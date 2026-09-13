@@ -1,6 +1,6 @@
 # ytimesy v0
 
-Status: UI foundation complete; live backend integration pending. Domain: ytimesy.com. Updated: 2026-09-12.
+Status: UI foundation complete; Freestyle/Codex integration proof recorded. Domain: ytimesy.com. Updated: 2026-09-13.
 
 ## Goal and proof
 
@@ -132,10 +132,12 @@ Recheck versioned APIs before implementing. Validate subscription connection usi
 ## Execution status
 
 - Research and product decisions captured; coding skill installed.
-- TanStack Start foundation and workspace empty states implemented; Diff / Terminal / Preview selectors work. Effect and TanStack Query are installed but their service/data integrations are pending.
+- TanStack Start foundation and workspace empty states implemented; Diff / Terminal / Preview selectors work.
+- Freestyle VM create/exec/delete and Codex app-server device-code start are proven in an isolated VM. See the milestone 2 evidence below. A pending device code is not an authenticated session; `turn/start` was not called.
+- Effect services and adapters exist for that proof. TanStack Query is still unused. Sending remains disabled in the UI.
 - Better Auth is selected; authentication is not implemented.
-- No deployed app, agent connection, or end-to-end provider verification yet.
-- Continue with milestone 2: prove the provider/auth boundary before expanding the product.
+- No deployed app, durable project records, GitHub listing, terminal, preview, or publication flow yet.
+- Continue with milestone 3: identity, tenant-scoped records, and GitHub App repository access. Then persist a workspace and complete Codex login in product onboarding.
 
 ## Cloud-agent handoff
 
@@ -145,7 +147,16 @@ Use ytimesy to work on its own repository with a real cloud coding agent. Preser
 
 ### Current evidence and limits
 
-The app currently contains frontend interactions and honest empty states, not a working cloud-agent service. Model, reasoning, and Fast options require connected-agent capabilities; sending stays disabled until integration. File attachments are local draft state. Diff, Terminal, and Preview are UI shells. Better Auth, PostgreSQL, GitHub authorization, durable jobs, VM provisioning, agent execution, and live transports remain unimplemented. Prior browser checks exercised the local UI; they do not prove remote authentication or execution.
+The workspace UI is still honest empty states. Model, reasoning, and Fast options still require a connected agent; sending stays disabled. File attachments are local draft state. Diff, Terminal, and Preview are UI shells.
+
+Milestone 2 live check (`pnpm prove:workspace`, 2026-09-13):
+
+- Freestyle SDK `0.2.13` against `https://api.freestyle.sh/v5`. Created `ytimesy-proof-*` from the default Ubuntu image with an explicit outbound-internet firewall, ran `uname` / `python3 --version`, then deleted the VM. Guest: Linux 6.1.102 `freestyle-vm`, Python 3.12.3. List-after-delete of `purpose:ytimesy-proof` was empty.
+- Codex CLI `0.154.0` installed in the guest with `https://chatgpt.com/codex/install.sh`. `codex app-server` accepted JSON-RPC `initialize`, `initialized`, `account/read` (no ChatGPT account), and `account/login/start` `{ "type": "chatgptDeviceCode" }`. Result: `awaiting_device_code` with `verificationUrl` `https://auth.openai.com/codex/device` and a 10-character user code. Login was cancelled after the payload was observed so the proof would not wait on a human.
+- `turn/start` was not sent. Completing ChatGPT authorization, listing models from `model/list`, and running a task remain unproven.
+- Rigkit `@rigkit/sdk` / `@rigkit/provider-freestyle` `0.3.0` documents API-key auth as `freestyle.provider({ apiKey })`. It was not embedded: the SDK targets a Bun project daemon (`@effect/platform-bun`). Environment preparation currently uses the Freestyle adapter directly.
+
+Better Auth, PostgreSQL records, GitHub authorization, durable jobs, live terminal/preview transports, and publication remain unimplemented. This environment currently has a PostgreSQL URL and GitHub App credentials; hosting, queue, and object-storage providers are still undecided product choices.
 
 ### Decisions to preserve
 
@@ -155,10 +166,10 @@ Use the installed self-documenting-code skill. Keep routes thin and put provider
 
 ### Local setup and verification
 
-Run `pnpm install --frozen-lockfile`, then `pnpm dev` (port 3000). To match the existing local browser, run `pnpm exec vite dev --host 127.0.0.1 --port 3001`. Run `pnpm lint`, `pnpm typecheck`, and `pnpm build` before handing off structural changes. Use agent-browser for UI checks. Screenshots and credentials must remain out of Git.
+Run `pnpm install --frozen-lockfile`, then `pnpm dev` (port 3000). To match the existing local browser, run `pnpm exec vite dev --host 127.0.0.1 --port 3001`. Run `pnpm lint`, `pnpm typecheck`, `pnpm test`, and `pnpm build` before handing off structural changes. `pnpm prove:workspace` is the live Freestyle/Codex proof and requires `FREESTYLE_API_KEY`. Use agent-browser for UI checks. Screenshots and credentials must remain out of Git.
 
 ### Next step
 
-Prove supported Codex authentication and a single agent request inside an isolated Freestyle VM, including Rigkit setup where appropriate. Verify current official APIs first. Then implement identity and repository access and connect the proof through a durable service workflow. Record actual commands, versions, results, and unresolved issues here after each integration milestone.
+Implement Better Auth with tenant-scoped PostgreSQL records and GitHub App repository listing. Then keep a persistent Freestyle workspace, complete Codex device-code login in onboarding, load `model/list` from app-server, and prove one `turn/start` request. Revisit Rigkit as the environment-prep adapter only if it can run as a Node worker without substituting a different VM provider.
 
-Provider credentials and account-side configuration are not included in the repository. Hosting, managed PostgreSQL, queue, and object-storage providers remain undecided. Do not assume a local server or an unpushed commit is available to a cloud agent: this repository must be made accessible to that environment first.
+Provider credentials are not committed. Hosting, queue, and object-storage providers remain undecided. Do not assume a local server or an unpushed commit is available to a cloud agent: this repository must be made accessible to that environment first.
