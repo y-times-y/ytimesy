@@ -19,6 +19,7 @@ dist/
 !.env.example
 *.tsbuildinfo
 .DS_Store
+.ytimesy/
 
 # Private keys and account configuration
 .secrets/

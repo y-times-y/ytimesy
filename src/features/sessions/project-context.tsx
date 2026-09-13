@@ -7,6 +7,7 @@ import {
 	SelectValue,
 } from "#/components/ui/select";
 import type { Project } from "../../domain/projects";
+import { WorkspaceStatus } from "../projects/workspace-status";
 
 export function ProjectContext({
 	projects,
@@ -54,6 +55,7 @@ export function ProjectContext({
 					<span>{selectedProject?.branch ?? "Branch"}</span>
 				</SelectTrigger>
 			</Select>
+			{selectedProject && <WorkspaceStatus projectId={selectedProject.id} />}
 		</div>
 	);
 }

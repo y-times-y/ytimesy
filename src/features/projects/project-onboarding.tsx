@@ -59,6 +59,15 @@ function RepositorySetup() {
 			}),
 		onSuccess: () => window.location.assign("/"),
 	});
+	const disconnect = useMutation({
+		mutationFn: () =>
+			requestJson<{ connected: boolean }>("/api/github/disconnect", {}),
+		onSuccess: () => {
+			setSelected(null);
+			setBranch("");
+			void repositories.refetch();
+		},
+	});
 	return (
 		<main className="onboarding-shell">
 			<section className="onboarding-card repository-setup">
@@ -164,12 +173,26 @@ function RepositorySetup() {
 						)}
 					</>
 				)}
-				{(connection.error || branches.error || save.error) && (
+				{(connection.error ||
+					branches.error ||
+					save.error ||
+					disconnect.error) && (
 					<p role="alert">
 						{connection.error?.message ||
 							branches.error?.message ||
-							save.error?.message}
+							save.error?.message ||
+							disconnect.error?.message}
 					</p>
+				)}
+				{repositories.data && (
+					<button
+						type="button"
+						className="setup-back"
+						disabled={disconnect.isPending}
+						onClick={() => disconnect.mutate()}
+					>
+						{disconnect.isPending ? "Disconnecting…" : "Disconnect GitHub"}
+					</button>
 				)}
 				<a className="setup-back" href="/">
 					Back to workspace

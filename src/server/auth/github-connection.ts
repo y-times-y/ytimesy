@@ -94,3 +94,18 @@ export async function githubAccessToken(userId: string) {
 		connection.release();
 	}
 }
+export async function githubConnectionExists(userId: string) {
+	const result = await database().query(
+		"select 1 from github_connection where user_id=$1",
+		[userId],
+	);
+	return result.rows.length > 0;
+}
+export async function disconnectGithubConnection(userId: string) {
+	await database().query("delete from github_oauth_state where user_id=$1", [
+		userId,
+	]);
+	await database().query("delete from github_connection where user_id=$1", [
+		userId,
+	]);
+}

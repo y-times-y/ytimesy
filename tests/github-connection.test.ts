@@ -2,7 +2,9 @@ import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import {
+	disconnectGithubConnection,
 	finishGithubConnection,
+	githubConnectionExists,
 	startGithubConnection,
 } from "../src/server/auth/github-connection";
 
@@ -84,4 +86,13 @@ it("rejects expired authorization state", async () => {
 	await expect(
 		finishGithubConnection("alice", state, "code"),
 	).rejects.toThrow();
+});
+it("removes stored GitHub credentials on disconnect", async () => {
+	const state =
+		new URL(await startGithubConnection("alice")).searchParams.get("state") ??
+		"";
+	await finishGithubConnection("alice", state, "code");
+	expect(await githubConnectionExists("alice")).toBe(true);
+	await disconnectGithubConnection("alice");
+	expect(await githubConnectionExists("alice")).toBe(false);
 });

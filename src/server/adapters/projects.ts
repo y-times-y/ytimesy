@@ -8,6 +8,16 @@ export async function listProjects(userId: string): Promise<Project[]> {
 	);
 	return result.rows;
 }
+export async function projectForOwner(
+	userId: string,
+	projectId: string,
+): Promise<Project | null> {
+	const result = await database().query(
+		'select id,repository_id::float8 as "repositoryId",installation_id::float8 as "installationId",full_name as "fullName",branch from project where id=$1 and user_id=$2',
+		[projectId, userId],
+	);
+	return result.rows[0] ?? null;
+}
 export async function saveProject(
 	userId: string,
 	repository: RepositoryChoice,
