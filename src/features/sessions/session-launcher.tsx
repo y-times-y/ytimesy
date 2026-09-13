@@ -13,6 +13,7 @@ import {
 	type SlashCommand,
 } from "#/domain/slash-command";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
+import { AgentSetup } from "./agent-setup";
 import {
 	preferredSessionModelId,
 	sessionModelsFromListed,
@@ -201,7 +202,12 @@ export function SessionLauncher({
 			<h1 id="session-title" className="sr-only">
 				Session
 			</h1>
-			<AgentSetup session={session} busy={busy} onConnect={onConnect} />
+			<AgentSetup
+				connection={session.connection}
+				snapshotAvailable={session.snapshotAvailable}
+				busy={busy}
+				onConnect={onConnect}
+			/>
 			<SessionTimeline
 				items={items}
 				turnStatus={session.turnStatus}
@@ -293,7 +299,7 @@ export function SessionLauncher({
 									title={
 										session.canSend
 											? "Send task"
-											: "Connect Codex during setup to start a session"
+											: "Sign in to Codex to start a session"
 									}
 									onClick={sendDraft}
 								>
@@ -307,50 +313,5 @@ export function SessionLauncher({
 				</div>
 			</div>
 		</section>
-	);
-}
-
-function AgentSetup({
-	session,
-	busy,
-	onConnect,
-}: {
-	session: PublicCodexSession;
-	busy: boolean;
-	onConnect: () => void;
-}) {
-	const { connection } = session;
-	if (connection.status === "authenticated") return null;
-	if (connection.status === "awaiting_device_code") {
-		return (
-			<div className="agent-setup" role="status">
-				<p>Authorize Codex, then this workspace will continue automatically.</p>
-				<p>
-					Open {connection.verificationUrl} and enter {connection.userCode}.
-				</p>
-			</div>
-		);
-	}
-	if (connection.status === "failed") {
-		return (
-			<div className="agent-setup" role="alert">
-				<p>{connection.message}</p>
-				<button type="button" onClick={onConnect} disabled={busy}>
-					Retry Codex
-				</button>
-			</div>
-		);
-	}
-	return (
-		<div className="agent-setup">
-			<p>
-				{session.snapshotAvailable
-					? "A private Codex snapshot is ready. Connect to load models and send a task."
-					: "Connect Codex to load models from the agent."}
-			</p>
-			<button type="button" onClick={onConnect} disabled={busy}>
-				{busy ? "Connecting…" : "Connect Codex"}
-			</button>
-		</div>
 	);
 }

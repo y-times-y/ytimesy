@@ -404,8 +404,14 @@ button:enabled:active {
 	gap: 13px;
 }
 .header-agent-status {
+	display: inline-flex;
+	align-items: center;
+	gap: 7px;
 	color: #8d8d8d;
 	font-size: 12px;
+}
+.header-agent-status svg {
+	color: #d8d8d8;
 }
 .panel-toggle {
 	display: grid;

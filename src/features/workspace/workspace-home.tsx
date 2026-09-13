@@ -3,6 +3,7 @@ import { PanelRight } from "lucide-react";
 import { useEffect, useState } from "react";
 import { fileChangesFromSessionItems } from "#/domain/session-item";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
+import { CodexMark } from "../sessions/codex-mark";
 import {
 	connectCodexSession,
 	getCodexSession,
@@ -47,7 +48,7 @@ export function WorkspaceHome({
 	const agentLabel =
 		session.connection.status === "authenticated"
 			? `Codex${session.connection.planType ? ` · ${session.connection.planType}` : ""}`
-			: null;
+			: "Codex";
 
 	useEffect(() => {
 		if (compact) setProjectsOpen(false);
@@ -123,9 +124,10 @@ export function WorkspaceHome({
 				<header className="workspace-header">
 					<div className="header-navigation">
 						<span>Workspace</span>
-						{agentLabel ? (
-							<span className="header-agent-status">{agentLabel}</span>
-						) : null}
+						<span className="header-agent-status">
+							<CodexMark size={16} />
+							{agentLabel}
+						</span>
 					</div>
 					<div className="header-tools">
 						<button
