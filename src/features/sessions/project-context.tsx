@@ -6,11 +6,20 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "#/components/ui/select";
+import type { Project } from "../../domain/projects";
 
-export function ProjectContext() {
+export function ProjectContext({
+	projects,
+	selectedProject,
+	onSelectProject,
+}: {
+	projects: Project[];
+	selectedProject?: Project;
+	onSelectProject: (id: string) => void;
+}) {
 	return (
 		<div className="session-context">
-			<Select>
+			<Select value={selectedProject?.id ?? ""} onValueChange={onSelectProject}>
 				<SelectTrigger
 					className="context-select project-select"
 					aria-label="Project"
@@ -24,9 +33,17 @@ export function ProjectContext() {
 					align="start"
 					sideOffset={8}
 				>
-					<SelectItem value="empty" disabled>
-						No projects added yet
-					</SelectItem>
+					{projects.length ? (
+						projects.map((project) => (
+							<SelectItem key={project.id} value={project.id}>
+								{project.fullName}
+							</SelectItem>
+						))
+					) : (
+						<SelectItem value="empty" disabled>
+							No projects added yet
+						</SelectItem>
+					)}
 				</SelectContent>
 			</Select>
 			<Select disabled>
@@ -34,7 +51,7 @@ export function ProjectContext() {
 					className="context-select branch-select"
 					aria-label="Branch"
 				>
-					<SelectValue placeholder="Branch" />
+					<span>{selectedProject?.branch ?? "Branch"}</span>
 				</SelectTrigger>
 			</Select>
 		</div>

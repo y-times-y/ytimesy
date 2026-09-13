@@ -1,13 +1,20 @@
 import { PanelLeft, Plus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import type { Project } from "../../domain/projects";
 
 interface ProjectSidebarProps {
+	projects: Project[];
+	selectedProjectId?: string;
+	onSelectProject: (id: string) => void;
 	expanded: boolean;
 	onToggle: () => void;
 	onAddProject: () => void;
 }
 
 export function ProjectSidebar({
+	projects,
+	selectedProjectId,
+	onSelectProject,
 	expanded,
 	onToggle,
 	onAddProject,
@@ -114,7 +121,25 @@ export function ProjectSidebar({
 						<Plus size={16} />
 					</button>
 				</div>
-				<p className="sidebar-empty">No repositories connected.</p>
+				{projects.length ? (
+					<ul className="project-list">
+						{projects.map((project) => (
+							<li key={project.id}>
+								<button
+									type="button"
+									aria-current={
+										project.id === selectedProjectId ? "page" : undefined
+									}
+									onClick={() => onSelectProject(project.id)}
+								>
+									{project.fullName}
+								</button>
+							</li>
+						))}
+					</ul>
+				) : (
+					<p className="sidebar-empty">No repositories connected.</p>
+				)}
 			</aside>
 			<nav
 				className="sidebar-rail"

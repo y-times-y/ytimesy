@@ -11,7 +11,9 @@
 			"scripts/cloud-proof/**",
 			"*.json",
 			"vite.config.ts",
-			"!src/routeTree.gen.ts"
+			"!src/routeTree.gen.ts",
+			"tests/**",
+			"vitest.config.ts"
 		]
 	},
 	"formatter": {
