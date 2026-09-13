@@ -210,15 +210,15 @@ export function SessionLauncher({
 			<div className="session-dock">
 				<ProjectContext />
 				<div className="composer-shell">
-					{visibleSlashCommands.length > 0 ? (
-						<SlashCommandPalette
-							commands={visibleSlashCommands}
-							activeIndex={slashIndex}
-							onHover={setSlashIndex}
-							onSelect={runSlashCommand}
-						/>
-					) : null}
 					<div className="session-composer">
+						{visibleSlashCommands.length > 0 ? (
+							<SlashCommandPalette
+								commands={visibleSlashCommands}
+								activeIndex={slashIndex}
+								onHover={setSlashIndex}
+								onSelect={runSlashCommand}
+							/>
+						) : null}
 						<TaskInput
 							value={draft}
 							onChange={setDraft}

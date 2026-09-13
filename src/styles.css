@@ -163,10 +163,7 @@ button:enabled:active {
 	flex: 1;
 	min-height: 0;
 	--inspector-width: 310px;
-	--side-chat-width: 0px;
-	grid-template-columns: minmax(0, 1fr) var(--side-chat-width) var(
-			--inspector-width
-		);
+	grid-template-columns: minmax(0, 1fr) var(--inspector-width);
 	transition: grid-template-columns 280ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 .welcome-panel {
@@ -203,22 +200,26 @@ button:enabled:active {
 }
 .inspector-tabs {
 	display: flex;
-	gap: 3px;
-	padding: 12px;
+	align-items: center;
+	gap: 2px;
+	padding: 8px 10px;
 	border-bottom: 1px solid #242424;
+	overflow-x: auto;
+	scrollbar-width: none;
 }
 .inspector-tabs button {
 	display: flex;
 	align-items: center;
 	justify-content: center;
 	gap: 7px;
-	flex: 1;
+	flex: 0 0 auto;
 	border: 1px solid transparent;
-	padding: 8px 6px;
+	padding: 6px 9px;
 	background: transparent;
 	color: #989898;
 	border-radius: 6px;
 	font-size: 11px;
+	white-space: nowrap;
 }
 .inspector-tabs button:hover {
 	color: #e8e8e8;
@@ -273,6 +274,44 @@ button:enabled:active {
 .workspace-inspector .file-change-list {
 	padding: 12px 14px;
 }
+.inspector-side-tab {
+	display: flex;
+	align-items: center;
+	margin-left: 4px;
+	border: 1px solid transparent;
+	border-radius: 7px;
+}
+.inspector-side-tab[data-active="true"] {
+	background: #282828;
+	border-color: #3d3d3d;
+}
+.inspector-side-tab button {
+	padding: 6px 8px;
+}
+.inspector-side-tab[data-active="true"] > button[aria-pressed="true"] {
+	background: transparent;
+	border-color: transparent;
+	box-shadow: none;
+}
+.inspector-side-close {
+	width: 24px;
+	min-width: 24px;
+	padding: 0;
+	color: #8a8a8a;
+}
+.inspector-side-close:hover {
+	color: #fff;
+}
+.inspector-new-tab {
+	width: 28px;
+	min-width: 28px;
+	margin-left: auto;
+	padding: 0;
+	color: #8a8a8a;
+}
+.inspector-new-tab:hover {
+	color: #f0f0f0;
+}
 
 @media (min-width: 1700px) {
 	.workspace-shell {
@@ -281,6 +320,9 @@ button:enabled:active {
 	.workspace-body {
 		--inspector-width: 360px;
 	}
+	.workspace-body[data-inspector-view="side"] {
+		--inspector-width: 480px;
+	}
 }
 @media (max-width: 1200px) {
 	.workspace-shell {
@@ -288,6 +330,9 @@ button:enabled:active {
 	}
 	.workspace-body {
 		--inspector-width: 265px;
+	}
+	.workspace-body[data-inspector-view="side"] {
+		--inspector-width: 340px;
 	}
 	.welcome-content {
 		padding-right: 28px;
@@ -393,8 +438,7 @@ button:enabled:active {
 	}
 }
 .project-sidebar-frame,
-.inspector-frame,
-.side-chat-frame {
+.inspector-frame {
 	overflow: hidden;
 	min-width: 0;
 	min-height: 0;
@@ -413,18 +457,11 @@ button:enabled:active {
 		opacity 180ms ease,
 		transform 280ms cubic-bezier(0.22, 1, 0.36, 1);
 }
-.side-chat-frame {
-	width: var(--side-chat-width);
-	height: 100%;
-}
-.workspace-body:not([data-side-chat="true"]) .side-chat-frame {
-	pointer-events: none;
-}
 .workspace-shell[data-projects-collapsed="true"] {
 	grid-template-columns: var(--rail-width) minmax(0, 1fr);
 }
-.workspace-body[data-side-chat="true"] {
-	--side-chat-width: 360px;
+.workspace-body[data-inspector-view="side"] {
+	--inspector-width: 420px;
 }
 .workspace-body[data-inspector-collapsed="true"] {
 	--inspector-width: 0px;
@@ -439,11 +476,13 @@ button:enabled:active {
 }
 @media (max-width: 1000px) {
 	.workspace-body,
-	.workspace-body[data-inspector-collapsed="true"],
-	.workspace-body[data-side-chat="true"] {
+	.workspace-body[data-inspector-collapsed="true"] {
 		grid-template-columns: minmax(0, 1fr);
 		grid-template-rows: auto 320px;
 		transition: grid-template-rows 280ms cubic-bezier(0.22, 1, 0.36, 1);
+	}
+	.workspace-body[data-inspector-view="side"] {
+		grid-template-rows: auto min(52dvh, 420px);
 	}
 	.workspace-body[data-inspector-collapsed="true"] {
 		grid-template-rows: auto 0px;
@@ -452,23 +491,11 @@ button:enabled:active {
 		width: 100%;
 		height: 320px;
 	}
+	.workspace-body[data-inspector-view="side"] .workspace-inspector {
+		height: min(52dvh, 420px);
+	}
 	.workspace-body[data-inspector-collapsed="true"] .workspace-inspector {
 		transform: translateY(12px);
-	}
-	.side-chat-frame {
-		position: absolute;
-		inset: 0;
-		width: auto;
-		height: auto;
-		z-index: 3;
-		background: #0c0c0c;
-		border-left: 0;
-	}
-	.workspace-body:not([data-side-chat="true"]) .side-chat-frame {
-		visibility: hidden;
-	}
-	.workspace-body {
-		position: relative;
 	}
 }
 @media (prefers-reduced-motion: reduce) {
@@ -714,7 +741,10 @@ button:enabled:active {
 		min-width: 44px;
 		min-height: 44px;
 	}
-	.inspector-tabs button {
+	.inspector-tabs button,
+	.inspector-new-tab,
+	.inspector-side-close {
+		min-width: 44px;
 		min-height: 44px;
 	}
 }
