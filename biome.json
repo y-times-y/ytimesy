@@ -6,7 +6,15 @@
 		"useIgnoreFile": true
 	},
 	"files": {
-		"includes": ["src/**", "*.json", "vite.config.ts", "!src/routeTree.gen.ts"]
+		"includes": [
+			"src/**",
+			"scripts/cloud-proof/**",
+			"*.json",
+			"vite.config.ts",
+			"!src/routeTree.gen.ts",
+			"tests/**",
+			"vitest.config.ts"
+		]
 	},
 	"formatter": {
 		"enabled": true,
