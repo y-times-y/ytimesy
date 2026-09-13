@@ -17,7 +17,8 @@
 		"prove:workspace": "tsx scripts/prove-workspace.ts",
 		"prove:codex-login": "tsx scripts/codex-login.ts",
 		"prove:codex-login:status": "tsx scripts/codex-login-status.ts",
-		"prove:codex-login:resume": "tsx scripts/codex-login-resume.ts"
+		"prove:codex-login:resume": "tsx scripts/codex-login-resume.ts",
+		"prove:codex-login:cleanup": "tsx scripts/codex-login-cleanup.ts"
 	},
 	"dependencies": {
 		"@fontsource-variable/inter": "^5.3.0",
