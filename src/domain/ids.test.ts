@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { JobId, ProjectId, SessionId, UserId, WorkspaceId } from "./ids";
+import {
+	AuthSnapshotId,
+	JobId,
+	ProjectId,
+	SessionId,
+	UserId,
+	WorkspaceId,
+} from "./ids";
 
 describe("branded IDs", () => {
 	it("accepts trimmed values", () => {
@@ -8,6 +15,7 @@ describe("branded IDs", () => {
 		expect(WorkspaceId("vm_1")).toBe("vm_1");
 		expect(SessionId("s1")).toBe("s1");
 		expect(JobId("j1")).toBe("j1");
+		expect(AuthSnapshotId("sh-1")).toBe("sh-1");
 	});
 
 	it("rejects empty values", () => {

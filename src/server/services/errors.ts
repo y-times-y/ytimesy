@@ -9,7 +9,7 @@ export class MissingFreestyleApiKey extends Data.TaggedError(
 export class WorkspaceProvisionError extends Data.TaggedError(
 	"WorkspaceProvisionError",
 )<{
-	readonly operation: "create" | "destroy" | "reconcile";
+	readonly operation: "create" | "destroy" | "reconcile" | "snapshot";
 	readonly message: string;
 	readonly providerWorkspaceId?: string;
 }> {}

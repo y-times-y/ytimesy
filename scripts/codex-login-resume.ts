@@ -1,30 +1,28 @@
-import { readFile } from "node:fs/promises";
 import { Effect, Exit } from "effect";
 import { WorkspaceId } from "#/domain/ids";
 import { resumeCodexSession } from "#/server/adapters/codex/login-session";
 import { publicLoginStatus } from "#/server/adapters/codex/login-status";
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
+import { readProofVmState } from "#/server/proof/codex-login-state";
+import { persistCodexAuthSnapshotIfMissing } from "#/server/proof/persist-codex-auth-snapshot";
 import { WorkspaceMachineService } from "#/server/services/capabilities";
-
-const STATE_PATH = ".ytimesy/proof-state.json";
 
 const program = Effect.gen(function* () {
 	const machines = yield* WorkspaceMachineService;
-	const raw = yield* Effect.tryPromise(() => readFile(STATE_PATH, "utf8"));
-	const parsed: unknown = JSON.parse(raw);
-	if (
-		typeof parsed !== "object" ||
-		parsed === null ||
-		!("workspaceId" in parsed) ||
-		typeof parsed.workspaceId !== "string"
-	) {
+	const state = yield* Effect.tryPromise(() => readProofVmState());
+	if (!state) {
 		throw new Error("Proof state is missing workspaceId");
 	}
-	const workspaceId = parsed.workspaceId;
-	const status = yield* resumeCodexSession(machines, WorkspaceId(workspaceId));
+	const workspaceId = WorkspaceId(state.workspaceId);
+	const status = yield* resumeCodexSession(machines, workspaceId);
+	const snapshot =
+		status.stage === "authenticated"
+			? yield* persistCodexAuthSnapshotIfMissing(machines, workspaceId)
+			: null;
 	return {
-		workspaceId,
+		workspaceId: state.workspaceId,
 		login: publicLoginStatus(status),
+		snapshot,
 	};
 });
 

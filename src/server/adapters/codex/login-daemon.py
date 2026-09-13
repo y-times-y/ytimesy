@@ -105,7 +105,14 @@ def listed_models(result):
     return models
 
 
+PREFERRED_MODEL_ID = os.environ.get("CODEX_PREFERRED_MODEL", "gpt-5.3-codex-spark")
+
+
 def choose_model(models):
+    if PREFERRED_MODEL_ID:
+        for model in models:
+            if model["id"] == PREFERRED_MODEL_ID:
+                return model["id"]
     for model in models:
         if model.get("isDefault"):
             return model["id"]

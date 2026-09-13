@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parseCodexLoginStatus } from "./login-status";
+import {
+	chooseListedModelId,
+	PREFERRED_CODEX_MODEL_ID,
+	parseCodexLoginStatus,
+} from "./login-status";
 
 describe("parseCodexLoginStatus", () => {
 	it("keeps a pending device code out of authenticated state", () => {
@@ -53,5 +57,23 @@ describe("parseCodexLoginStatus", () => {
 			},
 			codexVersion: null,
 		});
+	});
+});
+
+describe("chooseListedModelId", () => {
+	it("uses gpt-5.3-codex-spark when the connected agent listed it", () => {
+		expect(
+			chooseListedModelId([
+				{ id: "gpt-6-astra", isDefault: true },
+				{ id: PREFERRED_CODEX_MODEL_ID },
+			]),
+		).toBe(PREFERRED_CODEX_MODEL_ID);
+	});
+
+	it("never invents a model that was not listed", () => {
+		expect(chooseListedModelId([{ id: "gpt-6-astra", isDefault: true }])).toBe(
+			"gpt-6-astra",
+		);
+		expect(chooseListedModelId([])).toBeNull();
 	});
 });

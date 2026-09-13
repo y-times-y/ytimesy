@@ -154,3 +154,15 @@ export function publicLoginStatus(status: CodexLoginStatus) {
 	}
 	return status;
 }
+
+export const PREFERRED_CODEX_MODEL_ID = "gpt-5.3-codex-spark";
+
+export function chooseListedModelId(
+	models: readonly { readonly id: string; readonly isDefault?: boolean }[],
+	preferredId = PREFERRED_CODEX_MODEL_ID,
+): string | null {
+	if (models.some((model) => model.id === preferredId)) return preferredId;
+	const listedDefault = models.find((model) => model.isDefault);
+	if (listedDefault) return listedDefault.id;
+	return models[0]?.id ?? null;
+}

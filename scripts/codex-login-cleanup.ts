@@ -1,27 +1,33 @@
-import { readFile, unlink } from "node:fs/promises";
 import { Effect, Exit } from "effect";
 import { WorkspaceId } from "#/domain/ids";
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
+import {
+	deleteProofVmState,
+	readProofVmState,
+} from "#/server/proof/codex-login-state";
 import { WorkspaceMachineService } from "#/server/services/capabilities";
-
-const STATE_PATH = ".ytimesy/proof-state.json";
 
 const program = Effect.gen(function* () {
 	const machines = yield* WorkspaceMachineService;
-	const raw = yield* Effect.tryPromise(() => readFile(STATE_PATH, "utf8"));
-	const parsed = JSON.parse(raw) as { workspaceId: string };
+	const state = yield* Effect.tryPromise(() => readProofVmState());
+	if (!state) {
+		throw new Error("Proof state is missing workspaceId");
+	}
 	yield* Effect.tryPromise(() =>
-		machines.destroy(WorkspaceId(parsed.workspaceId)),
+		machines.destroy(WorkspaceId(state.workspaceId)),
 	);
-	yield* Effect.tryPromise(() => unlink(STATE_PATH).catch(() => undefined));
-	return parsed.workspaceId;
+	yield* Effect.tryPromise(() => deleteProofVmState());
+	return {
+		deletedWorkspaceId: state.workspaceId,
+		keptAuthSnapshot: true,
+	};
 });
 
 const exit = await Effect.runPromiseExit(
 	program.pipe(Effect.provide(FreestyleWorkspaceMachinesLive)),
 );
 if (Exit.isSuccess(exit)) {
-	console.log(`deleted ${exit.value}`);
+	console.log(JSON.stringify(exit.value, null, 2));
 	process.exit(0);
 }
 console.error(String(exit.cause));

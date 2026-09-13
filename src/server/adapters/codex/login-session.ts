@@ -2,7 +2,11 @@ import { readFileSync } from "node:fs";
 import { Duration, Effect } from "effect";
 import type { WorkspaceId } from "#/domain/ids";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
-import { type CodexLoginStatus, parseCodexLoginStatus } from "./login-status";
+import {
+	type CodexLoginStatus,
+	PREFERRED_CODEX_MODEL_ID,
+	parseCodexLoginStatus,
+} from "./login-status";
 
 const LOGIN_DAEMON_SOURCE = readFileSync(
 	new URL("./login-daemon.py", import.meta.url),
@@ -38,6 +42,53 @@ rm -f /tmp/ytimesy-auth-status.json
 PYTHONUNBUFFERED=1 setsid python3 /tmp/ytimesy-codex-login.py >/tmp/ytimesy-codex-login.log 2>&1 < /dev/null &
 echo $! > /tmp/ytimesy-codex-login.pid
 echo "LOGIN_PID=$(cat /tmp/ytimesy-codex-login.pid)"
+`;
+
+const LOCATE_CODEX = `set -eu
+if [ -z "\${HOME:-}" ]; then
+  export HOME=/root
+fi
+CODEX_BIN=""
+for home in "$HOME" /home/ubuntu /root; do
+  if [ -x "$home/.codex/packages/standalone/current/codex" ]; then
+    export HOME="$home"
+    CODEX_BIN="$home/.codex/packages/standalone/current/codex"
+    break
+  fi
+done
+export PATH="$HOME/.local/bin:$HOME/.codex/bin:$HOME/.codex/packages/standalone/current:$PATH"
+if [ -z "$CODEX_BIN" ] && command -v codex >/dev/null 2>&1; then
+  CODEX_BIN="$(command -v codex)"
+fi
+if [ -z "$CODEX_BIN" ]; then
+  echo "codex binary not found" >&2
+  exit 1
+fi
+echo "CODEX_HOME=$HOME"
+echo "CODEX_BIN=$CODEX_BIN"
+"$CODEX_BIN" --version
+`;
+
+const CONFIRM_CHATGPT_LOGIN = `${LOCATE_CODEX}
+if [ ! -f "$HOME/.codex/auth.json" ]; then
+  echo "MISSING_AUTH_FILE" >&2
+  exit 1
+fi
+echo "AUTH_FILE_PRESENT"
+STATUS="$("$CODEX_BIN" login status || true)"
+echo "$STATUS"
+echo "$STATUS" | grep -q "Logged in using ChatGPT"
+`;
+
+const STOP_LOGIN_DAEMON = `set -eu
+if [ -f /tmp/ytimesy-codex-login.pid ]; then
+  PID="$(cat /tmp/ytimesy-codex-login.pid)"
+  pkill -P "$PID" 2>/dev/null || true
+  kill "$PID" 2>/dev/null || true
+  rm -f /tmp/ytimesy-codex-login.pid
+fi
+sync
+echo "LOGIN_DAEMON_STOPPED"
 `;
 
 function firstMatch(stdout: string, pattern: RegExp): string | null {
@@ -84,6 +135,7 @@ export function startInteractiveDeviceCodeLogin(
 				workspaceId,
 				`export CODEX_BIN=${shellSingleQuote(codexBin)}
 export CODEX_VERSION=${shellSingleQuote(codexVersion ?? "")}
+export CODEX_PREFERRED_MODEL=${shellSingleQuote(PREFERRED_CODEX_MODEL_ID)}
 ${START_LOGIN_SCRIPT}`,
 				30_000,
 			),
@@ -125,18 +177,7 @@ export function resumeCodexSession(
 		const locate = yield* Effect.tryPromise(() =>
 			machines.exec(
 				workspaceId,
-				`set -eu
-export PATH="$HOME/.local/bin:$HOME/.codex/bin:$HOME/.codex/packages/standalone/current:$PATH"
-if [ -x "$HOME/.codex/packages/standalone/current/codex" ]; then
-  CODEX_BIN="$HOME/.codex/packages/standalone/current/codex"
-elif command -v codex >/dev/null 2>&1; then
-  CODEX_BIN="$(command -v codex)"
-else
-  echo "codex binary not found" >&2
-  exit 1
-fi
-echo "CODEX_BIN=$CODEX_BIN"
-"$CODEX_BIN" --version
+				`${LOCATE_CODEX}
 "$CODEX_BIN" login status
 `,
 				30_000,
@@ -167,6 +208,7 @@ echo "CODEX_BIN=$CODEX_BIN"
 				workspaceId,
 				`export CODEX_BIN=${shellSingleQuote(codexBin)}
 export CODEX_VERSION=${shellSingleQuote(codexVersion ?? "")}
+export CODEX_PREFERRED_MODEL=${shellSingleQuote(PREFERRED_CODEX_MODEL_ID)}
 export FORCE_RESTART=1
 ${START_LOGIN_SCRIPT}`,
 				30_000,
@@ -197,6 +239,88 @@ ${START_LOGIN_SCRIPT}`,
 			Effect.succeed(
 				failedStatus(cause instanceof Error ? cause.message : String(cause)),
 			),
+		),
+	);
+}
+
+/**
+ * Stops the login daemon before a Freestyle snapshot so the capture is
+ * Codex-on-disk (including ~/.codex/auth.json), not a live app-server with
+ * stale sockets.
+ */
+export function stopCodexLoginDaemon(
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+): Effect.Effect<void, never, never> {
+	return Effect.tryPromise(() =>
+		machines.exec(workspaceId, STOP_LOGIN_DAEMON, 30_000),
+	).pipe(
+		Effect.flatMap(() => Effect.void),
+		Effect.catchAll(() => Effect.void),
+	);
+}
+
+export function confirmChatgptLoginOnWorkspace(
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+): Effect.Effect<
+	| { readonly confirmed: true }
+	| { readonly confirmed: false; readonly message: string }
+> {
+	return Effect.tryPromise(() =>
+		machines.exec(workspaceId, CONFIRM_CHATGPT_LOGIN, 30_000),
+	).pipe(
+		Effect.map((result) => {
+			if (result.exitCode !== 0) {
+				return {
+					confirmed: false as const,
+					message: (result.stderr || result.stdout).trim(),
+				};
+			}
+			return { confirmed: true as const };
+		}),
+		Effect.catchAll((cause) =>
+			Effect.succeed({
+				confirmed: false as const,
+				message: cause instanceof Error ? cause.message : String(cause),
+			}),
+		),
+	);
+}
+
+export function snapshotAuthenticatedCodexWorkspace(
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+): Effect.Effect<
+	| { readonly ok: true; readonly snapshotId: string; readonly public: false }
+	| { readonly ok: false; readonly message: string }
+> {
+	return Effect.gen(function* () {
+		const confirmed = yield* confirmChatgptLoginOnWorkspace(
+			machines,
+			workspaceId,
+		);
+		if (!confirmed.confirmed) {
+			return {
+				ok: false as const,
+				message: `Refusing to snapshot without ChatGPT login: ${confirmed.message}`,
+			};
+		}
+		yield* stopCodexLoginDaemon(machines, workspaceId);
+		const snapshot = yield* Effect.tryPromise(() =>
+			machines.snapshotAuthenticatedWorkspace(workspaceId),
+		);
+		return {
+			ok: true as const,
+			snapshotId: snapshot.snapshotId,
+			public: snapshot.public,
+		};
+	}).pipe(
+		Effect.catchAll((cause) =>
+			Effect.succeed({
+				ok: false as const,
+				message: cause instanceof Error ? cause.message : String(cause),
+			}),
 		),
 	);
 }

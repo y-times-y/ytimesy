@@ -1,4 +1,5 @@
-import type { WorkspaceId } from "#/domain/ids";
+import type { IsolatedAuthSnapshot } from "#/domain/auth-snapshot";
+import type { AuthSnapshotId, WorkspaceId } from "#/domain/ids";
 
 export interface CommandOutput {
 	readonly exitCode: number;
@@ -10,17 +11,23 @@ export interface ProofWorkspace {
 	readonly workspaceId: WorkspaceId;
 	readonly state: string;
 	readonly slug: string;
+	readonly bootedFromSnapshotId: string | null;
 }
 
 export interface CreateProofWorkspaceOptions {
 	readonly ttlSeconds?: number;
 	readonly idleTimeoutSeconds?: number;
+	readonly snapshotId?: string;
 }
 
 export interface WorkspaceMachines {
 	readonly createProofWorkspace: (
 		options?: CreateProofWorkspaceOptions,
 	) => Promise<ProofWorkspace>;
+	readonly snapshotAuthenticatedWorkspace: (
+		workspaceId: WorkspaceId,
+	) => Promise<IsolatedAuthSnapshot>;
+	readonly destroySnapshot: (snapshotId: AuthSnapshotId) => Promise<void>;
 	readonly exec: (
 		workspaceId: WorkspaceId,
 		command: string,
