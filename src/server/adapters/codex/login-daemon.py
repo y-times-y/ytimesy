@@ -74,9 +74,11 @@ def account_from_result(result):
     if not isinstance(result, dict):
         return None
     account = result.get("account")
-    if not isinstance(account, dict):
-        return None
-    return account
+    if isinstance(account, dict):
+        return account
+    if result.get("type") == "chatgpt":
+        return result
+    return None
 
 
 def listed_models(result):
@@ -131,6 +133,36 @@ def collect_turn_text(notifications):
     return "\n".join(texts) if texts else None
 
 
+def read_chatgpt_account(proc, timeout=45):
+    deadline = time.time() + timeout
+    request_id = 50
+    last_account = None
+    last_error = None
+    while time.time() < deadline:
+        request_id += 1
+        send(
+            proc,
+            {
+                "method": "account/read",
+                "id": request_id,
+                "params": {"refreshToken": True},
+            },
+        )
+        message, _ = wait_for_id(proc, request_id, 20)
+        if "error" in message:
+            last_error = message["error"].get("message", "account/read failed")
+            time.sleep(1)
+            continue
+        last_error = None
+        last_account = account_from_result(message.get("result"))
+        if last_account and last_account.get("type") == "chatgpt":
+            return last_account
+        time.sleep(1)
+    if last_error:
+        fail(last_error, stageDetail="accountRead")
+    return last_account
+
+
 def wait_for_login(proc, timeout):
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -151,6 +183,16 @@ def wait_for_login(proc, timeout):
         if method == "account/updated" and params.get("authMode") == "chatgpt":
             return params
     fail("Timed out waiting for ChatGPT device-code authorization")
+
+
+def cli_has_chatgpt_login():
+    result = subprocess.run(
+        [CODEX, "login", "status"],
+        capture_output=True,
+        text=True,
+    )
+    output = (result.stdout or "") + (result.stderr or "")
+    return "Logged in using ChatGPT" in output
 
 
 def main():
@@ -184,15 +226,14 @@ def main():
         if "error" in initialized:
             fail(initialized["error"].get("message", "initialize failed"), stageDetail="initialize")
         send(proc, {"method": "initialized", "params": {}})
-        send(proc, {"method": "account/read", "id": 1, "params": {"refreshToken": False}})
-        account_message, _ = wait_for_id(proc, 1, 30)
-        if "error" in account_message:
-            fail(
-                account_message["error"].get("message", "account/read failed"),
-                stageDetail="accountRead",
-            )
-        account = account_from_result(account_message.get("result"))
+        already_logged_in = cli_has_chatgpt_login()
+        account = read_chatgpt_account(proc, timeout=45 if already_logged_in else 8)
         if not (account and account.get("type") == "chatgpt"):
+            if already_logged_in:
+                fail(
+                    "Codex CLI has a ChatGPT login, but app-server account/read did not return a ChatGPT account",
+                    stageDetail="accountRead",
+                )
             send(
                 proc,
                 {
@@ -227,12 +268,13 @@ def main():
                 }
             )
             wait_for_login(proc, 12 * 60)
-            send(proc, {"method": "account/read", "id": 6, "params": {"refreshToken": False}})
-            account_message, _ = wait_for_id(proc, 6, 30)
-            account = account_from_result(account_message.get("result"))
+            account = read_chatgpt_account(proc, timeout=45)
 
         if not account or account.get("type") != "chatgpt":
-            fail("Login finished without a ChatGPT account", account=account)
+            fail(
+                "Login finished without a ChatGPT account",
+                accountType=None if not account else account.get("type"),
+            )
 
         send(proc, {"method": "model/list", "id": 7, "params": {"limit": 50, "includeHidden": False}})
         models_message, _ = wait_for_id(proc, 7, 45)
