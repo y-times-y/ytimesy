@@ -19,3 +19,6 @@ dist/
 !.env.example
 *.tsbuildinfo
 .DS_Store
+
+# Private keys and account configuration
+.secrets/
