@@ -21,15 +21,18 @@ import { ReasoningOption } from "./reasoning-option";
 
 interface SessionControlsProps {
 	models: readonly SessionModel[];
+	modelId: string;
+	onModelIdChange: (id: string) => void;
 	onAttachFiles: (files: File[]) => void;
 }
 
 export function SessionControls({
 	models,
+	modelId,
+	onModelIdChange,
 	onAttachFiles,
 }: SessionControlsProps) {
 	const fileInput = useRef<HTMLInputElement>(null);
-	const [modelId, setModelId] = useState("");
 	const [reasoningId, setReasoningId] = useState("");
 	const model = models.find((candidate) => candidate.id === modelId);
 	const reasoning = resolveReasoningLevel(model, reasoningId);
@@ -59,7 +62,7 @@ export function SessionControls({
 			<Select
 				value={model?.id ?? ""}
 				onValueChange={(id) => {
-					setModelId(id);
+					onModelIdChange(id);
 					setReasoningId("");
 					setFast(false);
 				}}

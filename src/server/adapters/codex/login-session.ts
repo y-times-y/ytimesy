@@ -108,6 +108,7 @@ function failedStatus(message: string): CodexLoginStatus {
 export function startInteractiveDeviceCodeLogin(
 	machines: WorkspaceMachines,
 	workspaceId: WorkspaceId,
+	options: { skipInitialTurn?: boolean } = {},
 ): Effect.Effect<CodexLoginStatus> {
 	return Effect.gen(function* () {
 		const install = yield* Effect.tryPromise(() =>
@@ -142,6 +143,7 @@ export function startInteractiveDeviceCodeLogin(
 				`export CODEX_BIN=${shellSingleQuote(codexBin)}
 export CODEX_VERSION=${shellSingleQuote(codexVersion ?? "")}
 export CODEX_PREFERRED_MODEL=${shellSingleQuote(PREFERRED_CODEX_MODEL_ID)}
+export YTIMESY_SKIP_INITIAL_TURN=${options.skipInitialTurn ? "1" : "0"}
 ${START_LOGIN_SCRIPT}`,
 				30_000,
 			),
@@ -178,6 +180,7 @@ ${START_LOGIN_SCRIPT}`,
 export function resumeCodexSession(
 	machines: WorkspaceMachines,
 	workspaceId: WorkspaceId,
+	options: { skipInitialTurn?: boolean } = {},
 ): Effect.Effect<CodexLoginStatus> {
 	return Effect.gen(function* () {
 		const locate = yield* Effect.tryPromise(() =>
@@ -215,6 +218,7 @@ export function resumeCodexSession(
 				`export CODEX_BIN=${shellSingleQuote(codexBin)}
 export CODEX_VERSION=${shellSingleQuote(codexVersion ?? "")}
 export CODEX_PREFERRED_MODEL=${shellSingleQuote(PREFERRED_CODEX_MODEL_ID)}
+export YTIMESY_SKIP_INITIAL_TURN=${options.skipInitialTurn ? "1" : "0"}
 export FORCE_RESTART=1
 ${START_LOGIN_SCRIPT}`,
 				30_000,
@@ -346,6 +350,57 @@ export function readLoginStatus(
 			),
 		),
 	);
+}
+
+export function submitCodexTask(
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+	input: { readonly text: string; readonly modelId: string },
+): Effect.Effect<CodexLoginStatus> {
+	const taskId = crypto.randomUUID();
+	return Effect.gen(function* () {
+		yield* Effect.tryPromise(() =>
+			machines.writeTextFile(
+				workspaceId,
+				"/tmp/ytimesy-task-request.json",
+				`${JSON.stringify({
+					id: taskId,
+					text: input.text,
+					modelId: input.modelId,
+				})}\n`,
+			),
+		);
+		for (let attempt = 0; attempt < 90; attempt += 1) {
+			yield* Effect.sleep(Duration.seconds(2));
+			const raw = yield* Effect.tryPromise(() =>
+				machines.readTextFile(workspaceId, "/tmp/ytimesy-task-result.json"),
+			);
+			if (raw && resultMatchesTask(raw, taskId)) {
+				return yield* readLoginStatus(machines, workspaceId);
+			}
+		}
+		return failedStatus("Codex did not finish the task in time");
+	}).pipe(
+		Effect.catchAll((cause) =>
+			Effect.succeed(
+				failedStatus(cause instanceof Error ? cause.message : String(cause)),
+			),
+		),
+	);
+}
+
+function resultMatchesTask(raw: string, taskId: string): boolean {
+	try {
+		const parsed: unknown = JSON.parse(raw);
+		return (
+			typeof parsed === "object" &&
+			parsed !== null &&
+			"id" in parsed &&
+			parsed.id === taskId
+		);
+	} catch {
+		return false;
+	}
 }
 
 function shellSingleQuote(value: string): string {

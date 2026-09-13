@@ -11,6 +11,12 @@ export type CodexTurnResult = {
 	readonly error: string | null;
 };
 
+export type SessionMessage = {
+	readonly id: string;
+	readonly role: "user" | "assistant";
+	readonly text: string;
+};
+
 export type CodexLoginStatus =
 	| { readonly stage: "starting"; readonly codexVersion: string | null }
 	| {
@@ -26,6 +32,7 @@ export type CodexLoginStatus =
 			readonly planType: string | null;
 			readonly models: readonly ListedModel[];
 			readonly turn: CodexTurnResult | null;
+			readonly messages: readonly SessionMessage[];
 			readonly codexVersion: string | null;
 	  }
 	| {
@@ -83,6 +90,7 @@ export function parseCodexLoginStatus(
 				planType: readString(parsed.planType) ?? null,
 				models: listedModels(parsed.models),
 				turn: turnResult(parsed.turn),
+				messages: sessionMessages(parsed.messages),
 				codexVersion: readString(parsed.codexVersion) ?? null,
 			};
 		}
@@ -117,6 +125,24 @@ function listedModels(value: unknown): readonly ListedModel[] {
 	return models;
 }
 
+function sessionMessages(value: unknown): readonly SessionMessage[] {
+	if (!Array.isArray(value)) return [];
+	const messages: SessionMessage[] = [];
+	for (const row of value) {
+		if (!isRecord(row)) continue;
+		const role = readString(row.role);
+		const text = readString(row.text);
+		if (role !== "user" && role !== "assistant") continue;
+		if (!text) continue;
+		messages.push({
+			id: readString(row.id) ?? `${role}:${text}`,
+			role,
+			text,
+		});
+	}
+	return messages;
+}
+
 function turnResult(value: unknown): CodexTurnResult | null {
 	if (!isRecord(value)) return null;
 	const threadId = readString(value.threadId);
@@ -149,6 +175,7 @@ export function publicLoginStatus(status: CodexLoginStatus) {
 			modelCount: status.models.length,
 			models: status.models,
 			turn: status.turn,
+			messages: status.messages,
 			codexVersion: status.codexVersion,
 		};
 	}

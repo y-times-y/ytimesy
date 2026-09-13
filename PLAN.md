@@ -137,7 +137,7 @@ Recheck versioned APIs before implementing. Validate subscription connection usi
 - Effect services and adapters exist for that proof. TanStack Query is still unused. Sending remains disabled in the UI.
 - Better Auth is selected; authentication is not implemented.
 - No deployed app, durable project records, GitHub listing, terminal, preview, or publication flow yet.
-- Continue with milestone 3: identity, tenant-scoped records, and GitHub App repository access. Then persist a workspace and complete Codex login in product onboarding.
+- Continue with milestone 3: identity, tenant-scoped records, and GitHub App repository access. The workspace UI now connects Codex through the existing app-server daemon (not ACP), loading `model/list` into the composer after a private snapshot boot. Sending a task reuses that daemon's inbox. GitHub listing, terminal, preview, and publication remain unimplemented.
 
 ## Cloud-agent handoff
 
@@ -175,6 +175,6 @@ Run `pnpm install --frozen-lockfile`, then `pnpm dev` (port 3000). To match the 
 
 ### Next step
 
-A private Codex ChatGPT snapshot now exists for this environment; later proof VMs should boot from it instead of repeating device-code login. `turn/start` completed on listed `gpt-5.3-codex-spark`. Do not switch Codex work to API-key billing. Next: Better Auth with tenant-scoped PostgreSQL records and GitHub App repository listing, then persist a workspace and surface Codex login plus `model/list` in onboarding. Revisit Rigkit as the environment-prep adapter only if it can run as a Node worker without substituting a different VM provider.
+A private Codex ChatGPT snapshot now exists for this environment; later proof VMs should boot from it instead of repeating device-code login. The workspace UI connects that snapshot through Codex app-server (`thread/start` / `turn/start`, `model/list`) rather than ACP. `turn/start` completed on listed `gpt-5.3-codex-spark`. Do not switch Codex work to API-key billing. Next: Better Auth with tenant-scoped PostgreSQL records and GitHub App repository listing. Revisit Rigkit as the environment-prep adapter only if it can run as a Node worker without substituting a different VM provider.
 
 Provider credentials are not committed. Hosting, queue, and object-storage providers remain undecided. Do not assume a local server or an unpushed commit is available to a cloud agent: this repository must be made accessible to that environment first.
