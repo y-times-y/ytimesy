@@ -210,33 +210,96 @@
 	color: white;
 }
 .agent-setup {
+	display: grid;
+	grid-template-columns: 28px minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 4px 12px;
 	margin: 0 0 16px;
-	padding: 12px 14px;
-	border: 1px solid #353535;
-	border-radius: 8px;
-	background: #191919;
-	font-size: 13px;
-	color: #cfcfcf;
+	padding: 14px 16px;
+	border: 1px solid #2e2e2e;
+	border-radius: 12px;
+	background: #141414;
 	flex-shrink: 0;
 }
-.agent-setup p {
-	margin: 0 0 8px;
+.agent-setup-mark {
+	display: grid;
+	place-items: center;
+	width: 28px;
+	height: 28px;
+	color: #f2f2f0;
 }
-.agent-setup p:last-child {
-	margin-bottom: 0;
+.agent-setup-copy {
+	min-width: 0;
 }
-.agent-setup button {
-	min-height: 44px;
-	padding: 8px 12px;
-	border: 1px solid #555;
+.agent-setup-copy h2 {
+	margin: 0;
+	font-size: 14px;
+	font-weight: 550;
+	letter-spacing: -0.02em;
+	color: #f0f0f0;
+}
+.agent-setup-copy p {
+	margin: 3px 0 0;
+	font-size: 12px;
+	line-height: 1.45;
+	color: #8d8d8d;
+}
+.agent-setup-action {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-height: 32px;
+	padding: 6px 12px;
+	border: 1px solid #808080;
 	border-radius: 8px;
 	background: #dcdcdc;
 	color: #151515;
+	font-size: 13px;
+	text-decoration: none;
+	white-space: nowrap;
 }
-.agent-setup button:disabled {
+.agent-setup-action:hover {
+	background: #ececec;
+	color: #111;
+}
+.agent-setup button.agent-setup-action:disabled {
 	cursor: not-allowed;
 	background: #777;
 	color: #363636;
+}
+.agent-setup-code {
+	grid-column: 2 / -1;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-top: 8px;
+}
+.agent-setup-code code {
+	padding: 6px 10px;
+	border: 1px solid #333;
+	border-radius: 8px;
+	background: #0e0e0e;
+	color: #f2f2f0;
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: 16px;
+	font-weight: 550;
+	letter-spacing: 0.12em;
+}
+.agent-setup-code button {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	min-height: 32px;
+	padding: 4px 10px;
+	border: 1px solid #3a3a3a;
+	border-radius: 8px;
+	background: transparent;
+	color: #cfcfcf;
+	font-size: 12px;
+}
+.agent-setup-code button:hover {
+	background: #ffffff0c;
+	color: #fff;
 }
 .project-setup-notice {
 	margin-top: 18px;
@@ -671,6 +734,17 @@
 		min-width: 44px;
 		height: 44px;
 	}
+	.agent-setup {
+		grid-template-columns: 28px minmax(0, 1fr);
+	}
+	.agent-setup-action {
+		grid-column: 2;
+		justify-self: start;
+		margin-top: 4px;
+	}
+	.agent-setup-code {
+		grid-column: 1 / -1;
+	}
 }
 @media (max-width: 600px), (max-width: 900px) and (max-height: 500px) {
 	.session-launcher[data-layout="empty"] {
@@ -680,7 +754,9 @@
 @media (pointer: coarse) {
 	.composer-control,
 	.session-send,
-	.session-attachments button {
+	.session-attachments button,
+	.agent-setup-action,
+	.agent-setup-code button {
 		min-width: 44px;
 		min-height: 44px;
 	}

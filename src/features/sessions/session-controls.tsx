@@ -82,7 +82,7 @@ export function SessionControls({
 				>
 					{models.length === 0 ? (
 						<SelectItem value="unconnected" disabled>
-							Connect an agent to load models
+							Sign in to Codex to load models
 						</SelectItem>
 					) : (
 						models.map((availableModel) => (
