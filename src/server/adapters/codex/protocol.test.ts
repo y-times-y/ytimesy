@@ -20,6 +20,7 @@ describe("Codex probe protocol", () => {
 
 		expect(agentConnectionFromProbe(report)).toEqual({
 			status: "awaiting_device_code",
+			provider: "codex",
 			loginId: "login-1",
 			verificationUrl: "https://auth.openai.com/codex/device",
 			userCode: "ABCD-1234",
@@ -37,6 +38,7 @@ describe("Codex probe protocol", () => {
 
 		expect(agentConnectionFromProbe(report)).toEqual({
 			status: "failed",
+			provider: "codex",
 			message:
 				"Codex returned API-key login; ytimesy requires ChatGPT device-code auth",
 		});
@@ -56,6 +58,7 @@ describe("Codex probe protocol", () => {
 
 		expect(agentConnectionFromProbe(report)).toEqual({
 			status: "authenticated",
+			provider: "codex",
 			authMode: "chatgpt",
 			planType: "plus",
 			email: null,

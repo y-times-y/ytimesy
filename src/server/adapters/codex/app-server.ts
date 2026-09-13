@@ -37,6 +37,7 @@ export function installAndProbeDeviceCode(
 			return {
 				connection: {
 					status: "failed" as const,
+					provider: "codex" as const,
 					message: `Codex install failed: ${(install.stderr || install.stdout).trim()}`,
 				},
 				codexVersion: null,
@@ -57,6 +58,7 @@ export function installAndProbeDeviceCode(
 			return {
 				connection: {
 					status: "failed" as const,
+					provider: "codex" as const,
 					message: "Codex install succeeded without reporting a binary path",
 				},
 				codexVersion,
@@ -101,6 +103,7 @@ export function installAndProbeDeviceCode(
 			Effect.succeed({
 				connection: {
 					status: "failed" as const,
+					provider: "codex" as const,
 					message: cause instanceof Error ? cause.message : String(cause),
 				},
 				codexVersion: null,

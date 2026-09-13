@@ -55,7 +55,7 @@ export function composerSlashCommands(
 			label: "Side chat",
 			description: "Ask a question without interrupting the current run",
 			availability: context.authenticated ? "ready" : "unavailable",
-			unavailableReason: "Sign in to Codex to start a side chat",
+			unavailableReason: "Sign in to an agent to start a side chat",
 		},
 		{
 			id: "btw",
@@ -63,7 +63,7 @@ export function composerSlashCommands(
 			label: "By the way",
 			description: "Open a side chat for a tangent",
 			availability: context.authenticated ? "ready" : "unavailable",
-			unavailableReason: "Sign in to Codex to start a side chat",
+			unavailableReason: "Sign in to an agent to start a side chat",
 		},
 		{
 			id: "stop",
@@ -90,7 +90,7 @@ export function composerSlashCommands(
 			label: "Model",
 			description: "Switch the model for the next run",
 			availability: context.hasModels ? "ready" : "unavailable",
-			unavailableReason: "Sign in to Codex to load models",
+			unavailableReason: "Sign in to an agent to load models",
 		},
 		{
 			id: "diff",

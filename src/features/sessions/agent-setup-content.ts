@@ -1,11 +1,20 @@
 import type { AgentConnection } from "#/domain/agent-connection";
+import {
+	type AgentProvider,
+	offeredAgentProviders,
+} from "#/domain/agent-provider";
 
-export type AgentSetupContent = {
-	readonly title: "Codex";
+export type AgentProviderSetup = {
+	readonly provider: AgentProvider;
 	readonly detail: string;
 	readonly actionLabel: string | null;
 	readonly userCode: string | null;
 	readonly verificationUrl: string | null;
+};
+
+export type AgentSetupContent = {
+	readonly heading: "Connect an agent";
+	readonly providers: readonly AgentProviderSetup[];
 };
 
 export function agentSetupContent(
@@ -13,27 +22,42 @@ export function agentSetupContent(
 	snapshotAvailable: boolean,
 ): AgentSetupContent | null {
 	if (connection.status === "authenticated") return null;
-	if (connection.status === "awaiting_device_code") {
+	return {
+		heading: "Connect an agent",
+		providers: offeredAgentProviders().map((provider) =>
+			providerSetup(provider, connection, snapshotAvailable),
+		),
+	};
+}
+
+function providerSetup(
+	provider: AgentProvider,
+	connection: AgentConnection,
+	snapshotAvailable: boolean,
+): AgentProviderSetup {
+	const forThisProvider =
+		connection.status !== "disconnected" && connection.provider === provider.id;
+	if (forThisProvider && connection.status === "awaiting_device_code") {
 		return {
-			title: "Codex",
-			detail: "Enter this code on OpenAI to authorize this workspace.",
-			actionLabel: "Open OpenAI",
+			provider,
+			detail: `Enter this code on ${provider.authorizeWith} to authorize this workspace.`,
+			actionLabel: `Open ${provider.authorizeWith}`,
 			userCode: connection.userCode,
 			verificationUrl: connection.verificationUrl,
 		};
 	}
-	if (connection.status === "failed") {
+	if (forThisProvider && connection.status === "failed") {
 		return {
-			title: "Codex",
+			provider,
 			detail: connection.message,
 			actionLabel: "Try again",
 			userCode: null,
 			verificationUrl: null,
 		};
 	}
-	if (connection.status === "expired") {
+	if (forThisProvider && connection.status === "expired") {
 		return {
-			title: "Codex",
+			provider,
 			detail: connection.message,
 			actionLabel: "Sign in again",
 			userCode: null,
@@ -41,10 +65,11 @@ export function agentSetupContent(
 		};
 	}
 	return {
-		title: "Codex",
-		detail: snapshotAvailable
-			? "Sign in with ChatGPT to continue."
-			: "Sign in with ChatGPT to use Codex in this workspace.",
+		provider,
+		detail:
+			snapshotAvailable && provider.id === "codex"
+				? `Sign in with ${provider.signInMethod} to continue.`
+				: `Sign in with ${provider.signInMethod}.`,
 		actionLabel: "Sign in",
 		userCode: null,
 		verificationUrl: null,
