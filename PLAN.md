@@ -44,7 +44,7 @@ Codex onboarding target: Connect Codex → copy a one-time code → authorize on
 | GitHub | GitHub App and Octokit |
 | UI | Tailwind and shadcn/ui preset `b1D0dv72` (Radix Mira, neutral, Inter) |
 | Terminal | xterm.js connected to the workspace PTY |
-| Jobs | Durable queue and separately runnable workers; provider not chosen |
+| Jobs | pg-boss in PostgreSQL schema `job_queue`; separately runnable `pnpm worker` |
 | Live transport | Reconnectable agent events; WebSockets for terminal; exact transport to validate |
 | Large artifacts | Object storage; provider not chosen |
 
@@ -70,7 +70,7 @@ This integration manages database changes from this repository. It is separate f
 
 ### Migration ownership
 
-Initialize and commit `supabase/config.toml` and ordered SQL files under `supabase/migrations/` when implementing the database. The CLI configuration is initialized. Migrations `20260913010000_enable_automatic_rls.sql` and `20260913193000_identity_and_projects.sql` are applied. The latter contains Better Auth, encrypted GitHub connections, single-use OAuth state, and personal project records. Capture any existing application schema before introducing migrations; inspect the actual database rather than assuming it is empty. Treat migrations as the authoritative schema history, including Better Auth tables and job-system setup. Account for libraries that create or migrate their own schemas so two independent mechanisms do not race or diverge.
+Initialize and commit `supabase/config.toml` and ordered SQL files under `supabase/migrations/` when implementing the database. The CLI configuration is initialized. Migrations `20260913010000_enable_automatic_rls.sql` and `20260913193000_identity_and_projects.sql` are applied. The latter contains Better Auth, encrypted GitHub connections, single-use OAuth state, and personal project records. Capture any existing application schema before introducing migrations; inspect the actual database rather than assuming it is empty. Treat migrations as the authoritative schema history, including Better Auth tables and job-system setup. pg-boss creates and migrates its own tables inside the `job_queue` schema at process start; application migrations only create that schema and revoke Data API access. Do not copy pg-boss DDL into `supabase/migrations/`. Account for libraries that create or migrate their own schemas so two independent mechanisms do not race or diverge.
 
 For a schema change, add a new migration, verify it against a disposable development database, and review it with the application changes. Preserve already-applied migrations. Keep production data and credentials out of migration/seed files. Preview branches rebuild schema from committed migrations and optional seeds; they do not automatically copy production schema or data.
 
@@ -168,6 +168,7 @@ Recheck versioned APIs before implementing. Validate subscription connection usi
 - Research and product decisions captured; coding skill installed.
 - TanStack Start foundation and workspace empty states implemented; Diff / Terminal / Preview selectors work. Effect and TanStack Query are installed but their service/data integrations are pending.
 - Better Auth GitHub sign-in, encrypted GitHub App connections, repository/branch selection, and owner-scoped project records are implemented and verified locally.
+- Durable per-user workspace records, pg-boss jobs in the `job_queue` schema, GitHub disconnect, and Codex account persistence (snapshot id sealed, never returned to the browser) are implemented. Adding a project queues workspace preparation. The worker clones the authorized branch and installs lockfile dependencies through a `WorkspaceRuntime` capability. Freestyle hosting, Rigkit, and Codex device-code login remain the parallel integration-proof work; this process uses an unconfigured runtime until that host is wired.
 - No deployed app or complete end-to-end flow yet. Freestyle VM creation, remote execution, pinned Codex installation, and app-server handshake were verified live on 2026-09-13. ChatGPT device authorization and a real app-server file edit passed. The UI is not connected to this operator proof.
 - The narrow Codex/Freestyle proof and identity/repository step passed. Continue with Rigkit validation and durable workspace preparation.
 
@@ -179,7 +180,7 @@ Use ytimesy to work on its own repository with a real cloud coding agent. Preser
 
 ### Current evidence and limits
 
-The app currently contains frontend interactions and honest empty states, not a working cloud-agent service. Model, reasoning, and Fast options require connected-agent capabilities; sending stays disabled until integration. File attachments are local draft state. Diff, Terminal, and Preview are UI shells. Better Auth, PostgreSQL records, and GitHub repository authorization now work. Durable jobs, production VM provisioning, in-app agent execution, and live transports remain unimplemented. Prior browser checks exercised the local UI; they do not prove remote authentication or execution.
+The app currently contains frontend interactions and honest empty states, not a working cloud-agent service. Model, reasoning, and Fast options require connected-agent capabilities; sending stays disabled until integration. File attachments are local draft state. Diff, Terminal, and Preview are UI shells. Better Auth, PostgreSQL records, GitHub repository authorization, durable workspace jobs, and per-user agent-account records now work. Production VM provisioning, in-app agent execution, and live transports remain unimplemented. Prior browser checks exercised the local UI; they do not prove remote authentication or execution.
 
 ### Decisions to preserve
 
@@ -189,11 +190,11 @@ Use the installed self-documenting-code skill. Keep routes thin and put provider
 
 ### Local setup and verification
 
-Run `pnpm install --frozen-lockfile`, then `pnpm dev` (port 3000). To match the existing local browser, run `pnpm exec vite dev --host 127.0.0.1 --port 3001`. Run `pnpm lint`, `pnpm typecheck`, and `pnpm build` before handing off structural changes. Use agent-browser for UI checks. Screenshots and credentials must remain out of Git.
+Run `pnpm install --frozen-lockfile`, then `pnpm dev` (port 3000). To match the existing local browser, run `pnpm exec vite dev --host 127.0.0.1 --port 3001`. Run `pnpm worker` in a second process to drain workspace-preparation jobs. Run `pnpm lint`, `pnpm typecheck`, and `pnpm build` before handing off structural changes. Use agent-browser for UI checks. Screenshots and credentials must remain out of Git.
 
 ### Next step
 
-The isolated Codex authentication and single-request proof passed (see progress below). Identity and authorized GitHub repository selection now work locally. Next implement durable workspace preparation and connect the Codex flow to the signed-in user. Validate Rigkit setup and recovery before connecting this proof through a durable workspace workflow. Record live results and unresolved issues after each milestone.
+The isolated Codex authentication and single-request proof passed (see progress below). Identity and authorized GitHub repository selection now work locally. Durable workspace records and the prepare-workspace job exist; they wait on the Freestyle host adapter from the parallel integration-proof work. Connect the Codex device-code flow to `saveConnectedAgentAccount` so snapshot ids are stored per signed-in user instead of a local `.ytimesy/` file. Validate Rigkit setup and recovery before treating preparation as complete. Record live results and unresolved issues after each milestone.
 
 Provider credentials and account-side configuration are not included in the repository. Supabase is selected for PostgreSQL. Hosting, queue, and object-storage providers remain undecided. Do not assume a local server or an unpushed commit is available to a cloud agent: this repository must be made accessible to that environment first.
 
@@ -217,6 +218,10 @@ Repository discovery uses the GitHub App user token, so GitHub enforces the inte
 
 Live evidence: Het signed in through GitHub, authorized the ytimesy Cloud app, selected `y-times-y/ytimesy` and `master`, saved the project, and saw it restored after a browser reload. The installation returned only that repository. Supabase schema verification found no missing Better Auth tables/columns. Signed-out project access returned 401; a cross-origin mutation returned 403. The client production bundle contained none of the configured secret values. Screens remain honest: agent model selection and sending are still unavailable pending the next integration.
 
-Validation: 12 tests cover migration/RLS, owner isolation, missing owners, request origins, OAuth state ownership/replay/expiry, mismatched GitHub accounts, unauthorized repositories, and missing branches. These use a disposable PGlite database and mocked GitHub responses; the real onboarding evidence above is separate. Typecheck, lint, and production build pass. Agent-browser verified the signed-out screen at 320px; authenticated flow was verified in Comet. Real-device Safari and expired-token refresh against GitHub remain untested. Better Auth's migration inspector warns about its own generated bigint rate-limit field (`lastRequest`); it reports no missing schema and live auth works.
+Validation: tests cover migration/RLS, owner isolation, missing owners, request origins, OAuth state ownership/replay/expiry, mismatched GitHub accounts, unauthorized repositories, missing branches, workspace duplicate-provision policy, token redaction, and sealed agent-account snapshot ids. These use a disposable PGlite database and mocked GitHub responses; the real onboarding evidence above is separate. Typecheck, lint, and production build pass. Agent-browser verified the signed-out screen at 320px; authenticated flow was verified in Comet. Real-device Safari and expired-token refresh against GitHub remain untested. Better Auth's migration inspector warns about its own generated bigint rate-limit field (`lastRequest`); it reports no missing schema and live auth works.
 
-Run `pnpm dev` for the environment-loaded server on port 3001. GitHub App `ytimesy-cloud` is installed on organization `y-times-y` with selected access to this repository. The database migration was pushed with the existing database password supplied to the CLI through its environment after its temporary-login-role API failed. Do not expose that password in process arguments or commit it.
+Run `pnpm dev` for the environment-loaded server on port 3001 and `pnpm worker` to drain prepare-workspace jobs. GitHub App `[REDACTED]` is installed on organization `y-times-y` with selected access to this repository. The database migration was pushed with the existing database password supplied to the CLI through its environment after its temporary-login-role API failed. Do not expose that password in process arguments or commit it.
+
+### Durable workspace records and identity follow-through — 2026-09-13
+
+Added owner-scoped `workspace`, `workspace_event`, and `agent_account` tables plus the `job_queue` schema for pg-boss. Saving a project queues `prepare-workspace`. The worker claims one workspace per project, records a provider ref before further work, reuses a machine found by slug after a timeout, clones with the GitHub token only in git config env, and installs from the detected lockfile. Snapshot ids for Codex are sealed per user and omitted from `/api/account`. GitHub disconnect deletes stored App credentials without signing the user out. Freestyle VM creation stays behind `WorkspaceRuntime`; this worker uses the unconfigured host until that adapter is wired.

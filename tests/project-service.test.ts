@@ -58,3 +58,38 @@ it("does not save a nonexistent branch", async () => {
 	expect(result._tag).toBe("Left");
 	expect(adapter.save).not.toHaveBeenCalled();
 });
+it("queues workspace preparation only after the project is saved", async () => {
+	adapter.authorize.mockResolvedValue({
+		fullName: "test/repo",
+		installationId: 1,
+		repositoryId: 2,
+	});
+	adapter.branch.mockResolvedValue({});
+	adapter.save.mockResolvedValue({
+		id: "proj",
+		repositoryId: 2,
+		installationId: 1,
+		fullName: "test/repo",
+		branch: "main",
+	});
+	const enqueue = vi.fn(() =>
+		Effect.succeed({
+			id: "ws",
+			userId: "alice",
+			projectId: "proj",
+			status: "queued" as const,
+			providerRef: null,
+			errorMessage: null,
+			updatedAt: new Date(0).toISOString(),
+		}),
+	);
+	await Effect.runPromise(
+		connectProject(
+			"alice",
+			{ installationId: 1, repositoryId: 2, branch: "main" },
+			enqueue,
+		),
+	);
+	expect(adapter.save).toHaveBeenCalledOnce();
+	expect(enqueue).toHaveBeenCalledWith("alice", "proj");
+});

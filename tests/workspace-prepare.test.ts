@@ -1,0 +1,108 @@
+import { readFile } from "node:fs/promises";
+import { PGlite } from "@electric-sql/pglite";
+import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { saveProject } from "../src/server/adapters/projects";
+import { MemoryWorkspaceRuntime } from "../src/server/adapters/workspace-runtime";
+import {
+	insertQueuedWorkspace,
+	listWorkspaceEvents,
+	saveProviderRef,
+	saveWorkspaceStatus,
+	workspaceById,
+} from "../src/server/adapters/workspaces";
+import { runWorkspacePreparation } from "../src/server/jobs/prepare-workspace";
+
+let db: PGlite;
+vi.mock("../src/server/adapters/database", () => ({
+	database: () => ({
+		query: async (sql: string, params?: unknown[]) => {
+			const result = await db.query(sql, params);
+			return { ...result, rowCount: result.affectedRows ?? result.rows.length };
+		},
+	}),
+}));
+vi.mock("../src/server/config", () => ({
+	serverConfig: () => ({
+		APP_URL: "[REDACTED]",
+		BETTER_AUTH_SECRET: "test-only-secret-longer-than-thirty-two-characters",
+	}),
+}));
+vi.mock("../src/server/auth/github-connection", () => ({
+	githubAccessToken: async () => "ghp_secretfixturetoken",
+}));
+
+beforeAll(async () => {
+	db = new PGlite();
+	await db.exec("create role anon; create role authenticated;");
+	for (const file of [
+		"20260913010000_enable_automatic_rls.sql",
+		"20260913193000_identity_and_projects.sql",
+		"20260913221500_workspaces_jobs_agent_accounts.sql",
+	])
+		await db.exec(await readFile(`supabase/migrations/${file}`, "utf8"));
+	await db.exec(
+		`insert into auth_user(id,name,email,"emailVerified") values('alice','Alice','alice@example.test',true)`,
+	);
+});
+afterAll(() => db.close());
+
+const repo = {
+	installationId: 1,
+	repositoryId: 9,
+	fullName: "acme/app",
+	defaultBranch: "main",
+};
+
+it("clones with a token in env only and reuses a machine found by slug", async () => {
+	const project = await saveProject("alice", repo, "main");
+	const workspace = await insertQueuedWorkspace("alice", project.id);
+	const runtime = new MemoryWorkspaceRuntime({
+		exitCode: 0,
+		stdout: "pnpm-lock.yaml\n",
+		stderr: "",
+	});
+	await runtime.provision(`ytimesy-ws-${workspace.id}`);
+	const ready = await runWorkspacePreparation(workspace.id, runtime);
+	expect(ready?.status).toBe("ready");
+	expect(runtime.machines.size).toBe(1);
+	expect(
+		runtime.commands.some((command) =>
+			command.argv.join(" ").includes("git clone"),
+		),
+	).toBe(true);
+	expect(
+		runtime.commands.some((command) => command.argv.join(" ").includes("ghp_")),
+	).toBe(false);
+	const events = await listWorkspaceEvents("alice", workspace.id);
+	expect(events.map((event) => event.message).join("\n")).not.toContain("ghp_");
+});
+
+it("recovers a recorded provider instead of creating a second machine", async () => {
+	const project = await saveProject(
+		"alice",
+		{
+			...repo,
+			repositoryId: 10,
+			fullName: "acme/recover",
+		},
+		"main",
+	);
+	const workspace = await insertQueuedWorkspace("alice", project.id);
+	const runtime = new MemoryWorkspaceRuntime({
+		exitCode: 0,
+		stdout: "package-lock.json\n",
+		stderr: "",
+	});
+	const providerRef = await runtime.provision(`ytimesy-ws-${workspace.id}`);
+	await saveProviderRef(workspace.id, providerRef);
+	await saveWorkspaceStatus(workspace.id, "provisioning");
+	const originalCreate = runtime.provision.bind(runtime);
+	let provisions = 0;
+	runtime.provision = async (slug) => {
+		provisions += 1;
+		return originalCreate(slug);
+	};
+	await runWorkspacePreparation(workspace.id, runtime);
+	expect(provisions).toBe(0);
+	expect((await workspaceById(workspace.id))?.status).toBe("ready");
+});

@@ -851,3 +851,26 @@ button:enabled:active {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+.session-context {
+	flex-wrap: wrap;
+}
+.workspace-status {
+	flex: 1 1 100%;
+	margin: 0;
+	font-size: 12px;
+	line-height: 1.4;
+	color: #929292;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	min-height: 24px;
+}
+.workspace-status button {
+	min-height: 44px;
+	padding: 0 10px;
+	border: 0;
+	border-radius: 8px;
+	background: #3a3a3a;
+	color: #eee;
+	font-size: 12px;
+}

@@ -14,7 +14,8 @@
 		"lint": "biome check .",
 		"format": "biome check --write .",
 		"cloud:proof": "node --env-file=.env --import tsx scripts/cloud-proof/freestyle.ts",
-		"test": "vitest run"
+		"test": "vitest run",
+		"worker": "node --env-file-if-exists=.env --import tsx src/server/jobs/worker.ts"
 	},
 	"dependencies": {
 		"@fontsource-variable/inter": "^5.3.0",
