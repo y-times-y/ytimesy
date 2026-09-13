@@ -19,3 +19,6 @@ dist/
 !.env.example
 *.tsbuildinfo
 .DS_Store
+
+# Live provider proof state (workspace IDs, never commit login codes)
+.ytimesy/

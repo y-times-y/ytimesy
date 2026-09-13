@@ -17,7 +17,7 @@ export class WorkspaceProvisionError extends Data.TaggedError(
 export class WorkspaceCommandError extends Data.TaggedError(
 	"WorkspaceCommandError",
 )<{
-	readonly operation: "exec" | "writeFile";
+	readonly operation: "exec" | "writeFile" | "readFile";
 	readonly message: string;
 	readonly providerWorkspaceId: string;
 }> {}

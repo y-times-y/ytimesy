@@ -12,7 +12,8 @@
 			"*.json",
 			"vite.config.ts",
 			"vitest.config.ts",
-			"!src/routeTree.gen.ts"
+			"!src/routeTree.gen.ts",
+			"!src/**/*.py"
 		]
 	},
 	"formatter": {

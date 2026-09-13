@@ -12,8 +12,15 @@ export interface ProofWorkspace {
 	readonly slug: string;
 }
 
+export interface CreateProofWorkspaceOptions {
+	readonly ttlSeconds?: number;
+	readonly idleTimeoutSeconds?: number;
+}
+
 export interface WorkspaceMachines {
-	readonly createProofWorkspace: () => Promise<ProofWorkspace>;
+	readonly createProofWorkspace: (
+		options?: CreateProofWorkspaceOptions,
+	) => Promise<ProofWorkspace>;
 	readonly exec: (
 		workspaceId: WorkspaceId,
 		command: string,
@@ -24,6 +31,10 @@ export interface WorkspaceMachines {
 		path: string,
 		contents: string,
 	) => Promise<void>;
+	readonly readTextFile: (
+		workspaceId: WorkspaceId,
+		path: string,
+	) => Promise<string | null>;
 	readonly destroy: (workspaceId: WorkspaceId) => Promise<void>;
 	readonly destroyOrphans: (slugPrefix: string) => Promise<readonly string[]>;
 }

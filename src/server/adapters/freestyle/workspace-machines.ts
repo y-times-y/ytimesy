@@ -7,6 +7,7 @@ import {
 } from "#/server/services/errors";
 import type {
 	CommandOutput,
+	CreateProofWorkspaceOptions,
 	ProofWorkspace,
 	WorkspaceMachines,
 } from "#/server/services/workspace-machines";
@@ -28,7 +29,9 @@ export function createFreestyleWorkspaceMachines(
 	const freestyle = new Freestyle({ apiKey });
 
 	return {
-		async createProofWorkspace(): Promise<ProofWorkspace> {
+		async createProofWorkspace(
+			options: CreateProofWorkspaceOptions = {},
+		): Promise<ProofWorkspace> {
 			const slug = proofWorkspaceSlug(randomBytes(4).toString("hex"));
 			try {
 				const created = await freestyle.vms.create({
@@ -36,8 +39,8 @@ export function createFreestyleWorkspaceMachines(
 					displayName: "ytimesy workspace proof",
 					firewall: GUEST_INTERNET_FIREWALL,
 					metadata: { purpose: PROOF_METADATA_PURPOSE },
-					ttlSeconds: 20 * 60,
-					idleTimeoutSeconds: 10 * 60,
+					ttlSeconds: options.ttlSeconds ?? 20 * 60,
+					idleTimeoutSeconds: options.idleTimeoutSeconds ?? 10 * 60,
 				});
 				const running = await waitUntilRunning(created.vm);
 				return {
@@ -87,6 +90,27 @@ export function createFreestyleWorkspaceMachines(
 			} catch (cause) {
 				throw new WorkspaceCommandError({
 					operation: "writeFile",
+					message: providerMessage(cause),
+					providerWorkspaceId: workspaceId,
+				});
+			}
+		},
+
+		async readTextFile(
+			workspaceId: WorkspaceId,
+			path: string,
+		): Promise<string | null> {
+			try {
+				return await freestyle.vms.ref(workspaceId).fs.readTextFile(path);
+			} catch (cause) {
+				if (
+					cause instanceof FreestyleApiError &&
+					(cause.status === 404 || cause.code === "NOT_FOUND")
+				) {
+					return null;
+				}
+				throw new WorkspaceCommandError({
+					operation: "readFile",
 					message: providerMessage(cause),
 					providerWorkspaceId: workspaceId,
 				});
