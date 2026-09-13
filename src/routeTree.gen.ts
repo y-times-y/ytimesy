@@ -14,6 +14,7 @@ import { Route as OnboardingRouteImport } from './routes/onboarding'
 import { Route as ApiAccountRouteImport } from './routes/api/account'
 import { Route as ApiProjectsRouteImport } from './routes/api/projects'
 import { Route as ApiWorkspacesRouteImport } from './routes/api/workspaces'
+import { Route as AuthPathRouteImport } from './routes/auth/$path'
 import { Route as ApiAgentAccountRouteImport } from './routes/api/agent/account'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiGithubBranchesRouteImport } from './routes/api/github/branches'
@@ -46,6 +47,11 @@ const ApiProjectsRoute = ApiProjectsRouteImport.update({
 const ApiWorkspacesRoute = ApiWorkspacesRouteImport.update({
   id: '/api/workspaces',
   path: '/api/workspaces',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AuthPathRoute = AuthPathRouteImport.update({
+  id: '/auth/$path',
+  path: '/auth/$path',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiAgentAccountRoute = ApiAgentAccountRouteImport.update({
@@ -95,6 +101,7 @@ export interface FileRoutesByFullPath {
   '/api/account': typeof ApiAccountRoute
   '/api/projects': typeof ApiProjectsRoute
   '/api/workspaces': typeof ApiWorkspacesRouteWithChildren
+  '/auth/$path': typeof AuthPathRoute
   '/api/agent/account': typeof ApiAgentAccountRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/github/branches': typeof ApiGithubBranchesRoute
@@ -110,6 +117,7 @@ export interface FileRoutesByTo {
   '/api/account': typeof ApiAccountRoute
   '/api/projects': typeof ApiProjectsRoute
   '/api/workspaces': typeof ApiWorkspacesRouteWithChildren
+  '/auth/$path': typeof AuthPathRoute
   '/api/agent/account': typeof ApiAgentAccountRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/github/branches': typeof ApiGithubBranchesRoute
@@ -126,6 +134,7 @@ export interface FileRoutesById {
   '/api/account': typeof ApiAccountRoute
   '/api/projects': typeof ApiProjectsRoute
   '/api/workspaces': typeof ApiWorkspacesRouteWithChildren
+  '/auth/$path': typeof AuthPathRoute
   '/api/agent/account': typeof ApiAgentAccountRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/github/branches': typeof ApiGithubBranchesRoute
@@ -143,6 +152,7 @@ export interface FileRouteTypes {
     | '/api/account'
     | '/api/projects'
     | '/api/workspaces'
+    | '/auth/$path'
     | '/api/agent/account'
     | '/api/auth/$'
     | '/api/github/branches'
@@ -158,6 +168,7 @@ export interface FileRouteTypes {
     | '/api/account'
     | '/api/projects'
     | '/api/workspaces'
+    | '/auth/$path'
     | '/api/agent/account'
     | '/api/auth/$'
     | '/api/github/branches'
@@ -173,6 +184,7 @@ export interface FileRouteTypes {
     | '/api/account'
     | '/api/projects'
     | '/api/workspaces'
+    | '/auth/$path'
     | '/api/agent/account'
     | '/api/auth/$'
     | '/api/github/branches'
@@ -189,6 +201,7 @@ export interface RootRouteChildren {
   ApiAccountRoute: typeof ApiAccountRoute
   ApiProjectsRoute: typeof ApiProjectsRoute
   ApiWorkspacesRoute: typeof ApiWorkspacesRouteWithChildren
+  AuthPathRoute: typeof AuthPathRoute
   ApiAgentAccountRoute: typeof ApiAgentAccountRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiGithubBranchesRoute: typeof ApiGithubBranchesRoute
@@ -233,6 +246,13 @@ declare module '@tanstack/react-router' {
       path: '/api/workspaces'
       fullPath: '/api/workspaces'
       preLoaderRoute: typeof ApiWorkspacesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/auth/$path': {
+      id: '/auth/$path'
+      path: '/auth/$path'
+      fullPath: '/auth/$path'
+      preLoaderRoute: typeof AuthPathRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/agent/account': {
@@ -312,6 +332,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAccountRoute: ApiAccountRoute,
   ApiProjectsRoute: ApiProjectsRoute,
   ApiWorkspacesRoute: ApiWorkspacesRouteWithChildren,
+  AuthPathRoute: AuthPathRoute,
   ApiAgentAccountRoute: ApiAgentAccountRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiGithubBranchesRoute: ApiGithubBranchesRoute,
