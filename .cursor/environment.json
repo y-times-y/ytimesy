@@ -1,0 +1,17 @@
+{
+	"name": "ytimesy",
+	"install": "corepack enable && pnpm install --frozen-lockfile",
+	"terminals": [
+		{
+			"name": "dev",
+			"command": "pnpm dev",
+			"description": "Runs the ytimesy TanStack Start dev server on port 3001. Server routes for sign-in, GitHub, and projects need real secrets (BETTER_AUTH_SECRET, DATABASE_URL, GitHub OAuth/App, FREESTYLE_API_KEY) provided via environment secrets; the UI renders without them."
+		}
+	],
+	"ports": [
+		{
+			"name": "web server",
+			"port": 3001
+		}
+	]
+}
