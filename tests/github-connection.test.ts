@@ -38,7 +38,7 @@ beforeAll(async () => {
 			"utf8",
 		),
 	);
-	await db.exec(`insert into auth_user(id,name,email,"emailVerified") values('alice','Alice','alice@example.test',true),('bob','Bob','bob@example.test',true);
+	await db.exec(`insert into auth_user(id,name,email,"emailVerified") values('alice','Alice','alice@example.test',true),('bob','Bob','bob@example.test',true),('carol','Carol','carol@example.test',true);
  insert into auth_account(id,"accountId","providerId","userId","updatedAt") values('a','123','github','alice',now());`);
 	github.exchange.mockResolvedValue({
 		accessToken: "secret-fixture-token",
@@ -86,6 +86,14 @@ it("rejects expired authorization state", async () => {
 	await expect(
 		finishGithubConnection("alice", state, "code"),
 	).rejects.toThrow();
+});
+it("lets email or Google users connect a GitHub account for repositories", async () => {
+	github.profile.mockResolvedValueOnce({ data: { id: 789 } });
+	const state =
+		new URL(await startGithubConnection("carol")).searchParams.get("state") ??
+		"";
+	await finishGithubConnection("carol", state, "code");
+	expect(await githubConnectionExists("carol")).toBe(true);
 });
 it("removes stored GitHub credentials on disconnect", async () => {
 	const state =

@@ -1,6 +1,8 @@
 import { betterAuth } from "better-auth";
 import { database } from "../adapters/database";
+import { persistVerificationEmail } from "../adapters/email";
 import { serverConfig } from "../config";
+import { authTrustedOrigins, googleOAuthConfigured } from "./providers";
 
 export function authOptions() {
 	const config = serverConfig();
@@ -8,7 +10,31 @@ export function authOptions() {
 		database: database(),
 		baseURL: config.APP_URL,
 		secret: config.BETTER_AUTH_SECRET,
-		trustedOrigins: [config.APP_URL],
+		trustedOrigins: authTrustedOrigins(config.APP_URL),
+		emailAndPassword: {
+			enabled: true,
+			requireEmailVerification: true,
+			minPasswordLength: 8,
+			autoSignIn: false,
+		},
+		emailVerification: {
+			sendOnSignUp: true,
+			sendOnSignIn: true,
+			autoSignInAfterVerification: true,
+			sendVerificationEmail: async ({
+				user,
+				url,
+			}: {
+				user: { email: string };
+				url: string;
+			}) => {
+				await persistVerificationEmail({
+					to: user.email,
+					subject: "Verify your ytimesy email",
+					actionUrl: url,
+				});
+			},
+		},
 		socialProviders: {
 			github: {
 				disableDefaultScope: true,
@@ -16,6 +42,14 @@ export function authOptions() {
 				clientId: config.GITHUB_OAUTH_CLIENT_ID,
 				clientSecret: config.GITHUB_OAUTH_CLIENT_SECRET,
 			},
+			...(googleOAuthConfigured(config)
+				? {
+						google: {
+							clientId: config.GOOGLE_CLIENT_ID,
+							clientSecret: config.GOOGLE_CLIENT_SECRET,
+						},
+					}
+				: {}),
 		},
 		user: { modelName: "auth_user" },
 		session: { modelName: "auth_session", expiresIn: 60 * 60 * 24 * 7 },

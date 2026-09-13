@@ -79,8 +79,7 @@ function RepositorySetup() {
 				<p>Choose a repository and a starting branch.</p>
 				{callbackFailed && (
 					<p role="alert">
-						GitHub connection was canceled or expired. Try again with the
-						account you used to sign in.
+						GitHub connection was canceled or expired. Try again.
 					</p>
 				)}
 				{repositories.isPending && <p role="status">Loading repositories…</p>}

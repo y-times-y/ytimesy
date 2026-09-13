@@ -31,6 +31,7 @@ beforeAll(async () => {
 		"20260913010000_enable_automatic_rls.sql",
 		"20260913193000_identity_and_projects.sql",
 		"20260913221500_workspaces_jobs_agent_accounts.sql",
+		"20260913234500_auth_email_outbox.sql",
 	])
 		await db.exec(await readFile(`supabase/migrations/${file}`, "utf8"));
 	await db.exec(

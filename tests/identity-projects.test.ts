@@ -20,6 +20,7 @@ beforeAll(async () => {
 		"20260913010000_enable_automatic_rls.sql",
 		"20260913193000_identity_and_projects.sql",
 		"20260913221500_workspaces_jobs_agent_accounts.sql",
+		"20260913234500_auth_email_outbox.sql",
 	])
 		await db.exec(await readFile(`supabase/migrations/${file}`, "utf8"));
 	await db.exec(
@@ -49,14 +50,16 @@ describe("personal project ownership", () => {
 		const result = await db.query<{ relname: string; relrowsecurity: boolean }>(
 			"select relname,relrowsecurity from pg_class where relnamespace='public'::regnamespace and relkind='r'",
 		);
-		expect(result.rows).toHaveLength(11);
+		expect(result.rows).toHaveLength(12);
 		expect(result.rows.every((row) => row.relrowsecurity)).toBe(true);
 		for (const role of ["anon", "authenticated"]) {
-			const grants = await db.query<{ allowed: boolean }>(
-				"select has_table_privilege($1,'project','SELECT') as allowed",
-				[role],
-			);
-			expect(grants.rows[0].allowed).toBe(false);
+			for (const table of ["project", "auth_email_outbox"]) {
+				const grants = await db.query<{ allowed: boolean }>(
+					"select has_table_privilege($1,$2,'SELECT') as allowed",
+					[role, table],
+				);
+				expect(grants.rows[0].allowed).toBe(false);
+			}
 		}
 	});
 	it("rejects unknown owners through the database foreign key", async () => {

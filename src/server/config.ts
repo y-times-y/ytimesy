@@ -1,6 +1,11 @@
 import "@tanstack/react-start/server-only";
 import { z } from "zod";
 
+const optionalSecret = z.preprocess(
+	(value) => (value === "" || value == null ? undefined : value),
+	z.string().min(1).optional(),
+);
+
 const configuration = z.object({
 	APP_URL: z.url(),
 	BETTER_AUTH_SECRET: z.string().min(32),
@@ -20,6 +25,8 @@ const configuration = z.object({
 	GITHUB_APP_CLIENT_ID: z.string().min(1),
 	GITHUB_APP_CLIENT_SECRET: z.string().min(1),
 	GITHUB_APP_SLUG: z.string().regex(/^[a-z0-9-]+$/),
+	GOOGLE_CLIENT_ID: optionalSecret,
+	GOOGLE_CLIENT_SECRET: optionalSecret,
 });
 export function serverConfig() {
 	const parsed = configuration.safeParse(process.env);
