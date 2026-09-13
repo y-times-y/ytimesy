@@ -166,3 +166,7 @@ export function chooseListedModelId(
 	if (listedDefault) return listedDefault.id;
 	return models[0]?.id ?? null;
 }
+
+export function isChatgptCliLoginOutput(output: string): boolean {
+	return output.includes("Logged in using ChatGPT");
+}

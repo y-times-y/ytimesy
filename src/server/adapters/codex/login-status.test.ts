@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	chooseListedModelId,
+	isChatgptCliLoginOutput,
 	PREFERRED_CODEX_MODEL_ID,
 	parseCodexLoginStatus,
 } from "./login-status";
@@ -75,5 +76,12 @@ describe("chooseListedModelId", () => {
 			"gpt-6-astra",
 		);
 		expect(chooseListedModelId([])).toBeNull();
+	});
+});
+
+describe("isChatgptCliLoginOutput", () => {
+	it("accepts Codex CLI status on stderr or stdout", () => {
+		expect(isChatgptCliLoginOutput("Logged in using ChatGPT")).toBe(true);
+		expect(isChatgptCliLoginOutput("not logged in")).toBe(false);
 	});
 });

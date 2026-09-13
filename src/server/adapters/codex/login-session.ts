@@ -4,6 +4,7 @@ import type { WorkspaceId } from "#/domain/ids";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
 import {
 	type CodexLoginStatus,
+	isChatgptCliLoginOutput,
 	PREFERRED_CODEX_MODEL_ID,
 	parseCodexLoginStatus,
 } from "./login-status";
@@ -75,9 +76,14 @@ if [ ! -f "$HOME/.codex/auth.json" ]; then
   exit 1
 fi
 echo "AUTH_FILE_PRESENT"
-STATUS="$("$CODEX_BIN" login status || true)"
+STATUS="$("$CODEX_BIN" login status 2>&1 || true)"
 echo "$STATUS"
-echo "$STATUS" | grep -q "Logged in using ChatGPT"
+if echo "$STATUS" | grep -q "Logged in using ChatGPT"; then
+  echo "CHATGPT_LOGIN_CONFIRMED"
+  exit 0
+fi
+echo "NOT_CHATGPT_LOGIN" >&2
+exit 1
 `;
 
 const STOP_LOGIN_DAEMON = `set -eu
@@ -271,13 +277,14 @@ export function confirmChatgptLoginOnWorkspace(
 		machines.exec(workspaceId, CONFIRM_CHATGPT_LOGIN, 30_000),
 	).pipe(
 		Effect.map((result) => {
-			if (result.exitCode !== 0) {
-				return {
-					confirmed: false as const,
-					message: (result.stderr || result.stdout).trim(),
-				};
+			const output = `${result.stdout}\n${result.stderr}`;
+			if (isChatgptCliLoginOutput(output)) {
+				return { confirmed: true as const };
 			}
-			return { confirmed: true as const };
+			return {
+				confirmed: false as const,
+				message: output.trim(),
+			};
 		}),
 		Effect.catchAll((cause) =>
 			Effect.succeed({
