@@ -22,3 +22,4 @@ dist/
 
 # Live provider proof state (workspace IDs, never commit login codes)
 .ytimesy/
+**/__pycache__/
