@@ -208,7 +208,7 @@ export function SessionLauncher({
 				fill={chatLayout}
 			/>
 			<div className="session-dock">
-				<ProjectContext />
+				{visibleSlashCommands.length === 0 ? <ProjectContext /> : null}
 				<div className="composer-shell">
 					<div className="session-composer">
 						{visibleSlashCommands.length > 0 ? (
@@ -223,9 +223,7 @@ export function SessionLauncher({
 							value={draft}
 							onChange={setDraft}
 							onSubmit={sendDraft}
-							disabled={
-								busy || (!session.canSend && session.turnStatus !== "running")
-							}
+							disabled={busy}
 							onKeyDown={handleComposerKey}
 						/>
 						{attachments.length > 0 && (
