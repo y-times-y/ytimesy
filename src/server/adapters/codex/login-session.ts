@@ -371,7 +371,13 @@ export function submitCodexTask(
 			),
 		);
 		for (let attempt = 0; attempt < 90; attempt += 1) {
-			yield* Effect.sleep(Duration.seconds(2));
+			yield* Effect.sleep(Duration.seconds(1));
+			const status = yield* readLoginStatus(machines, workspaceId);
+			if (status.stage === "failed") return status;
+			if (status.stage === "authenticated") {
+				if (status.turnStatus === "running") return status;
+				if (status.turnStatus === "failed") return status;
+			}
 			const raw = yield* Effect.tryPromise(() =>
 				machines.readTextFile(workspaceId, "/tmp/ytimesy-task-result.json"),
 			);

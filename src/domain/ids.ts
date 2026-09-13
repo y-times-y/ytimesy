@@ -21,6 +21,7 @@ export type WorkspaceId = Brand<string, "WorkspaceId">;
 export type SessionId = Brand<string, "SessionId">;
 export type JobId = Brand<string, "JobId">;
 export type AuthSnapshotId = Brand<string, "AuthSnapshotId">;
+export type SessionItemId = Brand<string, "SessionItemId">;
 
 export const UserId = (value: string) => brandedId("UserId", value);
 export const ProjectId = (value: string) => brandedId("ProjectId", value);
@@ -29,3 +30,5 @@ export const SessionId = (value: string) => brandedId("SessionId", value);
 export const JobId = (value: string) => brandedId("JobId", value);
 export const AuthSnapshotId = (value: string) =>
 	brandedId("AuthSnapshotId", value);
+export const SessionItemId = (value: string) =>
+	brandedId("SessionItemId", value);

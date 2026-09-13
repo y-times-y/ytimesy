@@ -1,7 +1,8 @@
 import { Effect } from "effect";
 import type { AgentConnection } from "#/domain/agent-connection";
 import { WorkspaceId } from "#/domain/ids";
-import { canSendSessionTask } from "#/domain/session-policy";
+import type { SessionItem, SessionTurnStatus } from "#/domain/session-item";
+import { canSubmitComposer } from "#/domain/session-policy";
 import type { WorkspaceLifecycle } from "#/domain/workspace";
 import {
 	readLoginStatus,
@@ -12,7 +13,6 @@ import {
 import type {
 	CodexLoginStatus,
 	ListedModel,
-	SessionMessage,
 } from "#/server/adapters/codex/login-status";
 import { PROOF_LOGIN_LIFETIME } from "#/server/adapters/freestyle/proof-vm";
 import {
@@ -28,7 +28,8 @@ export type PublicCodexSession = {
 	readonly connection: AgentConnection;
 	readonly models: readonly ListedModel[];
 	readonly canSend: boolean;
-	readonly messages: readonly SessionMessage[];
+	readonly turnStatus: SessionTurnStatus;
+	readonly items: readonly SessionItem[];
 };
 
 const disconnected: AgentConnection = { status: "disconnected" };
@@ -42,7 +43,8 @@ export function emptyCodexSession(
 		connection: disconnected,
 		models: [],
 		canSend: false,
-		messages: [],
+		turnStatus: "idle",
+		items: [],
 	};
 }
 
@@ -184,13 +186,17 @@ function viewFromStatus(
 		workspaceId: WorkspaceId(workspaceId),
 	};
 	const models = status.stage === "authenticated" ? status.models : [];
+	const turnStatus =
+		status.stage === "authenticated" ? status.turnStatus : "idle";
+	const items = status.stage === "authenticated" ? status.items : [];
 	return {
 		snapshotAvailable,
 		workspaceId,
 		connection,
 		models,
-		canSend: canSendSessionTask(workspace, connection),
-		messages: status.stage === "authenticated" ? status.messages : [],
+		canSend: canSubmitComposer(workspace, connection, turnStatus),
+		turnStatus,
+		items,
 	};
 }
 

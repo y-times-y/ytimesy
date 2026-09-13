@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { FileChangeEntry } from "#/domain/session-item";
 
 const views = {
 	diff: {
@@ -20,7 +21,13 @@ const views = {
 
 type InspectorView = keyof typeof views;
 
-export function WorkspaceInspector({ collapsed }: { collapsed: boolean }) {
+export function WorkspaceInspector({
+	collapsed,
+	fileChanges = [],
+}: {
+	collapsed: boolean;
+	fileChanges?: readonly FileChangeEntry[];
+}) {
 	const [activeView, setActiveView] = useState<InspectorView>("diff");
 	const currentView = views[activeView];
 	return (
@@ -45,10 +52,21 @@ export function WorkspaceInspector({ collapsed }: { collapsed: boolean }) {
 					);
 				})}
 			</div>
-			<section className="inspector-empty" aria-live="polite">
-				<h2>{currentView.title}</h2>
-				<p>{currentView.description}</p>
-			</section>
+			{activeView === "diff" && fileChanges.length > 0 ? (
+				<ul className="inspector-changes" aria-label="File changes">
+					{fileChanges.map((change) => (
+						<li key={`${change.change}:${change.path}`}>
+							<span>{change.change}</span>
+							{change.path}
+						</li>
+					))}
+				</ul>
+			) : (
+				<section className="inspector-empty" aria-live="polite">
+					<h2>{currentView.title}</h2>
+					<p>{currentView.description}</p>
+				</section>
+			)}
 		</aside>
 	);
 }
