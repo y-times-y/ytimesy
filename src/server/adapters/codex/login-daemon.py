@@ -8,7 +8,10 @@ import time
 
 CODEX = os.environ.get("CODEX_BIN", "codex")
 STATUS_PATH = "/tmp/ytimesy-auth-status.json"
+TASK_REQUEST_PATH = "/tmp/ytimesy-task-request.json"
+TASK_RESULT_PATH = "/tmp/ytimesy-task-result.json"
 TURN_PROMPT = "Reply with the single word pong and do not run any tools."
+SKIP_INITIAL_TURN = os.environ.get("YTIMESY_SKIP_INITIAL_TURN") == "1"
 
 
 def write_status(payload):
@@ -170,6 +173,128 @@ def collect_turn_text(notifications):
     return "\n".join(texts) if texts else None
 
 
+rpc_id = 100
+
+
+def next_rpc_id():
+    global rpc_id
+    rpc_id += 1
+    return rpc_id
+
+
+def start_thread(proc, model_id):
+    request_id = next_rpc_id()
+    send(
+        proc,
+        {
+            "method": "thread/start",
+            "id": request_id,
+            "params": {
+                "model": model_id,
+                "cwd": "/tmp",
+                "approvalPolicy": "never",
+                "sandbox": "danger-full-access",
+            },
+        },
+    )
+    thread_message, _ = wait_for_id(proc, request_id, 45)
+    if "error" in thread_message:
+        return None, thread_message["error"].get("message", "thread/start failed")
+    thread = {}
+    if isinstance(thread_message.get("result"), dict):
+        thread = thread_message["result"].get("thread") or {}
+    thread_id = thread.get("id") if isinstance(thread, dict) else None
+    if not thread_id:
+        return None, "thread/start did not return a thread id"
+    return thread_id, None
+
+
+def run_turn(proc, thread_id, model_id, text):
+    request_id = next_rpc_id()
+    send(
+        proc,
+        {
+            "method": "turn/start",
+            "id": request_id,
+            "params": {
+                "threadId": thread_id,
+                "input": [{"type": "text", "text": text}],
+                "approvalPolicy": "never",
+                "sandboxPolicy": {"type": "dangerFullAccess"},
+            },
+        },
+    )
+    turn_message, notifications = wait_for_id(proc, request_id, 180)
+    turn_status = "started"
+    turn_obj = find_completed_turn(notifications)
+    if "error" in turn_message:
+        return {
+            "threadId": thread_id,
+            "modelId": model_id,
+            "status": "error",
+            "text": turn_message["error"].get("message"),
+            "error": turn_message["error"].get("message"),
+        }
+    assistant = None
+    error_text = None
+    deadline = time.time() + 180
+    while turn_obj is None and time.time() < deadline:
+        try:
+            message = read_message(proc, min(15.0, deadline - time.time()))
+        except TimeoutError:
+            continue
+        notifications.append(message)
+        turn_obj = find_completed_turn(notifications)
+    if turn_obj is None:
+        turn_status = "timeout"
+    else:
+        turn_status = turn_obj.get("status") or "completed"
+    assistant = collect_turn_text(notifications)
+    error_text = turn_error_message(turn_obj, notifications)
+    return {
+        "threadId": thread_id,
+        "modelId": model_id,
+        "status": turn_status,
+        "text": assistant,
+        "error": error_text,
+    }
+
+
+def append_turn_messages(messages, user_text, turn):
+    messages.append(
+        {
+            "id": "user-%s" % (len(messages) + 1),
+            "role": "user",
+            "text": user_text,
+        }
+    )
+    reply = turn.get("text") or turn.get("error")
+    if isinstance(reply, str) and reply.strip():
+        messages.append(
+            {
+                "id": "assistant-%s" % (len(messages) + 1),
+                "role": "assistant",
+                "text": reply.strip(),
+            }
+        )
+
+
+def read_json_file(path):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+
+def write_json_file(path, payload):
+    temporary = path + ".tmp"
+    with open(temporary, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle)
+        handle.write("\n")
+    os.replace(temporary, path)
+
+
 def read_chatgpt_account(proc, timeout=45):
     deadline = time.time() + timeout
     request_id = 50
@@ -319,85 +444,78 @@ def main():
         if "error" not in models_message:
             models = listed_models(models_message.get("result"))
         model_id = choose_model(models)
+        listed = [{"id": model["id"], "label": model["label"]} for model in models]
         turn = None
-        if model_id:
-            send(
-                proc,
-                {
-                    "method": "thread/start",
-                    "id": 10,
-                    "params": {
-                        "model": model_id,
-                        "cwd": "/tmp",
-                        "approvalPolicy": "never",
-                        "sandbox": "danger-full-access",
-                    },
-                },
-            )
-            thread_message, _ = wait_for_id(proc, 10, 45)
-            thread = {}
-            if "error" not in thread_message and isinstance(thread_message.get("result"), dict):
-                thread = thread_message["result"].get("thread") or {}
-            thread_id = thread.get("id") if isinstance(thread, dict) else None
+        thread_id = None
+        messages = []
+        if model_id and not SKIP_INITIAL_TURN:
+            thread_id, thread_error = start_thread(proc, model_id)
             if thread_id:
-                send(
-                    proc,
-                    {
-                        "method": "turn/start",
-                        "id": 11,
-                        "params": {
-                            "threadId": thread_id,
-                            "input": [{"type": "text", "text": TURN_PROMPT}],
-                            "approvalPolicy": "never",
-                            "sandboxPolicy": {"type": "dangerFullAccess"},
-                        },
-                    },
-                )
-                turn_message, notifications = wait_for_id(proc, 11, 30)
-                turn_status = "started"
-                turn_obj = find_completed_turn(notifications)
-                if "error" in turn_message:
-                    turn_status = "error"
-                    assistant = turn_message["error"].get("message")
-                    error_text = assistant
-                else:
-                    assistant = None
-                    error_text = None
-                    deadline = time.time() + 180
-                    while turn_obj is None and time.time() < deadline:
-                        try:
-                            message = read_message(proc, min(15.0, deadline - time.time()))
-                        except TimeoutError:
-                            continue
-                        notifications.append(message)
-                        turn_obj = find_completed_turn(notifications)
-                    if turn_obj is None:
-                        turn_status = "timeout"
-                    else:
-                        turn_status = turn_obj.get("status") or "completed"
-                    assistant = collect_turn_text(notifications)
-                    error_text = turn_error_message(turn_obj, notifications)
+                turn = run_turn(proc, thread_id, model_id, TURN_PROMPT)
+                append_turn_messages(messages, TURN_PROMPT, turn)
+            elif thread_error:
                 turn = {
-                    "threadId": thread_id,
+                    "threadId": "",
                     "modelId": model_id,
-                    "status": turn_status,
-                    "text": assistant,
-                    "error": error_text,
+                    "status": "error",
+                    "text": thread_error,
+                    "error": thread_error,
                 }
 
-        write_status(
-            {
-                "stage": "authenticated",
-                "authMode": "chatgpt",
-                "planType": account.get("planType"),
-                "codexVersion": version,
-                "models": [{"id": model["id"], "label": model["label"]} for model in models],
-                "turn": turn,
-            }
-        )
-        # Keep app-server alive so a follow-up can inspect the session.
+        def publish(current_turn):
+            write_status(
+                {
+                    "stage": "authenticated",
+                    "authMode": "chatgpt",
+                    "planType": account.get("planType"),
+                    "codexVersion": version,
+                    "models": listed,
+                    "turn": current_turn,
+                    "messages": messages,
+                }
+            )
+
+        publish(turn)
         while True:
-            time.sleep(30)
+            request = read_json_file(TASK_REQUEST_PATH)
+            if isinstance(request, dict) and request.get("id") and request.get("text"):
+                requested_model = request.get("modelId") or model_id
+                if requested_model:
+                    model_id = requested_model
+                if not thread_id and model_id:
+                    thread_id, thread_error = start_thread(proc, model_id)
+                    if thread_error and not thread_id:
+                        turn = {
+                            "threadId": "",
+                            "modelId": model_id or "",
+                            "status": "error",
+                            "text": thread_error,
+                            "error": thread_error,
+                        }
+                        write_json_file(
+                            TASK_RESULT_PATH,
+                            {"id": request["id"], "turn": turn},
+                        )
+                        try:
+                            os.remove(TASK_REQUEST_PATH)
+                        except FileNotFoundError:
+                            pass
+                        publish(turn)
+                        time.sleep(0.4)
+                        continue
+                if thread_id and model_id:
+                    turn = run_turn(proc, thread_id, model_id, request["text"])
+                    append_turn_messages(messages, request["text"], turn)
+                    write_json_file(
+                        TASK_RESULT_PATH,
+                        {"id": request["id"], "turn": turn},
+                    )
+                    try:
+                        os.remove(TASK_REQUEST_PATH)
+                    except FileNotFoundError:
+                        pass
+                    publish(turn)
+            time.sleep(0.4)
     except Exception as exc:
         fail(str(exc), stageDetail="loginDaemon")
     finally:

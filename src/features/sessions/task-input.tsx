@@ -5,7 +5,17 @@ function fitDraftHeight(input: HTMLTextAreaElement) {
 	input.style.height = `${input.scrollHeight}px`;
 }
 
-export function TaskInput() {
+export function TaskInput({
+	value,
+	onChange,
+	onSubmit,
+	disabled,
+}: {
+	value: string;
+	onChange: (value: string) => void;
+	onSubmit: () => void;
+	disabled?: boolean;
+}) {
 	const inputRef = useRef<HTMLTextAreaElement>(null);
 
 	useEffect(() => {
@@ -27,7 +37,19 @@ export function TaskInput() {
 			aria-label="Task description"
 			placeholder="What would you like to work on?"
 			rows={2}
+			value={value}
+			disabled={disabled}
+			onChange={(event) => {
+				onChange(event.currentTarget.value);
+				fitDraftHeight(event.currentTarget);
+			}}
 			onInput={(event) => fitDraftHeight(event.currentTarget)}
+			onKeyDown={(event) => {
+				if (event.key === "Enter" && !event.shiftKey) {
+					event.preventDefault();
+					onSubmit();
+				}
+			}}
 		/>
 	);
 }

@@ -56,6 +56,7 @@ describe("parseCodexLoginStatus", () => {
 				text: "pong",
 				error: null,
 			},
+			messages: [],
 			codexVersion: null,
 		});
 	});
