@@ -8,6 +8,7 @@ export type CodexTurnResult = {
 	readonly modelId: string;
 	readonly status: string;
 	readonly text: string | null;
+	readonly error: string | null;
 };
 
 export type CodexLoginStatus =
@@ -127,6 +128,7 @@ function turnResult(value: unknown): CodexTurnResult | null {
 		modelId,
 		status,
 		text: readString(value.text) ?? null,
+		error: readString(value.error) ?? null,
 	};
 }
 

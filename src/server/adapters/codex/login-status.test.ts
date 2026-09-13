@@ -35,6 +35,7 @@ describe("parseCodexLoginStatus", () => {
 						modelId: "gpt-test",
 						status: "completed",
 						text: "pong",
+						error: null,
 					},
 				}),
 			),
@@ -48,6 +49,7 @@ describe("parseCodexLoginStatus", () => {
 				modelId: "gpt-test",
 				status: "completed",
 				text: "pong",
+				error: null,
 			},
 			codexVersion: null,
 		});

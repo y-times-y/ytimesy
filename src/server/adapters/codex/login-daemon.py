@@ -114,6 +114,36 @@ def choose_model(models):
     return None
 
 
+def find_completed_turn(notifications):
+    for message in notifications:
+        if message.get("method") != "turn/completed":
+            continue
+        params = message.get("params") if isinstance(message.get("params"), dict) else {}
+        turn_obj = params.get("turn") if isinstance(params.get("turn"), dict) else params
+        if isinstance(turn_obj, dict):
+            return turn_obj
+    return None
+
+
+def turn_error_message(turn_obj, notifications):
+    if isinstance(turn_obj, dict):
+        err = turn_obj.get("error")
+        if isinstance(err, dict) and isinstance(err.get("message"), str):
+            return err["message"]
+        if isinstance(err, str) and err:
+            return err
+    for message in notifications:
+        if message.get("method") != "error":
+            continue
+        params = message.get("params") if isinstance(message.get("params"), dict) else {}
+        err = params.get("error") if isinstance(params.get("error"), dict) else params
+        if isinstance(err, dict) and isinstance(err.get("message"), str):
+            return err["message"]
+        if isinstance(params.get("message"), str):
+            return params["message"]
+    return None
+
+
 def collect_turn_text(notifications):
     texts = []
     for message in notifications:
@@ -289,7 +319,12 @@ def main():
                 {
                     "method": "thread/start",
                     "id": 10,
-                    "params": {"model": model_id, "cwd": "/tmp"},
+                    "params": {
+                        "model": model_id,
+                        "cwd": "/tmp",
+                        "approvalPolicy": "never",
+                        "sandbox": "danger-full-access",
+                    },
                 },
             )
             thread_message, _ = wait_for_id(proc, 10, 45)
@@ -306,38 +341,41 @@ def main():
                         "params": {
                             "threadId": thread_id,
                             "input": [{"type": "text", "text": TURN_PROMPT}],
+                            "approvalPolicy": "never",
+                            "sandboxPolicy": {"type": "dangerFullAccess"},
                         },
                     },
                 )
                 turn_message, notifications = wait_for_id(proc, 11, 30)
                 turn_status = "started"
+                turn_obj = find_completed_turn(notifications)
                 if "error" in turn_message:
                     turn_status = "error"
-                    notifications = []
                     assistant = turn_message["error"].get("message")
+                    error_text = assistant
                 else:
                     assistant = None
+                    error_text = None
                     deadline = time.time() + 180
-                    while time.time() < deadline:
+                    while turn_obj is None and time.time() < deadline:
                         try:
                             message = read_message(proc, min(15.0, deadline - time.time()))
                         except TimeoutError:
                             continue
                         notifications.append(message)
-                        if message.get("method") == "turn/completed":
-                            params = message.get("params") if isinstance(message.get("params"), dict) else {}
-                            turn_obj = params.get("turn") if isinstance(params.get("turn"), dict) else params
-                            turn_status = turn_obj.get("status") if isinstance(turn_obj, dict) else "completed"
-                            assistant = collect_turn_text(notifications)
-                            break
-                    else:
+                        turn_obj = find_completed_turn(notifications)
+                    if turn_obj is None:
                         turn_status = "timeout"
-                        assistant = collect_turn_text(notifications)
+                    else:
+                        turn_status = turn_obj.get("status") or "completed"
+                    assistant = collect_turn_text(notifications)
+                    error_text = turn_error_message(turn_obj, notifications)
                 turn = {
                     "threadId": thread_id,
                     "modelId": model_id,
                     "status": turn_status,
                     "text": assistant,
+                    "error": error_text,
                 }
 
         write_status(
