@@ -4,6 +4,7 @@ import {
 	JobId,
 	ProjectId,
 	SessionId,
+	SessionItemId,
 	UserId,
 	WorkspaceId,
 } from "./ids";
@@ -16,6 +17,7 @@ describe("branded IDs", () => {
 		expect(SessionId("s1")).toBe("s1");
 		expect(JobId("j1")).toBe("j1");
 		expect(AuthSnapshotId("sh-1")).toBe("sh-1");
+		expect(SessionItemId("item-1")).toBe("item-1");
 	});
 
 	it("rejects empty values", () => {

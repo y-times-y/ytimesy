@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { canStartAgentTurn, isAuthenticatedAgent } from "./agent-connection";
 import { WorkspaceId } from "./ids";
-import { canSendSessionTask } from "./session-policy";
+import { canSendSessionTask, canSubmitComposer } from "./session-policy";
 import { isUsableWorkspace } from "./workspace";
 
 describe("agent connection", () => {
@@ -59,5 +59,24 @@ describe("session send policy", () => {
 				},
 			),
 		).toBe(false);
+	});
+});
+
+describe("composer submit policy", () => {
+	it("blocks a second task while the current turn is running", () => {
+		const running = {
+			status: "running" as const,
+			workspaceId: WorkspaceId("vm_1"),
+		};
+		const authenticated = {
+			status: "authenticated" as const,
+			authMode: "chatgpt" as const,
+			planType: null,
+			email: null,
+		};
+
+		expect(canSubmitComposer(running, authenticated, "idle")).toBe(true);
+		expect(canSubmitComposer(running, authenticated, "running")).toBe(false);
+		expect(canSubmitComposer(running, authenticated, "completed")).toBe(true);
 	});
 });

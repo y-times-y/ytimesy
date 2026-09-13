@@ -56,8 +56,56 @@ describe("parseCodexLoginStatus", () => {
 				text: "pong",
 				error: null,
 			},
+			turnStatus: "completed",
+			items: [],
 			messages: [],
 			codexVersion: null,
+		});
+	});
+
+	it("maps stored app-server items instead of flattening the turn to chat text", () => {
+		const status = parseCodexLoginStatus(
+			JSON.stringify({
+				stage: "authenticated",
+				authMode: "chatgpt",
+				planType: "prolite",
+				models: [{ id: "gpt-5.3-codex-spark", label: "Spark" }],
+				turnStatus: "running",
+				items: [
+					{
+						id: "item_user_1",
+						type: "userMessage",
+						content: [{ type: "text", text: "echo hi" }],
+					},
+					{
+						id: "item_cmd_1",
+						type: "commandExecution",
+						command: "echo hi",
+						cwd: "/tmp",
+						status: "inProgress",
+					},
+				],
+			}),
+		);
+		expect(status).toMatchObject({
+			stage: "authenticated",
+			turnStatus: "running",
+			items: [
+				{
+					kind: "userMessage",
+					id: "item_user_1",
+					text: "echo hi",
+				},
+				{
+					kind: "commandExecution",
+					id: "item_cmd_1",
+					command: "echo hi",
+					cwd: "/tmp",
+					status: "inProgress",
+					output: null,
+					exitCode: null,
+				},
+			],
 		});
 	});
 });

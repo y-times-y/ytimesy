@@ -1,3 +1,9 @@
+import type { SessionItem, SessionTurnStatus } from "#/domain/session-item";
+import {
+	sessionItemsFromDaemonStatus,
+	sessionTurnStatusFromDaemon,
+} from "./app-server-items";
+
 export type ListedModel = {
 	readonly id: string;
 	readonly label: string;
@@ -32,6 +38,8 @@ export type CodexLoginStatus =
 			readonly planType: string | null;
 			readonly models: readonly ListedModel[];
 			readonly turn: CodexTurnResult | null;
+			readonly turnStatus: SessionTurnStatus;
+			readonly items: readonly SessionItem[];
 			readonly messages: readonly SessionMessage[];
 			readonly codexVersion: string | null;
 	  }
@@ -84,13 +92,23 @@ export function parseCodexLoginStatus(
 			};
 		}
 		if (stage === "authenticated") {
+			const turn = turnResult(parsed.turn);
+			const items = sessionItemsFromDaemonStatus(parsed);
 			return {
 				stage: "authenticated",
 				authMode: "chatgpt",
 				planType: readString(parsed.planType) ?? null,
 				models: listedModels(parsed.models),
-				turn: turnResult(parsed.turn),
-				messages: sessionMessages(parsed.messages),
+				turn,
+				turnStatus: sessionTurnStatusFromDaemon(
+					parsed.turnStatus,
+					turn?.status ?? null,
+				),
+				items,
+				messages:
+					items.length > 0
+						? conversationMessagesFromItems(items)
+						: sessionMessages(parsed.messages),
 				codexVersion: readString(parsed.codexVersion) ?? null,
 			};
 		}
@@ -143,6 +161,21 @@ function sessionMessages(value: unknown): readonly SessionMessage[] {
 	return messages;
 }
 
+function conversationMessagesFromItems(
+	items: readonly SessionItem[],
+): readonly SessionMessage[] {
+	const messages: SessionMessage[] = [];
+	for (const item of items) {
+		if (item.kind === "userMessage") {
+			messages.push({ id: item.id, role: "user", text: item.text });
+		}
+		if (item.kind === "agentMessage" && item.text) {
+			messages.push({ id: item.id, role: "assistant", text: item.text });
+		}
+	}
+	return messages;
+}
+
 function turnResult(value: unknown): CodexTurnResult | null {
 	if (!isRecord(value)) return null;
 	const threadId = readString(value.threadId);
@@ -175,6 +208,8 @@ export function publicLoginStatus(status: CodexLoginStatus) {
 			modelCount: status.models.length,
 			models: status.models,
 			turn: status.turn,
+			turnStatus: status.turnStatus,
+			items: status.items,
 			messages: status.messages,
 			codexVersion: status.codexVersion,
 		};

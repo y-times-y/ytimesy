@@ -1,6 +1,7 @@
 import { useServerFn } from "@tanstack/react-start";
 import { PanelRight } from "lucide-react";
 import { useEffect, useState } from "react";
+import { fileChangesFromSessionItems } from "#/domain/session-item";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
 import {
 	connectCodexSession,
@@ -25,18 +26,31 @@ export function WorkspaceHome({
 	const [busy, setBusy] = useState(false);
 	const connect = useServerFn(connectCodexSession);
 	const sendTask = useServerFn(sendCodexSessionTask);
+	const fileChanges = fileChangesFromSessionItems(session.items);
+	const chatLayout =
+		session.connection.status === "authenticated" || session.items.length > 0;
+	const agentLabel =
+		session.connection.status === "authenticated"
+			? `Codex${session.connection.planType ? ` · ${session.connection.planType}` : ""}`
+			: null;
 
 	useEffect(() => {
 		if (compact) setProjectsOpen(false);
 	}, [compact]);
 
 	useEffect(() => {
-		if (session.connection.status !== "awaiting_device_code") return;
+		if (
+			session.connection.status !== "awaiting_device_code" &&
+			session.turnStatus !== "running"
+		) {
+			return;
+		}
+		const interval = session.turnStatus === "running" ? 1000 : 3000;
 		const timer = window.setInterval(() => {
 			void getCodexSession().then(setSession);
-		}, 3000);
+		}, interval);
 		return () => window.clearInterval(timer);
-	}, [session.connection.status]);
+	}, [session.connection.status, session.turnStatus]);
 
 	return (
 		<div className="workspace-shell" data-projects-collapsed={!projectsOpen}>
@@ -52,6 +66,9 @@ export function WorkspaceHome({
 				<header className="workspace-header">
 					<div className="header-navigation">
 						<span>Workspace</span>
+						{agentLabel ? (
+							<span className="header-agent-status">{agentLabel}</span>
+						) : null}
 					</div>
 					<div className="header-tools">
 						<button
@@ -75,10 +92,14 @@ export function WorkspaceHome({
 					<section
 						className="welcome-panel"
 						aria-label="Get started"
+						data-layout={chatLayout ? "chat" : "empty"}
 						inert={compact && inspectorOpen}
 						aria-hidden={compact && inspectorOpen}
 					>
-						<div className="welcome-content">
+						<div
+							className="welcome-content"
+							data-layout={chatLayout ? "chat" : "empty"}
+						>
 							<SessionLauncher
 								session={session}
 								busy={busy}
@@ -106,7 +127,10 @@ export function WorkspaceHome({
 						</div>
 					</section>
 					<div className="inspector-frame">
-						<WorkspaceInspector collapsed={!inspectorOpen} />
+						<WorkspaceInspector
+							collapsed={!inspectorOpen}
+							fileChanges={fileChanges}
+						/>
 					</div>
 				</div>
 			</main>

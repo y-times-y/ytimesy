@@ -155,22 +155,197 @@ def turn_error_message(turn_obj, notifications):
 
 
 def collect_turn_text(notifications):
+    return assistant_text_from_items(collect_items_from_notifications(notifications))
+
+
+def user_message_text(item):
+    if isinstance(item.get("text"), str) and item["text"].strip():
+        return item["text"].strip()
+    content = item.get("content")
+    if not isinstance(content, list):
+        return ""
+    parts = []
+    for part in content:
+        if isinstance(part, dict) and isinstance(part.get("text"), str) and part["text"].strip():
+            parts.append(part["text"].strip())
+        elif isinstance(part, str) and part.strip():
+            parts.append(part.strip())
+    return "\n".join(parts)
+
+
+def assistant_text_from_items(items):
     texts = []
-    for message in notifications:
-        if message.get("method") != "item/completed":
-            continue
-        params = message.get("params")
-        if not isinstance(params, dict):
-            continue
-        item = params.get("item")
+    for item in items:
         if not isinstance(item, dict):
             continue
         if item.get("type") not in ("agentMessage", "agent_message"):
             continue
-        text = item.get("text") or item.get("content")
+        text = item.get("text")
         if isinstance(text, str) and text.strip():
             texts.append(text.strip())
     return "\n".join(texts) if texts else None
+
+
+def messages_from_items(items):
+    messages = []
+    for item in items:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+            continue
+        item_type = item.get("type")
+        if item_type in ("userMessage", "user_message"):
+            text = user_message_text(item)
+            if text:
+                messages.append({"id": item["id"], "role": "user", "text": text})
+        elif item_type in ("agentMessage", "agent_message"):
+            text = item.get("text")
+            if isinstance(text, str) and text.strip():
+                messages.append({"id": item["id"], "role": "assistant", "text": text.strip()})
+    return messages
+
+
+def notification_delta(params):
+    delta = params.get("delta")
+    if isinstance(delta, str):
+        return delta
+    if isinstance(delta, dict) and isinstance(delta.get("text"), str):
+        return delta["text"]
+    output = params.get("output")
+    if isinstance(output, str):
+        return output
+    text = params.get("text")
+    if isinstance(text, str):
+        return text
+    return ""
+
+
+def upsert_item(items_by_id, order, item):
+    if not isinstance(item, dict):
+        return
+    item_id = item.get("id")
+    if not isinstance(item_id, str) or not item_id:
+        return
+    if item_id not in items_by_id:
+        order.append(item_id)
+    items_by_id[item_id] = item
+
+
+def ordered_items(items_by_id, order):
+    return [items_by_id[item_id] for item_id in order if item_id in items_by_id]
+
+
+def ensure_item(items_by_id, order, item_id, item_type):
+    current = items_by_id.get(item_id)
+    if isinstance(current, dict):
+        return current
+    created = {"id": item_id, "type": item_type}
+    order.append(item_id)
+    items_by_id[item_id] = created
+    return created
+
+
+def apply_reasoning_delta(item, params):
+    delta = notification_delta(params)
+    if not delta:
+        return
+    index = params.get("summaryIndex")
+    if not isinstance(index, int):
+        index = params.get("summary_index")
+    if not isinstance(index, int):
+        index = 0
+    summary = item.get("summary")
+    if not isinstance(summary, list):
+        summary = []
+    while len(summary) <= index:
+        summary.append("")
+    current = summary[index]
+    if isinstance(current, str):
+        summary[index] = current + delta
+    elif isinstance(current, dict):
+        current = dict(current)
+        current["text"] = (current.get("text") or "") + delta
+        summary[index] = current
+    else:
+        summary[index] = delta
+    item["type"] = item.get("type") or "reasoning"
+    item["summary"] = summary
+
+
+def apply_app_server_notification(items_by_id, order, message):
+    if not isinstance(message, dict):
+        return
+    method = message.get("method")
+    params = message.get("params") if isinstance(message.get("params"), dict) else {}
+    item = params.get("item")
+    if isinstance(item, dict):
+        upsert_item(items_by_id, order, item)
+    if method == "turn/completed":
+        turn = params.get("turn") if isinstance(params.get("turn"), dict) else {}
+        for turn_item in turn.get("items") or []:
+            upsert_item(items_by_id, order, turn_item)
+    item_id = params.get("itemId") or params.get("item_id")
+    if not isinstance(item_id, str) or not item_id:
+        return
+    if method in ("item/agentMessage/delta", "item/agent_message/delta"):
+        current = ensure_item(items_by_id, order, item_id, "agentMessage")
+        current["type"] = "agentMessage"
+        current["text"] = (current.get("text") or "") + notification_delta(params)
+        return
+    if method == "item/plan/delta":
+        current = ensure_item(items_by_id, order, item_id, "plan")
+        current["type"] = "plan"
+        current["text"] = (current.get("text") or "") + notification_delta(params)
+        return
+    if method in ("item/reasoning/summaryTextDelta", "item/reasoning/textDelta"):
+        current = ensure_item(items_by_id, order, item_id, "reasoning")
+        apply_reasoning_delta(current, params)
+        return
+    if method == "item/commandExecution/outputDelta":
+        current = items_by_id.get(item_id)
+        if isinstance(current, dict):
+            current["aggregatedOutput"] = (current.get("aggregatedOutput") or "") + notification_delta(params)
+
+
+def collect_items_from_notifications(notifications):
+    items_by_id = {}
+    order = []
+    for message in notifications:
+        apply_app_server_notification(items_by_id, order, message)
+    return ordered_items(items_by_id, order)
+
+
+def merge_session_items(session_items, incoming):
+    items_by_id = {}
+    order = []
+    user_texts = set()
+    for item in session_items:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+            continue
+        upsert_item(items_by_id, order, item)
+        if item.get("type") in ("userMessage", "user_message"):
+            text = user_message_text(item)
+            if text:
+                user_texts.add(text)
+    for item in incoming:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+            continue
+        if item.get("type") in ("userMessage", "user_message"):
+            text = user_message_text(item)
+            if text and text in user_texts and item["id"] not in items_by_id:
+                continue
+        upsert_item(items_by_id, order, item)
+        if item.get("type") in ("userMessage", "user_message"):
+            text = user_message_text(item)
+            if text:
+                user_texts.add(text)
+    return ordered_items(items_by_id, order)
+
+
+def user_message_item(item_id, text):
+    return {
+        "id": item_id,
+        "type": "userMessage",
+        "content": [{"type": "text", "text": text}],
+    }
 
 
 rpc_id = 100
@@ -209,7 +384,7 @@ def start_thread(proc, model_id):
     return thread_id, None
 
 
-def run_turn(proc, thread_id, model_id, text):
+def run_turn(proc, thread_id, model_id, text, on_items=None):
     request_id = next_rpc_id()
     send(
         proc,
@@ -224,9 +399,17 @@ def run_turn(proc, thread_id, model_id, text):
             },
         },
     )
+    items_by_id = {}
+    order = []
+
+    def note(message):
+        apply_app_server_notification(items_by_id, order, message)
+        if on_items:
+            on_items(ordered_items(items_by_id, order))
+
     turn_message, notifications = wait_for_id(proc, request_id, 180)
-    turn_status = "started"
-    turn_obj = find_completed_turn(notifications)
+    for message in notifications:
+        note(message)
     if "error" in turn_message:
         return {
             "threadId": thread_id,
@@ -235,8 +418,7 @@ def run_turn(proc, thread_id, model_id, text):
             "text": turn_message["error"].get("message"),
             "error": turn_message["error"].get("message"),
         }
-    assistant = None
-    error_text = None
+    turn_obj = find_completed_turn(notifications)
     deadline = time.time() + 180
     while turn_obj is None and time.time() < deadline:
         try:
@@ -244,39 +426,22 @@ def run_turn(proc, thread_id, model_id, text):
         except TimeoutError:
             continue
         notifications.append(message)
+        note(message)
         turn_obj = find_completed_turn(notifications)
     if turn_obj is None:
         turn_status = "timeout"
     else:
         turn_status = turn_obj.get("status") or "completed"
-    assistant = collect_turn_text(notifications)
-    error_text = turn_error_message(turn_obj, notifications)
+    items = ordered_items(items_by_id, order)
+    if on_items:
+        on_items(items)
     return {
         "threadId": thread_id,
         "modelId": model_id,
         "status": turn_status,
-        "text": assistant,
-        "error": error_text,
+        "text": assistant_text_from_items(items),
+        "error": turn_error_message(turn_obj, notifications),
     }
-
-
-def append_turn_messages(messages, user_text, turn):
-    messages.append(
-        {
-            "id": "user-%s" % (len(messages) + 1),
-            "role": "user",
-            "text": user_text,
-        }
-    )
-    reply = turn.get("text") or turn.get("error")
-    if isinstance(reply, str) and reply.strip():
-        messages.append(
-            {
-                "id": "assistant-%s" % (len(messages) + 1),
-                "role": "assistant",
-                "text": reply.strip(),
-            }
-        )
 
 
 def read_json_file(path):
@@ -447,20 +612,9 @@ def main():
         listed = [{"id": model["id"], "label": model["label"]} for model in models]
         turn = None
         thread_id = None
-        messages = []
-        if model_id and not SKIP_INITIAL_TURN:
-            thread_id, thread_error = start_thread(proc, model_id)
-            if thread_id:
-                turn = run_turn(proc, thread_id, model_id, TURN_PROMPT)
-                append_turn_messages(messages, TURN_PROMPT, turn)
-            elif thread_error:
-                turn = {
-                    "threadId": "",
-                    "modelId": model_id,
-                    "status": "error",
-                    "text": thread_error,
-                    "error": thread_error,
-                }
+        session_items = []
+        turn_status = "idle"
+        active_task_id = None
 
         def publish(current_turn):
             write_status(
@@ -471,9 +625,42 @@ def main():
                     "codexVersion": version,
                     "models": listed,
                     "turn": current_turn,
-                    "messages": messages,
+                    "turnStatus": turn_status,
+                    "activeTaskId": active_task_id,
+                    "items": session_items,
+                    "messages": messages_from_items(session_items),
                 }
             )
+
+        if model_id and not SKIP_INITIAL_TURN:
+            thread_id, thread_error = start_thread(proc, model_id)
+            if thread_id:
+                turn_status = "running"
+                session_items = [user_message_item("user-initial", TURN_PROMPT)]
+                publish(None)
+
+                def on_initial_items(turn_items):
+                    nonlocal session_items
+                    session_items = merge_session_items(session_items, turn_items)
+                    publish(turn)
+
+                turn = run_turn(
+                    proc, thread_id, model_id, TURN_PROMPT, on_items=on_initial_items
+                )
+                turn_status = (
+                    "failed"
+                    if turn.get("status") in ("error", "timeout", "failed")
+                    else "completed"
+                )
+            elif thread_error:
+                turn_status = "failed"
+                turn = {
+                    "threadId": "",
+                    "modelId": model_id,
+                    "status": "error",
+                    "text": thread_error,
+                    "error": thread_error,
+                }
 
         publish(turn)
         while True:
@@ -485,6 +672,8 @@ def main():
                 if not thread_id and model_id:
                     thread_id, thread_error = start_thread(proc, model_id)
                     if thread_error and not thread_id:
+                        turn_status = "failed"
+                        active_task_id = None
                         turn = {
                             "threadId": "",
                             "modelId": model_id or "",
@@ -504,8 +693,32 @@ def main():
                         time.sleep(0.4)
                         continue
                 if thread_id and model_id:
-                    turn = run_turn(proc, thread_id, model_id, request["text"])
-                    append_turn_messages(messages, request["text"], turn)
+                    active_task_id = request["id"]
+                    turn_status = "running"
+                    session_items = merge_session_items(
+                        session_items,
+                        [user_message_item("user-%s" % request["id"], request["text"])],
+                    )
+                    publish(turn)
+
+                    def on_task_items(turn_items):
+                        nonlocal session_items
+                        session_items = merge_session_items(session_items, turn_items)
+                        publish(turn)
+
+                    turn = run_turn(
+                        proc,
+                        thread_id,
+                        model_id,
+                        request["text"],
+                        on_items=on_task_items,
+                    )
+                    turn_status = (
+                        "failed"
+                        if turn.get("status") in ("error", "timeout", "failed")
+                        else "completed"
+                    )
+                    active_task_id = None
                     write_json_file(
                         TASK_RESULT_PATH,
                         {"id": request["id"], "turn": turn},

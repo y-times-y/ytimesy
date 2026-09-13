@@ -1,5 +1,7 @@
 import { ArrowUp, X } from "lucide-react";
 import { useEffect, useState } from "react";
+import { SessionItemId } from "#/domain/ids";
+import { type SessionItem, visibleSessionItems } from "#/domain/session-item";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
 import {
 	preferredSessionModelId,
@@ -7,6 +9,7 @@ import {
 } from "./model-capabilities";
 import { ProjectContext } from "./project-context";
 import { SessionControls } from "./session-controls";
+import { SessionTimeline } from "./session-timeline";
 import { TaskInput } from "./task-input";
 
 export function SessionLauncher({
@@ -24,6 +27,10 @@ export function SessionLauncher({
 	const [attachments, setAttachments] = useState<File[]>([]);
 	const [draft, setDraft] = useState("");
 	const [modelId, setModelId] = useState(preferredSessionModelId(models));
+	const [optimisticItems, setOptimisticItems] = useState<SessionItem[]>([]);
+	const items = visibleSessionItems(session.items, optimisticItems);
+	const chatLayout =
+		session.connection.status === "authenticated" || items.length > 0;
 
 	useEffect(() => {
 		const listed = sessionModelsFromListed(session.models);
@@ -34,96 +41,115 @@ export function SessionLauncher({
 		);
 	}, [session.models]);
 
+	useEffect(() => {
+		setOptimisticItems((current) =>
+			current.filter(
+				(item) =>
+					item.kind !== "userMessage" ||
+					!session.items.some(
+						(existing) =>
+							existing.kind === "userMessage" && existing.text === item.text,
+					),
+			),
+		);
+	}, [session.items]);
+
 	function sendDraft() {
 		const text = draft.trim();
 		if (!text || !session.canSend || !modelId || busy) return;
+		setOptimisticItems((current) => [
+			...current,
+			{
+				kind: "userMessage",
+				id: SessionItemId(`local-${crypto.randomUUID()}`),
+				text,
+			},
+		]);
 		onSend(text, modelId);
 		setDraft("");
 	}
 
 	return (
-		<section className="session-launcher" aria-labelledby="session-title">
+		<section
+			className="session-launcher"
+			aria-labelledby="session-title"
+			data-layout={chatLayout ? "chat" : "empty"}
+		>
 			<h1 id="session-title" className="sr-only">
-				New session
+				Session
 			</h1>
 			<AgentSetup session={session} busy={busy} onConnect={onConnect} />
-			{session.messages.length > 0 && (
-				<ol className="session-transcript" aria-label="Conversation">
-					{session.messages.map((message) => (
-						<li
-							key={message.id ?? `${message.role}:${message.text}`}
-							data-role={message.role}
-						>
-							<span>{message.role === "user" ? "You" : "Codex"}</span>
-							<p>{message.text}</p>
-						</li>
-					))}
-				</ol>
-			)}
-			<ProjectContext />
-			<div className="session-composer">
-				<TaskInput
-					value={draft}
-					onChange={setDraft}
-					onSubmit={sendDraft}
-					disabled={busy || !session.canSend}
-				/>
-				{attachments.length > 0 && (
-					<ul className="session-attachments" aria-label="Attached files">
-						{attachments.map((file, index) => (
-							<li key={`${file.name}-${file.lastModified}-${file.size}`}>
-								<span title={file.name}>{file.name}</span>
-								<button
-									type="button"
-									aria-label={`Remove ${file.name}`}
-									onClick={() =>
-										setAttachments((files) =>
-											files.filter((_, fileIndex) => fileIndex !== index),
-										)
-									}
-								>
-									<X size={14} />
-								</button>
-							</li>
-						))}
-					</ul>
-				)}
-				<div className="session-toolbar">
-					<SessionControls
-						models={models}
-						modelId={modelId}
-						onModelIdChange={setModelId}
-						onAttachFiles={(selected) =>
-							setAttachments((files) => {
-								const additions = selected.filter(
-									(file) =>
-										!files.some(
-											(existing) =>
-												existing.name === file.name &&
-												existing.size === file.size &&
-												existing.lastModified === file.lastModified,
-										),
-								);
-								return [...files, ...additions];
-							})
-						}
+			<SessionTimeline
+				items={items}
+				turnStatus={session.turnStatus}
+				fill={chatLayout}
+			/>
+			<div className="session-dock">
+				<ProjectContext />
+				<div className="session-composer">
+					<TaskInput
+						value={draft}
+						onChange={setDraft}
+						onSubmit={sendDraft}
+						disabled={busy || !session.canSend}
 					/>
-					<button
-						type="button"
-						className="session-send"
-						aria-label="Start session"
-						disabled={!session.canSend || busy || !draft.trim() || !modelId}
-						title={
-							session.canSend
-								? "Send task"
-								: "Connect Codex during setup to start a session"
-						}
-						onClick={sendDraft}
-					>
-						<span className="send-face">
-							<ArrowUp className="size-4" />
-						</span>
-					</button>
+					{attachments.length > 0 && (
+						<ul className="session-attachments" aria-label="Attached files">
+							{attachments.map((file, index) => (
+								<li key={`${file.name}-${file.lastModified}-${file.size}`}>
+									<span title={file.name}>{file.name}</span>
+									<button
+										type="button"
+										aria-label={`Remove ${file.name}`}
+										onClick={() =>
+											setAttachments((files) =>
+												files.filter((_, fileIndex) => fileIndex !== index),
+											)
+										}
+									>
+										<X size={14} />
+									</button>
+								</li>
+							))}
+						</ul>
+					)}
+					<div className="session-toolbar">
+						<SessionControls
+							models={models}
+							modelId={modelId}
+							onModelIdChange={setModelId}
+							onAttachFiles={(selected) =>
+								setAttachments((files) => {
+									const additions = selected.filter(
+										(file) =>
+											!files.some(
+												(existing) =>
+													existing.name === file.name &&
+													existing.size === file.size &&
+													existing.lastModified === file.lastModified,
+											),
+									);
+									return [...files, ...additions];
+								})
+							}
+						/>
+						<button
+							type="button"
+							className="session-send"
+							aria-label="Send"
+							disabled={!session.canSend || busy || !draft.trim() || !modelId}
+							title={
+								session.canSend
+									? "Send task"
+									: "Connect Codex during setup to start a session"
+							}
+							onClick={sendDraft}
+						>
+							<span className="send-face">
+								<ArrowUp className="size-4" />
+							</span>
+						</button>
+					</div>
 				</div>
 			</div>
 		</section>
@@ -140,15 +166,7 @@ function AgentSetup({
 	onConnect: () => void;
 }) {
 	const { connection } = session;
-	if (connection.status === "authenticated") {
-		return (
-			<p className="agent-setup" role="status">
-				Codex connected
-				{connection.planType ? ` · ${connection.planType}` : ""}. Models come
-				from the agent.
-			</p>
-		);
-	}
+	if (connection.status === "authenticated") return null;
 	if (connection.status === "awaiting_device_code") {
 		return (
 			<div className="agent-setup" role="status">
