@@ -120,6 +120,11 @@ export function SessionLauncher({
 	}
 
 	function sendDraft() {
+		if (slashDraft) {
+			const command = visibleSlashCommands[slashIndex];
+			if (command) runSlashCommand(command);
+			return;
+		}
 		sendText(draft.trim());
 	}
 
@@ -281,7 +286,11 @@ export function SessionLauncher({
 									className="session-send"
 									aria-label="Send"
 									disabled={
-										!session.canSend || busy || !draft.trim() || !modelId
+										!session.canSend ||
+										busy ||
+										!draft.trim() ||
+										!modelId ||
+										Boolean(slashDraft)
 									}
 									title={
 										session.canSend
