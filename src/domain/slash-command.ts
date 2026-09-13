@@ -124,12 +124,27 @@ export function composerSlashCommands(
 	];
 }
 
+export function slashCommandMatches(
+	command: SlashCommand,
+	query: string,
+): boolean {
+	if (query.length === 0) return true;
+	if (command.trigger.slice(1).startsWith(query)) return true;
+	if (command.id.startsWith(query)) return true;
+	return command.label
+		.toLowerCase()
+		.split(/\s+/)
+		.some((word) => word.startsWith(query));
+}
+
 export function matchingSlashCommands(
 	draft: SlashDraft,
 	commands: readonly SlashCommand[],
 ): SlashCommand[] {
-	if (draft.query.length === 0) return [...commands];
-	return commands.filter((command) =>
-		command.trigger.slice(1).startsWith(draft.query),
-	);
+	return commands
+		.filter((command) => slashCommandMatches(command, draft.query))
+		.sort((left, right) => {
+			if (left.availability === right.availability) return 0;
+			return left.availability === "ready" ? -1 : 1;
+		});
 }

@@ -423,61 +423,65 @@
 	position: relative;
 }
 .slash-palette {
-	position: absolute;
-	left: 0;
-	right: 0;
-	bottom: calc(100% + 8px);
-	z-index: 6;
 	margin: 0;
-	padding: 6px;
-	list-style: none;
-	border: 1px solid #3a3a3a;
-	border-radius: 12px;
-	background: #171717;
-	box-shadow: 0 16px 40px #0008;
-	max-height: min(320px, 50dvh);
+	padding: 6px 6px 8px;
+	border-bottom: 1px solid #3a3a3a;
+	max-height: min(280px, 42dvh);
 	overflow-y: auto;
+	scrollbar-width: thin;
+	scrollbar-color: #3a3a3a transparent;
 }
 .slash-palette button {
-	display: flex;
+	display: grid;
+	grid-template-columns: 16px minmax(0, 1fr) auto;
 	align-items: center;
-	gap: 12px;
+	gap: 10px;
 	width: 100%;
-	min-height: 44px;
-	padding: 8px 10px;
+	min-height: 36px;
+	padding: 7px 10px;
 	border: 0;
 	border-radius: 8px;
 	background: transparent;
-	color: #d8d8d8;
+	color: #ececec;
 	text-align: left;
 }
 .slash-palette button[data-active="true"],
 .slash-palette button:hover {
-	background: #ffffff10;
+	background: #ffffff0c;
 }
-.slash-palette button:disabled {
-	opacity: 0.55;
-	cursor: not-allowed;
+.slash-palette button[aria-disabled="true"] {
+	opacity: 0.38;
 }
 .slash-palette .slash-command-trigger {
 	flex-shrink: 0;
-	width: 5.5em;
+	color: #6d6d6d;
 	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-	font-size: 12px;
-	color: #f0f0f0;
+	font-size: 11px;
 }
 .slash-palette-copy {
 	display: flex;
 	flex-direction: column;
-	gap: 2px;
+	gap: 1px;
 	min-width: 0;
 }
 .slash-palette-copy span {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 	font-size: 13px;
+	line-height: 1.3;
 }
 .slash-palette-copy small {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 	color: #8a8a8a;
 	font-size: 11px;
+	line-height: 1.3;
+}
+.session-composer:has(.slash-palette) textarea {
+	min-height: 56px;
+	padding-top: 14px;
 }
 .file-type-icon {
 	display: grid;
@@ -545,43 +549,9 @@
 .side-chat {
 	display: flex;
 	flex-direction: column;
-	height: 100%;
+	flex: 1;
 	min-height: 0;
-	border-left: 1px solid #282828;
-	background: #101010;
-}
-.side-chat-header {
-	display: flex;
-	align-items: flex-start;
-	justify-content: space-between;
-	gap: 12px;
-	padding: 14px 14px 10px;
-	border-bottom: 1px solid #242424;
-}
-.side-chat-header h2 {
-	margin: 0;
-	font-size: 13px;
-	font-weight: 550;
-}
-.side-chat-lede {
-	margin: 6px 0 0;
-	color: #8a8a8a;
-	font-size: 11px;
-	line-height: 1.5;
-}
-.side-chat-close {
-	display: grid;
-	place-items: center;
-	width: 32px;
-	height: 32px;
-	border: 0;
-	border-radius: 6px;
 	background: transparent;
-	color: #b0b0b0;
-}
-.side-chat-close:hover {
-	background: #ffffff12;
-	color: #fff;
 }
 .side-chat .session-timeline {
 	padding: 8px 12px 12px;
@@ -594,28 +564,58 @@
 }
 .side-chat-composer {
 	display: flex;
-	align-items: flex-end;
+	align-items: center;
 	gap: 8px;
-	padding: 10px 12px 14px;
-	border-top: 1px solid #242424;
+	margin: 10px 12px 14px;
+	padding: 8px 10px;
+	border: 1px solid #333;
+	border-radius: 12px;
+	background: #191919;
+	color: #8a8a8a;
 }
-.side-chat-composer textarea {
+.side-chat .side-chat-composer textarea {
 	flex: 1;
-	min-height: 44px;
+	min-height: 36px;
 	max-height: 120px;
-	padding: 10px 12px;
-	border: 1px solid #3a3a3a;
-	border-radius: 10px;
-	background: #1a1a1a;
+	padding: 6px 0;
+	border: 0;
+	background: transparent;
 	color: #ededed;
 	font: inherit;
 	font-size: 14px;
+	line-height: 1.45;
 	resize: none;
 }
-.panel-toggle[aria-pressed="true"] {
-	color: #eee;
-	background: #282828;
-	border-color: #3d3d3d;
+.side-chat .side-chat-composer textarea::placeholder {
+	color: #8a8a8a;
+}
+.side-chat-send {
+	display: grid;
+	place-items: center;
+	width: 28px;
+	height: 28px;
+	flex-shrink: 0;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	color: #d0d0d0;
+}
+.side-chat-send:hover {
+	background: #ffffff10;
+	color: #fff;
+}
+.side-chat-send:disabled {
+	opacity: 0.35;
+	cursor: not-allowed;
+}
+@media (pointer: coarse) {
+	.slash-palette button {
+		min-height: 44px;
+	}
+	.side-chat-send {
+		width: 44px;
+		height: 44px;
+	}
 }
 .session-activity[data-status="inProgress"] summary,
 .session-activity[data-status="inProgress"] > p {

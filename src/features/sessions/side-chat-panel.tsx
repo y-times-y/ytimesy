@@ -1,4 +1,4 @@
-import { ArrowUp, X } from "lucide-react";
+import { ArrowUp, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
 import { SessionItemId } from "#/domain/ids";
 import {
@@ -16,7 +16,6 @@ export function SideChatPanel({
 	mainTurnRunning,
 	busy,
 	queued,
-	onClose,
 	onSend,
 }: {
 	items: readonly SessionItem[];
@@ -25,7 +24,6 @@ export function SideChatPanel({
 	mainTurnRunning: boolean;
 	busy: boolean;
 	queued: boolean;
-	onClose: () => void;
 	onSend: (text: string) => void;
 }) {
 	const [draft, setDraft] = useState("");
@@ -61,53 +59,35 @@ export function SideChatPanel({
 	}
 
 	return (
-		<aside className="side-chat" aria-label="Side chat">
-			<header className="side-chat-header">
-				<div>
-					<h2>Side chat</h2>
-					<p className="side-chat-lede">
-						Asks without interrupting the current run. Defaults to read, search,
-						and answer.
-					</p>
-				</div>
-				<button
-					type="button"
-					className="side-chat-close"
-					aria-label="Close side chat"
-					onClick={onClose}
-				>
-					<X size={16} />
-				</button>
-			</header>
+		<section className="side-chat" aria-label="Side chat">
 			<SessionTimeline items={visible} turnStatus={turnStatus} fill />
 			{queued || mainTurnRunning ? (
 				<p className="side-chat-queue" role="status">
 					{queued
-						? "Queued. This sends when the current run finishes."
-						: "Will not interrupt the current run."}
+						? "Queued until the current run finishes."
+						: "Does not interrupt the current run."}
 				</p>
 			) : null}
 			<div className="side-chat-composer">
+				<Plus size={16} aria-hidden="true" />
 				<TaskInput
 					value={draft}
 					onChange={setDraft}
 					onSubmit={sendDraft}
 					disabled={busy || !canSend}
-					placeholder="Ask a side question"
+					placeholder="Message side chat"
 					label="Side chat message"
 				/>
 				<button
 					type="button"
-					className="session-send"
+					className="side-chat-send"
 					aria-label="Send side chat"
 					disabled={!canSend || busy || !draft.trim()}
 					onClick={sendDraft}
 				>
-					<span className="send-face">
-						<ArrowUp className="size-4" />
-					</span>
+					<ArrowUp size={16} />
 				</button>
 			</div>
-		</aside>
+		</section>
 	);
 }

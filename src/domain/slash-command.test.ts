@@ -38,4 +38,14 @@ describe("slash commands", () => {
 			).map((command) => command.trigger),
 		).toEqual(["/stop"]);
 	});
+
+	it("keeps ready commands above unavailable ones", () => {
+		expect(
+			matchingSlashCommands({ query: "", argument: "" }, connected)[0]
+				?.availability,
+		).toBe("ready");
+		expect(
+			matchingSlashCommands({ query: "", argument: "" }, connected).at(-1)?.id,
+		).toBe("pr");
+	});
 });
