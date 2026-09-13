@@ -1,5 +1,6 @@
 import { ArrowUp, X } from "lucide-react";
 import { useState } from "react";
+import type { Project } from "../../domain/projects";
 import type { SessionModel } from "./model-capabilities";
 import { ProjectContext } from "./project-context";
 import { SessionControls } from "./session-controls";
@@ -7,8 +8,14 @@ import { TaskInput } from "./task-input";
 
 export function SessionLauncher({
 	models = [],
+	projects,
+	selectedProject,
+	onSelectProject,
 }: {
 	models?: readonly SessionModel[];
+	projects: Project[];
+	selectedProject?: Project;
+	onSelectProject: (id: string) => void;
 }) {
 	const [attachments, setAttachments] = useState<File[]>([]);
 
@@ -17,7 +24,11 @@ export function SessionLauncher({
 			<h1 id="session-title" className="sr-only">
 				New session
 			</h1>
-			<ProjectContext />
+			<ProjectContext
+				projects={projects}
+				selectedProject={selectedProject}
+				onSelectProject={onSelectProject}
+			/>
 			<div className="session-composer">
 				<TaskInput />
 				{attachments.length > 0 && (

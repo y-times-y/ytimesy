@@ -727,3 +727,127 @@ button:enabled:active {
 		@apply font-sans;
 	}
 }
+
+.onboarding-shell {
+	min-height: 100dvh;
+	display: grid;
+	place-items: center;
+	padding: 24px;
+	background: #101010;
+}
+.onboarding-card {
+	width: min(100%, 420px);
+	display: flex;
+	flex-direction: column;
+	gap: 20px;
+	padding: 32px;
+	border: 1px solid #303030;
+	border-radius: 20px;
+	background: #181818;
+}
+.onboarding-card .brand {
+	align-self: flex-start;
+	margin-bottom: 12px;
+}
+.onboarding-card h1 {
+	font-size: 24px;
+	letter-spacing: -0.6px;
+	margin: 0;
+}
+.onboarding-card p {
+	color: #aaa;
+	font-size: 14px;
+	line-height: 1.6;
+	margin: 0;
+}
+.onboarding-card label {
+	font-size: 13px;
+	color: #bbb;
+	margin-bottom: -12px;
+}
+.onboarding-card select {
+	width: 100%;
+	min-width: 0;
+	height: 44px;
+	padding: 0 12px;
+	border: 1px solid #444;
+	border-radius: 8px;
+	background: #222;
+	color: #eee;
+	font-size: 16px;
+}
+.setup-primary {
+	min-height: 44px;
+	padding: 10px 16px;
+	border-radius: 8px;
+	background: #eee;
+	color: #161616;
+	font-size: 14px;
+	font-weight: 500;
+}
+.setup-primary:disabled {
+	opacity: 0.45;
+	cursor: default;
+}
+.setup-links {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	font-size: 12px;
+	color: #bbb;
+}
+.setup-links a,
+.setup-links button,
+.setup-back {
+	min-height: 44px;
+	display: inline-flex;
+	align-items: center;
+}
+.setup-back {
+	font-size: 13px;
+	color: #aaa;
+	align-self: center;
+}
+.project-list {
+	padding: 8px 12px;
+	list-style: none;
+}
+.project-list button {
+	width: 100%;
+	text-align: left;
+	padding: 12px;
+	min-height: 44px;
+	border-radius: 8px;
+	font-size: 13px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.project-list button[aria-current],
+.project-list button:hover {
+	background: #292929;
+}
+@media (max-width: 400px) {
+	.onboarding-shell {
+		padding: 16px;
+	}
+	.onboarding-card {
+		padding: 24px 20px;
+	}
+}
+
+.account-signout {
+	width: auto;
+	padding-inline: 10px;
+	white-space: nowrap;
+	font-size: 12px;
+}
+.header-navigation {
+	min-width: 0;
+}
+.header-navigation > span {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}

@@ -1,0 +1,31 @@
+import "@tanstack/react-start/server-only";
+import { z } from "zod";
+
+const configuration = z.object({
+	APP_URL: z.url(),
+	BETTER_AUTH_SECRET: z.string().min(32),
+	DATABASE_URL: z.string().refine((value) => {
+		try {
+			const url = new URL(value);
+			return (
+				["postgres:", "postgresql:"].includes(url.protocol) &&
+				url.searchParams.get("sslmode") === "verify-full"
+			);
+		} catch {
+			return false;
+		}
+	}, "Use a PostgreSQL URL with sslmode=verify-full"),
+	GITHUB_OAUTH_CLIENT_ID: z.string().min(1),
+	GITHUB_OAUTH_CLIENT_SECRET: z.string().min(1),
+	GITHUB_APP_CLIENT_ID: z.string().min(1),
+	GITHUB_APP_CLIENT_SECRET: z.string().min(1),
+	GITHUB_APP_SLUG: z.string().regex(/^[a-z0-9-]+$/),
+});
+export function serverConfig() {
+	const parsed = configuration.safeParse(process.env);
+	if (!parsed.success)
+		throw new Error(
+			`Missing or invalid server configuration: ${parsed.error.issues.map((issue) => issue.path.join(".")).join(", ")}`,
+		);
+	return parsed.data;
+}

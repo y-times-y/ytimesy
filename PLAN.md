@@ -1,6 +1,6 @@
 # ytimesy v0
 
-Status: UI foundation complete; live backend integration pending. Domain: ytimesy.com. Updated: 2026-09-13.
+Status: identity and repository onboarding verified locally; cloud execution is still an operator proof. Domain: ytimesy.com. Updated: 2026-09-13.
 
 ## Goal and proof
 
@@ -70,7 +70,7 @@ This integration manages database changes from this repository. It is separate f
 
 ### Migration ownership
 
-Initialize and commit `supabase/config.toml` and ordered SQL files under `supabase/migrations/` when implementing the database. The CLI configuration is initialized. Migration `20260913010000_enable_automatic_rls.sql` is applied; application tables are not yet created. Capture any existing application schema before introducing migrations; inspect the actual database rather than assuming it is empty. Treat migrations as the authoritative schema history, including Better Auth tables and job-system setup. Account for libraries that create or migrate their own schemas so two independent mechanisms do not race or diverge.
+Initialize and commit `supabase/config.toml` and ordered SQL files under `supabase/migrations/` when implementing the database. The CLI configuration is initialized. Migrations `20260913010000_enable_automatic_rls.sql` and `20260913193000_identity_and_projects.sql` are applied. The latter contains Better Auth, encrypted GitHub connections, single-use OAuth state, and personal project records. Capture any existing application schema before introducing migrations; inspect the actual database rather than assuming it is empty. Treat migrations as the authoritative schema history, including Better Auth tables and job-system setup. Account for libraries that create or migrate their own schemas so two independent mechanisms do not race or diverge.
 
 For a schema change, add a new migration, verify it against a disposable development database, and review it with the application changes. Preserve already-applied migrations. Keep production data and credentials out of migration/seed files. Preview branches rebuild schema from committed migrations and optional seeds; they do not automatically copy production schema or data.
 
@@ -167,9 +167,9 @@ Recheck versioned APIs before implementing. Validate subscription connection usi
 
 - Research and product decisions captured; coding skill installed.
 - TanStack Start foundation and workspace empty states implemented; Diff / Terminal / Preview selectors work. Effect and TanStack Query are installed but their service/data integrations are pending.
-- Better Auth is selected; authentication is not implemented.
+- Better Auth GitHub sign-in, encrypted GitHub App connections, repository/branch selection, and owner-scoped project records are implemented and verified locally.
 - No deployed app or complete end-to-end flow yet. Freestyle VM creation, remote execution, pinned Codex installation, and app-server handshake were verified live on 2026-09-13. ChatGPT device authorization and a real app-server file edit passed. The UI is not connected to this operator proof.
-- The narrow Codex/Freestyle proof passed. Continue with identity and repository access; validate Rigkit preparation before implementing the durable provisioning workflow.
+- The narrow Codex/Freestyle proof and identity/repository step passed. Continue with Rigkit validation and durable workspace preparation.
 
 ## Cloud-agent handoff
 
@@ -179,7 +179,7 @@ Use ytimesy to work on its own repository with a real cloud coding agent. Preser
 
 ### Current evidence and limits
 
-The app currently contains frontend interactions and honest empty states, not a working cloud-agent service. Model, reasoning, and Fast options require connected-agent capabilities; sending stays disabled until integration. File attachments are local draft state. Diff, Terminal, and Preview are UI shells. Better Auth, PostgreSQL, GitHub authorization, durable jobs, VM provisioning, agent execution, and live transports remain unimplemented. Prior browser checks exercised the local UI; they do not prove remote authentication or execution.
+The app currently contains frontend interactions and honest empty states, not a working cloud-agent service. Model, reasoning, and Fast options require connected-agent capabilities; sending stays disabled until integration. File attachments are local draft state. Diff, Terminal, and Preview are UI shells. Better Auth, PostgreSQL records, and GitHub repository authorization now work. Durable jobs, production VM provisioning, in-app agent execution, and live transports remain unimplemented. Prior browser checks exercised the local UI; they do not prove remote authentication or execution.
 
 ### Decisions to preserve
 
@@ -193,7 +193,7 @@ Run `pnpm install --frozen-lockfile`, then `pnpm dev` (port 3000). To match the 
 
 ### Next step
 
-The isolated Codex authentication and single-request proof passed (see progress below). Next implement Better Auth identity and authorized GitHub repository selection. Validate Rigkit setup and recovery before connecting this proof through a durable workspace workflow. Record live results and unresolved issues after each milestone.
+The isolated Codex authentication and single-request proof passed (see progress below). Identity and authorized GitHub repository selection now work locally. Next implement durable workspace preparation and connect the Codex flow to the signed-in user. Validate Rigkit setup and recovery before connecting this proof through a durable workspace workflow. Record live results and unresolved issues after each milestone.
 
 Provider credentials and account-side configuration are not included in the repository. Supabase is selected for PostgreSQL. Hosting, queue, and object-storage providers remain undecided. Do not assume a local server or an unpushed commit is available to a cloud agent: this repository must be made accessible to that environment first.
 
@@ -207,3 +207,16 @@ Verified live: the configured Freestyle API key lists VMs and creates `ytimesy-c
 The runner performs a bounded file-edit proof after login and verifies the resulting file. The VM has a 24-hour deletion deadline and 30-minute per-run cap. The guest authentication state belongs only to this isolated proof. Rigkit execution and process reconnect remain unverified. This proof does not wire the UI or implement durable production workflows.
 
 Pause/resume was verified after the successful turn: ChatGPT login remained valid, and the proof file retained its exact content. Final VM state was confirmed `paused`. The 24-hour deletion deadline remains active; this is a disposable proof, not durable user storage. Lint, TypeScript, and production build passed. No commit or deployment was made.
+
+
+### Identity and repository onboarding — 2026-09-13
+
+Implemented Better Auth 1.7.4 with PostgreSQL-backed sessions and rate limiting. GitHub OAuth App sign-in requests only `user:email`; its pre-existing callback remains configured. The new exact local callback is `http://127.0.0.1:3001/api/auth/callback/github`. GitHub App repository connection is separate, with callback `http://127.0.0.1:3001/api/github/callback`, user-bound single-use state, PKCE, matching GitHub identity, and encrypted tokens. Refresh rotation is serialized with a database row lock; revoked access returns a reconnection error. Configure production HTTPS callbacks before deployment.
+
+Repository discovery uses the GitHub App user token, so GitHub enforces the intersection of user and installation access. Only unsuspended installations with write access and writable, nonarchived repositories are offered. Project creation repeats this authorization check and verifies the branch against GitHub before saving. A personal tenant is the Better Auth user for v0; project queries and credential queries always include its ID. Table RLS and revoked Data API grants deny client access. The server's privileged database connection still requires these explicit ownership checks; RLS is not being represented as protection against bugs in privileged server code.
+
+Live evidence: Het signed in through GitHub, authorized the ytimesy Cloud app, selected `y-times-y/ytimesy` and `master`, saved the project, and saw it restored after a browser reload. The installation returned only that repository. Supabase schema verification found no missing Better Auth tables/columns. Signed-out project access returned 401; a cross-origin mutation returned 403. The client production bundle contained none of the configured secret values. Screens remain honest: agent model selection and sending are still unavailable pending the next integration.
+
+Validation: 12 tests cover migration/RLS, owner isolation, missing owners, request origins, OAuth state ownership/replay/expiry, mismatched GitHub accounts, unauthorized repositories, and missing branches. These use a disposable PGlite database and mocked GitHub responses; the real onboarding evidence above is separate. Typecheck, lint, and production build pass. Agent-browser verified the signed-out screen at 320px; authenticated flow was verified in Comet. Real-device Safari and expired-token refresh against GitHub remain untested. Better Auth's migration inspector warns about its own generated bigint rate-limit field (`lastRequest`); it reports no missing schema and live auth works.
+
+Run `pnpm dev` for the environment-loaded server on port 3001. GitHub App `ytimesy-cloud` is installed on organization `y-times-y` with selected access to this repository. The database migration was pushed with the existing database password supplied to the CLI through its environment after its temporary-login-role API failed. Do not expose that password in process arguments or commit it.
