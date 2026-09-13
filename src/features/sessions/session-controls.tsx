@@ -68,6 +68,7 @@ export function SessionControls({
 				}}
 			>
 				<SelectTrigger
+					id="session-model-select"
 					className="composer-select model-select"
 					aria-label="Model"
 				>

@@ -18,3 +18,13 @@ export function canSubmitComposer(
 		canSendSessionTask(workspace, connection) && !isTurnRunning(turnStatus)
 	);
 }
+
+export function canSubmitSideChat(
+	workspace: WorkspaceLifecycle,
+	connection: AgentConnection,
+	sideTurnStatus: SessionTurnStatus,
+): boolean {
+	return (
+		canSendSessionTask(workspace, connection) && !isTurnRunning(sideTurnStatus)
+	);
+}

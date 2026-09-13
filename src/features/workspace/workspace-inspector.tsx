@@ -1,5 +1,7 @@
-import { useState } from "react";
 import type { FileChangeEntry } from "#/domain/session-item";
+import { FileChangeList } from "../sessions/file-change-row";
+
+export type InspectorView = "diff" | "terminal" | "preview";
 
 const views = {
 	diff: {
@@ -19,16 +21,17 @@ const views = {
 	},
 } as const;
 
-type InspectorView = keyof typeof views;
-
 export function WorkspaceInspector({
 	collapsed,
+	activeView,
+	onActiveViewChange,
 	fileChanges = [],
 }: {
 	collapsed: boolean;
+	activeView: InspectorView;
+	onActiveViewChange: (view: InspectorView) => void;
 	fileChanges?: readonly FileChangeEntry[];
 }) {
-	const [activeView, setActiveView] = useState<InspectorView>("diff");
 	const currentView = views[activeView];
 	return (
 		<aside
@@ -45,7 +48,7 @@ export function WorkspaceInspector({
 							type="button"
 							key={view}
 							aria-pressed={activeView === view}
-							onClick={() => setActiveView(view)}
+							onClick={() => onActiveViewChange(view)}
 						>
 							{views[view].label}
 						</button>
@@ -53,14 +56,7 @@ export function WorkspaceInspector({
 				})}
 			</div>
 			{activeView === "diff" && fileChanges.length > 0 ? (
-				<ul className="inspector-changes" aria-label="File changes">
-					{fileChanges.map((change) => (
-						<li key={`${change.change}:${change.path}`}>
-							<span>{change.change}</span>
-							{change.path}
-						</li>
-					))}
-				</ul>
+				<FileChangeList changes={fileChanges} />
 			) : (
 				<section className="inspector-empty" aria-live="polite">
 					<h2>{currentView.title}</h2>

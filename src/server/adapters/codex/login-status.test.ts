@@ -58,6 +58,8 @@ describe("parseCodexLoginStatus", () => {
 			},
 			turnStatus: "completed",
 			items: [],
+			sideTurnStatus: "idle",
+			sideItems: [],
 			messages: [],
 			codexVersion: null,
 		});

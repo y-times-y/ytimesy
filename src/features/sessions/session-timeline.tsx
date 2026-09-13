@@ -1,13 +1,8 @@
-import {
-	Brain,
-	Files,
-	Globe,
-	SquareTerminal,
-	TriangleAlert,
-	Wrench,
-} from "lucide-react";
 import { useEffect, useRef } from "react";
+import { activityGlyphForToolName } from "#/domain/session-activity";
 import type { SessionItem, SessionTurnStatus } from "#/domain/session-item";
+import { ActivityIcon } from "./activity-icon";
+import { FileChangeList } from "./file-change-row";
 
 export function SessionTimeline({
 	items,
@@ -53,7 +48,7 @@ function SessionItemView({ item }: { item: SessionItem }) {
 			return (
 				<details className="session-activity" data-kind="reasoning">
 					<summary>
-						<Brain size={16} />
+						<ActivityIcon glyph="thinking" />
 						<span className="session-activity-title">
 							{item.summaries[0] ?? "Thinking"}
 						</span>
@@ -67,7 +62,7 @@ function SessionItemView({ item }: { item: SessionItem }) {
 			return (
 				<details className="session-activity" data-kind="plan" open>
 					<summary>
-						<Brain size={16} />
+						<ActivityIcon glyph="plan" />
 						<span className="session-activity-title">Plan</span>
 					</summary>
 					<p>{item.text || "Planning…"}</p>
@@ -82,7 +77,7 @@ function SessionItemView({ item }: { item: SessionItem }) {
 					open={item.status === "inProgress" || Boolean(item.output)}
 				>
 					<summary>
-						<SquareTerminal size={16} />
+						<ActivityIcon glyph="shell" />
 						<code className="session-activity-title">{item.command}</code>
 						<span className="session-activity-status">
 							{activityStatusLabel(item.status)}
@@ -107,19 +102,17 @@ function SessionItemView({ item }: { item: SessionItem }) {
 					data-status={item.status}
 				>
 					<p>
-						<Files size={16} />
-						<span className="session-activity-title">Files</span>
+						<ActivityIcon glyph="files" />
+						<span className="session-activity-title">
+							{item.changes.length === 1
+								? "1 file changed"
+								: `${item.changes.length} files changed`}
+						</span>
 						<span className="session-activity-status">
 							{activityStatusLabel(item.status)}
 						</span>
 					</p>
-					<ul>
-						{item.changes.map((change) => (
-							<li key={`${change.change}:${change.path}`}>
-								{change.change} {change.path}
-							</li>
-						))}
-					</ul>
+					<FileChangeList changes={item.changes} />
 				</div>
 			);
 		case "mcpToolCall":
@@ -130,7 +123,7 @@ function SessionItemView({ item }: { item: SessionItem }) {
 					data-status={item.status}
 				>
 					<p>
-						<Wrench size={16} />
+						<ActivityIcon glyph="mcp" />
 						<span className="session-activity-title">
 							{item.server} · {item.tool}
 						</span>
@@ -148,7 +141,7 @@ function SessionItemView({ item }: { item: SessionItem }) {
 					data-status={item.status}
 				>
 					<p>
-						<Wrench size={16} />
+						<ActivityIcon glyph={activityGlyphForToolName(item.tool)} />
 						<span className="session-activity-title">{item.tool}</span>
 						<span className="session-activity-status">
 							{activityStatusLabel(item.status)}
@@ -160,7 +153,7 @@ function SessionItemView({ item }: { item: SessionItem }) {
 			return (
 				<div className="session-activity" data-kind="webSearch">
 					<p>
-						<Globe size={16} />
+						<ActivityIcon glyph="web" />
 						<span className="session-activity-title">
 							{item.query ? item.query : "Search"}
 						</span>
@@ -171,7 +164,7 @@ function SessionItemView({ item }: { item: SessionItem }) {
 			return (
 				<div className="session-activity" data-kind="error" role="alert">
 					<p>
-						<TriangleAlert size={16} />
+						<ActivityIcon glyph="error" />
 						<span className="session-activity-title">{item.message}</span>
 					</p>
 				</div>
@@ -180,7 +173,7 @@ function SessionItemView({ item }: { item: SessionItem }) {
 			return (
 				<div className="session-activity" data-kind="unknown">
 					<p>
-						<Wrench size={16} />
+						<ActivityIcon glyph={activityGlyphForToolName(item.type)} />
 						<span className="session-activity-title">{item.type}</span>
 					</p>
 				</div>

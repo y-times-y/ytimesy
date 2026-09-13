@@ -8,6 +8,7 @@ import {
 	type PublicCodexSession,
 	readCodexWorkspaceSession,
 	sendCodexWorkspaceTask,
+	stopCodexWorkspaceTurn,
 } from "#/server/services/codex-workspace-session";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
 
@@ -37,15 +38,27 @@ export const connectCodexSession = createServerFn({ method: "POST" }).handler(
 );
 
 export const sendCodexSessionTask = createServerFn({ method: "POST" })
-	.validator((data: { text: string; modelId: string }) => {
-		const text = data.text.trim();
-		const modelId = data.modelId.trim();
-		if (!text) throw new Error("Task text is required");
-		if (!modelId) throw new Error("A listed model is required");
-		return { text, modelId };
-	})
+	.validator(
+		(data: { text: string; modelId: string; lane?: "main" | "side" }) => {
+			const text = data.text.trim();
+			const modelId = data.modelId.trim();
+			if (!text) throw new Error("Task text is required");
+			if (!modelId) throw new Error("A listed model is required");
+			return {
+				text,
+				modelId,
+				lane: data.lane === "side" ? ("side" as const) : ("main" as const),
+			};
+		},
+	)
 	.handler(async ({ data }): Promise<PublicCodexSession> => {
 		return runWithMachines((machines) =>
 			sendCodexWorkspaceTask(machines, data),
 		);
 	});
+
+export const stopCodexSessionTurn = createServerFn({ method: "POST" }).handler(
+	async (): Promise<PublicCodexSession> => {
+		return runWithMachines(stopCodexWorkspaceTurn);
+	},
+);
