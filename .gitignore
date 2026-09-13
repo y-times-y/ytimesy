@@ -1,0 +1,21 @@
+
+# Local research notes
+md/
+
+# Local UI reference screenshots (also ignored if copied into the repository)
+Screenshot 2026-09-12 at 4.40.51*PM.png
+Screenshot 2026-09-12 at 4.40.38*PM.png
+Screenshot 2026-09-12 at 4.41.27*PM.png
+Screenshot 2026-09-12 at 5.41.44*PM.png
+ytimesy-ui-reference/
+
+# Application output and local secrets
+node_modules/
+dist/
+.output/
+.tanstack/
+.env
+.env.*
+!.env.example
+*.tsbuildinfo
+.DS_Store
