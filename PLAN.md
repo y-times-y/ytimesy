@@ -90,7 +90,7 @@ Million-developer scalability is an architectural ambition, not a verified launc
 - Preserve durable event ordering/cursors for reconnect; distinguish cached UI data from the authoritative session record.
 - Effect retries and finalizers do not replace durable recovery or orphan reconciliation.
 - Cancellation of a run is distinct from deleting its persistent workspace.
-- Snapshot credentials only within explicitly isolated user state; shared base images contain no user secrets. Define logout, deletion, and credential-expiry behavior.
+- Snapshot credentials only within explicitly isolated user state; shared base images contain no user secrets. Define logout, deletion, and credential-expiry behavior. After ChatGPT login, capture a private Freestyle VM snapshot of that user's guest (disk includes `~/.codex/auth.json`). Store the snapshot id in tenant-scoped records later; proof CLI stores it in gitignored `.ytimesy/codex-auth-snapshot.json`. Do not mark that snapshot public or bake it into a shared base image. Shared images may later include tools such as bubblewrap, but never user credentials.
 - GitHub authority is repository-scoped and brokered wherever practical. Untrusted repository code must not gain platform authority.
 - App previews and terminals require access control. Browser preview content is untrusted and must not inherit application-origin privileges.
 
@@ -133,7 +133,7 @@ Recheck versioned APIs before implementing. Validate subscription connection usi
 
 - Research and product decisions captured; coding skill installed.
 - TanStack Start foundation and workspace empty states implemented; Diff / Terminal / Preview selectors work.
-- Freestyle VM create/exec/delete and Codex ChatGPT device-code login are proven in an isolated VM. See milestone 2 evidence. `model/list` returned the connected agent's models. `turn/start` was attempted and rejected by a ChatGPT usage limit; it was not completed and API-key billing was not substituted.
+- Freestyle VM create/exec/delete and Codex ChatGPT device-code login are proven in an isolated VM. See milestone 2 evidence. `model/list` returned the connected agent's models. `turn/start` was attempted and rejected by a ChatGPT usage limit; it was not completed and API-key billing was not substituted. After a successful ChatGPT login, a private Freestyle snapshot is the way to boot later VMs without repeating device-code authorization.
 - Effect services and adapters exist for that proof. TanStack Query is still unused. Sending remains disabled in the UI.
 - Better Auth is selected; authentication is not implemented.
 - No deployed app, durable project records, GitHub listing, terminal, preview, or publication flow yet.
@@ -156,7 +156,8 @@ Milestone 2 live check (2026-09-13):
 - `model/list` (hidden models excluded) returned, in order: `gpt-6-astra` (GPT-6-Astra), `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.3-codex-spark`. These names came from the connected agent; they were not invented in ytimesy.
 - `turn/start` used listed model `gpt-6-astra` with `approvalPolicy: "never"` and `sandboxPolicy: { "type": "dangerFullAccess" }` on the throwaway VM. The turn finished `failed`: usage limit on the ChatGPT Codex subscription, retry after 2026-09-19 17:57, or add credits at https://chatgpt.com/codex/settings/usage. No API-key login was used.
 - First `account/read` immediately after device-code completion returned `account: null`; retrying `account/read` with `refreshToken: true` on a new app-server process saw the ChatGPT account. Product login must wait for that refresh, not treat the first null as logged-out.
-- App-server logs a missing host `bubblewrap` and falls back to the bundled helper. That is a VM image concern for later workspace snapshots; the failed turn's recorded error was the usage limit, not bubblewrap.
+- App-server logs a missing host `bubblewrap` and falls back to the bundled helper. That is a VM image concern for later shared base snapshots; the failed turn's recorded error was the usage limit, not bubblewrap. User ChatGPT credentials are snapshotted separately and privately (`vm.snapshot`, then `vms.create({ snapshotId })`), never into a public/shared image.
+- After ChatGPT login, `pnpm prove:codex-login:status` (or `:snapshot`) captures that private snapshot. Later `pnpm prove:codex-login` boots from `.ytimesy/codex-auth-snapshot.json` and resumes Codex instead of starting a new device-code flow. `prove:codex-login:cleanup` deletes the running VM and keeps the snapshot.
 - Rigkit `@rigkit/sdk` / `@rigkit/provider-freestyle` `0.3.0` documents API-key auth as `freestyle.provider({ apiKey })`. It was not embedded: the SDK targets a Bun project daemon (`@effect/platform-bun`).
 
 Better Auth, PostgreSQL records, GitHub authorization, durable jobs, live terminal/preview transports, and publication remain unimplemented. This environment currently has a PostgreSQL URL and GitHub App credentials; hosting, queue, and object-storage providers are still undecided product choices.
@@ -169,10 +170,10 @@ Use the installed self-documenting-code skill. Keep routes thin and put provider
 
 ### Local setup and verification
 
-Run `pnpm install --frozen-lockfile`, then `pnpm dev` (port 3000). To match the existing local browser, run `pnpm exec vite dev --host 127.0.0.1 --port 3001`. Run `pnpm lint`, `pnpm typecheck`, `pnpm test`, and `pnpm build` before handing off structural changes. `pnpm prove:codex-login` starts a live ChatGPT device-code login (`FREESTYLE_API_KEY` required). Use agent-browser for UI checks. Screenshots and credentials must remain out of Git.
+Run `pnpm install --frozen-lockfile`, then `pnpm dev` (port 3000). To match the existing local browser, run `pnpm exec vite dev --host 127.0.0.1 --port 3001`. Run `pnpm lint`, `pnpm typecheck`, `pnpm test`, and `pnpm build` before handing off structural changes. `pnpm prove:codex-login` starts a live ChatGPT device-code login unless a private auth snapshot already exists (`FREESTYLE_API_KEY` required). After authorization, `pnpm prove:codex-login:status` records that snapshot. Use agent-browser for UI checks. Screenshots and credentials must remain out of Git.
 
 ### Next step
 
-A completed `turn/start` still needs ChatGPT Codex usage (credits or after 2026-09-19 17:57). Do not switch that request to API-key billing. In parallel, implement Better Auth with tenant-scoped PostgreSQL records and GitHub App repository listing, then persist a workspace and surface Codex login plus `model/list` in onboarding. Revisit Rigkit as the environment-prep adapter only if it can run as a Node worker without substituting a different VM provider.
+A completed `turn/start` still needs ChatGPT Codex usage (credits or after 2026-09-19 17:57). Do not switch that request to API-key billing. Capture a private Freestyle snapshot after the next successful ChatGPT login so later proof VMs skip device-code authorization. In parallel, implement Better Auth with tenant-scoped PostgreSQL records and GitHub App repository listing, then persist a workspace and surface Codex login plus `model/list` in onboarding. Revisit Rigkit as the environment-prep adapter only if it can run as a Node worker without substituting a different VM provider.
 
 Provider credentials are not committed. Hosting, queue, and object-storage providers remain undecided. Do not assume a local server or an unpushed commit is available to a cloud agent: this repository must be made accessible to that environment first.
