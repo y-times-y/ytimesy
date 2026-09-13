@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { githubAppIdentityMatchesSignIn } from "../../domain/github-sign-in";
 import { database } from "../adapters/database";
 import { exchangeGithubToken, githubClient } from "../adapters/github";
 import { serverConfig } from "../config";
@@ -50,7 +51,12 @@ export async function finishGithubConnection(
 		'select "accountId" from auth_account where "userId"=$1 and "providerId"=\'github\'',
 		[userId],
 	);
-	if (account.rows[0]?.accountId !== String(profile.data.id))
+	if (
+		!githubAppIdentityMatchesSignIn(
+			account.rows[0]?.accountId,
+			String(profile.data.id),
+		)
+	)
 		throw new Error("Connect the same GitHub account you used to sign in.");
 	await database().query(
 		"insert into github_connection(user_id,github_user_id,encrypted_credentials) values($1,$2,$3) on conflict(user_id) do update set github_user_id=excluded.github_user_id,encrypted_credentials=excluded.encrypted_credentials,updated_at=now()",
