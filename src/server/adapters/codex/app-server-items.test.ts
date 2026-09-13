@@ -89,6 +89,35 @@ describe("sessionItemFromAppServerItem", () => {
 		});
 	});
 
+	it("maps a fileChange with unified-diff line counts", () => {
+		expect(
+			sessionItemFromAppServerItem({
+				id: "item_files_1",
+				type: "fileChange",
+				status: "completed",
+				changes: [
+					{
+						path: "src/app.ts",
+						kind: "update",
+						diff: "--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1,2 @@\n keep\n+added\n",
+					},
+				],
+			}),
+		).toEqual({
+			kind: "fileChange",
+			id: SessionItemId("item_files_1"),
+			status: "completed",
+			changes: [
+				{
+					path: "src/app.ts",
+					change: "update",
+					additions: 1,
+					deletions: 0,
+				},
+			],
+		});
+	});
+
 	it("preserves unknown item types instead of dropping them", () => {
 		expect(
 			sessionItemFromAppServerItem({

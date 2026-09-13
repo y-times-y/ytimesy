@@ -1,7 +1,17 @@
-import { ArrowUp, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { ArrowUp, Square, X } from "lucide-react";
+import { type KeyboardEvent, useEffect, useMemo, useState } from "react";
 import { SessionItemId } from "#/domain/ids";
-import { type SessionItem, visibleSessionItems } from "#/domain/session-item";
+import {
+	lastUserMessageText,
+	type SessionItem,
+	visibleSessionItems,
+} from "#/domain/session-item";
+import {
+	composerSlashCommands,
+	matchingSlashCommands,
+	parseSlashDraft,
+	type SlashCommand,
+} from "#/domain/slash-command";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
 import {
 	preferredSessionModelId,
@@ -10,27 +20,68 @@ import {
 import { ProjectContext } from "./project-context";
 import { SessionControls } from "./session-controls";
 import { SessionTimeline } from "./session-timeline";
+import { SlashCommandPalette } from "./slash-command-palette";
 import { TaskInput } from "./task-input";
+
+export type InspectorView = "diff" | "terminal" | "preview";
 
 export function SessionLauncher({
 	session,
 	busy,
 	onConnect,
 	onSend,
+	onStop,
+	onOpenSideChat,
+	onOpenInspector,
 }: {
 	session: PublicCodexSession;
 	busy: boolean;
 	onConnect: () => void;
 	onSend: (text: string, modelId: string) => void;
+	onStop: () => void;
+	onOpenSideChat: (question?: string) => void;
+	onOpenInspector: (view: InspectorView) => void;
 }) {
 	const models = sessionModelsFromListed(session.models);
 	const [attachments, setAttachments] = useState<File[]>([]);
 	const [draft, setDraft] = useState("");
 	const [modelId, setModelId] = useState(preferredSessionModelId(models));
 	const [optimisticItems, setOptimisticItems] = useState<SessionItem[]>([]);
+	const [slashIndex, setSlashIndex] = useState(0);
 	const items = visibleSessionItems(session.items, optimisticItems);
+	const lastUserText = lastUserMessageText(items);
 	const chatLayout =
 		session.connection.status === "authenticated" || items.length > 0;
+	const slashDraft = parseSlashDraft(draft);
+	const slashCommands = useMemo(
+		() =>
+			composerSlashCommands({
+				authenticated: session.connection.status === "authenticated",
+				turnRunning: session.turnStatus === "running",
+				canSend: session.canSend,
+				hasLastUserMessage: Boolean(lastUserText),
+				hasModels: models.length > 0,
+				publicationReady: false,
+			}),
+		[
+			lastUserText,
+			models.length,
+			session.canSend,
+			session.connection.status,
+			session.turnStatus,
+		],
+	);
+	const visibleSlashCommands = slashDraft
+		? matchingSlashCommands(slashDraft, slashCommands)
+		: [];
+
+	useEffect(() => {
+		if (!draft.startsWith("/")) {
+			setSlashIndex(0);
+			return;
+		}
+		setSlashIndex(0);
+	}, [draft]);
 
 	useEffect(() => {
 		const listed = sessionModelsFromListed(session.models);
@@ -54,8 +105,7 @@ export function SessionLauncher({
 		);
 	}, [session.items]);
 
-	function sendDraft() {
-		const text = draft.trim();
+	function sendText(text: string) {
 		if (!text || !session.canSend || !modelId || busy) return;
 		setOptimisticItems((current) => [
 			...current,
@@ -67,6 +117,74 @@ export function SessionLauncher({
 		]);
 		onSend(text, modelId);
 		setDraft("");
+	}
+
+	function sendDraft() {
+		sendText(draft.trim());
+	}
+
+	function runSlashCommand(command: SlashCommand) {
+		if (command.availability !== "ready") return;
+		const argument = slashDraft?.argument ?? "";
+		if (command.id === "side" || command.id === "btw") {
+			onOpenSideChat(argument || undefined);
+			setDraft("");
+			return;
+		}
+		if (command.id === "stop") {
+			onStop();
+			setDraft("");
+			return;
+		}
+		if (command.id === "retry" && lastUserText) {
+			setDraft("");
+			sendText(lastUserText);
+			return;
+		}
+		if (command.id === "model") {
+			setDraft("");
+			document.getElementById("session-model-select")?.focus();
+			return;
+		}
+		if (
+			command.id === "diff" ||
+			command.id === "terminal" ||
+			command.id === "preview"
+		) {
+			onOpenInspector(command.id);
+			setDraft("");
+		}
+	}
+
+	function handleComposerKey(event: KeyboardEvent<HTMLTextAreaElement>) {
+		if (!slashDraft || visibleSlashCommands.length === 0) return false;
+		if (event.key === "ArrowDown") {
+			event.preventDefault();
+			setSlashIndex((index) => (index + 1) % visibleSlashCommands.length);
+			return true;
+		}
+		if (event.key === "ArrowUp") {
+			event.preventDefault();
+			setSlashIndex(
+				(index) =>
+					(index - 1 + visibleSlashCommands.length) %
+					visibleSlashCommands.length,
+			);
+			return true;
+		}
+		if (event.key === "Escape") {
+			event.preventDefault();
+			setDraft("");
+			return true;
+		}
+		if (event.key === "Tab" || event.key === "Enter") {
+			const command = visibleSlashCommands[slashIndex];
+			if (!command) return false;
+			event.preventDefault();
+			runSlashCommand(command);
+			return true;
+		}
+		return false;
 	}
 
 	return (
@@ -86,69 +204,98 @@ export function SessionLauncher({
 			/>
 			<div className="session-dock">
 				<ProjectContext />
-				<div className="session-composer">
-					<TaskInput
-						value={draft}
-						onChange={setDraft}
-						onSubmit={sendDraft}
-						disabled={busy || !session.canSend}
-					/>
-					{attachments.length > 0 && (
-						<ul className="session-attachments" aria-label="Attached files">
-							{attachments.map((file, index) => (
-								<li key={`${file.name}-${file.lastModified}-${file.size}`}>
-									<span title={file.name}>{file.name}</span>
-									<button
-										type="button"
-										aria-label={`Remove ${file.name}`}
-										onClick={() =>
-											setAttachments((files) =>
-												files.filter((_, fileIndex) => fileIndex !== index),
-											)
-										}
-									>
-										<X size={14} />
-									</button>
-								</li>
-							))}
-						</ul>
-					)}
-					<div className="session-toolbar">
-						<SessionControls
-							models={models}
-							modelId={modelId}
-							onModelIdChange={setModelId}
-							onAttachFiles={(selected) =>
-								setAttachments((files) => {
-									const additions = selected.filter(
-										(file) =>
-											!files.some(
-												(existing) =>
-													existing.name === file.name &&
-													existing.size === file.size &&
-													existing.lastModified === file.lastModified,
-											),
-									);
-									return [...files, ...additions];
-								})
-							}
+				<div className="composer-shell">
+					{visibleSlashCommands.length > 0 ? (
+						<SlashCommandPalette
+							commands={visibleSlashCommands}
+							activeIndex={slashIndex}
+							onHover={setSlashIndex}
+							onSelect={runSlashCommand}
 						/>
-						<button
-							type="button"
-							className="session-send"
-							aria-label="Send"
-							disabled={!session.canSend || busy || !draft.trim() || !modelId}
-							title={
-								session.canSend
-									? "Send task"
-									: "Connect Codex during setup to start a session"
+					) : null}
+					<div className="session-composer">
+						<TaskInput
+							value={draft}
+							onChange={setDraft}
+							onSubmit={sendDraft}
+							disabled={
+								busy || (!session.canSend && session.turnStatus !== "running")
 							}
-							onClick={sendDraft}
-						>
-							<span className="send-face">
-								<ArrowUp className="size-4" />
-							</span>
-						</button>
+							onKeyDown={handleComposerKey}
+						/>
+						{attachments.length > 0 && (
+							<ul className="session-attachments" aria-label="Attached files">
+								{attachments.map((file, index) => (
+									<li key={`${file.name}-${file.lastModified}-${file.size}`}>
+										<span title={file.name}>{file.name}</span>
+										<button
+											type="button"
+											aria-label={`Remove ${file.name}`}
+											onClick={() =>
+												setAttachments((files) =>
+													files.filter((_, fileIndex) => fileIndex !== index),
+												)
+											}
+										>
+											<X size={14} />
+										</button>
+									</li>
+								))}
+							</ul>
+						)}
+						<div className="session-toolbar">
+							<SessionControls
+								models={models}
+								modelId={modelId}
+								onModelIdChange={setModelId}
+								onAttachFiles={(selected) =>
+									setAttachments((files) => {
+										const additions = selected.filter(
+											(file) =>
+												!files.some(
+													(existing) =>
+														existing.name === file.name &&
+														existing.size === file.size &&
+														existing.lastModified === file.lastModified,
+												),
+										);
+										return [...files, ...additions];
+									})
+								}
+							/>
+							{session.turnStatus === "running" ? (
+								<button
+									type="button"
+									className="session-send"
+									aria-label="Stop"
+									title="Stop this run"
+									onClick={onStop}
+								>
+									<span className="send-face send-face-stop">
+										<Square className="size-3.5" fill="currentColor" />
+									</span>
+								</button>
+							) : (
+								<button
+									type="button"
+									className="session-send"
+									aria-label="Send"
+									disabled={
+										!session.canSend || busy || !draft.trim() || !modelId
+									}
+									title={
+										session.canSend
+											? "Send task"
+											: "Connect Codex during setup to start a session"
+									}
+									onClick={sendDraft}
+								>
+									<span className="send-face">
+										<ArrowUp className="size-4" />
+									</span>
+								</button>
+							)}
+						</div>
 					</div>
 				</div>
 			</div>

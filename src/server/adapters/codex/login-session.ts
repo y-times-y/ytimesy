@@ -355,14 +355,27 @@ export function readLoginStatus(
 export function submitCodexTask(
 	machines: WorkspaceMachines,
 	workspaceId: WorkspaceId,
-	input: { readonly text: string; readonly modelId: string },
+	input: {
+		readonly text: string;
+		readonly modelId: string;
+		readonly lane?: "main" | "side";
+	},
 ): Effect.Effect<CodexLoginStatus> {
 	const taskId = crypto.randomUUID();
+	const lane = input.lane === "side" ? "side" : "main";
+	const requestPath =
+		lane === "side"
+			? "/tmp/ytimesy-side-request.json"
+			: "/tmp/ytimesy-task-request.json";
+	const resultPath =
+		lane === "side"
+			? "/tmp/ytimesy-side-result.json"
+			: "/tmp/ytimesy-task-result.json";
 	return Effect.gen(function* () {
 		yield* Effect.tryPromise(() =>
 			machines.writeTextFile(
 				workspaceId,
-				"/tmp/ytimesy-task-request.json",
+				requestPath,
 				`${JSON.stringify({
 					id: taskId,
 					text: input.text,
@@ -375,17 +388,47 @@ export function submitCodexTask(
 			const status = yield* readLoginStatus(machines, workspaceId);
 			if (status.stage === "failed") return status;
 			if (status.stage === "authenticated") {
-				if (status.turnStatus === "running") return status;
-				if (status.turnStatus === "failed") return status;
+				const running =
+					lane === "side"
+						? status.sideTurnStatus === "running"
+						: status.turnStatus === "running";
+				const failed =
+					lane === "side"
+						? status.sideTurnStatus === "failed"
+						: status.turnStatus === "failed";
+				if (running || failed) return status;
 			}
 			const raw = yield* Effect.tryPromise(() =>
-				machines.readTextFile(workspaceId, "/tmp/ytimesy-task-result.json"),
+				machines.readTextFile(workspaceId, resultPath),
 			);
 			if (raw && resultMatchesTask(raw, taskId)) {
 				return yield* readLoginStatus(machines, workspaceId);
 			}
 		}
 		return failedStatus("Codex did not finish the task in time");
+	}).pipe(
+		Effect.catchAll((cause) =>
+			Effect.succeed(
+				failedStatus(cause instanceof Error ? cause.message : String(cause)),
+			),
+		),
+	);
+}
+
+export function interruptCodexTurn(
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+): Effect.Effect<CodexLoginStatus> {
+	return Effect.gen(function* () {
+		yield* Effect.tryPromise(() =>
+			machines.writeTextFile(
+				workspaceId,
+				"/tmp/ytimesy-stop-request.json",
+				`${JSON.stringify({ requestedAt: new Date().toISOString() })}\n`,
+			),
+		);
+		yield* Effect.sleep(Duration.seconds(1));
+		return yield* readLoginStatus(machines, workspaceId);
 	}).pipe(
 		Effect.catchAll((cause) =>
 			Effect.succeed(

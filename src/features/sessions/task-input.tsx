@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { type KeyboardEvent, useEffect, useRef } from "react";
 
 function fitDraftHeight(input: HTMLTextAreaElement) {
 	input.style.height = "auto";
@@ -10,11 +10,17 @@ export function TaskInput({
 	onChange,
 	onSubmit,
 	disabled,
+	placeholder = "What would you like to work on?",
+	label = "Task description",
+	onKeyDown,
 }: {
 	value: string;
 	onChange: (value: string) => void;
 	onSubmit: () => void;
 	disabled?: boolean;
+	placeholder?: string;
+	label?: string;
+	onKeyDown?: (event: KeyboardEvent<HTMLTextAreaElement>) => boolean;
 }) {
 	const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -34,8 +40,8 @@ export function TaskInput({
 	return (
 		<textarea
 			ref={inputRef}
-			aria-label="Task description"
-			placeholder="What would you like to work on?"
+			aria-label={label}
+			placeholder={placeholder}
 			rows={2}
 			value={value}
 			disabled={disabled}
@@ -45,6 +51,7 @@ export function TaskInput({
 			}}
 			onInput={(event) => fitDraftHeight(event.currentTarget)}
 			onKeyDown={(event) => {
+				if (onKeyDown?.(event)) return;
 				if (event.key === "Enter" && !event.shiftKey) {
 					event.preventDefault();
 					onSubmit();

@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { canStartAgentTurn, isAuthenticatedAgent } from "./agent-connection";
 import { WorkspaceId } from "./ids";
-import { canSendSessionTask, canSubmitComposer } from "./session-policy";
+import {
+	canSendSessionTask,
+	canSubmitComposer,
+	canSubmitSideChat,
+} from "./session-policy";
 import { isUsableWorkspace } from "./workspace";
 
 describe("agent connection", () => {
@@ -78,5 +82,7 @@ describe("composer submit policy", () => {
 		expect(canSubmitComposer(running, authenticated, "idle")).toBe(true);
 		expect(canSubmitComposer(running, authenticated, "running")).toBe(false);
 		expect(canSubmitComposer(running, authenticated, "completed")).toBe(true);
+		expect(canSubmitSideChat(running, authenticated, "idle")).toBe(true);
+		expect(canSubmitSideChat(running, authenticated, "running")).toBe(false);
 	});
 });

@@ -4,6 +4,7 @@ import {
 	fileChangesFromSessionItems,
 	isConversationItem,
 	isTurnRunning,
+	lastUserMessageText,
 	type SessionItem,
 	visibleSessionItems,
 } from "./session-item";
@@ -47,15 +48,15 @@ describe("session items", () => {
 				id: SessionItemId("patch-1"),
 				status: "completed",
 				changes: [
-					{ path: "README.md", change: "update" },
-					{ path: "src/app.ts", change: "add" },
+					{ path: "README.md", change: "update", additions: 4, deletions: 1 },
+					{ path: "src/app.ts", change: "add", additions: 12, deletions: 0 },
 				],
 			},
 		];
 
 		expect(fileChangesFromSessionItems(items)).toEqual([
-			{ path: "README.md", change: "update" },
-			{ path: "src/app.ts", change: "add" },
+			{ path: "README.md", change: "update", additions: 4, deletions: 1 },
+			{ path: "src/app.ts", change: "add", additions: 12, deletions: 0 },
 		]);
 	});
 
@@ -81,5 +82,26 @@ describe("session items", () => {
 				{ kind: "userMessage", id: SessionItemId("local-1"), text: "first" },
 			]),
 		).toEqual(server);
+	});
+
+	it("returns the most recent user message for retry", () => {
+		const items: SessionItem[] = [
+			{
+				kind: "userMessage",
+				id: SessionItemId("user-1"),
+				text: "first",
+			},
+			{
+				kind: "agentMessage",
+				id: SessionItemId("msg-1"),
+				text: "ok",
+			},
+			{
+				kind: "userMessage",
+				id: SessionItemId("user-2"),
+				text: "second",
+			},
+		];
+		expect(lastUserMessageText(items)).toBe("second");
 	});
 });

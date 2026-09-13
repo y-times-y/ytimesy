@@ -149,6 +149,9 @@
 	background: #dcdcdc;
 	color: #151515;
 }
+.send-face-stop {
+	background: #ececec;
+}
 .session-send:disabled {
 	cursor: not-allowed;
 }
@@ -413,12 +416,206 @@
 }
 .session-activity ul {
 	margin: 0;
-	padding: 8px 12px 10px;
+	padding: 0;
 	list-style: none;
+}
+.composer-shell {
+	position: relative;
+}
+.slash-palette {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: calc(100% + 8px);
+	z-index: 6;
+	margin: 0;
+	padding: 6px;
+	list-style: none;
+	border: 1px solid #3a3a3a;
+	border-radius: 12px;
+	background: #171717;
+	box-shadow: 0 16px 40px #0008;
+	max-height: min(320px, 50dvh);
+	overflow-y: auto;
+}
+.slash-palette button {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	width: 100%;
+	min-height: 44px;
+	padding: 8px 10px;
+	border: 0;
+	border-radius: 8px;
+	background: transparent;
+	color: #d8d8d8;
+	text-align: left;
+}
+.slash-palette button[data-active="true"],
+.slash-palette button:hover {
+	background: #ffffff10;
+}
+.slash-palette button:disabled {
+	opacity: 0.55;
+	cursor: not-allowed;
+}
+.slash-palette .slash-command-trigger {
+	flex-shrink: 0;
+	width: 5.5em;
 	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 	font-size: 12px;
-	line-height: 1.6;
-	color: #d0d0d0;
+	color: #f0f0f0;
+}
+.slash-palette-copy {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+.slash-palette-copy span {
+	font-size: 13px;
+}
+.slash-palette-copy small {
+	color: #8a8a8a;
+	font-size: 11px;
+}
+.file-type-icon {
+	display: grid;
+	place-items: center;
+	width: 16px;
+	height: 16px;
+	flex-shrink: 0;
+	border: 1px solid #5a5a5a;
+	border-radius: 3px;
+	color: #e4e4e4;
+	font-size: 7px;
+	font-weight: 650;
+	letter-spacing: -0.04em;
+	line-height: 1;
+}
+.file-change-list {
+	margin: 0;
+	padding: 4px 8px 8px;
+	list-style: none;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+.file-change-row {
+	display: grid;
+	grid-template-columns: 16px minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 8px;
+	min-height: 28px;
+	padding: 4px 6px;
+	border-radius: 6px;
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: 12px;
+	color: #d5d5d5;
+}
+.file-change-path {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+}
+.file-change-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.file-change-dir {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: #6f6f6f;
+	font-size: 10px;
+}
+.file-change-stats {
+	display: flex;
+	gap: 8px;
+	font-variant-numeric: tabular-nums;
+	font-size: 11px;
+}
+.file-change-additions {
+	color: #cfcfcf;
+}
+.file-change-deletions {
+	color: #8a8a8a;
+}
+.side-chat {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	min-height: 0;
+	border-left: 1px solid #282828;
+	background: #101010;
+}
+.side-chat-header {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 14px 14px 10px;
+	border-bottom: 1px solid #242424;
+}
+.side-chat-header h2 {
+	margin: 0;
+	font-size: 13px;
+	font-weight: 550;
+}
+.side-chat-lede {
+	margin: 6px 0 0;
+	color: #8a8a8a;
+	font-size: 11px;
+	line-height: 1.5;
+}
+.side-chat-close {
+	display: grid;
+	place-items: center;
+	width: 32px;
+	height: 32px;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	color: #b0b0b0;
+}
+.side-chat-close:hover {
+	background: #ffffff12;
+	color: #fff;
+}
+.side-chat .session-timeline {
+	padding: 8px 12px 12px;
+}
+.side-chat-queue {
+	margin: 0;
+	padding: 0 14px 8px;
+	color: #8a8a8a;
+	font-size: 11px;
+}
+.side-chat-composer {
+	display: flex;
+	align-items: flex-end;
+	gap: 8px;
+	padding: 10px 12px 14px;
+	border-top: 1px solid #242424;
+}
+.side-chat-composer textarea {
+	flex: 1;
+	min-height: 44px;
+	max-height: 120px;
+	padding: 10px 12px;
+	border: 1px solid #3a3a3a;
+	border-radius: 10px;
+	background: #1a1a1a;
+	color: #ededed;
+	font: inherit;
+	font-size: 14px;
+	resize: none;
+}
+.panel-toggle[aria-pressed="true"] {
+	color: #eee;
+	background: #282828;
+	border-color: #3d3d3d;
 }
 .session-activity[data-status="inProgress"] summary,
 .session-activity[data-status="inProgress"] > p {

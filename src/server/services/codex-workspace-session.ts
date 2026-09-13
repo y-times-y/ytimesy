@@ -2,9 +2,10 @@ import { Effect } from "effect";
 import type { AgentConnection } from "#/domain/agent-connection";
 import { WorkspaceId } from "#/domain/ids";
 import type { SessionItem, SessionTurnStatus } from "#/domain/session-item";
-import { canSubmitComposer } from "#/domain/session-policy";
+import { canSubmitComposer, canSubmitSideChat } from "#/domain/session-policy";
 import type { WorkspaceLifecycle } from "#/domain/workspace";
 import {
+	interruptCodexTurn,
 	readLoginStatus,
 	resumeCodexSession,
 	startInteractiveDeviceCodeLogin,
@@ -28,8 +29,11 @@ export type PublicCodexSession = {
 	readonly connection: AgentConnection;
 	readonly models: readonly ListedModel[];
 	readonly canSend: boolean;
+	readonly canSendSide: boolean;
 	readonly turnStatus: SessionTurnStatus;
 	readonly items: readonly SessionItem[];
+	readonly sideTurnStatus: SessionTurnStatus;
+	readonly sideItems: readonly SessionItem[];
 };
 
 const disconnected: AgentConnection = { status: "disconnected" };
@@ -43,8 +47,11 @@ export function emptyCodexSession(
 		connection: disconnected,
 		models: [],
 		canSend: false,
+		canSendSide: false,
 		turnStatus: "idle",
 		items: [],
+		sideTurnStatus: "idle",
+		sideItems: [],
 	};
 }
 
@@ -148,7 +155,11 @@ export function connectCodexWorkspaceSession(
 
 export function sendCodexWorkspaceTask(
 	machines: WorkspaceMachines,
-	input: { readonly text: string; readonly modelId: string },
+	input: {
+		readonly text: string;
+		readonly modelId: string;
+		readonly lane?: "main" | "side";
+	},
 ): Effect.Effect<PublicCodexSession> {
 	return Effect.gen(function* () {
 		const vm = yield* Effect.tryPromise(() => readProofVmState());
@@ -160,6 +171,33 @@ export function sendCodexWorkspaceTask(
 			machines,
 			WorkspaceId(vm.workspaceId),
 			input,
+		);
+		return viewFromStatus(status, vm.workspaceId, Boolean(snapshot));
+	}).pipe(
+		Effect.catchAll((cause) =>
+			Effect.succeed({
+				...emptyCodexSession(),
+				connection: {
+					status: "failed" as const,
+					message: cause instanceof Error ? cause.message : String(cause),
+				},
+			}),
+		),
+	);
+}
+
+export function stopCodexWorkspaceTurn(
+	machines: WorkspaceMachines,
+): Effect.Effect<PublicCodexSession> {
+	return Effect.gen(function* () {
+		const vm = yield* Effect.tryPromise(() => readProofVmState());
+		if (!vm) {
+			return emptyCodexSession();
+		}
+		const snapshot = yield* Effect.tryPromise(() => readAuthSnapshotState());
+		const status = yield* interruptCodexTurn(
+			machines,
+			WorkspaceId(vm.workspaceId),
 		);
 		return viewFromStatus(status, vm.workspaceId, Boolean(snapshot));
 	}).pipe(
@@ -189,14 +227,20 @@ function viewFromStatus(
 	const turnStatus =
 		status.stage === "authenticated" ? status.turnStatus : "idle";
 	const items = status.stage === "authenticated" ? status.items : [];
+	const sideTurnStatus =
+		status.stage === "authenticated" ? status.sideTurnStatus : "idle";
+	const sideItems = status.stage === "authenticated" ? status.sideItems : [];
 	return {
 		snapshotAvailable,
 		workspaceId,
 		connection,
 		models,
 		canSend: canSubmitComposer(workspace, connection, turnStatus),
+		canSendSide: canSubmitSideChat(workspace, connection, sideTurnStatus),
 		turnStatus,
 		items,
+		sideTurnStatus,
+		sideItems,
 	};
 }
 

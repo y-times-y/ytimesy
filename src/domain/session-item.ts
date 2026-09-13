@@ -45,6 +45,8 @@ export type CommandExecutionItem = {
 export type FileChangeEntry = {
 	readonly path: string;
 	readonly change: "add" | "delete" | "update";
+	readonly additions: number;
+	readonly deletions: number;
 };
 
 export type FileChangeItem = {
@@ -116,6 +118,16 @@ export function fileChangesFromSessionItems(
 	return items.flatMap((item) =>
 		item.kind === "fileChange" ? item.changes : [],
 	);
+}
+
+export function lastUserMessageText(
+	items: readonly SessionItem[],
+): string | null {
+	for (let index = items.length - 1; index >= 0; index -= 1) {
+		const item = items[index];
+		if (item?.kind === "userMessage" && item.text.trim()) return item.text;
+	}
+	return null;
 }
 
 export function visibleSessionItems(

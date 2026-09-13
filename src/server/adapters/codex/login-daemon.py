@@ -10,8 +10,16 @@ CODEX = os.environ.get("CODEX_BIN", "codex")
 STATUS_PATH = "/tmp/ytimesy-auth-status.json"
 TASK_REQUEST_PATH = "/tmp/ytimesy-task-request.json"
 TASK_RESULT_PATH = "/tmp/ytimesy-task-result.json"
+SIDE_REQUEST_PATH = "/tmp/ytimesy-side-request.json"
+SIDE_RESULT_PATH = "/tmp/ytimesy-side-result.json"
+STOP_REQUEST_PATH = "/tmp/ytimesy-stop-request.json"
 TURN_PROMPT = "Reply with the single word pong and do not run any tools."
 SKIP_INITIAL_TURN = os.environ.get("YTIMESY_SKIP_INITIAL_TURN") == "1"
+SIDE_CHAT_PREFIX = (
+    "SIDE CHAT. Answer the question. Read and search if needed. "
+    "Do not edit files unless the user explicitly asks to apply a change."
+    "\n\nQuestion:\n"
+)
 
 
 def write_status(payload):
@@ -384,6 +392,32 @@ def start_thread(proc, model_id):
     return thread_id, None
 
 
+def consume_stop_request():
+    if not os.path.exists(STOP_REQUEST_PATH):
+        return False
+    try:
+        os.remove(STOP_REQUEST_PATH)
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def request_turn_interrupt(proc, thread_id):
+    request_id = next_rpc_id()
+    send(
+        proc,
+        {
+            "method": "turn/interrupt",
+            "id": request_id,
+            "params": {"threadId": thread_id},
+        },
+    )
+    try:
+        wait_for_id(proc, request_id, 8)
+    except TimeoutError:
+        pass
+
+
 def run_turn(proc, thread_id, model_id, text, on_items=None):
     request_id = next_rpc_id()
     send(
@@ -421,6 +455,8 @@ def run_turn(proc, thread_id, model_id, text, on_items=None):
     turn_obj = find_completed_turn(notifications)
     deadline = time.time() + 180
     while turn_obj is None and time.time() < deadline:
+        if consume_stop_request():
+            request_turn_interrupt(proc, thread_id)
         try:
             message = read_message(proc, min(15.0, deadline - time.time()))
         except TimeoutError:
@@ -615,6 +651,11 @@ def main():
         session_items = []
         turn_status = "idle"
         active_task_id = None
+        side_turn = None
+        side_thread_id = None
+        side_items = []
+        side_turn_status = "idle"
+        side_active_task_id = None
 
         def publish(current_turn):
             write_status(
@@ -629,8 +670,19 @@ def main():
                     "activeTaskId": active_task_id,
                     "items": session_items,
                     "messages": messages_from_items(session_items),
+                    "sideTurn": side_turn,
+                    "sideTurnStatus": side_turn_status,
+                    "sideActiveTaskId": side_active_task_id,
+                    "sideItems": side_items,
                 }
             )
+
+        def finish_request(path, result_path, request_id, result):
+            write_json_file(result_path, {"id": request_id, "turn": result})
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
 
         if model_id and not SKIP_INITIAL_TURN:
             thread_id, thread_error = start_thread(proc, model_id)
@@ -681,14 +733,9 @@ def main():
                             "text": thread_error,
                             "error": thread_error,
                         }
-                        write_json_file(
-                            TASK_RESULT_PATH,
-                            {"id": request["id"], "turn": turn},
+                        finish_request(
+                            TASK_REQUEST_PATH, TASK_RESULT_PATH, request["id"], turn
                         )
-                        try:
-                            os.remove(TASK_REQUEST_PATH)
-                        except FileNotFoundError:
-                            pass
                         publish(turn)
                         time.sleep(0.4)
                         continue
@@ -719,15 +766,79 @@ def main():
                         else "completed"
                     )
                     active_task_id = None
-                    write_json_file(
-                        TASK_RESULT_PATH,
-                        {"id": request["id"], "turn": turn},
+                    finish_request(
+                        TASK_REQUEST_PATH, TASK_RESULT_PATH, request["id"], turn
                     )
-                    try:
-                        os.remove(TASK_REQUEST_PATH)
-                    except FileNotFoundError:
-                        pass
                     publish(turn)
+                    time.sleep(0.4)
+                    continue
+
+            if turn_status != "running":
+                side_request = read_json_file(SIDE_REQUEST_PATH)
+                if (
+                    isinstance(side_request, dict)
+                    and side_request.get("id")
+                    and side_request.get("text")
+                ):
+                    requested_model = side_request.get("modelId") or model_id
+                    if requested_model:
+                        model_id = requested_model
+                    if not side_thread_id and model_id:
+                        side_thread_id, side_thread_error = start_thread(proc, model_id)
+                        if side_thread_error and not side_thread_id:
+                            side_turn_status = "failed"
+                            side_active_task_id = None
+                            side_turn = {
+                                "threadId": "",
+                                "modelId": model_id or "",
+                                "status": "error",
+                                "text": side_thread_error,
+                                "error": side_thread_error,
+                            }
+                            finish_request(
+                                SIDE_REQUEST_PATH,
+                                SIDE_RESULT_PATH,
+                                side_request["id"],
+                                side_turn,
+                            )
+                            publish(turn)
+                            time.sleep(0.4)
+                            continue
+                    if side_thread_id and model_id:
+                        side_active_task_id = side_request["id"]
+                        side_turn_status = "running"
+                        question = side_request["text"]
+                        side_items = merge_session_items(
+                            side_items,
+                            [user_message_item("side-%s" % side_request["id"], question)],
+                        )
+                        publish(turn)
+
+                        def on_side_items(turn_items):
+                            nonlocal side_items
+                            side_items = merge_session_items(side_items, turn_items)
+                            publish(turn)
+
+                        side_turn = run_turn(
+                            proc,
+                            side_thread_id,
+                            model_id,
+                            SIDE_CHAT_PREFIX + question,
+                            on_items=on_side_items,
+                        )
+                        side_turn_status = (
+                            "failed"
+                            if side_turn.get("status") in ("error", "timeout", "failed")
+                            else "completed"
+                        )
+                        side_active_task_id = None
+                        finish_request(
+                            SIDE_REQUEST_PATH,
+                            SIDE_RESULT_PATH,
+                            side_request["id"],
+                            side_turn,
+                        )
+                        publish(turn)
             time.sleep(0.4)
     except Exception as exc:
         fail(str(exc), stageDetail="loginDaemon")

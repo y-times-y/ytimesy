@@ -1,7 +1,9 @@
 import type { SessionItem, SessionTurnStatus } from "#/domain/session-item";
+import { itemsWithVisibleSideChatText } from "#/domain/side-chat";
 import {
 	sessionItemsFromDaemonStatus,
 	sessionTurnStatusFromDaemon,
+	sideSessionItemsFromDaemonStatus,
 } from "./app-server-items";
 
 export type ListedModel = {
@@ -40,6 +42,8 @@ export type CodexLoginStatus =
 			readonly turn: CodexTurnResult | null;
 			readonly turnStatus: SessionTurnStatus;
 			readonly items: readonly SessionItem[];
+			readonly sideTurnStatus: SessionTurnStatus;
+			readonly sideItems: readonly SessionItem[];
 			readonly messages: readonly SessionMessage[];
 			readonly codexVersion: string | null;
 	  }
@@ -105,6 +109,13 @@ export function parseCodexLoginStatus(
 					turn?.status ?? null,
 				),
 				items,
+				sideTurnStatus: sessionTurnStatusFromDaemon(
+					parsed.sideTurnStatus,
+					null,
+				),
+				sideItems: itemsWithVisibleSideChatText(
+					sideSessionItemsFromDaemonStatus(parsed),
+				),
 				messages:
 					items.length > 0
 						? conversationMessagesFromItems(items)
@@ -210,6 +221,8 @@ export function publicLoginStatus(status: CodexLoginStatus) {
 			turn: status.turn,
 			turnStatus: status.turnStatus,
 			items: status.items,
+			sideTurnStatus: status.sideTurnStatus,
+			sideItems: status.sideItems,
 			messages: status.messages,
 			codexVersion: status.codexVersion,
 		};

@@ -1,3 +1,4 @@
+import { readDiffLineCounts } from "#/domain/diff-stats";
 import { SessionItemId } from "#/domain/ids";
 import type {
 	FileChangeEntry,
@@ -102,7 +103,11 @@ function reasoningSummaries(item: Record<string, unknown>): string[] {
 
 function fileChangeKind(value: unknown): FileChangeEntry["change"] {
 	const raw = typeof value === "string" ? value.toLowerCase() : "";
-	if (raw === "add" || raw === "delete" || raw === "update") return raw;
+	if (raw === "add" || raw === "added") return "add";
+	if (raw === "delete" || raw === "deleted" || raw === "remove")
+		return "delete";
+	if (raw === "update" || raw === "updated" || raw === "modify")
+		return "update";
 	return "update";
 }
 
@@ -113,7 +118,17 @@ function fileChanges(value: unknown): FileChangeEntry[] {
 		if (!isRecord(entry)) continue;
 		const path = readString(entry.path);
 		if (!path) continue;
-		changes.push({ path, change: fileChangeKind(entry.kind) });
+		const counts = readDiffLineCounts(
+			entry.additions,
+			entry.deletions,
+			readString(entry.diff),
+		);
+		changes.push({
+			path,
+			change: fileChangeKind(entry.kind ?? entry.change),
+			additions: counts.additions,
+			deletions: counts.deletions,
+		});
 	}
 	return changes;
 }
@@ -372,6 +387,12 @@ export function sessionItemsFromDaemonStatus(
 	const items = sessionItemsFromAppServerList(status.items);
 	if (items.length > 0) return items;
 	return sessionItemsFromLegacyMessages(status.messages);
+}
+
+export function sideSessionItemsFromDaemonStatus(
+	status: Record<string, unknown>,
+): SessionItem[] {
+	return sessionItemsFromAppServerList(status.sideItems);
 }
 
 export function sessionTurnStatusFromDaemon(
