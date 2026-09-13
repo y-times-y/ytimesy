@@ -133,7 +133,7 @@ Recheck versioned APIs before implementing. Validate subscription connection usi
 
 - Research and product decisions captured; coding skill installed.
 - TanStack Start foundation and workspace empty states implemented; Diff / Terminal / Preview selectors work.
-- Freestyle VM create/exec/delete and Codex app-server device-code start are proven in an isolated VM. See the milestone 2 evidence below. A pending device code is not an authenticated session; `turn/start` was not called.
+- Freestyle VM create/exec/delete and Codex ChatGPT device-code login are proven in an isolated VM. See milestone 2 evidence. `model/list` returned the connected agent's models. `turn/start` was attempted and rejected by a ChatGPT usage limit; it was not completed and API-key billing was not substituted.
 - Effect services and adapters exist for that proof. TanStack Query is still unused. Sending remains disabled in the UI.
 - Better Auth is selected; authentication is not implemented.
 - No deployed app, durable project records, GitHub listing, terminal, preview, or publication flow yet.
@@ -149,12 +149,15 @@ Use ytimesy to work on its own repository with a real cloud coding agent. Preser
 
 The workspace UI is still honest empty states. Model, reasoning, and Fast options still require a connected agent; sending stays disabled. File attachments are local draft state. Diff, Terminal, and Preview are UI shells.
 
-Milestone 2 live check (`pnpm prove:workspace`, 2026-09-13):
+Milestone 2 live check (2026-09-13):
 
-- Freestyle SDK `0.2.13` against `https://api.freestyle.sh/v5`. Created `ytimesy-proof-*` from the default Ubuntu image with an explicit outbound-internet firewall, ran `uname` / `python3 --version`, then deleted the VM. Guest: Linux 6.1.102 `freestyle-vm`, Python 3.12.3. List-after-delete of `purpose:ytimesy-proof` was empty.
-- Codex CLI `0.154.0` installed in the guest with `https://chatgpt.com/codex/install.sh`. `codex app-server` accepted JSON-RPC `initialize`, `initialized`, `account/read` (no ChatGPT account), and `account/login/start` `{ "type": "chatgptDeviceCode" }`. Result: `awaiting_device_code` with `verificationUrl` `https://auth.openai.com/codex/device` and a 10-character user code. Login was cancelled after the payload was observed so the proof would not wait on a human.
-- `turn/start` was not sent. Completing ChatGPT authorization, listing models from `model/list`, and running a task remain unproven.
-- Rigkit `@rigkit/sdk` / `@rigkit/provider-freestyle` `0.3.0` documents API-key auth as `freestyle.provider({ apiKey })`. It was not embedded: the SDK targets a Bun project daemon (`@effect/platform-bun`). Environment preparation currently uses the Freestyle adapter directly.
+- Freestyle SDK `0.2.13` against `https://api.freestyle.sh/v5`. Created `ytimesy-proof-*` from the default Ubuntu image with an explicit outbound-internet firewall. Guest: Linux 6.1.102 `freestyle-vm`, Python 3.12.3. Proof VMs are deleted after the check.
+- Codex CLI `0.154.0` installed with `https://chatgpt.com/codex/install.sh`. `codex app-server` accepted JSON-RPC `initialize`, `account/login/start` `{ "type": "chatgptDeviceCode" }`, and after browser authorization `codex login status` reported `Logged in using ChatGPT`. Plan type from app-server: `prolite`.
+- `model/list` (hidden models excluded) returned, in order: `gpt-6-astra` (GPT-6-Astra), `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.3-codex-spark`. These names came from the connected agent; they were not invented in ytimesy.
+- `turn/start` used listed model `gpt-6-astra` with `approvalPolicy: "never"` and `sandboxPolicy: { "type": "dangerFullAccess" }` on the throwaway VM. The turn finished `failed`: usage limit on the ChatGPT Codex subscription, retry after 2026-09-19 17:57, or add credits at https://chatgpt.com/codex/settings/usage. No API-key login was used.
+- First `account/read` immediately after device-code completion returned `account: null`; retrying `account/read` with `refreshToken: true` on a new app-server process saw the ChatGPT account. Product login must wait for that refresh, not treat the first null as logged-out.
+- App-server logs a missing host `bubblewrap` and falls back to the bundled helper. That is a VM image concern for later workspace snapshots; the failed turn's recorded error was the usage limit, not bubblewrap.
+- Rigkit `@rigkit/sdk` / `@rigkit/provider-freestyle` `0.3.0` documents API-key auth as `freestyle.provider({ apiKey })`. It was not embedded: the SDK targets a Bun project daemon (`@effect/platform-bun`).
 
 Better Auth, PostgreSQL records, GitHub authorization, durable jobs, live terminal/preview transports, and publication remain unimplemented. This environment currently has a PostgreSQL URL and GitHub App credentials; hosting, queue, and object-storage providers are still undecided product choices.
 
@@ -166,10 +169,10 @@ Use the installed self-documenting-code skill. Keep routes thin and put provider
 
 ### Local setup and verification
 
-Run `pnpm install --frozen-lockfile`, then `pnpm dev` (port 3000). To match the existing local browser, run `pnpm exec vite dev --host 127.0.0.1 --port 3001`. Run `pnpm lint`, `pnpm typecheck`, `pnpm test`, and `pnpm build` before handing off structural changes. `pnpm prove:workspace` is the live Freestyle/Codex proof and requires `FREESTYLE_API_KEY`. Use agent-browser for UI checks. Screenshots and credentials must remain out of Git.
+Run `pnpm install --frozen-lockfile`, then `pnpm dev` (port 3000). To match the existing local browser, run `pnpm exec vite dev --host 127.0.0.1 --port 3001`. Run `pnpm lint`, `pnpm typecheck`, `pnpm test`, and `pnpm build` before handing off structural changes. `pnpm prove:codex-login` starts a live ChatGPT device-code login (`FREESTYLE_API_KEY` required). Use agent-browser for UI checks. Screenshots and credentials must remain out of Git.
 
 ### Next step
 
-Implement Better Auth with tenant-scoped PostgreSQL records and GitHub App repository listing. Then keep a persistent Freestyle workspace, complete Codex device-code login in onboarding, load `model/list` from app-server, and prove one `turn/start` request. Revisit Rigkit as the environment-prep adapter only if it can run as a Node worker without substituting a different VM provider.
+A completed `turn/start` still needs ChatGPT Codex usage (credits or after 2026-09-19 17:57). Do not switch that request to API-key billing. In parallel, implement Better Auth with tenant-scoped PostgreSQL records and GitHub App repository listing, then persist a workspace and surface Codex login plus `model/list` in onboarding. Revisit Rigkit as the environment-prep adapter only if it can run as a Node worker without substituting a different VM provider.
 
 Provider credentials are not committed. Hosting, queue, and object-storage providers remain undecided. Do not assume a local server or an unpushed commit is available to a cloud agent: this repository must be made accessible to that environment first.
