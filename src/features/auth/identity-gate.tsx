@@ -1,5 +1,5 @@
+import { Auth } from "#/components/auth/auth";
 import { authClient } from "./client";
-import { SignInCard } from "./sign-in-card";
 
 export function IdentityGate({ children }: { children: React.ReactNode }) {
 	const session = authClient.useSession();
@@ -12,13 +12,7 @@ export function IdentityGate({ children }: { children: React.ReactNode }) {
 	if (session.data) return children;
 	return (
 		<main className="onboarding-shell">
-			<SignInCard
-				sessionError={
-					session.error
-						? "Unable to check your session. Please refresh."
-						: undefined
-				}
-			/>
+			<Auth view="signIn" />
 		</main>
 	);
 }

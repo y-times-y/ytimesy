@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
 import { useState } from "react";
+import { AuthProviders } from "../features/auth/auth-providers";
 
 import appCss from "../styles.css?url";
 
@@ -37,13 +38,13 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 			}),
 	);
 	return (
-		<html lang="en" className="dark">
+		<html lang="en" className="dark" suppressHydrationWarning>
 			<head>
 				<HeadContent />
 			</head>
 			<body>
 				<QueryClientProvider client={queryClient}>
-					{children}
+					<AuthProviders>{children}</AuthProviders>
 				</QueryClientProvider>
 
 				<Scripts />
