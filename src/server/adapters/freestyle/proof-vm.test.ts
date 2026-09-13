@@ -5,6 +5,7 @@ import {
 	privateCodexAuthSnapshotFields,
 	proofAuthSnapshotSlug,
 	proofCreateVmFields,
+	requestedAuthSnapshotId,
 } from "./proof-vm";
 
 describe("proofCreateVmFields", () => {
@@ -47,5 +48,12 @@ describe("privateCodexAuthSnapshotFields", () => {
 			autoDeleteSeconds: -1,
 		});
 		expect(privateCodexAuthSnapshotFields("a1b2")).not.toHaveProperty("public");
+	});
+});
+
+describe("requestedAuthSnapshotId", () => {
+	it("records only a snapshot we asked to boot from, not Freestyle's default image", () => {
+		expect(requestedAuthSnapshotId("sh-user-codex")).toBe("sh-user-codex");
+		expect(requestedAuthSnapshotId(undefined)).toBeNull();
 	});
 });

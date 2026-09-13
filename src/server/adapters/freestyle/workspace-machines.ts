@@ -17,6 +17,7 @@ import {
 	privateCodexAuthSnapshotFields,
 	proofCreateVmFields,
 	proofWorkspaceSlug,
+	requestedAuthSnapshotId,
 } from "./proof-vm";
 
 function providerMessage(cause: unknown): string {
@@ -49,8 +50,7 @@ export function createFreestyleWorkspaceMachines(
 					workspaceId: WorkspaceId(created.vmId),
 					state: running.state,
 					slug: running.slug ?? slug,
-					bootedFromSnapshotId:
-						running.snapshotId ?? options.snapshotId ?? null,
+					bootedFromSnapshotId: requestedAuthSnapshotId(options.snapshotId),
 				};
 			} catch (cause) {
 				throw new WorkspaceProvisionError({

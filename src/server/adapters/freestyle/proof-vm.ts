@@ -44,6 +44,12 @@ export function proofCreateVmFields(input: {
 	};
 }
 
+export function requestedAuthSnapshotId(
+	snapshotId: string | undefined,
+): string | null {
+	return snapshotId ?? null;
+}
+
 export function privateCodexAuthSnapshotFields(uniqueSuffix: string) {
 	return {
 		slug: proofAuthSnapshotSlug(uniqueSuffix),
