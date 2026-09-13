@@ -1,6 +1,6 @@
 # ytimesy v0
 
-Status: UI foundation complete; live backend integration pending. Domain: ytimesy.com. Updated: 2026-09-12.
+Status: UI foundation complete; live backend integration pending. Domain: ytimesy.com. Updated: 2026-09-13.
 
 ## Goal and proof
 
@@ -40,7 +40,7 @@ Codex onboarding target: Connect Codex → copy a one-time code → authorize on
 | Backend operations | Effect TS from day one |
 | Workspace runtime | Freestyle full Linux VMs |
 | Environment preparation | Rigkit; verify programmatic and web-auth integration |
-| Durable application records | Managed PostgreSQL; provider not chosen |
+| Durable application records | Supabase PostgreSQL; Free plan for initial development |
 | GitHub | GitHub App and Octokit |
 | UI | Tailwind and shadcn/ui preset `b1D0dv72` (Radix Mira, neutral, Inter) |
 | Terminal | xterm.js connected to the workspace PTY |
@@ -49,6 +49,40 @@ Codex onboarding target: Connect Codex → copy a one-time code → authorize on
 | Large artifacts | Object storage; provider not chosen |
 
 Hosting is still open. Prefer compatible, existing integrations after a small proof. No Fastify service is required for ordinary web endpoints. TanStack Start handles those; separate workers handle long-lived operations. Pin verified package versions and use a lockfile. Current docs label Start a release candidate; account for that when validating deployment.
+
+## Supabase and GitHub workflow
+
+Decision recorded 2026-09-13: use Supabase PostgreSQL on the Free plan initially. Better Auth remains the application authentication system. Access PostgreSQL from server-side modules through `DATABASE_URL`; Supabase Auth and the Data API are not required by this architecture.
+
+### Integration settings
+
+The intended Supabase GitHub integration configuration is:
+
+| Setting | Value |
+| --- | --- |
+| Repository | `y-times-y/ytimesy` |
+| Working directory | `.` (parent of the root `supabase/` directory) |
+| Production branch | `master` |
+| Automatic branching | Off initially; preview databases have separate pricing/plan requirements |
+| Deploy to production | Off until migrations and validation are working and the user enables deployment |
+
+This integration manages database changes from this repository. It is separate from the ytimesy GitHub App that grants users access to their coding repositories. Linking the repository alone is not authorization to enable automatic production deployment.
+
+### Migration ownership
+
+Initialize and commit `supabase/config.toml` and ordered SQL files under `supabase/migrations/` when implementing the database. The CLI configuration is initialized. Migration `20260913010000_enable_automatic_rls.sql` is applied; application tables are not yet created. Capture any existing application schema before introducing migrations; inspect the actual database rather than assuming it is empty. Treat migrations as the authoritative schema history, including Better Auth tables and job-system setup. Account for libraries that create or migrate their own schemas so two independent mechanisms do not race or diverge.
+
+For a schema change, add a new migration, verify it against a disposable development database, and review it with the application changes. Preserve already-applied migrations. Keep production data and credentials out of migration/seed files. Preview branches rebuild schema from committed migrations and optional seeds; they do not automatically copy production schema or data.
+
+Before enabling automatic production deployment, validate clean schema creation and upgrades from the preceding schema, establish a required migration check in GitHub, and document recovery for failed migrations. Supabase's production deployment option applies new migrations and configured functions/storage buckets when commits reach the configured production branch. Treat enabling it as a separate deployment decision.
+
+### Connection and setup status
+
+For initial local development and the persistent worker, request the dashboard's Session pooler URL (port 5432) in the ignored `.env` as `DATABASE_URL`; this supports IPv4 and session state. Use a direct connection where required by migration tooling and where network connectivity permits. Configure TLS and bounded connection pools explicitly. Keep credentials server-only; never commit or print connection URLs.
+
+Supabase CLI 2.117.0 is authenticated and linked to `zqkptvyvoyqqtpihlshw`. The initial public schema was empty. Migration `20260913010000_enable_automatic_rls.sql` was applied with `supabase db push --linked`. A live create-table probe confirmed automatic RLS; the probe transaction was rolled back. The ignored `.env` now uses the project's session pooler with `sslmode=verify-full` and `sslrootcert=.secrets/supabase-ca.crt`; node-postgres connectivity was verified. The Supabase CA certificate is local and ignored; configure a trusted CA path explicitly in deployment. RLS enablement is not a substitute for application tenancy checks and policies, especially for privileged database roles. The dashboard GitHub integration remains unverified. Confirm their actual state before reporting setup complete. The intended project security settings are Data API off, automatic table exposure off, and automatic RLS enabled if available; migrations must still define the application's authorization and database grants.
+
+Reference: [Supabase GitHub integration](https://supabase.com/docs/guides/deployment/branching/github-integration), [PostgreSQL connections](https://supabase.com/docs/guides/database/connecting-to-postgres). Recheck feature eligibility and pricing before enabling preview branches.
 
 ## Modules and dependency direction
 
@@ -103,7 +137,7 @@ Scaffold TanStack Start with TypeScript, lint/typecheck/build scripts, and a cle
 Verify official Codex remote login and app-server protocol in a user-isolated Freestyle workspace. Verify Rigkit installation/setup operations and authentication interaction. Establish supported versions and cleanup behavior. User subscription access is not interchangeable with a general inference API.
 
 ### 3. Identity, records, and GitHub
-Integrate Better Auth and select Postgres hosting, implement migrations and tenant-scoped access, install GitHub App, and list authorized repositories. Save project/branch selection. Configuration requiring user/provider account access may remain a clearly reported blocker, not mocked success.
+Integrate Better Auth with Supabase PostgreSQL, implement migrations and tenant-scoped access, install GitHub App, and list authorized repositories. Save project/branch selection. Configuration requiring user/provider account access may remain a clearly reported blocker, not mocked success.
 
 ### 4. Durable workspace preparation
 Implement queued creation, setup logs, retries, recovery, and state transitions. Prepare the real repo and run its app. Keep credentials out of source and logs.
@@ -134,8 +168,8 @@ Recheck versioned APIs before implementing. Validate subscription connection usi
 - Research and product decisions captured; coding skill installed.
 - TanStack Start foundation and workspace empty states implemented; Diff / Terminal / Preview selectors work. Effect and TanStack Query are installed but their service/data integrations are pending.
 - Better Auth is selected; authentication is not implemented.
-- No deployed app, agent connection, or end-to-end provider verification yet.
-- Continue with milestone 2: prove the provider/auth boundary before expanding the product.
+- No deployed app or complete end-to-end flow yet. Freestyle VM creation, remote execution, pinned Codex installation, and app-server handshake were verified live on 2026-09-13. ChatGPT device authorization and a real app-server file edit passed. The UI is not connected to this operator proof.
+- The narrow Codex/Freestyle proof passed. Continue with identity and repository access; validate Rigkit preparation before implementing the durable provisioning workflow.
 
 ## Cloud-agent handoff
 
@@ -159,6 +193,17 @@ Run `pnpm install --frozen-lockfile`, then `pnpm dev` (port 3000). To match the 
 
 ### Next step
 
-Prove supported Codex authentication and a single agent request inside an isolated Freestyle VM, including Rigkit setup where appropriate. Verify current official APIs first. Then implement identity and repository access and connect the proof through a durable service workflow. Record actual commands, versions, results, and unresolved issues here after each integration milestone.
+The isolated Codex authentication and single-request proof passed (see progress below). Next implement Better Auth identity and authorized GitHub repository selection. Validate Rigkit setup and recovery before connecting this proof through a durable workspace workflow. Record live results and unresolved issues after each milestone.
 
-Provider credentials and account-side configuration are not included in the repository. Hosting, managed PostgreSQL, queue, and object-storage providers remain undecided. Do not assume a local server or an unpushed commit is available to a cloud agent: this repository must be made accessible to that environment first.
+Provider credentials and account-side configuration are not included in the repository. Supabase is selected for PostgreSQL. Hosting, queue, and object-storage providers remain undecided. Do not assume a local server or an unpushed commit is available to a cloud agent: this repository must be made accessible to that environment first.
+
+
+### Integration proof progress — 2026-09-13
+
+The operator runner and recovery commands are in [scripts/cloud-proof/README.md](scripts/cloud-proof/README.md). Use that guide when continuing the first live Codex task. `pnpm cloud:proof status` refreshes actual state; this record is not proof that an ephemeral VM still exists.
+
+Verified live: the configured Freestyle API key lists VMs and creates `ytimesy-codex-proof` from `freestyle/ubuntu-sm` (2 CPU, 4 GiB RAM). Remote Node 24.20.0 and Git 2.43.0 work. Codex 0.152.1 installed under the guest ubuntu user's directory. Its device-auth flow returns an OpenAI authorization code. The app-server initialize/account-read flow works; the test correctly fails before inference while signed out. Het completed device authorization. A live turn using the discovered default model `gpt-5.6-sol` completed and wrote exactly `ytimesy cloud proof` plus a newline to `proof.txt`. The runner read the file independently and verified its exact contents. No API key fallback was used.
+
+The runner performs a bounded file-edit proof after login and verifies the resulting file. The VM has a 24-hour deletion deadline and 30-minute per-run cap. The guest authentication state belongs only to this isolated proof. Rigkit execution and process reconnect remain unverified. This proof does not wire the UI or implement durable production workflows.
+
+Pause/resume was verified after the successful turn: ChatGPT login remained valid, and the proof file retained its exact content. Final VM state was confirmed `paused`. The 24-hour deletion deadline remains active; this is a disposable proof, not durable user storage. Lint, TypeScript, and production build passed. No commit or deployment was made.
