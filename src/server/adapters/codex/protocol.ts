@@ -78,6 +78,7 @@ export function agentConnectionFromProbe(
 	if (!report.ok) {
 		return {
 			status: "failed",
+			provider: "codex",
 			message: report.error ?? `Codex probe failed at ${report.stage}`,
 		};
 	}
@@ -91,6 +92,7 @@ export function agentConnectionFromProbe(
 	if (isRecord(report.login) && readString(report.login.type) === "apiKey") {
 		return {
 			status: "failed",
+			provider: "codex",
 			message:
 				"Codex returned API-key login; ytimesy requires ChatGPT device-code auth",
 		};
@@ -107,6 +109,7 @@ function chatgptAccount(value: unknown): AgentConnection | undefined {
 	if (!isRecord(account) || account.type !== "chatgpt") return undefined;
 	return {
 		status: "authenticated",
+		provider: "codex",
 		authMode: "chatgpt",
 		planType: readString(account.planType) ?? null,
 		email: readString(account.email) ?? null,
@@ -121,12 +124,14 @@ function deviceCodeLogin(value: unknown): AgentConnection | undefined {
 	if (!loginId || !verificationUrl || !userCode) {
 		return {
 			status: "failed",
+			provider: "codex",
 			message:
 				"chatgptDeviceCode response was missing loginId, verificationUrl, or userCode",
 		};
 	}
 	return {
 		status: "awaiting_device_code",
+		provider: "codex",
 		loginId,
 		verificationUrl,
 		userCode,

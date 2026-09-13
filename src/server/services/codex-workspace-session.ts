@@ -146,6 +146,7 @@ export function connectCodexWorkspaceSession(
 				...emptyCodexSession(),
 				connection: {
 					status: "failed" as const,
+					provider: "codex" as const,
 					message: cause instanceof Error ? cause.message : String(cause),
 				},
 			}),
@@ -179,6 +180,7 @@ export function sendCodexWorkspaceTask(
 				...emptyCodexSession(),
 				connection: {
 					status: "failed" as const,
+					provider: "codex" as const,
 					message: cause instanceof Error ? cause.message : String(cause),
 				},
 			}),
@@ -206,6 +208,7 @@ export function stopCodexWorkspaceTurn(
 				...emptyCodexSession(),
 				connection: {
 					status: "failed" as const,
+					provider: "codex" as const,
 					message: cause instanceof Error ? cause.message : String(cause),
 				},
 			}),
@@ -248,6 +251,7 @@ function connectionFromStatus(status: CodexLoginStatus): AgentConnection {
 	if (status.stage === "authenticated") {
 		return {
 			status: "authenticated",
+			provider: "codex",
 			authMode: "chatgpt",
 			planType: status.planType,
 			email: null,
@@ -256,13 +260,18 @@ function connectionFromStatus(status: CodexLoginStatus): AgentConnection {
 	if (status.stage === "awaiting_device_code") {
 		return {
 			status: "awaiting_device_code",
+			provider: "codex",
 			loginId: status.loginId,
 			verificationUrl: status.verificationUrl,
 			userCode: status.userCode,
 		};
 	}
 	if (status.stage === "failed") {
-		return { status: "failed", message: status.message };
+		return {
+			status: "failed",
+			provider: "codex",
+			message: status.message,
+		};
 	}
 	return disconnected;
 }

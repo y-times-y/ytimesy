@@ -12,6 +12,7 @@ describe("agent connection", () => {
 	it("treats a pending device code as unauthenticated", () => {
 		const pending = {
 			status: "awaiting_device_code" as const,
+			provider: "codex" as const,
 			loginId: "login-1",
 			verificationUrl: "https://auth.openai.com/codex/device",
 			userCode: "ABCD-1234",
@@ -24,6 +25,7 @@ describe("agent connection", () => {
 	it("allows a turn only after ChatGPT authentication", () => {
 		const authenticated = {
 			status: "authenticated" as const,
+			provider: "codex" as const,
 			authMode: "chatgpt" as const,
 			planType: "plus",
 			email: null,
@@ -47,6 +49,7 @@ describe("session send policy", () => {
 		expect(
 			canSendSessionTask(running, {
 				status: "authenticated",
+				provider: "codex",
 				authMode: "chatgpt",
 				planType: null,
 				email: null,
@@ -57,6 +60,7 @@ describe("session send policy", () => {
 				{ status: "creating" },
 				{
 					status: "authenticated",
+					provider: "codex",
 					authMode: "chatgpt",
 					planType: null,
 					email: null,
@@ -74,6 +78,7 @@ describe("composer submit policy", () => {
 		};
 		const authenticated = {
 			status: "authenticated" as const,
+			provider: "codex" as const,
 			authMode: "chatgpt" as const,
 			planType: null,
 			email: null,

@@ -1,9 +1,13 @@
 import { useServerFn } from "@tanstack/react-start";
 import { PanelRight } from "lucide-react";
 import { useEffect, useState } from "react";
+import {
+	connectedAgentStatus,
+	connectedProviderId,
+} from "#/domain/agent-connection";
 import { fileChangesFromSessionItems } from "#/domain/session-item";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
-import { CodexMark } from "../sessions/codex-mark";
+import { AgentProviderMark } from "../sessions/agent-provider-mark";
 import {
 	connectCodexSession,
 	getCodexSession,
@@ -45,10 +49,8 @@ export function WorkspaceHome({
 	const fileChanges = fileChangesFromSessionItems(session.items);
 	const chatLayout =
 		session.connection.status === "authenticated" || session.items.length > 0;
-	const agentLabel =
-		session.connection.status === "authenticated"
-			? `Codex${session.connection.planType ? ` · ${session.connection.planType}` : ""}`
-			: "Codex";
+	const agentStatus = connectedAgentStatus(session.connection);
+	const connectedProvider = connectedProviderId(session.connection);
 
 	useEffect(() => {
 		if (compact) setProjectsOpen(false);
@@ -124,10 +126,12 @@ export function WorkspaceHome({
 				<header className="workspace-header">
 					<div className="header-navigation">
 						<span>Workspace</span>
-						<span className="header-agent-status">
-							<CodexMark size={16} />
-							{agentLabel}
-						</span>
+						{connectedProvider && agentStatus ? (
+							<span className="header-agent-status">
+								<AgentProviderMark provider={connectedProvider} size={16} />
+								{agentStatus}
+							</span>
+						) : null}
 					</div>
 					<div className="header-tools">
 						<button

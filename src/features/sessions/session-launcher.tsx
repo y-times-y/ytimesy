@@ -299,7 +299,7 @@ export function SessionLauncher({
 									title={
 										session.canSend
 											? "Send task"
-											: "Sign in to Codex to start a session"
+											: "Sign in to an agent to start a session"
 									}
 									onClick={sendDraft}
 								>

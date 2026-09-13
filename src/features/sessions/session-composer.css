@@ -210,16 +210,28 @@
 	color: white;
 }
 .agent-setup {
-	display: grid;
-	grid-template-columns: 28px minmax(0, 1fr) auto;
-	align-items: center;
-	gap: 4px 12px;
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
 	margin: 0 0 16px;
 	padding: 14px 16px;
 	border: 1px solid #2e2e2e;
 	border-radius: 12px;
 	background: #141414;
 	flex-shrink: 0;
+}
+.agent-setup > h2 {
+	margin: 0;
+	font-size: 11px;
+	font-weight: 500;
+	letter-spacing: 0.02em;
+	color: #8a8a8a;
+}
+.agent-provider {
+	display: grid;
+	grid-template-columns: 28px minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 4px 12px;
 }
 .agent-setup-mark {
 	display: grid;
@@ -231,7 +243,7 @@
 .agent-setup-copy {
 	min-width: 0;
 }
-.agent-setup-copy h2 {
+.agent-setup-copy h3 {
 	margin: 0;
 	font-size: 14px;
 	font-weight: 550;
@@ -735,6 +747,9 @@
 		height: 44px;
 	}
 	.agent-setup {
+		grid-template-columns: unset;
+	}
+	.agent-provider {
 		grid-template-columns: 28px minmax(0, 1fr);
 	}
 	.agent-setup-action {
