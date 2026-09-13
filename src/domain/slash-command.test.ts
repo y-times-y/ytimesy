@@ -39,13 +39,11 @@ describe("slash commands", () => {
 		).toEqual(["/stop"]);
 	});
 
-	it("keeps ready commands above unavailable ones", () => {
+	it("hides unavailable commands until they are typed", () => {
 		expect(
-			matchingSlashCommands({ query: "", argument: "" }, connected)[0]
-				?.availability,
-		).toBe("ready");
-		expect(
-			matchingSlashCommands({ query: "", argument: "" }, connected).at(-1)?.id,
-		).toBe("pr");
+			matchingSlashCommands({ query: "", argument: "" }, connected).map(
+				(command) => command.id,
+			),
+		).toEqual(["side", "btw", "retry", "model", "diff", "terminal", "preview"]);
 	});
 });

@@ -141,10 +141,15 @@ export function matchingSlashCommands(
 	draft: SlashDraft,
 	commands: readonly SlashCommand[],
 ): SlashCommand[] {
-	return commands
-		.filter((command) => slashCommandMatches(command, draft.query))
-		.sort((left, right) => {
-			if (left.availability === right.availability) return 0;
-			return left.availability === "ready" ? -1 : 1;
-		});
+	const matched = commands.filter((command) =>
+		slashCommandMatches(command, draft.query),
+	);
+	if (draft.query.length === 0) {
+		const ready = matched.filter((command) => command.availability === "ready");
+		if (ready.length > 0) return ready;
+	}
+	return matched.sort((left, right) => {
+		if (left.availability === right.availability) return 0;
+		return left.availability === "ready" ? -1 : 1;
+	});
 }

@@ -74,7 +74,7 @@ export function SideChatPanel({
 					value={draft}
 					onChange={setDraft}
 					onSubmit={sendDraft}
-					disabled={busy || !canSend}
+					disabled={busy}
 					placeholder="Message side chat"
 					label="Side chat message"
 				/>
