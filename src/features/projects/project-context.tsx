@@ -1,4 +1,4 @@
-import { FolderGit2, GitBranch } from "lucide-react";
+import { GitBranch } from "lucide-react";
 import {
 	Select,
 	SelectContent,
@@ -54,7 +54,6 @@ export function ProjectContext({
 					className="context-select project-select"
 					aria-label="Project"
 				>
-					<FolderGit2 size={14} />
 					<SelectValue placeholder="Select a repository" />
 				</SelectTrigger>
 				<SelectContent

@@ -26,12 +26,15 @@ describe("harness access", () => {
 		]);
 	});
 
-	it("offers ChatGPT sign-in only on Codex", () => {
-		const rows = offeredHarnessAccess({ status: "disconnected" });
-		expect(rows[0]?.subscriptionAction).toBe("sign_in");
-		expect(rows[0]?.subscriptionActionLabel).toBe("Sign in");
-		expect(rows[1]?.subscriptionAction).toBeNull();
-		expect(rows[2]?.subscriptionAction).toBeNull();
+	it("offers ChatGPT resume when a Codex snapshot is saved", () => {
+		const rows = offeredHarnessAccess(
+			{ status: "disconnected" },
+			{},
+			{ codexSnapshotAvailable: true },
+		);
+		expect(rows[0]?.statusLabel).toBe("Saved workspace");
+		expect(rows[0]?.subscriptionActionLabel).toBe("Resume");
+		expect(rows[0]?.summary).toContain("saved workspace");
 	});
 
 	it("does not treat a saved key as a connected harness", () => {

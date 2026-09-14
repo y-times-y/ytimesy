@@ -294,6 +294,7 @@ export function SessionLauncher({
 								connection={session.connection}
 								apiKeyHints={apiKeyHints}
 								busy={busy}
+								snapshotAvailable={session.snapshotAvailable}
 								onConnect={onConnect}
 								onSaveApiKey={onSaveApiKey}
 								models={models}

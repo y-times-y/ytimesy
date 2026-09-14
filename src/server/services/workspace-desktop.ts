@@ -1,8 +1,16 @@
 import { Effect } from "effect";
 import { WorkspaceId } from "#/domain/ids";
-import type { WorkspaceDesktop } from "#/domain/workspace-desktop";
+import {
+	desktopFailedBecauseWorkspaceGone,
+	desktopStartFailureReason,
+	START_HARNESS_BEFORE_DESKTOP,
+	type WorkspaceDesktop,
+} from "#/domain/workspace-desktop";
 import { START_WORKSPACE_DESKTOP } from "#/server/adapters/freestyle/start-desktop";
-import { readProofVmState } from "#/server/proof/codex-login-state";
+import {
+	deleteProofVmState,
+	readProofVmState,
+} from "#/server/proof/codex-login-state";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 export function readWorkspaceDesktop(
@@ -19,17 +27,23 @@ export function startWorkspaceDesktop(
 		if (!vm) {
 			return {
 				status: "failed" as const,
-				reason: "Start a harness workspace before opening the desktop.",
+				reason: START_HARNESS_BEFORE_DESKTOP,
 			};
 		}
 		currentDesktop = { status: "starting" };
 		const started = yield* Effect.tryPromise(() =>
-			machines.exec(WorkspaceId(vm.workspaceId), START_WORKSPACE_DESKTOP, 240_000),
+			machines.exec(
+				WorkspaceId(vm.workspaceId),
+				START_WORKSPACE_DESKTOP,
+				240_000,
+			),
 		);
 		if (started.exitCode !== 0) {
 			currentDesktop = {
 				status: "failed",
-				reason: (started.stderr || started.stdout).trim() || "Desktop failed to start.",
+				reason:
+					(started.stderr || started.stdout).trim() ||
+					"Desktop failed to start.",
 			};
 			return currentDesktop;
 		}
@@ -49,27 +63,34 @@ export function startWorkspaceDesktop(
 				status: "running",
 				viewerUrl: null,
 				display: ":0",
-				message:
-					cause instanceof Error
-						? `Desktop is on display :0 but not reachable from the browser: ${cause.message}`
-						: "Desktop is on display :0 but not reachable from the browser.",
+				message: `Desktop is on display :0 but not reachable from the browser: ${desktopStartFailureReason(cause)}`,
 			};
 		}
 		return currentDesktop;
 	}).pipe(
-		Effect.catchAll((cause) => {
-			currentDesktop = {
-				status: "failed",
-				reason: cause instanceof Error ? cause.message : String(cause),
-			};
-			return Effect.succeed(currentDesktop);
-		}),
+		Effect.catchAll((cause) =>
+			Effect.gen(function* () {
+				if (desktopFailedBecauseWorkspaceGone(cause)) {
+					yield* Effect.tryPromise(() => deleteProofVmState()).pipe(
+						Effect.catchAll(() => Effect.void),
+					);
+				}
+				currentDesktop = {
+					status: "failed",
+					reason: desktopStartFailureReason(cause),
+				};
+				return currentDesktop;
+			}),
+		),
 	);
 }
 
 let currentDesktop: WorkspaceDesktop = { status: "stopped" };
 
 function desktopHostname(workspaceId: string): string {
-	const slug = workspaceId.replaceAll(/[^a-zA-Z0-9]/g, "").slice(-12).toLowerCase();
+	const slug = workspaceId
+		.replaceAll(/[^a-zA-Z0-9]/g, "")
+		.slice(-12)
+		.toLowerCase();
 	return `ytimesy-desk-${slug || "local"}.style.dev`;
 }

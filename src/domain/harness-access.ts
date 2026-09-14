@@ -34,9 +34,15 @@ export type HarnessAccess = {
 export function offeredHarnessAccess(
 	connection: AgentConnection,
 	apiKeyHints: Readonly<Partial<Record<AgentProviderId, string>>> = {},
+	options: { readonly codexSnapshotAvailable?: boolean } = {},
 ): readonly HarnessAccess[] {
 	return offeredAgentProviders().map((provider) =>
-		harnessAccess(provider, connection, apiKeyHints[provider.id] ?? null),
+		harnessAccess(
+			provider,
+			connection,
+			apiKeyHints[provider.id] ?? null,
+			options,
+		),
 	);
 }
 
@@ -44,6 +50,7 @@ export function harnessAccess(
 	provider: AgentProvider,
 	connection: AgentConnection,
 	apiKeyHint: string | null,
+	options: { readonly codexSnapshotAvailable?: boolean } = {},
 ): HarnessAccess {
 	const forThisProvider =
 		connection.status !== "disconnected" && connection.provider === provider.id;
@@ -97,7 +104,7 @@ export function harnessAccess(
 			verificationUrl: null,
 		};
 	}
-	return unsignedAccess(provider, apiKeyHint);
+	return unsignedAccess(provider, apiKeyHint, options);
 }
 
 export function selectedHarnessIsConnected(
@@ -137,6 +144,7 @@ function readyAccess(
 function unsignedAccess(
 	provider: AgentProvider,
 	apiKeyHint: string | null,
+	options: { readonly codexSnapshotAvailable?: boolean } = {},
 ): HarnessAccess {
 	if (provider.id === "claude") {
 		return {
@@ -174,12 +182,20 @@ function unsignedAccess(
 		provider,
 		readiness: "unsigned",
 		muted: true,
-		statusLabel: apiKeyHint ? "Key saved" : "Not signed in",
-		summary: apiKeyHint
-			? `Key ${apiKeyHint} is stored. Sign in with ChatGPT to use Codex.`
-			: "Sign in with ChatGPT, or paste an API key.",
+		statusLabel: options.codexSnapshotAvailable
+			? "Saved workspace"
+			: apiKeyHint
+				? "Key saved"
+				: "Not signed in",
+		summary: options.codexSnapshotAvailable
+			? "Resume ChatGPT from the saved workspace."
+			: apiKeyHint
+				? `Key ${apiKeyHint} is stored. Sign in with ChatGPT to use Codex.`
+				: "Sign in with ChatGPT, or paste an API key.",
 		subscriptionAction: "sign_in",
-		subscriptionActionLabel: "Sign in",
+		subscriptionActionLabel: options.codexSnapshotAvailable
+			? "Resume"
+			: "Sign in",
 		apiKeyHint,
 		userCode: null,
 		verificationUrl: null,
