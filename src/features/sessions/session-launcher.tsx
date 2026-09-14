@@ -44,6 +44,7 @@ export function SessionLauncher({
 	onOpenSideChat,
 	onOpenInspector,
 	projectPicker,
+	pickerBusy,
 	onSelectProject,
 	onSelectBranch,
 }: {
@@ -59,6 +60,7 @@ export function SessionLauncher({
 	onOpenSideChat: (question?: string) => void;
 	onOpenInspector: (view: InspectorView) => void;
 	projectPicker: PublicProjectPicker | null;
+	pickerBusy: boolean;
 	onSelectProject: (projectId: string) => void;
 	onSelectBranch: (branch: string) => void;
 }) {
@@ -238,7 +240,7 @@ export function SessionLauncher({
 				{visibleSlashCommands.length === 0 ? (
 					<ProjectContext
 						picker={projectPicker}
-						busy={busy}
+						busy={pickerBusy}
 						onSelectProject={onSelectProject}
 						onSelectBranch={onSelectBranch}
 					/>

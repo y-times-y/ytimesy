@@ -21,8 +21,10 @@ export function ProjectContext({
 }) {
 	const projects = picker?.projects ?? [];
 	const branches = picker?.branches ?? [];
-	const selectedProjectId = picker?.selectedProjectId ?? undefined;
-	const selectedBranch = picker?.selectedBranch ?? undefined;
+	const selectedProjectId = picker?.selectedProjectId ?? null;
+	const selectedBranch = picker?.selectedBranch ?? null;
+	const projectValue = selectedProjectId ?? "none";
+	const branchValue = selectedBranch ?? "none";
 	const emptyCopy = picker
 		? (picker.message ?? "No projects added yet")
 		: "Loading projects…";
@@ -32,8 +34,11 @@ export function ProjectContext({
 	return (
 		<div className="session-context">
 			<Select
-				value={selectedProjectId}
-				onValueChange={onSelectProject}
+				value={projectValue}
+				onValueChange={(value) => {
+					if (value === "none") return;
+					onSelectProject(value);
+				}}
 				disabled={projectDisabled}
 			>
 				<SelectTrigger
@@ -50,7 +55,7 @@ export function ProjectContext({
 					sideOffset={8}
 				>
 					{projects.length === 0 ? (
-						<SelectItem value="empty" disabled>
+						<SelectItem value="none" disabled>
 							{emptyCopy}
 						</SelectItem>
 					) : (
@@ -63,8 +68,11 @@ export function ProjectContext({
 				</SelectContent>
 			</Select>
 			<Select
-				value={selectedBranch}
-				onValueChange={onSelectBranch}
+				value={branchValue}
+				onValueChange={(value) => {
+					if (value === "none") return;
+					onSelectBranch(value);
+				}}
 				disabled={branchDisabled}
 			>
 				<SelectTrigger
@@ -80,7 +88,7 @@ export function ProjectContext({
 					sideOffset={8}
 				>
 					{branches.length === 0 ? (
-						<SelectItem value="empty" disabled>
+						<SelectItem value="none" disabled>
 							{selectedProjectId ? "Loading branches…" : "Branch"}
 						</SelectItem>
 					) : (
