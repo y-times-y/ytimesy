@@ -4,6 +4,7 @@ import type { FileChangeEntry } from "#/domain/session-item";
 import type { WorkspaceDesktop } from "#/domain/workspace-desktop";
 import { DesktopInspector } from "./desktop-inspector";
 import { DiffInspector } from "./diff-inspector";
+import { TerminalInspector } from "./terminal-inspector";
 
 export type ToolsView = "diff" | "terminal" | "desktop";
 export type InspectorView = ToolsView | "side";
@@ -35,6 +36,7 @@ export function WorkspaceInspector({
 	desktop,
 	desktopBusy,
 	onStartDesktop,
+	projectId,
 	sideChatOpen,
 	onNewSideChat,
 	onCloseSideChat,
@@ -47,6 +49,7 @@ export function WorkspaceInspector({
 	desktop: WorkspaceDesktop;
 	desktopBusy: boolean;
 	onStartDesktop: () => void;
+	projectId?: string;
 	sideChatOpen: boolean;
 	onNewSideChat: () => void;
 	onCloseSideChat: () => void;
@@ -113,6 +116,11 @@ export function WorkspaceInspector({
 					desktop={desktop}
 					busy={desktopBusy}
 					onStart={onStartDesktop}
+				/>
+			) : activeView === "terminal" ? (
+				<TerminalInspector
+					projectId={projectId}
+					active={!collapsed && activeView === "terminal"}
 				/>
 			) : currentView ? (
 				<section className="inspector-empty" aria-live="polite">

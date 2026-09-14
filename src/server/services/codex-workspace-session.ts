@@ -80,6 +80,9 @@ export function readCodexWorkspaceSession(
 		if (!providerRef) {
 			return emptyCodexSession(Boolean(snapshotId));
 		}
+		yield* Effect.tryPromise(() =>
+			machines.ensureRunning(WorkspaceId(providerRef)),
+		);
 		const status = yield* readLoginStatus(machines, WorkspaceId(providerRef));
 		return viewFromStatus(status, providerRef, Boolean(snapshotId));
 	}).pipe(
@@ -201,7 +204,7 @@ export function stopCodexWorkspaceTurn(
 }
 
 function withPreparedWorkspace<A>(
-	_machines: WorkspaceMachines,
+	machines: WorkspaceMachines,
 	scope: CodexSessionScope,
 	run: (providerRef: string, snapshotAvailable: boolean) => Effect.Effect<A>,
 ): Effect.Effect<A | PublicCodexSession> {
@@ -216,6 +219,9 @@ function withPreparedWorkspace<A>(
 		if (!providerRef) {
 			return emptyCodexSession(Boolean(snapshotId));
 		}
+		yield* Effect.tryPromise(() =>
+			machines.ensureRunning(WorkspaceId(providerRef)),
+		);
 		return yield* run(providerRef, Boolean(snapshotId));
 	}).pipe(
 		Effect.catchAll((cause) =>

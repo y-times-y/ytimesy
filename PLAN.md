@@ -182,7 +182,7 @@ Recheck versioned APIs before implementing. Validate subscription connection usi
 - TanStack Start foundation and workspace empty states implemented; Diff / Terminal / Desktop selectors work.
 - Better Auth GitHub sign-in, encrypted GitHub App connections, repository/branch selection, and owner-scoped project records are implemented and verified locally.
 - Durable per-user workspace records, pg-boss jobs in the `job_queue` schema, GitHub disconnect, and Codex account persistence (snapshot id sealed, never returned to the browser) are implemented. Adding a project queues workspace preparation. The worker clones the authorized branch and installs lockfile dependencies through a `WorkspaceRuntime` capability. The worker uses Freestyle when `FREESTYLE_API_KEY` is set; otherwise it stays on the unconfigured host. Rigkit is not embedded: `@rigkit/sdk` 0.3.0 requires a Bun daemon, so preparation is Freestyle clone-and-install.
-- Freestyle VM create/exec/delete and Codex ChatGPT device-code login are proven in an isolated VM. The workspace UI connects Codex through the existing app-server daemon (not ACP) on the signed-in user's prepared workspace VM, loading `model/list` into the composer after that machine is running. Sending a task reuses that daemon's inbox. Rigkit was not embedded. Terminal PTY, publication from a live checkout, and Claude/OpenCode sign-in remain incomplete.
+- Freestyle VM create/exec/delete and Codex ChatGPT device-code login are proven in an isolated VM. The workspace UI connects Codex through the existing app-server daemon (not ACP) on the signed-in user's prepared workspace VM, loading `model/list` into the composer after that machine is running. Sending a task reuses that daemon's inbox. Rigkit was not embedded. The Terminal tab attaches xterm.js to a reconnectable workspace PTY through a same-origin WebSocket proxy. Create pull request commits and pushes the live checkout, then opens a draft PR. Claude/OpenCode sign-in remain incomplete.
 - Continue by connecting durable workspace jobs to the Freestyle adapters, storing Codex snapshot ids per signed-in user, and validating Rigkit.
 
 ## Cloud-agent handoff
@@ -193,7 +193,7 @@ Use ytimesy to work on its own repository with a real cloud coding agent. Preser
 
 ### Current evidence and limits
 
-The workspace UI can load Codex models and send turns through the app-server daemon on the signed-in user's prepared Freestyle VM. Better Auth, PostgreSQL records, GitHub repository authorization, durable workspace jobs, and per-user agent-account records also work on this branch. Live terminal transport, Claude/OpenCode sign-in, and publication from a real checkout remain incomplete.
+The workspace UI can load Codex models and send turns through the app-server daemon on the signed-in user's prepared workspace VM. Better Auth, PostgreSQL records, GitHub repository authorization, durable workspace jobs, and per-user agent-account records also work on this branch. The Terminal tab proxies a reconnectable PTY on that VM. Create pull request commits and pushes from the live checkout, using a workspace branch when the project is on the default branch, then opens a draft PR. Closing the browser leaves the VM running; reload resumes the same machine, PTY slug `main`, Codex login, and a desktop already listening on 6080. Claude/OpenCode sign-in remain incomplete. Conversation items are still process-local to the web server.
 
 Milestone 2 live check (2026-09-13):
 
@@ -227,7 +227,7 @@ Run `pnpm install --frozen-lockfile`, then `pnpm dev` (port 3000). To match the 
 
 ### Next step
 
-Identity and authorized GitHub repository selection work locally. Durable workspace records queue `prepare-workspace`; the worker provisions a Freestyle VM when `FREESTYLE_API_KEY` is set, cloning the authorized branch and installing from the lockfile. New machines boot from the signed-in user's sealed Codex snapshot when one exists. Codex sign-in and turns use that prepared VM; after ChatGPT login the snapshot id is stored with `saveConnectedAgentAccount` rather than a shared `.ytimesy/` file. Rigkit remains unavailable in the Node worker. Next: live terminal PTY on that VM, then explicit commit/push from the checkout.
+Identity and authorized GitHub repository selection work locally. Durable workspace records queue `prepare-workspace`; the worker provisions a workspace VM when `FREESTYLE_API_KEY` is set, cloning the authorized branch and installing from the lockfile. New machines boot from the signed-in user's sealed Codex snapshot when one exists. Codex sign-in and turns use that prepared VM; after ChatGPT login the snapshot id is stored with `saveConnectedAgentAccount` rather than a shared `.ytimesy/` file. Terminal, desktop reconnect, and explicit commit/push/PR use that same `provider_ref`. Rigkit remains unavailable in the Node worker. Next: dogfood the loop on `y-times-y/ytimesy`, then Claude/OpenCode sign-in.
 
 Provider credentials and account-side configuration are not included in the repository. Supabase is selected for PostgreSQL. Hosting, queue, and object-storage providers remain undecided. Do not assume a local server or an unpushed commit is available to a cloud agent: this repository must be made accessible to that environment first.
 

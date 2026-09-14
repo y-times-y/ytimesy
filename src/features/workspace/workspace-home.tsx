@@ -321,6 +321,7 @@ export function WorkspaceHome({
 							fileChanges={fileChanges}
 							desktop={desktop}
 							desktopBusy={desktopBusy}
+							projectId={selectedProject?.id}
 							onStartDesktop={() => {
 								setDesktopBusy(true);
 								setDesktop({ status: "starting" });
