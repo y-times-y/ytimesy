@@ -1,4 +1,4 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { GitBranch } from "lucide-react";
 import { useState } from "react";
 import {
@@ -8,9 +8,14 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "#/components/ui/select";
+import { branchSwitchBlockedReason } from "../../domain/project-workspace";
 import type { Project } from "../../domain/projects";
 import { requestJson } from "../projects/api";
-import { WorkspaceStatus } from "../projects/workspace-status";
+import { GithubSetupLink } from "../projects/github-setup-link";
+import {
+	WorkspaceStatus,
+	type WorkspaceView,
+} from "../projects/workspace-status";
 
 export function ProjectContext({
 	projects,
@@ -50,14 +55,7 @@ export function ProjectContext({
 					)}
 				</SelectContent>
 			</Select>
-			<Select disabled>
-				<SelectTrigger
-					className="context-select branch-select"
-					aria-label="Branch"
-				>
-					<span>{selectedProject?.branch ?? "Branch"}</span>
-				</SelectTrigger>
-			</Select>
+			<BranchSelect project={selectedProject} />
 			{selectedProject && <WorkspaceStatus projectId={selectedProject.id} />}
 			{selectedProject && (
 				<PublicationAction
@@ -66,6 +64,103 @@ export function ProjectContext({
 				/>
 			)}
 		</div>
+	);
+}
+
+function BranchSelect({ project }: { project?: Project }) {
+	const queryClient = useQueryClient();
+	const workspace = useQuery({
+		queryKey: ["workspace", project?.id],
+		queryFn: () =>
+			requestJson<WorkspaceView | null>(
+				`/api/workspaces?projectId=${project?.id}`,
+			),
+		enabled: !!project,
+	});
+	const branches = useQuery({
+		queryKey: [
+			"github",
+			"branches",
+			project?.installationId,
+			project?.repositoryId,
+		],
+		queryFn: () =>
+			requestJson<string[]>(
+				`/api/github/branches?installationId=${project?.installationId}&repositoryId=${project?.repositoryId}`,
+			),
+		enabled: !!project,
+		retry: false,
+	});
+	const switchBranch = useMutation({
+		mutationFn: (branch: string) =>
+			requestJson<Project>("/api/projects", {
+				installationId: project?.installationId,
+				repositoryId: project?.repositoryId,
+				branch,
+			}),
+		onSuccess: () => {
+			void queryClient.invalidateQueries({ queryKey: ["projects"] });
+			void queryClient.invalidateQueries({
+				queryKey: ["workspace", project?.id],
+			});
+		},
+	});
+	const names = [
+		...new Set([
+			...(project ? [project.branch] : []),
+			...(branches.data ?? []),
+		]),
+	];
+	const preparing = branchSwitchBlockedReason(workspace.data?.status);
+	const disabled =
+		!project ||
+		switchBranch.isPending ||
+		workspace.isPending ||
+		Boolean(preparing) ||
+		branches.isPending ||
+		branches.isError;
+	const error = switchBranch.error ?? (project ? branches.error : null);
+	return (
+		<>
+			<Select
+				value={project?.branch ?? ""}
+				disabled={disabled}
+				onValueChange={(branch) => {
+					if (!project || branch === project.branch) return;
+					switchBranch.mutate(branch);
+				}}
+			>
+				<SelectTrigger
+					className="context-select branch-select"
+					aria-label="Branch"
+				>
+					<SelectValue placeholder="Branch" />
+				</SelectTrigger>
+				<SelectContent
+					position="popper"
+					side="top"
+					align="start"
+					sideOffset={8}
+				>
+					{names.length ? (
+						names.map((name) => (
+							<SelectItem key={name} value={name}>
+								{name}
+							</SelectItem>
+						))
+					) : (
+						<SelectItem value="empty" disabled>
+							Branch
+						</SelectItem>
+					)}
+				</SelectContent>
+			</Select>
+			{error && (
+				<p className="context-alert" role="alert">
+					{error.message} <GithubSetupLink message={error.message} />
+				</p>
+			)}
+		</>
 	);
 }
 
@@ -78,6 +173,7 @@ function PublicationAction({ projectId }: { projectId: string }) {
 				{ projectId, title },
 			),
 	});
+	const message = publish.error?.message;
 	return (
 		<form
 			className="publication-action"
@@ -106,7 +202,11 @@ function PublicationAction({ projectId }: { projectId: string }) {
 					Draft PR #{publish.data.number}
 				</a>
 			)}
-			{publish.error && <p role="alert">{publish.error.message}</p>}
+			{message && (
+				<p role="alert">
+					{message} <GithubSetupLink message={message} />
+				</p>
+			)}
 		</form>
 	);
 }

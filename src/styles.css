@@ -909,9 +909,16 @@ button:enabled:active {
 	white-space: nowrap;
 }
 .publication-action p,
-.publication-action a {
+.publication-action a,
+.context-alert {
 	flex: 1 1 100%;
 	margin: 0;
 	font-size: 12px;
 	color: #929292;
+}
+.publication-action a,
+.context-alert a,
+.workspace-status a {
+	color: #ddd;
+	text-underline-offset: 2px;
 }
