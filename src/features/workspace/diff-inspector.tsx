@@ -5,7 +5,9 @@ import {
 	fileChangesHeading,
 } from "#/domain/file-change-copy";
 import type { FileChangeEntry } from "#/domain/session-item";
+import { sourceLanguageFromPath } from "#/domain/source-language";
 import { FileChangeCounts } from "../sessions/file-change-counts";
+import { CodeTokens } from "../sessions/highlighted-code";
 
 export function DiffInspector({
 	changes,
@@ -41,6 +43,7 @@ function DiffFilePreview({
 	defaultOpen: boolean;
 }) {
 	const path = fileChangeDisplayPath(change.path);
+	const language = sourceLanguageFromPath(change.path);
 	const lines = diffPreviewLines(change);
 	const [open, setOpen] = useState(defaultOpen);
 	return (
@@ -68,7 +71,7 @@ function DiffFilePreview({
 							<span className="diff-gutter" aria-hidden="true">
 								{line.kind === "add" ? "+" : line.kind === "del" ? "-" : " "}
 							</span>
-							{line.text}
+							<CodeTokens text={line.text} language={language} />
 						</span>
 					))}
 				</pre>
