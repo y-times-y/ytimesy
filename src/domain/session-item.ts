@@ -240,19 +240,13 @@ function presentTurnBody(body: readonly SessionItem[]): SessionItem[] {
 	const reasonings = body.filter(
 		(row): row is ReasoningItem => row.kind === "reasoning",
 	);
-	const agents = body.filter(
-		(row): row is AgentMessageItem => row.kind === "agentMessage",
-	);
-	const tools = body.filter(
-		(row) => row.kind !== "reasoning" && row.kind !== "agentMessage",
-	);
-	const compacted: SessionItem[] = [];
-	if (reasonings[0]) {
-		compacted.push({
-			...reasonings[0],
-			summaries: reasonings.flatMap((row) => row.summaries),
-		});
-	}
-	compacted.push(...tools, ...agents);
-	return compacted;
+	const rest = body.filter((row) => row.kind !== "reasoning");
+	if (!reasonings[0]) return [...rest];
+	const thought: ReasoningItem = {
+		...reasonings[0],
+		summaries: reasonings.flatMap((row) => row.summaries),
+	};
+	const firstTool = rest.findIndex((row) => row.kind !== "agentMessage");
+	if (firstTool <= 0) return [thought, ...rest];
+	return [...rest.slice(0, firstTool), thought, ...rest.slice(firstTool)];
 }

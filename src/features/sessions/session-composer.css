@@ -361,7 +361,10 @@
 	margin: 4px 0 12px;
 }
 .session-timeline li[data-kind="agentMessage"] {
-	margin: 10px 0 8px;
+	margin: 8px 0 6px;
+}
+.session-timeline li[data-kind="agentMessage"] + li[data-kind="agentMessage"] {
+	margin-top: 2px;
 }
 .session-message {
 	max-width: 100%;
