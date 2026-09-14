@@ -134,7 +134,7 @@ Million-developer scalability is an architectural ambition, not a verified launc
 - Preserve durable event ordering/cursors for reconnect; distinguish cached UI data from the authoritative session record.
 - Effect retries and finalizers do not replace durable recovery or orphan reconciliation.
 - Cancellation of a run is distinct from deleting its workspace VM. Deleting one agent VM must not delete the project snapshot or other agents' VMs.
-- Snapshot credentials only within explicitly isolated user state; shared base images contain no user secrets. Define logout, deletion, and credential-expiry behavior. After ChatGPT login, capture a private Freestyle VM snapshot of that user's guest (disk includes `~/.codex/auth.json`). Store the snapshot id in tenant-scoped records later; proof CLI stores it in gitignored `.ytimesy/codex-auth-snapshot.json`. Do not mark that snapshot public or bake it into a shared base image. Shared images may later include tools such as bubblewrap, but never user credentials.
+- Snapshot credentials only within explicitly isolated user state; shared base images contain no user secrets. Define logout, deletion, and credential-expiry behavior. After ChatGPT login, capture a private Freestyle VM snapshot of that user's guest (disk includes `~/.codex/auth.json`). The signed-in app stores that snapshot id in `agent_account`; proof CLI still uses gitignored `.ytimesy/codex-auth-snapshot.json`. Do not mark that snapshot public or bake it into a shared base image. Shared images may later include tools such as bubblewrap, but never user credentials.
 - GitHub authority is repository-scoped and brokered wherever practical. Untrusted repository code must not gain platform authority.
 - App previews and terminals require access control. Browser preview content is untrusted and must not inherit application-origin privileges.
 
@@ -181,8 +181,8 @@ Recheck versioned APIs before implementing. Validate subscription connection usi
 - Research and product decisions captured; coding skill installed.
 - TanStack Start foundation and workspace empty states implemented; Diff / Terminal / Desktop selectors work.
 - Better Auth GitHub sign-in, encrypted GitHub App connections, repository/branch selection, and owner-scoped project records are implemented and verified locally.
-- Durable per-user workspace records, pg-boss jobs in the `job_queue` schema, GitHub disconnect, and Codex account persistence (snapshot id sealed, never returned to the browser) are implemented. Adding a project queues workspace preparation. The worker clones the authorized branch and installs lockfile dependencies through a `WorkspaceRuntime` capability. This process still uses an unconfigured runtime until the Freestyle host adapter from the integration-proof work is wired in.
-- Freestyle VM create/exec/delete and Codex ChatGPT device-code login are proven in an isolated VM. The workspace UI connects Codex through the existing app-server daemon (not ACP), loading `model/list` into the composer after a private snapshot boot. Sending a task reuses that daemon's inbox. Rigkit was not embedded. Terminal PTY, publication from a live checkout, and a merged product flow remain incomplete.
+- Durable per-user workspace records, pg-boss jobs in the `job_queue` schema, GitHub disconnect, and Codex account persistence (snapshot id sealed, never returned to the browser) are implemented. Adding a project queues workspace preparation. The worker clones the authorized branch and installs lockfile dependencies through a `WorkspaceRuntime` capability. The worker uses Freestyle when `FREESTYLE_API_KEY` is set; otherwise it stays on the unconfigured host. Rigkit is not embedded: `@rigkit/sdk` 0.3.0 requires a Bun daemon, so preparation is Freestyle clone-and-install.
+- Freestyle VM create/exec/delete and Codex ChatGPT device-code login are proven in an isolated VM. The workspace UI connects Codex through the existing app-server daemon (not ACP) on the signed-in user's prepared workspace VM, loading `model/list` into the composer after that machine is running. Sending a task reuses that daemon's inbox. Rigkit was not embedded. Terminal PTY, publication from a live checkout, and Claude/OpenCode sign-in remain incomplete.
 - Continue by connecting durable workspace jobs to the Freestyle adapters, storing Codex snapshot ids per signed-in user, and validating Rigkit.
 
 ## Cloud-agent handoff
@@ -193,7 +193,7 @@ Use ytimesy to work on its own repository with a real cloud coding agent. Preser
 
 ### Current evidence and limits
 
-The workspace UI can load Codex models and send turns through the app-server daemon after a private snapshot boot. Better Auth, PostgreSQL records, GitHub repository authorization, durable workspace jobs, and per-user agent-account records also work on this branch. Production VM provisioning from the signed-in app, live terminal transport, and publication from a real checkout remain incomplete.
+The workspace UI can load Codex models and send turns through the app-server daemon on the signed-in user's prepared Freestyle VM. Better Auth, PostgreSQL records, GitHub repository authorization, durable workspace jobs, and per-user agent-account records also work on this branch. Live terminal transport, Claude/OpenCode sign-in, and publication from a real checkout remain incomplete.
 
 Milestone 2 live check (2026-09-13):
 
@@ -227,7 +227,7 @@ Run `pnpm install --frozen-lockfile`, then `pnpm dev` (port 3000). To match the 
 
 ### Next step
 
-Identity and authorized GitHub repository selection work locally. Durable workspace records and the prepare-workspace job exist; they wait on the Freestyle host adapter. A private Codex ChatGPT snapshot exists for this environment; later proof VMs should boot from it. Connect the Codex device-code flow to `saveConnectedAgentAccount` so snapshot ids are stored per signed-in user instead of a local `.ytimesy/` file. Validate Rigkit setup and recovery before treating preparation as complete. Record live results and unresolved issues after each milestone.
+Identity and authorized GitHub repository selection work locally. Durable workspace records queue `prepare-workspace`; the worker provisions a Freestyle VM when `FREESTYLE_API_KEY` is set, cloning the authorized branch and installing from the lockfile. New machines boot from the signed-in user's sealed Codex snapshot when one exists. Codex sign-in and turns use that prepared VM; after ChatGPT login the snapshot id is stored with `saveConnectedAgentAccount` rather than a shared `.ytimesy/` file. Rigkit remains unavailable in the Node worker. Next: live terminal PTY on that VM, then explicit commit/push from the checkout.
 
 Provider credentials and account-side configuration are not included in the repository. Supabase is selected for PostgreSQL. Hosting, queue, and object-storage providers remain undecided. Do not assume a local server or an unpushed commit is available to a cloud agent: this repository must be made accessible to that environment first.
 
@@ -257,4 +257,4 @@ Run `pnpm dev` for the environment-loaded server on port 3001 and `pnpm worker` 
 
 ### Durable workspace records and identity follow-through — 2026-09-13
 
-Added owner-scoped `workspace`, `workspace_event`, and `agent_account` tables plus the `job_queue` schema for pg-boss. Saving a project queues `prepare-workspace`. The worker claims one workspace per project, records a provider ref before further work, reuses a machine found by slug after a timeout, clones with the GitHub token only in git config env, and installs from the detected lockfile. Snapshot ids for Codex are sealed per user and omitted from `/api/account`. GitHub disconnect deletes stored App credentials without signing the user out. Freestyle VM creation stays behind `WorkspaceRuntime`; this worker uses the unconfigured host until that adapter is wired.
+Added owner-scoped `workspace`, `workspace_event`, and `agent_account` tables plus the `job_queue` schema for pg-boss. Saving a project queues `prepare-workspace`. The worker claims one workspace per project, records a provider ref before further work, reuses a machine found by slug after a timeout, clones with the GitHub token only in git config env, and installs from the detected lockfile. Snapshot ids for Codex are sealed per user and omitted from `/api/account`. GitHub disconnect deletes stored App credentials without signing the user out. Freestyle VM creation is behind `WorkspaceRuntime`; the worker uses `FreestyleWorkspaceRuntime` when `FREESTYLE_API_KEY` is set.

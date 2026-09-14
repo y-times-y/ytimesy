@@ -1,6 +1,10 @@
 import { Effect } from "effect";
 import type { AgentConnection } from "#/domain/agent-connection";
 import { WorkspaceId } from "#/domain/ids";
+import {
+	codexConnectBlockedReason,
+	workspaceSessionMachineRef,
+} from "#/domain/project-workspace";
 import type { SessionItem, SessionTurnStatus } from "#/domain/session-item";
 import { canSubmitComposer, canSubmitSideChat } from "#/domain/session-policy";
 import type { WorkspaceLifecycle } from "#/domain/workspace";
@@ -15,12 +19,9 @@ import type {
 	CodexLoginStatus,
 	ListedModel,
 } from "#/server/adapters/codex/login-status";
-import { PROOF_LOGIN_LIFETIME } from "#/server/adapters/freestyle/proof-vm";
-import {
-	readAuthSnapshotState,
-	readProofVmState,
-	writeProofVmState,
-} from "#/server/proof/codex-login-state";
+import { readyWorkspaceForOwner } from "#/server/adapters/workspaces";
+import { loadAgentSnapshotId } from "#/server/auth/agent-account";
+import { persistCodexAuthSnapshotForUser } from "#/server/proof/persist-codex-auth-snapshot";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 export type PublicCodexSession = {
@@ -34,6 +35,11 @@ export type PublicCodexSession = {
 	readonly items: readonly SessionItem[];
 	readonly sideTurnStatus: SessionTurnStatus;
 	readonly sideItems: readonly SessionItem[];
+};
+
+export type CodexSessionScope = {
+	readonly userId: string;
+	readonly projectId?: string;
 };
 
 const disconnected: AgentConnection = { status: "disconnected" };
@@ -56,27 +62,30 @@ export function emptyCodexSession(
 }
 
 /**
- * Reads the current proof workspace without provisioning. Missing or dead VMs
+ * Reads Codex on the signed-in user's prepared workspace. Missing machines
  * become a disconnected session so the homepage can render.
  */
 export function readCodexWorkspaceSession(
 	machines: WorkspaceMachines,
+	scope: CodexSessionScope,
 ): Effect.Effect<PublicCodexSession> {
 	return Effect.gen(function* () {
-		const snapshot = yield* Effect.tryPromise(() => readAuthSnapshotState());
-		const vm = yield* Effect.tryPromise(() => readProofVmState());
-		if (!vm) {
-			return emptyCodexSession(Boolean(snapshot));
-		}
-		const status = yield* readLoginStatus(
-			machines,
-			WorkspaceId(vm.workspaceId),
+		const snapshotId = yield* Effect.tryPromise(() =>
+			loadAgentSnapshotId(scope.userId),
 		);
-		return viewFromStatus(status, vm.workspaceId, Boolean(snapshot));
+		const workspace = yield* Effect.tryPromise(() =>
+			readyWorkspaceForOwner(scope.userId, scope.projectId),
+		);
+		const providerRef = workspaceSessionMachineRef(workspace);
+		if (!providerRef) {
+			return emptyCodexSession(Boolean(snapshotId));
+		}
+		const status = yield* readLoginStatus(machines, WorkspaceId(providerRef));
+		return viewFromStatus(status, providerRef, Boolean(snapshotId));
 	}).pipe(
 		Effect.catchAll(() =>
-			Effect.tryPromise(() => readAuthSnapshotState()).pipe(
-				Effect.map((snapshot) => emptyCodexSession(Boolean(snapshot))),
+			Effect.tryPromise(() => loadAgentSnapshotId(scope.userId)).pipe(
+				Effect.map((snapshotId) => emptyCodexSession(Boolean(snapshotId))),
 				Effect.catchAll(() => Effect.succeed(emptyCodexSession())),
 			),
 		),
@@ -84,15 +93,37 @@ export function readCodexWorkspaceSession(
 }
 
 /**
- * Boots from the private ChatGPT snapshot when one exists, otherwise starts
- * device-code login. Reuses a live proof VM and its app-server daemon when
- * present; does not add ACP.
+ * Recovers the prepared project VM and starts or resumes Codex there.
+ * Snapshot ids are stored on the signed-in user, not a shared `.ytimesy/` file.
  */
 export function connectCodexWorkspaceSession(
 	machines: WorkspaceMachines,
+	scope: CodexSessionScope,
 ): Effect.Effect<PublicCodexSession> {
 	return Effect.gen(function* () {
-		const existing = yield* readCodexWorkspaceSession(machines);
+		const snapshotId = yield* Effect.tryPromise(() =>
+			loadAgentSnapshotId(scope.userId),
+		);
+		const workspace = yield* Effect.tryPromise(() =>
+			readyWorkspaceForOwner(scope.userId, scope.projectId),
+		);
+		const blocked = codexConnectBlockedReason(workspace);
+		if (blocked || !workspace?.providerRef) {
+			return {
+				...emptyCodexSession(Boolean(snapshotId)),
+				connection: {
+					status: "failed" as const,
+					provider: "codex" as const,
+					message: blocked ?? "Prepare a workspace before signing in to Codex.",
+				},
+			};
+		}
+
+		yield* Effect.tryPromise(() =>
+			machines.ensureRunning(WorkspaceId(workspace.providerRef as string)),
+		);
+
+		const existing = yield* readCodexWorkspaceSession(machines, scope);
 		if (existing.connection.status === "authenticated") {
 			return existing;
 		}
@@ -100,52 +131,24 @@ export function connectCodexWorkspaceSession(
 			return existing;
 		}
 
-		const snapshot = yield* Effect.tryPromise(() => readAuthSnapshotState());
-		const existingVm = yield* Effect.tryPromise(() => readProofVmState());
-		if (existingVm) {
-			const resumed = yield* authenticateProofWorkspace(
-				machines,
-				WorkspaceId(existingVm.workspaceId),
-				Boolean(snapshot),
-			);
-			if (
-				resumed.stage === "authenticated" ||
-				resumed.stage === "awaiting_device_code"
-			) {
-				return viewFromStatus(
-					resumed,
-					existingVm.workspaceId,
-					Boolean(snapshot),
-				);
-			}
-		}
-
-		const workspace = snapshot
-			? yield* Effect.tryPromise(() =>
-					machines.createProofWorkspace({
-						...PROOF_LOGIN_LIFETIME,
-						snapshotId: snapshot.snapshotId,
-					}),
-				)
-			: yield* Effect.tryPromise(() =>
-					machines.createProofWorkspace(PROOF_LOGIN_LIFETIME),
-				);
-
-		yield* Effect.tryPromise(() =>
-			writeProofVmState({
-				workspaceId: workspace.workspaceId,
-				slug: workspace.slug,
-				startedAt: new Date().toISOString(),
-				bootedFromSnapshotId: snapshot?.snapshotId ?? null,
-			}),
-		);
-
-		const status = yield* authenticateProofWorkspace(
+		const status = yield* authenticatePreparedWorkspace(
 			machines,
-			workspace.workspaceId,
-			Boolean(snapshot),
+			WorkspaceId(workspace.providerRef),
+			Boolean(snapshotId),
 		);
-		return viewFromStatus(status, workspace.workspaceId, Boolean(snapshot));
+		if (status.stage === "authenticated") {
+			yield* persistCodexAuthSnapshotForUser(
+				scope.userId,
+				machines,
+				WorkspaceId(workspace.providerRef),
+				{ planType: status.planType, email: null },
+			);
+		}
+		return viewFromStatus(
+			status,
+			workspace.providerRef,
+			Boolean(snapshotId) || status.stage === "authenticated",
+		);
 	}).pipe(
 		Effect.catchAll((cause) =>
 			Effect.succeed({
@@ -162,52 +165,58 @@ export function connectCodexWorkspaceSession(
 
 export function sendCodexWorkspaceTask(
 	machines: WorkspaceMachines,
+	scope: CodexSessionScope,
 	input: {
 		readonly text: string;
 		readonly modelId: string;
 		readonly lane?: "main" | "side";
 	},
 ): Effect.Effect<PublicCodexSession> {
-	return Effect.gen(function* () {
-		const vm = yield* Effect.tryPromise(() => readProofVmState());
-		if (!vm) {
-			return emptyCodexSession();
-		}
-		const snapshot = yield* Effect.tryPromise(() => readAuthSnapshotState());
-		const status = yield* submitCodexTask(
-			machines,
-			WorkspaceId(vm.workspaceId),
-			input,
-		);
-		return viewFromStatus(status, vm.workspaceId, Boolean(snapshot));
-	}).pipe(
-		Effect.catchAll((cause) =>
-			Effect.succeed({
-				...emptyCodexSession(),
-				connection: {
-					status: "failed" as const,
-					provider: "codex" as const,
-					message: cause instanceof Error ? cause.message : String(cause),
-				},
-			}),
-		),
+	return withPreparedWorkspace(
+		machines,
+		scope,
+		(providerRef, snapshotAvailable) =>
+			submitCodexTask(machines, WorkspaceId(providerRef), input).pipe(
+				Effect.map((status) =>
+					viewFromStatus(status, providerRef, snapshotAvailable),
+				),
+			),
 	);
 }
 
 export function stopCodexWorkspaceTurn(
 	machines: WorkspaceMachines,
+	scope: CodexSessionScope,
 ): Effect.Effect<PublicCodexSession> {
+	return withPreparedWorkspace(
+		machines,
+		scope,
+		(providerRef, snapshotAvailable) =>
+			interruptCodexTurn(machines, WorkspaceId(providerRef)).pipe(
+				Effect.map((status) =>
+					viewFromStatus(status, providerRef, snapshotAvailable),
+				),
+			),
+	);
+}
+
+function withPreparedWorkspace<A>(
+	_machines: WorkspaceMachines,
+	scope: CodexSessionScope,
+	run: (providerRef: string, snapshotAvailable: boolean) => Effect.Effect<A>,
+): Effect.Effect<A | PublicCodexSession> {
 	return Effect.gen(function* () {
-		const vm = yield* Effect.tryPromise(() => readProofVmState());
-		if (!vm) {
-			return emptyCodexSession();
-		}
-		const snapshot = yield* Effect.tryPromise(() => readAuthSnapshotState());
-		const status = yield* interruptCodexTurn(
-			machines,
-			WorkspaceId(vm.workspaceId),
+		const snapshotId = yield* Effect.tryPromise(() =>
+			loadAgentSnapshotId(scope.userId),
 		);
-		return viewFromStatus(status, vm.workspaceId, Boolean(snapshot));
+		const workspace = yield* Effect.tryPromise(() =>
+			readyWorkspaceForOwner(scope.userId, scope.projectId),
+		);
+		const providerRef = workspaceSessionMachineRef(workspace);
+		if (!providerRef) {
+			return emptyCodexSession(Boolean(snapshotId));
+		}
+		return yield* run(providerRef, Boolean(snapshotId));
 	}).pipe(
 		Effect.catchAll((cause) =>
 			Effect.succeed({
@@ -222,12 +231,7 @@ export function stopCodexWorkspaceTurn(
 	);
 }
 
-/**
- * Resumes ChatGPT auth on an existing proof VM. Snapshot boots skip device
- * code unless resume fails; a failed snapshot resume then starts device-code
- * on that same VM rather than minting another from the burned refresh token.
- */
-function authenticateProofWorkspace(
+function authenticatePreparedWorkspace(
 	machines: WorkspaceMachines,
 	workspaceId: WorkspaceId,
 	snapshotAvailable: boolean,

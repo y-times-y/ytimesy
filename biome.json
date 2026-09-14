@@ -9,6 +9,7 @@
 		"includes": [
 			"src/**",
 			"scripts/**",
+			"!scripts/setup-github-app.mjs",
 			"*.json",
 			"vite.config.ts",
 			"vitest.config.ts",

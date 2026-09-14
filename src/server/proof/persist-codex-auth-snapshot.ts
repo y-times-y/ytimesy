@@ -1,6 +1,10 @@
 import { Effect } from "effect";
 import { AuthSnapshotId, type WorkspaceId } from "#/domain/ids";
 import { snapshotAuthenticatedCodexWorkspace } from "#/server/adapters/codex/login-session";
+import {
+	loadAgentSnapshotId,
+	saveConnectedAgentAccount,
+} from "#/server/auth/agent-account";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
 import {
 	type ProofAuthSnapshotState,
@@ -46,6 +50,47 @@ export function persistCodexAuthSnapshotIfMissing(
 	);
 }
 
+/**
+ * Captures a private Codex snapshot into the signed-in user's agent_account.
+ * Does not write the shared CLI file under `.ytimesy/`.
+ */
+export function persistCodexAuthSnapshotForUser(
+	userId: string,
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+	account: { readonly planType: string | null; readonly email?: string | null },
+): Effect.Effect<PersistCodexAuthSnapshotResult> {
+	return Effect.gen(function* () {
+		const existingId = yield* Effect.tryPromise(() =>
+			loadAgentSnapshotId(userId),
+		);
+		if (existingId) {
+			return {
+				kind: "existing" as const,
+				snapshot: snapshotRecord(existingId, workspaceId),
+			};
+		}
+		const snapshot = yield* captureSnapshot(machines, workspaceId);
+		if (snapshot.kind === "failed") return snapshot;
+		yield* Effect.tryPromise(() =>
+			saveConnectedAgentAccount(userId, {
+				provider: "codex",
+				snapshotId: snapshot.snapshot.snapshotId,
+				planType: account.planType,
+				email: account.email ?? null,
+			}),
+		);
+		return snapshot;
+	}).pipe(
+		Effect.catchAll((cause) =>
+			Effect.succeed({
+				kind: "failed" as const,
+				message: cause instanceof Error ? cause.message : String(cause),
+			}),
+		),
+	);
+}
+
 export function replaceCodexAuthSnapshot(
 	machines: WorkspaceMachines,
 	workspaceId: WorkspaceId,
@@ -73,10 +118,9 @@ export function replaceCodexAuthSnapshot(
 	);
 }
 
-function captureAndStore(
+function captureSnapshot(
 	machines: WorkspaceMachines,
 	workspaceId: WorkspaceId,
-	kind: "created" | "replaced",
 ): Effect.Effect<PersistCodexAuthSnapshotResult> {
 	return Effect.gen(function* () {
 		const snapshot = yield* snapshotAuthenticatedCodexWorkspace(
@@ -86,9 +130,23 @@ function captureAndStore(
 		if (!snapshot.ok) {
 			return { kind: "failed" as const, message: snapshot.message };
 		}
-		const record = snapshotRecord(snapshot.snapshotId, workspaceId);
-		yield* Effect.tryPromise(() => writeAuthSnapshotState(record));
-		return { kind, snapshot: record };
+		return {
+			kind: "created" as const,
+			snapshot: snapshotRecord(snapshot.snapshotId, workspaceId),
+		};
+	});
+}
+
+function captureAndStore(
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+	kind: "created" | "replaced",
+): Effect.Effect<PersistCodexAuthSnapshotResult> {
+	return Effect.gen(function* () {
+		const snapshot = yield* captureSnapshot(machines, workspaceId);
+		if (snapshot.kind === "failed") return snapshot;
+		yield* Effect.tryPromise(() => writeAuthSnapshotState(snapshot.snapshot));
+		return { kind, snapshot: snapshot.snapshot };
 	}).pipe(
 		Effect.catchAll((cause) =>
 			Effect.succeed({

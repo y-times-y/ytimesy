@@ -10,6 +10,10 @@ import {
 	saveWorkspaceStatus,
 	workspaceById,
 } from "../src/server/adapters/workspaces";
+import {
+	disconnectAgentAccount,
+	saveConnectedAgentAccount,
+} from "../src/server/auth/agent-account";
 import { runWorkspacePreparation } from "../src/server/jobs/prepare-workspace";
 
 let db: PGlite;
@@ -77,6 +81,35 @@ it("clones with a token in env only and reuses a machine found by slug", async (
 	).toBe(false);
 	const events = await listWorkspaceEvents("alice", workspace.id);
 	expect(events.map((event) => event.message).join("\n")).not.toContain("ghp_");
+});
+
+it("boots a new machine from the user's Codex snapshot when one exists", async () => {
+	await saveConnectedAgentAccount("alice", {
+		provider: "codex",
+		snapshotId: "sh-alice-codex",
+		planType: "prolite",
+		email: "alice@example.test",
+	});
+	const project = await saveProject(
+		"alice",
+		{
+			...repo,
+			repositoryId: 11,
+			fullName: "acme/snapshot",
+		},
+		"main",
+	);
+	const workspace = await insertQueuedWorkspace("alice", project.id);
+	const runtime = new MemoryWorkspaceRuntime({
+		exitCode: 0,
+		stdout: "pnpm-lock.yaml\n",
+		stderr: "",
+	});
+	await runWorkspacePreparation(workspace.id, runtime);
+	expect(runtime.lastProvisionOptions).toEqual({
+		snapshotId: "sh-alice-codex",
+	});
+	await disconnectAgentAccount("alice");
 });
 
 it("recovers a recorded provider instead of creating a second machine", async () => {

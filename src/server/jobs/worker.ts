@@ -1,10 +1,10 @@
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { UnconfiguredWorkspaceRuntime } from "../adapters/workspace-runtime";
+import { workspaceRuntimeFromEnv } from "../adapters/freestyle/workspace-runtime";
 import { runWorkspacePreparation } from "./prepare-workspace";
 import { jobQueue, PREPARE_WORKSPACE_QUEUE } from "./queue";
 
-const runtime = new UnconfiguredWorkspaceRuntime();
+const runtime = workspaceRuntimeFromEnv();
 
 export async function startWorkspaceWorker() {
 	const queue = await jobQueue();

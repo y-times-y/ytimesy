@@ -3,10 +3,12 @@ import {
 	blocksDuplicateProvision,
 	branchSwitchBlockedReason,
 	canStartPrepare,
+	codexConnectBlockedReason,
 	needsMachineCreate,
 	needsMachineRecover,
 	publicFailureMessage,
 	redactSecrets,
+	workspaceSessionMachineRef,
 	workspaceSlug,
 } from "../src/domain/project-workspace";
 
@@ -47,4 +49,35 @@ it("redacts tokens from failure messages and logs", () => {
 		"AUTHORIZATION: bearer [redacted]",
 	);
 	expect(workspaceSlug("abc")).toBe("ytimesy-ws-abc");
+});
+
+it("only exposes a Codex session machine after the workspace is ready", () => {
+	expect(workspaceSessionMachineRef(null)).toBeNull();
+	expect(
+		workspaceSessionMachineRef({
+			status: "installing",
+			providerRef: "vm-1",
+		}),
+	).toBeNull();
+	expect(
+		workspaceSessionMachineRef({
+			status: "ready",
+			providerRef: "vm-1",
+		}),
+	).toBe("vm-1");
+	expect(codexConnectBlockedReason(null)).toMatch(/Prepare a workspace/);
+	expect(
+		codexConnectBlockedReason({
+			status: "cloning",
+			providerRef: "vm-1",
+			errorMessage: null,
+		}),
+	).toMatch(/Wait for workspace preparation/);
+	expect(
+		codexConnectBlockedReason({
+			status: "failed",
+			providerRef: null,
+			errorMessage: "GitHub access expired or was denied. Reconnect GitHub.",
+		}),
+	).toBe("GitHub access expired or was denied. Reconnect GitHub.");
 });

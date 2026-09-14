@@ -96,8 +96,17 @@ export function WorkspaceHome({
 				opencode: hintForHarness(status.keys, "opencode") ?? undefined,
 			});
 		});
-		void loadDesktop().then(setDesktop);
-	}, [loadDesktop, loadKeys]);
+	}, [loadKeys]);
+
+	useEffect(() => {
+		if (!selectedProject?.id) return;
+		void getCodexSession({ data: { projectId: selectedProject.id } }).then(
+			setSession,
+		);
+		void loadDesktop({ data: { projectId: selectedProject.id } }).then(
+			setDesktop,
+		);
+	}, [loadDesktop, selectedProject?.id]);
 
 	useEffect(() => {
 		if (compact || openedDiff.current || fileChanges.length === 0) return;
@@ -123,13 +132,16 @@ export function WorkspaceHome({
 				? 1000
 				: 3000;
 		const timer = window.setInterval(() => {
-			void getCodexSession().then((next) => {
+			void getCodexSession({
+				data: { projectId: selectedProject?.id },
+			}).then((next) => {
 				setSession(next);
 				if (next.sideTurnStatus !== "idle") setSideQueued(false);
 			});
 		}, interval);
 		return () => window.clearInterval(timer);
 	}, [
+		selectedProject?.id,
 		session.connection.status,
 		session.sideTurnStatus,
 		session.turnStatus,
@@ -158,7 +170,9 @@ export function WorkspaceHome({
 		if (!modelId) return;
 		if (session.turnStatus === "running") setSideQueued(true);
 		setBusy(true);
-		void sendTask({ data: { text, modelId, lane: "side" } })
+		void sendTask({
+			data: { text, modelId, lane: "side", projectId: selectedProject?.id },
+		})
 			.then(setSession)
 			.finally(() => setBusy(false));
 	}
@@ -236,7 +250,7 @@ export function WorkspaceHome({
 								apiKeyHints={apiKeyHints}
 								onConnect={() => {
 									setBusy(true);
-									void connect()
+									void connect({ data: { projectId: selectedProject?.id } })
 										.then(setSession)
 										.finally(() => setBusy(false));
 								}}
@@ -257,13 +271,15 @@ export function WorkspaceHome({
 								}}
 								onSend={(text, modelId) => {
 									setBusy(true);
-									void sendTask({ data: { text, modelId } })
+									void sendTask({
+										data: { text, modelId, projectId: selectedProject?.id },
+									})
 										.then(setSession)
 										.finally(() => setBusy(false));
 								}}
 								onStop={() => {
 									setBusy(true);
-									void stopTurn()
+									void stopTurn({ data: { projectId: selectedProject?.id } })
 										.then(setSession)
 										.finally(() => setBusy(false));
 								}}
@@ -308,7 +324,9 @@ export function WorkspaceHome({
 							onStartDesktop={() => {
 								setDesktopBusy(true);
 								setDesktop({ status: "starting" });
-								void startDesktop()
+								void startDesktop({
+									data: { projectId: selectedProject?.id },
+								})
 									.then(setDesktop)
 									.finally(() => setDesktopBusy(false));
 							}}
