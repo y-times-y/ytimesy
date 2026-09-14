@@ -7,6 +7,7 @@ import {
 	isTurnRunning,
 	lastUserMessageText,
 	type SessionItem,
+	sessionTitleFromItems,
 	visibleSessionItems,
 } from "./session-item";
 
@@ -171,6 +172,19 @@ describe("session items", () => {
 			},
 		];
 		expect(lastUserMessageText(items)).toBe("second");
+	});
+
+	it("uses the first line of the latest user message as the session title", () => {
+		expect(sessionTitleFromItems([])).toBe("New session");
+		expect(
+			sessionTitleFromItems([
+				{
+					kind: "userMessage",
+					id: SessionItemId("user-1"),
+					text: "fix the composer\nmore detail",
+				},
+			]),
+		).toBe("fix the composer");
 	});
 
 	it("collapses thinking around tool rows into one Codex Thought line", () => {

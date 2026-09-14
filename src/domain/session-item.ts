@@ -146,6 +146,14 @@ export function lastUserMessageText(
 	return null;
 }
 
+export function sessionTitleFromItems(items: readonly SessionItem[]): string {
+	const text = lastUserMessageText(items);
+	if (!text) return "New session";
+	const line = text.trim().split("\n")[0]?.trim() ?? "";
+	if (!line) return "New session";
+	return line.length > 48 ? `${line.slice(0, 47)}…` : line;
+}
+
 export function visibleSessionItems(
 	serverItems: readonly SessionItem[],
 	optimisticItems: readonly SessionItem[],

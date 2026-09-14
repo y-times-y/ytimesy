@@ -1,4 +1,4 @@
-import { Plus, X } from "lucide-react";
+import { PanelRight, Plus, X } from "lucide-react";
 import type { ReactNode } from "react";
 import type { FileChangeEntry } from "#/domain/session-item";
 import type { WorkspaceDesktop } from "#/domain/workspace-desktop";
@@ -38,6 +38,7 @@ export function WorkspaceInspector({
 	sideChatOpen,
 	onNewSideChat,
 	onCloseSideChat,
+	onCollapse,
 	sideChat,
 }: {
 	collapsed: boolean;
@@ -50,6 +51,7 @@ export function WorkspaceInspector({
 	sideChatOpen: boolean;
 	onNewSideChat: () => void;
 	onCloseSideChat: () => void;
+	onCollapse?: () => void;
 	sideChat: ReactNode;
 }) {
 	const currentView = activeView === "side" ? null : views[activeView];
@@ -103,6 +105,17 @@ export function WorkspaceInspector({
 				>
 					<Plus size={16} />
 				</button>
+				{onCollapse ? (
+					<button
+						type="button"
+						className="inspector-collapse"
+						aria-label="Hide tools"
+						title="Hide tools"
+						onClick={onCollapse}
+					>
+						<PanelRight size={16} />
+					</button>
+				) : null}
 			</div>
 			{activeView === "side" ? (
 				sideChat

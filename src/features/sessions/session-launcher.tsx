@@ -244,6 +244,11 @@ export function SessionLauncher({
 							onChange={setDraft}
 							onSubmit={sendDraft}
 							disabled={busy}
+							placeholder={
+								chatLayout
+									? "Add a follow up"
+									: "What would you like to work on?"
+							}
 							onKeyDown={handleComposerKey}
 						/>
 						{attachments.length > 0 && (
