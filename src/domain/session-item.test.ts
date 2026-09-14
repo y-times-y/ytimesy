@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { SessionItemId } from "./ids";
 import {
+	compactTimelineItems,
 	fileChangesFromSessionItems,
 	isConversationItem,
 	isTurnRunning,
@@ -170,5 +171,38 @@ describe("session items", () => {
 			},
 		];
 		expect(lastUserMessageText(items)).toBe("second");
+	});
+
+	it("collapses consecutive thinking rows into one Codex-style activity line", () => {
+		expect(
+			compactTimelineItems([
+				{
+					kind: "reasoning",
+					id: SessionItemId("r1"),
+					summaries: ["first"],
+				},
+				{
+					kind: "reasoning",
+					id: SessionItemId("r2"),
+					summaries: ["second"],
+				},
+				{
+					kind: "agentMessage",
+					id: SessionItemId("m1"),
+					text: "ok",
+				},
+			]),
+		).toEqual([
+			{
+				kind: "reasoning",
+				id: SessionItemId("r1"),
+				summaries: ["first", "second"],
+			},
+			{
+				kind: "agentMessage",
+				id: SessionItemId("m1"),
+				text: "ok",
+			},
+		]);
 	});
 });

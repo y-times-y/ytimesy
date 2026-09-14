@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { diffPreviewLines } from "#/domain/diff-preview";
-import { fileChangesHeading } from "#/domain/file-change-copy";
-import { fileBasename } from "#/domain/file-kind";
+import {
+	fileChangeDisplayPath,
+	fileChangesHeading,
+} from "#/domain/file-change-copy";
 import type { FileChangeEntry } from "#/domain/session-item";
 import { FileChangeCounts } from "../sessions/file-change-counts";
-import { FileTypeIcon } from "../sessions/file-type-icon";
 
 export function DiffInspector({
 	changes,
@@ -39,7 +40,7 @@ function DiffFilePreview({
 	change: FileChangeEntry;
 	defaultOpen: boolean;
 }) {
-	const name = fileBasename(change.path);
+	const path = fileChangeDisplayPath(change.path);
 	const lines = diffPreviewLines(change);
 	const [open, setOpen] = useState(defaultOpen);
 	return (
@@ -48,14 +49,8 @@ function DiffFilePreview({
 			open={open}
 			onToggle={(event) => setOpen(event.currentTarget.open)}
 		>
-			<summary>
-				<FileTypeIcon path={change.path} />
-				<span className="file-change-path" title={change.path}>
-					<span className="file-change-name">{name}</span>
-					{name !== change.path ? (
-						<span className="file-change-dir">{change.path}</span>
-					) : null}
-				</span>
+			<summary title={change.path}>
+				<span className="file-change-name">{path}</span>
 				<FileChangeCounts
 					additions={change.additions}
 					deletions={change.deletions}

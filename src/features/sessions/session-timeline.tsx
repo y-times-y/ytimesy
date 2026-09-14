@@ -1,10 +1,15 @@
 import { type UIEvent, useEffect, useRef } from "react";
 import { fileChangeTotals } from "#/domain/diff-preview";
-import { fileChangeActivityTitle } from "#/domain/file-change-copy";
+import { fileChangeActivity } from "#/domain/file-change-copy";
 import { activityGlyphForToolName } from "#/domain/session-activity";
-import type { SessionItem, SessionTurnStatus } from "#/domain/session-item";
+import {
+	compactTimelineItems,
+	type SessionItem,
+	type SessionTurnStatus,
+} from "#/domain/session-item";
 import { visibleShellCommand } from "#/domain/visible-shell-command";
 import { ActivityIcon } from "./activity-icon";
+import { AgentMarkdown } from "./agent-markdown";
 import { FileChangeCounts } from "./file-change-counts";
 
 export function SessionTimeline({
@@ -18,6 +23,7 @@ export function SessionTimeline({
 }) {
 	const listRef = useRef<HTMLOListElement>(null);
 	const stickToEnd = useRef(true);
+	const visible = compactTimelineItems(items);
 
 	useEffect(() => {
 		if (!stickToEnd.current) return;
@@ -40,7 +46,7 @@ export function SessionTimeline({
 			aria-label="Session"
 			onScroll={rememberScrollPin}
 		>
-			{items.map((item) => (
+			{visible.map((item) => (
 				<li key={item.id} data-kind={item.kind}>
 					<SessionItemView item={item} />
 				</li>
@@ -57,9 +63,17 @@ export function SessionTimeline({
 function SessionItemView({ item }: { item: SessionItem }) {
 	switch (item.kind) {
 		case "userMessage":
-			return <ConversationBlock text={item.text} speaker="user" />;
+			return (
+				<div className="session-message" data-role="user">
+					<p>{item.text}</p>
+				</div>
+			);
 		case "agentMessage":
-			return <ConversationBlock text={item.text} speaker="assistant" />;
+			return (
+				<div className="session-message" data-role="assistant">
+					<AgentMarkdown text={item.text} />
+				</div>
+			);
 		case "reasoning": {
 			const summaries = item.summaries.filter((summary) => summary.trim());
 			if (summaries.length === 0) {
@@ -123,6 +137,7 @@ function SessionItemView({ item }: { item: SessionItem }) {
 		}
 		case "fileChange": {
 			const totals = fileChangeTotals(item.changes);
+			const activity = fileChangeActivity(item.changes);
 			const status = activityStatusLabel(item.status);
 			return (
 				<div
@@ -133,7 +148,12 @@ function SessionItemView({ item }: { item: SessionItem }) {
 					<p>
 						<ActivityIcon glyph="edit" />
 						<span className="session-activity-title">
-							{fileChangeActivityTitle(item.changes)}
+							{activity.verb}{" "}
+							{activity.name ? (
+								<span className="session-file-name">{activity.name}</span>
+							) : (
+								`${item.changes.length} files`
+							)}
 						</span>
 						<FileChangeCounts
 							additions={totals.additions}
@@ -213,20 +233,6 @@ function activityStatus(status: string) {
 	return label ? (
 		<span className="session-activity-status">{label}</span>
 	) : null;
-}
-
-function ConversationBlock({
-	text,
-	speaker,
-}: {
-	text: string;
-	speaker: "user" | "assistant";
-}) {
-	return (
-		<div className="session-message" data-role={speaker}>
-			<p>{text}</p>
-		</div>
-	);
 }
 
 function activityStatusLabel(status: string): string | null {
