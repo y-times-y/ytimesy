@@ -4,6 +4,7 @@ import {
 	type AgentProviderId,
 	agentProviderById,
 } from "#/domain/agent-provider";
+import type { PublicProjectPicker } from "#/domain/github-project";
 import { selectedHarnessIsConnected } from "#/domain/harness-access";
 import { SessionItemId } from "#/domain/ids";
 import {
@@ -18,11 +19,11 @@ import {
 	type SlashCommand,
 } from "#/domain/slash-command";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
+import { ProjectContext } from "../projects/project-context";
 import {
 	preferredSessionModelId,
 	sessionModelsFromListed,
 } from "./model-capabilities";
-import { ProjectContext } from "./project-context";
 import { SessionControls } from "./session-controls";
 import { SessionTimeline } from "./session-timeline";
 import { SlashCommandPalette } from "./slash-command-palette";
@@ -42,6 +43,9 @@ export function SessionLauncher({
 	onStop,
 	onOpenSideChat,
 	onOpenInspector,
+	projectPicker,
+	onSelectProject,
+	onSelectBranch,
 }: {
 	session: PublicCodexSession;
 	busy: boolean;
@@ -54,6 +58,9 @@ export function SessionLauncher({
 	onStop: () => void;
 	onOpenSideChat: (question?: string) => void;
 	onOpenInspector: (view: InspectorView) => void;
+	projectPicker: PublicProjectPicker | null;
+	onSelectProject: (projectId: string) => void;
+	onSelectBranch: (branch: string) => void;
 }) {
 	const harnessReady = selectedHarnessIsConnected(
 		session.connection,
@@ -228,7 +235,14 @@ export function SessionLauncher({
 				fill={chatLayout}
 			/>
 			<div className="session-dock">
-				{visibleSlashCommands.length === 0 ? <ProjectContext /> : null}
+				{visibleSlashCommands.length === 0 ? (
+					<ProjectContext
+						picker={projectPicker}
+						busy={busy}
+						onSelectProject={onSelectProject}
+						onSelectBranch={onSelectBranch}
+					/>
+				) : null}
 				<div className="composer-shell">
 					<div className="session-composer">
 						{visibleSlashCommands.length > 0 ? (
