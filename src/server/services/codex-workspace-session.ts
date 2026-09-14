@@ -85,7 +85,8 @@ export function readCodexWorkspaceSession(
 
 /**
  * Boots from the private ChatGPT snapshot when one exists, otherwise starts
- * device-code login. Reuses the existing app-server daemon; does not add ACP.
+ * device-code login. Reuses a live proof VM and its app-server daemon when
+ * present; does not add ACP.
  */
 export function connectCodexWorkspaceSession(
 	machines: WorkspaceMachines,
@@ -100,6 +101,25 @@ export function connectCodexWorkspaceSession(
 		}
 
 		const snapshot = yield* Effect.tryPromise(() => readAuthSnapshotState());
+		const existingVm = yield* Effect.tryPromise(() => readProofVmState());
+		if (existingVm) {
+			const resumed = yield* authenticateProofWorkspace(
+				machines,
+				WorkspaceId(existingVm.workspaceId),
+				Boolean(snapshot),
+			);
+			if (
+				resumed.stage === "authenticated" ||
+				resumed.stage === "awaiting_device_code"
+			) {
+				return viewFromStatus(
+					resumed,
+					existingVm.workspaceId,
+					Boolean(snapshot),
+				);
+			}
+		}
+
 		const workspace = snapshot
 			? yield* Effect.tryPromise(() =>
 					machines.createProofWorkspace({
@@ -120,25 +140,11 @@ export function connectCodexWorkspaceSession(
 			}),
 		);
 
-		const status = snapshot
-			? yield* resumeCodexSession(machines, workspace.workspaceId, {
-					skipInitialTurn: true,
-				})
-			: yield* startInteractiveDeviceCodeLogin(
-					machines,
-					workspace.workspaceId,
-					{ skipInitialTurn: true },
-				);
-
-		if (snapshot && status.stage === "failed") {
-			const retry = yield* startInteractiveDeviceCodeLogin(
-				machines,
-				workspace.workspaceId,
-				{ skipInitialTurn: true },
-			);
-			return viewFromStatus(retry, workspace.workspaceId, Boolean(snapshot));
-		}
-
+		const status = yield* authenticateProofWorkspace(
+			machines,
+			workspace.workspaceId,
+			Boolean(snapshot),
+		);
 		return viewFromStatus(status, workspace.workspaceId, Boolean(snapshot));
 	}).pipe(
 		Effect.catchAll((cause) =>
@@ -214,6 +220,33 @@ export function stopCodexWorkspaceTurn(
 			}),
 		),
 	);
+}
+
+/**
+ * Resumes ChatGPT auth on an existing proof VM. Snapshot boots skip device
+ * code unless resume fails; a failed snapshot resume then starts device-code
+ * on that same VM rather than minting another from the burned refresh token.
+ */
+function authenticateProofWorkspace(
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+	snapshotAvailable: boolean,
+): Effect.Effect<CodexLoginStatus> {
+	return Effect.gen(function* () {
+		const status = snapshotAvailable
+			? yield* resumeCodexSession(machines, workspaceId, {
+					skipInitialTurn: true,
+				})
+			: yield* startInteractiveDeviceCodeLogin(machines, workspaceId, {
+					skipInitialTurn: true,
+				});
+		if (snapshotAvailable && status.stage === "failed") {
+			return yield* startInteractiveDeviceCodeLogin(machines, workspaceId, {
+				skipInitialTurn: true,
+			});
+		}
+		return status;
+	});
 }
 
 function viewFromStatus(

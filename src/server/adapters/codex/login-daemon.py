@@ -92,6 +92,14 @@ def account_from_result(result):
     return None
 
 
+def is_chatgpt_account(account):
+    return isinstance(account, dict) and account.get("type") == "chatgpt"
+
+
+def chatgpt_account_from_cli_login():
+    return {"type": "chatgpt", "planType": None}
+
+
 def listed_models(result):
     if not isinstance(result, dict):
         return []
@@ -496,34 +504,55 @@ def write_json_file(path, payload):
     os.replace(temporary, path)
 
 
+def read_account_once(proc, request_id, refresh_token, timeout=20):
+    send(
+        proc,
+        {
+            "method": "account/read",
+            "id": request_id,
+            "params": {"refreshToken": refresh_token},
+        },
+    )
+    message, _ = wait_for_id(proc, request_id, timeout)
+    if "error" in message:
+        return None, message["error"].get("message", "account/read failed")
+    return account_from_result(message.get("result")), None
+
+
 def read_chatgpt_account(proc, timeout=45):
+    """Reads the ChatGPT account from the live access token first.
+
+    ChatGPT refresh tokens are single-use. Looping account/read with
+    refreshToken=true after a snapshot boot burns the snapshotted token and
+    then looks logged-out even when CLI login and the access token are valid.
+    Refresh at most once, and only if the unrefreshed read never returned
+    type=chatgpt.
+    """
     deadline = time.time() + timeout
     request_id = 50
     last_account = None
     last_error = None
     while time.time() < deadline:
         request_id += 1
-        send(
-            proc,
-            {
-                "method": "account/read",
-                "id": request_id,
-                "params": {"refreshToken": True},
-            },
-        )
-        message, _ = wait_for_id(proc, request_id, 20)
-        if "error" in message:
-            last_error = message["error"].get("message", "account/read failed")
+        account, error = read_account_once(proc, request_id, False)
+        if error:
+            last_error = error
             time.sleep(1)
             continue
         last_error = None
-        last_account = account_from_result(message.get("result"))
-        if last_account and last_account.get("type") == "chatgpt":
-            return last_account
+        last_account = account
+        if is_chatgpt_account(account):
+            return account
         time.sleep(1)
-    if last_error:
+    request_id += 1
+    account, error = read_account_once(proc, request_id, True)
+    if is_chatgpt_account(account):
+        return account
+    if error and last_account is None:
+        fail(error, stageDetail="accountRead")
+    if last_error and last_account is None and not error:
         fail(last_error, stageDetail="accountRead")
-    return last_account
+    return last_account if last_account is not None else account
 
 
 def wait_for_login(proc, timeout):
@@ -591,49 +620,47 @@ def main():
         send(proc, {"method": "initialized", "params": {}})
         already_logged_in = cli_has_chatgpt_login()
         account = read_chatgpt_account(proc, timeout=45 if already_logged_in else 8)
-        if not (account and account.get("type") == "chatgpt"):
+        if not is_chatgpt_account(account):
             if already_logged_in:
-                fail(
-                    "Codex CLI has a ChatGPT login, but app-server account/read did not return a ChatGPT account",
-                    stageDetail="accountRead",
+                account = chatgpt_account_from_cli_login()
+            else:
+                send(
+                    proc,
+                    {
+                        "method": "account/login/start",
+                        "id": 4,
+                        "params": {"type": "chatgptDeviceCode"},
+                    },
                 )
-            send(
-                proc,
-                {
-                    "method": "account/login/start",
-                    "id": 4,
-                    "params": {"type": "chatgptDeviceCode"},
-                },
-            )
-            login, _ = wait_for_id(proc, 4, 45)
-            if "error" in login:
-                fail(
-                    login["error"].get("message", "account/login/start failed"),
-                    stageDetail="loginStart",
-                    login=login,
+                login, _ = wait_for_id(proc, 4, 45)
+                if "error" in login:
+                    fail(
+                        login["error"].get("message", "account/login/start failed"),
+                        stageDetail="loginStart",
+                        login=login,
+                    )
+                result = login.get("result") if isinstance(login.get("result"), dict) else {}
+                user_code = result.get("userCode")
+                verification_url = result.get("verificationUrl")
+                login_id = result.get("loginId")
+                if not user_code or not verification_url or not login_id:
+                    fail(
+                        "chatgptDeviceCode response was missing loginId, verificationUrl, or userCode",
+                        login=result,
+                    )
+                write_status(
+                    {
+                        "stage": "awaiting_device_code",
+                        "loginId": login_id,
+                        "verificationUrl": verification_url,
+                        "userCode": user_code,
+                        "codexVersion": version,
+                    }
                 )
-            result = login.get("result") if isinstance(login.get("result"), dict) else {}
-            user_code = result.get("userCode")
-            verification_url = result.get("verificationUrl")
-            login_id = result.get("loginId")
-            if not user_code or not verification_url or not login_id:
-                fail(
-                    "chatgptDeviceCode response was missing loginId, verificationUrl, or userCode",
-                    login=result,
-                )
-            write_status(
-                {
-                    "stage": "awaiting_device_code",
-                    "loginId": login_id,
-                    "verificationUrl": verification_url,
-                    "userCode": user_code,
-                    "codexVersion": version,
-                }
-            )
-            wait_for_login(proc, 12 * 60)
-            account = read_chatgpt_account(proc, timeout=45)
+                wait_for_login(proc, 12 * 60)
+                account = read_chatgpt_account(proc, timeout=45)
 
-        if not account or account.get("type") != "chatgpt":
+        if not is_chatgpt_account(account):
             fail(
                 "Login finished without a ChatGPT account",
                 accountType=None if not account else account.get("type"),
