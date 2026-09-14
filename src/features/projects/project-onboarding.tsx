@@ -1,6 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import type { Project, RepositoryChoice } from "../../domain/projects";
+import { authClient } from "../auth/client";
 import { IdentityGate } from "../auth/identity-gate";
 import { requestJson } from "./api";
 
@@ -12,6 +13,9 @@ export function ProjectOnboarding() {
 	);
 }
 function RepositorySetup() {
+	const session = authClient.useSession();
+	const signedInAs =
+		session.data?.user.email ?? session.data?.user.name ?? null;
 	const [selected, setSelected] = useState<RepositoryChoice | null>(null);
 	const [branch, setBranch] = useState("");
 	const [callbackFailed, setCallbackFailed] = useState(false);
@@ -196,6 +200,17 @@ function RepositorySetup() {
 				<a className="setup-back" href="/">
 					Back to workspace
 				</a>
+				{signedInAs && <p>Signed in as {signedInAs}</p>}
+				<button
+					type="button"
+					className="setup-back"
+					onClick={async () => {
+						await authClient.signOut();
+						window.location.assign("/");
+					}}
+				>
+					Sign out
+				</button>
 			</section>
 		</main>
 	);
