@@ -1,7 +1,7 @@
 import { Plus, X } from "lucide-react";
 import type { ReactNode } from "react";
 import type { FileChangeEntry } from "#/domain/session-item";
-import { FileChangeList } from "../sessions/file-change-row";
+import { DiffInspector } from "./diff-inspector";
 
 export type ToolsView = "diff" | "terminal" | "preview";
 export type InspectorView = ToolsView | "side";
@@ -98,7 +98,7 @@ export function WorkspaceInspector({
 			{activeView === "side" ? (
 				sideChat
 			) : activeView === "diff" && fileChanges.length > 0 ? (
-				<FileChangeList changes={fileChanges} />
+				<DiffInspector changes={fileChanges} />
 			) : currentView ? (
 				<section className="inspector-empty" aria-live="polite">
 					<h2>{currentView.title}</h2>

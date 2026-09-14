@@ -48,15 +48,39 @@ describe("session items", () => {
 				id: SessionItemId("patch-1"),
 				status: "completed",
 				changes: [
-					{ path: "README.md", change: "update", additions: 4, deletions: 1 },
-					{ path: "src/app.ts", change: "add", additions: 12, deletions: 0 },
+					{
+						path: "README.md",
+						change: "update",
+						additions: 4,
+						deletions: 1,
+						preview: "--- a/README.md\n+setup\n",
+					},
+					{
+						path: "src/app.ts",
+						change: "add",
+						additions: 12,
+						deletions: 0,
+						preview: "export {}\n",
+					},
 				],
 			},
 		];
 
 		expect(fileChangesFromSessionItems(items)).toEqual([
-			{ path: "README.md", change: "update", additions: 4, deletions: 1 },
-			{ path: "src/app.ts", change: "add", additions: 12, deletions: 0 },
+			{
+				path: "README.md",
+				change: "update",
+				additions: 4,
+				deletions: 1,
+				preview: "--- a/README.md\n+setup\n",
+			},
+			{
+				path: "src/app.ts",
+				change: "add",
+				additions: 12,
+				deletions: 0,
+				preview: "export {}\n",
+			},
 		]);
 	});
 

@@ -42,7 +42,7 @@ export function TaskInput({
 			ref={inputRef}
 			aria-label={label}
 			placeholder={placeholder}
-			rows={2}
+			rows={1}
 			value={value}
 			disabled={disabled}
 			onChange={(event) => {

@@ -17,12 +17,11 @@
 .session-context {
 	display: flex;
 	align-items: center;
-	gap: 16px;
-	margin: 0 18px -14px;
-	padding: 10px 16px 24px;
-	border: 1px solid #444;
-	border-radius: 16px 16px 0 0;
-	background: #292929;
+	gap: 12px;
+	margin: 0;
+	padding: 8px 14px 0;
+	border: 0;
+	background: transparent;
 }
 .context-select {
 	border: 0;
@@ -42,12 +41,10 @@
 .session-composer {
 	position: relative;
 	overflow: hidden;
-	border: 1px solid #505050;
-	border-radius: 18px;
-	background: #303030;
-	box-shadow:
-		0 16px 44px #0005,
-		inset 0 1px 0 #ffffff05;
+	border: 1px solid #3f3f3f;
+	border-radius: 14px;
+	background: #262626;
+	box-shadow: 0 10px 28px #0004;
 }
 .session-composer:has(textarea:focus-visible) {
 	border-color: #808080;
@@ -55,17 +52,17 @@
 .session-composer textarea {
 	display: block;
 	width: 100%;
-	min-height: 84px;
+	min-height: 44px;
 	max-height: min(240px, 40dvh);
 	overflow-y: auto;
 	resize: none;
-	padding: 23px 25px 12px;
+	padding: 10px 16px 8px;
 	color: #ededed;
 	border: 0;
 	background: transparent;
 	font: inherit;
 	font-size: 16px;
-	line-height: 1.6;
+	line-height: 1.45;
 	outline: none;
 }
 .session-composer textarea::placeholder {
@@ -75,7 +72,7 @@
 	display: flex;
 	align-items: center;
 	gap: 12px;
-	padding: 10px 14px 14px;
+	padding: 4px 10px 10px;
 }
 .session-controls {
 	display: flex;
@@ -336,23 +333,17 @@
 .session-timeline {
 	list-style: none;
 	margin: 0;
-	padding: 4px 4px 18px;
+	padding: 8px 8px 16px;
 	display: flex;
 	flex-direction: column;
-	gap: 18px;
+	justify-content: flex-start;
+	gap: 10px;
 	flex: 1;
 	min-height: 0;
 	overflow-y: auto;
 	overscroll-behavior: contain;
 	scrollbar-width: thin;
 	scrollbar-color: #333 transparent;
-}
-.session-timeline-spacer {
-	flex: 1 1 auto;
-	min-height: 12px;
-	padding: 0;
-	border: 0;
-	background: none;
 }
 .session-timeline li[data-kind] {
 	flex: 0 0 auto;
@@ -366,22 +357,26 @@
 .session-message p {
 	margin: 0;
 	white-space: pre-wrap;
-	font-size: 15px;
-	line-height: 1.6;
+	font-size: 14px;
+	line-height: 1.55;
 	color: #ececec;
 }
 .session-message[data-role="user"] {
 	display: flex;
+	justify-content: flex-end;
 }
 .session-message[data-role="user"] p {
-	max-width: 100%;
+	max-width: min(36em, 86%);
 	width: fit-content;
-	padding: 14px 16px;
-	border: 1px solid #2c2c2c;
-	border-radius: 14px;
-	background: #161616;
+	padding: 8px 14px;
+	border: 0;
+	border-radius: 16px;
+	background: #2a2a2a;
+	font-size: 14px;
+	line-height: 1.45;
 }
 .session-message[data-role="assistant"] p {
+	max-width: 42em;
 	padding: 2px 2px 0;
 }
 .session-working {
@@ -435,11 +430,11 @@
 .session-activity[data-kind="commandExecution"] summary code {
 	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 	font-size: 12px;
-	color: #d8d8d8;
+	color: #cfcfcf;
 }
 .session-activity[data-kind="reasoning"] > p,
 .session-activity[data-kind="plan"] > p {
-	margin: 8px 0 0 24px;
+	margin: 6px 0 0 24px;
 	white-space: pre-wrap;
 	color: #a3a3a3;
 	font-size: 13px;
@@ -449,34 +444,28 @@
 .session-activity[data-kind="fileChange"],
 .session-activity[data-kind="error"] {
 	overflow: hidden;
-	border: 1px solid #2a2a2a;
-	border-radius: 10px;
-	background: #101010;
-}
-.session-activity[data-kind="commandExecution"] summary,
-.session-activity[data-kind="fileChange"] > p,
-.session-activity[data-kind="error"] > p {
-	padding: 9px 12px;
-	background: #151515;
-	border-bottom: 1px solid #242424;
-	font-size: 12px;
+	border: 0;
+	border-radius: 0;
+	background: transparent;
 }
 .session-activity[data-kind="error"] {
-	border-color: #3d2a2a;
+	border: 1px solid #3d2a2a;
+	border-radius: 10px;
+	background: #1a1212;
 }
 .session-activity[data-kind="error"] > p {
-	background: #1a1212;
-	border-bottom: 0;
+	padding: 8px 10px;
 	color: #d7c4c4;
 	white-space: pre-wrap;
 }
 .session-output {
-	margin: 0;
-	max-height: 180px;
+	margin: 6px 0 0 24px;
+	max-height: 160px;
 	overflow: auto;
-	padding: 10px 12px;
-	border: 0;
-	background: #0c0c0c;
+	padding: 8px 10px;
+	border: 1px solid #242424;
+	border-radius: 8px;
+	background: #101010;
 	color: #c6c6c6;
 	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 	font-size: 12px;
@@ -485,7 +474,7 @@
 }
 .session-activity-meta {
 	margin: 0;
-	padding: 6px 12px 10px;
+	padding: 4px 0 0 24px;
 	color: #6f6f6f;
 	font-size: 11px;
 }
@@ -555,8 +544,8 @@
 	line-height: 1.3;
 }
 .session-composer:has(.slash-palette) textarea {
-	min-height: 56px;
-	padding-top: 14px;
+	min-height: 44px;
+	padding-top: 10px;
 }
 .file-type-icon {
 	display: grid;
@@ -615,11 +604,14 @@
 	font-variant-numeric: tabular-nums;
 	font-size: 11px;
 }
+.session-activity[data-kind="fileChange"] .file-change-stats {
+	margin-left: 4px;
+}
 .file-change-additions {
-	color: #cfcfcf;
+	color: #9bb89f;
 }
 .file-change-deletions {
-	color: #8a8a8a;
+	color: #c49a9a;
 }
 .side-chat {
 	display: flex;
@@ -699,8 +691,8 @@
 @container (max-width: 480px) {
 	.session-context {
 		gap: 8px;
-		margin-inline: 8px;
-		padding: 6px 10px 20px;
+		margin-inline: 0;
+		padding: 8px 10px 0;
 	}
 	.context-select {
 		gap: 5px;
@@ -709,8 +701,8 @@
 		flex: 1;
 	}
 	.session-composer textarea {
-		padding: 18px 16px 10px;
-		min-height: 80px;
+		padding: 10px 12px 8px;
+		min-height: 44px;
 	}
 	.session-toolbar {
 		display: grid;
