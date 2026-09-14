@@ -10,8 +10,10 @@ import type { PublicProjectPicker } from "#/domain/github-project";
 import { hintForHarness } from "#/domain/harness-api-key";
 import {
 	fileChangesFromSessionItems,
+	lastUserMessageText,
 	sessionTitleFromItems,
 } from "#/domain/session-item";
+import { chatsListedInSidebar } from "#/domain/sidebar-chats";
 import type { WorkspaceDesktop } from "#/domain/workspace-desktop";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
 import {
@@ -51,7 +53,6 @@ export function WorkspaceHome({
 }) {
 	const compact = useCompactLayout();
 	const [session, setSession] = useState(initialSession);
-	const [showSetup, setShowSetup] = useState(false);
 	const [projectPicker, setProjectPicker] =
 		useState<PublicProjectPicker | null>(null);
 	const [projectsOpen, setProjectsOpen] = useState(false);
@@ -86,6 +87,12 @@ export function WorkspaceHome({
 	const agentStatus = connectedAgentStatus(session.connection);
 	const connectedProvider = connectedProviderId(session.connection);
 	const sessionTitle = sessionTitleFromItems(session.items);
+	const hasUserMessage = Boolean(lastUserMessageText(session.items));
+	const sidebarChats = chatsListedInSidebar({
+		projectSelected: Boolean(projectPicker?.selectedProjectId),
+		hasUserMessage,
+		title: sessionTitle,
+	});
 
 	useEffect(() => {
 		if (compact) setProjectsOpen(false);
@@ -202,13 +209,23 @@ export function WorkspaceHome({
 			.finally(() => setPickerBusy(false));
 	}
 
-	function addProject() {
-		if (projectPicker?.installUrl) {
-			window.open(projectPicker.installUrl, "_blank", "noopener,noreferrer");
+	function focusProjectPicker() {
+		document
+			.querySelector<HTMLButtonElement>('[aria-label="Project"]')
+			?.click();
+	}
+
+	function startNewChat() {
+		if (!projectPicker?.selectedProjectId) {
+			setProjectsOpen(true);
+			requestAnimationFrame(focusProjectPicker);
 			return;
 		}
-		setShowSetup(true);
-		if (compact) setProjectsOpen(false);
+		document
+			.querySelector<HTMLTextAreaElement>(
+				'textarea[aria-label="Task description"]',
+			)
+			?.focus();
 	}
 
 	function sendSideChat(text: string) {
@@ -226,9 +243,10 @@ export function WorkspaceHome({
 			<ProjectSidebar
 				expanded={projectsOpen}
 				onToggle={() => setProjectsOpen((open) => !open)}
-				onAddProject={addProject}
 				picker={projectPicker}
-				onSelectProject={selectProject}
+				chats={sidebarChats}
+				onNewChat={startNewChat}
+				onFocusProject={focusProjectPicker}
 			/>
 			<main className="workspace-main" inert={compact && projectsOpen}>
 				<div
@@ -343,17 +361,6 @@ export function WorkspaceHome({
 								onSelectProject={selectProject}
 								onSelectBranch={selectBranch}
 							/>
-							{showSetup && (
-								<div className="project-setup-notice" role="status">
-									<p>
-										{projectPicker?.message ??
-											"GitHub App credentials are not configured."}
-									</p>
-									<button type="button" onClick={() => setShowSetup(false)}>
-										Dismiss
-									</button>
-								</div>
-							)}
 						</div>
 					</section>
 					<div className="inspector-frame">

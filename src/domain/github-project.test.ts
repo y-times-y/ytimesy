@@ -6,7 +6,9 @@ import {
 	gitHubRepositoryFromApi,
 	githubAppInstallUrl,
 	githubProjectId,
+	githubRepositoryName,
 	parseGitHubProjectId,
+	projectPickerLabel,
 	publicProjectPicker,
 	resolveSelectedBranch,
 	resolveSelectedProject,
@@ -236,5 +238,40 @@ describe("publicProjectPicker", () => {
 			installUrl: "https://github.com/apps/ytimesy/installations/new",
 			message: null,
 		});
+	});
+});
+
+describe("project picker labels", () => {
+	it("uses the repository name unless two repos share it", () => {
+		expect(githubRepositoryName("y-times-y/ytimesy")).toBe("ytimesy");
+		expect(
+			projectPickerLabel(
+				{
+					projectId: "github:y-times-y/ytimesy",
+					fullName: "y-times-y/ytimesy",
+					defaultBranch: "master",
+					private: true,
+				},
+				[],
+			),
+		).toBe("ytimesy");
+		expect(
+			projectPickerLabel(
+				{
+					projectId: "github:y-times-y/ytimesy",
+					fullName: "y-times-y/ytimesy",
+					defaultBranch: "master",
+					private: true,
+				},
+				[
+					{
+						projectId: "github:other/ytimesy",
+						fullName: "other/ytimesy",
+						defaultBranch: "main",
+						private: false,
+					},
+				],
+			),
+		).toBe("y-times-y/ytimesy");
 	});
 });
