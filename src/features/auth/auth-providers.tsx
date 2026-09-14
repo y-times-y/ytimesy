@@ -8,8 +8,6 @@ import { TooltipProvider } from "#/components/ui/tooltip";
 import { requestJson } from "../projects/api";
 import { authClient } from "./client";
 
-const githubOnly = ["github"] as const;
-
 export function AuthProviders({ children }: { children: ReactNode }) {
 	const navigate = useNavigate();
 	const providers = useQuery({
@@ -31,7 +29,7 @@ export function AuthProviders({ children }: { children: ReactNode }) {
 				<AuthProvider
 					authClient={authClient}
 					redirectTo="/"
-					socialProviders={providers.data?.socialProviders ?? githubOnly}
+					socialProviders={providers.data?.socialProviders ?? ["github"]}
 					emailAndPassword={{
 						enabled: true,
 						requireEmailVerification: true,
