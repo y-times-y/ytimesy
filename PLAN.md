@@ -12,7 +12,7 @@ V0 is complete when Het connects a real private repository and his own agent acc
 
 1. Sign in; install a GitHub App with selected-repository access.
 2. Choose a repository and branch. Prepare a project environment snapshot (dependencies, project configuration, and necessary credentials). Each agent session then gets its own Freestyle VM copied from that snapshot.
-3. Connect agent access through that provider's supported sign-in. Offered v0 agents are Codex and Claude. ytimesy is the host; neither provider is the product. Validate each official protocol before claiming support. Claude Code must stay unmodified; each user authenticates with their own Claude account or API key inside that binary. Do not offer Claude.ai login inside ytimesy, intermediate Anthropic billing, or use Anthropic marks as ytimesy branding.
+3. Connect agent access through that provider's supported sign-in. Offered v0 agents are Codex, Claude, and OpenCode. ytimesy is the host; none of these is the product. Validate each official protocol before claiming support. Claude Code must stay unmodified; each user authenticates with their own Claude account or API key inside that binary. Do not offer Claude.ai login inside ytimesy, intermediate Anthropic billing, or use Anthropic marks as ytimesy branding. OpenCode is the path when the user does not want a Codex or Claude Code subscription: run OpenCode in the workspace (`opencode serve`) and load models from that agent, including OpenCode Zen's currently free models. Do not hardcode a free-model catalog, silently fall back to paid inference, or use OpenCode to launder a Claude Pro subscription.
 4. Start and steer an agent session. Show messages, tool activity, progress, approvals, cancellation, and actionable failures.
 5. Inspect that session's workspace through Diff, Terminal, and Preview. The terminal is explicitly required in v0.
 6. Continue active work independently of the web application request or browser connection. Reconnect to retained sessions; expose expired authentication and recovery states clearly.
@@ -20,13 +20,13 @@ V0 is complete when Het connects a real private repository and his own agent acc
 
 Workspace isolation: a Project owns a prepared environment (Rigkit apply / clone-and-install, then a Freestyle snapshot or a warm spare that agents never edit). That template is shared; the running checkout is not. Each agent session owns a WorkspaceId: a distinct Freestyle VM copied from the template (`vms.create({ snapshotId })` or `vm.fork()` of the unused warm spare). Isolation is the VM copy, not git worktrees on one disk. Competing agents run in parallel, each with its own working tree, index, ports, PTY, and preview. Reconnect to an existing session pauses/resumes that same VM. Starting another agent copies again from the clean template — never from an agent VM that already has edits. Each workspace checkout uses its own branch for publication.
 
-Project context is an agent-context concern, not a VM concern and not a Codex-only concern. Agents under the same Project share a durable briefing plus captured reasoning traces from sibling sessions, including across Codex and Claude. Persist those on the Project in ytimesy records. Each provider adapter injects the relevant traces into that agent's session so the next agent can reuse how something was figured out, not only a compacted fact list. Still a new session per agent — do not share a live chat. Inject related traces (same area of the repo, related task), not every thought from every session. After a session, keep the traces and a short briefing update; do not require the other agent to replay the full transcript. Resume continues one session; forking a conversation is explicit, not how every new agent starts.
+Project context is an agent-context concern, not a VM concern and not a Codex-only concern. Agents under the same Project share a durable briefing plus captured reasoning traces from sibling sessions, including across Codex, Claude, and OpenCode. Persist those on the Project in ytimesy records. Each provider adapter injects the relevant traces into that agent's session so the next agent can reuse how something was figured out, not only a compacted fact list. Still a new session per agent — do not share a live chat. Inject related traces (same area of the repo, related task), not every thought from every session. After a session, keep the traces and a short briefing update; do not require the other agent to replay the full transcript. Resume continues one session; forking a conversation is explicit, not how every new agent starts.
 
-Environment speed is separate from context. A new agent VM is a copy of an already-prepared project snapshot (`vm.fork()` or `vms.create({ snapshotId })`), so opening another agent does not run setup. The first project setup must still be fast: boot a prebaked tools image (Node, git, Codex CLI, Claude Code CLI, package store — no user secrets), apply that user's private per-provider auth snapshot, then clone and install with warm caches, and snapshot immediately. Do not install OS tooling per project, do not copy Cursor hourly Builds as the user-visible wait, and do not block a second agent on `pnpm install`. Composer can bind as soon as that session's VM is reachable.
+Environment speed is separate from context. A new agent VM is a copy of an already-prepared project snapshot (`vm.fork()` or `vms.create({ snapshotId })`), so opening another agent does not run setup. The first project setup must still be fast: boot a prebaked tools image (Node, git, Codex CLI, Claude Code CLI, OpenCode CLI, package store — no user secrets), apply that user's private per-provider auth snapshot, then clone and install with warm caches, and snapshot immediately. Do not install OS tooling per project, do not copy Cursor hourly Builds as the user-visible wait, and do not block a second agent on `pnpm install`. Composer can bind as soon as that session's VM is reachable.
 
 Do not put two agents in one checkout, use git worktrees to fake isolation, serialize competing edits on a shared VM, or re-run `pnpm install` when opening a new agent.
 
-Later: local session import/handoff, agents beyond Codex and Claude, non-Git folders, fresh project/repository creation, advanced collaboration, automations, and billing UI. Preserve clean extension boundaries without implementing speculative features.
+Later: local session import/handoff, agents beyond Codex, Claude, and OpenCode, non-Git folders, fresh project/repository creation, advanced collaboration, automations, and billing UI. Preserve clean extension boundaries without implementing speculative features.
 
 ## Experience and visual direction
 
@@ -37,6 +37,8 @@ ytimesy has its own monochrome visual identity: Inter interface typography from 
 Codex onboarding target: Connect Codex → copy a one-time code → authorize on OpenAI's page → automatically detect completion. Preserve progress and support expiry/retry/reconnection. Never ask for secrets in chat. Provider usage remains billed to the user's supported subscription or explicitly selected API account; infrastructure usage is separate.
 
 Claude onboarding target: run unmodified Claude Code in the user's workspace VM and complete Anthropic's own sign-in in that binary. Each end user brings their own Claude subscription or API key. Do not collect Claude.ai passwords in ytimesy chat, wrap Claude.ai login in the ytimesy origin, or bill Anthropic usage through ytimesy.
+
+OpenCode onboarding target: install OpenCode in the workspace and connect through its official server (`opencode serve`). Default path is the user's OpenCode Zen account so they can use Zen's currently free models without a Codex or Claude Code subscription; they may also attach their own provider keys or local models. Load model names from the connected agent. Some Zen free models are time-limited and may use prompts for training — surface that from the provider, do not hide it. Do not store Zen keys in shared images or bill Zen through ytimesy.
 
 ## Stack decisions
 
@@ -108,7 +110,7 @@ Million-developer scalability is an architectural ambition, not a verified launc
 Scaffold TanStack Start with TypeScript, lint/typecheck/build scripts, and a clean ytimesy app shell. Introduce the first domain models and Effect service boundary through a real narrow operation. Use honest empty/unconfigured states; do not fabricate repos, sessions, or successful connections.
 
 ### 2. Integration proof
-Verify official Codex remote login and app-server protocol in a user-isolated Freestyle workspace. Verify official Claude Code in the same class of workspace with user-owned credentials. Verify Rigkit installation/setup operations and authentication interaction. Establish supported versions and cleanup behavior. User subscription access is not interchangeable with a general inference API.
+Verify official Codex remote login and app-server protocol in a user-isolated Freestyle workspace. Verify official Claude Code in the same class of workspace with user-owned credentials. Verify OpenCode `serve` and that model/list includes whatever Zen currently reports as free, without inventing names. Verify Rigkit installation/setup operations and authentication interaction. Establish supported versions and cleanup behavior. User subscription access is not interchangeable with a general inference API.
 
 ### 3. Identity, records, and GitHub
 Integrate Better Auth and select Postgres hosting, implement migrations and tenant-scoped access, install GitHub App, and list authorized repositories. Save project/branch selection. Configuration requiring user/provider account access may remain a clearly reported blocker, not mocked success.
@@ -134,6 +136,8 @@ Run typecheck and production build for structural changes. Unit-test meaningful 
 - Effect: https://effect.website/docs/getting-started/introduction/
 - Codex auth: https://developers.openai.com/codex/auth
 - Claude hosting/auth constraints: https://code.claude.com/docs/en/legal-and-compliance
+- OpenCode server: https://opencode.ai/docs/server/
+- OpenCode Zen (including free models): https://dev.opencode.ai/docs/zen/
 
 Recheck versioned APIs before implementing. Validate subscription connection using the official provider protocol; a successful login alone does not establish supported execution or token lifecycle behavior. Prior research notes are historical context, not a substitute for current documentation.
 
@@ -151,7 +155,7 @@ Recheck versioned APIs before implementing. Validate subscription connection usi
 
 ### Goal
 
-Use ytimesy to work on its own repository with a real cloud coding agent. Preserve the approved UI while building the first complete flow: sign in → connect this repository → connect Codex or Claude → launch a Freestyle workspace → send a task → inspect changes, terminal, and preview → publish explicitly.
+Use ytimesy to work on its own repository with a real cloud coding agent. Preserve the approved UI while building the first complete flow: sign in → connect this repository → connect Codex, Claude, or OpenCode → launch a Freestyle workspace → send a task → inspect changes, terminal, and preview → publish explicitly.
 
 ### Current evidence and limits
 
@@ -175,13 +179,13 @@ Better Auth, PostgreSQL records, GitHub authorization, durable jobs, live termin
 
 Keep the plain monochrome workspace, Inter typography, compact growing composer, responsive panels, hover-revealed sidebar rail, and model-specific reasoning controls. The approved logo is the faceted rising-bar Y in `public/brand/mark.svg`. `mark-light.svg` is light artwork for dark backgrounds; `mark-dark.svg` is dark artwork for light backgrounds. Keep the current logo and avoid restarting brand exploration.
 
-Offered coding agents are Codex and Claude. Provider protocols, login, and marks stay in adapters; do not treat ytimesy as a Codex product. Claude Code stays unmodified, with per-user credentials and a private auth snapshot separate from Codex.
+Offered coding agents are Codex, Claude, and OpenCode. Provider protocols, login, and marks stay in adapters; do not treat ytimesy as a Codex product. Claude Code stays unmodified, with per-user credentials and a private auth snapshot separate from Codex. OpenCode is the no-Codex/Claude-subscription option; free Zen models are listed by the connected agent, not hardcoded.
 
 Each new agent session is a new VM copied from the project's prepared snapshot or unused warm spare, not a second git worktree on a shared machine. Resume is the same VM; a second agent is another copy. Fork only from a clean template so agent B does not inherit agent A's dirty tree.
 
 Shared project context is injected into the new agent's session, independent of that VM copy and of which provider is running. Include sibling reasoning traces, not only compacted facts.
 
-First project setup boots a prebaked tools image (both CLIs), applies the user's private provider auth snapshot, then clone/install with caches and snapshot. Later agents copy that snapshot with no setup wait.
+First project setup boots a prebaked tools image (Codex, Claude Code, and OpenCode CLIs), applies the user's private provider auth snapshot, then clone/install with caches and snapshot. Later agents copy that snapshot with no setup wait.
 
 Use the installed self-documenting-code skill. Keep routes thin and put provider operations behind explicit adapters. Do not fabricate integration success or silently substitute paid model API access for the user's subscription.
 
