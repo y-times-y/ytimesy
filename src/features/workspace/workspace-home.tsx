@@ -1,10 +1,16 @@
 import { useServerFn } from "@tanstack/react-start";
 import { PanelRight } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { connectedAgentStatus, connectedProviderId } from "#/domain/agent-connection";
+import {
+	connectedAgentStatus,
+	connectedProviderId,
+} from "#/domain/agent-connection";
 import type { AgentProviderId } from "#/domain/agent-provider";
 import { hintForHarness } from "#/domain/harness-api-key";
-import { fileChangesFromSessionItems } from "#/domain/session-item";
+import {
+	fileChangesFromSessionItems,
+	sessionTitleFromItems,
+} from "#/domain/session-item";
 import type { WorkspaceDesktop } from "#/domain/workspace-desktop";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
 import { AgentProviderMark } from "../sessions/agent-provider-mark";
@@ -24,10 +30,7 @@ import {
 } from "../sessions/model-capabilities";
 import { SessionLauncher } from "../sessions/session-launcher";
 import { SideChatPanel } from "../sessions/side-chat-panel";
-import {
-	getWorkspaceDesktop,
-	startWorkspaceDesktopFn,
-} from "./desktop.fn";
+import { getWorkspaceDesktop, startWorkspaceDesktopFn } from "./desktop.fn";
 import { ProjectSidebar } from "./project-sidebar";
 import { useCompactLayout } from "./use-compact-layout";
 import {
@@ -55,7 +58,9 @@ export function WorkspaceHome({
 	const [apiKeyHints, setApiKeyHints] = useState<
 		Partial<Record<AgentProviderId, string>>
 	>({});
-	const [desktop, setDesktop] = useState<WorkspaceDesktop>({ status: "stopped" });
+	const [desktop, setDesktop] = useState<WorkspaceDesktop>({
+		status: "stopped",
+	});
 	const [desktopBusy, setDesktopBusy] = useState(false);
 	const connect = useServerFn(connectCodexSession);
 	const sendTask = useServerFn(sendCodexSessionTask);
@@ -70,6 +75,7 @@ export function WorkspaceHome({
 		session.connection.status === "authenticated" || session.items.length > 0;
 	const agentStatus = connectedAgentStatus(session.connection);
 	const connectedProvider = connectedProviderId(session.connection);
+	const sessionTitle = sessionTitleFromItems(session.items);
 
 	useEffect(() => {
 		if (compact) setProjectsOpen(false);
@@ -85,6 +91,11 @@ export function WorkspaceHome({
 		});
 		void loadDesktop().then(setDesktop);
 	}, [loadDesktop, loadKeys]);
+
+	useEffect(() => {
+		if (!chatLayout) return;
+		setInspectorOpen(true);
+	}, [chatLayout]);
 
 	useEffect(() => {
 		if (compact || openedDiff.current || fileChanges.length === 0) return;
@@ -161,35 +172,11 @@ export function WorkspaceHome({
 				}}
 			/>
 			<main className="workspace-main" inert={compact && projectsOpen}>
-				<header className="workspace-header">
-					<div className="header-navigation">
-						<span>Workspace</span>
-						{connectedProvider && agentStatus ? (
-							<span className="header-agent-status">
-								<AgentProviderMark provider={connectedProvider} size={16} />
-								{agentStatus}
-							</span>
-						) : null}
-					</div>
-					<div className="header-tools">
-						<button
-							type="button"
-							className="panel-toggle inspector-toggle"
-							aria-label={inspectorOpen ? "Hide tools" : "Show tools"}
-							title={inspectorOpen ? "Hide tools" : "Show tools"}
-							aria-expanded={inspectorOpen}
-							aria-controls="workspace-inspector"
-							onClick={() => setInspectorOpen((open) => !open)}
-						>
-							<PanelRight size={16} />
-							<span>Tools</span>
-						</button>
-					</div>
-				</header>
 				<div
 					className="workspace-body"
 					data-inspector-collapsed={!inspectorOpen}
 					data-inspector-view={inspectorView}
+					data-layout={chatLayout ? "chat" : "empty"}
 				>
 					<section
 						className="welcome-panel"
@@ -198,6 +185,52 @@ export function WorkspaceHome({
 						inert={compact && inspectorOpen}
 						aria-hidden={compact && inspectorOpen}
 					>
+						{chatLayout ? (
+							<div className="session-title-row">
+								<div className="session-title-copy">
+									<span className="session-title">{sessionTitle}</span>
+									{connectedProvider && agentStatus ? (
+										<span className="header-agent-status">
+											<AgentProviderMark
+												provider={connectedProvider}
+												size={14}
+											/>
+											{agentStatus}
+										</span>
+									) : null}
+								</div>
+								{inspectorOpen ? null : (
+									<button
+										type="button"
+										className="panel-toggle inspector-toggle"
+										aria-label="Show tools"
+										title="Show tools"
+										aria-expanded={false}
+										aria-controls="workspace-inspector"
+										onClick={() => setInspectorOpen(true)}
+									>
+										<PanelRight size={16} />
+										<span>Tools</span>
+									</button>
+								)}
+							</div>
+						) : (
+							<div className="session-title-row session-title-row-empty">
+								<div className="session-title-copy" />
+								<button
+									type="button"
+									className="panel-toggle inspector-toggle"
+									aria-label={inspectorOpen ? "Hide tools" : "Show tools"}
+									title={inspectorOpen ? "Hide tools" : "Show tools"}
+									aria-expanded={inspectorOpen}
+									aria-controls="workspace-inspector"
+									onClick={() => setInspectorOpen((open) => !open)}
+								>
+									<PanelRight size={16} />
+									<span>Tools</span>
+								</button>
+							</div>
+						)}
 						<div
 							className="welcome-content"
 							data-layout={chatLayout ? "chat" : "empty"}
@@ -289,6 +322,7 @@ export function WorkspaceHome({
 									onSend={sendSideChat}
 								/>
 							}
+							onCollapse={() => setInspectorOpen(false)}
 						/>
 					</div>
 				</div>

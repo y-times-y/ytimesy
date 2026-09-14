@@ -1,4 +1,4 @@
-import { Paperclip, Zap } from "lucide-react";
+import { Plus, Zap } from "lucide-react";
 import { useRef, useState } from "react";
 import {
 	Select,
@@ -80,7 +80,7 @@ export function SessionControls({
 				title="Attach files"
 				onClick={() => fileInput.current?.click()}
 			>
-				<Paperclip className="size-4" />
+				<Plus className="size-4" />
 			</button>
 			<HarnessPicker
 				harnessId={harnessId}
@@ -116,9 +116,7 @@ export function SessionControls({
 					}
 				>
 					<SelectValue
-						placeholder={
-							harnessReady ? "Select model" : `Sign in to ${harnessName}`
-						}
+						placeholder={harnessReady ? "Select model" : "Sign in first"}
 					/>
 				</SelectTrigger>
 				<SelectContent
