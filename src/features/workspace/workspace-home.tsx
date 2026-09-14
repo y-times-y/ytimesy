@@ -214,17 +214,17 @@ export function WorkspaceHome({
 									</button>
 								)}
 							</div>
-						) : (
+						) : inspectorOpen ? null : (
 							<div className="session-title-row session-title-row-empty">
 								<div className="session-title-copy" />
 								<button
 									type="button"
 									className="panel-toggle inspector-toggle"
-									aria-label={inspectorOpen ? "Hide tools" : "Show tools"}
-									title={inspectorOpen ? "Hide tools" : "Show tools"}
-									aria-expanded={inspectorOpen}
+									aria-label="Show tools"
+									title="Show tools"
+									aria-expanded={false}
 									aria-controls="workspace-inspector"
-									onClick={() => setInspectorOpen((open) => !open)}
+									onClick={() => setInspectorOpen(true)}
 								>
 									<PanelRight size={16} />
 									<span>Tools</span>
