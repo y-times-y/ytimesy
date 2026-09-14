@@ -32,7 +32,9 @@ echo "CODEX_BIN=$CODEX_BIN"
 
 const START_LOGIN_SCRIPT = `set -eu
 if [ "\${FORCE_RESTART:-0}" = "1" ] && [ -f /tmp/ytimesy-codex-login.pid ]; then
-  kill "$(cat /tmp/ytimesy-codex-login.pid)" 2>/dev/null || true
+  PID="$(cat /tmp/ytimesy-codex-login.pid)"
+  pkill -P "$PID" 2>/dev/null || true
+  kill "$PID" 2>/dev/null || true
   rm -f /tmp/ytimesy-codex-login.pid
 fi
 if [ -f /tmp/ytimesy-codex-login.pid ] && kill -0 "$(cat /tmp/ytimesy-codex-login.pid)" 2>/dev/null; then
@@ -198,6 +200,7 @@ export function resumeCodexSession(
 			);
 		}
 		const codexBin = firstMatch(locate.stdout, /^CODEX_BIN=(.+)$/m);
+		const codexHome = firstMatch(locate.stdout, /^CODEX_HOME=(.+)$/m);
 		const codexVersion =
 			firstMatch(locate.stdout, /codex-cli\s+(\S+)/i) ?? null;
 		if (!codexBin) {
@@ -215,7 +218,7 @@ export function resumeCodexSession(
 		const start = yield* Effect.tryPromise(() =>
 			machines.exec(
 				workspaceId,
-				`export CODEX_BIN=${shellSingleQuote(codexBin)}
+				`${codexHome ? `export HOME=${shellSingleQuote(codexHome)}\n` : ""}export CODEX_BIN=${shellSingleQuote(codexBin)}
 export CODEX_VERSION=${shellSingleQuote(codexVersion ?? "")}
 export CODEX_PREFERRED_MODEL=${shellSingleQuote(PREFERRED_CODEX_MODEL_ID)}
 export YTIMESY_SKIP_INITIAL_TURN=${options.skipInitialTurn ? "1" : "0"}
