@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { Effect } from "effect";
+import { failureMessage } from "#/domain/failure-message";
 import type { WorkspaceDesktop } from "#/domain/workspace-desktop";
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
 import { WorkspaceMachineService } from "#/server/services/capabilities";
@@ -28,8 +29,11 @@ export const getWorkspaceDesktop = createServerFn({ method: "GET" }).handler(
 	},
 );
 
-export const startWorkspaceDesktopFn = createServerFn({ method: "POST" }).handler(
-	async (): Promise<WorkspaceDesktop> => {
-		return runWithMachines(startWorkspaceDesktop);
-	},
-);
+export const startWorkspaceDesktopFn = createServerFn({
+	method: "POST",
+}).handler(async (): Promise<WorkspaceDesktop> => {
+	return runWithMachines(startWorkspaceDesktop).catch((cause) => ({
+		status: "failed" as const,
+		reason: failureMessage(cause),
+	}));
+});

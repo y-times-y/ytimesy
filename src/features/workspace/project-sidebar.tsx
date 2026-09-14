@@ -1,4 +1,4 @@
-import { FolderGit2, PanelLeft, Plus } from "lucide-react";
+import { PanelLeft, Plus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
 	type PublicGitHubProject,
@@ -132,15 +132,12 @@ export function ProjectSidebar({
 				</div>
 				<button
 					type="button"
-					className="sidebar-project-chip"
-					data-empty={!projectLabel}
+					className="sidebar-chat"
+					data-selected={projectLabel ? true : undefined}
 					onClick={onFocusProject}
 				>
-					<FolderGit2 size={16} />
-					<span>
-						{projectLabel ??
-							(picker === null ? "Loading repository…" : "Select a repository")}
-					</span>
+					{projectLabel ??
+						(picker === null ? "Loading repository…" : "Select a repository")}
 				</button>
 				<div className="sidebar-section">
 					<span>Chats</span>

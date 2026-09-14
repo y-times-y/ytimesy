@@ -137,33 +137,6 @@ button:enabled:active {
 	line-height: 1.7;
 	color: #858585;
 }
-.sidebar-project-chip {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	width: 100%;
-	min-height: 44px;
-	margin-top: 18px;
-	padding: 8px 6px;
-	border: 0;
-	border-radius: 8px;
-	background: transparent;
-	color: #f2f2f2;
-	font-size: 13px;
-	line-height: 1.3;
-	text-align: left;
-}
-.sidebar-project-chip[data-empty="true"] {
-	color: #858585;
-}
-.sidebar-project-chip:hover {
-	background: #ffffff0c;
-}
-.sidebar-project-chip span {
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
 .sidebar-chats {
 	list-style: none;
 	margin: 0;
@@ -195,6 +168,9 @@ button:enabled:active {
 .sidebar-chat[data-selected="true"] {
 	background: #ffffff0c;
 	color: #f2f2f2;
+}
+.sidebar-brand-row + .sidebar-chat {
+	margin-top: 12px;
 }
 .panel-toggle[data-active="true"] {
 	color: #f2f2f2;

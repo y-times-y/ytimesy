@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { Duration, Effect } from "effect";
+import { failureMessage } from "#/domain/failure-message";
 import type { WorkspaceId } from "#/domain/ids";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
 import {
@@ -107,6 +108,10 @@ function failedStatus(message: string): CodexLoginStatus {
 	return { stage: "failed", message };
 }
 
+function failedFromCause(cause: unknown): CodexLoginStatus {
+	return failedStatus(failureMessage(cause));
+}
+
 export function startInteractiveDeviceCodeLogin(
 	machines: WorkspaceMachines,
 	workspaceId: WorkspaceId,
@@ -170,13 +175,7 @@ ${START_LOGIN_SCRIPT}`,
 		return failedStatus(
 			`Codex login did not publish a device code in time${log ? `: ${log.slice(-500)}` : ""}`,
 		);
-	}).pipe(
-		Effect.catchAll((cause) =>
-			Effect.succeed(
-				failedStatus(cause instanceof Error ? cause.message : String(cause)),
-			),
-		),
-	);
+	}).pipe(Effect.catchAll((cause) => Effect.succeed(failedFromCause(cause))));
 }
 
 export function resumeCodexSession(
@@ -247,13 +246,7 @@ ${START_LOGIN_SCRIPT}`,
 		return failedStatus(
 			"Resumed Codex session did not finish model/list or turn/start",
 		);
-	}).pipe(
-		Effect.catchAll((cause) =>
-			Effect.succeed(
-				failedStatus(cause instanceof Error ? cause.message : String(cause)),
-			),
-		),
-	);
+	}).pipe(Effect.catchAll((cause) => Effect.succeed(failedFromCause(cause))));
 }
 
 /**
@@ -296,7 +289,7 @@ export function confirmChatgptLoginOnWorkspace(
 		Effect.catchAll((cause) =>
 			Effect.succeed({
 				confirmed: false as const,
-				message: cause instanceof Error ? cause.message : String(cause),
+				message: failureMessage(cause),
 			}),
 		),
 	);
@@ -333,7 +326,7 @@ export function snapshotAuthenticatedCodexWorkspace(
 		Effect.catchAll((cause) =>
 			Effect.succeed({
 				ok: false as const,
-				message: cause instanceof Error ? cause.message : String(cause),
+				message: failureMessage(cause),
 			}),
 		),
 	);
@@ -347,11 +340,7 @@ export function readLoginStatus(
 		machines.readTextFile(workspaceId, "/tmp/ytimesy-auth-status.json"),
 	).pipe(
 		Effect.map(parseCodexLoginStatus),
-		Effect.catchAll((cause) =>
-			Effect.succeed(
-				failedStatus(cause instanceof Error ? cause.message : String(cause)),
-			),
-		),
+		Effect.catchAll((cause) => Effect.succeed(failedFromCause(cause))),
 	);
 }
 
@@ -409,13 +398,7 @@ export function submitCodexTask(
 			}
 		}
 		return failedStatus("Codex did not finish the task in time");
-	}).pipe(
-		Effect.catchAll((cause) =>
-			Effect.succeed(
-				failedStatus(cause instanceof Error ? cause.message : String(cause)),
-			),
-		),
-	);
+	}).pipe(Effect.catchAll((cause) => Effect.succeed(failedFromCause(cause))));
 }
 
 export function interruptCodexTurn(
@@ -432,13 +415,7 @@ export function interruptCodexTurn(
 		);
 		yield* Effect.sleep(Duration.seconds(1));
 		return yield* readLoginStatus(machines, workspaceId);
-	}).pipe(
-		Effect.catchAll((cause) =>
-			Effect.succeed(
-				failedStatus(cause instanceof Error ? cause.message : String(cause)),
-			),
-		),
-	);
+	}).pipe(Effect.catchAll((cause) => Effect.succeed(failedFromCause(cause))));
 }
 
 function resultMatchesTask(raw: string, taskId: string): boolean {

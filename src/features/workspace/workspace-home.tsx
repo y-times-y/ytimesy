@@ -71,6 +71,7 @@ export function WorkspaceHome({
 		status: "stopped",
 	});
 	const [desktopBusy, setDesktopBusy] = useState(false);
+	const autoResumeStarted = useRef(false);
 	const connect = useServerFn(connectCodexSession);
 	const sendTask = useServerFn(sendCodexSessionTask);
 	const stopTurn = useServerFn(stopCodexSessionTurn);
@@ -132,6 +133,23 @@ export function WorkspaceHome({
 		setInspectorView("diff");
 		setInspectorOpen(true);
 	}, [compact, fileChanges.length]);
+
+	useEffect(() => {
+		if (autoResumeStarted.current) return;
+		if (harnessId !== "codex") return;
+		if (!session.snapshotAvailable) return;
+		if (session.connection.status !== "disconnected") return;
+		autoResumeStarted.current = true;
+		setBusy(true);
+		void connect()
+			.then(setSession)
+			.finally(() => setBusy(false));
+	}, [
+		connect,
+		harnessId,
+		session.connection.status,
+		session.snapshotAvailable,
+	]);
 
 	useEffect(() => {
 		if (

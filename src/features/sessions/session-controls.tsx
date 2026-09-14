@@ -38,6 +38,7 @@ interface SessionControlsProps {
 	modelId: string;
 	onModelIdChange: (id: string) => void;
 	onAttachFiles: (files: File[]) => void;
+	snapshotAvailable?: boolean;
 }
 
 export function SessionControls({
@@ -52,6 +53,7 @@ export function SessionControls({
 	modelId,
 	onModelIdChange,
 	onAttachFiles,
+	snapshotAvailable = false,
 }: SessionControlsProps) {
 	const fileInput = useRef<HTMLInputElement>(null);
 	const [reasoningId, setReasoningId] = useState("");
@@ -87,6 +89,7 @@ export function SessionControls({
 				connection={connection}
 				apiKeyHints={apiKeyHints}
 				busy={busy}
+				snapshotAvailable={snapshotAvailable}
 				onHarnessIdChange={(id) => {
 					onHarnessIdChange(id);
 					onModelIdChange("");
