@@ -6,6 +6,18 @@ export class MissingFreestyleApiKey extends Data.TaggedError(
 	readonly message: string;
 }> {}
 
+export class MissingGitHubAppCredentials extends Data.TaggedError(
+	"MissingGitHubAppCredentials",
+)<{
+	readonly message: string;
+}> {}
+
+export class GitHubAppRequestError extends Data.TaggedError(
+	"GitHubAppRequestError",
+)<{
+	readonly message: string;
+}> {}
+
 export class WorkspaceProvisionError extends Data.TaggedError(
 	"WorkspaceProvisionError",
 )<{

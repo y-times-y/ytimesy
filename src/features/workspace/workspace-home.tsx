@@ -6,6 +6,7 @@ import {
 	connectedProviderId,
 } from "#/domain/agent-connection";
 import type { AgentProviderId } from "#/domain/agent-provider";
+import type { PublicProjectPicker } from "#/domain/github-project";
 import { hintForHarness } from "#/domain/harness-api-key";
 import {
 	fileChangesFromSessionItems,
@@ -13,6 +14,10 @@ import {
 } from "#/domain/session-item";
 import type { WorkspaceDesktop } from "#/domain/workspace-desktop";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
+import {
+	getGitHubProjects,
+	saveGitHubProjectSelectionFn,
+} from "../projects/github-projects.fn";
 import { AgentProviderMark } from "../sessions/agent-provider-mark";
 import {
 	connectCodexSession,
@@ -47,6 +52,8 @@ export function WorkspaceHome({
 	const compact = useCompactLayout();
 	const [session, setSession] = useState(initialSession);
 	const [showSetup, setShowSetup] = useState(false);
+	const [projectPicker, setProjectPicker] =
+		useState<PublicProjectPicker | null>(null);
 	const [projectsOpen, setProjectsOpen] = useState(false);
 	const [inspectorOpen, setInspectorOpen] = useState(false);
 	const [toolsView, setToolsView] = useState<ToolsView>("diff");
@@ -69,6 +76,8 @@ export function WorkspaceHome({
 	const saveKey = useServerFn(saveHarnessApiKeyFn);
 	const loadDesktop = useServerFn(getWorkspaceDesktop);
 	const startDesktop = useServerFn(startWorkspaceDesktopFn);
+	const loadProjects = useServerFn(getGitHubProjects);
+	const saveProject = useServerFn(saveGitHubProjectSelectionFn);
 	const fileChanges = fileChangesFromSessionItems(session.items);
 	const openedDiff = useRef(false);
 	const chatLayout =
@@ -90,7 +99,18 @@ export function WorkspaceHome({
 			});
 		});
 		void loadDesktop().then(setDesktop);
-	}, [loadDesktop, loadKeys]);
+		void loadProjects().then(setProjectPicker);
+	}, [loadDesktop, loadKeys, loadProjects]);
+
+	useEffect(() => {
+		function refreshProjects() {
+			if (document.visibilityState !== "visible") return;
+			void loadProjects().then(setProjectPicker);
+		}
+		document.addEventListener("visibilitychange", refreshProjects);
+		return () =>
+			document.removeEventListener("visibilitychange", refreshProjects);
+	}, [loadProjects]);
 
 	useEffect(() => {
 		if (!chatLayout) return;
@@ -151,6 +171,45 @@ export function WorkspaceHome({
 		setInspectorView(toolsView);
 	}
 
+	function selectProject(projectId: string) {
+		const project = projectPicker?.projects.find(
+			(entry) => entry.projectId === projectId,
+		);
+		if (!project) return;
+		if (projectPicker?.selectedProjectId === projectId) return;
+		setBusy(true);
+		void saveProject({
+			data: {
+				projectId,
+				branch: project.defaultBranch,
+			},
+		})
+			.then(setProjectPicker)
+			.finally(() => setBusy(false));
+	}
+
+	function selectBranch(branch: string) {
+		if (!projectPicker?.selectedProjectId) return;
+		setBusy(true);
+		void saveProject({
+			data: {
+				projectId: projectPicker.selectedProjectId,
+				branch,
+			},
+		})
+			.then(setProjectPicker)
+			.finally(() => setBusy(false));
+	}
+
+	function addProject() {
+		if (projectPicker?.installUrl) {
+			window.open(projectPicker.installUrl, "_blank", "noopener,noreferrer");
+			return;
+		}
+		setShowSetup(true);
+		if (compact) setProjectsOpen(false);
+	}
+
 	function sendSideChat(text: string) {
 		const modelId = sessionModelId(session);
 		if (!modelId) return;
@@ -166,10 +225,9 @@ export function WorkspaceHome({
 			<ProjectSidebar
 				expanded={projectsOpen}
 				onToggle={() => setProjectsOpen((open) => !open)}
-				onAddProject={() => {
-					setShowSetup(true);
-					if (compact) setProjectsOpen(false);
-				}}
+				onAddProject={addProject}
+				picker={projectPicker}
+				onSelectProject={selectProject}
 			/>
 			<main className="workspace-main" inert={compact && projectsOpen}>
 				<div
@@ -279,10 +337,16 @@ export function WorkspaceHome({
 									if (question) sendSideChat(question);
 								}}
 								onOpenInspector={openInspector}
+								projectPicker={projectPicker}
+								onSelectProject={selectProject}
+								onSelectBranch={selectBranch}
 							/>
 							{showSetup && (
 								<div className="project-setup-notice" role="status">
-									<p>Project setup isn’t available yet.</p>
+									<p>
+										{projectPicker?.message ??
+											"GitHub App credentials are not configured."}
+									</p>
 									<button type="button" onClick={() => setShowSetup(false)}>
 										Dismiss
 									</button>

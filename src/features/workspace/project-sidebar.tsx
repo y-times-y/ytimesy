@@ -1,22 +1,28 @@
 import { PanelLeft, Plus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import type { PublicProjectPicker } from "#/domain/github-project";
 
 interface ProjectSidebarProps {
 	expanded: boolean;
 	onToggle: () => void;
 	onAddProject: () => void;
+	picker: PublicProjectPicker | null;
+	onSelectProject: (projectId: string) => void;
 }
 
 export function ProjectSidebar({
 	expanded,
 	onToggle,
 	onAddProject,
+	picker,
+	onSelectProject,
 }: ProjectSidebarProps) {
 	const collapseButton = useRef<HTMLButtonElement>(null);
 	const railLogo = useRef<HTMLButtonElement>(null);
 	const [hovered, setHovered] = useState(false);
 	const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const visible = expanded || hovered;
+	const projects = picker?.projects ?? [];
 
 	function cancelClose() {
 		if (closeTimer.current !== null) clearTimeout(closeTimer.current);
@@ -114,7 +120,38 @@ export function ProjectSidebar({
 						<Plus size={16} />
 					</button>
 				</div>
-				<p className="sidebar-empty">No repositories connected.</p>
+				{projects.length === 0 ? (
+					<p className="sidebar-empty">
+						{picker?.message ?? "Loading projects…"}
+					</p>
+				) : (
+					<ul className="sidebar-projects">
+						{projects.map((project) => (
+							<li key={project.projectId}>
+								<button
+									type="button"
+									className="sidebar-project"
+									data-selected={
+										project.projectId === picker?.selectedProjectId
+									}
+									onClick={() => onSelectProject(project.projectId)}
+								>
+									{project.fullName}
+								</button>
+							</li>
+						))}
+					</ul>
+				)}
+				{picker?.installUrl ? (
+					<a
+						className="sidebar-install"
+						href={picker.installUrl}
+						target="_blank"
+						rel="noreferrer"
+					>
+						Manage GitHub App access
+					</a>
+				) : null}
 			</aside>
 			<nav
 				className="sidebar-rail"
