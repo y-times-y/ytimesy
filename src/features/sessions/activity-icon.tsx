@@ -29,5 +29,5 @@ const icons = {
 
 export function ActivityIcon({ glyph }: { glyph: SessionActivityGlyph }) {
 	const Icon = icons[glyph];
-	return <Icon size={16} aria-hidden="true" />;
+	return <Icon size={14} strokeWidth={1.5} aria-hidden="true" />;
 }

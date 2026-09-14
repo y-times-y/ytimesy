@@ -12,14 +12,14 @@
 }
 .session-dock {
 	flex-shrink: 0;
-	padding-top: 8px;
+	padding-top: 4px;
 }
 .session-context {
 	display: flex;
 	align-items: center;
-	gap: 12px;
+	gap: 10px;
 	margin: 0;
-	padding: 8px 14px 0;
+	padding: 0 12px 6px;
 	border: 0;
 	background: transparent;
 }
@@ -27,13 +27,15 @@
 	border: 0;
 	background: transparent;
 	box-shadow: none;
-	padding: 4px 0;
-	font-size: 13px;
+	padding: 2px 0;
+	font-size: 12px;
 	display: flex;
 	align-items: center;
-	gap: 8px;
+	gap: 6px;
 	min-width: 0;
-	color: #d4d4d4;
+	color: rgba(255, 255, 255, 0.5);
+	height: 24px;
+	min-height: 24px;
 }
 .branch-select {
 	color: #929292;
@@ -41,10 +43,10 @@
 .session-composer {
 	position: relative;
 	overflow: hidden;
-	border: 1px solid #3f3f3f;
-	border-radius: 14px;
-	background: #262626;
-	box-shadow: 0 10px 28px #0004;
+	border: 1px solid rgba(255, 255, 255, 0.08);
+	border-radius: 20px;
+	background: rgba(33, 33, 33, 0.96);
+	box-shadow: none;
 }
 .session-composer:has(textarea:focus-visible) {
 	border-color: #808080;
@@ -52,27 +54,27 @@
 .session-composer textarea {
 	display: block;
 	width: 100%;
-	min-height: 44px;
+	min-height: 40px;
 	max-height: min(240px, 40dvh);
 	overflow-y: auto;
 	resize: none;
-	padding: 10px 16px 8px;
-	color: #ededed;
+	padding: 12px 12px 4px;
+	color: #fff;
 	border: 0;
 	background: transparent;
 	font: inherit;
-	font-size: 16px;
-	line-height: 1.45;
+	font-size: 13px;
+	line-height: 20px;
 	outline: none;
 }
 .session-composer textarea::placeholder {
-	color: #a5a5a5;
+	color: rgba(255, 255, 255, 0.4);
 }
 .session-toolbar {
 	display: flex;
 	align-items: center;
-	gap: 12px;
-	padding: 4px 10px 10px;
+	gap: 8px;
+	padding: 0 8px 8px;
 }
 .session-controls {
 	display: flex;
@@ -333,11 +335,11 @@
 .session-timeline {
 	list-style: none;
 	margin: 0;
-	padding: 8px 8px 16px;
+	padding: 4px 8px 12px;
 	display: flex;
 	flex-direction: column;
 	justify-content: flex-start;
-	gap: 10px;
+	gap: 2px;
 	flex: 1;
 	min-height: 0;
 	overflow-y: auto;
@@ -351,51 +353,84 @@
 	border: 0;
 	background: none;
 }
+.session-timeline li[data-kind="userMessage"],
+.session-timeline li[data-kind="agentMessage"] {
+	margin: 10px 0 8px;
+}
 .session-message {
 	max-width: 100%;
 }
-.session-message p {
+.session-message p,
+.session-markdown p {
 	margin: 0;
+	font-size: 13px;
+	line-height: 20px;
+	color: #fff;
 	white-space: pre-wrap;
-	font-size: 14px;
-	line-height: 1.55;
-	color: #ececec;
 }
 .session-message[data-role="user"] {
 	display: flex;
 	justify-content: flex-end;
 }
 .session-message[data-role="user"] p {
-	max-width: min(36em, 86%);
+	max-width: min(333px, 72%);
 	width: fit-content;
 	padding: 8px 14px;
 	border: 0;
 	border-radius: 16px;
-	background: #2a2a2a;
-	font-size: 14px;
-	line-height: 1.45;
+	background: rgba(255, 255, 255, 0.05);
+	font-size: 13px;
+	line-height: 20px;
+	white-space: pre-wrap;
 }
-.session-message[data-role="assistant"] p {
+.session-message[data-role="assistant"] {
 	max-width: 42em;
-	padding: 2px 2px 0;
+}
+.session-markdown {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+.session-markdown ul {
+	margin: 0;
+	padding: 0 0 0 18px;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+.session-markdown li {
+	font-size: 13px;
+	line-height: 20px;
+	color: #fff;
+}
+.session-markdown code {
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: 12px;
+	line-height: 18px;
+	padding: 1px 4px;
+	border-radius: 4px;
+	background: rgba(255, 255, 255, 0.08);
+}
+.session-markdown pre {
+	margin: 0;
+	padding: 8px 12px;
+	overflow: auto;
+	border: 1px solid rgba(255, 255, 255, 0.08);
+	border-radius: 8px;
+	background: #212121;
+}
+.session-markdown pre code {
+	padding: 0;
+	background: transparent;
 }
 .session-working {
 	margin: 0;
-	color: #8f8f8f;
-	font-size: 13px;
+	color: rgba(255, 255, 255, 0.5);
+	font-size: 12px;
+	line-height: 20px;
 }
 .session-activity {
-	color: #b3b3b3;
-}
-.session-activity[data-kind="reasoning"],
-.session-activity[data-kind="plan"],
-.session-activity[data-kind="webSearch"],
-.session-activity[data-kind="mcpToolCall"],
-.session-activity[data-kind="dynamicToolCall"],
-.session-activity[data-kind="unknown"] {
-	border: 0;
-	background: transparent;
-	padding: 0;
+	color: rgba(255, 255, 255, 0.5);
 }
 .session-activity summary,
 .session-activity[data-kind] > p {
@@ -403,9 +438,11 @@
 	align-items: center;
 	gap: 8px;
 	margin: 0;
-	color: #8f8f8f;
-	font-size: 13px;
-	line-height: 1.4;
+	min-height: 20px;
+	color: rgba(255, 255, 255, 0.5);
+	font-size: 12px;
+	line-height: 20px;
+	font-weight: 400;
 }
 .session-activity summary {
 	cursor: pointer;
@@ -419,6 +456,10 @@
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+	color: rgba(255, 255, 255, 0.5);
+}
+.session-file-name {
+	color: rgba(255, 255, 255, 0.85);
 }
 .session-activity-status {
 	margin-left: auto;
@@ -430,15 +471,15 @@
 .session-activity[data-kind="commandExecution"] summary code {
 	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 	font-size: 12px;
-	color: #cfcfcf;
+	color: rgba(255, 255, 255, 0.7);
 }
 .session-activity[data-kind="reasoning"] > p,
 .session-activity[data-kind="plan"] > p {
-	margin: 6px 0 0 24px;
+	margin: 4px 0 0 22px;
 	white-space: pre-wrap;
-	color: #a3a3a3;
-	font-size: 13px;
-	line-height: 1.55;
+	color: rgba(255, 255, 255, 0.55);
+	font-size: 12px;
+	line-height: 20px;
 }
 .session-activity[data-kind="commandExecution"],
 .session-activity[data-kind="fileChange"],
@@ -544,8 +585,8 @@
 	line-height: 1.3;
 }
 .session-composer:has(.slash-palette) textarea {
-	min-height: 44px;
-	padding-top: 10px;
+	min-height: 40px;
+	padding-top: 12px;
 }
 .file-type-icon {
 	display: grid;
@@ -602,16 +643,18 @@
 	display: flex;
 	gap: 8px;
 	font-variant-numeric: tabular-nums;
-	font-size: 11px;
+	font-size: 13px;
+	line-height: 20px;
 }
 .session-activity[data-kind="fileChange"] .file-change-stats {
 	margin-left: 4px;
+	font-size: 12px;
 }
 .file-change-additions {
-	color: #9bb89f;
+	color: #40c977;
 }
 .file-change-deletions {
-	color: #c49a9a;
+	color: #ff6764;
 }
 .side-chat {
 	display: flex;
@@ -701,8 +744,8 @@
 		flex: 1;
 	}
 	.session-composer textarea {
-		padding: 10px 12px 8px;
-		min-height: 44px;
+		padding: 12px 12px 4px;
+		min-height: 40px;
 	}
 	.session-toolbar {
 		display: grid;
@@ -759,6 +802,9 @@
 	}
 }
 @media (pointer: coarse) {
+	.session-composer textarea {
+		font-size: 16px;
+	}
 	.composer-control,
 	.session-send,
 	.session-attachments button,

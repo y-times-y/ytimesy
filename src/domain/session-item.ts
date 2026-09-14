@@ -153,3 +153,21 @@ export function visibleSessionItems(
 		),
 	];
 }
+
+export function compactTimelineItems(
+	items: readonly SessionItem[],
+): SessionItem[] {
+	const compacted: SessionItem[] = [];
+	for (const item of items) {
+		const last = compacted[compacted.length - 1];
+		if (item.kind === "reasoning" && last?.kind === "reasoning") {
+			compacted[compacted.length - 1] = {
+				...last,
+				summaries: [...last.summaries, ...item.summaries],
+			};
+			continue;
+		}
+		compacted.push(item);
+	}
+	return compacted;
+}

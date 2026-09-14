@@ -15,7 +15,7 @@ export function ProjectContext() {
 					className="context-select project-select"
 					aria-label="Project"
 				>
-					<GitBranch size={18} />
+					<GitBranch size={14} />
 					<SelectValue placeholder="Select project" />
 				</SelectTrigger>
 				<SelectContent
