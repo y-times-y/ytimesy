@@ -1,6 +1,6 @@
 # ytimesy v0
 
-Status: UI foundation complete; Freestyle/Codex integration proof recorded. Domain: ytimesy.com. Updated: 2026-09-13.
+Status: UI foundation complete; Freestyle/Codex integration proof recorded. Domain: ytimesy.com. Updated: 2026-09-14.
 
 ## Goal and proof
 
@@ -11,16 +11,18 @@ V0 is complete when Het connects a real private repository and his own agent acc
 ## Product scope
 
 1. Sign in; install a GitHub App with selected-repository access.
-2. Choose a repository and branch. Prepare a persistent Freestyle workspace with dependencies, project configuration, and necessary credentials.
+2. Choose a repository and branch. Prepare a project environment snapshot (dependencies, project configuration, and necessary credentials). Each agent session then gets its own Freestyle VM copied from that snapshot.
 3. Connect agent access through the provider's supported sign-in flow. Begin with Codex as the first integration candidate; validate remote authentication and app-server behavior before claiming support.
 4. Start and steer an agent session. Show messages, tool activity, progress, approvals, cancellation, and actionable failures.
-5. Inspect the same workspace through Diff, Terminal, and Preview. The terminal is explicitly required in v0.
+5. Inspect that session's workspace through Diff, Terminal, and Preview. The terminal is explicitly required in v0.
 6. Continue active work independently of the web application request or browser connection. Reconnect to retained sessions; expose expired authentication and recovery states clearly.
 7. Offer explicit commit, push, and create-PR actions. Do not silently publish or fall back to paid API inference.
 
-Initial allocation: one persistent workspace per project. Serialize conflicting agent runs in that workspace until separate workspaces are implemented. Session history may contain multiple tasks; it is not a license to run competing edits in one checkout.
+Workspace isolation: a Project owns a prepared environment (Rigkit apply / clone-and-install, then a Freestyle snapshot or a warm spare that agents never edit). That template is shared; the running checkout is not. Each agent session owns a WorkspaceId: a distinct Freestyle VM copied from the template (`vms.create({ snapshotId })` or `vm.fork()` of the unused warm spare). Isolation is the VM copy, not git worktrees on one disk. Competing agents run in parallel, each with its own working tree, index, ports, PTY, and preview. Reconnect to an existing session pauses/resumes that same VM. Starting another agent copies again from the clean template — never from an agent VM that already has edits. Each workspace checkout uses its own branch for publication.
 
-Later: local session import/handoff, additional agents, non-Git folders, fresh project/repository creation, parallel workspaces, advanced collaboration, automations, and billing UI. Preserve clean extension boundaries without implementing speculative features.
+Do not put two agents in one checkout, use git worktrees to fake isolation, serialize competing edits on a shared VM, or re-run `pnpm install` when opening a new agent.
+
+Later: local session import/handoff, additional agents, non-Git folders, fresh project/repository creation, advanced collaboration, automations, and billing UI. Preserve clean extension boundaries without implementing speculative features.
 
 ## Experience and visual direction
 
@@ -74,7 +76,7 @@ Dependency flow: UI → authenticated server entry → service → defined capab
 - Small semantic functions take required inputs and return explicit outputs. Side effects are explicit responsibilities.
 - Workflow functions compose steps; document non-obvious behavior such as retries, recovery, and publication boundaries.
 - Model independent concepts separately. Prefer explicit state variants over unrelated optional fields.
-- Distinguish UserId, ProjectId, WorkspaceId, SessionId, and JobId.
+- Distinguish UserId, ProjectId, WorkspaceId, SessionId, and JobId. A Project is the prepared environment. A Workspace is one agent VM. A Session is the conversation attached to that VM. Do not collapse WorkspaceId onto ProjectId.
 - Keep Effect in backend services and adapters; UI receives serializable data and actionable errors.
 - Name modules for what they own. Avoid catch-all utility files, generic managers, pass-through abstraction layers, and oversized route files.
 - Add an abstraction when it clarifies a real boundary, not merely to support an imagined future provider.
@@ -89,7 +91,7 @@ Million-developer scalability is an architectural ambition, not a verified launc
 - Limit concurrency and apply backpressure. Record infrastructure usage from the beginning.
 - Preserve durable event ordering/cursors for reconnect; distinguish cached UI data from the authoritative session record.
 - Effect retries and finalizers do not replace durable recovery or orphan reconciliation.
-- Cancellation of a run is distinct from deleting its persistent workspace.
+- Cancellation of a run is distinct from deleting its workspace VM. Deleting one agent VM must not delete the project snapshot or other agents' VMs.
 - Snapshot credentials only within explicitly isolated user state; shared base images contain no user secrets. Define logout, deletion, and credential-expiry behavior. After ChatGPT login, capture a private Freestyle VM snapshot of that user's guest (disk includes `~/.codex/auth.json`). Store the snapshot id in tenant-scoped records later; proof CLI stores it in gitignored `.ytimesy/codex-auth-snapshot.json`. Do not mark that snapshot public or bake it into a shared base image. Shared images may later include tools such as bubblewrap, but never user credentials.
 - GitHub authority is repository-scoped and brokered wherever practical. Untrusted repository code must not gain platform authority.
 - App previews and terminals require access control. Browser preview content is untrusted and must not inherit application-origin privileges.
@@ -166,6 +168,8 @@ Better Auth, PostgreSQL records, GitHub authorization, durable jobs, live termin
 ### Decisions to preserve
 
 Keep the plain monochrome workspace, Inter typography, compact growing composer, responsive panels, hover-revealed sidebar rail, and model-specific reasoning controls. The approved logo is the faceted rising-bar Y in `public/brand/mark.svg`. `mark-light.svg` is light artwork for dark backgrounds; `mark-dark.svg` is dark artwork for light backgrounds. Keep the current logo and avoid restarting brand exploration.
+
+Each new agent session is a new VM copied from the project's prepared snapshot or unused warm spare, not a second git worktree on a shared machine. Resume is the same VM; a second agent is another copy. Fork only from a clean template so agent B does not inherit agent A's dirty tree.
 
 Use the installed self-documenting-code skill. Keep routes thin and put provider operations behind explicit adapters. Do not fabricate integration success or silently substitute paid model API access for the user's subscription.
 
