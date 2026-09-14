@@ -175,7 +175,7 @@ export function compactTimelineItems(
 		}
 		presented.push(item);
 	}
-	return collapseReasoningInActivityStretches(presented);
+	return presentCodexTurns(presented);
 }
 
 export function showTurnWorking(
@@ -201,37 +201,58 @@ function presentCommandExecution(item: CommandExecutionItem): SessionItem[] {
 	return [files, { ...item, command: remainder }];
 }
 
-function collapseReasoningInActivityStretches(
-	items: readonly SessionItem[],
-): SessionItem[] {
+function presentCodexTurns(items: readonly SessionItem[]): SessionItem[] {
 	const compacted: SessionItem[] = [];
 	let index = 0;
+	while (index < items.length && items[index]?.kind !== "userMessage") {
+		const leading = collectUntilUser(items, index);
+		compacted.push(...presentTurnBody(leading.items));
+		index = leading.next;
+	}
+	while (index < items.length) {
+		const user = items[index];
+		if (!user) break;
+		compacted.push(user);
+		index += 1;
+		const body = collectUntilUser(items, index);
+		compacted.push(...presentTurnBody(body.items));
+		index = body.next;
+	}
+	return compacted;
+}
+
+function collectUntilUser(
+	items: readonly SessionItem[],
+	start: number,
+): { items: SessionItem[]; next: number } {
+	const collected: SessionItem[] = [];
+	let index = start;
 	while (index < items.length) {
 		const item = items[index];
-		if (!item) break;
-		if (isConversationItem(item)) {
-			compacted.push(item);
-			index += 1;
-			continue;
-		}
-		const stretch: SessionItem[] = [];
-		while (index < items.length) {
-			const next = items[index];
-			if (!next || isConversationItem(next)) break;
-			stretch.push(next);
-			index += 1;
-		}
-		const reasonings = stretch.filter(
-			(row): row is ReasoningItem => row.kind === "reasoning",
-		);
-		const rest = stretch.filter((row) => row.kind !== "reasoning");
-		if (reasonings[0]) {
-			compacted.push({
-				...reasonings[0],
-				summaries: reasonings.flatMap((row) => row.summaries),
-			});
-		}
-		compacted.push(...rest);
+		if (!item || item.kind === "userMessage") break;
+		collected.push(item);
+		index += 1;
 	}
+	return { items: collected, next: index };
+}
+
+function presentTurnBody(body: readonly SessionItem[]): SessionItem[] {
+	const reasonings = body.filter(
+		(row): row is ReasoningItem => row.kind === "reasoning",
+	);
+	const agents = body.filter(
+		(row): row is AgentMessageItem => row.kind === "agentMessage",
+	);
+	const tools = body.filter(
+		(row) => row.kind !== "reasoning" && row.kind !== "agentMessage",
+	);
+	const compacted: SessionItem[] = [];
+	if (reasonings[0]) {
+		compacted.push({
+			...reasonings[0],
+			summaries: reasonings.flatMap((row) => row.summaries),
+		});
+	}
+	compacted.push(...tools, ...agents);
 	return compacted;
 }

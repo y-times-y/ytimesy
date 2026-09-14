@@ -187,6 +187,11 @@ describe("session items", () => {
 					summaries: ["first"],
 				},
 				{
+					kind: "agentMessage",
+					id: SessionItemId("m0"),
+					text: "I’ll create the file.",
+				},
+				{
 					kind: "commandExecution",
 					id: SessionItemId("cmd-1"),
 					command: `mkdir -p /tmp/src && cat > /tmp/src/hero.tsx <<'EOF'\nexport const hero = { title: "ytimesy" };\nEOF`,
@@ -230,6 +235,11 @@ describe("session items", () => {
 						preview: 'export const hero = { title: "ytimesy" };',
 					},
 				],
+			},
+			{
+				kind: "agentMessage",
+				id: SessionItemId("m0"),
+				text: "I’ll create the file.",
 			},
 			{
 				kind: "agentMessage",
