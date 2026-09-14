@@ -16,24 +16,50 @@ import {
 	TooltipProvider,
 	TooltipTrigger,
 } from "#/components/ui/tooltip";
+import type { AgentConnection } from "#/domain/agent-connection";
+import {
+	type AgentProviderId,
+	agentProviderById,
+} from "#/domain/agent-provider";
+import { selectedHarnessIsConnected } from "#/domain/harness-access";
+import { HarnessPicker } from "./harness-picker";
 import { resolveReasoningLevel, type SessionModel } from "./model-capabilities";
 import { ReasoningOption } from "./reasoning-option";
 
 interface SessionControlsProps {
+	harnessId: AgentProviderId;
+	onHarnessIdChange: (id: AgentProviderId) => void;
+	connection: AgentConnection;
+	apiKeyHints: Readonly<Partial<Record<AgentProviderId, string>>>;
+	busy: boolean;
+	onConnect: () => void;
+	onSaveApiKey: (harnessId: AgentProviderId, apiKey: string) => void;
 	models: readonly SessionModel[];
+	modelId: string;
+	onModelIdChange: (id: string) => void;
 	onAttachFiles: (files: File[]) => void;
 }
 
 export function SessionControls({
+	harnessId,
+	onHarnessIdChange,
+	connection,
+	apiKeyHints,
+	busy,
+	onConnect,
+	onSaveApiKey,
 	models,
+	modelId,
+	onModelIdChange,
 	onAttachFiles,
 }: SessionControlsProps) {
 	const fileInput = useRef<HTMLInputElement>(null);
-	const [modelId, setModelId] = useState("");
 	const [reasoningId, setReasoningId] = useState("");
 	const model = models.find((candidate) => candidate.id === modelId);
 	const reasoning = resolveReasoningLevel(model, reasoningId);
 	const [fast, setFast] = useState(false);
+	const harnessReady = selectedHarnessIsConnected(connection, harnessId);
+	const harnessName = agentProviderById(harnessId).name;
 
 	return (
 		<div className="session-controls">
@@ -56,19 +82,44 @@ export function SessionControls({
 			>
 				<Paperclip className="size-4" />
 			</button>
-			<Select
-				value={model?.id ?? ""}
-				onValueChange={(id) => {
-					setModelId(id);
+			<HarnessPicker
+				harnessId={harnessId}
+				connection={connection}
+				apiKeyHints={apiKeyHints}
+				busy={busy}
+				onHarnessIdChange={(id) => {
+					onHarnessIdChange(id);
+					onModelIdChange("");
 					setReasoningId("");
 					setFast(false);
 				}}
+				onConnect={onConnect}
+				onSaveApiKey={onSaveApiKey}
+			/>
+			<Select
+				value={model?.id ?? ""}
+				onValueChange={(id) => {
+					onModelIdChange(id);
+					setReasoningId("");
+					setFast(false);
+				}}
+				disabled={!harnessReady}
 			>
 				<SelectTrigger
+					id="session-model-select"
 					className="composer-select model-select"
 					aria-label="Model"
+					title={
+						harnessReady
+							? undefined
+							: `Sign in to ${harnessName} to load its models`
+					}
 				>
-					<SelectValue placeholder="Select model" />
+					<SelectValue
+						placeholder={
+							harnessReady ? "Select model" : `Sign in to ${harnessName}`
+						}
+					/>
 				</SelectTrigger>
 				<SelectContent
 					position="popper"
@@ -78,7 +129,9 @@ export function SessionControls({
 				>
 					{models.length === 0 ? (
 						<SelectItem value="unconnected" disabled>
-							Connect an agent to load models
+							{harnessReady
+								? `${harnessName} has not listed models yet`
+								: `Sign in to ${harnessName} to load its models`}
 						</SelectItem>
 					) : (
 						models.map((availableModel) => (
@@ -92,17 +145,19 @@ export function SessionControls({
 			<Select
 				value={reasoning?.id ?? ""}
 				onValueChange={setReasoningId}
-				disabled={!model?.reasoning}
+				disabled={!harnessReady || !model?.reasoning}
 			>
 				<SelectTrigger
 					className="composer-select reasoning-select"
 					aria-label="Reasoning level"
 					title={
-						!model
-							? "Select a model to see its reasoning levels"
-							: !model.reasoning
-								? "This model has no configurable reasoning levels"
-								: undefined
+						!harnessReady
+							? `Sign in to ${harnessName} first`
+							: !model
+								? "Select a model to see its reasoning levels"
+								: !model.reasoning
+									? "This model has no configurable reasoning levels"
+									: undefined
 					}
 				>
 					<SelectValue placeholder="Reasoning" />
@@ -148,11 +203,13 @@ export function SessionControls({
 						</Toggle>
 					</TooltipTrigger>
 					<TooltipContent side="bottom" sideOffset={8}>
-						{!model
-							? "Select a model first"
-							: !model.supportsFastMode
-								? "Fast mode unavailable for this model"
-								: `Fast mode ${fast ? "on" : "off"}`}
+						{!harnessReady
+							? `Sign in to ${harnessName} first`
+							: !model
+								? "Select a model first"
+								: !model.supportsFastMode
+									? "Fast mode unavailable for this model"
+									: `Fast mode ${fast ? "on" : "off"}`}
 					</TooltipContent>
 				</Tooltip>
 			</TooltipProvider>
