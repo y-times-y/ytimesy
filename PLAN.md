@@ -20,9 +20,9 @@ V0 is complete when Het connects a real private repository and his own agent acc
 
 Workspace isolation: a Project owns a prepared environment (Rigkit apply / clone-and-install, then a Freestyle snapshot or a warm spare that agents never edit). That template is shared; the running checkout is not. Each agent session owns a WorkspaceId: a distinct Freestyle VM copied from the template (`vms.create({ snapshotId })` or `vm.fork()` of the unused warm spare). Isolation is the VM copy, not git worktrees on one disk. Competing agents run in parallel, each with its own working tree, index, ports, PTY, and preview. Reconnect to an existing session pauses/resumes that same VM. Starting another agent copies again from the clean template — never from an agent VM that already has edits. Each workspace checkout uses its own branch for publication.
 
-Project context: agents under the same Project share a durable brief, not a working tree. A new session should start already knowing the repo shape, conventions, current branch/snapshot, open sibling work, and durable facts earlier agents wrote back — it should not spend the first turns re-reading the tree. Store that pack on the Project (Postgres plus instruction files copied into the template). Seed each new Codex thread from it (`cwd` so `AGENTS.md` and skills load, plus `thread/inject_items` / developer instructions for the living brief). After a session, compact what is worth keeping (decisions, map of the repo, open PRs) back onto the Project; do not copy a sibling's full transcript, uncommitted diff, or live thread by default. `thread/resume` continues one session; `thread/fork` is an explicit “branch this conversation,” not how every new agent starts.
+Project context is an agent-context concern, not a VM concern. Agents under the same Project share a durable briefing that is injected into each new session's model context so it already knows the repo shape, conventions, open sibling work, and facts earlier agents wrote back. Store that pack on the Project and seed the Codex thread at start; after a session, compact durable notes back onto the Project. Do not implement this by sharing a VM, a working tree, or one live Codex thread. `thread/resume` continues one session; `thread/fork` is an explicit “branch this conversation,” not how every new agent starts.
 
-Do not put two agents in one checkout, use git worktrees to fake isolation, serialize competing edits on a shared VM, re-run `pnpm install` when opening a new agent, or treat “shared context” as one shared Codex thread.
+Do not put two agents in one checkout, use git worktrees to fake isolation, serialize competing edits on a shared VM, or re-run `pnpm install` when opening a new agent.
 
 Later: local session import/handoff, additional agents, non-Git folders, fresh project/repository creation, advanced collaboration, automations, and billing UI. Preserve clean extension boundaries without implementing speculative features.
 
@@ -78,7 +78,7 @@ Dependency flow: UI → authenticated server entry → service → defined capab
 - Small semantic functions take required inputs and return explicit outputs. Side effects are explicit responsibilities.
 - Workflow functions compose steps; document non-obvious behavior such as retries, recovery, and publication boundaries.
 - Model independent concepts separately. Prefer explicit state variants over unrelated optional fields.
-- Distinguish UserId, ProjectId, WorkspaceId, SessionId, and JobId. A Project is the prepared environment plus the shared context pack. A Workspace is one agent VM. A Session is the conversation attached to that VM. Do not collapse WorkspaceId onto ProjectId.
+- Distinguish UserId, ProjectId, WorkspaceId, SessionId, and JobId. A Project owns the environment template and the shared agent briefing. A Workspace is one agent VM. A Session is the conversation attached to that VM. Do not treat the briefing as VM state or collapse WorkspaceId onto ProjectId.
 - Keep Effect in backend services and adapters; UI receives serializable data and actionable errors.
 - Name modules for what they own. Avoid catch-all utility files, generic managers, pass-through abstraction layers, and oversized route files.
 - Add an abstraction when it clarifies a real boundary, not merely to support an imagined future provider.
@@ -171,7 +171,9 @@ Better Auth, PostgreSQL records, GitHub authorization, durable jobs, live termin
 
 Keep the plain monochrome workspace, Inter typography, compact growing composer, responsive panels, hover-revealed sidebar rail, and model-specific reasoning controls. The approved logo is the faceted rising-bar Y in `public/brand/mark.svg`. `mark-light.svg` is light artwork for dark backgrounds; `mark-dark.svg` is dark artwork for light backgrounds. Keep the current logo and avoid restarting brand exploration.
 
-Each new agent session is a new VM copied from the project's prepared snapshot or unused warm spare, not a second git worktree on a shared machine. Resume is the same VM; a second agent is another copy. Fork only from a clean template so agent B does not inherit agent A's dirty tree. Seed that new thread from the project's shared context pack so it does not re-explore the repo from scratch; write durable facts back to the Project, not a shared live transcript.
+Each new agent session is a new VM copied from the project's prepared snapshot or unused warm spare, not a second git worktree on a shared machine. Resume is the same VM; a second agent is another copy. Fork only from a clean template so agent B does not inherit agent A's dirty tree.
+
+Shared project context is injected into the new agent's thread, independent of that VM copy. Write durable facts back to the Project briefing, not a shared live transcript.
 
 Use the installed self-documenting-code skill. Keep routes thin and put provider operations behind explicit adapters. Do not fabricate integration success or silently substitute paid model API access for the user's subscription.
 
