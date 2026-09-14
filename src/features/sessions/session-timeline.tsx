@@ -6,6 +6,7 @@ import {
 	compactTimelineItems,
 	type SessionItem,
 	type SessionTurnStatus,
+	showTurnWorking,
 } from "#/domain/session-item";
 import { visibleShellCommand } from "#/domain/visible-shell-command";
 import { ActivityIcon } from "./activity-icon";
@@ -51,7 +52,7 @@ export function SessionTimeline({
 					<SessionItemView item={item} />
 				</li>
 			))}
-			{turnStatus === "running" ? (
+			{showTurnWorking(items, turnStatus) ? (
 				<li data-kind="working">
 					<p className="session-working">Working…</p>
 				</li>
@@ -81,7 +82,7 @@ function SessionItemView({ item }: { item: SessionItem }) {
 					<div className="session-activity" data-kind="reasoning">
 						<p>
 							<ActivityIcon glyph="thinking" />
-							<span className="session-activity-title">Thinking</span>
+							<span className="session-activity-title">Thought</span>
 						</p>
 					</div>
 				);
@@ -90,7 +91,7 @@ function SessionItemView({ item }: { item: SessionItem }) {
 				<details className="session-activity" data-kind="reasoning">
 					<summary>
 						<ActivityIcon glyph="thinking" />
-						<span className="session-activity-title">Thinking</span>
+						<span className="session-activity-title">Thought</span>
 					</summary>
 					{summaries.map((summary) => (
 						<p key={`${item.id}:${summary}`}>{summary}</p>

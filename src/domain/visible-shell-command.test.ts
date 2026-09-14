@@ -15,4 +15,12 @@ describe("visibleShellCommand", () => {
 			"python3 todo.py list",
 		);
 	});
+
+	it("hides heredoc bodies the way Codex shows a one-line shell activity", () => {
+		expect(
+			visibleShellCommand(
+				`mkdir -p /tmp/src && cat > /tmp/src/hero.tsx <<'EOF'\nexport const hero = { title: "ytimesy" };\nEOF`,
+			),
+		).toBe("mkdir -p /tmp/src && cat > /tmp/src/hero.tsx");
+	});
 });

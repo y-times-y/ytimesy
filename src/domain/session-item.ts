@@ -1,4 +1,8 @@
-import type { SessionItemId } from "./ids";
+import { SessionItemId } from "./ids";
+import {
+	fileChangesFromShellCommand,
+	remainingShellCommandAfterWrites,
+} from "./shell-file-change";
 
 export type SessionTurnStatus = "idle" | "running" | "completed" | "failed";
 
@@ -118,6 +122,12 @@ export function fileChangesFromSessionItems(
 ): readonly FileChangeEntry[] {
 	const latestByPath = new Map<string, FileChangeEntry>();
 	for (const item of items) {
+		if (item.kind !== "commandExecution") continue;
+		for (const change of fileChangesFromShellCommand(item.command)) {
+			latestByPath.set(change.path, change);
+		}
+	}
+	for (const item of items) {
 		if (item.kind !== "fileChange") continue;
 		for (const change of item.changes) {
 			latestByPath.set(change.path, change);
@@ -157,17 +167,71 @@ export function visibleSessionItems(
 export function compactTimelineItems(
 	items: readonly SessionItem[],
 ): SessionItem[] {
-	const compacted: SessionItem[] = [];
+	const presented: SessionItem[] = [];
 	for (const item of items) {
-		const last = compacted[compacted.length - 1];
-		if (item.kind === "reasoning" && last?.kind === "reasoning") {
-			compacted[compacted.length - 1] = {
-				...last,
-				summaries: [...last.summaries, ...item.summaries],
-			};
+		if (item.kind === "commandExecution") {
+			presented.push(...presentCommandExecution(item));
 			continue;
 		}
-		compacted.push(item);
+		presented.push(item);
+	}
+	return collapseReasoningInActivityStretches(presented);
+}
+
+export function showTurnWorking(
+	items: readonly SessionItem[],
+	turnStatus: SessionTurnStatus,
+): boolean {
+	if (turnStatus !== "running") return false;
+	const last = compactTimelineItems(items).at(-1);
+	return last == null || last.kind === "userMessage";
+}
+
+function presentCommandExecution(item: CommandExecutionItem): SessionItem[] {
+	const writes = fileChangesFromShellCommand(item.command);
+	if (writes.length === 0) return [item];
+	const remainder = remainingShellCommandAfterWrites(item.command, writes);
+	const files: FileChangeItem = {
+		kind: "fileChange",
+		id: remainder ? SessionItemId(`${item.id}:files`) : item.id,
+		status: item.status,
+		changes: writes,
+	};
+	if (!remainder) return [files];
+	return [files, { ...item, command: remainder }];
+}
+
+function collapseReasoningInActivityStretches(
+	items: readonly SessionItem[],
+): SessionItem[] {
+	const compacted: SessionItem[] = [];
+	let index = 0;
+	while (index < items.length) {
+		const item = items[index];
+		if (!item) break;
+		if (isConversationItem(item)) {
+			compacted.push(item);
+			index += 1;
+			continue;
+		}
+		const stretch: SessionItem[] = [];
+		while (index < items.length) {
+			const next = items[index];
+			if (!next || isConversationItem(next)) break;
+			stretch.push(next);
+			index += 1;
+		}
+		const reasonings = stretch.filter(
+			(row): row is ReasoningItem => row.kind === "reasoning",
+		);
+		const rest = stretch.filter((row) => row.kind !== "reasoning");
+		if (reasonings[0]) {
+			compacted.push({
+				...reasonings[0],
+				summaries: reasonings.flatMap((row) => row.summaries),
+			});
+		}
+		compacted.push(...rest);
 	}
 	return compacted;
 }
