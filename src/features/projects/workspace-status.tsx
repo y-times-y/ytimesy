@@ -1,5 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { requestJson } from "./api";
+import { GithubSetupLink } from "./github-setup-link";
 
 export interface WorkspaceView {
 	id: string;
@@ -57,7 +58,8 @@ export function WorkspaceStatus({ projectId }: { projectId: string }) {
 	if (workspace.error)
 		return (
 			<p className="workspace-status" role="alert">
-				{workspace.error.message}
+				{workspace.error.message}{" "}
+				<GithubSetupLink message={workspace.error.message} />
 			</p>
 		);
 	if (!current)
@@ -81,6 +83,12 @@ export function WorkspaceStatus({ projectId }: { projectId: string }) {
 				{current.status === "failed"
 					? (current.errorMessage ?? copy.failed)
 					: copy[current.status]}
+				{current.status === "failed" && current.errorMessage && (
+					<>
+						{" "}
+						<GithubSetupLink message={current.errorMessage} />
+					</>
+				)}
 			</span>
 			{current.status === "failed" && (
 				<button

@@ -8,3 +8,7 @@ export function githubAppIdentityMatchesSignIn(
 		signedInGithubAccountId === connectingGithubUserId
 	);
 }
+
+export function needsGithubSetup(message: string) {
+	return /\b(?:re)?connect github\b/i.test(message);
+}

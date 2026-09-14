@@ -1,5 +1,8 @@
 import { expect, it } from "vitest";
-import { githubAppIdentityMatchesSignIn } from "../src/domain/github-sign-in";
+import {
+	githubAppIdentityMatchesSignIn,
+	needsGithubSetup,
+} from "../src/domain/github-sign-in";
 import {
 	authTrustedOrigins,
 	configuredSocialProviders,
@@ -10,6 +13,15 @@ it("only binds GitHub App identity to GitHub sign-in accounts", () => {
 	expect(githubAppIdentityMatchesSignIn("123", "123")).toBe(true);
 	expect(githubAppIdentityMatchesSignIn("123", "456")).toBe(false);
 	expect(githubAppIdentityMatchesSignIn(undefined, "789")).toBe(true);
+});
+
+it("sends GitHub connection errors back to onboarding", () => {
+	expect(needsGithubSetup("Connect GitHub to choose repositories.")).toBe(true);
+	expect(needsGithubSetup("Reconnect GitHub.")).toBe(true);
+	expect(
+		needsGithubSetup("GitHub access expired or was denied. Reconnect GitHub."),
+	).toBe(true);
+	expect(needsGithubSetup("Project is not available.")).toBe(false);
 });
 
 it("trusts localhost and 127.0.0.1 for local Better Auth origins", () => {
