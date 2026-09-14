@@ -4,16 +4,17 @@ export function OpenCodeMark({ size = 24 }: { size?: number }) {
 			aria-hidden="true"
 			fill="none"
 			height={size}
-			stroke="currentColor"
-			strokeLinecap="round"
-			strokeLinejoin="round"
-			strokeWidth="1.5"
-			viewBox="0 0 24 24"
+			viewBox="0 0 512 512"
 			width={size}
 			xmlns="http://www.w3.org/2000/svg"
 		>
-			<circle cx="12" cy="12" r="8.25" />
-			<circle cx="12" cy="12" r="3" />
+			<path d="M320 224V352H192V224H320Z" fill="currentColor" opacity="0.35" />
+			<path
+				clipRule="evenodd"
+				d="M384 416H128V96H384V416ZM320 160H192V352H320V160Z"
+				fill="currentColor"
+				fillRule="evenodd"
+			/>
 		</svg>
 	);
 }
