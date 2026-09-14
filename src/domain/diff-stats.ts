@@ -27,6 +27,27 @@ export function countDiffLineChanges(
 	return { additions, deletions };
 }
 
+export function countWholeFileLines(diff: string | null | undefined): number {
+	if (!diff) return 0;
+	return diff.split("\n").filter((line) => line.length > 0).length;
+}
+
+export function isUnifiedDiff(diff: string | null | undefined): boolean {
+	if (!diff) return false;
+	return /^(?:--- |\+\+\+ |@@ )/m.test(diff);
+}
+
+export function countFileChangeLines(
+	change: "add" | "delete" | "update",
+	diff: string | null | undefined,
+): DiffLineCounts {
+	if (diff && isUnifiedDiff(diff)) return countDiffLineChanges(diff);
+	const lines = countWholeFileLines(diff);
+	if (change === "add") return { additions: lines, deletions: 0 };
+	if (change === "delete") return { additions: 0, deletions: lines };
+	return emptyDiffLineCounts();
+}
+
 export function readDiffLineCounts(
 	additions: unknown,
 	deletions: unknown,
