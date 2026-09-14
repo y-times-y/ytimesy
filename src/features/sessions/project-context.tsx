@@ -1,4 +1,6 @@
+import { useMutation } from "@tanstack/react-query";
 import { GitBranch } from "lucide-react";
+import { useState } from "react";
 import {
 	Select,
 	SelectContent,
@@ -7,6 +9,7 @@ import {
 	SelectValue,
 } from "#/components/ui/select";
 import type { Project } from "../../domain/projects";
+import { requestJson } from "../projects/api";
 import { WorkspaceStatus } from "../projects/workspace-status";
 
 export function ProjectContext({
@@ -56,6 +59,54 @@ export function ProjectContext({
 				</SelectTrigger>
 			</Select>
 			{selectedProject && <WorkspaceStatus projectId={selectedProject.id} />}
+			{selectedProject && (
+				<PublicationAction
+					key={selectedProject.id}
+					projectId={selectedProject.id}
+				/>
+			)}
 		</div>
+	);
+}
+
+function PublicationAction({ projectId }: { projectId: string }) {
+	const [title, setTitle] = useState("");
+	const publish = useMutation({
+		mutationFn: () =>
+			requestJson<{ url: string; number: number; draft: boolean }>(
+				"/api/projects/publish",
+				{ projectId, title },
+			),
+	});
+	return (
+		<form
+			className="publication-action"
+			onSubmit={(event) => {
+				event.preventDefault();
+				publish.mutate();
+			}}
+		>
+			<input
+				id="pull-request-title"
+				aria-label="Pull request title"
+				placeholder="Pull request title"
+				value={title}
+				maxLength={256}
+				required
+				onChange={(event) => {
+					setTitle(event.target.value);
+					publish.reset();
+				}}
+			/>
+			<button type="submit" disabled={publish.isPending || !title.trim()}>
+				{publish.isPending ? "Creating…" : "Create pull request"}
+			</button>
+			{publish.data && (
+				<a href={publish.data.url} target="_blank" rel="noreferrer">
+					Draft PR #{publish.data.number}
+				</a>
+			)}
+			{publish.error && <p role="alert">{publish.error.message}</p>}
+		</form>
 	);
 }
