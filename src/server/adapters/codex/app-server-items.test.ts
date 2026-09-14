@@ -113,6 +113,8 @@ describe("sessionItemFromAppServerItem", () => {
 					change: "update",
 					additions: 1,
 					deletions: 0,
+					preview:
+						"--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1,2 @@\n keep\n+added\n",
 				},
 			],
 		});
@@ -142,6 +144,7 @@ describe("sessionItemFromAppServerItem", () => {
 					change: "add",
 					additions: 2,
 					deletions: 0,
+					preview: "print('hi')\nprint('there')\n",
 				},
 			],
 		});

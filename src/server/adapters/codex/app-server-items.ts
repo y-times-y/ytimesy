@@ -122,7 +122,8 @@ function fileChanges(value: unknown): FileChangeEntry[] {
 		const path = readString(entry.path);
 		if (!path) continue;
 		const change = fileChangeKind(entry.kind ?? entry.change);
-		const counted = countFileChangeLines(change, readString(entry.diff));
+		const preview = readString(entry.diff) ?? null;
+		const counted = countFileChangeLines(change, preview ?? undefined);
 		const explicit = readDiffLineCounts(
 			entry.additions,
 			entry.deletions,
@@ -135,6 +136,7 @@ function fileChanges(value: unknown): FileChangeEntry[] {
 			change,
 			additions: counts.additions,
 			deletions: counts.deletions,
+			preview,
 		});
 	}
 	return changes;

@@ -214,7 +214,6 @@ export function SessionLauncher({
 				fill={chatLayout}
 			/>
 			<div className="session-dock">
-				{visibleSlashCommands.length === 0 ? <ProjectContext /> : null}
 				<div className="composer-shell">
 					<div className="session-composer">
 						{visibleSlashCommands.length > 0 ? (
@@ -224,7 +223,9 @@ export function SessionLauncher({
 								onHover={setSlashIndex}
 								onSelect={runSlashCommand}
 							/>
-						) : null}
+						) : (
+							<ProjectContext />
+						)}
 						<TaskInput
 							value={draft}
 							onChange={setDraft}

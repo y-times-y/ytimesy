@@ -1,8 +1,11 @@
 import { useEffect, useRef } from "react";
+import { fileChangeTotals } from "#/domain/diff-preview";
+import { fileChangeActivityTitle } from "#/domain/file-change-copy";
 import { activityGlyphForToolName } from "#/domain/session-activity";
 import type { SessionItem, SessionTurnStatus } from "#/domain/session-item";
+import { visibleShellCommand } from "#/domain/visible-shell-command";
 import { ActivityIcon } from "./activity-icon";
-import { FileChangeList } from "./file-change-row";
+import { FileChangeCounts } from "./file-change-counts";
 
 export function SessionTimeline({
 	items,
@@ -23,7 +26,6 @@ export function SessionTimeline({
 
 	return (
 		<ol ref={listRef} className="session-timeline" aria-label="Session">
-			<li className="session-timeline-spacer" aria-hidden="true" />
 			{items.map((item) => (
 				<li key={item.id} data-kind={item.kind}>
 					<SessionItemView item={item} />
@@ -44,23 +46,33 @@ function SessionItemView({ item }: { item: SessionItem }) {
 			return <ConversationBlock text={item.text} speaker="user" />;
 		case "agentMessage":
 			return <ConversationBlock text={item.text} speaker="assistant" />;
-		case "reasoning":
+		case "reasoning": {
+			const summaries = item.summaries.filter((summary) => summary.trim());
+			if (summaries.length === 0) {
+				return (
+					<div className="session-activity" data-kind="reasoning">
+						<p>
+							<ActivityIcon glyph="thinking" />
+							<span className="session-activity-title">Thinking</span>
+						</p>
+					</div>
+				);
+			}
 			return (
 				<details className="session-activity" data-kind="reasoning">
 					<summary>
 						<ActivityIcon glyph="thinking" />
-						<span className="session-activity-title">
-							{item.summaries[0] ?? "Thinking"}
-						</span>
+						<span className="session-activity-title">Thinking</span>
 					</summary>
-					{item.summaries.slice(item.summaries[0] ? 1 : 0).map((summary) => (
+					{summaries.map((summary) => (
 						<p key={`${item.id}:${summary}`}>{summary}</p>
 					))}
 				</details>
 			);
+		}
 		case "plan":
 			return (
-				<details className="session-activity" data-kind="plan" open>
+				<details className="session-activity" data-kind="plan">
 					<summary>
 						<ActivityIcon glyph="plan" />
 						<span className="session-activity-title">Plan</span>
@@ -68,33 +80,36 @@ function SessionItemView({ item }: { item: SessionItem }) {
 					<p>{item.text || "Planning…"}</p>
 				</details>
 			);
-		case "commandExecution":
+		case "commandExecution": {
+			const status = activityStatusLabel(item.status);
 			return (
 				<details
 					className="session-activity"
 					data-kind="commandExecution"
 					data-status={item.status}
-					open={item.status === "inProgress" || Boolean(item.output)}
+					open={item.status === "inProgress"}
 				>
 					<summary>
 						<ActivityIcon glyph="shell" />
-						<code className="session-activity-title">{item.command}</code>
-						<span className="session-activity-status">
-							{activityStatusLabel(item.status)}
-						</span>
+						<code className="session-activity-title">
+							{visibleShellCommand(item.command)}
+						</code>
+						{status ? (
+							<span className="session-activity-status">{status}</span>
+						) : null}
 					</summary>
-					{item.cwd ? (
-						<p className="session-activity-meta">{item.cwd}</p>
-					) : null}
 					{item.output ? (
 						<pre className="session-output">{item.output}</pre>
 					) : null}
-					{item.exitCode !== null ? (
+					{item.status === "failed" && item.exitCode !== null ? (
 						<p className="session-activity-meta">exit {item.exitCode}</p>
 					) : null}
 				</details>
 			);
-		case "fileChange":
+		}
+		case "fileChange": {
+			const totals = fileChangeTotals(item.changes);
+			const status = activityStatusLabel(item.status);
 			return (
 				<div
 					className="session-activity"
@@ -102,19 +117,21 @@ function SessionItemView({ item }: { item: SessionItem }) {
 					data-status={item.status}
 				>
 					<p>
-						<ActivityIcon glyph="files" />
+						<ActivityIcon glyph="edit" />
 						<span className="session-activity-title">
-							{item.changes.length === 1
-								? "1 file changed"
-								: `${item.changes.length} files changed`}
+							{fileChangeActivityTitle(item.changes)}
 						</span>
-						<span className="session-activity-status">
-							{activityStatusLabel(item.status)}
-						</span>
+						<FileChangeCounts
+							additions={totals.additions}
+							deletions={totals.deletions}
+						/>
+						{status ? (
+							<span className="session-activity-status">{status}</span>
+						) : null}
 					</p>
-					<FileChangeList changes={item.changes} />
 				</div>
 			);
+		}
 		case "mcpToolCall":
 			return (
 				<div
@@ -127,9 +144,7 @@ function SessionItemView({ item }: { item: SessionItem }) {
 						<span className="session-activity-title">
 							{item.server} · {item.tool}
 						</span>
-						<span className="session-activity-status">
-							{activityStatusLabel(item.status)}
-						</span>
+						{activityStatus(item.status)}
 					</p>
 				</div>
 			);
@@ -143,9 +158,7 @@ function SessionItemView({ item }: { item: SessionItem }) {
 					<p>
 						<ActivityIcon glyph={activityGlyphForToolName(item.tool)} />
 						<span className="session-activity-title">{item.tool}</span>
-						<span className="session-activity-status">
-							{activityStatusLabel(item.status)}
-						</span>
+						{activityStatus(item.status)}
 					</p>
 				</div>
 			);
@@ -181,6 +194,13 @@ function SessionItemView({ item }: { item: SessionItem }) {
 	}
 }
 
+function activityStatus(status: string) {
+	const label = activityStatusLabel(status);
+	return label ? (
+		<span className="session-activity-status">{label}</span>
+	) : null;
+}
+
 function ConversationBlock({
 	text,
 	speaker,
@@ -195,10 +215,9 @@ function ConversationBlock({
 	);
 }
 
-function activityStatusLabel(status: string): string {
+function activityStatusLabel(status: string): string | null {
 	if (status === "inProgress") return "Running";
-	if (status === "completed") return "Done";
 	if (status === "failed") return "Failed";
 	if (status === "declined") return "Declined";
-	return status;
+	return null;
 }

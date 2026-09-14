@@ -47,6 +47,7 @@ export type FileChangeEntry = {
 	readonly change: "add" | "delete" | "update";
 	readonly additions: number;
 	readonly deletions: number;
+	readonly preview: string | null;
 };
 
 export type FileChangeItem = {

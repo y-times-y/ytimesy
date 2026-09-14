@@ -1,6 +1,6 @@
 import { useServerFn } from "@tanstack/react-start";
 import { PanelRight } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
 	connectedAgentStatus,
 	connectedProviderId,
@@ -47,6 +47,7 @@ export function WorkspaceHome({
 	const sendTask = useServerFn(sendCodexSessionTask);
 	const stopTurn = useServerFn(stopCodexSessionTurn);
 	const fileChanges = fileChangesFromSessionItems(session.items);
+	const openedDiff = useRef(false);
 	const chatLayout =
 		session.connection.status === "authenticated" || session.items.length > 0;
 	const agentStatus = connectedAgentStatus(session.connection);
@@ -55,6 +56,14 @@ export function WorkspaceHome({
 	useEffect(() => {
 		if (compact) setProjectsOpen(false);
 	}, [compact]);
+
+	useEffect(() => {
+		if (compact || openedDiff.current || fileChanges.length === 0) return;
+		openedDiff.current = true;
+		setToolsView("diff");
+		setInspectorView("diff");
+		setInspectorOpen(true);
+	}, [compact, fileChanges.length]);
 
 	useEffect(() => {
 		if (
