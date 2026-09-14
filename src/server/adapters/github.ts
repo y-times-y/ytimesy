@@ -106,3 +106,72 @@ export async function listBranches(
 	});
 	return branches.map((branch) => branch.name);
 }
+
+function repositoryOwnerName(fullName: string) {
+	const [owner, repo] = fullName.split("/");
+	if (!owner || !repo) throw new Error("Repository name is invalid.");
+	return { owner, repo };
+}
+
+export async function compareBranchAhead(
+	token: string,
+	fullName: string,
+	base: string,
+	head: string,
+) {
+	const { owner, repo } = repositoryOwnerName(fullName);
+	try {
+		const comparison = await githubClient(token).repos.compareCommits({
+			owner,
+			repo,
+			base,
+			head,
+		});
+		return comparison.data.ahead_by ?? 0;
+	} catch (error) {
+		const status =
+			typeof error === "object" && error !== null && "status" in error
+				? Number(error.status)
+				: 0;
+		if (status === 404)
+			throw new Response(
+				"Branch is not on GitHub. Push it from the workspace first.",
+				{ status: 409 },
+			);
+		throw error;
+	}
+}
+
+export async function createDraftPullRequest(
+	token: string,
+	fullName: string,
+	draft: { title: string; body: string; head: string; base: string },
+) {
+	const { owner, repo } = repositoryOwnerName(fullName);
+	try {
+		const created = await githubClient(token).pulls.create({
+			owner,
+			repo,
+			title: draft.title,
+			body: draft.body,
+			head: draft.head,
+			base: draft.base,
+			draft: true,
+		});
+		return {
+			number: created.data.number,
+			url: created.data.html_url,
+			draft: Boolean(created.data.draft),
+		};
+	} catch (error) {
+		const status =
+			typeof error === "object" && error !== null && "status" in error
+				? Number(error.status)
+				: 0;
+		if (status === 422)
+			throw new Response("A pull request for this branch already exists.", {
+				status: 409,
+			});
+		throw error;
+	}
+}

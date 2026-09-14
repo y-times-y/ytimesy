@@ -23,6 +23,7 @@ import { Route as ApiGithubConnectRouteImport } from './routes/api/github/connec
 import { Route as ApiGithubDisconnectRouteImport } from './routes/api/github/disconnect'
 import { Route as ApiGithubRepositoriesRouteImport } from './routes/api/github/repositories'
 import { Route as ApiIdentityProvidersRouteImport } from './routes/api/identity/providers'
+import { Route as ApiProjectsPublishRouteImport } from './routes/api/projects/publish'
 import { Route as ApiWorkspacesRetryRouteImport } from './routes/api/workspaces.retry'
 
 const IndexRoute = IndexRouteImport.update({
@@ -95,6 +96,11 @@ const ApiIdentityProvidersRoute = ApiIdentityProvidersRouteImport.update({
   path: '/api/identity/providers',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiProjectsPublishRoute = ApiProjectsPublishRouteImport.update({
+  id: '/publish',
+  path: '/publish',
+  getParentRoute: () => ApiProjectsRoute,
+} as any)
 const ApiWorkspacesRetryRoute = ApiWorkspacesRetryRouteImport.update({
   id: '/retry',
   path: '/retry',
@@ -105,7 +111,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/onboarding': typeof OnboardingRoute
   '/api/account': typeof ApiAccountRoute
-  '/api/projects': typeof ApiProjectsRoute
+  '/api/projects': typeof ApiProjectsRouteWithChildren
   '/api/workspaces': typeof ApiWorkspacesRouteWithChildren
   '/auth/$path': typeof AuthPathRoute
   '/api/agent/account': typeof ApiAgentAccountRoute
@@ -116,13 +122,14 @@ export interface FileRoutesByFullPath {
   '/api/github/disconnect': typeof ApiGithubDisconnectRoute
   '/api/github/repositories': typeof ApiGithubRepositoriesRoute
   '/api/identity/providers': typeof ApiIdentityProvidersRoute
+  '/api/projects/publish': typeof ApiProjectsPublishRoute
   '/api/workspaces/retry': typeof ApiWorkspacesRetryRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/onboarding': typeof OnboardingRoute
   '/api/account': typeof ApiAccountRoute
-  '/api/projects': typeof ApiProjectsRoute
+  '/api/projects': typeof ApiProjectsRouteWithChildren
   '/api/workspaces': typeof ApiWorkspacesRouteWithChildren
   '/auth/$path': typeof AuthPathRoute
   '/api/agent/account': typeof ApiAgentAccountRoute
@@ -133,6 +140,7 @@ export interface FileRoutesByTo {
   '/api/github/disconnect': typeof ApiGithubDisconnectRoute
   '/api/github/repositories': typeof ApiGithubRepositoriesRoute
   '/api/identity/providers': typeof ApiIdentityProvidersRoute
+  '/api/projects/publish': typeof ApiProjectsPublishRoute
   '/api/workspaces/retry': typeof ApiWorkspacesRetryRoute
 }
 export interface FileRoutesById {
@@ -140,7 +148,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/onboarding': typeof OnboardingRoute
   '/api/account': typeof ApiAccountRoute
-  '/api/projects': typeof ApiProjectsRoute
+  '/api/projects': typeof ApiProjectsRouteWithChildren
   '/api/workspaces': typeof ApiWorkspacesRouteWithChildren
   '/auth/$path': typeof AuthPathRoute
   '/api/agent/account': typeof ApiAgentAccountRoute
@@ -151,6 +159,7 @@ export interface FileRoutesById {
   '/api/github/disconnect': typeof ApiGithubDisconnectRoute
   '/api/github/repositories': typeof ApiGithubRepositoriesRoute
   '/api/identity/providers': typeof ApiIdentityProvidersRoute
+  '/api/projects/publish': typeof ApiProjectsPublishRoute
   '/api/workspaces/retry': typeof ApiWorkspacesRetryRoute
 }
 export interface FileRouteTypes {
@@ -170,6 +179,7 @@ export interface FileRouteTypes {
     | '/api/github/disconnect'
     | '/api/github/repositories'
     | '/api/identity/providers'
+    | '/api/projects/publish'
     | '/api/workspaces/retry'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -187,6 +197,7 @@ export interface FileRouteTypes {
     | '/api/github/disconnect'
     | '/api/github/repositories'
     | '/api/identity/providers'
+    | '/api/projects/publish'
     | '/api/workspaces/retry'
   id:
     | '__root__'
@@ -204,6 +215,7 @@ export interface FileRouteTypes {
     | '/api/github/disconnect'
     | '/api/github/repositories'
     | '/api/identity/providers'
+    | '/api/projects/publish'
     | '/api/workspaces/retry'
   fileRoutesById: FileRoutesById
 }
@@ -211,7 +223,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   OnboardingRoute: typeof OnboardingRoute
   ApiAccountRoute: typeof ApiAccountRoute
-  ApiProjectsRoute: typeof ApiProjectsRoute
+  ApiProjectsRoute: typeof ApiProjectsRouteWithChildren
   ApiWorkspacesRoute: typeof ApiWorkspacesRouteWithChildren
   AuthPathRoute: typeof AuthPathRoute
   ApiAgentAccountRoute: typeof ApiAgentAccountRoute
@@ -324,6 +336,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiIdentityProvidersRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/projects/publish': {
+      id: '/api/projects/publish'
+      path: '/publish'
+      fullPath: '/api/projects/publish'
+      preLoaderRoute: typeof ApiProjectsPublishRouteImport
+      parentRoute: typeof ApiProjectsRoute
+    }
     '/api/workspaces/retry': {
       id: '/api/workspaces/retry'
       path: '/retry'
@@ -333,6 +352,18 @@ declare module '@tanstack/react-router' {
     }
   }
 }
+
+interface ApiProjectsRouteChildren {
+  ApiProjectsPublishRoute: typeof ApiProjectsPublishRoute
+}
+
+const ApiProjectsRouteChildren: ApiProjectsRouteChildren = {
+  ApiProjectsPublishRoute: ApiProjectsPublishRoute,
+}
+
+const ApiProjectsRouteWithChildren = ApiProjectsRoute._addFileChildren(
+  ApiProjectsRouteChildren,
+)
 
 interface ApiWorkspacesRouteChildren {
   ApiWorkspacesRetryRoute: typeof ApiWorkspacesRetryRoute
@@ -350,7 +381,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   OnboardingRoute: OnboardingRoute,
   ApiAccountRoute: ApiAccountRoute,
-  ApiProjectsRoute: ApiProjectsRoute,
+  ApiProjectsRoute: ApiProjectsRouteWithChildren,
   ApiWorkspacesRoute: ApiWorkspacesRouteWithChildren,
   AuthPathRoute: AuthPathRoute,
   ApiAgentAccountRoute: ApiAgentAccountRoute,
