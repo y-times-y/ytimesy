@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { type UIEvent, useEffect, useRef } from "react";
 import { fileChangeTotals } from "#/domain/diff-preview";
 import { fileChangeActivityTitle } from "#/domain/file-change-copy";
 import { activityGlyphForToolName } from "#/domain/session-activity";
@@ -17,15 +17,29 @@ export function SessionTimeline({
 	fill?: boolean;
 }) {
 	const listRef = useRef<HTMLOListElement>(null);
+	const stickToEnd = useRef(true);
 
 	useEffect(() => {
+		if (!stickToEnd.current) return;
+		if (items.length === 0 && turnStatus !== "running") return;
 		listRef.current?.lastElementChild?.scrollIntoView({ block: "end" });
-	});
+	}, [items, turnStatus]);
+
+	function rememberScrollPin(event: UIEvent<HTMLOListElement>) {
+		const list = event.currentTarget;
+		stickToEnd.current =
+			list.scrollHeight - list.scrollTop - list.clientHeight < 64;
+	}
 
 	if (items.length === 0 && turnStatus !== "running" && !fill) return null;
 
 	return (
-		<ol ref={listRef} className="session-timeline" aria-label="Session">
+		<ol
+			ref={listRef}
+			className="session-timeline"
+			aria-label="Session"
+			onScroll={rememberScrollPin}
+		>
 			{items.map((item) => (
 				<li key={item.id} data-kind={item.kind}>
 					<SessionItemView item={item} />

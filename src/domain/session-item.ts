@@ -116,9 +116,14 @@ export function isTurnRunning(status: SessionTurnStatus): boolean {
 export function fileChangesFromSessionItems(
 	items: readonly SessionItem[],
 ): readonly FileChangeEntry[] {
-	return items.flatMap((item) =>
-		item.kind === "fileChange" ? item.changes : [],
-	);
+	const latestByPath = new Map<string, FileChangeEntry>();
+	for (const item of items) {
+		if (item.kind !== "fileChange") continue;
+		for (const change of item.changes) {
+			latestByPath.set(change.path, change);
+		}
+	}
+	return [...latestByPath.values()];
 }
 
 export function lastUserMessageText(
