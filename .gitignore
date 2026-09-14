@@ -20,6 +20,7 @@ dist/
 *.tsbuildinfo
 .DS_Store
 .ytimesy/
+**/__pycache__/
 
 # Private keys and account configuration
 .secrets/

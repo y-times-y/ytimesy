@@ -1,11 +1,27 @@
-import { useEffect, useRef } from "react";
+import { type KeyboardEvent, useEffect, useRef } from "react";
 
 function fitDraftHeight(input: HTMLTextAreaElement) {
 	input.style.height = "auto";
 	input.style.height = `${input.scrollHeight}px`;
 }
 
-export function TaskInput() {
+export function TaskInput({
+	value,
+	onChange,
+	onSubmit,
+	disabled,
+	placeholder = "What would you like to work on?",
+	label = "Task description",
+	onKeyDown,
+}: {
+	value: string;
+	onChange: (value: string) => void;
+	onSubmit: () => void;
+	disabled?: boolean;
+	placeholder?: string;
+	label?: string;
+	onKeyDown?: (event: KeyboardEvent<HTMLTextAreaElement>) => boolean;
+}) {
 	const inputRef = useRef<HTMLTextAreaElement>(null);
 
 	useEffect(() => {
@@ -22,12 +38,27 @@ export function TaskInput() {
 	}, []);
 
 	return (
-		<textarea
-			ref={inputRef}
-			aria-label="Task description"
-			placeholder="What would you like to work on?"
-			rows={2}
-			onInput={(event) => fitDraftHeight(event.currentTarget)}
-		/>
+		<div className="composer-input">
+			<textarea
+				ref={inputRef}
+				aria-label={label}
+				placeholder={placeholder}
+				rows={1}
+				value={value}
+				disabled={disabled}
+				onChange={(event) => {
+					onChange(event.currentTarget.value);
+					fitDraftHeight(event.currentTarget);
+				}}
+				onInput={(event) => fitDraftHeight(event.currentTarget)}
+				onKeyDown={(event) => {
+					if (onKeyDown?.(event)) return;
+					if (event.key === "Enter" && !event.shiftKey) {
+						event.preventDefault();
+						onSubmit();
+					}
+				}}
+			/>
+		</div>
 	);
 }
