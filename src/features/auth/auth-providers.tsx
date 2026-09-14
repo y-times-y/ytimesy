@@ -24,7 +24,7 @@ export function AuthProviders({ children }: { children: ReactNode }) {
 					emailAndPassword={{
 						enabled: true,
 						requireEmailVerification: true,
-						forgotPassword: false,
+						forgotPassword: true,
 					}}
 					navigate={navigate}
 					Link={({ href, ...props }) => <Link to={href} {...props} />}

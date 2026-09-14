@@ -1,6 +1,6 @@
 import { betterAuth } from "better-auth";
 import { database } from "../adapters/database";
-import { persistVerificationEmail } from "../adapters/email";
+import { persistAuthEmail } from "../adapters/email";
 import { serverConfig } from "../config";
 import { authTrustedOrigins, googleOAuthConfigured } from "./providers";
 
@@ -16,6 +16,20 @@ export function authOptions() {
 			requireEmailVerification: true,
 			minPasswordLength: 8,
 			autoSignIn: false,
+			sendResetPassword: async ({
+				user,
+				url,
+			}: {
+				user: { email: string };
+				url: string;
+			}) => {
+				await persistAuthEmail({
+					to: user.email,
+					subject: "Reset your ytimesy password",
+					purpose: "reset-password",
+					actionUrl: url,
+				});
+			},
 		},
 		emailVerification: {
 			sendOnSignUp: true,
@@ -28,9 +42,10 @@ export function authOptions() {
 				user: { email: string };
 				url: string;
 			}) => {
-				await persistVerificationEmail({
+				await persistAuthEmail({
 					to: user.email,
 					subject: "Verify your ytimesy email",
+					purpose: "verify-email",
 					actionUrl: url,
 				});
 			},
