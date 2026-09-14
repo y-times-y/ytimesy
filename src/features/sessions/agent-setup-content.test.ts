@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { CODEX_PROVIDER } from "#/domain/agent-provider";
+import { CLAUDE_PROVIDER, CODEX_PROVIDER } from "#/domain/agent-provider";
 import { agentSetupContent } from "./agent-setup-content";
+
+const idleClaude = {
+	provider: CLAUDE_PROVIDER,
+	detail:
+		"Claude Code sign-in is not connected yet. Each user signs in with their own Claude account.",
+	actionLabel: null,
+	userCode: null,
+	verificationUrl: null,
+} as const;
 
 describe("agentSetupContent", () => {
 	it("hides setup after an agent is signed in", () => {
@@ -18,7 +27,7 @@ describe("agentSetupContent", () => {
 		).toBeNull();
 	});
 
-	it("lists Codex as an offered agent, not as the product", () => {
+	it("lists Codex and Claude as offered agents, not as the product", () => {
 		expect(agentSetupContent({ status: "disconnected" }, false)).toEqual({
 			heading: "Connect an agent",
 			providers: [
@@ -29,6 +38,7 @@ describe("agentSetupContent", () => {
 					userCode: null,
 					verificationUrl: null,
 				},
+				idleClaude,
 			],
 		});
 	});
@@ -63,6 +73,7 @@ describe("agentSetupContent", () => {
 					userCode: "ABCD-1234",
 					verificationUrl: "https://auth.openai.com/codex/device",
 				},
+				idleClaude,
 			],
 		});
 	});
@@ -87,6 +98,7 @@ describe("agentSetupContent", () => {
 					userCode: null,
 					verificationUrl: null,
 				},
+				idleClaude,
 			],
 		});
 	});

@@ -64,6 +64,16 @@ function providerSetup(
 			verificationUrl: null,
 		};
 	}
+	if (provider.id === "claude") {
+		return {
+			provider,
+			detail:
+				"Claude Code sign-in is not connected yet. Each user signs in with their own Claude account.",
+			actionLabel: null,
+			userCode: null,
+			verificationUrl: null,
+		};
+	}
 	return {
 		provider,
 		detail:
