@@ -16,7 +16,7 @@ export const CODEX_PROVIDER: AgentProvider = {
 
 export const CLAUDE_PROVIDER: AgentProvider = {
 	id: "claude",
-	name: "Claude",
+	name: "Claude Code",
 	signInMethod: "Claude account",
 	authorizeWith: "Anthropic",
 };

@@ -1,11 +1,11 @@
 import { useServerFn } from "@tanstack/react-start";
 import { PanelRight } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import {
-	connectedAgentStatus,
-	connectedProviderId,
-} from "#/domain/agent-connection";
+import { connectedAgentStatus, connectedProviderId } from "#/domain/agent-connection";
+import type { AgentProviderId } from "#/domain/agent-provider";
+import { hintForHarness } from "#/domain/harness-api-key";
 import { fileChangesFromSessionItems } from "#/domain/session-item";
+import type { WorkspaceDesktop } from "#/domain/workspace-desktop";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
 import { AgentProviderMark } from "../sessions/agent-provider-mark";
 import {
@@ -15,11 +15,19 @@ import {
 	stopCodexSessionTurn,
 } from "../sessions/codex-session.fn";
 import {
+	getHarnessApiKeys,
+	saveHarnessApiKeyFn,
+} from "../sessions/harness-key.fn";
+import {
 	preferredSessionModelId,
 	sessionModelsFromListed,
 } from "../sessions/model-capabilities";
 import { SessionLauncher } from "../sessions/session-launcher";
 import { SideChatPanel } from "../sessions/side-chat-panel";
+import {
+	getWorkspaceDesktop,
+	startWorkspaceDesktopFn,
+} from "./desktop.fn";
 import { ProjectSidebar } from "./project-sidebar";
 import { useCompactLayout } from "./use-compact-layout";
 import {
@@ -43,9 +51,19 @@ export function WorkspaceHome({
 	const [sideChatOpen, setSideChatOpen] = useState(false);
 	const [sideQueued, setSideQueued] = useState(false);
 	const [busy, setBusy] = useState(false);
+	const [harnessId, setHarnessId] = useState<AgentProviderId>("codex");
+	const [apiKeyHints, setApiKeyHints] = useState<
+		Partial<Record<AgentProviderId, string>>
+	>({});
+	const [desktop, setDesktop] = useState<WorkspaceDesktop>({ status: "stopped" });
+	const [desktopBusy, setDesktopBusy] = useState(false);
 	const connect = useServerFn(connectCodexSession);
 	const sendTask = useServerFn(sendCodexSessionTask);
 	const stopTurn = useServerFn(stopCodexSessionTurn);
+	const loadKeys = useServerFn(getHarnessApiKeys);
+	const saveKey = useServerFn(saveHarnessApiKeyFn);
+	const loadDesktop = useServerFn(getWorkspaceDesktop);
+	const startDesktop = useServerFn(startWorkspaceDesktopFn);
 	const fileChanges = fileChangesFromSessionItems(session.items);
 	const openedDiff = useRef(false);
 	const chatLayout =
@@ -56,6 +74,17 @@ export function WorkspaceHome({
 	useEffect(() => {
 		if (compact) setProjectsOpen(false);
 	}, [compact]);
+
+	useEffect(() => {
+		void loadKeys().then((status) => {
+			setApiKeyHints({
+				codex: hintForHarness(status.keys, "codex") ?? undefined,
+				claude: hintForHarness(status.keys, "claude") ?? undefined,
+				opencode: hintForHarness(status.keys, "opencode") ?? undefined,
+			});
+		});
+		void loadDesktop().then(setDesktop);
+	}, [loadDesktop, loadKeys]);
 
 	useEffect(() => {
 		if (compact || openedDiff.current || fileChanges.length === 0) return;
@@ -176,10 +205,28 @@ export function WorkspaceHome({
 							<SessionLauncher
 								session={session}
 								busy={busy}
+								harnessId={harnessId}
+								onHarnessIdChange={setHarnessId}
+								apiKeyHints={apiKeyHints}
 								onConnect={() => {
 									setBusy(true);
 									void connect()
 										.then(setSession)
+										.finally(() => setBusy(false));
+								}}
+								onSaveApiKey={(id, apiKey) => {
+									setBusy(true);
+									void saveKey({ data: { harnessId: id, apiKey } })
+										.then((status) => {
+											setApiKeyHints({
+												codex:
+													hintForHarness(status.keys, "codex") ?? undefined,
+												claude:
+													hintForHarness(status.keys, "claude") ?? undefined,
+												opencode:
+													hintForHarness(status.keys, "opencode") ?? undefined,
+											});
+										})
 										.finally(() => setBusy(false));
 								}}
 								onSend={(text, modelId) => {
@@ -219,6 +266,15 @@ export function WorkspaceHome({
 								setInspectorView(view);
 							}}
 							fileChanges={fileChanges}
+							desktop={desktop}
+							desktopBusy={desktopBusy}
+							onStartDesktop={() => {
+								setDesktopBusy(true);
+								setDesktop({ status: "starting" });
+								void startDesktop()
+									.then(setDesktop)
+									.finally(() => setDesktopBusy(false));
+							}}
 							sideChatOpen={sideChatOpen}
 							onNewSideChat={openSideChat}
 							onCloseSideChat={closeSideChat}

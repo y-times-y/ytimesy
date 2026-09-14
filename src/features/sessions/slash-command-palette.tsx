@@ -1,9 +1,9 @@
 import {
-	AppWindow,
 	Files,
 	GitPullRequest,
 	MessageSquare,
 	MessagesSquare,
+	Monitor,
 	RotateCcw,
 	Sparkles,
 	Square,
@@ -19,7 +19,7 @@ const icons: Record<SlashCommandId, typeof MessageSquare> = {
 	model: Sparkles,
 	diff: Files,
 	terminal: SquareTerminal,
-	preview: AppWindow,
+	desktop: Monitor,
 	pr: GitPullRequest,
 };
 

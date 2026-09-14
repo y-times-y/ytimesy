@@ -183,6 +183,28 @@ export function createFreestyleWorkspaceMachines(
 			}
 		},
 
+		async exposeHttp(
+			workspaceId: WorkspaceId,
+			port: number,
+			hostname: string,
+		): Promise<string> {
+			try {
+				await freestyle.tls.rules.create({
+					action: "allow",
+					domain: hostname,
+					source: { public: true },
+					destination: { vmId: workspaceId, port },
+				});
+				return `https://${hostname}`;
+			} catch (cause) {
+				throw new WorkspaceProvisionError({
+					operation: "create",
+					message: providerMessage(cause),
+					providerWorkspaceId: workspaceId,
+				});
+			}
+		},
+
 		async destroyOrphans(slugPrefix: string): Promise<readonly string[]> {
 			try {
 				const { vms } = await freestyle.vms.list({

@@ -6,4 +6,4 @@ Before writing or reviewing code, apply [.agents/skills/self-documenting-code/SK
 
 Use agent-browser for browser research and UI verification, as requested by the user. Keep reference screenshots out of commits. Report live verification separately from mock tests and build checks.
 
-The first release must include Diff, Terminal, and Preview. Offered coding agents are Codex, Claude, and OpenCode; ytimesy is not any of those products. Freestyle, TanStack Start, and Effect are selected. Consult PLAN.md for unresolved provider choices rather than silently treating proposals as decisions.
+The first release must include Diff, Terminal, and Desktop. Offered harnesses are Codex, Claude Code, and OpenCode; ytimesy is not any of those products. Freestyle, TanStack Start, and Effect are selected. Consult PLAN.md for unresolved provider choices rather than silently treating proposals as decisions.

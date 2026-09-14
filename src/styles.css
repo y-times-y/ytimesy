@@ -255,6 +255,37 @@ button:enabled:active {
 	margin: 0;
 	max-width: 225px;
 }
+.desktop-inspector {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	min-height: 0;
+}
+.desktop-inspector-copy {
+	margin: 0;
+	padding: 8px 12px;
+	border-bottom: 1px solid #242424;
+	font-size: 12px;
+	line-height: 1.4;
+	color: #8a8a8a;
+}
+.desktop-frame {
+	flex: 1;
+	width: 100%;
+	min-height: 0;
+	border: 0;
+	background: #111;
+}
+.desktop-start {
+	margin-top: 16px;
+	min-height: 44px;
+	padding: 0 14px;
+	border: 1px solid #3d3d3d;
+	border-radius: 8px;
+	background: #282828;
+	color: #eee;
+	font-size: 13px;
+}
 .inspector-changes {
 	list-style: none;
 	margin: 0;

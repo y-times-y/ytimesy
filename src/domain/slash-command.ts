@@ -6,7 +6,7 @@ export type SlashCommandId =
 	| "model"
 	| "diff"
 	| "terminal"
-	| "preview"
+	| "desktop"
 	| "pr";
 
 export type SlashCommandAvailability = "ready" | "unavailable";
@@ -107,10 +107,10 @@ export function composerSlashCommands(
 			availability: "ready",
 		},
 		{
-			id: "preview",
-			trigger: "/preview",
-			label: "Preview",
-			description: "Show the app preview",
+			id: "desktop",
+			trigger: "/desktop",
+			label: "Desktop",
+			description: "Show the shared workspace desktop",
 			availability: "ready",
 		},
 		{
