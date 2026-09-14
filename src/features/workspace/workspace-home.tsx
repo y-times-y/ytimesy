@@ -61,6 +61,7 @@ export function WorkspaceHome({
 	const [sideChatOpen, setSideChatOpen] = useState(false);
 	const [sideQueued, setSideQueued] = useState(false);
 	const [busy, setBusy] = useState(false);
+	const [pickerBusy, setPickerBusy] = useState(false);
 	const [harnessId, setHarnessId] = useState<AgentProviderId>("codex");
 	const [apiKeyHints, setApiKeyHints] = useState<
 		Partial<Record<AgentProviderId, string>>
@@ -177,7 +178,7 @@ export function WorkspaceHome({
 		);
 		if (!project) return;
 		if (projectPicker?.selectedProjectId === projectId) return;
-		setBusy(true);
+		setPickerBusy(true);
 		void saveProject({
 			data: {
 				projectId,
@@ -185,12 +186,12 @@ export function WorkspaceHome({
 			},
 		})
 			.then(setProjectPicker)
-			.finally(() => setBusy(false));
+			.finally(() => setPickerBusy(false));
 	}
 
 	function selectBranch(branch: string) {
 		if (!projectPicker?.selectedProjectId) return;
-		setBusy(true);
+		setPickerBusy(true);
 		void saveProject({
 			data: {
 				projectId: projectPicker.selectedProjectId,
@@ -198,7 +199,7 @@ export function WorkspaceHome({
 			},
 		})
 			.then(setProjectPicker)
-			.finally(() => setBusy(false));
+			.finally(() => setPickerBusy(false));
 	}
 
 	function addProject() {
@@ -338,6 +339,7 @@ export function WorkspaceHome({
 								}}
 								onOpenInspector={openInspector}
 								projectPicker={projectPicker}
+								pickerBusy={pickerBusy}
 								onSelectProject={selectProject}
 								onSelectBranch={selectBranch}
 							/>
