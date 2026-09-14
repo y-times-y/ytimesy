@@ -4,7 +4,7 @@ export function OpenCodeMark({ size = 24 }: { size?: number }) {
 			aria-hidden="true"
 			fill="none"
 			height={size}
-			viewBox="0 0 512 512"
+			viewBox="128 96 256 320"
 			width={size}
 			xmlns="http://www.w3.org/2000/svg"
 		>
