@@ -218,6 +218,11 @@ describe("session items", () => {
 				text: "create hero",
 			},
 			{
+				kind: "agentMessage",
+				id: SessionItemId("m0"),
+				text: "I’ll create the file.",
+			},
+			{
 				kind: "reasoning",
 				id: SessionItemId("r1"),
 				summaries: ["first", "second"],
@@ -235,11 +240,6 @@ describe("session items", () => {
 						preview: 'export const hero = { title: "ytimesy" };',
 					},
 				],
-			},
-			{
-				kind: "agentMessage",
-				id: SessionItemId("m0"),
-				text: "I’ll create the file.",
 			},
 			{
 				kind: "agentMessage",
