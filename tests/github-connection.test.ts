@@ -163,13 +163,13 @@ it("rotates an expired GitHub token and stores the replacement", async () => {
 	expect(stored.rows[0].encrypted_credentials).not.toContain(
 		"rotated-access-token",
 	);
-	expect(JSON.parse(await unseal(stored.rows[0].encrypted_credentials))).toEqual(
-		{
-			accessToken: "rotated-access-token",
-			refreshToken: "rotated-refresh-token",
-			expiresAt: expect.any(Number),
-		},
-	);
+	expect(
+		JSON.parse(await unseal(stored.rows[0].encrypted_credentials)),
+	).toEqual({
+		accessToken: "rotated-access-token",
+		refreshToken: "rotated-refresh-token",
+		expiresAt: expect.any(Number),
+	});
 });
 
 it("asks the user to reconnect GitHub when refresh is impossible", async () => {
