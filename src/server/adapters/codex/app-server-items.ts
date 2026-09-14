@@ -1,4 +1,4 @@
-import { readDiffLineCounts } from "#/domain/diff-stats";
+import { countFileChangeLines, readDiffLineCounts } from "#/domain/diff-stats";
 import { SessionItemId } from "#/domain/ids";
 import type {
 	FileChangeEntry,
@@ -102,6 +102,9 @@ function reasoningSummaries(item: Record<string, unknown>): string[] {
 }
 
 function fileChangeKind(value: unknown): FileChangeEntry["change"] {
+	if (isRecord(value)) {
+		return fileChangeKind(value.type ?? value.kind ?? value.change);
+	}
 	const raw = typeof value === "string" ? value.toLowerCase() : "";
 	if (raw === "add" || raw === "added") return "add";
 	if (raw === "delete" || raw === "deleted" || raw === "remove")
@@ -118,14 +121,18 @@ function fileChanges(value: unknown): FileChangeEntry[] {
 		if (!isRecord(entry)) continue;
 		const path = readString(entry.path);
 		if (!path) continue;
-		const counts = readDiffLineCounts(
+		const change = fileChangeKind(entry.kind ?? entry.change);
+		const counted = countFileChangeLines(change, readString(entry.diff));
+		const explicit = readDiffLineCounts(
 			entry.additions,
 			entry.deletions,
-			readString(entry.diff),
+			undefined,
 		);
+		const counts =
+			explicit.additions > 0 || explicit.deletions > 0 ? explicit : counted;
 		changes.push({
 			path,
-			change: fileChangeKind(entry.kind ?? entry.change),
+			change,
 			additions: counts.additions,
 			deletions: counts.deletions,
 		});

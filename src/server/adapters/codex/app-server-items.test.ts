@@ -118,6 +118,35 @@ describe("sessionItemFromAppServerItem", () => {
 		});
 	});
 
+	it("maps Codex whole-file adds when kind is { type: add }", () => {
+		expect(
+			sessionItemFromAppServerItem({
+				id: "item_files_2",
+				type: "fileChange",
+				status: "completed",
+				changes: [
+					{
+						path: "/home/ubuntu/todo-cli/todo.py",
+						kind: { type: "add" },
+						diff: "print('hi')\nprint('there')\n",
+					},
+				],
+			}),
+		).toEqual({
+			kind: "fileChange",
+			id: SessionItemId("item_files_2"),
+			status: "completed",
+			changes: [
+				{
+					path: "/home/ubuntu/todo-cli/todo.py",
+					change: "add",
+					additions: 2,
+					deletions: 0,
+				},
+			],
+		});
+	});
+
 	it("preserves unknown item types instead of dropping them", () => {
 		expect(
 			sessionItemFromAppServerItem({
