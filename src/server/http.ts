@@ -1,7 +1,9 @@
 import { z } from "zod";
+import { authTrustedOrigins } from "./auth/providers";
 import { serverConfig } from "./config";
 export function requireSameOrigin(request: Request) {
-	if (request.headers.get("origin") !== new URL(serverConfig().APP_URL).origin)
+	const origin = request.headers.get("origin");
+	if (!origin || !authTrustedOrigins(serverConfig().APP_URL).includes(origin))
 		throw new Response("Request origin is not allowed.", { status: 403 });
 	if (!request.headers.get("content-type")?.startsWith("application/json"))
 		throw new Response("JSON required.", { status: 415 });

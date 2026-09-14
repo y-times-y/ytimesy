@@ -11,7 +11,7 @@ vi.mock("../src/server/adapters/database", () => ({
 	}),
 }));
 vi.mock("../src/server/config", () => ({
-	serverConfig: () => ({ APP_URL: "http://127.0.0.1:3001" }),
+	serverConfig: () => ({ APP_URL: "http://127.0.0.1:3999" }),
 }));
 beforeAll(async () => {
 	db = new PGlite();
@@ -73,7 +73,7 @@ describe("mutation origin boundary", () => {
 		(origin) => {
 			expect(() =>
 				requireSameOrigin(
-					new Request("http://127.0.0.1:3001/api/projects", {
+					new Request("http://127.0.0.1:3999/api/projects", {
 						method: "POST",
 						headers: {
 							...(origin ? { origin } : {}),
@@ -84,17 +84,20 @@ describe("mutation origin boundary", () => {
 			).toThrow();
 		},
 	);
-	it("accepts a same-origin JSON request", () => {
-		expect(() =>
-			requireSameOrigin(
-				new Request("http://127.0.0.1:3001/api/projects", {
-					method: "POST",
-					headers: {
-						origin: "http://127.0.0.1:3001",
-						"Content-Type": "application/json",
-					},
-				}),
-			),
-		).not.toThrow();
-	});
+	it.each(["http://127.0.0.1:3999", "http://localhost:3999"])(
+		"accepts trusted origin %s",
+		(origin) => {
+			expect(() =>
+				requireSameOrigin(
+					new Request("http://127.0.0.1:3999/api/projects", {
+						method: "POST",
+						headers: {
+							origin,
+							"Content-Type": "application/json",
+						},
+					}),
+				),
+			).not.toThrow();
+		},
+	);
 });
