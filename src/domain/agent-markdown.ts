@@ -11,19 +11,27 @@ export type AgentMarkdownBlock =
 			readonly ordered: boolean;
 			readonly items: readonly (readonly AgentInline[])[];
 	  }
-	| { readonly kind: "code"; readonly text: string };
+	| {
+			readonly kind: "code";
+			readonly language: string | null;
+			readonly text: string;
+	  };
 
 export function parseAgentMarkdown(text: string): AgentMarkdownBlock[] {
 	const trimmed = text.replace(/\r\n/g, "\n").trim();
 	if (!trimmed) return [];
 	const blocks: AgentMarkdownBlock[] = [];
-	const fence = /```[^\n]*\n([\s\S]*?)```/g;
+	const fence = /```([^\n]*)\n([\s\S]*?)```/g;
 	let cursor = 0;
 	let match = fence.exec(trimmed);
 	while (match) {
 		const before = trimmed.slice(cursor, match.index);
 		blocks.push(...parseMarkdownBlocks(before));
-		blocks.push({ kind: "code", text: (match[1] ?? "").replace(/\n$/, "") });
+		blocks.push({
+			kind: "code",
+			language: fenceLanguage(match[1] ?? ""),
+			text: (match[2] ?? "").replace(/\n$/, ""),
+		});
 		cursor = match.index + match[0].length;
 		match = fence.exec(trimmed);
 	}
@@ -126,4 +134,9 @@ function inlineFromCode(text: string): AgentInline {
 		return { kind: "code", text: label.slice(1, -1) };
 	}
 	return { kind: "code", text: label };
+}
+
+function fenceLanguage(tag: string): string | null {
+	const name = tag.trim().split(/\s+/)[0];
+	return name || null;
 }

@@ -369,16 +369,35 @@ button:enabled:active {
 	text-align: center;
 	color: rgba(255, 255, 255, 0.45);
 }
+.code-token-keyword {
+	color: #f67576;
+}
+.code-token-string {
+	color: #85df7b;
+}
+.code-token-sign {
+	color: #999;
+}
+.code-token-comment {
+	color: #999;
+}
+.code-token-class {
+	color: #b06dff;
+}
+.code-token-entity {
+	color: #6dcbf4;
+}
+.code-token-identifier {
+	color: #fff;
+}
 .diff-line-add {
 	background: rgba(64, 201, 119, 0.23);
-	color: #fff;
 }
 .diff-line-add .diff-gutter {
 	color: #40c977;
 }
 .diff-line-del {
 	background: rgba(255, 103, 100, 0.23);
-	color: #fff;
 }
 .diff-line-del .diff-gutter {
 	color: #ff6764;

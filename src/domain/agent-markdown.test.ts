@@ -47,6 +47,20 @@ describe("parseAgentMarkdown", () => {
 		]);
 	});
 
+	it("keeps a fence language so agent snippets can be color-coded", () => {
+		expect(
+			parseAgentMarkdown(
+				"```tsx\nexport const hero = { title: 'ytimesy' };\n```",
+			),
+		).toEqual([
+			{
+				kind: "code",
+				language: "tsx",
+				text: "export const hero = { title: 'ytimesy' };",
+			},
+		]);
+	});
+
 	it("keeps markdown file links from leaking raw brackets in a paragraph", () => {
 		expect(
 			parseAgentMarkdown("Created [`src/hero.tsx`](/tmp/src/hero.tsx) with:"),

@@ -1,5 +1,7 @@
 import type { AgentInline } from "#/domain/agent-markdown";
 import { parseAgentMarkdown } from "#/domain/agent-markdown";
+import { sourceLanguageFromFence } from "#/domain/source-language";
+import { HighlightedCode } from "./highlighted-code";
 
 export function AgentMarkdown({ text }: { text: string }) {
 	const blocks = parseAgentMarkdown(text);
@@ -19,7 +21,12 @@ export function AgentMarkdown({ text }: { text: string }) {
 				if (block.kind === "code") {
 					return (
 						<pre key={key}>
-							<code>{block.text}</code>
+							<code>
+								<HighlightedCode
+									text={block.text}
+									language={sourceLanguageFromFence(block.language)}
+								/>
+							</code>
 						</pre>
 					);
 				}
