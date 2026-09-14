@@ -26,6 +26,18 @@ export function canStartPrepare(status: WorkspaceStatus | undefined) {
 	return status === undefined || status === "queued" || status === "failed";
 }
 
+export function branchSwitchBlockedReason(
+	status: WorkspaceStatus | undefined,
+): string | null {
+	if (
+		status === "provisioning" ||
+		status === "cloning" ||
+		status === "installing"
+	)
+		return "Wait for workspace preparation to finish.";
+	return null;
+}
+
 export function blocksDuplicateProvision(status: WorkspaceStatus) {
 	return (
 		status === "ready" ||

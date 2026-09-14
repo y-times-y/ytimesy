@@ -18,6 +18,16 @@ export async function projectForOwner(
 	);
 	return result.rows[0] ?? null;
 }
+export async function projectForRepository(
+	userId: string,
+	repositoryId: number,
+): Promise<Project | null> {
+	const result = await database().query(
+		'select id,repository_id::float8 as "repositoryId",installation_id::float8 as "installationId",full_name as "fullName",branch from project where user_id=$1 and repository_id=$2',
+		[userId, repositoryId],
+	);
+	return result.rows[0] ?? null;
+}
 export async function saveProject(
 	userId: string,
 	repository: RepositoryChoice,
