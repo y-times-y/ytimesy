@@ -38,25 +38,27 @@ export function TaskInput({
 	}, []);
 
 	return (
-		<textarea
-			ref={inputRef}
-			aria-label={label}
-			placeholder={placeholder}
-			rows={1}
-			value={value}
-			disabled={disabled}
-			onChange={(event) => {
-				onChange(event.currentTarget.value);
-				fitDraftHeight(event.currentTarget);
-			}}
-			onInput={(event) => fitDraftHeight(event.currentTarget)}
-			onKeyDown={(event) => {
-				if (onKeyDown?.(event)) return;
-				if (event.key === "Enter" && !event.shiftKey) {
-					event.preventDefault();
-					onSubmit();
-				}
-			}}
-		/>
+		<div className="composer-input">
+			<textarea
+				ref={inputRef}
+				aria-label={label}
+				placeholder={placeholder}
+				rows={1}
+				value={value}
+				disabled={disabled}
+				onChange={(event) => {
+					onChange(event.currentTarget.value);
+					fitDraftHeight(event.currentTarget);
+				}}
+				onInput={(event) => fitDraftHeight(event.currentTarget)}
+				onKeyDown={(event) => {
+					if (onKeyDown?.(event)) return;
+					if (event.key === "Enter" && !event.shiftKey) {
+						event.preventDefault();
+						onSubmit();
+					}
+				}}
+			/>
+		</div>
 	);
 }
