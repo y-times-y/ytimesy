@@ -921,4 +921,5 @@ button:enabled:active {
 .workspace-status a {
 	color: #ddd;
 	text-underline-offset: 2px;
+	white-space: nowrap;
 }
