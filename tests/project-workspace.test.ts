@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import {
 	blocksDuplicateProvision,
+	branchSwitchBlockedReason,
 	canStartPrepare,
 	needsMachineCreate,
 	needsMachineRecover,
@@ -8,6 +9,15 @@ import {
 	redactSecrets,
 	workspaceSlug,
 } from "../src/domain/project-workspace";
+
+it("allows branch switch once prepare is idle or failed", () => {
+	expect(branchSwitchBlockedReason("provisioning")).toMatch(/finish/);
+	expect(branchSwitchBlockedReason("cloning")).toMatch(/finish/);
+	expect(branchSwitchBlockedReason("installing")).toMatch(/finish/);
+	expect(branchSwitchBlockedReason("ready")).toBeNull();
+	expect(branchSwitchBlockedReason("failed")).toBeNull();
+	expect(branchSwitchBlockedReason(undefined)).toBeNull();
+});
 
 it("starts prepare only from absent, queued, or failed workspaces", () => {
 	expect(canStartPrepare(undefined)).toBe(true);
