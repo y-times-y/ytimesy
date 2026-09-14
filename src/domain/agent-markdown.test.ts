@@ -14,6 +14,7 @@ describe("parseAgentMarkdown", () => {
 			},
 			{
 				kind: "list",
+				ordered: false,
 				items: [
 					[{ kind: "code", text: "todo.py" }],
 					[{ kind: "strong", text: "done" }],
@@ -25,6 +26,49 @@ describe("parseAgentMarkdown", () => {
 					{ kind: "text", text: "Run " },
 					{ kind: "code", text: "python3 test_todo.py" },
 					{ kind: "text", text: "." },
+				],
+			},
+		]);
+	});
+
+	it("keeps a lead-in and numbered list on adjacent lines", () => {
+		expect(
+			parseAgentMarkdown("Created:\n1. [`src/hero.tsx`](/tmp/src/hero.tsx)"),
+		).toEqual([
+			{
+				kind: "paragraph",
+				inlines: [{ kind: "text", text: "Created:" }],
+			},
+			{
+				kind: "list",
+				ordered: true,
+				items: [[{ kind: "code", text: "src/hero.tsx" }]],
+			},
+		]);
+	});
+
+	it("keeps markdown file links from leaking raw brackets in a paragraph", () => {
+		expect(
+			parseAgentMarkdown("Created [`src/hero.tsx`](/tmp/src/hero.tsx) with:"),
+		).toEqual([
+			{
+				kind: "paragraph",
+				inlines: [
+					{ kind: "text", text: "Created " },
+					{ kind: "code", text: "src/hero.tsx" },
+					{ kind: "text", text: " with:" },
+				],
+			},
+		]);
+		expect(
+			parseAgentMarkdown("Created `[src/hero.tsx](/tmp/src/hero.tsx)` with:"),
+		).toEqual([
+			{
+				kind: "paragraph",
+				inlines: [
+					{ kind: "text", text: "Created " },
+					{ kind: "code", text: "src/hero.tsx" },
+					{ kind: "text", text: " with:" },
 				],
 			},
 		]);

@@ -173,13 +173,27 @@ describe("session items", () => {
 		expect(lastUserMessageText(items)).toBe("second");
 	});
 
-	it("collapses consecutive thinking rows into one Codex-style activity line", () => {
+	it("collapses thinking around tool rows into one Codex Thought line", () => {
 		expect(
 			compactTimelineItems([
+				{
+					kind: "userMessage",
+					id: SessionItemId("user-1"),
+					text: "create hero",
+				},
 				{
 					kind: "reasoning",
 					id: SessionItemId("r1"),
 					summaries: ["first"],
+				},
+				{
+					kind: "commandExecution",
+					id: SessionItemId("cmd-1"),
+					command: `mkdir -p /tmp/src && cat > /tmp/src/hero.tsx <<'EOF'\nexport const hero = { title: "ytimesy" };\nEOF`,
+					cwd: "/tmp",
+					status: "completed",
+					output: null,
+					exitCode: 0,
 				},
 				{
 					kind: "reasoning",
@@ -194,14 +208,57 @@ describe("session items", () => {
 			]),
 		).toEqual([
 			{
+				kind: "userMessage",
+				id: SessionItemId("user-1"),
+				text: "create hero",
+			},
+			{
 				kind: "reasoning",
 				id: SessionItemId("r1"),
 				summaries: ["first", "second"],
 			},
 			{
+				kind: "fileChange",
+				id: SessionItemId("cmd-1"),
+				status: "completed",
+				changes: [
+					{
+						path: "/tmp/src/hero.tsx",
+						change: "add",
+						additions: 1,
+						deletions: 0,
+						preview: 'export const hero = { title: "ytimesy" };',
+					},
+				],
+			},
+			{
 				kind: "agentMessage",
 				id: SessionItemId("m1"),
 				text: "ok",
+			},
+		]);
+	});
+
+	it("collects Diff files from shell heredoc writes", () => {
+		expect(
+			fileChangesFromSessionItems([
+				{
+					kind: "commandExecution",
+					id: SessionItemId("cmd-1"),
+					command: `cat > src/hero.tsx <<'EOF'\nexport const hero = { title: "ytimesy" };\nEOF`,
+					cwd: "/tmp",
+					status: "completed",
+					output: null,
+					exitCode: 0,
+				},
+			]),
+		).toEqual([
+			{
+				path: "src/hero.tsx",
+				change: "add",
+				additions: 1,
+				deletions: 0,
+				preview: 'export const hero = { title: "ytimesy" };',
 			},
 		]);
 	});

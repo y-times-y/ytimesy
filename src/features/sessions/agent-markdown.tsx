@@ -24,8 +24,9 @@ export function AgentMarkdown({ text }: { text: string }) {
 					);
 				}
 				if (block.kind === "list") {
+					const ListTag = block.ordered ? "ol" : "ul";
 					return (
-						<ul key={key}>
+						<ListTag key={key}>
 							{numbered(block.items, (item) =>
 								item.map((part) => part.text).join(""),
 							).map(({ item, key: itemKey }) => (
@@ -33,7 +34,7 @@ export function AgentMarkdown({ text }: { text: string }) {
 									<AgentInlines inlines={item} />
 								</li>
 							))}
-						</ul>
+						</ListTag>
 					);
 				}
 				return (

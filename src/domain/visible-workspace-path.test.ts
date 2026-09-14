@@ -6,6 +6,7 @@ describe("visibleWorkspacePath", () => {
 		expect(visibleWorkspacePath("/home/ubuntu/todo-cli/todo.py")).toBe(
 			"todo-cli/todo.py",
 		);
+		expect(visibleWorkspacePath("/tmp/src/hero.tsx")).toBe("src/hero.tsx");
 		expect(visibleWorkspacePath("src/hero.tsx")).toBe("src/hero.tsx");
 	});
 });
