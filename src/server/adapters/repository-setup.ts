@@ -32,6 +32,46 @@ export function githubCloneEnv(token: string) {
 	};
 }
 
+export function githubPushEnv(token: string) {
+	return githubCloneEnv(token);
+}
+
+export function commitAllArgv(
+	directory: string,
+	message: string,
+	author: { readonly name: string; readonly email: string },
+) {
+	return [
+		"bash",
+		"-lc",
+		[
+			`cd ${shellSingleQuote(directory)}`,
+			"git add -A",
+			`if git diff --cached --quiet; then echo YTIMESY_NO_COMMIT; else git -c user.name=${shellSingleQuote(author.name)} -c user.email=${shellSingleQuote(author.email)} commit -m ${shellSingleQuote(message)}; fi`,
+		].join(" && "),
+	];
+}
+
+export function checkoutBranchArgv(directory: string, branch: string) {
+	return [
+		"bash",
+		"-lc",
+		`cd ${shellSingleQuote(directory)} && git checkout -B ${shellSingleQuote(branch)}`,
+	];
+}
+
+export function pushBranchArgv(directory: string, branch: string) {
+	return [
+		"bash",
+		"-lc",
+		`cd ${shellSingleQuote(directory)} && git push -u origin HEAD:${shellSingleQuote(branch)}`,
+	];
+}
+
+export function commitCreatedOutput(stdout: string) {
+	return !stdout.includes("YTIMESY_NO_COMMIT");
+}
+
 export function installArgv(directory: string, lockfiles: string[]) {
 	const command = lockfiles.includes("pnpm-lock.yaml")
 		? ["pnpm", "install", "--frozen-lockfile"]

@@ -45,7 +45,11 @@ export class UnconfiguredWorkspaceRuntime implements WorkspaceRuntime {
 
 export class MemoryWorkspaceRuntime implements WorkspaceRuntime {
 	readonly machines = new Map<string, string>();
-	readonly commands: { providerRef: string; argv: string[] }[] = [];
+	readonly commands: {
+		providerRef: string;
+		argv: string[];
+		envKeys: string[];
+	}[] = [];
 	constructor(private readonly execResult: RuntimeCommandResult = success) {}
 	async findBySlug(slug: string) {
 		return this.machines.get(slug) ?? null;
@@ -64,8 +68,12 @@ export class MemoryWorkspaceRuntime implements WorkspaceRuntime {
 			throw new Error("Workspace machine is missing.");
 		return providerRef;
 	}
-	async exec(providerRef: string, argv: string[]) {
-		this.commands.push({ providerRef, argv });
+	async exec(
+		providerRef: string,
+		argv: string[],
+		env: Record<string, string> = {},
+	) {
+		this.commands.push({ providerRef, argv, envKeys: Object.keys(env) });
 		return this.execResult;
 	}
 }

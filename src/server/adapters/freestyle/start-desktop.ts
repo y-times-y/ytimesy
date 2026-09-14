@@ -36,3 +36,17 @@ import json
 print("YTIMESY_DESKTOP=" + json.dumps({"display": ":0", "port": 6080}))
 PY
 `;
+
+export const PROBE_WORKSPACE_DESKTOP = `python3 - <<'PY'
+import socket
+probe = socket.socket()
+probe.settimeout(1)
+try:
+    probe.connect(("127.0.0.1", 6080))
+    print("YTIMESY_DESKTOP_UP")
+except Exception:
+    print("YTIMESY_DESKTOP_DOWN")
+finally:
+    probe.close()
+PY
+`;

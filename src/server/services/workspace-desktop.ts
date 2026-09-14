@@ -1,8 +1,16 @@
 import { Effect } from "effect";
 import { WorkspaceId } from "#/domain/ids";
 import { workspaceSessionMachineRef } from "#/domain/project-workspace";
-import type { WorkspaceDesktop } from "#/domain/workspace-desktop";
-import { START_WORKSPACE_DESKTOP } from "#/server/adapters/freestyle/start-desktop";
+import {
+	desktopHostname,
+	desktopPortIsListening,
+	desktopViewerUrlForMachine,
+	type WorkspaceDesktop,
+} from "#/domain/workspace-desktop";
+import {
+	PROBE_WORKSPACE_DESKTOP,
+	START_WORKSPACE_DESKTOP,
+} from "#/server/adapters/freestyle/start-desktop";
 import { readyWorkspaceForOwner } from "#/server/adapters/workspaces";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -12,10 +20,20 @@ export type DesktopScope = {
 };
 
 export function readWorkspaceDesktop(
-	_machines: WorkspaceMachines,
+	machines: WorkspaceMachines,
 	scope: DesktopScope,
 ): Effect.Effect<WorkspaceDesktop> {
-	return Effect.succeed(desktopFor(scopeKey(scope)));
+	return Effect.gen(function* () {
+		const key = scopeKey(scope);
+		const cached = desktopFor(key);
+		if (cached.status === "running" && cached.viewerUrl) return cached;
+		const recovered = yield* recoverRunningDesktop(machines, scope);
+		if (recovered) {
+			desktops.set(key, recovered);
+			return recovered;
+		}
+		return cached;
+	});
 }
 
 export function startWorkspaceDesktop(
@@ -51,32 +69,34 @@ export function startWorkspaceDesktop(
 			desktops.set(key, failed);
 			return failed;
 		}
-		const hostname = desktopHostname(providerRef);
-		try {
-			const origin = yield* Effect.tryPromise(() =>
-				machines.exposeHttp(WorkspaceId(providerRef), 6080, hostname),
-			);
-			const running: WorkspaceDesktop = {
-				status: "running",
-				viewerUrl: `${origin}/vnc.html?autoconnect=1&resize=scale&reconnect=1`,
-				display: ":0",
-				message: "You and the agent share this desktop.",
-			};
-			desktops.set(key, running);
-			return running;
-		} catch (cause) {
-			const running: WorkspaceDesktop = {
-				status: "running",
-				viewerUrl: null,
-				display: ":0",
-				message:
-					cause instanceof Error
-						? `Desktop is on display :0 but not reachable from the browser: ${cause.message}`
-						: "Desktop is on display :0 but not reachable from the browser.",
-			};
-			desktops.set(key, running);
-			return running;
-		}
+		const exposed = yield* Effect.either(
+			Effect.tryPromise(() =>
+				machines.exposeHttp(
+					WorkspaceId(providerRef),
+					6080,
+					desktopHostname(providerRef),
+				),
+			),
+		);
+		const running: WorkspaceDesktop =
+			exposed._tag === "Right"
+				? {
+						status: "running",
+						viewerUrl: `${exposed.right}/vnc.html?autoconnect=1&resize=scale&reconnect=1`,
+						display: ":0",
+						message: "You and the agent share this desktop.",
+					}
+				: {
+						status: "running",
+						viewerUrl: desktopViewerUrlForMachine(providerRef),
+						display: ":0",
+						message:
+							exposed.left instanceof Error
+								? `Desktop is on display :0. Browser mapping reused the existing host: ${exposed.left.message}`
+								: "Desktop is on display :0. Browser mapping reused the existing host.",
+					};
+		desktops.set(key, running);
+		return running;
 	}).pipe(
 		Effect.catchAll((cause) => {
 			const failed: WorkspaceDesktop = {
@@ -89,6 +109,33 @@ export function startWorkspaceDesktop(
 	);
 }
 
+function recoverRunningDesktop(
+	machines: WorkspaceMachines,
+	scope: DesktopScope,
+): Effect.Effect<WorkspaceDesktop | null> {
+	return Effect.gen(function* () {
+		const workspace = yield* Effect.tryPromise(() =>
+			readyWorkspaceForOwner(scope.userId, scope.projectId),
+		);
+		const providerRef = workspaceSessionMachineRef(workspace);
+		if (!providerRef) return null;
+		yield* Effect.tryPromise(() =>
+			machines.ensureRunning(WorkspaceId(providerRef)),
+		);
+		const probe = yield* Effect.tryPromise(() =>
+			machines.exec(WorkspaceId(providerRef), PROBE_WORKSPACE_DESKTOP, 15_000),
+		);
+		if (!desktopPortIsListening(`${probe.stdout}\n${probe.stderr}`))
+			return null;
+		return {
+			status: "running" as const,
+			viewerUrl: desktopViewerUrlForMachine(providerRef),
+			display: ":0" as const,
+			message: "You and the agent share this desktop.",
+		};
+	}).pipe(Effect.catchAll(() => Effect.succeed(null)));
+}
+
 const desktops = new Map<string, WorkspaceDesktop>();
 
 function scopeKey(scope: DesktopScope) {
@@ -97,12 +144,4 @@ function scopeKey(scope: DesktopScope) {
 
 function desktopFor(key: string): WorkspaceDesktop {
 	return desktops.get(key) ?? { status: "stopped" };
-}
-
-function desktopHostname(workspaceId: string): string {
-	const slug = workspaceId
-		.replaceAll(/[^a-zA-Z0-9]/g, "")
-		.slice(-12)
-		.toLowerCase();
-	return `ytimesy-desk-${slug || "local"}.style.dev`;
 }

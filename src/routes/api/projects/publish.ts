@@ -20,7 +20,13 @@ export const Route = createFileRoute("/api/projects/publish")({
 					const user = await requireUser(request.headers);
 					const input = draft.parse(await request.json());
 					const result = await Effect.runPromise(
-						Effect.either(publishProject(user.id, input)),
+						Effect.either(
+							publishProject(user.id, {
+								...input,
+								authorName: user.name,
+								authorEmail: user.email,
+							}),
+						),
 					);
 					if (result._tag === "Left") throw result.left.error;
 					return result.right;

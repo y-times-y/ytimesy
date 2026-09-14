@@ -286,6 +286,31 @@ button:enabled:active {
 	color: #eee;
 	font-size: 13px;
 }
+.terminal-inspector {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	min-height: 0;
+	background: #111;
+}
+.terminal-inspector-error {
+	margin: 0;
+	padding: 8px 12px;
+	border-bottom: 1px solid #242424;
+	font-size: 12px;
+	line-height: 1.4;
+	color: #c8c8c8;
+}
+.terminal-inspector-frame {
+	flex: 1;
+	min-height: 0;
+	padding: 8px;
+}
+.terminal-inspector .xterm,
+.terminal-inspector .xterm-viewport {
+	height: 100%;
+	background: #111;
+}
 .inspector-changes {
 	list-style: none;
 	margin: 0;
