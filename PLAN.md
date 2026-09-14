@@ -20,7 +20,9 @@ V0 is complete when Het connects a real private repository and his own agent acc
 
 Workspace isolation: a Project owns a prepared environment (Rigkit apply / clone-and-install, then a Freestyle snapshot or a warm spare that agents never edit). That template is shared; the running checkout is not. Each agent session owns a WorkspaceId: a distinct Freestyle VM copied from the template (`vms.create({ snapshotId })` or `vm.fork()` of the unused warm spare). Isolation is the VM copy, not git worktrees on one disk. Competing agents run in parallel, each with its own working tree, index, ports, PTY, and preview. Reconnect to an existing session pauses/resumes that same VM. Starting another agent copies again from the clean template — never from an agent VM that already has edits. Each workspace checkout uses its own branch for publication.
 
-Project context is an agent-context concern, not a VM concern. Agents under the same Project share a durable briefing that is injected into each new session's model context so it already knows the repo shape, conventions, open sibling work, and facts earlier agents wrote back. Store that pack on the Project and seed the Codex thread at start; after a session, compact durable notes back onto the Project. Do not implement this by sharing a VM, a working tree, or one live Codex thread. `thread/resume` continues one session; `thread/fork` is an explicit “branch this conversation,” not how every new agent starts.
+Project context is an agent-context concern, not a VM concern. Agents under the same Project share a durable briefing plus captured reasoning traces from sibling sessions. Codex already streams Thought summaries and, when the model allows it, raw reasoning blocks; persist those on the Project and inject the relevant traces into a new thread so the next agent can reuse how something was figured out, not only a compacted fact list. Still a new thread per agent — do not share a live chat. Inject related traces (same area of the repo, related task), not every thought from every session. After a session, keep the traces and a short briefing update; do not require the other agent to replay the full transcript. `thread/resume` continues one session; `thread/fork` is an explicit “branch this conversation,” not how every new agent starts.
+
+Environment speed is separate from context. A new agent VM is a copy of an already-prepared project snapshot (`vm.fork()` or `vms.create({ snapshotId })`), so opening another agent does not run setup. The first project setup must still be fast: boot a prebaked tools+auth image (Node, git, Codex, package store — no user secrets in the shared layer), then clone and install with warm caches, and snapshot immediately. Do not install OS tooling per project, do not copy Cursor hourly Builds as the user-visible wait, and do not block a second agent on `pnpm install`. Composer can bind as soon as that session's VM is reachable.
 
 Do not put two agents in one checkout, use git worktrees to fake isolation, serialize competing edits on a shared VM, or re-run `pnpm install` when opening a new agent.
 
@@ -173,7 +175,9 @@ Keep the plain monochrome workspace, Inter typography, compact growing composer,
 
 Each new agent session is a new VM copied from the project's prepared snapshot or unused warm spare, not a second git worktree on a shared machine. Resume is the same VM; a second agent is another copy. Fork only from a clean template so agent B does not inherit agent A's dirty tree.
 
-Shared project context is injected into the new agent's thread, independent of that VM copy. Write durable facts back to the Project briefing, not a shared live transcript.
+Shared project context is injected into the new agent's thread, independent of that VM copy. Include sibling reasoning traces (Thought summaries and raw reasoning when Codex gives them), not only compacted facts.
+
+First project setup boots a prebaked tools+auth image, then clone/install with caches and snapshot. Later agents copy that snapshot with no setup wait.
 
 Use the installed self-documenting-code skill. Keep routes thin and put provider operations behind explicit adapters. Do not fabricate integration success or silently substitute paid model API access for the user's subscription.
 
