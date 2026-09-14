@@ -12,7 +12,7 @@ V0 is complete when Het connects a real private repository and his own agent acc
 
 1. Sign in; install a GitHub App with selected-repository access.
 2. Choose a repository and branch. Prepare a project environment snapshot (dependencies, project configuration, and necessary credentials). Each agent session then gets its own Freestyle VM copied from that snapshot.
-3. Connect agent access through the provider's supported sign-in flow. Begin with Codex as the first integration candidate; validate remote authentication and app-server behavior before claiming support.
+3. Connect agent access through that provider's supported sign-in. Offered v0 agents are Codex and Claude. ytimesy is the host; neither provider is the product. Validate each official protocol before claiming support. Claude Code must stay unmodified; each user authenticates with their own Claude account or API key inside that binary. Do not offer Claude.ai login inside ytimesy, intermediate Anthropic billing, or use Anthropic marks as ytimesy branding.
 4. Start and steer an agent session. Show messages, tool activity, progress, approvals, cancellation, and actionable failures.
 5. Inspect that session's workspace through Diff, Terminal, and Preview. The terminal is explicitly required in v0.
 6. Continue active work independently of the web application request or browser connection. Reconnect to retained sessions; expose expired authentication and recovery states clearly.
@@ -20,13 +20,13 @@ V0 is complete when Het connects a real private repository and his own agent acc
 
 Workspace isolation: a Project owns a prepared environment (Rigkit apply / clone-and-install, then a Freestyle snapshot or a warm spare that agents never edit). That template is shared; the running checkout is not. Each agent session owns a WorkspaceId: a distinct Freestyle VM copied from the template (`vms.create({ snapshotId })` or `vm.fork()` of the unused warm spare). Isolation is the VM copy, not git worktrees on one disk. Competing agents run in parallel, each with its own working tree, index, ports, PTY, and preview. Reconnect to an existing session pauses/resumes that same VM. Starting another agent copies again from the clean template — never from an agent VM that already has edits. Each workspace checkout uses its own branch for publication.
 
-Project context is an agent-context concern, not a VM concern. Agents under the same Project share a durable briefing plus captured reasoning traces from sibling sessions. Codex already streams Thought summaries and, when the model allows it, raw reasoning blocks; persist those on the Project and inject the relevant traces into a new thread so the next agent can reuse how something was figured out, not only a compacted fact list. Still a new thread per agent — do not share a live chat. Inject related traces (same area of the repo, related task), not every thought from every session. After a session, keep the traces and a short briefing update; do not require the other agent to replay the full transcript. `thread/resume` continues one session; `thread/fork` is an explicit “branch this conversation,” not how every new agent starts.
+Project context is an agent-context concern, not a VM concern and not a Codex-only concern. Agents under the same Project share a durable briefing plus captured reasoning traces from sibling sessions, including across Codex and Claude. Persist those on the Project in ytimesy records. Each provider adapter injects the relevant traces into that agent's session so the next agent can reuse how something was figured out, not only a compacted fact list. Still a new session per agent — do not share a live chat. Inject related traces (same area of the repo, related task), not every thought from every session. After a session, keep the traces and a short briefing update; do not require the other agent to replay the full transcript. Resume continues one session; forking a conversation is explicit, not how every new agent starts.
 
-Environment speed is separate from context. A new agent VM is a copy of an already-prepared project snapshot (`vm.fork()` or `vms.create({ snapshotId })`), so opening another agent does not run setup. The first project setup must still be fast: boot a prebaked tools+auth image (Node, git, Codex, package store — no user secrets in the shared layer), then clone and install with warm caches, and snapshot immediately. Do not install OS tooling per project, do not copy Cursor hourly Builds as the user-visible wait, and do not block a second agent on `pnpm install`. Composer can bind as soon as that session's VM is reachable.
+Environment speed is separate from context. A new agent VM is a copy of an already-prepared project snapshot (`vm.fork()` or `vms.create({ snapshotId })`), so opening another agent does not run setup. The first project setup must still be fast: boot a prebaked tools image (Node, git, Codex CLI, Claude Code CLI, package store — no user secrets), apply that user's private per-provider auth snapshot, then clone and install with warm caches, and snapshot immediately. Do not install OS tooling per project, do not copy Cursor hourly Builds as the user-visible wait, and do not block a second agent on `pnpm install`. Composer can bind as soon as that session's VM is reachable.
 
 Do not put two agents in one checkout, use git worktrees to fake isolation, serialize competing edits on a shared VM, or re-run `pnpm install` when opening a new agent.
 
-Later: local session import/handoff, additional agents, non-Git folders, fresh project/repository creation, advanced collaboration, automations, and billing UI. Preserve clean extension boundaries without implementing speculative features.
+Later: local session import/handoff, agents beyond Codex and Claude, non-Git folders, fresh project/repository creation, advanced collaboration, automations, and billing UI. Preserve clean extension boundaries without implementing speculative features.
 
 ## Experience and visual direction
 
@@ -35,6 +35,8 @@ Left sidebar: projects and sessions. Collapse it into a persistent narrow rail w
 ytimesy has its own monochrome visual identity: Inter interface typography from shadcn preset `b1D0dv72` (Radix Mira, neutral palette; reserve monospace for code and terminal content), black and charcoal surfaces, fine gray borders, white primary actions, deliberate spacing, and polished interaction states. Use simple 16px icons with a consistent 1.5px stroke; omit decorative icons from text tabs. Keep the workspace background plain; no artwork or shader for now. Use a compact monochrome Y silhouette made from two vertical bars of ascending height that join into one lower stem, with restrained flat grayscale facets for depth from `public/brand/mark.svg`, shown at 28px in both sidebar states. Pair it with the lowercase ytimesy wordmark in the expanded sidebar. Keep the lettering restrained, closely spaced, and off-white. The symbol should express independent work multiplying through its own geometry; do not imitate reference brand marks. Do not use starbursts, masks, mountains, PR symbols, glow, gradients, or surrounding tiles. The displayed name is ytimesy. Keep the expanded wordmark free of a separate logo tile or version badge. The project and domain remain ytimesy and ytimesy.com. Avoid green accents and literal binary-digit fields; keep the texture away from primary content. Reference screenshots remain ignored by Git. Use concise, functional UI copy. Avoid promotional headlines, taglines, and redundant onboarding prose inside the workspace. Infrastructure details appear only when they help resolve a problem.
 
 Codex onboarding target: Connect Codex → copy a one-time code → authorize on OpenAI's page → automatically detect completion. Preserve progress and support expiry/retry/reconnection. Never ask for secrets in chat. Provider usage remains billed to the user's supported subscription or explicitly selected API account; infrastructure usage is separate.
+
+Claude onboarding target: run unmodified Claude Code in the user's workspace VM and complete Anthropic's own sign-in in that binary. Each end user brings their own Claude subscription or API key. Do not collect Claude.ai passwords in ytimesy chat, wrap Claude.ai login in the ytimesy origin, or bill Anthropic usage through ytimesy.
 
 ## Stack decisions
 
@@ -106,7 +108,7 @@ Million-developer scalability is an architectural ambition, not a verified launc
 Scaffold TanStack Start with TypeScript, lint/typecheck/build scripts, and a clean ytimesy app shell. Introduce the first domain models and Effect service boundary through a real narrow operation. Use honest empty/unconfigured states; do not fabricate repos, sessions, or successful connections.
 
 ### 2. Integration proof
-Verify official Codex remote login and app-server protocol in a user-isolated Freestyle workspace. Verify Rigkit installation/setup operations and authentication interaction. Establish supported versions and cleanup behavior. User subscription access is not interchangeable with a general inference API.
+Verify official Codex remote login and app-server protocol in a user-isolated Freestyle workspace. Verify official Claude Code in the same class of workspace with user-owned credentials. Verify Rigkit installation/setup operations and authentication interaction. Establish supported versions and cleanup behavior. User subscription access is not interchangeable with a general inference API.
 
 ### 3. Identity, records, and GitHub
 Integrate Better Auth and select Postgres hosting, implement migrations and tenant-scoped access, install GitHub App, and list authorized repositories. Save project/branch selection. Configuration requiring user/provider account access may remain a clearly reported blocker, not mocked success.
@@ -149,7 +151,7 @@ Recheck versioned APIs before implementing. Validate subscription connection usi
 
 ### Goal
 
-Use ytimesy to work on its own repository with a real cloud coding agent. Preserve the approved UI while building the first complete flow: sign in → connect this repository → connect Codex → launch a Freestyle workspace → send a task → inspect changes, terminal, and preview → publish explicitly.
+Use ytimesy to work on its own repository with a real cloud coding agent. Preserve the approved UI while building the first complete flow: sign in → connect this repository → connect Codex or Claude → launch a Freestyle workspace → send a task → inspect changes, terminal, and preview → publish explicitly.
 
 ### Current evidence and limits
 
@@ -173,11 +175,13 @@ Better Auth, PostgreSQL records, GitHub authorization, durable jobs, live termin
 
 Keep the plain monochrome workspace, Inter typography, compact growing composer, responsive panels, hover-revealed sidebar rail, and model-specific reasoning controls. The approved logo is the faceted rising-bar Y in `public/brand/mark.svg`. `mark-light.svg` is light artwork for dark backgrounds; `mark-dark.svg` is dark artwork for light backgrounds. Keep the current logo and avoid restarting brand exploration.
 
+Offered coding agents are Codex and Claude. Provider protocols, login, and marks stay in adapters; do not treat ytimesy as a Codex product. Claude Code stays unmodified, with per-user credentials and a private auth snapshot separate from Codex.
+
 Each new agent session is a new VM copied from the project's prepared snapshot or unused warm spare, not a second git worktree on a shared machine. Resume is the same VM; a second agent is another copy. Fork only from a clean template so agent B does not inherit agent A's dirty tree.
 
-Shared project context is injected into the new agent's thread, independent of that VM copy. Include sibling reasoning traces (Thought summaries and raw reasoning when Codex gives them), not only compacted facts.
+Shared project context is injected into the new agent's session, independent of that VM copy and of which provider is running. Include sibling reasoning traces, not only compacted facts.
 
-First project setup boots a prebaked tools+auth image, then clone/install with caches and snapshot. Later agents copy that snapshot with no setup wait.
+First project setup boots a prebaked tools image (both CLIs), applies the user's private provider auth snapshot, then clone/install with caches and snapshot. Later agents copy that snapshot with no setup wait.
 
 Use the installed self-documenting-code skill. Keep routes thin and put provider operations behind explicit adapters. Do not fabricate integration success or silently substitute paid model API access for the user's subscription.
 

@@ -1,18 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { connectedAgentStatus } from "./agent-connection";
-import { agentProviderById, offeredAgentProviders } from "./agent-provider";
+import {
+	agentProviderById,
+	CLAUDE_PROVIDER,
+	CODEX_PROVIDER,
+	offeredAgentProviders,
+} from "./agent-provider";
 
 describe("agent providers", () => {
-	it("offers Codex first and does not invent other agents", () => {
-		expect(offeredAgentProviders().map((provider) => provider.id)).toEqual([
-			"codex",
-		]);
-		expect(agentProviderById("codex")).toEqual({
-			id: "codex",
-			name: "Codex",
-			signInMethod: "ChatGPT",
-			authorizeWith: "OpenAI",
-		});
+	it("offers Codex and Claude and does not invent other agents", () => {
+		expect(offeredAgentProviders()).toEqual([CODEX_PROVIDER, CLAUDE_PROVIDER]);
+		expect(agentProviderById("codex")).toEqual(CODEX_PROVIDER);
+		expect(agentProviderById("claude")).toEqual(CLAUDE_PROVIDER);
 	});
 
 	it("names the connected agent from its provider", () => {
