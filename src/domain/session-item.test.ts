@@ -84,6 +84,49 @@ describe("session items", () => {
 		]);
 	});
 
+	it("keeps the latest preview when the same path is edited again", () => {
+		const items: SessionItem[] = [
+			{
+				kind: "fileChange",
+				id: SessionItemId("patch-1"),
+				status: "completed",
+				changes: [
+					{
+						path: "todo.py",
+						change: "add",
+						additions: 10,
+						deletions: 0,
+						preview: "print(1)\n",
+					},
+				],
+			},
+			{
+				kind: "fileChange",
+				id: SessionItemId("patch-2"),
+				status: "completed",
+				changes: [
+					{
+						path: "todo.py",
+						change: "update",
+						additions: 2,
+						deletions: 1,
+						preview: "print(2)\n",
+					},
+				],
+			},
+		];
+
+		expect(fileChangesFromSessionItems(items)).toEqual([
+			{
+				path: "todo.py",
+				change: "update",
+				additions: 2,
+				deletions: 1,
+				preview: "print(2)\n",
+			},
+		]);
+	});
+
 	it("keeps a local user message until the server transcript includes it", () => {
 		const server: SessionItem[] = [
 			{
