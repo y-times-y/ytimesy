@@ -1,28 +1,50 @@
-import { PanelLeft, Plus } from "lucide-react";
+import { FolderGit2, PanelLeft, Plus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { PublicProjectPicker } from "#/domain/github-project";
+import {
+	type PublicGitHubProject,
+	type PublicProjectPicker,
+	projectPickerLabel,
+} from "#/domain/github-project";
+import {
+	newChatIsActive,
+	type SidebarChat,
+	sidebarChatsEmptyCopy,
+} from "#/domain/sidebar-chats";
 
 interface ProjectSidebarProps {
 	expanded: boolean;
 	onToggle: () => void;
-	onAddProject: () => void;
 	picker: PublicProjectPicker | null;
-	onSelectProject: (projectId: string) => void;
+	chats: readonly SidebarChat[];
+	onNewChat: () => void;
+	onFocusProject: () => void;
 }
 
 export function ProjectSidebar({
 	expanded,
 	onToggle,
-	onAddProject,
 	picker,
-	onSelectProject,
+	chats,
+	onNewChat,
+	onFocusProject,
 }: ProjectSidebarProps) {
 	const collapseButton = useRef<HTMLButtonElement>(null);
 	const railLogo = useRef<HTMLButtonElement>(null);
 	const [hovered, setHovered] = useState(false);
 	const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const visible = expanded || hovered;
-	const projects = picker?.projects ?? [];
+	const selected = selectedProject(picker);
+	const projectLabel = selected
+		? projectPickerLabel(selected, picker?.projects ?? [])
+		: null;
+	const emptyCopy = sidebarChatsEmptyCopy({
+		loading: picker === null,
+		projectSelected: Boolean(selected),
+	});
+	const newChatActive = newChatIsActive({
+		projectSelected: Boolean(selected),
+		hasUserMessage: chats.length > 0,
+	});
 
 	function cancelClose() {
 		if (closeTimer.current !== null) clearTimeout(closeTimer.current);
@@ -67,14 +89,14 @@ export function ProjectSidebar({
 			<button
 				type="button"
 				className="sidebar-backdrop"
-				aria-label="Close projects"
+				aria-label="Close chats"
 				tabIndex={-1}
 				onClick={toggleProjects}
 			/>
 			<aside
 				id="project-sidebar"
 				className="project-sidebar"
-				aria-label="Projects"
+				aria-label="Chats"
 				inert={!visible}
 				aria-hidden={!visible}
 				onKeyDown={(event) => {
@@ -99,8 +121,8 @@ export function ProjectSidebar({
 						type="button"
 						className="panel-toggle"
 						ref={collapseButton}
-						aria-label={expanded ? "Collapse projects" : "Keep projects open"}
-						title={expanded ? "Collapse projects" : "Keep projects open"}
+						aria-label={expanded ? "Collapse chats" : "Keep chats open"}
+						title={expanded ? "Collapse chats" : "Keep chats open"}
 						aria-expanded={expanded}
 						aria-controls="project-sidebar"
 						onClick={toggleProjects}
@@ -108,54 +130,48 @@ export function ProjectSidebar({
 						<PanelLeft size={16} />
 					</button>
 				</div>
+				<button
+					type="button"
+					className="sidebar-project-chip"
+					data-empty={!projectLabel}
+					onClick={onFocusProject}
+				>
+					<FolderGit2 size={16} />
+					<span>
+						{projectLabel ??
+							(picker === null ? "Loading repository…" : "Select a repository")}
+					</span>
+				</button>
 				<div className="sidebar-section">
-					<span>Projects</span>
+					<span>Chats</span>
 					<button
 						type="button"
 						className="panel-toggle"
-						aria-label="Add project"
-						title="Add project"
-						onClick={onAddProject}
+						aria-label="New chat"
+						title="New chat"
+						data-active={newChatActive}
+						onClick={onNewChat}
 					>
 						<Plus size={16} />
 					</button>
 				</div>
-				{projects.length === 0 ? (
-					<p className="sidebar-empty">
-						{picker?.message ?? "Loading projects…"}
-					</p>
+				{chats.length === 0 ? (
+					<p className="sidebar-empty">{emptyCopy}</p>
 				) : (
-					<ul className="sidebar-projects">
-						{projects.map((project) => (
-							<li key={project.projectId}>
-								<button
-									type="button"
-									className="sidebar-project"
-									data-selected={
-										project.projectId === picker?.selectedProjectId
-									}
-									onClick={() => onSelectProject(project.projectId)}
-								>
-									{project.fullName}
+					<ul className="sidebar-chats">
+						{chats.map((chat) => (
+							<li key={chat.id}>
+								<button type="button" className="sidebar-chat" data-selected>
+									{chat.title}
 								</button>
 							</li>
 						))}
 					</ul>
 				)}
-				{picker?.installUrl ? (
-					<a
-						className="sidebar-install"
-						href={picker.installUrl}
-						target="_blank"
-						rel="noreferrer"
-					>
-						Manage GitHub App access
-					</a>
-				) : null}
 			</aside>
 			<nav
 				className="sidebar-rail"
-				aria-label="Project shortcuts"
+				aria-label="Chat shortcuts"
 				inert={visible}
 				aria-hidden={visible}
 			>
@@ -163,8 +179,8 @@ export function ProjectSidebar({
 					type="button"
 					ref={railLogo}
 					className="rail-brand"
-					aria-label="Open projects"
-					title="Open projects"
+					aria-label="Open chats"
+					title="Open chats"
 					aria-expanded={expanded}
 					aria-controls="project-sidebar"
 					onClick={toggleProjects}
@@ -180,13 +196,25 @@ export function ProjectSidebar({
 				<button
 					type="button"
 					className="panel-toggle"
-					aria-label="Add project"
-					title="Add project"
-					onClick={onAddProject}
+					aria-label="New chat"
+					title="New chat"
+					data-active={newChatActive}
+					onClick={onNewChat}
 				>
 					<Plus size={16} />
 				</button>
 			</nav>
 		</div>
+	);
+}
+
+function selectedProject(
+	picker: PublicProjectPicker | null,
+): PublicGitHubProject | null {
+	if (!picker?.selectedProjectId) return null;
+	return (
+		picker.projects.find(
+			(project) => project.projectId === picker.selectedProjectId,
+		) ?? null
 	);
 }

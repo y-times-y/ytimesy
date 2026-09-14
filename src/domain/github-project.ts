@@ -74,6 +74,24 @@ export function parseGitHubProjectId(
 	return { owner: match[1], name: match[2] };
 }
 
+export function githubRepositoryName(fullName: string): string {
+	const parsed = fullName.trim().split("/");
+	return parsed.length === 2 && parsed[1] ? parsed[1] : fullName.trim();
+}
+
+export function projectPickerLabel(
+	project: PublicGitHubProject,
+	siblings: readonly PublicGitHubProject[],
+): string {
+	const name = githubRepositoryName(project.fullName);
+	const clashing = siblings.some(
+		(other) =>
+			other.projectId !== project.projectId &&
+			githubRepositoryName(other.fullName) === name,
+	);
+	return clashing ? project.fullName : name;
+}
+
 export function gitHubRepositoryFromApi(
 	installationId: string,
 	value: unknown,

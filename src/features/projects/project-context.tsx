@@ -1,4 +1,4 @@
-import { GitBranch } from "lucide-react";
+import { FolderGit2, GitBranch } from "lucide-react";
 import {
 	Select,
 	SelectContent,
@@ -6,7 +6,10 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "#/components/ui/select";
-import type { PublicProjectPicker } from "#/domain/github-project";
+import {
+	type PublicProjectPicker,
+	projectPickerLabel,
+} from "#/domain/github-project";
 
 export function ProjectContext({
 	picker,
@@ -26,8 +29,8 @@ export function ProjectContext({
 	const projectValue = selectedProjectId ?? "none";
 	const branchValue = selectedBranch ?? "none";
 	const emptyCopy = picker
-		? (picker.message ?? "No projects added yet")
-		: "Loading projects…";
+		? (picker.message ?? "No repositories yet")
+		: "Loading repositories…";
 	const branchDisabled = busy || !selectedProjectId;
 	const projectDisabled = busy || !picker;
 
@@ -37,6 +40,12 @@ export function ProjectContext({
 				value={projectValue}
 				onValueChange={(value) => {
 					if (value === "none") return;
+					if (value === "add-repo") {
+						if (picker?.installUrl) {
+							window.open(picker.installUrl, "_blank", "noopener,noreferrer");
+						}
+						return;
+					}
 					onSelectProject(value);
 				}}
 				disabled={projectDisabled}
@@ -45,8 +54,8 @@ export function ProjectContext({
 					className="context-select project-select"
 					aria-label="Project"
 				>
-					<GitBranch size={14} />
-					<SelectValue placeholder="Select project" />
+					<FolderGit2 size={14} />
+					<SelectValue placeholder="Select a repository" />
 				</SelectTrigger>
 				<SelectContent
 					position="popper"
@@ -61,10 +70,13 @@ export function ProjectContext({
 					) : (
 						projects.map((project) => (
 							<SelectItem key={project.projectId} value={project.projectId}>
-								{project.fullName}
+								{projectPickerLabel(project, projects)}
 							</SelectItem>
 						))
 					)}
+					{picker?.installUrl ? (
+						<SelectItem value="add-repo">Add repository…</SelectItem>
+					) : null}
 				</SelectContent>
 			</Select>
 			<Select
@@ -79,6 +91,7 @@ export function ProjectContext({
 					className="context-select branch-select"
 					aria-label="Branch"
 				>
+					<GitBranch size={14} />
 					<SelectValue placeholder="Branch" />
 				</SelectTrigger>
 				<SelectContent
