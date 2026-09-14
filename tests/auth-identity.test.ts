@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import { githubAppIdentityMatchesSignIn } from "../src/domain/github-sign-in";
 import {
 	authTrustedOrigins,
+	configuredSocialProviders,
 	googleOAuthConfigured,
 } from "../src/server/auth/providers";
 
@@ -23,4 +24,11 @@ it("trusts localhost and 127.0.0.1 for local Better Auth origins", () => {
 			GOOGLE_CLIENT_SECRET: "secret",
 		}),
 	).toBe(true);
+	expect(configuredSocialProviders({})).toEqual(["github"]);
+	expect(
+		configuredSocialProviders({
+			GOOGLE_CLIENT_ID: "id",
+			GOOGLE_CLIENT_SECRET: "secret",
+		}),
+	).toEqual(["google", "github"]);
 });

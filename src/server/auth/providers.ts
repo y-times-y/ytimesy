@@ -1,8 +1,17 @@
+export type SocialProviderId = "github" | "google";
+
 export function googleOAuthConfigured(config: {
 	GOOGLE_CLIENT_ID?: string;
 	GOOGLE_CLIENT_SECRET?: string;
 }): config is { GOOGLE_CLIENT_ID: string; GOOGLE_CLIENT_SECRET: string } {
 	return Boolean(config.GOOGLE_CLIENT_ID && config.GOOGLE_CLIENT_SECRET);
+}
+
+export function configuredSocialProviders(config: {
+	GOOGLE_CLIENT_ID?: string;
+	GOOGLE_CLIENT_SECRET?: string;
+}): SocialProviderId[] {
+	return googleOAuthConfigured(config) ? ["google", "github"] : ["github"];
 }
 
 export function authTrustedOrigins(appUrl: string) {

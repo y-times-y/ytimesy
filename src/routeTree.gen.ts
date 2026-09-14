@@ -22,6 +22,7 @@ import { Route as ApiGithubCallbackRouteImport } from './routes/api/github/callb
 import { Route as ApiGithubConnectRouteImport } from './routes/api/github/connect'
 import { Route as ApiGithubDisconnectRouteImport } from './routes/api/github/disconnect'
 import { Route as ApiGithubRepositoriesRouteImport } from './routes/api/github/repositories'
+import { Route as ApiIdentityProvidersRouteImport } from './routes/api/identity/providers'
 import { Route as ApiWorkspacesRetryRouteImport } from './routes/api/workspaces.retry'
 
 const IndexRoute = IndexRouteImport.update({
@@ -89,6 +90,11 @@ const ApiGithubRepositoriesRoute = ApiGithubRepositoriesRouteImport.update({
   path: '/api/github/repositories',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiIdentityProvidersRoute = ApiIdentityProvidersRouteImport.update({
+  id: '/api/identity/providers',
+  path: '/api/identity/providers',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiWorkspacesRetryRoute = ApiWorkspacesRetryRouteImport.update({
   id: '/retry',
   path: '/retry',
@@ -109,6 +115,7 @@ export interface FileRoutesByFullPath {
   '/api/github/connect': typeof ApiGithubConnectRoute
   '/api/github/disconnect': typeof ApiGithubDisconnectRoute
   '/api/github/repositories': typeof ApiGithubRepositoriesRoute
+  '/api/identity/providers': typeof ApiIdentityProvidersRoute
   '/api/workspaces/retry': typeof ApiWorkspacesRetryRoute
 }
 export interface FileRoutesByTo {
@@ -125,6 +132,7 @@ export interface FileRoutesByTo {
   '/api/github/connect': typeof ApiGithubConnectRoute
   '/api/github/disconnect': typeof ApiGithubDisconnectRoute
   '/api/github/repositories': typeof ApiGithubRepositoriesRoute
+  '/api/identity/providers': typeof ApiIdentityProvidersRoute
   '/api/workspaces/retry': typeof ApiWorkspacesRetryRoute
 }
 export interface FileRoutesById {
@@ -142,6 +150,7 @@ export interface FileRoutesById {
   '/api/github/connect': typeof ApiGithubConnectRoute
   '/api/github/disconnect': typeof ApiGithubDisconnectRoute
   '/api/github/repositories': typeof ApiGithubRepositoriesRoute
+  '/api/identity/providers': typeof ApiIdentityProvidersRoute
   '/api/workspaces/retry': typeof ApiWorkspacesRetryRoute
 }
 export interface FileRouteTypes {
@@ -160,6 +169,7 @@ export interface FileRouteTypes {
     | '/api/github/connect'
     | '/api/github/disconnect'
     | '/api/github/repositories'
+    | '/api/identity/providers'
     | '/api/workspaces/retry'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -176,6 +186,7 @@ export interface FileRouteTypes {
     | '/api/github/connect'
     | '/api/github/disconnect'
     | '/api/github/repositories'
+    | '/api/identity/providers'
     | '/api/workspaces/retry'
   id:
     | '__root__'
@@ -192,6 +203,7 @@ export interface FileRouteTypes {
     | '/api/github/connect'
     | '/api/github/disconnect'
     | '/api/github/repositories'
+    | '/api/identity/providers'
     | '/api/workspaces/retry'
   fileRoutesById: FileRoutesById
 }
@@ -209,6 +221,7 @@ export interface RootRouteChildren {
   ApiGithubConnectRoute: typeof ApiGithubConnectRoute
   ApiGithubDisconnectRoute: typeof ApiGithubDisconnectRoute
   ApiGithubRepositoriesRoute: typeof ApiGithubRepositoriesRoute
+  ApiIdentityProvidersRoute: typeof ApiIdentityProvidersRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -304,6 +317,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiGithubRepositoriesRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/identity/providers': {
+      id: '/api/identity/providers'
+      path: '/api/identity/providers'
+      fullPath: '/api/identity/providers'
+      preLoaderRoute: typeof ApiIdentityProvidersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/workspaces/retry': {
       id: '/api/workspaces/retry'
       path: '/retry'
@@ -340,6 +360,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiGithubConnectRoute: ApiGithubConnectRoute,
   ApiGithubDisconnectRoute: ApiGithubDisconnectRoute,
   ApiGithubRepositoriesRoute: ApiGithubRepositoriesRoute,
+  ApiIdentityProvidersRoute: ApiIdentityProvidersRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
