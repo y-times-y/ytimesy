@@ -4,14 +4,20 @@ import {
 	agentProviderById,
 	CLAUDE_PROVIDER,
 	CODEX_PROVIDER,
+	OPENCODE_PROVIDER,
 	offeredAgentProviders,
 } from "./agent-provider";
 
 describe("agent providers", () => {
-	it("offers Codex and Claude and does not invent other agents", () => {
-		expect(offeredAgentProviders()).toEqual([CODEX_PROVIDER, CLAUDE_PROVIDER]);
+	it("offers Codex, Claude, and OpenCode and does not invent other agents", () => {
+		expect(offeredAgentProviders()).toEqual([
+			CODEX_PROVIDER,
+			CLAUDE_PROVIDER,
+			OPENCODE_PROVIDER,
+		]);
 		expect(agentProviderById("codex")).toEqual(CODEX_PROVIDER);
 		expect(agentProviderById("claude")).toEqual(CLAUDE_PROVIDER);
+		expect(agentProviderById("opencode")).toEqual(OPENCODE_PROVIDER);
 	});
 
 	it("names the connected agent from its provider", () => {

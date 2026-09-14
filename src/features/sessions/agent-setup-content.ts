@@ -64,16 +64,8 @@ function providerSetup(
 			verificationUrl: null,
 		};
 	}
-	if (provider.id === "claude") {
-		return {
-			provider,
-			detail:
-				"Claude Code sign-in is not connected yet. Each user signs in with their own Claude account.",
-			actionLabel: null,
-			userCode: null,
-			verificationUrl: null,
-		};
-	}
+	const unwired = unwiredProviderSetup(provider);
+	if (unwired) return unwired;
 	return {
 		provider,
 		detail:
@@ -84,4 +76,30 @@ function providerSetup(
 		userCode: null,
 		verificationUrl: null,
 	};
+}
+
+function unwiredProviderSetup(
+	provider: AgentProvider,
+): AgentProviderSetup | null {
+	if (provider.id === "claude") {
+		return {
+			provider,
+			detail:
+				"Claude Code sign-in is not connected yet. Each user signs in with their own Claude account.",
+			actionLabel: null,
+			userCode: null,
+			verificationUrl: null,
+		};
+	}
+	if (provider.id === "opencode") {
+		return {
+			provider,
+			detail:
+				"OpenCode sign-in is not connected yet. Use Zen free models or your own keys — no Codex or Claude subscription required.",
+			actionLabel: null,
+			userCode: null,
+			verificationUrl: null,
+		};
+	}
+	return null;
 }

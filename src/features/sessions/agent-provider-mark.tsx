@@ -1,6 +1,7 @@
 import type { AgentProviderId } from "#/domain/agent-provider";
 import { ClaudeMark } from "./claude-mark";
 import { CodexMark } from "./codex-mark";
+import { OpenCodeMark } from "./opencode-mark";
 
 export function AgentProviderMark({
 	provider,
@@ -14,5 +15,7 @@ export function AgentProviderMark({
 			return <CodexMark size={size} />;
 		case "claude":
 			return <ClaudeMark size={size} />;
+		case "opencode":
+			return <OpenCodeMark size={size} />;
 	}
 }

@@ -1,4 +1,4 @@
-export type AgentProviderId = "codex" | "claude";
+export type AgentProviderId = "codex" | "claude" | "opencode";
 
 export type AgentProvider = {
 	readonly id: AgentProviderId;
@@ -21,8 +21,15 @@ export const CLAUDE_PROVIDER: AgentProvider = {
 	authorizeWith: "Anthropic",
 };
 
+export const OPENCODE_PROVIDER: AgentProvider = {
+	id: "opencode",
+	name: "OpenCode",
+	signInMethod: "OpenCode Zen",
+	authorizeWith: "OpenCode",
+};
+
 export function offeredAgentProviders(): readonly AgentProvider[] {
-	return [CODEX_PROVIDER, CLAUDE_PROVIDER];
+	return [CODEX_PROVIDER, CLAUDE_PROVIDER, OPENCODE_PROVIDER];
 }
 
 export function agentProviderById(id: AgentProviderId): AgentProvider {
@@ -31,5 +38,7 @@ export function agentProviderById(id: AgentProviderId): AgentProvider {
 			return CODEX_PROVIDER;
 		case "claude":
 			return CLAUDE_PROVIDER;
+		case "opencode":
+			return OPENCODE_PROVIDER;
 	}
 }
