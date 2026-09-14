@@ -1,57 +1,71 @@
 import { Effect } from "effect";
 import { WorkspaceId } from "#/domain/ids";
+import { workspaceSessionMachineRef } from "#/domain/project-workspace";
 import type { WorkspaceDesktop } from "#/domain/workspace-desktop";
 import { START_WORKSPACE_DESKTOP } from "#/server/adapters/freestyle/start-desktop";
-import { readProofVmState } from "#/server/proof/codex-login-state";
+import { readyWorkspaceForOwner } from "#/server/adapters/workspaces";
 import type { WorkspaceMachines } from "./workspace-machines";
+
+export type DesktopScope = {
+	readonly userId: string;
+	readonly projectId?: string;
+};
 
 export function readWorkspaceDesktop(
 	_machines: WorkspaceMachines,
+	scope: DesktopScope,
 ): Effect.Effect<WorkspaceDesktop> {
-	return Effect.succeed(currentDesktop);
+	return Effect.succeed(desktopFor(scopeKey(scope)));
 }
 
 export function startWorkspaceDesktop(
 	machines: WorkspaceMachines,
+	scope: DesktopScope,
 ): Effect.Effect<WorkspaceDesktop> {
 	return Effect.gen(function* () {
-		const vm = yield* Effect.tryPromise(() => readProofVmState());
-		if (!vm) {
+		const workspace = yield* Effect.tryPromise(() =>
+			readyWorkspaceForOwner(scope.userId, scope.projectId),
+		);
+		const providerRef = workspaceSessionMachineRef(workspace);
+		if (!providerRef) {
 			return {
 				status: "failed" as const,
-				reason: "Start a harness workspace before opening the desktop.",
+				reason: "Prepare a workspace before opening the desktop.",
 			};
 		}
-		currentDesktop = { status: "starting" };
+		const key = scopeKey(scope);
+		desktops.set(key, { status: "starting" });
+		yield* Effect.tryPromise(() =>
+			machines.ensureRunning(WorkspaceId(providerRef)),
+		);
 		const started = yield* Effect.tryPromise(() =>
-			machines.exec(
-				WorkspaceId(vm.workspaceId),
-				START_WORKSPACE_DESKTOP,
-				240_000,
-			),
+			machines.exec(WorkspaceId(providerRef), START_WORKSPACE_DESKTOP, 240_000),
 		);
 		if (started.exitCode !== 0) {
-			currentDesktop = {
+			const failed: WorkspaceDesktop = {
 				status: "failed",
 				reason:
 					(started.stderr || started.stdout).trim() ||
 					"Desktop failed to start.",
 			};
-			return currentDesktop;
+			desktops.set(key, failed);
+			return failed;
 		}
-		const hostname = desktopHostname(vm.workspaceId);
+		const hostname = desktopHostname(providerRef);
 		try {
 			const origin = yield* Effect.tryPromise(() =>
-				machines.exposeHttp(WorkspaceId(vm.workspaceId), 6080, hostname),
+				machines.exposeHttp(WorkspaceId(providerRef), 6080, hostname),
 			);
-			currentDesktop = {
+			const running: WorkspaceDesktop = {
 				status: "running",
 				viewerUrl: `${origin}/vnc.html?autoconnect=1&resize=scale&reconnect=1`,
 				display: ":0",
 				message: "You and the agent share this desktop.",
 			};
+			desktops.set(key, running);
+			return running;
 		} catch (cause) {
-			currentDesktop = {
+			const running: WorkspaceDesktop = {
 				status: "running",
 				viewerUrl: null,
 				display: ":0",
@@ -60,20 +74,30 @@ export function startWorkspaceDesktop(
 						? `Desktop is on display :0 but not reachable from the browser: ${cause.message}`
 						: "Desktop is on display :0 but not reachable from the browser.",
 			};
+			desktops.set(key, running);
+			return running;
 		}
-		return currentDesktop;
 	}).pipe(
 		Effect.catchAll((cause) => {
-			currentDesktop = {
+			const failed: WorkspaceDesktop = {
 				status: "failed",
 				reason: cause instanceof Error ? cause.message : String(cause),
 			};
-			return Effect.succeed(currentDesktop);
+			desktops.set(scopeKey(scope), failed);
+			return Effect.succeed(failed);
 		}),
 	);
 }
 
-let currentDesktop: WorkspaceDesktop = { status: "stopped" };
+const desktops = new Map<string, WorkspaceDesktop>();
+
+function scopeKey(scope: DesktopScope) {
+	return `${scope.userId}:${scope.projectId ?? ""}`;
+}
+
+function desktopFor(key: string): WorkspaceDesktop {
+	return desktops.get(key) ?? { status: "stopped" };
+}
 
 function desktopHostname(workspaceId: string): string {
 	const slug = workspaceId

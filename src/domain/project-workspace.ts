@@ -26,6 +26,30 @@ export function canStartPrepare(status: WorkspaceStatus | undefined) {
 	return status === undefined || status === "queued" || status === "failed";
 }
 
+export function workspaceSessionMachineRef(
+	workspace: Pick<ProjectWorkspace, "status" | "providerRef"> | null,
+) {
+	if (workspace?.status === "ready" && workspace.providerRef)
+		return workspace.providerRef;
+	return null;
+}
+
+export function codexConnectBlockedReason(
+	workspace: Pick<
+		ProjectWorkspace,
+		"status" | "providerRef" | "errorMessage"
+	> | null,
+) {
+	if (workspaceSessionMachineRef(workspace)) return null;
+	if (!workspace) return "Prepare a workspace before signing in to Codex.";
+	if (workspace.status === "failed")
+		return (
+			workspace.errorMessage ??
+			"Workspace preparation failed. Retry, then sign in to Codex."
+		);
+	return "Wait for workspace preparation to finish before signing in to Codex.";
+}
+
 export function branchSwitchBlockedReason(
 	status: WorkspaceStatus | undefined,
 ): string | null {

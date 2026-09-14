@@ -20,6 +20,7 @@ import {
 	saveWorkspaceStatus,
 	workspaceById,
 } from "../adapters/workspaces";
+import { loadAgentSnapshotId } from "../auth/agent-account";
 import { githubAccessToken } from "../auth/github-connection";
 
 /**
@@ -87,6 +88,7 @@ export async function runWorkspacePreparation(
 async function resolveMachine(
 	workspace: {
 		id: string;
+		userId: string;
 		status: import("../../domain/project-workspace").WorkspaceStatus;
 		providerRef: string | null;
 	},
@@ -107,7 +109,11 @@ async function resolveMachine(
 		workspace.providerRef
 	)
 		return workspace.providerRef;
-	const created = await runtime.provision(slug);
+	const snapshotId = await loadAgentSnapshotId(workspace.userId);
+	const created = await runtime.provision(
+		slug,
+		snapshotId ? { snapshotId } : undefined,
+	);
 	return (await saveProviderRef(workspace.id, created)).providerRef as string;
 }
 

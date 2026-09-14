@@ -4,9 +4,13 @@ export interface RuntimeCommandResult {
 	stderr: string;
 }
 
+export interface WorkspaceProvisionOptions {
+	readonly snapshotId?: string;
+}
+
 export interface WorkspaceRuntime {
 	findBySlug(slug: string): Promise<string | null>;
-	provision(slug: string): Promise<string>;
+	provision(slug: string, options?: WorkspaceProvisionOptions): Promise<string>;
 	recover(providerRef: string): Promise<string>;
 	exec(
 		providerRef: string,
@@ -46,7 +50,9 @@ export class MemoryWorkspaceRuntime implements WorkspaceRuntime {
 	async findBySlug(slug: string) {
 		return this.machines.get(slug) ?? null;
 	}
-	async provision(slug: string) {
+	lastProvisionOptions: WorkspaceProvisionOptions | undefined;
+	async provision(slug: string, options?: WorkspaceProvisionOptions) {
+		this.lastProvisionOptions = options;
 		const existing = this.machines.get(slug);
 		if (existing) return existing;
 		const providerRef = `memory:${slug}`;

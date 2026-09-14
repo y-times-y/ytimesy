@@ -1,9 +1,12 @@
 import { createServerFn } from "@tanstack/react-start";
+import { getRequest } from "@tanstack/react-start/server";
 import { Effect } from "effect";
 import type { WorkspaceDesktop } from "#/domain/workspace-desktop";
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
+import { requireUser } from "#/server/auth/auth";
 import { WorkspaceMachineService } from "#/server/services/capabilities";
 import {
+	type DesktopScope,
 	readWorkspaceDesktop,
 	startWorkspaceDesktop,
 } from "#/server/services/workspace-desktop";
@@ -20,16 +23,37 @@ function runWithMachines<A>(
 	);
 }
 
-export const getWorkspaceDesktop = createServerFn({ method: "GET" }).handler(
-	async (): Promise<WorkspaceDesktop> => {
-		return runWithMachines(readWorkspaceDesktop).catch(() => ({
-			status: "stopped" as const,
-		}));
-	},
-);
+function optionalProjectId(data: { projectId?: string } | undefined) {
+	const projectId =
+		typeof data?.projectId === "string" ? data.projectId.trim() : "";
+	return { projectId: projectId || undefined };
+}
+
+async function requireScope(projectId?: string): Promise<DesktopScope> {
+	const user = await requireUser(getRequest().headers);
+	return { userId: user.id, projectId };
+}
+
+export const getWorkspaceDesktop = createServerFn({ method: "GET" })
+	.validator(optionalProjectId)
+	.handler(async ({ data }): Promise<WorkspaceDesktop> => {
+		try {
+			const scope = await requireScope(data.projectId);
+			return await runWithMachines((machines) =>
+				readWorkspaceDesktop(machines, scope),
+			);
+		} catch {
+			return { status: "stopped" };
+		}
+	});
 
 export const startWorkspaceDesktopFn = createServerFn({
 	method: "POST",
-}).handler(async (): Promise<WorkspaceDesktop> => {
-	return runWithMachines(startWorkspaceDesktop);
-});
+})
+	.validator(optionalProjectId)
+	.handler(async ({ data }): Promise<WorkspaceDesktop> => {
+		const scope = await requireScope(data.projectId);
+		return runWithMachines((machines) =>
+			startWorkspaceDesktop(machines, scope),
+		);
+	});

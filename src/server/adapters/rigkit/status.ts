@@ -1,3 +1,5 @@
+import { RIGKIT_NODE_GAP } from "#/domain/workspace-preparation";
+
 export const RIGKIT_PACKAGES = {
 	sdk: "0.3.0",
 	providerFreestyle: "0.3.0",
@@ -9,6 +11,5 @@ export const RIGKIT_INTEGRATION_STATUS = {
 		"https://www.npmjs.com/package/@rigkit/provider-freestyle",
 	],
 	apiKeyAuth: "freestyle.provider({ apiKey }) or FREESTYLE_API_KEY",
-	inAppEmbedding:
-		"Not used yet. @rigkit/sdk 0.3.0 targets a Bun project daemon and pulls @effect/platform-bun; workspace VMs are created with the Freestyle SDK until Rigkit can run as a Node worker.",
+	inAppEmbedding: RIGKIT_NODE_GAP,
 } as const;

@@ -43,6 +43,27 @@ export async function workspaceForOwner(
 	return result.rows[0] ? toWorkspace(result.rows[0]) : null;
 }
 
+export async function readyWorkspaceForOwner(
+	userId: string,
+	projectId?: string,
+): Promise<ProjectWorkspace | null> {
+	if (projectId) {
+		const workspace = await workspaceForProject(userId, projectId);
+		if (workspace?.status === "ready" && workspace.providerRef)
+			return workspace;
+		return workspace;
+	}
+	const result = await database().query(
+		`select id,user_id,project_id,status,provider_ref,error_message,updated_at
+		 from workspace
+		 where user_id=$1 and status='ready' and provider_ref is not null
+		 order by updated_at desc
+		 limit 1`,
+		[userId],
+	);
+	return result.rows[0] ? toWorkspace(result.rows[0]) : null;
+}
+
 export async function insertQueuedWorkspace(
 	userId: string,
 	projectId: string,
