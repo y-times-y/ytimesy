@@ -26,10 +26,10 @@ describe("agent providers", () => {
 			connectedAgentStatus({
 				status: "authenticated",
 				provider: "codex",
-				authMode: "chatgpt",
-				planType: "prolite",
+				authMode: "apikey",
+				planType: null,
 				email: null,
 			}),
-		).toBe("Codex · prolite");
+		).toBe("Codex · API key");
 	});
 });

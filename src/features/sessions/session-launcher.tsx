@@ -1,5 +1,10 @@
 import { ArrowUp, Square, X } from "lucide-react";
 import { type KeyboardEvent, useEffect, useMemo, useState } from "react";
+import {
+	type AgentProviderId,
+	agentProviderById,
+} from "#/domain/agent-provider";
+import { selectedHarnessIsConnected } from "#/domain/harness-access";
 import { SessionItemId } from "#/domain/ids";
 import {
 	lastUserMessageText,
@@ -13,7 +18,6 @@ import {
 	type SlashCommand,
 } from "#/domain/slash-command";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
-import { AgentSetup } from "./agent-setup";
 import {
 	preferredSessionModelId,
 	sessionModelsFromListed,
@@ -24,12 +28,16 @@ import { SessionTimeline } from "./session-timeline";
 import { SlashCommandPalette } from "./slash-command-palette";
 import { TaskInput } from "./task-input";
 
-export type InspectorView = "diff" | "terminal" | "preview";
+export type InspectorView = "diff" | "terminal" | "desktop";
 
 export function SessionLauncher({
 	session,
 	busy,
+	harnessId,
+	onHarnessIdChange,
+	apiKeyHints,
 	onConnect,
+	onSaveApiKey,
 	onSend,
 	onStop,
 	onOpenSideChat,
@@ -37,13 +45,21 @@ export function SessionLauncher({
 }: {
 	session: PublicCodexSession;
 	busy: boolean;
+	harnessId: AgentProviderId;
+	onHarnessIdChange: (id: AgentProviderId) => void;
+	apiKeyHints: Readonly<Partial<Record<AgentProviderId, string>>>;
 	onConnect: () => void;
+	onSaveApiKey: (harnessId: AgentProviderId, apiKey: string) => void;
 	onSend: (text: string, modelId: string) => void;
 	onStop: () => void;
 	onOpenSideChat: (question?: string) => void;
 	onOpenInspector: (view: InspectorView) => void;
 }) {
-	const models = sessionModelsFromListed(session.models);
+	const harnessReady = selectedHarnessIsConnected(
+		session.connection,
+		harnessId,
+	);
+	const models = harnessReady ? sessionModelsFromListed(session.models) : [];
 	const [attachments, setAttachments] = useState<File[]>([]);
 	const [draft, setDraft] = useState("");
 	const [modelId, setModelId] = useState(preferredSessionModelId(models));
@@ -57,9 +73,9 @@ export function SessionLauncher({
 	const slashCommands = useMemo(
 		() =>
 			composerSlashCommands({
-				authenticated: session.connection.status === "authenticated",
+				authenticated: harnessReady,
 				turnRunning: session.turnStatus === "running",
-				canSend: session.canSend,
+				canSend: harnessReady && session.canSend,
 				hasLastUserMessage: Boolean(lastUserText),
 				hasModels: models.length > 0,
 				publicationReady: false,
@@ -67,8 +83,8 @@ export function SessionLauncher({
 		[
 			lastUserText,
 			models.length,
+			harnessReady,
 			session.canSend,
-			session.connection.status,
 			session.turnStatus,
 		],
 	);
@@ -85,13 +101,17 @@ export function SessionLauncher({
 	}, [draft]);
 
 	useEffect(() => {
+		if (!harnessReady) {
+			setModelId("");
+			return;
+		}
 		const listed = sessionModelsFromListed(session.models);
 		setModelId((current) =>
 			listed.some((model) => model.id === current)
 				? current
 				: preferredSessionModelId(listed),
 		);
-	}, [session.models]);
+	}, [harnessReady, session.models]);
 
 	useEffect(() => {
 		setOptimisticItems((current) =>
@@ -107,7 +127,7 @@ export function SessionLauncher({
 	}, [session.items]);
 
 	function sendText(text: string) {
-		if (!text || !session.canSend || !modelId || busy) return;
+		if (!text || !harnessReady || !session.canSend || !modelId || busy) return;
 		setOptimisticItems((current) => [
 			...current,
 			{
@@ -155,7 +175,7 @@ export function SessionLauncher({
 		if (
 			command.id === "diff" ||
 			command.id === "terminal" ||
-			command.id === "preview"
+			command.id === "desktop"
 		) {
 			onOpenInspector(command.id);
 			setDraft("");
@@ -202,12 +222,6 @@ export function SessionLauncher({
 			<h1 id="session-title" className="sr-only">
 				Session
 			</h1>
-			<AgentSetup
-				connection={session.connection}
-				snapshotAvailable={session.snapshotAvailable}
-				busy={busy}
-				onConnect={onConnect}
-			/>
 			<SessionTimeline
 				items={items}
 				turnStatus={session.turnStatus}
@@ -254,6 +268,13 @@ export function SessionLauncher({
 						)}
 						<div className="session-toolbar">
 							<SessionControls
+								harnessId={harnessId}
+								onHarnessIdChange={onHarnessIdChange}
+								connection={session.connection}
+								apiKeyHints={apiKeyHints}
+								busy={busy}
+								onConnect={onConnect}
+								onSaveApiKey={onSaveApiKey}
 								models={models}
 								modelId={modelId}
 								onModelIdChange={setModelId}
@@ -290,6 +311,7 @@ export function SessionLauncher({
 									className="session-send"
 									aria-label="Send"
 									disabled={
+										!harnessReady ||
 										!session.canSend ||
 										busy ||
 										!draft.trim() ||
@@ -297,9 +319,11 @@ export function SessionLauncher({
 										Boolean(slashDraft)
 									}
 									title={
-										session.canSend
-											? "Send task"
-											: "Sign in to an agent to start a session"
+										harnessReady
+											? session.canSend
+												? "Send task"
+												: "Wait for this harness to finish starting"
+											: `Sign in to ${agentProviderById(harnessId).name} to start a session`
 									}
 									onClick={sendDraft}
 								>

@@ -83,7 +83,7 @@ export function agentConnectionFromProbe(
 		};
 	}
 
-	const authenticated = chatgptAccount(report.account);
+	const authenticated = providerAccount(report.account);
 	if (authenticated) return authenticated;
 
 	const pending = deviceCodeLogin(report.login);
@@ -94,7 +94,7 @@ export function agentConnectionFromProbe(
 			status: "failed",
 			provider: "codex",
 			message:
-				"Codex returned API-key login; ytimesy requires ChatGPT device-code auth",
+				"Codex is waiting for an API key. Paste one in the harness picker, or sign in with ChatGPT.",
 		};
 	}
 
@@ -103,17 +103,29 @@ export function agentConnectionFromProbe(
 	};
 }
 
-function chatgptAccount(value: unknown): AgentConnection | undefined {
+function providerAccount(value: unknown): AgentConnection | undefined {
 	if (!isRecord(value)) return undefined;
 	const account = value.account;
-	if (!isRecord(account) || account.type !== "chatgpt") return undefined;
-	return {
-		status: "authenticated",
-		provider: "codex",
-		authMode: "chatgpt",
-		planType: readString(account.planType) ?? null,
-		email: readString(account.email) ?? null,
-	};
+	if (!isRecord(account)) return undefined;
+	if (account.type === "chatgpt") {
+		return {
+			status: "authenticated",
+			provider: "codex",
+			authMode: "chatgpt",
+			planType: readString(account.planType) ?? null,
+			email: readString(account.email) ?? null,
+		};
+	}
+	if (account.type === "apiKey" || account.type === "api") {
+		return {
+			status: "authenticated",
+			provider: "codex",
+			authMode: "apikey",
+			planType: readString(account.planType) ?? null,
+			email: null,
+		};
+	}
+	return undefined;
 }
 
 function deviceCodeLogin(value: unknown): AgentConnection | undefined {

@@ -1,9 +1,11 @@
 import { Plus, X } from "lucide-react";
 import type { ReactNode } from "react";
 import type { FileChangeEntry } from "#/domain/session-item";
+import type { WorkspaceDesktop } from "#/domain/workspace-desktop";
+import { DesktopInspector } from "./desktop-inspector";
 import { DiffInspector } from "./diff-inspector";
 
-export type ToolsView = "diff" | "terminal" | "preview";
+export type ToolsView = "diff" | "terminal" | "desktop";
 export type InspectorView = ToolsView | "side";
 
 const views = {
@@ -17,10 +19,11 @@ const views = {
 		title: "No terminal connected.",
 		description: "Start a workspace to use the terminal.",
 	},
-	preview: {
-		label: "Preview",
-		title: "No preview running.",
-		description: "Run your app to see its preview.",
+	desktop: {
+		label: "Desktop",
+		title: "No desktop yet.",
+		description:
+			"Start a shared Linux desktop the agent can computer-use. You can watch and control it here.",
 	},
 } as const;
 
@@ -29,6 +32,9 @@ export function WorkspaceInspector({
 	activeView,
 	onActiveViewChange,
 	fileChanges = [],
+	desktop,
+	desktopBusy,
+	onStartDesktop,
 	sideChatOpen,
 	onNewSideChat,
 	onCloseSideChat,
@@ -38,6 +44,9 @@ export function WorkspaceInspector({
 	activeView: InspectorView;
 	onActiveViewChange: (view: InspectorView) => void;
 	fileChanges?: readonly FileChangeEntry[];
+	desktop: WorkspaceDesktop;
+	desktopBusy: boolean;
+	onStartDesktop: () => void;
 	sideChatOpen: boolean;
 	onNewSideChat: () => void;
 	onCloseSideChat: () => void;
@@ -99,6 +108,12 @@ export function WorkspaceInspector({
 				sideChat
 			) : activeView === "diff" && fileChanges.length > 0 ? (
 				<DiffInspector changes={fileChanges} />
+			) : activeView === "desktop" ? (
+				<DesktopInspector
+					desktop={desktop}
+					busy={desktopBusy}
+					onStart={onStartDesktop}
+				/>
 			) : currentView ? (
 				<section className="inspector-empty" aria-live="polite">
 					<h2>{currentView.title}</h2>

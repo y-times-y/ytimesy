@@ -27,7 +27,7 @@ describe("Codex probe protocol", () => {
 		});
 	});
 
-	it("rejects API-key login as unsupported for ytimesy", () => {
+	it("treats API-key login without an account as a missing key, not a silent fallback", () => {
 		const report = parseCodexProbeReport(
 			`YTIMESY_PROOF=${JSON.stringify({
 				ok: true,
@@ -40,7 +40,7 @@ describe("Codex probe protocol", () => {
 			status: "failed",
 			provider: "codex",
 			message:
-				"Codex returned API-key login; ytimesy requires ChatGPT device-code auth",
+				"Codex is waiting for an API key. Paste one in the harness picker, or sign in with ChatGPT.",
 		});
 	});
 

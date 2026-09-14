@@ -43,5 +43,10 @@ export interface WorkspaceMachines {
 		path: string,
 	) => Promise<string | null>;
 	readonly destroy: (workspaceId: WorkspaceId) => Promise<void>;
+	readonly exposeHttp: (
+		workspaceId: WorkspaceId,
+		port: number,
+		hostname: string,
+	) => Promise<string>;
 	readonly destroyOrphans: (slugPrefix: string) => Promise<readonly string[]>;
 }
