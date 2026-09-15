@@ -40,7 +40,7 @@ describe("cloneSelectedProjectScript", () => {
 	it("reuses a sealed checkout without cloning again", () => {
 		const script = reusePreparedCheckoutCommand("ytimesy");
 		expect(script).toContain('if [ -d "$DEST/.git" ]; then');
-		expect(script).toContain(PROJECT_CWD_PATH);
+		expect(script).not.toContain(PROJECT_CWD_PATH);
 		expect(script).not.toContain("git clone");
 		expect(
 			preparedCheckoutPathFromReuse("present\n/home/ubuntu/ytimesy\n"),
