@@ -138,8 +138,11 @@ export function WorkspaceHome({
 	useEffect(() => {
 		if (autoResumeStarted.current) return;
 		if (harnessId !== "codex") return;
-		if (!session.snapshotAvailable) return;
-		if (session.connection.status !== "disconnected") return;
+		const shouldConnect =
+			session.connection.status === "authenticated" ||
+			(session.snapshotAvailable &&
+				session.connection.status === "disconnected");
+		if (!shouldConnect) return;
 		autoResumeStarted.current = true;
 		setBusy(true);
 		void connect()

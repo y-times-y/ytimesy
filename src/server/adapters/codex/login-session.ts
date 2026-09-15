@@ -241,9 +241,15 @@ ${START_LOGIN_SCRIPT}`,
 			);
 		}
 
+		let sawRestart = false;
 		for (let attempt = 0; attempt < 90; attempt += 1) {
 			yield* Effect.sleep(Duration.seconds(2));
 			const status = yield* readLoginStatus(machines, workspaceId);
+			if (status.stage === "missing" || status.stage === "starting") {
+				sawRestart = true;
+				continue;
+			}
+			if (!sawRestart && attempt < 3) continue;
 			if (
 				status.stage === "authenticated" ||
 				status.stage === "failed" ||

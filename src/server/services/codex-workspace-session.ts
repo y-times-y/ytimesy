@@ -187,7 +187,6 @@ export function sendCodexWorkspaceTask(
 			return emptyCodexSession(Boolean(snapshot));
 		}
 		yield* ensureProjectCheckout(machines, WorkspaceId(vm.workspaceId));
-		yield* ensureCurrentLoginDaemon(machines, WorkspaceId(vm.workspaceId));
 		const status = yield* submitCodexTask(
 			machines,
 			WorkspaceId(vm.workspaceId),
