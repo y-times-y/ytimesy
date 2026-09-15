@@ -268,9 +268,7 @@ export function WorkspaceHome({
 			},
 		})
 			.then((next) => applySessionView(epoch, next))
-			.finally(() =>
-				setBusyChatIds((ids) => withoutBusyChat(ids, chatId)),
-			);
+			.finally(() => setBusyChatIds((ids) => withoutBusyChat(ids, chatId)));
 	}, [
 		applySessionView,
 		connect,

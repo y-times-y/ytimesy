@@ -62,7 +62,9 @@ export function composerBusyForOpenChat(input: {
 	readonly openChatId: string | undefined;
 	readonly busyChatIds: readonly string[];
 }): boolean {
-	return Boolean(input.openChatId && input.busyChatIds.includes(input.openChatId));
+	return Boolean(
+		input.openChatId && input.busyChatIds.includes(input.openChatId),
+	);
 }
 
 export function sidebarChatIsRunning(input: {
