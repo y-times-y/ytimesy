@@ -70,6 +70,7 @@ export function SessionLauncher({
 	const [attachments, setAttachments] = useState<File[]>([]);
 	const [draft, setDraft] = useState("");
 	const [modelId, setModelId] = useState(preferredSessionModelId(models));
+	const selectedModel = models.find((model) => model.id === modelId);
 	const [optimisticItems, setOptimisticItems] = useState<SessionItem[]>([]);
 	const [slashIndex, setSlashIndex] = useState(0);
 	const items = visibleSessionItems(session.items, optimisticItems);
@@ -346,6 +347,9 @@ export function SessionLauncher({
 								</button>
 							)}
 						</div>
+						{selectedModel?.notice ? (
+							<p className="model-provider-notice">{selectedModel.notice}</p>
+						) : null}
 					</div>
 				</div>
 			</div>

@@ -31,5 +31,14 @@ describe("agent providers", () => {
 				email: null,
 			}),
 		).toBe("Codex · API key");
+		expect(
+			connectedAgentStatus({
+				status: "authenticated",
+				provider: "claude",
+				authMode: "subscription",
+				planType: null,
+				email: null,
+			}),
+		).toBe("Claude Code");
 	});
 });

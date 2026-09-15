@@ -26,12 +26,18 @@ describe("harness access", () => {
 		]);
 	});
 
-	it("offers ChatGPT sign-in only on Codex", () => {
+	it("offers Sign in on every unsigned harness", () => {
 		const rows = offeredHarnessAccess({ status: "disconnected" });
-		expect(rows[0]?.subscriptionAction).toBe("sign_in");
-		expect(rows[0]?.subscriptionActionLabel).toBe("Sign in");
-		expect(rows[1]?.subscriptionAction).toBeNull();
-		expect(rows[2]?.subscriptionAction).toBeNull();
+		expect(rows.map((row) => row.subscriptionAction)).toEqual([
+			"sign_in",
+			"sign_in",
+			"sign_in",
+		]);
+		expect(rows.map((row) => row.subscriptionActionLabel)).toEqual([
+			"Sign in",
+			"Sign in",
+			"Sign in",
+		]);
 	});
 
 	it("does not treat a saved key as a connected harness", () => {
@@ -42,7 +48,8 @@ describe("harness access", () => {
 		);
 		expect(claude.muted).toBe(true);
 		expect(claude.statusLabel).toBe("Key saved");
-		expect(claude.summary).toContain("not connected");
+		expect(claude.summary).toContain("stored");
+		expect(claude.subscriptionAction).toBe("sign_in");
 		expect(
 			selectedHarnessIsConnected({ status: "disconnected" }, "claude"),
 		).toBe(false);
@@ -73,6 +80,31 @@ describe("harness access", () => {
 		expect(harnessAccess(OPENCODE_PROVIDER, connection, null).muted).toBe(true);
 		expect(selectedHarnessIsConnected(connection, "codex")).toBe(true);
 		expect(selectedHarnessIsConnected(connection, "claude")).toBe(false);
+	});
+
+	it("keeps Anthropic's URL on the authorizing Claude row", () => {
+		const access = harnessAccess(
+			CLAUDE_PROVIDER,
+			{
+				status: "awaiting_device_code",
+				provider: "claude",
+				loginId: "claude-auth",
+				verificationUrl:
+					"https://claude.ai/oauth/authorize?code=true&client_id=abc",
+				userCode: "",
+			},
+			null,
+		);
+		expect(access).toMatchObject({
+			readiness: "authorizing",
+			muted: true,
+			subscriptionActionLabel: "Open Anthropic",
+			userCode: "",
+			verificationUrl:
+				"https://claude.ai/oauth/authorize?code=true&client_id=abc",
+		});
+		expect(access.summary).toMatch(/Anthropic/);
+		expect(access.summary).toMatch(/Terminal/);
 	});
 
 	it("keeps the device code on the authorizing Codex row", () => {

@@ -1,4 +1,4 @@
-import type { AgentConnection } from "./agent-connection";
+import type { AgentAuthMode, AgentConnection } from "./agent-connection";
 import {
 	type AgentProvider,
 	type AgentProviderId,
@@ -61,7 +61,9 @@ export function harnessAccess(
 			readiness: "authorizing",
 			muted: true,
 			statusLabel: "Authorizing",
-			summary: `Enter this code on ${provider.authorizeWith}`,
+			summary: connection.userCode
+				? `Enter this code on ${provider.authorizeWith}`
+				: `Open ${provider.authorizeWith} to finish signing in. If it shows a code, paste it in Terminal.`,
 			subscriptionAction: "open_provider",
 			subscriptionActionLabel: `Open ${provider.authorizeWith}`,
 			apiKeyHint,
@@ -111,7 +113,7 @@ export function selectedHarnessIsConnected(
 
 function readyAccess(
 	provider: AgentProvider,
-	authMode: "chatgpt" | "apikey",
+	authMode: AgentAuthMode,
 	planType: string | null,
 	apiKeyHint: string | null,
 ): HarnessAccess {
@@ -145,10 +147,10 @@ function unsignedAccess(
 			muted: true,
 			statusLabel: apiKeyHint ? "Key saved" : "Not signed in",
 			summary: apiKeyHint
-				? `Key ${apiKeyHint} is stored. Claude Code is not connected yet.`
-				: "Paste an API key. Claude Code sign-in is not connected yet.",
-			subscriptionAction: null,
-			subscriptionActionLabel: null,
+				? `Key ${apiKeyHint} is stored. Sign in with Claude Code so Anthropic can authenticate it.`
+				: "Sign in with Claude Code on Anthropic's page, or paste an API key.",
+			subscriptionAction: "sign_in",
+			subscriptionActionLabel: "Sign in",
 			apiKeyHint,
 			userCode: null,
 			verificationUrl: null,
@@ -161,10 +163,10 @@ function unsignedAccess(
 			muted: true,
 			statusLabel: apiKeyHint ? "Key saved" : "Not signed in",
 			summary: apiKeyHint
-				? `Key ${apiKeyHint} is stored. OpenCode is not connected yet.`
-				: "Paste a Zen or provider API key. OpenCode is not connected yet.",
-			subscriptionAction: null,
-			subscriptionActionLabel: null,
+				? `Key ${apiKeyHint} is stored. Sign in so OpenCode can connect it.`
+				: "Sign in to OpenCode Zen, or paste a Zen or provider API key.",
+			subscriptionAction: "sign_in",
+			subscriptionActionLabel: "Sign in",
 			apiKeyHint,
 			userCode: null,
 			verificationUrl: null,

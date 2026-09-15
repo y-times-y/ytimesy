@@ -4,6 +4,7 @@ import {
 	branchSwitchBlockedReason,
 	canStartPrepare,
 	codexConnectBlockedReason,
+	harnessConnectBlockedReason,
 	needsMachineCreate,
 	needsMachineRecover,
 	publicFailureMessage,
@@ -66,6 +67,10 @@ it("only exposes a Codex session machine after the workspace is ready", () => {
 		}),
 	).toBe("vm-1");
 	expect(codexConnectBlockedReason(null)).toMatch(/Prepare a workspace/);
+	expect(harnessConnectBlockedReason(null, "Claude Code")).toBe(
+		"Prepare a workspace before signing in to Claude Code.",
+	);
+	expect(harnessConnectBlockedReason(null, "OpenCode")).toMatch(/OpenCode/);
 	expect(
 		codexConnectBlockedReason({
 			status: "cloning",
