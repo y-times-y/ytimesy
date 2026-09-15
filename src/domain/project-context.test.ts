@@ -82,4 +82,13 @@ describe("nextProjectBriefing", () => {
 			}),
 		).toBe("OpenCode serve must start in the checkout.");
 	});
+
+	it("keeps only the latest briefing lines", () => {
+		expect(
+			nextProjectBriefing({
+				briefing: ["a", "b", "c", "d", "e", "f"].join("\n"),
+				summary: "g",
+			}),
+		).toBe(["b", "c", "d", "e", "f", "g"].join("\n"));
+	});
 });

@@ -113,7 +113,14 @@ export function publicFailureMessage(error: unknown) {
 			: error instanceof Response
 				? error.statusText
 				: "Workspace preparation failed. Retry after checking GitHub access.";
-	return redactSecrets(message).slice(0, 300);
+	return workspaceCapacityMessage(redactSecrets(message).slice(0, 300));
+}
+
+export function workspaceCapacityMessage(message: string) {
+	if (/LIMIT_EXCEEDED|limit of \d+ VMs/i.test(message)) {
+		return "This Freestyle plan is at its VM limit. Delete an unused agent session or raise the quota before starting another. Pausing a VM does not free a slot.";
+	}
+	return message;
 }
 
 export function redactSecrets(value: string) {

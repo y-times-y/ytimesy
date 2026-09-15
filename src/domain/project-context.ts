@@ -70,7 +70,11 @@ export function nextProjectBriefing(input: {
 	if (briefing.includes(summary.slice(0, Math.min(80, summary.length)))) {
 		return briefing;
 	}
-	return clipBriefing(`${briefing}\n${summary}`);
+	const lines = `${briefing}\n${summary}`
+		.split("\n")
+		.map((line) => line.trim())
+		.filter(Boolean);
+	return clipBriefing(lines.slice(-6).join("\n"));
 }
 
 function clipBriefing(text: string) {

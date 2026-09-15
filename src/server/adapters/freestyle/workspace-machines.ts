@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { Freestyle, FreestyleApiError } from "freestyle";
 import { isolatedAuthSnapshot } from "#/domain/auth-snapshot";
 import { type AuthSnapshotId, WorkspaceId } from "#/domain/ids";
+import { publicFailureMessage } from "#/domain/project-workspace";
 import {
 	WorkspaceCommandError,
 	WorkspaceProvisionError,
@@ -23,9 +24,11 @@ import {
 import { waitUntilVmRunning } from "./wait-until-running";
 
 function providerMessage(cause: unknown): string {
-	if (cause instanceof FreestyleApiError) return cause.message;
-	if (cause instanceof Error) return cause.message;
-	return String(cause);
+	return publicFailureMessage(
+		cause instanceof FreestyleApiError || cause instanceof Error
+			? cause
+			: new Error(String(cause)),
+	);
 }
 
 export function createFreestyleWorkspaceMachines(
