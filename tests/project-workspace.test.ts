@@ -69,7 +69,7 @@ it("explains the Freestyle VM cap without treating pause as a free slot", () => 
 	).toMatch(/Pausing a VM does not free a slot/);
 });
 
-it("explains a used Freestyle compute allowance without asking to add a card", () => {
+it("explains a used Freestyle vCPU-hour allowance without asking to add a card", () => {
 	expect(
 		publicFailureMessage(
 			new Error(
@@ -77,7 +77,7 @@ it("explains a used Freestyle compute allowance without asking to add a card", (
 			),
 		),
 	).toBe(
-		"This Freestyle plan has used its compute allowance. Wait for the allowance to reset or upgrade the plan, then resume the VM.",
+		"This Freestyle plan has used its vCPU-hour allowance. Wait for the allowance to reset or upgrade the plan, then resume the VM.",
 	);
 });
 

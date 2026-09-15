@@ -415,24 +415,14 @@ export function submitCodexTask(
 	input: {
 		readonly text: string;
 		readonly modelId: string;
-		readonly lane?: "main" | "side";
 	},
 ): Effect.Effect<CodexLoginStatus> {
 	const taskId = crypto.randomUUID();
-	const lane = input.lane === "side" ? "side" : "main";
-	const requestPath =
-		lane === "side"
-			? "/tmp/ytimesy-side-request.json"
-			: "/tmp/ytimesy-task-request.json";
-	const resultPath =
-		lane === "side"
-			? "/tmp/ytimesy-side-result.json"
-			: "/tmp/ytimesy-task-result.json";
 	return Effect.gen(function* () {
 		yield* Effect.tryPromise(() =>
 			machines.writeTextFile(
 				workspaceId,
-				requestPath,
+				"/tmp/ytimesy-task-request.json",
 				`${JSON.stringify({
 					id: taskId,
 					text: input.text,
@@ -445,19 +435,13 @@ export function submitCodexTask(
 			const status = yield* readLoginStatus(machines, workspaceId);
 			if (status.stage === "failed") return status;
 			if (status.stage === "authenticated") {
-				const running =
-					lane === "side"
-						? status.sideTurnStatus === "running"
-						: status.turnStatus === "running";
-				const failed =
-					lane === "side"
-						? status.sideTurnStatus === "failed"
-						: status.turnStatus === "failed";
-				if (running || failed) return status;
+				if (status.turnStatus === "running" || status.turnStatus === "failed") {
+					return status;
+				}
 			}
 			const raw = yield* Effect.tryPromise(() =>
-				machines.readTextFile(workspaceId, resultPath),
-			);
+				machines.readTextFile(workspaceId, "/tmp/ytimesy-task-result.json"),
+			).pipe(Effect.catchAll(() => Effect.succeed(null)));
 			if (raw && resultMatchesTask(raw, taskId)) {
 				return yield* readLoginStatus(machines, workspaceId);
 			}

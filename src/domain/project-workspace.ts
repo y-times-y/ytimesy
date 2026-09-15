@@ -126,7 +126,7 @@ export function workspaceCapacityMessage(message: string) {
 		return "This Freestyle plan is at its VM limit. Delete an unused agent session or raise the quota before starting another. Pausing a VM does not free a slot.";
 	}
 	if (isWorkspaceComputeAllowanceExhausted(message)) {
-		return "This Freestyle plan has used its compute allowance. Wait for the allowance to reset or upgrade the plan, then resume the VM.";
+		return "This Freestyle plan has used its vCPU-hour allowance. Wait for the allowance to reset or upgrade the plan, then resume the VM.";
 	}
 	return message;
 }
