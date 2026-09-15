@@ -69,6 +69,30 @@ describe("errorMessageFromOpenCode", () => {
 			}),
 		).toBe("Zen quota exceeded");
 	});
+
+	it("reads APIError payloads nested under info.error.data", () => {
+		expect(
+			errorMessageFromOpenCode([
+				{
+					info: {
+						role: "assistant",
+						error: {
+							name: "APIError",
+							data: {
+								message:
+									"Error from provider (Console): Upstream request failed: [user_blocked] Your access has been restricted due to repeated policy violations.",
+								statusCode: 403,
+								isRetryable: false,
+							},
+						},
+					},
+					parts: [],
+				},
+			]),
+		).toBe(
+			"Error from provider (Console): Upstream request failed: [user_blocked] Your access has been restricted due to repeated policy violations.",
+		);
+	});
 });
 
 describe("openCodeSessionIsBusy", () => {

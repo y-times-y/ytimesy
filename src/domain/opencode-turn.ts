@@ -24,12 +24,23 @@ export function errorMessageFromOpenCode(payload: unknown): string | null {
 		const trimmed = payload.trim();
 		return looksLikeOpenCodeError(trimmed) ? trimmed : null;
 	}
+	if (Array.isArray(payload)) {
+		for (const row of payload) {
+			const nested = errorMessageFromOpenCode(row);
+			if (nested) return nested;
+		}
+		return null;
+	}
 	if (!isRecord(payload)) return null;
 	const direct =
 		readNonEmpty(payload.error) ||
 		readNonEmpty(payload.message) ||
 		(isRecord(payload.error) ? readNonEmpty(payload.error.message) : undefined);
 	if (direct) return direct;
+	if (isRecord(payload.error)) {
+		const wrappedError = errorMessageFromOpenCode(payload.error);
+		if (wrappedError) return wrappedError;
+	}
 	if (isRecord(payload.info)) {
 		const infoError = errorMessageFromOpenCode(payload.info);
 		if (infoError) return infoError;
