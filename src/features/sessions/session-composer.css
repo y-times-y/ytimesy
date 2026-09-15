@@ -1156,7 +1156,18 @@ details[open] > summary .session-activity-chevron {
 		display: none;
 	}
 	.session-launcher[data-layout="chat"] .session-context {
-		flex-wrap: nowrap;
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto auto;
+		align-items: center;
+		gap: 8px;
 		min-width: 0;
+	}
+	.session-launcher[data-layout="chat"] .project-select {
+		min-width: 0;
+		max-width: 100%;
+	}
+	.session-launcher[data-layout="chat"] .publication-action {
+		margin: 0;
+		flex-wrap: nowrap;
 	}
 }
