@@ -1,4 +1,9 @@
-import type { WorkspaceDesktop } from "#/domain/workspace-desktop";
+import { useLayoutEffect, useRef, useState } from "react";
+import {
+	SHARED_DESKTOP_HEIGHT,
+	SHARED_DESKTOP_WIDTH,
+	type WorkspaceDesktop,
+} from "#/domain/workspace-desktop";
 
 export function DesktopInspector({
 	desktop,
@@ -12,12 +17,7 @@ export function DesktopInspector({
 	if (desktop.status === "running" && desktop.viewerUrl) {
 		return (
 			<section className="desktop-inspector" aria-label="Workspace desktop">
-				<iframe
-					className="desktop-frame"
-					title="Workspace desktop"
-					src={desktop.viewerUrl}
-					allow="clipboard-read; clipboard-write"
-				/>
+				<DesktopStage src={desktop.viewerUrl} />
 			</section>
 		);
 	}
@@ -41,6 +41,7 @@ export function DesktopInspector({
 	return (
 		<section
 			className="inspector-empty desktop-inspector-empty"
+			data-kind="desktop"
 			aria-live="polite"
 		>
 			<h2>{title}</h2>
@@ -53,5 +54,55 @@ export function DesktopInspector({
 				</button>
 			)}
 		</section>
+	);
+}
+
+function DesktopStage({ src }: { src: string }) {
+	const viewport = useRef<HTMLDivElement>(null);
+	const [scale, setScale] = useState(1);
+
+	useLayoutEffect(() => {
+		const stage = viewport.current;
+		if (!stage) return;
+		const measureStage = (target: HTMLElement) => {
+			const next = Math.min(
+				target.clientWidth / SHARED_DESKTOP_WIDTH,
+				target.clientHeight / SHARED_DESKTOP_HEIGHT,
+			);
+			setScale(next > 0 ? next : 1);
+		};
+		measureStage(stage);
+		const observer = new ResizeObserver((entries) => {
+			const target = entries[0]?.target;
+			if (target instanceof HTMLElement) measureStage(target);
+		});
+		observer.observe(stage);
+		return () => observer.disconnect();
+	}, []);
+
+	return (
+		<div className="desktop-stage" ref={viewport}>
+			<div
+				className="desktop-stage-frame"
+				style={{
+					width: SHARED_DESKTOP_WIDTH * scale,
+					height: SHARED_DESKTOP_HEIGHT * scale,
+				}}
+			>
+				<iframe
+					className="desktop-frame"
+					title="Workspace desktop"
+					src={src}
+					width={SHARED_DESKTOP_WIDTH}
+					height={SHARED_DESKTOP_HEIGHT}
+					allow="clipboard-read; clipboard-write"
+					style={{
+						width: SHARED_DESKTOP_WIDTH,
+						height: SHARED_DESKTOP_HEIGHT,
+						transform: `scale(${scale})`,
+					}}
+				/>
+			</div>
+		</div>
 	);
 }

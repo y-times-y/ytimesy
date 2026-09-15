@@ -10,6 +10,7 @@ import { SessionItemId } from "#/domain/ids";
 import {
 	lastUserMessageText,
 	type SessionItem,
+	sessionUsesFollowUpLayout,
 	visibleSessionItems,
 } from "#/domain/session-item";
 import {
@@ -76,8 +77,10 @@ export function SessionLauncher({
 	const [slashIndex, setSlashIndex] = useState(0);
 	const items = visibleSessionItems(session.items, optimisticItems);
 	const lastUserText = lastUserMessageText(items);
-	const chatLayout =
-		session.connection.status === "authenticated" || items.length > 0;
+	const followUpLayout = sessionUsesFollowUpLayout({
+		items,
+		turnStatus: session.turnStatus,
+	});
 	const slashDraft = parseSlashDraft(draft);
 	const slashCommands = useMemo(
 		() =>
@@ -226,7 +229,7 @@ export function SessionLauncher({
 		<section
 			className="session-launcher"
 			aria-labelledby="session-title"
-			data-layout={chatLayout ? "chat" : "empty"}
+			data-layout={followUpLayout ? "chat" : "empty"}
 		>
 			<h1 id="session-title" className="sr-only">
 				Session
@@ -234,7 +237,7 @@ export function SessionLauncher({
 			<SessionTimeline
 				items={items}
 				turnStatus={session.turnStatus}
-				fill={chatLayout}
+				fill={followUpLayout}
 			/>
 			<div className="session-dock">
 				{visibleSlashCommands.length === 0 ? (
@@ -261,7 +264,7 @@ export function SessionLauncher({
 							onSubmit={sendDraft}
 							disabled={busy}
 							placeholder={
-								chatLayout
+								followUpLayout
 									? "Add a follow up"
 									: "What would you like to work on?"
 							}

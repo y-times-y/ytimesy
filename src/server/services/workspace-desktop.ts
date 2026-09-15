@@ -1,6 +1,7 @@
 import { Effect } from "effect";
 import { WorkspaceId } from "#/domain/ids";
 import {
+	desktopEmbedUrl,
 	desktopFailedBecauseWorkspaceGone,
 	desktopStartFailureReason,
 	START_HARNESS_BEFORE_DESKTOP,
@@ -65,7 +66,7 @@ export function startWorkspaceDesktop(
 			);
 			currentDesktop = {
 				status: "running",
-				viewerUrl: `${origin}/vnc.html?autoconnect=1&resize=scale&reconnect=1`,
+				viewerUrl: desktopEmbedUrl(origin),
 				display: ":0",
 				message: "You and the agent share this desktop.",
 			};

@@ -153,6 +153,15 @@ export function lastUserMessageText(
 	return null;
 }
 
+export function sessionUsesFollowUpLayout(input: {
+	readonly items: readonly SessionItem[];
+	readonly turnStatus: SessionTurnStatus;
+}): boolean {
+	return (
+		Boolean(lastUserMessageText(input.items)) || input.turnStatus === "running"
+	);
+}
+
 export function sessionTitleFromItems(items: readonly SessionItem[]): string {
 	const text = lastUserMessageText(items);
 	if (!text) return "New session";

@@ -8,6 +8,7 @@ import {
 	lastUserMessageText,
 	type SessionItem,
 	sessionTitleFromItems,
+	sessionUsesFollowUpLayout,
 	showTurnWorking,
 	visibleSessionItems,
 } from "./session-item";
@@ -323,5 +324,26 @@ describe("session items", () => {
 				preview: 'export const hero = { title: "ytimesy" };',
 			},
 		]);
+	});
+
+	it("keeps the tall composer until the user actually starts a turn", () => {
+		expect(sessionUsesFollowUpLayout({ items: [], turnStatus: "idle" })).toBe(
+			false,
+		);
+		expect(
+			sessionUsesFollowUpLayout({
+				items: [
+					{
+						kind: "userMessage",
+						id: SessionItemId("user-1"),
+						text: "fix the composer",
+					},
+				],
+				turnStatus: "idle",
+			}),
+		).toBe(true);
+		expect(
+			sessionUsesFollowUpLayout({ items: [], turnStatus: "running" }),
+		).toBe(true);
 	});
 });

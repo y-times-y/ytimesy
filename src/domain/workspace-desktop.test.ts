@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	desktopCanBeControlled,
+	desktopEmbedUrl,
 	desktopFailedBecauseWorkspaceGone,
 	desktopStartFailureReason,
 	desktopViewerUrl,
@@ -35,5 +36,11 @@ describe("workspace desktop", () => {
 		};
 		expect(desktopFailedBecauseWorkspaceGone(cause)).toBe(true);
 		expect(desktopStartFailureReason(cause)).toBe(START_HARNESS_BEFORE_DESKTOP);
+	});
+
+	it("embeds noVNC without local letterboxing inside the iframe", () => {
+		expect(desktopEmbedUrl("https://ytimesy-desk-abc.style.dev")).toBe(
+			"https://ytimesy-desk-abc.style.dev/vnc.html?autoconnect=1&resize=off&reconnect=1",
+		);
 	});
 });

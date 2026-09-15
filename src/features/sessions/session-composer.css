@@ -4,6 +4,7 @@
 }
 .session-launcher[data-layout="empty"] {
 	container-type: inline-size;
+	width: 100%;
 }
 .session-launcher[data-layout="chat"] {
 	display: flex;
