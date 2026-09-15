@@ -477,6 +477,17 @@ button.harness-choice-action:disabled,
 .session-message[data-role="assistant"] {
 	max-width: 42em;
 }
+.session-message[data-role="assistant"] p {
+	font-size: 14px;
+	line-height: 22px;
+	color: #ececec;
+}
+.session-working {
+	margin: 4px 0;
+	color: rgba(255, 255, 255, 0.45);
+	font-size: 13px;
+	line-height: 18px;
+}
 .session-markdown {
 	display: flex;
 	flex-direction: column;
@@ -517,15 +528,6 @@ button.harness-choice-action:disabled,
 .session-markdown pre code {
 	padding: 0;
 	background: transparent;
-}
-.session-working {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	margin: 4px 0;
-	color: rgba(255, 255, 255, 0.5);
-	font-size: 13px;
-	line-height: 18px;
 }
 .session-activity {
 	color: rgba(255, 255, 255, 0.5);
@@ -636,22 +638,24 @@ details[open] > summary .session-activity-chevron {
 .session-activity[data-kind="fileChange"] > p {
 	padding: 2px 0;
 }
-.session-activity[data-kind="commandExecution"],
+.session-activity[data-kind="commandExecution"] {
+	overflow: hidden;
+	margin: 4px 0;
+	border: 1px solid rgba(255, 255, 255, 0.08);
+	border-radius: 10px;
+	background: transparent;
+}
+.session-activity[data-kind="commandExecution"] summary {
+	padding: 6px 10px;
+	min-height: 32px;
+}
 .session-activity[data-kind="mcpToolCall"],
 .session-activity[data-kind="dynamicToolCall"]:not([data-nested]),
 .session-activity[data-kind="unknown"]:not([data-nested]) {
 	overflow: hidden;
 	margin: 2px 0;
-	border: 1px solid rgba(255, 255, 255, 0.08);
-	border-radius: 8px;
+	border: 0;
 	background: transparent;
-}
-.session-activity[data-kind="commandExecution"] summary,
-.session-activity[data-kind="mcpToolCall"] > p,
-.session-activity[data-kind="dynamicToolCall"]:not([data-nested]) > p,
-.session-activity[data-kind="unknown"]:not([data-nested]) > p {
-	padding: 4px 8px;
-	min-height: 30px;
 }
 .session-activity[data-kind="fileChange"],
 .session-activity[data-kind="error"] {

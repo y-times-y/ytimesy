@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { Duration, Effect } from "effect";
 import { failureMessage } from "#/domain/failure-message";
@@ -14,6 +15,7 @@ const LOGIN_DAEMON_SOURCE = readFileSync(
 	new URL("./login-daemon.py", import.meta.url),
 	"utf8",
 );
+const LOGIN_DAEMON_HASH_PATH = "/tmp/ytimesy-codex-login.hash";
 
 const CODEX_INSTALL_SCRIPT = `set -eu
 export HOME="\${HOME:-/root}"
@@ -43,6 +45,10 @@ if [ -f /tmp/ytimesy-codex-login.pid ] && kill -0 "$(cat /tmp/ytimesy-codex-logi
   exit 0
 fi
 rm -f /tmp/ytimesy-auth-status.json
+export DISPLAY="\${DISPLAY:-:0}"
+if [ -f /tmp/ytimesy-project-cwd ]; then
+  export YTIMESY_PROJECT_CWD="$(tr -d '\\n' < /tmp/ytimesy-project-cwd)"
+fi
 PYTHONUNBUFFERED=1 setsid python3 /tmp/ytimesy-codex-login.py >/tmp/ytimesy-codex-login.log 2>&1 < /dev/null &
 echo $! > /tmp/ytimesy-codex-login.pid
 echo "LOGIN_PID=$(cat /tmp/ytimesy-codex-login.pid)"
@@ -165,6 +171,9 @@ ${START_LOGIN_SCRIPT}`,
 			yield* Effect.sleep(Duration.seconds(1));
 			const status = yield* readLoginStatus(machines, workspaceId);
 			if (status.stage !== "missing" && status.stage !== "starting") {
+				if (status.stage === "authenticated") {
+					yield* persistLoginDaemonHash(machines, workspaceId);
+				}
 				return status;
 			}
 		}
@@ -240,6 +249,9 @@ ${START_LOGIN_SCRIPT}`,
 				status.stage === "failed" ||
 				status.stage === "awaiting_device_code"
 			) {
+				if (status.stage === "authenticated") {
+					yield* persistLoginDaemonHash(machines, workspaceId);
+				}
 				return status;
 			}
 		}
@@ -247,6 +259,53 @@ ${START_LOGIN_SCRIPT}`,
 			"Resumed Codex session did not finish model/list or turn/start",
 		);
 	}).pipe(Effect.catchAll((cause) => Effect.succeed(failedFromCause(cause))));
+}
+
+/**
+ * Writes the current login daemon onto the guest. Restarts it only when the
+ * source changed so reconnecting does not wipe a live transcript.
+ */
+export function ensureCurrentLoginDaemon(
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+): Effect.Effect<void> {
+	return Effect.gen(function* () {
+		const expected = loginDaemonSourceHash();
+		yield* Effect.tryPromise(() =>
+			machines.writeTextFile(
+				workspaceId,
+				"/tmp/ytimesy-codex-login.py",
+				LOGIN_DAEMON_SOURCE,
+			),
+		);
+		const existing = yield* Effect.tryPromise(() =>
+			machines.readTextFile(workspaceId, LOGIN_DAEMON_HASH_PATH),
+		).pipe(Effect.catchAll(() => Effect.succeed("")));
+		if ((existing ?? "").trim() === expected) return;
+		const resumed = yield* resumeCodexSession(machines, workspaceId, {
+			skipInitialTurn: true,
+		});
+		if (resumed.stage === "authenticated") {
+			yield* persistLoginDaemonHash(machines, workspaceId);
+		}
+	}).pipe(Effect.catchAll(() => Effect.void));
+}
+
+function loginDaemonSourceHash(): string {
+	return createHash("sha256").update(LOGIN_DAEMON_SOURCE).digest("hex");
+}
+
+function persistLoginDaemonHash(
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+): Effect.Effect<void> {
+	return Effect.tryPromise(() =>
+		machines.writeTextFile(
+			workspaceId,
+			LOGIN_DAEMON_HASH_PATH,
+			`${loginDaemonSourceHash()}\n`,
+		),
+	).pipe(Effect.catchAll(() => Effect.void));
 }
 
 /**

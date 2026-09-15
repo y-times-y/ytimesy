@@ -12,6 +12,7 @@ import {
 	selectionNeedsPersist,
 } from "#/domain/github-project";
 import { ProjectId } from "#/domain/ids";
+import type { ProjectCheckout } from "#/domain/project-checkout";
 import { readGitHubAppCredentials } from "#/server/adapters/github/credentials";
 import {
 	createOctokitGitHubListing,
@@ -163,6 +164,41 @@ export function loadGitHubProjectPicker(
 			),
 		),
 	);
+}
+
+/**
+ * Resolves the composer project (repo + branch + installation) for cloning
+ * into an agent VM. Returns null when no repository is selected yet.
+ */
+export function loadProjectCheckout(
+	deps: GitHubProjectDeps,
+): Effect.Effect<ProjectCheckout | null> {
+	return Effect.gen(function* () {
+		const picker = yield* loadGitHubProjectPicker(deps);
+		if (!picker.selectedProjectId || !picker.selectedBranch) return null;
+		const credentialsResult = yield* Effect.either(
+			readGitHubAppCredentials(deps.env),
+		);
+		if (Either.isLeft(credentialsResult)) return null;
+		const listed = yield* Effect.tryPromise({
+			try: () => deps.github.listAuthorized(credentialsResult.right),
+			catch: (cause) =>
+				new GitHubAppRequestError({ message: githubErrorMessage(cause) }),
+		}).pipe(Effect.catchAll(() => Effect.succeed(null)));
+		if (!listed) return null;
+		const project = listed.repositories.find(
+			(repository) =>
+				`github:${repository.fullName}` === picker.selectedProjectId,
+		);
+		if (!project) return null;
+		return {
+			owner: project.owner,
+			name: project.name,
+			fullName: project.fullName,
+			branch: picker.selectedBranch,
+			installationId: project.installationId,
+		};
+	});
 }
 
 export function saveGitHubProjectSelection(

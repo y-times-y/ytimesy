@@ -28,11 +28,13 @@ describe("sessionItemFromAppServerItem", () => {
 				id: "item_reason_1",
 				type: "reasoning",
 				summary: [{ text: "I should run the requested command." }],
+				duration_ms: 4200,
 			}),
 		).toEqual({
 			kind: "reasoning",
 			id: SessionItemId("item_reason_1"),
 			summaries: ["I should run the requested command."],
+			durationSeconds: 4.2,
 		});
 	});
 

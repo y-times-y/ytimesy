@@ -28,6 +28,7 @@ export type ReasoningItem = {
 	readonly kind: "reasoning";
 	readonly id: SessionItemId;
 	readonly summaries: readonly string[];
+	readonly durationSeconds?: number;
 };
 
 export type PlanItem = {
@@ -183,7 +184,7 @@ export function compactTimelineItems(
 		}
 		presented.push(item);
 	}
-	return presentCodexTurns(presented);
+	return presented;
 }
 
 export function showTurnWorking(
@@ -192,7 +193,21 @@ export function showTurnWorking(
 ): boolean {
 	if (turnStatus !== "running") return false;
 	const last = compactTimelineItems(items).at(-1);
-	return last == null || last.kind === "userMessage";
+	if (last == null || last.kind === "userMessage") return true;
+	if (last.kind === "reasoning") return false;
+	if (last.kind === "commandExecution" && last.status === "inProgress") {
+		return false;
+	}
+	if (last.kind === "fileChange" && last.status === "inProgress") {
+		return false;
+	}
+	if (last.kind === "dynamicToolCall" && last.status === "inProgress") {
+		return false;
+	}
+	if (last.kind === "mcpToolCall" && last.status === "inProgress") {
+		return false;
+	}
+	return true;
 }
 
 function presentCommandExecution(item: CommandExecutionItem): SessionItem[] {
@@ -207,54 +222,4 @@ function presentCommandExecution(item: CommandExecutionItem): SessionItem[] {
 	};
 	if (!remainder) return [files];
 	return [files, { ...item, command: remainder }];
-}
-
-function presentCodexTurns(items: readonly SessionItem[]): SessionItem[] {
-	const compacted: SessionItem[] = [];
-	let index = 0;
-	while (index < items.length && items[index]?.kind !== "userMessage") {
-		const leading = collectUntilUser(items, index);
-		compacted.push(...presentTurnBody(leading.items));
-		index = leading.next;
-	}
-	while (index < items.length) {
-		const user = items[index];
-		if (!user) break;
-		compacted.push(user);
-		index += 1;
-		const body = collectUntilUser(items, index);
-		compacted.push(...presentTurnBody(body.items));
-		index = body.next;
-	}
-	return compacted;
-}
-
-function collectUntilUser(
-	items: readonly SessionItem[],
-	start: number,
-): { items: SessionItem[]; next: number } {
-	const collected: SessionItem[] = [];
-	let index = start;
-	while (index < items.length) {
-		const item = items[index];
-		if (!item || item.kind === "userMessage") break;
-		collected.push(item);
-		index += 1;
-	}
-	return { items: collected, next: index };
-}
-
-function presentTurnBody(body: readonly SessionItem[]): SessionItem[] {
-	const reasonings = body.filter(
-		(row): row is ReasoningItem => row.kind === "reasoning",
-	);
-	const rest = body.filter((row) => row.kind !== "reasoning");
-	if (!reasonings[0]) return [...rest];
-	const thought: ReasoningItem = {
-		...reasonings[0],
-		summaries: reasonings.flatMap((row) => row.summaries),
-	};
-	const firstTool = rest.findIndex((row) => row.kind !== "agentMessage");
-	if (firstTool <= 0) return [thought, ...rest];
-	return [...rest.slice(0, firstTool), thought, ...rest.slice(firstTool)];
 }

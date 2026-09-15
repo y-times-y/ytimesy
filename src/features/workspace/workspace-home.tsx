@@ -72,6 +72,7 @@ export function WorkspaceHome({
 	});
 	const [desktopBusy, setDesktopBusy] = useState(false);
 	const autoResumeStarted = useRef(false);
+	const desktopAutoStarted = useRef(false);
 	const connect = useServerFn(connectCodexSession);
 	const sendTask = useServerFn(sendCodexSessionTask);
 	const stopTurn = useServerFn(stopCodexSessionTurn);
@@ -150,6 +151,18 @@ export function WorkspaceHome({
 		session.connection.status,
 		session.snapshotAvailable,
 	]);
+
+	useEffect(() => {
+		if (session.connection.status !== "authenticated") return;
+		if (desktopAutoStarted.current) return;
+		if (desktop.status === "running" || desktop.status === "starting") return;
+		desktopAutoStarted.current = true;
+		setDesktopBusy(true);
+		setDesktop({ status: "starting" });
+		void startDesktop()
+			.then(setDesktop)
+			.finally(() => setDesktopBusy(false));
+	}, [desktop.status, session.connection.status, startDesktop]);
 
 	useEffect(() => {
 		if (

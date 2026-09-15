@@ -8,6 +8,7 @@ import {
 	lastUserMessageText,
 	type SessionItem,
 	sessionTitleFromItems,
+	showTurnWorking,
 	visibleSessionItems,
 } from "./session-item";
 
@@ -187,7 +188,7 @@ describe("session items", () => {
 		).toBe("fix the composer");
 	});
 
-	it("collapses thinking around tool rows into one Codex Thought line", () => {
+	it("keeps reasoning interleaved with tools the way Cursor Cloud does", () => {
 		expect(
 			compactTimelineItems([
 				{
@@ -199,6 +200,7 @@ describe("session items", () => {
 					kind: "reasoning",
 					id: SessionItemId("r1"),
 					summaries: ["first"],
+					durationSeconds: 4,
 				},
 				{
 					kind: "agentMessage",
@@ -218,49 +220,54 @@ describe("session items", () => {
 					kind: "reasoning",
 					id: SessionItemId("r2"),
 					summaries: ["second"],
+					durationSeconds: 1,
 				},
 				{
 					kind: "agentMessage",
 					id: SessionItemId("m1"),
 					text: "ok",
 				},
-			]),
+			]).map((item) => item.kind),
 		).toEqual([
-			{
-				kind: "userMessage",
-				id: SessionItemId("user-1"),
-				text: "create hero",
-			},
-			{
-				kind: "agentMessage",
-				id: SessionItemId("m0"),
-				text: "I’ll create the file.",
-			},
-			{
-				kind: "reasoning",
-				id: SessionItemId("r1"),
-				summaries: ["first", "second"],
-			},
-			{
-				kind: "fileChange",
-				id: SessionItemId("cmd-1"),
-				status: "completed",
-				changes: [
+			"userMessage",
+			"reasoning",
+			"agentMessage",
+			"fileChange",
+			"reasoning",
+			"agentMessage",
+		]);
+	});
+
+	it("does not add a second Thinking row while a thought is already open", () => {
+		expect(
+			showTurnWorking(
+				[
 					{
-						path: "/tmp/src/hero.tsx",
-						change: "add",
-						additions: 1,
-						deletions: 0,
-						preview: 'export const hero = { title: "ytimesy" };',
+						kind: "userMessage",
+						id: SessionItemId("user-1"),
+						text: "look",
+					},
+					{
+						kind: "reasoning",
+						id: SessionItemId("r1"),
+						summaries: ["checking the repo"],
 					},
 				],
-			},
-			{
-				kind: "agentMessage",
-				id: SessionItemId("m1"),
-				text: "ok",
-			},
-		]);
+				"running",
+			),
+		).toBe(false);
+		expect(
+			showTurnWorking(
+				[
+					{
+						kind: "userMessage",
+						id: SessionItemId("user-1"),
+						text: "look",
+					},
+				],
+				"running",
+			),
+		).toBe(true);
 	});
 
 	it("collects Diff files from shell heredoc writes", () => {

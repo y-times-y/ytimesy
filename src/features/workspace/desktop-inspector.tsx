@@ -12,9 +12,6 @@ export function DesktopInspector({
 	if (desktop.status === "running" && desktop.viewerUrl) {
 		return (
 			<section className="desktop-inspector" aria-label="Workspace desktop">
-				<p className="desktop-inspector-copy">
-					{desktop.message ?? "You and the agent share this desktop."}
-				</p>
 				<iframe
 					className="desktop-frame"
 					title="Workspace desktop"
@@ -32,26 +29,29 @@ export function DesktopInspector({
 				? "Starting desktop…"
 				: desktop.status === "running"
 					? "Desktop is running on the VM."
-					: "No desktop yet.";
+					: "Starting the shared desktop…";
 	const description =
 		desktop.status === "failed"
 			? desktop.reason
 			: desktop.status === "running"
-				? (desktop.message ?? "The agent can use display :0. Browser access is not mapped yet.")
-				: "Start a shared Linux desktop the agent can computer-use. You can watch and control it here.";
+				? (desktop.message ??
+					"The agent computer-uses display :0. Browser access is not mapped yet.")
+				: "This is the Linux desktop the agent uses for QA. You watch and control the same screen.";
 
 	return (
-		<section className="inspector-empty desktop-inspector-empty" aria-live="polite">
+		<section
+			className="inspector-empty desktop-inspector-empty"
+			aria-live="polite"
+		>
 			<h2>{title}</h2>
 			<p>{description}</p>
-			<button
-				type="button"
-				className="desktop-start"
-				onClick={onStart}
-				disabled={busy || desktop.status === "starting"}
-			>
-				{desktop.status === "starting" || busy ? "Starting…" : "Start desktop"}
-			</button>
+			{desktop.status === "starting" || busy ? (
+				<p className="desktop-inspector-status">Starting…</p>
+			) : (
+				<button type="button" className="desktop-start" onClick={onStart}>
+					{desktop.status === "failed" ? "Retry desktop" : "Start desktop"}
+				</button>
+			)}
 		</section>
 	);
 }

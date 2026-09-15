@@ -79,6 +79,20 @@ function userMessageText(item: Record<string, unknown>): string {
 		.join("\n");
 }
 
+function reasoningDurationSeconds(
+	item: Record<string, unknown>,
+): number | undefined {
+	const ms = item.duration_ms ?? item.durationMs;
+	if (typeof ms === "number" && Number.isFinite(ms) && ms > 0) {
+		return ms / 1000;
+	}
+	const seconds = item.duration_seconds ?? item.durationSeconds;
+	if (typeof seconds === "number" && Number.isFinite(seconds) && seconds > 0) {
+		return seconds;
+	}
+	return undefined;
+}
+
 function reasoningSummaries(item: Record<string, unknown>): string[] {
 	const fromFields = [item.summary, item.summary_text, item.content, item.text];
 	const summaries: string[] = [];
@@ -292,7 +306,15 @@ export function sessionItemFromAppServerItem(
 		return { kind: "agentMessage", id, text: readString(value.text) ?? "" };
 	}
 	if (type === "reasoning") {
-		return { kind: "reasoning", id, summaries: reasoningSummaries(value) };
+		const durationSeconds = reasoningDurationSeconds(value);
+		return durationSeconds == null
+			? { kind: "reasoning", id, summaries: reasoningSummaries(value) }
+			: {
+					kind: "reasoning",
+					id,
+					summaries: reasoningSummaries(value),
+					durationSeconds,
+				};
 	}
 	if (type === "plan") {
 		return { kind: "plan", id, text: readString(value.text) ?? "" };

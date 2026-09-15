@@ -5,6 +5,7 @@ import type { GitHubAppListing } from "#/server/adapters/github/octokit-app";
 import {
 	type GitHubProjectDeps,
 	loadGitHubProjectPicker,
+	loadProjectCheckout,
 	saveGitHubProjectSelection,
 } from "./github-projects";
 
@@ -59,6 +60,7 @@ function listing(options?: {
 				"master",
 				"cursor/workspace-integration-proof-58b4",
 			],
+		installationToken: async () => "ghs_test_token",
 	};
 }
 
@@ -100,6 +102,20 @@ describe("loadGitHubProjectPicker", () => {
 		expect(store.saved).toEqual({
 			projectId: "github:y-times-y/ytimesy",
 			branch: "master",
+		});
+	});
+
+	it("resolves the selected repository for a guest clone", async () => {
+		const store = memoryStore();
+		const projectDeps = deps({ store });
+		await Effect.runPromise(loadGitHubProjectPicker(projectDeps));
+		const checkout = await Effect.runPromise(loadProjectCheckout(projectDeps));
+		expect(checkout).toEqual({
+			owner: "y-times-y",
+			name: "ytimesy",
+			fullName: "y-times-y/ytimesy",
+			branch: "master",
+			installationId: "161432829",
 		});
 	});
 
