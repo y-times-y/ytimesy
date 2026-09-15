@@ -3,6 +3,7 @@ import {
 	backgroundTurnPollChatIds,
 	chatsListedInSidebar,
 	composerBusyForOpenChat,
+	composerHarnessForChat,
 	listedChatHarnessId,
 	listedChatModelId,
 	listedChatTurnStatus,
@@ -229,6 +230,20 @@ describe("parallel chat busy", () => {
 				"opencode",
 			),
 		).toBe("opencode");
+		expect(
+			composerHarnessForChat({
+				listedHarnessId: "codex",
+				connectionProvider: "opencode",
+				fallback: "opencode",
+			}),
+		).toBe("codex");
+		expect(
+			composerHarnessForChat({
+				listedHarnessId: null,
+				connectionProvider: "claude",
+				fallback: "opencode",
+			}),
+		).toBe("claude");
 	});
 });
 

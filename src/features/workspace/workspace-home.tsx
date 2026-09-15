@@ -39,6 +39,7 @@ import {
 import {
 	backgroundTurnPollChatIds,
 	composerBusyForOpenChat,
+	composerHarnessForChat,
 	listedChatHarnessId,
 	listedChatModelId,
 	listedChatTurnStatus,
@@ -178,6 +179,8 @@ export function WorkspaceHome({
 			}
 			setSession(next);
 			if (next.agentSessionId) setSelectedSessionId(next.agentSessionId);
+			const provider = connectedProviderId(next.connection);
+			if (provider) setHarnessId(provider);
 		},
 		[rememberSessionView],
 	);
@@ -625,6 +628,16 @@ export function WorkspaceHome({
 					openedDiff.current = false;
 					setDesktop({ status: "stopped" });
 					const cached = sessionViews.current.get(id);
+					setHarnessId(
+						composerHarnessForChat({
+							listedHarnessId: sidebarChats.find((chat) => chat.id === id)
+								?.harnessId,
+							connectionProvider: cached
+								? connectedProviderId(cached.connection)
+								: null,
+							fallback: harnessId,
+						}),
+					);
 					if (cached) {
 						setSession(cached);
 						if (cached.listedModelId) setComposerModelId(cached.listedModelId);
