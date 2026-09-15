@@ -160,7 +160,7 @@ async function runCommand(
 		throw new Error(
 			result.stderr.trim() ||
 				result.stdout.trim() ||
-				"Workspace command failed.",
+				`Workspace command failed (exit ${result.exitCode}).`,
 		);
 	return result;
 }
