@@ -1,3 +1,4 @@
+import { writeFile } from "node:fs/promises";
 import { Effect, Exit } from "effect";
 import { describe, expect, it } from "vitest";
 import {
@@ -39,6 +40,26 @@ describe("readGitHubAppCredentials", () => {
 			privateKey:
 				"-----BEGIN RSA PRIVATE KEY-----\nabc\n-----END RSA PRIVATE KEY-----",
 			slug: "ytimesy",
+		});
+	});
+
+	it("reads a PEM from GITHUB_PRIVATE_KEY_PATH when the env value is empty", async () => {
+		const keyPath = "/tmp/ytimesy-test-github-app.pem";
+		await writeFile(
+			keyPath,
+			"-----BEGIN RSA PRIVATE KEY-----\\nabc\\n-----END RSA PRIVATE KEY-----\n",
+		);
+		await expect(
+			Effect.runPromise(
+				readGitHubAppCredentials({
+					GITHUB_APP_ID: "4932652",
+					GITHUB_PRIVATE_KEY_PATH: keyPath,
+				}),
+			),
+		).resolves.toMatchObject({
+			appId: "4932652",
+			privateKey:
+				"-----BEGIN RSA PRIVATE KEY-----\nabc\n-----END RSA PRIVATE KEY-----",
 		});
 	});
 });

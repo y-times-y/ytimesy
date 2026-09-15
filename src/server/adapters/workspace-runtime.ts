@@ -18,6 +18,11 @@ export interface WorkspaceRuntime {
 		env: Record<string, string>,
 		timeoutMs: number,
 	): Promise<RuntimeCommandResult>;
+	writeTextFile(
+		providerRef: string,
+		path: string,
+		contents: string,
+	): Promise<void>;
 }
 
 export class UnconfiguredWorkspaceRuntime implements WorkspaceRuntime {
@@ -41,6 +46,9 @@ export class UnconfiguredWorkspaceRuntime implements WorkspaceRuntime {
 			),
 		);
 	}
+	writeTextFile(): Promise<void> {
+		return this.provision().then(() => undefined);
+	}
 }
 
 export class MemoryWorkspaceRuntime implements WorkspaceRuntime {
@@ -50,6 +58,7 @@ export class MemoryWorkspaceRuntime implements WorkspaceRuntime {
 		argv: string[];
 		envKeys: string[];
 	}[] = [];
+	readonly files: { providerRef: string; path: string; bytes: number }[] = [];
 	constructor(private readonly execResult: RuntimeCommandResult = success) {}
 	async findBySlug(slug: string) {
 		return this.machines.get(slug) ?? null;
@@ -75,6 +84,9 @@ export class MemoryWorkspaceRuntime implements WorkspaceRuntime {
 	) {
 		this.commands.push({ providerRef, argv, envKeys: Object.keys(env) });
 		return this.execResult;
+	}
+	async writeTextFile(providerRef: string, path: string, contents: string) {
+		this.files.push({ providerRef, path, bytes: contents.length });
 	}
 }
 

@@ -1,3 +1,5 @@
+import { githubGitHttpEnv } from "#/domain/github-git-auth";
+
 export function repositoryDirectory(fullName: string) {
 	const repo = fullName.split("/")[1];
 	if (!repo) throw new Error("Repository name is missing.");
@@ -25,11 +27,7 @@ export function cloneRepositoryArgv(
 }
 
 export function githubCloneEnv(token: string) {
-	return {
-		GIT_CONFIG_COUNT: "1",
-		GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
-		GIT_CONFIG_VALUE_0: `AUTHORIZATION: bearer ${token}`,
-	};
+	return githubGitHttpEnv(token);
 }
 
 export function githubPushEnv(token: string) {

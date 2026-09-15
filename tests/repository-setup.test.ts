@@ -14,9 +14,13 @@ it("keeps the GitHub token out of clone argv", () => {
 	const argv = cloneRepositoryArgv("y-times-y/ytimesy", "master", "/repo");
 	expect(argv.join(" ")).not.toMatch(/ghp_|bearer|token/i);
 	expect(argv).toContain("https://github.com/y-times-y/ytimesy.git");
-	expect(githubCloneEnv("ghp_secret").GIT_CONFIG_VALUE_0).toContain(
+	expect(githubCloneEnv("ghp_secret").GIT_CONFIG_VALUE_0).toMatch(
+		/^AUTHORIZATION: basic /,
+	);
+	expect(githubCloneEnv("ghp_secret").GIT_CONFIG_VALUE_0).not.toContain(
 		"ghp_secret",
 	);
+	expect(githubCloneEnv("ghp_secret").GIT_TERMINAL_PROMPT).toBe("0");
 	expect(repositoryDirectory("y-times-y/ytimesy")).toBe("/home/ubuntu/ytimesy");
 });
 

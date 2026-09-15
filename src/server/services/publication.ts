@@ -1,4 +1,5 @@
 import { Effect } from "effect";
+import { projectCheckoutFromFullName } from "../../domain/project-checkout";
 import { publicFailureMessage } from "../../domain/project-workspace";
 import {
 	publicationBlockedReason,
@@ -6,18 +7,21 @@ import {
 	publicationHeadBranch,
 	publicationWorkspaceBlockedReason,
 } from "../../domain/publication";
+import {
+	PROJECT_TOKEN_PATH,
+	pushSelectedBranchScript,
+} from "../adapters/freestyle/clone-project";
 import { workspaceRuntimeFromEnv } from "../adapters/freestyle/workspace-runtime";
 import {
 	authorizedRepository,
 	compareBranchAhead,
 	createDraftPullRequest,
 } from "../adapters/github";
+import { githubInstallationAccessToken } from "../adapters/github/installation-token";
 import { projectForOwner } from "../adapters/projects";
 import {
 	checkoutBranchArgv,
 	commitAllArgv,
-	githubPushEnv,
-	pushBranchArgv,
 	repositoryDirectory,
 } from "../adapters/repository-setup";
 import type { WorkspaceRuntime } from "../adapters/workspace-runtime";
@@ -47,6 +51,14 @@ export function publishProject(
 				throw new Response("Project is not available.", { status: 404 });
 			return owned;
 		});
+		const checkout = projectCheckoutFromFullName({
+			fullName: project.fullName,
+			branch: project.branch,
+			installationId: project.installationId,
+		});
+		if (!checkout) {
+			return yield* reject("Repository name is missing.");
+		}
 		const workspace = yield* Effect.tryPromise(() =>
 			readyWorkspaceForOwner(userId, input.projectId),
 		);
@@ -101,11 +113,34 @@ export function publishProject(
 					checkedOut.stdout.trim() ||
 					"Could not switch to the publication branch.",
 			);
+		const installationToken = yield* Effect.tryPromise(() =>
+			githubInstallationAccessToken(project.installationId),
+		);
+		yield* Effect.tryPromise(() =>
+			runtime
+				.writeTextFile(
+					providerRef,
+					PROJECT_TOKEN_PATH,
+					`${installationToken}\n`,
+				)
+				.catch((error) => {
+					throw hostFailure(error, "Could not write the GitHub token.");
+				}),
+		);
 		const pushed = yield* runGit(
 			runtime,
 			providerRef,
-			pushBranchArgv(directory, head),
-			githubPushEnv(token),
+			[
+				"bash",
+				"-lc",
+				pushSelectedBranchScript({
+					owner: checkout.owner,
+					name: checkout.name,
+					branch: head,
+					directory,
+				}),
+			],
+			{},
 			"Push failed. Reconnect GitHub and retry.",
 		);
 		if (pushed.exitCode !== 0)

@@ -1,17 +1,20 @@
 import {
+	projectCheckoutFromFullName,
+	projectCheckoutPath,
+} from "../../domain/project-checkout";
+import {
 	needsMachineCreate,
 	needsMachineRecover,
 	publicFailureMessage,
 	workspaceSlug,
 } from "../../domain/project-workspace";
-import { projectForOwner } from "../adapters/projects";
 import {
-	cloneRepositoryArgv,
-	githubCloneEnv,
-	installArgv,
-	listLockfilesArgv,
-	repositoryDirectory,
-} from "../adapters/repository-setup";
+	cloneSelectedProjectScript,
+	PROJECT_TOKEN_PATH,
+} from "../adapters/freestyle/clone-project";
+import { githubInstallationAccessToken } from "../adapters/github/installation-token";
+import { projectForOwner } from "../adapters/projects";
+import { installArgv, listLockfilesArgv } from "../adapters/repository-setup";
 import type { WorkspaceRuntime } from "../adapters/workspace-runtime";
 import {
 	claimWorkspaceForJob,
@@ -21,12 +24,12 @@ import {
 	workspaceById,
 } from "../adapters/workspaces";
 import { loadAgentSnapshotId } from "../auth/agent-account";
-import { githubAccessToken } from "../auth/github-connection";
 
 /**
  * Recovers a recorded provider_ref instead of creating a second VM when a
- * previous attempt timed out after remote creation. GitHub tokens stay in
- * command env and are never written to workspace_event.
+ * previous attempt timed out after remote creation. Installation tokens are
+ * written to a temp file on the VM and deleted during clone; they are never
+ * stored in argv or workspace_event.
  */
 export async function runWorkspacePreparation(
 	workspaceId: string,
@@ -40,16 +43,33 @@ export async function runWorkspacePreparation(
 	try {
 		const project = await projectForOwner(userId, claimed.projectId);
 		if (!project) throw new Error("Project is not available.");
+		const checkout = projectCheckoutFromFullName({
+			fullName: project.fullName,
+			branch: project.branch,
+			installationId: project.installationId,
+		});
+		if (!checkout) throw new Error("Repository name is missing.");
 		await recordWorkspaceEvent(userId, workspaceId, "Preparing workspace.");
 		const providerRef = await resolveMachine(claimed, runtime);
 		await saveWorkspaceStatus(workspaceId, "cloning");
-		const directory = repositoryDirectory(project.fullName);
-		const token = await githubAccessToken(userId);
+		const home = await guestHome(runtime, providerRef);
+		const directory = projectCheckoutPath(home, checkout.name);
+		const token = await githubInstallationAccessToken(checkout.installationId);
+		await runtime.writeTextFile(providerRef, PROJECT_TOKEN_PATH, `${token}\n`);
 		await runCommand(
 			runtime,
 			providerRef,
-			cloneRepositoryArgv(project.fullName, project.branch, directory),
-			githubCloneEnv(token),
+			[
+				"bash",
+				"-lc",
+				cloneSelectedProjectScript({
+					owner: checkout.owner,
+					name: checkout.name,
+					branch: checkout.branch,
+					destination: directory,
+				}),
+			],
+			{},
 			10 * 60 * 1000,
 		);
 		await recordWorkspaceEvent(
@@ -83,6 +103,17 @@ export async function runWorkspacePreparation(
 		await recordWorkspaceEvent(userId, workspaceId, message);
 		throw error;
 	}
+}
+
+async function guestHome(runtime: WorkspaceRuntime, providerRef: string) {
+	const result = await runtime.exec(
+		providerRef,
+		["bash", "-lc", `printf '%s' "\${HOME:-/home/ubuntu}"`],
+		{},
+		15_000,
+	);
+	const home = result.stdout.trim();
+	return home || "/home/ubuntu";
 }
 
 async function resolveMachine(

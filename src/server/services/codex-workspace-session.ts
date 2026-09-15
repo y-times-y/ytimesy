@@ -222,7 +222,10 @@ export function stopCodexWorkspaceTurn(
 function withPreparedWorkspace<A>(
 	machines: WorkspaceMachines,
 	scope: CodexSessionScope,
-	run: (providerRef: string, snapshotAvailable: boolean) => Effect.Effect<A>,
+	run: (
+		providerRef: string,
+		snapshotAvailable: boolean,
+	) => Effect.Effect<A, Error>,
 ): Effect.Effect<A | PublicCodexSession> {
 	return Effect.gen(function* () {
 		const snapshotId = yield* Effect.tryPromise(() =>
@@ -279,7 +282,7 @@ function prepareCodexGuest(
 	machines: WorkspaceMachines,
 	workspaceId: WorkspaceId,
 	scope: CodexSessionScope,
-): Effect.Effect<void> {
+): Effect.Effect<void, Error> {
 	return Effect.gen(function* () {
 		yield* preparePreparedGuest(machines, workspaceId, scope);
 		yield* ensureCurrentLoginDaemon(machines, workspaceId).pipe(
