@@ -1,6 +1,6 @@
 import { type AgentProviderId, agentProviderById } from "./agent-provider";
 
-export type AgentAuthMode = "chatgpt" | "apikey";
+export type AgentAuthMode = "chatgpt" | "apikey" | "subscription" | "local";
 
 export type AgentConnection =
 	| { readonly status: "disconnected" }

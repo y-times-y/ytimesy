@@ -1,4 +1,7 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
+import { useState } from "react";
+import { AuthProviders } from "../features/auth/auth-providers";
 
 import appCss from "../styles.css?url";
 
@@ -28,13 +31,21 @@ export const Route = createRootRoute({
 });
 
 function RootDocument({ children }: { children: React.ReactNode }) {
+	const [queryClient] = useState(
+		() =>
+			new QueryClient({
+				defaultOptions: { queries: { staleTime: 15000, retry: false } },
+			}),
+	);
 	return (
-		<html lang="en" className="dark">
+		<html lang="en" className="dark" suppressHydrationWarning>
 			<head>
 				<HeadContent />
 			</head>
 			<body>
-				{children}
+				<QueryClientProvider client={queryClient}>
+					<AuthProviders>{children}</AuthProviders>
+				</QueryClientProvider>
 
 				<Scripts />
 			</body>

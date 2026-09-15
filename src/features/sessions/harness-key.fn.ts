@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import {
-	hintForHarness,
 	type HarnessApiKeyStatus,
+	hintForHarness,
 	publicHarnessApiKey,
 } from "#/domain/harness-api-key";
 import {

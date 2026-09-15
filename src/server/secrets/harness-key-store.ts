@@ -33,9 +33,13 @@ export async function saveHarnessApiKey(
 		record,
 	];
 	await mkdir(".ytimesy", { recursive: true });
-	await writeFile(HARNESS_KEY_STORE_PATH, `${JSON.stringify(next, null, 2)}\n`, {
-		mode: 0o600,
-	});
+	await writeFile(
+		HARNESS_KEY_STORE_PATH,
+		`${JSON.stringify(next, null, 2)}\n`,
+		{
+			mode: 0o600,
+		},
+	);
 	return record;
 }
 

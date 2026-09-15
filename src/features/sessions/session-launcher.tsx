@@ -4,9 +4,12 @@ import {
 	type AgentProviderId,
 	agentProviderById,
 } from "#/domain/agent-provider";
-import type { PublicProjectPicker } from "#/domain/github-project";
-import { selectedHarnessIsConnected } from "#/domain/harness-access";
+import {
+	harnessRequiresAccountLogin,
+	selectedHarnessIsConnected,
+} from "#/domain/harness-access";
 import { SessionItemId } from "#/domain/ids";
+import type { Project } from "#/domain/projects";
 import {
 	lastUserMessageText,
 	type SessionItem,
@@ -20,11 +23,11 @@ import {
 	type SlashCommand,
 } from "#/domain/slash-command";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
-import { ProjectContext } from "../projects/project-context";
 import {
 	preferredSessionModelId,
 	sessionModelsFromListed,
 } from "./model-capabilities";
+import { ProjectContext } from "./project-context";
 import { SessionControls } from "./session-controls";
 import { SessionTimeline } from "./session-timeline";
 import { SlashCommandPalette } from "./slash-command-palette";
@@ -44,10 +47,9 @@ export function SessionLauncher({
 	onStop,
 	onOpenSideChat,
 	onOpenInspector,
-	projectPicker,
-	pickerBusy,
+	projects,
+	selectedProject,
 	onSelectProject,
-	onSelectBranch,
 }: {
 	session: PublicCodexSession;
 	busy: boolean;
@@ -60,10 +62,9 @@ export function SessionLauncher({
 	onStop: () => void;
 	onOpenSideChat: (question?: string) => void;
 	onOpenInspector: (view: InspectorView) => void;
-	projectPicker: PublicProjectPicker | null;
-	pickerBusy: boolean;
-	onSelectProject: (projectId: string) => void;
-	onSelectBranch: (branch: string) => void;
+	projects: Project[];
+	selectedProject?: Project;
+	onSelectProject: (id: string) => void;
 }) {
 	const harnessReady = selectedHarnessIsConnected(
 		session.connection,
@@ -73,6 +74,7 @@ export function SessionLauncher({
 	const [attachments, setAttachments] = useState<File[]>([]);
 	const [draft, setDraft] = useState("");
 	const [modelId, setModelId] = useState(preferredSessionModelId(models));
+	const selectedModel = models.find((model) => model.id === modelId);
 	const [optimisticItems, setOptimisticItems] = useState<SessionItem[]>([]);
 	const [slashIndex, setSlashIndex] = useState(0);
 	const items = visibleSessionItems(session.items, optimisticItems);
@@ -86,16 +88,19 @@ export function SessionLauncher({
 		() =>
 			composerSlashCommands({
 				authenticated: harnessReady,
+				requiresAccountLogin: harnessRequiresAccountLogin(harnessId),
 				turnRunning: session.turnStatus === "running",
 				canSend: harnessReady && session.canSend,
 				hasLastUserMessage: Boolean(lastUserText),
 				hasModels: models.length > 0,
-				publicationReady: false,
+				publicationReady: Boolean(selectedProject),
 			}),
 		[
+			harnessId,
 			lastUserText,
 			models.length,
 			harnessReady,
+			selectedProject,
 			session.canSend,
 			session.turnStatus,
 		],
@@ -184,6 +189,11 @@ export function SessionLauncher({
 			document.getElementById("session-model-select")?.focus();
 			return;
 		}
+		if (command.id === "pr") {
+			setDraft("");
+			document.getElementById("pull-request-title")?.focus();
+			return;
+		}
 		if (
 			command.id === "diff" ||
 			command.id === "terminal" ||
@@ -242,10 +252,9 @@ export function SessionLauncher({
 			<div className="session-dock">
 				{visibleSlashCommands.length === 0 ? (
 					<ProjectContext
-						picker={projectPicker}
-						busy={pickerBusy}
+						projects={projects}
+						selectedProject={selectedProject}
 						onSelectProject={onSelectProject}
-						onSelectBranch={onSelectBranch}
 					/>
 				) : null}
 				<div className="composer-shell">
@@ -348,7 +357,9 @@ export function SessionLauncher({
 											? session.canSend
 												? "Send task"
 												: "Wait for this harness to finish starting"
-											: `Sign in to ${agentProviderById(harnessId).name} to start a session`
+											: harnessRequiresAccountLogin(harnessId)
+												? `Sign in to ${agentProviderById(harnessId).name} to start a session`
+												: `Connect ${agentProviderById(harnessId).name} to start a session`
 									}
 									onClick={sendDraft}
 								>
@@ -358,6 +369,9 @@ export function SessionLauncher({
 								</button>
 							)}
 						</div>
+						{selectedModel?.notice ? (
+							<p className="model-provider-notice">{selectedModel.notice}</p>
+						) : null}
 					</div>
 				</div>
 			</div>

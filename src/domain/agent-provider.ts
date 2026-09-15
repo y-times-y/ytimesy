@@ -3,7 +3,7 @@ export type AgentProviderId = "codex" | "claude" | "opencode";
 export type AgentProvider = {
 	readonly id: AgentProviderId;
 	readonly name: string;
-	readonly signInMethod: string;
+	readonly signInMethod: string | null;
 	readonly authorizeWith: string;
 };
 
@@ -24,8 +24,8 @@ export const CLAUDE_PROVIDER: AgentProvider = {
 export const OPENCODE_PROVIDER: AgentProvider = {
 	id: "opencode",
 	name: "OpenCode",
-	signInMethod: "OpenCode Zen",
-	authorizeWith: "OpenCode",
+	signInMethod: null,
+	authorizeWith: "workspace",
 };
 
 export function offeredAgentProviders(): readonly AgentProvider[] {

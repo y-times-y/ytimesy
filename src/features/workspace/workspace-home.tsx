@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { PanelRight } from "lucide-react";
 import { type PointerEvent, useEffect, useRef, useState } from "react";
@@ -6,13 +7,13 @@ import {
 	connectedProviderId,
 } from "#/domain/agent-connection";
 import type { AgentProviderId } from "#/domain/agent-provider";
-import type { PublicProjectPicker } from "#/domain/github-project";
 import { hintForHarness } from "#/domain/harness-api-key";
 import {
 	inspectorSplitFromPointer,
 	inspectorSplitRatio,
 	nudgeInspectorSplit,
 } from "#/domain/inspector-split";
+import type { Project } from "#/domain/projects";
 import {
 	fileChangesFromSessionItems,
 	lastUserMessageText,
@@ -22,10 +23,8 @@ import {
 import { chatsListedInSidebar } from "#/domain/sidebar-chats";
 import type { WorkspaceDesktop } from "#/domain/workspace-desktop";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
-import {
-	getGitHubProjects,
-	saveGitHubProjectSelectionFn,
-} from "../projects/github-projects.fn";
+import { authClient } from "../auth/client";
+import { requestJson } from "../projects/api";
 import { AgentProviderMark } from "../sessions/agent-provider-mark";
 import {
 	connectCodexSession,
@@ -59,9 +58,15 @@ export function WorkspaceHome({
 }) {
 	const compact = useCompactLayout();
 	const inspectorBeside = useInspectorBesideChat();
+	const projects = useQuery({
+		queryKey: ["projects"],
+		queryFn: () => requestJson<Project[]>("/api/projects"),
+	});
+	const [selectedProjectId, setSelectedProjectId] = useState<string>();
+	const selectedProject =
+		projects.data?.find((project) => project.id === selectedProjectId) ??
+		projects.data?.[0];
 	const [session, setSession] = useState(initialSession);
-	const [projectPicker, setProjectPicker] =
-		useState<PublicProjectPicker | null>(null);
 	const [projectsOpen, setProjectsOpen] = useState(false);
 	const [inspectorOpen, setInspectorOpen] = useState(false);
 	const [toolsView, setToolsView] = useState<ToolsView>("diff");
@@ -72,7 +77,6 @@ export function WorkspaceHome({
 	const [sideChatOpen, setSideChatOpen] = useState(false);
 	const [sideQueued, setSideQueued] = useState(false);
 	const [busy, setBusy] = useState(false);
-	const [pickerBusy, setPickerBusy] = useState(false);
 	const [harnessId, setHarnessId] = useState<AgentProviderId>("codex");
 	const [apiKeyHints, setApiKeyHints] = useState<
 		Partial<Record<AgentProviderId, string>>
@@ -90,8 +94,6 @@ export function WorkspaceHome({
 	const saveKey = useServerFn(saveHarnessApiKeyFn);
 	const loadDesktop = useServerFn(getWorkspaceDesktop);
 	const startDesktop = useServerFn(startWorkspaceDesktopFn);
-	const loadProjects = useServerFn(getGitHubProjects);
-	const saveProject = useServerFn(saveGitHubProjectSelectionFn);
 	const fileChanges = fileChangesFromSessionItems(session.items);
 	const openedDiff = useRef(false);
 	const followUpLayout = sessionUsesFollowUpLayout({
@@ -107,7 +109,7 @@ export function WorkspaceHome({
 	const sessionTitle = sessionTitleFromItems(session.items);
 	const hasUserMessage = Boolean(lastUserMessageText(session.items));
 	const sidebarChats = chatsListedInSidebar({
-		projectSelected: Boolean(projectPicker?.selectedProjectId),
+		projectSelected: Boolean(selectedProject),
 		hasUserMessage,
 		title: sessionTitle,
 	});
@@ -124,25 +126,27 @@ export function WorkspaceHome({
 				opencode: hintForHarness(status.keys, "opencode") ?? undefined,
 			});
 		});
-		void loadDesktop().then((next) => {
-			setDesktop((current) =>
-				current.status === "starting" || current.status === "running"
-					? current
-					: next,
-			);
-		});
-		void loadProjects().then(setProjectPicker);
-	}, [loadDesktop, loadKeys, loadProjects]);
+	}, [loadKeys]);
 
 	useEffect(() => {
-		function refreshProjects() {
-			if (document.visibilityState !== "visible") return;
-			void loadProjects().then(setProjectPicker);
-		}
-		document.addEventListener("visibilitychange", refreshProjects);
-		return () =>
-			document.removeEventListener("visibilitychange", refreshProjects);
-	}, [loadProjects]);
+		if (!selectedProject?.id) return;
+		void loadDesktop({ data: { projectId: selectedProject.id } }).then(
+			(next) => {
+				setDesktop((current) =>
+					current.status === "starting" || current.status === "running"
+						? current
+						: next,
+				);
+			},
+		);
+	}, [loadDesktop, selectedProject?.id]);
+
+	useEffect(() => {
+		if (!selectedProject?.id || busy) return;
+		void getCodexSession({
+			data: { projectId: selectedProject.id, harnessId },
+		}).then(setSession);
+	}, [busy, harnessId, selectedProject?.id]);
 
 	useEffect(() => {
 		if (session.connection.status !== "authenticated") return;
@@ -160,6 +164,7 @@ export function WorkspaceHome({
 	useEffect(() => {
 		if (autoResumeStarted.current) return;
 		if (harnessId !== "codex") return;
+		if (!selectedProject?.id) return;
 		const shouldConnect =
 			session.connection.status === "authenticated" ||
 			(session.snapshotAvailable &&
@@ -167,27 +172,36 @@ export function WorkspaceHome({
 		if (!shouldConnect) return;
 		autoResumeStarted.current = true;
 		setBusy(true);
-		void connect()
+		void connect({
+			data: { projectId: selectedProject.id, harnessId },
+		})
 			.then(setSession)
 			.finally(() => setBusy(false));
 	}, [
 		connect,
 		harnessId,
+		selectedProject?.id,
 		session.connection.status,
 		session.snapshotAvailable,
 	]);
 
 	useEffect(() => {
 		if (session.connection.status !== "authenticated") return;
+		if (!selectedProject?.id) return;
 		if (desktopAutoStarted.current) return;
 		if (desktop.status === "running" || desktop.status === "starting") return;
 		desktopAutoStarted.current = true;
 		setDesktopBusy(true);
 		setDesktop({ status: "starting" });
-		void startDesktop()
+		void startDesktop({ data: { projectId: selectedProject.id } })
 			.then(setDesktop)
 			.finally(() => setDesktopBusy(false));
-	}, [desktop.status, session.connection.status, startDesktop]);
+	}, [
+		desktop.status,
+		selectedProject?.id,
+		session.connection.status,
+		startDesktop,
+	]);
 
 	useEffect(() => {
 		if (
@@ -205,13 +219,17 @@ export function WorkspaceHome({
 				? 1000
 				: 3000;
 		const timer = window.setInterval(() => {
-			void getCodexSession().then((next) => {
+			void getCodexSession({
+				data: { projectId: selectedProject?.id, harnessId },
+			}).then((next) => {
 				setSession(next);
 				if (next.sideTurnStatus !== "idle") setSideQueued(false);
 			});
 		}, interval);
 		return () => window.clearInterval(timer);
 	}, [
+		selectedProject?.id,
+		harnessId,
 		session.connection.status,
 		session.sideTurnStatus,
 		session.turnStatus,
@@ -235,36 +253,6 @@ export function WorkspaceHome({
 		setInspectorView(toolsView);
 	}
 
-	function selectProject(projectId: string) {
-		const project = projectPicker?.projects.find(
-			(entry) => entry.projectId === projectId,
-		);
-		if (!project) return;
-		if (projectPicker?.selectedProjectId === projectId) return;
-		setPickerBusy(true);
-		void saveProject({
-			data: {
-				projectId,
-				branch: project.defaultBranch,
-			},
-		})
-			.then(setProjectPicker)
-			.finally(() => setPickerBusy(false));
-	}
-
-	function selectBranch(branch: string) {
-		if (!projectPicker?.selectedProjectId) return;
-		setPickerBusy(true);
-		void saveProject({
-			data: {
-				projectId: projectPicker.selectedProjectId,
-				branch,
-			},
-		})
-			.then(setProjectPicker)
-			.finally(() => setPickerBusy(false));
-	}
-
 	function focusProjectPicker() {
 		document
 			.querySelector<HTMLButtonElement>('[aria-label="Project"]')
@@ -272,7 +260,7 @@ export function WorkspaceHome({
 	}
 
 	function startNewChat() {
-		if (!projectPicker?.selectedProjectId) {
+		if (!selectedProject) {
 			setProjectsOpen(true);
 			requestAnimationFrame(focusProjectPicker);
 			return;
@@ -284,12 +272,25 @@ export function WorkspaceHome({
 			?.focus();
 	}
 
+	async function signOut() {
+		await authClient.signOut();
+		window.location.assign("/");
+	}
+
 	function sendSideChat(text: string) {
 		const modelId = sessionModelId(session);
 		if (!modelId) return;
 		if (session.turnStatus === "running") setSideQueued(true);
 		setBusy(true);
-		void sendTask({ data: { text, modelId, lane: "side" } })
+		void sendTask({
+			data: {
+				text,
+				modelId,
+				lane: "side",
+				projectId: selectedProject?.id,
+				harnessId,
+			},
+		})
 			.then(setSession)
 			.finally(() => setBusy(false));
 	}
@@ -324,12 +325,21 @@ export function WorkspaceHome({
 	return (
 		<div className="workspace-shell" data-projects-collapsed={!projectsOpen}>
 			<ProjectSidebar
+				projects={projects.data ?? []}
+				projectsLoading={projects.isPending}
+				selectedProjectId={selectedProject?.id}
+				onSelectProject={setSelectedProjectId}
 				expanded={projectsOpen}
 				onToggle={() => setProjectsOpen((open) => !open)}
-				picker={projectPicker}
+				onAddProject={() => {
+					window.location.assign("/onboarding");
+					if (compact) setProjectsOpen(false);
+				}}
 				chats={sidebarChats}
 				onNewChat={startNewChat}
-				onFocusProject={focusProjectPicker}
+				onSignOut={() => {
+					void signOut();
+				}}
 			/>
 			<main className="workspace-main" inert={compact && projectsOpen}>
 				<div
@@ -408,11 +418,28 @@ export function WorkspaceHome({
 								session={session}
 								busy={busy}
 								harnessId={harnessId}
-								onHarnessIdChange={setHarnessId}
+								onHarnessIdChange={(id) => {
+									setHarnessId(id);
+									if (id !== "opencode") return;
+									setBusy(true);
+									void connect({
+										data: {
+											projectId: selectedProject?.id,
+											harnessId: id,
+										},
+									})
+										.then(setSession)
+										.finally(() => setBusy(false));
+								}}
 								apiKeyHints={apiKeyHints}
 								onConnect={() => {
 									setBusy(true);
-									void connect()
+									void connect({
+										data: {
+											projectId: selectedProject?.id,
+											harnessId,
+										},
+									})
 										.then(setSession)
 										.finally(() => setBusy(false));
 								}}
@@ -428,18 +455,38 @@ export function WorkspaceHome({
 												opencode:
 													hintForHarness(status.keys, "opencode") ?? undefined,
 											});
+											if (id === harnessId) {
+												return connect({
+													data: {
+														projectId: selectedProject?.id,
+														harnessId: id,
+													},
+												}).then(setSession);
+											}
 										})
 										.finally(() => setBusy(false));
 								}}
 								onSend={(text, modelId) => {
 									setBusy(true);
-									void sendTask({ data: { text, modelId } })
+									void sendTask({
+										data: {
+											text,
+											modelId,
+											projectId: selectedProject?.id,
+											harnessId,
+										},
+									})
 										.then(setSession)
 										.finally(() => setBusy(false));
 								}}
 								onStop={() => {
 									setBusy(true);
-									void stopTurn()
+									void stopTurn({
+										data: {
+											projectId: selectedProject?.id,
+											harnessId,
+										},
+									})
 										.then(setSession)
 										.finally(() => setBusy(false));
 								}}
@@ -448,11 +495,26 @@ export function WorkspaceHome({
 									if (question) sendSideChat(question);
 								}}
 								onOpenInspector={openInspector}
-								projectPicker={projectPicker}
-								pickerBusy={pickerBusy}
-								onSelectProject={selectProject}
-								onSelectBranch={selectBranch}
+								projects={projects.data ?? []}
+								selectedProject={selectedProject}
+								onSelectProject={setSelectedProjectId}
 							/>
+							{projects.isPending && <p role="status">Loading projects…</p>}
+							{projects.error && (
+								<p role="alert">
+									Unable to load projects.{" "}
+									<button type="button" onClick={() => void projects.refetch()}>
+										Retry
+									</button>
+								</p>
+							)}
+							{!projects.isPending &&
+								!projects.error &&
+								!projects.data?.length && (
+									<a className="setup-back" href="/onboarding">
+										Add your first project
+									</a>
+								)}
 						</div>
 					</section>
 					<div className="inspector-frame">
@@ -488,10 +550,13 @@ export function WorkspaceHome({
 							fileChanges={fileChanges}
 							desktop={desktop}
 							desktopBusy={desktopBusy}
+							projectId={selectedProject?.id}
 							onStartDesktop={() => {
 								setDesktopBusy(true);
 								setDesktop({ status: "starting" });
-								void startDesktop()
+								void startDesktop({
+									data: { projectId: selectedProject?.id },
+								})
 									.then(setDesktop)
 									.finally(() => setDesktopBusy(false));
 							}}

@@ -3,8 +3,11 @@ import {
 	desktopCanBeControlled,
 	desktopEmbedUrl,
 	desktopFailedBecauseWorkspaceGone,
+	desktopHostname,
+	desktopPortIsListening,
 	desktopStartFailureReason,
 	desktopViewerUrl,
+	desktopViewerUrlForMachine,
 	START_HARNESS_BEFORE_DESKTOP,
 } from "./workspace-desktop";
 
@@ -42,5 +45,16 @@ describe("workspace desktop", () => {
 		expect(desktopEmbedUrl("https://ytimesy-desk-abc.style.dev")).toBe(
 			"https://ytimesy-desk-abc.style.dev/vnc.html?autoconnect=1&resize=off&reconnect=1",
 		);
+	});
+
+	it("rebuilds the same viewer URL from the durable machine id", () => {
+		expect(desktopHostname("vm_abcDEF-12")).toBe(
+			"ytimesy-desk-vmabcdef12.style.dev",
+		);
+		expect(desktopViewerUrlForMachine("vm_abcDEF-12")).toBe(
+			"https://ytimesy-desk-vmabcdef12.style.dev/vnc.html?autoconnect=1&resize=off&reconnect=1",
+		);
+		expect(desktopPortIsListening("YTIMESY_DESKTOP_UP\n")).toBe(true);
+		expect(desktopPortIsListening("YTIMESY_DESKTOP_DOWN\n")).toBe(false);
 	});
 });

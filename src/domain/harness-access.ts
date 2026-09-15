@@ -1,4 +1,4 @@
-import type { AgentConnection } from "./agent-connection";
+import type { AgentAuthMode, AgentConnection } from "./agent-connection";
 import {
 	type AgentProvider,
 	type AgentProviderId,
@@ -14,6 +14,7 @@ export type HarnessReadiness =
 
 export type HarnessSubscriptionAction =
 	| "sign_in"
+	| "connect"
 	| "open_provider"
 	| "retry"
 	| "sign_in_again";
@@ -68,7 +69,9 @@ export function harnessAccess(
 			readiness: "authorizing",
 			muted: true,
 			statusLabel: "Authorizing",
-			summary: `Enter this code on ${provider.authorizeWith}`,
+			summary: connection.userCode
+				? `Enter this code on ${provider.authorizeWith}`
+				: `Open ${provider.authorizeWith} to finish signing in. If it shows a code, paste it in Terminal.`,
 			subscriptionAction: "open_provider",
 			subscriptionActionLabel: `Open ${provider.authorizeWith}`,
 			apiKeyHint,
@@ -116,23 +119,56 @@ export function selectedHarnessIsConnected(
 	);
 }
 
+export function harnessRequiresAccountLogin(
+	harnessId: AgentProviderId,
+): boolean {
+	return harnessId !== "opencode";
+}
+
 function readyAccess(
 	provider: AgentProvider,
-	authMode: "chatgpt" | "apikey",
+	authMode: AgentAuthMode,
 	planType: string | null,
 	apiKeyHint: string | null,
 ): HarnessAccess {
-	const usingKey = authMode === "apikey";
+	if (authMode === "apikey") {
+		return {
+			provider,
+			readiness: "ready",
+			muted: false,
+			statusLabel: "API key",
+			summary: "Using a stored API key",
+			subscriptionAction: null,
+			subscriptionActionLabel: null,
+			apiKeyHint,
+			userCode: null,
+			verificationUrl: null,
+		};
+	}
+	if (authMode === "local") {
+		return {
+			provider,
+			readiness: "ready",
+			muted: false,
+			statusLabel: "Connected",
+			summary: planType ?? "Running on this workspace",
+			subscriptionAction: null,
+			subscriptionActionLabel: null,
+			apiKeyHint,
+			userCode: null,
+			verificationUrl: null,
+		};
+	}
 	return {
 		provider,
 		readiness: "ready",
 		muted: false,
-		statusLabel: usingKey ? "API key" : "Signed in",
-		summary: usingKey
-			? "Using a stored API key"
-			: planType
-				? planType
-				: `Signed in with ${provider.signInMethod}`,
+		statusLabel: "Signed in",
+		summary: planType
+			? planType
+			: provider.signInMethod
+				? `Signed in with ${provider.signInMethod}`
+				: "Running on this workspace",
 		subscriptionAction: null,
 		subscriptionActionLabel: null,
 		apiKeyHint,
@@ -153,10 +189,10 @@ function unsignedAccess(
 			muted: true,
 			statusLabel: apiKeyHint ? "Key saved" : "Not signed in",
 			summary: apiKeyHint
-				? `Key ${apiKeyHint} is stored. Claude Code is not connected yet.`
-				: "Paste an API key. Claude Code sign-in is not connected yet.",
-			subscriptionAction: null,
-			subscriptionActionLabel: null,
+				? `Key ${apiKeyHint} is stored. Sign in with Claude Code so Anthropic can authenticate it.`
+				: "Sign in with Claude Code on Anthropic's page, or paste an API key.",
+			subscriptionAction: "sign_in",
+			subscriptionActionLabel: "Sign in",
 			apiKeyHint,
 			userCode: null,
 			verificationUrl: null,
@@ -167,12 +203,12 @@ function unsignedAccess(
 			provider,
 			readiness: "unsigned",
 			muted: true,
-			statusLabel: apiKeyHint ? "Key saved" : "Not signed in",
+			statusLabel: apiKeyHint ? "Key saved" : "Not connected",
 			summary: apiKeyHint
-				? `Key ${apiKeyHint} is stored. OpenCode is not connected yet.`
-				: "Paste a Zen or provider API key. OpenCode is not connected yet.",
-			subscriptionAction: null,
-			subscriptionActionLabel: null,
+				? `Key ${apiKeyHint} is stored. Connect OpenCode to attach it. No account is required.`
+				: "Connect OpenCode on the workspace. No account is required. Paste a provider key only if you want extra models.",
+			subscriptionAction: "connect",
+			subscriptionActionLabel: "Connect",
 			apiKeyHint,
 			userCode: null,
 			verificationUrl: null,

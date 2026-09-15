@@ -9,11 +9,13 @@
 		"includes": [
 			"src/**",
 			"scripts/**",
+			"!scripts/setup-github-app.mjs",
 			"*.json",
 			"vite.config.ts",
 			"vitest.config.ts",
 			"!src/routeTree.gen.ts",
-			"!src/**/*.py"
+			"!src/**/*.py",
+			"tests/**"
 		]
 	},
 	"formatter": {
@@ -26,6 +28,27 @@
 			"preset": "recommended"
 		}
 	},
+	"overrides": [
+		{
+			"includes": [
+				"src/components/ui/field.tsx",
+				"src/components/ui/input-group.tsx",
+				"src/components/ui/slider.tsx"
+			],
+			"linter": {
+				"rules": {
+					"a11y": {
+						"useSemanticElements": "off",
+						"useKeyWithClickEvents": "off"
+					},
+					"suspicious": {
+						"noArrayIndexKey": "off",
+						"noDoubleEquals": "off"
+					}
+				}
+			}
+		}
+	],
 	"javascript": {
 		"formatter": {
 			"quoteStyle": "double"

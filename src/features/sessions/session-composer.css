@@ -78,6 +78,12 @@
 	gap: 8px;
 	padding: 0 8px 8px;
 }
+.model-provider-notice {
+	margin: 0 12px 10px;
+	font-size: 12px;
+	line-height: 1.45;
+	color: #8d8d8d;
+}
 .session-controls {
 	display: flex;
 	align-items: center;
@@ -280,10 +286,6 @@
 	height: 28px;
 	color: #f2f2f0;
 }
-.harness-choice[data-muted="true"] .harness-choice-mark,
-.harness-choice[data-muted="true"] .harness-choice-name {
-	opacity: 0.45;
-}
 .harness-choice-copy {
 	display: flex;
 	align-items: baseline;
@@ -296,6 +298,10 @@
 	font-weight: 550;
 	letter-spacing: -0.02em;
 	color: #f0f0f0;
+}
+.harness-choice[data-muted="true"] .harness-choice-mark,
+.harness-choice[data-muted="true"] .harness-choice-name {
+	opacity: 0.45;
 }
 .harness-choice-status {
 	flex-shrink: 0;

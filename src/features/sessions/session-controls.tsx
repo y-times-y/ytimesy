@@ -21,7 +21,10 @@ import {
 	type AgentProviderId,
 	agentProviderById,
 } from "#/domain/agent-provider";
-import { selectedHarnessIsConnected } from "#/domain/harness-access";
+import {
+	harnessRequiresAccountLogin,
+	selectedHarnessIsConnected,
+} from "#/domain/harness-access";
 import { HarnessPicker } from "./harness-picker";
 import { resolveReasoningLevel, type SessionModel } from "./model-capabilities";
 import { ReasoningOption } from "./reasoning-option";
@@ -62,6 +65,9 @@ export function SessionControls({
 	const [fast, setFast] = useState(false);
 	const harnessReady = selectedHarnessIsConnected(connection, harnessId);
 	const harnessName = agentProviderById(harnessId).name;
+	const startPrompt = harnessRequiresAccountLogin(harnessId)
+		? `Sign in to ${harnessName}`
+		: `Connect ${harnessName}`;
 
 	return (
 		<div className="session-controls">
@@ -112,14 +118,10 @@ export function SessionControls({
 					id="session-model-select"
 					className="composer-select model-select"
 					aria-label="Model"
-					title={
-						harnessReady
-							? undefined
-							: `Sign in to ${harnessName} to load its models`
-					}
+					title={harnessReady ? undefined : `${startPrompt} to load its models`}
 				>
 					<SelectValue
-						placeholder={harnessReady ? "Select model" : "Sign in first"}
+						placeholder={harnessReady ? "Select model" : startPrompt}
 					/>
 				</SelectTrigger>
 				<SelectContent
@@ -132,7 +134,7 @@ export function SessionControls({
 						<SelectItem value="unconnected" disabled>
 							{harnessReady
 								? `${harnessName} has not listed models yet`
-								: `Sign in to ${harnessName} to load its models`}
+								: `${startPrompt} to load its models`}
 						</SelectItem>
 					) : (
 						models.map((availableModel) => (
@@ -153,7 +155,7 @@ export function SessionControls({
 					aria-label="Reasoning level"
 					title={
 						!harnessReady
-							? `Sign in to ${harnessName} first`
+							? `${startPrompt} first`
 							: !model
 								? "Select a model to see its reasoning levels"
 								: !model.reasoning
@@ -205,7 +207,7 @@ export function SessionControls({
 					</TooltipTrigger>
 					<TooltipContent side="bottom" sideOffset={8}>
 						{!harnessReady
-							? `Sign in to ${harnessName} first`
+							? `${startPrompt} first`
 							: !model
 								? "Select a model first"
 								: !model.supportsFastMode

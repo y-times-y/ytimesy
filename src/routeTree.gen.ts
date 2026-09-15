@@ -10,33 +10,230 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as OnboardingRouteImport } from './routes/onboarding'
+import { Route as ApiAccountRouteImport } from './routes/api/account'
+import { Route as ApiProjectsRouteImport } from './routes/api/projects'
+import { Route as ApiWorkspacesRouteImport } from './routes/api/workspaces'
+import { Route as AuthPathRouteImport } from './routes/auth/$path'
+import { Route as ApiAgentAccountRouteImport } from './routes/api/agent/account'
+import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as ApiGithubBranchesRouteImport } from './routes/api/github/branches'
+import { Route as ApiGithubCallbackRouteImport } from './routes/api/github/callback'
+import { Route as ApiGithubConnectRouteImport } from './routes/api/github/connect'
+import { Route as ApiGithubDisconnectRouteImport } from './routes/api/github/disconnect'
+import { Route as ApiGithubRepositoriesRouteImport } from './routes/api/github/repositories'
+import { Route as ApiIdentityProvidersRouteImport } from './routes/api/identity/providers'
+import { Route as ApiProjectsPublishRouteImport } from './routes/api/projects/publish'
+import { Route as ApiWorkspacesRetryRouteImport } from './routes/api/workspaces.retry'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const OnboardingRoute = OnboardingRouteImport.update({
+  id: '/onboarding',
+  path: '/onboarding',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAccountRoute = ApiAccountRouteImport.update({
+  id: '/api/account',
+  path: '/api/account',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiProjectsRoute = ApiProjectsRouteImport.update({
+  id: '/api/projects',
+  path: '/api/projects',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiWorkspacesRoute = ApiWorkspacesRouteImport.update({
+  id: '/api/workspaces',
+  path: '/api/workspaces',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AuthPathRoute = AuthPathRouteImport.update({
+  id: '/auth/$path',
+  path: '/auth/$path',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAgentAccountRoute = ApiAgentAccountRouteImport.update({
+  id: '/api/agent/account',
+  path: '/api/agent/account',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
+  id: '/api/auth/$',
+  path: '/api/auth/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiGithubBranchesRoute = ApiGithubBranchesRouteImport.update({
+  id: '/api/github/branches',
+  path: '/api/github/branches',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiGithubCallbackRoute = ApiGithubCallbackRouteImport.update({
+  id: '/api/github/callback',
+  path: '/api/github/callback',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiGithubConnectRoute = ApiGithubConnectRouteImport.update({
+  id: '/api/github/connect',
+  path: '/api/github/connect',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiGithubDisconnectRoute = ApiGithubDisconnectRouteImport.update({
+  id: '/api/github/disconnect',
+  path: '/api/github/disconnect',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiGithubRepositoriesRoute = ApiGithubRepositoriesRouteImport.update({
+  id: '/api/github/repositories',
+  path: '/api/github/repositories',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiIdentityProvidersRoute = ApiIdentityProvidersRouteImport.update({
+  id: '/api/identity/providers',
+  path: '/api/identity/providers',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiProjectsPublishRoute = ApiProjectsPublishRouteImport.update({
+  id: '/publish',
+  path: '/publish',
+  getParentRoute: () => ApiProjectsRoute,
+} as any)
+const ApiWorkspacesRetryRoute = ApiWorkspacesRetryRouteImport.update({
+  id: '/retry',
+  path: '/retry',
+  getParentRoute: () => ApiWorkspacesRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/onboarding': typeof OnboardingRoute
+  '/api/account': typeof ApiAccountRoute
+  '/api/projects': typeof ApiProjectsRouteWithChildren
+  '/api/workspaces': typeof ApiWorkspacesRouteWithChildren
+  '/auth/$path': typeof AuthPathRoute
+  '/api/agent/account': typeof ApiAgentAccountRoute
+  '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/github/branches': typeof ApiGithubBranchesRoute
+  '/api/github/callback': typeof ApiGithubCallbackRoute
+  '/api/github/connect': typeof ApiGithubConnectRoute
+  '/api/github/disconnect': typeof ApiGithubDisconnectRoute
+  '/api/github/repositories': typeof ApiGithubRepositoriesRoute
+  '/api/identity/providers': typeof ApiIdentityProvidersRoute
+  '/api/projects/publish': typeof ApiProjectsPublishRoute
+  '/api/workspaces/retry': typeof ApiWorkspacesRetryRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/onboarding': typeof OnboardingRoute
+  '/api/account': typeof ApiAccountRoute
+  '/api/projects': typeof ApiProjectsRouteWithChildren
+  '/api/workspaces': typeof ApiWorkspacesRouteWithChildren
+  '/auth/$path': typeof AuthPathRoute
+  '/api/agent/account': typeof ApiAgentAccountRoute
+  '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/github/branches': typeof ApiGithubBranchesRoute
+  '/api/github/callback': typeof ApiGithubCallbackRoute
+  '/api/github/connect': typeof ApiGithubConnectRoute
+  '/api/github/disconnect': typeof ApiGithubDisconnectRoute
+  '/api/github/repositories': typeof ApiGithubRepositoriesRoute
+  '/api/identity/providers': typeof ApiIdentityProvidersRoute
+  '/api/projects/publish': typeof ApiProjectsPublishRoute
+  '/api/workspaces/retry': typeof ApiWorkspacesRetryRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/onboarding': typeof OnboardingRoute
+  '/api/account': typeof ApiAccountRoute
+  '/api/projects': typeof ApiProjectsRouteWithChildren
+  '/api/workspaces': typeof ApiWorkspacesRouteWithChildren
+  '/auth/$path': typeof AuthPathRoute
+  '/api/agent/account': typeof ApiAgentAccountRoute
+  '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/github/branches': typeof ApiGithubBranchesRoute
+  '/api/github/callback': typeof ApiGithubCallbackRoute
+  '/api/github/connect': typeof ApiGithubConnectRoute
+  '/api/github/disconnect': typeof ApiGithubDisconnectRoute
+  '/api/github/repositories': typeof ApiGithubRepositoriesRoute
+  '/api/identity/providers': typeof ApiIdentityProvidersRoute
+  '/api/projects/publish': typeof ApiProjectsPublishRoute
+  '/api/workspaces/retry': typeof ApiWorkspacesRetryRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/'
+  fullPaths:
+    | '/'
+    | '/onboarding'
+    | '/api/account'
+    | '/api/projects'
+    | '/api/workspaces'
+    | '/auth/$path'
+    | '/api/agent/account'
+    | '/api/auth/$'
+    | '/api/github/branches'
+    | '/api/github/callback'
+    | '/api/github/connect'
+    | '/api/github/disconnect'
+    | '/api/github/repositories'
+    | '/api/identity/providers'
+    | '/api/projects/publish'
+    | '/api/workspaces/retry'
   fileRoutesByTo: FileRoutesByTo
-  to: '/'
-  id: '__root__' | '/'
+  to:
+    | '/'
+    | '/onboarding'
+    | '/api/account'
+    | '/api/projects'
+    | '/api/workspaces'
+    | '/auth/$path'
+    | '/api/agent/account'
+    | '/api/auth/$'
+    | '/api/github/branches'
+    | '/api/github/callback'
+    | '/api/github/connect'
+    | '/api/github/disconnect'
+    | '/api/github/repositories'
+    | '/api/identity/providers'
+    | '/api/projects/publish'
+    | '/api/workspaces/retry'
+  id:
+    | '__root__'
+    | '/'
+    | '/onboarding'
+    | '/api/account'
+    | '/api/projects'
+    | '/api/workspaces'
+    | '/auth/$path'
+    | '/api/agent/account'
+    | '/api/auth/$'
+    | '/api/github/branches'
+    | '/api/github/callback'
+    | '/api/github/connect'
+    | '/api/github/disconnect'
+    | '/api/github/repositories'
+    | '/api/identity/providers'
+    | '/api/projects/publish'
+    | '/api/workspaces/retry'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  OnboardingRoute: typeof OnboardingRoute
+  ApiAccountRoute: typeof ApiAccountRoute
+  ApiProjectsRoute: typeof ApiProjectsRouteWithChildren
+  ApiWorkspacesRoute: typeof ApiWorkspacesRouteWithChildren
+  AuthPathRoute: typeof AuthPathRoute
+  ApiAgentAccountRoute: typeof ApiAgentAccountRoute
+  ApiAuthSplatRoute: typeof ApiAuthSplatRoute
+  ApiGithubBranchesRoute: typeof ApiGithubBranchesRoute
+  ApiGithubCallbackRoute: typeof ApiGithubCallbackRoute
+  ApiGithubConnectRoute: typeof ApiGithubConnectRoute
+  ApiGithubDisconnectRoute: typeof ApiGithubDisconnectRoute
+  ApiGithubRepositoriesRoute: typeof ApiGithubRepositoriesRoute
+  ApiIdentityProvidersRoute: typeof ApiIdentityProvidersRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -48,11 +245,153 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/onboarding': {
+      id: '/onboarding'
+      path: '/onboarding'
+      fullPath: '/onboarding'
+      preLoaderRoute: typeof OnboardingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/account': {
+      id: '/api/account'
+      path: '/api/account'
+      fullPath: '/api/account'
+      preLoaderRoute: typeof ApiAccountRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/projects': {
+      id: '/api/projects'
+      path: '/api/projects'
+      fullPath: '/api/projects'
+      preLoaderRoute: typeof ApiProjectsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/workspaces': {
+      id: '/api/workspaces'
+      path: '/api/workspaces'
+      fullPath: '/api/workspaces'
+      preLoaderRoute: typeof ApiWorkspacesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/auth/$path': {
+      id: '/auth/$path'
+      path: '/auth/$path'
+      fullPath: '/auth/$path'
+      preLoaderRoute: typeof AuthPathRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/agent/account': {
+      id: '/api/agent/account'
+      path: '/api/agent/account'
+      fullPath: '/api/agent/account'
+      preLoaderRoute: typeof ApiAgentAccountRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/auth/$': {
+      id: '/api/auth/$'
+      path: '/api/auth/$'
+      fullPath: '/api/auth/$'
+      preLoaderRoute: typeof ApiAuthSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/github/branches': {
+      id: '/api/github/branches'
+      path: '/api/github/branches'
+      fullPath: '/api/github/branches'
+      preLoaderRoute: typeof ApiGithubBranchesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/github/callback': {
+      id: '/api/github/callback'
+      path: '/api/github/callback'
+      fullPath: '/api/github/callback'
+      preLoaderRoute: typeof ApiGithubCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/github/connect': {
+      id: '/api/github/connect'
+      path: '/api/github/connect'
+      fullPath: '/api/github/connect'
+      preLoaderRoute: typeof ApiGithubConnectRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/github/disconnect': {
+      id: '/api/github/disconnect'
+      path: '/api/github/disconnect'
+      fullPath: '/api/github/disconnect'
+      preLoaderRoute: typeof ApiGithubDisconnectRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/github/repositories': {
+      id: '/api/github/repositories'
+      path: '/api/github/repositories'
+      fullPath: '/api/github/repositories'
+      preLoaderRoute: typeof ApiGithubRepositoriesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/identity/providers': {
+      id: '/api/identity/providers'
+      path: '/api/identity/providers'
+      fullPath: '/api/identity/providers'
+      preLoaderRoute: typeof ApiIdentityProvidersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/projects/publish': {
+      id: '/api/projects/publish'
+      path: '/publish'
+      fullPath: '/api/projects/publish'
+      preLoaderRoute: typeof ApiProjectsPublishRouteImport
+      parentRoute: typeof ApiProjectsRoute
+    }
+    '/api/workspaces/retry': {
+      id: '/api/workspaces/retry'
+      path: '/retry'
+      fullPath: '/api/workspaces/retry'
+      preLoaderRoute: typeof ApiWorkspacesRetryRouteImport
+      parentRoute: typeof ApiWorkspacesRoute
+    }
   }
 }
 
+interface ApiProjectsRouteChildren {
+  ApiProjectsPublishRoute: typeof ApiProjectsPublishRoute
+}
+
+const ApiProjectsRouteChildren: ApiProjectsRouteChildren = {
+  ApiProjectsPublishRoute: ApiProjectsPublishRoute,
+}
+
+const ApiProjectsRouteWithChildren = ApiProjectsRoute._addFileChildren(
+  ApiProjectsRouteChildren,
+)
+
+interface ApiWorkspacesRouteChildren {
+  ApiWorkspacesRetryRoute: typeof ApiWorkspacesRetryRoute
+}
+
+const ApiWorkspacesRouteChildren: ApiWorkspacesRouteChildren = {
+  ApiWorkspacesRetryRoute: ApiWorkspacesRetryRoute,
+}
+
+const ApiWorkspacesRouteWithChildren = ApiWorkspacesRoute._addFileChildren(
+  ApiWorkspacesRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  OnboardingRoute: OnboardingRoute,
+  ApiAccountRoute: ApiAccountRoute,
+  ApiProjectsRoute: ApiProjectsRouteWithChildren,
+  ApiWorkspacesRoute: ApiWorkspacesRouteWithChildren,
+  AuthPathRoute: AuthPathRoute,
+  ApiAgentAccountRoute: ApiAgentAccountRoute,
+  ApiAuthSplatRoute: ApiAuthSplatRoute,
+  ApiGithubBranchesRoute: ApiGithubBranchesRoute,
+  ApiGithubCallbackRoute: ApiGithubCallbackRoute,
+  ApiGithubConnectRoute: ApiGithubConnectRoute,
+  ApiGithubDisconnectRoute: ApiGithubDisconnectRoute,
+  ApiGithubRepositoriesRoute: ApiGithubRepositoriesRoute,
+  ApiIdentityProvidersRoute: ApiIdentityProvidersRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
