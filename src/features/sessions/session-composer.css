@@ -1117,7 +1117,8 @@ details[open] > summary .session-activity-chevron {
 		align-items: flex-end;
 	}
 	.session-launcher[data-layout="chat"] .composer-input {
-		flex: 1 1 100%;
+		flex: 1 0 100%;
+		width: 100%;
 		order: 1;
 	}
 	.session-launcher[data-layout="chat"] .attachment-control {
