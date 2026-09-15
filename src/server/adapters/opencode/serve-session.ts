@@ -243,8 +243,8 @@ function readOpenCodeSnapshot(
 ): Effect.Effect<OpenCodeAuthStatus> {
 	return Effect.gen(function* () {
 		const catalog =
-			(yield* curlJson(machines, workspaceId, "/api/model")) ??
-			(yield* curlJson(machines, workspaceId, "/config/providers"));
+			(yield* curlJson(machines, workspaceId, "/config/providers")) ??
+			(yield* curlJson(machines, workspaceId, "/api/model"));
 		const models = parseOpenCodeModelCatalog(catalog);
 		const previous = yield* readOpenCodeAuthStatus(machines, workspaceId);
 		const previousItems =
