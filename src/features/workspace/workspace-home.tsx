@@ -352,6 +352,18 @@ export function WorkspaceHome({
 			.then((next) => {
 				if (next) setSession(next);
 			})
+			.catch((cause) => {
+				setSession((current) => ({
+					...current,
+					connection: {
+						status: "failed",
+						provider: harnessId,
+						message: cause instanceof Error ? cause.message : String(cause),
+					},
+					canSend: false,
+					canSendSide: false,
+				}));
+			})
 			.finally(() => setBusy(false));
 	}
 
