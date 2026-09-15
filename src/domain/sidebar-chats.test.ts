@@ -8,6 +8,8 @@ import {
 	selectedChatIdAfterDelete,
 	sidebarChatIsRunning,
 	sidebarChatsEmptyCopy,
+	sidebarIsPinnedInStorage,
+	sidebarPinnedStorageValue,
 	withBusyChat,
 	withChatTurnStatus,
 	withoutBusyChat,
@@ -59,6 +61,16 @@ describe("sidebar empty copy", () => {
 		expect(
 			newChatIsActive({ projectSelected: true, hasUserMessage: true }),
 		).toBe(false);
+	});
+});
+
+describe("sidebar pin storage", () => {
+	it("pins only the stored expanded state", () => {
+		expect(sidebarIsPinnedInStorage("1")).toBe(true);
+		expect(sidebarIsPinnedInStorage("0")).toBe(false);
+		expect(sidebarIsPinnedInStorage(null)).toBe(false);
+		expect(sidebarPinnedStorageValue(true)).toBe("1");
+		expect(sidebarPinnedStorageValue(false)).toBe("0");
 	});
 });
 
