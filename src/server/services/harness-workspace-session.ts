@@ -249,7 +249,7 @@ export function stopHarnessWorkspaceTurn(
 	if (scope.harnessId === "opencode") {
 		return stopOpenCodeWorkspaceTurn(machines, scope);
 	}
-	return readHarnessWorkspaceSession(machines, scope);
+	return stopClaudeWorkspaceTurn(machines, scope);
 }
 
 /**
@@ -271,33 +271,17 @@ function stopOpenCodeWorkspaceTurn(
 		);
 		const providerRef = bound.providerRef;
 		if (!providerRef) {
-			yield* Effect.tryPromise(() =>
-				persistSessionTurnStatus(bound.session, "idle"),
-			);
-			return yield* Effect.tryPromise(() =>
-				persistBoundSessionView(bound.session, {
-					...emptyHarnessSession(),
-					turnStatus: "idle",
-				}),
-			);
+			return yield* persistIdleStoppedSession(bound.session, null);
 		}
 		const running = yield* Effect.tryPromise(() =>
 			machines.isRunning(WorkspaceId(providerRef)),
 		);
 		if (!running) {
-			yield* Effect.tryPromise(() =>
-				persistSessionTurnStatus(bound.session, "idle"),
+			const paused = yield* persistIdleStoppedSession(
+				bound.session,
+				pausedHarnessSessionView(scope, providerRef),
 			);
-			const paused = yield* Effect.tryPromise(() =>
-				persistBoundSessionView(
-					bound.session,
-					pausedHarnessSessionView(scope, providerRef),
-				),
-			);
-			return yield* attachSiblingSideChat(machines, scope, {
-				...paused,
-				turnStatus: "idle",
-			});
+			return yield* attachSiblingSideChat(machines, scope, paused);
 		}
 		const status = yield* abortOpenCodeTurn(machines, WorkspaceId(providerRef));
 		const view = yield* Effect.tryPromise(() =>
@@ -319,6 +303,68 @@ function stopOpenCodeWorkspaceTurn(
 			}),
 		),
 	);
+}
+
+/**
+ * Claude Code has no abort adapter yet. A paused VM is already stopped;
+ * persist idle without booting so Stop does not consume compute allowance.
+ */
+function stopClaudeWorkspaceTurn(
+	machines: WorkspaceMachines,
+	scope: HarnessSessionScope,
+): Effect.Effect<PublicHarnessSession> {
+	return Effect.gen(function* () {
+		if (!scope.projectId) return emptyHarnessSession();
+		const bound = yield* Effect.tryPromise(() =>
+			peekAgentSessionMachine({
+				userId: scope.userId,
+				projectId: scope.projectId as string,
+				sessionId: scope.sessionId,
+			}),
+		);
+		const providerRef = bound.providerRef;
+		if (!providerRef) {
+			return yield* persistIdleStoppedSession(bound.session, null);
+		}
+		const running = yield* Effect.tryPromise(() =>
+			machines.isRunning(WorkspaceId(providerRef)),
+		);
+		if (!running) {
+			const paused = yield* persistIdleStoppedSession(
+				bound.session,
+				pausedHarnessSessionView(scope, providerRef),
+			);
+			return yield* attachSiblingSideChat(machines, scope, paused);
+		}
+		return yield* readHarnessWorkspaceSession(machines, scope);
+	}).pipe(
+		Effect.catchAll((cause) =>
+			Effect.succeed({
+				...emptyHarnessSession(),
+				connection: {
+					status: "failed" as const,
+					provider: "claude" as const,
+					message: publicFailureMessage(cause),
+				},
+			}),
+		),
+	);
+}
+
+function persistIdleStoppedSession(
+	session: Awaited<ReturnType<typeof peekAgentSessionMachine>>["session"],
+	view: PublicHarnessSession | null,
+) {
+	return Effect.gen(function* () {
+		yield* Effect.tryPromise(() => persistSessionTurnStatus(session, "idle"));
+		const persisted = yield* Effect.tryPromise(() =>
+			persistBoundSessionView(
+				session,
+				view ?? { ...emptyHarnessSession(), turnStatus: "idle" },
+			),
+		);
+		return { ...persisted, turnStatus: "idle" as const };
+	});
 }
 
 /**
