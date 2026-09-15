@@ -1149,10 +1149,10 @@ button:enabled:active {
 		height: 44px;
 		font-size: 16px;
 	}
-	.publication-label-full {
+	.publication-action .publication-label-full {
 		display: none;
 	}
-	.publication-label-short {
+	.publication-action .publication-label-short {
 		display: inline;
 	}
 }
