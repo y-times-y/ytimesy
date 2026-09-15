@@ -84,7 +84,11 @@ export function connectHarnessWorkspaceSession(
 		const workspace = yield* Effect.tryPromise(() =>
 			readyWorkspaceForOwner(scope.userId, scope.projectId),
 		);
-		const blocked = harnessConnectBlockedReason(workspace, harnessName);
+		const blocked = harnessConnectBlockedReason(
+			workspace,
+			harnessName,
+			scope.harnessId === "opencode" ? "connect" : "sign_in",
+		);
 		if (blocked || !workspace?.providerRef) {
 			return {
 				...emptyHarnessSession(),
@@ -93,7 +97,9 @@ export function connectHarnessWorkspaceSession(
 					provider: scope.harnessId,
 					message:
 						blocked ??
-						`Prepare a workspace before signing in to ${harnessName}.`,
+						(scope.harnessId === "opencode"
+							? `Prepare a workspace before connecting ${harnessName}.`
+							: `Prepare a workspace before signing in to ${harnessName}.`),
 				},
 			};
 		}
@@ -282,15 +288,6 @@ function connectionFromOpenCode(status: OpenCodeAuthStatus): AgentConnection {
 			authMode: status.authMode,
 			planType: status.planType,
 			email: null,
-		};
-	}
-	if (status.stage === "awaiting_device_code") {
-		return {
-			status: "awaiting_device_code",
-			provider: "opencode",
-			loginId: status.loginId,
-			verificationUrl: status.verificationUrl,
-			userCode: "",
 		};
 	}
 	if (status.stage === "failed") {

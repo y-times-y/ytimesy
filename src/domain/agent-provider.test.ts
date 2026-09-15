@@ -40,5 +40,14 @@ describe("agent providers", () => {
 				email: null,
 			}),
 		).toBe("Claude Code");
+		expect(
+			connectedAgentStatus({
+				status: "authenticated",
+				provider: "opencode",
+				authMode: "local",
+				planType: null,
+				email: null,
+			}),
+		).toBe("OpenCode");
 	});
 });

@@ -14,6 +14,7 @@ export type HarnessReadiness =
 
 export type HarnessSubscriptionAction =
 	| "sign_in"
+	| "connect"
 	| "open_provider"
 	| "retry"
 	| "sign_in_again";
@@ -111,23 +112,52 @@ export function selectedHarnessIsConnected(
 	);
 }
 
+export function harnessRequiresAccountLogin(
+	harnessId: AgentProviderId,
+): boolean {
+	return harnessId !== "opencode";
+}
+
 function readyAccess(
 	provider: AgentProvider,
 	authMode: AgentAuthMode,
 	planType: string | null,
 	apiKeyHint: string | null,
 ): HarnessAccess {
-	const usingKey = authMode === "apikey";
+	if (authMode === "apikey") {
+		return {
+			provider,
+			readiness: "ready",
+			muted: false,
+			statusLabel: "API key",
+			summary: "Using a stored API key",
+			subscriptionAction: null,
+			subscriptionActionLabel: null,
+			apiKeyHint,
+			userCode: null,
+			verificationUrl: null,
+		};
+	}
+	if (authMode === "local") {
+		return {
+			provider,
+			readiness: "ready",
+			muted: false,
+			statusLabel: "Connected",
+			summary: planType ?? "Running on this workspace",
+			subscriptionAction: null,
+			subscriptionActionLabel: null,
+			apiKeyHint,
+			userCode: null,
+			verificationUrl: null,
+		};
+	}
 	return {
 		provider,
 		readiness: "ready",
 		muted: false,
-		statusLabel: usingKey ? "API key" : "Signed in",
-		summary: usingKey
-			? "Using a stored API key"
-			: planType
-				? planType
-				: `Signed in with ${provider.signInMethod}`,
+		statusLabel: "Signed in",
+		summary: planType ? planType : `Signed in with ${provider.signInMethod}`,
 		subscriptionAction: null,
 		subscriptionActionLabel: null,
 		apiKeyHint,
@@ -161,12 +191,12 @@ function unsignedAccess(
 			provider,
 			readiness: "unsigned",
 			muted: true,
-			statusLabel: apiKeyHint ? "Key saved" : "Not signed in",
+			statusLabel: apiKeyHint ? "Key saved" : "Not connected",
 			summary: apiKeyHint
-				? `Key ${apiKeyHint} is stored. Sign in so OpenCode can connect it.`
-				: "Sign in to OpenCode Zen, or paste a Zen or provider API key.",
-			subscriptionAction: "sign_in",
-			subscriptionActionLabel: "Sign in",
+				? `Key ${apiKeyHint} is stored. Connect OpenCode to attach it. No account is required.`
+				: "Connect OpenCode on the workspace. No account is required. Paste a provider key only if you want extra models.",
+			subscriptionAction: "connect",
+			subscriptionActionLabel: "Connect",
 			apiKeyHint,
 			userCode: null,
 			verificationUrl: null,

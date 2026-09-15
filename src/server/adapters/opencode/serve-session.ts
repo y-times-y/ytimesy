@@ -1,11 +1,7 @@
 import { Duration, Effect } from "effect";
 import { SessionItemId, type WorkspaceId } from "#/domain/ids";
 import type { ListedModel } from "#/domain/listed-model";
-import {
-	openCodeProviderIsConnected,
-	openCodeZenAuthUrl,
-	parseOpenCodeModelCatalog,
-} from "#/domain/opencode-catalog";
+import { parseOpenCodeModelCatalog } from "#/domain/opencode-catalog";
 import { posixShellQuoted } from "#/domain/posix-command";
 import type { SessionItem, SessionTurnStatus } from "#/domain/session-item";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
@@ -52,13 +48,8 @@ export type OpenCodeAuthStatus =
 	| { readonly stage: "missing" }
 	| { readonly stage: "starting" }
 	| {
-			readonly stage: "awaiting_device_code";
-			readonly loginId: string;
-			readonly verificationUrl: string;
-	  }
-	| {
 			readonly stage: "authenticated";
-			readonly authMode: "subscription" | "apikey";
+			readonly authMode: "local" | "apikey";
 			readonly planType: string | null;
 			readonly models: readonly ListedModel[];
 			readonly turnStatus: SessionTurnStatus;
@@ -77,24 +68,11 @@ export function parseOpenCodeAuthStatus(
 		}
 		const stage = readString(parsed.stage);
 		if (stage === "starting") return { stage: "starting" };
-		if (stage === "awaiting_device_code") {
-			const verificationUrl = readString(parsed.verificationUrl);
-			if (!verificationUrl) {
-				return {
-					stage: "failed",
-					message: "OpenCode did not publish its sign-in URL",
-				};
-			}
-			return {
-				stage: "awaiting_device_code",
-				loginId: readString(parsed.loginId) ?? "opencode-zen",
-				verificationUrl,
-			};
-		}
+		if (stage === "awaiting_device_code") return { stage: "missing" };
 		if (stage === "authenticated") {
 			return {
 				stage: "authenticated",
-				authMode: parsed.authMode === "apikey" ? "apikey" : "subscription",
+				authMode: parsed.authMode === "apikey" ? "apikey" : "local",
 				planType: readString(parsed.planType) ?? null,
 				models: Array.isArray(parsed.models)
 					? parseOpenCodeModelCatalog(parsed.models)
@@ -111,7 +89,7 @@ export function parseOpenCodeAuthStatus(
 		if (stage === "failed") {
 			return {
 				stage: "failed",
-				message: readString(parsed.message) ?? "OpenCode sign-in failed",
+				message: readString(parsed.message) ?? "OpenCode connect failed",
 			};
 		}
 		return {
@@ -139,9 +117,8 @@ export function readOpenCodeAuthStatus(
 }
 
 /**
- * Installs OpenCode, starts `opencode serve`, and connects Zen only through
- * that server. A stored key is applied with PUT /auth/opencode and is not
- * treated as signed in until the server lists models.
+ * Installs OpenCode and starts `opencode serve`. No account login is required.
+ * A stored key is optional and is attached only if the server accepts it.
  */
 export function connectOpenCode(
 	machines: WorkspaceMachines,
@@ -184,16 +161,16 @@ ${START_SERVE_SCRIPT}`,
 			);
 		}
 
+		let usedKey = false;
 		if (apiKey) {
-			const connected = yield* putOpenCodeAuth(machines, workspaceId, apiKey);
-			if (!connected) {
-				return failed(
-					"OpenCode did not accept the stored key. Sign in to OpenCode Zen and paste a key that the server accepts.",
-				);
-			}
+			usedKey = yield* putOpenCodeAuth(machines, workspaceId, apiKey);
 		}
 
-		const snapshot = yield* readOpenCodeSnapshot(machines, workspaceId);
+		const snapshot = yield* readOpenCodeSnapshot(
+			machines,
+			workspaceId,
+			usedKey,
+		);
 		yield* persistStatus(machines, workspaceId, snapshot);
 		return snapshot;
 	}).pipe(
@@ -262,40 +239,30 @@ function putOpenCodeAuth(
 function readOpenCodeSnapshot(
 	machines: WorkspaceMachines,
 	workspaceId: WorkspaceId,
+	usedKey = false,
 ): Effect.Effect<OpenCodeAuthStatus> {
 	return Effect.gen(function* () {
 		const catalog =
 			(yield* curlJson(machines, workspaceId, "/api/model")) ??
 			(yield* curlJson(machines, workspaceId, "/config/providers"));
-		const providers =
-			(yield* curlJson(machines, workspaceId, "/provider")) ??
-			(yield* curlJson(machines, workspaceId, "/config/providers"));
 		const models = parseOpenCodeModelCatalog(catalog);
-		const connected = openCodeProviderIsConnected(providers);
 		const previous = yield* readOpenCodeAuthStatus(machines, workspaceId);
 		const previousItems =
 			previous.stage === "authenticated" ? previous.items : [];
 		const previousTurn =
 			previous.stage === "authenticated" ? previous.turnStatus : "idle";
-		if (connected && models.length > 0) {
-			return {
-				stage: "authenticated" as const,
-				authMode: "subscription" as const,
-				planType: "OpenCode Zen",
-				models,
-				turnStatus: previousTurn,
-				items: previousItems,
-			};
-		}
-		if (connected && models.length === 0) {
-			return failed(
-				"OpenCode is connected but listed no models. ytimesy did not fall back to another provider.",
-			);
-		}
+		const authMode =
+			usedKey ||
+			(previous.stage === "authenticated" && previous.authMode === "apikey")
+				? ("apikey" as const)
+				: ("local" as const);
 		return {
-			stage: "awaiting_device_code" as const,
-			loginId: "opencode-zen",
-			verificationUrl: openCodeZenAuthUrl(),
+			stage: "authenticated" as const,
+			authMode,
+			planType: null,
+			models,
+			turnStatus: previousTurn,
+			items: previousItems,
 		};
 	});
 }

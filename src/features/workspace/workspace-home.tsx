@@ -100,13 +100,17 @@ export function WorkspaceHome({
 
 	useEffect(() => {
 		if (!selectedProject?.id) return;
-		void getCodexSession({
-			data: { projectId: selectedProject.id, harnessId },
-		}).then(setSession);
 		void loadDesktop({ data: { projectId: selectedProject.id } }).then(
 			setDesktop,
 		);
-	}, [harnessId, loadDesktop, selectedProject?.id]);
+	}, [loadDesktop, selectedProject?.id]);
+
+	useEffect(() => {
+		if (!selectedProject?.id || busy) return;
+		void getCodexSession({
+			data: { projectId: selectedProject.id, harnessId },
+		}).then(setSession);
+	}, [busy, harnessId, selectedProject?.id]);
 
 	useEffect(() => {
 		if (compact || openedDiff.current || fileChanges.length === 0) return;
@@ -253,7 +257,19 @@ export function WorkspaceHome({
 								session={session}
 								busy={busy}
 								harnessId={harnessId}
-								onHarnessIdChange={setHarnessId}
+								onHarnessIdChange={(id) => {
+									setHarnessId(id);
+									if (id !== "opencode") return;
+									setBusy(true);
+									void connect({
+										data: {
+											projectId: selectedProject?.id,
+											harnessId: id,
+										},
+									})
+										.then(setSession)
+										.finally(() => setBusy(false));
+								}}
 								apiKeyHints={apiKeyHints}
 								onConnect={() => {
 									setBusy(true);

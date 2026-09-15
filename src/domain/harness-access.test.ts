@@ -6,6 +6,7 @@ import {
 } from "./agent-provider";
 import {
 	harnessAccess,
+	harnessRequiresAccountLogin,
 	offeredHarnessAccess,
 	selectedHarnessIsConnected,
 } from "./harness-access";
@@ -22,22 +23,26 @@ describe("harness access", () => {
 		expect(rows.map((row) => row.statusLabel)).toEqual([
 			"Not signed in",
 			"Not signed in",
-			"Not signed in",
+			"Not connected",
 		]);
 	});
 
-	it("offers Sign in on every unsigned harness", () => {
+	it("offers Sign in on Codex and Claude, and Connect on OpenCode", () => {
 		const rows = offeredHarnessAccess({ status: "disconnected" });
 		expect(rows.map((row) => row.subscriptionAction)).toEqual([
 			"sign_in",
 			"sign_in",
-			"sign_in",
+			"connect",
 		]);
 		expect(rows.map((row) => row.subscriptionActionLabel)).toEqual([
 			"Sign in",
 			"Sign in",
-			"Sign in",
+			"Connect",
 		]);
+		expect(rows[2]?.statusLabel).toBe("Not connected");
+		expect(rows[2]?.summary).toMatch(/No account is required/);
+		expect(harnessRequiresAccountLogin("opencode")).toBe(false);
+		expect(harnessRequiresAccountLogin("claude")).toBe(true);
 	});
 
 	it("does not treat a saved key as a connected harness", () => {
@@ -80,6 +85,24 @@ describe("harness access", () => {
 		expect(harnessAccess(OPENCODE_PROVIDER, connection, null).muted).toBe(true);
 		expect(selectedHarnessIsConnected(connection, "codex")).toBe(true);
 		expect(selectedHarnessIsConnected(connection, "claude")).toBe(false);
+	});
+
+	it("unmutes OpenCode as connected without a login", () => {
+		const connection = {
+			status: "authenticated" as const,
+			provider: "opencode" as const,
+			authMode: "local" as const,
+			planType: null,
+			email: null,
+		};
+		expect(harnessAccess(OPENCODE_PROVIDER, connection, null)).toMatchObject({
+			readiness: "ready",
+			muted: false,
+			statusLabel: "Connected",
+			summary: "Running on this workspace",
+			subscriptionAction: null,
+		});
+		expect(selectedHarnessIsConnected(connection, "opencode")).toBe(true);
 	});
 
 	it("keeps Anthropic's URL on the authorizing Claude row", () => {

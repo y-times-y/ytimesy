@@ -1,20 +1,5 @@
 import type { ListedModel } from "./listed-model";
 
-const OPENCODE_AUTH_URL = "https://opencode.ai/auth";
-
-export function openCodeZenAuthUrl() {
-	return OPENCODE_AUTH_URL;
-}
-
-export function isOpenCodeZenAuthUrl(value: string): boolean {
-	try {
-		const url = new URL(value);
-		return url.protocol === "https:" && url.hostname === "opencode.ai";
-	} catch {
-		return false;
-	}
-}
-
 export function parseOpenCodeModelCatalog(
 	payload: unknown,
 ): readonly ListedModel[] {
@@ -34,29 +19,6 @@ export function parseOpenCodeModelCatalog(
 		models.push(model);
 	}
 	return models;
-}
-
-export function openCodeProviderIsConnected(
-	payload: unknown,
-	providerId = "opencode",
-): boolean {
-	if (!isRecord(payload)) return false;
-	if (
-		Array.isArray(payload.connected) &&
-		payload.connected.some((id) => id === providerId)
-	) {
-		return true;
-	}
-	const providers = Array.isArray(payload.providers)
-		? payload.providers
-		: Array.isArray(payload.all)
-			? payload.all
-			: [];
-	return providers.some((row) => {
-		if (!isRecord(row)) return false;
-		const id = readString(row.id);
-		return id === providerId && row.connected !== false;
-	});
 }
 
 function collectCatalogModels(payload: unknown): ListedModel[] {

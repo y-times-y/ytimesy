@@ -70,7 +70,9 @@ it("only exposes a Codex session machine after the workspace is ready", () => {
 	expect(harnessConnectBlockedReason(null, "Claude Code")).toBe(
 		"Prepare a workspace before signing in to Claude Code.",
 	);
-	expect(harnessConnectBlockedReason(null, "OpenCode")).toMatch(/OpenCode/);
+	expect(harnessConnectBlockedReason(null, "OpenCode", "connect")).toBe(
+		"Prepare a workspace before connecting OpenCode.",
+	);
 	expect(
 		codexConnectBlockedReason({
 			status: "cloning",

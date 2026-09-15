@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-	isOpenCodeZenAuthUrl,
-	openCodeProviderIsConnected,
-	openCodeZenAuthUrl,
-	parseOpenCodeModelCatalog,
-} from "./opencode-catalog";
+import { parseOpenCodeModelCatalog } from "./opencode-catalog";
 
 describe("OpenCode catalog parsing", () => {
 	it("loads model names from the connected server and keeps provider notices", () => {
@@ -60,13 +55,5 @@ describe("OpenCode catalog parsing", () => {
 		]);
 		expect(parseOpenCodeModelCatalog({ providers: [] })).toEqual([]);
 		expect(parseOpenCodeModelCatalog("not json")).toEqual([]);
-	});
-
-	it("treats OpenCode as connected only when the server says so", () => {
-		expect(openCodeProviderIsConnected({ connected: ["opencode"] })).toBe(true);
-		expect(openCodeProviderIsConnected({ connected: ["openai"] })).toBe(false);
-		expect(openCodeZenAuthUrl()).toBe("https://opencode.ai/auth");
-		expect(isOpenCodeZenAuthUrl("https://opencode.ai/auth")).toBe(true);
-		expect(isOpenCodeZenAuthUrl("https://ytimesy.com/opencode")).toBe(false);
 	});
 });
