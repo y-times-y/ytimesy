@@ -9,7 +9,7 @@ type Point = readonly [number, number];
 type Rgb = readonly [number, number, number];
 
 const MARK_VIEWBOX = 32;
-const MARK_SIZE = 360;
+const MARK_SIZE = 640;
 
 const MARK_PATHS: readonly { fill: Rgb; polygon: readonly Point[] }[] = [
 	{

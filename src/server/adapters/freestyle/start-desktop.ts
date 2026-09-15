@@ -92,7 +92,9 @@ if [ -z "$chrome_bin" ]; then
   exit 1
 fi
 if ! chrome_is_running; then
-  "$chrome_bin" --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --no-default-browser-check --disable-session-crashed-bubble --user-data-dir=/tmp/ytimesy-chrome-profile --window-size=1040,720 --window-position=200,90 about:blank >/tmp/ytimesy-browser.log 2>&1 &
+  rm -rf /tmp/ytimesy-chrome-profile
+  mkdir -p /tmp/ytimesy-chrome-profile
+  "$chrome_bin" --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --no-default-browser-check --disable-session-crashed-bubble --test-type --user-data-dir=/tmp/ytimesy-chrome-profile --window-size=720,640 --window-position=680,160 about:blank >/tmp/ytimesy-browser.log 2>&1 &
   i=0
   while [ "$i" -lt 10 ]; do
     if chrome_is_running; then
@@ -106,6 +108,25 @@ if ! chrome_is_running; then
     cat /tmp/ytimesy-browser.log >&2 || true
     exit 1
   fi
+fi
+if command -v xdotool >/dev/null 2>&1; then
+  i=0
+  while [ "$i" -lt 8 ]; do
+    wid="$(xdotool search --onlyvisible --class 'Google-chrome' 2>/dev/null | head -n 1 || true)"
+    if [ -z "$wid" ]; then
+      wid="$(xdotool search --onlyvisible --name 'Google Chrome' 2>/dev/null | head -n 1 || true)"
+    fi
+    if [ -z "$wid" ]; then
+      wid="$(xdotool search --onlyvisible --class Chromium 2>/dev/null | head -n 1 || true)"
+    fi
+    if [ -n "$wid" ]; then
+      xdotool windowmove "$wid" 680 160 >/dev/null 2>&1 || true
+      xdotool windowsize "$wid" 720 640 >/dev/null 2>&1 || true
+      break
+    fi
+    i=$((i + 1))
+    sleep 1
+  done
 fi
 if ! pgrep -x x11vnc >/dev/null 2>&1; then
   x11vnc -display :0 -forever -shared -nopw -listen 127.0.0.1 -rfbport 5900 >/tmp/ytimesy-x11vnc.log 2>&1 &

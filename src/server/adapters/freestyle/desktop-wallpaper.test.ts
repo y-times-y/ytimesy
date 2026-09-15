@@ -26,7 +26,7 @@ describe("desktopWallpaperPng", () => {
 				DESKTOP_WALLPAPER_HEIGHT - 1,
 			),
 		).toEqual([...DESKTOP_WALLPAPER_BACKGROUND]);
-		expect(desktopWallpaperPixel(720, 520)).not.toEqual([
+		expect(desktopWallpaperPixel(620, 450)).not.toEqual([
 			...DESKTOP_WALLPAPER_BACKGROUND,
 		]);
 	});
