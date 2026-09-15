@@ -611,7 +611,8 @@ button.harness-choice-action:disabled,
 	color: rgba(255, 255, 255, 0.5);
 }
 .session-activity-title.session-shimmer,
-.session-working.session-shimmer {
+.session-working.session-shimmer,
+.session-exploration > summary:hover .session-activity-title.session-shimmer {
 	color: transparent;
 	-webkit-text-fill-color: transparent;
 }

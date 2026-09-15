@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { SessionItemId } from "./ids";
 import type { SessionItem } from "./session-item";
 import {
+	explorationGroupIsLive,
 	explorationLabel,
 	groupTimelineRows,
 	isExplorationItem,
@@ -106,7 +107,7 @@ describe("timeline activity grouping", () => {
 		expect(explorationLabel({ files: 1, searches: 0 })).toBe("Explored 1 file");
 	});
 
-	it("keeps an in-progress read visible instead of collapsing it into Explored", () => {
+	it("streams an in-progress read into Explored and marks that group live", () => {
 		const rows = groupTimelineRows([
 			{
 				kind: "dynamicToolCall",
@@ -121,11 +122,16 @@ describe("timeline activity grouping", () => {
 				status: "inProgress",
 			},
 		]);
-		expect(rows.map((row) => row.kind)).toEqual(["exploration", "item"]);
-		expect(rows[1]).toMatchObject({
-			kind: "item",
-			item: { status: "inProgress" },
+		expect(rows).toHaveLength(1);
+		expect(rows[0]).toMatchObject({
+			kind: "exploration",
+			counts: { files: 2, searches: 0 },
 		});
+		if (rows[0]?.kind !== "exploration") {
+			throw new Error("expected one Explored group");
+		}
+		expect(explorationGroupIsLive(rows[0].items)).toBe(true);
+		expect(explorationGroupIsLive(rows[0].items.slice(0, 1))).toBe(false);
 	});
 
 	it("keeps file edits as coding activity instead of Explored", () => {

@@ -16,6 +16,7 @@ import {
 } from "#/domain/session-item";
 import { thoughtLabel } from "#/domain/thought-label";
 import {
+	explorationGroupIsLive,
 	explorationLabel,
 	groupTimelineRows,
 	type TimelineRow,
@@ -25,6 +26,7 @@ import { ActivityIcon } from "./activity-icon";
 import { AgentMarkdown } from "./agent-markdown";
 import { FileChangeCounts } from "./file-change-counts";
 import { FileTypeIcon } from "./file-type-icon";
+import { LiveCollapsible } from "./live-collapsible";
 
 export function SessionTimeline({
 	items,
@@ -99,10 +101,21 @@ function TimelineRowView({
 	onOpenFile?: (path: string) => void;
 }) {
 	if (row.kind === "exploration") {
+		const live = explorationGroupIsLive(row.items);
 		return (
-			<details className="session-exploration">
+			<LiveCollapsible
+				className="session-exploration"
+				data-live={live ? "true" : undefined}
+				live={live}
+			>
 				<summary>
-					<span className="session-activity-title">
+					<span
+						className={
+							live
+								? "session-activity-title session-shimmer"
+								: "session-activity-title"
+						}
+					>
 						{explorationLabel(row.counts)}
 					</span>
 					<ChevronRight size={12} className="session-activity-chevron" />
@@ -116,7 +129,7 @@ function TimelineRowView({
 						onOpenFile={onOpenFile}
 					/>
 				))}
-			</details>
+			</LiveCollapsible>
 		);
 	}
 	return (
@@ -190,11 +203,11 @@ function SessionItemView({
 				);
 			}
 			return (
-				<details
+				<LiveCollapsible
 					className="session-activity"
 					data-kind="reasoning"
 					data-live={live ? "true" : undefined}
-					open={live || undefined}
+					live={live}
 				>
 					<summary>
 						<span className={titleClass}>{title}</span>
@@ -203,7 +216,7 @@ function SessionItemView({
 					{summaries.map((summary) => (
 						<p key={`${item.id}:${summary}`}>{summary}</p>
 					))}
-				</details>
+				</LiveCollapsible>
 			);
 		}
 		case "plan":
@@ -220,12 +233,12 @@ function SessionItemView({
 		case "commandExecution": {
 			const status = activityStatusLabel(item.status);
 			return (
-				<details
+				<LiveCollapsible
 					className="session-activity"
 					data-kind="commandExecution"
 					data-status={item.status}
 					data-live={live ? "true" : undefined}
-					open={item.status === "inProgress" || undefined}
+					live={live}
 				>
 					<summary>
 						<span className="session-shell-prefix" aria-hidden="true">
@@ -244,7 +257,7 @@ function SessionItemView({
 					{item.status === "failed" && item.exitCode !== null ? (
 						<p className="session-activity-meta">exit {item.exitCode}</p>
 					) : null}
-				</details>
+				</LiveCollapsible>
 			);
 		}
 		case "fileChange": {
