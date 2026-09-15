@@ -3,6 +3,7 @@ import { SessionItemId } from "#/domain/ids";
 import { PROJECT_CWD_PATH } from "#/server/adapters/freestyle/clone-project";
 import {
 	dropCopiedOpenCodeTranscript,
+	OPENCODE_LOCATE_BIN_SCRIPT,
 	OPENCODE_START_SERVE_SCRIPT,
 	parseCurlHttp,
 	parseOpenCodeAuthStatus,
@@ -138,6 +139,14 @@ describe("OPENCODE_START_SERVE_SCRIPT", () => {
 	it("starts serve from the project checkout", () => {
 		expect(OPENCODE_START_SERVE_SCRIPT).toContain(PROJECT_CWD_PATH);
 		expect(OPENCODE_START_SERVE_SCRIPT).toContain('cd "$SERVE_CWD"');
+	});
+});
+
+describe("OPENCODE_LOCATE_BIN_SCRIPT", () => {
+	it("finds a snapshot OpenCode binary without installing", () => {
+		expect(OPENCODE_LOCATE_BIN_SCRIPT).toContain("command -v opencode");
+		expect(OPENCODE_LOCATE_BIN_SCRIPT).not.toContain("curl");
+		expect(OPENCODE_LOCATE_BIN_SCRIPT).not.toContain("--version");
 	});
 });
 

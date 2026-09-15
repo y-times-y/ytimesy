@@ -54,6 +54,15 @@ for line in porcelain.splitlines():
 print(json.dumps({"porcelain": porcelain, "previews": previews}))
 PY`;
 
+export const OPENCODE_LOCATE_BIN_SCRIPT = `set -eu
+export HOME="\${HOME:-/root}"
+export PATH="$HOME/.opencode/bin:$HOME/.local/bin:/usr/local/bin:$PATH"
+if ! command -v opencode >/dev/null 2>&1; then
+  exit 1
+fi
+echo "OPENCODE_BIN=$(command -v opencode)"
+`;
+
 const INSTALL_SCRIPT = `set -eu
 export HOME="\${HOME:-/root}"
 export PATH="$HOME/.opencode/bin:$HOME/.local/bin:/usr/local/bin:$PATH"
@@ -203,9 +212,15 @@ export function connectOpenCode(
 	options?: { readonly discardCopiedTranscript?: boolean },
 ): Effect.Effect<OpenCodeAuthStatus> {
 	return Effect.gen(function* () {
-		const install = yield* Effect.tryPromise(() =>
-			machines.exec(workspaceId, INSTALL_SCRIPT, 240_000),
+		const located = yield* Effect.tryPromise(() =>
+			machines.exec(workspaceId, OPENCODE_LOCATE_BIN_SCRIPT, 15_000),
 		);
+		const install =
+			located.exitCode === 0
+				? located
+				: yield* Effect.tryPromise(() =>
+						machines.exec(workspaceId, INSTALL_SCRIPT, 240_000),
+					);
 		if (install.exitCode !== 0) {
 			return failed(
 				`OpenCode install failed: ${(install.stderr || install.stdout).trim()}`,
