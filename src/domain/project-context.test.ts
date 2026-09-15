@@ -42,21 +42,18 @@ describe("projectContextDocument", () => {
 		);
 	});
 
-	it("puts the newest briefing line first for the next agent", () => {
+	it("puts the newest durable briefing line first for the next agent", () => {
 		expect(
 			projectContextDocument({
 				briefing: [
+					"Lockfile installs use corepack.",
 					"Reply with exactly ytimesy-ctx-1a0a3daa754: ytimesy-ctx-1a0a3daa754",
 					"Reply with exactly turn-text-proof-58b4: turn-text-proof-58b4",
 				].join("\n"),
 				traces: [],
 			}),
 		).toBe(
-			[
-				"## Project briefing",
-				"Reply with exactly turn-text-proof-58b4: turn-text-proof-58b4",
-				"Reply with exactly ytimesy-ctx-1a0a3daa754: ytimesy-ctx-1a0a3daa754",
-			].join("\n"),
+			["## Project briefing", "Lockfile installs use corepack."].join("\n"),
 		);
 	});
 });
@@ -157,12 +154,12 @@ describe("traceAreaFromTurn", () => {
 });
 
 describe("completedTurnUpdatesProjectContext", () => {
-	it("does not store an exact-reply ping with no repo area", () => {
+	it("does not store a short token reply with no repo area", () => {
 		expect(
 			completedTurnUpdatesProjectContext({
 				area: null,
-				task: "Reply with exactly turn-text-proof-58b4 and nothing else.",
-				reply: "turn-text-proof-58b4",
+				task: "A sibling just finished a leftover-reply follow-up. Reply with exactly that follow-up's answer.",
+				reply: "ytimesy-ctx-1a0a3daa754",
 			}),
 		).toBe(false);
 	});
