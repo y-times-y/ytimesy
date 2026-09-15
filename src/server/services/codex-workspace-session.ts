@@ -251,15 +251,17 @@ function authenticateProofWorkspace(
 function prepareAgentGuest(
 	machines: WorkspaceMachines,
 	workspaceId: string | null,
-): Effect.Effect<void> {
+) {
 	if (!workspaceId) return Effect.void;
 	return Effect.gen(function* () {
 		yield* ensureProjectCheckout(machines, WorkspaceId(workspaceId));
-		yield* ensureCurrentLoginDaemon(machines, WorkspaceId(workspaceId));
+		yield* ensureCurrentLoginDaemon(machines, WorkspaceId(workspaceId)).pipe(
+			Effect.catchAll(() => Effect.void),
+		);
 		yield* Effect.sync(() => {
 			void Effect.runPromise(startWorkspaceDesktop(machines));
 		});
-	}).pipe(Effect.catchAll(() => Effect.void));
+	});
 }
 
 function discardProofWorkspace(

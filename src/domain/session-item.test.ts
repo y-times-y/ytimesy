@@ -238,6 +238,23 @@ describe("session items", () => {
 		]);
 	});
 
+	it("hides the internal workspace preamble from the transcript", () => {
+		expect(
+			compactTimelineItems([
+				{
+					kind: "userMessage",
+					id: SessionItemId("user-1"),
+					text: "What is this repository?",
+				},
+				{
+					kind: "userMessage",
+					id: SessionItemId("user-preamble"),
+					text: "You are in a ytimesy workspace VM. The project checkout is /home/ubuntu/ytimesy; work there.\n\nWhat is this repository?",
+				},
+			]).map((item) => item.id),
+		).toEqual([SessionItemId("user-1")]);
+	});
+
 	it("does not add a second Thinking row while a thought is already open", () => {
 		expect(
 			showTurnWorking(
