@@ -931,6 +931,7 @@ button:enabled:active {
 .rail-brand {
 	display: grid;
 	place-items: center;
+	position: relative;
 	width: 40px;
 	height: 40px;
 	margin-bottom: 13px;
@@ -938,6 +939,16 @@ button:enabled:active {
 	border: 0;
 	border-radius: 7px;
 	background: transparent;
+}
+.rail-brand[data-activity="running"]::after {
+	content: "";
+	position: absolute;
+	right: 6px;
+	top: 6px;
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: #f2f2f2;
 }
 .rail-brand:hover {
 	background: #ffffff08;
