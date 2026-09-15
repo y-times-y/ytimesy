@@ -12,7 +12,9 @@ describe("sharedDesktopDeveloperInstructions", () => {
 		expect(text).toContain("/home/ubuntu/ytimesy");
 		expect(text).toContain(`DISPLAY=${SHARED_DISPLAY}`);
 		expect(text).toContain("Desktop tab");
+		expect(text).toContain("google-chrome-stable");
 		expect(text).toContain("chromium");
+		expect(text).toContain("already open");
 		expect(text).toContain("xdotool");
 		expect(text).toContain("scrot");
 		expect(text).not.toContain("Start desktop");

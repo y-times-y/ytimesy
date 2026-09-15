@@ -11,23 +11,67 @@ apt_get() {
   fi
 }
 
+install_google_chrome() {
+  if command -v google-chrome-stable >/dev/null 2>&1 || command -v google-chrome >/dev/null 2>&1; then
+    return 0
+  fi
+  apt_get update -qq
+  apt_get install -y -qq --no-install-recommends wget ca-certificates fonts-liberation
+  wget -q --timeout=90 -O /tmp/google-chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+  apt_get install -y -qq /tmp/google-chrome.deb
+}
+
+chrome_is_running() {
+  pgrep -x chrome >/dev/null 2>&1 || pgrep -x chromium >/dev/null 2>&1 || pgrep -x chromium-browser >/dev/null 2>&1
+}
+
+find_chrome_bin() {
+  for bin in google-chrome-stable google-chrome chromium chromium-browser; do
+    if command -v "$bin" >/dev/null 2>&1; then
+      printf '%s' "$bin"
+      return 0
+    fi
+  done
+  return 1
+}
+
 if ! command -v Xvfb >/dev/null 2>&1 || ! command -v x11vnc >/dev/null 2>&1 || ! command -v websockify >/dev/null 2>&1; then
   apt_get update -qq
-  apt_get install -y -qq --no-install-recommends xvfb x11vnc novnc websockify fluxbox xterm
+  apt_get install -y -qq --no-install-recommends xvfb x11vnc novnc websockify fluxbox xterm feh
 fi
-if ! command -v chromium >/dev/null 2>&1 && ! command -v chromium-browser >/dev/null 2>&1 && ! command -v google-chrome >/dev/null 2>&1; then
+if ! command -v feh >/dev/null 2>&1; then
   apt_get update -qq
-  apt_get install -y -qq --no-install-recommends chromium || apt_get install -y -qq --no-install-recommends chromium-browser || true
+  apt_get install -y -qq --no-install-recommends feh
 fi
 if ! command -v xdotool >/dev/null 2>&1 || ! command -v scrot >/dev/null 2>&1; then
   apt_get install -y -qq --no-install-recommends xdotool scrot x11-utils dbus-x11 fonts-liberation || true
 fi
-PROFILE="\${HOME:-/root}/.profile"
+if ! install_google_chrome; then
+  apt_get update -qq
+  apt_get install -y -qq --no-install-recommends chromium || apt_get install -y -qq --no-install-recommends chromium-browser || true
+fi
+
+PROFILE="\${HOME}/.profile"
 touch "$PROFILE"
 if ! grep -q 'DISPLAY=:0' "$PROFILE" 2>/dev/null; then
   printf '\\nexport DISPLAY=:0\\n' >> "$PROFILE"
 fi
 printf ':0\\n' > /tmp/ytimesy-display
+
+if [ ! -s /tmp/ytimesy-desktop-wallpaper.b64 ]; then
+  echo "ytimesy desktop wallpaper is missing" >&2
+  exit 1
+fi
+WALL_DIR="\${HOME}/.ytimesy"
+WALLPAPER="$WALL_DIR/desktop-wallpaper.png"
+mkdir -p "$WALL_DIR" "\${HOME}/.fluxbox" /tmp/ytimesy-chrome-profile
+base64 -d /tmp/ytimesy-desktop-wallpaper.b64 > "$WALLPAPER"
+if [ ! -s "$WALLPAPER" ]; then
+  echo "ytimesy desktop wallpaper could not be decoded" >&2
+  exit 1
+fi
+printf 'session.screen0.rootCommand: feh --bg-fill %s\\n' "$WALLPAPER" > "\${HOME}/.fluxbox/overlay"
+
 if ! pgrep -x Xvfb >/dev/null 2>&1; then
   Xvfb :0 -screen 0 1440x900x24 -ac >/tmp/ytimesy-xvfb.log 2>&1 &
   sleep 1
@@ -37,13 +81,31 @@ if ! pgrep -x fluxbox >/dev/null 2>&1; then
   fluxbox >/tmp/ytimesy-fluxbox.log 2>&1 &
   sleep 1
 fi
-if ! pgrep -f 'chromium|google-chrome' >/dev/null 2>&1; then
-  for bin in chromium chromium-browser google-chrome; do
-    if command -v "$bin" >/dev/null 2>&1; then
-      "$bin" --no-sandbox --disable-gpu --disable-dev-shm-usage --start-maximized about:blank >/tmp/ytimesy-browser.log 2>&1 &
+if ! feh --bg-fill "$WALLPAPER" >/tmp/ytimesy-wallpaper.log 2>&1; then
+  sleep 1
+  feh --bg-fill "$WALLPAPER" >/tmp/ytimesy-wallpaper.log 2>&1
+fi
+
+chrome_bin="$(find_chrome_bin || true)"
+if [ -z "$chrome_bin" ]; then
+  echo "Chrome is required on the shared desktop but was not installed." >&2
+  exit 1
+fi
+if ! chrome_is_running; then
+  "$chrome_bin" --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --no-default-browser-check --disable-session-crashed-bubble --user-data-dir=/tmp/ytimesy-chrome-profile --window-size=1040,720 --window-position=200,90 about:blank >/tmp/ytimesy-browser.log 2>&1 &
+  i=0
+  while [ "$i" -lt 10 ]; do
+    if chrome_is_running; then
       break
     fi
+    i=$((i + 1))
+    sleep 1
   done
+  if ! chrome_is_running; then
+    echo "Chrome did not open on DISPLAY=:0" >&2
+    cat /tmp/ytimesy-browser.log >&2 || true
+    exit 1
+  fi
 fi
 if ! pgrep -x x11vnc >/dev/null 2>&1; then
   x11vnc -display :0 -forever -shared -nopw -listen 127.0.0.1 -rfbport 5900 >/tmp/ytimesy-x11vnc.log 2>&1 &
