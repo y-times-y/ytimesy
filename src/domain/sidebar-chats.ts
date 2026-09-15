@@ -27,3 +27,14 @@ export function newChatIsActive(input: {
 }): boolean {
 	return input.projectSelected && !input.hasUserMessage;
 }
+
+export function selectedChatIdAfterDelete(input: {
+	readonly chats: readonly { readonly id: string }[];
+	readonly selectedChatId: string | undefined;
+	readonly deletedChatId: string;
+}): string | undefined {
+	if (input.selectedChatId !== input.deletedChatId) {
+		return input.selectedChatId;
+	}
+	return input.chats.find((chat) => chat.id !== input.deletedChatId)?.id;
+}

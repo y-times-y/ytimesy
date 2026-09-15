@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	chatsListedInSidebar,
 	newChatIsActive,
+	selectedChatIdAfterDelete,
 	sidebarChatsEmptyCopy,
 } from "./sidebar-chats";
 
@@ -51,5 +52,39 @@ describe("sidebar empty copy", () => {
 		expect(
 			newChatIsActive({ projectSelected: true, hasUserMessage: true }),
 		).toBe(false);
+	});
+});
+
+describe("selectedChatIdAfterDelete", () => {
+	const chats = [{ id: "a" }, { id: "b" }, { id: "c" }];
+
+	it("keeps the open chat when another row is removed", () => {
+		expect(
+			selectedChatIdAfterDelete({
+				chats,
+				selectedChatId: "b",
+				deletedChatId: "a",
+			}),
+		).toBe("b");
+	});
+
+	it("opens the next remaining chat when the open chat is removed", () => {
+		expect(
+			selectedChatIdAfterDelete({
+				chats,
+				selectedChatId: "a",
+				deletedChatId: "a",
+			}),
+		).toBe("b");
+	});
+
+	it("clears selection when the last chat is removed", () => {
+		expect(
+			selectedChatIdAfterDelete({
+				chats: [{ id: "a" }],
+				selectedChatId: "a",
+				deletedChatId: "a",
+			}),
+		).toBeUndefined();
 	});
 });

@@ -5,6 +5,7 @@ import {
 	projectEnvironmentSnapshotSlug,
 	type SessionMachinePlan,
 	sessionMachinePlan,
+	sessionMachineRefsToDestroy,
 } from "#/domain/agent-session";
 import { WorkspaceId } from "#/domain/ids";
 import {
@@ -16,6 +17,8 @@ import {
 	type AgentSessionRecord,
 	agentSessionForOwner,
 	childAgentSession,
+	childAgentSessions,
+	deleteAgentSessionForOwner,
 	insertAgentSession,
 	listAgentSessions,
 	saveAgentSessionProviderRef,
@@ -114,6 +117,38 @@ export async function peekAgentSessionMachine(input: {
 			null)
 		: (sessions[0] ?? null);
 	return { session, providerRef: session?.providerRef ?? null };
+}
+
+/**
+ * Deletes this agent session and its side-chat copy. The project snapshot and
+ * template VM stay. A session that was attached to the template before
+ * snapshots existed only drops the row.
+ */
+export async function deleteAgentSessionMachine(
+	machines: Pick<WorkspaceMachines, "destroy">,
+	input: {
+		readonly userId: string;
+		readonly projectId: string;
+		readonly sessionId: string;
+	},
+) {
+	const session = await agentSessionForOwner(input.userId, input.sessionId);
+	if (!session || session.projectId !== input.projectId) {
+		throw new Error("Agent session is not available.");
+	}
+	const workspace = await workspaceForProject(input.userId, input.projectId);
+	const children = session.parentSessionId
+		? []
+		: await childAgentSessions(input.userId, session.id);
+	const refs = sessionMachineRefsToDestroy({
+		sessionProviderRef: session.providerRef,
+		childProviderRefs: children.map((child) => child.providerRef),
+		templateProviderRef: workspace?.providerRef ?? null,
+	});
+	for (const ref of refs) {
+		await machines.destroy(WorkspaceId(ref));
+	}
+	await deleteAgentSessionForOwner(input.userId, session.id);
 }
 
 export async function executeSessionMachinePlan(input: {

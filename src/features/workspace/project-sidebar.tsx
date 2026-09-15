@@ -1,4 +1,4 @@
-import { PanelLeft, Plus } from "lucide-react";
+import { PanelLeft, Plus, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Project } from "#/domain/projects";
 import {
@@ -20,6 +20,7 @@ interface ProjectSidebarProps {
 	hasUserMessage?: boolean;
 	onSelectChat?: (id: string) => void;
 	onNewChat: () => void;
+	onDeleteChat?: (id: string) => void;
 	onSignOut: () => void;
 }
 
@@ -36,6 +37,7 @@ export function ProjectSidebar({
 	hasUserMessage = false,
 	onSelectChat,
 	onNewChat,
+	onDeleteChat,
 	onSignOut,
 }: ProjectSidebarProps) {
 	const collapseButton = useRef<HTMLButtonElement>(null);
@@ -191,7 +193,7 @@ export function ProjectSidebar({
 				) : (
 					<ul className="sidebar-chats">
 						{chats.map((chat) => (
-							<li key={chat.id}>
+							<li key={chat.id} className="sidebar-chat-row">
 								<button
 									type="button"
 									className="sidebar-chat"
@@ -201,6 +203,20 @@ export function ProjectSidebar({
 								>
 									{chat.title}
 								</button>
+								{onDeleteChat ? (
+									<button
+										type="button"
+										className="sidebar-chat-delete"
+										aria-label={`Delete ${chat.title}`}
+										title="Delete chat"
+										onClick={(event) => {
+											event.stopPropagation();
+											onDeleteChat(chat.id);
+										}}
+									>
+										<X size={16} />
+									</button>
+								) : null}
 							</li>
 						))}
 					</ul>

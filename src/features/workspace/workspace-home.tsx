@@ -1,7 +1,13 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { PanelRight } from "lucide-react";
-import { type PointerEvent, useEffect, useRef, useState } from "react";
+import {
+	type PointerEvent,
+	useCallback,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
 import {
 	connectedAgentStatus,
 	connectedProviderId,
@@ -23,12 +29,14 @@ import {
 	sessionTitleFromItems,
 	sessionUsesFollowUpLayout,
 } from "#/domain/session-item";
+import { selectedChatIdAfterDelete } from "#/domain/sidebar-chats";
 import type { WorkspaceDesktop } from "#/domain/workspace-desktop";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
 import { authClient } from "../auth/client";
 import { requestJson } from "../projects/api";
 import { AgentProviderMark } from "../sessions/agent-provider-mark";
 import {
+	deleteProjectAgentSession,
 	listProjectAgentSessions,
 	startProjectAgentSession,
 } from "../sessions/agent-session.fn";
@@ -64,6 +72,7 @@ export function WorkspaceHome({
 }) {
 	const compact = useCompactLayout();
 	const inspectorBeside = useInspectorBesideChat();
+	const queryClient = useQueryClient();
 	const projects = useQuery({
 		queryKey: ["projects"],
 		queryFn: () => requestJson<Project[]>("/api/projects"),
@@ -83,6 +92,7 @@ export function WorkspaceHome({
 		enabled: Boolean(selectedProject?.id),
 	});
 	const startSession = useServerFn(startProjectAgentSession);
+	const deleteSession = useServerFn(deleteProjectAgentSession);
 	const [projectsOpen, setProjectsOpen] = useState(false);
 	const [inspectorOpen, setInspectorOpen] = useState(false);
 	const [toolsView, setToolsView] = useState<ToolsView>("diff");
@@ -105,6 +115,19 @@ export function WorkspaceHome({
 	const [desktopBusy, setDesktopBusy] = useState(false);
 	const autoResumeStarted = useRef(false);
 	const desktopAutoStarted = useRef(false);
+	const sessionEpoch = useRef(0);
+	const bumpSessionEpoch = useCallback(() => {
+		sessionEpoch.current += 1;
+		return sessionEpoch.current;
+	}, []);
+	const applySessionView = useCallback(
+		(epoch: number, next: PublicCodexSession) => {
+			if (epoch !== sessionEpoch.current) return;
+			setSession(next);
+			if (next.agentSessionId) setSelectedSessionId(next.agentSessionId);
+		},
+		[],
+	);
 	const connect = useServerFn(connectCodexSession);
 	const sendTask = useServerFn(sendCodexSessionTask);
 	const stopTurn = useServerFn(stopCodexSessionTurn);
@@ -180,17 +203,15 @@ export function WorkspaceHome({
 
 	useEffect(() => {
 		if (!activeProjectId || busy) return;
+		const epoch = sessionEpoch.current;
 		void getCodexSession({
 			data: {
 				projectId: activeProjectId,
 				harnessId,
 				sessionId: activeSessionId,
 			},
-		}).then((next) => {
-			setSession(next);
-			if (next.agentSessionId) setSelectedSessionId(next.agentSessionId);
-		});
-	}, [busy, harnessId, activeProjectId, activeSessionId]);
+		}).then((next) => applySessionView(epoch, next));
+	}, [applySessionView, busy, harnessId, activeProjectId, activeSessionId]);
 
 	useEffect(() => {
 		if (session.connection.status !== "authenticated") return;
@@ -220,6 +241,7 @@ export function WorkspaceHome({
 		if (!shouldConnect) return;
 		autoResumeStarted.current = true;
 		setBusy(true);
+		const epoch = sessionEpoch.current;
 		void connect({
 			data: {
 				projectId: activeProjectId,
@@ -227,9 +249,10 @@ export function WorkspaceHome({
 				sessionId: activeSessionId,
 			},
 		})
-			.then(setSession)
+			.then((next) => applySessionView(epoch, next))
 			.finally(() => setBusy(false));
 	}, [
+		applySessionView,
 		connect,
 		harnessId,
 		activeProjectId,
@@ -274,6 +297,7 @@ export function WorkspaceHome({
 			sideQueued
 				? 1000
 				: 3000;
+		const epoch = sessionEpoch.current;
 		const timer = window.setInterval(() => {
 			void getCodexSession({
 				data: {
@@ -282,6 +306,7 @@ export function WorkspaceHome({
 					sessionId: activeSessionId,
 				},
 			}).then((next) => {
+				if (epoch !== sessionEpoch.current) return;
 				setSession(next);
 				if (next.sideTurnStatus !== "idle") setSideQueued(false);
 			});
@@ -327,6 +352,7 @@ export function WorkspaceHome({
 			return;
 		}
 		setBusy(true);
+		const epoch = bumpSessionEpoch();
 		void startSession({
 			data: { projectId: selectedProject.id, harnessId },
 		})
@@ -350,9 +376,60 @@ export function WorkspaceHome({
 				});
 			})
 			.then((next) => {
-				if (next) setSession(next);
+				if (next) applySessionView(epoch, next);
 			})
 			.catch((cause) => {
+				setSession((current) => ({
+					...current,
+					connection: {
+						status: "failed",
+						provider: harnessId,
+						message: cause instanceof Error ? cause.message : String(cause),
+					},
+					canSend: false,
+					canSendSide: false,
+				}));
+			})
+			.finally(() => setBusy(false));
+	}
+
+	function deleteChat(chatId: string) {
+		if (!selectedProject) {
+			return;
+		}
+		const remaining = sidebarChats.filter((chat) => chat.id !== chatId);
+		queryClient.setQueryData(["agent-sessions", selectedProject.id], remaining);
+		const nextId = selectedChatIdAfterDelete({
+			chats: sidebarChats,
+			selectedChatId: activeSessionId,
+			deletedChatId: chatId,
+		});
+		if (activeSessionId === chatId) {
+			bumpSessionEpoch();
+			setSelectedSessionId(nextId);
+			desktopAutoStarted.current = false;
+			autoResumeStarted.current = false;
+			openedDiff.current = false;
+			setDesktop({ status: "stopped" });
+			setSession((current) => ({
+				...current,
+				agentSessionId: nextId ?? null,
+				items: [],
+				turnStatus: "idle",
+				sideItems: [],
+				sideTurnStatus: "idle",
+				connection: { status: "disconnected" },
+				canSend: false,
+				canSendSide: false,
+			}));
+		}
+		setBusy(true);
+		void deleteSession({
+			data: { projectId: selectedProject.id, sessionId: chatId },
+		})
+			.then(() => chats.refetch())
+			.catch((cause) => {
+				void chats.refetch();
 				setSession((current) => ({
 					...current,
 					connection: {
@@ -429,6 +506,7 @@ export function WorkspaceHome({
 				selectedChatId={activeSessionId}
 				hasUserMessage={hasUserMessage}
 				onSelectChat={(id) => {
+					bumpSessionEpoch();
 					setSelectedSessionId(id);
 					desktopAutoStarted.current = false;
 					autoResumeStarted.current = false;
@@ -442,6 +520,7 @@ export function WorkspaceHome({
 					}));
 				}}
 				onNewChat={startNewChat}
+				onDeleteChat={deleteChat}
 				onSignOut={() => {
 					void signOut();
 				}}

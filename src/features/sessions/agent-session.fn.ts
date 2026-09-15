@@ -10,7 +10,10 @@ import { listAgentSessions } from "#/server/adapters/agent-sessions";
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
 import { requireUser } from "#/server/auth/auth";
 import { parseHarnessId } from "#/server/secrets/harness-key-store";
-import { bindAgentSessionMachine } from "#/server/services/agent-session-machine";
+import {
+	bindAgentSessionMachine,
+	deleteAgentSessionMachine,
+} from "#/server/services/agent-session-machine";
 import { WorkspaceMachineService } from "#/server/services/capabilities";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
 
@@ -71,4 +74,25 @@ export const startProjectAgentSession = createServerFn({ method: "POST" })
 			}),
 		);
 		return { id: bound.session.id, title: bound.session.title };
+	});
+
+export const deleteProjectAgentSession = createServerFn({ method: "POST" })
+	.validator((data: { projectId?: string; sessionId?: string }) => {
+		const projectId = data.projectId?.trim() ?? "";
+		const sessionId = data.sessionId?.trim() ?? "";
+		if (!projectId || !sessionId) {
+			throw new Error("Select a chat to delete.");
+		}
+		return { projectId, sessionId };
+	})
+	.handler(async ({ data }): Promise<{ id: string }> => {
+		const user = await requireUser(getRequest().headers);
+		await runWithMachines((machines) =>
+			deleteAgentSessionMachine(machines, {
+				userId: user.id,
+				projectId: data.projectId,
+				sessionId: data.sessionId,
+			}),
+		);
+		return { id: data.sessionId };
 	});
