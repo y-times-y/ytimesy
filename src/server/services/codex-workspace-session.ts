@@ -5,10 +5,12 @@ import {
 	codexConnectBlockedReason,
 	workspaceSessionMachineRef,
 } from "#/domain/project-workspace";
+import { shouldStartDeviceCodeAfterSnapshotResume } from "#/domain/proof-workspace-recovery";
 import type { SessionItem, SessionTurnStatus } from "#/domain/session-item";
 import { canSubmitComposer, canSubmitSideChat } from "#/domain/session-policy";
 import type { WorkspaceLifecycle } from "#/domain/workspace";
 import {
+	ensureCurrentLoginDaemon,
 	interruptCodexTurn,
 	readLoginStatus,
 	resumeCodexSession,
@@ -22,6 +24,7 @@ import type {
 import { readyWorkspaceForOwner } from "#/server/adapters/workspaces";
 import { loadAgentSnapshotId } from "#/server/auth/agent-account";
 import { persistCodexAuthSnapshotForUser } from "#/server/proof/persist-codex-auth-snapshot";
+import { preparePreparedGuest } from "./project-workspace";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 export type PublicCodexSession = {
@@ -128,7 +131,12 @@ export function connectCodexWorkspaceSession(
 
 		const existing = yield* readCodexWorkspaceSession(machines, scope);
 		if (existing.connection.status === "authenticated") {
-			return existing;
+			yield* prepareCodexGuest(
+				machines,
+				WorkspaceId(workspace.providerRef),
+				scope,
+			);
+			return yield* readCodexWorkspaceSession(machines, scope);
 		}
 		if (existing.connection.status === "awaiting_device_code") {
 			return existing;
@@ -145,6 +153,11 @@ export function connectCodexWorkspaceSession(
 				machines,
 				WorkspaceId(workspace.providerRef),
 				{ planType: status.planType, email: null },
+			);
+			yield* prepareCodexGuest(
+				machines,
+				WorkspaceId(workspace.providerRef),
+				scope,
 			);
 		}
 		return viewFromStatus(
@@ -179,7 +192,10 @@ export function sendCodexWorkspaceTask(
 		machines,
 		scope,
 		(providerRef, snapshotAvailable) =>
-			submitCodexTask(machines, WorkspaceId(providerRef), input).pipe(
+			prepareCodexGuest(machines, WorkspaceId(providerRef), scope).pipe(
+				Effect.flatMap(() =>
+					submitCodexTask(machines, WorkspaceId(providerRef), input),
+				),
 				Effect.map((status) =>
 					viewFromStatus(status, providerRef, snapshotAvailable),
 				),
@@ -250,12 +266,25 @@ function authenticatePreparedWorkspace(
 			: yield* startInteractiveDeviceCodeLogin(machines, workspaceId, {
 					skipInitialTurn: true,
 				});
-		if (snapshotAvailable && status.stage === "failed") {
+		if (snapshotAvailable && shouldStartDeviceCodeAfterSnapshotResume(status)) {
 			return yield* startInteractiveDeviceCodeLogin(machines, workspaceId, {
 				skipInitialTurn: true,
 			});
 		}
 		return status;
+	});
+}
+
+function prepareCodexGuest(
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+	scope: CodexSessionScope,
+): Effect.Effect<void> {
+	return Effect.gen(function* () {
+		yield* preparePreparedGuest(machines, workspaceId, scope);
+		yield* ensureCurrentLoginDaemon(machines, workspaceId).pipe(
+			Effect.catchAll(() => Effect.void),
+		);
 	});
 }
 

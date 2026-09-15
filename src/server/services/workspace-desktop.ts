@@ -7,6 +7,7 @@ import {
 	desktopPortIsListening,
 	desktopStartFailureReason,
 	desktopViewerUrlForMachine,
+	START_HARNESS_BEFORE_DESKTOP,
 	type WorkspaceDesktop,
 } from "#/domain/workspace-desktop";
 import {
@@ -62,7 +63,7 @@ export function startWorkspaceDesktop(
 		if (!providerRef) {
 			return {
 				status: "failed" as const,
-				reason: "Prepare a workspace before opening the desktop.",
+				reason: START_HARNESS_BEFORE_DESKTOP,
 			};
 		}
 		const key = scopeKey(scope);

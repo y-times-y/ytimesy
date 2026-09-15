@@ -2,7 +2,11 @@ import { Effect } from "effect";
 import { sharedDesktopDeveloperInstructions } from "#/domain/agent-desktop";
 import { failureMessage } from "#/domain/failure-message";
 import type { WorkspaceId } from "#/domain/ids";
-import { projectCheckoutPath } from "#/domain/project-checkout";
+import {
+	type ProjectCheckout,
+	projectCheckoutFromFullName,
+	projectCheckoutPath,
+} from "#/domain/project-checkout";
 import {
 	cloneSelectedProjectScript,
 	DEVELOPER_INSTRUCTIONS_PATH,
@@ -10,35 +14,41 @@ import {
 	redactInstallationToken,
 } from "#/server/adapters/freestyle/clone-project";
 import { readGitHubAppCredentials } from "#/server/adapters/github/credentials";
+import { listProjects, projectForOwner } from "#/server/adapters/projects";
 import { liveGitHubProjectDeps, loadProjectCheckout } from "./github-projects";
+import { type DesktopScope, startWorkspaceDesktop } from "./workspace-desktop";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 /**
- * Clones the selected GitHub repo into the guest home and writes the Codex
- * cwd file. Installation tokens are written to a temp file on the VM and
- * deleted during the clone; they are never stored in git remotes.
+ * Clones the GitHub repo into the guest home and writes the agent cwd file.
+ * Installation tokens are written to a temp file on the VM and deleted during
+ * the clone; they are never stored in git remotes.
  */
 export function ensureProjectCheckout(
 	machines: WorkspaceMachines,
 	workspaceId: WorkspaceId,
+	checkout?: ProjectCheckout | null,
 ): Effect.Effect<string | null, Error> {
 	return Effect.gen(function* () {
-		const deps = liveGitHubProjectDeps();
-		const checkout = yield* loadProjectCheckout(deps);
-		if (!checkout) {
+		const resolved =
+			checkout === undefined
+				? yield* loadProjectCheckout(liveGitHubProjectDeps())
+				: checkout;
+		if (!resolved) {
 			const home = yield* guestHome(machines, workspaceId);
 			yield* writeDeveloperInstructions(machines, workspaceId, home);
 			return null;
 		}
+		const deps = liveGitHubProjectDeps();
 		const credentials = yield* readGitHubAppCredentials(deps.env);
 		const token = yield* Effect.tryPromise(() =>
 			deps.github.installationToken({
 				credentials,
-				installationId: checkout.installationId,
+				installationId: resolved.installationId,
 			}),
 		);
 		const home = yield* guestHome(machines, workspaceId);
-		const destination = projectCheckoutPath(home, checkout.name);
+		const destination = projectCheckoutPath(home, resolved.name);
 		yield* Effect.tryPromise(() =>
 			machines.writeTextFile(workspaceId, PROJECT_TOKEN_PATH, `${token}\n`),
 		);
@@ -46,9 +56,9 @@ export function ensureProjectCheckout(
 			machines.exec(
 				workspaceId,
 				cloneSelectedProjectScript({
-					owner: checkout.owner,
-					name: checkout.name,
-					branch: checkout.branch,
+					owner: resolved.owner,
+					name: resolved.name,
+					branch: resolved.branch,
 					destination,
 				}),
 				180_000,
@@ -59,7 +69,7 @@ export function ensureProjectCheckout(
 				machines.exec(workspaceId, `rm -f ${PROJECT_TOKEN_PATH}`, 10_000),
 			).pipe(Effect.catchAll(() => Effect.void));
 			throw new Error(
-				`Could not clone ${checkout.fullName}: ${redactInstallationToken((cloned.stderr || cloned.stdout).trim() || "git clone failed.")}`,
+				`Could not clone ${resolved.fullName}: ${redactInstallationToken((cloned.stderr || cloned.stdout).trim() || "git clone failed.")}`,
 			);
 		}
 		yield* writeDeveloperInstructions(machines, workspaceId, destination);
@@ -79,6 +89,41 @@ export function writeDeveloperInstructions(
 			`${sharedDesktopDeveloperInstructions({ cwd })}\n`,
 		),
 	).pipe(Effect.catchAll(() => Effect.void));
+}
+
+export function loadTenantProjectCheckout(scope: {
+	readonly userId: string;
+	readonly projectId?: string;
+}): Effect.Effect<ProjectCheckout | null> {
+	return Effect.tryPromise(async () => {
+		const project = scope.projectId
+			? await projectForOwner(scope.userId, scope.projectId)
+			: ((await listProjects(scope.userId))[0] ?? null);
+		if (!project) return null;
+		return projectCheckoutFromFullName({
+			fullName: project.fullName,
+			branch: project.branch,
+			installationId: project.installationId,
+		});
+	}).pipe(Effect.catchAll(() => Effect.succeed(null)));
+}
+
+export function preparePreparedGuest(
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+	scope: DesktopScope,
+): Effect.Effect<void> {
+	return Effect.gen(function* () {
+		const checkout = yield* loadTenantProjectCheckout(scope);
+		yield* ensureProjectCheckout(
+			machines,
+			workspaceId,
+			checkout ?? undefined,
+		).pipe(Effect.catchAll(() => Effect.succeed(null)));
+		yield* startWorkspaceDesktop(machines, scope).pipe(
+			Effect.catchAll(() => Effect.void),
+		);
+	});
 }
 
 function guestHome(
