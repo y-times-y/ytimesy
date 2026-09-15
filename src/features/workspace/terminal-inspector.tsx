@@ -2,9 +2,11 @@ import { useEffect, useRef, useState } from "react";
 
 export function TerminalInspector({
 	projectId,
+	sessionId,
 	active,
 }: {
 	projectId?: string;
+	sessionId?: string;
 	active: boolean;
 }) {
 	const containerRef = useRef<HTMLDivElement>(null);
@@ -49,6 +51,7 @@ export function TerminalInspector({
 			const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
 			const url = new URL(`${protocol}//${window.location.host}/api/terminal`);
 			url.searchParams.set("projectId", projectId);
+			if (sessionId) url.searchParams.set("sessionId", sessionId);
 			url.searchParams.set("cols", String(term.cols));
 			url.searchParams.set("rows", String(term.rows));
 			const socket = new WebSocket(url);
@@ -117,7 +120,7 @@ export function TerminalInspector({
 			dispose?.();
 			setConnected(false);
 		};
-	}, [active, projectId]);
+	}, [active, projectId, sessionId]);
 
 	if (!projectId) {
 		return (

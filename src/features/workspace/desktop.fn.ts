@@ -23,22 +23,33 @@ function runWithMachines<A>(
 	);
 }
 
-function optionalProjectId(data: { projectId?: string } | undefined) {
+function optionalProjectId(data: {
+	projectId?: string;
+	sessionId?: string;
+} | undefined) {
 	const projectId =
 		typeof data?.projectId === "string" ? data.projectId.trim() : "";
-	return { projectId: projectId || undefined };
+	const sessionId =
+		typeof data?.sessionId === "string" ? data.sessionId.trim() : "";
+	return {
+		projectId: projectId || undefined,
+		sessionId: sessionId || undefined,
+	};
 }
 
-async function requireScope(projectId?: string): Promise<DesktopScope> {
+async function requireScope(
+	projectId?: string,
+	sessionId?: string,
+): Promise<DesktopScope> {
 	const user = await requireUser(getRequest().headers);
-	return { userId: user.id, projectId };
+	return { userId: user.id, projectId, sessionId };
 }
 
 export const getWorkspaceDesktop = createServerFn({ method: "GET" })
 	.validator(optionalProjectId)
 	.handler(async ({ data }): Promise<WorkspaceDesktop> => {
 		try {
-			const scope = await requireScope(data.projectId);
+			const scope = await requireScope(data.projectId, data.sessionId);
 			return await runWithMachines((machines) =>
 				readWorkspaceDesktop(machines, scope),
 			);
@@ -52,7 +63,7 @@ export const startWorkspaceDesktopFn = createServerFn({
 })
 	.validator(optionalProjectId)
 	.handler(async ({ data }): Promise<WorkspaceDesktop> => {
-		const scope = await requireScope(data.projectId);
+		const scope = await requireScope(data.projectId, data.sessionId);
 		return runWithMachines((machines) =>
 			startWorkspaceDesktop(machines, scope),
 		);

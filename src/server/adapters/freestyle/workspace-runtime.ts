@@ -68,7 +68,32 @@ export class FreestyleWorkspaceRuntime implements WorkspaceRuntime {
 	}
 
 	async writeTextFile(providerRef: string, path: string, contents: string) {
-		await this.client().vms.ref(providerRef).fs.writeTextFile(path, contents);
+		await this.client()
+			.vms.ref(providerRef)
+			.fs.writeTextFile(path, contents);
+	}
+
+	async snapshot(providerRef: string, slug: string) {
+		const created = await this.client().vms.ref(providerRef).snapshot({
+			slug,
+			displayName: "ytimesy project environment",
+			autoDeleteSeconds: -1,
+		});
+		if (created.snapshot.public) {
+			await this.client()
+				.vms.snapshots.delete(created.snapshotId)
+				.catch(() => undefined);
+			throw new Error(
+				"Freestyle returned a public snapshot; deleted it because project checkouts cannot live in a shared image",
+			);
+		}
+		return created.snapshotId;
+	}
+
+	async pause(providerRef: string) {
+		const vm = this.client().vms.ref(providerRef);
+		const data = await vm.data();
+		if (data.state === "running") await vm.pause();
 	}
 
 	private client() {

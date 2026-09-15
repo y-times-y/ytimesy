@@ -2,6 +2,7 @@ import {
 	projectCheckoutFromFullName,
 	projectCheckoutPath,
 } from "../../domain/project-checkout";
+import { projectEnvironmentSnapshotSlug } from "../../domain/agent-session";
 import {
 	needsMachineCreate,
 	needsMachineRecover,
@@ -20,6 +21,7 @@ import {
 	claimWorkspaceForJob,
 	recordWorkspaceEvent,
 	saveProviderRef,
+	saveTemplateSnapshot,
 	saveWorkspaceStatus,
 	workspaceById,
 } from "../adapters/workspaces";
@@ -95,6 +97,27 @@ export async function runWorkspacePreparation(
 		);
 		await recordWorkspaceEvent(userId, workspaceId, "Installed dependencies.");
 		const ready = await saveWorkspaceStatus(workspaceId, "ready");
+		if (providerRef) {
+			try {
+				const snapshotId = await runtime.snapshot(
+					providerRef,
+					projectEnvironmentSnapshotSlug(workspaceId),
+				);
+				await saveTemplateSnapshot(workspaceId, snapshotId);
+				await runtime.pause?.(providerRef);
+				await recordWorkspaceEvent(
+					userId,
+					workspaceId,
+					"Sealed project environment snapshot.",
+				);
+			} catch (error) {
+				await recordWorkspaceEvent(
+					userId,
+					workspaceId,
+					`Project snapshot not sealed: ${publicFailureMessage(error)}`,
+				);
+			}
+		}
 		await recordWorkspaceEvent(userId, workspaceId, "Workspace is ready.");
 		return ready;
 	} catch (error) {

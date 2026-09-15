@@ -2,6 +2,7 @@ export const PROJECT_TOKEN_PATH = "/tmp/ytimesy-gh-token";
 export const PROJECT_CWD_PATH = "/tmp/ytimesy-project-cwd";
 export const DEVELOPER_INSTRUCTIONS_PATH =
 	"/tmp/ytimesy-developer-instructions.txt";
+export { PROJECT_CONTEXT_PATH } from "#/domain/project-context";
 
 export function redactInstallationToken(text: string): string {
 	return text.replace(/x-access-token:[^@\s]+@/g, "x-access-token:***@");
@@ -37,6 +38,14 @@ if ! command -v git >/dev/null 2>&1; then
   apt_get install -y -qq --no-install-recommends git ca-certificates
 fi
 
+mkdir -p "$(dirname "$DEST")"
+if [ -d "$DEST/.git" ]; then
+  rm -f "$TOKEN_FILE"
+  printf '%s\\n' "$DEST" > ${shellSingleQuote(PROJECT_CWD_PATH)}
+  echo "PROJECT_CWD=$DEST"
+  exit 0
+fi
+
 TOKEN="$(tr -d '\\n\\r' < "$TOKEN_FILE")"
 rm -f "$TOKEN_FILE"
 if [ -z "$TOKEN" ]; then
@@ -44,20 +53,17 @@ if [ -z "$TOKEN" ]; then
   exit 1
 fi
 
-mkdir -p "$(dirname "$DEST")"
-if [ -d "$DEST/.git" ]; then
-  git -C "$DEST" fetch --depth 1 "https://x-access-token:\${TOKEN}@github.com/\${OWNER}/\${NAME}.git" "$BRANCH"
-  git -C "$DEST" checkout -B "$BRANCH" FETCH_HEAD
-  git -C "$DEST" remote set-url origin "$ORIGIN"
-else
-  rm -rf "$DEST"
-  git clone --depth 1 --branch "$BRANCH" "https://x-access-token:\${TOKEN}@github.com/\${OWNER}/\${NAME}.git" "$DEST"
-  git -C "$DEST" remote set-url origin "$ORIGIN"
-fi
+rm -rf "$DEST"
+git clone --depth 1 --branch "$BRANCH" "https://x-access-token:\${TOKEN}@github.com/\${OWNER}/\${NAME}.git" "$DEST"
+git -C "$DEST" remote set-url origin "$ORIGIN"
 
 printf '%s\\n' "$DEST" > ${shellSingleQuote(PROJECT_CWD_PATH)}
 echo "PROJECT_CWD=$DEST"
 `;
+}
+
+export function preparedCheckoutExistsCommand(destination: string) {
+	return `test -d ${shellSingleQuote(destination)}/.git && echo present`;
 }
 
 export function pushSelectedBranchScript(input: {

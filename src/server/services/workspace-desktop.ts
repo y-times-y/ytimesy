@@ -19,11 +19,16 @@ import {
 	START_WORKSPACE_DESKTOP,
 } from "#/server/adapters/freestyle/start-desktop";
 import { readyWorkspaceForOwner } from "#/server/adapters/workspaces";
+import {
+	bindAgentSessionMachine,
+	peekAgentSessionMachine,
+} from "./agent-session-machine";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 export type DesktopScope = {
 	readonly userId: string;
 	readonly projectId?: string;
+	readonly sessionId?: string;
 };
 
 /**
@@ -59,7 +64,37 @@ export function startWorkspaceDesktop(
 		const workspace = yield* Effect.tryPromise(() =>
 			readyWorkspaceForOwner(scope.userId, scope.projectId),
 		);
-		const providerRef = workspaceSessionMachineRef(workspace);
+		if (!workspaceSessionMachineRef(workspace) || !scope.projectId) {
+			return {
+				status: "failed" as const,
+				reason: START_HARNESS_BEFORE_DESKTOP,
+			};
+		}
+		const peeked = yield* Effect.tryPromise(() =>
+			peekAgentSessionMachine({
+				userId: scope.userId,
+				projectId: scope.projectId as string,
+				sessionId: scope.sessionId,
+			}),
+		);
+		const existing = peeked.session;
+		if (!existing) {
+			return {
+				status: "failed" as const,
+				reason: START_HARNESS_BEFORE_DESKTOP,
+			};
+		}
+		const bound = peeked.providerRef
+			? peeked
+			: yield* Effect.tryPromise(() =>
+					bindAgentSessionMachine(machines, {
+						userId: scope.userId,
+						projectId: scope.projectId as string,
+						harness: existing.harness,
+						sessionId: existing.id,
+					}),
+				);
+		const providerRef = bound.providerRef;
 		if (!providerRef) {
 			return {
 				status: "failed" as const,
@@ -136,10 +171,16 @@ function recoverRunningDesktop(
 	scope: DesktopScope,
 ): Effect.Effect<WorkspaceDesktop | null> {
 	return Effect.gen(function* () {
-		const workspace = yield* Effect.tryPromise(() =>
-			readyWorkspaceForOwner(scope.userId, scope.projectId),
-		);
-		const providerRef = workspaceSessionMachineRef(workspace);
+		const peeked = scope.projectId
+			? yield* Effect.tryPromise(() =>
+					peekAgentSessionMachine({
+						userId: scope.userId,
+						projectId: scope.projectId as string,
+						sessionId: scope.sessionId,
+					}),
+				)
+			: { providerRef: null };
+		const providerRef = peeked.providerRef;
 		if (!providerRef) return null;
 		yield* Effect.tryPromise(() =>
 			machines.ensureRunning(WorkspaceId(providerRef)),
@@ -161,7 +202,7 @@ function recoverRunningDesktop(
 const desktops = new Map<string, WorkspaceDesktop>();
 
 function scopeKey(scope: DesktopScope) {
-	return `${scope.userId}:${scope.projectId ?? ""}`;
+	return `${scope.userId}:${scope.projectId ?? ""}:${scope.sessionId ?? ""}`;
 }
 
 function desktopFor(key: string): WorkspaceDesktop {

@@ -88,6 +88,7 @@ it("queues workspace preparation only after the project is saved", async () => {
 			projectId: "proj",
 			status: "queued" as const,
 			providerRef: null,
+			templateSnapshotId: null,
 			errorMessage: null,
 			updatedAt: new Date(0).toISOString(),
 		}),
@@ -123,6 +124,7 @@ it("does not change branch while the workspace is still preparing", async () => 
 		projectId: "proj",
 		status: "cloning",
 		providerRef: "vm-1",
+		templateSnapshotId: null,
 		errorMessage: null,
 		updatedAt: new Date(0).toISOString(),
 	});
@@ -161,6 +163,7 @@ it("marks a ready workspace failed so Retry can clone the new branch", async () 
 		projectId: "proj",
 		status: "ready",
 		providerRef: "vm-1",
+		templateSnapshotId: null,
 		errorMessage: null,
 		updatedAt: new Date(0).toISOString(),
 	});
@@ -179,6 +182,7 @@ it("marks a ready workspace failed so Retry can clone the new branch", async () 
 			projectId: "proj",
 			status: "queued" as const,
 			providerRef: "vm-1",
+			templateSnapshotId: null,
 			errorMessage: null,
 			updatedAt: new Date(0).toISOString(),
 		}),
@@ -218,6 +222,7 @@ it("does not restart a ready workspace when the branch is unchanged", async () =
 		projectId: "proj",
 		status: "ready",
 		providerRef: "vm-1",
+		templateSnapshotId: null,
 		errorMessage: null,
 		updatedAt: new Date(0).toISOString(),
 	});
@@ -235,6 +240,7 @@ it("does not restart a ready workspace when the branch is unchanged", async () =
 			projectId: "proj",
 			status: "ready" as const,
 			providerRef: "vm-1",
+			templateSnapshotId: null,
 			errorMessage: null,
 			updatedAt: new Date(0).toISOString(),
 		}),

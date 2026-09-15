@@ -63,6 +63,7 @@ async function handleTerminalSocket(
 		const pty = await connectWorkspaceTerminal({
 			userId: user.id,
 			projectId,
+			sessionId: url.searchParams.get("sessionId")?.trim() || undefined,
 			directory: repositoryDirectory(project.fullName),
 			cols: size.cols,
 			rows: size.rows,

@@ -255,6 +255,7 @@ export function SessionLauncher({
 						projects={projects}
 						selectedProject={selectedProject}
 						onSelectProject={onSelectProject}
+						sessionId={session.agentSessionId}
 					/>
 				) : null}
 				<div className="composer-shell">

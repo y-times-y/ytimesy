@@ -5,10 +5,7 @@ import {
 	agentProviderById,
 } from "#/domain/agent-provider";
 import { WorkspaceId } from "#/domain/ids";
-import {
-	harnessConnectBlockedReason,
-	workspaceSessionMachineRef,
-} from "#/domain/project-workspace";
+import { harnessConnectBlockedReason } from "#/domain/project-workspace";
 import { canSubmitComposer, canSubmitSideChat } from "#/domain/session-policy";
 import type { WorkspaceLifecycle } from "#/domain/workspace";
 import {
@@ -26,6 +23,10 @@ import {
 import { readyWorkspaceForOwner } from "#/server/adapters/workspaces";
 import { decryptHarnessApiKey } from "#/server/secrets/harness-key-store";
 import {
+	bindAgentSessionMachine,
+	peekAgentSessionMachine,
+} from "./agent-session-machine";
+import {
 	type CodexSessionScope,
 	connectCodexWorkspaceSession,
 	emptyCodexSession,
@@ -34,6 +35,7 @@ import {
 	sendCodexWorkspaceTask,
 	stopCodexWorkspaceTurn,
 } from "./codex-workspace-session";
+import { persistBoundSessionView } from "./persist-session-view";
 import { preparePreparedGuest } from "./project-workspace";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -56,20 +58,26 @@ export function readHarnessWorkspaceSession(
 	if (scope.harnessId === "codex") {
 		return readCodexWorkspaceSession(machines, scope);
 	}
-	return withPreparedMachine(machines, scope, (providerRef) => {
+	return withSessionMachine(machines, scope, false, (providerRef, session) => {
 		if (scope.harnessId === "claude") {
 			return refreshClaudeAuthStatus(machines, WorkspaceId(providerRef)).pipe(
 				Effect.map((status) => viewFromClaude(status, providerRef)),
+				Effect.flatMap((view) =>
+					Effect.tryPromise(() => persistBoundSessionView(session, view)),
+				),
 			);
 		}
 		return refreshOpenCodeAuthStatus(machines, WorkspaceId(providerRef)).pipe(
 			Effect.map((status) => viewFromOpenCode(status, providerRef)),
+			Effect.flatMap((view) =>
+				Effect.tryPromise(() => persistBoundSessionView(session, view)),
+			),
 		);
 	});
 }
 
 /**
- * Starts the selected harness on the prepared workspace VM. Stored keys are
+ * Starts the selected harness on this agent session's VM. Stored keys are
  * passed to the unmodified CLI or `opencode serve` and never count as signed
  * in on their own.
  */
@@ -90,7 +98,7 @@ export function connectHarnessWorkspaceSession(
 			harnessName,
 			scope.harnessId === "opencode" ? "connect" : "sign_in",
 		);
-		if (blocked || !workspace?.providerRef) {
+		if (blocked || !workspace?.providerRef || !scope.projectId) {
 			return {
 				...emptyHarnessSession(),
 				connection: {
@@ -104,12 +112,21 @@ export function connectHarnessWorkspaceSession(
 				},
 			};
 		}
+		const bound = yield* Effect.tryPromise(() =>
+			bindAgentSessionMachine(machines, {
+				userId: scope.userId,
+				projectId: scope.projectId as string,
+				harness: scope.harnessId,
+				sessionId: scope.sessionId,
+				createNew: scope.createNew,
+			}),
+		);
 		yield* Effect.tryPromise(() =>
-			machines.ensureRunning(WorkspaceId(workspace.providerRef as string)),
+			machines.ensureRunning(WorkspaceId(bound.providerRef)),
 		);
 		yield* preparePreparedGuest(
 			machines,
-			WorkspaceId(workspace.providerRef),
+			WorkspaceId(bound.providerRef),
 			scope,
 		);
 		const apiKey = yield* Effect.tryPromise(() =>
@@ -118,17 +135,27 @@ export function connectHarnessWorkspaceSession(
 		if (scope.harnessId === "claude") {
 			const status = yield* connectClaudeCode(
 				machines,
-				WorkspaceId(workspace.providerRef),
+				WorkspaceId(bound.providerRef),
 				apiKey,
 			);
-			return viewFromClaude(status, workspace.providerRef);
+			return yield* Effect.tryPromise(() =>
+				persistBoundSessionView(
+					bound.session,
+					viewFromClaude(status, bound.providerRef),
+				),
+			);
 		}
 		const status = yield* connectOpenCode(
 			machines,
-			WorkspaceId(workspace.providerRef),
+			WorkspaceId(bound.providerRef),
 			apiKey,
 		);
-		return viewFromOpenCode(status, workspace.providerRef);
+		return yield* Effect.tryPromise(() =>
+			persistBoundSessionView(
+				bound.session,
+				viewFromOpenCode(status, bound.providerRef),
+			),
+		);
 	}).pipe(
 		Effect.catchAll((cause) =>
 			Effect.succeed({
@@ -155,14 +182,20 @@ export function sendHarnessWorkspaceTask(
 	if (scope.harnessId === "codex") {
 		return sendCodexWorkspaceTask(machines, scope, input);
 	}
-	return withPreparedMachine(machines, scope, (providerRef) => {
+	return withSessionMachine(machines, scope, true, (providerRef, session) => {
 		if (scope.harnessId === "claude") {
 			return submitClaudeTask(machines, WorkspaceId(providerRef), input).pipe(
 				Effect.map((status) => viewFromClaude(status, providerRef)),
+				Effect.flatMap((view) =>
+					Effect.tryPromise(() => persistBoundSessionView(session, view)),
+				),
 			);
 		}
 		return submitOpenCodeTask(machines, WorkspaceId(providerRef), input).pipe(
 			Effect.map((status) => viewFromOpenCode(status, providerRef)),
+			Effect.flatMap((view) =>
+				Effect.tryPromise(() => persistBoundSessionView(session, view)),
+			),
 		);
 	});
 }
@@ -177,21 +210,44 @@ export function stopHarnessWorkspaceTurn(
 	return readHarnessWorkspaceSession(machines, scope);
 }
 
-function withPreparedMachine(
+function withSessionMachine(
 	machines: WorkspaceMachines,
 	scope: HarnessSessionScope,
-	run: (providerRef: string) => Effect.Effect<PublicHarnessSession>,
+	provision: boolean,
+	run: (
+		providerRef: string,
+		session: Awaited<ReturnType<typeof peekAgentSessionMachine>>["session"],
+	) => Effect.Effect<PublicHarnessSession, unknown>,
 ): Effect.Effect<PublicHarnessSession> {
 	return Effect.gen(function* () {
-		const workspace = yield* Effect.tryPromise(() =>
-			readyWorkspaceForOwner(scope.userId, scope.projectId),
-		);
-		const providerRef = workspaceSessionMachineRef(workspace);
-		if (!providerRef) return emptyHarnessSession();
+		if (!scope.projectId) return emptyHarnessSession();
+		const bound = provision
+			? yield* Effect.tryPromise(() =>
+					bindAgentSessionMachine(machines, {
+						userId: scope.userId,
+						projectId: scope.projectId as string,
+						harness: scope.harnessId,
+						sessionId: scope.sessionId,
+						createNew: scope.createNew,
+					}),
+				)
+			: yield* Effect.tryPromise(() =>
+					peekAgentSessionMachine({
+						userId: scope.userId,
+						projectId: scope.projectId as string,
+						sessionId: scope.sessionId,
+					}),
+				);
+		const providerRef = bound.providerRef;
+		if (!providerRef) {
+			return yield* Effect.tryPromise(() =>
+				persistBoundSessionView(bound.session, emptyHarnessSession()),
+			);
+		}
 		yield* Effect.tryPromise(() =>
 			machines.ensureRunning(WorkspaceId(providerRef)),
 		);
-		return yield* run(providerRef);
+		return yield* run(providerRef, bound.session);
 	}).pipe(
 		Effect.catchAll((cause) =>
 			Effect.succeed({
@@ -246,6 +302,7 @@ function viewFromConnection(
 	return {
 		snapshotAvailable: false,
 		workspaceId,
+		agentSessionId: null,
 		connection,
 		models,
 		canSend: canSubmitComposer(workspace, connection, turnStatus),

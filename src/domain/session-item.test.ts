@@ -5,6 +5,7 @@ import {
 	fileChangesFromSessionItems,
 	isConversationItem,
 	isTurnRunning,
+	lastAgentMessageText,
 	lastUserMessageText,
 	type SessionItem,
 	sessionTitleFromItems,
@@ -188,6 +189,23 @@ describe("session items", () => {
 				},
 			]),
 		).toBe("What is this repository?");
+	});
+
+	it("reads the latest agent reply for briefing traces", () => {
+		expect(
+			lastAgentMessageText([
+				{
+					kind: "userMessage",
+					id: SessionItemId("user-1"),
+					text: "Seal the snapshot",
+				},
+				{
+					kind: "agentMessage",
+					id: SessionItemId("agent-1"),
+					text: "Wrote template_snapshot_id.",
+				},
+			]),
+		).toBe("Wrote template_snapshot_id.");
 	});
 
 	it("uses the first line of the latest user message as the session title", () => {
