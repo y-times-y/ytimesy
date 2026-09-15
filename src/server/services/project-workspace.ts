@@ -103,8 +103,7 @@ export function writeDeveloperInstructions(
 }
 
 /**
- * Clone uses the signed-in owner's Postgres project, not the leftover
- * `.ytimesy/selected-project.json` GitHub picker.
+ * Clone uses the signed-in owner's Postgres project.
  */
 export function loadTenantProjectCheckout(scope: {
 	readonly userId: string;
