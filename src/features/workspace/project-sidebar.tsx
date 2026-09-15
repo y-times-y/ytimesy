@@ -196,9 +196,7 @@ export function ProjectSidebar({
 									type="button"
 									className="sidebar-chat"
 									data-selected={chat.id === selectedChatId}
-									aria-current={
-										chat.id === selectedChatId ? "page" : undefined
-									}
+									aria-current={chat.id === selectedChatId ? "page" : undefined}
 									onClick={() => onSelectChat?.(chat.id)}
 								>
 									{chat.title}

@@ -10,16 +10,16 @@ import {
 import {
 	cloneSelectedProjectScript,
 	DEVELOPER_INSTRUCTIONS_PATH,
-	preparedCheckoutExistsCommand,
 	PROJECT_CONTEXT_PATH,
 	PROJECT_CWD_PATH,
 	PROJECT_TOKEN_PATH,
+	preparedCheckoutExistsCommand,
 	redactInstallationToken,
 } from "#/server/adapters/freestyle/clone-project";
 import { readGitHubAppCredentials } from "#/server/adapters/github/credentials";
 import { listProjects, projectForOwner } from "#/server/adapters/projects";
 import { liveGitHubProjectDeps, loadProjectCheckout } from "./github-projects";
-import { type DesktopScope } from "./workspace-desktop";
+import type { DesktopScope } from "./workspace-desktop";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 /**

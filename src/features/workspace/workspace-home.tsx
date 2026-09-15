@@ -29,6 +29,10 @@ import { authClient } from "../auth/client";
 import { requestJson } from "../projects/api";
 import { AgentProviderMark } from "../sessions/agent-provider-mark";
 import {
+	listProjectAgentSessions,
+	startProjectAgentSession,
+} from "../sessions/agent-session.fn";
+import {
 	connectCodexSession,
 	getCodexSession,
 	sendCodexSessionTask,
@@ -44,10 +48,6 @@ import {
 } from "../sessions/model-capabilities";
 import { SessionLauncher } from "../sessions/session-launcher";
 import { SideChatPanel } from "../sessions/side-chat-panel";
-import {
-	listProjectAgentSessions,
-	startProjectAgentSession,
-} from "../sessions/agent-session.fn";
 import { getWorkspaceDesktop, startWorkspaceDesktopFn } from "./desktop.fn";
 import { ProjectSidebar } from "./project-sidebar";
 import { useCompactLayout, useInspectorBesideChat } from "./use-compact-layout";
@@ -127,11 +127,13 @@ export function WorkspaceHome({
 	const sessionTitle = sessionTitleFromItems(session.items);
 	const hasUserMessage = Boolean(lastUserMessageText(session.items));
 	const sidebarChats = chats.data ?? [];
-	const activeSessionId = selectedSessionId ?? session.agentSessionId ?? undefined;
+	const activeProjectId = selectedProject?.id;
+	const activeSessionId =
+		selectedSessionId ?? session.agentSessionId ?? undefined;
 
 	function sessionScope() {
 		return {
-			projectId: selectedProject?.id,
+			projectId: activeProjectId,
 			harnessId,
 			sessionId: activeSessionId,
 		};
@@ -152,10 +154,11 @@ export function WorkspaceHome({
 	}, [loadKeys]);
 
 	useEffect(() => {
+		void activeProjectId;
 		setSelectedSessionId(undefined);
 		desktopAutoStarted.current = false;
 		autoResumeStarted.current = false;
-	}, [selectedProject?.id]);
+	}, [activeProjectId]);
 
 	useEffect(() => {
 		if (selectedSessionId || !chats.data?.[0]) return;
@@ -163,29 +166,31 @@ export function WorkspaceHome({
 	}, [chats.data, selectedSessionId]);
 
 	useEffect(() => {
-		if (!selectedProject?.id) return;
+		if (!activeProjectId) return;
 		void loadDesktop({
-			data: { projectId: selectedProject.id, sessionId: activeSessionId },
-		}).then(
-			(next) => {
-				setDesktop((current) =>
-					current.status === "starting" || current.status === "running"
-						? current
-						: next,
-				);
-			},
-		);
-	}, [loadDesktop, selectedProject?.id, activeSessionId]);
+			data: { projectId: activeProjectId, sessionId: activeSessionId },
+		}).then((next) => {
+			setDesktop((current) =>
+				current.status === "starting" || current.status === "running"
+					? current
+					: next,
+			);
+		});
+	}, [loadDesktop, activeProjectId, activeSessionId]);
 
 	useEffect(() => {
-		if (!selectedProject?.id || busy) return;
+		if (!activeProjectId || busy) return;
 		void getCodexSession({
-			data: sessionScope(),
+			data: {
+				projectId: activeProjectId,
+				harnessId,
+				sessionId: activeSessionId,
+			},
 		}).then((next) => {
 			setSession(next);
 			if (next.agentSessionId) setSelectedSessionId(next.agentSessionId);
 		});
-	}, [busy, harnessId, selectedProject?.id, activeSessionId]);
+	}, [busy, harnessId, activeProjectId, activeSessionId]);
 
 	useEffect(() => {
 		if (session.connection.status !== "authenticated") return;
@@ -203,7 +208,7 @@ export function WorkspaceHome({
 	useEffect(() => {
 		if (autoResumeStarted.current) return;
 		if (harnessId !== "codex") return;
-		if (!selectedProject?.id) return;
+		if (!activeProjectId) return;
 		const shouldConnect =
 			session.connection.status === "authenticated" ||
 			(session.snapshotAvailable &&
@@ -212,34 +217,40 @@ export function WorkspaceHome({
 		autoResumeStarted.current = true;
 		setBusy(true);
 		void connect({
-			data: sessionScope(),
+			data: {
+				projectId: activeProjectId,
+				harnessId,
+				sessionId: activeSessionId,
+			},
 		})
 			.then(setSession)
 			.finally(() => setBusy(false));
 	}, [
 		connect,
 		harnessId,
-		selectedProject?.id,
+		activeProjectId,
+		activeSessionId,
 		session.connection.status,
 		session.snapshotAvailable,
 	]);
 
 	useEffect(() => {
 		if (session.connection.status !== "authenticated") return;
-		if (!selectedProject?.id) return;
+		if (!activeProjectId) return;
 		if (desktopAutoStarted.current) return;
 		if (desktop.status === "running" || desktop.status === "starting") return;
 		desktopAutoStarted.current = true;
 		setDesktopBusy(true);
 		setDesktop({ status: "starting" });
 		void startDesktop({
-			data: { projectId: selectedProject.id, sessionId: activeSessionId },
+			data: { projectId: activeProjectId, sessionId: activeSessionId },
 		})
 			.then(setDesktop)
 			.finally(() => setDesktopBusy(false));
 	}, [
 		desktop.status,
-		selectedProject?.id,
+		activeProjectId,
+		activeSessionId,
 		session.connection.status,
 		startDesktop,
 	]);
@@ -261,7 +272,11 @@ export function WorkspaceHome({
 				: 3000;
 		const timer = window.setInterval(() => {
 			void getCodexSession({
-				data: sessionScope(),
+				data: {
+					projectId: activeProjectId,
+					harnessId,
+					sessionId: activeSessionId,
+				},
 			}).then((next) => {
 				setSession(next);
 				if (next.sideTurnStatus !== "idle") setSideQueued(false);
@@ -269,7 +284,8 @@ export function WorkspaceHome({
 		}, interval);
 		return () => window.clearInterval(timer);
 	}, [
-		selectedProject?.id,
+		activeProjectId,
+		activeSessionId,
 		harnessId,
 		session.connection.status,
 		session.sideTurnStatus,

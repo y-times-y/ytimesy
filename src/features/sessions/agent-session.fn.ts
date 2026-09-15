@@ -1,17 +1,17 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getRequest } from "@tanstack/react-start/server";
 import { Effect } from "effect";
-import { chatsFromAgentSessions } from "#/domain/agent-session";
 import {
 	type AgentProviderId,
 	DEFAULT_COMPOSER_HARNESS_ID,
 } from "#/domain/agent-provider";
-import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
+import { chatsFromAgentSessions } from "#/domain/agent-session";
 import { listAgentSessions } from "#/server/adapters/agent-sessions";
+import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
 import { requireUser } from "#/server/auth/auth";
 import { parseHarnessId } from "#/server/secrets/harness-key-store";
-import { WorkspaceMachineService } from "#/server/services/capabilities";
 import { bindAgentSessionMachine } from "#/server/services/agent-session-machine";
+import { WorkspaceMachineService } from "#/server/services/capabilities";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
 
 export type PublicAgentChat = {
@@ -32,8 +32,7 @@ function runWithMachines<A>(
 
 export const listProjectAgentSessions = createServerFn({ method: "GET" })
 	.validator((data: { projectId?: string } | undefined) => ({
-		projectId:
-			typeof data?.projectId === "string" ? data.projectId.trim() : "",
+		projectId: typeof data?.projectId === "string" ? data.projectId.trim() : "",
 	}))
 	.handler(async ({ data }): Promise<readonly PublicAgentChat[]> => {
 		if (!data.projectId) return [];

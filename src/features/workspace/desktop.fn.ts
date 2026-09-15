@@ -23,10 +23,14 @@ function runWithMachines<A>(
 	);
 }
 
-function optionalProjectId(data: {
-	projectId?: string;
-	sessionId?: string;
-} | undefined) {
+function optionalProjectId(
+	data:
+		| {
+				projectId?: string;
+				sessionId?: string;
+		  }
+		| undefined,
+) {
 	const projectId =
 		typeof data?.projectId === "string" ? data.projectId.trim() : "";
 	const sessionId =

@@ -52,7 +52,7 @@ describe("personal project ownership", () => {
 		const result = await db.query<{ relname: string; relrowsecurity: boolean }>(
 			"select relname,relrowsecurity from pg_class where relnamespace='public'::regnamespace and relkind='r'",
 		);
-		expect(result.rows).toHaveLength(12);
+		expect(result.rows).toHaveLength(15);
 		expect(result.rows.every((row) => row.relrowsecurity)).toBe(true);
 		for (const role of ["anon", "authenticated"]) {
 			for (const table of ["project", "auth_email_outbox"]) {

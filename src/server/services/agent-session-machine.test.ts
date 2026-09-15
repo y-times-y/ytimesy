@@ -18,8 +18,7 @@ function machines(overrides: {
 				return overrides.snapshot ?? "snap-late";
 			},
 			provisionSession: async (slug: string, snapshotId: string) => {
-				if (overrides.failProvision)
-					throw new Error("provision must not run");
+				if (overrides.failProvision) throw new Error("provision must not run");
 				provisioned.push({ slug, snapshotId });
 				return WorkspaceId(overrides.copied ?? "agent-vm");
 			},

@@ -1,8 +1,8 @@
+import { projectEnvironmentSnapshotSlug } from "../../domain/agent-session";
 import {
 	projectCheckoutFromFullName,
 	projectCheckoutPath,
 } from "../../domain/project-checkout";
-import { projectEnvironmentSnapshotSlug } from "../../domain/agent-session";
 import {
 	needsMachineCreate,
 	needsMachineRecover,
@@ -103,13 +103,15 @@ export async function runWorkspacePreparation(
 					providerRef,
 					projectEnvironmentSnapshotSlug(workspaceId),
 				);
-				await saveTemplateSnapshot(workspaceId, snapshotId);
+				const sealed = await saveTemplateSnapshot(workspaceId, snapshotId);
 				await runtime.pause?.(providerRef);
 				await recordWorkspaceEvent(
 					userId,
 					workspaceId,
 					"Sealed project environment snapshot.",
 				);
+				await recordWorkspaceEvent(userId, workspaceId, "Workspace is ready.");
+				return sealed ?? ready;
 			} catch (error) {
 				await recordWorkspaceEvent(
 					userId,
