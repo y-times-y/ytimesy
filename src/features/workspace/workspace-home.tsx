@@ -33,6 +33,7 @@ import {
 } from "#/domain/session-item";
 import {
 	composerBusyForOpenChat,
+	listedChatTurnStatus,
 	selectedChatIdAfterDelete,
 	sidebarChatIsRunning,
 	withBusyChat,
@@ -535,11 +536,12 @@ export function WorkspaceHome({
 					autoResumeStarted.current = false;
 					openedDiff.current = false;
 					setDesktop({ status: "stopped" });
+					const listedTurn = listedChatTurnStatus(sidebarChats, id);
 					setSession((current) => ({
 						...current,
 						agentSessionId: id,
 						items: [],
-						turnStatus: "idle",
+						turnStatus: listedTurn,
 						sideItems: [],
 						sideTurnStatus: "idle",
 						connection: { status: "disconnected" },
