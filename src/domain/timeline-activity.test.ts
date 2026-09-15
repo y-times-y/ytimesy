@@ -106,6 +106,28 @@ describe("timeline activity grouping", () => {
 		expect(explorationLabel({ files: 1, searches: 0 })).toBe("Explored 1 file");
 	});
 
+	it("keeps an in-progress read visible instead of collapsing it into Explored", () => {
+		const rows = groupTimelineRows([
+			{
+				kind: "dynamicToolCall",
+				id: SessionItemId("read-1"),
+				tool: "read_file",
+				status: "completed",
+			},
+			{
+				kind: "dynamicToolCall",
+				id: SessionItemId("read-2"),
+				tool: "read session-timeline.tsx",
+				status: "inProgress",
+			},
+		]);
+		expect(rows.map((row) => row.kind)).toEqual(["exploration", "item"]);
+		expect(rows[1]).toMatchObject({
+			kind: "item",
+			item: { status: "inProgress" },
+		});
+	});
+
 	it("keeps file edits as coding activity instead of Explored", () => {
 		expect(isExplorationItem(fileChange("f1", "src/a.ts"))).toBe(false);
 		const rows = groupTimelineRows([

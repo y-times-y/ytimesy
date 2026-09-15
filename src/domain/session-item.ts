@@ -126,6 +126,23 @@ export function isTurnRunning(status: SessionTurnStatus): boolean {
 	return status === "running";
 }
 
+export function liveActivityStatus(
+	item: SessionItem,
+): ToolActivityStatus | null {
+	if (
+		item.kind === "commandExecution" ||
+		item.kind === "fileChange" ||
+		item.kind === "mcpToolCall" ||
+		item.kind === "dynamicToolCall"
+	) {
+		return item.status;
+	}
+	if (item.kind === "reasoning" && item.durationSeconds == null) {
+		return "inProgress";
+	}
+	return null;
+}
+
 export function fileChangesFromSessionItems(
 	items: readonly SessionItem[],
 ): readonly FileChangeEntry[] {

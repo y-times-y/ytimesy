@@ -146,7 +146,7 @@ export function canResumeDisconnectedFollowUp(input: {
 	return input.harnessId === "opencode";
 }
 
-export const RUNNING_TURN_POLL_MS = 1500;
+export const RUNNING_TURN_POLL_MS = 700;
 
 export function runningAuthenticatedTurnShouldPoll(input: {
 	readonly turnStatus: SessionTurnStatus;

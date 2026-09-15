@@ -3,6 +3,7 @@ import { fileChangesFromGitPorcelain } from "#/domain/git-working-tree";
 import { SessionItemId, type WorkspaceId } from "#/domain/ids";
 import type { ListedModel } from "#/domain/listed-model";
 import { parseOpenCodeModelCatalog } from "#/domain/opencode-catalog";
+import { sessionItemsFromOpenCodeMessages } from "#/domain/opencode-session-items";
 import {
 	assistantTextFromOpenCode,
 	assistantTextFromOpenCodeMessages,
@@ -507,6 +508,70 @@ function simpleSessionItems(value: unknown): readonly SessionItem[] {
 				message: String(row.message),
 			});
 		}
+		if (kind === "reasoning") {
+			const summaries = Array.isArray(row.summaries)
+				? row.summaries.filter(
+						(summary): summary is string =>
+							typeof summary === "string" && summary.trim().length > 0,
+					)
+				: [];
+			items.push({
+				kind: "reasoning",
+				id: SessionItemId(id),
+				summaries,
+				...(typeof row.durationSeconds === "number"
+					? { durationSeconds: row.durationSeconds }
+					: {}),
+			});
+		}
+		if (kind === "commandExecution" && readString(row.command)) {
+			items.push({
+				kind: "commandExecution",
+				id: SessionItemId(id),
+				command: String(row.command),
+				cwd: readString(row.cwd) ?? null,
+				status: toolActivityStatus(row.status),
+				output: readString(row.output) ?? null,
+				exitCode: typeof row.exitCode === "number" ? row.exitCode : null,
+			});
+		}
+		if (kind === "dynamicToolCall" && readString(row.tool)) {
+			const status = toolActivityStatus(row.status);
+			items.push({
+				kind: "dynamicToolCall",
+				id: SessionItemId(id),
+				tool: String(row.tool),
+				status: status === "declined" ? "failed" : status,
+			});
+		}
+		if (
+			kind === "mcpToolCall" &&
+			readString(row.server) &&
+			readString(row.tool)
+		) {
+			const status = toolActivityStatus(row.status);
+			items.push({
+				kind: "mcpToolCall",
+				id: SessionItemId(id),
+				server: String(row.server),
+				tool: String(row.tool),
+				status: status === "declined" ? "failed" : status,
+			});
+		}
+		if (kind === "webSearch") {
+			items.push({
+				kind: "webSearch",
+				id: SessionItemId(id),
+				query: readString(row.query) ?? null,
+			});
+		}
+		if (kind === "plan" && readString(row.text)) {
+			items.push({
+				kind: "plan",
+				id: SessionItemId(id),
+				text: String(row.text),
+			});
+		}
 		if (kind === "fileChange") {
 			const changes = fileChangeEntries(row.changes);
 			if (changes.length > 0) {
@@ -822,7 +887,11 @@ function syncOpenCodeTurn(
 			errorMessageFromOpenCode(messages.body) ??
 			errorMessageFromOpenCode(status.body);
 		const workingTree = yield* readWorkingTreeChanges(machines, workspaceId);
-		const items = withWorkingTreeChanges(current.items, workingTree);
+		const mapped = sessionItemsFromOpenCodeMessages(messages.body);
+		const items = withWorkingTreeChanges(
+			mapped.length > 0 ? mapped : current.items,
+			workingTree,
+		);
 		const now = Date.now();
 		const lastBusyAt = busy ? now : current.lastBusyAt;
 		const seenBusy = current.seenBusy || busy;

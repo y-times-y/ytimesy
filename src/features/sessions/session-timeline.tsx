@@ -9,6 +9,7 @@ import { fileBasename } from "#/domain/file-kind";
 import { activityGlyphForToolName } from "#/domain/session-activity";
 import {
 	compactTimelineItems,
+	liveActivityStatus,
 	type SessionItem,
 	type SessionTurnStatus,
 	showTurnWorking,
@@ -79,7 +80,7 @@ export function SessionTimeline({
 			))}
 			{showTurnWorking(items, turnStatus) ? (
 				<li data-kind="working">
-					<p className="session-working">Thinking</p>
+					<p className="session-working session-shimmer">Thinking</p>
 				</li>
 			) : null}
 		</ol>
@@ -111,6 +112,7 @@ function TimelineRowView({
 						key={item.id}
 						item={item}
 						nested
+						turnRunning={turnRunning}
 						onOpenFile={onOpenFile}
 					/>
 				))}
@@ -121,6 +123,8 @@ function TimelineRowView({
 		<SessionItemView
 			item={row.item}
 			thoughtInProgress={turnRunning && isLastItem}
+			turnRunning={turnRunning}
+			isLastItem={isLastItem}
 			onOpenFile={onOpenFile}
 		/>
 	);
@@ -130,13 +134,21 @@ function SessionItemView({
 	item,
 	nested = false,
 	thoughtInProgress = false,
+	turnRunning = false,
+	isLastItem = false,
 	onOpenFile,
 }: {
 	item: SessionItem;
 	nested?: boolean;
 	thoughtInProgress?: boolean;
+	turnRunning?: boolean;
+	isLastItem?: boolean;
 	onOpenFile?: (path: string) => void;
 }) {
+	const live = activityTitleIsLive(item, turnRunning, thoughtInProgress);
+	const titleClass = live
+		? "session-activity-title session-shimmer"
+		: "session-activity-title";
 	switch (item.kind) {
 		case "userMessage":
 			return (
@@ -146,7 +158,15 @@ function SessionItemView({
 			);
 		case "agentMessage":
 			return (
-				<div className="session-message" data-role="assistant">
+				<div
+					className="session-message"
+					data-role="assistant"
+					data-streaming={
+						turnRunning && isLastItem && item.text.length > 0
+							? "true"
+							: undefined
+					}
+				>
 					<AgentMarkdown text={item.text} />
 				</div>
 			);
@@ -154,21 +174,30 @@ function SessionItemView({
 			const summaries = item.summaries.filter((summary) => summary.trim());
 			const title = thoughtLabel({
 				durationSeconds: item.durationSeconds,
-				inProgress: thoughtInProgress && item.durationSeconds == null,
+				inProgress: live,
 			});
 			if (summaries.length === 0) {
 				return (
-					<div className="session-activity" data-kind="reasoning">
+					<div
+						className="session-activity"
+						data-kind="reasoning"
+						data-live={live ? "true" : undefined}
+					>
 						<p>
-							<span className="session-activity-title">{title}</span>
+							<span className={titleClass}>{title}</span>
 						</p>
 					</div>
 				);
 			}
 			return (
-				<details className="session-activity" data-kind="reasoning">
+				<details
+					className="session-activity"
+					data-kind="reasoning"
+					data-live={live ? "true" : undefined}
+					open={live || undefined}
+				>
 					<summary>
-						<span className="session-activity-title">{title}</span>
+						<span className={titleClass}>{title}</span>
 						<ChevronRight size={12} className="session-activity-chevron" />
 					</summary>
 					{summaries.map((summary) => (
@@ -195,18 +224,17 @@ function SessionItemView({
 					className="session-activity"
 					data-kind="commandExecution"
 					data-status={item.status}
-					open={item.status === "inProgress"}
+					data-live={live ? "true" : undefined}
+					open={item.status === "inProgress" || undefined}
 				>
 					<summary>
 						<span className="session-shell-prefix" aria-hidden="true">
 							$
 						</span>
-						<code className="session-activity-title">
+						<code className={titleClass}>
 							{visibleShellCommand(item.command)}
 						</code>
-						{item.status === "inProgress" ? (
-							<span className="session-activity-spinner" aria-hidden="true" />
-						) : status ? (
+						{status ? (
 							<span className="session-activity-status">{status}</span>
 						) : null}
 					</summary>
@@ -229,12 +257,9 @@ function SessionItemView({
 					deletions={totals.deletions}
 				/>
 			);
-			const progress =
-				item.status === "inProgress" ? (
-					<span className="session-activity-spinner" aria-hidden="true" />
-				) : status ? (
-					<span className="session-activity-status">{status}</span>
-				) : null;
+			const progress = status ? (
+				<span className="session-activity-status">{status}</span>
+			) : null;
 			if (item.changes.length === 0) return null;
 			if (item.changes.length === 1) {
 				const activity = fileChangeActivity(item.changes);
@@ -244,11 +269,12 @@ function SessionItemView({
 						className="session-activity"
 						data-kind="fileChange"
 						data-status={item.status}
+						data-live={live ? "true" : undefined}
 						data-nested={nested ? "true" : undefined}
 					>
 						<p>
 							<ActivityIcon glyph="edit" />
-							<span className="session-activity-title">
+							<span className={titleClass}>
 								{activity.verb}{" "}
 								{change && activity.name ? (
 									<FileMentionButton
@@ -271,12 +297,13 @@ function SessionItemView({
 					className="session-activity"
 					data-kind="fileChange"
 					data-status={item.status}
+					data-live={live ? "true" : undefined}
 					data-nested={nested ? "true" : undefined}
 					open
 				>
 					<summary>
 						<ActivityIcon glyph="edit" />
-						<span className="session-activity-title">{title}</span>
+						<span className={titleClass}>{title}</span>
 						{counts}
 						<ChevronRight size={12} className="session-activity-chevron" />
 						{progress}
@@ -304,10 +331,11 @@ function SessionItemView({
 					className="session-activity"
 					data-kind="mcpToolCall"
 					data-status={item.status}
+					data-live={live ? "true" : undefined}
 				>
 					<p>
 						<ActivityIcon glyph="mcp" />
-						<span className="session-activity-title">
+						<span className={titleClass}>
 							{item.server} · {item.tool}
 						</span>
 						{activityStatus(item.status)}
@@ -320,11 +348,12 @@ function SessionItemView({
 					className="session-activity"
 					data-kind="dynamicToolCall"
 					data-status={item.status}
+					data-live={live ? "true" : undefined}
 					data-nested={nested ? "true" : undefined}
 				>
 					<p>
 						<ActivityIcon glyph={activityGlyphForToolName(item.tool)} />
-						<span className="session-activity-title">{item.tool}</span>
+						<span className={titleClass}>{item.tool}</span>
 						{activityStatus(item.status)}
 					</p>
 				</div>
@@ -394,13 +423,21 @@ function FileMentionButton({
 }
 
 function activityStatus(status: string) {
-	if (status === "inProgress") {
-		return <span className="session-activity-spinner" aria-hidden="true" />;
-	}
 	const label = activityStatusLabel(status);
 	return label ? (
 		<span className="session-activity-status">{label}</span>
 	) : null;
+}
+
+function activityTitleIsLive(
+	item: SessionItem,
+	turnRunning: boolean,
+	thoughtInProgress: boolean,
+): boolean {
+	if (item.kind === "reasoning") {
+		return turnRunning && (thoughtInProgress || item.durationSeconds == null);
+	}
+	return liveActivityStatus(item) === "inProgress";
 }
 
 function activityStatusLabel(status: string): string | null {
