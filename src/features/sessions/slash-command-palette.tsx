@@ -1,5 +1,6 @@
 import {
 	Files,
+	FolderTree,
 	GitPullRequest,
 	MessageSquare,
 	MessagesSquare,
@@ -17,6 +18,7 @@ const icons: Record<SlashCommandId, typeof MessageSquare> = {
 	stop: Square,
 	retry: RotateCcw,
 	model: Sparkles,
+	files: FolderTree,
 	diff: Files,
 	terminal: SquareTerminal,
 	desktop: Monitor,

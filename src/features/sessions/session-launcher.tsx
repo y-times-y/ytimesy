@@ -33,7 +33,7 @@ import { SessionTimeline } from "./session-timeline";
 import { SlashCommandPalette } from "./slash-command-palette";
 import { TaskInput } from "./task-input";
 
-export type InspectorView = "diff" | "terminal" | "desktop";
+export type InspectorView = "files" | "diff" | "terminal" | "desktop";
 
 export function SessionLauncher({
 	session,
@@ -47,6 +47,7 @@ export function SessionLauncher({
 	onStop,
 	onOpenSideChat,
 	onOpenInspector,
+	onOpenFile,
 	onComposerModelIdChange,
 	projects,
 	selectedProject,
@@ -64,6 +65,7 @@ export function SessionLauncher({
 	onStop: () => void;
 	onOpenSideChat: (question?: string) => void;
 	onOpenInspector: (view: InspectorView) => void;
+	onOpenFile?: (path: string) => void;
 	onComposerModelIdChange?: (modelId: string) => void;
 	projects: Project[];
 	selectedProject?: Project;
@@ -221,6 +223,7 @@ export function SessionLauncher({
 			return;
 		}
 		if (
+			command.id === "files" ||
 			command.id === "diff" ||
 			command.id === "terminal" ||
 			command.id === "desktop"
@@ -274,6 +277,7 @@ export function SessionLauncher({
 				items={items}
 				turnStatus={session.turnStatus}
 				fill={followUpLayout}
+				onOpenFile={onOpenFile}
 			/>
 			<div className="session-dock">
 				{visibleSlashCommands.length === 0 ? (

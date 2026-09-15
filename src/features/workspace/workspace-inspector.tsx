@@ -4,12 +4,18 @@ import type { FileChangeEntry } from "#/domain/session-item";
 import type { WorkspaceDesktop } from "#/domain/workspace-desktop";
 import { DesktopInspector } from "./desktop-inspector";
 import { DiffInspector } from "./diff-inspector";
+import { FilesInspector } from "./files-inspector";
 import { TerminalInspector } from "./terminal-inspector";
 
-export type ToolsView = "diff" | "terminal" | "desktop";
+export type ToolsView = "files" | "diff" | "terminal" | "desktop";
 export type InspectorView = ToolsView | "side";
 
 const views = {
+	files: {
+		label: "Files",
+		title: "No files yet.",
+		description: "Files the agent edits will appear here.",
+	},
 	diff: {
 		label: "Diff",
 		title: "No changes yet.",
@@ -33,6 +39,8 @@ export function WorkspaceInspector({
 	activeView,
 	onActiveViewChange,
 	fileChanges = [],
+	selectedFilePath,
+	onSelectFilePath,
 	desktop,
 	desktopBusy,
 	onStartDesktop,
@@ -48,6 +56,8 @@ export function WorkspaceInspector({
 	activeView: InspectorView;
 	onActiveViewChange: (view: InspectorView) => void;
 	fileChanges?: readonly FileChangeEntry[];
+	selectedFilePath?: string;
+	onSelectFilePath?: (path: string) => void;
 	desktop: WorkspaceDesktop;
 	desktopBusy: boolean;
 	onStartDesktop: () => void;
@@ -124,8 +134,14 @@ export function WorkspaceInspector({
 			</div>
 			{activeView === "side" ? (
 				sideChat
+			) : activeView === "files" && fileChanges.length > 0 ? (
+				<FilesInspector
+					changes={fileChanges}
+					selectedPath={selectedFilePath}
+					onSelectPath={onSelectFilePath ?? (() => undefined)}
+				/>
 			) : activeView === "diff" && fileChanges.length > 0 ? (
-				<DiffInspector changes={fileChanges} />
+				<DiffInspector changes={fileChanges} selectedPath={selectedFilePath} />
 			) : activeView === "desktop" ? (
 				<DesktopInspector
 					desktop={desktop}
