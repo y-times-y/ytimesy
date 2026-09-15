@@ -150,6 +150,14 @@ export function listedChatHarnessId(
 	return chats.find((chat) => chat.id === chatId)?.harnessId ?? fallback;
 }
 
+export function composerHarnessForChat(input: {
+	readonly listedHarnessId?: AgentProviderId | null;
+	readonly connectionProvider?: AgentProviderId | null;
+	readonly fallback: AgentProviderId;
+}): AgentProviderId {
+	return input.listedHarnessId ?? input.connectionProvider ?? input.fallback;
+}
+
 /**
  * A running sibling keeps polling after the user switches chats. Skip the
  * open row (its own interval handles that) and any chat whose Send is still
