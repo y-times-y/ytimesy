@@ -1,5 +1,3 @@
-import { posixShellQuoted } from "./posix-command";
-
 export function projectEnvironmentSnapshotSlug(workspaceId: string) {
 	return `ytimesy-pe-${compactId(workspaceId)}`;
 }
@@ -83,10 +81,6 @@ export const COPIED_SESSION_STATUS_RESETS = [
 		path: COPIED_CLAUDE_STATUS_PATH,
 		contents: `${JSON.stringify({ stage: "missing" })}\n`,
 	},
-	{
-		path: "/tmp/ytimesy-opencode-serve.pid",
-		contents: "",
-	},
 ] as const;
 
 export const COPIED_SESSION_DB_FILES = [
@@ -111,12 +105,20 @@ export function copiedSessionScratchFileResetCommand() {
 	return `rm -f ${COPIED_SESSION_SCRATCH_PATHS.join(" ")}`;
 }
 
-export function copiedSessionScratchResetCommand() {
-	const script = [
-		`rm -f ${[...COPIED_SESSION_SCRATCH_PATHS, ...COPIED_SESSION_DB_FILES].join(" ")}`,
-		`rm -rf ${COPIED_SESSION_SCRATCH_TREES.join(" ")}`,
-	].join("; ");
-	return `bash -lc ${posixShellQuoted(script)}`;
+export function copiedSessionScratchDatabaseResetCommand() {
+	return `rm -f ${COPIED_SESSION_DB_FILES.join(" ")}`;
+}
+
+export function copiedSessionScratchTreeResetCommand() {
+	return `rm -rf ${COPIED_SESSION_SCRATCH_TREES.join(" ")}`;
+}
+
+export function copiedSessionScratchResetCommands() {
+	return [
+		copiedSessionScratchFileResetCommand(),
+		copiedSessionScratchDatabaseResetCommand(),
+		copiedSessionScratchTreeResetCommand(),
+	] as const;
 }
 
 export function sessionMachineRefsToDestroy(input: {

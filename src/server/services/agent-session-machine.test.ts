@@ -87,8 +87,12 @@ describe("executeSessionMachinePlan", () => {
 			saveSessionProviderRef: async () => undefined,
 		});
 		expect(runtime.commands[0]).toBe(copiedSessionScratchFileResetCommand());
-		expect(runtime.commands[1]?.startsWith("bash -lc ")).toBe(true);
 		expect(runtime.commands[1]).toContain("opencode.db");
+		expect(runtime.commands[1]?.startsWith("rm -f ")).toBe(true);
+		expect(runtime.commands[2]?.startsWith("rm -rf ")).toBe(true);
+		expect(runtime.commands.some((command) => command.includes("bash"))).toBe(
+			false,
+		);
 		expect(runtime.writes).toContainEqual({
 			path: "/tmp/ytimesy-opencode-status.json",
 			contents: `${JSON.stringify({ stage: "missing" })}\n`,
@@ -97,10 +101,11 @@ describe("executeSessionMachinePlan", () => {
 			path: "/tmp/ytimesy-claude-auth-status.json",
 			contents: `${JSON.stringify({ stage: "missing" })}\n`,
 		});
-		expect(runtime.writes).toContainEqual({
-			path: "/tmp/ytimesy-opencode-serve.pid",
-			contents: "",
-		});
+		expect(
+			runtime.writes.some((write) =>
+				write.path.endsWith("ytimesy-opencode-serve.pid"),
+			),
+		).toBe(false);
 	});
 
 	it("still overwrites copied status when guest rm cannot delete sticky /tmp files", async () => {
