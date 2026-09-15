@@ -4,6 +4,7 @@ import {
 	agentProviderById,
 	CLAUDE_PROVIDER,
 	CODEX_PROVIDER,
+	DEFAULT_COMPOSER_HARNESS_ID,
 	OPENCODE_PROVIDER,
 	offeredAgentProviders,
 } from "./agent-provider";
@@ -19,6 +20,7 @@ describe("agent providers", () => {
 		expect(agentProviderById("claude")).toEqual(CLAUDE_PROVIDER);
 		expect(agentProviderById("opencode")).toEqual(OPENCODE_PROVIDER);
 		expect(OPENCODE_PROVIDER.signInMethod).toBeNull();
+		expect(DEFAULT_COMPOSER_HARNESS_ID).toBe("opencode");
 	});
 
 	it("names the connected agent from its provider", () => {

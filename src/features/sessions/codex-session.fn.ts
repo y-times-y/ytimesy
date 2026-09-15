@@ -1,7 +1,10 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getRequest } from "@tanstack/react-start/server";
 import { Effect } from "effect";
-import type { AgentProviderId } from "#/domain/agent-provider";
+import {
+	type AgentProviderId,
+	DEFAULT_COMPOSER_HARNESS_ID,
+} from "#/domain/agent-provider";
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
 import { requireUser } from "#/server/auth/auth";
 import { parseHarnessId } from "#/server/secrets/harness-key-store";
@@ -30,7 +33,7 @@ function runWithMachines<A>(
 
 async function optionalScope(
 	projectId?: string,
-	harnessId: AgentProviderId = "codex",
+	harnessId: AgentProviderId = DEFAULT_COMPOSER_HARNESS_ID,
 ): Promise<HarnessSessionScope | null> {
 	try {
 		const user = await requireUser(getRequest().headers);
@@ -42,7 +45,7 @@ async function optionalScope(
 
 async function requireScope(
 	projectId?: string,
-	harnessId: AgentProviderId = "codex",
+	harnessId: AgentProviderId = DEFAULT_COMPOSER_HARNESS_ID,
 ): Promise<HarnessSessionScope> {
 	const user = await requireUser(getRequest().headers);
 	return { userId: user.id, projectId, harnessId };
@@ -55,7 +58,7 @@ function optionalSessionInput(
 		typeof data?.projectId === "string" ? data.projectId.trim() : "";
 	const harnessId = data?.harnessId
 		? parseHarnessId(data.harnessId)
-		: ("codex" as const);
+		: DEFAULT_COMPOSER_HARNESS_ID;
 	return { projectId: projectId || undefined, harnessId };
 }
 
@@ -98,7 +101,7 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 				projectId: data.projectId?.trim() || undefined,
 				harnessId: data.harnessId
 					? parseHarnessId(data.harnessId)
-					: ("codex" as const),
+					: DEFAULT_COMPOSER_HARNESS_ID,
 			};
 		},
 	)

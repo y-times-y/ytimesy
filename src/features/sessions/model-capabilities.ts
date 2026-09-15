@@ -46,6 +46,38 @@ export function sessionModelsFromListed(
 export function preferredSessionModelId(
 	models: readonly SessionModel[],
 ): string {
-	const spark = models.find((model) => model.id === "gpt-5.3-codex-spark");
-	return spark?.id ?? models[0]?.id ?? "";
+	return (
+		listedModelId(models, isListedCodexSpark) ??
+		listedModelId(models, isListedZenSpark13) ??
+		listedModelId(models, isListedZenSpark) ??
+		listedModelId(models, isListedZenFree) ??
+		models[0]?.id ??
+		""
+	);
+}
+
+function listedModelId(
+	models: readonly SessionModel[],
+	listed: (id: string) => boolean,
+): string | undefined {
+	return models.find((model) => listed(model.id))?.id;
+}
+
+function isListedCodexSpark(id: string): boolean {
+	return id === "gpt-5.3-codex-spark";
+}
+
+function isListedZenSpark13(id: string): boolean {
+	return id.startsWith("opencode/") && id.includes("muse-spark-1.3");
+}
+
+function isListedZenSpark(id: string): boolean {
+	return id.startsWith("opencode/") && id.includes("spark");
+}
+
+function isListedZenFree(id: string): boolean {
+	return (
+		id.startsWith("opencode/") &&
+		(id.endsWith("-free") || id.includes("contributor-free"))
+	);
 }
