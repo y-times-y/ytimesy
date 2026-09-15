@@ -1,4 +1,4 @@
-import { Plus, X } from "lucide-react";
+import { PanelRight, Plus, X } from "lucide-react";
 import type { ReactNode } from "react";
 import type { FileChangeEntry } from "#/domain/session-item";
 import type { WorkspaceDesktop } from "#/domain/workspace-desktop";
@@ -22,9 +22,9 @@ const views = {
 	},
 	desktop: {
 		label: "Desktop",
-		title: "No desktop yet.",
+		title: "Shared desktop",
 		description:
-			"Start a shared Linux desktop the agent can computer-use. You can watch and control it here.",
+			"This is the Linux desktop the agent uses for QA. You watch and control the same screen.",
 	},
 } as const;
 
@@ -40,6 +40,7 @@ export function WorkspaceInspector({
 	sideChatOpen,
 	onNewSideChat,
 	onCloseSideChat,
+	onCollapse,
 	sideChat,
 }: {
 	collapsed: boolean;
@@ -53,6 +54,7 @@ export function WorkspaceInspector({
 	sideChatOpen: boolean;
 	onNewSideChat: () => void;
 	onCloseSideChat: () => void;
+	onCollapse?: () => void;
 	sideChat: ReactNode;
 }) {
 	const currentView = activeView === "side" ? null : views[activeView];
@@ -106,6 +108,17 @@ export function WorkspaceInspector({
 				>
 					<Plus size={16} />
 				</button>
+				{onCollapse ? (
+					<button
+						type="button"
+						className="inspector-collapse"
+						aria-label="Hide tools"
+						title="Hide tools"
+						onClick={onCollapse}
+					>
+						<PanelRight size={16} />
+					</button>
+				) : null}
 			</div>
 			{activeView === "side" ? (
 				sideChat
@@ -123,7 +136,11 @@ export function WorkspaceInspector({
 					active={!collapsed && activeView === "terminal"}
 				/>
 			) : currentView ? (
-				<section className="inspector-empty" aria-live="polite">
+				<section
+					className="inspector-empty"
+					data-kind={activeView}
+					aria-live="polite"
+				>
 					<h2>{currentView.title}</h2>
 					<p>{currentView.description}</p>
 				</section>

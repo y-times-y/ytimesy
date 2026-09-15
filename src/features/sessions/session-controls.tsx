@@ -37,6 +37,7 @@ interface SessionControlsProps {
 	busy: boolean;
 	onConnect: () => void;
 	onSaveApiKey: (harnessId: AgentProviderId, apiKey: string) => void;
+	snapshotAvailable?: boolean;
 	models: readonly SessionModel[];
 	modelId: string;
 	onModelIdChange: (id: string) => void;
@@ -51,6 +52,7 @@ export function SessionControls({
 	busy,
 	onConnect,
 	onSaveApiKey,
+	snapshotAvailable = false,
 	models,
 	modelId,
 	onModelIdChange,
@@ -101,6 +103,7 @@ export function SessionControls({
 				}}
 				onConnect={onConnect}
 				onSaveApiKey={onSaveApiKey}
+				snapshotAvailable={snapshotAvailable}
 			/>
 			<Select
 				value={model?.id ?? ""}

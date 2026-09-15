@@ -208,12 +208,20 @@ export function createFreestyleWorkspaceMachines(
 			hostname: string,
 		): Promise<string> {
 			try {
-				await freestyle.tls.rules.create({
-					action: "allow",
-					domain: hostname,
-					source: { public: true },
-					destination: { vmId: workspaceId, port },
+				const listed = await freestyle.tls.rules.list({
+					vmId: workspaceId,
 				});
+				const already = listed.rules.some(
+					(rule) => rule.domain === hostname && rule.destination.port === port,
+				);
+				if (!already) {
+					await freestyle.tls.rules.create({
+						action: "allow",
+						domain: hostname,
+						source: { public: true },
+						destination: { vmId: workspaceId, port },
+					});
+				}
 				return `https://${hostname}`;
 			} catch (cause) {
 				throw new WorkspaceProvisionError({

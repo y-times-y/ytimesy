@@ -22,6 +22,7 @@ export function HarnessPicker({
 	onHarnessIdChange,
 	onConnect,
 	onSaveApiKey,
+	snapshotAvailable = false,
 }: {
 	harnessId: AgentProviderId;
 	connection: AgentConnection;
@@ -30,8 +31,11 @@ export function HarnessPicker({
 	onHarnessIdChange: (id: AgentProviderId) => void;
 	onConnect: () => void;
 	onSaveApiKey: (harnessId: AgentProviderId, apiKey: string) => void;
+	snapshotAvailable?: boolean;
 }) {
-	const options = offeredHarnessAccess(connection, apiKeyHints);
+	const options = offeredHarnessAccess(connection, apiKeyHints, {
+		codexSnapshotAvailable: snapshotAvailable,
+	});
 	const selected =
 		options.find((option) => option.provider.id === harnessId) ?? options[0];
 	const [open, setOpen] = useState(false);
@@ -53,11 +57,15 @@ export function HarnessPicker({
 				data-muted={selected.muted ? "true" : undefined}
 				aria-label="Harness"
 				title={
-					selected.muted
-						? harnessRequiresAccountLogin(selected.provider.id)
-							? `${selected.provider.name} is not signed in`
-							: `${selected.provider.name} is not connected`
-						: selected.provider.name
+					busy && selected.subscriptionActionLabel === "Resume"
+						? "Resuming the saved ChatGPT workspace"
+						: selected.muted
+							? selected.statusLabel === "Saved workspace"
+								? selected.summary
+								: harnessRequiresAccountLogin(selected.provider.id)
+									? `${selected.provider.name} is not signed in`
+									: `${selected.provider.name} is not connected`
+							: selected.provider.name
 				}
 			>
 				<AgentProviderMark provider={selected.provider.id} size={16} />
@@ -183,7 +191,9 @@ function HarnessChoice({
 							{busy
 								? option.subscriptionAction === "connect"
 									? "Connecting…"
-									: "Signing in…"
+									: option.subscriptionActionLabel === "Resume"
+										? "Resuming…"
+										: "Signing in…"
 								: option.subscriptionActionLabel}
 						</button>
 					) : null}

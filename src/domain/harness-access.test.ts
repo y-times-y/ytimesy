@@ -45,6 +45,17 @@ describe("harness access", () => {
 		expect(harnessRequiresAccountLogin("claude")).toBe(true);
 	});
 
+	it("offers ChatGPT resume when a Codex snapshot is saved", () => {
+		const rows = offeredHarnessAccess(
+			{ status: "disconnected" },
+			{},
+			{ codexSnapshotAvailable: true },
+		);
+		expect(rows[0]?.statusLabel).toBe("Saved workspace");
+		expect(rows[0]?.subscriptionActionLabel).toBe("Resume");
+		expect(rows[0]?.summary).toContain("saved workspace");
+	});
+
 	it("does not treat a saved key as a connected harness", () => {
 		const claude = harnessAccess(
 			CLAUDE_PROVIDER,

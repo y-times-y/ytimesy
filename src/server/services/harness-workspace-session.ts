@@ -34,6 +34,7 @@ import {
 	sendCodexWorkspaceTask,
 	stopCodexWorkspaceTurn,
 } from "./codex-workspace-session";
+import { preparePreparedGuest } from "./project-workspace";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 export type HarnessSessionScope = CodexSessionScope & {
@@ -105,6 +106,11 @@ export function connectHarnessWorkspaceSession(
 		}
 		yield* Effect.tryPromise(() =>
 			machines.ensureRunning(WorkspaceId(workspace.providerRef as string)),
+		);
+		yield* preparePreparedGuest(
+			machines,
+			WorkspaceId(workspace.providerRef),
+			scope,
 		);
 		const apiKey = yield* Effect.tryPromise(() =>
 			decryptHarnessApiKey(scope.harnessId),

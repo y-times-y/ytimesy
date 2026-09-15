@@ -7,6 +7,9 @@ import {
 	isTurnRunning,
 	lastUserMessageText,
 	type SessionItem,
+	sessionTitleFromItems,
+	sessionUsesFollowUpLayout,
+	showTurnWorking,
 	visibleSessionItems,
 } from "./session-item";
 
@@ -171,9 +174,36 @@ describe("session items", () => {
 			},
 		];
 		expect(lastUserMessageText(items)).toBe("second");
+		expect(
+			lastUserMessageText([
+				{
+					kind: "userMessage",
+					id: SessionItemId("user-1"),
+					text: "What is this repository?",
+				},
+				{
+					kind: "userMessage",
+					id: SessionItemId("preamble"),
+					text: "You are in a ytimesy workspace VM. The project checkout is /home/ubuntu; work there.\n\nWhat is this repository?",
+				},
+			]),
+		).toBe("What is this repository?");
 	});
 
-	it("collapses thinking around tool rows into one Codex Thought line", () => {
+	it("uses the first line of the latest user message as the session title", () => {
+		expect(sessionTitleFromItems([])).toBe("New session");
+		expect(
+			sessionTitleFromItems([
+				{
+					kind: "userMessage",
+					id: SessionItemId("user-1"),
+					text: "fix the composer\nmore detail",
+				},
+			]),
+		).toBe("fix the composer");
+	});
+
+	it("keeps reasoning interleaved with tools the way Cursor Cloud does", () => {
 		expect(
 			compactTimelineItems([
 				{
@@ -185,6 +215,7 @@ describe("session items", () => {
 					kind: "reasoning",
 					id: SessionItemId("r1"),
 					summaries: ["first"],
+					durationSeconds: 4,
 				},
 				{
 					kind: "agentMessage",
@@ -204,49 +235,71 @@ describe("session items", () => {
 					kind: "reasoning",
 					id: SessionItemId("r2"),
 					summaries: ["second"],
+					durationSeconds: 1,
 				},
 				{
 					kind: "agentMessage",
 					id: SessionItemId("m1"),
 					text: "ok",
 				},
-			]),
+			]).map((item) => item.kind),
 		).toEqual([
-			{
-				kind: "userMessage",
-				id: SessionItemId("user-1"),
-				text: "create hero",
-			},
-			{
-				kind: "agentMessage",
-				id: SessionItemId("m0"),
-				text: "I’ll create the file.",
-			},
-			{
-				kind: "reasoning",
-				id: SessionItemId("r1"),
-				summaries: ["first", "second"],
-			},
-			{
-				kind: "fileChange",
-				id: SessionItemId("cmd-1"),
-				status: "completed",
-				changes: [
+			"userMessage",
+			"reasoning",
+			"agentMessage",
+			"fileChange",
+			"reasoning",
+			"agentMessage",
+		]);
+	});
+
+	it("hides the internal workspace preamble from the transcript", () => {
+		expect(
+			compactTimelineItems([
+				{
+					kind: "userMessage",
+					id: SessionItemId("user-1"),
+					text: "What is this repository?",
+				},
+				{
+					kind: "userMessage",
+					id: SessionItemId("user-preamble"),
+					text: "You are in a ytimesy workspace VM. The project checkout is /home/ubuntu/ytimesy; work there.\n\nWhat is this repository?",
+				},
+			]).map((item) => item.id),
+		).toEqual([SessionItemId("user-1")]);
+	});
+
+	it("does not add a second Thinking row while a thought is already open", () => {
+		expect(
+			showTurnWorking(
+				[
 					{
-						path: "/tmp/src/hero.tsx",
-						change: "add",
-						additions: 1,
-						deletions: 0,
-						preview: 'export const hero = { title: "ytimesy" };',
+						kind: "userMessage",
+						id: SessionItemId("user-1"),
+						text: "look",
+					},
+					{
+						kind: "reasoning",
+						id: SessionItemId("r1"),
+						summaries: ["checking the repo"],
 					},
 				],
-			},
-			{
-				kind: "agentMessage",
-				id: SessionItemId("m1"),
-				text: "ok",
-			},
-		]);
+				"running",
+			),
+		).toBe(false);
+		expect(
+			showTurnWorking(
+				[
+					{
+						kind: "userMessage",
+						id: SessionItemId("user-1"),
+						text: "look",
+					},
+				],
+				"running",
+			),
+		).toBe(true);
 	});
 
 	it("collects Diff files from shell heredoc writes", () => {
@@ -271,5 +324,26 @@ describe("session items", () => {
 				preview: 'export const hero = { title: "ytimesy" };',
 			},
 		]);
+	});
+
+	it("keeps the tall composer until the user actually starts a turn", () => {
+		expect(sessionUsesFollowUpLayout({ items: [], turnStatus: "idle" })).toBe(
+			false,
+		);
+		expect(
+			sessionUsesFollowUpLayout({
+				items: [
+					{
+						kind: "userMessage",
+						id: SessionItemId("user-1"),
+						text: "fix the composer",
+					},
+				],
+				turnStatus: "idle",
+			}),
+		).toBe(true);
+		expect(
+			sessionUsesFollowUpLayout({ items: [], turnStatus: "running" }),
+		).toBe(true);
 	});
 });
