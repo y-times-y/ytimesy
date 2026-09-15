@@ -157,7 +157,11 @@ function readyAccess(
 		readiness: "ready",
 		muted: false,
 		statusLabel: "Signed in",
-		summary: planType ? planType : `Signed in with ${provider.signInMethod}`,
+		summary: planType
+			? planType
+			: provider.signInMethod
+				? `Signed in with ${provider.signInMethod}`
+				: "Running on this workspace",
 		subscriptionAction: null,
 		subscriptionActionLabel: null,
 		apiKeyHint,

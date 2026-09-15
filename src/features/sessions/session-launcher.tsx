@@ -85,6 +85,7 @@ export function SessionLauncher({
 		() =>
 			composerSlashCommands({
 				authenticated: harnessReady,
+				requiresAccountLogin: harnessRequiresAccountLogin(harnessId),
 				turnRunning: session.turnStatus === "running",
 				canSend: harnessReady && session.canSend,
 				hasLastUserMessage: Boolean(lastUserText),
@@ -92,6 +93,7 @@ export function SessionLauncher({
 				publicationReady: false,
 			}),
 		[
+			harnessId,
 			lastUserText,
 			models.length,
 			harnessReady,

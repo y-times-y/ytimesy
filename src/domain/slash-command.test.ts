@@ -7,6 +7,7 @@ import {
 
 const connected = composerSlashCommands({
 	authenticated: true,
+	requiresAccountLogin: true,
 	turnRunning: false,
 	canSend: true,
 	hasLastUserMessage: true,
@@ -37,6 +38,24 @@ describe("slash commands", () => {
 				connected,
 			).map((command) => command.trigger),
 		).toEqual(["/stop"]);
+	});
+
+	it("asks OpenCode to connect instead of signing in", () => {
+		const unsigned = composerSlashCommands({
+			authenticated: false,
+			requiresAccountLogin: false,
+			turnRunning: false,
+			canSend: false,
+			hasLastUserMessage: false,
+			hasModels: false,
+			publicationReady: false,
+		});
+		expect(
+			unsigned.find((command) => command.id === "side")?.unavailableReason,
+		).toBe("Connect an agent to start a side chat");
+		expect(
+			unsigned.find((command) => command.id === "model")?.unavailableReason,
+		).toBe("Connect an agent to load models");
 	});
 
 	it("hides unavailable commands until they are typed", () => {
