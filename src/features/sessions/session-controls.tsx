@@ -26,6 +26,7 @@ import {
 	selectedHarnessIsConnected,
 } from "#/domain/harness-access";
 import { listedModelDisplayName } from "#/domain/listed-model";
+import { useCompactLayout } from "../workspace/use-compact-layout";
 import { HarnessPicker } from "./harness-picker";
 import { resolveReasoningLevel, type SessionModel } from "./model-capabilities";
 import { ReasoningOption } from "./reasoning-option";
@@ -74,6 +75,7 @@ export function SessionControls({
 	const persistedModelId = (model?.id || modelId || listedModelId).trim();
 	const persistedLabel =
 		model?.label || listedModelDisplayName(persistedModelId);
+	const compactComposer = useCompactLayout();
 
 	return (
 		<div className="session-controls">
@@ -163,77 +165,83 @@ export function SessionControls({
 					)}
 				</SelectContent>
 			</Select>
-			<Select
-				value={reasoning?.id ?? ""}
-				onValueChange={setReasoningId}
-				disabled={!harnessReady || !model?.reasoning}
-			>
-				<SelectTrigger
-					className="composer-select reasoning-select"
-					aria-label="Reasoning level"
-					title={
-						!harnessReady
-							? `${startPrompt} first`
-							: !model
-								? "Select a model to see its reasoning levels"
-								: !model.reasoning
-									? "This model has no configurable reasoning levels"
-									: undefined
-					}
+			{compactComposer ? null : (
+				<Select
+					value={reasoning?.id ?? ""}
+					onValueChange={setReasoningId}
+					disabled={!harnessReady || !model?.reasoning}
 				>
-					<SelectValue placeholder="Reasoning" />
-				</SelectTrigger>
-				<SelectContent
-					position="popper"
-					side="bottom"
-					align="start"
-					sideOffset={8}
-				>
-					<SelectGroup>
-						<SelectLabel>Reasoning</SelectLabel>
-						{model?.reasoning?.levels.map((option, index, levels) => (
-							<SelectItem
-								key={option.id}
-								value={option.id}
-								textValue={option.label}
+					<SelectTrigger
+						className="composer-select reasoning-select"
+						aria-label="Reasoning level"
+						title={
+							!harnessReady
+								? `${startPrompt} first`
+								: !model
+									? "Select a model to see its reasoning levels"
+									: !model.reasoning
+										? "This model has no configurable reasoning levels"
+										: undefined
+						}
+					>
+						<SelectValue placeholder="Reasoning" />
+					</SelectTrigger>
+					<SelectContent
+						position="popper"
+						side="bottom"
+						align="start"
+						sideOffset={8}
+					>
+						<SelectGroup>
+							<SelectLabel>Reasoning</SelectLabel>
+							{model?.reasoning?.levels.map((option, index, levels) => (
+								<SelectItem
+									key={option.id}
+									value={option.id}
+									textValue={option.label}
+								>
+									<ReasoningOption
+										label={option.label}
+										level={index + 1}
+										levelCount={levels.length}
+									/>
+								</SelectItem>
+							))}
+						</SelectGroup>
+					</SelectContent>
+				</Select>
+			)}
+			{compactComposer ? null : (
+				<TooltipProvider delayDuration={350}>
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Toggle
+								className="composer-control fast-control"
+								aria-label="Fast mode"
+								disabled={!model?.supportsFastMode}
+								pressed={Boolean(model?.supportsFastMode && fast)}
+								onPressedChange={setFast}
 							>
-								<ReasoningOption
-									label={option.label}
-									level={index + 1}
-									levelCount={levels.length}
+								<Zap
+									className="size-4"
+									fill={
+										model?.supportsFastMode && fast ? "currentColor" : "none"
+									}
 								/>
-							</SelectItem>
-						))}
-					</SelectGroup>
-				</SelectContent>
-			</Select>
-			<TooltipProvider delayDuration={350}>
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<Toggle
-							className="composer-control fast-control"
-							aria-label="Fast mode"
-							disabled={!model?.supportsFastMode}
-							pressed={Boolean(model?.supportsFastMode && fast)}
-							onPressedChange={setFast}
-						>
-							<Zap
-								className="size-4"
-								fill={model?.supportsFastMode && fast ? "currentColor" : "none"}
-							/>
-						</Toggle>
-					</TooltipTrigger>
-					<TooltipContent side="bottom" sideOffset={8}>
-						{!harnessReady
-							? `${startPrompt} first`
-							: !model
-								? "Select a model first"
-								: !model.supportsFastMode
-									? "Fast mode unavailable for this model"
-									: `Fast mode ${fast ? "on" : "off"}`}
-					</TooltipContent>
-				</Tooltip>
-			</TooltipProvider>
+							</Toggle>
+						</TooltipTrigger>
+						<TooltipContent side="bottom" sideOffset={8}>
+							{!harnessReady
+								? `${startPrompt} first`
+								: !model
+									? "Select a model first"
+									: !model.supportsFastMode
+										? "Fast mode unavailable for this model"
+										: `Fast mode ${fast ? "on" : "off"}`}
+						</TooltipContent>
+					</Tooltip>
+				</TooltipProvider>
+			)}
 		</div>
 	);
 }
