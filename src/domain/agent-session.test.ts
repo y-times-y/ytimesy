@@ -3,6 +3,7 @@ import {
 	agentSessionMachineSlug,
 	chatsFromAgentSessions,
 	copiedSessionScratchFileResetCommand,
+	copiedSessionScratchResetCommand,
 	copiedSessionScratchResetCommands,
 	projectEnvironmentSnapshotSlug,
 	sessionMachinePlan,
@@ -229,21 +230,16 @@ describe("copiedSessionScratchFileResetCommand", () => {
 });
 
 describe("copiedSessionScratchResetCommands", () => {
-	it("clears harness leftovers with direct rm so Freestyle exec does not need a shell", () => {
-		const [files, databases, trees] = copiedSessionScratchResetCommands();
-		expect(files.startsWith("rm -f ")).toBe(true);
-		expect(databases.startsWith("rm -f ")).toBe(true);
-		expect(trees.startsWith("rm -rf ")).toBe(true);
-		expect(files).toContain("/tmp/ytimesy-opencode-status.json");
-		expect(files).toContain("/tmp/ytimesy-claude-auth-status.json");
-		expect(files).toContain("/tmp/ytimesy-auth-status.json");
-		expect(databases).toContain(
-			"/home/ubuntu/.local/share/opencode/opencode.db",
-		);
-		expect(trees).toContain("/home/ubuntu/.codex/sessions");
-		expect(files.includes("bash")).toBe(false);
-		expect(databases.includes("bash")).toBe(false);
-		expect(trees.includes("bash")).toBe(false);
+	it("clears harness leftovers with one direct rm so Freestyle exec does not need a shell", () => {
+		const [reset] = copiedSessionScratchResetCommands();
+		expect(reset).toBe(copiedSessionScratchResetCommand());
+		expect(reset.startsWith("rm -rf ")).toBe(true);
+		expect(reset).toContain("/tmp/ytimesy-opencode-status.json");
+		expect(reset).toContain("/tmp/ytimesy-claude-auth-status.json");
+		expect(reset).toContain("/tmp/ytimesy-auth-status.json");
+		expect(reset).toContain("/home/ubuntu/.local/share/opencode/opencode.db");
+		expect(reset).toContain("/home/ubuntu/.codex/sessions");
+		expect(reset.includes("bash")).toBe(false);
 	});
 });
 

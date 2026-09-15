@@ -542,7 +542,6 @@ function sendHarnessSideTask(
 				sessionId: existing?.id,
 				createNew: !existing,
 				parentSessionId: scope.sessionId,
-				task: input.text,
 			}),
 		);
 		yield* Effect.tryPromise(() =>

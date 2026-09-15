@@ -62,8 +62,22 @@ echo "PROJECT_CWD=$DEST"
 `;
 }
 
-export function preparedCheckoutExistsCommand(destination: string) {
-	return `test -d ${shellSingleQuote(destination)}/.git && echo present`;
+export function reusePreparedCheckoutCommand(repoName: string) {
+	return `HOME="\${HOME:-/home/ubuntu}"
+DEST="$HOME/"${shellSingleQuote(repoName)}
+if [ -d "$DEST/.git" ]; then
+  printf '%s\\n' "$DEST" > ${shellSingleQuote(PROJECT_CWD_PATH)}
+  echo present
+  echo "$DEST"
+fi`;
+}
+
+export function preparedCheckoutPathFromReuse(stdout: string): string | null {
+	const lines = stdout.split(/\r?\n/);
+	const index = lines.findIndex((line) => line.trim() === "present");
+	if (index < 0) return null;
+	const path = lines[index + 1]?.trim() ?? "";
+	return path.startsWith("/") ? path : null;
 }
 
 export function pushSelectedBranchScript(input: {

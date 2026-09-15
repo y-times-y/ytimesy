@@ -11,10 +11,10 @@ import {
 	cloneSelectedProjectScript,
 	DEVELOPER_INSTRUCTIONS_PATH,
 	PROJECT_CONTEXT_PATH,
-	PROJECT_CWD_PATH,
 	PROJECT_TOKEN_PATH,
-	preparedCheckoutExistsCommand,
+	preparedCheckoutPathFromReuse,
 	redactInstallationToken,
+	reusePreparedCheckoutCommand,
 } from "#/server/adapters/freestyle/clone-project";
 import { githubInstallationAccessToken } from "#/server/adapters/github/installation-token";
 import { listProjects, projectForOwner } from "#/server/adapters/projects";
@@ -22,9 +22,10 @@ import type { DesktopScope } from "./workspace-desktop";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 /**
- * Clones the GitHub repo into the guest home and writes the agent cwd file.
- * Installation tokens are written to a temp file on the VM and deleted during
- * the clone; they are never stored in git remotes.
+ * Reuses the sealed project checkout when the guest already has it.
+ * Clones only when that directory is missing. Installation tokens are
+ * written to a temp file on the VM and deleted during the clone; they
+ * are never stored in git remotes.
  */
 export function ensureProjectCheckout(
 	machines: WorkspaceMachines,
@@ -37,26 +38,17 @@ export function ensureProjectCheckout(
 			yield* writeDeveloperInstructions(machines, workspaceId, home);
 			return null;
 		}
-		const home = yield* guestHome(machines, workspaceId);
-		const destination = projectCheckoutPath(home, checkout.name);
-		const existing = yield* Effect.tryPromise(() =>
+		const reused = yield* Effect.tryPromise(() =>
 			machines.exec(
 				workspaceId,
-				preparedCheckoutExistsCommand(destination),
+				reusePreparedCheckoutCommand(checkout.name),
 				15_000,
 			),
 		);
-		if (existing.stdout.includes("present")) {
-			yield* Effect.tryPromise(() =>
-				machines.writeTextFile(
-					workspaceId,
-					PROJECT_CWD_PATH,
-					`${destination}\n`,
-				),
-			);
-			yield* writeDeveloperInstructions(machines, workspaceId, destination);
-			return destination;
-		}
+		const reusedPath = preparedCheckoutPathFromReuse(reused.stdout);
+		if (reusedPath) return reusedPath;
+		const home = yield* guestHome(machines, workspaceId);
+		const destination = projectCheckoutPath(home, checkout.name);
 		const token = yield* Effect.tryPromise(() =>
 			githubInstallationAccessToken(checkout.installationId),
 		);
