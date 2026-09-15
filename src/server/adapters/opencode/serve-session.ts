@@ -269,9 +269,14 @@ export function refreshOpenCodeAuthStatus(
 	return Effect.gen(function* () {
 		const health = yield* curlJson(machines, workspaceId, "/global/health");
 		if (health == null) {
-			const restarted = yield* restartOpenCodeServe(machines, workspaceId);
-			if (!restarted) {
-				return yield* readOpenCodeAuthStatus(machines, workspaceId);
+			const previous = yield* readOpenCodeAuthStatus(machines, workspaceId);
+			const turnRunning =
+				previous.stage === "authenticated" && previous.turnStatus === "running";
+			if (!turnRunning) {
+				const restarted = yield* restartOpenCodeServe(machines, workspaceId);
+				if (!restarted) {
+					return previous;
+				}
 			}
 		}
 		let snapshot = yield* readOpenCodeSnapshot(machines, workspaceId);
@@ -570,7 +575,7 @@ export function submitOpenCodeTask(
 			...running,
 			serveSessionId: sessionId,
 		};
-		const asyncReply = yield* curlHttp(
+		let asyncReply = yield* curlHttp(
 			machines,
 			workspaceId,
 			"POST",
@@ -578,6 +583,21 @@ export function submitOpenCodeTask(
 			body,
 			30_000,
 		);
+		for (
+			let attempt = 0;
+			attempt < 3 && asyncReply.status === 404;
+			attempt += 1
+		) {
+			yield* Effect.sleep(Duration.seconds(1));
+			asyncReply = yield* curlHttp(
+				machines,
+				workspaceId,
+				"POST",
+				`/session/${sessionId}/prompt_async`,
+				body,
+				30_000,
+			);
+		}
 		if (asyncReply.status === 404) {
 			const response = yield* curlHttp(
 				machines,
@@ -587,7 +607,30 @@ export function submitOpenCodeTask(
 				body,
 				180_000,
 			);
-			return yield* finishOpenCodeTurn(machines, workspaceId, queued, response);
+			if (response.status >= 400) {
+				return yield* failOpenCodeTurn(
+					machines,
+					workspaceId,
+					queued,
+					openCodeTurnFailureMessage({
+						payload: response.body ?? response.raw,
+						httpStatus: response.status,
+					}),
+				);
+			}
+			const text =
+				assistantTextFromOpenCode(response.body) ??
+				assistantTextFromOpenCodeMessages(response.body);
+			if (text) {
+				return yield* finishOpenCodeTurn(
+					machines,
+					workspaceId,
+					queued,
+					response,
+				);
+			}
+			yield* persistStatus(machines, workspaceId, queued);
+			return queued;
 		}
 		if (asyncReply.status >= 400) {
 			return yield* failOpenCodeTurn(
