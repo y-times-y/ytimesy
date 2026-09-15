@@ -19,7 +19,8 @@ dist/
 !.env.example
 *.tsbuildinfo
 .DS_Store
-
-# Live provider proof state (workspace IDs, never commit login codes)
 .ytimesy/
 **/__pycache__/
+
+# Private keys and account configuration
+.secrets/

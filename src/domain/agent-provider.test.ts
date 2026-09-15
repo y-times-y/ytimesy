@@ -18,6 +18,7 @@ describe("agent providers", () => {
 		expect(agentProviderById("codex")).toEqual(CODEX_PROVIDER);
 		expect(agentProviderById("claude")).toEqual(CLAUDE_PROVIDER);
 		expect(agentProviderById("opencode")).toEqual(OPENCODE_PROVIDER);
+		expect(OPENCODE_PROVIDER.signInMethod).toBeNull();
 	});
 
 	it("names the connected agent from its provider", () => {
@@ -31,5 +32,23 @@ describe("agent providers", () => {
 				email: null,
 			}),
 		).toBe("Codex · API key");
+		expect(
+			connectedAgentStatus({
+				status: "authenticated",
+				provider: "claude",
+				authMode: "subscription",
+				planType: null,
+				email: null,
+			}),
+		).toBe("Claude Code");
+		expect(
+			connectedAgentStatus({
+				status: "authenticated",
+				provider: "opencode",
+				authMode: "local",
+				planType: null,
+				email: null,
+			}),
+		).toBe("OpenCode");
 	});
 });

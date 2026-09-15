@@ -9,6 +9,7 @@ import type { AgentConnection } from "#/domain/agent-connection";
 import type { AgentProviderId } from "#/domain/agent-provider";
 import {
 	type HarnessAccess,
+	harnessRequiresAccountLogin,
 	offeredHarnessAccess,
 } from "#/domain/harness-access";
 import { AgentProviderMark } from "./agent-provider-mark";
@@ -61,7 +62,9 @@ export function HarnessPicker({
 						: selected.muted
 							? selected.statusLabel === "Saved workspace"
 								? selected.summary
-								: `${selected.provider.name} is not signed in`
+								: harnessRequiresAccountLogin(selected.provider.id)
+									? `${selected.provider.name} is not signed in`
+									: `${selected.provider.name} is not connected`
 							: selected.provider.name
 				}
 			>
@@ -188,7 +191,9 @@ function HarnessChoice({
 							{busy
 								? option.subscriptionActionLabel === "Resume"
 									? "Resuming…"
-									: "Signing in…"
+									: option.subscriptionAction === "connect"
+										? "Connecting…"
+										: "Signing in…"
 								: option.subscriptionActionLabel}
 						</button>
 					) : null}

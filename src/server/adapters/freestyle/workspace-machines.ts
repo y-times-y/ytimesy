@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { Freestyle, FreestyleApiError, type Vm } from "freestyle";
+import { Freestyle, FreestyleApiError } from "freestyle";
 import { isolatedAuthSnapshot } from "#/domain/auth-snapshot";
 import { type AuthSnapshotId, WorkspaceId } from "#/domain/ids";
 import {
@@ -19,6 +19,7 @@ import {
 	proofWorkspaceSlug,
 	requestedAuthSnapshotId,
 } from "./proof-vm";
+import { waitUntilVmRunning } from "./wait-until-running";
 
 function providerMessage(cause: unknown): string {
 	if (cause instanceof FreestyleApiError) return cause.message;
@@ -45,7 +46,7 @@ export function createFreestyleWorkspaceMachines(
 						snapshotId: options.snapshotId,
 					}),
 				);
-				const running = await waitUntilRunning(created.vm);
+				const running = await waitUntilVmRunning(created.vm, "Proof VM");
 				return {
 					workspaceId: WorkspaceId(created.vmId),
 					state: running.state,
@@ -168,6 +169,24 @@ export function createFreestyleWorkspaceMachines(
 			}
 		},
 
+		async ensureRunning(workspaceId: WorkspaceId): Promise<WorkspaceId> {
+			try {
+				const vm = freestyle.vms.ref(workspaceId);
+				const data = await vm.data();
+				if (data.state === "paused" || data.state === "stopped") {
+					await vm.start();
+				}
+				await waitUntilVmRunning(vm, "Workspace VM");
+				return workspaceId;
+			} catch (cause) {
+				throw new WorkspaceProvisionError({
+					operation: "create",
+					message: providerMessage(cause),
+					providerWorkspaceId: workspaceId,
+				});
+			}
+		},
+
 		async destroy(workspaceId: WorkspaceId): Promise<void> {
 			try {
 				await freestyle.vms.ref(workspaceId).delete();
@@ -234,24 +253,4 @@ export function createFreestyleWorkspaceMachines(
 			}
 		},
 	};
-}
-
-async function waitUntilRunning(vm: Vm) {
-	for (let attempt = 0; attempt < 30; attempt += 1) {
-		const data = await vm.data();
-		if (data.state === "running") return data;
-		if (data.state === "stopped") {
-			throw new WorkspaceProvisionError({
-				operation: "create",
-				message: "Proof VM stopped before it became running",
-				providerWorkspaceId: vm.id,
-			});
-		}
-		await new Promise((resolve) => setTimeout(resolve, 1000));
-	}
-	throw new WorkspaceProvisionError({
-		operation: "create",
-		message: "Proof VM did not become running",
-		providerWorkspaceId: vm.id,
-	});
 }

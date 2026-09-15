@@ -1,108 +1,168 @@
 import { Effect } from "effect";
 import { WorkspaceId } from "#/domain/ids";
+import { workspaceSessionMachineRef } from "#/domain/project-workspace";
 import {
 	desktopEmbedUrl,
-	desktopFailedBecauseWorkspaceGone,
+	desktopHostname,
+	desktopPortIsListening,
 	desktopStartFailureReason,
-	START_HARNESS_BEFORE_DESKTOP,
+	desktopViewerUrlForMachine,
 	type WorkspaceDesktop,
 } from "#/domain/workspace-desktop";
 import {
 	DESKTOP_WALLPAPER_B64_PATH,
 	desktopWallpaperBase64,
 } from "#/server/adapters/freestyle/desktop-wallpaper";
-import { START_WORKSPACE_DESKTOP } from "#/server/adapters/freestyle/start-desktop";
 import {
-	deleteProofVmState,
-	readProofVmState,
-} from "#/server/proof/codex-login-state";
+	PROBE_WORKSPACE_DESKTOP,
+	START_WORKSPACE_DESKTOP,
+} from "#/server/adapters/freestyle/start-desktop";
+import { readyWorkspaceForOwner } from "#/server/adapters/workspaces";
 import type { WorkspaceMachines } from "./workspace-machines";
 
-export function readWorkspaceDesktop(
-	_machines: WorkspaceMachines,
-): Effect.Effect<WorkspaceDesktop> {
-	return Effect.succeed(currentDesktop);
-}
+export type DesktopScope = {
+	readonly userId: string;
+	readonly projectId?: string;
+};
 
-export function startWorkspaceDesktop(
+/**
+ * Recovers a running desktop on the prepared project VM, or returns the
+ * last in-memory status for this owner and project.
+ */
+export function readWorkspaceDesktop(
 	machines: WorkspaceMachines,
+	scope: DesktopScope,
 ): Effect.Effect<WorkspaceDesktop> {
 	return Effect.gen(function* () {
-		const vm = yield* Effect.tryPromise(() => readProofVmState());
-		if (!vm) {
+		const key = scopeKey(scope);
+		const cached = desktopFor(key);
+		if (cached.status === "running" && cached.viewerUrl) return cached;
+		const recovered = yield* recoverRunningDesktop(machines, scope);
+		if (recovered) {
+			desktops.set(key, recovered);
+			return recovered;
+		}
+		return cached;
+	});
+}
+
+/**
+ * Writes the ytimesy wallpaper, starts the shared X desktop, and maps noVNC.
+ * Chrome install on a cold VM can take several minutes.
+ */
+export function startWorkspaceDesktop(
+	machines: WorkspaceMachines,
+	scope: DesktopScope,
+): Effect.Effect<WorkspaceDesktop> {
+	return Effect.gen(function* () {
+		const workspace = yield* Effect.tryPromise(() =>
+			readyWorkspaceForOwner(scope.userId, scope.projectId),
+		);
+		const providerRef = workspaceSessionMachineRef(workspace);
+		if (!providerRef) {
 			return {
 				status: "failed" as const,
-				reason: START_HARNESS_BEFORE_DESKTOP,
+				reason: "Prepare a workspace before opening the desktop.",
 			};
 		}
-		currentDesktop = { status: "starting" };
+		const key = scopeKey(scope);
+		desktops.set(key, { status: "starting" });
+		yield* Effect.tryPromise(() =>
+			machines.ensureRunning(WorkspaceId(providerRef)),
+		);
 		yield* Effect.tryPromise(() =>
 			machines.writeTextFile(
-				WorkspaceId(vm.workspaceId),
+				WorkspaceId(providerRef),
 				DESKTOP_WALLPAPER_B64_PATH,
 				desktopWallpaperBase64(),
 			),
 		);
 		const started = yield* Effect.tryPromise(() =>
-			machines.exec(
-				WorkspaceId(vm.workspaceId),
-				START_WORKSPACE_DESKTOP,
-				300_000,
-			),
+			machines.exec(WorkspaceId(providerRef), START_WORKSPACE_DESKTOP, 300_000),
 		);
 		if (started.exitCode !== 0) {
-			currentDesktop = {
+			const failed: WorkspaceDesktop = {
 				status: "failed",
 				reason:
 					(started.stderr || started.stdout).trim() ||
 					"Desktop failed to start.",
 			};
-			return currentDesktop;
+			desktops.set(key, failed);
+			return failed;
 		}
-		const hostname = desktopHostname(vm.workspaceId);
-		try {
-			const origin = yield* Effect.tryPromise(() =>
-				machines.exposeHttp(WorkspaceId(vm.workspaceId), 6080, hostname),
-			);
-			currentDesktop = {
-				status: "running",
-				viewerUrl: desktopEmbedUrl(origin),
-				display: ":0",
-				message: "You and the agent share this desktop.",
-			};
-		} catch (cause) {
-			currentDesktop = {
-				status: "running",
-				viewerUrl: null,
-				display: ":0",
-				message: `Desktop is on display :0 but not reachable from the browser: ${desktopStartFailureReason(cause)}`,
-			};
-		}
-		return currentDesktop;
+		const exposed = yield* Effect.either(
+			Effect.tryPromise(() =>
+				machines.exposeHttp(
+					WorkspaceId(providerRef),
+					6080,
+					desktopHostname(providerRef),
+				),
+			),
+		);
+		const running: WorkspaceDesktop =
+			exposed._tag === "Right"
+				? {
+						status: "running",
+						viewerUrl: desktopEmbedUrl(exposed.right),
+						display: ":0",
+						message: "You and the agent share this desktop.",
+					}
+				: {
+						status: "running",
+						viewerUrl: desktopViewerUrlForMachine(providerRef),
+						display: ":0",
+						message:
+							exposed.left instanceof Error
+								? `Desktop is on display :0. Browser mapping reused the existing host: ${exposed.left.message}`
+								: "Desktop is on display :0. Browser mapping reused the existing host.",
+					};
+		desktops.set(key, running);
+		return running;
 	}).pipe(
-		Effect.catchAll((cause) =>
-			Effect.gen(function* () {
-				if (desktopFailedBecauseWorkspaceGone(cause)) {
-					yield* Effect.tryPromise(() => deleteProofVmState()).pipe(
-						Effect.catchAll(() => Effect.void),
-					);
-				}
-				currentDesktop = {
-					status: "failed",
-					reason: desktopStartFailureReason(cause),
-				};
-				return currentDesktop;
-			}),
-		),
+		Effect.catchAll((cause) => {
+			const failed: WorkspaceDesktop = {
+				status: "failed",
+				reason: desktopStartFailureReason(cause),
+			};
+			desktops.set(scopeKey(scope), failed);
+			return Effect.succeed(failed);
+		}),
 	);
 }
 
-let currentDesktop: WorkspaceDesktop = { status: "stopped" };
+function recoverRunningDesktop(
+	machines: WorkspaceMachines,
+	scope: DesktopScope,
+): Effect.Effect<WorkspaceDesktop | null> {
+	return Effect.gen(function* () {
+		const workspace = yield* Effect.tryPromise(() =>
+			readyWorkspaceForOwner(scope.userId, scope.projectId),
+		);
+		const providerRef = workspaceSessionMachineRef(workspace);
+		if (!providerRef) return null;
+		yield* Effect.tryPromise(() =>
+			machines.ensureRunning(WorkspaceId(providerRef)),
+		);
+		const probe = yield* Effect.tryPromise(() =>
+			machines.exec(WorkspaceId(providerRef), PROBE_WORKSPACE_DESKTOP, 15_000),
+		);
+		if (!desktopPortIsListening(`${probe.stdout}\n${probe.stderr}`))
+			return null;
+		return {
+			status: "running" as const,
+			viewerUrl: desktopViewerUrlForMachine(providerRef),
+			display: ":0" as const,
+			message: "You and the agent share this desktop.",
+		};
+	}).pipe(Effect.catchAll(() => Effect.succeed(null)));
+}
 
-function desktopHostname(workspaceId: string): string {
-	const slug = workspaceId
-		.replaceAll(/[^a-zA-Z0-9]/g, "")
-		.slice(-12)
-		.toLowerCase();
-	return `ytimesy-desk-${slug || "local"}.style.dev`;
+const desktops = new Map<string, WorkspaceDesktop>();
+
+function scopeKey(scope: DesktopScope) {
+	return `${scope.userId}:${scope.projectId ?? ""}`;
+}
+
+function desktopFor(key: string): WorkspaceDesktop {
+	return desktops.get(key) ?? { status: "stopped" };
 }

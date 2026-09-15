@@ -6,6 +6,7 @@ export interface ReasoningLevel {
 export interface SessionModel {
 	id: string;
 	label: string;
+	notice: string | null;
 	reasoning: {
 		levels: readonly [ReasoningLevel, ...ReasoningLevel[]];
 		defaultLevelId: string;
@@ -27,11 +28,16 @@ export function resolveReasoningLevel(
 }
 
 export function sessionModelsFromListed(
-	models: readonly { readonly id: string; readonly label: string }[],
+	models: readonly {
+		readonly id: string;
+		readonly label: string;
+		readonly notice?: string;
+	}[],
 ): SessionModel[] {
 	return models.map((model) => ({
 		id: model.id,
 		label: model.label,
+		notice: model.notice ?? null,
 		reasoning: null,
 		supportsFastMode: false,
 	}));

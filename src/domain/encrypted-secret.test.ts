@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-	decryptSecret,
-	encryptSecret,
-	secretHint,
-} from "./encrypted-secret";
+import { decryptSecret, encryptSecret, secretHint } from "./encrypted-secret";
 
 describe("encrypted secrets", () => {
 	it("round-trips plaintext and never puts it in the stored record", () => {

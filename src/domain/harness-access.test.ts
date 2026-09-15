@@ -6,6 +6,7 @@ import {
 } from "./agent-provider";
 import {
 	harnessAccess,
+	harnessRequiresAccountLogin,
 	offeredHarnessAccess,
 	selectedHarnessIsConnected,
 } from "./harness-access";
@@ -22,7 +23,7 @@ describe("harness access", () => {
 		expect(rows.map((row) => row.statusLabel)).toEqual([
 			"Not signed in",
 			"Not signed in",
-			"Not signed in",
+			"Not connected",
 		]);
 	});
 
@@ -37,6 +38,24 @@ describe("harness access", () => {
 		expect(rows[0]?.summary).toContain("saved workspace");
 	});
 
+	it("offers Sign in on Codex and Claude, and Connect on OpenCode", () => {
+		const rows = offeredHarnessAccess({ status: "disconnected" });
+		expect(rows.map((row) => row.subscriptionAction)).toEqual([
+			"sign_in",
+			"sign_in",
+			"connect",
+		]);
+		expect(rows.map((row) => row.subscriptionActionLabel)).toEqual([
+			"Sign in",
+			"Sign in",
+			"Connect",
+		]);
+		expect(rows[2]?.statusLabel).toBe("Not connected");
+		expect(rows[2]?.summary).toMatch(/No account is required/);
+		expect(harnessRequiresAccountLogin("opencode")).toBe(false);
+		expect(harnessRequiresAccountLogin("claude")).toBe(true);
+	});
+
 	it("does not treat a saved key as a connected harness", () => {
 		const claude = harnessAccess(
 			CLAUDE_PROVIDER,
@@ -45,7 +64,8 @@ describe("harness access", () => {
 		);
 		expect(claude.muted).toBe(true);
 		expect(claude.statusLabel).toBe("Key saved");
-		expect(claude.summary).toContain("not connected");
+		expect(claude.summary).toContain("stored");
+		expect(claude.subscriptionAction).toBe("sign_in");
 		expect(
 			selectedHarnessIsConnected({ status: "disconnected" }, "claude"),
 		).toBe(false);
@@ -76,6 +96,49 @@ describe("harness access", () => {
 		expect(harnessAccess(OPENCODE_PROVIDER, connection, null).muted).toBe(true);
 		expect(selectedHarnessIsConnected(connection, "codex")).toBe(true);
 		expect(selectedHarnessIsConnected(connection, "claude")).toBe(false);
+	});
+
+	it("unmutes OpenCode as connected without a login", () => {
+		const connection = {
+			status: "authenticated" as const,
+			provider: "opencode" as const,
+			authMode: "local" as const,
+			planType: null,
+			email: null,
+		};
+		expect(harnessAccess(OPENCODE_PROVIDER, connection, null)).toMatchObject({
+			readiness: "ready",
+			muted: false,
+			statusLabel: "Connected",
+			summary: "Running on this workspace",
+			subscriptionAction: null,
+		});
+		expect(selectedHarnessIsConnected(connection, "opencode")).toBe(true);
+	});
+
+	it("keeps Anthropic's URL on the authorizing Claude row", () => {
+		const access = harnessAccess(
+			CLAUDE_PROVIDER,
+			{
+				status: "awaiting_device_code",
+				provider: "claude",
+				loginId: "claude-auth",
+				verificationUrl:
+					"https://claude.ai/oauth/authorize?code=true&client_id=abc",
+				userCode: "",
+			},
+			null,
+		);
+		expect(access).toMatchObject({
+			readiness: "authorizing",
+			muted: true,
+			subscriptionActionLabel: "Open Anthropic",
+			userCode: "",
+			verificationUrl:
+				"https://claude.ai/oauth/authorize?code=true&client_id=abc",
+		});
+		expect(access.summary).toMatch(/Anthropic/);
+		expect(access.summary).toMatch(/Terminal/);
 	});
 
 	it("keeps the device code on the authorizing Codex row", () => {

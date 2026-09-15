@@ -1,6 +1,6 @@
 # ytimesy v0
 
-Status: UI foundation complete; Freestyle/Codex integration proof recorded. Domain: ytimesy.com. Updated: 2026-09-14.
+Status: identity and GitHub onboarding work locally; Freestyle/Codex integration proof is recorded and the workspace UI can send Codex turns. Claude Code sign-in and OpenCode connect (`opencode serve`, no account login) dispatch on the prepared VM. Domain: ytimesy.com. Updated: 2026-09-15.
 
 ## Goal and proof
 
@@ -38,7 +38,7 @@ Codex onboarding target: Connect Codex → copy a one-time code → authorize on
 
 Claude onboarding target: run unmodified Claude Code in the user's workspace VM and complete Anthropic's own sign-in in that binary. Each end user brings their own Claude subscription or API key. Do not collect Claude.ai passwords in ytimesy chat, wrap Claude.ai login in the ytimesy origin, or bill Anthropic usage through ytimesy.
 
-OpenCode onboarding target: install OpenCode in the workspace and connect through its official server (`opencode serve`). Default path is the user's OpenCode Zen account so they can use Zen's currently free models without a Codex or Claude Code subscription; they may also attach their own provider keys or local models. Load model names from the connected agent. Some Zen free models are time-limited and may use prompts for training — surface that from the provider, do not hide it. Do not store Zen keys in shared images or bill Zen through ytimesy.
+OpenCode onboarding target: install OpenCode in the workspace and connect through its official server (`opencode serve`). OpenCode does not require an account login. Optional provider or Zen keys may be attached afterward. Load model names from the connected agent. Some listed free models are time-limited and may use prompts for training — surface that from the provider, do not hide it. Do not store Zen keys in shared images or bill Zen through ytimesy.
 
 ## Stack decisions
 
@@ -50,15 +50,49 @@ OpenCode onboarding target: install OpenCode in the workspace and connect throug
 | Backend operations | Effect TS from day one |
 | Workspace runtime | Freestyle full Linux VMs |
 | Environment preparation | Rigkit; verify programmatic and web-auth integration |
-| Durable application records | Managed PostgreSQL; provider not chosen |
+| Durable application records | Supabase PostgreSQL; Free plan for initial development |
 | GitHub | GitHub App and Octokit |
 | UI | Tailwind and shadcn/ui preset `b1D0dv72` (Radix Mira, neutral, Inter) |
 | Terminal | xterm.js connected to the workspace PTY |
-| Jobs | Durable queue and separately runnable workers; provider not chosen |
+| Jobs | pg-boss in PostgreSQL schema `job_queue`; separately runnable `pnpm worker` |
 | Live transport | Reconnectable agent events; WebSockets for terminal; exact transport to validate |
 | Large artifacts | Object storage; provider not chosen |
 
 Hosting is still open. Prefer compatible, existing integrations after a small proof. No Fastify service is required for ordinary web endpoints. TanStack Start handles those; separate workers handle long-lived operations. Pin verified package versions and use a lockfile. Current docs label Start a release candidate; account for that when validating deployment.
+
+## Supabase and GitHub workflow
+
+Decision recorded 2026-09-13: use Supabase PostgreSQL on the Free plan initially. Better Auth remains the application authentication system. Access PostgreSQL from server-side modules through `DATABASE_URL`; Supabase Auth and the Data API are not required by this architecture.
+
+### Integration settings
+
+The intended Supabase GitHub integration configuration is:
+
+| Setting | Value |
+| --- | --- |
+| Repository | `y-times-y/ytimesy` |
+| Working directory | `.` (parent of the root `supabase/` directory) |
+| Production branch | `master` |
+| Automatic branching | Off initially; preview databases have separate pricing/plan requirements |
+| Deploy to production | Off until migrations and validation are working and the user enables deployment |
+
+This integration manages database changes from this repository. It is separate from the ytimesy GitHub App that grants users access to their coding repositories. Linking the repository alone is not authorization to enable automatic production deployment.
+
+### Migration ownership
+
+Initialize and commit `supabase/config.toml` and ordered SQL files under `supabase/migrations/` when implementing the database. The CLI configuration is initialized. Migrations `20260913010000_enable_automatic_rls.sql` and `20260913193000_identity_and_projects.sql` are applied. The latter contains Better Auth, encrypted GitHub connections, single-use OAuth state, and personal project records. Capture any existing application schema before introducing migrations; inspect the actual database rather than assuming it is empty. Treat migrations as the authoritative schema history, including Better Auth tables and job-system setup. pg-boss creates and migrates its own tables inside the `job_queue` schema at process start; application migrations only create that schema and revoke Data API access. Do not copy pg-boss DDL into `supabase/migrations/`. Account for libraries that create or migrate their own schemas so two independent mechanisms do not race or diverge.
+
+For a schema change, add a new migration, verify it against a disposable development database, and review it with the application changes. Preserve already-applied migrations. Keep production data and credentials out of migration/seed files. Preview branches rebuild schema from committed migrations and optional seeds; they do not automatically copy production schema or data.
+
+Before enabling automatic production deployment, validate clean schema creation and upgrades from the preceding schema, establish a required migration check in GitHub, and document recovery for failed migrations. Supabase's production deployment option applies new migrations and configured functions/storage buckets when commits reach the configured production branch. Treat enabling it as a separate deployment decision.
+
+### Connection and setup status
+
+For initial local development and the persistent worker, request the dashboard's Session pooler URL (port 5432) in the ignored `.env` as `DATABASE_URL`; this supports IPv4 and session state. Use a direct connection where required by migration tooling and where network connectivity permits. Configure TLS and bounded connection pools explicitly. Keep credentials server-only; never commit or print connection URLs.
+
+Supabase CLI 2.117.0 is authenticated and linked to `exampledevprojectref`. The initial public schema was empty. Migration `20260913010000_enable_automatic_rls.sql` was applied with `supabase db push --linked`. A live create-table probe confirmed automatic RLS; the probe transaction was rolled back. The ignored `.env` now uses the project's session pooler with `sslmode=verify-full` and `sslrootcert=.secrets/supabase-ca.crt`; node-postgres connectivity was verified. The Supabase CA certificate is local and ignored; configure a trusted CA path explicitly in deployment. RLS enablement is not a substitute for application tenancy checks and policies, especially for privileged database roles. The dashboard GitHub integration remains unverified. Confirm their actual state before reporting setup complete. The intended project security settings are Data API off, automatic table exposure off, and automatic RLS enabled if available; migrations must still define the application's authorization and database grants.
+
+Reference: [Supabase GitHub integration](https://supabase.com/docs/guides/deployment/branching/github-integration), [PostgreSQL connections](https://supabase.com/docs/guides/database/connecting-to-postgres). Recheck feature eligibility and pricing before enabling preview branches.
 
 ## Modules and dependency direction
 
@@ -100,7 +134,7 @@ Million-developer scalability is an architectural ambition, not a verified launc
 - Preserve durable event ordering/cursors for reconnect; distinguish cached UI data from the authoritative session record.
 - Effect retries and finalizers do not replace durable recovery or orphan reconciliation.
 - Cancellation of a run is distinct from deleting its workspace VM. Deleting one agent VM must not delete the project snapshot or other agents' VMs.
-- Snapshot credentials only within explicitly isolated user state; shared base images contain no user secrets. Define logout, deletion, and credential-expiry behavior. After ChatGPT login, capture a private Freestyle VM snapshot of that user's guest (disk includes `~/.codex/auth.json`). Store the snapshot id in tenant-scoped records later; proof CLI stores it in gitignored `.ytimesy/codex-auth-snapshot.json`. Do not mark that snapshot public or bake it into a shared base image. Shared images may later include tools such as bubblewrap, but never user credentials.
+- Snapshot credentials only within explicitly isolated user state; shared base images contain no user secrets. Define logout, deletion, and credential-expiry behavior. After ChatGPT login, capture a private Freestyle VM snapshot of that user's guest (disk includes `~/.codex/auth.json`). The signed-in app stores that snapshot id in `agent_account`; proof CLI still uses gitignored `.ytimesy/codex-auth-snapshot.json`. Do not mark that snapshot public or bake it into a shared base image. Shared images may later include tools such as bubblewrap, but never user credentials.
 - GitHub authority is repository-scoped and brokered wherever practical. Untrusted repository code must not gain platform authority.
 - App previews and terminals require access control. Browser preview content is untrusted and must not inherit application-origin privileges.
 
@@ -113,7 +147,7 @@ Scaffold TanStack Start with TypeScript, lint/typecheck/build scripts, and a cle
 Verify official Codex remote login and app-server protocol in a user-isolated Freestyle workspace. Verify official Claude Code in the same class of workspace with user-owned credentials. Verify OpenCode `serve` and that model/list includes whatever Zen currently reports as free, without inventing names. Verify Rigkit installation/setup operations and authentication interaction. Establish supported versions and cleanup behavior. User subscription access is not interchangeable with a general inference API.
 
 ### 3. Identity, records, and GitHub
-Integrate Better Auth and select Postgres hosting, implement migrations and tenant-scoped access, install GitHub App, and list authorized repositories. Save project/branch selection. Configuration requiring user/provider account access may remain a clearly reported blocker, not mocked success.
+Integrate Better Auth with Supabase PostgreSQL, implement migrations and tenant-scoped access, install GitHub App, and list authorized repositories. Save project/branch selection. Configuration requiring user/provider account access may remain a clearly reported blocker, not mocked success.
 
 ### 4. Durable workspace preparation
 Implement queued creation, setup logs, retries, recovery, and state transitions. Prepare the real repo and run its app. Keep credentials out of source and logs.
@@ -144,12 +178,14 @@ Recheck versioned APIs before implementing. Validate subscription connection usi
 ## Execution status
 
 - Research and product decisions captured; coding skill installed.
-- TanStack Start foundation and workspace empty states implemented; Diff / Terminal / Preview selectors work.
-- Freestyle VM create/exec/delete and Codex ChatGPT device-code login are proven in an isolated VM. See milestone 2 evidence. `model/list` returned the connected agent's models. `turn/start` completed on listed model `gpt-5.3-codex-spark` with ChatGPT subscription access (not API-key billing). A private Freestyle snapshot of that login boots later VMs already authenticated.
-- Effect services and adapters exist for that proof. TanStack Query is still unused. Sending remains disabled in the UI.
-- Better Auth is selected; authentication is not implemented.
-- No deployed app, durable project records, GitHub listing, terminal, preview, or publication flow yet.
-- Continue with milestone 3: identity, tenant-scoped records, and GitHub App repository access. The workspace UI now connects Codex through the existing app-server daemon (not ACP), loading `model/list` into the composer after a private snapshot boot. Sending a task reuses that daemon's inbox. GitHub listing, terminal, preview, and publication remain unimplemented.
+- Research and product decisions captured; coding skill installed.
+- TanStack Start foundation and workspace empty states implemented; Diff / Terminal / Desktop selectors work.
+- Better Auth GitHub sign-in, encrypted GitHub App connections, repository/branch selection, and owner-scoped project records are implemented and verified locally.
+- Durable per-user workspace records, pg-boss jobs in the `job_queue` schema, GitHub disconnect, and Codex account persistence (snapshot id sealed, never returned to the browser) are implemented. Adding a project queues workspace preparation. The worker clones the authorized branch and installs lockfile dependencies through a `WorkspaceRuntime` capability. The worker uses Freestyle when `FREESTYLE_API_KEY` is set; otherwise it stays on the unconfigured host. Rigkit is not embedded: `@rigkit/sdk` 0.3.0 requires a Bun daemon, so preparation is Freestyle clone-and-install.
+- Freestyle VM create/exec/delete and Codex ChatGPT device-code login are proven in an isolated VM. The workspace UI connects Codex through the existing app-server daemon (not ACP) on the signed-in user's prepared workspace VM, loading `model/list` into the composer after that machine is running. Sending a task reuses that daemon's inbox. Rigkit was not embedded. The Terminal tab attaches xterm.js to a reconnectable workspace PTY through a same-origin WebSocket proxy. Create pull request commits and pushes the live checkout, then opens a draft PR. Claude Code sign-in runs unmodified `claude` on the prepared VM. OpenCode connects through `opencode serve` with no account login. Live dogfood of those two harnesses is still pending a ready checkout.
+
+Live terminal check (2026-09-14): `openWorkspacePty` on a running VM created slug `main`, echoed `ytimesy-terminal-proof`, and `attach` replayed that output; a second open returned `created: false`. An unauthenticated `/api/terminal` WebSocket returned `Sign in required.` The product workspace in this environment is `failed` at clone (`could not read Username for https://github.com`); there was no ready checkout here for live publish dogfood.
+- Continue by connecting durable workspace jobs to the Freestyle adapters, storing Codex snapshot ids per signed-in user, and validating Rigkit.
 
 ## Cloud-agent handoff
 
@@ -159,7 +195,7 @@ Use ytimesy to work on its own repository with a real cloud coding agent. Preser
 
 ### Current evidence and limits
 
-The workspace UI is still honest empty states. Model, reasoning, and Fast options still require a connected agent; sending stays disabled. File attachments are local draft state. Diff, Terminal, and Preview are UI shells.
+The workspace UI can load Codex models and send turns through the app-server daemon on the signed-in user's prepared workspace VM. Better Auth, PostgreSQL records, GitHub repository authorization, durable workspace jobs, and per-user agent-account records also work on this branch. The Terminal tab proxies a reconnectable PTY on that VM. Create pull request commits and pushes from the live checkout, using a workspace branch when the project is on the default branch, then opens a draft PR. Closing the browser leaves the VM running; reload resumes the same machine, PTY slug `main`, Codex login, and a desktop already listening on 6080. Claude Code sign-in runs unmodified `claude auth login --claudeai` on that VM and opens Anthropic's own URL; a stored API key is applied only after `claude auth status` accepts it. OpenCode starts official `opencode serve` with no account login, loads model names plus provider notices from that server, and may attach an optional provider key. Live dogfood of Claude and OpenCode is still pending a ready checkout. Conversation items are still process-local to the web server.
 
 Milestone 2 live check (2026-09-13):
 
@@ -172,8 +208,6 @@ Milestone 2 live check (2026-09-13):
 - App-server logs a missing host `bubblewrap` and falls back to the bundled helper. That is a VM image concern for later shared base snapshots. Spark `turn/start` completed despite that warning. User ChatGPT credentials are snapshotted separately and privately (`vm.snapshot`, then `vms.create({ snapshotId })`), never into a public/shared image.
 - After ChatGPT login, `pnpm prove:codex-login:status` (or `:snapshot`) captures that private snapshot. Later `pnpm prove:codex-login` boots from `.ytimesy/codex-auth-snapshot.json` and resumes Codex instead of starting a new device-code flow. `prove:codex-login:cleanup` deletes the running VM and keeps the snapshot. `codex login status` may print `Logged in using ChatGPT` on stderr; treat that as authenticated.
 - Rigkit `@rigkit/sdk` / `@rigkit/provider-freestyle` `0.3.0` documents API-key auth as `freestyle.provider({ apiKey })`. It was not embedded: the SDK targets a Bun project daemon (`@effect/platform-bun`).
-
-Better Auth, PostgreSQL records, GitHub authorization, durable jobs, live terminal/preview transports, and publication remain unimplemented. This environment currently has a PostgreSQL URL and GitHub App credentials; hosting, queue, and object-storage providers are still undecided product choices.
 
 ### Decisions to preserve
 
@@ -191,10 +225,38 @@ Use the installed self-documenting-code skill. Keep routes thin and put provider
 
 ### Local setup and verification
 
-Run `pnpm install --frozen-lockfile`, then `pnpm dev` (port 3000). To match the existing local browser, run `pnpm exec vite dev --host 127.0.0.1 --port 3001`. Run `pnpm lint`, `pnpm typecheck`, `pnpm test`, and `pnpm build` before handing off structural changes. `pnpm prove:codex-login` starts a live ChatGPT device-code login unless a private auth snapshot already exists (`FREESTYLE_API_KEY` required). After authorization, `pnpm prove:codex-login:status` records that snapshot. Use agent-browser for UI checks. Screenshots and credentials must remain out of Git.
+Run `pnpm install --frozen-lockfile`, then `pnpm dev` (port 3000). To match the existing local browser, run `pnpm exec vite dev --host 127.0.0.1 --port 3001`. Run `pnpm worker` in a second process to drain workspace-preparation jobs. Run `pnpm lint`, `pnpm typecheck`, `pnpm test`, and `pnpm build` before handing off structural changes. `pnpm prove:codex-login` starts a live ChatGPT device-code login unless a private auth snapshot already exists (`FREESTYLE_API_KEY` required). After authorization, `pnpm prove:codex-login:status` records that snapshot. Use agent-browser for UI checks. Screenshots and credentials must remain out of Git.
 
 ### Next step
 
-A private Codex ChatGPT snapshot now exists for this environment; later proof VMs should boot from it instead of repeating device-code login. The workspace UI connects that snapshot through Codex app-server (`thread/start` / `turn/start`, `model/list`) rather than ACP. `turn/start` completed on listed `gpt-5.3-codex-spark`. Do not silently substitute API-key billing for ChatGPT; BYOK is an explicit harness option and keys are encrypted at rest. Next: Better Auth with tenant-scoped PostgreSQL records and GitHub App repository listing. Revisit Rigkit as the environment-prep adapter only if it can run as a Node worker without substituting a different VM provider.
+Identity and authorized GitHub repository selection work locally. Durable workspace records queue `prepare-workspace`; the worker provisions a workspace VM when `FREESTYLE_API_KEY` is set, cloning the authorized branch and installing from the lockfile. New machines boot from the signed-in user's sealed Codex snapshot when one exists. Codex sign-in and turns use that prepared VM; after ChatGPT login the snapshot id is stored with `saveConnectedAgentAccount` rather than a shared `.ytimesy/` file. Terminal, desktop reconnect, and explicit commit/push/PR use that same `provider_ref`. Claude Code sign-in and OpenCode connect (`opencode serve`, no account login) now dispatch on that machine. Rigkit remains unavailable in the Node worker. Next: dogfood the loop on `y-times-y/ytimesy`.
 
-Provider credentials are not committed. Hosting, queue, and object-storage providers remain undecided. Do not assume a local server or an unpushed commit is available to a cloud agent: this repository must be made accessible to that environment first.
+Provider credentials and account-side configuration are not included in the repository. Supabase is selected for PostgreSQL. Hosting, queue, and object-storage providers remain undecided. Do not assume a local server or an unpushed commit is available to a cloud agent: this repository must be made accessible to that environment first.
+
+
+### Integration proof progress — 2026-09-13
+
+The operator runner and recovery commands are in [scripts/cloud-proof/README.md](scripts/cloud-proof/README.md). Use that guide when continuing the first live Codex task. `pnpm cloud:proof status` refreshes actual state; this record is not proof that an ephemeral VM still exists.
+
+Verified live: the configured Freestyle API key lists VMs and creates `ytimesy-codex-proof` from `freestyle/ubuntu-sm` (2 CPU, 4 GiB RAM). Remote Node 24.20.0 and Git 2.43.0 work. Codex 0.152.1 installed under the guest ubuntu user's directory. Its device-auth flow returns an OpenAI authorization code. The app-server initialize/account-read flow works; the test correctly fails before inference while signed out. Het completed device authorization. A live turn using the discovered default model `gpt-5.6-sol` completed and wrote exactly `ytimesy cloud proof` plus a newline to `proof.txt`. The runner read the file independently and verified its exact contents. No API key fallback was used.
+
+The runner performs a bounded file-edit proof after login and verifies the resulting file. The VM has a 24-hour deletion deadline and 30-minute per-run cap. The guest authentication state belongs only to this isolated proof. Rigkit execution and process reconnect remain unverified. This proof does not wire the UI or implement durable production workflows.
+
+Pause/resume was verified after the successful turn: ChatGPT login remained valid, and the proof file retained its exact content. Final VM state was confirmed `paused`. The 24-hour deletion deadline remains active; this is a disposable proof, not durable user storage. Lint, TypeScript, and production build passed. No commit or deployment was made.
+
+
+### Identity and repository onboarding — 2026-09-13
+
+Implemented Better Auth 1.7.4 with PostgreSQL-backed sessions and rate limiting. GitHub OAuth App sign-in requests only `user:email`; its pre-existing callback remains configured. The new exact local callback is `http://127.0.0.1:3001/api/auth/callback/github`. GitHub App repository connection is separate, with callback `http://127.0.0.1:3001/api/github/callback`, user-bound single-use state, PKCE, matching GitHub identity, and encrypted tokens. Refresh rotation is serialized with a database row lock; revoked access returns a reconnection error. Configure production HTTPS callbacks before deployment.
+
+Repository discovery uses the GitHub App user token, so GitHub enforces the intersection of user and installation access. Only unsuspended installations with write access and writable, nonarchived repositories are offered. Project creation repeats this authorization check and verifies the branch against GitHub before saving. A personal tenant is the Better Auth user for v0; project queries and credential queries always include its ID. Table RLS and revoked Data API grants deny client access. The server's privileged database connection still requires these explicit ownership checks; RLS is not being represented as protection against bugs in privileged server code.
+
+Live evidence: Het signed in through GitHub, authorized the ytimesy Cloud app, selected `y-times-y/ytimesy` and `master`, saved the project, and saw it restored after a browser reload. The installation returned only that repository. Supabase schema verification found no missing Better Auth tables/columns. Signed-out project access returned 401; a cross-origin mutation returned 403. The client production bundle contained none of the configured secret values. This identity branch now also includes the Task initiation session UI: Codex composer, harness picker, Diff from file changes, and Desktop. Production VM provisioning from the signed-in app, live terminal transport, and Claude/OpenCode sign-in remain incomplete.
+
+Validation: tests cover migration/RLS, owner isolation, missing owners, request origins, OAuth state ownership/replay/expiry, mismatched GitHub accounts, unauthorized repositories, missing branches, workspace duplicate-provision policy, token redaction, and sealed agent-account snapshot ids. These use a disposable PGlite database and mocked GitHub responses; the real onboarding evidence above is separate. Typecheck, lint, and production build pass. Agent-browser verified the signed-out screen at 320px; authenticated flow was verified in Comet. Real-device Safari and expired-token refresh against GitHub remain untested. Better Auth's migration inspector warns about its own generated bigint rate-limit field (`lastRequest`); it reports no missing schema and live auth works.
+
+Run `pnpm dev` for the environment-loaded server on port 3001 and `pnpm worker` to drain prepare-workspace jobs. GitHub App `[REDACTED]` is installed on organization `y-times-y` with selected access to this repository. The database migration was pushed with the existing database password supplied to the CLI through its environment after its temporary-login-role API failed. Do not expose that password in process arguments or commit it.
+
+### Durable workspace records and identity follow-through — 2026-09-13
+
+Added owner-scoped `workspace`, `workspace_event`, and `agent_account` tables plus the `job_queue` schema for pg-boss. Saving a project queues `prepare-workspace`. The worker claims one workspace per project, records a provider ref before further work, reuses a machine found by slug after a timeout, clones with the GitHub token only in git config env, and installs from the detected lockfile. Snapshot ids for Codex are sealed per user and omitted from `/api/account`. GitHub disconnect deletes stored App credentials without signing the user out. Freestyle VM creation is behind `WorkspaceRuntime`; the worker uses `FreestyleWorkspaceRuntime` when `FREESTYLE_API_KEY` is set.

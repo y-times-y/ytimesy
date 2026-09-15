@@ -1,10 +1,6 @@
 import { PanelLeft, Plus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import {
-	type PublicGitHubProject,
-	type PublicProjectPicker,
-	projectPickerLabel,
-} from "#/domain/github-project";
+import type { Project } from "#/domain/projects";
 import {
 	newChatIsActive,
 	type SidebarChat,
@@ -12,33 +8,38 @@ import {
 } from "#/domain/sidebar-chats";
 
 interface ProjectSidebarProps {
+	projects: Project[];
+	projectsLoading: boolean;
+	selectedProjectId?: string;
+	onSelectProject: (id: string) => void;
 	expanded: boolean;
 	onToggle: () => void;
-	picker: PublicProjectPicker | null;
+	onAddProject: () => void;
 	chats: readonly SidebarChat[];
 	onNewChat: () => void;
-	onFocusProject: () => void;
+	onSignOut: () => void;
 }
 
 export function ProjectSidebar({
+	projects,
+	projectsLoading,
+	selectedProjectId,
+	onSelectProject,
 	expanded,
 	onToggle,
-	picker,
+	onAddProject,
 	chats,
 	onNewChat,
-	onFocusProject,
+	onSignOut,
 }: ProjectSidebarProps) {
 	const collapseButton = useRef<HTMLButtonElement>(null);
 	const railLogo = useRef<HTMLButtonElement>(null);
 	const [hovered, setHovered] = useState(false);
 	const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const visible = expanded || hovered;
-	const selected = selectedProject(picker);
-	const projectLabel = selected
-		? projectPickerLabel(selected, picker?.projects ?? [])
-		: null;
+	const selected = projects.find((project) => project.id === selectedProjectId);
 	const emptyCopy = sidebarChatsEmptyCopy({
-		loading: picker === null,
+		loading: projectsLoading,
 		projectSelected: Boolean(selected),
 	});
 	const newChatActive = newChatIsActive({
@@ -96,7 +97,7 @@ export function ProjectSidebar({
 			<aside
 				id="project-sidebar"
 				className="project-sidebar"
-				aria-label="Chats"
+				aria-label="Projects and chats"
 				inert={!visible}
 				aria-hidden={!visible}
 				onKeyDown={(event) => {
@@ -130,15 +131,42 @@ export function ProjectSidebar({
 						<PanelLeft size={16} />
 					</button>
 				</div>
-				<button
-					type="button"
-					className="sidebar-chat"
-					data-selected={projectLabel ? true : undefined}
-					onClick={onFocusProject}
-				>
-					{projectLabel ??
-						(picker === null ? "Loading repository…" : "Select a repository")}
-				</button>
+				<div className="sidebar-section">
+					<span>Projects</span>
+					<button
+						type="button"
+						className="panel-toggle"
+						aria-label="Add project"
+						title="Add project"
+						onClick={onAddProject}
+					>
+						<Plus size={16} />
+					</button>
+				</div>
+				{projects.length ? (
+					<ul className="project-list">
+						{projects.map((project) => (
+							<li key={project.id}>
+								<button
+									type="button"
+									className="sidebar-chat"
+									aria-current={
+										project.id === selectedProjectId ? "page" : undefined
+									}
+									onClick={() => onSelectProject(project.id)}
+								>
+									{project.fullName}
+								</button>
+							</li>
+						))}
+					</ul>
+				) : (
+					<p className="sidebar-empty">
+						{projectsLoading
+							? "Loading repositories…"
+							: "No repositories connected."}
+					</p>
+				)}
 				<div className="sidebar-section">
 					<span>Chats</span>
 					<button
@@ -165,6 +193,13 @@ export function ProjectSidebar({
 						))}
 					</ul>
 				)}
+				<button
+					type="button"
+					className="panel-toggle account-signout"
+					onClick={onSignOut}
+				>
+					Sign out
+				</button>
 			</aside>
 			<nav
 				className="sidebar-rail"
@@ -202,16 +237,5 @@ export function ProjectSidebar({
 				</button>
 			</nav>
 		</div>
-	);
-}
-
-function selectedProject(
-	picker: PublicProjectPicker | null,
-): PublicGitHubProject | null {
-	if (!picker?.selectedProjectId) return null;
-	return (
-		picker.projects.find(
-			(project) => project.projectId === picker.selectedProjectId,
-		) ?? null
 	);
 }

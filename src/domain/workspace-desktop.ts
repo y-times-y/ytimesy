@@ -37,3 +37,19 @@ export function desktopCanBeControlled(desktop: WorkspaceDesktop): boolean {
 export function desktopEmbedUrl(origin: string): string {
 	return `${origin.replace(/\/$/, "")}/vnc.html?autoconnect=1&resize=off&reconnect=1`;
 }
+
+export function desktopHostname(providerRef: string) {
+	const slug = providerRef
+		.replaceAll(/[^a-zA-Z0-9]/g, "")
+		.slice(-12)
+		.toLowerCase();
+	return `ytimesy-desk-${slug || "local"}.style.dev`;
+}
+
+export function desktopViewerUrlForMachine(providerRef: string) {
+	return desktopEmbedUrl(`https://${desktopHostname(providerRef)}`);
+}
+
+export function desktopPortIsListening(output: string) {
+	return output.includes("YTIMESY_DESKTOP_UP");
+}
