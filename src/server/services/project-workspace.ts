@@ -18,7 +18,7 @@ import {
 } from "#/server/adapters/freestyle/clone-project";
 import { readGitHubAppCredentials } from "#/server/adapters/github/credentials";
 import { listProjects, projectForOwner } from "#/server/adapters/projects";
-import { liveGitHubProjectDeps, loadProjectCheckout } from "./github-projects";
+import { liveGitHubProjectDeps } from "./github-projects";
 import type { DesktopScope } from "./workspace-desktop";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -30,21 +30,17 @@ import type { WorkspaceMachines } from "./workspace-machines";
 export function ensureProjectCheckout(
 	machines: WorkspaceMachines,
 	workspaceId: WorkspaceId,
-	checkout?: ProjectCheckout | null,
+	checkout: ProjectCheckout | null,
 ): Effect.Effect<string | null, Error> {
 	return Effect.gen(function* () {
-		const resolved =
-			checkout === undefined
-				? yield* loadProjectCheckout(liveGitHubProjectDeps())
-				: checkout;
-		if (!resolved) {
+		if (!checkout) {
 			const home = yield* guestHome(machines, workspaceId);
 			yield* writeDeveloperInstructions(machines, workspaceId, home);
 			return null;
 		}
 		const deps = liveGitHubProjectDeps();
 		const home = yield* guestHome(machines, workspaceId);
-		const destination = projectCheckoutPath(home, resolved.name);
+		const destination = projectCheckoutPath(home, checkout.name);
 		const existing = yield* Effect.tryPromise(() =>
 			machines.exec(
 				workspaceId,
@@ -67,7 +63,7 @@ export function ensureProjectCheckout(
 		const token = yield* Effect.tryPromise(() =>
 			deps.github.installationToken({
 				credentials,
-				installationId: resolved.installationId,
+				installationId: checkout.installationId,
 			}),
 		);
 		yield* Effect.tryPromise(() =>
@@ -77,9 +73,9 @@ export function ensureProjectCheckout(
 			machines.exec(
 				workspaceId,
 				cloneSelectedProjectScript({
-					owner: resolved.owner,
-					name: resolved.name,
-					branch: resolved.branch,
+					owner: checkout.owner,
+					name: checkout.name,
+					branch: checkout.branch,
 					destination,
 				}),
 				180_000,
@@ -90,7 +86,7 @@ export function ensureProjectCheckout(
 				machines.exec(workspaceId, `rm -f ${PROJECT_TOKEN_PATH}`, 10_000),
 			).pipe(Effect.catchAll(() => Effect.void));
 			throw new Error(
-				`Could not clone ${resolved.fullName}: ${redactInstallationToken((cloned.stderr || cloned.stdout).trim() || "git clone failed.")}`,
+				`Could not clone ${checkout.fullName}: ${redactInstallationToken((cloned.stderr || cloned.stdout).trim() || "git clone failed.")}`,
 			);
 		}
 		yield* writeDeveloperInstructions(machines, workspaceId, destination);

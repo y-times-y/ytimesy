@@ -11,6 +11,7 @@ import { WorkspaceId } from "#/domain/ids";
 import {
 	PROJECT_CONTEXT_PATH,
 	projectContextDocument,
+	promptTextWithProjectContext,
 	relatedTracesForTask,
 } from "#/domain/project-context";
 import {
@@ -91,7 +92,7 @@ export async function bindAgentSessionMachine(
 			),
 	});
 	if (executed.planKind !== "resume") {
-		await injectProjectContext(machines, executed.providerRef, {
+		await syncProjectContextForTask(machines, executed.providerRef, {
 			projectId: input.projectId,
 			task: input.task ?? session.title,
 		});
@@ -205,21 +206,26 @@ export async function executeSessionMachinePlan(input: {
 	return { providerRef: copied, planKind: plan.kind };
 }
 
-async function injectProjectContext(
-	machines: WorkspaceMachines,
+export async function syncProjectContextForTask(
+	machines: Pick<WorkspaceMachines, "writeTextFile">,
 	providerRef: string,
 	input: { readonly projectId: string; readonly task: string },
-) {
+): Promise<string> {
 	const briefing = await loadProjectBriefing(input.projectId);
 	const traces = relatedTracesForTask(
 		await listProjectTraces(input.projectId),
 		input.task,
 	);
 	const document = projectContextDocument({ briefing, traces });
-	if (!document) return;
-	await machines.writeTextFile(
-		WorkspaceId(providerRef),
-		PROJECT_CONTEXT_PATH,
-		`${document}\n`,
-	);
+	if (document) {
+		await machines.writeTextFile(
+			WorkspaceId(providerRef),
+			PROJECT_CONTEXT_PATH,
+			`${document}\n`,
+		);
+	}
+	return promptTextWithProjectContext({
+		task: input.task,
+		document,
+	});
 }

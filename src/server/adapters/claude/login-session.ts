@@ -455,7 +455,11 @@ function listedModels(value: unknown): readonly ListedModel[] {
 export function submitClaudeTask(
 	machines: WorkspaceMachines,
 	workspaceId: WorkspaceId,
-	input: { readonly text: string; readonly modelId: string },
+	input: {
+		readonly text: string;
+		readonly modelId: string;
+		readonly promptText?: string;
+	},
 ): Effect.Effect<ClaudeAuthStatus> {
 	return Effect.gen(function* () {
 		const current = yield* refreshClaudeAuthStatus(machines, workspaceId);
@@ -482,7 +486,7 @@ export function submitClaudeTask(
 		const result = yield* Effect.tryPromise(() =>
 			machines.exec(
 				workspaceId,
-				`${keyPrefix}${posixShellQuoted(claudeBin)} -p --output-format text --dangerously-skip-permissions --model ${posixShellQuoted(input.modelId)} ${posixShellQuoted(input.text)}`,
+				`${keyPrefix}${posixShellQuoted(claudeBin)} -p --output-format text --dangerously-skip-permissions --model ${posixShellQuoted(input.modelId)} ${posixShellQuoted(input.promptText ?? input.text)}`,
 				180_000,
 			),
 		);

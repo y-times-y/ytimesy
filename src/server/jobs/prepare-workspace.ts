@@ -30,6 +30,7 @@ import {
 	workspaceById,
 } from "../adapters/workspaces";
 import { loadAgentSnapshotId } from "../auth/agent-account";
+import { readToolsSnapshotId } from "../records/tools-snapshot-store";
 
 /**
  * Recovers a recorded provider_ref instead of creating a second VM when a
@@ -171,7 +172,7 @@ async function resolveMachine(
 		return workspace.providerRef;
 	const snapshotId = workspaceBootSnapshotId({
 		userAuthSnapshotId: await loadAgentSnapshotId(workspace.userId),
-		toolsSnapshotId: toolsSnapshotIdFromEnv(),
+		toolsSnapshotId: toolsSnapshotIdFromEnv() ?? (await readToolsSnapshotId()),
 	});
 	const created = await runtime.provision(
 		slug,

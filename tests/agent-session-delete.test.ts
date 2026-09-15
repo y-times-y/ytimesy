@@ -92,7 +92,7 @@ it("destroys agent copies and side-chat copies, never the template VM", async ()
 		[project.id],
 	);
 	expect(remaining.rows).toEqual([]);
-	const template = await db.query(
+	const template = await db.query<{ provider_ref: string }>(
 		"select provider_ref from workspace where id=$1",
 		[workspaceId],
 	);

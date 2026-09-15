@@ -77,6 +77,16 @@ export function nextProjectBriefing(input: {
 	return clipBriefing(lines.slice(-6).join("\n"));
 }
 
+export function promptTextWithProjectContext(input: {
+	readonly task: string;
+	readonly document: string;
+}): string {
+	const document = input.document.trim();
+	const task = input.task;
+	if (!document) return task;
+	return `Shared project context from sibling agents:\n\n${document}\n\n---\n\n${task}`;
+}
+
 function clipBriefing(text: string) {
 	return text.length > 1200 ? `${text.slice(0, 1199)}…` : text;
 }

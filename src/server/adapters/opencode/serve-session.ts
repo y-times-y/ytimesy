@@ -480,7 +480,11 @@ function readString(value: unknown): string | undefined {
 export function submitOpenCodeTask(
 	machines: WorkspaceMachines,
 	workspaceId: WorkspaceId,
-	input: { readonly text: string; readonly modelId: string },
+	input: {
+		readonly text: string;
+		readonly modelId: string;
+		readonly promptText?: string;
+	},
 ): Effect.Effect<OpenCodeAuthStatus> {
 	return Effect.gen(function* () {
 		const current = yield* refreshOpenCodeAuthStatus(machines, workspaceId);
@@ -533,7 +537,7 @@ export function submitOpenCodeTask(
 		const [providerID, modelID] = splitOpenCodeModelId(input.modelId);
 		const body = JSON.stringify({
 			model: { providerID, modelID },
-			parts: [{ type: "text", text: input.text }],
+			parts: [{ type: "text", text: input.promptText ?? input.text }],
 		});
 		const queued: Extract<OpenCodeAuthStatus, { stage: "authenticated" }> = {
 			...running,
