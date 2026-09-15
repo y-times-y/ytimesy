@@ -66,7 +66,6 @@ export function reusePreparedCheckoutCommand(repoName: string) {
 	return `HOME="\${HOME:-/home/ubuntu}"
 DEST="$HOME/"${shellSingleQuote(repoName)}
 if [ -d "$DEST/.git" ]; then
-  printf '%s\\n' "$DEST" > ${shellSingleQuote(PROJECT_CWD_PATH)}
   echo present
   echo "$DEST"
 fi`;

@@ -11,6 +11,7 @@ import {
 	cloneSelectedProjectScript,
 	DEVELOPER_INSTRUCTIONS_PATH,
 	PROJECT_CONTEXT_PATH,
+	PROJECT_CWD_PATH,
 	PROJECT_TOKEN_PATH,
 	preparedCheckoutPathFromReuse,
 	redactInstallationToken,
@@ -23,9 +24,10 @@ import type { WorkspaceMachines } from "./workspace-machines";
 
 /**
  * Reuses the sealed project checkout when the guest already has it.
- * Clones only when that directory is missing. Installation tokens are
- * written to a temp file on the VM and deleted during the clone; they
- * are never stored in git remotes.
+ * Clones only when that directory is missing. Guest exec cannot rewrite
+ * `/tmp/ytimesy-project-cwd` (permission denied); the filesystem API can.
+ * Installation tokens are written to a temp file on the VM and deleted
+ * during the clone; they are never stored in git remotes.
  */
 export function ensureProjectCheckout(
 	machines: WorkspaceMachines,
@@ -46,7 +48,16 @@ export function ensureProjectCheckout(
 			),
 		);
 		const reusedPath = preparedCheckoutPathFromReuse(reused.stdout);
-		if (reusedPath) return reusedPath;
+		if (reusedPath) {
+			yield* Effect.tryPromise(() =>
+				machines.writeTextFile(
+					workspaceId,
+					PROJECT_CWD_PATH,
+					`${reusedPath}\n`,
+				),
+			);
+			return reusedPath;
+		}
 		const home = yield* guestHome(machines, workspaceId);
 		const destination = projectCheckoutPath(home, checkout.name);
 		const token = yield* Effect.tryPromise(() =>
