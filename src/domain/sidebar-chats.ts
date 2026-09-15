@@ -98,6 +98,25 @@ export function sidebarChatIsRunning(input: {
 	return input.turnStatus === "running";
 }
 
+export function sidebarHasRunningChat(input: {
+	readonly chats: readonly SidebarChat[];
+	readonly busyChatIds: readonly string[];
+	readonly openChatId?: string;
+	readonly openTurnStatus?: SessionTurnStatus;
+	readonly openSideTurnStatus?: SessionTurnStatus;
+}): boolean {
+	return input.chats.some((chat) =>
+		sidebarChatIsRunning({
+			chatId: chat.id,
+			turnStatus: chat.turnStatus,
+			busyChatIds: input.busyChatIds,
+			openChatId: input.openChatId,
+			openTurnStatus: input.openTurnStatus,
+			openSideTurnStatus: input.openSideTurnStatus,
+		}),
+	);
+}
+
 export function withChatTurnStatus(
 	chats: readonly SidebarChat[],
 	chatId: string | undefined,

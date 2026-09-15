@@ -7,6 +7,7 @@ import {
 	type SidebarChat,
 	sidebarChatIsRunning,
 	sidebarChatsEmptyCopy,
+	sidebarHasRunningChat,
 } from "#/domain/sidebar-chats";
 
 interface ProjectSidebarProps {
@@ -61,6 +62,13 @@ export function ProjectSidebar({
 	const newChatActive = newChatIsActive({
 		projectSelected: Boolean(selected),
 		hasUserMessage,
+	});
+	const hasRunningChat = sidebarHasRunningChat({
+		chats,
+		busyChatIds,
+		openChatId: selectedChatId,
+		openTurnStatus,
+		openSideTurnStatus,
 	});
 
 	function cancelClose() {
@@ -265,6 +273,7 @@ export function ProjectSidebar({
 					title="Open chats"
 					aria-expanded={expanded}
 					aria-controls="project-sidebar"
+					data-activity={hasRunningChat ? "running" : undefined}
 					onClick={toggleProjects}
 				>
 					<img
@@ -274,6 +283,9 @@ export function ProjectSidebar({
 						height={28}
 						alt=""
 					/>
+					{hasRunningChat ? (
+						<span className="sr-only">A chat is running</span>
+					) : null}
 				</button>
 				<button
 					type="button"

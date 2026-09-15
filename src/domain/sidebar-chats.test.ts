@@ -11,6 +11,7 @@ import {
 	sessionViewAppliesToOpenChat,
 	sidebarChatIsRunning,
 	sidebarChatsEmptyCopy,
+	sidebarHasRunningChat,
 	sidebarIsPinnedInStorage,
 	sidebarPinnedStorageValue,
 	withBusyChat,
@@ -142,6 +143,28 @@ describe("parallel chat busy", () => {
 				chatId: "b",
 				turnStatus: "idle",
 				busyChatIds: withoutBusyChat(["a"], "a"),
+				openChatId: "b",
+				openTurnStatus: "idle",
+			}),
+		).toBe(false);
+	});
+
+	it("marks the collapsed rail when any chat is still running", () => {
+		expect(
+			sidebarHasRunningChat({
+				chats: [
+					{ id: "a", title: "fix login", turnStatus: "running" },
+					{ id: "b", title: "add snapshot copy", turnStatus: "idle" },
+				],
+				busyChatIds: [],
+				openChatId: "b",
+				openTurnStatus: "idle",
+			}),
+		).toBe(true);
+		expect(
+			sidebarHasRunningChat({
+				chats: [{ id: "b", title: "add snapshot copy", turnStatus: "idle" }],
+				busyChatIds: [],
 				openChatId: "b",
 				openTurnStatus: "idle",
 			}),
