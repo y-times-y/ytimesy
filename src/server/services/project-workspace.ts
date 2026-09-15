@@ -1,11 +1,13 @@
 import { Effect } from "effect";
 import { sharedDesktopDeveloperInstructions } from "#/domain/agent-desktop";
+import { failureMessage } from "#/domain/failure-message";
 import type { WorkspaceId } from "#/domain/ids";
 import { projectCheckoutPath } from "#/domain/project-checkout";
 import {
 	cloneSelectedProjectScript,
 	DEVELOPER_INSTRUCTIONS_PATH,
 	PROJECT_TOKEN_PATH,
+	redactInstallationToken,
 } from "#/server/adapters/freestyle/clone-project";
 import { readGitHubAppCredentials } from "#/server/adapters/github/credentials";
 import { liveGitHubProjectDeps, loadProjectCheckout } from "./github-projects";
@@ -19,7 +21,7 @@ import type { WorkspaceMachines } from "./workspace-machines";
 export function ensureProjectCheckout(
 	machines: WorkspaceMachines,
 	workspaceId: WorkspaceId,
-): Effect.Effect<string | null> {
+): Effect.Effect<string | null, Error> {
 	return Effect.gen(function* () {
 		const deps = liveGitHubProjectDeps();
 		const checkout = yield* loadProjectCheckout(deps);
@@ -56,12 +58,13 @@ export function ensureProjectCheckout(
 			yield* Effect.tryPromise(() =>
 				machines.exec(workspaceId, `rm -f ${PROJECT_TOKEN_PATH}`, 10_000),
 			).pipe(Effect.catchAll(() => Effect.void));
-			yield* writeDeveloperInstructions(machines, workspaceId, home);
-			return null;
+			throw new Error(
+				`Could not clone ${checkout.fullName}: ${redactInstallationToken((cloned.stderr || cloned.stdout).trim() || "git clone failed.")}`,
+			);
 		}
 		yield* writeDeveloperInstructions(machines, workspaceId, destination);
 		return destination;
-	}).pipe(Effect.catchAll(() => Effect.succeed(null)));
+	}).pipe(Effect.mapError((cause) => new Error(failureMessage(cause))));
 }
 
 export function writeDeveloperInstructions(

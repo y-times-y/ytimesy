@@ -178,6 +178,9 @@ export function compactTimelineItems(
 ): SessionItem[] {
 	const presented: SessionItem[] = [];
 	for (const item of items) {
+		if (item.kind === "userMessage" && isWorkspacePreamble(item.text)) {
+			continue;
+		}
 		if (item.kind === "commandExecution") {
 			presented.push(...presentCommandExecution(item));
 			continue;
@@ -185,6 +188,10 @@ export function compactTimelineItems(
 		presented.push(item);
 	}
 	return presented;
+}
+
+function isWorkspacePreamble(text: string): boolean {
+	return text.startsWith("You are in a ytimesy workspace VM.");
 }
 
 export function showTurnWorking(

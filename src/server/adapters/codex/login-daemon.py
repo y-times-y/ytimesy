@@ -371,12 +371,6 @@ def error_item(item_id, message):
     return {"id": item_id, "type": "error", "message": message}
 
 
-def turn_text_with_workspace(text, include_workspace):
-    if not include_workspace:
-        return text
-    return developer_instructions(project_cwd()) + "\n\n" + text
-
-
 rpc_id = 100
 
 
@@ -836,13 +830,11 @@ def main():
                 if requested_model:
                     model_id = requested_model
                 cwd = project_cwd()
-                include_workspace = False
                 if thread_id and thread_cwd != cwd:
                     thread_id = None
                 if not thread_id and model_id:
                     thread_id, thread_error = start_thread(proc, model_id, cwd)
                     thread_cwd = cwd
-                    include_workspace = bool(thread_id)
                     if thread_error and not thread_id:
                         turn_status = "failed"
                         active_task_id = None
@@ -886,7 +878,7 @@ def main():
                         proc,
                         thread_id,
                         model_id,
-                        turn_text_with_workspace(request["text"], include_workspace),
+                        request["text"],
                         on_items=on_task_items,
                     )
                     if turn.get("error"):

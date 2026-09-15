@@ -3,6 +3,10 @@ export const PROJECT_CWD_PATH = "/tmp/ytimesy-project-cwd";
 export const DEVELOPER_INSTRUCTIONS_PATH =
 	"/tmp/ytimesy-developer-instructions.txt";
 
+export function redactInstallationToken(text: string): string {
+	return text.replace(/x-access-token:[^@\s]+@/g, "x-access-token:***@");
+}
+
 export function cloneSelectedProjectScript(input: {
 	readonly owner: string;
 	readonly name: string;
@@ -32,7 +36,7 @@ if ! command -v git >/dev/null 2>&1; then
   apt_get install -y -qq --no-install-recommends git ca-certificates
 fi
 
-TOKEN="$(cat "$TOKEN_FILE")"
+TOKEN="$(tr -d '\\n\\r' < "$TOKEN_FILE")"
 rm -f "$TOKEN_FILE"
 if [ -z "$TOKEN" ]; then
   echo "GitHub installation token was empty" >&2
