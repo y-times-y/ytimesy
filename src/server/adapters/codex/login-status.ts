@@ -1,3 +1,4 @@
+import type { ListedModel } from "#/domain/listed-model";
 import type { SessionItem, SessionTurnStatus } from "#/domain/session-item";
 import { itemsWithVisibleSideChatText } from "#/domain/side-chat";
 import {
@@ -6,10 +7,7 @@ import {
 	sideSessionItemsFromDaemonStatus,
 } from "./app-server-items";
 
-export type ListedModel = {
-	readonly id: string;
-	readonly label: string;
-};
+export type { ListedModel };
 
 export type CodexTurnResult = {
 	readonly threadId: string;
@@ -149,7 +147,9 @@ function listedModels(value: unknown): readonly ListedModel[] {
 		if (!isRecord(row)) continue;
 		const id = readString(row.id);
 		if (!id) continue;
-		models.push({ id, label: readString(row.label) ?? id });
+		const label = readString(row.label) ?? id;
+		const notice = readString(row.notice);
+		models.push(notice ? { id, label, notice } : { id, label });
 	}
 	return models;
 }

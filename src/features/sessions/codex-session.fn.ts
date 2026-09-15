@@ -1,18 +1,20 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getRequest } from "@tanstack/react-start/server";
 import { Effect } from "effect";
+import type { AgentProviderId } from "#/domain/agent-provider";
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
 import { requireUser } from "#/server/auth/auth";
+import { parseHarnessId } from "#/server/secrets/harness-key-store";
 import { WorkspaceMachineService } from "#/server/services/capabilities";
+import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
 import {
-	type CodexSessionScope,
-	connectCodexWorkspaceSession,
-	emptyCodexSession,
-	type PublicCodexSession,
-	readCodexWorkspaceSession,
-	sendCodexWorkspaceTask,
-	stopCodexWorkspaceTurn,
-} from "#/server/services/codex-workspace-session";
+	connectHarnessWorkspaceSession,
+	emptyHarnessSession,
+	type HarnessSessionScope,
+	readHarnessWorkspaceSession,
+	sendHarnessWorkspaceTask,
+	stopHarnessWorkspaceTurn,
+} from "#/server/services/harness-workspace-session";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
 
 function runWithMachines<A>(
@@ -28,42 +30,51 @@ function runWithMachines<A>(
 
 async function optionalScope(
 	projectId?: string,
-): Promise<CodexSessionScope | null> {
+	harnessId: AgentProviderId = "codex",
+): Promise<HarnessSessionScope | null> {
 	try {
 		const user = await requireUser(getRequest().headers);
-		return { userId: user.id, projectId };
+		return { userId: user.id, projectId, harnessId };
 	} catch {
 		return null;
 	}
 }
 
-async function requireScope(projectId?: string): Promise<CodexSessionScope> {
+async function requireScope(
+	projectId?: string,
+	harnessId: AgentProviderId = "codex",
+): Promise<HarnessSessionScope> {
 	const user = await requireUser(getRequest().headers);
-	return { userId: user.id, projectId };
+	return { userId: user.id, projectId, harnessId };
 }
 
-function optionalProjectId(data: { projectId?: string } | undefined) {
+function optionalSessionInput(
+	data: { projectId?: string; harnessId?: string } | undefined,
+) {
 	const projectId =
 		typeof data?.projectId === "string" ? data.projectId.trim() : "";
-	return { projectId: projectId || undefined };
+	const harnessId = data?.harnessId
+		? parseHarnessId(data.harnessId)
+		: ("codex" as const);
+	return { projectId: projectId || undefined, harnessId };
 }
 
 export const getCodexSession = createServerFn({ method: "GET" })
-	.validator(optionalProjectId)
+	.validator(optionalSessionInput)
 	.handler(async ({ data }): Promise<PublicCodexSession> => {
-		const scope = await optionalScope(data.projectId);
-		if (!scope) return emptyCodexSession();
+		const scope = await optionalScope(data.projectId, data.harnessId);
+		if (!scope) return emptyHarnessSession();
 		return runWithMachines((machines) =>
-			readCodexWorkspaceSession(machines, scope),
-		).catch(() => emptyCodexSession());
+			readHarnessWorkspaceSession(machines, scope),
+		).catch(() => emptyHarnessSession());
 	});
 
 export const connectCodexSession = createServerFn({ method: "POST" })
-	.validator(optionalProjectId)
+	.validator(optionalSessionInput)
 	.handler(async ({ data }): Promise<PublicCodexSession> => {
-		const scope = await requireScope(data.projectId);
+		const scope = await requireScope(data.projectId, data.harnessId);
 		return runWithMachines((machines) =>
-			connectCodexWorkspaceSession(machines, scope),
+			connectHarnessWorkspaceSession(machines, scope),
 		);
 	});
 
@@ -74,6 +85,7 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 			modelId: string;
 			lane?: "main" | "side";
 			projectId?: string;
+			harnessId?: string;
 		}) => {
 			const text = data.text.trim();
 			const modelId = data.modelId.trim();
@@ -84,21 +96,24 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 				modelId,
 				lane: data.lane === "side" ? ("side" as const) : ("main" as const),
 				projectId: data.projectId?.trim() || undefined,
+				harnessId: data.harnessId
+					? parseHarnessId(data.harnessId)
+					: ("codex" as const),
 			};
 		},
 	)
 	.handler(async ({ data }): Promise<PublicCodexSession> => {
-		const scope = await requireScope(data.projectId);
+		const scope = await requireScope(data.projectId, data.harnessId);
 		return runWithMachines((machines) =>
-			sendCodexWorkspaceTask(machines, scope, data),
+			sendHarnessWorkspaceTask(machines, scope, data),
 		);
 	});
 
 export const stopCodexSessionTurn = createServerFn({ method: "POST" })
-	.validator(optionalProjectId)
+	.validator(optionalSessionInput)
 	.handler(async ({ data }): Promise<PublicCodexSession> => {
-		const scope = await requireScope(data.projectId);
+		const scope = await requireScope(data.projectId, data.harnessId);
 		return runWithMachines((machines) =>
-			stopCodexWorkspaceTurn(machines, scope),
+			stopHarnessWorkspaceTurn(machines, scope),
 		);
 	});

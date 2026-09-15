@@ -100,13 +100,13 @@ export function WorkspaceHome({
 
 	useEffect(() => {
 		if (!selectedProject?.id) return;
-		void getCodexSession({ data: { projectId: selectedProject.id } }).then(
-			setSession,
-		);
+		void getCodexSession({
+			data: { projectId: selectedProject.id, harnessId },
+		}).then(setSession);
 		void loadDesktop({ data: { projectId: selectedProject.id } }).then(
 			setDesktop,
 		);
-	}, [loadDesktop, selectedProject?.id]);
+	}, [harnessId, loadDesktop, selectedProject?.id]);
 
 	useEffect(() => {
 		if (compact || openedDiff.current || fileChanges.length === 0) return;
@@ -133,7 +133,7 @@ export function WorkspaceHome({
 				: 3000;
 		const timer = window.setInterval(() => {
 			void getCodexSession({
-				data: { projectId: selectedProject?.id },
+				data: { projectId: selectedProject?.id, harnessId },
 			}).then((next) => {
 				setSession(next);
 				if (next.sideTurnStatus !== "idle") setSideQueued(false);
@@ -142,6 +142,7 @@ export function WorkspaceHome({
 		return () => window.clearInterval(timer);
 	}, [
 		selectedProject?.id,
+		harnessId,
 		session.connection.status,
 		session.sideTurnStatus,
 		session.turnStatus,
@@ -171,7 +172,13 @@ export function WorkspaceHome({
 		if (session.turnStatus === "running") setSideQueued(true);
 		setBusy(true);
 		void sendTask({
-			data: { text, modelId, lane: "side", projectId: selectedProject?.id },
+			data: {
+				text,
+				modelId,
+				lane: "side",
+				projectId: selectedProject?.id,
+				harnessId,
+			},
 		})
 			.then(setSession)
 			.finally(() => setBusy(false));
@@ -250,7 +257,12 @@ export function WorkspaceHome({
 								apiKeyHints={apiKeyHints}
 								onConnect={() => {
 									setBusy(true);
-									void connect({ data: { projectId: selectedProject?.id } })
+									void connect({
+										data: {
+											projectId: selectedProject?.id,
+											harnessId,
+										},
+									})
 										.then(setSession)
 										.finally(() => setBusy(false));
 								}}
@@ -266,20 +278,38 @@ export function WorkspaceHome({
 												opencode:
 													hintForHarness(status.keys, "opencode") ?? undefined,
 											});
+											if (id === harnessId) {
+												return connect({
+													data: {
+														projectId: selectedProject?.id,
+														harnessId: id,
+													},
+												}).then(setSession);
+											}
 										})
 										.finally(() => setBusy(false));
 								}}
 								onSend={(text, modelId) => {
 									setBusy(true);
 									void sendTask({
-										data: { text, modelId, projectId: selectedProject?.id },
+										data: {
+											text,
+											modelId,
+											projectId: selectedProject?.id,
+											harnessId,
+										},
 									})
 										.then(setSession)
 										.finally(() => setBusy(false));
 								}}
 								onStop={() => {
 									setBusy(true);
-									void stopTurn({ data: { projectId: selectedProject?.id } })
+									void stopTurn({
+										data: {
+											projectId: selectedProject?.id,
+											harnessId,
+										},
+									})
 										.then(setSession)
 										.finally(() => setBusy(false));
 								}}

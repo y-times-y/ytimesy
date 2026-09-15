@@ -34,20 +34,31 @@ export function workspaceSessionMachineRef(
 	return null;
 }
 
+export function harnessConnectBlockedReason(
+	workspace: Pick<
+		ProjectWorkspace,
+		"status" | "providerRef" | "errorMessage"
+	> | null,
+	harnessName: string,
+) {
+	if (workspaceSessionMachineRef(workspace)) return null;
+	if (!workspace)
+		return `Prepare a workspace before signing in to ${harnessName}.`;
+	if (workspace.status === "failed")
+		return (
+			workspace.errorMessage ??
+			`Workspace preparation failed. Retry, then sign in to ${harnessName}.`
+		);
+	return `Wait for workspace preparation to finish before signing in to ${harnessName}.`;
+}
+
 export function codexConnectBlockedReason(
 	workspace: Pick<
 		ProjectWorkspace,
 		"status" | "providerRef" | "errorMessage"
 	> | null,
 ) {
-	if (workspaceSessionMachineRef(workspace)) return null;
-	if (!workspace) return "Prepare a workspace before signing in to Codex.";
-	if (workspace.status === "failed")
-		return (
-			workspace.errorMessage ??
-			"Workspace preparation failed. Retry, then sign in to Codex."
-		);
-	return "Wait for workspace preparation to finish before signing in to Codex.";
+	return harnessConnectBlockedReason(workspace, "Codex");
 }
 
 export function branchSwitchBlockedReason(
