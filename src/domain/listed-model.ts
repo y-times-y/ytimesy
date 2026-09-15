@@ -77,6 +77,13 @@ export function listedModelPreferenceFromSessions(input: {
 	return { listedModelId, blockedListedModelIds };
 }
 
+export function listedModelDisplayName(modelId: string) {
+	const id = modelId.trim();
+	if (!id) return "";
+	const slash = id.lastIndexOf("/");
+	return slash >= 0 ? id.slice(slash + 1) : id;
+}
+
 export function preferredListedModelId(
 	models: readonly { readonly id: string }[],
 	options?: ListedModelPreference,

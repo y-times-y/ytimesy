@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	listedModelDisplayName,
 	listedModelPreferenceFromSessions,
 	listedModelRestrictedByProvider,
 	preferredListedModelId,
@@ -122,5 +123,15 @@ describe("listedModelPreferenceFromSessions", () => {
 				"[user_blocked] Your access has been restricted due to repeated policy violations.",
 			),
 		).toBe(true);
+	});
+});
+
+describe("listedModelDisplayName", () => {
+	it("shows the catalog id tail without inventing a label", () => {
+		expect(listedModelDisplayName("opencode/big-pickle")).toBe("big-pickle");
+		expect(listedModelDisplayName("gpt-5.3-codex-spark")).toBe(
+			"gpt-5.3-codex-spark",
+		);
+		expect(listedModelDisplayName("  ")).toBe("");
 	});
 });

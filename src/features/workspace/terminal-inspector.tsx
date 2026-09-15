@@ -1,4 +1,8 @@
 import { useEffect, useRef, useState } from "react";
+import {
+	terminalInspectorPrompt,
+	terminalInspectorShouldAttach,
+} from "#/domain/workspace-terminal";
 
 export function TerminalInspector({
 	projectId,
@@ -12,9 +16,18 @@ export function TerminalInspector({
 	const containerRef = useRef<HTMLDivElement>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [connected, setConnected] = useState(false);
+	const [connectGeneration, setConnectGeneration] = useState(0);
+	const prompt = terminalInspectorPrompt({ projectId, sessionId });
+	const shouldAttach = terminalInspectorShouldAttach({
+		tabActive: active,
+		projectId,
+		sessionId,
+		connectRequested: connectGeneration > 0,
+	});
+	const attachAttempt = shouldAttach ? connectGeneration : 0;
 
 	useEffect(() => {
-		if (!active || !projectId || !containerRef.current) {
+		if (!attachAttempt || !containerRef.current || !projectId || !sessionId) {
 			setConnected(false);
 			return;
 		}
@@ -51,7 +64,7 @@ export function TerminalInspector({
 			const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
 			const url = new URL(`${protocol}//${window.location.host}/api/terminal`);
 			url.searchParams.set("projectId", projectId);
-			if (sessionId) url.searchParams.set("sessionId", sessionId);
+			url.searchParams.set("sessionId", sessionId);
 			url.searchParams.set("cols", String(term.cols));
 			url.searchParams.set("rows", String(term.rows));
 			const socket = new WebSocket(url);
@@ -120,22 +133,27 @@ export function TerminalInspector({
 			dispose?.();
 			setConnected(false);
 		};
-	}, [active, projectId, sessionId]);
+	}, [attachAttempt, projectId, sessionId]);
 
-	if (!projectId) {
+	if (!shouldAttach) {
 		return (
 			<section className="inspector-empty" aria-live="polite">
-				<h2>No terminal connected.</h2>
-				<p>Select a project to use the terminal.</p>
-			</section>
-		);
-	}
-
-	if (!active) {
-		return (
-			<section className="inspector-empty" aria-live="polite">
-				<h2>Terminal</h2>
-				<p>Open Terminal to attach to the prepared workspace.</p>
+				<h2>{prompt.title}</h2>
+				<p>{prompt.description}</p>
+				{prompt.actionLabel && active ? (
+					<button
+						type="button"
+						className="desktop-start"
+						onClick={() => setConnectGeneration((generation) => generation + 1)}
+					>
+						{error ? "Retry terminal" : prompt.actionLabel}
+					</button>
+				) : null}
+				{error ? (
+					<p className="terminal-inspector-error" role="alert">
+						{error}
+					</p>
+				) : null}
 			</section>
 		);
 	}
@@ -143,9 +161,18 @@ export function TerminalInspector({
 	return (
 		<section className="terminal-inspector" aria-label="Workspace terminal">
 			{error ? (
-				<p className="terminal-inspector-error" role="alert">
-					{error}
-				</p>
+				<>
+					<p className="terminal-inspector-error" role="alert">
+						{error}
+					</p>
+					<button
+						type="button"
+						className="desktop-start"
+						onClick={() => setConnectGeneration((generation) => generation + 1)}
+					>
+						Retry terminal
+					</button>
+				</>
 			) : null}
 			<div
 				ref={containerRef}

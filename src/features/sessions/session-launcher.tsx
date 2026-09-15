@@ -338,6 +338,7 @@ export function SessionLauncher({
 								onSaveApiKey={onSaveApiKey}
 								models={models}
 								modelId={modelId}
+								listedModelId={modelId || session.listedModelId}
 								onModelIdChange={setModelId}
 								onAttachFiles={(selected) =>
 									setAttachments((files) => {
