@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { copiedSessionScratchFileResetCommand } from "#/domain/agent-session";
 import { WorkspaceId } from "#/domain/ids";
 import { executeSessionMachinePlan } from "./agent-session-machine.ts";
 
@@ -6,14 +7,17 @@ function machines(overrides: {
 	snapshot?: string;
 	copied?: string;
 	failProvision?: boolean;
+	execExitCode?: number;
 }) {
 	const provisioned: Array<{ slug: string; snapshotId: string }> = [];
 	const snapshots: string[] = [];
 	const commands: string[] = [];
+	const writes: Array<{ path: string; contents: string }> = [];
 	return {
 		provisioned,
 		snapshots,
 		commands,
+		writes,
 		api: {
 			snapshotEnvironment: async () => {
 				snapshots.push(overrides.snapshot ?? "snap-late");
@@ -27,7 +31,14 @@ function machines(overrides: {
 			ensureRunning: async (id: string) => WorkspaceId(id),
 			exec: async (_id: string, command: string) => {
 				commands.push(command);
-				return { exitCode: 0, stdout: "", stderr: "" };
+				return {
+					exitCode: overrides.execExitCode ?? 0,
+					stdout: "",
+					stderr: "",
+				};
+			},
+			writeTextFile: async (_id: string, path: string, contents: string) => {
+				writes.push({ path, contents });
 			},
 		},
 	};
@@ -75,8 +86,38 @@ describe("executeSessionMachinePlan", () => {
 			saveTemplateSnapshot: async () => undefined,
 			saveSessionProviderRef: async () => undefined,
 		});
-		expect(runtime.commands[0]).toContain("/tmp/ytimesy-opencode-status.json");
-		expect(runtime.commands[0]).toContain("opencode.db");
+		expect(runtime.commands[0]).toBe(copiedSessionScratchFileResetCommand());
+		expect(runtime.commands[1]?.startsWith("bash -lc ")).toBe(true);
+		expect(runtime.commands[1]).toContain("opencode.db");
+		expect(runtime.writes).toContainEqual({
+			path: "/tmp/ytimesy-opencode-status.json",
+			contents: `${JSON.stringify({ stage: "missing" })}\n`,
+		});
+		expect(runtime.writes).toContainEqual({
+			path: "/tmp/ytimesy-claude-auth-status.json",
+			contents: `${JSON.stringify({ stage: "missing" })}\n`,
+		});
+		expect(runtime.writes).toContainEqual({
+			path: "/tmp/ytimesy-opencode-serve.pid",
+			contents: "",
+		});
+	});
+
+	it("still overwrites copied status when guest rm cannot delete sticky /tmp files", async () => {
+		const runtime = machines({ copied: "agent-vm", execExitCode: 1 });
+		const result = await executeSessionMachinePlan({
+			machines: runtime.api,
+			sessionId: "11111111-2222-3333-4444-555555555555",
+			sessionProviderRef: null,
+			workspaceId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+			templateSnapshotId: "snap-1",
+			templateProviderRef: "repo-vm",
+			templateAlreadyBound: true,
+			saveTemplateSnapshot: async () => undefined,
+			saveSessionProviderRef: async () => undefined,
+		});
+		expect(result.providerRef).toBe("agent-vm");
+		expect(runtime.writes[0]?.path).toBe("/tmp/ytimesy-opencode-status.json");
 	});
 
 	it("resumes the same agent VM for later turns", async () => {

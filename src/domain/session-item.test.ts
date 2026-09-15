@@ -8,6 +8,7 @@ import {
 	lastAgentMessageText,
 	lastUserMessageText,
 	type SessionItem,
+	sessionRecordHasConversation,
 	sessionTitleFromItems,
 	sessionUsesFollowUpLayout,
 	showTurnWorking,
@@ -33,6 +34,10 @@ describe("session items", () => {
 
 		expect(isConversationItem(user)).toBe(true);
 		expect(isConversationItem(command)).toBe(false);
+		expect(sessionRecordHasConversation([user, command])).toBe(true);
+		expect(sessionRecordHasConversation([command])).toBe(false);
+		expect(sessionRecordHasConversation([])).toBe(false);
+		expect(sessionRecordHasConversation(null)).toBe(false);
 	});
 
 	it("does not treat a completed turn as still running", () => {

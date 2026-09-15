@@ -6,6 +6,7 @@ import {
 } from "#/domain/agent-provider";
 import { WorkspaceId } from "#/domain/ids";
 import { harnessConnectBlockedReason } from "#/domain/project-workspace";
+import { sessionRecordHasConversation } from "#/domain/session-item";
 import { canSubmitComposer, canSubmitSideChat } from "#/domain/session-policy";
 import type { WorkspaceLifecycle } from "#/domain/workspace";
 import { childAgentSession } from "#/server/adapters/agent-sessions";
@@ -153,6 +154,11 @@ export function connectHarnessWorkspaceSession(
 			machines,
 			WorkspaceId(bound.providerRef),
 			apiKey,
+			{
+				discardCopiedTranscript: !sessionRecordHasConversation(
+					bound.session.items,
+				),
+			},
 		);
 		return yield* Effect.tryPromise(() =>
 			persistBoundSessionView(
@@ -430,6 +436,11 @@ function sendHarnessSideTask(
 					machines,
 					WorkspaceId(bound.providerRef),
 					apiKey,
+					{
+						discardCopiedTranscript: !sessionRecordHasConversation(
+							bound.session.items,
+						),
+					},
 				);
 			}
 			if (status.stage === "authenticated") {

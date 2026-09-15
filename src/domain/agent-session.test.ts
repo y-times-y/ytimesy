@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	agentSessionMachineSlug,
 	chatsFromAgentSessions,
+	copiedSessionScratchFileResetCommand,
 	copiedSessionScratchResetCommand,
 	projectEnvironmentSnapshotSlug,
 	sessionMachinePlan,
@@ -100,11 +101,20 @@ describe("agent session names", () => {
 	});
 });
 
+describe("copiedSessionScratchFileResetCommand", () => {
+	it("is a direct rm so Freestyle exec does not need a shell", () => {
+		expect(copiedSessionScratchFileResetCommand()).toBe(
+			"rm -f /tmp/ytimesy-opencode-status.json /tmp/ytimesy-claude-auth-status.json /tmp/ytimesy-opencode-serve.pid /tmp/ytimesy-opencode-serve.log /tmp/ytimesy-opencode-http-body /tmp/ytimesy-opencode-auth.json /tmp/ytimesy-opencode-auth-result.txt /tmp/ytimesy-auth-status.json /tmp/ytimesy-task-request.json /tmp/ytimesy-task-result.json /tmp/ytimesy-side-request.json /tmp/ytimesy-side-result.json /tmp/ytimesy-project-context.md",
+		);
+	});
+});
+
 describe("copiedSessionScratchResetCommand", () => {
 	it("clears harness leftovers copied from the template VM", () => {
 		const command = copiedSessionScratchResetCommand();
 		expect(command.startsWith("bash -lc ")).toBe(true);
 		expect(command).toContain("/tmp/ytimesy-opencode-status.json");
+		expect(command).toContain("/tmp/ytimesy-claude-auth-status.json");
 		expect(command).toContain("/tmp/ytimesy-auth-status.json");
 		expect(command).toContain("/home/ubuntu/.local/share/opencode/opencode.db");
 		expect(command).toContain("/home/ubuntu/.codex/sessions");

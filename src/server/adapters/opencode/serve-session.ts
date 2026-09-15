@@ -108,6 +108,20 @@ export type OpenCodeAuthStatus =
 	  }
 	| { readonly stage: "failed"; readonly message: string };
 
+export function dropCopiedOpenCodeTranscript(
+	status: OpenCodeAuthStatus,
+): OpenCodeAuthStatus {
+	if (status.stage !== "authenticated") return status;
+	return {
+		...status,
+		turnStatus: "idle",
+		items: status.items.filter((item) => item.kind === "fileChange"),
+		serveSessionId: null,
+		seenBusy: false,
+		turnStartedAt: null,
+	};
+}
+
 export function parseOpenCodeAuthStatus(
 	contents: string | null,
 ): OpenCodeAuthStatus {
@@ -181,6 +195,7 @@ export function connectOpenCode(
 	machines: WorkspaceMachines,
 	workspaceId: WorkspaceId,
 	apiKey: string | null,
+	options?: { readonly discardCopiedTranscript?: boolean },
 ): Effect.Effect<OpenCodeAuthStatus> {
 	return Effect.gen(function* () {
 		const install = yield* Effect.tryPromise(() =>
@@ -228,8 +243,11 @@ ${START_SERVE_SCRIPT}`,
 			workspaceId,
 			usedKey,
 		);
-		yield* persistStatus(machines, workspaceId, snapshot);
-		return snapshot;
+		const connected = options?.discardCopiedTranscript
+			? dropCopiedOpenCodeTranscript(snapshot)
+			: snapshot;
+		yield* persistStatus(machines, workspaceId, connected);
+		return connected;
 	}).pipe(
 		Effect.catchAll((cause) =>
 			Effect.succeed(

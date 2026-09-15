@@ -55,16 +55,38 @@ export function chatsFromAgentSessions(
 		}));
 }
 
+export const COPIED_OPENCODE_STATUS_PATH = "/tmp/ytimesy-opencode-status.json";
+export const COPIED_CLAUDE_STATUS_PATH = "/tmp/ytimesy-claude-auth-status.json";
+
 export const COPIED_SESSION_SCRATCH_PATHS = [
-	"/tmp/ytimesy-opencode-status.json",
+	COPIED_OPENCODE_STATUS_PATH,
+	COPIED_CLAUDE_STATUS_PATH,
 	"/tmp/ytimesy-opencode-serve.pid",
 	"/tmp/ytimesy-opencode-serve.log",
 	"/tmp/ytimesy-opencode-http-body",
+	"/tmp/ytimesy-opencode-auth.json",
+	"/tmp/ytimesy-opencode-auth-result.txt",
 	"/tmp/ytimesy-auth-status.json",
 	"/tmp/ytimesy-task-request.json",
 	"/tmp/ytimesy-task-result.json",
 	"/tmp/ytimesy-side-request.json",
 	"/tmp/ytimesy-side-result.json",
+	"/tmp/ytimesy-project-context.md",
+] as const;
+
+export const COPIED_SESSION_STATUS_RESETS = [
+	{
+		path: COPIED_OPENCODE_STATUS_PATH,
+		contents: `${JSON.stringify({ stage: "missing" })}\n`,
+	},
+	{
+		path: COPIED_CLAUDE_STATUS_PATH,
+		contents: `${JSON.stringify({ stage: "missing" })}\n`,
+	},
+	{
+		path: "/tmp/ytimesy-opencode-serve.pid",
+		contents: "",
+	},
 ] as const;
 
 export const COPIED_SESSION_DB_FILES = [
@@ -84,6 +106,10 @@ export const COPIED_SESSION_SCRATCH_TREES = [
 	"/root/.local/state/opencode",
 	"/root/.codex/sessions",
 ] as const;
+
+export function copiedSessionScratchFileResetCommand() {
+	return `rm -f ${COPIED_SESSION_SCRATCH_PATHS.join(" ")}`;
+}
 
 export function copiedSessionScratchResetCommand() {
 	const script = [
