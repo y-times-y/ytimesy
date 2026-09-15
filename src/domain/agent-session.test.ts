@@ -103,10 +103,11 @@ describe("agent session names", () => {
 describe("copiedSessionScratchResetCommand", () => {
 	it("clears harness leftovers copied from the template VM", () => {
 		const command = copiedSessionScratchResetCommand();
+		expect(command.startsWith("bash -lc ")).toBe(true);
 		expect(command).toContain("/tmp/ytimesy-opencode-status.json");
 		expect(command).toContain("/tmp/ytimesy-auth-status.json");
-		expect(command).toContain("$HOME/.local/share/opencode/opencode.db");
-		expect(command).toContain("$HOME/.codex/sessions");
+		expect(command).toContain("/home/ubuntu/.local/share/opencode/opencode.db");
+		expect(command).toContain("/home/ubuntu/.codex/sessions");
 	});
 });
 
