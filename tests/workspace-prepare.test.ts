@@ -127,6 +127,30 @@ it("boots a new machine from the user's Codex snapshot when one exists", async (
 	await disconnectAgentAccount("alice");
 });
 
+it("boots from the shared tools snapshot when the user has no auth snapshot", async () => {
+	vi.stubEnv("YTIMESY_TOOLS_SNAPSHOT_ID", "sh-tools");
+	const project = await saveProject(
+		"alice",
+		{
+			...repo,
+			repositoryId: 12,
+			fullName: "acme/tools-image",
+		},
+		"main",
+	);
+	const workspace = await insertQueuedWorkspace("alice", project.id);
+	const runtime = new MemoryWorkspaceRuntime({
+		exitCode: 0,
+		stdout: "pnpm-lock.yaml\n",
+		stderr: "",
+	});
+	await runWorkspacePreparation(workspace.id, runtime);
+	expect(runtime.lastProvisionOptions).toEqual({
+		snapshotId: "sh-tools",
+	});
+	vi.unstubAllEnvs();
+});
+
 it("recovers a recorded provider instead of creating a second machine", async () => {
 	const project = await saveProject(
 		"alice",
