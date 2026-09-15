@@ -10,6 +10,7 @@ import {
 import {
 	cloneSelectedProjectScript,
 	DEVELOPER_INSTRUCTIONS_PATH,
+	fastForwardPreparedCheckoutScript,
 	PROJECT_CONTEXT_PATH,
 	PROJECT_CWD_PATH,
 	PROJECT_TOKEN_PATH,
@@ -24,10 +25,12 @@ import type { WorkspaceMachines } from "./workspace-machines";
 
 /**
  * Reuses the sealed project checkout when the guest already has it.
- * Clones only when that directory is missing. Guest exec cannot rewrite
- * `/tmp/ytimesy-project-cwd` (permission denied); the filesystem API can.
- * Installation tokens are written to a temp file on the VM and deleted
- * during the clone; they are never stored in git remotes.
+ * Clones only when that directory is missing. A clean reused tree is
+ * fast-forwarded to the project's branch; a dirty agent tree is not.
+ * Guest exec cannot rewrite `/tmp/ytimesy-project-cwd` (permission denied);
+ * the filesystem API can. Installation tokens are written to a temp file
+ * on the VM and deleted during clone or fast-forward; they are never
+ * stored in git remotes.
  */
 export function ensureProjectCheckout(
 	machines: WorkspaceMachines,
@@ -56,6 +59,32 @@ export function ensureProjectCheckout(
 					`${reusedPath}\n`,
 				),
 			);
+			const token = yield* Effect.tryPromise(() =>
+				githubInstallationAccessToken(checkout.installationId),
+			).pipe(Effect.catchAll(() => Effect.succeed("")));
+			if (token) {
+				yield* Effect.tryPromise(() =>
+					machines.writeTextFile(workspaceId, PROJECT_TOKEN_PATH, `${token}\n`),
+				);
+				yield* Effect.tryPromise(() =>
+					machines.exec(
+						workspaceId,
+						fastForwardPreparedCheckoutScript({
+							owner: checkout.owner,
+							name: checkout.name,
+							branch: checkout.branch,
+							destination: reusedPath,
+						}),
+						60_000,
+					),
+				).pipe(
+					Effect.catchAll(() =>
+						Effect.tryPromise(() =>
+							machines.exec(workspaceId, `rm -f ${PROJECT_TOKEN_PATH}`, 10_000),
+						).pipe(Effect.catchAll(() => Effect.void)),
+					),
+				);
+			}
 			return reusedPath;
 		}
 		const home = yield* guestHome(machines, workspaceId);

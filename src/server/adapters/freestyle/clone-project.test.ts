@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	cloneSelectedProjectScript,
+	fastForwardPreparedCheckoutScript,
 	PROJECT_CWD_PATH,
 	preparedCheckoutPathFromReuse,
 	pushSelectedBranchScript,
@@ -46,6 +47,24 @@ describe("cloneSelectedProjectScript", () => {
 			preparedCheckoutPathFromReuse("present\n/home/ubuntu/ytimesy\n"),
 		).toBe("/home/ubuntu/ytimesy");
 		expect(preparedCheckoutPathFromReuse("absent")).toBeNull();
+	});
+
+	it("fast-forwards a clean sealed checkout and skips a dirty agent tree", () => {
+		const script = fastForwardPreparedCheckoutScript({
+			owner: "y-times-y",
+			name: "ytimesy",
+			branch: "master",
+			destination: "/home/ubuntu/ytimesy",
+		});
+		expect(script).toContain("status --porcelain");
+		expect(script).toContain("echo dirty");
+		expect(script).toContain('git -C "$DEST" fetch --depth 1');
+		expect(script).toContain("merge --ff-only");
+		expect(script).not.toContain("reset --hard");
+		expect(script).not.toContain("git clone");
+		expect(script).toContain('rm -f "$TOKEN_FILE"');
+		expect(script).toContain('git -C "$DEST" remote set-url origin');
+		expect(script).not.toContain("ghs_");
 	});
 
 	it("pushes HEAD with the installation token, then forgets it on origin", () => {

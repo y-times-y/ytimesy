@@ -71,6 +71,49 @@ if [ -d "$DEST/.git" ]; then
 fi`;
 }
 
+/**
+ * A new snapshot copy can sit on a stale commit. Fast-forward only when
+ * the working tree is clean so a resumed agent keeps its edits.
+ */
+export function fastForwardPreparedCheckoutScript(input: {
+	readonly owner: string;
+	readonly name: string;
+	readonly branch: string;
+	readonly destination: string;
+}): string {
+	return `set -eu
+export GIT_TERMINAL_PROMPT=0
+TOKEN_FILE=${shellSingleQuote(PROJECT_TOKEN_PATH)}
+DEST=${shellSingleQuote(input.destination)}
+OWNER=${shellSingleQuote(input.owner)}
+NAME=${shellSingleQuote(input.name)}
+BRANCH=${shellSingleQuote(input.branch)}
+ORIGIN="https://github.com/\${OWNER}/\${NAME}.git"
+TOKEN="$(tr -d '\\n\\r' < "$TOKEN_FILE")"
+rm -f "$TOKEN_FILE"
+if [ -z "$TOKEN" ]; then
+  echo stale
+  exit 0
+fi
+if [ ! -d "$DEST/.git" ]; then
+  echo absent
+  exit 0
+fi
+if [ -n "$(git -C "$DEST" status --porcelain)" ]; then
+  echo dirty
+  exit 0
+fi
+if ! git -C "$DEST" fetch --depth 1 "https://x-access-token:\${TOKEN}@github.com/\${OWNER}/\${NAME}.git" "$BRANCH"; then
+  git -C "$DEST" remote set-url origin "$ORIGIN"
+  echo stale
+  exit 0
+fi
+git -C "$DEST" merge --ff-only FETCH_HEAD >/dev/null 2>&1 || true
+git -C "$DEST" remote set-url origin "$ORIGIN"
+echo updated
+`;
+}
+
 export function preparedCheckoutPathFromReuse(stdout: string): string | null {
 	const lines = stdout.split(/\r?\n/);
 	const index = lines.findIndex((line) => line.trim() === "present");
