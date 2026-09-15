@@ -109,24 +109,30 @@ if ! chrome_is_running; then
     exit 1
   fi
 fi
+chrome_window=""
 if command -v xdotool >/dev/null 2>&1; then
   i=0
-  while [ "$i" -lt 8 ]; do
-    wid="$(xdotool search --onlyvisible --class 'Google-chrome' 2>/dev/null | head -n 1 || true)"
-    if [ -z "$wid" ]; then
-      wid="$(xdotool search --onlyvisible --name 'Google Chrome' 2>/dev/null | head -n 1 || true)"
+  while [ "$i" -lt 15 ]; do
+    chrome_window="$(xdotool search --onlyvisible --class 'Google-chrome' 2>/dev/null | head -n 1 || true)"
+    if [ -z "$chrome_window" ]; then
+      chrome_window="$(xdotool search --onlyvisible --name 'Google Chrome' 2>/dev/null | head -n 1 || true)"
     fi
-    if [ -z "$wid" ]; then
-      wid="$(xdotool search --onlyvisible --class Chromium 2>/dev/null | head -n 1 || true)"
+    if [ -z "$chrome_window" ]; then
+      chrome_window="$(xdotool search --onlyvisible --class Chromium 2>/dev/null | head -n 1 || true)"
     fi
-    if [ -n "$wid" ]; then
-      xdotool windowmove "$wid" 680 160 >/dev/null 2>&1 || true
-      xdotool windowsize "$wid" 720 640 >/dev/null 2>&1 || true
+    if [ -n "$chrome_window" ]; then
+      xdotool windowmove "$chrome_window" 680 160 >/dev/null 2>&1 || true
+      xdotool windowsize "$chrome_window" 720 640 >/dev/null 2>&1 || true
       break
     fi
     i=$((i + 1))
     sleep 1
   done
+  if [ -z "$chrome_window" ]; then
+    echo "Chrome is running but has no window on DISPLAY=:0" >&2
+    cat /tmp/ytimesy-browser.log >&2 || true
+    exit 1
+  fi
 fi
 if ! pgrep -x x11vnc >/dev/null 2>&1; then
   x11vnc -display :0 -forever -shared -nopw -listen 127.0.0.1 -rfbport 5900 >/tmp/ytimesy-x11vnc.log 2>&1 &
