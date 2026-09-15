@@ -9,6 +9,7 @@ import {
 	needsMachineRecover,
 	publicFailureMessage,
 	redactSecrets,
+	workspaceEnvironmentIsReady,
 	workspaceSessionMachineRef,
 	workspaceSlug,
 } from "../src/domain/project-workspace";
@@ -116,4 +117,32 @@ it("only exposes a Codex session machine after the workspace is ready", () => {
 			errorMessage: "GitHub access expired or was denied. Reconnect GitHub.",
 		}),
 	).toBe("GitHub access expired or was denied. Reconnect GitHub.");
+	expect(workspaceEnvironmentIsReady(null)).toBe(false);
+	expect(
+		workspaceEnvironmentIsReady({
+			status: "ready",
+			providerRef: null,
+			templateSnapshotId: "sh-template",
+		}),
+	).toBe(true);
+	expect(
+		harnessConnectBlockedReason(
+			{
+				status: "ready",
+				providerRef: null,
+				templateSnapshotId: "sh-codex-auth",
+				errorMessage: null,
+			},
+			"OpenCode",
+			"connect",
+		),
+	).toBeNull();
+	expect(
+		codexConnectBlockedReason({
+			status: "ready",
+			providerRef: null,
+			templateSnapshotId: "sh-codex-auth",
+			errorMessage: null,
+		}),
+	).toBeNull();
 });

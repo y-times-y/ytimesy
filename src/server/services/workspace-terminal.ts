@@ -22,7 +22,7 @@ export async function connectWorkspaceTerminal(input: {
 }): Promise<PtySession> {
 	const workspace = await readyWorkspaceForOwner(input.userId, input.projectId);
 	const blocked = terminalConnectBlockedReason(workspace);
-	if (blocked || !workspace?.providerRef) {
+	if (blocked || !workspace) {
 		throw new Error(
 			blocked ?? "Prepare a workspace before opening the terminal.",
 		);

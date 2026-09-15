@@ -1,6 +1,6 @@
 import {
-	type ProjectWorkspace,
-	workspaceSessionMachineRef,
+	type WorkspaceEnvironmentState,
+	workspaceEnvironmentIsReady,
 } from "./project-workspace";
 
 export const WORKSPACE_PTY_SLUG = "main";
@@ -38,13 +38,9 @@ export function parseTerminalClientMessage(
 }
 
 export function terminalConnectBlockedReason(
-	workspace:
-		| (Pick<ProjectWorkspace, "status" | "providerRef"> & {
-				errorMessage?: string | null;
-		  })
-		| null,
+	workspace: WorkspaceEnvironmentState | null,
 ) {
-	if (workspaceSessionMachineRef(workspace)) return null;
+	if (workspaceEnvironmentIsReady(workspace)) return null;
 	if (!workspace) return "Prepare a workspace before opening the terminal.";
 	if (workspace.status === "failed")
 		return (

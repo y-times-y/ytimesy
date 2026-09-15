@@ -35,6 +35,16 @@ describe("sessionMachinePlan", () => {
 		).toEqual({ kind: "copy-snapshot", snapshotId: "sh-template" });
 	});
 
+	it("copies from the snapshot when the unused template VM is gone", () => {
+		expect(
+			sessionMachinePlan({
+				sessionProviderRef: null,
+				templateSnapshotId: "sh-template",
+				templateProviderRef: null,
+			}),
+		).toEqual({ kind: "copy-snapshot", snapshotId: "sh-template" });
+	});
+
 	it("seals the template before the first agent instead of attaching it", () => {
 		expect(
 			sessionMachinePlan({

@@ -130,7 +130,7 @@ export function connectHarnessWorkspaceSession(
 			harnessName,
 			scope.harnessId === "opencode" ? "connect" : "sign_in",
 		);
-		if (blocked || !workspace?.providerRef || !scope.projectId) {
+		if (blocked || !scope.projectId) {
 			return {
 				...emptyHarnessSession(),
 				connection: {

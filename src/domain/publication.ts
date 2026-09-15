@@ -1,6 +1,6 @@
 import {
-	type ProjectWorkspace,
-	workspaceSessionMachineRef,
+	type WorkspaceEnvironmentState,
+	workspaceEnvironmentIsReady,
 } from "./project-workspace";
 
 export type BranchComparison = {
@@ -25,13 +25,9 @@ export function publicationBlockedReason(
 }
 
 export function publicationWorkspaceBlockedReason(
-	workspace:
-		| (Pick<ProjectWorkspace, "status" | "providerRef"> & {
-				errorMessage?: string | null;
-		  })
-		| null,
+	workspace: WorkspaceEnvironmentState | null,
 ) {
-	if (workspaceSessionMachineRef(workspace)) return null;
+	if (workspaceEnvironmentIsReady(workspace)) return null;
 	if (!workspace) return "Prepare a workspace before publishing.";
 	if (workspace.status === "failed")
 		return (

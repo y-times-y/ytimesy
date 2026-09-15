@@ -32,6 +32,14 @@ export function canStartPrepare(status: WorkspaceStatus | undefined) {
 	return status === undefined || status === "queued" || status === "failed";
 }
 
+export type WorkspaceEnvironmentState = Pick<
+	ProjectWorkspace,
+	"status" | "providerRef"
+> & {
+	templateSnapshotId?: string | null;
+	errorMessage?: string | null;
+};
+
 export function workspaceSessionMachineRef(
 	workspace: Pick<ProjectWorkspace, "status" | "providerRef"> | null,
 ) {
@@ -40,11 +48,19 @@ export function workspaceSessionMachineRef(
 	return null;
 }
 
+/**
+ * Agents copy from the sealed snapshot. The unused template VM is optional
+ * once that snapshot exists; pausing or deleting it must not block Connect.
+ */
+export function workspaceEnvironmentIsReady(
+	workspace: WorkspaceEnvironmentState | null,
+) {
+	if (workspace?.status !== "ready") return false;
+	return Boolean(workspace.providerRef || workspace.templateSnapshotId);
+}
+
 export function harnessConnectBlockedReason(
-	workspace: Pick<
-		ProjectWorkspace,
-		"status" | "providerRef" | "errorMessage"
-	> | null,
+	workspace: WorkspaceEnvironmentState | null,
 	harnessName: string,
 	kind: "sign_in" | "connect" = "sign_in",
 ) {
@@ -52,7 +68,7 @@ export function harnessConnectBlockedReason(
 		kind === "connect"
 			? `connecting ${harnessName}`
 			: `signing in to ${harnessName}`;
-	if (workspaceSessionMachineRef(workspace)) return null;
+	if (workspaceEnvironmentIsReady(workspace)) return null;
 	if (!workspace) return `Prepare a workspace before ${action}.`;
 	if (workspace.status === "failed")
 		return (
@@ -63,10 +79,7 @@ export function harnessConnectBlockedReason(
 }
 
 export function codexConnectBlockedReason(
-	workspace: Pick<
-		ProjectWorkspace,
-		"status" | "providerRef" | "errorMessage"
-	> | null,
+	workspace: WorkspaceEnvironmentState | null,
 ) {
 	return harnessConnectBlockedReason(workspace, "Codex");
 }

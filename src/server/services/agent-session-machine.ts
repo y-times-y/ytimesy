@@ -19,6 +19,7 @@ import {
 	promptTextWithProjectContext,
 	relatedTracesForTask,
 } from "#/domain/project-context";
+import { workspaceEnvironmentIsReady } from "#/domain/project-workspace";
 import {
 	type AgentSessionRecord,
 	agentSessionForOwner,
@@ -48,7 +49,7 @@ async function resolveAgentSessionRecord(input: {
 	readonly parentSessionId?: string;
 }) {
 	const workspace = await workspaceForProject(input.userId, input.projectId);
-	if (workspace?.status !== "ready" || !workspace.providerRef) {
+	if (!workspace || !workspaceEnvironmentIsReady(workspace)) {
 		throw new Error("Prepare a project environment before starting an agent.");
 	}
 	const sessions = await listAgentSessions(input.userId, input.projectId);
@@ -219,7 +220,7 @@ export async function executeSessionMachinePlan(input: {
 	readonly sessionProviderRef: string | null;
 	readonly workspaceId: string;
 	readonly templateSnapshotId: string | null;
-	readonly templateProviderRef: string;
+	readonly templateProviderRef: string | null;
 	readonly saveTemplateSnapshot: (snapshotId: string) => Promise<void>;
 	readonly saveSessionProviderRef: (providerRef: string) => Promise<void>;
 	readonly wait?: (ms: number) => Promise<void>;
@@ -267,7 +268,7 @@ async function copyAgentSessionFromTemplate(
 		>;
 		readonly sessionId: string;
 		readonly workspaceId: string;
-		readonly templateProviderRef: string;
+		readonly templateProviderRef: string | null;
 		readonly saveTemplateSnapshot: (snapshotId: string) => Promise<void>;
 		readonly wait?: (ms: number) => Promise<void>;
 	},
@@ -278,7 +279,10 @@ async function copyAgentSessionFromTemplate(
 		return await input.machines.provisionSession(slug, snapshotId);
 	} catch (cause) {
 		const message = failureMessage(cause);
-		if (shouldResealProjectSnapshotAfterCopyFailure(message)) {
+		if (
+			shouldResealProjectSnapshotAfterCopyFailure(message) &&
+			input.templateProviderRef
+		) {
 			await input.machines.ensureRunning(
 				WorkspaceId(input.templateProviderRef),
 			);

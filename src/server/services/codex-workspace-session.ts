@@ -177,7 +177,7 @@ export function connectCodexWorkspaceSession(
 			readyWorkspaceForOwner(scope.userId, scope.projectId),
 		);
 		const blocked = codexConnectBlockedReason(workspace);
-		if (blocked || !workspace?.providerRef) {
+		if (blocked) {
 			return {
 				...emptyCodexSession(Boolean(snapshotId)),
 				connection: {

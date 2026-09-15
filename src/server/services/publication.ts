@@ -67,7 +67,7 @@ export function publishProject(
 			readyWorkspaceForOwner(userId, input.projectId),
 		);
 		const workspaceBlocked = publicationWorkspaceBlockedReason(workspace);
-		if (workspaceBlocked || !workspace?.providerRef) {
+		if (workspaceBlocked || !workspace) {
 			return yield* reject(
 				workspaceBlocked ?? "Prepare a workspace before publishing.",
 			);
