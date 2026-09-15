@@ -18,6 +18,11 @@ describe("projectContextDocument", () => {
 				briefing: "Lockfile installs use corepack.",
 				traces: [
 					{ area: "prepare", summary: "nvm must be sourced before pnpm" },
+					{
+						area: null,
+						summary:
+							"Seal the snapshot: Wrote template_snapshot_id.\nHow: Copy from the unused template.",
+					},
 					{ area: null, summary: "  " },
 				],
 			}),
@@ -28,6 +33,7 @@ describe("projectContextDocument", () => {
 				"",
 				"## Related traces",
 				"- prepare: nvm must be sourced before pnpm",
+				"- Seal the snapshot: Wrote template_snapshot_id.\nHow: Copy from the unused template.",
 			].join("\n"),
 		);
 	});
@@ -62,6 +68,20 @@ describe("traceSummaryFromTurn", () => {
 				reply: "Wrote template_snapshot_id after pnpm install.",
 			}),
 		).toBe("Seal the snapshot: Wrote template_snapshot_id after pnpm install.");
+	});
+
+	it("keeps sibling reasoning, not only the compacted reply", () => {
+		expect(
+			traceSummaryFromTurn({
+				task: "Seal the snapshot",
+				reply: "Wrote template_snapshot_id after pnpm install.",
+				reasoning: [
+					"Agents copy from the unused template, never from a dirty checkout.",
+				],
+			}),
+		).toBe(
+			"Seal the snapshot: Wrote template_snapshot_id after pnpm install.\nHow: Agents copy from the unused template, never from a dirty checkout.",
+		);
 	});
 });
 

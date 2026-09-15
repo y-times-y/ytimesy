@@ -7,6 +7,7 @@ import {
 	isTurnRunning,
 	lastAgentMessageText,
 	lastUserMessageText,
+	reasoningSummariesFromTurn,
 	type SessionItem,
 	sessionRecordHasConversation,
 	sessionTitleFromItems,
@@ -253,6 +254,38 @@ describe("session items", () => {
 				},
 			]),
 		).toBe("Wrote template_snapshot_id.");
+	});
+
+	it("reads reasoning summaries from the latest turn", () => {
+		expect(
+			reasoningSummariesFromTurn([
+				{
+					kind: "userMessage",
+					id: SessionItemId("user-old"),
+					text: "old task",
+				},
+				{
+					kind: "reasoning",
+					id: SessionItemId("reason-old"),
+					summaries: ["stale"],
+				},
+				{
+					kind: "userMessage",
+					id: SessionItemId("user-1"),
+					text: "Seal the snapshot",
+				},
+				{
+					kind: "reasoning",
+					id: SessionItemId("reason-1"),
+					summaries: ["Snapshot ids are on the unused template."],
+				},
+				{
+					kind: "agentMessage",
+					id: SessionItemId("agent-1"),
+					text: "Wrote template_snapshot_id.",
+				},
+			]),
+		).toEqual(["Snapshot ids are on the unused template."]);
 	});
 
 	it("uses the first line of the latest user message as the session title", () => {
