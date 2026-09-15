@@ -1,3 +1,5 @@
+import type { SessionItem } from "./session-item";
+
 export const PROJECT_CONTEXT_PATH = "/tmp/ytimesy-project-context.md";
 
 export type ProjectTrace = {
@@ -104,6 +106,64 @@ export function promptTextWithProjectContext(input: {
 	const task = input.task;
 	if (!document) return task;
 	return `Shared project context from sibling agents:\n\n${document}\n\n---\n\n${task}`;
+}
+
+/**
+ * Related traces key off this path so the next agent gets how a sibling
+ * figured out the same area, not every thought from every session.
+ */
+export function traceAreaFromTurn(input: {
+	readonly task: string;
+	readonly items: readonly SessionItem[];
+}): string | null {
+	return fileChangeAreaFromTurn(input.items) ?? traceAreaFromTask(input.task);
+}
+
+export function traceAreaFromTask(task: string): string | null {
+	const paths = [
+		...task.matchAll(
+			/(?<![A-Za-z0-9_./-])((?:src|tests|public|scripts|\.agents)\/[\w./-]+|[\w.-]+\.(?:md|ts|tsx|css|json))/g,
+		),
+	].map((match) => match[1]);
+	return areaFromPaths(paths);
+}
+
+function fileChangeAreaFromTurn(items: readonly SessionItem[]): string | null {
+	let start = 0;
+	for (let index = 0; index < items.length; index += 1) {
+		if (items[index]?.kind === "userMessage") start = index + 1;
+	}
+	const paths: string[] = [];
+	for (const item of items.slice(start)) {
+		if (item.kind !== "fileChange") continue;
+		for (const change of item.changes) {
+			const path = change.path.trim();
+			if (path) paths.push(path);
+		}
+	}
+	return areaFromPaths(paths);
+}
+
+function areaFromPaths(paths: readonly string[]): string | null {
+	const unique = [
+		...new Set(paths.map((path) => path.replace(/^\.\//, "")).filter(Boolean)),
+	];
+	if (unique.length === 0) return null;
+	if (unique.length === 1) return unique[0] ?? null;
+	const directories = unique.map((path) => {
+		const slash = path.lastIndexOf("/");
+		return slash === -1 ? path : path.slice(0, slash);
+	});
+	const common = directories[0];
+	if (
+		common &&
+		directories.every(
+			(directory) => directory === common || directory.startsWith(`${common}/`),
+		)
+	) {
+		return common;
+	}
+	return unique[0] ?? null;
 }
 
 function clipBriefing(text: string) {

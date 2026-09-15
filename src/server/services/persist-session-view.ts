@@ -3,6 +3,7 @@ import { listedModelPreferenceFromSessions } from "#/domain/listed-model";
 import {
 	briefingUpdateFromTurn,
 	nextProjectBriefing,
+	traceAreaFromTurn,
 	traceSummaryFromTurn,
 } from "#/domain/project-context";
 import {
@@ -115,7 +116,7 @@ async function captureTurnTrace(
 	await insertProjectTrace({
 		projectId: session.projectId,
 		sessionId: session.id,
-		area: null,
+		area: traceAreaFromTurn({ task, items: next }),
 		summary,
 	});
 	const briefing = await loadProjectBriefing(session.projectId);
