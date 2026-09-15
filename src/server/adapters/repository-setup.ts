@@ -86,7 +86,7 @@ export function installArgv(directory: string, lockfiles: string[]) {
 }
 
 export function guestNodePath() {
-	return 'export NVM_DIR="${NVM_DIR:-/usr/local/nvm}"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"';
+	return `export NVM_DIR="\${NVM_DIR:-/usr/local/nvm}"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"`;
 }
 
 export function listLockfilesArgv(directory: string) {
