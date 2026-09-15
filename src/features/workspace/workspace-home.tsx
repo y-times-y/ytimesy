@@ -108,7 +108,13 @@ export function WorkspaceHome({
 				opencode: hintForHarness(status.keys, "opencode") ?? undefined,
 			});
 		});
-		void loadDesktop().then(setDesktop);
+		void loadDesktop().then((next) => {
+			setDesktop((current) =>
+				current.status === "starting" || current.status === "running"
+					? current
+					: next,
+			);
+		});
 		void loadProjects().then(setProjectPicker);
 	}, [loadDesktop, loadKeys, loadProjects]);
 

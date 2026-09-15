@@ -142,7 +142,13 @@ export function lastUserMessageText(
 ): string | null {
 	for (let index = items.length - 1; index >= 0; index -= 1) {
 		const item = items[index];
-		if (item?.kind === "userMessage" && item.text.trim()) return item.text;
+		if (
+			item?.kind === "userMessage" &&
+			item.text.trim() &&
+			!isWorkspacePreamble(item.text)
+		) {
+			return item.text;
+		}
 	}
 	return null;
 }
