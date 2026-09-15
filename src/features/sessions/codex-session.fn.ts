@@ -149,7 +149,22 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 	});
 
 export const stopCodexSessionTurn = createServerFn({ method: "POST" })
-	.validator(optionalSessionInput)
+	.validator(
+		(
+			data:
+				| {
+						projectId?: string;
+						harnessId?: string;
+						sessionId?: string;
+						createNew?: boolean;
+						lane?: "main" | "side";
+				  }
+				| undefined,
+		) => ({
+			...optionalSessionInput(data),
+			lane: data?.lane === "side" ? ("side" as const) : ("main" as const),
+		}),
+	)
 	.handler(async ({ data }): Promise<PublicCodexSession> => {
 		const scope = await requireScope(
 			data.projectId,
@@ -158,6 +173,6 @@ export const stopCodexSessionTurn = createServerFn({ method: "POST" })
 			data.createNew,
 		);
 		return runWithMachines((machines) =>
-			stopHarnessWorkspaceTurn(machines, scope),
+			stopHarnessWorkspaceTurn(machines, scope, { lane: data.lane }),
 		);
 	});

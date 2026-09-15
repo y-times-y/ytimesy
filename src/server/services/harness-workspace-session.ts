@@ -242,7 +242,11 @@ export function sendHarnessWorkspaceTask(
 export function stopHarnessWorkspaceTurn(
 	machines: WorkspaceMachines,
 	scope: HarnessSessionScope,
+	input?: { readonly lane?: "main" | "side" },
 ): Effect.Effect<PublicHarnessSession> {
+	if (input?.lane === "side") {
+		return stopHarnessSideTurn(machines, scope);
+	}
 	if (scope.harnessId === "codex") {
 		return stopCodexWorkspaceTurn(machines, scope);
 	}
@@ -696,6 +700,57 @@ function sendHarnessSideTask(
 			createNew: false,
 		});
 		return mergeSideChat(main, sideView, scope.harnessId);
+	}).pipe(
+		Effect.catchAll((cause) =>
+			Effect.succeed({
+				...emptyHarnessSession(),
+				connection: {
+					status: "failed" as const,
+					provider: scope.harnessId,
+					message: publicFailureMessage(cause),
+				},
+			}),
+		),
+	);
+}
+
+/**
+ * Side Stop targets the child session VM. It does not copy a new machine
+ * and does not abort the parent's running turn.
+ */
+function stopHarnessSideTurn(
+	machines: WorkspaceMachines,
+	scope: HarnessSessionScope,
+): Effect.Effect<PublicHarnessSession> {
+	return Effect.gen(function* () {
+		if (!scope.projectId || !scope.sessionId) {
+			return {
+				...emptyHarnessSession(),
+				connection: {
+					status: "failed" as const,
+					provider: scope.harnessId,
+					message: "Open a chat before stopping a side agent.",
+				},
+			};
+		}
+		const child = yield* Effect.tryPromise(() =>
+			childAgentSession(scope.userId, scope.sessionId as string),
+		);
+		if (!child) {
+			return yield* readHarnessWorkspaceSession(machines, scope);
+		}
+		const stopped = yield* stopHarnessWorkspaceTurn(machines, {
+			userId: scope.userId,
+			projectId: scope.projectId,
+			sessionId: child.id,
+			harnessId: child.harness,
+			createNew: false,
+		});
+		const main = yield* readHarnessWorkspaceSession(machines, {
+			...scope,
+			createNew: false,
+		});
+		return mergeSideChat(main, stopped, scope.harnessId);
 	}).pipe(
 		Effect.catchAll((cause) =>
 			Effect.succeed({

@@ -1,5 +1,9 @@
 import type { AgentProviderId } from "./agent-provider";
-import type { SessionItem } from "./session-item";
+import {
+	isTurnRunning,
+	type SessionItem,
+	type SessionTurnStatus,
+} from "./session-item";
 
 export const SIDE_CHAT_QUESTION_MARKER = "\n\nQuestion:\n";
 
@@ -17,6 +21,12 @@ export function sideAgentSubmitLane(_harness: AgentProviderId): "main" {
 
 export function sideChatTurnText(question: string): string {
 	return `${SIDE_CHAT_TURN_PREFIX}${SIDE_CHAT_QUESTION_MARKER}${question}`;
+}
+
+export function sideChatComposerAction(
+	turnStatus: SessionTurnStatus,
+): "stop" | "send" {
+	return isTurnRunning(turnStatus) ? "stop" : "send";
 }
 
 export function visibleSideChatText(text: string): string {

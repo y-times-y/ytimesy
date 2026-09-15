@@ -1,4 +1,4 @@
-import { ArrowUp, Plus } from "lucide-react";
+import { ArrowUp, Plus, Square } from "lucide-react";
 import { useEffect, useState } from "react";
 import { SessionItemId } from "#/domain/ids";
 import {
@@ -6,6 +6,7 @@ import {
 	type SessionTurnStatus,
 	visibleSessionItems,
 } from "#/domain/session-item";
+import { sideChatComposerAction } from "#/domain/side-chat";
 import { SessionTimeline } from "./session-timeline";
 import { TaskInput } from "./task-input";
 
@@ -18,6 +19,7 @@ export function SideChatPanel({
 	busy,
 	queued = false,
 	onSend,
+	onStop,
 }: {
 	items: readonly SessionItem[];
 	turnStatus: SessionTurnStatus;
@@ -27,6 +29,7 @@ export function SideChatPanel({
 	busy: boolean;
 	queued?: boolean;
 	onSend: (text: string) => void;
+	onStop: () => void;
 }) {
 	const [draft, setDraft] = useState("");
 	const [optimisticItems, setOptimisticItems] = useState<SessionItem[]>([]);
@@ -86,15 +89,27 @@ export function SideChatPanel({
 					placeholder="Message side chat"
 					label="Side chat message"
 				/>
-				<button
-					type="button"
-					className="side-chat-send"
-					aria-label="Send side chat"
-					disabled={!canSend || busy || !draft.trim()}
-					onClick={sendDraft}
-				>
-					<ArrowUp size={16} />
-				</button>
+				{sideChatComposerAction(turnStatus) === "stop" ? (
+					<button
+						type="button"
+						className="side-chat-send"
+						aria-label="Stop side chat"
+						title="Stop this run"
+						onClick={onStop}
+					>
+						<Square size={14} fill="currentColor" />
+					</button>
+				) : (
+					<button
+						type="button"
+						className="side-chat-send"
+						aria-label="Send side chat"
+						disabled={!canSend || busy || !draft.trim()}
+						onClick={sendDraft}
+					>
+						<ArrowUp size={16} />
+					</button>
+				)}
 			</div>
 		</section>
 	);

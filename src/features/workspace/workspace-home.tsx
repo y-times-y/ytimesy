@@ -948,6 +948,19 @@ export function WorkspaceHome({
 									isolated
 									busy={composerBusy}
 									onSend={sendSideChat}
+									onStop={() => {
+										const chatId = activeSessionId;
+										const epoch = sessionEpoch.current;
+										setBusyChatIds((ids) => withBusyChat(ids, chatId));
+										void stopTurn({
+											data: { ...sessionScope(), lane: "side" as const },
+										})
+											.then((next) => applySessionView(epoch, next))
+											.finally(() => {
+												setBusyChatIds((ids) => withoutBusyChat(ids, chatId));
+												void chats.refetch();
+											});
+									}}
 								/>
 							}
 							onCollapse={() => setInspectorOpen(false)}
