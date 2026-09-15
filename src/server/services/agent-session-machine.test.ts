@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { copiedSessionScratchFileResetCommand } from "#/domain/agent-session";
+import { copiedSessionScratchResetCommand } from "#/domain/agent-session";
 import { WorkspaceId } from "#/domain/ids";
 import { executeSessionMachinePlan } from "./agent-session-machine.ts";
 
@@ -95,10 +95,10 @@ describe("executeSessionMachinePlan", () => {
 			saveTemplateSnapshot: async () => undefined,
 			saveSessionProviderRef: async () => undefined,
 		});
-		expect(runtime.commands[0]).toBe(copiedSessionScratchFileResetCommand());
-		expect(runtime.commands[1]).toContain("opencode.db");
-		expect(runtime.commands[1]?.startsWith("rm -f ")).toBe(true);
-		expect(runtime.commands[2]?.startsWith("rm -rf ")).toBe(true);
+		expect(runtime.commands[0]).toBe(copiedSessionScratchResetCommand());
+		expect(runtime.commands).toHaveLength(1);
+		expect(runtime.commands[0]?.startsWith("rm -rf ")).toBe(true);
+		expect(runtime.commands[0]).toContain("opencode.db");
 		expect(runtime.commands.some((command) => command.includes("bash"))).toBe(
 			false,
 		);
@@ -135,7 +135,10 @@ describe("executeSessionMachinePlan", () => {
 			saveSessionProviderRef: async () => undefined,
 		});
 		expect(result.providerRef).toBe("agent-vm");
-		expect(runtime.writes[0]?.path).toBe("/tmp/ytimesy-opencode-status.json");
+		expect(runtime.writes).toContainEqual({
+			path: "/tmp/ytimesy-opencode-status.json",
+			contents: `${JSON.stringify({ stage: "missing" })}\n`,
+		});
 	});
 
 	it("resumes the same agent VM for later turns", async () => {

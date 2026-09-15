@@ -135,7 +135,6 @@ export async function bindAgentSessionMachine(
 		readonly sessionId?: string;
 		readonly createNew?: boolean;
 		readonly parentSessionId?: string;
-		readonly task?: string;
 	},
 ) {
 	const { session, workspace } = await resolveAgentSessionRecord(input);
@@ -156,12 +155,6 @@ export async function bindAgentSessionMachine(
 				() => undefined,
 			),
 	});
-	if (executed.planKind !== "resume") {
-		await syncProjectContextForTask(machines, executed.providerRef, {
-			projectId: input.projectId,
-			task: input.task ?? session.title,
-		});
-	}
 	return {
 		session: { ...session, providerRef: executed.providerRef },
 		providerRef: executed.providerRef,
@@ -347,20 +340,24 @@ async function retryCopyAfterCapacityLag(
 
 /**
  * Guest `rm` of `/tmp` can fail when the snapshot files are root-owned
- * (sticky bit). Freestyle `exec` is not a shell, so reset uses direct `rm`
- * argv instead of `bash -lc`. Status files are overwritten through the FS
- * API so Connect cannot reload the template chat.
+ * (sticky bit). Freestyle `exec` is not a shell, so reset uses one direct
+ * `rm -rf` argv instead of `bash -lc`. Status files are overwritten through
+ * the FS API so Connect cannot reload the template chat.
  */
 async function resetCopiedSessionScratch(
 	machines: Pick<WorkspaceMachines, "exec" | "writeTextFile">,
 	copied: WorkspaceId,
 ) {
-	for (const command of copiedSessionScratchResetCommands()) {
-		await machines.exec(copied, command, 15_000);
-	}
-	for (const file of COPIED_SESSION_STATUS_RESETS) {
-		await machines.writeTextFile(copied, file.path, file.contents);
-	}
+	await Promise.all(
+		copiedSessionScratchResetCommands().map((command) =>
+			machines.exec(copied, command, 15_000),
+		),
+	);
+	await Promise.all(
+		COPIED_SESSION_STATUS_RESETS.map((file) =>
+			machines.writeTextFile(copied, file.path, file.contents),
+		),
+	);
 }
 
 export async function syncProjectContextForTask(

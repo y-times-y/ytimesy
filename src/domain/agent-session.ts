@@ -163,12 +163,16 @@ export function copiedSessionScratchTreeResetCommand() {
 	return `rm -rf ${COPIED_SESSION_SCRATCH_TREES.join(" ")}`;
 }
 
+export function copiedSessionScratchResetCommand() {
+	return `rm -rf ${[
+		...COPIED_SESSION_SCRATCH_PATHS,
+		...COPIED_SESSION_DB_FILES,
+		...COPIED_SESSION_SCRATCH_TREES,
+	].join(" ")}`;
+}
+
 export function copiedSessionScratchResetCommands() {
-	return [
-		copiedSessionScratchFileResetCommand(),
-		copiedSessionScratchDatabaseResetCommand(),
-		copiedSessionScratchTreeResetCommand(),
-	] as const;
+	return [copiedSessionScratchResetCommand()] as const;
 }
 
 export function sessionMachineRefsToDestroy(input: {
