@@ -119,6 +119,14 @@ export function selectedHarnessIsConnected(
 	);
 }
 
+export function shouldAutoResumeHarnessSession(input: {
+	readonly harnessId: AgentProviderId;
+	readonly connection: AgentConnection;
+}): boolean {
+	if (input.harnessId === "claude") return false;
+	return selectedHarnessIsConnected(input.connection, input.harnessId);
+}
+
 export function harnessRequiresAccountLogin(
 	harnessId: AgentProviderId,
 ): boolean {

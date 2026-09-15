@@ -9,6 +9,7 @@ import {
 	harnessRequiresAccountLogin,
 	offeredHarnessAccess,
 	selectedHarnessIsConnected,
+	shouldAutoResumeHarnessSession,
 } from "./harness-access";
 
 describe("harness access", () => {
@@ -114,6 +115,45 @@ describe("harness access", () => {
 			subscriptionAction: null,
 		});
 		expect(selectedHarnessIsConnected(connection, "opencode")).toBe(true);
+	});
+
+	it("does not boot a paused OpenCode or Codex chat just to show the transcript", () => {
+		expect(
+			shouldAutoResumeHarnessSession({
+				harnessId: "opencode",
+				connection: { status: "disconnected" },
+			}),
+		).toBe(false);
+		expect(
+			shouldAutoResumeHarnessSession({
+				harnessId: "codex",
+				connection: { status: "disconnected" },
+			}),
+		).toBe(false);
+		expect(
+			shouldAutoResumeHarnessSession({
+				harnessId: "opencode",
+				connection: {
+					status: "authenticated",
+					provider: "opencode",
+					authMode: "local",
+					planType: null,
+					email: null,
+				},
+			}),
+		).toBe(true);
+		expect(
+			shouldAutoResumeHarnessSession({
+				harnessId: "claude",
+				connection: {
+					status: "authenticated",
+					provider: "claude",
+					authMode: "subscription",
+					planType: null,
+					email: null,
+				},
+			}),
+		).toBe(false);
 	});
 
 	it("keeps Anthropic's URL on the authorizing Claude row", () => {
