@@ -1,9 +1,15 @@
 import { Duration, Effect } from "effect";
+import { fileChangesFromGitPorcelain } from "#/domain/git-working-tree";
 import { SessionItemId, type WorkspaceId } from "#/domain/ids";
 import type { ListedModel } from "#/domain/listed-model";
 import { parseOpenCodeModelCatalog } from "#/domain/opencode-catalog";
 import { posixShellQuoted } from "#/domain/posix-command";
-import type { SessionItem, SessionTurnStatus } from "#/domain/session-item";
+import type {
+	FileChangeEntry,
+	SessionItem,
+	SessionTurnStatus,
+} from "#/domain/session-item";
+import { PROJECT_CWD_PATH } from "#/server/adapters/freestyle/clone-project";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
 
 const STATUS_PATH = "/tmp/ytimesy-opencode-status.json";
@@ -12,6 +18,33 @@ const LOG_PATH = "/tmp/ytimesy-opencode-serve.log";
 const AUTH_BODY_PATH = "/tmp/ytimesy-opencode-auth.json";
 const OPENCODE_PORT = 4096;
 const OPENCODE_ORIGIN = `http://127.0.0.1:${OPENCODE_PORT}`;
+const WORKING_TREE_ITEM_ID = SessionItemId("opencode-working-tree");
+const READ_WORKING_TREE = `python3 - <<'PY'
+import json, os, subprocess
+cwd_file = ${JSON.stringify(PROJECT_CWD_PATH)}
+cwd = open(cwd_file).read().strip() if os.path.isfile(cwd_file) else ""
+if not cwd:
+    cwd = os.path.expanduser("~/ytimesy")
+if not os.path.isdir(os.path.join(cwd, ".git")):
+    print(json.dumps({"porcelain": "", "previews": {}}))
+    raise SystemExit
+porcelain = subprocess.check_output(["git", "-C", cwd, "status", "--porcelain=v1"], text=True)
+previews = {}
+for line in porcelain.splitlines():
+    if len(line) < 4:
+        continue
+    path = line[3:].split(" -> ")[-1].strip().strip('"')
+    full = os.path.join(cwd, path)
+    code = line[:2]
+    if code == "??" and os.path.isfile(full) and os.path.getsize(full) < 50000:
+        previews[path] = open(full, errors="replace").read()[:4000]
+        continue
+    if "M" in code or code.strip() == "A":
+        diff = subprocess.check_output(["git", "-C", cwd, "diff", "--", path], text=True)
+        if diff:
+            previews[path] = diff[:4000]
+print(json.dumps({"porcelain": porcelain, "previews": previews}))
+PY`;
 
 const INSTALL_SCRIPT = `set -eu
 export HOME="\${HOME:-/root}"
@@ -256,13 +289,14 @@ function readOpenCodeSnapshot(
 			(previous.stage === "authenticated" && previous.authMode === "apikey")
 				? ("apikey" as const)
 				: ("local" as const);
+		const workingTree = yield* readWorkingTreeChanges(machines, workspaceId);
 		return {
 			stage: "authenticated" as const,
 			authMode,
 			planType: null,
 			models,
 			turnStatus: previousTurn,
-			items: previousItems,
+			items: withWorkingTreeChanges(previousItems, workingTree),
 		};
 	});
 }
@@ -279,6 +313,52 @@ function persistStatus(
 			`${JSON.stringify(status)}\n`,
 		),
 	).pipe(Effect.catchAll(() => Effect.void));
+}
+
+function readWorkingTreeChanges(
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+): Effect.Effect<readonly FileChangeEntry[]> {
+	return Effect.tryPromise(() =>
+		machines.exec(workspaceId, READ_WORKING_TREE, 20_000),
+	).pipe(
+		Effect.map((result) => parseWorkingTreePayload(result.stdout)),
+		Effect.catchAll(() => Effect.succeed([])),
+	);
+}
+
+function parseWorkingTreePayload(raw: string): readonly FileChangeEntry[] {
+	try {
+		const parsed: unknown = JSON.parse(raw.trim());
+		if (!isRecord(parsed) || typeof parsed.porcelain !== "string") return [];
+		const previews = isRecord(parsed.previews)
+			? Object.fromEntries(
+					Object.entries(parsed.previews).filter(
+						(entry): entry is [string, string] => typeof entry[1] === "string",
+					),
+				)
+			: {};
+		return fileChangesFromGitPorcelain(parsed.porcelain, previews);
+	} catch {
+		return [];
+	}
+}
+
+function withWorkingTreeChanges(
+	items: readonly SessionItem[],
+	changes: readonly FileChangeEntry[],
+): SessionItem[] {
+	const withoutTree = items.filter((item) => item.id !== WORKING_TREE_ITEM_ID);
+	if (changes.length === 0) return [...withoutTree];
+	return [
+		...withoutTree,
+		{
+			kind: "fileChange",
+			id: WORKING_TREE_ITEM_ID,
+			status: "completed",
+			changes,
+		},
+	];
 }
 
 function curlJson(
