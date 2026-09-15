@@ -9,6 +9,7 @@ import {
 	type SessionTurnStatus,
 	showTurnWorking,
 } from "#/domain/session-item";
+import { thoughtLabel } from "#/domain/thought-label";
 import {
 	explorationLabel,
 	groupTimelineRows,
@@ -59,22 +60,33 @@ export function SessionTimeline({
 					key={row.kind === "item" ? row.item.id : `explore:${row.id}`}
 					data-kind={row.kind === "item" ? row.item.kind : "exploration"}
 				>
-					<TimelineRowView row={row} />
+					<TimelineRowView
+						row={row}
+						turnRunning={turnStatus === "running"}
+						isLastItem={
+							row.kind === "item" && row.item.id === visible.at(-1)?.id
+						}
+					/>
 				</li>
 			))}
 			{showTurnWorking(items, turnStatus) ? (
 				<li data-kind="working">
-					<p className="session-working">
-						<span className="session-activity-spinner" aria-hidden="true" />
-						Working
-					</p>
+					<p className="session-working">Thinking</p>
 				</li>
 			) : null}
 		</ol>
 	);
 }
 
-function TimelineRowView({ row }: { row: TimelineRow }) {
+function TimelineRowView({
+	row,
+	turnRunning,
+	isLastItem,
+}: {
+	row: TimelineRow;
+	turnRunning: boolean;
+	isLastItem: boolean;
+}) {
 	if (row.kind === "exploration") {
 		return (
 			<details className="session-exploration">
@@ -90,15 +102,22 @@ function TimelineRowView({ row }: { row: TimelineRow }) {
 			</details>
 		);
 	}
-	return <SessionItemView item={row.item} />;
+	return (
+		<SessionItemView
+			item={row.item}
+			thoughtInProgress={turnRunning && isLastItem}
+		/>
+	);
 }
 
 function SessionItemView({
 	item,
 	nested = false,
+	thoughtInProgress = false,
 }: {
 	item: SessionItem;
 	nested?: boolean;
+	thoughtInProgress?: boolean;
 }) {
 	switch (item.kind) {
 		case "userMessage":
@@ -115,11 +134,15 @@ function SessionItemView({
 			);
 		case "reasoning": {
 			const summaries = item.summaries.filter((summary) => summary.trim());
+			const title = thoughtLabel({
+				durationSeconds: item.durationSeconds,
+				inProgress: thoughtInProgress && item.durationSeconds == null,
+			});
 			if (summaries.length === 0) {
 				return (
 					<div className="session-activity" data-kind="reasoning">
 						<p>
-							<span className="session-activity-title">Thought</span>
+							<span className="session-activity-title">{title}</span>
 						</p>
 					</div>
 				);
@@ -127,7 +150,7 @@ function SessionItemView({
 			return (
 				<details className="session-activity" data-kind="reasoning">
 					<summary>
-						<span className="session-activity-title">Thought</span>
+						<span className="session-activity-title">{title}</span>
 						<ChevronRight size={12} className="session-activity-chevron" />
 					</summary>
 					{summaries.map((summary) => (

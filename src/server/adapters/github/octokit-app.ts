@@ -20,6 +20,10 @@ export type GitHubAppListing = {
 		owner: string;
 		name: string;
 	}) => Promise<readonly string[]>;
+	readonly installationToken: (input: {
+		credentials: GitHubAppCredentials;
+		installationId: string;
+	}) => Promise<string>;
 };
 
 export function createOctokitGitHubListing(): GitHubAppListing {
@@ -60,6 +64,21 @@ export function createOctokitGitHubListing(): GitHubAppListing {
 				},
 			);
 			return flattenBranchNames(pages);
+		},
+		async installationToken(input) {
+			const app = githubApp(input.credentials);
+			const octokit = await app.getInstallationOctokit(
+				Number(input.installationId),
+			);
+			const auth = await octokit.auth({ type: "installation" });
+			if (
+				!auth ||
+				typeof auth !== "object" ||
+				typeof (auth as { token?: unknown }).token !== "string"
+			) {
+				throw new Error("GitHub App did not return an installation token");
+			}
+			return (auth as { token: string }).token;
 		},
 	};
 }

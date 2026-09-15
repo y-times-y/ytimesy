@@ -10,6 +10,7 @@ import type { SessionItem, SessionTurnStatus } from "#/domain/session-item";
 import { canSubmitComposer, canSubmitSideChat } from "#/domain/session-policy";
 import type { WorkspaceLifecycle } from "#/domain/workspace";
 import {
+	ensureCurrentLoginDaemon,
 	interruptCodexTurn,
 	readLoginStatus,
 	resumeCodexSession,
@@ -27,6 +28,8 @@ import {
 	readProofVmState,
 	writeProofVmState,
 } from "#/server/proof/codex-login-state";
+import { ensureProjectCheckout } from "./project-workspace";
+import { startWorkspaceDesktop } from "./workspace-desktop";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 export type PublicCodexSession = {
@@ -99,7 +102,8 @@ export function connectCodexWorkspaceSession(
 		const snapshotAvailable = Boolean(snapshot);
 		const existing = yield* readCodexWorkspaceSession(machines);
 		if (existing.connection.status === "authenticated") {
-			return existing;
+			yield* prepareAgentGuest(machines, existing.workspaceId);
+			return yield* readCodexWorkspaceSession(machines);
 		}
 		if (existing.connection.status === "awaiting_device_code") {
 			return existing;
@@ -116,6 +120,9 @@ export function connectCodexWorkspaceSession(
 				resumed.stage === "authenticated" ||
 				resumed.stage === "awaiting_device_code"
 			) {
+				if (resumed.stage === "authenticated") {
+					yield* prepareAgentGuest(machines, existingVm.workspaceId);
+				}
 				return viewFromStatus(
 					resumed,
 					existingVm.workspaceId,
@@ -158,6 +165,9 @@ export function connectCodexWorkspaceSession(
 			workspace.workspaceId,
 			snapshotAvailable,
 		);
+		if (status.stage === "authenticated") {
+			yield* prepareAgentGuest(machines, workspace.workspaceId);
+		}
 		return viewFromStatus(status, workspace.workspaceId, snapshotAvailable);
 	}).pipe(Effect.catchAll((cause) => sessionAfterFailure(cause)));
 }
@@ -176,6 +186,8 @@ export function sendCodexWorkspaceTask(
 		if (!vm) {
 			return emptyCodexSession(Boolean(snapshot));
 		}
+		yield* ensureProjectCheckout(machines, WorkspaceId(vm.workspaceId));
+		yield* ensureCurrentLoginDaemon(machines, WorkspaceId(vm.workspaceId));
 		const status = yield* submitCodexTask(
 			machines,
 			WorkspaceId(vm.workspaceId),
@@ -235,6 +247,20 @@ function authenticateProofWorkspace(
 		}
 		return status;
 	});
+}
+
+function prepareAgentGuest(
+	machines: WorkspaceMachines,
+	workspaceId: string | null,
+): Effect.Effect<void> {
+	if (!workspaceId) return Effect.void;
+	return Effect.gen(function* () {
+		yield* ensureProjectCheckout(machines, WorkspaceId(workspaceId));
+		yield* ensureCurrentLoginDaemon(machines, WorkspaceId(workspaceId));
+		yield* Effect.sync(() => {
+			void Effect.runPromise(startWorkspaceDesktop(machines));
+		});
+	}).pipe(Effect.catchAll(() => Effect.void));
 }
 
 function discardProofWorkspace(

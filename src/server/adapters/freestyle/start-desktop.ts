@@ -15,6 +15,19 @@ if ! command -v Xvfb >/dev/null 2>&1 || ! command -v x11vnc >/dev/null 2>&1 || !
   apt_get update -qq
   apt_get install -y -qq --no-install-recommends xvfb x11vnc novnc websockify fluxbox xterm
 fi
+if ! command -v chromium >/dev/null 2>&1 && ! command -v chromium-browser >/dev/null 2>&1 && ! command -v google-chrome >/dev/null 2>&1; then
+  apt_get update -qq
+  apt_get install -y -qq --no-install-recommends chromium || apt_get install -y -qq --no-install-recommends chromium-browser || true
+fi
+if ! command -v xdotool >/dev/null 2>&1 || ! command -v scrot >/dev/null 2>&1; then
+  apt_get install -y -qq --no-install-recommends xdotool scrot x11-utils dbus-x11 fonts-liberation || true
+fi
+PROFILE="\${HOME:-/root}/.profile"
+touch "$PROFILE"
+if ! grep -q 'DISPLAY=:0' "$PROFILE" 2>/dev/null; then
+  printf '\\nexport DISPLAY=:0\\n' >> "$PROFILE"
+fi
+printf ':0\\n' > /tmp/ytimesy-display
 if ! pgrep -x Xvfb >/dev/null 2>&1; then
   Xvfb :0 -screen 0 1440x900x24 -ac >/tmp/ytimesy-xvfb.log 2>&1 &
   sleep 1
@@ -22,6 +35,15 @@ fi
 export DISPLAY=:0
 if ! pgrep -x fluxbox >/dev/null 2>&1; then
   fluxbox >/tmp/ytimesy-fluxbox.log 2>&1 &
+  sleep 1
+fi
+if ! pgrep -f 'chromium|google-chrome' >/dev/null 2>&1; then
+  for bin in chromium chromium-browser google-chrome; do
+    if command -v "$bin" >/dev/null 2>&1; then
+      "$bin" --no-sandbox --disable-gpu --disable-dev-shm-usage --start-maximized about:blank >/tmp/ytimesy-browser.log 2>&1 &
+      break
+    fi
+  done
 fi
 if ! pgrep -x x11vnc >/dev/null 2>&1; then
   x11vnc -display :0 -forever -shared -nopw -listen 127.0.0.1 -rfbport 5900 >/tmp/ytimesy-x11vnc.log 2>&1 &
