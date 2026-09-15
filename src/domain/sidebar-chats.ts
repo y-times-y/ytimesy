@@ -1,10 +1,12 @@
-import type { SessionTurnStatus } from "./session-item";
+import type { AgentProviderId } from "./agent-provider";
+import { isTurnRunning, type SessionTurnStatus } from "./session-item";
 
 export type SidebarChat = {
 	readonly id: string;
 	readonly title: string;
 	readonly turnStatus?: SessionTurnStatus;
 	readonly listedModelId?: string | null;
+	readonly harnessId?: AgentProviderId | null;
 };
 
 export function chatsListedInSidebar(input: {
@@ -119,4 +121,40 @@ export function listedChatModelId(
 	chatId: string,
 ): string {
 	return chats.find((chat) => chat.id === chatId)?.listedModelId?.trim() ?? "";
+}
+
+export function listedChatHarnessId(
+	chats: readonly SidebarChat[],
+	chatId: string,
+	fallback: AgentProviderId,
+): AgentProviderId {
+	return chats.find((chat) => chat.id === chatId)?.harnessId ?? fallback;
+}
+
+/**
+ * A running sibling keeps polling after the user switches chats. Skip the
+ * open row (its own interval handles that) and any chat whose Send is still
+ * in flight so the submit and the poll do not share a guest.
+ */
+export function backgroundTurnPollChatIds(input: {
+	readonly chats: readonly SidebarChat[];
+	readonly openChatId?: string;
+	readonly busyChatIds: readonly string[];
+}): string[] {
+	return input.chats
+		.filter((chat) => {
+			if (chat.id === input.openChatId) return false;
+			if (input.busyChatIds.includes(chat.id)) return false;
+			return isTurnRunning(chat.turnStatus ?? "idle");
+		})
+		.map((chat) => chat.id);
+}
+
+export function sessionViewAppliesToOpenChat(input: {
+	readonly openChatId?: string;
+	readonly agentSessionId: string | null;
+}): boolean {
+	return Boolean(
+		input.agentSessionId && input.agentSessionId === input.openChatId,
+	);
 }

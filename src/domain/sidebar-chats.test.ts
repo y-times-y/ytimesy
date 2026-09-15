@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+	backgroundTurnPollChatIds,
 	chatsListedInSidebar,
 	composerBusyForOpenChat,
+	listedChatHarnessId,
 	listedChatModelId,
 	listedChatTurnStatus,
 	newChatIsActive,
 	selectedChatIdAfterDelete,
+	sessionViewAppliesToOpenChat,
 	sidebarChatIsRunning,
 	sidebarChatsEmptyCopy,
 	sidebarIsPinnedInStorage,
@@ -175,11 +178,76 @@ describe("parallel chat busy", () => {
 						id: "a",
 						title: "fix login",
 						listedModelId: "opencode/big-pickle",
+						harnessId: "opencode",
 					},
 					{ id: "b", title: "add snapshot copy" },
 				],
 				"a",
 			),
 		).toBe("opencode/big-pickle");
+		expect(
+			listedChatHarnessId(
+				[
+					{
+						id: "a",
+						title: "fix login",
+						harnessId: "opencode",
+					},
+					{ id: "b", title: "add snapshot copy" },
+				],
+				"a",
+				"codex",
+			),
+		).toBe("opencode");
+		expect(
+			listedChatHarnessId(
+				[{ id: "b", title: "add snapshot copy" }],
+				"b",
+				"opencode",
+			),
+		).toBe("opencode");
+	});
+});
+
+describe("background turn poll", () => {
+	it("polls a running sibling after the user switches chats", () => {
+		expect(
+			backgroundTurnPollChatIds({
+				chats: [
+					{ id: "a", title: "fix login", turnStatus: "running" },
+					{ id: "b", title: "add snapshot copy", turnStatus: "idle" },
+				],
+				openChatId: "b",
+				busyChatIds: [],
+			}),
+		).toEqual(["a"]);
+	});
+
+	it("does not poll the open chat or a send that is still in flight", () => {
+		expect(
+			backgroundTurnPollChatIds({
+				chats: [
+					{ id: "a", title: "fix login", turnStatus: "running" },
+					{ id: "b", title: "add snapshot copy", turnStatus: "running" },
+				],
+				openChatId: "a",
+				busyChatIds: ["b"],
+			}),
+		).toEqual([]);
+	});
+
+	it("keeps a completed sibling view on that chat instead of the open one", () => {
+		expect(
+			sessionViewAppliesToOpenChat({
+				openChatId: "b",
+				agentSessionId: "a",
+			}),
+		).toBe(false);
+		expect(
+			sessionViewAppliesToOpenChat({
+				openChatId: "a",
+				agentSessionId: "a",
+			}),
+		).toBe(true);
 	});
 });

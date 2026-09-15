@@ -1,4 +1,5 @@
 import type { AgentConnection } from "./agent-connection";
+import type { AgentProviderId } from "./agent-provider";
 import { isWorkspaceAtCapacity, workspaceLooksGone } from "./failure-message";
 import type { SessionTurnStatus } from "./session-item";
 
@@ -72,6 +73,7 @@ export function chatsFromAgentSessions(
 		readonly parentSessionId?: string | null;
 		readonly turnStatus?: SessionTurnStatus;
 		readonly listedModelId?: string | null;
+		readonly harness?: AgentProviderId | null;
 	}[],
 ) {
 	return sessions
@@ -81,6 +83,7 @@ export function chatsFromAgentSessions(
 			title: session.title,
 			turnStatus: session.turnStatus ?? "idle",
 			listedModelId: session.listedModelId ?? null,
+			harnessId: session.harness ?? null,
 		}));
 }
 
