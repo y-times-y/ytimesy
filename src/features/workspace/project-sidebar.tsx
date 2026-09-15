@@ -1,4 +1,4 @@
-import { PanelLeft, Plus, X } from "lucide-react";
+import { Archive, PanelLeft, Plus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Project } from "#/domain/projects";
 import type { SessionTurnStatus } from "#/domain/session-item";
@@ -218,7 +218,11 @@ export function ProjectSidebar({
 								openSideTurnStatus,
 							});
 							return (
-								<li key={chat.id} className="sidebar-chat-row">
+								<li
+									key={chat.id}
+									className="sidebar-chat-row"
+									data-selected={chat.id === selectedChatId}
+								>
 									<button
 										type="button"
 										className="sidebar-chat"
@@ -235,15 +239,15 @@ export function ProjectSidebar({
 									{onDeleteChat ? (
 										<button
 											type="button"
-											className="sidebar-chat-delete"
-											aria-label={`Delete ${chat.title}`}
-											title="Delete chat"
+											className="sidebar-chat-archive"
+											aria-label={`Remove ${chat.title}`}
+											title="Remove chat"
 											onClick={(event) => {
 												event.stopPropagation();
 												onDeleteChat(chat.id);
 											}}
 										>
-											<X size={16} />
+											<Archive size={14} strokeWidth={1.5} />
 										</button>
 									) : null}
 								</li>

@@ -4,6 +4,7 @@ export type SlashCommandId =
 	| "stop"
 	| "retry"
 	| "model"
+	| "files"
 	| "diff"
 	| "terminal"
 	| "desktop"
@@ -95,6 +96,13 @@ export function composerSlashCommands(
 			description: "Switch the model for the next run",
 			availability: context.hasModels ? "ready" : "unavailable",
 			unavailableReason: `${startHint} to load models`,
+		},
+		{
+			id: "files",
+			trigger: "/files",
+			label: "Files",
+			description: "Show the workspace file tree",
+			availability: "ready",
 		},
 		{
 			id: "diff",

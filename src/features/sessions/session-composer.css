@@ -573,6 +573,20 @@ button.harness-choice-action:disabled,
 .session-file-name {
 	color: rgba(255, 255, 255, 0.85);
 }
+.session-file-open {
+	display: inline;
+	margin: 0;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	cursor: pointer;
+	text-align: left;
+}
+.session-file-open:hover .session-file-name {
+	text-decoration: underline;
+}
 .session-activity-status {
 	margin-left: auto;
 	flex-shrink: 0;

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { diffPreviewLines } from "#/domain/diff-preview";
 import {
 	fileChangeDisplayPath,
@@ -6,13 +6,16 @@ import {
 } from "#/domain/file-change-copy";
 import type { FileChangeEntry } from "#/domain/session-item";
 import { sourceLanguageFromPath } from "#/domain/source-language";
+import { fileChangeForPath } from "#/domain/workspace-file-tree";
 import { FileChangeCounts } from "../sessions/file-change-counts";
 import { CodeTokens } from "../sessions/highlighted-code";
 
 export function DiffInspector({
 	changes,
+	selectedPath,
 }: {
 	changes: readonly FileChangeEntry[];
+	selectedPath?: string;
 }) {
 	const heading = fileChangesHeading(changes);
 	return (
@@ -27,7 +30,16 @@ export function DiffInspector({
 			<ul className="diff-file-list">
 				{changes.map((change, index) => (
 					<li key={`${change.change}:${change.path}`}>
-						<DiffFilePreview change={change} defaultOpen={index === 0} />
+						<DiffFilePreview
+							change={change}
+							defaultOpen={index === 0 && !selectedPath}
+							selected={
+								fileChangeForPath(
+									selectedPath ? [change] : [],
+									selectedPath ?? "",
+								) != null
+							}
+						/>
 					</li>
 				))}
 			</ul>
@@ -35,20 +47,26 @@ export function DiffInspector({
 	);
 }
 
-function DiffFilePreview({
+export function DiffFilePreview({
 	change,
 	defaultOpen,
+	selected = false,
 }: {
 	change: FileChangeEntry;
 	defaultOpen: boolean;
+	selected?: boolean;
 }) {
 	const path = fileChangeDisplayPath(change.path);
 	const language = sourceLanguageFromPath(change.path);
 	const lines = diffPreviewLines(change);
-	const [open, setOpen] = useState(defaultOpen);
+	const [open, setOpen] = useState(defaultOpen || selected);
+	useEffect(() => {
+		if (selected) setOpen(true);
+	}, [selected]);
 	return (
 		<details
 			className="diff-file"
+			data-selected={selected ? "true" : undefined}
 			open={open}
 			onToggle={(event) => setOpen(event.currentTarget.open)}
 		>

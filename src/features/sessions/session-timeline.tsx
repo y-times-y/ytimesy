@@ -29,10 +29,12 @@ export function SessionTimeline({
 	items,
 	turnStatus,
 	fill = false,
+	onOpenFile,
 }: {
 	items: readonly SessionItem[];
 	turnStatus: SessionTurnStatus;
 	fill?: boolean;
+	onOpenFile?: (path: string) => void;
 }) {
 	const listRef = useRef<HTMLOListElement>(null);
 	const stickToEnd = useRef(true);
@@ -71,6 +73,7 @@ export function SessionTimeline({
 						isLastItem={
 							row.kind === "item" && row.item.id === visible.at(-1)?.id
 						}
+						onOpenFile={onOpenFile}
 					/>
 				</li>
 			))}
@@ -87,10 +90,12 @@ function TimelineRowView({
 	row,
 	turnRunning,
 	isLastItem,
+	onOpenFile,
 }: {
 	row: TimelineRow;
 	turnRunning: boolean;
 	isLastItem: boolean;
+	onOpenFile?: (path: string) => void;
 }) {
 	if (row.kind === "exploration") {
 		return (
@@ -102,7 +107,12 @@ function TimelineRowView({
 					<ChevronRight size={12} className="session-activity-chevron" />
 				</summary>
 				{row.items.map((item) => (
-					<SessionItemView key={item.id} item={item} nested />
+					<SessionItemView
+						key={item.id}
+						item={item}
+						nested
+						onOpenFile={onOpenFile}
+					/>
 				))}
 			</details>
 		);
@@ -111,6 +121,7 @@ function TimelineRowView({
 		<SessionItemView
 			item={row.item}
 			thoughtInProgress={turnRunning && isLastItem}
+			onOpenFile={onOpenFile}
 		/>
 	);
 }
@@ -119,10 +130,12 @@ function SessionItemView({
 	item,
 	nested = false,
 	thoughtInProgress = false,
+	onOpenFile,
 }: {
 	item: SessionItem;
 	nested?: boolean;
 	thoughtInProgress?: boolean;
+	onOpenFile?: (path: string) => void;
 }) {
 	switch (item.kind) {
 		case "userMessage":
@@ -225,6 +238,7 @@ function SessionItemView({
 			if (item.changes.length === 0) return null;
 			if (item.changes.length === 1) {
 				const activity = fileChangeActivity(item.changes);
+				const change = item.changes[0];
 				return (
 					<div
 						className="session-activity"
@@ -236,8 +250,12 @@ function SessionItemView({
 							<ActivityIcon glyph="edit" />
 							<span className="session-activity-title">
 								{activity.verb}{" "}
-								{activity.name ? (
-									<span className="session-file-name">{activity.name}</span>
+								{change && activity.name ? (
+									<FileMentionButton
+										path={change.path}
+										name={activity.name}
+										onOpenFile={onOpenFile}
+									/>
 								) : (
 									"1 file"
 								)}
@@ -266,9 +284,11 @@ function SessionItemView({
 					{item.changes.map((change) => (
 						<p className="session-file-change-row" key={change.path}>
 							<FileTypeIcon path={change.path} />
-							<span className="session-file-name">
-								{fileBasename(change.path)}
-							</span>
+							<FileMentionButton
+								path={change.path}
+								name={fileBasename(change.path)}
+								onOpenFile={onOpenFile}
+							/>
 							<FileChangeCounts
 								additions={change.additions}
 								deletions={change.deletions}
@@ -347,6 +367,30 @@ function SessionItemView({
 				</div>
 			);
 	}
+}
+
+function FileMentionButton({
+	path,
+	name,
+	onOpenFile,
+}: {
+	path: string;
+	name: string;
+	onOpenFile?: (path: string) => void;
+}) {
+	if (!onOpenFile) {
+		return <span className="session-file-name">{name}</span>;
+	}
+	return (
+		<button
+			type="button"
+			className="session-file-open"
+			title={`Open ${path}`}
+			onClick={() => onOpenFile(path)}
+		>
+			<span className="session-file-name">{name}</span>
+		</button>
+	);
 }
 
 function activityStatus(status: string) {

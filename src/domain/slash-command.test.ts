@@ -63,6 +63,15 @@ describe("slash commands", () => {
 			matchingSlashCommands({ query: "", argument: "" }, connected).map(
 				(command) => command.id,
 			),
-		).toEqual(["side", "btw", "retry", "model", "diff", "terminal", "desktop"]);
+		).toEqual([
+			"side",
+			"btw",
+			"retry",
+			"model",
+			"files",
+			"diff",
+			"terminal",
+			"desktop",
+		]);
 	});
 });

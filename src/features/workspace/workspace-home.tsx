@@ -122,8 +122,9 @@ export function WorkspaceHome({
 	const [projectsOpen, setProjectsOpen] = useState(false);
 	const [sidebarPinReady, setSidebarPinReady] = useState(false);
 	const [inspectorOpen, setInspectorOpen] = useState(false);
-	const [toolsView, setToolsView] = useState<ToolsView>("diff");
-	const [inspectorView, setInspectorView] = useState<InspectorView>("diff");
+	const [toolsView, setToolsView] = useState<ToolsView>("files");
+	const [inspectorView, setInspectorView] = useState<InspectorView>("files");
+	const [selectedFilePath, setSelectedFilePath] = useState<string>();
 	const [customSplit, setCustomSplit] = useState<number | null>(null);
 	const [splitting, setSplitting] = useState(false);
 	const workspaceBody = useRef<HTMLDivElement>(null);
@@ -270,6 +271,7 @@ export function WorkspaceHome({
 		autoResumeStarted.current = false;
 		loadedSessionId.current = undefined;
 		sessionViews.current.clear();
+		setSelectedFilePath(undefined);
 	}, [activeProjectId]);
 
 	useEffect(() => {
@@ -314,8 +316,8 @@ export function WorkspaceHome({
 	useEffect(() => {
 		if (compact || openedDiff.current || fileChanges.length === 0) return;
 		openedDiff.current = true;
-		setToolsView("diff");
-		setInspectorView("diff");
+		setToolsView("files");
+		setInspectorView("files");
 		setInspectorOpen(true);
 	}, [compact, fileChanges.length]);
 
@@ -441,6 +443,11 @@ export function WorkspaceHome({
 		setInspectorOpen(true);
 	}
 
+	function openMentionedFile(path: string) {
+		setSelectedFilePath(path);
+		openInspector("files");
+	}
+
 	function openSideChat() {
 		setSideChatOpen(true);
 		setInspectorView("side");
@@ -473,6 +480,7 @@ export function WorkspaceHome({
 				setSelectedSessionId(created.id);
 				autoResumeStarted.current = true;
 				openedDiff.current = false;
+				setSelectedFilePath(undefined);
 				setDesktop({ status: "stopped" });
 				setSession((current) => ({
 					...current,
@@ -521,6 +529,7 @@ export function WorkspaceHome({
 			setSelectedSessionId(nextId);
 			autoResumeStarted.current = false;
 			openedDiff.current = false;
+			setSelectedFilePath(undefined);
 			setDesktop({ status: "stopped" });
 			setSession((current) => ({
 				...current,
@@ -626,6 +635,7 @@ export function WorkspaceHome({
 					setSelectedSessionId(id);
 					autoResumeStarted.current = false;
 					openedDiff.current = false;
+					setSelectedFilePath(undefined);
 					setDesktop({ status: "stopped" });
 					const cached = sessionViews.current.get(id);
 					setHarnessId(
@@ -901,6 +911,7 @@ export function WorkspaceHome({
 									if (question) sendSideChat(question);
 								}}
 								onOpenInspector={openInspector}
+								onOpenFile={openMentionedFile}
 								projects={projects.data ?? []}
 								selectedProject={selectedProject}
 								onSelectProject={setSelectedProjectId}
@@ -954,6 +965,8 @@ export function WorkspaceHome({
 								setInspectorView(view);
 							}}
 							fileChanges={fileChanges}
+							selectedFilePath={selectedFilePath}
+							onSelectFilePath={setSelectedFilePath}
 							desktop={desktop}
 							desktopBusy={desktopBusy}
 							projectId={selectedProject?.id}
