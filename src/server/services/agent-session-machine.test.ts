@@ -81,6 +81,29 @@ describe("executeSessionMachinePlan", () => {
 		expect(saved).toEqual(["agent-vm"]);
 	});
 
+	it("copies from the snapshot when the unused template VM is gone", async () => {
+		const runtime = machines({ copied: "agent-vm" });
+		const result = await executeSessionMachinePlan({
+			machines: runtime.api,
+			sessionId: "11111111-2222-3333-4444-555555555555",
+			sessionProviderRef: null,
+			workspaceId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+			templateSnapshotId: "snap-1",
+			templateProviderRef: null,
+			saveTemplateSnapshot: async () => {
+				throw new Error("snapshot already sealed");
+			},
+			saveSessionProviderRef: async () => undefined,
+		});
+		expect(result).toEqual({
+			providerRef: "agent-vm",
+			planKind: "copy-snapshot",
+		});
+		expect(runtime.provisioned).toEqual([
+			{ slug: "ytimesy-ag-1111111122223333", snapshotId: "snap-1" },
+		]);
+	});
+
 	it("clears copied harness scratch so the new agent does not inherit the template transcript", async () => {
 		const runtime = machines({ copied: "agent-vm" });
 		await executeSessionMachinePlan({

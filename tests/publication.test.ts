@@ -50,6 +50,13 @@ it("blocks publish until a prepared workspace exists", () => {
 			providerRef: "vm-1",
 		}),
 	).toBeNull();
+	expect(
+		publicationWorkspaceBlockedReason({
+			status: "ready",
+			providerRef: null,
+			templateSnapshotId: "sh-template",
+		}),
+	).toBeNull();
 });
 
 it("does not publish from the unused template", () => {

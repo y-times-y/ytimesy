@@ -1,7 +1,7 @@
 import { Effect } from "effect";
 import { copiedAgentMachineRef } from "#/domain/agent-session";
 import { WorkspaceId } from "#/domain/ids";
-import { workspaceSessionMachineRef } from "#/domain/project-workspace";
+import { workspaceEnvironmentIsReady } from "#/domain/project-workspace";
 import {
 	desktopEmbedUrl,
 	desktopHostname,
@@ -67,7 +67,7 @@ export function startWorkspaceDesktop(
 		);
 		if (
 			!workspace ||
-			!workspaceSessionMachineRef(workspace) ||
+			!workspaceEnvironmentIsReady(workspace) ||
 			!scope.projectId
 		) {
 			return {

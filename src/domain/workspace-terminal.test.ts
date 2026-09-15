@@ -48,6 +48,13 @@ describe("workspace terminal", () => {
 				providerRef: "vm-1",
 			}),
 		).toBeNull();
+		expect(
+			terminalConnectBlockedReason({
+				status: "ready",
+				providerRef: null,
+				templateSnapshotId: "sh-template",
+			}),
+		).toBeNull();
 	});
 
 	it("does not open a terminal on the unused template", () => {
