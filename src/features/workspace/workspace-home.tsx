@@ -16,7 +16,11 @@ import {
 	type AgentProviderId,
 	DEFAULT_COMPOSER_HARNESS_ID,
 } from "#/domain/agent-provider";
-import { shouldAutoResumeHarnessSession } from "#/domain/harness-access";
+import {
+	RUNNING_TURN_POLL_MS,
+	runningAuthenticatedTurnShouldPoll,
+	shouldAutoResumeHarnessSession,
+} from "#/domain/harness-access";
 import { hintForHarness } from "#/domain/harness-api-key";
 import {
 	inspectorSplitFromPointer,
@@ -289,34 +293,34 @@ export function WorkspaceHome({
 	]);
 
 	useEffect(() => {
-		if (
-			session.connection.status !== "awaiting_device_code" &&
-			session.turnStatus !== "running" &&
-			session.sideTurnStatus !== "running"
-		) {
-			return;
-		}
-		const interval =
-			session.turnStatus === "running" || session.sideTurnStatus === "running"
-				? 1000
-				: 3000;
+		const pollDeviceCode = session.connection.status === "awaiting_device_code";
+		const pollTurn = runningAuthenticatedTurnShouldPoll({
+			turnStatus: session.turnStatus,
+			sideTurnStatus: session.sideTurnStatus,
+			connectionStatus: session.connection.status,
+			composerBusy,
+		});
+		if (!pollDeviceCode && !pollTurn) return;
+		if (!activeProjectId) return;
 		const epoch = sessionEpoch.current;
-		const timer = window.setInterval(() => {
-			void getCodexSession({
-				data: {
-					projectId: activeProjectId,
-					harnessId,
-					sessionId: activeSessionId,
-				},
-			}).then((next) => {
-				if (epoch !== sessionEpoch.current) return;
-				setSession(next);
-			});
-		}, interval);
+		const timer = window.setInterval(
+			() => {
+				void getCodexSession({
+					data: {
+						projectId: activeProjectId,
+						harnessId,
+						sessionId: activeSessionId,
+					},
+				}).then((next) => applySessionView(epoch, next));
+			},
+			pollTurn ? RUNNING_TURN_POLL_MS : 3000,
+		);
 		return () => window.clearInterval(timer);
 	}, [
 		activeProjectId,
 		activeSessionId,
+		applySessionView,
+		composerBusy,
 		harnessId,
 		session.connection.status,
 		session.sideTurnStatus,
