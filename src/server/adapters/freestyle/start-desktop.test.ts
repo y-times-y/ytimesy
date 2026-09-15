@@ -21,7 +21,8 @@ describe("start workspace desktop", () => {
 			"/tmp/ytimesy-desktop-wallpaper.b64",
 		);
 		expect(START_WORKSPACE_DESKTOP).toContain("desktop-wallpaper.png");
-		expect(START_WORKSPACE_DESKTOP).toContain("--window-size=1040,720");
+		expect(START_WORKSPACE_DESKTOP).toContain("--window-size=720,640");
+		expect(START_WORKSPACE_DESKTOP).toContain("windowmove");
 		expect(START_WORKSPACE_DESKTOP).toContain("pgrep -x chrome");
 		expect(START_WORKSPACE_DESKTOP).not.toContain(
 			"pgrep -f 'google-chrome|chromium'",
