@@ -488,10 +488,30 @@ function sendHarnessSideTask(
 			bound.session,
 			input,
 		);
-		const main = yield* readHarnessWorkspaceSession(machines, {
-			...scope,
-			createNew: false,
-		});
+		const peeked = yield* Effect.tryPromise(() =>
+			peekAgentSessionMachine({
+				userId: scope.userId,
+				projectId: scope.projectId as string,
+				sessionId: scope.sessionId,
+			}),
+		);
+		const parentRef = peeked.providerRef;
+		const parentRunning = parentRef
+			? yield* Effect.tryPromise(() =>
+					machines.isRunning(WorkspaceId(parentRef)),
+				)
+			: false;
+		const main = parentRunning
+			? yield* readHarnessWorkspaceSession(machines, {
+					...scope,
+					createNew: false,
+				})
+			: yield* Effect.tryPromise(() =>
+					persistBoundSessionView(
+						peeked.session,
+						pausedHarnessSessionView(scope, parentRef ?? "pending"),
+					),
+				);
 		return mergeSideChat(main, sideView, scope.harnessId);
 	}).pipe(
 		Effect.catchAll((cause) =>
