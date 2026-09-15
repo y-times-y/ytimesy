@@ -29,7 +29,7 @@ export function DesktopInspector({
 				? "Starting desktop…"
 				: desktop.status === "running"
 					? "Desktop is running on the VM."
-					: "Starting the shared desktop…";
+					: "Shared desktop";
 	const description =
 		desktop.status === "failed"
 			? desktop.reason

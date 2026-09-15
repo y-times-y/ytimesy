@@ -21,7 +21,7 @@ const views = {
 	},
 	desktop: {
 		label: "Desktop",
-		title: "Starting the shared desktop…",
+		title: "Shared desktop",
 		description:
 			"This is the Linux desktop the agent uses for QA. You watch and control the same screen.",
 	},

@@ -367,6 +367,16 @@ def user_message_item(item_id, text):
     }
 
 
+def error_item(item_id, message):
+    return {"id": item_id, "type": "error", "message": message}
+
+
+def turn_text_with_workspace(text, include_workspace):
+    if not include_workspace:
+        return text
+    return developer_instructions(project_cwd()) + "\n\n" + text
+
+
 rpc_id = 100
 
 
@@ -826,11 +836,13 @@ def main():
                 if requested_model:
                     model_id = requested_model
                 cwd = project_cwd()
+                include_workspace = False
                 if thread_id and thread_cwd != cwd:
                     thread_id = None
                 if not thread_id and model_id:
                     thread_id, thread_error = start_thread(proc, model_id, cwd)
                     thread_cwd = cwd
+                    include_workspace = bool(thread_id)
                     if thread_error and not thread_id:
                         turn_status = "failed"
                         active_task_id = None
@@ -841,6 +853,15 @@ def main():
                             "text": thread_error,
                             "error": thread_error,
                         }
+                        session_items = merge_session_items(
+                            session_items,
+                            [
+                                user_message_item(
+                                    "user-%s" % request["id"], request["text"]
+                                ),
+                                error_item("error-%s" % request["id"], thread_error),
+                            ],
+                        )
                         finish_request(
                             TASK_REQUEST_PATH, TASK_RESULT_PATH, request["id"], turn
                         )
@@ -865,9 +886,14 @@ def main():
                         proc,
                         thread_id,
                         model_id,
-                        request["text"],
+                        turn_text_with_workspace(request["text"], include_workspace),
                         on_items=on_task_items,
                     )
+                    if turn.get("error"):
+                        session_items = merge_session_items(
+                            session_items,
+                            [error_item("error-%s" % request["id"], turn["error"])],
+                        )
                     turn_status = (
                         "failed"
                         if turn.get("status") in ("error", "timeout", "failed")
