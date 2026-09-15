@@ -53,6 +53,7 @@ export function SessionLauncher({
 	projects,
 	selectedProject,
 	onSelectProject,
+	listedTitle,
 }: {
 	session: PublicCodexSession;
 	busy: boolean;
@@ -69,6 +70,7 @@ export function SessionLauncher({
 	projects: Project[];
 	selectedProject?: Project;
 	onSelectProject: (id: string) => void;
+	listedTitle?: string;
 }) {
 	const harnessReady = selectedHarnessIsConnected(
 		session.connection,
@@ -93,6 +95,7 @@ export function SessionLauncher({
 	const followUpLayout = sessionUsesFollowUpLayout({
 		items,
 		turnStatus: session.turnStatus,
+		listedTitle,
 	});
 	const slashDraft = parseSlashDraft(draft);
 	const slashCommands = useMemo(

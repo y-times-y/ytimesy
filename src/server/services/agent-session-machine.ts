@@ -40,18 +40,14 @@ import {
 } from "#/server/adapters/workspaces";
 import type { WorkspaceMachines } from "./workspace-machines";
 
-export async function bindAgentSessionMachine(
-	machines: WorkspaceMachines,
-	input: {
-		readonly userId: string;
-		readonly projectId: string;
-		readonly harness: AgentProviderId;
-		readonly sessionId?: string;
-		readonly createNew?: boolean;
-		readonly parentSessionId?: string;
-		readonly task?: string;
-	},
-) {
+async function resolveAgentSessionRecord(input: {
+	readonly userId: string;
+	readonly projectId: string;
+	readonly harness: AgentProviderId;
+	readonly sessionId?: string;
+	readonly createNew?: boolean;
+	readonly parentSessionId?: string;
+}) {
 	const workspace = await workspaceForProject(input.userId, input.projectId);
 	if (workspace?.status !== "ready" || !workspace.providerRef) {
 		throw new Error("Prepare a project environment before starting an agent.");
@@ -103,6 +99,46 @@ export async function bindAgentSessionMachine(
 			title: input.parentSessionId ? "Side chat" : undefined,
 			listedModelId: inherited.listedModelId || null,
 		}));
+	return {
+		session,
+		workspace: {
+			id: workspace.id,
+			providerRef: workspace.providerRef,
+			templateSnapshotId: workspace.templateSnapshotId,
+		},
+	};
+}
+
+/**
+ * New chat is a session row. The VM copy waits until Connect or Send so
+ * opening a composer does not consume a Freestyle slot.
+ */
+export async function openAgentSession(input: {
+	readonly userId: string;
+	readonly projectId: string;
+	readonly harness: AgentProviderId;
+	readonly parentSessionId?: string;
+}) {
+	const { session } = await resolveAgentSessionRecord({
+		...input,
+		createNew: true,
+	});
+	return session;
+}
+
+export async function bindAgentSessionMachine(
+	machines: WorkspaceMachines,
+	input: {
+		readonly userId: string;
+		readonly projectId: string;
+		readonly harness: AgentProviderId;
+		readonly sessionId?: string;
+		readonly createNew?: boolean;
+		readonly parentSessionId?: string;
+		readonly task?: string;
+	},
+) {
+	const { session, workspace } = await resolveAgentSessionRecord(input);
 	const bound = await templateAlreadyBound(workspace.id, workspace.providerRef);
 	const executed = await executeSessionMachinePlan({
 		machines,

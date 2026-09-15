@@ -128,6 +128,7 @@ export function WorkspaceHome({
 	const autoResumeStarted = useRef(false);
 	const sessionEpoch = useRef(0);
 	const loadedSessionId = useRef<string | undefined>(undefined);
+	const sessionViews = useRef(new Map<string, PublicCodexSession>());
 	const bumpSessionEpoch = useCallback(() => {
 		sessionEpoch.current += 1;
 		return sessionEpoch.current;
@@ -135,6 +136,8 @@ export function WorkspaceHome({
 	const applySessionView = useCallback(
 		(epoch: number, next: PublicCodexSession) => {
 			if (epoch !== sessionEpoch.current) return;
+			if (next.agentSessionId)
+				sessionViews.current.set(next.agentSessionId, next);
 			setSession(next);
 			if (next.agentSessionId) setSelectedSessionId(next.agentSessionId);
 		},
@@ -149,10 +152,6 @@ export function WorkspaceHome({
 	const startDesktop = useServerFn(startWorkspaceDesktopFn);
 	const fileChanges = fileChangesFromSessionItems(session.items);
 	const openedDiff = useRef(false);
-	const followUpLayout = sessionUsesFollowUpLayout({
-		items: session.items,
-		turnStatus: session.turnStatus,
-	});
 	const splitRatio = inspectorSplitRatio({
 		custom: customSplit,
 		desktop: inspectorView === "desktop",
@@ -168,6 +167,14 @@ export function WorkspaceHome({
 	const composerBusy = composerBusyForOpenChat({
 		openChatId: activeSessionId,
 		busyChatIds,
+	});
+	const listedTitle = sidebarChats.find(
+		(chat) => chat.id === activeSessionId,
+	)?.title;
+	const followUpLayout = sessionUsesFollowUpLayout({
+		items: session.items,
+		turnStatus: session.turnStatus,
+		listedTitle,
 	});
 
 	function sessionScope() {
@@ -197,6 +204,7 @@ export function WorkspaceHome({
 		setSelectedSessionId(undefined);
 		autoResumeStarted.current = false;
 		loadedSessionId.current = undefined;
+		sessionViews.current.clear();
 	}, [activeProjectId]);
 
 	useEffect(() => {
@@ -371,13 +379,11 @@ export function WorkspaceHome({
 			return;
 		}
 		const epoch = bumpSessionEpoch();
-		let createdId: string | undefined;
 		void startSession({
 			data: { projectId: selectedProject.id, harnessId },
 		})
 			.then((created) => {
-				createdId = created.id;
-				setBusyChatIds((ids) => withBusyChat(ids, created.id));
+				if (epoch !== sessionEpoch.current) return;
 				setSelectedSessionId(created.id);
 				autoResumeStarted.current = true;
 				openedDiff.current = false;
@@ -389,16 +395,14 @@ export function WorkspaceHome({
 					turnStatus: "idle",
 					sideItems: [],
 					sideTurnStatus: "idle",
+					connection: { status: "disconnected" },
+					canSend: false,
+					canSendSide: false,
 				}));
 				void chats.refetch();
-				return connect({
-					data: { ...sessionScope(), sessionId: created.id, createNew: false },
-				});
-			})
-			.then((next) => {
-				if (next) applySessionView(epoch, next);
 			})
 			.catch((cause) => {
+				if (epoch !== sessionEpoch.current) return;
 				setSession((current) => ({
 					...current,
 					connection: {
@@ -409,10 +413,6 @@ export function WorkspaceHome({
 					canSend: false,
 					canSendSide: false,
 				}));
-			})
-			.finally(() => {
-				setBusyChatIds((ids) => withoutBusyChat(ids, createdId));
-				void chats.refetch();
 			});
 	}
 
@@ -422,6 +422,7 @@ export function WorkspaceHome({
 		}
 		const remaining = sidebarChats.filter((chat) => chat.id !== chatId);
 		queryClient.setQueryData(["agent-sessions", selectedProject.id], remaining);
+		sessionViews.current.delete(chatId);
 		const nextId = selectedChatIdAfterDelete({
 			chats: sidebarChats,
 			selectedChatId: activeSessionId,
@@ -536,6 +537,11 @@ export function WorkspaceHome({
 					autoResumeStarted.current = false;
 					openedDiff.current = false;
 					setDesktop({ status: "stopped" });
+					const cached = sessionViews.current.get(id);
+					if (cached) {
+						setSession(cached);
+						return;
+					}
 					const listedTurn = listedChatTurnStatus(sidebarChats, id);
 					setSession((current) => ({
 						...current,
@@ -631,6 +637,7 @@ export function WorkspaceHome({
 							<SessionLauncher
 								session={session}
 								busy={composerBusy}
+								listedTitle={listedTitle}
 								harnessId={harnessId}
 								onHarnessIdChange={(id) => {
 									setHarnessId(id);

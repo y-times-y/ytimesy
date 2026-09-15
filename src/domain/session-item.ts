@@ -214,9 +214,12 @@ export function sessionViewItems(
 export function sessionUsesFollowUpLayout(input: {
 	readonly items: readonly SessionItem[];
 	readonly turnStatus: SessionTurnStatus;
+	readonly listedTitle?: string;
 }): boolean {
 	return (
-		Boolean(lastUserMessageText(input.items)) || input.turnStatus === "running"
+		Boolean(lastUserMessageText(input.items)) ||
+		input.turnStatus === "running" ||
+		Boolean(input.listedTitle && input.listedTitle !== "New session")
 	);
 }
 

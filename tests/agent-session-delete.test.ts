@@ -4,7 +4,10 @@ import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { SessionItemId } from "../src/domain/ids";
 import { insertAgentSession } from "../src/server/adapters/agent-sessions";
 import { saveProject } from "../src/server/adapters/projects";
-import { deleteAgentSessionMachine } from "../src/server/services/agent-session-machine";
+import {
+	deleteAgentSessionMachine,
+	openAgentSession,
+} from "../src/server/services/agent-session-machine";
 import { emptyCodexSession } from "../src/server/services/codex-workspace-session";
 import {
 	persistBoundSessionView,
@@ -210,4 +213,33 @@ it("keeps a running turn across a paused read until a live harness view arrives"
 		],
 	});
 	expect(completed.turnStatus).toBe("completed");
+});
+
+it("opens a new chat without copying a VM and inherits the last listed model", async () => {
+	const { project, workspaceId } = await readyWorkspace();
+	await insertAgentSession({
+		userId: "alice",
+		projectId: project.id,
+		workspaceId,
+		harness: "opencode",
+		providerRef: "vm-sibling",
+		listedModelId: "opencode/big-pickle",
+	});
+	const opened = await openAgentSession({
+		userId: "alice",
+		projectId: project.id,
+		harness: "opencode",
+	});
+	expect(opened.providerRef).toBeNull();
+	expect(opened.title).toBe("New session");
+	expect(opened.listedModelId).toBe("opencode/big-pickle");
+	expect(opened.turnStatus).toBe("idle");
+	const stored = await db.query<{
+		provider_ref: string | null;
+		listed_model_id: string | null;
+	}>("select provider_ref, listed_model_id from agent_session where id=$1", [
+		opened.id,
+	]);
+	expect(stored.rows[0]?.provider_ref).toBeNull();
+	expect(stored.rows[0]?.listed_model_id).toBe("opencode/big-pickle");
 });

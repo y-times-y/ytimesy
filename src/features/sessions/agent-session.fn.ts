@@ -13,8 +13,8 @@ import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live
 import { requireUser } from "#/server/auth/auth";
 import { parseHarnessId } from "#/server/secrets/harness-key-store";
 import {
-	bindAgentSessionMachine,
 	deleteAgentSessionMachine,
+	openAgentSession,
 } from "#/server/services/agent-session-machine";
 import { WorkspaceMachineService } from "#/server/services/capabilities";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
@@ -68,19 +68,15 @@ export const startProjectAgentSession = createServerFn({ method: "POST" })
 	.handler(async ({ data }): Promise<PublicAgentChat> => {
 		const user = await requireUser(getRequest().headers);
 		try {
-			const bound = await runWithMachines((machines) =>
-				bindAgentSessionMachine(machines, {
-					userId: user.id,
-					projectId: data.projectId,
-					harness: data.harnessId as AgentProviderId,
-					sessionId: data.sessionId,
-					createNew: !data.sessionId,
-				}),
-			);
+			const session = await openAgentSession({
+				userId: user.id,
+				projectId: data.projectId,
+				harness: data.harnessId as AgentProviderId,
+			});
 			return {
-				id: bound.session.id,
-				title: bound.session.title,
-				turnStatus: bound.session.turnStatus,
+				id: session.id,
+				title: session.title,
+				turnStatus: session.turnStatus,
 			};
 		} catch (cause) {
 			throw new Error(publicFailureMessage(cause));

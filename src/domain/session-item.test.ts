@@ -443,5 +443,19 @@ describe("session items", () => {
 		expect(
 			sessionUsesFollowUpLayout({ items: [], turnStatus: "running" }),
 		).toBe(true);
+		expect(
+			sessionUsesFollowUpLayout({
+				items: [],
+				turnStatus: "idle",
+				listedTitle: "fix the composer",
+			}),
+		).toBe(true);
+		expect(
+			sessionUsesFollowUpLayout({
+				items: [],
+				turnStatus: "idle",
+				listedTitle: "New session",
+			}),
+		).toBe(false);
 	});
 });
