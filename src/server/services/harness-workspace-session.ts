@@ -4,6 +4,7 @@ import {
 	type AgentProviderId,
 	agentProviderById,
 } from "#/domain/agent-provider";
+import { failureMessage } from "#/domain/failure-message";
 import { canResumeDisconnectedFollowUp } from "#/domain/harness-access";
 import { WorkspaceId } from "#/domain/ids";
 import { submittedListedModelId } from "#/domain/listed-model";
@@ -182,7 +183,7 @@ export function connectHarnessWorkspaceSession(
 				connection: {
 					status: "failed" as const,
 					provider: scope.harnessId,
-					message: cause instanceof Error ? cause.message : String(cause),
+					message: failureMessage(cause),
 				},
 			}),
 		),
@@ -297,7 +298,7 @@ function withSessionMachine(
 				connection: {
 					status: "failed" as const,
 					provider: scope.harnessId,
-					message: cause instanceof Error ? cause.message : String(cause),
+					message: failureMessage(cause),
 				},
 			}),
 		),
@@ -499,7 +500,7 @@ function sendHarnessSideTask(
 				connection: {
 					status: "failed" as const,
 					provider: scope.harnessId,
-					message: cause instanceof Error ? cause.message : String(cause),
+					message: failureMessage(cause),
 				},
 			}),
 		),
