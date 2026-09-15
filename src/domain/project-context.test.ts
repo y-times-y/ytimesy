@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	nextProjectBriefing,
 	projectContextDocument,
+	promptTextWithProjectContext,
 	relatedTracesForTask,
 	traceSummaryFromTurn,
 } from "./project-context";
@@ -90,5 +91,36 @@ describe("nextProjectBriefing", () => {
 				summary: "g",
 			}),
 		).toBe(["b", "c", "d", "e", "f", "g"].join("\n"));
+	});
+});
+
+describe("promptTextWithProjectContext", () => {
+	it("leaves the task unchanged when there is no shared context", () => {
+		expect(
+			promptTextWithProjectContext({
+				task: "Fix the desktop viewer",
+				document: "  ",
+			}),
+		).toBe("Fix the desktop viewer");
+	});
+
+	it("prepends sibling briefing without replacing the task", () => {
+		expect(
+			promptTextWithProjectContext({
+				task: "Fix the desktop viewer",
+				document: "## Project briefing\nnoVNC maps display :0",
+			}),
+		).toBe(
+			[
+				"Shared project context from sibling agents:",
+				"",
+				"## Project briefing",
+				"noVNC maps display :0",
+				"",
+				"---",
+				"",
+				"Fix the desktop viewer",
+			].join("\n"),
+		);
 	});
 });

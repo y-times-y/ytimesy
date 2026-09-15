@@ -24,6 +24,7 @@ import { persistCodexAuthSnapshotForUser } from "#/server/proof/persist-codex-au
 import {
 	bindAgentSessionMachine,
 	peekAgentSessionMachine,
+	syncProjectContextForTask,
 } from "./agent-session-machine";
 import { persistBoundSessionView } from "./persist-session-view";
 import { preparePreparedGuest } from "./project-workspace";
@@ -228,6 +229,16 @@ export function sendCodexWorkspaceTask(
 		scope,
 		(providerRef, snapshotAvailable) =>
 			prepareCodexGuest(machines, WorkspaceId(providerRef), scope).pipe(
+				Effect.tap(() =>
+					scope.projectId
+						? Effect.tryPromise(() =>
+								syncProjectContextForTask(machines, providerRef, {
+									projectId: scope.projectId as string,
+									task: input.text,
+								}),
+							)
+						: Effect.void,
+				),
 				Effect.flatMap(() =>
 					submitCodexTask(machines, WorkspaceId(providerRef), input),
 				),

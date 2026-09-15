@@ -48,7 +48,7 @@ export function liveGitHubProjectDeps(): GitHubProjectDeps {
 	};
 }
 
-/** Tenant records are still local `.ytimesy/` proof state until Better Auth exists. */
+/** Leftover onboarding picker store. Workspace clone uses Postgres projects. */
 export function loadGitHubProjectPicker(
 	deps: GitHubProjectDeps,
 ): Effect.Effect<PublicProjectPicker> {

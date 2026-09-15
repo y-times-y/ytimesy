@@ -26,6 +26,7 @@ import { decryptHarnessApiKey } from "#/server/secrets/harness-key-store";
 import {
 	bindAgentSessionMachine,
 	peekAgentSessionMachine,
+	syncProjectContextForTask,
 } from "./agent-session-machine";
 import {
 	type CodexSessionScope,
@@ -189,8 +190,19 @@ export function sendHarnessWorkspaceTask(
 		return sendHarnessSideTask(machines, scope, input);
 	}
 	return withSessionMachine(machines, scope, true, (providerRef, session) => {
+		const submitted = Effect.tryPromise(() =>
+			scope.projectId
+				? syncProjectContextForTask(machines, providerRef, {
+						projectId: scope.projectId,
+						task: input.text,
+					})
+				: Promise.resolve(input.text),
+		).pipe(Effect.map((promptText) => ({ ...input, promptText })));
 		if (scope.harnessId === "claude") {
-			return submitClaudeTask(machines, WorkspaceId(providerRef), input).pipe(
+			return submitted.pipe(
+				Effect.flatMap((payload) =>
+					submitClaudeTask(machines, WorkspaceId(providerRef), payload),
+				),
 				Effect.map((status) => viewFromClaude(status, providerRef)),
 				Effect.flatMap((view) =>
 					Effect.tryPromise(() => persistBoundSessionView(session, view)),
@@ -198,7 +210,10 @@ export function sendHarnessWorkspaceTask(
 				Effect.flatMap((view) => attachSiblingSideChat(machines, scope, view)),
 			);
 		}
-		return submitOpenCodeTask(machines, WorkspaceId(providerRef), input).pipe(
+		return submitted.pipe(
+			Effect.flatMap((payload) =>
+				submitOpenCodeTask(machines, WorkspaceId(providerRef), payload),
+			),
 			Effect.map((status) => viewFromOpenCode(status, providerRef)),
 			Effect.flatMap((view) =>
 				Effect.tryPromise(() => persistBoundSessionView(session, view)),
@@ -367,6 +382,15 @@ function sendHarnessSideTask(
 			WorkspaceId(bound.providerRef),
 			scope,
 		);
+		const payload = {
+			...input,
+			promptText: yield* Effect.tryPromise(() =>
+				syncProjectContextForTask(machines, bound.providerRef, {
+					projectId: scope.projectId as string,
+					task: input.text,
+				}),
+			),
+		};
 		const apiKey = yield* Effect.tryPromise(() =>
 			decryptHarnessApiKey(scope.harnessId),
 		);
@@ -387,7 +411,7 @@ function sendHarnessSideTask(
 				status = yield* submitClaudeTask(
 					machines,
 					WorkspaceId(bound.providerRef),
-					input,
+					payload,
 				);
 			}
 			sideView = yield* Effect.tryPromise(() =>
@@ -412,7 +436,7 @@ function sendHarnessSideTask(
 				status = yield* submitOpenCodeTask(
 					machines,
 					WorkspaceId(bound.providerRef),
-					input,
+					payload,
 				);
 			}
 			sideView = yield* Effect.tryPromise(() =>

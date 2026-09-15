@@ -38,6 +38,11 @@ vi.mock("../src/server/adapters/github/installation-token", () => ({
 	githubInstallationAccessToken: async () => "ghs_secretfixturetoken",
 }));
 
+const toolsSnapshot = { id: undefined as string | undefined };
+vi.mock("../src/server/records/tools-snapshot-store", () => ({
+	readToolsSnapshotId: async () => toolsSnapshot.id,
+}));
+
 beforeAll(async () => {
 	db = new PGlite();
 	await db.exec("create role anon; create role authenticated;");
@@ -149,6 +154,30 @@ it("boots from the shared tools snapshot when the user has no auth snapshot", as
 		snapshotId: "sh-tools",
 	});
 	vi.unstubAllEnvs();
+});
+
+it("boots from the local tools snapshot file when env is unset", async () => {
+	toolsSnapshot.id = "sh-from-file";
+	const project = await saveProject(
+		"alice",
+		{
+			...repo,
+			repositoryId: 13,
+			fullName: "acme/tools-file",
+		},
+		"main",
+	);
+	const workspace = await insertQueuedWorkspace("alice", project.id);
+	const runtime = new MemoryWorkspaceRuntime({
+		exitCode: 0,
+		stdout: "pnpm-lock.yaml\n",
+		stderr: "",
+	});
+	await runWorkspacePreparation(workspace.id, runtime);
+	expect(runtime.lastProvisionOptions).toEqual({
+		snapshotId: "sh-from-file",
+	});
+	toolsSnapshot.id = undefined;
 });
 
 it("recovers a recorded provider instead of creating a second machine", async () => {
