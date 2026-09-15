@@ -6,6 +6,7 @@ import {
 	DEFAULT_COMPOSER_HARNESS_ID,
 } from "#/domain/agent-provider";
 import { chatsFromAgentSessions } from "#/domain/agent-session";
+import { publicFailureMessage } from "#/domain/project-workspace";
 import { listAgentSessions } from "#/server/adapters/agent-sessions";
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
 import { requireUser } from "#/server/auth/auth";
@@ -64,16 +65,20 @@ export const startProjectAgentSession = createServerFn({ method: "POST" })
 	)
 	.handler(async ({ data }): Promise<PublicAgentChat> => {
 		const user = await requireUser(getRequest().headers);
-		const bound = await runWithMachines((machines) =>
-			bindAgentSessionMachine(machines, {
-				userId: user.id,
-				projectId: data.projectId,
-				harness: data.harnessId as AgentProviderId,
-				sessionId: data.sessionId,
-				createNew: !data.sessionId,
-			}),
-		);
-		return { id: bound.session.id, title: bound.session.title };
+		try {
+			const bound = await runWithMachines((machines) =>
+				bindAgentSessionMachine(machines, {
+					userId: user.id,
+					projectId: data.projectId,
+					harness: data.harnessId as AgentProviderId,
+					sessionId: data.sessionId,
+					createNew: !data.sessionId,
+				}),
+			);
+			return { id: bound.session.id, title: bound.session.title };
+		} catch (cause) {
+			throw new Error(publicFailureMessage(cause));
+		}
 	});
 
 export const deleteProjectAgentSession = createServerFn({ method: "POST" })

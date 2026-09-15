@@ -6,7 +6,10 @@ import {
 	listedModelPreferenceFromSessions,
 	submittedListedModelId,
 } from "#/domain/listed-model";
-import { codexConnectBlockedReason } from "#/domain/project-workspace";
+import {
+	codexConnectBlockedReason,
+	publicFailureMessage,
+} from "#/domain/project-workspace";
 import { shouldStartDeviceCodeAfterSnapshotResume } from "#/domain/proof-workspace-recovery";
 import type { SessionItem, SessionTurnStatus } from "#/domain/session-item";
 import { canSubmitComposer, canSubmitSideChat } from "#/domain/session-policy";
@@ -243,7 +246,7 @@ export function connectCodexWorkspaceSession(
 				connection: {
 					status: "failed" as const,
 					provider: "codex" as const,
-					message: cause instanceof Error ? cause.message : String(cause),
+					message: publicFailureMessage(cause),
 				},
 			}),
 		),
@@ -366,7 +369,7 @@ function withPreparedWorkspace<A>(
 				connection: {
 					status: "failed" as const,
 					provider: "codex" as const,
-					message: cause instanceof Error ? cause.message : String(cause),
+					message: publicFailureMessage(cause),
 				},
 			}),
 		),
