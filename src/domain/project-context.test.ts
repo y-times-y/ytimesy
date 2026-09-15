@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { SessionItemId } from "./ids";
 import {
 	nextProjectBriefing,
 	projectContextDocument,
 	promptTextWithProjectContext,
 	relatedTracesForTask,
+	traceAreaFromTask,
+	traceAreaFromTurn,
 	traceSummaryFromTurn,
 } from "./project-context";
 
@@ -57,6 +60,56 @@ describe("relatedTracesForTask", () => {
 
 	it("falls back to recent traces when nothing matches", () => {
 		expect(relatedTracesForTask(traces, "xyz")).toEqual(traces);
+	});
+});
+
+describe("traceAreaFromTurn", () => {
+	it("uses a path named in the task when the tree has no this-turn edits", () => {
+		expect(traceAreaFromTask("Create PARALLEL_A.md with parallel-a-ok.")).toBe(
+			"PARALLEL_A.md",
+		);
+		expect(
+			traceAreaFromTurn({
+				task: "Add src/domain/snapshot-copy-proof.ts for the copy proof.",
+				items: [],
+			}),
+		).toBe("src/domain/snapshot-copy-proof.ts");
+	});
+
+	it("uses this turn's file changes over an older path in the task", () => {
+		expect(
+			traceAreaFromTurn({
+				task: "Also mention FOLLOWUP_RESUME.md",
+				items: [
+					{
+						kind: "userMessage",
+						id: SessionItemId("u1"),
+						text: "Write the copy proof",
+					},
+					{
+						kind: "fileChange",
+						id: SessionItemId("f1"),
+						status: "completed",
+						changes: [
+							{
+								path: "src/domain/snapshot-copy-proof.ts",
+								change: "add",
+								additions: 3,
+								deletions: 0,
+								preview: null,
+							},
+							{
+								path: "src/domain/snapshot-copy-proof.test.ts",
+								change: "add",
+								additions: 8,
+								deletions: 0,
+								preview: null,
+							},
+						],
+					},
+				],
+			}),
+		).toBe("src/domain");
 	});
 });
 
