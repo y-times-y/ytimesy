@@ -3,6 +3,7 @@ import { Freestyle, FreestyleApiError } from "freestyle";
 import { isolatedAuthSnapshot } from "#/domain/auth-snapshot";
 import { type AuthSnapshotId, WorkspaceId } from "#/domain/ids";
 import { publicFailureMessage } from "#/domain/project-workspace";
+import { guestMutationBlockedReason } from "#/domain/workspace";
 import {
 	WorkspaceCommandError,
 	WorkspaceProvisionError,
@@ -118,6 +119,7 @@ export function createFreestyleWorkspaceMachines(
 			timeoutMs = 120_000,
 		): Promise<CommandOutput> {
 			try {
+				await rejectPausedGuestMutation(freestyle, workspaceId, "exec");
 				const result = await freestyle.vms.ref(workspaceId).exec({
 					command,
 					timeoutMs,
@@ -128,6 +130,7 @@ export function createFreestyleWorkspaceMachines(
 					stderr: result.stderr ?? "",
 				};
 			} catch (cause) {
+				if (cause instanceof WorkspaceCommandError) throw cause;
 				throw new WorkspaceCommandError({
 					operation: "exec",
 					message: providerMessage(cause),
@@ -142,8 +145,10 @@ export function createFreestyleWorkspaceMachines(
 			contents: string,
 		): Promise<void> {
 			try {
+				await rejectPausedGuestMutation(freestyle, workspaceId, "writeFile");
 				await freestyle.vms.ref(workspaceId).fs.writeTextFile(path, contents);
 			} catch (cause) {
+				if (cause instanceof WorkspaceCommandError) throw cause;
 				throw new WorkspaceCommandError({
 					operation: "writeFile",
 					message: providerMessage(cause),
@@ -330,6 +335,22 @@ export function createFreestyleWorkspaceMachines(
 			}
 		},
 	};
+}
+
+async function rejectPausedGuestMutation(
+	freestyle: Freestyle,
+	workspaceId: WorkspaceId,
+	operation: "exec" | "writeFile",
+) {
+	const data = await freestyle.vms.ref(workspaceId).data();
+	const blocked = guestMutationBlockedReason(data.state);
+	if (blocked) {
+		throw new WorkspaceCommandError({
+			operation,
+			message: blocked,
+			providerWorkspaceId: workspaceId,
+		});
+	}
 }
 
 async function findVmBySlug(
