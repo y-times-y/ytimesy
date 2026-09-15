@@ -14,6 +14,7 @@ export interface ProjectWorkspace {
 	projectId: string;
 	status: WorkspaceStatus;
 	providerRef: string | null;
+	templateSnapshotId: string | null;
 	errorMessage: string | null;
 	updatedAt: string;
 }

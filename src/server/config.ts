@@ -27,8 +27,6 @@ const configuration = z.object({
 	GITHUB_APP_SLUG: z.string().regex(/^[a-z0-9-]+$/),
 	GOOGLE_CLIENT_ID: optionalSecret,
 	GOOGLE_CLIENT_SECRET: optionalSecret,
-	DEV_AUTH_BYPASS_SECRET: optionalSecret,
-	DEV_AUTH_USER_ID: optionalSecret,
 });
 export function serverConfig() {
 	const parsed = configuration.safeParse(process.env);

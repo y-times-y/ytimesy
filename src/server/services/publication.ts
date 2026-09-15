@@ -26,6 +26,7 @@ import {
 } from "../adapters/repository-setup";
 import type { WorkspaceRuntime } from "../adapters/workspace-runtime";
 import { readyWorkspaceForOwner } from "../adapters/workspaces";
+import { peekAgentSessionMachine } from "./agent-session-machine";
 import { githubAccessToken } from "../auth/github-connection";
 
 /**
@@ -36,6 +37,7 @@ export function publishProject(
 	userId: string,
 	input: {
 		projectId: string;
+		sessionId?: string;
 		title: string;
 		body?: string;
 		authorName?: string | null;
@@ -68,6 +70,14 @@ export function publishProject(
 				workspaceBlocked ?? "Prepare a workspace before publishing.",
 			);
 		}
+		const peeked = yield* Effect.tryPromise(() =>
+			peekAgentSessionMachine({
+				userId,
+				projectId: input.projectId,
+				sessionId: input.sessionId,
+			}),
+		);
+		const providerRef = peeked.providerRef ?? workspace.providerRef;
 		const repository = yield* Effect.tryPromise(() =>
 			authorizedRepository(token, project.installationId, project.repositoryId),
 		);
@@ -81,7 +91,6 @@ export function publishProject(
 			defaultBranch: repository.defaultBranch,
 			workspaceId: workspace.id,
 		});
-		const providerRef = workspace.providerRef;
 		yield* Effect.tryPromise(() =>
 			runtime.recover(providerRef).catch((error) => {
 				throw hostFailure(error, "Workspace is not available.");

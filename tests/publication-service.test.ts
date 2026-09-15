@@ -29,6 +29,9 @@ vi.mock("../src/server/adapters/github", () => ({
 vi.mock("../src/server/adapters/workspaces", () => ({
 	readyWorkspaceForOwner: adapter.workspace,
 }));
+vi.mock("../src/server/services/agent-session-machine", () => ({
+	peekAgentSessionMachine: async () => ({ session: null, providerRef: null }),
+}));
 
 const projectId = "11111111-1111-4111-8111-111111111111";
 const workspaceId = "22222222-2222-4222-8222-222222222222";

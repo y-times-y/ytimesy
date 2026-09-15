@@ -47,6 +47,7 @@ beforeAll(async () => {
 		"20260913221500_workspaces_jobs_agent_accounts.sql",
 		"20260913234500_auth_email_outbox.sql",
 		"20260914010000_auth_email_reset_password.sql",
+		"20260915053000_agent_sessions_and_snapshots.sql",
 	])
 		await db.exec(await readFile(`supabase/migrations/${file}`, "utf8"));
 	await db.exec(
@@ -73,6 +74,8 @@ it("clones with an installation token file, not git argv", async () => {
 	await runtime.provision(`ytimesy-ws-${workspace.id}`);
 	const ready = await runWorkspacePreparation(workspace.id, runtime);
 	expect(ready?.status).toBe("ready");
+	expect(ready?.templateSnapshotId).toMatch(/^snap:ytimesy-pe-/);
+	expect(runtime.paused).toHaveLength(1);
 	expect(runtime.machines.size).toBe(1);
 	expect(
 		runtime.commands.some((command) =>
@@ -88,6 +91,9 @@ it("clones with an installation token file, not git argv", async () => {
 		runtime.files.some((file) => file.path === "/tmp/ytimesy-gh-token"),
 	).toBe(true);
 	const events = await listWorkspaceEvents("alice", workspace.id);
+	expect(events.map((event) => event.message)).toContain(
+		"Sealed project environment snapshot.",
+	);
 	expect(events.map((event) => event.message).join("\n")).not.toContain("ghp_");
 });
 

@@ -23,7 +23,6 @@ import {
 	sessionTitleFromItems,
 	sessionUsesFollowUpLayout,
 } from "#/domain/session-item";
-import { chatsListedInSidebar } from "#/domain/sidebar-chats";
 import type { WorkspaceDesktop } from "#/domain/workspace-desktop";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
 import { authClient } from "../auth/client";
@@ -45,6 +44,10 @@ import {
 } from "../sessions/model-capabilities";
 import { SessionLauncher } from "../sessions/session-launcher";
 import { SideChatPanel } from "../sessions/side-chat-panel";
+import {
+	listProjectAgentSessions,
+	startProjectAgentSession,
+} from "../sessions/agent-session.fn";
 import { getWorkspaceDesktop, startWorkspaceDesktopFn } from "./desktop.fn";
 import { ProjectSidebar } from "./project-sidebar";
 import { useCompactLayout, useInspectorBesideChat } from "./use-compact-layout";
@@ -69,7 +72,17 @@ export function WorkspaceHome({
 	const selectedProject =
 		projects.data?.find((project) => project.id === selectedProjectId) ??
 		projects.data?.[0];
+	const [selectedSessionId, setSelectedSessionId] = useState<string>();
 	const [session, setSession] = useState(initialSession);
+	const chats = useQuery({
+		queryKey: ["agent-sessions", selectedProject?.id],
+		queryFn: () =>
+			listProjectAgentSessions({
+				data: { projectId: selectedProject?.id },
+			}),
+		enabled: Boolean(selectedProject?.id),
+	});
+	const startSession = useServerFn(startProjectAgentSession);
 	const [projectsOpen, setProjectsOpen] = useState(false);
 	const [inspectorOpen, setInspectorOpen] = useState(false);
 	const [toolsView, setToolsView] = useState<ToolsView>("diff");
@@ -113,11 +126,16 @@ export function WorkspaceHome({
 	const connectedProvider = connectedProviderId(session.connection);
 	const sessionTitle = sessionTitleFromItems(session.items);
 	const hasUserMessage = Boolean(lastUserMessageText(session.items));
-	const sidebarChats = chatsListedInSidebar({
-		projectSelected: Boolean(selectedProject),
-		hasUserMessage,
-		title: sessionTitle,
-	});
+	const sidebarChats = chats.data ?? [];
+	const activeSessionId = selectedSessionId ?? session.agentSessionId ?? undefined;
+
+	function sessionScope() {
+		return {
+			projectId: selectedProject?.id,
+			harnessId,
+			sessionId: activeSessionId,
+		};
+	}
 
 	useEffect(() => {
 		if (compact) setProjectsOpen(false);
@@ -134,8 +152,21 @@ export function WorkspaceHome({
 	}, [loadKeys]);
 
 	useEffect(() => {
+		setSelectedSessionId(undefined);
+		desktopAutoStarted.current = false;
+		autoResumeStarted.current = false;
+	}, [selectedProject?.id]);
+
+	useEffect(() => {
+		if (selectedSessionId || !chats.data?.[0]) return;
+		setSelectedSessionId(chats.data[0].id);
+	}, [chats.data, selectedSessionId]);
+
+	useEffect(() => {
 		if (!selectedProject?.id) return;
-		void loadDesktop({ data: { projectId: selectedProject.id } }).then(
+		void loadDesktop({
+			data: { projectId: selectedProject.id, sessionId: activeSessionId },
+		}).then(
 			(next) => {
 				setDesktop((current) =>
 					current.status === "starting" || current.status === "running"
@@ -144,14 +175,17 @@ export function WorkspaceHome({
 				);
 			},
 		);
-	}, [loadDesktop, selectedProject?.id]);
+	}, [loadDesktop, selectedProject?.id, activeSessionId]);
 
 	useEffect(() => {
 		if (!selectedProject?.id || busy) return;
 		void getCodexSession({
-			data: { projectId: selectedProject.id, harnessId },
-		}).then(setSession);
-	}, [busy, harnessId, selectedProject?.id]);
+			data: sessionScope(),
+		}).then((next) => {
+			setSession(next);
+			if (next.agentSessionId) setSelectedSessionId(next.agentSessionId);
+		});
+	}, [busy, harnessId, selectedProject?.id, activeSessionId]);
 
 	useEffect(() => {
 		if (session.connection.status !== "authenticated") return;
@@ -178,7 +212,7 @@ export function WorkspaceHome({
 		autoResumeStarted.current = true;
 		setBusy(true);
 		void connect({
-			data: { projectId: selectedProject.id, harnessId },
+			data: sessionScope(),
 		})
 			.then(setSession)
 			.finally(() => setBusy(false));
@@ -198,7 +232,9 @@ export function WorkspaceHome({
 		desktopAutoStarted.current = true;
 		setDesktopBusy(true);
 		setDesktop({ status: "starting" });
-		void startDesktop({ data: { projectId: selectedProject.id } })
+		void startDesktop({
+			data: { projectId: selectedProject.id, sessionId: activeSessionId },
+		})
 			.then(setDesktop)
 			.finally(() => setDesktopBusy(false));
 	}, [
@@ -225,7 +261,7 @@ export function WorkspaceHome({
 				: 3000;
 		const timer = window.setInterval(() => {
 			void getCodexSession({
-				data: { projectId: selectedProject?.id, harnessId },
+				data: sessionScope(),
 			}).then((next) => {
 				setSession(next);
 				if (next.sideTurnStatus !== "idle") setSideQueued(false);
@@ -270,11 +306,25 @@ export function WorkspaceHome({
 			requestAnimationFrame(focusProjectPicker);
 			return;
 		}
-		document
-			.querySelector<HTMLTextAreaElement>(
-				'textarea[aria-label="Task description"]',
-			)
-			?.focus();
+		setBusy(true);
+		void startSession({
+			data: { projectId: selectedProject.id, harnessId },
+		})
+			.then((created) => {
+				setSelectedSessionId(created.id);
+				desktopAutoStarted.current = false;
+				autoResumeStarted.current = false;
+				openedDiff.current = false;
+				setDesktop({ status: "stopped" });
+				return connect({
+					data: { ...sessionScope(), sessionId: created.id, createNew: false },
+				});
+			})
+			.then((next) => {
+				if (next) setSession(next);
+				void chats.refetch();
+			})
+			.finally(() => setBusy(false));
 	}
 
 	async function signOut() {
@@ -288,13 +338,7 @@ export function WorkspaceHome({
 		if (session.turnStatus === "running") setSideQueued(true);
 		setBusy(true);
 		void sendTask({
-			data: {
-				text,
-				modelId,
-				lane: "side",
-				projectId: selectedProject?.id,
-				harnessId,
-			},
+			data: { ...sessionScope(), text, modelId, lane: "side" as const },
 		})
 			.then(setSession)
 			.finally(() => setBusy(false));
@@ -341,6 +385,21 @@ export function WorkspaceHome({
 					if (compact) setProjectsOpen(false);
 				}}
 				chats={sidebarChats}
+				selectedChatId={activeSessionId}
+				hasUserMessage={hasUserMessage}
+				onSelectChat={(id) => {
+					setSelectedSessionId(id);
+					desktopAutoStarted.current = false;
+					autoResumeStarted.current = false;
+					openedDiff.current = false;
+					setDesktop({ status: "stopped" });
+					setSession((current) => ({
+						...current,
+						agentSessionId: id,
+						items: [],
+						turnStatus: "idle",
+					}));
+				}}
 				onNewChat={startNewChat}
 				onSignOut={() => {
 					void signOut();
@@ -428,10 +487,7 @@ export function WorkspaceHome({
 									if (id !== "opencode") return;
 									setBusy(true);
 									void connect({
-										data: {
-											projectId: selectedProject?.id,
-											harnessId: id,
-										},
+										data: { ...sessionScope(), harnessId: id },
 									})
 										.then(setSession)
 										.finally(() => setBusy(false));
@@ -440,10 +496,7 @@ export function WorkspaceHome({
 								onConnect={() => {
 									setBusy(true);
 									void connect({
-										data: {
-											projectId: selectedProject?.id,
-											harnessId,
-										},
+										data: sessionScope(),
 									})
 										.then(setSession)
 										.finally(() => setBusy(false));
@@ -462,10 +515,7 @@ export function WorkspaceHome({
 											});
 											if (id === harnessId) {
 												return connect({
-													data: {
-														projectId: selectedProject?.id,
-														harnessId: id,
-													},
+													data: { ...sessionScope(), harnessId: id },
 												}).then(setSession);
 											}
 										})
@@ -474,12 +524,7 @@ export function WorkspaceHome({
 								onSend={(text, modelId) => {
 									setBusy(true);
 									void sendTask({
-										data: {
-											text,
-											modelId,
-											projectId: selectedProject?.id,
-											harnessId,
-										},
+										data: { ...sessionScope(), text, modelId },
 									})
 										.then(setSession)
 										.finally(() => setBusy(false));
@@ -487,10 +532,7 @@ export function WorkspaceHome({
 								onStop={() => {
 									setBusy(true);
 									void stopTurn({
-										data: {
-											projectId: selectedProject?.id,
-											harnessId,
-										},
+										data: sessionScope(),
 									})
 										.then(setSession)
 										.finally(() => setBusy(false));
@@ -556,11 +598,15 @@ export function WorkspaceHome({
 							desktop={desktop}
 							desktopBusy={desktopBusy}
 							projectId={selectedProject?.id}
+							sessionId={activeSessionId}
 							onStartDesktop={() => {
 								setDesktopBusy(true);
 								setDesktop({ status: "starting" });
 								void startDesktop({
-									data: { projectId: selectedProject?.id },
+									data: {
+										projectId: selectedProject?.id,
+										sessionId: activeSessionId,
+									},
 								})
 									.then(setDesktop)
 									.finally(() => setDesktopBusy(false));

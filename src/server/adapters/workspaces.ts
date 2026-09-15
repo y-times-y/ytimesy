@@ -9,13 +9,14 @@ interface WorkspaceRow {
 	project_id: string;
 	status: ProjectWorkspace["status"];
 	provider_ref: string | null;
+	template_snapshot_id: string | null;
 	error_message: string | null;
 	updated_at: Date | string;
 }
 
 export async function workspaceById(workspaceId: string) {
 	const result = await database().query(
-		"select id,user_id,project_id,status,provider_ref,error_message,updated_at from workspace where id=$1",
+		"select id,user_id,project_id,status,provider_ref,template_snapshot_id,error_message,updated_at from workspace where id=$1",
 		[workspaceId],
 	);
 	return result.rows[0] ? toWorkspace(result.rows[0]) : null;
@@ -26,7 +27,7 @@ export async function workspaceForProject(
 	projectId: string,
 ): Promise<ProjectWorkspace | null> {
 	const result = await database().query(
-		"select id,user_id,project_id,status,provider_ref,error_message,updated_at from workspace where user_id=$1 and project_id=$2",
+		"select id,user_id,project_id,status,provider_ref,template_snapshot_id,error_message,updated_at from workspace where user_id=$1 and project_id=$2",
 		[userId, projectId],
 	);
 	return result.rows[0] ? toWorkspace(result.rows[0]) : null;
@@ -37,7 +38,7 @@ export async function workspaceForOwner(
 	workspaceId: string,
 ): Promise<ProjectWorkspace | null> {
 	const result = await database().query(
-		"select id,user_id,project_id,status,provider_ref,error_message,updated_at from workspace where id=$1 and user_id=$2",
+		"select id,user_id,project_id,status,provider_ref,template_snapshot_id,error_message,updated_at from workspace where id=$1 and user_id=$2",
 		[workspaceId, userId],
 	);
 	return result.rows[0] ? toWorkspace(result.rows[0]) : null;
@@ -54,7 +55,7 @@ export async function readyWorkspaceForOwner(
 		return workspace;
 	}
 	const result = await database().query(
-		`select id,user_id,project_id,status,provider_ref,error_message,updated_at
+		`select id,user_id,project_id,status,provider_ref,template_snapshot_id,error_message,updated_at
 		 from workspace
 		 where user_id=$1 and status='ready' and provider_ref is not null
 		 order by updated_at desc
@@ -77,7 +78,7 @@ export async function insertQueuedWorkspace(
 		  error_message=case when workspace.status='failed' then null else workspace.error_message end,
 		  updated_at=case when workspace.status in ('queued','failed') then now() else workspace.updated_at end
 		 where workspace.user_id = excluded.user_id
-		 returning id,user_id,project_id,status,provider_ref,error_message,updated_at`,
+		 returning id,user_id,project_id,status,provider_ref,template_snapshot_id,error_message,updated_at`,
 		[id, userId, projectId],
 	);
 	if (!result.rows[0])
@@ -89,7 +90,7 @@ export async function markWorkspaceQueued(userId: string, workspaceId: string) {
 	const result = await database().query(
 		`update workspace set status='queued', error_message=null, updated_at=now()
 		 where id=$1 and user_id=$2 and status='failed'
-		 returning id,user_id,project_id,status,provider_ref,error_message,updated_at`,
+		 returning id,user_id,project_id,status,provider_ref,template_snapshot_id,error_message,updated_at`,
 		[workspaceId, userId],
 	);
 	return result.rows[0] ? toWorkspace(result.rows[0]) : null;
@@ -99,7 +100,7 @@ export async function claimWorkspaceForJob(workspaceId: string) {
 	const result = await database().query(
 		`update workspace set status='provisioning', error_message=null, updated_at=now()
 		 where id=$1 and status in ('queued','failed')
-		 returning id,user_id,project_id,status,provider_ref,error_message,updated_at`,
+		 returning id,user_id,project_id,status,provider_ref,template_snapshot_id,error_message,updated_at`,
 		[workspaceId],
 	);
 	return result.rows[0] ? toWorkspace(result.rows[0]) : null;
@@ -112,8 +113,21 @@ export async function saveProviderRef(
 	const result = await database().query(
 		`update workspace set provider_ref=$2, updated_at=now()
 		 where id=$1
-		 returning id,user_id,project_id,status,provider_ref,error_message,updated_at`,
+		 returning id,user_id,project_id,status,provider_ref,template_snapshot_id,error_message,updated_at`,
 		[workspaceId, providerRef],
+	);
+	return toWorkspace(result.rows[0]);
+}
+
+export async function saveTemplateSnapshot(
+	workspaceId: string,
+	snapshotId: string,
+) {
+	const result = await database().query(
+		`update workspace set template_snapshot_id=$2, updated_at=now()
+		 where id=$1
+		 returning id,user_id,project_id,status,provider_ref,template_snapshot_id,error_message,updated_at`,
+		[workspaceId, snapshotId],
 	);
 	return toWorkspace(result.rows[0]);
 }
@@ -126,7 +140,7 @@ export async function saveWorkspaceStatus(
 	const result = await database().query(
 		`update workspace set status=$2, error_message=$3, updated_at=now()
 		 where id=$1
-		 returning id,user_id,project_id,status,provider_ref,error_message,updated_at`,
+		 returning id,user_id,project_id,status,provider_ref,template_snapshot_id,error_message,updated_at`,
 		[workspaceId, status, errorMessage],
 	);
 	return toWorkspace(result.rows[0]);
@@ -169,6 +183,7 @@ function toWorkspace(row: WorkspaceRow): ProjectWorkspace {
 		projectId: row.project_id,
 		status: row.status,
 		providerRef: row.provider_ref,
+		templateSnapshotId: row.template_snapshot_id,
 		errorMessage: row.error_message,
 		updatedAt:
 			row.updated_at instanceof Date

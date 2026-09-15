@@ -34,10 +34,12 @@ function runWithMachines<A>(
 async function optionalScope(
 	projectId?: string,
 	harnessId: AgentProviderId = DEFAULT_COMPOSER_HARNESS_ID,
+	sessionId?: string,
+	createNew?: boolean,
 ): Promise<HarnessSessionScope | null> {
 	try {
 		const user = await requireUser(getRequest().headers);
-		return { userId: user.id, projectId, harnessId };
+		return { userId: user.id, projectId, harnessId, sessionId, createNew };
 	} catch {
 		return null;
 	}
@@ -46,26 +48,47 @@ async function optionalScope(
 async function requireScope(
 	projectId?: string,
 	harnessId: AgentProviderId = DEFAULT_COMPOSER_HARNESS_ID,
+	sessionId?: string,
+	createNew?: boolean,
 ): Promise<HarnessSessionScope> {
 	const user = await requireUser(getRequest().headers);
-	return { userId: user.id, projectId, harnessId };
+	return { userId: user.id, projectId, harnessId, sessionId, createNew };
 }
 
 function optionalSessionInput(
-	data: { projectId?: string; harnessId?: string } | undefined,
+	data:
+		| {
+				projectId?: string;
+				harnessId?: string;
+				sessionId?: string;
+				createNew?: boolean;
+		  }
+		| undefined,
 ) {
 	const projectId =
 		typeof data?.projectId === "string" ? data.projectId.trim() : "";
+	const sessionId =
+		typeof data?.sessionId === "string" ? data.sessionId.trim() : "";
 	const harnessId = data?.harnessId
 		? parseHarnessId(data.harnessId)
 		: DEFAULT_COMPOSER_HARNESS_ID;
-	return { projectId: projectId || undefined, harnessId };
+	return {
+		projectId: projectId || undefined,
+		sessionId: sessionId || undefined,
+		createNew: data?.createNew === true,
+		harnessId,
+	};
 }
 
 export const getCodexSession = createServerFn({ method: "GET" })
 	.validator(optionalSessionInput)
 	.handler(async ({ data }): Promise<PublicCodexSession> => {
-		const scope = await optionalScope(data.projectId, data.harnessId);
+		const scope = await optionalScope(
+			data.projectId,
+			data.harnessId,
+			data.sessionId,
+			data.createNew,
+		);
 		if (!scope) return emptyHarnessSession();
 		return runWithMachines((machines) =>
 			readHarnessWorkspaceSession(machines, scope),
@@ -75,7 +98,12 @@ export const getCodexSession = createServerFn({ method: "GET" })
 export const connectCodexSession = createServerFn({ method: "POST" })
 	.validator(optionalSessionInput)
 	.handler(async ({ data }): Promise<PublicCodexSession> => {
-		const scope = await requireScope(data.projectId, data.harnessId);
+		const scope = await requireScope(
+			data.projectId,
+			data.harnessId,
+			data.sessionId,
+			data.createNew,
+		);
 		return runWithMachines((machines) =>
 			connectHarnessWorkspaceSession(machines, scope),
 		);
@@ -89,6 +117,8 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 			lane?: "main" | "side";
 			projectId?: string;
 			harnessId?: string;
+			sessionId?: string;
+			createNew?: boolean;
 		}) => {
 			const text = data.text.trim();
 			const modelId = data.modelId.trim();
@@ -102,11 +132,18 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 				harnessId: data.harnessId
 					? parseHarnessId(data.harnessId)
 					: DEFAULT_COMPOSER_HARNESS_ID,
+				sessionId: data.sessionId?.trim() || undefined,
+				createNew: data.createNew === true,
 			};
 		},
 	)
 	.handler(async ({ data }): Promise<PublicCodexSession> => {
-		const scope = await requireScope(data.projectId, data.harnessId);
+		const scope = await requireScope(
+			data.projectId,
+			data.harnessId,
+			data.sessionId,
+			data.createNew,
+		);
 		return runWithMachines((machines) =>
 			sendHarnessWorkspaceTask(machines, scope, data),
 		);
@@ -115,7 +152,12 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 export const stopCodexSessionTurn = createServerFn({ method: "POST" })
 	.validator(optionalSessionInput)
 	.handler(async ({ data }): Promise<PublicCodexSession> => {
-		const scope = await requireScope(data.projectId, data.harnessId);
+		const scope = await requireScope(
+			data.projectId,
+			data.harnessId,
+			data.sessionId,
+			data.createNew,
+		);
 		return runWithMachines((machines) =>
 			stopHarnessWorkspaceTurn(machines, scope),
 		);

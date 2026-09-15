@@ -153,6 +153,20 @@ export function lastUserMessageText(
 	return null;
 }
 
+export function lastAgentMessageText(
+	items: readonly SessionItem[],
+): string | null {
+	for (let index = items.length - 1; index >= 0; index -= 1) {
+		const item = items[index];
+		if (item?.kind === "agentMessage" && item.text.trim()) return item.text;
+	}
+	return null;
+}
+
+export function sessionItemsFromUnknown(value: unknown): SessionItem[] {
+	return Array.isArray(value) ? (value as SessionItem[]) : [];
+}
+
 export function sessionUsesFollowUpLayout(input: {
 	readonly items: readonly SessionItem[];
 	readonly turnStatus: SessionTurnStatus;

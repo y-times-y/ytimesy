@@ -12,6 +12,7 @@ import type {
 	ProofWorkspace,
 	WorkspaceMachines,
 } from "#/server/services/workspace-machines";
+import { productCreateVmFields } from "./product-vm";
 import {
 	PROOF_METADATA_PURPOSE,
 	privateCodexAuthSnapshotFields,
@@ -248,6 +249,50 @@ export function createFreestyleWorkspaceMachines(
 			} catch (cause) {
 				throw new WorkspaceProvisionError({
 					operation: "reconcile",
+					message: providerMessage(cause),
+				});
+			}
+		},
+
+		async snapshotEnvironment(workspaceId, slug) {
+			try {
+				const created = await freestyle.vms.ref(workspaceId).snapshot({
+					slug,
+					displayName: "ytimesy project environment",
+					autoDeleteSeconds: -1,
+				});
+				if (created.snapshot.public) {
+					await freestyle.vms.snapshots
+						.delete(created.snapshotId)
+						.catch(() => undefined);
+					throw new WorkspaceProvisionError({
+						operation: "snapshot",
+						message:
+							"Freestyle returned a public snapshot; deleted it because project checkouts cannot live in a shared image",
+						providerWorkspaceId: workspaceId,
+					});
+				}
+				return created.snapshotId;
+			} catch (cause) {
+				if (cause instanceof WorkspaceProvisionError) throw cause;
+				throw new WorkspaceProvisionError({
+					operation: "snapshot",
+					message: providerMessage(cause),
+					providerWorkspaceId: workspaceId,
+				});
+			}
+		},
+
+		async provisionSession(slug, snapshotId) {
+			try {
+				const created = await freestyle.vms.create(
+					productCreateVmFields({ slug, snapshotId }),
+				);
+				await waitUntilVmRunning(created.vm, "Agent session VM");
+				return WorkspaceId(created.vmId);
+			} catch (cause) {
+				throw new WorkspaceProvisionError({
+					operation: "create",
 					message: providerMessage(cause),
 				});
 			}

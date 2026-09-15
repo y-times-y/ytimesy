@@ -3,7 +3,6 @@ import type { AgentConnection } from "#/domain/agent-connection";
 import { WorkspaceId } from "#/domain/ids";
 import {
 	codexConnectBlockedReason,
-	workspaceSessionMachineRef,
 } from "#/domain/project-workspace";
 import { shouldStartDeviceCodeAfterSnapshotResume } from "#/domain/proof-workspace-recovery";
 import type { SessionItem, SessionTurnStatus } from "#/domain/session-item";
@@ -24,12 +23,18 @@ import type {
 import { readyWorkspaceForOwner } from "#/server/adapters/workspaces";
 import { loadAgentSnapshotId } from "#/server/auth/agent-account";
 import { persistCodexAuthSnapshotForUser } from "#/server/proof/persist-codex-auth-snapshot";
+import {
+	bindAgentSessionMachine,
+	peekAgentSessionMachine,
+} from "./agent-session-machine";
+import { persistBoundSessionView } from "./persist-session-view";
 import { preparePreparedGuest } from "./project-workspace";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 export type PublicCodexSession = {
 	readonly snapshotAvailable: boolean;
 	readonly workspaceId: string | null;
+	readonly agentSessionId: string | null;
 	readonly connection: AgentConnection;
 	readonly models: readonly ListedModel[];
 	readonly canSend: boolean;
@@ -43,6 +48,8 @@ export type PublicCodexSession = {
 export type CodexSessionScope = {
 	readonly userId: string;
 	readonly projectId?: string;
+	readonly sessionId?: string;
+	readonly createNew?: boolean;
 };
 
 const disconnected: AgentConnection = { status: "disconnected" };
@@ -53,6 +60,7 @@ export function emptyCodexSession(
 	return {
 		snapshotAvailable,
 		workspaceId: null,
+		agentSessionId: null,
 		connection: disconnected,
 		models: [],
 		canSend: false,
@@ -65,8 +73,8 @@ export function emptyCodexSession(
 }
 
 /**
- * Reads Codex on the signed-in user's prepared workspace. Missing machines
- * become a disconnected session so the homepage can render.
+ * Reads Codex on this agent session's VM. Missing machines become a
+ * disconnected session so the homepage can render.
  */
 export function readCodexWorkspaceSession(
 	machines: WorkspaceMachines,
@@ -76,18 +84,33 @@ export function readCodexWorkspaceSession(
 		const snapshotId = yield* Effect.tryPromise(() =>
 			loadAgentSnapshotId(scope.userId),
 		);
-		const workspace = yield* Effect.tryPromise(() =>
-			readyWorkspaceForOwner(scope.userId, scope.projectId),
+		if (!scope.projectId) return emptyCodexSession(Boolean(snapshotId));
+		const peeked = yield* Effect.tryPromise(() =>
+			peekAgentSessionMachine({
+				userId: scope.userId,
+				projectId: scope.projectId as string,
+				sessionId: scope.sessionId,
+			}),
 		);
-		const providerRef = workspaceSessionMachineRef(workspace);
+		const providerRef = peeked.providerRef;
 		if (!providerRef) {
-			return emptyCodexSession(Boolean(snapshotId));
+			return yield* Effect.tryPromise(() =>
+				persistBoundSessionView(
+					peeked.session,
+					emptyCodexSession(Boolean(snapshotId)),
+				),
+			);
 		}
 		yield* Effect.tryPromise(() =>
 			machines.ensureRunning(WorkspaceId(providerRef)),
 		);
 		const status = yield* readLoginStatus(machines, WorkspaceId(providerRef));
-		return viewFromStatus(status, providerRef, Boolean(snapshotId));
+		return yield* Effect.tryPromise(() =>
+			persistBoundSessionView(
+				peeked.session,
+				viewFromStatus(status, providerRef, Boolean(snapshotId)),
+			),
+		);
 	}).pipe(
 		Effect.catchAll(() =>
 			Effect.tryPromise(() => loadAgentSnapshotId(scope.userId)).pipe(
@@ -125,18 +148,35 @@ export function connectCodexWorkspaceSession(
 			};
 		}
 
+		const bound = yield* Effect.tryPromise(() =>
+			bindAgentSessionMachine(machines, {
+				userId: scope.userId,
+				projectId: scope.projectId as string,
+				harness: "codex",
+				sessionId: scope.sessionId,
+				createNew: scope.createNew,
+			}),
+		);
 		yield* Effect.tryPromise(() =>
-			machines.ensureRunning(WorkspaceId(workspace.providerRef as string)),
+			machines.ensureRunning(WorkspaceId(bound.providerRef)),
 		);
 
-		const existing = yield* readCodexWorkspaceSession(machines, scope);
+		const existing = yield* readCodexWorkspaceSession(machines, {
+			...scope,
+			sessionId: bound.session.id,
+			createNew: false,
+		});
 		if (existing.connection.status === "authenticated") {
 			yield* prepareCodexGuest(
 				machines,
-				WorkspaceId(workspace.providerRef),
+				WorkspaceId(bound.providerRef),
 				scope,
 			);
-			return yield* readCodexWorkspaceSession(machines, scope);
+			return yield* readCodexWorkspaceSession(machines, {
+				...scope,
+				sessionId: bound.session.id,
+				createNew: false,
+			});
 		}
 		if (existing.connection.status === "awaiting_device_code") {
 			return existing;
@@ -144,26 +184,31 @@ export function connectCodexWorkspaceSession(
 
 		const status = yield* authenticatePreparedWorkspace(
 			machines,
-			WorkspaceId(workspace.providerRef),
+			WorkspaceId(bound.providerRef),
 			Boolean(snapshotId),
 		);
 		if (status.stage === "authenticated") {
 			yield* persistCodexAuthSnapshotForUser(
 				scope.userId,
 				machines,
-				WorkspaceId(workspace.providerRef),
+				WorkspaceId(bound.providerRef),
 				{ planType: status.planType, email: null },
 			);
 			yield* prepareCodexGuest(
 				machines,
-				WorkspaceId(workspace.providerRef),
+				WorkspaceId(bound.providerRef),
 				scope,
 			);
 		}
-		return viewFromStatus(
-			status,
-			workspace.providerRef,
-			Boolean(snapshotId) || status.stage === "authenticated",
+		return yield* Effect.tryPromise(() =>
+			persistBoundSessionView(
+				bound.session,
+				viewFromStatus(
+					status,
+					bound.providerRef,
+					Boolean(snapshotId) || status.stage === "authenticated",
+				),
+			),
 		);
 	}).pipe(
 		Effect.catchAll((cause) =>
@@ -231,17 +276,26 @@ function withPreparedWorkspace<A>(
 		const snapshotId = yield* Effect.tryPromise(() =>
 			loadAgentSnapshotId(scope.userId),
 		);
-		const workspace = yield* Effect.tryPromise(() =>
-			readyWorkspaceForOwner(scope.userId, scope.projectId),
+		if (!scope.projectId) return emptyCodexSession(Boolean(snapshotId));
+		const bound = yield* Effect.tryPromise(() =>
+			bindAgentSessionMachine(machines, {
+				userId: scope.userId,
+				projectId: scope.projectId as string,
+				harness: "codex",
+				sessionId: scope.sessionId,
+				createNew: scope.createNew,
+			}),
 		);
-		const providerRef = workspaceSessionMachineRef(workspace);
-		if (!providerRef) {
-			return emptyCodexSession(Boolean(snapshotId));
-		}
 		yield* Effect.tryPromise(() =>
-			machines.ensureRunning(WorkspaceId(providerRef)),
+			machines.ensureRunning(WorkspaceId(bound.providerRef)),
 		);
-		return yield* run(providerRef, Boolean(snapshotId));
+		const result = yield* run(bound.providerRef, Boolean(snapshotId));
+		if (isPublicCodexSession(result)) {
+			return yield* Effect.tryPromise(() =>
+				persistBoundSessionView(bound.session, result),
+			);
+		}
+		return result;
 	}).pipe(
 		Effect.catchAll((cause) =>
 			Effect.succeed({
@@ -253,6 +307,15 @@ function withPreparedWorkspace<A>(
 				},
 			}),
 		),
+	);
+}
+
+function isPublicCodexSession(value: unknown): value is PublicCodexSession {
+	return Boolean(
+		value &&
+			typeof value === "object" &&
+			"connection" in value &&
+			"items" in value,
 	);
 }
 
@@ -311,6 +374,7 @@ function viewFromStatus(
 	return {
 		snapshotAvailable,
 		workspaceId,
+		agentSessionId: null,
 		connection,
 		models,
 		canSend: canSubmitComposer(workspace, connection, turnStatus),

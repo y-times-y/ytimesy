@@ -50,4 +50,12 @@ export interface WorkspaceMachines {
 		hostname: string,
 	) => Promise<string>;
 	readonly destroyOrphans: (slugPrefix: string) => Promise<readonly string[]>;
+	readonly snapshotEnvironment: (
+		workspaceId: WorkspaceId,
+		slug: string,
+	) => Promise<string>;
+	readonly provisionSession: (
+		slug: string,
+		snapshotId: string,
+	) => Promise<WorkspaceId>;
 }

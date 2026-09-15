@@ -10,13 +10,16 @@ import {
 import {
 	cloneSelectedProjectScript,
 	DEVELOPER_INSTRUCTIONS_PATH,
+	preparedCheckoutExistsCommand,
+	PROJECT_CONTEXT_PATH,
+	PROJECT_CWD_PATH,
 	PROJECT_TOKEN_PATH,
 	redactInstallationToken,
 } from "#/server/adapters/freestyle/clone-project";
 import { readGitHubAppCredentials } from "#/server/adapters/github/credentials";
 import { listProjects, projectForOwner } from "#/server/adapters/projects";
 import { liveGitHubProjectDeps, loadProjectCheckout } from "./github-projects";
-import { type DesktopScope, startWorkspaceDesktop } from "./workspace-desktop";
+import { type DesktopScope } from "./workspace-desktop";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 /**
@@ -40,6 +43,26 @@ export function ensureProjectCheckout(
 			return null;
 		}
 		const deps = liveGitHubProjectDeps();
+		const home = yield* guestHome(machines, workspaceId);
+		const destination = projectCheckoutPath(home, resolved.name);
+		const existing = yield* Effect.tryPromise(() =>
+			machines.exec(
+				workspaceId,
+				preparedCheckoutExistsCommand(destination),
+				15_000,
+			),
+		);
+		if (existing.stdout.includes("present")) {
+			yield* Effect.tryPromise(() =>
+				machines.writeTextFile(
+					workspaceId,
+					PROJECT_CWD_PATH,
+					`${destination}\n`,
+				),
+			);
+			yield* writeDeveloperInstructions(machines, workspaceId, destination);
+			return destination;
+		}
 		const credentials = yield* readGitHubAppCredentials(deps.env);
 		const token = yield* Effect.tryPromise(() =>
 			deps.github.installationToken({
@@ -47,8 +70,6 @@ export function ensureProjectCheckout(
 				installationId: resolved.installationId,
 			}),
 		);
-		const home = yield* guestHome(machines, workspaceId);
-		const destination = projectCheckoutPath(home, resolved.name);
 		yield* Effect.tryPromise(() =>
 			machines.writeTextFile(workspaceId, PROJECT_TOKEN_PATH, `${token}\n`),
 		);
@@ -86,7 +107,7 @@ export function writeDeveloperInstructions(
 		machines.writeTextFile(
 			workspaceId,
 			DEVELOPER_INSTRUCTIONS_PATH,
-			`${sharedDesktopDeveloperInstructions({ cwd })}\n`,
+			`${sharedDesktopDeveloperInstructions({ cwd })} If ${PROJECT_CONTEXT_PATH} exists, treat it as this project's shared briefing and sibling traces.\n`,
 		),
 	).pipe(Effect.catchAll(() => Effect.void));
 }
@@ -116,9 +137,6 @@ export function preparePreparedGuest(
 	return Effect.gen(function* () {
 		const checkout = yield* loadTenantProjectCheckout(scope);
 		yield* ensureProjectCheckout(machines, workspaceId, checkout);
-		yield* startWorkspaceDesktop(machines, scope).pipe(
-			Effect.catchAll(() => Effect.void),
-		);
 	});
 }
 

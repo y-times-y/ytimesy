@@ -23,6 +23,8 @@ export interface WorkspaceRuntime {
 		path: string,
 		contents: string,
 	): Promise<void>;
+	snapshot(providerRef: string, slug: string): Promise<string>;
+	pause?(providerRef: string): Promise<void>;
 }
 
 export class UnconfiguredWorkspaceRuntime implements WorkspaceRuntime {
@@ -49,6 +51,13 @@ export class UnconfiguredWorkspaceRuntime implements WorkspaceRuntime {
 	writeTextFile(): Promise<void> {
 		return this.provision().then(() => undefined);
 	}
+	snapshot(): Promise<string> {
+		return Promise.reject(
+			new Error(
+				"Freestyle workspace hosting is not wired in this process. Durable records are saved; retry after the workspace host is connected.",
+			),
+		);
+	}
 }
 
 export class MemoryWorkspaceRuntime implements WorkspaceRuntime {
@@ -59,6 +68,7 @@ export class MemoryWorkspaceRuntime implements WorkspaceRuntime {
 		envKeys: string[];
 	}[] = [];
 	readonly files: { providerRef: string; path: string; bytes: number }[] = [];
+	snapshots = new Map<string, string>();
 	constructor(private readonly execResult: RuntimeCommandResult = success) {}
 	async findBySlug(slug: string) {
 		return this.machines.get(slug) ?? null;
@@ -87,6 +97,19 @@ export class MemoryWorkspaceRuntime implements WorkspaceRuntime {
 	}
 	async writeTextFile(providerRef: string, path: string, contents: string) {
 		this.files.push({ providerRef, path, bytes: contents.length });
+	}
+	async snapshot(providerRef: string, slug: string) {
+		if (![...this.machines.values()].includes(providerRef))
+			throw new Error("Workspace machine is missing.");
+		const snapshotId = `snap:${slug}`;
+		this.snapshots.set(slug, snapshotId);
+		return snapshotId;
+	}
+	readonly paused: string[] = [];
+	async pause(providerRef: string) {
+		if (![...this.machines.values()].includes(providerRef))
+			throw new Error("Workspace machine is missing.");
+		this.paused.push(providerRef);
 	}
 }
 

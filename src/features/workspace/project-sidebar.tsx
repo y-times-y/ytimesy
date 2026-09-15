@@ -16,6 +16,9 @@ interface ProjectSidebarProps {
 	onToggle: () => void;
 	onAddProject: () => void;
 	chats: readonly SidebarChat[];
+	selectedChatId?: string;
+	hasUserMessage?: boolean;
+	onSelectChat?: (id: string) => void;
 	onNewChat: () => void;
 	onSignOut: () => void;
 }
@@ -29,6 +32,9 @@ export function ProjectSidebar({
 	onToggle,
 	onAddProject,
 	chats,
+	selectedChatId,
+	hasUserMessage = false,
+	onSelectChat,
 	onNewChat,
 	onSignOut,
 }: ProjectSidebarProps) {
@@ -44,7 +50,7 @@ export function ProjectSidebar({
 	});
 	const newChatActive = newChatIsActive({
 		projectSelected: Boolean(selected),
-		hasUserMessage: chats.length > 0,
+		hasUserMessage,
 	});
 
 	function cancelClose() {
@@ -186,7 +192,15 @@ export function ProjectSidebar({
 					<ul className="sidebar-chats">
 						{chats.map((chat) => (
 							<li key={chat.id}>
-								<button type="button" className="sidebar-chat" data-selected>
+								<button
+									type="button"
+									className="sidebar-chat"
+									data-selected={chat.id === selectedChatId}
+									aria-current={
+										chat.id === selectedChatId ? "page" : undefined
+									}
+									onClick={() => onSelectChat?.(chat.id)}
+								>
 									{chat.title}
 								</button>
 							</li>

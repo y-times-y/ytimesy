@@ -21,10 +21,12 @@ export function ProjectContext({
 	projects,
 	selectedProject,
 	onSelectProject,
+	sessionId,
 }: {
 	projects: Project[];
 	selectedProject?: Project;
 	onSelectProject: (id: string) => void;
+	sessionId?: string | null;
 }) {
 	return (
 		<div className="session-context">
@@ -61,6 +63,7 @@ export function ProjectContext({
 				<PublicationAction
 					key={selectedProject.id}
 					projectId={selectedProject.id}
+					sessionId={sessionId}
 				/>
 			)}
 		</div>
@@ -164,13 +167,19 @@ function BranchSelect({ project }: { project?: Project }) {
 	);
 }
 
-function PublicationAction({ projectId }: { projectId: string }) {
+function PublicationAction({
+	projectId,
+	sessionId,
+}: {
+	projectId: string;
+	sessionId?: string | null;
+}) {
 	const [title, setTitle] = useState("");
 	const publish = useMutation({
 		mutationFn: () =>
 			requestJson<{ url: string; number: number; draft: boolean }>(
 				"/api/projects/publish",
-				{ projectId, title },
+				{ projectId, sessionId, title },
 			),
 	});
 	const message = publish.error?.message;

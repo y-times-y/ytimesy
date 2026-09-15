@@ -4,10 +4,12 @@ import { terminalConnectBlockedReason } from "#/domain/workspace-terminal";
 import { readFreestyleApiKey } from "../adapters/freestyle/api-key";
 import { openWorkspacePty } from "../adapters/freestyle/workspace-pty";
 import { readyWorkspaceForOwner } from "../adapters/workspaces";
+import { peekAgentSessionMachine } from "./agent-session-machine";
 
 export async function connectWorkspaceTerminal(input: {
 	readonly userId: string;
 	readonly projectId: string;
+	readonly sessionId?: string;
 	readonly directory: string;
 	readonly cols: number;
 	readonly rows: number;
@@ -21,6 +23,12 @@ export async function connectWorkspaceTerminal(input: {
 			blocked ?? "Prepare a workspace before opening the terminal.",
 		);
 	}
+	const peeked = await peekAgentSessionMachine({
+		userId: input.userId,
+		projectId: input.projectId,
+		sessionId: input.sessionId,
+	});
+	const providerRef = peeked.providerRef ?? workspace.providerRef;
 	const apiKey = await Effect.runPromise(
 		readFreestyleApiKey().pipe(
 			Effect.mapError(
@@ -33,7 +41,7 @@ export async function connectWorkspaceTerminal(input: {
 	);
 	return openWorkspacePty({
 		apiKey,
-		providerRef: workspace.providerRef,
+		providerRef,
 		directory: input.directory,
 		cols: input.cols,
 		rows: input.rows,

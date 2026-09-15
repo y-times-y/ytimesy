@@ -37,6 +37,7 @@ export function WorkspaceInspector({
 	desktopBusy,
 	onStartDesktop,
 	projectId,
+	sessionId,
 	sideChatOpen,
 	onNewSideChat,
 	onCloseSideChat,
@@ -51,6 +52,7 @@ export function WorkspaceInspector({
 	desktopBusy: boolean;
 	onStartDesktop: () => void;
 	projectId?: string;
+	sessionId?: string;
 	sideChatOpen: boolean;
 	onNewSideChat: () => void;
 	onCloseSideChat: () => void;
@@ -133,6 +135,7 @@ export function WorkspaceInspector({
 			) : activeView === "terminal" ? (
 				<TerminalInspector
 					projectId={projectId}
+					sessionId={sessionId}
 					active={!collapsed && activeView === "terminal"}
 				/>
 			) : currentView ? (
