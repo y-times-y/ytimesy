@@ -1,16 +1,22 @@
 import { betterAuth } from "better-auth";
+import { developmentSessionTarget } from "#/domain/development-session";
 import { database } from "../adapters/database";
 import { persistAuthEmail } from "../adapters/email";
 import { serverConfig } from "../config";
+import { developmentSessionPlugin } from "./development-session-plugin";
 import { authTrustedOrigins, googleOAuthConfigured } from "./providers";
 
 export function authOptions() {
 	const config = serverConfig();
+	const developmentSession = developmentSessionTarget(config);
 	return {
 		database: database(),
 		baseURL: config.APP_URL,
 		secret: config.BETTER_AUTH_SECRET,
 		trustedOrigins: authTrustedOrigins(config.APP_URL),
+		plugins: developmentSession
+			? [developmentSessionPlugin(developmentSession)]
+			: [],
 		emailAndPassword: {
 			enabled: true,
 			requireEmailVerification: true,
