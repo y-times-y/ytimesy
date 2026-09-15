@@ -59,6 +59,16 @@ it("redacts tokens from failure messages and logs", () => {
 	expect(workspaceSlug("abc")).toBe("ytimesy-ws-abc");
 });
 
+it("explains the Freestyle VM cap without treating pause as a free slot", () => {
+	expect(
+		publicFailureMessage(
+			new Error(
+				"This plan has a limit of 5 VMs, and you are at 5. To create another VM, delete existing ones or upgrade your plan.",
+			),
+		),
+	).toMatch(/Pausing a VM does not free a slot/);
+});
+
 it("only exposes a Codex session machine after the workspace is ready", () => {
 	expect(workspaceSessionMachineRef(null)).toBeNull();
 	expect(
