@@ -8,6 +8,7 @@ import {
 	sessionMachinePlan,
 	sessionMachineRefsToDestroy,
 	shouldResealProjectSnapshotAfterCopyFailure,
+	workspaceCopyCapacityRetryDelaysMs,
 } from "./agent-session";
 
 describe("sessionMachinePlan", () => {
@@ -85,6 +86,17 @@ describe("shouldResealProjectSnapshotAfterCopyFailure", () => {
 				"LIMIT_EXCEEDED: limit of 5 VMs",
 			),
 		).toBe(false);
+	});
+});
+
+describe("workspaceCopyCapacityRetryDelaysMs", () => {
+	it("retries a stale VM cap and does not retry other copy failures", () => {
+		expect(
+			workspaceCopyCapacityRetryDelaysMs("LIMIT_EXCEEDED: limit of 5 VMs"),
+		).toEqual([4_000, 8_000, 16_000]);
+		expect(
+			workspaceCopyCapacityRetryDelaysMs("Snapshot sh-old not found"),
+		).toEqual([]);
 	});
 });
 

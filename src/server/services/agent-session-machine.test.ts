@@ -243,6 +243,7 @@ describe("executeSessionMachinePlan", () => {
 			failMessage: "LIMIT_EXCEEDED: limit of 5 VMs",
 		});
 		const snapshots: string[] = [];
+		const waits: number[] = [];
 		await expect(
 			executeSessionMachinePlan({
 				machines: runtime.api,
@@ -256,9 +257,46 @@ describe("executeSessionMachinePlan", () => {
 					snapshots.push(snapshotId);
 				},
 				saveSessionProviderRef: async () => undefined,
+				wait: async (ms) => {
+					waits.push(ms);
+				},
 			}),
 		).rejects.toThrow(/LIMIT_EXCEEDED/);
 		expect(snapshots).toEqual([]);
 		expect(runtime.provisioned).toEqual([]);
+		expect(waits).toEqual([4_000, 8_000, 16_000]);
+	});
+
+	it("retries a copy when Freestyle still reports the cap after a delete", async () => {
+		const runtime = machines({
+			failFirstProvision: true,
+			failMessage: "LIMIT_EXCEEDED: limit of 5 VMs",
+			copied: "agent-after-lag",
+		});
+		const waits: number[] = [];
+		const result = await executeSessionMachinePlan({
+			machines: runtime.api,
+			sessionId: "11111111-2222-3333-4444-555555555555",
+			sessionProviderRef: null,
+			workspaceId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+			templateSnapshotId: "snap-1",
+			templateProviderRef: "repo-vm",
+			templateAlreadyBound: true,
+			saveTemplateSnapshot: async () => {
+				throw new Error("snapshot already sealed");
+			},
+			saveSessionProviderRef: async () => undefined,
+			wait: async (ms) => {
+				waits.push(ms);
+			},
+		});
+		expect(result).toEqual({
+			providerRef: "agent-after-lag",
+			planKind: "copy-snapshot",
+		});
+		expect(runtime.provisioned).toEqual([
+			{ slug: "ytimesy-ag-1111111122223333", snapshotId: "snap-1" },
+		]);
+		expect(waits).toEqual([4_000]);
 	});
 });

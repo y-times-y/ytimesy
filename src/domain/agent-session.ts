@@ -1,4 +1,4 @@
-import { workspaceLooksGone } from "./failure-message";
+import { isWorkspaceAtCapacity, workspaceLooksGone } from "./failure-message";
 
 export function projectEnvironmentSnapshotSlug(workspaceId: string) {
 	return `ytimesy-pe-${compactId(workspaceId)}`;
@@ -41,12 +41,26 @@ export function sessionMachinePlan(input: {
 }
 
 export function shouldResealProjectSnapshotAfterCopyFailure(message: string) {
-	if (/LIMIT_EXCEEDED|limit of \d+ VMs/i.test(message)) return false;
+	if (isWorkspaceAtCapacity(message)) return false;
 	return (
 		workspaceLooksGone(message) ||
 		/snapshot/i.test(message) ||
 		/expired|auto.?delete/i.test(message)
 	);
+}
+
+/**
+ * Freestyle can keep reporting the VM cap for a short time after Delete
+ * chat destroys a machine. Retry the copy; do not reseal the template.
+ */
+export const WORKSPACE_COPY_CAPACITY_RETRY_DELAYS_MS = [
+	4_000, 8_000, 16_000,
+] as const;
+
+export function workspaceCopyCapacityRetryDelaysMs(message: string) {
+	return isWorkspaceAtCapacity(message)
+		? WORKSPACE_COPY_CAPACITY_RETRY_DELAYS_MS
+		: [];
 }
 
 export function chatsFromAgentSessions(

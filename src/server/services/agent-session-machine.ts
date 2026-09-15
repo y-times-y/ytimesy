@@ -8,6 +8,7 @@ import {
 	sessionMachinePlan,
 	sessionMachineRefsToDestroy,
 	shouldResealProjectSnapshotAfterCopyFailure,
+	workspaceCopyCapacityRetryDelaysMs,
 } from "#/domain/agent-session";
 import { failureMessage } from "#/domain/failure-message";
 import { WorkspaceId } from "#/domain/ids";
@@ -172,6 +173,7 @@ export async function executeSessionMachinePlan(input: {
 	readonly templateAlreadyBound: boolean;
 	readonly saveTemplateSnapshot: (snapshotId: string) => Promise<void>;
 	readonly saveSessionProviderRef: (providerRef: string) => Promise<void>;
+	readonly wait?: (ms: number) => Promise<void>;
 }): Promise<{ providerRef: string; planKind: SessionMachinePlan["kind"] }> {
 	let snapshotId = input.templateSnapshotId;
 	let plan = sessionMachinePlan({
@@ -220,6 +222,7 @@ async function copyAgentSessionFromTemplate(
 		readonly workspaceId: string;
 		readonly templateProviderRef: string;
 		readonly saveTemplateSnapshot: (snapshotId: string) => Promise<void>;
+		readonly wait?: (ms: number) => Promise<void>;
 	},
 	snapshotId: string,
 ) {
@@ -227,17 +230,58 @@ async function copyAgentSessionFromTemplate(
 	try {
 		return await input.machines.provisionSession(slug, snapshotId);
 	} catch (cause) {
-		if (!shouldResealProjectSnapshotAfterCopyFailure(failureMessage(cause))) {
-			throw cause;
+		const message = failureMessage(cause);
+		if (shouldResealProjectSnapshotAfterCopyFailure(message)) {
+			await input.machines.ensureRunning(
+				WorkspaceId(input.templateProviderRef),
+			);
+			const nextSnapshotId = await input.machines.snapshotEnvironment(
+				WorkspaceId(input.templateProviderRef),
+				projectEnvironmentSnapshotSlug(input.workspaceId),
+			);
+			await input.saveTemplateSnapshot(nextSnapshotId);
+			return await input.machines.provisionSession(slug, nextSnapshotId);
 		}
-		await input.machines.ensureRunning(WorkspaceId(input.templateProviderRef));
-		const nextSnapshotId = await input.machines.snapshotEnvironment(
-			WorkspaceId(input.templateProviderRef),
-			projectEnvironmentSnapshotSlug(input.workspaceId),
-		);
-		await input.saveTemplateSnapshot(nextSnapshotId);
-		return await input.machines.provisionSession(slug, nextSnapshotId);
+		return await retryCopyAfterCapacityLag(input.machines, slug, snapshotId, {
+			cause,
+			wait: input.wait,
+		});
 	}
+}
+
+async function retryCopyAfterCapacityLag(
+	machines: Pick<WorkspaceMachines, "provisionSession">,
+	slug: string,
+	snapshotId: string,
+	input: {
+		readonly cause: unknown;
+		readonly wait?: (ms: number) => Promise<void>;
+	},
+) {
+	const wait =
+		input.wait ??
+		((ms: number) =>
+			new Promise<void>((resolve) => {
+				setTimeout(resolve, ms);
+			}));
+	let cause = input.cause;
+	for (const delay of workspaceCopyCapacityRetryDelaysMs(
+		failureMessage(cause),
+	)) {
+		await wait(delay);
+		try {
+			return await machines.provisionSession(slug, snapshotId);
+		} catch (retryCause) {
+			cause = retryCause;
+			if (
+				workspaceCopyCapacityRetryDelaysMs(failureMessage(retryCause))
+					.length === 0
+			) {
+				throw retryCause;
+			}
+		}
+	}
+	throw cause;
 }
 
 /**

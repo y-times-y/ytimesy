@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { failureMessage, workspaceLooksGone } from "./failure-message";
+import {
+	failureMessage,
+	isWorkspaceAtCapacity,
+	workspaceLooksGone,
+} from "./failure-message";
 
 describe("failureMessage", () => {
 	it("unwraps Effect.tryPromise UnknownException to the inner error", () => {
@@ -29,5 +33,12 @@ describe("workspaceLooksGone", () => {
 		expect(workspaceLooksGone("Freestyle API 404")).toBe(true);
 		expect(workspaceLooksGone("Codex login timed out")).toBe(false);
 		expect(workspaceLooksGone("codex binary not found")).toBe(false);
+	});
+});
+
+describe("isWorkspaceAtCapacity", () => {
+	it("recognizes the Freestyle VM cap", () => {
+		expect(isWorkspaceAtCapacity("LIMIT_EXCEEDED: limit of 5 VMs")).toBe(true);
+		expect(isWorkspaceAtCapacity("Snapshot sh-old not found")).toBe(false);
 	});
 });
