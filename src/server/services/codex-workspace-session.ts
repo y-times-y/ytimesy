@@ -315,19 +315,74 @@ export function sendCodexWorkspaceTask(
 	);
 }
 
+/**
+ * Interrupt talks to a live Codex daemon. A paused VM is already stopped;
+ * persist idle without booting so Stop does not consume compute allowance.
+ */
 export function stopCodexWorkspaceTurn(
 	machines: WorkspaceMachines,
 	scope: CodexSessionScope,
 ): Effect.Effect<PublicCodexSession> {
-	return withPreparedWorkspace(
-		machines,
-		scope,
-		(providerRef, snapshotAvailable, _session) =>
-			interruptCodexTurn(machines, WorkspaceId(providerRef)).pipe(
-				Effect.map((status) =>
-					viewFromStatus(status, providerRef, snapshotAvailable),
+	return Effect.gen(function* () {
+		const snapshotId = yield* Effect.tryPromise(() =>
+			loadAgentSnapshotId(scope.userId),
+		);
+		if (!scope.projectId) return emptyCodexSession(Boolean(snapshotId));
+		const peeked = yield* Effect.tryPromise(() =>
+			peekAgentSessionMachine({
+				userId: scope.userId,
+				projectId: scope.projectId as string,
+				sessionId: scope.sessionId,
+			}),
+		);
+		const providerRef = peeked.providerRef;
+		if (!providerRef) {
+			yield* Effect.tryPromise(() =>
+				persistSessionTurnStatus(peeked.session, "idle"),
+			);
+			return yield* Effect.tryPromise(() =>
+				persistBoundSessionView(
+					peeked.session,
+					emptyCodexSession(Boolean(snapshotId)),
 				),
+			);
+		}
+		const running = yield* Effect.tryPromise(() =>
+			machines.isRunning(WorkspaceId(providerRef)),
+		);
+		if (!running) {
+			yield* Effect.tryPromise(() =>
+				persistSessionTurnStatus(peeked.session, "idle"),
+			);
+			const paused = yield* Effect.tryPromise(() =>
+				persistBoundSessionView(
+					peeked.session,
+					pausedCodexSessionView(providerRef, Boolean(snapshotId)),
+				),
+			);
+			return { ...paused, turnStatus: "idle" as const };
+		}
+		const status = yield* interruptCodexTurn(
+			machines,
+			WorkspaceId(providerRef),
+		);
+		return yield* Effect.tryPromise(() =>
+			persistBoundSessionView(
+				peeked.session,
+				viewFromStatus(status, providerRef, Boolean(snapshotId)),
 			),
+		);
+	}).pipe(
+		Effect.catchAll((cause) =>
+			Effect.succeed({
+				...emptyCodexSession(),
+				connection: {
+					status: "failed" as const,
+					provider: "codex" as const,
+					message: publicFailureMessage(cause),
+				},
+			}),
+		),
 	);
 }
 
