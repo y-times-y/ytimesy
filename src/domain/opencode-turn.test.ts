@@ -44,6 +44,22 @@ describe("assistantTextFromOpenCodeMessages", () => {
 			]),
 		).toBe("pong");
 	});
+
+	it("reads text parts after empty reasoning parts", () => {
+		expect(
+			assistantTextFromOpenCodeMessages([
+				{
+					info: { role: "assistant", finish: "stop" },
+					parts: [
+						{ type: "step-start" },
+						{ type: "reasoning", text: "" },
+						{ type: "text", text: "side-zen-ok" },
+						{ type: "step-finish", reason: "stop" },
+					],
+				},
+			]),
+		).toBe("side-zen-ok");
+	});
 });
 
 describe("errorMessageFromOpenCode", () => {
