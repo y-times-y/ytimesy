@@ -58,15 +58,32 @@ export async function childAgentSession(
 	userId: string,
 	parentSessionId: string,
 ) {
+	const children = await childAgentSessions(userId, parentSessionId);
+	return children[0] ?? null;
+}
+
+export async function childAgentSessions(
+	userId: string,
+	parentSessionId: string,
+) {
 	const result = await database().query(
 		`select ${SESSION_COLUMNS}
 		 from agent_session
 		 where user_id=$1 and parent_session_id=$2
-		 order by created_at asc
-		 limit 1`,
+		 order by created_at asc`,
 		[userId, parentSessionId],
 	);
-	return result.rows[0] ? toSession(result.rows[0]) : null;
+	return result.rows.map((row: AgentSessionRow) => toSession(row));
+}
+
+export async function deleteAgentSessionForOwner(
+	userId: string,
+	sessionId: string,
+) {
+	await database().query(
+		`delete from agent_session where id=$1 and user_id=$2`,
+		[sessionId, userId],
+	);
 }
 
 export async function insertAgentSession(input: {

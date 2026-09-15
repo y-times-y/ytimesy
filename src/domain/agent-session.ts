@@ -69,6 +69,18 @@ export function copiedSessionScratchResetCommand() {
 	return `rm -f ${COPIED_SESSION_SCRATCH_PATHS.join(" ")}`;
 }
 
+export function sessionMachineRefsToDestroy(input: {
+	readonly sessionProviderRef: string | null;
+	readonly childProviderRefs?: readonly (string | null)[];
+	readonly templateProviderRef: string | null;
+}): string[] {
+	const refs = [
+		input.sessionProviderRef,
+		...(input.childProviderRefs ?? []),
+	].filter((ref): ref is string => Boolean(ref));
+	return [...new Set(refs)].filter((ref) => ref !== input.templateProviderRef);
+}
+
 function compactId(value: string) {
 	return value.replaceAll("-", "").slice(0, 16);
 }

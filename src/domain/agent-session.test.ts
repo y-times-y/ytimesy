@@ -5,6 +5,7 @@ import {
 	copiedSessionScratchResetCommand,
 	projectEnvironmentSnapshotSlug,
 	sessionMachinePlan,
+	sessionMachineRefsToDestroy,
 } from "./agent-session";
 
 describe("sessionMachinePlan", () => {
@@ -105,5 +106,36 @@ describe("copiedSessionScratchResetCommand", () => {
 		expect(command).toContain("/tmp/ytimesy-opencode-status.json");
 		expect(command).toContain("/tmp/ytimesy-auth-status.json");
 		expect(command.startsWith("rm -f ")).toBe(true);
+	});
+});
+
+describe("sessionMachineRefsToDestroy", () => {
+	it("never deletes the project environment VM", () => {
+		expect(
+			sessionMachineRefsToDestroy({
+				sessionProviderRef: "vm-template",
+				childProviderRefs: ["vm-side", "vm-template"],
+				templateProviderRef: "vm-template",
+			}),
+		).toEqual(["vm-side"]);
+	});
+
+	it("deletes the agent copy and its side-chat copy", () => {
+		expect(
+			sessionMachineRefsToDestroy({
+				sessionProviderRef: "vm-a",
+				childProviderRefs: ["vm-b"],
+				templateProviderRef: "vm-template",
+			}),
+		).toEqual(["vm-a", "vm-b"]);
+	});
+
+	it("destroys nothing when the chat still shares the template VM", () => {
+		expect(
+			sessionMachineRefsToDestroy({
+				sessionProviderRef: "vm-template",
+				templateProviderRef: "vm-template",
+			}),
+		).toEqual([]);
 	});
 });
