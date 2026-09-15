@@ -1,5 +1,8 @@
 import { failureMessage, workspaceLooksGone } from "./failure-message";
 
+export const SHARED_DESKTOP_WIDTH = 1440;
+export const SHARED_DESKTOP_HEIGHT = 900;
+
 export type WorkspaceDesktop =
 	| { readonly status: "stopped" }
 	| { readonly status: "starting" }
@@ -29,4 +32,8 @@ export function desktopViewerUrl(desktop: WorkspaceDesktop): string | null {
 
 export function desktopCanBeControlled(desktop: WorkspaceDesktop): boolean {
 	return desktop.status === "running" && Boolean(desktop.viewerUrl);
+}
+
+export function desktopEmbedUrl(origin: string): string {
+	return `${origin.replace(/\/$/, "")}/vnc.html?autoconnect=1&resize=off&reconnect=1`;
 }

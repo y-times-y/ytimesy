@@ -1,6 +1,6 @@
 import { useServerFn } from "@tanstack/react-start";
 import { PanelRight } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { type PointerEvent, useEffect, useRef, useState } from "react";
 import {
 	connectedAgentStatus,
 	connectedProviderId,
@@ -9,9 +9,15 @@ import type { AgentProviderId } from "#/domain/agent-provider";
 import type { PublicProjectPicker } from "#/domain/github-project";
 import { hintForHarness } from "#/domain/harness-api-key";
 import {
+	inspectorSplitFromPointer,
+	inspectorSplitRatio,
+	nudgeInspectorSplit,
+} from "#/domain/inspector-split";
+import {
 	fileChangesFromSessionItems,
 	lastUserMessageText,
 	sessionTitleFromItems,
+	sessionUsesFollowUpLayout,
 } from "#/domain/session-item";
 import { chatsListedInSidebar } from "#/domain/sidebar-chats";
 import type { WorkspaceDesktop } from "#/domain/workspace-desktop";
@@ -39,7 +45,7 @@ import { SessionLauncher } from "../sessions/session-launcher";
 import { SideChatPanel } from "../sessions/side-chat-panel";
 import { getWorkspaceDesktop, startWorkspaceDesktopFn } from "./desktop.fn";
 import { ProjectSidebar } from "./project-sidebar";
-import { useCompactLayout } from "./use-compact-layout";
+import { useCompactLayout, useInspectorBesideChat } from "./use-compact-layout";
 import {
 	type InspectorView,
 	type ToolsView,
@@ -52,6 +58,7 @@ export function WorkspaceHome({
 	initialSession: PublicCodexSession;
 }) {
 	const compact = useCompactLayout();
+	const inspectorBeside = useInspectorBesideChat();
 	const [session, setSession] = useState(initialSession);
 	const [projectPicker, setProjectPicker] =
 		useState<PublicProjectPicker | null>(null);
@@ -59,6 +66,9 @@ export function WorkspaceHome({
 	const [inspectorOpen, setInspectorOpen] = useState(false);
 	const [toolsView, setToolsView] = useState<ToolsView>("diff");
 	const [inspectorView, setInspectorView] = useState<InspectorView>("diff");
+	const [customSplit, setCustomSplit] = useState<number | null>(null);
+	const [splitting, setSplitting] = useState(false);
+	const workspaceBody = useRef<HTMLDivElement>(null);
 	const [sideChatOpen, setSideChatOpen] = useState(false);
 	const [sideQueued, setSideQueued] = useState(false);
 	const [busy, setBusy] = useState(false);
@@ -84,8 +94,14 @@ export function WorkspaceHome({
 	const saveProject = useServerFn(saveGitHubProjectSelectionFn);
 	const fileChanges = fileChangesFromSessionItems(session.items);
 	const openedDiff = useRef(false);
-	const chatLayout =
-		session.connection.status === "authenticated" || session.items.length > 0;
+	const followUpLayout = sessionUsesFollowUpLayout({
+		items: session.items,
+		turnStatus: session.turnStatus,
+	});
+	const splitRatio = inspectorSplitRatio({
+		custom: customSplit,
+		desktop: inspectorView === "desktop",
+	});
 	const agentStatus = connectedAgentStatus(session.connection);
 	const connectedProvider = connectedProviderId(session.connection);
 	const sessionTitle = sessionTitleFromItems(session.items);
@@ -129,9 +145,9 @@ export function WorkspaceHome({
 	}, [loadProjects]);
 
 	useEffect(() => {
-		if (!chatLayout) return;
+		if (session.connection.status !== "authenticated") return;
 		setInspectorOpen(true);
-	}, [chatLayout]);
+	}, [session.connection.status]);
 
 	useEffect(() => {
 		if (compact || openedDiff.current || fileChanges.length === 0) return;
@@ -278,6 +294,33 @@ export function WorkspaceHome({
 			.finally(() => setBusy(false));
 	}
 
+	function beginInspectorSplit(event: PointerEvent<HTMLButtonElement>) {
+		if (!inspectorBeside) return;
+		event.preventDefault();
+		const body = workspaceBody.current;
+		if (!body) return;
+		const handle = event.currentTarget;
+		handle.setPointerCapture(event.pointerId);
+		const bounds = body.getBoundingClientRect();
+		setSplitting(true);
+		function move(next: globalThis.PointerEvent) {
+			setCustomSplit(
+				inspectorSplitFromPointer({
+					clientX: next.clientX,
+					originX: bounds.left,
+					width: bounds.width,
+				}),
+			);
+		}
+		function stop() {
+			setSplitting(false);
+			handle.removeEventListener("pointermove", move);
+			handle.removeEventListener("pointerup", stop);
+		}
+		handle.addEventListener("pointermove", move);
+		handle.addEventListener("pointerup", stop);
+	}
+
 	return (
 		<div className="workspace-shell" data-projects-collapsed={!projectsOpen}>
 			<ProjectSidebar
@@ -290,19 +333,28 @@ export function WorkspaceHome({
 			/>
 			<main className="workspace-main" inert={compact && projectsOpen}>
 				<div
+					ref={workspaceBody}
 					className="workspace-body"
 					data-inspector-collapsed={!inspectorOpen}
 					data-inspector-view={inspectorView}
-					data-layout={chatLayout ? "chat" : "empty"}
+					data-layout={followUpLayout ? "chat" : "empty"}
+					data-splitting={splitting ? "true" : undefined}
+					style={
+						inspectorOpen && inspectorBeside
+							? {
+									gridTemplateColumns: `${splitRatio}fr ${1 - splitRatio}fr`,
+								}
+							: undefined
+					}
 				>
 					<section
 						className="welcome-panel"
 						aria-label="Get started"
-						data-layout={chatLayout ? "chat" : "empty"}
+						data-layout={followUpLayout ? "chat" : "empty"}
 						inert={compact && inspectorOpen}
 						aria-hidden={compact && inspectorOpen}
 					>
-						{chatLayout ? (
+						{followUpLayout ? (
 							<div className="session-title-row">
 								<div className="session-title-copy">
 									<span className="session-title">{sessionTitle}</span>
@@ -350,7 +402,7 @@ export function WorkspaceHome({
 						)}
 						<div
 							className="welcome-content"
-							data-layout={chatLayout ? "chat" : "empty"}
+							data-layout={followUpLayout ? "chat" : "empty"}
 						>
 							<SessionLauncher
 								session={session}
@@ -404,6 +456,28 @@ export function WorkspaceHome({
 						</div>
 					</section>
 					<div className="inspector-frame">
+						{inspectorOpen && inspectorBeside ? (
+							<button
+								type="button"
+								className="inspector-split"
+								aria-label="Resize tools panel"
+								title="Drag to resize. Double-click to reset."
+								onPointerDown={beginInspectorSplit}
+								onDoubleClick={() => setCustomSplit(null)}
+								onKeyDown={(event) => {
+									if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+										return;
+									}
+									event.preventDefault();
+									setCustomSplit(
+										nudgeInspectorSplit(
+											splitRatio,
+											event.key === "ArrowLeft" ? -1 : 1,
+										),
+									);
+								}}
+							/>
+						) : null}
 						<WorkspaceInspector
 							collapsed={!inspectorOpen}
 							activeView={inspectorView}

@@ -128,7 +128,11 @@ export function WorkspaceInspector({
 					onStart={onStartDesktop}
 				/>
 			) : currentView ? (
-				<section className="inspector-empty" aria-live="polite">
+				<section
+					className="inspector-empty"
+					data-kind={activeView}
+					aria-live="polite"
+				>
 					<h2>{currentView.title}</h2>
 					<p>{currentView.description}</p>
 				</section>
