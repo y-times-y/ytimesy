@@ -16,7 +16,7 @@ export type TimelineRow =
 	  };
 
 export function isExplorationItem(item: SessionItem): boolean {
-	if (item.kind === "fileChange") return true;
+	if (item.kind === "fileChange") return false;
 	if (item.kind === "webSearch") return true;
 	if (item.kind === "dynamicToolCall") {
 		return isExplorationGlyph(activityGlyphForToolName(item.tool));
@@ -33,10 +33,6 @@ export function explorationCounts(
 	let files = 0;
 	let searches = 0;
 	for (const item of items) {
-		if (item.kind === "fileChange") {
-			files += item.changes.length;
-			continue;
-		}
 		if (item.kind === "webSearch") {
 			searches += 1;
 			continue;

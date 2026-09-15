@@ -19,6 +19,7 @@ import type {
 	FileChangeEntry,
 	SessionItem,
 	SessionTurnStatus,
+	ToolActivityStatus,
 } from "#/domain/session-item";
 import { PROJECT_CWD_PATH } from "#/server/adapters/freestyle/clone-project";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
@@ -506,8 +507,54 @@ function simpleSessionItems(value: unknown): readonly SessionItem[] {
 				message: String(row.message),
 			});
 		}
+		if (kind === "fileChange") {
+			const changes = fileChangeEntries(row.changes);
+			if (changes.length > 0) {
+				items.push({
+					kind: "fileChange",
+					id: SessionItemId(id),
+					status: toolActivityStatus(row.status),
+					changes,
+				});
+			}
+		}
 	}
 	return items;
+}
+
+function fileChangeEntries(value: unknown): readonly FileChangeEntry[] {
+	if (!Array.isArray(value)) return [];
+	const entries: FileChangeEntry[] = [];
+	for (const row of value) {
+		if (!isRecord(row)) continue;
+		const path = readString(row.path);
+		if (!path) continue;
+		const change =
+			row.change === "add" || row.change === "delete" || row.change === "update"
+				? row.change
+				: null;
+		if (!change) continue;
+		entries.push({
+			path,
+			change,
+			additions: typeof row.additions === "number" ? row.additions : 0,
+			deletions: typeof row.deletions === "number" ? row.deletions : 0,
+			preview: typeof row.preview === "string" ? row.preview : null,
+		});
+	}
+	return entries;
+}
+
+function toolActivityStatus(value: unknown): ToolActivityStatus {
+	if (
+		value === "inProgress" ||
+		value === "failed" ||
+		value === "declined" ||
+		value === "completed"
+	) {
+		return value;
+	}
+	return "completed";
 }
 
 function failed(message: string): OpenCodeAuthStatus {

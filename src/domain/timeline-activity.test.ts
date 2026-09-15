@@ -53,8 +53,18 @@ describe("timeline activity grouping", () => {
 
 	it("collapses consecutive reads and searches into one Explored row", () => {
 		const items: SessionItem[] = [
-			fileChange("f1", "src/a.ts"),
-			fileChange("f2", "src/b.ts"),
+			{
+				kind: "dynamicToolCall",
+				id: SessionItemId("read-1"),
+				tool: "read_file",
+				status: "completed",
+			},
+			{
+				kind: "dynamicToolCall",
+				id: SessionItemId("read-2"),
+				tool: "read",
+				status: "completed",
+			},
 			{
 				kind: "webSearch",
 				id: SessionItemId("s1"),
@@ -69,7 +79,12 @@ describe("timeline activity grouping", () => {
 				output: null,
 				exitCode: null,
 			},
-			fileChange("f3", "src/c.ts"),
+			{
+				kind: "dynamicToolCall",
+				id: SessionItemId("read-3"),
+				tool: "view",
+				status: "completed",
+			},
 		];
 		const rows = groupTimelineRows(items);
 		expect(rows).toHaveLength(3);
@@ -89,5 +104,32 @@ describe("timeline activity grouping", () => {
 			counts: { files: 1, searches: 0 },
 		});
 		expect(explorationLabel({ files: 1, searches: 0 })).toBe("Explored 1 file");
+	});
+
+	it("keeps file edits as coding activity instead of Explored", () => {
+		expect(isExplorationItem(fileChange("f1", "src/a.ts"))).toBe(false);
+		const rows = groupTimelineRows([
+			fileChange("f1", "src/a.ts"),
+			{
+				kind: "dynamicToolCall",
+				id: SessionItemId("read-1"),
+				tool: "read_file",
+				status: "completed",
+			},
+			fileChange("f2", "src/b.ts"),
+		]);
+		expect(rows.map((row) => row.kind)).toEqual([
+			"item",
+			"exploration",
+			"item",
+		]);
+		expect(rows[0]).toMatchObject({
+			kind: "item",
+			item: { kind: "fileChange" },
+		});
+		expect(rows[2]).toMatchObject({
+			kind: "item",
+			item: { kind: "fileChange" },
+		});
 	});
 });
