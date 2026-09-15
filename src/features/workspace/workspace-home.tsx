@@ -33,6 +33,7 @@ import {
 } from "#/domain/session-item";
 import {
 	composerBusyForOpenChat,
+	listedChatModelId,
 	listedChatTurnStatus,
 	selectedChatIdAfterDelete,
 	sidebarChatIsRunning,
@@ -391,6 +392,7 @@ export function WorkspaceHome({
 				setSession((current) => ({
 					...current,
 					agentSessionId: created.id,
+					listedModelId: created.listedModelId || current.listedModelId,
 					items: [],
 					turnStatus: "idle",
 					sideItems: [],
@@ -399,6 +401,7 @@ export function WorkspaceHome({
 					canSend: false,
 					canSendSide: false,
 				}));
+				if (created.listedModelId) setComposerModelId(created.listedModelId);
 				void chats.refetch();
 			})
 			.catch((cause) => {
@@ -540,12 +543,16 @@ export function WorkspaceHome({
 					const cached = sessionViews.current.get(id);
 					if (cached) {
 						setSession(cached);
+						if (cached.listedModelId) setComposerModelId(cached.listedModelId);
 						return;
 					}
 					const listedTurn = listedChatTurnStatus(sidebarChats, id);
+					const listedModelId = listedChatModelId(sidebarChats, id);
+					if (listedModelId) setComposerModelId(listedModelId);
 					setSession((current) => ({
 						...current,
 						agentSessionId: id,
+						listedModelId: listedModelId || current.listedModelId,
 						items: [],
 						turnStatus: listedTurn,
 						sideItems: [],
@@ -635,6 +642,7 @@ export function WorkspaceHome({
 							data-layout={followUpLayout ? "chat" : "empty"}
 						>
 							<SessionLauncher
+								key={session.agentSessionId ?? "new"}
 								session={session}
 								busy={composerBusy}
 								listedTitle={listedTitle}

@@ -11,6 +11,7 @@ import {
 	selectedHarnessIsConnected,
 } from "#/domain/harness-access";
 import { SessionItemId } from "#/domain/ids";
+import { submittedListedModelId } from "#/domain/listed-model";
 import type { Project } from "#/domain/projects";
 import {
 	lastUserMessageText,
@@ -25,10 +26,7 @@ import {
 	type SlashCommand,
 } from "#/domain/slash-command";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
-import {
-	preferredSessionModelId,
-	sessionModelsFromListed,
-} from "./model-capabilities";
+import { sessionModelsFromListed } from "./model-capabilities";
 import { ProjectContext } from "./project-context";
 import { SessionControls } from "./session-controls";
 import { SessionTimeline } from "./session-timeline";
@@ -136,18 +134,12 @@ export function SessionLauncher({
 	}, [modelId, onComposerModelIdChange]);
 
 	useEffect(() => {
-		const listed = sessionModelsFromListed(session.models);
-		setModelId((current) => {
-			if (current && listed.some((model) => model.id === current))
-				return current;
-			if (current && listed.length === 0) {
-				return current || session.listedModelId;
-			}
-			return preferredSessionModelId(listed, {
-				lastUsedId: current || session.listedModelId,
+		setModelId((current) =>
+			submittedListedModelId(current, session.models, {
+				lastUsedId: session.listedModelId,
 				excludedIds: session.blockedListedModelIds,
-			});
-		});
+			}),
+		);
 	}, [session.blockedListedModelIds, session.listedModelId, session.models]);
 
 	useEffect(() => {

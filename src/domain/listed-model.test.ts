@@ -45,6 +45,28 @@ describe("submittedListedModelId", () => {
 		).toBe("opencode/nemotron-3-ultra-free");
 	});
 
+	it("skips a requested spark the provider already restricted", () => {
+		expect(
+			submittedListedModelId(
+				"opencode/muse-spark-1.3-contributor-free",
+				listed,
+				{
+					lastUsedId: "opencode/big-pickle",
+					excludedIds: ["opencode/muse-spark-1.3-contributor-free"],
+				},
+			),
+		).toBe("opencode/big-pickle");
+	});
+
+	it("reuses the last listed id before the catalog loads", () => {
+		expect(
+			preferredListedModelId([], { lastUsedId: "opencode/big-pickle" }),
+		).toBe("opencode/big-pickle");
+		expect(
+			submittedListedModelId("", [], { lastUsedId: "opencode/big-pickle" }),
+		).toBe("opencode/big-pickle");
+	});
+
 	it("does not invent an id when the catalog is empty", () => {
 		expect(submittedListedModelId("", [])).toBe("");
 		expect(preferredListedModelId([])).toBe("");

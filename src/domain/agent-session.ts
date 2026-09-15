@@ -71,6 +71,7 @@ export function chatsFromAgentSessions(
 		readonly title: string;
 		readonly parentSessionId?: string | null;
 		readonly turnStatus?: SessionTurnStatus;
+		readonly listedModelId?: string | null;
 	}[],
 ) {
 	return sessions
@@ -79,6 +80,7 @@ export function chatsFromAgentSessions(
 			id: session.id,
 			title: session.title,
 			turnStatus: session.turnStatus ?? "idle",
+			listedModelId: session.listedModelId ?? null,
 		}));
 }
 
