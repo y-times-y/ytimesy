@@ -31,17 +31,21 @@ import { publicFailureMessage } from "#/domain/project-workspace";
 import type { Project } from "#/domain/projects";
 import {
 	fileChangesFromSessionItems,
+	isTurnRunning,
 	lastUserMessageText,
 	sessionTitleFromItems,
 	sessionUsesFollowUpLayout,
 } from "#/domain/session-item";
 import {
+	backgroundTurnPollChatIds,
 	composerBusyForOpenChat,
+	listedChatHarnessId,
 	listedChatModelId,
 	listedChatTurnStatus,
 	SIDEBAR_PINNED_STORAGE_KEY,
+	type SidebarChat,
 	selectedChatIdAfterDelete,
-	sidebarChatIsRunning,
+	sessionViewAppliesToOpenChat,
 	sidebarIsPinnedInStorage,
 	sidebarPinnedStorageValue,
 	withBusyChat,
@@ -137,20 +141,45 @@ export function WorkspaceHome({
 	const autoResumeStarted = useRef(false);
 	const sessionEpoch = useRef(0);
 	const loadedSessionId = useRef<string | undefined>(undefined);
+	const selectedSessionIdRef = useRef<string | undefined>(undefined);
 	const sessionViews = useRef(new Map<string, PublicCodexSession>());
 	const bumpSessionEpoch = useCallback(() => {
 		sessionEpoch.current += 1;
 		return sessionEpoch.current;
 	}, []);
+	const rememberSessionView = useCallback(
+		(next: PublicCodexSession) => {
+			if (!next.agentSessionId) return;
+			sessionViews.current.set(next.agentSessionId, next);
+			if (!selectedProject?.id) return;
+			const chatId = next.agentSessionId;
+			queryClient.setQueryData(
+				["agent-sessions", selectedProject.id],
+				(current: readonly SidebarChat[] | undefined) =>
+					withChatTurnStatus(current ?? [], chatId, next.turnStatus),
+			);
+		},
+		[queryClient, selectedProject?.id],
+	);
 	const applySessionView = useCallback(
 		(epoch: number, next: PublicCodexSession) => {
+			rememberSessionView(next);
 			if (epoch !== sessionEpoch.current) return;
-			if (next.agentSessionId)
-				sessionViews.current.set(next.agentSessionId, next);
+			const openChatId = selectedSessionIdRef.current;
+			if (
+				openChatId &&
+				next.agentSessionId &&
+				!sessionViewAppliesToOpenChat({
+					openChatId,
+					agentSessionId: next.agentSessionId,
+				})
+			) {
+				return;
+			}
 			setSession(next);
 			if (next.agentSessionId) setSelectedSessionId(next.agentSessionId);
 		},
-		[],
+		[rememberSessionView],
 	);
 	const connect = useServerFn(connectCodexSession);
 	const sendTask = useServerFn(sendCodexSessionTask);
@@ -173,6 +202,7 @@ export function WorkspaceHome({
 	const activeProjectId = selectedProject?.id;
 	const activeSessionId =
 		selectedSessionId ?? session.agentSessionId ?? undefined;
+	selectedSessionIdRef.current = activeSessionId;
 	const composerBusy = composerBusyForOpenChat({
 		openChatId: activeSessionId,
 		busyChatIds,
@@ -355,29 +385,50 @@ export function WorkspaceHome({
 	]);
 
 	useEffect(() => {
-		const siblingRunning = sidebarChats.some(
-			(chat) =>
-				chat.id !== activeSessionId &&
-				sidebarChatIsRunning({
-					chatId: chat.id,
-					turnStatus: chat.turnStatus,
-					busyChatIds,
-					openChatId: activeSessionId,
-					openTurnStatus: session.turnStatus,
-					openSideTurnStatus: session.sideTurnStatus,
-				}),
-		);
-		if (!siblingRunning) return;
-		const timer = window.setInterval(() => {
-			void chats.refetch();
-		}, 2000);
+		const ids = backgroundTurnPollChatIds({
+			chats: sidebarChats,
+			openChatId: activeSessionId,
+			busyChatIds,
+		});
+		if (!activeProjectId || ids.length === 0) return;
+		let inFlight = false;
+		const pollSiblings = () => {
+			if (inFlight) return;
+			inFlight = true;
+			void Promise.all(
+				ids.map((sessionId) =>
+					getCodexSession({
+						data: {
+							projectId: activeProjectId,
+							harnessId: listedChatHarnessId(
+								sidebarChats,
+								sessionId,
+								harnessId,
+							),
+							sessionId,
+						},
+					}).then((next) => {
+						const wasRunning = listedChatTurnStatus(sidebarChats, sessionId);
+						rememberSessionView(next);
+						if (isTurnRunning(wasRunning) && !isTurnRunning(next.turnStatus)) {
+							void chats.refetch();
+						}
+					}),
+				),
+			).finally(() => {
+				inFlight = false;
+			});
+		};
+		pollSiblings();
+		const timer = window.setInterval(pollSiblings, RUNNING_TURN_POLL_MS);
 		return () => window.clearInterval(timer);
 	}, [
+		activeProjectId,
 		activeSessionId,
 		busyChatIds,
 		chats.refetch,
-		session.sideTurnStatus,
-		session.turnStatus,
+		harnessId,
+		rememberSessionView,
 		sidebarChats,
 	]);
 
@@ -566,6 +617,7 @@ export function WorkspaceHome({
 				openSideTurnStatus={session.sideTurnStatus}
 				hasUserMessage={hasUserMessage}
 				onSelectChat={(id) => {
+					selectedSessionIdRef.current = id;
 					bumpSessionEpoch();
 					setSelectedSessionId(id);
 					autoResumeStarted.current = false;

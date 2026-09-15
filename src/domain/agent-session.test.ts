@@ -134,12 +134,14 @@ describe("agent session names", () => {
 				title: "fix login",
 				turnStatus: "idle",
 				listedModelId: null,
+				harnessId: null,
 			},
 			{
 				id: "s2",
 				title: "add snapshot copy",
 				turnStatus: "idle",
 				listedModelId: null,
+				harnessId: null,
 			},
 		]);
 	});
@@ -155,6 +157,7 @@ describe("agent session names", () => {
 				title: "fix login",
 				turnStatus: "running",
 				listedModelId: null,
+				harnessId: null,
 			},
 		]);
 	});
@@ -166,6 +169,7 @@ describe("agent session names", () => {
 					id: "s1",
 					title: "fix login",
 					listedModelId: "opencode/big-pickle",
+					harness: "opencode",
 				},
 			]),
 		).toEqual([
@@ -174,6 +178,7 @@ describe("agent session names", () => {
 				title: "fix login",
 				turnStatus: "idle",
 				listedModelId: "opencode/big-pickle",
+				harnessId: "opencode",
 			},
 		]);
 	});
@@ -190,6 +195,7 @@ describe("agent session names", () => {
 				title: "fix login",
 				turnStatus: "idle",
 				listedModelId: null,
+				harnessId: null,
 			},
 		]);
 	});
