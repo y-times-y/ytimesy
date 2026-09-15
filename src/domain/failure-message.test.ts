@@ -37,8 +37,13 @@ describe("workspaceLooksGone", () => {
 });
 
 describe("isWorkspaceAtCapacity", () => {
-	it("recognizes the Freestyle VM cap", () => {
+	it("recognizes the Freestyle VM cap before and after the public rewrite", () => {
 		expect(isWorkspaceAtCapacity("LIMIT_EXCEEDED: limit of 5 VMs")).toBe(true);
+		expect(
+			isWorkspaceAtCapacity(
+				"This Freestyle plan is at its VM limit. Delete an unused agent session or raise the quota before starting another. Pausing a VM does not free a slot.",
+			),
+		).toBe(true);
 		expect(isWorkspaceAtCapacity("Snapshot sh-old not found")).toBe(false);
 	});
 });

@@ -86,6 +86,11 @@ describe("shouldResealProjectSnapshotAfterCopyFailure", () => {
 				"LIMIT_EXCEEDED: limit of 5 VMs",
 			),
 		).toBe(false);
+		expect(
+			shouldResealProjectSnapshotAfterCopyFailure(
+				"This Freestyle plan is at its VM limit. Delete an unused agent session or raise the quota before starting another. Pausing a VM does not free a slot.",
+			),
+		).toBe(false);
 	});
 });
 
@@ -93,6 +98,11 @@ describe("workspaceCopyCapacityRetryDelaysMs", () => {
 	it("retries a stale VM cap and does not retry other copy failures", () => {
 		expect(
 			workspaceCopyCapacityRetryDelaysMs("LIMIT_EXCEEDED: limit of 5 VMs"),
+		).toEqual([4_000, 8_000, 16_000]);
+		expect(
+			workspaceCopyCapacityRetryDelaysMs(
+				"This Freestyle plan is at its VM limit. Delete an unused agent session or raise the quota before starting another. Pausing a VM does not free a slot.",
+			),
 		).toEqual([4_000, 8_000, 16_000]);
 		expect(
 			workspaceCopyCapacityRetryDelaysMs("Snapshot sh-old not found"),

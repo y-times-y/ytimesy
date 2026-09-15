@@ -4,14 +4,16 @@ import {
 	type AgentProviderId,
 	agentProviderById,
 } from "#/domain/agent-provider";
-import { failureMessage } from "#/domain/failure-message";
 import { canResumeDisconnectedFollowUp } from "#/domain/harness-access";
 import { WorkspaceId } from "#/domain/ids";
 import {
 	listedModelPreferenceFromSessions,
 	submittedListedModelId,
 } from "#/domain/listed-model";
-import { harnessConnectBlockedReason } from "#/domain/project-workspace";
+import {
+	harnessConnectBlockedReason,
+	publicFailureMessage,
+} from "#/domain/project-workspace";
 import { sessionRecordHasConversation } from "#/domain/session-item";
 import { canSubmitComposer, canSubmitSideChat } from "#/domain/session-policy";
 import type { WorkspaceLifecycle } from "#/domain/workspace";
@@ -194,7 +196,7 @@ export function connectHarnessWorkspaceSession(
 				connection: {
 					status: "failed" as const,
 					provider: scope.harnessId,
-					message: failureMessage(cause),
+					message: publicFailureMessage(cause),
 				},
 			}),
 		),
@@ -313,7 +315,7 @@ function withSessionMachine(
 				connection: {
 					status: "failed" as const,
 					provider: scope.harnessId,
-					message: failureMessage(cause),
+					message: publicFailureMessage(cause),
 				},
 			}),
 		),
@@ -571,7 +573,7 @@ function sendHarnessSideTask(
 				connection: {
 					status: "failed" as const,
 					provider: scope.harnessId,
-					message: failureMessage(cause),
+					message: publicFailureMessage(cause),
 				},
 			}),
 		),

@@ -23,6 +23,7 @@ import {
 	inspectorSplitRatio,
 	nudgeInspectorSplit,
 } from "#/domain/inspector-split";
+import { publicFailureMessage } from "#/domain/project-workspace";
 import type { Project } from "#/domain/projects";
 import {
 	fileChangesFromSessionItems,
@@ -350,7 +351,7 @@ export function WorkspaceHome({
 					connection: {
 						status: "failed",
 						provider: harnessId,
-						message: cause instanceof Error ? cause.message : String(cause),
+						message: publicFailureMessage(cause),
 					},
 					canSend: false,
 					canSendSide: false,
@@ -400,7 +401,7 @@ export function WorkspaceHome({
 					connection: {
 						status: "failed",
 						provider: harnessId,
-						message: cause instanceof Error ? cause.message : String(cause),
+						message: publicFailureMessage(cause),
 					},
 					canSend: false,
 					canSendSide: false,
@@ -646,10 +647,7 @@ export function WorkspaceHome({
 												connection: {
 													status: "failed",
 													provider: harnessId,
-													message:
-														cause instanceof Error
-															? cause.message
-															: String(cause),
+													message: publicFailureMessage(cause),
 												},
 											}));
 										} finally {

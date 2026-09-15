@@ -299,4 +299,35 @@ describe("executeSessionMachinePlan", () => {
 		]);
 		expect(waits).toEqual([4_000]);
 	});
+
+	it("retries a copy when the adapter already rewrote the VM cap error", async () => {
+		const runtime = machines({
+			failFirstProvision: true,
+			failMessage:
+				"This Freestyle plan is at its VM limit. Delete an unused agent session or raise the quota before starting another. Pausing a VM does not free a slot.",
+			copied: "agent-after-rewrite",
+		});
+		const waits: number[] = [];
+		const result = await executeSessionMachinePlan({
+			machines: runtime.api,
+			sessionId: "11111111-2222-3333-4444-555555555555",
+			sessionProviderRef: null,
+			workspaceId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+			templateSnapshotId: "snap-1",
+			templateProviderRef: "repo-vm",
+			templateAlreadyBound: true,
+			saveTemplateSnapshot: async () => {
+				throw new Error("snapshot already sealed");
+			},
+			saveSessionProviderRef: async () => undefined,
+			wait: async (ms) => {
+				waits.push(ms);
+			},
+		});
+		expect(result).toEqual({
+			providerRef: "agent-after-rewrite",
+			planKind: "copy-snapshot",
+		});
+		expect(waits).toEqual([4_000]);
+	});
 });

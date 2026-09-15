@@ -14,7 +14,9 @@ export function workspaceLooksGone(message: string): boolean {
 }
 
 export function isWorkspaceAtCapacity(message: string) {
-	return /LIMIT_EXCEEDED|limit of \d+ VMs/i.test(message);
+	return /LIMIT_EXCEEDED|limit of \d+ VMs|at its VM limit|Pausing a VM does not free a slot/i.test(
+		message,
+	);
 }
 
 function unwrapFailureMessage(cause: unknown, seen: Set<unknown>): string {
