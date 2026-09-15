@@ -1,7 +1,11 @@
 import { ChevronRight } from "lucide-react";
 import { type UIEvent, useEffect, useRef } from "react";
 import { fileChangeTotals } from "#/domain/diff-preview";
-import { fileChangeActivity } from "#/domain/file-change-copy";
+import {
+	fileChangeActivity,
+	fileChangeActivityTitle,
+} from "#/domain/file-change-copy";
+import { fileBasename } from "#/domain/file-kind";
 import { activityGlyphForToolName } from "#/domain/session-activity";
 import {
 	compactTimelineItems,
@@ -19,6 +23,7 @@ import { visibleShellCommand } from "#/domain/visible-shell-command";
 import { ActivityIcon } from "./activity-icon";
 import { AgentMarkdown } from "./agent-markdown";
 import { FileChangeCounts } from "./file-change-counts";
+import { FileTypeIcon } from "./file-type-icon";
 
 export function SessionTimeline({
 	items,
@@ -203,36 +208,74 @@ function SessionItemView({
 		}
 		case "fileChange": {
 			const totals = fileChangeTotals(item.changes);
-			const activity = fileChangeActivity(item.changes);
+			const title = fileChangeActivityTitle(item.changes);
 			const status = activityStatusLabel(item.status);
+			const counts = (
+				<FileChangeCounts
+					additions={totals.additions}
+					deletions={totals.deletions}
+				/>
+			);
+			const progress =
+				item.status === "inProgress" ? (
+					<span className="session-activity-spinner" aria-hidden="true" />
+				) : status ? (
+					<span className="session-activity-status">{status}</span>
+				) : null;
+			if (item.changes.length === 0) return null;
+			if (item.changes.length === 1) {
+				const activity = fileChangeActivity(item.changes);
+				return (
+					<div
+						className="session-activity"
+						data-kind="fileChange"
+						data-status={item.status}
+						data-nested={nested ? "true" : undefined}
+					>
+						<p>
+							<ActivityIcon glyph="edit" />
+							<span className="session-activity-title">
+								{activity.verb}{" "}
+								{activity.name ? (
+									<span className="session-file-name">{activity.name}</span>
+								) : (
+									"1 file"
+								)}
+							</span>
+							{counts}
+							{progress}
+						</p>
+					</div>
+				);
+			}
 			return (
-				<div
+				<details
 					className="session-activity"
 					data-kind="fileChange"
 					data-status={item.status}
 					data-nested={nested ? "true" : undefined}
+					open
 				>
-					<p>
+					<summary>
 						<ActivityIcon glyph="edit" />
-						<span className="session-activity-title">
-							{activity.verb}{" "}
-							{activity.name ? (
-								<span className="session-file-name">{activity.name}</span>
-							) : (
-								`${item.changes.length} files`
-							)}
-						</span>
-						<FileChangeCounts
-							additions={totals.additions}
-							deletions={totals.deletions}
-						/>
-						{item.status === "inProgress" ? (
-							<span className="session-activity-spinner" aria-hidden="true" />
-						) : status ? (
-							<span className="session-activity-status">{status}</span>
-						) : null}
-					</p>
-				</div>
+						<span className="session-activity-title">{title}</span>
+						{counts}
+						<ChevronRight size={12} className="session-activity-chevron" />
+						{progress}
+					</summary>
+					{item.changes.map((change) => (
+						<p className="session-file-change-row" key={change.path}>
+							<FileTypeIcon path={change.path} />
+							<span className="session-file-name">
+								{fileBasename(change.path)}
+							</span>
+							<FileChangeCounts
+								additions={change.additions}
+								deletions={change.deletions}
+							/>
+						</p>
+					))}
+				</details>
 			);
 		}
 		case "mcpToolCall":

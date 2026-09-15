@@ -31,6 +31,62 @@ describe("parseOpenCodeAuthStatus", () => {
 		expect(parseOpenCodeAuthStatus(null)).toEqual({ stage: "missing" });
 	});
 
+	it("keeps working-tree file edits when reconnecting from the status file", () => {
+		expect(
+			parseOpenCodeAuthStatus(
+				JSON.stringify({
+					stage: "authenticated",
+					authMode: "local",
+					turnStatus: "idle",
+					items: [
+						{
+							kind: "userMessage",
+							id: "user-1",
+							text: "write the proof",
+						},
+						{
+							kind: "fileChange",
+							id: "opencode-working-tree",
+							status: "completed",
+							changes: [
+								{
+									path: "FOLLOWUP_RESUME.md",
+									change: "add",
+									additions: 1,
+									deletions: 0,
+									preview: "follow-up woke this paused VM",
+								},
+							],
+						},
+					],
+				}),
+			),
+		).toMatchObject({
+			stage: "authenticated",
+			items: [
+				{
+					kind: "userMessage",
+					id: "user-1",
+					text: "write the proof",
+				},
+				{
+					kind: "fileChange",
+					id: "opencode-working-tree",
+					status: "completed",
+					changes: [
+						{
+							path: "FOLLOWUP_RESUME.md",
+							change: "add",
+							additions: 1,
+							deletions: 0,
+							preview: "follow-up woke this paused VM",
+						},
+					],
+				},
+			],
+		});
+	});
+
 	it("does not keep a Zen login wait state", () => {
 		expect(
 			parseOpenCodeAuthStatus(

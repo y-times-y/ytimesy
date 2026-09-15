@@ -644,8 +644,35 @@ details[open] > summary .session-activity-chevron {
 .session-activity[data-kind="reasoning"] .session-activity-title {
 	font-weight: 400;
 }
-.session-activity[data-kind="fileChange"] > p {
+.session-activity[data-kind="fileChange"] > p,
+.session-activity[data-kind="fileChange"] > summary {
+	display: flex;
+	align-items: center;
+	gap: 6px;
 	padding: 2px 0;
+	min-height: 22px;
+}
+.session-activity[data-kind="fileChange"] > summary {
+	cursor: pointer;
+	list-style: none;
+}
+.session-activity[data-kind="fileChange"] > summary::-webkit-details-marker {
+	display: none;
+}
+.session-file-change-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 0;
+	padding: 2px 0 2px 20px;
+	min-height: 22px;
+	color: rgba(255, 255, 255, 0.78);
+	font-size: 13px;
+	line-height: 18px;
+}
+.session-file-change-row .file-type-icon,
+.session-file-change-row > svg {
+	flex-shrink: 0;
 }
 .session-activity[data-kind="commandExecution"] {
 	overflow: hidden;
