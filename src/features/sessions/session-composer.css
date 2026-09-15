@@ -856,6 +856,9 @@ details[open] > summary .session-activity-chevron {
 	font-size: 13px;
 	line-height: 20px;
 }
+.session-activity[data-kind="fileChange"] .session-activity-title {
+	flex: 0 1 auto;
+}
 .session-activity[data-kind="fileChange"] .file-change-stats {
 	margin-left: 4px;
 	font-size: 12px;
