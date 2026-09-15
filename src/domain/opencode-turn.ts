@@ -50,6 +50,7 @@ export function errorMessageFromOpenCode(payload: unknown): string | null {
 		if (dataError) return dataError;
 	}
 	for (const row of openCodeMessageRows(payload)) {
+		if (row === payload) continue;
 		const nested = errorMessageFromOpenCode(row);
 		if (nested) return nested;
 	}

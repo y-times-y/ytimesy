@@ -93,6 +93,15 @@ describe("errorMessageFromOpenCode", () => {
 			"Error from provider (Console): Upstream request failed: [user_blocked] Your access has been restricted due to repeated policy violations.",
 		);
 	});
+
+	it("does not recurse on a normal { info, parts } assistant row", () => {
+		expect(
+			errorMessageFromOpenCode({
+				info: { role: "assistant", id: "msg-1" },
+				parts: [{ type: "text", text: "done" }],
+			}),
+		).toBeNull();
+	});
 });
 
 describe("openCodeSessionIsBusy", () => {
