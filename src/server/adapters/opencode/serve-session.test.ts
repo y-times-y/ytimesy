@@ -82,6 +82,7 @@ describe("dropCopiedOpenCodeTranscript", () => {
 				serveSessionId: "ses_copied",
 				seenBusy: true,
 				turnStartedAt: 1,
+				lastBusyAt: 1,
 			}),
 		).toEqual({
 			stage: "authenticated",
@@ -113,6 +114,7 @@ describe("dropCopiedOpenCodeTranscript", () => {
 			serveSessionId: null,
 			seenBusy: false,
 			turnStartedAt: null,
+			lastBusyAt: null,
 		});
 	});
 

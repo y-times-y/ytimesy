@@ -3,8 +3,11 @@ import {
 	assistantTextFromOpenCode,
 	assistantTextFromOpenCodeMessages,
 	errorMessageFromOpenCode,
+	OPENCODE_ASSISTANT_GRACE_MS,
+	OPENCODE_TURN_MAX_WAIT_MS,
 	openCodeSessionIsBusy,
 	openCodeTurnFailureMessage,
+	openCodeTurnPollDecision,
 } from "./opencode-turn";
 
 describe("assistantTextFromOpenCode", () => {
@@ -72,5 +75,60 @@ describe("openCodeTurnFailureMessage", () => {
 		expect(openCodeTurnFailureMessage({ payload: null, httpStatus: 429 })).toBe(
 			"OpenCode HTTP 429. ytimesy did not fall back to another provider.",
 		);
+	});
+});
+
+describe("openCodeTurnPollDecision", () => {
+	const idle = {
+		busy: false,
+		seenBusy: false,
+		hasAssistantText: false,
+		hasError: false,
+		elapsedMs: 1_000,
+		msSinceLastBusy: null,
+	};
+
+	it("keeps polling while OpenCode is busy", () => {
+		expect(openCodeTurnPollDecision({ ...idle, busy: true })).toBe("running");
+	});
+
+	it("completes when assistant text is present", () => {
+		expect(
+			openCodeTurnPollDecision({
+				...idle,
+				seenBusy: true,
+				hasAssistantText: true,
+				msSinceLastBusy: 20_000,
+			}),
+		).toBe("completed");
+	});
+
+	it("waits after busy clears so /message can catch up", () => {
+		expect(
+			openCodeTurnPollDecision({
+				...idle,
+				seenBusy: true,
+				msSinceLastBusy: OPENCODE_ASSISTANT_GRACE_MS - 1,
+			}),
+		).toBe("running");
+	});
+
+	it("fails once busy has been gone longer than the grace period", () => {
+		expect(
+			openCodeTurnPollDecision({
+				...idle,
+				seenBusy: true,
+				msSinceLastBusy: OPENCODE_ASSISTANT_GRACE_MS,
+			}),
+		).toBe("failed");
+	});
+
+	it("fails if OpenCode never becomes busy before the max wait", () => {
+		expect(
+			openCodeTurnPollDecision({
+				...idle,
+				elapsedMs: OPENCODE_TURN_MAX_WAIT_MS + 1,
+			}),
+		).toBe("failed");
 	});
 });

@@ -9,6 +9,7 @@ import {
 	errorMessageFromOpenCode,
 	openCodeSessionIsBusy,
 	openCodeTurnFailureMessage,
+	openCodeTurnPollDecision,
 } from "#/domain/opencode-turn";
 import { posixShellQuoted } from "#/domain/posix-command";
 import type {
@@ -105,6 +106,7 @@ export type OpenCodeAuthStatus =
 			readonly serveSessionId: string | null;
 			readonly seenBusy: boolean;
 			readonly turnStartedAt: number | null;
+			readonly lastBusyAt: number | null;
 	  }
 	| { readonly stage: "failed"; readonly message: string };
 
@@ -119,6 +121,7 @@ export function dropCopiedOpenCodeTranscript(
 		serveSessionId: null,
 		seenBusy: false,
 		turnStartedAt: null,
+		lastBusyAt: null,
 	};
 }
 
@@ -155,6 +158,8 @@ export function parseOpenCodeAuthStatus(
 					typeof parsed.turnStartedAt === "number"
 						? parsed.turnStartedAt
 						: null,
+				lastBusyAt:
+					typeof parsed.lastBusyAt === "number" ? parsed.lastBusyAt : null,
 			};
 		}
 		if (stage === "failed") {
@@ -341,6 +346,8 @@ function readOpenCodeSnapshot(
 			previous.stage === "authenticated" ? previous.seenBusy : false;
 		const turnStartedAt =
 			previous.stage === "authenticated" ? previous.turnStartedAt : null;
+		const lastBusyAt =
+			previous.stage === "authenticated" ? previous.lastBusyAt : null;
 		const authMode =
 			usedKey ||
 			(previous.stage === "authenticated" && previous.authMode === "apikey")
@@ -357,6 +364,7 @@ function readOpenCodeSnapshot(
 			serveSessionId,
 			seenBusy,
 			turnStartedAt,
+			lastBusyAt,
 		};
 	});
 }
@@ -518,6 +526,7 @@ export function submitOpenCodeTask(
 			items: [...current.items, userItem],
 			seenBusy: false,
 			turnStartedAt: Date.now(),
+			lastBusyAt: null,
 		};
 		yield* persistStatus(machines, workspaceId, running);
 		const directory = yield* Effect.tryPromise(() =>
@@ -654,15 +663,26 @@ function syncOpenCodeTurn(
 			errorMessageFromOpenCode(status.body);
 		const workingTree = yield* readWorkingTreeChanges(machines, workspaceId);
 		const items = withWorkingTreeChanges(current.items, workingTree);
+		const now = Date.now();
+		const lastBusyAt = busy ? now : current.lastBusyAt;
 		const seenBusy = current.seenBusy || busy;
-		if (busy) {
+		const decision = openCodeTurnPollDecision({
+			busy,
+			seenBusy,
+			hasAssistantText: Boolean(text),
+			hasError: Boolean(error),
+			elapsedMs: now - (current.turnStartedAt ?? now),
+			msSinceLastBusy: lastBusyAt === null ? null : now - lastBusyAt,
+		});
+		if (decision === "running") {
 			return {
 				...current,
 				items,
-				seenBusy: true,
+				seenBusy,
+				lastBusyAt,
 			};
 		}
-		if (text) {
+		if (decision === "completed" && text) {
 			const withoutAgentErrors = items.filter((item) => item.kind !== "error");
 			const already = withoutAgentErrors.some(
 				(item) => item.kind === "agentMessage" && item.text === text,
@@ -681,24 +701,19 @@ function syncOpenCodeTurn(
 							},
 						],
 				seenBusy,
+				lastBusyAt,
 			};
 		}
-		if (error) {
-			return yield* failOpenCodeTurn(machines, workspaceId, current, error);
-		}
-		const elapsed = Date.now() - (current.turnStartedAt ?? Date.now());
-		if (seenBusy || elapsed > 180_000) {
-			return yield* failOpenCodeTurn(
-				machines,
-				workspaceId,
-				current,
+		return yield* failOpenCodeTurn(
+			machines,
+			workspaceId,
+			{ ...current, items, seenBusy, lastBusyAt },
+			error ??
 				openCodeTurnFailureMessage({
 					payload: messages.body ?? status.body,
 					httpStatus: messages.status,
 				}),
-			);
-		}
-		return { ...current, items, seenBusy };
+		);
 	});
 }
 

@@ -58,6 +58,9 @@ export function openCodeSessionIsBusy(
 	return type === "busy" || type === "running" || type === "retry";
 }
 
+export const OPENCODE_TURN_MAX_WAIT_MS = 180_000;
+export const OPENCODE_ASSISTANT_GRACE_MS = 15_000;
+
 export function openCodeTurnFailureMessage(input: {
 	readonly payload: unknown;
 	readonly httpStatus?: number;
@@ -68,6 +71,34 @@ export function openCodeTurnFailureMessage(input: {
 		return `OpenCode HTTP ${input.httpStatus}. ytimesy did not fall back to another provider.`;
 	}
 	return "OpenCode listed no assistant text. ytimesy did not fall back to another provider.";
+}
+
+/**
+ * Busy can clear before `/message` has the assistant text. Wait a short
+ * grace period after the last busy poll before treating silence as failure.
+ */
+export function openCodeTurnPollDecision(input: {
+	readonly busy: boolean;
+	readonly seenBusy: boolean;
+	readonly hasAssistantText: boolean;
+	readonly hasError: boolean;
+	readonly elapsedMs: number;
+	readonly msSinceLastBusy: number | null;
+}): "running" | "completed" | "failed" {
+	if (input.busy) return "running";
+	if (input.hasAssistantText) return "completed";
+	if (input.hasError) return "failed";
+	if (
+		input.seenBusy &&
+		input.msSinceLastBusy !== null &&
+		input.msSinceLastBusy < OPENCODE_ASSISTANT_GRACE_MS
+	) {
+		return "running";
+	}
+	if (input.seenBusy || input.elapsedMs > OPENCODE_TURN_MAX_WAIT_MS) {
+		return "failed";
+	}
+	return "running";
 }
 
 function textPartsFromOpenCode(payload: unknown): string[] {
