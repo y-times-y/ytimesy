@@ -27,6 +27,7 @@ export type SlashDraft = {
 
 export type SlashCommandContext = {
 	readonly authenticated: boolean;
+	readonly requiresAccountLogin: boolean;
 	readonly turnRunning: boolean;
 	readonly canSend: boolean;
 	readonly hasLastUserMessage: boolean;
@@ -48,6 +49,9 @@ export function parseSlashDraft(draft: string): SlashDraft | null {
 export function composerSlashCommands(
 	context: SlashCommandContext,
 ): readonly SlashCommand[] {
+	const startHint = context.requiresAccountLogin
+		? "Sign in to an agent"
+		: "Connect an agent";
 	return [
 		{
 			id: "side",
@@ -55,7 +59,7 @@ export function composerSlashCommands(
 			label: "Side chat",
 			description: "Ask a question without interrupting the current run",
 			availability: context.authenticated ? "ready" : "unavailable",
-			unavailableReason: "Sign in to an agent to start a side chat",
+			unavailableReason: `${startHint} to start a side chat`,
 		},
 		{
 			id: "btw",
@@ -63,7 +67,7 @@ export function composerSlashCommands(
 			label: "By the way",
 			description: "Open a side chat for a tangent",
 			availability: context.authenticated ? "ready" : "unavailable",
-			unavailableReason: "Sign in to an agent to start a side chat",
+			unavailableReason: `${startHint} to start a side chat`,
 		},
 		{
 			id: "stop",
@@ -90,7 +94,7 @@ export function composerSlashCommands(
 			label: "Model",
 			description: "Switch the model for the next run",
 			availability: context.hasModels ? "ready" : "unavailable",
-			unavailableReason: "Sign in to an agent to load models",
+			unavailableReason: `${startHint} to load models`,
 		},
 		{
 			id: "diff",

@@ -18,6 +18,7 @@ describe("agent providers", () => {
 		expect(agentProviderById("codex")).toEqual(CODEX_PROVIDER);
 		expect(agentProviderById("claude")).toEqual(CLAUDE_PROVIDER);
 		expect(agentProviderById("opencode")).toEqual(OPENCODE_PROVIDER);
+		expect(OPENCODE_PROVIDER.signInMethod).toBeNull();
 	});
 
 	it("names the connected agent from its provider", () => {
