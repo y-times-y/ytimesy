@@ -1,5 +1,5 @@
 import { activityGlyphForToolName } from "./session-activity";
-import type { SessionItem } from "./session-item";
+import { liveActivityStatus, type SessionItem } from "./session-item";
 
 export type ExplorationCounts = {
 	readonly files: number;
@@ -73,7 +73,7 @@ export function groupTimelineRows(
 	while (index < items.length) {
 		const item = items[index];
 		if (!item) break;
-		if (!isExplorationItem(item)) {
+		if (!isExplorationItem(item) || liveActivityStatus(item) === "inProgress") {
 			rows.push({ kind: "item", item });
 			index += 1;
 			continue;
@@ -81,7 +81,13 @@ export function groupTimelineRows(
 		const grouped: SessionItem[] = [];
 		while (index < items.length) {
 			const next = items[index];
-			if (!next || !isExplorationItem(next)) break;
+			if (
+				!next ||
+				!isExplorationItem(next) ||
+				liveActivityStatus(next) === "inProgress"
+			) {
+				break;
+			}
 			grouped.push(next);
 			index += 1;
 		}

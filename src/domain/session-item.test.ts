@@ -7,6 +7,7 @@ import {
 	isTurnRunning,
 	lastAgentMessageText,
 	lastUserMessageText,
+	liveActivityStatus,
 	reasoningSummariesFromTurn,
 	type SessionItem,
 	sessionRecordHasConversation,
@@ -398,6 +399,21 @@ describe("session items", () => {
 				"running",
 			),
 		).toBe(true);
+		expect(
+			liveActivityStatus({
+				kind: "dynamicToolCall",
+				id: SessionItemId("t1"),
+				tool: "read",
+				status: "inProgress",
+			}),
+		).toBe("inProgress");
+		expect(
+			liveActivityStatus({
+				kind: "reasoning",
+				id: SessionItemId("r1"),
+				summaries: ["checking"],
+			}),
+		).toBe("inProgress");
 	});
 
 	it("collects Diff files from shell heredoc writes", () => {

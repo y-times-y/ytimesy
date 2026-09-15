@@ -87,6 +87,58 @@ describe("parseOpenCodeAuthStatus", () => {
 		});
 	});
 
+	it("keeps live reasoning and tool calls when reconnecting from the status file", () => {
+		expect(
+			parseOpenCodeAuthStatus(
+				JSON.stringify({
+					stage: "authenticated",
+					authMode: "local",
+					turnStatus: "running",
+					items: [
+						{
+							kind: "reasoning",
+							id: "r1",
+							summaries: ["inspect the timeline"],
+						},
+						{
+							kind: "dynamicToolCall",
+							id: "t1",
+							tool: "read session-timeline.tsx",
+							status: "inProgress",
+						},
+						{
+							kind: "commandExecution",
+							id: "c1",
+							command: "pnpm test",
+							cwd: "/home/ubuntu/ytimesy",
+							status: "inProgress",
+							output: null,
+							exitCode: null,
+						},
+					],
+				}),
+			),
+		).toMatchObject({
+			stage: "authenticated",
+			items: [
+				{
+					kind: "reasoning",
+					summaries: ["inspect the timeline"],
+				},
+				{
+					kind: "dynamicToolCall",
+					tool: "read session-timeline.tsx",
+					status: "inProgress",
+				},
+				{
+					kind: "commandExecution",
+					command: "pnpm test",
+					status: "inProgress",
+				},
+			],
+		});
+	});
+
 	it("does not keep a Zen login wait state", () => {
 		expect(
 			parseOpenCodeAuthStatus(
