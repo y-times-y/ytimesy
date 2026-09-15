@@ -56,15 +56,17 @@ export function chatsFromAgentSessions(
 export const COPIED_OPENCODE_STATUS_PATH = "/tmp/ytimesy-opencode-status.json";
 export const COPIED_CLAUDE_STATUS_PATH = "/tmp/ytimesy-claude-auth-status.json";
 
+export const COPIED_CODEX_STATUS_PATH = "/tmp/ytimesy-auth-status.json";
+
 export const COPIED_SESSION_SCRATCH_PATHS = [
 	COPIED_OPENCODE_STATUS_PATH,
 	COPIED_CLAUDE_STATUS_PATH,
+	COPIED_CODEX_STATUS_PATH,
 	"/tmp/ytimesy-opencode-serve.pid",
 	"/tmp/ytimesy-opencode-serve.log",
 	"/tmp/ytimesy-opencode-http-body",
 	"/tmp/ytimesy-opencode-auth.json",
 	"/tmp/ytimesy-opencode-auth-result.txt",
-	"/tmp/ytimesy-auth-status.json",
 	"/tmp/ytimesy-task-request.json",
 	"/tmp/ytimesy-task-result.json",
 	"/tmp/ytimesy-side-request.json",
@@ -79,6 +81,10 @@ export const COPIED_SESSION_STATUS_RESETS = [
 	},
 	{
 		path: COPIED_CLAUDE_STATUS_PATH,
+		contents: `${JSON.stringify({ stage: "missing" })}\n`,
+	},
+	{
+		path: COPIED_CODEX_STATUS_PATH,
 		contents: `${JSON.stringify({ stage: "missing" })}\n`,
 	},
 ] as const;
