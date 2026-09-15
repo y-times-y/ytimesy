@@ -11,6 +11,7 @@ import {
 	sessionRecordHasConversation,
 	sessionTitleFromItems,
 	sessionUsesFollowUpLayout,
+	sessionViewItems,
 	showTurnWorking,
 	visibleSessionItems,
 } from "./session-item";
@@ -38,6 +39,47 @@ describe("session items", () => {
 		expect(sessionRecordHasConversation([command])).toBe(false);
 		expect(sessionRecordHasConversation([])).toBe(false);
 		expect(sessionRecordHasConversation(null)).toBe(false);
+		expect(sessionViewItems([command], [user, command])).toEqual([
+			user,
+			command,
+		]);
+		expect(
+			sessionViewItems(
+				[
+					{
+						kind: "fileChange",
+						id: SessionItemId("tree"),
+						status: "completed",
+						changes: [
+							{
+								path: "README.md",
+								change: "update",
+								additions: 1,
+								deletions: 0,
+								preview: null,
+							},
+						],
+					},
+				],
+				[user],
+			),
+		).toEqual([
+			user,
+			{
+				kind: "fileChange",
+				id: SessionItemId("tree"),
+				status: "completed",
+				changes: [
+					{
+						path: "README.md",
+						change: "update",
+						additions: 1,
+						deletions: 0,
+						preview: null,
+					},
+				],
+			},
+		]);
 	});
 
 	it("does not treat a completed turn as still running", () => {

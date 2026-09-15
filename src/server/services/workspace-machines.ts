@@ -44,6 +44,7 @@ export interface WorkspaceMachines {
 	) => Promise<string | null>;
 	readonly destroy: (workspaceId: WorkspaceId) => Promise<void>;
 	readonly ensureRunning: (workspaceId: WorkspaceId) => Promise<WorkspaceId>;
+	readonly isRunning: (workspaceId: WorkspaceId) => Promise<boolean>;
 	readonly exposeHttp: (
 		workspaceId: WorkspaceId,
 		port: number,
