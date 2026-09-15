@@ -114,6 +114,14 @@ export function isConversationItem(
 	return item.kind === "userMessage" || item.kind === "agentMessage";
 }
 
+export function sessionRecordHasConversation(items: unknown): boolean {
+	if (!Array.isArray(items)) return false;
+	return items.some((item) => {
+		if (!item || typeof item !== "object" || !("kind" in item)) return false;
+		return item.kind === "userMessage" || item.kind === "agentMessage";
+	});
+}
+
 export function isTurnRunning(status: SessionTurnStatus): boolean {
 	return status === "running";
 }

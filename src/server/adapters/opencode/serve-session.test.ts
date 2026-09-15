@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { SessionItemId } from "#/domain/ids";
 import { PROJECT_CWD_PATH } from "#/server/adapters/freestyle/clone-project";
 import {
+	dropCopiedOpenCodeTranscript,
 	OPENCODE_START_SERVE_SCRIPT,
 	parseCurlHttp,
 	parseOpenCodeAuthStatus,
@@ -34,6 +36,99 @@ describe("parseOpenCodeAuthStatus", () => {
 				}),
 			),
 		).toEqual({ stage: "missing" });
+	});
+});
+
+describe("dropCopiedOpenCodeTranscript", () => {
+	it("keeps working-tree changes and drops the copied chat", () => {
+		expect(
+			dropCopiedOpenCodeTranscript({
+				stage: "authenticated",
+				authMode: "local",
+				planType: null,
+				models: [
+					{
+						id: "opencode/muse-spark-1.3-contributor-free",
+						label: "Muse Spark",
+					},
+				],
+				turnStatus: "completed",
+				items: [
+					{
+						kind: "userMessage",
+						id: SessionItemId("user-1"),
+						text: "DIFF_PROOF ping",
+					},
+					{
+						kind: "agentMessage",
+						id: SessionItemId("agent-1"),
+						text: "pong",
+					},
+					{
+						kind: "fileChange",
+						id: SessionItemId("opencode-working-tree"),
+						status: "completed",
+						changes: [
+							{
+								path: "DIFF_PROOF.md",
+								change: "add",
+								additions: 1,
+								deletions: 0,
+								preview: "pong",
+							},
+						],
+					},
+				],
+				serveSessionId: "ses_copied",
+				seenBusy: true,
+				turnStartedAt: 1,
+			}),
+		).toEqual({
+			stage: "authenticated",
+			authMode: "local",
+			planType: null,
+			models: [
+				{
+					id: "opencode/muse-spark-1.3-contributor-free",
+					label: "Muse Spark",
+				},
+			],
+			turnStatus: "idle",
+			items: [
+				{
+					kind: "fileChange",
+					id: SessionItemId("opencode-working-tree"),
+					status: "completed",
+					changes: [
+						{
+							path: "DIFF_PROOF.md",
+							change: "add",
+							additions: 1,
+							deletions: 0,
+							preview: "pong",
+						},
+					],
+				},
+			],
+			serveSessionId: null,
+			seenBusy: false,
+			turnStartedAt: null,
+		});
+	});
+
+	it("leaves a missing or failed connect unchanged", () => {
+		expect(dropCopiedOpenCodeTranscript({ stage: "missing" })).toEqual({
+			stage: "missing",
+		});
+		expect(
+			dropCopiedOpenCodeTranscript({
+				stage: "failed",
+				message: "opencode serve did not become healthy",
+			}),
+		).toEqual({
+			stage: "failed",
+			message: "opencode serve did not become healthy",
+		});
 	});
 });
 
