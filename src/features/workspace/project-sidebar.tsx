@@ -222,9 +222,7 @@ export function ProjectSidebar({
 										onClick={() => onSelectChat?.(chat.id)}
 									>
 										{chat.title}
-										{running ? (
-											<span className="sr-only">Running</span>
-										) : null}
+										{running ? <span className="sr-only">Running</span> : null}
 									</button>
 									{onDeleteChat ? (
 										<button
