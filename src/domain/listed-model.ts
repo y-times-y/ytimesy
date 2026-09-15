@@ -4,24 +4,103 @@ export type ListedModel = {
 	readonly notice?: string;
 };
 
+export type ListedModelPreference = {
+	readonly lastUsedId?: string;
+	readonly excludedIds?: readonly string[];
+};
+
+export type ListedModelSessionHint = {
+	readonly harness: string;
+	readonly listedModelId: string | null;
+	readonly items: unknown;
+};
+
+export function listedModelRestrictedByProvider(message: string): boolean {
+	return /\[user_blocked\]|access has been restricted due to repeated policy/i.test(
+		message,
+	);
+}
+
+export function sessionListedModelIsBlocked(
+	listedModelId: string | null | undefined,
+	items: unknown,
+): boolean {
+	const id = listedModelId?.trim();
+	if (!id) return false;
+	const rows = Array.isArray(items) ? items : [];
+	for (let index = rows.length - 1; index >= 0; index -= 1) {
+		const item = rows[index];
+		if (!item || typeof item !== "object") continue;
+		const record = item as {
+			kind?: unknown;
+			message?: unknown;
+			text?: unknown;
+		};
+		if (
+			record.kind === "error" &&
+			typeof record.message === "string" &&
+			listedModelRestrictedByProvider(record.message)
+		) {
+			return true;
+		}
+		if (record.kind === "agentMessage" && typeof record.text === "string") {
+			if (listedModelRestrictedByProvider(record.text)) return true;
+			if (record.text.trim()) return false;
+		}
+	}
+	return false;
+}
+
+export function listedModelPreferenceFromSessions(input: {
+	readonly harness: string;
+	readonly sessions: readonly ListedModelSessionHint[];
+}): {
+	readonly listedModelId: string;
+	readonly blockedListedModelIds: readonly string[];
+} {
+	const own = input.sessions.filter(
+		(session) => session.harness === input.harness,
+	);
+	const blockedListedModelIds = [
+		...new Set(
+			own.flatMap((session) => {
+				const id = session.listedModelId?.trim();
+				if (!id) return [];
+				return sessionListedModelIsBlocked(id, session.items) ? [id] : [];
+			}),
+		),
+	];
+	const listedModelId =
+		own
+			.map((session) => session.listedModelId?.trim() ?? "")
+			.find((id) => id && !blockedListedModelIds.includes(id)) ?? "";
+	return { listedModelId, blockedListedModelIds };
+}
+
 export function preferredListedModelId(
 	models: readonly { readonly id: string }[],
+	options?: ListedModelPreference,
 ): string {
+	const excluded = new Set(options?.excludedIds ?? []);
+	const listed = models.filter((model) => model.id && !excluded.has(model.id));
+	const lastUsed = options?.lastUsedId?.trim();
+	if (lastUsed && listed.some((model) => model.id === lastUsed))
+		return lastUsed;
 	return (
-		models.find((model) => model.id === "gpt-5.3-codex-spark")?.id ??
-		models.find(
+		listed.find((model) => model.id === "gpt-5.3-codex-spark")?.id ??
+		listed.find(
 			(model) =>
 				model.id.startsWith("opencode/") && model.id.includes("muse-spark-1.3"),
 		)?.id ??
-		models.find(
+		listed.find(
 			(model) => model.id.startsWith("opencode/") && model.id.includes("spark"),
 		)?.id ??
-		models.find(
+		listed.find(
 			(model) =>
 				model.id.startsWith("opencode/") &&
 				(model.id.endsWith("-free") || model.id.includes("contributor-free")),
 		)?.id ??
-		models[0]?.id ??
+		listed[0]?.id ??
 		""
 	);
 }
@@ -29,8 +108,9 @@ export function preferredListedModelId(
 export function submittedListedModelId(
 	requested: string,
 	models: readonly { readonly id: string }[],
+	options?: ListedModelPreference,
 ): string {
 	const trimmed = requested.trim();
 	if (trimmed && models.some((model) => model.id === trimmed)) return trimmed;
-	return preferredListedModelId(models);
+	return preferredListedModelId(models, options);
 }

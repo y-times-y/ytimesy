@@ -3,7 +3,7 @@ import type { AgentProviderId } from "#/domain/agent-provider";
 import { database } from "./database";
 
 const SESSION_COLUMNS =
-	"id,user_id,project_id,workspace_id,harness,provider_ref,parent_session_id,title,briefing,items,status,updated_at";
+	"id,user_id,project_id,workspace_id,harness,provider_ref,parent_session_id,title,briefing,items,listed_model_id,status,updated_at";
 
 export type AgentSessionRecord = {
 	id: string;
@@ -16,6 +16,7 @@ export type AgentSessionRecord = {
 	title: string;
 	briefing: string | null;
 	items: unknown;
+	listedModelId: string | null;
 	status: "starting" | "ready" | "failed";
 	updatedAt: string;
 };
@@ -31,6 +32,7 @@ interface AgentSessionRow {
 	title: string;
 	briefing: string | null;
 	items: unknown;
+	listed_model_id: string | null;
 	status: AgentSessionRecord["status"];
 	updated_at: Date | string;
 }
@@ -94,11 +96,12 @@ export async function insertAgentSession(input: {
 	readonly providerRef?: string | null;
 	readonly parentSessionId?: string | null;
 	readonly title?: string;
+	readonly listedModelId?: string | null;
 }) {
 	const id = randomUUID();
 	const result = await database().query(
-		`insert into agent_session(id,user_id,project_id,workspace_id,harness,provider_ref,parent_session_id,title,status)
-		 values($1,$2,$3,$4,$5,$6,$7,$8,'starting')
+		`insert into agent_session(id,user_id,project_id,workspace_id,harness,provider_ref,parent_session_id,title,listed_model_id,status)
+		 values($1,$2,$3,$4,$5,$6,$7,$8,$9,'starting')
 		 returning ${SESSION_COLUMNS}`,
 		[
 			id,
@@ -109,6 +112,7 @@ export async function insertAgentSession(input: {
 			input.providerRef ?? null,
 			input.parentSessionId ?? null,
 			input.title ?? (input.parentSessionId ? "Side chat" : "New session"),
+			input.listedModelId?.trim() || null,
 		],
 	);
 	return toSession(result.rows[0]);
@@ -131,15 +135,22 @@ export async function saveAgentSessionItems(
 	sessionId: string,
 	items: unknown,
 	title?: string,
+	listedModelId?: string | null,
 ) {
 	const result = await database().query(
 		`update agent_session
 		 set items=$2::jsonb,
 		     title=coalesce($3, title),
+		     listed_model_id=coalesce($4, listed_model_id),
 		     updated_at=now()
 		 where id=$1
 		 returning ${SESSION_COLUMNS}`,
-		[sessionId, JSON.stringify(items), title ?? null],
+		[
+			sessionId,
+			JSON.stringify(items),
+			title ?? null,
+			listedModelId?.trim() || null,
+		],
 	);
 	return result.rows[0] ? toSession(result.rows[0]) : null;
 }
@@ -169,6 +180,7 @@ function toSession(row: AgentSessionRow): AgentSessionRecord {
 		title: row.title,
 		briefing: row.briefing,
 		items: row.items,
+		listedModelId: row.listed_model_id,
 		status: row.status,
 		updatedAt:
 			row.updated_at instanceof Date

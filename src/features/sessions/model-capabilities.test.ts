@@ -48,6 +48,22 @@ describe("preferredSessionModelId", () => {
 		{ id: "opencode/big-pickle", label: "Big Pickle" },
 	]);
 
+	it("reuses the last listed id instead of re-preferring Zen spark", () => {
+		expect(
+			preferredSessionModelId(listedZen, {
+				lastUsedId: "opencode/big-pickle",
+			}),
+		).toBe("opencode/big-pickle");
+	});
+
+	it("skips a listed Zen spark the provider already restricted", () => {
+		expect(
+			preferredSessionModelId(listedZen, {
+				excludedIds: ["opencode/muse-spark-1.3-contributor-free"],
+			}),
+		).toBe("opencode/muse-spark-1.2-contributor-free");
+	});
+
 	it("prefers listed Codex spark when the connected catalog includes it", () => {
 		expect(
 			preferredSessionModelId(

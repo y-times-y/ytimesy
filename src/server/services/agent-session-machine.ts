@@ -12,6 +12,7 @@ import {
 } from "#/domain/agent-session";
 import { failureMessage } from "#/domain/failure-message";
 import { WorkspaceId } from "#/domain/ids";
+import { listedModelPreferenceFromSessions } from "#/domain/listed-model";
 import {
 	PROJECT_CONTEXT_PATH,
 	projectContextDocument,
@@ -68,6 +69,29 @@ export async function bindAgentSessionMachine(
 	if (input.sessionId && !input.createNew && !selected) {
 		throw new Error("Agent session is not available.");
 	}
+	const parent = input.parentSessionId
+		? ((await agentSessionForOwner(input.userId, input.parentSessionId)) ??
+			null)
+		: null;
+	const inherited = listedModelPreferenceFromSessions({
+		harness: input.harness,
+		sessions: [
+			...(parent
+				? [
+						{
+							harness: parent.harness,
+							listedModelId: parent.listedModelId,
+							items: parent.items,
+						},
+					]
+				: []),
+			...sessions.map((session) => ({
+				harness: session.harness,
+				listedModelId: session.listedModelId,
+				items: session.items,
+			})),
+		],
+	});
 	const session =
 		selected ??
 		(await insertAgentSession({
@@ -77,6 +101,7 @@ export async function bindAgentSessionMachine(
 			harness: input.harness,
 			parentSessionId: input.parentSessionId,
 			title: input.parentSessionId ? "Side chat" : undefined,
+			listedModelId: inherited.listedModelId || null,
 		}));
 	const bound = await templateAlreadyBound(workspace.id, workspace.providerRef);
 	const executed = await executeSessionMachinePlan({

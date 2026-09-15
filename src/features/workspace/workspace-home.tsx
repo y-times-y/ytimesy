@@ -84,6 +84,9 @@ export function WorkspaceHome({
 		projects.data?.[0];
 	const [selectedSessionId, setSelectedSessionId] = useState<string>();
 	const [session, setSession] = useState(initialSession);
+	const [composerModelId, setComposerModelId] = useState(
+		initialSession.listedModelId,
+	);
 	const chats = useQuery({
 		queryKey: ["agent-sessions", selectedProject?.id],
 		queryFn: () =>
@@ -412,7 +415,8 @@ export function WorkspaceHome({
 	}
 
 	function sendSideChat(text: string) {
-		const modelId = sessionModelId(session);
+		const modelId =
+			composerModelId || session.listedModelId || sessionModelId(session);
 		setBusy(true);
 		void sendTask({
 			data: { ...sessionScope(), text, modelId, lane: "side" as const },
@@ -576,6 +580,7 @@ export function WorkspaceHome({
 										.finally(() => setBusy(false));
 								}}
 								apiKeyHints={apiKeyHints}
+								onComposerModelIdChange={setComposerModelId}
 								onConnect={() => {
 									autoResumeStarted.current = true;
 									setBusy(true);
@@ -624,6 +629,10 @@ export function WorkspaceHome({
 												modelId ||
 												preferredSessionModelId(
 													sessionModelsFromListed(current.models),
+													{
+														lastUsedId: current.listedModelId,
+														excludedIds: current.blockedListedModelIds,
+													},
 												);
 											if (!resolvedModel) return;
 											const next = await sendTask({
@@ -754,5 +763,11 @@ export function WorkspaceHome({
 }
 
 function sessionModelId(session: PublicCodexSession): string {
-	return preferredSessionModelId(sessionModelsFromListed(session.models));
+	return (
+		session.listedModelId ||
+		preferredSessionModelId(sessionModelsFromListed(session.models), {
+			lastUsedId: session.listedModelId,
+			excludedIds: session.blockedListedModelIds,
+		})
+	);
 }

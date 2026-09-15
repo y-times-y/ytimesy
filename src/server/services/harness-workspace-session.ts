@@ -7,7 +7,10 @@ import {
 import { failureMessage } from "#/domain/failure-message";
 import { canResumeDisconnectedFollowUp } from "#/domain/harness-access";
 import { WorkspaceId } from "#/domain/ids";
-import { submittedListedModelId } from "#/domain/listed-model";
+import {
+	listedModelPreferenceFromSessions,
+	submittedListedModelId,
+} from "#/domain/listed-model";
 import { harnessConnectBlockedReason } from "#/domain/project-workspace";
 import { sessionRecordHasConversation } from "#/domain/session-item";
 import { canSubmitComposer, canSubmitSideChat } from "#/domain/session-policy";
@@ -360,6 +363,8 @@ function viewFromConnection(
 		agentSessionId: null,
 		connection,
 		models,
+		listedModelId: "",
+		blockedListedModelIds: [],
 		canSend: canSubmitComposer(workspace, connection, turnStatus),
 		canSendSide: canSubmitSideChat(workspace, connection, "idle"),
 		turnStatus,
@@ -409,17 +414,36 @@ function submitConnectedHarnessTask(
 					apiKey,
 				);
 			}
+			let listedModelId = "";
 			if (status.stage === "authenticated") {
-				const modelId = submittedListedModelId(input.modelId, status.models);
-				if (modelId) {
+				const preference = listedModelPreferenceFromSessions({
+					harness: session?.harness ?? scope.harnessId,
+					sessions: session
+						? [
+								{
+									harness: session.harness,
+									listedModelId: session.listedModelId,
+									items: session.items,
+								},
+							]
+						: [],
+				});
+				listedModelId = submittedListedModelId(input.modelId, status.models, {
+					lastUsedId: preference.listedModelId,
+					excludedIds: preference.blockedListedModelIds,
+				});
+				if (listedModelId) {
 					status = yield* submitClaudeTask(machines, WorkspaceId(providerRef), {
 						...payload,
-						modelId,
+						modelId: listedModelId,
 					});
 				}
 			}
 			return yield* Effect.tryPromise(() =>
-				persistBoundSessionView(session, viewFromClaude(status, providerRef)),
+				persistBoundSessionView(session, {
+					...viewFromClaude(status, providerRef),
+					listedModelId,
+				}),
 			);
 		}
 		let status = yield* refreshOpenCodeAuthStatus(
@@ -438,17 +462,36 @@ function submitConnectedHarnessTask(
 				},
 			);
 		}
+		let listedModelId = "";
 		if (status.stage === "authenticated") {
-			const modelId = submittedListedModelId(input.modelId, status.models);
-			if (modelId) {
+			const preference = listedModelPreferenceFromSessions({
+				harness: session?.harness ?? scope.harnessId,
+				sessions: session
+					? [
+							{
+								harness: session.harness,
+								listedModelId: session.listedModelId,
+								items: session.items,
+							},
+						]
+					: [],
+			});
+			listedModelId = submittedListedModelId(input.modelId, status.models, {
+				lastUsedId: preference.listedModelId,
+				excludedIds: preference.blockedListedModelIds,
+			});
+			if (listedModelId) {
 				status = yield* submitOpenCodeTask(machines, WorkspaceId(providerRef), {
 					...payload,
-					modelId,
+					modelId: listedModelId,
 				});
 			}
 		}
 		return yield* Effect.tryPromise(() =>
-			persistBoundSessionView(session, viewFromOpenCode(status, providerRef)),
+			persistBoundSessionView(session, {
+				...viewFromOpenCode(status, providerRef),
+				listedModelId,
+			}),
 		);
 	});
 }

@@ -2,12 +2,16 @@ import { Effect } from "effect";
 import type { AgentConnection } from "#/domain/agent-connection";
 import { canResumeDisconnectedFollowUp } from "#/domain/harness-access";
 import { WorkspaceId } from "#/domain/ids";
-import { submittedListedModelId } from "#/domain/listed-model";
+import {
+	listedModelPreferenceFromSessions,
+	submittedListedModelId,
+} from "#/domain/listed-model";
 import { codexConnectBlockedReason } from "#/domain/project-workspace";
 import { shouldStartDeviceCodeAfterSnapshotResume } from "#/domain/proof-workspace-recovery";
 import type { SessionItem, SessionTurnStatus } from "#/domain/session-item";
 import { canSubmitComposer, canSubmitSideChat } from "#/domain/session-policy";
 import type { WorkspaceLifecycle } from "#/domain/workspace";
+import type { AgentSessionRecord } from "#/server/adapters/agent-sessions";
 import {
 	ensureCurrentLoginDaemon,
 	interruptCodexTurn,
@@ -38,6 +42,8 @@ export type PublicCodexSession = {
 	readonly agentSessionId: string | null;
 	readonly connection: AgentConnection;
 	readonly models: readonly ListedModel[];
+	readonly listedModelId: string;
+	readonly blockedListedModelIds: readonly string[];
 	readonly canSend: boolean;
 	readonly canSendSide: boolean;
 	readonly turnStatus: SessionTurnStatus;
@@ -64,6 +70,8 @@ export function emptyCodexSession(
 		agentSessionId: null,
 		connection: disconnected,
 		models: [],
+		listedModelId: "",
+		blockedListedModelIds: [],
 		canSend: false,
 		canSendSide: false,
 		turnStatus: "idle",
@@ -253,7 +261,7 @@ export function sendCodexWorkspaceTask(
 	return withPreparedWorkspace(
 		machines,
 		scope,
-		(providerRef, snapshotAvailable) =>
+		(providerRef, snapshotAvailable, session) =>
 			Effect.gen(function* () {
 				yield* prepareCodexGuest(machines, WorkspaceId(providerRef), scope);
 				let status = yield* readLoginStatus(machines, WorkspaceId(providerRef));
@@ -267,7 +275,14 @@ export function sendCodexWorkspaceTask(
 				if (status.stage !== "authenticated") {
 					return viewFromStatus(status, providerRef, snapshotAvailable);
 				}
-				const modelId = submittedListedModelId(input.modelId, status.models);
+				const preference = listedModelPreferenceFromSessions({
+					harness: session.harness,
+					sessions: [session],
+				});
+				const modelId = submittedListedModelId(input.modelId, status.models, {
+					lastUsedId: preference.listedModelId,
+					excludedIds: preference.blockedListedModelIds,
+				});
 				if (!modelId) {
 					return viewFromStatus(status, providerRef, snapshotAvailable);
 				}
@@ -283,7 +298,10 @@ export function sendCodexWorkspaceTask(
 					text: input.text,
 					modelId,
 				});
-				return viewFromStatus(status, providerRef, snapshotAvailable);
+				return {
+					...viewFromStatus(status, providerRef, snapshotAvailable),
+					listedModelId: modelId,
+				};
 			}),
 	);
 }
@@ -295,7 +313,7 @@ export function stopCodexWorkspaceTurn(
 	return withPreparedWorkspace(
 		machines,
 		scope,
-		(providerRef, snapshotAvailable) =>
+		(providerRef, snapshotAvailable, _session) =>
 			interruptCodexTurn(machines, WorkspaceId(providerRef)).pipe(
 				Effect.map((status) =>
 					viewFromStatus(status, providerRef, snapshotAvailable),
@@ -310,6 +328,7 @@ function withPreparedWorkspace<A>(
 	run: (
 		providerRef: string,
 		snapshotAvailable: boolean,
+		session: AgentSessionRecord,
 	) => Effect.Effect<A, Error>,
 ): Effect.Effect<A | PublicCodexSession> {
 	return Effect.gen(function* () {
@@ -329,7 +348,11 @@ function withPreparedWorkspace<A>(
 		yield* Effect.tryPromise(() =>
 			machines.ensureRunning(WorkspaceId(bound.providerRef)),
 		);
-		const result = yield* run(bound.providerRef, Boolean(snapshotId));
+		const result = yield* run(
+			bound.providerRef,
+			Boolean(snapshotId),
+			bound.session,
+		);
 		if (isPublicCodexSession(result)) {
 			return yield* Effect.tryPromise(() =>
 				persistBoundSessionView(bound.session, result),
@@ -414,6 +437,8 @@ function viewFromStatus(
 		agentSessionId: null,
 		connection,
 		models,
+		listedModelId: "",
+		blockedListedModelIds: [],
 		canSend: canSubmitComposer(workspace, connection, turnStatus),
 		canSendSide: canSubmitSideChat(workspace, connection, "idle"),
 		turnStatus,

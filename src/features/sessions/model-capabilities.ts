@@ -1,4 +1,7 @@
-import { preferredListedModelId } from "#/domain/listed-model";
+import {
+	type ListedModelPreference,
+	preferredListedModelId,
+} from "#/domain/listed-model";
 
 export interface ReasoningLevel {
 	id: string;
@@ -47,6 +50,7 @@ export function sessionModelsFromListed(
 
 export function preferredSessionModelId(
 	models: readonly SessionModel[],
+	options?: ListedModelPreference,
 ): string {
-	return preferredListedModelId(models);
+	return preferredListedModelId(models, options);
 }

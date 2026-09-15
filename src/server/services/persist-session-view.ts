@@ -1,3 +1,4 @@
+import { listedModelPreferenceFromSessions } from "#/domain/listed-model";
 import {
 	briefingUpdateFromTurn,
 	nextProjectBriefing,
@@ -14,6 +15,7 @@ import {
 } from "#/domain/session-item";
 import {
 	type AgentSessionRecord,
+	listAgentSessions,
 	saveAgentSessionItems,
 } from "#/server/adapters/agent-sessions";
 import {
@@ -27,27 +29,56 @@ export async function persistBoundSessionView(
 	session: AgentSessionRecord | null,
 	view: PublicCodexSession,
 ): Promise<PublicCodexSession> {
-	if (!session) return { ...view, agentSessionId: null };
+	if (!session) {
+		return {
+			...view,
+			agentSessionId: null,
+			listedModelId: view.listedModelId,
+			blockedListedModelIds: view.blockedListedModelIds,
+		};
+	}
 	const liveItems = sessionViewItems(
 		view.items,
 		sessionItemsFromUnknown(session.items),
 	);
 	const title = sessionTitleFromItems(liveItems);
+	const submittedModelId = view.listedModelId.trim() || session.listedModelId;
 	if (liveItems.length > 0) {
 		const previous = sessionItemsFromUnknown(session.items);
 		await saveAgentSessionItems(
 			session.id,
 			liveItems,
 			title === "New session" ? undefined : title,
+			view.listedModelId.trim() || null,
 		);
 		if (view.turnStatus !== "running") {
 			await captureTurnTrace(session, previous, liveItems);
 		}
 	}
+	const siblings = await listAgentSessions(session.userId, session.projectId);
+	const preference = listedModelPreferenceFromSessions({
+		harness: session.harness,
+		sessions: [
+			{
+				harness: session.harness,
+				listedModelId: submittedModelId,
+				items: liveItems,
+			},
+			...siblings
+				.filter((row) => row.id !== session.id)
+				.map((row) => ({
+					harness: row.harness,
+					listedModelId: row.listedModelId,
+					items: row.items,
+				})),
+		],
+	});
 	return {
 		...view,
 		agentSessionId: session.id,
 		items: liveItems,
+		listedModelId: preference.listedModelId,
+		blockedListedModelIds: preference.blockedListedModelIds,
 	};
 }
 
