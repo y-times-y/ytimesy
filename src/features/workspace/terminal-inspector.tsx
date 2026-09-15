@@ -1,7 +1,4 @@
-import { FitAddon } from "@xterm/addon-fit";
-import { Terminal } from "@xterm/xterm";
 import { useEffect, useRef, useState } from "react";
-import "@xterm/xterm/css/xterm.css";
 
 export function TerminalInspector({
 	projectId,
@@ -20,83 +17,104 @@ export function TerminalInspector({
 			return;
 		}
 		const container = containerRef.current;
-		const term = new Terminal({
-			convertEol: true,
-			cursorBlink: true,
-			fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-			fontSize: 13,
-			theme: {
-				background: "#111111",
-				foreground: "#e8e8e8",
-				cursor: "#eeeeee",
-				selectionBackground: "#3d3d3d",
-			},
-		});
-		const fit = new FitAddon();
-		term.loadAddon(fit);
-		term.open(container);
-		fit.fit();
-		const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-		const url = new URL(`${protocol}//${window.location.host}/api/terminal`);
-		url.searchParams.set("projectId", projectId);
-		url.searchParams.set("cols", String(term.cols));
-		url.searchParams.set("rows", String(term.rows));
-		const socket = new WebSocket(url);
-		socket.binaryType = "arraybuffer";
 		let closed = false;
-		setError(null);
-		socket.addEventListener("open", () => {
-			if (closed) return;
-			setConnected(true);
-			socket.send(
-				JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }),
-			);
-		});
-		socket.addEventListener("message", (event) => {
-			if (typeof event.data === "string") {
-				try {
-					const message = JSON.parse(event.data) as {
-						type?: string;
-						message?: string;
-					};
-					if (message.type === "error" && message.message) {
-						setError(message.message);
-						setConnected(false);
-					}
-				} catch {
-					term.write(event.data);
-				}
+		let dispose: (() => void) | undefined;
+		void (async () => {
+			const [{ Terminal }, { FitAddon }] = await Promise.all([
+				import("@xterm/xterm"),
+				import("@xterm/addon-fit"),
+			]);
+			await import("@xterm/xterm/css/xterm.css");
+			if (closed || containerRef.current !== container) return;
+			const term = new Terminal({
+				convertEol: true,
+				cursorBlink: true,
+				fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+				fontSize: 13,
+				theme: {
+					background: "#111111",
+					foreground: "#e8e8e8",
+					cursor: "#eeeeee",
+					selectionBackground: "#3d3d3d",
+				},
+			});
+			const fit = new FitAddon();
+			term.loadAddon(fit);
+			term.open(container);
+			if (closed) {
+				term.dispose();
 				return;
 			}
-			term.write(new Uint8Array(event.data as ArrayBuffer));
-		});
-		socket.addEventListener("close", () => {
-			if (closed) return;
-			setConnected(false);
-		});
-		socket.addEventListener("error", () => {
-			if (closed) return;
-			setError("Terminal disconnected. Retry from Tools.");
-			setConnected(false);
-		});
-		const dataSub = term.onData((data) => {
-			if (socket.readyState === WebSocket.OPEN) socket.send(data);
-		});
-		const observer = new ResizeObserver(() => {
 			fit.fit();
-			if (socket.readyState === WebSocket.OPEN) {
+			const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+			const url = new URL(`${protocol}//${window.location.host}/api/terminal`);
+			url.searchParams.set("projectId", projectId);
+			url.searchParams.set("cols", String(term.cols));
+			url.searchParams.set("rows", String(term.rows));
+			const socket = new WebSocket(url);
+			socket.binaryType = "arraybuffer";
+			setError(null);
+			socket.addEventListener("open", () => {
+				if (closed) return;
+				setConnected(true);
 				socket.send(
 					JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }),
 				);
-			}
-		});
-		observer.observe(container);
+			});
+			socket.addEventListener("message", (event) => {
+				if (typeof event.data === "string") {
+					try {
+						const message = JSON.parse(event.data) as {
+							type?: string;
+							message?: string;
+						};
+						if (message.type === "error" && message.message) {
+							setError(message.message);
+							setConnected(false);
+						}
+					} catch {
+						term.write(event.data);
+					}
+					return;
+				}
+				term.write(new Uint8Array(event.data as ArrayBuffer));
+			});
+			socket.addEventListener("close", () => {
+				if (closed) return;
+				setConnected(false);
+			});
+			socket.addEventListener("error", () => {
+				if (closed) return;
+				setError("Terminal disconnected. Retry from Tools.");
+				setConnected(false);
+			});
+			const dataSub = term.onData((data) => {
+				if (socket.readyState === WebSocket.OPEN) socket.send(data);
+			});
+			const observer = new ResizeObserver(() => {
+				fit.fit();
+				if (socket.readyState === WebSocket.OPEN) {
+					socket.send(
+						JSON.stringify({
+							type: "resize",
+							cols: term.cols,
+							rows: term.rows,
+						}),
+					);
+				}
+			});
+			observer.observe(container);
+			dispose = () => {
+				observer.disconnect();
+				dataSub.dispose();
+				socket.close();
+				term.dispose();
+			};
+			if (closed) dispose();
+		})();
 		return () => {
 			closed = true;
-			observer.disconnect();
-			dataSub.dispose();
-			socket.close();
-			term.dispose();
+			dispose?.();
 			setConnected(false);
 		};
 	}, [active, projectId]);
