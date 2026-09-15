@@ -1,9 +1,15 @@
 import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { SessionItemId } from "../src/domain/ids";
 import { insertAgentSession } from "../src/server/adapters/agent-sessions";
 import { saveProject } from "../src/server/adapters/projects";
 import { deleteAgentSessionMachine } from "../src/server/services/agent-session-machine";
+import { emptyCodexSession } from "../src/server/services/codex-workspace-session";
+import {
+	persistBoundSessionView,
+	persistSessionTurnStatus,
+} from "../src/server/services/persist-session-view";
 
 let db: PGlite;
 vi.mock("../src/server/adapters/database", () => ({
@@ -34,6 +40,7 @@ beforeAll(async () => {
 		"20260915060000_agent_session_parent.sql",
 		"20260915083000_product_setting.sql",
 		"20260915103000_agent_session_listed_model.sql",
+		"20260915110000_agent_session_turn_status.sql",
 	])
 		await db.exec(await readFile(`supabase/migrations/${file}`, "utf8"));
 	await db.exec(
@@ -167,4 +174,40 @@ it("stores the listed model last submitted on an agent session", async () => {
 		[session.id],
 	);
 	expect(stored.rows[0]?.listed_model_id).toBe("opencode/big-pickle");
+});
+
+it("keeps a running turn across a paused read until a live harness view arrives", async () => {
+	const { project, workspaceId } = await readyWorkspace();
+	const session = await insertAgentSession({
+		userId: "alice",
+		projectId: project.id,
+		workspaceId,
+		harness: "opencode",
+		providerRef: "vm-agent",
+	});
+	expect(session.turnStatus).toBe("idle");
+	await persistSessionTurnStatus(session, "running");
+	const paused = await persistBoundSessionView(session, emptyCodexSession());
+	expect(paused.turnStatus).toBe("running");
+	const stored = await db.query<{ turn_status: string }>(
+		"select turn_status from agent_session where id=$1",
+		[session.id],
+	);
+	expect(stored.rows[0]?.turn_status).toBe("running");
+	const completed = await persistBoundSessionView(session, {
+		...emptyCodexSession(),
+		connection: {
+			status: "authenticated",
+			provider: "opencode",
+			authMode: "local",
+			planType: null,
+			email: null,
+		},
+		turnStatus: "completed",
+		items: [
+			{ kind: "userMessage", id: SessionItemId("u1"), text: "ping" },
+			{ kind: "agentMessage", id: SessionItemId("a1"), text: "pong" },
+		],
+	});
+	expect(completed.turnStatus).toBe("completed");
 });

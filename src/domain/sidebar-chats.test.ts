@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
 	chatsListedInSidebar,
+	composerBusyForOpenChat,
 	newChatIsActive,
 	selectedChatIdAfterDelete,
+	sidebarChatIsRunning,
 	sidebarChatsEmptyCopy,
+	withBusyChat,
+	withChatTurnStatus,
+	withoutBusyChat,
 } from "./sidebar-chats";
 
 describe("chatsListedInSidebar", () => {
@@ -86,5 +91,59 @@ describe("selectedChatIdAfterDelete", () => {
 				deletedChatId: "a",
 			}),
 		).toBeUndefined();
+	});
+});
+
+describe("parallel chat busy", () => {
+	it("only disables the composer for the chat that is in flight", () => {
+		expect(
+			composerBusyForOpenChat({
+				openChatId: "b",
+				busyChatIds: withBusyChat(["a"], "a"),
+			}),
+		).toBe(false);
+		expect(
+			composerBusyForOpenChat({
+				openChatId: "a",
+				busyChatIds: ["a"],
+			}),
+		).toBe(true);
+	});
+
+	it("shows a sibling as running while this chat stays idle", () => {
+		expect(
+			sidebarChatIsRunning({
+				chatId: "a",
+				turnStatus: "running",
+				busyChatIds: [],
+				openChatId: "b",
+				openTurnStatus: "idle",
+			}),
+		).toBe(true);
+		expect(
+			sidebarChatIsRunning({
+				chatId: "b",
+				turnStatus: "idle",
+				busyChatIds: withoutBusyChat(["a"], "a"),
+				openChatId: "b",
+				openTurnStatus: "idle",
+			}),
+		).toBe(false);
+	});
+
+	it("marks only that chat running in the listed rows", () => {
+		expect(
+			withChatTurnStatus(
+				[
+					{ id: "a", title: "fix login", turnStatus: "idle" },
+					{ id: "b", title: "add snapshot copy", turnStatus: "idle" },
+				],
+				"a",
+				"running",
+			),
+		).toEqual([
+			{ id: "a", title: "fix login", turnStatus: "running" },
+			{ id: "b", title: "add snapshot copy", turnStatus: "idle" },
+		]);
 	});
 });

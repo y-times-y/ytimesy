@@ -7,6 +7,7 @@ import {
 	projectEnvironmentSnapshotSlug,
 	sessionMachinePlan,
 	sessionMachineRefsToDestroy,
+	sessionTurnStatusForPersist,
 	shouldResealProjectSnapshotAfterCopyFailure,
 	workspaceCopyCapacityRetryDelaysMs,
 } from "./agent-session";
@@ -127,9 +128,17 @@ describe("agent session names", () => {
 				{ id: "s2", title: "add snapshot copy" },
 			]),
 		).toEqual([
-			{ id: "s1", title: "fix login" },
-			{ id: "s2", title: "add snapshot copy" },
+			{ id: "s1", title: "fix login", turnStatus: "idle" },
+			{ id: "s2", title: "add snapshot copy", turnStatus: "idle" },
 		]);
+	});
+
+	it("keeps a running turn on the sidebar row", () => {
+		expect(
+			chatsFromAgentSessions([
+				{ id: "s1", title: "fix login", turnStatus: "running" },
+			]),
+		).toEqual([{ id: "s1", title: "fix login", turnStatus: "running" }]);
 	});
 
 	it("hides side-chat children from the sidebar", () => {
@@ -138,7 +147,33 @@ describe("agent session names", () => {
 				{ id: "s1", title: "fix login", parentSessionId: null },
 				{ id: "side", title: "Side chat", parentSessionId: "s1" },
 			]),
-		).toEqual([{ id: "s1", title: "fix login" }]);
+		).toEqual([{ id: "s1", title: "fix login", turnStatus: "idle" }]);
+	});
+});
+
+describe("sessionTurnStatusForPersist", () => {
+	it("does not overwrite a stored running turn on a paused disconnect", () => {
+		expect(
+			sessionTurnStatusForPersist({
+				liveStatus: "idle",
+				liveConnection: "disconnected",
+			}),
+		).toBeUndefined();
+	});
+
+	it("takes the live harness status once that VM is connected", () => {
+		expect(
+			sessionTurnStatusForPersist({
+				liveStatus: "completed",
+				liveConnection: "authenticated",
+			}),
+		).toBe("completed");
+		expect(
+			sessionTurnStatusForPersist({
+				liveStatus: "failed",
+				liveConnection: "failed",
+			}),
+		).toBe("failed");
 	});
 });
 

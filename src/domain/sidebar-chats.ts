@@ -1,6 +1,9 @@
+import type { SessionTurnStatus } from "./session-item";
+
 export type SidebarChat = {
 	readonly id: string;
 	readonly title: string;
+	readonly turnStatus?: SessionTurnStatus;
 };
 
 export function chatsListedInSidebar(input: {
@@ -37,4 +40,56 @@ export function selectedChatIdAfterDelete(input: {
 		return input.selectedChatId;
 	}
 	return input.chats.find((chat) => chat.id !== input.deletedChatId)?.id;
+}
+
+export function withBusyChat(
+	ids: readonly string[],
+	chatId: string | undefined,
+): string[] {
+	if (!chatId || ids.includes(chatId)) return [...ids];
+	return [...ids, chatId];
+}
+
+export function withoutBusyChat(
+	ids: readonly string[],
+	chatId: string | undefined,
+): string[] {
+	if (!chatId) return [...ids];
+	return ids.filter((id) => id !== chatId);
+}
+
+export function composerBusyForOpenChat(input: {
+	readonly openChatId: string | undefined;
+	readonly busyChatIds: readonly string[];
+}): boolean {
+	return Boolean(input.openChatId && input.busyChatIds.includes(input.openChatId));
+}
+
+export function sidebarChatIsRunning(input: {
+	readonly chatId: string;
+	readonly turnStatus?: SessionTurnStatus;
+	readonly busyChatIds: readonly string[];
+	readonly openChatId?: string;
+	readonly openTurnStatus?: SessionTurnStatus;
+	readonly openSideTurnStatus?: SessionTurnStatus;
+}): boolean {
+	if (input.busyChatIds.includes(input.chatId)) return true;
+	if (input.chatId === input.openChatId) {
+		return (
+			input.openTurnStatus === "running" ||
+			input.openSideTurnStatus === "running"
+		);
+	}
+	return input.turnStatus === "running";
+}
+
+export function withChatTurnStatus(
+	chats: readonly SidebarChat[],
+	chatId: string | undefined,
+	turnStatus: SessionTurnStatus,
+): SidebarChat[] {
+	if (!chatId) return [...chats];
+	return chats.map((chat) =>
+		chat.id === chatId ? { ...chat, turnStatus } : chat,
+	);
 }

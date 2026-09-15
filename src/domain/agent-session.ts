@@ -1,4 +1,6 @@
+import type { AgentConnection } from "./agent-connection";
 import { isWorkspaceAtCapacity, workspaceLooksGone } from "./failure-message";
+import type { SessionTurnStatus } from "./session-item";
 
 export function projectEnvironmentSnapshotSlug(workspaceId: string) {
 	return `ytimesy-pe-${compactId(workspaceId)}`;
@@ -68,6 +70,7 @@ export function chatsFromAgentSessions(
 		readonly id: string;
 		readonly title: string;
 		readonly parentSessionId?: string | null;
+		readonly turnStatus?: SessionTurnStatus;
 	}[],
 ) {
 	return sessions
@@ -75,7 +78,21 @@ export function chatsFromAgentSessions(
 		.map((session) => ({
 			id: session.id,
 			title: session.title,
+			turnStatus: session.turnStatus ?? "idle",
 		}));
+}
+
+/**
+ * A paused chat read is disconnected and does not know whether a sibling
+ * send already marked this row running. Leave the stored status until a
+ * live harness view replaces it.
+ */
+export function sessionTurnStatusForPersist(input: {
+	readonly liveStatus: SessionTurnStatus;
+	readonly liveConnection: AgentConnection["status"];
+}): SessionTurnStatus | undefined {
+	if (input.liveConnection === "disconnected") return undefined;
+	return input.liveStatus;
 }
 
 export const COPIED_OPENCODE_STATUS_PATH = "/tmp/ytimesy-opencode-status.json";

@@ -35,7 +35,10 @@ import {
 	peekAgentSessionMachine,
 	syncProjectContextForTask,
 } from "./agent-session-machine";
-import { persistBoundSessionView } from "./persist-session-view";
+import {
+	persistBoundSessionView,
+	persistSessionTurnStatus,
+} from "./persist-session-view";
 import { preparePreparedGuest } from "./project-workspace";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -297,6 +300,9 @@ export function sendCodexWorkspaceTask(
 						}),
 					);
 				}
+				yield* Effect.tryPromise(() =>
+					persistSessionTurnStatus(session, "running"),
+				);
 				status = yield* submitCodexTask(machines, WorkspaceId(providerRef), {
 					text: input.text,
 					modelId,

@@ -1,9 +1,11 @@
 import { PanelLeft, Plus, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Project } from "#/domain/projects";
+import type { SessionTurnStatus } from "#/domain/session-item";
 import {
 	newChatIsActive,
 	type SidebarChat,
+	sidebarChatIsRunning,
 	sidebarChatsEmptyCopy,
 } from "#/domain/sidebar-chats";
 
@@ -17,6 +19,9 @@ interface ProjectSidebarProps {
 	onAddProject: () => void;
 	chats: readonly SidebarChat[];
 	selectedChatId?: string;
+	busyChatIds?: readonly string[];
+	openTurnStatus?: SessionTurnStatus;
+	openSideTurnStatus?: SessionTurnStatus;
 	hasUserMessage?: boolean;
 	onSelectChat?: (id: string) => void;
 	onNewChat: () => void;
@@ -34,6 +39,9 @@ export function ProjectSidebar({
 	onAddProject,
 	chats,
 	selectedChatId,
+	busyChatIds = [],
+	openTurnStatus,
+	openSideTurnStatus,
 	hasUserMessage = false,
 	onSelectChat,
 	onNewChat,
@@ -192,33 +200,49 @@ export function ProjectSidebar({
 					<p className="sidebar-empty">{emptyCopy}</p>
 				) : (
 					<ul className="sidebar-chats">
-						{chats.map((chat) => (
-							<li key={chat.id} className="sidebar-chat-row">
-								<button
-									type="button"
-									className="sidebar-chat"
-									data-selected={chat.id === selectedChatId}
-									aria-current={chat.id === selectedChatId ? "page" : undefined}
-									onClick={() => onSelectChat?.(chat.id)}
-								>
-									{chat.title}
-								</button>
-								{onDeleteChat ? (
+						{chats.map((chat) => {
+							const running = sidebarChatIsRunning({
+								chatId: chat.id,
+								turnStatus: chat.turnStatus,
+								busyChatIds,
+								openChatId: selectedChatId,
+								openTurnStatus,
+								openSideTurnStatus,
+							});
+							return (
+								<li key={chat.id} className="sidebar-chat-row">
 									<button
 										type="button"
-										className="sidebar-chat-delete"
-										aria-label={`Delete ${chat.title}`}
-										title="Delete chat"
-										onClick={(event) => {
-											event.stopPropagation();
-											onDeleteChat(chat.id);
-										}}
+										className="sidebar-chat"
+										data-selected={chat.id === selectedChatId}
+										data-activity={running ? "running" : undefined}
+										aria-current={
+											chat.id === selectedChatId ? "page" : undefined
+										}
+										onClick={() => onSelectChat?.(chat.id)}
 									>
-										<X size={16} />
+										{chat.title}
+										{running ? (
+											<span className="sr-only">Running</span>
+										) : null}
 									</button>
-								) : null}
-							</li>
-						))}
+									{onDeleteChat ? (
+										<button
+											type="button"
+											className="sidebar-chat-delete"
+											aria-label={`Delete ${chat.title}`}
+											title="Delete chat"
+											onClick={(event) => {
+												event.stopPropagation();
+												onDeleteChat(chat.id);
+											}}
+										>
+											<X size={16} />
+										</button>
+									) : null}
+								</li>
+							);
+						})}
 					</ul>
 				)}
 				<button

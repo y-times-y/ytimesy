@@ -1,3 +1,4 @@
+import { sessionTurnStatusForPersist } from "#/domain/agent-session";
 import { listedModelPreferenceFromSessions } from "#/domain/listed-model";
 import {
 	briefingUpdateFromTurn,
@@ -9,6 +10,7 @@ import {
 	lastUserMessageText,
 	reasoningSummariesFromTurn,
 	type SessionItem,
+	type SessionTurnStatus,
 	sessionItemsFromUnknown,
 	sessionTitleFromItems,
 	sessionViewItems,
@@ -17,6 +19,7 @@ import {
 	type AgentSessionRecord,
 	listAgentSessions,
 	saveAgentSessionItems,
+	saveAgentSessionTurnStatus,
 } from "#/server/adapters/agent-sessions";
 import {
 	insertProjectTrace,
@@ -43,17 +46,21 @@ export async function persistBoundSessionView(
 	);
 	const title = sessionTitleFromItems(liveItems);
 	const submittedModelId = view.listedModelId.trim() || session.listedModelId;
-	if (liveItems.length > 0) {
-		const previous = sessionItemsFromUnknown(session.items);
-		await saveAgentSessionItems(
-			session.id,
-			liveItems,
-			title === "New session" ? undefined : title,
-			view.listedModelId.trim() || null,
-		);
-		if (view.turnStatus !== "running") {
-			await captureTurnTrace(session, previous, liveItems);
-		}
+	const persistTurn = sessionTurnStatusForPersist({
+		liveStatus: view.turnStatus,
+		liveConnection: view.connection.status,
+	});
+	const previous = sessionItemsFromUnknown(session.items);
+	const saved = await saveAgentSessionItems(
+		session.id,
+		liveItems,
+		title === "New session" ? undefined : title,
+		view.listedModelId.trim() || null,
+		persistTurn,
+	);
+	const turnStatus = saved?.turnStatus ?? persistTurn ?? session.turnStatus;
+	if (liveItems.length > 0 && turnStatus !== "running") {
+		await captureTurnTrace(session, previous, liveItems);
 	}
 	const siblings = await listAgentSessions(session.userId, session.projectId);
 	const preference = listedModelPreferenceFromSessions({
@@ -77,9 +84,18 @@ export async function persistBoundSessionView(
 		...view,
 		agentSessionId: session.id,
 		items: liveItems,
+		turnStatus,
 		listedModelId: preference.listedModelId,
 		blockedListedModelIds: preference.blockedListedModelIds,
 	};
+}
+
+export async function persistSessionTurnStatus(
+	session: AgentSessionRecord | null,
+	turnStatus: SessionTurnStatus,
+): Promise<void> {
+	if (!session) return;
+	await saveAgentSessionTurnStatus(session.id, turnStatus);
 }
 
 async function captureTurnTrace(
