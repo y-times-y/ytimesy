@@ -1,10 +1,12 @@
 import {
+	briefingUpdateFromTurn,
 	nextProjectBriefing,
 	traceSummaryFromTurn,
 } from "#/domain/project-context";
 import {
 	lastAgentMessageText,
 	lastUserMessageText,
+	reasoningSummariesFromTurn,
 	type SessionItem,
 	sessionItemsFromUnknown,
 	sessionTitleFromItems,
@@ -56,9 +58,11 @@ async function captureTurnTrace(
 ) {
 	const reply = lastAgentMessageText(next);
 	if (!reply || reply === lastAgentMessageText(previous)) return;
+	const task = lastUserMessageText(next) ?? session.title;
 	const summary = traceSummaryFromTurn({
-		task: lastUserMessageText(next) ?? session.title,
+		task,
 		reply,
+		reasoning: reasoningSummariesFromTurn(next),
 	});
 	if (!summary) return;
 	await insertProjectTrace({
@@ -68,7 +72,10 @@ async function captureTurnTrace(
 		summary,
 	});
 	const briefing = await loadProjectBriefing(session.projectId);
-	const updated = nextProjectBriefing({ briefing, summary });
+	const fact = briefingUpdateFromTurn({ task, reply });
+	const updated = fact
+		? nextProjectBriefing({ briefing, summary: fact })
+		: briefing;
 	if (updated !== briefing)
 		await saveProjectBriefing(session.projectId, updated);
 }

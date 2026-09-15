@@ -171,6 +171,31 @@ export function lastAgentMessageText(
 	return null;
 }
 
+export function reasoningSummariesFromTurn(
+	items: readonly SessionItem[],
+): string[] {
+	let start = 0;
+	for (let index = 0; index < items.length; index += 1) {
+		const item = items[index];
+		if (
+			item?.kind === "userMessage" &&
+			item.text.trim() &&
+			!isWorkspacePreamble(item.text)
+		) {
+			start = index + 1;
+		}
+	}
+	const summaries: string[] = [];
+	for (const item of items.slice(start)) {
+		if (item.kind !== "reasoning") continue;
+		for (const summary of item.summaries) {
+			const trimmed = summary.trim();
+			if (trimmed) summaries.push(trimmed);
+		}
+	}
+	return summaries;
+}
+
 export function sessionItemsFromUnknown(value: unknown): SessionItem[] {
 	return Array.isArray(value) ? (value as SessionItem[]) : [];
 }

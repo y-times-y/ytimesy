@@ -48,7 +48,7 @@ export function relatedTracesForTask(
 		.map((row) => row.trace);
 }
 
-export function traceSummaryFromTurn(input: {
+export function briefingUpdateFromTurn(input: {
 	readonly task: string;
 	readonly reply: string;
 }): string | null {
@@ -57,6 +57,25 @@ export function traceSummaryFromTurn(input: {
 	if (!task && !reply) return null;
 	const summary = reply ? `${task || "Task"}: ${reply}` : task;
 	return summary.length > 400 ? `${summary.slice(0, 399)}…` : summary;
+}
+
+export function traceSummaryFromTurn(input: {
+	readonly task: string;
+	readonly reply: string;
+	readonly reasoning?: readonly string[];
+}): string | null {
+	const fact = briefingUpdateFromTurn({
+		task: input.task,
+		reply: input.reply,
+	});
+	if (!fact) return null;
+	const how = (input.reasoning ?? [])
+		.map((summary) => summary.trim().replace(/\s+/g, " "))
+		.filter(Boolean)
+		.join(" ");
+	if (!how) return fact;
+	const combined = `${fact}\nHow: ${how}`;
+	return combined.length > 800 ? `${combined.slice(0, 799)}…` : combined;
 }
 
 export function nextProjectBriefing(input: {
