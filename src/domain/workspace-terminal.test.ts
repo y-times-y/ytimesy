@@ -4,6 +4,8 @@ import {
 	isWorkspacePtySlug,
 	parseTerminalClientMessage,
 	terminalConnectBlockedReason,
+	terminalInspectorPrompt,
+	terminalInspectorShouldAttach,
 	terminalSessionBlockedReason,
 	WORKSPACE_PTY_SLUG,
 	workspacePtyCommand,
@@ -51,6 +53,43 @@ describe("workspace terminal", () => {
 	it("does not open a terminal on the unused template", () => {
 		expect(terminalSessionBlockedReason("vm-agent")).toBeNull();
 		expect(terminalSessionBlockedReason(null)).toMatch(/Connect an agent/);
+	});
+
+	it("waits for an explicit connect before attaching the PTY", () => {
+		expect(
+			terminalInspectorShouldAttach({
+				tabActive: true,
+				projectId: "project-1",
+				sessionId: "session-1",
+				connectRequested: false,
+			}),
+		).toBe(false);
+		expect(
+			terminalInspectorShouldAttach({
+				tabActive: true,
+				projectId: "project-1",
+				sessionId: "session-1",
+				connectRequested: true,
+			}),
+		).toBe(true);
+		expect(
+			terminalInspectorShouldAttach({
+				tabActive: true,
+				projectId: "project-1",
+				connectRequested: true,
+			}),
+		).toBe(false);
+		expect(
+			terminalInspectorPrompt({ projectId: "project-1" }).actionLabel,
+		).toBe(null);
+		expect(
+			terminalInspectorPrompt({
+				projectId: "project-1",
+				sessionId: "session-1",
+			}),
+		).toMatchObject({
+			actionLabel: "Connect terminal",
+		});
 	});
 
 	it("starts the shell in the cloned repository directory", () => {

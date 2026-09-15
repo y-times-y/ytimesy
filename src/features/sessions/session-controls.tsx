@@ -25,6 +25,7 @@ import {
 	harnessRequiresAccountLogin,
 	selectedHarnessIsConnected,
 } from "#/domain/harness-access";
+import { listedModelDisplayName } from "#/domain/listed-model";
 import { HarnessPicker } from "./harness-picker";
 import { resolveReasoningLevel, type SessionModel } from "./model-capabilities";
 import { ReasoningOption } from "./reasoning-option";
@@ -42,6 +43,7 @@ interface SessionControlsProps {
 	modelId: string;
 	onModelIdChange: (id: string) => void;
 	onAttachFiles: (files: File[]) => void;
+	listedModelId?: string;
 }
 
 export function SessionControls({
@@ -57,6 +59,7 @@ export function SessionControls({
 	modelId,
 	onModelIdChange,
 	onAttachFiles,
+	listedModelId = "",
 }: SessionControlsProps) {
 	const fileInput = useRef<HTMLInputElement>(null);
 	const [reasoningId, setReasoningId] = useState("");
@@ -68,6 +71,9 @@ export function SessionControls({
 	const startPrompt = harnessRequiresAccountLogin(harnessId)
 		? `Sign in to ${harnessName}`
 		: `Connect ${harnessName}`;
+	const persistedModelId = (model?.id || modelId || listedModelId).trim();
+	const persistedLabel =
+		model?.label || listedModelDisplayName(persistedModelId);
 
 	return (
 		<div className="session-controls">
@@ -106,7 +112,7 @@ export function SessionControls({
 				snapshotAvailable={snapshotAvailable}
 			/>
 			<Select
-				value={model?.id ?? ""}
+				value={persistedModelId || undefined}
 				onValueChange={(id) => {
 					onModelIdChange(id);
 					setReasoningId("");
@@ -118,11 +124,21 @@ export function SessionControls({
 					id="session-model-select"
 					className="composer-select model-select"
 					aria-label="Model"
-					title={harnessReady ? undefined : `${startPrompt} to load its models`}
+					title={
+						harnessReady
+							? undefined
+							: persistedLabel
+								? `${startPrompt} to change models`
+								: `${startPrompt} to load its models`
+					}
 				>
-					<SelectValue
-						placeholder={harnessReady ? "Select model" : startPrompt}
-					/>
+					{harnessReady ? (
+						<SelectValue placeholder={startPrompt} />
+					) : (
+						<span data-slot="select-value">
+							{persistedLabel || startPrompt}
+						</span>
+					)}
 				</SelectTrigger>
 				<SelectContent
 					position="popper"
@@ -130,11 +146,13 @@ export function SessionControls({
 					align="start"
 					sideOffset={8}
 				>
-					{models.length === 0 ? (
+					{models.length === 0 && persistedModelId ? (
+						<SelectItem value={persistedModelId} disabled>
+							{persistedLabel}
+						</SelectItem>
+					) : models.length === 0 ? (
 						<SelectItem value="unconnected" disabled>
-							{harnessReady
-								? `${harnessName} has not listed models yet`
-								: `${startPrompt} to load its models`}
+							{startPrompt} to load its models
 						</SelectItem>
 					) : (
 						models.map((availableModel) => (

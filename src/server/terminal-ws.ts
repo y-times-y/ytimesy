@@ -1,6 +1,7 @@
 import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer } from "ws";
+import { publicFailureMessage } from "#/domain/project-workspace";
 import {
 	clampPtySize,
 	parseTerminalClientMessage,
@@ -71,10 +72,7 @@ async function handleTerminalSocket(
 				if (socket.readyState === WebSocket.OPEN) socket.send(data);
 			},
 			onError: (cause) => {
-				sendTerminalError(
-					socket,
-					cause instanceof Error ? cause.message : String(cause),
-				);
+				sendTerminalError(socket, publicFailureMessage(cause));
 			},
 		});
 		socket.on("message", (raw, isBinary) => {
@@ -104,10 +102,8 @@ async function handleTerminalSocket(
 				? cause.status === 401
 					? "Sign in required."
 					: await cause.text()
-				: cause instanceof Error
-					? cause.message
-					: "Terminal failed to connect.";
-		sendTerminalError(socket, message);
+				: publicFailureMessage(cause);
+		sendTerminalError(socket, message || "Terminal failed to connect.");
 		socket.close();
 	}
 }

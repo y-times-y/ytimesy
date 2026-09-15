@@ -61,6 +61,46 @@ export function terminalSessionBlockedReason(
 	return "Connect an agent before opening the terminal.";
 }
 
+export function terminalInspectorShouldAttach(input: {
+	readonly tabActive: boolean;
+	readonly projectId?: string;
+	readonly sessionId?: string;
+	readonly connectRequested: boolean;
+}) {
+	return Boolean(
+		input.tabActive &&
+			input.projectId &&
+			input.sessionId &&
+			input.connectRequested,
+	);
+}
+
+export function terminalInspectorPrompt(input: {
+	readonly projectId?: string;
+	readonly sessionId?: string;
+}) {
+	if (!input.projectId) {
+		return {
+			title: "No terminal connected.",
+			description: "Select a project to use the terminal.",
+			actionLabel: null,
+		};
+	}
+	if (!input.sessionId) {
+		return {
+			title: "No terminal connected.",
+			description: "Connect an agent before opening the terminal.",
+			actionLabel: null,
+		};
+	}
+	return {
+		title: "No terminal connected.",
+		description:
+			"Connect to this chat's workspace to use the terminal. A paused VM will start.",
+		actionLabel: "Connect terminal",
+	};
+}
+
 export function workspacePtyCommand(directory: string) {
 	return `cd ${shellSingleQuote(directory)} && exec bash -l`;
 }

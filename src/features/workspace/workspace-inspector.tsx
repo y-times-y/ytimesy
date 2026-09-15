@@ -134,6 +134,7 @@ export function WorkspaceInspector({
 				/>
 			) : activeView === "terminal" ? (
 				<TerminalInspector
+					key={`${projectId ?? ""}:${sessionId ?? ""}`}
 					projectId={projectId}
 					sessionId={sessionId}
 					active={!collapsed && activeView === "terminal"}
