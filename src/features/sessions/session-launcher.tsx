@@ -49,6 +49,7 @@ export function SessionLauncher({
 	onStop,
 	onOpenSideChat,
 	onOpenInspector,
+	onComposerModelIdChange,
 	projects,
 	selectedProject,
 	onSelectProject,
@@ -64,6 +65,7 @@ export function SessionLauncher({
 	onStop: () => void;
 	onOpenSideChat: (question?: string) => void;
 	onOpenInspector: (view: InspectorView) => void;
+	onComposerModelIdChange?: (modelId: string) => void;
 	projects: Project[];
 	selectedProject?: Project;
 	onSelectProject: (id: string) => void;
@@ -82,7 +84,7 @@ export function SessionLauncher({
 	const models = harnessReady ? sessionModelsFromListed(session.models) : [];
 	const [attachments, setAttachments] = useState<File[]>([]);
 	const [draft, setDraft] = useState("");
-	const [modelId, setModelId] = useState(preferredSessionModelId(models));
+	const [modelId, setModelId] = useState(session.listedModelId);
 	const selectedModel = models.find((model) => model.id === modelId);
 	const [optimisticItems, setOptimisticItems] = useState<SessionItem[]>([]);
 	const [slashIndex, setSlashIndex] = useState(0);
@@ -127,17 +129,23 @@ export function SessionLauncher({
 	}, [draft]);
 
 	useEffect(() => {
-		if (!harnessReady) {
-			setModelId("");
-			return;
-		}
+		onComposerModelIdChange?.(modelId);
+	}, [modelId, onComposerModelIdChange]);
+
+	useEffect(() => {
 		const listed = sessionModelsFromListed(session.models);
-		setModelId((current) =>
-			listed.some((model) => model.id === current)
-				? current
-				: preferredSessionModelId(listed),
-		);
-	}, [harnessReady, session.models]);
+		setModelId((current) => {
+			if (current && listed.some((model) => model.id === current))
+				return current;
+			if (current && listed.length === 0) {
+				return current || session.listedModelId;
+			}
+			return preferredSessionModelId(listed, {
+				lastUsedId: current || session.listedModelId,
+				excludedIds: session.blockedListedModelIds,
+			});
+		});
+	}, [session.blockedListedModelIds, session.listedModelId, session.models]);
 
 	useEffect(() => {
 		setOptimisticItems((current) =>

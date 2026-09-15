@@ -33,6 +33,7 @@ beforeAll(async () => {
 		"20260915053000_agent_sessions_and_snapshots.sql",
 		"20260915060000_agent_session_parent.sql",
 		"20260915083000_product_setting.sql",
+		"20260915103000_agent_session_listed_model.sql",
 	])
 		await db.exec(await readFile(`supabase/migrations/${file}`, "utf8"));
 	await db.exec(
@@ -148,4 +149,22 @@ it("does not let another user delete a session", async () => {
 		session.id,
 	]);
 	expect(remaining.rows).toEqual([{ id: session.id }]);
+});
+
+it("stores the listed model last submitted on an agent session", async () => {
+	const { project, workspaceId } = await readyWorkspace();
+	const session = await insertAgentSession({
+		userId: "alice",
+		projectId: project.id,
+		workspaceId,
+		harness: "opencode",
+		providerRef: "vm-agent",
+		listedModelId: "opencode/big-pickle",
+	});
+	expect(session.listedModelId).toBe("opencode/big-pickle");
+	const stored = await db.query<{ listed_model_id: string | null }>(
+		"select listed_model_id from agent_session where id=$1",
+		[session.id],
+	);
+	expect(stored.rows[0]?.listed_model_id).toBe("opencode/big-pickle");
 });
