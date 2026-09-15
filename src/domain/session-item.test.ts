@@ -173,6 +173,20 @@ describe("session items", () => {
 			},
 		];
 		expect(lastUserMessageText(items)).toBe("second");
+		expect(
+			lastUserMessageText([
+				{
+					kind: "userMessage",
+					id: SessionItemId("user-1"),
+					text: "What is this repository?",
+				},
+				{
+					kind: "userMessage",
+					id: SessionItemId("preamble"),
+					text: "You are in a ytimesy workspace VM. The project checkout is /home/ubuntu; work there.\n\nWhat is this repository?",
+				},
+			]),
+		).toBe("What is this repository?");
 	});
 
 	it("uses the first line of the latest user message as the session title", () => {
