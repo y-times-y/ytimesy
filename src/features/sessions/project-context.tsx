@@ -220,7 +220,14 @@ function PublicationAction({
 				type="submit"
 				disabled={publish.isPending || (open && !title.trim())}
 			>
-				{publish.isPending ? "Creating…" : "Create pull request"}
+				{publish.isPending ? (
+					"Creating…"
+				) : (
+					<>
+						<span className="publication-label-full">Create pull request</span>
+						<span className="publication-label-short">PR</span>
+					</>
+				)}
 			</button>
 			{publish.data && (
 				<a href={publish.data.url} target="_blank" rel="noreferrer">

@@ -1149,6 +1149,12 @@ button:enabled:active {
 		height: 44px;
 		font-size: 16px;
 	}
+	.publication-label-full {
+		display: none;
+	}
+	.publication-label-short {
+		display: inline;
+	}
 }
 @media (pointer: coarse) and (min-width: 601px) {
 	.panel-toggle,
@@ -1457,6 +1463,9 @@ button:enabled:active {
 .publication-action button:hover {
 	color: #f2f2f2;
 	background: rgba(255, 255, 255, 0.04);
+}
+.publication-label-short {
+	display: none;
 }
 .publication-action p,
 .publication-action a,

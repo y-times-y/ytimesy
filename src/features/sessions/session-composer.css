@@ -927,6 +927,7 @@ details[open] > summary .session-activity-chevron {
 		gap: 8px;
 		margin-inline: 0;
 		padding: 8px 10px 0;
+		flex-wrap: nowrap;
 	}
 	.context-select {
 		gap: 5px;
@@ -1153,5 +1154,9 @@ details[open] > summary .session-activity-chevron {
 	.session-launcher[data-layout="chat"] .fast-control,
 	.session-launcher[data-layout="chat"] .reasoning-select {
 		display: none;
+	}
+	.session-launcher[data-layout="chat"] .session-context {
+		flex-wrap: nowrap;
+		min-width: 0;
 	}
 }
