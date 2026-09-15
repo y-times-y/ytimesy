@@ -559,11 +559,12 @@ export function WorkspaceHome({
 		const modelId =
 			composerModelId || session.listedModelId || sessionModelId(session);
 		const chatId = activeSessionId;
+		const epoch = sessionEpoch.current;
 		setBusyChatIds((ids) => withBusyChat(ids, chatId));
 		void sendTask({
 			data: { ...sessionScope(), text, modelId, lane: "side" as const },
 		})
-			.then(setSession)
+			.then((next) => applySessionView(epoch, next))
 			.finally(() => {
 				setBusyChatIds((ids) => withoutBusyChat(ids, chatId));
 				void chats.refetch();
@@ -734,11 +735,12 @@ export function WorkspaceHome({
 									setHarnessId(id);
 									if (id !== "opencode") return;
 									const chatId = activeSessionId;
+									const epoch = sessionEpoch.current;
 									setBusyChatIds((ids) => withBusyChat(ids, chatId));
 									void connect({
 										data: { ...sessionScope(), harnessId: id },
 									})
-										.then(setSession)
+										.then((next) => applySessionView(epoch, next))
 										.finally(() =>
 											setBusyChatIds((ids) => withoutBusyChat(ids, chatId)),
 										);
@@ -748,17 +750,19 @@ export function WorkspaceHome({
 								onConnect={() => {
 									autoResumeStarted.current = true;
 									const chatId = activeSessionId;
+									const epoch = sessionEpoch.current;
 									setBusyChatIds((ids) => withBusyChat(ids, chatId));
 									void connect({
 										data: sessionScope(),
 									})
-										.then(setSession)
+										.then((next) => applySessionView(epoch, next))
 										.finally(() =>
 											setBusyChatIds((ids) => withoutBusyChat(ids, chatId)),
 										);
 								}}
 								onSaveApiKey={(id, apiKey) => {
 									const chatId = activeSessionId;
+									const epoch = sessionEpoch.current;
 									setBusyChatIds((ids) => withBusyChat(ids, chatId));
 									void saveKey({ data: { harnessId: id, apiKey } })
 										.then((status) => {
@@ -773,7 +777,7 @@ export function WorkspaceHome({
 											if (id === harnessId) {
 												return connect({
 													data: { ...sessionScope(), harnessId: id },
-												}).then(setSession);
+												}).then((next) => applySessionView(epoch, next));
 											}
 										})
 										.finally(() =>
@@ -834,11 +838,12 @@ export function WorkspaceHome({
 								}}
 								onStop={() => {
 									const chatId = activeSessionId;
+									const epoch = sessionEpoch.current;
 									setBusyChatIds((ids) => withBusyChat(ids, chatId));
 									void stopTurn({
 										data: sessionScope(),
 									})
-										.then(setSession)
+										.then((next) => applySessionView(epoch, next))
 										.finally(() => {
 											setBusyChatIds((ids) => withoutBusyChat(ids, chatId));
 											void chats.refetch();
