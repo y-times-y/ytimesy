@@ -32,6 +32,16 @@ export function newChatIsActive(input: {
 	return input.projectSelected && !input.hasUserMessage;
 }
 
+export const SIDEBAR_PINNED_STORAGE_KEY = "ytimesy-sidebar-pinned";
+
+export function sidebarIsPinnedInStorage(value: string | null): boolean {
+	return value === "1";
+}
+
+export function sidebarPinnedStorageValue(pinned: boolean): "1" | "0" {
+	return pinned ? "1" : "0";
+}
+
 export function selectedChatIdAfterDelete(input: {
 	readonly chats: readonly { readonly id: string }[];
 	readonly selectedChatId: string | undefined;

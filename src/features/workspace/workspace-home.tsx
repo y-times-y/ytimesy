@@ -39,8 +39,11 @@ import {
 	composerBusyForOpenChat,
 	listedChatModelId,
 	listedChatTurnStatus,
+	SIDEBAR_PINNED_STORAGE_KEY,
 	selectedChatIdAfterDelete,
 	sidebarChatIsRunning,
+	sidebarIsPinnedInStorage,
+	sidebarPinnedStorageValue,
 	withBusyChat,
 	withChatTurnStatus,
 	withoutBusyChat,
@@ -112,6 +115,7 @@ export function WorkspaceHome({
 	const startSession = useServerFn(startProjectAgentSession);
 	const deleteSession = useServerFn(deleteProjectAgentSession);
 	const [projectsOpen, setProjectsOpen] = useState(false);
+	const [sidebarPinReady, setSidebarPinReady] = useState(false);
 	const [inspectorOpen, setInspectorOpen] = useState(false);
 	const [toolsView, setToolsView] = useState<ToolsView>("diff");
 	const [inspectorView, setInspectorView] = useState<InspectorView>("diff");
@@ -191,8 +195,31 @@ export function WorkspaceHome({
 	}
 
 	useEffect(() => {
-		if (compact) setProjectsOpen(false);
+		const mobile =
+			compact ||
+			window.matchMedia(
+				"(max-width: 600px), (max-width: 900px) and (max-height: 500px)",
+			).matches;
+		if (mobile) {
+			setProjectsOpen(false);
+			setSidebarPinReady(true);
+			return;
+		}
+		setProjectsOpen(
+			sidebarIsPinnedInStorage(
+				window.localStorage.getItem(SIDEBAR_PINNED_STORAGE_KEY),
+			),
+		);
+		setSidebarPinReady(true);
 	}, [compact]);
+
+	useEffect(() => {
+		if (!sidebarPinReady || compact) return;
+		window.localStorage.setItem(
+			SIDEBAR_PINNED_STORAGE_KEY,
+			sidebarPinnedStorageValue(projectsOpen),
+		);
+	}, [compact, projectsOpen, sidebarPinReady]);
 
 	useEffect(() => {
 		void loadKeys().then((status) => {
