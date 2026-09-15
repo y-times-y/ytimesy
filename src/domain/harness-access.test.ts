@@ -6,6 +6,7 @@ import {
 } from "./agent-provider";
 import {
 	canResumeDisconnectedFollowUp,
+	composerSendIsEnabled,
 	harnessAccess,
 	harnessRequiresAccountLogin,
 	offeredHarnessAccess,
@@ -205,6 +206,69 @@ describe("harness access", () => {
 				turnStatus: "idle",
 			}),
 		).toBe(false);
+	});
+
+	it("enables Send on a disconnected OpenCode follow-up before Connect", () => {
+		expect(
+			composerSendIsEnabled({
+				harnessId: "opencode",
+				connection: { status: "disconnected" },
+				turnStatus: "idle",
+				canSend: false,
+				busy: false,
+				draft: "Add a follow up",
+				modelId: "",
+				slashDraft: false,
+			}),
+		).toBe(true);
+		expect(
+			composerSendIsEnabled({
+				harnessId: "claude",
+				connection: { status: "disconnected" },
+				turnStatus: "idle",
+				canSend: false,
+				busy: false,
+				draft: "Add a follow up",
+				modelId: "",
+				slashDraft: false,
+			}),
+		).toBe(false);
+		expect(
+			composerSendIsEnabled({
+				harnessId: "opencode",
+				connection: {
+					status: "authenticated",
+					provider: "opencode",
+					authMode: "local",
+					planType: null,
+					email: null,
+				},
+				turnStatus: "idle",
+				canSend: true,
+				busy: false,
+				draft: "Add a follow up",
+				modelId: "",
+				slashDraft: false,
+			}),
+		).toBe(false);
+		expect(
+			composerSendIsEnabled({
+				harnessId: "opencode",
+				connection: {
+					status: "authenticated",
+					provider: "opencode",
+					authMode: "local",
+					planType: null,
+					email: null,
+				},
+				turnStatus: "idle",
+				canSend: true,
+				busy: false,
+				draft: "Add a follow up",
+				modelId: "opencode/muse-spark-1.3-contributor-free",
+				slashDraft: false,
+			}),
+		).toBe(true);
 	});
 
 	it("keeps Anthropic's URL on the authorizing Claude row", () => {

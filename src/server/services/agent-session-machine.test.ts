@@ -7,12 +7,15 @@ function machines(overrides: {
 	snapshot?: string;
 	copied?: string;
 	failProvision?: boolean;
+	failFirstProvision?: boolean;
+	failMessage?: string;
 	execExitCode?: number;
 }) {
 	const provisioned: Array<{ slug: string; snapshotId: string }> = [];
 	const snapshots: string[] = [];
 	const commands: string[] = [];
 	const writes: Array<{ path: string; contents: string }> = [];
+	let provisionAttempts = 0;
 	return {
 		provisioned,
 		snapshots,
@@ -24,7 +27,13 @@ function machines(overrides: {
 				return overrides.snapshot ?? "snap-late";
 			},
 			provisionSession: async (slug: string, snapshotId: string) => {
-				if (overrides.failProvision) throw new Error("provision must not run");
+				provisionAttempts += 1;
+				if (overrides.failProvision) {
+					throw new Error(overrides.failMessage ?? "provision must not run");
+				}
+				if (overrides.failFirstProvision && provisionAttempts === 1) {
+					throw new Error(overrides.failMessage ?? "Snapshot not found");
+				}
 				provisioned.push({ slug, snapshotId });
 				return WorkspaceId(overrides.copied ?? "agent-vm");
 			},
@@ -192,5 +201,64 @@ describe("executeSessionMachinePlan", () => {
 			planKind: "copy-snapshot",
 		});
 		expect(runtime.provisioned[0]?.snapshotId).toBe("snap-late");
+	});
+
+	it("reseals the template when the stored snapshot is gone, then copies", async () => {
+		const runtime = machines({
+			failFirstProvision: true,
+			failMessage: "Snapshot sh-old not found",
+			snapshot: "snap-resealed",
+			copied: "agent-recovered",
+		});
+		const snapshots: string[] = [];
+		const result = await executeSessionMachinePlan({
+			machines: runtime.api,
+			sessionId: "11111111-2222-3333-4444-555555555555",
+			sessionProviderRef: null,
+			workspaceId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+			templateSnapshotId: "sh-old",
+			templateProviderRef: "repo-vm",
+			templateAlreadyBound: true,
+			saveTemplateSnapshot: async (snapshotId) => {
+				snapshots.push(snapshotId);
+			},
+			saveSessionProviderRef: async () => undefined,
+		});
+		expect(snapshots).toEqual(["snap-resealed"]);
+		expect(runtime.provisioned).toEqual([
+			{
+				slug: "ytimesy-ag-1111111122223333",
+				snapshotId: "snap-resealed",
+			},
+		]);
+		expect(result).toEqual({
+			providerRef: "agent-recovered",
+			planKind: "copy-snapshot",
+		});
+	});
+
+	it("does not reseal the template when Freestyle is at the VM cap", async () => {
+		const runtime = machines({
+			failProvision: true,
+			failMessage: "LIMIT_EXCEEDED: limit of 5 VMs",
+		});
+		const snapshots: string[] = [];
+		await expect(
+			executeSessionMachinePlan({
+				machines: runtime.api,
+				sessionId: "11111111-2222-3333-4444-555555555555",
+				sessionProviderRef: null,
+				workspaceId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+				templateSnapshotId: "snap-1",
+				templateProviderRef: "repo-vm",
+				templateAlreadyBound: true,
+				saveTemplateSnapshot: async (snapshotId) => {
+					snapshots.push(snapshotId);
+				},
+				saveSessionProviderRef: async () => undefined,
+			}),
+		).rejects.toThrow(/LIMIT_EXCEEDED/);
+		expect(snapshots).toEqual([]);
+		expect(runtime.provisioned).toEqual([]);
 	});
 });

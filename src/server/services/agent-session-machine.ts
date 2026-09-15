@@ -7,7 +7,9 @@ import {
 	type SessionMachinePlan,
 	sessionMachinePlan,
 	sessionMachineRefsToDestroy,
+	shouldResealProjectSnapshotAfterCopyFailure,
 } from "#/domain/agent-session";
+import { failureMessage } from "#/domain/failure-message";
 import { WorkspaceId } from "#/domain/ids";
 import {
 	PROJECT_CONTEXT_PATH,
@@ -202,13 +204,40 @@ export async function executeSessionMachinePlan(input: {
 	if (plan.kind !== "copy-snapshot") {
 		throw new Error("Could not copy the project snapshot.");
 	}
-	const copied = await input.machines.provisionSession(
-		agentSessionMachineSlug(input.sessionId),
-		plan.snapshotId,
-	);
+	const copied = await copyAgentSessionFromTemplate(input, plan.snapshotId);
 	await input.saveSessionProviderRef(copied);
 	await resetCopiedSessionScratch(input.machines, copied);
 	return { providerRef: copied, planKind: plan.kind };
+}
+
+async function copyAgentSessionFromTemplate(
+	input: {
+		readonly machines: Pick<
+			WorkspaceMachines,
+			"snapshotEnvironment" | "provisionSession" | "ensureRunning"
+		>;
+		readonly sessionId: string;
+		readonly workspaceId: string;
+		readonly templateProviderRef: string;
+		readonly saveTemplateSnapshot: (snapshotId: string) => Promise<void>;
+	},
+	snapshotId: string,
+) {
+	const slug = agentSessionMachineSlug(input.sessionId);
+	try {
+		return await input.machines.provisionSession(slug, snapshotId);
+	} catch (cause) {
+		if (!shouldResealProjectSnapshotAfterCopyFailure(failureMessage(cause))) {
+			throw cause;
+		}
+		await input.machines.ensureRunning(WorkspaceId(input.templateProviderRef));
+		const nextSnapshotId = await input.machines.snapshotEnvironment(
+			WorkspaceId(input.templateProviderRef),
+			projectEnvironmentSnapshotSlug(input.workspaceId),
+		);
+		await input.saveTemplateSnapshot(nextSnapshotId);
+		return await input.machines.provisionSession(slug, nextSnapshotId);
+	}
 }
 
 /**

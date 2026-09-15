@@ -7,6 +7,7 @@ import {
 	projectEnvironmentSnapshotSlug,
 	sessionMachinePlan,
 	sessionMachineRefsToDestroy,
+	shouldResealProjectSnapshotAfterCopyFailure,
 } from "./agent-session";
 
 describe("sessionMachinePlan", () => {
@@ -66,6 +67,24 @@ describe("sessionMachinePlan", () => {
 			kind: "blocked",
 			reason: "Prepare a project environment before starting an agent.",
 		});
+	});
+});
+
+describe("shouldResealProjectSnapshotAfterCopyFailure", () => {
+	it("reseals when Freestyle dropped the snapshot, not when the VM cap is full", () => {
+		expect(
+			shouldResealProjectSnapshotAfterCopyFailure("Snapshot sh-old not found"),
+		).toBe(true);
+		expect(
+			shouldResealProjectSnapshotAfterCopyFailure(
+				"snapshot expired after auto-delete",
+			),
+		).toBe(true);
+		expect(
+			shouldResealProjectSnapshotAfterCopyFailure(
+				"LIMIT_EXCEEDED: limit of 5 VMs",
+			),
+		).toBe(false);
 	});
 });
 
