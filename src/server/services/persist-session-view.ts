@@ -8,6 +8,7 @@ import {
 	type SessionItem,
 	sessionItemsFromUnknown,
 	sessionTitleFromItems,
+	sessionViewItems,
 } from "#/domain/session-item";
 import {
 	type AgentSessionRecord,
@@ -25,9 +26,10 @@ export async function persistBoundSessionView(
 	view: PublicCodexSession,
 ): Promise<PublicCodexSession> {
 	if (!session) return { ...view, agentSessionId: null };
-	const liveItems = view.items.length
-		? view.items
-		: sessionItemsFromUnknown(session.items);
+	const liveItems = sessionViewItems(
+		view.items,
+		sessionItemsFromUnknown(session.items),
+	);
 	const title = sessionTitleFromItems(liveItems);
 	if (liveItems.length > 0) {
 		const previous = sessionItemsFromUnknown(session.items);

@@ -72,8 +72,8 @@ export function emptyCodexSession(
 }
 
 /**
- * Reads Codex on this agent session's VM. Missing machines become a
- * disconnected session so the homepage can render.
+ * Reads Codex on this agent session. Paused VMs stay paused; the stored
+ * transcript is enough to render the chat until Connect wakes the machine.
  */
 export function readCodexWorkspaceSession(
 	machines: WorkspaceMachines,
@@ -100,9 +100,17 @@ export function readCodexWorkspaceSession(
 				),
 			);
 		}
-		yield* Effect.tryPromise(() =>
-			machines.ensureRunning(WorkspaceId(providerRef)),
+		const running = yield* Effect.tryPromise(() =>
+			machines.isRunning(WorkspaceId(providerRef)),
 		);
+		if (!running) {
+			return yield* Effect.tryPromise(() =>
+				persistBoundSessionView(
+					peeked.session,
+					emptyCodexSession(Boolean(snapshotId)),
+				),
+			);
+		}
 		const status = yield* readLoginStatus(machines, WorkspaceId(providerRef));
 		return yield* Effect.tryPromise(() =>
 			persistBoundSessionView(

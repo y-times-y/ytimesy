@@ -175,6 +175,17 @@ export function sessionItemsFromUnknown(value: unknown): SessionItem[] {
 	return Array.isArray(value) ? (value as SessionItem[]) : [];
 }
 
+export function sessionViewItems(
+	live: readonly SessionItem[],
+	recorded: readonly SessionItem[],
+): SessionItem[] {
+	if (sessionRecordHasConversation(live)) return [...live];
+	if (!sessionRecordHasConversation(recorded)) return [...live];
+	const tree = live.filter((item) => item.kind === "fileChange");
+	const withoutTree = recorded.filter((item) => item.kind !== "fileChange");
+	return tree.length === 0 ? [...recorded] : [...withoutTree, ...tree];
+}
+
 export function sessionUsesFollowUpLayout(input: {
 	readonly items: readonly SessionItem[];
 	readonly turnStatus: SessionTurnStatus;

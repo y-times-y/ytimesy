@@ -54,6 +54,10 @@ export function emptyHarnessSession(
 	return emptyCodexSession(snapshotAvailable);
 }
 
+/**
+ * Renders the stored agent transcript without starting a paused VM.
+ * Connect wakes the machine when the user actually resumes that chat.
+ */
 export function readHarnessWorkspaceSession(
 	machines: WorkspaceMachines,
 	scope: HarnessSessionScope,
@@ -239,6 +243,10 @@ export function stopHarnessWorkspaceTurn(
 	return readHarnessWorkspaceSession(machines, scope);
 }
 
+/**
+ * Send/connect start the session VM. Read returns the stored transcript
+ * when that VM is paused so switching chats does not wait on a boot.
+ */
 function withSessionMachine(
 	machines: WorkspaceMachines,
 	scope: HarnessSessionScope,
@@ -273,10 +281,27 @@ function withSessionMachine(
 				persistBoundSessionView(bound.session, emptyHarnessSession()),
 			);
 		}
-		yield* Effect.tryPromise(() =>
-			machines.ensureRunning(WorkspaceId(providerRef)),
+		if (provision) {
+			yield* Effect.tryPromise(() =>
+				machines.ensureRunning(WorkspaceId(providerRef)),
+			);
+			return yield* run(providerRef, bound.session);
+		}
+		const running = yield* Effect.tryPromise(() =>
+			machines.isRunning(WorkspaceId(providerRef)),
 		);
-		return yield* run(providerRef, bound.session);
+		if (!running) {
+			return yield* Effect.tryPromise(() =>
+				persistBoundSessionView(bound.session, emptyHarnessSession()),
+			);
+		}
+		return yield* run(providerRef, bound.session).pipe(
+			Effect.catchAll(() =>
+				Effect.tryPromise(() =>
+					persistBoundSessionView(bound.session, emptyHarnessSession()),
+				),
+			),
+		);
 	}).pipe(
 		Effect.catchAll((cause) =>
 			Effect.succeed({

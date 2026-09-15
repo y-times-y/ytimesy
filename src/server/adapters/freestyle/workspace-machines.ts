@@ -191,6 +191,15 @@ export function createFreestyleWorkspaceMachines(
 			}
 		},
 
+		async isRunning(workspaceId: WorkspaceId): Promise<boolean> {
+			try {
+				const data = await freestyle.vms.ref(workspaceId).data();
+				return data.state === "running";
+			} catch {
+				return false;
+			}
+		},
+
 		async destroy(workspaceId: WorkspaceId): Promise<void> {
 			try {
 				await freestyle.vms.ref(workspaceId).delete();
