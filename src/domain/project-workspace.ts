@@ -40,16 +40,20 @@ export function harnessConnectBlockedReason(
 		"status" | "providerRef" | "errorMessage"
 	> | null,
 	harnessName: string,
+	kind: "sign_in" | "connect" = "sign_in",
 ) {
+	const action =
+		kind === "connect"
+			? `connecting ${harnessName}`
+			: `signing in to ${harnessName}`;
 	if (workspaceSessionMachineRef(workspace)) return null;
-	if (!workspace)
-		return `Prepare a workspace before signing in to ${harnessName}.`;
+	if (!workspace) return `Prepare a workspace before ${action}.`;
 	if (workspace.status === "failed")
 		return (
 			workspace.errorMessage ??
-			`Workspace preparation failed. Retry, then sign in to ${harnessName}.`
+			`Workspace preparation failed. Retry, then finish ${action}.`
 		);
-	return `Wait for workspace preparation to finish before signing in to ${harnessName}.`;
+	return `Wait for workspace preparation to finish before ${action}.`;
 }
 
 export function codexConnectBlockedReason(

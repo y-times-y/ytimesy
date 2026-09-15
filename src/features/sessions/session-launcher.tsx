@@ -4,7 +4,10 @@ import {
 	type AgentProviderId,
 	agentProviderById,
 } from "#/domain/agent-provider";
-import { selectedHarnessIsConnected } from "#/domain/harness-access";
+import {
+	harnessRequiresAccountLogin,
+	selectedHarnessIsConnected,
+} from "#/domain/harness-access";
 import { SessionItemId } from "#/domain/ids";
 import {
 	lastUserMessageText,
@@ -337,7 +340,9 @@ export function SessionLauncher({
 											? session.canSend
 												? "Send task"
 												: "Wait for this harness to finish starting"
-											: `Sign in to ${agentProviderById(harnessId).name} to start a session`
+											: harnessRequiresAccountLogin(harnessId)
+												? `Sign in to ${agentProviderById(harnessId).name} to start a session`
+												: `Connect ${agentProviderById(harnessId).name} to start a session`
 									}
 									onClick={sendDraft}
 								>
