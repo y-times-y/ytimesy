@@ -4,6 +4,7 @@ import {
 	isWorkspacePtySlug,
 	parseTerminalClientMessage,
 	terminalConnectBlockedReason,
+	terminalSessionBlockedReason,
 	WORKSPACE_PTY_SLUG,
 	workspacePtyCommand,
 } from "./workspace-terminal";
@@ -45,6 +46,11 @@ describe("workspace terminal", () => {
 				providerRef: "vm-1",
 			}),
 		).toBeNull();
+	});
+
+	it("does not open a terminal on the unused template", () => {
+		expect(terminalSessionBlockedReason("vm-agent")).toBeNull();
+		expect(terminalSessionBlockedReason(null)).toMatch(/Connect an agent/);
 	});
 
 	it("starts the shell in the cloned repository directory", () => {

@@ -1,6 +1,10 @@
 import { Effect } from "effect";
 import type { PtySession } from "freestyle";
-import { terminalConnectBlockedReason } from "#/domain/workspace-terminal";
+import { copiedAgentMachineRef } from "#/domain/agent-session";
+import {
+	terminalConnectBlockedReason,
+	terminalSessionBlockedReason,
+} from "#/domain/workspace-terminal";
 import { readFreestyleApiKey } from "../adapters/freestyle/api-key";
 import { openWorkspacePty } from "../adapters/freestyle/workspace-pty";
 import { readyWorkspaceForOwner } from "../adapters/workspaces";
@@ -28,7 +32,16 @@ export async function connectWorkspaceTerminal(input: {
 		projectId: input.projectId,
 		sessionId: input.sessionId,
 	});
-	const providerRef = peeked.providerRef ?? workspace.providerRef;
+	const providerRef = copiedAgentMachineRef({
+		sessionProviderRef: peeked.providerRef,
+		templateProviderRef: workspace.providerRef,
+	});
+	const sessionBlocked = terminalSessionBlockedReason(providerRef);
+	if (sessionBlocked || !providerRef) {
+		throw new Error(
+			sessionBlocked ?? "Connect an agent before opening the terminal.",
+		);
+	}
 	const apiKey = await Effect.runPromise(
 		readFreestyleApiKey().pipe(
 			Effect.mapError(

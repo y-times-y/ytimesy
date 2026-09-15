@@ -41,6 +41,13 @@ export function publicationWorkspaceBlockedReason(
 	return "Wait for workspace preparation to finish before publishing.";
 }
 
+export function publicationSessionBlockedReason(
+	sessionProviderRef: string | null,
+) {
+	if (sessionProviderRef) return null;
+	return "Connect an agent before publishing.";
+}
+
 export function publicationCommitAuthor(user: {
 	readonly name?: string | null;
 	readonly email?: string | null;
