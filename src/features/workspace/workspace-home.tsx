@@ -16,6 +16,7 @@ import {
 	type AgentProviderId,
 	DEFAULT_COMPOSER_HARNESS_ID,
 } from "#/domain/agent-provider";
+import { shouldAutoResumeHarnessSession } from "#/domain/harness-access";
 import { hintForHarness } from "#/domain/harness-api-key";
 import {
 	inspectorSplitFromPointer,
@@ -229,16 +230,14 @@ export function WorkspaceHome({
 	useEffect(() => {
 		if (autoResumeStarted.current) return;
 		if (!activeProjectId) return;
-		if (harnessId === "claude") return;
-		const shouldConnect =
-			session.connection.status === "authenticated" ||
-			(harnessId === "codex" &&
-				session.snapshotAvailable &&
-				session.connection.status === "disconnected") ||
-			(harnessId === "opencode" &&
-				Boolean(activeSessionId) &&
-				session.connection.status === "disconnected");
-		if (!shouldConnect) return;
+		if (
+			!shouldAutoResumeHarnessSession({
+				harnessId,
+				connection: session.connection,
+			})
+		) {
+			return;
+		}
 		autoResumeStarted.current = true;
 		setBusy(true);
 		const epoch = sessionEpoch.current;
@@ -257,8 +256,7 @@ export function WorkspaceHome({
 		harnessId,
 		activeProjectId,
 		activeSessionId,
-		session.connection.status,
-		session.snapshotAvailable,
+		session.connection,
 	]);
 
 	useEffect(() => {
@@ -517,6 +515,11 @@ export function WorkspaceHome({
 						agentSessionId: id,
 						items: [],
 						turnStatus: "idle",
+						sideItems: [],
+						sideTurnStatus: "idle",
+						connection: { status: "disconnected" },
+						canSend: false,
+						canSendSide: false,
 					}));
 				}}
 				onNewChat={startNewChat}
