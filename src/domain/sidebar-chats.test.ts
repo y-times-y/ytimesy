@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	chatsListedInSidebar,
 	composerBusyForOpenChat,
+	listedChatModelId,
 	listedChatTurnStatus,
 	newChatIsActive,
 	selectedChatIdAfterDelete,
@@ -155,5 +156,18 @@ describe("parallel chat busy", () => {
 				"a",
 			),
 		).toBe("running");
+		expect(
+			listedChatModelId(
+				[
+					{
+						id: "a",
+						title: "fix login",
+						listedModelId: "opencode/big-pickle",
+					},
+					{ id: "b", title: "add snapshot copy" },
+				],
+				"a",
+			),
+		).toBe("opencode/big-pickle");
 	});
 });

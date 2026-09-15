@@ -84,8 +84,11 @@ export function preferredListedModelId(
 	const excluded = new Set(options?.excludedIds ?? []);
 	const listed = models.filter((model) => model.id && !excluded.has(model.id));
 	const lastUsed = options?.lastUsedId?.trim();
-	if (lastUsed && listed.some((model) => model.id === lastUsed))
-		return lastUsed;
+	if (lastUsed && !excluded.has(lastUsed)) {
+		if (listed.length === 0 || listed.some((model) => model.id === lastUsed)) {
+			return lastUsed;
+		}
+	}
 	return (
 		listed.find((model) => model.id === "gpt-5.3-codex-spark")?.id ??
 		listed.find(
@@ -111,6 +114,13 @@ export function submittedListedModelId(
 	options?: ListedModelPreference,
 ): string {
 	const trimmed = requested.trim();
-	if (trimmed && models.some((model) => model.id === trimmed)) return trimmed;
+	const excluded = new Set(options?.excludedIds ?? []);
+	if (
+		trimmed &&
+		!excluded.has(trimmed) &&
+		models.some((model) => model.id === trimmed)
+	) {
+		return trimmed;
+	}
 	return preferredListedModelId(models, options);
 }

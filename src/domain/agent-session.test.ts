@@ -128,8 +128,18 @@ describe("agent session names", () => {
 				{ id: "s2", title: "add snapshot copy" },
 			]),
 		).toEqual([
-			{ id: "s1", title: "fix login", turnStatus: "idle" },
-			{ id: "s2", title: "add snapshot copy", turnStatus: "idle" },
+			{
+				id: "s1",
+				title: "fix login",
+				turnStatus: "idle",
+				listedModelId: null,
+			},
+			{
+				id: "s2",
+				title: "add snapshot copy",
+				turnStatus: "idle",
+				listedModelId: null,
+			},
 		]);
 	});
 
@@ -138,7 +148,33 @@ describe("agent session names", () => {
 			chatsFromAgentSessions([
 				{ id: "s1", title: "fix login", turnStatus: "running" },
 			]),
-		).toEqual([{ id: "s1", title: "fix login", turnStatus: "running" }]);
+		).toEqual([
+			{
+				id: "s1",
+				title: "fix login",
+				turnStatus: "running",
+				listedModelId: null,
+			},
+		]);
+	});
+
+	it("keeps the last listed model on the sidebar row", () => {
+		expect(
+			chatsFromAgentSessions([
+				{
+					id: "s1",
+					title: "fix login",
+					listedModelId: "opencode/big-pickle",
+				},
+			]),
+		).toEqual([
+			{
+				id: "s1",
+				title: "fix login",
+				turnStatus: "idle",
+				listedModelId: "opencode/big-pickle",
+			},
+		]);
 	});
 
 	it("hides side-chat children from the sidebar", () => {
@@ -147,7 +183,14 @@ describe("agent session names", () => {
 				{ id: "s1", title: "fix login", parentSessionId: null },
 				{ id: "side", title: "Side chat", parentSessionId: "s1" },
 			]),
-		).toEqual([{ id: "s1", title: "fix login", turnStatus: "idle" }]);
+		).toEqual([
+			{
+				id: "s1",
+				title: "fix login",
+				turnStatus: "idle",
+				listedModelId: null,
+			},
+		]);
 	});
 });
 

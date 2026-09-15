@@ -23,6 +23,7 @@ export type PublicAgentChat = {
 	readonly id: string;
 	readonly title: string;
 	readonly turnStatus: SessionTurnStatus;
+	readonly listedModelId?: string | null;
 };
 
 function runWithMachines<A>(
@@ -77,6 +78,7 @@ export const startProjectAgentSession = createServerFn({ method: "POST" })
 				id: session.id,
 				title: session.title,
 				turnStatus: session.turnStatus,
+				listedModelId: session.listedModelId,
 			};
 		} catch (cause) {
 			throw new Error(publicFailureMessage(cause));

@@ -4,6 +4,7 @@ export type SidebarChat = {
 	readonly id: string;
 	readonly title: string;
 	readonly turnStatus?: SessionTurnStatus;
+	readonly listedModelId?: string | null;
 };
 
 export function chatsListedInSidebar(input: {
@@ -101,4 +102,11 @@ export function listedChatTurnStatus(
 	chatId: string,
 ): SessionTurnStatus {
 	return chats.find((chat) => chat.id === chatId)?.turnStatus ?? "idle";
+}
+
+export function listedChatModelId(
+	chats: readonly SidebarChat[],
+	chatId: string,
+): string {
+	return chats.find((chat) => chat.id === chatId)?.listedModelId?.trim() ?? "";
 }
