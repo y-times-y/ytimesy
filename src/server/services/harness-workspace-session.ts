@@ -28,6 +28,7 @@ import {
 	submitClaudeTask,
 } from "#/server/adapters/claude/login-session";
 import {
+	abortOpenCodeTurn,
 	connectOpenCode,
 	type OpenCodeAuthStatus,
 	refreshOpenCodeAuthStatus,
@@ -244,6 +245,17 @@ export function stopHarnessWorkspaceTurn(
 ): Effect.Effect<PublicHarnessSession> {
 	if (scope.harnessId === "codex") {
 		return stopCodexWorkspaceTurn(machines, scope);
+	}
+	if (scope.harnessId === "opencode") {
+		return withSessionMachine(machines, scope, true, (providerRef, session) =>
+			abortOpenCodeTurn(machines, WorkspaceId(providerRef)).pipe(
+				Effect.map((status) => viewFromOpenCode(status, providerRef)),
+				Effect.flatMap((view) =>
+					Effect.tryPromise(() => persistBoundSessionView(session, view)),
+				),
+				Effect.flatMap((view) => attachSiblingSideChat(machines, scope, view)),
+			),
+		);
 	}
 	return readHarnessWorkspaceSession(machines, scope);
 }

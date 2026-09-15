@@ -8,6 +8,8 @@ import {
 	assistantTextFromOpenCodeMessages,
 	assistantTextFromOpenCodeTurn,
 	errorMessageFromOpenCode,
+	openCodeAbortAccepted,
+	openCodeAbortFailureMessage,
 	openCodeSessionIsBusy,
 	openCodeTurnFailureMessage,
 	openCodeTurnPollDecision,
@@ -522,6 +524,58 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function readString(value: unknown): string | undefined {
 	return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+export function abortedOpenCodeTurn(
+	current: Extract<OpenCodeAuthStatus, { stage: "authenticated" }>,
+): Extract<OpenCodeAuthStatus, { stage: "authenticated" }> {
+	return {
+		...current,
+		turnStatus: "idle",
+		seenBusy: false,
+		turnStartedAt: null,
+		lastBusyAt: null,
+	};
+}
+
+/**
+ * Stops a running OpenCode turn through official `POST /session/:id/abort`.
+ * Abort is not a provider failure: the composer goes idle unless the abort
+ * request itself fails.
+ */
+export function abortOpenCodeTurn(
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+): Effect.Effect<OpenCodeAuthStatus> {
+	return Effect.gen(function* () {
+		const current = yield* readOpenCodeAuthStatus(machines, workspaceId);
+		if (current.stage !== "authenticated") return current;
+		if (current.turnStatus !== "running") return current;
+		if (current.serveSessionId) {
+			const response = yield* curlHttp(
+				machines,
+				workspaceId,
+				"POST",
+				`/session/${current.serveSessionId}/abort`,
+				"",
+				20_000,
+			);
+			if (!openCodeAbortAccepted(response)) {
+				return yield* failOpenCodeTurn(
+					machines,
+					workspaceId,
+					current,
+					openCodeAbortFailureMessage({
+						payload: response.body ?? response.raw,
+						httpStatus: response.status,
+					}),
+				);
+			}
+		}
+		const stopped = abortedOpenCodeTurn(current);
+		yield* persistStatus(machines, workspaceId, stopped);
+		return stopped;
+	}).pipe(Effect.catchAll(() => readOpenCodeAuthStatus(machines, workspaceId)));
 }
 
 export function submitOpenCodeTask(
