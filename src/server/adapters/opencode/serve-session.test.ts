@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { SessionItemId } from "#/domain/ids";
 import { PROJECT_CWD_PATH } from "#/server/adapters/freestyle/clone-project";
 import {
+	abortedOpenCodeTurn,
 	dropCopiedOpenCodeTranscript,
 	OPENCODE_LOCATE_BIN_SCRIPT,
 	OPENCODE_START_SERVE_SCRIPT,
@@ -158,6 +159,44 @@ describe("parseCurlHttp", () => {
 			status: 429,
 			body: { error: { message: "Zen quota exceeded" } },
 			raw: '{"error":{"message":"Zen quota exceeded"}}',
+		});
+	});
+});
+
+describe("abortedOpenCodeTurn", () => {
+	it("returns the composer to idle without a provider error", () => {
+		expect(
+			abortedOpenCodeTurn({
+				stage: "authenticated",
+				authMode: "local",
+				planType: null,
+				models: [{ id: "opencode/big-pickle", label: "Big Pickle" }],
+				turnStatus: "running",
+				items: [
+					{
+						kind: "userMessage",
+						id: SessionItemId("user-1"),
+						text: "Write STOP_PROOF.md",
+					},
+				],
+				serveSessionId: "ses_running",
+				seenBusy: true,
+				turnStartedAt: 1,
+				lastBusyAt: 2,
+			}),
+		).toMatchObject({
+			turnStatus: "idle",
+			serveSessionId: "ses_running",
+			seenBusy: false,
+			turnStartedAt: null,
+			lastBusyAt: null,
+			items: [
+				{
+					kind: "userMessage",
+					id: SessionItemId("user-1"),
+					text: "Write STOP_PROOF.md",
+				},
+			],
 		});
 	});
 });

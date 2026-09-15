@@ -105,6 +105,32 @@ export function openCodeTurnFailureMessage(input: {
 }
 
 /**
+ * Official `POST /session/:id/abort` returns JSON `true`. A missing session
+ * is already stopped. Other error payloads stay failures so Stop does not
+ * look successful when the turn is still running.
+ */
+export function openCodeAbortAccepted(input: {
+	readonly status: number;
+	readonly body: unknown;
+}): boolean {
+	if (input.status === 404) return true;
+	if (input.status < 200 || input.status >= 300) return false;
+	return errorMessageFromOpenCode(input.body) == null;
+}
+
+export function openCodeAbortFailureMessage(input: {
+	readonly payload: unknown;
+	readonly httpStatus?: number;
+}): string {
+	const fromPayload = errorMessageFromOpenCode(input.payload);
+	if (fromPayload) return fromPayload;
+	if (input.httpStatus && input.httpStatus > 0) {
+		return `OpenCode abort HTTP ${input.httpStatus}. ytimesy did not fall back to another provider.`;
+	}
+	return "OpenCode abort did not stop the turn. ytimesy did not fall back to another provider.";
+}
+
+/**
  * Busy can clear before `/message` has this turn's assistant text. Keep
  * polling until the turn budget expires unless OpenCode reported an error.
  */

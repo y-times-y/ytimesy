@@ -5,6 +5,8 @@ import {
 	assistantTextFromOpenCodeTurn,
 	errorMessageFromOpenCode,
 	OPENCODE_TURN_MAX_WAIT_MS,
+	openCodeAbortAccepted,
+	openCodeAbortFailureMessage,
 	openCodeSessionIsBusy,
 	openCodeTurnFailureMessage,
 	openCodeTurnPollDecision,
@@ -209,5 +211,41 @@ describe("openCodeTurnPollDecision", () => {
 				elapsedMs: OPENCODE_TURN_MAX_WAIT_MS + 1,
 			}),
 		).toBe("failed");
+	});
+});
+
+describe("openCodeAbortAccepted", () => {
+	it("accepts the documented JSON true abort", () => {
+		expect(openCodeAbortAccepted({ status: 200, body: true })).toBe(true);
+	});
+
+	it("treats a missing session as already stopped", () => {
+		expect(
+			openCodeAbortAccepted({
+				status: 404,
+				body: { error: { message: "Not found" } },
+			}),
+		).toBe(true);
+	});
+
+	it("rejects abort HTTP failures", () => {
+		expect(
+			openCodeAbortAccepted({
+				status: 500,
+				body: { error: { message: "abort failed" } },
+			}),
+		).toBe(false);
+		expect(openCodeAbortAccepted({ status: 0, body: null })).toBe(false);
+	});
+});
+
+describe("openCodeAbortFailureMessage", () => {
+	it("keeps the provider abort error instead of inventing a fallback", () => {
+		expect(
+			openCodeAbortFailureMessage({
+				payload: { error: { message: "session is not abortable" } },
+				httpStatus: 400,
+			}),
+		).toBe("session is not abortable");
 	});
 });
