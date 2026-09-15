@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	failureMessage,
 	isWorkspaceAtCapacity,
+	isWorkspaceComputeAllowanceExhausted,
 	workspaceLooksGone,
 } from "./failure-message";
 
@@ -45,5 +46,21 @@ describe("isWorkspaceAtCapacity", () => {
 			),
 		).toBe(true);
 		expect(isWorkspaceAtCapacity("Snapshot sh-old not found")).toBe(false);
+	});
+});
+
+describe("isWorkspaceComputeAllowanceExhausted", () => {
+	it("recognizes Freestyle vcpu and memory time allowance errors", () => {
+		expect(
+			isWorkspaceComputeAllowanceExhausted(
+				"Cannot start this VM because the allowance for vcpu_time, memory_time has been used. Add a card to unlock the full Free allowance, wait for the allowance to reset, or upgrade to Hobby; then resume the VM manually.",
+			),
+		).toBe(true);
+		expect(
+			isWorkspaceComputeAllowanceExhausted(
+				"This Freestyle plan has used its compute allowance. Wait for the allowance to reset or upgrade the plan, then resume the VM.",
+			),
+		).toBe(true);
+		expect(isWorkspaceComputeAllowanceExhausted("LIMIT_EXCEEDED")).toBe(false);
 	});
 });

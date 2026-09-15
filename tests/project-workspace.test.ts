@@ -69,6 +69,18 @@ it("explains the Freestyle VM cap without treating pause as a free slot", () => 
 	).toMatch(/Pausing a VM does not free a slot/);
 });
 
+it("explains a used Freestyle compute allowance without asking to add a card", () => {
+	expect(
+		publicFailureMessage(
+			new Error(
+				"Cannot start this VM because the allowance for vcpu_time, memory_time has been used. Add a card to unlock the full Free allowance, wait for the allowance to reset, or upgrade to Hobby; then resume the VM manually.",
+			),
+		),
+	).toBe(
+		"This Freestyle plan has used its compute allowance. Wait for the allowance to reset or upgrade the plan, then resume the VM.",
+	);
+});
+
 it("only exposes a Codex session machine after the workspace is ready", () => {
 	expect(workspaceSessionMachineRef(null)).toBeNull();
 	expect(

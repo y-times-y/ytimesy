@@ -247,17 +247,78 @@ export function stopHarnessWorkspaceTurn(
 		return stopCodexWorkspaceTurn(machines, scope);
 	}
 	if (scope.harnessId === "opencode") {
-		return withSessionMachine(machines, scope, true, (providerRef, session) =>
-			abortOpenCodeTurn(machines, WorkspaceId(providerRef)).pipe(
-				Effect.map((status) => viewFromOpenCode(status, providerRef)),
-				Effect.flatMap((view) =>
-					Effect.tryPromise(() => persistBoundSessionView(session, view)),
-				),
-				Effect.flatMap((view) => attachSiblingSideChat(machines, scope, view)),
-			),
-		);
+		return stopOpenCodeWorkspaceTurn(machines, scope);
 	}
 	return readHarnessWorkspaceSession(machines, scope);
+}
+
+/**
+ * Abort talks to a live OpenCode serve. A paused VM is already stopped;
+ * persist idle without booting so Stop does not consume compute allowance.
+ */
+function stopOpenCodeWorkspaceTurn(
+	machines: WorkspaceMachines,
+	scope: HarnessSessionScope,
+): Effect.Effect<PublicHarnessSession> {
+	return Effect.gen(function* () {
+		if (!scope.projectId) return emptyHarnessSession();
+		const bound = yield* Effect.tryPromise(() =>
+			peekAgentSessionMachine({
+				userId: scope.userId,
+				projectId: scope.projectId as string,
+				sessionId: scope.sessionId,
+			}),
+		);
+		const providerRef = bound.providerRef;
+		if (!providerRef) {
+			yield* Effect.tryPromise(() =>
+				persistSessionTurnStatus(bound.session, "idle"),
+			);
+			return yield* Effect.tryPromise(() =>
+				persistBoundSessionView(bound.session, {
+					...emptyHarnessSession(),
+					turnStatus: "idle",
+				}),
+			);
+		}
+		const running = yield* Effect.tryPromise(() =>
+			machines.isRunning(WorkspaceId(providerRef)),
+		);
+		if (!running) {
+			yield* Effect.tryPromise(() =>
+				persistSessionTurnStatus(bound.session, "idle"),
+			);
+			const paused = yield* Effect.tryPromise(() =>
+				persistBoundSessionView(
+					bound.session,
+					pausedHarnessSessionView(scope, providerRef),
+				),
+			);
+			return yield* attachSiblingSideChat(machines, scope, {
+				...paused,
+				turnStatus: "idle",
+			});
+		}
+		const status = yield* abortOpenCodeTurn(machines, WorkspaceId(providerRef));
+		const view = yield* Effect.tryPromise(() =>
+			persistBoundSessionView(
+				bound.session,
+				viewFromOpenCode(status, providerRef),
+			),
+		);
+		return yield* attachSiblingSideChat(machines, scope, view);
+	}).pipe(
+		Effect.catchAll((cause) =>
+			Effect.succeed({
+				...emptyHarnessSession(),
+				connection: {
+					status: "failed" as const,
+					provider: "opencode" as const,
+					message: publicFailureMessage(cause),
+				},
+			}),
+		),
+	);
 }
 
 /**
