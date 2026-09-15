@@ -34,6 +34,9 @@ vi.mock("../src/server/config", () => ({
 vi.mock("../src/server/auth/github-connection", () => ({
 	githubAccessToken: async () => "ghp_secretfixturetoken",
 }));
+vi.mock("../src/server/adapters/github/installation-token", () => ({
+	githubInstallationAccessToken: async () => "ghs_secretfixturetoken",
+}));
 
 beforeAll(async () => {
 	db = new PGlite();
@@ -59,7 +62,7 @@ const repo = {
 	defaultBranch: "main",
 };
 
-it("clones with a token in env only and reuses a machine found by slug", async () => {
+it("clones with an installation token file, not git argv", async () => {
 	const project = await saveProject("alice", repo, "main");
 	const workspace = await insertQueuedWorkspace("alice", project.id);
 	const runtime = new MemoryWorkspaceRuntime({
@@ -77,8 +80,13 @@ it("clones with a token in env only and reuses a machine found by slug", async (
 		),
 	).toBe(true);
 	expect(
-		runtime.commands.some((command) => command.argv.join(" ").includes("ghp_")),
+		runtime.commands.some((command) =>
+			command.argv.join(" ").includes("ghs_secretfixturetoken"),
+		),
 	).toBe(false);
+	expect(
+		runtime.files.some((file) => file.path === "/tmp/ytimesy-gh-token"),
+	).toBe(true);
 	const events = await listWorkspaceEvents("alice", workspace.id);
 	expect(events.map((event) => event.message).join("\n")).not.toContain("ghp_");
 });

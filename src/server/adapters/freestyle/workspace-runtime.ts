@@ -67,6 +67,10 @@ export class FreestyleWorkspaceRuntime implements WorkspaceRuntime {
 		};
 	}
 
+	async writeTextFile(providerRef: string, path: string, contents: string) {
+		await this.client().vms.ref(providerRef).fs.writeTextFile(path, contents);
+	}
+
 	private client() {
 		return new Freestyle({ apiKey: this.apiKey });
 	}

@@ -112,14 +112,10 @@ export function preparePreparedGuest(
 	machines: WorkspaceMachines,
 	workspaceId: WorkspaceId,
 	scope: DesktopScope,
-): Effect.Effect<void> {
+): Effect.Effect<void, Error> {
 	return Effect.gen(function* () {
 		const checkout = yield* loadTenantProjectCheckout(scope);
-		yield* ensureProjectCheckout(
-			machines,
-			workspaceId,
-			checkout ?? undefined,
-		).pipe(Effect.catchAll(() => Effect.succeed(null)));
+		yield* ensureProjectCheckout(machines, workspaceId, checkout);
 		yield* startWorkspaceDesktop(machines, scope).pipe(
 			Effect.catchAll(() => Effect.void),
 		);

@@ -5,6 +5,7 @@ import { publishProject } from "../src/server/services/publication";
 
 const adapter = vi.hoisted(() => ({
 	token: vi.fn(),
+	installationToken: vi.fn(),
 	project: vi.fn(),
 	authorize: vi.fn(),
 	ahead: vi.fn(),
@@ -13,6 +14,9 @@ const adapter = vi.hoisted(() => ({
 }));
 vi.mock("../src/server/auth/github-connection", () => ({
 	githubAccessToken: adapter.token,
+}));
+vi.mock("../src/server/adapters/github/installation-token", () => ({
+	githubInstallationAccessToken: adapter.installationToken,
 }));
 vi.mock("../src/server/adapters/projects", () => ({
 	projectForOwner: adapter.project,
@@ -43,6 +47,7 @@ async function readyRuntime() {
 beforeEach(() => {
 	vi.resetAllMocks();
 	adapter.token.mockResolvedValue("user-token");
+	adapter.installationToken.mockResolvedValue("ghs_install");
 	adapter.project.mockResolvedValue({
 		id: projectId,
 		repositoryId: 2,
@@ -107,7 +112,7 @@ it("does not create a pull request when the branch is not ahead", async () => {
 	expect(adapter.create).not.toHaveBeenCalled();
 	expect(
 		runtime.commands.some((command) =>
-			command.argv.join(" ").includes("git push"),
+			command.argv.join(" ").includes("push -u"),
 		),
 	).toBe(true);
 });
@@ -140,19 +145,17 @@ it("commits and pushes from the checkout before opening a draft pull request", a
 	).toBe(true);
 	expect(
 		runtime.commands.some((command) =>
-			command.argv.join(" ").includes("git push"),
+			command.argv.join(" ").includes("push -u"),
 		),
 	).toBe(true);
 	expect(
 		runtime.commands
-			.find((command) => command.argv.join(" ").includes("git push"))
+			.find((command) => command.argv.join(" ").includes("push -u"))
 			?.argv.join(" "),
-	).not.toMatch(/user-token|ghp_/);
+	).not.toMatch(/user-token|ghs_install|ghp_/);
 	expect(
-		runtime.commands.find((command) =>
-			command.argv.join(" ").includes("git push"),
-		)?.envKeys,
-	).toContain("GIT_CONFIG_VALUE_0");
+		runtime.files.some((file) => file.path === "/tmp/ytimesy-gh-token"),
+	).toBe(true);
 	expect(adapter.create).toHaveBeenCalledWith("user-token", "acme/app", {
 		title: "Ship feature",
 		body: "Ready for review.",

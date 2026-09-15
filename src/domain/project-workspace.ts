@@ -123,5 +123,10 @@ export function redactSecrets(value: string) {
 		.replace(
 			/AUTHORIZATION:\s*bearer\s+\S+/gi,
 			"AUTHORIZATION: bearer [redacted]",
-		);
+		)
+		.replace(
+			/AUTHORIZATION:\s*basic\s+\S+/gi,
+			"AUTHORIZATION: basic [redacted]",
+		)
+		.replace(/x-access-token:[^@\s]+@/g, "x-access-token:***@");
 }

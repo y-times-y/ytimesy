@@ -49,6 +49,13 @@ it("redacts tokens from failure messages and logs", () => {
 	expect(publicFailureMessage(new Error("AUTHORIZATION: bearer ghp_abc"))).toBe(
 		"AUTHORIZATION: bearer [redacted]",
 	);
+	expect(
+		publicFailureMessage(
+			new Error(
+				"fatal: https://x-access-token:ghs_secret@github.com/acme/app.git",
+			),
+		),
+	).toBe("fatal: https://x-access-token:***@github.com/acme/app.git");
 	expect(workspaceSlug("abc")).toBe("ytimesy-ws-abc");
 });
 
