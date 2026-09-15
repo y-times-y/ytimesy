@@ -65,6 +65,10 @@ export function explorationLabel(counts: ExplorationCounts): string {
 	return `Explored ${parts.join(" ")}`;
 }
 
+export function explorationGroupIsLive(items: readonly SessionItem[]): boolean {
+	return items.some((item) => liveActivityStatus(item) === "inProgress");
+}
+
 export function groupTimelineRows(
 	items: readonly SessionItem[],
 ): TimelineRow[] {
@@ -73,7 +77,7 @@ export function groupTimelineRows(
 	while (index < items.length) {
 		const item = items[index];
 		if (!item) break;
-		if (!isExplorationItem(item) || liveActivityStatus(item) === "inProgress") {
+		if (!isExplorationItem(item)) {
 			rows.push({ kind: "item", item });
 			index += 1;
 			continue;
@@ -81,11 +85,7 @@ export function groupTimelineRows(
 		const grouped: SessionItem[] = [];
 		while (index < items.length) {
 			const next = items[index];
-			if (
-				!next ||
-				!isExplorationItem(next) ||
-				liveActivityStatus(next) === "inProgress"
-			) {
+			if (!next || !isExplorationItem(next)) {
 				break;
 			}
 			grouped.push(next);
