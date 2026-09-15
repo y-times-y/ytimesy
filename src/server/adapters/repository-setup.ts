@@ -72,17 +72,21 @@ export function commitCreatedOutput(stdout: string) {
 
 export function installArgv(directory: string, lockfiles: string[]) {
 	const command = lockfiles.includes("pnpm-lock.yaml")
-		? ["pnpm", "install", "--frozen-lockfile"]
+		? "corepack pnpm install --frozen-lockfile"
 		: lockfiles.includes("yarn.lock")
-			? ["yarn", "install", "--frozen-lockfile"]
+			? "corepack yarn install --frozen-lockfile"
 			: lockfiles.includes("package-lock.json")
-				? ["npm", "ci"]
-				: ["npm", "install"];
+				? "npm ci"
+				: "npm install";
 	return [
 		"bash",
 		"-lc",
-		`cd ${shellSingleQuote(directory)} && ${command.map(shellSingleQuote).join(" ")}`,
+		`cd ${shellSingleQuote(directory)} && ${guestNodePath()} && ${command}`,
 	];
+}
+
+export function guestNodePath() {
+	return 'export NVM_DIR="${NVM_DIR:-/usr/local/nvm}"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"';
 }
 
 export function listLockfilesArgv(directory: string) {

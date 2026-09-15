@@ -26,11 +26,10 @@ it("keeps the GitHub token out of clone argv", () => {
 
 it("selects the lockfile install command", () => {
 	expect(installArgv("/repo", ["pnpm-lock.yaml"]).at(-1)).toContain(
-		"'pnpm' 'install' '--frozen-lockfile'",
+		"corepack pnpm install --frozen-lockfile",
 	);
-	expect(installArgv("/repo", ["package-lock.json"]).at(-1)).toContain(
-		"'npm' 'ci'",
-	);
+	expect(installArgv("/repo", ["pnpm-lock.yaml"]).at(-1)).toContain("nvm.sh");
+	expect(installArgv("/repo", ["package-lock.json"]).at(-1)).toContain("npm ci");
 });
 
 it("keeps the GitHub token out of commit and push argv", () => {
