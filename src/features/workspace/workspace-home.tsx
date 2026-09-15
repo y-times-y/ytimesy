@@ -419,7 +419,6 @@ export function WorkspaceHome({
 
 	function sendSideChat(text: string) {
 		const modelId = sessionModelId(session);
-		if (!modelId) return;
 		if (harnessId === "codex" && session.turnStatus === "running")
 			setSideQueued(true);
 		setBusy(true);

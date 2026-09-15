@@ -129,9 +129,9 @@ export function shouldAutoResumeHarnessSession(input: {
 }
 
 /**
- * Selecting a paused chat must not boot its VM. Typing a follow-up should:
- * OpenCode can connect without an account; Codex can resume a saved workspace;
- * Claude still needs an explicit Anthropic sign-in.
+ * Selecting a paused chat must not boot its VM. A follow-up or a side-agent
+ * send may still start that harness: OpenCode can connect without an account;
+ * Codex can resume a saved workspace; Claude still needs Anthropic sign-in.
  */
 export function canResumeDisconnectedFollowUp(input: {
 	readonly harnessId: AgentProviderId;

@@ -1,3 +1,5 @@
+import { preferredListedModelId } from "#/domain/listed-model";
+
 export interface ReasoningLevel {
 	id: string;
 	label: string;
@@ -46,38 +48,5 @@ export function sessionModelsFromListed(
 export function preferredSessionModelId(
 	models: readonly SessionModel[],
 ): string {
-	return (
-		listedModelId(models, isListedCodexSpark) ??
-		listedModelId(models, isListedZenSpark13) ??
-		listedModelId(models, isListedZenSpark) ??
-		listedModelId(models, isListedZenFree) ??
-		models[0]?.id ??
-		""
-	);
-}
-
-function listedModelId(
-	models: readonly SessionModel[],
-	listed: (id: string) => boolean,
-): string | undefined {
-	return models.find((model) => listed(model.id))?.id;
-}
-
-function isListedCodexSpark(id: string): boolean {
-	return id === "gpt-5.3-codex-spark";
-}
-
-function isListedZenSpark13(id: string): boolean {
-	return id.startsWith("opencode/") && id.includes("muse-spark-1.3");
-}
-
-function isListedZenSpark(id: string): boolean {
-	return id.startsWith("opencode/") && id.includes("spark");
-}
-
-function isListedZenFree(id: string): boolean {
-	return (
-		id.startsWith("opencode/") &&
-		(id.endsWith("-free") || id.includes("contributor-free"))
-	);
+	return preferredListedModelId(models);
 }
