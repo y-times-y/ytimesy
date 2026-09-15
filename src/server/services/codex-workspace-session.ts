@@ -248,7 +248,6 @@ export function sendCodexWorkspaceTask(
 	input: {
 		readonly text: string;
 		readonly modelId: string;
-		readonly lane?: "main" | "side";
 	},
 ): Effect.Effect<PublicCodexSession> {
 	return withPreparedWorkspace(
@@ -281,7 +280,7 @@ export function sendCodexWorkspaceTask(
 					);
 				}
 				status = yield* submitCodexTask(machines, WorkspaceId(providerRef), {
-					...input,
+					text: input.text,
 					modelId,
 				});
 				return viewFromStatus(status, providerRef, snapshotAvailable);
@@ -409,9 +408,6 @@ function viewFromStatus(
 	const turnStatus =
 		status.stage === "authenticated" ? status.turnStatus : "idle";
 	const items = status.stage === "authenticated" ? status.items : [];
-	const sideTurnStatus =
-		status.stage === "authenticated" ? status.sideTurnStatus : "idle";
-	const sideItems = status.stage === "authenticated" ? status.sideItems : [];
 	return {
 		snapshotAvailable,
 		workspaceId,
@@ -419,11 +415,11 @@ function viewFromStatus(
 		connection,
 		models,
 		canSend: canSubmitComposer(workspace, connection, turnStatus),
-		canSendSide: canSubmitSideChat(workspace, connection, sideTurnStatus),
+		canSendSide: canSubmitSideChat(workspace, connection, "idle"),
 		turnStatus,
 		items,
-		sideTurnStatus,
-		sideItems,
+		sideTurnStatus: "idle",
+		sideItems: [],
 	};
 }
 

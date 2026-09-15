@@ -102,7 +102,6 @@ export function WorkspaceHome({
 	const [splitting, setSplitting] = useState(false);
 	const workspaceBody = useRef<HTMLDivElement>(null);
 	const [sideChatOpen, setSideChatOpen] = useState(false);
-	const [sideQueued, setSideQueued] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const [harnessId, setHarnessId] = useState<AgentProviderId>(
 		DEFAULT_COMPOSER_HARNESS_ID,
@@ -256,15 +255,12 @@ export function WorkspaceHome({
 		if (
 			session.connection.status !== "awaiting_device_code" &&
 			session.turnStatus !== "running" &&
-			session.sideTurnStatus !== "running" &&
-			!sideQueued
+			session.sideTurnStatus !== "running"
 		) {
 			return;
 		}
 		const interval =
-			session.turnStatus === "running" ||
-			session.sideTurnStatus === "running" ||
-			sideQueued
+			session.turnStatus === "running" || session.sideTurnStatus === "running"
 				? 1000
 				: 3000;
 		const epoch = sessionEpoch.current;
@@ -278,7 +274,6 @@ export function WorkspaceHome({
 			}).then((next) => {
 				if (epoch !== sessionEpoch.current) return;
 				setSession(next);
-				if (next.sideTurnStatus !== "idle") setSideQueued(false);
 			});
 		}, interval);
 		return () => window.clearInterval(timer);
@@ -289,7 +284,6 @@ export function WorkspaceHome({
 		session.connection.status,
 		session.sideTurnStatus,
 		session.turnStatus,
-		sideQueued,
 	]);
 
 	function openInspector(view: ToolsView) {
@@ -419,8 +413,6 @@ export function WorkspaceHome({
 
 	function sendSideChat(text: string) {
 		const modelId = sessionModelId(session);
-		if (harnessId === "codex" && session.turnStatus === "running")
-			setSideQueued(true);
 		setBusy(true);
 		void sendTask({
 			data: { ...sessionScope(), text, modelId, lane: "side" as const },
@@ -747,9 +739,8 @@ export function WorkspaceHome({
 									turnStatus={session.sideTurnStatus}
 									canSend={session.canSendSide}
 									mainTurnRunning={session.turnStatus === "running"}
-									isolated={harnessId !== "codex"}
+									isolated
 									busy={busy}
-									queued={sideQueued}
 									onSend={sendSideChat}
 								/>
 							}
