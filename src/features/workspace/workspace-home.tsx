@@ -357,7 +357,7 @@ export function WorkspaceHome({
 			.then((created) => {
 				setSelectedSessionId(created.id);
 				desktopAutoStarted.current = false;
-				autoResumeStarted.current = false;
+				autoResumeStarted.current = true;
 				openedDiff.current = false;
 				setDesktop({ status: "stopped" });
 				setSession((current) => ({
@@ -617,6 +617,7 @@ export function WorkspaceHome({
 								}}
 								apiKeyHints={apiKeyHints}
 								onConnect={() => {
+									autoResumeStarted.current = true;
 									setBusy(true);
 									void connect({
 										data: sessionScope(),
@@ -646,11 +647,46 @@ export function WorkspaceHome({
 								}}
 								onSend={(text, modelId) => {
 									setBusy(true);
-									void sendTask({
-										data: { ...sessionScope(), text, modelId },
-									})
-										.then(setSession)
-										.finally(() => setBusy(false));
+									autoResumeStarted.current = true;
+									const epoch = sessionEpoch.current;
+									const scope = sessionScope();
+									void (async () => {
+										try {
+											let current = session;
+											if (current.connection.status !== "authenticated") {
+												current = await connect({ data: scope });
+												applySessionView(epoch, current);
+												if (current.connection.status !== "authenticated") {
+													return;
+												}
+											}
+											const resolvedModel =
+												modelId ||
+												preferredSessionModelId(
+													sessionModelsFromListed(current.models),
+												);
+											if (!resolvedModel) return;
+											const next = await sendTask({
+												data: { ...scope, text, modelId: resolvedModel },
+											});
+											applySessionView(epoch, next);
+										} catch (cause) {
+											if (epoch !== sessionEpoch.current) return;
+											setSession((current) => ({
+												...current,
+												connection: {
+													status: "failed",
+													provider: harnessId,
+													message:
+														cause instanceof Error
+															? cause.message
+															: String(cause),
+												},
+											}));
+										} finally {
+											setBusy(false);
+										}
+									})();
 								}}
 								onStop={() => {
 									setBusy(true);
