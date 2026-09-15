@@ -11,7 +11,7 @@ export function projectContextDocument(input: {
 	readonly briefing: string;
 	readonly traces: readonly ProjectTrace[];
 }): string {
-	const briefing = input.briefing.trim();
+	const briefing = briefingLinesNewestFirst(input.briefing);
 	const traces = input.traces
 		.map((trace) => {
 			const summary = trace.summary.trim();
@@ -31,11 +31,12 @@ export function relatedTracesForTask(
 	task: string,
 	limit = 8,
 ): ProjectTrace[] {
+	const durable = durableProjectTraces(traces);
 	const words = task
 		.toLowerCase()
 		.split(/[^a-z0-9]+/)
 		.filter((word) => word.length > 3);
-	const ranked = traces.map((trace, index) => {
+	const ranked = durable.map((trace, index) => {
 		const hay = `${trace.area ?? ""} ${trace.summary}`.toLowerCase();
 		const hits = words.reduce(
 			(count, word) => count + (hay.includes(word) ? 1 : 0),
@@ -48,6 +49,30 @@ export function relatedTracesForTask(
 		.sort((left, right) => right.hits - left.hits || left.index - right.index)
 		.slice(0, limit)
 		.map((row) => row.trace);
+}
+
+/**
+ * Exact-reply pings are not how a sibling figured out the repo. Keep
+ * traces that touched an area or recorded reasoning.
+ */
+export function completedTurnUpdatesProjectContext(input: {
+	readonly area: string | null;
+	readonly task: string;
+	readonly reply: string;
+	readonly reasoning?: readonly string[];
+}): boolean {
+	if (input.area?.trim()) return true;
+	if ((input.reasoning ?? []).some((line) => line.trim())) return true;
+	return !isExactReplyEcho(input.task, input.reply);
+}
+
+export function durableProjectTraces(
+	traces: readonly ProjectTrace[],
+): ProjectTrace[] {
+	return traces.filter(
+		(trace) =>
+			Boolean(trace.area?.trim()) || !isExactReplyEchoTrace(trace.summary),
+	);
 }
 
 export function briefingUpdateFromTurn(input: {
@@ -168,4 +193,28 @@ function areaFromPaths(paths: readonly string[]): string | null {
 
 function clipBriefing(text: string) {
 	return text.length > 1200 ? `${text.slice(0, 1199)}…` : text;
+}
+
+function briefingLinesNewestFirst(briefing: string): string {
+	return briefing
+		.split("\n")
+		.map((line) => line.trim())
+		.filter(Boolean)
+		.reverse()
+		.join("\n");
+}
+
+function isExactReplyEcho(task: string, reply: string): boolean {
+	const token = reply.trim();
+	if (!token || token.length > 80 || /\s/.test(token)) return false;
+	const normalized = task.toLowerCase();
+	return (
+		normalized.includes("reply with exactly") &&
+		normalized.includes(token.toLowerCase())
+	);
+}
+
+function isExactReplyEchoTrace(summary: string): boolean {
+	if (/\nHow:/i.test(summary)) return false;
+	return /^reply with exactly .+: \S{1,80}$/i.test(summary.trim());
 }
