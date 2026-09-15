@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	agentSessionMachineSlug,
 	chatsFromAgentSessions,
+	copiedAgentMachineRef,
 	copiedSessionScratchFileResetCommand,
 	copiedSessionScratchResetCommand,
 	copiedSessionScratchResetCommands,
@@ -262,5 +263,28 @@ describe("sessionMachineRefsToDestroy", () => {
 				templateProviderRef: "vm-template",
 			}),
 		).toEqual([]);
+	});
+});
+
+describe("copiedAgentMachineRef", () => {
+	it("returns the session copy and never the unused template", () => {
+		expect(
+			copiedAgentMachineRef({
+				sessionProviderRef: "vm-a",
+				templateProviderRef: "vm-template",
+			}),
+		).toBe("vm-a");
+		expect(
+			copiedAgentMachineRef({
+				sessionProviderRef: "vm-template",
+				templateProviderRef: "vm-template",
+			}),
+		).toBeNull();
+		expect(
+			copiedAgentMachineRef({
+				sessionProviderRef: null,
+				templateProviderRef: "vm-template",
+			}),
+		).toBeNull();
 	});
 });

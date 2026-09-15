@@ -54,6 +54,13 @@ export function terminalConnectBlockedReason(
 	return "Wait for workspace preparation to finish before opening the terminal.";
 }
 
+export function terminalSessionBlockedReason(
+	sessionProviderRef: string | null,
+) {
+	if (sessionProviderRef) return null;
+	return "Connect an agent before opening the terminal.";
+}
+
 export function workspacePtyCommand(directory: string) {
 	return `cd ${shellSingleQuote(directory)} && exec bash -l`;
 }

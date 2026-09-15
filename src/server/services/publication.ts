@@ -1,10 +1,12 @@
 import { Effect } from "effect";
+import { copiedAgentMachineRef } from "../../domain/agent-session";
 import { projectCheckoutFromFullName } from "../../domain/project-checkout";
 import { publicFailureMessage } from "../../domain/project-workspace";
 import {
 	publicationBlockedReason,
 	publicationCommitAuthor,
 	publicationHeadBranch,
+	publicationSessionBlockedReason,
 	publicationWorkspaceBlockedReason,
 } from "../../domain/publication";
 import {
@@ -77,7 +79,16 @@ export function publishProject(
 				sessionId: input.sessionId,
 			}),
 		);
-		const providerRef = peeked.providerRef ?? workspace.providerRef;
+		const providerRef = copiedAgentMachineRef({
+			sessionProviderRef: peeked.providerRef,
+			templateProviderRef: workspace.providerRef,
+		});
+		const sessionBlocked = publicationSessionBlockedReason(providerRef);
+		if (sessionBlocked || !providerRef) {
+			return yield* reject(
+				sessionBlocked ?? "Connect an agent before publishing.",
+			);
+		}
 		const repository = yield* Effect.tryPromise(() =>
 			authorizedRepository(token, project.installationId, project.repositoryId),
 		);

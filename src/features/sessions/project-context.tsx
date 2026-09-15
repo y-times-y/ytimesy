@@ -175,6 +175,7 @@ function PublicationAction({
 	sessionId?: string | null;
 }) {
 	const [title, setTitle] = useState("");
+	const [composing, setComposing] = useState(false);
 	const publish = useMutation({
 		mutationFn: () =>
 			requestJson<{ url: string; number: number; draft: boolean }>(
@@ -183,27 +184,42 @@ function PublicationAction({
 			),
 	});
 	const message = publish.error?.message;
+	const open =
+		composing || Boolean(title) || Boolean(publish.data) || Boolean(message);
 	return (
 		<form
 			className="publication-action"
+			data-open={open}
 			onSubmit={(event) => {
 				event.preventDefault();
+				if (!open) {
+					setComposing(true);
+					requestAnimationFrame(() => {
+						document.getElementById("pull-request-title")?.focus();
+					});
+					return;
+				}
 				publish.mutate();
 			}}
 		>
 			<input
 				id="pull-request-title"
+				className="publication-title"
 				aria-label="Pull request title"
 				placeholder="Pull request title"
 				value={title}
 				maxLength={256}
-				required
+				required={open}
+				onFocus={() => setComposing(true)}
 				onChange={(event) => {
 					setTitle(event.target.value);
 					publish.reset();
 				}}
 			/>
-			<button type="submit" disabled={publish.isPending || !title.trim()}>
+			<button
+				type="submit"
+				disabled={publish.isPending || (open && !title.trim())}
+			>
 				{publish.isPending ? "Creating…" : "Create pull request"}
 			</button>
 			{publish.data && (

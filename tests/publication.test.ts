@@ -3,6 +3,7 @@ import {
 	publicationBlockedReason,
 	publicationCommitAuthor,
 	publicationHeadBranch,
+	publicationSessionBlockedReason,
 	publicationWorkspaceBlockedReason,
 	workspacePublicationBranch,
 } from "../src/domain/publication";
@@ -49,6 +50,11 @@ it("blocks publish until a prepared workspace exists", () => {
 			providerRef: "vm-1",
 		}),
 	).toBeNull();
+});
+
+it("does not publish from the unused template", () => {
+	expect(publicationSessionBlockedReason("vm-agent")).toBeNull();
+	expect(publicationSessionBlockedReason(null)).toMatch(/Connect an agent/);
 });
 
 it("opens a workspace branch when the selected branch is the default", () => {

@@ -1,4 +1,5 @@
 import { Effect } from "effect";
+import { copiedAgentMachineRef } from "#/domain/agent-session";
 import { WorkspaceId } from "#/domain/ids";
 import { workspaceSessionMachineRef } from "#/domain/project-workspace";
 import {
@@ -64,7 +65,11 @@ export function startWorkspaceDesktop(
 		const workspace = yield* Effect.tryPromise(() =>
 			readyWorkspaceForOwner(scope.userId, scope.projectId),
 		);
-		if (!workspaceSessionMachineRef(workspace) || !scope.projectId) {
+		if (
+			!workspace ||
+			!workspaceSessionMachineRef(workspace) ||
+			!scope.projectId
+		) {
 			return {
 				status: "failed" as const,
 				reason: START_HARNESS_BEFORE_DESKTOP,
@@ -84,17 +89,24 @@ export function startWorkspaceDesktop(
 				reason: START_HARNESS_BEFORE_DESKTOP,
 			};
 		}
-		const bound = peeked.providerRef
-			? peeked
-			: yield* Effect.tryPromise(() =>
-					bindAgentSessionMachine(machines, {
-						userId: scope.userId,
-						projectId: scope.projectId as string,
-						harness: existing.harness,
-						sessionId: existing.id,
-					}),
-				);
-		const providerRef = bound.providerRef;
+		let providerRef = copiedAgentMachineRef({
+			sessionProviderRef: peeked.providerRef,
+			templateProviderRef: workspace.providerRef,
+		});
+		if (!providerRef && !peeked.providerRef) {
+			const bound = yield* Effect.tryPromise(() =>
+				bindAgentSessionMachine(machines, {
+					userId: scope.userId,
+					projectId: scope.projectId as string,
+					harness: existing.harness,
+					sessionId: existing.id,
+				}),
+			);
+			providerRef = copiedAgentMachineRef({
+				sessionProviderRef: bound.providerRef,
+				templateProviderRef: workspace.providerRef,
+			});
+		}
 		if (!providerRef) {
 			return {
 				status: "failed" as const,
@@ -166,36 +178,54 @@ export function startWorkspaceDesktop(
 	);
 }
 
+/**
+ * Probe a guest that is already running. Do not start a paused VM just to
+ * learn that Desktop is stopped — that burns vCPU-hours on chat switch.
+ */
+export async function desktopFromRunningGuest(
+	machines: Pick<WorkspaceMachines, "isRunning" | "exec">,
+	providerRef: string,
+): Promise<WorkspaceDesktop | null> {
+	const running = await machines.isRunning(WorkspaceId(providerRef));
+	if (!running) return null;
+	const probe = await machines.exec(
+		WorkspaceId(providerRef),
+		PROBE_WORKSPACE_DESKTOP,
+		15_000,
+	);
+	if (!desktopPortIsListening(`${probe.stdout}\n${probe.stderr}`)) return null;
+	return {
+		status: "running",
+		viewerUrl: desktopViewerUrlForMachine(providerRef),
+		display: ":0",
+		message: "You and the agent share this desktop.",
+	};
+}
+
 function recoverRunningDesktop(
 	machines: WorkspaceMachines,
 	scope: DesktopScope,
 ): Effect.Effect<WorkspaceDesktop | null> {
 	return Effect.gen(function* () {
-		const peeked = scope.projectId
-			? yield* Effect.tryPromise(() =>
-					peekAgentSessionMachine({
-						userId: scope.userId,
-						projectId: scope.projectId as string,
-						sessionId: scope.sessionId,
-					}),
-				)
-			: { providerRef: null };
-		const providerRef = peeked.providerRef;
+		if (!scope.projectId) return null;
+		const workspace = yield* Effect.tryPromise(() =>
+			readyWorkspaceForOwner(scope.userId, scope.projectId),
+		);
+		const peeked = yield* Effect.tryPromise(() =>
+			peekAgentSessionMachine({
+				userId: scope.userId,
+				projectId: scope.projectId as string,
+				sessionId: scope.sessionId,
+			}),
+		);
+		const providerRef = copiedAgentMachineRef({
+			sessionProviderRef: peeked.providerRef,
+			templateProviderRef: workspace?.providerRef ?? null,
+		});
 		if (!providerRef) return null;
-		yield* Effect.tryPromise(() =>
-			machines.ensureRunning(WorkspaceId(providerRef)),
+		return yield* Effect.tryPromise(() =>
+			desktopFromRunningGuest(machines, providerRef),
 		);
-		const probe = yield* Effect.tryPromise(() =>
-			machines.exec(WorkspaceId(providerRef), PROBE_WORKSPACE_DESKTOP, 15_000),
-		);
-		if (!desktopPortIsListening(`${probe.stdout}\n${probe.stderr}`))
-			return null;
-		return {
-			status: "running" as const,
-			viewerUrl: desktopViewerUrlForMachine(providerRef),
-			display: ":0" as const,
-			message: "You and the agent share this desktop.",
-		};
 	}).pipe(Effect.catchAll(() => Effect.succeed(null)));
 }
 

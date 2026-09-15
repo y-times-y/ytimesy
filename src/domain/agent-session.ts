@@ -186,6 +186,18 @@ export function sessionMachineRefsToDestroy(input: {
 	return [...new Set(refs)].filter((ref) => ref !== input.templateProviderRef);
 }
 
+export function copiedAgentMachineRef(input: {
+	readonly sessionProviderRef: string | null;
+	readonly templateProviderRef: string | null;
+}) {
+	return (
+		sessionMachineRefsToDestroy({
+			sessionProviderRef: input.sessionProviderRef,
+			templateProviderRef: input.templateProviderRef,
+		})[0] ?? null
+	);
+}
+
 function compactId(value: string) {
 	return value.replaceAll("-", "").slice(0, 16);
 }
