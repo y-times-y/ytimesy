@@ -285,12 +285,32 @@ export function createFreestyleWorkspaceMachines(
 
 		async provisionSession(slug, snapshotId) {
 			try {
+				const existing = await findVmBySlug(freestyle, slug);
+				if (existing) {
+					const vm = freestyle.vms.ref(existing);
+					const data = await vm.data();
+					if (data.state === "paused" || data.state === "stopped") {
+						await vm.start();
+					}
+					await waitUntilVmRunning(vm, "Agent session VM");
+					return WorkspaceId(existing);
+				}
 				const created = await freestyle.vms.create(
 					productCreateVmFields({ slug, snapshotId }),
 				);
 				await waitUntilVmRunning(created.vm, "Agent session VM");
 				return WorkspaceId(created.vmId);
 			} catch (cause) {
+				if (cause instanceof FreestyleApiError && cause.status === 409) {
+					const recovered = await findVmBySlug(freestyle, slug);
+					if (recovered) {
+						await waitUntilVmRunning(
+							freestyle.vms.ref(recovered),
+							"Agent session VM",
+						);
+						return WorkspaceId(recovered);
+					}
+				}
 				throw new WorkspaceProvisionError({
 					operation: "create",
 					message: providerMessage(cause),
@@ -298,4 +318,12 @@ export function createFreestyleWorkspaceMachines(
 			}
 		},
 	};
+}
+
+async function findVmBySlug(
+	freestyle: Freestyle,
+	slug: string,
+): Promise<string | null> {
+	const { vms } = await freestyle.vms.list({ slug, limit: 1 });
+	return vms[0]?.id ?? null;
 }

@@ -2,6 +2,9 @@ import { randomUUID } from "node:crypto";
 import type { AgentProviderId } from "#/domain/agent-provider";
 import { database } from "./database";
 
+const SESSION_COLUMNS =
+	"id,user_id,project_id,workspace_id,harness,provider_ref,parent_session_id,title,briefing,items,status,updated_at";
+
 export type AgentSessionRecord = {
 	id: string;
 	userId: string;
@@ -9,6 +12,7 @@ export type AgentSessionRecord = {
 	workspaceId: string;
 	harness: AgentProviderId;
 	providerRef: string | null;
+	parentSessionId: string | null;
 	title: string;
 	briefing: string | null;
 	items: unknown;
@@ -23,6 +27,7 @@ interface AgentSessionRow {
 	workspace_id: string;
 	harness: AgentProviderId;
 	provider_ref: string | null;
+	parent_session_id: string | null;
 	title: string;
 	briefing: string | null;
 	items: unknown;
@@ -32,9 +37,9 @@ interface AgentSessionRow {
 
 export async function listAgentSessions(userId: string, projectId: string) {
 	const result = await database().query(
-		`select id,user_id,project_id,workspace_id,harness,provider_ref,title,briefing,items,status,updated_at
+		`select ${SESSION_COLUMNS}
 		 from agent_session
-		 where user_id=$1 and project_id=$2
+		 where user_id=$1 and project_id=$2 and parent_session_id is null
 		 order by updated_at desc`,
 		[userId, projectId],
 	);
@@ -43,9 +48,23 @@ export async function listAgentSessions(userId: string, projectId: string) {
 
 export async function agentSessionForOwner(userId: string, sessionId: string) {
 	const result = await database().query(
-		`select id,user_id,project_id,workspace_id,harness,provider_ref,title,briefing,items,status,updated_at
-		 from agent_session where id=$1 and user_id=$2`,
+		`select ${SESSION_COLUMNS} from agent_session where id=$1 and user_id=$2`,
 		[sessionId, userId],
+	);
+	return result.rows[0] ? toSession(result.rows[0]) : null;
+}
+
+export async function childAgentSession(
+	userId: string,
+	parentSessionId: string,
+) {
+	const result = await database().query(
+		`select ${SESSION_COLUMNS}
+		 from agent_session
+		 where user_id=$1 and parent_session_id=$2
+		 order by created_at asc
+		 limit 1`,
+		[userId, parentSessionId],
 	);
 	return result.rows[0] ? toSession(result.rows[0]) : null;
 }
@@ -56,13 +75,14 @@ export async function insertAgentSession(input: {
 	readonly workspaceId: string;
 	readonly harness: AgentProviderId;
 	readonly providerRef?: string | null;
+	readonly parentSessionId?: string | null;
 	readonly title?: string;
 }) {
 	const id = randomUUID();
 	const result = await database().query(
-		`insert into agent_session(id,user_id,project_id,workspace_id,harness,provider_ref,title,status)
-		 values($1,$2,$3,$4,$5,$6,$7,'starting')
-		 returning id,user_id,project_id,workspace_id,harness,provider_ref,title,briefing,items,status,updated_at`,
+		`insert into agent_session(id,user_id,project_id,workspace_id,harness,provider_ref,parent_session_id,title,status)
+		 values($1,$2,$3,$4,$5,$6,$7,$8,'starting')
+		 returning ${SESSION_COLUMNS}`,
 		[
 			id,
 			input.userId,
@@ -70,7 +90,8 @@ export async function insertAgentSession(input: {
 			input.workspaceId,
 			input.harness,
 			input.providerRef ?? null,
-			input.title ?? "New session",
+			input.parentSessionId ?? null,
+			input.title ?? (input.parentSessionId ? "Side chat" : "New session"),
 		],
 	);
 	return toSession(result.rows[0]);
@@ -83,7 +104,7 @@ export async function saveAgentSessionProviderRef(
 	const result = await database().query(
 		`update agent_session set provider_ref=$2, status='ready', updated_at=now()
 		 where id=$1
-		 returning id,user_id,project_id,workspace_id,harness,provider_ref,title,briefing,items,status,updated_at`,
+		 returning ${SESSION_COLUMNS}`,
 		[sessionId, providerRef],
 	);
 	return toSession(result.rows[0]);
@@ -100,7 +121,7 @@ export async function saveAgentSessionItems(
 		     title=coalesce($3, title),
 		     updated_at=now()
 		 where id=$1
-		 returning id,user_id,project_id,workspace_id,harness,provider_ref,title,briefing,items,status,updated_at`,
+		 returning ${SESSION_COLUMNS}`,
 		[sessionId, JSON.stringify(items), title ?? null],
 	);
 	return result.rows[0] ? toSession(result.rows[0]) : null;
@@ -127,6 +148,7 @@ function toSession(row: AgentSessionRow): AgentSessionRecord {
 		workspaceId: row.workspace_id,
 		harness: row.harness,
 		providerRef: row.provider_ref,
+		parentSessionId: row.parent_session_id,
 		title: row.title,
 		briefing: row.briefing,
 		items: row.items,

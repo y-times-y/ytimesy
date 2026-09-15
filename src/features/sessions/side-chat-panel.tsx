@@ -14,6 +14,7 @@ export function SideChatPanel({
 	turnStatus,
 	canSend,
 	mainTurnRunning,
+	isolated = false,
 	busy,
 	queued,
 	onSend,
@@ -22,6 +23,7 @@ export function SideChatPanel({
 	turnStatus: SessionTurnStatus;
 	canSend: boolean;
 	mainTurnRunning: boolean;
+	isolated?: boolean;
 	busy: boolean;
 	queued: boolean;
 	onSend: (text: string) => void;
@@ -61,11 +63,17 @@ export function SideChatPanel({
 	return (
 		<section className="side-chat" aria-label="Side chat">
 			<SessionTimeline items={visible} turnStatus={turnStatus} fill />
-			{queued || mainTurnRunning ? (
+			{queued ? (
 				<p className="side-chat-queue" role="status">
-					{queued
-						? "Queued until the current run finishes."
-						: "Does not interrupt the current run."}
+					Queued until the current run finishes.
+				</p>
+			) : isolated ? (
+				<p className="side-chat-queue" role="status">
+					Runs on its own workspace copy.
+				</p>
+			) : mainTurnRunning ? (
+				<p className="side-chat-queue" role="status">
+					Does not interrupt the current run.
 				</p>
 			) : null}
 			<div className="side-chat-composer">

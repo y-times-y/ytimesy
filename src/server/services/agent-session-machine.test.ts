@@ -9,9 +9,11 @@ function machines(overrides: {
 }) {
 	const provisioned: Array<{ slug: string; snapshotId: string }> = [];
 	const snapshots: string[] = [];
+	const commands: string[] = [];
 	return {
 		provisioned,
 		snapshots,
+		commands,
 		api: {
 			snapshotEnvironment: async () => {
 				snapshots.push(overrides.snapshot ?? "snap-late");
@@ -23,6 +25,10 @@ function machines(overrides: {
 				return WorkspaceId(overrides.copied ?? "agent-vm");
 			},
 			ensureRunning: async (id: string) => WorkspaceId(id),
+			exec: async (_id: string, command: string) => {
+				commands.push(command);
+				return { exitCode: 0, stdout: "", stderr: "" };
+			},
 		},
 	};
 }
@@ -54,6 +60,22 @@ describe("executeSessionMachinePlan", () => {
 			{ slug: "ytimesy-ag-1111111122223333", snapshotId: "snap-1" },
 		]);
 		expect(saved).toEqual(["agent-vm"]);
+	});
+
+	it("clears copied harness scratch so the new agent does not inherit the template transcript", async () => {
+		const runtime = machines({ copied: "agent-vm" });
+		await executeSessionMachinePlan({
+			machines: runtime.api,
+			sessionId: "11111111-2222-3333-4444-555555555555",
+			sessionProviderRef: null,
+			workspaceId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+			templateSnapshotId: "snap-1",
+			templateProviderRef: "repo-vm",
+			templateAlreadyBound: true,
+			saveTemplateSnapshot: async () => undefined,
+			saveSessionProviderRef: async () => undefined,
+		});
+		expect(runtime.commands[0]).toContain("/tmp/ytimesy-opencode-status.json");
 	});
 
 	it("resumes the same agent VM for later turns", async () => {
