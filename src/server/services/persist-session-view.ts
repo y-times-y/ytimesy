@@ -2,6 +2,7 @@ import { sessionTurnStatusForPersist } from "#/domain/agent-session";
 import { listedModelPreferenceFromSessions } from "#/domain/listed-model";
 import {
 	briefingUpdateFromTurn,
+	completedTurnUpdatesProjectContext,
 	nextProjectBriefing,
 	traceAreaFromTurn,
 	traceSummaryFromTurn,
@@ -107,16 +108,28 @@ async function captureTurnTrace(
 	const reply = lastAgentMessageText(next);
 	if (!reply || reply === lastAgentMessageText(previous)) return;
 	const task = lastUserMessageText(next) ?? session.title;
+	const area = traceAreaFromTurn({ task, items: next });
+	const reasoning = reasoningSummariesFromTurn(next);
+	if (
+		!completedTurnUpdatesProjectContext({
+			area,
+			task,
+			reply,
+			reasoning,
+		})
+	) {
+		return;
+	}
 	const summary = traceSummaryFromTurn({
 		task,
 		reply,
-		reasoning: reasoningSummariesFromTurn(next),
+		reasoning,
 	});
 	if (!summary) return;
 	await insertProjectTrace({
 		projectId: session.projectId,
 		sessionId: session.id,
-		area: traceAreaFromTurn({ task, items: next }),
+		area,
 		summary,
 	});
 	const briefing = await loadProjectBriefing(session.projectId);
