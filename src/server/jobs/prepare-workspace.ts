@@ -10,6 +10,10 @@ import {
 	workspaceSlug,
 } from "../../domain/project-workspace";
 import {
+	toolsSnapshotIdFromEnv,
+	workspaceBootSnapshotId,
+} from "../../domain/workspace-boot-snapshot";
+import {
 	cloneSelectedProjectScript,
 	PROJECT_TOKEN_PATH,
 } from "../adapters/freestyle/clone-project";
@@ -165,7 +169,10 @@ async function resolveMachine(
 		workspace.providerRef
 	)
 		return workspace.providerRef;
-	const snapshotId = await loadAgentSnapshotId(workspace.userId);
+	const snapshotId = workspaceBootSnapshotId({
+		userAuthSnapshotId: await loadAgentSnapshotId(workspace.userId),
+		toolsSnapshotId: toolsSnapshotIdFromEnv(),
+	});
 	const created = await runtime.provision(
 		slug,
 		snapshotId ? { snapshotId } : undefined,
