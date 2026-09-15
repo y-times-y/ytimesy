@@ -4,6 +4,7 @@ import { SessionItemId } from "./ids";
 import {
 	itemsWithVisibleSideChatText,
 	sideAgentSubmitLane,
+	sideChatComposerAction,
 	sideChatTurnText,
 	visibleSideChatText,
 } from "./side-chat";
@@ -42,5 +43,13 @@ describe("side chat turn text", () => {
 				text: "explain the diff",
 			},
 		]);
+	});
+});
+
+describe("sideChatComposerAction", () => {
+	it("stops a running side agent instead of queuing another send", () => {
+		expect(sideChatComposerAction("running")).toBe("stop");
+		expect(sideChatComposerAction("idle")).toBe("send");
+		expect(sideChatComposerAction("completed")).toBe("send");
 	});
 });
