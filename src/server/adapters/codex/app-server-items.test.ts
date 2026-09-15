@@ -28,11 +28,13 @@ describe("sessionItemFromAppServerItem", () => {
 				id: "item_reason_1",
 				type: "reasoning",
 				summary: [{ text: "I should run the requested command." }],
+				duration_ms: 4200,
 			}),
 		).toEqual({
 			kind: "reasoning",
 			id: SessionItemId("item_reason_1"),
 			summaries: ["I should run the requested command."],
+			durationSeconds: 4.2,
 		});
 	});
 
@@ -316,6 +318,32 @@ describe("sessionItemsFromDaemonStatus", () => {
 		).toEqual([
 			{ kind: "userMessage", id: SessionItemId("user-1"), text: "hi" },
 			{ kind: "agentMessage", id: SessionItemId("assistant-1"), text: "pong" },
+		]);
+	});
+
+	it("surfaces a turn error when the daemon recorded no error item", () => {
+		expect(
+			sessionItemsFromDaemonStatus({
+				items: [
+					{
+						id: "user-1",
+						type: "userMessage",
+						content: [{ type: "text", text: "list files" }],
+					},
+				],
+				turn: { error: "thread/start failed: cwd does not exist" },
+			}),
+		).toEqual([
+			{
+				kind: "userMessage",
+				id: SessionItemId("user-1"),
+				text: "list files",
+			},
+			{
+				kind: "error",
+				id: SessionItemId("turn-error"),
+				message: "thread/start failed: cwd does not exist",
+			},
 		]);
 	});
 });

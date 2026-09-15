@@ -294,6 +294,7 @@ export function SessionLauncher({
 								busy={busy}
 								onConnect={onConnect}
 								onSaveApiKey={onSaveApiKey}
+								snapshotAvailable={session.snapshotAvailable}
 								models={models}
 								modelId={modelId}
 								onModelIdChange={setModelId}

@@ -2,11 +2,18 @@ import { Effect } from "effect";
 import { WorkspaceId } from "#/domain/ids";
 import { workspaceSessionMachineRef } from "#/domain/project-workspace";
 import {
+	desktopEmbedUrl,
 	desktopHostname,
 	desktopPortIsListening,
+	desktopStartFailureReason,
 	desktopViewerUrlForMachine,
+	START_HARNESS_BEFORE_DESKTOP,
 	type WorkspaceDesktop,
 } from "#/domain/workspace-desktop";
+import {
+	DESKTOP_WALLPAPER_B64_PATH,
+	desktopWallpaperBase64,
+} from "#/server/adapters/freestyle/desktop-wallpaper";
 import {
 	PROBE_WORKSPACE_DESKTOP,
 	START_WORKSPACE_DESKTOP,
@@ -48,7 +55,7 @@ export function startWorkspaceDesktop(
 		if (!providerRef) {
 			return {
 				status: "failed" as const,
-				reason: "Prepare a workspace before opening the desktop.",
+				reason: START_HARNESS_BEFORE_DESKTOP,
 			};
 		}
 		const key = scopeKey(scope);
@@ -56,8 +63,15 @@ export function startWorkspaceDesktop(
 		yield* Effect.tryPromise(() =>
 			machines.ensureRunning(WorkspaceId(providerRef)),
 		);
+		yield* Effect.tryPromise(() =>
+			machines.writeTextFile(
+				WorkspaceId(providerRef),
+				DESKTOP_WALLPAPER_B64_PATH,
+				desktopWallpaperBase64(),
+			),
+		);
 		const started = yield* Effect.tryPromise(() =>
-			machines.exec(WorkspaceId(providerRef), START_WORKSPACE_DESKTOP, 240_000),
+			machines.exec(WorkspaceId(providerRef), START_WORKSPACE_DESKTOP, 300_000),
 		);
 		if (started.exitCode !== 0) {
 			const failed: WorkspaceDesktop = {
@@ -82,7 +96,7 @@ export function startWorkspaceDesktop(
 			exposed._tag === "Right"
 				? {
 						status: "running",
-						viewerUrl: `${exposed.right}/vnc.html?autoconnect=1&resize=scale&reconnect=1`,
+						viewerUrl: desktopEmbedUrl(exposed.right),
 						display: ":0",
 						message: "You and the agent share this desktop.",
 					}
@@ -101,7 +115,7 @@ export function startWorkspaceDesktop(
 		Effect.catchAll((cause) => {
 			const failed: WorkspaceDesktop = {
 				status: "failed",
-				reason: cause instanceof Error ? cause.message : String(cause),
+				reason: desktopStartFailureReason(cause),
 			};
 			desktops.set(scopeKey(scope), failed);
 			return Effect.succeed(failed);

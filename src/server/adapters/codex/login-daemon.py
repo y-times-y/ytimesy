@@ -13,6 +13,9 @@ TASK_RESULT_PATH = "/tmp/ytimesy-task-result.json"
 SIDE_REQUEST_PATH = "/tmp/ytimesy-side-request.json"
 SIDE_RESULT_PATH = "/tmp/ytimesy-side-result.json"
 STOP_REQUEST_PATH = "/tmp/ytimesy-stop-request.json"
+PROJECT_CWD_PATH = "/tmp/ytimesy-project-cwd"
+DISPLAY_PATH = "/tmp/ytimesy-display"
+DEVELOPER_INSTRUCTIONS_PATH = "/tmp/ytimesy-developer-instructions.txt"
 TURN_PROMPT = "Reply with the single word pong and do not run any tools."
 SKIP_INITIAL_TURN = os.environ.get("YTIMESY_SKIP_INITIAL_TURN") == "1"
 SIDE_CHAT_PREFIX = (
@@ -364,6 +367,10 @@ def user_message_item(item_id, text):
     }
 
 
+def error_item(item_id, message):
+    return {"id": item_id, "type": "error", "message": message}
+
+
 rpc_id = 100
 
 
@@ -373,19 +380,86 @@ def next_rpc_id():
     return rpc_id
 
 
-def start_thread(proc, model_id):
+def project_cwd():
+    env = (os.environ.get("YTIMESY_PROJECT_CWD") or "").strip()
+    if env and os.path.isdir(env):
+        return env
+    try:
+        with open(PROJECT_CWD_PATH, encoding="utf-8") as handle:
+            path = handle.read().strip()
+        if path and os.path.isdir(path):
+            return path
+    except OSError:
+        pass
+    home = (os.environ.get("HOME") or "").strip()
+    if home and os.path.isdir(home):
+        return home
+    return "/tmp"
+
+
+def apply_display_env():
+    display = ":0"
+    try:
+        with open(DISPLAY_PATH, encoding="utf-8") as handle:
+            value = handle.read().strip()
+        if value:
+            display = value
+    except OSError:
+        pass
+    os.environ["DISPLAY"] = display
+    return display
+
+
+def developer_instructions(cwd):
+    try:
+        with open(DEVELOPER_INSTRUCTIONS_PATH, encoding="utf-8") as handle:
+            text = handle.read().strip()
+        if text:
+            return text
+    except OSError:
+        pass
+    display = apply_display_env()
+    return (
+        "You are in a ytimesy workspace VM. The project checkout is %s; work there. "
+        "This VM has a shared Linux desktop on DISPLAY=%s. The user watches and can "
+        "control that same screen from the Desktop tab. Use that display for QA and "
+        "computer-use: open the browser there, click, type, and screenshot there. "
+        "GUI commands must export DISPLAY=%s. Browser: chromium --no-sandbox, "
+        "chromium-browser --no-sandbox, or google-chrome --no-sandbox. "
+        "Pointer/keyboard: xdotool. Screenshots: scrot."
+        % (cwd, display, display)
+    )
+
+
+def start_thread(proc, model_id, cwd=None):
+    cwd = cwd or project_cwd()
+    apply_display_env()
+    params = {
+        "model": model_id,
+        "cwd": cwd,
+        "approvalPolicy": "never",
+        "sandbox": "danger-full-access",
+        "developerInstructions": developer_instructions(cwd),
+    }
+    thread_id, error = request_thread_start(proc, params)
+    if thread_id:
+        return thread_id, None
+    if error and "developerInstructions" in error:
+        params.pop("developerInstructions", None)
+        thread_id, error = request_thread_start(proc, params)
+        if thread_id:
+            return thread_id, None
+    return None, error or "thread/start failed"
+
+
+def request_thread_start(proc, params):
     request_id = next_rpc_id()
     send(
         proc,
         {
             "method": "thread/start",
             "id": request_id,
-            "params": {
-                "model": model_id,
-                "cwd": "/tmp",
-                "approvalPolicy": "never",
-                "sandbox": "danger-full-access",
-            },
+            "params": params,
         },
     )
     thread_message, _ = wait_for_id(proc, request_id, 45)
@@ -427,6 +501,7 @@ def request_turn_interrupt(proc, thread_id):
 
 
 def run_turn(proc, thread_id, model_id, text, on_items=None):
+    apply_display_env()
     request_id = next_rpc_id()
     send(
         proc,
@@ -591,6 +666,8 @@ def main():
     version = os.environ.get("CODEX_VERSION")
     write_status({"stage": "starting", "codexVersion": version})
     error_log = open("/tmp/ytimesy-app-server.err", "w", encoding="utf-8")
+    env = os.environ.copy()
+    env["DISPLAY"] = apply_display_env()
     proc = subprocess.Popen(
         [CODEX, "app-server"],
         stdin=subprocess.PIPE,
@@ -598,6 +675,7 @@ def main():
         stderr=error_log,
         text=True,
         bufsize=1,
+        env=env,
     )
     try:
         send(
@@ -675,11 +753,13 @@ def main():
         listed = [{"id": model["id"], "label": model["label"]} for model in models]
         turn = None
         thread_id = None
+        thread_cwd = None
         session_items = []
         turn_status = "idle"
         active_task_id = None
         side_turn = None
         side_thread_id = None
+        side_thread_cwd = None
         side_items = []
         side_turn_status = "idle"
         side_active_task_id = None
@@ -712,7 +792,8 @@ def main():
                 pass
 
         if model_id and not SKIP_INITIAL_TURN:
-            thread_id, thread_error = start_thread(proc, model_id)
+            thread_cwd = project_cwd()
+            thread_id, thread_error = start_thread(proc, model_id, thread_cwd)
             if thread_id:
                 turn_status = "running"
                 session_items = [user_message_item("user-initial", TURN_PROMPT)]
@@ -748,8 +829,12 @@ def main():
                 requested_model = request.get("modelId") or model_id
                 if requested_model:
                     model_id = requested_model
+                cwd = project_cwd()
+                if thread_id and thread_cwd != cwd:
+                    thread_id = None
                 if not thread_id and model_id:
-                    thread_id, thread_error = start_thread(proc, model_id)
+                    thread_id, thread_error = start_thread(proc, model_id, cwd)
+                    thread_cwd = cwd
                     if thread_error and not thread_id:
                         turn_status = "failed"
                         active_task_id = None
@@ -760,6 +845,15 @@ def main():
                             "text": thread_error,
                             "error": thread_error,
                         }
+                        session_items = merge_session_items(
+                            session_items,
+                            [
+                                user_message_item(
+                                    "user-%s" % request["id"], request["text"]
+                                ),
+                                error_item("error-%s" % request["id"], thread_error),
+                            ],
+                        )
                         finish_request(
                             TASK_REQUEST_PATH, TASK_RESULT_PATH, request["id"], turn
                         )
@@ -787,6 +881,11 @@ def main():
                         request["text"],
                         on_items=on_task_items,
                     )
+                    if turn.get("error"):
+                        session_items = merge_session_items(
+                            session_items,
+                            [error_item("error-%s" % request["id"], turn["error"])],
+                        )
                     turn_status = (
                         "failed"
                         if turn.get("status") in ("error", "timeout", "failed")
@@ -810,8 +909,14 @@ def main():
                     requested_model = side_request.get("modelId") or model_id
                     if requested_model:
                         model_id = requested_model
+                    cwd = project_cwd()
+                    if side_thread_id and side_thread_cwd != cwd:
+                        side_thread_id = None
                     if not side_thread_id and model_id:
-                        side_thread_id, side_thread_error = start_thread(proc, model_id)
+                        side_thread_id, side_thread_error = start_thread(
+                            proc, model_id, cwd
+                        )
+                        side_thread_cwd = cwd
                         if side_thread_error and not side_thread_id:
                             side_turn_status = "failed"
                             side_active_task_id = None

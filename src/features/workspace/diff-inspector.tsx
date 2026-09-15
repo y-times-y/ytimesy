@@ -54,10 +54,15 @@ function DiffFilePreview({
 		>
 			<summary title={change.path}>
 				<span className="file-change-name">{path}</span>
-				<FileChangeCounts
-					additions={change.additions}
-					deletions={change.deletions}
-				/>
+				<span className="diff-file-meta">
+					<FileChangeCounts
+						additions={change.additions}
+						deletions={change.deletions}
+					/>
+					{change.change === "add" ? (
+						<span className="diff-file-badge">New</span>
+					) : null}
+				</span>
 			</summary>
 			{lines.length === 0 ? (
 				<p className="diff-preview-empty">No diff preview for this file.</p>
@@ -68,6 +73,9 @@ function DiffFilePreview({
 							key={`${change.path}:${line.number}`}
 							className={`diff-line diff-line-${line.kind}`}
 						>
+							<span className="diff-line-number" aria-hidden="true">
+								{line.number}
+							</span>
 							<span className="diff-gutter" aria-hidden="true">
 								{line.kind === "add" ? "+" : line.kind === "del" ? "-" : " "}
 							</span>

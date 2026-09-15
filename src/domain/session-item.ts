@@ -28,6 +28,7 @@ export type ReasoningItem = {
 	readonly kind: "reasoning";
 	readonly id: SessionItemId;
 	readonly summaries: readonly string[];
+	readonly durationSeconds?: number;
 };
 
 export type PlanItem = {
@@ -141,9 +142,32 @@ export function lastUserMessageText(
 ): string | null {
 	for (let index = items.length - 1; index >= 0; index -= 1) {
 		const item = items[index];
-		if (item?.kind === "userMessage" && item.text.trim()) return item.text;
+		if (
+			item?.kind === "userMessage" &&
+			item.text.trim() &&
+			!isWorkspacePreamble(item.text)
+		) {
+			return item.text;
+		}
 	}
 	return null;
+}
+
+export function sessionUsesFollowUpLayout(input: {
+	readonly items: readonly SessionItem[];
+	readonly turnStatus: SessionTurnStatus;
+}): boolean {
+	return (
+		Boolean(lastUserMessageText(input.items)) || input.turnStatus === "running"
+	);
+}
+
+export function sessionTitleFromItems(items: readonly SessionItem[]): string {
+	const text = lastUserMessageText(items);
+	if (!text) return "New session";
+	const line = text.trim().split("\n")[0]?.trim() ?? "";
+	if (!line) return "New session";
+	return line.length > 48 ? `${line.slice(0, 47)}…` : line;
 }
 
 export function visibleSessionItems(
@@ -169,13 +193,20 @@ export function compactTimelineItems(
 ): SessionItem[] {
 	const presented: SessionItem[] = [];
 	for (const item of items) {
+		if (item.kind === "userMessage" && isWorkspacePreamble(item.text)) {
+			continue;
+		}
 		if (item.kind === "commandExecution") {
 			presented.push(...presentCommandExecution(item));
 			continue;
 		}
 		presented.push(item);
 	}
-	return presentCodexTurns(presented);
+	return presented;
+}
+
+function isWorkspacePreamble(text: string): boolean {
+	return text.startsWith("You are in a ytimesy workspace VM.");
 }
 
 export function showTurnWorking(
@@ -184,7 +215,21 @@ export function showTurnWorking(
 ): boolean {
 	if (turnStatus !== "running") return false;
 	const last = compactTimelineItems(items).at(-1);
-	return last == null || last.kind === "userMessage";
+	if (last == null || last.kind === "userMessage") return true;
+	if (last.kind === "reasoning") return false;
+	if (last.kind === "commandExecution" && last.status === "inProgress") {
+		return false;
+	}
+	if (last.kind === "fileChange" && last.status === "inProgress") {
+		return false;
+	}
+	if (last.kind === "dynamicToolCall" && last.status === "inProgress") {
+		return false;
+	}
+	if (last.kind === "mcpToolCall" && last.status === "inProgress") {
+		return false;
+	}
+	return true;
 }
 
 function presentCommandExecution(item: CommandExecutionItem): SessionItem[] {
@@ -199,54 +244,4 @@ function presentCommandExecution(item: CommandExecutionItem): SessionItem[] {
 	};
 	if (!remainder) return [files];
 	return [files, { ...item, command: remainder }];
-}
-
-function presentCodexTurns(items: readonly SessionItem[]): SessionItem[] {
-	const compacted: SessionItem[] = [];
-	let index = 0;
-	while (index < items.length && items[index]?.kind !== "userMessage") {
-		const leading = collectUntilUser(items, index);
-		compacted.push(...presentTurnBody(leading.items));
-		index = leading.next;
-	}
-	while (index < items.length) {
-		const user = items[index];
-		if (!user) break;
-		compacted.push(user);
-		index += 1;
-		const body = collectUntilUser(items, index);
-		compacted.push(...presentTurnBody(body.items));
-		index = body.next;
-	}
-	return compacted;
-}
-
-function collectUntilUser(
-	items: readonly SessionItem[],
-	start: number,
-): { items: SessionItem[]; next: number } {
-	const collected: SessionItem[] = [];
-	let index = start;
-	while (index < items.length) {
-		const item = items[index];
-		if (!item || item.kind === "userMessage") break;
-		collected.push(item);
-		index += 1;
-	}
-	return { items: collected, next: index };
-}
-
-function presentTurnBody(body: readonly SessionItem[]): SessionItem[] {
-	const reasonings = body.filter(
-		(row): row is ReasoningItem => row.kind === "reasoning",
-	);
-	const rest = body.filter((row) => row.kind !== "reasoning");
-	if (!reasonings[0]) return [...rest];
-	const thought: ReasoningItem = {
-		...reasonings[0],
-		summaries: reasonings.flatMap((row) => row.summaries),
-	};
-	const firstTool = rest.findIndex((row) => row.kind !== "agentMessage");
-	if (firstTool <= 0) return [thought, ...rest];
-	return [...rest.slice(0, firstTool), thought, ...rest.slice(firstTool)];
 }

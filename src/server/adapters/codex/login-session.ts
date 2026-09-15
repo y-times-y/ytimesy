@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { Duration, Effect } from "effect";
+import { failureMessage } from "#/domain/failure-message";
 import type { WorkspaceId } from "#/domain/ids";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
 import {
@@ -13,6 +15,7 @@ const LOGIN_DAEMON_SOURCE = readFileSync(
 	new URL("./login-daemon.py", import.meta.url),
 	"utf8",
 );
+const LOGIN_DAEMON_HASH_PATH = "/tmp/ytimesy-codex-login.hash";
 
 const CODEX_INSTALL_SCRIPT = `set -eu
 export HOME="\${HOME:-/root}"
@@ -42,6 +45,10 @@ if [ -f /tmp/ytimesy-codex-login.pid ] && kill -0 "$(cat /tmp/ytimesy-codex-logi
   exit 0
 fi
 rm -f /tmp/ytimesy-auth-status.json
+export DISPLAY="\${DISPLAY:-:0}"
+if [ -f /tmp/ytimesy-project-cwd ]; then
+  export YTIMESY_PROJECT_CWD="$(tr -d '\\n' < /tmp/ytimesy-project-cwd)"
+fi
 PYTHONUNBUFFERED=1 setsid python3 /tmp/ytimesy-codex-login.py >/tmp/ytimesy-codex-login.log 2>&1 < /dev/null &
 echo $! > /tmp/ytimesy-codex-login.pid
 echo "LOGIN_PID=$(cat /tmp/ytimesy-codex-login.pid)"
@@ -107,6 +114,10 @@ function failedStatus(message: string): CodexLoginStatus {
 	return { stage: "failed", message };
 }
 
+function failedFromCause(cause: unknown): CodexLoginStatus {
+	return failedStatus(failureMessage(cause));
+}
+
 export function startInteractiveDeviceCodeLogin(
 	machines: WorkspaceMachines,
 	workspaceId: WorkspaceId,
@@ -160,6 +171,9 @@ ${START_LOGIN_SCRIPT}`,
 			yield* Effect.sleep(Duration.seconds(1));
 			const status = yield* readLoginStatus(machines, workspaceId);
 			if (status.stage !== "missing" && status.stage !== "starting") {
+				if (status.stage === "authenticated") {
+					yield* persistLoginDaemonHash(machines, workspaceId);
+				}
 				return status;
 			}
 		}
@@ -170,13 +184,7 @@ ${START_LOGIN_SCRIPT}`,
 		return failedStatus(
 			`Codex login did not publish a device code in time${log ? `: ${log.slice(-500)}` : ""}`,
 		);
-	}).pipe(
-		Effect.catchAll((cause) =>
-			Effect.succeed(
-				failedStatus(cause instanceof Error ? cause.message : String(cause)),
-			),
-		),
-	);
+	}).pipe(Effect.catchAll((cause) => Effect.succeed(failedFromCause(cause))));
 }
 
 export function resumeCodexSession(
@@ -233,27 +241,77 @@ ${START_LOGIN_SCRIPT}`,
 			);
 		}
 
+		let sawRestart = false;
 		for (let attempt = 0; attempt < 90; attempt += 1) {
 			yield* Effect.sleep(Duration.seconds(2));
 			const status = yield* readLoginStatus(machines, workspaceId);
+			if (status.stage === "missing" || status.stage === "starting") {
+				sawRestart = true;
+				continue;
+			}
+			if (!sawRestart && attempt < 3) continue;
 			if (
 				status.stage === "authenticated" ||
 				status.stage === "failed" ||
 				status.stage === "awaiting_device_code"
 			) {
+				if (status.stage === "authenticated") {
+					yield* persistLoginDaemonHash(machines, workspaceId);
+				}
 				return status;
 			}
 		}
 		return failedStatus(
 			"Resumed Codex session did not finish model/list or turn/start",
 		);
-	}).pipe(
-		Effect.catchAll((cause) =>
-			Effect.succeed(
-				failedStatus(cause instanceof Error ? cause.message : String(cause)),
+	}).pipe(Effect.catchAll((cause) => Effect.succeed(failedFromCause(cause))));
+}
+
+/**
+ * Writes the current login daemon onto the guest. Restarts it only when the
+ * source changed so reconnecting does not wipe a live transcript.
+ */
+export function ensureCurrentLoginDaemon(
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+): Effect.Effect<void> {
+	return Effect.gen(function* () {
+		const expected = loginDaemonSourceHash();
+		yield* Effect.tryPromise(() =>
+			machines.writeTextFile(
+				workspaceId,
+				"/tmp/ytimesy-codex-login.py",
+				LOGIN_DAEMON_SOURCE,
 			),
+		);
+		const existing = yield* Effect.tryPromise(() =>
+			machines.readTextFile(workspaceId, LOGIN_DAEMON_HASH_PATH),
+		).pipe(Effect.catchAll(() => Effect.succeed("")));
+		if ((existing ?? "").trim() === expected) return;
+		const resumed = yield* resumeCodexSession(machines, workspaceId, {
+			skipInitialTurn: true,
+		});
+		if (resumed.stage === "authenticated") {
+			yield* persistLoginDaemonHash(machines, workspaceId);
+		}
+	}).pipe(Effect.catchAll(() => Effect.void));
+}
+
+function loginDaemonSourceHash(): string {
+	return createHash("sha256").update(LOGIN_DAEMON_SOURCE).digest("hex");
+}
+
+function persistLoginDaemonHash(
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+): Effect.Effect<void> {
+	return Effect.tryPromise(() =>
+		machines.writeTextFile(
+			workspaceId,
+			LOGIN_DAEMON_HASH_PATH,
+			`${loginDaemonSourceHash()}\n`,
 		),
-	);
+	).pipe(Effect.catchAll(() => Effect.void));
 }
 
 /**
@@ -296,7 +354,7 @@ export function confirmChatgptLoginOnWorkspace(
 		Effect.catchAll((cause) =>
 			Effect.succeed({
 				confirmed: false as const,
-				message: cause instanceof Error ? cause.message : String(cause),
+				message: failureMessage(cause),
 			}),
 		),
 	);
@@ -333,7 +391,7 @@ export function snapshotAuthenticatedCodexWorkspace(
 		Effect.catchAll((cause) =>
 			Effect.succeed({
 				ok: false as const,
-				message: cause instanceof Error ? cause.message : String(cause),
+				message: failureMessage(cause),
 			}),
 		),
 	);
@@ -347,11 +405,7 @@ export function readLoginStatus(
 		machines.readTextFile(workspaceId, "/tmp/ytimesy-auth-status.json"),
 	).pipe(
 		Effect.map(parseCodexLoginStatus),
-		Effect.catchAll((cause) =>
-			Effect.succeed(
-				failedStatus(cause instanceof Error ? cause.message : String(cause)),
-			),
-		),
+		Effect.catchAll((cause) => Effect.succeed(failedFromCause(cause))),
 	);
 }
 
@@ -409,13 +463,7 @@ export function submitCodexTask(
 			}
 		}
 		return failedStatus("Codex did not finish the task in time");
-	}).pipe(
-		Effect.catchAll((cause) =>
-			Effect.succeed(
-				failedStatus(cause instanceof Error ? cause.message : String(cause)),
-			),
-		),
-	);
+	}).pipe(Effect.catchAll((cause) => Effect.succeed(failedFromCause(cause))));
 }
 
 export function interruptCodexTurn(
@@ -432,13 +480,7 @@ export function interruptCodexTurn(
 		);
 		yield* Effect.sleep(Duration.seconds(1));
 		return yield* readLoginStatus(machines, workspaceId);
-	}).pipe(
-		Effect.catchAll((cause) =>
-			Effect.succeed(
-				failedStatus(cause instanceof Error ? cause.message : String(cause)),
-			),
-		),
-	);
+	}).pipe(Effect.catchAll((cause) => Effect.succeed(failedFromCause(cause))));
 }
 
 function resultMatchesTask(raw: string, taskId: string): boolean {
