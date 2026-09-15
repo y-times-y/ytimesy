@@ -6,6 +6,7 @@ import {
 } from "#/domain/agent-provider";
 import {
 	canResumeDisconnectedFollowUp,
+	composerSendIsEnabled,
 	harnessRequiresAccountLogin,
 	selectedHarnessIsConnected,
 } from "#/domain/harness-access";
@@ -152,9 +153,21 @@ export function SessionLauncher({
 	}, [session.items]);
 
 	function sendText(text: string) {
-		if (!text || busy) return;
-		if (!composerReady) return;
-		if (!canResumeFollowUp && !modelId) return;
+		if (
+			!composerSendIsEnabled({
+				harnessId,
+				connection: session.connection,
+				turnStatus: session.turnStatus,
+				snapshotAvailable: session.snapshotAvailable,
+				canSend: session.canSend,
+				busy,
+				draft: text,
+				modelId,
+				slashDraft: false,
+			})
+		) {
+			return;
+		}
 		setOptimisticItems((current) => [
 			...current,
 			{
@@ -356,11 +369,17 @@ export function SessionLauncher({
 									className="session-send"
 									aria-label="Send"
 									disabled={
-										!composerReady ||
-										busy ||
-										!draft.trim() ||
-										(!canResumeFollowUp && !modelId) ||
-										Boolean(slashDraft)
+										!composerSendIsEnabled({
+											harnessId,
+											connection: session.connection,
+											turnStatus: session.turnStatus,
+											snapshotAvailable: session.snapshotAvailable,
+											canSend: session.canSend,
+											busy,
+											draft,
+											modelId,
+											slashDraft: Boolean(slashDraft),
+										})
 									}
 									title={
 										canResumeFollowUp

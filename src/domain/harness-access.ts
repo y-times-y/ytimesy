@@ -146,6 +146,29 @@ export function canResumeDisconnectedFollowUp(input: {
 	return input.harnessId === "opencode";
 }
 
+export function composerSendIsEnabled(input: {
+	readonly harnessId: AgentProviderId;
+	readonly connection: AgentConnection;
+	readonly turnStatus: SessionTurnStatus;
+	readonly snapshotAvailable?: boolean;
+	readonly canSend: boolean;
+	readonly busy: boolean;
+	readonly draft: string;
+	readonly modelId: string;
+	readonly slashDraft: boolean;
+}): boolean {
+	if (input.busy || input.slashDraft || !input.draft.trim()) return false;
+	const harnessReady = selectedHarnessIsConnected(
+		input.connection,
+		input.harnessId,
+	);
+	const canResume = canResumeDisconnectedFollowUp(input);
+	if (!harnessReady && !canResume) return false;
+	if (harnessReady && !input.canSend && !canResume) return false;
+	if (!canResume && !input.modelId) return false;
+	return true;
+}
+
 export function harnessRequiresAccountLogin(
 	harnessId: AgentProviderId,
 ): boolean {

@@ -213,11 +213,6 @@ export function WorkspaceHome({
 	}, [applySessionView, busy, harnessId, activeProjectId, activeSessionId]);
 
 	useEffect(() => {
-		if (session.connection.status !== "authenticated") return;
-		setInspectorOpen(true);
-	}, [session.connection.status]);
-
-	useEffect(() => {
 		if (compact || openedDiff.current || fileChanges.length === 0) return;
 		openedDiff.current = true;
 		setToolsView("diff");

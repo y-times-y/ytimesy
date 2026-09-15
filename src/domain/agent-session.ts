@@ -1,3 +1,5 @@
+import { workspaceLooksGone } from "./failure-message";
+
 export function projectEnvironmentSnapshotSlug(workspaceId: string) {
 	return `ytimesy-pe-${compactId(workspaceId)}`;
 }
@@ -36,6 +38,15 @@ export function sessionMachinePlan(input: {
 		kind: "blocked",
 		reason: "Prepare a project environment before starting an agent.",
 	};
+}
+
+export function shouldResealProjectSnapshotAfterCopyFailure(message: string) {
+	if (/LIMIT_EXCEEDED|limit of \d+ VMs/i.test(message)) return false;
+	return (
+		workspaceLooksGone(message) ||
+		/snapshot/i.test(message) ||
+		/expired|auto.?delete/i.test(message)
+	);
 }
 
 export function chatsFromAgentSessions(
