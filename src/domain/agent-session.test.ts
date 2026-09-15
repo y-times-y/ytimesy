@@ -68,12 +68,12 @@ describe("sessionMachinePlan", () => {
 
 describe("agent session names", () => {
 	it("keeps Freestyle slugs short and stable", () => {
-		expect(projectEnvironmentSnapshotSlug("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")).toBe(
-			"ytimesy-pe-aaaaaaaabbbbcccc",
-		);
-		expect(agentSessionMachineSlug("11111111-2222-3333-4444-555555555555")).toBe(
-			"ytimesy-ag-1111111122223333",
-		);
+		expect(
+			projectEnvironmentSnapshotSlug("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+		).toBe("ytimesy-pe-aaaaaaaabbbbcccc");
+		expect(
+			agentSessionMachineSlug("11111111-2222-3333-4444-555555555555"),
+		).toBe("ytimesy-ag-1111111122223333");
 	});
 
 	it("lists saved sessions as sidebar chats", () => {

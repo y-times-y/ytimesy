@@ -18,7 +18,7 @@ describe("cloneSelectedProjectScript", () => {
 		expect(script).toContain("x-access-token:");
 		expect(script).toContain("@github.com");
 		expect(script).toContain('if [ -d "$DEST/.git" ]; then');
-		expect(script).not.toContain("git -C \"$DEST\" fetch --depth 1");
+		expect(script).not.toContain('git -C "$DEST" fetch --depth 1');
 		expect(script).toContain('git -C "$DEST" remote set-url origin');
 		expect(script).toContain(PROJECT_CWD_PATH);
 		expect(script).toContain('rm -f "$TOKEN_FILE"');

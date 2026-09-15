@@ -5,18 +5,18 @@ import {
 	type SessionMachinePlan,
 	sessionMachinePlan,
 } from "#/domain/agent-session";
+import { WorkspaceId } from "#/domain/ids";
 import {
 	PROJECT_CONTEXT_PATH,
 	projectContextDocument,
 	relatedTracesForTask,
 } from "#/domain/project-context";
-import { WorkspaceId } from "#/domain/ids";
 import {
+	type AgentSessionRecord,
 	insertAgentSession,
 	listAgentSessions,
 	saveAgentSessionProviderRef,
 	templateAlreadyBound,
-	type AgentSessionRecord,
 } from "#/server/adapters/agent-sessions";
 import {
 	listProjectTraces,
@@ -40,7 +40,7 @@ export async function bindAgentSessionMachine(
 	},
 ) {
 	const workspace = await workspaceForProject(input.userId, input.projectId);
-	if (!workspace || workspace.status !== "ready" || !workspace.providerRef) {
+	if (workspace?.status !== "ready" || !workspace.providerRef) {
 		throw new Error("Prepare a project environment before starting an agent.");
 	}
 	const sessions = await listAgentSessions(input.userId, input.projectId);
@@ -60,10 +60,7 @@ export async function bindAgentSessionMachine(
 			workspaceId: workspace.id,
 			harness: input.harness,
 		}));
-	const bound = await templateAlreadyBound(
-		workspace.id,
-		workspace.providerRef,
-	);
+	const bound = await templateAlreadyBound(workspace.id, workspace.providerRef);
 	const executed = await executeSessionMachinePlan({
 		machines,
 		sessionId: session.id,
@@ -96,7 +93,10 @@ export async function peekAgentSessionMachine(input: {
 	readonly userId: string;
 	readonly projectId: string;
 	readonly sessionId?: string;
-}): Promise<{ session: AgentSessionRecord | null; providerRef: string | null }> {
+}): Promise<{
+	session: AgentSessionRecord | null;
+	providerRef: string | null;
+}> {
 	const sessions = await listAgentSessions(input.userId, input.projectId);
 	const session = input.sessionId
 		? (sessions.find((row) => row.id === input.sessionId) ?? null)

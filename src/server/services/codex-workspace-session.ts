@@ -1,9 +1,7 @@
 import { Effect } from "effect";
 import type { AgentConnection } from "#/domain/agent-connection";
 import { WorkspaceId } from "#/domain/ids";
-import {
-	codexConnectBlockedReason,
-} from "#/domain/project-workspace";
+import { codexConnectBlockedReason } from "#/domain/project-workspace";
 import { shouldStartDeviceCodeAfterSnapshotResume } from "#/domain/proof-workspace-recovery";
 import type { SessionItem, SessionTurnStatus } from "#/domain/session-item";
 import { canSubmitComposer, canSubmitSideChat } from "#/domain/session-policy";
@@ -167,11 +165,7 @@ export function connectCodexWorkspaceSession(
 			createNew: false,
 		});
 		if (existing.connection.status === "authenticated") {
-			yield* prepareCodexGuest(
-				machines,
-				WorkspaceId(bound.providerRef),
-				scope,
-			);
+			yield* prepareCodexGuest(machines, WorkspaceId(bound.providerRef), scope);
 			return yield* readCodexWorkspaceSession(machines, {
 				...scope,
 				sessionId: bound.session.id,
@@ -194,11 +188,7 @@ export function connectCodexWorkspaceSession(
 				WorkspaceId(bound.providerRef),
 				{ planType: status.planType, email: null },
 			);
-			yield* prepareCodexGuest(
-				machines,
-				WorkspaceId(bound.providerRef),
-				scope,
-			);
+			yield* prepareCodexGuest(machines, WorkspaceId(bound.providerRef), scope);
 		}
 		return yield* Effect.tryPromise(() =>
 			persistBoundSessionView(

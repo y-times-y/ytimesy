@@ -19,8 +19,8 @@ export function projectContextDocument(input: {
 		})
 		.filter((line): line is string => Boolean(line));
 	const parts: string[] = [];
-	if (briefing) parts.push("## Project briefing", briefing);
-	if (traces.length) parts.push("## Related traces", traces.join("\n"));
+	if (briefing) parts.push(`## Project briefing\n${briefing}`);
+	if (traces.length) parts.push(`## Related traces\n${traces.join("\n")}`);
 	return parts.join("\n\n");
 }
 
@@ -55,8 +55,6 @@ export function traceSummaryFromTurn(input: {
 	const task = input.task.trim().replace(/\s+/g, " ");
 	const reply = input.reply.trim().replace(/\s+/g, " ");
 	if (!task && !reply) return null;
-	const summary = reply
-		? `${task || "Task"}: ${reply}`
-		: task;
+	const summary = reply ? `${task || "Task"}: ${reply}` : task;
 	return summary.length > 400 ? `${summary.slice(0, 399)}…` : summary;
 }

@@ -2,9 +2,9 @@ import { traceSummaryFromTurn } from "#/domain/project-context";
 import {
 	lastAgentMessageText,
 	lastUserMessageText,
+	type SessionItem,
 	sessionItemsFromUnknown,
 	sessionTitleFromItems,
-	type SessionItem,
 } from "#/domain/session-item";
 import {
 	type AgentSessionRecord,

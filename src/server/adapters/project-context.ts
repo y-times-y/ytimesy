@@ -38,12 +38,6 @@ export async function insertProjectTrace(input: {
 	await database().query(
 		`insert into project_trace(id, project_id, session_id, area, summary)
 		 values($1,$2,$3,$4,$5)`,
-		[
-			randomUUID(),
-			input.projectId,
-			input.sessionId,
-			input.area,
-			input.summary,
-		],
+		[randomUUID(), input.projectId, input.sessionId, input.area, input.summary],
 	);
 }

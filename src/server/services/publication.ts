@@ -26,8 +26,8 @@ import {
 } from "../adapters/repository-setup";
 import type { WorkspaceRuntime } from "../adapters/workspace-runtime";
 import { readyWorkspaceForOwner } from "../adapters/workspaces";
-import { peekAgentSessionMachine } from "./agent-session-machine";
 import { githubAccessToken } from "../auth/github-connection";
+import { peekAgentSessionMachine } from "./agent-session-machine";
 
 /**
  * Commits and pushes the live workspace checkout, then opens a draft PR.

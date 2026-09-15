@@ -33,7 +33,10 @@ describe("projectContextDocument", () => {
 
 describe("relatedTracesForTask", () => {
 	const traces = [
-		{ area: "auth", summary: "GitHub App installation tokens clone private repos" },
+		{
+			area: "auth",
+			summary: "GitHub App installation tokens clone private repos",
+		},
 		{ area: "desktop", summary: "noVNC maps display :0" },
 		{ area: "diff", summary: "git status --porcelain feeds the inspector" },
 	];
