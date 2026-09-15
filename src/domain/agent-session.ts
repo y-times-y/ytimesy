@@ -1,3 +1,5 @@
+import { posixShellQuoted } from "./posix-command";
+
 export function projectEnvironmentSnapshotSlug(workspaceId: string) {
 	return `ytimesy-pe-${compactId(workspaceId)}`;
 }
@@ -65,13 +67,30 @@ export const COPIED_SESSION_SCRATCH_PATHS = [
 	"/tmp/ytimesy-side-result.json",
 ] as const;
 
+export const COPIED_SESSION_DB_FILES = [
+	"/home/ubuntu/.local/share/opencode/opencode.db",
+	"/home/ubuntu/.local/share/opencode/opencode.db-wal",
+	"/home/ubuntu/.local/share/opencode/opencode.db-shm",
+	"/root/.local/share/opencode/opencode.db",
+	"/root/.local/share/opencode/opencode.db-wal",
+	"/root/.local/share/opencode/opencode.db-shm",
+] as const;
+
+export const COPIED_SESSION_SCRATCH_TREES = [
+	"/home/ubuntu/.local/share/opencode/log",
+	"/home/ubuntu/.local/state/opencode",
+	"/home/ubuntu/.codex/sessions",
+	"/root/.local/share/opencode/log",
+	"/root/.local/state/opencode",
+	"/root/.codex/sessions",
+] as const;
+
 export function copiedSessionScratchResetCommand() {
-	return [
-		`export HOME="\${HOME:-/home/ubuntu}"`,
-		`rm -f ${COPIED_SESSION_SCRATCH_PATHS.join(" ")}`,
-		`rm -f "$HOME/.local/share/opencode/opencode.db" "$HOME/.local/share/opencode/opencode.db-wal" "$HOME/.local/share/opencode/opencode.db-shm"`,
-		`rm -rf "$HOME/.local/share/opencode/log" "$HOME/.local/state/opencode" "$HOME/.codex/sessions"`,
-	].join(" && ");
+	const script = [
+		`rm -f ${[...COPIED_SESSION_SCRATCH_PATHS, ...COPIED_SESSION_DB_FILES].join(" ")}`,
+		`rm -rf ${COPIED_SESSION_SCRATCH_TREES.join(" ")}`,
+	].join("; ");
+	return `bash -lc ${posixShellQuoted(script)}`;
 }
 
 export function sessionMachineRefsToDestroy(input: {
