@@ -6,6 +6,10 @@ import {
 	START_HARNESS_BEFORE_DESKTOP,
 	type WorkspaceDesktop,
 } from "#/domain/workspace-desktop";
+import {
+	DESKTOP_WALLPAPER_B64_PATH,
+	desktopWallpaperBase64,
+} from "#/server/adapters/freestyle/desktop-wallpaper";
 import { START_WORKSPACE_DESKTOP } from "#/server/adapters/freestyle/start-desktop";
 import {
 	deleteProofVmState,
@@ -31,11 +35,18 @@ export function startWorkspaceDesktop(
 			};
 		}
 		currentDesktop = { status: "starting" };
+		yield* Effect.tryPromise(() =>
+			machines.writeTextFile(
+				WorkspaceId(vm.workspaceId),
+				DESKTOP_WALLPAPER_B64_PATH,
+				desktopWallpaperBase64(),
+			),
+		);
 		const started = yield* Effect.tryPromise(() =>
 			machines.exec(
 				WorkspaceId(vm.workspaceId),
 				START_WORKSPACE_DESKTOP,
-				240_000,
+				300_000,
 			),
 		);
 		if (started.exitCode !== 0) {
