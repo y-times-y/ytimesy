@@ -105,7 +105,8 @@ describe("copiedSessionScratchResetCommand", () => {
 		const command = copiedSessionScratchResetCommand();
 		expect(command).toContain("/tmp/ytimesy-opencode-status.json");
 		expect(command).toContain("/tmp/ytimesy-auth-status.json");
-		expect(command.startsWith("rm -f ")).toBe(true);
+		expect(command).toContain("$HOME/.local/share/opencode/opencode.db");
+		expect(command).toContain("$HOME/.codex/sessions");
 	});
 });
 

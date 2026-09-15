@@ -66,7 +66,12 @@ export const COPIED_SESSION_SCRATCH_PATHS = [
 ] as const;
 
 export function copiedSessionScratchResetCommand() {
-	return `rm -f ${COPIED_SESSION_SCRATCH_PATHS.join(" ")}`;
+	return [
+		`export HOME="\${HOME:-/home/ubuntu}"`,
+		`rm -f ${COPIED_SESSION_SCRATCH_PATHS.join(" ")}`,
+		`rm -f "$HOME/.local/share/opencode/opencode.db" "$HOME/.local/share/opencode/opencode.db-wal" "$HOME/.local/share/opencode/opencode.db-shm"`,
+		`rm -rf "$HOME/.local/share/opencode/log" "$HOME/.local/state/opencode" "$HOME/.codex/sessions"`,
+	].join(" && ");
 }
 
 export function sessionMachineRefsToDestroy(input: {

@@ -76,6 +76,7 @@ describe("executeSessionMachinePlan", () => {
 			saveSessionProviderRef: async () => undefined,
 		});
 		expect(runtime.commands[0]).toContain("/tmp/ytimesy-opencode-status.json");
+		expect(runtime.commands[0]).toContain("opencode.db");
 	});
 
 	it("resumes the same agent VM for later turns", async () => {
