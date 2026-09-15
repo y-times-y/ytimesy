@@ -16,7 +16,7 @@ export function SideChatPanel({
 	mainTurnRunning,
 	isolated = false,
 	busy,
-	queued,
+	queued = false,
 	onSend,
 }: {
 	items: readonly SessionItem[];
@@ -25,7 +25,7 @@ export function SideChatPanel({
 	mainTurnRunning: boolean;
 	isolated?: boolean;
 	busy: boolean;
-	queued: boolean;
+	queued?: boolean;
 	onSend: (text: string) => void;
 }) {
 	const [draft, setDraft] = useState("");

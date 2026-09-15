@@ -1,10 +1,20 @@
 import { describe, expect, it } from "vitest";
+import { offeredAgentProviders } from "./agent-provider";
 import { SessionItemId } from "./ids";
 import {
 	itemsWithVisibleSideChatText,
+	sideAgentSubmitLane,
 	sideChatTurnText,
 	visibleSideChatText,
 } from "./side-chat";
+
+describe("side agent isolation", () => {
+	it("submits every harness side agent on its own copied checkout", () => {
+		for (const provider of offeredAgentProviders()) {
+			expect(sideAgentSubmitLane(provider.id)).toBe("main");
+		}
+	});
+});
 
 describe("side chat turn text", () => {
 	it("strips the ask-only prefix from the visible user question", () => {

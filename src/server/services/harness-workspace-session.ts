@@ -69,7 +69,11 @@ export function readHarnessWorkspaceSession(
 	scope: HarnessSessionScope,
 ): Effect.Effect<PublicHarnessSession> {
 	if (scope.harnessId === "codex") {
-		return readCodexWorkspaceSession(machines, scope);
+		return withSiblingSideChat(
+			machines,
+			scope,
+			readCodexWorkspaceSession(machines, scope),
+		);
 	}
 	return withSessionMachine(machines, scope, false, (providerRef, session) => {
 		if (scope.harnessId === "claude") {
@@ -101,7 +105,11 @@ export function connectHarnessWorkspaceSession(
 	scope: HarnessSessionScope,
 ): Effect.Effect<PublicHarnessSession> {
 	if (scope.harnessId === "codex") {
-		return connectCodexWorkspaceSession(machines, scope);
+		return withSiblingSideChat(
+			machines,
+			scope,
+			connectCodexWorkspaceSession(machines, scope),
+		);
 	}
 	const harnessName = agentProviderById(scope.harnessId).name;
 	return Effect.gen(function* () {
@@ -199,11 +207,15 @@ export function sendHarnessWorkspaceTask(
 		readonly lane?: "main" | "side";
 	},
 ): Effect.Effect<PublicHarnessSession> {
-	if (scope.harnessId === "codex") {
-		return sendCodexWorkspaceTask(machines, scope, input);
-	}
 	if (input.lane === "side") {
 		return sendHarnessSideTask(machines, scope, input);
+	}
+	if (scope.harnessId === "codex") {
+		return withSiblingSideChat(
+			machines,
+			scope,
+			sendCodexWorkspaceTask(machines, scope, input),
+		);
 	}
 	return withSessionMachine(machines, scope, true, (providerRef, session) =>
 		submitConnectedHarnessTask(
@@ -443,7 +455,8 @@ function submitConnectedHarnessTask(
 
 /**
  * Side chat is a second agent session VM copied from the same project
- * snapshot. It does not share the main agent's checkout.
+ * snapshot. Codex uses that copy's main lane so it does not share the
+ * parent's checkout. Read of the parent stays paused-safe.
  */
 function sendHarnessSideTask(
 	machines: WorkspaceMachines,
@@ -481,37 +494,32 @@ function sendHarnessSideTask(
 		yield* Effect.tryPromise(() =>
 			machines.ensureRunning(WorkspaceId(bound.providerRef)),
 		);
-		const sideView = yield* submitConnectedHarnessTask(
-			machines,
-			scope,
-			bound.providerRef,
-			bound.session,
-			input,
-		);
-		const peeked = yield* Effect.tryPromise(() =>
-			peekAgentSessionMachine({
-				userId: scope.userId,
-				projectId: scope.projectId as string,
-				sessionId: scope.sessionId,
-			}),
-		);
-		const parentRef = peeked.providerRef;
-		const parentRunning = parentRef
-			? yield* Effect.tryPromise(() =>
-					machines.isRunning(WorkspaceId(parentRef)),
-				)
-			: false;
-		const main = parentRunning
-			? yield* readHarnessWorkspaceSession(machines, {
-					...scope,
-					createNew: false,
-				})
-			: yield* Effect.tryPromise(() =>
-					persistBoundSessionView(
-						peeked.session,
-						pausedHarnessSessionView(scope, parentRef ?? "pending"),
-					),
-				);
+		const sideView =
+			scope.harnessId === "codex"
+				? yield* sendCodexWorkspaceTask(
+						machines,
+						{
+							userId: scope.userId,
+							projectId: scope.projectId,
+							sessionId: bound.session.id,
+							createNew: false,
+						},
+						{
+							text: input.text,
+							modelId: input.modelId,
+						},
+					)
+				: yield* submitConnectedHarnessTask(
+						machines,
+						scope,
+						bound.providerRef,
+						bound.session,
+						input,
+					);
+		const main = yield* readHarnessWorkspaceSession(machines, {
+			...scope,
+			createNew: false,
+		});
 		return mergeSideChat(main, sideView, scope.harnessId);
 	}).pipe(
 		Effect.catchAll((cause) =>
@@ -523,6 +531,18 @@ function sendHarnessSideTask(
 					message: failureMessage(cause),
 				},
 			}),
+		),
+	);
+}
+
+function withSiblingSideChat(
+	machines: WorkspaceMachines,
+	scope: HarnessSessionScope,
+	view: Effect.Effect<PublicHarnessSession>,
+): Effect.Effect<PublicHarnessSession> {
+	return view.pipe(
+		Effect.flatMap((session) =>
+			attachSiblingSideChat(machines, scope, session),
 		),
 	);
 }
@@ -541,6 +561,14 @@ function attachSiblingSideChat(
 		);
 		if (!child?.providerRef) {
 			return mergeSideChat(main, null, scope.harnessId);
+		}
+		if (scope.harnessId === "codex") {
+			const side = yield* readCodexWorkspaceSession(machines, {
+				userId: scope.userId,
+				projectId: scope.projectId,
+				sessionId: child.id,
+			});
+			return mergeSideChat(main, side, scope.harnessId);
 		}
 		const running = yield* Effect.tryPromise(() =>
 			machines.isRunning(WorkspaceId(child.providerRef as string)),
