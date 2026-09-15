@@ -63,7 +63,9 @@ export function completedTurnUpdatesProjectContext(input: {
 }): boolean {
 	if (input.area?.trim()) return true;
 	if ((input.reasoning ?? []).some((line) => line.trim())) return true;
-	return !isExactReplyEcho(input.task, input.reply);
+	if (isExactReplyEcho(input.task, input.reply)) return false;
+	const reply = input.reply.trim();
+	return Boolean(reply.includes(" ") || reply.length > 80);
 }
 
 export function durableProjectTraces(
@@ -199,7 +201,7 @@ function briefingLinesNewestFirst(briefing: string): string {
 	return briefing
 		.split("\n")
 		.map((line) => line.trim())
-		.filter(Boolean)
+		.filter((line) => line && !isPingBriefingLine(line))
 		.reverse()
 		.join("\n");
 }
@@ -217,4 +219,9 @@ function isExactReplyEcho(task: string, reply: string): boolean {
 function isExactReplyEchoTrace(summary: string): boolean {
 	if (/\nHow:/i.test(summary)) return false;
 	return /^reply with exactly .+: \S{1,80}$/i.test(summary.trim());
+}
+
+function isPingBriefingLine(line: string): boolean {
+	if (isExactReplyEchoTrace(line)) return true;
+	return /do not edit files\.: \S{1,80}$/i.test(line);
 }
