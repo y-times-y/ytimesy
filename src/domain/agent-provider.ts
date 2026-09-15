@@ -1,5 +1,7 @@
 export type AgentProviderId = "codex" | "claude" | "opencode";
 
+export const DEFAULT_COMPOSER_HARNESS_ID: AgentProviderId = "opencode";
+
 export type AgentProvider = {
 	readonly id: AgentProviderId;
 	readonly name: string;

@@ -6,7 +6,10 @@ import {
 	connectedAgentStatus,
 	connectedProviderId,
 } from "#/domain/agent-connection";
-import type { AgentProviderId } from "#/domain/agent-provider";
+import {
+	type AgentProviderId,
+	DEFAULT_COMPOSER_HARNESS_ID,
+} from "#/domain/agent-provider";
 import { hintForHarness } from "#/domain/harness-api-key";
 import {
 	inspectorSplitFromPointer,
@@ -77,7 +80,9 @@ export function WorkspaceHome({
 	const [sideChatOpen, setSideChatOpen] = useState(false);
 	const [sideQueued, setSideQueued] = useState(false);
 	const [busy, setBusy] = useState(false);
-	const [harnessId, setHarnessId] = useState<AgentProviderId>("codex");
+	const [harnessId, setHarnessId] = useState<AgentProviderId>(
+		DEFAULT_COMPOSER_HARNESS_ID,
+	);
 	const [apiKeyHints, setApiKeyHints] = useState<
 		Partial<Record<AgentProviderId, string>>
 	>({});
