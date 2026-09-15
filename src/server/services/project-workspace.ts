@@ -16,9 +16,8 @@ import {
 	preparedCheckoutExistsCommand,
 	redactInstallationToken,
 } from "#/server/adapters/freestyle/clone-project";
-import { readGitHubAppCredentials } from "#/server/adapters/github/credentials";
+import { githubInstallationAccessToken } from "#/server/adapters/github/installation-token";
 import { listProjects, projectForOwner } from "#/server/adapters/projects";
-import { liveGitHubProjectDeps } from "./github-projects";
 import type { DesktopScope } from "./workspace-desktop";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -38,7 +37,6 @@ export function ensureProjectCheckout(
 			yield* writeDeveloperInstructions(machines, workspaceId, home);
 			return null;
 		}
-		const deps = liveGitHubProjectDeps();
 		const home = yield* guestHome(machines, workspaceId);
 		const destination = projectCheckoutPath(home, checkout.name);
 		const existing = yield* Effect.tryPromise(() =>
@@ -59,12 +57,8 @@ export function ensureProjectCheckout(
 			yield* writeDeveloperInstructions(machines, workspaceId, destination);
 			return destination;
 		}
-		const credentials = yield* readGitHubAppCredentials(deps.env);
 		const token = yield* Effect.tryPromise(() =>
-			deps.github.installationToken({
-				credentials,
-				installationId: checkout.installationId,
-			}),
+			githubInstallationAccessToken(checkout.installationId),
 		);
 		yield* Effect.tryPromise(() =>
 			machines.writeTextFile(workspaceId, PROJECT_TOKEN_PATH, `${token}\n`),
@@ -108,6 +102,10 @@ export function writeDeveloperInstructions(
 	).pipe(Effect.catchAll(() => Effect.void));
 }
 
+/**
+ * Clone uses the signed-in owner's Postgres project, not the leftover
+ * `.ytimesy/selected-project.json` GitHub picker.
+ */
 export function loadTenantProjectCheckout(scope: {
 	readonly userId: string;
 	readonly projectId?: string;

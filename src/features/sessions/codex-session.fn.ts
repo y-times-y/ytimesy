@@ -123,7 +123,9 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 			const text = data.text.trim();
 			const modelId = data.modelId.trim();
 			if (!text) throw new Error("Task text is required");
-			if (!modelId) throw new Error("A listed model is required");
+			if (!modelId && data.lane !== "side") {
+				throw new Error("A listed model is required");
+			}
 			return {
 				text,
 				modelId,

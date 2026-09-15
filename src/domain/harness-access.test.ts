@@ -158,7 +158,7 @@ describe("harness access", () => {
 		).toBe(false);
 	});
 
-	it("lets a follow-up resume OpenCode or a saved Codex workspace without auto-booting on select", () => {
+	it("lets a follow-up or side send resume OpenCode or a saved Codex workspace without auto-booting on select", () => {
 		expect(
 			canResumeDisconnectedFollowUp({
 				harnessId: "opencode",

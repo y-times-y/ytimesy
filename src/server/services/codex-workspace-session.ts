@@ -1,6 +1,8 @@
 import { Effect } from "effect";
 import type { AgentConnection } from "#/domain/agent-connection";
+import { canResumeDisconnectedFollowUp } from "#/domain/harness-access";
 import { WorkspaceId } from "#/domain/ids";
+import { submittedListedModelId } from "#/domain/listed-model";
 import { codexConnectBlockedReason } from "#/domain/project-workspace";
 import { shouldStartDeviceCodeAfterSnapshotResume } from "#/domain/proof-workspace-recovery";
 import type { SessionItem, SessionTurnStatus } from "#/domain/session-item";
@@ -71,6 +73,23 @@ export function emptyCodexSession(
 	};
 }
 
+function pausedCodexSessionView(
+	workspaceId: string,
+	snapshotAvailable: boolean,
+): PublicCodexSession {
+	const view = emptyCodexSession(snapshotAvailable);
+	return {
+		...view,
+		workspaceId,
+		canSendSide: canResumeDisconnectedFollowUp({
+			harnessId: "codex",
+			connection: view.connection,
+			turnStatus: "idle",
+			snapshotAvailable,
+		}),
+	};
+}
+
 /**
  * Reads Codex on this agent session. Paused VMs stay paused; the stored
  * transcript is enough to render the chat until Connect wakes the machine.
@@ -107,7 +126,7 @@ export function readCodexWorkspaceSession(
 			return yield* Effect.tryPromise(() =>
 				persistBoundSessionView(
 					peeked.session,
-					emptyCodexSession(Boolean(snapshotId)),
+					pausedCodexSessionView(providerRef, Boolean(snapshotId)),
 				),
 			);
 		}
@@ -249,6 +268,10 @@ export function sendCodexWorkspaceTask(
 				if (status.stage !== "authenticated") {
 					return viewFromStatus(status, providerRef, snapshotAvailable);
 				}
+				const modelId = submittedListedModelId(input.modelId, status.models);
+				if (!modelId) {
+					return viewFromStatus(status, providerRef, snapshotAvailable);
+				}
 				if (scope.projectId) {
 					yield* Effect.tryPromise(() =>
 						syncProjectContextForTask(machines, providerRef, {
@@ -257,11 +280,10 @@ export function sendCodexWorkspaceTask(
 						}),
 					);
 				}
-				status = yield* submitCodexTask(
-					machines,
-					WorkspaceId(providerRef),
-					input,
-				);
+				status = yield* submitCodexTask(machines, WorkspaceId(providerRef), {
+					...input,
+					modelId,
+				});
 				return viewFromStatus(status, providerRef, snapshotAvailable);
 			}),
 	);
