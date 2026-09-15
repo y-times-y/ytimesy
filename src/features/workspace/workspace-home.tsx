@@ -690,6 +690,23 @@ export function WorkspaceHome({
 					>
 						{followUpLayout ? (
 							<div className="session-title-row">
+								<button
+									type="button"
+									className="panel-toggle session-title-chats"
+									aria-label="Open chats"
+									title="Open chats"
+									aria-expanded={projectsOpen}
+									aria-controls="project-sidebar"
+									onClick={() => setProjectsOpen(true)}
+								>
+									<img
+										className="brand-mark"
+										src="/brand/mark.svg"
+										width={22}
+										height={22}
+										alt=""
+									/>
+								</button>
 								<div className="session-title-copy">
 									<span className="session-title">{sessionTitle}</span>
 									{connectedProvider && agentStatus ? (
@@ -719,6 +736,23 @@ export function WorkspaceHome({
 							</div>
 						) : inspectorOpen ? null : (
 							<div className="session-title-row session-title-row-empty">
+								<button
+									type="button"
+									className="panel-toggle session-title-chats"
+									aria-label="Open chats"
+									title="Open chats"
+									aria-expanded={projectsOpen}
+									aria-controls="project-sidebar"
+									onClick={() => setProjectsOpen(true)}
+								>
+									<img
+										className="brand-mark"
+										src="/brand/mark.svg"
+										width={22}
+										height={22}
+										alt=""
+									/>
+								</button>
 								<div className="session-title-copy" />
 								<button
 									type="button"
