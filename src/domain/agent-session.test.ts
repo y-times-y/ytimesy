@@ -20,7 +20,6 @@ describe("sessionMachinePlan", () => {
 				sessionProviderRef: "vm-session",
 				templateSnapshotId: "sh-template",
 				templateProviderRef: "vm-template",
-				templateAlreadyBound: true,
 			}),
 		).toEqual({ kind: "resume", providerRef: "vm-session" });
 	});
@@ -31,29 +30,16 @@ describe("sessionMachinePlan", () => {
 				sessionProviderRef: null,
 				templateSnapshotId: "sh-template",
 				templateProviderRef: "vm-template",
-				templateAlreadyBound: true,
 			}),
 		).toEqual({ kind: "copy-snapshot", snapshotId: "sh-template" });
 	});
 
-	it("attaches the prepared VM once when no snapshot exists yet", () => {
+	it("seals the template before the first agent instead of attaching it", () => {
 		expect(
 			sessionMachinePlan({
 				sessionProviderRef: null,
 				templateSnapshotId: null,
 				templateProviderRef: "vm-template",
-				templateAlreadyBound: false,
-			}),
-		).toEqual({ kind: "attach-legacy", providerRef: "vm-template" });
-	});
-
-	it("snapshots the prepared VM before a second agent can start", () => {
-		expect(
-			sessionMachinePlan({
-				sessionProviderRef: null,
-				templateSnapshotId: null,
-				templateProviderRef: "vm-template",
-				templateAlreadyBound: true,
 			}),
 		).toEqual({ kind: "needs-snapshot", providerRef: "vm-template" });
 	});
@@ -64,7 +50,6 @@ describe("sessionMachinePlan", () => {
 				sessionProviderRef: null,
 				templateSnapshotId: null,
 				templateProviderRef: null,
-				templateAlreadyBound: false,
 			}),
 		).toEqual({
 			kind: "blocked",

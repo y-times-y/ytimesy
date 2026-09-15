@@ -20,7 +20,7 @@ export function isWorkspaceAtCapacity(message: string) {
 }
 
 export function isWorkspaceComputeAllowanceExhausted(message: string) {
-	return /allowance for vcpu_time|memory_time has been used|compute allowance/i.test(
+	return /allowance for vcpu_time|memory_time has been used|compute allowance|vCPU-hour allowance/i.test(
 		message,
 	);
 }

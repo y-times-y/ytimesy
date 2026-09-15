@@ -174,19 +174,6 @@ export async function saveAgentSessionTurnStatus(
 	return result.rows[0] ? toSession(result.rows[0]) : null;
 }
 
-export async function templateAlreadyBound(
-	workspaceId: string,
-	templateProviderRef: string,
-) {
-	const result = await database().query(
-		`select 1 from agent_session
-		 where workspace_id=$1 and provider_ref=$2
-		 limit 1`,
-		[workspaceId, templateProviderRef],
-	);
-	return Boolean(result.rowCount);
-}
-
 function toSession(row: AgentSessionRow): AgentSessionRecord {
 	return {
 		id: row.id,

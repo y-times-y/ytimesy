@@ -58,7 +58,7 @@ describe("isWorkspaceComputeAllowanceExhausted", () => {
 		).toBe(true);
 		expect(
 			isWorkspaceComputeAllowanceExhausted(
-				"This Freestyle plan has used its compute allowance. Wait for the allowance to reset or upgrade the plan, then resume the VM.",
+				"This Freestyle plan has used its vCPU-hour allowance. Wait for the allowance to reset or upgrade the plan, then resume the VM.",
 			),
 		).toBe(true);
 		expect(isWorkspaceComputeAllowanceExhausted("LIMIT_EXCEEDED")).toBe(false);

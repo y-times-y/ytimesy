@@ -3,6 +3,7 @@ import { GUEST_INTERNET_FIREWALL } from "./proof-vm";
 export const WORKSPACE_METADATA_PURPOSE = "ytimesy-workspace";
 export const FREESTYLE_EXEC_TIMEOUT_MS_MAX = 300_000;
 
+/** Never auto-pause: closing the browser must leave the guest running. Allocated vCPU hours keep counting until pause or delete. */
 export function productCreateVmFields(input: {
 	readonly slug: string;
 	readonly snapshotId?: string;

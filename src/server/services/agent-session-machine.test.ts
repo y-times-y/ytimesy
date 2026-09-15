@@ -64,7 +64,6 @@ describe("executeSessionMachinePlan", () => {
 			workspaceId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
 			templateSnapshotId: "snap-1",
 			templateProviderRef: "repo-vm",
-			templateAlreadyBound: true,
 			saveTemplateSnapshot: async () => {
 				throw new Error("snapshot already sealed");
 			},
@@ -91,7 +90,6 @@ describe("executeSessionMachinePlan", () => {
 			workspaceId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
 			templateSnapshotId: "snap-1",
 			templateProviderRef: "repo-vm",
-			templateAlreadyBound: true,
 			saveTemplateSnapshot: async () => undefined,
 			saveSessionProviderRef: async () => undefined,
 		});
@@ -130,7 +128,6 @@ describe("executeSessionMachinePlan", () => {
 			workspaceId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
 			templateSnapshotId: "snap-1",
 			templateProviderRef: "repo-vm",
-			templateAlreadyBound: true,
 			saveTemplateSnapshot: async () => undefined,
 			saveSessionProviderRef: async () => undefined,
 		});
@@ -150,7 +147,6 @@ describe("executeSessionMachinePlan", () => {
 			workspaceId: "ws-1",
 			templateSnapshotId: "snap-1",
 			templateProviderRef: "repo-vm",
-			templateAlreadyBound: true,
 			saveTemplateSnapshot: async () => undefined,
 			saveSessionProviderRef: async () => {
 				throw new Error("resume must not mint another VM");
@@ -162,24 +158,36 @@ describe("executeSessionMachinePlan", () => {
 		});
 	});
 
-	it("attaches the prepared VM once before a snapshot exists", async () => {
-		const runtime = machines({ failProvision: true });
+	it("seals the template and copies a new agent VM instead of attaching it", async () => {
+		const runtime = machines({ snapshot: "snap-first", copied: "agent-1" });
 		const saved: string[] = [];
+		const snapshots: string[] = [];
 		const result = await executeSessionMachinePlan({
 			machines: runtime.api,
-			sessionId: "sess-1",
+			sessionId: "11111111-2222-3333-4444-555555555555",
 			sessionProviderRef: null,
-			workspaceId: "ws-1",
+			workspaceId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
 			templateSnapshotId: null,
 			templateProviderRef: "repo-vm",
-			templateAlreadyBound: false,
-			saveTemplateSnapshot: async () => undefined,
+			saveTemplateSnapshot: async (snapshotId) => {
+				snapshots.push(snapshotId);
+			},
 			saveSessionProviderRef: async (providerRef) => {
 				saved.push(providerRef);
 			},
 		});
-		expect(result.planKind).toBe("attach-legacy");
-		expect(saved).toEqual(["repo-vm"]);
+		expect(snapshots).toEqual(["snap-first"]);
+		expect(saved).toEqual(["agent-1"]);
+		expect(result).toEqual({
+			providerRef: "agent-1",
+			planKind: "copy-snapshot",
+		});
+		expect(runtime.provisioned).toEqual([
+			{
+				slug: "ytimesy-ag-1111111122223333",
+				snapshotId: "snap-first",
+			},
+		]);
 	});
 
 	it("snapshots the prepared VM before copying a second agent", async () => {
@@ -192,7 +200,6 @@ describe("executeSessionMachinePlan", () => {
 			workspaceId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
 			templateSnapshotId: null,
 			templateProviderRef: "repo-vm",
-			templateAlreadyBound: true,
 			saveTemplateSnapshot: async (snapshotId) => {
 				snapshots.push(snapshotId);
 			},
@@ -221,7 +228,6 @@ describe("executeSessionMachinePlan", () => {
 			workspaceId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
 			templateSnapshotId: "sh-old",
 			templateProviderRef: "repo-vm",
-			templateAlreadyBound: true,
 			saveTemplateSnapshot: async (snapshotId) => {
 				snapshots.push(snapshotId);
 			},
@@ -255,7 +261,6 @@ describe("executeSessionMachinePlan", () => {
 				workspaceId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
 				templateSnapshotId: "snap-1",
 				templateProviderRef: "repo-vm",
-				templateAlreadyBound: true,
 				saveTemplateSnapshot: async (snapshotId) => {
 					snapshots.push(snapshotId);
 				},
@@ -284,7 +289,6 @@ describe("executeSessionMachinePlan", () => {
 			workspaceId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
 			templateSnapshotId: "snap-1",
 			templateProviderRef: "repo-vm",
-			templateAlreadyBound: true,
 			saveTemplateSnapshot: async () => {
 				throw new Error("snapshot already sealed");
 			},
@@ -318,7 +322,6 @@ describe("executeSessionMachinePlan", () => {
 			workspaceId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
 			templateSnapshotId: "snap-1",
 			templateProviderRef: "repo-vm",
-			templateAlreadyBound: true,
 			saveTemplateSnapshot: async () => {
 				throw new Error("snapshot already sealed");
 			},

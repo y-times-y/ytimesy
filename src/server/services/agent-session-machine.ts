@@ -28,7 +28,6 @@ import {
 	insertAgentSession,
 	listAgentSessions,
 	saveAgentSessionProviderRef,
-	templateAlreadyBound,
 } from "#/server/adapters/agent-sessions";
 import {
 	listProjectTraces,
@@ -138,7 +137,6 @@ export async function bindAgentSessionMachine(
 	},
 ) {
 	const { session, workspace } = await resolveAgentSessionRecord(input);
-	const bound = await templateAlreadyBound(workspace.id, workspace.providerRef);
 	const executed = await executeSessionMachinePlan({
 		machines,
 		sessionId: session.id,
@@ -146,8 +144,6 @@ export async function bindAgentSessionMachine(
 		workspaceId: workspace.id,
 		templateSnapshotId: workspace.templateSnapshotId,
 		templateProviderRef: workspace.providerRef,
-		templateAlreadyBound:
-			bound && session.providerRef !== workspace.providerRef,
 		saveTemplateSnapshot: (snapshotId) =>
 			saveTemplateSnapshot(workspace.id, snapshotId).then(() => undefined),
 		saveSessionProviderRef: (providerRef) =>
@@ -224,7 +220,6 @@ export async function executeSessionMachinePlan(input: {
 	readonly workspaceId: string;
 	readonly templateSnapshotId: string | null;
 	readonly templateProviderRef: string;
-	readonly templateAlreadyBound: boolean;
 	readonly saveTemplateSnapshot: (snapshotId: string) => Promise<void>;
 	readonly saveSessionProviderRef: (providerRef: string) => Promise<void>;
 	readonly wait?: (ms: number) => Promise<void>;
@@ -234,7 +229,6 @@ export async function executeSessionMachinePlan(input: {
 		sessionProviderRef: input.sessionProviderRef,
 		templateSnapshotId: snapshotId,
 		templateProviderRef: input.templateProviderRef,
-		templateAlreadyBound: input.templateAlreadyBound,
 	});
 	if (plan.kind === "needs-snapshot") {
 		await input.machines.ensureRunning(WorkspaceId(plan.providerRef));
@@ -247,11 +241,10 @@ export async function executeSessionMachinePlan(input: {
 			sessionProviderRef: input.sessionProviderRef,
 			templateSnapshotId: snapshotId,
 			templateProviderRef: input.templateProviderRef,
-			templateAlreadyBound: true,
 		});
 	}
 	if (plan.kind === "blocked") throw new Error(plan.reason);
-	if (plan.kind === "resume" || plan.kind === "attach-legacy") {
+	if (plan.kind === "resume") {
 		await input.machines.ensureRunning(WorkspaceId(plan.providerRef));
 		if (!input.sessionProviderRef)
 			await input.saveSessionProviderRef(plan.providerRef);

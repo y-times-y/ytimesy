@@ -111,7 +111,7 @@ it("destroys agent copies and side-chat copies, never the template VM", async ()
 	expect(template.rows[0]?.provider_ref).toBe("vm-template");
 });
 
-it("drops an attach-legacy row without deleting the template VM", async () => {
+it("drops a leftover template-bound session row without deleting the template VM", async () => {
 	const { project, workspaceId } = await readyWorkspace();
 	const session = await insertAgentSession({
 		userId: "alice",
