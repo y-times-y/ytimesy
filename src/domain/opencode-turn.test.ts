@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	assistantTextFromOpenCode,
 	assistantTextFromOpenCodeMessages,
+	assistantTextFromOpenCodeTurn,
 	errorMessageFromOpenCode,
 	OPENCODE_TURN_MAX_WAIT_MS,
 	openCodeSessionIsBusy,
@@ -58,6 +59,46 @@ describe("assistantTextFromOpenCodeMessages", () => {
 				},
 			]),
 		).toBe("side-zen-ok");
+	});
+});
+
+describe("assistantTextFromOpenCodeTurn", () => {
+	it("ignores the previous assistant reply after a new user message", () => {
+		expect(
+			assistantTextFromOpenCodeTurn([
+				{
+					info: { role: "user" },
+					parts: [{ type: "text", text: "ping" }],
+				},
+				{
+					info: { role: "assistant" },
+					parts: [{ type: "text", text: "zen-ok" }],
+				},
+				{
+					info: { role: "user" },
+					parts: [{ type: "text", text: "Write PARALLEL_A.md" }],
+				},
+			]),
+		).toBeNull();
+	});
+
+	it("reads this turn's assistant text after the latest user message", () => {
+		expect(
+			assistantTextFromOpenCodeTurn([
+				{
+					info: { role: "assistant" },
+					parts: [{ type: "text", text: "zen-ok" }],
+				},
+				{
+					info: { role: "user" },
+					parts: [{ type: "text", text: "Write PARALLEL_A.md" }],
+				},
+				{
+					info: { role: "assistant" },
+					parts: [{ type: "text", text: "parallel-a-ok" }],
+				},
+			]),
+		).toBe("parallel-a-ok");
 	});
 });
 
@@ -130,7 +171,7 @@ describe("openCodeTurnPollDecision", () => {
 	const idle = {
 		busy: false,
 		seenBusy: false,
-		hasAssistantText: false,
+		hasNewAssistantText: false,
 		hasError: false,
 		elapsedMs: 1_000,
 		msSinceLastBusy: null,
@@ -140,12 +181,12 @@ describe("openCodeTurnPollDecision", () => {
 		expect(openCodeTurnPollDecision({ ...idle, busy: true })).toBe("running");
 	});
 
-	it("completes when assistant text is present", () => {
+	it("completes when this turn's assistant text is present", () => {
 		expect(
 			openCodeTurnPollDecision({
 				...idle,
 				seenBusy: true,
-				hasAssistantText: true,
+				hasNewAssistantText: true,
 				msSinceLastBusy: 20_000,
 			}),
 		).toBe("completed");

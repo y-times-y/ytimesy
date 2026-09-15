@@ -6,6 +6,7 @@ import { parseOpenCodeModelCatalog } from "#/domain/opencode-catalog";
 import {
 	assistantTextFromOpenCode,
 	assistantTextFromOpenCodeMessages,
+	assistantTextFromOpenCodeTurn,
 	errorMessageFromOpenCode,
 	openCodeSessionIsBusy,
 	openCodeTurnFailureMessage,
@@ -715,7 +716,7 @@ function syncOpenCodeTurn(
 			20_000,
 		);
 		const busy = openCodeSessionIsBusy(status.body, current.serveSessionId);
-		const text = assistantTextFromOpenCodeMessages(messages.body);
+		const text = assistantTextFromOpenCodeTurn(messages.body);
 		const error =
 			errorMessageFromOpenCode(messages.body) ??
 			errorMessageFromOpenCode(status.body);
@@ -727,7 +728,7 @@ function syncOpenCodeTurn(
 		const decision = openCodeTurnPollDecision({
 			busy,
 			seenBusy,
-			hasAssistantText: Boolean(text),
+			hasNewAssistantText: Boolean(text),
 			hasError: Boolean(error),
 			elapsedMs: now - (current.turnStartedAt ?? now),
 			msSinceLastBusy: lastBusyAt === null ? null : now - lastBusyAt,

@@ -18,6 +18,26 @@ export function assistantTextFromOpenCodeMessages(
 	return null;
 }
 
+/**
+ * A follow-up session still contains the previous assistant reply. Completing
+ * on that leftover text would mark the new turn done before it answers.
+ */
+export function assistantTextFromOpenCodeTurn(payload: unknown): string | null {
+	const messages = openCodeMessageRows(payload);
+	let lastUserIndex = -1;
+	for (let index = 0; index < messages.length; index += 1) {
+		if (openCodeMessageRole(messages[index]) === "user") lastUserIndex = index;
+	}
+	if (lastUserIndex < 0) return assistantTextFromOpenCodeMessages(payload);
+	for (let index = messages.length - 1; index > lastUserIndex; index -= 1) {
+		const row = messages[index];
+		if (!row || openCodeMessageRole(row) === "user") continue;
+		const text = assistantTextFromOpenCode(row);
+		if (text) return text;
+	}
+	return null;
+}
+
 export function errorMessageFromOpenCode(payload: unknown): string | null {
 	if (payload == null) return null;
 	if (typeof payload === "string") {
@@ -85,19 +105,19 @@ export function openCodeTurnFailureMessage(input: {
 }
 
 /**
- * Busy can clear before `/message` has the assistant text. Keep polling
- * until the turn budget expires unless OpenCode reported an error.
+ * Busy can clear before `/message` has this turn's assistant text. Keep
+ * polling until the turn budget expires unless OpenCode reported an error.
  */
 export function openCodeTurnPollDecision(input: {
 	readonly busy: boolean;
 	readonly seenBusy: boolean;
-	readonly hasAssistantText: boolean;
+	readonly hasNewAssistantText: boolean;
 	readonly hasError: boolean;
 	readonly elapsedMs: number;
 	readonly msSinceLastBusy: number | null;
 }): "running" | "completed" | "failed" {
 	if (input.busy) return "running";
-	if (input.hasAssistantText) return "completed";
+	if (input.hasNewAssistantText) return "completed";
 	if (input.hasError) return "failed";
 	if (input.elapsedMs > OPENCODE_TURN_MAX_WAIT_MS) return "failed";
 	return "running";
