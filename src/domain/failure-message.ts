@@ -19,6 +19,12 @@ export function isWorkspaceAtCapacity(message: string) {
 	);
 }
 
+export function isWorkspaceComputeAllowanceExhausted(message: string) {
+	return /allowance for vcpu_time|memory_time has been used|compute allowance/i.test(
+		message,
+	);
+}
+
 function unwrapFailureMessage(cause: unknown, seen: Set<unknown>): string {
 	if (cause == null) return "";
 	if (typeof cause === "string") {

@@ -1,8 +1,11 @@
+import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
-import { SessionItemId } from "#/domain/ids";
+import { SessionItemId, WorkspaceId } from "#/domain/ids";
 import { PROJECT_CWD_PATH } from "#/server/adapters/freestyle/clone-project";
+import type { WorkspaceMachines } from "#/server/services/workspace-machines";
 import {
 	abortedOpenCodeTurn,
+	abortOpenCodeTurn,
 	dropCopiedOpenCodeTranscript,
 	OPENCODE_LOCATE_BIN_SCRIPT,
 	OPENCODE_START_SERVE_SCRIPT,
@@ -198,5 +201,86 @@ describe("abortedOpenCodeTurn", () => {
 				},
 			],
 		});
+	});
+});
+
+const runningOpenCodeStatus = JSON.stringify({
+	stage: "authenticated",
+	authMode: "local",
+	planType: null,
+	models: [{ id: "opencode/big-pickle", label: "Big Pickle" }],
+	turnStatus: "running",
+	items: [
+		{
+			kind: "userMessage",
+			id: "user-1",
+			text: "Write STOP_PROOF.md",
+		},
+	],
+	serveSessionId: "ses_running",
+	seenBusy: true,
+	turnStartedAt: 1,
+	lastBusyAt: 2,
+});
+
+function mockOpenCodeMachines(abortStdout: string) {
+	const writes: string[] = [];
+	const execs: string[] = [];
+	const machines = {
+		readTextFile: async () => runningOpenCodeStatus,
+		writeTextFile: async (
+			_workspaceId: unknown,
+			_path: string,
+			contents: string,
+		) => {
+			writes.push(contents);
+		},
+		exec: async (_workspaceId: unknown, command: string) => {
+			execs.push(command);
+			return { exitCode: 0, stdout: abortStdout, stderr: "" };
+		},
+	} as unknown as WorkspaceMachines;
+	return { machines, writes, execs };
+}
+
+describe("abortOpenCodeTurn", () => {
+	it("posts official abort and returns the composer to idle", async () => {
+		const { machines, writes, execs } = mockOpenCodeMachines("true\n200");
+		const stopped = await Effect.runPromise(
+			abortOpenCodeTurn(machines, WorkspaceId("vm-stop")),
+		);
+		expect(
+			execs.some((command) => command.includes("/session/ses_running/abort")),
+		).toBe(true);
+		expect(stopped).toMatchObject({
+			stage: "authenticated",
+			turnStatus: "idle",
+			serveSessionId: "ses_running",
+		});
+		expect(stopped.stage === "authenticated" ? stopped.items : []).not.toEqual(
+			expect.arrayContaining([expect.objectContaining({ kind: "error" })]),
+		);
+		expect(writes.at(-1)).toContain('"turnStatus":"idle"');
+	});
+
+	it("fails the turn only when abort itself fails", async () => {
+		const { machines } = mockOpenCodeMachines(
+			'{"error":{"message":"session is not abortable"}}\n500',
+		);
+		const failed = await Effect.runPromise(
+			abortOpenCodeTurn(machines, WorkspaceId("vm-stop")),
+		);
+		expect(failed).toMatchObject({
+			stage: "authenticated",
+			turnStatus: "failed",
+		});
+		expect(failed.stage === "authenticated" ? failed.items : []).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					kind: "error",
+					message: "session is not abortable",
+				}),
+			]),
+		);
 	});
 });
