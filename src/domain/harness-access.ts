@@ -4,6 +4,7 @@ import {
 	type AgentProviderId,
 	offeredAgentProviders,
 } from "./agent-provider";
+import { isTurnRunning, type SessionTurnStatus } from "./session-item";
 
 export type HarnessReadiness =
 	| "ready"
@@ -125,6 +126,24 @@ export function shouldAutoResumeHarnessSession(input: {
 }): boolean {
 	if (input.harnessId === "claude") return false;
 	return selectedHarnessIsConnected(input.connection, input.harnessId);
+}
+
+/**
+ * Selecting a paused chat must not boot its VM. Typing a follow-up should:
+ * OpenCode can connect without an account; Codex can resume a saved workspace;
+ * Claude still needs an explicit Anthropic sign-in.
+ */
+export function canResumeDisconnectedFollowUp(input: {
+	readonly harnessId: AgentProviderId;
+	readonly connection: AgentConnection;
+	readonly turnStatus: SessionTurnStatus;
+	readonly snapshotAvailable?: boolean;
+}): boolean {
+	if (isTurnRunning(input.turnStatus)) return false;
+	if (input.connection.status !== "disconnected") return false;
+	if (input.harnessId === "claude") return false;
+	if (input.harnessId === "codex") return Boolean(input.snapshotAvailable);
+	return input.harnessId === "opencode";
 }
 
 export function harnessRequiresAccountLogin(

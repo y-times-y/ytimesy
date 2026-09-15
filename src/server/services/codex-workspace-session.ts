@@ -236,24 +236,34 @@ export function sendCodexWorkspaceTask(
 		machines,
 		scope,
 		(providerRef, snapshotAvailable) =>
-			prepareCodexGuest(machines, WorkspaceId(providerRef), scope).pipe(
-				Effect.tap(() =>
-					scope.projectId
-						? Effect.tryPromise(() =>
-								syncProjectContextForTask(machines, providerRef, {
-									projectId: scope.projectId as string,
-									task: input.text,
-								}),
-							)
-						: Effect.void,
-				),
-				Effect.flatMap(() =>
-					submitCodexTask(machines, WorkspaceId(providerRef), input),
-				),
-				Effect.map((status) =>
-					viewFromStatus(status, providerRef, snapshotAvailable),
-				),
-			),
+			Effect.gen(function* () {
+				yield* prepareCodexGuest(machines, WorkspaceId(providerRef), scope);
+				let status = yield* readLoginStatus(machines, WorkspaceId(providerRef));
+				if (status.stage !== "authenticated") {
+					status = yield* authenticatePreparedWorkspace(
+						machines,
+						WorkspaceId(providerRef),
+						snapshotAvailable,
+					);
+				}
+				if (status.stage !== "authenticated") {
+					return viewFromStatus(status, providerRef, snapshotAvailable);
+				}
+				if (scope.projectId) {
+					yield* Effect.tryPromise(() =>
+						syncProjectContextForTask(machines, providerRef, {
+							projectId: scope.projectId as string,
+							task: input.text,
+						}),
+					);
+				}
+				status = yield* submitCodexTask(
+					machines,
+					WorkspaceId(providerRef),
+					input,
+				);
+				return viewFromStatus(status, providerRef, snapshotAvailable);
+			}),
 	);
 }
 

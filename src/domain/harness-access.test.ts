@@ -5,6 +5,7 @@ import {
 	OPENCODE_PROVIDER,
 } from "./agent-provider";
 import {
+	canResumeDisconnectedFollowUp,
 	harnessAccess,
 	harnessRequiresAccountLogin,
 	offeredHarnessAccess,
@@ -152,6 +153,56 @@ describe("harness access", () => {
 					planType: null,
 					email: null,
 				},
+			}),
+		).toBe(false);
+	});
+
+	it("lets a follow-up resume OpenCode or a saved Codex workspace without auto-booting on select", () => {
+		expect(
+			canResumeDisconnectedFollowUp({
+				harnessId: "opencode",
+				connection: { status: "disconnected" },
+				turnStatus: "idle",
+			}),
+		).toBe(true);
+		expect(
+			canResumeDisconnectedFollowUp({
+				harnessId: "codex",
+				connection: { status: "disconnected" },
+				turnStatus: "idle",
+				snapshotAvailable: true,
+			}),
+		).toBe(true);
+		expect(
+			canResumeDisconnectedFollowUp({
+				harnessId: "codex",
+				connection: { status: "disconnected" },
+				turnStatus: "idle",
+			}),
+		).toBe(false);
+		expect(
+			canResumeDisconnectedFollowUp({
+				harnessId: "claude",
+				connection: { status: "disconnected" },
+				turnStatus: "idle",
+			}),
+		).toBe(false);
+		expect(
+			canResumeDisconnectedFollowUp({
+				harnessId: "opencode",
+				connection: { status: "disconnected" },
+				turnStatus: "running",
+			}),
+		).toBe(false);
+		expect(
+			canResumeDisconnectedFollowUp({
+				harnessId: "opencode",
+				connection: {
+					status: "failed",
+					provider: "opencode",
+					message: "serve failed",
+				},
+				turnStatus: "idle",
 			}),
 		).toBe(false);
 	});

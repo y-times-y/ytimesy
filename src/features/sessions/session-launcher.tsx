@@ -5,6 +5,7 @@ import {
 	agentProviderById,
 } from "#/domain/agent-provider";
 import {
+	canResumeDisconnectedFollowUp,
 	harnessRequiresAccountLogin,
 	selectedHarnessIsConnected,
 } from "#/domain/harness-access";
@@ -70,6 +71,13 @@ export function SessionLauncher({
 		session.connection,
 		harnessId,
 	);
+	const canResumeFollowUp = canResumeDisconnectedFollowUp({
+		harnessId,
+		connection: session.connection,
+		turnStatus: session.turnStatus,
+		snapshotAvailable: session.snapshotAvailable,
+	});
+	const composerReady = (harnessReady && session.canSend) || canResumeFollowUp;
 	const models = harnessReady ? sessionModelsFromListed(session.models) : [];
 	const [attachments, setAttachments] = useState<File[]>([]);
 	const [draft, setDraft] = useState("");
@@ -90,18 +98,18 @@ export function SessionLauncher({
 				authenticated: harnessReady,
 				requiresAccountLogin: harnessRequiresAccountLogin(harnessId),
 				turnRunning: session.turnStatus === "running",
-				canSend: harnessReady && session.canSend,
+				canSend: composerReady,
 				hasLastUserMessage: Boolean(lastUserText),
 				hasModels: models.length > 0,
 				publicationReady: Boolean(selectedProject),
 			}),
 		[
+			composerReady,
 			harnessId,
 			lastUserText,
 			models.length,
 			harnessReady,
 			selectedProject,
-			session.canSend,
 			session.turnStatus,
 		],
 	);
@@ -144,7 +152,9 @@ export function SessionLauncher({
 	}, [session.items]);
 
 	function sendText(text: string) {
-		if (!text || !harnessReady || !session.canSend || !modelId || busy) return;
+		if (!text || busy) return;
+		if (!composerReady) return;
+		if (!canResumeFollowUp && !modelId) return;
 		setOptimisticItems((current) => [
 			...current,
 			{
@@ -346,21 +356,22 @@ export function SessionLauncher({
 									className="session-send"
 									aria-label="Send"
 									disabled={
-										!harnessReady ||
-										!session.canSend ||
+										!composerReady ||
 										busy ||
 										!draft.trim() ||
-										!modelId ||
+										(!canResumeFollowUp && !modelId) ||
 										Boolean(slashDraft)
 									}
 									title={
-										harnessReady
-											? session.canSend
-												? "Send task"
-												: "Wait for this harness to finish starting"
-											: harnessRequiresAccountLogin(harnessId)
-												? `Sign in to ${agentProviderById(harnessId).name} to start a session`
-												: `Connect ${agentProviderById(harnessId).name} to start a session`
+										canResumeFollowUp
+											? "Resume and send"
+											: harnessReady
+												? session.canSend
+													? "Send task"
+													: "Wait for this harness to finish starting"
+												: harnessRequiresAccountLogin(harnessId)
+													? `Sign in to ${agentProviderById(harnessId).name} to start a session`
+													: `Connect ${agentProviderById(harnessId).name} to start a session`
 									}
 									onClick={sendDraft}
 								>

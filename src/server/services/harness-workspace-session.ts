@@ -9,7 +9,10 @@ import { harnessConnectBlockedReason } from "#/domain/project-workspace";
 import { sessionRecordHasConversation } from "#/domain/session-item";
 import { canSubmitComposer, canSubmitSideChat } from "#/domain/session-policy";
 import type { WorkspaceLifecycle } from "#/domain/workspace";
-import { childAgentSession } from "#/server/adapters/agent-sessions";
+import {
+	type AgentSessionRecord,
+	childAgentSession,
+} from "#/server/adapters/agent-sessions";
 import {
 	type ClaudeAuthStatus,
 	connectClaudeCode,
@@ -199,38 +202,17 @@ export function sendHarnessWorkspaceTask(
 	if (input.lane === "side") {
 		return sendHarnessSideTask(machines, scope, input);
 	}
-	return withSessionMachine(machines, scope, true, (providerRef, session) => {
-		const submitted = Effect.tryPromise(() =>
-			scope.projectId
-				? syncProjectContextForTask(machines, providerRef, {
-						projectId: scope.projectId,
-						task: input.text,
-					})
-				: Promise.resolve(input.text),
-		).pipe(Effect.map((promptText) => ({ ...input, promptText })));
-		if (scope.harnessId === "claude") {
-			return submitted.pipe(
-				Effect.flatMap((payload) =>
-					submitClaudeTask(machines, WorkspaceId(providerRef), payload),
-				),
-				Effect.map((status) => viewFromClaude(status, providerRef)),
-				Effect.flatMap((view) =>
-					Effect.tryPromise(() => persistBoundSessionView(session, view)),
-				),
-				Effect.flatMap((view) => attachSiblingSideChat(machines, scope, view)),
-			);
-		}
-		return submitted.pipe(
-			Effect.flatMap((payload) =>
-				submitOpenCodeTask(machines, WorkspaceId(providerRef), payload),
-			),
-			Effect.map((status) => viewFromOpenCode(status, providerRef)),
-			Effect.flatMap((view) =>
-				Effect.tryPromise(() => persistBoundSessionView(session, view)),
-			),
+	return withSessionMachine(machines, scope, true, (providerRef, session) =>
+		submitConnectedHarnessTask(
+			machines,
+			scope,
+			providerRef,
+			session,
+			input,
+		).pipe(
 			Effect.flatMap((view) => attachSiblingSideChat(machines, scope, view)),
-		);
-	});
+		),
+	);
 }
 
 export function stopHarnessWorkspaceTurn(
@@ -369,6 +351,86 @@ function viewFromConnection(
 }
 
 /**
+ * A follow-up on a paused VM starts that harness if needed, then submits.
+ * Stored keys are attached during connect; they are not treated as signed in.
+ */
+function submitConnectedHarnessTask(
+	machines: WorkspaceMachines,
+	scope: HarnessSessionScope,
+	providerRef: string,
+	session: AgentSessionRecord | null,
+	input: {
+		readonly text: string;
+		readonly modelId: string;
+	},
+): Effect.Effect<PublicHarnessSession, unknown> {
+	return Effect.gen(function* () {
+		yield* preparePreparedGuest(machines, WorkspaceId(providerRef), scope);
+		const promptText = yield* Effect.tryPromise(() =>
+			scope.projectId
+				? syncProjectContextForTask(machines, providerRef, {
+						projectId: scope.projectId,
+						task: input.text,
+					})
+				: Promise.resolve(input.text),
+		);
+		const payload = { ...input, promptText };
+		const apiKey = yield* Effect.tryPromise(() =>
+			decryptHarnessApiKey(scope.harnessId),
+		);
+		if (scope.harnessId === "claude") {
+			let status = yield* refreshClaudeAuthStatus(
+				machines,
+				WorkspaceId(providerRef),
+			);
+			if (status.stage !== "authenticated") {
+				status = yield* connectClaudeCode(
+					machines,
+					WorkspaceId(providerRef),
+					apiKey,
+				);
+			}
+			if (status.stage === "authenticated") {
+				status = yield* submitClaudeTask(
+					machines,
+					WorkspaceId(providerRef),
+					payload,
+				);
+			}
+			return yield* Effect.tryPromise(() =>
+				persistBoundSessionView(session, viewFromClaude(status, providerRef)),
+			);
+		}
+		let status = yield* refreshOpenCodeAuthStatus(
+			machines,
+			WorkspaceId(providerRef),
+		);
+		if (status.stage !== "authenticated") {
+			status = yield* connectOpenCode(
+				machines,
+				WorkspaceId(providerRef),
+				apiKey,
+				{
+					discardCopiedTranscript: !sessionRecordHasConversation(
+						session?.items,
+					),
+				},
+			);
+		}
+		if (status.stage === "authenticated") {
+			status = yield* submitOpenCodeTask(
+				machines,
+				WorkspaceId(providerRef),
+				payload,
+			);
+		}
+		return yield* Effect.tryPromise(() =>
+			persistBoundSessionView(session, viewFromOpenCode(status, providerRef)),
+		);
+	});
+}
+
+/**
  * Side chat is a second agent session VM copied from the same project
  * snapshot. It does not share the main agent's checkout.
  */
@@ -408,80 +470,13 @@ function sendHarnessSideTask(
 		yield* Effect.tryPromise(() =>
 			machines.ensureRunning(WorkspaceId(bound.providerRef)),
 		);
-		yield* preparePreparedGuest(
+		const sideView = yield* submitConnectedHarnessTask(
 			machines,
-			WorkspaceId(bound.providerRef),
 			scope,
+			bound.providerRef,
+			bound.session,
+			input,
 		);
-		const payload = {
-			...input,
-			promptText: yield* Effect.tryPromise(() =>
-				syncProjectContextForTask(machines, bound.providerRef, {
-					projectId: scope.projectId as string,
-					task: input.text,
-				}),
-			),
-		};
-		const apiKey = yield* Effect.tryPromise(() =>
-			decryptHarnessApiKey(scope.harnessId),
-		);
-		let sideView: PublicHarnessSession;
-		if (scope.harnessId === "claude") {
-			let status = yield* refreshClaudeAuthStatus(
-				machines,
-				WorkspaceId(bound.providerRef),
-			);
-			if (status.stage !== "authenticated") {
-				status = yield* connectClaudeCode(
-					machines,
-					WorkspaceId(bound.providerRef),
-					apiKey,
-				);
-			}
-			if (status.stage === "authenticated") {
-				status = yield* submitClaudeTask(
-					machines,
-					WorkspaceId(bound.providerRef),
-					payload,
-				);
-			}
-			sideView = yield* Effect.tryPromise(() =>
-				persistBoundSessionView(
-					bound.session,
-					viewFromClaude(status, bound.providerRef),
-				),
-			);
-		} else {
-			let status = yield* refreshOpenCodeAuthStatus(
-				machines,
-				WorkspaceId(bound.providerRef),
-			);
-			if (status.stage !== "authenticated") {
-				status = yield* connectOpenCode(
-					machines,
-					WorkspaceId(bound.providerRef),
-					apiKey,
-					{
-						discardCopiedTranscript: !sessionRecordHasConversation(
-							bound.session.items,
-						),
-					},
-				);
-			}
-			if (status.stage === "authenticated") {
-				status = yield* submitOpenCodeTask(
-					machines,
-					WorkspaceId(bound.providerRef),
-					payload,
-				);
-			}
-			sideView = yield* Effect.tryPromise(() =>
-				persistBoundSessionView(
-					bound.session,
-					viewFromOpenCode(status, bound.providerRef),
-				),
-			);
-		}
 		const main = yield* readHarnessWorkspaceSession(machines, {
 			...scope,
 			createNew: false,
@@ -512,9 +507,15 @@ function attachSiblingSideChat(
 			childAgentSession(scope.userId, scope.sessionId as string),
 		);
 		if (!child?.providerRef) return mergeSideChat(main, null);
-		yield* Effect.tryPromise(() =>
-			machines.ensureRunning(WorkspaceId(child.providerRef as string)),
+		const running = yield* Effect.tryPromise(() =>
+			machines.isRunning(WorkspaceId(child.providerRef as string)),
 		);
+		if (!running) {
+			const stored = yield* Effect.tryPromise(() =>
+				persistBoundSessionView(child, emptyHarnessSession()),
+			);
+			return mergeSideChat(main, stored);
+		}
 		if (scope.harnessId === "claude") {
 			const status = yield* refreshClaudeAuthStatus(
 				machines,
