@@ -101,6 +101,10 @@ describe("executeSessionMachinePlan", () => {
 			path: "/tmp/ytimesy-claude-auth-status.json",
 			contents: `${JSON.stringify({ stage: "missing" })}\n`,
 		});
+		expect(runtime.writes).toContainEqual({
+			path: "/tmp/ytimesy-auth-status.json",
+			contents: `${JSON.stringify({ stage: "missing" })}\n`,
+		});
 		expect(
 			runtime.writes.some((write) =>
 				write.path.endsWith("ytimesy-opencode-serve.pid"),
