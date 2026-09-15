@@ -10,6 +10,7 @@ import {
 	harnessAccess,
 	harnessRequiresAccountLogin,
 	offeredHarnessAccess,
+	runningAuthenticatedTurnShouldPoll,
 	selectedHarnessIsConnected,
 	shouldAutoResumeHarnessSession,
 } from "./harness-access";
@@ -316,5 +317,53 @@ describe("harness access", () => {
 			userCode: "ABCD-1234",
 			verificationUrl: "https://auth.openai.com/codex/device",
 		});
+	});
+});
+
+describe("runningAuthenticatedTurnShouldPoll", () => {
+	it("polls an authenticated running turn after Send returns", () => {
+		expect(
+			runningAuthenticatedTurnShouldPoll({
+				turnStatus: "running",
+				sideTurnStatus: "idle",
+				connectionStatus: "authenticated",
+				composerBusy: false,
+			}),
+		).toBe(true);
+		expect(
+			runningAuthenticatedTurnShouldPoll({
+				turnStatus: "idle",
+				sideTurnStatus: "running",
+				connectionStatus: "authenticated",
+				composerBusy: false,
+			}),
+		).toBe(true);
+	});
+
+	it("does not poll while Send is in flight or the VM is paused", () => {
+		expect(
+			runningAuthenticatedTurnShouldPoll({
+				turnStatus: "running",
+				sideTurnStatus: "idle",
+				connectionStatus: "authenticated",
+				composerBusy: true,
+			}),
+		).toBe(false);
+		expect(
+			runningAuthenticatedTurnShouldPoll({
+				turnStatus: "running",
+				sideTurnStatus: "idle",
+				connectionStatus: "disconnected",
+				composerBusy: false,
+			}),
+		).toBe(false);
+		expect(
+			runningAuthenticatedTurnShouldPoll({
+				turnStatus: "completed",
+				sideTurnStatus: "idle",
+				connectionStatus: "authenticated",
+				composerBusy: false,
+			}),
+		).toBe(false);
 	});
 });

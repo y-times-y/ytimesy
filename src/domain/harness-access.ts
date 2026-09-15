@@ -146,6 +146,19 @@ export function canResumeDisconnectedFollowUp(input: {
 	return input.harnessId === "opencode";
 }
 
+export const RUNNING_TURN_POLL_MS = 1500;
+
+export function runningAuthenticatedTurnShouldPoll(input: {
+	readonly turnStatus: SessionTurnStatus;
+	readonly sideTurnStatus: SessionTurnStatus;
+	readonly connectionStatus: AgentConnection["status"];
+	readonly composerBusy: boolean;
+}): boolean {
+	if (input.composerBusy) return false;
+	if (input.connectionStatus !== "authenticated") return false;
+	return isTurnRunning(input.turnStatus) || isTurnRunning(input.sideTurnStatus);
+}
+
 export function composerSendIsEnabled(input: {
 	readonly harnessId: AgentProviderId;
 	readonly connection: AgentConnection;
