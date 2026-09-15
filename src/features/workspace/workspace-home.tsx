@@ -115,7 +115,6 @@ export function WorkspaceHome({
 	});
 	const [desktopBusy, setDesktopBusy] = useState(false);
 	const autoResumeStarted = useRef(false);
-	const desktopAutoStarted = useRef(false);
 	const sessionEpoch = useRef(0);
 	const bumpSessionEpoch = useCallback(() => {
 		sessionEpoch.current += 1;
@@ -180,7 +179,6 @@ export function WorkspaceHome({
 	useEffect(() => {
 		void activeProjectId;
 		setSelectedSessionId(undefined);
-		desktopAutoStarted.current = false;
 		autoResumeStarted.current = false;
 	}, [activeProjectId]);
 
@@ -260,27 +258,6 @@ export function WorkspaceHome({
 	]);
 
 	useEffect(() => {
-		if (session.connection.status !== "authenticated") return;
-		if (!activeProjectId) return;
-		if (desktopAutoStarted.current) return;
-		if (desktop.status === "running" || desktop.status === "starting") return;
-		desktopAutoStarted.current = true;
-		setDesktopBusy(true);
-		setDesktop({ status: "starting" });
-		void startDesktop({
-			data: { projectId: activeProjectId, sessionId: activeSessionId },
-		})
-			.then(setDesktop)
-			.finally(() => setDesktopBusy(false));
-	}, [
-		desktop.status,
-		activeProjectId,
-		activeSessionId,
-		session.connection.status,
-		startDesktop,
-	]);
-
-	useEffect(() => {
 		if (
 			session.connection.status !== "awaiting_device_code" &&
 			session.turnStatus !== "running" &&
@@ -356,7 +333,6 @@ export function WorkspaceHome({
 		})
 			.then((created) => {
 				setSelectedSessionId(created.id);
-				desktopAutoStarted.current = false;
 				autoResumeStarted.current = true;
 				openedDiff.current = false;
 				setDesktop({ status: "stopped" });
@@ -405,7 +381,6 @@ export function WorkspaceHome({
 		if (activeSessionId === chatId) {
 			bumpSessionEpoch();
 			setSelectedSessionId(nextId);
-			desktopAutoStarted.current = false;
 			autoResumeStarted.current = false;
 			openedDiff.current = false;
 			setDesktop({ status: "stopped" });
@@ -506,7 +481,6 @@ export function WorkspaceHome({
 				onSelectChat={(id) => {
 					bumpSessionEpoch();
 					setSelectedSessionId(id);
-					desktopAutoStarted.current = false;
 					autoResumeStarted.current = false;
 					openedDiff.current = false;
 					setDesktop({ status: "stopped" });
