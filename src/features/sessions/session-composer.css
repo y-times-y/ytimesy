@@ -472,8 +472,8 @@ button.harness-choice-action:disabled,
 	display: block;
 }
 .session-message[data-role="user"] p {
-	max-width: min(100%, 42em);
-	width: fit-content;
+	max-width: 100%;
+	width: 100%;
 	padding: 8px 12px;
 	border: 0;
 	border-radius: 12px;
