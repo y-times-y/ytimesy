@@ -95,3 +95,10 @@ export function withChatTurnStatus(
 		chat.id === chatId ? { ...chat, turnStatus } : chat,
 	);
 }
+
+export function listedChatTurnStatus(
+	chats: readonly SidebarChat[],
+	chatId: string,
+): SessionTurnStatus {
+	return chats.find((chat) => chat.id === chatId)?.turnStatus ?? "idle";
+}

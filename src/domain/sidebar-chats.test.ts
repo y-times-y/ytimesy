@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	chatsListedInSidebar,
 	composerBusyForOpenChat,
+	listedChatTurnStatus,
 	newChatIsActive,
 	selectedChatIdAfterDelete,
 	sidebarChatIsRunning,
@@ -145,5 +146,14 @@ describe("parallel chat busy", () => {
 			{ id: "a", title: "fix login", turnStatus: "running" },
 			{ id: "b", title: "add snapshot copy", turnStatus: "idle" },
 		]);
+		expect(
+			listedChatTurnStatus(
+				[
+					{ id: "a", title: "fix login", turnStatus: "running" },
+					{ id: "b", title: "add snapshot copy", turnStatus: "idle" },
+				],
+				"a",
+			),
+		).toBe("running");
 	});
 });
