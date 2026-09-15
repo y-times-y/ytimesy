@@ -1,4 +1,4 @@
-import { Plus, Zap } from "lucide-react";
+import { Paperclip, Zap } from "lucide-react";
 import { useRef, useState } from "react";
 import {
 	Select,
@@ -37,11 +37,11 @@ interface SessionControlsProps {
 	busy: boolean;
 	onConnect: () => void;
 	onSaveApiKey: (harnessId: AgentProviderId, apiKey: string) => void;
+	snapshotAvailable?: boolean;
 	models: readonly SessionModel[];
 	modelId: string;
 	onModelIdChange: (id: string) => void;
 	onAttachFiles: (files: File[]) => void;
-	snapshotAvailable?: boolean;
 }
 
 export function SessionControls({
@@ -52,11 +52,11 @@ export function SessionControls({
 	busy,
 	onConnect,
 	onSaveApiKey,
+	snapshotAvailable = false,
 	models,
 	modelId,
 	onModelIdChange,
 	onAttachFiles,
-	snapshotAvailable = false,
 }: SessionControlsProps) {
 	const fileInput = useRef<HTMLInputElement>(null);
 	const [reasoningId, setReasoningId] = useState("");
@@ -88,14 +88,13 @@ export function SessionControls({
 				title="Attach files"
 				onClick={() => fileInput.current?.click()}
 			>
-				<Plus className="size-4" />
+				<Paperclip className="size-4" />
 			</button>
 			<HarnessPicker
 				harnessId={harnessId}
 				connection={connection}
 				apiKeyHints={apiKeyHints}
 				busy={busy}
-				snapshotAvailable={snapshotAvailable}
 				onHarnessIdChange={(id) => {
 					onHarnessIdChange(id);
 					onModelIdChange("");
@@ -104,6 +103,7 @@ export function SessionControls({
 				}}
 				onConnect={onConnect}
 				onSaveApiKey={onSaveApiKey}
+				snapshotAvailable={snapshotAvailable}
 			/>
 			<Select
 				value={model?.id ?? ""}
