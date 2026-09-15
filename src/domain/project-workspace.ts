@@ -1,3 +1,5 @@
+import { isWorkspaceAtCapacity } from "./failure-message";
+
 export const workspaceStatuses = [
 	"queued",
 	"provisioning",
@@ -117,7 +119,7 @@ export function publicFailureMessage(error: unknown) {
 }
 
 export function workspaceCapacityMessage(message: string) {
-	if (/LIMIT_EXCEEDED|limit of \d+ VMs/i.test(message)) {
+	if (isWorkspaceAtCapacity(message)) {
 		return "This Freestyle plan is at its VM limit. Delete an unused agent session or raise the quota before starting another. Pausing a VM does not free a slot.";
 	}
 	return message;
