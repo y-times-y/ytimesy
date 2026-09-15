@@ -7,6 +7,7 @@ import {
 } from "#/domain/agent-provider";
 import { chatsFromAgentSessions } from "#/domain/agent-session";
 import { publicFailureMessage } from "#/domain/project-workspace";
+import type { SessionTurnStatus } from "#/domain/session-item";
 import { listAgentSessions } from "#/server/adapters/agent-sessions";
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
 import { requireUser } from "#/server/auth/auth";
@@ -21,6 +22,7 @@ import type { WorkspaceMachines } from "#/server/services/workspace-machines";
 export type PublicAgentChat = {
 	readonly id: string;
 	readonly title: string;
+	readonly turnStatus: SessionTurnStatus;
 };
 
 function runWithMachines<A>(
@@ -75,7 +77,11 @@ export const startProjectAgentSession = createServerFn({ method: "POST" })
 					createNew: !data.sessionId,
 				}),
 			);
-			return { id: bound.session.id, title: bound.session.title };
+			return {
+				id: bound.session.id,
+				title: bound.session.title,
+				turnStatus: bound.session.turnStatus,
+			};
 		} catch (cause) {
 			throw new Error(publicFailureMessage(cause));
 		}

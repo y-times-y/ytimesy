@@ -3,7 +3,7 @@ import type { AgentProviderId } from "#/domain/agent-provider";
 import { database } from "./database";
 
 const SESSION_COLUMNS =
-	"id,user_id,project_id,workspace_id,harness,provider_ref,parent_session_id,title,briefing,items,listed_model_id,status,updated_at";
+	"id,user_id,project_id,workspace_id,harness,provider_ref,parent_session_id,title,briefing,items,listed_model_id,turn_status,status,updated_at";
 
 export type AgentSessionRecord = {
 	id: string;
@@ -17,6 +17,7 @@ export type AgentSessionRecord = {
 	briefing: string | null;
 	items: unknown;
 	listedModelId: string | null;
+	turnStatus: "idle" | "running" | "completed" | "failed";
 	status: "starting" | "ready" | "failed";
 	updatedAt: string;
 };
@@ -33,6 +34,7 @@ interface AgentSessionRow {
 	briefing: string | null;
 	items: unknown;
 	listed_model_id: string | null;
+	turn_status: AgentSessionRecord["turnStatus"];
 	status: AgentSessionRecord["status"];
 	updated_at: Date | string;
 }
@@ -136,12 +138,14 @@ export async function saveAgentSessionItems(
 	items: unknown,
 	title?: string,
 	listedModelId?: string | null,
+	turnStatus?: AgentSessionRecord["turnStatus"],
 ) {
 	const result = await database().query(
 		`update agent_session
 		 set items=$2::jsonb,
 		     title=coalesce($3, title),
 		     listed_model_id=coalesce($4, listed_model_id),
+		     turn_status=coalesce($5, turn_status),
 		     updated_at=now()
 		 where id=$1
 		 returning ${SESSION_COLUMNS}`,
@@ -150,7 +154,22 @@ export async function saveAgentSessionItems(
 			JSON.stringify(items),
 			title ?? null,
 			listedModelId?.trim() || null,
+			turnStatus ?? null,
 		],
+	);
+	return result.rows[0] ? toSession(result.rows[0]) : null;
+}
+
+export async function saveAgentSessionTurnStatus(
+	sessionId: string,
+	turnStatus: AgentSessionRecord["turnStatus"],
+) {
+	const result = await database().query(
+		`update agent_session
+		 set turn_status=$2, updated_at=now()
+		 where id=$1
+		 returning ${SESSION_COLUMNS}`,
+		[sessionId, turnStatus],
 	);
 	return result.rows[0] ? toSession(result.rows[0]) : null;
 }
@@ -181,6 +200,7 @@ function toSession(row: AgentSessionRow): AgentSessionRecord {
 		briefing: row.briefing,
 		items: row.items,
 		listedModelId: row.listed_model_id,
+		turnStatus: row.turn_status ?? "idle",
 		status: row.status,
 		updatedAt:
 			row.updated_at instanceof Date

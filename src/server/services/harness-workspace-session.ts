@@ -49,7 +49,10 @@ import {
 	sendCodexWorkspaceTask,
 	stopCodexWorkspaceTurn,
 } from "./codex-workspace-session";
-import { persistBoundSessionView } from "./persist-session-view";
+import {
+	persistBoundSessionView,
+	persistSessionTurnStatus,
+} from "./persist-session-view";
 import { preparePreparedGuest } from "./project-workspace";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -435,6 +438,9 @@ function submitConnectedHarnessTask(
 					excludedIds: preference.blockedListedModelIds,
 				});
 				if (listedModelId) {
+					yield* Effect.tryPromise(() =>
+						persistSessionTurnStatus(session, "running"),
+					);
 					status = yield* submitClaudeTask(machines, WorkspaceId(providerRef), {
 						...payload,
 						modelId: listedModelId,
@@ -483,6 +489,9 @@ function submitConnectedHarnessTask(
 				excludedIds: preference.blockedListedModelIds,
 			});
 			if (listedModelId) {
+				yield* Effect.tryPromise(() =>
+					persistSessionTurnStatus(session, "running"),
+				);
 				status = yield* submitOpenCodeTask(machines, WorkspaceId(providerRef), {
 					...payload,
 					modelId: listedModelId,
@@ -538,6 +547,9 @@ function sendHarnessSideTask(
 		);
 		yield* Effect.tryPromise(() =>
 			machines.ensureRunning(WorkspaceId(bound.providerRef)),
+		);
+		yield* Effect.tryPromise(() =>
+			persistSessionTurnStatus(bound.session, "running"),
 		);
 		const sideView =
 			scope.harnessId === "codex"

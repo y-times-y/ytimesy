@@ -169,6 +169,21 @@ button:enabled:active {
 	background: #ffffff0c;
 	color: #f2f2f2;
 }
+.sidebar-chat[data-activity="running"] {
+	position: relative;
+	padding-right: 18px;
+}
+.sidebar-chat[data-activity="running"]::after {
+	content: "";
+	position: absolute;
+	right: 8px;
+	top: 50%;
+	width: 6px;
+	height: 6px;
+	margin-top: -3px;
+	border-radius: 50%;
+	background: #f2f2f2;
+}
 .sidebar-chat-row {
 	display: flex;
 	align-items: center;

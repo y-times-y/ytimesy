@@ -31,7 +31,14 @@ import {
 	sessionTitleFromItems,
 	sessionUsesFollowUpLayout,
 } from "#/domain/session-item";
-import { selectedChatIdAfterDelete } from "#/domain/sidebar-chats";
+import {
+	composerBusyForOpenChat,
+	selectedChatIdAfterDelete,
+	sidebarChatIsRunning,
+	withBusyChat,
+	withChatTurnStatus,
+	withoutBusyChat,
+} from "#/domain/sidebar-chats";
 import type { WorkspaceDesktop } from "#/domain/workspace-desktop";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
 import { authClient } from "../auth/client";
@@ -106,7 +113,7 @@ export function WorkspaceHome({
 	const [splitting, setSplitting] = useState(false);
 	const workspaceBody = useRef<HTMLDivElement>(null);
 	const [sideChatOpen, setSideChatOpen] = useState(false);
-	const [busy, setBusy] = useState(false);
+	const [busyChatIds, setBusyChatIds] = useState<string[]>([]);
 	const [harnessId, setHarnessId] = useState<AgentProviderId>(
 		DEFAULT_COMPOSER_HARNESS_ID,
 	);
@@ -119,6 +126,7 @@ export function WorkspaceHome({
 	const [desktopBusy, setDesktopBusy] = useState(false);
 	const autoResumeStarted = useRef(false);
 	const sessionEpoch = useRef(0);
+	const loadedSessionId = useRef<string | undefined>(undefined);
 	const bumpSessionEpoch = useCallback(() => {
 		sessionEpoch.current += 1;
 		return sessionEpoch.current;
@@ -156,6 +164,10 @@ export function WorkspaceHome({
 	const activeProjectId = selectedProject?.id;
 	const activeSessionId =
 		selectedSessionId ?? session.agentSessionId ?? undefined;
+	const composerBusy = composerBusyForOpenChat({
+		openChatId: activeSessionId,
+		busyChatIds,
+	});
 
 	function sessionScope() {
 		return {
@@ -183,6 +195,7 @@ export function WorkspaceHome({
 		void activeProjectId;
 		setSelectedSessionId(undefined);
 		autoResumeStarted.current = false;
+		loadedSessionId.current = undefined;
 	}, [activeProjectId]);
 
 	useEffect(() => {
@@ -204,7 +217,10 @@ export function WorkspaceHome({
 	}, [loadDesktop, activeProjectId, activeSessionId]);
 
 	useEffect(() => {
-		if (!activeProjectId || busy) return;
+		if (!activeProjectId) return;
+		const switching = loadedSessionId.current !== activeSessionId;
+		if (!switching && composerBusy) return;
+		loadedSessionId.current = activeSessionId;
 		const epoch = sessionEpoch.current;
 		void getCodexSession({
 			data: {
@@ -213,7 +229,13 @@ export function WorkspaceHome({
 				sessionId: activeSessionId,
 			},
 		}).then((next) => applySessionView(epoch, next));
-	}, [applySessionView, busy, harnessId, activeProjectId, activeSessionId]);
+	}, [
+		applySessionView,
+		composerBusy,
+		harnessId,
+		activeProjectId,
+		activeSessionId,
+	]);
 
 	useEffect(() => {
 		if (compact || openedDiff.current || fileChanges.length === 0) return;
@@ -235,8 +257,9 @@ export function WorkspaceHome({
 			return;
 		}
 		autoResumeStarted.current = true;
-		setBusy(true);
+		setBusyChatIds((ids) => withBusyChat(ids, activeSessionId));
 		const epoch = sessionEpoch.current;
+		const chatId = activeSessionId;
 		void connect({
 			data: {
 				projectId: activeProjectId,
@@ -245,7 +268,9 @@ export function WorkspaceHome({
 			},
 		})
 			.then((next) => applySessionView(epoch, next))
-			.finally(() => setBusy(false));
+			.finally(() =>
+				setBusyChatIds((ids) => withoutBusyChat(ids, chatId)),
+			);
 	}, [
 		applySessionView,
 		connect,
@@ -290,6 +315,33 @@ export function WorkspaceHome({
 		session.turnStatus,
 	]);
 
+	useEffect(() => {
+		const siblingRunning = sidebarChats.some(
+			(chat) =>
+				chat.id !== activeSessionId &&
+				sidebarChatIsRunning({
+					chatId: chat.id,
+					turnStatus: chat.turnStatus,
+					busyChatIds,
+					openChatId: activeSessionId,
+					openTurnStatus: session.turnStatus,
+					openSideTurnStatus: session.sideTurnStatus,
+				}),
+		);
+		if (!siblingRunning) return;
+		const timer = window.setInterval(() => {
+			void chats.refetch();
+		}, 2000);
+		return () => window.clearInterval(timer);
+	}, [
+		activeSessionId,
+		busyChatIds,
+		chats.refetch,
+		session.sideTurnStatus,
+		session.turnStatus,
+		sidebarChats,
+	]);
+
 	function openInspector(view: ToolsView) {
 		setToolsView(view);
 		setInspectorView(view);
@@ -319,12 +371,14 @@ export function WorkspaceHome({
 			requestAnimationFrame(focusProjectPicker);
 			return;
 		}
-		setBusy(true);
 		const epoch = bumpSessionEpoch();
+		let createdId: string | undefined;
 		void startSession({
 			data: { projectId: selectedProject.id, harnessId },
 		})
 			.then((created) => {
+				createdId = created.id;
+				setBusyChatIds((ids) => withBusyChat(ids, created.id));
 				setSelectedSessionId(created.id);
 				autoResumeStarted.current = true;
 				openedDiff.current = false;
@@ -357,7 +411,10 @@ export function WorkspaceHome({
 					canSendSide: false,
 				}));
 			})
-			.finally(() => setBusy(false));
+			.finally(() => {
+				setBusyChatIds((ids) => withoutBusyChat(ids, createdId));
+				void chats.refetch();
+			});
 	}
 
 	function deleteChat(chatId: string) {
@@ -389,7 +446,6 @@ export function WorkspaceHome({
 				canSendSide: false,
 			}));
 		}
-		setBusy(true);
 		void deleteSession({
 			data: { projectId: selectedProject.id, sessionId: chatId },
 		})
@@ -406,8 +462,7 @@ export function WorkspaceHome({
 					canSend: false,
 					canSendSide: false,
 				}));
-			})
-			.finally(() => setBusy(false));
+			});
 	}
 
 	async function signOut() {
@@ -418,12 +473,16 @@ export function WorkspaceHome({
 	function sendSideChat(text: string) {
 		const modelId =
 			composerModelId || session.listedModelId || sessionModelId(session);
-		setBusy(true);
+		const chatId = activeSessionId;
+		setBusyChatIds((ids) => withBusyChat(ids, chatId));
 		void sendTask({
 			data: { ...sessionScope(), text, modelId, lane: "side" as const },
 		})
 			.then(setSession)
-			.finally(() => setBusy(false));
+			.finally(() => {
+				setBusyChatIds((ids) => withoutBusyChat(ids, chatId));
+				void chats.refetch();
+			});
 	}
 
 	function beginInspectorSplit(event: PointerEvent<HTMLButtonElement>) {
@@ -468,6 +527,9 @@ export function WorkspaceHome({
 				}}
 				chats={sidebarChats}
 				selectedChatId={activeSessionId}
+				busyChatIds={busyChatIds}
+				openTurnStatus={session.turnStatus}
+				openSideTurnStatus={session.sideTurnStatus}
 				hasUserMessage={hasUserMessage}
 				onSelectChat={(id) => {
 					bumpSessionEpoch();
@@ -568,31 +630,38 @@ export function WorkspaceHome({
 						>
 							<SessionLauncher
 								session={session}
-								busy={busy}
+								busy={composerBusy}
 								harnessId={harnessId}
 								onHarnessIdChange={(id) => {
 									setHarnessId(id);
 									if (id !== "opencode") return;
-									setBusy(true);
+									const chatId = activeSessionId;
+									setBusyChatIds((ids) => withBusyChat(ids, chatId));
 									void connect({
 										data: { ...sessionScope(), harnessId: id },
 									})
 										.then(setSession)
-										.finally(() => setBusy(false));
+										.finally(() =>
+											setBusyChatIds((ids) => withoutBusyChat(ids, chatId)),
+										);
 								}}
 								apiKeyHints={apiKeyHints}
 								onComposerModelIdChange={setComposerModelId}
 								onConnect={() => {
 									autoResumeStarted.current = true;
-									setBusy(true);
+									const chatId = activeSessionId;
+									setBusyChatIds((ids) => withBusyChat(ids, chatId));
 									void connect({
 										data: sessionScope(),
 									})
 										.then(setSession)
-										.finally(() => setBusy(false));
+										.finally(() =>
+											setBusyChatIds((ids) => withoutBusyChat(ids, chatId)),
+										);
 								}}
 								onSaveApiKey={(id, apiKey) => {
-									setBusy(true);
+									const chatId = activeSessionId;
+									setBusyChatIds((ids) => withBusyChat(ids, chatId));
 									void saveKey({ data: { harnessId: id, apiKey } })
 										.then((status) => {
 											setApiKeyHints({
@@ -609,13 +678,22 @@ export function WorkspaceHome({
 												}).then(setSession);
 											}
 										})
-										.finally(() => setBusy(false));
+										.finally(() =>
+											setBusyChatIds((ids) => withoutBusyChat(ids, chatId)),
+										);
 								}}
 								onSend={(text, modelId) => {
-									setBusy(true);
 									autoResumeStarted.current = true;
 									const epoch = sessionEpoch.current;
 									const scope = sessionScope();
+									const chatId = activeSessionId;
+									setBusyChatIds((ids) => withBusyChat(ids, chatId));
+									if (activeProjectId) {
+										queryClient.setQueryData(
+											["agent-sessions", activeProjectId],
+											withChatTurnStatus(sidebarChats, chatId, "running"),
+										);
+									}
 									void (async () => {
 										try {
 											let current = session;
@@ -651,17 +729,22 @@ export function WorkspaceHome({
 												},
 											}));
 										} finally {
-											setBusy(false);
+											setBusyChatIds((ids) => withoutBusyChat(ids, chatId));
+											void chats.refetch();
 										}
 									})();
 								}}
 								onStop={() => {
-									setBusy(true);
+									const chatId = activeSessionId;
+									setBusyChatIds((ids) => withBusyChat(ids, chatId));
 									void stopTurn({
 										data: sessionScope(),
 									})
 										.then(setSession)
-										.finally(() => setBusy(false));
+										.finally(() => {
+											setBusyChatIds((ids) => withoutBusyChat(ids, chatId));
+											void chats.refetch();
+										});
 								}}
 								onOpenSideChat={(question) => {
 									openSideChat();
@@ -747,7 +830,7 @@ export function WorkspaceHome({
 									canSend={session.canSendSide}
 									mainTurnRunning={session.turnStatus === "running"}
 									isolated
-									busy={busy}
+									busy={composerBusy}
 									onSend={sendSideChat}
 								/>
 							}
