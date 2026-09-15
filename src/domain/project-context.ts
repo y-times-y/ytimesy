@@ -58,3 +58,21 @@ export function traceSummaryFromTurn(input: {
 	const summary = reply ? `${task || "Task"}: ${reply}` : task;
 	return summary.length > 400 ? `${summary.slice(0, 399)}…` : summary;
 }
+
+export function nextProjectBriefing(input: {
+	readonly briefing: string;
+	readonly summary: string;
+}): string {
+	const briefing = input.briefing.trim();
+	const summary = input.summary.trim();
+	if (!summary) return briefing;
+	if (!briefing) return clipBriefing(summary);
+	if (briefing.includes(summary.slice(0, Math.min(80, summary.length)))) {
+		return briefing;
+	}
+	return clipBriefing(`${briefing}\n${summary}`);
+}
+
+function clipBriefing(text: string) {
+	return text.length > 1200 ? `${text.slice(0, 1199)}…` : text;
+}

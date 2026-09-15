@@ -1,4 +1,7 @@
-import { traceSummaryFromTurn } from "#/domain/project-context";
+import {
+	nextProjectBriefing,
+	traceSummaryFromTurn,
+} from "#/domain/project-context";
 import {
 	lastAgentMessageText,
 	lastUserMessageText,
@@ -10,7 +13,11 @@ import {
 	type AgentSessionRecord,
 	saveAgentSessionItems,
 } from "#/server/adapters/agent-sessions";
-import { insertProjectTrace } from "#/server/adapters/project-context";
+import {
+	insertProjectTrace,
+	loadProjectBriefing,
+	saveProjectBriefing,
+} from "#/server/adapters/project-context";
 import type { PublicCodexSession } from "./codex-workspace-session";
 
 export async function persistBoundSessionView(
@@ -58,4 +65,8 @@ async function captureTurnTrace(
 		area: null,
 		summary,
 	});
+	const briefing = await loadProjectBriefing(session.projectId);
+	const updated = nextProjectBriefing({ briefing, summary });
+	if (updated !== briefing)
+		await saveProjectBriefing(session.projectId, updated);
 }

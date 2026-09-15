@@ -207,11 +207,15 @@ export function WorkspaceHome({
 
 	useEffect(() => {
 		if (autoResumeStarted.current) return;
-		if (harnessId !== "codex") return;
 		if (!activeProjectId) return;
+		if (harnessId === "claude") return;
 		const shouldConnect =
 			session.connection.status === "authenticated" ||
-			(session.snapshotAvailable &&
+			(harnessId === "codex" &&
+				session.snapshotAvailable &&
+				session.connection.status === "disconnected") ||
+			(harnessId === "opencode" &&
+				Boolean(activeSessionId) &&
 				session.connection.status === "disconnected");
 		if (!shouldConnect) return;
 		autoResumeStarted.current = true;
@@ -332,13 +336,21 @@ export function WorkspaceHome({
 				autoResumeStarted.current = false;
 				openedDiff.current = false;
 				setDesktop({ status: "stopped" });
+				setSession((current) => ({
+					...current,
+					agentSessionId: created.id,
+					items: [],
+					turnStatus: "idle",
+					sideItems: [],
+					sideTurnStatus: "idle",
+				}));
+				void chats.refetch();
 				return connect({
 					data: { ...sessionScope(), sessionId: created.id, createNew: false },
 				});
 			})
 			.then((next) => {
 				if (next) setSession(next);
-				void chats.refetch();
 			})
 			.finally(() => setBusy(false));
 	}
@@ -351,7 +363,8 @@ export function WorkspaceHome({
 	function sendSideChat(text: string) {
 		const modelId = sessionModelId(session);
 		if (!modelId) return;
-		if (session.turnStatus === "running") setSideQueued(true);
+		if (harnessId === "codex" && session.turnStatus === "running")
+			setSideQueued(true);
 		setBusy(true);
 		void sendTask({
 			data: { ...sessionScope(), text, modelId, lane: "side" as const },
@@ -636,6 +649,7 @@ export function WorkspaceHome({
 									turnStatus={session.sideTurnStatus}
 									canSend={session.canSendSide}
 									mainTurnRunning={session.turnStatus === "running"}
+									isolated={harnessId !== "codex"}
 									busy={busy}
 									queued={sideQueued}
 									onSend={sendSideChat}

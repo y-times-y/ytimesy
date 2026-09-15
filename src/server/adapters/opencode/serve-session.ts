@@ -3,6 +3,13 @@ import { fileChangesFromGitPorcelain } from "#/domain/git-working-tree";
 import { SessionItemId, type WorkspaceId } from "#/domain/ids";
 import type { ListedModel } from "#/domain/listed-model";
 import { parseOpenCodeModelCatalog } from "#/domain/opencode-catalog";
+import {
+	assistantTextFromOpenCode,
+	assistantTextFromOpenCodeMessages,
+	errorMessageFromOpenCode,
+	openCodeSessionIsBusy,
+	openCodeTurnFailureMessage,
+} from "#/domain/opencode-turn";
 import { posixShellQuoted } from "#/domain/posix-command";
 import type {
 	FileChangeEntry,
@@ -63,7 +70,14 @@ echo "OPENCODE_BIN=$OPENCODE_BIN"
 "$OPENCODE_BIN" --version
 `;
 
-const START_SERVE_SCRIPT = `set -eu
+export const OPENCODE_START_SERVE_SCRIPT = `set -eu
+CWD_FILE=${PROJECT_CWD_PATH}
+if [ -f "$CWD_FILE" ]; then
+  SERVE_CWD="$(tr -d '\\n\\r' < "$CWD_FILE")"
+  if [ -n "$SERVE_CWD" ] && [ -d "$SERVE_CWD" ]; then
+    cd "$SERVE_CWD"
+  fi
+fi
 if [ -f ${PID_PATH} ] && kill -0 "$(cat ${PID_PATH})" 2>/dev/null; then
   echo "SERVE_PID=$(cat ${PID_PATH})"
   exit 0
@@ -76,6 +90,7 @@ setsid "$OPENCODE_BIN" serve --port ${OPENCODE_PORT} --hostname 127.0.0.1 >${LOG
 echo $! > ${PID_PATH}
 echo "SERVE_PID=$(cat ${PID_PATH})"
 `;
+const START_SERVE_SCRIPT = OPENCODE_START_SERVE_SCRIPT;
 
 export type OpenCodeAuthStatus =
 	| { readonly stage: "missing" }
@@ -87,6 +102,9 @@ export type OpenCodeAuthStatus =
 			readonly models: readonly ListedModel[];
 			readonly turnStatus: SessionTurnStatus;
 			readonly items: readonly SessionItem[];
+			readonly serveSessionId: string | null;
+			readonly seenBusy: boolean;
+			readonly turnStartedAt: number | null;
 	  }
 	| { readonly stage: "failed"; readonly message: string };
 
@@ -117,6 +135,12 @@ export function parseOpenCodeAuthStatus(
 						? parsed.turnStatus
 						: "idle",
 				items: simpleSessionItems(parsed.items),
+				serveSessionId: readString(parsed.serveSessionId) ?? null,
+				seenBusy: parsed.seenBusy === true,
+				turnStartedAt:
+					typeof parsed.turnStartedAt === "number"
+						? parsed.turnStartedAt
+						: null,
 			};
 		}
 		if (stage === "failed") {
@@ -222,9 +246,18 @@ export function refreshOpenCodeAuthStatus(
 	return Effect.gen(function* () {
 		const health = yield* curlJson(machines, workspaceId, "/global/health");
 		if (health == null) {
-			return yield* readOpenCodeAuthStatus(machines, workspaceId);
+			const restarted = yield* restartOpenCodeServe(machines, workspaceId);
+			if (!restarted) {
+				return yield* readOpenCodeAuthStatus(machines, workspaceId);
+			}
 		}
-		const snapshot = yield* readOpenCodeSnapshot(machines, workspaceId);
+		let snapshot = yield* readOpenCodeSnapshot(machines, workspaceId);
+		if (
+			snapshot.stage === "authenticated" &&
+			snapshot.turnStatus === "running"
+		) {
+			snapshot = yield* syncOpenCodeTurn(machines, workspaceId, snapshot);
+		}
 		yield* persistStatus(machines, workspaceId, snapshot);
 		return snapshot;
 	}).pipe(Effect.catchAll(() => readOpenCodeAuthStatus(machines, workspaceId)));
@@ -284,6 +317,12 @@ function readOpenCodeSnapshot(
 			previous.stage === "authenticated" ? previous.items : [];
 		const previousTurn =
 			previous.stage === "authenticated" ? previous.turnStatus : "idle";
+		const serveSessionId =
+			previous.stage === "authenticated" ? previous.serveSessionId : null;
+		const seenBusy =
+			previous.stage === "authenticated" ? previous.seenBusy : false;
+		const turnStartedAt =
+			previous.stage === "authenticated" ? previous.turnStartedAt : null;
 		const authMode =
 			usedKey ||
 			(previous.stage === "authenticated" && previous.authMode === "apikey")
@@ -297,6 +336,9 @@ function readOpenCodeSnapshot(
 			models,
 			turnStatus: previousTurn,
 			items: withWorkingTreeChanges(previousItems, workingTree),
+			serveSessionId,
+			seenBusy,
+			turnStartedAt,
 		};
 	});
 }
@@ -448,79 +490,254 @@ export function submitOpenCodeTask(
 			id: SessionItemId(`opencode-user-${Date.now()}`),
 			text: input.text,
 		};
-		const running: OpenCodeAuthStatus = {
+		const running: Extract<OpenCodeAuthStatus, { stage: "authenticated" }> = {
 			...current,
 			turnStatus: "running",
 			items: [...current.items, userItem],
+			seenBusy: false,
+			turnStartedAt: Date.now(),
 		};
 		yield* persistStatus(machines, workspaceId, running);
-		const session = yield* curlJsonMethod(
-			machines,
-			workspaceId,
-			"POST",
-			"/session",
-			"{}",
+		const directory = yield* Effect.tryPromise(() =>
+			machines.readTextFile(workspaceId, PROJECT_CWD_PATH),
+		).pipe(
+			Effect.map((value) => value?.trim() || null),
+			Effect.catchAll(() => Effect.succeed(null)),
 		);
-		const sessionId =
-			isRecord(session) && readString(session.id) ? session.id : null;
+		let sessionId = running.serveSessionId;
 		if (!sessionId) {
-			const failedTurn: OpenCodeAuthStatus = {
-				...current,
-				turnStatus: "failed",
-				items: [
-					...running.items,
-					{
-						kind: "error",
-						id: SessionItemId(`opencode-error-${Date.now()}`),
-						message: "opencode serve did not create a session.",
-					},
-				],
-			};
-			yield* persistStatus(machines, workspaceId, failedTurn);
-			return failedTurn;
+			const created = yield* curlHttp(
+				machines,
+				workspaceId,
+				"POST",
+				"/session",
+				JSON.stringify({
+					title: input.text.slice(0, 80),
+					...(directory ? { directory } : {}),
+				}),
+				30_000,
+			);
+			const createdId = isRecord(created.body)
+				? readString(created.body.id)
+				: undefined;
+			sessionId = createdId ?? null;
+			if (!sessionId) {
+				return yield* failOpenCodeTurn(
+					machines,
+					workspaceId,
+					running,
+					"opencode serve did not create a session.",
+				);
+			}
 		}
 		const [providerID, modelID] = splitOpenCodeModelId(input.modelId);
 		const body = JSON.stringify({
 			model: { providerID, modelID },
 			parts: [{ type: "text", text: input.text }],
 		});
-		const response = yield* curlJsonMethod(
+		const queued: Extract<OpenCodeAuthStatus, { stage: "authenticated" }> = {
+			...running,
+			serveSessionId: sessionId,
+		};
+		const asyncReply = yield* curlHttp(
 			machines,
 			workspaceId,
 			"POST",
-			`/session/${sessionId}/message`,
+			`/session/${sessionId}/prompt_async`,
 			body,
+			30_000,
 		);
-		const text = assistantTextFromOpenCode(response);
-		const next: OpenCodeAuthStatus = text
-			? {
-					...current,
-					turnStatus: "completed",
-					items: [
-						...running.items,
-						{
-							kind: "agentMessage",
-							id: SessionItemId(`opencode-agent-${Date.now()}`),
-							text,
-						},
-					],
-				}
-			: {
-					...current,
-					turnStatus: "failed",
-					items: [
-						...running.items,
-						{
-							kind: "error",
-							id: SessionItemId(`opencode-error-${Date.now()}`),
-							message:
-								"OpenCode listed no assistant text. ytimesy did not fall back to another provider.",
-						},
-					],
-				};
-		yield* persistStatus(machines, workspaceId, next);
-		return next;
+		if (asyncReply.status === 404) {
+			const response = yield* curlHttp(
+				machines,
+				workspaceId,
+				"POST",
+				`/session/${sessionId}/message`,
+				body,
+				180_000,
+			);
+			return yield* finishOpenCodeTurn(machines, workspaceId, queued, response);
+		}
+		if (asyncReply.status >= 400) {
+			return yield* failOpenCodeTurn(
+				machines,
+				workspaceId,
+				queued,
+				openCodeTurnFailureMessage({
+					payload: asyncReply.body ?? asyncReply.raw,
+					httpStatus: asyncReply.status,
+				}),
+			);
+		}
+		yield* persistStatus(machines, workspaceId, queued);
+		return queued;
 	});
+}
+
+function restartOpenCodeServe(
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+): Effect.Effect<boolean> {
+	return Effect.gen(function* () {
+		const start = yield* Effect.tryPromise(() =>
+			machines.exec(
+				workspaceId,
+				`export PATH="$HOME/.opencode/bin:$HOME/.local/bin:/usr/local/bin:$PATH"
+if command -v opencode >/dev/null 2>&1; then
+  export OPENCODE_BIN="$(command -v opencode)"
+${START_SERVE_SCRIPT}
+fi`,
+				30_000,
+			),
+		);
+		if (start.exitCode !== 0) return false;
+		return yield* waitForHealth(machines, workspaceId);
+	}).pipe(Effect.catchAll(() => Effect.succeed(false)));
+}
+
+function syncOpenCodeTurn(
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+	current: Extract<OpenCodeAuthStatus, { stage: "authenticated" }>,
+): Effect.Effect<OpenCodeAuthStatus> {
+	return Effect.gen(function* () {
+		if (!current.serveSessionId) {
+			return yield* failOpenCodeTurn(
+				machines,
+				workspaceId,
+				current,
+				"OpenCode turn is running without a session id.",
+			);
+		}
+		const status = yield* curlHttp(
+			machines,
+			workspaceId,
+			"GET",
+			"/session/status",
+			"",
+			20_000,
+		);
+		const messages = yield* curlHttp(
+			machines,
+			workspaceId,
+			"GET",
+			`/session/${current.serveSessionId}/message`,
+			"",
+			20_000,
+		);
+		const busy = openCodeSessionIsBusy(status.body, current.serveSessionId);
+		const text = assistantTextFromOpenCodeMessages(messages.body);
+		const error =
+			errorMessageFromOpenCode(messages.body) ??
+			errorMessageFromOpenCode(status.body);
+		const workingTree = yield* readWorkingTreeChanges(machines, workspaceId);
+		const items = withWorkingTreeChanges(current.items, workingTree);
+		const seenBusy = current.seenBusy || busy;
+		if (busy) {
+			return {
+				...current,
+				items,
+				seenBusy: true,
+			};
+		}
+		if (text) {
+			const withoutAgentErrors = items.filter((item) => item.kind !== "error");
+			const already = withoutAgentErrors.some(
+				(item) => item.kind === "agentMessage" && item.text === text,
+			);
+			return {
+				...current,
+				turnStatus: "completed" as const,
+				items: already
+					? withoutAgentErrors
+					: [
+							...withoutAgentErrors,
+							{
+								kind: "agentMessage" as const,
+								id: SessionItemId(`opencode-agent-${Date.now()}`),
+								text,
+							},
+						],
+				seenBusy,
+			};
+		}
+		if (error) {
+			return yield* failOpenCodeTurn(machines, workspaceId, current, error);
+		}
+		const elapsed = Date.now() - (current.turnStartedAt ?? Date.now());
+		if (seenBusy || elapsed > 180_000) {
+			return yield* failOpenCodeTurn(
+				machines,
+				workspaceId,
+				current,
+				openCodeTurnFailureMessage({
+					payload: messages.body ?? status.body,
+					httpStatus: messages.status,
+				}),
+			);
+		}
+		return { ...current, items, seenBusy };
+	});
+}
+
+function finishOpenCodeTurn(
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+	current: Extract<OpenCodeAuthStatus, { stage: "authenticated" }>,
+	response: CurlHttpResult,
+): Effect.Effect<OpenCodeAuthStatus> {
+	const text =
+		assistantTextFromOpenCode(response.body) ??
+		assistantTextFromOpenCodeMessages(response.body);
+	if (text) {
+		const completed: OpenCodeAuthStatus = {
+			...current,
+			turnStatus: "completed",
+			items: [
+				...current.items,
+				{
+					kind: "agentMessage",
+					id: SessionItemId(`opencode-agent-${Date.now()}`),
+					text,
+				},
+			],
+		};
+		return persistStatus(machines, workspaceId, completed).pipe(
+			Effect.map(() => completed),
+		);
+	}
+	return failOpenCodeTurn(
+		machines,
+		workspaceId,
+		current,
+		openCodeTurnFailureMessage({
+			payload: response.body ?? response.raw,
+			httpStatus: response.status,
+		}),
+	);
+}
+
+function failOpenCodeTurn(
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+	current: Extract<OpenCodeAuthStatus, { stage: "authenticated" }>,
+	message: string,
+): Effect.Effect<OpenCodeAuthStatus> {
+	const failedTurn: OpenCodeAuthStatus = {
+		...current,
+		turnStatus: "failed",
+		items: [
+			...current.items,
+			{
+				kind: "error",
+				id: SessionItemId(`opencode-error-${Date.now()}`),
+				message,
+			},
+		],
+	};
+	return persistStatus(machines, workspaceId, failedTurn).pipe(
+		Effect.map(() => failedTurn),
+	);
 }
 
 function splitOpenCodeModelId(modelId: string): [string, string] {
@@ -529,53 +746,59 @@ function splitOpenCodeModelId(modelId: string): [string, string] {
 	return [modelId.slice(0, slash), modelId.slice(slash + 1)];
 }
 
-function assistantTextFromOpenCode(payload: unknown): string | null {
-	if (typeof payload === "string" && payload.trim()) return payload.trim();
-	if (!isRecord(payload)) return null;
-	if (typeof payload.text === "string" && payload.text.trim()) {
-		return payload.text.trim();
-	}
-	const parts = Array.isArray(payload.parts)
-		? payload.parts
-		: isRecord(payload.info) && Array.isArray(payload.parts)
-			? payload.parts
-			: Array.isArray(payload.parts)
-				? payload.parts
-				: [];
-	const texts: string[] = [];
-	for (const part of Array.isArray(payload.parts) ? payload.parts : parts) {
-		if (!isRecord(part)) continue;
-		if (part.type === "text" && readString(part.text)) {
-			texts.push(String(part.text));
-		}
-	}
-	return texts.join("\n").trim() || null;
-}
+export type CurlHttpResult = {
+	readonly status: number;
+	readonly body: unknown | null;
+	readonly raw: string;
+};
 
-function curlJsonMethod(
+function curlHttp(
 	machines: WorkspaceMachines,
 	workspaceId: WorkspaceId,
 	method: "POST" | "GET",
 	path: string,
 	body: string,
-): Effect.Effect<unknown | null> {
-	const quotedBody = posixShellQuoted(body);
+	timeoutMs: number,
+): Effect.Effect<CurlHttpResult> {
+	const dataFlag =
+		method === "GET" || body === ""
+			? ""
+			: ` -H 'Content-Type: application/json' --data ${posixShellQuoted(body)}`;
 	return Effect.tryPromise(() =>
 		machines.exec(
 			workspaceId,
-			`curl -fsS -X ${method} ${OPENCODE_ORIGIN}${path} -H 'Content-Type: application/json' --data ${quotedBody} || true`,
-			180_000,
+			`curl -sS -X ${method} ${OPENCODE_ORIGIN}${path}${dataFlag} -w '\\n%{http_code}'`,
+			timeoutMs,
 		),
 	).pipe(
-		Effect.map((result) => {
-			const text = result.stdout.trim();
-			if (!text) return null;
-			try {
-				return JSON.parse(text) as unknown;
-			} catch {
-				return text;
-			}
-		}),
-		Effect.catchAll(() => Effect.succeed(null)),
+		Effect.map((result) => parseCurlHttp(result.stdout)),
+		Effect.catchAll(() =>
+			Effect.succeed({
+				status: 0,
+				body: null,
+				raw: "",
+			} satisfies CurlHttpResult),
+		),
 	);
+}
+
+export function parseCurlHttp(stdout: string): CurlHttpResult {
+	const trimmed = stdout.replace(/\s+$/, "");
+	const lastNl = trimmed.lastIndexOf("\n");
+	const statusText = lastNl === -1 ? trimmed : trimmed.slice(lastNl + 1);
+	const raw = lastNl === -1 ? "" : trimmed.slice(0, lastNl);
+	const status = Number.parseInt(statusText, 10);
+	let body: unknown | null = null;
+	if (raw.trim()) {
+		try {
+			body = JSON.parse(raw) as unknown;
+		} catch {
+			body = raw;
+		}
+	}
+	return {
+		status: Number.isFinite(status) ? status : 0,
+		body,
+		raw,
+	};
 }

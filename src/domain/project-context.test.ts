@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	nextProjectBriefing,
 	projectContextDocument,
 	relatedTracesForTask,
 	traceSummaryFromTurn,
@@ -60,5 +61,25 @@ describe("traceSummaryFromTurn", () => {
 				reply: "Wrote template_snapshot_id after pnpm install.",
 			}),
 		).toBe("Seal the snapshot: Wrote template_snapshot_id after pnpm install.");
+	});
+});
+
+describe("nextProjectBriefing", () => {
+	it("starts from the first completed turn", () => {
+		expect(
+			nextProjectBriefing({
+				briefing: "  ",
+				summary: "OpenCode serve must start in the checkout.",
+			}),
+		).toBe("OpenCode serve must start in the checkout.");
+	});
+
+	it("does not duplicate a summary the briefing already has", () => {
+		expect(
+			nextProjectBriefing({
+				briefing: "OpenCode serve must start in the checkout.",
+				summary: "OpenCode serve must start in the checkout.",
+			}),
+		).toBe("OpenCode serve must start in the checkout.");
 	});
 });

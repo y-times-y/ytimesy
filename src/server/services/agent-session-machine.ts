@@ -1,6 +1,7 @@
 import type { AgentProviderId } from "#/domain/agent-provider";
 import {
 	agentSessionMachineSlug,
+	copiedSessionScratchResetCommand,
 	projectEnvironmentSnapshotSlug,
 	type SessionMachinePlan,
 	sessionMachinePlan,
@@ -13,6 +14,8 @@ import {
 } from "#/domain/project-context";
 import {
 	type AgentSessionRecord,
+	agentSessionForOwner,
+	childAgentSession,
 	insertAgentSession,
 	listAgentSessions,
 	saveAgentSessionProviderRef,
@@ -36,6 +39,7 @@ export async function bindAgentSessionMachine(
 		readonly harness: AgentProviderId;
 		readonly sessionId?: string;
 		readonly createNew?: boolean;
+		readonly parentSessionId?: string;
 		readonly task?: string;
 	},
 ) {
@@ -47,8 +51,12 @@ export async function bindAgentSessionMachine(
 	const selected = input.createNew
 		? null
 		: input.sessionId
-			? sessions.find((session) => session.id === input.sessionId)
-			: sessions[0];
+			? ((await agentSessionForOwner(input.userId, input.sessionId)) ??
+				sessions.find((session) => session.id === input.sessionId) ??
+				null)
+			: input.parentSessionId
+				? await childAgentSession(input.userId, input.parentSessionId)
+				: (sessions[0] ?? null);
 	if (input.sessionId && !input.createNew && !selected) {
 		throw new Error("Agent session is not available.");
 	}
@@ -59,6 +67,8 @@ export async function bindAgentSessionMachine(
 			projectId: input.projectId,
 			workspaceId: workspace.id,
 			harness: input.harness,
+			parentSessionId: input.parentSessionId,
+			title: input.parentSessionId ? "Side chat" : undefined,
 		}));
 	const bound = await templateAlreadyBound(workspace.id, workspace.providerRef);
 	const executed = await executeSessionMachinePlan({
@@ -99,7 +109,9 @@ export async function peekAgentSessionMachine(input: {
 }> {
 	const sessions = await listAgentSessions(input.userId, input.projectId);
 	const session = input.sessionId
-		? (sessions.find((row) => row.id === input.sessionId) ?? null)
+		? ((await agentSessionForOwner(input.userId, input.sessionId)) ??
+			sessions.find((row) => row.id === input.sessionId) ??
+			null)
 		: (sessions[0] ?? null);
 	return { session, providerRef: session?.providerRef ?? null };
 }
@@ -107,7 +119,7 @@ export async function peekAgentSessionMachine(input: {
 export async function executeSessionMachinePlan(input: {
 	readonly machines: Pick<
 		WorkspaceMachines,
-		"snapshotEnvironment" | "provisionSession" | "ensureRunning"
+		"snapshotEnvironment" | "provisionSession" | "ensureRunning" | "exec"
 	>;
 	readonly sessionId: string;
 	readonly sessionProviderRef: string | null;
@@ -153,6 +165,7 @@ export async function executeSessionMachinePlan(input: {
 		agentSessionMachineSlug(input.sessionId),
 		plan.snapshotId,
 	);
+	await input.machines.exec(copied, copiedSessionScratchResetCommand(), 15_000);
 	await input.saveSessionProviderRef(copied);
 	return { providerRef: copied, planKind: plan.kind };
 }

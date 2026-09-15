@@ -42,12 +42,31 @@ export function chatsFromAgentSessions(
 	sessions: readonly {
 		readonly id: string;
 		readonly title: string;
+		readonly parentSessionId?: string | null;
 	}[],
 ) {
-	return sessions.map((session) => ({
-		id: session.id,
-		title: session.title,
-	}));
+	return sessions
+		.filter((session) => !session.parentSessionId)
+		.map((session) => ({
+			id: session.id,
+			title: session.title,
+		}));
+}
+
+export const COPIED_SESSION_SCRATCH_PATHS = [
+	"/tmp/ytimesy-opencode-status.json",
+	"/tmp/ytimesy-opencode-serve.pid",
+	"/tmp/ytimesy-opencode-serve.log",
+	"/tmp/ytimesy-opencode-http-body",
+	"/tmp/ytimesy-auth-status.json",
+	"/tmp/ytimesy-task-request.json",
+	"/tmp/ytimesy-task-result.json",
+	"/tmp/ytimesy-side-request.json",
+	"/tmp/ytimesy-side-result.json",
+] as const;
+
+export function copiedSessionScratchResetCommand() {
+	return `rm -f ${COPIED_SESSION_SCRATCH_PATHS.join(" ")}`;
 }
 
 function compactId(value: string) {

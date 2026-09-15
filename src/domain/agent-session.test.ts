@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	agentSessionMachineSlug,
 	chatsFromAgentSessions,
+	copiedSessionScratchResetCommand,
 	projectEnvironmentSnapshotSlug,
 	sessionMachinePlan,
 } from "./agent-session";
@@ -86,5 +87,23 @@ describe("agent session names", () => {
 			{ id: "s1", title: "fix login" },
 			{ id: "s2", title: "add snapshot copy" },
 		]);
+	});
+
+	it("hides side-chat children from the sidebar", () => {
+		expect(
+			chatsFromAgentSessions([
+				{ id: "s1", title: "fix login", parentSessionId: null },
+				{ id: "side", title: "Side chat", parentSessionId: "s1" },
+			]),
+		).toEqual([{ id: "s1", title: "fix login" }]);
+	});
+});
+
+describe("copiedSessionScratchResetCommand", () => {
+	it("clears harness leftovers copied from the template VM", () => {
+		const command = copiedSessionScratchResetCommand();
+		expect(command).toContain("/tmp/ytimesy-opencode-status.json");
+		expect(command).toContain("/tmp/ytimesy-auth-status.json");
+		expect(command.startsWith("rm -f ")).toBe(true);
 	});
 });

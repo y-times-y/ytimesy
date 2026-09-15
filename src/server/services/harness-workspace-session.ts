@@ -8,6 +8,7 @@ import { WorkspaceId } from "#/domain/ids";
 import { harnessConnectBlockedReason } from "#/domain/project-workspace";
 import { canSubmitComposer, canSubmitSideChat } from "#/domain/session-policy";
 import type { WorkspaceLifecycle } from "#/domain/workspace";
+import { childAgentSession } from "#/server/adapters/agent-sessions";
 import {
 	type ClaudeAuthStatus,
 	connectClaudeCode,
@@ -65,6 +66,7 @@ export function readHarnessWorkspaceSession(
 				Effect.flatMap((view) =>
 					Effect.tryPromise(() => persistBoundSessionView(session, view)),
 				),
+				Effect.flatMap((view) => attachSiblingSideChat(machines, scope, view)),
 			);
 		}
 		return refreshOpenCodeAuthStatus(machines, WorkspaceId(providerRef)).pipe(
@@ -72,6 +74,7 @@ export function readHarnessWorkspaceSession(
 			Effect.flatMap((view) =>
 				Effect.tryPromise(() => persistBoundSessionView(session, view)),
 			),
+			Effect.flatMap((view) => attachSiblingSideChat(machines, scope, view)),
 		);
 	});
 }
@@ -182,6 +185,9 @@ export function sendHarnessWorkspaceTask(
 	if (scope.harnessId === "codex") {
 		return sendCodexWorkspaceTask(machines, scope, input);
 	}
+	if (input.lane === "side") {
+		return sendHarnessSideTask(machines, scope, input);
+	}
 	return withSessionMachine(machines, scope, true, (providerRef, session) => {
 		if (scope.harnessId === "claude") {
 			return submitClaudeTask(machines, WorkspaceId(providerRef), input).pipe(
@@ -189,6 +195,7 @@ export function sendHarnessWorkspaceTask(
 				Effect.flatMap((view) =>
 					Effect.tryPromise(() => persistBoundSessionView(session, view)),
 				),
+				Effect.flatMap((view) => attachSiblingSideChat(machines, scope, view)),
 			);
 		}
 		return submitOpenCodeTask(machines, WorkspaceId(providerRef), input).pipe(
@@ -196,6 +203,7 @@ export function sendHarnessWorkspaceTask(
 			Effect.flatMap((view) =>
 				Effect.tryPromise(() => persistBoundSessionView(session, view)),
 			),
+			Effect.flatMap((view) => attachSiblingSideChat(machines, scope, view)),
 		);
 	});
 }
@@ -311,6 +319,196 @@ function viewFromConnection(
 		items,
 		sideTurnStatus: "idle",
 		sideItems: [],
+	};
+}
+
+/**
+ * Side chat is a second agent session VM copied from the same project
+ * snapshot. It does not share the main agent's checkout.
+ */
+function sendHarnessSideTask(
+	machines: WorkspaceMachines,
+	scope: HarnessSessionScope,
+	input: {
+		readonly text: string;
+		readonly modelId: string;
+	},
+): Effect.Effect<PublicHarnessSession> {
+	return Effect.gen(function* () {
+		if (!scope.projectId || !scope.sessionId) {
+			return {
+				...emptyHarnessSession(),
+				connection: {
+					status: "failed" as const,
+					provider: scope.harnessId,
+					message: "Open a chat before starting a side agent.",
+				},
+			};
+		}
+		const existing = yield* Effect.tryPromise(() =>
+			childAgentSession(scope.userId, scope.sessionId as string),
+		);
+		const bound = yield* Effect.tryPromise(() =>
+			bindAgentSessionMachine(machines, {
+				userId: scope.userId,
+				projectId: scope.projectId as string,
+				harness: scope.harnessId,
+				sessionId: existing?.id,
+				createNew: !existing,
+				parentSessionId: scope.sessionId,
+				task: input.text,
+			}),
+		);
+		yield* Effect.tryPromise(() =>
+			machines.ensureRunning(WorkspaceId(bound.providerRef)),
+		);
+		yield* preparePreparedGuest(
+			machines,
+			WorkspaceId(bound.providerRef),
+			scope,
+		);
+		const apiKey = yield* Effect.tryPromise(() =>
+			decryptHarnessApiKey(scope.harnessId),
+		);
+		let sideView: PublicHarnessSession;
+		if (scope.harnessId === "claude") {
+			let status = yield* refreshClaudeAuthStatus(
+				machines,
+				WorkspaceId(bound.providerRef),
+			);
+			if (status.stage !== "authenticated") {
+				status = yield* connectClaudeCode(
+					machines,
+					WorkspaceId(bound.providerRef),
+					apiKey,
+				);
+			}
+			if (status.stage === "authenticated") {
+				status = yield* submitClaudeTask(
+					machines,
+					WorkspaceId(bound.providerRef),
+					input,
+				);
+			}
+			sideView = yield* Effect.tryPromise(() =>
+				persistBoundSessionView(
+					bound.session,
+					viewFromClaude(status, bound.providerRef),
+				),
+			);
+		} else {
+			let status = yield* refreshOpenCodeAuthStatus(
+				machines,
+				WorkspaceId(bound.providerRef),
+			);
+			if (status.stage !== "authenticated") {
+				status = yield* connectOpenCode(
+					machines,
+					WorkspaceId(bound.providerRef),
+					apiKey,
+				);
+			}
+			if (status.stage === "authenticated") {
+				status = yield* submitOpenCodeTask(
+					machines,
+					WorkspaceId(bound.providerRef),
+					input,
+				);
+			}
+			sideView = yield* Effect.tryPromise(() =>
+				persistBoundSessionView(
+					bound.session,
+					viewFromOpenCode(status, bound.providerRef),
+				),
+			);
+		}
+		const main = yield* readHarnessWorkspaceSession(machines, {
+			...scope,
+			createNew: false,
+		});
+		return mergeSideChat(main, sideView);
+	}).pipe(
+		Effect.catchAll((cause) =>
+			Effect.succeed({
+				...emptyHarnessSession(),
+				connection: {
+					status: "failed" as const,
+					provider: scope.harnessId,
+					message: cause instanceof Error ? cause.message : String(cause),
+				},
+			}),
+		),
+	);
+}
+
+function attachSiblingSideChat(
+	machines: WorkspaceMachines,
+	scope: HarnessSessionScope,
+	main: PublicHarnessSession,
+): Effect.Effect<PublicHarnessSession> {
+	if (!scope.sessionId) return Effect.succeed(mergeSideChat(main, null));
+	return Effect.gen(function* () {
+		const child = yield* Effect.tryPromise(() =>
+			childAgentSession(scope.userId, scope.sessionId as string),
+		);
+		if (!child?.providerRef) return mergeSideChat(main, null);
+		yield* Effect.tryPromise(() =>
+			machines.ensureRunning(WorkspaceId(child.providerRef as string)),
+		);
+		if (scope.harnessId === "claude") {
+			const status = yield* refreshClaudeAuthStatus(
+				machines,
+				WorkspaceId(child.providerRef),
+			);
+			const side = yield* Effect.tryPromise(() =>
+				persistBoundSessionView(
+					child,
+					viewFromClaude(status, child.providerRef as string),
+				),
+			);
+			return mergeSideChat(main, side);
+		}
+		const status = yield* refreshOpenCodeAuthStatus(
+			machines,
+			WorkspaceId(child.providerRef),
+		);
+		const side = yield* Effect.tryPromise(() =>
+			persistBoundSessionView(
+				child,
+				viewFromOpenCode(status, child.providerRef as string),
+			),
+		);
+		return mergeSideChat(main, side);
+	}).pipe(Effect.catchAll(() => Effect.succeed(mergeSideChat(main, null))));
+}
+
+function mergeSideChat(
+	main: PublicHarnessSession,
+	side: PublicHarnessSession | null,
+): PublicHarnessSession {
+	const workspace: WorkspaceLifecycle = {
+		status: "running",
+		workspaceId: WorkspaceId(
+			side?.workspaceId ?? main.workspaceId ?? "pending",
+		),
+	};
+	if (!side) {
+		return {
+			...main,
+			canSendSide: canSubmitSideChat(workspace, main.connection, "idle"),
+		};
+	}
+	return {
+		...main,
+		sideItems: side.items,
+		sideTurnStatus: side.turnStatus,
+		canSendSide: canSubmitSideChat(
+			workspace,
+			side.connection.status === "authenticated"
+				? side.connection
+				: main.connection,
+			side.turnStatus,
+		),
 	};
 }
 
