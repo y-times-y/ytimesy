@@ -3,7 +3,6 @@ import {
 	assistantTextFromOpenCode,
 	assistantTextFromOpenCodeMessages,
 	errorMessageFromOpenCode,
-	OPENCODE_ASSISTANT_GRACE_MS,
 	OPENCODE_TURN_MAX_WAIT_MS,
 	openCodeSessionIsBusy,
 	openCodeTurnFailureMessage,
@@ -119,27 +118,17 @@ describe("openCodeTurnPollDecision", () => {
 		).toBe("completed");
 	});
 
-	it("waits after busy clears so /message can catch up", () => {
+	it("keeps polling after busy clears so /message can catch up", () => {
 		expect(
 			openCodeTurnPollDecision({
 				...idle,
 				seenBusy: true,
-				msSinceLastBusy: OPENCODE_ASSISTANT_GRACE_MS - 1,
+				msSinceLastBusy: 20_000,
 			}),
 		).toBe("running");
 	});
 
-	it("fails once busy has been gone longer than the grace period", () => {
-		expect(
-			openCodeTurnPollDecision({
-				...idle,
-				seenBusy: true,
-				msSinceLastBusy: OPENCODE_ASSISTANT_GRACE_MS,
-			}),
-		).toBe("failed");
-	});
-
-	it("fails if OpenCode never becomes busy before the max wait", () => {
+	it("fails when the turn budget expires without assistant text", () => {
 		expect(
 			openCodeTurnPollDecision({
 				...idle,

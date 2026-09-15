@@ -59,7 +59,6 @@ export function openCodeSessionIsBusy(
 }
 
 export const OPENCODE_TURN_MAX_WAIT_MS = 180_000;
-export const OPENCODE_ASSISTANT_GRACE_MS = 15_000;
 
 export function openCodeTurnFailureMessage(input: {
 	readonly payload: unknown;
@@ -74,8 +73,8 @@ export function openCodeTurnFailureMessage(input: {
 }
 
 /**
- * Busy can clear before `/message` has the assistant text. Wait a short
- * grace period after the last busy poll before treating silence as failure.
+ * Busy can clear before `/message` has the assistant text. Keep polling
+ * until the turn budget expires unless OpenCode reported an error.
  */
 export function openCodeTurnPollDecision(input: {
 	readonly busy: boolean;
@@ -88,16 +87,7 @@ export function openCodeTurnPollDecision(input: {
 	if (input.busy) return "running";
 	if (input.hasAssistantText) return "completed";
 	if (input.hasError) return "failed";
-	if (
-		input.seenBusy &&
-		input.msSinceLastBusy !== null &&
-		input.msSinceLastBusy < OPENCODE_ASSISTANT_GRACE_MS
-	) {
-		return "running";
-	}
-	if (input.seenBusy || input.elapsedMs > OPENCODE_TURN_MAX_WAIT_MS) {
-		return "failed";
-	}
+	if (input.elapsedMs > OPENCODE_TURN_MAX_WAIT_MS) return "failed";
 	return "running";
 }
 
