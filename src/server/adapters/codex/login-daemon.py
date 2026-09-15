@@ -143,6 +143,33 @@ def choose_model(models):
     return None
 
 
+def append_preferred_hidden_model(proc, models):
+    if not PREFERRED_MODEL_ID:
+        return models
+    if any(model["id"] == PREFERRED_MODEL_ID for model in models):
+        return models
+    request_id = next_rpc_id()
+    send(
+        proc,
+        {
+            "method": "model/list",
+            "id": request_id,
+            "params": {"limit": 50, "includeHidden": True},
+        },
+    )
+    hidden_message, _ = wait_for_id(proc, request_id, 45)
+    if "error" in hidden_message:
+        return models
+    for model in listed_models(hidden_message.get("result")):
+        if model["id"] == PREFERRED_MODEL_ID:
+            return models + [model]
+    return models
+
+
+def thread_model_changed(thread_id, thread_cwd, thread_model, cwd, model_id):
+    return bool(thread_id) and (thread_cwd != cwd or thread_model != model_id)
+
+
 def find_completed_turn(notifications):
     for message in notifications:
         if message.get("method") != "turn/completed":
@@ -749,17 +776,20 @@ def main():
         models = []
         if "error" not in models_message:
             models = listed_models(models_message.get("result"))
+        models = append_preferred_hidden_model(proc, models)
         model_id = choose_model(models)
         listed = [{"id": model["id"], "label": model["label"]} for model in models]
         turn = None
         thread_id = None
         thread_cwd = None
+        thread_model = None
         session_items = []
         turn_status = "idle"
         active_task_id = None
         side_turn = None
         side_thread_id = None
         side_thread_cwd = None
+        side_thread_model = None
         side_items = []
         side_turn_status = "idle"
         side_active_task_id = None
@@ -794,6 +824,7 @@ def main():
         if model_id and not SKIP_INITIAL_TURN:
             thread_cwd = project_cwd()
             thread_id, thread_error = start_thread(proc, model_id, thread_cwd)
+            thread_model = model_id if thread_id else None
             if thread_id:
                 turn_status = "running"
                 session_items = [user_message_item("user-initial", TURN_PROMPT)]
@@ -830,11 +861,14 @@ def main():
                 if requested_model:
                     model_id = requested_model
                 cwd = project_cwd()
-                if thread_id and thread_cwd != cwd:
+                if thread_model_changed(
+                    thread_id, thread_cwd, thread_model, cwd, model_id
+                ):
                     thread_id = None
                 if not thread_id and model_id:
                     thread_id, thread_error = start_thread(proc, model_id, cwd)
                     thread_cwd = cwd
+                    thread_model = model_id if thread_id else None
                     if thread_error and not thread_id:
                         turn_status = "failed"
                         active_task_id = None
@@ -910,13 +944,20 @@ def main():
                     if requested_model:
                         model_id = requested_model
                     cwd = project_cwd()
-                    if side_thread_id and side_thread_cwd != cwd:
+                    if thread_model_changed(
+                        side_thread_id,
+                        side_thread_cwd,
+                        side_thread_model,
+                        cwd,
+                        model_id,
+                    ):
                         side_thread_id = None
                     if not side_thread_id and model_id:
                         side_thread_id, side_thread_error = start_thread(
                             proc, model_id, cwd
                         )
                         side_thread_cwd = cwd
+                        side_thread_model = model_id if side_thread_id else None
                         if side_thread_error and not side_thread_id:
                             side_turn_status = "failed"
                             side_active_task_id = None
