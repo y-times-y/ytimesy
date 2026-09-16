@@ -19,7 +19,6 @@ import {
 import {
 	RUNNING_TURN_POLL_MS,
 	runningAuthenticatedTurnShouldPoll,
-	shouldAutoResumeHarnessSession,
 } from "#/domain/harness-access";
 import { hintForHarness } from "#/domain/harness-api-key";
 import {
@@ -140,7 +139,6 @@ export function WorkspaceHome({
 		status: "stopped",
 	});
 	const [desktopBusy, setDesktopBusy] = useState(false);
-	const autoResumeStarted = useRef(false);
 	const sessionEpoch = useRef(0);
 	const loadedSessionId = useRef<string | undefined>(undefined);
 	const selectedSessionIdRef = useRef<string | undefined>(undefined);
@@ -268,7 +266,6 @@ export function WorkspaceHome({
 	useEffect(() => {
 		void activeProjectId;
 		setSelectedSessionId(undefined);
-		autoResumeStarted.current = false;
 		loadedSessionId.current = undefined;
 		sessionViews.current.clear();
 		setSelectedFilePath(undefined);
@@ -320,39 +317,6 @@ export function WorkspaceHome({
 		setInspectorView("files");
 		setInspectorOpen(true);
 	}, [compact, fileChanges.length]);
-
-	useEffect(() => {
-		if (autoResumeStarted.current) return;
-		if (!activeProjectId) return;
-		if (
-			!shouldAutoResumeHarnessSession({
-				harnessId,
-				connection: session.connection,
-			})
-		) {
-			return;
-		}
-		autoResumeStarted.current = true;
-		setBusyChatIds((ids) => withBusyChat(ids, activeSessionId));
-		const epoch = sessionEpoch.current;
-		const chatId = activeSessionId;
-		void connect({
-			data: {
-				projectId: activeProjectId,
-				harnessId,
-				sessionId: activeSessionId,
-			},
-		})
-			.then((next) => applySessionView(epoch, next))
-			.finally(() => setBusyChatIds((ids) => withoutBusyChat(ids, chatId)));
-	}, [
-		applySessionView,
-		connect,
-		harnessId,
-		activeProjectId,
-		activeSessionId,
-		session.connection,
-	]);
 
 	useEffect(() => {
 		const pollDeviceCode = session.connection.status === "awaiting_device_code";
@@ -478,7 +442,6 @@ export function WorkspaceHome({
 			.then((created) => {
 				if (epoch !== sessionEpoch.current) return;
 				setSelectedSessionId(created.id);
-				autoResumeStarted.current = true;
 				openedDiff.current = false;
 				setSelectedFilePath(undefined);
 				setDesktop({ status: "stopped" });
@@ -527,7 +490,6 @@ export function WorkspaceHome({
 		if (activeSessionId === chatId) {
 			bumpSessionEpoch();
 			setSelectedSessionId(nextId);
-			autoResumeStarted.current = false;
 			openedDiff.current = false;
 			setSelectedFilePath(undefined);
 			setDesktop({ status: "stopped" });
@@ -633,7 +595,6 @@ export function WorkspaceHome({
 					selectedSessionIdRef.current = id;
 					bumpSessionEpoch();
 					setSelectedSessionId(id);
-					autoResumeStarted.current = false;
 					openedDiff.current = false;
 					setSelectedFilePath(undefined);
 					setDesktop({ status: "stopped" });
@@ -805,7 +766,6 @@ export function WorkspaceHome({
 								apiKeyHints={apiKeyHints}
 								onComposerModelIdChange={setComposerModelId}
 								onConnect={() => {
-									autoResumeStarted.current = true;
 									const chatId = activeSessionId;
 									const epoch = sessionEpoch.current;
 									setBusyChatIds((ids) => withBusyChat(ids, chatId));
@@ -842,7 +802,6 @@ export function WorkspaceHome({
 										);
 								}}
 								onSend={(text, modelId) => {
-									autoResumeStarted.current = true;
 									const epoch = sessionEpoch.current;
 									const scope = sessionScope();
 									const chatId = activeSessionId;

@@ -120,7 +120,7 @@ describe("harness access", () => {
 		expect(selectedHarnessIsConnected(connection, "opencode")).toBe(true);
 	});
 
-	it("does not boot a paused OpenCode or Codex chat just to show the transcript", () => {
+	it("does not Connect on select even if the last view was authenticated", () => {
 		expect(
 			shouldAutoResumeHarnessSession({
 				harnessId: "opencode",
@@ -144,7 +144,7 @@ describe("harness access", () => {
 					email: null,
 				},
 			}),
-		).toBe(true);
+		).toBe(false);
 		expect(
 			shouldAutoResumeHarnessSession({
 				harnessId: "claude",
