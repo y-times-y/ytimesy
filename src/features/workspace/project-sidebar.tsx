@@ -1,4 +1,4 @@
-import { Archive, PanelLeft, Plus } from "lucide-react";
+import { Archive, PanelLeft, Plus, Settings } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Project } from "#/domain/projects";
 import type { SessionTurnStatus } from "#/domain/session-item";
@@ -27,6 +27,7 @@ interface ProjectSidebarProps {
 	onSelectChat?: (id: string) => void;
 	onNewChat: () => void;
 	onDeleteChat?: (id: string) => void;
+	onOpenSettings?: () => void;
 	onSignOut: () => void;
 }
 
@@ -47,6 +48,7 @@ export function ProjectSidebar({
 	onSelectChat,
 	onNewChat,
 	onDeleteChat,
+	onOpenSettings,
 	onSignOut,
 }: ProjectSidebarProps) {
 	const collapseButton = useRef<HTMLButtonElement>(null);
@@ -255,13 +257,27 @@ export function ProjectSidebar({
 						})}
 					</ul>
 				)}
-				<button
-					type="button"
-					className="panel-toggle account-signout"
-					onClick={onSignOut}
-				>
-					Sign out
-				</button>
+				<div className="sidebar-account">
+					{onOpenSettings ? (
+						<button
+							type="button"
+							className="panel-toggle"
+							aria-label="Settings"
+							title="Settings"
+							onClick={onOpenSettings}
+						>
+							<Settings size={16} />
+							<span>Settings</span>
+						</button>
+					) : null}
+					<button
+						type="button"
+						className="panel-toggle account-signout"
+						onClick={onSignOut}
+					>
+						Sign out
+					</button>
+				</div>
 			</aside>
 			<nav
 				className="sidebar-rail"

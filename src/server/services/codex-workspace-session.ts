@@ -40,6 +40,7 @@ import {
 	persistSessionTurnStatus,
 } from "./persist-session-view";
 import { preparePreparedGuest } from "./project-workspace";
+import { beginSharedDesktop } from "./workspace-desktop";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 export type PublicCodexSession = {
@@ -475,6 +476,7 @@ function prepareCodexGuest(
 ): Effect.Effect<void, Error> {
 	return Effect.gen(function* () {
 		yield* preparePreparedGuest(machines, workspaceId, scope);
+		beginSharedDesktop(machines, scope);
 		yield* ensureCurrentLoginDaemon(machines, workspaceId).pipe(
 			Effect.catchAll(() => Effect.void),
 		);

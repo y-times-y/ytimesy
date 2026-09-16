@@ -1,9 +1,20 @@
 import type { AgentInline } from "#/domain/agent-markdown";
 import { parseAgentMarkdown } from "#/domain/agent-markdown";
+import { fileBasename } from "#/domain/file-kind";
+import type { FileChangeEntry } from "#/domain/session-item";
 import { sourceLanguageFromFence } from "#/domain/source-language";
+import { FileMentionButton, mentionedFileChange } from "./file-mention";
 import { HighlightedCode } from "./highlighted-code";
 
-export function AgentMarkdown({ text }: { text: string }) {
+export function AgentMarkdown({
+	text,
+	fileChanges = [],
+	onOpenFile,
+}: {
+	text: string;
+	fileChanges?: readonly FileChangeEntry[];
+	onOpenFile?: (path: string) => void;
+}) {
 	const blocks = parseAgentMarkdown(text);
 	if (blocks.length === 0) return <p>{text}</p>;
 	return (
@@ -38,7 +49,11 @@ export function AgentMarkdown({ text }: { text: string }) {
 								item.map((part) => part.text).join(""),
 							).map(({ item, key: itemKey }) => (
 								<li key={itemKey}>
-									<AgentInlines inlines={item} />
+									<AgentInlines
+										inlines={item}
+										fileChanges={fileChanges}
+										onOpenFile={onOpenFile}
+									/>
 								</li>
 							))}
 						</ListTag>
@@ -46,7 +61,11 @@ export function AgentMarkdown({ text }: { text: string }) {
 				}
 				return (
 					<p key={key}>
-						<AgentInlines inlines={block.inlines} />
+						<AgentInlines
+							inlines={block.inlines}
+							fileChanges={fileChanges}
+							onOpenFile={onOpenFile}
+						/>
 					</p>
 				);
 			})}
@@ -54,11 +73,31 @@ export function AgentMarkdown({ text }: { text: string }) {
 	);
 }
 
-function AgentInlines({ inlines }: { inlines: readonly AgentInline[] }) {
+function AgentInlines({
+	inlines,
+	fileChanges,
+	onOpenFile,
+}: {
+	inlines: readonly AgentInline[];
+	fileChanges: readonly FileChangeEntry[];
+	onOpenFile?: (path: string) => void;
+}) {
 	return (
 		<>
 			{numbered(inlines, (part) => `${part.kind}:${part.text}`).map(
 				({ item: part, key }) => {
+					if (part.kind === "file") {
+						const mentioned = mentionedFileChange(part.path, fileChanges);
+						return (
+							<FileMentionButton
+								key={key}
+								path={mentioned?.path ?? part.path}
+								name={part.text || fileBasename(part.path)}
+								change={mentioned?.change}
+								onOpenFile={onOpenFile}
+							/>
+						);
+					}
 					if (part.kind === "code") return <code key={key}>{part.text}</code>;
 					if (part.kind === "strong")
 						return <strong key={key}>{part.text}</strong>;

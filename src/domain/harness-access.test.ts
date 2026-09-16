@@ -16,14 +16,14 @@ import {
 } from "./harness-access";
 
 describe("harness access", () => {
-	it("lists every offered harness and mutes ones that are not signed in", () => {
+	it("lists every offered harness and mutes account logins that are not signed in", () => {
 		const rows = offeredHarnessAccess({ status: "disconnected" });
 		expect(rows.map((row) => row.provider.id)).toEqual([
 			"codex",
 			"claude",
 			"opencode",
 		]);
-		expect(rows.every((row) => row.muted)).toBe(true);
+		expect(rows.map((row) => row.muted)).toEqual([true, true, false]);
 		expect(rows.map((row) => row.statusLabel)).toEqual([
 			"Not signed in",
 			"Not signed in",
@@ -40,6 +40,17 @@ describe("harness access", () => {
 		expect(rows[0]?.statusLabel).toBe("Saved workspace");
 		expect(rows[0]?.subscriptionActionLabel).toBe("Resume");
 		expect(rows[0]?.summary).toContain("saved workspace");
+	});
+
+	it("keeps OpenCode selectable without an account login", () => {
+		expect(
+			harnessAccess(OPENCODE_PROVIDER, { status: "disconnected" }, null),
+		).toMatchObject({
+			readiness: "unsigned",
+			muted: false,
+			statusLabel: "Not connected",
+			subscriptionAction: "connect",
+		});
 	});
 
 	it("offers Sign in on Codex and Claude, and Connect on OpenCode", () => {
@@ -97,7 +108,9 @@ describe("harness access", () => {
 			userCode: null,
 			verificationUrl: null,
 		});
-		expect(harnessAccess(OPENCODE_PROVIDER, connection, null).muted).toBe(true);
+		expect(harnessAccess(OPENCODE_PROVIDER, connection, null).muted).toBe(
+			false,
+		);
 		expect(selectedHarnessIsConnected(connection, "codex")).toBe(true);
 		expect(selectedHarnessIsConnected(connection, "claude")).toBe(false);
 	});

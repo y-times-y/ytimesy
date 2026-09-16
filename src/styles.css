@@ -206,7 +206,6 @@ button:enabled:active {
 	pointer-events: none;
 }
 .sidebar-chat-row:hover .sidebar-chat-archive,
-.sidebar-chat-row[data-selected="true"] .sidebar-chat-archive,
 .sidebar-chat-archive:focus-visible {
 	opacity: 1;
 	pointer-events: auto;
@@ -727,6 +726,9 @@ button:enabled:active {
 .file-tree-file[data-change="delete"] .file-tree-name {
 	color: #ff6764;
 	text-decoration: line-through;
+}
+.file-tree-file[data-change="update"] .file-tree-name {
+	color: #79b8ff;
 }
 .diff-file[data-selected="true"] {
 	border-color: rgba(255, 255, 255, 0.2);
@@ -1471,9 +1473,105 @@ button:enabled:active {
 	white-space: nowrap;
 	font-size: 12px;
 }
-.project-sidebar .account-signout {
+.sidebar-account {
 	margin-top: auto;
-	align-self: flex-start;
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 4px;
+}
+.sidebar-account .panel-toggle {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+}
+.project-sidebar .sidebar-account {
+	align-self: stretch;
+}
+.settings-overlay {
+	position: fixed;
+	inset: 0;
+	z-index: 40;
+	display: grid;
+	place-items: center;
+}
+.settings-backdrop {
+	position: absolute;
+	inset: 0;
+	border: 0;
+	background: #00000099;
+}
+.settings-panel {
+	position: relative;
+	z-index: 1;
+	width: min(480px, calc(100vw - 32px));
+	max-height: min(640px, calc(100vh - 32px));
+	overflow: auto;
+	padding: 20px;
+	border: 1px solid #2a2a2a;
+	border-radius: 12px;
+	background: #141414;
+}
+.settings-panel-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	margin-bottom: 8px;
+}
+.settings-panel-head h2 {
+	margin: 0;
+	font-size: 16px;
+	font-weight: 550;
+}
+.settings-copy {
+	margin: 0 0 12px;
+	color: #9a9a9a;
+	font-size: 13px;
+	line-height: 18px;
+}
+.settings-secret-list {
+	margin: 0 0 16px;
+	padding: 0;
+	list-style: none;
+}
+.settings-secret-list li {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	min-height: 32px;
+}
+.settings-secret-list code {
+	font-size: 12px;
+}
+.settings-secret-hint {
+	margin-left: 8px;
+	color: #6f6f6f;
+	font-size: 12px;
+}
+.settings-secret-form {
+	display: grid;
+	grid-template-columns: 1fr 1fr auto;
+	gap: 8px;
+}
+.settings-secret-form input {
+	min-width: 0;
+	height: 32px;
+	padding: 0 8px;
+	border: 1px solid #2a2a2a;
+	border-radius: 8px;
+	background: #0f0f0f;
+	color: #f2f2f2;
+}
+.settings-secret-form button {
+	height: 32px;
+	padding: 0 12px;
+	border: 0;
+	border-radius: 8px;
+	background: #f2f2f2;
+	color: #111;
+	font-size: 12px;
 }
 .header-navigation {
 	min-width: 0;

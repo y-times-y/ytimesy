@@ -71,4 +71,37 @@ describe("session timeline live collapse", () => {
 		expect(done).not.toMatch(/data-kind="reasoning"[^>]*open/);
 		expect(done).toContain("Looking at the session timeline");
 	});
+
+	it("color-codes mentioned files so clicking them opens the diff", () => {
+		const html = renderToString(
+			createElement(SessionTimeline, {
+				items: [
+					{
+						kind: "agentMessage",
+						id: SessionItemId("msg-1"),
+						text: "Updated `src/styles.css`.",
+					},
+					{
+						kind: "fileChange",
+						id: SessionItemId("file-1"),
+						status: "completed",
+						changes: [
+							{
+								path: "src/styles.css",
+								change: "update",
+								additions: 2,
+								deletions: 1,
+								preview: "+ok\n",
+							},
+						],
+					},
+				],
+				turnStatus: "completed",
+				onOpenFile: () => undefined,
+			}),
+		);
+		expect(html).toContain("session-file-open");
+		expect(html).toContain('data-change="update"');
+		expect(html).toContain("src/styles.css");
+	});
 });

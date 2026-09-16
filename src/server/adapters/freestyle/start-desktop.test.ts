@@ -31,6 +31,9 @@ describe("start workspace desktop", () => {
 			"pgrep -f 'google-chrome|chromium'",
 		);
 		expect(START_WORKSPACE_DESKTOP).toContain(
+			"Chrome is still installing; desktop is up on DISPLAY=:0",
+		);
+		expect(START_WORKSPACE_DESKTOP).not.toContain(
 			"Chrome is required on the shared desktop but was not installed.",
 		);
 	});

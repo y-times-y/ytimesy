@@ -93,6 +93,12 @@ if [ -f "$CWD_FILE" ]; then
     cd "$SERVE_CWD"
   fi
 fi
+SECRETS_FILE="\${HOME:-/home/ubuntu}/.ytimesy-agent-secrets.env"
+if [ -f "$SECRETS_FILE" ]; then
+  set -a
+  . "$SECRETS_FILE"
+  set +a
+fi
 if [ -f ${PID_PATH} ] && kill -0 "$(cat ${PID_PATH})" 2>/dev/null; then
   echo "SERVE_PID=$(cat ${PID_PATH})"
   exit 0

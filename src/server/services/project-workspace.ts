@@ -20,6 +20,7 @@ import {
 } from "#/server/adapters/freestyle/clone-project";
 import { githubInstallationAccessToken } from "#/server/adapters/github/installation-token";
 import { listProjects, projectForOwner } from "#/server/adapters/projects";
+import { injectProjectSecrets } from "./project-secrets";
 import type { DesktopScope } from "./workspace-desktop";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -124,12 +125,13 @@ export function writeDeveloperInstructions(
 	machines: WorkspaceMachines,
 	workspaceId: WorkspaceId,
 	cwd: string,
+	secretNames: readonly string[] = [],
 ): Effect.Effect<void> {
 	return Effect.tryPromise(() =>
 		machines.writeTextFile(
 			workspaceId,
 			DEVELOPER_INSTRUCTIONS_PATH,
-			`${sharedDesktopDeveloperInstructions({ cwd })} If ${PROJECT_CONTEXT_PATH} exists, treat it as this project's shared briefing and sibling traces.\n`,
+			`${sharedDesktopDeveloperInstructions({ cwd, secretNames })} If ${PROJECT_CONTEXT_PATH} exists, treat it as this project's shared briefing and sibling traces.\n`,
 		),
 	).pipe(Effect.catchAll(() => Effect.void));
 }
@@ -161,7 +163,18 @@ export function preparePreparedGuest(
 ): Effect.Effect<void, Error> {
 	return Effect.gen(function* () {
 		const checkout = yield* loadTenantProjectCheckout(scope);
-		yield* ensureProjectCheckout(machines, workspaceId, checkout);
+		const cwd = yield* ensureProjectCheckout(machines, workspaceId, checkout);
+		const secretNames = yield* injectProjectSecrets(
+			machines,
+			workspaceId,
+			scope,
+		);
+		yield* writeDeveloperInstructions(
+			machines,
+			workspaceId,
+			cwd ?? "/home/ubuntu",
+			secretNames,
+		);
 	});
 }
 

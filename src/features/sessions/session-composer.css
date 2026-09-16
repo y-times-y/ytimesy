@@ -619,6 +619,16 @@ button.harness-choice-action:disabled,
 .session-file-name {
 	color: rgba(255, 255, 255, 0.85);
 }
+.session-file-name[data-change="add"] {
+	color: #40c977;
+}
+.session-file-name[data-change="delete"] {
+	color: #ff6764;
+	text-decoration: line-through;
+}
+.session-file-name[data-change="update"] {
+	color: #79b8ff;
+}
 .session-file-open {
 	display: inline;
 	margin: 0;

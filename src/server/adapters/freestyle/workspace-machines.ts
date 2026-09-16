@@ -14,7 +14,11 @@ import type {
 	ProofWorkspace,
 	WorkspaceMachines,
 } from "#/server/services/workspace-machines";
-import { productCreateVmFields } from "./product-vm";
+import {
+	PRODUCT_IDLE_TIMEOUT_SECONDS,
+	productCreateVmFields,
+	productIdleTimeoutNeedsUpdate,
+} from "./product-vm";
 import {
 	PROOF_METADATA_PURPOSE,
 	privateCodexAuthSnapshotFields,
@@ -181,11 +185,7 @@ export function createFreestyleWorkspaceMachines(
 		async ensureRunning(workspaceId: WorkspaceId): Promise<WorkspaceId> {
 			try {
 				const vm = freestyle.vms.ref(workspaceId);
-				const data = await vm.data();
-				if (data.state === "paused" || data.state === "stopped") {
-					await vm.start();
-				}
-				await waitUntilVmRunning(vm, "Workspace VM");
+				await resumeProductVm(vm, "Workspace VM");
 				return workspaceId;
 			} catch (cause) {
 				throw new WorkspaceProvisionError({
@@ -304,12 +304,10 @@ export function createFreestyleWorkspaceMachines(
 			try {
 				const existing = await findVmBySlug(freestyle, slug);
 				if (existing) {
-					const vm = freestyle.vms.ref(existing);
-					const data = await vm.data();
-					if (data.state === "paused" || data.state === "stopped") {
-						await vm.start();
-					}
-					await waitUntilVmRunning(vm, "Agent session VM");
+					await resumeProductVm(
+						freestyle.vms.ref(existing),
+						"Agent session VM",
+					);
 					return WorkspaceId(existing);
 				}
 				const created = await freestyle.vms.create(
@@ -335,6 +333,22 @@ export function createFreestyleWorkspaceMachines(
 			}
 		},
 	};
+}
+
+async function resumeProductVm(
+	vm: ReturnType<Freestyle["vms"]["ref"]>,
+	label: string,
+) {
+	const data = await vm.data();
+	if (productIdleTimeoutNeedsUpdate(data.idleTimeoutSeconds)) {
+		await vm
+			.update({ idleTimeoutSeconds: PRODUCT_IDLE_TIMEOUT_SECONDS })
+			.catch(() => undefined);
+	}
+	if (data.state === "paused" || data.state === "stopped") {
+		await vm.start();
+	}
+	await waitUntilVmRunning(vm, label);
 }
 
 async function rejectPausedGuestMutation(
