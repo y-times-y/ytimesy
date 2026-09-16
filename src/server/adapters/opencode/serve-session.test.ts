@@ -251,6 +251,7 @@ describe("OPENCODE_START_SERVE_SCRIPT", () => {
 	it("starts serve from the project checkout", () => {
 		expect(OPENCODE_START_SERVE_SCRIPT).toContain(PROJECT_CWD_PATH);
 		expect(OPENCODE_START_SERVE_SCRIPT).toContain('cd "$SERVE_CWD"');
+		expect(OPENCODE_START_SERVE_SCRIPT).toContain(".ytimesy-agent-secrets.env");
 	});
 });
 

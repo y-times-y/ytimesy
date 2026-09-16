@@ -269,7 +269,7 @@ function unsignedAccess(
 		return {
 			provider,
 			readiness: "unsigned",
-			muted: true,
+			muted: false,
 			statusLabel: apiKeyHint ? "Key saved" : "Not connected",
 			summary: apiKeyHint
 				? `Key ${apiKeyHint} is stored. Connect OpenCode to attach it. No account is required.`

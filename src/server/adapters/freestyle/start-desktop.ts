@@ -46,9 +46,13 @@ fi
 if ! command -v xdotool >/dev/null 2>&1 || ! command -v scrot >/dev/null 2>&1; then
   apt_get install -y -qq --no-install-recommends xdotool scrot x11-utils dbus-x11 fonts-liberation || true
 fi
-if ! install_google_chrome; then
-  apt_get update -qq
-  apt_get install -y -qq --no-install-recommends chromium || apt_get install -y -qq --no-install-recommends chromium-browser || true
+if ! find_chrome_bin >/dev/null 2>&1; then
+  (
+    if ! install_google_chrome; then
+      apt_get update -qq
+      apt_get install -y -qq --no-install-recommends chromium || apt_get install -y -qq --no-install-recommends chromium-browser || true
+    fi
+  ) >/tmp/ytimesy-chrome-install.log 2>&1 &
 fi
 
 PROFILE="\${HOME}/.profile"
@@ -87,11 +91,7 @@ if ! feh --bg-fill "$WALLPAPER" >/tmp/ytimesy-wallpaper.log 2>&1; then
 fi
 
 chrome_bin="$(find_chrome_bin || true)"
-if [ -z "$chrome_bin" ]; then
-  echo "Chrome is required on the shared desktop but was not installed." >&2
-  exit 1
-fi
-if ! chrome_is_running; then
+if [ -n "$chrome_bin" ] && ! chrome_is_running; then
   rm -rf /tmp/ytimesy-chrome-profile
   mkdir -p /tmp/ytimesy-chrome-profile
   "$chrome_bin" --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --no-default-browser-check --disable-session-crashed-bubble --test-type --user-data-dir=/tmp/ytimesy-chrome-profile --window-size=720,640 --window-position=680,160 about:blank >/tmp/ytimesy-browser.log 2>&1 &
@@ -103,14 +103,12 @@ if ! chrome_is_running; then
     i=$((i + 1))
     sleep 1
   done
-  if ! chrome_is_running; then
-    echo "Chrome did not open on DISPLAY=:0" >&2
-    cat /tmp/ytimesy-browser.log >&2 || true
-    exit 1
-  fi
+fi
+if [ -z "$chrome_bin" ]; then
+  echo "Chrome is still installing; desktop is up on DISPLAY=:0" >&2
 fi
 chrome_window=""
-if command -v xdotool >/dev/null 2>&1; then
+if [ -n "$chrome_bin" ] && command -v xdotool >/dev/null 2>&1; then
   i=0
   while [ "$i" -lt 15 ]; do
     chrome_window="$(xdotool search --onlyvisible --class 'Google-chrome' 2>/dev/null | head -n 1 || true)"
@@ -131,7 +129,6 @@ if command -v xdotool >/dev/null 2>&1; then
   if [ -z "$chrome_window" ]; then
     echo "Chrome is running but has no window on DISPLAY=:0" >&2
     cat /tmp/ytimesy-browser.log >&2 || true
-    exit 1
   fi
 fi
 if ! pgrep -x x11vnc >/dev/null 2>&1; then

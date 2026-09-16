@@ -33,6 +33,21 @@ export type DesktopScope = {
 };
 
 /**
+ * Starts the shared display without blocking Connect or Send on Chrome
+ * install. Failures stay on the Desktop tab.
+ */
+export function beginSharedDesktop(
+	machines: WorkspaceMachines,
+	scope: DesktopScope,
+): void {
+	void Effect.runPromise(
+		startWorkspaceDesktop(machines, scope).pipe(
+			Effect.catchAll(() => Effect.void),
+		),
+	);
+}
+
+/**
  * Recovers a running desktop on the prepared project VM, or returns the
  * last in-memory status for this owner and project.
  */
@@ -55,7 +70,7 @@ export function readWorkspaceDesktop(
 
 /**
  * Writes the ytimesy wallpaper, starts the shared X desktop, and maps noVNC.
- * Chrome install on a cold VM can take several minutes.
+ * Chrome install continues in the background so Connect is not blocked.
  */
 export function startWorkspaceDesktop(
 	machines: WorkspaceMachines,

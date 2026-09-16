@@ -14,9 +14,15 @@ describe("sharedDesktopDeveloperInstructions", () => {
 		expect(text).toContain("Desktop tab");
 		expect(text).toContain("google-chrome-stable");
 		expect(text).toContain("chromium");
-		expect(text).toContain("already open");
+		expect(text).toContain("Connect starts that display");
 		expect(text).toContain("xdotool");
 		expect(text).toContain("scrot");
-		expect(text).not.toContain("Start desktop");
+		expect(text).toContain("computer-use");
+		expect(
+			sharedDesktopDeveloperInstructions({
+				cwd: "/home/ubuntu/ytimesy",
+				secretNames: ["GH_TOKEN"],
+			}),
+		).toContain("GH_TOKEN");
 	});
 });

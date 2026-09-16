@@ -5,7 +5,12 @@ import {
 	type WorkspaceProvisionOptions,
 	type WorkspaceRuntime,
 } from "../workspace-runtime";
-import { freestyleExecTimeoutMs, productCreateVmFields } from "./product-vm";
+import {
+	freestyleExecTimeoutMs,
+	PRODUCT_IDLE_TIMEOUT_SECONDS,
+	productCreateVmFields,
+	productIdleTimeoutNeedsUpdate,
+} from "./product-vm";
 import { waitUntilVmRunning } from "./wait-until-running";
 
 export class FreestyleWorkspaceRuntime implements WorkspaceRuntime {
@@ -40,6 +45,11 @@ export class FreestyleWorkspaceRuntime implements WorkspaceRuntime {
 	async recover(providerRef: string) {
 		const vm = this.client().vms.ref(providerRef);
 		const data = await vm.data();
+		if (productIdleTimeoutNeedsUpdate(data.idleTimeoutSeconds)) {
+			await vm
+				.update({ idleTimeoutSeconds: PRODUCT_IDLE_TIMEOUT_SECONDS })
+				.catch(() => undefined);
+		}
 		if (data.state === "paused" || data.state === "stopped") {
 			await vm.start();
 		}

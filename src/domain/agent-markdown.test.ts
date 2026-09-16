@@ -16,7 +16,13 @@ describe("parseAgentMarkdown", () => {
 				kind: "list",
 				ordered: false,
 				items: [
-					[{ kind: "code", text: "todo.py" }],
+					[
+						{
+							kind: "file",
+							text: "todo.py",
+							path: "/home/ubuntu/todo-cli/todo.py",
+						},
+					],
 					[{ kind: "strong", text: "done" }],
 				],
 			},
@@ -42,7 +48,15 @@ describe("parseAgentMarkdown", () => {
 			{
 				kind: "list",
 				ordered: true,
-				items: [[{ kind: "code", text: "src/hero.tsx" }]],
+				items: [
+					[
+						{
+							kind: "file",
+							text: "src/hero.tsx",
+							path: "/tmp/src/hero.tsx",
+						},
+					],
+				],
 			},
 		]);
 	});
@@ -69,7 +83,11 @@ describe("parseAgentMarkdown", () => {
 				kind: "paragraph",
 				inlines: [
 					{ kind: "text", text: "Created " },
-					{ kind: "code", text: "src/hero.tsx" },
+					{
+						kind: "file",
+						text: "src/hero.tsx",
+						path: "/tmp/src/hero.tsx",
+					},
 					{ kind: "text", text: " with:" },
 				],
 			},
@@ -81,8 +99,25 @@ describe("parseAgentMarkdown", () => {
 				kind: "paragraph",
 				inlines: [
 					{ kind: "text", text: "Created " },
-					{ kind: "code", text: "src/hero.tsx" },
+					{
+						kind: "file",
+						text: "src/hero.tsx",
+						path: "/tmp/src/hero.tsx",
+					},
 					{ kind: "text", text: " with:" },
+				],
+			},
+		]);
+	});
+
+	it("treats backtick paths as file mentions", () => {
+		expect(parseAgentMarkdown("Updated `src/styles.css`.")).toEqual([
+			{
+				kind: "paragraph",
+				inlines: [
+					{ kind: "text", text: "Updated " },
+					{ kind: "file", text: "src/styles.css", path: "src/styles.css" },
+					{ kind: "text", text: "." },
 				],
 			},
 		]);

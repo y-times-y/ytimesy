@@ -55,6 +55,7 @@ import {
 	persistSessionTurnStatus,
 } from "./persist-session-view";
 import { preparePreparedGuest } from "./project-workspace";
+import { beginSharedDesktop } from "./workspace-desktop";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 export type HarnessSessionScope = CodexSessionScope & {
@@ -161,6 +162,7 @@ export function connectHarnessWorkspaceSession(
 			WorkspaceId(bound.providerRef),
 			scope,
 		);
+		beginSharedDesktop(machines, scope);
 		const apiKey = yield* Effect.tryPromise(() =>
 			decryptHarnessApiKey(scope.harnessId),
 		);
@@ -518,6 +520,7 @@ function submitConnectedHarnessTask(
 ): Effect.Effect<PublicHarnessSession, unknown> {
 	return Effect.gen(function* () {
 		yield* preparePreparedGuest(machines, WorkspaceId(providerRef), scope);
+		beginSharedDesktop(machines, scope);
 		const promptText = yield* Effect.tryPromise(() =>
 			scope.projectId
 				? syncProjectContextForTask(machines, providerRef, {

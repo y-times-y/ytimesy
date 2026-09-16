@@ -9,6 +9,8 @@ import { fileBasename } from "#/domain/file-kind";
 import { activityGlyphForToolName } from "#/domain/session-activity";
 import {
 	compactTimelineItems,
+	type FileChangeEntry,
+	fileChangesFromSessionItems,
 	liveActivityStatus,
 	type SessionItem,
 	type SessionTurnStatus,
@@ -25,6 +27,7 @@ import { visibleShellCommand } from "#/domain/visible-shell-command";
 import { ActivityIcon } from "./activity-icon";
 import { AgentMarkdown } from "./agent-markdown";
 import { FileChangeCounts } from "./file-change-counts";
+import { FileMentionButton } from "./file-mention";
 import { FileTypeIcon } from "./file-type-icon";
 import { LiveCollapsible } from "./live-collapsible";
 
@@ -43,6 +46,7 @@ export function SessionTimeline({
 	const stickToEnd = useRef(true);
 	const visible = compactTimelineItems(items);
 	const rows = groupTimelineRows(visible);
+	const fileChanges = fileChangesFromSessionItems(items);
 
 	useEffect(() => {
 		if (!stickToEnd.current) return;
@@ -76,6 +80,7 @@ export function SessionTimeline({
 						isLastItem={
 							row.kind === "item" && row.item.id === visible.at(-1)?.id
 						}
+						fileChanges={fileChanges}
 						onOpenFile={onOpenFile}
 					/>
 				</li>
@@ -93,11 +98,13 @@ function TimelineRowView({
 	row,
 	turnRunning,
 	isLastItem,
+	fileChanges,
 	onOpenFile,
 }: {
 	row: TimelineRow;
 	turnRunning: boolean;
 	isLastItem: boolean;
+	fileChanges: readonly FileChangeEntry[];
 	onOpenFile?: (path: string) => void;
 }) {
 	if (row.kind === "exploration") {
@@ -126,6 +133,7 @@ function TimelineRowView({
 						item={item}
 						nested
 						turnRunning={turnRunning}
+						fileChanges={fileChanges}
 						onOpenFile={onOpenFile}
 					/>
 				))}
@@ -138,6 +146,7 @@ function TimelineRowView({
 			thoughtInProgress={turnRunning && isLastItem}
 			turnRunning={turnRunning}
 			isLastItem={isLastItem}
+			fileChanges={fileChanges}
 			onOpenFile={onOpenFile}
 		/>
 	);
@@ -149,6 +158,7 @@ function SessionItemView({
 	thoughtInProgress = false,
 	turnRunning = false,
 	isLastItem = false,
+	fileChanges,
 	onOpenFile,
 }: {
 	item: SessionItem;
@@ -156,6 +166,7 @@ function SessionItemView({
 	thoughtInProgress?: boolean;
 	turnRunning?: boolean;
 	isLastItem?: boolean;
+	fileChanges: readonly FileChangeEntry[];
 	onOpenFile?: (path: string) => void;
 }) {
 	const live = activityTitleIsLive(item, turnRunning, thoughtInProgress);
@@ -180,7 +191,11 @@ function SessionItemView({
 							: undefined
 					}
 				>
-					<AgentMarkdown text={item.text} />
+					<AgentMarkdown
+						text={item.text}
+						fileChanges={fileChanges}
+						onOpenFile={onOpenFile}
+					/>
 				</div>
 			);
 		case "reasoning": {
@@ -293,6 +308,7 @@ function SessionItemView({
 									<FileMentionButton
 										path={change.path}
 										name={activity.name}
+										change={change.change}
 										onOpenFile={onOpenFile}
 									/>
 								) : (
@@ -327,6 +343,7 @@ function SessionItemView({
 							<FileMentionButton
 								path={change.path}
 								name={fileBasename(change.path)}
+								change={change.change}
 								onOpenFile={onOpenFile}
 							/>
 							<FileChangeCounts
@@ -409,30 +426,6 @@ function SessionItemView({
 				</div>
 			);
 	}
-}
-
-function FileMentionButton({
-	path,
-	name,
-	onOpenFile,
-}: {
-	path: string;
-	name: string;
-	onOpenFile?: (path: string) => void;
-}) {
-	if (!onOpenFile) {
-		return <span className="session-file-name">{name}</span>;
-	}
-	return (
-		<button
-			type="button"
-			className="session-file-open"
-			title={`Open ${path}`}
-			onClick={() => onOpenFile(path)}
-		>
-			<span className="session-file-name">{name}</span>
-		</button>
-	);
 }
 
 function activityStatus(status: string) {

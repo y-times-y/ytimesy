@@ -79,6 +79,7 @@ import {
 import { SessionLauncher } from "../sessions/session-launcher";
 import { SideChatPanel } from "../sessions/side-chat-panel";
 import { getWorkspaceDesktop, startWorkspaceDesktopFn } from "./desktop.fn";
+import { ProjectSettings } from "./project-settings";
 import { ProjectSidebar } from "./project-sidebar";
 import { useCompactLayout, useInspectorBesideChat } from "./use-compact-layout";
 import {
@@ -139,6 +140,7 @@ export function WorkspaceHome({
 		status: "stopped",
 	});
 	const [desktopBusy, setDesktopBusy] = useState(false);
+	const [settingsOpen, setSettingsOpen] = useState(false);
 	const sessionEpoch = useRef(0);
 	const loadedSessionId = useRef<string | undefined>(undefined);
 	const selectedSessionIdRef = useRef<string | undefined>(undefined);
@@ -632,9 +634,15 @@ export function WorkspaceHome({
 				}}
 				onNewChat={startNewChat}
 				onDeleteChat={deleteChat}
+				onOpenSettings={() => setSettingsOpen(true)}
 				onSignOut={() => {
 					void signOut();
 				}}
+			/>
+			<ProjectSettings
+				open={settingsOpen}
+				projectId={selectedProject?.id}
+				onClose={() => setSettingsOpen(false)}
 			/>
 			<main className="workspace-main" inert={compact && projectsOpen}>
 				<div
@@ -751,17 +759,6 @@ export function WorkspaceHome({
 								harnessId={harnessId}
 								onHarnessIdChange={(id) => {
 									setHarnessId(id);
-									if (id !== "opencode") return;
-									const chatId = activeSessionId;
-									const epoch = sessionEpoch.current;
-									setBusyChatIds((ids) => withBusyChat(ids, chatId));
-									void connect({
-										data: { ...sessionScope(), harnessId: id },
-									})
-										.then((next) => applySessionView(epoch, next))
-										.finally(() =>
-											setBusyChatIds((ids) => withoutBusyChat(ids, chatId)),
-										);
 								}}
 								apiKeyHints={apiKeyHints}
 								onComposerModelIdChange={setComposerModelId}

@@ -93,7 +93,7 @@ export function HarnessPicker({
 							busy={busy}
 							onSelect={() => {
 								onHarnessIdChange(option.provider.id);
-								if (!option.muted) setOpen(false);
+								if (option.readiness === "ready") setOpen(false);
 							}}
 							onConnect={onConnect}
 							onSaveApiKey={onSaveApiKey}

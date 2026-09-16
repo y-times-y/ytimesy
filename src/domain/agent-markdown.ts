@@ -1,6 +1,7 @@
 export type AgentInline =
 	| { readonly kind: "text"; readonly text: string }
 	| { readonly kind: "code"; readonly text: string }
+	| { readonly kind: "file"; readonly text: string; readonly path: string }
 	| { readonly kind: "strong"; readonly text: string }
 	| { readonly kind: "link"; readonly text: string };
 
@@ -37,6 +38,14 @@ export function parseAgentMarkdown(text: string): AgentMarkdownBlock[] {
 	}
 	blocks.push(...parseMarkdownBlocks(trimmed.slice(cursor)));
 	return blocks;
+}
+
+export function looksLikeWorkspaceFilePath(text: string) {
+	const trimmed = text.trim();
+	if (!trimmed || /\s/.test(trimmed)) return false;
+	if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return false;
+	if (trimmed.includes("/")) return true;
+	return /\.[A-Za-z0-9]{1,12}$/.test(trimmed);
 }
 
 function parseMarkdownBlocks(text: string): AgentMarkdownBlock[] {
@@ -107,12 +116,7 @@ function parseInlines(text: string): AgentInline[] {
 		}
 		const token = match[0];
 		if (token.startsWith("[")) {
-			const label = token.match(/^\[([^\]]+)\]/)?.[1] ?? token;
-			if (label.startsWith("`") && label.endsWith("`") && label.length > 1) {
-				inlines.push({ kind: "code", text: label.slice(1, -1) });
-			} else {
-				inlines.push({ kind: "link", text: label });
-			}
+			inlines.push(inlineFromMarkdownLink(token));
 		} else if (token.startsWith("`")) {
 			inlines.push(inlineFromCode(token.slice(1, -1)));
 		} else if (token.startsWith("**")) {
@@ -126,14 +130,52 @@ function parseInlines(text: string): AgentInline[] {
 	return inlines.length > 0 ? inlines : [{ kind: "text", text }];
 }
 
-function inlineFromCode(text: string): AgentInline {
-	const wrapped = text.match(/^\[([^\]]+)\]\([^)]+\)$/);
-	if (!wrapped?.[1]) return { kind: "code", text };
-	const label = wrapped[1];
-	if (label.startsWith("`") && label.endsWith("`") && label.length > 1) {
-		return { kind: "code", text: label.slice(1, -1) };
+function inlineFromMarkdownLink(token: string): AgentInline {
+	const parsed = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+	const label = parsed?.[1] ?? token;
+	const href = parsed?.[2] ?? "";
+	const codeLabel =
+		label.startsWith("`") && label.endsWith("`") && label.length > 1
+			? label.slice(1, -1)
+			: label;
+	if (
+		looksLikeWorkspaceFilePath(href) ||
+		looksLikeWorkspaceFilePath(codeLabel)
+	) {
+		return {
+			kind: "file",
+			text: codeLabel,
+			path: looksLikeWorkspaceFilePath(href) ? href : codeLabel,
+		};
 	}
-	return { kind: "code", text: label };
+	if (label.startsWith("`") && label.endsWith("`") && label.length > 1) {
+		return { kind: "code", text: codeLabel };
+	}
+	return { kind: "link", text: codeLabel };
+}
+
+function inlineFromCode(text: string): AgentInline {
+	const wrapped = text.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+	if (wrapped?.[1]) {
+		const label = wrapped[1];
+		const href = wrapped[2] ?? "";
+		const inner =
+			label.startsWith("`") && label.endsWith("`") && label.length > 1
+				? label.slice(1, -1)
+				: label;
+		if (looksLikeWorkspaceFilePath(href) || looksLikeWorkspaceFilePath(inner)) {
+			return {
+				kind: "file",
+				text: inner,
+				path: looksLikeWorkspaceFilePath(href) ? href : inner,
+			};
+		}
+		return { kind: "code", text: inner };
+	}
+	if (looksLikeWorkspaceFilePath(text)) {
+		return { kind: "file", text, path: text };
+	}
+	return { kind: "code", text };
 }
 
 function fenceLanguage(tag: string): string | null {
