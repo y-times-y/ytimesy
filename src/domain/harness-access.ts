@@ -120,12 +120,16 @@ export function selectedHarnessIsConnected(
 	);
 }
 
-export function shouldAutoResumeHarnessSession(input: {
+/**
+ * Connect starts a paused VM. Reloading or selecting a chat that last looked
+ * authenticated must not Connect — Send still resumes through
+ * {@link canResumeDisconnectedFollowUp}.
+ */
+export function shouldAutoResumeHarnessSession(_input: {
 	readonly harnessId: AgentProviderId;
 	readonly connection: AgentConnection;
 }): boolean {
-	if (input.harnessId === "claude") return false;
-	return selectedHarnessIsConnected(input.connection, input.harnessId);
+	return false;
 }
 
 /**
