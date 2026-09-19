@@ -1,4 +1,8 @@
 import { githubGitHttpEnv } from "#/domain/github-git-auth";
+import {
+	type PublicationAuthor,
+	commitCoAuthorTrailer,
+} from "#/domain/publication";
 
 export function repositoryDirectory(fullName: string) {
 	const repo = fullName.split("/")[1];
@@ -51,15 +55,19 @@ export function configureCommitAuthorArgv(
 export function commitAllArgv(
 	directory: string,
 	message: string,
-	author: { readonly name: string; readonly email: string },
+	author: PublicationAuthor,
+	coAuthor?: PublicationAuthor | null,
 ) {
+	const trailer = coAuthor
+		? ` -m ${shellSingleQuote(commitCoAuthorTrailer(coAuthor))}`
+		: "";
 	return [
 		"bash",
 		"-lc",
 		[
 			`cd ${shellSingleQuote(directory)}`,
 			"git add -A",
-			`if git diff --cached --quiet; then echo YTIMESY_NO_COMMIT; else git -c user.name=${shellSingleQuote(author.name)} -c user.email=${shellSingleQuote(author.email)} commit -m ${shellSingleQuote(message)}; fi`,
+			`if git diff --cached --quiet; then echo YTIMESY_NO_COMMIT; else git -c user.name=${shellSingleQuote(author.name)} -c user.email=${shellSingleQuote(author.email)} commit -m ${shellSingleQuote(message)}${trailer}; fi`,
 		].join(" && "),
 	];
 }

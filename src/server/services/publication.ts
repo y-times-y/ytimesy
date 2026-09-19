@@ -1,12 +1,13 @@
 import { Effect } from "effect";
 import { copiedAgentMachineRef } from "../../domain/agent-session";
-import { githubAppBotFromEnv } from "../../domain/github-bot";
 import { projectCheckoutFromFullName } from "../../domain/project-checkout";
 import { publicFailureMessage } from "../../domain/project-workspace";
 import {
 	publicationBlockedReason,
+	publicationCoAuthor,
 	publicationCommitAuthor,
 	publicationHeadBranch,
+	publicationHumanAuthor,
 	publicationSessionBlockedReason,
 	publicationWorkspaceBlockedReason,
 } from "../../domain/publication";
@@ -20,6 +21,7 @@ import {
 	compareBranchAhead,
 	createDraftPullRequest,
 } from "../adapters/github";
+import { resolveGithubAppBot } from "../adapters/github/bot-identity";
 import { githubInstallationAccessToken } from "../adapters/github/installation-token";
 import { projectForOwner } from "../adapters/projects";
 import {
@@ -95,11 +97,17 @@ export function publishProject(
 			authorizedRepository(token, project.installationId, project.repositoryId),
 		);
 		const directory = repositoryDirectory(project.fullName);
+		const bot = yield* Effect.tryPromise(() => resolveGithubAppBot());
+		const human = publicationHumanAuthor({
+			name: input.authorName,
+			email: input.authorEmail,
+		});
 		const author = publicationCommitAuthor({
 			name: input.authorName,
 			email: input.authorEmail,
-			bot: githubAppBotFromEnv(),
+			bot,
 		});
+		const coAuthor = publicationCoAuthor({ author, human });
 		const head = publicationHeadBranch({
 			selectedBranch: project.branch,
 			defaultBranch: repository.defaultBranch,
@@ -120,7 +128,7 @@ export function publishProject(
 		const committed = yield* runGit(
 			runtime,
 			providerRef,
-			commitAllArgv(directory, input.title, author),
+			commitAllArgv(directory, input.title, author, coAuthor),
 			{},
 			"Commit failed in the workspace.",
 		);

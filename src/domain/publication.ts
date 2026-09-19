@@ -50,9 +50,34 @@ export function publicationCommitAuthor(user: {
 	readonly bot?: PublicationAuthor | null;
 }): PublicationAuthor {
 	if (user.bot) return user.bot;
-	const email = user.email?.trim() || "noreply@ytimesy.com";
+	return (
+		publicationHumanAuthor(user) ?? {
+			name: "noreply",
+			email: "noreply@ytimesy.com",
+		}
+	);
+}
+
+export function publicationHumanAuthor(user: {
+	readonly name?: string | null;
+	readonly email?: string | null;
+}): PublicationAuthor | null {
+	const email = user.email?.trim();
+	if (!email) return null;
 	const name = user.name?.trim() || email.split("@")[0] || "ytimesy";
 	return { name, email };
+}
+
+export function commitCoAuthorTrailer(author: PublicationAuthor) {
+	return `Co-authored-by: ${author.name} <${author.email}>`;
+}
+
+export function publicationCoAuthor(input: {
+	readonly author: PublicationAuthor;
+	readonly human: PublicationAuthor | null;
+}) {
+	if (!input.human || input.human.email === input.author.email) return null;
+	return input.human;
 }
 
 export function workspacePublicationBranch(workspaceId: string) {
