@@ -83,7 +83,20 @@ it("opens a workspace branch when the selected branch is the default", () => {
 	).toBe("feature");
 });
 
-it("names the commit after the signed-in user", () => {
+it("names the commit after the GitHub App bot when one is configured", () => {
+	expect(
+		publicationCommitAuthor({
+			name: "Het",
+			email: "het@example.test",
+			bot: {
+				name: "ytimesy-cloud[bot]",
+				email: "4932652+ytimesy-cloud[bot]@users.noreply.github.com",
+			},
+		}),
+	).toEqual({
+		name: "ytimesy-cloud[bot]",
+		email: "4932652+ytimesy-cloud[bot]@users.noreply.github.com",
+	});
 	expect(
 		publicationCommitAuthor({ name: "Het", email: "het@example.test" }),
 	).toEqual({ name: "Het", email: "het@example.test" });

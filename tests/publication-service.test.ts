@@ -30,7 +30,10 @@ vi.mock("../src/server/adapters/workspaces", () => ({
 	readyWorkspaceForOwner: adapter.workspace,
 }));
 vi.mock("../src/server/services/agent-session-machine", () => ({
-	peekAgentSessionMachine: async () => ({ session: null, providerRef: null }),
+	peekAgentSessionMachine: async () => ({
+		session: { id: "sess" },
+		providerRef: "memory:session",
+	}),
 }));
 
 const projectId = "11111111-1111-4111-8111-111111111111";
@@ -38,16 +41,18 @@ const workspaceId = "22222222-2222-4222-8222-222222222222";
 
 async function readyRuntime() {
 	const runtime = new MemoryWorkspaceRuntime();
-	const providerRef = await runtime.provision("ws");
+	await runtime.provision("session");
+	const templateRef = await runtime.provision("ws");
 	adapter.workspace.mockResolvedValue({
 		id: workspaceId,
 		status: "ready",
-		providerRef,
+		providerRef: templateRef,
 	});
 	return runtime;
 }
 
 beforeEach(() => {
+	vi.unstubAllEnvs();
 	vi.resetAllMocks();
 	adapter.token.mockResolvedValue("user-token");
 	adapter.installationToken.mockResolvedValue("ghs_install");
@@ -121,6 +126,8 @@ it("does not create a pull request when the branch is not ahead", async () => {
 });
 
 it("commits and pushes from the checkout before opening a draft pull request", async () => {
+	vi.stubEnv("GITHUB_APP_ID", "4932652");
+	vi.stubEnv("GITHUB_APP_SLUG", "ytimesy-cloud");
 	const runtime = await readyRuntime();
 	adapter.ahead.mockResolvedValue(2);
 	adapter.create.mockResolvedValue({
@@ -146,6 +153,17 @@ it("commits and pushes from the checkout before opening a draft pull request", a
 			command.argv.join(" ").includes("git add -A"),
 		),
 	).toBe(true);
+	expect(
+		runtime.commands.some((command) =>
+			command.argv.join(" ").includes('user.name=\'ytimesy-cloud[bot]\''),
+		),
+	).toBe(true);
+	expect(
+		runtime.commands.some((command) =>
+			command.argv.join(" ").includes("Co-authored-by"),
+		),
+	).toBe(false);
+	vi.unstubAllEnvs();
 	expect(
 		runtime.commands.some((command) =>
 			command.argv.join(" ").includes("push -u"),
