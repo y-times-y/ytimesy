@@ -7,7 +7,6 @@ import {
 	publicationCoAuthor,
 	publicationCommitAuthor,
 	publicationHeadBranch,
-	publicationHumanAuthor,
 	publicationSessionBlockedReason,
 	publicationWorkspaceBlockedReason,
 } from "../../domain/publication";
@@ -98,16 +97,11 @@ export function publishProject(
 		);
 		const directory = repositoryDirectory(project.fullName);
 		const bot = yield* Effect.tryPromise(() => resolveGithubAppBot());
-		const human = publicationHumanAuthor({
-			name: input.authorName,
-			email: input.authorEmail,
-		});
 		const author = publicationCommitAuthor({
 			name: input.authorName,
 			email: input.authorEmail,
-			bot,
 		});
-		const coAuthor = publicationCoAuthor({ author, human });
+		const coAuthor = publicationCoAuthor({ author, bot });
 		const head = publicationHeadBranch({
 			selectedBranch: project.branch,
 			defaultBranch: repository.defaultBranch,

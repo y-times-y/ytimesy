@@ -155,14 +155,16 @@ it("commits and pushes from the checkout before opening a draft pull request", a
 	).toBe(true);
 	expect(
 		runtime.commands.some((command) =>
-			command.argv.join(" ").includes("user.name='ytimesy-cloud[bot]'"),
+			command.argv.join(" ").includes("user.name='Alice'"),
 		),
 	).toBe(true);
 	expect(
 		runtime.commands.some((command) =>
 			command.argv
 				.join(" ")
-				.includes("Co-authored-by: Alice <alice@example.test>"),
+				.includes(
+					"Co-authored-by: ytimesy-cloud[bot] <328807657+ytimesy-cloud[bot]@users.noreply.github.com>",
+				),
 		),
 	).toBe(true);
 	vi.unstubAllEnvs();
