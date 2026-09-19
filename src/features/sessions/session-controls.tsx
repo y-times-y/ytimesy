@@ -25,7 +25,6 @@ import {
 	harnessRequiresAccountLogin,
 	selectedHarnessIsConnected,
 } from "#/domain/harness-access";
-import { listedModelDisplayName } from "#/domain/listed-model";
 import { useCompactLayout } from "../workspace/use-compact-layout";
 import { HarnessPicker } from "./harness-picker";
 import { resolveReasoningLevel, type SessionModel } from "./model-capabilities";
@@ -35,11 +34,6 @@ interface SessionControlsProps {
 	harnessId: AgentProviderId;
 	onHarnessIdChange: (id: AgentProviderId) => void;
 	connection: AgentConnection;
-	apiKeyHints: Readonly<Partial<Record<AgentProviderId, string>>>;
-	busy: boolean;
-	onConnect: () => void;
-	onSaveApiKey: (harnessId: AgentProviderId, apiKey: string) => void;
-	snapshotAvailable?: boolean;
 	models: readonly SessionModel[];
 	modelId: string;
 	onModelIdChange: (id: string) => void;
@@ -51,11 +45,6 @@ export function SessionControls({
 	harnessId,
 	onHarnessIdChange,
 	connection,
-	apiKeyHints,
-	busy,
-	onConnect,
-	onSaveApiKey,
-	snapshotAvailable = false,
 	models,
 	modelId,
 	onModelIdChange,
@@ -72,9 +61,11 @@ export function SessionControls({
 	const startPrompt = harnessRequiresAccountLogin(harnessId)
 		? `Sign in to ${harnessName}`
 		: `Connect ${harnessName}`;
-	const persistedModelId = (model?.id || modelId || listedModelId).trim();
-	const persistedLabel =
-		model?.label || listedModelDisplayName(persistedModelId);
+	const catalogModel =
+		models.find((candidate) => candidate.id === modelId) ??
+		models.find((candidate) => candidate.id === listedModelId);
+	const persistedModelId = (model?.id || catalogModel?.id || "").trim();
+	const persistedLabel = model?.label || catalogModel?.label || "";
 	const compactComposer = useCompactLayout();
 
 	return (
@@ -100,18 +91,12 @@ export function SessionControls({
 			</button>
 			<HarnessPicker
 				harnessId={harnessId}
-				connection={connection}
-				apiKeyHints={apiKeyHints}
-				busy={busy}
 				onHarnessIdChange={(id) => {
 					onHarnessIdChange(id);
 					onModelIdChange("");
 					setReasoningId("");
 					setFast(false);
 				}}
-				onConnect={onConnect}
-				onSaveApiKey={onSaveApiKey}
-				snapshotAvailable={snapshotAvailable}
 			/>
 			<Select
 				value={persistedModelId || undefined}
@@ -135,16 +120,16 @@ export function SessionControls({
 					}
 				>
 					{harnessReady ? (
-						<SelectValue placeholder={startPrompt} />
+						<SelectValue
+							placeholder={models.length ? "Select model" : "Loading models…"}
+						/>
 					) : (
-						<span data-slot="select-value">
-							{persistedLabel || startPrompt}
-						</span>
+						<span data-slot="select-value">{startPrompt}</span>
 					)}
 				</SelectTrigger>
 				<SelectContent
 					position="popper"
-					side="bottom"
+					side="top"
 					align="start"
 					sideOffset={8}
 				>
@@ -165,30 +150,21 @@ export function SessionControls({
 					)}
 				</SelectContent>
 			</Select>
-			{compactComposer ? null : (
+			{compactComposer || !model?.reasoning ? null : (
 				<Select
 					value={reasoning?.id ?? ""}
 					onValueChange={setReasoningId}
-					disabled={!harnessReady || !model?.reasoning}
+					disabled={!harnessReady}
 				>
 					<SelectTrigger
 						className="composer-select reasoning-select"
 						aria-label="Reasoning level"
-						title={
-							!harnessReady
-								? `${startPrompt} first`
-								: !model
-									? "Select a model to see its reasoning levels"
-									: !model.reasoning
-										? "This model has no configurable reasoning levels"
-										: undefined
-						}
 					>
 						<SelectValue placeholder="Reasoning" />
 					</SelectTrigger>
 					<SelectContent
 						position="popper"
-						side="bottom"
+						side="top"
 						align="start"
 						sideOffset={8}
 					>
@@ -211,33 +187,24 @@ export function SessionControls({
 					</SelectContent>
 				</Select>
 			)}
-			{compactComposer ? null : (
+			{compactComposer || !model?.supportsFastMode ? null : (
 				<TooltipProvider delayDuration={350}>
 					<Tooltip>
 						<TooltipTrigger asChild>
 							<Toggle
 								className="composer-control fast-control"
 								aria-label="Fast mode"
-								disabled={!model?.supportsFastMode}
-								pressed={Boolean(model?.supportsFastMode && fast)}
+								pressed={fast}
 								onPressedChange={setFast}
 							>
 								<Zap
 									className="size-4"
-									fill={
-										model?.supportsFastMode && fast ? "currentColor" : "none"
-									}
+									fill={fast ? "currentColor" : "none"}
 								/>
 							</Toggle>
 						</TooltipTrigger>
 						<TooltipContent side="bottom" sideOffset={8}>
-							{!harnessReady
-								? `${startPrompt} first`
-								: !model
-									? "Select a model first"
-									: !model.supportsFastMode
-										? "Fast mode unavailable for this model"
-										: `Fast mode ${fast ? "on" : "off"}`}
+							{`Fast mode ${fast ? "on" : "off"}`}
 						</TooltipContent>
 					</Tooltip>
 				</TooltipProvider>

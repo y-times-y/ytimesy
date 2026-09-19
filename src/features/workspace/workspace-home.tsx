@@ -8,10 +8,7 @@ import {
 	useRef,
 	useState,
 } from "react";
-import {
-	connectedAgentStatus,
-	connectedProviderId,
-} from "#/domain/agent-connection";
+import { connectedProviderId } from "#/domain/agent-connection";
 import {
 	type AgentProviderId,
 	DEFAULT_COMPOSER_HARNESS_ID,
@@ -20,14 +17,18 @@ import {
 	RUNNING_TURN_POLL_MS,
 	runningAuthenticatedTurnShouldPoll,
 } from "#/domain/harness-access";
-import { hintForHarness } from "#/domain/harness-api-key";
 import {
 	inspectorSplitFromPointer,
 	inspectorSplitRatio,
+	inspectorStaysBesideChat,
 	nudgeInspectorSplit,
 } from "#/domain/inspector-split";
 import { publicFailureMessage } from "#/domain/project-workspace";
-import type { Project } from "#/domain/projects";
+import { type Project, selectedProjectIdAfterDelete } from "#/domain/projects";
+import {
+	type ListedPullRequest,
+	sidebarChatPrMarkForWorkspace,
+} from "#/domain/sidebar-pr";
 import {
 	fileChangesFromSessionItems,
 	isTurnRunning,
@@ -52,11 +53,14 @@ import {
 	withChatTurnStatus,
 	withoutBusyChat,
 } from "#/domain/sidebar-chats";
-import type { WorkspaceDesktop } from "#/domain/workspace-desktop";
+import {
+	desktopInspectorShouldStart,
+	type WorkspaceDesktop,
+} from "#/domain/workspace-desktop";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
 import { authClient } from "../auth/client";
 import { requestJson } from "../projects/api";
-import { AgentProviderMark } from "../sessions/agent-provider-mark";
+import { deleteOwnedProject } from "../projects/project.fn";
 import {
 	deleteProjectAgentSession,
 	listProjectAgentSessions,
@@ -69,10 +73,6 @@ import {
 	stopCodexSessionTurn,
 } from "../sessions/codex-session.fn";
 import {
-	getHarnessApiKeys,
-	saveHarnessApiKeyFn,
-} from "../sessions/harness-key.fn";
-import {
 	preferredSessionModelId,
 	sessionModelsFromListed,
 } from "../sessions/model-capabilities";
@@ -81,7 +81,7 @@ import { SideChatPanel } from "../sessions/side-chat-panel";
 import { getWorkspaceDesktop, startWorkspaceDesktopFn } from "./desktop.fn";
 import { ProjectSettings } from "./project-settings";
 import { ProjectSidebar } from "./project-sidebar";
-import { useCompactLayout, useInspectorBesideChat } from "./use-compact-layout";
+import { useCompactLayout } from "./use-compact-layout";
 import {
 	type InspectorView,
 	type ToolsView,
@@ -94,7 +94,7 @@ export function WorkspaceHome({
 	initialSession: PublicCodexSession;
 }) {
 	const compact = useCompactLayout();
-	const inspectorBeside = useInspectorBesideChat();
+	const inspectorBeside = inspectorStaysBesideChat(compact);
 	const queryClient = useQueryClient();
 	const projects = useQuery({
 		queryKey: ["projects"],
@@ -109,6 +109,21 @@ export function WorkspaceHome({
 	const [composerModelId, setComposerModelId] = useState(
 		initialSession.listedModelId,
 	);
+	const pullRequests = useQuery({
+		queryKey: [
+			"github",
+			"pull-requests",
+			selectedProject?.installationId,
+			selectedProject?.repositoryId,
+		],
+		queryFn: () =>
+			requestJson<{ pullRequests: ListedPullRequest[] }>(
+				`/api/github/pull-requests?installationId=${selectedProject?.installationId}&repositoryId=${selectedProject?.repositoryId}`,
+			),
+		enabled: Boolean(
+			selectedProject?.installationId && selectedProject?.repositoryId,
+		),
+	});
 	const chats = useQuery({
 		queryKey: ["agent-sessions", selectedProject?.id],
 		queryFn: () =>
@@ -119,6 +134,7 @@ export function WorkspaceHome({
 	});
 	const startSession = useServerFn(startProjectAgentSession);
 	const deleteSession = useServerFn(deleteProjectAgentSession);
+	const deleteProject = useServerFn(deleteOwnedProject);
 	const [projectsOpen, setProjectsOpen] = useState(false);
 	const [sidebarPinReady, setSidebarPinReady] = useState(false);
 	const [inspectorOpen, setInspectorOpen] = useState(false);
@@ -133,14 +149,16 @@ export function WorkspaceHome({
 	const [harnessId, setHarnessId] = useState<AgentProviderId>(
 		DEFAULT_COMPOSER_HARNESS_ID,
 	);
-	const [apiKeyHints, setApiKeyHints] = useState<
-		Partial<Record<AgentProviderId, string>>
-	>({});
 	const [desktop, setDesktop] = useState<WorkspaceDesktop>({
 		status: "stopped",
 	});
 	const [desktopBusy, setDesktopBusy] = useState(false);
+	const desktopStartInFlight = useRef(false);
 	const [settingsOpen, setSettingsOpen] = useState(false);
+	const [composerDraft, setComposerDraft] = useState(false);
+	const [projectPickerOpen, setProjectPickerOpen] = useState(false);
+	const composerDraftRef = useRef(false);
+	composerDraftRef.current = composerDraft;
 	const sessionEpoch = useRef(0);
 	const loadedSessionId = useRef<string | undefined>(undefined);
 	const selectedSessionIdRef = useRef<string | undefined>(undefined);
@@ -167,6 +185,7 @@ export function WorkspaceHome({
 		(epoch: number, next: PublicCodexSession) => {
 			rememberSessionView(next);
 			if (epoch !== sessionEpoch.current) return;
+			if (composerDraftRef.current) return;
 			const openChatId = selectedSessionIdRef.current;
 			if (
 				openChatId &&
@@ -188,8 +207,6 @@ export function WorkspaceHome({
 	const connect = useServerFn(connectCodexSession);
 	const sendTask = useServerFn(sendCodexSessionTask);
 	const stopTurn = useServerFn(stopCodexSessionTurn);
-	const loadKeys = useServerFn(getHarnessApiKeys);
-	const saveKey = useServerFn(saveHarnessApiKeyFn);
 	const loadDesktop = useServerFn(getWorkspaceDesktop);
 	const startDesktop = useServerFn(startWorkspaceDesktopFn);
 	const fileChanges = fileChangesFromSessionItems(session.items);
@@ -198,15 +215,59 @@ export function WorkspaceHome({
 		custom: customSplit,
 		desktop: inspectorView === "desktop",
 	});
-	const agentStatus = connectedAgentStatus(session.connection);
-	const connectedProvider = connectedProviderId(session.connection);
 	const sessionTitle = sessionTitleFromItems(session.items);
 	const hasUserMessage = Boolean(lastUserMessageText(session.items));
-	const sidebarChats = chats.data ?? [];
+	const listedPullRequests = pullRequests.data?.pullRequests ?? [];
+	const sidebarChats = (chats.data ?? []).map((chat) => {
+		const mark = sidebarChatPrMarkForWorkspace({
+			workspaceId: chat.workspaceId,
+			pullRequests: listedPullRequests,
+		});
+		return {
+			...chat,
+			prUrl: mark?.url ?? null,
+			prNeed: mark?.need ?? null,
+		};
+	});
 	const activeProjectId = selectedProject?.id;
 	const activeSessionId =
 		selectedSessionId ?? session.agentSessionId ?? undefined;
 	selectedSessionIdRef.current = activeSessionId;
+	const requestDesktop = useCallback(() => {
+		if (desktopStartInFlight.current) return;
+		if (
+			!desktopInspectorShouldStart({
+				tabActive: true,
+				projectId: selectedProject?.id,
+				sessionId: activeSessionId,
+				desktop,
+				busy: desktopBusy,
+			}) &&
+			desktop.status !== "failed"
+		) {
+			return;
+		}
+		desktopStartInFlight.current = true;
+		setDesktopBusy(true);
+		setDesktop({ status: "starting" });
+		void startDesktop({
+			data: {
+				projectId: selectedProject?.id,
+				sessionId: activeSessionId,
+			},
+		})
+			.then(setDesktop)
+			.finally(() => {
+				desktopStartInFlight.current = false;
+				setDesktopBusy(false);
+			});
+	}, [
+		activeSessionId,
+		desktop,
+		desktopBusy,
+		selectedProject?.id,
+		startDesktop,
+	]);
 	const composerBusy = composerBusyForOpenChat({
 		openChatId: activeSessionId,
 		busyChatIds,
@@ -256,14 +317,18 @@ export function WorkspaceHome({
 	}, [compact, projectsOpen, sidebarPinReady]);
 
 	useEffect(() => {
-		void loadKeys().then((status) => {
-			setApiKeyHints({
-				codex: hintForHarness(status.keys, "codex") ?? undefined,
-				claude: hintForHarness(status.keys, "claude") ?? undefined,
-				opencode: hintForHarness(status.keys, "opencode") ?? undefined,
-			});
-		});
-	}, [loadKeys]);
+		const params = new URLSearchParams(window.location.search);
+		if (params.get("addProject") !== "1") return;
+		setComposerDraft(true);
+		setProjectPickerOpen(true);
+		params.delete("addProject");
+		const query = params.toString();
+		window.history.replaceState(
+			{},
+			"",
+			`${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`,
+		);
+	}, []);
 
 	useEffect(() => {
 		void activeProjectId;
@@ -274,9 +339,9 @@ export function WorkspaceHome({
 	}, [activeProjectId]);
 
 	useEffect(() => {
-		if (selectedSessionId || !chats.data?.[0]) return;
+		if (composerDraft || selectedSessionId || !chats.data?.[0]) return;
 		setSelectedSessionId(chats.data[0].id);
-	}, [chats.data, selectedSessionId]);
+	}, [chats.data, composerDraft, selectedSessionId]);
 
 	useEffect(() => {
 		if (!activeProjectId) return;
@@ -292,7 +357,7 @@ export function WorkspaceHome({
 	}, [loadDesktop, activeProjectId, activeSessionId]);
 
 	useEffect(() => {
-		if (!activeProjectId) return;
+		if (!activeProjectId || composerDraft) return;
 		const switching = loadedSessionId.current !== activeSessionId;
 		if (!switching && composerBusy) return;
 		loadedSessionId.current = activeSessionId;
@@ -307,6 +372,7 @@ export function WorkspaceHome({
 	}, [
 		applySessionView,
 		composerBusy,
+		composerDraft,
 		harnessId,
 		activeProjectId,
 		activeSessionId,
@@ -425,21 +491,39 @@ export function WorkspaceHome({
 		setInspectorView(toolsView);
 	}
 
-	function focusProjectPicker() {
-		document
-			.querySelector<HTMLButtonElement>('[aria-label="Project"]')
-			?.click();
+	function openAddProject() {
+		setSettingsOpen(false);
+		bumpSessionEpoch();
+		selectedSessionIdRef.current = undefined;
+		setSelectedSessionId(undefined);
+		setSession((current) => ({
+			...current,
+			workspaceId: null,
+			agentSessionId: null,
+			items: [],
+			turnStatus: "idle",
+			sideItems: [],
+			sideTurnStatus: "idle",
+			canSend: false,
+			canSendSide: false,
+		}));
+		setComposerDraft(true);
+		setProjectPickerOpen(true);
+		if (compact) setProjectsOpen(false);
 	}
 
-	function startNewChat() {
-		if (!selectedProject) {
-			setProjectsOpen(true);
-			requestAnimationFrame(focusProjectPicker);
+	function startNewChat(projectId?: string) {
+		const targetProjectId = projectId ?? selectedProject?.id;
+		if (!targetProjectId) {
+			openAddProject();
 			return;
 		}
+		if (projectId) setSelectedProjectId(projectId);
+		setComposerDraft(false);
+		setProjectPickerOpen(false);
 		const epoch = bumpSessionEpoch();
 		void startSession({
-			data: { projectId: selectedProject.id, harnessId },
+			data: { projectId: targetProjectId, harnessId },
 		})
 			.then((created) => {
 				if (epoch !== sessionEpoch.current) return;
@@ -526,6 +610,56 @@ export function WorkspaceHome({
 			});
 	}
 
+	function removeProject(projectId: string) {
+		const listed = projects.data ?? [];
+		const remaining = listed.filter((project) => project.id !== projectId);
+		const nextId = selectedProjectIdAfterDelete({
+			projects: listed,
+			selectedProjectId: selectedProject?.id,
+			deletedProjectId: projectId,
+		});
+		queryClient.setQueryData(["projects"], remaining);
+		queryClient.removeQueries({ queryKey: ["agent-sessions", projectId] });
+		setSelectedProjectId(nextId);
+		if (selectedProject?.id === projectId) {
+			bumpSessionEpoch();
+			selectedSessionIdRef.current = undefined;
+			setSelectedSessionId(undefined);
+			openedDiff.current = false;
+			setSelectedFilePath(undefined);
+			setDesktop({ status: "stopped" });
+			setComposerDraft(!nextId);
+			setProjectPickerOpen(false);
+			setSession((current) => ({
+				...current,
+				workspaceId: null,
+				agentSessionId: null,
+				items: [],
+				turnStatus: "idle",
+				sideItems: [],
+				sideTurnStatus: "idle",
+				connection: { status: "disconnected" },
+				canSend: false,
+				canSendSide: false,
+			}));
+		}
+		void deleteProject({ data: { projectId } })
+			.then(() => projects.refetch())
+			.catch((cause) => {
+				void projects.refetch();
+				setSession((current) => ({
+					...current,
+					connection: {
+						status: "failed",
+						provider: harnessId,
+						message: publicFailureMessage(cause),
+					},
+					canSend: false,
+					canSendSide: false,
+				}));
+			});
+	}
+
 	async function signOut() {
 		await authClient.signOut();
 		window.location.assign("/");
@@ -583,10 +717,7 @@ export function WorkspaceHome({
 				onSelectProject={setSelectedProjectId}
 				expanded={projectsOpen}
 				onToggle={() => setProjectsOpen((open) => !open)}
-				onAddProject={() => {
-					window.location.assign("/onboarding");
-					if (compact) setProjectsOpen(false);
-				}}
+				onAddProject={openAddProject}
 				chats={sidebarChats}
 				selectedChatId={activeSessionId}
 				busyChatIds={busyChatIds}
@@ -594,6 +725,8 @@ export function WorkspaceHome({
 				openSideTurnStatus={session.sideTurnStatus}
 				hasUserMessage={hasUserMessage}
 				onSelectChat={(id) => {
+					setComposerDraft(false);
+					setProjectPickerOpen(false);
 					selectedSessionIdRef.current = id;
 					bumpSessionEpoch();
 					setSelectedSessionId(id);
@@ -634,14 +767,21 @@ export function WorkspaceHome({
 				}}
 				onNewChat={startNewChat}
 				onDeleteChat={deleteChat}
+				onDeleteProject={removeProject}
 				onOpenSettings={() => setSettingsOpen(true)}
-				onSignOut={() => {
-					void signOut();
-				}}
 			/>
 			<ProjectSettings
 				open={settingsOpen}
 				projectId={selectedProject?.id}
+				projects={projects.data ?? []}
+				selectedProject={selectedProject}
+				onProjectAdded={(project) => {
+					setSelectedProjectId(project.id);
+					void projects.refetch();
+				}}
+				onSignOut={() => {
+					void signOut();
+				}}
 				onClose={() => setSettingsOpen(false)}
 			/>
 			<main className="workspace-main" inert={compact && projectsOpen}>
@@ -688,15 +828,6 @@ export function WorkspaceHome({
 								</button>
 								<div className="session-title-copy">
 									<span className="session-title">{sessionTitle}</span>
-									{connectedProvider && agentStatus ? (
-										<span className="header-agent-status">
-											<AgentProviderMark
-												provider={connectedProvider}
-												size={14}
-											/>
-											{agentStatus}
-										</span>
-									) : null}
 								</div>
 								{inspectorOpen ? null : (
 									<button
@@ -755,49 +886,12 @@ export function WorkspaceHome({
 								key={session.agentSessionId ?? "new"}
 								session={session}
 								busy={composerBusy}
-								listedTitle={listedTitle}
+								listedTitle={composerDraft ? undefined : listedTitle}
 								harnessId={harnessId}
 								onHarnessIdChange={(id) => {
 									setHarnessId(id);
 								}}
-								apiKeyHints={apiKeyHints}
 								onComposerModelIdChange={setComposerModelId}
-								onConnect={() => {
-									const chatId = activeSessionId;
-									const epoch = sessionEpoch.current;
-									setBusyChatIds((ids) => withBusyChat(ids, chatId));
-									void connect({
-										data: sessionScope(),
-									})
-										.then((next) => applySessionView(epoch, next))
-										.finally(() =>
-											setBusyChatIds((ids) => withoutBusyChat(ids, chatId)),
-										);
-								}}
-								onSaveApiKey={(id, apiKey) => {
-									const chatId = activeSessionId;
-									const epoch = sessionEpoch.current;
-									setBusyChatIds((ids) => withBusyChat(ids, chatId));
-									void saveKey({ data: { harnessId: id, apiKey } })
-										.then((status) => {
-											setApiKeyHints({
-												codex:
-													hintForHarness(status.keys, "codex") ?? undefined,
-												claude:
-													hintForHarness(status.keys, "claude") ?? undefined,
-												opencode:
-													hintForHarness(status.keys, "opencode") ?? undefined,
-											});
-											if (id === harnessId) {
-												return connect({
-													data: { ...sessionScope(), harnessId: id },
-												}).then((next) => applySessionView(epoch, next));
-											}
-										})
-										.finally(() =>
-											setBusyChatIds((ids) => withoutBusyChat(ids, chatId)),
-										);
-								}}
 								onSend={(text, modelId) => {
 									const epoch = sessionEpoch.current;
 									const scope = sessionScope();
@@ -870,7 +964,12 @@ export function WorkspaceHome({
 								onOpenFile={openMentionedFile}
 								projects={projects.data ?? []}
 								selectedProject={selectedProject}
-								onSelectProject={setSelectedProjectId}
+								onSelectProject={(id) => {
+									setSelectedProjectId(id);
+									setProjectPickerOpen(false);
+								}}
+								projectPickerOpen={projectPickerOpen}
+								onProjectPickerOpenChange={setProjectPickerOpen}
 							/>
 							{projects.isPending && <p role="status">Loading projects…</p>}
 							{projects.error && (
@@ -884,9 +983,13 @@ export function WorkspaceHome({
 							{!projects.isPending &&
 								!projects.error &&
 								!projects.data?.length && (
-									<a className="setup-back" href="/onboarding">
+									<button
+										type="button"
+										className="setup-back"
+										onClick={openAddProject}
+									>
 										Add your first project
-									</a>
+									</button>
 								)}
 						</div>
 					</section>
@@ -927,18 +1030,7 @@ export function WorkspaceHome({
 							desktopBusy={desktopBusy}
 							projectId={selectedProject?.id}
 							sessionId={activeSessionId}
-							onStartDesktop={() => {
-								setDesktopBusy(true);
-								setDesktop({ status: "starting" });
-								void startDesktop({
-									data: {
-										projectId: selectedProject?.id,
-										sessionId: activeSessionId,
-									},
-								})
-									.then(setDesktop)
-									.finally(() => setDesktopBusy(false));
-							}}
+							onStartDesktop={requestDesktop}
 							sideChatOpen={sideChatOpen}
 							onNewSideChat={openSideChat}
 							onCloseSideChat={closeSideChat}

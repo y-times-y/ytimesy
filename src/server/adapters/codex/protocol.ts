@@ -94,7 +94,7 @@ export function agentConnectionFromProbe(
 			status: "failed",
 			provider: "codex",
 			message:
-				"Codex is waiting for an API key. Paste one in the harness picker, or sign in with ChatGPT.",
+				"Codex is waiting for an API key or ChatGPT sign-in.",
 		};
 	}
 

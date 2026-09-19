@@ -6,7 +6,10 @@ import {
 	parseClaudeListedModels,
 } from "#/domain/claude-auth";
 import { SessionItemId, type WorkspaceId } from "#/domain/ids";
-import type { ListedModel } from "#/domain/listed-model";
+import {
+	type ListedModel,
+	listedModelSupportsFastMode,
+} from "#/domain/listed-model";
 import { posixShellQuoted } from "#/domain/posix-command";
 import type { SessionItem, SessionTurnStatus } from "#/domain/session-item";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
@@ -447,7 +450,13 @@ function listedModels(value: unknown): readonly ListedModel[] {
 		if (!id) continue;
 		const label = readString(row.label) ?? id;
 		const notice = readString(row.notice);
-		models.push(notice ? { id, label, notice } : { id, label });
+		const supportsFastMode = listedModelSupportsFastMode(row);
+		models.push({
+			id,
+			label,
+			...(notice ? { notice } : {}),
+			...(supportsFastMode ? { supportsFastMode } : {}),
+		});
 	}
 	return models;
 }

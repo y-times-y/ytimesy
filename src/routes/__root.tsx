@@ -1,11 +1,14 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
 import { useState } from "react";
+import { AppError, AppNotFound } from "../features/app/app-status";
 import { AuthProviders } from "../features/auth/auth-providers";
 
 import appCss from "../styles.css?url";
 
 export const Route = createRootRoute({
+	notFoundComponent: AppNotFound,
+	errorComponent: AppError,
 	head: () => ({
 		meta: [
 			{

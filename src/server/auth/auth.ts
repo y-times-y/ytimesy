@@ -2,6 +2,7 @@ import { betterAuth } from "better-auth";
 import { database } from "../adapters/database";
 import { persistAuthEmail } from "../adapters/email";
 import { serverConfig } from "../config";
+import { loadLocalQaUser, requestAllowsLocalQaIdentity } from "./local-qa-identity";
 import { authTrustedOrigins, googleOAuthConfigured } from "./providers";
 
 export function authOptions() {
@@ -72,6 +73,11 @@ export function authOptions() {
 			modelName: "auth_account",
 			encryptOAuthTokens: true,
 			accountLinking: { enabled: false },
+			storeStateStrategy: "database" as const,
+			skipStateCookieCheck: true,
+		},
+		onAPIError: {
+			errorURL: `${config.APP_URL}/auth/sign-in`,
 		},
 		verification: { modelName: "auth_verification" },
 		rateLimit: {
@@ -91,6 +97,11 @@ export function auth() {
 }
 export async function requireUser(headers: Headers) {
 	const session = await auth().api.getSession({ headers });
-	if (!session) throw new Response("Sign in required", { status: 401 });
-	return session.user;
+	if (session) return session.user;
+	if (!requestAllowsLocalQaIdentity(headers)) {
+		throw new Response("Sign in required", { status: 401 });
+	}
+	const user = await loadLocalQaUser();
+	if (!user) throw new Response("Sign in required", { status: 401 });
+	return user;
 }

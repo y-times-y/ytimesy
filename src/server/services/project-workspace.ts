@@ -7,7 +7,13 @@ import {
 	projectCheckoutFromFullName,
 	projectCheckoutPath,
 } from "#/domain/project-checkout";
+import { projectFolderName, type Project } from "#/domain/projects";
 import {
+	sessionCloneBranch,
+	sessionWorkingBranch,
+} from "#/domain/session-branch";
+import {
+	checkoutWorkingBranchScript,
 	cloneSelectedProjectScript,
 	DEVELOPER_INSTRUCTIONS_PATH,
 	fastForwardPreparedCheckoutScript,
@@ -18,8 +24,10 @@ import {
 	redactInstallationToken,
 	reusePreparedCheckoutCommand,
 } from "#/server/adapters/freestyle/clone-project";
+import { authorizedRepository } from "#/server/adapters/github";
 import { githubInstallationAccessToken } from "#/server/adapters/github/installation-token";
 import { listProjects, projectForOwner } from "#/server/adapters/projects";
+import { githubAccessToken } from "#/server/auth/github-connection";
 import { injectProjectSecrets } from "./project-secrets";
 import type { DesktopScope } from "./workspace-desktop";
 import type { WorkspaceMachines } from "./workspace-machines";
@@ -74,6 +82,7 @@ export function ensureProjectCheckout(
 							owner: checkout.owner,
 							name: checkout.name,
 							branch: checkout.branch,
+							workingBranch: checkout.workingBranch,
 							destination: reusedPath,
 						}),
 						60_000,
@@ -85,6 +94,14 @@ export function ensureProjectCheckout(
 						).pipe(Effect.catchAll(() => Effect.void)),
 					),
 				);
+			} else if (checkout.workingBranch) {
+				yield* Effect.tryPromise(() =>
+					machines.exec(
+						workspaceId,
+						checkoutWorkingBranchScript(reusedPath, checkout.workingBranch),
+						15_000,
+					),
+				).pipe(Effect.catchAll(() => Effect.void));
 			}
 			return reusedPath;
 		}
@@ -103,6 +120,7 @@ export function ensureProjectCheckout(
 					owner: checkout.owner,
 					name: checkout.name,
 					branch: checkout.branch,
+					workingBranch: checkout.workingBranch,
 					destination,
 				}),
 				180_000,
@@ -148,12 +166,42 @@ export function loadTenantProjectCheckout(scope: {
 			? await projectForOwner(scope.userId, scope.projectId)
 			: ((await listProjects(scope.userId))[0] ?? null);
 		if (!project) return null;
-		return projectCheckoutFromFullName({
-			fullName: project.fullName,
-			branch: project.branch,
-			installationId: project.installationId,
-		});
+		return checkoutForProject(scope.userId, project);
 	}).pipe(Effect.catchAll(() => Effect.succeed(null)));
+}
+
+async function checkoutForProject(userId: string, project: Project) {
+	const defaultBranch = await projectDefaultBranch(userId, project);
+	return projectCheckoutFromFullName({
+		fullName: project.fullName,
+		branch: sessionCloneBranch({
+			selectedBranch: project.branch,
+			defaultBranch,
+			title: projectFolderName(project.fullName),
+			id: String(project.repositoryId),
+		}),
+		workingBranch: sessionWorkingBranch({
+			selectedBranch: project.branch,
+			defaultBranch,
+			title: projectFolderName(project.fullName),
+			id: String(project.repositoryId),
+		}),
+		installationId: project.installationId,
+	});
+}
+
+async function projectDefaultBranch(userId: string, project: Project) {
+	try {
+		const token = await githubAccessToken(userId);
+		const repository = await authorizedRepository(
+			token,
+			project.installationId,
+			project.repositoryId,
+		);
+		return repository.defaultBranch;
+	} catch {
+		return project.branch;
+	}
 }
 
 export function preparePreparedGuest(

@@ -25,8 +25,17 @@ describe("projectCheckoutFromFullName", () => {
 			name: "ytimesy",
 			fullName: "y-times-y/ytimesy",
 			branch: "master",
+			workingBranch: "master",
 			installationId: "161432829",
 		});
+		expect(
+			projectCheckoutFromFullName({
+				fullName: "y-times-y/ytimesy",
+				branch: "master",
+				workingBranch: "ytimesy",
+				installationId: 161432829,
+			}),
+		).toMatchObject({ branch: "master", workingBranch: "ytimesy" });
 	});
 });
 

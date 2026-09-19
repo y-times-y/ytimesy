@@ -22,14 +22,15 @@ export const Route = createFileRoute("/api/github/branches")({
 						Object.fromEntries(new URL(request.url).searchParams),
 					);
 					const token = await githubAccessToken(user.id);
-					return listBranches(
+					const repository = await authorizedRepository(
 						token,
-						await authorizedRepository(
-							token,
-							params.installationId,
-							params.repositoryId,
-						),
+						params.installationId,
+						params.repositoryId,
 					);
+					return {
+						branches: await listBranches(token, repository),
+						defaultBranch: repository.defaultBranch,
+					};
 				}),
 		},
 	},

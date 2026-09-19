@@ -11,10 +11,15 @@ import {
 	selectedChatIdAfterDelete,
 	sessionViewAppliesToOpenChat,
 	sidebarChatIsRunning,
+	projectFolderIsExpanded,
 	sidebarChatsEmptyCopy,
 	sidebarHasRunningChat,
+	toggleCollapsedProjectIds,
+	withProjectExpanded,
 	sidebarIsPinnedInStorage,
 	sidebarPinnedStorageValue,
+	chatsWithPinnedFirst,
+	togglePinnedChatIds,
 	withBusyChat,
 	withChatTurnStatus,
 	withoutBusyChat,
@@ -69,6 +74,38 @@ describe("sidebar empty copy", () => {
 	});
 });
 
+describe("project folder collapse", () => {
+	it("keeps only the selected project open unless the user collapsed it", () => {
+		expect(
+			projectFolderIsExpanded({
+				projectId: "a",
+				selectedProjectId: "a",
+				collapsedIds: [],
+			}),
+		).toBe(true);
+		expect(
+			projectFolderIsExpanded({
+				projectId: "a",
+				selectedProjectId: "a",
+				collapsedIds: ["a"],
+			}),
+		).toBe(false);
+		expect(
+			projectFolderIsExpanded({
+				projectId: "b",
+				selectedProjectId: "a",
+				collapsedIds: [],
+			}),
+		).toBe(false);
+	});
+
+	it("toggles a collapsed folder and reopens it on select", () => {
+		expect(toggleCollapsedProjectIds(["a"], "a")).toEqual([]);
+		expect(toggleCollapsedProjectIds([], "a")).toEqual(["a"]);
+		expect(withProjectExpanded(["a", "b"], "a")).toEqual(["b"]);
+	});
+});
+
 describe("sidebar pin storage", () => {
 	it("pins only the stored expanded state", () => {
 		expect(sidebarIsPinnedInStorage("1")).toBe(true);
@@ -76,6 +113,19 @@ describe("sidebar pin storage", () => {
 		expect(sidebarIsPinnedInStorage(null)).toBe(false);
 		expect(sidebarPinnedStorageValue(true)).toBe("1");
 		expect(sidebarPinnedStorageValue(false)).toBe("0");
+	});
+});
+
+describe("pinned chats", () => {
+	it("toggles a chat pin and keeps pinned rows first", () => {
+		expect(togglePinnedChatIds([], "b")).toEqual(["b"]);
+		expect(togglePinnedChatIds(["b"], "b")).toEqual([]);
+		expect(
+			chatsWithPinnedFirst(
+				[{ id: "a", title: "a" }, { id: "b", title: "b" }, { id: "c", title: "c" }],
+				["c", "b"],
+			).map((chat) => chat.id),
+		).toEqual(["b", "c", "a"]);
 	});
 });
 

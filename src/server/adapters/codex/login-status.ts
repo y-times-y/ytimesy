@@ -1,4 +1,7 @@
-import type { ListedModel } from "#/domain/listed-model";
+import {
+	type ListedModel,
+	listedModelSupportsFastMode,
+} from "#/domain/listed-model";
 import type { SessionItem, SessionTurnStatus } from "#/domain/session-item";
 import { itemsWithVisibleSideChatText } from "#/domain/side-chat";
 import {
@@ -149,7 +152,13 @@ function listedModels(value: unknown): readonly ListedModel[] {
 		if (!id) continue;
 		const label = readString(row.label) ?? id;
 		const notice = readString(row.notice);
-		models.push(notice ? { id, label, notice } : { id, label });
+		const supportsFastMode = listedModelSupportsFastMode(row);
+		models.push({
+			id,
+			label,
+			...(notice ? { notice } : {}),
+			...(supportsFastMode ? { supportsFastMode } : {}),
+		});
 	}
 	return models;
 }

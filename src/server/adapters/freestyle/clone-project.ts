@@ -13,7 +13,9 @@ export function cloneSelectedProjectScript(input: {
 	readonly name: string;
 	readonly branch: string;
 	readonly destination: string;
+	readonly workingBranch?: string;
 }): string {
+	const workingBranch = input.workingBranch?.trim() || input.branch;
 	return `set -eu
 export HOME="\${HOME:-/root}"
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:\${PATH:-}"
@@ -22,6 +24,7 @@ DEST=${shellSingleQuote(input.destination)}
 OWNER=${shellSingleQuote(input.owner)}
 NAME=${shellSingleQuote(input.name)}
 BRANCH=${shellSingleQuote(input.branch)}
+WORKING=${shellSingleQuote(workingBranch)}
 ORIGIN="https://github.com/\${OWNER}/\${NAME}.git"
 export GIT_TERMINAL_PROMPT=0
 
@@ -54,8 +57,15 @@ if [ -z "$TOKEN" ]; then
 fi
 
 rm -rf "$DEST"
-git clone --depth 1 --branch "$BRANCH" "https://x-access-token:\${TOKEN}@github.com/\${OWNER}/\${NAME}.git" "$DEST"
+if [ -n "$BRANCH" ]; then
+  git clone --depth 1 --branch "$BRANCH" "https://x-access-token:\${TOKEN}@github.com/\${OWNER}/\${NAME}.git" "$DEST"
+else
+  git clone --depth 1 "https://x-access-token:\${TOKEN}@github.com/\${OWNER}/\${NAME}.git" "$DEST"
+fi
 git -C "$DEST" remote set-url origin "$ORIGIN"
+if [ -n "$WORKING" ]; then
+  git -C "$DEST" checkout -B "$WORKING"
+fi
 
 printf '%s\\n' "$DEST" > ${shellSingleQuote(PROJECT_CWD_PATH)}
 echo "PROJECT_CWD=$DEST"
@@ -75,12 +85,21 @@ fi`;
  * A new snapshot copy can sit on a stale commit. Fast-forward only when
  * the working tree is clean so a resumed agent keeps its edits.
  */
+export function checkoutWorkingBranchScript(
+	destination: string,
+	branch: string,
+): string {
+	return `git -C ${shellSingleQuote(destination)} checkout -B ${shellSingleQuote(branch)}`;
+}
+
 export function fastForwardPreparedCheckoutScript(input: {
 	readonly owner: string;
 	readonly name: string;
 	readonly branch: string;
 	readonly destination: string;
+	readonly workingBranch?: string;
 }): string {
+	const workingBranch = input.workingBranch?.trim() || input.branch;
 	return `set -eu
 export GIT_TERMINAL_PROMPT=0
 TOKEN_FILE=${shellSingleQuote(PROJECT_TOKEN_PATH)}
@@ -88,6 +107,7 @@ DEST=${shellSingleQuote(input.destination)}
 OWNER=${shellSingleQuote(input.owner)}
 NAME=${shellSingleQuote(input.name)}
 BRANCH=${shellSingleQuote(input.branch)}
+WORKING=${shellSingleQuote(workingBranch)}
 ORIGIN="https://github.com/\${OWNER}/\${NAME}.git"
 TOKEN="$(tr -d '\\n\\r' < "$TOKEN_FILE")"
 rm -f "$TOKEN_FILE"
@@ -103,12 +123,17 @@ if [ -n "$(git -C "$DEST" status --porcelain)" ]; then
   echo dirty
   exit 0
 fi
-if ! git -C "$DEST" fetch --depth 1 "https://x-access-token:\${TOKEN}@github.com/\${OWNER}/\${NAME}.git" "$BRANCH"; then
+if [ -n "$BRANCH" ] && ! git -C "$DEST" fetch --depth 1 "https://x-access-token:\${TOKEN}@github.com/\${OWNER}/\${NAME}.git" "$BRANCH"; then
   git -C "$DEST" remote set-url origin "$ORIGIN"
   echo stale
   exit 0
 fi
-git -C "$DEST" merge --ff-only FETCH_HEAD >/dev/null 2>&1 || true
+if [ -n "$BRANCH" ]; then
+  git -C "$DEST" merge --ff-only FETCH_HEAD >/dev/null 2>&1 || true
+fi
+if [ -n "$WORKING" ]; then
+  git -C "$DEST" checkout -B "$WORKING"
+fi
 git -C "$DEST" remote set-url origin "$ORIGIN"
 echo updated
 `;

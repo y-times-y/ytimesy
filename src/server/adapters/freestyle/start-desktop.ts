@@ -21,10 +21,6 @@ install_google_chrome() {
   apt_get install -y -qq /tmp/google-chrome.deb
 }
 
-chrome_is_running() {
-  pgrep -x chrome >/dev/null 2>&1 || pgrep -x chromium >/dev/null 2>&1 || pgrep -x chromium-browser >/dev/null 2>&1
-}
-
 find_chrome_bin() {
   for bin in google-chrome-stable google-chrome chromium chromium-browser; do
     if command -v "$bin" >/dev/null 2>&1; then
@@ -35,9 +31,88 @@ find_chrome_bin() {
   return 1
 }
 
+apply_guest_identity() {
+  if command -v sudo >/dev/null 2>&1; then
+    sudo -n hostname ytimesy >/dev/null 2>&1 || true
+    printf 'ytimesy\\n' | sudo -n tee /etc/hostname >/dev/null 2>&1 || true
+  fi
+  hostname ytimesy >/dev/null 2>&1 || true
+  export HOSTNAME=ytimesy
+  if [ -w /etc/hostname ]; then
+    printf 'ytimesy\\n' > /etc/hostname
+  fi
+  if [ -w /etc/hosts ] && ! grep -q '[[:space:]]ytimesy$' /etc/hosts 2>/dev/null; then
+    printf '127.0.1.1 ytimesy\\n' >> /etc/hosts
+  fi
+  PROFILE="\${HOME}/.bashrc"
+  touch "$PROFILE"
+  if ! grep -q 'ytimesy guest prompt' "$PROFILE" 2>/dev/null; then
+    printf '\\n# ytimesy guest prompt\\nexport HOSTNAME=ytimesy\\nexport PS1="\\\\u@ytimesy:\\\\w\\\\$ "\\n' >> "$PROFILE"
+  fi
+}
+
+write_desktop_launchers() {
+  DESK_DIR="\${HOME}/.ytimesy/desk"
+  mkdir -p "$DESK_DIR" "\${HOME}/.config/tint2" "\${HOME}/.fluxbox"
+  cat > "$DESK_DIR/chrome.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Chrome
+Exec=/bin/sh -c 'bin=$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser); exec "$bin" --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --no-default-browser-check --disable-session-crashed-bubble --test-type --user-data-dir=/tmp/ytimesy-chrome-profile'
+Icon=google-chrome
+Terminal=false
+EOF
+  cat > "$DESK_DIR/terminal.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Terminal
+Exec=xterm -fa Monospace -fs 12 -bg black -fg white -T Terminal -e bash -lc 'export HOSTNAME=ytimesy PS1="\\u@ytimesy:\\w\\$ "; cd ~; exec bash --norc --noprofile'
+Icon=utilities-terminal
+Terminal=false
+EOF
+  cat > "$DESK_DIR/files.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Files
+Exec=pcmanfm
+Icon=system-file-manager
+Terminal=false
+EOF
+  cat > "\${HOME}/.config/tint2/tint2rc" <<EOF
+# ytimesy desktop dock
+rounded = 22
+border_width = 0
+background_color = #1a1a1a 90
+border_color = #000000 0
+panel_monitor = all
+panel_position = bottom center horizontal
+panel_size = 0 64
+panel_margin = 0 18
+panel_padding = 14 10 16
+panel_background_id = 1
+panel_items = L
+wm_menu = 0
+panel_dock = 1
+autohide = 0
+launcher_padding = 8 6 14
+launcher_background_id = 0
+launcher_icon_size = 40
+launcher_item_app = $DESK_DIR/chrome.desktop
+launcher_item_app = $DESK_DIR/terminal.desktop
+launcher_item_app = $DESK_DIR/files.desktop
+EOF
+  if ! grep -q 'toolbar.visible' "\${HOME}/.fluxbox/init" 2>/dev/null; then
+    printf 'session.screen0.toolbar.visible: false\\n' >> "\${HOME}/.fluxbox/init"
+  fi
+}
+
 if ! command -v Xvfb >/dev/null 2>&1 || ! command -v x11vnc >/dev/null 2>&1 || ! command -v websockify >/dev/null 2>&1; then
   apt_get update -qq
-  apt_get install -y -qq --no-install-recommends xvfb x11vnc novnc websockify fluxbox xterm feh
+  apt_get install -y -qq --no-install-recommends xvfb x11vnc websockify fluxbox xterm feh tint2 pcmanfm
+fi
+if ! command -v tint2 >/dev/null 2>&1 || ! command -v pcmanfm >/dev/null 2>&1; then
+  apt_get update -qq
+  apt_get install -y -qq --no-install-recommends tint2 pcmanfm || true
 fi
 if ! command -v feh >/dev/null 2>&1; then
   apt_get update -qq
@@ -55,6 +130,7 @@ if ! find_chrome_bin >/dev/null 2>&1; then
   ) >/tmp/ytimesy-chrome-install.log 2>&1 &
 fi
 
+apply_guest_identity
 PROFILE="\${HOME}/.profile"
 touch "$PROFILE"
 if ! grep -q 'DISPLAY=:0' "$PROFILE" 2>/dev/null; then
@@ -75,6 +151,7 @@ if [ ! -s "$WALLPAPER" ]; then
   exit 1
 fi
 printf 'session.screen0.rootCommand: feh --bg-fill %s\\n' "$WALLPAPER" > "\${HOME}/.fluxbox/overlay"
+write_desktop_launchers
 
 if ! pgrep -x Xvfb >/dev/null 2>&1; then
   Xvfb :0 -screen 0 1440x900x24 -ac >/tmp/ytimesy-xvfb.log 2>&1 &
@@ -89,70 +166,93 @@ if ! feh --bg-fill "$WALLPAPER" >/tmp/ytimesy-wallpaper.log 2>&1; then
   sleep 1
   feh --bg-fill "$WALLPAPER" >/tmp/ytimesy-wallpaper.log 2>&1
 fi
-
-chrome_bin="$(find_chrome_bin || true)"
-if [ -n "$chrome_bin" ] && ! chrome_is_running; then
-  rm -rf /tmp/ytimesy-chrome-profile
-  mkdir -p /tmp/ytimesy-chrome-profile
-  "$chrome_bin" --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --no-default-browser-check --disable-session-crashed-bubble --test-type --user-data-dir=/tmp/ytimesy-chrome-profile --window-size=720,640 --window-position=680,160 about:blank >/tmp/ytimesy-browser.log 2>&1 &
-  i=0
-  while [ "$i" -lt 10 ]; do
-    if chrome_is_running; then
-      break
-    fi
-    i=$((i + 1))
-    sleep 1
-  done
+if command -v tint2 >/dev/null 2>&1; then
+  pkill -x tint2 >/dev/null 2>&1 || true
+  tint2 -c "\${HOME}/.config/tint2/tint2rc" >/tmp/ytimesy-dock.log 2>&1 &
 fi
-if [ -z "$chrome_bin" ]; then
+if ! find_chrome_bin >/dev/null 2>&1; then
   echo "Chrome is still installing; desktop is up on DISPLAY=:0" >&2
 fi
-chrome_window=""
-if [ -n "$chrome_bin" ] && command -v xdotool >/dev/null 2>&1; then
-  i=0
-  while [ "$i" -lt 15 ]; do
-    chrome_window="$(xdotool search --onlyvisible --class 'Google-chrome' 2>/dev/null | head -n 1 || true)"
-    if [ -z "$chrome_window" ]; then
-      chrome_window="$(xdotool search --onlyvisible --name 'Google Chrome' 2>/dev/null | head -n 1 || true)"
-    fi
-    if [ -z "$chrome_window" ]; then
-      chrome_window="$(xdotool search --onlyvisible --class Chromium 2>/dev/null | head -n 1 || true)"
-    fi
-    if [ -n "$chrome_window" ]; then
-      xdotool windowmove "$chrome_window" 680 160 >/dev/null 2>&1 || true
-      xdotool windowsize "$chrome_window" 720 640 >/dev/null 2>&1 || true
-      break
-    fi
-    i=$((i + 1))
-    sleep 1
-  done
-  if [ -z "$chrome_window" ]; then
-    echo "Chrome is running but has no window on DISPLAY=:0" >&2
-    cat /tmp/ytimesy-browser.log >&2 || true
-  fi
-fi
 if ! pgrep -x x11vnc >/dev/null 2>&1; then
-  x11vnc -display :0 -forever -shared -nopw -listen 127.0.0.1 -rfbport 5900 >/tmp/ytimesy-x11vnc.log 2>&1 &
+  x11vnc -display :0 -forever -shared -nopw -listen 127.0.0.1 -rfbport 5900 >/tmp/ytimesy-desk.log 2>&1 &
   sleep 1
 fi
-WEBROOT=""
-if [ -d /usr/share/novnc ]; then
-  WEBROOT=/usr/share/novnc
-elif [ -d /usr/share/novnc/noVNC ]; then
-  WEBROOT=/usr/share/novnc/noVNC
-fi
 if ! ss -ltn | grep -q ':6080'; then
-  if [ -n "$WEBROOT" ]; then
-    websockify --web="$WEBROOT" 0.0.0.0:6080 127.0.0.1:5900 >/tmp/ytimesy-novnc.log 2>&1 &
-  else
-    websockify 0.0.0.0:6080 127.0.0.1:5900 >/tmp/ytimesy-novnc.log 2>&1 &
-  fi
+  websockify 0.0.0.0:6080 127.0.0.1:5900 >/tmp/ytimesy-desk-proxy.log 2>&1 &
   sleep 1
 fi
 python3 - <<'PY'
 import json
 print("YTIMESY_DESKTOP=" + json.dumps({"display": ":0", "port": 6080}))
 PY
+`;
+
+export const ENSURE_WORKSPACE_DESKTOP = `set -eu
+export DEBIAN_FRONTEND=noninteractive
+export HOME="\${HOME:-/root}"
+export DISPLAY=:0
+if command -v sudo >/dev/null 2>&1; then
+  sudo -n hostname ytimesy >/dev/null 2>&1 || true
+fi
+hostname ytimesy >/dev/null 2>&1 || true
+if ! command -v tint2 >/dev/null 2>&1 || ! command -v pcmanfm >/dev/null 2>&1; then
+  if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
+    sudo -n apt-get update -qq
+    sudo -n apt-get install -y -qq --no-install-recommends tint2 pcmanfm || true
+  else
+    apt-get update -qq
+    apt-get install -y -qq --no-install-recommends tint2 pcmanfm || true
+  fi
+fi
+DESK_DIR="\${HOME}/.ytimesy/desk"
+mkdir -p "$DESK_DIR" "\${HOME}/.config/tint2" "\${HOME}/.fluxbox"
+cat > "$DESK_DIR/chrome.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Chrome
+Exec=/bin/sh -c 'bin=$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser); exec "$bin" --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --no-default-browser-check --disable-session-crashed-bubble --test-type --user-data-dir=/tmp/ytimesy-chrome-profile'
+Icon=google-chrome
+Terminal=false
+EOF
+cat > "$DESK_DIR/terminal.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Terminal
+Exec=xterm -fa Monospace -fs 12 -bg black -fg white -T Terminal -e bash -lc 'export HOSTNAME=ytimesy PS1="\\u@ytimesy:\\w\\$ "; cd ~; exec bash --norc --noprofile'
+Icon=utilities-terminal
+Terminal=false
+EOF
+cat > "$DESK_DIR/files.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Files
+Exec=pcmanfm
+Icon=system-file-manager
+Terminal=false
+EOF
+cat > "\${HOME}/.config/tint2/tint2rc" <<EOF
+rounded = 22
+border_width = 0
+background_color = #1a1a1a 90
+border_color = #000000 0
+panel_monitor = all
+panel_position = bottom center horizontal
+panel_size = 0 64
+panel_margin = 0 18
+panel_padding = 14 10 16
+panel_background_id = 1
+panel_items = L
+panel_dock = 1
+launcher_padding = 8 6 14
+launcher_icon_size = 40
+launcher_item_app = $DESK_DIR/chrome.desktop
+launcher_item_app = $DESK_DIR/terminal.desktop
+launcher_item_app = $DESK_DIR/files.desktop
+EOF
+if command -v tint2 >/dev/null 2>&1; then
+  pkill -x tint2 >/dev/null 2>&1 || true
+  tint2 -c "\${HOME}/.config/tint2/tint2rc" >/tmp/ytimesy-dock.log 2>&1 &
+fi
 `;
 
 export const PROBE_WORKSPACE_DESKTOP = `python3 - <<'PY'

@@ -39,6 +39,19 @@ interface AgentSessionRow {
 	updated_at: Date | string;
 }
 
+export async function listProjectProviderRefs(
+	userId: string,
+	projectId: string,
+): Promise<string[]> {
+	const result = await database().query(
+		`select provider_ref
+		 from agent_session
+		 where user_id=$1 and project_id=$2 and provider_ref is not null`,
+		[userId, projectId],
+	);
+	return result.rows.map((row: { provider_ref: string }) => row.provider_ref);
+}
+
 export async function listAgentSessions(userId: string, projectId: string) {
 	const result = await database().query(
 		`select ${SESSION_COLUMNS}

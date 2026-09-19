@@ -1,4 +1,7 @@
-import type { ListedModel } from "./listed-model";
+import {
+	type ListedModel,
+	listedModelSupportsFastMode,
+} from "./listed-model";
 
 export function parseOpenCodeModelCatalog(
 	payload: unknown,
@@ -80,7 +83,15 @@ function modelsFromUnknown(
 	const id = qualifyModelId(listedProvider, modelId);
 	const label = readString(record.name) ?? readString(record.label) ?? modelId;
 	const notice = noticeFromModel(record);
-	return notice ? [{ id, label, notice }] : [{ id, label }];
+	const supportsFastMode = listedModelSupportsFastMode(record);
+	return [
+		{
+			id,
+			label,
+			...(notice ? { notice } : {}),
+			...(supportsFastMode ? { supportsFastMode } : {}),
+		},
+	];
 }
 
 export function noticeFromModel(

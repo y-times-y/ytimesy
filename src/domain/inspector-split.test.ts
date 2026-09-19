@@ -5,10 +5,17 @@ import {
 	INSPECTOR_SPLIT_DESKTOP,
 	inspectorSplitFromPointer,
 	inspectorSplitRatio,
+	inspectorStaysBesideChat,
 	nudgeInspectorSplit,
 } from "./inspector-split";
 
 describe("inspector split", () => {
+	it("keeps tools as a sidebar so the composer stays desktop-width", () => {
+		expect(INSPECTOR_SPLIT_DEFAULT).toBe(0.66);
+		expect(inspectorStaysBesideChat(false)).toBe(true);
+		expect(inspectorStaysBesideChat(true)).toBe(false);
+	});
+
 	it("gives the desktop more of the canvas until the user drags", () => {
 		expect(inspectorSplitRatio({ custom: null, desktop: false })).toBe(
 			INSPECTOR_SPLIT_DEFAULT,

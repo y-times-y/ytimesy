@@ -7,6 +7,7 @@ import { requireUser } from "../../server/auth/auth";
 import { endpoint, requireSameOrigin } from "../../server/http";
 import {
 	enqueueProjectWorkspace,
+	enqueueWorkspaceSnapshotRefresh,
 	workspaceView,
 } from "../../server/services/workspaces";
 
@@ -25,6 +26,8 @@ export const Route = createFileRoute("/api/workspaces")({
 						user.id,
 						ProjectId(projectId),
 					);
+					if (workspace?.status === "ready")
+						void enqueueWorkspaceSnapshotRefresh(workspace.id);
 					return workspace ? workspaceView(workspace) : null;
 				}),
 			POST: ({ request }) =>

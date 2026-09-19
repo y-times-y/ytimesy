@@ -48,6 +48,43 @@ it("does not save a repository outside the users GitHub access", async () => {
 	expect(adapter.save).not.toHaveBeenCalled();
 	expect(adapter.branch).not.toHaveBeenCalled();
 });
+it("saves the default ytimesy chat branch without requiring it on GitHub", async () => {
+	adapter.authorize.mockResolvedValue({
+		fullName: "test/repo",
+		installationId: 1,
+		repositoryId: 2,
+		defaultBranch: "main",
+	});
+	adapter.save.mockResolvedValue({
+		id: "proj",
+		repositoryId: 2,
+		installationId: 1,
+		fullName: "test/repo",
+		branch: "ytimesy",
+	});
+	const enqueue = vi.fn(() =>
+		Effect.succeed({
+			id: "ws",
+			userId: "alice",
+			projectId: "proj",
+			status: "queued" as const,
+			providerRef: null,
+			templateSnapshotId: null,
+			errorMessage: null,
+			updatedAt: new Date(0).toISOString(),
+		}),
+	);
+	await Effect.runPromise(
+		connectProject(
+			"alice",
+			{ installationId: 1, repositoryId: 2, branch: "ytimesy" },
+			enqueue,
+		),
+	);
+	expect(adapter.branch).not.toHaveBeenCalled();
+	expect(adapter.save).toHaveBeenCalledOnce();
+});
+
 it("does not save a nonexistent branch", async () => {
 	adapter.authorize.mockResolvedValue({
 		fullName: "test/repo",

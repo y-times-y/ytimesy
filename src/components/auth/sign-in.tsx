@@ -40,6 +40,7 @@ import {
 } from "#/components/ui/input-group.tsx";
 import { useSignInContinuation } from "#/lib/auth/use-sign-in-continuation.ts";
 import { cn } from "#/lib/utils.ts";
+import { YtimesyBrand } from "#/features/auth/onboarding-shell";
 import { isAuthFormFieldInvalid, useAuthForm } from "./auth-form";
 import { LastUsedBadge } from "./last-login-method/last-used-badge";
 import { ProviderButtons, type SocialLayout } from "./provider-buttons";
@@ -132,6 +133,7 @@ export function SignIn({
 			<AuthPrompts view="signIn" />
 			<ReauthenticationNotice />
 			<CardHeader>
+				<YtimesyBrand />
 				<CardTitle className="text-xl font-semibold">
 					{localization.auth.signIn}
 				</CardTitle>

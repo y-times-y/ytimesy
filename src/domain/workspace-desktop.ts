@@ -1,4 +1,5 @@
 import { failureMessage, workspaceLooksGone } from "./failure-message";
+import { publicFailureMessage } from "./project-workspace";
 
 export const SHARED_DESKTOP_WIDTH = 1440;
 export const SHARED_DESKTOP_HEIGHT = 900;
@@ -19,7 +20,10 @@ export const START_HARNESS_BEFORE_DESKTOP =
 
 export function desktopStartFailureReason(cause: unknown): string {
 	const message = failureMessage(cause);
-	return workspaceLooksGone(message) ? START_HARNESS_BEFORE_DESKTOP : message;
+	if (workspaceLooksGone(message)) return START_HARNESS_BEFORE_DESKTOP;
+	return publicFailureMessage(
+		cause instanceof Error ? cause : new Error(message),
+	);
 }
 
 export function desktopFailedBecauseWorkspaceGone(cause: unknown): boolean {
@@ -34,8 +38,88 @@ export function desktopCanBeControlled(desktop: WorkspaceDesktop): boolean {
 	return desktop.status === "running" && Boolean(desktop.viewerUrl);
 }
 
+export function desktopInspectorShouldStart(input: {
+	readonly tabActive: boolean;
+	readonly projectId?: string;
+	readonly sessionId?: string;
+	readonly desktop: WorkspaceDesktop;
+	readonly busy: boolean;
+}) {
+	return Boolean(
+		input.tabActive &&
+			input.projectId &&
+			input.sessionId &&
+			!input.busy &&
+			input.desktop.status === "stopped",
+	);
+}
+
+export function desktopInspectorPrompt(input: {
+	readonly desktop: WorkspaceDesktop;
+	readonly projectId?: string;
+	readonly sessionId?: string;
+}) {
+	if (input.desktop.status === "failed") {
+		return {
+			title: "Desktop failed to start.",
+			description: input.desktop.reason,
+			actionLabel: "Retry desktop",
+		};
+	}
+	if (input.desktop.status === "starting") {
+		return {
+			title: "Starting desktop…",
+			description:
+				"This is the desktop the agent uses for QA. You watch and control the same screen.",
+			actionLabel: null,
+		};
+	}
+	if (!input.projectId) {
+		return {
+			title: "Shared desktop",
+			description: "Select a project to use the desktop.",
+			actionLabel: null,
+		};
+	}
+	if (!input.sessionId) {
+		return {
+			title: "Shared desktop",
+			description: "Connect an agent before opening the desktop.",
+			actionLabel: null,
+		};
+	}
+	if (input.desktop.status === "running") {
+		return {
+			title: "Desktop is running.",
+			description:
+				input.desktop.message ??
+				"You and the agent share this screen.",
+			actionLabel: null,
+		};
+	}
+	return {
+		title: "Starting desktop…",
+		description:
+			"This is the desktop the agent uses for QA. You watch and control the same screen.",
+		actionLabel: null,
+	};
+}
+
+export function desktopClientViewerUrl(input: {
+	readonly projectId: string;
+	readonly sessionId?: string;
+}) {
+	const params = new URLSearchParams({ projectId: input.projectId });
+	if (input.sessionId) params.set("sessionId", input.sessionId);
+	return `/api/desktop?${params}`;
+}
+
+export function desktopRemoteOrigin(hostname: string) {
+	return `https://${hostname.replace(/\/$/, "")}`;
+}
+
 export function desktopEmbedUrl(origin: string): string {
-	return `${origin.replace(/\/$/, "")}/vnc.html?autoconnect=1&resize=off&reconnect=1`;
+	return `${origin.replace(/\/$/, "")}/`;
 }
 
 export function desktopHostname(providerRef: string) {

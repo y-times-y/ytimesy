@@ -9,6 +9,7 @@ import {
 import { projectForOwner } from "./adapters/projects";
 import { repositoryDirectory } from "./adapters/repository-setup";
 import { requireUser } from "./auth/auth";
+import { DESKTOP_PATH, handleDesktopSocket } from "./desktop-ws";
 import { connectWorkspaceTerminal } from "./services/workspace-terminal";
 
 const TERMINAL_PATH = "/api/terminal";
@@ -18,13 +19,23 @@ export function attachTerminalUpgrade(httpServer: Server) {
 	const bind = () => {
 		if (attached.has(httpServer)) return;
 		attached.add(httpServer);
-		const wss = new WebSocketServer({ noServer: true });
+		const wss = new WebSocketServer({
+			noServer: true,
+			handleProtocols: (protocols) =>
+				protocols.has("binary") ? "binary" : false,
+		});
 		const existing = httpServer.listeners("upgrade").slice() as Array<
 			(request: IncomingMessage, socket: Duplex, head: Buffer) => void
 		>;
 		httpServer.removeAllListeners("upgrade");
 		httpServer.on("upgrade", (request, socket, head) => {
 			const url = new URL(request.url ?? "/", "http://localhost");
+			if (url.pathname === DESKTOP_PATH) {
+				wss.handleUpgrade(request, socket, head, (ws) => {
+					void handleDesktopSocket(ws, request, url);
+				});
+				return;
+			}
 			if (url.pathname !== TERMINAL_PATH) {
 				for (const listener of existing) listener(request, socket, head);
 				return;

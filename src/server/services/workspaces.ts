@@ -67,6 +67,13 @@ export function enqueueProjectWorkspace(
 	});
 }
 
+export function enqueueWorkspaceSnapshotRefresh(
+	workspaceId: string,
+	queue: WorkspaceJobQueue = postgresJobQueue,
+) {
+	return queue.enqueueRefresh?.(workspaceId).catch(() => null) ?? null;
+}
+
 export function retryProjectWorkspace(
 	userId: string,
 	workspaceId: string,

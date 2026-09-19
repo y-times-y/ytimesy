@@ -1,4 +1,11 @@
-export type SocialProviderId = "github" | "google";
+import {
+	offeredSocialProviders,
+	type SocialProviderId,
+} from "#/domain/identity-providers";
+
+export type { SocialProviderId };
+
+export { offeredSocialProviders };
 
 export function googleOAuthConfigured(config: {
 	GOOGLE_CLIENT_ID?: string;
@@ -7,11 +14,8 @@ export function googleOAuthConfigured(config: {
 	return Boolean(config.GOOGLE_CLIENT_ID && config.GOOGLE_CLIENT_SECRET);
 }
 
-export function configuredSocialProviders(config: {
-	GOOGLE_CLIENT_ID?: string;
-	GOOGLE_CLIENT_SECRET?: string;
-}): SocialProviderId[] {
-	return googleOAuthConfigured(config) ? ["google", "github"] : ["github"];
+export function configuredSocialProviders(): SocialProviderId[] {
+	return [...offeredSocialProviders];
 }
 
 export function authTrustedOrigins(appUrl: string) {

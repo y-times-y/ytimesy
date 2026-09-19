@@ -1,5 +1,6 @@
 import type { AgentProviderId } from "./agent-provider";
 import { isTurnRunning, type SessionTurnStatus } from "./session-item";
+import type { SidebarChatPrNeed } from "./sidebar-pr";
 
 export type SidebarChat = {
 	readonly id: string;
@@ -7,7 +8,101 @@ export type SidebarChat = {
 	readonly turnStatus?: SessionTurnStatus;
 	readonly listedModelId?: string | null;
 	readonly harnessId?: AgentProviderId | null;
+	readonly updatedAt?: string | null;
+	readonly workspaceId?: string | null;
+	readonly prUrl?: string | null;
+	readonly prNeed?: SidebarChatPrNeed | null;
 };
+
+export type SidebarChatAttention = "running" | "attention" | "idle";
+
+export const CHAT_SEEN_STORAGE_KEY = "ytimesy-chat-seen";
+
+export function compactRelativeAge(
+	from: string | null | undefined,
+	nowMs = Date.now(),
+) {
+	if (!from) return null;
+	const then = Date.parse(from);
+	if (!Number.isFinite(then)) return null;
+	const seconds = Math.max(0, Math.floor((nowMs - then) / 1000));
+	if (seconds < 45) return "now";
+	const minutes = Math.floor(seconds / 60);
+	if (minutes < 60) return `${minutes}m`;
+	const hours = Math.floor(minutes / 60);
+	if (hours < 24) return `${hours}h`;
+	const days = Math.floor(hours / 24);
+	if (days < 7) return `${days}d`;
+	const weeks = Math.floor(days / 7);
+	if (weeks < 5) return `${weeks}w`;
+	return `${Math.floor(days / 30)}mo`;
+}
+
+export function sidebarChatSeenKey(input: {
+	readonly id: string;
+	readonly turnStatus?: SessionTurnStatus;
+	readonly updatedAt?: string | null;
+}) {
+	return `${input.id}:${input.turnStatus ?? "idle"}:${input.updatedAt ?? ""}`;
+}
+
+export function parseSeenChatKeys(raw: string | null): readonly string[] {
+	if (!raw) return [];
+	try {
+		const parsed: unknown = JSON.parse(raw);
+		if (!Array.isArray(parsed)) return [];
+		return parsed.filter((key): key is string => typeof key === "string");
+	} catch {
+		return [];
+	}
+}
+
+export function seenChatStorageValue(keys: readonly string[]) {
+	return JSON.stringify([...new Set(keys)]);
+}
+
+export function sidebarChatAttention(input: {
+	readonly running: boolean;
+	readonly turnStatus?: SessionTurnStatus;
+	readonly selected: boolean;
+	readonly seen: boolean;
+}): SidebarChatAttention {
+	if (input.running) return "running";
+	if (input.selected || input.seen) return "idle";
+	if (input.turnStatus === "completed" || input.turnStatus === "failed") {
+		return "attention";
+	}
+	return "idle";
+}
+
+export function sidebarHasAttentionChat(input: {
+	readonly chats: readonly SidebarChat[];
+	readonly selectedChatId?: string;
+	readonly seenKeys: readonly string[];
+	readonly busyChatIds?: readonly string[];
+	readonly openTurnStatus?: SessionTurnStatus;
+	readonly openSideTurnStatus?: SessionTurnStatus;
+}): boolean {
+	const seen = new Set(input.seenKeys);
+	return input.chats.some((chat) => {
+		const running = sidebarChatIsRunning({
+			chatId: chat.id,
+			turnStatus: chat.turnStatus,
+			busyChatIds: input.busyChatIds ?? [],
+			openChatId: input.selectedChatId,
+			openTurnStatus: input.openTurnStatus,
+			openSideTurnStatus: input.openSideTurnStatus,
+		});
+		return (
+			sidebarChatAttention({
+				running,
+				turnStatus: chat.turnStatus,
+				selected: chat.id === input.selectedChatId,
+				seen: seen.has(sidebarChatSeenKey(chat)),
+			}) === "attention"
+		);
+	});
+}
 
 export function chatsListedInSidebar(input: {
 	projectSelected: boolean;
@@ -35,6 +130,41 @@ export function newChatIsActive(input: {
 }
 
 export const SIDEBAR_PINNED_STORAGE_KEY = "ytimesy-sidebar-pinned";
+export const SIDEBAR_PINNED_CHATS_KEY = "ytimesy-pinned-chats";
+export const SIDEBAR_COLLAPSED_PROJECTS_KEY = "ytimesy-sidebar-collapsed-projects";
+
+export function parseCollapsedProjectIds(raw: string | null): readonly string[] {
+	return parseSeenChatKeys(raw);
+}
+
+export function collapsedProjectStorageValue(ids: readonly string[]) {
+	return seenChatStorageValue(ids);
+}
+
+export function projectFolderIsExpanded(input: {
+	readonly projectId: string;
+	readonly selectedProjectId?: string;
+	readonly collapsedIds: readonly string[];
+}): boolean {
+	if (input.projectId !== input.selectedProjectId) return false;
+	return !input.collapsedIds.includes(input.projectId);
+}
+
+export function toggleCollapsedProjectIds(
+	collapsedIds: readonly string[],
+	projectId: string,
+): string[] {
+	return collapsedIds.includes(projectId)
+		? collapsedIds.filter((id) => id !== projectId)
+		: [...collapsedIds, projectId];
+}
+
+export function withProjectExpanded(
+	collapsedIds: readonly string[],
+	projectId: string,
+): string[] {
+	return collapsedIds.filter((id) => id !== projectId);
+}
 
 export function sidebarIsPinnedInStorage(value: string | null): boolean {
 	return value === "1";
@@ -42,6 +172,34 @@ export function sidebarIsPinnedInStorage(value: string | null): boolean {
 
 export function sidebarPinnedStorageValue(pinned: boolean): "1" | "0" {
 	return pinned ? "1" : "0";
+}
+
+export function parsePinnedChatIds(raw: string | null): readonly string[] {
+	return parseSeenChatKeys(raw);
+}
+
+export function pinnedChatStorageValue(ids: readonly string[]) {
+	return seenChatStorageValue(ids);
+}
+
+export function togglePinnedChatIds(
+	pinnedIds: readonly string[],
+	chatId: string,
+): string[] {
+	return pinnedIds.includes(chatId)
+		? pinnedIds.filter((id) => id !== chatId)
+		: [...pinnedIds, chatId];
+}
+
+export function chatsWithPinnedFirst(
+	chats: readonly SidebarChat[],
+	pinnedIds: readonly string[],
+): SidebarChat[] {
+	const pinned = new Set(pinnedIds);
+	return [
+		...chats.filter((chat) => pinned.has(chat.id)),
+		...chats.filter((chat) => !pinned.has(chat.id)),
+	];
 }
 
 export function selectedChatIdAfterDelete(input: {

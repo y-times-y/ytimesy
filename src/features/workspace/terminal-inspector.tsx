@@ -16,15 +16,14 @@ export function TerminalInspector({
 	const containerRef = useRef<HTMLDivElement>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [connected, setConnected] = useState(false);
-	const [connectGeneration, setConnectGeneration] = useState(0);
+	const [retryGeneration, setRetryGeneration] = useState(0);
 	const prompt = terminalInspectorPrompt({ projectId, sessionId });
 	const shouldAttach = terminalInspectorShouldAttach({
 		tabActive: active,
 		projectId,
 		sessionId,
-		connectRequested: connectGeneration > 0,
 	});
-	const attachAttempt = shouldAttach ? connectGeneration : 0;
+	const attachAttempt = shouldAttach ? retryGeneration + 1 : 0;
 
 	useEffect(() => {
 		if (!attachAttempt || !containerRef.current || !projectId || !sessionId) {
@@ -140,15 +139,6 @@ export function TerminalInspector({
 			<section className="inspector-empty" aria-live="polite">
 				<h2>{prompt.title}</h2>
 				<p>{prompt.description}</p>
-				{prompt.actionLabel && active ? (
-					<button
-						type="button"
-						className="desktop-start"
-						onClick={() => setConnectGeneration((generation) => generation + 1)}
-					>
-						{error ? "Retry terminal" : prompt.actionLabel}
-					</button>
-				) : null}
 				{error ? (
 					<p className="terminal-inspector-error" role="alert">
 						{error}
@@ -168,12 +158,14 @@ export function TerminalInspector({
 					<button
 						type="button"
 						className="desktop-start"
-						onClick={() => setConnectGeneration((generation) => generation + 1)}
+						onClick={() => setRetryGeneration((generation) => generation + 1)}
 					>
 						Retry terminal
 					</button>
 				</>
-			) : null}
+			) : connected ? null : (
+				<p className="desktop-inspector-status">Starting terminal…</p>
+			)}
 			<div
 				ref={containerRef}
 				className="terminal-inspector-frame"

@@ -3,6 +3,11 @@ import {
 	projectCheckoutFromFullName,
 	projectCheckoutPath,
 } from "../../domain/project-checkout";
+import { projectFolderName } from "../../domain/projects";
+import {
+	sessionCloneBranch,
+	sessionWorkingBranch,
+} from "../../domain/session-branch";
 import {
 	needsMachineCreate,
 	needsMachineRecover,
@@ -17,15 +22,27 @@ import {
 	cloneSelectedProjectScript,
 	PROJECT_TOKEN_PATH,
 } from "../adapters/freestyle/clone-project";
+import {
+	authorizedRepository,
+	repositoryBranchSha,
+} from "../adapters/github";
+import { resolveGithubAppBot } from "../adapters/github/bot-identity";
 import { githubInstallationAccessToken } from "../adapters/github/installation-token";
 import { projectForOwner } from "../adapters/projects";
-import { installArgv, listLockfilesArgv } from "../adapters/repository-setup";
+import { githubAccessToken } from "../auth/github-connection";
+import {
+	githubBotCommitHookPath,
+	githubBotCommitMsgHook,
+	installArgv,
+	listLockfilesArgv,
+} from "../adapters/repository-setup";
 import type { WorkspaceRuntime } from "../adapters/workspace-runtime";
 import {
 	claimWorkspaceForJob,
 	recordWorkspaceEvent,
 	saveProviderRef,
 	saveTemplateSnapshot,
+	saveTemplateSource,
 	saveWorkspaceStatus,
 	workspaceById,
 } from "../adapters/workspaces";
@@ -50,9 +67,21 @@ export async function runWorkspacePreparation(
 	try {
 		const project = await projectForOwner(userId, claimed.projectId);
 		if (!project) throw new Error("Project is not available.");
+		const defaultBranch = await projectDefaultBranch(userId, project);
 		const checkout = projectCheckoutFromFullName({
 			fullName: project.fullName,
-			branch: project.branch,
+			branch: sessionCloneBranch({
+				selectedBranch: project.branch,
+				defaultBranch,
+				title: projectFolderName(project.fullName),
+				id: String(project.repositoryId),
+			}),
+			workingBranch: sessionWorkingBranch({
+				selectedBranch: project.branch,
+				defaultBranch,
+				title: projectFolderName(project.fullName),
+				id: String(project.repositoryId),
+			}),
 			installationId: project.installationId,
 		});
 		if (!checkout) throw new Error("Repository name is missing.");
@@ -73,16 +102,32 @@ export async function runWorkspacePreparation(
 					owner: checkout.owner,
 					name: checkout.name,
 					branch: checkout.branch,
+					workingBranch: checkout.workingBranch,
 					destination: directory,
 				}),
 			],
 			{},
 			10 * 60 * 1000,
 		);
+		const bot = await resolveGithubAppBot();
+		if (bot) {
+			await runtime.writeTextFile(
+				providerRef,
+				githubBotCommitHookPath(directory),
+				githubBotCommitMsgHook(bot),
+			);
+			await runCommand(
+				runtime,
+				providerRef,
+				["chmod", "+x", githubBotCommitHookPath(directory)],
+				{},
+				15_000,
+			);
+		}
 		await recordWorkspaceEvent(
 			userId,
 			workspaceId,
-			`Cloned ${project.fullName} at ${project.branch}.`,
+			`Cloned ${project.fullName} at ${checkout.workingBranch}.`,
 		);
 		await saveWorkspaceStatus(workspaceId, "installing");
 		const listing = await runCommand(
@@ -109,6 +154,17 @@ export async function runWorkspacePreparation(
 					projectEnvironmentSnapshotSlug(workspaceId),
 				);
 				const sealed = await saveTemplateSnapshot(workspaceId, snapshotId);
+				try {
+					const sourceSha = await repositoryBranchSha(
+						await githubAccessToken(userId),
+						project.fullName,
+						checkout.branch,
+					);
+					if (sourceSha && checkout.branch)
+						await saveTemplateSource(workspaceId, checkout.branch, sourceSha);
+				} catch {
+					// Snapshot is already sealed; source SHA can be recorded on refresh.
+				}
 				await runtime.pause?.(providerRef);
 				await recordWorkspaceEvent(
 					userId,
@@ -132,6 +188,22 @@ export async function runWorkspacePreparation(
 		await saveWorkspaceStatus(workspaceId, "failed", message);
 		await recordWorkspaceEvent(userId, workspaceId, message);
 		throw error;
+	}
+}
+
+async function projectDefaultBranch(
+	userId: string,
+	project: { installationId: number; repositoryId: number; branch: string },
+) {
+	try {
+		const repository = await authorizedRepository(
+			await githubAccessToken(userId),
+			project.installationId,
+			project.repositoryId,
+		);
+		return repository.defaultBranch;
+	} catch {
+		return project.branch;
 	}
 }
 

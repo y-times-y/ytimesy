@@ -3,11 +3,13 @@ import {
 	blocksDuplicateProvision,
 	branchSwitchBlockedReason,
 	canStartPrepare,
+	workspacePrepareShowsStatus,
 	codexConnectBlockedReason,
 	harnessConnectBlockedReason,
 	needsMachineCreate,
 	needsMachineRecover,
 	publicFailureMessage,
+	redactInfrastructure,
 	redactSecrets,
 	workspaceEnvironmentIsReady,
 	workspaceSessionMachineRef,
@@ -29,6 +31,16 @@ it("starts prepare only from absent, queued, or failed workspaces", () => {
 	expect(canStartPrepare("failed")).toBe(true);
 	expect(canStartPrepare("ready")).toBe(false);
 	expect(canStartPrepare("provisioning")).toBe(false);
+});
+
+it("keeps first-time prepare off the composer until it fails", () => {
+	expect(workspacePrepareShowsStatus("queued")).toBe(false);
+	expect(workspacePrepareShowsStatus("provisioning")).toBe(false);
+	expect(workspacePrepareShowsStatus("cloning")).toBe(false);
+	expect(workspacePrepareShowsStatus("installing")).toBe(false);
+	expect(workspacePrepareShowsStatus("ready")).toBe(false);
+	expect(workspacePrepareShowsStatus(undefined)).toBe(false);
+	expect(workspacePrepareShowsStatus("failed")).toBe(true);
 });
 
 it("blocks a second machine while work is in flight or ready", () => {
@@ -60,17 +72,24 @@ it("redacts tokens from failure messages and logs", () => {
 	expect(workspaceSlug("abc")).toBe("ytimesy-ws-abc");
 });
 
-it("explains the Freestyle VM cap without treating pause as a free slot", () => {
+it("explains the workspace cap without treating pause as a free slot", () => {
 	expect(
 		publicFailureMessage(
 			new Error(
 				"This plan has a limit of 5 VMs, and you are at 5. To create another VM, delete existing ones or upgrade your plan.",
 			),
 		),
-	).toMatch(/Pausing a VM does not free a slot/);
+	).toMatch(/Pausing does not free a slot/);
+	expect(
+		publicFailureMessage(
+			new Error(
+				"This plan has a limit of 5 VMs, and you are at 5. To create another VM, delete existing ones or upgrade your plan.",
+			),
+		),
+	).not.toMatch(/Freestyle|style\.dev|noVNC/i);
 });
 
-it("explains a used Freestyle vCPU-hour allowance without asking to add a card", () => {
+it("explains a used compute allowance without naming the host", () => {
 	expect(
 		publicFailureMessage(
 			new Error(
@@ -78,8 +97,21 @@ it("explains a used Freestyle vCPU-hour allowance without asking to add a card",
 			),
 		),
 	).toBe(
-		"This Freestyle plan has used its vCPU-hour allowance. Wait for the allowance to reset or upgrade the plan, then resume the VM.",
+		"This workspace plan has used its compute allowance. Wait for the allowance to reset or upgrade the plan, then try again.",
 	);
+});
+
+it("does not name the workspace host in public errors", () => {
+	expect(
+		redactInfrastructure(
+			"noVNC at https://ytimesy-desk-abc.style.dev/vnc.html on freestyle-vm",
+		),
+	).not.toMatch(/Freestyle|style\.dev|noVNC|freestyle-vm|vnc\.html/i);
+	expect(
+		publicFailureMessage(
+			new Error("Desktop failed on https://ytimesy-desk-abc.style.dev/vnc.html"),
+		),
+	).not.toMatch(/style\.dev|vnc\.html|noVNC|Freestyle/i);
 });
 
 it("only exposes a Codex session machine after the workspace is ready", () => {

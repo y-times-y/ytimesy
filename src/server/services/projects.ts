@@ -1,13 +1,35 @@
 import { Effect } from "effect";
+import { addedProjectBranch } from "../../domain/add-project";
+import { WorkspaceId } from "../../domain/ids";
 import { branchSwitchBlockedReason } from "../../domain/project-workspace";
-import type { ProjectSelection } from "../../domain/projects";
-import { authorizedRepository, githubClient } from "../adapters/github";
-import { projectForRepository, saveProject } from "../adapters/projects";
+import {
+	projectFolderName,
+	projectMachineRefsToDestroy,
+	type ProjectSelection,
+} from "../../domain/projects";
+import {
+	isGeneratedSessionBranch,
+	sessionBranchChangeRestartsWorkspace,
+	sessionWorkingBranch,
+} from "../../domain/session-branch";
+import {
+	authorizedRepository,
+	createAuthorizedRepository,
+	githubClient,
+} from "../adapters/github";
+import { listProjectProviderRefs } from "../adapters/agent-sessions";
+import {
+	deleteProjectForOwner,
+	projectForOwner,
+	projectForRepository,
+	saveProject,
+} from "../adapters/projects";
 import {
 	saveWorkspaceStatus,
 	workspaceForProject,
 } from "../adapters/workspaces";
 import { githubAccessToken } from "../auth/github-connection";
+import type { WorkspaceMachines } from "./workspace-machines";
 import { enqueueProjectWorkspace } from "./workspaces";
 
 const branchChangedMessage = "Branch changed. Retry to prepare this branch.";
@@ -31,14 +53,22 @@ export function connectProject(
 				selection.repositoryId,
 			),
 		);
-		const [owner, repo] = repository.fullName.split("/");
-		yield* Effect.tryPromise(() =>
-			githubClient(token).repos.getBranch({
-				owner,
-				repo,
-				branch: selection.branch,
-			}),
-		);
+		const storedBranch = sessionWorkingBranch({
+			selectedBranch: selection.branch,
+			defaultBranch: repository.defaultBranch,
+			title: projectFolderName(repository.fullName),
+			id: String(repository.repositoryId),
+		});
+		if (!isGeneratedSessionBranch(storedBranch)) {
+			const [owner, repo] = repository.fullName.split("/");
+			yield* Effect.tryPromise(() =>
+				githubClient(token).repos.getBranch({
+					owner,
+					repo,
+					branch: storedBranch,
+				}),
+			);
+		}
 		let restartWorkspaceId: string | null = null;
 		yield* Effect.tryPromise(async () => {
 			const existing = await projectForRepository(
@@ -49,11 +79,20 @@ export function connectProject(
 			const workspace = await workspaceForProject(userId, existing.id);
 			const blocked = branchSwitchBlockedReason(workspace?.status);
 			if (blocked) throw new Response(blocked, { status: 409 });
-			if (workspace?.status === "ready" && existing.branch !== selection.branch)
+			if (
+				workspace?.status === "ready" &&
+				sessionBranchChangeRestartsWorkspace({
+					from: existing.branch,
+					to: storedBranch,
+					defaultBranch: repository.defaultBranch,
+					title: projectFolderName(repository.fullName),
+					id: String(repository.repositoryId),
+				})
+			)
 				restartWorkspaceId = workspace.id;
 		});
 		const project = yield* Effect.tryPromise(() =>
-			saveProject(userId, repository, selection.branch),
+			saveProject(userId, repository, storedBranch),
 		);
 		const workspaceToRestart = restartWorkspaceId;
 		if (workspaceToRestart)
@@ -63,4 +102,55 @@ export function connectProject(
 		yield* enqueue(userId, project.id);
 		return project;
 	});
+}
+
+export function createScratchProject(
+	userId: string,
+	name: string,
+	enqueue = enqueueProjectWorkspace,
+) {
+	return Effect.gen(function* () {
+		const token = yield* Effect.tryPromise(() => githubAccessToken(userId));
+		const repository = yield* Effect.tryPromise(() =>
+			createAuthorizedRepository(token, name),
+		);
+		const project = yield* Effect.tryPromise(() =>
+			saveProject(userId, repository, addedProjectBranch(repository)),
+		);
+		yield* enqueue(userId, project.id);
+		return project;
+	});
+}
+
+/**
+ * Drops this ytimesy project and its template/session VMs. The GitHub
+ * repository stays; the same repo can be added again from the picker.
+ * Freestyle destroy failures are ignored so the sidebar can clear; leftover
+ * machines are reclaimed by the idle timeout.
+ */
+export async function removeProjectMachine(
+	machines: Pick<WorkspaceMachines, "destroy">,
+	input: {
+		readonly userId: string;
+		readonly projectId: string;
+	},
+) {
+	const project = await projectForOwner(input.userId, input.projectId);
+	if (!project) throw new Error("Project is not available.");
+	const workspace = await workspaceForProject(input.userId, input.projectId);
+	const refs = projectMachineRefsToDestroy({
+		sessionProviderRefs: await listProjectProviderRefs(
+			input.userId,
+			input.projectId,
+		),
+		templateProviderRef: workspace?.providerRef,
+	});
+	for (const ref of refs) {
+		try {
+			await machines.destroy(WorkspaceId(ref));
+		} catch {
+			// Idle timeout reclaims machines that Freestyle did not delete.
+		}
+	}
+	await deleteProjectForOwner(input.userId, input.projectId);
 }

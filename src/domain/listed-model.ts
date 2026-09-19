@@ -2,7 +2,15 @@ export type ListedModel = {
 	readonly id: string;
 	readonly label: string;
 	readonly notice?: string;
+	readonly supportsFastMode?: boolean;
 };
+
+export function listedModelSupportsFastMode(row: {
+	readonly supportsFastMode?: unknown;
+	readonly fast?: unknown;
+}): boolean {
+	return row.supportsFastMode === true || row.fast === true;
+}
 
 export type ListedModelPreference = {
 	readonly lastUsedId?: string;
@@ -130,4 +138,26 @@ export function submittedListedModelId(
 		return trimmed;
 	}
 	return preferredListedModelId(models, options);
+}
+
+export function composerModelIdForCatalog(input: {
+	readonly requestedId: string;
+	readonly catalog: readonly { readonly id: string }[];
+	readonly lastUsedForCatalog?: string;
+	readonly excludedIds?: readonly string[];
+}): string {
+	const excluded = new Set(input.excludedIds ?? []);
+	const listed = input.catalog.filter(
+		(model) => model.id && !excluded.has(model.id),
+	);
+	const requested = input.requestedId.trim();
+	if (requested && listed.some((model) => model.id === requested)) {
+		return requested;
+	}
+	const remembered = input.lastUsedForCatalog?.trim() ?? "";
+	if (remembered && listed.some((model) => model.id === remembered)) {
+		return remembered;
+	}
+	if (listed.length === 0) return "";
+	return preferredListedModelId(listed, { excludedIds: input.excludedIds });
 }
