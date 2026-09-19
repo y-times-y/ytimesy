@@ -1,5 +1,6 @@
 import { Effect } from "effect";
 import { copiedAgentMachineRef } from "../../domain/agent-session";
+import { githubAppBotFromEnv } from "../../domain/github-bot";
 import { projectCheckoutFromFullName } from "../../domain/project-checkout";
 import { publicFailureMessage } from "../../domain/project-workspace";
 import {
@@ -24,6 +25,7 @@ import { projectForOwner } from "../adapters/projects";
 import {
 	checkoutBranchArgv,
 	commitAllArgv,
+	configureCommitAuthorArgv,
 	repositoryDirectory,
 } from "../adapters/repository-setup";
 import type { WorkspaceRuntime } from "../adapters/workspace-runtime";
@@ -96,6 +98,7 @@ export function publishProject(
 		const author = publicationCommitAuthor({
 			name: input.authorName,
 			email: input.authorEmail,
+			bot: githubAppBotFromEnv(),
 		});
 		const head = publicationHeadBranch({
 			selectedBranch: project.branch,
@@ -106,6 +109,13 @@ export function publishProject(
 			runtime.recover(providerRef).catch((error) => {
 				throw hostFailure(error, "Workspace is not available.");
 			}),
+		);
+		yield* runGit(
+			runtime,
+			providerRef,
+			configureCommitAuthorArgv(directory, author),
+			{},
+			"Could not set the commit author.",
 		);
 		const committed = yield* runGit(
 			runtime,

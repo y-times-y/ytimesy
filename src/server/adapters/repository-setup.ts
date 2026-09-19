@@ -34,6 +34,20 @@ export function githubPushEnv(token: string) {
 	return githubCloneEnv(token);
 }
 
+export function configureCommitAuthorArgv(
+	directory: string,
+	author: { readonly name: string; readonly email: string },
+) {
+	return [
+		"bash",
+		"-lc",
+		[
+			`git -C ${shellSingleQuote(directory)} config user.name ${shellSingleQuote(author.name)}`,
+			`git -C ${shellSingleQuote(directory)} config user.email ${shellSingleQuote(author.email)}`,
+		].join(" && "),
+	];
+}
+
 export function commitAllArgv(
 	directory: string,
 	message: string,

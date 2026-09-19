@@ -47,7 +47,9 @@ export function publicationSessionBlockedReason(
 export function publicationCommitAuthor(user: {
 	readonly name?: string | null;
 	readonly email?: string | null;
+	readonly bot?: PublicationAuthor | null;
 }): PublicationAuthor {
+	if (user.bot) return user.bot;
 	const email = user.email?.trim() || "noreply@ytimesy.com";
 	const name = user.name?.trim() || email.split("@")[0] || "ytimesy";
 	return { name, email };

@@ -3,6 +3,7 @@ import {
 	checkoutBranchArgv,
 	cloneRepositoryArgv,
 	commitAllArgv,
+	configureCommitAuthorArgv,
 	githubCloneEnv,
 	githubPushEnv,
 	installArgv,
@@ -55,4 +56,11 @@ it("keeps the GitHub token out of commit and push argv", () => {
 	expect(
 		checkoutBranchArgv("/home/ubuntu/app", "ytimesy-abc").at(-1),
 	).toContain("git checkout -B");
+	const author = configureCommitAuthorArgv("/home/ubuntu/app", {
+		name: "ytimesy-cloud[bot]",
+		email: "4932652+ytimesy-cloud[bot]@users.noreply.github.com",
+	});
+	expect(author.join(" ")).toContain("config user.name");
+	expect(author.join(" ")).toContain("ytimesy-cloud[bot]");
+	expect(author.join(" ")).not.toMatch(/Co-authored-by/i);
 });
