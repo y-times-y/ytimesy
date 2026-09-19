@@ -1,8 +1,11 @@
 import { expect, it } from "vitest";
 import {
+	commitCoAuthorTrailer,
 	publicationBlockedReason,
+	publicationCoAuthor,
 	publicationCommitAuthor,
 	publicationHeadBranch,
+	publicationHumanAuthor,
 	publicationSessionBlockedReason,
 	publicationWorkspaceBlockedReason,
 	workspacePublicationBranch,
@@ -83,20 +86,30 @@ it("opens a workspace branch when the selected branch is the default", () => {
 	).toBe("feature");
 });
 
-it("names the commit after the GitHub App bot when one is configured", () => {
+it("names the commit after the GitHub App bot and keeps the user as co-author", () => {
+	const bot = {
+		name: "ytimesy-cloud[bot]",
+		email: "328807657+ytimesy-cloud[bot]@users.noreply.github.com",
+	};
 	expect(
 		publicationCommitAuthor({
 			name: "Het",
 			email: "het@example.test",
-			bot: {
-				name: "ytimesy-cloud[bot]",
-				email: "4932652+ytimesy-cloud[bot]@users.noreply.github.com",
-			},
+			bot,
 		}),
-	).toEqual({
-		name: "ytimesy-cloud[bot]",
-		email: "4932652+ytimesy-cloud[bot]@users.noreply.github.com",
-	});
+	).toEqual(bot);
+	expect(
+		publicationCoAuthor({
+			author: bot,
+			human: publicationHumanAuthor({
+				name: "Het",
+				email: "het@example.test",
+			}),
+		}),
+	).toEqual({ name: "Het", email: "het@example.test" });
+	expect(
+		commitCoAuthorTrailer({ name: "Het", email: "het@example.test" }),
+	).toBe("Co-authored-by: Het <het@example.test>");
 	expect(
 		publicationCommitAuthor({ name: "Het", email: "het@example.test" }),
 	).toEqual({ name: "Het", email: "het@example.test" });

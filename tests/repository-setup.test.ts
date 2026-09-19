@@ -58,9 +58,20 @@ it("keeps the GitHub token out of commit and push argv", () => {
 	).toContain("git checkout -B");
 	const author = configureCommitAuthorArgv("/home/ubuntu/app", {
 		name: "ytimesy-cloud[bot]",
-		email: "4932652+ytimesy-cloud[bot]@users.noreply.github.com",
+		email: "328807657+ytimesy-cloud[bot]@users.noreply.github.com",
 	});
 	expect(author.join(" ")).toContain("config user.name");
 	expect(author.join(" ")).toContain("ytimesy-cloud[bot]");
-	expect(author.join(" ")).not.toMatch(/Co-authored-by/i);
+	const withHuman = commitAllArgv(
+		"/home/ubuntu/app",
+		"Ship feature",
+		{
+			name: "ytimesy-cloud[bot]",
+			email: "328807657+ytimesy-cloud[bot]@users.noreply.github.com",
+		},
+		{ name: "Alice", email: "alice@example.test" },
+	);
+	expect(withHuman.join(" ")).toContain(
+		"Co-authored-by: Alice <alice@example.test>",
+	);
 });

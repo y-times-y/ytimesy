@@ -4,26 +4,26 @@ export type GithubAppBotIdentity = {
 };
 
 export function githubAppBotIdentity(app: {
-	readonly id: string;
+	readonly userId: string;
 	readonly slug: string;
 }): GithubAppBotIdentity | null {
-	const id = app.id.trim();
+	const userId = app.userId.trim();
 	const slug = app.slug.trim();
-	if (!/^\d+$/.test(id) || !/^[a-z0-9-]+$/.test(slug)) return null;
+	if (!/^\d+$/.test(userId) || !/^[a-z0-9-]+$/.test(slug)) return null;
 	return {
 		name: `${slug}[bot]`,
-		email: `${id}+${slug}[bot]@users.noreply.github.com`,
+		email: `${userId}+${slug}[bot]@users.noreply.github.com`,
 	};
 }
 
 export function githubAppBotFromEnv(
 	env: {
-		readonly GITHUB_APP_ID?: string;
+		readonly GITHUB_APP_BOT_USER_ID?: string;
 		readonly GITHUB_APP_SLUG?: string;
 	} = process.env,
 ) {
 	return githubAppBotIdentity({
-		id: env.GITHUB_APP_ID ?? "",
+		userId: env.GITHUB_APP_BOT_USER_ID ?? "",
 		slug: env.GITHUB_APP_SLUG ?? "",
 	});
 }

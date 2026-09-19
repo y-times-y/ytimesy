@@ -126,7 +126,7 @@ it("does not create a pull request when the branch is not ahead", async () => {
 });
 
 it("commits and pushes from the checkout before opening a draft pull request", async () => {
-	vi.stubEnv("GITHUB_APP_ID", "4932652");
+	vi.stubEnv("GITHUB_APP_BOT_USER_ID", "328807657");
 	vi.stubEnv("GITHUB_APP_SLUG", "ytimesy-cloud");
 	const runtime = await readyRuntime();
 	adapter.ahead.mockResolvedValue(2);
@@ -155,14 +155,16 @@ it("commits and pushes from the checkout before opening a draft pull request", a
 	).toBe(true);
 	expect(
 		runtime.commands.some((command) =>
-			command.argv.join(" ").includes('user.name=\'ytimesy-cloud[bot]\''),
+			command.argv.join(" ").includes("user.name='ytimesy-cloud[bot]'"),
 		),
 	).toBe(true);
 	expect(
 		runtime.commands.some((command) =>
-			command.argv.join(" ").includes("Co-authored-by"),
+			command.argv
+				.join(" ")
+				.includes("Co-authored-by: Alice <alice@example.test>"),
 		),
-	).toBe(false);
+	).toBe(true);
 	vi.unstubAllEnvs();
 	expect(
 		runtime.commands.some((command) =>
