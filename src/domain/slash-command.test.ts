@@ -12,7 +12,6 @@ const connected = composerSlashCommands({
 	canSend: true,
 	hasLastUserMessage: true,
 	hasModels: true,
-	publicationReady: false,
 });
 
 describe("slash commands", () => {
@@ -21,12 +20,6 @@ describe("slash commands", () => {
 			query: "side",
 			argument: "why did this fail",
 		});
-	});
-
-	it("keeps /pr unavailable until publication exists", () => {
-		const pr = connected.find((command) => command.id === "pr");
-		expect(pr?.availability).toBe("unavailable");
-		expect(pr?.unavailableReason).toMatch(/GitHub publication/i);
 	});
 
 	it("filters commands from the first token", () => {
@@ -48,7 +41,6 @@ describe("slash commands", () => {
 			canSend: false,
 			hasLastUserMessage: false,
 			hasModels: false,
-			publicationReady: false,
 		});
 		expect(
 			unsigned.find((command) => command.id === "side")?.unavailableReason,

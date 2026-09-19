@@ -3,11 +3,11 @@ import { copiedAgentMachineRef } from "#/domain/agent-session";
 import { WorkspaceId } from "#/domain/ids";
 import { workspaceEnvironmentIsReady } from "#/domain/project-workspace";
 import {
-	desktopEmbedUrl,
+	desktopClientViewerUrl,
 	desktopHostname,
 	desktopPortIsListening,
+	desktopRemoteOrigin,
 	desktopStartFailureReason,
-	desktopViewerUrlForMachine,
 	START_HARNESS_BEFORE_DESKTOP,
 	type WorkspaceDesktop,
 } from "#/domain/workspace-desktop";
@@ -16,6 +16,7 @@ import {
 	desktopWallpaperBase64,
 } from "#/server/adapters/freestyle/desktop-wallpaper";
 import {
+	ENSURE_WORKSPACE_DESKTOP,
 	PROBE_WORKSPACE_DESKTOP,
 	START_WORKSPACE_DESKTOP,
 } from "#/server/adapters/freestyle/start-desktop";
@@ -57,20 +58,21 @@ export function readWorkspaceDesktop(
 ): Effect.Effect<WorkspaceDesktop> {
 	return Effect.gen(function* () {
 		const key = scopeKey(scope);
-		const cached = desktopFor(key);
+		const cached = clientFacingDesktop(desktopFor(key), scope);
 		if (cached.status === "running" && cached.viewerUrl) return cached;
 		const recovered = yield* recoverRunningDesktop(machines, scope);
 		if (recovered) {
 			desktops.set(key, recovered);
-			return recovered;
+			return clientFacingDesktop(recovered, scope);
 		}
 		return cached;
 	});
 }
 
 /**
- * Writes the ytimesy wallpaper, starts the shared X desktop, and maps noVNC.
- * Chrome install continues in the background so Connect is not blocked.
+ * Writes the ytimesy wallpaper, starts the shared X desktop, and maps the
+ * display through a same-origin viewer. Chrome install continues in the
+ * background so Connect is not blocked.
  */
 export function startWorkspaceDesktop(
 	machines: WorkspaceMachines,
@@ -146,9 +148,12 @@ export function startWorkspaceDesktop(
 		if (started.exitCode !== 0) {
 			const failed: WorkspaceDesktop = {
 				status: "failed",
-				reason:
-					(started.stderr || started.stdout).trim() ||
-					"Desktop failed to start.",
+				reason: desktopStartFailureReason(
+					new Error(
+						(started.stderr || started.stdout).trim() ||
+							"Desktop failed to start.",
+					),
+				),
 			};
 			desktops.set(key, failed);
 			return failed;
@@ -162,23 +167,24 @@ export function startWorkspaceDesktop(
 				),
 			),
 		);
-		const running: WorkspaceDesktop =
+		rememberDesktopRemote(
+			key,
 			exposed._tag === "Right"
-				? {
-						status: "running",
-						viewerUrl: desktopEmbedUrl(exposed.right),
-						display: ":0",
-						message: "You and the agent share this desktop.",
-					}
-				: {
-						status: "running",
-						viewerUrl: desktopViewerUrlForMachine(providerRef),
-						display: ":0",
-						message:
-							exposed.left instanceof Error
-								? `Desktop is on display :0. Browser mapping reused the existing host: ${exposed.left.message}`
-								: "Desktop is on display :0. Browser mapping reused the existing host.",
-					};
+				? exposed.right
+				: desktopRemoteOrigin(desktopHostname(providerRef)),
+		);
+		const running = clientFacingDesktop(
+			{
+				status: "running",
+				viewerUrl: desktopClientViewerUrl({
+					projectId: scope.projectId,
+					sessionId: scope.sessionId,
+				}),
+				display: ":0",
+				message: "You and the agent share this desktop.",
+			},
+			scope,
+		);
 		desktops.set(key, running);
 		return running;
 	}).pipe(
@@ -211,10 +217,32 @@ export async function desktopFromRunningGuest(
 	if (!desktopPortIsListening(`${probe.stdout}\n${probe.stderr}`)) return null;
 	return {
 		status: "running",
-		viewerUrl: desktopViewerUrlForMachine(providerRef),
+		viewerUrl: null,
 		display: ":0",
 		message: "You and the agent share this desktop.",
 	};
+}
+
+export async function resolveDesktopRemote(
+	scope: DesktopScope,
+): Promise<string | null> {
+	const cached = remotes.get(scopeKey(scope));
+	if (cached) return cached;
+	if (!scope.projectId) return null;
+	const workspace = await readyWorkspaceForOwner(scope.userId, scope.projectId);
+	const peeked = await peekAgentSessionMachine({
+		userId: scope.userId,
+		projectId: scope.projectId,
+		sessionId: scope.sessionId,
+	});
+	const providerRef = copiedAgentMachineRef({
+		sessionProviderRef: peeked.providerRef,
+		templateProviderRef: workspace?.providerRef ?? null,
+	});
+	if (!providerRef) return null;
+	const origin = desktopRemoteOrigin(desktopHostname(providerRef));
+	rememberDesktopRemote(scopeKey(scope), origin);
+	return origin;
 }
 
 function recoverRunningDesktop(
@@ -238,13 +266,23 @@ function recoverRunningDesktop(
 			templateProviderRef: workspace?.providerRef ?? null,
 		});
 		if (!providerRef) return null;
-		return yield* Effect.tryPromise(() =>
+		const recovered = yield* Effect.tryPromise(() =>
 			desktopFromRunningGuest(machines, providerRef),
 		);
+		if (!recovered) return null;
+		rememberDesktopRemote(
+			scopeKey(scope),
+			desktopRemoteOrigin(desktopHostname(providerRef)),
+		);
+		void machines
+			.exec(WorkspaceId(providerRef), ENSURE_WORKSPACE_DESKTOP, 120_000)
+			.catch(() => undefined);
+		return clientFacingDesktop(recovered, scope);
 	}).pipe(Effect.catchAll(() => Effect.succeed(null)));
 }
 
 const desktops = new Map<string, WorkspaceDesktop>();
+const remotes = new Map<string, string>();
 
 function scopeKey(scope: DesktopScope) {
 	return `${scope.userId}:${scope.projectId ?? ""}:${scope.sessionId ?? ""}`;
@@ -252,4 +290,25 @@ function scopeKey(scope: DesktopScope) {
 
 function desktopFor(key: string): WorkspaceDesktop {
 	return desktops.get(key) ?? { status: "stopped" };
+}
+
+function rememberDesktopRemote(key: string, origin: string) {
+	remotes.set(key, origin.replace(/\/$/, ""));
+}
+
+function clientFacingDesktop(
+	desktop: WorkspaceDesktop,
+	scope: DesktopScope,
+): WorkspaceDesktop {
+	if (desktop.status !== "running") return desktop;
+	return {
+		...desktop,
+		viewerUrl: scope.projectId
+			? desktopClientViewerUrl({
+					projectId: scope.projectId,
+					sessionId: scope.sessionId,
+				})
+			: null,
+		message: "You and the agent share this desktop.",
+	};
 }

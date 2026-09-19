@@ -131,6 +131,8 @@ describe("agent session names", () => {
 				turnStatus: "idle",
 				listedModelId: null,
 				harnessId: null,
+				updatedAt: null,
+				workspaceId: null,
 			},
 			{
 				id: "s2",
@@ -138,6 +140,8 @@ describe("agent session names", () => {
 				turnStatus: "idle",
 				listedModelId: null,
 				harnessId: null,
+				updatedAt: null,
+				workspaceId: null,
 			},
 		]);
 	});
@@ -154,6 +158,8 @@ describe("agent session names", () => {
 				turnStatus: "running",
 				listedModelId: null,
 				harnessId: null,
+				updatedAt: null,
+				workspaceId: null,
 			},
 		]);
 	});
@@ -175,6 +181,8 @@ describe("agent session names", () => {
 				turnStatus: "idle",
 				listedModelId: "opencode/big-pickle",
 				harnessId: "opencode",
+				updatedAt: null,
+				workspaceId: null,
 			},
 		]);
 	});
@@ -192,6 +200,8 @@ describe("agent session names", () => {
 				turnStatus: "idle",
 				listedModelId: null,
 				harnessId: null,
+				updatedAt: null,
+				workspaceId: null,
 			},
 		]);
 	});

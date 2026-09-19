@@ -34,6 +34,18 @@ vi.mock("../src/server/config", () => ({
 vi.mock("../src/server/auth/github-connection", () => ({
 	githubAccessToken: async () => "ghp_secretfixturetoken",
 }));
+vi.mock("../src/server/adapters/github", () => ({
+	authorizedRepository: async (
+		_token: string,
+		installationId: number,
+		repositoryId: number,
+	) => ({
+		installationId,
+		repositoryId,
+		fullName: "acme/app",
+		defaultBranch: "main",
+	}),
+}));
 vi.mock("../src/server/adapters/github/installation-token", () => ({
 	githubInstallationAccessToken: async () => "ghs_secretfixturetoken",
 }));
@@ -57,6 +69,7 @@ beforeAll(async () => {
 		"20260915083000_product_setting.sql",
 		"20260915103000_agent_session_listed_model.sql",
 		"20260915110000_agent_session_turn_status.sql",
+		"20260919161500_workspace_snapshot_source.sql",
 	])
 		await db.exec(await readFile(`supabase/migrations/${file}`, "utf8"));
 	await db.exec(
@@ -73,6 +86,8 @@ const repo = {
 };
 
 it("clones with an installation token file, not git argv", async () => {
+	vi.stubEnv("GITHUB_APP_BOT_USER_ID", "328807657");
+	vi.stubEnv("GITHUB_APP_SLUG", "ytimesy-cloud");
 	const project = await saveProject("alice", repo, "main");
 	const workspace = await insertQueuedWorkspace("alice", project.id);
 	const runtime = new MemoryWorkspaceRuntime({
@@ -99,6 +114,10 @@ it("clones with an installation token file, not git argv", async () => {
 	expect(
 		runtime.files.some((file) => file.path === "/tmp/ytimesy-gh-token"),
 	).toBe(true);
+	expect(
+		runtime.files.some((file) => file.path.endsWith("/.git/hooks/commit-msg")),
+	).toBe(true);
+	vi.unstubAllEnvs();
 	const events = await listWorkspaceEvents("alice", workspace.id);
 	expect(events.map((event) => event.message)).toContain(
 		"Sealed project environment snapshot.",

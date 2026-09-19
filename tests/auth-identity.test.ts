@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { authCallbackErrorMessage } from "../src/domain/auth-callback";
 import {
 	githubAppIdentityMatchesSignIn,
 	needsGithubSetup,
@@ -36,11 +37,18 @@ it("trusts localhost and 127.0.0.1 for local Better Auth origins", () => {
 			GOOGLE_CLIENT_SECRET: "secret",
 		}),
 	).toBe(true);
-	expect(configuredSocialProviders({})).toEqual(["github"]);
-	expect(
-		configuredSocialProviders({
-			GOOGLE_CLIENT_ID: "id",
-			GOOGLE_CLIENT_SECRET: "secret",
-		}),
-	).toEqual(["google", "github"]);
+	expect(configuredSocialProviders()).toEqual(["github", "google"]);
+});
+
+it("turns OAuth callback failures into a retryable sign-in message", () => {
+	expect(authCallbackErrorMessage(undefined)).toBeNull();
+	expect(authCallbackErrorMessage("state_mismatch")).toBe(
+		"Sign-in was interrupted. Try again from this page.",
+	);
+	expect(authCallbackErrorMessage("unable_to_link_account")).toBe(
+		"That email already uses a different sign-in method.",
+	);
+	expect(authCallbackErrorMessage("unknown")).toBe(
+		"Sign-in did not complete. Try again.",
+	);
 });

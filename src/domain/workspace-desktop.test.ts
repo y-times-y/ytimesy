@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
 	desktopCanBeControlled,
-	desktopEmbedUrl,
+	desktopClientViewerUrl,
 	desktopFailedBecauseWorkspaceGone,
 	desktopHostname,
+	desktopInspectorPrompt,
+	desktopInspectorShouldStart,
 	desktopPortIsListening,
 	desktopStartFailureReason,
 	desktopViewerUrl,
@@ -17,7 +19,7 @@ describe("workspace desktop", () => {
 		expect(
 			desktopCanBeControlled({
 				status: "running",
-				viewerUrl: "https://desk.style.dev/vnc.html",
+				viewerUrl: "/api/desktop?projectId=project-1&sessionId=session-1",
 				display: ":0",
 				message: null,
 			}),
@@ -41,20 +43,77 @@ describe("workspace desktop", () => {
 		expect(desktopStartFailureReason(cause)).toBe(START_HARNESS_BEFORE_DESKTOP);
 	});
 
-	it("embeds noVNC without local letterboxing inside the iframe", () => {
-		expect(desktopEmbedUrl("https://ytimesy-desk-abc.style.dev")).toBe(
-			"https://ytimesy-desk-abc.style.dev/vnc.html?autoconnect=1&resize=off&reconnect=1",
-		);
+	it("gives the browser a same-origin desktop socket, not the host URL", () => {
+		expect(
+			desktopClientViewerUrl({
+				projectId: "project-1",
+				sessionId: "session-1",
+			}),
+		).toBe("/api/desktop?projectId=project-1&sessionId=session-1");
+		expect(
+			desktopClientViewerUrl({
+				projectId: "project-1",
+				sessionId: "session-1",
+			}),
+		).not.toMatch(/style\.dev|vnc\.html|novnc/i);
 	});
 
-	it("rebuilds the same viewer URL from the durable machine id", () => {
+	it("keeps the remote host name on the server", () => {
 		expect(desktopHostname("vm_abcDEF-12")).toBe(
 			"ytimesy-desk-vmabcdef12.style.dev",
 		);
 		expect(desktopViewerUrlForMachine("vm_abcDEF-12")).toBe(
-			"https://ytimesy-desk-vmabcdef12.style.dev/vnc.html?autoconnect=1&resize=off&reconnect=1",
+			"https://ytimesy-desk-vmabcdef12.style.dev/",
 		);
 		expect(desktopPortIsListening("YTIMESY_DESKTOP_UP\n")).toBe(true);
 		expect(desktopPortIsListening("YTIMESY_DESKTOP_DOWN\n")).toBe(false);
+	});
+
+	it("starts the desktop as soon as the Desktop tab is open on a chat", () => {
+		expect(
+			desktopInspectorShouldStart({
+				tabActive: true,
+				projectId: "project-1",
+				sessionId: "session-1",
+				desktop: { status: "stopped" },
+				busy: false,
+			}),
+		).toBe(true);
+		expect(
+			desktopInspectorShouldStart({
+				tabActive: true,
+				projectId: "project-1",
+				sessionId: "session-1",
+				desktop: { status: "starting" },
+				busy: false,
+			}),
+		).toBe(false);
+		expect(
+			desktopInspectorShouldStart({
+				tabActive: true,
+				projectId: "project-1",
+				desktop: { status: "stopped" },
+				busy: false,
+			}),
+		).toBe(false);
+		expect(
+			desktopInspectorPrompt({
+				desktop: { status: "stopped" },
+				projectId: "project-1",
+				sessionId: "session-1",
+			}),
+		).toMatchObject({
+			title: "Starting desktop…",
+			actionLabel: null,
+		});
+		expect(
+			desktopInspectorPrompt({
+				desktop: { status: "failed", reason: "VM not found" },
+				projectId: "project-1",
+				sessionId: "session-1",
+			}),
+		).toMatchObject({
+			actionLabel: "Retry desktop",
+		});
 	});
 });

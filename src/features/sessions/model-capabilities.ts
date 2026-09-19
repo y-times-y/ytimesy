@@ -1,5 +1,6 @@
 import {
 	type ListedModelPreference,
+	listedModelSupportsFastMode,
 	preferredListedModelId,
 } from "#/domain/listed-model";
 
@@ -37,6 +38,8 @@ export function sessionModelsFromListed(
 		readonly id: string;
 		readonly label: string;
 		readonly notice?: string;
+		readonly supportsFastMode?: boolean;
+		readonly fast?: boolean;
 	}[],
 ): SessionModel[] {
 	return models.map((model) => ({
@@ -44,7 +47,7 @@ export function sessionModelsFromListed(
 		label: model.label,
 		notice: model.notice ?? null,
 		reasoning: null,
-		supportsFastMode: false,
+		supportsFastMode: listedModelSupportsFastMode(model),
 	}));
 }
 

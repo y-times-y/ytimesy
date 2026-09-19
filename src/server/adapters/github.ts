@@ -75,6 +75,64 @@ export async function listAuthorizedRepositories(
 	}
 	return choices.sort((a, b) => a.fullName.localeCompare(b.fullName));
 }
+export async function createAuthorizedRepository(
+	token: string,
+	name: string,
+): Promise<RepositoryChoice> {
+	const github = githubClient(token);
+	let created;
+	try {
+		created = await github.repos.createForAuthenticatedUser({
+			name,
+			private: true,
+			auto_init: true,
+		});
+	} catch (error) {
+		const status =
+			typeof error === "object" && error !== null && "status" in error
+				? Number(error.status)
+				: 0;
+		if (status === 422)
+			throw new Response("That repository name is already used.", {
+				status: 409,
+			});
+		if (status === 403)
+			throw new Response(
+				"GitHub denied creating a repository. Check the app permissions.",
+				{ status: 409 },
+			);
+		throw error;
+	}
+	const installations = await github.paginate(
+		github.apps.listInstallationsForAuthenticatedUser,
+		{ per_page: 100 },
+	);
+	const installation = installations.find(
+		(row) =>
+			!row.suspended_at &&
+			row.app_slug === serverConfig().GITHUB_APP_SLUG &&
+			row.permissions.contents === "write",
+	);
+	if (!installation)
+		throw new Response("Connect GitHub to create a repository.", {
+			status: 409,
+		});
+	try {
+		await github.apps.addRepoToInstallationForAuthenticatedUser({
+			installation_id: installation.id,
+			repository_id: created.data.id,
+		});
+	} catch {
+		// All-repo installs already include the new repository.
+	}
+	return {
+		installationId: installation.id,
+		repositoryId: created.data.id,
+		fullName: created.data.full_name,
+		defaultBranch: created.data.default_branch || "main",
+	};
+}
+
 export async function authorizedRepository(
 	token: string,
 	installationId: number,
@@ -105,6 +163,31 @@ export async function listBranches(
 		per_page: 100,
 	});
 	return branches.map((branch) => branch.name);
+}
+
+export async function repositoryBranchSha(
+	token: string,
+	fullName: string,
+	ref: string,
+) {
+	const branch = ref.trim();
+	if (!branch) return null;
+	const { owner, repo } = repositoryOwnerName(fullName);
+	try {
+		const result = await githubClient(token).repos.getBranch({
+			owner,
+			repo,
+			branch,
+		});
+		return result.data.commit.sha ?? null;
+	} catch (error) {
+		const status =
+			typeof error === "object" && error !== null && "status" in error
+				? Number(error.status)
+				: 0;
+		if (status === 404) return null;
+		throw error;
+	}
 }
 
 function repositoryOwnerName(fullName: string) {
@@ -174,4 +257,37 @@ export async function createDraftPullRequest(
 			});
 		throw error;
 	}
+}
+
+export async function listSessionPullRequests(token: string, fullName: string) {
+	const { owner, repo } = repositoryOwnerName(fullName);
+	const github = githubClient(token);
+	const pulls = await github.paginate(github.pulls.list, {
+		owner,
+		repo,
+		state: "all",
+		per_page: 100,
+	});
+	const ours = pulls
+		.filter((pull) => pull.head.ref.startsWith("ytimesy-"))
+		.slice(0, 30);
+	return Promise.all(
+		ours.map(async (pull) => {
+			const full = await github.pulls.get({
+				owner,
+				repo,
+				pull_number: pull.number,
+			});
+			return {
+				number: full.data.number,
+				url: full.data.html_url,
+				head: full.data.head.ref,
+				draft: Boolean(full.data.draft),
+				state: full.data.state,
+				merged: Boolean(full.data.merged),
+				mergeable: full.data.mergeable ?? null,
+				mergeableState: full.data.mergeable_state ?? null,
+			};
+		}),
+	);
 }

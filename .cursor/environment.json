@@ -6,13 +6,13 @@
 		{
 			"name": "dev",
 			"command": "pnpm dev",
-			"description": "Runs the ytimesy TanStack Start dev server on port 3001. Server routes for sign-in, GitHub, and projects need runtime secrets (BETTER_AUTH_SECRET, DATABASE_URL, GitHub OAuth/App, FREESTYLE_API_KEY, GITHUB_PRIVATE_KEY, SUPABASE_CA_CERT); the UI renders without them."
+			"description": "Runs the ytimesy TanStack Start dev server on port 3000. Server routes for sign-in, GitHub, and projects need runtime secrets (BETTER_AUTH_SECRET, DATABASE_URL, GitHub OAuth/App, FREESTYLE_API_KEY, GITHUB_PRIVATE_KEY, SUPABASE_CA_CERT); the UI renders without them."
 		}
 	],
 	"ports": [
 		{
 			"name": "web server",
-			"port": 3001
+			"port": 3000
 		}
 	]
 }

@@ -46,3 +46,12 @@ export async function saveProject(
 	);
 	return result.rows[0];
 }
+
+export async function deleteProjectForOwner(userId: string, projectId: string) {
+	const result = await database().query(
+		"delete from project where id=$1 and user_id=$2 returning id",
+		[projectId, userId],
+	);
+	if (!result.rows[0])
+		throw new Response("Project is not available.", { status: 403 });
+}

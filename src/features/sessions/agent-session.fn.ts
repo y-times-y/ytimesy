@@ -25,6 +25,8 @@ export type PublicAgentChat = {
 	readonly turnStatus: SessionTurnStatus;
 	readonly listedModelId?: string | null;
 	readonly harnessId?: AgentProviderId | null;
+	readonly updatedAt?: string | null;
+	readonly workspaceId?: string | null;
 };
 
 function runWithMachines<A>(
@@ -81,6 +83,7 @@ export const startProjectAgentSession = createServerFn({ method: "POST" })
 				turnStatus: session.turnStatus,
 				listedModelId: session.listedModelId,
 				harnessId: session.harness,
+				updatedAt: session.updatedAt,
 			};
 		} catch (cause) {
 			throw new Error(publicFailureMessage(cause));

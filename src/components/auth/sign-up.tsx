@@ -38,6 +38,7 @@ import {
 	InputGroupButton,
 	InputGroupInput,
 } from "#/components/ui/input-group.tsx";
+import { YtimesyBrand } from "#/features/auth/onboarding-shell";
 import { cn } from "#/lib/utils.ts";
 import {
 	getAuthAdditionalFieldValidators,
@@ -179,6 +180,7 @@ export function SignUp({
 		<Card className={cn("w-full max-w-sm", className)}>
 			<AuthPrompts view="signUp" />
 			<CardHeader>
+				<YtimesyBrand />
 				<CardTitle className="text-xl font-semibold">
 					{localization.auth.signUp}
 				</CardTitle>

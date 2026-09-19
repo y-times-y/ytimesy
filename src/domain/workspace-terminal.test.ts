@@ -62,46 +62,49 @@ describe("workspace terminal", () => {
 		expect(terminalSessionBlockedReason(null)).toMatch(/Connect an agent/);
 	});
 
-	it("waits for an explicit connect before attaching the PTY", () => {
+	it("attaches the PTY as soon as the Terminal tab is open on a chat", () => {
 		expect(
 			terminalInspectorShouldAttach({
 				tabActive: true,
 				projectId: "project-1",
 				sessionId: "session-1",
-				connectRequested: false,
-			}),
-		).toBe(false);
-		expect(
-			terminalInspectorShouldAttach({
-				tabActive: true,
-				projectId: "project-1",
-				sessionId: "session-1",
-				connectRequested: true,
 			}),
 		).toBe(true);
 		expect(
 			terminalInspectorShouldAttach({
-				tabActive: true,
+				tabActive: false,
 				projectId: "project-1",
-				connectRequested: true,
+				sessionId: "session-1",
 			}),
 		).toBe(false);
 		expect(
-			terminalInspectorPrompt({ projectId: "project-1" }).actionLabel,
-		).toBe(null);
+			terminalInspectorShouldAttach({
+				tabActive: true,
+				projectId: "project-1",
+			}),
+		).toBe(false);
+		expect(terminalInspectorPrompt({ projectId: "project-1" })).toMatchObject({
+			description: "Connect an agent before opening the terminal.",
+		});
 		expect(
 			terminalInspectorPrompt({
 				projectId: "project-1",
 				sessionId: "session-1",
 			}),
 		).toMatchObject({
-			actionLabel: "Connect terminal",
+			title: "Starting terminal…",
 		});
 	});
 
-	it("starts the shell in the cloned repository directory", () => {
-		expect(workspacePtyCommand("/home/ubuntu/ytimesy")).toBe(
-			"cd '/home/ubuntu/ytimesy' && exec bash -l",
+	it("starts the shell in the cloned repository directory as ytimesy", () => {
+		expect(workspacePtyCommand("/home/ubuntu/ytimesy")).toContain(
+			"cd '/home/ubuntu/ytimesy'",
+		);
+		expect(workspacePtyCommand("/home/ubuntu/ytimesy")).toContain(
+			"HOSTNAME=ytimesy",
+		);
+		expect(workspacePtyCommand("/home/ubuntu/ytimesy")).not.toContain(
+			"freestyle",
 		);
 	});
 });

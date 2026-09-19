@@ -6,7 +6,8 @@ export const Route = createFileRoute("/api/github/callback")({
 	server: {
 		handlers: {
 			GET: async ({ request }) => {
-				const target = new URL("/onboarding", serverConfig().APP_URL);
+				const target = new URL("/", serverConfig().APP_URL);
+				target.searchParams.set("addProject", "1");
 				try {
 					const user = await requireUser(request.headers);
 					const query = new URL(request.url).searchParams;

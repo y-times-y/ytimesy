@@ -70,6 +70,8 @@ export function chatsFromAgentSessions(
 		readonly turnStatus?: SessionTurnStatus;
 		readonly listedModelId?: string | null;
 		readonly harness?: AgentProviderId | null;
+		readonly updatedAt?: string | null;
+		readonly workspaceId?: string | null;
 	}[],
 ) {
 	return sessions
@@ -80,6 +82,8 @@ export function chatsFromAgentSessions(
 			turnStatus: session.turnStatus ?? "idle",
 			listedModelId: session.listedModelId ?? null,
 			harnessId: session.harness ?? null,
+			updatedAt: session.updatedAt ?? null,
+			workspaceId: session.workspaceId ?? null,
 		}));
 }
 

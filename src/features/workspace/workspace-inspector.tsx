@@ -30,7 +30,7 @@ const views = {
 		label: "Desktop",
 		title: "Shared desktop",
 		description:
-			"This is the Linux desktop the agent uses for QA. You watch and control the same screen.",
+			"This is the desktop the agent uses for QA. You watch and control the same screen.",
 	},
 } as const;
 
@@ -146,6 +146,8 @@ export function WorkspaceInspector({
 				<DesktopInspector
 					desktop={desktop}
 					busy={desktopBusy}
+					projectId={projectId}
+					sessionId={sessionId}
 					onStart={onStartDesktop}
 				/>
 			) : activeView === "terminal" ? (

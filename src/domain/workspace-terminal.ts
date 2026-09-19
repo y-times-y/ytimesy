@@ -61,14 +61,8 @@ export function terminalInspectorShouldAttach(input: {
 	readonly tabActive: boolean;
 	readonly projectId?: string;
 	readonly sessionId?: string;
-	readonly connectRequested: boolean;
 }) {
-	return Boolean(
-		input.tabActive &&
-			input.projectId &&
-			input.sessionId &&
-			input.connectRequested,
-	);
+	return Boolean(input.tabActive && input.projectId && input.sessionId);
 }
 
 export function terminalInspectorPrompt(input: {
@@ -79,26 +73,36 @@ export function terminalInspectorPrompt(input: {
 		return {
 			title: "No terminal connected.",
 			description: "Select a project to use the terminal.",
-			actionLabel: null,
 		};
 	}
 	if (!input.sessionId) {
 		return {
 			title: "No terminal connected.",
 			description: "Connect an agent before opening the terminal.",
-			actionLabel: null,
 		};
 	}
 	return {
-		title: "No terminal connected.",
-		description:
-			"Connect to this chat's workspace to use the terminal. A paused VM will start.",
-		actionLabel: "Connect terminal",
+		title: "Starting terminal…",
+		description: "Opening this chat's workspace.",
 	};
 }
 
+export const WORKSPACE_GUEST_HOSTNAME = "ytimesy";
+
+export function workspaceGuestPrompt() {
+	return "\\u@ytimesy:\\w\\$ ";
+}
+
+export function workspaceGuestIdentityCommand() {
+	return [
+		`hostname ${WORKSPACE_GUEST_HOSTNAME} 2>/dev/null || true`,
+		`export HOSTNAME=${WORKSPACE_GUEST_HOSTNAME}`,
+		`export PS1='${workspaceGuestPrompt()}'`,
+	].join("; ");
+}
+
 export function workspacePtyCommand(directory: string) {
-	return `cd ${shellSingleQuote(directory)} && exec bash -l`;
+	return `${workspaceGuestIdentityCommand()}; cd ${shellSingleQuote(directory)} && exec bash --noprofile --norc`;
 }
 
 function shellSingleQuote(value: string) {

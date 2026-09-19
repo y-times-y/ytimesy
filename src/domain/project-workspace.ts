@@ -20,6 +20,8 @@ export interface ProjectWorkspace {
 	status: WorkspaceStatus;
 	providerRef: string | null;
 	templateSnapshotId: string | null;
+	templateSourceRef?: string | null;
+	templateSourceSha?: string | null;
 	errorMessage: string | null;
 	updatedAt: string;
 }
@@ -30,6 +32,12 @@ export function workspaceSlug(workspaceId: string) {
 
 export function canStartPrepare(status: WorkspaceStatus | undefined) {
 	return status === undefined || status === "queued" || status === "failed";
+}
+
+export function workspacePrepareShowsStatus(
+	status: WorkspaceStatus | undefined,
+) {
+	return status === "failed";
 }
 
 export type WorkspaceEnvironmentState = Pick<
@@ -131,17 +139,35 @@ export function publicFailureMessage(error: unknown) {
 			: error instanceof Response
 				? error.statusText
 				: "Workspace preparation failed. Retry after checking GitHub access.";
-	return workspaceCapacityMessage(redactSecrets(message).slice(0, 300));
+	return redactInfrastructure(
+		workspaceCapacityMessage(redactSecrets(message)),
+	).slice(0, 300);
 }
 
 export function workspaceCapacityMessage(message: string) {
 	if (isWorkspaceAtCapacity(message)) {
-		return "This Freestyle plan is at its VM limit. Delete an unused agent session or raise the quota before starting another. Pausing a VM does not free a slot.";
+		return "This workspace plan is at its limit. Delete an unused agent session or raise the quota before starting another. Pausing does not free a slot.";
 	}
 	if (isWorkspaceComputeAllowanceExhausted(message)) {
-		return "This Freestyle plan has used its vCPU-hour allowance. Wait for the allowance to reset or upgrade the plan, then resume the VM.";
+		return "This workspace plan has used its compute allowance. Wait for the allowance to reset or upgrade the plan, then try again.";
 	}
 	return message;
+}
+
+export function redactInfrastructure(value: string) {
+	return value
+		.replace(/https?:\/\/[a-z0-9.-]+\.style\.dev\S*/gi, "workspace")
+		.replace(/[a-z0-9.-]+\.style\.dev/gi, "workspace")
+		.replace(/\bfreestyle-vm\b/gi, "ytimesy")
+		.replace(/\bFreestyle\b/g, "workspace")
+		.replace(/\bfreestyle\b/gi, "workspace")
+		.replace(/\bnoVNC\b/g, "desktop")
+		.replace(/\bnovnc\b/gi, "desktop")
+		.replace(/\bx11vnc\b/gi, "desktop")
+		.replace(/\bwebsockify\b/gi, "desktop")
+		.replace(/\bvnc\.html\b/gi, "desktop")
+		.replace(/\bvcpu_time\b/gi, "compute")
+		.replace(/\bmemory_time\b/gi, "memory");
 }
 
 export function redactSecrets(value: string) {

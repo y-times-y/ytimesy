@@ -21,6 +21,18 @@ describe("sessionModelsFromListed", () => {
 		]);
 	});
 
+	it("keeps Fast only when the listed model reports it", () => {
+		expect(
+			sessionModelsFromListed([
+				{
+					id: "gpt-5.3-codex",
+					label: "GPT-5.3-Codex",
+					supportsFastMode: true,
+				},
+			])[0]?.supportsFastMode,
+		).toBe(true);
+	});
+
 	it("surfaces a provider notice from the listed model", () => {
 		expect(
 			sessionModelsFromListed([

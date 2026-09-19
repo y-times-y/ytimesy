@@ -1,5 +1,6 @@
 import { ArrowUp, Square, X } from "lucide-react";
 import { type KeyboardEvent, useEffect, useMemo, useState } from "react";
+import { connectedProviderId } from "#/domain/agent-connection";
 import {
 	type AgentProviderId,
 	agentProviderById,
@@ -11,7 +12,7 @@ import {
 	selectedHarnessIsConnected,
 } from "#/domain/harness-access";
 import { SessionItemId } from "#/domain/ids";
-import { submittedListedModelId } from "#/domain/listed-model";
+import { composerModelIdForCatalog } from "#/domain/listed-model";
 import type { Project } from "#/domain/projects";
 import {
 	lastUserMessageText,
@@ -40,9 +41,6 @@ export function SessionLauncher({
 	busy,
 	harnessId,
 	onHarnessIdChange,
-	apiKeyHints,
-	onConnect,
-	onSaveApiKey,
 	onSend,
 	onStop,
 	onOpenSideChat,
@@ -53,14 +51,13 @@ export function SessionLauncher({
 	selectedProject,
 	onSelectProject,
 	listedTitle,
+	projectPickerOpen,
+	onProjectPickerOpenChange,
 }: {
 	session: PublicCodexSession;
 	busy: boolean;
 	harnessId: AgentProviderId;
 	onHarnessIdChange: (id: AgentProviderId) => void;
-	apiKeyHints: Readonly<Partial<Record<AgentProviderId, string>>>;
-	onConnect: () => void;
-	onSaveApiKey: (harnessId: AgentProviderId, apiKey: string) => void;
 	onSend: (text: string, modelId: string) => void;
 	onStop: () => void;
 	onOpenSideChat: (question?: string) => void;
@@ -71,6 +68,8 @@ export function SessionLauncher({
 	selectedProject?: Project;
 	onSelectProject: (id: string) => void;
 	listedTitle?: string;
+	projectPickerOpen?: boolean;
+	onProjectPickerOpenChange?: (open: boolean) => void;
 }) {
 	const harnessReady = selectedHarnessIsConnected(
 		session.connection,
@@ -87,6 +86,13 @@ export function SessionLauncher({
 	const [attachments, setAttachments] = useState<File[]>([]);
 	const [draft, setDraft] = useState("");
 	const [modelId, setModelId] = useState(session.listedModelId);
+	const [lastModelByHarness, setLastModelByHarness] = useState<
+		Partial<Record<AgentProviderId, string>>
+	>(() =>
+		session.listedModelId
+			? { [harnessId]: session.listedModelId }
+			: {},
+	);
 	const selectedModel = models.find((model) => model.id === modelId);
 	const [optimisticItems, setOptimisticItems] = useState<SessionItem[]>([]);
 	const [slashIndex, setSlashIndex] = useState(0);
@@ -107,7 +113,6 @@ export function SessionLauncher({
 				canSend: composerReady,
 				hasLastUserMessage: Boolean(lastUserText),
 				hasModels: models.length > 0,
-				publicationReady: Boolean(selectedProject),
 			}),
 		[
 			composerReady,
@@ -115,7 +120,6 @@ export function SessionLauncher({
 			lastUserText,
 			models.length,
 			harnessReady,
-			selectedProject,
 			session.turnStatus,
 		],
 	);
@@ -136,13 +140,37 @@ export function SessionLauncher({
 	}, [modelId, onComposerModelIdChange]);
 
 	useEffect(() => {
-		setModelId((current) =>
-			submittedListedModelId(current, session.models, {
-				lastUsedId: session.listedModelId,
+		const connectedHarness = connectedProviderId(session.connection);
+		const lastUsedForCatalog =
+			lastModelByHarness[harnessId] ||
+			(connectedHarness === harnessId ? session.listedModelId : "");
+		setModelId((current) => {
+			const next = composerModelIdForCatalog({
+				requestedId: current,
+				catalog: harnessReady ? session.models : [],
+				lastUsedForCatalog,
 				excludedIds: session.blockedListedModelIds,
-			}),
+			});
+			return next === current ? current : next;
+		});
+	}, [
+		harnessId,
+		harnessReady,
+		lastModelByHarness,
+		session.blockedListedModelIds,
+		session.connection,
+		session.listedModelId,
+		session.models,
+	]);
+
+	useEffect(() => {
+		if (!modelId || !models.some((model) => model.id === modelId)) return;
+		setLastModelByHarness((current) =>
+			current[harnessId] === modelId
+				? current
+				: { ...current, [harnessId]: modelId },
 		);
-	}, [session.blockedListedModelIds, session.listedModelId, session.models]);
+	}, [harnessId, modelId, models]);
 
 	useEffect(() => {
 		setOptimisticItems((current) =>
@@ -217,11 +245,6 @@ export function SessionLauncher({
 			document.getElementById("session-model-select")?.focus();
 			return;
 		}
-		if (command.id === "pr") {
-			setDraft("");
-			document.getElementById("pull-request-title")?.focus();
-			return;
-		}
 		if (
 			command.id === "files" ||
 			command.id === "diff" ||
@@ -285,7 +308,9 @@ export function SessionLauncher({
 						projects={projects}
 						selectedProject={selectedProject}
 						onSelectProject={onSelectProject}
-						sessionId={session.agentSessionId}
+						projectLocked={followUpLayout}
+						projectPickerOpen={projectPickerOpen}
+						onProjectPickerOpenChange={onProjectPickerOpenChange}
 					/>
 				) : null}
 				<div className="composer-shell">
@@ -335,11 +360,6 @@ export function SessionLauncher({
 								harnessId={harnessId}
 								onHarnessIdChange={onHarnessIdChange}
 								connection={session.connection}
-								apiKeyHints={apiKeyHints}
-								busy={busy}
-								snapshotAvailable={session.snapshotAvailable}
-								onConnect={onConnect}
-								onSaveApiKey={onSaveApiKey}
 								models={models}
 								modelId={modelId}
 								listedModelId={modelId || session.listedModelId}

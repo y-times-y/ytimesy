@@ -1,7 +1,11 @@
 export const INSPECTOR_SPLIT_MIN = 0.32;
 export const INSPECTOR_SPLIT_MAX = 0.72;
-export const INSPECTOR_SPLIT_DEFAULT = 0.5;
+export const INSPECTOR_SPLIT_DEFAULT = 0.66;
 export const INSPECTOR_SPLIT_DESKTOP = 0.38;
+
+export function inspectorStaysBesideChat(compact: boolean) {
+	return !compact;
+}
 
 export function clampInspectorSplit(ratio: number): number {
 	if (!Number.isFinite(ratio)) return INSPECTOR_SPLIT_DEFAULT;

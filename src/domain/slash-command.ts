@@ -7,8 +7,7 @@ export type SlashCommandId =
 	| "files"
 	| "diff"
 	| "terminal"
-	| "desktop"
-	| "pr";
+	| "desktop";
 
 export type SlashCommandAvailability = "ready" | "unavailable";
 
@@ -33,7 +32,6 @@ export type SlashCommandContext = {
 	readonly canSend: boolean;
 	readonly hasLastUserMessage: boolean;
 	readonly hasModels: boolean;
-	readonly publicationReady: boolean;
 };
 
 export function parseSlashDraft(draft: string): SlashDraft | null {
@@ -124,14 +122,6 @@ export function composerSlashCommands(
 			label: "Desktop",
 			description: "Show the shared workspace desktop",
 			availability: "ready",
-		},
-		{
-			id: "pr",
-			trigger: "/pr",
-			label: "Pull request",
-			description: "Create a draft pull request from this diff",
-			availability: context.publicationReady ? "ready" : "unavailable",
-			unavailableReason: "GitHub publication isn’t connected yet",
 		},
 	];
 }

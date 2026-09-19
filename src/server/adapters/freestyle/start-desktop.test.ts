@@ -1,17 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { START_WORKSPACE_DESKTOP } from "./start-desktop";
+import { ENSURE_WORKSPACE_DESKTOP, START_WORKSPACE_DESKTOP } from "./start-desktop";
 
 describe("start workspace desktop", () => {
 	it("uses passwordless sudo for apt when the guest is not root", () => {
 		expect(START_WORKSPACE_DESKTOP).toContain("sudo -n apt-get");
 		expect(START_WORKSPACE_DESKTOP).toContain("id -u");
-		expect(START_WORKSPACE_DESKTOP).toContain("xdotool");
 		expect(START_WORKSPACE_DESKTOP).toContain("export DISPLAY=:0");
 		expect(START_WORKSPACE_DESKTOP).toContain("--no-sandbox");
-		expect(START_WORKSPACE_DESKTOP).toContain("about:blank");
 	});
 
-	it("installs Google Chrome, applies the ytimesy wallpaper, and opens a windowed browser", () => {
+	it("installs Chrome, wallpaper, and a dock with Chrome, Terminal, and Files", () => {
 		expect(START_WORKSPACE_DESKTOP).toContain("google-chrome-stable");
 		expect(START_WORKSPACE_DESKTOP).toContain(
 			"dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb",
@@ -21,20 +19,27 @@ describe("start workspace desktop", () => {
 			"/tmp/ytimesy-desktop-wallpaper.b64",
 		);
 		expect(START_WORKSPACE_DESKTOP).toContain("desktop-wallpaper.png");
-		expect(START_WORKSPACE_DESKTOP).toContain("--window-size=720,640");
-		expect(START_WORKSPACE_DESKTOP).toContain("windowmove");
-		expect(START_WORKSPACE_DESKTOP).toContain(
-			"Chrome is running but has no window on DISPLAY=:0",
-		);
-		expect(START_WORKSPACE_DESKTOP).toContain("pgrep -x chrome");
-		expect(START_WORKSPACE_DESKTOP).not.toContain(
-			"pgrep -f 'google-chrome|chromium'",
-		);
+		expect(START_WORKSPACE_DESKTOP).toContain("tint2");
+		expect(START_WORKSPACE_DESKTOP).toContain("panel_size = 0 64");
+		expect(START_WORKSPACE_DESKTOP).toContain("bottom center horizontal");
+		expect(START_WORKSPACE_DESKTOP).not.toContain("panel_size = 100%");
+		expect(START_WORKSPACE_DESKTOP).toContain("pcmanfm");
+		expect(START_WORKSPACE_DESKTOP).toContain("chrome.desktop");
+		expect(START_WORKSPACE_DESKTOP).toContain("terminal.desktop");
+		expect(START_WORKSPACE_DESKTOP).toContain("files.desktop");
+		expect(START_WORKSPACE_DESKTOP).toContain("hostname ytimesy");
+		expect(START_WORKSPACE_DESKTOP).not.toContain("about:blank");
+		expect(START_WORKSPACE_DESKTOP).not.toContain("--window-size=720,640");
+		expect(START_WORKSPACE_DESKTOP).not.toContain("novnc");
 		expect(START_WORKSPACE_DESKTOP).toContain(
 			"Chrome is still installing; desktop is up on DISPLAY=:0",
 		);
-		expect(START_WORKSPACE_DESKTOP).not.toContain(
-			"Chrome is required on the shared desktop but was not installed.",
-		);
+	});
+
+	it("can add the dock to a desktop that is already running", () => {
+		expect(ENSURE_WORKSPACE_DESKTOP).toContain("hostname ytimesy");
+		expect(ENSURE_WORKSPACE_DESKTOP).toContain("tint2");
+		expect(ENSURE_WORKSPACE_DESKTOP).toContain("pcmanfm");
+		expect(ENSURE_WORKSPACE_DESKTOP).toContain("chrome.desktop");
 	});
 });

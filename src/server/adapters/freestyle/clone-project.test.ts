@@ -23,6 +23,7 @@ describe("cloneSelectedProjectScript", () => {
 		expect(script).toContain('if [ -d "$DEST/.git" ]; then');
 		expect(script).not.toContain('git -C "$DEST" fetch --depth 1');
 		expect(script).toContain('git -C "$DEST" remote set-url origin');
+		expect(script).toContain('git -C "$DEST" checkout -B');
 		expect(script).toContain(PROJECT_CWD_PATH);
 		expect(script).toContain('rm -f "$TOKEN_FILE"');
 		expect(script).not.toContain("ghs_");
@@ -60,6 +61,7 @@ describe("cloneSelectedProjectScript", () => {
 		expect(script).toContain("echo dirty");
 		expect(script).toContain('git -C "$DEST" fetch --depth 1');
 		expect(script).toContain("merge --ff-only");
+		expect(script).toContain('git -C "$DEST" checkout -B');
 		expect(script).not.toContain("reset --hard");
 		expect(script).not.toContain("git clone");
 		expect(script).toContain('rm -f "$TOKEN_FILE"');

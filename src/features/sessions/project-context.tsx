@@ -1,6 +1,4 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { GitBranch } from "lucide-react";
-import { useState } from "react";
 import {
 	Select,
 	SelectContent,
@@ -9,63 +7,47 @@ import {
 	SelectValue,
 } from "#/components/ui/select";
 import { branchSwitchBlockedReason } from "../../domain/project-workspace";
-import type { Project } from "../../domain/projects";
+import { projectFolderName, type Project } from "../../domain/projects";
+import {
+	listedSessionBranches,
+	sessionWorkingBranch,
+} from "../../domain/session-branch";
 import { requestJson } from "../projects/api";
 import { GithubSetupLink } from "../projects/github-setup-link";
 import {
 	WorkspaceStatus,
 	type WorkspaceView,
 } from "../projects/workspace-status";
+import { ProjectPicker } from "./project-picker";
 
 export function ProjectContext({
 	projects,
 	selectedProject,
 	onSelectProject,
-	sessionId,
+	projectLocked = false,
+	projectPickerOpen,
+	onProjectPickerOpenChange,
 }: {
 	projects: Project[];
 	selectedProject?: Project;
 	onSelectProject: (id: string) => void;
-	sessionId?: string | null;
+	projectLocked?: boolean;
+	projectPickerOpen?: boolean;
+	onProjectPickerOpenChange?: (open: boolean) => void;
 }) {
 	return (
 		<div className="session-context">
-			<Select value={selectedProject?.id ?? ""} onValueChange={onSelectProject}>
-				<SelectTrigger
-					className="context-select project-select"
-					aria-label="Project"
-				>
-					<GitBranch size={14} />
-					<SelectValue placeholder="Select project" />
-				</SelectTrigger>
-				<SelectContent
-					position="popper"
-					side="top"
-					align="start"
-					sideOffset={8}
-				>
-					{projects.length ? (
-						projects.map((project) => (
-							<SelectItem key={project.id} value={project.id}>
-								{project.fullName}
-							</SelectItem>
-						))
-					) : (
-						<SelectItem value="empty" disabled>
-							No projects added yet
-						</SelectItem>
-					)}
-				</SelectContent>
-			</Select>
-			<BranchSelect project={selectedProject} />
-			{selectedProject && <WorkspaceStatus projectId={selectedProject.id} />}
-			{selectedProject && (
-				<PublicationAction
-					key={selectedProject.id}
-					projectId={selectedProject.id}
-					sessionId={sessionId}
+			{projectLocked ? null : (
+				<ProjectPicker
+					projects={projects}
+					selectedProject={selectedProject}
+					onSelectProject={onSelectProject}
+					open={projectPickerOpen}
+					onOpenChange={onProjectPickerOpenChange}
 				/>
 			)}
+			<BranchSelect project={selectedProject} />
+			{selectedProject && <WorkspaceStatus projectId={selectedProject.id} />}
 		</div>
 	);
 }
@@ -88,7 +70,7 @@ function BranchSelect({ project }: { project?: Project }) {
 			project?.repositoryId,
 		],
 		queryFn: () =>
-			requestJson<string[]>(
+			requestJson<{ branches: string[]; defaultBranch: string }>(
 				`/api/github/branches?installationId=${project?.installationId}&repositoryId=${project?.repositoryId}`,
 			),
 		enabled: !!project,
@@ -108,12 +90,19 @@ function BranchSelect({ project }: { project?: Project }) {
 			});
 		},
 	});
-	const names = [
-		...new Set([
-			...(project ? [project.branch] : []),
-			...(branches.data ?? []),
-		]),
-	];
+	const remote = branches.data?.branches ?? [];
+	const workingBranch = project
+		? sessionWorkingBranch({
+				selectedBranch: project.branch,
+				defaultBranch: branches.data?.defaultBranch,
+				title: projectFolderName(project.fullName),
+				id: String(project.repositoryId),
+			})
+		: "";
+	const names = listedSessionBranches({
+		remoteBranches: [...(project ? [project.branch] : []), ...remote],
+		workingBranch,
+	});
 	const preparing = branchSwitchBlockedReason(workspace.data?.status);
 	const disabled =
 		!project ||
@@ -126,10 +115,10 @@ function BranchSelect({ project }: { project?: Project }) {
 	return (
 		<>
 			<Select
-				value={project?.branch ?? ""}
+				value={workingBranch}
 				disabled={disabled}
 				onValueChange={(branch) => {
-					if (!project || branch === project.branch) return;
+					if (!project || branch === workingBranch) return;
 					switchBranch.mutate(branch);
 				}}
 			>
@@ -164,81 +153,5 @@ function BranchSelect({ project }: { project?: Project }) {
 				</p>
 			)}
 		</>
-	);
-}
-
-function PublicationAction({
-	projectId,
-	sessionId,
-}: {
-	projectId: string;
-	sessionId?: string | null;
-}) {
-	const [title, setTitle] = useState("");
-	const [composing, setComposing] = useState(false);
-	const publish = useMutation({
-		mutationFn: () =>
-			requestJson<{ url: string; number: number; draft: boolean }>(
-				"/api/projects/publish",
-				{ projectId, sessionId, title },
-			),
-	});
-	const message = publish.error?.message;
-	const open =
-		composing || Boolean(title) || Boolean(publish.data) || Boolean(message);
-	return (
-		<form
-			className="publication-action"
-			data-open={open}
-			onSubmit={(event) => {
-				event.preventDefault();
-				if (!open) {
-					setComposing(true);
-					requestAnimationFrame(() => {
-						document.getElementById("pull-request-title")?.focus();
-					});
-					return;
-				}
-				publish.mutate();
-			}}
-		>
-			<input
-				id="pull-request-title"
-				className="publication-title"
-				aria-label="Pull request title"
-				placeholder="Pull request title"
-				value={title}
-				maxLength={256}
-				required={open}
-				onFocus={() => setComposing(true)}
-				onChange={(event) => {
-					setTitle(event.target.value);
-					publish.reset();
-				}}
-			/>
-			<button
-				type="submit"
-				disabled={publish.isPending || (open && !title.trim())}
-			>
-				{publish.isPending ? (
-					"Creating…"
-				) : (
-					<>
-						<span className="publication-label-full">Create pull request</span>
-						<span className="publication-label-short">PR</span>
-					</>
-				)}
-			</button>
-			{publish.data && (
-				<a href={publish.data.url} target="_blank" rel="noreferrer">
-					Draft PR #{publish.data.number}
-				</a>
-			)}
-			{message && (
-				<p role="alert">
-					{message} <GithubSetupLink message={message} />
-				</p>
-			)}
-		</form>
 	);
 }

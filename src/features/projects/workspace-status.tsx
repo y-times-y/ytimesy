@@ -1,4 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
+import { workspacePrepareShowsStatus } from "#/domain/project-workspace";
 import { requestJson } from "./api";
 import { GithubSetupLink } from "./github-setup-link";
 
@@ -15,15 +17,6 @@ export interface WorkspaceView {
 	errorMessage: string | null;
 	updatedAt: string;
 }
-
-const copy: Record<WorkspaceView["status"], string> = {
-	queued: "Workspace queued. The worker picks it up next.",
-	provisioning: "Provisioning workspace…",
-	cloning: "Cloning repository…",
-	installing: "Installing dependencies…",
-	ready: "Workspace ready.",
-	failed: "Workspace preparation failed.",
-};
 
 export function WorkspaceStatus({ projectId }: { projectId: string }) {
 	const workspace = useQuery({
@@ -53,8 +46,22 @@ export function WorkspaceStatus({ projectId }: { projectId: string }) {
 		onSuccess: () => void workspace.refetch(),
 	});
 	const current = workspace.data;
-	if (workspace.isPending)
-		return <p className="workspace-status">Checking workspace…</p>;
+	const queuedMissing = useRef(false);
+	useEffect(() => {
+		queuedMissing.current = false;
+	}, [projectId]);
+	useEffect(() => {
+		if (
+			queuedMissing.current ||
+			workspace.isPending ||
+			workspace.error ||
+			current
+		)
+			return;
+		queuedMissing.current = true;
+		prepare.mutate();
+	}, [current, prepare, workspace.error, workspace.isPending]);
+	if (workspace.isPending) return null;
 	if (workspace.error)
 		return (
 			<p className="workspace-status" role="alert">
@@ -62,43 +69,25 @@ export function WorkspaceStatus({ projectId }: { projectId: string }) {
 				<GithubSetupLink message={workspace.error.message} />
 			</p>
 		);
-	if (!current)
-		return (
-			<p className="workspace-status">
-				<button
-					type="button"
-					disabled={prepare.isPending}
-					onClick={() => prepare.mutate()}
-				>
-					{prepare.isPending ? "Queuing…" : "Prepare workspace"}
-				</button>
-			</p>
-		);
+	if (!current || !workspacePrepareShowsStatus(current.status)) return null;
 	return (
-		<p
-			className="workspace-status"
-			role={current.status === "failed" ? "alert" : "status"}
-		>
+		<p className="workspace-status" role="alert">
 			<span>
-				{current.status === "failed"
-					? (current.errorMessage ?? copy.failed)
-					: copy[current.status]}
-				{current.status === "failed" && current.errorMessage && (
+				{current.errorMessage ?? "Workspace preparation failed."}
+				{current.errorMessage ? (
 					<>
 						{" "}
 						<GithubSetupLink message={current.errorMessage} />
 					</>
-				)}
+				) : null}
 			</span>
-			{current.status === "failed" && (
-				<button
-					type="button"
-					disabled={retry.isPending}
-					onClick={() => retry.mutate(current.id)}
-				>
-					{retry.isPending ? "Retrying…" : "Retry"}
-				</button>
-			)}
+			<button
+				type="button"
+				disabled={retry.isPending}
+				onClick={() => retry.mutate(current.id)}
+			>
+				{retry.isPending ? "Retrying…" : "Retry"}
+			</button>
 		</p>
 	);
 }

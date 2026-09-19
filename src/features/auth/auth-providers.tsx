@@ -1,22 +1,14 @@
-import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { ThemeProvider } from "next-themes";
 import type { ReactNode } from "react";
 import { AuthProvider } from "#/components/auth/auth-provider";
 import { Toaster } from "#/components/ui/sonner";
 import { TooltipProvider } from "#/components/ui/tooltip";
-import { requestJson } from "../projects/api";
+import { offeredSocialProviders } from "#/domain/identity-providers";
 import { authClient } from "./client";
 
 export function AuthProviders({ children }: { children: ReactNode }) {
 	const navigate = useNavigate();
-	const providers = useQuery({
-		queryKey: ["identity", "providers"],
-		queryFn: () =>
-			requestJson<{ socialProviders: Array<"github" | "google"> }>(
-				"/api/identity/providers",
-			),
-	});
 	return (
 		<ThemeProvider
 			attribute="class"
@@ -29,11 +21,16 @@ export function AuthProviders({ children }: { children: ReactNode }) {
 				<AuthProvider
 					authClient={authClient}
 					redirectTo="/"
-					socialProviders={providers.data?.socialProviders ?? ["github"]}
+					socialProviders={[...offeredSocialProviders]}
 					emailAndPassword={{
 						enabled: true,
 						requireEmailVerification: true,
 						forgotPassword: true,
+					}}
+					localization={{
+						auth: {
+							emailPlaceholder: "you@email.com",
+						},
 					}}
 					navigate={navigate}
 					Link={({ href, ...props }) => <Link to={href} {...props} />}
