@@ -38,6 +38,20 @@ export function githubPushEnv(token: string) {
 	return githubCloneEnv(token);
 }
 
+export function githubBotCommitHookPath(directory: string) {
+	return `${directory.replace(/\/$/, "")}/.git/hooks/commit-msg`;
+}
+
+export function githubBotCommitMsgHook(bot: PublicationAuthor) {
+	return `#!/bin/sh
+trailer=${JSON.stringify(commitCoAuthorTrailer(bot))}
+if grep -F -q "$trailer" "$1"; then
+  exit 0
+fi
+printf '\\n%s\\n' "$trailer" >> "$1"
+`;
+}
+
 export function configureCommitAuthorArgv(
 	directory: string,
 	author: { readonly name: string; readonly email: string },

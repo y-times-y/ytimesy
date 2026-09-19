@@ -47,9 +47,7 @@ export function publicationSessionBlockedReason(
 export function publicationCommitAuthor(user: {
 	readonly name?: string | null;
 	readonly email?: string | null;
-	readonly bot?: PublicationAuthor | null;
 }): PublicationAuthor {
-	if (user.bot) return user.bot;
 	return (
 		publicationHumanAuthor(user) ?? {
 			name: "noreply",
@@ -74,10 +72,10 @@ export function commitCoAuthorTrailer(author: PublicationAuthor) {
 
 export function publicationCoAuthor(input: {
 	readonly author: PublicationAuthor;
-	readonly human: PublicationAuthor | null;
+	readonly bot: PublicationAuthor | null;
 }) {
-	if (!input.human || input.human.email === input.author.email) return null;
-	return input.human;
+	if (!input.bot || input.bot.email === input.author.email) return null;
+	return input.bot;
 }
 
 export function workspacePublicationBranch(workspaceId: string) {
