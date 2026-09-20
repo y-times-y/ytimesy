@@ -6,6 +6,7 @@ import {
 	composerHarnessForChat,
 	listedChatHarnessId,
 	listedChatModelId,
+	rememberedClaudeModelIdFromChats,
 	listedChatTurnStatus,
 	newChatIsActive,
 	selectedChatIdAfterDelete,
@@ -294,6 +295,27 @@ describe("parallel chat busy", () => {
 				fallback: "opencode",
 			}),
 		).toBe("claude");
+		expect(
+			rememberedClaudeModelIdFromChats([
+				{
+					id: "a",
+					title: "OpenCode chat",
+					harnessId: "opencode",
+					listedModelId: "opencode/muse",
+				},
+				{
+					id: "b",
+					title: "Claude chat",
+					harnessId: "claude",
+					listedModelId: "fable",
+				},
+			]),
+		).toBe("fable");
+		expect(
+			rememberedClaudeModelIdFromChats([
+				{ id: "a", title: "empty", harnessId: "opencode" },
+			]),
+		).toBe("");
 	});
 });
 

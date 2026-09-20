@@ -2,15 +2,28 @@ import { readFileSync } from "node:fs";
 import { Duration, Effect } from "effect";
 import {
 	claudeCliIsSignedIn,
+	claudeListedModelsAreUsable,
 	parseAnthropicLoginUrl,
-	parseClaudeListedModels,
+	parseClaudeAuthPasteCode,
+	parseClaudeBinaryPath,
+	parseClaudeHomePath,
+	parseClaudeModelFlagsFromHelp,
 } from "#/domain/claude-auth";
+import {
+	type ClaudeHomeRestore,
+	restoreClaudeHome,
+} from "#/server/adapters/claude/home-files";
 import { SessionItemId, type WorkspaceId } from "#/domain/ids";
 import {
 	type ListedModel,
 	listedModelSupportsFastMode,
 } from "#/domain/listed-model";
+import {
+	guestCliDisableUpdateExports,
+	pinnedClaudeInstallCommand,
+} from "#/domain/guest-cli-pin";
 import { posixShellQuoted } from "#/domain/posix-command";
+import { ensureGuestCliPin } from "#/server/adapters/guest-cli-pin";
 import type { SessionItem, SessionTurnStatus } from "#/domain/session-item";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
 
@@ -22,13 +35,15 @@ const LOGIN_DAEMON_SOURCE = readFileSync(
 const STATUS_PATH = "/tmp/ytimesy-claude-auth-status.json";
 const LOG_PATH = "/tmp/ytimesy-claude-login.log";
 const PID_PATH = "/tmp/ytimesy-claude-login.pid";
+const CODE_PATH = "/tmp/ytimesy-claude-auth-code";
 const KEY_ENV_PATH = "/tmp/ytimesy-claude-key.env";
 
 const CLAUDE_INSTALL_SCRIPT = `set -eu
+${guestCliDisableUpdateExports()}
 export HOME="\${HOME:-/root}"
 export PATH="$HOME/.local/bin:$HOME/.claude/bin:/usr/local/bin:$PATH"
 if ! command -v claude >/dev/null 2>&1; then
-  curl -fsSL https://claude.ai/install.sh | bash
+  ${pinnedClaudeInstallCommand()}
 fi
 export PATH="$HOME/.local/bin:$HOME/.claude/bin:/usr/local/bin:$PATH"
 if command -v claude >/dev/null 2>&1; then
@@ -42,6 +57,7 @@ echo "CLAUDE_BIN=$CLAUDE_BIN"
 `;
 
 const LOCATE_CLAUDE = `set -eu
+${guestCliDisableUpdateExports()}
 if [ -z "\${HOME:-}" ]; then
   export HOME=/root
 fi
@@ -66,7 +82,7 @@ if [ -f ${PID_PATH} ] && kill -0 "$(cat ${PID_PATH})" 2>/dev/null; then
   echo "LOGIN_PID=$(cat ${PID_PATH})"
   exit 0
 fi
-rm -f ${STATUS_PATH}
+rm -f ${STATUS_PATH} ${CODE_PATH}
 PYTHONUNBUFFERED=1 setsid python3 /tmp/ytimesy-claude-login.py >${LOG_PATH} 2>&1 < /dev/null &
 echo $! > ${PID_PATH}
 echo "LOGIN_PID=$(cat ${PID_PATH})"
@@ -161,28 +177,23 @@ export function readClaudeAuthStatus(
 }
 
 /**
- * Installs unmodified Claude Code and either resumes a CLI login, applies a
- * stored API key only after `claude auth status` accepts it, or starts
- * Anthropic's own authorize URL.
+ * Starts Anthropic's authorize URL on a VM that already has Claude Code.
+ * Install is only the fallback when the snapshot binary is missing. Checkout
+ * and Desktop are not part of this path.
  */
 export function connectClaudeCode(
 	machines: WorkspaceMachines,
 	workspaceId: WorkspaceId,
 	apiKey: string | null,
+	restore?: ClaudeHomeRestore,
 ): Effect.Effect<ClaudeAuthStatus> {
 	return Effect.gen(function* () {
-		const install = yield* Effect.tryPromise(() =>
-			machines.exec(workspaceId, CLAUDE_INSTALL_SCRIPT, 240_000),
-		);
-		if (install.exitCode !== 0) {
-			return failed(
-				`Claude Code install failed: ${(install.stderr || install.stdout).trim()}`,
-			);
+		yield* ensureGuestCliPin(machines, workspaceId);
+		const located = yield* locateOrInstallClaude(machines, workspaceId);
+		if (!located) {
+			return failed("Claude Code is not installed on this workspace");
 		}
-		const claudeBin = firstMatch(install.stdout, /^CLAUDE_BIN=(.+)$/m);
-		if (!claudeBin) {
-			return failed("Claude Code install succeeded without reporting a binary");
-		}
+		const claudeBin = located.bin;
 
 		const existing = yield* probeClaudeCli(
 			machines,
@@ -190,7 +201,41 @@ export function connectClaudeCode(
 			claudeBin,
 			null,
 		);
-		if (existing.stage === "authenticated") return existing;
+		if (existing.stage === "authenticated") {
+			yield* persistClaudeStatus(machines, workspaceId, existing);
+			yield* stopClaudeLoginDaemon(machines, workspaceId);
+			return existing;
+		}
+		if (restore?.userId) {
+			const applied = yield* restoreClaudeHome(
+				machines,
+				workspaceId,
+				located.home,
+				restore,
+			);
+			if (applied) {
+				const restored = yield* probeClaudeCli(
+					machines,
+					workspaceId,
+					claudeBin,
+					null,
+				);
+				if (restored.stage === "authenticated") {
+					yield* persistClaudeStatus(machines, workspaceId, restored);
+					yield* stopClaudeLoginDaemon(machines, workspaceId);
+					return restored;
+				}
+			}
+		}
+
+		const published = yield* readClaudeAuthStatus(machines, workspaceId);
+		if (
+			published.stage === "authenticated" &&
+			claudeListedModelsAreUsable(published.models)
+		) {
+			return published;
+		}
+		if (published.stage === "awaiting_device_code") return published;
 
 		if (apiKey) {
 			const byok = yield* applyStoredClaudeKey(
@@ -213,9 +258,10 @@ export function connectClaudeCode(
 		const start = yield* Effect.tryPromise(() =>
 			machines.exec(
 				workspaceId,
-				`export CLAUDE_BIN=${posixShellQuoted(claudeBin)}
-${START_LOGIN_SCRIPT}`,
-				30_000,
+				guestBash(
+					`export CLAUDE_BIN=${posixShellQuoted(claudeBin)}\n${START_LOGIN_SCRIPT}`,
+				),
+				15_000,
 			),
 		);
 		if (start.exitCode !== 0) {
@@ -223,8 +269,8 @@ ${START_LOGIN_SCRIPT}`,
 				`Failed to start Claude Code login: ${(start.stderr || start.stdout).trim()}`,
 			);
 		}
-		for (let attempt = 0; attempt < 40; attempt += 1) {
-			yield* Effect.sleep(Duration.seconds(1));
+		for (let attempt = 0; attempt < 20; attempt += 1) {
+			yield* Effect.sleep(Duration.millis(500));
 			const status = yield* readClaudeAuthStatus(machines, workspaceId);
 			if (status.stage !== "missing" && status.stage !== "starting") {
 				if (status.stage === "authenticated" && status.models.length === 0) {
@@ -261,26 +307,167 @@ ${START_LOGIN_SCRIPT}`,
 	);
 }
 
+function locateOrInstallClaude(
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+): Effect.Effect<{ readonly bin: string; readonly home: string } | null> {
+	return Effect.gen(function* () {
+		const located = yield* Effect.tryPromise(() =>
+			machines.exec(workspaceId, guestBash(LOCATE_CLAUDE), 15_000),
+		);
+		const home = parseClaudeHomePath(located.stdout) ?? "/root";
+		const existing = parseClaudeBinaryPath(located.stdout);
+		if (existing) return { bin: existing, home };
+		const install = yield* Effect.tryPromise(() =>
+			machines.exec(workspaceId, guestBash(CLAUDE_INSTALL_SCRIPT), 240_000),
+		);
+		if (install.exitCode !== 0) return null;
+		const installed = parseClaudeBinaryPath(install.stdout);
+		if (!installed) return null;
+		return {
+			bin: installed,
+			home: parseClaudeHomePath(install.stdout) ?? home,
+		};
+	}).pipe(Effect.catchAll(() => Effect.succeed(null)));
+}
+
+function guestBash(script: string) {
+	return `bash -lc ${posixShellQuoted(`${guestCliDisableUpdateExports()}\n${script}`)}`;
+}
+
+function stopClaudeLoginDaemon(
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+): Effect.Effect<void> {
+	return Effect.tryPromise(() =>
+		machines.exec(
+			workspaceId,
+			guestBash(
+				`if [ -f ${PID_PATH} ]; then PID="$(cat ${PID_PATH})"; pkill -P "$PID" 2>/dev/null || true; kill "$PID" 2>/dev/null || true; rm -f ${PID_PATH}; fi`,
+			),
+			10_000,
+		),
+	).pipe(
+		Effect.as(undefined),
+		Effect.catchAll(() => Effect.void),
+	);
+}
+
 export function refreshClaudeAuthStatus(
 	machines: WorkspaceMachines,
 	workspaceId: WorkspaceId,
 ): Effect.Effect<ClaudeAuthStatus> {
 	return Effect.gen(function* () {
 		const published = yield* readClaudeAuthStatus(machines, workspaceId);
-		if (published.stage === "authenticated") return published;
+		if (
+			published.stage === "authenticated" &&
+			claudeListedModelsAreUsable(published.models)
+		) {
+			return published;
+		}
 		const locate = yield* Effect.tryPromise(() =>
-			machines.exec(workspaceId, LOCATE_CLAUDE, 30_000),
+			machines.exec(workspaceId, guestBash(LOCATE_CLAUDE), 15_000),
 		);
 		if (locate.exitCode !== 0) {
 			return published.stage === "missing" ? published : published;
 		}
-		const claudeBin = firstMatch(locate.stdout, /^CLAUDE_BIN=(.+)$/m);
+		const claudeBin = parseClaudeBinaryPath(locate.stdout);
 		if (!claudeBin) return published;
 		const live = yield* probeClaudeCli(machines, workspaceId, claudeBin, null);
-		if (live.stage === "authenticated") return live;
+		if (live.stage === "authenticated") {
+			yield* persistClaudeStatus(machines, workspaceId, live);
+			return live;
+		}
 		if (published.stage === "awaiting_device_code") return published;
 		return live.stage === "failed" ? published : live;
 	}).pipe(Effect.catchAll(() => readClaudeAuthStatus(machines, workspaceId)));
+}
+
+/**
+ * Writes Anthropic's paste-back code into the same `claude auth login` PTY.
+ * A new login would mint a different PKCE session and reject this code.
+ */
+export function submitClaudeAuthCode(
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+	rawCode: string,
+): Effect.Effect<ClaudeAuthStatus> {
+	const code = parseClaudeAuthPasteCode(rawCode);
+	if (!code) {
+		return Effect.succeed(
+			failed("Paste the login code from Anthropic's page."),
+		);
+	}
+	return Effect.gen(function* () {
+		const current = yield* readClaudeAuthStatus(machines, workspaceId);
+		if (current.stage === "authenticated") {
+			if (current.models.length > 0) return current;
+			const locate = yield* Effect.tryPromise(() =>
+				machines.exec(workspaceId, guestBash(LOCATE_CLAUDE), 15_000),
+			);
+			const claudeBin = parseClaudeBinaryPath(locate.stdout);
+			if (!claudeBin) return current;
+			return yield* attachClaudeModels(
+				machines,
+				workspaceId,
+				claudeBin,
+				current,
+			);
+		}
+		if (current.stage !== "awaiting_device_code") {
+			return failed(
+				"Claude Code is not waiting for Anthropic's login code. Sign in again.",
+			);
+		}
+		const alive = yield* Effect.tryPromise(() =>
+			machines.exec(
+				workspaceId,
+				guestBash(
+					`if [ -f ${PID_PATH} ] && kill -0 "$(cat ${PID_PATH})" 2>/dev/null; then echo ALIVE; fi`,
+				),
+				10_000,
+			),
+		);
+		if (!alive.stdout.includes("ALIVE")) {
+			return failed(
+				"Claude Code login expired. Sign in again for a new Anthropic URL.",
+			);
+		}
+		yield* Effect.tryPromise(() =>
+			machines.writeTextFile(workspaceId, CODE_PATH, `${code}\n`),
+		);
+		for (let attempt = 0; attempt < 45; attempt += 1) {
+			yield* Effect.sleep(Duration.seconds(1));
+			const status = yield* refreshClaudeAuthStatus(machines, workspaceId);
+			if (status.stage === "authenticated") {
+				if (status.models.length === 0) {
+					const locate = yield* Effect.tryPromise(() =>
+						machines.exec(workspaceId, guestBash(LOCATE_CLAUDE), 15_000),
+					);
+					const claudeBin = parseClaudeBinaryPath(locate.stdout);
+					if (claudeBin) {
+						return yield* attachClaudeModels(
+							machines,
+							workspaceId,
+							claudeBin,
+							status,
+						);
+					}
+				}
+				return status;
+			}
+			if (status.stage === "failed") return status;
+		}
+		return failed(
+			"Claude Code did not accept that login code. Open Anthropic again and paste the new code.",
+		);
+	}).pipe(
+		Effect.catchAll((cause) =>
+			Effect.succeed(
+				failed(cause instanceof Error ? cause.message : String(cause)),
+			),
+		),
+	);
 }
 
 function applyStoredClaudeKey(
@@ -328,8 +515,8 @@ function probeClaudeCli(
 	return Effect.tryPromise(() =>
 		machines.exec(
 			workspaceId,
-			`${prefix}${posixShellQuoted(claudeBin)} auth status`,
-			30_000,
+			guestBash(`${prefix}${posixShellQuoted(claudeBin)} auth status`),
+			8_000,
 		),
 	).pipe(
 		Effect.flatMap((result) =>
@@ -368,6 +555,7 @@ function attachClaudeModels(
 ): Effect.Effect<ClaudeAuthStatus> {
 	return listClaudeModels(machines, workspaceId, claudeBin, null).pipe(
 		Effect.map((models) => ({ ...status, models })),
+		Effect.tap((next) => persistClaudeStatus(machines, workspaceId, next)),
 	);
 }
 
@@ -375,29 +563,28 @@ function listClaudeModels(
 	machines: WorkspaceMachines,
 	workspaceId: WorkspaceId,
 	claudeBin: string,
-	keyEnvPath: string | null,
+	_keyEnvPath: string | null,
 ): Effect.Effect<readonly ListedModel[]> {
-	const prefix = keyEnvPath ? `. ${posixShellQuoted(keyEnvPath)}\n` : "";
 	return Effect.tryPromise(() =>
 		machines.exec(
 			workspaceId,
-			`${prefix}${posixShellQuoted(claudeBin)} models --json || ${posixShellQuoted(claudeBin)} models || true`,
-			30_000,
+			guestBash(`${posixShellQuoted(claudeBin)} --help`),
+			15_000,
 		),
 	).pipe(
-		Effect.map((result) =>
-			parseClaudeListedModels(`${result.stdout}\n${result.stderr}`),
-		),
+		Effect.map((result) => {
+			const fromHelp = parseClaudeModelFlagsFromHelp(
+				`${result.stdout}\n${result.stderr}`,
+			);
+			if (fromHelp.length > 0) return fromHelp;
+			return [];
+		}),
 		Effect.catchAll(() => Effect.succeed([] as const)),
 	);
 }
 
 function failed(message: string): ClaudeAuthStatus {
 	return { stage: "failed", message };
-}
-
-function firstMatch(stdout: string, pattern: RegExp): string | null {
-	return stdout.match(pattern)?.[1]?.trim() ?? null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -474,9 +661,9 @@ export function submitClaudeTask(
 		const current = yield* refreshClaudeAuthStatus(machines, workspaceId);
 		if (current.stage !== "authenticated") return current;
 		const locate = yield* Effect.tryPromise(() =>
-			machines.exec(workspaceId, LOCATE_CLAUDE, 30_000),
+			machines.exec(workspaceId, guestBash(LOCATE_CLAUDE), 15_000),
 		);
-		const claudeBin = firstMatch(locate.stdout, /^CLAUDE_BIN=(.+)$/m);
+		const claudeBin = parseClaudeBinaryPath(locate.stdout);
 		if (locate.exitCode !== 0 || !claudeBin) {
 			return failed("Claude Code is not installed on this workspace");
 		}
@@ -495,7 +682,9 @@ export function submitClaudeTask(
 		const result = yield* Effect.tryPromise(() =>
 			machines.exec(
 				workspaceId,
-				`${keyPrefix}${posixShellQuoted(claudeBin)} -p --output-format text --dangerously-skip-permissions --model ${posixShellQuoted(input.modelId)} ${posixShellQuoted(input.promptText ?? input.text)}`,
+				guestBash(
+					`${keyPrefix}${posixShellQuoted(claudeBin)} -p --output-format text --dangerously-skip-permissions --model ${posixShellQuoted(input.modelId)} ${posixShellQuoted(input.promptText ?? input.text)}`,
+				),
 				180_000,
 			),
 		);

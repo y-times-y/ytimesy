@@ -1,4 +1,8 @@
 import { Effect } from "effect";
+import {
+	guestCliDisableUpdateExports,
+	pinnedCodexInstallCommand,
+} from "#/domain/guest-cli-pin";
 import type { WorkspaceId } from "#/domain/ids";
 import type { CodexProbeResult } from "#/server/services/capabilities";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
@@ -6,8 +10,11 @@ import { CODEX_JSONRPC_PROBE_SCRIPT } from "./json-rpc-probe";
 import { agentConnectionFromProbe, parseCodexProbeReport } from "./protocol";
 
 const CODEX_INSTALL_SCRIPT = `set -eu
+${guestCliDisableUpdateExports()}
 export HOME="\${HOME:-/root}"
-curl -fsSL https://chatgpt.com/codex/install.sh | sh
+if ! command -v codex >/dev/null 2>&1 && [ ! -x "$HOME/.codex/packages/standalone/current/codex" ]; then
+  ${pinnedCodexInstallCommand()}
+fi
 export PATH="$HOME/.local/bin:$HOME/.codex/bin:$HOME/.codex/packages/standalone/current:$PATH"
 if [ -x "$HOME/.codex/packages/standalone/current/codex" ]; then
   CODEX_BIN="$HOME/.codex/packages/standalone/current/codex"

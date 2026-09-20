@@ -6,8 +6,12 @@ import {
 } from "./agent-provider";
 import {
 	canResumeDisconnectedFollowUp,
+	claudeAuthNeedsPaste,
+	composerCanStartSignIn,
 	composerSendIsEnabled,
 	harnessAccess,
+	harnessLoginShouldShow,
+	harnessLoginIsPending,
 	harnessRequiresAccountLogin,
 	offeredHarnessAccess,
 	runningAuthenticatedTurnShouldPoll,
@@ -204,6 +208,14 @@ describe("harness access", () => {
 		).toBe(false);
 		expect(
 			canResumeDisconnectedFollowUp({
+				harnessId: "claude",
+				connection: { status: "disconnected" },
+				turnStatus: "idle",
+				listedModelId: "fable",
+			}),
+		).toBe(true);
+		expect(
+			canResumeDisconnectedFollowUp({
 				harnessId: "opencode",
 				connection: { status: "disconnected" },
 				turnStatus: "running",
@@ -246,7 +258,54 @@ describe("harness access", () => {
 				modelId: "",
 				slashDraft: false,
 			}),
+		).toBe(true);
+		expect(
+			composerCanStartSignIn({
+				harnessId: "claude",
+				connection: { status: "disconnected" },
+				busy: false,
+				draft: "Add a follow up",
+				slashDraft: false,
+			}),
+		).toBe(true);
+		expect(
+			composerSendIsEnabled({
+				harnessId: "claude",
+				connection: {
+					status: "awaiting_device_code",
+					provider: "claude",
+					loginId: "claude-auth",
+					verificationUrl: "https://claude.com/cai/oauth/authorize",
+					userCode: "",
+				},
+				turnStatus: "idle",
+				canSend: false,
+				busy: false,
+				draft: "Add a follow up",
+				modelId: "",
+				slashDraft: false,
+			}),
 		).toBe(false);
+		expect(
+			harnessLoginShouldShow({
+				harnessReady: false,
+				harnessId: "claude",
+				connection: { status: "disconnected" },
+			}),
+		).toBe(false);
+		expect(
+			harnessLoginShouldShow({
+				harnessReady: false,
+				harnessId: "claude",
+				connection: {
+					status: "awaiting_device_code",
+					provider: "claude",
+					loginId: "claude-auth",
+					verificationUrl: "https://claude.com/cai/oauth/authorize",
+					userCode: "",
+				},
+			}),
+		).toBe(true);
 		expect(
 			composerSendIsEnabled({
 				harnessId: "opencode",
@@ -307,7 +366,27 @@ describe("harness access", () => {
 				"https://claude.ai/oauth/authorize?code=true&client_id=abc",
 		});
 		expect(access.summary).toMatch(/Anthropic/);
-		expect(access.summary).toMatch(/Terminal/);
+		expect(access.summary).toMatch(/paste it here/);
+		expect(
+			claudeAuthNeedsPaste({
+				status: "awaiting_device_code",
+				provider: "claude",
+				loginId: "claude-auth",
+				verificationUrl:
+					"https://claude.ai/oauth/authorize?code=true&client_id=abc",
+				userCode: "",
+			}),
+		).toBe(true);
+		expect(
+			harnessLoginIsPending({
+				status: "awaiting_device_code",
+				provider: "claude",
+				loginId: "claude-auth",
+				verificationUrl:
+					"https://claude.ai/oauth/authorize?code=true&client_id=abc",
+				userCode: "",
+			}),
+		).toBe(true);
 	});
 
 	it("keeps the device code on the authorizing Codex row", () => {
@@ -330,6 +409,15 @@ describe("harness access", () => {
 			userCode: "ABCD-1234",
 			verificationUrl: "https://auth.openai.com/codex/device",
 		});
+		expect(
+			claudeAuthNeedsPaste({
+				status: "awaiting_device_code",
+				provider: "codex",
+				loginId: "login-1",
+				verificationUrl: "https://auth.openai.com/codex/device",
+				userCode: "ABCD-1234",
+			}),
+		).toBe(false);
 	});
 });
 

@@ -1,11 +1,20 @@
 const ANTHROPIC_LOGIN_HOSTS = new Set([
 	"claude.ai",
+	"claude.com",
 	"platform.claude.com",
 	"console.anthropic.com",
 ]);
 
 const LOGIN_URL_PATTERN =
-	/https:\/\/(?:claude\.ai|platform\.claude\.com|console\.anthropic\.com)[^\s"'<>\\]+/gi;
+	/https:\/\/(?:claude\.ai|claude\.com|platform\.claude\.com|console\.anthropic\.com)[^\s"'<>\\\x00-\x1f]+/gi;
+
+export function parseClaudeBinaryPath(output: string): string | null {
+	return output.match(/^CLAUDE_BIN=(.+)$/m)?.[1]?.trim() || null;
+}
+
+export function parseClaudeHomePath(output: string): string | null {
+	return output.match(/^CLAUDE_HOME=(.+)$/m)?.[1]?.trim() || null;
+}
 
 export function parseAnthropicLoginUrl(output: string): string | null {
 	const matches = output.match(LOGIN_URL_PATTERN) ?? [];
@@ -27,15 +36,126 @@ export function isAnthropicAuthorizeUrl(value: string): boolean {
 	}
 }
 
+const CALLBACK_CODE_PATTERN = /^[A-Za-z0-9._~+/-]+=*(?:#[A-Za-z0-9._~+/-]+=*)+$/;
+const LONG_CODE_PATTERN = /^[A-Za-z0-9._~+/-]+=*$/;
+
+/**
+ * Anthropic's remote login is not device-code. After the user signs in on
+ * Anthropic's page, that page shows a paste-back code bound to the same
+ * `claude auth login` PKCE session. API keys and setup-tokens are not this
+ * code.
+ */
+export function parseClaudeAuthPasteCode(input: string): string | null {
+	const trimmed = input.trim();
+	if (!trimmed || /\s/.test(trimmed)) return null;
+	if (isAnthropicApiKey(trimmed) || isClaudeOauthToken(trimmed)) return null;
+	const fromUrl = codeFromAnthropicCallbackUrl(trimmed);
+	if (fromUrl) return fromUrl;
+	if (trimmed.length < 8 || trimmed.length > 2048) return null;
+	if (CALLBACK_CODE_PATTERN.test(trimmed)) return trimmed;
+	if (LONG_CODE_PATTERN.test(trimmed) && trimmed.length >= 16) return trimmed;
+	return null;
+}
+
+export function isAnthropicApiKey(value: string): boolean {
+	return /^sk-ant-api/i.test(value.trim());
+}
+
+export function isClaudeOauthToken(value: string): boolean {
+	return /^sk-ant-oat/i.test(value.trim());
+}
+
+function codeFromAnthropicCallbackUrl(value: string): string | null {
+	try {
+		const url = new URL(value);
+		if (url.protocol !== "https:") return null;
+		if (!ANTHROPIC_LOGIN_HOSTS.has(url.hostname)) return null;
+		if (!url.pathname.includes("callback") && !url.pathname.includes("code")) {
+			return null;
+		}
+		const code = url.searchParams.get("code")?.trim();
+		if (!code) return null;
+		const state = url.searchParams.get("state")?.trim();
+		return state ? `${code}#${state}` : code;
+	} catch {
+		return null;
+	}
+}
+
+export function claudeSessionRemembersSignIn(
+	listedModelId?: string | null,
+): boolean {
+	const id = listedModelId?.trim() ?? "";
+	if (!id) return false;
+	return (
+		id === "fable" ||
+		id === "opus" ||
+		id === "sonnet" ||
+		id.startsWith("claude")
+	);
+}
+
+export function rememberedClaudeModels(listedModelId: string): readonly {
+	readonly id: string;
+	readonly label: string;
+}[] {
+	const aliases = [
+		{ id: "fable", label: "fable" },
+		{ id: "opus", label: "opus" },
+		{ id: "sonnet", label: "sonnet" },
+	] as const;
+	if (aliases.some((model) => model.id === listedModelId)) return aliases;
+	return [{ id: listedModelId, label: listedModelId }, ...aliases];
+}
+
 export function claudeCliIsSignedIn(output: string): boolean {
 	const text = output.trim();
 	if (!text) return false;
 	if (/\bnot logged in\b/i.test(text)) return false;
 	if (/\blogin required\b/i.test(text)) return false;
+	const fromJson = loggedInFromStatusJson(text);
+	if (fromJson !== null) return fromJson;
 	return (
 		/\blogged in\b/i.test(text) ||
 		/\blogin successful\b/i.test(text) ||
 		/\bauthenticated\b/i.test(text)
+	);
+}
+
+function loggedInFromStatusJson(output: string): boolean | null {
+	try {
+		const parsed: unknown = JSON.parse(output);
+		if (!isRecord(parsed) || typeof parsed.loggedIn !== "boolean") {
+			return null;
+		}
+		return parsed.loggedIn;
+	} catch {
+		return null;
+	}
+}
+
+export function parseClaudeModelFlagsFromHelp(output: string): readonly {
+	readonly id: string;
+	readonly label: string;
+}[] {
+	const aliases = output.match(
+		/alias for the latest model[\s\S]*?'([^']+)',\s*'([^']+)',\s*or\s*'([^']+)'/i,
+	);
+	if (!aliases) return [];
+	return [aliases[1], aliases[2], aliases[3]]
+		.filter((id): id is string => Boolean(id))
+		.map((id) => ({ id, label: id }));
+}
+
+export function claudeListedModelsAreUsable(
+	models: readonly { readonly id: string }[],
+): boolean {
+	return (
+		models.length > 0 &&
+		models.every(
+			(model) =>
+				/^[a-z][a-z0-9._:-]*$/i.test(model.id.trim()) && !/\s/.test(model.id),
+		)
 	);
 }
 
@@ -110,12 +230,22 @@ function modelsFromCliLines(output: string): readonly {
 		const withId = line.match(/^(.+?)\s+\(([^)]+)\)/);
 		if (withId?.[1] && withId[2]) {
 			const id = withId[2].trim();
-			if (seen.has(id)) continue;
+			if (
+				seen.has(id) ||
+				/\s/.test(id) ||
+				!/^[a-z][a-z0-9._:-]*$/i.test(id)
+			) {
+				continue;
+			}
 			seen.add(id);
 			models.push({ id, label: withId[1].trim() });
 			continue;
 		}
-		if (/^[a-z0-9][a-z0-9._:-]*$/i.test(line) && line.includes("-")) {
+		if (
+			/^[a-z][a-z0-9._:-]*$/i.test(line) &&
+			line.includes("-") &&
+			!/\s/.test(line)
+		) {
 			if (seen.has(line)) continue;
 			seen.add(line);
 			models.push({ id: line, label: line });
@@ -125,7 +255,7 @@ function modelsFromCliLines(output: string): readonly {
 }
 
 function stripTrailingPunctuation(value: string) {
-	return value.replace(/[).,;]+$/g, "");
+	return value.replace(/[\x00-\x1f]/g, "").replace(/[).,;]+$/g, "");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

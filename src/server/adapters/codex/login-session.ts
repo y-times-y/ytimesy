@@ -2,6 +2,11 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { Duration, Effect } from "effect";
 import { failureMessage } from "#/domain/failure-message";
+import {
+	guestCliDisableUpdateExports,
+	pinnedCodexInstallCommand,
+} from "#/domain/guest-cli-pin";
+import { ensureGuestCliPin } from "#/server/adapters/guest-cli-pin";
 import type { WorkspaceId } from "#/domain/ids";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
 import {
@@ -18,8 +23,11 @@ const LOGIN_DAEMON_SOURCE = readFileSync(
 const LOGIN_DAEMON_HASH_PATH = "/tmp/ytimesy-codex-login.hash";
 
 const CODEX_INSTALL_SCRIPT = `set -eu
+${guestCliDisableUpdateExports()}
 export HOME="\${HOME:-/root}"
-curl -fsSL https://chatgpt.com/codex/install.sh | sh
+if ! command -v codex >/dev/null 2>&1 && [ ! -x "$HOME/.codex/packages/standalone/current/codex" ]; then
+  ${pinnedCodexInstallCommand()}
+fi
 export PATH="$HOME/.local/bin:$HOME/.codex/bin:$HOME/.codex/packages/standalone/current:$PATH"
 if [ -x "$HOME/.codex/packages/standalone/current/codex" ]; then
   CODEX_BIN="$HOME/.codex/packages/standalone/current/codex"
@@ -55,6 +63,7 @@ echo "LOGIN_PID=$(cat /tmp/ytimesy-codex-login.pid)"
 `;
 
 const LOCATE_CODEX = `set -eu
+${guestCliDisableUpdateExports()}
 if [ -z "\${HOME:-}" ]; then
   export HOME=/root
 fi
@@ -124,6 +133,7 @@ export function startInteractiveDeviceCodeLogin(
 	options: { skipInitialTurn?: boolean } = {},
 ): Effect.Effect<CodexLoginStatus> {
 	return Effect.gen(function* () {
+		yield* ensureGuestCliPin(machines, workspaceId);
 		const install = yield* Effect.tryPromise(() =>
 			machines.exec(workspaceId, CODEX_INSTALL_SCRIPT, 240_000),
 		);
@@ -193,6 +203,7 @@ export function resumeCodexSession(
 	options: { skipInitialTurn?: boolean } = {},
 ): Effect.Effect<CodexLoginStatus> {
 	return Effect.gen(function* () {
+		yield* ensureGuestCliPin(machines, workspaceId);
 		const locate = yield* Effect.tryPromise(() =>
 			machines.exec(
 				workspaceId,

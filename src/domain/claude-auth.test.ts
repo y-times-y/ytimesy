@@ -1,12 +1,37 @@
 import { describe, expect, it } from "vitest";
 import {
 	claudeCliIsSignedIn,
+	claudeSessionRemembersSignIn,
+	rememberedClaudeModels,
+	claudeListedModelsAreUsable,
 	isAnthropicAuthorizeUrl,
 	parseAnthropicLoginUrl,
+	parseClaudeAuthPasteCode,
+	parseClaudeBinaryPath,
+	parseClaudeHomePath,
 	parseClaudeListedModels,
+	parseClaudeModelFlagsFromHelp,
 } from "./claude-auth";
 
 describe("Claude Code login parsing", () => {
+	it("reads the guest binary from locate output and ignores a missing install", () => {
+		expect(
+			parseClaudeBinaryPath(
+				["CLAUDE_HOME=/home/ubuntu", "CLAUDE_BIN=/usr/local/bin/claude"].join(
+					"\n",
+				),
+			),
+		).toBe("/usr/local/bin/claude");
+		expect(parseClaudeBinaryPath("claude binary not found")).toBeNull();
+		expect(
+			parseClaudeHomePath(
+				["CLAUDE_HOME=/home/ubuntu", "CLAUDE_BIN=/usr/local/bin/claude"].join(
+					"\n",
+				),
+			),
+		).toBe("/home/ubuntu");
+	});
+
 	it("keeps Anthropic's authorize URL and rejects wrapped or localhost callbacks", () => {
 		const output = [
 			"Browser didn't open. Use this URL:",
@@ -18,11 +43,42 @@ describe("Claude Code login parsing", () => {
 			/^https:\/\/claude\.ai\/oauth\/authorize\?/,
 		);
 		expect(
+			parseAnthropicLoginUrl(
+				"https://claude.com/cai/oauth/authorize?code=true&client_id=abc",
+			),
+		).toMatch(/^https:\/\/claude\.com\/cai\/oauth\/authorize\?/);
+		expect(
 			isAnthropicAuthorizeUrl("https://ytimesy.com/login?next=claude"),
 		).toBe(false);
 		expect(isAnthropicAuthorizeUrl("http://localhost:54134/callback")).toBe(
 			false,
 		);
+	});
+
+	it("accepts Anthropic's paste-back code and rejects keys or device codes", () => {
+		expect(parseClaudeAuthPasteCode("ABC123#XYZ789")).toBe("ABC123#XYZ789");
+		expect(parseClaudeAuthPasteCode("  ABC123#XYZ789  ")).toBe("ABC123#XYZ789");
+		expect(
+			parseClaudeAuthPasteCode(
+				"https://platform.claude.com/oauth/code/callback?code=ABC123&state=XYZ789",
+			),
+		).toBe("ABC123#XYZ789");
+		expect(parseClaudeAuthPasteCode("")).toBeNull();
+		expect(parseClaudeAuthPasteCode("ABCD-1234")).toBeNull();
+		expect(parseClaudeAuthPasteCode("sk-ant-api03-secret")).toBeNull();
+		expect(parseClaudeAuthPasteCode("sk-ant-oat01-secret")).toBeNull();
+		expect(parseClaudeAuthPasteCode("not a code")).toBeNull();
+	});
+
+	it("remembers a prior Claude sign-in from the stored model id", () => {
+		expect(claudeSessionRemembersSignIn("fable")).toBe(true);
+		expect(claudeSessionRemembersSignIn("opus")).toBe(true);
+		expect(claudeSessionRemembersSignIn("")).toBe(false);
+		expect(rememberedClaudeModels("fable")).toEqual([
+			{ id: "fable", label: "fable" },
+			{ id: "opus", label: "opus" },
+			{ id: "sonnet", label: "sonnet" },
+		]);
 	});
 
 	it("does not treat a stored key or empty status as signed in", () => {
@@ -31,6 +87,43 @@ describe("Claude Code login parsing", () => {
 		expect(claudeCliIsSignedIn("API key saved")).toBe(false);
 		expect(claudeCliIsSignedIn("Logged in as het@example.com")).toBe(true);
 		expect(claudeCliIsSignedIn("Login successful")).toBe(true);
+		expect(claudeCliIsSignedIn('{"loggedIn":true,"authMethod":"claude.ai"}')).toBe(
+			true,
+		);
+		expect(claudeCliIsSignedIn('{"loggedIn":false}')).toBe(false);
+	});
+
+	it("loads --model aliases from Claude Code help and ignores a chat reply", () => {
+		expect(
+			parseClaudeModelFlagsFromHelp(
+				"Provide an alias for the latest model (e.g. 'fable', 'opus', or 'sonnet') or a model's full name (e.g. 'claude-fable-5').",
+			),
+		).toEqual([
+			{ id: "fable", label: "fable" },
+			{ id: "opus", label: "opus" },
+			{ id: "sonnet", label: "sonnet" },
+		]);
+		expect(
+			parseClaudeModelFlagsFromHelp(
+				[
+					"--model <model>                       Model for the current session. Provide",
+					"                                        an alias for the latest model (e.g.",
+					"                                        'fable', 'opus', or 'sonnet') or a",
+					"                                        model's full name (e.g.",
+					"                                        'claude-fable-5').",
+					"      Comma or space-separated list of tool names to allow (e.g. \"Bash(git *)",
+				].join("\n"),
+			),
+		).toEqual([
+			{ id: "fable", label: "fable" },
+			{ id: "opus", label: "opus" },
+			{ id: "sonnet", label: "sonnet" },
+		]);
+		expect(
+			parseClaudeListedModels(
+				"Could you clarify what you'd like to know about models?",
+			),
+		).toEqual([]);
 	});
 
 	it("loads model names only from Claude Code output", () => {
@@ -56,5 +149,17 @@ describe("Claude Code login parsing", () => {
 			{ id: "claude-opus-4-6", label: "opus" },
 		]);
 		expect(parseClaudeListedModels("not a model list")).toEqual([]);
+		expect(
+			claudeListedModelsAreUsable([
+				{ id: "fable" },
+				{ id: "opus" },
+				{ id: "sonnet" },
+			]),
+		).toBe(true);
+		expect(
+			claudeListedModelsAreUsable([
+				{ id: 'e.g. "Bash(git *' },
+			]),
+		).toBe(false);
 	});
 });

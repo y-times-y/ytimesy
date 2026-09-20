@@ -252,6 +252,9 @@ describe("OPENCODE_START_SERVE_SCRIPT", () => {
 		expect(OPENCODE_START_SERVE_SCRIPT).toContain(PROJECT_CWD_PATH);
 		expect(OPENCODE_START_SERVE_SCRIPT).toContain('cd "$SERVE_CWD"');
 		expect(OPENCODE_START_SERVE_SCRIPT).toContain(".ytimesy-agent-secrets.env");
+		expect(OPENCODE_START_SERVE_SCRIPT).toContain(
+			"OPENCODE_DISABLE_AUTOUPDATE",
+		);
 	});
 });
 

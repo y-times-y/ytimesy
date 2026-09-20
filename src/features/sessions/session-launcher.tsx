@@ -6,8 +6,14 @@ import {
 	agentProviderById,
 } from "#/domain/agent-provider";
 import {
+	claudeSessionRemembersSignIn,
+	rememberedClaudeModels,
+} from "#/domain/claude-auth";
+import {
 	canResumeDisconnectedFollowUp,
+	composerCanStartSignIn,
 	composerSendIsEnabled,
+	harnessLoginShouldShow,
 	harnessRequiresAccountLogin,
 	selectedHarnessIsConnected,
 } from "#/domain/harness-access";
@@ -27,6 +33,7 @@ import {
 	type SlashCommand,
 } from "#/domain/slash-command";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
+import { HarnessLogin } from "./harness-login";
 import { sessionModelsFromListed } from "./model-capabilities";
 import { ProjectContext } from "./project-context";
 import { SessionControls } from "./session-controls";
@@ -42,6 +49,8 @@ export function SessionLauncher({
 	harnessId,
 	onHarnessIdChange,
 	onSend,
+	onConnect,
+	onSubmitAuthCode,
 	onStop,
 	onOpenSideChat,
 	onOpenInspector,
@@ -59,6 +68,8 @@ export function SessionLauncher({
 	harnessId: AgentProviderId;
 	onHarnessIdChange: (id: AgentProviderId) => void;
 	onSend: (text: string, modelId: string) => void;
+	onConnect: () => void;
+	onSubmitAuthCode: (code: string) => void;
 	onStop: () => void;
 	onOpenSideChat: (question?: string) => void;
 	onOpenInspector: (view: InspectorView) => void;
@@ -71,18 +82,27 @@ export function SessionLauncher({
 	projectPickerOpen?: boolean;
 	onProjectPickerOpenChange?: (open: boolean) => void;
 }) {
-	const harnessReady = selectedHarnessIsConnected(
-		session.connection,
-		harnessId,
-	);
+	const harnessReady =
+		selectedHarnessIsConnected(session.connection, harnessId) ||
+		(harnessId === "claude" &&
+			claudeSessionRemembersSignIn(session.listedModelId));
 	const canResumeFollowUp = canResumeDisconnectedFollowUp({
 		harnessId,
 		connection: session.connection,
 		turnStatus: session.turnStatus,
 		snapshotAvailable: session.snapshotAvailable,
+		listedModelId: session.listedModelId,
 	});
 	const composerReady = (harnessReady && session.canSend) || canResumeFollowUp;
-	const models = harnessReady ? sessionModelsFromListed(session.models) : [];
+	const models = harnessReady
+		? sessionModelsFromListed(
+				session.models.length > 0
+					? session.models
+					: harnessId === "claude" && session.listedModelId
+						? rememberedClaudeModels(session.listedModelId)
+						: [],
+			)
+		: [];
 	const [attachments, setAttachments] = useState<File[]>([]);
 	const [draft, setDraft] = useState("");
 	const [modelId, setModelId] = useState(session.listedModelId);
@@ -192,6 +212,7 @@ export function SessionLauncher({
 				connection: session.connection,
 				turnStatus: session.turnStatus,
 				snapshotAvailable: session.snapshotAvailable,
+				listedModelId: session.listedModelId,
 				canSend: session.canSend,
 				busy,
 				draft: text,
@@ -323,6 +344,19 @@ export function SessionLauncher({
 								onSelect={runSlashCommand}
 							/>
 						) : null}
+						{harnessLoginShouldShow({
+							harnessReady,
+							harnessId,
+							connection: session.connection,
+						}) ? (
+							<HarnessLogin
+								harnessId={harnessId}
+								connection={session.connection}
+								busy={busy}
+								onConnect={onConnect}
+								onSubmitAuthCode={onSubmitAuthCode}
+							/>
+						) : null}
 						<TaskInput
 							value={draft}
 							onChange={setDraft}
@@ -402,6 +436,7 @@ export function SessionLauncher({
 											connection: session.connection,
 											turnStatus: session.turnStatus,
 											snapshotAvailable: session.snapshotAvailable,
+											listedModelId: session.listedModelId,
 											canSend: session.canSend,
 											busy,
 											draft,
@@ -416,9 +451,17 @@ export function SessionLauncher({
 												? session.canSend
 													? "Send task"
 													: "Wait for this harness to finish starting"
-												: harnessRequiresAccountLogin(harnessId)
-													? `Sign in to ${agentProviderById(harnessId).name} to start a session`
-													: `Connect ${agentProviderById(harnessId).name} to start a session`
+												: composerCanStartSignIn({
+															harnessId,
+															connection: session.connection,
+															busy,
+															draft,
+															slashDraft: Boolean(slashDraft),
+														})
+													? "Send"
+													: harnessRequiresAccountLogin(harnessId)
+														? `Sign in to ${agentProviderById(harnessId).name} to start a session`
+														: `Connect ${agentProviderById(harnessId).name} to start a session`
 									}
 									onClick={sendDraft}
 								>

@@ -28,6 +28,7 @@ import { authorizedRepository } from "#/server/adapters/github";
 import { githubInstallationAccessToken } from "#/server/adapters/github/installation-token";
 import { listProjects, projectForOwner } from "#/server/adapters/projects";
 import { githubAccessToken } from "#/server/auth/github-connection";
+import { ensureGuestCliPin } from "#/server/adapters/guest-cli-pin";
 import { injectProjectSecrets } from "./project-secrets";
 import type { DesktopScope } from "./workspace-desktop";
 import type { WorkspaceMachines } from "./workspace-machines";
@@ -210,6 +211,7 @@ export function preparePreparedGuest(
 	scope: DesktopScope,
 ): Effect.Effect<void, Error> {
 	return Effect.gen(function* () {
+		yield* ensureGuestCliPin(machines, workspaceId);
 		const checkout = yield* loadTenantProjectCheckout(scope);
 		const cwd = yield* ensureProjectCheckout(machines, workspaceId, checkout);
 		const secretNames = yield* injectProjectSecrets(

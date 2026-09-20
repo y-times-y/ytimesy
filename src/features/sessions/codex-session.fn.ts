@@ -11,6 +11,7 @@ import { parseHarnessId } from "#/server/secrets/harness-key-store";
 import { WorkspaceMachineService } from "#/server/services/capabilities";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
 import {
+	completeClaudeWorkspaceAuth,
 	connectHarnessWorkspaceSession,
 	emptyHarnessSession,
 	type HarnessSessionScope,
@@ -106,6 +107,39 @@ export const connectCodexSession = createServerFn({ method: "POST" })
 		);
 		return runWithMachines((machines) =>
 			connectHarnessWorkspaceSession(machines, scope),
+		);
+	});
+
+export const completeClaudeSessionAuth = createServerFn({ method: "POST" })
+	.validator(
+		(data: {
+			code: string;
+			projectId?: string;
+			sessionId?: string;
+			createNew?: boolean;
+		}) => {
+			const code = data.code.trim();
+			if (!code) throw new Error("Paste the login code from Anthropic's page.");
+			return {
+				...optionalSessionInput({
+					projectId: data.projectId,
+					sessionId: data.sessionId,
+					createNew: data.createNew,
+					harnessId: "claude",
+				}),
+				code,
+			};
+		},
+	)
+	.handler(async ({ data }): Promise<PublicCodexSession> => {
+		const scope = await requireScope(
+			data.projectId,
+			"claude",
+			data.sessionId,
+			data.createNew,
+		);
+		return runWithMachines((machines) =>
+			completeClaudeWorkspaceAuth(machines, scope, data.code),
 		);
 	});
 
