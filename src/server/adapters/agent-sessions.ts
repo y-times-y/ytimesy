@@ -52,6 +52,28 @@ export async function listProjectProviderRefs(
 	return result.rows.map((row: { provider_ref: string }) => row.provider_ref);
 }
 
+export async function listUserProviderRefs(
+	userId: string,
+	excludeProviderRef?: string,
+): Promise<string[]> {
+	const result = await database().query(
+		`select provider_ref
+		 from agent_session
+		 where user_id=$1 and provider_ref is not null
+		 order by updated_at desc`,
+		[userId],
+	);
+	const seen = new Set<string>();
+	const refs: string[] = [];
+	for (const row of result.rows as { provider_ref: string }[]) {
+		const ref = row.provider_ref.trim();
+		if (!ref || ref === excludeProviderRef || seen.has(ref)) continue;
+		seen.add(ref);
+		refs.push(ref);
+	}
+	return refs;
+}
+
 export async function listAgentSessions(userId: string, projectId: string) {
 	const result = await database().query(
 		`select ${SESSION_COLUMNS}

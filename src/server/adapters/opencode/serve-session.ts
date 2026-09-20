@@ -22,7 +22,12 @@ import type {
 	SessionTurnStatus,
 	ToolActivityStatus,
 } from "#/domain/session-item";
+import {
+	guestCliDisableUpdateExports,
+	pinnedOpenCodeInstallCommand,
+} from "#/domain/guest-cli-pin";
 import { PROJECT_CWD_PATH } from "#/server/adapters/freestyle/clone-project";
+import { ensureGuestCliPin } from "#/server/adapters/guest-cli-pin";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
 
 const STATUS_PATH = "/tmp/ytimesy-opencode-status.json";
@@ -60,6 +65,7 @@ print(json.dumps({"porcelain": porcelain, "previews": previews}))
 PY`;
 
 export const OPENCODE_LOCATE_BIN_SCRIPT = `set -eu
+${guestCliDisableUpdateExports()}
 export HOME="\${HOME:-/root}"
 export PATH="$HOME/.opencode/bin:$HOME/.local/bin:/usr/local/bin:$PATH"
 if ! command -v opencode >/dev/null 2>&1; then
@@ -69,10 +75,11 @@ echo "OPENCODE_BIN=$(command -v opencode)"
 `;
 
 const INSTALL_SCRIPT = `set -eu
+${guestCliDisableUpdateExports()}
 export HOME="\${HOME:-/root}"
 export PATH="$HOME/.opencode/bin:$HOME/.local/bin:/usr/local/bin:$PATH"
 if ! command -v opencode >/dev/null 2>&1; then
-  curl -fsSL https://opencode.ai/install | bash
+  ${pinnedOpenCodeInstallCommand()}
 fi
 export PATH="$HOME/.opencode/bin:$HOME/.local/bin:/usr/local/bin:$PATH"
 if command -v opencode >/dev/null 2>&1; then
@@ -86,6 +93,7 @@ echo "OPENCODE_BIN=$OPENCODE_BIN"
 `;
 
 export const OPENCODE_START_SERVE_SCRIPT = `set -eu
+${guestCliDisableUpdateExports()}
 CWD_FILE=${PROJECT_CWD_PATH}
 if [ -f "$CWD_FILE" ]; then
   SERVE_CWD="$(tr -d '\\n\\r' < "$CWD_FILE")"
@@ -223,6 +231,7 @@ export function connectOpenCode(
 	options?: { readonly discardCopiedTranscript?: boolean },
 ): Effect.Effect<OpenCodeAuthStatus> {
 	return Effect.gen(function* () {
+		yield* ensureGuestCliPin(machines, workspaceId);
 		const located = yield* Effect.tryPromise(() =>
 			machines.exec(workspaceId, OPENCODE_LOCATE_BIN_SCRIPT, 15_000),
 		);

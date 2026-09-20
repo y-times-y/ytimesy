@@ -4,10 +4,15 @@ import {
 	type AgentProviderId,
 	agentProviderById,
 } from "#/domain/agent-provider";
+import {
+	claudeSessionRemembersSignIn,
+	rememberedClaudeModels,
+} from "#/domain/claude-auth";
 import { canResumeDisconnectedFollowUp } from "#/domain/harness-access";
 import { WorkspaceId } from "#/domain/ids";
 import {
 	listedModelPreferenceFromSessions,
+	preferredListedModelId,
 	submittedListedModelId,
 } from "#/domain/listed-model";
 import {
@@ -20,11 +25,14 @@ import type { WorkspaceLifecycle } from "#/domain/workspace";
 import {
 	type AgentSessionRecord,
 	childAgentSession,
+	listUserProviderRefs,
 } from "#/server/adapters/agent-sessions";
+import { captureClaudeHome } from "#/server/adapters/claude/home-files";
 import {
 	type ClaudeAuthStatus,
 	connectClaudeCode,
 	refreshClaudeAuthStatus,
+	submitClaudeAuthCode,
 	submitClaudeTask,
 } from "#/server/adapters/claude/login-session";
 import {
@@ -88,6 +96,14 @@ export function readHarnessWorkspaceSession(
 	return withSessionMachine(machines, scope, false, (providerRef, session) => {
 		if (scope.harnessId === "claude") {
 			return refreshClaudeAuthStatus(machines, WorkspaceId(providerRef)).pipe(
+				Effect.tap((status) =>
+					rememberClaudeHome(
+						machines,
+						WorkspaceId(providerRef),
+						scope.userId,
+						status,
+					),
+				),
 				Effect.map((status) => viewFromClaude(status, providerRef)),
 				Effect.flatMap((view) =>
 					Effect.tryPromise(() => persistBoundSessionView(session, view)),
@@ -106,9 +122,9 @@ export function readHarnessWorkspaceSession(
 }
 
 /**
- * Starts the selected harness on this agent session's VM. Stored keys are
- * passed to the unmodified CLI or `opencode serve` and never count as signed
- * in on their own.
+ * Starts the selected harness on this agent session's VM. Claude Sign in
+ * only resumes or copies that VM and starts Anthropic's login. Checkout
+ * waits for Send. Stored keys never count as signed in on their own.
  */
 export function connectHarnessWorkspaceSession(
 	machines: WorkspaceMachines,
@@ -157,20 +173,32 @@ export function connectHarnessWorkspaceSession(
 		yield* Effect.tryPromise(() =>
 			machines.ensureRunning(WorkspaceId(bound.providerRef)),
 		);
-		yield* preparePreparedGuest(
-			machines,
-			WorkspaceId(bound.providerRef),
-			scope,
-		);
+		if (scope.harnessId !== "claude") {
+			yield* preparePreparedGuest(
+				machines,
+				WorkspaceId(bound.providerRef),
+				scope,
+			);
+		}
 		beginSharedDesktop(machines, scope);
 		const apiKey = yield* Effect.tryPromise(() =>
 			decryptHarnessApiKey(scope.harnessId),
 		);
 		if (scope.harnessId === "claude") {
+			const siblings = yield* Effect.tryPromise(() =>
+				listUserProviderRefs(scope.userId, bound.providerRef),
+			);
 			const status = yield* connectClaudeCode(
 				machines,
 				WorkspaceId(bound.providerRef),
 				apiKey,
+				{ userId: scope.userId, siblingProviderRefs: siblings },
+			);
+			yield* rememberClaudeHome(
+				machines,
+				WorkspaceId(bound.providerRef),
+				scope.userId,
+				status,
 			);
 			return yield* Effect.tryPromise(() =>
 				persistBoundSessionView(
@@ -202,6 +230,66 @@ export function connectHarnessWorkspaceSession(
 				connection: {
 					status: "failed" as const,
 					provider: scope.harnessId,
+					message: publicFailureMessage(cause),
+				},
+			}),
+		),
+	);
+}
+
+/**
+ * Completes Claude Code on the same login PTY. Anthropic's paste-back code
+ * is bound to that PKCE session; starting a second login would reject it.
+ */
+export function completeClaudeWorkspaceAuth(
+	machines: WorkspaceMachines,
+	scope: HarnessSessionScope,
+	code: string,
+): Effect.Effect<PublicHarnessSession> {
+	if (scope.harnessId !== "claude") {
+		return Effect.succeed({
+			...emptyHarnessSession(),
+			connection: {
+				status: "failed" as const,
+				provider: scope.harnessId,
+				message: "Only Claude Code uses a pasted Anthropic login code.",
+			},
+		});
+	}
+	return withSessionMachine(
+		machines,
+		scope,
+		true,
+		(providerRef, session) =>
+			submitClaudeAuthCode(
+				machines,
+				WorkspaceId(providerRef),
+				code,
+			).pipe(
+				Effect.tap((status) =>
+					rememberClaudeHome(
+						machines,
+						WorkspaceId(providerRef),
+						scope.userId,
+						status,
+					),
+				),
+				Effect.flatMap((status) =>
+					Effect.tryPromise(() =>
+						persistBoundSessionView(
+							session,
+							viewFromClaude(status, providerRef),
+						),
+					),
+				),
+			),
+	).pipe(
+		Effect.catchAll((cause) =>
+			Effect.succeed({
+				...emptyHarnessSession(),
+				connection: {
+					status: "failed" as const,
+					provider: "claude" as const,
 					message: publicFailureMessage(cause),
 				},
 			}),
@@ -285,7 +373,7 @@ function stopOpenCodeWorkspaceTurn(
 		if (!running) {
 			const paused = yield* persistIdleStoppedSession(
 				bound.session,
-				pausedHarnessSessionView(scope, providerRef),
+				pausedHarnessSessionView(scope, providerRef, bound.session),
 			);
 			return yield* attachSiblingSideChat(machines, scope, paused);
 		}
@@ -338,7 +426,7 @@ function stopClaudeWorkspaceTurn(
 		if (!running) {
 			const paused = yield* persistIdleStoppedSession(
 				bound.session,
-				pausedHarnessSessionView(scope, providerRef),
+				pausedHarnessSessionView(scope, providerRef, bound.session),
 			);
 			return yield* attachSiblingSideChat(machines, scope, paused);
 		}
@@ -424,7 +512,7 @@ function withSessionMachine(
 			const paused = yield* Effect.tryPromise(() =>
 				persistBoundSessionView(
 					bound.session,
-					pausedHarnessSessionView(scope, providerRef),
+					pausedHarnessSessionView(scope, providerRef, bound.session),
 				),
 			);
 			return yield* attachSiblingSideChat(machines, scope, paused);
@@ -454,13 +542,21 @@ function viewFromClaude(
 	status: ClaudeAuthStatus,
 	workspaceId: string,
 ): PublicHarnessSession {
-	return viewFromConnection(
+	const models = status.stage === "authenticated" ? status.models : [];
+	const view = viewFromConnection(
 		connectionFromClaude(status),
 		workspaceId,
-		status.stage === "authenticated" ? status.models : [],
+		models,
 		status.stage === "authenticated" ? status.turnStatus : "idle",
 		status.stage === "authenticated" ? status.items : [],
 	);
+	return {
+		...view,
+		listedModelId:
+			status.stage === "authenticated"
+				? preferredListedModelId(models)
+				: "",
+	};
 }
 
 function viewFromOpenCode(
@@ -539,12 +635,22 @@ function submitConnectedHarnessTask(
 				WorkspaceId(providerRef),
 			);
 			if (status.stage !== "authenticated") {
+				const siblings = yield* Effect.tryPromise(() =>
+					listUserProviderRefs(scope.userId, providerRef),
+				);
 				status = yield* connectClaudeCode(
 					machines,
 					WorkspaceId(providerRef),
 					apiKey,
+					{ userId: scope.userId, siblingProviderRefs: siblings },
 				);
 			}
+			yield* rememberClaudeHome(
+				machines,
+				WorkspaceId(providerRef),
+				scope.userId,
+				status,
+			);
 			let listedModelId = "";
 			if (status.stage === "authenticated") {
 				const preference = listedModelPreferenceFromSessions({
@@ -885,7 +991,30 @@ function mergeSideChat(
 function pausedHarnessSessionView(
 	scope: HarnessSessionScope,
 	workspaceId: string,
+	session: { readonly listedModelId?: string | null } | null,
 ): PublicHarnessSession {
+	const listedModelId = session?.listedModelId?.trim() ?? "";
+	if (
+		scope.harnessId === "claude" &&
+		claudeSessionRemembersSignIn(listedModelId)
+	) {
+		const models = rememberedClaudeModels(listedModelId);
+		return {
+			...emptyHarnessSession(),
+			workspaceId,
+			connection: {
+				status: "authenticated",
+				provider: "claude",
+				authMode: "subscription",
+				planType: null,
+				email: null,
+			},
+			models,
+			listedModelId,
+			canSend: true,
+			canSendSide: true,
+		};
+	}
 	const view = emptyHarnessSession();
 	return {
 		...view,
@@ -895,6 +1024,7 @@ function pausedHarnessSessionView(
 			connection: view.connection,
 			turnStatus: "idle",
 			snapshotAvailable: view.snapshotAvailable,
+			listedModelId,
 		}),
 	};
 }
@@ -926,6 +1056,16 @@ function connectionFromClaude(status: ClaudeAuthStatus): AgentConnection {
 		};
 	}
 	return { status: "disconnected" };
+}
+
+function rememberClaudeHome(
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+	userId: string,
+	status: ClaudeAuthStatus,
+): Effect.Effect<void> {
+	if (status.stage !== "authenticated") return Effect.void;
+	return captureClaudeHome(machines, workspaceId, userId);
 }
 
 function connectionFromOpenCode(status: OpenCodeAuthStatus): AgentConnection {

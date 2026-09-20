@@ -1,7 +1,9 @@
 import type { AgentAuthMode, AgentConnection } from "./agent-connection";
+import { claudeSessionRemembersSignIn } from "./claude-auth";
 import {
 	type AgentProvider,
 	type AgentProviderId,
+	agentProviderById,
 	offeredAgentProviders,
 } from "./agent-provider";
 import { isTurnRunning, type SessionTurnStatus } from "./session-item";
@@ -72,7 +74,7 @@ export function harnessAccess(
 			statusLabel: "Authorizing",
 			summary: connection.userCode
 				? `Enter this code on ${provider.authorizeWith}`
-				: `Open ${provider.authorizeWith} to finish signing in. If it shows a code, paste it in Terminal.`,
+				: `Open ${provider.authorizeWith} to finish signing in. If it shows a code, paste it here.`,
 			subscriptionAction: "open_provider",
 			subscriptionActionLabel: `Open ${provider.authorizeWith}`,
 			apiKeyHint,
@@ -111,6 +113,17 @@ export function harnessAccess(
 	return unsignedAccess(provider, apiKeyHint, options);
 }
 
+export function harnessLoginIsPending(connection: AgentConnection): boolean {
+	return connection.status === "awaiting_device_code";
+}
+
+export function claudeAuthNeedsPaste(connection: AgentConnection): boolean {
+	return (
+		connection.status === "awaiting_device_code" &&
+		connection.provider === "claude"
+	);
+}
+
 export function selectedHarnessIsConnected(
 	connection: AgentConnection,
 	harnessId: AgentProviderId,
@@ -135,17 +148,21 @@ export function shouldAutoResumeHarnessSession(_input: {
 /**
  * Selecting a paused chat must not boot its VM. A follow-up or a side-agent
  * send may still start that harness: OpenCode can connect without an account;
- * Codex can resume a saved workspace; Claude still needs Anthropic sign-in.
+ * Codex can resume a saved workspace; Claude can resume a chat that already
+ * stored a Claude model after Anthropic sign-in.
  */
 export function canResumeDisconnectedFollowUp(input: {
 	readonly harnessId: AgentProviderId;
 	readonly connection: AgentConnection;
 	readonly turnStatus: SessionTurnStatus;
 	readonly snapshotAvailable?: boolean;
+	readonly listedModelId?: string | null;
 }): boolean {
 	if (isTurnRunning(input.turnStatus)) return false;
 	if (input.connection.status !== "disconnected") return false;
-	if (input.harnessId === "claude") return false;
+	if (input.harnessId === "claude") {
+		return claudeSessionRemembersSignIn(input.listedModelId);
+	}
 	if (input.harnessId === "codex") return Boolean(input.snapshotAvailable);
 	return input.harnessId === "opencode";
 }
@@ -163,11 +180,28 @@ export function runningAuthenticatedTurnShouldPoll(input: {
 	return isTurnRunning(input.turnStatus) || isTurnRunning(input.sideTurnStatus);
 }
 
+export function composerCanStartSignIn(input: {
+	readonly harnessId: AgentProviderId;
+	readonly connection: AgentConnection;
+	readonly busy: boolean;
+	readonly draft: string;
+	readonly slashDraft: boolean;
+}): boolean {
+	if (input.busy || input.slashDraft || !input.draft.trim()) return false;
+	if (!harnessRequiresAccountLogin(input.harnessId)) return false;
+	if (selectedHarnessIsConnected(input.connection, input.harnessId)) {
+		return false;
+	}
+	if (input.connection.status === "awaiting_device_code") return false;
+	return input.harnessId === "claude" || input.harnessId === "codex";
+}
+
 export function composerSendIsEnabled(input: {
 	readonly harnessId: AgentProviderId;
 	readonly connection: AgentConnection;
 	readonly turnStatus: SessionTurnStatus;
 	readonly snapshotAvailable?: boolean;
+	readonly listedModelId?: string | null;
 	readonly canSend: boolean;
 	readonly busy: boolean;
 	readonly draft: string;
@@ -175,6 +209,7 @@ export function composerSendIsEnabled(input: {
 	readonly slashDraft: boolean;
 }): boolean {
 	if (input.busy || input.slashDraft || !input.draft.trim()) return false;
+	if (composerCanStartSignIn(input)) return true;
 	const harnessReady = selectedHarnessIsConnected(
 		input.connection,
 		input.harnessId,
@@ -184,6 +219,28 @@ export function composerSendIsEnabled(input: {
 	if (harnessReady && !input.canSend && !canResume) return false;
 	if (!canResume && !input.modelId) return false;
 	return true;
+}
+
+/**
+ * Sign in is not a wall. Show this only while Anthropic is waiting for a
+ * paste, or after a failed/expired login. Send starts a first login.
+ */
+export function harnessLoginShouldShow(input: {
+	readonly harnessReady: boolean;
+	readonly connection: AgentConnection;
+	readonly harnessId: AgentProviderId;
+}): boolean {
+	if (input.harnessReady) return false;
+	const access = harnessAccess(
+		agentProviderById(input.harnessId),
+		input.connection,
+		null,
+	);
+	return (
+		access.readiness === "authorizing" ||
+		access.readiness === "failed" ||
+		access.readiness === "expired"
+	);
 }
 
 export function harnessRequiresAccountLogin(
@@ -256,8 +313,8 @@ function unsignedAccess(
 			muted: true,
 			statusLabel: apiKeyHint ? "Key saved" : "Not signed in",
 			summary: apiKeyHint
-				? `Key ${apiKeyHint} is stored. Sign in with Claude Code so Anthropic can authenticate it.`
-				: "Sign in with Claude Code on Anthropic's page, or paste an API key.",
+				? `Key ${apiKeyHint} is stored. Send a task to finish signing in.`
+				: "Type a task and send. Anthropic opens if you still need to sign in.",
 			subscriptionAction: "sign_in",
 			subscriptionActionLabel: "Sign in",
 			apiKeyHint,

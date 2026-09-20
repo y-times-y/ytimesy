@@ -57,7 +57,7 @@ export async function persistBoundSessionView(
 		session.id,
 		liveItems,
 		title === "New session" ? undefined : title,
-		view.listedModelId.trim() || null,
+		submittedModelId?.trim() || session.listedModelId || null,
 		persistTurn,
 	);
 	const turnStatus = saved?.turnStatus ?? persistTurn ?? session.turnStatus;

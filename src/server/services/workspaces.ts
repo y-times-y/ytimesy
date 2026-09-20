@@ -71,7 +71,9 @@ export function enqueueWorkspaceSnapshotRefresh(
 	workspaceId: string,
 	queue: WorkspaceJobQueue = postgresJobQueue,
 ) {
-	return queue.enqueueRefresh?.(workspaceId).catch(() => null) ?? null;
+	const enqueue = queue.enqueueRefresh;
+	if (!enqueue) return null;
+	return enqueue(workspaceId).catch(() => null);
 }
 
 export function retryProjectWorkspace(

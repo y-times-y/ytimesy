@@ -85,6 +85,81 @@
 	line-height: 1.45;
 	color: #8d8d8d;
 }
+.harness-login {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 12px 14px 4px;
+}
+.harness-login-copy,
+.harness-login-code {
+	margin: 0;
+	font-size: 12px;
+	line-height: 1.45;
+	color: #8d8d8d;
+}
+.harness-login-code {
+	font-size: 13px;
+	letter-spacing: 0.06em;
+	color: #ececec;
+}
+.harness-login-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+.harness-login-input {
+	flex: 1;
+	min-width: 0;
+	min-height: 28px;
+	padding: 0 10px;
+	border: 1px solid #2e2e2e;
+	border-radius: 8px;
+	background: #121212;
+	color: #eee;
+	font: inherit;
+	font-size: 13px;
+}
+.harness-login-input::placeholder {
+	color: rgba(255, 255, 255, 0.35);
+}
+.harness-login-input:focus-visible {
+	outline: none;
+	border-color: #808080;
+}
+.harness-login-action {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-height: 28px;
+	padding: 0 10px;
+	border: 1px solid #3a3a3a;
+	border-radius: 8px;
+	background: #ececec;
+	color: #151515;
+	font: inherit;
+	font-size: 12px;
+	text-decoration: none;
+	white-space: nowrap;
+}
+.harness-login-action:hover {
+	background: #fff;
+}
+.harness-login-action:disabled {
+	cursor: not-allowed;
+	background: #777;
+	color: #363636;
+	border-color: transparent;
+}
+a.harness-login-action {
+	background: transparent;
+	color: #ececec;
+}
+a.harness-login-action:hover {
+	background: #ffffff0a;
+	color: #fff;
+}
 .session-controls {
 	display: flex;
 	align-items: center;

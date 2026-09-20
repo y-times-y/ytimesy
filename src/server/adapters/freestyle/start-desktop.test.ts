@@ -28,6 +28,10 @@ describe("start workspace desktop", () => {
 		expect(START_WORKSPACE_DESKTOP).toContain("terminal.desktop");
 		expect(START_WORKSPACE_DESKTOP).toContain("files.desktop");
 		expect(START_WORKSPACE_DESKTOP).toContain("hostname ytimesy");
+		expect(START_WORKSPACE_DESKTOP).toContain("DISABLE_UPDATES=1");
+		expect(START_WORKSPACE_DESKTOP).toContain(
+			"OPENCODE_DISABLE_AUTOUPDATE=true",
+		);
 		expect(START_WORKSPACE_DESKTOP).not.toContain("about:blank");
 		expect(START_WORKSPACE_DESKTOP).not.toContain("--window-size=720,640");
 		expect(START_WORKSPACE_DESKTOP).not.toContain("novnc");

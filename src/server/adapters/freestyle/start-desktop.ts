@@ -49,6 +49,9 @@ apply_guest_identity() {
   if ! grep -q 'ytimesy guest prompt' "$PROFILE" 2>/dev/null; then
     printf '\\n# ytimesy guest prompt\\nexport HOSTNAME=ytimesy\\nexport PS1="\\\\u@ytimesy:\\\\w\\\\$ "\\n' >> "$PROFILE"
   fi
+  if ! grep -q 'ytimesy guest cli pin' "$PROFILE" 2>/dev/null; then
+    printf '\\n# ytimesy guest cli pin\\nif [ -f /tmp/ytimesy-guest-cli-pin.env ]; then . /tmp/ytimesy-guest-cli-pin.env; fi\\nexport DISABLE_AUTOUPDATER=1\\nexport DISABLE_UPDATES=1\\nexport OPENCODE_DISABLE_AUTOUPDATE=true\\n' >> "$PROFILE"
+  fi
 }
 
 write_desktop_launchers() {

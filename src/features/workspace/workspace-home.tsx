@@ -10,11 +10,16 @@ import {
 } from "react";
 import { connectedProviderId } from "#/domain/agent-connection";
 import {
+	claudeSessionRemembersSignIn,
+	rememberedClaudeModels,
+} from "#/domain/claude-auth";
+import {
 	type AgentProviderId,
 	DEFAULT_COMPOSER_HARNESS_ID,
 } from "#/domain/agent-provider";
 import {
 	RUNNING_TURN_POLL_MS,
+	harnessLoginIsPending,
 	runningAuthenticatedTurnShouldPoll,
 } from "#/domain/harness-access";
 import {
@@ -42,6 +47,7 @@ import {
 	composerHarnessForChat,
 	listedChatHarnessId,
 	listedChatModelId,
+	rememberedClaudeModelIdFromChats,
 	listedChatTurnStatus,
 	SIDEBAR_PINNED_STORAGE_KEY,
 	type SidebarChat,
@@ -67,6 +73,7 @@ import {
 	startProjectAgentSession,
 } from "../sessions/agent-session.fn";
 import {
+	completeClaudeSessionAuth,
 	connectCodexSession,
 	getCodexSession,
 	sendCodexSessionTask,
@@ -162,6 +169,11 @@ export function WorkspaceHome({
 	const sessionEpoch = useRef(0);
 	const loadedSessionId = useRef<string | undefined>(undefined);
 	const selectedSessionIdRef = useRef<string | undefined>(undefined);
+	const pendingSendRef = useRef<{
+		text: string;
+		modelId: string;
+	} | null>(null);
+	const claudeLoginWindowRef = useRef<Window | null>(null);
 	const sessionViews = useRef(new Map<string, PublicCodexSession>());
 	const bumpSessionEpoch = useCallback(() => {
 		sessionEpoch.current += 1;
@@ -200,11 +212,17 @@ export function WorkspaceHome({
 			setSession(next);
 			if (next.agentSessionId) setSelectedSessionId(next.agentSessionId);
 			const provider = connectedProviderId(next.connection);
-			if (provider) setHarnessId(provider);
+			const listed = next.agentSessionId
+				? listedChatHarnessId(chats.data ?? [], next.agentSessionId, "")
+				: "";
+			if (provider && (!listed || listed === provider)) {
+				setHarnessId(provider);
+			}
 		},
-		[rememberSessionView],
+		[chats.data, rememberSessionView],
 	);
 	const connect = useServerFn(connectCodexSession);
+	const completeClaudeAuth = useServerFn(completeClaudeSessionAuth);
 	const sendTask = useServerFn(sendCodexSessionTask);
 	const stopTurn = useServerFn(stopCodexSessionTurn);
 	const loadDesktop = useServerFn(getWorkspaceDesktop);
@@ -289,6 +307,55 @@ export function WorkspaceHome({
 		};
 	}
 
+	function rememberedClaudeId(forHarness: AgentProviderId = harnessId) {
+		return (
+			(forHarness === "claude" &&
+			claudeSessionRemembersSignIn(session.listedModelId)
+				? session.listedModelId
+				: "") ||
+			(forHarness === "claude"
+				? listedChatModelId(sidebarChats, activeSessionId ?? "")
+				: "") ||
+			rememberedClaudeModelIdFromChats(sidebarChats)
+		);
+	}
+
+	function applyRememberedClaude(id: AgentProviderId) {
+		if (id !== "claude") return;
+		const listed = rememberedClaudeId(id);
+		if (!claudeSessionRemembersSignIn(listed)) return;
+		setSession((current) => ({
+			...current,
+			connection: {
+				status: "authenticated",
+				provider: "claude",
+				authMode: "subscription",
+				planType: null,
+				email: null,
+			},
+			models:
+				current.models.length > 0
+					? current.models
+					: rememberedClaudeModels(listed),
+			listedModelId: listed || current.listedModelId,
+		}));
+	}
+
+	function revealClaudeLogin(url: string) {
+		const popup = claudeLoginWindowRef.current;
+		if (popup && !popup.closed) {
+			popup.location.href = url;
+			return;
+		}
+		window.open(url, "ytimesy-claude-login", "noopener,noreferrer");
+	}
+
+	function closeClaudeLoginWindow() {
+		const popup = claudeLoginWindowRef.current;
+		if (popup && !popup.closed) popup.close();
+		claudeLoginWindowRef.current = null;
+	}
+
 	useEffect(() => {
 		const mobile =
 			compact ||
@@ -340,7 +407,16 @@ export function WorkspaceHome({
 
 	useEffect(() => {
 		if (composerDraft || selectedSessionId || !chats.data?.[0]) return;
-		setSelectedSessionId(chats.data[0].id);
+		const first = chats.data[0];
+		setSelectedSessionId(first.id);
+		if (first.harnessId) setHarnessId(first.harnessId);
+		if (first.listedModelId) {
+			setSession((current) => ({
+				...current,
+				agentSessionId: first.id,
+				listedModelId: first.listedModelId ?? current.listedModelId,
+			}));
+		}
 	}, [chats.data, composerDraft, selectedSessionId]);
 
 	useEffect(() => {
@@ -365,12 +441,17 @@ export function WorkspaceHome({
 		void getCodexSession({
 			data: {
 				projectId: activeProjectId,
-				harnessId,
+				harnessId: listedChatHarnessId(
+					chats.data ?? [],
+					activeSessionId ?? "",
+					harnessId,
+				),
 				sessionId: activeSessionId,
 			},
 		}).then((next) => applySessionView(epoch, next));
 	}, [
 		applySessionView,
+		chats.data,
 		composerBusy,
 		composerDraft,
 		harnessId,
@@ -387,7 +468,7 @@ export function WorkspaceHome({
 	}, [compact, fileChanges.length]);
 
 	useEffect(() => {
-		const pollDeviceCode = session.connection.status === "awaiting_device_code";
+		const pollDeviceCode = harnessLoginIsPending(session.connection);
 		const pollTurn = runningAuthenticatedTurnShouldPoll({
 			turnStatus: session.turnStatus,
 			sideTurnStatus: session.sideTurnStatus,
@@ -890,12 +971,99 @@ export function WorkspaceHome({
 								harnessId={harnessId}
 								onHarnessIdChange={(id) => {
 									setHarnessId(id);
+									applyRememberedClaude(id);
 								}}
 								onComposerModelIdChange={setComposerModelId}
+								onConnect={() => {
+									const epoch = sessionEpoch.current;
+									const scope = sessionScope();
+									const chatId = activeSessionId;
+									setBusyChatIds((ids) => withBusyChat(ids, chatId));
+									void connect({ data: scope })
+										.then((next) => applySessionView(epoch, next))
+										.catch((cause) => {
+											if (epoch !== sessionEpoch.current) return;
+											setSession((current) => ({
+												...current,
+												connection: {
+													status: "failed",
+													provider: harnessId,
+													message: publicFailureMessage(cause),
+												},
+											}));
+										})
+										.finally(() => {
+											setBusyChatIds((ids) => withoutBusyChat(ids, chatId));
+										});
+								}}
+								onSubmitAuthCode={(code) => {
+									const epoch = sessionEpoch.current;
+									const scope = sessionScope();
+									const chatId = activeSessionId;
+									setBusyChatIds((ids) => withBusyChat(ids, chatId));
+									void completeClaudeAuth({
+										data: { ...scope, code },
+									})
+										.then(async (next) => {
+											applySessionView(epoch, next);
+											const pending = pendingSendRef.current;
+											if (
+												next.connection.status !== "authenticated" ||
+												!pending
+											) {
+												return;
+											}
+											pendingSendRef.current = null;
+											closeClaudeLoginWindow();
+											const resolvedModel =
+												pending.modelId ||
+												preferredSessionModelId(
+													sessionModelsFromListed(next.models),
+													{
+														lastUsedId: next.listedModelId,
+														excludedIds: next.blockedListedModelIds,
+													},
+												);
+											if (!resolvedModel) return;
+											const sent = await sendTask({
+												data: {
+													...scope,
+													text: pending.text,
+													modelId: resolvedModel,
+												},
+											});
+											applySessionView(epoch, sent);
+										})
+										.catch((cause) => {
+											if (epoch !== sessionEpoch.current) return;
+											setSession((current) => ({
+												...current,
+												connection: {
+													status: "failed",
+													provider: "claude",
+													message: publicFailureMessage(cause),
+												},
+											}));
+										})
+										.finally(() => {
+											setBusyChatIds((ids) => withoutBusyChat(ids, chatId));
+											void chats.refetch();
+										});
+								}}
 								onSend={(text, modelId) => {
 									const epoch = sessionEpoch.current;
 									const scope = sessionScope();
 									const chatId = activeSessionId;
+									pendingSendRef.current = { text, modelId };
+									if (
+										harnessId === "claude" &&
+										session.connection.status !== "authenticated"
+									) {
+										claudeLoginWindowRef.current = window.open(
+											"about:blank",
+											"ytimesy-claude-login",
+										);
+									}
 									setBusyChatIds((ids) => withBusyChat(ids, chatId));
 									if (activeProjectId) {
 										queryClient.setQueryData(
@@ -909,7 +1077,19 @@ export function WorkspaceHome({
 											if (current.connection.status !== "authenticated") {
 												current = await connect({ data: scope });
 												applySessionView(epoch, current);
+												if (
+													current.connection.status ===
+														"awaiting_device_code" &&
+													current.connection.verificationUrl
+												) {
+													revealClaudeLogin(
+														current.connection.verificationUrl,
+													);
+													return;
+												}
 												if (current.connection.status !== "authenticated") {
+													pendingSendRef.current = null;
+													closeClaudeLoginWindow();
 													return;
 												}
 											}
@@ -922,12 +1102,27 @@ export function WorkspaceHome({
 														excludedIds: current.blockedListedModelIds,
 													},
 												);
-											if (!resolvedModel) return;
+											if (!resolvedModel) {
+												pendingSendRef.current = null;
+												closeClaudeLoginWindow();
+												return;
+											}
 											const next = await sendTask({
 												data: { ...scope, text, modelId: resolvedModel },
 											});
 											applySessionView(epoch, next);
+											if (
+												next.connection.status === "awaiting_device_code" &&
+												next.connection.verificationUrl
+											) {
+												revealClaudeLogin(next.connection.verificationUrl);
+												return;
+											}
+											pendingSendRef.current = null;
+											closeClaudeLoginWindow();
 										} catch (cause) {
+											pendingSendRef.current = null;
+											closeClaudeLoginWindow();
 											if (epoch !== sessionEpoch.current) return;
 											setSession((current) => ({
 												...current,
