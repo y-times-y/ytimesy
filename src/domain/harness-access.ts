@@ -173,9 +173,8 @@ export function runningAuthenticatedTurnShouldPoll(input: {
 	readonly turnStatus: SessionTurnStatus;
 	readonly sideTurnStatus: SessionTurnStatus;
 	readonly connectionStatus: AgentConnection["status"];
-	readonly composerBusy: boolean;
+	readonly composerBusy?: boolean;
 }): boolean {
-	if (input.composerBusy) return false;
 	if (input.connectionStatus !== "authenticated") return false;
 	return isTurnRunning(input.turnStatus) || isTurnRunning(input.sideTurnStatus);
 }

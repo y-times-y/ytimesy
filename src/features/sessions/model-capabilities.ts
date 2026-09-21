@@ -40,13 +40,14 @@ export function sessionModelsFromListed(
 		readonly notice?: string;
 		readonly supportsFastMode?: boolean;
 		readonly fast?: boolean;
+		readonly reasoning?: SessionModel["reasoning"];
 	}[],
 ): SessionModel[] {
 	return models.map((model) => ({
 		id: model.id,
 		label: model.label,
 		notice: model.notice ?? null,
-		reasoning: null,
+		reasoning: model.reasoning ?? null,
 		supportsFastMode: listedModelSupportsFastMode(model),
 	}));
 }

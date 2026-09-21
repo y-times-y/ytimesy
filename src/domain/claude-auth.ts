@@ -1,3 +1,5 @@
+import { claudeStreamTerminalResult } from "./claude-stream";
+
 const ANTHROPIC_LOGIN_HOSTS = new Set([
 	"claude.ai",
 	"claude.com",
@@ -142,9 +144,50 @@ export function parseClaudeModelFlagsFromHelp(output: string): readonly {
 		/alias for the latest model[\s\S]*?'([^']+)',\s*'([^']+)',\s*or\s*'([^']+)'/i,
 	);
 	if (!aliases) return [];
+	const fullName = output.match(
+		/full name \(e\.g\.\s*'([^']+)'\)/i,
+	)?.[1];
 	return [aliases[1], aliases[2], aliases[3]]
 		.filter((id): id is string => Boolean(id))
-		.map((id) => ({ id, label: id }));
+		.map((id) => ({
+			id,
+			label: fullName && fullName.includes(id) ? fullName : id,
+		}));
+}
+
+export function claudeBackgroundTurnResult(input: {
+	readonly exitText: string | null;
+	readonly output: string | null;
+	readonly pidAlive: boolean;
+	readonly pidFilePresent?: boolean;
+}):
+	| { readonly kind: "running" }
+	| { readonly kind: "completed"; readonly text: string }
+	| { readonly kind: "failed"; readonly message: string } {
+	const exitText = input.exitText?.trim() ?? "";
+	if (exitText) {
+		const code = Number.parseInt(exitText, 10);
+		const output = input.output?.trim() ?? "";
+		if (code === 0 && output) return { kind: "completed", text: output };
+		return {
+			kind: "failed",
+			message: output || "Claude Code did not return a response.",
+		};
+	}
+	const streamed = claudeStreamTerminalResult(input.output);
+	if (streamed?.kind === "failed") return streamed;
+	if (streamed?.kind === "completed") {
+		return { kind: "completed", text: input.output?.trim() ?? "" };
+	}
+	if (input.pidAlive || input.pidFilePresent === false) {
+		return { kind: "running" };
+	}
+	const output = input.output?.trim() ?? "";
+	if (output) return { kind: "completed", text: output };
+	return {
+		kind: "failed",
+		message: "Claude Code stopped before it finished.",
+	};
 }
 
 export function claudeListedModelsAreUsable(

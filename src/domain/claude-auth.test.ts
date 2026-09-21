@@ -11,6 +11,7 @@ import {
 	parseClaudeHomePath,
 	parseClaudeListedModels,
 	parseClaudeModelFlagsFromHelp,
+	claudeBackgroundTurnResult,
 } from "./claude-auth";
 
 describe("Claude Code login parsing", () => {
@@ -93,13 +94,64 @@ describe("Claude Code login parsing", () => {
 		expect(claudeCliIsSignedIn('{"loggedIn":false}')).toBe(false);
 	});
 
+	it("collects a background Claude turn without inventing a reply", () => {
+		expect(
+			claudeBackgroundTurnResult({
+				exitText: null,
+				output: "",
+				pidAlive: true,
+			}),
+		).toEqual({ kind: "running" });
+		expect(
+			claudeBackgroundTurnResult({
+				exitText: "0\n",
+				output: "pong",
+				pidAlive: false,
+			}),
+		).toEqual({ kind: "completed", text: "pong" });
+		expect(
+			claudeBackgroundTurnResult({
+				exitText: "1\n",
+				output: "",
+				pidAlive: false,
+			}),
+		).toEqual({
+			kind: "failed",
+			message: "Claude Code did not return a response.",
+		});
+		expect(
+			claudeBackgroundTurnResult({
+				exitText: null,
+				output: null,
+				pidAlive: false,
+				pidFilePresent: false,
+			}),
+		).toEqual({ kind: "running" });
+		expect(
+			claudeBackgroundTurnResult({
+				exitText: null,
+				output: "pong",
+				pidAlive: false,
+				pidFilePresent: true,
+			}),
+		).toEqual({ kind: "completed", text: "pong" });
+		expect(
+			claudeBackgroundTurnResult({
+				exitText: null,
+				output: `{"type":"assistant","message":{"content":[{"type":"text","text":"pong"}]}}\n{"type":"result","result":"pong"}\n`,
+				pidAlive: true,
+				pidFilePresent: true,
+			}),
+		).toMatchObject({ kind: "completed" });
+	});
+
 	it("loads --model aliases from Claude Code help and ignores a chat reply", () => {
 		expect(
 			parseClaudeModelFlagsFromHelp(
 				"Provide an alias for the latest model (e.g. 'fable', 'opus', or 'sonnet') or a model's full name (e.g. 'claude-fable-5').",
 			),
 		).toEqual([
-			{ id: "fable", label: "fable" },
+			{ id: "fable", label: "claude-fable-5" },
 			{ id: "opus", label: "opus" },
 			{ id: "sonnet", label: "sonnet" },
 		]);
@@ -115,7 +167,7 @@ describe("Claude Code login parsing", () => {
 				].join("\n"),
 			),
 		).toEqual([
-			{ id: "fable", label: "fable" },
+			{ id: "fable", label: "claude-fable-5" },
 			{ id: "opus", label: "opus" },
 			{ id: "sonnet", label: "sonnet" },
 		]);

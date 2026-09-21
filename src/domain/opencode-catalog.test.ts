@@ -56,4 +56,67 @@ describe("OpenCode catalog parsing", () => {
 		expect(parseOpenCodeModelCatalog({ providers: [] })).toEqual([]);
 		expect(parseOpenCodeModelCatalog("not json")).toEqual([]);
 	});
+
+	it("keeps persisted reasoning after a status reread", () => {
+		expect(
+			parseOpenCodeModelCatalog([
+				{
+					id: "opencode/muse-spark-1.3-contributor-free",
+					name: "Muse Spark 1.3 Free",
+					reasoning: {
+						levels: [
+							{ id: "low", label: "low" },
+							{ id: "high", label: "high" },
+						],
+						defaultLevelId: "high",
+					},
+				},
+			]),
+		).toEqual([
+			{
+				id: "opencode/muse-spark-1.3-contributor-free",
+				label: "Muse Spark 1.3 Free",
+				reasoning: {
+					levels: [
+						{ id: "low", label: "low" },
+						{ id: "high", label: "high" },
+					],
+					defaultLevelId: "high",
+				},
+			},
+		]);
+	});
+
+	it("keeps catalog names and listed reasoning variants", () => {
+		expect(
+			parseOpenCodeModelCatalog({
+				providers: [
+					{
+						id: "opencode",
+						models: {
+							"muse-spark-1.3-contributor-free": {
+								name: "Muse Spark 1.3 Free",
+								variants: ["minimal", "low", "medium", "high", "xhigh"],
+							},
+						},
+					},
+				],
+			}),
+		).toEqual([
+			{
+				id: "opencode/muse-spark-1.3-contributor-free",
+				label: "Muse Spark 1.3 Free",
+				reasoning: {
+					levels: [
+						{ id: "minimal", label: "minimal" },
+						{ id: "low", label: "low" },
+						{ id: "medium", label: "medium" },
+						{ id: "high", label: "high" },
+						{ id: "xhigh", label: "xhigh" },
+					],
+					defaultLevelId: "medium",
+				},
+			},
+		]);
+	});
 });

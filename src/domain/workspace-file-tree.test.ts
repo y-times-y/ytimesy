@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { FileChangeEntry } from "./session-item";
 import {
 	fileChangeForPath,
+	fileTreeChangeMark,
 	firstWorkspaceFilePath,
+	workspaceExplorerTree,
 	workspaceFileTree,
 } from "./workspace-file-tree";
 
@@ -77,5 +79,41 @@ describe("workspace file tree", () => {
 		expect(firstWorkspaceFilePath(workspaceFileTree(changes))).toBe(
 			"src/domain/session-item.ts",
 		);
+	});
+
+	it("lists the workspace tree and only marks files that changed", () => {
+		expect(
+			workspaceExplorerTree(
+				["src/domain/session-item.ts", "src/styles.css"],
+				[change("src/styles.css")],
+			),
+		).toMatchObject([
+			{
+				kind: "dir",
+				name: "src",
+				children: [
+					{
+						kind: "dir",
+						name: "domain",
+						children: [
+							{
+								kind: "file",
+								name: "session-item.ts",
+								path: "src/domain/session-item.ts",
+							},
+						],
+					},
+					{
+						kind: "file",
+						name: "styles.css",
+						path: "src/styles.css",
+						change: change("src/styles.css"),
+					},
+				],
+			},
+		]);
+		expect(fileTreeChangeMark("update")).toBe("M");
+		expect(fileTreeChangeMark("add")).toBe("U");
+		expect(fileTreeChangeMark(undefined)).toBeNull();
 	});
 });

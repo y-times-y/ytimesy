@@ -3,6 +3,7 @@ import type { AgentConnection } from "#/domain/agent-connection";
 import { canResumeDisconnectedFollowUp } from "#/domain/harness-access";
 import { WorkspaceId } from "#/domain/ids";
 import {
+	listedFastModeId,
 	listedModelPreferenceFromSessions,
 	submittedListedModelId,
 } from "#/domain/listed-model";
@@ -263,6 +264,8 @@ export function sendCodexWorkspaceTask(
 	input: {
 		readonly text: string;
 		readonly modelId: string;
+		readonly variant?: string;
+		readonly fast?: boolean;
 	},
 ): Effect.Effect<PublicCodexSession> {
 	return withPreparedWorkspace(
@@ -304,9 +307,22 @@ export function sendCodexWorkspaceTask(
 				yield* Effect.tryPromise(() =>
 					persistSessionTurnStatus(session, "running"),
 				);
+				const listed = status.models.find((model) => model.id === modelId);
+				const reasoningEffort =
+					input.variant?.trim() &&
+					listed?.reasoning?.levels.some(
+						(level) => level.id === input.variant?.trim(),
+					)
+						? input.variant.trim()
+						: undefined;
+				const serviceTier = input.fast
+					? listedFastModeId(listed ?? {})
+					: undefined;
 				status = yield* submitCodexTask(machines, WorkspaceId(providerRef), {
 					text: input.text,
 					modelId,
+					...(reasoningEffort ? { reasoningEffort } : {}),
+					...(serviceTier ? { serviceTier } : {}),
 				});
 				return {
 					...viewFromStatus(status, providerRef, snapshotAvailable),

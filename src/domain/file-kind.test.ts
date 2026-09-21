@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { fileKindBadge, fileKindFromPath } from "./file-kind";
+import {
+	fileKindBadge,
+	fileKindFromPath,
+	vscodeFileIconName,
+} from "./file-kind";
 
 describe("fileKindFromPath", () => {
 	it("maps common source extensions to distinct kinds", () => {
@@ -21,5 +25,21 @@ describe("fileKindFromPath", () => {
 		expect(fileKindBadge("typescript")).toBe("TS");
 		expect(fileKindBadge("json")).toBe("{}");
 		expect(fileKindBadge("unknown")).toBe("");
+	});
+
+	it("uses vscode-icons names for real file glyphs", () => {
+		expect(vscodeFileIconName("src/app.ts")).toBe(
+			"vscode-icons:file-type-typescript",
+		);
+		expect(vscodeFileIconName("src/widget.tsx")).toBe(
+			"vscode-icons:file-type-reactts",
+		);
+		expect(vscodeFileIconName("package.json")).toBe("vscode-icons:file-type-npm");
+		expect(vscodeFileIconName("src/app.test.ts")).toBe(
+			"vscode-icons:file-type-testts",
+		);
+		expect(vscodeFileIconName("notes")).toBe("vscode-icons:default-file");
+		expect(vscodeFileIconName("mark.svg")).toBe("catppuccin:svg");
+		expect(vscodeFileIconName("photo.png")).toBe("catppuccin:image");
 	});
 });

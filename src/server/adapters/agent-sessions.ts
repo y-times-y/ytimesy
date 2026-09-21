@@ -93,6 +93,14 @@ export async function agentSessionForOwner(userId: string, sessionId: string) {
 	return result.rows[0] ? toSession(result.rows[0]) : null;
 }
 
+export async function agentSessionById(sessionId: string) {
+	const result = await database().query(
+		`select ${SESSION_COLUMNS} from agent_session where id=$1`,
+		[sessionId],
+	);
+	return result.rows[0] ? toSession(result.rows[0]) : null;
+}
+
 export async function childAgentSession(
 	userId: string,
 	parentSessionId: string,

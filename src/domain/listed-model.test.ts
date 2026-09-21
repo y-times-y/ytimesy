@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+	listedFastModeId,
 	listedModelDisplayName,
 	listedModelSupportsFastMode,
+	listedReasoningFromRow,
+	listedReasoningFromVariants,
+	modelIdToSubmit,
 	listedModelPreferenceFromSessions,
 	listedModelRestrictedByProvider,
 	preferredListedModelId,
@@ -174,9 +178,89 @@ describe("listedModelSupportsFastMode", () => {
 		expect(listedModelSupportsFastMode({})).toBe(false);
 		expect(listedModelSupportsFastMode({ supportsFastMode: true })).toBe(true);
 		expect(listedModelSupportsFastMode({ fast: true })).toBe(true);
+		expect(listedModelSupportsFastMode({ variants: ["fast"] })).toBe(true);
+		expect(listedModelSupportsFastMode({ variants: { fast: {} } })).toBe(true);
+		expect(listedModelSupportsFastMode({ variants: ["low", "high"] })).toBe(
+			false,
+		);
 		expect(listedModelSupportsFastMode({ supportsFastMode: "yes" })).toBe(
 			false,
 		);
+		expect(
+			listedModelSupportsFastMode({
+				serviceTiers: [{ id: "fast", name: "Fast" }],
+			}),
+		).toBe(true);
+		expect(
+			listedModelSupportsFastMode({
+				capabilities: { fast: true },
+			}),
+		).toBe(true);
+		expect(listedFastModeId({ additionalSpeedTiers: ["fast"] })).toBe("fast");
+		expect(listedFastModeId({ serviceTiers: [{ name: "Flex" }] })).toBe(
+			undefined,
+		);
+	});
+});
+
+describe("modelIdToSubmit", () => {
+	it("keeps the requested id when the catalog is still empty", () => {
+		expect(
+			modelIdToSubmit("opencode/big-pickle", [], {
+				lastUsedId: "opencode/big-pickle",
+			}),
+		).toBe("opencode/big-pickle");
+	});
+});
+
+describe("listedReasoningFromVariants", () => {
+	it("uses listed variant ids and does not invent Fast", () => {
+		expect(listedReasoningFromVariants(["minimal", "low", "medium"])).toEqual({
+			levels: [
+				{ id: "minimal", label: "minimal" },
+				{ id: "low", label: "low" },
+				{ id: "medium", label: "medium" },
+			],
+			defaultLevelId: "medium",
+		});
+		expect(listedReasoningFromVariants(["fast", "low"])).toEqual({
+			levels: [{ id: "low", label: "low" }],
+			defaultLevelId: "low",
+		});
+	});
+
+	it("keeps persisted reasoning and Codex effort catalogs", () => {
+		expect(
+			listedReasoningFromRow({
+				reasoning: {
+					levels: [{ id: "high", label: "high" }],
+					defaultLevelId: "high",
+				},
+			}),
+		).toEqual({
+			levels: [{ id: "high", label: "high" }],
+			defaultLevelId: "high",
+		});
+		expect(
+			listedReasoningFromRow({
+				supportedReasoningEfforts: [
+					{ reasoningEffort: "low", description: "Faster" },
+					{ reasoningEffort: "high", description: "Deeper" },
+				],
+				defaultReasoningEffort: "high",
+			}),
+		).toEqual({
+			levels: [
+				{ id: "low", label: "Faster" },
+				{ id: "high", label: "Deeper" },
+			],
+			defaultLevelId: "high",
+		});
+		expect(
+			listedReasoningFromRow({
+				capabilities: { reasoning: true },
+			}),
+		).toBeUndefined();
 	});
 });
 

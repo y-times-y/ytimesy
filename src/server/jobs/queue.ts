@@ -19,6 +19,9 @@ export async function jobQueue(): Promise<PgBoss> {
 			max: 2,
 			application_name: "ytimesy-jobs",
 		});
+		boss.on("error", () => {
+			// Poll errors must not take down the Vite process.
+		});
 		await boss.start();
 		await boss.createQueue(PREPARE_WORKSPACE_QUEUE, {
 			policy: "singleton",

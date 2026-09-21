@@ -117,14 +117,89 @@ def listed_models(result):
         if not isinstance(model_id, str) or not model_id:
             continue
         label = row.get("displayName")
-        models.append(
-            {
-                "id": model_id,
-                "label": label if isinstance(label, str) and label else model_id,
-                "isDefault": bool(row.get("isDefault")),
-            }
+        model = {
+            "id": model_id,
+            "label": label if isinstance(label, str) and label else model_id,
+            "isDefault": bool(row.get("isDefault")),
+        }
+        reasoning = listed_reasoning(row)
+        if reasoning:
+            model["reasoning"] = reasoning
+        if model_supports_fast(row):
+            model["supportsFastMode"] = True
+        fast_id = listed_fast_id(row.get("serviceTiers")) or listed_fast_id(
+            row.get("additionalSpeedTiers")
         )
+        if fast_id:
+            model["fastModeId"] = fast_id
+        models.append(model)
     return models
+
+
+def listed_reasoning(row):
+    persisted = row.get("reasoning")
+    if isinstance(persisted, dict) and isinstance(persisted.get("levels"), list):
+        if persisted.get("levels"):
+            return persisted
+    efforts = row.get("supportedReasoningEfforts")
+    levels = []
+    if isinstance(efforts, list):
+        for item in efforts:
+            if isinstance(item, str) and item.strip() and item.strip() != "fast":
+                levels.append({"id": item.strip(), "label": item.strip()})
+                continue
+            if not isinstance(item, dict):
+                continue
+            effort = item.get("reasoningEffort") or item.get("id") or item.get("effort")
+            if not isinstance(effort, str) or not effort.strip() or effort.strip() == "fast":
+                continue
+            description = item.get("description") or item.get("label")
+            levels.append(
+                {
+                    "id": effort.strip(),
+                    "label": description.strip()
+                    if isinstance(description, str) and description.strip()
+                    else effort.strip(),
+                }
+            )
+    if not levels:
+        return None
+    default_id = row.get("defaultReasoningEffort")
+    if not isinstance(default_id, str) or not any(
+        level["id"] == default_id for level in levels
+    ):
+        default_id = "medium" if any(level["id"] == "medium" for level in levels) else levels[0]["id"]
+    return {"levels": levels, "defaultLevelId": default_id}
+
+
+def model_supports_fast(row):
+    if row.get("supportsFastMode") is True or row.get("fast") is True:
+        return True
+    for value in (
+        row.get("serviceTiers"),
+        row.get("additionalSpeedTiers"),
+    ):
+        if listed_fast_id(value):
+            return True
+    return False
+
+
+def listed_fast_id(value):
+    if isinstance(value, str) and value.strip().lower() == "fast":
+        return value.strip()
+    if isinstance(value, list):
+        for item in value:
+            found = listed_fast_id(item)
+            if found:
+                return found
+        return None
+    if not isinstance(value, dict):
+        return None
+    for key in (value.get("id"), value.get("name")):
+        if isinstance(key, str) and key.strip().lower() == "fast":
+            identity = value.get("id")
+            return identity.strip() if isinstance(identity, str) and identity.strip() else key.strip()
+    return None
 
 
 PREFERRED_MODEL_ID = os.environ.get("CODEX_PREFERRED_MODEL", "gpt-5.3-codex-spark")
@@ -527,20 +602,27 @@ def request_turn_interrupt(proc, thread_id):
         pass
 
 
-def run_turn(proc, thread_id, model_id, text, on_items=None):
+def run_turn(proc, thread_id, model_id, text, on_items=None, effort=None, service_tier=None):
     apply_display_env()
     request_id = next_rpc_id()
+    params = {
+        "threadId": thread_id,
+        "input": [{"type": "text", "text": text}],
+        "approvalPolicy": "never",
+        "sandboxPolicy": {"type": "dangerFullAccess"},
+    }
+    if isinstance(model_id, str) and model_id.strip():
+        params["model"] = model_id.strip()
+    if isinstance(effort, str) and effort.strip():
+        params["effort"] = effort.strip()
+    if isinstance(service_tier, str) and service_tier.strip():
+        params["serviceTier"] = service_tier.strip()
     send(
         proc,
         {
             "method": "turn/start",
             "id": request_id,
-            "params": {
-                "threadId": thread_id,
-                "input": [{"type": "text", "text": text}],
-                "approvalPolicy": "never",
-                "sandboxPolicy": {"type": "dangerFullAccess"},
-            },
+            "params": params,
         },
     )
     items_by_id = {}
@@ -908,12 +990,16 @@ def main():
                         session_items = merge_session_items(session_items, turn_items)
                         publish(turn)
 
+                    effort = request.get("reasoningEffort") or request.get("effort")
+                    service_tier = request.get("serviceTier")
                     turn = run_turn(
                         proc,
                         thread_id,
                         model_id,
                         request["text"],
                         on_items=on_task_items,
+                        effort=effort,
+                        service_tier=service_tier,
                     )
                     if turn.get("error"):
                         session_items = merge_session_items(

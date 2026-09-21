@@ -1,5 +1,5 @@
 import { Paperclip, Zap } from "lucide-react";
-import { useRef, useState } from "react";
+import { useRef } from "react";
 import {
 	Select,
 	SelectContent,
@@ -25,7 +25,6 @@ import {
 	harnessRequiresAccountLogin,
 	selectedHarnessIsConnected,
 } from "#/domain/harness-access";
-import { useCompactLayout } from "../workspace/use-compact-layout";
 import { HarnessPicker } from "./harness-picker";
 import { resolveReasoningLevel, type SessionModel } from "./model-capabilities";
 import { ReasoningOption } from "./reasoning-option";
@@ -39,6 +38,10 @@ interface SessionControlsProps {
 	onModelIdChange: (id: string) => void;
 	onAttachFiles: (files: File[]) => void;
 	listedModelId?: string;
+	reasoningId: string;
+	onReasoningIdChange: (id: string) => void;
+	fast: boolean;
+	onFastChange: (fast: boolean) => void;
 }
 
 export function SessionControls({
@@ -50,12 +53,14 @@ export function SessionControls({
 	onModelIdChange,
 	onAttachFiles,
 	listedModelId = "",
+	reasoningId,
+	onReasoningIdChange,
+	fast,
+	onFastChange,
 }: SessionControlsProps) {
 	const fileInput = useRef<HTMLInputElement>(null);
-	const [reasoningId, setReasoningId] = useState("");
 	const model = models.find((candidate) => candidate.id === modelId);
 	const reasoning = resolveReasoningLevel(model, reasoningId);
-	const [fast, setFast] = useState(false);
 	const harnessReady = selectedHarnessIsConnected(connection, harnessId);
 	const harnessName = agentProviderById(harnessId).name;
 	const startPrompt = harnessRequiresAccountLogin(harnessId)
@@ -66,7 +71,6 @@ export function SessionControls({
 		models.find((candidate) => candidate.id === listedModelId);
 	const persistedModelId = (model?.id || catalogModel?.id || "").trim();
 	const persistedLabel = model?.label || catalogModel?.label || "";
-	const compactComposer = useCompactLayout();
 
 	return (
 		<div className="session-controls">
@@ -94,16 +98,16 @@ export function SessionControls({
 				onHarnessIdChange={(id) => {
 					onHarnessIdChange(id);
 					onModelIdChange("");
-					setReasoningId("");
-					setFast(false);
+					onReasoningIdChange("");
+					onFastChange(false);
 				}}
 			/>
 			<Select
 				value={persistedModelId || undefined}
 				onValueChange={(id) => {
 					onModelIdChange(id);
-					setReasoningId("");
-					setFast(false);
+					onReasoningIdChange("");
+					onFastChange(false);
 				}}
 				disabled={!harnessReady}
 			>
@@ -150,10 +154,10 @@ export function SessionControls({
 					)}
 				</SelectContent>
 			</Select>
-			{compactComposer || !model?.reasoning ? null : (
+			{!model?.reasoning ? null : (
 				<Select
 					value={reasoning?.id ?? ""}
-					onValueChange={setReasoningId}
+					onValueChange={onReasoningIdChange}
 					disabled={!harnessReady}
 				>
 					<SelectTrigger
@@ -187,7 +191,7 @@ export function SessionControls({
 					</SelectContent>
 				</Select>
 			)}
-			{compactComposer || !model?.supportsFastMode ? null : (
+			{!model?.supportsFastMode ? null : (
 				<TooltipProvider delayDuration={350}>
 					<Tooltip>
 						<TooltipTrigger asChild>
@@ -195,7 +199,7 @@ export function SessionControls({
 								className="composer-control fast-control"
 								aria-label="Fast mode"
 								pressed={fast}
-								onPressedChange={setFast}
+								onPressedChange={onFastChange}
 							>
 								<Zap
 									className="size-4"

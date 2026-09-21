@@ -6,7 +6,7 @@ export type WorkspaceFileNode = {
 	readonly kind: "file";
 	readonly name: string;
 	readonly path: string;
-	readonly change: FileChangeEntry;
+	readonly change?: FileChangeEntry;
 };
 
 export type WorkspaceDirNode = {
@@ -20,18 +20,31 @@ export type WorkspaceTreeNode = WorkspaceFileNode | WorkspaceDirNode;
 
 type DraftDir = {
 	readonly dirs: Map<string, DraftDir>;
-	readonly files: Map<string, FileChangeEntry>;
+	readonly files: Map<string, FileChangeEntry | undefined>;
 };
 
 export function workspaceFileTree(
 	changes: readonly FileChangeEntry[],
 ): readonly WorkspaceTreeNode[] {
+	return workspaceExplorerTree(
+		changes.map((change) => change.path),
+		changes,
+	);
+}
+
+export function workspaceExplorerTree(
+	paths: readonly string[],
+	changes: readonly FileChangeEntry[] = [],
+): readonly WorkspaceTreeNode[] {
 	const root = emptyDraft();
-	for (const change of changes) {
-		const path = visibleWorkspacePath(change.path);
+	const listed = new Set<string>();
+	for (const raw of [...paths, ...changes.map((change) => change.path)]) {
+		const path = visibleWorkspacePath(raw);
+		if (!path || listed.has(path)) continue;
+		listed.add(path);
 		const parts = path.split("/").filter(Boolean);
 		if (parts.length === 0) continue;
-		insertChange(root, parts, change);
+		insertPath(root, parts, fileChangeForPath(changes, path));
 	}
 	return finalizeDraft(root, "");
 }
@@ -64,14 +77,23 @@ export function firstWorkspaceFilePath(
 	return undefined;
 }
 
+export function fileTreeChangeMark(
+	change: FileChangeEntry["change"] | undefined,
+): string | null {
+	if (change === "add") return "U";
+	if (change === "update") return "M";
+	if (change === "delete") return "D";
+	return null;
+}
+
 function emptyDraft(): DraftDir {
 	return { dirs: new Map(), files: new Map() };
 }
 
-function insertChange(
+function insertPath(
 	draft: DraftDir,
 	parts: readonly string[],
-	change: FileChangeEntry,
+	change: FileChangeEntry | undefined,
 ): void {
 	const [head, ...rest] = parts;
 	if (!head) return;
@@ -82,7 +104,7 @@ function insertChange(
 	const existing = draft.dirs.get(head);
 	const next = existing ?? emptyDraft();
 	if (!existing) draft.dirs.set(head, next);
-	insertChange(next, rest, change);
+	insertPath(next, rest, change);
 }
 
 function finalizeDraft(
@@ -105,8 +127,8 @@ function finalizeDraft(
 		.map(([name, change]) => ({
 			kind: "file" as const,
 			name,
-			path: visibleWorkspacePath(change.path),
-			change,
+			path: change ? visibleWorkspacePath(change.path) : path ? `${path}/${name}` : name,
+			...(change ? { change } : {}),
 		}));
 	return [...dirs, ...files];
 }

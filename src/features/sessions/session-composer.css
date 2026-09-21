@@ -703,8 +703,19 @@ a.harness-login-action:hover {
 .session-file-name[data-change="update"] {
 	color: #79b8ff;
 }
+.session-file-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	vertical-align: middle;
+}
+.session-file-chip .file-type-icon {
+	width: 16px;
+	height: 16px;
+}
 .session-file-open {
-	display: inline;
+	display: inline-flex;
+	align-items: center;
 	margin: 0;
 	padding: 0;
 	border: 0;
@@ -713,6 +724,7 @@ a.harness-login-action:hover {
 	font: inherit;
 	cursor: pointer;
 	text-align: left;
+	vertical-align: middle;
 }
 .session-file-open:hover .session-file-name {
 	text-decoration: underline;
@@ -950,18 +962,11 @@ details[open] > summary .session-activity-chevron {
 	min-height: 40px;
 }
 .file-type-icon {
-	display: grid;
-	place-items: center;
+	display: block;
 	width: 16px;
 	height: 16px;
 	flex-shrink: 0;
-	border: 1px solid #5a5a5a;
-	border-radius: 3px;
-	color: #e4e4e4;
-	font-size: 7px;
-	font-weight: 650;
-	letter-spacing: -0.04em;
-	line-height: 1;
+	border: 0;
 }
 .file-change-list {
 	margin: 0;

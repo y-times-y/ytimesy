@@ -4,6 +4,9 @@ export type SourceTokenKind =
 	| "identifier"
 	| "keyword"
 	| "string"
+	| "number"
+	| "function"
+	| "property"
 	| "class"
 	| "entity"
 	| "sign"
@@ -75,6 +78,20 @@ const JAVASCRIPT_KEYWORDS = new Set([
 	"while",
 	"with",
 	"yield",
+	"any",
+	"unknown",
+	"never",
+	"bigint",
+	"symbol",
+	"object",
+	"number",
+	"string",
+	"boolean",
+	"unique",
+	"asserts",
+	"namespace",
+	"module",
+	"require",
 ]);
 
 const PYTHON_KEYWORDS = new Set([
@@ -117,18 +134,162 @@ const PYTHON_KEYWORDS = new Set([
 
 const JSON_KEYWORDS = new Set(["true", "false", "null"]);
 
+const RUST_KEYWORDS = new Set([
+	"as",
+	"async",
+	"await",
+	"break",
+	"const",
+	"continue",
+	"crate",
+	"dyn",
+	"else",
+	"enum",
+	"extern",
+	"false",
+	"fn",
+	"for",
+	"if",
+	"impl",
+	"in",
+	"let",
+	"loop",
+	"match",
+	"mod",
+	"move",
+	"mut",
+	"pub",
+	"ref",
+	"return",
+	"self",
+	"Self",
+	"static",
+	"struct",
+	"super",
+	"trait",
+	"true",
+	"type",
+	"unsafe",
+	"use",
+	"where",
+	"while",
+]);
+
+const GO_KEYWORDS = new Set([
+	"break",
+	"case",
+	"chan",
+	"const",
+	"continue",
+	"default",
+	"defer",
+	"else",
+	"fallthrough",
+	"for",
+	"func",
+	"go",
+	"goto",
+	"if",
+	"import",
+	"interface",
+	"map",
+	"package",
+	"range",
+	"return",
+	"select",
+	"struct",
+	"switch",
+	"type",
+	"var",
+	"true",
+	"false",
+	"nil",
+]);
+
+const SHELL_KEYWORDS = new Set([
+	"if",
+	"then",
+	"else",
+	"elif",
+	"fi",
+	"for",
+	"do",
+	"done",
+	"in",
+	"while",
+	"case",
+	"esac",
+	"export",
+	"local",
+	"return",
+	"function",
+	"source",
+	"true",
+	"false",
+]);
+
+const SHELL_COMMANDS = new Set([
+	"cd",
+	"ls",
+	"echo",
+	"cat",
+	"mkdir",
+	"rm",
+	"cp",
+	"mv",
+	"git",
+	"npm",
+	"pnpm",
+	"bun",
+	"cargo",
+	"go",
+	"python",
+	"node",
+	"curl",
+	"wget",
+]);
+
+const CSS_KEYWORDS = new Set([
+	"from",
+	"to",
+	"and",
+	"or",
+	"not",
+	"only",
+	"important",
+	"inherit",
+	"initial",
+	"unset",
+	"none",
+	"auto",
+	"solid",
+	"flex",
+	"grid",
+	"block",
+	"inline",
+	"absolute",
+	"relative",
+	"fixed",
+	"hidden",
+	"scroll",
+]);
+
 export function tokenizeSourceLine(
 	text: string,
 	language: SourceLanguage,
 ): SourceToken[] {
-	if (language === "plain" || language === "markdown") {
-		return tokenizeGeneric(text, new Set());
-	}
+	if (language === "markdown") return tokenizeMarkdown(text);
 	if (language === "python") return tokenizeGeneric(text, PYTHON_KEYWORDS, "#");
 	if (language === "json") return tokenizeGeneric(text, JSON_KEYWORDS);
-	if (language === "css") return tokenizeCss(text);
+	if (language === "css") return tokenizeGeneric(text, CSS_KEYWORDS);
 	if (language === "html") return tokenizeHtml(text);
-	if (language === "shell") return tokenizeGeneric(text, new Set(), "#");
+	if (language === "shell") {
+		return tokenizeGeneric(text, SHELL_KEYWORDS, "#", false, SHELL_COMMANDS);
+	}
+	if (language === "yaml") return tokenizeGeneric(text, JSON_KEYWORDS, "#");
+	if (language === "rust") return tokenizeGeneric(text, RUST_KEYWORDS);
+	if (language === "go") return tokenizeGeneric(text, GO_KEYWORDS);
+	if (language === "plain") return tokenizeGeneric(text, new Set());
 	return tokenizeJavascript(text);
 }
 
@@ -141,6 +302,7 @@ function tokenizeGeneric(
 	keywords: ReadonlySet<string>,
 	hashComment: "#" | null = null,
 	jsx = false,
+	commands: ReadonlySet<string> = new Set(),
 ): SourceToken[] {
 	const tokens: SourceToken[] = [];
 	let index = 0;
@@ -170,6 +332,20 @@ function tokenizeGeneric(
 			afterOpenTag = false;
 			continue;
 		}
+		const hex = rest.match(/^#(?:[\da-fA-F]{3,8})\b/);
+		if (hex?.[0]) {
+			tokens.push({ kind: "number", text: hex[0] });
+			index += hex[0].length;
+			afterOpenTag = false;
+			continue;
+		}
+		if (rest[0] === "@" && /^@[A-Za-z_]/.test(rest)) {
+			const decorator = rest.match(/^@[A-Za-z_]\w*/)?.[0] ?? "@";
+			tokens.push({ kind: "class", text: decorator });
+			index += decorator.length;
+			afterOpenTag = false;
+			continue;
+		}
 		if (jsx && rest[0] === "<") {
 			tokens.push({ kind: "sign", text: "<" });
 			index += 1;
@@ -184,11 +360,19 @@ function tokenizeGeneric(
 		const ident = rest.match(/^[A-Za-z_$][\w$]*/);
 		if (ident?.[0]) {
 			const word = ident[0];
+			const next = rest.slice(word.length);
 			tokens.push({
-				kind: tokenKindForWord(word, keywords, afterOpenTag),
+				kind: tokenKindForWord(word, keywords, afterOpenTag, next, commands),
 				text: word,
 			});
 			index += word.length;
+			afterOpenTag = false;
+			continue;
+		}
+		const number = readSourceNumber(rest);
+		if (number) {
+			tokens.push({ kind: "number", text: number });
+			index += number.length;
 			afterOpenTag = false;
 			continue;
 		}
@@ -207,23 +391,43 @@ function tokenizeGeneric(
 	return tokens;
 }
 
-function tokenizeCss(text: string): SourceToken[] {
-	return tokenizeGeneric(text, new Set(["from", "to", "and", "or", "not"]));
-}
-
 function tokenizeHtml(text: string): SourceToken[] {
 	return tokenizeGeneric(text, new Set(), null, true);
+}
+
+function tokenizeMarkdown(text: string): SourceToken[] {
+	const heading = text.match(/^(#{1,6})(\s+)(.*)$/);
+	if (heading?.[1] && heading[2] != null && heading[3] != null) {
+		return [
+			{ kind: "keyword", text: heading[1] },
+			{ kind: "identifier", text: heading[2] },
+			{ kind: "class", text: heading[3] },
+		];
+	}
+	return tokenizeGeneric(text, new Set());
 }
 
 function tokenKindForWord(
 	word: string,
 	keywords: ReadonlySet<string>,
 	afterOpenTag: boolean,
+	next: string,
+	commands: ReadonlySet<string>,
 ): SourceTokenKind {
 	if (afterOpenTag) return "entity";
 	if (keywords.has(word)) return "keyword";
+	if (commands.has(word)) return "function";
 	if (/^[A-Z][A-Za-z0-9]+$/.test(word)) return "class";
+	if (next.startsWith("(")) return "function";
+	if (/^(\?|!)?:(?!\/\/)/.test(next)) return "property";
 	return "identifier";
+}
+
+function readSourceNumber(text: string): string | null {
+	const match = text.match(
+		/^(0x[\da-fA-F](?:_?[\da-fA-F])*|\d(?:_?\d)*(?:\.\d(?:_?\d)*)?(?:e[+-]?\d(?:_?\d)*)?)(?:px|em|rem|%|vh|vw|vmin|vmax|s|ms|deg|fr)?/i,
+	);
+	return match?.[0] ?? null;
 }
 
 function readQuoted(text: string, quote: string): string {

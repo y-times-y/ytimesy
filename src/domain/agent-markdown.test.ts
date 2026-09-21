@@ -122,4 +122,31 @@ describe("parseAgentMarkdown", () => {
 			},
 		]);
 	});
+
+	it("turns filename* markers into file mentions", () => {
+		expect(
+			parseAgentMarkdown(
+				"Updated session-timeline.tsx* and `src/domain/agent-markdown.ts*`.",
+			),
+		).toEqual([
+			{
+				kind: "paragraph",
+				inlines: [
+					{ kind: "text", text: "Updated " },
+					{
+						kind: "file",
+						text: "session-timeline.tsx",
+						path: "session-timeline.tsx",
+					},
+					{ kind: "text", text: " and " },
+					{
+						kind: "file",
+						text: "src/domain/agent-markdown.ts",
+						path: "src/domain/agent-markdown.ts",
+					},
+					{ kind: "text", text: "." },
+				],
+			},
+		]);
+	});
 });

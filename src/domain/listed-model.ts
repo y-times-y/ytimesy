@@ -1,15 +1,209 @@
+export type ListedReasoning = {
+	readonly levels: readonly [
+		{ readonly id: string; readonly label: string },
+		...{ readonly id: string; readonly label: string }[],
+	];
+	readonly defaultLevelId: string;
+};
+
 export type ListedModel = {
 	readonly id: string;
 	readonly label: string;
 	readonly notice?: string;
 	readonly supportsFastMode?: boolean;
+	readonly fastModeId?: string;
+	readonly reasoning?: ListedReasoning;
 };
 
 export function listedModelSupportsFastMode(row: {
 	readonly supportsFastMode?: unknown;
 	readonly fast?: unknown;
+	readonly variants?: unknown;
+	readonly serviceTiers?: unknown;
+	readonly additionalSpeedTiers?: unknown;
+	readonly capabilities?: unknown;
 }): boolean {
-	return row.supportsFastMode === true || row.fast === true;
+	if (row.supportsFastMode === true || row.fast === true) return true;
+	const capabilities = asRecord(row.capabilities);
+	if (
+		capabilities?.fast === true ||
+		capabilities?.supportsFastMode === true
+	) {
+		return true;
+	}
+	return listedFastModeId(row) != null;
+}
+
+export function listedFastModeId(row: {
+	readonly fastModeId?: unknown;
+	readonly variants?: unknown;
+	readonly serviceTiers?: unknown;
+	readonly additionalSpeedTiers?: unknown;
+	readonly capabilities?: unknown;
+}): string | undefined {
+	if (typeof row.fastModeId === "string" && row.fastModeId.trim()) {
+		return row.fastModeId.trim();
+	}
+	if (listedVariantIds(row.variants).includes("fast")) return "fast";
+	const capabilities = asRecord(row.capabilities);
+	if (listedVariantIds(capabilities?.variants).includes("fast")) return "fast";
+	return (
+		listedFastServiceTierId(row.serviceTiers) ??
+		listedFastServiceTierId(row.additionalSpeedTiers) ??
+		listedFastServiceTierId(capabilities?.serviceTiers) ??
+		listedFastServiceTierId(capabilities?.additionalSpeedTiers)
+	);
+}
+
+export function listedReasoningFromRow(row: {
+	readonly reasoning?: unknown;
+	readonly variants?: unknown;
+	readonly supportedReasoningEfforts?: unknown;
+	readonly defaultReasoningEffort?: unknown;
+	readonly capabilities?: unknown;
+}): ListedReasoning | undefined {
+	const persisted = listedReasoningFromPersisted(row.reasoning);
+	if (persisted) return persisted;
+	const capabilities = asRecord(row.capabilities);
+	return (
+		listedReasoningFromVariants(row.variants) ??
+		listedReasoningFromVariants(capabilities?.variants) ??
+		listedReasoningFromEfforts(
+			row.supportedReasoningEfforts ??
+				capabilities?.supportedReasoningEfforts,
+			row.defaultReasoningEffort ?? capabilities?.defaultReasoningEffort,
+		)
+	);
+}
+
+export function listedReasoningFromVariants(
+	variants: unknown,
+): ListedReasoning | undefined {
+	const ids = listedVariantIds(variants).filter((id) => id !== "fast");
+	if (ids.length === 0) return undefined;
+	const levels = ids.map((id) => ({ id, label: id }));
+	const defaultLevelId = ids.includes("medium") ? "medium" : ids[0];
+	return {
+		levels: [levels[0], ...levels.slice(1)],
+		defaultLevelId,
+	};
+}
+
+export function listedVariantIds(variants: unknown): readonly string[] {
+	if (Array.isArray(variants)) {
+		return variants.filter(
+			(value): value is string =>
+				typeof value === "string" && value.trim().length > 0,
+		);
+	}
+	if (typeof variants === "object" && variants !== null) {
+		return Object.keys(variants).filter((key) => key.trim().length > 0);
+	}
+	return [];
+}
+
+function listedReasoningFromPersisted(
+	value: unknown,
+): ListedReasoning | undefined {
+	if (!isRecord(value)) return undefined;
+	const levels = listedEffortLevels(value.levels);
+	if (!levels) return undefined;
+	const defaultLevelId =
+		typeof value.defaultLevelId === "string" &&
+		levels.some((level) => level.id === value.defaultLevelId)
+			? value.defaultLevelId
+			: levels[0].id;
+	return { levels, defaultLevelId };
+}
+
+function listedReasoningFromEfforts(
+	efforts: unknown,
+	defaultEffort: unknown,
+): ListedReasoning | undefined {
+	const levels = listedEffortLevels(efforts);
+	if (!levels) return undefined;
+	const requested =
+		typeof defaultEffort === "string" ? defaultEffort.trim() : "";
+	const defaultLevelId = levels.some((level) => level.id === requested)
+		? requested
+		: levels.some((level) => level.id === "medium")
+			? "medium"
+			: levels[0].id;
+	return { levels, defaultLevelId };
+}
+
+function listedEffortLevels(
+	value: unknown,
+): ListedReasoning["levels"] | undefined {
+	if (!Array.isArray(value)) return undefined;
+	const levels: { id: string; label: string }[] = [];
+	for (const item of value) {
+		if (typeof item === "string" && item.trim() && item.trim() !== "fast") {
+			levels.push({ id: item.trim(), label: item.trim() });
+			continue;
+		}
+		if (!isRecord(item)) continue;
+		const id =
+			readListedString(item.reasoningEffort) ??
+			readListedString(item.id) ??
+			readListedString(item.effort);
+		if (!id || id === "fast") continue;
+		levels.push({
+			id,
+			label: readListedString(item.description) ?? readListedString(item.label) ?? id,
+		});
+	}
+	if (levels.length === 0) return undefined;
+	return [levels[0], ...levels.slice(1)];
+}
+
+function listedFastServiceTierId(value: unknown): string | undefined {
+	if (typeof value === "string" && value.trim().toLowerCase() === "fast") {
+		return value.trim();
+	}
+	if (Array.isArray(value)) {
+		for (const item of value) {
+			const id = listedFastServiceTierId(item);
+			if (id) return id;
+		}
+		return undefined;
+	}
+	if (!isRecord(value)) return undefined;
+	for (const key of [value.id, value.name]) {
+		if (typeof key === "string" && key.trim().toLowerCase() === "fast") {
+			return typeof value.id === "string" && value.id.trim()
+				? value.id.trim()
+				: key.trim();
+		}
+	}
+	return undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+	return typeof value === "object" && value !== null && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: undefined;
+}
+
+function readListedString(value: unknown): string | undefined {
+	return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function modelIdToSubmit(
+	requested: string,
+	models: readonly { readonly id: string }[],
+	options?: ListedModelPreference,
+): string {
+	return (
+		submittedListedModelId(requested, models, options) ||
+		requested.trim() ||
+		options?.lastUsedId?.trim() ||
+		""
+	);
 }
 
 export type ListedModelPreference = {

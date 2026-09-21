@@ -23,6 +23,7 @@ import {
 	runningAuthenticatedTurnShouldPoll,
 } from "#/domain/harness-access";
 import {
+	inspectorPaneIsWide,
 	inspectorSplitFromPointer,
 	inspectorSplitRatio,
 	inspectorStaysBesideChat,
@@ -38,8 +39,10 @@ import {
 	fileChangesFromSessionItems,
 	isTurnRunning,
 	lastUserMessageText,
+	sessionItemsQueuedWithUser,
 	sessionTitleFromItems,
 	sessionUsesFollowUpLayout,
+	sessionViewShouldReplaceOpenTurn,
 } from "#/domain/session-item";
 import {
 	backgroundTurnPollChatIds,
@@ -172,6 +175,8 @@ export function WorkspaceHome({
 	const pendingSendRef = useRef<{
 		text: string;
 		modelId: string;
+		variant?: string;
+		fast?: boolean;
 	} | null>(null);
 	const claudeLoginWindowRef = useRef<Window | null>(null);
 	const sessionViews = useRef(new Map<string, PublicCodexSession>());
@@ -195,7 +200,6 @@ export function WorkspaceHome({
 	);
 	const applySessionView = useCallback(
 		(epoch: number, next: PublicCodexSession) => {
-			rememberSessionView(next);
 			if (epoch !== sessionEpoch.current) return;
 			if (composerDraftRef.current) return;
 			const openChatId = selectedSessionIdRef.current;
@@ -209,15 +213,28 @@ export function WorkspaceHome({
 			) {
 				return;
 			}
-			setSession(next);
-			if (next.agentSessionId) setSelectedSessionId(next.agentSessionId);
-			const provider = connectedProviderId(next.connection);
-			const listed = next.agentSessionId
-				? listedChatHarnessId(chats.data ?? [], next.agentSessionId, "")
-				: "";
-			if (provider && (!listed || listed === provider)) {
-				setHarnessId(provider);
-			}
+			setSession((current) => {
+				if (
+					!sessionViewShouldReplaceOpenTurn({
+						currentStatus: current.turnStatus,
+						nextStatus: next.turnStatus,
+						currentItems: current.items,
+						nextItems: next.items,
+					})
+				) {
+					return current;
+				}
+				rememberSessionView(next);
+				if (next.agentSessionId) setSelectedSessionId(next.agentSessionId);
+				const provider = connectedProviderId(next.connection);
+				const listed = next.agentSessionId
+					? listedChatHarnessId(chats.data ?? [], next.agentSessionId, "")
+					: "";
+				if (provider && (!listed || listed === provider)) {
+					setHarnessId(provider);
+				}
+				return next;
+			});
 		},
 		[chats.data, rememberSessionView],
 	);
@@ -231,7 +248,7 @@ export function WorkspaceHome({
 	const openedDiff = useRef(false);
 	const splitRatio = inspectorSplitRatio({
 		custom: customSplit,
-		desktop: inspectorView === "desktop",
+		wide: inspectorPaneIsWide(inspectorView),
 	});
 	const sessionTitle = sessionTitleFromItems(session.items);
 	const hasUserMessage = Boolean(lastUserMessageText(session.items));
@@ -290,6 +307,7 @@ export function WorkspaceHome({
 		openChatId: activeSessionId,
 		busyChatIds,
 	});
+	const openTurnStatus = session.turnStatus;
 	const listedTitle = sidebarChats.find(
 		(chat) => chat.id === activeSessionId,
 	)?.title;
@@ -802,7 +820,7 @@ export function WorkspaceHome({
 				chats={sidebarChats}
 				selectedChatId={activeSessionId}
 				busyChatIds={busyChatIds}
-				openTurnStatus={session.turnStatus}
+				openTurnStatus={openTurnStatus}
 				openSideTurnStatus={session.sideTurnStatus}
 				hasUserMessage={hasUserMessage}
 				onSelectChat={(id) => {
@@ -1030,6 +1048,10 @@ export function WorkspaceHome({
 													...scope,
 													text: pending.text,
 													modelId: resolvedModel,
+													...(pending.variant
+														? { variant: pending.variant }
+														: {}),
+													...(pending.fast ? { fast: true } : {}),
 												},
 											});
 											applySessionView(epoch, sent);
@@ -1050,11 +1072,18 @@ export function WorkspaceHome({
 											void chats.refetch();
 										});
 								}}
-								onSend={(text, modelId) => {
+								onSend={(text, modelId, options) => {
 									const epoch = sessionEpoch.current;
 									const scope = sessionScope();
 									const chatId = activeSessionId;
-									pendingSendRef.current = { text, modelId };
+									pendingSendRef.current = {
+										text,
+										modelId,
+										...(options?.reasoningId
+											? { variant: options.reasoningId }
+											: {}),
+										...(options?.fast ? { fast: true } : {}),
+									};
 									if (
 										harnessId === "claude" &&
 										session.connection.status !== "authenticated"
@@ -1065,6 +1094,11 @@ export function WorkspaceHome({
 										);
 									}
 									setBusyChatIds((ids) => withBusyChat(ids, chatId));
+									setSession((current) => ({
+										...current,
+										turnStatus: "running",
+										items: sessionItemsQueuedWithUser(current.items, text),
+									}));
 									if (activeProjectId) {
 										queryClient.setQueryData(
 											["agent-sessions", activeProjectId],
@@ -1107,8 +1141,17 @@ export function WorkspaceHome({
 												closeClaudeLoginWindow();
 												return;
 											}
+											const pending = pendingSendRef.current;
 											const next = await sendTask({
-												data: { ...scope, text, modelId: resolvedModel },
+												data: {
+													...scope,
+													text,
+													modelId: resolvedModel,
+													...(pending?.variant
+														? { variant: pending.variant }
+														: {}),
+													...(pending?.fast ? { fast: true } : {}),
+												},
 											});
 											applySessionView(epoch, next);
 											if (

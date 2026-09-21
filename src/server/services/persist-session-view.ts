@@ -14,11 +14,13 @@ import {
 	type SessionItem,
 	type SessionTurnStatus,
 	sessionItemsFromUnknown,
+	sessionItemsQueuedWithUser,
 	sessionTitleFromItems,
 	sessionViewItems,
 } from "#/domain/session-item";
 import {
 	type AgentSessionRecord,
+	agentSessionById,
 	listAgentSessions,
 	saveAgentSessionItems,
 	saveAgentSessionTurnStatus,
@@ -29,6 +31,22 @@ import {
 	saveProjectBriefing,
 } from "#/server/adapters/project-context";
 import type { PublicCodexSession } from "./codex-workspace-session";
+
+export async function persistQueuedUserTurn(
+	session: AgentSessionRecord | null,
+	view: PublicCodexSession,
+	text: string,
+): Promise<PublicCodexSession> {
+	return persistBoundSessionView(session, {
+		...view,
+		turnStatus: "running",
+		items: sessionItemsQueuedWithUser(
+			sessionItemsFromUnknown(session?.items),
+			text,
+		),
+		canSend: false,
+	});
+}
 
 export async function persistBoundSessionView(
 	session: AgentSessionRecord | null,
@@ -42,17 +60,21 @@ export async function persistBoundSessionView(
 			blockedListedModelIds: view.blockedListedModelIds,
 		};
 	}
+	const stored = (await agentSessionById(session.id)) ?? session;
 	const liveItems = sessionViewItems(
 		view.items,
-		sessionItemsFromUnknown(session.items),
+		sessionItemsFromUnknown(stored.items),
 	);
 	const title = sessionTitleFromItems(liveItems);
-	const submittedModelId = view.listedModelId.trim() || session.listedModelId;
+	const submittedModelId = view.listedModelId.trim() || stored.listedModelId;
 	const persistTurn = sessionTurnStatusForPersist({
 		liveStatus: view.turnStatus,
 		liveConnection: view.connection.status,
+		storedStatus: stored.turnStatus,
+		storedLastUser: lastUserMessageText(sessionItemsFromUnknown(stored.items)),
+		liveLastUser: lastUserMessageText(view.items),
 	});
-	const previous = sessionItemsFromUnknown(session.items);
+	const previous = sessionItemsFromUnknown(stored.items);
 	const saved = await saveAgentSessionItems(
 		session.id,
 		liveItems,

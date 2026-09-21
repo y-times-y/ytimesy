@@ -186,9 +186,7 @@ function SessionItemView({
 					className="session-message"
 					data-role="assistant"
 					data-streaming={
-						turnRunning && isLastItem && item.text.length > 0
-							? "true"
-							: undefined
+						turnRunning && item.streaming ? "true" : undefined
 					}
 				>
 					<AgentMarkdown

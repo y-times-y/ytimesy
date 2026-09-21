@@ -426,6 +426,8 @@ export function submitCodexTask(
 	input: {
 		readonly text: string;
 		readonly modelId: string;
+		readonly reasoningEffort?: string;
+		readonly serviceTier?: string;
 	},
 ): Effect.Effect<CodexLoginStatus> {
 	const taskId = crypto.randomUUID();
@@ -438,26 +440,18 @@ export function submitCodexTask(
 					id: taskId,
 					text: input.text,
 					modelId: input.modelId,
+					...(input.reasoningEffort
+						? { reasoningEffort: input.reasoningEffort }
+						: {}),
+					...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
 				})}\n`,
 			),
 		);
-		for (let attempt = 0; attempt < 90; attempt += 1) {
-			yield* Effect.sleep(Duration.seconds(1));
-			const status = yield* readLoginStatus(machines, workspaceId);
-			if (status.stage === "failed") return status;
-			if (status.stage === "authenticated") {
-				if (status.turnStatus === "running" || status.turnStatus === "failed") {
-					return status;
-				}
-			}
-			const raw = yield* Effect.tryPromise(() =>
-				machines.readTextFile(workspaceId, "/tmp/ytimesy-task-result.json"),
-			).pipe(Effect.catchAll(() => Effect.succeed(null)));
-			if (raw && resultMatchesTask(raw, taskId)) {
-				return yield* readLoginStatus(machines, workspaceId);
-			}
+		const status = yield* readLoginStatus(machines, workspaceId);
+		if (status.stage === "authenticated") {
+			return { ...status, turnStatus: "running" };
 		}
-		return failedStatus("Codex did not finish the task in time");
+		return status;
 	}).pipe(Effect.catchAll((cause) => Effect.succeed(failedFromCause(cause))));
 }
 
@@ -476,20 +470,6 @@ export function interruptCodexTurn(
 		yield* Effect.sleep(Duration.seconds(1));
 		return yield* readLoginStatus(machines, workspaceId);
 	}).pipe(Effect.catchAll((cause) => Effect.succeed(failedFromCause(cause))));
-}
-
-function resultMatchesTask(raw: string, taskId: string): boolean {
-	try {
-		const parsed: unknown = JSON.parse(raw);
-		return (
-			typeof parsed === "object" &&
-			parsed !== null &&
-			"id" in parsed &&
-			parsed.id === taskId
-		);
-	} catch {
-		return false;
-	}
 }
 
 function shellSingleQuote(value: string): string {

@@ -93,7 +93,7 @@ export const getCodexSession = createServerFn({ method: "GET" })
 		if (!scope) return emptyHarnessSession();
 		return runWithMachines((machines) =>
 			readHarnessWorkspaceSession(machines, scope),
-		).catch(() => emptyHarnessSession());
+		);
 	});
 
 export const connectCodexSession = createServerFn({ method: "POST" })
@@ -153,10 +153,13 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 			harnessId?: string;
 			sessionId?: string;
 			createNew?: boolean;
+			variant?: string;
+			fast?: boolean;
 		}) => {
 			const text = data.text.trim();
 			const modelId = data.modelId.trim();
 			if (!text) throw new Error("Task text is required");
+			const variant = data.variant?.trim();
 			return {
 				text,
 				modelId,
@@ -167,6 +170,8 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 					: DEFAULT_COMPOSER_HARNESS_ID,
 				sessionId: data.sessionId?.trim() || undefined,
 				createNew: data.createNew === true,
+				...(variant ? { variant } : {}),
+				...(data.fast === true ? { fast: true } : {}),
 			};
 		},
 	)

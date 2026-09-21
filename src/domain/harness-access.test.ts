@@ -441,7 +441,7 @@ describe("runningAuthenticatedTurnShouldPoll", () => {
 		).toBe(true);
 	});
 
-	it("does not poll while Send is in flight or the VM is paused", () => {
+	it("keeps polling a running turn even while Send is still in flight", () => {
 		expect(
 			runningAuthenticatedTurnShouldPoll({
 				turnStatus: "running",
@@ -449,7 +449,7 @@ describe("runningAuthenticatedTurnShouldPoll", () => {
 				connectionStatus: "authenticated",
 				composerBusy: true,
 			}),
-		).toBe(false);
+		).toBe(true);
 		expect(
 			runningAuthenticatedTurnShouldPoll({
 				turnStatus: "running",

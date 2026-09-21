@@ -22,6 +22,7 @@ export type AgentMessageItem = {
 	readonly kind: "agentMessage";
 	readonly id: SessionItemId;
 	readonly text: string;
+	readonly streaming?: boolean;
 };
 
 export type ReasoningItem = {
@@ -217,15 +218,99 @@ export function sessionItemsFromUnknown(value: unknown): SessionItem[] {
 	return Array.isArray(value) ? (value as SessionItem[]) : [];
 }
 
+export function sessionItemsQueuedWithUser(
+	items: readonly SessionItem[],
+	text: string,
+): SessionItem[] {
+	const queued = text.trim();
+	if (!queued) return [...items];
+	if (lastUserMessageText(items) === queued) return [...items];
+	return [
+		...items,
+		{
+			kind: "userMessage",
+			id: SessionItemId(`queued-user-${items.length}-${queued.length}`),
+			text: queued,
+		},
+	];
+}
+
 export function sessionViewItems(
 	live: readonly SessionItem[],
 	recorded: readonly SessionItem[],
 ): SessionItem[] {
+	const ahead = transcriptAheadOfPeer(live, recorded);
+	if (ahead) {
+		const tree = (ahead === recorded ? live : recorded).filter(
+			(item) => item.kind === "fileChange",
+		);
+		const withoutTree = ahead.filter((item) => item.kind !== "fileChange");
+		return tree.length === 0 ? [...ahead] : [...withoutTree, ...tree];
+	}
 	if (sessionRecordHasConversation(live)) return [...live];
 	if (!sessionRecordHasConversation(recorded)) return [...live];
 	const tree = live.filter((item) => item.kind === "fileChange");
 	const withoutTree = recorded.filter((item) => item.kind !== "fileChange");
 	return tree.length === 0 ? [...recorded] : [...withoutTree, ...tree];
+}
+
+function transcriptAheadOfPeer(
+	left: readonly SessionItem[],
+	right: readonly SessionItem[],
+): SessionItem[] | null {
+	const leftUser = lastUserMessageText(left);
+	const rightUser = lastUserMessageText(right);
+	if (!leftUser || !rightUser || leftUser === rightUser) return null;
+	const leftHasRight = userTextsFromItems(left).includes(rightUser);
+	const rightHasLeft = userTextsFromItems(right).includes(leftUser);
+	if (leftHasRight && !rightHasLeft) return [...left];
+	if (rightHasLeft && !leftHasRight) return [...right];
+	return null;
+}
+
+function userTextsFromItems(items: readonly SessionItem[]): string[] {
+	return items
+		.filter((item) => item.kind === "userMessage")
+		.map((item) => item.text);
+}
+
+export function sessionViewShouldReplaceOpenTurn(input: {
+	readonly currentStatus: SessionTurnStatus;
+	readonly nextStatus: SessionTurnStatus;
+	readonly currentItems: readonly SessionItem[];
+	readonly nextItems: readonly SessionItem[];
+}): boolean {
+	if (input.currentStatus !== "running") return true;
+	if (input.nextStatus === "running") return true;
+	const currentUser = lastUserMessageText(input.currentItems);
+	const nextUser = lastUserMessageText(input.nextItems);
+	if (currentUser && currentUser !== nextUser) return false;
+	if (input.nextStatus === "idle") return false;
+	if (
+		(input.nextStatus === "completed" || input.nextStatus === "failed") &&
+		currentUser &&
+		!turnSettledAfterUser(input.nextItems, currentUser)
+	) {
+		return false;
+	}
+	return (
+		input.nextStatus === "completed" || input.nextStatus === "failed"
+	);
+}
+
+function turnSettledAfterUser(
+	items: readonly SessionItem[],
+	user: string,
+): boolean {
+	let lastUser = -1;
+	for (let index = 0; index < items.length; index += 1) {
+		const item = items[index];
+		if (item?.kind === "userMessage" && item.text === user) lastUser = index;
+	}
+	if (lastUser < 0) return false;
+	return items
+		.slice(lastUser + 1)
+		.some((item) => item.kind === "agentMessage" || item.kind === "error");
 }
 
 export function sessionUsesFollowUpLayout(input: {
@@ -287,6 +372,27 @@ function isWorkspacePreamble(text: string): boolean {
 	return text.startsWith("You are in a ytimesy workspace VM.");
 }
 
+export function sessionTurnLooksSettled(
+	items: readonly SessionItem[],
+): boolean {
+	if (items.some((item) => liveActivityStatus(item) === "inProgress")) {
+		return false;
+	}
+	const last = compactTimelineItems(items).at(-1);
+	return last?.kind === "agentMessage" || last?.kind === "error";
+}
+
+export function persistableTurnStatusFromTranscript(input: {
+	readonly liveStatus: SessionTurnStatus;
+	readonly items: readonly SessionItem[];
+}): SessionTurnStatus {
+	if (input.liveStatus !== "running" || !sessionTurnLooksSettled(input.items)) {
+		return input.liveStatus;
+	}
+	const last = compactTimelineItems(input.items).at(-1);
+	return last?.kind === "error" ? "failed" : "completed";
+}
+
 export function showTurnWorking(
 	items: readonly SessionItem[],
 	turnStatus: SessionTurnStatus,
@@ -294,6 +400,7 @@ export function showTurnWorking(
 	if (turnStatus !== "running") return false;
 	const last = compactTimelineItems(items).at(-1);
 	if (last == null || last.kind === "userMessage") return true;
+	if (last.kind === "agentMessage" || last.kind === "error") return false;
 	if (last.kind === "reasoning") return false;
 	if (last.kind === "commandExecution" && last.status === "inProgress") {
 		return false;
