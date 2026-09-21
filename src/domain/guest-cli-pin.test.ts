@@ -35,6 +35,7 @@ describe("guest CLI pin", () => {
 		expect(seal).toContain(GUEST_CLI_PIN_ENV_PATH);
 		expect(seal).toContain(exports);
 		expect(seal).toContain("autoupdate");
+		expect(seal).toContain("showThinkingSummaries");
 		expect(seal).toContain("check_for_update_on_startup");
 		expect(seal).not.toContain("curl ");
 		expect(seal).not.toContain("claude update");

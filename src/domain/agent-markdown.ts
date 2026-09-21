@@ -40,9 +40,13 @@ export function parseAgentMarkdown(text: string): AgentMarkdownBlock[] {
 	return blocks;
 }
 
+export function stripFileMentionMarker(text: string) {
+	return text.trim().replace(/\*+$/, "");
+}
+
 export function looksLikeWorkspaceFilePath(text: string) {
-	const trimmed = text.trim();
-	if (!trimmed || /\s/.test(trimmed)) return false;
+	const trimmed = stripFileMentionMarker(text);
+	if (!trimmed || /\s/.test(trimmed) || trimmed.includes("*")) return false;
 	if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return false;
 	if (trimmed.includes("/")) return true;
 	return /\.[A-Za-z0-9]{1,12}$/.test(trimmed);
@@ -127,7 +131,8 @@ function parseInlines(text: string): AgentInline[] {
 	}
 	if (cursor < text.length)
 		inlines.push({ kind: "text", text: text.slice(cursor) });
-	return inlines.length > 0 ? inlines : [{ kind: "text", text }];
+	const parts = inlines.length > 0 ? inlines : [{ kind: "text" as const, text }];
+	return parts.flatMap(splitTextFileMentions);
 }
 
 function inlineFromMarkdownLink(token: string): AgentInline {
@@ -173,9 +178,38 @@ function inlineFromCode(text: string): AgentInline {
 		return { kind: "code", text: inner };
 	}
 	if (looksLikeWorkspaceFilePath(text)) {
-		return { kind: "file", text, path: text };
+		const path = stripFileMentionMarker(text);
+		return { kind: "file", text: path, path };
 	}
 	return { kind: "code", text };
+}
+
+function splitTextFileMentions(part: AgentInline): AgentInline[] {
+	if (part.kind !== "text") {
+		if (part.kind === "file") {
+			const path = stripFileMentionMarker(part.path);
+			return [{ ...part, text: stripFileMentionMarker(part.text), path }];
+		}
+		return [part];
+	}
+	const pattern =
+		/(?<![\w`])((?:[\w.@-]+\/)*[\w.@-]+\.[A-Za-z0-9]{1,12})\*(?!\*)/g;
+	const inlines: AgentInline[] = [];
+	let cursor = 0;
+	let match = pattern.exec(part.text);
+	while (match) {
+		if (match.index > cursor) {
+			inlines.push({ kind: "text", text: part.text.slice(cursor, match.index) });
+		}
+		const path = match[1] ?? "";
+		inlines.push({ kind: "file", text: path, path });
+		cursor = match.index + match[0].length;
+		match = pattern.exec(part.text);
+	}
+	if (cursor < part.text.length) {
+		inlines.push({ kind: "text", text: part.text.slice(cursor) });
+	}
+	return inlines.length > 0 ? inlines : [part];
 }
 
 function fenceLanguage(tag: string): string | null {

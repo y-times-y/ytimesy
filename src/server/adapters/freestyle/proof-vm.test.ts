@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
 	GUEST_INTERNET_FIREWALL,
 	PROOF_METADATA_PURPOSE,
+	privateAuthSnapshotFields,
 	privateCodexAuthSnapshotFields,
 	proofAuthSnapshotSlug,
+	proofClaudeAuthSnapshotSlug,
 	proofCreateVmFields,
 	requestedAuthSnapshotId,
 } from "./proof-vm";
@@ -48,6 +50,11 @@ describe("privateCodexAuthSnapshotFields", () => {
 			autoDeleteSeconds: -1,
 		});
 		expect(privateCodexAuthSnapshotFields("a1b2")).not.toHaveProperty("public");
+		expect(privateAuthSnapshotFields("claude", "a1b2")).toEqual({
+			slug: proofClaudeAuthSnapshotSlug("a1b2"),
+			displayName: "ytimesy isolated Claude Code login",
+			autoDeleteSeconds: -1,
+		});
 	});
 });
 

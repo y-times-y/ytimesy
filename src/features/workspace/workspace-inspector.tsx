@@ -14,12 +14,12 @@ const views = {
 	files: {
 		label: "Files",
 		title: "No files yet.",
-		description: "Files the agent edits will appear here.",
+		description: "The workspace tree will appear here.",
 	},
 	diff: {
 		label: "Diff",
 		title: "No changes yet.",
-		description: "File changes will appear here.",
+		description: "Changes from this turn will appear here.",
 	},
 	terminal: {
 		label: "Terminal",
@@ -134,11 +134,14 @@ export function WorkspaceInspector({
 			</div>
 			{activeView === "side" ? (
 				sideChat
-			) : activeView === "files" && fileChanges.length > 0 ? (
+			) : activeView === "files" ? (
 				<FilesInspector
 					changes={fileChanges}
 					selectedPath={selectedFilePath}
 					onSelectPath={onSelectFilePath ?? (() => undefined)}
+					projectId={projectId}
+					sessionId={sessionId}
+					active={!collapsed && activeView === "files"}
 				/>
 			) : activeView === "diff" && fileChanges.length > 0 ? (
 				<DiffInspector changes={fileChanges} selectedPath={selectedFilePath} />

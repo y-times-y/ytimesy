@@ -10,6 +10,8 @@ describe("sourceLanguageFromPath", () => {
 		expect(sourceLanguageFromPath("src/app.test.ts")).toBe("javascript");
 		expect(sourceLanguageFromPath("todo.py")).toBe("python");
 		expect(sourceLanguageFromPath("package.json")).toBe("json");
+		expect(sourceLanguageFromPath("main.rs")).toBe("rust");
+		expect(sourceLanguageFromPath("compose.yaml")).toBe("yaml");
 	});
 });
 

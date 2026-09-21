@@ -11,6 +11,7 @@ import {
 	newChatIsActive,
 	selectedChatIdAfterDelete,
 	sessionViewAppliesToOpenChat,
+	sidebarChatAttention,
 	sidebarChatIsRunning,
 	projectFolderIsExpanded,
 	sidebarChatsEmptyCopy,
@@ -359,5 +360,42 @@ describe("background turn poll", () => {
 				agentSessionId: "a",
 			}),
 		).toBe(true);
+	});
+});
+
+describe("sidebarChatAttention", () => {
+	it("marks a finished turn as attention until it is seen", () => {
+		expect(
+			sidebarChatAttention({
+				running: false,
+				turnStatus: "completed",
+				selected: false,
+				seen: false,
+			}),
+		).toBe("attention");
+		expect(
+			sidebarChatAttention({
+				running: false,
+				turnStatus: "completed",
+				selected: true,
+				seen: false,
+			}),
+		).toBe("idle");
+		expect(
+			sidebarChatAttention({
+				running: true,
+				turnStatus: "running",
+				selected: true,
+				seen: false,
+			}),
+		).toBe("running");
+		expect(
+			sidebarChatAttention({
+				running: false,
+				turnStatus: "completed",
+				selected: false,
+				seen: true,
+			}),
+		).toBe("idle");
 	});
 });

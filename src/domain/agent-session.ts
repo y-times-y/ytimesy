@@ -26,9 +26,13 @@ export function sessionMachinePlan(input: {
 	readonly sessionProviderRef: string | null;
 	readonly templateSnapshotId: string | null;
 	readonly templateProviderRef: string | null;
+	readonly authSnapshotId?: string | null;
 }): SessionMachinePlan {
 	if (input.sessionProviderRef)
 		return { kind: "resume", providerRef: input.sessionProviderRef };
+	const authSnapshotId = input.authSnapshotId?.trim();
+	if (authSnapshotId)
+		return { kind: "copy-snapshot", snapshotId: authSnapshotId };
 	if (input.templateSnapshotId)
 		return { kind: "copy-snapshot", snapshotId: input.templateSnapshotId };
 	if (input.templateProviderRef)
@@ -95,8 +99,22 @@ export function chatsFromAgentSessions(
 export function sessionTurnStatusForPersist(input: {
 	readonly liveStatus: SessionTurnStatus;
 	readonly liveConnection: AgentConnection["status"];
+	readonly storedStatus?: SessionTurnStatus;
+	readonly storedLastUser?: string | null;
+	readonly liveLastUser?: string | null;
 }): SessionTurnStatus | undefined {
 	if (input.liveConnection === "disconnected") return undefined;
+	if (input.storedStatus === "running" && input.liveStatus === "idle") {
+		return undefined;
+	}
+	if (
+		input.storedStatus === "running" &&
+		input.liveStatus === "completed" &&
+		input.storedLastUser &&
+		input.storedLastUser !== input.liveLastUser
+	) {
+		return undefined;
+	}
 	return input.liveStatus;
 }
 

@@ -77,6 +77,7 @@ def pin_one_home(home_path: Path):
     env["DISABLE_AUTOUPDATER"] = "1"
     env["DISABLE_UPDATES"] = "1"
     settings["env"] = env
+    settings["showThinkingSummaries"] = True
     claude.write_text(json.dumps(settings, indent=2) + "\\n")
 
     opencode = home_path / ".config" / "opencode" / "opencode.json"

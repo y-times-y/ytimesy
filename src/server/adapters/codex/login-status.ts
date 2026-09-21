@@ -1,6 +1,8 @@
 import {
 	type ListedModel,
+	listedFastModeId,
 	listedModelSupportsFastMode,
+	listedReasoningFromRow,
 } from "#/domain/listed-model";
 import type { SessionItem, SessionTurnStatus } from "#/domain/session-item";
 import { itemsWithVisibleSideChatText } from "#/domain/side-chat";
@@ -153,11 +155,15 @@ function listedModels(value: unknown): readonly ListedModel[] {
 		const label = readString(row.label) ?? id;
 		const notice = readString(row.notice);
 		const supportsFastMode = listedModelSupportsFastMode(row);
+		const fastModeId = listedFastModeId(row);
+		const reasoning = listedReasoningFromRow(row);
 		models.push({
 			id,
 			label,
 			...(notice ? { notice } : {}),
 			...(supportsFastMode ? { supportsFastMode } : {}),
+			...(fastModeId ? { fastModeId } : {}),
+			...(reasoning ? { reasoning } : {}),
 		});
 	}
 	return models;

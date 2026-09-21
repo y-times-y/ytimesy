@@ -692,6 +692,8 @@ a.sidebar-chat-pr,
 	background: #0a0a0a;
 	display: flex;
 	flex-direction: column;
+	min-width: 0;
+	overflow: hidden;
 }
 .inspector-tabs {
 	display: flex;
@@ -982,25 +984,34 @@ a.sidebar-chat-pr,
 	color: rgba(255, 255, 255, 0.45);
 }
 .code-token-keyword {
-	color: #f67576;
+	color: #c586c0;
 }
 .code-token-string {
-	color: #85df7b;
+	color: #ce9178;
+}
+.code-token-number {
+	color: #b5cea8;
+}
+.code-token-function {
+	color: #dcdcaa;
+}
+.code-token-property {
+	color: #9cdcfe;
 }
 .code-token-sign {
-	color: #999;
+	color: #d4d4d4;
 }
 .code-token-comment {
-	color: #999;
+	color: #6a9955;
 }
 .code-token-class {
-	color: #b06dff;
+	color: #4ec9b0;
 }
 .code-token-entity {
-	color: #6dcbf4;
+	color: #569cd6;
 }
 .code-token-identifier {
-	color: #fff;
+	color: #d4d4d4;
 }
 .diff-line-add {
 	background: rgba(64, 201, 119, 0.23);
@@ -1016,14 +1027,133 @@ a.sidebar-chat-pr,
 }
 .files-inspector {
 	display: flex;
-	flex-direction: column;
+	flex-direction: row;
 	flex: 1;
+	min-width: 0;
 	min-height: 0;
-	overflow: auto;
+	overflow: hidden;
 }
 .file-tree {
-	padding: 8px 4px 10px;
+	flex: 0 0 220px;
+	flex-shrink: 0;
+	width: 220px;
+	min-width: 160px;
+	max-width: 280px;
+	min-height: 0;
+	overflow: auto;
+	padding: 6px 4px 8px;
+	border-left: 1px solid rgba(255, 255, 255, 0.08);
+}
+.file-tree-empty {
+	margin: 12px 10px;
+	color: rgba(255, 255, 255, 0.45);
+	font-size: 12px;
+	line-height: 18px;
+}
+.file-tree-mark {
+	flex-shrink: 0;
+	color: #9a9a9a;
+	font-size: 10px;
+	font-weight: 650;
+	letter-spacing: 0.02em;
+}
+.file-tree-file[data-change="add"] .file-tree-mark {
+	color: #cfcfcf;
+}
+.file-tree-file[data-change="update"] .file-tree-mark {
+	color: #79b8ff;
+}
+.file-tree-file[data-change="delete"] .file-tree-mark {
+	color: #ff6764;
+}
+.file-editor {
+	display: flex;
+	flex-direction: column;
+	flex: 1 1 0;
+	min-width: 0;
+	min-height: 0;
+	overflow: hidden;
+}
+.file-editor-tab {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-height: 32px;
+	padding: 0 10px;
 	border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+	color: #d6d6d6;
+	font-size: 12px;
+}
+.file-editor-dirty {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: #d4d4d4;
+}
+.file-editor-save {
+	margin-left: auto;
+	height: 22px;
+	border: 0;
+	padding: 0 8px;
+	background: rgba(255, 255, 255, 0.08);
+	color: #f2f2f2;
+	border-radius: 6px;
+	font-size: 11px;
+}
+.file-editor-save:disabled {
+	opacity: 0.55;
+}
+.file-editor-error {
+	margin: 0;
+	padding: 6px 10px;
+	border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+	color: #ff6764;
+	font-size: 12px;
+}
+.file-editor-pane {
+	position: relative;
+	display: grid;
+	flex: 1;
+	min-width: 0;
+	min-height: 0;
+	overflow: auto;
+	background: #141414;
+}
+.file-editor-source,
+.file-editor-input {
+	grid-area: 1 / 1;
+	min-width: 100%;
+	min-height: 100%;
+	margin: 0;
+	padding: 10px 12px 16px;
+	border: 0;
+	background: transparent;
+	color: #d4d4d4;
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: 12px;
+	line-height: 18px;
+	white-space: pre;
+	tab-size: 2;
+	overflow: hidden;
+}
+.file-editor-source {
+	pointer-events: none;
+}
+.file-editor-input {
+	resize: none;
+	color: transparent;
+	caret-color: #fff;
+	outline: none;
+}
+.file-editor-input::selection {
+	background: rgba(255, 255, 255, 0.18);
+	color: transparent;
+}
+@media (max-width: 600px), (max-width: 900px) and (max-height: 500px) {
+	.file-tree {
+		flex: 0 0 160px;
+		width: 160px;
+	}
 }
 .file-tree-list {
 	list-style: none;

@@ -26,6 +26,7 @@ export interface WorkspaceMachines {
 	) => Promise<ProofWorkspace>;
 	readonly snapshotAuthenticatedWorkspace: (
 		workspaceId: WorkspaceId,
+		provider?: "codex" | "claude",
 	) => Promise<IsolatedAuthSnapshot>;
 	readonly destroySnapshot: (snapshotId: AuthSnapshotId) => Promise<void>;
 	readonly exec: (

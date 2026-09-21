@@ -1,5 +1,6 @@
 import type { FileChangeEntry } from "#/domain/session-item";
 import { fileChangeForPath } from "#/domain/workspace-file-tree";
+import { FileTypeIcon } from "./file-type-icon";
 
 export function FileMentionButton({
 	path,
@@ -12,12 +13,15 @@ export function FileMentionButton({
 	change?: FileChangeEntry["change"];
 	onOpenFile?: (path: string) => void;
 }) {
-	const color = (
-		<span className="session-file-name" data-change={change}>
-			{name}
+	const chip = (
+		<span className="session-file-chip">
+			<FileTypeIcon path={path} />
+			<span className="session-file-name" data-change={change}>
+				{name}
+			</span>
 		</span>
 	);
-	if (!onOpenFile) return color;
+	if (!onOpenFile) return chip;
 	return (
 		<button
 			type="button"
@@ -25,7 +29,7 @@ export function FileMentionButton({
 			title={`Open ${path}`}
 			onClick={() => onOpenFile(path)}
 		>
-			{color}
+			{chip}
 		</button>
 	);
 }

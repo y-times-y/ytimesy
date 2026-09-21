@@ -13,7 +13,10 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { projectFolderName, type Project } from "#/domain/projects";
-import type { SessionTurnStatus } from "#/domain/session-item";
+import {
+	isTurnRunning,
+	type SessionTurnStatus,
+} from "#/domain/session-item";
 import {
 	accountDisplayName,
 	accountInitials,
@@ -151,7 +154,9 @@ export function ProjectSidebar({
 	useEffect(() => {
 		const chat = chats.find((row) => row.id === selectedChatId);
 		if (!chat) return;
-		const key = sidebarChatSeenKey(chat);
+		const turnStatus = openTurnStatus ?? chat.turnStatus;
+		if (isTurnRunning(turnStatus ?? "idle")) return;
+		const key = sidebarChatSeenKey({ ...chat, turnStatus });
 		setSeenKeys((current) => {
 			if (current.includes(key)) return current;
 			const next = [...current, key];
@@ -161,7 +166,7 @@ export function ProjectSidebar({
 			);
 			return next;
 		});
-	}, [chats, selectedChatId]);
+	}, [selectedChatId, openTurnStatus]);
 
 	function persistCollapsed(next: readonly string[]) {
 		setCollapsedProjectIds(next);
@@ -202,9 +207,11 @@ export function ProjectSidebar({
 	}
 
 	function chatAttention(chat: SidebarChat) {
+		const turnStatus =
+			chat.id === selectedChatId ? openTurnStatus : chat.turnStatus;
 		const running = sidebarChatIsRunning({
 			chatId: chat.id,
-			turnStatus: chat.turnStatus,
+			turnStatus,
 			busyChatIds,
 			openChatId: selectedChatId,
 			openTurnStatus,
@@ -212,9 +219,14 @@ export function ProjectSidebar({
 		});
 		return sidebarChatAttention({
 			running,
-			turnStatus: chat.turnStatus,
+			turnStatus,
 			selected: chat.id === selectedChatId,
-			seen: seenKeys.includes(sidebarChatSeenKey(chat)),
+			seen: seenKeys.includes(
+				sidebarChatSeenKey({
+					...chat,
+					turnStatus,
+				}),
+			),
 		});
 	}
 

@@ -18,7 +18,10 @@ import {
 	selectedHarnessIsConnected,
 } from "#/domain/harness-access";
 import { SessionItemId } from "#/domain/ids";
-import { composerModelIdForCatalog } from "#/domain/listed-model";
+import {
+	composerModelIdForCatalog,
+	listedModelDisplayName,
+} from "#/domain/listed-model";
 import type { Project } from "#/domain/projects";
 import {
 	lastUserMessageText,
@@ -34,7 +37,10 @@ import {
 } from "#/domain/slash-command";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
 import { HarnessLogin } from "./harness-login";
-import { sessionModelsFromListed } from "./model-capabilities";
+import {
+	resolveReasoningLevel,
+	sessionModelsFromListed,
+} from "./model-capabilities";
 import { ProjectContext } from "./project-context";
 import { SessionControls } from "./session-controls";
 import { SessionTimeline } from "./session-timeline";
@@ -67,7 +73,11 @@ export function SessionLauncher({
 	busy: boolean;
 	harnessId: AgentProviderId;
 	onHarnessIdChange: (id: AgentProviderId) => void;
-	onSend: (text: string, modelId: string) => void;
+	onSend: (
+		text: string,
+		modelId: string,
+		options?: { readonly reasoningId?: string; readonly fast?: boolean },
+	) => void;
 	onConnect: () => void;
 	onSubmitAuthCode: (code: string) => void;
 	onStop: () => void;
@@ -94,18 +104,30 @@ export function SessionLauncher({
 		listedModelId: session.listedModelId,
 	});
 	const composerReady = (harnessReady && session.canSend) || canResumeFollowUp;
-	const models = harnessReady
-		? sessionModelsFromListed(
-				session.models.length > 0
-					? session.models
-					: harnessId === "claude" && session.listedModelId
-						? rememberedClaudeModels(session.listedModelId)
-						: [],
-			)
-		: [];
+	const listedCatalog =
+		session.models.length > 0
+			? session.models
+			: harnessId === "claude" && session.listedModelId
+				? rememberedClaudeModels(session.listedModelId)
+				: session.listedModelId
+					? [
+							{
+								id: session.listedModelId,
+								label:
+									listedModelDisplayName(session.listedModelId) ||
+									session.listedModelId,
+							},
+						]
+					: [];
+	const models =
+		harnessReady || canResumeFollowUp
+			? sessionModelsFromListed(listedCatalog)
+			: [];
 	const [attachments, setAttachments] = useState<File[]>([]);
 	const [draft, setDraft] = useState("");
 	const [modelId, setModelId] = useState(session.listedModelId);
+	const [reasoningId, setReasoningId] = useState("");
+	const [fast, setFast] = useState(false);
 	const [lastModelByHarness, setLastModelByHarness] = useState<
 		Partial<Record<AgentProviderId, string>>
 	>(() =>
@@ -117,10 +139,11 @@ export function SessionLauncher({
 	const [optimisticItems, setOptimisticItems] = useState<SessionItem[]>([]);
 	const [slashIndex, setSlashIndex] = useState(0);
 	const items = visibleSessionItems(session.items, optimisticItems);
+	const turnStatus = session.turnStatus;
 	const lastUserText = lastUserMessageText(items);
 	const followUpLayout = sessionUsesFollowUpLayout({
 		items,
-		turnStatus: session.turnStatus,
+		turnStatus,
 		listedTitle,
 	});
 	const slashDraft = parseSlashDraft(draft);
@@ -129,7 +152,7 @@ export function SessionLauncher({
 			composerSlashCommands({
 				authenticated: harnessReady,
 				requiresAccountLogin: harnessRequiresAccountLogin(harnessId),
-				turnRunning: session.turnStatus === "running",
+				turnRunning: turnStatus === "running",
 				canSend: composerReady,
 				hasLastUserMessage: Boolean(lastUserText),
 				hasModels: models.length > 0,
@@ -140,7 +163,7 @@ export function SessionLauncher({
 			lastUserText,
 			models.length,
 			harnessReady,
-			session.turnStatus,
+			turnStatus,
 		],
 	);
 	const visibleSlashCommands = slashDraft
@@ -193,6 +216,11 @@ export function SessionLauncher({
 	}, [harnessId, modelId, models]);
 
 	useEffect(() => {
+		setReasoningId(selectedModel?.reasoning?.defaultLevelId ?? "");
+		setFast(false);
+	}, [selectedModel?.id, selectedModel?.reasoning?.defaultLevelId]);
+
+	useEffect(() => {
 		setOptimisticItems((current) =>
 			current.filter(
 				(item) =>
@@ -210,7 +238,7 @@ export function SessionLauncher({
 			!composerSendIsEnabled({
 				harnessId,
 				connection: session.connection,
-				turnStatus: session.turnStatus,
+				turnStatus,
 				snapshotAvailable: session.snapshotAvailable,
 				listedModelId: session.listedModelId,
 				canSend: session.canSend,
@@ -230,7 +258,11 @@ export function SessionLauncher({
 				text,
 			},
 		]);
-		onSend(text, modelId);
+		const reasoning = resolveReasoningLevel(selectedModel, reasoningId);
+		onSend(text, modelId, {
+			...(reasoning?.id ? { reasoningId: reasoning.id } : {}),
+			...(fast ? { fast: true } : {}),
+		});
 		setDraft("");
 	}
 
@@ -319,7 +351,7 @@ export function SessionLauncher({
 			</h1>
 			<SessionTimeline
 				items={items}
-				turnStatus={session.turnStatus}
+				turnStatus={turnStatus}
 				fill={followUpLayout}
 				onOpenFile={onOpenFile}
 			/>
@@ -398,6 +430,10 @@ export function SessionLauncher({
 								modelId={modelId}
 								listedModelId={modelId || session.listedModelId}
 								onModelIdChange={setModelId}
+								reasoningId={reasoningId}
+								onReasoningIdChange={setReasoningId}
+								fast={fast}
+								onFastChange={setFast}
 								onAttachFiles={(selected) =>
 									setAttachments((files) => {
 										const additions = selected.filter(
@@ -413,7 +449,7 @@ export function SessionLauncher({
 									})
 								}
 							/>
-							{session.turnStatus === "running" ? (
+							{turnStatus === "running" ? (
 								<button
 									type="button"
 									className="session-send"
@@ -434,7 +470,7 @@ export function SessionLauncher({
 										!composerSendIsEnabled({
 											harnessId,
 											connection: session.connection,
-											turnStatus: session.turnStatus,
+											turnStatus,
 											snapshotAvailable: session.snapshotAvailable,
 											listedModelId: session.listedModelId,
 											canSend: session.canSend,

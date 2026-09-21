@@ -2,9 +2,11 @@ import type { UserAgentAccount } from "../../domain/user-agent-account";
 import { database } from "../adapters/database";
 import { seal, unseal } from "./token-vault";
 
+export type AgentAccountProvider = "codex" | "claude";
+
 interface AgentAccountRow {
 	status: "disconnected" | "connected" | "expired";
-	provider: "codex";
+	provider: AgentAccountProvider;
 	encrypted_snapshot_id: string | null;
 	plan_type: string | null;
 	email: string | null;
@@ -15,16 +17,23 @@ export async function loadAgentAccount(
 	userId: string,
 ): Promise<UserAgentAccount> {
 	const result = await database().query(
-		"select status,provider,encrypted_snapshot_id,plan_type,email,message from agent_account where user_id=$1",
+		"select status,provider,encrypted_snapshot_id,plan_type,email,message from agent_account where user_id=$1 and provider='codex'",
 		[userId],
 	);
 	return toAccount(result.rows[0]);
 }
 
 export async function loadAgentSnapshotId(userId: string) {
+	return loadHarnessSnapshotId(userId, "codex");
+}
+
+export async function loadHarnessSnapshotId(
+	userId: string,
+	provider: AgentAccountProvider,
+) {
 	const result = await database().query(
-		"select status,encrypted_snapshot_id from agent_account where user_id=$1",
-		[userId],
+		"select status,encrypted_snapshot_id from agent_account where user_id=$1 and provider=$2",
+		[userId, provider],
 	);
 	const row = result.rows[0] as
 		| { status: string; encrypted_snapshot_id: string | null }
@@ -36,7 +45,7 @@ export async function loadAgentSnapshotId(userId: string) {
 export async function saveConnectedAgentAccount(
 	userId: string,
 	input: {
-		provider: "codex";
+		provider: AgentAccountProvider;
 		snapshotId: string;
 		planType: string | null;
 		email: string | null;
@@ -45,8 +54,7 @@ export async function saveConnectedAgentAccount(
 	await database().query(
 		`insert into agent_account(user_id,provider,status,encrypted_snapshot_id,plan_type,email,message)
 		 values($1,$2,'connected',$3,$4,$5,null)
-		 on conflict(user_id) do update set
-		  provider=excluded.provider,
+		 on conflict(user_id, provider) do update set
 		  status='connected',
 		  encrypted_snapshot_id=excluded.encrypted_snapshot_id,
 		  plan_type=excluded.plan_type,
@@ -67,7 +75,7 @@ export async function expireAgentAccount(userId: string, message: string) {
 	await database().query(
 		`insert into agent_account(user_id,provider,status,encrypted_snapshot_id,plan_type,email,message)
 		 values($1,'codex','expired',null,null,null,$2)
-		 on conflict(user_id) do update set
+		 on conflict(user_id, provider) do update set
 		  status='expired',
 		  encrypted_snapshot_id=null,
 		  plan_type=null,
@@ -79,9 +87,10 @@ export async function expireAgentAccount(userId: string, message: string) {
 }
 
 export async function disconnectAgentAccount(userId: string) {
-	await database().query("delete from agent_account where user_id=$1", [
-		userId,
-	]);
+	await database().query(
+		"delete from agent_account where user_id=$1 and provider='codex'",
+		[userId],
+	);
 }
 
 function toAccount(row: AgentAccountRow | undefined): UserAgentAccount {
@@ -90,7 +99,7 @@ function toAccount(row: AgentAccountRow | undefined): UserAgentAccount {
 		return { status: "expired", message: row.message ?? "Reconnect Codex." };
 	return {
 		status: "connected",
-		provider: row.provider,
+		provider: row.provider === "claude" ? "codex" : row.provider,
 		planType: row.plan_type,
 		email: row.email,
 	};

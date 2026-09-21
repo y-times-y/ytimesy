@@ -12,12 +12,16 @@ export function clampInspectorSplit(ratio: number): number {
 	return Math.min(INSPECTOR_SPLIT_MAX, Math.max(INSPECTOR_SPLIT_MIN, ratio));
 }
 
+export function inspectorPaneIsWide(view: string): boolean {
+	return view === "desktop" || view === "files";
+}
+
 export function inspectorSplitRatio(input: {
 	readonly custom: number | null;
-	readonly desktop: boolean;
+	readonly wide: boolean;
 }): number {
 	if (input.custom !== null) return clampInspectorSplit(input.custom);
-	return input.desktop ? INSPECTOR_SPLIT_DESKTOP : INSPECTOR_SPLIT_DEFAULT;
+	return input.wide ? INSPECTOR_SPLIT_DESKTOP : INSPECTOR_SPLIT_DEFAULT;
 }
 
 export function inspectorSplitFromPointer(input: {

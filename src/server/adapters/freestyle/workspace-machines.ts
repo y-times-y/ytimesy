@@ -21,7 +21,7 @@ import {
 } from "./product-vm";
 import {
 	PROOF_METADATA_PURPOSE,
-	privateCodexAuthSnapshotFields,
+	privateAuthSnapshotFields,
 	proofCreateVmFields,
 	proofWorkspaceSlug,
 	requestedAuthSnapshotId,
@@ -70,13 +70,14 @@ export function createFreestyleWorkspaceMachines(
 			}
 		},
 
-		async snapshotAuthenticatedWorkspace(workspaceId) {
+		async snapshotAuthenticatedWorkspace(workspaceId, provider = "codex") {
 			try {
-				const created = await freestyle.vms
-					.ref(workspaceId)
-					.snapshot(
-						privateCodexAuthSnapshotFields(randomBytes(4).toString("hex")),
-					);
+				const created = await freestyle.vms.ref(workspaceId).snapshot(
+					privateAuthSnapshotFields(
+						provider,
+						randomBytes(4).toString("hex"),
+					),
+				);
 				if (created.snapshot.public) {
 					await freestyle.vms.snapshots
 						.delete(created.snapshotId)
@@ -84,7 +85,7 @@ export function createFreestyleWorkspaceMachines(
 					throw new WorkspaceProvisionError({
 						operation: "snapshot",
 						message:
-							"Freestyle returned a public snapshot; deleted it because Codex credentials cannot live in a shared image",
+							"Freestyle returned a public snapshot; deleted it because credentials cannot live in a shared image",
 						providerWorkspaceId: workspaceId,
 					});
 				}

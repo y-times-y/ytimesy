@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { Duration, Effect } from "effect";
 import {
+	claudeBackgroundTurnResult,
 	claudeCliIsSignedIn,
 	claudeListedModelsAreUsable,
 	parseAnthropicLoginUrl,
@@ -10,13 +11,21 @@ import {
 	parseClaudeModelFlagsFromHelp,
 } from "#/domain/claude-auth";
 import {
+	claudeSettingsPath,
+	claudeSettingsShowingThoughts,
+} from "#/domain/claude-home";
+import { claudeTurnItemsFromStream } from "#/domain/claude-stream";
+import {
 	type ClaudeHomeRestore,
 	restoreClaudeHome,
 } from "#/server/adapters/claude/home-files";
+import { failureMessage } from "#/domain/failure-message";
 import { SessionItemId, type WorkspaceId } from "#/domain/ids";
 import {
 	type ListedModel,
+	listedFastModeId,
 	listedModelSupportsFastMode,
+	listedReasoningFromRow,
 } from "#/domain/listed-model";
 import {
 	guestCliDisableUpdateExports,
@@ -24,11 +33,19 @@ import {
 } from "#/domain/guest-cli-pin";
 import { posixShellQuoted } from "#/domain/posix-command";
 import { ensureGuestCliPin } from "#/server/adapters/guest-cli-pin";
-import type { SessionItem, SessionTurnStatus } from "#/domain/session-item";
+import type {
+	SessionItem,
+	SessionTurnStatus,
+	ToolActivityStatus,
+} from "#/domain/session-item";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
 
 const LOGIN_DAEMON_SOURCE = readFileSync(
 	new URL("./login-daemon.py", import.meta.url),
+	"utf8",
+);
+const TURN_PTY_SOURCE = readFileSync(
+	new URL("./turn-pty.py", import.meta.url),
 	"utf8",
 );
 
@@ -37,6 +54,11 @@ const LOG_PATH = "/tmp/ytimesy-claude-login.log";
 const PID_PATH = "/tmp/ytimesy-claude-login.pid";
 const CODE_PATH = "/tmp/ytimesy-claude-auth-code";
 const KEY_ENV_PATH = "/tmp/ytimesy-claude-key.env";
+const TURN_OUT_PATH = "/tmp/ytimesy-claude-turn.out";
+const TURN_ERR_PATH = "/tmp/ytimesy-claude-turn.err";
+const TURN_EXIT_PATH = "/tmp/ytimesy-claude-turn.exit";
+const TURN_PID_PATH = "/tmp/ytimesy-claude-turn.pid";
+const TURN_PTY_PATH = "/tmp/ytimesy-claude-turn-pty.py";
 
 const CLAUDE_INSTALL_SCRIPT = `set -eu
 ${guestCliDisableUpdateExports()}
@@ -361,6 +383,16 @@ export function refreshClaudeAuthStatus(
 		const published = yield* readClaudeAuthStatus(machines, workspaceId);
 		if (
 			published.stage === "authenticated" &&
+			published.turnStatus === "running"
+		) {
+			return yield* syncClaudeBackgroundTurn(
+				machines,
+				workspaceId,
+				published,
+			);
+		}
+		if (
+			published.stage === "authenticated" &&
 			claudeListedModelsAreUsable(published.models)
 		) {
 			return published;
@@ -624,8 +656,84 @@ function simpleSessionItems(value: unknown): readonly SessionItem[] {
 				message: String(row.message),
 			});
 		}
+		if (kind === "reasoning") {
+			const summaries = Array.isArray(row.summaries)
+				? row.summaries.filter(
+						(summary): summary is string =>
+							typeof summary === "string" && summary.length > 0,
+					)
+				: [];
+			items.push({
+				kind: "reasoning",
+				id: SessionItemId(id),
+				summaries,
+				...(typeof row.durationSeconds === "number"
+					? { durationSeconds: row.durationSeconds }
+					: {}),
+			});
+		}
+		if (kind === "commandExecution" && readString(row.command)) {
+			items.push({
+				kind: "commandExecution",
+				id: SessionItemId(id),
+				command: String(row.command),
+				cwd: readString(row.cwd) ?? null,
+				status: toolActivityStatus(row.status),
+				output: readString(row.output) ?? null,
+				exitCode: typeof row.exitCode === "number" ? row.exitCode : null,
+			});
+		}
+		if (kind === "dynamicToolCall" && readString(row.tool)) {
+			const status = toolActivityStatus(row.status);
+			items.push({
+				kind: "dynamicToolCall",
+				id: SessionItemId(id),
+				tool: String(row.tool),
+				status: status === "declined" ? "failed" : status,
+			});
+		}
 	}
 	return items;
+}
+
+function toolActivityStatus(value: unknown): ToolActivityStatus {
+	if (
+		value === "completed" ||
+		value === "failed" ||
+		value === "declined" ||
+		value === "inProgress"
+	) {
+		return value;
+	}
+	return "inProgress";
+}
+
+function writeClaudeThinkingSettings(
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+	home: string,
+): Effect.Effect<void> {
+	const path = claudeSettingsPath(home);
+	return Effect.gen(function* () {
+		const existing = yield* Effect.tryPromise(() =>
+			machines.readTextFile(workspaceId, path),
+		).pipe(Effect.catchAll(() => Effect.succeed(null)));
+		const parent = path.slice(0, path.lastIndexOf("/"));
+		yield* Effect.tryPromise(() =>
+			machines.exec(
+				workspaceId,
+				guestBash(`mkdir -p ${posixShellQuoted(parent)}`),
+				10_000,
+			),
+		);
+		yield* Effect.tryPromise(() =>
+			machines.writeTextFile(
+				workspaceId,
+				path,
+				claudeSettingsShowingThoughts(existing),
+			),
+		);
+	}).pipe(Effect.catchAll(() => Effect.void));
 }
 
 function listedModels(value: unknown): readonly ListedModel[] {
@@ -638,11 +746,15 @@ function listedModels(value: unknown): readonly ListedModel[] {
 		const label = readString(row.label) ?? id;
 		const notice = readString(row.notice);
 		const supportsFastMode = listedModelSupportsFastMode(row);
+		const fastModeId = listedFastModeId(row);
+		const reasoning = listedReasoningFromRow(row);
 		models.push({
 			id,
 			label,
 			...(notice ? { notice } : {}),
 			...(supportsFastMode ? { supportsFastMode } : {}),
+			...(fastModeId ? { fastModeId } : {}),
+			...(reasoning ? { reasoning } : {}),
 		});
 	}
 	return models;
@@ -667,6 +779,10 @@ export function submitClaudeTask(
 		if (locate.exitCode !== 0 || !claudeBin) {
 			return failed("Claude Code is not installed on this workspace");
 		}
+		const home = parseClaudeHomePath(locate.stdout);
+		if (home) {
+			yield* writeClaudeThinkingSettings(machines, workspaceId, home);
+		}
 		const userItem: SessionItem = {
 			kind: "userMessage",
 			id: SessionItemId(`claude-user-${Date.now()}`),
@@ -678,45 +794,44 @@ export function submitClaudeTask(
 			items: [...current.items, userItem],
 		};
 		yield* persistClaudeStatus(machines, workspaceId, running);
+		yield* Effect.tryPromise(() =>
+			machines.writeTextFile(workspaceId, TURN_PTY_PATH, TURN_PTY_SOURCE),
+		);
 		const keyPrefix = `if [ -f ${KEY_ENV_PATH} ]; then . ${KEY_ENV_PATH}; fi\n`;
-		const result = yield* Effect.tryPromise(() =>
+		const prompt = input.promptText ?? input.text;
+		const start = yield* Effect.tryPromise(() =>
 			machines.exec(
 				workspaceId,
 				guestBash(
-					`${keyPrefix}${posixShellQuoted(claudeBin)} -p --output-format text --dangerously-skip-permissions --model ${posixShellQuoted(input.modelId)} ${posixShellQuoted(input.promptText ?? input.text)}`,
+					`${keyPrefix}rm -f ${TURN_OUT_PATH} ${TURN_ERR_PATH} ${TURN_EXIT_PATH} ${TURN_PID_PATH}
+(
+  python3 ${TURN_PTY_PATH} ${TURN_OUT_PATH} ${TURN_ERR_PATH} -- ${posixShellQuoted(claudeBin)} -p --output-format stream-json --verbose --include-partial-messages --dangerously-skip-permissions --model ${posixShellQuoted(input.modelId)} ${posixShellQuoted(prompt)}
+  echo $? >${TURN_EXIT_PATH}
+) >/dev/null 2>&1 &
+echo $! >${TURN_PID_PATH}`,
 				),
-				180_000,
+				15_000,
 			),
 		);
-		const output = (result.stdout || result.stderr).trim();
-		const next: ClaudeAuthStatus =
-			result.exitCode === 0 && output
-				? {
-						...current,
-						turnStatus: "completed",
-						items: [
-							...running.items,
-							{
-								kind: "agentMessage",
-								id: SessionItemId(`claude-agent-${Date.now()}`),
-								text: output,
-							},
-						],
-					}
-				: {
-						...current,
-						turnStatus: "failed",
-						items: [
-							...running.items,
-							{
-								kind: "error",
-								id: SessionItemId(`claude-error-${Date.now()}`),
-								message: output || "Claude Code did not return a response.",
-							},
-						],
-					};
-		yield* persistClaudeStatus(machines, workspaceId, next);
-		return next;
+		if (start.exitCode !== 0) {
+			const failedStart: ClaudeAuthStatus = {
+				...running,
+				turnStatus: "failed",
+				items: [
+					...running.items,
+					{
+						kind: "error",
+						id: SessionItemId(`claude-error-${Date.now()}`),
+						message:
+							(start.stderr || start.stdout).trim() ||
+							"Claude Code did not start the turn.",
+					},
+				],
+			};
+			yield* persistClaudeStatus(machines, workspaceId, failedStart);
+			return failedStart;
+		}
+		return running;
 	}).pipe(
 		Effect.catchAll((cause) =>
 			Effect.succeed(
@@ -724,6 +839,70 @@ export function submitClaudeTask(
 			),
 		),
 	);
+}
+
+function syncClaudeBackgroundTurn(
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+	current: Extract<ClaudeAuthStatus, { stage: "authenticated" }>,
+): Effect.Effect<ClaudeAuthStatus> {
+	return Effect.gen(function* () {
+		const probe = yield* Effect.tryPromise(() =>
+			machines.exec(
+				workspaceId,
+				guestBash(
+					`if [ -f ${TURN_PID_PATH} ]; then echo PID_PRESENT; fi
+if [ -f ${TURN_PID_PATH} ] && kill -0 "$(cat ${TURN_PID_PATH})" 2>/dev/null; then echo ALIVE; fi
+if [ -f ${TURN_EXIT_PATH} ]; then echo EXIT_PRESENT; fi`,
+				),
+				10_000,
+			),
+		);
+		const output = yield* Effect.tryPromise(() =>
+			machines.readTextFile(workspaceId, TURN_OUT_PATH),
+		).pipe(Effect.catchAll(() => Effect.succeed(null)));
+		const exitText = yield* Effect.tryPromise(() =>
+			machines.readTextFile(workspaceId, TURN_EXIT_PATH),
+		).pipe(Effect.catchAll(() => Effect.succeed(null)));
+		const result = claudeBackgroundTurnResult({
+			exitText,
+			output,
+			pidAlive: probe.stdout.includes("ALIVE"),
+			pidFilePresent: probe.stdout.includes("PID_PRESENT"),
+		});
+		const items = claudeTurnItemsFromStream({
+			previousItems: current.items,
+			stream: output,
+		});
+		if (result.kind === "running") {
+			const running = { ...current, items };
+			yield* persistClaudeStatus(machines, workspaceId, running);
+			return running;
+		}
+		const next: ClaudeAuthStatus =
+			result.kind === "completed"
+				? {
+						...current,
+						turnStatus: "completed",
+						items,
+					}
+				: {
+						...current,
+						turnStatus: "failed",
+						items: items.some((item) => item.kind === "error")
+							? items
+							: [
+									...items,
+									{
+										kind: "error",
+										id: SessionItemId(`claude-error-${Date.now()}`),
+										message: result.message,
+									},
+								],
+					};
+		yield* persistClaudeStatus(machines, workspaceId, next);
+		return next;
+	}).pipe(Effect.catchAll(() => Effect.succeed(current)));
 }
 
 function persistClaudeStatus(
@@ -738,4 +917,47 @@ function persistClaudeStatus(
 			`${JSON.stringify(status)}\n`,
 		),
 	).pipe(Effect.catchAll(() => Effect.void));
+}
+
+export function snapshotAuthenticatedClaudeWorkspace(
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+): Effect.Effect<
+	| { readonly ok: true; readonly snapshotId: string; readonly public: false }
+	| { readonly ok: false; readonly message: string }
+> {
+	return Effect.gen(function* () {
+		const locate = yield* Effect.tryPromise(() =>
+			machines.exec(workspaceId, guestBash(LOCATE_CLAUDE), 15_000),
+		);
+		const claudeBin = parseClaudeBinaryPath(locate.stdout);
+		if (!claudeBin) {
+			return {
+				ok: false as const,
+				message: "Claude Code is not installed on this workspace",
+			};
+		}
+		const live = yield* probeClaudeCli(machines, workspaceId, claudeBin, null);
+		if (live.stage !== "authenticated") {
+			return {
+				ok: false as const,
+				message: "Refusing to snapshot without Anthropic sign-in",
+			};
+		}
+		const snapshot = yield* Effect.tryPromise(() =>
+			machines.snapshotAuthenticatedWorkspace(workspaceId, "claude"),
+		);
+		return {
+			ok: true as const,
+			snapshotId: snapshot.snapshotId,
+			public: snapshot.public,
+		};
+	}).pipe(
+		Effect.catchAll((cause) =>
+			Effect.succeed({
+				ok: false as const,
+				message: failureMessage(cause),
+			}),
+		),
+	);
 }

@@ -8,6 +8,9 @@ export type SourceLanguage =
 	| "html"
 	| "shell"
 	| "markdown"
+	| "yaml"
+	| "rust"
+	| "go"
 	| "plain";
 
 const EXTENSION_LANGUAGE: Record<string, SourceLanguage> = {
@@ -33,11 +36,11 @@ const EXTENSION_LANGUAGE: Record<string, SourceLanguage> = {
 	zsh: "shell",
 	md: "markdown",
 	mdx: "markdown",
-	yml: "plain",
-	yaml: "plain",
-	toml: "plain",
-	rs: "plain",
-	go: "plain",
+	yml: "yaml",
+	yaml: "yaml",
+	toml: "yaml",
+	rs: "rust",
+	go: "go",
 };
 
 const FENCE_LANGUAGE: Record<string, SourceLanguage> = {
@@ -59,6 +62,13 @@ const FENCE_LANGUAGE: Record<string, SourceLanguage> = {
 	zsh: "shell",
 	md: "markdown",
 	markdown: "markdown",
+	yml: "yaml",
+	yaml: "yaml",
+	toml: "yaml",
+	rs: "rust",
+	rust: "rust",
+	go: "go",
+	golang: "go",
 };
 
 export function sourceLanguageFromPath(path: string): SourceLanguage {

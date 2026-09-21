@@ -38,6 +38,7 @@ import {
 	saveTemplateSnapshot,
 	workspaceForProject,
 } from "#/server/adapters/workspaces";
+import { loadHarnessSnapshotId } from "#/server/auth/agent-account";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 async function resolveAgentSessionRecord(input: {
@@ -138,6 +139,10 @@ export async function bindAgentSessionMachine(
 	},
 ) {
 	const { session, workspace } = await resolveAgentSessionRecord(input);
+	const authSnapshotId =
+		input.harness === "claude"
+			? await loadHarnessSnapshotId(input.userId, "claude")
+			: null;
 	const executed = await executeSessionMachinePlan({
 		machines,
 		sessionId: session.id,
@@ -145,6 +150,7 @@ export async function bindAgentSessionMachine(
 		workspaceId: workspace.id,
 		templateSnapshotId: workspace.templateSnapshotId,
 		templateProviderRef: workspace.providerRef,
+		authSnapshotId,
 		saveTemplateSnapshot: (snapshotId) =>
 			saveTemplateSnapshot(workspace.id, snapshotId).then(() => undefined),
 		saveSessionProviderRef: (providerRef) =>
@@ -221,6 +227,7 @@ export async function executeSessionMachinePlan(input: {
 	readonly workspaceId: string;
 	readonly templateSnapshotId: string | null;
 	readonly templateProviderRef: string | null;
+	readonly authSnapshotId?: string | null;
 	readonly saveTemplateSnapshot: (snapshotId: string) => Promise<void>;
 	readonly saveSessionProviderRef: (providerRef: string) => Promise<void>;
 	readonly wait?: (ms: number) => Promise<void>;
@@ -230,6 +237,7 @@ export async function executeSessionMachinePlan(input: {
 		sessionProviderRef: input.sessionProviderRef,
 		templateSnapshotId: snapshotId,
 		templateProviderRef: input.templateProviderRef,
+		authSnapshotId: input.authSnapshotId,
 	});
 	if (plan.kind === "needs-snapshot") {
 		await input.machines.ensureRunning(WorkspaceId(plan.providerRef));
@@ -242,6 +250,7 @@ export async function executeSessionMachinePlan(input: {
 			sessionProviderRef: input.sessionProviderRef,
 			templateSnapshotId: snapshotId,
 			templateProviderRef: input.templateProviderRef,
+			authSnapshotId: input.authSnapshotId,
 		});
 	}
 	if (plan.kind === "blocked") throw new Error(plan.reason);

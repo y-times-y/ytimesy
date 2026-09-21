@@ -1,6 +1,8 @@
 import {
 	type ListedModel,
+	listedFastModeId,
 	listedModelSupportsFastMode,
+	listedReasoningFromRow,
 } from "./listed-model";
 
 export function parseOpenCodeModelCatalog(
@@ -84,12 +86,16 @@ function modelsFromUnknown(
 	const label = readString(record.name) ?? readString(record.label) ?? modelId;
 	const notice = noticeFromModel(record);
 	const supportsFastMode = listedModelSupportsFastMode(record);
+	const fastModeId = listedFastModeId(record);
+	const reasoning = listedReasoningFromRow(record);
 	return [
 		{
 			id,
 			label,
 			...(notice ? { notice } : {}),
 			...(supportsFastMode ? { supportsFastMode } : {}),
+			...(fastModeId ? { fastModeId } : {}),
+			...(reasoning ? { reasoning } : {}),
 		},
 	];
 }

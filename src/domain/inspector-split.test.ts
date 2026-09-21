@@ -4,6 +4,7 @@ import {
 	INSPECTOR_SPLIT_DEFAULT,
 	INSPECTOR_SPLIT_DESKTOP,
 	inspectorSplitFromPointer,
+	inspectorPaneIsWide,
 	inspectorSplitRatio,
 	inspectorStaysBesideChat,
 	nudgeInspectorSplit,
@@ -17,13 +18,16 @@ describe("inspector split", () => {
 	});
 
 	it("gives the desktop more of the canvas until the user drags", () => {
-		expect(inspectorSplitRatio({ custom: null, desktop: false })).toBe(
+		expect(inspectorPaneIsWide("diff")).toBe(false);
+		expect(inspectorPaneIsWide("files")).toBe(true);
+		expect(inspectorPaneIsWide("desktop")).toBe(true);
+		expect(inspectorSplitRatio({ custom: null, wide: false })).toBe(
 			INSPECTOR_SPLIT_DEFAULT,
 		);
-		expect(inspectorSplitRatio({ custom: null, desktop: true })).toBe(
+		expect(inspectorSplitRatio({ custom: null, wide: true })).toBe(
 			INSPECTOR_SPLIT_DESKTOP,
 		);
-		expect(inspectorSplitRatio({ custom: 0.6, desktop: true })).toBe(0.6);
+		expect(inspectorSplitRatio({ custom: 0.6, wide: true })).toBe(0.6);
 	});
 
 	it("keeps the conversation and tools both usable", () => {

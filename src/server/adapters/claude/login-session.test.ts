@@ -39,4 +39,38 @@ describe("parseClaudeAuthStatus", () => {
 		});
 		expect(parseClaudeAuthStatus(null)).toEqual({ stage: "missing" });
 	});
+
+	it("keeps thinking text when rereading the guest status file", () => {
+		expect(
+			parseClaudeAuthStatus(
+				JSON.stringify({
+					stage: "authenticated",
+					authMode: "subscription",
+					models: [],
+					turnStatus: "running",
+					items: [
+						{
+							kind: "userMessage",
+							id: "u1",
+							text: "look around",
+						},
+						{
+							kind: "reasoning",
+							id: "r1",
+							summaries: ["I should list the workspace first."],
+						},
+					],
+				}),
+			),
+		).toMatchObject({
+			stage: "authenticated",
+			items: [
+				{ kind: "userMessage", text: "look around" },
+				{
+					kind: "reasoning",
+					summaries: ["I should list the workspace first."],
+				},
+			],
+		});
+	});
 });

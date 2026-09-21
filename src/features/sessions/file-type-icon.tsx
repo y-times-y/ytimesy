@@ -1,15 +1,25 @@
-import { File } from "lucide-react";
-import { fileKindBadge, fileKindFromPath } from "#/domain/file-kind";
+import { addCollection, Icon } from "@iconify/react";
+import { vscodeFileIconName } from "#/domain/file-kind";
+import catppuccinFileIcons from "./catppuccin-file-icons.json";
+import vscodeFileIcons from "./vscode-file-icons.json";
 
-export function FileTypeIcon({ path }: { path: string }) {
-	const kind = fileKindFromPath(path);
-	const badge = fileKindBadge(kind);
-	if (!badge) {
-		return <File size={16} aria-hidden="true" />;
-	}
+addCollection(vscodeFileIcons as Parameters<typeof addCollection>[0]);
+addCollection(catppuccinFileIcons as Parameters<typeof addCollection>[0]);
+
+export function FileTypeIcon({
+	path,
+	size = 16,
+}: {
+	path: string;
+	size?: number;
+}) {
 	return (
-		<span className="file-type-icon" data-kind={kind} aria-hidden="true">
-			{badge}
-		</span>
+		<Icon
+			icon={vscodeFileIconName(path)}
+			width={size}
+			height={size}
+			className="file-type-icon"
+			aria-hidden="true"
+		/>
 	);
 }

@@ -16,11 +16,13 @@ import {
 	openCodeTurnPollDecision,
 } from "#/domain/opencode-turn";
 import { posixShellQuoted } from "#/domain/posix-command";
-import type {
-	FileChangeEntry,
-	SessionItem,
-	SessionTurnStatus,
-	ToolActivityStatus,
+import {
+	type FileChangeEntry,
+	lastAgentMessageText,
+	type SessionItem,
+	type SessionTurnStatus,
+	sessionTurnLooksSettled,
+	type ToolActivityStatus,
 } from "#/domain/session-item";
 import {
 	guestCliDisableUpdateExports,
@@ -712,6 +714,7 @@ export function submitOpenCodeTask(
 		readonly text: string;
 		readonly modelId: string;
 		readonly promptText?: string;
+		readonly variant?: string;
 	},
 ): Effect.Effect<OpenCodeAuthStatus> {
 	return Effect.gen(function* () {
@@ -766,6 +769,9 @@ export function submitOpenCodeTask(
 		const [providerID, modelID] = splitOpenCodeModelId(input.modelId);
 		const body = JSON.stringify({
 			model: { providerID, modelID },
+			...(input.variant?.trim()
+				? { variant: input.variant.trim() }
+				: {}),
 			parts: [{ type: "text", text: input.promptText ?? input.text }],
 		});
 		const queued: Extract<OpenCodeAuthStatus, { stage: "authenticated" }> = {
@@ -897,7 +903,6 @@ function syncOpenCodeTurn(
 			20_000,
 		);
 		const busy = openCodeSessionIsBusy(status.body, current.serveSessionId);
-		const text = assistantTextFromOpenCodeTurn(messages.body);
 		const error =
 			errorMessageFromOpenCode(messages.body) ??
 			errorMessageFromOpenCode(status.body);
@@ -907,6 +912,11 @@ function syncOpenCodeTurn(
 			mapped.length > 0 ? mapped : current.items,
 			workingTree,
 		);
+		const text =
+			assistantTextFromOpenCodeTurn(messages.body) ??
+			(sessionTurnLooksSettled(items)
+				? lastAgentMessageText(items)
+				: null);
 		const now = Date.now();
 		const lastBusyAt = busy ? now : current.lastBusyAt;
 		const seenBusy = current.seenBusy || busy;

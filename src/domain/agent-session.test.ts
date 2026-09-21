@@ -35,6 +35,17 @@ describe("sessionMachinePlan", () => {
 		).toEqual({ kind: "copy-snapshot", snapshotId: "sh-template" });
 	});
 
+	it("copies a new Claude chat from the private auth snapshot", () => {
+		expect(
+			sessionMachinePlan({
+				sessionProviderRef: null,
+				templateSnapshotId: "sh-template",
+				templateProviderRef: "vm-template",
+				authSnapshotId: "sh-claude-auth",
+			}),
+		).toEqual({ kind: "copy-snapshot", snapshotId: "sh-claude-auth" });
+	});
+
 	it("copies from the snapshot when the unused template VM is gone", () => {
 		expect(
 			sessionMachinePlan({
@@ -230,6 +241,22 @@ describe("sessionTurnStatusForPersist", () => {
 				liveConnection: "failed",
 			}),
 		).toBe("failed");
+		expect(
+			sessionTurnStatusForPersist({
+				liveStatus: "idle",
+				liveConnection: "authenticated",
+				storedStatus: "running",
+			}),
+		).toBeUndefined();
+		expect(
+			sessionTurnStatusForPersist({
+				liveStatus: "completed",
+				liveConnection: "authenticated",
+				storedStatus: "running",
+				storedLastUser: "list the files",
+				liveLastUser: "tell me a joke",
+			}),
+		).toBeUndefined();
 	});
 });
 

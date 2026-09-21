@@ -8,12 +8,15 @@ import {
 	lastAgentMessageText,
 	lastUserMessageText,
 	liveActivityStatus,
+	persistableTurnStatusFromTranscript,
 	reasoningSummariesFromTurn,
 	type SessionItem,
 	sessionRecordHasConversation,
 	sessionTitleFromItems,
 	sessionUsesFollowUpLayout,
+	sessionItemsQueuedWithUser,
 	sessionViewItems,
+	sessionViewShouldReplaceOpenTurn,
 	showTurnWorking,
 	visibleSessionItems,
 } from "./session-item";
@@ -45,6 +48,97 @@ describe("session items", () => {
 			user,
 			command,
 		]);
+		expect(sessionItemsQueuedWithUser([user], "run echo")).toEqual([user]);
+		expect(sessionItemsQueuedWithUser([user], "list the files")).toMatchObject([
+			{ text: "run echo" },
+			{ kind: "userMessage", text: "list the files" },
+		]);
+		expect(
+			sessionViewItems(
+				[user, { kind: "agentMessage", id: SessionItemId("old"), text: "pong" }],
+				[
+					user,
+					{ kind: "agentMessage", id: SessionItemId("old"), text: "pong" },
+					{
+						kind: "userMessage",
+						id: SessionItemId("next"),
+						text: "list the files",
+					},
+				],
+			),
+		).toMatchObject([{ text: "run echo" }, { text: "pong" }, { text: "list the files" }]);
+		expect(
+			sessionViewItems(
+				[
+					user,
+					{
+						kind: "userMessage",
+						id: SessionItemId("next"),
+						text: "list the files",
+					},
+				],
+				[user, { kind: "agentMessage", id: SessionItemId("old"), text: "pong" }],
+			),
+		).toMatchObject([{ text: "run echo" }, { text: "list the files" }]);
+		expect(
+			sessionViewShouldReplaceOpenTurn({
+				currentStatus: "running",
+				nextStatus: "idle",
+				currentItems: [
+					{
+						kind: "userMessage",
+						id: SessionItemId("next"),
+						text: "list the files",
+					},
+				],
+				nextItems: [user],
+			}),
+		).toBe(false);
+		expect(
+			sessionViewShouldReplaceOpenTurn({
+				currentStatus: "running",
+				nextStatus: "completed",
+				currentItems: [
+					{
+						kind: "userMessage",
+						id: SessionItemId("next"),
+						text: "list the files",
+					},
+				],
+				nextItems: [
+					{
+						kind: "userMessage",
+						id: SessionItemId("next"),
+						text: "list the files",
+					},
+				],
+			}),
+		).toBe(false);
+		expect(
+			sessionViewShouldReplaceOpenTurn({
+				currentStatus: "running",
+				nextStatus: "completed",
+				currentItems: [
+					{
+						kind: "userMessage",
+						id: SessionItemId("next"),
+						text: "list the files",
+					},
+				],
+				nextItems: [
+					{
+						kind: "userMessage",
+						id: SessionItemId("next"),
+						text: "list the files",
+					},
+					{
+						kind: "agentMessage",
+						id: SessionItemId("done"),
+						text: "pong",
+					},
+				],
+			}),
+		).toBe(true);
 		expect(
 			sessionViewItems(
 				[
@@ -400,6 +494,23 @@ describe("session items", () => {
 			),
 		).toBe(true);
 		expect(
+			showTurnWorking(
+				[
+					{
+						kind: "userMessage",
+						id: SessionItemId("user-1"),
+						text: "look",
+					},
+					{
+						kind: "agentMessage",
+						id: SessionItemId("agent-1"),
+						text: "done",
+					},
+				],
+				"running",
+			),
+		).toBe(false);
+		expect(
 			liveActivityStatus({
 				kind: "dynamicToolCall",
 				id: SessionItemId("t1"),
@@ -407,6 +518,23 @@ describe("session items", () => {
 				status: "inProgress",
 			}),
 		).toBe("inProgress");
+		expect(
+			persistableTurnStatusFromTranscript({
+				liveStatus: "running",
+				items: [
+					{
+						kind: "userMessage",
+						id: SessionItemId("user-1"),
+						text: "look",
+					},
+					{
+						kind: "agentMessage",
+						id: SessionItemId("agent-1"),
+						text: "done",
+					},
+				],
+			}),
+		).toBe("completed");
 		expect(
 			liveActivityStatus({
 				kind: "reasoning",
