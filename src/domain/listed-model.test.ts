@@ -1,17 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
+	composerModelIdForCatalog,
 	listedFastModeId,
 	listedModelDisplayName,
+	listedModelPreferenceFromSessions,
+	listedModelRestrictedByProvider,
 	listedModelSupportsFastMode,
 	listedReasoningFromRow,
 	listedReasoningFromVariants,
 	modelIdToSubmit,
-	listedModelPreferenceFromSessions,
-	listedModelRestrictedByProvider,
 	preferredListedModelId,
 	sessionListedModelIsBlocked,
 	submittedListedModelId,
-	composerModelIdForCatalog,
 } from "./listed-model";
 
 describe("submittedListedModelId", () => {
@@ -85,10 +85,7 @@ describe("composerModelIdForCatalog", () => {
 		{ id: "opencode/muse-spark-1.3-contributor-free" },
 		{ id: "opencode/big-pickle" },
 	];
-	const codex = [
-		{ id: "gpt-5.3-codex-spark" },
-		{ id: "gpt-5.3-codex" },
-	];
+	const codex = [{ id: "gpt-5.3-codex-spark" }, { id: "gpt-5.3-codex" }];
 
 	it("does not keep another provider's model after the catalog changes", () => {
 		expect(

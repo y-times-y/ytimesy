@@ -1,14 +1,14 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import {
-	type EncryptedSecret,
-	decryptSecret,
-	encryptSecret,
-} from "#/domain/encrypted-secret";
-import {
 	type ClaudeHomeFiles,
 	claudeHomeFilesAreUsable,
 	parseClaudeHomeDump,
 } from "#/domain/claude-home";
+import {
+	decryptSecret,
+	type EncryptedSecret,
+	encryptSecret,
+} from "#/domain/encrypted-secret";
 import { loadSecretMasterKey } from "./master-key";
 
 export const CLAUDE_HOME_STORE_PATH = ".ytimesy/claude-homes.json";

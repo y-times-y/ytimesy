@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { ENSURE_WORKSPACE_DESKTOP, START_WORKSPACE_DESKTOP } from "./start-desktop";
+import {
+	ENSURE_WORKSPACE_DESKTOP,
+	START_WORKSPACE_DESKTOP,
+} from "./start-desktop";
 
 describe("start workspace desktop", () => {
 	it("uses passwordless sudo for apt when the guest is not root", () => {

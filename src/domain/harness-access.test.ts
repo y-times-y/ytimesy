@@ -22,11 +22,16 @@ import {
 describe("harness access", () => {
 	it("lists every offered harness and mutes account logins that are not signed in", () => {
 		const rows = offeredHarnessAccess({ status: "disconnected" });
-		expect(rows.map((row) => row.provider.id)).toEqual(["codex", "claude"]);
-		expect(rows.map((row) => row.muted)).toEqual([true, true]);
+		expect(rows.map((row) => row.provider.id)).toEqual([
+			"codex",
+			"claude",
+			"api",
+		]);
+		expect(rows.map((row) => row.muted)).toEqual([true, true, true]);
 		expect(rows.map((row) => row.statusLabel)).toEqual([
 			"Not signed in",
 			"Not signed in",
+			"Not connected",
 		]);
 	});
 
@@ -57,10 +62,12 @@ describe("harness access", () => {
 		expect(rows.map((row) => row.subscriptionAction)).toEqual([
 			"sign_in",
 			"sign_in",
+			null,
 		]);
 		expect(rows.map((row) => row.subscriptionActionLabel)).toEqual([
 			"Sign in",
 			"Sign in",
+			null,
 		]);
 		expect(harnessRequiresAccountLogin("opencode")).toBe(false);
 		expect(harnessRequiresAccountLogin("claude")).toBe(true);

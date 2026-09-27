@@ -5,7 +5,9 @@ import {
 	type WorkspaceProvisionOptions,
 	type WorkspaceRuntime,
 } from "../workspace-runtime";
+import { runLongCommand } from "./long-command";
 import {
+	FREESTYLE_EXEC_TIMEOUT_MS_MAX,
 	freestyleExecTimeoutMs,
 	PRODUCT_IDLE_TIMEOUT_SECONDS,
 	productCreateVmFields,
@@ -25,12 +27,19 @@ export class FreestyleWorkspaceRuntime implements WorkspaceRuntime {
 		const existing = await this.findBySlug(slug);
 		if (existing) return this.recover(existing);
 		try {
-			const created = await this.client().vms.create(
-				productCreateVmFields({
+			const created = await this.client().vms.create({
+				...productCreateVmFields({
 					slug,
 					snapshotId: options?.snapshotId,
 				}),
-			);
+				...(options?.maxRunSeconds
+					? {
+							maxRunSeconds: options.maxRunSeconds,
+							maxRunTotalSeconds: options.maxRunSeconds,
+							automaticRestart: false,
+						}
+					: {}),
+			});
 			await waitUntilVmRunning(created.vm, "Workspace VM");
 			return created.vmId;
 		} catch (cause) {
@@ -63,13 +72,14 @@ export class FreestyleWorkspaceRuntime implements WorkspaceRuntime {
 		env: Record<string, string>,
 		timeoutMs: number,
 	) {
-		const result = await this.client()
-			.vms.ref(providerRef)
-			.exec({
-				command: posixShellCommand(argv),
-				env,
-				timeoutMs: freestyleExecTimeoutMs(timeoutMs),
-			});
+		const vm = this.client().vms.ref(providerRef);
+		if (timeoutMs > FREESTYLE_EXEC_TIMEOUT_MS_MAX)
+			return runLongCommand(vm.pty, argv, env, timeoutMs);
+		const result = await vm.exec({
+			command: posixShellCommand(argv),
+			env,
+			timeoutMs: freestyleExecTimeoutMs(timeoutMs),
+		});
 		return {
 			exitCode: result.statusCode ?? 124,
 			stdout: result.stdout ?? "",
@@ -102,6 +112,17 @@ export class FreestyleWorkspaceRuntime implements WorkspaceRuntime {
 		const vm = this.client().vms.ref(providerRef);
 		const data = await vm.data();
 		if (data.state === "running") await vm.pause();
+	}
+
+	async snapshotExists(snapshotId: string) {
+		try {
+			const snapshot = await this.client().vms.snapshots.get(snapshotId);
+			return !snapshot.public;
+		} catch (error) {
+			if (error instanceof FreestyleApiError && error.status === 404)
+				return false;
+			throw error;
+		}
 	}
 
 	private client() {

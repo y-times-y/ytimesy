@@ -1,9 +1,11 @@
 import { createServerFn } from "@tanstack/react-start";
+import { getRequest } from "@tanstack/react-start/server";
 import {
 	type HarnessApiKeyStatus,
 	hintForHarness,
-	publicHarnessApiKey,
 } from "#/domain/harness-api-key";
+import { requireUser } from "#/server/auth/auth";
+import { requireSameOrigin } from "#/server/http";
 import {
 	listHarnessApiKeys,
 	parseHarnessId,
@@ -12,8 +14,9 @@ import {
 
 export const getHarnessApiKeys = createServerFn({ method: "GET" }).handler(
 	async (): Promise<HarnessApiKeyStatus> => {
-		const keys = await listHarnessApiKeys();
-		return { keys: keys.map(publicHarnessApiKey) };
+		const user = await requireUser(getRequest().headers);
+		const keys = await listHarnessApiKeys(user.id);
+		return { keys };
 	},
 );
 
@@ -25,9 +28,12 @@ export const saveHarnessApiKeyFn = createServerFn({ method: "POST" })
 		};
 	})
 	.handler(async ({ data }): Promise<HarnessApiKeyStatus> => {
-		await saveHarnessApiKey(data.harnessId, data.apiKey);
-		const keys = await listHarnessApiKeys();
-		return { keys: keys.map(publicHarnessApiKey) };
+		const request = getRequest();
+		requireSameOrigin(request);
+		const user = await requireUser(request.headers);
+		await saveHarnessApiKey(user.id, data.harnessId, data.apiKey);
+		const keys = await listHarnessApiKeys(user.id);
+		return { keys };
 	});
 
 export function harnessKeyHintMap(
@@ -36,6 +42,5 @@ export function harnessKeyHintMap(
 	return {
 		codex: hintForHarness(status.keys, "codex") ?? undefined,
 		claude: hintForHarness(status.keys, "claude") ?? undefined,
-		opencode: hintForHarness(status.keys, "opencode") ?? undefined,
 	};
 }

@@ -9,10 +9,10 @@ export const Route = createFileRoute("/")({
 });
 
 function HomePage() {
-	const { session, signedIn } = Route.useLoaderData();
+	const { session, signedIn, projects } = Route.useLoaderData();
 	return (
 		<IdentityGate initialSignedIn={signedIn}>
-			<WorkspaceHome initialSession={session} />
+			<WorkspaceHome initialSession={session} initialProjects={projects} />
 		</IdentityGate>
 	);
 }

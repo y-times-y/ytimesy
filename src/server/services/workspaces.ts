@@ -1,4 +1,5 @@
 import { Effect } from "effect";
+import type { EnvironmentModelRequest } from "#/domain/environment-model";
 import {
 	blocksDuplicateProvision,
 	canStartPrepare,
@@ -14,6 +15,7 @@ import {
 	workspaceForProject,
 } from "../adapters/workspaces";
 import { postgresJobQueue, type WorkspaceJobQueue } from "../jobs/queue";
+import { resolveEnvironmentModel } from "./environment-model";
 
 export function workspaceView(workspace: ProjectWorkspace) {
 	return {
@@ -33,6 +35,7 @@ export function enqueueProjectWorkspace(
 	userId: string,
 	projectId: string,
 	queue: WorkspaceJobQueue = postgresJobQueue,
+	repairRequest?: EnvironmentModelRequest,
 ) {
 	return Effect.gen(function* () {
 		yield* Effect.tryPromise(async () => {
@@ -44,6 +47,9 @@ export function enqueueProjectWorkspace(
 		);
 		if (existing && blocksDuplicateProvision(existing.status)) return existing;
 		if (existing && !canStartPrepare(existing.status)) return existing;
+		const repairModel = yield* Effect.tryPromise(() =>
+			resolveEnvironmentModel(userId, repairRequest),
+		);
 		const workspace = existing
 			? ((yield* Effect.tryPromise(() =>
 					markWorkspaceQueued(userId, existing.id),
@@ -52,7 +58,7 @@ export function enqueueProjectWorkspace(
 					insertQueuedWorkspace(userId, projectId),
 				);
 		const jobId = yield* Effect.tryPromise(() =>
-			queue.enqueuePrepare(workspace.id).catch(async () => {
+			queue.enqueuePrepare(workspace.id, repairModel).catch(async () => {
 				await recordWorkspaceEvent(
 					userId,
 					workspace.id,
@@ -67,19 +73,11 @@ export function enqueueProjectWorkspace(
 	});
 }
 
-export function enqueueWorkspaceSnapshotRefresh(
-	workspaceId: string,
-	queue: WorkspaceJobQueue = postgresJobQueue,
-) {
-	const enqueue = queue.enqueueRefresh;
-	if (!enqueue) return null;
-	return enqueue(workspaceId).catch(() => null);
-}
-
 export function retryProjectWorkspace(
 	userId: string,
 	workspaceId: string,
 	queue: WorkspaceJobQueue = postgresJobQueue,
+	repairRequest?: EnvironmentModelRequest,
 ) {
 	return Effect.gen(function* () {
 		const workspace = yield* Effect.tryPromise(async () => {
@@ -89,6 +87,11 @@ export function retryProjectWorkspace(
 			return owned;
 		});
 		if (!canStartPrepare(workspace.status)) return workspace;
-		return yield* enqueueProjectWorkspace(userId, workspace.projectId, queue);
+		return yield* enqueueProjectWorkspace(
+			userId,
+			workspace.projectId,
+			queue,
+			repairRequest,
+		);
 	});
 }

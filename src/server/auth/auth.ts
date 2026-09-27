@@ -2,7 +2,10 @@ import { betterAuth } from "better-auth";
 import { database } from "../adapters/database";
 import { persistAuthEmail } from "../adapters/email";
 import { serverConfig } from "../config";
-import { loadLocalQaUser, requestAllowsLocalQaIdentity } from "./local-qa-identity";
+import {
+	loadLocalQaUser,
+	requestAllowsLocalQaIdentity,
+} from "./local-qa-identity";
 import { authTrustedOrigins, googleOAuthConfigured } from "./providers";
 
 export function authOptions() {

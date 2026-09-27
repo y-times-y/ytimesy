@@ -1,5 +1,9 @@
 import { Children, type ReactNode, useLayoutEffect } from "react";
 import { Group, Panel, Separator, useGroupRef } from "react-resizable-panels";
+import {
+	CHAT_PANE_MIN_WIDTH,
+	INSPECTOR_PANE_MIN_WIDTH,
+} from "#/domain/inspector-split";
 
 export function WorkspacePanes({
 	children,
@@ -36,6 +40,7 @@ export function WorkspacePanes({
 			data-inspector-collapsed={!open}
 			data-inspector-view={view}
 			data-layout={layout}
+			data-compact={compact}
 			onLayoutChanged={(next, meta) => {
 				if (meta.isUserInteraction && open && !compact)
 					onResize(next.chat / 100);
@@ -43,7 +48,7 @@ export function WorkspacePanes({
 		>
 			<Panel
 				id="chat"
-				minSize={open && !compact ? "32%" : 0}
+				minSize={open && !compact ? `${CHAT_PANE_MIN_WIDTH}px` : 0}
 				maxSize={open && !compact ? "72%" : "100%"}
 				collapsible={!open || compact}
 				collapsedSize={0}
@@ -60,7 +65,7 @@ export function WorkspacePanes({
 			) : null}
 			<Panel
 				id="inspector"
-				minSize={open && !compact ? "28%" : 0}
+				minSize={open && !compact ? `${INSPECTOR_PANE_MIN_WIDTH}px` : 0}
 				collapsible={!open || compact}
 				collapsedSize={0}
 			>

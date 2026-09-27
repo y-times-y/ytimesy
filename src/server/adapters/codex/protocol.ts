@@ -93,8 +93,7 @@ export function agentConnectionFromProbe(
 		return {
 			status: "failed",
 			provider: "codex",
-			message:
-				"Codex is waiting for an API key or ChatGPT sign-in.",
+			message: "Codex is waiting for an API key or ChatGPT sign-in.",
 		};
 	}
 

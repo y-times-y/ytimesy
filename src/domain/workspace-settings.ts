@@ -50,12 +50,13 @@ export function harnessSettingsCopy(input: {
 	if (input.id === "codex") {
 		if (input.account?.status === "connected") {
 			const email = input.account.email?.trim();
-			return email
-				? `ChatGPT connected as ${email}.`
-				: "ChatGPT is connected.";
+			return email ? `ChatGPT connected as ${email}.` : "ChatGPT is connected.";
 		}
 		if (input.account?.status === "expired") {
-			return input.account.message || "ChatGPT sign-in expired. Reconnect from the composer.";
+			return (
+				input.account.message ||
+				"ChatGPT sign-in expired. Reconnect from the composer."
+			);
 		}
 	}
 	return `Connect ${agentProviderById(input.id).name} from the harness picker in the composer.`;

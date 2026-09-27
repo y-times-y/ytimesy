@@ -1,6 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { GUEST_INTERNET_FIREWALL } from "./proof-vm";
-import { CHEAP_BASE_SNAPSHOT } from "./product-vm";
 import {
 	JOB_WORKER_GUEST_CERT,
 	JOB_WORKER_GUEST_GITHUB_KEY,
@@ -12,6 +10,8 @@ import {
 	jobWorkerEnvFile,
 	jobWorkerIdleNeedsUpdate,
 } from "./job-worker-vm";
+import { CHEAP_BASE_SNAPSHOT } from "./product-vm";
+import { GUEST_INTERNET_FIREWALL } from "./proof-vm";
 
 describe("jobWorkerCreateVmFields", () => {
 	it("never idles and never expires a run", () => {
@@ -56,8 +56,8 @@ describe("jobWorkerEnvFile", () => {
 			`GITHUB_PRIVATE_KEY_PATH="${JOB_WORKER_GUEST_GITHUB_KEY}"`,
 		);
 		expect(env).toContain("FREESTYLE_API_KEY=fs_test");
-		expect(jobWorkerDatabaseUrl("postgresql://db.example/postgres", "/c.crt")).toBe(
-			"postgresql://db.example/postgres?sslrootcert=%2Fc.crt",
-		);
+		expect(
+			jobWorkerDatabaseUrl("postgresql://db.example/postgres", "/c.crt"),
+		).toBe("postgresql://db.example/postgres?sslrootcert=%2Fc.crt");
 	});
 });

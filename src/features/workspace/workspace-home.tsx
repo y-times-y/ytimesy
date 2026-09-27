@@ -1,6 +1,6 @@
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { PanelRight } from "lucide-react";
+import { Maximize2, Minimize2, PanelRight } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { connectedProviderId } from "#/domain/agent-connection";
 import {
@@ -8,6 +8,7 @@ import {
 	DEFAULT_COMPOSER_HARNESS_ID,
 	offeredAgentProviderId,
 } from "#/domain/agent-provider";
+import { shouldPollAgentTasks } from "#/domain/agent-task";
 import {
 	claudeSessionRemembersSignIn,
 	rememberedClaudeModels,
@@ -20,9 +21,11 @@ import {
 import {
 	inspectorPaneIsWide,
 	inspectorSplitRatio,
+	workspaceNeedsSinglePane,
 } from "#/domain/inspector-split";
 import { publicFailureMessage } from "#/domain/project-workspace";
 import { type Project, selectedProjectIdAfterDelete } from "#/domain/projects";
+import { workspacePublicationBranch } from "#/domain/publication";
 import {
 	fileChangesFromSessionItems,
 	isTurnRunning,
@@ -66,20 +69,15 @@ import {
 } from "#/domain/workspace-desktop";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
 import { authClient } from "../auth/client";
-import { requestJson } from "../projects/api";
+import { requestJson, retryTransientRead } from "../projects/api";
 import { deleteOwnedProject } from "../projects/project.fn";
 import {
-	createProjectAgentTaskDraft,
 	deleteProjectAgentSession,
-	editProjectAgentTaskDraft,
 	listProjectAgentSessions,
 	listProjectAgentTasks,
-	requestProjectAgentTaskWrapUp,
 	startProjectAgentSession,
-	startProjectAgentTask,
 } from "../sessions/agent-session.fn";
 import {
-	completeClaudeSessionAuth,
 	connectCodexSession,
 	getCodexSession,
 	sendCodexSessionTask,
@@ -92,7 +90,6 @@ import {
 import { SessionLauncher } from "../sessions/session-launcher";
 import { sessionReconciliationQuery } from "../sessions/session-reconciliation";
 import { SideChatPanel } from "../sessions/side-chat-panel";
-import { TaskPanel } from "../sessions/task-panel";
 import { getWorkspaceDesktop, startWorkspaceDesktopFn } from "./desktop.fn";
 import { ProjectSettings } from "./project-settings";
 import { ProjectSidebar } from "./project-sidebar";
@@ -102,18 +99,38 @@ import {
 	type ToolsView,
 	WorkspaceInspector,
 } from "./workspace-inspector";
+import { WorkspaceOverview } from "./workspace-overview";
 import { WorkspacePanes } from "./workspace-panes";
 
 export function WorkspaceHome({
 	initialSession,
+	initialProjects,
 }: {
 	initialSession: PublicCodexSession;
+	initialProjects?: Project[];
 }) {
 	const compact = useCompactLayout();
+	const workspaceMainRef = useRef<HTMLElement>(null);
+	const [inspectorCompact, setInspectorCompact] = useState(false);
+	const [inspectorExpanded, setInspectorExpanded] = useState(false);
+	useEffect(() => {
+		const main = workspaceMainRef.current;
+		if (!main) return;
+		const observer = new ResizeObserver(([entry]) => {
+			if (entry)
+				setInspectorCompact(workspaceNeedsSinglePane(entry.contentRect.width));
+		});
+		observer.observe(main);
+		return () => observer.disconnect();
+	}, []);
+	const singlePane = compact || inspectorCompact || inspectorExpanded;
 	const queryClient = useQueryClient();
 	const projects = useQuery({
 		queryKey: ["projects"],
 		queryFn: () => requestJson<Project[]>("/api/projects"),
+		initialData: initialProjects,
+		retry: retryTransientRead,
+		retryDelay: (attempt) => Math.min(500 * 2 ** attempt, 2000),
 	});
 	const [selectedProjectId, setSelectedProjectId] = useState<string>();
 	const selectedProject =
@@ -151,17 +168,12 @@ export function WorkspaceHome({
 	});
 	const startSession = useServerFn(startProjectAgentSession);
 	const deleteSession = useServerFn(deleteProjectAgentSession);
-	const createAgentTaskDraft = useServerFn(createProjectAgentTaskDraft);
-	const editAgentTaskDraft = useServerFn(editProjectAgentTaskDraft);
-	const startAgentTask = useServerFn(startProjectAgentTask);
-	const requestTaskWrapUp = useServerFn(requestProjectAgentTaskWrapUp);
 	const deleteProject = useServerFn(deleteOwnedProject);
-	const [taskMutationBusy, setTaskMutationBusy] = useState(false);
 	const [projectsOpen, setProjectsOpen] = useState(false);
 	const [sidebarPinReady, setSidebarPinReady] = useState(false);
 	const [inspectorOpen, setInspectorOpen] = useState(false);
 	const [toolsView, setToolsView] = useState<ToolsView>("files");
-	const [inspectorView, setInspectorView] = useState<InspectorView>("files");
+	const [inspectorView, setInspectorView] = useState<InspectorView>("overview");
 	const [selectedFilePath, setSelectedFilePath] = useState<string>();
 	const [customSplit, setCustomSplit] = useState<number | null>(null);
 	const [sideChatOpen, setSideChatOpen] = useState(false);
@@ -187,7 +199,6 @@ export function WorkspaceHome({
 		variant?: string;
 		fast?: boolean;
 	} | null>(null);
-	const claudeLoginWindowRef = useRef<Window | null>(null);
 	const sessionViews = useRef(new Map<string, PublicCodexSession>());
 	const bumpSessionEpoch = useCallback(() => {
 		sessionEpoch.current += 1;
@@ -268,13 +279,11 @@ export function WorkspaceHome({
 	const connect = useServerFn(connectCodexSession);
 	const applySessionViewRef = useRef(applySessionView);
 	applySessionViewRef.current = applySessionView;
-	const completeClaudeAuth = useServerFn(completeClaudeSessionAuth);
 	const sendTask = useServerFn(sendCodexSessionTask);
 	const stopTurn = useServerFn(stopCodexSessionTurn);
 	const loadDesktop = useServerFn(getWorkspaceDesktop);
 	const startDesktop = useServerFn(startWorkspaceDesktopFn);
 	const fileChanges = fileChangesFromSessionItems(session.items);
-	const openedDiff = useRef(false);
 	const splitRatio = inspectorSplitRatio({
 		custom: customSplit,
 		wide: inspectorPaneIsWide(inspectorView),
@@ -307,10 +316,17 @@ export function WorkspaceHome({
 			}),
 		enabled: Boolean(activeProjectId && activeSessionId),
 		refetchInterval: (query) =>
-			query.state.data?.some((task) => task.status === "working")
+			shouldPollAgentTasks(session.turnStatus, query.state.data ?? [])
 				? 2_500
 				: false,
 	});
+	useEffect(() => {
+		if (
+			activeSessionId &&
+			(session.turnStatus === "completed" || session.turnStatus === "failed")
+		)
+			void agentTasks.refetch();
+	}, [activeSessionId, session.turnStatus, agentTasks.refetch]);
 	selectedSessionIdRef.current = activeSessionId;
 	const requestDesktop = useCallback(() => {
 		if (desktopStartInFlight.current) return;
@@ -401,21 +417,6 @@ export function WorkspaceHome({
 					: rememberedClaudeModels(listed),
 			listedModelId: listed || current.listedModelId,
 		}));
-	}
-
-	function revealClaudeLogin(url: string) {
-		const popup = claudeLoginWindowRef.current;
-		if (popup && !popup.closed) {
-			popup.location.href = url;
-			return;
-		}
-		window.open(url, "ytimesy-claude-login", "noopener,noreferrer");
-	}
-
-	function closeClaudeLoginWindow() {
-		const popup = claudeLoginWindowRef.current;
-		if (popup && !popup.closed) popup.close();
-		claudeLoginWindowRef.current = null;
 	}
 
 	useEffect(() => {
@@ -529,14 +530,6 @@ export function WorkspaceHome({
 	}, [sessionRead.data]);
 
 	useEffect(() => {
-		if (compact || openedDiff.current || fileChanges.length === 0) return;
-		openedDiff.current = true;
-		setToolsView("files");
-		setInspectorView("files");
-		setInspectorOpen(true);
-	}, [compact, fileChanges.length]);
-
-	useEffect(() => {
 		if (
 			!activeProjectId ||
 			!activeSessionId ||
@@ -605,6 +598,7 @@ export function WorkspaceHome({
 						...current,
 						items: progress.items,
 						turnStatus: progress.turnStatus,
+						usage: progress.usage ?? current.usage,
 					};
 				});
 				if (
@@ -751,7 +745,7 @@ export function WorkspaceHome({
 			.then((created) => {
 				if (epoch !== sessionEpoch.current) return;
 				setSelectedSessionId(created.id);
-				openedDiff.current = false;
+				setInspectorView("overview");
 				setSelectedFilePath(undefined);
 				setDesktop({ status: "stopped" });
 				setSession((current) => ({
@@ -799,7 +793,7 @@ export function WorkspaceHome({
 		if (activeSessionId === chatId) {
 			bumpSessionEpoch();
 			setSelectedSessionId(nextId);
-			openedDiff.current = false;
+			setInspectorView("overview");
 			setSelectedFilePath(undefined);
 			setDesktop({ status: "stopped" });
 			setSession((current) => ({
@@ -848,7 +842,7 @@ export function WorkspaceHome({
 			bumpSessionEpoch();
 			selectedSessionIdRef.current = undefined;
 			setSelectedSessionId(undefined);
-			openedDiff.current = false;
+			setInspectorView("overview");
 			setSelectedFilePath(undefined);
 			setDesktop({ status: "stopped" });
 			setComposerDraft(!nextId);
@@ -904,135 +898,6 @@ export function WorkspaceHome({
 			});
 	}
 
-	function createAgentTask(input: {
-		parentSessionId: string;
-		title: string;
-		prompt: string;
-		placement: "shared" | "fresh";
-		access: "read_only" | "read_write";
-		execution: "parallel" | "stacked";
-		dependsOnSessionId: string | null;
-	}) {
-		if (!activeProjectId || !activeSessionId) return;
-		const modelId =
-			composerModelId || session.listedModelId || sessionModelId(session);
-		if (!modelId) return;
-		setTaskMutationBusy(true);
-		void createAgentTaskDraft({
-			data: {
-				projectId: activeProjectId,
-				parentSessionId: input.parentSessionId,
-				title: input.title,
-				prompt: input.prompt,
-				modelId,
-				harnessId,
-				placement: input.placement,
-				access: input.access,
-				execution: input.execution,
-				dependsOnSessionId: input.dependsOnSessionId,
-			},
-		})
-			.then(() => agentTasks.refetch())
-			.catch((cause) => {
-				setSession((current) => ({
-					...current,
-					connection: {
-						status: "failed",
-						provider: harnessId,
-						message: publicFailureMessage(cause),
-					},
-				}));
-			})
-			.finally(() => setTaskMutationBusy(false));
-	}
-
-	function editAgentTask(input: {
-		taskSessionId: string;
-		parentSessionId: string;
-		title: string;
-		prompt: string;
-		placement: "shared" | "fresh";
-		access: "read_only" | "read_write";
-		execution: "parallel" | "stacked";
-		dependsOnSessionId: string | null;
-	}) {
-		if (!activeProjectId) return;
-		const task = agentTasks.data?.find(
-			(item) => item.id === input.taskSessionId,
-		);
-		if (!task?.listedModelId) return;
-		setTaskMutationBusy(true);
-		void editAgentTaskDraft({
-			data: {
-				projectId: activeProjectId,
-				...input,
-				modelId: task.listedModelId,
-				harnessId: task.harnessId,
-			},
-		})
-			.then(() => agentTasks.refetch())
-			.catch((cause) => {
-				setSession((current) => ({
-					...current,
-					connection: {
-						status: "failed",
-						provider: task.harnessId,
-						message: publicFailureMessage(cause),
-					},
-				}));
-			})
-			.finally(() => setTaskMutationBusy(false));
-	}
-
-	function launchAgentTask(taskSessionId: string) {
-		if (!activeProjectId) return;
-		setTaskMutationBusy(true);
-		void startAgentTask({
-			data: { projectId: activeProjectId, taskSessionId },
-		})
-			.then(() => agentTasks.refetch())
-			.catch((cause) => {
-				setSession((current) => ({
-					...current,
-					connection: {
-						status: "failed",
-						provider: harnessId,
-						message: publicFailureMessage(cause),
-					},
-				}));
-			})
-			.finally(() => setTaskMutationBusy(false));
-	}
-
-	function askAgentTaskToWrapUp(taskSessionId: string) {
-		if (!activeProjectId) return;
-		const task = agentTasks.data?.find(
-			(candidate) => candidate.id === taskSessionId,
-		);
-		const modelId =
-			task?.listedModelId ||
-			composerModelId ||
-			session.listedModelId ||
-			sessionModelId(session);
-		if (!modelId) return;
-		setTaskMutationBusy(true);
-		void requestTaskWrapUp({
-			data: { projectId: activeProjectId, taskSessionId, modelId },
-		})
-			.then(() => agentTasks.refetch())
-			.catch((cause) => {
-				setSession((current) => ({
-					...current,
-					connection: {
-						status: "failed",
-						provider: task?.harnessId ?? harnessId,
-						message: publicFailureMessage(cause),
-					},
-				}));
-			})
-			.finally(() => setTaskMutationBusy(false));
-	}
-
 	return (
 		<div className="workspace-shell" data-projects-collapsed={!projectsOpen}>
 			<ProjectSidebar
@@ -1055,7 +920,7 @@ export function WorkspaceHome({
 					selectedSessionIdRef.current = id;
 					bumpSessionEpoch();
 					setSelectedSessionId(id);
-					openedDiff.current = false;
+					setInspectorView("overview");
 					setSelectedFilePath(undefined);
 					setDesktop({ status: "stopped" });
 					const cached = sessionViews.current.get(id);
@@ -1096,6 +961,7 @@ export function WorkspaceHome({
 				onOpenSettings={() => setSettingsOpen(true)}
 			/>
 			<ProjectSettings
+				codexUsage={session.usage}
 				open={settingsOpen}
 				projectId={selectedProject?.id}
 				projects={projects.data ?? []}
@@ -1109,7 +975,33 @@ export function WorkspaceHome({
 				}}
 				onClose={() => setSettingsOpen(false)}
 			/>
-			<main className="workspace-main" inert={compact && projectsOpen}>
+			<main
+				ref={workspaceMainRef}
+				className="workspace-main"
+				inert={compact && projectsOpen}
+				data-can-expand-inspector={
+					inspectorOpen && !compact && !inspectorCompact
+				}
+			>
+				{inspectorOpen && !compact && !inspectorCompact ? (
+					<button
+						type="button"
+						className="workspace-sidebar-toggle workspace-inspector-expand"
+						aria-label={
+							inspectorExpanded ? "Restore split view" : "Expand workspace"
+						}
+						title={
+							inspectorExpanded ? "Restore split view" : "Expand workspace"
+						}
+						onClick={() => setInspectorExpanded((value) => !value)}
+					>
+						{inspectorExpanded ? (
+							<Minimize2 size={16} />
+						) : (
+							<Maximize2 size={16} />
+						)}
+					</button>
+				) : null}
 				<button
 					type="button"
 					className="workspace-sidebar-toggle workspace-inspector-toggle"
@@ -1125,7 +1017,7 @@ export function WorkspaceHome({
 				</button>
 				<WorkspacePanes
 					open={inspectorOpen}
-					compact={compact}
+					compact={singlePane}
 					ratio={splitRatio}
 					view={inspectorView}
 					layout={followUpLayout ? "chat" : "empty"}
@@ -1136,8 +1028,8 @@ export function WorkspaceHome({
 						className="welcome-panel"
 						aria-label="Get started"
 						data-layout={followUpLayout ? "chat" : "empty"}
-						inert={compact && inspectorOpen}
-						aria-hidden={compact && inspectorOpen}
+						inert={singlePane && inspectorOpen}
+						aria-hidden={singlePane && inspectorOpen}
 					>
 						{followUpLayout ? (
 							<div className="session-title-row">
@@ -1161,6 +1053,7 @@ export function WorkspaceHome({
 								listedTitle={composerDraft ? undefined : listedTitle}
 								harnessId={harnessId}
 								onHarnessIdChange={(id) => {
+									if (session.turnStatus === "running") return;
 									setHarnessId(id);
 									applyRememberedClaude(id);
 								}}
@@ -1187,64 +1080,6 @@ export function WorkspaceHome({
 											setBusyChatIds((ids) => withoutBusyChat(ids, chatId));
 										});
 								}}
-								onSubmitAuthCode={(code) => {
-									const epoch = sessionEpoch.current;
-									const scope = sessionScope();
-									const chatId = activeSessionId;
-									setBusyChatIds((ids) => withBusyChat(ids, chatId));
-									void completeClaudeAuth({
-										data: { ...scope, code },
-									})
-										.then(async (next) => {
-											applySessionView(epoch, next);
-											const pending = pendingSendRef.current;
-											if (
-												next.connection.status !== "authenticated" ||
-												!pending
-											) {
-												return;
-											}
-											pendingSendRef.current = null;
-											closeClaudeLoginWindow();
-											const resolvedModel =
-												pending.modelId ||
-												preferredSessionModelId(
-													sessionModelsFromListed(next.models),
-													{
-														lastUsedId: next.listedModelId,
-														excludedIds: next.blockedListedModelIds,
-													},
-												);
-											if (!resolvedModel) return;
-											const sent = await sendTask({
-												data: {
-													...scope,
-													text: pending.text,
-													modelId: resolvedModel,
-													...(pending.variant
-														? { variant: pending.variant }
-														: {}),
-													...(pending.fast ? { fast: true } : {}),
-												},
-											});
-											applySessionView(epoch, sent);
-										})
-										.catch((cause) => {
-											if (epoch !== sessionEpoch.current) return;
-											setSession((current) => ({
-												...current,
-												connection: {
-													status: "failed",
-													provider: "claude",
-													message: publicFailureMessage(cause),
-												},
-											}));
-										})
-										.finally(() => {
-											setBusyChatIds((ids) => withoutBusyChat(ids, chatId));
-											void chats.refetch();
-										});
-								}}
 								onSend={(text, modelId, options) => {
 									const epoch = sessionEpoch.current;
 									const scope = sessionScope();
@@ -1257,15 +1092,6 @@ export function WorkspaceHome({
 											: {}),
 										...(options?.fast ? { fast: true } : {}),
 									};
-									if (
-										harnessId === "claude" &&
-										session.connection.status !== "authenticated"
-									) {
-										claudeLoginWindowRef.current = window.open(
-											"about:blank",
-											"ytimesy-claude-login",
-										);
-									}
 									setBusyChatIds((ids) => withBusyChat(ids, chatId));
 									setSession((current) => ({
 										...current,
@@ -1289,12 +1115,10 @@ export function WorkspaceHome({
 														"awaiting_device_code" &&
 													current.connection.verificationUrl
 												) {
-													revealClaudeLogin(current.connection.verificationUrl);
 													return;
 												}
 												if (current.connection.status !== "authenticated") {
 													pendingSendRef.current = null;
-													closeClaudeLoginWindow();
 													return;
 												}
 											}
@@ -1309,7 +1133,6 @@ export function WorkspaceHome({
 												);
 											if (!resolvedModel) {
 												pendingSendRef.current = null;
-												closeClaudeLoginWindow();
 												return;
 											}
 											const pending = pendingSendRef.current;
@@ -1329,14 +1152,11 @@ export function WorkspaceHome({
 												next.connection.status === "awaiting_device_code" &&
 												next.connection.verificationUrl
 											) {
-												revealClaudeLogin(next.connection.verificationUrl);
 												return;
 											}
 											pendingSendRef.current = null;
-											closeClaudeLoginWindow();
 										} catch (cause) {
 											pendingSendRef.current = null;
-											closeClaudeLoginWindow();
 											if (epoch !== sessionEpoch.current) return;
 											setSession((current) => ({
 												...current,
@@ -1380,7 +1200,7 @@ export function WorkspaceHome({
 								projectPickerOpen={projectPickerOpen}
 								onProjectPickerOpenChange={setProjectPickerOpen}
 							/>
-							{projects.error && (
+							{projects.error && !projects.data && (
 								<p role="alert">
 									Unable to load projects.{" "}
 									<button type="button" onClick={() => void projects.refetch()}>
@@ -1403,10 +1223,11 @@ export function WorkspaceHome({
 					</section>
 					<div className="inspector-frame">
 						<WorkspaceInspector
+							key={activeSessionId ?? "new-session"}
 							collapsed={!inspectorOpen}
 							activeView={inspectorView}
 							onActiveViewChange={(view) => {
-								if (view !== "side" && view !== "tasks") setToolsView(view);
+								if (view !== "side" && view !== "overview") setToolsView(view);
 								setInspectorView(view);
 							}}
 							fileChanges={fileChanges}
@@ -1420,18 +1241,23 @@ export function WorkspaceHome({
 							sideChatOpen={sideChatOpen}
 							onNewSideChat={openSideChat}
 							onCloseSideChat={closeSideChat}
-							tasks={
-								activeSessionId ? (
-									<TaskPanel
-										tasks={agentTasks.data ?? []}
-										rootSessionId={activeSessionId}
-										busy={taskMutationBusy}
-										onCreate={createAgentTask}
-										onEdit={editAgentTask}
-										onStart={launchAgentTask}
-										onWrapUp={askAgentTaskToWrapUp}
-									/>
-								) : null
+							overview={
+								<WorkspaceOverview
+									tasks={agentTasks.data ?? []}
+									items={session.items}
+									changes={fileChanges}
+									repository={selectedProject?.fullName}
+									desktop={desktop}
+									onOpen={openInspector}
+									pullRequests={listedPullRequests.filter((pr) => {
+										const workspaceId = sidebarChats.find(
+											(chat) => chat.id === activeSessionId,
+										)?.workspaceId;
+										return workspaceId
+											? pr.head === workspacePublicationBranch(workspaceId)
+											: false;
+									})}
+								/>
 							}
 							sideChat={
 								<SideChatPanel

@@ -1,3 +1,4 @@
+import { posixShellQuoted } from "#/domain/posix-command";
 import { projectCheckoutPath } from "#/domain/project-checkout";
 import {
 	cloneSelectedProjectScript,
@@ -40,6 +41,8 @@ export async function prepareProjectCheckout(input: {
 	readonly home: string;
 	readonly onCloned?: (directory: string) => Promise<void>;
 	readonly onInstalled?: () => Promise<void>;
+	readonly install?: boolean;
+	readonly commit?: string;
 }) {
 	const directory = projectCheckoutPath(input.home, input.name);
 	const token = await githubInstallationAccessToken(input.installationId);
@@ -73,6 +76,21 @@ chmod 600 '${PROJECT_TOKEN_PATH}'`,
 		);
 	}
 	await input.onCloned?.(directory);
+	if (input.commit) {
+		if (!/^[a-f0-9]{40}$/i.test(input.commit))
+			throw new Error("Invalid repository revision.");
+		await runCheckoutCommand(
+			input.host,
+			`git -C ${posixShellQuoted(directory)} rev-parse HEAD`,
+			15_000,
+		).then((result) => {
+			if (result.stdout.trim() !== input.commit)
+				throw new Error(
+					"Repository moved during preparation. Retry the build.",
+				);
+		});
+	}
+	if (input.install === false) return directory;
 	const listing = await runCheckoutCommand(
 		input.host,
 		listLockfilesArgv(directory)[2],

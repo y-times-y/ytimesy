@@ -1,11 +1,12 @@
 import type { AgentAuthMode, AgentConnection } from "./agent-connection";
-import { claudeSessionRemembersSignIn } from "./claude-auth";
 import {
 	type AgentProvider,
 	type AgentProviderId,
 	agentProviderById,
 	offeredAgentProviders,
 } from "./agent-provider";
+import { claudeSessionRemembersSignIn } from "./claude-auth";
+import { parseModelRouteId } from "./model-connection";
 import { isTurnRunning, type SessionTurnStatus } from "./session-item";
 
 export type HarnessReadiness =
@@ -195,7 +196,8 @@ export function composerCanStartSignIn(input: {
 		input.harnessId === "codex" &&
 		input.connection.status === "disconnected" &&
 		input.snapshotAvailable
-	) return false;
+	)
+		return false;
 	if (input.connection.status === "awaiting_device_code") return false;
 	return input.harnessId === "claude" || input.harnessId === "codex";
 }
@@ -214,6 +216,11 @@ export function composerSendIsEnabled(input: {
 }): boolean {
 	if (input.busy || input.slashDraft || !input.draft.trim()) return false;
 	if (composerCanStartSignIn(input)) return true;
+	if (input.harnessId === "api")
+		return (
+			input.turnStatus !== "running" &&
+			parseModelRouteId(input.modelId) !== null
+		);
 	const harnessReady = selectedHarnessIsConnected(
 		input.connection,
 		input.harnessId,
@@ -250,7 +257,7 @@ export function harnessLoginShouldShow(input: {
 export function harnessRequiresAccountLogin(
 	harnessId: AgentProviderId,
 ): boolean {
-	return harnessId !== "opencode";
+	return harnessId === "codex" || harnessId === "claude";
 }
 
 function readyAccess(
@@ -310,6 +317,19 @@ function unsignedAccess(
 	apiKeyHint: string | null,
 	options: { readonly codexSnapshotAvailable?: boolean } = {},
 ): HarnessAccess {
+	if (provider.id === "api")
+		return {
+			provider,
+			readiness: "unsigned",
+			muted: true,
+			statusLabel: "Not connected",
+			summary: "Add an API connection in Settings and verify a model.",
+			subscriptionAction: null,
+			subscriptionActionLabel: null,
+			apiKeyHint: null,
+			userCode: null,
+			verificationUrl: null,
+		};
 	if (provider.id === "claude") {
 		return {
 			provider,

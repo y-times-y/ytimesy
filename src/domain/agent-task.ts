@@ -10,6 +10,16 @@ export type AgentTaskStatus =
 	| "idle"
 	| "done"
 	| "failed";
+
+export function shouldPollAgentTasks(
+	leadStatus: SessionTurnStatus,
+	tasks: readonly Pick<AgentTask, "status">[],
+): boolean {
+	return (
+		leadStatus === "running" ||
+		tasks.some((task) => task.status === "working" || task.status === "waiting")
+	);
+}
 export type AgentTaskPlacement = "shared" | "fresh";
 export type AgentTaskAccess = "read_only" | "read_write";
 export type AgentTaskExecution = "parallel" | "stacked";

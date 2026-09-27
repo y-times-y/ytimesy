@@ -1,0 +1,218 @@
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { PGlite } from "@electric-sql/pglite";
+import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { environmentRecipe } from "../src/domain/project-environment";
+import { MemoryWorkspaceRuntime } from "../src/server/adapters/workspace-runtime";
+import {
+	activateEnvironmentBuild,
+	claimEnvironmentBuild,
+	type EnvironmentBuildInput,
+	finishEnvironmentBuild,
+	provisionEnvironmentBuild,
+	verifyEnvironmentRepositories,
+} from "../src/server/services/environment-build";
+
+let db: PGlite;
+vi.mock("../src/server/adapters/project-secrets", () => ({
+	loadProjectSecretsForOwner: async () => [],
+}));
+vi.mock("../src/server/adapters/database", () => ({
+	database: () => ({
+		query: (sql: string, params: unknown[]) => db.query(sql, params),
+	}),
+}));
+const input: EnvironmentBuildInput = {
+	workspaceId: "22222222-2222-4222-8222-222222222222",
+	userId: "alice",
+	projectId: "11111111-1111-4111-8111-111111111111",
+	secretRevision: createHash("sha256").update("[]").digest("hex"),
+	inputHash: "tested-input",
+	baseSnapshotId: "tools-snapshot",
+	repositories: [
+		{
+			repositoryId: 1,
+			installationId: 1,
+			fullName: "org/web",
+			branch: "main",
+			commit: "a".repeat(40),
+		},
+	],
+};
+const repositories = input.repositories.map((repo) => ({
+	...repo,
+	directory: "/home/ubuntu/web",
+	recipe: environmentRecipe.parse({ verify: ["npm test"] }),
+}));
+
+beforeAll(async () => {
+	db = new PGlite();
+	await db.exec("create role anon; create role authenticated;");
+	for (const file of [
+		"20260913010000_enable_automatic_rls.sql",
+		"20260913193000_identity_and_projects.sql",
+		"20260913221500_workspaces_jobs_agent_accounts.sql",
+		"20260927210000_project_environments.sql",
+	])
+		await db.exec(await readFile(`supabase/migrations/${file}`, "utf8"));
+	await db.exec(`alter table workspace add column template_snapshot_id text, add column template_source_ref text, add column template_source_sha text;
+		insert into auth_user(id,name,email,"emailVerified") values ('alice','Alice','alice@test.invalid',true);
+		insert into project(id,user_id,repository_id,installation_id,full_name,branch) values('11111111-1111-4111-8111-111111111111','alice',1,1,'org/web','main');
+		insert into workspace(id,user_id,project_id,status,template_snapshot_id,provider_ref) values('${input.workspaceId}','alice','11111111-1111-4111-8111-111111111111','ready','previous-snapshot','previous-machine');`);
+});
+afterAll(() => db.close());
+
+it("preserves the last working snapshot when verification fails and pauses only the new builder", async () => {
+	const runtime = new MemoryWorkspaceRuntime({
+		exitCode: 1,
+		stdout: "sensitive-output",
+		stderr: "",
+	});
+	const id = await claimEnvironmentBuild(input);
+	await expect(claimEnvironmentBuild(input)).rejects.toThrow("already running");
+	const vm = await provisionEnvironmentBuild(input, id, runtime);
+	await expect(
+		verifyEnvironmentRepositories(input, vm, repositories, runtime),
+	).rejects.toThrow("verification failed");
+	await finishEnvironmentBuild(input, id, runtime);
+	const workspace = await db.query<{
+		template_snapshot_id: string;
+		status: string;
+	}>("select template_snapshot_id,status from workspace where id=$1", [
+		input.workspaceId,
+	]);
+	expect(workspace.rows[0]).toEqual({
+		template_snapshot_id: "previous-snapshot",
+		status: "ready",
+	});
+	expect(runtime.paused).toEqual([vm]);
+	const build = await db.query<{ status: string; error_message: string }>(
+		"select status,error_message from environment_build where id=$1",
+		[id],
+	);
+	expect(build.rows[0].status).toBe("failed");
+	expect(build.rows[0].error_message).not.toContain("sensitive-output");
+});
+
+it("activates a verified replacement atomically and keeps it ready during cleanup", async () => {
+	const runtime = new MemoryWorkspaceRuntime();
+	const id = await claimEnvironmentBuild(input);
+	const vm = await provisionEnvironmentBuild(input, id, runtime);
+	await verifyEnvironmentRepositories(input, vm, repositories, runtime);
+	const snapshot = await activateEnvironmentBuild(
+		input,
+		id,
+		vm,
+		repositories,
+		runtime,
+	);
+	await finishEnvironmentBuild(input, id, runtime);
+	const workspace = await db.query<{
+		template_snapshot_id: string;
+		provider_ref: string;
+	}>("select template_snapshot_id,provider_ref from workspace where id=$1", [
+		input.workspaceId,
+	]);
+	expect(workspace.rows[0]).toEqual({
+		template_snapshot_id: snapshot,
+		provider_ref: vm,
+	});
+	expect(runtime.paused).toEqual([vm]);
+	const build = await db.query<{ status: string }>(
+		"select status from environment_build where id=$1",
+		[id],
+	);
+	expect(build.rows[0].status).toBe("ready");
+});
+
+it("reclaims only expired builds and pauses their builder before a retry", async () => {
+	const runtime = new MemoryWorkspaceRuntime();
+	const abandoned = await claimEnvironmentBuild(input, runtime);
+	const vm = await provisionEnvironmentBuild(input, abandoned, runtime);
+	await db.query(
+		"update environment_build set created_at=now()-interval '71 minutes' where id=$1",
+		[abandoned],
+	);
+	const retry = await claimEnvironmentBuild(input, runtime);
+	expect(retry).not.toBe(abandoned);
+	expect(runtime.paused).toEqual([vm]);
+	await expect(claimEnvironmentBuild(input, runtime)).rejects.toThrow(
+		"already running",
+	);
+	await finishEnvironmentBuild(input, retry, runtime);
+});
+
+it("does not activate a snapshot with a stale secret revision", async () => {
+	const runtime = new MemoryWorkspaceRuntime();
+	await expect(
+		activateEnvironmentBuild(
+			{ ...input, secretRevision: "outdated" },
+			"unused",
+			"vm",
+			repositories,
+			runtime,
+		),
+	).rejects.toThrow("secrets changed");
+	expect(runtime.snapshots.size).toBe(0);
+});
+
+it("records failed baseline checks without blocking activation or storing command output", async () => {
+	const runtime = new MemoryWorkspaceRuntime();
+	const exec = vi.spyOn(runtime, "exec");
+	exec.mockResolvedValueOnce({
+		exitCode: 2,
+		stdout: "secret-output",
+		stderr: "",
+	});
+	const checked = await verifyEnvironmentRepositories(
+		input,
+		"vm",
+		[
+			{
+				...repositories[0],
+				recipe: environmentRecipe.parse({ checks: ["npm run typecheck"] }),
+			},
+		],
+		runtime,
+	);
+	expect(checked[0].checkResults).toEqual([
+		{ command: "npm run typecheck", exitCode: 2 },
+	]);
+	expect(JSON.stringify(checked)).not.toContain("secret-output");
+	const id = await claimEnvironmentBuild(input, runtime);
+	const vm = await provisionEnvironmentBuild(input, id, runtime);
+	const write = vi.spyOn(runtime, "writeTextFile");
+	await activateEnvironmentBuild(input, id, vm, checked, runtime);
+	expect(
+		write.mock.calls.find(
+			(call) => call[1] === "/tmp/ytimesy-environment.json",
+		)?.[2],
+	).toContain('"exitCode":2');
+	await finishEnvironmentBuild(input, id, runtime);
+});
+
+it("permits installed projects without scripts but keeps infrastructure failures fatal", async () => {
+	const runtime = new MemoryWorkspaceRuntime();
+	await expect(
+		verifyEnvironmentRepositories(
+			input,
+			"vm",
+			[{ ...repositories[0], recipe: environmentRecipe.parse({}) }],
+			runtime,
+		),
+	).resolves.toHaveLength(1);
+	vi.spyOn(runtime, "exec").mockRejectedValue(new Error("VM disconnected"));
+	await expect(
+		verifyEnvironmentRepositories(
+			input,
+			"vm",
+			[
+				{
+					...repositories[0],
+					recipe: environmentRecipe.parse({ checks: ["npm test"] }),
+				},
+			],
+			runtime,
+		),
+	).rejects.toThrow("VM disconnected");
+});

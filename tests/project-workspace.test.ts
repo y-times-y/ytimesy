@@ -3,7 +3,6 @@ import {
 	blocksDuplicateProvision,
 	branchSwitchBlockedReason,
 	canStartPrepare,
-	workspacePrepareShowsStatus,
 	codexConnectBlockedReason,
 	harnessConnectBlockedReason,
 	needsMachineCreate,
@@ -12,6 +11,7 @@ import {
 	redactInfrastructure,
 	redactSecrets,
 	workspaceEnvironmentIsReady,
+	workspacePrepareShowsStatus,
 	workspaceSessionMachineRef,
 	workspaceSlug,
 } from "../src/domain/project-workspace";
@@ -109,7 +109,9 @@ it("does not name the workspace host in public errors", () => {
 	).not.toMatch(/Freestyle|style\.dev|noVNC|freestyle-vm|vnc\.html/i);
 	expect(
 		publicFailureMessage(
-			new Error("Desktop failed on https://ytimesy-desk-abc.style.dev/vnc.html"),
+			new Error(
+				"Desktop failed on https://ytimesy-desk-abc.style.dev/vnc.html",
+			),
 		),
 	).not.toMatch(/style\.dev|vnc\.html|noVNC|Freestyle/i);
 });

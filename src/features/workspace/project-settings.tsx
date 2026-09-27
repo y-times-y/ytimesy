@@ -3,8 +3,8 @@ import { useServerFn } from "@tanstack/react-start";
 import { Bot, Folder, User, X } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 import { offeredAgentProviders } from "#/domain/agent-provider";
-import { projectFolderName, type Project } from "#/domain/projects";
 import type { PublicProjectSecret } from "#/domain/project-secret";
+import { type Project, projectDisplayName } from "#/domain/projects";
 import type { UserAgentAccount } from "#/domain/user-agent-account";
 import {
 	accountDisplayName,
@@ -15,8 +15,9 @@ import {
 	settingsNavItems,
 } from "#/domain/workspace-settings";
 import { AddProjectForm } from "../projects/add-project-form";
-import { GithubMark } from "./github-mark";
 import { requestJson } from "../projects/api";
+import { ModelConnections } from "../sessions/model-connections";
+import { GithubMark } from "./github-mark";
 import {
 	deleteProjectSecretFn,
 	listProjectSecretsFn,
@@ -41,6 +42,7 @@ const sectionIcon = {
 } as const;
 
 export function ProjectSettings({
+	codexUsage,
 	open,
 	projectId,
 	projects,
@@ -50,6 +52,7 @@ export function ProjectSettings({
 	onClose,
 }: {
 	open: boolean;
+	codexUsage?: CodexUsage;
 	projectId?: string;
 	projects: readonly Project[];
 	selectedProject?: Project;
@@ -139,7 +142,10 @@ export function ProjectSettings({
 						) : null}
 						{section === "agents" ? (
 							<AgentsSection
-								account={account.data?.agentAccount ?? { status: "disconnected" }}
+								usage={codexUsage}
+								account={
+									account.data?.agentAccount ?? { status: "disconnected" }
+								}
 							/>
 						) : null}
 					</div>
@@ -211,7 +217,7 @@ function GithubSection({
 				<ul className="settings-project-list">
 					{projects.map((project) => (
 						<li key={project.id}>
-							<strong>{projectFolderName(project.fullName)}</strong>
+							<strong>{projectDisplayName(project)}</strong>
 							<span>
 								{project.fullName} · {project.branch}
 							</span>
@@ -232,9 +238,7 @@ function GithubSection({
 					{disconnect.isPending ? "Disconnecting…" : "Disconnect GitHub"}
 				</button>
 			) : null}
-			{disconnect.error ? (
-				<p role="alert">{disconnect.error.message}</p>
-			) : null}
+			{disconnect.error ? <p role="alert">{disconnect.error.message}</p> : null}
 		</>
 	);
 }
@@ -315,7 +319,7 @@ function ProjectSecretsSection({ project }: { project?: Project }) {
 
 	return (
 		<>
-			<h3>{projectFolderName(project.fullName)}</h3>
+			<h3>{projectDisplayName(project)}</h3>
 			<p className="settings-copy">
 				{project.fullName} on {project.branch}. Secrets become environment
 				variables for the agent. The browser only sees names and hints.
@@ -374,12 +378,19 @@ function ProjectSecretsSection({ project }: { project?: Project }) {
 	);
 }
 
-function AgentsSection({ account }: { account: UserAgentAccount }) {
+function AgentsSection({
+	account,
+	usage,
+}: {
+	account: UserAgentAccount;
+	usage?: CodexUsage;
+}) {
 	return (
 		<>
 			<h3>Agents</h3>
 			<p className="settings-copy">
-				Sign in and API keys stay in the composer harness picker.
+				Existing runtime sign-in stays in the composer. Manage model API
+				connections below.
 			</p>
 			<ul className="settings-harness-list">
 				{offeredAgentProviders().map((provider) => (
@@ -389,6 +400,11 @@ function AgentsSection({ account }: { account: UserAgentAccount }) {
 					</li>
 				))}
 			</ul>
+			<ModelConnections />
+			<CodexSubscriptionUsage usage={usage} />
 		</>
 	);
 }
+
+import type { CodexUsage } from "#/domain/codex-usage";
+import { CodexSubscriptionUsage } from "../sessions/codex-usage";

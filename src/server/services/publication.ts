@@ -2,6 +2,7 @@ import { Effect } from "effect";
 import { copiedAgentMachineRef } from "../../domain/agent-session";
 import { projectCheckoutFromFullName } from "../../domain/project-checkout";
 import { publicFailureMessage } from "../../domain/project-workspace";
+import { repositoriesForProject } from "../../domain/projects";
 import {
 	publicationBlockedReason,
 	publicationCoAuthor,
@@ -43,6 +44,7 @@ export function publishProject(
 	userId: string,
 	input: {
 		projectId: string;
+		repositoryFullName?: string;
 		sessionId?: string;
 		title: string;
 		body?: string;
@@ -58,7 +60,22 @@ export function publishProject(
 			const owned = await projectForOwner(userId, input.projectId);
 			if (!owned)
 				throw new Response("Project is not available.", { status: 404 });
-			return owned;
+			const repositories = repositoriesForProject(owned);
+			if (repositories.length > 1 && !input.repositoryFullName) {
+				throw new Error(
+					"Select the repository to publish for this multi-repository project.",
+				);
+			}
+			const selected = input.repositoryFullName
+				? repositories.find(
+						(repo) => repo.fullName === input.repositoryFullName,
+					)
+				: repositories[0];
+			if (!selected)
+				throw new Response("Repository is not part of this project.", {
+					status: 403,
+				});
+			return { ...owned, ...selected };
 		});
 		const checkout = projectCheckoutFromFullName({
 			fullName: project.fullName,

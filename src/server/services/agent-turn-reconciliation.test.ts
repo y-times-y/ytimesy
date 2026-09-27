@@ -6,9 +6,12 @@ import type { WorkspaceMachines } from "./workspace-machines";
 describe("running turn reconciliation", () => {
 	it("observes each persisted running session despite one provider failure", async () => {
 		const machines = {} as WorkspaceMachines;
-		const observe = vi.fn(async (_machines: WorkspaceMachines, scope: HarnessSessionScope) => {
-			if (scope.sessionId === "first") throw new Error("VM temporarily unavailable");
-		});
+		const observe = vi.fn(
+			async (_machines: WorkspaceMachines, scope: HarnessSessionScope) => {
+				if (scope.sessionId === "first")
+					throw new Error("VM temporarily unavailable");
+			},
+		);
 		const result = await reconcileRunningAgentTurns(machines, {
 			list: async () => [
 				{

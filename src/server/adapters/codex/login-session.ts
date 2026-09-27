@@ -214,7 +214,7 @@ ${START_LOGIN_SCRIPT}`,
 export function resumeCodexSession(
 	machines: WorkspaceMachines,
 	workspaceId: WorkspaceId,
-	options: { skipInitialTurn?: boolean } = {},
+	options: { skipInitialTurn?: boolean; diagnosisOnly?: boolean } = {},
 ): Effect.Effect<CodexLoginStatus> {
 	return Effect.gen(function* () {
 		yield* ensureGuestCliPin(machines, workspaceId);
@@ -253,6 +253,7 @@ export function resumeCodexSession(
 export CODEX_VERSION=${shellSingleQuote(codexVersion ?? "")}
 export CODEX_PREFERRED_MODEL=${shellSingleQuote(PREFERRED_CODEX_MODEL_ID)}
 export YTIMESY_SKIP_INITIAL_TURN=${options.skipInitialTurn ? "1" : "0"}
+export YTIMESY_SETUP_DIAGNOSIS=${options.diagnosisOnly ? "1" : "0"}
 export FORCE_RESTART=1
 ${START_LOGIN_SCRIPT}`,
 				30_000,
@@ -295,6 +296,7 @@ export function configureCodexExternalAuth(
 	machines: WorkspaceMachines,
 	workspaceId: WorkspaceId,
 	tokens: CodexExternalTokens,
+	options: { diagnosisOnly?: boolean } = {},
 ): Effect.Effect<CodexLoginStatus> {
 	return Effect.gen(function* () {
 		const existing = yield* Effect.tryPromise(() =>
@@ -323,7 +325,7 @@ rm -f "$HOME/.codex/auth.json"
 				"Could not isolate Codex credentials on this worker.",
 			);
 		}
-		if (existing) {
+		if (existing && !options.diagnosisOnly) {
 			const running = yield* Effect.tryPromise(() =>
 				machines.exec(
 					workspaceId,
@@ -337,6 +339,7 @@ rm -f "$HOME/.codex/auth.json"
 		}
 		return yield* resumeCodexSession(machines, workspaceId, {
 			skipInitialTurn: true,
+			diagnosisOnly: options.diagnosisOnly,
 		});
 	}).pipe(Effect.catchAll((cause) => Effect.succeed(failedFromCause(cause))));
 }
@@ -351,13 +354,6 @@ export function ensureCurrentLoginDaemon(
 ): Effect.Effect<void> {
 	return Effect.gen(function* () {
 		const expected = loginDaemonSourceHash();
-		yield* Effect.tryPromise(() =>
-			machines.writeTextFile(
-				workspaceId,
-				"/tmp/ytimesy-codex-login.py",
-				LOGIN_DAEMON_SOURCE,
-			),
-		);
 		const existing = yield* Effect.tryPromise(() =>
 			machines.readTextFile(workspaceId, LOGIN_DAEMON_HASH_PATH),
 		).pipe(Effect.catchAll(() => Effect.succeed("")));

@@ -2,6 +2,7 @@ import type { AgentSessionRecord } from "#/server/adapters/agent-sessions";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 const SESSION_LOCAL_PATHS = [
+	"/tmp/ytimesy-api-progress.json",
 	"/tmp/ytimesy-agent-task-tool-request.json",
 	"/tmp/ytimesy-agent-task-tool-response.json",
 	"/tmp/ytimesy-app-server.err",
@@ -78,10 +79,7 @@ export function sessionScopedWorkspaceMachines(
 			);
 		},
 		readTextFile: (workspaceId, path) =>
-			base.readTextFile(
-				workspaceId,
-				scopeSessionRuntimeText(path, sessionId),
-			),
+			base.readTextFile(workspaceId, scopeSessionRuntimeText(path, sessionId)),
 	};
 	unscopedMachines.set(scoped, base);
 	return scoped;

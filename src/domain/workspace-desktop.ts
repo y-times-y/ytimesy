@@ -92,8 +92,7 @@ export function desktopInspectorPrompt(input: {
 		return {
 			title: "Desktop is running.",
 			description:
-				input.desktop.message ??
-				"You and the agent share this screen.",
+				input.desktop.message ?? "You and the agent share this screen.",
 			actionLabel: null,
 		};
 	}

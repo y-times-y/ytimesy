@@ -28,7 +28,7 @@ beforeAll(async () => {
 	await db.exec("create role anon; create role authenticated");
 	await db.exec("create table workspace(id uuid primary key)");
 	await db.exec(
-		"create table project(id uuid primary key,user_id text,repository_id bigint,installation_id bigint,full_name text,branch text)",
+		"create table project(id uuid primary key,user_id text,name text,repository_id bigint,installation_id bigint,full_name text,branch text); create table project_repository(project_id uuid,repository_id bigint,installation_id bigint,full_name text,branch text,position integer)",
 	);
 	await db.exec(
 		await readFile(
@@ -93,7 +93,11 @@ it("preserves the separate Claude project template path", async () => {
 		provisionSession,
 		snapshotEnvironment: vi.fn(async () => "sh-claude-combined"),
 		destroy: vi.fn(async () => undefined),
-		exec: vi.fn(async () => ({ exitCode: 0, stdout: "/home/ubuntu", stderr: "" })),
+		exec: vi.fn(async () => ({
+			exitCode: 0,
+			stdout: "/home/ubuntu",
+			stderr: "",
+		})),
 		writeTextFile: vi.fn(async () => undefined),
 		ensureRunning: vi.fn(async (vm) => vm),
 	} as unknown as WorkspaceMachines;

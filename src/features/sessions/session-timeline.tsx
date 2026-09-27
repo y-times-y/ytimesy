@@ -31,6 +31,7 @@ import { FileChangeCounts } from "./file-change-counts";
 import { FileMentionButton } from "./file-mention";
 import { LiveCollapsible } from "./live-collapsible";
 import { ShellCommandCode } from "./shell-command-code";
+import { TodoList } from "./todo-list";
 
 export function SessionTimeline({
 	items,
@@ -267,6 +268,7 @@ function SessionItemView({
 			);
 		}
 		case "plan":
+			if (item.todos) return <TodoList todos={item.todos} />;
 			return (
 				<details className="session-activity" data-kind="plan">
 					<summary>

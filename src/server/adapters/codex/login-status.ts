@@ -1,3 +1,4 @@
+import { type CodexUsage, parseCodexUsage } from "#/domain/codex-usage";
 import {
 	type ListedModel,
 	listedFastModeId,
@@ -40,6 +41,7 @@ export type CodexLoginStatus =
 	| {
 			readonly stage: "authenticated";
 			readonly authMode: "chatgpt";
+			readonly usage?: CodexUsage;
 			readonly planType: string | null;
 			readonly models: readonly ListedModel[];
 			readonly turn: CodexTurnResult | null;
@@ -104,6 +106,7 @@ export function parseCodexLoginStatus(
 			return {
 				stage: "authenticated",
 				authMode: "chatgpt",
+				usage: parseCodexUsage(parsed.usage),
 				planType: readString(parsed.planType) ?? null,
 				models: listedModels(parsed.models),
 				turn,

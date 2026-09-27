@@ -1,7 +1,7 @@
 import { Effect } from "effect";
 import { guestCliPinSealScript } from "#/domain/guest-cli-pin";
-import { posixShellQuoted } from "#/domain/posix-command";
 import type { WorkspaceId } from "#/domain/ids";
+import { posixShellQuoted } from "#/domain/posix-command";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
 
 export function ensureGuestCliPin(

@@ -72,14 +72,13 @@ export function injectProjectSecrets(
 ): Effect.Effect<readonly string[]> {
 	return Effect.tryPromise(async () => {
 		if (!scope.projectId) return [];
-		const stored = await loadProjectSecretsForOwner(
+		const environment = await loadProjectSecretEnvironment(
 			scope.userId,
 			scope.projectId,
 		);
-		const masterKey = await loadSecretMasterKey();
-		const secrets = stored.map((record) => ({
-			name: record.name,
-			value: decryptSecret(masterKey, record.encrypted),
+		const secrets = Object.entries(environment).map(([name, value]) => ({
+			name,
+			value,
 		}));
 		const home = await guestHome(machines, workspaceId);
 		const path = agentSecretsEnvPath(home);
@@ -95,6 +94,31 @@ export function injectProjectSecrets(
 		);
 		return secrets.map((secret) => secret.name);
 	}).pipe(Effect.catchAll(() => Effect.succeed([])));
+}
+
+export async function loadProjectSecretEnvironment(
+	userId: string,
+	projectId: string,
+	names?: readonly string[],
+): Promise<Record<string, string>> {
+	if (!(await projectForOwner(userId, projectId)))
+		throw new Error("Project is not available.");
+	const stored = await loadProjectSecretsForOwner(userId, projectId);
+	if (names?.some((name) => !stored.some((secret) => secret.name === name)))
+		throw new Error(
+			"A required build secret is missing. Add it in project settings.",
+		);
+	const selected = names
+		? stored.filter((secret) => names.includes(secret.name))
+		: stored;
+	if (!selected.length) return {};
+	const masterKey = await loadSecretMasterKey();
+	return Object.fromEntries(
+		selected.map((secret) => [
+			secret.name,
+			decryptSecret(masterKey, secret.encrypted),
+		]),
+	);
 }
 
 async function guestHome(

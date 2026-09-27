@@ -1,50 +1,53 @@
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Effect } from "effect";
+import type { EnvironmentModel } from "#/domain/environment-model";
+import { claimApiTurn, expireApiTurnLeases } from "../adapters/api-turns";
 import { closeDatabase } from "../adapters/database";
 import { readFreestyleApiKey } from "../adapters/freestyle/api-key";
 import { createFreestyleWorkspaceMachines } from "../adapters/freestyle/workspace-machines";
-import { workspaceRuntimeFromEnv } from "../adapters/freestyle/workspace-runtime";
+import { applyProjectEnvironment } from "../adapters/rigkit/apply";
+import { listReadyWorkspaceIds } from "../adapters/workspaces";
 import { deliverAgentTaskEvents } from "../services/agent-task-event-delivery";
 import { reconcileRunningAgentTurns } from "../services/agent-turn-reconciliation";
 import { reconcileCodexRefreshRequests } from "../services/codex-refresh-reconciliation";
-import { runWorkspacePreparation } from "./prepare-workspace";
+import { runApiTurn } from "./api-turn";
 import {
 	AGENT_TASK_EVENT_QUEUE,
 	jobQueue,
 	PREPARE_WORKSPACE_QUEUE,
 	REFRESH_WORKSPACE_QUEUE,
 } from "./queue";
-import {
-	readyWorkspaceIdsToRefresh,
-	refreshWorkspaceSnapshot,
-} from "./refresh-workspace";
 
-const runtime = workspaceRuntimeFromEnv();
 let turnSweep: ReturnType<typeof setInterval> | undefined;
 let codexRefreshSweep: ReturnType<typeof setInterval> | undefined;
+let apiTurnSweep: ReturnType<typeof setInterval> | undefined;
 
 export async function startWorkspaceWorker() {
 	const queue = await jobQueue("worker");
 	const taskMachines = createFreestyleWorkspaceMachines(
 		await Effect.runPromise(readFreestyleApiKey()),
 	);
-	await queue.work<{ workspaceId: string }>(
-		PREPARE_WORKSPACE_QUEUE,
-		{ localConcurrency: 2 },
-		async ([job]) => {
-			await runWorkspacePreparation(job.data.workspaceId, runtime);
-		},
-	);
+	await queue.work<{
+		workspaceId: string;
+		repairModel?: EnvironmentModel | null;
+	}>(PREPARE_WORKSPACE_QUEUE, { localConcurrency: 2 }, async ([job]) => {
+		await applyProjectEnvironment(
+			job.data.workspaceId,
+			true,
+			job.data.repairModel ?? null,
+		);
+	});
 	await queue.work<{ workspaceId?: string }>(
 		REFRESH_WORKSPACE_QUEUE,
 		{ localConcurrency: 1 },
 		async ([job]) => {
+			if (process.env.YTIMESY_ENVIRONMENT_AUTO_REFRESH === "false") return;
 			if (job.data.workspaceId) {
-				await refreshWorkspaceSnapshot(job.data.workspaceId, runtime);
+				await applyProjectEnvironment(job.data.workspaceId);
 				return;
 			}
-			for (const workspaceId of await readyWorkspaceIdsToRefresh()) {
+			for (const workspaceId of await listReadyWorkspaceIds()) {
 				await queue.send(
 					REFRESH_WORKSPACE_QUEUE,
 					{ workspaceId },
@@ -61,7 +64,9 @@ export async function startWorkspaceWorker() {
 		},
 	);
 	try {
-		await queue.schedule(REFRESH_WORKSPACE_QUEUE, "0 * * * *", {});
+		if (process.env.YTIMESY_ENVIRONMENT_AUTO_REFRESH === "false")
+			await queue.unschedule(REFRESH_WORKSPACE_QUEUE);
+		else await queue.schedule(REFRESH_WORKSPACE_QUEUE, "0 * * * *", {});
 	} catch {
 		// Hourly check is already registered for this queue.
 	}
@@ -86,6 +91,31 @@ export async function startWorkspaceWorker() {
 	turnSweep = setInterval(() => void reconcile(), 2_000);
 	turnSweep.unref();
 	void reconcile();
+	let apiClaiming = false;
+	let apiRunning = 0;
+	const runPendingApiTurn = async () => {
+		if (apiClaiming || apiRunning >= 2) return;
+		apiClaiming = true;
+		try {
+			await expireApiTurnLeases();
+			const turn = await claimApiTurn();
+			if (turn) {
+				apiRunning++;
+				void runApiTurn(taskMachines, turn)
+					.catch(() => {})
+					.finally(() => {
+						apiRunning--;
+					});
+			}
+		} catch {
+			/* A later sweep retries database outages; running turns are never replayed. */
+		} finally {
+			apiClaiming = false;
+		}
+	};
+	if (apiTurnSweep) clearInterval(apiTurnSweep);
+	apiTurnSweep = setInterval(() => void runPendingApiTurn(), 1000);
+	apiTurnSweep.unref();
 	let refreshingCodex = false;
 	const refreshCodex = async () => {
 		if (refreshingCodex) return;
@@ -113,6 +143,7 @@ if (
 	console.info("ytimesy workspace worker is running.");
 	const stop = async () => {
 		if (turnSweep) clearInterval(turnSweep);
+		if (apiTurnSweep) clearInterval(apiTurnSweep);
 		if (codexRefreshSweep) clearInterval(codexRefreshSweep);
 		await queue.stop({ graceful: true, timeout: 15000 });
 		await closeDatabase();

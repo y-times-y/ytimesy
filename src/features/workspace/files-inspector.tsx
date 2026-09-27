@@ -1,14 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { ChevronRight } from "lucide-react";
-import { lazy, Suspense, useEffect, useState } from "react";
+import { ChevronRight, PanelRightClose, PanelRightOpen } from "lucide-react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { fileBasename } from "#/domain/file-kind";
 import { filePreviewKind } from "#/domain/file-preview";
-import {
-	FilePreview,
-	PreviewModeSwitch,
-	WorkspaceImagePreview,
-} from "./file-preview";
 import type { FileChangeEntry } from "#/domain/session-item";
 import { fileEditorSaveShortcut } from "#/domain/workspace-explorer";
 import {
@@ -22,10 +17,15 @@ import {
 import { FileTypeIcon } from "../sessions/file-type-icon";
 import {
 	listWorkspaceExplorerFn,
-	readWorkspaceSourceFn,
 	readWorkspacePreviewFn,
+	readWorkspaceSourceFn,
 	writeWorkspaceSourceFn,
 } from "./explorer.fn";
+import {
+	FilePreview,
+	PreviewModeSwitch,
+	WorkspaceImagePreview,
+} from "./file-preview";
 
 const SourceEditor = lazy(() =>
 	import("./source-editor").then((module) => ({
@@ -49,6 +49,8 @@ export function FilesInspector({
 	active?: boolean;
 }) {
 	const [drafts, setDrafts] = useState<Record<string, string>>({});
+	const [treeOpen, setTreeOpen] = useState(true);
+	const filesRef = useRef<HTMLElement>(null);
 	const listExplorer = useServerFn(listWorkspaceExplorerFn);
 	const readSource = useServerFn(readWorkspaceSourceFn);
 	const readPreview = useServerFn(readWorkspacePreviewFn);
@@ -87,45 +89,68 @@ export function FilesInspector({
 			filePreviewKind(activePath ?? "") !== "image",
 	});
 	return (
-		<section className="files-inspector" aria-label="Files">
-			<FileSourcePreview
-				key={activePath}
-				path={activePath}
-				text={source.data?.text ?? null}
-				pending={source.isFetching}
-				onRetry={() => {
-					void explorer.refetch();
-					void source.refetch();
-				}}
-				draft={activePath ? drafts[activePath] : undefined}
-				projectId={projectId}
-				sessionId={sessionId}
-				onDraftChange={(path, next, saved) => {
-					setDrafts((current) => {
-						if (next === saved) {
-							const { [path]: _cleared, ...rest } = current;
-							return rest;
-						}
-						return { ...current, [path]: next };
-					});
-				}}
-			/>
-			<nav className="file-tree" aria-label="Workspace files">
-				{tree.length === 0 ? (
-					<p className="file-tree-empty">
-						{explorer.isPending
-							? "Loading files…"
-							: "The workspace tree will appear here."}
-					</p>
-				) : (
-					<FileTreeNodes
-						nodes={tree}
-						depth={0}
-						selectedPath={activePath}
-						onSelectPath={onSelectPath}
-					/>
-				)}
-			</nav>
+		<section ref={filesRef} className="files-inspector" aria-label="Files">
+			<div className="files-toolbar">
+				<button
+					type="button"
+					aria-label={treeOpen ? "Hide file tree" : "Show file tree"}
+					title={treeOpen ? "Hide file tree" : "Show file tree"}
+					aria-expanded={treeOpen}
+					onClick={() => setTreeOpen((open) => !open)}
+				>
+					{treeOpen ? (
+						<PanelRightClose size={16} />
+					) : (
+						<PanelRightOpen size={16} />
+					)}
+				</button>
+			</div>
+			<div className="files-content">
+				<FileSourcePreview
+					key={activePath}
+					path={activePath}
+					text={source.data?.text ?? null}
+					pending={source.isFetching}
+					onRetry={() => {
+						void explorer.refetch();
+						void source.refetch();
+					}}
+					draft={activePath ? drafts[activePath] : undefined}
+					projectId={projectId}
+					sessionId={sessionId}
+					onDraftChange={(path, next, saved) => {
+						setDrafts((current) => {
+							if (next === saved) {
+								const { [path]: _cleared, ...rest } = current;
+								return rest;
+							}
+							return { ...current, [path]: next };
+						});
+					}}
+				/>
+				{treeOpen ? (
+					<nav className="file-tree" aria-label="Workspace files">
+						{tree.length === 0 ? (
+							<p className="file-tree-empty">
+								{explorer.isPending
+									? "Loading files…"
+									: "The workspace tree will appear here."}
+							</p>
+						) : (
+							<FileTreeNodes
+								nodes={tree}
+								depth={0}
+								selectedPath={activePath}
+								onSelectPath={(path) => {
+									onSelectPath(path);
+									if (filesRef.current && filesRef.current.clientWidth <= 600)
+										setTreeOpen(false);
+								}}
+							/>
+						)}
+					</nav>
+				) : null}
+			</div>
 		</section>
 	);
 }

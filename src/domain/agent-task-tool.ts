@@ -62,10 +62,10 @@ export function taskToolString(
 export function taskToolHarness(
 	arguments_: Record<string, unknown>,
 	fallback: AgentProviderId,
-): "codex" | "claude" {
+): "codex" | "claude" | "api" {
 	const value = taskToolString(arguments_, "harness");
-	if (value === "codex" || value === "claude") return value;
-	return fallback === "claude" ? "claude" : "codex";
+	if (value === "codex" || value === "claude" || value === "api") return value;
+	return fallback === "claude" || fallback === "api" ? fallback : "codex";
 }
 
 export function taskToolPlacement(

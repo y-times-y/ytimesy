@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { WorkspaceId } from "#/domain/ids";
 import {
-	scopeSessionRuntimeText,
 	machinesForAgentSession,
+	scopeSessionRuntimeText,
 	sessionRuntimeRoot,
 	sessionScopedWorkspaceMachines,
 } from "./session-workspace-machines";

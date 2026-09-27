@@ -1,5 +1,6 @@
-import { Plus, X } from "lucide-react";
-import type { ReactNode } from "react";
+import { ListTodo, Plus, X } from "lucide-react";
+import { DropdownMenu } from "radix-ui";
+import { type ReactNode, useEffect, useState } from "react";
 import type { FileChangeEntry } from "#/domain/session-item";
 import type { WorkspaceDesktop } from "#/domain/workspace-desktop";
 import { DesktopInspector } from "./desktop-inspector";
@@ -8,7 +9,7 @@ import { FilesInspector } from "./files-inspector";
 import { TerminalInspector } from "./terminal-inspector";
 
 export type ToolsView = "files" | "diff" | "terminal" | "desktop";
-export type InspectorView = ToolsView | "tasks" | "side";
+export type InspectorView = ToolsView | "overview" | "side";
 
 const views = {
 	files: {
@@ -50,7 +51,7 @@ export function WorkspaceInspector({
 	onNewSideChat,
 	onCloseSideChat,
 	sideChat,
-	tasks,
+	overview,
 }: {
 	collapsed: boolean;
 	activeView: InspectorView;
@@ -67,10 +68,19 @@ export function WorkspaceInspector({
 	onNewSideChat: () => void;
 	onCloseSideChat: () => void;
 	sideChat: ReactNode;
-	tasks: ReactNode;
+	overview: ReactNode;
 }) {
+	const [openedViews, setOpenedViews] = useState<ToolsView[]>([]);
+	useEffect(() => {
+		if (activeView !== "overview" && activeView !== "side")
+			setOpenedViews((current) =>
+				current.includes(activeView) ? current : [...current, activeView],
+			);
+	}, [activeView]);
 	const currentView =
-		activeView === "side" || activeView === "tasks" ? null : views[activeView];
+		activeView === "side" || activeView === "overview"
+			? null
+			: views[activeView];
 	return (
 		<aside
 			id="workspace-inspector"
@@ -79,58 +89,102 @@ export function WorkspaceInspector({
 			inert={collapsed}
 			aria-hidden={collapsed}
 		>
-			<div className="inspector-tabs">
-				{(Object.keys(views) as ToolsView[]).map((view) => (
+			<div className="inspector-toolbar">
+				<div className="inspector-tabs">
 					<button
 						type="button"
-						key={view}
-						aria-pressed={activeView === view}
-						onClick={() => onActiveViewChange(view)}
+						aria-pressed={activeView === "overview"}
+						onClick={() => onActiveViewChange("overview")}
 					>
-						{views[view].label}
+						<ListTodo size={16} />
+						Overview
 					</button>
-				))}
-				<button
-					type="button"
-					aria-pressed={activeView === "tasks"}
-					onClick={() => onActiveViewChange("tasks")}
-				>
-					Tasks
-				</button>
-				{sideChatOpen ? (
-					<div
-						className="inspector-side-tab"
-						data-active={activeView === "side"}
-					>
-						<button
-							type="button"
-							aria-pressed={activeView === "side"}
-							onClick={() => onActiveViewChange("side")}
+					{openedViews.map((view) => (
+						<div
+							className="inspector-side-tab"
+							key={view}
+							data-active={activeView === view}
 						>
-							New Side Chat
-						</button>
-						<button
-							type="button"
-							className="inspector-side-close"
-							aria-label="Close side chat"
-							onClick={onCloseSideChat}
+							<button
+								type="button"
+								key={view}
+								aria-pressed={activeView === view}
+								onClick={() => onActiveViewChange(view)}
+							>
+								{views[view].label}
+							</button>
+							<button
+								type="button"
+								className="inspector-side-close"
+								aria-label={`Close ${views[view].label}`}
+								onClick={() => {
+									setOpenedViews((current) =>
+										current.filter((item) => item !== view),
+									);
+									if (activeView === view) onActiveViewChange("overview");
+								}}
+							>
+								<X size={13} />
+							</button>
+						</div>
+					))}
+					{sideChatOpen ? (
+						<div
+							className="inspector-side-tab"
+							data-active={activeView === "side"}
 						>
-							<X size={14} />
-						</button>
-					</div>
-				) : null}
-				<button
-					type="button"
-					className="inspector-new-tab"
-					aria-label="New side chat"
-					title="New side chat"
-					onClick={onNewSideChat}
-				>
-					<Plus size={16} />
-				</button>
+							<button
+								type="button"
+								aria-pressed={activeView === "side"}
+								onClick={() => onActiveViewChange("side")}
+							>
+								New Side Chat
+							</button>
+							<button
+								type="button"
+								className="inspector-side-close"
+								aria-label="Close side chat"
+								onClick={onCloseSideChat}
+							>
+								<X size={14} />
+							</button>
+						</div>
+					) : null}
+					<DropdownMenu.Root>
+						<DropdownMenu.Trigger asChild>
+							<button
+								type="button"
+								className="inspector-new-tab"
+								aria-label="Open workspace view"
+							>
+								<Plus size={16} />
+							</button>
+						</DropdownMenu.Trigger>
+						<DropdownMenu.Portal>
+							<DropdownMenu.Content
+								className="inspector-view-menu"
+								sideOffset={6}
+								align="start"
+							>
+								{(Object.keys(views) as ToolsView[]).map((view) => (
+									<DropdownMenu.Item
+										key={view}
+										onSelect={() => onActiveViewChange(view)}
+									>
+										{views[view].label}
+									</DropdownMenu.Item>
+								))}
+								<DropdownMenu.Separator />
+								<DropdownMenu.Item onSelect={onNewSideChat}>
+									Side chat
+								</DropdownMenu.Item>
+							</DropdownMenu.Content>
+						</DropdownMenu.Portal>
+					</DropdownMenu.Root>
+				</div>
 			</div>
-			{activeView === "tasks" ? (
-				tasks
+			{activeView === "overview" ? (
+				overview
 			) : activeView === "side" ? (
 				sideChat
 			) : activeView === "files" ? (
@@ -149,15 +203,7 @@ export function WorkspaceInspector({
 					projectId={projectId}
 					sessionId={sessionId}
 				/>
-			) : activeView === "desktop" ? (
-				<DesktopInspector
-					desktop={desktop}
-					busy={desktopBusy}
-					projectId={projectId}
-					sessionId={sessionId}
-					onStart={onStartDesktop}
-				/>
-			) : activeView === "terminal" ? (
+			) : activeView === "desktop" ? null : activeView === "terminal" ? (
 				<TerminalInspector
 					key={`${projectId ?? ""}:${sessionId ?? ""}`}
 					projectId={projectId}
@@ -174,6 +220,27 @@ export function WorkspaceInspector({
 					<p>{currentView.description}</p>
 				</section>
 			) : null}
+			{(activeView === "desktop" || openedViews.includes("desktop")) && (
+				<div
+					key={`desktop:${projectId ?? ""}:${sessionId ?? ""}`}
+					style={{
+						display: activeView === "desktop" ? "flex" : "none",
+						flex: 1,
+						minHeight: 0,
+						minWidth: 0,
+						overflow: "hidden",
+					}}
+				>
+					<DesktopInspector
+						desktop={desktop}
+						busy={desktopBusy}
+						projectId={projectId}
+						sessionId={sessionId}
+						onStart={onStartDesktop}
+						active={!collapsed && activeView === "desktop"}
+					/>
+				</div>
+			)}
 		</aside>
 	);
 }

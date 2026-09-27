@@ -6,7 +6,37 @@ import {
 } from "./sidebar-pr";
 
 describe("sidebarChatPrNeedFromPullRequest", () => {
-	it("hides a clean open pull request", () => {
+	it.each([
+		[null, null],
+		[true, "unknown"],
+		[null, "clean"],
+		[true, "has_hooks"],
+	] as const)(
+		"does not infer readiness from %s / %s",
+		(mergeable, mergeableState) => {
+			expect(
+				sidebarChatPrNeedFromPullRequest({
+					draft: false,
+					state: "open",
+					merged: false,
+					mergeable,
+					mergeableState,
+				}),
+			).toBe("pending");
+		},
+	);
+	it("does not mark a draft with a clean merge as ready", () => {
+		expect(
+			sidebarChatPrNeedFromPullRequest({
+				draft: true,
+				state: "open",
+				merged: false,
+				mergeable: true,
+				mergeableState: "clean",
+			}),
+		).toBe("draft");
+	});
+	it("marks a clean open pull request ready", () => {
 		expect(
 			sidebarChatPrNeedFromPullRequest({
 				draft: false,
@@ -15,7 +45,7 @@ describe("sidebarChatPrNeedFromPullRequest", () => {
 				mergeable: true,
 				mergeableState: "clean",
 			}),
-		).toBeNull();
+		).toBe("ready");
 	});
 
 	it("marks merge conflicts, blocked reviews, and failed checks", () => {
@@ -69,7 +99,7 @@ describe("sidebarChatPrNeedFromPullRequest", () => {
 		).toBe("closed");
 	});
 
-	it("hides a merged pull request", () => {
+	it("keeps a merged pull request visible", () => {
 		expect(
 			sidebarChatPrNeedFromPullRequest({
 				draft: false,
@@ -78,12 +108,12 @@ describe("sidebarChatPrNeedFromPullRequest", () => {
 				mergeable: true,
 				mergeableState: "clean",
 			}),
-		).toBeNull();
+		).toBe("merged");
 	});
 });
 
 describe("sidebarChatPrMarkForWorkspace", () => {
-	it("only attaches a mark when that workspace branch needs attention", () => {
+	it("attaches both attention and ready marks to the matching workspace", () => {
 		const workspaceId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 		const head = workspacePublicationBranch(workspaceId);
 		expect(
@@ -123,6 +153,6 @@ describe("sidebarChatPrMarkForWorkspace", () => {
 					},
 				],
 			}),
-		).toBeNull();
+		).toMatchObject({ need: "ready", label: "Ready to merge" });
 	});
 });

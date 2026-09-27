@@ -4,15 +4,16 @@ import { Effect } from "effect";
 import {
 	type AgentProviderId,
 	DEFAULT_COMPOSER_HARNESS_ID,
+	parseRuntimeId as parseHarnessId,
 } from "#/domain/agent-provider";
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
+import { listProjects } from "#/server/adapters/projects";
 import { requireUser } from "#/server/auth/auth";
 import { hasManagedCodexAuth } from "#/server/auth/codex-managed-auth";
-import { parseHarnessId } from "#/server/secrets/harness-key-store";
+import { requireSameOrigin } from "#/server/http";
 import { WorkspaceMachineService } from "#/server/services/capabilities";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
 import {
-	completeClaudeWorkspaceAuth,
 	connectHarnessWorkspaceSession,
 	emptyHarnessSession,
 	type HarnessSessionScope,
@@ -53,6 +54,7 @@ async function requireScope(
 	sessionId?: string,
 	createNew?: boolean,
 ): Promise<HarnessSessionScope> {
+	requireSameOrigin(getRequest());
 	const user = await requireUser(getRequest().headers);
 	return { userId: user.id, projectId, harnessId, sessionId, createNew };
 }
@@ -99,18 +101,27 @@ export const getCodexSession = createServerFn({ method: "GET" })
 
 export const getWorkspaceBootstrap = createServerFn({ method: "GET" }).handler(
 	async () => {
-		let user;
+		let user: Awaited<ReturnType<typeof requireUser>>;
 		try {
 			user = await requireUser(getRequest().headers);
 		} catch (error) {
 			if (!(error instanceof Response) || error.status !== 401) throw error;
-			return { signedIn: false, session: emptyHarnessSession() };
+			return {
+				signedIn: false,
+				session: emptyHarnessSession(),
+				projects: undefined,
+			};
 		}
+		const [snapshotAvailable, projects] = await Promise.all([
+			hasManagedCodexAuth(user.id),
+			listProjects(user.id).catch(() => undefined),
+		]);
 		return {
 			signedIn: true,
+			projects,
 			session: {
 				...emptyHarnessSession(),
-				snapshotAvailable: await hasManagedCodexAuth(user.id),
+				snapshotAvailable,
 			},
 		};
 	},
@@ -127,39 +138,6 @@ export const connectCodexSession = createServerFn({ method: "POST" })
 		);
 		return runWithMachines((machines) =>
 			connectHarnessWorkspaceSession(machines, scope),
-		);
-	});
-
-export const completeClaudeSessionAuth = createServerFn({ method: "POST" })
-	.validator(
-		(data: {
-			code: string;
-			projectId?: string;
-			sessionId?: string;
-			createNew?: boolean;
-		}) => {
-			const code = data.code.trim();
-			if (!code) throw new Error("Paste the login code from Anthropic's page.");
-			return {
-				...optionalSessionInput({
-					projectId: data.projectId,
-					sessionId: data.sessionId,
-					createNew: data.createNew,
-					harnessId: "claude",
-				}),
-				code,
-			};
-		},
-	)
-	.handler(async ({ data }): Promise<PublicCodexSession> => {
-		const scope = await requireScope(
-			data.projectId,
-			"claude",
-			data.sessionId,
-			data.createNew,
-		);
-		return runWithMachines((machines) =>
-			completeClaudeWorkspaceAuth(machines, scope, data.code),
 		);
 	});
 

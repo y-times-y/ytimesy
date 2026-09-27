@@ -7,11 +7,11 @@ if command -v sudo >/dev/null 2>&1; then
   sudo -n rm -f /root/.codex/auth.json
 fi
 if [ -d /tmp/ytimesy-sessions ]; then
-  find /tmp/ytimesy-sessions -type f \( \
+  find /tmp/ytimesy-sessions -type f '(' \
     -name 'ytimesy-codex-external-tokens.json' -o \
     -name 'ytimesy-codex-refresh-request.json' -o \
     -name 'ytimesy-codex-refresh-response.json' \
-  \) -delete
+  ')' -delete
 fi
 test ! -e "$HOME/.codex/auth.json"
 `;

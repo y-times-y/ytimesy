@@ -1,5 +1,5 @@
-import { GUEST_INTERNET_FIREWALL } from "./proof-vm";
 import { CHEAP_BASE_SNAPSHOT } from "./product-vm";
+import { GUEST_INTERNET_FIREWALL } from "./proof-vm";
 
 export const JOB_WORKER_SLUG = "ytimesy-job-worker";
 export const JOB_WORKER_METADATA_PURPOSE = "ytimesy-job-worker";
@@ -24,9 +24,7 @@ export function jobWorkerCreateVmFields() {
 	};
 }
 
-export function jobWorkerIdleNeedsUpdate(
-	current: number | null | undefined,
-) {
+export function jobWorkerIdleNeedsUpdate(current: number | null | undefined) {
 	return current !== JOB_WORKER_IDLE_TIMEOUT_SECONDS;
 }
 
@@ -43,9 +41,7 @@ export function jobWorkerEnvFile(
 	return source
 		.split("\n")
 		.map((line) => {
-			const match = /^(DATABASE_URL|GITHUB_PRIVATE_KEY_PATH)=(.*)$/.exec(
-				line,
-			);
+			const match = /^(DATABASE_URL|GITHUB_PRIVATE_KEY_PATH)=(.*)$/.exec(line);
 			if (!match) return line;
 			const [, key, raw] = match;
 			const value = unquoteEnvValue(raw);

@@ -1,5 +1,6 @@
 import { Effect } from "effect";
 import { sharedDesktopDeveloperInstructions } from "#/domain/agent-desktop";
+import { PREPARED_ENVIRONMENT_INSTRUCTIONS } from "#/domain/environment-context";
 import { failureMessage } from "#/domain/failure-message";
 import type { WorkspaceId } from "#/domain/ids";
 import {
@@ -7,7 +8,11 @@ import {
 	projectCheckoutFromFullName,
 	projectCheckoutPath,
 } from "#/domain/project-checkout";
-import { projectFolderName, type Project } from "#/domain/projects";
+import {
+	type Project,
+	projectFolderName,
+	repositoriesForProject,
+} from "#/domain/projects";
 import {
 	sessionCloneBranch,
 	sessionWorkingBranch,
@@ -26,9 +31,10 @@ import {
 } from "#/server/adapters/freestyle/clone-project";
 import { authorizedRepository } from "#/server/adapters/github";
 import { githubInstallationAccessToken } from "#/server/adapters/github/installation-token";
+import { ensureGuestCliPin } from "#/server/adapters/guest-cli-pin";
 import { listProjects, projectForOwner } from "#/server/adapters/projects";
 import { githubAccessToken } from "#/server/auth/github-connection";
-import { ensureGuestCliPin } from "#/server/adapters/guest-cli-pin";
+import { startEnvironmentServices } from "./environment-services";
 import { injectProjectSecrets } from "./project-secrets";
 import type { DesktopScope } from "./workspace-desktop";
 import type { WorkspaceMachines } from "./workspace-machines";
@@ -43,6 +49,19 @@ import type { WorkspaceMachines } from "./workspace-machines";
  * stored in git remotes.
  */
 export function ensureProjectCheckout(
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+	checkout: ProjectCheckout | null,
+): Effect.Effect<string | null, Error> {
+	return Effect.gen(function* () {
+		for (const additional of checkout?.additionalRepositories ?? []) {
+			yield* ensureSingleProjectCheckout(machines, workspaceId, additional);
+		}
+		return yield* ensureSingleProjectCheckout(machines, workspaceId, checkout);
+	});
+}
+
+function ensureSingleProjectCheckout(
 	machines: WorkspaceMachines,
 	workspaceId: WorkspaceId,
 	checkout: ProjectCheckout | null,
@@ -145,12 +164,13 @@ export function writeDeveloperInstructions(
 	workspaceId: WorkspaceId,
 	cwd: string,
 	secretNames: readonly string[] = [],
+	repositories: readonly string[] = [],
 ): Effect.Effect<void> {
 	return Effect.tryPromise(() =>
 		machines.writeTextFile(
 			workspaceId,
 			DEVELOPER_INSTRUCTIONS_PATH,
-			`${sharedDesktopDeveloperInstructions({ cwd, secretNames })} If ${PROJECT_CONTEXT_PATH} exists, treat it as this project's shared briefing and sibling traces.\n`,
+			`${sharedDesktopDeveloperInstructions({ cwd, secretNames })} If ${PROJECT_CONTEXT_PATH} exists, treat it as this project's shared briefing and sibling traces. ${PREPARED_ENVIRONMENT_INSTRUCTIONS}\n${repositories.length > 1 ? `Project repositories (separate Git roots under the home directory): ${repositories.join(", ")}. Inspect each repository's instructions before editing it; commit and review each repository independently.\n` : ""}`,
 		),
 	).pipe(Effect.catchAll(() => Effect.void));
 }
@@ -167,7 +187,17 @@ export function loadTenantProjectCheckout(scope: {
 			? await projectForOwner(scope.userId, scope.projectId)
 			: ((await listProjects(scope.userId))[0] ?? null);
 		if (!project) return null;
-		return checkoutForProject(scope.userId, project);
+		const checkout = await checkoutForProject(scope.userId, project);
+		if (!checkout) return null;
+		const additionalRepositories = [];
+		for (const repository of repositoriesForProject(project).slice(1)) {
+			const additional = await checkoutForProject(scope.userId, {
+				...repository,
+				id: project.id,
+			});
+			if (additional) additionalRepositories.push(additional);
+		}
+		return { ...checkout, additionalRepositories };
 	}).pipe(Effect.catchAll(() => Effect.succeed(null)));
 }
 
@@ -219,11 +249,19 @@ export function preparePreparedGuest(
 			workspaceId,
 			scope,
 		);
+		yield* Effect.tryPromise(() =>
+			startEnvironmentServices(machines, workspaceId),
+		);
 		yield* writeDeveloperInstructions(
 			machines,
 			workspaceId,
 			cwd ?? "/home/ubuntu",
 			secretNames,
+			checkout
+				? [checkout, ...(checkout.additionalRepositories ?? [])].map(
+						(repo) => repo.fullName,
+					)
+				: [],
 		);
 	});
 }

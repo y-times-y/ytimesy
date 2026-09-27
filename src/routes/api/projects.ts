@@ -1,10 +1,13 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { Effect } from "effect";
-import { projectSelection } from "../../domain/projects";
+import { projectGroupSelection, projectSelection } from "../../domain/projects";
 import { listProjects } from "../../server/adapters/projects";
 import { requireUser } from "../../server/auth/auth";
 import { endpoint, requireSameOrigin } from "../../server/http";
-import { connectProject } from "../../server/services/projects";
+import {
+	connectProject,
+	connectProjectGroup,
+} from "../../server/services/projects";
 export const Route = createFileRoute("/api/projects")({
 	server: {
 		handlers: {
@@ -16,10 +19,12 @@ export const Route = createFileRoute("/api/projects")({
 				endpoint(async () => {
 					requireSameOrigin(request);
 					const user = await requireUser(request.headers);
-					const data = projectSelection.parse(await request.json());
-					const result = await Effect.runPromise(
-						Effect.either(connectProject(user.id, data)),
-					);
+					const body = await request.json();
+					const operation =
+						body && typeof body === "object" && "repositories" in body
+							? connectProjectGroup(user.id, projectGroupSelection.parse(body))
+							: connectProject(user.id, projectSelection.parse(body));
+					const result = await Effect.runPromise(Effect.either(operation));
 					if (result._tag === "Left") throw result.left.error;
 					return result.right;
 				}),

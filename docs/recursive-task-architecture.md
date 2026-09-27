@@ -122,7 +122,8 @@ the control plane does not invent a smaller fixed task-count limit.
 
 - `create_task` persists an editable draft without provisioning a machine or
   starting a model turn.
-- Drafts can be revised from the task panel or by the lead through `edit_task`.
+- The lead revises drafts through `edit_task`. The task panel is a read-only
+  progress overview; users steer delegation through chat, not task controls.
   Both paths validate the same stored task before execution.
 - `start_task` validates depth, placement, access, and stacked dependencies,
   binds the machine, starts the isolated prompt, and returns placement plus

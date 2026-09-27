@@ -89,9 +89,9 @@ describe("Claude Code login parsing", () => {
 		expect(claudeCliIsSignedIn("API key saved")).toBe(false);
 		expect(claudeCliIsSignedIn("Logged in as het@example.com")).toBe(true);
 		expect(claudeCliIsSignedIn("Login successful")).toBe(true);
-		expect(claudeCliIsSignedIn('{"loggedIn":true,"authMethod":"claude.ai"}')).toBe(
-			true,
-		);
+		expect(
+			claudeCliIsSignedIn('{"loggedIn":true,"authMethod":"claude.ai"}'),
+		).toBe(true);
 		expect(claudeCliIsSignedIn('{"loggedIn":false}')).toBe(false);
 	});
 
@@ -164,7 +164,7 @@ describe("Claude Code login parsing", () => {
 					"                                        'fable', 'opus', or 'sonnet') or a",
 					"                                        model's full name (e.g.",
 					"                                        'claude-fable-5').",
-					"      Comma or space-separated list of tool names to allow (e.g. \"Bash(git *)",
+					'      Comma or space-separated list of tool names to allow (e.g. "Bash(git *)',
 				].join("\n"),
 			),
 		).toEqual([
@@ -232,10 +232,8 @@ describe("Claude Code login parsing", () => {
 				{ id: "sonnet" },
 			]),
 		).toBe(true);
-		expect(
-			claudeListedModelsAreUsable([
-				{ id: 'e.g. "Bash(git *' },
-			]),
-		).toBe(false);
+		expect(claudeListedModelsAreUsable([{ id: 'e.g. "Bash(git *' }])).toBe(
+			false,
+		);
 	});
 });

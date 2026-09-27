@@ -2,6 +2,13 @@ import { type KeyboardEvent, useEffect, useRef } from "react";
 
 function fitDraftHeight(input: HTMLTextAreaElement) {
 	input.style.height = "auto";
+	if (!input.value) {
+		input.dataset.expanded = "false";
+		return;
+	}
+	if (input.value && input.scrollHeight > 36) {
+		input.dataset.expanded = "true";
+	}
 	input.style.height = `${input.scrollHeight}px`;
 }
 
@@ -23,6 +30,10 @@ export function TaskInput({
 	onKeyDown?: (event: KeyboardEvent<HTMLTextAreaElement>) => boolean;
 }) {
 	const inputRef = useRef<HTMLTextAreaElement>(null);
+	useEffect(() => {
+		const input = inputRef.current;
+		if (input && input.value === value) fitDraftHeight(input);
+	}, [value]);
 
 	useEffect(() => {
 		const input = inputRef.current;
@@ -48,9 +59,7 @@ export function TaskInput({
 				disabled={disabled}
 				onChange={(event) => {
 					onChange(event.currentTarget.value);
-					fitDraftHeight(event.currentTarget);
 				}}
-				onInput={(event) => fitDraftHeight(event.currentTarget)}
 				onKeyDown={(event) => {
 					if (onKeyDown?.(event)) return;
 					if (event.key === "Enter" && !event.shiftKey) {

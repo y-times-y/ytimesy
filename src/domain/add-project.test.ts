@@ -12,6 +12,47 @@ import {
 } from "./add-project";
 
 describe("add project", () => {
+	it("keeps named projects sharing a primary repository visible and searchable", () => {
+		const repository = {
+			installationId: 1,
+			repositoryId: 11,
+			fullName: "org/web",
+			defaultBranch: "main",
+		};
+		const projects = [
+			{ ...repository, id: "one", name: "Product one", branch: "main" },
+			{
+				...repository,
+				id: "two",
+				name: "Product two",
+				branch: "main",
+				repositories: [
+					{ ...repository, branch: "main" },
+					{
+						installationId: 1,
+						repositoryId: 12,
+						fullName: "org/api",
+						branch: "main",
+					},
+				],
+			},
+		];
+		const rows = projectPickerRows({
+			projects,
+			repositories: [repository],
+			query: "",
+		});
+		expect(
+			rows.filter((row) => row.project).map((row) => row.project?.id),
+		).toEqual(["one", "two"]);
+		expect(
+			projectPickerRows({
+				projects,
+				repositories: [repository],
+				query: "org/api",
+			}).map((row) => row.project?.id),
+		).toEqual(["two"]);
+	});
 	it("asks to connect GitHub only when it is not ready, then pick a repo", () => {
 		expect(
 			addProjectPhase({
@@ -31,7 +72,9 @@ describe("add project", () => {
 				githubReady: true,
 			}),
 		).toBe("choose");
-		expect(addProjectCopy("choose").description).toContain("ytimesy/");
+		expect(addProjectCopy("choose").description).toContain(
+			"Select repositories",
+		);
 	});
 
 	it("starts a Cursor-style ytimesy/slug-id branch when a repo is added", () => {

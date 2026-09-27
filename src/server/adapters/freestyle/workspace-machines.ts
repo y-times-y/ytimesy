@@ -72,12 +72,11 @@ export function createFreestyleWorkspaceMachines(
 
 		async snapshotAuthenticatedWorkspace(workspaceId, provider = "codex") {
 			try {
-				const created = await freestyle.vms.ref(workspaceId).snapshot(
-					privateAuthSnapshotFields(
-						provider,
-						randomBytes(4).toString("hex"),
-					),
-				);
+				const created = await freestyle.vms
+					.ref(workspaceId)
+					.snapshot(
+						privateAuthSnapshotFields(provider, randomBytes(4).toString("hex")),
+					);
 				if (created.snapshot.public) {
 					await freestyle.vms.snapshots
 						.delete(created.snapshotId)

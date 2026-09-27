@@ -1,3 +1,4 @@
+import type { AgentTodo } from "./agent-todos";
 import { SessionItemId } from "./ids";
 import {
 	fileChangesFromShellCommand,
@@ -41,6 +42,7 @@ export type PlanItem = {
 	readonly kind: "plan";
 	readonly id: SessionItemId;
 	readonly text: string;
+	readonly todos?: readonly AgentTodo[];
 };
 
 export type CommandExecutionItem = {

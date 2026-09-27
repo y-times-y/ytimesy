@@ -30,6 +30,7 @@ beforeAll(async () => {
 		"20260920010000_agent_account_per_provider.sql",
 		"20260921230000_agent_task_lifecycle.sql",
 		"20260921231000_agent_task_events.sql",
+		"20260927210000_project_environments.sql",
 	])
 		await db.exec(await readFile(`supabase/migrations/${file}`, "utf8"));
 	await db.exec(
@@ -59,7 +60,7 @@ describe("personal project ownership", () => {
 		const result = await db.query<{ relname: string; relrowsecurity: boolean }>(
 			"select relname,relrowsecurity from pg_class where relnamespace='public'::regnamespace and relkind='r'",
 		);
-		expect(result.rows).toHaveLength(17);
+		expect(result.rows).toHaveLength(19);
 		expect(result.rows.every((row) => row.relrowsecurity)).toBe(true);
 		for (const role of ["anon", "authenticated"]) {
 			for (const table of ["project", "auth_email_outbox", "product_setting"]) {

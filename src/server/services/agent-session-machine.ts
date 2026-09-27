@@ -57,8 +57,8 @@ import {
 	saveTemplateSnapshot,
 	workspaceForProject,
 } from "#/server/adapters/workspaces";
-import type { WorkspaceMachines } from "./workspace-machines";
 import { providerProjectTemplateSnapshot } from "./provider-project-template";
+import type { WorkspaceMachines } from "./workspace-machines";
 
 async function resolveAgentSessionRecord(input: {
 	readonly userId: string;

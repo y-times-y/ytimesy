@@ -1,5 +1,5 @@
-import type { WorkspaceRuntime } from "#/server/adapters/workspace-runtime";
 import { REMOVE_CODEX_CREDENTIAL_FILES } from "#/server/adapters/codex/credential-files";
+import type { WorkspaceRuntime } from "#/server/adapters/workspace-runtime";
 
 /** Legacy project VMs may have been cloned from a login image. */
 export async function removeCodexCredentialsFromProjectTemplate(

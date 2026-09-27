@@ -136,7 +136,12 @@ export function guestNodePath() {
     . "$NVM_DIR/nvm.sh"
     break
   fi
-done`;
+done
+mkdir -p "$HOME/.local/bin"
+export PATH="$HOME/.local/bin:$PATH"
+if command -v corepack >/dev/null 2>&1; then
+  corepack enable --install-directory "$HOME/.local/bin"
+fi`;
 }
 
 export function listLockfilesArgv(directory: string) {

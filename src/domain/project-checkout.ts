@@ -5,6 +5,7 @@ export type ProjectCheckout = {
 	readonly branch: string;
 	readonly workingBranch: string;
 	readonly installationId: string;
+	readonly additionalRepositories?: ProjectCheckout[];
 };
 
 export function projectCheckoutPath(home: string, repoName: string): string {

@@ -2,29 +2,29 @@ import { describe, expect, it } from "vitest";
 import {
 	backgroundTurnPollChatIds,
 	chatsListedInSidebar,
+	chatsWithPinnedFirst,
 	composerBusyForOpenChat,
 	composerHarnessForChat,
 	listedChatHarnessId,
 	listedChatModelId,
-	rememberedClaudeModelIdFromChats,
 	listedChatTurnStatus,
 	newChatIsActive,
+	projectFolderIsExpanded,
+	rememberedClaudeModelIdFromChats,
 	selectedChatIdAfterDelete,
 	sessionViewAppliesToOpenChat,
 	sidebarChatAttention,
 	sidebarChatIsRunning,
-	projectFolderIsExpanded,
 	sidebarChatsEmptyCopy,
 	sidebarHasRunningChat,
-	toggleCollapsedProjectIds,
-	withProjectExpanded,
 	sidebarIsPinnedInStorage,
 	sidebarPinnedStorageValue,
-	chatsWithPinnedFirst,
+	toggleCollapsedProjectIds,
 	togglePinnedChatIds,
 	withBusyChat,
 	withChatTurnStatus,
 	withoutBusyChat,
+	withProjectExpanded,
 } from "./sidebar-chats";
 
 describe("chatsListedInSidebar", () => {
@@ -124,7 +124,11 @@ describe("pinned chats", () => {
 		expect(togglePinnedChatIds(["b"], "b")).toEqual([]);
 		expect(
 			chatsWithPinnedFirst(
-				[{ id: "a", title: "a" }, { id: "b", title: "b" }, { id: "c", title: "c" }],
+				[
+					{ id: "a", title: "a" },
+					{ id: "b", title: "b" },
+					{ id: "c", title: "c" },
+				],
 				["c", "b"],
 			).map((chat) => chat.id),
 		).toEqual(["b", "c", "a"]);

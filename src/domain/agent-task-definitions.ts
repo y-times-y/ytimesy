@@ -16,7 +16,7 @@ export const agentTaskToolDefinitions = [
 					type: "string",
 				},
 				harness: {
-					enum: ["codex", "claude"],
+					enum: ["codex", "claude", "api"],
 				},
 				placement: {
 					enum: ["shared", "fresh"],
@@ -55,7 +55,7 @@ export const agentTaskToolDefinitions = [
 					type: "string",
 				},
 				harness: {
-					enum: ["codex", "claude"],
+					enum: ["codex", "claude", "api"],
 				},
 				placement: {
 					enum: ["shared", "fresh"],
@@ -179,7 +179,7 @@ export const agentTaskToolDefinitions = [
 	{
 		name: "publish_task",
 		description:
-			"Commit a reviewed task, push its branch, and open a draft pull request.",
+			"Commit a reviewed task, push its branch, and open a draft pull request. Multi-repository projects require repositoryFullName; publish each repository separately.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -192,6 +192,7 @@ export const agentTaskToolDefinitions = [
 				body: {
 					type: "string",
 				},
+				repositoryFullName: { type: "string" },
 			},
 			required: ["taskId", "title"],
 			additionalProperties: false,

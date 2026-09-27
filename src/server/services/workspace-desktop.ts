@@ -135,15 +135,8 @@ export function startWorkspaceDesktop(
 		yield* Effect.tryPromise(() =>
 			machines.ensureRunning(WorkspaceId(providerRef)),
 		);
-		yield* Effect.tryPromise(() =>
-			machines.writeTextFile(
-				WorkspaceId(providerRef),
-				DESKTOP_WALLPAPER_B64_PATH,
-				desktopWallpaperBase64(),
-			),
-		);
 		const started = yield* Effect.tryPromise(() =>
-			machines.exec(WorkspaceId(providerRef), START_WORKSPACE_DESKTOP, 300_000),
+			ensureDesktopProcesses(machines, providerRef),
 		);
 		if (started.exitCode !== 0) {
 			const failed: WorkspaceDesktop = {
@@ -197,6 +190,22 @@ export function startWorkspaceDesktop(
 			return Effect.succeed(failed);
 		}),
 	);
+}
+
+export async function ensureDesktopProcesses(
+	machines: Pick<WorkspaceMachines, "exec" | "writeTextFile">,
+	providerRef: string,
+) {
+	const id = WorkspaceId(providerRef);
+	const probe = await machines.exec(id, PROBE_WORKSPACE_DESKTOP, 15_000);
+	if (probe.exitCode === 0 && desktopPortIsListening(probe.stdout))
+		return probe;
+	await machines.writeTextFile(
+		id,
+		DESKTOP_WALLPAPER_B64_PATH,
+		desktopWallpaperBase64(),
+	);
+	return machines.exec(id, START_WORKSPACE_DESKTOP, 300_000);
 }
 
 /**

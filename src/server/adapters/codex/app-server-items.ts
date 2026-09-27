@@ -1,3 +1,4 @@
+import { agentTodosFromUnknown } from "#/domain/agent-todos";
 import { countFileChangeLines, readDiffLineCounts } from "#/domain/diff-stats";
 import { SessionItemId } from "#/domain/ids";
 import type {
@@ -226,6 +227,14 @@ function applyNotificationDelta(
 	method: string,
 	params: Record<string, unknown>,
 ): void {
+	if (method === "turn/plan/updated") {
+		const turnId = readString(params.turnId);
+		if (!turnId || !Array.isArray(params.plan)) return;
+		const item = ensureItem(byId, order, `plan-${turnId}`, "plan");
+		item.todos = params.plan;
+		item.text = readString(params.explanation) ?? "";
+		return;
+	}
 	const itemIdValue = readString(params.itemId) ?? readString(params.item_id);
 	if (!itemIdValue) return;
 	const delta = notificationDelta(params);
@@ -324,7 +333,14 @@ export function sessionItemFromAppServerItem(
 				};
 	}
 	if (type === "plan") {
-		return { kind: "plan", id, text: readString(value.text) ?? "" };
+		return {
+			kind: "plan",
+			id,
+			text: readString(value.text) ?? "",
+			...(Array.isArray(value.todos)
+				? { todos: agentTodosFromUnknown(value.todos) }
+				: {}),
+		};
 	}
 	if (type === "commandExecution") {
 		return {

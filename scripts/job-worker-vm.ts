@@ -21,6 +21,7 @@ import { waitUntilVmRunning } from "#/server/adapters/freestyle/wait-until-runni
 
 const guestArchive = `${JOB_WORKER_GUEST_ROOT}/app.tgz`;
 const guestLog = `${JOB_WORKER_GUEST_ROOT}/worker.log`;
+const rigkitBunVersion = "1.2.15";
 
 async function main() {
 	const apiKey = Effect.runSync(readFreestyleApiKey());
@@ -53,7 +54,11 @@ async function main() {
 		30_000,
 	);
 	console.info((status.stdout ?? "").trim() || (status.stderr ?? "").trim());
-	if (!/^\d+ node --import tsx src\/server\/jobs\/worker\.ts$/m.test(status.stdout ?? "")) {
+	if (
+		!/^\d+ node --import tsx src\/server\/jobs\/worker\.ts$/m.test(
+			status.stdout ?? "",
+		)
+	) {
 		throw new Error("Job worker process did not start.");
 	}
 	console.info(`Job worker is running on ${JOB_WORKER_SLUG}.`);
@@ -133,12 +138,18 @@ async function deployApp(vm: ReturnType<Freestyle["vms"]["ref"]>) {
 
 async function deploySecrets(vm: ReturnType<Freestyle["vms"]["ref"]>) {
 	const envSource = await readFile(".env", "utf8");
+	const autoRefresh = process.env.YTIMESY_ENVIRONMENT_AUTO_REFRESH;
+	if (autoRefresh && !["true", "false"].includes(autoRefresh))
+		throw new Error("Environment auto-refresh must be true or false.");
 	await vm.fs.writeTextFile(
 		`${JOB_WORKER_GUEST_ROOT}/.env`,
 		jobWorkerEnvFile(envSource, {
 			cert: JOB_WORKER_GUEST_CERT,
 			githubKey: JOB_WORKER_GUEST_GITHUB_KEY,
-		}),
+		}) +
+			(autoRefresh
+				? `\nYTIMESY_ENVIRONMENT_AUTO_REFRESH=${autoRefresh}\n`
+				: ""),
 	);
 	const databaseUrl = process.env.DATABASE_URL ?? "";
 	const certFromUrl = new URL(databaseUrl).searchParams.get("sslrootcert");
@@ -167,6 +178,7 @@ function guestStartScript() {
 set -euo pipefail
 export HOME=/home/ubuntu
 export PATH="$HOME/.codex/packages/standalone/current:$HOME/.codex/bin:$HOME/.local/bin:$PATH"
+export BUN_BINARY="$HOME/.local/share/ytimesy-bun/node_modules/.bin/bun"
 if [ -s /usr/local/nvm/nvm.sh ]; then
   . /usr/local/nvm/nvm.sh
 elif [ -s "$HOME/.nvm/nvm.sh" ]; then
@@ -199,6 +211,9 @@ command -v node >/dev/null || nvm install 22
 corepack enable
 corepack prepare pnpm@10.20.0 --activate
 pnpm install --frozen-lockfile
+if [ ! -x "$HOME/.local/share/ytimesy-bun/node_modules/.bin/bun" ] || [ "$("$HOME/.local/share/ytimesy-bun/node_modules/.bin/bun" --version)" != "${rigkitBunVersion}" ]; then
+  npm install --prefix "$HOME/.local/share/ytimesy-bun" --no-save bun@${rigkitBunVersion}
+fi
 if ! command -v codex >/dev/null 2>&1 && [ ! -x "$HOME/.codex/packages/standalone/current/codex" ]; then
   ${pinnedCodexInstallCommand()}
 fi
