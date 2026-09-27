@@ -168,6 +168,12 @@ a.harness-login-action:hover {
 	min-width: 0;
 	overflow: hidden;
 }
+.composer-model-controls {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	min-width: 0;
+}
 .composer-control,
 .composer-select {
 	min-height: 26px;
@@ -317,12 +323,38 @@ a.harness-login-action:hover {
 }
 .project-picker {
 	width: min(360px, calc(100vw - 24px));
+	max-height: min(
+		var(--radix-popover-content-available-height, 80dvh),
+		calc(100dvh - 24px)
+	);
+	overflow-y: auto;
 	padding: 8px;
 	border: 1px solid #2e2e2e;
 	border-radius: 12px;
 	background: #171717;
 	color: #ececec;
 	box-shadow: 0 12px 32px #00000066;
+}
+.project-picker[data-creating] {
+	display: flex;
+	overflow: hidden;
+	width: min(420px, calc(100vw - 24px));
+	padding: 0;
+	gap: 0;
+	border-color: #3b3b3b;
+	background: #202020;
+	box-shadow: 0 16px 48px #0006;
+}
+.project-picker[data-creating] .add-project {
+	width: 100%;
+	max-height: inherit;
+}
+.project-picker[data-creating] .add-project > * {
+	flex-shrink: 0;
+}
+.project-picker[data-creating] .add-project > .add-project-repos {
+	flex-shrink: 1;
+	min-height: 44px;
 }
 .project-picker-search {
 	width: 100%;
@@ -428,71 +460,6 @@ a.harness-login-action:hover {
 }
 .project-picker-create button:disabled {
 	opacity: 0.45;
-}
-.harness-picker {
-	width: min(280px, calc(100vw - 24px));
-	max-height: min(420px, 70dvh);
-	overflow-y: auto;
-	padding: 4px;
-	border: 1px solid #2e2e2e;
-	border-radius: 10px;
-	background: #171717;
-	color: #ececec;
-	box-shadow: 0 12px 32px #00000066;
-}
-.harness-picker-list {
-	display: flex;
-	flex-direction: column;
-	gap: 1px;
-}
-.harness-choice {
-	display: grid;
-	grid-template-columns: 16px minmax(0, 1fr) 14px;
-	align-items: center;
-	gap: 8px;
-	width: 100%;
-	min-height: 32px;
-	padding: 6px 8px;
-	border: 0;
-	border-radius: 7px;
-	background: transparent;
-	color: inherit;
-	text-align: left;
-	cursor: pointer;
-}
-.harness-choice:hover,
-.harness-choice[data-selected="true"] {
-	background: #ffffff0c;
-}
-.harness-choice-mark {
-	display: grid;
-	place-items: center;
-	width: 16px;
-	height: 16px;
-	color: #f2f2f0;
-}
-.harness-choice-name {
-	min-width: 0;
-	font-size: 13px;
-	font-weight: 500;
-	letter-spacing: -0.01em;
-	color: #f0f0f0;
-}
-.model-choice {
-	grid-template-columns: minmax(0, 1fr) 14px;
-	padding-left: 32px;
-}
-.model-choice:disabled {
-	opacity: 0.5;
-	cursor: default;
-}
-.model-picker-status {
-	margin: 4px 8px 10px 32px;
-	font-size: 12px;
-	color: #999;
-}
-.harness-choice-check {
-	color: #d4d4d4;
 }
 .project-setup-notice {
 	margin-top: 18px;
@@ -839,10 +806,6 @@ a.harness-login-action:hover {
 	gap: 5px;
 	vertical-align: middle;
 }
-.session-file-chip .file-type-icon {
-	width: 16px;
-	height: 16px;
-}
 .session-file-open {
 	display: inline-flex;
 	align-items: center;
@@ -914,9 +877,6 @@ details[open] > summary .session-activity-chevron {
 .session-exploration > summary::-webkit-details-marker {
 	display: none;
 }
-.session-exploration > summary:hover .session-activity-title {
-	color: rgba(255, 255, 255, 0.7);
-}
 .session-exploration .session-activity {
 	padding-left: 2px;
 }
@@ -959,10 +919,6 @@ details[open] > summary .session-activity-chevron {
 	color: rgba(255, 255, 255, 0.78);
 	font-size: 13px;
 	line-height: 18px;
-}
-.session-file-change-row .file-type-icon,
-.session-file-change-row > svg {
-	flex-shrink: 0;
 }
 .session-activity[data-kind="commandExecution"] {
 	overflow: hidden;
@@ -1013,9 +969,6 @@ details[open] > summary .session-activity-chevron {
 	line-height: 1.5;
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
-}
-.session-command-detail .session-activity-meta {
-	padding: 6px 0 0;
 }
 .session-activity-meta {
 	margin: 0;
@@ -1221,173 +1174,96 @@ details[open] > summary .session-activity-chevron {
 	cursor: not-allowed;
 }
 .task-panel {
-	display: grid;
-	grid-template-rows: auto minmax(0, 1fr) auto;
 	height: 100%;
 	min-height: 0;
-	background: #111;
+	overflow: auto;
+	padding: 16px;
 }
-.task-panel-header,
-.task-draft {
-	border-bottom: 1px solid #292929;
-	padding: 12px 14px;
-}
-.task-panel-header,
-.task-panel-header > div,
-.task-row,
-.task-row-copy > div,
-.task-row-actions,
-.task-draft > div {
+.task-panel-header {
 	display: flex;
-	align-items: center;
-}
-.task-panel-header,
-.task-draft > div {
+	align-items: baseline;
 	justify-content: space-between;
+	gap: 12px;
+	padding: 8px 10px;
+	border-radius: 7px;
+	background: #ffffff04;
 }
-.task-panel-header > div,
-.task-row-copy > div {
-	gap: 8px;
+.task-panel-header h2 {
+	margin: 0;
+	font-size: 13px;
+	font-weight: 500;
 }
 .task-count,
 .task-label,
 .task-row-copy small {
 	color: #858585;
 }
-.task-panel button {
-	border: 0;
-	background: transparent;
-	color: #bdbdbd;
-	cursor: pointer;
-}
-.task-panel-header button,
-.task-draft > div button:last-child {
-	display: inline-flex;
-	align-items: center;
-	gap: 6px;
-	border: 1px solid #363636;
-	border-radius: 6px;
-	padding: 6px 9px;
+.task-count {
+	margin-left: 6px;
+	font-size: 12px;
 }
 .task-list {
-	overflow: auto;
-	padding: 8px;
+	list-style: none;
+	margin: 10px 0 0;
+	padding: 0;
 }
 .task-empty {
 	margin: 0;
-	padding: 20px 12px;
+	padding: 24px 10px;
 	color: #858585;
 	font-size: 13px;
-	line-height: 1.5;
+	line-height: 1.6;
 }
 .task-row {
+	display: flex;
+	align-items: flex-start;
 	gap: 9px;
-	min-height: 52px;
-	margin-left: calc(var(--task-depth) * 18px);
-	padding: 8px;
-	border-radius: 6px;
-}
-.task-row:hover {
-	background: #181818;
+	margin-left: calc(var(--task-depth) * 16px);
+	padding: 12px 8px;
 }
 .task-status {
 	display: grid;
 	place-items: center;
-	color: #6f6f6f;
+	flex: 0 0 16px;
+	height: 20px;
+	color: #858585;
 }
 .task-status[data-status="done"] {
-	color: #a3a3a3;
+	color: #4ade80;
 }
 .task-status[data-status="working"] {
-	color: #e5e5e5;
+	color: #ededed;
+}
+.task-status[data-status="failed"] {
+	color: #f87171;
+}
+.task-branch {
+	flex-shrink: 0;
+	margin-top: 3px;
+	color: #666;
 }
 .task-row-copy {
 	min-width: 0;
 	flex: 1;
 }
-.task-row-copy strong {
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
+.task-row-copy > div {
+	line-height: 20px;
 	font-size: 13px;
-	font-weight: 500;
+	overflow-wrap: anywhere;
+}
+.task-label {
+	margin-right: 8px;
+	white-space: nowrap;
+}
+.task-row-copy strong {
+	font-weight: 450;
+	color: #dedede;
 }
 .task-row-copy small {
 	display: block;
-	margin-top: 3px;
-	font-size: 11px;
-}
-.task-row-actions {
-	gap: 3px;
-	opacity: 0;
-}
-.task-row:hover .task-row-actions,
-.task-row:focus-within .task-row-actions {
-	opacity: 1;
-}
-.task-row-actions button {
-	display: grid;
-	place-items: center;
-	width: 28px;
-	height: 28px;
-	border-radius: 5px;
-}
-.task-row-actions button:hover {
-	background: #282828;
-	color: #fff;
-}
-.task-draft {
-	display: grid;
-	gap: 8px;
-	border-top: 1px solid #292929;
-	border-bottom: 0;
-}
-.task-draft label {
+	margin-top: 4px;
 	font-size: 12px;
-	font-weight: 600;
-}
-.task-title-field,
-.task-prompt-field {
-	width: 100%;
-	box-sizing: border-box;
-	border: 1px solid #343434;
-	border-radius: 6px;
-	background: #171717;
-	color: #ededed;
-	font: inherit;
-	padding: 8px 9px;
-}
-.task-prompt-field {
-	resize: vertical;
-	min-height: 72px;
-}
-.task-draft > .task-draft-options {
-	display: grid;
-	grid-template-columns: 1fr 1fr;
-	align-items: end;
-	gap: 8px;
-}
-.task-draft-options label {
-	display: grid;
-	gap: 5px;
-	color: #a3a3a3;
-}
-.task-draft-options label:last-child:nth-child(3) {
-	grid-column: 1 / -1;
-}
-.task-draft-options select {
-	min-width: 0;
-	border: 1px solid #343434;
-	border-radius: 6px;
-	background: #171717;
-	color: #ededed;
-	font: inherit;
-	font-size: 12px;
-	padding: 7px 8px;
-}
-.task-draft button:disabled {
-	opacity: 0.45;
-	cursor: default;
+	overflow-wrap: anywhere;
 }
 @media (pointer: coarse) {
 	.slash-palette button {
@@ -1451,6 +1327,9 @@ details[open] > summary .session-activity-chevron {
 		justify-self: start;
 		width: auto;
 	}
+	.session-toolbar .composer-model-controls {
+		grid-area: 1 / 2 / 2 / 4;
+	}
 	.reasoning-select {
 		grid-area: 2 / 2 / 3 / 4;
 		width: 100%;
@@ -1484,8 +1363,7 @@ details[open] > summary .session-activity-chevron {
 	}
 	.composer-control,
 	.session-send,
-	.session-attachments button,
-	.harness-choice {
+	.session-attachments button {
 		min-width: 44px;
 		min-height: 44px;
 	}
@@ -1530,20 +1408,18 @@ details[open] > summary .session-activity-chevron {
 .session-launcher[data-layout="chat"] .session-composer {
 	display: grid;
 	grid-template-columns: auto minmax(0, 1fr) auto auto;
-	grid-template-areas: "attach input harness send";
+	grid-template-areas:
+		"slash slash slash slash"
+		"input input input input"
+		"files files files files"
+		"attach harness fast send";
 	align-items: center;
 	column-gap: 4px;
 	min-height: 44px;
-	border-radius: 9999px;
-	padding: 4px 8px 4px 6px;
-	background: #1c1c1c;
-	box-shadow:
-		inset 0 0 0 1px rgba(255, 255, 255, 0.1),
-		0 1px 4px rgba(0, 0, 0, 0.2);
-}
-.session-launcher[data-layout="chat"] .session-composer:has(.fast-control) {
-	grid-template-columns: auto minmax(0, 1fr) auto auto auto;
-	grid-template-areas: "attach input harness fast send";
+	border-radius: 16px;
+	padding: 10px;
+	background: #1a1a1a;
+	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
 .session-launcher[data-layout="chat"]
 	.session-composer:has(textarea:focus-visible) {
@@ -1554,43 +1430,19 @@ details[open] > summary .session-activity-chevron {
 .session-launcher[data-layout="chat"] .slash-palette {
 	grid-area: slash;
 }
-.session-launcher[data-layout="chat"] .session-composer:has(.slash-palette) {
-	grid-template-areas:
-		"slash slash slash slash"
-		"attach input harness send";
-	border-radius: 16px;
-}
-.session-launcher[data-layout="chat"]
-	.session-composer:has(.slash-palette):has(.fast-control) {
-	grid-template-areas:
-		"slash slash slash slash slash"
-		"attach input harness fast send";
-}
 .session-launcher[data-layout="chat"] .composer-input {
 	grid-area: input;
 	min-width: 0;
-	padding: 0;
+	padding: 4px 4px 8px;
 }
 .session-launcher[data-layout="chat"] .session-composer textarea {
-	min-height: 36px;
-	max-height: 160px;
-	padding: 8px 4px;
+	min-height: 54px;
+	max-height: min(240px, 30dvh);
+	padding: 0 4px;
 }
 .session-launcher[data-layout="chat"] .session-attachments {
 	grid-area: files;
 	padding: 0 8px 4px;
-}
-.session-launcher[data-layout="chat"]
-	.session-composer:has(.session-attachments) {
-	grid-template-areas:
-		"attach input harness send"
-		"files files files files";
-}
-.session-launcher[data-layout="chat"]
-	.session-composer:has(.session-attachments):has(.fast-control) {
-	grid-template-areas:
-		"attach input harness fast send"
-		"files files files files files";
 }
 .session-launcher[data-layout="chat"] .session-toolbar,
 .session-launcher[data-layout="chat"] .session-controls {
@@ -1602,6 +1454,9 @@ details[open] > summary .session-activity-chevron {
 .session-launcher[data-layout="chat"] .harness-select {
 	grid-area: harness;
 	max-width: 13rem;
+}
+.session-launcher[data-layout="chat"] .composer-model-controls {
+	grid-area: harness;
 }
 .session-launcher[data-layout="chat"] .reasoning-select {
 	display: none;
@@ -1620,34 +1475,49 @@ details[open] > summary .session-activity-chevron {
 .session-launcher[data-layout="empty"] .session-toolbar {
 	padding: 4px 10px 10px;
 }
+.session-launcher[data-layout="chat"]
+	.session-composer:not(
+		:has(textarea[data-expanded="true"], .session-attachments, .slash-palette)
+	) {
+	grid-template-columns: auto minmax(70px, 1fr) auto auto auto;
+	grid-template-areas: "attach input harness fast send";
+	border-radius: 9999px;
+	padding: 4px 8px 4px 6px;
+}
+.session-launcher[data-layout="chat"]
+	.session-composer:not(
+		:has(textarea[data-expanded="true"], .session-attachments, .slash-palette)
+	)
+	.composer-input {
+	padding: 0;
+}
+.session-launcher[data-layout="chat"]
+	.session-composer:not(
+		:has(textarea[data-expanded="true"], .session-attachments, .slash-palette)
+	)
+	textarea {
+	min-height: 36px;
+	padding: 8px 4px;
+}
+.session-launcher[data-layout="chat"] textarea:placeholder-shown {
+	height: 36px;
+	overflow: hidden;
+}
+.session-launcher[data-layout="chat"] textarea::placeholder {
+	white-space: nowrap;
+}
 @container composer (max-width: 520px) {
-	.session-launcher[data-layout="chat"] .session-composer,
-	.session-launcher[data-layout="chat"] .session-composer:has(.fast-control) {
+	.session-launcher[data-layout="chat"] .session-composer {
 		grid-template-columns: auto minmax(0, 1fr) auto;
 		grid-template-areas:
+			"slash slash slash"
 			"input input input"
+			"files files files"
 			"attach harness send";
 		border-radius: 16px;
 		padding: 8px;
 		min-height: 0;
 		row-gap: 2px;
-	}
-	.session-launcher[data-layout="chat"] .session-composer:has(.slash-palette),
-	.session-launcher[data-layout="chat"]
-		.session-composer:has(.slash-palette):has(.fast-control) {
-		grid-template-areas:
-			"slash slash slash"
-			"input input input"
-			"attach harness send";
-	}
-	.session-launcher[data-layout="chat"]
-		.session-composer:has(.session-attachments),
-	.session-launcher[data-layout="chat"]
-		.session-composer:has(.session-attachments):has(.fast-control) {
-		grid-template-areas:
-			"input input input"
-			"files files files"
-			"attach harness send";
 	}
 	.session-launcher[data-layout="chat"] .composer-input {
 		width: auto;
@@ -1673,4 +1543,19 @@ details[open] > summary .session-activity-chevron {
 	.session-launcher[data-layout="chat"] .publication-action {
 		margin-left: auto;
 	}
+}
+
+.session-file-chip .file-type-icon {
+	width: 16px;
+	height: 16px;
+}
+.session-file-change-row .file-type-icon,
+.session-file-change-row > svg {
+	flex-shrink: 0;
+}
+.session-exploration > summary:hover .session-activity-title {
+	color: rgba(255, 255, 255, 0.7);
+}
+.session-command-detail .session-activity-meta {
+	padding: 6px 0 0;
 }

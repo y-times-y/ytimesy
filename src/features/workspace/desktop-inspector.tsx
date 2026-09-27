@@ -12,15 +12,17 @@ export function DesktopInspector({
 	projectId,
 	sessionId,
 	onStart,
+	active = true,
 }: {
 	desktop: WorkspaceDesktop;
 	busy: boolean;
 	projectId?: string;
 	sessionId?: string;
 	onStart: () => void;
+	active?: boolean;
 }) {
 	const shouldStart = desktopInspectorShouldStart({
-		tabActive: true,
+		tabActive: active,
 		projectId,
 		sessionId,
 		desktop,

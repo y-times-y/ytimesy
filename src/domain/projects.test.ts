@@ -1,9 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
+	projectDisplayName,
 	projectFolderName,
 	projectMachineRefsToDestroy,
 	selectedProjectIdAfterDelete,
 } from "./projects";
+
+it("uses a named repository group while preserving legacy project labels", () => {
+	expect(projectDisplayName({ name: "Product", fullName: "org/web" })).toBe(
+		"Product",
+	);
+	expect(projectDisplayName({ fullName: "org/web" })).toBe("web");
+});
 
 describe("projectFolderName", () => {
 	it("uses the repository name after the owner", () => {

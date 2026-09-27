@@ -4,7 +4,9 @@ import { serviceCodexRefreshRequest } from "./codex-workspace-session";
 import { machinesForAgentSession } from "./session-workspace-machines";
 import type { WorkspaceMachines } from "./workspace-machines";
 
-type RunningCodexSession = Awaited<ReturnType<typeof runningCodexSessions>>[number];
+type RunningCodexSession = Awaited<
+	ReturnType<typeof runningCodexSessions>
+>[number];
 
 /** Keeps subscription refresh independent of slower task-tool reconciliation. */
 export async function reconcileCodexRefreshRequests(

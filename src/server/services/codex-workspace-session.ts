@@ -1,5 +1,6 @@
 import { Effect } from "effect";
 import type { AgentConnection } from "#/domain/agent-connection";
+import type { CodexUsage } from "#/domain/codex-usage";
 import { canResumeDisconnectedFollowUp } from "#/domain/harness-access";
 import { WorkspaceId } from "#/domain/ids";
 import {
@@ -16,10 +17,10 @@ import { canSubmitComposer, canSubmitSideChat } from "#/domain/session-policy";
 import type { WorkspaceLifecycle } from "#/domain/workspace";
 import type { AgentSessionRecord } from "#/server/adapters/agent-sessions";
 import {
-	ensureCurrentLoginDaemon,
-	configureCodexExternalAuth,
 	CODEX_REFRESH_REQUEST_PATH,
 	CODEX_REFRESH_RESPONSE_PATH,
+	configureCodexExternalAuth,
+	ensureCurrentLoginDaemon,
 	interruptCodexTurn,
 	readLoginStatus,
 	startInteractiveDeviceCodeLogin,
@@ -49,6 +50,7 @@ import { beginSharedDesktop } from "./workspace-desktop";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 export type PublicCodexSession = {
+	readonly usage?: CodexUsage;
 	readonly snapshotAvailable: boolean;
 	readonly workspaceId: string | null;
 	readonly agentSessionId: string | null;
@@ -461,11 +463,7 @@ function withPreparedWorkspace<A>(
 		yield* Effect.tryPromise(() =>
 			machines.ensureRunning(WorkspaceId(bound.providerRef)),
 		);
-		const result = yield* run(
-			bound.providerRef,
-			hasCodexAuth,
-			bound.session,
-		);
+		const result = yield* run(bound.providerRef, hasCodexAuth, bound.session);
 		if (isPublicCodexSession(result)) {
 			return yield* Effect.tryPromise(() =>
 				persistBoundSessionView(bound.session, result),
@@ -557,9 +555,10 @@ export async function serviceCodexRefreshRequest(
 	try {
 		const claimedContents = await machines.readTextFile(workspaceId, claimPath);
 		const request = JSON.parse(claimedContents ?? "null") as unknown;
-		const id = request && typeof request === "object" && "id" in request
-			? request.id
-			: null;
+		const id =
+			request && typeof request === "object" && "id" in request
+				? request.id
+				: null;
 		if (typeof id !== "string") return;
 		try {
 			const tokens = await codexExternalTokens(userId, true);
@@ -576,11 +575,9 @@ export async function serviceCodexRefreshRequest(
 			);
 		}
 	} finally {
-		await machines.exec(
-			workspaceId,
-			`rm -f ${claimPath}`,
-			15_000,
-		).catch(() => undefined);
+		await machines
+			.exec(workspaceId, `rm -f ${claimPath}`, 15_000)
+			.catch(() => undefined);
 	}
 }
 
@@ -613,6 +610,7 @@ function viewFromStatus(
 		status.stage === "authenticated" ? status.turnStatus : "idle";
 	const items = status.stage === "authenticated" ? status.items : [];
 	return {
+		usage: status.stage === "authenticated" ? status.usage : undefined,
 		snapshotAvailable,
 		workspaceId,
 		agentSessionId: null,

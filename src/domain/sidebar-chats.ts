@@ -132,9 +132,12 @@ export function newChatIsActive(input: {
 
 export const SIDEBAR_PINNED_STORAGE_KEY = "ytimesy-sidebar-pinned";
 export const SIDEBAR_PINNED_CHATS_KEY = "ytimesy-pinned-chats";
-export const SIDEBAR_COLLAPSED_PROJECTS_KEY = "ytimesy-sidebar-collapsed-projects";
+export const SIDEBAR_COLLAPSED_PROJECTS_KEY =
+	"ytimesy-sidebar-collapsed-projects";
 
-export function parseCollapsedProjectIds(raw: string | null): readonly string[] {
+export function parseCollapsedProjectIds(
+	raw: string | null,
+): readonly string[] {
 	return parseSeenChatKeys(raw);
 }
 

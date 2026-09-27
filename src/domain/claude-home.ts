@@ -22,7 +22,11 @@ export function claudeHomeFilesAreUsable(
 	if (!main) return false;
 	try {
 		const parsed: unknown = JSON.parse(main);
-		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		if (
+			typeof parsed !== "object" ||
+			parsed === null ||
+			Array.isArray(parsed)
+		) {
 			return false;
 		}
 		return Object.keys(parsed).some((key) => AUTH_KEY.test(key));

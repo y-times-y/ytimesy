@@ -1,5 +1,9 @@
 import { Duration, Effect } from "effect";
 import { fileChangesFromGitPorcelain } from "#/domain/git-working-tree";
+import {
+	guestCliDisableUpdateExports,
+	pinnedOpenCodeInstallCommand,
+} from "#/domain/guest-cli-pin";
 import { SessionItemId, type WorkspaceId } from "#/domain/ids";
 import type { ListedModel } from "#/domain/listed-model";
 import { parseOpenCodeModelCatalog } from "#/domain/opencode-catalog";
@@ -24,10 +28,6 @@ import {
 	sessionTurnLooksSettled,
 	type ToolActivityStatus,
 } from "#/domain/session-item";
-import {
-	guestCliDisableUpdateExports,
-	pinnedOpenCodeInstallCommand,
-} from "#/domain/guest-cli-pin";
 import { PROJECT_CWD_PATH } from "#/server/adapters/freestyle/clone-project";
 import { ensureGuestCliPin } from "#/server/adapters/guest-cli-pin";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
@@ -769,9 +769,7 @@ export function submitOpenCodeTask(
 		const [providerID, modelID] = splitOpenCodeModelId(input.modelId);
 		const body = JSON.stringify({
 			model: { providerID, modelID },
-			...(input.variant?.trim()
-				? { variant: input.variant.trim() }
-				: {}),
+			...(input.variant?.trim() ? { variant: input.variant.trim() } : {}),
 			parts: [{ type: "text", text: input.promptText ?? input.text }],
 		});
 		const queued: Extract<OpenCodeAuthStatus, { stage: "authenticated" }> = {
@@ -914,9 +912,7 @@ function syncOpenCodeTurn(
 		);
 		const text =
 			assistantTextFromOpenCodeTurn(messages.body) ??
-			(sessionTurnLooksSettled(items)
-				? lastAgentMessageText(items)
-				: null);
+			(sessionTurnLooksSettled(items) ? lastAgentMessageText(items) : null);
 		const now = Date.now();
 		const lastBusyAt = busy ? now : current.lastBusyAt;
 		const seenBusy = current.seenBusy || busy;

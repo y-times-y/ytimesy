@@ -1,6 +1,11 @@
 export const INSPECTOR_SPLIT_MIN = 0.32;
 export const INSPECTOR_SPLIT_MAX = 0.72;
-export const INSPECTOR_SPLIT_DEFAULT = 0.66;
+export const INSPECTOR_SPLIT_DEFAULT = 0.42;
+export const CHAT_PANE_MIN_WIDTH = 320;
+export const INSPECTOR_PANE_MIN_WIDTH = 360;
+export function workspaceNeedsSinglePane(width: number): boolean {
+	return width < CHAT_PANE_MIN_WIDTH + INSPECTOR_PANE_MIN_WIDTH + 4;
+}
 export const INSPECTOR_SPLIT_DESKTOP = 0.38;
 
 export function clampInspectorSplit(ratio: number): number {

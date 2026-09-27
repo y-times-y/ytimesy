@@ -23,9 +23,9 @@ describe("Claude home reuse", () => {
 
 	it("rejects empty, junk, or key-only dumps so a new chat still signs in", () => {
 		expect(claudeHomeFilesAreUsable({})).toBe(false);
-		expect(
-			claudeHomeFilesAreUsable({ ".claude.json": "not-json" }),
-		).toBe(false);
+		expect(claudeHomeFilesAreUsable({ ".claude.json": "not-json" })).toBe(
+			false,
+		);
 		expect(
 			claudeHomeFilesAreUsable({
 				".claude.json": JSON.stringify({ theme: "dark" }),

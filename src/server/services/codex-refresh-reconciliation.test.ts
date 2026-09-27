@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { WorkspaceId } from "#/domain/ids";
-import type { WorkspaceMachines } from "./workspace-machines";
 import { reconcileCodexRefreshRequests } from "./codex-refresh-reconciliation";
+import type { WorkspaceMachines } from "./workspace-machines";
 
 describe("Codex refresh reconciliation", () => {
 	it("services a running shared child in its own session scope", async () => {
@@ -16,12 +16,14 @@ describe("Codex refresh reconciliation", () => {
 			);
 		});
 		const result = await reconcileCodexRefreshRequests(machines, {
-			list: async () => [{
-				id: "child-1",
-				userId: "user-1",
-				providerRef: "vm-1",
-				taskPlacement: "shared",
-			}],
+			list: async () => [
+				{
+					id: "child-1",
+					userId: "user-1",
+					providerRef: "vm-1",
+					taskPlacement: "shared",
+				},
+			],
 			service,
 		});
 		expect(result).toEqual({ observed: 1, failed: 0 });

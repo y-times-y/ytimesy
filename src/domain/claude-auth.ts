@@ -9,6 +9,7 @@ const ANTHROPIC_LOGIN_HOSTS = new Set([
 ]);
 
 const LOGIN_URL_PATTERN =
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: Terminal control bytes must not become part of an authorization URL.
 	/https:\/\/(?:claude\.ai|claude\.com|platform\.claude\.com|console\.anthropic\.com)[^\s"'<>\\\x00-\x1f]+/gi;
 
 export function parseClaudeBinaryPath(output: string): string | null {
@@ -39,7 +40,8 @@ export function isAnthropicAuthorizeUrl(value: string): boolean {
 	}
 }
 
-const CALLBACK_CODE_PATTERN = /^[A-Za-z0-9._~+/-]+=*(?:#[A-Za-z0-9._~+/-]+=*)+$/;
+const CALLBACK_CODE_PATTERN =
+	/^[A-Za-z0-9._~+/-]+=*(?:#[A-Za-z0-9._~+/-]+=*)+$/;
 const LONG_CODE_PATTERN = /^[A-Za-z0-9._~+/-]+=*$/;
 
 /**
@@ -145,14 +147,12 @@ export function parseClaudeModelFlagsFromHelp(output: string): readonly {
 		/alias for the latest model[\s\S]*?'([^']+)',\s*'([^']+)',\s*or\s*'([^']+)'/i,
 	);
 	if (!aliases) return [];
-	const fullName = output.match(
-		/full name \(e\.g\.\s*'([^']+)'\)/i,
-	)?.[1];
+	const fullName = output.match(/full name \(e\.g\.\s*'([^']+)'\)/i)?.[1];
 	return [aliases[1], aliases[2], aliases[3]]
 		.filter((id): id is string => Boolean(id))
 		.map((id) => ({
 			id,
-			label: fullName && fullName.includes(id) ? fullName : id,
+			label: fullName?.includes(id) ? fullName : id,
 		}));
 }
 
@@ -301,11 +301,7 @@ function modelsFromCliLines(output: string): readonly {
 		const withId = line.match(/^(.+?)\s+\(([^)]+)\)/);
 		if (withId?.[1] && withId[2]) {
 			const id = withId[2].trim();
-			if (
-				seen.has(id) ||
-				/\s/.test(id) ||
-				!/^[a-z][a-z0-9._:-]*$/i.test(id)
-			) {
+			if (seen.has(id) || /\s/.test(id) || !/^[a-z][a-z0-9._:-]*$/i.test(id)) {
 				continue;
 			}
 			seen.add(id);
@@ -326,6 +322,7 @@ function modelsFromCliLines(output: string): readonly {
 }
 
 function stripTrailingPunctuation(value: string) {
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: Strip terminal control bytes from parsed CLI output.
 	return value.replace(/[\x00-\x1f]/g, "").replace(/[).,;]+$/g, "");
 }
 

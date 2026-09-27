@@ -25,10 +25,7 @@ export function listedModelSupportsFastMode(row: {
 }): boolean {
 	if (row.supportsFastMode === true || row.fast === true) return true;
 	const capabilities = asRecord(row.capabilities);
-	if (
-		capabilities?.fast === true ||
-		capabilities?.supportsFastMode === true
-	) {
+	if (capabilities?.fast === true || capabilities?.supportsFastMode === true) {
 		return true;
 	}
 	return listedFastModeId(row) != null;
@@ -69,8 +66,7 @@ export function listedReasoningFromRow(row: {
 		listedReasoningFromVariants(row.variants) ??
 		listedReasoningFromVariants(capabilities?.variants) ??
 		listedReasoningFromEfforts(
-			row.supportedReasoningEfforts ??
-				capabilities?.supportedReasoningEfforts,
+			row.supportedReasoningEfforts ?? capabilities?.supportedReasoningEfforts,
 			row.defaultReasoningEffort ?? capabilities?.defaultReasoningEffort,
 		)
 	);
@@ -150,7 +146,10 @@ function listedEffortLevels(
 		if (!id || id === "fast") continue;
 		levels.push({
 			id,
-			label: readListedString(item.description) ?? readListedString(item.label) ?? id,
+			label:
+				readListedString(item.description) ??
+				readListedString(item.label) ??
+				id,
 		});
 	}
 	if (levels.length === 0) return undefined;

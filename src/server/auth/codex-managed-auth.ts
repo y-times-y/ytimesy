@@ -1,10 +1,10 @@
 import { spawn } from "node:child_process";
-import { createInterface } from "node:readline";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { database } from "../adapters/database";
+import { createInterface } from "node:readline";
 import type { WorkspaceId } from "#/domain/ids";
+import { database } from "../adapters/database";
 import type { WorkspaceMachines } from "../services/workspace-machines";
 import { seal, unseal } from "./token-vault";
 
@@ -25,7 +25,8 @@ export type CodexExternalTokens = {
 };
 
 function managedAuth(value: unknown): ManagedCodexAuth {
-	if (!value || typeof value !== "object") throw new Error("Codex login is missing.");
+	if (!value || typeof value !== "object")
+		throw new Error("Codex login is missing.");
 	const record = value as Record<string, unknown>;
 	const tokens = record.tokens as Record<string, unknown> | undefined;
 	if (
@@ -42,7 +43,8 @@ function managedAuth(value: unknown): ManagedCodexAuth {
 
 export function codexAccessTokenExpiresAt(auth: ManagedCodexAuth): number {
 	const payload = auth.tokens.access_token.split(".")[1];
-	if (!payload) throw new Error("Codex access token is invalid; reconnect Codex.");
+	if (!payload)
+		throw new Error("Codex access token is invalid; reconnect Codex.");
 	try {
 		const claims = JSON.parse(Buffer.from(payload, "base64url").toString()) as {
 			exp?: unknown;
@@ -123,7 +125,10 @@ export async function codexExternalTokens(
 			throw new Error("Connect Codex before starting this agent.");
 		}
 		let auth = managedAuth(JSON.parse(await unseal(row.encrypted_codex_auth)));
-		if (forceRefresh || codexAccessTokenExpiresAt(auth) < Date.now() + 300_000) {
+		if (
+			forceRefresh ||
+			codexAccessTokenExpiresAt(auth) < Date.now() + 300_000
+		) {
 			auth = await refreshManagedCodexAuth(auth);
 			await client.query(
 				"update agent_account set encrypted_codex_auth=$2,updated_at=now() where user_id=$1 and provider='codex'",
@@ -190,17 +195,24 @@ async function requestManagedRefresh(codexHome: string): Promise<void> {
 			child.stdin.write(`${JSON.stringify({ id, method, params })}\n`);
 		});
 	try {
-		const initialized = await Promise.race([processFailure, request(1, "initialize", {
-			clientInfo: { name: "ytimesy", title: "ytimesy", version: "0.0.0" },
-			capabilities: { experimentalApi: true },
-		})]);
-		if (initialized.error) throw new Error("Codex login refresh failed; reconnect Codex.");
-		child.stdin.write(`${JSON.stringify({ method: "initialized", params: {} })}\n`);
+		const initialized = await Promise.race([
+			processFailure,
+			request(1, "initialize", {
+				clientInfo: { name: "ytimesy", title: "ytimesy", version: "0.0.0" },
+				capabilities: { experimentalApi: true },
+			}),
+		]);
+		if (initialized.error)
+			throw new Error("Codex login refresh failed; reconnect Codex.");
+		child.stdin.write(
+			`${JSON.stringify({ method: "initialized", params: {} })}\n`,
+		);
 		const refreshed = await Promise.race([
 			processFailure,
 			request(2, "account/read", { refreshToken: true }),
 		]);
-		if (refreshed.error) throw new Error("Codex login refresh failed; reconnect Codex.");
+		if (refreshed.error)
+			throw new Error("Codex login refresh failed; reconnect Codex.");
 	} finally {
 		child.kill();
 		lines.close();

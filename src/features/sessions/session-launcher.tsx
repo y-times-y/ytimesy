@@ -1,6 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { authClient } from "#/features/auth/client";
 import { ArrowUp, Square, X } from "lucide-react";
 import { type KeyboardEvent, useEffect, useMemo, useState } from "react";
 import { connectedProviderId } from "#/domain/agent-connection";
@@ -38,9 +37,12 @@ import {
 	parseSlashDraft,
 	type SlashCommand,
 } from "#/domain/slash-command";
+import { authClient } from "#/features/auth/client";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
+import { ContextUsage } from "./context-usage";
 import { HarnessLogin } from "./harness-login";
 import {
+	composerListedModels,
 	resolveReasoningLevel,
 	sessionModelsFromListed,
 } from "./model-capabilities";
@@ -60,7 +62,6 @@ export function SessionLauncher({
 	onHarnessIdChange,
 	onSend,
 	onConnect,
-	onSubmitAuthCode,
 	onStop,
 	onOpenSideChat,
 	onOpenInspector,
@@ -83,7 +84,6 @@ export function SessionLauncher({
 		options?: { readonly reasoningId?: string; readonly fast?: boolean },
 	) => void;
 	onConnect: () => void;
-	onSubmitAuthCode: (code: string) => void;
 	onStop: () => void;
 	onOpenSideChat: (question?: string) => void;
 	onOpenInspector: (view: InspectorView) => void;
@@ -153,11 +153,21 @@ export function SessionLauncher({
 	const models = useMemo(
 		() =>
 			sessionModelsFromListed(
-				(harnessReady || canResumeFollowUp) && listedCatalog.length
-					? listedCatalog
-					: (catalog.data ?? []),
+				composerListedModels({
+					sessionModels: session.models,
+					catalogModels: catalog.data ?? [],
+					rememberedModels: listedCatalog,
+					sessionConnected:
+						connectedProviderId(session.connection) === harnessId,
+				}),
 			),
-		[harnessReady, canResumeFollowUp, listedCatalog, catalog.data],
+		[
+			session.models,
+			session.connection,
+			harnessId,
+			listedCatalog,
+			catalog.data,
+		],
 	);
 	const [attachments, setAttachments] = useState<File[]>([]);
 	const [draft, setDraft] = useState("");
@@ -248,6 +258,7 @@ export function SessionLauncher({
 		);
 	}, [harnessId, modelId, models]);
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: Model changes must reset overrides even when their default reasoning levels match.
 	useEffect(() => {
 		setReasoningId(selectedModel?.reasoning?.defaultLevelId ?? "");
 		setFast(false);
@@ -395,6 +406,16 @@ export function SessionLauncher({
 						selectedProject={selectedProject}
 						onSelectProject={onSelectProject}
 						projectLocked={followUpLayout}
+						repairModel={
+							selectedModel && (harnessId === "api" || harnessId === "codex")
+								? {
+										harness: harnessId,
+										modelId: selectedModel.id,
+										allowApi: false,
+									}
+								: undefined
+						}
+						repairModelLabel={selectedModel?.label}
 						projectPickerOpen={projectPickerOpen}
 						onProjectPickerOpenChange={onProjectPickerOpenChange}
 					/>
@@ -409,19 +430,7 @@ export function SessionLauncher({
 								onSelect={runSlashCommand}
 							/>
 						) : null}
-						{harnessLoginShouldShow({
-							harnessReady,
-							harnessId,
-							connection: session.connection,
-						}) ? (
-							<HarnessLogin
-								harnessId={harnessId}
-								connection={session.connection}
-								busy={busy}
-								onConnect={onConnect}
-								onSubmitAuthCode={onSubmitAuthCode}
-							/>
-						) : null}
+
 						<TaskInput
 							value={draft}
 							onChange={setDraft}
@@ -429,7 +438,7 @@ export function SessionLauncher({
 							disabled={busy}
 							placeholder={
 								followUpLayout
-									? "Add a follow up"
+									? "Follow up…"
 									: "What would you like to work on?"
 							}
 							onKeyDown={handleComposerKey}
@@ -456,6 +465,28 @@ export function SessionLauncher({
 						)}
 						<div className="session-toolbar">
 							<SessionControls
+								contextIndicator={
+									harnessId === "codex" ? (
+										<ContextUsage
+											context={session.usage?.context}
+											compacting={session.usage?.compacting}
+										/>
+									) : null
+								}
+								connectionContent={
+									harnessLoginShouldShow({
+										harnessReady,
+										harnessId,
+										connection: session.connection,
+									}) ? (
+										<HarnessLogin
+											harnessId={harnessId}
+											connection={session.connection}
+											busy={busy}
+											onConnect={onConnect}
+										/>
+									) : null
+								}
 								providerConnected={
 									harnessReady ||
 									(harnessId === "codex" && session.snapshotAvailable)

@@ -7,6 +7,7 @@ import { publishProject } from "../../../server/services/publication";
 
 const draft = z.object({
 	projectId: z.string().uuid(),
+	repositoryFullName: z.string().max(256).optional(),
 	sessionId: z.string().uuid().optional(),
 	title: z.string().trim().min(1).max(256),
 	body: z.string().max(4000).optional(),

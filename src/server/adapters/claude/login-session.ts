@@ -1,12 +1,9 @@
 import { readFileSync } from "node:fs";
-import { Duration, Effect } from "effect";
+import { Effect } from "effect";
 import { AGENT_ORCHESTRATION_INSTRUCTIONS } from "#/domain/agent-orchestration";
 import {
 	claudeBackgroundTurnResult,
 	claudeCliIsSignedIn,
-	claudeListedModelsAreUsable,
-	parseAnthropicLoginUrl,
-	parseClaudeAuthPasteCode,
 	parseClaudeBinaryPath,
 	parseClaudeCapabilitiesFromHelp,
 	parseClaudeHomePath,
@@ -35,20 +32,13 @@ import type {
 	SessionTurnStatus,
 	ToolActivityStatus,
 } from "#/domain/session-item";
-import {
-	type ClaudeHomeRestore,
-	restoreClaudeHome,
-} from "#/server/adapters/claude/home-files";
+import type { ClaudeHomeRestore } from "#/server/adapters/claude/home-files";
 import { REMOVE_CODEX_CREDENTIAL_FILES } from "#/server/adapters/codex/credential-files";
 import { DEVELOPER_INSTRUCTIONS_PATH } from "#/server/adapters/freestyle/clone-project";
 import { ensureGuestCliPin } from "#/server/adapters/guest-cli-pin";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
 import { embedTaskToolDefinitions } from "../task-tool-source";
 
-const LOGIN_DAEMON_SOURCE = readFileSync(
-	new URL("./login-daemon.py", import.meta.url),
-	"utf8",
-);
 const TURN_PTY_SOURCE = readFileSync(
 	new URL("./turn-pty.py", import.meta.url),
 	"utf8",
@@ -58,9 +48,7 @@ const TASK_TOOL_SERVER_SOURCE = embedTaskToolDefinitions(
 );
 
 const STATUS_PATH = "/tmp/ytimesy-claude-auth-status.json";
-const LOG_PATH = "/tmp/ytimesy-claude-login.log";
 const PID_PATH = "/tmp/ytimesy-claude-login.pid";
-const CODE_PATH = "/tmp/ytimesy-claude-auth-code";
 const KEY_ENV_PATH = "/tmp/ytimesy-claude-key.env";
 const TURN_OUT_PATH = "/tmp/ytimesy-claude-turn.out";
 const TURN_ERR_PATH = "/tmp/ytimesy-claude-turn.err";
@@ -107,23 +95,6 @@ fi
 echo "CLAUDE_HOME=$HOME"
 echo "CLAUDE_BIN=$(command -v claude)"
 claude --version
-`;
-
-const START_LOGIN_SCRIPT = `set -eu
-if [ "\${FORCE_RESTART:-0}" = "1" ] && [ -f ${PID_PATH} ]; then
-  PID="$(cat ${PID_PATH})"
-  pkill -P "$PID" 2>/dev/null || true
-  kill "$PID" 2>/dev/null || true
-  rm -f ${PID_PATH}
-fi
-if [ -f ${PID_PATH} ] && kill -0 "$(cat ${PID_PATH})" 2>/dev/null; then
-  echo "LOGIN_PID=$(cat ${PID_PATH})"
-  exit 0
-fi
-rm -f ${STATUS_PATH} ${CODE_PATH}
-PYTHONUNBUFFERED=1 setsid python3 /tmp/ytimesy-claude-login.py >${LOG_PATH} 2>&1 < /dev/null &
-echo $! > ${PID_PATH}
-echo "LOGIN_PID=$(cat ${PID_PATH})"
 `;
 
 export type ClaudeAuthStatus =
@@ -215,132 +186,32 @@ export function readClaudeAuthStatus(
 }
 
 /**
- * Starts Anthropic's authorize URL on a VM that already has Claude Code.
- * Install is only the fallback when the snapshot binary is missing. Checkout
- * and Desktop are not part of this path.
+ * Connects the unmodified CLI using the explicitly supplied API key.
+ * Subscription credentials are not restored or used as a fallback.
  */
 export function connectClaudeCode(
 	machines: WorkspaceMachines,
 	workspaceId: WorkspaceId,
 	apiKey: string | null,
-	restore?: ClaudeHomeRestore,
+	_restore?: ClaudeHomeRestore,
 ): Effect.Effect<ClaudeAuthStatus> {
 	return Effect.gen(function* () {
+		if (!apiKey)
+			return failed("Add your Anthropic API key in the model picker.");
 		yield* ensureGuestCliPin(machines, workspaceId);
 		const located = yield* locateOrInstallClaude(machines, workspaceId);
-		if (!located) {
+		if (!located)
 			return failed("Claude Code is not installed on this workspace");
-		}
-		const claudeBin = located.bin;
-
-		const existing = yield* probeClaudeCli(
+		yield* stopClaudeLoginDaemon(machines, workspaceId);
+		return yield* applyStoredClaudeKey(
 			machines,
 			workspaceId,
-			claudeBin,
-			null,
-		);
-		if (existing.stage === "authenticated") {
-			yield* persistClaudeStatus(machines, workspaceId, existing);
-			yield* stopClaudeLoginDaemon(machines, workspaceId);
-			return existing;
-		}
-		if (restore?.userId) {
-			const applied = yield* restoreClaudeHome(
-				machines,
-				workspaceId,
-				located.home,
-				restore,
-			);
-			if (applied) {
-				const restored = yield* probeClaudeCli(
-					machines,
-					workspaceId,
-					claudeBin,
-					null,
-				);
-				if (restored.stage === "authenticated") {
-					yield* persistClaudeStatus(machines, workspaceId, restored);
-					yield* stopClaudeLoginDaemon(machines, workspaceId);
-					return restored;
-				}
-			}
-		}
-
-		const published = yield* readClaudeAuthStatus(machines, workspaceId);
-		if (
-			published.stage === "authenticated" &&
-			claudeListedModelsAreUsable(published.models)
-		) {
-			return published;
-		}
-		if (published.stage === "awaiting_device_code") return published;
-
-		if (apiKey) {
-			const byok = yield* applyStoredClaudeKey(
-				machines,
-				workspaceId,
-				claudeBin,
-				apiKey,
-			);
-			if (byok.stage === "authenticated") return byok;
-			if (byok.stage === "failed") return byok;
-		}
-
-		yield* Effect.tryPromise(() =>
-			machines.writeTextFile(
-				workspaceId,
-				"/tmp/ytimesy-claude-login.py",
-				LOGIN_DAEMON_SOURCE,
-			),
-		);
-		const start = yield* Effect.tryPromise(() =>
-			machines.exec(
-				workspaceId,
-				guestBash(
-					`export CLAUDE_BIN=${posixShellQuoted(claudeBin)}\n${START_LOGIN_SCRIPT}`,
-				),
-				15_000,
-			),
-		);
-		if (start.exitCode !== 0) {
-			return failed(
-				`Failed to start Claude Code login: ${(start.stderr || start.stdout).trim()}`,
-			);
-		}
-		for (let attempt = 0; attempt < 20; attempt += 1) {
-			yield* Effect.sleep(Duration.millis(500));
-			const status = yield* readClaudeAuthStatus(machines, workspaceId);
-			if (status.stage !== "missing" && status.stage !== "starting") {
-				if (status.stage === "authenticated" && status.models.length === 0) {
-					return yield* attachClaudeModels(
-						machines,
-						workspaceId,
-						claudeBin,
-						status,
-					);
-				}
-				return status;
-			}
-		}
-		const log = yield* Effect.tryPromise(() =>
-			machines.readTextFile(workspaceId, LOG_PATH),
-		);
-		const url = parseAnthropicLoginUrl(log ?? "");
-		if (url) {
-			return {
-				stage: "awaiting_device_code" as const,
-				loginId: "claude-auth",
-				verificationUrl: url,
-			};
-		}
-		return failed(
-			`Claude Code did not publish Anthropic's login URL${log ? `: ${log.slice(-500)}` : ""}`,
+			located.bin,
+			apiKey,
 		);
 	}).pipe(
-		Effect.catchAll((cause) =>
-			Effect.succeed(
-				failed(cause instanceof Error ? cause.message : String(cause)),
-			),
+		Effect.catchAll(() =>
+			Effect.succeed(failed("Could not connect with the Anthropic API key.")),
 		),
 	);
 }
@@ -397,121 +268,12 @@ export function refreshClaudeAuthStatus(
 ): Effect.Effect<ClaudeAuthStatus> {
 	return Effect.gen(function* () {
 		const published = yield* readClaudeAuthStatus(machines, workspaceId);
-		if (
-			published.stage === "authenticated" &&
-			published.turnStatus === "running"
-		) {
+		if (published.stage !== "authenticated" || published.authMode !== "apikey")
+			return failed("Add your Anthropic API key in the model picker.");
+		if (published.turnStatus === "running")
 			return yield* syncClaudeBackgroundTurn(machines, workspaceId, published);
-		}
-		if (
-			published.stage === "authenticated" &&
-			claudeListedModelsAreUsable(published.models)
-		) {
-			return published;
-		}
-		const locate = yield* Effect.tryPromise(() =>
-			machines.exec(workspaceId, guestBash(LOCATE_CLAUDE), 15_000),
-		);
-		if (locate.exitCode !== 0) {
-			return published.stage === "missing" ? published : published;
-		}
-		const claudeBin = parseClaudeBinaryPath(locate.stdout);
-		if (!claudeBin) return published;
-		const live = yield* probeClaudeCli(machines, workspaceId, claudeBin, null);
-		if (live.stage === "authenticated") {
-			yield* persistClaudeStatus(machines, workspaceId, live);
-			return live;
-		}
-		if (published.stage === "awaiting_device_code") return published;
-		return live.stage === "failed" ? published : live;
-	}).pipe(Effect.catchAll(() => readClaudeAuthStatus(machines, workspaceId)));
-}
-
-/**
- * Writes Anthropic's paste-back code into the same `claude auth login` PTY.
- * A new login would mint a different PKCE session and reject this code.
- */
-export function submitClaudeAuthCode(
-	machines: WorkspaceMachines,
-	workspaceId: WorkspaceId,
-	rawCode: string,
-): Effect.Effect<ClaudeAuthStatus> {
-	const code = parseClaudeAuthPasteCode(rawCode);
-	if (!code) {
-		return Effect.succeed(
-			failed("Paste the login code from Anthropic's page."),
-		);
-	}
-	return Effect.gen(function* () {
-		const current = yield* readClaudeAuthStatus(machines, workspaceId);
-		if (current.stage === "authenticated") {
-			if (current.models.length > 0) return current;
-			const locate = yield* Effect.tryPromise(() =>
-				machines.exec(workspaceId, guestBash(LOCATE_CLAUDE), 15_000),
-			);
-			const claudeBin = parseClaudeBinaryPath(locate.stdout);
-			if (!claudeBin) return current;
-			return yield* attachClaudeModels(
-				machines,
-				workspaceId,
-				claudeBin,
-				current,
-			);
-		}
-		if (current.stage !== "awaiting_device_code") {
-			return failed(
-				"Claude Code is not waiting for Anthropic's login code. Sign in again.",
-			);
-		}
-		const alive = yield* Effect.tryPromise(() =>
-			machines.exec(
-				workspaceId,
-				guestBash(
-					`if [ -f ${PID_PATH} ] && kill -0 "$(cat ${PID_PATH})" 2>/dev/null; then echo ALIVE; fi`,
-				),
-				10_000,
-			),
-		);
-		if (!alive.stdout.includes("ALIVE")) {
-			return failed(
-				"Claude Code login expired. Sign in again for a new Anthropic URL.",
-			);
-		}
-		yield* Effect.tryPromise(() =>
-			machines.writeTextFile(workspaceId, CODE_PATH, `${code}\n`),
-		);
-		for (let attempt = 0; attempt < 45; attempt += 1) {
-			yield* Effect.sleep(Duration.seconds(1));
-			const status = yield* refreshClaudeAuthStatus(machines, workspaceId);
-			if (status.stage === "authenticated") {
-				if (status.models.length === 0) {
-					const locate = yield* Effect.tryPromise(() =>
-						machines.exec(workspaceId, guestBash(LOCATE_CLAUDE), 15_000),
-					);
-					const claudeBin = parseClaudeBinaryPath(locate.stdout);
-					if (claudeBin) {
-						return yield* attachClaudeModels(
-							machines,
-							workspaceId,
-							claudeBin,
-							status,
-						);
-					}
-				}
-				return status;
-			}
-			if (status.stage === "failed") return status;
-		}
-		return failed(
-			"Claude Code did not accept that login code. Open Anthropic again and paste the new code.",
-		);
-	}).pipe(
-		Effect.catchAll((cause) =>
-			Effect.succeed(
-				failed(cause instanceof Error ? cause.message : String(cause)),
-			),
-		),
-	);
+		return published;
+	});
 }
 
 function applyStoredClaudeKey(
@@ -521,6 +283,14 @@ function applyStoredClaudeKey(
 	apiKey: string,
 ): Effect.Effect<ClaudeAuthStatus> {
 	return Effect.gen(function* () {
+		const previous = yield* readClaudeAuthStatus(machines, workspaceId);
+		if (
+			previous.stage === "authenticated" &&
+			previous.authMode === "apikey" &&
+			previous.turnStatus === "running"
+		) {
+			return yield* syncClaudeBackgroundTurn(machines, workspaceId, previous);
+		}
 		yield* Effect.tryPromise(() =>
 			machines.writeTextFile(
 				workspaceId,
@@ -536,15 +306,22 @@ function applyStoredClaudeKey(
 		);
 		if (probed.stage !== "authenticated") {
 			return failed(
-				"Claude Code did not accept the stored API key. Sign in on Anthropic's page instead.",
+				"Claude Code did not accept the API key. Update it in the model picker.",
 			);
 		}
-		return probed;
+		const connected = {
+			...probed,
+			items: previous.stage === "authenticated" ? previous.items : probed.items,
+			turnStatus:
+				previous.stage === "authenticated"
+					? previous.turnStatus
+					: probed.turnStatus,
+		};
+		yield* persistClaudeStatus(machines, workspaceId, connected);
+		return connected;
 	}).pipe(
-		Effect.catchAll((cause) =>
-			Effect.succeed(
-				failed(cause instanceof Error ? cause.message : String(cause)),
-			),
+		Effect.catchAll(() =>
+			Effect.succeed(failed("Could not apply the Anthropic API key.")),
 		),
 	);
 }
@@ -588,18 +365,6 @@ function probeClaudeCli(
 			}),
 		),
 		Effect.catchAll(() => Effect.succeed({ stage: "missing" as const })),
-	);
-}
-
-function attachClaudeModels(
-	machines: WorkspaceMachines,
-	workspaceId: WorkspaceId,
-	claudeBin: string,
-	status: Extract<ClaudeAuthStatus, { stage: "authenticated" }>,
-): Effect.Effect<ClaudeAuthStatus> {
-	return listClaudeModels(machines, workspaceId, claudeBin, null).pipe(
-		Effect.map((models) => ({ ...status, models })),
-		Effect.tap((next) => persistClaudeStatus(machines, workspaceId, next)),
 	);
 }
 
@@ -795,6 +560,8 @@ export function submitClaudeTask(
 	return Effect.gen(function* () {
 		const current = yield* refreshClaudeAuthStatus(machines, workspaceId);
 		if (current.stage !== "authenticated") return current;
+		if (current.authMode !== "apikey")
+			return failed("Add your Anthropic API key in the model picker.");
 		const locate = yield* Effect.tryPromise(() =>
 			machines.exec(workspaceId, guestBash(LOCATE_CLAUDE), 15_000),
 		);
@@ -843,7 +610,7 @@ export function submitClaudeTask(
 				TASK_TOOL_CONFIG,
 			),
 		);
-		const keyPrefix = `if [ -f ${KEY_ENV_PATH} ]; then . ${KEY_ENV_PATH}; fi\n`;
+		const keyPrefix = `. ${KEY_ENV_PATH}\n: "\${ANTHROPIC_API_KEY:?Anthropic API key is required}"\n`;
 		const prompt = input.promptText ?? input.text;
 		const reasoningFlag = input.reasoningEffort
 			? ` --effort ${posixShellQuoted(input.reasoningEffort)}`

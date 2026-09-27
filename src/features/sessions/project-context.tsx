@@ -6,8 +6,9 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "#/components/ui/select";
+import type { EnvironmentModelRequest } from "#/domain/environment-model";
 import { branchSwitchBlockedReason } from "../../domain/project-workspace";
-import { projectFolderName, type Project } from "../../domain/projects";
+import { type Project, projectFolderName } from "../../domain/projects";
 import {
 	listedSessionBranches,
 	sessionWorkingBranch,
@@ -27,6 +28,8 @@ export function ProjectContext({
 	projectLocked = false,
 	projectPickerOpen,
 	onProjectPickerOpenChange,
+	repairModel,
+	repairModelLabel,
 }: {
 	projects: Project[];
 	selectedProject?: Project;
@@ -34,6 +37,8 @@ export function ProjectContext({
 	projectLocked?: boolean;
 	projectPickerOpen?: boolean;
 	onProjectPickerOpenChange?: (open: boolean) => void;
+	repairModel?: EnvironmentModelRequest;
+	repairModelLabel?: string;
 }) {
 	return (
 		<div className="session-context">
@@ -47,7 +52,13 @@ export function ProjectContext({
 				/>
 			)}
 			<BranchSelect project={selectedProject} />
-			{selectedProject && <WorkspaceStatus projectId={selectedProject.id} />}
+			{selectedProject && (
+				<WorkspaceStatus
+					projectId={selectedProject.id}
+					repairModel={repairModel}
+					repairModelLabel={repairModelLabel}
+				/>
+			)}
 		</div>
 	);
 }

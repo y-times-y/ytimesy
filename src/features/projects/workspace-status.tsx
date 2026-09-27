@@ -1,5 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
+import type { EnvironmentModelRequest } from "#/domain/environment-model";
 import { workspacePrepareShowsStatus } from "#/domain/project-workspace";
 import { requestJson } from "./api";
 import { GithubSetupLink } from "./github-setup-link";
@@ -18,7 +19,15 @@ export interface WorkspaceView {
 	updatedAt: string;
 }
 
-export function WorkspaceStatus({ projectId }: { projectId: string }) {
+export function WorkspaceStatus({
+	projectId,
+	repairModel,
+	repairModelLabel,
+}: {
+	projectId: string;
+	repairModel?: EnvironmentModelRequest;
+	repairModelLabel?: string;
+}) {
 	const workspace = useQuery({
 		queryKey: ["workspace", projectId],
 		queryFn: () =>
@@ -41,26 +50,25 @@ export function WorkspaceStatus({ projectId }: { projectId: string }) {
 		onSuccess: () => void workspace.refetch(),
 	});
 	const retry = useMutation({
-		mutationFn: (workspaceId: string) =>
-			requestJson<WorkspaceView>("/api/workspaces/retry", { workspaceId }),
+		mutationFn: (input: {
+			workspaceId: string;
+			repairModel?: EnvironmentModelRequest;
+		}) => requestJson<WorkspaceView>("/api/workspaces/retry", input),
 		onSuccess: () => void workspace.refetch(),
 	});
 	const current = workspace.data;
-	const queuedMissing = useRef(false);
-	useEffect(() => {
-		queuedMissing.current = false;
-	}, [projectId]);
+	const queuedMissing = useRef<string | null>(null);
 	useEffect(() => {
 		if (
-			queuedMissing.current ||
+			queuedMissing.current === projectId ||
 			workspace.isPending ||
 			workspace.error ||
 			current
 		)
 			return;
-		queuedMissing.current = true;
+		queuedMissing.current = projectId;
 		prepare.mutate();
-	}, [current, prepare, workspace.error, workspace.isPending]);
+	}, [current, prepare, projectId, workspace.error, workspace.isPending]);
 	if (workspace.isPending) return null;
 	if (workspace.error)
 		return (
@@ -84,10 +92,31 @@ export function WorkspaceStatus({ projectId }: { projectId: string }) {
 			<button
 				type="button"
 				disabled={retry.isPending}
-				onClick={() => retry.mutate(current.id)}
+				onClick={() => retry.mutate({ workspaceId: current.id })}
 			>
 				{retry.isPending ? "Retrying…" : "Retry"}
 			</button>
+			{repairModel && (
+				<button
+					type="button"
+					disabled={retry.isPending}
+					onClick={() =>
+						retry.mutate({
+							workspaceId: current.id,
+							repairModel: {
+								...repairModel,
+								allowApi: repairModel.harness === "api",
+							},
+						})
+					}
+				>
+					Repair with {repairModelLabel || "selected model"}
+					{repairModel.harness === "api"
+						? " (API charges apply)"
+						: " (subscription usage)"}
+				</button>
+			)}
+			{retry.error && <span>{retry.error.message}</span>}
 		</p>
 	);
 }

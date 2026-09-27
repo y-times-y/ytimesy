@@ -3,26 +3,29 @@ import { addedProjectBranch } from "../../domain/add-project";
 import { WorkspaceId } from "../../domain/ids";
 import { branchSwitchBlockedReason } from "../../domain/project-workspace";
 import {
+	type ProjectGroupSelection,
+	type ProjectRepository,
+	type ProjectSelection,
 	projectFolderName,
 	projectMachineRefsToDestroy,
-	type ProjectSelection,
 } from "../../domain/projects";
 import {
 	isGeneratedSessionBranch,
 	sessionBranchChangeRestartsWorkspace,
 	sessionWorkingBranch,
 } from "../../domain/session-branch";
+import { listProjectProviderRefs } from "../adapters/agent-sessions";
 import {
 	authorizedRepository,
 	createAuthorizedRepository,
 	githubClient,
 } from "../adapters/github";
-import { listProjectProviderRefs } from "../adapters/agent-sessions";
 import {
 	deleteProjectForOwner,
 	projectForOwner,
 	projectForRepository,
 	saveProject,
+	saveProjectGroup,
 } from "../adapters/projects";
 import {
 	saveWorkspaceStatus,
@@ -33,6 +36,46 @@ import type { WorkspaceMachines } from "./workspace-machines";
 import { enqueueProjectWorkspace } from "./workspaces";
 
 const branchChangedMessage = "Branch changed. Retry to prepare this branch.";
+
+export function connectProjectGroup(
+	userId: string,
+	selection: ProjectGroupSelection,
+) {
+	return Effect.gen(function* () {
+		const token = yield* Effect.tryPromise(() => githubAccessToken(userId));
+		const repositories: ProjectRepository[] = [];
+		for (const selected of selection.repositories) {
+			const repository = yield* Effect.tryPromise(() =>
+				authorizedRepository(
+					token,
+					selected.installationId,
+					selected.repositoryId,
+				),
+			);
+			const branch = isGeneratedSessionBranch(selected.branch)
+				? repository.defaultBranch
+				: selected.branch;
+			const [owner, repo] = repository.fullName.split("/");
+			yield* Effect.tryPromise(() =>
+				githubClient(token).repos.getBranch({ owner, repo, branch }),
+			);
+			repositories.push({ ...repository, branch });
+		}
+		// Existing tools address checkouts by basename; reject ambiguous directory names.
+		if (
+			new Set(repositories.map((repo) => projectFolderName(repo.fullName)))
+				.size !== repositories.length
+		)
+			throw new Error(
+				"Repositories in one project must have different folder names.",
+			);
+		const project = yield* Effect.tryPromise(() =>
+			saveProjectGroup(userId, selection.name, repositories),
+		);
+		yield* enqueueProjectWorkspace(userId, project.id);
+		return project;
+	});
+}
 
 /**
  * Saves the authorized repository and branch. A ready workspace whose branch

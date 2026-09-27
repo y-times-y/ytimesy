@@ -1,29 +1,78 @@
 import { randomUUID } from "node:crypto";
-import type { Project, RepositoryChoice } from "../../domain/projects";
+import type {
+	Project,
+	ProjectRepository,
+	RepositoryChoice,
+} from "../../domain/projects";
 import { database } from "./database";
+
+const projectColumns = `p.id,p.name,p.repository_id::float8 as "repositoryId",p.installation_id::float8 as "installationId",p.full_name as "fullName",p.branch,
+  (select json_agg(json_build_object('repositoryId',r.repository_id::float8,'installationId',r.installation_id::float8,'fullName',r.full_name,'branch',r.branch) order by r.position)
+   from project_repository r where r.project_id=p.id) as repositories`;
 export async function listProjects(userId: string): Promise<Project[]> {
 	const result = await database().query(
-		'select id,repository_id::float8 as "repositoryId",installation_id::float8 as "installationId",full_name as "fullName",branch from project where user_id=$1 order by created_at',
+		`select ${projectColumns} from project p where p.user_id=$1 order by p.created_at`,
 		[userId],
 	);
-	return result.rows;
+	return result.rows.map(projectFromRow);
 }
 export async function projectForOwner(
 	userId: string,
 	projectId: string,
 ): Promise<Project | null> {
 	const result = await database().query(
-		'select id,repository_id::float8 as "repositoryId",installation_id::float8 as "installationId",full_name as "fullName",branch from project where id=$1 and user_id=$2',
+		`select ${projectColumns} from project p where p.id=$1 and p.user_id=$2`,
 		[projectId, userId],
 	);
-	return result.rows[0] ?? null;
+	return result.rows[0] ? projectFromRow(result.rows[0]) : null;
+}
+
+function projectFromRow(row: Project): Project {
+	if (row.name) return row;
+	const { name: _name, repositories: _repositories, ...legacy } = row;
+	return legacy;
+}
+
+/** One statement commits the project and its complete, pre-authorized repository set. */
+export async function saveProjectGroup(
+	userId: string,
+	name: string,
+	repositories: ProjectRepository[],
+): Promise<Project> {
+	const primary = repositories[0];
+	if (!primary) throw new Error("Select at least one repository.");
+	const id = randomUUID();
+	await database().query(
+		`with saved as (
+    insert into project(id,user_id,repository_id,installation_id,full_name,branch,name,repository_set_key)
+    values($1,$2,$3,$4,$5,$6,$7,$9) returning id
+  ) insert into project_repository(project_id,repository_id,installation_id,full_name,branch,position)
+    select saved.id,r."repositoryId",r."installationId",r."fullName",r.branch,r.position
+    from saved,jsonb_to_recordset($8::jsonb) as r("repositoryId" bigint,"installationId" bigint,"fullName" text,branch text,position integer)`,
+		[
+			id,
+			userId,
+			primary.repositoryId,
+			primary.installationId,
+			primary.fullName,
+			primary.branch,
+			name,
+			JSON.stringify(
+				repositories.map((repo, position) => ({ ...repo, position })),
+			),
+			id,
+		],
+	);
+	const project = await projectForOwner(userId, id);
+	if (!project) throw new Error("Project could not be saved.");
+	return project;
 }
 export async function projectForRepository(
 	userId: string,
 	repositoryId: number,
 ): Promise<Project | null> {
 	const result = await database().query(
-		'select id,repository_id::float8 as "repositoryId",installation_id::float8 as "installationId",full_name as "fullName",branch from project where user_id=$1 and repository_id=$2',
+		'select id,repository_id::float8 as "repositoryId",installation_id::float8 as "installationId",full_name as "fullName",branch from project where user_id=$1 and repository_id=$2 and repository_set_key=\'\'',
 		[userId, repositoryId],
 	);
 	return result.rows[0] ?? null;
@@ -34,7 +83,7 @@ export async function saveProject(
 	branch: string,
 ): Promise<Project> {
 	const result = await database().query(
-		'insert into project(id,user_id,repository_id,installation_id,full_name,branch) values($1,$2,$3,$4,$5,$6) on conflict(user_id,repository_id) do update set installation_id=excluded.installation_id,full_name=excluded.full_name,branch=excluded.branch returning id,repository_id::float8 as "repositoryId",installation_id::float8 as "installationId",full_name as "fullName",branch',
+		'insert into project(id,user_id,repository_id,installation_id,full_name,branch) values($1,$2,$3,$4,$5,$6) on conflict(user_id,repository_id,repository_set_key) do update set installation_id=excluded.installation_id,full_name=excluded.full_name,branch=excluded.branch returning id,repository_id::float8 as "repositoryId",installation_id::float8 as "installationId",full_name as "fullName",branch',
 		[
 			randomUUID(),
 			userId,

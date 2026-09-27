@@ -7,6 +7,7 @@ const fake = vi.hoisted(() => ({
 		start: ReturnType<typeof vi.fn>;
 		stop: ReturnType<typeof vi.fn>;
 		createQueue: ReturnType<typeof vi.fn>;
+		updateQueue: ReturnType<typeof vi.fn>;
 	}[],
 	start: async () => {},
 	query: vi.fn(async () => ({ rows: [] })),
@@ -16,6 +17,7 @@ vi.mock("pg-boss", () => ({
 		start = vi.fn(() => fake.start());
 		stop = vi.fn(async () => {});
 		createQueue = vi.fn(async () => {});
+		updateQueue = vi.fn(async () => {});
 		on = vi.fn();
 		constructor(public options: ConstructorOptions) {
 			fake.instances.push(this);
@@ -49,6 +51,14 @@ describe("job queue connection lifecycle", () => {
 		await jobQueue();
 		await jobQueue("worker");
 		const [producer, worker] = fake.instances;
+		expect(producer.updateQueue).not.toHaveBeenCalled();
+		expect(worker.updateQueue).toHaveBeenCalledWith("prepare-workspace", {
+			expireInSeconds: 4500,
+		});
+		expect(worker.updateQueue).toHaveBeenCalledWith(
+			"refresh-workspace-snapshot",
+			{ expireInSeconds: 4500 },
+		);
 		expect(producer.options).toMatchObject({
 			schedule: false,
 			supervise: false,

@@ -100,7 +100,10 @@ function toAccount(row: AgentAccountRow | undefined): UserAgentAccount {
 	if (row.status === "expired")
 		return { status: "expired", message: row.message ?? "Reconnect Codex." };
 	if (!row.encrypted_codex_auth) {
-		return { status: "expired", message: "Reconnect Codex to update its login." };
+		return {
+			status: "expired",
+			message: "Reconnect Codex to update its login.",
+		};
 	}
 	return {
 		status: "connected",

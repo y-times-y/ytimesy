@@ -62,6 +62,7 @@ export function isUserFacingAppError(message: string) {
 	const text = message.trim();
 	if (!text || text.length > 140) return false;
 	if (!/\s/.test(text)) return false;
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: Reject terminal escape sequences in user-facing error copy.
 	return !/parse_error|transform failed|expected ['`]|ansi|src\/|\.tsx?:|node_modules|stack|exception|at \S+\s+\(|\u001b|\[\d{1,3}m/i.test(
 		text,
 	);

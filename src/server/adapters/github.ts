@@ -80,7 +80,9 @@ export async function createAuthorizedRepository(
 	name: string,
 ): Promise<RepositoryChoice> {
 	const github = githubClient(token);
-	let created;
+	let created: Awaited<
+		ReturnType<typeof github.repos.createForAuthenticatedUser>
+	>;
 	try {
 		created = await github.repos.createForAuthenticatedUser({
 			name,

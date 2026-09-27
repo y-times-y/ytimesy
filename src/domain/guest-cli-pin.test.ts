@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
-	GUEST_CLI_PIN_ENV_PATH,
-	ensurePinnedCodexCommand,
 	ensurePinnedClaudeCommand,
+	ensurePinnedCodexCommand,
+	GUEST_CLI_PIN_ENV_PATH,
+	guestCliDisableUpdateExports,
+	guestCliPinSealScript,
 	PINNED_CLAUDE_CLI_VERSION,
 	PINNED_CODEX_CLI_VERSION,
 	PINNED_OPENCODE_CLI_VERSION,
-	guestCliDisableUpdateExports,
-	guestCliPinSealScript,
 	pinnedClaudeInstallCommand,
 	pinnedCodexInstallCommand,
 	pinnedOpenCodeInstallCommand,
@@ -25,7 +25,9 @@ describe("guest CLI pin", () => {
 	});
 	it("pins installers to the versions the adapters parse", () => {
 		expect(pinnedClaudeInstallCommand()).toContain(PINNED_CLAUDE_CLI_VERSION);
-		expect(pinnedClaudeInstallCommand()).toContain("@anthropic-ai/claude-code@");
+		expect(pinnedClaudeInstallCommand()).toContain(
+			"@anthropic-ai/claude-code@",
+		);
 		expect(pinnedOpenCodeInstallCommand()).toContain(
 			`--version ${PINNED_OPENCODE_CLI_VERSION}`,
 		);

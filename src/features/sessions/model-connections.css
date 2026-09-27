@@ -1,0 +1,42 @@
+.model-connection-card {
+	margin-block: 12px;
+	min-width: 0;
+}
+.model-connection-card select,
+.model-connection-form select {
+	width: 100%;
+	min-width: 0;
+	max-width: 100%;
+	padding: 10px;
+	border: 1px solid #333;
+	border-radius: 6px;
+	background: #171717;
+	color: #eee;
+	font: inherit;
+}
+.model-connection-card label {
+	display: block;
+	margin-block: 8px;
+}
+.model-connection-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+.model-connection-form {
+	margin-top: 20px;
+}
+.model-connection-form input {
+	min-width: 0;
+}
+@media (max-width: 600px) {
+	.model-connection-card select,
+	.model-connection-form select,
+	.model-connection-form input {
+		font-size: 16px;
+		min-height: 44px;
+	}
+	.model-connection-actions button {
+		min-height: 44px;
+	}
+}

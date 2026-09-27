@@ -1,4 +1,6 @@
 import { PgBoss } from "pg-boss";
+import { ENVIRONMENT_JOB_TIMEOUT_SECONDS } from "#/domain/environment-build-limits";
+import type { EnvironmentModel } from "#/domain/environment-model";
 import { database } from "../adapters/database";
 
 export const PREPARE_WORKSPACE_QUEUE = "prepare-workspace";
@@ -6,8 +8,10 @@ export const REFRESH_WORKSPACE_QUEUE = "refresh-workspace-snapshot";
 export const AGENT_TASK_EVENT_QUEUE = "agent-task-event";
 
 export interface WorkspaceJobQueue {
-	enqueuePrepare(workspaceId: string): Promise<string | null>;
-	enqueueRefresh?(workspaceId: string): Promise<string | null>;
+	enqueuePrepare(
+		workspaceId: string,
+		repairModel?: EnvironmentModel | null,
+	): Promise<string | null>;
 }
 
 type QueueRole = "producer" | "worker";
@@ -49,13 +53,19 @@ async function startJobQueue(role: QueueRole): Promise<PgBoss> {
 			retryLimit: 3,
 			retryBackoff: true,
 			retryDelay: 30,
-			expireInSeconds: 30 * 60,
+			expireInSeconds: ENVIRONMENT_JOB_TIMEOUT_SECONDS,
 		});
 		await boss.createQueue(REFRESH_WORKSPACE_QUEUE, {
 			policy: "singleton",
 			retryLimit: 1,
-			expireInSeconds: 30 * 60,
+			expireInSeconds: ENVIRONMENT_JOB_TIMEOUT_SECONDS,
 		});
+		if (role === "worker") {
+			for (const name of [PREPARE_WORKSPACE_QUEUE, REFRESH_WORKSPACE_QUEUE])
+				await boss.updateQueue(name, {
+					expireInSeconds: ENVIRONMENT_JOB_TIMEOUT_SECONDS,
+				});
+		}
 		await boss.createQueue(AGENT_TASK_EVENT_QUEUE, {
 			retryLimit: 3,
 			retryBackoff: true,
@@ -79,20 +89,12 @@ export async function enqueueAgentTaskEvent(eventId?: string) {
 }
 
 export const postgresJobQueue: WorkspaceJobQueue = {
-	async enqueuePrepare(workspaceId) {
+	async enqueuePrepare(workspaceId, repairModel) {
 		const queue = await jobQueue();
 		return queue.send(
 			PREPARE_WORKSPACE_QUEUE,
-			{ workspaceId },
-			{ singletonKey: workspaceId },
-		);
-	},
-	async enqueueRefresh(workspaceId) {
-		const queue = await jobQueue();
-		return queue.send(
-			REFRESH_WORKSPACE_QUEUE,
-			{ workspaceId },
-			{ singletonKey: `refresh:${workspaceId}` },
+			{ workspaceId, repairModel: repairModel ?? null },
+			{ singletonKey: workspaceId, ...(repairModel ? { retryLimit: 0 } : {}) },
 		);
 	},
 };

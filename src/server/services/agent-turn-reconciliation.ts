@@ -2,8 +2,8 @@ import { Effect } from "effect";
 import type { AgentSessionRecord } from "#/server/adapters/agent-sessions";
 import { runningAgentSessions } from "#/server/adapters/agent-sessions";
 import {
-	readHarnessWorkspaceSession,
 	type HarnessSessionScope,
+	readHarnessWorkspaceSession,
 } from "./harness-workspace-session";
 import { machinesForAgentSession } from "./session-workspace-machines";
 import type { WorkspaceMachines } from "./workspace-machines";

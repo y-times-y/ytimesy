@@ -1,19 +1,25 @@
+import { posix } from "node:path";
 import { Effect } from "effect";
-import { WorkspaceId } from "#/domain/ids";
 import type { WorkspaceFilePreview } from "#/domain/file-preview";
-import { filePreviewCommand } from "./file-preview-command";
+import { WorkspaceId } from "#/domain/ids";
 import { posixShellQuoted } from "#/domain/posix-command";
+import {
+	type ProjectFileRoot,
+	resolveProjectFile,
+} from "#/domain/project-files";
+import { projectFolderName, repositoriesForProject } from "#/domain/projects";
 import {
 	parseWorkspaceExplorerListing,
 	type WorkspaceExplorerListing,
 	type WorkspaceSourceFile,
 	type WorkspaceSourceWrite,
-	workspaceSourcePath,
 	workspaceSourceText,
 	workspaceSourceWriteText,
 } from "#/domain/workspace-explorer";
 import { PROJECT_CWD_PATH } from "#/server/adapters/freestyle/clone-project";
+import { projectForOwner } from "../adapters/projects";
 import { peekAgentSessionMachine } from "./agent-session-machine";
+import { filePreviewCommand } from "./file-preview-command";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 export type ExplorerScope = {
@@ -41,15 +47,20 @@ export function listWorkspaceExplorer(
 	machines: WorkspaceMachines,
 	scope: ExplorerScope,
 ): Effect.Effect<WorkspaceExplorerListing> {
-	return withRunningCheckout(machines, scope, (workspaceId) =>
+	return withRunningCheckout(machines, scope, (workspaceId, _root, roots) =>
 		Effect.tryPromise(() =>
 			machines.exec(
 				workspaceId,
-				`bash -lc ${posixShellQuoted(LIST_WORKSPACE_FILES)}`,
+				`bash -lc ${posixShellQuoted(roots.length > 1 ? roots.map((root) => `git -C ${posixShellQuoted(root.directory)} ls-files -co --exclude-standard | while IFS= read -r file; do printf '%s/%s\\n' ${posixShellQuoted(root.name)} "$file"; done`).join("\n") : LIST_WORKSPACE_FILES)}`,
 				20_000,
 			),
 		).pipe(
-			Effect.map((result) => parseWorkspaceExplorerListing(result.stdout)),
+			Effect.map((result) => {
+				const listing = parseWorkspaceExplorerListing(result.stdout);
+				return roots.length > 1
+					? { ...listing, root: posix.dirname(roots[0].directory) }
+					: listing;
+			}),
 			Effect.catchAll(() => Effect.succeed(emptyListing())),
 		),
 	).pipe(Effect.map((listing) => listing ?? emptyListing()));
@@ -62,8 +73,8 @@ export function readWorkspaceExplorerFile(
 ): Effect.Effect<WorkspaceSourceFile | null> {
 	const want = requested.trim();
 	if (!want) return Effect.succeed(null);
-	return withRunningCheckout(machines, scope, (workspaceId, root) => {
-		const path = root ? workspaceSourcePath(root, want) : null;
+	return withRunningCheckout(machines, scope, (workspaceId, _root, roots) => {
+		const path = resolveProjectFile(roots, want)?.path;
 		if (!path) return Effect.succeed(null);
 		return Effect.tryPromise(() =>
 			machines.readTextFile(workspaceId, path),
@@ -91,8 +102,8 @@ export function writeWorkspaceExplorerFile(
 			reason: "invalid",
 		});
 	}
-	return withRunningCheckout(machines, scope, (workspaceId, root) => {
-		const path = root ? workspaceSourcePath(root, want) : null;
+	return withRunningCheckout(machines, scope, (workspaceId, _root, roots) => {
+		const path = resolveProjectFile(roots, want)?.path;
 		if (!path)
 			return Effect.succeed<WorkspaceSourceWrite>({
 				ok: false,
@@ -120,8 +131,9 @@ export function readWorkspaceFilePreview(
 	path: string,
 	revision: "head" | "working",
 ): Effect.Effect<WorkspaceFilePreview> {
-	return withRunningCheckout(machines, scope, (id, root) => {
-		if (!root)
+	return withRunningCheckout(machines, scope, (id, _root, roots) => {
+		const file = resolveProjectFile(roots, path);
+		if (!file)
 			return Effect.succeed<WorkspaceFilePreview>({
 				kind: "unavailable",
 				reason: "Checkout is unavailable.",
@@ -129,7 +141,7 @@ export function readWorkspaceFilePreview(
 		return Effect.tryPromise(async (): Promise<WorkspaceFilePreview> => {
 			const output = await machines.exec(
 				id,
-				filePreviewCommand(root, path, revision),
+				filePreviewCommand(file.root, file.relative, revision),
 				25_000,
 			);
 			const result = JSON.parse(output.stdout);
@@ -172,7 +184,11 @@ export function readWorkspaceFilePreview(
 function withRunningCheckout<A>(
 	machines: WorkspaceMachines,
 	scope: ExplorerScope,
-	run: (workspaceId: WorkspaceId, root: string | null) => Effect.Effect<A>,
+	run: (
+		workspaceId: WorkspaceId,
+		root: string | null,
+		roots: ProjectFileRoot[],
+	) => Effect.Effect<A>,
 ): Effect.Effect<A | null> {
 	const projectId = scope.projectId?.trim();
 	if (!projectId) return Effect.succeed(null);
@@ -194,7 +210,24 @@ function withRunningCheckout<A>(
 		const cwd = yield* Effect.tryPromise(() =>
 			machines.readTextFile(workspaceId, PROJECT_CWD_PATH),
 		).pipe(Effect.catchAll(() => Effect.succeed(null)));
-		return yield* run(workspaceId, cwd?.trim() || null);
+		const root = cwd?.trim() || null;
+		const project = yield* Effect.tryPromise(() =>
+			projectForOwner(scope.userId, projectId),
+		);
+		if (!project) return null;
+		const roots = root
+			? repositoriesForProject(project).map((repo, index) => ({
+					name: projectFolderName(repo.fullName),
+					directory:
+						index === 0
+							? root
+							: posix.join(
+									posix.dirname(root),
+									projectFolderName(repo.fullName),
+								),
+				}))
+			: [];
+		return yield* run(workspaceId, root, roots);
 	}).pipe(Effect.catchAll(() => Effect.succeed(null)));
 }
 

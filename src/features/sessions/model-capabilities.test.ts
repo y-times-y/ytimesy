@@ -1,8 +1,68 @@
 import { describe, expect, it } from "vitest";
 import {
+	composerListedModels,
 	preferredSessionModelId,
+	reasoningLevelLabel,
 	sessionModelsFromListed,
 } from "./model-capabilities";
+
+describe("composerListedModels", () => {
+	const remembered = [{ id: "gpt-6-luna", label: "gpt-6-luna" }];
+	const catalog = [
+		{ id: "gpt-6-astra", label: "GPT-6-Astra" },
+		{ id: "gpt-6-luna", label: "GPT-6-Luna", supportsFastMode: true },
+	];
+	it("does not let a disconnected chat's single-model fallback hide the catalog", () => {
+		expect(
+			composerListedModels({
+				sessionModels: remembered,
+				catalogModels: catalog,
+				rememberedModels: remembered,
+				sessionConnected: false,
+			}),
+		).toBe(catalog);
+	});
+	it("uses the catalog when a connected session has not loaded models", () => {
+		expect(
+			composerListedModels({
+				sessionModels: [],
+				catalogModels: catalog,
+				rememberedModels: remembered,
+				sessionConnected: true,
+			}),
+		).toBe(catalog);
+	});
+	it("prefers the connected runtime's current catalog over older saved models", () => {
+		expect(
+			composerListedModels({
+				sessionModels: catalog,
+				catalogModels: remembered,
+				rememberedModels: [],
+				sessionConnected: true,
+			}),
+		).toBe(catalog);
+	});
+	it("retains the last-used model only when no catalog is available", () => {
+		expect(
+			composerListedModels({
+				sessionModels: [],
+				catalogModels: [],
+				rememberedModels: remembered,
+				sessionConnected: false,
+			}),
+		).toBe(remembered);
+	});
+});
+
+it.each([
+	["low", "Low"],
+	["medium", "Medium"],
+	["high", "High"],
+	["xhigh", "Extra high"],
+	["max", "Max"],
+])("uses a short reasoning label for %s", (id, label) => {
+	expect(reasoningLevelLabel(id)).toBe(label);
+});
 
 describe("sessionModelsFromListed", () => {
 	it("keeps agent-listed names and does not invent reasoning or Fast", () => {

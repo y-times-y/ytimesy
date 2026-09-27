@@ -38,9 +38,9 @@ import {
 	InputGroupButton,
 	InputGroupInput,
 } from "#/components/ui/input-group.tsx";
+import { YtimesyBrand } from "#/features/auth/onboarding-shell";
 import { useSignInContinuation } from "#/lib/auth/use-sign-in-continuation.ts";
 import { cn } from "#/lib/utils.ts";
-import { YtimesyBrand } from "#/features/auth/onboarding-shell";
 import { isAuthFormFieldInvalid, useAuthForm } from "./auth-form";
 import { LastUsedBadge } from "./last-login-method/last-used-badge";
 import { ProviderButtons, type SocialLayout } from "./provider-buttons";

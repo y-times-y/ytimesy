@@ -2,7 +2,9 @@ import { expect, it } from "vitest";
 import { appErrorDetail } from "./app-status";
 
 it("uses a short product message when one exists", () => {
-	expect(appErrorDetail(new Error("Database is down"))).toBe("Database is down");
+	expect(appErrorDetail(new Error("Database is down"))).toBe(
+		"Database is down",
+	);
 });
 
 it("hides compiler dumps and empty errors", () => {

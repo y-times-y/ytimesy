@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { WorkspaceId } from "../src/domain/ids";
 import {
 	disconnectAgentAccount,
 	loadAgentAccount,
@@ -11,7 +12,6 @@ import {
 	captureManagedCodexAuth,
 	codexExternalTokens,
 } from "../src/server/auth/codex-managed-auth";
-import { WorkspaceId } from "../src/domain/ids";
 import type { WorkspaceMachines } from "../src/server/services/workspace-machines";
 
 let db: PGlite;
@@ -50,6 +50,7 @@ beforeAll(async () => {
 		"20260921230000_agent_task_lifecycle.sql",
 		"20260921231000_agent_task_events.sql",
 		"20260923014000_codex_managed_auth.sql",
+		"20260927210000_project_environments.sql",
 	])
 		await db.exec(await readFile(`supabase/migrations/${file}`, "utf8"));
 	await db.exec(
@@ -106,7 +107,9 @@ it("stores one encrypted managed login after device-code sign-in", async () => {
 	const stored = await db.query<{ encrypted_codex_auth: string }>(
 		"select encrypted_codex_auth from agent_account where user_id='alice'",
 	);
-	expect(stored.rows[0].encrypted_codex_auth).not.toContain("refresh-test-only");
+	expect(stored.rows[0].encrypted_codex_auth).not.toContain(
+		"refresh-test-only",
+	);
 	expect(await loadAgentAccount("alice")).toMatchObject({
 		status: "connected",
 		provider: "codex",

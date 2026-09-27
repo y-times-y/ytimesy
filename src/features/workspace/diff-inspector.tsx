@@ -5,12 +5,12 @@ import {
 	fileChangeDisplayPath,
 	fileChangesHeading,
 } from "#/domain/file-change-copy";
+import { filePreviewKind } from "#/domain/file-preview";
 import type { FileChangeEntry } from "#/domain/session-item";
 import { sourceLanguageFromPath } from "#/domain/source-language";
 import { fileChangeForPath } from "#/domain/workspace-file-tree";
 import { FileChangeCounts } from "../sessions/file-change-counts";
 import { DiffHunkPreview } from "./diff-hunk-preview";
-import { filePreviewKind } from "#/domain/file-preview";
 import { PreviewModeSwitch, WorkspaceDiffPreview } from "./file-preview";
 
 export function DiffInspector({

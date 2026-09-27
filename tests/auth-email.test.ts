@@ -36,6 +36,7 @@ beforeAll(async () => {
 		"20260920010000_agent_account_per_provider.sql",
 		"20260921230000_agent_task_lifecycle.sql",
 		"20260921231000_agent_task_events.sql",
+		"20260927210000_project_environments.sql",
 	])
 		await db.exec(await readFile(`supabase/migrations/${file}`, "utf8"));
 });

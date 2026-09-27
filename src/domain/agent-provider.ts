@@ -1,4 +1,4 @@
-export type AgentProviderId = "codex" | "claude" | "opencode";
+export type AgentProviderId = "codex" | "claude" | "opencode" | "api";
 
 export const DEFAULT_COMPOSER_HARNESS_ID: AgentProviderId = "codex";
 
@@ -31,11 +31,25 @@ export const OPENCODE_PROVIDER: AgentProvider = {
 };
 
 export function offeredAgentProviders(): readonly AgentProvider[] {
-	return [CODEX_PROVIDER, CLAUDE_PROVIDER];
+	return [CODEX_PROVIDER, CLAUDE_PROVIDER, API_PROVIDER];
+}
+
+export const API_PROVIDER: AgentProvider = {
+	id: "api",
+	name: "API models",
+	signInMethod: null,
+	authorizeWith: "API connection",
+};
+
+export function parseRuntimeId(
+	value: string,
+): Exclude<AgentProviderId, "opencode"> {
+	if (value === "codex" || value === "claude" || value === "api") return value;
+	throw new Error("Unsupported runtime");
 }
 
 export function recognizedAgentProviders(): readonly AgentProvider[] {
-	return [CODEX_PROVIDER, CLAUDE_PROVIDER, OPENCODE_PROVIDER];
+	return [CODEX_PROVIDER, CLAUDE_PROVIDER, OPENCODE_PROVIDER, API_PROVIDER];
 }
 
 export function offeredAgentProviderId(id: AgentProviderId): AgentProviderId {
@@ -46,6 +60,8 @@ export function offeredAgentProviderId(id: AgentProviderId): AgentProviderId {
 
 export function agentProviderById(id: AgentProviderId): AgentProvider {
 	switch (id) {
+		case "api":
+			return API_PROVIDER;
 		case "codex":
 			return CODEX_PROVIDER;
 		case "claude":

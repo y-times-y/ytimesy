@@ -1,4 +1,3 @@
-import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { IdentityGate } from "./identity-gate";
@@ -17,10 +16,7 @@ describe("server-verified identity", () => {
 	it("keeps the workspace visible during the browser session check", () => {
 		state.isPending = true;
 		const html = renderToStaticMarkup(
-			createElement(IdentityGate, {
-				initialSignedIn: true,
-				children: "Workspace",
-			}),
+			<IdentityGate initialSignedIn>Workspace</IdentityGate>,
 		);
 		expect(html).toBe("Workspace");
 	});
@@ -28,10 +24,7 @@ describe("server-verified identity", () => {
 		state.isPending = true;
 		expect(
 			renderToStaticMarkup(
-				createElement(IdentityGate, {
-					initialSignedIn: false,
-					children: "Workspace",
-				}),
+				<IdentityGate initialSignedIn={false}>Workspace</IdentityGate>,
 			),
 		).toBe("");
 	});
@@ -40,10 +33,7 @@ describe("server-verified identity", () => {
 		state.data = null;
 		expect(
 			renderToStaticMarkup(
-				createElement(IdentityGate, {
-					initialSignedIn: true,
-					children: "Workspace",
-				}),
+				<IdentityGate initialSignedIn>Workspace</IdentityGate>,
 			),
 		).toBe("Sign in");
 	});

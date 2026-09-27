@@ -3,37 +3,36 @@ import {
 	Archive,
 	ChevronRight,
 	CircleAlert,
+	Clock3,
 	Folder,
+	GitCompareArrows,
 	GitMerge,
+	GitPullRequest,
 	GitPullRequestClosed,
 	GitPullRequestDraft,
 	PanelLeft,
 	Pin,
 	Plus,
+	ShieldX,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { projectFolderName, type Project } from "#/domain/projects";
+import { type Project, projectDisplayName } from "#/domain/projects";
 import { isTurnRunning, type SessionTurnStatus } from "#/domain/session-item";
-import {
-	accountDisplayName,
-	accountInitials,
-} from "#/domain/workspace-settings";
-import { requestJson } from "../projects/api";
 import {
 	CHAT_SEEN_STORAGE_KEY,
 	chatsWithPinnedFirst,
-	compactRelativeAge,
 	collapsedProjectStorageValue,
+	compactRelativeAge,
 	newChatIsActive,
 	parseCollapsedProjectIds,
 	parsePinnedChatIds,
 	parseSeenChatKeys,
 	pinnedChatStorageValue,
 	projectFolderIsExpanded,
-	seenChatStorageValue,
-	type SidebarChat,
 	SIDEBAR_COLLAPSED_PROJECTS_KEY,
 	SIDEBAR_PINNED_CHATS_KEY,
+	type SidebarChat,
+	seenChatStorageValue,
 	sidebarChatAttention,
 	sidebarChatIsRunning,
 	sidebarChatSeenKey,
@@ -47,6 +46,11 @@ import {
 	type SidebarChatPrNeed,
 	sidebarChatPrNeedLabel,
 } from "#/domain/sidebar-pr";
+import {
+	accountDisplayName,
+	accountInitials,
+} from "#/domain/workspace-settings";
+import { requestJson } from "../projects/api";
 
 interface ProjectSidebarProps {
 	projects: Project[];
@@ -166,7 +170,7 @@ export function ProjectSidebar({
 			);
 			return next;
 		});
-	}, [selectedChatId, openTurnStatus]);
+	}, [selectedChatId, openTurnStatus, chats]);
 
 	function persistCollapsed(next: readonly string[]) {
 		setCollapsedProjectIds(next);
@@ -340,8 +344,8 @@ export function ProjectSidebar({
 											className="sidebar-folder-toggle"
 											aria-label={
 												open
-													? `Collapse ${projectFolderName(project.fullName)}`
-													: `Expand ${projectFolderName(project.fullName)}`
+													? `Collapse ${projectDisplayName(project)}`
+													: `Expand ${projectDisplayName(project)}`
 											}
 											aria-expanded={open}
 											onClick={() => toggleProjectFolder(project.id)}
@@ -360,14 +364,14 @@ export function ProjectSidebar({
 											}
 										>
 											<Folder size={16} />
-											<span>{projectFolderName(project.fullName)}</span>
+											<span>{projectDisplayName(project)}</span>
 										</button>
 										<div className="sidebar-folder-actions">
 											{onDeleteProject ? (
 												<button
 													type="button"
 													className="sidebar-folder-remove"
-													aria-label={`Remove ${projectFolderName(project.fullName)}`}
+													aria-label={`Remove ${projectDisplayName(project)}`}
 													title="Remove project"
 													onClick={(event) => {
 														event.stopPropagation();
@@ -380,7 +384,7 @@ export function ProjectSidebar({
 											<button
 												type="button"
 												className="sidebar-folder-add"
-												aria-label={`New chat in ${projectFolderName(project.fullName)}`}
+												aria-label={`New chat in ${projectDisplayName(project)}`}
 												title="New chat"
 												data-active={
 													selected && newChatActive ? "true" : undefined
@@ -614,9 +618,12 @@ function SidebarAccountButton({ onOpen }: { onOpen: () => void }) {
 }
 
 function SidebarChatPrIcon({ need }: { need: SidebarChatPrNeed }) {
-	if (need === "conflict") return <GitMerge size={13} strokeWidth={1.5} />;
-	if (need === "blocked")
-		return <GitPullRequestClosed size={13} strokeWidth={1.5} />;
+	if (need === "ready") return <GitPullRequest size={13} strokeWidth={1.5} />;
+	if (need === "merged") return <GitMerge size={13} strokeWidth={1.5} />;
+	if (need === "pending") return <Clock3 size={13} strokeWidth={1.5} />;
+	if (need === "conflict")
+		return <GitCompareArrows size={13} strokeWidth={1.5} />;
+	if (need === "blocked") return <ShieldX size={13} strokeWidth={1.5} />;
 	if (need === "checks_failed")
 		return <CircleAlert size={13} strokeWidth={1.5} />;
 	if (need === "draft")

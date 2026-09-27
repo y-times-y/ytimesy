@@ -11,10 +11,10 @@ import {
 	persistableTurnStatusFromTranscript,
 	reasoningSummariesFromTurn,
 	type SessionItem,
+	sessionItemsQueuedWithUser,
 	sessionRecordHasConversation,
 	sessionTitleFromItems,
 	sessionUsesFollowUpLayout,
-	sessionItemsQueuedWithUser,
 	sessionViewItems,
 	sessionViewShouldReplaceOpenTurn,
 	showTurnWorking,
@@ -55,7 +55,10 @@ describe("session items", () => {
 		]);
 		expect(
 			sessionViewItems(
-				[user, { kind: "agentMessage", id: SessionItemId("old"), text: "pong" }],
+				[
+					user,
+					{ kind: "agentMessage", id: SessionItemId("old"), text: "pong" },
+				],
 				[
 					user,
 					{ kind: "agentMessage", id: SessionItemId("old"), text: "pong" },
@@ -66,7 +69,11 @@ describe("session items", () => {
 					},
 				],
 			),
-		).toMatchObject([{ text: "run echo" }, { text: "pong" }, { text: "list the files" }]);
+		).toMatchObject([
+			{ text: "run echo" },
+			{ text: "pong" },
+			{ text: "list the files" },
+		]);
 		expect(
 			sessionViewItems(
 				[
@@ -77,7 +84,10 @@ describe("session items", () => {
 						text: "list the files",
 					},
 				],
-				[user, { kind: "agentMessage", id: SessionItemId("old"), text: "pong" }],
+				[
+					user,
+					{ kind: "agentMessage", id: SessionItemId("old"), text: "pong" },
+				],
 			),
 		).toMatchObject([{ text: "run echo" }, { text: "list the files" }]);
 		expect(

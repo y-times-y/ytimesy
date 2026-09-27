@@ -1,6 +1,6 @@
 import {
-	projectFolderName,
 	type Project,
+	projectFolderName,
 	type RepositoryChoice,
 } from "./projects";
 import { sessionBranchName } from "./session-branch";
@@ -20,12 +20,13 @@ export function addProjectCopy(phase: AddProjectPhase) {
 	if (phase === "connect") {
 		return {
 			title: "Connect GitHub",
-			description: "Grant ytimesy access to the repositories you want to work on.",
+			description:
+				"Grant ytimesy access to the repositories you want to work on.",
 		};
 	}
 	return {
 		title: "Add project",
-		description: "Pick a repository. New chats start on a ytimesy/ branch.",
+		description: "Select repositories to share one project environment.",
 	};
 }
 
@@ -71,7 +72,11 @@ export function filterProjects(
 	const needle = query.trim().toLowerCase();
 	if (!needle) return [...projects];
 	return projects.filter((project) =>
-		project.fullName.toLowerCase().includes(needle),
+		[
+			project.name,
+			project.fullName,
+			...(project.repositories?.map((repo) => repo.fullName) ?? []),
+		].some((name) => name?.toLowerCase().includes(needle)),
 	);
 }
 
@@ -109,9 +114,13 @@ export function projectPickerRows(input: {
 }): ProjectPickerRow[] {
 	const seen = new Set<string>();
 	const rows: ProjectPickerRow[] = [];
-	for (const repository of filterRepositories(input.repositories, input.query)) {
+	for (const repository of filterRepositories(
+		input.repositories,
+		input.query,
+	)) {
 		const project = input.projects.find(
 			(candidate) =>
+				!candidate.name &&
 				candidate.installationId === repository.installationId &&
 				candidate.repositoryId === repository.repositoryId,
 		);
@@ -127,13 +136,15 @@ export function projectPickerRows(input: {
 	}
 	for (const project of filterProjects(input.projects, input.query)) {
 		const key = `${project.installationId}:${project.repositoryId}`;
-		if (seen.has(key)) continue;
+		if (!project.name && seen.has(key)) continue;
 		rows.push({
 			key: project.id,
-			fullName: project.fullName,
+			fullName: project.name || project.fullName,
 			selected: project.id === input.selectedProjectId,
 			project,
 		});
 	}
-	return rows.sort((left, right) => left.fullName.localeCompare(right.fullName));
+	return rows.sort((left, right) =>
+		left.fullName.localeCompare(right.fullName),
+	);
 }

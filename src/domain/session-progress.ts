@@ -23,6 +23,7 @@ export function progressIsFresh(
 }
 
 export type SessionProgress = {
+	readonly usage?: CodexUsage;
 	readonly sessionId: string;
 	readonly items: readonly SessionItem[];
 	readonly turnStatus: SessionTurnStatus;
@@ -43,3 +44,5 @@ export function progressMatchesTurn(
 			expected.at(-1)?.text === received.at(-1)?.text)
 	);
 }
+
+import type { CodexUsage } from "./codex-usage";

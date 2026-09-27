@@ -16,6 +16,7 @@ import {
 	taskToolPlacement,
 	taskToolString,
 } from "#/domain/agent-task-tool";
+import { runtimeHandoffPrompt } from "#/domain/api-conversation";
 import {
 	claudeSessionRemembersSignIn,
 	rememberedClaudeModels,
@@ -48,6 +49,7 @@ import {
 	saveAgentTaskPublication,
 	saveAgentTaskReview,
 	saveAgentTaskState,
+	selectAgentSessionHarness,
 	sideAgentSession,
 } from "#/server/adapters/agent-sessions";
 import {
@@ -61,7 +63,6 @@ import {
 	type ClaudeAuthStatus,
 	connectClaudeCode,
 	refreshClaudeAuthStatus,
-	submitClaudeAuthCode,
 	submitClaudeTask,
 } from "#/server/adapters/claude/login-session";
 import {
@@ -87,6 +88,11 @@ import {
 	prepareAgentTaskStart,
 	syncProjectContextForTask,
 } from "./agent-session-machine";
+import {
+	readApiWorkspaceSession,
+	sendApiWorkspaceTask,
+	stopApiWorkspaceTask,
+} from "./api-workspace-session";
 import {
 	type CodexSessionScope,
 	connectCodexWorkspaceSession,
@@ -145,10 +151,20 @@ export function startPreparedAgentTask(
 					predecessor,
 				}),
 			);
-			yield* sendHarnessWorkspaceTask(taskMachines, taskScope(scope, task), {
+			const taskInput = {
 				text: task.taskPrompt as string,
 				modelId: task.listedModelId as string,
-			});
+			};
+			if (task.harness === "api")
+				yield* Effect.tryPromise(() =>
+					sendApiWorkspaceTask(taskScope(scope, task), taskInput, true),
+				);
+			else
+				yield* sendHarnessWorkspaceTask(
+					taskMachines,
+					taskScope(scope, task),
+					taskInput,
+				);
 			return machine;
 		}).pipe(
 			Effect.tapError(() =>
@@ -208,6 +224,12 @@ export function readHarnessWorkspaceSession(
 	machines: WorkspaceMachines,
 	scope: HarnessSessionScope,
 ): Effect.Effect<PublicHarnessSession> {
+	if (scope.harnessId === "api")
+		return withSiblingSideChat(
+			machines,
+			scope,
+			Effect.promise(() => readApiWorkspaceSession(scope)),
+		);
 	return serviceAgentTaskToolRequest(machines, scope).pipe(
 		Effect.flatMap(() => readHarnessWorkspaceSessionView(machines, scope)),
 	);
@@ -261,6 +283,8 @@ export function connectHarnessWorkspaceSession(
 	machines: WorkspaceMachines,
 	scope: HarnessSessionScope,
 ): Effect.Effect<PublicHarnessSession> {
+	if (scope.harnessId === "api")
+		return Effect.promise(() => readApiWorkspaceSession(scope));
 	if (scope.harnessId === "codex") {
 		return withSiblingSideChat(
 			machines,
@@ -313,7 +337,7 @@ export function connectHarnessWorkspaceSession(
 		}
 		beginSharedDesktop(machines, scope);
 		const apiKey = yield* Effect.tryPromise(() =>
-			decryptHarnessApiKey(scope.harnessId),
+			decryptHarnessApiKey(scope.userId, scope.harnessId),
 		);
 		if (scope.harnessId === "claude") {
 			const siblings = yield* Effect.tryPromise(() =>
@@ -368,56 +392,6 @@ export function connectHarnessWorkspaceSession(
 	);
 }
 
-/**
- * Completes Claude Code on the same login PTY. Anthropic's paste-back code
- * is bound to that PKCE session; starting a second login would reject it.
- */
-export function completeClaudeWorkspaceAuth(
-	machines: WorkspaceMachines,
-	scope: HarnessSessionScope,
-	code: string,
-): Effect.Effect<PublicHarnessSession> {
-	if (scope.harnessId !== "claude") {
-		return Effect.succeed({
-			...emptyHarnessSession(),
-			connection: {
-				status: "failed" as const,
-				provider: scope.harnessId,
-				message: "Only Claude Code uses a pasted Anthropic login code.",
-			},
-		});
-	}
-	return withSessionMachine(machines, scope, true, (providerRef, session) =>
-		submitClaudeAuthCode(machines, WorkspaceId(providerRef), code).pipe(
-			Effect.tap((status) =>
-				rememberClaudeHome(
-					machines,
-					WorkspaceId(providerRef),
-					scope.userId,
-					status,
-					"replace",
-				),
-			),
-			Effect.flatMap((status) =>
-				Effect.tryPromise(() =>
-					persistBoundSessionView(session, viewFromClaude(status, providerRef)),
-				),
-			),
-		),
-	).pipe(
-		Effect.catchAll((cause) =>
-			Effect.succeed({
-				...emptyHarnessSession(),
-				connection: {
-					status: "failed" as const,
-					provider: "claude" as const,
-					message: publicFailureMessage(cause),
-				},
-			}),
-		),
-	);
-}
-
 export function sendHarnessWorkspaceTask(
 	machines: WorkspaceMachines,
 	scope: HarnessSessionScope,
@@ -427,17 +401,68 @@ export function sendHarnessWorkspaceTask(
 		readonly lane?: "main" | "side";
 		readonly variant?: string;
 		readonly fast?: boolean;
+		readonly runtimeText?: string;
 	},
 ): Effect.Effect<PublicHarnessSession> {
+	if (
+		scope.harnessId !== "api" &&
+		input.runtimeText === undefined &&
+		scope.sessionId &&
+		input.lane !== "side"
+	) {
+		return Effect.gen(function* () {
+			const previous = yield* Effect.tryPromise(() =>
+				agentSessionForOwner(scope.userId, scope.sessionId as string),
+			);
+			const switching = previous && previous.harness !== scope.harnessId;
+			if (switching && previous.turnStatus === "running")
+				throw new Error("Stop the active turn before switching runtimes.");
+			const runtimeText = switching
+				? runtimeHandoffPrompt(
+						sessionItemsFromUnknown(previous.items),
+						input.text,
+					)
+				: input.text;
+			if (switching)
+				yield* Effect.tryPromise(() =>
+					selectAgentSessionHarness(
+						scope.userId,
+						previous.projectId,
+						previous.id,
+						scope.harnessId,
+					),
+				);
+			return yield* sendHarnessWorkspaceTask(machines, scope, {
+				...input,
+				runtimeText,
+			});
+		}).pipe(
+			Effect.catchAll((cause) =>
+				Effect.succeed({
+					...emptyHarnessSession(),
+					connection: {
+						status: "failed" as const,
+						provider: scope.harnessId,
+						message: publicFailureMessage(cause),
+					},
+				}),
+			),
+		);
+	}
 	if (input.lane === "side") {
 		return sendHarnessSideTask(machines, scope, input);
 	}
+	if (scope.harnessId === "api")
+		return Effect.promise(() => sendApiWorkspaceTask(scope, input));
 	if (scope.harnessId === "codex") {
 		return queueHarnessTurn(
 			machines,
 			scope,
 			input.text,
-			sendCodexWorkspaceTask(machines, scope, input),
+			sendCodexWorkspaceTask(machines, scope, {
+				...input,
+				text: input.runtimeText ?? input.text,
+			}),
 		);
 	}
 	return queueHarnessTurn(
@@ -445,13 +470,10 @@ export function sendHarnessWorkspaceTask(
 		scope,
 		input.text,
 		withSessionMachine(machines, scope, true, (providerRef, session) =>
-			submitConnectedHarnessTask(
-				machines,
-				scope,
-				providerRef,
-				session,
-				input,
-			).pipe(
+			submitConnectedHarnessTask(machines, scope, providerRef, session, {
+				...input,
+				text: input.runtimeText ?? input.text,
+			}).pipe(
 				Effect.flatMap((view) => attachSiblingSideChat(machines, scope, view)),
 			),
 		),
@@ -656,7 +678,7 @@ function serviceAgentTaskToolRequest(
 	}).pipe(Effect.catchAll(() => Effect.void));
 }
 
-function runAgentTaskTool(
+export function runAgentTaskTool(
 	machines: WorkspaceMachines,
 	scope: HarnessSessionScope,
 	parent: AgentSessionRecord,
@@ -835,6 +857,8 @@ git diff -- .`,
 				: null;
 			const published = yield* publishProject(scope.userId, {
 				projectId: scope.projectId,
+				repositoryFullName:
+					taskToolString(request.arguments, "repositoryFullName") || undefined,
 				sessionId: target.id,
 				title,
 				body: taskToolString(request.arguments, "body"),
@@ -903,6 +927,8 @@ export function stopHarnessWorkspaceTurn(
 	if (input?.lane === "side") {
 		return stopHarnessSideTurn(machines, scope);
 	}
+	if (scope.harnessId === "api")
+		return Effect.promise(() => stopApiWorkspaceTask(scope));
 	if (scope.harnessId === "codex") {
 		return stopCodexWorkspaceTurn(machines, scope);
 	}
@@ -1206,24 +1232,14 @@ function submitConnectedHarnessTask(
 			);
 		}
 		const apiKey = yield* Effect.tryPromise(() =>
-			decryptHarnessApiKey(scope.harnessId),
+			decryptHarnessApiKey(scope.userId, scope.harnessId),
 		);
 		if (scope.harnessId === "claude") {
-			let status = yield* refreshClaudeAuthStatus(
+			let status = yield* connectClaudeCode(
 				machines,
 				WorkspaceId(providerRef),
+				apiKey,
 			);
-			if (status.stage !== "authenticated") {
-				const siblings = yield* Effect.tryPromise(() =>
-					listUserProviderRefs(scope.userId, providerRef),
-				);
-				status = yield* connectClaudeCode(
-					machines,
-					WorkspaceId(providerRef),
-					apiKey,
-					{ userId: scope.userId, siblingProviderRefs: siblings },
-				);
-			}
 			yield* rememberClaudeHome(
 				machines,
 				WorkspaceId(providerRef),
@@ -1393,31 +1409,39 @@ function sendHarnessSideTask(
 		yield* Effect.tryPromise(() =>
 			machines.ensureRunning(WorkspaceId(bound.providerRef)),
 		);
-		yield* Effect.tryPromise(() =>
-			persistSessionTurnStatus(bound.session, "running"),
-		);
+		if (scope.harnessId !== "api")
+			yield* Effect.tryPromise(() =>
+				persistSessionTurnStatus(bound.session, "running"),
+			);
 		const sideView =
-			scope.harnessId === "codex"
-				? yield* sendCodexWorkspaceTask(
-						machines,
-						{
-							userId: scope.userId,
-							projectId: scope.projectId,
-							sessionId: bound.session.id,
-							createNew: false,
-						},
-						{
-							text: input.text,
-							modelId: input.modelId,
-						},
+			scope.harnessId === "api"
+				? yield* Effect.promise(() =>
+						sendApiWorkspaceTask(
+							{ ...scope, sessionId: bound.session.id, createNew: false },
+							input,
+						),
 					)
-				: yield* submitConnectedHarnessTask(
-						machines,
-						scope,
-						bound.providerRef,
-						bound.session,
-						input,
-					);
+				: scope.harnessId === "codex"
+					? yield* sendCodexWorkspaceTask(
+							machines,
+							{
+								userId: scope.userId,
+								projectId: scope.projectId,
+								sessionId: bound.session.id,
+								createNew: false,
+							},
+							{
+								text: input.text,
+								modelId: input.modelId,
+							},
+						)
+					: yield* submitConnectedHarnessTask(
+							machines,
+							scope,
+							bound.providerRef,
+							bound.session,
+							input,
+						);
 		const main = yield* readHarnessWorkspaceSession(machines, {
 			...scope,
 			createNew: false,
@@ -1696,7 +1720,8 @@ function rememberClaudeHome(
 	status: ClaudeAuthStatus,
 	snapshot: "ensure" | "replace" | false = "ensure",
 ): Effect.Effect<void> {
-	if (status.stage !== "authenticated") return Effect.void;
+	if (status.stage !== "authenticated" || status.authMode === "apikey")
+		return Effect.void;
 	return Effect.gen(function* () {
 		yield* captureClaudeHome(machines, workspaceId, userId);
 		if (!snapshot) return;

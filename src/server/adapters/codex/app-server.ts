@@ -1,7 +1,7 @@
 import { Effect } from "effect";
 import {
-	guestCliDisableUpdateExports,
 	ensurePinnedCodexCommand,
+	guestCliDisableUpdateExports,
 } from "#/domain/guest-cli-pin";
 import type { WorkspaceId } from "#/domain/ids";
 import type { CodexProbeResult } from "#/server/services/capabilities";

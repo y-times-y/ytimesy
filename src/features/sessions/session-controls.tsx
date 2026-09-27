@@ -1,27 +1,12 @@
-import { Paperclip, Zap } from "lucide-react";
-import { useRef } from "react";
-import {
-	Select,
-	SelectContent,
-	SelectGroup,
-	SelectItem,
-	SelectLabel,
-	SelectTrigger,
-	SelectValue,
-} from "#/components/ui/select";
-import { Toggle } from "#/components/ui/toggle";
-import {
-	Tooltip,
-	TooltipContent,
-	TooltipProvider,
-	TooltipTrigger,
-} from "#/components/ui/tooltip";
+import { Paperclip } from "lucide-react";
+import { type ReactNode, useRef } from "react";
 import type { AgentProviderId } from "#/domain/agent-provider";
 import { HarnessPicker } from "./harness-picker";
-import { resolveReasoningLevel, type SessionModel } from "./model-capabilities";
-import { ReasoningOption } from "./reasoning-option";
+import type { SessionModel } from "./model-capabilities";
 
 interface SessionControlsProps {
+	contextIndicator?: ReactNode;
+	connectionContent?: ReactNode;
 	harnessId: AgentProviderId;
 	onHarnessIdChange: (id: AgentProviderId) => void;
 	models: readonly SessionModel[];
@@ -39,6 +24,8 @@ interface SessionControlsProps {
 }
 
 export function SessionControls({
+	contextIndicator,
+	connectionContent,
 	harnessId,
 	onHarnessIdChange,
 	models,
@@ -56,7 +43,6 @@ export function SessionControls({
 }: SessionControlsProps) {
 	const fileInput = useRef<HTMLInputElement>(null);
 	const model = models.find((candidate) => candidate.id === modelId);
-	const reasoning = resolveReasoningLevel(model, reasoningId);
 	const selectedModelId =
 		model?.id ??
 		models.find((candidate) => candidate.id === listedModelId)?.id ??
@@ -82,82 +68,34 @@ export function SessionControls({
 			>
 				<Paperclip className="size-4" />
 			</button>
-			<HarnessPicker
-				harnessId={harnessId}
-				models={models}
-				modelId={selectedModelId}
-				modelsEnabled={models.length > 0}
-				onConnect={onConnect}
-				catalogStatus={catalogStatus}
-				providerConnected={providerConnected}
-				onModelIdChange={(id) => {
-					onModelIdChange(id);
-					onReasoningIdChange("");
-					onFastChange(false);
-				}}
-				onHarnessIdChange={(id) => {
-					onHarnessIdChange(id);
-					onModelIdChange("");
-					onReasoningIdChange("");
-					onFastChange(false);
-				}}
-			/>
-			{!model?.reasoning ? null : (
-				<Select
-					value={reasoning?.id ?? ""}
-					onValueChange={onReasoningIdChange}
-					disabled={models.length === 0}
-				>
-					<SelectTrigger
-						className="composer-select reasoning-select"
-						aria-label="Reasoning level"
-					>
-						<SelectValue placeholder="Reasoning" />
-					</SelectTrigger>
-					<SelectContent
-						position="popper"
-						side="top"
-						align="start"
-						sideOffset={8}
-					>
-						<SelectGroup>
-							<SelectLabel>Reasoning</SelectLabel>
-							{model?.reasoning?.levels.map((option, index, levels) => (
-								<SelectItem
-									key={option.id}
-									value={option.id}
-									textValue={option.label}
-								>
-									<ReasoningOption
-										label={option.label}
-										level={index + 1}
-										levelCount={levels.length}
-									/>
-								</SelectItem>
-							))}
-						</SelectGroup>
-					</SelectContent>
-				</Select>
-			)}
-			{!model?.supportsFastMode ? null : (
-				<TooltipProvider delayDuration={350}>
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<Toggle
-								className="composer-control fast-control"
-								aria-label="Fast mode"
-								pressed={fast}
-								onPressedChange={onFastChange}
-							>
-								<Zap className="size-4" fill={fast ? "currentColor" : "none"} />
-							</Toggle>
-						</TooltipTrigger>
-						<TooltipContent side="bottom" sideOffset={8}>
-							{`Fast mode ${fast ? "on" : "off"}`}
-						</TooltipContent>
-					</Tooltip>
-				</TooltipProvider>
-			)}
+			<div className="composer-model-controls">
+				<HarnessPicker
+					connectionContent={connectionContent}
+					harnessId={harnessId}
+					models={models}
+					modelId={selectedModelId}
+					modelsEnabled={models.length > 0}
+					onConnect={onConnect}
+					catalogStatus={catalogStatus}
+					providerConnected={providerConnected}
+					reasoningId={reasoningId}
+					onReasoningIdChange={onReasoningIdChange}
+					fast={fast}
+					onFastChange={onFastChange}
+					onModelIdChange={(id) => {
+						onModelIdChange(id);
+						onReasoningIdChange("");
+						onFastChange(false);
+					}}
+					onHarnessIdChange={(id) => {
+						onHarnessIdChange(id);
+						onModelIdChange("");
+						onReasoningIdChange("");
+						onFastChange(false);
+					}}
+				/>
+				{contextIndicator}
+			</div>
 		</div>
 	);
 }

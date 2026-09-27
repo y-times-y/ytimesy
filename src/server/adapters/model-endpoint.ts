@@ -1,0 +1,84 @@
+import { lookup } from "node:dns/promises";
+import ipaddr from "ipaddr.js";
+import { Agent, fetch as transportFetch } from "undici";
+import { publicModelEndpoint } from "#/domain/model-connection";
+
+export function isPublicModelAddress(address: string): boolean {
+	try {
+		return ipaddr.process(address).range() === "unicast";
+	} catch {
+		return false;
+	}
+}
+
+/** Validate at socket connection time, not just when saving: DNS can change after validation. */
+export function modelEndpointTransport(baseUrl: string) {
+	const allowed = new URL(publicModelEndpoint(baseUrl));
+	const dispatcher = new Agent({
+		connect: {
+			lookup(hostname, options, callback) {
+				void lookup(hostname, { all: true, verbatim: true })
+					.then((addresses) => {
+						if (
+							!addresses.length ||
+							addresses.some((row) => !isPublicModelAddress(row.address))
+						) {
+							callback(
+								new Error(
+									"Model endpoints must resolve only to public addresses.",
+								),
+								[],
+								undefined,
+							);
+							return;
+						}
+						const matching = options.family
+							? addresses.filter((row) => row.family === options.family)
+							: addresses;
+						if (!matching.length) {
+							callback(
+								new Error("No supported public address."),
+								[],
+								undefined,
+							);
+							return;
+						}
+						if (options.all) callback(null, matching, undefined);
+						else callback(null, matching[0].address, matching[0].family);
+					})
+					.catch(() =>
+						callback(
+							new Error("Model endpoint DNS resolution failed."),
+							[],
+							undefined,
+						),
+					);
+			},
+		},
+	});
+	const fetch: typeof globalThis.fetch = async (input, init) => {
+		const target = new URL(
+			input instanceof Request ? input.url : String(input),
+		);
+		if (target.origin !== allowed.origin || target.username || target.password)
+			throw new Error("Model endpoint origin changed.");
+		const literal = target.hostname.replace(/^\[|\]$/g, "");
+		if (ipaddr.isValid(literal) && !isPublicModelAddress(literal))
+			throw new Error("Model endpoints must use public addresses.");
+		const request = new Request(input, init);
+		const signal = AbortSignal.any([
+			AbortSignal.timeout(120_000),
+			request.signal,
+		]);
+		return (await transportFetch(target, {
+			method: request.method,
+			headers: [...request.headers],
+			body: request.body,
+			duplex: request.body ? "half" : undefined,
+			signal,
+			redirect: "error",
+			dispatcher,
+		} as Parameters<typeof transportFetch>[1])) as unknown as Response;
+	};
+	return { fetch, close: () => dispatcher.close() };
+}

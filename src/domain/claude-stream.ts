@@ -1,3 +1,4 @@
+import { agentTodosFromUnknown } from "./agent-todos";
 import { fileBasename } from "./file-kind";
 import { SessionItemId } from "./ids";
 import { activityGlyphForToolName } from "./session-activity";
@@ -143,7 +144,12 @@ function appendAssistantBlocks(
 		}
 		if (type === "tool_use") {
 			const toolId = readNonEmpty(block.id) ?? streamItemId("tool", items);
-			if (toolIndex.has(toolId)) continue;
+			const existingIndex = toolIndex.get(toolId);
+			if (existingIndex !== undefined) {
+				if (block.name === "TodoWrite")
+					items[existingIndex] = itemFromClaudeToolUse(block, toolId);
+				continue;
+			}
 			toolIndex.set(toolId, items.length);
 			items.push(itemFromClaudeToolUse(block, toolId));
 		}
@@ -231,6 +237,14 @@ function applyToolResults(
 		const output = toolResultText(block);
 		const failed = block.is_error === true;
 		const status: ToolActivityStatus = failed ? "failed" : "completed";
+		if (current.kind === "plan" && failed) {
+			items[index] = {
+				kind: "unknown",
+				id: current.id,
+				type: "Todo update failed",
+			};
+			continue;
+		}
 		if (current.kind === "commandExecution") {
 			items[index] = {
 				...current,
@@ -323,6 +337,14 @@ function itemFromClaudeToolUse(
 ): SessionItem {
 	const tool = readNonEmpty(block.name) ?? "tool";
 	const args = isRecord(block.input) ? block.input : {};
+	if (tool === "TodoWrite" && Array.isArray(args.todos)) {
+		return {
+			kind: "plan",
+			id: SessionItemId(toolId),
+			text: "",
+			todos: agentTodosFromUnknown(args.todos),
+		};
+	}
 	const glyph = activityGlyphForToolName(tool);
 	if (glyph === "shell") {
 		return {

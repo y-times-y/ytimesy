@@ -4,6 +4,7 @@ import { Effect } from "effect";
 import {
 	type AgentProviderId,
 	DEFAULT_COMPOSER_HARNESS_ID,
+	parseRuntimeId as parseHarnessId,
 } from "#/domain/agent-provider";
 import { chatsFromAgentSessions } from "#/domain/agent-session";
 import {
@@ -22,7 +23,6 @@ import {
 } from "#/server/adapters/agent-sessions";
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
 import { requireUser } from "#/server/auth/auth";
-import { parseHarnessId } from "#/server/secrets/harness-key-store";
 import {
 	deleteAgentSessionMachine,
 	editAgentTaskDraft,
@@ -162,7 +162,9 @@ function parseAgentTaskDraftInput(data: TaskDraftInput) {
 	const title = data.title?.trim() || prompt.slice(0, 80);
 	const modelId = data.modelId?.trim() ?? "";
 	if (!projectId || !parentSessionId || !prompt || !modelId) {
-		throw new Error("A parent, prompt, and model are required to draft a task.");
+		throw new Error(
+			"A parent, prompt, and model are required to draft a task.",
+		);
 	}
 	if (title.toLowerCase() === "side chat") {
 		throw new Error("Choose a different task title.");
@@ -173,9 +175,15 @@ function parseAgentTaskDraftInput(data: TaskDraftInput) {
 		title: title.slice(0, 120),
 		prompt,
 		modelId,
-		placement: (data.placement === "shared" ? "shared" : "fresh") as AgentTaskPlacement,
-		access: (data.access === "read_only" ? "read_only" : "read_write") as AgentTaskAccess,
-		execution: (data.execution === "stacked" ? "stacked" : "parallel") as AgentTaskExecution,
+		placement: (data.placement === "shared"
+			? "shared"
+			: "fresh") as AgentTaskPlacement,
+		access: (data.access === "read_only"
+			? "read_only"
+			: "read_write") as AgentTaskAccess,
+		execution: (data.execution === "stacked"
+			? "stacked"
+			: "parallel") as AgentTaskExecution,
 		dependsOnSessionId: data.dependsOnSessionId?.trim() || null,
 		harnessId: data.harnessId
 			? parseHarnessId(data.harnessId)

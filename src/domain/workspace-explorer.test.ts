@@ -26,9 +26,9 @@ describe("workspace explorer", () => {
 	});
 
 	it("keeps reads inside the checkout", () => {
-		expect(
-			workspaceSourcePath("/home/ubuntu/ytimesy", "src/styles.css"),
-		).toBe("/home/ubuntu/ytimesy/src/styles.css");
+		expect(workspaceSourcePath("/home/ubuntu/ytimesy", "src/styles.css")).toBe(
+			"/home/ubuntu/ytimesy/src/styles.css",
+		);
 		expect(
 			workspaceSourcePath(
 				"/home/ubuntu/ytimesy",

@@ -17,7 +17,7 @@ interface WorkspaceRow {
 }
 
 const WORKSPACE_COLUMNS =
-	'id,user_id,project_id,status,provider_ref,template_snapshot_id,template_source_ref,template_source_sha,error_message,updated_at';
+	"id,user_id,project_id,status,provider_ref,template_snapshot_id,template_source_ref,template_source_sha,error_message,updated_at";
 
 export async function workspaceById(workspaceId: string) {
 	const result = await database().query(

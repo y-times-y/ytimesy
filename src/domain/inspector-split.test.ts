@@ -5,11 +5,17 @@ import {
 	INSPECTOR_SPLIT_DESKTOP,
 	inspectorPaneIsWide,
 	inspectorSplitRatio,
+	workspaceNeedsSinglePane,
 } from "./inspector-split";
 
 describe("inspector split", () => {
-	it("keeps tools as a sidebar so the composer stays desktop-width", () => {
-		expect(INSPECTOR_SPLIT_DEFAULT).toBe(0.66);
+	it("gives the workspace more room by default", () => {
+		expect(INSPECTOR_SPLIT_DEFAULT).toBe(0.42);
+	});
+	it("switches based on both pane minimums and the divider", () => {
+		expect(workspaceNeedsSinglePane(683)).toBe(true);
+		expect(workspaceNeedsSinglePane(684)).toBe(false);
+		expect(workspaceNeedsSinglePane(900)).toBe(false);
 	});
 
 	it("gives the desktop more of the canvas until the user drags", () => {

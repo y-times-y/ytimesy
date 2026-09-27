@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { connectedAgentStatus } from "./agent-connection";
 import {
+	API_PROVIDER,
 	agentProviderById,
 	CLAUDE_PROVIDER,
 	CODEX_PROVIDER,
@@ -13,11 +14,16 @@ import {
 
 describe("agent providers", () => {
 	it("offers Codex and Claude while preserving legacy provider records", () => {
-		expect(offeredAgentProviders()).toEqual([CODEX_PROVIDER, CLAUDE_PROVIDER]);
+		expect(offeredAgentProviders()).toEqual([
+			CODEX_PROVIDER,
+			CLAUDE_PROVIDER,
+			API_PROVIDER,
+		]);
 		expect(recognizedAgentProviders()).toEqual([
 			CODEX_PROVIDER,
 			CLAUDE_PROVIDER,
 			OPENCODE_PROVIDER,
+			API_PROVIDER,
 		]);
 		expect(agentProviderById("codex")).toEqual(CODEX_PROVIDER);
 		expect(agentProviderById("claude")).toEqual(CLAUDE_PROVIDER);

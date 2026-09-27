@@ -1,3 +1,4 @@
+import { Plug } from "lucide-react";
 import type { AgentProviderId } from "#/domain/agent-provider";
 import { ClaudeMark } from "./claude-mark";
 import { CodexMark } from "./codex-mark";
@@ -11,6 +12,8 @@ export function AgentProviderMark({
 	size?: number;
 }) {
 	switch (provider) {
+		case "api":
+			return <Plug size={size} aria-hidden="true" />;
 		case "codex":
 			return <CodexMark size={size} />;
 		case "claude":

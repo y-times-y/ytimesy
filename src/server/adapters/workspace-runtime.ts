@@ -6,6 +6,7 @@ export interface RuntimeCommandResult {
 
 export interface WorkspaceProvisionOptions {
 	readonly snapshotId?: string;
+	readonly maxRunSeconds?: number;
 }
 
 export interface WorkspaceRuntime {
@@ -24,6 +25,7 @@ export interface WorkspaceRuntime {
 		contents: string,
 	): Promise<void>;
 	snapshot(providerRef: string, slug: string): Promise<string>;
+	snapshotExists?(snapshotId: string): Promise<boolean>;
 	pause?(providerRef: string): Promise<void>;
 }
 

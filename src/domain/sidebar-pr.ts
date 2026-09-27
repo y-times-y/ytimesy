@@ -1,6 +1,9 @@
 import { workspacePublicationBranch } from "./publication";
 
 export type SidebarChatPrNeed =
+	| "ready"
+	| "merged"
+	| "pending"
 	| "conflict"
 	| "blocked"
 	| "checks_failed"
@@ -30,8 +33,8 @@ export function sidebarChatPrNeedFromPullRequest(pr: {
 	readonly merged: boolean;
 	readonly mergeable: boolean | null;
 	readonly mergeableState: string | null;
-}): SidebarChatPrNeed | null {
-	if (pr.merged) return null;
+}): SidebarChatPrNeed {
+	if (pr.merged) return "merged";
 	if (pr.state === "closed") return "closed";
 	const mergeableState = pr.mergeableState?.trim().toLowerCase() ?? "";
 	if (pr.mergeable === false || mergeableState === "dirty") return "conflict";
@@ -40,10 +43,19 @@ export function sidebarChatPrNeedFromPullRequest(pr: {
 	}
 	if (mergeableState === "unstable") return "checks_failed";
 	if (pr.draft || mergeableState === "draft") return "draft";
-	return null;
+	if (
+		pr.state === "open" &&
+		pr.mergeable === true &&
+		mergeableState === "clean"
+	)
+		return "ready";
+	return "pending";
 }
 
 export function sidebarChatPrNeedLabel(need: SidebarChatPrNeed) {
+	if (need === "ready") return "Ready to merge";
+	if (need === "merged") return "Pull request merged";
+	if (need === "pending") return "Merge readiness not confirmed";
 	if (need === "conflict") return "Has merge conflicts";
 	if (need === "blocked") return "Cannot be merged";
 	if (need === "checks_failed") return "Checks failed";
@@ -63,7 +75,6 @@ export function sidebarChatPrMarkForWorkspace(input: {
 	);
 	if (!pullRequest) return null;
 	const need = sidebarChatPrNeedFromPullRequest(pullRequest);
-	if (!need) return null;
 	return {
 		need,
 		url: pullRequest.url,

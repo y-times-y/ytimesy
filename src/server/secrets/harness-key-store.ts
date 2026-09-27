@@ -1,103 +1,49 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import type { AgentProviderId } from "#/domain/agent-provider";
-import { recognizedAgentProviders } from "#/domain/agent-provider";
-import {
-	decryptSecret,
-	type EncryptedSecret,
-	encryptSecret,
-	secretHint,
-} from "#/domain/encrypted-secret";
-import type { HarnessApiKeyRecord } from "#/domain/harness-api-key";
-import { loadSecretMasterKey } from "./master-key";
-
-export const HARNESS_KEY_STORE_PATH = ".ytimesy/harness-keys.json";
+import { secretHint } from "#/domain/encrypted-secret";
+import type { PublicHarnessApiKey } from "#/domain/harness-api-key";
+import { database } from "../adapters/database";
+import { seal, unseal } from "../auth/token-vault";
 
 export async function saveHarnessApiKey(
+	userId: string,
 	harnessId: AgentProviderId,
 	plaintext: string,
-): Promise<HarnessApiKeyRecord> {
+): Promise<void> {
 	const secret = plaintext.trim();
-	if (secret.length < 8) {
-		throw new Error("API key is too short");
-	}
-	const masterKey = await loadSecretMasterKey();
-	const record: HarnessApiKeyRecord = {
-		harnessId,
-		hint: secretHint(secret),
-		encrypted: encryptSecret(masterKey, secret),
-		updatedAt: new Date().toISOString(),
-	};
-	const records = await readRecords();
-	const next = [
-		...records.filter((entry) => entry.harnessId !== harnessId),
-		record,
-	];
-	await mkdir(".ytimesy", { recursive: true });
-	await writeFile(
-		HARNESS_KEY_STORE_PATH,
-		`${JSON.stringify(next, null, 2)}\n`,
-		{
-			mode: 0o600,
-		},
+	if (secret.length < 8) throw new Error("API key is too short");
+	const encrypted = await seal(secret);
+	await database().query(
+		"insert into user_harness_api_key(user_id,provider,encrypted_key,hint) values($1,$2,$3,$4) on conflict(user_id,provider) do update set encrypted_key=excluded.encrypted_key,hint=excluded.hint,updated_at=now()",
+		[userId, parseHarnessId(harnessId), encrypted, secretHint(secret)],
 	);
-	return record;
 }
 
-export async function listHarnessApiKeys(): Promise<
-	readonly HarnessApiKeyRecord[]
-> {
-	return readRecords();
+export async function listHarnessApiKeys(
+	userId: string,
+): Promise<readonly PublicHarnessApiKey[]> {
+	const result = await database().query(
+		"select provider,hint from user_harness_api_key where user_id=$1",
+		[userId],
+	);
+	return result.rows.map((row) => ({
+		harnessId: parseHarnessId(row.provider),
+		hint: row.hint,
+	}));
 }
 
 export async function decryptHarnessApiKey(
+	userId: string,
 	harnessId: AgentProviderId,
 ): Promise<string | null> {
-	const record = (await readRecords()).find(
-		(entry) => entry.harnessId === harnessId,
+	const result = await database().query(
+		"select encrypted_key from user_harness_api_key where user_id=$1 and provider=$2",
+		[userId, parseHarnessId(harnessId)],
 	);
-	if (!record) return null;
-	const masterKey = await loadSecretMasterKey();
-	return decryptSecret(masterKey, record.encrypted);
+	return result.rows[0] ? unseal(result.rows[0].encrypted_key) : null;
 }
 
-export function parseHarnessId(value: string): AgentProviderId {
-	const match = recognizedAgentProviders().find(
-		(harness) => harness.id === value,
-	);
-	if (!match) throw new Error("Unknown harness");
-	return match.id;
-}
-
-async function readRecords(): Promise<HarnessApiKeyRecord[]> {
-	try {
-		const parsed: unknown = JSON.parse(
-			await readFile(HARNESS_KEY_STORE_PATH, "utf8"),
-		);
-		if (!Array.isArray(parsed)) return [];
-		return parsed.filter(isRecord);
-	} catch {
-		return [];
-	}
-}
-
-function isRecord(value: unknown): value is HarnessApiKeyRecord {
-	if (typeof value !== "object" || value === null) return false;
-	const entry = value as Partial<HarnessApiKeyRecord>;
-	return (
-		typeof entry.harnessId === "string" &&
-		typeof entry.hint === "string" &&
-		isEncrypted(entry.encrypted) &&
-		typeof entry.updatedAt === "string"
-	);
-}
-
-function isEncrypted(value: unknown): value is EncryptedSecret {
-	if (typeof value !== "object" || value === null) return false;
-	const secret = value as Partial<EncryptedSecret>;
-	return (
-		secret.version === 1 &&
-		typeof secret.iv === "string" &&
-		typeof secret.tag === "string" &&
-		typeof secret.ciphertext === "string"
-	);
+export function parseHarnessId(value: string): "codex" | "claude" {
+	if (value !== "codex" && value !== "claude")
+		throw new Error("Unsupported provider");
+	return value;
 }
