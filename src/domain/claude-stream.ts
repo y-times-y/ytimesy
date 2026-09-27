@@ -46,13 +46,16 @@ export function claudeTurnItemsFromStream(input: {
 	readonly stream: string | null;
 }): SessionItem[] {
 	const prior = itemsThroughLastUserMessage(input.previousItems);
-	const streamed = sessionItemsFromClaudeStream(input.stream).filter(
-		(item) => item.kind !== "userMessage",
-	);
+	const turnId = prior.at(-1)?.id ?? "initial";
+	const streamed = sessionItemsFromClaudeStream(input.stream)
+		.filter((item) => item.kind !== "userMessage")
+		.map((item) => ({ ...item, id: SessionItemId(`${turnId}:${item.id}`) }));
 	return streamed.length === 0 ? [...prior] : [...prior, ...streamed];
 }
 
-export function claudeStreamTerminalResult(output: string | null):
+export function claudeStreamTerminalResult(
+	output: string | null,
+):
 	| { readonly kind: "completed" }
 	| { readonly kind: "failed"; readonly message: string }
 	| null {
@@ -110,7 +113,9 @@ function appendAssistantBlocks(
 			}
 			items.push({
 				kind: "reasoning",
-				id: SessionItemId(readNonEmpty(block.id) ?? nextStreamId("think")),
+				id: SessionItemId(
+					readNonEmpty(block.id) ?? streamItemId("think", items),
+				),
 				summaries: text ? [text] : [],
 			});
 			continue;
@@ -128,15 +133,16 @@ function appendAssistantBlocks(
 			}
 			items.push(
 				settledAgentMessage({
-					kind: "agentMessage",
-					id: SessionItemId(readNonEmpty(block.id) ?? nextStreamId("text")),
+					id: SessionItemId(
+						readNonEmpty(block.id) ?? streamItemId("text", items),
+					),
 					text,
 				}),
 			);
 			continue;
 		}
 		if (type === "tool_use") {
-			const toolId = readNonEmpty(block.id) ?? nextStreamId("tool");
+			const toolId = readNonEmpty(block.id) ?? streamItemId("tool", items);
 			if (toolIndex.has(toolId)) continue;
 			toolIndex.set(toolId, items.length);
 			items.push(itemFromClaudeToolUse(block, toolId));
@@ -157,7 +163,9 @@ function applyStreamEvent(
 		if (blockType === "thinking" || blockType === "redacted_thinking") {
 			items.push({
 				kind: "reasoning",
-				id: SessionItemId(readNonEmpty(block.id) ?? nextStreamId("think")),
+				id: SessionItemId(
+					readNonEmpty(block.id) ?? streamItemId("think", items),
+				),
 				summaries: [],
 			});
 			return;
@@ -166,7 +174,7 @@ function applyStreamEvent(
 			return;
 		}
 		if (blockType === "tool_use") {
-			const toolId = readNonEmpty(block.id) ?? nextStreamId("tool");
+			const toolId = readNonEmpty(block.id) ?? streamItemId("tool", items);
 			if (toolIndex.has(toolId)) return;
 			toolIndex.set(toolId, items.length);
 			items.push(itemFromClaudeToolUse(block, toolId));
@@ -200,7 +208,7 @@ function applyStreamEvent(
 		}
 		items.push({
 			kind: "agentMessage",
-			id: SessionItemId(nextStreamId("text")),
+			id: SessionItemId(streamItemId("text", items)),
 			text: next,
 			streaming: true,
 		});
@@ -233,7 +241,7 @@ function applyToolResults(
 			continue;
 		}
 		if (current.kind === "dynamicToolCall" || current.kind === "mcpToolCall") {
-			items[index] = { ...current, status: status === "declined" ? "failed" : status };
+			items[index] = { ...current, status };
 		}
 	}
 }
@@ -246,20 +254,21 @@ function appendResult(items: SessionItem[], event: Record<string, unknown>) {
 			"Claude Code did not return a response.";
 		items.push({
 			kind: "error",
-			id: SessionItemId(nextStreamId("error")),
+			id: SessionItemId(streamItemId("error", items)),
 			message,
 		});
 		return;
 	}
 	const text = readNonEmpty(event.result);
 	if (!text) return;
-	if (items.some((item) => item.kind === "agentMessage" && item.text === text)) {
+	if (
+		items.some((item) => item.kind === "agentMessage" && item.text === text)
+	) {
 		return;
 	}
 	items.push(
 		settledAgentMessage({
-			kind: "agentMessage",
-			id: SessionItemId(nextStreamId("result")),
+			id: SessionItemId(streamItemId("result", items)),
 			text,
 		}),
 	);
@@ -285,7 +294,7 @@ function appendThinkingDelta(items: SessionItem[], next: string) {
 	}
 	items.push({
 		kind: "reasoning",
-		id: SessionItemId(nextStreamId("think")),
+		id: SessionItemId(streamItemId("think", items)),
 		summaries: [next],
 	});
 }
@@ -319,8 +328,7 @@ function itemFromClaudeToolUse(
 		return {
 			kind: "commandExecution",
 			id: SessionItemId(toolId),
-			command:
-				readNonEmpty(args.command) ?? readNonEmpty(args.cmd) ?? tool,
+			command: readNonEmpty(args.command) ?? readNonEmpty(args.cmd) ?? tool,
 			cwd: readNonEmpty(args.workdir) ?? readNonEmpty(args.cwd) ?? null,
 			status: "inProgress",
 			output: null,
@@ -361,7 +369,9 @@ function claudeToolTitle(tool: string, args: Record<string, unknown>): string {
 	return tool;
 }
 
-function contentBlocks(event: Record<string, unknown>): Record<string, unknown>[] {
+function contentBlocks(
+	event: Record<string, unknown>,
+): Record<string, unknown>[] {
 	const message = isRecord(event.message) ? event.message : event;
 	const content = message.content;
 	if (!Array.isArray(content)) return [];
@@ -393,11 +403,8 @@ function itemsThroughLastUserMessage(
 	return lastUser >= 0 ? items.slice(0, lastUser + 1) : [...items];
 }
 
-let streamSeq = 0;
-
-function nextStreamId(kind: string): string {
-	streamSeq += 1;
-	return `claude-${kind}-${streamSeq}`;
+function streamItemId(kind: string, items: readonly SessionItem[]): string {
+	return `claude-${kind}-${items.length}`;
 }
 
 function lastIndexOfKind(

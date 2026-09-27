@@ -1,17 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
+	claudeBackgroundTurnResult,
 	claudeCliIsSignedIn,
-	claudeSessionRemembersSignIn,
-	rememberedClaudeModels,
 	claudeListedModelsAreUsable,
+	claudeSessionRemembersSignIn,
 	isAnthropicAuthorizeUrl,
 	parseAnthropicLoginUrl,
 	parseClaudeAuthPasteCode,
 	parseClaudeBinaryPath,
+	parseClaudeCapabilitiesFromHelp,
 	parseClaudeHomePath,
 	parseClaudeListedModels,
 	parseClaudeModelFlagsFromHelp,
-	claudeBackgroundTurnResult,
+	rememberedClaudeModels,
 } from "./claude-auth";
 
 describe("Claude Code login parsing", () => {
@@ -176,6 +177,29 @@ describe("Claude Code login parsing", () => {
 				"Could you clarify what you'd like to know about models?",
 			),
 		).toEqual([]);
+	});
+
+	it("loads reasoning and Fast only when Claude Code advertises them", () => {
+		expect(
+			parseClaudeCapabilitiesFromHelp(
+				"--effort <level> Effort level (low, medium, high, xhigh, max)\n--fast Use fast mode",
+			),
+		).toEqual({
+			reasoning: {
+				levels: [
+					{ id: "low", label: "low" },
+					{ id: "medium", label: "medium" },
+					{ id: "high", label: "high" },
+					{ id: "xhigh", label: "xhigh" },
+					{ id: "max", label: "max" },
+				],
+				defaultLevelId: "medium",
+			},
+			supportsFastMode: true,
+		});
+		expect(parseClaudeCapabilitiesFromHelp("--model <model>")).toEqual({
+			supportsFastMode: false,
+		});
 	});
 
 	it("loads model names only from Claude Code output", () => {

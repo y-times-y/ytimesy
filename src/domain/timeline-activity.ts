@@ -1,5 +1,10 @@
 import { activityGlyphForToolName } from "./session-activity";
-import { liveActivityStatus, type SessionItem } from "./session-item";
+import {
+	liveActivityStatus,
+	type SessionItem,
+	type SessionTurnStatus,
+} from "./session-item";
+import { workedLabel } from "./turn-timing";
 
 export type ExplorationCounts = {
 	readonly files: number;
@@ -8,6 +13,12 @@ export type ExplorationCounts = {
 
 export type TimelineRow =
 	| { readonly kind: "item"; readonly item: SessionItem }
+	| {
+			readonly kind: "work";
+			readonly label: string;
+			readonly id: SessionItem["id"];
+			readonly items: readonly SessionItem[];
+	  }
 	| {
 			readonly kind: "exploration";
 			readonly id: SessionItem["id"];
@@ -70,6 +81,58 @@ export function explorationGroupIsLive(items: readonly SessionItem[]): boolean {
 }
 
 export function groupTimelineRows(
+	items: readonly SessionItem[],
+	turnStatus: SessionTurnStatus = "running",
+): TimelineRow[] {
+	const rows: TimelineRow[] = [];
+	let turn: SessionItem[] = [];
+	let timing: { startedAt: number; completedAt?: number } | undefined;
+	function flush(completed: boolean) {
+		const visible = turn.filter(
+			(item) =>
+				item.kind !== "reasoning" ||
+				item.summaries.some((summary) => summary.trim()),
+		);
+		if (!completed) {
+			rows.push(...groupExplorationRows(turn));
+			return;
+		}
+		const final = visible
+			.filter(
+				(item) => item.kind === "agentMessage" && item.phase !== "commentary",
+			)
+			.at(-1);
+		const activity = visible.filter(
+			(item) =>
+				item !== final && item.kind !== "fileChange" && item.kind !== "error",
+		);
+		if (activity[0])
+			rows.push({
+				kind: "work",
+				id: activity[0].id,
+				items: activity,
+				label: workedLabel(timing),
+			});
+		if (final) rows.push({ kind: "item", item: final });
+		rows.push(
+			...visible
+				.filter((item) => item.kind === "fileChange" || item.kind === "error")
+				.map((item) => ({ kind: "item" as const, item })),
+		);
+	}
+	for (const item of items) {
+		if (item.kind === "userMessage") {
+			flush(true);
+			turn = [];
+			timing = item.timing;
+			rows.push({ kind: "item", item });
+		} else turn.push(item);
+	}
+	flush(turnStatus !== "running");
+	return rows;
+}
+
+export function groupExplorationRows(
 	items: readonly SessionItem[],
 ): TimelineRow[] {
 	const rows: TimelineRow[] = [];

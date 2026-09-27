@@ -7,6 +7,7 @@ import {
 } from "#/domain/agent-provider";
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
 import { requireUser } from "#/server/auth/auth";
+import { hasManagedCodexAuth } from "#/server/auth/codex-managed-auth";
 import { parseHarnessId } from "#/server/secrets/harness-key-store";
 import { WorkspaceMachineService } from "#/server/services/capabilities";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
@@ -95,6 +96,25 @@ export const getCodexSession = createServerFn({ method: "GET" })
 			readHarnessWorkspaceSession(machines, scope),
 		);
 	});
+
+export const getWorkspaceBootstrap = createServerFn({ method: "GET" }).handler(
+	async () => {
+		let user;
+		try {
+			user = await requireUser(getRequest().headers);
+		} catch (error) {
+			if (!(error instanceof Response) || error.status !== 401) throw error;
+			return { signedIn: false, session: emptyHarnessSession() };
+		}
+		return {
+			signedIn: true,
+			session: {
+				...emptyHarnessSession(),
+				snapshotAvailable: await hasManagedCodexAuth(user.id),
+			},
+		};
+	},
+);
 
 export const connectCodexSession = createServerFn({ method: "POST" })
 	.validator(optionalSessionInput)

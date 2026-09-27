@@ -16,15 +16,7 @@ import {
 	TooltipProvider,
 	TooltipTrigger,
 } from "#/components/ui/tooltip";
-import type { AgentConnection } from "#/domain/agent-connection";
-import {
-	type AgentProviderId,
-	agentProviderById,
-} from "#/domain/agent-provider";
-import {
-	harnessRequiresAccountLogin,
-	selectedHarnessIsConnected,
-} from "#/domain/harness-access";
+import type { AgentProviderId } from "#/domain/agent-provider";
 import { HarnessPicker } from "./harness-picker";
 import { resolveReasoningLevel, type SessionModel } from "./model-capabilities";
 import { ReasoningOption } from "./reasoning-option";
@@ -32,7 +24,6 @@ import { ReasoningOption } from "./reasoning-option";
 interface SessionControlsProps {
 	harnessId: AgentProviderId;
 	onHarnessIdChange: (id: AgentProviderId) => void;
-	connection: AgentConnection;
 	models: readonly SessionModel[];
 	modelId: string;
 	onModelIdChange: (id: string) => void;
@@ -42,12 +33,14 @@ interface SessionControlsProps {
 	onReasoningIdChange: (id: string) => void;
 	fast: boolean;
 	onFastChange: (fast: boolean) => void;
+	onConnect: () => void;
+	catalogStatus: "loading" | "error" | "ready";
+	providerConnected: boolean;
 }
 
 export function SessionControls({
 	harnessId,
 	onHarnessIdChange,
-	connection,
 	models,
 	modelId,
 	onModelIdChange,
@@ -57,21 +50,17 @@ export function SessionControls({
 	onReasoningIdChange,
 	fast,
 	onFastChange,
+	onConnect,
+	catalogStatus,
+	providerConnected,
 }: SessionControlsProps) {
 	const fileInput = useRef<HTMLInputElement>(null);
 	const model = models.find((candidate) => candidate.id === modelId);
 	const reasoning = resolveReasoningLevel(model, reasoningId);
-	const harnessReady = selectedHarnessIsConnected(connection, harnessId);
-	const harnessName = agentProviderById(harnessId).name;
-	const startPrompt = harnessRequiresAccountLogin(harnessId)
-		? `Sign in to ${harnessName}`
-		: `Connect ${harnessName}`;
-	const catalogModel =
-		models.find((candidate) => candidate.id === modelId) ??
-		models.find((candidate) => candidate.id === listedModelId);
-	const persistedModelId = (model?.id || catalogModel?.id || "").trim();
-	const persistedLabel = model?.label || catalogModel?.label || "";
-
+	const selectedModelId =
+		model?.id ??
+		models.find((candidate) => candidate.id === listedModelId)?.id ??
+		"";
 	return (
 		<div className="session-controls">
 			<input
@@ -95,6 +84,17 @@ export function SessionControls({
 			</button>
 			<HarnessPicker
 				harnessId={harnessId}
+				models={models}
+				modelId={selectedModelId}
+				modelsEnabled={models.length > 0}
+				onConnect={onConnect}
+				catalogStatus={catalogStatus}
+				providerConnected={providerConnected}
+				onModelIdChange={(id) => {
+					onModelIdChange(id);
+					onReasoningIdChange("");
+					onFastChange(false);
+				}}
 				onHarnessIdChange={(id) => {
 					onHarnessIdChange(id);
 					onModelIdChange("");
@@ -102,63 +102,11 @@ export function SessionControls({
 					onFastChange(false);
 				}}
 			/>
-			<Select
-				value={persistedModelId || undefined}
-				onValueChange={(id) => {
-					onModelIdChange(id);
-					onReasoningIdChange("");
-					onFastChange(false);
-				}}
-				disabled={!harnessReady}
-			>
-				<SelectTrigger
-					id="session-model-select"
-					className="composer-select model-select"
-					aria-label="Model"
-					title={
-						harnessReady
-							? undefined
-							: persistedLabel
-								? `${startPrompt} to change models`
-								: `${startPrompt} to load its models`
-					}
-				>
-					{harnessReady ? (
-						<SelectValue
-							placeholder={models.length ? "Select model" : "Loading models…"}
-						/>
-					) : (
-						<span data-slot="select-value">{startPrompt}</span>
-					)}
-				</SelectTrigger>
-				<SelectContent
-					position="popper"
-					side="top"
-					align="start"
-					sideOffset={8}
-				>
-					{models.length === 0 && persistedModelId ? (
-						<SelectItem value={persistedModelId} disabled>
-							{persistedLabel}
-						</SelectItem>
-					) : models.length === 0 ? (
-						<SelectItem value="unconnected" disabled>
-							{startPrompt} to load its models
-						</SelectItem>
-					) : (
-						models.map((availableModel) => (
-							<SelectItem key={availableModel.id} value={availableModel.id}>
-								{availableModel.label}
-							</SelectItem>
-						))
-					)}
-				</SelectContent>
-			</Select>
 			{!model?.reasoning ? null : (
 				<Select
 					value={reasoning?.id ?? ""}
 					onValueChange={onReasoningIdChange}
-					disabled={!harnessReady}
+					disabled={models.length === 0}
 				>
 					<SelectTrigger
 						className="composer-select reasoning-select"
@@ -201,10 +149,7 @@ export function SessionControls({
 								pressed={fast}
 								onPressedChange={onFastChange}
 							>
-								<Zap
-									className="size-4"
-									fill={fast ? "currentColor" : "none"}
-								/>
+								<Zap className="size-4" fill={fast ? "currentColor" : "none"} />
 							</Toggle>
 						</TooltipTrigger>
 						<TooltipContent side="bottom" sideOffset={8}>

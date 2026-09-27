@@ -1,40 +1,28 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { PanelRight } from "lucide-react";
-import {
-	type PointerEvent,
-	useCallback,
-	useEffect,
-	useRef,
-	useState,
-} from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { connectedProviderId } from "#/domain/agent-connection";
+import {
+	type AgentProviderId,
+	DEFAULT_COMPOSER_HARNESS_ID,
+	offeredAgentProviderId,
+} from "#/domain/agent-provider";
 import {
 	claudeSessionRemembersSignIn,
 	rememberedClaudeModels,
 } from "#/domain/claude-auth";
 import {
-	type AgentProviderId,
-	DEFAULT_COMPOSER_HARNESS_ID,
-} from "#/domain/agent-provider";
-import {
-	RUNNING_TURN_POLL_MS,
 	harnessLoginIsPending,
-	runningAuthenticatedTurnShouldPoll,
+	RUNNING_TURN_POLL_MS,
+	runningTurnShouldPoll,
 } from "#/domain/harness-access";
 import {
 	inspectorPaneIsWide,
-	inspectorSplitFromPointer,
 	inspectorSplitRatio,
-	inspectorStaysBesideChat,
-	nudgeInspectorSplit,
 } from "#/domain/inspector-split";
 import { publicFailureMessage } from "#/domain/project-workspace";
 import { type Project, selectedProjectIdAfterDelete } from "#/domain/projects";
-import {
-	type ListedPullRequest,
-	sidebarChatPrMarkForWorkspace,
-} from "#/domain/sidebar-pr";
 import {
 	fileChangesFromSessionItems,
 	isTurnRunning,
@@ -45,13 +33,19 @@ import {
 	sessionViewShouldReplaceOpenTurn,
 } from "#/domain/session-item";
 import {
+	type LiveProgressMarks,
+	progressIsFresh,
+	progressMatchesTurn,
+	type SessionProgress,
+} from "#/domain/session-progress";
+import {
 	backgroundTurnPollChatIds,
 	composerBusyForOpenChat,
 	composerHarnessForChat,
 	listedChatHarnessId,
 	listedChatModelId,
-	rememberedClaudeModelIdFromChats,
 	listedChatTurnStatus,
+	rememberedClaudeModelIdFromChats,
 	SIDEBAR_PINNED_STORAGE_KEY,
 	type SidebarChat,
 	selectedChatIdAfterDelete,
@@ -63,6 +57,10 @@ import {
 	withoutBusyChat,
 } from "#/domain/sidebar-chats";
 import {
+	type ListedPullRequest,
+	sidebarChatPrMarkForWorkspace,
+} from "#/domain/sidebar-pr";
+import {
 	desktopInspectorShouldStart,
 	type WorkspaceDesktop,
 } from "#/domain/workspace-desktop";
@@ -71,9 +69,14 @@ import { authClient } from "../auth/client";
 import { requestJson } from "../projects/api";
 import { deleteOwnedProject } from "../projects/project.fn";
 import {
+	createProjectAgentTaskDraft,
 	deleteProjectAgentSession,
+	editProjectAgentTaskDraft,
 	listProjectAgentSessions,
+	listProjectAgentTasks,
+	requestProjectAgentTaskWrapUp,
 	startProjectAgentSession,
+	startProjectAgentTask,
 } from "../sessions/agent-session.fn";
 import {
 	completeClaudeSessionAuth,
@@ -87,7 +90,9 @@ import {
 	sessionModelsFromListed,
 } from "../sessions/model-capabilities";
 import { SessionLauncher } from "../sessions/session-launcher";
+import { sessionReconciliationQuery } from "../sessions/session-reconciliation";
 import { SideChatPanel } from "../sessions/side-chat-panel";
+import { TaskPanel } from "../sessions/task-panel";
 import { getWorkspaceDesktop, startWorkspaceDesktopFn } from "./desktop.fn";
 import { ProjectSettings } from "./project-settings";
 import { ProjectSidebar } from "./project-sidebar";
@@ -97,6 +102,7 @@ import {
 	type ToolsView,
 	WorkspaceInspector,
 } from "./workspace-inspector";
+import { WorkspacePanes } from "./workspace-panes";
 
 export function WorkspaceHome({
 	initialSession,
@@ -104,7 +110,6 @@ export function WorkspaceHome({
 	initialSession: PublicCodexSession;
 }) {
 	const compact = useCompactLayout();
-	const inspectorBeside = inspectorStaysBesideChat(compact);
 	const queryClient = useQueryClient();
 	const projects = useQuery({
 		queryKey: ["projects"],
@@ -116,6 +121,8 @@ export function WorkspaceHome({
 		projects.data?.[0];
 	const [selectedSessionId, setSelectedSessionId] = useState<string>();
 	const [session, setSession] = useState(initialSession);
+	const currentSessionRef = useRef(session);
+	currentSessionRef.current = session;
 	const [composerModelId, setComposerModelId] = useState(
 		initialSession.listedModelId,
 	);
@@ -144,7 +151,12 @@ export function WorkspaceHome({
 	});
 	const startSession = useServerFn(startProjectAgentSession);
 	const deleteSession = useServerFn(deleteProjectAgentSession);
+	const createAgentTaskDraft = useServerFn(createProjectAgentTaskDraft);
+	const editAgentTaskDraft = useServerFn(editProjectAgentTaskDraft);
+	const startAgentTask = useServerFn(startProjectAgentTask);
+	const requestTaskWrapUp = useServerFn(requestProjectAgentTaskWrapUp);
 	const deleteProject = useServerFn(deleteOwnedProject);
+	const [taskMutationBusy, setTaskMutationBusy] = useState(false);
 	const [projectsOpen, setProjectsOpen] = useState(false);
 	const [sidebarPinReady, setSidebarPinReady] = useState(false);
 	const [inspectorOpen, setInspectorOpen] = useState(false);
@@ -152,8 +164,6 @@ export function WorkspaceHome({
 	const [inspectorView, setInspectorView] = useState<InspectorView>("files");
 	const [selectedFilePath, setSelectedFilePath] = useState<string>();
 	const [customSplit, setCustomSplit] = useState<number | null>(null);
-	const [splitting, setSplitting] = useState(false);
-	const workspaceBody = useRef<HTMLDivElement>(null);
 	const [sideChatOpen, setSideChatOpen] = useState(false);
 	const [busyChatIds, setBusyChatIds] = useState<string[]>([]);
 	const [harnessId, setHarnessId] = useState<AgentProviderId>(
@@ -170,7 +180,6 @@ export function WorkspaceHome({
 	const composerDraftRef = useRef(false);
 	composerDraftRef.current = composerDraft;
 	const sessionEpoch = useRef(0);
-	const loadedSessionId = useRef<string | undefined>(undefined);
 	const selectedSessionIdRef = useRef<string | undefined>(undefined);
 	const pendingSendRef = useRef<{
 		text: string;
@@ -198,6 +207,7 @@ export function WorkspaceHome({
 		},
 		[queryClient, selectedProject?.id],
 	);
+	const liveProgress = useRef<LiveProgressMarks | null>({});
 	const applySessionView = useCallback(
 		(epoch: number, next: PublicCodexSession) => {
 			if (epoch !== sessionEpoch.current) return;
@@ -214,6 +224,22 @@ export function WorkspaceHome({
 				return;
 			}
 			setSession((current) => {
+				const fresh = (lane: "main" | "side") =>
+					progressIsFresh(
+						liveProgress.current,
+						lane,
+						next.agentSessionId,
+						Date.now(),
+					);
+				next = {
+					...next,
+					...(next.turnStatus === "running" && fresh("main")
+						? { items: current.items }
+						: {}),
+					...(next.sideTurnStatus === "running" && fresh("side")
+						? { sideItems: current.sideItems }
+						: {}),
+				};
 				if (
 					!sessionViewShouldReplaceOpenTurn({
 						currentStatus: current.turnStatus,
@@ -228,8 +254,9 @@ export function WorkspaceHome({
 				if (next.agentSessionId) setSelectedSessionId(next.agentSessionId);
 				const provider = connectedProviderId(next.connection);
 				const listed = next.agentSessionId
-					? listedChatHarnessId(chats.data ?? [], next.agentSessionId, "")
-					: "";
+					? (chats.data ?? []).find((chat) => chat.id === next.agentSessionId)
+							?.harnessId
+					: undefined;
 				if (provider && (!listed || listed === provider)) {
 					setHarnessId(provider);
 				}
@@ -239,6 +266,8 @@ export function WorkspaceHome({
 		[chats.data, rememberSessionView],
 	);
 	const connect = useServerFn(connectCodexSession);
+	const applySessionViewRef = useRef(applySessionView);
+	applySessionViewRef.current = applySessionView;
 	const completeClaudeAuth = useServerFn(completeClaudeSessionAuth);
 	const sendTask = useServerFn(sendCodexSessionTask);
 	const stopTurn = useServerFn(stopCodexSessionTurn);
@@ -267,6 +296,21 @@ export function WorkspaceHome({
 	const activeProjectId = selectedProject?.id;
 	const activeSessionId =
 		selectedSessionId ?? session.agentSessionId ?? undefined;
+	const agentTasks = useQuery({
+		queryKey: ["agent-tasks", activeProjectId, activeSessionId],
+		queryFn: () =>
+			listProjectAgentTasks({
+				data: {
+					projectId: activeProjectId,
+					rootSessionId: activeSessionId,
+				},
+			}),
+		enabled: Boolean(activeProjectId && activeSessionId),
+		refetchInterval: (query) =>
+			query.state.data?.some((task) => task.status === "working")
+				? 2_500
+				: false,
+	});
 	selectedSessionIdRef.current = activeSessionId;
 	const requestDesktop = useCallback(() => {
 		if (desktopStartInFlight.current) return;
@@ -418,7 +462,6 @@ export function WorkspaceHome({
 	useEffect(() => {
 		void activeProjectId;
 		setSelectedSessionId(undefined);
-		loadedSessionId.current = undefined;
 		sessionViews.current.clear();
 		setSelectedFilePath(undefined);
 	}, [activeProjectId]);
@@ -450,32 +493,40 @@ export function WorkspaceHome({
 		});
 	}, [loadDesktop, activeProjectId, activeSessionId]);
 
-	useEffect(() => {
-		if (!activeProjectId || composerDraft) return;
-		const switching = loadedSessionId.current !== activeSessionId;
-		if (!switching && composerBusy) return;
-		loadedSessionId.current = activeSessionId;
-		const epoch = sessionEpoch.current;
-		void getCodexSession({
-			data: {
-				projectId: activeProjectId,
+	const pollSession =
+		harnessLoginIsPending(session.connection) ||
+		runningTurnShouldPoll({
+			turnStatus: session.turnStatus,
+			sideTurnStatus: session.sideTurnStatus,
+			connectionStatus: session.connection.status,
+			composerBusy,
+		});
+	const sessionRead = useQuery({
+		...sessionReconciliationQuery(
+			{
+				projectId: activeProjectId ?? "",
+				sessionId: activeSessionId ?? "",
 				harnessId: listedChatHarnessId(
 					chats.data ?? [],
 					activeSessionId ?? "",
 					harnessId,
 				),
-				sessionId: activeSessionId,
 			},
-		}).then((next) => applySessionView(epoch, next));
-	}, [
-		applySessionView,
-		chats.data,
-		composerBusy,
-		composerDraft,
-		harnessId,
-		activeProjectId,
-		activeSessionId,
-	]);
+			sessionEpoch.current,
+		),
+		enabled: Boolean(
+			activeProjectId && activeSessionId && !composerDraft && !composerBusy,
+		),
+		refetchInterval: pollSession ? RUNNING_TURN_POLL_MS : false,
+		refetchIntervalInBackground: true,
+	});
+	useEffect(() => {
+		if (sessionRead.data)
+			applySessionViewRef.current(
+				sessionRead.data.epoch,
+				sessionRead.data.view,
+			);
+	}, [sessionRead.data]);
 
 	useEffect(() => {
 		if (compact || openedDiff.current || fileChanges.length === 0) return;
@@ -486,87 +537,144 @@ export function WorkspaceHome({
 	}, [compact, fileChanges.length]);
 
 	useEffect(() => {
-		const pollDeviceCode = harnessLoginIsPending(session.connection);
-		const pollTurn = runningAuthenticatedTurnShouldPoll({
-			turnStatus: session.turnStatus,
-			sideTurnStatus: session.sideTurnStatus,
-			connectionStatus: session.connection.status,
-			composerBusy,
-		});
-		if (!pollDeviceCode && !pollTurn) return;
-		if (!activeProjectId) return;
+		if (
+			!activeProjectId ||
+			!activeSessionId ||
+			(session.turnStatus !== "running" && session.sideTurnStatus !== "running")
+		)
+			return;
 		const epoch = sessionEpoch.current;
-		const timer = window.setInterval(
-			() => {
-				void getCodexSession({
-					data: {
-						projectId: activeProjectId,
-						harnessId,
-						sessionId: activeSessionId,
-					},
-				}).then((next) => applySessionView(epoch, next));
-			},
-			pollTurn ? RUNNING_TURN_POLL_MS : 3000,
-		);
-		return () => window.clearInterval(timer);
-	}, [
-		activeProjectId,
-		activeSessionId,
-		applySessionView,
-		composerBusy,
-		harnessId,
-		session.connection.status,
-		session.sideTurnStatus,
-		session.turnStatus,
-	]);
-
-	useEffect(() => {
-		const ids = backgroundTurnPollChatIds({
-			chats: sidebarChats,
-			openChatId: activeSessionId,
-			busyChatIds,
-		});
-		if (!activeProjectId || ids.length === 0) return;
-		let inFlight = false;
-		const pollSiblings = () => {
-			if (inFlight) return;
-			inFlight = true;
-			void Promise.all(
-				ids.map((sessionId) =>
-					getCodexSession({
+		const sources = (["main", "side"] as const).flatMap((lane) => {
+			if (
+				(lane === "main" ? session.turnStatus : session.sideTurnStatus) !==
+				"running"
+			)
+				return [];
+			const source = new EventSource(
+				`/api/agent/progress?${new URLSearchParams({ projectId: activeProjectId, sessionId: activeSessionId, lane })}`,
+			);
+			let lastRevision = "";
+			source.addEventListener("progress", (event: MessageEvent) => {
+				if (
+					epoch !== sessionEpoch.current ||
+					selectedSessionIdRef.current !== activeSessionId
+				)
+					return;
+				if (event.lastEventId && event.lastEventId === lastRevision) return;
+				let progress: SessionProgress;
+				try {
+					progress = JSON.parse(event.data);
+				} catch {
+					return;
+				}
+				if (
+					progress.sessionId !== activeSessionId ||
+					!Array.isArray(progress.items)
+				)
+					return;
+				if (
+					!progressMatchesTurn(
+						lane === "main"
+							? currentSessionRef.current.items
+							: currentSessionRef.current.sideItems,
+						progress.items,
+					)
+				)
+					return;
+				lastRevision = event.lastEventId;
+				liveProgress.current ??= {};
+				liveProgress.current[lane] = {
+					sessionId: activeSessionId,
+					receivedAt: Date.now(),
+				};
+				setSession((current) => {
+					if (
+						!progressMatchesTurn(
+							lane === "main" ? current.items : current.sideItems,
+							progress.items,
+						)
+					)
+						return current;
+					if (lane === "side")
+						return {
+							...current,
+							sideItems: progress.items,
+							sideTurnStatus: progress.turnStatus,
+						};
+					return {
+						...current,
+						items: progress.items,
+						turnStatus: progress.turnStatus,
+					};
+				});
+				if (
+					progress.turnStatus === "completed" ||
+					progress.turnStatus === "failed"
+				) {
+					void getCodexSession({
 						data: {
 							projectId: activeProjectId,
-							harnessId: listedChatHarnessId(
-								sidebarChats,
-								sessionId,
-								harnessId,
-							),
-							sessionId,
+							sessionId: activeSessionId,
+							harnessId,
 						},
-					}).then((next) => {
-						const wasRunning = listedChatTurnStatus(sidebarChats, sessionId);
-						rememberSessionView(next);
-						if (isTurnRunning(wasRunning) && !isTurnRunning(next.turnStatus)) {
-							void chats.refetch();
-						}
-					}),
-				),
-			).finally(() => {
-				inFlight = false;
+					})
+						.then((next) => applySessionViewRef.current(epoch, next))
+						.catch(() => undefined);
+				}
 			});
+			source.onerror = () => {
+				if (liveProgress.current) delete liveProgress.current[lane];
+			};
+			return [source];
+		});
+		return () => {
+			for (const source of sources) source.close();
+			liveProgress.current = {};
 		};
-		pollSiblings();
-		const timer = window.setInterval(pollSiblings, RUNNING_TURN_POLL_MS);
-		return () => window.clearInterval(timer);
 	}, [
 		activeProjectId,
 		activeSessionId,
-		busyChatIds,
-		chats.refetch,
+		session.turnStatus,
+		session.sideTurnStatus,
 		harnessId,
-		rememberSessionView,
-		sidebarChats,
 	]);
+
+	const backgroundIds = backgroundTurnPollChatIds({
+		chats: sidebarChats,
+		openChatId: activeSessionId,
+		busyChatIds,
+	});
+	const backgroundReads = useQueries({
+		queries: backgroundIds.map((sessionId) => ({
+			...sessionReconciliationQuery(
+				{
+					projectId: activeProjectId ?? "",
+					sessionId,
+					harnessId: listedChatHarnessId(sidebarChats, sessionId, harnessId),
+				},
+				0,
+			),
+			enabled: Boolean(activeProjectId),
+			refetchInterval: RUNNING_TURN_POLL_MS,
+			refetchIntervalInBackground: true,
+		})),
+	});
+	const appliedBackgroundReads = useRef(new WeakSet<object>());
+	useEffect(() => {
+		for (const result of backgroundReads) {
+			if (!result.data || appliedBackgroundReads.current.has(result.data))
+				continue;
+			appliedBackgroundReads.current.add(result.data);
+			const next = result.data.view;
+			const wasRunning = listedChatTurnStatus(
+				sidebarChats,
+				next.agentSessionId ?? "",
+			);
+			rememberSessionView(next);
+			if (isTurnRunning(wasRunning) && !isTurnRunning(next.turnStatus))
+				void chats.refetch();
+		}
+	}, [backgroundReads, sidebarChats, rememberSessionView, chats.refetch]);
 
 	function openInspector(view: ToolsView) {
 		setToolsView(view);
@@ -618,11 +726,27 @@ export function WorkspaceHome({
 			return;
 		}
 		if (projectId) setSelectedProjectId(projectId);
+		const newChatHarnessId = offeredAgentProviderId(harnessId);
+		setHarnessId(newChatHarnessId);
+		setComposerModelId("");
 		setComposerDraft(false);
 		setProjectPickerOpen(false);
 		const epoch = bumpSessionEpoch();
+		setSession((current) => ({
+			...current,
+			agentSessionId: null,
+			listedModelId: "",
+			models: [],
+			items: [],
+			turnStatus: "idle",
+			sideItems: [],
+			sideTurnStatus: "idle",
+			connection: { status: "disconnected" },
+			canSend: false,
+			canSendSide: false,
+		}));
 		void startSession({
-			data: { projectId: targetProjectId, harnessId },
+			data: { projectId: targetProjectId, harnessId: newChatHarnessId },
 		})
 			.then((created) => {
 				if (epoch !== sessionEpoch.current) return;
@@ -651,7 +775,7 @@ export function WorkspaceHome({
 					...current,
 					connection: {
 						status: "failed",
-						provider: harnessId,
+						provider: newChatHarnessId,
 						message: publicFailureMessage(cause),
 					},
 					canSend: false,
@@ -780,31 +904,133 @@ export function WorkspaceHome({
 			});
 	}
 
-	function beginInspectorSplit(event: PointerEvent<HTMLButtonElement>) {
-		if (!inspectorBeside) return;
-		event.preventDefault();
-		const body = workspaceBody.current;
-		if (!body) return;
-		const handle = event.currentTarget;
-		handle.setPointerCapture(event.pointerId);
-		const bounds = body.getBoundingClientRect();
-		setSplitting(true);
-		function move(next: globalThis.PointerEvent) {
-			setCustomSplit(
-				inspectorSplitFromPointer({
-					clientX: next.clientX,
-					originX: bounds.left,
-					width: bounds.width,
-				}),
-			);
-		}
-		function stop() {
-			setSplitting(false);
-			handle.removeEventListener("pointermove", move);
-			handle.removeEventListener("pointerup", stop);
-		}
-		handle.addEventListener("pointermove", move);
-		handle.addEventListener("pointerup", stop);
+	function createAgentTask(input: {
+		parentSessionId: string;
+		title: string;
+		prompt: string;
+		placement: "shared" | "fresh";
+		access: "read_only" | "read_write";
+		execution: "parallel" | "stacked";
+		dependsOnSessionId: string | null;
+	}) {
+		if (!activeProjectId || !activeSessionId) return;
+		const modelId =
+			composerModelId || session.listedModelId || sessionModelId(session);
+		if (!modelId) return;
+		setTaskMutationBusy(true);
+		void createAgentTaskDraft({
+			data: {
+				projectId: activeProjectId,
+				parentSessionId: input.parentSessionId,
+				title: input.title,
+				prompt: input.prompt,
+				modelId,
+				harnessId,
+				placement: input.placement,
+				access: input.access,
+				execution: input.execution,
+				dependsOnSessionId: input.dependsOnSessionId,
+			},
+		})
+			.then(() => agentTasks.refetch())
+			.catch((cause) => {
+				setSession((current) => ({
+					...current,
+					connection: {
+						status: "failed",
+						provider: harnessId,
+						message: publicFailureMessage(cause),
+					},
+				}));
+			})
+			.finally(() => setTaskMutationBusy(false));
+	}
+
+	function editAgentTask(input: {
+		taskSessionId: string;
+		parentSessionId: string;
+		title: string;
+		prompt: string;
+		placement: "shared" | "fresh";
+		access: "read_only" | "read_write";
+		execution: "parallel" | "stacked";
+		dependsOnSessionId: string | null;
+	}) {
+		if (!activeProjectId) return;
+		const task = agentTasks.data?.find(
+			(item) => item.id === input.taskSessionId,
+		);
+		if (!task?.listedModelId) return;
+		setTaskMutationBusy(true);
+		void editAgentTaskDraft({
+			data: {
+				projectId: activeProjectId,
+				...input,
+				modelId: task.listedModelId,
+				harnessId: task.harnessId,
+			},
+		})
+			.then(() => agentTasks.refetch())
+			.catch((cause) => {
+				setSession((current) => ({
+					...current,
+					connection: {
+						status: "failed",
+						provider: task.harnessId,
+						message: publicFailureMessage(cause),
+					},
+				}));
+			})
+			.finally(() => setTaskMutationBusy(false));
+	}
+
+	function launchAgentTask(taskSessionId: string) {
+		if (!activeProjectId) return;
+		setTaskMutationBusy(true);
+		void startAgentTask({
+			data: { projectId: activeProjectId, taskSessionId },
+		})
+			.then(() => agentTasks.refetch())
+			.catch((cause) => {
+				setSession((current) => ({
+					...current,
+					connection: {
+						status: "failed",
+						provider: harnessId,
+						message: publicFailureMessage(cause),
+					},
+				}));
+			})
+			.finally(() => setTaskMutationBusy(false));
+	}
+
+	function askAgentTaskToWrapUp(taskSessionId: string) {
+		if (!activeProjectId) return;
+		const task = agentTasks.data?.find(
+			(candidate) => candidate.id === taskSessionId,
+		);
+		const modelId =
+			task?.listedModelId ||
+			composerModelId ||
+			session.listedModelId ||
+			sessionModelId(session);
+		if (!modelId) return;
+		setTaskMutationBusy(true);
+		void requestTaskWrapUp({
+			data: { projectId: activeProjectId, taskSessionId, modelId },
+		})
+			.then(() => agentTasks.refetch())
+			.catch((cause) => {
+				setSession((current) => ({
+					...current,
+					connection: {
+						status: "failed",
+						provider: task?.harnessId ?? harnessId,
+						message: publicFailureMessage(cause),
+					},
+				}));
+			})
+			.finally(() => setTaskMutationBusy(false));
 	}
 
 	return (
@@ -884,20 +1110,27 @@ export function WorkspaceHome({
 				onClose={() => setSettingsOpen(false)}
 			/>
 			<main className="workspace-main" inert={compact && projectsOpen}>
-				<div
-					ref={workspaceBody}
-					className="workspace-body"
-					data-inspector-collapsed={!inspectorOpen}
-					data-inspector-view={inspectorView}
-					data-layout={followUpLayout ? "chat" : "empty"}
-					data-splitting={splitting ? "true" : undefined}
-					style={
-						inspectorOpen && inspectorBeside
-							? {
-									gridTemplateColumns: `${splitRatio}fr ${1 - splitRatio}fr`,
-								}
-							: undefined
+				<button
+					type="button"
+					className="workspace-sidebar-toggle workspace-inspector-toggle"
+					aria-label={
+						inspectorOpen ? "Close right sidebar" : "Open right sidebar"
 					}
+					title={inspectorOpen ? "Close right sidebar" : "Open right sidebar"}
+					aria-expanded={inspectorOpen}
+					aria-controls="workspace-inspector"
+					onClick={() => setInspectorOpen((open) => !open)}
+				>
+					<PanelRight size={18} />
+				</button>
+				<WorkspacePanes
+					open={inspectorOpen}
+					compact={compact}
+					ratio={splitRatio}
+					view={inspectorView}
+					layout={followUpLayout ? "chat" : "empty"}
+					onResize={setCustomSplit}
+					onReset={() => setCustomSplit(null)}
 				>
 					<section
 						className="welcome-panel"
@@ -908,73 +1141,13 @@ export function WorkspaceHome({
 					>
 						{followUpLayout ? (
 							<div className="session-title-row">
-								<button
-									type="button"
-									className="panel-toggle session-title-chats"
-									aria-label="Open chats"
-									title="Open chats"
-									aria-expanded={projectsOpen}
-									aria-controls="project-sidebar"
-									onClick={() => setProjectsOpen(true)}
-								>
-									<img
-										className="brand-mark"
-										src="/brand/mark.svg"
-										width={22}
-										height={22}
-										alt=""
-									/>
-								</button>
 								<div className="session-title-copy">
 									<span className="session-title">{sessionTitle}</span>
 								</div>
-								{inspectorOpen ? null : (
-									<button
-										type="button"
-										className="panel-toggle inspector-toggle"
-										aria-label="Show tools"
-										title="Show tools"
-										aria-expanded={false}
-										aria-controls="workspace-inspector"
-										onClick={() => setInspectorOpen(true)}
-									>
-										<PanelRight size={16} />
-										<span>Tools</span>
-									</button>
-								)}
 							</div>
 						) : inspectorOpen ? null : (
 							<div className="session-title-row session-title-row-empty">
-								<button
-									type="button"
-									className="panel-toggle session-title-chats"
-									aria-label="Open chats"
-									title="Open chats"
-									aria-expanded={projectsOpen}
-									aria-controls="project-sidebar"
-									onClick={() => setProjectsOpen(true)}
-								>
-									<img
-										className="brand-mark"
-										src="/brand/mark.svg"
-										width={22}
-										height={22}
-										alt=""
-									/>
-								</button>
 								<div className="session-title-copy" />
-								<button
-									type="button"
-									className="panel-toggle inspector-toggle"
-									aria-label="Show tools"
-									title="Show tools"
-									aria-expanded={false}
-									aria-controls="workspace-inspector"
-									onClick={() => setInspectorOpen(true)}
-								>
-									<PanelRight size={16} />
-									<span>Tools</span>
-								</button>
 							</div>
 						)}
 						<div
@@ -1116,9 +1289,7 @@ export function WorkspaceHome({
 														"awaiting_device_code" &&
 													current.connection.verificationUrl
 												) {
-													revealClaudeLogin(
-														current.connection.verificationUrl,
-													);
+													revealClaudeLogin(current.connection.verificationUrl);
 													return;
 												}
 												if (current.connection.status !== "authenticated") {
@@ -1209,7 +1380,6 @@ export function WorkspaceHome({
 								projectPickerOpen={projectPickerOpen}
 								onProjectPickerOpenChange={setProjectPickerOpen}
 							/>
-							{projects.isPending && <p role="status">Loading projects…</p>}
 							{projects.error && (
 								<p role="alert">
 									Unable to load projects.{" "}
@@ -1232,33 +1402,11 @@ export function WorkspaceHome({
 						</div>
 					</section>
 					<div className="inspector-frame">
-						{inspectorOpen && inspectorBeside ? (
-							<button
-								type="button"
-								className="inspector-split"
-								aria-label="Resize tools panel"
-								title="Drag to resize. Double-click to reset."
-								onPointerDown={beginInspectorSplit}
-								onDoubleClick={() => setCustomSplit(null)}
-								onKeyDown={(event) => {
-									if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
-										return;
-									}
-									event.preventDefault();
-									setCustomSplit(
-										nudgeInspectorSplit(
-											splitRatio,
-											event.key === "ArrowLeft" ? -1 : 1,
-										),
-									);
-								}}
-							/>
-						) : null}
 						<WorkspaceInspector
 							collapsed={!inspectorOpen}
 							activeView={inspectorView}
 							onActiveViewChange={(view) => {
-								if (view !== "side") setToolsView(view);
+								if (view !== "side" && view !== "tasks") setToolsView(view);
 								setInspectorView(view);
 							}}
 							fileChanges={fileChanges}
@@ -1272,6 +1420,19 @@ export function WorkspaceHome({
 							sideChatOpen={sideChatOpen}
 							onNewSideChat={openSideChat}
 							onCloseSideChat={closeSideChat}
+							tasks={
+								activeSessionId ? (
+									<TaskPanel
+										tasks={agentTasks.data ?? []}
+										rootSessionId={activeSessionId}
+										busy={taskMutationBusy}
+										onCreate={createAgentTask}
+										onEdit={editAgentTask}
+										onStart={launchAgentTask}
+										onWrapUp={askAgentTaskToWrapUp}
+									/>
+								) : null
+							}
 							sideChat={
 								<SideChatPanel
 									items={session.sideItems}
@@ -1296,10 +1457,9 @@ export function WorkspaceHome({
 									}}
 								/>
 							}
-							onCollapse={() => setInspectorOpen(false)}
 						/>
 					</div>
-				</div>
+				</WorkspacePanes>
 			</main>
 		</div>
 	);

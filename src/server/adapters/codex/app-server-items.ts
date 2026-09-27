@@ -303,7 +303,14 @@ export function sessionItemFromAppServerItem(
 		return { kind: "userMessage", id, text: userMessageText(value) };
 	}
 	if (type === "agentMessage") {
-		return { kind: "agentMessage", id, text: readString(value.text) ?? "" };
+		return {
+			kind: "agentMessage",
+			id,
+			text: readString(value.text) ?? "",
+			...(value.phase === "commentary" || value.phase === "final_answer"
+				? { phase: value.phase }
+				: {}),
+		};
 	}
 	if (type === "reasoning") {
 		const durationSeconds = reasoningDurationSeconds(value);

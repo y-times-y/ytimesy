@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getRequest } from "@tanstack/react-start/server";
 import { Effect } from "effect";
+import type { WorkspaceFilePreview } from "#/domain/file-preview";
 import type {
 	WorkspaceExplorerListing,
 	WorkspaceSourceFile,
@@ -13,6 +14,7 @@ import {
 	type ExplorerScope,
 	listWorkspaceExplorer,
 	readWorkspaceExplorerFile,
+	readWorkspaceFilePreview,
 	writeWorkspaceExplorerFile,
 } from "#/server/services/workspace-explorer";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
@@ -35,6 +37,7 @@ function optionalProjectId(
 				sessionId?: string;
 				path?: string;
 				text?: string;
+				revision?: "head" | "working";
 		  }
 		| undefined,
 ) {
@@ -49,6 +52,8 @@ function optionalProjectId(
 		sessionId: sessionId || undefined,
 		path: path || undefined,
 		text,
+		revision:
+			data?.revision === "head" ? ("head" as const) : ("working" as const),
 	};
 }
 
@@ -106,4 +111,14 @@ export const writeWorkspaceSourceFn = createServerFn({ method: "POST" })
 		} catch {
 			return { ok: false, reason: "failed" };
 		}
+	});
+
+export const readWorkspacePreviewFn = createServerFn({ method: "GET" })
+	.validator(optionalProjectId)
+	.handler(async ({ data }): Promise<WorkspaceFilePreview> => {
+		const scope = await requireScope(data.projectId, data.sessionId);
+		if (!data.path) return { kind: "unavailable", reason: "Select a file." };
+		return runWithMachines((machines) =>
+			readWorkspaceFilePreview(machines, scope, data.path ?? "", data.revision),
+		);
 	});

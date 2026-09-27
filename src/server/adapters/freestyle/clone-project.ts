@@ -44,27 +44,24 @@ fi
 mkdir -p "$(dirname "$DEST")"
 if [ -d "$DEST/.git" ]; then
   rm -f "$TOKEN_FILE"
-  printf '%s\\n' "$DEST" > ${shellSingleQuote(PROJECT_CWD_PATH)}
-  echo "PROJECT_CWD=$DEST"
-  exit 0
-fi
-
-TOKEN="$(tr -d '\\n\\r' < "$TOKEN_FILE")"
-rm -f "$TOKEN_FILE"
-if [ -z "$TOKEN" ]; then
-  echo "GitHub installation token was empty" >&2
-  exit 1
-fi
-
-rm -rf "$DEST"
-if [ -n "$BRANCH" ]; then
-  git clone --depth 1 --branch "$BRANCH" "https://x-access-token:\${TOKEN}@github.com/\${OWNER}/\${NAME}.git" "$DEST"
 else
-  git clone --depth 1 "https://x-access-token:\${TOKEN}@github.com/\${OWNER}/\${NAME}.git" "$DEST"
-fi
-git -C "$DEST" remote set-url origin "$ORIGIN"
-if [ -n "$WORKING" ]; then
-  git -C "$DEST" checkout -B "$WORKING"
+  TOKEN="$(tr -d '\\n\\r' < "$TOKEN_FILE")"
+  rm -f "$TOKEN_FILE"
+  if [ -z "$TOKEN" ]; then
+    echo "GitHub installation token was empty" >&2
+    exit 1
+  fi
+
+  rm -rf "$DEST"
+  if [ -n "$BRANCH" ]; then
+    git clone --depth 1 --branch "$BRANCH" "https://x-access-token:\${TOKEN}@github.com/\${OWNER}/\${NAME}.git" "$DEST"
+  else
+    git clone --depth 1 "https://x-access-token:\${TOKEN}@github.com/\${OWNER}/\${NAME}.git" "$DEST"
+  fi
+  git -C "$DEST" remote set-url origin "$ORIGIN"
+  if [ -n "$WORKING" ]; then
+    git -C "$DEST" checkout -B "$WORKING"
+  fi
 fi
 
 printf '%s\\n' "$DEST" > ${shellSingleQuote(PROJECT_CWD_PATH)}
@@ -113,29 +110,23 @@ TOKEN="$(tr -d '\\n\\r' < "$TOKEN_FILE")"
 rm -f "$TOKEN_FILE"
 if [ -z "$TOKEN" ]; then
   echo stale
-  exit 0
-fi
-if [ ! -d "$DEST/.git" ]; then
+elif [ ! -d "$DEST/.git" ]; then
   echo absent
-  exit 0
-fi
-if [ -n "$(git -C "$DEST" status --porcelain)" ]; then
+elif [ -n "$(git -C "$DEST" status --porcelain)" ]; then
   echo dirty
-  exit 0
-fi
-if [ -n "$BRANCH" ] && ! git -C "$DEST" fetch --depth 1 "https://x-access-token:\${TOKEN}@github.com/\${OWNER}/\${NAME}.git" "$BRANCH"; then
+elif [ -n "$BRANCH" ] && ! git -C "$DEST" fetch --depth 1 "https://x-access-token:\${TOKEN}@github.com/\${OWNER}/\${NAME}.git" "$BRANCH"; then
   git -C "$DEST" remote set-url origin "$ORIGIN"
   echo stale
-  exit 0
+else
+  if [ -n "$BRANCH" ]; then
+    git -C "$DEST" merge --ff-only FETCH_HEAD >/dev/null 2>&1 || true
+  fi
+  if [ -n "$WORKING" ]; then
+    git -C "$DEST" checkout -B "$WORKING"
+  fi
+  git -C "$DEST" remote set-url origin "$ORIGIN"
+  echo updated
 fi
-if [ -n "$BRANCH" ]; then
-  git -C "$DEST" merge --ff-only FETCH_HEAD >/dev/null 2>&1 || true
-fi
-if [ -n "$WORKING" ]; then
-  git -C "$DEST" checkout -B "$WORKING"
-fi
-git -C "$DEST" remote set-url origin "$ORIGIN"
-echo updated
 `;
 }
 

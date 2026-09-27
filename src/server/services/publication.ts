@@ -9,6 +9,7 @@ import {
 	publicationHeadBranch,
 	publicationSessionBlockedReason,
 	publicationWorkspaceBlockedReason,
+	workspacePublicationBranch,
 } from "../../domain/publication";
 import {
 	PROJECT_TOKEN_PATH,
@@ -45,6 +46,7 @@ export function publishProject(
 		sessionId?: string;
 		title: string;
 		body?: string;
+		baseBranch?: string;
 		authorName?: string | null;
 		authorEmail?: string | null;
 	},
@@ -102,11 +104,14 @@ export function publishProject(
 			email: input.authorEmail,
 		});
 		const coAuthor = publicationCoAuthor({ author, bot });
-		const head = publicationHeadBranch({
-			selectedBranch: project.branch,
-			defaultBranch: repository.defaultBranch,
-			workspaceId: workspace.id,
-		});
+		const base = input.baseBranch?.trim() || repository.defaultBranch;
+		const head = input.sessionId
+			? workspacePublicationBranch(input.sessionId)
+			: publicationHeadBranch({
+					selectedBranch: project.branch,
+					defaultBranch: repository.defaultBranch,
+					workspaceId: workspace.id,
+				});
 		yield* Effect.tryPromise(() =>
 			runtime.recover(providerRef).catch((error) => {
 				throw hostFailure(error, "Workspace is not available.");
@@ -182,27 +187,23 @@ export function publishProject(
 					"Push failed. Reconnect GitHub and retry.",
 			);
 		const aheadBy = yield* Effect.tryPromise(() =>
-			compareBranchAhead(
-				token,
-				repository.fullName,
-				repository.defaultBranch,
-				head,
-			),
+			compareBranchAhead(token, repository.fullName, base, head),
 		);
 		const blocked = publicationBlockedReason({
 			head,
-			base: repository.defaultBranch,
+			base,
 			aheadBy,
 		});
 		if (blocked) return yield* reject(blocked);
-		return yield* Effect.tryPromise(() =>
+		const pullRequest = yield* Effect.tryPromise(() =>
 			createDraftPullRequest(token, repository.fullName, {
 				title: input.title,
 				body: input.body ?? "",
 				head,
-				base: repository.defaultBranch,
+				base,
 			}),
 		);
+		return { ...pullRequest, head, base };
 	});
 }
 

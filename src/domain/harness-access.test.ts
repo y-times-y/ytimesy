@@ -10,11 +10,11 @@ import {
 	composerCanStartSignIn,
 	composerSendIsEnabled,
 	harnessAccess,
-	harnessLoginShouldShow,
 	harnessLoginIsPending,
+	harnessLoginShouldShow,
 	harnessRequiresAccountLogin,
 	offeredHarnessAccess,
-	runningAuthenticatedTurnShouldPoll,
+	runningTurnShouldPoll,
 	selectedHarnessIsConnected,
 	shouldAutoResumeHarnessSession,
 } from "./harness-access";
@@ -22,16 +22,11 @@ import {
 describe("harness access", () => {
 	it("lists every offered harness and mutes account logins that are not signed in", () => {
 		const rows = offeredHarnessAccess({ status: "disconnected" });
-		expect(rows.map((row) => row.provider.id)).toEqual([
-			"codex",
-			"claude",
-			"opencode",
-		]);
-		expect(rows.map((row) => row.muted)).toEqual([true, true, false]);
+		expect(rows.map((row) => row.provider.id)).toEqual(["codex", "claude"]);
+		expect(rows.map((row) => row.muted)).toEqual([true, true]);
 		expect(rows.map((row) => row.statusLabel)).toEqual([
 			"Not signed in",
 			"Not signed in",
-			"Not connected",
 		]);
 	});
 
@@ -57,20 +52,16 @@ describe("harness access", () => {
 		});
 	});
 
-	it("offers Sign in on Codex and Claude, and Connect on OpenCode", () => {
+	it("offers sign in on Codex and Claude", () => {
 		const rows = offeredHarnessAccess({ status: "disconnected" });
 		expect(rows.map((row) => row.subscriptionAction)).toEqual([
 			"sign_in",
 			"sign_in",
-			"connect",
 		]);
 		expect(rows.map((row) => row.subscriptionActionLabel)).toEqual([
 			"Sign in",
 			"Sign in",
-			"Connect",
 		]);
-		expect(rows[2]?.statusLabel).toBe("Not connected");
-		expect(rows[2]?.summary).toMatch(/No account is required/);
 		expect(harnessRequiresAccountLogin("opencode")).toBe(false);
 		expect(harnessRequiresAccountLogin("claude")).toBe(true);
 	});
@@ -177,6 +168,16 @@ describe("harness access", () => {
 	});
 
 	it("lets a follow-up or side send resume OpenCode or a saved Codex workspace without auto-booting on select", () => {
+		expect(
+			composerCanStartSignIn({
+				harnessId: "codex",
+				connection: { status: "disconnected" },
+				snapshotAvailable: true,
+				busy: false,
+				draft: "Add a follow up",
+				slashDraft: false,
+			}),
+		).toBe(false);
 		expect(
 			canResumeDisconnectedFollowUp({
 				harnessId: "opencode",
@@ -421,10 +422,10 @@ describe("harness access", () => {
 	});
 });
 
-describe("runningAuthenticatedTurnShouldPoll", () => {
+describe("runningTurnShouldPoll", () => {
 	it("polls an authenticated running turn after Send returns", () => {
 		expect(
-			runningAuthenticatedTurnShouldPoll({
+			runningTurnShouldPoll({
 				turnStatus: "running",
 				sideTurnStatus: "idle",
 				connectionStatus: "authenticated",
@@ -432,7 +433,7 @@ describe("runningAuthenticatedTurnShouldPoll", () => {
 			}),
 		).toBe(true);
 		expect(
-			runningAuthenticatedTurnShouldPoll({
+			runningTurnShouldPoll({
 				turnStatus: "idle",
 				sideTurnStatus: "running",
 				connectionStatus: "authenticated",
@@ -443,23 +444,40 @@ describe("runningAuthenticatedTurnShouldPoll", () => {
 
 	it("keeps polling a running turn even while Send is still in flight", () => {
 		expect(
-			runningAuthenticatedTurnShouldPoll({
+			runningTurnShouldPoll({
 				turnStatus: "running",
 				sideTurnStatus: "idle",
 				connectionStatus: "authenticated",
 				composerBusy: true,
 			}),
 		).toBe(true);
+	});
+
+	it("keeps reconciling running turns after a disconnected view without polling idle workspaces", () => {
 		expect(
-			runningAuthenticatedTurnShouldPoll({
+			runningTurnShouldPoll({
 				turnStatus: "running",
 				sideTurnStatus: "idle",
 				connectionStatus: "disconnected",
 				composerBusy: false,
 			}),
+		).toBe(true);
+		expect(
+			runningTurnShouldPoll({
+				turnStatus: "idle",
+				sideTurnStatus: "running",
+				connectionStatus: "disconnected",
+			}),
+		).toBe(true);
+		expect(
+			runningTurnShouldPoll({
+				turnStatus: "idle",
+				sideTurnStatus: "idle",
+				connectionStatus: "disconnected",
+			}),
 		).toBe(false);
 		expect(
-			runningAuthenticatedTurnShouldPoll({
+			runningTurnShouldPoll({
 				turnStatus: "completed",
 				sideTurnStatus: "idle",
 				connectionStatus: "authenticated",

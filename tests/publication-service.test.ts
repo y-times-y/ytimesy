@@ -191,6 +191,8 @@ it("commits and pushes from the checkout before opening a draft pull request", a
 		number: 4,
 		url: "https://github.example.test/acme/app/pull/4",
 		draft: true,
+		head: "feature",
+		base: "master",
 	});
 });
 

@@ -26,6 +26,64 @@ function fileChange(id: string, path: string): SessionItem {
 }
 
 describe("timeline activity grouping", () => {
+	it("keeps explicit commentary inside work when a turn fails without an answer", () => {
+		const rows = groupTimelineRows(
+			[
+				{
+					kind: "agentMessage",
+					id: SessionItemId("comment"),
+					phase: "commentary",
+					text: "Checking",
+				},
+				{ kind: "error", id: SessionItemId("error"), message: "Disconnected" },
+			],
+			"failed",
+		);
+		expect(rows[0]).toMatchObject({
+			kind: "work",
+			items: [{ text: "Checking" }],
+		});
+		expect(rows[1]).toMatchObject({ kind: "item", item: { kind: "error" } });
+	});
+	it("groups the whole previous turn without reopening it for a new prompt", () => {
+		const command: SessionItem = {
+			kind: "commandExecution",
+			id: SessionItemId("cmd"),
+			command: "pnpm test",
+			cwd: null,
+			status: "completed",
+			output: "ok",
+			exitCode: 0,
+		};
+		const rows = groupTimelineRows([
+			{ kind: "reasoning", id: SessionItemId("r"), summaries: ["Checking"] },
+			command,
+			{ kind: "agentMessage", id: SessionItemId("a"), text: "Update" },
+			{
+				...command,
+				id: SessionItemId("failed"),
+				status: "failed",
+				exitCode: 1,
+			},
+			{ kind: "userMessage", id: SessionItemId("u"), text: "Next" },
+			{ ...command, id: SessionItemId("next") },
+		]);
+		expect(rows.map((row) => row.kind)).toEqual([
+			"work",
+			"item",
+			"item",
+			"item",
+		]);
+		expect(rows[0]).toMatchObject({
+			id: "r",
+			items: [
+				{ kind: "reasoning" },
+				{ kind: "commandExecution" },
+				{ status: "failed" },
+			],
+		});
+		expect(rows[1]).toMatchObject({ kind: "item", item: { text: "Update" } });
+	});
 	it("treats file reads and searches as exploration, not shell pills", () => {
 		const read: SessionItem = {
 			kind: "dynamicToolCall",

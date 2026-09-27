@@ -1,7 +1,6 @@
 import {
 	Files,
 	FolderTree,
-	GitPullRequest,
 	MessageSquare,
 	MessagesSquare,
 	Monitor,
@@ -22,7 +21,6 @@ const icons: Record<SlashCommandId, typeof MessageSquare> = {
 	diff: Files,
 	terminal: SquareTerminal,
 	desktop: Monitor,
-	pr: GitPullRequest,
 };
 
 export function SlashCommandPalette({

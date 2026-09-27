@@ -10,6 +10,7 @@ import type { WorkspaceMachines } from "#/server/services/workspace-machines";
 export type PersistClaudeAuthSnapshotResult =
 	| { readonly kind: "existing"; readonly snapshotId: string }
 	| { readonly kind: "created"; readonly snapshotId: string }
+	| { readonly kind: "replaced"; readonly snapshotId: string }
 	| { readonly kind: "failed"; readonly message: string };
 
 /**
@@ -29,6 +30,53 @@ export function persistClaudeAuthSnapshotForUser(
 		if (existingId) {
 			return { kind: "existing" as const, snapshotId: existingId };
 		}
+		return yield* captureAndSaveClaudeAuthSnapshot(
+			userId,
+			machines,
+			workspaceId,
+			account,
+			"created",
+		);
+	}).pipe(
+		Effect.catchAll((cause) =>
+			Effect.succeed({
+				kind: "failed" as const,
+				message: cause instanceof Error ? cause.message : String(cause),
+			}),
+		),
+	);
+}
+
+export function refreshClaudeAuthSnapshotForUser(
+	userId: string,
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+	account: { readonly planType: string | null; readonly email?: string | null },
+): Effect.Effect<PersistClaudeAuthSnapshotResult> {
+	return captureAndSaveClaudeAuthSnapshot(
+		userId,
+		machines,
+		workspaceId,
+		account,
+		"replaced",
+	).pipe(
+		Effect.catchAll((cause) =>
+			Effect.succeed({
+				kind: "failed" as const,
+				message: cause instanceof Error ? cause.message : String(cause),
+			}),
+		),
+	);
+}
+
+function captureAndSaveClaudeAuthSnapshot(
+	userId: string,
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+	account: { readonly planType: string | null; readonly email?: string | null },
+	kind: "created" | "replaced",
+): Effect.Effect<PersistClaudeAuthSnapshotResult, unknown> {
+	return Effect.gen(function* () {
 		const snapshot = yield* snapshotAuthenticatedClaudeWorkspace(
 			machines,
 			workspaceId,
@@ -44,13 +92,6 @@ export function persistClaudeAuthSnapshotForUser(
 				email: account.email ?? null,
 			}),
 		);
-		return { kind: "created" as const, snapshotId: snapshot.snapshotId };
-	}).pipe(
-		Effect.catchAll((cause) =>
-			Effect.succeed({
-				kind: "failed" as const,
-				message: cause instanceof Error ? cause.message : String(cause),
-			}),
-		),
-	);
+		return { kind, snapshotId: snapshot.snapshotId };
+	});
 }

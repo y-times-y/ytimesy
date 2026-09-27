@@ -11,16 +11,17 @@ import {
 	codexConnectBlockedReason,
 	publicFailureMessage,
 } from "#/domain/project-workspace";
-import { shouldStartDeviceCodeAfterSnapshotResume } from "#/domain/proof-workspace-recovery";
 import type { SessionItem, SessionTurnStatus } from "#/domain/session-item";
 import { canSubmitComposer, canSubmitSideChat } from "#/domain/session-policy";
 import type { WorkspaceLifecycle } from "#/domain/workspace";
 import type { AgentSessionRecord } from "#/server/adapters/agent-sessions";
 import {
 	ensureCurrentLoginDaemon,
+	configureCodexExternalAuth,
+	CODEX_REFRESH_REQUEST_PATH,
+	CODEX_REFRESH_RESPONSE_PATH,
 	interruptCodexTurn,
 	readLoginStatus,
-	resumeCodexSession,
 	startInteractiveDeviceCodeLogin,
 	submitCodexTask,
 } from "#/server/adapters/codex/login-session";
@@ -29,8 +30,11 @@ import type {
 	ListedModel,
 } from "#/server/adapters/codex/login-status";
 import { readyWorkspaceForOwner } from "#/server/adapters/workspaces";
-import { loadAgentSnapshotId } from "#/server/auth/agent-account";
-import { persistCodexAuthSnapshotForUser } from "#/server/proof/persist-codex-auth-snapshot";
+import {
+	captureManagedCodexAuth,
+	codexExternalTokens,
+	hasManagedCodexAuth,
+} from "#/server/auth/codex-managed-auth";
 import {
 	bindAgentSessionMachine,
 	peekAgentSessionMachine,
@@ -115,10 +119,10 @@ export function readCodexWorkspaceSession(
 	scope: CodexSessionScope,
 ): Effect.Effect<PublicCodexSession> {
 	return Effect.gen(function* () {
-		const snapshotId = yield* Effect.tryPromise(() =>
-			loadAgentSnapshotId(scope.userId),
+		const hasCodexAuth = yield* Effect.tryPromise(() =>
+			hasManagedCodexAuth(scope.userId),
 		);
-		if (!scope.projectId) return emptyCodexSession(Boolean(snapshotId));
+		if (!scope.projectId) return emptyCodexSession(hasCodexAuth);
 		const peeked = yield* Effect.tryPromise(() =>
 			peekAgentSessionMachine({
 				userId: scope.userId,
@@ -131,7 +135,7 @@ export function readCodexWorkspaceSession(
 			return yield* Effect.tryPromise(() =>
 				persistBoundSessionView(
 					peeked.session,
-					emptyCodexSession(Boolean(snapshotId)),
+					emptyCodexSession(hasCodexAuth),
 				),
 			);
 		}
@@ -142,21 +146,36 @@ export function readCodexWorkspaceSession(
 			return yield* Effect.tryPromise(() =>
 				persistBoundSessionView(
 					peeked.session,
-					pausedCodexSessionView(providerRef, Boolean(snapshotId)),
+					pausedCodexSessionView(providerRef, hasCodexAuth),
 				),
 			);
 		}
-		const status = yield* readLoginStatus(machines, WorkspaceId(providerRef));
+		let status = yield* readLoginStatus(machines, WorkspaceId(providerRef));
+		if (status.stage === "authenticated") {
+			status = yield* promoteCodexLogin(
+				machines,
+				WorkspaceId(providerRef),
+				scope.userId,
+				status,
+			);
+			yield* Effect.tryPromise(() =>
+				serviceCodexRefreshRequest(
+					machines,
+					WorkspaceId(providerRef),
+					scope.userId,
+				),
+			);
+		}
 		return yield* Effect.tryPromise(() =>
 			persistBoundSessionView(
 				peeked.session,
-				viewFromStatus(status, providerRef, Boolean(snapshotId)),
+				viewFromStatus(status, providerRef, hasCodexAuth),
 			),
 		);
 	}).pipe(
 		Effect.catchAll(() =>
-			Effect.tryPromise(() => loadAgentSnapshotId(scope.userId)).pipe(
-				Effect.map((snapshotId) => emptyCodexSession(Boolean(snapshotId))),
+			Effect.tryPromise(() => hasManagedCodexAuth(scope.userId)).pipe(
+				Effect.map((hasCodexAuth) => emptyCodexSession(hasCodexAuth)),
 				Effect.catchAll(() => Effect.succeed(emptyCodexSession())),
 			),
 		),
@@ -172,8 +191,8 @@ export function connectCodexWorkspaceSession(
 	scope: CodexSessionScope,
 ): Effect.Effect<PublicCodexSession> {
 	return Effect.gen(function* () {
-		const snapshotId = yield* Effect.tryPromise(() =>
-			loadAgentSnapshotId(scope.userId),
+		const hasCodexAuth = yield* Effect.tryPromise(() =>
+			hasManagedCodexAuth(scope.userId),
 		);
 		const workspace = yield* Effect.tryPromise(() =>
 			readyWorkspaceForOwner(scope.userId, scope.projectId),
@@ -181,7 +200,7 @@ export function connectCodexWorkspaceSession(
 		const blocked = codexConnectBlockedReason(workspace);
 		if (blocked) {
 			return {
-				...emptyCodexSession(Boolean(snapshotId)),
+				...emptyCodexSession(hasCodexAuth),
 				connection: {
 					status: "failed" as const,
 					provider: "codex" as const,
@@ -208,7 +227,7 @@ export function connectCodexWorkspaceSession(
 			sessionId: bound.session.id,
 			createNew: false,
 		});
-		if (existing.connection.status === "authenticated") {
+		if (existing.connection.status === "authenticated" && hasCodexAuth) {
 			yield* prepareCodexGuest(machines, WorkspaceId(bound.providerRef), scope);
 			return yield* readCodexWorkspaceSession(machines, {
 				...scope,
@@ -220,17 +239,17 @@ export function connectCodexWorkspaceSession(
 			return existing;
 		}
 
-		const status = yield* authenticatePreparedWorkspace(
+		let status = yield* authenticatePreparedWorkspace(
 			machines,
 			WorkspaceId(bound.providerRef),
-			Boolean(snapshotId),
+			scope.userId,
 		);
 		if (status.stage === "authenticated") {
-			yield* persistCodexAuthSnapshotForUser(
-				scope.userId,
+			status = yield* promoteCodexLogin(
 				machines,
 				WorkspaceId(bound.providerRef),
-				{ planType: status.planType, email: null },
+				scope.userId,
+				status,
 			);
 			yield* prepareCodexGuest(machines, WorkspaceId(bound.providerRef), scope);
 		}
@@ -240,7 +259,7 @@ export function connectCodexWorkspaceSession(
 				viewFromStatus(
 					status,
 					bound.providerRef,
-					Boolean(snapshotId) || status.stage === "authenticated",
+					hasCodexAuth || status.stage === "authenticated",
 				),
 			),
 		);
@@ -273,18 +292,30 @@ export function sendCodexWorkspaceTask(
 		scope,
 		(providerRef, snapshotAvailable, session) =>
 			Effect.gen(function* () {
-				yield* prepareCodexGuest(machines, WorkspaceId(providerRef), scope);
 				let status = yield* readLoginStatus(machines, WorkspaceId(providerRef));
-				if (status.stage !== "authenticated") {
+				const managed = yield* Effect.tryPromise(() =>
+					hasManagedCodexAuth(scope.userId),
+				);
+				if (status.stage !== "authenticated" || managed) {
 					status = yield* authenticatePreparedWorkspace(
 						machines,
 						WorkspaceId(providerRef),
-						snapshotAvailable,
+						scope.userId,
 					);
 				}
 				if (status.stage !== "authenticated") {
 					return viewFromStatus(status, providerRef, snapshotAvailable);
 				}
+				status = yield* promoteCodexLogin(
+					machines,
+					WorkspaceId(providerRef),
+					scope.userId,
+					status,
+				);
+				if (status.stage !== "authenticated") {
+					return viewFromStatus(status, providerRef, snapshotAvailable);
+				}
+				yield* prepareCodexGuest(machines, WorkspaceId(providerRef), scope);
 				const preference = listedModelPreferenceFromSessions({
 					harness: session.harness,
 					sessions: [session],
@@ -296,7 +327,7 @@ export function sendCodexWorkspaceTask(
 				if (!modelId) {
 					return viewFromStatus(status, providerRef, snapshotAvailable);
 				}
-				if (scope.projectId) {
+				if (scope.projectId && !session.parentSessionId) {
 					yield* Effect.tryPromise(() =>
 						syncProjectContextForTask(machines, providerRef, {
 							projectId: scope.projectId as string,
@@ -321,6 +352,7 @@ export function sendCodexWorkspaceTask(
 				status = yield* submitCodexTask(machines, WorkspaceId(providerRef), {
 					text: input.text,
 					modelId,
+					...(session.taskAccess === "read_only" ? { readOnly: true } : {}),
 					...(reasoningEffort ? { reasoningEffort } : {}),
 					...(serviceTier ? { serviceTier } : {}),
 				});
@@ -341,10 +373,10 @@ export function stopCodexWorkspaceTurn(
 	scope: CodexSessionScope,
 ): Effect.Effect<PublicCodexSession> {
 	return Effect.gen(function* () {
-		const snapshotId = yield* Effect.tryPromise(() =>
-			loadAgentSnapshotId(scope.userId),
+		const hasCodexAuth = yield* Effect.tryPromise(() =>
+			hasManagedCodexAuth(scope.userId),
 		);
-		if (!scope.projectId) return emptyCodexSession(Boolean(snapshotId));
+		if (!scope.projectId) return emptyCodexSession(hasCodexAuth);
 		const peeked = yield* Effect.tryPromise(() =>
 			peekAgentSessionMachine({
 				userId: scope.userId,
@@ -360,7 +392,7 @@ export function stopCodexWorkspaceTurn(
 			return yield* Effect.tryPromise(() =>
 				persistBoundSessionView(
 					peeked.session,
-					emptyCodexSession(Boolean(snapshotId)),
+					emptyCodexSession(hasCodexAuth),
 				),
 			);
 		}
@@ -374,7 +406,7 @@ export function stopCodexWorkspaceTurn(
 			const paused = yield* Effect.tryPromise(() =>
 				persistBoundSessionView(
 					peeked.session,
-					pausedCodexSessionView(providerRef, Boolean(snapshotId)),
+					pausedCodexSessionView(providerRef, hasCodexAuth),
 				),
 			);
 			return { ...paused, turnStatus: "idle" as const };
@@ -386,7 +418,7 @@ export function stopCodexWorkspaceTurn(
 		return yield* Effect.tryPromise(() =>
 			persistBoundSessionView(
 				peeked.session,
-				viewFromStatus(status, providerRef, Boolean(snapshotId)),
+				viewFromStatus(status, providerRef, hasCodexAuth),
 			),
 		);
 	}).pipe(
@@ -413,10 +445,10 @@ function withPreparedWorkspace<A>(
 	) => Effect.Effect<A, Error>,
 ): Effect.Effect<A | PublicCodexSession> {
 	return Effect.gen(function* () {
-		const snapshotId = yield* Effect.tryPromise(() =>
-			loadAgentSnapshotId(scope.userId),
+		const hasCodexAuth = yield* Effect.tryPromise(() =>
+			hasManagedCodexAuth(scope.userId),
 		);
-		if (!scope.projectId) return emptyCodexSession(Boolean(snapshotId));
+		if (!scope.projectId) return emptyCodexSession(hasCodexAuth);
 		const bound = yield* Effect.tryPromise(() =>
 			bindAgentSessionMachine(machines, {
 				userId: scope.userId,
@@ -431,7 +463,7 @@ function withPreparedWorkspace<A>(
 		);
 		const result = yield* run(
 			bound.providerRef,
-			Boolean(snapshotId),
+			hasCodexAuth,
 			bound.session,
 		);
 		if (isPublicCodexSession(result)) {
@@ -466,23 +498,90 @@ function isPublicCodexSession(value: unknown): value is PublicCodexSession {
 function authenticatePreparedWorkspace(
 	machines: WorkspaceMachines,
 	workspaceId: WorkspaceId,
-	snapshotAvailable: boolean,
+	userId: string,
 ): Effect.Effect<CodexLoginStatus> {
 	return Effect.gen(function* () {
-		const status = snapshotAvailable
-			? yield* resumeCodexSession(machines, workspaceId, {
-					skipInitialTurn: true,
-				})
-			: yield* startInteractiveDeviceCodeLogin(machines, workspaceId, {
-					skipInitialTurn: true,
-				});
-		if (snapshotAvailable && shouldStartDeviceCodeAfterSnapshotResume(status)) {
-			return yield* startInteractiveDeviceCodeLogin(machines, workspaceId, {
-				skipInitialTurn: true,
-			});
+		if (yield* Effect.tryPromise(() => hasManagedCodexAuth(userId))) {
+			const tokens = yield* Effect.tryPromise(() =>
+				codexExternalTokens(userId),
+			);
+			return yield* configureCodexExternalAuth(machines, workspaceId, tokens);
 		}
-		return status;
+		return yield* startInteractiveDeviceCodeLogin(machines, workspaceId, {
+			skipInitialTurn: true,
+		});
+	}).pipe(
+		Effect.catchAll((cause) =>
+			Effect.succeed({
+				stage: "failed" as const,
+				message: publicFailureMessage(cause),
+			}),
+		),
+	);
+}
+
+function promoteCodexLogin(
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+	userId: string,
+	status: Extract<CodexLoginStatus, { stage: "authenticated" }>,
+): Effect.Effect<CodexLoginStatus, Error> {
+	return Effect.gen(function* () {
+		if (yield* Effect.tryPromise(() => hasManagedCodexAuth(userId))) {
+			return status;
+		}
+		yield* Effect.tryPromise(() =>
+			captureManagedCodexAuth(userId, machines, workspaceId, status.planType),
+		);
+		return yield* authenticatePreparedWorkspace(machines, workspaceId, userId);
 	});
+}
+
+export async function serviceCodexRefreshRequest(
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+	userId: string,
+): Promise<void> {
+	const contents = await machines.readTextFile(
+		workspaceId,
+		CODEX_REFRESH_REQUEST_PATH,
+	);
+	if (!contents) return;
+	const claimPath = `${CODEX_REFRESH_REQUEST_PATH}.claimed`;
+	const claimed = await machines.exec(
+		workspaceId,
+		`mv ${CODEX_REFRESH_REQUEST_PATH} ${claimPath}`,
+		15_000,
+	);
+	if (claimed.exitCode !== 0) return;
+	try {
+		const claimedContents = await machines.readTextFile(workspaceId, claimPath);
+		const request = JSON.parse(claimedContents ?? "null") as unknown;
+		const id = request && typeof request === "object" && "id" in request
+			? request.id
+			: null;
+		if (typeof id !== "string") return;
+		try {
+			const tokens = await codexExternalTokens(userId, true);
+			await machines.writeTextFile(
+				workspaceId,
+				CODEX_REFRESH_RESPONSE_PATH,
+				`${JSON.stringify({ id, tokens })}\n`,
+			);
+		} catch {
+			await machines.writeTextFile(
+				workspaceId,
+				CODEX_REFRESH_RESPONSE_PATH,
+				`${JSON.stringify({ id, error: "Codex login refresh failed." })}\n`,
+			);
+		}
+	} finally {
+		await machines.exec(
+			workspaceId,
+			`rm -f ${claimPath}`,
+			15_000,
+		).catch(() => undefined);
+	}
 }
 
 function prepareCodexGuest(

@@ -77,10 +77,7 @@ describe("add project", () => {
 			defaultBranch: "main",
 		};
 		expect(
-			repositoryIsAdded(
-				[{ ...ytimesy, id: "p1", branch: "ytimesy/ytimesy-000b" }],
-				notes,
-			),
+			repositoryIsAdded([{ installationId: 1, repositoryId: 11 }], notes),
 		).toBe(false);
 		expect(
 			projectPickerLists({

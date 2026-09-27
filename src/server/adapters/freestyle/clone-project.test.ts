@@ -26,6 +26,7 @@ describe("cloneSelectedProjectScript", () => {
 		expect(script).toContain('git -C "$DEST" checkout -B');
 		expect(script).toContain(PROJECT_CWD_PATH);
 		expect(script).toContain('rm -f "$TOKEN_FILE"');
+		expect(script).not.toContain("exit 0");
 		expect(script).not.toContain("ghs_");
 	});
 
@@ -66,6 +67,7 @@ describe("cloneSelectedProjectScript", () => {
 		expect(script).not.toContain("git clone");
 		expect(script).toContain('rm -f "$TOKEN_FILE"');
 		expect(script).toContain('git -C "$DEST" remote set-url origin');
+		expect(script).not.toContain("exit 0");
 		expect(script).not.toContain("ghs_");
 	});
 

@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { SessionItemId } from "./ids";
 import {
 	claudeTurnItemsFromStream,
 	sessionItemsFromClaudeStream,
 } from "./claude-stream";
+import { SessionItemId } from "./ids";
 
 describe("sessionItemsFromClaudeStream", () => {
 	it("streams thinking and tool calls before the final text", () => {
@@ -114,6 +114,32 @@ describe("sessionItemsFromClaudeStream", () => {
 });
 
 describe("claudeTurnItemsFromStream", () => {
+	it("keeps replay IDs stable without reusing them across turns", () => {
+		const stream =
+			'{"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}';
+		const first = {
+			previousItems: [
+				{
+					kind: "userMessage" as const,
+					id: SessionItemId("first"),
+					text: "hi",
+				},
+			],
+			stream,
+		};
+		expect(claudeTurnItemsFromStream(first)).toEqual(
+			claudeTurnItemsFromStream(first),
+		);
+		const second = {
+			...first,
+			previousItems: [
+				{ ...first.previousItems[0], id: SessionItemId("second") },
+			],
+		};
+		expect(claudeTurnItemsFromStream(first).at(-1)?.id).not.toBe(
+			claudeTurnItemsFromStream(second).at(-1)?.id,
+		);
+	});
 	it("keeps earlier turns and replaces only this turn's live items", () => {
 		expect(
 			claudeTurnItemsFromStream({

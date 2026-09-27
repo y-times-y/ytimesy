@@ -14,6 +14,7 @@ describe("project secrets", () => {
 				{ name: "OPENAI_API_KEY", value: "sk-secret'value" },
 			]),
 		).toBe("export OPENAI_API_KEY='sk-secret'\\''value'\n");
+		expect(agentSecretsEnvFile([])).toBe("# No project secrets configured.\n");
 		expect(agentSecretsEnvPath("/home/ubuntu/")).toBe(
 			"/home/ubuntu/.ytimesy-agent-secrets.env",
 		);

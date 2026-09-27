@@ -6,12 +6,15 @@ import {
 	CODEX_PROVIDER,
 	DEFAULT_COMPOSER_HARNESS_ID,
 	OPENCODE_PROVIDER,
+	offeredAgentProviderId,
 	offeredAgentProviders,
+	recognizedAgentProviders,
 } from "./agent-provider";
 
 describe("agent providers", () => {
-	it("offers Codex, Claude, and OpenCode and does not invent other agents", () => {
-		expect(offeredAgentProviders()).toEqual([
+	it("offers Codex and Claude while preserving legacy provider records", () => {
+		expect(offeredAgentProviders()).toEqual([CODEX_PROVIDER, CLAUDE_PROVIDER]);
+		expect(recognizedAgentProviders()).toEqual([
 			CODEX_PROVIDER,
 			CLAUDE_PROVIDER,
 			OPENCODE_PROVIDER,
@@ -20,7 +23,9 @@ describe("agent providers", () => {
 		expect(agentProviderById("claude")).toEqual(CLAUDE_PROVIDER);
 		expect(agentProviderById("opencode")).toEqual(OPENCODE_PROVIDER);
 		expect(OPENCODE_PROVIDER.signInMethod).toBeNull();
-		expect(DEFAULT_COMPOSER_HARNESS_ID).toBe("opencode");
+		expect(DEFAULT_COMPOSER_HARNESS_ID).toBe("codex");
+		expect(offeredAgentProviderId("claude")).toBe("claude");
+		expect(offeredAgentProviderId("opencode")).toBe("codex");
 	});
 
 	it("names the connected agent from its provider", () => {

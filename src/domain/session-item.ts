@@ -16,6 +16,10 @@ export type UserMessageItem = {
 	readonly kind: "userMessage";
 	readonly id: SessionItemId;
 	readonly text: string;
+	readonly timing?: {
+		readonly startedAt: number;
+		readonly completedAt?: number;
+	};
 };
 
 export type AgentMessageItem = {
@@ -23,6 +27,7 @@ export type AgentMessageItem = {
 	readonly id: SessionItemId;
 	readonly text: string;
 	readonly streaming?: boolean;
+	readonly phase?: "commentary" | "final_answer";
 };
 
 export type ReasoningItem = {
@@ -239,6 +244,24 @@ export function sessionViewItems(
 	live: readonly SessionItem[],
 	recorded: readonly SessionItem[],
 ): SessionItem[] {
+	const merged = mergeSessionViewItems(live, recorded);
+	const recordedUsers = recorded.filter((item) => item.kind === "userMessage");
+	let ordinal = 0;
+	let matchingPrefix = true;
+	return merged.map((item) => {
+		if (item.kind !== "userMessage") return item;
+		const previous = recordedUsers[ordinal++];
+		matchingPrefix = matchingPrefix && previous?.text === item.text;
+		return matchingPrefix && previous?.timing
+			? { ...item, timing: previous.timing }
+			: item;
+	});
+}
+
+function mergeSessionViewItems(
+	live: readonly SessionItem[],
+	recorded: readonly SessionItem[],
+): SessionItem[] {
 	const ahead = transcriptAheadOfPeer(live, recorded);
 	if (ahead) {
 		const tree = (ahead === recorded ? live : recorded).filter(
@@ -293,9 +316,7 @@ export function sessionViewShouldReplaceOpenTurn(input: {
 	) {
 		return false;
 	}
-	return (
-		input.nextStatus === "completed" || input.nextStatus === "failed"
-	);
+	return input.nextStatus === "completed" || input.nextStatus === "failed";
 }
 
 function turnSettledAfterUser(

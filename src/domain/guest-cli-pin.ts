@@ -5,9 +5,9 @@ import { posixShellQuoted } from "./posix-command";
  * upgrade these binaries; the CLIs themselves will unless updates are
  * disabled. A newer guest binary is unsupported until the adapter is.
  */
-export const PINNED_CLAUDE_CLI_VERSION = "2.1.234";
+export const PINNED_CLAUDE_CLI_VERSION = "2.1.283";
 export const PINNED_OPENCODE_CLI_VERSION = "1.18.18";
-export const PINNED_CODEX_CLI_VERSION = "0.154.0";
+export const PINNED_CODEX_CLI_VERSION = "0.157.1";
 
 export const GUEST_CLI_PIN_ENV_PATH = "/tmp/ytimesy-guest-cli-pin.env";
 
@@ -26,7 +26,21 @@ export function guestCliDisableUpdateExports(): string {
 }
 
 export function pinnedClaudeInstallCommand(): string {
-	return `curl -fsSL https://claude.ai/install.sh | bash -s -- ${PINNED_CLAUDE_CLI_VERSION}`;
+	return `npm install --prefix "$HOME/.ytimesy-cli" --no-audit --no-fund @anthropic-ai/claude-code@${PINNED_CLAUDE_CLI_VERSION}`;
+}
+
+export function ensurePinnedCodexCommand(): string {
+	return `export PATH="$HOME/.codex/packages/standalone/current:$HOME/.local/bin:$HOME/.codex/bin:$PATH"
+if [ "$(codex --version 2>/dev/null || true)" != "codex-cli ${PINNED_CODEX_CLI_VERSION}" ]; then
+  ${pinnedCodexInstallCommand()}
+fi`;
+}
+
+export function ensurePinnedClaudeCommand(): string {
+	return `export PATH="$HOME/.ytimesy-cli/node_modules/.bin:$HOME/.local/bin:$HOME/.claude/bin:/usr/local/bin:$PATH"
+if [ "$(claude --version 2>/dev/null || true)" != "${PINNED_CLAUDE_CLI_VERSION} (Claude Code)" ]; then
+  ${pinnedClaudeInstallCommand()}
+fi`;
 }
 
 export function pinnedOpenCodeInstallCommand(): string {

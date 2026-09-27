@@ -1,17 +1,17 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { IdentityGate } from "../features/auth/identity-gate";
-import { getCodexSession } from "../features/sessions/codex-session.fn";
+import { getWorkspaceBootstrap } from "../features/sessions/codex-session.fn";
 import { WorkspaceHome } from "../features/workspace/workspace-home";
 
 export const Route = createFileRoute("/")({
-	loader: () => getCodexSession(),
+	loader: () => getWorkspaceBootstrap(),
 	component: HomePage,
 });
 
 function HomePage() {
-	const session = Route.useLoaderData();
+	const { session, signedIn } = Route.useLoaderData();
 	return (
-		<IdentityGate>
+		<IdentityGate initialSignedIn={signedIn}>
 			<WorkspaceHome initialSession={session} />
 		</IdentityGate>
 	);

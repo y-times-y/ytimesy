@@ -65,6 +65,43 @@ describe("parseCodexLoginStatus", () => {
 		});
 	});
 
+	it("preserves provider-advertised reasoning and Fast capabilities", () => {
+		const status = parseCodexLoginStatus(
+			JSON.stringify({
+				stage: "authenticated",
+				authMode: "chatgpt",
+				models: [
+					{
+						id: "gpt-test",
+						label: "GPT Test",
+						supportsFastMode: true,
+						reasoning: {
+							levels: [
+								{ id: "low", label: "Low" },
+								{ id: "high", label: "High" },
+							],
+							defaultLevelId: "high",
+						},
+					},
+				],
+			}),
+		);
+		expect(status.stage === "authenticated" ? status.models : []).toEqual([
+			{
+				id: "gpt-test",
+				label: "GPT Test",
+				supportsFastMode: true,
+				reasoning: {
+					levels: [
+						{ id: "low", label: "Low" },
+						{ id: "high", label: "High" },
+					],
+					defaultLevelId: "high",
+				},
+			},
+		]);
+	});
+
 	it("maps stored app-server items instead of flattening the turn to chat text", () => {
 		const status = parseCodexLoginStatus(
 			JSON.stringify({

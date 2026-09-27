@@ -1,4 +1,4 @@
-import { PanelRight, Plus, X } from "lucide-react";
+import { Plus, X } from "lucide-react";
 import type { ReactNode } from "react";
 import type { FileChangeEntry } from "#/domain/session-item";
 import type { WorkspaceDesktop } from "#/domain/workspace-desktop";
@@ -8,7 +8,7 @@ import { FilesInspector } from "./files-inspector";
 import { TerminalInspector } from "./terminal-inspector";
 
 export type ToolsView = "files" | "diff" | "terminal" | "desktop";
-export type InspectorView = ToolsView | "side";
+export type InspectorView = ToolsView | "tasks" | "side";
 
 const views = {
 	files: {
@@ -49,8 +49,8 @@ export function WorkspaceInspector({
 	sideChatOpen,
 	onNewSideChat,
 	onCloseSideChat,
-	onCollapse,
 	sideChat,
+	tasks,
 }: {
 	collapsed: boolean;
 	activeView: InspectorView;
@@ -66,10 +66,11 @@ export function WorkspaceInspector({
 	sideChatOpen: boolean;
 	onNewSideChat: () => void;
 	onCloseSideChat: () => void;
-	onCollapse?: () => void;
 	sideChat: ReactNode;
+	tasks: ReactNode;
 }) {
-	const currentView = activeView === "side" ? null : views[activeView];
+	const currentView =
+		activeView === "side" || activeView === "tasks" ? null : views[activeView];
 	return (
 		<aside
 			id="workspace-inspector"
@@ -89,6 +90,13 @@ export function WorkspaceInspector({
 						{views[view].label}
 					</button>
 				))}
+				<button
+					type="button"
+					aria-pressed={activeView === "tasks"}
+					onClick={() => onActiveViewChange("tasks")}
+				>
+					Tasks
+				</button>
 				{sideChatOpen ? (
 					<div
 						className="inspector-side-tab"
@@ -120,19 +128,10 @@ export function WorkspaceInspector({
 				>
 					<Plus size={16} />
 				</button>
-				{onCollapse ? (
-					<button
-						type="button"
-						className="inspector-collapse"
-						aria-label="Hide tools"
-						title="Hide tools"
-						onClick={onCollapse}
-					>
-						<PanelRight size={16} />
-					</button>
-				) : null}
 			</div>
-			{activeView === "side" ? (
+			{activeView === "tasks" ? (
+				tasks
+			) : activeView === "side" ? (
 				sideChat
 			) : activeView === "files" ? (
 				<FilesInspector
@@ -144,7 +143,12 @@ export function WorkspaceInspector({
 					active={!collapsed && activeView === "files"}
 				/>
 			) : activeView === "diff" && fileChanges.length > 0 ? (
-				<DiffInspector changes={fileChanges} selectedPath={selectedFilePath} />
+				<DiffInspector
+					changes={fileChanges}
+					selectedPath={selectedFilePath}
+					projectId={projectId}
+					sessionId={sessionId}
+				/>
 			) : activeView === "desktop" ? (
 				<DesktopInspector
 					desktop={desktop}

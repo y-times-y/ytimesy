@@ -7,6 +7,10 @@ const optionalSecret = z.preprocess(
 );
 
 const configuration = z.object({
+	DATABASE_POOL_MAX: z.preprocess(
+		(value) => (value === "" ? undefined : value),
+		z.coerce.number().int().min(1).max(20).default(2),
+	),
 	APP_URL: z.url(),
 	BETTER_AUTH_SECRET: z.string().min(32),
 	DATABASE_URL: z.string().refine((value) => {

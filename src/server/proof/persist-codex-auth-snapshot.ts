@@ -91,6 +91,34 @@ export function persistCodexAuthSnapshotForUser(
 	);
 }
 
+export function refreshCodexAuthSnapshotForUser(
+	userId: string,
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+	account: { readonly planType: string | null; readonly email?: string | null },
+): Effect.Effect<PersistCodexAuthSnapshotResult> {
+	return Effect.gen(function* () {
+		const captured = yield* captureSnapshot(machines, workspaceId);
+		if (captured.kind === "failed") return captured;
+		yield* Effect.tryPromise(() =>
+			saveConnectedAgentAccount(userId, {
+				provider: "codex",
+				snapshotId: captured.snapshot.snapshotId,
+				planType: account.planType,
+				email: account.email ?? null,
+			}),
+		);
+		return { kind: "replaced" as const, snapshot: captured.snapshot };
+	}).pipe(
+		Effect.catchAll((cause) =>
+			Effect.succeed({
+				kind: "failed" as const,
+				message: cause instanceof Error ? cause.message : String(cause),
+			}),
+		),
+	);
+}
+
 export function replaceCodexAuthSnapshot(
 	machines: WorkspaceMachines,
 	workspaceId: WorkspaceId,

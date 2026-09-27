@@ -1,7 +1,7 @@
 import { githubGitHttpEnv } from "#/domain/github-git-auth";
 import {
-	type PublicationAuthor,
 	commitCoAuthorTrailer,
+	type PublicationAuthor,
 } from "#/domain/publication";
 
 export function repositoryDirectory(fullName: string) {
@@ -40,6 +40,11 @@ export function githubPushEnv(token: string) {
 
 export function githubBotCommitHookPath(directory: string) {
 	return `${directory.replace(/\/$/, "")}/.git/hooks/commit-msg`;
+}
+
+export function activateGithubBotCommitHookArgv(directory: string) {
+	const hook = shellSingleQuote(githubBotCommitHookPath(directory));
+	return ["bash", "-lc", `chmod +x ${hook} || sudo -n chmod +x ${hook}`];
 }
 
 export function githubBotCommitMsgHook(bot: PublicationAuthor) {
@@ -107,6 +112,9 @@ export function commitCreatedOutput(stdout: string) {
 }
 
 export function installArgv(directory: string, lockfiles: string[]) {
+	if (!lockfiles.includes("package.json")) {
+		return ["bash", "-lc", `cd ${shellSingleQuote(directory)} && true`];
+	}
 	const command = lockfiles.includes("pnpm-lock.yaml")
 		? "corepack pnpm install --frozen-lockfile"
 		: lockfiles.includes("yarn.lock")

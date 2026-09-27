@@ -10,9 +10,18 @@ import {
 	shouldResealProjectSnapshotAfterCopyFailure,
 	workspaceCopyCapacityRetryDelaysMs,
 } from "#/domain/agent-session";
+import {
+	type AgentTaskAccess,
+	type AgentTaskExecution,
+	type AgentTaskPlacement,
+	agentTaskStartBlockedByDependency,
+	canSpawnAgentTask,
+	validateAgentTaskPlan,
+} from "#/domain/agent-task";
 import { failureMessage } from "#/domain/failure-message";
 import { WorkspaceId } from "#/domain/ids";
 import { listedModelPreferenceFromSessions } from "#/domain/listed-model";
+import { projectCheckoutFromFullName } from "#/domain/project-checkout";
 import {
 	PROJECT_CONTEXT_PATH,
 	projectContextDocument,
@@ -24,22 +33,32 @@ import {
 	type AgentSessionRecord,
 	agentSessionForOwner,
 	childAgentSession,
-	childAgentSessions,
 	deleteAgentSessionForOwner,
+	descendantAgentSessions,
 	insertAgentSession,
 	listAgentSessions,
 	saveAgentSessionProviderRef,
+	saveAgentTaskDraft,
+	saveAgentTaskState,
+	selectAgentSessionHarness,
 } from "#/server/adapters/agent-sessions";
+import {
+	fastForwardPreparedCheckoutScript,
+	PROJECT_TOKEN_PATH,
+} from "#/server/adapters/freestyle/clone-project";
+import { githubInstallationAccessToken } from "#/server/adapters/github/installation-token";
 import {
 	listProjectTraces,
 	loadProjectBriefing,
 } from "#/server/adapters/project-context";
+import { projectForOwner } from "#/server/adapters/projects";
+import { repositoryDirectory } from "#/server/adapters/repository-setup";
 import {
 	saveTemplateSnapshot,
 	workspaceForProject,
 } from "#/server/adapters/workspaces";
-import { loadHarnessSnapshotId } from "#/server/auth/agent-account";
 import type { WorkspaceMachines } from "./workspace-machines";
+import { providerProjectTemplateSnapshot } from "./provider-project-template";
 
 async function resolveAgentSessionRecord(input: {
 	readonly userId: string;
@@ -48,6 +67,15 @@ async function resolveAgentSessionRecord(input: {
 	readonly sessionId?: string;
 	readonly createNew?: boolean;
 	readonly parentSessionId?: string;
+	readonly title?: string;
+	readonly listedModelId?: string;
+	readonly task?: {
+		readonly prompt: string;
+		readonly placement: AgentTaskPlacement;
+		readonly access: AgentTaskAccess;
+		readonly execution: AgentTaskExecution;
+		readonly dependsOnSessionId: string | null;
+	};
 }) {
 	const workspace = await workspaceForProject(input.userId, input.projectId);
 	if (!workspace || !workspaceEnvironmentIsReady(workspace)) {
@@ -66,10 +94,16 @@ async function resolveAgentSessionRecord(input: {
 	if (input.sessionId && !input.createNew && !selected) {
 		throw new Error("Agent session is not available.");
 	}
+	if (selected && selected.projectId !== input.projectId) {
+		throw new Error("Agent session is not in this project.");
+	}
 	const parent = input.parentSessionId
 		? ((await agentSessionForOwner(input.userId, input.parentSessionId)) ??
 			null)
 		: null;
+	if (parent && parent.projectId !== input.projectId) {
+		throw new Error("The parent task is not in this project.");
+	}
 	const inherited = listedModelPreferenceFromSessions({
 		harness: input.harness,
 		sessions: [
@@ -97,8 +131,10 @@ async function resolveAgentSessionRecord(input: {
 			workspaceId: workspace.id,
 			harness: input.harness,
 			parentSessionId: input.parentSessionId,
-			title: input.parentSessionId ? "Side chat" : undefined,
-			listedModelId: inherited.listedModelId || null,
+			title: input.title,
+			listedModelId:
+				input.listedModelId?.trim() || inherited.listedModelId || null,
+			task: input.task,
 		}));
 	return {
 		session,
@@ -119,12 +155,219 @@ export async function openAgentSession(input: {
 	readonly projectId: string;
 	readonly harness: AgentProviderId;
 	readonly parentSessionId?: string;
+	readonly title?: string;
 }) {
 	const { session } = await resolveAgentSessionRecord({
 		...input,
 		createNew: true,
 	});
 	return session;
+}
+
+/**
+ * Creates a child task under any session. The parent chain is deliberately
+ * bounded so recursive delegation cannot grow without limit.
+ */
+export async function openAgentTask(input: {
+	readonly userId: string;
+	readonly projectId: string;
+	readonly parentSessionId: string;
+	readonly title: string;
+	readonly harness: AgentProviderId;
+	readonly modelId: string;
+	readonly prompt: string;
+	readonly placement: AgentTaskPlacement;
+	readonly access: AgentTaskAccess;
+	readonly execution: AgentTaskExecution;
+	readonly dependsOnSessionId: string | null;
+}) {
+	let parent = await agentSessionForOwner(input.userId, input.parentSessionId);
+	if (!parent || parent.projectId !== input.projectId) {
+		throw new Error("The parent task is not available.");
+	}
+	let parentDepth = 0;
+	while (parent.parentSessionId) {
+		parentDepth += 1;
+		const next = await agentSessionForOwner(
+			input.userId,
+			parent.parentSessionId,
+		);
+		if (!next || next.projectId !== input.projectId) {
+			throw new Error("The task hierarchy is invalid.");
+		}
+		parent = next;
+	}
+	if (!canSpawnAgentTask(parentDepth)) {
+		throw new Error("Tasks can delegate at most three levels deep.");
+	}
+	const invalidPlan = validateAgentTaskPlan({
+		prompt: input.prompt,
+		placement: input.placement,
+		access: input.access,
+		execution: input.execution,
+		dependsOnSessionId: input.dependsOnSessionId,
+	});
+	if (invalidPlan) throw new Error(invalidPlan);
+	if (input.dependsOnSessionId) {
+		const predecessor = await agentSessionForOwner(
+			input.userId,
+			input.dependsOnSessionId,
+		);
+		if (
+			!predecessor ||
+			predecessor.projectId !== input.projectId ||
+			predecessor.parentSessionId !== input.parentSessionId
+		) {
+			throw new Error("A stacked predecessor must be a sibling task.");
+		}
+	}
+	const { session } = await resolveAgentSessionRecord({
+		userId: input.userId,
+		projectId: input.projectId,
+		harness: input.harness,
+		parentSessionId: input.parentSessionId,
+		title: input.title,
+		listedModelId: input.modelId,
+		createNew: true,
+		task: {
+			prompt: input.prompt,
+			placement: input.placement,
+			access: input.access,
+			execution: input.execution,
+			dependsOnSessionId: input.dependsOnSessionId,
+		},
+	});
+	return session;
+}
+
+export async function editAgentTaskDraft(input: {
+	readonly userId: string;
+	readonly projectId: string;
+	readonly taskSessionId: string;
+	readonly title: string;
+	readonly harness: AgentProviderId;
+	readonly modelId: string;
+	readonly prompt: string;
+	readonly placement: AgentTaskPlacement;
+	readonly access: AgentTaskAccess;
+	readonly execution: AgentTaskExecution;
+	readonly dependsOnSessionId: string | null;
+}) {
+	const draft = await agentSessionForOwner(input.userId, input.taskSessionId);
+	if (
+		!draft ||
+		draft.projectId !== input.projectId ||
+		!draft.parentSessionId ||
+		draft.taskState !== "draft" ||
+		draft.providerRef
+	) {
+		throw new Error("Only an unstarted task draft can be edited.");
+	}
+	const invalidPlan = validateAgentTaskPlan({
+		prompt: input.prompt,
+		placement: input.placement,
+		access: input.access,
+		execution: input.execution,
+		dependsOnSessionId: input.dependsOnSessionId,
+	});
+	if (invalidPlan) throw new Error(invalidPlan);
+	if (input.harness === "opencode") {
+		throw new Error("This runtime is no longer offered for new tasks.");
+	}
+	if (!input.title.trim() || !input.modelId.trim()) {
+		throw new Error("A task title and model are required.");
+	}
+	if (input.dependsOnSessionId) {
+		const predecessor = await agentSessionForOwner(
+			input.userId,
+			input.dependsOnSessionId,
+		);
+		if (
+			!predecessor ||
+			predecessor.projectId !== input.projectId ||
+			predecessor.parentSessionId !== draft.parentSessionId ||
+			predecessor.id === draft.id
+		) {
+			throw new Error("A stacked predecessor must be another sibling task.");
+		}
+	}
+	const saved = await saveAgentTaskDraft({
+		userId: input.userId,
+		sessionId: draft.id,
+		title: input.title.trim().slice(0, 120),
+		prompt: input.prompt.trim(),
+		harness: input.harness,
+		modelId: input.modelId.trim(),
+		placement: input.placement,
+		access: input.access,
+		execution: input.execution,
+		dependsOnSessionId: input.dependsOnSessionId,
+	});
+	if (!saved) throw new Error("The task draft changed before it was saved.");
+	return saved;
+}
+
+/**
+ * Validates a stored draft immediately before execution. Capacity is checked
+ * here because drafts consume neither a runtime slot nor model tokens.
+ */
+export async function prepareAgentTaskStart(input: {
+	readonly userId: string;
+	readonly projectId: string;
+	readonly taskSessionId: string;
+}) {
+	const task = await agentSessionForOwner(input.userId, input.taskSessionId);
+	if (
+		!task ||
+		task.projectId !== input.projectId ||
+		!task.parentSessionId ||
+		!task.taskState ||
+		!task.taskPlacement ||
+		!task.taskAccess ||
+		!task.taskExecution
+	) {
+		throw new Error("The task draft is not available.");
+	}
+	if (task.taskState !== "draft" && task.taskState !== "idle") {
+		throw new Error("Only a draft or idle task can be started.");
+	}
+	await rootAgentSession(input.userId, input.projectId, task);
+	const predecessor = task.dependsOnSessionId
+		? await agentSessionForOwner(input.userId, task.dependsOnSessionId)
+		: null;
+	const dependencyBlock = agentTaskStartBlockedByDependency(
+		{
+			execution: task.taskExecution,
+			dependsOnSessionId: task.dependsOnSessionId,
+		},
+		predecessor
+			? {
+					status: predecessor.taskState ?? "idle",
+					reviewState: predecessor.taskReviewState ?? "pending",
+					branch: predecessor.taskBranch,
+				}
+			: null,
+	);
+	if (dependencyBlock) throw new Error(dependencyBlock);
+	const started = await saveAgentTaskState(task.id, "working");
+	if (!started) throw new Error("The task draft could not be started.");
+	return { task: started, predecessor };
+}
+
+async function rootAgentSession(
+	userId: string,
+	projectId: string,
+	start: AgentSessionRecord,
+) {
+	let current = start;
+	while (current.parentSessionId) {
+		const parent = await agentSessionForOwner(userId, current.parentSessionId);
+		if (!parent || parent.projectId !== projectId) {
+			throw new Error("The task hierarchy is invalid.");
+		}
+		current = parent;
+	}
+	return current;
 }
 
 export async function bindAgentSessionMachine(
@@ -136,21 +379,39 @@ export async function bindAgentSessionMachine(
 		readonly sessionId?: string;
 		readonly createNew?: boolean;
 		readonly parentSessionId?: string;
+		readonly title?: string;
+		readonly sourceSnapshotId?: string;
 	},
 ) {
 	const { session, workspace } = await resolveAgentSessionRecord(input);
-	const authSnapshotId =
-		input.harness === "claude"
-			? await loadHarnessSnapshotId(input.userId, "claude")
-			: null;
+	const selectedSession =
+		session.harness === input.harness
+			? session
+			: await selectAgentSessionHarness(
+					input.userId,
+					input.projectId,
+					session.id,
+					input.harness,
+				);
+	const templateSnapshotId =
+		input.sourceSnapshotId ??
+		(session.providerRef
+			? workspace.templateSnapshotId
+			: await providerProjectTemplateSnapshot({
+					machines,
+					userId: input.userId,
+					projectId: input.projectId,
+					workspaceId: workspace.id,
+					projectSnapshotId: workspace.templateSnapshotId,
+					harness: input.harness,
+				}));
 	const executed = await executeSessionMachinePlan({
 		machines,
 		sessionId: session.id,
 		sessionProviderRef: session.providerRef,
 		workspaceId: workspace.id,
-		templateSnapshotId: workspace.templateSnapshotId,
-		templateProviderRef: workspace.providerRef,
-		authSnapshotId,
+		templateSnapshotId,
+		templateProviderRef: input.sourceSnapshotId ? null : workspace.providerRef,
 		saveTemplateSnapshot: (snapshotId) =>
 			saveTemplateSnapshot(workspace.id, snapshotId).then(() => undefined),
 		saveSessionProviderRef: (providerRef) =>
@@ -159,9 +420,107 @@ export async function bindAgentSessionMachine(
 			),
 	});
 	return {
-		session: { ...session, providerRef: executed.providerRef },
+		session: { ...selectedSession, providerRef: executed.providerRef },
 		providerRef: executed.providerRef,
 	};
+}
+
+/**
+ * Assigns the execution machine selected by a validated task plan. Stacked
+ * work copies the reviewed predecessor state rather than the clean template.
+ */
+export async function bindPreparedAgentTaskMachine(
+	machines: WorkspaceMachines,
+	input: {
+		readonly userId: string;
+		readonly projectId: string;
+		readonly task: AgentSessionRecord;
+		readonly predecessor: AgentSessionRecord | null;
+	},
+) {
+	let sourceSnapshotId: string | undefined;
+	if (input.task.taskPlacement === "shared") {
+		if (!input.task.parentSessionId) {
+			throw new Error("The read-only task has no parent machine.");
+		}
+		const parent = await agentSessionForOwner(
+			input.userId,
+			input.task.parentSessionId,
+		);
+		if (!parent?.providerRef) {
+			throw new Error("Start the parent workspace before sharing its state.");
+		}
+		await machines.ensureRunning(WorkspaceId(parent.providerRef));
+		const session = await saveAgentSessionProviderRef(
+			input.task.id,
+			parent.providerRef,
+		);
+		return { session, providerRef: parent.providerRef };
+	} else if (
+		input.task.taskExecution === "stacked" &&
+		!input.predecessor?.taskBranch
+	) {
+		throw new Error(
+			"Publish the reviewed predecessor before starting stacked work.",
+		);
+	}
+	const bound = await bindAgentSessionMachine(machines, {
+		userId: input.userId,
+		projectId: input.projectId,
+		harness: input.task.harness,
+		sessionId: input.task.id,
+		createNew: false,
+		sourceSnapshotId,
+	});
+	if (input.task.taskExecution === "stacked" && input.predecessor?.taskBranch) {
+		await checkoutStackedTaskBase(machines, bound.providerRef, {
+			userId: input.userId,
+			projectId: input.projectId,
+			branch: input.predecessor.taskBranch,
+		});
+	}
+	return bound;
+}
+
+async function checkoutStackedTaskBase(
+	machines: WorkspaceMachines,
+	providerRef: string,
+	input: {
+		readonly userId: string;
+		readonly projectId: string;
+		readonly branch: string;
+	},
+) {
+	const project = await projectForOwner(input.userId, input.projectId);
+	const checkout = project
+		? projectCheckoutFromFullName({
+				fullName: project.fullName,
+				branch: project.branch,
+				installationId: project.installationId,
+			})
+		: null;
+	if (!project || !checkout)
+		throw new Error("The stacked project is unavailable.");
+	const token = await githubInstallationAccessToken(project.installationId);
+	const workspaceId = WorkspaceId(providerRef);
+	await machines.writeTextFile(workspaceId, PROJECT_TOKEN_PATH, `${token}\n`);
+	const result = await machines.exec(
+		workspaceId,
+		fastForwardPreparedCheckoutScript({
+			owner: checkout.owner,
+			name: checkout.name,
+			branch: input.branch,
+			destination: repositoryDirectory(project.fullName),
+			workingBranch: input.branch,
+		}),
+		120_000,
+	);
+	if (result.exitCode !== 0 || !result.stdout.includes("updated")) {
+		throw new Error(
+			(result.stderr || result.stdout).trim() ||
+				"The stacked predecessor branch could not be checked out.",
+		);
+	}
 }
 
 export async function peekAgentSessionMachine(input: {
@@ -199,12 +558,13 @@ export async function deleteAgentSessionMachine(
 		throw new Error("Agent session is not available.");
 	}
 	const workspace = await workspaceForProject(input.userId, input.projectId);
-	const children = session.parentSessionId
-		? []
-		: await childAgentSessions(input.userId, session.id);
+	const children = await descendantAgentSessions(input.userId, session.id);
 	const refs = sessionMachineRefsToDestroy({
-		sessionProviderRef: session.providerRef,
-		childProviderRefs: children.map((child) => child.providerRef),
+		sessionProviderRef:
+			session.taskPlacement === "shared" ? null : session.providerRef,
+		childProviderRefs: children
+			.filter((child) => child.taskPlacement !== "shared")
+			.map((child) => child.providerRef),
 		templateProviderRef: workspace?.providerRef ?? null,
 	});
 	for (const ref of refs) {

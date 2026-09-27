@@ -5,6 +5,7 @@ import select
 import subprocess
 import sys
 import time
+import uuid
 
 CODEX = os.environ.get("CODEX_BIN", "codex")
 STATUS_PATH = "/tmp/ytimesy-auth-status.json"
@@ -12,12 +13,18 @@ TASK_REQUEST_PATH = "/tmp/ytimesy-task-request.json"
 TASK_RESULT_PATH = "/tmp/ytimesy-task-result.json"
 SIDE_REQUEST_PATH = "/tmp/ytimesy-side-request.json"
 SIDE_RESULT_PATH = "/tmp/ytimesy-side-result.json"
-STOP_REQUEST_PATH = "/tmp/ytimesy-stop-request.json"
+STOP_REQUEST_PATH = os.path.join(os.environ.get("HOME") or "/tmp", ".ytimesy-stop-request.json")
 PROJECT_CWD_PATH = "/tmp/ytimesy-project-cwd"
 DISPLAY_PATH = "/tmp/ytimesy-display"
 DEVELOPER_INSTRUCTIONS_PATH = "/tmp/ytimesy-developer-instructions.txt"
+AGENT_TASK_TOOL_REQUEST_PATH = "/tmp/ytimesy-agent-task-tool-request.json"
+AGENT_TASK_TOOL_RESPONSE_PATH = "/tmp/ytimesy-agent-task-tool-response.json"
+EXTERNAL_TOKENS_PATH = "/tmp/ytimesy-codex-external-tokens.json"
+EXTERNAL_REFRESH_REQUEST_PATH = "/tmp/ytimesy-codex-refresh-request.json"
+EXTERNAL_REFRESH_RESPONSE_PATH = "/tmp/ytimesy-codex-refresh-response.json"
 TURN_PROMPT = "Reply with the single word pong and do not run any tools."
 SKIP_INITIAL_TURN = os.environ.get("YTIMESY_SKIP_INITIAL_TURN") == "1"
+APP_SERVER_READ_BUFFERS = {}
 SIDE_CHAT_PREFIX = (
     "SIDE CHAT. Answer the question. Read and search if needed. "
     "Do not edit files unless the user explicitly asks to apply a change."
@@ -42,26 +49,32 @@ def fail(message, **extra):
 
 def read_message(proc, timeout):
     deadline = time.time() + timeout
-    buffer = ""
+    buffer = APP_SERVER_READ_BUFFERS.get(proc.pid, b"")
     while time.time() < deadline:
+        if b"\n" in buffer:
+            line, buffer = buffer.split(b"\n", 1)
+            APP_SERVER_READ_BUFFERS[proc.pid] = buffer
+            if not line.strip():
+                continue
+            try:
+                message = json.loads(line)
+                if message.get("method") == "item/tool/call" and "id" in message:
+                    service_agent_task_tool_call(proc, message)
+                    continue
+                if message.get("method") == "account/chatgptAuthTokens/refresh" and "id" in message:
+                    service_external_token_refresh(proc, message)
+                    continue
+                return message
+            except json.JSONDecodeError:
+                continue
         remaining = max(0.05, deadline - time.time())
         ready, _, _ = select.select([proc.stdout], [], [], remaining)
         if not ready:
             continue
-        chunk = proc.stdout.readline()
-        if chunk == "":
+        chunk = os.read(proc.stdout.fileno(), 65536)
+        if not chunk:
             raise RuntimeError("codex app-server closed stdout")
         buffer += chunk
-        if not chunk.endswith("\n"):
-            continue
-        line = buffer.strip()
-        buffer = ""
-        if not line:
-            continue
-        try:
-            return json.loads(line)
-        except json.JSONDecodeError:
-            continue
     raise TimeoutError("timed out waiting for app-server JSON")
 
 
@@ -82,6 +95,79 @@ def wait_for_id(proc, target_id, timeout):
 def send(proc, payload):
     proc.stdin.write(json.dumps(payload) + "\n")
     proc.stdin.flush()
+
+
+def external_tokens():
+    value = read_json_file(EXTERNAL_TOKENS_PATH)
+    if not isinstance(value, dict):
+        return None
+    if not isinstance(value.get("accessToken"), str) or not isinstance(value.get("chatgptAccountId"), str):
+        return None
+    return {key: value[key] for key in ("accessToken", "chatgptAccountId", "chatgptPlanType") if isinstance(value.get(key), str)}
+
+
+def service_external_token_refresh(proc, message):
+    request_id = "%s:%s" % (message["id"], uuid.uuid4().hex)
+    write_json_file(EXTERNAL_REFRESH_REQUEST_PATH, {"id": request_id})
+    deadline = time.time() + 8
+    while time.time() < deadline:
+        response = read_json_file(EXTERNAL_REFRESH_RESPONSE_PATH)
+        if isinstance(response, dict) and response.get("id") == request_id:
+            tokens = response.get("tokens")
+            if isinstance(tokens, dict) and isinstance(tokens.get("accessToken"), str):
+                send(proc, {"id": message["id"], "result": tokens})
+            else:
+                send(proc, {"id": message["id"], "error": {"code": -32000, "message": "Codex login refresh failed."}})
+            return
+        time.sleep(0.2)
+    send(proc, {"id": message["id"], "error": {"code": -32000, "message": "Codex login refresh timed out."}})
+
+
+TASK_TOOL_DEFINITIONS = [] # YTIMESY_TASK_TOOL_DEFINITIONS
+
+def agent_task_dynamic_tools():
+    return [{"type": "function", **tool} for tool in TASK_TOOL_DEFINITIONS]
+
+
+def service_agent_task_tool_call(proc, message):
+    params = message.get("params") if isinstance(message.get("params"), dict) else {}
+    call_id = params.get("callId")
+    tool = params.get("tool")
+    arguments = params.get("arguments")
+    request_id = message.get("id")
+    if not isinstance(call_id, str) or not isinstance(tool, str) or not isinstance(arguments, dict):
+        send(proc, {"id": request_id, "result": {"success": False, "contentItems": [{"type": "inputText", "text": "Invalid task tool request."}]}})
+        return
+    write_json_file(
+        AGENT_TASK_TOOL_REQUEST_PATH,
+        {"id": call_id, "tool": tool, "arguments": arguments},
+    )
+    deadline = time.time() + 180
+    response = None
+    while time.time() < deadline:
+        candidate = read_json_file(AGENT_TASK_TOOL_RESPONSE_PATH)
+        if isinstance(candidate, dict) and candidate.get("id") == call_id:
+            response = candidate
+            break
+        time.sleep(0.25)
+    if response is None:
+        response = {"ok": False, "error": "Task orchestration timed out."}
+    output = response.get("result") if response.get("ok") else response.get("error")
+    send(
+        proc,
+        {
+            "id": request_id,
+            "result": {
+                "success": bool(response.get("ok")),
+                "contentItems": [
+                    {
+                        "type": "inputText",
+                        "text": json.dumps(output),
+                    }
+                ],
+            },
+        },
+    )
 
 
 def account_from_result(result):
@@ -542,6 +628,7 @@ def start_thread(proc, model_id, cwd=None):
         "approvalPolicy": "never",
         "sandbox": "danger-full-access",
         "developerInstructions": developer_instructions(cwd),
+        "dynamicTools": agent_task_dynamic_tools(),
     }
     thread_id, error = request_thread_start(proc, params)
     if thread_id:
@@ -581,12 +668,12 @@ def consume_stop_request():
         return False
     try:
         os.remove(STOP_REQUEST_PATH)
-    except FileNotFoundError:
+    except OSError:
         return False
     return True
 
 
-def request_turn_interrupt(proc, thread_id):
+def request_turn_interrupt(proc, thread_id, wait_for_response=True):
     request_id = next_rpc_id()
     send(
         proc,
@@ -596,20 +683,22 @@ def request_turn_interrupt(proc, thread_id):
             "params": {"threadId": thread_id},
         },
     )
+    if not wait_for_response:
+        return
     try:
         wait_for_id(proc, request_id, 8)
     except TimeoutError:
         pass
 
 
-def run_turn(proc, thread_id, model_id, text, on_items=None, effort=None, service_tier=None):
+def run_turn(proc, thread_id, model_id, text, on_items=None, effort=None, service_tier=None, read_only=False):
     apply_display_env()
     request_id = next_rpc_id()
     params = {
         "threadId": thread_id,
         "input": [{"type": "text", "text": text}],
         "approvalPolicy": "never",
-        "sandboxPolicy": {"type": "dangerFullAccess"},
+        "sandboxPolicy": {"type": "readOnly" if read_only else "dangerFullAccess"},
     }
     if isinstance(model_id, str) and model_id.strip():
         params["model"] = model_id.strip()
@@ -633,33 +722,39 @@ def run_turn(proc, thread_id, model_id, text, on_items=None, effort=None, servic
         if on_items:
             on_items(ordered_items(items_by_id, order))
 
-    turn_message, notifications = wait_for_id(proc, request_id, 180)
-    for message in notifications:
-        note(message)
-    if "error" in turn_message:
-        return {
-            "threadId": thread_id,
-            "modelId": model_id,
-            "status": "error",
-            "text": turn_message["error"].get("message"),
-            "error": turn_message["error"].get("message"),
-        }
-    turn_obj = find_completed_turn(notifications)
-    deadline = time.time() + 180
-    while turn_obj is None and time.time() < deadline:
+    notifications = []
+    turn_obj = None
+    turn_id = None
+    # A quiet socket is not a completed task. Keep reading until the provider
+    # finishes or exits; short reads keep user cancellation responsive.
+    while turn_obj is None:
         if consume_stop_request():
-            request_turn_interrupt(proc, thread_id)
+            request_turn_interrupt(proc, thread_id, wait_for_response=False)
         try:
-            message = read_message(proc, min(15.0, deadline - time.time()))
+            message = read_message(proc, 1.0)
         except TimeoutError:
             continue
-        notifications.append(message)
+        except (RuntimeError, OSError) as error:
+            turn_obj = {"status": "failed", "error": {"message": str(error)}}
+            break
+        if message.get("id") == request_id:
+            if "error" in message:
+                turn_obj = {"status": "failed", "error": message["error"]}
+                break
+            turn_id = (message.get("result", {}).get("turn") or {}).get("id")
+            continue
+        params = message.get("params") or {}
+        if params.get("threadId") not in (None, thread_id):
+            continue
+        if turn_id and params.get("turnId") not in (None, turn_id):
+            continue
         note(message)
-        turn_obj = find_completed_turn(notifications)
-    if turn_obj is None:
-        turn_status = "timeout"
-    else:
-        turn_status = turn_obj.get("status") or "completed"
+        if message.get("method") == "error":
+            notifications = [message]
+        completed = find_completed_turn([message])
+        if completed and (not turn_id or completed.get("id") == turn_id):
+            turn_obj = completed
+    turn_status = turn_obj.get("status") or "completed"
     items = ordered_items(items_by_id, order)
     if on_items:
         on_items(items)
@@ -797,7 +892,11 @@ def main():
                         "name": "ytimesy",
                         "title": "ytimesy",
                         "version": "0.0.0",
-                    }
+                    },
+                    "capabilities": {
+                        "experimentalApi": True,
+                        "requestAttestation": False,
+                    },
                 },
             },
         )
@@ -805,8 +904,17 @@ def main():
         if "error" in initialized:
             fail(initialized["error"].get("message", "initialize failed"), stageDetail="initialize")
         send(proc, {"method": "initialized", "params": {}})
-        already_logged_in = cli_has_chatgpt_login()
-        account = read_chatgpt_account(proc, timeout=45 if already_logged_in else 8)
+        supplied_tokens = external_tokens()
+        if supplied_tokens:
+            send(proc, {"method": "account/login/start", "id": 3, "params": {"type": "chatgptAuthTokens", **supplied_tokens}})
+            external_login, _ = wait_for_id(proc, 3, 30)
+            if "error" in external_login:
+                fail("Codex external login failed; reconnect Codex.", stageDetail="externalLogin")
+            account = {"type": "chatgpt", "planType": supplied_tokens.get("chatgptPlanType")}
+            already_logged_in = False
+        else:
+            already_logged_in = cli_has_chatgpt_login()
+            account = read_chatgpt_account(proc, timeout=45 if already_logged_in else 8)
         if not is_chatgpt_account(account):
             if already_logged_in:
                 account = chatgpt_account_from_cli_login()
@@ -860,7 +968,10 @@ def main():
             models = listed_models(models_message.get("result"))
         models = append_preferred_hidden_model(proc, models)
         model_id = choose_model(models)
-        listed = [{"id": model["id"], "label": model["label"]} for model in models]
+        listed = [
+            {key: value for key, value in model.items() if key != "isDefault"}
+            for model in models
+        ]
         turn = None
         thread_id = None
         thread_cwd = None
@@ -875,6 +986,7 @@ def main():
         side_items = []
         side_turn_status = "idle"
         side_active_task_id = None
+        completed_request_ids = set()
 
         def publish(current_turn):
             write_status(
@@ -898,9 +1010,10 @@ def main():
 
         def finish_request(path, result_path, request_id, result):
             write_json_file(result_path, {"id": request_id, "turn": result})
+            completed_request_ids.add(request_id)
             try:
                 os.remove(path)
-            except FileNotFoundError:
+            except OSError:
                 pass
 
         if model_id and not SKIP_INITIAL_TURN:
@@ -938,7 +1051,12 @@ def main():
         publish(turn)
         while True:
             request = read_json_file(TASK_REQUEST_PATH)
-            if isinstance(request, dict) and request.get("id") and request.get("text"):
+            if (
+                isinstance(request, dict)
+                and request.get("id")
+                and request.get("id") not in completed_request_ids
+                and request.get("text")
+            ):
                 requested_model = request.get("modelId") or model_id
                 if requested_model:
                     model_id = requested_model
@@ -1000,6 +1118,7 @@ def main():
                         on_items=on_task_items,
                         effort=effort,
                         service_tier=service_tier,
+                        read_only=request.get("readOnly") is True,
                     )
                     if turn.get("error"):
                         session_items = merge_session_items(
@@ -1024,6 +1143,7 @@ def main():
                 if (
                     isinstance(side_request, dict)
                     and side_request.get("id")
+                    and side_request.get("id") not in completed_request_ids
                     and side_request.get("text")
                 ):
                     requested_model = side_request.get("modelId") or model_id

@@ -1,10 +1,9 @@
-import { addCollection, Icon } from "@iconify/react";
-import { vscodeFileIconName } from "#/domain/file-kind";
-import catppuccinFileIcons from "./catppuccin-file-icons.json";
-import vscodeFileIcons from "./vscode-file-icons.json";
+import { fileTypeIconName } from "#/domain/file-kind";
+import setiFileIcons from "#/domain/seti-file-icons.json";
+import "./seti-file-icons.css";
 
-addCollection(vscodeFileIcons as Parameters<typeof addCollection>[0]);
-addCollection(catppuccinFileIcons as Parameters<typeof addCollection>[0]);
+const icons: Record<string, { fontCharacter: string; fontColor?: string }> =
+	setiFileIcons.iconDefinitions;
 
 export function FileTypeIcon({
 	path,
@@ -13,13 +12,20 @@ export function FileTypeIcon({
 	path: string;
 	size?: number;
 }) {
+	const name = fileTypeIconName(path);
+	const icon = icons[name] ?? icons[setiFileIcons.file];
 	return (
-		<Icon
-			icon={vscodeFileIconName(path)}
-			width={size}
-			height={size}
-			className="file-type-icon"
+		<span
+			style={{
+				width: size,
+				height: size,
+				fontSize: size * 1.5,
+				color: icon.fontColor,
+			}}
+			className="file-type-icon seti-file-icon"
 			aria-hidden="true"
-		/>
+		>
+			{String.fromCodePoint(Number.parseInt(icon.fontCharacter.slice(1), 16))}
+		</span>
 	);
 }

@@ -2,11 +2,20 @@ import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { SessionItemId } from "../src/domain/ids";
-import { insertAgentSession } from "../src/server/adapters/agent-sessions";
+import {
+	insertAgentSession,
+	saveAgentTaskPublication,
+	saveAgentTaskReview,
+	saveAgentTaskState,
+	selectAgentSessionHarness,
+} from "../src/server/adapters/agent-sessions";
 import { saveProject } from "../src/server/adapters/projects";
 import {
+	bindAgentSessionMachine,
 	deleteAgentSessionMachine,
 	openAgentSession,
+	openAgentTask,
+	prepareAgentTaskStart,
 } from "../src/server/services/agent-session-machine";
 import { emptyCodexSession } from "../src/server/services/codex-workspace-session";
 import {
@@ -44,6 +53,8 @@ beforeAll(async () => {
 		"20260915083000_product_setting.sql",
 		"20260915103000_agent_session_listed_model.sql",
 		"20260915110000_agent_session_turn_status.sql",
+		"20260921230000_agent_task_lifecycle.sql",
+		"20260921231000_agent_task_events.sql",
 		"20260919161500_workspace_snapshot_source.sql",
 	])
 		await db.exec(await readFile(`supabase/migrations/${file}`, "utf8"));
@@ -72,6 +83,63 @@ async function readyWorkspace() {
 	);
 	return { project, workspaceId };
 }
+
+it("persists the selected runtime before a reused chat starts polling", async () => {
+	const { project, workspaceId } = await readyWorkspace();
+	const session = await insertAgentSession({
+		userId: "alice",
+		projectId: project.id,
+		workspaceId,
+		harness: "claude",
+		providerRef: "vm-agent",
+		listedModelId: "claude-old",
+	});
+	const bound = await bindAgentSessionMachine(
+		{ ensureRunning: async () => {} } as never,
+		{
+			userId: "alice",
+			projectId: project.id,
+			sessionId: session.id,
+			harness: "codex",
+		},
+	);
+	expect(bound.session.harness).toBe("codex");
+	expect(
+		(
+			await db.query(
+				"select harness,listed_model_id from agent_session where id=$1",
+				[session.id],
+			)
+		).rows,
+	).toEqual([{ harness: "codex", listed_model_id: null }]);
+});
+
+it("does not switch a running turn or another owner's runtime", async () => {
+	const { project, workspaceId } = await readyWorkspace();
+	const session = await insertAgentSession({
+		userId: "alice",
+		projectId: project.id,
+		workspaceId,
+		harness: "claude",
+		providerRef: "vm-agent",
+	});
+	await expect(
+		selectAgentSessionHarness("bob", project.id, session.id, "codex"),
+	).rejects.toThrow();
+	await db.query("update agent_session set turn_status='running' where id=$1", [
+		session.id,
+	]);
+	await expect(
+		selectAgentSessionHarness("alice", project.id, session.id, "codex"),
+	).rejects.toThrow();
+	expect(
+		(
+			await db.query("select harness from agent_session where id=$1", [
+				session.id,
+			])
+		).rows,
+	).toEqual([{ harness: "claude" }]);
+});
 
 it("destroys agent copies and side-chat copies, never the template VM", async () => {
 	const { project, workspaceId } = await readyWorkspace();
@@ -135,6 +203,49 @@ it("drops a leftover template-bound session row without deleting the template VM
 		session.id,
 	]);
 	expect(remaining.rows).toEqual([]);
+});
+
+it("deletes a shared child session without destroying its parent's machine", async () => {
+	const { project, workspaceId } = await readyWorkspace();
+	const parent = await insertAgentSession({
+		userId: "alice",
+		projectId: project.id,
+		workspaceId,
+		harness: "codex",
+		providerRef: "vm-parent",
+		listedModelId: "codex/gpt-test",
+	});
+	const child = await openAgentTask({
+		userId: "alice",
+		projectId: project.id,
+		parentSessionId: parent.id,
+		title: "Read-only audit",
+		harness: "codex",
+		modelId: "codex/gpt-test",
+		prompt: "Inspect the current working tree without editing it.",
+		placement: "shared",
+		access: "read_only",
+		execution: "parallel",
+		dependsOnSessionId: null,
+	});
+	await db.query(
+		"update agent_session set provider_ref='vm-parent' where id=$1",
+		[child.id],
+	);
+	const destroyed: string[] = [];
+	await deleteAgentSessionMachine(
+		{
+			destroy: async (workspaceId) => {
+				destroyed.push(workspaceId);
+			},
+		},
+		{ userId: "alice", projectId: project.id, sessionId: child.id },
+	);
+	expect(destroyed).toEqual([]);
+	expect(
+		(await db.query("select id from agent_session where id=$1", [parent.id]))
+			.rows,
+	).toEqual([{ id: parent.id }]);
 });
 
 it("does not let another user delete a session", async () => {
@@ -243,4 +354,76 @@ it("opens a new chat without copying a VM and inherits the last listed model", a
 	]);
 	expect(stored.rows[0]?.provider_ref).toBeNull();
 	expect(stored.rows[0]?.listed_model_id).toBe("opencode/big-pickle");
+});
+
+it("stores drafts without compute and gates stacked work on reviewed predecessors", async () => {
+	const { project, workspaceId } = await readyWorkspace();
+	const root = await insertAgentSession({
+		userId: "alice",
+		projectId: project.id,
+		workspaceId,
+		harness: "codex",
+		listedModelId: "codex/gpt-test",
+	});
+	const first = await openAgentTask({
+		userId: "alice",
+		projectId: project.id,
+		parentSessionId: root.id,
+		title: "Schema",
+		harness: "codex",
+		modelId: "codex/gpt-test",
+		prompt: "Implement and verify the schema.",
+		placement: "fresh",
+		access: "read_write",
+		execution: "parallel",
+		dependsOnSessionId: null,
+	});
+	expect(first.taskState).toBe("draft");
+	expect(first.providerRef).toBeNull();
+	const second = await openAgentTask({
+		userId: "alice",
+		projectId: project.id,
+		parentSessionId: root.id,
+		title: "API",
+		harness: "codex",
+		modelId: "codex/gpt-test",
+		prompt: "Build the API on the reviewed schema.",
+		placement: "fresh",
+		access: "read_write",
+		execution: "stacked",
+		dependsOnSessionId: first.id,
+	});
+	await expect(
+		prepareAgentTaskStart({
+			userId: "alice",
+			projectId: project.id,
+			taskSessionId: second.id,
+		}),
+	).rejects.toThrow("finish");
+	await saveAgentTaskState(first.id, "done");
+	await expect(
+		prepareAgentTaskStart({
+			userId: "alice",
+			projectId: project.id,
+			taskSessionId: second.id,
+		}),
+	).rejects.toThrow("Review");
+	await saveAgentTaskReview(first.id, "reviewed");
+	await expect(
+		prepareAgentTaskStart({
+			userId: "alice",
+			projectId: project.id,
+			taskSessionId: second.id,
+		}),
+	).rejects.toThrow("Publish");
+	await saveAgentTaskPublication(first.id, {
+		branch: "ytimesy-task-1",
+		pullRequestUrl: "https://example.test/pull/1",
+	});
+	const started = await prepareAgentTaskStart({
+		userId: "alice",
+		projectId: project.id,
+		taskSessionId: second.id,
+	});
+	expect(started.task.taskState).toBe("working");
 });

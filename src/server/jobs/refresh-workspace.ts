@@ -7,8 +7,11 @@ import {
 	projectSnapshotNeedsRefresh,
 	projectSnapshotSourceRef,
 } from "../../domain/project-snapshot";
+import {
+	publicFailureMessage,
+	workspaceSlug,
+} from "../../domain/project-workspace";
 import { projectFolderName } from "../../domain/projects";
-import { publicFailureMessage, workspaceSlug } from "../../domain/project-workspace";
 import {
 	sessionCloneBranch,
 	sessionWorkingBranch,
@@ -17,14 +20,12 @@ import {
 	cloneSelectedProjectScript,
 	PROJECT_TOKEN_PATH,
 } from "../adapters/freestyle/clone-project";
-import {
-	authorizedRepository,
-	repositoryBranchSha,
-} from "../adapters/github";
+import { authorizedRepository, repositoryBranchSha } from "../adapters/github";
 import { resolveGithubAppBot } from "../adapters/github/bot-identity";
 import { githubInstallationAccessToken } from "../adapters/github/installation-token";
 import { projectForOwner } from "../adapters/projects";
 import {
+	activateGithubBotCommitHookArgv,
 	githubBotCommitHookPath,
 	githubBotCommitMsgHook,
 	installArgv,
@@ -40,6 +41,7 @@ import {
 	workspaceById,
 } from "../adapters/workspaces";
 import { githubAccessToken } from "../auth/github-connection";
+import { removeCodexCredentialsFromProjectTemplate } from "../services/project-template-credentials";
 
 /**
  * Rebuilds a ready project's snapshot when the clone-source commit moved.
@@ -126,7 +128,7 @@ export async function refreshWorkspaceSnapshot(
 			await runCommand(
 				runtime,
 				providerRef,
-				["chmod", "+x", githubBotCommitHookPath(directory)],
+				activateGithubBotCommitHookArgv(directory),
 				{},
 				15_000,
 			);
@@ -148,13 +150,13 @@ export async function refreshWorkspaceSnapshot(
 			{},
 			15 * 60 * 1000,
 		);
+		await removeCodexCredentialsFromProjectTemplate(runtime, providerRef);
 		const snapshotId = await runtime.snapshot(
 			providerRef,
 			projectEnvironmentSnapshotSlug(workspaceId),
 		);
 		await saveTemplateSnapshot(workspaceId, snapshotId);
-		if (remoteSha)
-			await saveTemplateSource(workspaceId, sourceRef, remoteSha);
+		if (remoteSha) await saveTemplateSource(workspaceId, sourceRef, remoteSha);
 		await runtime.pause?.(providerRef);
 		await recordWorkspaceEvent(
 			workspace.userId,
@@ -204,11 +206,13 @@ async function resolveReadyTemplate(
 	const slug = workspaceSlug(workspace.id);
 	if (workspace.providerRef) {
 		const recovered = await runtime.recover(workspace.providerRef);
-		return (await saveProviderRef(workspace.id, recovered)).providerRef as string;
+		return (await saveProviderRef(workspace.id, recovered))
+			.providerRef as string;
 	}
 	const existing = await runtime.findBySlug(slug);
 	if (existing)
-		return (await saveProviderRef(workspace.id, existing)).providerRef as string;
+		return (await saveProviderRef(workspace.id, existing))
+			.providerRef as string;
 	if (!workspace.templateSnapshotId)
 		throw new Error("Project snapshot is not available.");
 	const created = await runtime.provision(slug, {

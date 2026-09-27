@@ -35,6 +35,90 @@ function renderTimeline(
 }
 
 describe("session timeline live collapse", () => {
+	it("folds commentary and tools only after completion and keeps the final answer outside", () => {
+		const items: SessionItem[] = [
+			{
+				kind: "userMessage",
+				id: SessionItemId("u"),
+				text: "Check it",
+				timing: { startedAt: 1000, completedAt: 73000 },
+			},
+			{
+				kind: "agentMessage",
+				id: SessionItemId("update"),
+				text: "Checking the files",
+			},
+			thought("reasoning", false),
+			readCall("read", "completed"),
+			{
+				kind: "agentMessage",
+				id: SessionItemId("final"),
+				text: "Here is the result",
+			},
+		];
+		expect(renderTimeline(items, "running")).not.toContain(
+			'class="session-work"',
+		);
+		const done = renderTimeline(items, "completed");
+		expect(done.match(/class="session-work"/g)).toHaveLength(1);
+		expect(done).toContain("Worked for 1m 12s");
+		expect(done).not.toContain("steps");
+		const workEnd = done.indexOf("</div></details></li>");
+		expect(done.indexOf("Checking the files")).toBeLessThan(workEnd);
+		expect(done.indexOf("Here is the result")).toBeGreaterThan(workEnd);
+	});
+
+	it("omits empty completed reasoning", () => {
+		const html = renderTimeline(
+			[{ kind: "reasoning", id: SessionItemId("empty"), summaries: [] }],
+			"completed",
+		);
+		expect(html).not.toContain("Thought");
+		expect(html).not.toContain('class="session-work"');
+	});
+	it("does not reactivate historical reasoning, tools, or streaming on a new prompt", () => {
+		const html = renderTimeline(
+			[
+				thought("old-thought", true),
+				readCall("old-read", "inProgress"),
+				{
+					kind: "agentMessage",
+					id: SessionItemId("old-answer"),
+					text: "Previous answer",
+					streaming: true,
+				},
+				{
+					kind: "userMessage",
+					id: SessionItemId("new-prompt"),
+					text: "Next question",
+				},
+				thought("new-thought", true),
+			],
+			"running",
+		);
+		const historical = html.split('data-kind="userMessage"')[0];
+		expect(historical).not.toContain('data-live="true"');
+		expect(historical).not.toContain('data-streaming="true"');
+		expect(historical).not.toMatch(/<details[^>]*open/);
+		expect(html.split('data-kind="userMessage"')[1]).toMatch(
+			/data-kind="reasoning"[^>]*open/,
+		);
+	});
+
+	it("renders file icons before any diff exists", () => {
+		const html = renderTimeline(
+			[
+				{
+					kind: "agentMessage",
+					id: SessionItemId("reference"),
+					text: "Read `src/styles.css`.",
+				},
+			],
+			"completed",
+		);
+		expect(html).toContain("file-type-icon");
+		expect(html).not.toContain("data-change=");
+	});
 	it("opens Explored while a read is in progress so tools stream inside the group", () => {
 		const html = renderTimeline(
 			[
@@ -72,7 +156,7 @@ describe("session timeline live collapse", () => {
 		expect(done).toContain("Looking at the session timeline");
 	});
 
-	it("color-codes mentioned files so clicking them opens the diff", () => {
+	it("renders mentioned files as clickable text with a file icon", () => {
 		const html = renderToString(
 			createElement(SessionTimeline, {
 				items: [
@@ -101,7 +185,12 @@ describe("session timeline live collapse", () => {
 			}),
 		);
 		expect(html).toContain("session-file-open");
+		expect(html).toContain("file-type-icon");
 		expect(html).toContain('data-change="update"');
+		const response = html.split('<li data-kind="fileChange">')[0];
+		expect(response).not.toContain("data-change=");
+		expect(response).toContain("file-type-icon");
+		expect(response).toContain('title="Open src/styles.css"');
 		expect(html).toContain("src/styles.css");
 	});
 });

@@ -1,7 +1,7 @@
 import { Effect } from "effect";
 import {
 	guestCliDisableUpdateExports,
-	pinnedCodexInstallCommand,
+	ensurePinnedCodexCommand,
 } from "#/domain/guest-cli-pin";
 import type { WorkspaceId } from "#/domain/ids";
 import type { CodexProbeResult } from "#/server/services/capabilities";
@@ -12,9 +12,7 @@ import { agentConnectionFromProbe, parseCodexProbeReport } from "./protocol";
 const CODEX_INSTALL_SCRIPT = `set -eu
 ${guestCliDisableUpdateExports()}
 export HOME="\${HOME:-/root}"
-if ! command -v codex >/dev/null 2>&1 && [ ! -x "$HOME/.codex/packages/standalone/current/codex" ]; then
-  ${pinnedCodexInstallCommand()}
-fi
+${ensurePinnedCodexCommand()}
 export PATH="$HOME/.local/bin:$HOME/.codex/bin:$HOME/.codex/packages/standalone/current:$PATH"
 if [ -x "$HOME/.codex/packages/standalone/current/codex" ]; then
   CODEX_BIN="$HOME/.codex/packages/standalone/current/codex"

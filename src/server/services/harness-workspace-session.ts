@@ -1,9 +1,21 @@
-import { Effect } from "effect";
+import { Duration, Effect } from "effect";
 import type { AgentConnection } from "#/domain/agent-connection";
 import {
 	type AgentProviderId,
 	agentProviderById,
 } from "#/domain/agent-provider";
+import { agentTaskTree } from "#/domain/agent-task";
+import {
+	AGENT_TASK_TOOL_REQUEST_PATH,
+	AGENT_TASK_TOOL_RESPONSE_PATH,
+	parseAgentTaskToolRequest,
+	serializeAgentTaskToolResponse,
+	taskToolAccess,
+	taskToolExecution,
+	taskToolHarness,
+	taskToolPlacement,
+	taskToolString,
+} from "#/domain/agent-task-tool";
 import {
 	claudeSessionRemembersSignIn,
 	rememberedClaudeModels,
@@ -22,6 +34,7 @@ import {
 	publicFailureMessage,
 } from "#/domain/project-workspace";
 import {
+	lastAgentMessageText,
 	sessionItemsFromUnknown,
 	sessionRecordHasConversation,
 } from "#/domain/session-item";
@@ -29,11 +42,21 @@ import { canSubmitComposer, canSubmitSideChat } from "#/domain/session-policy";
 import type { WorkspaceLifecycle } from "#/domain/workspace";
 import {
 	type AgentSessionRecord,
-	childAgentSession,
+	agentSessionForOwner,
+	descendantAgentSessions,
 	listUserProviderRefs,
+	saveAgentTaskPublication,
+	saveAgentTaskReview,
+	saveAgentTaskState,
+	sideAgentSession,
 } from "#/server/adapters/agent-sessions";
+import {
+	claimAgentTaskCommand,
+	completeAgentTaskCommand,
+	renewAgentTaskCommandClaim,
+} from "#/server/adapters/agent-task-command-receipts";
+import { saveAgentTaskBlockedEvent } from "#/server/adapters/agent-task-events";
 import { captureClaudeHome } from "#/server/adapters/claude/home-files";
-import { persistClaudeAuthSnapshotForUser } from "#/server/proof/persist-claude-auth-snapshot";
 import {
 	type ClaudeAuthStatus,
 	connectClaudeCode,
@@ -49,10 +72,19 @@ import {
 	submitOpenCodeTask,
 } from "#/server/adapters/opencode/serve-session";
 import { readyWorkspaceForOwner } from "#/server/adapters/workspaces";
+import { enqueueAgentTaskEvent } from "#/server/jobs/queue";
+import {
+	persistClaudeAuthSnapshotForUser,
+	refreshClaudeAuthSnapshotForUser,
+} from "#/server/proof/persist-claude-auth-snapshot";
 import { decryptHarnessApiKey } from "#/server/secrets/harness-key-store";
 import {
 	bindAgentSessionMachine,
+	bindPreparedAgentTaskMachine,
+	editAgentTaskDraft,
+	openAgentTask,
 	peekAgentSessionMachine,
+	prepareAgentTaskStart,
 	syncProjectContextForTask,
 } from "./agent-session-machine";
 import {
@@ -70,6 +102,8 @@ import {
 	persistSessionTurnStatus,
 } from "./persist-session-view";
 import { preparePreparedGuest } from "./project-workspace";
+import { publishProject } from "./publication";
+import { machinesForAgentSession } from "./session-workspace-machines";
 import { beginSharedDesktop } from "./workspace-desktop";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -78,6 +112,87 @@ export type HarnessSessionScope = CodexSessionScope & {
 };
 
 export type PublicHarnessSession = PublicCodexSession;
+
+export function startPreparedAgentTask(
+	machines: WorkspaceMachines,
+	scope: HarnessSessionScope,
+	taskSessionId: string,
+): Effect.Effect<
+	{ id: string; machineId: string; placement: "shared" | "fresh" },
+	unknown
+> {
+	return Effect.gen(function* () {
+		if (!scope.projectId) throw new Error("The project is not available.");
+		const { task, predecessor } = yield* Effect.tryPromise(() =>
+			prepareAgentTaskStart({
+				userId: scope.userId,
+				projectId: scope.projectId as string,
+				taskSessionId,
+			}),
+		);
+		if (!task.taskPrompt || !task.listedModelId || !task.taskPlacement) {
+			throw new Error(
+				"The task draft is missing its prompt, model, or placement.",
+			);
+		}
+		const taskMachines = machinesForAgentSession(machines, task);
+		const bound = yield* Effect.gen(function* () {
+			const machine = yield* Effect.tryPromise(() =>
+				bindPreparedAgentTaskMachine(taskMachines, {
+					userId: scope.userId,
+					projectId: scope.projectId as string,
+					task,
+					predecessor,
+				}),
+			);
+			yield* sendHarnessWorkspaceTask(taskMachines, taskScope(scope, task), {
+				text: task.taskPrompt as string,
+				modelId: task.listedModelId as string,
+			});
+			return machine;
+		}).pipe(
+			Effect.tapError(() =>
+				Effect.tryPromise(() => saveAgentTaskState(task.id, "failed")),
+			),
+		);
+		return {
+			id: task.id,
+			machineId: bound.providerRef,
+			placement: task.taskPlacement as "shared" | "fresh",
+		};
+	});
+}
+
+export function requestAgentTaskWrapUp(
+	machines: WorkspaceMachines,
+	scope: HarnessSessionScope,
+	taskSessionId: string,
+	modelId?: string,
+): Effect.Effect<{ id: string }, unknown> {
+	return Effect.gen(function* () {
+		const task = yield* Effect.tryPromise(() =>
+			agentSessionForOwner(scope.userId, taskSessionId),
+		);
+		if (!task || task.projectId !== scope.projectId || !task.parentSessionId) {
+			throw new Error("The task is not available.");
+		}
+		if (task.harness === "claude" && task.turnStatus === "running") {
+			throw new Error(
+				"This runtime cannot be interrupted safely yet. Wait for its current turn before requesting a wrap-up.",
+			);
+		}
+		const selectedModel = modelId || task.listedModelId;
+		if (!selectedModel) throw new Error("The task has no model selection.");
+		const taskMachines = machinesForAgentSession(machines, task);
+		const targetScope = taskScope(scope, task);
+		yield* stopHarnessWorkspaceTurn(taskMachines, targetScope);
+		yield* sendHarnessWorkspaceTask(taskMachines, targetScope, {
+			modelId: selectedModel,
+			text: "Wrap up now. Stop expanding scope, preserve useful work, run only essential verification, and return a concise result with evidence and remaining uncertainty.",
+		});
+		return { id: task.id };
+	});
+}
 
 export function emptyHarnessSession(
 	snapshotAvailable = false,
@@ -90,6 +205,15 @@ export function emptyHarnessSession(
  * Connect wakes the machine when the user actually resumes that chat.
  */
 export function readHarnessWorkspaceSession(
+	machines: WorkspaceMachines,
+	scope: HarnessSessionScope,
+): Effect.Effect<PublicHarnessSession> {
+	return serviceAgentTaskToolRequest(machines, scope).pipe(
+		Effect.flatMap(() => readHarnessWorkspaceSessionView(machines, scope)),
+	);
+}
+
+function readHarnessWorkspaceSessionView(
 	machines: WorkspaceMachines,
 	scope: HarnessSessionScope,
 ): Effect.Effect<PublicHarnessSession> {
@@ -263,33 +387,23 @@ export function completeClaudeWorkspaceAuth(
 			},
 		});
 	}
-	return withSessionMachine(
-		machines,
-		scope,
-		true,
-		(providerRef, session) =>
-			submitClaudeAuthCode(
-				machines,
-				WorkspaceId(providerRef),
-				code,
-			).pipe(
-				Effect.tap((status) =>
-					rememberClaudeHome(
-						machines,
-						WorkspaceId(providerRef),
-						scope.userId,
-						status,
-					),
-				),
-				Effect.flatMap((status) =>
-					Effect.tryPromise(() =>
-						persistBoundSessionView(
-							session,
-							viewFromClaude(status, providerRef),
-						),
-					),
+	return withSessionMachine(machines, scope, true, (providerRef, session) =>
+		submitClaudeAuthCode(machines, WorkspaceId(providerRef), code).pipe(
+			Effect.tap((status) =>
+				rememberClaudeHome(
+					machines,
+					WorkspaceId(providerRef),
+					scope.userId,
+					status,
+					"replace",
 				),
 			),
+			Effect.flatMap((status) =>
+				Effect.tryPromise(() =>
+					persistBoundSessionView(session, viewFromClaude(status, providerRef)),
+				),
+			),
+		),
 	).pipe(
 		Effect.catchAll((cause) =>
 			Effect.succeed({
@@ -345,9 +459,8 @@ export function sendHarnessWorkspaceTask(
 }
 
 /**
- * Persist the user turn as running and return it now. Boot, checkout, and
- * the harness start continue in the background so the composer can poll
- * thinking and tool calls instead of waiting for the final paragraph.
+ * Persists the user turn before provisioning, then waits only until the
+ * provider accepts the request. Turn supervision continues in the background.
  */
 function queueHarnessTurn(
 	machines: WorkspaceMachines,
@@ -368,11 +481,7 @@ function queueHarnessTurn(
 			persistQueuedUserTurn(
 				peeked.session,
 				peeked.providerRef
-					? pausedHarnessSessionView(
-							scope,
-							peeked.providerRef,
-							peeked.session,
-						)
+					? pausedHarnessSessionView(scope, peeked.providerRef, peeked.session)
 					: {
 							...emptyHarnessSession(),
 							items: sessionItemsFromUnknown(peeked.session?.items),
@@ -380,25 +489,410 @@ function queueHarnessTurn(
 				text,
 			),
 		);
-		void Effect.runPromise(
-			submit.pipe(
-				Effect.catchAll((cause) =>
-					Effect.tryPromise(() =>
-						persistBoundSessionView(peeked.session, {
-							...queued,
-							turnStatus: "failed",
-							connection: {
-								status: "failed",
-								provider: scope.harnessId,
-								message: publicFailureMessage(cause),
-							},
-						}),
-					),
+		const launched = yield* submit.pipe(
+			Effect.flatMap((view) =>
+				Effect.tryPromise(() =>
+					persistBoundSessionView(peeked.session, {
+						...view,
+						items: queued.items,
+					}),
+				),
+			),
+			Effect.catchAll((cause) =>
+				Effect.tryPromise(() =>
+					persistBoundSessionView(peeked.session, {
+						...queued,
+						turnStatus: "failed",
+						connection: {
+							status: "failed",
+							provider: scope.harnessId,
+							message: publicFailureMessage(cause),
+						},
+					}),
 				),
 			),
 		);
-		return yield* attachSiblingSideChat(machines, scope, queued);
+		if (launched.turnStatus === "running") {
+			void Effect.runPromise(
+				superviseHarnessTurn(machines, scope, launched).pipe(
+					Effect.catchAll(() => Effect.void),
+				),
+			);
+		}
+		return yield* attachSiblingSideChat(machines, scope, launched);
+	}).pipe(
+		Effect.catchAll((cause) =>
+			Effect.succeed({
+				...emptyHarnessSession(),
+				connection: {
+					status: "failed" as const,
+					provider: scope.harnessId,
+					message: publicFailureMessage(cause),
+				},
+			}),
+		),
+	);
+}
+
+const TASK_SUPERVISION_POLLS = 1_800;
+const activeAgentTaskToolRequests = new Set<string>();
+
+/**
+ * Keeps provider state and task-tool requests moving after the browser closes.
+ * The VM remains the execution boundary; the control plane owns orchestration.
+ */
+function superviseHarnessTurn(
+	machines: WorkspaceMachines,
+	scope: HarnessSessionScope,
+	initial: PublicHarnessSession,
+): Effect.Effect<PublicHarnessSession> {
+	return Effect.gen(function* () {
+		let current = initial;
+		for (
+			let poll = 0;
+			poll < TASK_SUPERVISION_POLLS && current.turnStatus === "running";
+			poll += 1
+		) {
+			yield* serviceAgentTaskToolRequest(machines, scope);
+			yield* Effect.sleep(Duration.seconds(1));
+			current = yield* readHarnessWorkspaceSessionView(machines, {
+				...scope,
+				createNew: false,
+			});
+		}
+		return current;
 	});
+}
+
+/**
+ * Drains one provider-local request. The bound session scopes every operation,
+ * so a model cannot address another user's task by guessing an identifier.
+ */
+function serviceAgentTaskToolRequest(
+	machines: WorkspaceMachines,
+	scope: HarnessSessionScope,
+): Effect.Effect<void> {
+	return Effect.gen(function* () {
+		if (!scope.projectId || !scope.sessionId) return;
+		const parent = yield* Effect.tryPromise(() =>
+			agentSessionForOwner(scope.userId, scope.sessionId as string),
+		);
+		if (
+			!parent ||
+			parent.projectId !== scope.projectId ||
+			!parent.providerRef
+		) {
+			return;
+		}
+		const workspaceId = WorkspaceId(parent.providerRef);
+		const requestText = yield* Effect.tryPromise(() =>
+			machines.readTextFile(workspaceId, AGENT_TASK_TOOL_REQUEST_PATH),
+		).pipe(Effect.catchAll(() => Effect.succeed(null)));
+		const request = parseAgentTaskToolRequest(requestText);
+		if (!request) return;
+		const responseText = yield* Effect.tryPromise(() =>
+			machines.readTextFile(workspaceId, AGENT_TASK_TOOL_RESPONSE_PATH),
+		).pipe(Effect.catchAll(() => Effect.succeed(null)));
+		if (agentTaskToolResponseId(responseText) === request.id) return;
+		const receipt = yield* Effect.tryPromise(() =>
+			claimAgentTaskCommand(parent.id, request.id),
+		);
+		if (receipt.kind === "processing") return;
+		if (receipt.kind === "done") {
+			yield* Effect.tryPromise(() =>
+				machines.writeTextFile(
+					workspaceId,
+					AGENT_TASK_TOOL_RESPONSE_PATH,
+					serializeAgentTaskToolResponse(receipt.response),
+				),
+			);
+			return;
+		}
+		const inFlightKey = `${parent.id}:${request.id}`;
+		if (activeAgentTaskToolRequests.has(inFlightKey)) return;
+		activeAgentTaskToolRequests.add(inFlightKey);
+		const heartbeat = setInterval(
+			() =>
+				void renewAgentTaskCommandClaim(parent.id, request.id).catch(
+					() => undefined,
+				),
+			10_000,
+		);
+		heartbeat.unref();
+		yield* Effect.gen(function* () {
+			const response = yield* runAgentTaskTool(
+				machines,
+				scope,
+				parent,
+				request,
+			).pipe(
+				Effect.map((result) => ({ id: request.id, ok: true as const, result })),
+				Effect.catchAll((cause) =>
+					Effect.succeed({
+						id: request.id,
+						ok: false as const,
+						error: publicFailureMessage(cause),
+					}),
+				),
+			);
+			yield* Effect.tryPromise(() =>
+				completeAgentTaskCommand(parent.id, response),
+			);
+			yield* Effect.tryPromise(() =>
+				machines.writeTextFile(
+					workspaceId,
+					AGENT_TASK_TOOL_RESPONSE_PATH,
+					serializeAgentTaskToolResponse(response),
+				),
+			);
+		}).pipe(
+			Effect.ensuring(
+				Effect.sync(() => {
+					clearInterval(heartbeat);
+					activeAgentTaskToolRequests.delete(inFlightKey);
+				}),
+			),
+		);
+	}).pipe(Effect.catchAll(() => Effect.void));
+}
+
+function runAgentTaskTool(
+	machines: WorkspaceMachines,
+	scope: HarnessSessionScope,
+	parent: AgentSessionRecord,
+	request: NonNullable<ReturnType<typeof parseAgentTaskToolRequest>>,
+): Effect.Effect<unknown, unknown> {
+	return Effect.gen(function* () {
+		if (!scope.projectId) throw new Error("The project is not available.");
+		if (request.tool === "create_task") {
+			const title = taskToolString(request.arguments, "title");
+			const prompt = taskToolString(request.arguments, "prompt");
+			if (!title || !prompt)
+				throw new Error("Task title and prompt are required.");
+			const harnessId = taskToolHarness(request.arguments, parent.harness);
+			const modelId =
+				taskToolString(request.arguments, "modelId") ||
+				(harnessId === parent.harness ? parent.listedModelId : "") ||
+				"";
+			if (!modelId) {
+				throw new Error(
+					"Choose a model when starting a task on a different runtime.",
+				);
+			}
+			const task = yield* Effect.tryPromise(() =>
+				openAgentTask({
+					userId: scope.userId,
+					projectId: scope.projectId as string,
+					parentSessionId: parent.id,
+					title,
+					harness: harnessId,
+					modelId,
+					prompt,
+					placement: taskToolPlacement(request.arguments),
+					access: taskToolAccess(request.arguments),
+					execution: taskToolExecution(request.arguments),
+					dependsOnSessionId:
+						taskToolString(request.arguments, "dependsOnTaskId") || null,
+				}),
+			);
+			return {
+				taskId: task.id,
+				title: task.title,
+				status: "draft",
+				placement: task.taskPlacement,
+				execution: task.taskExecution,
+			};
+		}
+		if (request.tool === "report_task_blocked") {
+			if (!parent.parentSessionId) {
+				throw new Error("A root agent has no parent to notify.");
+			}
+			const question = taskToolString(request.arguments, "question");
+			const eventId = yield* Effect.tryPromise(() =>
+				saveAgentTaskBlockedEvent({ sessionId: parent.id, question }),
+			);
+			if (eventId) {
+				yield* Effect.tryPromise(() =>
+					enqueueAgentTaskEvent(eventId).catch(() => null),
+				);
+			}
+			return { taskId: parent.id, status: "waiting" };
+		}
+
+		const descendants = yield* Effect.tryPromise(() =>
+			descendantAgentSessions(scope.userId, parent.id),
+		);
+		const taskRows = descendants.filter((row) => row.title !== "Side chat");
+		if (request.tool === "list_tasks") {
+			const byId = new Map(taskRows.map((row) => [row.id, row]));
+			return agentTaskTree(parent.id, taskRows).map((task) => ({
+				...task,
+				summary:
+					task.summary ??
+					lastAgentMessageText(
+						sessionItemsFromUnknown(byId.get(task.id)?.items),
+					),
+			}));
+		}
+
+		const taskId = taskToolString(request.arguments, "taskId");
+		const target = taskRows.find((row) => row.id === taskId);
+		if (!target) throw new Error("That descendant task is not available.");
+		if (request.tool === "edit_task") {
+			const title = taskToolString(request.arguments, "title");
+			const prompt = taskToolString(request.arguments, "prompt");
+			const harness = taskToolHarness(request.arguments, target.harness);
+			const modelId =
+				taskToolString(request.arguments, "modelId") ||
+				(harness === target.harness ? target.listedModelId : "");
+			if (!modelId) throw new Error("Choose a model for the edited runtime.");
+			const execution = taskToolString(request.arguments, "execution")
+				? taskToolExecution(request.arguments)
+				: target.taskExecution || "parallel";
+			const edited = yield* Effect.tryPromise(() =>
+				editAgentTaskDraft({
+					userId: scope.userId,
+					projectId: scope.projectId as string,
+					taskSessionId: target.id,
+					title,
+					prompt,
+					harness,
+					modelId,
+					placement: taskToolString(request.arguments, "placement")
+						? taskToolPlacement(request.arguments)
+						: target.taskPlacement || "fresh",
+					access: taskToolString(request.arguments, "access")
+						? taskToolAccess(request.arguments)
+						: target.taskAccess || "read_write",
+					execution,
+					dependsOnSessionId:
+						execution === "parallel"
+							? null
+							: Object.hasOwn(request.arguments, "dependsOnTaskId")
+								? taskToolString(request.arguments, "dependsOnTaskId") || null
+								: target.dependsOnSessionId,
+				}),
+			);
+			return { taskId: edited.id, status: "draft" };
+		}
+		if (request.tool === "start_task") {
+			const started = yield* startPreparedAgentTask(machines, scope, target.id);
+			return {
+				taskId: started.id,
+				status: "working",
+				placement: started.placement,
+				machineId: started.machineId,
+			};
+		}
+		if (request.tool === "inspect_task_diff") {
+			if (!target.providerRef) {
+				throw new Error("The task has no machine to inspect.");
+			}
+			const diff = yield* Effect.tryPromise(() =>
+				machines.exec(
+					WorkspaceId(target.providerRef as string),
+					`set -eu
+cd "$(cat /tmp/ytimesy-project-cwd)"
+git status --short
+git diff --stat
+git diff -- .`,
+					30_000,
+				),
+			);
+			if (diff.exitCode !== 0) {
+				throw new Error((diff.stderr || diff.stdout).trim() || "Diff failed.");
+			}
+			return {
+				taskId: target.id,
+				diff: diff.stdout.slice(0, 60_000),
+				truncated: diff.stdout.length > 60_000,
+			};
+		}
+		if (request.tool === "mark_task_reviewed") {
+			if (target.taskState !== "done") {
+				throw new Error("Only a completed task can be marked reviewed.");
+			}
+			const reviewed = yield* Effect.tryPromise(() =>
+				saveAgentTaskReview(target.id, "reviewed"),
+			);
+			if (!reviewed) throw new Error("The task review could not be saved.");
+			return { taskId: target.id, reviewState: "reviewed" };
+		}
+		if (request.tool === "publish_task") {
+			if (
+				target.taskState !== "done" ||
+				target.taskReviewState !== "reviewed"
+			) {
+				throw new Error("Review the completed task before publishing it.");
+			}
+			if (target.taskAccess !== "read_write") {
+				throw new Error("Read-only tasks have no changes to publish.");
+			}
+			const title = taskToolString(request.arguments, "title");
+			if (!title) throw new Error("A pull request title is required.");
+			const predecessor = target.dependsOnSessionId
+				? taskRows.find((row) => row.id === target.dependsOnSessionId)
+				: null;
+			const published = yield* publishProject(scope.userId, {
+				projectId: scope.projectId,
+				sessionId: target.id,
+				title,
+				body: taskToolString(request.arguments, "body"),
+				...(predecessor?.taskBranch
+					? { baseBranch: predecessor.taskBranch }
+					: {}),
+			});
+			const saved = yield* Effect.tryPromise(() =>
+				saveAgentTaskPublication(target.id, {
+					branch: published.head,
+					pullRequestUrl: published.url,
+				}),
+			);
+			if (!saved) throw new Error("The task publication could not be saved.");
+			return {
+				taskId: target.id,
+				branch: published.head,
+				pullRequestUrl: published.url,
+			};
+		}
+		if (request.tool === "request_task_wrap_up") {
+			const wrapped = yield* requestAgentTaskWrapUp(machines, scope, target.id);
+			return { taskId: wrapped.id, status: "working" };
+		}
+		const targetMachines = machinesForAgentSession(machines, target);
+		const message = taskToolString(request.arguments, "message");
+		if (!message) throw new Error("A task message is required.");
+		const modelId = target.listedModelId || parent.listedModelId || "";
+		if (!modelId) throw new Error("The task has no model selection.");
+		yield* sendHarnessWorkspaceTask(targetMachines, taskScope(scope, target), {
+			text: message,
+			modelId,
+		});
+		return { taskId: target.id, status: "working" };
+	});
+}
+
+function taskScope(
+	scope: HarnessSessionScope,
+	task: AgentSessionRecord,
+): HarnessSessionScope {
+	return {
+		userId: scope.userId,
+		projectId: scope.projectId,
+		sessionId: task.id,
+		harnessId: task.harness,
+		createNew: false,
+	};
+}
+
+function agentTaskToolResponseId(text: string | null): string | null {
+	if (!text?.trim()) return null;
+	try {
+		const value = JSON.parse(text) as { id?: unknown };
+		return typeof value.id === "string" ? value.id : null;
+	} catch {
+		return null;
+	}
 }
 
 export function stopHarnessWorkspaceTurn(
@@ -625,9 +1119,7 @@ function viewFromClaude(
 	return {
 		...view,
 		listedModelId:
-			status.stage === "authenticated"
-				? preferredListedModelId(models)
-				: "",
+			status.stage === "authenticated" ? preferredListedModelId(models) : "",
 	};
 }
 
@@ -694,24 +1186,23 @@ function submitConnectedHarnessTask(
 			yield* preparePreparedGuest(machines, WorkspaceId(providerRef), scope);
 		}
 		beginSharedDesktop(machines, scope);
-		const promptText = followUp
-			? input.text
-			: yield* Effect.tryPromise(() =>
-					scope.projectId
-						? syncProjectContextForTask(machines, providerRef, {
-								projectId: scope.projectId,
-								task: input.text,
-							})
-						: Promise.resolve(input.text),
-				);
+		const promptText =
+			followUp || session?.parentSessionId
+				? input.text
+				: yield* Effect.tryPromise(() =>
+						scope.projectId
+							? syncProjectContextForTask(machines, providerRef, {
+									projectId: scope.projectId,
+									task: input.text,
+								})
+							: Promise.resolve(input.text),
+					);
 		const payload = { ...input, promptText };
 		if (followUp) {
 			void Effect.runPromise(
-				preparePreparedGuest(
-					machines,
-					WorkspaceId(providerRef),
-					scope,
-				).pipe(Effect.catchAll(() => Effect.void)),
+				preparePreparedGuest(machines, WorkspaceId(providerRef), scope).pipe(
+					Effect.catchAll(() => Effect.void),
+				),
 			);
 		}
 		const apiKey = yield* Effect.tryPromise(() =>
@@ -776,6 +1267,9 @@ function submitConnectedHarnessTask(
 				status = yield* submitClaudeTask(machines, WorkspaceId(providerRef), {
 					...payload,
 					modelId: listedModelId,
+					...(input.variant ? { reasoningEffort: input.variant } : {}),
+					...(input.fast ? { fast: true } : {}),
+					...(session?.taskAccess === "read_only" ? { readOnly: true } : {}),
 				});
 			}
 			return yield* Effect.tryPromise(() =>
@@ -883,7 +1377,7 @@ function sendHarnessSideTask(
 			};
 		}
 		const existing = yield* Effect.tryPromise(() =>
-			childAgentSession(scope.userId, scope.sessionId as string),
+			sideAgentSession(scope.userId, scope.sessionId as string),
 		);
 		const bound = yield* Effect.tryPromise(() =>
 			bindAgentSessionMachine(machines, {
@@ -893,6 +1387,7 @@ function sendHarnessSideTask(
 				sessionId: existing?.id,
 				createNew: !existing,
 				parentSessionId: scope.sessionId,
+				title: "Side chat",
 			}),
 		);
 		yield* Effect.tryPromise(() =>
@@ -962,7 +1457,7 @@ function stopHarnessSideTurn(
 			};
 		}
 		const child = yield* Effect.tryPromise(() =>
-			childAgentSession(scope.userId, scope.sessionId as string),
+			sideAgentSession(scope.userId, scope.sessionId as string),
 		);
 		if (!child) {
 			return yield* readHarnessWorkspaceSession(machines, scope);
@@ -1015,7 +1510,7 @@ function attachSiblingSideChat(
 	}
 	return Effect.gen(function* () {
 		const child = yield* Effect.tryPromise(() =>
-			childAgentSession(scope.userId, scope.sessionId as string),
+			sideAgentSession(scope.userId, scope.sessionId as string),
 		);
 		if (!child?.providerRef) {
 			return mergeSideChat(main, null, scope.harnessId);
@@ -1199,13 +1694,17 @@ function rememberClaudeHome(
 	workspaceId: WorkspaceId,
 	userId: string,
 	status: ClaudeAuthStatus,
-	snapshot = true,
+	snapshot: "ensure" | "replace" | false = "ensure",
 ): Effect.Effect<void> {
 	if (status.stage !== "authenticated") return Effect.void;
 	return Effect.gen(function* () {
 		yield* captureClaudeHome(machines, workspaceId, userId);
 		if (!snapshot) return;
-		yield* persistClaudeAuthSnapshotForUser(userId, machines, workspaceId, {
+		const persist =
+			snapshot === "replace"
+				? refreshClaudeAuthSnapshotForUser
+				: persistClaudeAuthSnapshotForUser;
+		yield* persist(userId, machines, workspaceId, {
 			planType: status.planType,
 			email: null,
 		});

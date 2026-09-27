@@ -1,3 +1,6 @@
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useServerFn } from "@tanstack/react-start";
+import { authClient } from "#/features/auth/client";
 import { ArrowUp, Square, X } from "lucide-react";
 import { type KeyboardEvent, useEffect, useMemo, useState } from "react";
 import { connectedProviderId } from "#/domain/agent-connection";
@@ -41,6 +44,7 @@ import {
 	resolveReasoningLevel,
 	sessionModelsFromListed,
 } from "./model-capabilities";
+import { getAgentModelCatalog } from "./model-catalog.fn";
 import { ProjectContext } from "./project-context";
 import { SessionControls } from "./session-controls";
 import { SessionTimeline } from "./session-timeline";
@@ -119,10 +123,42 @@ export function SessionLauncher({
 							},
 						]
 					: [];
-	const models =
-		harnessReady || canResumeFollowUp
-			? sessionModelsFromListed(listedCatalog)
-			: [];
+	const loadCatalog = useServerFn(getAgentModelCatalog);
+	const identity = authClient.useSession();
+	const queryClient = useQueryClient();
+	useEffect(() => {
+		if (
+			!identity.data?.user.id ||
+			connectedProviderId(session.connection) !== harnessId ||
+			session.models.length === 0
+		)
+			return;
+		queryClient.setQueryData(
+			["agent-model-catalog", identity.data.user.id, harnessId],
+			session.models,
+		);
+	}, [
+		identity.data?.user.id,
+		harnessId,
+		session.connection,
+		session.models,
+		queryClient,
+	]);
+	const catalog = useQuery({
+		queryKey: ["agent-model-catalog", identity.data?.user.id, harnessId],
+		enabled: Boolean(identity.data?.user.id),
+		queryFn: () => loadCatalog({ data: { provider: harnessId } }),
+		staleTime: 60_000,
+	});
+	const models = useMemo(
+		() =>
+			sessionModelsFromListed(
+				(harnessReady || canResumeFollowUp) && listedCatalog.length
+					? listedCatalog
+					: (catalog.data ?? []),
+			),
+		[harnessReady, canResumeFollowUp, listedCatalog, catalog.data],
+	);
 	const [attachments, setAttachments] = useState<File[]>([]);
 	const [draft, setDraft] = useState("");
 	const [modelId, setModelId] = useState(session.listedModelId);
@@ -131,9 +167,7 @@ export function SessionLauncher({
 	const [lastModelByHarness, setLastModelByHarness] = useState<
 		Partial<Record<AgentProviderId, string>>
 	>(() =>
-		session.listedModelId
-			? { [harnessId]: session.listedModelId }
-			: {},
+		session.listedModelId ? { [harnessId]: session.listedModelId } : {},
 	);
 	const selectedModel = models.find((model) => model.id === modelId);
 	const [optimisticItems, setOptimisticItems] = useState<SessionItem[]>([]);
@@ -190,7 +224,7 @@ export function SessionLauncher({
 		setModelId((current) => {
 			const next = composerModelIdForCatalog({
 				requestedId: current,
-				catalog: harnessReady ? session.models : [],
+				catalog: models,
 				lastUsedForCatalog,
 				excludedIds: session.blockedListedModelIds,
 			});
@@ -198,12 +232,11 @@ export function SessionLauncher({
 		});
 	}, [
 		harnessId,
-		harnessReady,
 		lastModelByHarness,
 		session.blockedListedModelIds,
 		session.connection,
 		session.listedModelId,
-		session.models,
+		models,
 	]);
 
 	useEffect(() => {
@@ -423,9 +456,26 @@ export function SessionLauncher({
 						)}
 						<div className="session-toolbar">
 							<SessionControls
+								providerConnected={
+									harnessReady ||
+									(harnessId === "codex" && session.snapshotAvailable)
+								}
+								catalogStatus={
+									catalog.isPending
+										? "loading"
+										: catalog.isError
+											? "error"
+											: "ready"
+								}
+								onConnect={
+									catalog.isError
+										? () => {
+												void catalog.refetch();
+											}
+										: onConnect
+								}
 								harnessId={harnessId}
 								onHarnessIdChange={onHarnessIdChange}
-								connection={session.connection}
 								models={models}
 								modelId={modelId}
 								listedModelId={modelId || session.listedModelId}
@@ -490,6 +540,7 @@ export function SessionLauncher({
 												: composerCanStartSignIn({
 															harnessId,
 															connection: session.connection,
+															snapshotAvailable: session.snapshotAvailable,
 															busy,
 															draft,
 															slashDraft: Boolean(slashDraft),
