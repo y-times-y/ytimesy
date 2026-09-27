@@ -38,13 +38,19 @@ export function workspaceExplorerTree(
 ): readonly WorkspaceTreeNode[] {
 	const root = emptyDraft();
 	const listed = new Set<string>();
-	for (const raw of [...paths, ...changes.map((change) => change.path)]) {
+	const changesByPath = new Map(
+		changes.map((change) => [
+			workspacePathForMention(change.path, paths),
+			change,
+		]),
+	);
+	for (const raw of [...paths, ...changesByPath.keys()]) {
 		const path = visibleWorkspacePath(raw);
 		if (!path || listed.has(path)) continue;
 		listed.add(path);
 		const parts = path.split("/").filter(Boolean);
 		if (parts.length === 0) continue;
-		insertPath(root, parts, fileChangeForPath(changes, path));
+		insertPath(root, parts, changesByPath.get(path));
 	}
 	return finalizeDraft(root, "");
 }
@@ -64,6 +70,48 @@ export function fileChangeForPath(
 		(change) => fileBasename(visibleWorkspacePath(change.path)) === base,
 	);
 	return matches.length === 1 ? matches[0] : undefined;
+}
+
+export function workspacePathForMention(
+	mentionedPath: string,
+	paths: readonly string[],
+	changes: readonly FileChangeEntry[] = [],
+): string {
+	const mentioned = visibleWorkspacePath(pathWithoutLocation(mentionedPath));
+	return (
+		matchingWorkspacePath(mentioned, paths) ??
+		matchingWorkspacePath(
+			mentioned,
+			changes.map((change) => change.path),
+		) ??
+		mentioned
+	);
+}
+
+function matchingWorkspacePath(
+	mentioned: string,
+	paths: readonly string[],
+): string | undefined {
+	const available = [...new Set(paths.map(visibleWorkspacePath))];
+	const exact = available.find((path) => path === mentioned);
+	if (exact) return exact;
+	const suffixMatches = available.filter((path) =>
+		mentioned.endsWith(`/${path}`),
+	);
+	if (suffixMatches.length === 1) return suffixMatches[0];
+	const basename = fileBasename(mentioned);
+	const basenameMatches = available.filter(
+		(path) => fileBasename(path) === basename,
+	);
+	return basenameMatches.length === 1 ? basenameMatches[0] : undefined;
+}
+
+function pathWithoutLocation(path: string): string {
+	return path
+		.trim()
+		.replace(/^<|>$/g, "")
+		.replace(/#L\d+(?:-L\d+)?$/, "")
+		.replace(/:\d+(?::\d+)?$/, "");
 }
 
 export function firstWorkspaceFilePath(
@@ -127,7 +175,7 @@ function finalizeDraft(
 		.map(([name, change]) => ({
 			kind: "file" as const,
 			name,
-			path: change ? visibleWorkspacePath(change.path) : path ? `${path}/${name}` : name,
+			path: path ? `${path}/${name}` : name,
 			...(change ? { change } : {}),
 		}));
 	return [...dirs, ...files];

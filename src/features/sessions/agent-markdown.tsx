@@ -1,122 +1,105 @@
-import type { AgentInline } from "#/domain/agent-markdown";
-import { parseAgentMarkdown } from "#/domain/agent-markdown";
-import { fileBasename } from "#/domain/file-kind";
+import { useMemo } from "react";
+import {
+	CodeBlock,
+	type Components,
+	defaultRehypePlugins,
+	defaultUrlTransform,
+	Streamdown,
+} from "streamdown";
 import type { FileChangeEntry } from "#/domain/session-item";
-import { sourceLanguageFromFence } from "#/domain/source-language";
+import { workspaceFileMention } from "#/domain/workspace-file-mention";
+import { codeHighlighter } from "./code-highlighter";
 import { FileMentionButton, mentionedFileChange } from "./file-mention";
-import { HighlightedCode } from "./highlighted-code";
+
+// Workspace-relative links use our IDE handler; keep sanitization and apply
+// the link/image policy below instead of harden's web-only URL resolution.
+const markdownPlugins = [
+	defaultRehypePlugins.raw,
+	defaultRehypePlugins.sanitize,
+];
 
 export function AgentMarkdown({
 	text,
+	streaming = false,
 	fileChanges = [],
 	onOpenFile,
 }: {
 	text: string;
+	streaming?: boolean;
 	fileChanges?: readonly FileChangeEntry[];
 	onOpenFile?: (path: string) => void;
 }) {
-	const blocks = parseAgentMarkdown(text);
-	if (blocks.length === 0) return <p>{text}</p>;
-	return (
-		<div className="session-markdown">
-			{numbered(blocks, (block) =>
-				block.kind === "code"
-					? block.text
-					: block.kind === "list"
-						? block.items
-								.flat()
-								.map((part) => part.text)
-								.join("")
-						: block.inlines.map((part) => part.text).join(""),
-			).map(({ item: block, key }) => {
-				if (block.kind === "code") {
-					return (
-						<pre key={key}>
-							<code>
-								<HighlightedCode
-									text={block.text}
-									language={sourceLanguageFromFence(block.language)}
-								/>
-							</code>
-						</pre>
-					);
-				}
-				if (block.kind === "list") {
-					const ListTag = block.ordered ? "ol" : "ul";
-					return (
-						<ListTag key={key}>
-							{numbered(block.items, (item) =>
-								item.map((part) => part.text).join(""),
-							).map(({ item, key: itemKey }) => (
-								<li key={itemKey}>
-									<AgentInlines
-										inlines={item}
-										fileChanges={fileChanges}
-										onOpenFile={onOpenFile}
-									/>
-								</li>
-							))}
-						</ListTag>
-					);
+	const components = useMemo<Components>(() => {
+		function fileLink(path: string, label: string) {
+			const change = mentionedFileChange(path, fileChanges);
+			return (
+				<FileMentionButton
+					path={change?.path ?? path}
+					name={label}
+					onOpenFile={onOpenFile}
+				/>
+			);
+		}
+		return {
+			a: ({ href, children }) => {
+				const file = workspaceFileMention(href ?? "");
+				if (file)
+					return fileLink(file, typeof children === "string" ? children : file);
+				const safe = safeExternalLink(href);
+				return safe ? (
+					<a href={safe} target="_blank" rel="noopener noreferrer">
+						{children}
+					</a>
+				) : (
+					<span>{children}</span>
+				);
+			},
+			code: (props) => {
+				const { children, className } = props;
+				const text = String(children ?? "");
+				if (!("data-block" in props)) {
+					const file = workspaceFileMention(text);
+					return file ? fileLink(file, text) : <code>{children}</code>;
 				}
 				return (
-					<p key={key}>
-						<AgentInlines
-							inlines={block.inlines}
-							fileChanges={fileChanges}
-							onOpenFile={onOpenFile}
-						/>
-					</p>
+					<CodeBlock
+						code={text}
+						lineNumbers={false}
+						language={className?.replace(/^language-/, "") ?? "text"}
+					/>
 				);
-			})}
-		</div>
-	);
-}
-
-function AgentInlines({
-	inlines,
-	fileChanges,
-	onOpenFile,
-}: {
-	inlines: readonly AgentInline[];
-	fileChanges: readonly FileChangeEntry[];
-	onOpenFile?: (path: string) => void;
-}) {
+			},
+			img: ({ src, alt }) => {
+				const safe = safeExternalLink(
+					typeof src === "string" ? src : undefined,
+				);
+				return safe ? (
+					<a href={safe} target="_blank" rel="noopener noreferrer">
+						{alt || "View image"}
+					</a>
+				) : (
+					<span>{alt || "Image"}</span>
+				);
+			},
+		};
+	}, [fileChanges, onOpenFile]);
 	return (
-		<>
-			{numbered(inlines, (part) => `${part.kind}:${part.text}`).map(
-				({ item: part, key }) => {
-					if (part.kind === "file") {
-						const mentioned = mentionedFileChange(part.path, fileChanges);
-						return (
-							<FileMentionButton
-								key={key}
-								path={mentioned?.path ?? part.path}
-								name={part.text || fileBasename(part.path)}
-								change={mentioned?.change}
-								onOpenFile={onOpenFile}
-							/>
-						);
-					}
-					if (part.kind === "code") return <code key={key}>{part.text}</code>;
-					if (part.kind === "strong")
-						return <strong key={key}>{part.text}</strong>;
-					return <span key={key}>{part.text}</span>;
-				},
-			)}
-		</>
+		<Streamdown
+			className="session-markdown"
+			mode={streaming ? "streaming" : "static"}
+			isAnimating={streaming}
+			components={components}
+			plugins={{ code: codeHighlighter }}
+			rehypePlugins={markdownPlugins}
+			controls={false}
+			skipHtml
+			urlTransform={defaultUrlTransform}
+		>
+			{text}
+		</Streamdown>
 	);
 }
 
-function numbered<T>(
-	items: readonly T[],
-	identity: (item: T) => string,
-): { item: T; key: string }[] {
-	const seen = new Map<string, number>();
-	return items.map((item) => {
-		const base = identity(item);
-		const count = (seen.get(base) ?? 0) + 1;
-		seen.set(base, count);
-		return { item, key: `${base}:${count}` };
-	});
+function safeExternalLink(href: string | undefined) {
+	return href && /^(https?:\/\/|mailto:|#)/i.test(href) ? href : null;
 }

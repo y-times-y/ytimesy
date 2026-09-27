@@ -35,6 +35,9 @@ beforeAll(async () => {
 		"20260915083000_product_setting.sql",
 		"20260915103000_agent_session_listed_model.sql",
 		"20260915110000_agent_session_turn_status.sql",
+		"20260920010000_agent_account_per_provider.sql",
+		"20260921230000_agent_task_lifecycle.sql",
+		"20260921231000_agent_task_events.sql",
 		"20260919161500_workspace_snapshot_source.sql",
 	])
 		await db.exec(await readFile(`supabase/migrations/${file}`, "utf8"));
@@ -92,9 +95,10 @@ it("destroys session and template VMs, then drops the project row", async () => 
 	);
 	expect(destroyed.sort()).toEqual(["vm-agent", "vm-side", "vm-template"]);
 	expect(await listProjects("alice")).toEqual([]);
-	const sessions = await db.query("select id from agent_session where project_id=$1", [
-		project.id,
-	]);
+	const sessions = await db.query(
+		"select id from agent_session where project_id=$1",
+		[project.id],
+	);
 	expect(sessions.rows).toEqual([]);
 	const workspace = await db.query("select id from workspace where id=$1", [
 		workspaceId,

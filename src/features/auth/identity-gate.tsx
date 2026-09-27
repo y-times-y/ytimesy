@@ -2,13 +2,19 @@ import { Auth } from "#/components/auth/auth";
 import { authClient } from "./client";
 import { OnboardingShell } from "./onboarding-shell";
 
-export function IdentityGate({ children }: { children: React.ReactNode }) {
+export function IdentityGate({
+	children,
+	initialSignedIn = false,
+}: {
+	children: React.ReactNode;
+	initialSignedIn?: boolean;
+}) {
 	const session = authClient.useSession();
 	if (session.isPending)
-		return (
-			<OnboardingShell>
-				<p role="status">Loading…</p>
-			</OnboardingShell>
+		return initialSignedIn ? (
+			children
+		) : (
+			<OnboardingShell>{null}</OnboardingShell>
 		);
 	if (session.data) return children;
 	return (

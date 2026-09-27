@@ -16,6 +16,7 @@ import { Route as ApiProjectsRouteImport } from './routes/api/projects'
 import { Route as ApiWorkspacesRouteImport } from './routes/api/workspaces'
 import { Route as AuthPathRouteImport } from './routes/auth/$path'
 import { Route as ApiAgentAccountRouteImport } from './routes/api/agent/account'
+import { Route as ApiAgentProgressRouteImport } from './routes/api/agent/progress'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiGithubBranchesRouteImport } from './routes/api/github/branches'
 import { Route as ApiGithubCallbackRouteImport } from './routes/api/github/callback'
@@ -60,6 +61,11 @@ const AuthPathRoute = AuthPathRouteImport.update({
 const ApiAgentAccountRoute = ApiAgentAccountRouteImport.update({
   id: '/api/agent/account',
   path: '/api/agent/account',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAgentProgressRoute = ApiAgentProgressRouteImport.update({
+  id: '/api/agent/progress',
+  path: '/api/agent/progress',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
@@ -121,6 +127,7 @@ export interface FileRoutesByFullPath {
   '/api/workspaces': typeof ApiWorkspacesRouteWithChildren
   '/auth/$path': typeof AuthPathRoute
   '/api/agent/account': typeof ApiAgentAccountRoute
+  '/api/agent/progress': typeof ApiAgentProgressRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/github/branches': typeof ApiGithubBranchesRoute
   '/api/github/callback': typeof ApiGithubCallbackRoute
@@ -140,6 +147,7 @@ export interface FileRoutesByTo {
   '/api/workspaces': typeof ApiWorkspacesRouteWithChildren
   '/auth/$path': typeof AuthPathRoute
   '/api/agent/account': typeof ApiAgentAccountRoute
+  '/api/agent/progress': typeof ApiAgentProgressRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/github/branches': typeof ApiGithubBranchesRoute
   '/api/github/callback': typeof ApiGithubCallbackRoute
@@ -160,6 +168,7 @@ export interface FileRoutesById {
   '/api/workspaces': typeof ApiWorkspacesRouteWithChildren
   '/auth/$path': typeof AuthPathRoute
   '/api/agent/account': typeof ApiAgentAccountRoute
+  '/api/agent/progress': typeof ApiAgentProgressRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/github/branches': typeof ApiGithubBranchesRoute
   '/api/github/callback': typeof ApiGithubCallbackRoute
@@ -181,6 +190,7 @@ export interface FileRouteTypes {
     | '/api/workspaces'
     | '/auth/$path'
     | '/api/agent/account'
+    | '/api/agent/progress'
     | '/api/auth/$'
     | '/api/github/branches'
     | '/api/github/callback'
@@ -200,6 +210,7 @@ export interface FileRouteTypes {
     | '/api/workspaces'
     | '/auth/$path'
     | '/api/agent/account'
+    | '/api/agent/progress'
     | '/api/auth/$'
     | '/api/github/branches'
     | '/api/github/callback'
@@ -219,6 +230,7 @@ export interface FileRouteTypes {
     | '/api/workspaces'
     | '/auth/$path'
     | '/api/agent/account'
+    | '/api/agent/progress'
     | '/api/auth/$'
     | '/api/github/branches'
     | '/api/github/callback'
@@ -239,6 +251,7 @@ export interface RootRouteChildren {
   ApiWorkspacesRoute: typeof ApiWorkspacesRouteWithChildren
   AuthPathRoute: typeof AuthPathRoute
   ApiAgentAccountRoute: typeof ApiAgentAccountRoute
+  ApiAgentProgressRoute: typeof ApiAgentProgressRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiGithubBranchesRoute: typeof ApiGithubBranchesRoute
   ApiGithubCallbackRoute: typeof ApiGithubCallbackRoute
@@ -298,6 +311,13 @@ declare module '@tanstack/react-router' {
       path: '/api/agent/account'
       fullPath: '/api/agent/account'
       preLoaderRoute: typeof ApiAgentAccountRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/agent/progress': {
+      id: '/api/agent/progress'
+      path: '/api/agent/progress'
+      fullPath: '/api/agent/progress'
+      preLoaderRoute: typeof ApiAgentProgressRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/auth/$': {
@@ -405,6 +425,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiWorkspacesRoute: ApiWorkspacesRouteWithChildren,
   AuthPathRoute: AuthPathRoute,
   ApiAgentAccountRoute: ApiAgentAccountRoute,
+  ApiAgentProgressRoute: ApiAgentProgressRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiGithubBranchesRoute: ApiGithubBranchesRoute,
   ApiGithubCallbackRoute: ApiGithubCallbackRoute,

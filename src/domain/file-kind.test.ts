@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-	fileKindBadge,
-	fileKindFromPath,
-	vscodeFileIconName,
-} from "./file-kind";
+import { fileKindBadge, fileKindFromPath, fileTypeIconName } from "./file-kind";
 
 describe("fileKindFromPath", () => {
 	it("maps common source extensions to distinct kinds", () => {
@@ -27,19 +23,13 @@ describe("fileKindFromPath", () => {
 		expect(fileKindBadge("unknown")).toBe("");
 	});
 
-	it("uses vscode-icons names for real file glyphs", () => {
-		expect(vscodeFileIconName("src/app.ts")).toBe(
-			"vscode-icons:file-type-typescript",
-		);
-		expect(vscodeFileIconName("src/widget.tsx")).toBe(
-			"vscode-icons:file-type-reactts",
-		);
-		expect(vscodeFileIconName("package.json")).toBe("vscode-icons:file-type-npm");
-		expect(vscodeFileIconName("src/app.test.ts")).toBe(
-			"vscode-icons:file-type-testts",
-		);
-		expect(vscodeFileIconName("notes")).toBe("vscode-icons:default-file");
-		expect(vscodeFileIconName("mark.svg")).toBe("catppuccin:svg");
-		expect(vscodeFileIconName("photo.png")).toBe("catppuccin:image");
+	it("uses the built-in Seti file mappings", () => {
+		expect(fileTypeIconName("src/app.ts")).toBe("_typescript");
+		expect(fileTypeIconName("src/widget.tsx")).toBe("_react");
+		expect(fileTypeIconName("package.json")).toBe("_json");
+		expect(fileTypeIconName("src/app.test.ts")).toBe("_typescript_1");
+		expect(fileTypeIconName("notes")).toBe("_default");
+		expect(fileTypeIconName("mark.svg")).toBe("_svg");
+		expect(fileTypeIconName("photo.png")).toBe("_image");
 	});
 });

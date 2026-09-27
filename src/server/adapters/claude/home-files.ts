@@ -2,6 +2,7 @@ import { Effect } from "effect";
 import { parseClaudeHomePath } from "#/domain/claude-auth";
 import {
 	CLAUDE_HOME_FILE_NAMES,
+	type ClaudeHomeFileName,
 	type ClaudeHomeFiles,
 	claudeHomeFilesAreUsable,
 	parseClaudeHomeDump,
@@ -61,16 +62,23 @@ export function restoreClaudeHome(
 	homePath: string,
 	input: ClaudeHomeRestore,
 ): Effect.Effect<boolean> {
-	const dest = parseClaudeHomePath(`CLAUDE_HOME=${homePath}`) ?? homePath.trim();
+	const dest =
+		parseClaudeHomePath(`CLAUDE_HOME=${homePath}`) ?? homePath.trim();
 	if (!dest) return Effect.succeed(false);
 	return Effect.gen(function* () {
 		const stored = yield* Effect.tryPromise(() =>
 			loadClaudeHomeForUser(input.userId),
 		).pipe(Effect.catchAll(() => Effect.succeed(null)));
-		if (stored && (yield* writeClaudeHome(machines, workspaceId, dest, stored))) {
+		if (
+			stored &&
+			(yield* writeClaudeHome(machines, workspaceId, dest, stored))
+		) {
 			return true;
 		}
-		for (const sibling of input.siblingProviderRefs.slice(0, MAX_SIBLING_READS)) {
+		for (const sibling of input.siblingProviderRefs.slice(
+			0,
+			MAX_SIBLING_READS,
+		)) {
 			if (sibling === String(workspaceId)) continue;
 			const copied = yield* readSiblingClaudeHome(machines, sibling);
 			if (!copied) continue;
@@ -90,7 +98,7 @@ function readSiblingClaudeHome(
 	providerRef: string,
 ): Effect.Effect<ClaudeHomeFiles | null> {
 	return Effect.gen(function* () {
-		const files: Partial<ClaudeHomeFiles["files"]> = {};
+		const files: Partial<Record<ClaudeHomeFileName, string>> = {};
 		for (const home of SIBLING_HOMES) {
 			for (const name of CLAUDE_HOME_FILE_NAMES) {
 				if (files[name]) continue;

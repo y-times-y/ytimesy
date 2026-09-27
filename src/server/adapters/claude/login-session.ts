@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { Duration, Effect } from "effect";
+import { AGENT_ORCHESTRATION_INSTRUCTIONS } from "#/domain/agent-orchestration";
 import {
 	claudeBackgroundTurnResult,
 	claudeCliIsSignedIn,
@@ -7,6 +8,7 @@ import {
 	parseAnthropicLoginUrl,
 	parseClaudeAuthPasteCode,
 	parseClaudeBinaryPath,
+	parseClaudeCapabilitiesFromHelp,
 	parseClaudeHomePath,
 	parseClaudeModelFlagsFromHelp,
 } from "#/domain/claude-auth";
@@ -15,11 +17,11 @@ import {
 	claudeSettingsShowingThoughts,
 } from "#/domain/claude-home";
 import { claudeTurnItemsFromStream } from "#/domain/claude-stream";
-import {
-	type ClaudeHomeRestore,
-	restoreClaudeHome,
-} from "#/server/adapters/claude/home-files";
 import { failureMessage } from "#/domain/failure-message";
+import {
+	ensurePinnedClaudeCommand,
+	guestCliDisableUpdateExports,
+} from "#/domain/guest-cli-pin";
 import { SessionItemId, type WorkspaceId } from "#/domain/ids";
 import {
 	type ListedModel,
@@ -27,18 +29,21 @@ import {
 	listedModelSupportsFastMode,
 	listedReasoningFromRow,
 } from "#/domain/listed-model";
-import {
-	guestCliDisableUpdateExports,
-	pinnedClaudeInstallCommand,
-} from "#/domain/guest-cli-pin";
 import { posixShellQuoted } from "#/domain/posix-command";
-import { ensureGuestCliPin } from "#/server/adapters/guest-cli-pin";
 import type {
 	SessionItem,
 	SessionTurnStatus,
 	ToolActivityStatus,
 } from "#/domain/session-item";
+import {
+	type ClaudeHomeRestore,
+	restoreClaudeHome,
+} from "#/server/adapters/claude/home-files";
+import { REMOVE_CODEX_CREDENTIAL_FILES } from "#/server/adapters/codex/credential-files";
+import { DEVELOPER_INSTRUCTIONS_PATH } from "#/server/adapters/freestyle/clone-project";
+import { ensureGuestCliPin } from "#/server/adapters/guest-cli-pin";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
+import { embedTaskToolDefinitions } from "../task-tool-source";
 
 const LOGIN_DAEMON_SOURCE = readFileSync(
 	new URL("./login-daemon.py", import.meta.url),
@@ -47,6 +52,9 @@ const LOGIN_DAEMON_SOURCE = readFileSync(
 const TURN_PTY_SOURCE = readFileSync(
 	new URL("./turn-pty.py", import.meta.url),
 	"utf8",
+);
+const TASK_TOOL_SERVER_SOURCE = embedTaskToolDefinitions(
+	readFileSync(new URL("./task-tool-server.py", import.meta.url), "utf8"),
 );
 
 const STATUS_PATH = "/tmp/ytimesy-claude-auth-status.json";
@@ -59,15 +67,23 @@ const TURN_ERR_PATH = "/tmp/ytimesy-claude-turn.err";
 const TURN_EXIT_PATH = "/tmp/ytimesy-claude-turn.exit";
 const TURN_PID_PATH = "/tmp/ytimesy-claude-turn.pid";
 const TURN_PTY_PATH = "/tmp/ytimesy-claude-turn-pty.py";
+const TASK_TOOL_SERVER_PATH = "/tmp/ytimesy-claude-task-tools.py";
+const TASK_TOOL_CONFIG_PATH = "/tmp/ytimesy-claude-task-tools.json";
+const TASK_TOOL_CONFIG = `${JSON.stringify({
+	mcpServers: {
+		ytimesy_tasks: {
+			type: "stdio",
+			command: "python3",
+			args: [TASK_TOOL_SERVER_PATH],
+		},
+	},
+})}\n`;
 
 const CLAUDE_INSTALL_SCRIPT = `set -eu
 ${guestCliDisableUpdateExports()}
 export HOME="\${HOME:-/root}"
-export PATH="$HOME/.local/bin:$HOME/.claude/bin:/usr/local/bin:$PATH"
-if ! command -v claude >/dev/null 2>&1; then
-  ${pinnedClaudeInstallCommand()}
-fi
-export PATH="$HOME/.local/bin:$HOME/.claude/bin:/usr/local/bin:$PATH"
+export PATH="$HOME/.ytimesy-cli/node_modules/.bin:$HOME/.local/bin:$HOME/.claude/bin:/usr/local/bin:$PATH"
+${ensurePinnedClaudeCommand()}
 if command -v claude >/dev/null 2>&1; then
   CLAUDE_BIN="$(command -v claude)"
 else
@@ -385,11 +401,7 @@ export function refreshClaudeAuthStatus(
 			published.stage === "authenticated" &&
 			published.turnStatus === "running"
 		) {
-			return yield* syncClaudeBackgroundTurn(
-				machines,
-				workspaceId,
-				published,
-			);
+			return yield* syncClaudeBackgroundTurn(machines, workspaceId, published);
 		}
 		if (
 			published.stage === "authenticated" &&
@@ -605,10 +617,18 @@ function listClaudeModels(
 		),
 	).pipe(
 		Effect.map((result) => {
-			const fromHelp = parseClaudeModelFlagsFromHelp(
-				`${result.stdout}\n${result.stderr}`,
-			);
-			if (fromHelp.length > 0) return fromHelp;
+			const help = `${result.stdout}\n${result.stderr}`;
+			const fromHelp = parseClaudeModelFlagsFromHelp(help);
+			const capabilities = parseClaudeCapabilitiesFromHelp(help);
+			if (fromHelp.length > 0) {
+				return fromHelp.map((model) => ({
+					...model,
+					...(capabilities.reasoning
+						? { reasoning: capabilities.reasoning }
+						: {}),
+					...(capabilities.supportsFastMode ? { supportsFastMode: true } : {}),
+				}));
+			}
 			return [];
 		}),
 		Effect.catchAll(() => Effect.succeed([] as const)),
@@ -767,6 +787,9 @@ export function submitClaudeTask(
 		readonly text: string;
 		readonly modelId: string;
 		readonly promptText?: string;
+		readonly reasoningEffort?: string;
+		readonly fast?: boolean;
+		readonly readOnly?: boolean;
 	},
 ): Effect.Effect<ClaudeAuthStatus> {
 	return Effect.gen(function* () {
@@ -793,19 +816,54 @@ export function submitClaudeTask(
 			turnStatus: "running",
 			items: [...current.items, userItem],
 		};
+		yield* Effect.tryPromise(() =>
+			machines.exec(
+				workspaceId,
+				guestBash(
+					`rm -f ${TURN_OUT_PATH} ${TURN_ERR_PATH} ${TURN_EXIT_PATH} ${TURN_PID_PATH}`,
+				),
+				10_000,
+			),
+		);
 		yield* persistClaudeStatus(machines, workspaceId, running);
 		yield* Effect.tryPromise(() =>
 			machines.writeTextFile(workspaceId, TURN_PTY_PATH, TURN_PTY_SOURCE),
 		);
+		yield* Effect.tryPromise(() =>
+			machines.writeTextFile(
+				workspaceId,
+				TASK_TOOL_SERVER_PATH,
+				TASK_TOOL_SERVER_SOURCE,
+			),
+		);
+		yield* Effect.tryPromise(() =>
+			machines.writeTextFile(
+				workspaceId,
+				TASK_TOOL_CONFIG_PATH,
+				TASK_TOOL_CONFIG,
+			),
+		);
 		const keyPrefix = `if [ -f ${KEY_ENV_PATH} ]; then . ${KEY_ENV_PATH}; fi\n`;
 		const prompt = input.promptText ?? input.text;
+		const reasoningFlag = input.reasoningEffort
+			? ` --effort ${posixShellQuoted(input.reasoningEffort)}`
+			: "";
+		const fastFlag = input.fast ? " --fast" : "";
+		const permissionFlag = input.readOnly
+			? " --permission-mode plan"
+			: " --dangerously-skip-permissions";
+		const systemPrompt = yield* Effect.tryPromise(() =>
+			machines.readTextFile(workspaceId, DEVELOPER_INSTRUCTIONS_PATH),
+		).pipe(
+			Effect.catchAll(() => Effect.succeed(AGENT_ORCHESTRATION_INSTRUCTIONS)),
+		);
 		const start = yield* Effect.tryPromise(() =>
 			machines.exec(
 				workspaceId,
 				guestBash(
-					`${keyPrefix}rm -f ${TURN_OUT_PATH} ${TURN_ERR_PATH} ${TURN_EXIT_PATH} ${TURN_PID_PATH}
+					`${keyPrefix}
 (
-  python3 ${TURN_PTY_PATH} ${TURN_OUT_PATH} ${TURN_ERR_PATH} -- ${posixShellQuoted(claudeBin)} -p --output-format stream-json --verbose --include-partial-messages --dangerously-skip-permissions --model ${posixShellQuoted(input.modelId)} ${posixShellQuoted(prompt)}
+  python3 ${TURN_PTY_PATH} ${TURN_OUT_PATH} ${TURN_ERR_PATH} -- ${posixShellQuoted(claudeBin)} -p --output-format stream-json --verbose --include-partial-messages${permissionFlag} --strict-mcp-config --mcp-config ${TASK_TOOL_CONFIG_PATH} --append-system-prompt ${posixShellQuoted(systemPrompt?.trim() || AGENT_ORCHESTRATION_INSTRUCTIONS)} --model ${posixShellQuoted(input.modelId)}${reasoningFlag}${fastFlag} ${posixShellQuoted(prompt)}
   echo $? >${TURN_EXIT_PATH}
 ) >/dev/null 2>&1 &
 echo $! >${TURN_PID_PATH}`,
@@ -942,6 +1000,19 @@ export function snapshotAuthenticatedClaudeWorkspace(
 			return {
 				ok: false as const,
 				message: "Refusing to snapshot without Anthropic sign-in",
+			};
+		}
+		const scrubbed = yield* Effect.tryPromise(() =>
+			machines.exec(
+				workspaceId,
+				guestBash(REMOVE_CODEX_CREDENTIAL_FILES),
+				15_000,
+			),
+		);
+		if (scrubbed.exitCode !== 0) {
+			return {
+				ok: false as const,
+				message: "Could not isolate provider credentials before snapshot.",
 			};
 		}
 		const snapshot = yield* Effect.tryPromise(() =>

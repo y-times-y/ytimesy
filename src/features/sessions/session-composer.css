@@ -202,7 +202,6 @@ a.harness-login-action:hover {
 	align-items: center;
 	min-width: 0;
 }
-.model-select,
 .harness-select,
 .reasoning-select {
 	flex: 0 1 auto;
@@ -431,7 +430,9 @@ a.harness-login-action:hover {
 	opacity: 0.45;
 }
 .harness-picker {
-	width: 196px;
+	width: min(280px, calc(100vw - 24px));
+	max-height: min(420px, 70dvh);
+	overflow-y: auto;
 	padding: 4px;
 	border: 1px solid #2e2e2e;
 	border-radius: 10px;
@@ -476,6 +477,19 @@ a.harness-login-action:hover {
 	font-weight: 500;
 	letter-spacing: -0.01em;
 	color: #f0f0f0;
+}
+.model-choice {
+	grid-template-columns: minmax(0, 1fr) 14px;
+	padding-left: 32px;
+}
+.model-choice:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+.model-picker-status {
+	margin: 4px 8px 10px 32px;
+	font-size: 12px;
+	color: #999;
 }
 .harness-choice-check {
 	color: #d4d4d4;
@@ -621,6 +635,13 @@ a.harness-login-action:hover {
 	margin: 0;
 	padding: 0 0 0 18px;
 }
+.session-markdown ol {
+	list-style: decimal outside;
+	padding-inline-start: 2.5em;
+}
+.session-markdown ul {
+	list-style: disc outside;
+}
 .session-markdown li {
 	font-size: 13px;
 	line-height: 20px;
@@ -628,6 +649,56 @@ a.harness-login-action:hover {
 }
 .session-markdown strong {
 	font-weight: 550;
+}
+.session-markdown em {
+	font-style: italic;
+	font-synthesis: style;
+}
+.session-markdown :is(h1, h2, h3, h4, h5, h6) {
+	margin: 8px 0 0;
+	font-weight: 600;
+	line-height: 1.4;
+}
+.session-markdown h1 {
+	font-size: 20px;
+}
+.session-markdown h2 {
+	font-size: 18px;
+}
+.session-markdown h3 {
+	font-size: 16px;
+}
+.session-markdown :is(h4, h5, h6) {
+	font-size: 14px;
+}
+.session-markdown a {
+	color: #9ac2ff;
+	text-decoration: underline;
+	overflow-wrap: anywhere;
+}
+.session-markdown blockquote {
+	border-inline-start: 2px solid #555;
+	padding-inline-start: 12px;
+	color: #aaa;
+}
+.session-markdown table {
+	border-collapse: collapse;
+	width: 100%;
+	font-size: 13px;
+}
+.session-markdown :is(th, td) {
+	border: 1px solid #393939;
+	padding: 6px 10px;
+	text-align: start;
+}
+.session-markdown th {
+	font-weight: 600;
+}
+.session-markdown .contains-task-list {
+	list-style: none;
+}
+.session-markdown .task-list-item input {
+	margin-inline-end: 6px;
 }
 .session-markdown code {
 	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -640,11 +711,11 @@ a.harness-login-action:hover {
 .session-markdown pre {
 	margin: 0;
 	width: 100%;
-	padding: 8px 12px;
+	padding: 0;
 	overflow: auto;
-	border: 1px solid rgba(255, 255, 255, 0.08);
-	border-radius: 8px;
-	background: #212121;
+	border: 0;
+	border-radius: 0;
+	background: transparent;
 	font-size: 12px;
 	line-height: 18px;
 }
@@ -652,8 +723,67 @@ a.harness-login-action:hover {
 	padding: 0;
 	background: transparent;
 }
+.session-markdown [data-streamdown="code-block"] {
+	margin: 8px 0;
+	padding: 0;
+	gap: 0;
+	overflow: hidden;
+	background: #121212;
+}
+.session-markdown [data-streamdown="code-block-header"] {
+	padding: 6px 12px;
+}
+.session-markdown [data-streamdown="code-block-body"] {
+	padding: 8px 12px;
+	border: 0;
+	background: transparent;
+}
 .session-activity {
 	color: rgba(255, 255, 255, 0.5);
+}
+.session-work {
+	margin: 6px 0;
+	min-width: 0;
+}
+.session-work > summary {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-height: 28px;
+	list-style: none;
+	cursor: pointer;
+	color: rgba(255, 255, 255, 0.48);
+	font-size: 13px;
+}
+.session-work > summary::-webkit-details-marker {
+	display: none;
+}
+.session-work-items {
+	margin: 6px 0 10px 10px;
+	padding-left: 12px;
+	border-left: 1px solid rgba(255, 255, 255, 0.07);
+	min-width: 0;
+}
+.session-work summary:focus-visible {
+	outline: 1px solid rgba(255, 255, 255, 0.4);
+	outline-offset: 2px;
+	border-radius: 3px;
+}
+.session-command-detail {
+	margin: 6px 0 10px;
+	padding: 10px 12px;
+	border: 1px solid rgba(255, 255, 255, 0.08);
+	border-radius: 8px;
+	background: rgba(255, 255, 255, 0.015);
+}
+.session-command-source {
+	margin: 0;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: 12px;
+	line-height: 1.6;
+	color: rgba(255, 255, 255, 0.72);
 }
 .session-activity summary,
 .session-activity[data-kind] > p {
@@ -837,13 +967,13 @@ details[open] > summary .session-activity-chevron {
 .session-activity[data-kind="commandExecution"] {
 	overflow: hidden;
 	margin: 4px 0;
-	border: 1px solid rgba(255, 255, 255, 0.08);
-	border-radius: 10px;
+	border: 0;
+	border-radius: 0;
 	background: transparent;
 }
 .session-activity[data-kind="commandExecution"] summary {
-	padding: 6px 10px;
-	min-height: 32px;
+	padding: 2px 0;
+	min-height: 26px;
 }
 .session-activity[data-kind="mcpToolCall"],
 .session-activity[data-kind="dynamicToolCall"]:not([data-nested]),
@@ -871,18 +1001,21 @@ details[open] > summary .session-activity-chevron {
 	white-space: pre-wrap;
 }
 .session-output {
-	margin: 6px 0 0 24px;
-	max-height: 160px;
+	margin: 8px 0;
+	max-height: 220px;
 	overflow: auto;
-	padding: 8px 10px;
-	border: 1px solid #242424;
-	border-radius: 8px;
-	background: #101010;
+	padding: 0;
+	border: 0;
+	background: transparent;
 	color: #c6c6c6;
 	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 	font-size: 12px;
 	line-height: 1.5;
 	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.session-command-detail .session-activity-meta {
+	padding: 6px 0 0;
 }
 .session-activity-meta {
 	margin: 0;
@@ -1087,6 +1220,175 @@ details[open] > summary .session-activity-chevron {
 	opacity: 0.35;
 	cursor: not-allowed;
 }
+.task-panel {
+	display: grid;
+	grid-template-rows: auto minmax(0, 1fr) auto;
+	height: 100%;
+	min-height: 0;
+	background: #111;
+}
+.task-panel-header,
+.task-draft {
+	border-bottom: 1px solid #292929;
+	padding: 12px 14px;
+}
+.task-panel-header,
+.task-panel-header > div,
+.task-row,
+.task-row-copy > div,
+.task-row-actions,
+.task-draft > div {
+	display: flex;
+	align-items: center;
+}
+.task-panel-header,
+.task-draft > div {
+	justify-content: space-between;
+}
+.task-panel-header > div,
+.task-row-copy > div {
+	gap: 8px;
+}
+.task-count,
+.task-label,
+.task-row-copy small {
+	color: #858585;
+}
+.task-panel button {
+	border: 0;
+	background: transparent;
+	color: #bdbdbd;
+	cursor: pointer;
+}
+.task-panel-header button,
+.task-draft > div button:last-child {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	border: 1px solid #363636;
+	border-radius: 6px;
+	padding: 6px 9px;
+}
+.task-list {
+	overflow: auto;
+	padding: 8px;
+}
+.task-empty {
+	margin: 0;
+	padding: 20px 12px;
+	color: #858585;
+	font-size: 13px;
+	line-height: 1.5;
+}
+.task-row {
+	gap: 9px;
+	min-height: 52px;
+	margin-left: calc(var(--task-depth) * 18px);
+	padding: 8px;
+	border-radius: 6px;
+}
+.task-row:hover {
+	background: #181818;
+}
+.task-status {
+	display: grid;
+	place-items: center;
+	color: #6f6f6f;
+}
+.task-status[data-status="done"] {
+	color: #a3a3a3;
+}
+.task-status[data-status="working"] {
+	color: #e5e5e5;
+}
+.task-row-copy {
+	min-width: 0;
+	flex: 1;
+}
+.task-row-copy strong {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 13px;
+	font-weight: 500;
+}
+.task-row-copy small {
+	display: block;
+	margin-top: 3px;
+	font-size: 11px;
+}
+.task-row-actions {
+	gap: 3px;
+	opacity: 0;
+}
+.task-row:hover .task-row-actions,
+.task-row:focus-within .task-row-actions {
+	opacity: 1;
+}
+.task-row-actions button {
+	display: grid;
+	place-items: center;
+	width: 28px;
+	height: 28px;
+	border-radius: 5px;
+}
+.task-row-actions button:hover {
+	background: #282828;
+	color: #fff;
+}
+.task-draft {
+	display: grid;
+	gap: 8px;
+	border-top: 1px solid #292929;
+	border-bottom: 0;
+}
+.task-draft label {
+	font-size: 12px;
+	font-weight: 600;
+}
+.task-title-field,
+.task-prompt-field {
+	width: 100%;
+	box-sizing: border-box;
+	border: 1px solid #343434;
+	border-radius: 6px;
+	background: #171717;
+	color: #ededed;
+	font: inherit;
+	padding: 8px 9px;
+}
+.task-prompt-field {
+	resize: vertical;
+	min-height: 72px;
+}
+.task-draft > .task-draft-options {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	align-items: end;
+	gap: 8px;
+}
+.task-draft-options label {
+	display: grid;
+	gap: 5px;
+	color: #a3a3a3;
+}
+.task-draft-options label:last-child:nth-child(3) {
+	grid-column: 1 / -1;
+}
+.task-draft-options select {
+	min-width: 0;
+	border: 1px solid #343434;
+	border-radius: 6px;
+	background: #171717;
+	color: #ededed;
+	font: inherit;
+	font-size: 12px;
+	padding: 7px 8px;
+}
+.task-draft button:disabled {
+	opacity: 0.45;
+	cursor: default;
+}
 @media (pointer: coarse) {
 	.slash-palette button {
 		min-height: 44px;
@@ -1126,7 +1428,7 @@ details[open] > summary .session-activity-chevron {
 	}
 	.session-toolbar {
 		display: grid;
-		grid-template-columns: repeat(4, minmax(0, 1fr));
+		grid-template-columns: 44px minmax(0, 1fr) minmax(0, 1fr) 44px;
 		gap: 2px;
 		padding: 8px;
 	}
@@ -1134,26 +1436,33 @@ details[open] > summary .session-activity-chevron {
 		display: contents;
 	}
 	.harness-select {
-		grid-area: 1 / 1 / 2 / 5;
+		grid-area: 1 / 2;
 		width: 100%;
 		max-width: none;
+		gap: 4px;
+		padding-inline: 4px;
+		font-size: 12px;
 	}
-	.model-select {
-		grid-area: 2 / 1 / 3 / 3;
-		width: 100%;
+	.harness-select > svg:last-child {
+		display: none;
+	}
+	.session-toolbar .harness-select {
+		grid-column: 2 / 4;
+		justify-self: start;
+		width: auto;
 	}
 	.reasoning-select {
-		grid-area: 2 / 3 / 3 / 5;
+		grid-area: 2 / 2 / 3 / 4;
 		width: 100%;
 	}
 	.attachment-control {
-		grid-area: 3 / 1;
+		grid-area: 1 / 1;
 	}
 	.fast-control {
-		grid-area: 3 / 2;
+		grid-area: 2 / 4;
 	}
 	.session-send {
-		grid-area: 3 / 4;
+		grid-area: 1 / 4;
 		justify-self: end;
 	}
 	.composer-control,
@@ -1220,8 +1529,8 @@ details[open] > summary .session-activity-chevron {
 }
 .session-launcher[data-layout="chat"] .session-composer {
 	display: grid;
-	grid-template-columns: auto minmax(0, 1fr) auto auto auto;
-	grid-template-areas: "attach input harness model send";
+	grid-template-columns: auto minmax(0, 1fr) auto auto;
+	grid-template-areas: "attach input harness send";
 	align-items: center;
 	column-gap: 4px;
 	min-height: 44px;
@@ -1233,8 +1542,8 @@ details[open] > summary .session-activity-chevron {
 		0 1px 4px rgba(0, 0, 0, 0.2);
 }
 .session-launcher[data-layout="chat"] .session-composer:has(.fast-control) {
-	grid-template-columns: auto minmax(0, 1fr) auto auto auto auto;
-	grid-template-areas: "attach input harness model fast send";
+	grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+	grid-template-areas: "attach input harness fast send";
 }
 .session-launcher[data-layout="chat"]
 	.session-composer:has(textarea:focus-visible) {
@@ -1247,15 +1556,15 @@ details[open] > summary .session-activity-chevron {
 }
 .session-launcher[data-layout="chat"] .session-composer:has(.slash-palette) {
 	grid-template-areas:
-		"slash slash slash slash slash"
-		"attach input harness model send";
+		"slash slash slash slash"
+		"attach input harness send";
 	border-radius: 16px;
 }
 .session-launcher[data-layout="chat"]
 	.session-composer:has(.slash-palette):has(.fast-control) {
 	grid-template-areas:
-		"slash slash slash slash slash slash"
-		"attach input harness model fast send";
+		"slash slash slash slash slash"
+		"attach input harness fast send";
 }
 .session-launcher[data-layout="chat"] .composer-input {
 	grid-area: input;
@@ -1271,16 +1580,17 @@ details[open] > summary .session-activity-chevron {
 	grid-area: files;
 	padding: 0 8px 4px;
 }
-.session-launcher[data-layout="chat"] .session-composer:has(.session-attachments) {
+.session-launcher[data-layout="chat"]
+	.session-composer:has(.session-attachments) {
 	grid-template-areas:
-		"attach input harness model send"
-		"files files files files files";
+		"attach input harness send"
+		"files files files files";
 }
 .session-launcher[data-layout="chat"]
 	.session-composer:has(.session-attachments):has(.fast-control) {
 	grid-template-areas:
-		"attach input harness model fast send"
-		"files files files files files files";
+		"attach input harness fast send"
+		"files files files files files";
 }
 .session-launcher[data-layout="chat"] .session-toolbar,
 .session-launcher[data-layout="chat"] .session-controls {
@@ -1291,12 +1601,7 @@ details[open] > summary .session-activity-chevron {
 }
 .session-launcher[data-layout="chat"] .harness-select {
 	grid-area: harness;
-	max-width: 8.5rem;
-}
-.session-launcher[data-layout="chat"] .model-select {
-	grid-area: model;
-	width: auto;
-	max-width: 9.5rem;
+	max-width: 13rem;
 }
 .session-launcher[data-layout="chat"] .reasoning-select {
 	display: none;
@@ -1318,10 +1623,10 @@ details[open] > summary .session-activity-chevron {
 @container composer (max-width: 520px) {
 	.session-launcher[data-layout="chat"] .session-composer,
 	.session-launcher[data-layout="chat"] .session-composer:has(.fast-control) {
-		grid-template-columns: auto auto minmax(0, 1fr) auto;
+		grid-template-columns: auto minmax(0, 1fr) auto;
 		grid-template-areas:
-			"input input input input"
-			"attach harness model send";
+			"input input input"
+			"attach harness send";
 		border-radius: 16px;
 		padding: 8px;
 		min-height: 0;
@@ -1331,29 +1636,25 @@ details[open] > summary .session-activity-chevron {
 	.session-launcher[data-layout="chat"]
 		.session-composer:has(.slash-palette):has(.fast-control) {
 		grid-template-areas:
-			"slash slash slash slash"
-			"input input input input"
-			"attach harness model send";
+			"slash slash slash"
+			"input input input"
+			"attach harness send";
 	}
-	.session-launcher[data-layout="chat"] .session-composer:has(.session-attachments),
+	.session-launcher[data-layout="chat"]
+		.session-composer:has(.session-attachments),
 	.session-launcher[data-layout="chat"]
 		.session-composer:has(.session-attachments):has(.fast-control) {
 		grid-template-areas:
-			"input input input input"
-			"files files files files"
-			"attach harness model send";
+			"input input input"
+			"files files files"
+			"attach harness send";
 	}
 	.session-launcher[data-layout="chat"] .composer-input {
 		width: auto;
 	}
-	.session-launcher[data-layout="chat"] .harness-select,
-	.session-launcher[data-layout="chat"] .model-select {
+	.session-launcher[data-layout="chat"] .harness-select {
 		max-width: none;
 		min-width: 0;
-	}
-	.session-launcher[data-layout="chat"] .model-select {
-		width: 100%;
-		justify-self: stretch;
 	}
 	.session-launcher[data-layout="chat"] .session-send {
 		justify-self: end;

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
 	GUEST_CLI_PIN_ENV_PATH,
+	ensurePinnedCodexCommand,
+	ensurePinnedClaudeCommand,
 	PINNED_CLAUDE_CLI_VERSION,
 	PINNED_CODEX_CLI_VERSION,
 	PINNED_OPENCODE_CLI_VERSION,
@@ -12,9 +14,18 @@ import {
 } from "./guest-cli-pin";
 
 describe("guest CLI pin", () => {
+	it("upgrades older snapshot binaries rather than only checking their presence", () => {
+		expect(ensurePinnedCodexCommand()).toContain(
+			`!= "codex-cli ${PINNED_CODEX_CLI_VERSION}"`,
+		);
+		expect(ensurePinnedClaudeCommand()).toContain(
+			`!= "${PINNED_CLAUDE_CLI_VERSION} (Claude Code)"`,
+		);
+		expect(pinnedClaudeInstallCommand()).toContain("npm install --prefix");
+	});
 	it("pins installers to the versions the adapters parse", () => {
 		expect(pinnedClaudeInstallCommand()).toContain(PINNED_CLAUDE_CLI_VERSION);
-		expect(pinnedClaudeInstallCommand()).toContain("bash -s --");
+		expect(pinnedClaudeInstallCommand()).toContain("@anthropic-ai/claude-code@");
 		expect(pinnedOpenCodeInstallCommand()).toContain(
 			`--version ${PINNED_OPENCODE_CLI_VERSION}`,
 		);

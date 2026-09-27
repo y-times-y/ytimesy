@@ -1,6 +1,6 @@
 export type AgentProviderId = "codex" | "claude" | "opencode";
 
-export const DEFAULT_COMPOSER_HARNESS_ID: AgentProviderId = "opencode";
+export const DEFAULT_COMPOSER_HARNESS_ID: AgentProviderId = "codex";
 
 export type AgentProvider = {
 	readonly id: AgentProviderId;
@@ -31,7 +31,17 @@ export const OPENCODE_PROVIDER: AgentProvider = {
 };
 
 export function offeredAgentProviders(): readonly AgentProvider[] {
+	return [CODEX_PROVIDER, CLAUDE_PROVIDER];
+}
+
+export function recognizedAgentProviders(): readonly AgentProvider[] {
 	return [CODEX_PROVIDER, CLAUDE_PROVIDER, OPENCODE_PROVIDER];
+}
+
+export function offeredAgentProviderId(id: AgentProviderId): AgentProviderId {
+	return offeredAgentProviders().some((provider) => provider.id === id)
+		? id
+		: DEFAULT_COMPOSER_HARNESS_ID;
 }
 
 export function agentProviderById(id: AgentProviderId): AgentProvider {

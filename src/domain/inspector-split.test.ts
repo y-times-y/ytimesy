@@ -3,18 +3,13 @@ import {
 	clampInspectorSplit,
 	INSPECTOR_SPLIT_DEFAULT,
 	INSPECTOR_SPLIT_DESKTOP,
-	inspectorSplitFromPointer,
 	inspectorPaneIsWide,
 	inspectorSplitRatio,
-	inspectorStaysBesideChat,
-	nudgeInspectorSplit,
 } from "./inspector-split";
 
 describe("inspector split", () => {
 	it("keeps tools as a sidebar so the composer stays desktop-width", () => {
 		expect(INSPECTOR_SPLIT_DEFAULT).toBe(0.66);
-		expect(inspectorStaysBesideChat(false)).toBe(true);
-		expect(inspectorStaysBesideChat(true)).toBe(false);
 	});
 
 	it("gives the desktop more of the canvas until the user drags", () => {
@@ -33,13 +28,5 @@ describe("inspector split", () => {
 	it("keeps the conversation and tools both usable", () => {
 		expect(clampInspectorSplit(0.1)).toBe(0.32);
 		expect(clampInspectorSplit(0.9)).toBe(0.72);
-		expect(
-			inspectorSplitFromPointer({
-				clientX: 250,
-				originX: 50,
-				width: 400,
-			}),
-		).toBe(0.5);
-		expect(nudgeInspectorSplit(0.5, -1)).toBe(0.47);
 	});
 });

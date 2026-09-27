@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import type { AgentProviderId } from "#/domain/agent-provider";
-import { offeredAgentProviders } from "#/domain/agent-provider";
+import { recognizedAgentProviders } from "#/domain/agent-provider";
 import {
 	decryptSecret,
 	type EncryptedSecret,
@@ -61,7 +61,9 @@ export async function decryptHarnessApiKey(
 }
 
 export function parseHarnessId(value: string): AgentProviderId {
-	const match = offeredAgentProviders().find((harness) => harness.id === value);
+	const match = recognizedAgentProviders().find(
+		(harness) => harness.id === value,
+	);
 	if (!match) throw new Error("Unknown harness");
 	return match.id;
 }

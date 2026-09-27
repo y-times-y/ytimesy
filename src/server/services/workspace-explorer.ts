@@ -1,6 +1,8 @@
 import { Effect } from "effect";
-import { posixShellQuoted } from "#/domain/posix-command";
 import { WorkspaceId } from "#/domain/ids";
+import type { WorkspaceFilePreview } from "#/domain/file-preview";
+import { filePreviewCommand } from "./file-preview-command";
+import { posixShellQuoted } from "#/domain/posix-command";
 import {
 	parseWorkspaceExplorerListing,
 	type WorkspaceExplorerListing,
@@ -63,7 +65,9 @@ export function readWorkspaceExplorerFile(
 	return withRunningCheckout(machines, scope, (workspaceId, root) => {
 		const path = root ? workspaceSourcePath(root, want) : null;
 		if (!path) return Effect.succeed(null);
-		return Effect.tryPromise(() => machines.readTextFile(workspaceId, path)).pipe(
+		return Effect.tryPromise(() =>
+			machines.readTextFile(workspaceId, path),
+		).pipe(
 			Effect.map((contents) => {
 				const text = workspaceSourceText(contents);
 				return text == null ? null : { path: want, text };
@@ -82,11 +86,18 @@ export function writeWorkspaceExplorerFile(
 	const want = requested.trim();
 	const text = workspaceSourceWriteText(contents);
 	if (!want || text == null) {
-		return Effect.succeed({ ok: false, reason: "invalid" });
+		return Effect.succeed<WorkspaceSourceWrite>({
+			ok: false,
+			reason: "invalid",
+		});
 	}
 	return withRunningCheckout(machines, scope, (workspaceId, root) => {
 		const path = root ? workspaceSourcePath(root, want) : null;
-		if (!path) return Effect.succeed({ ok: false, reason: "invalid" });
+		if (!path)
+			return Effect.succeed<WorkspaceSourceWrite>({
+				ok: false,
+				reason: "invalid",
+			});
 		return Effect.tryPromise(() =>
 			machines.writeTextFile(workspaceId, path, text),
 		).pipe(
@@ -96,7 +107,65 @@ export function writeWorkspaceExplorerFile(
 			),
 		);
 	}).pipe(
-		Effect.map((result) => result ?? { ok: false, reason: "asleep" }),
+		Effect.map(
+			(result): WorkspaceSourceWrite =>
+				result ?? { ok: false, reason: "asleep" },
+		),
+	);
+}
+
+export function readWorkspaceFilePreview(
+	machines: WorkspaceMachines,
+	scope: ExplorerScope,
+	path: string,
+	revision: "head" | "working",
+): Effect.Effect<WorkspaceFilePreview> {
+	return withRunningCheckout(machines, scope, (id, root) => {
+		if (!root)
+			return Effect.succeed<WorkspaceFilePreview>({
+				kind: "unavailable",
+				reason: "Checkout is unavailable.",
+			});
+		return Effect.tryPromise(async (): Promise<WorkspaceFilePreview> => {
+			const output = await machines.exec(
+				id,
+				filePreviewCommand(root, path, revision),
+				25_000,
+			);
+			const result = JSON.parse(output.stdout);
+			if (result.kind === "text" && typeof result.text === "string")
+				return { kind: "text", text: result.text };
+			if (
+				result.kind === "image" &&
+				typeof result.dataUrl === "string" &&
+				/^data:image\/(png|jpeg|gif|webp|x-icon|avif);base64,[A-Za-z0-9+/=]+$/.test(
+					result.dataUrl,
+				)
+			)
+				return { kind: "image", dataUrl: result.dataUrl };
+			return {
+				kind: "unavailable",
+				reason:
+					typeof result.reason === "string"
+						? result.reason
+						: "Preview unavailable.",
+			};
+		}).pipe(
+			Effect.catchAll(() =>
+				Effect.succeed<WorkspaceFilePreview>({
+					kind: "unavailable",
+					reason: "Could not read the preview.",
+				}),
+			),
+		);
+	}).pipe(
+		Effect.map(
+			(result) =>
+				result ?? {
+					kind: "unavailable" as const,
+					reason: "Workspace is unavailable.",
+				},
+		),
 	);
 }
 

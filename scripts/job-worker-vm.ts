@@ -3,7 +3,10 @@ import { openAsBlob } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Effect } from "effect";
 import { Freestyle, FreestyleApiError } from "freestyle";
+import { pinnedCodexInstallCommand } from "#/domain/guest-cli-pin";
+import { readFreestyleApiKey } from "#/server/adapters/freestyle/api-key";
 import {
 	JOB_WORKER_GUEST_CERT,
 	JOB_WORKER_GUEST_GITHUB_KEY,
@@ -15,8 +18,6 @@ import {
 	jobWorkerIdleNeedsUpdate,
 } from "#/server/adapters/freestyle/job-worker-vm";
 import { waitUntilVmRunning } from "#/server/adapters/freestyle/wait-until-running";
-import { readFreestyleApiKey } from "#/server/adapters/freestyle/api-key";
-import { Effect } from "effect";
 
 const guestArchive = `${JOB_WORKER_GUEST_ROOT}/app.tgz`;
 const guestLog = `${JOB_WORKER_GUEST_ROOT}/worker.log`;
@@ -28,9 +29,13 @@ async function main() {
 	await waitUntilVmRunning(vm, "Job worker VM");
 	await deployApp(vm);
 	await deploySecrets(vm);
-	await vm.fs.writeTextFile(`${JOB_WORKER_GUEST_ROOT}/start.sh`, guestStartScript(), {
-		mode: 0o755,
-	});
+	await vm.fs.writeTextFile(
+		`${JOB_WORKER_GUEST_ROOT}/start.sh`,
+		guestStartScript(),
+		{
+			mode: 0o755,
+		},
+	);
 	await vm.fs.writeTextFile(
 		`${JOB_WORKER_GUEST_ROOT}/bootstrap.sh`,
 		guestBootstrapScript(),
@@ -44,13 +49,11 @@ async function main() {
 	);
 	const status = await run(
 		vm,
-		`pgrep -af 'src/server/jobs/worker.ts' || true; tail -n 20 ${guestLog} || true`,
+		`pgrep -af '^node --import tsx src/server/jobs/worker.ts$' || true; tail -n 20 ${guestLog} || true`,
 		30_000,
 	);
-	console.info(status.stdout.trim() || status.stderr.trim());
-	if (!/ytimesy workspace worker is running|src\/server\/jobs\/worker\.ts/.test(
-		`${status.stdout}\n${status.stderr}`,
-	)) {
+	console.info((status.stdout ?? "").trim() || (status.stderr ?? "").trim());
+	if (!/^\d+ node --import tsx src\/server\/jobs\/worker\.ts$/m.test(status.stdout ?? "")) {
 		throw new Error("Job worker process did not start.");
 	}
 	console.info(`Job worker is running on ${JOB_WORKER_SLUG}.`);
@@ -79,7 +82,8 @@ async function ensureWorkerVm(client: Freestyle) {
 		const created = await client.vms.create(jobWorkerCreateVmFields());
 		return created.vm;
 	} catch (error) {
-		if (!(error instanceof FreestyleApiError) || error.status !== 409) throw error;
+		if (!(error instanceof FreestyleApiError) || error.status !== 409)
+			throw error;
 		const { vms: recovered } = await client.vms.list({
 			slug: JOB_WORKER_SLUG,
 			limit: 1,
@@ -139,7 +143,10 @@ async function deploySecrets(vm: ReturnType<Freestyle["vms"]["ref"]>) {
 	const databaseUrl = process.env.DATABASE_URL ?? "";
 	const certFromUrl = new URL(databaseUrl).searchParams.get("sslrootcert");
 	const certPath = certFromUrl || ".secrets/supabase-ca.crt";
-	await vm.fs.writeTextFile(JOB_WORKER_GUEST_CERT, await readFile(certPath, "utf8"));
+	await vm.fs.writeTextFile(
+		JOB_WORKER_GUEST_CERT,
+		await readFile(certPath, "utf8"),
+	);
 	const keyPath = process.env.GITHUB_PRIVATE_KEY_PATH?.trim();
 	const key =
 		process.env.GITHUB_PRIVATE_KEY?.replaceAll("\\n", "\n").trim() ||
@@ -159,6 +166,7 @@ function guestStartScript() {
 	return `#!/bin/bash
 set -euo pipefail
 export HOME=/home/ubuntu
+export PATH="$HOME/.codex/packages/standalone/current:$HOME/.codex/bin:$HOME/.local/bin:$PATH"
 if [ -s /usr/local/nvm/nvm.sh ]; then
   . /usr/local/nvm/nvm.sh
 elif [ -s "$HOME/.nvm/nvm.sh" ]; then
@@ -191,6 +199,9 @@ command -v node >/dev/null || nvm install 22
 corepack enable
 corepack prepare pnpm@10.20.0 --activate
 pnpm install --frozen-lockfile
+if ! command -v codex >/dev/null 2>&1 && [ ! -x "$HOME/.codex/packages/standalone/current/codex" ]; then
+  ${pinnedCodexInstallCommand()}
+fi
 pkill -f 'src/server/jobs/worker.ts' || true
 nohup ./start.sh >> ${guestLog} 2>&1 < /dev/null &
 sleep 3

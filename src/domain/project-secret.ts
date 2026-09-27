@@ -52,9 +52,10 @@ export function parseProjectSecretValue(value: string) {
 export function agentSecretsEnvFile(
 	secrets: readonly { readonly name: string; readonly value: string }[],
 ) {
+	if (secrets.length === 0) return "# No project secrets configured.\n";
 	return `${secrets
 		.map((secret) => `export ${secret.name}=${posixShellQuoted(secret.value)}`)
-		.join("\n")}${secrets.length > 0 ? "\n" : ""}`;
+		.join("\n")}\n`;
 }
 
 export function agentSecretsDeveloperNote(names: readonly string[]) {

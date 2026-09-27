@@ -169,19 +169,19 @@ export function canResumeDisconnectedFollowUp(input: {
 
 export const RUNNING_TURN_POLL_MS = 700;
 
-export function runningAuthenticatedTurnShouldPoll(input: {
+export function runningTurnShouldPoll(input: {
 	readonly turnStatus: SessionTurnStatus;
 	readonly sideTurnStatus: SessionTurnStatus;
 	readonly connectionStatus: AgentConnection["status"];
 	readonly composerBusy?: boolean;
 }): boolean {
-	if (input.connectionStatus !== "authenticated") return false;
 	return isTurnRunning(input.turnStatus) || isTurnRunning(input.sideTurnStatus);
 }
 
 export function composerCanStartSignIn(input: {
 	readonly harnessId: AgentProviderId;
 	readonly connection: AgentConnection;
+	readonly snapshotAvailable?: boolean;
 	readonly busy: boolean;
 	readonly draft: string;
 	readonly slashDraft: boolean;
@@ -191,6 +191,11 @@ export function composerCanStartSignIn(input: {
 	if (selectedHarnessIsConnected(input.connection, input.harnessId)) {
 		return false;
 	}
+	if (
+		input.harnessId === "codex" &&
+		input.connection.status === "disconnected" &&
+		input.snapshotAvailable
+	) return false;
 	if (input.connection.status === "awaiting_device_code") return false;
 	return input.harnessId === "claude" || input.harnessId === "codex";
 }

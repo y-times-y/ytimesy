@@ -40,6 +40,43 @@ describe("parseClaudeAuthStatus", () => {
 		expect(parseClaudeAuthStatus(null)).toEqual({ stage: "missing" });
 	});
 
+	it("preserves Claude-advertised reasoning and Fast capabilities", () => {
+		const status = parseClaudeAuthStatus(
+			JSON.stringify({
+				stage: "authenticated",
+				authMode: "subscription",
+				models: [
+					{
+						id: "claude-test",
+						label: "Claude Test",
+						supportsFastMode: true,
+						reasoning: {
+							levels: [
+								{ id: "low", label: "low" },
+								{ id: "high", label: "high" },
+							],
+							defaultLevelId: "high",
+						},
+					},
+				],
+			}),
+		);
+		expect(status.stage === "authenticated" ? status.models : []).toEqual([
+			{
+				id: "claude-test",
+				label: "Claude Test",
+				supportsFastMode: true,
+				reasoning: {
+					levels: [
+						{ id: "low", label: "low" },
+						{ id: "high", label: "high" },
+					],
+					defaultLevelId: "high",
+				},
+			},
+		]);
+	});
+
 	it("keeps thinking text when rereading the guest status file", () => {
 		expect(
 			parseClaudeAuthStatus(

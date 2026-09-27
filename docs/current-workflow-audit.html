@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>ytimesy · Current workflow and code audit</title>
+  <style>
+    :root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#e9e9ea;background:#101113;font-size:15px;line-height:1.56}
+    *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0}a{color:#d4d8df;text-decoration-color:#777f89;text-underline-offset:3px}a:hover{color:#fff;text-decoration-color:#fff}
+    .shell{display:grid;grid-template-columns:250px minmax(0,1fr);min-height:100vh}.rail{position:sticky;top:0;height:100vh;overflow:auto;padding:28px 20px;border-right:1px solid #2a2c30;background:#141517}.brand{font-size:19px;letter-spacing:-.05em;font-weight:750;color:white}.rail small{display:block;color:#858a92;font-size:12px;margin:3px 0 30px}.rail nav a{display:block;padding:8px 10px;border-radius:8px;color:#a8adb5;text-decoration:none;font-size:13px}.rail nav a:hover,.rail nav a.active{background:#25272b;color:#fff}.rail .key{margin-top:27px;padding:14px;border:1px solid #33363b;border-radius:11px;font-size:12px;color:#aeb3bb}.key b{color:#fff}.content{min-width:0;max-width:1250px;width:100%;margin:auto;padding:42px clamp(22px,5vw,76px) 100px}.eyebrow{color:#aaaeb6;text-transform:uppercase;letter-spacing:.18em;font-size:11px;font-weight:700}.hero{border-bottom:1px solid #303237;padding-bottom:34px;margin-bottom:38px}.hero h1{font-size:clamp(36px,5vw,66px);line-height:1.05;letter-spacing:-.06em;margin:13px 0 18px;font-weight:750;max-width:900px}.lead{font-size:18px;color:#b9bec6;max-width:830px;margin:0}.meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:22px}.pill{border:1px solid #383b41;background:#1c1e21;border-radius:999px;padding:5px 11px;color:#c1c5ca;font-size:12px}.pill.warn{border-color:#755c3c;color:#e4c89f;background:#2c241a}.section{scroll-margin-top:30px;margin:44px 0 62px}.section h2{font-size:28px;letter-spacing:-.04em;margin:0 0 8px}.section>p:first-of-type{color:#aeb3bb;margin-top:0;max-width:900px}.sub{font-size:17px;letter-spacing:-.02em;margin:28px 0 12px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.grid.three{grid-template-columns:repeat(3,minmax(0,1fr))}.card{background:#1a1c1f;border:1px solid #303238;border-radius:14px;padding:18px 19px;min-width:0}.card h3{margin:0 0 7px;font-size:15px}.card p{margin:0;color:#b5bac1;font-size:13px}.card .ref{margin-top:12px}.ref{display:block;color:#959ba5;font-size:12px;overflow-wrap:anywhere}.ref a{color:#b8c0cb}.muted{color:#aeb3bb}.callout{padding:18px 20px;border-left:3px solid #dedfe1;background:#202226;border-radius:0 10px 10px 0;color:#d3d6db}.callout.warn{border-left-color:#d7a96b;background:#29231d}.callout.danger{border-left-color:#d98989;background:#2c2020}.callout p{margin:0}.steps{counter-reset:step;display:grid;gap:10px}.step{display:grid;grid-template-columns:34px minmax(0,1fr);gap:14px;align-items:start;padding:16px 18px;background:#1a1c1f;border:1px solid #303238;border-radius:12px}.step:before{counter-increment:step;content:counter(step);display:grid;place-items:center;width:28px;height:28px;border-radius:50%;background:#303338;color:#fff;font-size:12px;font-weight:700}.step h3{font-size:15px;margin:0 0 4px}.step p{font-size:13px;color:#b5bac1;margin:0}.step .ref{margin-top:8px}.flow{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin:20px 0}.flow .node{border:1px solid #3a3d43;background:#202226;border-radius:11px;padding:13px;font-size:12px;min-height:94px}.node strong{display:block;font-size:13px;color:white;margin-bottom:5px}.node span{color:#aeb4bc}.node.bad{border-color:#735953;background:#2b2221}.node.good{border-color:#526359;background:#202822}.split{display:grid;grid-template-columns:1fr 1fr;gap:14px}.pane{border:1px solid #34363c;border-radius:14px;overflow:hidden;background:#1b1d20}.pane header{padding:11px 17px;border-bottom:1px solid #34363c;font-size:12px;text-transform:uppercase;letter-spacing:.13em;color:#c3c6cb;font-weight:700}.pane.current header{background:#302521;color:#e7bd99}.pane.target header{background:#202a24;color:#b9d1c0}.pane .body{padding:17px}.pane ul{margin:0;padding-left:19px;color:#c1c5cc;font-size:13px}.pane li+li{margin-top:8px}table{width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed}th,td{padding:13px 12px;border-bottom:1px solid #303238;text-align:left;vertical-align:top}th{color:#a9afb8;font-weight:650;background:#1e2023}td{color:#c8ccd1}td:first-child{color:white;font-weight:650}.table-wrap{overflow:auto;border:1px solid #303238;border-radius:12px;background:#191b1e}.table-wrap table{min-width:690px}.status{display:inline-block;border-radius:5px;padding:2px 7px;font-size:11px;font-weight:700;white-space:nowrap}.status.real{background:#26362b;color:#b8dec0}.status.partial{background:#3c3120;color:#ecd2a3}.status.missing{background:#3b2626;color:#e7b3b3}.code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;background:#282a2f;border-radius:4px;padding:1px 5px;color:#e4e7ec}.severity{display:inline-block;font-size:10px;letter-spacing:.08em;border-radius:4px;padding:3px 6px;margin-right:6px;background:#52302d;color:#ffd4ce;font-weight:800}.severity.p1{background:#493d26;color:#ffe1ad}.severity.p2{background:#303942;color:#cadced}.finding{padding:18px 0;border-bottom:1px solid #303238}.finding h3{font-size:16px;margin:0 0 7px}.finding p{font-size:13px;color:#b9bec6;margin:0}.finding .ref{margin-top:8px}.note{font-size:12px;color:#8f959e}.glossary dt{font-weight:700;color:white;margin-top:12px}.glossary dd{margin:3px 0 0;color:#b9bec5;font-size:13px}.footer{border-top:1px solid #303238;padding-top:18px;color:#959ba4;font-size:12px}.footer p{max-width:880px}details{border:1px solid #32353a;background:#1a1c1f;border-radius:10px;padding:12px 15px;margin:9px 0}summary{cursor:pointer;font-weight:650;font-size:13px}details p{font-size:13px;color:#b9bec6;margin:9px 0 0}
+    @media(max-width:980px){.shell{grid-template-columns:1fr}.rail{position:relative;height:auto;border-right:0;border-bottom:1px solid #2a2c30;padding:18px 22px}.rail small,.rail .key{display:none}.rail nav{display:flex;overflow:auto;gap:4px}.rail nav a{white-space:nowrap}.content{padding-top:30px}.flow{grid-template-columns:repeat(2,minmax(0,1fr))}}
+    @media(max-width:680px){.grid,.grid.three,.split{grid-template-columns:1fr}.hero h1{font-size:36px}.flow{grid-template-columns:1fr}.flow .node{min-height:auto}}
+  </style>
+</head>
+<body>
+<div class="shell">
+  <aside class="rail">
+    <div class="brand">ytimesy</div><small>Codebase map · 22 September 2026</small>
+    <nav aria-label="Report sections">
+      <a href="#read-first">Read this first</a><a href="#system">System map</a><a href="#journey">End-to-end workflow</a><a href="#delegation">Recursive tasks</a><a href="#snapshots">Snapshot reality</a><a href="#features">What exists</a><a href="#repetition">Repeated logic</a><a href="#gaps">Incorrect or incomplete</a><a href="#sequence">Coherent target</a><a href="#sources">How to read this</a>
+    </nav>
+    <div class="key"><b>Evidence key</b><br>Implemented means a code path exists. Partial means the path has a material limitation. Missing means this behavior has no complete path in the inspected source. None of these labels means live production proof.</div>
+  </aside>
+  <main class="content">
+    <div class="hero" id="read-first">
+      <div class="eyebrow">Current implementation audit · source inspection</div>
+      <h1>What happens when an agent starts working?</h1>
+      <p class="lead">A navigable map of the code that exists today, the places where two paths do the same job, and the handoffs that still break the intended workflow.</p>
+      <div class="meta"><span class="pill">TanStack Start + React</span><span class="pill">PostgreSQL + pg-boss</span><span class="pill">Freestyle VMs</span><span class="pill">Codex / Claude adapters</span><span class="pill warn">Inspected, not live verified</span></div>
+    </div>
+
+    <section class="section" id="system">
+      <h2>The system in one minute</h2>
+      <p>The browser is a viewer and control surface. The database holds projects, sessions, task rows, transcripts, and task completion events. Freestyle holds each machine and its running provider process. These pieces are linked by services in the web process and a separate job worker.</p>
+      <div class="flow" aria-label="Current system flow">
+        <div class="node"><strong>1 · Browser</strong><span>Composer, task panel, Files, Diff, Terminal, Desktop</span></div>
+        <div class="node"><strong>2 · Server entry</strong><span>Authenticated TanStack functions and API routes</span></div>
+        <div class="node"><strong>3 · Services</strong><span>Choose session, VM, provider, task action, publication</span></div>
+        <div class="node"><strong>4 · State</strong><span>PostgreSQL rows, pg-boss jobs, event outbox</span></div>
+        <div class="node"><strong>5 · Execution</strong><span>Freestyle VM, Codex app server or Claude CLI</span></div>
+      </div>
+      <div class="grid three">
+        <div class="card"><h3>Project</h3><p>GitHub repository and branch plus one prepared workspace record and snapshot.</p><span class="ref"><a href="../src/server/jobs/prepare-workspace.ts">prepare-workspace.ts</a> · <a href="../src/server/adapters/workspaces.ts">workspaces.ts</a></span></div>
+        <div class="card"><h3>Session</h3><p>A conversation row. A root chat, child task, and legacy side chat all use the same table.</p><span class="ref"><a href="../src/server/adapters/agent-sessions.ts">agent-sessions.ts</a> · <a href="../src/domain/agent-task.ts">agent-task.ts</a></span></div>
+        <div class="card"><h3>Machine</h3><p>A Freestyle VM identified by <span class="code">provider_ref</span>. A writer gets its own VM; a read-only child can share its parent's VM.</p><span class="ref"><a href="../src/server/services/agent-session-machine.ts">agent-session-machine.ts</a> · <a href="../src/server/services/session-workspace-machines.ts">session-workspace-machines.ts</a></span></div>
+      </div>
+      <p class="note">Effect coordinates many server workflows, while database adapters commonly return Promises. Freestyle and provider calls are wrapped as effects at service boundaries. Effect does not persist a running effect across a server restart.</p>
+      <h3 class="sub">Where the important state lives</h3>
+      <div class="table-wrap"><table><thead><tr><th style="width:27%">State</th><th style="width:25%">Owner</th><th>What a restart means</th></tr></thead><tbody>
+        <tr><td>User, GitHub grant, project</td><td>PostgreSQL and encrypted server records</td><td>Still present, subject to external token validity.</td></tr>
+        <tr><td>Prepared repository image</td><td>Freestyle snapshot ID in workspace row</td><td>Can be copied again if the snapshot still exists.</td></tr>
+        <tr><td>Session transcript and task graph</td><td><span class="code">agent_session</span> rows</td><td>Still present; reads may reconcile them with a running provider.</td></tr>
+        <tr><td>Provider process and working tree</td><td>Freestyle VM</td><td>Independent of the browser; VM survival depends on its provider lifecycle.</td></tr>
+        <tr><td>Pending child result</td><td><span class="code">agent_task_event</span> + pg-boss</td><td>Retryable after it has been inserted.</td></tr>
+        <tr><td>Current task-tool request and supervisor</td><td>VM <span class="code">/tmp</span> files + web process memory</td><td>No complete durable reattachment to the in-flight turn.</td></tr>
+      </tbody></table></div>
+    </section>
+
+    <section class="section" id="journey">
+      <h2>End-to-end workflow today</h2>
+      <p>Follow a single user's task from account connection to publication. Each step names the code that currently owns it.</p>
+      <div class="steps">
+        <div class="step"><div><h3>Sign in and authorize a repository</h3><p>Better Auth identifies the user. The GitHub App flow grants selected repository access. The server validates ownership before storing a project and its branch.</p><span class="ref"><a href="../src/server/auth/auth.ts">auth.ts</a> · <a href="../src/server/services/projects.ts">projects.ts</a> · <a href="../src/server/adapters/github.ts">github.ts</a></span></div></div>
+        <div class="step"><div><h3>Queue project preparation</h3><p>A project gets a workspace row. pg-boss runs preparation: boot or recover a VM, clone the repository, install dependencies, seal a private snapshot, and pause the template VM. An hourly job can rebuild a changed snapshot.</p><span class="ref"><a href="../src/server/services/workspaces.ts">workspaces.ts</a> · <a href="../src/server/jobs/queue.ts">queue.ts</a> · <a href="../src/server/jobs/prepare-workspace.ts">prepare-workspace.ts</a> · <a href="../src/server/jobs/refresh-workspace.ts">refresh-workspace.ts</a></span></div></div>
+        <div class="step"><div><h3>Connect a runtime</h3><p>Codex device sign-in or Claude's own sign-in runs inside a VM. A successful login can be captured as a private Freestyle snapshot and its ID stored encrypted in <span class="code">agent_account</span>. API keys are an alternate explicit connection path.</p><span class="ref"><a href="../src/server/proof/persist-codex-auth-snapshot.ts">persist-codex-auth-snapshot.ts</a> · <a href="../src/server/proof/persist-claude-auth-snapshot.ts">persist-claude-auth-snapshot.ts</a> · <a href="../src/server/auth/agent-account.ts">agent-account.ts</a></span></div></div>
+        <div class="step"><div><h3>Open a root chat</h3><p>The UI first creates a session row. Connect or Send binds a VM by resuming its saved <span class="code">provider_ref</span> or copying a snapshot. The provider adapter reports listed models and auth status.</p><span class="ref"><a href="../src/features/sessions/agent-session.fn.ts">agent-session.fn.ts</a> · <a href="../src/server/services/agent-session-machine.ts">agent-session-machine.ts</a> · <a href="../src/server/services/harness-workspace-session.ts">harness-workspace-session.ts</a></span></div></div>
+        <div class="step"><div><h3>Send a turn</h3><p>The user's message is saved before the provider accepts the turn. Codex uses a Python daemon talking to its app server; Claude uses its CLI and a local MCP task-tool server. Transcripts and status are read back into the session row.</p><span class="ref"><a href="../src/server/services/persist-session-view.ts">persist-session-view.ts</a> · <a href="../src/server/adapters/codex/login-daemon.py">login-daemon.py</a> · <a href="../src/server/adapters/claude/login-session.ts">claude/login-session.ts</a></span></div></div>
+        <div class="step"><div><h3>Inspect the work</h3><p>Files reads the selected session's checkout, Diff shows changes, Terminal opens a PTY, and Desktop exposes a shared Linux display. These tools are tied to the session VM; a paused machine may need to wake before interactive use.</p><span class="ref"><a href="../src/server/services/workspace-explorer.ts">workspace-explorer.ts</a> · <a href="../src/server/services/workspace-terminal.ts">workspace-terminal.ts</a> · <a href="../src/server/services/workspace-desktop.ts">workspace-desktop.ts</a></span></div></div>
+        <div class="step"><div><h3>Publish deliberately</h3><p>A separate action configures commit identity, commits the workspace, pushes a branch with a temporary installation token, and opens a draft PR. Delegated tasks add a review-state check before their publication tool proceeds.</p><span class="ref"><a href="../src/server/services/publication.ts">publication.ts</a> · <a href="../src/server/services/harness-workspace-session.ts">harness-workspace-session.ts</a></span></div></div>
+      </div>
+    </section>
+
+    <section class="section" id="delegation">
+      <h2>How delegated tasks work</h2>
+      <p>The lead decides whether to delegate from prompt instructions. The control plane validates placement, depth, access, and stacked dependencies. A task is a child <span class="code">agent_session</span> row, so a child can become a parent.</p>
+      <div class="flow">
+        <div class="node"><strong>Draft</strong><span>Title, standalone prompt, model, access, placement, dependency</span></div>
+        <div class="node"><strong>Start</strong><span>Check depth ≤ 3 and predecessor; choose shared or fresh VM</span></div>
+        <div class="node"><strong>Run</strong><span>Child gets its own provider turn; read-only mode is requested where appropriate</span></div>
+        <div class="node"><strong>Wake parent</strong><span>Completed, failed, or blocked summary enters durable event table</span></div>
+        <div class="node"><strong>Review / PR</strong><span>Lead inspects diff, marks reviewed, then may publish</span></div>
+      </div>
+      <div class="grid">
+        <div class="card"><h3>Shared read-only child</h3><p>Reuses the parent's exact checkout. A wrapper changes known <span class="code">/tmp</span> daemon paths so concurrent conversations do not overwrite each other. Provider read-only permissions are also requested.</p><span class="ref"><a href="../src/server/services/session-workspace-machines.ts">session-workspace-machines.ts</a> · <a href="../src/server/services/agent-session-machine.ts">agent-session-machine.ts</a></span></div>
+        <div class="card"><h3>Fresh writing child</h3><p>Copies a snapshot into its own VM. Parallel tasks start independently; a stacked task waits for its sibling predecessor to be completed, reviewed, and published, then checks out that PR branch.</p><span class="ref"><a href="../src/domain/agent-task.ts">agent-task.ts</a> · <a href="../src/server/services/agent-session-machine.ts">agent-session-machine.ts</a></span></div>
+      </div>
+      <div class="callout warn" style="margin-top:15px"><p>Task tools exchange one JSON request and response through VM-local files. A web-process loop services these requests every second for at most 1,800 polls, about 30 minutes. The completion event becomes durable after the result is observed and saved; the running command and its supervision are not durable across process loss. <a href="../src/server/services/harness-workspace-session.ts">Source: harness-workspace-session.ts</a></p></div>
+      <h3 class="sub">A concrete example</h3>
+      <p class="muted">Suppose the lead is asked to fix a failing API and audit the UI. It can create two drafts: a fresh read-write API task and a shared read-only UI audit. Starting the API task copies a project snapshot into a new VM. Starting the audit keeps the lead's VM and checkout, with separate daemon files. Either child may delegate again until depth three. When the API child finishes, its summary is saved, an event is queued, and an idle parent receives a follow-up. The lead can inspect its diff and mark the result reviewed before opening a PR. If the server disappears before the result is observed, that last handoff is not guaranteed by the current supervisor.</p>
+      <p class="note">There are two task-start routes: the human task panel calls a server function, and a model calls <span class="code">start_task</span>. Both perform binding and sending in separate implementations.</p>
+    </section>
+
+    <section class="section" id="snapshots">
+      <h2>The snapshot story, precisely</h2>
+      <p>There is a user login snapshot, a project environment snapshot, and a per-session machine copy. Their relationship depends on which existed when project preparation ran.</p>
+      <div class="split">
+        <div class="pane current"><header>What current code does</header><div class="body"><ul>
+          <li>Project preparation prefers the user's Codex auth snapshot if already connected; otherwise it uses the tools image. It then clones and installs the repository and seals a project snapshot.</li>
+          <li>For a new Codex session, the binding path does not pass the saved Codex auth snapshot. It copies the project snapshot. This works for auth only when that project snapshot was prepared from a still-valid Codex login.</li>
+          <li>For Claude, session binding passes the Claude auth snapshot, which takes priority over the project snapshot. The repository may then have to be cloned into that session VM on Send.</li>
+          <li>A project prepared before Codex login is not automatically rebuilt from the newly saved login snapshot.</li>
+        </ul></div></div>
+        <div class="pane target"><header>Coherent intended contract</header><div class="body"><ul>
+          <li>Capture each user's provider login once in a private snapshot.</li>
+          <li>Prepare a versioned project template for that user and provider: authenticated base, repository, dependencies, and setup.</li>
+          <li>Copy that combined template for every writer; clear only conversation and runtime scratch files.</li>
+          <li>Refresh or invalidate templates when login, project source, or environment recipe changes.</li>
+        </ul></div></div>
+      </div>
+      <p class="ref">Evidence: <a href="../src/server/jobs/prepare-workspace.ts">prepare-workspace.ts</a> · <a href="../src/domain/workspace-boot-snapshot.ts">workspace-boot-snapshot.ts</a> · <a href="../src/domain/agent-session.ts">agent-session.ts</a> · <a href="../src/server/services/agent-session-machine.ts">agent-session-machine.ts</a> · <a href="../src/server/services/codex-workspace-session.ts">codex-workspace-session.ts</a></p>
+      <div class="callout danger"><p><b>Important correction:</b> “Codex child VMs never have credentials” would be too broad. They may inherit credentials from a project snapshot prepared after Codex login. The actual defect is that authentication depends on that preparation history and is not guaranteed for every new Codex VM.</p></div>
+    </section>
+
+    <section class="section" id="features">
+      <h2>What is implemented now?</h2>
+      <p>These labels describe source paths, not measured reliability in a live cloud run.</p>
+      <div class="table-wrap"><table><thead><tr><th style="width:29%">Capability</th><th style="width:15%">Status</th><th>What the code actually supplies</th></tr></thead><tbody>
+        <tr><td>GitHub project onboarding</td><td><span class="status real">Implemented</span></td><td>Owner-scoped repository selection, project row, queued workspace preparation.</td></tr>
+        <tr><td>Prepared project VM</td><td><span class="status real">Implemented</span></td><td>Clone, install, private snapshot, pause, hourly source refresh.</td></tr>
+        <tr><td>Per-user provider login snapshot</td><td><span class="status partial">Partial</span></td><td>Private snapshots and encrypted IDs exist. Reuse is inconsistent across provider and project lifecycle.</td></tr>
+        <tr><td>Root chats and provider models</td><td><span class="status real">Implemented</span></td><td>Codex and Claude adapters, model catalog, reasoning and Fast options where advertised.</td></tr>
+        <tr><td>Recursive tasks</td><td><span class="status partial">Partial</span></td><td>Child records, three-level bound, task tools, placement, parallel/stacked dependency, separate writer VMs.</td></tr>
+        <tr><td>Durable autonomous execution</td><td><span class="status partial">Partial</span></td><td>VM processes and event outbox survive a browser disconnect; web-process polling does not survive restart and stops after about 30 minutes.</td></tr>
+        <tr><td>Editable draft plan</td><td><span class="status missing">Missing</span></td><td>Draft creation exists; no draft edit or delete task operation despite the lead prompt saying “editable.”</td></tr>
+        <tr><td>Review and publication</td><td><span class="status partial">Partial</span></td><td>Diff inspection, review flag, commit/push/draft PR. No dedicated reviewer with structured findings and repair loop.</td></tr>
+        <tr><td>Files, Diff, Terminal, Desktop</td><td><span class="status real">Implemented</span></td><td>All four surfaces have UI and server/VM paths; live end-to-end behavior was not tested in this audit.</td></tr>
+        <tr><td>Composer attachments</td><td><span class="status partial">Partial</span></td><td>Selected files are React state; no observed upload or VM materialization path in Send.</td></tr>
+        <tr><td>Honest harness benchmark</td><td><span class="status missing">Missing</span></td><td>Current adapter runs Codex built-in local multi-agent mode with extra instructions, bypassing this product's task and VM control plane.</td></tr>
+      </tbody></table></div>
+      <p class="ref">Sources: <a href="../src/features/workspace/workspace-home.tsx">workspace-home.tsx</a> · <a href="../src/features/sessions/session-launcher.tsx">session-launcher.tsx</a> · <a href="../src/features/sessions/task-panel.tsx">task-panel.tsx</a> · <a href="../benchmarks/deep_swe/local_orchestration.py">local_orchestration.py</a></p>
+    </section>
+
+    <section class="section" id="repetition">
+      <h2>Repeated logic and unnecessary coupling</h2>
+      <p>These are consolidation candidates. The finding names the duplication and its consequence; it does not imply every similar line should become a generic helper.</p>
+      <div class="finding"><h3><span class="severity">P0</span>Two task-start implementations</h3><p>The UI server function and model tool both validate a draft, bind a child VM, send the task, and mark failure. Changes to start semantics can land in only one path. One service should own task start; both callers should use it.</p><span class="ref"><a href="../src/features/sessions/agent-session.fn.ts">agent-session.fn.ts:218</a> · <a href="../src/server/services/harness-workspace-session.ts">harness-workspace-session.ts:622</a></span></div>
+      <div class="finding"><h3><span class="severity">P0</span>Two wrap-up implementations</h3><p>Human and model paths each stop and send a wrap-up prompt, with different wording and Claude interruption checks. They can disagree on behavior. One task command should own this transition.</p><span class="ref"><a href="../src/features/sessions/agent-session.fn.ts">agent-session.fn.ts:282</a> · <a href="../src/server/services/harness-workspace-session.ts">harness-workspace-session.ts:733</a></span></div>
+      <div class="finding"><h3><span class="severity p1">P1</span>Clone/install repeated across lifecycle stages</h3><p>Initial preparation and hourly refresh repeat branch resolution, token file creation, cloning, bot hook setup, install, snapshot, and event recording. A narrower shared preparation operation could keep setup behavior consistent while each job retains its distinct failure policy.</p><span class="ref"><a href="../src/server/jobs/prepare-workspace.ts">prepare-workspace.ts</a> · <a href="../src/server/jobs/refresh-workspace.ts">refresh-workspace.ts</a></span></div>
+      <div class="finding"><h3><span class="severity p1">P1</span>Task tool contract duplicated in Python</h3><p>Codex dynamic tools and Claude MCP tools separately declare names, arguments, and descriptions. The TypeScript parser is a third copy of the accepted names. Schema drift can make one provider expose a tool that the control plane interprets differently.</p><span class="ref"><a href="../src/server/adapters/codex/login-daemon.py">codex/login-daemon.py:93</a> · <a href="../src/server/adapters/claude/task-tool-server.py">claude/task-tool-server.py:1</a> · <a href="../src/domain/agent-task-tool.ts">agent-task-tool.ts:35</a></span></div>
+      <div class="finding"><h3><span class="severity p1">P1</span>Task state written through several routes</h3><p>Direct task-state updates, transcript persistence, and turn-status updates each map provider status into <span class="code">task_state</span>. The same row also represents root sessions and legacy side chats. This makes transition rules hard to audit and permits state changes outside one owner.</p><span class="ref"><a href="../src/server/adapters/agent-sessions.ts">agent-sessions.ts:252</a> · <a href="../src/server/adapters/agent-sessions.ts">agent-sessions.ts:326</a> · <a href="../src/server/adapters/agent-sessions.ts">agent-sessions.ts:360</a></span></div>
+      <div class="finding"><h3><span class="severity p2">P2</span>Legacy side chat shares task hierarchy</h3><p>Side chat is identified by the title string “Side chat” and filtered out of task lists. That is a fragile implicit type. Its creation and provider-specific read paths also live inside the large harness session service.</p><span class="ref"><a href="../src/server/adapters/agent-sessions.ts">agent-sessions.ts:141</a> · <a href="../src/server/services/harness-workspace-session.ts">harness-workspace-session.ts:1240</a></span></div>
+      <div class="finding"><h3><span class="severity p2">P2</span>Large provider dispatch module</h3><p>The harness session service currently owns provider connection, turns, polling, task-tool dispatch, side chat, view mapping, and stop behavior in one module. Separating lifecycle ownership from provider adapters would make the actual control path easier to test.</p><span class="ref"><a href="../src/server/services/harness-workspace-session.ts">harness-workspace-session.ts</a></span></div>
+      <div class="finding"><h3><span class="severity p2">P2</span>Benchmark policy is a second prompt</h3><p>The benchmark file carries its own delegation text and a 3-direct/8-total cap. The product prompt has different rules. Comparing them as though they were the same harness would be misleading.</p><span class="ref"><a href="../benchmarks/deep_swe/local_orchestration.py">local_orchestration.py:9</a> · <a href="../src/domain/agent-orchestration.ts">agent-orchestration.ts:1</a></span></div>
+    </section>
+
+    <section class="section" id="gaps">
+      <h2>Where the current flow can fail</h2>
+      <div class="grid">
+        <div class="card"><h3>Auth depends on snapshot timing</h3><p>A new Codex VM may work if the project snapshot inherited login; a project built earlier may not. Claude takes the auth snapshot over the ready project snapshot and may redo checkout preparation.</p><span class="ref"><a href="../src/server/services/agent-session-machine.ts">agent-session-machine.ts:301</a></span></div>
+        <div class="card"><h3>Supervision is local to one process</h3><p>The 30-minute loop and in-memory in-flight set are not leases. Restarting the server or hitting the cap can leave a running provider without reliable result observation.</p><span class="ref"><a href="../src/server/services/harness-workspace-session.ts">harness-workspace-session.ts:446</a></span></div>
+        <div class="card"><h3>Fresh grandchild after shared child</h3><p>The fresh grandchild can inherit a wrapper that scopes paths to its shared parent, while later callers address unscoped paths. This can break follow-up and control messages.</p><span class="ref"><a href="../src/server/services/session-workspace-machines.ts">session-workspace-machines.ts:78</a></span></div>
+        <div class="card"><h3>Capacity has no admission queue</h3><p>Freestyle capacity errors receive short retries, then fail. There is no durable “start when a writer slot opens” state or budget per task tree.</p><span class="ref"><a href="../src/server/services/agent-session-machine.ts">agent-session-machine.ts:584</a></span></div>
+        <div class="card"><h3>Review is a state flag</h3><p>The lead can inspect a diff and set “reviewed.” The code does not create a reviewer task automatically, store structured findings, or cycle through repair and re-review.</p><span class="ref"><a href="../src/server/services/harness-workspace-session.ts">harness-workspace-session.ts:662</a></span></div>
+        <div class="card"><h3>No comparable performance run</h3><p>The current Python adapter does not invoke the product's VM task path. Run manifests, raw trajectories, model cost, VM cost, repetitions, and scoring receipts are absent.</p><span class="ref"><a href="../benchmarks/deep_swe/local_orchestration.py">local_orchestration.py:23</a></span></div>
+      </div>
+      <h3 class="sub">Browser closed versus server restarted</h3>
+      <div class="split"><div class="pane target"><header>Browser closes</header><div class="body"><ul><li>The VM and its provider process may continue.</li><li>The web-process supervisor can continue while that process stays up.</li><li>The saved transcript lets a later browser reconnect.</li></ul></div></div><div class="pane current"><header>Web process restarts</header><div class="body"><ul><li>Its polling loop and in-memory in-flight set disappear.</li><li>pg-boss can still deliver events that were already persisted.</li><li>There is no complete worker that reattaches to every active turn and recovers its missing completion event.</li></ul></div></div></div>
+      <h3 class="sub">What this audit did not prove</h3>
+      <p class="muted">It did not access a live Freestyle account, execute a complete private-repository task, deploy migrations, or run the benchmark. Those require separate live verification. It also did not change the application logic.</p>
+    </section>
+
+    <section class="section" id="sequence">
+      <h2>A coherent target workflow</h2>
+      <p>The order matters because the benchmark and review loop depend on a working, recoverable task runner.</p>
+      <div class="steps">
+        <div class="step"><div><h3>One provider-aware project template</h3><p>Build a combined private template from the user's authenticated provider snapshot plus the prepared repository. Store its source auth version and project version. Copy it for each writer.</p></div></div>
+        <div class="step"><div><h3>One durable task command service</h3><p>Have UI actions and provider task tools call the same create, edit, start, message, wrap-up, review, and publish operations. Persist command IDs and outcomes so retries do not duplicate VMs or PRs.</p></div></div>
+        <div class="step"><div><h3>Recoverable supervision</h3><p>A worker claims active turns with leases, periodically reconciles provider status, records completion, and restarts observation after process loss. Event delivery wakes an idle parent exactly once in effect.</p></div></div>
+        <div class="step"><div><h3>Explicit verification and review</h3><p>Attach success criteria and named checks to each task. A reviewer records findings against a specific diff revision; repair and re-review have bounded iterations and a clear exit condition.</p></div></div>
+        <div class="step"><div><h3>Benchmark the same path users run</h3><p>Feed tasks through the product control plane and fresh writer VMs. Pin task set, model, reasoning, hardware, limits, and repetitions. Record raw traces, pass rate, time, token cost, and VM cost.</p></div></div>
+      </div>
+    </section>
+
+    <section class="section" id="sources">
+      <h2>How to read this audit</h2>
+      <p>Every major statement links to repository source. Relative links open beside this HTML when viewed from the repository. The report describes the dirty working tree as inspected on 22 September 2026; many task files and migrations were untracked at inspection time, so a clean clone of the last commit will not contain the same implementation.</p>
+      <details><summary>Definitions used in this report</summary><dl class="glossary"><dt>Template</dt><dd>A saved Freestyle snapshot used as the starting disk for another VM.</dd><dt>Writer</dt><dd>A task allowed to modify files; its intended placement is a fresh VM.</dd><dt>Shared child</dt><dd>A read-only task on the parent's VM and checkout, with separately scoped daemon files.</dd><dt>Outbox</dt><dd>A database record of a completed, failed, or blocked child result waiting to be delivered to its parent.</dd><dt>Control plane</dt><dd>The app and worker code that owns task rows, VM binding, commands, results, and publication.</dd></dl></details>
+      <div class="footer"><p>Method: source inspection of domain models, TanStack server functions, services, database adapters, Freestyle and provider adapters, jobs, UI, migrations, and benchmark adapter. This is an architectural audit and explanation, not a measured benchmark or live acceptance test.</p></div>
+    </section>
+  </main>
+</div>
+<script>
+  const sections = [...document.querySelectorAll('main section[id], .hero[id]')];
+  const links = [...document.querySelectorAll('.rail nav a')];
+  if ('IntersectionObserver' in window) {
+    const observer = new IntersectionObserver(entries => {
+      for (const entry of entries) if (entry.isIntersecting) {
+        for (const link of links) link.classList.toggle('active', link.hash === '#' + entry.target.id);
+      }
+    }, {rootMargin:'-15% 0px -70% 0px'});
+    for (const section of sections) observer.observe(section);
+  }
+</script>
+</body>
+</html>

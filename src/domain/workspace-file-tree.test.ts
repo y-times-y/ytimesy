@@ -6,6 +6,7 @@ import {
 	firstWorkspaceFilePath,
 	workspaceExplorerTree,
 	workspaceFileTree,
+	workspacePathForMention,
 } from "./workspace-file-tree";
 
 function change(
@@ -22,6 +23,33 @@ function change(
 }
 
 describe("workspace file tree", () => {
+	it("does not mark unrelated files sharing a basename as changed", () => {
+		const tree = workspaceExplorerTree(
+			["README.md", "docs/README.md"],
+			[change("ytimesy/README.md")],
+		);
+		expect(tree[0]).toMatchObject({
+			kind: "dir",
+			children: [{ path: "docs/README.md" }],
+		});
+		if (tree[0]?.kind === "dir")
+			expect(tree[0].children[0]).not.toHaveProperty("change");
+		expect(tree[1]).toMatchObject({
+			path: "README.md",
+			change: { path: "ytimesy/README.md" },
+		});
+	});
+	it("prefers the actual checkout path over a repository-prefixed diff path", () => {
+		const changes = [change("ytimesy/README.md")];
+		expect(
+			workspacePathForMention("ytimesy/README.md", ["README.md"], changes),
+		).toBe("README.md");
+		expect(workspaceExplorerTree(["README.md"], changes)).toHaveLength(1);
+		expect(workspaceExplorerTree(["README.md"], changes)[0]).toMatchObject({
+			kind: "file",
+			path: "README.md",
+		});
+	});
 	it("nests files under directories the way a Files inspector does", () => {
 		expect(
 			workspaceFileTree([
@@ -79,6 +107,19 @@ describe("workspace file tree", () => {
 		expect(firstWorkspaceFilePath(workspaceFileTree(changes))).toBe(
 			"src/domain/session-item.ts",
 		);
+	});
+
+	it("resolves absolute agent links and line locations into the visible tree", () => {
+		const paths = ["package.json", "src/domain/session-item.ts"];
+		expect(
+			workspacePathForMention(
+				"/home/ubuntu/ytimesy/src/domain/session-item.ts:42",
+				paths,
+			),
+		).toBe("src/domain/session-item.ts");
+		expect(
+			workspacePathForMention("/home/ubuntu/ytimesy/package.json#L9", paths),
+		).toBe("package.json");
 	});
 
 	it("lists the workspace tree and only marks files that changed", () => {

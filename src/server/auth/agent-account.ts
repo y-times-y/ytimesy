@@ -8,6 +8,7 @@ interface AgentAccountRow {
 	status: "disconnected" | "connected" | "expired";
 	provider: AgentAccountProvider;
 	encrypted_snapshot_id: string | null;
+	encrypted_codex_auth: string | null;
 	plan_type: string | null;
 	email: string | null;
 	message: string | null;
@@ -17,7 +18,7 @@ export async function loadAgentAccount(
 	userId: string,
 ): Promise<UserAgentAccount> {
 	const result = await database().query(
-		"select status,provider,encrypted_snapshot_id,plan_type,email,message from agent_account where user_id=$1 and provider='codex'",
+		"select status,provider,encrypted_snapshot_id,encrypted_codex_auth,plan_type,email,message from agent_account where user_id=$1 and provider='codex'",
 		[userId],
 	);
 	return toAccount(result.rows[0]);
@@ -73,11 +74,12 @@ export async function saveConnectedAgentAccount(
 
 export async function expireAgentAccount(userId: string, message: string) {
 	await database().query(
-		`insert into agent_account(user_id,provider,status,encrypted_snapshot_id,plan_type,email,message)
-		 values($1,'codex','expired',null,null,null,$2)
+		`insert into agent_account(user_id,provider,status,encrypted_snapshot_id,encrypted_codex_auth,plan_type,email,message)
+		 values($1,'codex','expired',null,null,null,null,$2)
 		 on conflict(user_id, provider) do update set
 		  status='expired',
 		  encrypted_snapshot_id=null,
+		  encrypted_codex_auth=null,
 		  plan_type=null,
 		  email=null,
 		  message=$2,
@@ -97,6 +99,9 @@ function toAccount(row: AgentAccountRow | undefined): UserAgentAccount {
 	if (!row || row.status === "disconnected") return { status: "disconnected" };
 	if (row.status === "expired")
 		return { status: "expired", message: row.message ?? "Reconnect Codex." };
+	if (!row.encrypted_codex_auth) {
+		return { status: "expired", message: "Reconnect Codex to update its login." };
+	}
 	return {
 		status: "connected",
 		provider: row.provider === "claude" ? "codex" : row.provider,

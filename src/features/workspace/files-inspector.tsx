@@ -1,29 +1,37 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { ChevronRight } from "lucide-react";
-import { useEffect, useState } from "react";
-import type { FileChangeEntry } from "#/domain/session-item";
-import { sourceLanguageFromPath } from "#/domain/source-language";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { fileBasename } from "#/domain/file-kind";
-import { visibleWorkspacePath } from "#/domain/visible-workspace-path";
+import { filePreviewKind } from "#/domain/file-preview";
 import {
-	fileEditorSaveHotkey,
-	fileEditorSaveShortcut,
-} from "#/domain/workspace-explorer";
+	FilePreview,
+	PreviewModeSwitch,
+	WorkspaceImagePreview,
+} from "./file-preview";
+import type { FileChangeEntry } from "#/domain/session-item";
+import { fileEditorSaveShortcut } from "#/domain/workspace-explorer";
 import {
 	fileChangeForPath,
 	fileTreeChangeMark,
 	firstWorkspaceFilePath,
 	type WorkspaceTreeNode,
 	workspaceExplorerTree,
+	workspacePathForMention,
 } from "#/domain/workspace-file-tree";
 import { FileTypeIcon } from "../sessions/file-type-icon";
-import { HighlightedCode } from "../sessions/highlighted-code";
 import {
 	listWorkspaceExplorerFn,
 	readWorkspaceSourceFn,
+	readWorkspacePreviewFn,
 	writeWorkspaceSourceFn,
 } from "./explorer.fn";
+
+const SourceEditor = lazy(() =>
+	import("./source-editor").then((module) => ({
+		default: module.SourceEditor,
+	})),
+);
 
 export function FilesInspector({
 	changes,
@@ -43,6 +51,7 @@ export function FilesInspector({
 	const [drafts, setDrafts] = useState<Record<string, string>>({});
 	const listExplorer = useServerFn(listWorkspaceExplorerFn);
 	const readSource = useServerFn(readWorkspaceSourceFn);
+	const readPreview = useServerFn(readWorkspacePreviewFn);
 	const explorer = useQuery({
 		queryKey: ["workspace-explorer", projectId, sessionId],
 		queryFn: () =>
@@ -55,24 +64,39 @@ export function FilesInspector({
 	const tree = workspaceExplorerTree(explorer.data?.paths ?? [], changes);
 	const activePath =
 		(selectedPath
-			? visibleWorkspacePath(
+			? workspacePathForMention(
 					fileChangeForPath(changes, selectedPath)?.path ?? selectedPath,
+					explorer.data?.paths ?? [],
+					changes,
 				)
 			: undefined) ?? firstWorkspaceFilePath(tree);
 	const source = useQuery({
 		queryKey: ["workspace-source", projectId, sessionId, activePath],
-		queryFn: () =>
-			readSource({
-				data: { projectId, sessionId, path: activePath },
-			}),
-		enabled: active && Boolean(projectId && sessionId && activePath),
+		queryFn: async () => {
+			const data = { projectId, sessionId, path: activePath };
+			if (filePreviewKind(activePath ?? "") === "code")
+				return readSource({ data });
+			const preview = await readPreview({ data });
+			return preview.kind === "text"
+				? { path: activePath ?? "", text: preview.text }
+				: null;
+		},
+		enabled:
+			active &&
+			Boolean(projectId && sessionId && activePath) &&
+			filePreviewKind(activePath ?? "") !== "image",
 	});
 	return (
 		<section className="files-inspector" aria-label="Files">
 			<FileSourcePreview
+				key={activePath}
 				path={activePath}
 				text={source.data?.text ?? null}
-				pending={source.isPending}
+				pending={source.isFetching}
+				onRetry={() => {
+					void explorer.refetch();
+					void source.refetch();
+				}}
 				draft={activePath ? drafts[activePath] : undefined}
 				projectId={projectId}
 				sessionId={sessionId}
@@ -110,6 +134,7 @@ function FileSourcePreview({
 	path,
 	text,
 	pending,
+	onRetry,
 	draft,
 	projectId,
 	sessionId,
@@ -118,12 +143,17 @@ function FileSourcePreview({
 	path?: string;
 	text: string | null;
 	pending: boolean;
+	onRetry: () => void;
 	draft?: string;
 	projectId?: string;
 	sessionId?: string;
 	onDraftChange: (path: string, next: string, saved: string) => void;
 }) {
 	const queryClient = useQueryClient();
+	const previewKind = filePreviewKind(path ?? "");
+	const [mode, setMode] = useState<"preview" | "code">(
+		previewKind === "code" ? "code" : "preview",
+	);
 	const writeSource = useServerFn(writeWorkspaceSourceFn);
 	const saved = text ?? "";
 	const value = draft ?? saved;
@@ -166,20 +196,40 @@ function FileSourcePreview({
 			</div>
 		);
 	}
+	if (previewKind === "image")
+		return (
+			<section className="file-editor" aria-label={path}>
+				<header className="file-editor-tab">
+					<FileTypeIcon path={path} />
+					<span>{fileBasename(path)}</span>
+				</header>
+				<div className="file-editor-pane">
+					<WorkspaceImagePreview
+						path={path}
+						projectId={projectId}
+						sessionId={sessionId}
+					/>
+				</div>
+			</section>
+		);
 	if (pending && text == null) {
 		return (
-			<div className="file-editor" aria-label={path}>
+			<section className="file-editor" aria-label={path}>
 				<p className="diff-preview-empty">Opening {fileBasename(path)}…</p>
-			</div>
+			</section>
 		);
 	}
 	if (text == null) {
 		return (
-			<div className="file-editor" aria-label={path}>
+			<section className="file-editor" aria-label={path}>
 				<p className="diff-preview-empty">
-					Wake the workspace to open {fileBasename(path)}.
+					Could not open {fileBasename(path)}. The file or workspace may be
+					unavailable.
 				</p>
-			</div>
+				<button type="button" className="file-editor-save" onClick={onRetry}>
+					Try again
+				</button>
+			</section>
 		);
 	}
 	const saveFailed =
@@ -189,10 +239,17 @@ function FileSourcePreview({
 				: "Could not save."
 			: null;
 	return (
-		<div className="file-editor" aria-label={path} data-dirty={dirty || undefined}>
+		<section
+			className="file-editor"
+			aria-label={path}
+			data-dirty={dirty || undefined}
+		>
 			<header className="file-editor-tab">
 				<FileTypeIcon path={path} />
 				<span>{fileBasename(path)}</span>
+				{previewKind !== "code" ? (
+					<PreviewModeSwitch mode={mode} onChange={setMode} />
+				) : null}
 				{dirty ? <span className="file-editor-dirty" aria-hidden /> : null}
 				{dirty || save.isPending ? (
 					<button
@@ -207,29 +264,22 @@ function FileSourcePreview({
 			</header>
 			{saveFailed ? <p className="file-editor-error">{saveFailed}</p> : null}
 			<div className="file-editor-pane">
-				<pre className="file-editor-source" aria-hidden>
-					<HighlightedCode
-						text={value.endsWith("\n") ? `${value} ` : value}
-						language={sourceLanguageFromPath(path)}
-					/>
-				</pre>
-				<textarea
-					className="file-editor-input"
-					spellCheck={false}
-					wrap="off"
-					rows={Math.max(value.split("\n").length, 1)}
-					aria-label={fileBasename(path)}
-					value={value}
-					onChange={(event) => onDraftChange(path, event.target.value, saved)}
-					onKeyDown={(event) => {
-						if (fileEditorSaveHotkey(event)) {
-							event.preventDefault();
-							if (dirty && !save.isPending) save.mutate();
-						}
-					}}
-				/>
+				{mode === "preview" ? (
+					<FilePreview path={path} content={{ kind: "text", text: value }} />
+				) : (
+					<Suspense fallback={<pre>{value}</pre>}>
+						<SourceEditor
+							path={path}
+							value={value}
+							onChange={(next) => onDraftChange(path, next, saved)}
+							onSave={() => {
+								if (dirty && !save.isPending) save.mutate();
+							}}
+						/>
+					</Suspense>
+				)}
 			</div>
-		</div>
+		</section>
 	);
 }
 

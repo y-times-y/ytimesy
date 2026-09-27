@@ -69,7 +69,12 @@ beforeAll(async () => {
 		"20260915083000_product_setting.sql",
 		"20260915103000_agent_session_listed_model.sql",
 		"20260915110000_agent_session_turn_status.sql",
+		"20260920010000_agent_account_per_provider.sql",
+		"20260921230000_agent_task_lifecycle.sql",
+		"20260921231000_agent_task_events.sql",
 		"20260919161500_workspace_snapshot_source.sql",
+		"20260923011000_workspace_provider_templates.sql",
+		"20260923012000_provider_template_auth_fingerprint.sql",
 	])
 		await db.exec(await readFile(`supabase/migrations/${file}`, "utf8"));
 	await db.exec(
@@ -125,7 +130,7 @@ it("clones with an installation token file, not git argv", async () => {
 	expect(events.map((event) => event.message).join("\n")).not.toContain("ghp_");
 });
 
-it("boots a new machine from the user's Codex snapshot when one exists", async () => {
+it("does not copy the user's Codex snapshot into a project machine", async () => {
 	await saveConnectedAgentAccount("alice", {
 		provider: "codex",
 		snapshotId: "sh-alice-codex",
@@ -148,9 +153,7 @@ it("boots a new machine from the user's Codex snapshot when one exists", async (
 		stderr: "",
 	});
 	await runWorkspacePreparation(workspace.id, runtime);
-	expect(runtime.lastProvisionOptions).toEqual({
-		snapshotId: "sh-alice-codex",
-	});
+	expect(runtime.lastProvisionOptions).toBeUndefined();
 	await disconnectAgentAccount("alice");
 });
 

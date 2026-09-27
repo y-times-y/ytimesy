@@ -3,12 +3,14 @@ import { readFileSync } from "node:fs";
 import { Duration, Effect } from "effect";
 import { failureMessage } from "#/domain/failure-message";
 import {
+	ensurePinnedCodexCommand,
 	guestCliDisableUpdateExports,
-	pinnedCodexInstallCommand,
 } from "#/domain/guest-cli-pin";
-import { ensureGuestCliPin } from "#/server/adapters/guest-cli-pin";
 import type { WorkspaceId } from "#/domain/ids";
+import { ensureGuestCliPin } from "#/server/adapters/guest-cli-pin";
+import type { CodexExternalTokens } from "#/server/auth/codex-managed-auth";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
+import { embedTaskToolDefinitions } from "../task-tool-source";
 import {
 	type CodexLoginStatus,
 	isChatgptCliLoginOutput,
@@ -16,18 +18,21 @@ import {
 	parseCodexLoginStatus,
 } from "./login-status";
 
-const LOGIN_DAEMON_SOURCE = readFileSync(
-	new URL("./login-daemon.py", import.meta.url),
-	"utf8",
+const LOGIN_DAEMON_SOURCE = embedTaskToolDefinitions(
+	readFileSync(new URL("./login-daemon.py", import.meta.url), "utf8"),
 );
 const LOGIN_DAEMON_HASH_PATH = "/tmp/ytimesy-codex-login.hash";
+export const CODEX_EXTERNAL_TOKENS_PATH =
+	"/tmp/ytimesy-codex-external-tokens.json";
+export const CODEX_REFRESH_REQUEST_PATH =
+	"/tmp/ytimesy-codex-refresh-request.json";
+export const CODEX_REFRESH_RESPONSE_PATH =
+	"/tmp/ytimesy-codex-refresh-response.json";
 
 const CODEX_INSTALL_SCRIPT = `set -eu
 ${guestCliDisableUpdateExports()}
 export HOME="\${HOME:-/root}"
-if ! command -v codex >/dev/null 2>&1 && [ ! -x "$HOME/.codex/packages/standalone/current/codex" ]; then
-  ${pinnedCodexInstallCommand()}
-fi
+${ensurePinnedCodexCommand()}
 export PATH="$HOME/.local/bin:$HOME/.codex/bin:$HOME/.codex/packages/standalone/current:$PATH"
 if [ -x "$HOME/.codex/packages/standalone/current/codex" ]; then
   CODEX_BIN="$HOME/.codex/packages/standalone/current/codex"
@@ -133,6 +138,9 @@ export function startInteractiveDeviceCodeLogin(
 	options: { skipInitialTurn?: boolean } = {},
 ): Effect.Effect<CodexLoginStatus> {
 	return Effect.gen(function* () {
+		yield* Effect.tryPromise(() =>
+			machines.exec(workspaceId, `rm -f ${CODEX_EXTERNAL_TOKENS_PATH}`, 15_000),
+		);
 		yield* ensureGuestCliPin(machines, workspaceId);
 		const install = yield* Effect.tryPromise(() =>
 			machines.exec(workspaceId, CODEX_INSTALL_SCRIPT, 240_000),
@@ -150,6 +158,12 @@ export function startInteractiveDeviceCodeLogin(
 			return failedStatus(
 				"Codex install succeeded without reporting a binary path",
 			);
+		}
+		const cleared = yield* Effect.tryPromise(() =>
+			machines.exec(workspaceId, `rm -f "$HOME/.codex/auth.json"`, 15_000),
+		);
+		if (cleared.exitCode !== 0) {
+			return failedStatus("Could not clear the old Codex login.");
 		}
 
 		yield* Effect.tryPromise(() =>
@@ -207,10 +221,8 @@ export function resumeCodexSession(
 		const locate = yield* Effect.tryPromise(() =>
 			machines.exec(
 				workspaceId,
-				`${LOCATE_CODEX}
-"$CODEX_BIN" login status
-`,
-				30_000,
+				`${CODEX_INSTALL_SCRIPT}\n${LOCATE_CODEX}`,
+				240_000,
 			),
 		);
 		if (locate.exitCode !== 0) {
@@ -275,6 +287,57 @@ ${START_LOGIN_SCRIPT}`,
 		return failedStatus(
 			"Resumed Codex session did not finish model/list or turn/start",
 		);
+	}).pipe(Effect.catchAll((cause) => Effect.succeed(failedFromCause(cause))));
+}
+
+/** Execution VMs receive only a short-lived access token, never the refresh token. */
+export function configureCodexExternalAuth(
+	machines: WorkspaceMachines,
+	workspaceId: WorkspaceId,
+	tokens: CodexExternalTokens,
+): Effect.Effect<CodexLoginStatus> {
+	return Effect.gen(function* () {
+		const existing = yield* Effect.tryPromise(() =>
+			machines.readTextFile(workspaceId, CODEX_EXTERNAL_TOKENS_PATH),
+		);
+		yield* Effect.tryPromise(() =>
+			machines.writeTextFile(
+				workspaceId,
+				CODEX_EXTERNAL_TOKENS_PATH,
+				`${JSON.stringify(tokens)}\n`,
+			),
+		);
+		const secured = yield* Effect.tryPromise(() =>
+			machines.exec(
+				workspaceId,
+				`${LOCATE_CODEX}
+sudo -n chown "$(id -un):$(id -gn)" ${CODEX_EXTERNAL_TOKENS_PATH}
+chmod 600 ${CODEX_EXTERNAL_TOKENS_PATH}
+rm -f "$HOME/.codex/auth.json"
+`,
+				30_000,
+			),
+		);
+		if (secured.exitCode !== 0) {
+			return failedStatus(
+				"Could not isolate Codex credentials on this worker.",
+			);
+		}
+		if (existing) {
+			const running = yield* Effect.tryPromise(() =>
+				machines.exec(
+					workspaceId,
+					`test -f /tmp/ytimesy-codex-login.pid && kill -0 "$(cat /tmp/ytimesy-codex-login.pid)"`,
+					15_000,
+				),
+			);
+			if (running.exitCode === 0) {
+				return yield* readLoginStatus(machines, workspaceId);
+			}
+		}
+		return yield* resumeCodexSession(machines, workspaceId, {
+			skipInitialTurn: true,
+		});
 	}).pipe(Effect.catchAll((cause) => Effect.succeed(failedFromCause(cause))));
 }
 
@@ -428,6 +491,7 @@ export function submitCodexTask(
 		readonly modelId: string;
 		readonly reasoningEffort?: string;
 		readonly serviceTier?: string;
+		readonly readOnly?: boolean;
 	},
 ): Effect.Effect<CodexLoginStatus> {
 	const taskId = crypto.randomUUID();
@@ -444,12 +508,13 @@ export function submitCodexTask(
 						? { reasoningEffort: input.reasoningEffort }
 						: {}),
 					...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
+					...(input.readOnly ? { readOnly: true } : {}),
 				})}\n`,
 			),
 		);
 		const status = yield* readLoginStatus(machines, workspaceId);
 		if (status.stage === "authenticated") {
-			return { ...status, turnStatus: "running" };
+			return { ...status, turnStatus: "running" as const };
 		}
 		return status;
 	}).pipe(Effect.catchAll((cause) => Effect.succeed(failedFromCause(cause))));
@@ -460,10 +525,21 @@ export function interruptCodexTurn(
 	workspaceId: WorkspaceId,
 ): Effect.Effect<CodexLoginStatus> {
 	return Effect.gen(function* () {
+		const located = yield* Effect.tryPromise(() =>
+			machines.exec(workspaceId, "printenv HOME", 15_000),
+		);
+		const home = located.stdout.trim();
+		if (
+			located.exitCode !== 0 ||
+			!home.startsWith("/") ||
+			home.includes("\n")
+		) {
+			return failedStatus("Could not locate Codex control directory.");
+		}
 		yield* Effect.tryPromise(() =>
 			machines.writeTextFile(
 				workspaceId,
-				"/tmp/ytimesy-stop-request.json",
+				`${home}/.ytimesy-stop-request.json`,
 				`${JSON.stringify({ requestedAt: new Date().toISOString() })}\n`,
 			),
 		);

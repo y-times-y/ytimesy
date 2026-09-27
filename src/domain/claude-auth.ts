@@ -1,4 +1,5 @@
 import { claudeStreamTerminalResult } from "./claude-stream";
+import type { ListedReasoning } from "./listed-model";
 
 const ANTHROPIC_LOGIN_HOSTS = new Set([
 	"claude.ai",
@@ -153,6 +154,33 @@ export function parseClaudeModelFlagsFromHelp(output: string): readonly {
 			id,
 			label: fullName && fullName.includes(id) ? fullName : id,
 		}));
+}
+
+export function parseClaudeCapabilitiesFromHelp(output: string): {
+	readonly reasoning?: ListedReasoning;
+	readonly supportsFastMode: boolean;
+} {
+	const match = output.match(/--effort\s+<level>[\s\S]{0,240}?\(([^)]+)\)/i);
+	const ids = (match?.[1] ?? "")
+		.split(/,|\bor\b/i)
+		.map((value) => value.trim().replace(/^['"]|['"]$/g, ""))
+		.filter((value) => /^[a-z][a-z0-9_-]*$/i.test(value));
+	const firstLevelId = ids[0];
+	const defaultLevelId = ids.includes("medium") ? "medium" : firstLevelId;
+	return {
+		...(firstLevelId && defaultLevelId
+			? {
+					reasoning: {
+						levels: [
+							{ id: firstLevelId, label: firstLevelId },
+							...ids.slice(1).map((id) => ({ id, label: id })),
+						],
+						defaultLevelId,
+					},
+				}
+			: {}),
+		supportsFastMode: /^\s*--fast(?:\s|,)/m.test(output),
+	};
 }
 
 export function claudeBackgroundTurnResult(input: {

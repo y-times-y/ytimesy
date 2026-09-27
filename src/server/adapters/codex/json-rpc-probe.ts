@@ -84,7 +84,11 @@ def main():
                         "name": "ytimesy",
                         "title": "ytimesy",
                         "version": "0.0.0",
-                    }
+                    },
+                    "capabilities": {
+                        "experimentalApi": True,
+                        "requestAttestation": False,
+                    },
                 },
             },
         )

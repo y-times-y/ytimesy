@@ -1,52 +1,57 @@
+import type { HighlightResult } from "@streamdown/code";
+import { useEffect, useState } from "react";
 import type { SourceLanguage } from "#/domain/source-language";
-import { tokenizeSourceLine } from "#/domain/source-tokens";
+import { codeHighlighter } from "./code-highlighter";
 
-export function HighlightedCode({
+export function useHighlightedLines(text: string, language: SourceLanguage) {
+	const [result, setResult] = useState<{
+		text: string;
+		language: SourceLanguage;
+		tokens: HighlightResult["tokens"];
+	}>();
+	useEffect(() => {
+		let cancelled = false;
+		if (language === "text") return;
+		const receive = ({ tokens }: HighlightResult) => {
+			if (!cancelled) setResult({ text, language, tokens });
+		};
+		const ready = codeHighlighter.highlight(
+			{ code: text, language, themes: codeHighlighter.getThemes() },
+			receive,
+		);
+		if (ready) receive(ready);
+		return () => {
+			cancelled = true;
+		};
+	}, [text, language]);
+	return result?.text === text && result.language === language
+		? result.tokens
+		: undefined;
+}
+
+export function HighlightedTokens({
 	text,
-	language,
+	tokens,
 }: {
 	text: string;
-	language: SourceLanguage;
+	tokens?: HighlightResult["tokens"][number];
 }) {
-	const lines = numbered(text.split("\n"), (line) => line);
-	return (
-		<>
-			{lines.map(({ item: line, key }, position) => (
-				<span key={key} className="code-line">
-					{position > 0 ? "\n" : null}
-					<CodeTokens text={line} language={language} />
+	return tokens
+		? tokens.map((token) => (
+				<span
+					key={token.offset}
+					style={{
+						color: token.htmlStyle?.["--shiki-dark"] ?? token.color,
+						fontStyle:
+							token.fontStyle && token.fontStyle & 1 ? "italic" : undefined,
+						fontWeight:
+							token.fontStyle && token.fontStyle & 2 ? "bold" : undefined,
+						textDecoration:
+							token.fontStyle && token.fontStyle & 4 ? "underline" : undefined,
+					}}
+				>
+					{token.content}
 				</span>
-			))}
-		</>
-	);
-}
-
-export function CodeTokens({
-	text,
-	language,
-}: {
-	text: string;
-	language: SourceLanguage;
-}) {
-	return numbered(
-		tokenizeSourceLine(text, language),
-		(token) => `${token.kind}:${token.text}`,
-	).map(({ item: token, key }) => (
-		<span key={key} className={`code-token code-token-${token.kind}`}>
-			{token.text}
-		</span>
-	));
-}
-
-function numbered<T>(
-	items: readonly T[],
-	identity: (item: T) => string,
-): { item: T; key: string }[] {
-	const seen = new Map<string, number>();
-	return items.map((item) => {
-		const base = identity(item);
-		const count = (seen.get(base) ?? 0) + 1;
-		seen.set(base, count);
-		return { item, key: `${base}:${count}` };
-	});
+			))
+		: text;
 }

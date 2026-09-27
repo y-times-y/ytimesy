@@ -18,6 +18,8 @@ import {
 	sessionTitleFromItems,
 	sessionViewItems,
 } from "#/domain/session-item";
+import { recordTurnTiming } from "#/domain/turn-timing";
+import { saveAgentModelCatalog } from "#/server/adapters/agent-model-catalog";
 import {
 	type AgentSessionRecord,
 	agentSessionById,
@@ -25,11 +27,13 @@ import {
 	saveAgentSessionItems,
 	saveAgentSessionTurnStatus,
 } from "#/server/adapters/agent-sessions";
+import { saveAgentTaskResultAndEvent } from "#/server/adapters/agent-task-events";
 import {
 	insertProjectTrace,
 	loadProjectBriefing,
 	saveProjectBriefing,
 } from "#/server/adapters/project-context";
+import { enqueueAgentTaskEvent } from "#/server/jobs/queue";
 import type { PublicCodexSession } from "./codex-workspace-session";
 
 export async function persistQueuedUserTurn(
@@ -40,9 +44,11 @@ export async function persistQueuedUserTurn(
 	return persistBoundSessionView(session, {
 		...view,
 		turnStatus: "running",
-		items: sessionItemsQueuedWithUser(
-			sessionItemsFromUnknown(session?.items),
-			text,
+		items: recordTurnTiming(
+			sessionItemsQueuedWithUser(sessionItemsFromUnknown(session?.items), text),
+			"running",
+			Date.now(),
+			true,
 		),
 		canSend: false,
 	});
@@ -61,7 +67,13 @@ export async function persistBoundSessionView(
 		};
 	}
 	const stored = (await agentSessionById(session.id)) ?? session;
-	const liveItems = sessionViewItems(
+	if (
+		view.connection.status === "authenticated" &&
+		view.connection.provider === session.harness
+	) {
+		await saveAgentModelCatalog(session.userId, session.harness, view.models);
+	}
+	let liveItems = sessionViewItems(
 		view.items,
 		sessionItemsFromUnknown(stored.items),
 	);
@@ -75,6 +87,11 @@ export async function persistBoundSessionView(
 		liveLastUser: lastUserMessageText(view.items),
 	});
 	const previous = sessionItemsFromUnknown(stored.items);
+	liveItems = recordTurnTiming(
+		liveItems,
+		persistTurn ?? stored.turnStatus,
+		Date.now(),
+	);
 	const saved = await saveAgentSessionItems(
 		session.id,
 		liveItems,
@@ -83,6 +100,20 @@ export async function persistBoundSessionView(
 		persistTurn,
 	);
 	const turnStatus = saved?.turnStatus ?? persistTurn ?? session.turnStatus;
+	if (
+		session.parentSessionId &&
+		(turnStatus === "completed" || turnStatus === "failed")
+	) {
+		const summary = lastAgentMessageText(liveItems);
+		if (summary) {
+			const eventId = await saveAgentTaskResultAndEvent({
+				sessionId: session.id,
+				summary,
+				eventType: turnStatus === "failed" ? "failed" : "completed",
+			});
+			if (eventId) void enqueueAgentTaskEvent(eventId).catch(() => undefined);
+		}
+	}
 	if (liveItems.length > 0 && turnStatus !== "running") {
 		await captureTurnTrace(session, previous, liveItems);
 	}

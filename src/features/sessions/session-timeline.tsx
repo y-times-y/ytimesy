@@ -1,5 +1,6 @@
 import { ChevronRight } from "lucide-react";
 import { type UIEvent, useEffect, useRef } from "react";
+import { commandActivityTitle } from "#/domain/command-activity-title";
 import { fileChangeTotals } from "#/domain/diff-preview";
 import {
 	fileChangeActivity,
@@ -20,16 +21,16 @@ import { thoughtLabel } from "#/domain/thought-label";
 import {
 	explorationGroupIsLive,
 	explorationLabel,
+	groupExplorationRows,
 	groupTimelineRows,
 	type TimelineRow,
 } from "#/domain/timeline-activity";
-import { visibleShellCommand } from "#/domain/visible-shell-command";
 import { ActivityIcon } from "./activity-icon";
 import { AgentMarkdown } from "./agent-markdown";
 import { FileChangeCounts } from "./file-change-counts";
 import { FileMentionButton } from "./file-mention";
-import { FileTypeIcon } from "./file-type-icon";
 import { LiveCollapsible } from "./live-collapsible";
+import { ShellCommandCode } from "./shell-command-code";
 
 export function SessionTimeline({
 	items,
@@ -45,8 +46,13 @@ export function SessionTimeline({
 	const listRef = useRef<HTMLOListElement>(null);
 	const stickToEnd = useRef(true);
 	const visible = compactTimelineItems(items);
-	const rows = groupTimelineRows(visible);
+	const rows = groupTimelineRows(visible, turnStatus);
 	const fileChanges = fileChangesFromSessionItems(items);
+	const currentTurnIds = new Set<SessionItem["id"]>();
+	for (const item of visible) {
+		if (item.kind === "userMessage") currentTurnIds.clear();
+		else currentTurnIds.add(item.id);
+	}
 
 	useEffect(() => {
 		if (!stickToEnd.current) return;
@@ -71,14 +77,18 @@ export function SessionTimeline({
 		>
 			{rows.map((row) => (
 				<li
-					key={row.kind === "item" ? row.item.id : `explore:${row.id}`}
-					data-kind={row.kind === "item" ? row.item.kind : "exploration"}
+					key={row.kind === "item" ? row.item.id : `${row.kind}:${row.id}`}
+					data-kind={row.kind === "item" ? row.item.kind : row.kind}
 				>
 					<TimelineRowView
 						row={row}
-						turnRunning={turnStatus === "running"}
+						turnRunning={
+							turnStatus === "running" &&
+							currentTurnIds.has(row.kind === "item" ? row.item.id : row.id)
+						}
 						isLastItem={
-							row.kind === "item" && row.item.id === visible.at(-1)?.id
+							(row.kind === "item" ? row.item.id : row.items.at(-1)?.id) ===
+							visible.at(-1)?.id
 						}
 						fileChanges={fileChanges}
 						onOpenFile={onOpenFile}
@@ -107,8 +117,32 @@ function TimelineRowView({
 	fileChanges: readonly FileChangeEntry[];
 	onOpenFile?: (path: string) => void;
 }) {
+	if (row.kind === "work") {
+		return (
+			<details className="session-work">
+				<summary>
+					<span title="Elapsed time from dispatch to observed completion">
+						{row.label}
+					</span>
+					<ChevronRight size={12} className="session-activity-chevron" />
+				</summary>
+				<div className="session-work-items">
+					{groupExplorationRows(row.items).map((child) => (
+						<TimelineRowView
+							key={child.kind === "item" ? child.item.id : child.id}
+							row={child}
+							turnRunning={false}
+							isLastItem={false}
+							fileChanges={fileChanges}
+							onOpenFile={onOpenFile}
+						/>
+					))}
+				</div>
+			</details>
+		);
+	}
 	if (row.kind === "exploration") {
-		const live = explorationGroupIsLive(row.items);
+		const live = turnRunning && explorationGroupIsLive(row.items);
 		return (
 			<LiveCollapsible
 				className="session-exploration"
@@ -145,7 +179,6 @@ function TimelineRowView({
 			item={row.item}
 			thoughtInProgress={turnRunning && isLastItem}
 			turnRunning={turnRunning}
-			isLastItem={isLastItem}
 			fileChanges={fileChanges}
 			onOpenFile={onOpenFile}
 		/>
@@ -157,7 +190,6 @@ function SessionItemView({
 	nested = false,
 	thoughtInProgress = false,
 	turnRunning = false,
-	isLastItem = false,
 	fileChanges,
 	onOpenFile,
 }: {
@@ -165,7 +197,6 @@ function SessionItemView({
 	nested?: boolean;
 	thoughtInProgress?: boolean;
 	turnRunning?: boolean;
-	isLastItem?: boolean;
 	fileChanges: readonly FileChangeEntry[];
 	onOpenFile?: (path: string) => void;
 }) {
@@ -185,12 +216,11 @@ function SessionItemView({
 				<div
 					className="session-message"
 					data-role="assistant"
-					data-streaming={
-						turnRunning && item.streaming ? "true" : undefined
-					}
+					data-streaming={turnRunning && item.streaming ? "true" : undefined}
 				>
 					<AgentMarkdown
 						text={item.text}
+						streaming={Boolean(turnRunning && item.streaming)}
 						fileChanges={fileChanges}
 						onOpenFile={onOpenFile}
 					/>
@@ -203,6 +233,7 @@ function SessionItemView({
 				inProgress: live,
 			});
 			if (summaries.length === 0) {
+				if (!live) return null;
 				return (
 					<div
 						className="session-activity"
@@ -223,7 +254,10 @@ function SessionItemView({
 					live={live}
 				>
 					<summary>
-						<span className={titleClass}>{title}</span>
+						<span className={titleClass}>
+							{summaries[0]?.split("\n")[0].replace(/^#+\s*|\*\*/g, "") ||
+								title}
+						</span>
 						<ChevronRight size={12} className="session-activity-chevron" />
 					</summary>
 					{summaries.map((summary) => (
@@ -246,31 +280,31 @@ function SessionItemView({
 		case "commandExecution": {
 			const status = activityStatusLabel(item.status);
 			return (
-				<LiveCollapsible
+				<details
 					className="session-activity"
 					data-kind="commandExecution"
 					data-status={item.status}
 					data-live={live ? "true" : undefined}
-					live={live}
 				>
 					<summary>
-						<span className="session-shell-prefix" aria-hidden="true">
-							$
+						<span className={titleClass}>
+							{commandActivityTitle(item.command)}
 						</span>
-						<code className={titleClass}>
-							{visibleShellCommand(item.command)}
-						</code>
 						{status ? (
 							<span className="session-activity-status">{status}</span>
 						) : null}
+						<ChevronRight size={12} className="session-activity-chevron" />
 					</summary>
-					{item.output ? (
-						<pre className="session-output">{item.output}</pre>
-					) : null}
-					{item.status === "failed" && item.exitCode !== null ? (
-						<p className="session-activity-meta">exit {item.exitCode}</p>
-					) : null}
-				</LiveCollapsible>
+					<div className="session-command-detail">
+						<ShellCommandCode command={item.command} />
+						{item.output ? (
+							<pre className="session-output">{item.output}</pre>
+						) : null}
+						{item.exitCode !== null ? (
+							<p className="session-activity-meta">exit {item.exitCode}</p>
+						) : null}
+					</div>
+				</details>
 			);
 		}
 		case "fileChange": {
@@ -337,7 +371,6 @@ function SessionItemView({
 					</summary>
 					{item.changes.map((change) => (
 						<p className="session-file-change-row" key={change.path}>
-							<FileTypeIcon path={change.path} />
 							<FileMentionButton
 								path={change.path}
 								name={fileBasename(change.path)}
@@ -439,9 +472,9 @@ function activityTitleIsLive(
 	thoughtInProgress: boolean,
 ): boolean {
 	if (item.kind === "reasoning") {
-		return turnRunning && (thoughtInProgress || item.durationSeconds == null);
+		return turnRunning && thoughtInProgress;
 	}
-	return liveActivityStatus(item) === "inProgress";
+	return turnRunning && liveActivityStatus(item) === "inProgress";
 }
 
 function activityStatusLabel(status: string): string | null {
