@@ -1,6 +1,5 @@
 import { Effect } from "effect";
 import { competitionCandidateInstructions } from "#/domain/agent-competition";
-import { modelIdForAttempt } from "#/domain/model-attempts";
 import {
 	competitionCandidate,
 	competitionCandidateIds,
@@ -49,11 +48,7 @@ export async function startAgentCompetition(
 				competitionId: group.id,
 				title: `Agent ${index}`,
 				harness: group.harness,
-				modelId: modelIdForAttempt(
-					group.attempt_model_ids,
-					group.model_id,
-					index,
-				),
+				modelId: group.model_id,
 				prompt: `${group.prompt}\n\n${competitionCandidateInstructions}`,
 				placement: "fresh",
 				access: "read_write",

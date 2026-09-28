@@ -15,8 +15,6 @@ export type AgentCompetition = {
 	status: "queued" | "working" | "judging" | "complete" | "failed";
 	winnerSessionId: string | null;
 	errorMessage: string | null;
-	/** One entry per agent, in candidate order. Repeated ids are extra copies. */
-	attemptModelIds?: readonly string[];
 	candidates: readonly CompetitionCandidate[];
 };
 
