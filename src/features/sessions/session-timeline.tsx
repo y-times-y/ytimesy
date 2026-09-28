@@ -1,5 +1,7 @@
 import { ChevronRight } from "lucide-react";
-import { type UIEvent, useEffect, useRef } from "react";
+import { Fragment, type UIEvent, useEffect, useRef } from "react";
+import { SixDotSpinner } from "#/components/ui/six-dot-spinner";
+import type { AgentCompetition } from "#/domain/agent-competition";
 import { commandActivityTitle } from "#/domain/command-activity-title";
 import { fileChangeTotals } from "#/domain/diff-preview";
 import {
@@ -38,11 +40,17 @@ export function SessionTimeline({
 	turnStatus,
 	fill = false,
 	onOpenFile,
+	competitions = [],
+	onOpenCandidate,
+	autoScroll = true,
 }: {
 	items: readonly SessionItem[];
 	turnStatus: SessionTurnStatus;
 	fill?: boolean;
 	onOpenFile?: (path: string) => void;
+	competitions?: readonly AgentCompetition[];
+	onOpenCandidate?: (sessionId: string) => void;
+	autoScroll?: boolean;
 }) {
 	const listRef = useRef<HTMLOListElement>(null);
 	const stickToEnd = useRef(true);
@@ -56,10 +64,10 @@ export function SessionTimeline({
 	}
 
 	useEffect(() => {
-		if (!stickToEnd.current) return;
+		if (!autoScroll || !stickToEnd.current) return;
 		if (items.length === 0 && turnStatus !== "running") return;
 		listRef.current?.lastElementChild?.scrollIntoView({ block: "end" });
-	}, [items, turnStatus]);
+	}, [autoScroll, items, turnStatus]);
 
 	function rememberScrollPin(event: UIEvent<HTMLOListElement>) {
 		const list = event.currentTarget;
@@ -76,32 +84,164 @@ export function SessionTimeline({
 			aria-label="Session"
 			onScroll={rememberScrollPin}
 		>
-			{rows.map((row) => (
-				<li
-					key={row.kind === "item" ? row.item.id : `${row.kind}:${row.id}`}
-					data-kind={row.kind === "item" ? row.item.kind : row.kind}
-				>
-					<TimelineRowView
-						row={row}
-						turnRunning={
-							turnStatus === "running" &&
-							currentTurnIds.has(row.kind === "item" ? row.item.id : row.id)
-						}
-						isLastItem={
-							(row.kind === "item" ? row.item.id : row.items.at(-1)?.id) ===
-							visible.at(-1)?.id
-						}
-						fileChanges={fileChanges}
-						onOpenFile={onOpenFile}
-					/>
-				</li>
-			))}
-			{showTurnWorking(items, turnStatus) ? (
+			{rows.map((row) => {
+				const rowId = row.kind === "item" ? row.item.id : row.id;
+				const attached =
+					row.kind === "item" && row.item.kind === "userMessage"
+						? competitions.filter(
+								(group) => group.userMessageId === row.item.id,
+							)
+						: [];
+				return (
+					<Fragment
+						key={row.kind === "item" ? row.item.id : `${row.kind}:${row.id}`}
+					>
+						<li data-kind={row.kind === "item" ? row.item.kind : row.kind}>
+							<TimelineRowView
+								row={row}
+								turnRunning={
+									turnStatus === "running" && currentTurnIds.has(rowId)
+								}
+								isLastItem={
+									(row.kind === "item" ? row.item.id : row.items.at(-1)?.id) ===
+									visible.at(-1)?.id
+								}
+								fileChanges={fileChanges}
+								onOpenFile={onOpenFile}
+							/>
+						</li>
+						{attached.map((group) => (
+							<li key={group.id} data-kind="competition">
+								<CompetitionTurn
+									group={group}
+									onOpenCandidate={onOpenCandidate}
+								/>
+							</li>
+						))}
+					</Fragment>
+				);
+			})}
+			{!competitions.some((group) =>
+				["queued", "working"].includes(group.status),
+			) && showTurnWorking(items, turnStatus) ? (
 				<li data-kind="working">
 					<p className="session-working session-shimmer">Thinking</p>
 				</li>
 			) : null}
 		</ol>
+	);
+}
+
+function CompetitionTurn({
+	group,
+	onOpenCandidate,
+}: {
+	group: AgentCompetition;
+	onOpenCandidate?: (sessionId: string) => void;
+}) {
+	const candidatesFinished =
+		group.candidates.length === group.leaderCount &&
+		group.candidates.every((candidate) =>
+			["done", "failed"].includes(candidate.status),
+		);
+	return (
+		<section
+			className="competition-turn"
+			aria-label={`${group.leaderCount} independent agents`}
+		>
+			<div className="competition-turn-heading">
+				<span>{group.leaderCount} agents on this task</span>
+				<small>
+					{group.status === "judging"
+						? "Reviewing results"
+						: group.status === "complete"
+							? "Review complete"
+							: group.status === "failed"
+								? "Stopped"
+								: "Working independently"}
+				</small>
+			</div>
+			{[1, 2, 3, 4, 5].slice(0, group.leaderCount).map((agentNumber) => {
+				const candidate = group.candidates.find(
+					(item) => item.index === agentNumber,
+				);
+				const status = candidate?.status ?? "draft";
+				return (
+					<details
+						className="competition-candidate"
+						key={`${group.id}-agent-${agentNumber}`}
+					>
+						<summary>
+							{["working", "waiting"].includes(status) ? (
+								<SixDotSpinner />
+							) : (
+								<span className="competition-agent-dot" data-status={status} />
+							)}
+							<span>{`Agent ${agentNumber}`}</span>
+							<small className="competition-candidate-meta">
+								{group.winnerSessionId === candidate?.id
+									? "Selected"
+									: status === "done"
+										? "Done"
+										: status === "failed"
+											? "Failed"
+											: ["working", "waiting"].includes(status)
+												? "Working"
+												: "Starting"}
+							</small>
+							<ChevronRight
+								className="competition-candidate-chevron"
+								size={14}
+							/>
+						</summary>
+						{candidate ? (
+							<div className="competition-candidate-content">
+								<SessionTimeline
+									items={candidate.items.filter(
+										(item) => item.kind !== "userMessage",
+									)}
+									turnStatus={
+										["working", "waiting"].includes(status)
+											? "running"
+											: status === "done"
+												? "completed"
+												: status === "failed"
+													? "failed"
+													: "idle"
+									}
+									fill
+									autoScroll={false}
+								/>
+								{candidate.summary ? <p>{candidate.summary}</p> : null}
+								{onOpenCandidate ? (
+									<button
+										type="button"
+										onClick={() => onOpenCandidate(candidate.id)}
+									>
+										Inspect workspace
+									</button>
+								) : null}
+							</div>
+						) : null}
+					</details>
+				);
+			})}
+			{candidatesFinished && ["judging", "complete"].includes(group.status) ? (
+				<p className="competition-judge">
+					{group.status === "judging" ? <SixDotSpinner /> : null}
+					<span>
+						{group.status === "judging"
+							? "Judge reviewing results"
+							: group.winnerSessionId
+								? `Judge selected Agent ${group.candidates.find((candidate) => candidate.id === group.winnerSessionId)?.index ?? ""}`
+								: "Judge finished without a selection"}
+					</span>
+				</p>
+			) : null}
+			{group.errorMessage ? (
+				<p className="competition-error">{group.errorMessage}</p>
+			) : null}
+		</section>
 	);
 }
 

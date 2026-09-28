@@ -228,6 +228,7 @@ export function sessionItemsFromUnknown(value: unknown): SessionItem[] {
 export function sessionItemsQueuedWithUser(
 	items: readonly SessionItem[],
 	text: string,
+	messageId?: string,
 ): SessionItem[] {
 	const queued = text.trim();
 	if (!queued) return [...items];
@@ -236,7 +237,9 @@ export function sessionItemsQueuedWithUser(
 		...items,
 		{
 			kind: "userMessage",
-			id: SessionItemId(`queued-user-${items.length}-${queued.length}`),
+			id: SessionItemId(
+				messageId ?? `queued-user-${items.length}-${queued.length}`,
+			),
 			text: queued,
 		},
 	];

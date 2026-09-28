@@ -102,7 +102,7 @@ describe("job queue connection lifecycle", () => {
 		const [a, b] = await Promise.all([first, second]);
 		expect(premature).toBe(false);
 		expect(a).toBe(b);
-		expect(fake.instances[0].createQueue).toHaveBeenCalledTimes(3);
+		expect(fake.instances[0].createQueue).toHaveBeenCalledTimes(4);
 	});
 	it("closes a failed startup and lets the next request retry", async () => {
 		fake.start = async () => {

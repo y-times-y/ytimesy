@@ -6,6 +6,8 @@ import {
 	Monitor,
 	Terminal,
 } from "lucide-react";
+import { SixDotSpinner } from "#/components/ui/six-dot-spinner";
+import type { AgentCompetition } from "#/domain/agent-competition";
 import type { AgentTask } from "#/domain/agent-task";
 import { fileChangeTotals } from "#/domain/diff-preview";
 import type { FileChangeEntry, SessionItem } from "#/domain/session-item";
@@ -22,6 +24,7 @@ import type { ToolsView } from "./workspace-inspector";
 
 export function WorkspaceOverview({
 	tasks,
+	competitions = [],
 	items,
 	changes,
 	pullRequests,
@@ -30,6 +33,7 @@ export function WorkspaceOverview({
 	onOpen,
 }: {
 	tasks: readonly AgentTask[];
+	competitions?: readonly AgentCompetition[];
 	items: readonly SessionItem[];
 	changes: readonly FileChangeEntry[];
 	pullRequests: readonly ListedPullRequest[];
@@ -42,6 +46,11 @@ export function WorkspaceOverview({
 		.filter((item) => item.kind === "plan" && item.todos !== undefined)
 		.at(-1);
 	const totals = fileChangeTotals(changes);
+	const candidateIds = new Set(
+		competitions.flatMap((group) =>
+			group.candidates.map((candidate) => candidate.id),
+		),
+	);
 	const cards = [
 		{
 			view: "diff",
@@ -77,6 +86,51 @@ export function WorkspaceOverview({
 	] as const;
 	return (
 		<section className="workspace-overview" aria-label="Overview">
+			{competitions.map((competition, index) => (
+				<section
+					key={competition.id}
+					className="overview-section competition-overview"
+					aria-label={`Independent agents for task ${index + 1}`}
+				>
+					<h2>
+						Task {index + 1} <span>{competition.leaderCount} agents</span>
+					</h2>
+					<p>
+						{competition.status === "complete"
+							? competition.winnerSessionId
+								? "Agent selected"
+								: "No winner selected"
+							: competition.status === "failed"
+								? "Could not complete comparison"
+								: competition.status === "judging"
+									? "Comparing results"
+									: "Agents are implementing the same task separately"}
+					</p>
+					{competition.status === "working" ||
+					competition.status === "queued" ||
+					competition.status === "judging" ? (
+						<SixDotSpinner />
+					) : null}
+					{competition.errorMessage ? (
+						<small>{competition.errorMessage}</small>
+					) : null}
+					{tasks.some((task) =>
+						competition.candidates.some(
+							(candidate) => candidate.id === task.id,
+						),
+					) ? (
+						<TaskPanel
+							tasks={tasks.filter((task) =>
+								competition.candidates.some(
+									(candidate) => candidate.id === task.id,
+								),
+							)}
+							winnerId={competition.winnerSessionId}
+							comparison
+						/>
+					) : null}
+				</section>
+			))}
 			{todoPlan?.kind === "plan" && todoPlan.todos?.length ? (
 				<TodoList todos={todoPlan.todos} />
 			) : null}
@@ -86,7 +140,9 @@ export function WorkspaceOverview({
 					<AgentMarkdown text={plan.text} />
 				</section>
 			) : null}
-			{tasks.length > 0 ? <TaskPanel tasks={tasks} /> : null}
+			{tasks.some((task) => !candidateIds.has(task.id)) ? (
+				<TaskPanel tasks={tasks.filter((task) => !candidateIds.has(task.id))} />
+			) : null}
 			{pullRequests.length > 0 ? (
 				<section className="overview-section">
 					<h2>

@@ -6,6 +6,7 @@ import { database } from "../adapters/database";
 export const PREPARE_WORKSPACE_QUEUE = "prepare-workspace";
 export const REFRESH_WORKSPACE_QUEUE = "refresh-workspace-snapshot";
 export const AGENT_TASK_EVENT_QUEUE = "agent-task-event";
+export const START_COMPETITION_QUEUE = "start-agent-competition";
 
 export interface WorkspaceJobQueue {
 	enqueuePrepare(
@@ -72,6 +73,12 @@ async function startJobQueue(role: QueueRole): Promise<PgBoss> {
 			retryDelay: 15,
 			expireInSeconds: 30 * 60,
 		});
+		await boss.createQueue(START_COMPETITION_QUEUE, {
+			policy: "singleton",
+			retryLimit: 2,
+			retryBackoff: true,
+			expireInSeconds: 30 * 60,
+		});
 		return boss;
 	} catch (error) {
 		await boss.stop({ graceful: false, timeout: 1000 }).catch(() => undefined);
@@ -85,6 +92,15 @@ export async function enqueueAgentTaskEvent(eventId?: string) {
 		AGENT_TASK_EVENT_QUEUE,
 		{ eventId: eventId ?? null },
 		eventId ? { singletonKey: eventId } : undefined,
+	);
+}
+
+export async function enqueueCompetition(rootSessionId: string) {
+	const queue = await jobQueue();
+	return queue.send(
+		START_COMPETITION_QUEUE,
+		{ rootSessionId },
+		{ singletonKey: rootSessionId },
 	);
 }
 

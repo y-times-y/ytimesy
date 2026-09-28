@@ -1,3 +1,7 @@
+import {
+	competitionCandidatePublicItems,
+	competitionPublicItems,
+} from "#/domain/agent-competition";
 import { sessionTurnStatusForPersist } from "#/domain/agent-session";
 import { listedModelPreferenceFromSessions } from "#/domain/listed-model";
 import {
@@ -19,6 +23,7 @@ import {
 	sessionViewItems,
 } from "#/domain/session-item";
 import { recordTurnTiming } from "#/domain/turn-timing";
+import { competitionForCandidate } from "#/server/adapters/agent-competitions";
 import { saveAgentModelCatalog } from "#/server/adapters/agent-model-catalog";
 import {
 	type AgentSessionRecord,
@@ -67,26 +72,35 @@ export async function persistBoundSessionView(
 		};
 	}
 	const stored = (await agentSessionById(session.id)) ?? session;
+	const competition =
+		stored.candidateIndex && stored.parentSessionId
+			? await competitionForCandidate(stored.userId, stored.id)
+			: null;
+	const publicItems = (items: readonly SessionItem[]) =>
+		competition
+			? competitionCandidatePublicItems(items, competition.prompt)
+			: competitionPublicItems(items);
+	const recordedItems = publicItems(sessionItemsFromUnknown(stored.items));
+	const providerItems = publicItems(view.items);
 	if (
 		view.connection.status === "authenticated" &&
 		view.connection.provider === session.harness
 	) {
 		await saveAgentModelCatalog(session.userId, session.harness, view.models);
 	}
-	let liveItems = sessionViewItems(
-		view.items,
-		sessionItemsFromUnknown(stored.items),
-	);
-	const title = sessionTitleFromItems(liveItems);
+	let liveItems = sessionViewItems(providerItems, recordedItems);
+	const title = stored.candidateIndex
+		? undefined
+		: sessionTitleFromItems(liveItems);
 	const submittedModelId = view.listedModelId.trim() || stored.listedModelId;
 	const persistTurn = sessionTurnStatusForPersist({
 		liveStatus: view.turnStatus,
 		liveConnection: view.connection.status,
 		storedStatus: stored.turnStatus,
-		storedLastUser: lastUserMessageText(sessionItemsFromUnknown(stored.items)),
-		liveLastUser: lastUserMessageText(view.items),
+		storedLastUser: lastUserMessageText(recordedItems),
+		liveLastUser: lastUserMessageText(providerItems),
 	});
-	const previous = sessionItemsFromUnknown(stored.items);
+	const previous = recordedItems;
 	liveItems = recordTurnTiming(
 		liveItems,
 		persistTurn ?? stored.turnStatus,
