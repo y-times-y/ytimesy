@@ -58,7 +58,7 @@ export async function readApiWorkspaceSession(scope: CodexSessionScope) {
 
 export async function sendApiWorkspaceTask(
 	scope: CodexSessionScope,
-	input: { text: string; modelId: string },
+	input: { text: string; modelId: string; runtimeText?: string },
 	preparedTask = false,
 ) {
 	if (!scope.projectId)
@@ -94,6 +94,11 @@ export async function sendApiWorkspaceTask(
 		input.text,
 	);
 	const messages = apiConversation(items);
+	if (input.runtimeText)
+		messages[messages.length - 1] = {
+			role: "user",
+			content: input.runtimeText,
+		};
 	assertApiContextFits(messages);
 	await enqueueApiTurn({
 		userId: scope.userId,

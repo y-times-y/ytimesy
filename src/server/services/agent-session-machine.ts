@@ -67,6 +67,8 @@ async function resolveAgentSessionRecord(input: {
 	readonly sessionId?: string;
 	readonly createNew?: boolean;
 	readonly parentSessionId?: string;
+	readonly candidateIndex?: number;
+	readonly competitionId?: string;
 	readonly title?: string;
 	readonly listedModelId?: string;
 	readonly task?: {
@@ -131,6 +133,8 @@ async function resolveAgentSessionRecord(input: {
 			workspaceId: workspace.id,
 			harness: input.harness,
 			parentSessionId: input.parentSessionId,
+			candidateIndex: input.candidateIndex,
+			competitionId: input.competitionId,
 			title: input.title,
 			listedModelId:
 				input.listedModelId?.trim() || inherited.listedModelId || null,
@@ -172,6 +176,8 @@ export async function openAgentTask(input: {
 	readonly userId: string;
 	readonly projectId: string;
 	readonly parentSessionId: string;
+	readonly candidateIndex?: number;
+	readonly competitionId?: string;
 	readonly title: string;
 	readonly harness: AgentProviderId;
 	readonly modelId: string;
@@ -226,6 +232,8 @@ export async function openAgentTask(input: {
 		projectId: input.projectId,
 		harness: input.harness,
 		parentSessionId: input.parentSessionId,
+		candidateIndex: input.candidateIndex,
+		competitionId: input.competitionId,
 		title: input.title,
 		listedModelId: input.modelId,
 		createNew: true,

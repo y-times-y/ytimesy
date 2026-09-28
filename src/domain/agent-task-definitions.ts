@@ -177,6 +177,17 @@ export const agentTaskToolDefinitions = [
 		},
 	},
 	{
+		name: "select_competition_winner",
+		description:
+			"Select one completed and reviewed independent leader as winner after comparing evidence. Does not merge or publish.",
+		inputSchema: {
+			type: "object",
+			properties: { taskId: { type: "string" } },
+			required: ["taskId"],
+			additionalProperties: false,
+		},
+	},
+	{
 		name: "publish_task",
 		description:
 			"Commit a reviewed task, push its branch, and open a draft pull request. Multi-repository projects require repositoryFullName; publish each repository separately.",

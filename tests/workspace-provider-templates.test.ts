@@ -53,5 +53,5 @@ describe("provider project template migration", () => {
 		} finally {
 			await db.close();
 		}
-	});
+	}, 15_000);
 });

@@ -6,6 +6,7 @@ import {
 	CornerDownRight,
 } from "lucide-react";
 import type { CSSProperties } from "react";
+import { SixDotSpinner } from "#/components/ui/six-dot-spinner";
 import type { AgentTask, AgentTaskStatus } from "#/domain/agent-task";
 
 const statusLabels: Record<AgentTaskStatus, string> = {
@@ -17,7 +18,15 @@ const statusLabels: Record<AgentTaskStatus, string> = {
 	failed: "Failed",
 };
 
-export function TaskPanel({ tasks }: { tasks: readonly AgentTask[] }) {
+export function TaskPanel({
+	tasks,
+	winnerId,
+	comparison = false,
+}: {
+	tasks: readonly AgentTask[];
+	winnerId?: string | null;
+	comparison?: boolean;
+}) {
 	const completed = tasks.filter((task) => task.status === "done").length;
 	return (
 		<section className="task-panel" aria-label="Tasks">
@@ -64,18 +73,34 @@ export function TaskPanel({ tasks }: { tasks: readonly AgentTask[] }) {
 									<CircleAlert size={14} />
 								) : task.status === "waiting" ? (
 									<Clock3 size={14} />
+								) : task.status === "working" ? (
+									<SixDotSpinner />
 								) : (
-									<Circle
-										size={12}
-										fill={task.status === "working" ? "currentColor" : "none"}
-									/>
+									<Circle size={12} fill="none" />
 								)}
 							</span>
 							<div className="task-row-copy">
 								<div>
-									<span className="task-label">{task.label}</span>
+									<span className="task-label">
+										{comparison && task.depth === 1
+											? task.label.replace(/^Task /, "Agent ")
+											: task.label}
+									</span>
 									<strong>
-										{task.status === "done" ? <s>{task.title}</s> : task.title}
+										{task.status === "done" ? (
+											<s>
+												{comparison && task.depth === 1
+													? "Independent implementation"
+													: task.title}
+											</s>
+										) : comparison && task.depth === 1 ? (
+											"Independent implementation"
+										) : (
+											task.title
+										)}
+										{winnerId === task.id ? (
+											<span className="task-winner"> Selected</span>
+										) : null}
 									</strong>
 								</div>
 								<small>

@@ -2,12 +2,17 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Effect } from "effect";
 import type { EnvironmentModel } from "#/domain/environment-model";
+import {
+	markCompetitionStatus,
+	reconcileFinishedCompetitionJudges,
+} from "../adapters/agent-competitions";
 import { claimApiTurn, expireApiTurnLeases } from "../adapters/api-turns";
 import { closeDatabase } from "../adapters/database";
 import { readFreestyleApiKey } from "../adapters/freestyle/api-key";
 import { createFreestyleWorkspaceMachines } from "../adapters/freestyle/workspace-machines";
 import { applyProjectEnvironment } from "../adapters/rigkit/apply";
 import { listReadyWorkspaceIds } from "../adapters/workspaces";
+import { startAgentCompetition } from "../services/agent-competition-run";
 import { deliverAgentTaskEvents } from "../services/agent-task-event-delivery";
 import { reconcileRunningAgentTurns } from "../services/agent-turn-reconciliation";
 import { reconcileCodexRefreshRequests } from "../services/codex-refresh-reconciliation";
@@ -17,6 +22,7 @@ import {
 	jobQueue,
 	PREPARE_WORKSPACE_QUEUE,
 	REFRESH_WORKSPACE_QUEUE,
+	START_COMPETITION_QUEUE,
 } from "./queue";
 
 let turnSweep: ReturnType<typeof setInterval> | undefined;
@@ -63,6 +69,21 @@ export async function startWorkspaceWorker() {
 			await deliverAgentTaskEvents(taskMachines, job.data.eventId ?? undefined);
 		},
 	);
+	await queue.work<{ rootSessionId: string }>(
+		START_COMPETITION_QUEUE,
+		{ localConcurrency: 1 },
+		async ([job]) => {
+			try {
+				await startAgentCompetition(taskMachines, job.data.rootSessionId);
+			} catch {
+				await markCompetitionStatus(
+					job.data.rootSessionId,
+					"failed",
+					"Could not launch all independent agents. Review the Tasks panel for any partial work.",
+				);
+			}
+		},
+	);
 	try {
 		if (process.env.YTIMESY_ENVIRONMENT_AUTO_REFRESH === "false")
 			await queue.unschedule(REFRESH_WORKSPACE_QUEUE);
@@ -81,6 +102,7 @@ export async function startWorkspaceWorker() {
 		reconciling = true;
 		try {
 			await reconcileRunningAgentTurns(taskMachines);
+			await reconcileFinishedCompetitionJudges();
 		} catch {
 			// The next sweep retries after a database or provider outage.
 		} finally {

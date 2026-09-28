@@ -2,6 +2,12 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { ArrowUp, Square, X } from "lucide-react";
 import { type KeyboardEvent, useEffect, useMemo, useState } from "react";
+import { SixDotSpinner } from "#/components/ui/six-dot-spinner";
+import {
+	type AgentCompetition,
+	competitionModeAvailable,
+	competitionSendIsEnabled,
+} from "#/domain/agent-competition";
 import { connectedProviderId } from "#/domain/agent-connection";
 import {
 	type AgentProviderId,
@@ -39,6 +45,7 @@ import {
 } from "#/domain/slash-command";
 import { authClient } from "#/features/auth/client";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
+import { AgentCountPicker } from "./agent-count-picker";
 import { ContextUsage } from "./context-usage";
 import { HarnessLogin } from "./harness-login";
 import {
@@ -66,7 +73,10 @@ export function SessionLauncher({
 	onOpenSideChat,
 	onOpenInspector,
 	onOpenFile,
+	onOpenCandidate,
 	onComposerModelIdChange,
+	competitions = [],
+	allowComparison = true,
 	projects,
 	selectedProject,
 	onSelectProject,
@@ -81,14 +91,22 @@ export function SessionLauncher({
 	onSend: (
 		text: string,
 		modelId: string,
-		options?: { readonly reasoningId?: string; readonly fast?: boolean },
+		options?: {
+			readonly reasoningId?: string;
+			readonly fast?: boolean;
+			readonly leaderCount?: number;
+			readonly userMessageId?: string;
+		},
 	) => void;
 	onConnect: () => void;
 	onStop: () => void;
 	onOpenSideChat: (question?: string) => void;
 	onOpenInspector: (view: InspectorView) => void;
 	onOpenFile?: (path: string) => void;
+	onOpenCandidate?: (sessionId: string) => void;
 	onComposerModelIdChange?: (modelId: string) => void;
+	competitions?: readonly AgentCompetition[];
+	allowComparison?: boolean;
 	projects: Project[];
 	selectedProject?: Project;
 	onSelectProject: (id: string) => void;
@@ -174,6 +192,7 @@ export function SessionLauncher({
 	const [modelId, setModelId] = useState(session.listedModelId);
 	const [reasoningId, setReasoningId] = useState("");
 	const [fast, setFast] = useState(false);
+	const [leaderCount, setLeaderCount] = useState(1);
 	const [lastModelByHarness, setLastModelByHarness] = useState<
 		Partial<Record<AgentProviderId, string>>
 	>(() =>
@@ -184,12 +203,47 @@ export function SessionLauncher({
 	const [slashIndex, setSlashIndex] = useState(0);
 	const items = visibleSessionItems(session.items, optimisticItems);
 	const turnStatus = session.turnStatus;
+	const activeCompetition = competitions.find((group) =>
+		["queued", "working", "judging"].includes(group.status),
+	);
 	const lastUserText = lastUserMessageText(items);
 	const followUpLayout = sessionUsesFollowUpLayout({
 		items,
 		turnStatus,
 		listedTitle,
 	});
+	const competitionMode =
+		competitionModeAvailable({
+			harnessId,
+		}) && allowComparison;
+	const canSendCompetition = (text: string) =>
+		competitionSendIsEnabled({
+			modeAvailable: competitionMode,
+			selected: leaderCount > 1,
+			busy,
+			turnRunning: turnStatus === "running",
+			hasSession: Boolean(session.agentSessionId),
+			hasCodexAuth: session.snapshotAvailable,
+			harnessId,
+			text,
+			modelId,
+		});
+	function composerCanSend(text: string, slashCommand: boolean) {
+		if (activeCompetition) return false;
+		if (competitionMode && leaderCount > 1) return canSendCompetition(text);
+		return composerSendIsEnabled({
+			harnessId,
+			connection: session.connection,
+			turnStatus,
+			snapshotAvailable: session.snapshotAvailable,
+			listedModelId: session.listedModelId,
+			canSend: session.canSend,
+			busy,
+			draft: text,
+			modelId,
+			slashDraft: slashCommand,
+		});
+	}
 	const slashDraft = parseSlashDraft(draft);
 	const slashCommands = useMemo(
 		() =>
@@ -278,27 +332,13 @@ export function SessionLauncher({
 	}, [session.items]);
 
 	function sendText(text: string) {
-		if (
-			!composerSendIsEnabled({
-				harnessId,
-				connection: session.connection,
-				turnStatus,
-				snapshotAvailable: session.snapshotAvailable,
-				listedModelId: session.listedModelId,
-				canSend: session.canSend,
-				busy,
-				draft: text,
-				modelId,
-				slashDraft: false,
-			})
-		) {
-			return;
-		}
+		if (!composerCanSend(text, false)) return;
+		const userMessageId = crypto.randomUUID();
 		setOptimisticItems((current) => [
 			...current,
 			{
 				kind: "userMessage",
-				id: SessionItemId(`local-${crypto.randomUUID()}`),
+				id: SessionItemId(userMessageId),
 				text,
 			},
 		]);
@@ -306,8 +346,12 @@ export function SessionLauncher({
 		onSend(text, modelId, {
 			...(reasoning?.id ? { reasoningId: reasoning.id } : {}),
 			...(fast ? { fast: true } : {}),
+			...(competitionMode && leaderCount > 1
+				? { leaderCount, userMessageId }
+				: {}),
 		});
 		setDraft("");
+		setLeaderCount(1);
 	}
 
 	function sendDraft() {
@@ -398,6 +442,8 @@ export function SessionLauncher({
 				turnStatus={turnStatus}
 				fill={followUpLayout}
 				onOpenFile={onOpenFile}
+				competitions={competitions}
+				onOpenCandidate={onOpenCandidate}
 			/>
 			<div className="session-dock">
 				{visibleSlashCommands.length === 0 ? (
@@ -530,7 +576,23 @@ export function SessionLauncher({
 									})
 								}
 							/>
-							{turnStatus === "running" ? (
+							{competitionMode ? (
+								<AgentCountPicker
+									value={leaderCount}
+									onChange={setLeaderCount}
+								/>
+							) : null}
+							{turnStatus === "running" && activeCompetition ? (
+								<button
+									type="button"
+									className="session-send"
+									aria-label="Stop independent agents"
+									onClick={onStop}
+									title="Stop independent agents"
+								>
+									<SixDotSpinner />
+								</button>
+							) : turnStatus === "running" ? (
 								<button
 									type="button"
 									className="session-send"
@@ -547,20 +609,7 @@ export function SessionLauncher({
 									type="button"
 									className="session-send"
 									aria-label="Send"
-									disabled={
-										!composerSendIsEnabled({
-											harnessId,
-											connection: session.connection,
-											turnStatus,
-											snapshotAvailable: session.snapshotAvailable,
-											listedModelId: session.listedModelId,
-											canSend: session.canSend,
-											busy,
-											draft,
-											modelId,
-											slashDraft: Boolean(slashDraft),
-										})
-									}
+									disabled={!composerCanSend(draft, Boolean(slashDraft))}
 									title={
 										canResumeFollowUp
 											? "Resume and send"

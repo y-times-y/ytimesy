@@ -1,6 +1,7 @@
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import type { AgentCompetition } from "#/domain/agent-competition";
 import { SessionItemId } from "#/domain/ids";
 import type { SessionItem } from "#/domain/session-item";
 import { SessionTimeline } from "./session-timeline";
@@ -35,6 +36,79 @@ function renderTimeline(
 }
 
 describe("session timeline live collapse", () => {
+	it("places expandable agent work under its prompt and the judge after both agents finish", () => {
+		const items: SessionItem[] = [
+			{
+				kind: "userMessage",
+				id: SessionItemId("task-one"),
+				text: "Make a change",
+			},
+			{
+				kind: "agentMessage",
+				id: SessionItemId("judge-answer"),
+				text: "Agent 2 is better",
+			},
+		];
+		const group: AgentCompetition = {
+			id: "group-one",
+			rootSessionId: "root",
+			userMessageId: "task-one",
+			prompt: "Make a change",
+			leaderCount: 2,
+			status: "working",
+			winnerSessionId: null,
+			errorMessage: null,
+			candidates: [
+				{
+					id: "first",
+					index: 1,
+					status: "done",
+					summary: "First result",
+					items: [],
+				},
+				{ id: "second", index: 2, status: "working", summary: null, items: [] },
+			],
+		};
+		const working = renderToString(
+			createElement(SessionTimeline, {
+				items,
+				turnStatus: "running",
+				competitions: [group],
+			}),
+		);
+		expect(working).toContain('<details class="competition-candidate"');
+		expect(working).not.toContain("Judge reviewing results");
+		const finished = renderToString(
+			createElement(SessionTimeline, {
+				items,
+				turnStatus: "completed",
+				competitions: [
+					{
+						...group,
+						status: "complete",
+						winnerSessionId: "second",
+						candidates: [
+							group.candidates[0],
+							{
+								...group.candidates[1],
+								status: "done",
+								summary: "Second result",
+							},
+						],
+					},
+				],
+			}),
+		);
+		expect(finished.indexOf("Make a change")).toBeLessThan(
+			finished.indexOf("Agent 1"),
+		);
+		expect(finished.indexOf("Agent 2")).toBeLessThan(
+			finished.indexOf("Judge selected Agent 2"),
+		);
+		expect(finished.indexOf("Judge selected Agent 2")).toBeLessThan(
+			finished.indexOf("Agent 2 is better"),
+		);
+	});
 	it("folds commentary and tools only after completion and keeps the final answer outside", () => {
 		const items: SessionItem[] = [
 			{

@@ -1,4 +1,5 @@
 import { Duration, Effect } from "effect";
+import { competitionJudgeToolAllowed } from "#/domain/agent-competition";
 import type { AgentConnection } from "#/domain/agent-connection";
 import {
 	type AgentProviderId,
@@ -41,6 +42,10 @@ import {
 } from "#/domain/session-item";
 import { canSubmitComposer, canSubmitSideChat } from "#/domain/session-policy";
 import type { WorkspaceLifecycle } from "#/domain/workspace";
+import {
+	competitionForOwner,
+	selectCompetitionWinner,
+} from "#/server/adapters/agent-competitions";
 import {
 	type AgentSessionRecord,
 	agentSessionForOwner,
@@ -88,6 +93,7 @@ import {
 	prepareAgentTaskStart,
 	syncProjectContextForTask,
 } from "./agent-session-machine";
+import { agentTaskDiffScript } from "./agent-task-diff";
 import {
 	readApiWorkspaceSession,
 	sendApiWorkspaceTask,
@@ -686,6 +692,16 @@ export function runAgentTaskTool(
 ): Effect.Effect<unknown, unknown> {
 	return Effect.gen(function* () {
 		if (!scope.projectId) throw new Error("The project is not available.");
+		const competition =
+			!parent.parentSessionId && parent.taskAccess === "read_only"
+				? yield* Effect.tryPromise(() =>
+						competitionForOwner(scope.userId, parent.id),
+					)
+				: null;
+		if (competition && !competitionJudgeToolAllowed(request.tool))
+			throw new Error(
+				"The comparison agent can inspect and select work, but cannot start or publish tasks.",
+			);
 		if (request.tool === "create_task") {
 			const title = taskToolString(request.arguments, "title");
 			const prompt = taskToolString(request.arguments, "prompt");
@@ -810,14 +826,15 @@ export function runAgentTaskTool(
 			if (!target.providerRef) {
 				throw new Error("The task has no machine to inspect.");
 			}
+			yield* Effect.tryPromise(() =>
+				machines.ensureRunning(WorkspaceId(target.providerRef as string)),
+			);
 			const diff = yield* Effect.tryPromise(() =>
 				machines.exec(
 					WorkspaceId(target.providerRef as string),
 					`set -eu
 cd "$(cat /tmp/ytimesy-project-cwd)"
-git status --short
-git diff --stat
-git diff -- .`,
+${agentTaskDiffScript}`,
 					30_000,
 				),
 			);
@@ -839,6 +856,12 @@ git diff -- .`,
 			);
 			if (!reviewed) throw new Error("The task review could not be saved.");
 			return { taskId: target.id, reviewState: "reviewed" };
+		}
+		if (request.tool === "select_competition_winner") {
+			yield* Effect.tryPromise(() =>
+				selectCompetitionWinner(scope.userId, parent.id, target.id),
+			);
+			return { taskId: target.id, status: "selected" };
 		}
 		if (request.tool === "publish_task") {
 			if (

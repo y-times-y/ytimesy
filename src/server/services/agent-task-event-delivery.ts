@@ -1,5 +1,21 @@
 import { Effect } from "effect";
-import { agentSessionForOwner } from "#/server/adapters/agent-sessions";
+import {
+	competitionJudgeInstructions,
+	competitionJudgeQueueText,
+} from "#/domain/agent-competition";
+import {
+	claimCompetitionJudge,
+	competitionCandidateIds,
+	competitionForCandidate,
+	competitionForOwner,
+	markCompetitionStatus,
+	recoverInterruptedCompetitionJudge,
+	resetCompetitionJudge,
+} from "#/server/adapters/agent-competitions";
+import {
+	agentSessionForOwner,
+	descendantAgentSessions,
+} from "#/server/adapters/agent-sessions";
 import {
 	type AgentTaskEvent,
 	claimAgentTaskEvent,
@@ -23,6 +39,20 @@ export async function deliverAgentTaskEvents(
 			await markAgentTaskEventDelivered(event.id);
 			delivered += 1;
 		} catch (cause) {
+			const competition =
+				event.attempts >= 3
+					? await competitionForCandidate(event.userId, event.childSessionId)
+					: null;
+			if (
+				competition &&
+				["queued", "working", "judging"].includes(competition.status)
+			) {
+				await markCompetitionStatus(
+					event.parentSessionId,
+					"failed",
+					"Comparison could not start. Agent results remain available in Tasks.",
+				);
+			}
 			await deferAgentTaskEvent(
 				event.id,
 				cause instanceof Error ? cause.message : String(cause),
@@ -43,6 +73,14 @@ async function deliverAgentTaskEvent(
 	]);
 	if (!parent || !child || parent.projectId !== child.projectId) {
 		throw new Error("The task event hierarchy is no longer available.");
+	}
+	const competition = child.candidateIndex
+		? await competitionForCandidate(event.userId, child.id)
+		: null;
+	if (competition) {
+		if (["queued", "working", "judging"].includes(competition.status))
+			await startCompetitionJudge(machines, event.userId, parent.id);
+		return;
 	}
 	if (parent.turnStatus === "running") {
 		throw new Error(
@@ -75,6 +113,65 @@ async function deliverAgentTaskEvent(
 				: "The parent wakeup turn failed.",
 		);
 	}
+}
+
+/** The same durable judge launch can be retried without rerunning candidates. */
+export async function startCompetitionJudge(
+	machines: WorkspaceMachines,
+	userId: string,
+	rootSessionId: string,
+) {
+	const parent = await agentSessionForOwner(userId, rootSessionId);
+	if (
+		!parent ||
+		parent.parentSessionId ||
+		!(await competitionForOwner(userId, parent.id))
+	)
+		throw new Error("The comparison chat is not available.");
+	await recoverInterruptedCompetitionJudge(userId, parent.id);
+	const claimed = await claimCompetitionJudge(userId, parent.id);
+	if (!claimed) return false;
+	try {
+		const candidateIds = await competitionCandidateIds(claimed.id);
+		const candidates = (await descendantAgentSessions(userId, parent.id))
+			.filter(
+				(task) => task.parentSessionId === parent.id && task.candidateIndex,
+			)
+			.filter((task) => candidateIds.has(task.id))
+			.sort(
+				(left, right) =>
+					(left.candidateIndex ?? 0) - (right.candidateIndex ?? 0),
+			);
+		const evidence = candidates
+			.map(
+				(task) =>
+					`Agent ${task.candidateIndex} (${task.id}): ${task.taskState}. Summary: ${task.taskSummary || "No summary."}`,
+			)
+			.join("\n\n");
+		const view = await Effect.runPromise(
+			sendHarnessWorkspaceTask(
+				machinesForAgentSession(machines, parent),
+				{
+					userId,
+					projectId: parent.projectId,
+					sessionId: parent.id,
+					harnessId: parent.harness,
+					createNew: false,
+				},
+				{
+					modelId: parent.listedModelId || "",
+					text: competitionJudgeQueueText,
+					runtimeText: `Compare independent implementations for: ${claimed.prompt}\n\n${evidence}\n\n${competitionJudgeInstructions}`,
+				},
+			),
+		);
+		if (view.connection.status === "failed" || view.turnStatus === "failed")
+			throw new Error("The comparison turn could not start.");
+	} catch (error) {
+		await resetCompetitionJudge(parent.id);
+		throw error;
+	}
+	return true;
 }
 
 export function taskEventMessage(event: AgentTaskEvent, childTitle: string) {

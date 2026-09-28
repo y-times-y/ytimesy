@@ -72,6 +72,11 @@ import { authClient } from "../auth/client";
 import { requestJson, retryTransientRead } from "../projects/api";
 import { deleteOwnedProject } from "../projects/project.fn";
 import {
+	getAgentCompetitions,
+	startAgentCompetition,
+	stopAgentCompetition,
+} from "../sessions/agent-competition.fn";
+import {
 	deleteProjectAgentSession,
 	listProjectAgentSessions,
 	listProjectAgentTasks,
@@ -280,6 +285,9 @@ export function WorkspaceHome({
 	const applySessionViewRef = useRef(applySessionView);
 	applySessionViewRef.current = applySessionView;
 	const sendTask = useServerFn(sendCodexSessionTask);
+	const startCompetition = useServerFn(startAgentCompetition);
+	const stopCompetition = useServerFn(stopAgentCompetition);
+	const loadCompetition = useServerFn(getAgentCompetitions);
 	const stopTurn = useServerFn(stopCodexSessionTurn);
 	const loadDesktop = useServerFn(getWorkspaceDesktop);
 	const startDesktop = useServerFn(startWorkspaceDesktopFn);
@@ -320,6 +328,21 @@ export function WorkspaceHome({
 				? 2_500
 				: false,
 	});
+	const competition = useQuery({
+		queryKey: ["agent-competition", activeSessionId],
+		queryFn: () =>
+			loadCompetition({ data: { rootSessionId: activeSessionId } }),
+		enabled: Boolean(activeSessionId),
+		refetchInterval: (query) =>
+			query.state.data?.some((group) =>
+				["queued", "working", "judging"].includes(group.status),
+			)
+				? 2_500
+				: false,
+	});
+	const activeCompetition = competition.data?.find((group) =>
+		["queued", "working", "judging"].includes(group.status),
+	);
 	useEffect(() => {
 		if (
 			activeSessionId &&
@@ -898,6 +921,47 @@ export function WorkspaceHome({
 			});
 	}
 
+	function openChat(id: string) {
+		setComposerDraft(false);
+		setProjectPickerOpen(false);
+		selectedSessionIdRef.current = id;
+		bumpSessionEpoch();
+		setSelectedSessionId(id);
+		setInspectorView("overview");
+		setSelectedFilePath(undefined);
+		setDesktop({ status: "stopped" });
+		const cached = sessionViews.current.get(id);
+		setHarnessId(
+			composerHarnessForChat({
+				listedHarnessId: sidebarChats.find((chat) => chat.id === id)?.harnessId,
+				connectionProvider: cached
+					? connectedProviderId(cached.connection)
+					: null,
+				fallback: harnessId,
+			}),
+		);
+		if (cached) {
+			setSession(cached);
+			if (cached.listedModelId) setComposerModelId(cached.listedModelId);
+			return;
+		}
+		const listedTurn = listedChatTurnStatus(sidebarChats, id);
+		const listedModelId = listedChatModelId(sidebarChats, id);
+		if (listedModelId) setComposerModelId(listedModelId);
+		setSession((current) => ({
+			...current,
+			agentSessionId: id,
+			listedModelId: listedModelId || current.listedModelId,
+			items: [],
+			turnStatus: listedTurn,
+			sideItems: [],
+			sideTurnStatus: "idle",
+			connection: { status: "disconnected" },
+			canSend: false,
+			canSendSide: false,
+		}));
+	}
+
 	return (
 		<div className="workspace-shell" data-projects-collapsed={!projectsOpen}>
 			<ProjectSidebar
@@ -914,47 +978,7 @@ export function WorkspaceHome({
 				openTurnStatus={openTurnStatus}
 				openSideTurnStatus={session.sideTurnStatus}
 				hasUserMessage={hasUserMessage}
-				onSelectChat={(id) => {
-					setComposerDraft(false);
-					setProjectPickerOpen(false);
-					selectedSessionIdRef.current = id;
-					bumpSessionEpoch();
-					setSelectedSessionId(id);
-					setInspectorView("overview");
-					setSelectedFilePath(undefined);
-					setDesktop({ status: "stopped" });
-					const cached = sessionViews.current.get(id);
-					setHarnessId(
-						composerHarnessForChat({
-							listedHarnessId: sidebarChats.find((chat) => chat.id === id)
-								?.harnessId,
-							connectionProvider: cached
-								? connectedProviderId(cached.connection)
-								: null,
-							fallback: harnessId,
-						}),
-					);
-					if (cached) {
-						setSession(cached);
-						if (cached.listedModelId) setComposerModelId(cached.listedModelId);
-						return;
-					}
-					const listedTurn = listedChatTurnStatus(sidebarChats, id);
-					const listedModelId = listedChatModelId(sidebarChats, id);
-					if (listedModelId) setComposerModelId(listedModelId);
-					setSession((current) => ({
-						...current,
-						agentSessionId: id,
-						listedModelId: listedModelId || current.listedModelId,
-						items: [],
-						turnStatus: listedTurn,
-						sideItems: [],
-						sideTurnStatus: "idle",
-						connection: { status: "disconnected" },
-						canSend: false,
-						canSendSide: false,
-					}));
-				}}
+				onSelectChat={openChat}
 				onNewChat={startNewChat}
 				onDeleteChat={deleteChat}
 				onDeleteProject={removeProject}
@@ -1049,6 +1073,11 @@ export function WorkspaceHome({
 							<SessionLauncher
 								key={session.agentSessionId ?? "new"}
 								session={session}
+								competitions={competition.data ?? []}
+								allowComparison={Boolean(
+									activeSessionId &&
+										sidebarChats.some((chat) => chat.id === activeSessionId),
+								)}
 								busy={composerBusy}
 								listedTitle={composerDraft ? undefined : listedTitle}
 								harnessId={harnessId}
@@ -1084,6 +1113,54 @@ export function WorkspaceHome({
 									const epoch = sessionEpoch.current;
 									const scope = sessionScope();
 									const chatId = activeSessionId;
+									if (options?.leaderCount) {
+										setBusyChatIds((ids) => withBusyChat(ids, chatId));
+										setSession((current) => ({
+											...current,
+											turnStatus: "running",
+											items: sessionItemsQueuedWithUser(
+												current.items,
+												text,
+												options.userMessageId,
+											),
+										}));
+										void (async () => {
+											try {
+												if (!scope.projectId || !scope.sessionId)
+													throw new Error(
+														"Wait for this chat to open before sending.",
+													);
+												await startCompetition({
+													data: {
+														projectId: scope.projectId,
+														rootSessionId: scope.sessionId,
+														text,
+														harnessId,
+														modelId,
+														leaderCount: options.leaderCount as number,
+														userMessageId: options.userMessageId ?? "",
+													},
+												});
+												void competition.refetch();
+												void agentTasks.refetch();
+											} catch (cause) {
+												if (epoch === sessionEpoch.current)
+													setSession((current) => ({
+														...current,
+														turnStatus: "failed",
+														connection: {
+															status: "failed",
+															provider: harnessId,
+															message: publicFailureMessage(cause),
+														},
+													}));
+											} finally {
+												setBusyChatIds((ids) => withoutBusyChat(ids, chatId));
+												void chats.refetch();
+											}
+										})();
+										return;
+									}
 									pendingSendRef.current = {
 										text,
 										modelId,
@@ -1175,6 +1252,23 @@ export function WorkspaceHome({
 								onStop={() => {
 									const chatId = activeSessionId;
 									const epoch = sessionEpoch.current;
+									if (activeCompetition && chatId) {
+										setBusyChatIds((ids) => withBusyChat(ids, chatId));
+										void stopCompetition({ data: { rootSessionId: chatId } })
+											.then(() => {
+												void competition.refetch();
+												if (epoch === sessionEpoch.current)
+													setSession((current) => ({
+														...current,
+														turnStatus: "failed",
+													}));
+												void agentTasks.refetch();
+											})
+											.finally(() =>
+												setBusyChatIds((ids) => withoutBusyChat(ids, chatId)),
+											);
+										return;
+									}
 									setBusyChatIds((ids) => withBusyChat(ids, chatId));
 									void stopTurn({
 										data: sessionScope(),
@@ -1191,6 +1285,10 @@ export function WorkspaceHome({
 								}}
 								onOpenInspector={openInspector}
 								onOpenFile={openMentionedFile}
+								onOpenCandidate={(id) => {
+									openChat(id);
+									openInspector("diff");
+								}}
 								projects={projects.data ?? []}
 								selectedProject={selectedProject}
 								onSelectProject={(id) => {
@@ -1244,6 +1342,7 @@ export function WorkspaceHome({
 							overview={
 								<WorkspaceOverview
 									tasks={agentTasks.data ?? []}
+									competitions={competition.data ?? []}
 									items={session.items}
 									changes={fileChanges}
 									repository={selectedProject?.fullName}

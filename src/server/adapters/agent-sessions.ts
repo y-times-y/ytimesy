@@ -10,7 +10,7 @@ import type {
 import { database } from "./database";
 
 const SESSION_COLUMNS =
-	"id,user_id,project_id,workspace_id,harness,provider_ref,parent_session_id,title,briefing,items,listed_model_id,turn_status,status,task_prompt,task_state,task_placement,task_access,task_execution,depends_on_session_id,task_summary,task_review_state,task_branch,task_pull_request_url,created_at,updated_at";
+	"id,user_id,project_id,workspace_id,harness,provider_ref,parent_session_id,candidate_index,title,briefing,items,listed_model_id,turn_status,status,task_prompt,task_state,task_placement,task_access,task_execution,depends_on_session_id,task_summary,task_review_state,task_branch,task_pull_request_url,created_at,updated_at";
 
 export async function selectAgentSessionHarness(
 	userId: string,
@@ -39,6 +39,7 @@ export type AgentSessionRecord = {
 	harness: AgentProviderId;
 	providerRef: string | null;
 	parentSessionId: string | null;
+	candidateIndex: number | null;
 	title: string;
 	briefing: string | null;
 	items: unknown;
@@ -67,6 +68,7 @@ interface AgentSessionRow {
 	harness: AgentProviderId;
 	provider_ref: string | null;
 	parent_session_id: string | null;
+	candidate_index: number | null;
 	title: string;
 	briefing: string | null;
 	items: unknown;
@@ -256,6 +258,8 @@ export async function insertAgentSession(input: {
 	readonly harness: AgentProviderId;
 	readonly providerRef?: string | null;
 	readonly parentSessionId?: string | null;
+	readonly candidateIndex?: number | null;
+	readonly competitionId?: string | null;
 	readonly title?: string;
 	readonly listedModelId?: string | null;
 	readonly task?: {
@@ -267,14 +271,16 @@ export async function insertAgentSession(input: {
 	};
 }) {
 	const id = randomUUID();
+	const competitionColumn = input.competitionId ? ",competition_id" : "";
+	const competitionValue = input.competitionId ? ",$18" : "";
 	const result = await database().query(
 		`insert into agent_session(
 			id,user_id,project_id,workspace_id,harness,provider_ref,
-			parent_session_id,title,listed_model_id,status,
+			parent_session_id,candidate_index,title,listed_model_id,status,
 			task_prompt,task_state,task_placement,task_access,task_execution,
-			depends_on_session_id,task_review_state
+			depends_on_session_id,task_review_state${competitionColumn}
 		)
-		 values($1,$2,$3,$4,$5,$6,$7,$8,$9,'starting',$10,$11,$12,$13,$14,$15,$16)
+			 values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'starting',$11,$12,$13,$14,$15,$16,$17${competitionValue})
 		 returning ${SESSION_COLUMNS}`,
 		[
 			id,
@@ -284,6 +290,7 @@ export async function insertAgentSession(input: {
 			input.harness,
 			input.providerRef ?? null,
 			input.parentSessionId ?? null,
+			input.candidateIndex ?? null,
 			input.title ?? (input.parentSessionId ? "Task" : "New session"),
 			input.listedModelId?.trim() || null,
 			input.task?.prompt ?? null,
@@ -293,6 +300,7 @@ export async function insertAgentSession(input: {
 			input.task?.execution ?? null,
 			input.task?.dependsOnSessionId ?? null,
 			input.task ? "pending" : null,
+			...(input.competitionId ? [input.competitionId] : []),
 		],
 	);
 	return toSession(result.rows[0]);
@@ -473,6 +481,7 @@ function toSession(row: AgentSessionRow): AgentSessionRecord {
 		harness: row.harness,
 		providerRef: row.provider_ref,
 		parentSessionId: row.parent_session_id,
+		candidateIndex: row.candidate_index,
 		title: row.title,
 		briefing: row.briefing,
 		items: row.items,
