@@ -1,4 +1,4 @@
-import { ChevronDown, Search, Star } from "lucide-react";
+import { Check, ChevronDown, Search, Star } from "lucide-react";
 import "./model-picker.css";
 import { type ReactNode, useState } from "react";
 import {
@@ -11,18 +11,9 @@ import {
 	offeredAgentProviders,
 } from "#/domain/agent-provider";
 import { AUTHOR_LABELS } from "#/domain/browse-models";
-import {
-	enableMultipleModelAttempts,
-	type ModelAttemptSlot,
-	modelAttemptSummary,
-	modelAttemptTotal,
-	setModelAttemptCount,
-	toggleModelAttempt,
-} from "#/domain/model-attempts";
 import { parseModelRouteId } from "#/domain/model-connection";
 import { AgentProviderMark } from "./agent-provider-mark";
 import { ApiModelBrowser } from "./api-model-browser";
-import { ModelAttemptRows, MultipleModelsToggle } from "./model-attempt-menu";
 import type { SessionModel } from "./model-capabilities";
 import {
 	favoriteModelKey,
@@ -48,10 +39,6 @@ export function HarnessPicker({
 	onReasoningIdChange,
 	fast = false,
 	onFastChange,
-	multipleModels = false,
-	attemptSlots = [],
-	onMultipleModelsChange,
-	onAttemptSlotsChange,
 }: {
 	connectionContent?: ReactNode;
 	harnessId: AgentProviderId;
@@ -67,10 +54,6 @@ export function HarnessPicker({
 	onReasoningIdChange?: (id: string) => void;
 	fast?: boolean;
 	onFastChange?: (value: boolean) => void;
-	multipleModels?: boolean;
-	attemptSlots?: readonly ModelAttemptSlot[];
-	onMultipleModelsChange?: (enabled: boolean) => void;
-	onAttemptSlotsChange?: (slots: ModelAttemptSlot[]) => void;
 }) {
 	const options = offeredAgentProviders();
 	const selected =
@@ -85,16 +68,7 @@ export function HarnessPicker({
 	const [search, setSearch] = useState("");
 	const [favoritesOnly, setFavoritesOnly] = useState(false);
 	const [favorites, setFavorites] = useState<readonly string[]>([]);
-	const multiple = Boolean(onMultipleModelsChange) && multipleModels;
-	const slots = multiple ? attemptSlots : [];
-	const attemptTotal = multiple ? modelAttemptTotal(slots) : 1;
-	const primaryId = multiple ? (slots[0]?.modelId ?? "") : modelId;
-	const model = models.find((candidate) => candidate.id === primaryId);
-	const triggerLabel = modelAttemptSummary(
-		model?.label ?? "",
-		model ? attemptTotal : 0,
-	);
-	const extraRuns = model && attemptTotal > 1 ? attemptTotal - 1 : 0;
+	const model = models.find((candidate) => candidate.id === modelId);
 	const visibleModels = models.filter(
 		(candidate) =>
 			candidate.label.toLowerCase().includes(search.trim().toLowerCase()) &&
@@ -112,21 +86,6 @@ export function HarnessPicker({
 		writeModelFavorites(next);
 	}
 
-	function applyAttemptSlots(next: ModelAttemptSlot[]) {
-		onAttemptSlotsChange?.(next);
-		const primary = next[0]?.modelId ?? "";
-		if (primary !== modelId) onModelIdChange(primary);
-	}
-
-	function chooseModel(id: string) {
-		if (!multiple) {
-			onModelIdChange(id);
-			setOpen(false);
-			return;
-		}
-		applyAttemptSlots(toggleModelAttempt(slots, id));
-	}
-
 	return (
 		<Popover
 			open={open}
@@ -142,7 +101,7 @@ export function HarnessPicker({
 				id="session-harness-select"
 				className="composer-select harness-select"
 				aria-label="Model"
-				title={triggerLabel}
+				title={`${selected.name}${model ? ` · ${model.label}` : ""}`}
 			>
 				{harnessId === "api" ? (
 					<ModelProviderLogo
@@ -155,9 +114,6 @@ export function HarnessPicker({
 					<AgentProviderMark provider={selected.id} size={16} />
 				)}
 				<span>{model?.label ?? "Select model"}</span>
-				{extraRuns > 0 ? (
-					<span className="harness-select-more">+ {extraRuns}</span>
-				) : null}
 				<ChevronDown className="size-3" />
 			</PopoverTrigger>
 			<PopoverContent
@@ -176,18 +132,6 @@ export function HarnessPicker({
 						onChange={(event) => setSearch(event.target.value)}
 					/>
 				</label>
-				{onMultipleModelsChange ? (
-					<MultipleModelsToggle
-						checked={multiple}
-						onCheckedChange={(checked) => {
-							onMultipleModelsChange(checked);
-							if (checked) {
-								setBrowse(false);
-								applyAttemptSlots(enableMultipleModelAttempts(modelId));
-							}
-						}}
-					/>
-				) : null}
 				{model ? (
 					<ModelPickerSettings
 						model={model}
@@ -265,13 +209,9 @@ export function HarnessPicker({
 								author={apiProvider}
 								search={search}
 								onSelect={(id) => {
-									if (harnessId !== "api") {
-										onHarnessIdChange("api");
-										onModelIdChange(id);
-										setOpen(false);
-										return;
-									}
-									chooseModel(id);
+									if (harnessId !== "api") onHarnessIdChange("api");
+									onModelIdChange(id);
+									setOpen(false);
 								}}
 							/>
 						) : (
@@ -290,30 +230,48 @@ export function HarnessPicker({
 									) : (
 										connectionContent
 									)}
-									<ModelAttemptRows
-										models={visibleModels}
-										harnessId={harnessId}
-										modelId={modelId}
-										modelsEnabled={modelsEnabled}
-										multiple={multiple}
-										slots={slots}
-										favoriteIds={
-											new Set(
-												visibleModels
-													.filter((candidate) =>
-														favorites.includes(
-															favoriteModelKey(harnessId, candidate.id),
-														),
-													)
-													.map((candidate) => candidate.id),
-											)
-										}
-										onChoose={chooseModel}
-										onCountChange={(id, count) =>
-											applyAttemptSlots(setModelAttemptCount(slots, id, count))
-										}
-										onToggleFavorite={toggleFavorite}
-									/>
+									{visibleModels.map((candidate) => {
+										const favorite = favorites.includes(
+											favoriteModelKey(harnessId, candidate.id),
+										);
+										return (
+											<div
+												className="model-picker-row"
+												key={candidate.id}
+												data-selected={candidate.id === modelId}
+											>
+												<button
+													type="button"
+													className="model-picker-option"
+													disabled={!modelsEnabled}
+													aria-pressed={candidate.id === modelId}
+													title={candidate.notice ?? candidate.label}
+													onClick={() => {
+														onModelIdChange(candidate.id);
+														setOpen(false);
+													}}
+												>
+													<AgentProviderMark provider={harnessId} size={18} />
+													<span>{candidate.label}</span>
+													{candidate.id === modelId ? (
+														<Check size={14} aria-hidden="true" />
+													) : null}
+												</button>
+												<button
+													type="button"
+													className="model-favorite"
+													aria-label={`${favorite ? "Unfavorite" : "Favorite"} ${candidate.label}`}
+													aria-pressed={favorite}
+													onClick={() => toggleFavorite(candidate.id)}
+												>
+													<Star
+														size={15}
+														fill={favorite ? "currentColor" : "none"}
+													/>
+												</button>
+											</div>
+										);
+									})}
 									{visibleModels.length === 0 && models.length > 0 ? (
 										<p className="model-picker-status" role="status">
 											{search.trim()

@@ -30,45 +30,6 @@
 .model-picker-search:focus-within {
 	color: #bbb;
 }
-.model-multiple-toggle {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 12px;
-	min-height: 40px;
-	padding: 8px 12px;
-	border-bottom: 1px solid #ffffff12;
-	color: #eee;
-	font-size: 13px;
-}
-.model-attempt-box {
-	display: grid;
-	place-items: center;
-	flex: none;
-	width: 16px;
-	height: 16px;
-	border: 1.5px solid #8d8d8d;
-	border-radius: 4px;
-	color: #161616;
-}
-.model-attempt-box[data-checked="true"] {
-	background: #eee;
-	border-color: #eee;
-}
-.model-attempt-count {
-	flex: none;
-	margin-right: 4px;
-	border: 0;
-	background: transparent;
-	color: #d0d0d0;
-	font: inherit;
-	font-size: 13px;
-	cursor: pointer;
-}
-.model-attempt-count:focus-visible {
-	outline: 2px solid #aaa;
-	outline-offset: 2px;
-}
 .model-picker-search input::placeholder {
 	color: #858585;
 }
@@ -501,9 +462,5 @@
 	.model-favorite {
 		height: 44px;
 		flex-basis: 38px;
-	}
-	.model-multiple-toggle,
-	.model-attempt-count {
-		min-height: 44px;
 	}
 }

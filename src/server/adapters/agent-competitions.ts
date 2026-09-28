@@ -2,7 +2,6 @@ import {
 	type AgentCompetition,
 	competitionCandidatePublicItems,
 } from "#/domain/agent-competition";
-import { parallelAttemptModelIds } from "#/domain/model-attempts";
 import type { SessionItem } from "#/domain/session-item";
 import { database } from "./database";
 
@@ -15,21 +14,7 @@ type CompetitionRow = {
 	status: AgentCompetition["status"];
 	winner_session_id: string | null;
 	error_message: string | null;
-	attempt_model_ids: string[] | string | null;
 };
-
-function postgresTextList(
-	value: readonly string[] | string | null | undefined,
-) {
-	if (!value) return [];
-	if (typeof value !== "string") return [...value];
-	const body = value.trim();
-	if (!body || body === "{}") return [];
-	const inner =
-		body.startsWith("{") && body.endsWith("}") ? body.slice(1, -1) : body;
-	if (!inner) return [];
-	return inner.split(",").map((item) => item.replace(/^"|"$/g, ""));
-}
 
 function toCompetition(row: CompetitionRow): AgentCompetition {
 	return {
@@ -41,7 +26,6 @@ function toCompetition(row: CompetitionRow): AgentCompetition {
 		status: row.status,
 		winnerSessionId: row.winner_session_id,
 		errorMessage: row.error_message,
-		attemptModelIds: postgresTextList(row.attempt_model_ids),
 		candidates: [],
 	};
 }
@@ -56,7 +40,7 @@ type CandidateRow = {
 };
 
 const competitionColumns =
-	"id,root_session_id,user_message_id,prompt,leader_count,status,winner_session_id,error_message,attempt_model_ids";
+	"id,root_session_id,user_message_id,prompt,leader_count,status,winner_session_id,error_message";
 
 export async function competitionsForOwner(
 	userId: string,
@@ -104,7 +88,7 @@ export async function competitionForCandidate(
 	candidateId: string,
 ) {
 	const result = await database().query<CompetitionRow>(
-		`select c.id,c.root_session_id,c.user_message_id,c.prompt,c.leader_count,c.status,c.winner_session_id,c.error_message,c.attempt_model_ids from agent_competition c
+		`select c.id,c.root_session_id,c.user_message_id,c.prompt,c.leader_count,c.status,c.winner_session_id,c.error_message from agent_competition c
 		 join agent_session s on s.competition_id=c.id
 		 where c.user_id=$1 and s.user_id=$1 and s.id=$2`,
 		[userId, candidateId],
@@ -119,19 +103,16 @@ export async function createAgentCompetition(input: {
 	prompt: string;
 	harness: "codex" | "claude" | "api";
 	modelId: string;
-	modelIds?: readonly string[];
 	leaderCount: number;
 	userMessageId?: string;
 }) {
-	const attempts = parallelAttemptModelIds(input);
-	if (!attempts.ok) throw new Error(attempts.message);
 	const client = await database().connect();
 	try {
 		await client.query("begin");
 		const userMessageId = input.userMessageId ?? crypto.randomUUID();
 		const result = await client.query<CompetitionRow>(
-			`insert into agent_competition(root_session_id,user_id,project_id,user_message_id,prompt,harness,model_id,leader_count,attempt_model_ids)
-			 select $3,$1,$2,$8,$4,$5,$6,$7,$9::text[] from agent_session
+			`insert into agent_competition(root_session_id,user_id,project_id,user_message_id,prompt,harness,model_id,leader_count)
+			 select $3,$1,$2,$8,$4,$5,$6,$7 from agent_session
 			 where id=$3 and user_id=$1 and project_id=$2 and parent_session_id is null
 			   and turn_status<>'running'
 			 on conflict do nothing
@@ -145,7 +126,6 @@ export async function createAgentCompetition(input: {
 				input.modelId,
 				input.leaderCount,
 				userMessageId,
-				attempts.modelIds,
 			],
 		);
 		if (!result.rows[0])
@@ -188,18 +168,12 @@ export async function competitionRuntime(rootSessionId: string) {
 		harness: "codex" | "claude" | "api";
 		model_id: string;
 		leader_count: number;
-		attempt_model_ids: string[] | string | null;
 		status: AgentCompetition["status"];
 	}>(
-		"select id,root_session_id,user_id,project_id,prompt,harness,model_id,leader_count,attempt_model_ids,status from agent_competition where root_session_id=$1 and status in ('queued','working','judging') order by created_at desc limit 1",
+		"select id,root_session_id,user_id,project_id,prompt,harness,model_id,leader_count,status from agent_competition where root_session_id=$1 and status in ('queued','working','judging') order by created_at desc limit 1",
 		[rootSessionId],
 	);
-	const row = result.rows[0];
-	if (!row) return null;
-	return {
-		...row,
-		attempt_model_ids: postgresTextList(row.attempt_model_ids),
-	};
+	return result.rows[0] ?? null;
 }
 
 export async function competitionCandidate(

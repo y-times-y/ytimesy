@@ -30,10 +30,6 @@ import {
 	composerModelIdForCatalog,
 	listedModelDisplayName,
 } from "#/domain/listed-model";
-import {
-	expandModelAttempts,
-	type ModelAttemptSlot,
-} from "#/domain/model-attempts";
 import type { Project } from "#/domain/projects";
 import {
 	lastUserMessageText,
@@ -49,6 +45,7 @@ import {
 } from "#/domain/slash-command";
 import { authClient } from "#/features/auth/client";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
+import { AgentCountPicker } from "./agent-count-picker";
 import { ContextUsage } from "./context-usage";
 import { HarnessLogin } from "./harness-login";
 import {
@@ -98,7 +95,6 @@ export function SessionLauncher({
 			readonly reasoningId?: string;
 			readonly fast?: boolean;
 			readonly leaderCount?: number;
-			readonly modelIds?: readonly string[];
 			readonly userMessageId?: string;
 		},
 	) => void;
@@ -196,8 +192,7 @@ export function SessionLauncher({
 	const [modelId, setModelId] = useState(session.listedModelId);
 	const [reasoningId, setReasoningId] = useState("");
 	const [fast, setFast] = useState(false);
-	const [multipleModels, setMultipleModels] = useState(false);
-	const [attemptSlots, setAttemptSlots] = useState<ModelAttemptSlot[]>([]);
+	const [leaderCount, setLeaderCount] = useState(1);
 	const [lastModelByHarness, setLastModelByHarness] = useState<
 		Partial<Record<AgentProviderId, string>>
 	>(() =>
@@ -221,23 +216,21 @@ export function SessionLauncher({
 		competitionModeAvailable({
 			harnessId,
 		}) && allowComparison;
-	const parallelAttemptIds =
-		competitionMode && multipleModels ? expandModelAttempts(attemptSlots) : [];
 	const canSendCompetition = (text: string) =>
 		competitionSendIsEnabled({
 			modeAvailable: competitionMode,
-			selected: parallelAttemptIds.length > 1,
+			selected: leaderCount > 1,
 			busy,
 			turnRunning: turnStatus === "running",
 			hasSession: Boolean(session.agentSessionId),
 			hasCodexAuth: session.snapshotAvailable,
 			harnessId,
 			text,
-			modelId: parallelAttemptIds[0] ?? modelId,
+			modelId,
 		});
 	function composerCanSend(text: string, slashCommand: boolean) {
 		if (activeCompetition) return false;
-		if (parallelAttemptIds.length > 1) return canSendCompetition(text);
+		if (competitionMode && leaderCount > 1) return canSendCompetition(text);
 		return composerSendIsEnabled({
 			harnessId,
 			connection: session.connection,
@@ -286,16 +279,6 @@ export function SessionLauncher({
 	useEffect(() => {
 		onComposerModelIdChange?.(modelId);
 	}, [modelId, onComposerModelIdChange]);
-
-	useEffect(() => {
-		if (!multipleModels) return;
-		setAttemptSlots((current) => {
-			const next = current.filter((slot) =>
-				models.some((model) => model.id === slot.modelId),
-			);
-			return next.length === current.length ? current : next;
-		});
-	}, [models, multipleModels]);
 
 	useEffect(() => {
 		const connectedHarness = connectedProviderId(session.connection);
@@ -360,19 +343,15 @@ export function SessionLauncher({
 			},
 		]);
 		const reasoning = resolveReasoningLevel(selectedModel, reasoningId);
-		const primaryModelId = parallelAttemptIds[0] ?? modelId;
-		onSend(text, primaryModelId, {
+		onSend(text, modelId, {
 			...(reasoning?.id ? { reasoningId: reasoning.id } : {}),
 			...(fast ? { fast: true } : {}),
-			...(parallelAttemptIds.length > 1
-				? {
-						leaderCount: parallelAttemptIds.length,
-						modelIds: parallelAttemptIds,
-						userMessageId,
-					}
+			...(competitionMode && leaderCount > 1
+				? { leaderCount, userMessageId }
 				: {}),
 		});
 		setDraft("");
+		setLeaderCount(1);
 	}
 
 	function sendDraft() {
@@ -573,11 +552,7 @@ export function SessionLauncher({
 										: onConnect
 								}
 								harnessId={harnessId}
-								onHarnessIdChange={(id) => {
-									setMultipleModels(false);
-									setAttemptSlots([]);
-									onHarnessIdChange(id);
-								}}
+								onHarnessIdChange={onHarnessIdChange}
 								models={models}
 								modelId={modelId}
 								listedModelId={modelId || session.listedModelId}
@@ -586,14 +561,6 @@ export function SessionLauncher({
 								onReasoningIdChange={setReasoningId}
 								fast={fast}
 								onFastChange={setFast}
-								{...(competitionMode
-									? {
-											multipleModels,
-											attemptSlots,
-											onMultipleModelsChange: setMultipleModels,
-											onAttemptSlotsChange: setAttemptSlots,
-										}
-									: {})}
 								onAttachFiles={(selected) =>
 									setAttachments((files) => {
 										const additions = selected.filter(
@@ -609,6 +576,12 @@ export function SessionLauncher({
 									})
 								}
 							/>
+							{competitionMode ? (
+								<AgentCountPicker
+									value={leaderCount}
+									onChange={setLeaderCount}
+								/>
+							) : null}
 							{turnStatus === "running" && activeCompetition ? (
 								<button
 									type="button"
