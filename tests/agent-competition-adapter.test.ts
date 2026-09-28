@@ -49,6 +49,12 @@ beforeAll(async () => {
 			"utf8",
 		),
 	);
+	await db.exec(
+		await readFile(
+			"supabase/migrations/20260928160000_competition_attempt_models.sql",
+			"utf8",
+		),
+	);
 	await db.exec(`insert into auth_user values('alice'),('bob'); insert into project values('${projectId}');
 	 insert into agent_session(id,user_id,project_id) values('${rootId}','alice','${projectId}')`);
 });
@@ -170,11 +176,31 @@ it("waits for every candidate of this message before judging", async () => {
 		modelId: "test",
 		leaderCount: 3,
 	});
+	expect(followUp.attemptModelIds).toEqual(["test", "test", "test"]);
 	expect(followUp.id).not.toBe(group.id);
+	await db.query("update agent_competition set status='complete' where id=$1", [
+		followUp.id,
+	]);
+	await db.query(
+		"update agent_session set turn_status='completed' where id=$1",
+		[rootId],
+	);
+	const mixed = await createAgentCompetition({
+		userId: "alice",
+		projectId,
+		rootSessionId: rootId,
+		prompt: "Mixed models",
+		harness: "api",
+		modelId: "alpha",
+		modelIds: ["alpha", "alpha", "beta"],
+		leaderCount: 3,
+		userMessageId: "00000000-0000-4000-8000-000000000099",
+	});
+	expect(mixed.attemptModelIds).toEqual(["alpha", "alpha", "beta"]);
 	expect(await competitionsForOwner("bob", rootId)).toEqual([]);
 	expect(
 		(await competitionsForOwner("alice", rootId)).map((item) => item.id),
-	).toEqual([group.id, followUp.id]);
+	).toEqual([group.id, followUp.id, mixed.id]);
 	expect(await competitionForCandidate("alice", firstId)).toMatchObject({
 		id: group.id,
 	});
@@ -182,6 +208,10 @@ it("waits for every candidate of this message before judging", async () => {
 		(await db.query("select items from agent_session where id=$1", [rootId]))
 			.rows[0],
 	).toMatchObject({
-		items: [{ text: "Task" }, { text: "Next task" }],
+		items: [
+			{ text: "Task" },
+			{ text: "Next task" },
+			{ text: "Mixed models" },
+		],
 	});
 }, 15_000);
