@@ -4,6 +4,7 @@ import { Effect } from "effect";
 import { z } from "zod";
 import { leaderCount } from "#/domain/agent-competition";
 import { parseRuntimeId } from "#/domain/agent-provider";
+import { parallelAttemptModelIds } from "#/domain/model-attempts";
 import {
 	competitionsForOwner,
 	createAgentCompetition,
@@ -38,6 +39,7 @@ export const startAgentCompetition = createServerFn({ method: "POST" })
 			text: string;
 			harnessId: string;
 			modelId: string;
+			modelIds?: readonly string[];
 			leaderCount: number;
 			userMessageId: string;
 		}) => ({
@@ -46,6 +48,7 @@ export const startAgentCompetition = createServerFn({ method: "POST" })
 			text: data.text.trim(),
 			harnessId: parseRuntimeId(data.harnessId),
 			modelId: data.modelId.trim(),
+			modelIds: data.modelIds?.map((id) => id.trim()),
 			leaderCount: leaderCount.parse(data.leaderCount),
 			userMessageId: z.string().uuid().parse(data.userMessageId),
 		}),
@@ -53,7 +56,9 @@ export const startAgentCompetition = createServerFn({ method: "POST" })
 	.handler(async ({ data }) => {
 		requireSameOrigin(getRequest());
 		const user = await requireUser(getRequest().headers);
-		if (!data.text || !data.modelId || !data.projectId || !data.rootSessionId)
+		const attempts = parallelAttemptModelIds(data);
+		if (!attempts.ok) throw new Error(attempts.message);
+		if (!data.text || !data.projectId || !data.rootSessionId)
 			throw new Error(
 				"Choose a project, model, and task before starting agents.",
 			);
@@ -66,20 +71,17 @@ export const startAgentCompetition = createServerFn({ method: "POST" })
 			throw new Error("Start independent agents from a project chat.");
 		if (data.harnessId === "codex" && !(await hasManagedCodexAuth(user.id)))
 			throw new Error("Connect your Codex subscription first.");
-		if (
-			data.harnessId === "codex" &&
-			!(await loadAgentModelCatalog(user.id, "codex")).some(
-				(model) => model.id === data.modelId,
-			)
-		)
-			throw new Error("Choose a currently available Codex model first.");
-		if (
-			data.harnessId === "api" &&
-			!(await apiModelCatalog(user.id)).some(
-				(model) => model.id === data.modelId,
-			)
-		)
-			throw new Error("Choose a verified API model connection first.");
+		const catalog =
+			data.harnessId === "codex"
+				? await loadAgentModelCatalog(user.id, "codex")
+				: await apiModelCatalog(user.id);
+		const available = new Set(catalog.map((model) => model.id));
+		if (attempts.modelIds.some((id) => !available.has(id)))
+			throw new Error(
+				data.harnessId === "codex"
+					? "Choose currently available Codex models for each agent."
+					: "Choose verified API models for each agent.",
+			);
 		const group = await createAgentCompetition({
 			userId: user.id,
 			projectId: data.projectId,
@@ -87,6 +89,7 @@ export const startAgentCompetition = createServerFn({ method: "POST" })
 			prompt: data.text,
 			harness: data.harnessId,
 			modelId: data.modelId,
+			modelIds: attempts.modelIds,
 			leaderCount: data.leaderCount,
 			userMessageId: data.userMessageId,
 		});

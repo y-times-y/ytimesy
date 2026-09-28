@@ -1113,7 +1113,11 @@ export function WorkspaceHome({
 									const epoch = sessionEpoch.current;
 									const scope = sessionScope();
 									const chatId = activeSessionId;
-									if (options?.leaderCount) {
+									if (
+										options?.leaderCount &&
+										options.modelIds &&
+										options.modelIds.length > 1
+									) {
 										setBusyChatIds((ids) => withBusyChat(ids, chatId));
 										setSession((current) => ({
 											...current,
@@ -1137,6 +1141,7 @@ export function WorkspaceHome({
 														text,
 														harnessId,
 														modelId,
+														modelIds: options.modelIds,
 														leaderCount: options.leaderCount as number,
 														userMessageId: options.userMessageId ?? "",
 													},

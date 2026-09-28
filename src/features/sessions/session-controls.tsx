@@ -1,6 +1,7 @@
 import { Paperclip } from "lucide-react";
 import { type ReactNode, useRef } from "react";
 import type { AgentProviderId } from "#/domain/agent-provider";
+import type { ModelAttemptSlot } from "#/domain/model-attempts";
 import { HarnessPicker } from "./harness-picker";
 import type { SessionModel } from "./model-capabilities";
 
@@ -21,6 +22,10 @@ interface SessionControlsProps {
 	onConnect: () => void;
 	catalogStatus: "loading" | "error" | "ready";
 	providerConnected: boolean;
+	multipleModels?: boolean;
+	attemptSlots?: readonly ModelAttemptSlot[];
+	onMultipleModelsChange?: (enabled: boolean) => void;
+	onAttemptSlotsChange?: (slots: ModelAttemptSlot[]) => void;
 }
 
 export function SessionControls({
@@ -40,6 +45,10 @@ export function SessionControls({
 	onConnect,
 	catalogStatus,
 	providerConnected,
+	multipleModels,
+	attemptSlots,
+	onMultipleModelsChange,
+	onAttemptSlotsChange,
 }: SessionControlsProps) {
 	const fileInput = useRef<HTMLInputElement>(null);
 	const model = models.find((candidate) => candidate.id === modelId);
@@ -82,6 +91,10 @@ export function SessionControls({
 					onReasoningIdChange={onReasoningIdChange}
 					fast={fast}
 					onFastChange={onFastChange}
+					multipleModels={multipleModels}
+					attemptSlots={attemptSlots}
+					onMultipleModelsChange={onMultipleModelsChange}
+					onAttemptSlotsChange={onAttemptSlotsChange}
 					onModelIdChange={(id) => {
 						onModelIdChange(id);
 						onReasoningIdChange("");
