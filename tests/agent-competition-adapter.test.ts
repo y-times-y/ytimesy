@@ -208,10 +208,6 @@ it("waits for every candidate of this message before judging", async () => {
 		(await db.query("select items from agent_session where id=$1", [rootId]))
 			.rows[0],
 	).toMatchObject({
-		items: [
-			{ text: "Task" },
-			{ text: "Next task" },
-			{ text: "Mixed models" },
-		],
+		items: [{ text: "Task" }, { text: "Next task" }, { text: "Mixed models" }],
 	});
 }, 15_000);
