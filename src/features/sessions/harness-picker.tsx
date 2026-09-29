@@ -1,3 +1,5 @@
+import { useQuery } from "@tanstack/react-query";
+import { useServerFn } from "@tanstack/react-start";
 import { Check, ChevronDown, Search, Star } from "lucide-react";
 import "./model-picker.css";
 import { type ReactNode, useState } from "react";
@@ -6,15 +8,26 @@ import {
 	PopoverContent,
 	PopoverTrigger,
 } from "#/components/ui/popover";
+import { Switch } from "#/components/ui/switch";
 import {
 	type AgentProviderId,
 	offeredAgentProviders,
 } from "#/domain/agent-provider";
 import { AUTHOR_LABELS } from "#/domain/browse-models";
 import { parseModelRouteId } from "#/domain/model-connection";
+import {
+	expandModelRuns,
+	type ModelRun,
+	selectModelRun,
+} from "#/domain/parallel-models";
+import { authClient } from "#/features/auth/client";
 import { AgentProviderMark } from "./agent-provider-mark";
 import { ApiModelBrowser } from "./api-model-browser";
-import type { SessionModel } from "./model-capabilities";
+import {
+	type SessionModel,
+	sessionModelsFromListed,
+} from "./model-capabilities";
+import { getAgentModelCatalog } from "./model-catalog.fn";
 import {
 	favoriteModelKey,
 	readModelFavorites,
@@ -22,6 +35,7 @@ import {
 } from "./model-picker-favorites";
 import { ModelPickerSettings } from "./model-picker-settings";
 import { ModelProviderLogo } from "./model-provider-logo";
+import { ModelRunCount } from "./model-run-count";
 import { ProviderApiKeyInput } from "./provider-api-key-input";
 
 export function HarnessPicker({
@@ -39,6 +53,11 @@ export function HarnessPicker({
 	onReasoningIdChange,
 	fast = false,
 	onFastChange,
+	parallelAvailable = false,
+	multipleModels = false,
+	modelRuns = [],
+	onMultipleModelsChange,
+	onModelRunsChange,
 }: {
 	connectionContent?: ReactNode;
 	harnessId: AgentProviderId;
@@ -54,6 +73,11 @@ export function HarnessPicker({
 	onReasoningIdChange?: (id: string) => void;
 	fast?: boolean;
 	onFastChange?: (value: boolean) => void;
+	parallelAvailable?: boolean;
+	multipleModels?: boolean;
+	modelRuns?: readonly ModelRun[];
+	onMultipleModelsChange?: (enabled: boolean) => void;
+	onModelRunsChange?: (runs: ModelRun[]) => void;
 }) {
 	const options = offeredAgentProviders();
 	const selected =
@@ -68,7 +92,17 @@ export function HarnessPicker({
 	const [search, setSearch] = useState("");
 	const [favoritesOnly, setFavoritesOnly] = useState(false);
 	const [favorites, setFavorites] = useState<readonly string[]>([]);
+	const searching = Boolean(search.trim());
 	const model = models.find((candidate) => candidate.id === modelId);
+	const runCount = expandModelRuns(modelRuns).length;
+	function chooseModel(id: string) {
+		if (multipleModels) {
+			onModelRunsChange?.(selectModelRun(modelRuns, id));
+			return;
+		}
+		onModelIdChange(id);
+		setOpen(false);
+	}
 	const visibleModels = models.filter(
 		(candidate) =>
 			candidate.label.toLowerCase().includes(search.trim().toLowerCase()) &&
@@ -101,7 +135,11 @@ export function HarnessPicker({
 				id="session-harness-select"
 				className="composer-select harness-select"
 				aria-label="Model"
-				title={`${selected.name}${model ? ` · ${model.label}` : ""}`}
+				title={
+					multipleModels
+						? `${modelRuns.length} models · ${runCount} runs`
+						: `${selected.name}${model ? ` · ${model.label}` : ""}`
+				}
 			>
 				{harnessId === "api" ? (
 					<ModelProviderLogo
@@ -113,7 +151,11 @@ export function HarnessPicker({
 				) : (
 					<AgentProviderMark provider={selected.id} size={16} />
 				)}
-				<span>{model?.label ?? "Select model"}</span>
+				<span>
+					{multipleModels && modelRuns.length > 1
+						? `${modelRuns.length} models · ${runCount} runs`
+						: `${model?.label ?? "Select model"}${multipleModels && runCount > 1 ? ` · ${runCount} runs` : ""}`}
+				</span>
 				<ChevronDown className="size-3" />
 			</PopoverTrigger>
 			<PopoverContent
@@ -132,7 +174,24 @@ export function HarnessPicker({
 						onChange={(event) => setSearch(event.target.value)}
 					/>
 				</label>
-				{model ? (
+				{parallelAvailable ? (
+					<div className="model-picker-multiple">
+						<div>
+							<strong>Use multiple models</strong>
+							<p>
+								Independent attempts at one task. A judge compares results. Up
+								to five runs use more compute.
+							</p>
+						</div>
+						<Switch
+							aria-label="Use multiple models for independent attempts"
+							checked={multipleModels}
+							disabled={!modelId}
+							onCheckedChange={onMultipleModelsChange}
+						/>
+					</div>
+				) : null}
+				{model && !multipleModels ? (
 					<ModelPickerSettings
 						model={model}
 						reasoningId={reasoningId}
@@ -185,6 +244,8 @@ export function HarnessPicker({
 								aria-label={label}
 								aria-pressed={browse && apiProvider === id}
 								onClick={() => {
+									if (harnessId !== "api" && multipleModels)
+										onMultipleModelsChange?.(false);
 									setBrowse(true);
 									setApiProvider(id);
 									setFavoritesOnly(false);
@@ -198,21 +259,61 @@ export function HarnessPicker({
 					<section
 						className="model-picker-catalog"
 						aria-label={
-							browse
-								? (AUTHOR_LABELS[apiProvider] ?? "OpenRouter")
-								: selected.name
+							searching
+								? "Search all models"
+								: browse
+									? (AUTHOR_LABELS[apiProvider] ?? "OpenRouter")
+									: selected.name
 						}
 					>
-						{browse ? (
+						{searching ? (
+							<>
+								<CodexModelSearch
+									search={search}
+									fallbackModels={harnessId === "codex" ? models : []}
+									onSelect={(id) => {
+										if (multipleModels && harnessId !== "codex")
+											onMultipleModelsChange?.(false);
+										if (harnessId !== "codex") onHarnessIdChange("codex");
+										onModelIdChange(id);
+										setOpen(false);
+									}}
+								/>
+								<ApiModelBrowser
+									author={null}
+									search={search}
+									onBrowseProvider={(author) => {
+										setApiProvider(author);
+										setBrowse(true);
+										setSearch("");
+									}}
+									selectedRoute={modelId}
+									onSelect={(id) => {
+										if (harnessId !== "api") {
+											if (multipleModels) onMultipleModelsChange?.(false);
+											onHarnessIdChange("api");
+										}
+										onModelIdChange(id);
+										setOpen(false);
+									}}
+								/>
+							</>
+						) : browse ? (
 							<ApiModelBrowser
 								key={apiProvider}
 								author={apiProvider}
 								search={search}
+								selectedRoute={modelId}
 								onSelect={(id) => {
-									if (harnessId !== "api") onHarnessIdChange("api");
-									onModelIdChange(id);
-									setOpen(false);
+									if (harnessId !== "api") {
+										onHarnessIdChange("api");
+										onModelIdChange(id);
+										setOpen(false);
+									} else chooseModel(id);
 								}}
+								multipleModels={multipleModels && harnessId === "api"}
+								modelRuns={modelRuns}
+								onModelRunsChange={onModelRunsChange}
 							/>
 						) : (
 							<>
@@ -234,29 +335,58 @@ export function HarnessPicker({
 										const favorite = favorites.includes(
 											favoriteModelKey(harnessId, candidate.id),
 										);
+										const selectedRun = modelRuns.find(
+											(run) => run.modelId === candidate.id,
+										);
 										return (
 											<div
 												className="model-picker-row"
 												key={candidate.id}
-												data-selected={candidate.id === modelId}
+												data-selected={
+													multipleModels
+														? Boolean(selectedRun)
+														: candidate.id === modelId
+												}
 											>
 												<button
 													type="button"
 													className="model-picker-option"
 													disabled={!modelsEnabled}
-													aria-pressed={candidate.id === modelId}
+													aria-pressed={
+														multipleModels
+															? Boolean(selectedRun)
+															: candidate.id === modelId
+													}
 													title={candidate.notice ?? candidate.label}
 													onClick={() => {
-														onModelIdChange(candidate.id);
-														setOpen(false);
+														chooseModel(candidate.id);
 													}}
 												>
-													<AgentProviderMark provider={harnessId} size={18} />
+													{multipleModels ? (
+														<span
+															className="model-run-check"
+															aria-hidden="true"
+														>
+															{selectedRun ? (
+																<Check size={12} strokeWidth={2.4} />
+															) : null}
+														</span>
+													) : (
+														<AgentProviderMark provider={harnessId} size={18} />
+													)}
 													<span>{candidate.label}</span>
-													{candidate.id === modelId ? (
+													{!multipleModels && candidate.id === modelId ? (
 														<Check size={14} aria-hidden="true" />
 													) : null}
 												</button>
+												{multipleModels && selectedRun ? (
+													<ModelRunCount
+														modelId={candidate.id}
+														modelLabel={candidate.label}
+														runs={modelRuns}
+														onChange={(runs) => onModelRunsChange?.(runs)}
+													/>
+												) : null}
 												<button
 													type="button"
 													className="model-favorite"
@@ -314,5 +444,49 @@ export function HarnessPicker({
 				</div>
 			</PopoverContent>
 		</Popover>
+	);
+}
+
+function CodexModelSearch({
+	search,
+	fallbackModels,
+	onSelect,
+}: {
+	search: string;
+	fallbackModels: readonly SessionModel[];
+	onSelect: (id: string) => void;
+}) {
+	const identity = authClient.useSession();
+	const loadCatalog = useServerFn(getAgentModelCatalog);
+	const catalog = useQuery({
+		queryKey: ["agent-model-catalog", identity.data?.user.id, "codex"],
+		enabled: Boolean(identity.data?.user.id),
+		queryFn: () => loadCatalog({ data: { provider: "codex" } }),
+		staleTime: 60_000,
+	});
+	const models = catalog.data
+		? sessionModelsFromListed(catalog.data)
+		: fallbackModels;
+	const results = models.filter(
+		(model) =>
+			model.label.toLowerCase().includes(search.trim().toLowerCase()) ||
+			"codex".includes(search.trim().toLowerCase()),
+	);
+	if (!results.length) return null;
+	return (
+		<>
+			<h3>Codex · ChatGPT subscription</h3>
+			{results.map((model) => (
+				<button
+					type="button"
+					className="model-browser-option"
+					key={model.id}
+					onClick={() => onSelect(model.id)}
+				>
+					<AgentProviderMark provider="codex" size={18} />
+					<span>{model.label}</span>
+				</button>
+			))}
+		</>
 	);
 }

@@ -9,6 +9,8 @@ import {
 	fileChangeActivityTitle,
 } from "#/domain/file-change-copy";
 import { fileBasename } from "#/domain/file-kind";
+import { listedModelDisplayName } from "#/domain/listed-model";
+import { parseModelRouteId } from "#/domain/model-connection";
 import { activityGlyphForToolName } from "#/domain/session-activity";
 import {
 	compactTimelineItems,
@@ -166,6 +168,12 @@ function CompetitionTurn({
 					(item) => item.index === agentNumber,
 				);
 				const status = candidate?.status ?? "draft";
+				const assignedModel = group.attemptModelIds?.[agentNumber - 1];
+				const modelLabel = assignedModel
+					? listedModelDisplayName(
+							parseModelRouteId(assignedModel)?.modelId ?? assignedModel,
+						)
+					: "";
 				return (
 					<details
 						className="competition-candidate"
@@ -178,6 +186,11 @@ function CompetitionTurn({
 								<span className="competition-agent-dot" data-status={status} />
 							)}
 							<span>{`Agent ${agentNumber}`}</span>
+							{modelLabel ? (
+								<span className="competition-candidate-model">
+									{modelLabel}
+								</span>
+							) : null}
 							<small className="competition-candidate-meta">
 								{group.winnerSessionId === candidate?.id
 									? "Selected"

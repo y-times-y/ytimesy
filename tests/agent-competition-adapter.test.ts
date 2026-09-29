@@ -5,6 +5,7 @@ import {
 	claimCompetitionJudge,
 	competitionForCandidate,
 	competitionForOwner,
+	competitionRuntime,
 	competitionsForOwner,
 	createAgentCompetition,
 	selectCompetitionWinner,
@@ -49,6 +50,12 @@ beforeAll(async () => {
 			"utf8",
 		),
 	);
+	await db.exec(
+		await readFile(
+			"supabase/migrations/20260928120000_agent_competition_attempt_models.sql",
+			"utf8",
+		),
+	);
 	await db.exec(`insert into auth_user values('alice'),('bob'); insert into project values('${projectId}');
 	 insert into agent_session(id,user_id,project_id) values('${rootId}','alice','${projectId}')`);
 });
@@ -64,6 +71,7 @@ it("waits for every candidate of this message before judging", async () => {
 			harness: "api",
 			modelId: "test",
 			leaderCount: 2,
+			attemptModelIds: ["test", "test"],
 		}),
 	).rejects.toThrow();
 	const group = await createAgentCompetition({
@@ -74,8 +82,14 @@ it("waits for every candidate of this message before judging", async () => {
 		harness: "api",
 		modelId: "test",
 		leaderCount: 2,
+		attemptModelIds: ["test", "other"],
 	});
 	expect(group.status).toBe("queued");
+	expect(group.attemptModelIds).toEqual(["test", "other"]);
+	expect((await competitionRuntime(rootId))?.attempt_model_ids).toEqual([
+		"test",
+		"other",
+	]);
 	expect(
 		(await db.query("select harness from agent_session where id=$1", [rootId]))
 			.rows[0],
@@ -90,6 +104,7 @@ it("waits for every candidate of this message before judging", async () => {
 			harness: "api",
 			modelId: "test",
 			leaderCount: 2,
+			attemptModelIds: ["test", "test"],
 		}),
 	).rejects.toThrow();
 	await db.exec(`update agent_competition set status='working' where id='${group.id}';
@@ -169,6 +184,7 @@ it("waits for every candidate of this message before judging", async () => {
 		harness: "api",
 		modelId: "test",
 		leaderCount: 3,
+		attemptModelIds: ["test", "other", "test"],
 	});
 	expect(followUp.id).not.toBe(group.id);
 	expect(await competitionsForOwner("bob", rootId)).toEqual([]);

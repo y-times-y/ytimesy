@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { PublicModelConnection } from "./model-connection";
-import { providerConnections, providerKeyConnection } from "./provider-access";
+import {
+	providerConnections,
+	providerKeyConnection,
+	selectedProviderConnection,
+} from "./provider-access";
 
 describe("provider-level access", () => {
 	it("routes gateway keys to the gateway regardless of the selected provider", () => {
@@ -46,5 +50,34 @@ describe("provider-level access", () => {
 		expect(
 			providerConnections("deepseek", connections).map((row) => row.id),
 		).toEqual(["or", "deepseek"]);
+	});
+	it("uses the saved route until the user explicitly chooses another key", () => {
+		const gatewayId = "11111111-1111-4111-8111-111111111111";
+		const directId = "22222222-2222-4222-8222-222222222222";
+		const connections = [
+			{ id: gatewayId, provider: "openrouter", label: "OpenRouter" },
+			{ id: directId, provider: "google", label: "Google" },
+		] as PublicModelConnection[];
+		const route = `api/${gatewayId}/google%2Fgemini`;
+		expect(
+			selectedProviderConnection(
+				providerConnections("google", connections),
+				route,
+			)?.id,
+		).toBe(gatewayId);
+		expect(
+			selectedProviderConnection(
+				providerConnections("google", connections),
+				route,
+				directId,
+			)?.id,
+		).toBe(directId);
+		expect(
+			selectedProviderConnection(
+				providerConnections("openai", connections),
+				route,
+				directId,
+			)?.id,
+		).toBe(gatewayId);
 	});
 });

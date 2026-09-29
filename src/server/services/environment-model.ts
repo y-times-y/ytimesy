@@ -3,6 +3,7 @@ import { environmentModelRequest } from "#/domain/environment-model";
 import { parseModelRouteId } from "#/domain/model-connection";
 import { loadModelConnection } from "../adapters/model-connections";
 import { hasManagedCodexAuth } from "../auth/codex-managed-auth";
+import { availableApiModelRoutes } from "./model-connections";
 
 /** Freeze explicit selection in the job; never guess from another chat or connected account. */
 export async function resolveEnvironmentModel(
@@ -25,12 +26,13 @@ export async function resolveEnvironmentModel(
 		route && (await loadModelConnection(userId, route.connectionId));
 	if (
 		!route ||
-		!connection?.models.some(
-			(model) => model.id === route.modelId && model.toolStreamingVerified,
+		!connection ||
+		!(await availableApiModelRoutes([connection])).some(
+			(model) => model.id === request.modelId,
 		)
 	)
 		throw new Error(
-			"Select a verified model connection owned by this account.",
+			"The selected model is no longer available on this connection.",
 		);
 	return {
 		provider: "api",

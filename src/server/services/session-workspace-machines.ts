@@ -24,6 +24,7 @@ const SESSION_LOCAL_PATHS = [
 	"/tmp/ytimesy-codex-login.log",
 	"/tmp/ytimesy-codex-login.pid",
 	"/tmp/ytimesy-codex-login.py",
+	"/tmp/ytimesy-codex-thread-state.json",
 	"/tmp/ytimesy-codex-external-tokens.json",
 	"/tmp/ytimesy-codex-refresh-request.json",
 	"/tmp/ytimesy-codex-refresh-response.json",

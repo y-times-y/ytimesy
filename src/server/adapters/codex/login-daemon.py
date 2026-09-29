@@ -8,20 +8,29 @@ import time
 import uuid
 
 CODEX = os.environ.get("CODEX_BIN", "codex")
-STATUS_PATH = "/tmp/ytimesy-auth-status.json"
-TASK_REQUEST_PATH = "/tmp/ytimesy-task-request.json"
-TASK_RESULT_PATH = "/tmp/ytimesy-task-result.json"
-SIDE_REQUEST_PATH = "/tmp/ytimesy-side-request.json"
-SIDE_RESULT_PATH = "/tmp/ytimesy-side-result.json"
-STOP_REQUEST_PATH = os.path.join(os.environ.get("HOME") or "/tmp", ".ytimesy-stop-request.json")
-PROJECT_CWD_PATH = "/tmp/ytimesy-project-cwd"
-DISPLAY_PATH = "/tmp/ytimesy-display"
-DEVELOPER_INSTRUCTIONS_PATH = "/tmp/ytimesy-developer-instructions.txt"
-AGENT_TASK_TOOL_REQUEST_PATH = "/tmp/ytimesy-agent-task-tool-request.json"
-AGENT_TASK_TOOL_RESPONSE_PATH = "/tmp/ytimesy-agent-task-tool-response.json"
-EXTERNAL_TOKENS_PATH = "/tmp/ytimesy-codex-external-tokens.json"
-EXTERNAL_REFRESH_REQUEST_PATH = "/tmp/ytimesy-codex-refresh-request.json"
-EXTERNAL_REFRESH_RESPONSE_PATH = "/tmp/ytimesy-codex-refresh-response.json"
+REMOTE_EXEC_URL = os.environ.get("YTIMESY_REMOTE_EXEC_URL", "").strip()
+REMOTE_ENVIRONMENT_ID = os.environ.get("YTIMESY_REMOTE_ENVIRONMENT_ID", "").strip()
+RUNTIME_ROOT = os.environ.get("YTIMESY_RUNTIME_ROOT", "/tmp").strip()
+def runtime_path(default):
+    return os.path.join(RUNTIME_ROOT, os.path.basename(default)) if os.environ.get("YTIMESY_RUNTIME_ROOT") else default
+
+
+STATUS_PATH = runtime_path("/tmp/ytimesy-auth-status.json")
+STATE_PATH = runtime_path("/tmp/ytimesy-codex-thread-state.json")
+TASK_REQUEST_PATH = runtime_path("/tmp/ytimesy-task-request.json")
+TASK_RESULT_PATH = runtime_path("/tmp/ytimesy-task-result.json")
+SIDE_REQUEST_PATH = runtime_path("/tmp/ytimesy-side-request.json")
+SIDE_RESULT_PATH = runtime_path("/tmp/ytimesy-side-result.json")
+STOP_REQUEST_PATH = runtime_path("/tmp/ytimesy-stop-request.json")
+PROJECT_CWD_PATH = runtime_path("/tmp/ytimesy-project-cwd")
+DISPLAY_PATH = runtime_path("/tmp/ytimesy-display")
+DEVELOPER_INSTRUCTIONS_PATH = runtime_path("/tmp/ytimesy-developer-instructions.txt")
+AGENT_TASK_TOOL_REQUEST_PATH = runtime_path("/tmp/ytimesy-agent-task-tool-request.json")
+AGENT_TASK_TOOL_RESPONSE_PATH = runtime_path("/tmp/ytimesy-agent-task-tool-response.json")
+EXTERNAL_TOKENS_PATH = runtime_path("/tmp/ytimesy-codex-external-tokens.json")
+EXTERNAL_REFRESH_REQUEST_PATH = runtime_path("/tmp/ytimesy-codex-refresh-request.json")
+EXTERNAL_REFRESH_RESPONSE_PATH = runtime_path("/tmp/ytimesy-codex-refresh-response.json")
+ERROR_LOG_PATH = runtime_path("/tmp/ytimesy-app-server.err")
 TURN_PROMPT = "Reply with the single word pong and do not run any tools."
 SKIP_INITIAL_TURN = os.environ.get("YTIMESY_SKIP_INITIAL_TURN") == "1"
 APP_SERVER_READ_BUFFERS = {}
@@ -611,6 +620,8 @@ def next_rpc_id():
 
 def project_cwd():
     env = (os.environ.get("YTIMESY_PROJECT_CWD") or "").strip()
+    if REMOTE_EXEC_URL and env.startswith("/"):
+        return env
     if env and os.path.isdir(env):
         return env
     try:
@@ -677,6 +688,9 @@ def start_thread(proc, model_id, cwd=None):
         ),
         "dynamicTools": [] if diagnosis_only else agent_task_dynamic_tools(),
     }
+    if REMOTE_EXEC_URL:
+        params["runtimeWorkspaceRoots"] = [cwd]
+        params["environments"] = [remote_environment(cwd)]
     thread_id, error = request_thread_start(proc, params)
     if thread_id:
         return thread_id, None
@@ -710,6 +724,51 @@ def request_thread_start(proc, params):
     return thread_id, None
 
 
+def resume_thread(proc, thread_id, cwd):
+    params = {"threadId": thread_id}
+    if REMOTE_EXEC_URL:
+        params["cwd"] = cwd
+        params["runtimeWorkspaceRoots"] = [cwd]
+        params["environments"] = [remote_environment(cwd)]
+    request_id = next_rpc_id()
+    send(proc, {"method": "thread/resume", "id": request_id, "params": params})
+    try:
+        reply, _ = wait_for_id(proc, request_id, 45)
+    except (TimeoutError, RuntimeError, OSError):
+        return False
+    return (
+        "error" not in reply
+        and isinstance(reply.get("result"), dict)
+        and (reply["result"].get("thread") or {}).get("id") == thread_id
+    )
+
+
+def remote_environment(cwd):
+    return {
+        "environmentId": REMOTE_ENVIRONMENT_ID,
+        "cwd": cwd,
+        "runtimeWorkspaceRoots": [cwd],
+    }
+
+
+def check_remote_executor(proc):
+    if not REMOTE_EXEC_URL:
+        return None
+    request_id = next_rpc_id()
+    send(proc, {
+        "method": "environment/info",
+        "id": request_id,
+        "params": {"environmentId": REMOTE_ENVIRONMENT_ID},
+    })
+    try:
+        reply, _ = wait_for_id(proc, request_id, 10)
+    except (TimeoutError, RuntimeError, OSError):
+        return "The workspace executor is disconnected. Reconnect the workspace and retry."
+    if "error" in reply or not isinstance(reply.get("result"), dict):
+        return "The workspace executor is disconnected. Reconnect the workspace and retry."
+    return None
+
+
 def consume_stop_request():
     if not os.path.exists(STOP_REQUEST_PATH):
         return False
@@ -740,14 +799,30 @@ def request_turn_interrupt(proc, thread_id, wait_for_response=True):
 
 def run_turn(proc, thread_id, model_id, text, on_items=None, effort=None, service_tier=None, read_only=False):
     apply_display_env()
+    remote_error = check_remote_executor(proc)
+    if remote_error:
+        return {
+            "threadId": thread_id,
+            "modelId": model_id,
+            "status": "failed",
+            "text": "",
+            "error": remote_error,
+        }
     request_id = next_rpc_id()
     params = {
         "threadId": thread_id,
         "input": [{"type": "text", "text": text}],
         "summary": "concise",
         "approvalPolicy": "never",
-        "sandboxPolicy": {"type": "readOnly" if read_only else "dangerFullAccess"},
+        "sandboxPolicy": (
+            {"type": "readOnly"} if read_only else
+            {"type": "externalSandbox", "networkAccess": "restricted"}
+            if REMOTE_EXEC_URL else
+            {"type": "dangerFullAccess"}
+        ),
     }
+    if REMOTE_EXEC_URL:
+        params["environments"] = [remote_environment(project_cwd())]
     if isinstance(model_id, str) and model_id.strip():
         params["model"] = model_id.strip()
     if isinstance(effort, str) and effort.strip():
@@ -803,6 +878,10 @@ def run_turn(proc, thread_id, model_id, text, on_items=None, effort=None, servic
         if completed and (not turn_id or completed.get("id") == turn_id):
             turn_obj = completed
     turn_status = turn_obj.get("status") or "completed"
+    remote_error = check_remote_executor(proc)
+    if remote_error:
+        turn_status = "failed"
+        turn_obj = {"status": "failed", "error": {"message": remote_error}}
     items = ordered_items(items_by_id, order)
     if on_items:
         on_items(items)
@@ -829,6 +908,26 @@ def write_json_file(path, payload):
         json.dump(payload, handle)
         handle.write("\n")
     os.replace(temporary, path)
+
+
+def fail_interrupted_request(request_path, result_path, active_id):
+    if not isinstance(active_id, str) or not active_id:
+        return False
+    pending = read_json_file(request_path)
+    if not isinstance(pending, dict) or pending.get("id") != active_id:
+        return False
+    write_json_file(result_path, {
+        "id": active_id,
+        "turn": {
+            "status": "failed",
+            "error": "The Codex process restarted during this turn. Review the workspace before retrying.",
+        },
+    })
+    try:
+        os.remove(request_path)
+    except OSError:
+        pass
+    return True
 
 
 def read_account_once(proc, request_id, refresh_token, timeout=20):
@@ -916,12 +1015,25 @@ def cli_has_chatgpt_login():
 
 def main():
     version = os.environ.get("CODEX_VERSION")
+    if not os.path.isabs(RUNTIME_ROOT):
+        fail("Codex runtime state needs an absolute directory.")
+    if bool(REMOTE_EXEC_URL) != bool(REMOTE_ENVIRONMENT_ID):
+        fail("Remote execution requires both an executor URL and environment ID.")
+    if REMOTE_EXEC_URL and not REMOTE_EXEC_URL.startswith("wss://"):
+        fail("Remote execution requires an encrypted executor URL.")
+    saved_state = read_json_file(STATE_PATH)
+    if not isinstance(saved_state, dict):
+        saved_state = {}
     write_status({"stage": "starting", "codexVersion": version})
-    error_log = open("/tmp/ytimesy-app-server.err", "w", encoding="utf-8")
+    error_log = open(ERROR_LOG_PATH, "w", encoding="utf-8")
     env = os.environ.copy()
+    if REMOTE_EXEC_URL:
+        env["CODEX_HOME"] = os.environ.get("YTIMESY_CODEX_HOME", "")
+        if not env["CODEX_HOME"].startswith("/"):
+            fail("Remote execution requires an isolated Codex home.")
     env["DISPLAY"] = apply_display_env()
     proc = subprocess.Popen(
-        [CODEX, "app-server"],
+        [CODEX, "-c", "features.deferred_executor=true", "-c", "features.executor_capability_discovery=true", "app-server"] if REMOTE_EXEC_URL else [CODEX, "app-server"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=error_log,
@@ -952,6 +1064,21 @@ def main():
         if "error" in initialized:
             fail(initialized["error"].get("message", "initialize failed"), stageDetail="initialize")
         send(proc, {"method": "initialized", "params": {}})
+        if REMOTE_EXEC_URL:
+            send(proc, {
+                "method": "environment/add",
+                "id": 1,
+                "params": {
+                    "environmentId": REMOTE_ENVIRONMENT_ID,
+                    "execServerUrl": REMOTE_EXEC_URL,
+                },
+            })
+            added, _ = wait_for_id(proc, 1, 30)
+            if "error" in added:
+                fail("Could not register the workspace executor.")
+            remote_error = check_remote_executor(proc)
+            if remote_error:
+                fail(remote_error)
         supplied_tokens = external_tokens()
         if supplied_tokens:
             send(proc, {"method": "account/login/start", "id": 3, "params": {"type": "chatgptAuthTokens", **supplied_tokens}})
@@ -1020,24 +1147,58 @@ def main():
             {key: value for key, value in model.items() if key != "isDefault"}
             for model in models
         ]
-        turn = None
-        thread_id = None
-        thread_cwd = None
-        thread_model = None
-        session_items = []
-        turn_status = "idle"
-        active_task_id = None
-        side_turn = None
-        side_thread_id = None
-        side_thread_cwd = None
-        side_thread_model = None
-        side_items = []
-        side_turn_status = "idle"
-        side_active_task_id = None
+        turn = saved_state.get("turn")
+        thread_id = saved_state.get("threadId")
+        thread_cwd = saved_state.get("threadCwd")
+        thread_model = saved_state.get("threadModel")
+        session_items = saved_state.get("items") if isinstance(saved_state.get("items"), list) else []
+        turn_status = saved_state.get("turnStatus", "idle")
+        active_task_id = saved_state.get("activeTaskId")
+        side_turn = saved_state.get("sideTurn")
+        side_thread_id = saved_state.get("sideThreadId")
+        side_thread_cwd = saved_state.get("sideThreadCwd")
+        side_thread_model = saved_state.get("sideThreadModel")
+        side_items = saved_state.get("sideItems") if isinstance(saved_state.get("sideItems"), list) else []
+        side_turn_status = saved_state.get("sideTurnStatus", "idle")
+        side_active_task_id = saved_state.get("sideActiveTaskId")
         completed_request_ids = set()
+        if thread_id and not resume_thread(proc, thread_id, thread_cwd or project_cwd()):
+            fail("Could not resume the Codex conversation after a restart. Reconnect before sending another turn.")
+        if side_thread_id and not resume_thread(proc, side_thread_id, side_thread_cwd or project_cwd()):
+            fail("Could not resume the side conversation after a restart. Reconnect before sending another turn.")
+        if active_task_id:
+            completed_request_ids.add(active_task_id)
+            fail_interrupted_request(TASK_REQUEST_PATH, TASK_RESULT_PATH, active_task_id)
+            session_items = merge_session_items(session_items, [error_item(
+                "restart-%s" % active_task_id,
+                "The Codex process restarted during this turn. Review the workspace before retrying.",
+            )])
+            turn_status = "failed"
+            active_task_id = None
+        if side_active_task_id:
+            completed_request_ids.add(side_active_task_id)
+            fail_interrupted_request(SIDE_REQUEST_PATH, SIDE_RESULT_PATH, side_active_task_id)
+            side_turn_status = "failed"
+            side_active_task_id = None
         refresh_usage(proc)
 
         def publish(current_turn):
+            write_json_file(STATE_PATH, {
+                "threadId": thread_id,
+                "threadCwd": thread_cwd,
+                "threadModel": thread_model,
+                "turn": current_turn,
+                "turnStatus": turn_status,
+                "activeTaskId": active_task_id,
+                "items": session_items,
+                "sideThreadId": side_thread_id,
+                "sideThreadCwd": side_thread_cwd,
+                "sideThreadModel": side_thread_model,
+                "sideTurn": side_turn,
+                "sideTurnStatus": side_turn_status,
+                "sideActiveTaskId": side_active_task_id,
+                "sideItems": side_items,
+            })
             write_status(
                 {
                     "stage": "authenticated",

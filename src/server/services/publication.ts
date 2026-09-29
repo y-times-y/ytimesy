@@ -196,6 +196,17 @@ export function publishProject(
 			],
 			{},
 			"Push failed. Reconnect GitHub and retry.",
+		).pipe(
+			Effect.ensuring(
+				Effect.tryPromise(() =>
+					runtime.exec(
+						providerRef,
+						["rm", "-f", PROJECT_TOKEN_PATH],
+						{},
+						10_000,
+					),
+				).pipe(Effect.catchAll(() => Effect.void)),
+			),
 		);
 		if (pushed.exitCode !== 0)
 			return yield* reject(

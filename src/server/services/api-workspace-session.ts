@@ -2,10 +2,7 @@ import {
 	apiConversation,
 	assertApiContextFits,
 } from "#/domain/api-conversation";
-import {
-	parseModelRouteId,
-	verifiedConnectionModels,
-} from "#/domain/model-connection";
+import { parseModelRouteId } from "#/domain/model-connection";
 import {
 	sessionItemsFromUnknown,
 	sessionItemsQueuedWithUser,
@@ -21,10 +18,10 @@ import {
 	type CodexSessionScope,
 	emptyCodexSession,
 } from "./codex-workspace-session";
+import { availableApiModelRoutes } from "./model-connections";
 
 export async function apiModelCatalog(userId: string) {
-	const connections = await listModelConnections(userId);
-	return verifiedConnectionModels(connections);
+	return availableApiModelRoutes(await listModelConnections(userId));
 }
 
 export async function readApiWorkspaceSession(scope: CodexSessionScope) {
@@ -84,11 +81,14 @@ export async function sendApiWorkspaceTask(
 		selected.connectionId,
 	);
 	if (
-		!connection?.models.some(
-			(model) => model.id === selected.modelId && model.toolStreamingVerified,
+		!connection ||
+		!(await availableApiModelRoutes([connection])).some(
+			(model) => model.id === input.modelId,
 		)
 	)
-		throw new Error("Verify this model connection before using it.");
+		throw new Error(
+			"The selected model is no longer available on this connection.",
+		);
 	const items = sessionItemsQueuedWithUser(
 		sessionItemsFromUnknown(session.items),
 		input.text,

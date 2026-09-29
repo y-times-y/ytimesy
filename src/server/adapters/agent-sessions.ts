@@ -296,7 +296,7 @@ export async function insertAgentSession(input: {
 			input.task?.prompt ?? null,
 			input.task ? "draft" : null,
 			input.task?.placement ?? null,
-			input.task?.access ?? null,
+			input.task?.access ?? (input.parentSessionId ? null : "read_only"),
 			input.task?.execution ?? null,
 			input.task?.dependsOnSessionId ?? null,
 			input.task ? "pending" : null,

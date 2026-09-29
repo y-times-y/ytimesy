@@ -1,8 +1,6 @@
 import {
 	Files,
 	FolderTree,
-	MessageSquare,
-	MessagesSquare,
 	Monitor,
 	RotateCcw,
 	Sparkles,
@@ -11,9 +9,7 @@ import {
 } from "lucide-react";
 import type { SlashCommand, SlashCommandId } from "#/domain/slash-command";
 
-const icons: Record<SlashCommandId, typeof MessageSquare> = {
-	side: MessageSquare,
-	btw: MessagesSquare,
+const icons: Record<SlashCommandId, typeof Square> = {
 	stop: Square,
 	retry: RotateCcw,
 	model: Sparkles,

@@ -205,6 +205,35 @@ describe("executeSessionMachinePlan", () => {
 		});
 	});
 
+	it("replaces a missing read-only VM from the clean snapshot", async () => {
+		const runtime = machines({ copied: "replacement-vm" });
+		const saved: string[] = [];
+		const result = await executeSessionMachinePlan({
+			machines: {
+				...runtime.api,
+				ensureRunning: async () => {
+					throw new Error("VM not found");
+				},
+			},
+			sessionId: "11111111-2222-3333-4444-555555555555",
+			sessionProviderRef: "missing-vm",
+			replaceMissingReadOnly: true,
+			workspaceId: "ws-1",
+			templateSnapshotId: "snap-1",
+			templateProviderRef: "repo-vm",
+			saveTemplateSnapshot: async () => undefined,
+			saveSessionProviderRef: async (ref) => {
+				saved.push(ref);
+			},
+		});
+		expect(result).toEqual({
+			providerRef: "replacement-vm",
+			planKind: "recover-read-only",
+		});
+		expect(saved).toEqual(["replacement-vm"]);
+		expect(runtime.provisioned).toHaveLength(1);
+	});
+
 	it("seals the template and copies a new agent VM instead of attaching it", async () => {
 		const runtime = machines({ snapshot: "snap-first", copied: "agent-1" });
 		const saved: string[] = [];

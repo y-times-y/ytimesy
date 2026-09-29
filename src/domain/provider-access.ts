@@ -3,7 +3,10 @@ import {
 	DIRECT_MODEL_ENDPOINTS,
 	directModelProvider,
 } from "./browse-models";
-import type { PublicModelConnection } from "./model-connection";
+import {
+	type PublicModelConnection,
+	parseModelRouteId,
+} from "./model-connection";
 
 export function providerKeyConnection(author: string, apiKey: string) {
 	if (apiKey.trim().startsWith("sk-or-"))
@@ -37,5 +40,18 @@ export function providerConnections(
 			connection.provider === author ||
 			(connection.provider === "compatible" &&
 				connection.baseUrl === DIRECT_MODEL_ENDPOINTS[author]),
+	);
+}
+
+export function selectedProviderConnection(
+	available: readonly PublicModelConnection[],
+	selectedRoute: string,
+	chosenConnectionId?: string,
+): PublicModelConnection | undefined {
+	const routeConnectionId = parseModelRouteId(selectedRoute)?.connectionId;
+	return (
+		available.find((row) => row.id === chosenConnectionId) ??
+		available.find((row) => row.id === routeConnectionId) ??
+		available[0]
 	);
 }

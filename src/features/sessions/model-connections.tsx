@@ -3,12 +3,15 @@ import { useServerFn } from "@tanstack/react-start";
 import { useState } from "react";
 import "./model-connections.css";
 import {
+	availableConnectionModels,
 	MODEL_PROVIDERS,
 	type ModelProvider,
+	modelRouteId,
 	type PublicModelConnection,
 } from "#/domain/model-connection";
 import {
 	deleteModelConnectionFn,
+	getBrowseModels,
 	getModelConnections,
 	saveModelConnectionFn,
 	verifyModelConnectionFn,
@@ -17,12 +20,18 @@ import {
 export function ModelConnections() {
 	const queryClient = useQueryClient();
 	const getConnections = useServerFn(getModelConnections);
+	const getCodingModels = useServerFn(getBrowseModels);
 	const saveConnection = useServerFn(saveModelConnectionFn);
 	const removeConnection = useServerFn(deleteModelConnectionFn);
 	const verifyConnection = useServerFn(verifyModelConnectionFn);
 	const connections = useQuery({
 		queryKey: ["model-connections"],
 		queryFn: () => getConnections(),
+	});
+	const codingModels = useQuery({
+		queryKey: ["browse-models"],
+		queryFn: () => getCodingModels(),
+		staleTime: 15 * 60_000,
 	});
 	const [provider, setProvider] = useState<ModelProvider>("openai");
 	const [label, setLabel] = useState("");
@@ -66,8 +75,8 @@ export function ModelConnections() {
 		<section aria-label="Model API connections">
 			<h3>Model connections</h3>
 			<p className="settings-copy">
-				Manage saved connections here, or connect directly from the model
-				selector.
+				Add or replace keys here. Choose which saved connection to use in the
+				model selector.
 			</p>
 			<p className="settings-copy">
 				Use your own API account. Keys are encrypted, never shown again, and
@@ -79,9 +88,16 @@ export function ModelConnections() {
 				</p>
 			) : null}
 			{connections.data?.map((connection) => {
-				const model = connection.models.find(
-					(row) =>
-						row.id === (selected[connection.id] ?? connection.models[0]?.id),
+				const visibleIds = new Set(
+					availableConnectionModels([connection], codingModels.data ?? []).map(
+						(row) => row.id,
+					),
+				);
+				const visibleModels = connection.models.filter((row) =>
+					visibleIds.has(modelRouteId(connection.id, row.id)),
+				);
+				const model = visibleModels.find(
+					(row) => row.id === (selected[connection.id] ?? visibleModels[0]?.id),
 				);
 				return (
 					<div
@@ -103,7 +119,7 @@ export function ModelConnections() {
 								})
 							}
 						>
-							{connection.models.map((row) => (
+							{visibleModels.map((row) => (
 								<option key={row.id} value={row.id}>
 									{row.label}
 									{row.toolStreamingVerified ? " · verified" : ""}

@@ -1,4 +1,9 @@
 import { z } from "zod";
+import {
+	type BrowseModel,
+	isNonCodingModelId,
+	openRouterModelLabel,
+} from "./browse-models";
 
 export const modelProvider = z.enum([
 	"openai",
@@ -69,21 +74,46 @@ export type PublicModelConnection = {
 	readonly revision: string;
 };
 
+export function isCodingModelId(provider: ModelProvider, id: string): boolean {
+	if (id.endsWith(":batch") || isNonCodingModelId(id)) return false;
+	if (provider === "anthropic") return id.startsWith("claude-");
+	if (provider === "google")
+		return id.startsWith("gemini-") && !id.includes("live");
+	if (provider === "openai") return /^(?:gpt-|chatgpt-|o[1-9](?:-|$))/.test(id);
+	if (provider === "openrouter") return true;
+	return true;
+}
+
 export function modelRouteId(connectionId: string, modelId: string): string {
 	return `api/${connectionId}/${encodeURIComponent(modelId)}`;
 }
 
-export function verifiedConnectionModels(
+export function availableConnectionModels(
 	connections: readonly PublicModelConnection[],
+	browseModels: readonly BrowseModel[],
 ) {
 	return connections.flatMap((connection) =>
-		connection.models
-			.filter((model) => model.toolStreamingVerified)
+		connectionModels(connection, browseModels)
+			.filter((model) => isCodingModelId(connection.provider, model.id))
 			.map((model) => ({
 				id: modelRouteId(connection.id, model.id),
-				label: `${model.label} · ${connection.label}`,
+				label: `${connection.provider === "openrouter" ? openRouterModelLabel(model.label) : model.label} · ${connection.label}`,
 			})),
 	);
+}
+
+/** A saved gateway key grants access to the current public catalog, not only its login-time snapshot. */
+export function connectionModels(
+	connection: PublicModelConnection,
+	browseModels: readonly BrowseModel[],
+): readonly ConnectedModel[] {
+	if (connection.provider !== "openrouter") return connection.models;
+	const saved = new Map(connection.models.map((model) => [model.id, model]));
+	return browseModels.map((model) => ({
+		id: model.id,
+		label: model.label || saved.get(model.id)?.label || model.id,
+		toolStreamingVerified: saved.get(model.id)?.toolStreamingVerified ?? false,
+	}));
 }
 
 export function parseModelRouteId(

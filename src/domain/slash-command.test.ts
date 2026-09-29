@@ -15,10 +15,10 @@ const connected = composerSlashCommands({
 });
 
 describe("slash commands", () => {
-	it("parses /side with a trailing question", () => {
-		expect(parseSlashDraft("/side why did this fail")).toEqual({
-			query: "side",
-			argument: "why did this fail",
+	it("parses /model with a trailing argument", () => {
+		expect(parseSlashDraft("/model use this")).toEqual({
+			query: "model",
+			argument: "use this",
 		});
 	});
 
@@ -43,9 +43,6 @@ describe("slash commands", () => {
 			hasModels: false,
 		});
 		expect(
-			unsigned.find((command) => command.id === "side")?.unavailableReason,
-		).toBe("Connect an agent to start a side chat");
-		expect(
 			unsigned.find((command) => command.id === "model")?.unavailableReason,
 		).toBe("Connect an agent to load models");
 	});
@@ -55,15 +52,6 @@ describe("slash commands", () => {
 			matchingSlashCommands({ query: "", argument: "" }, connected).map(
 				(command) => command.id,
 			),
-		).toEqual([
-			"side",
-			"btw",
-			"retry",
-			"model",
-			"files",
-			"diff",
-			"terminal",
-			"desktop",
-		]);
+		).toEqual(["retry", "model", "files", "diff", "terminal", "desktop"]);
 	});
 });

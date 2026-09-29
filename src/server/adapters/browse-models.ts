@@ -10,10 +10,13 @@ export function browseModels(): Promise<BrowseModel[]> {
 		return Promise.resolve(cached.models);
 	if (pending) return pending;
 	pending = (async () => {
-		const response = await fetch("https://openrouter.ai/api/v1/models", {
-			signal: AbortSignal.timeout(8000),
-			redirect: "error",
-		});
+		const response = await fetch(
+			"https://openrouter.ai/api/v1/models?sort=top-weekly",
+			{
+				signal: AbortSignal.timeout(8000),
+				redirect: "error",
+			},
+		);
 		if (!response.ok) throw new Error("Model catalog unavailable.");
 		const models = parseBrowseModels(await readModelCatalogBody(response));
 		if (!models.length) throw new Error("Model catalog unavailable.");

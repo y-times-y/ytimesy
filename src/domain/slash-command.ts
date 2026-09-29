@@ -1,6 +1,4 @@
 export type SlashCommandId =
-	| "side"
-	| "btw"
 	| "stop"
 	| "retry"
 	| "model"
@@ -52,22 +50,6 @@ export function composerSlashCommands(
 		? "Sign in to an agent"
 		: "Connect an agent";
 	return [
-		{
-			id: "side",
-			trigger: "/side",
-			label: "Side chat",
-			description: "Ask a question without interrupting the current run",
-			availability: context.authenticated ? "ready" : "unavailable",
-			unavailableReason: `${startHint} to start a side chat`,
-		},
-		{
-			id: "btw",
-			trigger: "/btw",
-			label: "By the way",
-			description: "Open a side chat for a tangent",
-			availability: context.authenticated ? "ready" : "unavailable",
-			unavailableReason: `${startHint} to start a side chat`,
-		},
 		{
 			id: "stop",
 			trigger: "/stop",

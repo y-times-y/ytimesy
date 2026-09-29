@@ -357,7 +357,16 @@ export function ensureCurrentLoginDaemon(
 		const existing = yield* Effect.tryPromise(() =>
 			machines.readTextFile(workspaceId, LOGIN_DAEMON_HASH_PATH),
 		).pipe(Effect.catchAll(() => Effect.succeed("")));
-		if ((existing ?? "").trim() === expected) return;
+		if ((existing ?? "").trim() === expected) {
+			const running = yield* Effect.tryPromise(() =>
+				machines.exec(
+					workspaceId,
+					`test -f /tmp/ytimesy-codex-login.pid && kill -0 "$(cat /tmp/ytimesy-codex-login.pid)"`,
+					15_000,
+				),
+			);
+			if (running.exitCode === 0) return;
+		}
 		const resumed = yield* resumeCodexSession(machines, workspaceId, {
 			skipInitialTurn: true,
 		});
@@ -521,21 +530,10 @@ export function interruptCodexTurn(
 	workspaceId: WorkspaceId,
 ): Effect.Effect<CodexLoginStatus> {
 	return Effect.gen(function* () {
-		const located = yield* Effect.tryPromise(() =>
-			machines.exec(workspaceId, "printenv HOME", 15_000),
-		);
-		const home = located.stdout.trim();
-		if (
-			located.exitCode !== 0 ||
-			!home.startsWith("/") ||
-			home.includes("\n")
-		) {
-			return failedStatus("Could not locate Codex control directory.");
-		}
 		yield* Effect.tryPromise(() =>
 			machines.writeTextFile(
 				workspaceId,
-				`${home}/.ytimesy-stop-request.json`,
+				"/tmp/ytimesy-stop-request.json",
 				`${JSON.stringify({ requestedAt: new Date().toISOString() })}\n`,
 			),
 		);

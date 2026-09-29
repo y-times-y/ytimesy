@@ -48,7 +48,7 @@ export async function startAgentCompetition(
 				competitionId: group.id,
 				title: `Agent ${index}`,
 				harness: group.harness,
-				modelId: group.model_id,
+				modelId: group.attempt_model_ids?.[index - 1] ?? group.model_id,
 				prompt: `${group.prompt}\n\n${competitionCandidateInstructions}`,
 				placement: "fresh",
 				access: "read_write",

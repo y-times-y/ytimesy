@@ -18,7 +18,7 @@ import {
 	canSpawnAgentTask,
 	validateAgentTaskPlan,
 } from "#/domain/agent-task";
-import { failureMessage } from "#/domain/failure-message";
+import { failureMessage, workspaceLooksGone } from "#/domain/failure-message";
 import { WorkspaceId } from "#/domain/ids";
 import { listedModelPreferenceFromSessions } from "#/domain/listed-model";
 import { projectCheckoutFromFullName } from "#/domain/project-checkout";
@@ -417,6 +417,10 @@ export async function bindAgentSessionMachine(
 		machines,
 		sessionId: session.id,
 		sessionProviderRef: session.providerRef,
+		replaceMissingReadOnly:
+			input.harness === "api" &&
+			!selectedSession.parentSessionId &&
+			selectedSession.taskAccess === "read_only",
 		workspaceId: workspace.id,
 		templateSnapshotId,
 		templateProviderRef: input.sourceSnapshotId ? null : workspace.providerRef,
@@ -512,17 +516,24 @@ async function checkoutStackedTaskBase(
 	const token = await githubInstallationAccessToken(project.installationId);
 	const workspaceId = WorkspaceId(providerRef);
 	await machines.writeTextFile(workspaceId, PROJECT_TOKEN_PATH, `${token}\n`);
-	const result = await machines.exec(
-		workspaceId,
-		fastForwardPreparedCheckoutScript({
-			owner: checkout.owner,
-			name: checkout.name,
-			branch: input.branch,
-			destination: repositoryDirectory(project.fullName),
-			workingBranch: input.branch,
-		}),
-		120_000,
-	);
+	let result: Awaited<ReturnType<WorkspaceMachines["exec"]>>;
+	try {
+		result = await machines.exec(
+			workspaceId,
+			fastForwardPreparedCheckoutScript({
+				owner: checkout.owner,
+				name: checkout.name,
+				branch: input.branch,
+				destination: repositoryDirectory(project.fullName),
+				workingBranch: input.branch,
+			}),
+			120_000,
+		);
+	} finally {
+		await machines
+			.exec(workspaceId, `rm -f ${PROJECT_TOKEN_PATH}`, 10_000)
+			.catch(() => undefined);
+	}
 	if (result.exitCode !== 0 || !result.stdout.includes("updated")) {
 		throw new Error(
 			(result.stderr || result.stdout).trim() ||
@@ -592,6 +603,7 @@ export async function executeSessionMachinePlan(input: {
 	>;
 	readonly sessionId: string;
 	readonly sessionProviderRef: string | null;
+	readonly replaceMissingReadOnly?: boolean;
 	readonly workspaceId: string;
 	readonly templateSnapshotId: string | null;
 	readonly templateProviderRef: string | null;
@@ -599,7 +611,10 @@ export async function executeSessionMachinePlan(input: {
 	readonly saveTemplateSnapshot: (snapshotId: string) => Promise<void>;
 	readonly saveSessionProviderRef: (providerRef: string) => Promise<void>;
 	readonly wait?: (ms: number) => Promise<void>;
-}): Promise<{ providerRef: string; planKind: SessionMachinePlan["kind"] }> {
+}): Promise<{
+	providerRef: string;
+	planKind: SessionMachinePlan["kind"] | "recover-read-only";
+}> {
 	let snapshotId = input.templateSnapshotId;
 	let plan = sessionMachinePlan({
 		sessionProviderRef: input.sessionProviderRef,
@@ -623,7 +638,21 @@ export async function executeSessionMachinePlan(input: {
 	}
 	if (plan.kind === "blocked") throw new Error(plan.reason);
 	if (plan.kind === "resume") {
-		await input.machines.ensureRunning(WorkspaceId(plan.providerRef));
+		try {
+			await input.machines.ensureRunning(WorkspaceId(plan.providerRef));
+		} catch (cause) {
+			if (
+				!input.replaceMissingReadOnly ||
+				!workspaceLooksGone(failureMessage(cause)) ||
+				!snapshotId
+			) {
+				throw cause;
+			}
+			const replacement = await copyAgentSessionFromTemplate(input, snapshotId);
+			await input.saveSessionProviderRef(replacement);
+			await resetCopiedSessionScratch(input.machines, replacement);
+			return { providerRef: replacement, planKind: "recover-read-only" };
+		}
 		if (!input.sessionProviderRef)
 			await input.saveSessionProviderRef(plan.providerRef);
 		return { providerRef: plan.providerRef, planKind: plan.kind };

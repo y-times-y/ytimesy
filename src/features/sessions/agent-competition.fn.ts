@@ -4,6 +4,7 @@ import { Effect } from "effect";
 import { z } from "zod";
 import { leaderCount } from "#/domain/agent-competition";
 import { parseRuntimeId } from "#/domain/agent-provider";
+import { parallelAttemptModelIds } from "#/domain/parallel-models";
 import {
 	competitionsForOwner,
 	createAgentCompetition,
@@ -39,6 +40,7 @@ export const startAgentCompetition = createServerFn({ method: "POST" })
 			harnessId: string;
 			modelId: string;
 			leaderCount: number;
+			attemptModelIds: string[];
 			userMessageId: string;
 		}) => ({
 			projectId: data.projectId.trim(),
@@ -47,6 +49,7 @@ export const startAgentCompetition = createServerFn({ method: "POST" })
 			harnessId: parseRuntimeId(data.harnessId),
 			modelId: data.modelId.trim(),
 			leaderCount: leaderCount.parse(data.leaderCount),
+			attemptModelIds: parallelAttemptModelIds.parse(data.attemptModelIds),
 			userMessageId: z.string().uuid().parse(data.userMessageId),
 		}),
 	)
@@ -66,20 +69,18 @@ export const startAgentCompetition = createServerFn({ method: "POST" })
 			throw new Error("Start independent agents from a project chat.");
 		if (data.harnessId === "codex" && !(await hasManagedCodexAuth(user.id)))
 			throw new Error("Connect your Codex subscription first.");
+		if (data.attemptModelIds.length !== data.leaderCount)
+			throw new Error("The selected models must match the number of agents.");
+		const availableModels =
+			data.harnessId === "codex"
+				? await loadAgentModelCatalog(user.id, "codex")
+				: await apiModelCatalog(user.id);
+		const availableIds = new Set(availableModels.map((model) => model.id));
 		if (
-			data.harnessId === "codex" &&
-			!(await loadAgentModelCatalog(user.id, "codex")).some(
-				(model) => model.id === data.modelId,
-			)
+			!availableIds.has(data.modelId) ||
+			data.attemptModelIds.some((id) => !availableIds.has(id))
 		)
-			throw new Error("Choose a currently available Codex model first.");
-		if (
-			data.harnessId === "api" &&
-			!(await apiModelCatalog(user.id)).some(
-				(model) => model.id === data.modelId,
-			)
-		)
-			throw new Error("Choose a verified API model connection first.");
+			throw new Error("Choose currently available models first.");
 		const group = await createAgentCompetition({
 			userId: user.id,
 			projectId: data.projectId,
@@ -88,6 +89,7 @@ export const startAgentCompetition = createServerFn({ method: "POST" })
 			harness: data.harnessId,
 			modelId: data.modelId,
 			leaderCount: data.leaderCount,
+			attemptModelIds: data.attemptModelIds,
 			userMessageId: data.userMessageId,
 		});
 		try {

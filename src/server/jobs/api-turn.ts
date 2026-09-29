@@ -1,6 +1,10 @@
 import { AGENT_ORCHESTRATION_INSTRUCTIONS } from "#/domain/agent-orchestration";
 import { assertApiContextFits } from "#/domain/api-conversation";
 import { applyApiProgress } from "#/domain/api-progress";
+import {
+	type ApiTurnFailureStage,
+	apiTurnFailureMessage,
+} from "#/domain/api-turn-failure";
 import { PREPARED_ENVIRONMENT_INSTRUCTIONS } from "#/domain/environment-context";
 import { SessionItemId, WorkspaceId } from "#/domain/ids";
 import { agentSessionForOwner } from "../adapters/agent-sessions";
@@ -28,6 +32,7 @@ export async function runApiTurn(machines: WorkspaceMachines, turn: ApiTurn) {
 		| ((status: "running" | "completed" | "failed" | "idle") => Promise<void>)
 		| undefined;
 	let heartbeatBusy = false;
+	let failureStage: ApiTurnFailureStage = "connection";
 	const heartbeat = setInterval(() => {
 		if (heartbeatBusy) return;
 		heartbeatBusy = true;
@@ -56,6 +61,7 @@ export async function runApiTurn(machines: WorkspaceMachines, turn: ApiTurn) {
 			throw new Error(
 				"The API connection changed after this turn was submitted.",
 			);
+		failureStage = "workspace";
 		const bound = await bindAgentSessionMachine(machines, {
 			userId: owner.userId,
 			projectId: owner.projectId,
@@ -92,6 +98,7 @@ export async function runApiTurn(machines: WorkspaceMachines, turn: ApiTurn) {
 			signal: abort.signal,
 		});
 		let flushedAt = 0;
+		failureStage = "model";
 		await runApiAgent({
 			userId: turn.user_id,
 			connectionId: turn.connection_id,
@@ -101,6 +108,7 @@ export async function runApiTurn(machines: WorkspaceMachines, turn: ApiTurn) {
 			tools,
 			signal: abort.signal,
 			beforeStep: async (history) => {
+				failureStage = "budget";
 				assertApiContextFits(history);
 				abort.signal.throwIfAborted();
 				await reserveApiTokens(
@@ -108,19 +116,34 @@ export async function runApiTurn(machines: WorkspaceMachines, turn: ApiTurn) {
 					owner.id,
 					Buffer.byteLength(JSON.stringify(history), "utf8") + 24_000,
 				);
+				failureStage = "model";
+			},
+			beforeCompaction: async (older) => {
+				failureStage = "budget";
+				await reserveApiTokens(
+					owner.userId,
+					owner.id,
+					Buffer.byteLength(JSON.stringify(older), "utf8") + 4_000,
+				);
+				failureStage = "model";
 			},
 			onEvent: async (event) => {
 				items = applyApiProgress(items, turn.id, event);
 				if (Date.now() - flushedAt >= 250 || event.type === "finish") {
+					failureStage = "workspace";
 					await publishProgress?.("running");
+					failureStage = "model";
 					flushedAt = Date.now();
 				}
 			},
-			onStep: async (step) => {
-				messages = [...messages, ...step];
+			onStep: async (history) => {
+				failureStage = "saving";
+				messages = history;
 				await checkpointApiTurn(turn, messages, items);
+				failureStage = "model";
 			},
 		});
+		failureStage = "saving";
 		const saved = await finishApiTurn(turn, "completed", items);
 		if (!saved) return;
 		await publishProgress("completed").catch(() => {});
@@ -135,7 +158,7 @@ export async function runApiTurn(machines: WorkspaceMachines, turn: ApiTurn) {
 						.join("\n")
 						.slice(-16000) || "Task completed.",
 			});
-	} catch {
+	} catch (error) {
 		items = [
 			...items,
 			{
@@ -143,7 +166,7 @@ export async function runApiTurn(machines: WorkspaceMachines, turn: ApiTurn) {
 				id: SessionItemId(`${turn.id}:error`),
 				message: abort.signal.aborted
 					? "Run stopped. Inspect any in-flight command before continuing."
-					: "API run failed. Check connection access, credit, and workspace availability. No fallback was used.",
+					: apiTurnFailureMessage(failureStage, error),
 			},
 		];
 		items = applyApiProgress(items, turn.id, {

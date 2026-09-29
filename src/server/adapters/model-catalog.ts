@@ -1,4 +1,20 @@
-import type { ConnectedModel, ModelProvider } from "#/domain/model-connection";
+import { isOpenRouterCodingModel } from "#/domain/browse-models";
+import {
+	type ConnectedModel,
+	isCodingModelId,
+	type ModelProvider,
+} from "#/domain/model-connection";
+
+export function isProviderCodingModel(
+	provider: ModelProvider,
+	row: Record<string, unknown>,
+	id: string,
+): boolean {
+	return (
+		isCodingModelId(provider, id) &&
+		(provider !== "openrouter" || isOpenRouterCodingModel(row))
+	);
+}
 
 export function parseConnectedModels(
 	provider: ModelProvider,
@@ -23,7 +39,13 @@ export function parseConnectedModels(
 					? row.name.replace(/^models\//, "")
 					: undefined
 				: row.id;
-		if (typeof id !== "string" || !id.trim() || id.length > 512) continue;
+		if (
+			typeof id !== "string" ||
+			!id.trim() ||
+			id.length > 512 ||
+			!isProviderCodingModel(provider, row as Record<string, unknown>, id)
+		)
+			continue;
 		const label = row.displayName ?? row.display_name ?? row.name ?? id;
 		models.set(id, {
 			id,
