@@ -36,6 +36,22 @@ function renderTimeline(
 }
 
 describe("session timeline live collapse", () => {
+	it("shows a persisted failure reason in the chat", () => {
+		const html = renderTimeline(
+			[
+				{
+					kind: "error",
+					id: SessionItemId("turn-error"),
+					message:
+						"The provider rate limit was reached (HTTP 429). Wait and retry. No fallback was used.",
+				},
+			],
+			"completed",
+		);
+		expect(html).toContain('role="alert"');
+		expect(html).toContain("provider rate limit was reached");
+	});
+
 	it("places expandable agent work under its prompt and the judge after both agents finish", () => {
 		const items: SessionItem[] = [
 			{

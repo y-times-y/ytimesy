@@ -323,7 +323,7 @@ function unsignedAccess(
 			readiness: "unsigned",
 			muted: true,
 			statusLabel: "Not connected",
-			summary: "Add an API connection in Settings and verify a model.",
+			summary: "Add an API connection in Settings, then select a model.",
 			subscriptionAction: null,
 			subscriptionActionLabel: null,
 			apiKeyHint: null,

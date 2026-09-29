@@ -145,6 +145,12 @@ function ensureSingleProjectCheckout(
 				}),
 				180_000,
 			),
+		).pipe(
+			Effect.ensuring(
+				Effect.tryPromise(() =>
+					machines.exec(workspaceId, `rm -f ${PROJECT_TOKEN_PATH}`, 10_000),
+				).pipe(Effect.catchAll(() => Effect.void)),
+			),
 		);
 		if (cloned.exitCode !== 0) {
 			yield* Effect.tryPromise(() =>

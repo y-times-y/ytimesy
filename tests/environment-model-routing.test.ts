@@ -8,9 +8,13 @@ const mocks = vi.hoisted(() => ({
 	run: vi.fn(),
 	codex: vi.fn(),
 	budget: vi.fn(),
+	browse: vi.fn(),
 }));
 vi.mock("../src/server/adapters/model-connections", () => ({
 	loadModelConnection: mocks.load,
+}));
+vi.mock("../src/server/adapters/browse-models", () => ({
+	browseModels: mocks.browse,
 }));
 vi.mock("../src/server/auth/codex-managed-auth", () => ({
 	hasManagedCodexAuth: mocks.auth,
@@ -35,6 +39,7 @@ const input = {
 };
 beforeEach(() => {
 	vi.resetAllMocks();
+	mocks.browse.mockResolvedValue([{ id: "selected-model" }]);
 	mocks.run.mockImplementation(async (request) => {
 		await request.beforeStep();
 		await request.onEvent({
@@ -46,15 +51,26 @@ beforeEach(() => {
 it.each(["openai", "anthropic", "google", "openrouter", "compatible"])(
 	"routes the explicitly selected %s model through the shared API harness",
 	async (provider) => {
+		const modelId =
+			provider === "openai"
+				? "gpt-selected"
+				: provider === "anthropic"
+					? "claude-selected"
+					: provider === "google"
+						? "gemini-selected"
+						: provider === "openrouter"
+							? "vendor/selected"
+							: "selected-model";
+		mocks.browse.mockResolvedValue([{ id: modelId }]);
 		mocks.load.mockResolvedValue({
 			id,
 			provider,
 			revision: "revision",
-			models: [{ id: "selected-model", toolStreamingVerified: true }],
+			models: [{ id: modelId, label: modelId, toolStreamingVerified: true }],
 		});
 		const model = await resolveEnvironmentModel("alice", {
 			harness: "api",
-			modelId: `api/${id}/selected-model`,
+			modelId: `api/${id}/${encodeURIComponent(modelId)}`,
 			allowApi: true,
 		});
 		await expect(
@@ -68,7 +84,7 @@ it.each(["openai", "anthropic", "google", "openrouter", "compatible"])(
 		expect(request).toMatchObject({
 			connectionId: id,
 			connectionRevision: "revision",
-			modelId: "selected-model",
+			modelId,
 			tools: {},
 			maxSteps: 1,
 			maxOutputTokens: 512,
@@ -92,7 +108,7 @@ it("does not select a model or bill API usage implicitly", async () => {
 	).rejects.toThrow("Select a model");
 	expect(mocks.run).not.toHaveBeenCalled();
 });
-it("rejects missing or unverified owner connections", async () => {
+it("rejects missing owner connections and batch models", async () => {
 	mocks.load.mockResolvedValue(null);
 	await expect(
 		resolveEnvironmentModel("alice", {
@@ -100,7 +116,20 @@ it("rejects missing or unverified owner connections", async () => {
 			modelId: `api/${id}/model`,
 			allowApi: true,
 		}),
-	).rejects.toThrow("owned by this account");
+	).rejects.toThrow("no longer available");
+	mocks.load.mockResolvedValue({
+		id,
+		provider: "openrouter",
+		revision: "revision",
+		models: [{ id: "model:batch", toolStreamingVerified: false }],
+	});
+	await expect(
+		resolveEnvironmentModel("alice", {
+			harness: "api",
+			modelId: `api/${id}/model%3Abatch`,
+			allowApi: true,
+		}),
+	).rejects.toThrow("no longer available");
 });
 it("preserves the exact subscription model without API fallback", async () => {
 	mocks.auth.mockResolvedValue(true);

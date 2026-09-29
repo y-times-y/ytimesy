@@ -6,17 +6,6 @@ export type BrowseModel = {
 	author: string;
 	created: number;
 };
-const AUTHOR_ORDER = [
-	"anthropic",
-	"openai",
-	"x-ai",
-	"google",
-	"meta",
-	"moonshotai",
-	"deepseek",
-	"qwen",
-	"mistralai",
-];
 export const AUTHOR_LABELS: Record<string, string> = {
 	anthropic: "Anthropic",
 	openai: "OpenAI",
@@ -27,7 +16,26 @@ export const AUTHOR_LABELS: Record<string, string> = {
 	deepseek: "DeepSeek",
 	qwen: "Qwen",
 	mistralai: "Mistral",
+	"z-ai": "Z.ai",
+	minimax: "MiniMax",
+	xiaomi: "Xiaomi",
+	tencent: "Tencent",
+	nvidia: "NVIDIA",
 };
+const MAX_MODEL_AGE_SECONDS = 365 * 24 * 60 * 60;
+
+export function matchesModelSearch(
+	model: Pick<BrowseModel, "label" | "author">,
+	search: string,
+): boolean {
+	const term = search.trim().toLowerCase();
+	return (
+		!term ||
+		model.label.toLowerCase().includes(term) ||
+		model.author.toLowerCase().includes(term) ||
+		(AUTHOR_LABELS[model.author] ?? "").toLowerCase().includes(term)
+	);
+}
 export const DIRECT_MODEL_ENDPOINTS: Record<string, string> = {
 	meta: "https://api.meta.ai/v1",
 	deepseek: "https://api.deepseek.com",
@@ -40,41 +48,56 @@ export function directModelProvider(author: string): ModelProvider | null {
 		? author
 		: null;
 }
-export function parseBrowseModels(value: unknown): BrowseModel[] {
+export function openRouterModelLabel(name: string): string {
+	return name.replace(/^[^:]+: /, "");
+}
+export function isNonCodingModelId(id: string): boolean {
+	return /(?:audio|embedding|image|realtime|search|transcri|tts|safeguard|guard|moderation|classifier|rerank)/i.test(
+		id,
+	);
+}
+export function isOpenRouterCodingModel(row: unknown): row is {
+	id: string;
+	name: string;
+	created?: number;
+} {
+	if (!row || typeof row !== "object") return false;
+	const model = row as Record<string, unknown>;
+	const architecture = model.architecture as
+		| { output_modalities?: unknown }
+		| undefined;
+	return (
+		typeof model.id === "string" &&
+		typeof model.name === "string" &&
+		model.id.length <= 512 &&
+		!model.id.endsWith(":batch") &&
+		!model.id.startsWith("~") &&
+		!isNonCodingModelId(model.id) &&
+		Array.isArray(model.supported_parameters) &&
+		model.supported_parameters.includes("tools") &&
+		Array.isArray(architecture?.output_modalities) &&
+		architecture.output_modalities.length === 1 &&
+		architecture.output_modalities[0] === "text"
+	);
+}
+export function parseBrowseModels(
+	value: unknown,
+	nowSeconds = Math.floor(Date.now() / 1000),
+): BrowseModel[] {
 	const rows = (value as { data?: unknown })?.data;
 	if (!Array.isArray(rows)) throw new Error("Model catalog unavailable.");
 	const models = new Map<string, BrowseModel>();
 	for (const row of rows) {
-		if (
-			!row ||
-			typeof row.id !== "string" ||
-			typeof row.name !== "string" ||
-			row.id.length > 512 ||
-			!Array.isArray(row.supported_parameters) ||
-			!row.supported_parameters.includes("tools") ||
-			!Array.isArray(row.architecture?.output_modalities) ||
-			!row.architecture.output_modalities.includes("text") ||
-			row.id.endsWith(":batch")
-		)
-			continue;
+		if (!isOpenRouterCodingModel(row)) continue;
+		const created = typeof row.created === "number" ? row.created : 0;
+		if (created < nowSeconds - MAX_MODEL_AGE_SECONDS) continue;
 		const author = row.id.split("/")[0];
 		models.set(row.id, {
 			id: row.id,
-			label: row.name.replace(/^[^:]+: /, "").slice(0, 160),
+			label: openRouterModelLabel(row.name).slice(0, 160),
 			author,
-			created: typeof row.created === "number" ? row.created : 0,
+			created,
 		});
 	}
-	return [...models.values()].sort((a, b) => {
-		const rank = (author: string) =>
-			AUTHOR_ORDER.includes(author)
-				? AUTHOR_ORDER.indexOf(author)
-				: AUTHOR_ORDER.length;
-		return (
-			rank(a.author) - rank(b.author) ||
-			a.author.localeCompare(b.author) ||
-			b.created - a.created ||
-			a.label.localeCompare(b.label)
-		);
-	});
+	return [...models.values()];
 }

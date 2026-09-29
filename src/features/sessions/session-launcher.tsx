@@ -30,6 +30,7 @@ import {
 	composerModelIdForCatalog,
 	listedModelDisplayName,
 } from "#/domain/listed-model";
+import { expandModelRuns, type ModelRun } from "#/domain/parallel-models";
 import type { Project } from "#/domain/projects";
 import {
 	lastUserMessageText,
@@ -45,7 +46,6 @@ import {
 } from "#/domain/slash-command";
 import { authClient } from "#/features/auth/client";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
-import { AgentCountPicker } from "./agent-count-picker";
 import { ContextUsage } from "./context-usage";
 import { HarnessLogin } from "./harness-login";
 import {
@@ -70,11 +70,9 @@ export function SessionLauncher({
 	onSend,
 	onConnect,
 	onStop,
-	onOpenSideChat,
 	onOpenInspector,
 	onOpenFile,
 	onOpenCandidate,
-	onComposerModelIdChange,
 	competitions = [],
 	allowComparison = true,
 	projects,
@@ -95,16 +93,15 @@ export function SessionLauncher({
 			readonly reasoningId?: string;
 			readonly fast?: boolean;
 			readonly leaderCount?: number;
+			readonly attemptModelIds?: readonly string[];
 			readonly userMessageId?: string;
 		},
 	) => void;
 	onConnect: () => void;
 	onStop: () => void;
-	onOpenSideChat: (question?: string) => void;
 	onOpenInspector: (view: InspectorView) => void;
 	onOpenFile?: (path: string) => void;
 	onOpenCandidate?: (sessionId: string) => void;
-	onComposerModelIdChange?: (modelId: string) => void;
 	competitions?: readonly AgentCompetition[];
 	allowComparison?: boolean;
 	projects: Project[];
@@ -192,7 +189,10 @@ export function SessionLauncher({
 	const [modelId, setModelId] = useState(session.listedModelId);
 	const [reasoningId, setReasoningId] = useState("");
 	const [fast, setFast] = useState(false);
-	const [leaderCount, setLeaderCount] = useState(1);
+	const [multipleModels, setMultipleModels] = useState(false);
+	const [modelRuns, setModelRuns] = useState<ModelRun[]>([]);
+	const attemptModelIds = expandModelRuns(modelRuns);
+	const leaderCount = multipleModels ? attemptModelIds.length : 1;
 	const [lastModelByHarness, setLastModelByHarness] = useState<
 		Partial<Record<AgentProviderId, string>>
 	>(() =>
@@ -277,10 +277,6 @@ export function SessionLauncher({
 	}, [draft]);
 
 	useEffect(() => {
-		onComposerModelIdChange?.(modelId);
-	}, [modelId, onComposerModelIdChange]);
-
-	useEffect(() => {
 		const connectedHarness = connectedProviderId(session.connection);
 		const lastUsedForCatalog =
 			lastModelByHarness[harnessId] ||
@@ -344,14 +340,15 @@ export function SessionLauncher({
 		]);
 		const reasoning = resolveReasoningLevel(selectedModel, reasoningId);
 		onSend(text, modelId, {
-			...(reasoning?.id ? { reasoningId: reasoning.id } : {}),
-			...(fast ? { fast: true } : {}),
+			...(leaderCount === 1 && reasoning?.id
+				? { reasoningId: reasoning.id }
+				: {}),
+			...(leaderCount === 1 && fast ? { fast: true } : {}),
 			...(competitionMode && leaderCount > 1
-				? { leaderCount, userMessageId }
+				? { leaderCount, attemptModelIds, userMessageId }
 				: {}),
 		});
 		setDraft("");
-		setLeaderCount(1);
 	}
 
 	function sendDraft() {
@@ -365,12 +362,6 @@ export function SessionLauncher({
 
 	function runSlashCommand(command: SlashCommand) {
 		if (command.availability !== "ready") return;
-		const argument = slashDraft?.argument ?? "";
-		if (command.id === "side" || command.id === "btw") {
-			onOpenSideChat(argument || undefined);
-			setDraft("");
-			return;
-		}
 		if (command.id === "stop") {
 			onStop();
 			setDraft("");
@@ -557,6 +548,24 @@ export function SessionLauncher({
 								modelId={modelId}
 								listedModelId={modelId || session.listedModelId}
 								onModelIdChange={setModelId}
+								multipleModels={competitionMode && multipleModels}
+								modelRuns={modelRuns}
+								onMultipleModelsChange={(enabled) => {
+									setMultipleModels(enabled);
+									if (enabled)
+										setModelRuns([
+											{ modelId: modelId || models[0]?.id || "", count: 2 },
+										]);
+								}}
+								onModelRunsChange={(runs) => {
+									setModelRuns(runs);
+									if (runs[0] && runs[0].modelId !== modelId) {
+										setModelId(runs[0].modelId);
+										setReasoningId("");
+										setFast(false);
+									}
+								}}
+								parallelAvailable={competitionMode}
 								reasoningId={reasoningId}
 								onReasoningIdChange={setReasoningId}
 								fast={fast}
@@ -576,12 +585,6 @@ export function SessionLauncher({
 									})
 								}
 							/>
-							{competitionMode ? (
-								<AgentCountPicker
-									value={leaderCount}
-									onChange={setLeaderCount}
-								/>
-							) : null}
 							{turnStatus === "running" && activeCompetition ? (
 								<button
 									type="button"

@@ -33,6 +33,98 @@
 .model-picker-search input::placeholder {
 	color: #858585;
 }
+.model-picker-multiple {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 14px;
+	padding: 11px 13px;
+	border-bottom: 1px solid #ffffff14;
+}
+.model-picker-multiple strong {
+	font-size: 13px;
+	font-weight: 550;
+}
+.model-picker-multiple p {
+	margin: 3px 0 0;
+	color: #999;
+	font-size: 11px;
+	line-height: 1.4;
+}
+.model-picker-multiple [role="switch"] {
+	flex-shrink: 0;
+}
+.model-run-check {
+	display: grid;
+	place-items: center;
+	flex: 0 0 18px;
+	width: 18px;
+	height: 18px;
+	border: 1px solid #666;
+	border-radius: 5px;
+	color: #222;
+	transition:
+		background-color 140ms ease-out,
+		border-color 140ms ease-out;
+}
+.model-picker-option > .model-run-check {
+	flex: 0 0 18px;
+}
+.model-picker-row[data-selected="true"] .model-run-check,
+.model-browser-option[aria-pressed="true"] .model-run-check {
+	border-color: #c7c7c7;
+	background: #c7c7c7;
+}
+.model-run-trigger {
+	flex-shrink: 0;
+	min-width: 60px;
+	height: 28px;
+	margin-right: 2px;
+	padding: 0 4px 0 7px;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	box-shadow: none;
+	color: #bcbcbc;
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+}
+.model-run-trigger:hover,
+.model-run-trigger[data-state="open"] {
+	background: #ffffff12;
+	color: #f1f1f1;
+}
+.model-run-trigger svg {
+	width: 12px;
+	height: 12px;
+	opacity: 0.55;
+}
+.model-run-menu {
+	min-width: 96px;
+	gap: 0;
+	padding: 4px;
+	border: 1px solid #404040;
+	border-radius: 9px;
+	background: #242424;
+	box-shadow: 0 12px 30px #0009;
+}
+.model-run-menu [data-slot="select-item"] {
+	min-height: 30px;
+	padding: 5px 9px;
+	color: #bcbcbc;
+	font-size: 12px;
+}
+.model-run-menu [data-slot="select-item"][data-state="checked"] {
+	background: #ffffff12;
+	color: #f0f0f0;
+}
+.model-run-menu [data-slot="select-item"] > span:first-child {
+	display: none;
+}
+.model-browser-choice {
+	min-width: 0;
+	flex: 1;
+}
 .model-picker-settings {
 	padding: 7px 12px;
 	border-bottom: 1px solid #ffffff12;
@@ -177,6 +269,63 @@
 	margin-bottom: 6px;
 	border-bottom: 1px solid #ffffff12;
 }
+.model-source-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-height: 42px;
+	padding: 2px 10px 7px;
+	border-bottom: 1px solid #ffffff12;
+	margin-bottom: 4px;
+	color: #a8a8a8;
+	font-size: 12px;
+}
+.model-source-caption {
+	color: #818181;
+}
+.model-source-label {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.model-source-trigger {
+	min-width: 0;
+	max-width: min(240px, 100%);
+	height: 30px;
+	padding: 0 8px;
+	border: 1px solid #ffffff18;
+	border-radius: 7px;
+	background: #ffffff08;
+	box-shadow: none;
+	color: #e6e6e6;
+	font-size: 12px;
+}
+.model-source-trigger:hover,
+.model-source-trigger[data-state="open"] {
+	border-color: #ffffff32;
+	background: #ffffff12;
+	color: #eee;
+}
+.model-source-menu {
+	max-width: min(290px, calc(100vw - 36px));
+	gap: 0;
+	padding: 4px;
+	border: 1px solid #404040;
+	border-radius: 9px;
+	background: #242424;
+	box-shadow: 0 12px 30px #0009;
+}
+.model-source-menu [data-slot="select-item"] {
+	min-height: 34px;
+	padding: 7px 28px 7px 9px;
+	color: #bcbcbc;
+	font-size: 12px;
+}
+.model-source-menu [data-slot="select-item"][data-state="checked"] {
+	background: #ffffff12;
+	color: #f0f0f0;
+}
 .provider-key-row {
 	display: flex;
 	align-items: center;
@@ -186,17 +335,6 @@
 	min-width: 0;
 	flex: 1;
 }
-.provider-connected {
-	display: flex;
-	align-items: center;
-	gap: 5px;
-}
-.provider-model-check {
-	padding: 10px;
-	border: 1px solid #ffffff18;
-	border-radius: 8px;
-	margin-bottom: 8px;
-}
 .model-browser-option > svg {
 	flex-shrink: 0;
 }
@@ -205,13 +343,6 @@
 	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
-}
-.model-browser-option small {
-	display: block;
-	margin-top: 3px;
-	color: #969696;
-	font-size: 11px;
-	font-weight: 400;
 }
 .inline-model-connect {
 	padding: 5px 10px 12px;
@@ -327,6 +458,14 @@
 .model-provider-rail .model-provider-subscription:hover,
 .model-provider-rail .model-provider-subscription[aria-pressed="true"] {
 	color: #78b7ff;
+}
+.model-provider-monogram {
+	display: inline-grid;
+	flex: 0 0 auto;
+	place-items: center;
+	font-size: 0.78em;
+	font-weight: 800;
+	letter-spacing: -0.08em;
 }
 .model-picker-catalog h3 {
 	margin: 0;

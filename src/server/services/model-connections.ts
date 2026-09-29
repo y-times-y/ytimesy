@@ -2,8 +2,13 @@ import { randomUUID } from "node:crypto";
 import { streamText, tool } from "ai";
 import { Effect } from "effect";
 import { z } from "zod";
-import { modelConnectionInput } from "#/domain/model-connection";
+import {
+	availableConnectionModels,
+	modelConnectionInput,
+	type PublicModelConnection,
+} from "#/domain/model-connection";
 import { connectedLanguageModel } from "#/server/adapters/api-model";
+import { browseModels } from "#/server/adapters/browse-models";
 import { discoverConnectionModels } from "#/server/adapters/model-catalog";
 import {
 	claimModelProbe,
@@ -14,6 +19,16 @@ import {
 } from "#/server/adapters/model-connections";
 import { modelEndpointTransport } from "#/server/adapters/model-endpoint";
 import { seal, unseal } from "#/server/auth/token-vault";
+
+export async function availableApiModelRoutes(
+	connections: readonly PublicModelConnection[],
+) {
+	const hasGateway = connections.some((row) => row.provider === "openrouter");
+	return availableConnectionModels(
+		connections,
+		hasGateway ? await browseModels() : [],
+	);
+}
 
 export function connectApiModels(userId: string, raw: unknown) {
 	return Effect.tryPromise(async () => {

@@ -12,6 +12,7 @@ export type AgentCompetition = {
 	userMessageId: string;
 	prompt: string;
 	leaderCount: LeaderCount;
+	attemptModelIds?: readonly string[];
 	status: "queued" | "working" | "judging" | "complete" | "failed";
 	winnerSessionId: string | null;
 	errorMessage: string | null;

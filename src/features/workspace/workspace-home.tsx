@@ -94,7 +94,6 @@ import {
 } from "../sessions/model-capabilities";
 import { SessionLauncher } from "../sessions/session-launcher";
 import { sessionReconciliationQuery } from "../sessions/session-reconciliation";
-import { SideChatPanel } from "../sessions/side-chat-panel";
 import { getWorkspaceDesktop, startWorkspaceDesktopFn } from "./desktop.fn";
 import { ProjectSettings } from "./project-settings";
 import { ProjectSidebar } from "./project-sidebar";
@@ -145,9 +144,6 @@ export function WorkspaceHome({
 	const [session, setSession] = useState(initialSession);
 	const currentSessionRef = useRef(session);
 	currentSessionRef.current = session;
-	const [composerModelId, setComposerModelId] = useState(
-		initialSession.listedModelId,
-	);
 	const pullRequests = useQuery({
 		queryKey: [
 			"github",
@@ -177,11 +173,9 @@ export function WorkspaceHome({
 	const [projectsOpen, setProjectsOpen] = useState(false);
 	const [sidebarPinReady, setSidebarPinReady] = useState(false);
 	const [inspectorOpen, setInspectorOpen] = useState(false);
-	const [toolsView, setToolsView] = useState<ToolsView>("files");
 	const [inspectorView, setInspectorView] = useState<InspectorView>("overview");
 	const [selectedFilePath, setSelectedFilePath] = useState<string>();
 	const [customSplit, setCustomSplit] = useState<number | null>(null);
-	const [sideChatOpen, setSideChatOpen] = useState(false);
 	const [busyChatIds, setBusyChatIds] = useState<string[]>([]);
 	const [harnessId, setHarnessId] = useState<AgentProviderId>(
 		DEFAULT_COMPOSER_HARNESS_ID,
@@ -694,7 +688,6 @@ export function WorkspaceHome({
 	}, [backgroundReads, sidebarChats, rememberSessionView, chats.refetch]);
 
 	function openInspector(view: ToolsView) {
-		setToolsView(view);
 		setInspectorView(view);
 		setInspectorOpen(true);
 	}
@@ -702,17 +695,6 @@ export function WorkspaceHome({
 	function openMentionedFile(path: string) {
 		setSelectedFilePath(path);
 		openInspector("files");
-	}
-
-	function openSideChat() {
-		setSideChatOpen(true);
-		setInspectorView("side");
-		setInspectorOpen(true);
-	}
-
-	function closeSideChat() {
-		setSideChatOpen(false);
-		setInspectorView(toolsView);
 	}
 
 	function openAddProject() {
@@ -745,7 +727,6 @@ export function WorkspaceHome({
 		if (projectId) setSelectedProjectId(projectId);
 		const newChatHarnessId = offeredAgentProviderId(harnessId);
 		setHarnessId(newChatHarnessId);
-		setComposerModelId("");
 		setComposerDraft(false);
 		setProjectPickerOpen(false);
 		const epoch = bumpSessionEpoch();
@@ -783,7 +764,6 @@ export function WorkspaceHome({
 					canSend: false,
 					canSendSide: false,
 				}));
-				if (created.listedModelId) setComposerModelId(created.listedModelId);
 				void chats.refetch();
 			})
 			.catch((cause) => {
@@ -905,22 +885,6 @@ export function WorkspaceHome({
 		window.location.assign("/");
 	}
 
-	function sendSideChat(text: string) {
-		const modelId =
-			composerModelId || session.listedModelId || sessionModelId(session);
-		const chatId = activeSessionId;
-		const epoch = sessionEpoch.current;
-		setBusyChatIds((ids) => withBusyChat(ids, chatId));
-		void sendTask({
-			data: { ...sessionScope(), text, modelId, lane: "side" as const },
-		})
-			.then((next) => applySessionView(epoch, next))
-			.finally(() => {
-				setBusyChatIds((ids) => withoutBusyChat(ids, chatId));
-				void chats.refetch();
-			});
-	}
-
 	function openChat(id: string) {
 		setComposerDraft(false);
 		setProjectPickerOpen(false);
@@ -942,12 +906,10 @@ export function WorkspaceHome({
 		);
 		if (cached) {
 			setSession(cached);
-			if (cached.listedModelId) setComposerModelId(cached.listedModelId);
 			return;
 		}
 		const listedTurn = listedChatTurnStatus(sidebarChats, id);
 		const listedModelId = listedChatModelId(sidebarChats, id);
-		if (listedModelId) setComposerModelId(listedModelId);
 		setSession((current) => ({
 			...current,
 			agentSessionId: id,
@@ -1086,7 +1048,6 @@ export function WorkspaceHome({
 									setHarnessId(id);
 									applyRememberedClaude(id);
 								}}
-								onComposerModelIdChange={setComposerModelId}
 								onConnect={() => {
 									const epoch = sessionEpoch.current;
 									const scope = sessionScope();
@@ -1138,6 +1099,9 @@ export function WorkspaceHome({
 														harnessId,
 														modelId,
 														leaderCount: options.leaderCount as number,
+														attemptModelIds: [
+															...(options.attemptModelIds ?? []),
+														],
 														userMessageId: options.userMessageId ?? "",
 													},
 												});
@@ -1279,10 +1243,6 @@ export function WorkspaceHome({
 											void chats.refetch();
 										});
 								}}
-								onOpenSideChat={(question) => {
-									openSideChat();
-									if (question) sendSideChat(question);
-								}}
 								onOpenInspector={openInspector}
 								onOpenFile={openMentionedFile}
 								onOpenCandidate={(id) => {
@@ -1325,7 +1285,6 @@ export function WorkspaceHome({
 							collapsed={!inspectorOpen}
 							activeView={inspectorView}
 							onActiveViewChange={(view) => {
-								if (view !== "side" && view !== "overview") setToolsView(view);
 								setInspectorView(view);
 							}}
 							fileChanges={fileChanges}
@@ -1336,9 +1295,6 @@ export function WorkspaceHome({
 							projectId={selectedProject?.id}
 							sessionId={activeSessionId}
 							onStartDesktop={requestDesktop}
-							sideChatOpen={sideChatOpen}
-							onNewSideChat={openSideChat}
-							onCloseSideChat={closeSideChat}
 							overview={
 								<WorkspaceOverview
 									tasks={agentTasks.data ?? []}
@@ -1358,44 +1314,10 @@ export function WorkspaceHome({
 									})}
 								/>
 							}
-							sideChat={
-								<SideChatPanel
-									items={session.sideItems}
-									turnStatus={session.sideTurnStatus}
-									canSend={session.canSendSide}
-									mainTurnRunning={session.turnStatus === "running"}
-									isolated
-									busy={composerBusy}
-									onSend={sendSideChat}
-									onStop={() => {
-										const chatId = activeSessionId;
-										const epoch = sessionEpoch.current;
-										setBusyChatIds((ids) => withBusyChat(ids, chatId));
-										void stopTurn({
-											data: { ...sessionScope(), lane: "side" as const },
-										})
-											.then((next) => applySessionView(epoch, next))
-											.finally(() => {
-												setBusyChatIds((ids) => withoutBusyChat(ids, chatId));
-												void chats.refetch();
-											});
-									}}
-								/>
-							}
 						/>
 					</div>
 				</WorkspacePanes>
 			</main>
 		</div>
-	);
-}
-
-function sessionModelId(session: PublicCodexSession): string {
-	return (
-		session.listedModelId ||
-		preferredSessionModelId(sessionModelsFromListed(session.models), {
-			lastUsedId: session.listedModelId,
-			excludedIds: session.blockedListedModelIds,
-		})
 	);
 }

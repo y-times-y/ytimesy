@@ -86,6 +86,18 @@ async function readyWorkspace() {
 	return { project, workspaceId };
 }
 
+it("starts a new lead without write access to its own workspace", async () => {
+	const { project, workspaceId } = await readyWorkspace();
+	const session = await insertAgentSession({
+		userId: "alice",
+		projectId: project.id,
+		workspaceId,
+		harness: "codex",
+	});
+	expect(session.taskAccess).toBe("read_only");
+	expect(session.parentSessionId).toBeNull();
+});
+
 it("persists the selected runtime before a reused chat starts polling", async () => {
 	const { project, workspaceId } = await readyWorkspace();
 	const session = await insertAgentSession({

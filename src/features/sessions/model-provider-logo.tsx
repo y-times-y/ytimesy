@@ -14,6 +14,16 @@ export function ModelProviderLogo({
 }) {
 	if (provider === "anthropic") return <ClaudeMark size={size} />;
 	if (provider === "x-ai") return <XaiMark size={size} />;
+	if (provider === "z-ai")
+		return (
+			<span
+				className="model-provider-monogram"
+				style={{ width: size, height: size }}
+				aria-hidden="true"
+			>
+				Z
+			</span>
+		);
 	const key = provider === "google" ? "googlegemini" : provider;
 	const icon = icons[key as keyof typeof icons];
 	return icon ? (

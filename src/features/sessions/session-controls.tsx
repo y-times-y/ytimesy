@@ -1,6 +1,7 @@
 import { Paperclip } from "lucide-react";
 import { type ReactNode, useRef } from "react";
 import type { AgentProviderId } from "#/domain/agent-provider";
+import type { ModelRun } from "#/domain/parallel-models";
 import { HarnessPicker } from "./harness-picker";
 import type { SessionModel } from "./model-capabilities";
 
@@ -21,6 +22,11 @@ interface SessionControlsProps {
 	onConnect: () => void;
 	catalogStatus: "loading" | "error" | "ready";
 	providerConnected: boolean;
+	parallelAvailable: boolean;
+	multipleModels: boolean;
+	modelRuns: readonly ModelRun[];
+	onMultipleModelsChange: (enabled: boolean) => void;
+	onModelRunsChange: (runs: ModelRun[]) => void;
 }
 
 export function SessionControls({
@@ -40,6 +46,11 @@ export function SessionControls({
 	onConnect,
 	catalogStatus,
 	providerConnected,
+	parallelAvailable,
+	multipleModels,
+	modelRuns,
+	onMultipleModelsChange,
+	onModelRunsChange,
 }: SessionControlsProps) {
 	const fileInput = useRef<HTMLInputElement>(null);
 	const model = models.find((candidate) => candidate.id === modelId);
@@ -78,6 +89,11 @@ export function SessionControls({
 					onConnect={onConnect}
 					catalogStatus={catalogStatus}
 					providerConnected={providerConnected}
+					parallelAvailable={parallelAvailable}
+					multipleModels={multipleModels}
+					modelRuns={modelRuns}
+					onMultipleModelsChange={onMultipleModelsChange}
+					onModelRunsChange={onModelRunsChange}
 					reasoningId={reasoningId}
 					onReasoningIdChange={onReasoningIdChange}
 					fast={fast}
@@ -88,6 +104,7 @@ export function SessionControls({
 						onFastChange(false);
 					}}
 					onHarnessIdChange={(id) => {
+						onMultipleModelsChange(false);
 						onHarnessIdChange(id);
 						onModelIdChange("");
 						onReasoningIdChange("");

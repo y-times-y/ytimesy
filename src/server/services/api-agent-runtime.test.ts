@@ -1,4 +1,4 @@
-import { simulateReadableStream, tool } from "ai";
+import { APICallError, simulateReadableStream, tool } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { Effect } from "effect";
 import { beforeEach, expect, it, vi } from "vitest";
@@ -64,7 +64,7 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.load.mockResolvedValue({
 		id: "connection",
-		provider: "openai",
+		provider: "compatible",
 		revision: "revision",
 		baseUrl: "https://api.openai.com/v1",
 		sealedCredential: "sealed",
@@ -142,9 +142,83 @@ it("streams text and supplied reasoning, executes a tool, then continues to the 
 	expect(mocks.close).toHaveBeenCalledOnce();
 });
 
-it("rejects unverified or unavailable connections before any provider request", async () => {
+it("summarizes older history before a model step and checkpoints the compacted messages", async () => {
+	const model = new MockLanguageModelV4({
+		doGenerate: async () => ({
+			content: [
+				{
+					type: "text" as const,
+					text: "Earlier task was inspected; no edits were made.",
+				},
+			],
+			finishReason: { unified: "stop" as const, raw: "stop" },
+			usage,
+			warnings: [],
+		}),
+		doStream: stream([
+			{ type: "text-start", id: "a" },
+			{ type: "text-delta", id: "a", delta: "Ready" },
+			{ type: "text-end", id: "a" },
+			finish,
+		]),
+	});
+	mocks.model.mockReturnValue(model);
+	const checkpoints: unknown[][] = [];
+	await runApiAgent({
+		userId: "alice",
+		connectionId: "connection",
+		modelId: "model",
+		messages: [
+			{ role: "user", content: `old request ${"x".repeat(95_000)}` },
+			{ role: "assistant", content: "Earlier work" },
+			{ role: "user", content: "Continue the task" },
+		],
+		instructions: "Test instructions",
+		tools: {},
+		signal: new AbortController().signal,
+		onEvent: async () => {},
+		onStep: async (messages) => {
+			checkpoints.push(messages);
+		},
+	});
+	expect(model.doGenerateCalls).toHaveLength(1);
+	expect(model.doStreamCalls).toHaveLength(1);
+	expect(JSON.stringify(model.doStreamCalls[0])).not.toContain(
+		"x".repeat(1_000),
+	);
+	expect(JSON.stringify(checkpoints[0])).toContain(
+		"Earlier task was inspected",
+	);
+});
+
+it("runs a listed model without a separate verification request", async () => {
+	mocks.load.mockResolvedValue({
+		id: "connection",
+		provider: "compatible",
+		revision: "revision",
+		baseUrl: "https://api.openai.com/v1",
+		sealedCredential: "sealed",
+		models: [{ id: "model", toolStreamingVerified: false }],
+	});
+	mocks.model.mockReturnValue(
+		new MockLanguageModelV4({
+			doStream: stream([
+				{ type: "text-start", id: "a" },
+				{ type: "text-delta", id: "a", delta: "Ready" },
+				{ type: "text-end", id: "a" },
+				finish,
+			]),
+		}),
+	);
+	const events: ApiAgentEvent[] = [];
+	await run(events);
+	expect(events).toContainEqual({ type: "text-delta", id: "a", text: "Ready" });
+	expect(mocks.claim).not.toHaveBeenCalled();
+});
+
+it("rejects unavailable connections before any provider request", async () => {
 	mocks.load.mockResolvedValue(null);
-	await expect(run([])).rejects.toThrow("verified model connection");
+	await expect(run([])).rejects.toThrow("no longer available");
 	expect(mocks.model).not.toHaveBeenCalled();
 });
 
@@ -175,13 +249,34 @@ it("does not log raw provider failures, retry, or fall back", async () => {
 	});
 	mocks.model.mockReturnValue(model);
 	try {
-		await expect(run([])).rejects.toThrow("no fallback was used");
+		await expect(run([])).rejects.toThrow("No fallback was used");
 		expect(model.doStreamCalls).toHaveLength(1);
 		expect(log).not.toHaveBeenCalled();
 		expect(mocks.close).toHaveBeenCalledOnce();
 	} finally {
 		log.mockRestore();
 	}
+});
+
+it("turns a provider rate limit into an actionable error without echoing its response", async () => {
+	mocks.model.mockReturnValue(
+		new MockLanguageModelV4({
+			doStream: async () => {
+				throw new APICallError({
+					message: "secret-provider-response",
+					url: "https://example.com/v1/chat/completions",
+					requestBodyValues: {},
+					statusCode: 429,
+				});
+			},
+		}),
+	);
+	const message = await run([]).then(
+		() => "",
+		(error: Error) => error.message,
+	);
+	expect(message).toContain("rate limit");
+	expect(message).not.toContain("secret-provider-response");
 });
 
 it("requires the exact streamed verification tool and never executes it", async () => {

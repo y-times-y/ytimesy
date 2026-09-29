@@ -8,8 +8,30 @@ it("deduplicates model IDs without claiming tool support", () => {
 	expect(
 		parseConnectedModels("openrouter", {
 			data: [
-				{ id: "vendor/code", name: "Code" },
-				{ id: "vendor/code", name: "Code" },
+				{
+					id: "vendor/code",
+					name: "Code",
+					supported_parameters: ["tools"],
+					architecture: { output_modalities: ["text"] },
+				},
+				{
+					id: "vendor/code",
+					name: "Code",
+					supported_parameters: ["tools"],
+					architecture: { output_modalities: ["text"] },
+				},
+				{
+					id: "vendor/audio",
+					name: "Audio",
+					supported_parameters: ["tools"],
+					architecture: { output_modalities: ["text", "audio"] },
+				},
+				{
+					id: "vendor/code:batch",
+					name: "Code (batch)",
+					supported_parameters: ["tools"],
+					architecture: { output_modalities: ["text"] },
+				},
 				{ id: 42 },
 			],
 		}),
@@ -22,27 +44,41 @@ it("filters Google embedding-only models", () => {
 		parseConnectedModels("google", {
 			models: [
 				{
-					name: "models/chat",
+					name: "models/gemini-chat",
 					displayName: "Chat",
 					supportedGenerationMethods: ["generateContent"],
 				},
 				{ name: "models/embed", supportedGenerationMethods: ["embedContent"] },
 			],
 		}),
-	).toEqual([{ id: "chat", label: "Chat", toolStreamingVerified: false }]);
+	).toEqual([
+		{ id: "gemini-chat", label: "Chat", toolStreamingVerified: false },
+	]);
+});
+it("hides native non-coding model families", () => {
+	expect(
+		parseConnectedModels("openai", {
+			data: [
+				{ id: "gpt-6-sol" },
+				{ id: "gpt-audio" },
+				{ id: "gpt-5-image" },
+				{ id: "text-embedding-3-large" },
+			],
+		}).map((model) => model.id),
+	).toEqual(["gpt-6-sol"]);
 });
 it("follows pagination and authenticates using the provider header", async () => {
 	const fetch = vi
 		.fn<typeof globalThis.fetch>()
 		.mockResolvedValueOnce(
 			Response.json({
-				data: [{ id: "first" }],
+				data: [{ id: "claude-first" }],
 				has_more: true,
-				last_id: "first",
+				last_id: "claude-first",
 			}),
 		)
 		.mockResolvedValueOnce(
-			Response.json({ data: [{ id: "second" }], has_more: false }),
+			Response.json({ data: [{ id: "claude-second" }], has_more: false }),
 		);
 	const result = await discoverConnectionModels(
 		{
@@ -52,11 +88,14 @@ it("follows pagination and authenticates using the provider header", async () =>
 		},
 		fetch,
 	);
-	expect(result.map((row) => row.id)).toEqual(["first", "second"]);
+	expect(result.map((row) => row.id)).toEqual([
+		"claude-first",
+		"claude-second",
+	]);
 	expect(fetch.mock.calls[0][1]?.headers).toMatchObject({
 		"x-api-key": "fixture-key",
 	});
-	expect(String(fetch.mock.calls[1][0])).toContain("after_id=first");
+	expect(String(fetch.mock.calls[1][0])).toContain("after_id=claude-first");
 });
 it("does not expose provider errors that might echo credentials", async () => {
 	const fetch = vi

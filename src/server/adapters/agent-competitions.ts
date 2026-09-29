@@ -11,6 +11,7 @@ type CompetitionRow = {
 	user_message_id: string;
 	prompt: string;
 	leader_count: number;
+	attempt_model_ids: string[] | null;
 	status: AgentCompetition["status"];
 	winner_session_id: string | null;
 	error_message: string | null;
@@ -23,6 +24,7 @@ function toCompetition(row: CompetitionRow): AgentCompetition {
 		userMessageId: row.user_message_id,
 		prompt: row.prompt,
 		leaderCount: row.leader_count,
+		attemptModelIds: row.attempt_model_ids ?? undefined,
 		status: row.status,
 		winnerSessionId: row.winner_session_id,
 		errorMessage: row.error_message,
@@ -40,7 +42,7 @@ type CandidateRow = {
 };
 
 const competitionColumns =
-	"id,root_session_id,user_message_id,prompt,leader_count,status,winner_session_id,error_message";
+	"id,root_session_id,user_message_id,prompt,leader_count,attempt_model_ids,status,winner_session_id,error_message";
 
 export async function competitionsForOwner(
 	userId: string,
@@ -88,7 +90,7 @@ export async function competitionForCandidate(
 	candidateId: string,
 ) {
 	const result = await database().query<CompetitionRow>(
-		`select c.id,c.root_session_id,c.user_message_id,c.prompt,c.leader_count,c.status,c.winner_session_id,c.error_message from agent_competition c
+		`select c.id,c.root_session_id,c.user_message_id,c.prompt,c.leader_count,c.attempt_model_ids,c.status,c.winner_session_id,c.error_message from agent_competition c
 		 join agent_session s on s.competition_id=c.id
 		 where c.user_id=$1 and s.user_id=$1 and s.id=$2`,
 		[userId, candidateId],
@@ -104,6 +106,7 @@ export async function createAgentCompetition(input: {
 	harness: "codex" | "claude" | "api";
 	modelId: string;
 	leaderCount: number;
+	attemptModelIds: readonly string[];
 	userMessageId?: string;
 }) {
 	const client = await database().connect();
@@ -111,8 +114,8 @@ export async function createAgentCompetition(input: {
 		await client.query("begin");
 		const userMessageId = input.userMessageId ?? crypto.randomUUID();
 		const result = await client.query<CompetitionRow>(
-			`insert into agent_competition(root_session_id,user_id,project_id,user_message_id,prompt,harness,model_id,leader_count)
-			 select $3,$1,$2,$8,$4,$5,$6,$7 from agent_session
+			`insert into agent_competition(root_session_id,user_id,project_id,user_message_id,prompt,harness,model_id,leader_count,attempt_model_ids)
+			 select $3,$1,$2,$8,$4,$5,$6,$7,$9::text[] from agent_session
 			 where id=$3 and user_id=$1 and project_id=$2 and parent_session_id is null
 			   and turn_status<>'running'
 			 on conflict do nothing
@@ -126,6 +129,7 @@ export async function createAgentCompetition(input: {
 				input.modelId,
 				input.leaderCount,
 				userMessageId,
+				input.attemptModelIds,
 			],
 		);
 		if (!result.rows[0])
@@ -168,9 +172,10 @@ export async function competitionRuntime(rootSessionId: string) {
 		harness: "codex" | "claude" | "api";
 		model_id: string;
 		leader_count: number;
+		attempt_model_ids: string[] | null;
 		status: AgentCompetition["status"];
 	}>(
-		"select id,root_session_id,user_id,project_id,prompt,harness,model_id,leader_count,status from agent_competition where root_session_id=$1 and status in ('queued','working','judging') order by created_at desc limit 1",
+		"select id,root_session_id,user_id,project_id,prompt,harness,model_id,leader_count,attempt_model_ids,status from agent_competition where root_session_id=$1 and status in ('queued','working','judging') order by created_at desc limit 1",
 		[rootSessionId],
 	);
 	return result.rows[0] ?? null;
@@ -201,7 +206,7 @@ export async function markCompetitionStatus(
 	);
 	if (status === "failed" || status === "complete")
 		await database().query(
-			"update agent_session set turn_status=$2,task_access='read_write',updated_at=now() where id=$1",
+			"update agent_session set turn_status=$2,updated_at=now() where id=$1",
 			[rootSessionId, status === "complete" ? "completed" : "failed"],
 		);
 }
@@ -304,13 +309,6 @@ export async function reconcileFinishedCompetitionJudges() {
 		 updated_at=now()
 		 from agent_session s where c.root_session_id=s.id and c.status='judging'
 		 and s.turn_status in ('completed','failed')`,
-	);
-	await database().query(
-		`update agent_session s set task_access='read_write'
-		 from agent_competition c where c.root_session_id=s.id
-		 and c.status in ('complete','failed') and s.task_access='read_only'
-		 and s.turn_status in ('completed','failed')
-		 and not exists (select 1 from agent_competition active where active.root_session_id=s.id and active.status in ('queued','working','judging'))`,
 	);
 }
 

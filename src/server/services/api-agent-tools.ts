@@ -9,6 +9,9 @@ import {
 	completeAgentTaskCommand,
 	renewAgentTaskCommandClaim,
 } from "../adapters/agent-task-command-receipts";
+import { apiAgentBrowserTools } from "./api-agent-browser-tools";
+import { apiAgentCommandTools } from "./api-agent-command-tools";
+import { apiAgentFileTools } from "./api-agent-file-tools";
 import { runAgentTaskTool } from "./harness-workspace-session";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -55,6 +58,38 @@ export function apiAgentTools(input: {
 		}
 	}
 	const tools: ToolSet = {
+		list_files: tool({
+			description:
+				"List tracked and untracked repository files before choosing what to inspect.",
+			inputSchema: z.object({}),
+			execute: async () => {
+				signal.throwIfAborted();
+				const result = await machines.exec(
+					vm,
+					`git -C ${quote(cwd)} ls-files --cached --others --exclude-standard`,
+					15_000,
+				);
+				if (result.exitCode)
+					throw new Error("Could not list repository files.");
+				return result.stdout.slice(0, 32_000);
+			},
+		}),
+		search_files: tool({
+			description:
+				"Search tracked repository text without changing the workspace.",
+			inputSchema: z.object({ query: z.string().min(1).max(200) }),
+			execute: async ({ query }) => {
+				signal.throwIfAborted();
+				const result = await machines.exec(
+					vm,
+					`git -C ${quote(cwd)} grep -n -I -m 5 -e ${quote(query)} -- .`,
+					15_000,
+				);
+				if (result.exitCode > 1)
+					throw new Error("Could not search repository files.");
+				return result.stdout.slice(0, 32_000);
+			},
+		}),
 		read_file: tool({
 			description:
 				"Read a UTF-8 file inside the repository. Output is bounded.",
@@ -120,5 +155,38 @@ export function apiAgentTools(input: {
 				),
 		});
 	}
+	Object.assign(
+		tools,
+		apiAgentFileTools({
+			machines,
+			vm,
+			cwd,
+			readOnly: session.taskAccess === "read_only",
+			signal,
+			once,
+		}),
+	);
+	Object.assign(
+		tools,
+		apiAgentCommandTools({
+			machines,
+			vm,
+			cwd,
+			sessionId: session.id,
+			readOnly: session.taskAccess === "read_only",
+			signal,
+			once,
+		}),
+	);
+	Object.assign(
+		tools,
+		apiAgentBrowserTools({
+			machines,
+			vm,
+			readOnly: session.taskAccess === "read_only",
+			signal,
+			once,
+		}),
+	);
 	return tools;
 }

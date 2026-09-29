@@ -9,7 +9,7 @@ import { FilesInspector } from "./files-inspector";
 import { TerminalInspector } from "./terminal-inspector";
 
 export type ToolsView = "files" | "diff" | "terminal" | "desktop";
-export type InspectorView = ToolsView | "overview" | "side";
+export type InspectorView = ToolsView | "overview";
 
 const views = {
 	files: {
@@ -47,10 +47,6 @@ export function WorkspaceInspector({
 	onStartDesktop,
 	projectId,
 	sessionId,
-	sideChatOpen,
-	onNewSideChat,
-	onCloseSideChat,
-	sideChat,
 	overview,
 }: {
 	collapsed: boolean;
@@ -64,23 +60,16 @@ export function WorkspaceInspector({
 	onStartDesktop: () => void;
 	projectId?: string;
 	sessionId?: string;
-	sideChatOpen: boolean;
-	onNewSideChat: () => void;
-	onCloseSideChat: () => void;
-	sideChat: ReactNode;
 	overview: ReactNode;
 }) {
 	const [openedViews, setOpenedViews] = useState<ToolsView[]>([]);
 	useEffect(() => {
-		if (activeView !== "overview" && activeView !== "side")
+		if (activeView !== "overview")
 			setOpenedViews((current) =>
 				current.includes(activeView) ? current : [...current, activeView],
 			);
 	}, [activeView]);
-	const currentView =
-		activeView === "side" || activeView === "overview"
-			? null
-			: views[activeView];
+	const currentView = activeView === "overview" ? null : views[activeView];
 	return (
 		<aside
 			id="workspace-inspector"
@@ -128,28 +117,6 @@ export function WorkspaceInspector({
 							</button>
 						</div>
 					))}
-					{sideChatOpen ? (
-						<div
-							className="inspector-side-tab"
-							data-active={activeView === "side"}
-						>
-							<button
-								type="button"
-								aria-pressed={activeView === "side"}
-								onClick={() => onActiveViewChange("side")}
-							>
-								New Side Chat
-							</button>
-							<button
-								type="button"
-								className="inspector-side-close"
-								aria-label="Close side chat"
-								onClick={onCloseSideChat}
-							>
-								<X size={14} />
-							</button>
-						</div>
-					) : null}
 					<DropdownMenu.Root>
 						<DropdownMenu.Trigger asChild>
 							<button
@@ -174,10 +141,6 @@ export function WorkspaceInspector({
 										{views[view].label}
 									</DropdownMenu.Item>
 								))}
-								<DropdownMenu.Separator />
-								<DropdownMenu.Item onSelect={onNewSideChat}>
-									Side chat
-								</DropdownMenu.Item>
 							</DropdownMenu.Content>
 						</DropdownMenu.Portal>
 					</DropdownMenu.Root>
@@ -185,8 +148,6 @@ export function WorkspaceInspector({
 			</div>
 			{activeView === "overview" ? (
 				overview
-			) : activeView === "side" ? (
-				sideChat
 			) : activeView === "files" ? (
 				<FilesInspector
 					changes={fileChanges}

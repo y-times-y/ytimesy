@@ -157,11 +157,13 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 			const text = data.text.trim();
 			const modelId = data.modelId.trim();
 			if (!text) throw new Error("Task text is required");
+			if (data.lane === "side")
+				throw new Error("Side chat is no longer available.");
 			const variant = data.variant?.trim();
 			return {
 				text,
 				modelId,
-				lane: data.lane === "side" ? ("side" as const) : ("main" as const),
+				lane: "main" as const,
 				projectId: data.projectId?.trim() || undefined,
 				harnessId: data.harnessId
 					? parseHarnessId(data.harnessId)

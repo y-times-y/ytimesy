@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { WorkspaceId } from "#/domain/ids";
 import {
@@ -31,6 +33,32 @@ describe("session workspace machines", () => {
 		).toBe(
 			`${root}/ytimesy-codex-external-tokens.json ${root}/ytimesy-codex-refresh-request.json ${root}/ytimesy-codex-refresh-response.json`,
 		);
+	});
+
+	it("keeps Codex daemon state inside the shared session root", () => {
+		const source = readFileSync(
+			"src/server/adapters/codex/login-daemon.py",
+			"utf8",
+		);
+		const output = execFileSync(
+			"python3",
+			[
+				"-c",
+				"import json, sys; scope={'__name__':'scoped_test'}; exec(compile(sys.stdin.read(), 'login-daemon.py', 'exec'), scope); print(json.dumps([scope['STATUS_PATH'], scope['STATE_PATH'], scope['TASK_REQUEST_PATH'], scope['STOP_REQUEST_PATH']]))",
+			],
+			{
+				input: scopeSessionRuntimeText(source, "task-123"),
+				encoding: "utf8",
+				env: { ...process.env, YTIMESY_RUNTIME_ROOT: "" },
+			},
+		);
+		const root = sessionRuntimeRoot("task-123");
+		expect(JSON.parse(output)).toEqual([
+			`${root}/ytimesy-auth-status.json`,
+			`${root}/ytimesy-codex-thread-state.json`,
+			`${root}/ytimesy-task-request.json`,
+			`${root}/ytimesy-stop-request.json`,
+		]);
 	});
 
 	it("gives a writing grandchild the unscoped machine after a shared child", async () => {
