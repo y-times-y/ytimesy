@@ -7,6 +7,7 @@ import {
 	reconcileFinishedCompetitionJudges,
 } from "../adapters/agent-competitions";
 import { claimApiTurn, expireApiTurnLeases } from "../adapters/api-turns";
+import { sessionsAwaitingCheckpoint } from "../adapters/checkpoints/records";
 import { closeDatabase } from "../adapters/database";
 import { readFreestyleApiKey } from "../adapters/freestyle/api-key";
 import { createFreestyleWorkspaceMachines } from "../adapters/freestyle/workspace-machines";
@@ -16,12 +17,14 @@ import { startAgentCompetition } from "../services/agent-competition-run";
 import { deliverAgentTaskEvents } from "../services/agent-task-event-delivery";
 import { reconcileRunningAgentTurns } from "../services/agent-turn-reconciliation";
 import { reconcileCodexRefreshRequests } from "../services/codex-refresh-reconciliation";
+import { captureSessionCheckpoint } from "../services/session-checkpoint";
 import { runApiTurn } from "./api-turn";
 import {
 	AGENT_TASK_EVENT_QUEUE,
 	jobQueue,
 	PREPARE_WORKSPACE_QUEUE,
 	REFRESH_WORKSPACE_QUEUE,
+	SESSION_CHECKPOINT_QUEUE,
 	START_COMPETITION_QUEUE,
 } from "./queue";
 
@@ -34,6 +37,34 @@ export async function startWorkspaceWorker() {
 	const taskMachines = createFreestyleWorkspaceMachines(
 		await Effect.runPromise(readFreestyleApiKey()),
 	);
+	await queue.work<{ userId?: string; sessionId?: string }>(
+		SESSION_CHECKPOINT_QUEUE,
+		{ localConcurrency: 1 },
+		async ([job]) => {
+			if (!process.env.SUPABASE_STORAGE_SERVICE_KEY) return;
+			if (!job.data.userId || !job.data.sessionId) {
+				for (const session of await sessionsAwaitingCheckpoint())
+					await queue.send(
+						SESSION_CHECKPOINT_QUEUE,
+						{ userId: session.user_id, sessionId: session.id },
+						{ singletonKey: session.id },
+					);
+				return;
+			}
+			await captureSessionCheckpoint(
+				taskMachines,
+				job.data.userId,
+				job.data.sessionId,
+			);
+		},
+	);
+	if (process.env.SUPABASE_STORAGE_SERVICE_KEY)
+		await queue.schedule(
+			SESSION_CHECKPOINT_QUEUE,
+			"* * * * *",
+			{},
+			{ singletonKey: "checkpoint-sweep" },
+		);
 	await queue.work<{
 		workspaceId: string;
 		repairModel?: EnvironmentModel | null;

@@ -38,7 +38,10 @@ import {
 	loadProjectBriefing,
 	saveProjectBriefing,
 } from "#/server/adapters/project-context";
-import { enqueueAgentTaskEvent } from "#/server/jobs/queue";
+import {
+	enqueueAgentTaskEvent,
+	enqueueSessionCheckpoint,
+} from "#/server/jobs/queue";
 import type { PublicCodexSession } from "./codex-workspace-session";
 
 export async function persistQueuedUserTurn(
@@ -114,6 +117,13 @@ export async function persistBoundSessionView(
 		persistTurn,
 	);
 	const turnStatus = saved?.turnStatus ?? persistTurn ?? session.turnStatus;
+	if (
+		process.env.SUPABASE_STORAGE_SERVICE_KEY &&
+		stored.turnStatus === "running" &&
+		(turnStatus === "completed" || turnStatus === "failed")
+	) {
+		await enqueueSessionCheckpoint(session.userId, session.id);
+	}
 	if (
 		session.parentSessionId &&
 		(turnStatus === "completed" || turnStatus === "failed")

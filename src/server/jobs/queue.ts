@@ -7,6 +7,7 @@ export const PREPARE_WORKSPACE_QUEUE = "prepare-workspace";
 export const REFRESH_WORKSPACE_QUEUE = "refresh-workspace-snapshot";
 export const AGENT_TASK_EVENT_QUEUE = "agent-task-event";
 export const START_COMPETITION_QUEUE = "start-agent-competition";
+export const SESSION_CHECKPOINT_QUEUE = "session-checkpoint";
 
 export interface WorkspaceJobQueue {
 	enqueuePrepare(
@@ -79,6 +80,13 @@ async function startJobQueue(role: QueueRole): Promise<PgBoss> {
 			retryBackoff: true,
 			expireInSeconds: 30 * 60,
 		});
+		await boss.createQueue(SESSION_CHECKPOINT_QUEUE, {
+			policy: "singleton",
+			retryLimit: 3,
+			retryBackoff: true,
+			retryDelay: 15,
+			expireInSeconds: 15 * 60,
+		});
 		return boss;
 	} catch (error) {
 		await boss.stop({ graceful: false, timeout: 1000 }).catch(() => undefined);
@@ -101,6 +109,18 @@ export async function enqueueCompetition(rootSessionId: string) {
 		START_COMPETITION_QUEUE,
 		{ rootSessionId },
 		{ singletonKey: rootSessionId },
+	);
+}
+
+export async function enqueueSessionCheckpoint(
+	userId: string,
+	sessionId: string,
+) {
+	const queue = await jobQueue();
+	return queue.send(
+		SESSION_CHECKPOINT_QUEUE,
+		{ userId, sessionId },
+		{ singletonKey: sessionId },
 	);
 }
 

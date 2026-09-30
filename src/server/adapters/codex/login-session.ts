@@ -265,15 +265,12 @@ ${START_LOGIN_SCRIPT}`,
 			);
 		}
 
-		let sawRestart = false;
-		for (let attempt = 0; attempt < 90; attempt += 1) {
-			yield* Effect.sleep(Duration.seconds(2));
+		for (let attempt = 0; attempt < 360; attempt += 1) {
+			yield* Effect.sleep(Duration.millis(500));
 			const status = yield* readLoginStatus(machines, workspaceId);
 			if (status.stage === "missing" || status.stage === "starting") {
-				sawRestart = true;
 				continue;
 			}
-			if (!sawRestart && attempt < 3) continue;
 			if (
 				status.stage === "authenticated" ||
 				status.stage === "failed" ||
@@ -351,7 +348,7 @@ rm -f "$HOME/.codex/auth.json"
 export function ensureCurrentLoginDaemon(
 	machines: WorkspaceMachines,
 	workspaceId: WorkspaceId,
-): Effect.Effect<void> {
+): Effect.Effect<void, Error> {
 	return Effect.gen(function* () {
 		const expected = loginDaemonSourceHash();
 		const existing = yield* Effect.tryPromise(() =>
@@ -372,8 +369,20 @@ export function ensureCurrentLoginDaemon(
 		});
 		if (resumed.stage === "authenticated") {
 			yield* persistLoginDaemonHash(machines, workspaceId);
+		} else {
+			yield* Effect.fail(
+				new Error(
+					resumed.stage === "failed"
+						? resumed.message
+						: "Codex could not resume its conversation. Reconnect and retry.",
+				),
+			);
 		}
-	}).pipe(Effect.catchAll(() => Effect.void));
+	}).pipe(
+		Effect.mapError((cause) =>
+			cause instanceof Error ? cause : new Error(String(cause)),
+		),
+	);
 }
 
 function loginDaemonSourceHash(): string {

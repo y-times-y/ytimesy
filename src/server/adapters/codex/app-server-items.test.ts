@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SessionItemId } from "#/domain/ids";
+import { runtimeHandoffEnvelope } from "#/domain/runtime-handoff";
 import {
 	sessionItemFromAppServerItem,
 	sessionItemsFromAppServerNotifications,
@@ -292,6 +293,28 @@ describe("sessionItemsFromAppServerNotifications", () => {
 });
 
 describe("sessionItemsFromDaemonStatus", () => {
+	it("exposes only the original request from native and legacy handoff echoes", () => {
+		const text = runtimeHandoffEnvelope(
+			[{ role: "assistant", content: "Internal history" }],
+			"Read package.json",
+		);
+		for (const status of [
+			{
+				items: [
+					{ id: "u", type: "userMessage", content: [{ type: "text", text }] },
+				],
+			},
+			{ messages: [{ id: "u", role: "user", text }] },
+		]) {
+			expect(sessionItemsFromDaemonStatus(status)).toEqual([
+				{
+					kind: "userMessage",
+					id: SessionItemId("u"),
+					text: "Read package.json",
+				},
+			]);
+		}
+	});
 	it("prefers stored app-server items over flattened You/Codex messages", () => {
 		expect(
 			sessionItemsFromDaemonStatus({

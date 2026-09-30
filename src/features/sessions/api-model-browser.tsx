@@ -12,8 +12,8 @@ import {
 import {
 	AUTHOR_LABELS,
 	directModelProvider,
-	matchesModelSearch,
 	openRouterModelLabel,
+	visibleModelChoices,
 } from "#/domain/browse-models";
 import {
 	availableConnectionModels,
@@ -119,14 +119,14 @@ export function ApiModelBrowser({
 	const catalogOrder = new Map(
 		(catalog.data ?? []).map((model, index) => [model.id, index]),
 	);
-	const relevanceRank = (model: { id: string; author: string }) =>
+	const catalogRank = (model: { id: string; author: string }) =>
 		catalogOrder.get(model.id) ??
 		catalogOrder.get(`${model.author}/${model.id}`) ??
 		Number.MAX_SAFE_INTEGER;
-	const visibleConnected = connected
-		.filter((model) => matchesModelSearch(model, search))
-		.sort((a, b) => relevanceRank(a) - relevanceRank(b))
-		.slice(0, search.trim() ? undefined : 12);
+	const visibleConnected = visibleModelChoices(
+		connected.sort((a, b) => catalogRank(a) - catalogRank(b)),
+		search,
+	);
 	function update(rows: PublicModelConnection[]) {
 		client.setQueryData(["model-connections"], rows);
 		if (identity.data?.user.id)
@@ -149,16 +149,16 @@ export function ApiModelBrowser({
 			update(rows);
 		},
 	});
-	const locked = (catalog.data ?? [])
-		.filter(
+	const locked = visibleModelChoices(
+		(catalog.data ?? []).filter(
 			(model) =>
 				authors.includes(model.author) &&
-				matchesModelSearch(model, search) &&
 				!(author
 					? activeConnection
 					: providerConnections(model.author, connections.data ?? []).length),
-		)
-		.slice(0, search.trim() ? undefined : 12);
+		),
+		search,
+	);
 	return (
 		<>
 			<h3>

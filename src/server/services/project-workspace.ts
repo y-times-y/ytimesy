@@ -1,5 +1,6 @@
 import { Effect } from "effect";
 import { sharedDesktopDeveloperInstructions } from "#/domain/agent-desktop";
+import { agentSessionRoleInstructions } from "#/domain/agent-orchestration";
 import { PREPARED_ENVIRONMENT_INSTRUCTIONS } from "#/domain/environment-context";
 import { failureMessage } from "#/domain/failure-message";
 import type { WorkspaceId } from "#/domain/ids";
@@ -17,20 +18,16 @@ import {
 	sessionCloneBranch,
 	sessionWorkingBranch,
 } from "#/domain/session-branch";
+import { agentSessionForOwner } from "#/server/adapters/agent-sessions";
 import {
-	checkoutWorkingBranchScript,
-	cloneSelectedProjectScript,
 	DEVELOPER_INSTRUCTIONS_PATH,
-	fastForwardPreparedCheckoutScript,
 	PROJECT_CONTEXT_PATH,
 	PROJECT_CWD_PATH,
-	PROJECT_TOKEN_PATH,
 	preparedCheckoutPathFromReuse,
-	redactInstallationToken,
 	reusePreparedCheckoutCommand,
 } from "#/server/adapters/freestyle/clone-project";
 import { authorizedRepository } from "#/server/adapters/github";
-import { githubInstallationAccessToken } from "#/server/adapters/github/installation-token";
+import { receiveBrokeredRepository } from "#/server/adapters/github/git-broker";
 import { ensureGuestCliPin } from "#/server/adapters/guest-cli-pin";
 import { listProjects, projectForOwner } from "#/server/adapters/projects";
 import { githubAccessToken } from "#/server/auth/github-connection";
@@ -44,9 +41,8 @@ import type { WorkspaceMachines } from "./workspace-machines";
  * Clones only when that directory is missing. A clean reused tree is
  * fast-forwarded to the project's branch; a dirty agent tree is not.
  * Guest exec cannot rewrite `/tmp/ytimesy-project-cwd` (permission denied);
- * the filesystem API can. Installation tokens are written to a temp file
- * on the VM and deleted during clone or fast-forward; they are never
- * stored in git remotes.
+ * the filesystem API can. Authenticated fetches run on the server; the
+ * guest receives Git bundles, never an installation token.
  */
 export function ensureProjectCheckout(
 	machines: WorkspaceMachines,
@@ -88,78 +84,32 @@ function ensureSingleProjectCheckout(
 					`${reusedPath}\n`,
 				),
 			);
-			const token = yield* Effect.tryPromise(() =>
-				githubInstallationAccessToken(checkout.installationId),
-			).pipe(Effect.catchAll(() => Effect.succeed("")));
-			if (token) {
-				yield* Effect.tryPromise(() =>
-					machines.writeTextFile(workspaceId, PROJECT_TOKEN_PATH, `${token}\n`),
-				);
-				yield* Effect.tryPromise(() =>
-					machines.exec(
-						workspaceId,
-						fastForwardPreparedCheckoutScript({
-							owner: checkout.owner,
-							name: checkout.name,
-							branch: checkout.branch,
-							workingBranch: checkout.workingBranch,
-							destination: reusedPath,
-						}),
-						60_000,
-					),
-				).pipe(
-					Effect.catchAll(() =>
-						Effect.tryPromise(() =>
-							machines.exec(workspaceId, `rm -f ${PROJECT_TOKEN_PATH}`, 10_000),
-						).pipe(Effect.catchAll(() => Effect.void)),
-					),
-				);
-			} else if (checkout.workingBranch) {
-				yield* Effect.tryPromise(() =>
-					machines.exec(
-						workspaceId,
-						checkoutWorkingBranchScript(reusedPath, checkout.workingBranch),
-						15_000,
-					),
-				).pipe(Effect.catchAll(() => Effect.void));
-			}
+			yield* Effect.tryPromise(() =>
+				receiveBrokeredRepository(
+					{
+						exec: (command, timeout) =>
+							machines.exec(workspaceId, command, timeout),
+						writeTextFile: (path, text) =>
+							machines.writeTextFile(workspaceId, path, text),
+					},
+					{ ...checkout, destination: reusedPath, mode: "update" },
+				),
+			).pipe(Effect.catchAll(() => Effect.void));
 			return reusedPath;
 		}
 		const home = yield* guestHome(machines, workspaceId);
 		const destination = projectCheckoutPath(home, checkout.name);
-		const token = yield* Effect.tryPromise(() =>
-			githubInstallationAccessToken(checkout.installationId),
-		);
 		yield* Effect.tryPromise(() =>
-			machines.writeTextFile(workspaceId, PROJECT_TOKEN_PATH, `${token}\n`),
-		);
-		const cloned = yield* Effect.tryPromise(() =>
-			machines.exec(
-				workspaceId,
-				cloneSelectedProjectScript({
-					owner: checkout.owner,
-					name: checkout.name,
-					branch: checkout.branch,
-					workingBranch: checkout.workingBranch,
-					destination,
-				}),
-				180_000,
-			),
-		).pipe(
-			Effect.ensuring(
-				Effect.tryPromise(() =>
-					machines.exec(workspaceId, `rm -f ${PROJECT_TOKEN_PATH}`, 10_000),
-				).pipe(Effect.catchAll(() => Effect.void)),
+			receiveBrokeredRepository(
+				{
+					exec: (command, timeout) =>
+						machines.exec(workspaceId, command, timeout),
+					writeTextFile: (path, text) =>
+						machines.writeTextFile(workspaceId, path, text),
+				},
+				{ ...checkout, destination, mode: "clone" },
 			),
 		);
-		if (cloned.exitCode !== 0) {
-			yield* Effect.tryPromise(() =>
-				machines.exec(workspaceId, `rm -f ${PROJECT_TOKEN_PATH}`, 10_000),
-			).pipe(Effect.catchAll(() => Effect.void));
-			throw new Error(
-				`Could not clone ${checkout.fullName}: ${redactInstallationToken((cloned.stderr || cloned.stdout).trim() || "git clone failed.")}`,
-			);
-		}
 		yield* writeDeveloperInstructions(machines, workspaceId, destination);
 		return destination;
 	}).pipe(Effect.mapError((cause) => new Error(failureMessage(cause))));
@@ -171,12 +121,13 @@ export function writeDeveloperInstructions(
 	cwd: string,
 	secretNames: readonly string[] = [],
 	repositories: readonly string[] = [],
+	roleInstructions = "",
 ): Effect.Effect<void> {
 	return Effect.tryPromise(() =>
 		machines.writeTextFile(
 			workspaceId,
 			DEVELOPER_INSTRUCTIONS_PATH,
-			`${sharedDesktopDeveloperInstructions({ cwd, secretNames })} If ${PROJECT_CONTEXT_PATH} exists, treat it as this project's shared briefing and sibling traces. ${PREPARED_ENVIRONMENT_INSTRUCTIONS}\n${repositories.length > 1 ? `Project repositories (separate Git roots under the home directory): ${repositories.join(", ")}. Inspect each repository's instructions before editing it; commit and review each repository independently.\n` : ""}`,
+			`${sharedDesktopDeveloperInstructions({ cwd, secretNames })} If ${PROJECT_CONTEXT_PATH} exists, treat it as this project's shared briefing and sibling traces. ${PREPARED_ENVIRONMENT_INSTRUCTIONS}\n${repositories.length > 1 ? `Project repositories (separate Git roots under the home directory): ${repositories.join(", ")}. Inspect each repository's instructions before editing it; commit and review each repository independently.\n` : ""}${roleInstructions}\n`,
 		),
 	).pipe(Effect.catchAll(() => Effect.void));
 }
@@ -258,6 +209,11 @@ export function preparePreparedGuest(
 		yield* Effect.tryPromise(() =>
 			startEnvironmentServices(machines, workspaceId),
 		);
+		const session = scope.sessionId
+			? yield* Effect.tryPromise(() =>
+					agentSessionForOwner(scope.userId, scope.sessionId as string),
+				)
+			: null;
 		yield* writeDeveloperInstructions(
 			machines,
 			workspaceId,
@@ -268,6 +224,7 @@ export function preparePreparedGuest(
 						(repo) => repo.fullName,
 					)
 				: [],
+			agentSessionRoleInstructions(session ?? {}),
 		);
 	});
 }

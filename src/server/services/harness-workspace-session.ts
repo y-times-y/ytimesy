@@ -1,4 +1,4 @@
-import { Duration, Effect } from "effect";
+import { Cause, Duration, Effect } from "effect";
 import { competitionJudgeToolAllowed } from "#/domain/agent-competition";
 import type { AgentConnection } from "#/domain/agent-connection";
 import {
@@ -99,6 +99,7 @@ import {
 	sendApiWorkspaceTask,
 	stopApiWorkspaceTask,
 } from "./api-workspace-session";
+import { codexRuntimeForSession } from "./codex-runtime";
 import {
 	type CodexSessionScope,
 	connectCodexWorkspaceSession,
@@ -612,14 +613,23 @@ function serviceAgentTaskToolRequest(
 		) {
 			return;
 		}
-		const workspaceId = WorkspaceId(parent.providerRef);
+		const runtime =
+			parent.harness === "codex"
+				? yield* Effect.tryPromise(() =>
+						codexRuntimeForSession(machines, {
+							...parent,
+							providerRef: parent.providerRef as string,
+						}),
+					)
+				: { machines, workspaceId: WorkspaceId(parent.providerRef) };
+		const workspaceId = runtime.workspaceId;
 		const requestText = yield* Effect.tryPromise(() =>
-			machines.readTextFile(workspaceId, AGENT_TASK_TOOL_REQUEST_PATH),
+			runtime.machines.readTextFile(workspaceId, AGENT_TASK_TOOL_REQUEST_PATH),
 		).pipe(Effect.catchAll(() => Effect.succeed(null)));
 		const request = parseAgentTaskToolRequest(requestText);
 		if (!request) return;
 		const responseText = yield* Effect.tryPromise(() =>
-			machines.readTextFile(workspaceId, AGENT_TASK_TOOL_RESPONSE_PATH),
+			runtime.machines.readTextFile(workspaceId, AGENT_TASK_TOOL_RESPONSE_PATH),
 		).pipe(Effect.catchAll(() => Effect.succeed(null)));
 		if (agentTaskToolResponseId(responseText) === request.id) return;
 		const receipt = yield* Effect.tryPromise(() =>
@@ -628,7 +638,7 @@ function serviceAgentTaskToolRequest(
 		if (receipt.kind === "processing") return;
 		if (receipt.kind === "done") {
 			yield* Effect.tryPromise(() =>
-				machines.writeTextFile(
+				runtime.machines.writeTextFile(
 					workspaceId,
 					AGENT_TASK_TOOL_RESPONSE_PATH,
 					serializeAgentTaskToolResponse(receipt.response),
@@ -655,11 +665,11 @@ function serviceAgentTaskToolRequest(
 				request,
 			).pipe(
 				Effect.map((result) => ({ id: request.id, ok: true as const, result })),
-				Effect.catchAll((cause) =>
+				Effect.catchAllCause((cause) =>
 					Effect.succeed({
 						id: request.id,
 						ok: false as const,
-						error: publicFailureMessage(cause),
+						error: publicFailureMessage(Cause.squash(cause)),
 					}),
 				),
 			);
@@ -667,7 +677,7 @@ function serviceAgentTaskToolRequest(
 				completeAgentTaskCommand(parent.id, response),
 			);
 			yield* Effect.tryPromise(() =>
-				machines.writeTextFile(
+				runtime.machines.writeTextFile(
 					workspaceId,
 					AGENT_TASK_TOOL_RESPONSE_PATH,
 					serializeAgentTaskToolResponse(response),
@@ -699,8 +709,10 @@ export function runAgentTaskTool(
 					)
 				: null;
 		if (competition && !competitionJudgeToolAllowed(request.tool))
-			throw new Error(
-				"The comparison agent can inspect and select work, but cannot start or publish tasks.",
+			return yield* Effect.fail(
+				new Error(
+					"The comparison agent can inspect and select work, but cannot start or publish tasks.",
+				),
 			);
 		if (request.tool === "create_task") {
 			const title = taskToolString(request.arguments, "title");

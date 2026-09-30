@@ -2,6 +2,7 @@
 import json
 import os
 import select
+import signal
 import subprocess
 import sys
 import time
@@ -34,7 +35,11 @@ ERROR_LOG_PATH = runtime_path("/tmp/ytimesy-app-server.err")
 TURN_PROMPT = "Reply with the single word pong and do not run any tools."
 SKIP_INITIAL_TURN = os.environ.get("YTIMESY_SKIP_INITIAL_TURN") == "1"
 APP_SERVER_READ_BUFFERS = {}
+APP_SERVER_SERVICE_SECONDS = {}
 USAGE = {"rateLimits": None, "limitsUpdatedAt": None, "threads": {}, "compacting": {}}
+REMOTE_HEALTH_INTERVAL_SECONDS = 1
+REMOTE_HEALTH_TIMEOUT_SECONDS = 2
+REMOTE_EXECUTOR_LOST = "The workspace executor disconnected. Review any partial changes, reconnect the workspace, and retry."
 
 
 def capture_usage(message):
@@ -88,6 +93,14 @@ def fail(message, **extra):
     sys.exit(0)
 
 
+def service_protocol_request(proc, message, handler):
+    started = time.monotonic()
+    handler(proc, message)
+    elapsed = time.monotonic() - started
+    APP_SERVER_SERVICE_SECONDS[proc.pid] = APP_SERVER_SERVICE_SECONDS.get(proc.pid, 0) + elapsed
+    return elapsed
+
+
 def read_message(proc, timeout):
     deadline = time.time() + timeout
     buffer = APP_SERVER_READ_BUFFERS.get(proc.pid, b"")
@@ -101,10 +114,10 @@ def read_message(proc, timeout):
                 message = json.loads(line)
                 capture_usage(message)
                 if message.get("method") == "item/tool/call" and "id" in message:
-                    service_agent_task_tool_call(proc, message)
+                    deadline += service_protocol_request(proc, message, service_agent_task_tool_call)
                     continue
                 if message.get("method") == "account/chatgptAuthTokens/refresh" and "id" in message:
-                    service_external_token_refresh(proc, message)
+                    deadline += service_protocol_request(proc, message, service_external_token_refresh)
                     continue
                 return message
             except json.JSONDecodeError:
@@ -751,22 +764,94 @@ def remote_environment(cwd):
     }
 
 
-def check_remote_executor(proc):
+def check_remote_executor(proc, connect=False):
     if not REMOTE_EXEC_URL:
         return None
     request_id = next_rpc_id()
-    send(proc, {
-        "method": "environment/info",
-        "id": request_id,
-        "params": {"environmentId": REMOTE_ENVIRONMENT_ID},
-    })
     try:
-        reply, _ = wait_for_id(proc, request_id, 10)
+        send(proc, {
+            "method": "environment/info" if connect else "environment/status",
+            "id": request_id,
+            "params": {"environmentId": REMOTE_ENVIRONMENT_ID},
+        })
+        reply, _ = wait_for_id(proc, request_id, REMOTE_HEALTH_TIMEOUT_SECONDS)
     except (TimeoutError, RuntimeError, OSError):
-        return "The workspace executor is disconnected. Reconnect the workspace and retry."
+        return REMOTE_EXECUTOR_LOST
     if "error" in reply or not isinstance(reply.get("result"), dict):
-        return "The workspace executor is disconnected. Reconnect the workspace and retry."
+        return REMOTE_EXECUTOR_LOST
+    if not connect and reply["result"].get("status") != "ready":
+        return REMOTE_EXECUTOR_LOST
     return None
+
+
+class RemoteExecutorHealth:
+    """Multiplexes bounded health RPCs through the turn's sole protocol reader."""
+
+    def __init__(self, proc):
+        self.request_id = None
+        self.deadline = None
+        self.next_check = time.monotonic() + REMOTE_HEALTH_INTERVAL_SECONDS
+        self.service_seconds = APP_SERVER_SERVICE_SECONDS.get(getattr(proc, "pid", None), 0)
+
+    def check(self, proc):
+        if not REMOTE_EXEC_URL:
+            return None
+        service_seconds = APP_SERVER_SERVICE_SECONDS.get(getattr(proc, "pid", None), 0)
+        elapsed = service_seconds - self.service_seconds
+        self.service_seconds = service_seconds
+        # Token refresh and application tool handlers own the reader while they
+        # run; waiting on them is not evidence of an executor disconnection.
+        self.next_check += elapsed
+        if self.deadline is not None:
+            self.deadline += elapsed
+        now = time.monotonic()
+        if self.request_id is not None:
+            return REMOTE_EXECUTOR_LOST if now >= self.deadline else None
+        if now >= self.next_check:
+            self.request_id = next_rpc_id()
+            self.deadline = now + REMOTE_HEALTH_TIMEOUT_SECONDS
+            try:
+                send(proc, {
+                    "method": "environment/status", "id": self.request_id,
+                    "params": {"environmentId": REMOTE_ENVIRONMENT_ID},
+                })
+            except (RuntimeError, OSError):
+                return REMOTE_EXECUTOR_LOST
+        return None
+
+    def read_timeout(self):
+        if not REMOTE_EXEC_URL:
+            return 1.0
+        next_deadline = self.deadline if self.request_id is not None else self.next_check
+        return max(0.05, min(1.0, next_deadline - time.monotonic()))
+
+    def receive(self, message):
+        if self.request_id is None or message.get("id") != self.request_id:
+            return False, None
+        error = REMOTE_EXECUTOR_LOST if (
+            "error" in message or not isinstance(message.get("result"), dict)
+            or message["result"].get("status") != "ready"
+        ) else None
+        self.request_id = None
+        self.deadline = None
+        self.next_check = time.monotonic() + REMOTE_HEALTH_INTERVAL_SECONDS
+        return True, error
+
+
+def stop_disconnected_turn(proc, thread_id, turn_id=None):
+    # Do not leave a live turn that could resume writing on a later reconnect.
+    try:
+        request_turn_interrupt(proc, thread_id, turn_id, wait_for_response=False)
+    except (RuntimeError, OSError):
+        pass
+    if proc is not None and proc.poll() is None:
+        try:
+            if getattr(proc, "pid", None) and os.getpgid(proc.pid) == proc.pid:
+                os.killpg(proc.pid, signal.SIGKILL)
+            else:
+                proc.kill()
+        except ProcessLookupError:
+            pass
 
 
 def consume_stop_request():
@@ -779,14 +864,16 @@ def consume_stop_request():
     return True
 
 
-def request_turn_interrupt(proc, thread_id, wait_for_response=True):
+def request_turn_interrupt(proc, thread_id, turn_id, wait_for_response=True):
+    if not thread_id or not turn_id:
+        return
     request_id = next_rpc_id()
     send(
         proc,
         {
             "method": "turn/interrupt",
             "id": request_id,
-            "params": {"threadId": thread_id},
+            "params": {"threadId": thread_id, "turnId": turn_id},
         },
     )
     if not wait_for_response:
@@ -797,9 +884,44 @@ def request_turn_interrupt(proc, thread_id, wait_for_response=True):
         pass
 
 
+def terminate_turn_terminals(proc, thread_id, items):
+    # Native interrupt can finish a turn while a yielded remote command survives.
+    # Match this turn's item IDs so earlier dev servers and sibling chats survive.
+    item_ids = {item.get("id") for item in items if item.get("type") == "commandExecution"}
+    if not item_ids:
+        return
+    cursor = None
+    while True:
+        request_id = next_rpc_id()
+        params = {"threadId": thread_id}
+        if cursor:
+            params["cursor"] = cursor
+        send(proc, {"method": "thread/backgroundTerminals/list", "id": request_id, "params": params})
+        reply, _ = wait_for_id(proc, request_id, 8)
+        if "error" in reply:
+            raise RuntimeError("Could not verify stopped command cleanup.")
+        result = reply.get("result") or {}
+        for terminal in result.get("data") or []:
+            if terminal.get("itemId") not in item_ids:
+                continue
+            terminate_id = next_rpc_id()
+            send(proc, {"method": "thread/backgroundTerminals/terminate", "id": terminate_id,
+                        "params": {"threadId": thread_id, "processId": terminal["processId"]}})
+            terminated, _ = wait_for_id(proc, terminate_id, 8)
+            if "error" in terminated:
+                raise RuntimeError("Could not terminate the stopped command.")
+        cursor = result.get("nextCursor")
+        if not cursor:
+            return
+
+
 def run_turn(proc, thread_id, model_id, text, on_items=None, effort=None, service_tier=None, read_only=False):
     apply_display_env()
     remote_error = check_remote_executor(proc)
+    if remote_error and REMOTE_EXEC_URL:
+        # Before turn/start no model command is in flight, so a cold connection
+        # may safely be re-established. Never use this recovering RPC mid-turn.
+        remote_error = check_remote_executor(proc, connect=True)
     if remote_error:
         return {
             "threadId": thread_id,
@@ -848,18 +970,33 @@ def run_turn(proc, thread_id, model_id, text, on_items=None, effort=None, servic
     notifications = []
     turn_obj = None
     turn_id = None
+    health = RemoteExecutorHealth(proc)
+    executor_error = None
+    stop_requested = False
+    interrupt_sent = False
     # A quiet socket is not a completed task. Keep reading until the provider
     # finishes or exits; short reads keep user cancellation responsive.
     while turn_obj is None:
+        executor_error = health.check(proc)
+        if executor_error:
+            break
         if consume_stop_request():
-            request_turn_interrupt(proc, thread_id, wait_for_response=False)
+            stop_requested = True
+        if stop_requested and turn_id and not interrupt_sent:
+            request_turn_interrupt(proc, thread_id, turn_id, wait_for_response=False)
+            interrupt_sent = True
         try:
-            message = read_message(proc, 1.0)
+            message = read_message(proc, health.read_timeout())
         except TimeoutError:
             continue
         except (RuntimeError, OSError) as error:
             turn_obj = {"status": "failed", "error": {"message": str(error)}}
             break
+        health_reply, executor_error = health.receive(message)
+        if executor_error:
+            break
+        if health_reply:
+            continue
         if message.get("id") == request_id:
             if "error" in message:
                 turn_obj = {"status": "failed", "error": message["error"]}
@@ -871,17 +1008,30 @@ def run_turn(proc, thread_id, model_id, text, on_items=None, effort=None, servic
             continue
         if turn_id and params.get("turnId") not in (None, turn_id):
             continue
+        if (
+            REMOTE_EXEC_URL
+            and message.get("method") == "thread/environment/disconnected"
+            and params.get("threadId") == thread_id
+            and params.get("environmentId") == REMOTE_ENVIRONMENT_ID
+        ):
+            executor_error = REMOTE_EXECUTOR_LOST
+            break
         note(message)
         if message.get("method") == "error":
             notifications = [message]
         completed = find_completed_turn([message])
         if completed and (not turn_id or completed.get("id") == turn_id):
             turn_obj = completed
+    executor_error = executor_error or check_remote_executor(proc)
+    if executor_error:
+        stop_disconnected_turn(proc, thread_id, turn_id)
+        turn_obj = {"status": "failed", "error": {"message": executor_error}}
+    if stop_requested and not executor_error:
+        try:
+            terminate_turn_terminals(proc, thread_id, ordered_items(items_by_id, order))
+        except (RuntimeError, OSError, TimeoutError) as error:
+            turn_obj = {"status": "failed", "error": {"message": str(error)}}
     turn_status = turn_obj.get("status") or "completed"
-    remote_error = check_remote_executor(proc)
-    if remote_error:
-        turn_status = "failed"
-        turn_obj = {"status": "failed", "error": {"message": remote_error}}
     items = ordered_items(items_by_id, order)
     if on_items:
         on_items(items)
@@ -1040,6 +1190,7 @@ def main():
         text=True,
         bufsize=1,
         env=env,
+        start_new_session=True,
     )
     try:
         send(
@@ -1076,7 +1227,7 @@ def main():
             added, _ = wait_for_id(proc, 1, 30)
             if "error" in added:
                 fail("Could not register the workspace executor.")
-            remote_error = check_remote_executor(proc)
+            remote_error = check_remote_executor(proc, connect=True)
             if remote_error:
                 fail(remote_error)
         supplied_tokens = external_tokens()
@@ -1346,6 +1497,8 @@ def main():
                         TASK_REQUEST_PATH, TASK_RESULT_PATH, request["id"], turn
                     )
                     publish(turn)
+                    if proc.poll() is not None:
+                        return
                     time.sleep(0.4)
                     continue
 
@@ -1433,6 +1586,8 @@ def main():
     except Exception as exc:
         fail(str(exc), stageDetail="loginDaemon")
     finally:
+        if proc.poll() is None:
+            stop_disconnected_turn(proc, None)
         error_log.close()
 
 

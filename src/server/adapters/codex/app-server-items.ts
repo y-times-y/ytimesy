@@ -1,6 +1,7 @@
 import { agentTodosFromUnknown } from "#/domain/agent-todos";
 import { countFileChangeLines, readDiffLineCounts } from "#/domain/diff-stats";
 import { SessionItemId } from "#/domain/ids";
+import { visibleRuntimeUserText } from "#/domain/runtime-handoff";
 import type {
 	FileChangeEntry,
 	SessionItem,
@@ -309,7 +310,11 @@ export function sessionItemFromAppServerItem(
 	const type = camelType(readString(value.type) ?? "unknown");
 
 	if (type === "userMessage") {
-		return { kind: "userMessage", id, text: userMessageText(value) };
+		return {
+			kind: "userMessage",
+			id,
+			text: visibleRuntimeUserText(userMessageText(value)),
+		};
 	}
 	if (type === "agentMessage") {
 		return {
@@ -428,7 +433,7 @@ export function sessionItemsFromLegacyMessages(value: unknown): SessionItem[] {
 		const id = itemId(row.id) ?? SessionItemId(`${role}:${text}`);
 		items.push(
 			role === "user"
-				? { kind: "userMessage", id, text }
+				? { kind: "userMessage", id, text: visibleRuntimeUserText(text) }
 				: { kind: "agentMessage", id, text },
 		);
 	}

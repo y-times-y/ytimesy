@@ -1,4 +1,7 @@
-import { AGENT_ORCHESTRATION_INSTRUCTIONS } from "#/domain/agent-orchestration";
+import {
+	AGENT_ORCHESTRATION_INSTRUCTIONS,
+	agentSessionRoleInstructions,
+} from "#/domain/agent-orchestration";
 import { assertApiContextFits } from "#/domain/api-conversation";
 import { applyApiProgress } from "#/domain/api-progress";
 import {
@@ -104,7 +107,7 @@ export async function runApiTurn(machines: WorkspaceMachines, turn: ApiTurn) {
 			connectionId: turn.connection_id,
 			modelId: turn.model_id,
 			messages,
-			instructions: `You are the ytimesy coding agent. Work in ${cwd}. Read repository instructions before editing. ${PREPARED_ENVIRONMENT_INSTRUCTIONS} ${AGENT_ORCHESTRATION_INSTRUCTIONS}`,
+			instructions: `You are the ytimesy coding agent. Work in ${cwd}. Read repository instructions before editing. ${PREPARED_ENVIRONMENT_INSTRUCTIONS} ${AGENT_ORCHESTRATION_INSTRUCTIONS} ${agentSessionRoleInstructions(bound.session)}`,
 			tools,
 			signal: abort.signal,
 			beforeStep: async (history) => {

@@ -10,6 +10,7 @@ export interface WorkspaceProvisionOptions {
 }
 
 export interface WorkspaceRuntime {
+	readTextFile?(providerRef: string, path: string): Promise<string | null>;
 	findBySlug(slug: string): Promise<string | null>;
 	provision(slug: string, options?: WorkspaceProvisionOptions): Promise<string>;
 	recover(providerRef: string): Promise<string>;

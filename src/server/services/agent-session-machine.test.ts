@@ -234,6 +234,61 @@ describe("executeSessionMachinePlan", () => {
 		expect(runtime.provisioned).toHaveLength(1);
 	});
 
+	it("binds a replacement writer only after its saved checkpoint is restored", async () => {
+		const runtime = machines({ copied: "replacement-vm" });
+		const events: string[] = [];
+		const result = await executeSessionMachinePlan({
+			machines: {
+				...runtime.api,
+				ensureRunning: async () => {
+					throw new Error("VM not found");
+				},
+			},
+			sessionId: "11111111-2222-3333-4444-555555555555",
+			sessionProviderRef: "missing-vm",
+			workspaceId: "ws-1",
+			templateSnapshotId: "snap-1",
+			templateProviderRef: "repo-vm",
+			saveTemplateSnapshot: async () => undefined,
+			restoreMissingWorkspace: async (ref) => {
+				events.push(`restore:${ref}`);
+			},
+			saveSessionProviderRef: async (ref) => {
+				events.push(`bind:${ref}`);
+			},
+		});
+		expect(result.planKind).toBe("recover-checkpoint");
+		expect(events).toEqual(["restore:replacement-vm", "bind:replacement-vm"]);
+	});
+
+	it("does not bind a replacement when restoring saved work fails", async () => {
+		const runtime = machines({ copied: "replacement-vm" });
+		let bound = false;
+		await expect(
+			executeSessionMachinePlan({
+				machines: {
+					...runtime.api,
+					ensureRunning: async () => {
+						throw new Error("VM not found");
+					},
+				},
+				sessionId: "11111111-2222-3333-4444-555555555555",
+				sessionProviderRef: "missing-vm",
+				workspaceId: "ws-1",
+				templateSnapshotId: "snap-1",
+				templateProviderRef: "repo-vm",
+				saveTemplateSnapshot: async () => undefined,
+				restoreMissingWorkspace: async () => {
+					throw new Error("Invalid checkpoint");
+				},
+				saveSessionProviderRef: async () => {
+					bound = true;
+				},
+			}),
+		).rejects.toThrow("Invalid checkpoint");
+		expect(bound).toBe(false);
+	});
+
 	it("seals the template and copies a new agent VM instead of attaching it", async () => {
 		const runtime = machines({ snapshot: "snap-first", copied: "agent-1" });
 		const saved: string[] = [];

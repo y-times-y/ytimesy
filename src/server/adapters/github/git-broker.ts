@@ -1,0 +1,262 @@
+import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
+import { posixShellQuoted as quote } from "#/domain/posix-command";
+import { githubInstallationAccessToken } from "./installation-token";
+
+const execute = promisify(execFile);
+const MAX_BUNDLE_BYTES = 64 * 1024 * 1024;
+
+export interface GitTransferHost {
+	exec(
+		command: string,
+		timeoutMs: number,
+	): Promise<{ exitCode: number; stdout: string; stderr: string }>;
+	writeTextFile(path: string, contents: string): Promise<void>;
+	readTextFile?(path: string): Promise<string | null>;
+}
+
+type Repository = {
+	owner: string;
+	name: string;
+	branch: string;
+	installationId: number | string;
+};
+
+function repositoryUrl(input: Repository) {
+	if (
+		![input.owner, input.name].every((part) =>
+			/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(part),
+		)
+	)
+		throw new Error("Invalid GitHub repository.");
+	return `https://github.com/${input.owner}/${input.name}.git`;
+}
+
+/** Git never checks out untrusted files or inherits application secrets on the broker. */
+export async function withGitBroker<T>(
+	operation: (
+		git: (args: string[], token?: string) => Promise<string>,
+		directory: string,
+	) => Promise<T>,
+): Promise<T> {
+	const directory = await mkdtemp(join(tmpdir(), "ytimesy-git-"));
+	const git = async (args: string[], token?: string) => {
+		try {
+			const { stdout } = await execute(
+				"git",
+				[
+					"-c",
+					"core.hooksPath=/dev/null",
+					"-c",
+					"protocol.ext.allow=never",
+					"-c",
+					"fetch.fsckObjects=true",
+					"-c",
+					"transfer.fsckObjects=true",
+					...args,
+				],
+				{
+					cwd: directory,
+					timeout: 120_000,
+					maxBuffer: 1024 * 1024,
+					env: {
+						PATH: process.env.PATH,
+						HOME: directory,
+						GIT_CONFIG_NOSYSTEM: "1",
+						GIT_CONFIG_GLOBAL: "/dev/null",
+						GIT_TERMINAL_PROMPT: "0",
+						GIT_ALLOW_PROTOCOL: "https:file",
+						...(token
+							? {
+									GIT_CONFIG_COUNT: "1",
+									GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
+									GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`,
+								}
+							: {}),
+					},
+				},
+			);
+			return stdout.trim();
+		} catch {
+			throw new Error(
+				"GitHub transfer failed. Check repository access and retry; no credential was sent to the workspace.",
+			);
+		}
+	};
+	try {
+		return await operation(git, directory);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+}
+
+async function checked(host: GitTransferHost, command: string) {
+	const result = await host.exec(command, 120_000);
+	if (result.exitCode !== 0)
+		throw new Error(
+			"Workspace Git transfer failed; no GitHub credential was sent to it.",
+		);
+	return result.stdout.trim();
+}
+
+/** Installs/fetches credential-free Git objects, never a GitHub token, in the guest. */
+export async function receiveBrokeredRepository(
+	host: GitTransferHost,
+	input: Repository & {
+		destination: string;
+		workingBranch?: string;
+		mode: "clone" | "update";
+	},
+): Promise<string> {
+	const url = repositoryUrl(input);
+	await checked(host, "rm -f /tmp/ytimesy-gh-token");
+	return withGitBroker(async (git, directory) => {
+		await git(["check-ref-format", "--branch", input.branch]);
+		await git([
+			"check-ref-format",
+			"--branch",
+			input.workingBranch || input.branch,
+		]);
+		if (input.mode === "update") {
+			const state = await checked(
+				host,
+				`git -C ${quote(input.destination)} status --porcelain`,
+			);
+			if (state) return "dirty";
+		}
+		const token = await githubInstallationAccessToken(input.installationId, {
+			repositoryNames: [input.name],
+			contents: "read",
+		});
+		await git(["init", "--bare", "repo.git"]);
+		await git(
+			[
+				"-C",
+				"repo.git",
+				"fetch",
+				"--no-tags",
+				url,
+				`refs/heads/${input.branch}:refs/heads/source`,
+			],
+			token,
+		);
+		const bundle = join(directory, "source.bundle");
+		await git([
+			"-C",
+			"repo.git",
+			"bundle",
+			"create",
+			bundle,
+			"refs/heads/source",
+		]);
+		if ((await stat(bundle)).size > MAX_BUNDLE_BYTES)
+			throw new Error("Repository transfer exceeds the 64 MiB safety limit.");
+		const transfer = `/tmp/ytimesy-git-${randomUUID()}`;
+		try {
+			await host.writeTextFile(
+				`${transfer}.b64`,
+				(await readFile(bundle)).toString("base64"),
+			);
+			const dest = quote(input.destination);
+			const branch = quote(input.workingBranch || input.branch);
+			await checked(
+				host,
+				`set -eu
+umask 077
+base64 -d < ${quote(`${transfer}.b64`)} > ${quote(transfer)}
+${input.mode === "clone" ? `test ! -e ${dest}\nmkdir -p ${dest}\ngit -C ${dest} init` : `test -z "$(git -C ${dest} status --porcelain)"`}
+git -C ${dest} -c core.hooksPath=/dev/null fetch --no-tags ${quote(transfer)} refs/heads/source
+${input.mode === "clone" ? `git -C ${dest} -c core.hooksPath=/dev/null checkout -b ${branch} FETCH_HEAD\ngit -C ${dest} remote add origin ${quote(url)}` : `git -C ${dest} -c core.hooksPath=/dev/null merge --ff-only FETCH_HEAD\ngit -C ${dest} -c core.hooksPath=/dev/null checkout -B ${branch}\ngit -C ${dest} remote set-url origin ${quote(url)}`}
+echo updated`,
+			);
+			return "updated";
+		} finally {
+			await host
+				.exec(`rm -f ${quote(transfer)} ${quote(`${transfer}.b64`)}`, 10_000)
+				.catch(() => undefined);
+		}
+	});
+}
+
+/** Pushes a verified guest bundle from a fresh bare repository with server-only auth. */
+export async function pushBrokeredRepository(
+	host: GitTransferHost,
+	input: Repository & { directory: string; baseBranch?: string },
+): Promise<void> {
+	const url = repositoryUrl(input);
+	if (!host.readTextFile)
+		throw new Error(
+			"Workspace file transfer is unavailable; no push was attempted.",
+		);
+	const readTextFile = host.readTextFile.bind(host);
+	await withGitBroker(async (git, directory) => {
+		await git(["check-ref-format", "--branch", input.branch]);
+		if (input.baseBranch)
+			await git(["check-ref-format", "--branch", input.baseBranch]);
+		const transfer = `/tmp/ytimesy-git-${randomUUID()}`;
+		let encoded: string | null;
+		try {
+			await checked(
+				host,
+				`set -eu
+umask 077
+git -C ${quote(input.directory)} bundle create ${quote(transfer)} HEAD
+test "$(wc -c < ${quote(transfer)})" -le ${MAX_BUNDLE_BYTES}
+base64 < ${quote(transfer)} > ${quote(`${transfer}.b64`)}`,
+			);
+			encoded = await readTextFile(`${transfer}.b64`);
+		} finally {
+			await host
+				.exec(`rm -f ${quote(transfer)} ${quote(`${transfer}.b64`)}`, 10_000)
+				.catch(() => undefined);
+		}
+		if (
+			!encoded ||
+			encoded.length > MAX_BUNDLE_BYTES * 1.4 ||
+			!/^[A-Za-z0-9+/=\s]+$/.test(encoded)
+		)
+			throw new Error("Workspace bundle is missing or too large.");
+		const bundle = join(directory, "guest.bundle");
+		await writeFile(bundle, Buffer.from(encoded, "base64"), { mode: 0o600 });
+		await git(["init", "--bare", "repo.git"]);
+		const token = await githubInstallationAccessToken(input.installationId, {
+			repositoryNames: [input.name],
+			contents: "write",
+		});
+		if (input.baseBranch)
+			await git(
+				[
+					"-C",
+					"repo.git",
+					"fetch",
+					"--no-tags",
+					url,
+					`refs/heads/${input.baseBranch}:refs/heads/base`,
+				],
+				token,
+			);
+		await git(["-C", "repo.git", "bundle", "verify", bundle]);
+		await git([
+			"-C",
+			"repo.git",
+			"fetch",
+			"--no-tags",
+			bundle,
+			"HEAD:refs/heads/publish",
+		]);
+		await git(
+			[
+				"-C",
+				"repo.git",
+				"push",
+				url,
+				`refs/heads/publish:refs/heads/${input.branch}`,
+			],
+			token,
+		);
+	});
+}
