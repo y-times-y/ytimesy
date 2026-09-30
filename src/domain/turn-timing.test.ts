@@ -19,6 +19,8 @@ it("preserves timing across runtime IDs and freezes completed durations", () => 
 		"Worked for 1m 12s",
 	);
 	expect(workedLabel(undefined)).toBe("Worked");
+	expect(workedLabel({ startedAt: 1000, completedAt: 1000 })).toBe("Worked");
+	expect(workedLabel({ startedAt: 1000, completedAt: 1200 })).toBe("Worked");
 });
 
 it("does not invent timing for history or match a different prompt", () => {

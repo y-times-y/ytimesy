@@ -42,11 +42,7 @@ import {
 	saveAgentTaskState,
 	selectAgentSessionHarness,
 } from "#/server/adapters/agent-sessions";
-import {
-	fastForwardPreparedCheckoutScript,
-	PROJECT_TOKEN_PATH,
-} from "#/server/adapters/freestyle/clone-project";
-import { githubInstallationAccessToken } from "#/server/adapters/github/installation-token";
+import { receiveBrokeredRepository } from "#/server/adapters/github/git-broker";
 import {
 	listProjectTraces,
 	loadProjectBriefing,
@@ -57,7 +53,10 @@ import {
 	saveTemplateSnapshot,
 	workspaceForProject,
 } from "#/server/adapters/workspaces";
+import { checkpointForSession } from "../adapters/checkpoints/records";
+import { removeCheckpoint } from "../adapters/checkpoints/storage";
 import { providerProjectTemplateSnapshot } from "./provider-project-template";
+import { restoreSessionWorkspace } from "./session-checkpoint";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 async function resolveAgentSessionRecord(input: {
@@ -417,6 +416,24 @@ export async function bindAgentSessionMachine(
 		machines,
 		sessionId: session.id,
 		sessionProviderRef: session.providerRef,
+		restoreMissingWorkspace: process.env.SUPABASE_STORAGE_SERVICE_KEY
+			? async (newId) => {
+					const checkpoint = await checkpointForSession(
+						input.userId,
+						session.id,
+					);
+					if (!checkpoint || checkpoint.executor_id !== session.providerRef)
+						throw new Error(
+							"No checkpoint exists for the lost workspace; recovery stopped without discarding edits.",
+						);
+					await restoreSessionWorkspace(
+						machines,
+						input.userId,
+						session.id,
+						newId,
+					);
+				}
+			: undefined,
 		replaceMissingReadOnly:
 			input.harness === "api" &&
 			!selectedSession.parentSessionId &&
@@ -513,33 +530,23 @@ async function checkoutStackedTaskBase(
 		: null;
 	if (!project || !checkout)
 		throw new Error("The stacked project is unavailable.");
-	const token = await githubInstallationAccessToken(project.installationId);
 	const workspaceId = WorkspaceId(providerRef);
-	await machines.writeTextFile(workspaceId, PROJECT_TOKEN_PATH, `${token}\n`);
-	let result: Awaited<ReturnType<WorkspaceMachines["exec"]>>;
-	try {
-		result = await machines.exec(
-			workspaceId,
-			fastForwardPreparedCheckoutScript({
-				owner: checkout.owner,
-				name: checkout.name,
-				branch: input.branch,
-				destination: repositoryDirectory(project.fullName),
-				workingBranch: input.branch,
-			}),
-			120_000,
-		);
-	} finally {
-		await machines
-			.exec(workspaceId, `rm -f ${PROJECT_TOKEN_PATH}`, 10_000)
-			.catch(() => undefined);
-	}
-	if (result.exitCode !== 0 || !result.stdout.includes("updated")) {
-		throw new Error(
-			(result.stderr || result.stdout).trim() ||
-				"The stacked predecessor branch could not be checked out.",
-		);
-	}
+	const result = await receiveBrokeredRepository(
+		{
+			exec: (command, timeout) => machines.exec(workspaceId, command, timeout),
+			writeTextFile: (path, text) =>
+				machines.writeTextFile(workspaceId, path, text),
+		},
+		{
+			...checkout,
+			branch: input.branch,
+			workingBranch: input.branch,
+			destination: repositoryDirectory(project.fullName),
+			mode: "update",
+		},
+	);
+	if (result !== "updated")
+		throw new Error("The stacked predecessor branch could not be checked out.");
 }
 
 export async function peekAgentSessionMachine(input: {
@@ -565,7 +572,7 @@ export async function peekAgentSessionMachine(input: {
  * snapshots existed only drops the row.
  */
 export async function deleteAgentSessionMachine(
-	machines: Pick<WorkspaceMachines, "destroy">,
+	machines: Pick<WorkspaceMachines, "destroy" | "destroyCodexSession">,
 	input: {
 		readonly userId: string;
 		readonly projectId: string;
@@ -578,6 +585,14 @@ export async function deleteAgentSessionMachine(
 	}
 	const workspace = await workspaceForProject(input.userId, input.projectId);
 	const children = await descendantAgentSessions(input.userId, session.id);
+	for (const removed of [session, ...children]) {
+		if (process.env.SUPABASE_STORAGE_SERVICE_KEY) {
+			const checkpoint = await checkpointForSession(input.userId, removed.id);
+			if (checkpoint) await removeCheckpoint(checkpoint.object_path);
+		}
+		if (removed.harness === "codex")
+			await machines.destroyCodexSession?.(input.userId, removed.id);
+	}
 	const refs = sessionMachineRefsToDestroy({
 		sessionProviderRef:
 			session.taskPlacement === "shared" ? null : session.providerRef,
@@ -604,6 +619,7 @@ export async function executeSessionMachinePlan(input: {
 	readonly sessionId: string;
 	readonly sessionProviderRef: string | null;
 	readonly replaceMissingReadOnly?: boolean;
+	readonly restoreMissingWorkspace?: (newId: string) => Promise<void>;
 	readonly workspaceId: string;
 	readonly templateSnapshotId: string | null;
 	readonly templateProviderRef: string | null;
@@ -613,7 +629,10 @@ export async function executeSessionMachinePlan(input: {
 	readonly wait?: (ms: number) => Promise<void>;
 }): Promise<{
 	providerRef: string;
-	planKind: SessionMachinePlan["kind"] | "recover-read-only";
+	planKind:
+		| SessionMachinePlan["kind"]
+		| "recover-read-only"
+		| "recover-checkpoint";
 }> {
 	let snapshotId = input.templateSnapshotId;
 	let plan = sessionMachinePlan({
@@ -641,6 +660,20 @@ export async function executeSessionMachinePlan(input: {
 		try {
 			await input.machines.ensureRunning(WorkspaceId(plan.providerRef));
 		} catch (cause) {
+			if (
+				input.restoreMissingWorkspace &&
+				workspaceLooksGone(failureMessage(cause)) &&
+				snapshotId
+			) {
+				const replacement = await copyAgentSessionFromTemplate(
+					input,
+					snapshotId,
+				);
+				await resetCopiedSessionScratch(input.machines, replacement);
+				await input.restoreMissingWorkspace(replacement);
+				await input.saveSessionProviderRef(replacement);
+				return { providerRef: replacement, planKind: "recover-checkpoint" };
+			}
 			if (
 				!input.replaceMissingReadOnly ||
 				!workspaceLooksGone(failureMessage(cause)) ||

@@ -14,7 +14,7 @@ env["next_rpc_id"] = lambda: 42
 env["send"] = lambda *args: None
 env["consume_stop_request"] = lambda: False
 clock = [0]
-env["time"] = types.SimpleNamespace(time=lambda: clock[0])
+env["time"] = types.SimpleNamespace(time=lambda: clock[0], monotonic=lambda: clock[0])
 progress = []
 completed = {"method":"turn/completed", "params":{"threadId":"thread", "turn":{"id":"turn", "status":"completed"}}}
 delta = {"method":"item/agentMessage/delta", "params":{"threadId":"thread", "itemId":"item", "delta":"Hello"}}
@@ -66,6 +66,8 @@ messages = iter([ack, completed])
 env["read_message"] = lambda proc, timeout: next(messages)
 result = env["run_turn"](None, "thread", "model", "prompt")
 assert any(m["method"] == "turn/interrupt" for m in sent)
+interrupt = next(m for m in sent if m["method"] == "turn/interrupt")
+assert interrupt["params"] == {"threadId":"thread", "turnId":"turn"}
 assert result["status"] == "completed"`),
 	).toBe("ok");
 });
@@ -78,6 +80,22 @@ env["read_message"] = read
 result = env["run_turn"](None, "thread", "model", "prompt")
 assert result["status"] == "failed"
 assert result["error"] == "codex app-server closed stdout"`),
+	).toBe("ok");
+});
+
+it("cleans this turn's commands after native interruption before reporting completion", () => {
+	expect(
+		runCase(`stops = iter([False, False, True, False])
+env["consume_stop_request"] = lambda: next(stops)
+command = {"method":"item/started","params":{"threadId":"thread","turnId":"turn","item":{"id":"active","type":"commandExecution","command":"sleep 90","status":"inProgress"}}}
+interrupted = {"method":"turn/completed","params":{"threadId":"thread","turn":{"id":"turn","status":"interrupted"}}}
+messages = iter([ack, command, interrupted])
+env["read_message"] = lambda proc, timeout: next(messages)
+cleanup = []
+env["terminate_turn_terminals"] = lambda proc, thread, items: cleanup.append((thread, items))
+result = env["run_turn"](None, "thread", "model", "prompt")
+assert result["status"] == "interrupted"
+assert cleanup[0][0] == "thread" and cleanup[0][1][0]["id"] == "active"`),
 	).toBe("ok");
 });
 

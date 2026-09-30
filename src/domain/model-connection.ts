@@ -1,7 +1,9 @@
 import { z } from "zod";
 import {
 	type BrowseModel,
+	googleFlashModelRank,
 	isNonCodingModelId,
+	isShownInModelPicker,
 	openRouterModelLabel,
 } from "./browse-models";
 
@@ -107,13 +109,23 @@ export function connectionModels(
 	connection: PublicModelConnection,
 	browseModels: readonly BrowseModel[],
 ): readonly ConnectedModel[] {
-	if (connection.provider !== "openrouter") return connection.models;
+	if (connection.provider !== "openrouter")
+		return connection.provider === "google"
+			? connection.models
+					.filter((model) => isShownInModelPicker("google", model.id))
+					.sort(
+						(a, b) => googleFlashModelRank(a.id) - googleFlashModelRank(b.id),
+					)
+			: connection.models;
 	const saved = new Map(connection.models.map((model) => [model.id, model]));
-	return browseModels.map((model) => ({
-		id: model.id,
-		label: model.label || saved.get(model.id)?.label || model.id,
-		toolStreamingVerified: saved.get(model.id)?.toolStreamingVerified ?? false,
-	}));
+	return browseModels
+		.filter((model) => isShownInModelPicker(model.author, model.id))
+		.map((model) => ({
+			id: model.id,
+			label: model.label || saved.get(model.id)?.label || model.id,
+			toolStreamingVerified:
+				saved.get(model.id)?.toolStreamingVerified ?? false,
+		}));
 }
 
 export function parseModelRouteId(

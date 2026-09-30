@@ -11,6 +11,10 @@ const adapter = vi.hoisted(() => ({
 	ahead: vi.fn(),
 	create: vi.fn(),
 	workspace: vi.fn(),
+	push: vi.fn(),
+}));
+vi.mock("../src/server/adapters/github/git-broker", () => ({
+	pushBrokeredRepository: adapter.push,
 }));
 vi.mock("../src/server/auth/github-connection", () => ({
 	githubAccessToken: adapter.token,
@@ -56,6 +60,7 @@ beforeEach(() => {
 	vi.resetAllMocks();
 	adapter.token.mockResolvedValue("user-token");
 	adapter.installationToken.mockResolvedValue("ghs_install");
+	adapter.push.mockResolvedValue(undefined);
 	adapter.project.mockResolvedValue({
 		id: projectId,
 		repositoryId: 2,
@@ -118,11 +123,7 @@ it("does not create a pull request when the branch is not ahead", async () => {
 	);
 	expect(result._tag).toBe("Left");
 	expect(adapter.create).not.toHaveBeenCalled();
-	expect(
-		runtime.commands.some((command) =>
-			command.argv.join(" ").includes("push -u"),
-		),
-	).toBe(true);
+	expect(adapter.push).toHaveBeenCalled();
 });
 
 it("commits and pushes from the checkout before opening a draft pull request", async () => {
@@ -168,19 +169,18 @@ it("commits and pushes from the checkout before opening a draft pull request", a
 		),
 	).toBe(true);
 	vi.unstubAllEnvs();
-	expect(
-		runtime.commands.some((command) =>
-			command.argv.join(" ").includes("push -u"),
-		),
-	).toBe(true);
-	expect(
-		runtime.commands
-			.find((command) => command.argv.join(" ").includes("push -u"))
-			?.argv.join(" "),
-	).not.toMatch(/user-token|ghs_install|ghp_/);
+	expect(adapter.push).toHaveBeenCalledWith(
+		expect.anything(),
+		expect.objectContaining({
+			owner: "acme",
+			name: "app",
+			branch: "feature",
+			installationId: 1,
+		}),
+	);
 	expect(
 		runtime.files.some((file) => file.path === "/tmp/ytimesy-gh-token"),
-	).toBe(true);
+	).toBe(false);
 	expect(adapter.create).toHaveBeenCalledWith("user-token", "acme/app", {
 		title: "Ship feature",
 		body: "Ready for review.",

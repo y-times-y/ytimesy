@@ -57,7 +57,7 @@ it.each(["openai", "anthropic", "google", "openrouter", "compatible"])(
 				: provider === "anthropic"
 					? "claude-selected"
 					: provider === "google"
-						? "gemini-selected"
+						? "gemini-3.8-flash"
 						: provider === "openrouter"
 							? "vendor/selected"
 							: "selected-model";

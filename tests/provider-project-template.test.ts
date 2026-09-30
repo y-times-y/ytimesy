@@ -19,6 +19,9 @@ vi.mock("../src/server/auth/agent-account", () => ({
 vi.mock("../src/server/adapters/github/installation-token", () => ({
 	githubInstallationAccessToken: async () => "ghs_test_only_secret",
 }));
+vi.mock("../src/server/adapters/github/git-broker", () => ({
+	receiveBrokeredRepository: vi.fn(async () => "updated"),
+}));
 vi.mock("../src/server/adapters/github/bot-identity", () => ({
 	resolveGithubAppBot: async () => null,
 }));

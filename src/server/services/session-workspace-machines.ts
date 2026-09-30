@@ -25,6 +25,7 @@ const SESSION_LOCAL_PATHS = [
 	"/tmp/ytimesy-codex-login.pid",
 	"/tmp/ytimesy-codex-login.py",
 	"/tmp/ytimesy-codex-thread-state.json",
+	"/tmp/ytimesy-codex-runner-binding.json",
 	"/tmp/ytimesy-codex-external-tokens.json",
 	"/tmp/ytimesy-codex-refresh-request.json",
 	"/tmp/ytimesy-codex-refresh-response.json",
@@ -46,8 +47,11 @@ export function sessionRuntimeRoot(sessionId: string) {
 	return `/tmp/ytimesy-sessions/${safeId || "session"}`;
 }
 
-export function scopeSessionRuntimeText(text: string, sessionId: string) {
-	const root = sessionRuntimeRoot(sessionId);
+export function scopeSessionRuntimeText(
+	text: string,
+	sessionId: string,
+	root = sessionRuntimeRoot(sessionId),
+) {
 	let scoped = text;
 	for (const path of SESSION_LOCAL_PATHS) {
 		scoped = scoped.replaceAll(path, `${root}/${path.slice("/tmp/".length)}`);

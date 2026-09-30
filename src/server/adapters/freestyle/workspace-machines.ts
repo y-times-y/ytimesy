@@ -15,6 +15,10 @@ import type {
 	WorkspaceMachines,
 } from "#/server/services/workspace-machines";
 import {
+	deleteFreestyleCodexSession,
+	resolveFreestyleCodexRuntime,
+} from "./codex-runner";
+import {
 	PRODUCT_IDLE_TIMEOUT_SECONDS,
 	productCreateVmFields,
 	productIdleTimeoutNeedsUpdate,
@@ -41,7 +45,11 @@ export function createFreestyleWorkspaceMachines(
 ): WorkspaceMachines {
 	const freestyle = new Freestyle({ apiKey });
 
-	return {
+	const machines: WorkspaceMachines = {
+		destroyCodexSession: (userId, sessionId) =>
+			deleteFreestyleCodexSession(apiKey, userId, sessionId),
+		codexRuntime: (input) =>
+			resolveFreestyleCodexRuntime(apiKey, machines, input),
 		async createProofWorkspace(
 			options: CreateProofWorkspaceOptions = {},
 		): Promise<ProofWorkspace> {
@@ -333,6 +341,7 @@ export function createFreestyleWorkspaceMachines(
 			}
 		},
 	};
+	return machines;
 }
 
 async function resumeProductVm(

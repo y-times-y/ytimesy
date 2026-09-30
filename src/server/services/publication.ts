@@ -12,10 +12,6 @@ import {
 	publicationWorkspaceBlockedReason,
 	workspacePublicationBranch,
 } from "../../domain/publication";
-import {
-	PROJECT_TOKEN_PATH,
-	pushSelectedBranchScript,
-} from "../adapters/freestyle/clone-project";
 import { workspaceRuntimeFromEnv } from "../adapters/freestyle/workspace-runtime";
 import {
 	authorizedRepository,
@@ -23,7 +19,7 @@ import {
 	createDraftPullRequest,
 } from "../adapters/github";
 import { resolveGithubAppBot } from "../adapters/github/bot-identity";
-import { githubInstallationAccessToken } from "../adapters/github/installation-token";
+import { pushBrokeredRepository } from "../adapters/github/git-broker";
 import { projectForOwner } from "../adapters/projects";
 import {
 	checkoutBranchArgv,
@@ -167,53 +163,29 @@ export function publishProject(
 					checkedOut.stdout.trim() ||
 					"Could not switch to the publication branch.",
 			);
-		const installationToken = yield* Effect.tryPromise(() =>
-			githubInstallationAccessToken(project.installationId),
-		);
 		yield* Effect.tryPromise(() =>
-			runtime
-				.writeTextFile(
-					providerRef,
-					PROJECT_TOKEN_PATH,
-					`${installationToken}\n`,
-				)
-				.catch((error) => {
-					throw hostFailure(error, "Could not write the GitHub token.");
-				}),
-		);
-		const pushed = yield* runGit(
-			runtime,
-			providerRef,
-			[
-				"bash",
-				"-lc",
-				pushSelectedBranchScript({
+			pushBrokeredRepository(
+				{
+					exec: (command, timeout) =>
+						runtime.exec(providerRef, ["bash", "-lc", command], {}, timeout),
+					writeTextFile: (path, contents) =>
+						runtime.writeTextFile(providerRef, path, contents),
+					readTextFile: async (path) => {
+						if (!runtime.readTextFile)
+							throw new Error("Workspace file transfer unavailable.");
+						return runtime.readTextFile(providerRef, path);
+					},
+				},
+				{
 					owner: checkout.owner,
 					name: checkout.name,
 					branch: head,
+					baseBranch: base,
+					installationId: project.installationId,
 					directory,
-				}),
-			],
-			{},
-			"Push failed. Reconnect GitHub and retry.",
-		).pipe(
-			Effect.ensuring(
-				Effect.tryPromise(() =>
-					runtime.exec(
-						providerRef,
-						["rm", "-f", PROJECT_TOKEN_PATH],
-						{},
-						10_000,
-					),
-				).pipe(Effect.catchAll(() => Effect.void)),
+				},
 			),
 		);
-		if (pushed.exitCode !== 0)
-			return yield* reject(
-				pushed.stderr.trim() ||
-					pushed.stdout.trim() ||
-					"Push failed. Reconnect GitHub and retry.",
-			);
 		const aheadBy = yield* Effect.tryPromise(() =>
 			compareBranchAhead(token, repository.fullName, base, head),
 		);

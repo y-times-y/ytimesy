@@ -1,5 +1,6 @@
 import type { AgentTodo } from "./agent-todos";
 import { SessionItemId } from "./ids";
+import { visibleRuntimeUserText } from "./runtime-handoff";
 import {
 	fileChangesFromShellCommand,
 	remainingShellCommandAfterWrites,
@@ -222,7 +223,19 @@ export function reasoningSummariesFromTurn(
 }
 
 export function sessionItemsFromUnknown(value: unknown): SessionItem[] {
-	return Array.isArray(value) ? (value as SessionItem[]) : [];
+	return Array.isArray(value)
+		? normalizeRuntimeUserMessages(value as SessionItem[])
+		: [];
+}
+
+function normalizeRuntimeUserMessages(
+	items: readonly SessionItem[],
+): SessionItem[] {
+	return items.map((item) =>
+		item.kind === "userMessage"
+			? { ...item, text: visibleRuntimeUserText(item.text) }
+			: item,
+	);
 }
 
 export function sessionItemsQueuedWithUser(
@@ -249,8 +262,14 @@ export function sessionViewItems(
 	live: readonly SessionItem[],
 	recorded: readonly SessionItem[],
 ): SessionItem[] {
-	const merged = mergeSessionViewItems(live, recorded);
-	const recordedUsers = recorded.filter((item) => item.kind === "userMessage");
+	const normalizedRecorded = normalizeRuntimeUserMessages(recorded);
+	const merged = mergeSessionViewItems(
+		normalizeRuntimeUserMessages(live),
+		normalizedRecorded,
+	);
+	const recordedUsers = normalizedRecorded.filter(
+		(item) => item.kind === "userMessage",
+	);
 	let ordinal = 0;
 	let matchingPrefix = true;
 	return merged.map((item) => {
@@ -381,7 +400,7 @@ export function compactTimelineItems(
 	items: readonly SessionItem[],
 ): SessionItem[] {
 	const presented: SessionItem[] = [];
-	for (const item of items) {
+	for (const item of normalizeRuntimeUserMessages(items)) {
 		if (item.kind === "userMessage" && isWorkspacePreamble(item.text)) {
 			continue;
 		}

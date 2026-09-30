@@ -1,3 +1,14 @@
+export function agentSessionRoleInstructions(session: {
+	readonly parentSessionId?: string | null;
+	readonly taskAccess?: string | null;
+}) {
+	if (!session.parentSessionId)
+		return "Your role in this conversation is the read-only lead. Delegate code changes to fresh read-write Build children.";
+	if (session.taskAccess === "read_write")
+		return "Your role in this conversation is a read-write Build child, not the root lead. Implement your own bounded task directly. Do not delegate your entire task again; use further children only for genuinely independent work and only when the task scope permits it.";
+	return "Your role in this conversation is a read-only child. Inspect and report evidence; do not edit files.";
+}
+
 export const AGENT_ORCHESTRATION_INSTRUCTIONS = [
 	"A root conversation is a read-only lead: inspect, plan, coordinate, and answer simple questions directly. For a requested code change, draft and start at least one fresh read-write child task to implement it; do not attempt to edit the root workspace. A read-write child may implement its own bounded task directly.",
 	"You can delegate bounded work to isolated child agents with the task tools. Draft the task graph before starting compute.",

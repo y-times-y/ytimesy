@@ -23,6 +23,8 @@ export type GitHubAppListing = {
 	readonly installationToken: (input: {
 		credentials: GitHubAppCredentials;
 		installationId: string;
+		repositoryNames?: string[];
+		contents?: "read" | "write";
 	}) => Promise<string>;
 };
 
@@ -70,7 +72,15 @@ export function createOctokitGitHubListing(): GitHubAppListing {
 			const octokit = await app.getInstallationOctokit(
 				Number(input.installationId),
 			);
-			const auth = await octokit.auth({ type: "installation" });
+			const auth = await octokit.auth({
+				type: "installation",
+				...(input.repositoryNames
+					? { repositoryNames: input.repositoryNames }
+					: {}),
+				...(input.contents
+					? { permissions: { contents: input.contents } }
+					: {}),
+			});
 			if (
 				!auth ||
 				typeof auth !== "object" ||

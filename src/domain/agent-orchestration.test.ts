@@ -1,5 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { AGENT_ORCHESTRATION_INSTRUCTIONS } from "./agent-orchestration";
+import {
+	AGENT_ORCHESTRATION_INSTRUCTIONS,
+	agentSessionRoleInstructions,
+} from "./agent-orchestration";
+
+it("distinguishes the root lead from writable and read-only children", () => {
+	expect(agentSessionRoleInstructions({})).toContain("read-only lead");
+	expect(
+		agentSessionRoleInstructions({
+			parentSessionId: "parent",
+			taskAccess: "read_write",
+		}),
+	).toContain("Implement your own bounded task directly");
+	expect(
+		agentSessionRoleInstructions({
+			parentSessionId: "parent",
+			taskAccess: "read_only",
+		}),
+	).toContain("do not edit files");
+});
 
 describe("agent orchestration policy", () => {
 	it("teaches leads to parallelize selectively and synthesize verified results", () => {

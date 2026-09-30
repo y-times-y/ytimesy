@@ -4,6 +4,9 @@ import { prepareProjectCheckout } from "../src/server/services/prepare-project-c
 vi.mock("../src/server/adapters/github/installation-token", () => ({
 	githubInstallationAccessToken: async () => "installation-fixture",
 }));
+vi.mock("../src/server/adapters/github/git-broker", () => ({
+	receiveBrokeredRepository: vi.fn(async () => "updated"),
+}));
 vi.mock("../src/server/adapters/github/bot-identity", () => ({
 	resolveGithubAppBot: async () => ({ name: "Bot", email: "bot@test.invalid" }),
 }));
@@ -29,9 +32,9 @@ it("shares authenticated checkout logic without putting tokens in host commands"
 		commit: "a".repeat(40),
 	});
 	expect(directory).toBe("/home/ubuntu/web");
-	expect(host.writeTextFile).toHaveBeenCalledWith(
+	expect(host.writeTextFile).not.toHaveBeenCalledWith(
 		"/tmp/ytimesy-gh-token",
-		"installation-fixture\n",
+		expect.anything(),
 	);
 	expect(host.writeTextFile).toHaveBeenCalledWith(
 		expect.stringContaining("/.git/hooks/commit-msg"),

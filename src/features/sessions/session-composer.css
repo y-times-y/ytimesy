@@ -938,6 +938,7 @@ a.harness-login-action:hover {
 }
 .session-file-name {
 	color: rgba(255, 255, 255, 0.85);
+	user-select: text;
 }
 .session-file-name[data-change="add"] {
 	color: #40c977;

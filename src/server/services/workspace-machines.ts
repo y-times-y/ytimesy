@@ -21,6 +21,17 @@ export interface CreateProofWorkspaceOptions {
 }
 
 export interface WorkspaceMachines {
+	readonly destroyCodexSession?: (
+		userId: string,
+		sessionId: string,
+	) => Promise<void>;
+	readonly codexRuntime?: (input: {
+		readonly userId: string;
+		readonly sessionId: string;
+		readonly executorId: WorkspaceId;
+		readonly executorMachines: WorkspaceMachines;
+		readonly provision: boolean;
+	}) => Promise<CodexRuntime | null>;
 	readonly createProofWorkspace: (
 		options?: CreateProofWorkspaceOptions,
 	) => Promise<ProofWorkspace>;
@@ -60,4 +71,10 @@ export interface WorkspaceMachines {
 		slug: string,
 		snapshotId: string,
 	) => Promise<WorkspaceId>;
+}
+
+export interface CodexRuntime {
+	readonly machines: WorkspaceMachines;
+	readonly workspaceId: WorkspaceId;
+	readonly root: string;
 }

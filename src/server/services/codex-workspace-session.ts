@@ -41,6 +41,7 @@ import {
 	peekAgentSessionMachine,
 	syncProjectContextForTask,
 } from "./agent-session-machine";
+import { codexRuntimeForSession } from "./codex-runtime";
 import {
 	persistBoundSessionView,
 	persistSessionTurnStatus,
@@ -141,8 +142,14 @@ export function readCodexWorkspaceSession(
 				),
 			);
 		}
+		const savedSession = peeked.session;
+		const runtime = savedSession
+			? yield* Effect.tryPromise(() =>
+					codexRuntimeForSession(machines, { ...savedSession, providerRef }),
+				)
+			: { machines, workspaceId: WorkspaceId(providerRef) };
 		const running = yield* Effect.tryPromise(() =>
-			machines.isRunning(WorkspaceId(providerRef)),
+			runtime.machines.isRunning(runtime.workspaceId),
 		);
 		if (!running) {
 			return yield* Effect.tryPromise(() =>
@@ -152,18 +159,18 @@ export function readCodexWorkspaceSession(
 				),
 			);
 		}
-		let status = yield* readLoginStatus(machines, WorkspaceId(providerRef));
+		let status = yield* readLoginStatus(runtime.machines, runtime.workspaceId);
 		if (status.stage === "authenticated") {
 			status = yield* promoteCodexLogin(
-				machines,
-				WorkspaceId(providerRef),
+				runtime.machines,
+				runtime.workspaceId,
 				scope.userId,
 				status,
 			);
 			yield* Effect.tryPromise(() =>
 				serviceCodexRefreshRequest(
-					machines,
-					WorkspaceId(providerRef),
+					runtime.machines,
+					runtime.workspaceId,
 					scope.userId,
 				),
 			);
@@ -223,6 +230,17 @@ export function connectCodexWorkspaceSession(
 		yield* Effect.tryPromise(() =>
 			machines.ensureRunning(WorkspaceId(bound.providerRef)),
 		);
+		yield* prepareCodexGuest(machines, WorkspaceId(bound.providerRef), {
+			...scope,
+			sessionId: bound.session.id,
+		});
+		const runtime = yield* Effect.tryPromise(() =>
+			codexRuntimeForSession(
+				machines,
+				{ ...bound.session, providerRef: bound.providerRef },
+				true,
+			),
+		);
 
 		const existing = yield* readCodexWorkspaceSession(machines, {
 			...scope,
@@ -230,7 +248,7 @@ export function connectCodexWorkspaceSession(
 			createNew: false,
 		});
 		if (existing.connection.status === "authenticated" && hasCodexAuth) {
-			yield* prepareCodexGuest(machines, WorkspaceId(bound.providerRef), scope);
+			yield* ensureCurrentLoginDaemon(runtime.machines, runtime.workspaceId);
 			return yield* readCodexWorkspaceSession(machines, {
 				...scope,
 				sessionId: bound.session.id,
@@ -242,18 +260,18 @@ export function connectCodexWorkspaceSession(
 		}
 
 		let status = yield* authenticatePreparedWorkspace(
-			machines,
-			WorkspaceId(bound.providerRef),
+			runtime.machines,
+			runtime.workspaceId,
 			scope.userId,
 		);
 		if (status.stage === "authenticated") {
 			status = yield* promoteCodexLogin(
-				machines,
-				WorkspaceId(bound.providerRef),
+				runtime.machines,
+				runtime.workspaceId,
 				scope.userId,
 				status,
 			);
-			yield* prepareCodexGuest(machines, WorkspaceId(bound.providerRef), scope);
+			yield* ensureCurrentLoginDaemon(runtime.machines, runtime.workspaceId);
 		}
 		return yield* Effect.tryPromise(() =>
 			persistBoundSessionView(
@@ -294,14 +312,32 @@ export function sendCodexWorkspaceTask(
 		scope,
 		(providerRef, snapshotAvailable, session) =>
 			Effect.gen(function* () {
-				let status = yield* readLoginStatus(machines, WorkspaceId(providerRef));
+				yield* prepareCodexGuest(machines, WorkspaceId(providerRef), {
+					...scope,
+					sessionId: session.id,
+				});
+				if (scope.projectId && !session.parentSessionId) {
+					yield* Effect.tryPromise(() =>
+						syncProjectContextForTask(machines, providerRef, {
+							projectId: scope.projectId as string,
+							task: input.text,
+						}),
+					);
+				}
+				const runtime = yield* Effect.tryPromise(() =>
+					codexRuntimeForSession(machines, { ...session, providerRef }, true),
+				);
+				let status = yield* readLoginStatus(
+					runtime.machines,
+					runtime.workspaceId,
+				);
 				const managed = yield* Effect.tryPromise(() =>
 					hasManagedCodexAuth(scope.userId),
 				);
 				if (status.stage !== "authenticated" || managed) {
 					status = yield* authenticatePreparedWorkspace(
-						machines,
-						WorkspaceId(providerRef),
+						runtime.machines,
+						runtime.workspaceId,
 						scope.userId,
 					);
 				}
@@ -309,15 +345,15 @@ export function sendCodexWorkspaceTask(
 					return viewFromStatus(status, providerRef, snapshotAvailable);
 				}
 				status = yield* promoteCodexLogin(
-					machines,
-					WorkspaceId(providerRef),
+					runtime.machines,
+					runtime.workspaceId,
 					scope.userId,
 					status,
 				);
 				if (status.stage !== "authenticated") {
 					return viewFromStatus(status, providerRef, snapshotAvailable);
 				}
-				yield* prepareCodexGuest(machines, WorkspaceId(providerRef), scope);
+				yield* ensureCurrentLoginDaemon(runtime.machines, runtime.workspaceId);
 				const preference = listedModelPreferenceFromSessions({
 					harness: session.harness,
 					sessions: [session],
@@ -328,14 +364,6 @@ export function sendCodexWorkspaceTask(
 				});
 				if (!modelId) {
 					return viewFromStatus(status, providerRef, snapshotAvailable);
-				}
-				if (scope.projectId && !session.parentSessionId) {
-					yield* Effect.tryPromise(() =>
-						syncProjectContextForTask(machines, providerRef, {
-							projectId: scope.projectId as string,
-							task: input.text,
-						}),
-					);
 				}
 				yield* Effect.tryPromise(() =>
 					persistSessionTurnStatus(session, "running"),
@@ -351,7 +379,7 @@ export function sendCodexWorkspaceTask(
 				const serviceTier = input.fast
 					? listedFastModeId(listed ?? {})
 					: undefined;
-				status = yield* submitCodexTask(machines, WorkspaceId(providerRef), {
+				status = yield* submitCodexTask(runtime.machines, runtime.workspaceId, {
 					text: input.text,
 					modelId,
 					...(session.taskAccess === "read_only" ? { readOnly: true } : {}),
@@ -398,8 +426,14 @@ export function stopCodexWorkspaceTurn(
 				),
 			);
 		}
+		const savedSession = peeked.session;
+		const runtime = savedSession
+			? yield* Effect.tryPromise(() =>
+					codexRuntimeForSession(machines, { ...savedSession, providerRef }),
+				)
+			: { machines, workspaceId: WorkspaceId(providerRef) };
 		const running = yield* Effect.tryPromise(() =>
-			machines.isRunning(WorkspaceId(providerRef)),
+			runtime.machines.isRunning(runtime.workspaceId),
 		);
 		if (!running) {
 			yield* Effect.tryPromise(() =>
@@ -414,8 +448,8 @@ export function stopCodexWorkspaceTurn(
 			return { ...paused, turnStatus: "idle" as const };
 		}
 		const status = yield* interruptCodexTurn(
-			machines,
-			WorkspaceId(providerRef),
+			runtime.machines,
+			runtime.workspaceId,
 		);
 		return yield* Effect.tryPromise(() =>
 			persistBoundSessionView(
@@ -589,9 +623,6 @@ function prepareCodexGuest(
 	return Effect.gen(function* () {
 		yield* preparePreparedGuest(machines, workspaceId, scope);
 		beginSharedDesktop(machines, scope);
-		yield* ensureCurrentLoginDaemon(machines, workspaceId).pipe(
-			Effect.catchAll(() => Effect.void),
-		);
 	});
 }
 

@@ -1,12 +1,8 @@
 import { posixShellQuoted } from "#/domain/posix-command";
 import { projectCheckoutPath } from "#/domain/project-checkout";
-import {
-	cloneSelectedProjectScript,
-	PROJECT_CWD_PATH,
-	PROJECT_TOKEN_PATH,
-} from "#/server/adapters/freestyle/clone-project";
+import { PROJECT_CWD_PATH } from "#/server/adapters/freestyle/clone-project";
 import { resolveGithubAppBot } from "#/server/adapters/github/bot-identity";
-import { githubInstallationAccessToken } from "#/server/adapters/github/installation-token";
+import { receiveBrokeredRepository } from "#/server/adapters/github/git-broker";
 import {
 	activateGithubBotCommitHookArgv,
 	githubBotCommitHookPath,
@@ -29,7 +25,7 @@ export type ProjectCheckoutHost = {
 
 /**
  * The same checkout/install recipe prepares both the initial project image and
- * an authenticated provider image. Installation tokens never enter argv.
+ * an authenticated provider image. GitHub auth stays on the server broker.
  */
 export async function prepareProjectCheckout(input: {
 	readonly host: ProjectCheckoutHost;
@@ -45,26 +41,17 @@ export async function prepareProjectCheckout(input: {
 	readonly commit?: string;
 }) {
 	const directory = projectCheckoutPath(input.home, input.name);
-	const token = await githubInstallationAccessToken(input.installationId);
-	await input.host.writeTextFile(PROJECT_TOKEN_PATH, `${token}\n`);
-	await runCheckoutCommand(
-		input.host,
-		`if [ ! -O '${PROJECT_TOKEN_PATH}' ]; then sudo -n chown "$(id -u):$(id -g)" '${PROJECT_TOKEN_PATH}'; fi
-if [ -e '${PROJECT_CWD_PATH}' ] && [ ! -O '${PROJECT_CWD_PATH}' ]; then sudo -n chown "$(id -u):$(id -g)" '${PROJECT_CWD_PATH}'; fi
-chmod 600 '${PROJECT_TOKEN_PATH}'`,
+	const exists = await input.host.exec(
+		`test -d ${posixShellQuoted(`${directory}/.git`)} && echo present`,
 		15_000,
 	);
-	await runCheckoutCommand(
-		input.host,
-		cloneSelectedProjectScript({
-			owner: input.owner,
-			name: input.name,
-			branch: input.branch,
-			workingBranch: input.workingBranch,
+	if (!exists.stdout.includes("present"))
+		await receiveBrokeredRepository(input.host, {
+			...input,
 			destination: directory,
-		}),
-		10 * 60 * 1000,
-	);
+			mode: "clone",
+		});
+	await input.host.writeTextFile(PROJECT_CWD_PATH, `${directory}\n`);
 	const bot = await resolveGithubAppBot();
 	if (bot) {
 		const hook = githubBotCommitHookPath(directory);

@@ -33,6 +33,17 @@ describe("assistant Markdown", () => {
 		expect(html.match(/title="Open src\/main.ts"/g), html).toHaveLength(2);
 		expect(html).toContain("source");
 	});
+	it("retains package filenames in completed and streaming responses", () => {
+		for (const streaming of [false, true]) {
+			const html = render(
+				"I already read `package.json`; its test command is `pnpm test` (`vitest run`).",
+				streaming,
+			);
+			expect(html).toContain('title="Open package.json"');
+			expect(html).toContain('class="session-file-name">package.json</span>');
+			expect(html).toContain("pnpm test");
+		}
+	});
 	it("formats incomplete code fences while streaming without creating file buttons inside code", () => {
 		const html = render("```ts\nconst path = 'src/main.ts';", true);
 		expect(html).toContain("<pre");

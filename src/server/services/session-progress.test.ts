@@ -1,10 +1,27 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { WorkspaceId } from "#/domain/ids";
 import {
 	agentSessionForOwner,
 	sideAgentSession,
 } from "../adapters/agent-sessions";
+import { codexRunnerRoot } from "../adapters/freestyle/codex-runner";
 import { watchSessionProgress } from "../adapters/freestyle/session-progress";
+import { codexRuntimeForSession } from "./codex-runtime";
 import { sessionProgressResponse } from "./session-progress";
+
+const machineRead = vi.hoisted(() => vi.fn(async () => null));
+vi.mock("../adapters/freestyle/workspace-machines", () => ({
+	createFreestyleWorkspaceMachines: vi.fn(() => ({
+		readTextFile: machineRead,
+	})),
+}));
+
+vi.mock("./codex-runtime", () => ({
+	codexRuntimeForSession: vi.fn(async (_machines, session) => ({
+		workspaceId: session.providerRef,
+		root: "/tmp",
+	})),
+}));
 
 vi.mock("../adapters/agent-sessions", () => ({
 	agentSessionForOwner: vi.fn(),
@@ -37,6 +54,30 @@ afterEach(() => {
 });
 
 describe("private session progress", () => {
+	it("resolves shared-child runner bindings through the child-scoped executor", async () => {
+		vi.stubEnv("FREESTYLE_API_KEY", "fixture");
+		mockSession({ ...record, taskPlacement: "shared" });
+		vi.mocked(codexRuntimeForSession).mockImplementationOnce(
+			async (machines) => {
+				await machines.readTextFile(
+					WorkspaceId("vm"),
+					"/tmp/ytimesy-codex-runner-binding.json",
+				);
+				return {
+					machines,
+					workspaceId: WorkspaceId("runner"),
+					root: codexRunnerRoot("session"),
+				};
+			},
+		);
+		vi.mocked(watchSessionProgress).mockResolvedValue(vi.fn());
+		const response = await sessionProgressResponse(scope);
+		expect(machineRead).toHaveBeenCalledWith(
+			"vm",
+			"/tmp/ytimesy-sessions/session/ytimesy-codex-runner-binding.json",
+		);
+		await response.body?.cancel();
+	});
 	it("resolves side chat ownership before selecting its runtime", async () => {
 		vi.stubEnv("FREESTYLE_API_KEY", "fixture");
 		mockSession(record);
@@ -98,6 +139,23 @@ describe("private session progress", () => {
 		const response = await sessionProgressResponse(scope);
 		expect(vi.mocked(watchSessionProgress).mock.calls[0][0].paths.status).toBe(
 			"/tmp/ytimesy-sessions/session/ytimesy-auth-status.json",
+		);
+		await response.body?.cancel();
+	});
+	it("streams Codex from the isolated runner instead of its execution VM", async () => {
+		vi.stubEnv("FREESTYLE_API_KEY", "fixture");
+		mockSession(record);
+		vi.mocked(codexRuntimeForSession).mockResolvedValueOnce({
+			workspaceId: WorkspaceId("runner"),
+			root: codexRunnerRoot("session"),
+			machines: {} as never,
+		});
+		vi.mocked(watchSessionProgress).mockResolvedValue(vi.fn());
+		const response = await sessionProgressResponse(scope);
+		const stream = vi.mocked(watchSessionProgress).mock.calls[0][0];
+		expect(stream.providerRef).toBe("runner");
+		expect(stream.paths.status).toBe(
+			`${codexRunnerRoot("session")}/ytimesy-auth-status.json`,
 		);
 		await response.body?.cancel();
 	});

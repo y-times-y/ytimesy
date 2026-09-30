@@ -3,9 +3,15 @@ import {
 	agentSessionForOwner,
 	sideAgentSession,
 } from "../adapters/agent-sessions";
+import { scopeCodexRuntimeText } from "../adapters/freestyle/codex-runner";
 import { watchSessionProgress } from "../adapters/freestyle/session-progress";
+import { createFreestyleWorkspaceMachines } from "../adapters/freestyle/workspace-machines";
 import { progressAdapters } from "../adapters/session-progress";
-import { scopeSessionRuntimeText } from "./session-workspace-machines";
+import { codexRuntimeForSession } from "./codex-runtime";
+import {
+	machinesForAgentSession,
+	scopeSessionRuntimeText,
+} from "./session-workspace-machines";
 
 export async function sessionProgressResponse(input: {
 	userId: string;
@@ -28,13 +34,28 @@ export async function sessionProgressResponse(input: {
 	const apiKey = process.env.FREESTYLE_API_KEY;
 	if (!apiKey) return new Response(null, { status: 503 });
 	const adapter = progressAdapters[session.harness];
-	const providerRef = session.providerRef;
+	const runtime =
+		session.harness === "codex"
+			? await codexRuntimeForSession(
+					machinesForAgentSession(
+						createFreestyleWorkspaceMachines(apiKey),
+						session,
+					),
+					{
+						...session,
+						providerRef: session.providerRef,
+					},
+				)
+			: null;
+	const providerRef = runtime?.workspaceId ?? session.providerRef;
 	const paths = Object.fromEntries(
 		Object.entries(adapter.paths).map(([key, path]) => [
 			key,
-			session.taskPlacement === "shared"
-				? scopeSessionRuntimeText(path, session.id)
-				: path,
+			runtime && runtime.workspaceId !== session.providerRef
+				? scopeCodexRuntimeText(path, session.id)
+				: session.taskPlacement === "shared"
+					? scopeSessionRuntimeText(path, session.id)
+					: path,
 		]),
 	);
 	const abort = new AbortController();
