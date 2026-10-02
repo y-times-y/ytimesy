@@ -67,6 +67,7 @@ import {
 	desktopInspectorShouldStart,
 	type WorkspaceDesktop,
 } from "#/domain/workspace-desktop";
+import { captureAnalytics } from "#/features/analytics/client";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
 import { authClient } from "../auth/client";
 import { requestJson, retryTransientRead } from "../projects/api";
@@ -80,6 +81,7 @@ import {
 	deleteProjectAgentSession,
 	listProjectAgentSessions,
 	listProjectAgentTasks,
+	selectProjectChatBranch,
 	startProjectAgentSession,
 } from "../sessions/agent-session.fn";
 import {
@@ -168,6 +170,11 @@ export function WorkspaceHome({
 		enabled: Boolean(selectedProject?.id),
 	});
 	const startSession = useServerFn(startProjectAgentSession);
+	const selectChatBranch = useServerFn(selectProjectChatBranch);
+	const [pendingInitialBranch, setPendingInitialBranch] = useState<{
+		projectId: string;
+		branch: string;
+	} | null>(null);
 	const deleteSession = useServerFn(deleteProjectAgentSession);
 	const deleteProject = useServerFn(deleteOwnedProject);
 	const [projectsOpen, setProjectsOpen] = useState(false);
@@ -307,6 +314,57 @@ export function WorkspaceHome({
 	const activeProjectId = selectedProject?.id;
 	const activeSessionId =
 		selectedSessionId ?? session.agentSessionId ?? undefined;
+	useEffect(() => {
+		if (!pendingInitialBranch || !activeSessionId) return;
+		if (pendingInitialBranch.projectId !== activeProjectId) {
+			setPendingInitialBranch(null);
+			return;
+		}
+		let cancelled = false;
+		void selectChatBranch({
+			data: {
+				projectId: pendingInitialBranch.projectId,
+				sessionId: activeSessionId,
+				branch: pendingInitialBranch.branch,
+			},
+		})
+			.then(() => {
+				if (cancelled) return;
+				setSession((current) => {
+					if (current.agentSessionId !== activeSessionId) return current;
+					const next = {
+						...current,
+						selectedBranch: pendingInitialBranch.branch,
+					};
+					rememberSessionView(next);
+					return next;
+				});
+			})
+			.catch((cause) => {
+				if (cancelled) return;
+				setSession((current) => ({
+					...current,
+					connection: {
+						status: "failed",
+						provider: harnessId,
+						message: publicFailureMessage(cause),
+					},
+				}));
+			})
+			.finally(() => {
+				if (!cancelled) setPendingInitialBranch(null);
+			});
+		return () => {
+			cancelled = true;
+		};
+	}, [
+		pendingInitialBranch,
+		activeSessionId,
+		activeProjectId,
+		selectChatBranch,
+		rememberSessionView,
+		harnessId,
+	]);
 	const agentTasks = useQuery({
 		queryKey: ["agent-tasks", activeProjectId, activeSessionId],
 		queryFn: () =>
@@ -688,6 +746,13 @@ export function WorkspaceHome({
 	}, [backgroundReads, sidebarChats, rememberSessionView, chats.refetch]);
 
 	function openInspector(view: ToolsView) {
+		if (
+			view === "files" ||
+			view === "diff" ||
+			view === "terminal" ||
+			view === "desktop"
+		)
+			captureAnalytics("inspector_opened", { panel: view });
 		setInspectorView(view);
 		setInspectorOpen(true);
 	}
@@ -706,6 +771,7 @@ export function WorkspaceHome({
 			...current,
 			workspaceId: null,
 			agentSessionId: null,
+			selectedBranch: undefined,
 			items: [],
 			turnStatus: "idle",
 			sideItems: [],
@@ -720,6 +786,11 @@ export function WorkspaceHome({
 
 	function startNewChat(projectId?: string) {
 		const targetProjectId = projectId ?? selectedProject?.id;
+		if (
+			session.agentSessionId ||
+			pendingInitialBranch?.projectId !== targetProjectId
+		)
+			setPendingInitialBranch(null);
 		if (!targetProjectId) {
 			openAddProject();
 			return;
@@ -733,6 +804,7 @@ export function WorkspaceHome({
 		setSession((current) => ({
 			...current,
 			agentSessionId: null,
+			selectedBranch: undefined,
 			listedModelId: "",
 			models: [],
 			items: [],
@@ -755,6 +827,7 @@ export function WorkspaceHome({
 				setSession((current) => ({
 					...current,
 					agentSessionId: created.id,
+					selectedBranch: undefined,
 					listedModelId: created.listedModelId || current.listedModelId,
 					items: [],
 					turnStatus: "idle",
@@ -802,6 +875,7 @@ export function WorkspaceHome({
 			setSession((current) => ({
 				...current,
 				agentSessionId: nextId ?? null,
+				selectedBranch: undefined,
 				items: [],
 				turnStatus: "idle",
 				sideItems: [],
@@ -854,6 +928,7 @@ export function WorkspaceHome({
 				...current,
 				workspaceId: null,
 				agentSessionId: null,
+				selectedBranch: undefined,
 				items: [],
 				turnStatus: "idle",
 				sideItems: [],
@@ -886,6 +961,7 @@ export function WorkspaceHome({
 	}
 
 	function openChat(id: string) {
+		setPendingInitialBranch(null);
 		setComposerDraft(false);
 		setProjectPickerOpen(false);
 		selectedSessionIdRef.current = id;
@@ -913,6 +989,7 @@ export function WorkspaceHome({
 		setSession((current) => ({
 			...current,
 			agentSessionId: id,
+			selectedBranch: undefined,
 			listedModelId: listedModelId || current.listedModelId,
 			items: [],
 			turnStatus: listedTurn,
@@ -1033,14 +1110,38 @@ export function WorkspaceHome({
 							data-layout={followUpLayout ? "chat" : "empty"}
 						>
 							<SessionLauncher
+								childTasks={agentTasks.data ?? []}
 								key={session.agentSessionId ?? "new"}
-								session={session}
+								onBranchChange={(branch) => {
+									if (!session.agentSessionId && activeProjectId)
+										setPendingInitialBranch({
+											projectId: activeProjectId,
+											branch,
+										});
+									setSession((current) => {
+										const next = { ...current, selectedBranch: branch };
+										rememberSessionView(next);
+										return next;
+									});
+								}}
+								session={
+									pendingInitialBranch &&
+									pendingInitialBranch.projectId === activeProjectId
+										? {
+												...session,
+												selectedBranch: pendingInitialBranch.branch,
+											}
+										: session
+								}
 								competitions={competition.data ?? []}
 								allowComparison={Boolean(
 									activeSessionId &&
 										sidebarChats.some((chat) => chat.id === activeSessionId),
 								)}
-								busy={composerBusy}
+								busy={
+									composerBusy ||
+									Boolean(pendingInitialBranch && activeSessionId)
+								}
 								listedTitle={composerDraft ? undefined : listedTitle}
 								harnessId={harnessId}
 								onHarnessIdChange={(id) => {
@@ -1177,9 +1278,29 @@ export function WorkspaceHome({
 												return;
 											}
 											const pending = pendingSendRef.current;
+											if (pendingInitialBranch && scope.projectId) {
+												const sessionId =
+													scope.sessionId ?? current.agentSessionId;
+												if (!sessionId)
+													throw new Error(
+														"Wait for this chat to open before sending.",
+													);
+												await selectChatBranch({
+													data: {
+														projectId: scope.projectId,
+														sessionId,
+														branch: pendingInitialBranch.branch,
+													},
+												});
+												setPendingInitialBranch(null);
+											}
 											const next = await sendTask({
 												data: {
 													...scope,
+													sessionId:
+														scope.sessionId ??
+														current.agentSessionId ??
+														undefined,
 													text,
 													modelId: resolvedModel,
 													...(pending?.variant

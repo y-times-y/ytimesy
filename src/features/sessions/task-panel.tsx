@@ -6,7 +6,7 @@ import {
 	CornerDownRight,
 } from "lucide-react";
 import type { CSSProperties } from "react";
-import { SixDotSpinner } from "#/components/ui/six-dot-spinner";
+import { MatrixDotLoader } from "#/components/ui/matrix-dot-loader";
 import type { AgentTask, AgentTaskStatus } from "#/domain/agent-task";
 
 const statusLabels: Record<AgentTaskStatus, string> = {
@@ -74,7 +74,7 @@ export function TaskPanel({
 								) : task.status === "waiting" ? (
 									<Clock3 size={14} />
 								) : task.status === "working" ? (
-									<SixDotSpinner />
+									<MatrixDotLoader />
 								) : (
 									<Circle size={12} fill="none" />
 								)}

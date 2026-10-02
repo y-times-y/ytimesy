@@ -20,6 +20,7 @@ import {
 } from "#/domain/projects";
 import { sessionCloneBranch } from "#/domain/session-branch";
 import { toolsSnapshotIdFromEnv } from "#/domain/workspace-boot-snapshot";
+import { captureServerAnalytics } from "../adapters/analytics";
 import { database } from "../adapters/database";
 import { workspaceRuntimeFromEnv } from "../adapters/freestyle/workspace-runtime";
 import { authorizedRepository, repositoryBranchSha } from "../adapters/github";
@@ -180,6 +181,14 @@ export async function claimEnvironmentBuild(
 	);
 	if (!claimed.rows.length)
 		throw new Error("An environment build is already running.");
+	void captureServerAnalytics(
+		input.userId,
+		"environment_started",
+		{
+			repositories: input.repositories.length,
+		},
+		{ key: id, timestamp: new Date() },
+	);
 	return id;
 }
 
@@ -420,6 +429,14 @@ export async function activateEnvironmentBuild(
 	);
 	if (!result.rows.length)
 		throw new Error("Environment build is no longer active.");
+	void captureServerAnalytics(
+		input.userId,
+		"environment_finished",
+		{
+			outcome: "ready",
+		},
+		{ key: id, timestamp: new Date() },
+	);
 	await recordWorkspaceEvent(
 		input.userId,
 		input.workspaceId,
@@ -450,10 +467,19 @@ export async function finishEnvironmentBuild(
 		if (build?.status === "running") {
 			const message =
 				"Environment build did not complete. Check the repository setup commands and retry.";
-			await database().query(
-				"update environment_build set status='failed',error_message=$2,completed_at=now() where id=$1 and status='running'",
+			const failed = await database().query(
+				"update environment_build set status='failed',error_message=$2,completed_at=now() where id=$1 and status='running' returning id",
 				[id, message],
 			);
+			if (failed.rows.length)
+				void captureServerAnalytics(
+					input.userId,
+					"environment_finished",
+					{
+						outcome: "failed",
+					},
+					{ key: id, timestamp: new Date() },
+				);
 			const workspace = await workspaceById(input.workspaceId);
 			if (!workspace?.templateSnapshotId)
 				await saveWorkspaceStatus(input.workspaceId, "failed", message);

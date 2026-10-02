@@ -1,6 +1,6 @@
 .harness-picker {
-	width: min(400px, calc(100vw - 24px));
-	max-height: min(540px, var(--radix-popover-content-available-height), 80dvh);
+	width: min(360px, calc(100vw - 24px));
+	max-height: min(420px, var(--radix-popover-content-available-height), 70dvh);
 	padding: 0;
 	gap: 0;
 	overflow: hidden;
@@ -458,14 +458,6 @@
 .model-provider-rail .model-provider-subscription:hover,
 .model-provider-rail .model-provider-subscription[aria-pressed="true"] {
 	color: #78b7ff;
-}
-.model-provider-monogram {
-	display: inline-grid;
-	flex: 0 0 auto;
-	place-items: center;
-	font-size: 0.78em;
-	font-weight: 800;
-	letter-spacing: -0.08em;
 }
 .model-picker-catalog h3 {
 	margin: 0;

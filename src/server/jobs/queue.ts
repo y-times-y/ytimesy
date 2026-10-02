@@ -2,10 +2,12 @@ import { PgBoss } from "pg-boss";
 import { ENVIRONMENT_JOB_TIMEOUT_SECONDS } from "#/domain/environment-build-limits";
 import type { EnvironmentModel } from "#/domain/environment-model";
 import { database } from "../adapters/database";
+import type { PeerMessage } from "../services/agent-peer-messaging";
 
 export const PREPARE_WORKSPACE_QUEUE = "prepare-workspace";
 export const REFRESH_WORKSPACE_QUEUE = "refresh-workspace-snapshot";
 export const AGENT_TASK_EVENT_QUEUE = "agent-task-event";
+export const AGENT_PEER_MESSAGE_QUEUE = "agent-peer-message";
 export const START_COMPETITION_QUEUE = "start-agent-competition";
 export const SESSION_CHECKPOINT_QUEUE = "session-checkpoint";
 
@@ -74,6 +76,13 @@ async function startJobQueue(role: QueueRole): Promise<PgBoss> {
 			retryDelay: 15,
 			expireInSeconds: 30 * 60,
 		});
+		await boss.createQueue(AGENT_PEER_MESSAGE_QUEUE, {
+			policy: "singleton",
+			retryLimit: 5760,
+			retryDelay: 15,
+			retryBackoff: false,
+			expireInSeconds: 30 * 60,
+		});
 		await boss.createQueue(START_COMPETITION_QUEUE, {
 			policy: "singleton",
 			retryLimit: 2,
@@ -101,6 +110,16 @@ export async function enqueueAgentTaskEvent(eventId?: string) {
 		{ eventId: eventId ?? null },
 		eventId ? { singletonKey: eventId } : undefined,
 	);
+}
+
+export async function enqueuePeerMessage(
+	message: PeerMessage,
+	requestKey: string,
+) {
+	const queue = await jobQueue();
+	return queue.send(AGENT_PEER_MESSAGE_QUEUE, message, {
+		singletonKey: requestKey,
+	});
 }
 
 export async function enqueueCompetition(rootSessionId: string) {

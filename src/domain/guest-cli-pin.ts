@@ -7,7 +7,7 @@ import { posixShellQuoted } from "./posix-command";
  */
 export const PINNED_CLAUDE_CLI_VERSION = "2.1.283";
 export const PINNED_OPENCODE_CLI_VERSION = "1.18.18";
-export const PINNED_CODEX_CLI_VERSION = "0.157.1";
+export const PINNED_CODEX_CLI_VERSION = "0.159.2";
 
 export const GUEST_CLI_PIN_ENV_PATH = "/tmp/ytimesy-guest-cli-pin.env";
 

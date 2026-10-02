@@ -1,9 +1,4 @@
-import {
-	type Project,
-	projectFolderName,
-	type RepositoryChoice,
-} from "./projects";
-import { sessionBranchName } from "./session-branch";
+import type { Project, RepositoryChoice } from "./projects";
 
 export type AddProjectPhase = "loading" | "connect" | "choose";
 
@@ -31,12 +26,12 @@ export function addProjectCopy(phase: AddProjectPhase) {
 }
 
 export function addedProjectBranch(
-	repository: Pick<RepositoryChoice, "fullName" | "repositoryId">,
+	repository: Pick<
+		RepositoryChoice,
+		"fullName" | "repositoryId" | "defaultBranch"
+	>,
 ) {
-	return sessionBranchName({
-		title: projectFolderName(repository.fullName),
-		id: String(repository.repositoryId),
-	});
+	return repository.defaultBranch;
 }
 
 export function filterRepositories(

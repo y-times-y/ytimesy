@@ -6,7 +6,7 @@ import {
 	Monitor,
 	Terminal,
 } from "lucide-react";
-import { SixDotSpinner } from "#/components/ui/six-dot-spinner";
+import { MatrixDotLoader } from "#/components/ui/matrix-dot-loader";
 import type { AgentCompetition } from "#/domain/agent-competition";
 import type { AgentTask } from "#/domain/agent-task";
 import { fileChangeTotals } from "#/domain/diff-preview";
@@ -109,7 +109,7 @@ export function WorkspaceOverview({
 					{competition.status === "working" ||
 					competition.status === "queued" ||
 					competition.status === "judging" ? (
-						<SixDotSpinner />
+						<MatrixDotLoader />
 					) : null}
 					{competition.errorMessage ? (
 						<small>{competition.errorMessage}</small>

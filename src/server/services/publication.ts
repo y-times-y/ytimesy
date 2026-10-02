@@ -12,6 +12,7 @@ import {
 	publicationWorkspaceBlockedReason,
 	workspacePublicationBranch,
 } from "../../domain/publication";
+import { captureServerAnalytics } from "../adapters/analytics";
 import { workspaceRuntimeFromEnv } from "../adapters/freestyle/workspace-runtime";
 import {
 	authorizedRepository,
@@ -71,7 +72,11 @@ export function publishProject(
 				throw new Response("Repository is not part of this project.", {
 					status: 403,
 				});
-			return { ...owned, ...selected };
+			return {
+				...owned,
+				...selected,
+				isPrimaryRepository: selected.fullName === owned.fullName,
+			};
 		});
 		const checkout = projectCheckoutFromFullName({
 			fullName: project.fullName,
@@ -117,14 +122,20 @@ export function publishProject(
 			email: input.authorEmail,
 		});
 		const coAuthor = publicationCoAuthor({ author, bot });
-		const base = input.baseBranch?.trim() || repository.defaultBranch;
-		const head = input.sessionId
-			? workspacePublicationBranch(input.sessionId)
-			: publicationHeadBranch({
-					selectedBranch: project.branch,
-					defaultBranch: repository.defaultBranch,
-					workspaceId: workspace.id,
-				});
+		const chatBranch = project.isPrimaryRepository ? peeked.session : null;
+		const base =
+			input.baseBranch?.trim() ||
+			chatBranch?.baseBranch ||
+			repository.defaultBranch;
+		const head =
+			chatBranch?.workingBranch ||
+			(input.sessionId
+				? workspacePublicationBranch(input.sessionId)
+				: publicationHeadBranch({
+						selectedBranch: project.branch,
+						defaultBranch: repository.defaultBranch,
+						workspaceId: workspace.id,
+					}));
 		yield* Effect.tryPromise(() =>
 			runtime.recover(providerRef).catch((error) => {
 				throw hostFailure(error, "Workspace is not available.");
@@ -202,6 +213,15 @@ export function publishProject(
 				head,
 				base,
 			}),
+		);
+		void captureServerAnalytics(
+			userId,
+			"pull_request_created",
+			{},
+			{
+				key: pullRequest.url,
+				timestamp: new Date(),
+			},
 		);
 		return { ...pullRequest, head, base };
 	});

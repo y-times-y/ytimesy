@@ -1,0 +1,78 @@
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+
+const sdk = vi.hoisted(() => ({
+	captureImmediate: vi.fn().mockResolvedValue(undefined),
+	init: vi.fn(),
+}));
+vi.mock("posthog-node", () => ({
+	PostHog: class {
+		constructor(...args: unknown[]) {
+			sdk.init(...args);
+		}
+		captureImmediate = sdk.captureImmediate;
+	},
+}));
+beforeEach(() => {
+	vi.resetModules();
+	vi.clearAllMocks();
+	vi.stubEnv("POSTHOG_PROJECT_TOKEN", "phc_test");
+});
+afterEach(() => vi.unstubAllEnvs());
+
+it("captures allowlisted metadata with stable identity, never private input", async () => {
+	const { captureServerAnalytics } = await import("./analytics");
+	const identity = { key: "private/repository", timestamp: new Date(1234) };
+	const properties = {
+		runtime: "codex" as const,
+		role: "builder" as const,
+		prompt: "PRIVATE",
+		api_key: "PRIVATE",
+	};
+	await captureServerAnalytics("user-id", "turn_started", properties, identity);
+	await captureServerAnalytics("user-id", "turn_started", properties, identity);
+	const sent = sdk.captureImmediate.mock.calls[0][0];
+	expect(sent).toMatchObject({
+		distinctId: "user-id",
+		event: "turn_started",
+		timestamp: identity.timestamp,
+	});
+	expect(sent.uuid).toBe(sdk.captureImmediate.mock.calls[1][0].uuid);
+	expect(sent.uuid).toMatch(
+		/^[a-f0-9]{8}-[a-f0-9]{4}-5[a-f0-9]{3}-a[a-f0-9]{3}-[a-f0-9]{12}$/,
+	);
+	expect(JSON.stringify(sent)).not.toContain("PRIVATE");
+	expect(JSON.stringify(sent)).not.toContain(identity.key);
+	expect(sdk.init.mock.calls[0][1]).toMatchObject({
+		disableGeoip: true,
+		requestTimeout: 2000,
+	});
+});
+it("is disabled when unconfigured and rejects malformed metadata", async () => {
+	const { captureServerAnalytics } = await import("./analytics");
+	await captureServerAnalytics(
+		"user",
+		"environment_started",
+		{ repositories: 0 },
+		{ key: "id", timestamp: new Date() },
+	);
+	vi.stubEnv("POSTHOG_PROJECT_TOKEN", "");
+	await captureServerAnalytics(
+		"user",
+		"pull_request_created",
+		{},
+		{ key: "id", timestamp: new Date() },
+	);
+	expect(sdk.captureImmediate).not.toHaveBeenCalled();
+});
+it("does not propagate ingestion failures", async () => {
+	sdk.captureImmediate.mockRejectedValueOnce(new Error("offline"));
+	const { captureServerAnalytics } = await import("./analytics");
+	await expect(
+		captureServerAnalytics(
+			"user",
+			"pull_request_created",
+			{},
+			{ key: "id", timestamp: new Date() },
+		),
+	).resolves.toBeUndefined();
+});

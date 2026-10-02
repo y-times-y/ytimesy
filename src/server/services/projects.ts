@@ -12,9 +12,9 @@ import {
 import {
 	isGeneratedSessionBranch,
 	sessionBranchChangeRestartsWorkspace,
-	sessionWorkingBranch,
 } from "../../domain/session-branch";
 import { listProjectProviderRefs } from "../adapters/agent-sessions";
+import { captureServerAnalytics } from "../adapters/analytics";
 import {
 	authorizedRepository,
 	createAuthorizedRepository,
@@ -72,6 +72,12 @@ export function connectProjectGroup(
 		const project = yield* Effect.tryPromise(() =>
 			saveProjectGroup(userId, selection.name, repositories),
 		);
+		void captureServerAnalytics(
+			userId,
+			"project_connected",
+			{ repositories: repositories.length },
+			{ key: project.id, timestamp: new Date() },
+		);
 		yield* enqueueProjectWorkspace(userId, project.id);
 		return project;
 	});
@@ -96,12 +102,9 @@ export function connectProject(
 				selection.repositoryId,
 			),
 		);
-		const storedBranch = sessionWorkingBranch({
-			selectedBranch: selection.branch,
-			defaultBranch: repository.defaultBranch,
-			title: projectFolderName(repository.fullName),
-			id: String(repository.repositoryId),
-		});
+		const storedBranch = isGeneratedSessionBranch(selection.branch)
+			? repository.defaultBranch
+			: selection.branch;
 		if (!isGeneratedSessionBranch(storedBranch)) {
 			const [owner, repo] = repository.fullName.split("/");
 			yield* Effect.tryPromise(() =>
@@ -137,6 +140,12 @@ export function connectProject(
 		const project = yield* Effect.tryPromise(() =>
 			saveProject(userId, repository, storedBranch),
 		);
+		void captureServerAnalytics(
+			userId,
+			"project_connected",
+			{ repositories: 1 },
+			{ key: project.id, timestamp: new Date() },
+		);
 		const workspaceToRestart = restartWorkspaceId;
 		if (workspaceToRestart)
 			yield* Effect.tryPromise(() =>
@@ -159,6 +168,12 @@ export function createScratchProject(
 		);
 		const project = yield* Effect.tryPromise(() =>
 			saveProject(userId, repository, addedProjectBranch(repository)),
+		);
+		void captureServerAnalytics(
+			userId,
+			"project_connected",
+			{ repositories: 1 },
+			{ key: project.id, timestamp: new Date() },
 		);
 		yield* enqueue(userId, project.id);
 		return project;

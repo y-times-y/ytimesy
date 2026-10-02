@@ -5,6 +5,7 @@ import { failureMessage } from "#/domain/failure-message";
 import {
 	ensurePinnedCodexCommand,
 	guestCliDisableUpdateExports,
+	PINNED_CODEX_CLI_VERSION,
 } from "#/domain/guest-cli-pin";
 import type { WorkspaceId } from "#/domain/ids";
 import { ensureGuestCliPin } from "#/server/adapters/guest-cli-pin";
@@ -354,15 +355,21 @@ export function ensureCurrentLoginDaemon(
 		const existing = yield* Effect.tryPromise(() =>
 			machines.readTextFile(workspaceId, LOGIN_DAEMON_HASH_PATH),
 		).pipe(Effect.catchAll(() => Effect.succeed("")));
-		if ((existing ?? "").trim() === expected) {
-			const running = yield* Effect.tryPromise(() =>
-				machines.exec(
-					workspaceId,
-					`test -f /tmp/ytimesy-codex-login.pid && kill -0 "$(cat /tmp/ytimesy-codex-login.pid)"`,
-					15_000,
-				),
-			);
-			if (running.exitCode === 0) return;
+		const running = yield* Effect.tryPromise(() =>
+			machines.exec(
+				workspaceId,
+				`test -f /tmp/ytimesy-codex-login.pid && kill -0 "$(cat /tmp/ytimesy-codex-login.pid)"`,
+				15_000,
+			),
+		);
+		if (running.exitCode === 0) {
+			if ((existing ?? "").trim() === expected) return;
+			const status = yield* readLoginStatus(machines, workspaceId);
+			if (
+				status.stage === "authenticated" &&
+				(status.turnStatus === "running" || status.sideTurnStatus === "running")
+			)
+				return;
 		}
 		const resumed = yield* resumeCodexSession(machines, workspaceId, {
 			skipInitialTurn: true,
@@ -386,7 +393,10 @@ export function ensureCurrentLoginDaemon(
 }
 
 function loginDaemonSourceHash(): string {
-	return createHash("sha256").update(LOGIN_DAEMON_SOURCE).digest("hex");
+	return createHash("sha256")
+		.update(LOGIN_DAEMON_SOURCE)
+		.update(PINNED_CODEX_CLI_VERSION)
+		.digest("hex");
 }
 
 function persistLoginDaemonHash(

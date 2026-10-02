@@ -4,6 +4,7 @@ import {
 	matchesModelSearch,
 	openRouterModelLabel,
 	parseBrowseModels,
+	recentModelGenerations,
 	visibleModelChoices,
 } from "./browse-models";
 import { availableConnectionModels } from "./model-connection";
@@ -16,7 +17,7 @@ const row = (id: string, created = now) => ({
 	supported_parameters: ["tools"],
 	architecture: { output_modalities: ["text"] },
 });
-it("puts recent models first and excludes old models", () => {
+it("puts recent models first without aging out a retained predecessor", () => {
 	const models = parseBrowseModels(
 		{
 			data: [
@@ -48,6 +49,7 @@ it("puts recent models first and excludes old models", () => {
 		"tencent/hy3",
 		"google/gemini-3.7-flash",
 		"openai/model",
+		"google/gemini-3.6-flash",
 	]);
 });
 it("offers only the selected Google Flash models", () => {
@@ -73,20 +75,52 @@ it("searches model names, provider IDs, and provider names", () => {
 	expect(matchesModelSearch(model, "Google")).toBe(true);
 	expect(matchesModelSearch(model, "openai")).toBe(false);
 });
-it("shows a focused default list while keeping all coding models searchable", () => {
+it("does not hide eligible models behind an arbitrary default-list cap", () => {
 	const models = Array.from({ length: 9 }, (_, index) => ({
 		label: `Model ${index + 1}`,
 		author: "openai",
 	}));
-	expect(visibleModelChoices(models, "").map((model) => model.label)).toEqual([
-		"Model 1",
-		"Model 2",
-		"Model 3",
-		"Model 4",
-		"Model 5",
-	]);
+	expect(visibleModelChoices(models, "")).toEqual(models);
 	expect(visibleModelChoices(models, "Model 9")).toEqual([models[8]]);
 	expect(visibleModelChoices(models, "OpenAI")).toHaveLength(9);
+});
+it("retains the latest three generations and all their variants", () => {
+	const ids = [
+		"openai/gpt-6.1-sol-pro",
+		"openai/gpt-6.1-sol",
+		"openai/gpt-6-luna-pro",
+		"openai/gpt-6-luna",
+		"openai/gpt-6-sol",
+		"openai/gpt-6-astra",
+		"openai/gpt-5.6-sol",
+		"openai/gpt-5.5",
+	];
+	expect(
+		recentModelGenerations(ids.map((id) => ({ id }))).map((m) => m.id),
+	).toEqual(ids.slice(0, -1));
+});
+it("keeps Claude tiers independent, handles older version ordering, and preserves unknown IDs", () => {
+	const ids = [
+		"anthropic/claude-opus-5.5",
+		"anthropic/claude-opus-5",
+		"anthropic/claude-opus-4.6",
+		"anthropic/claude-opus-4.5",
+		"anthropic/claude-sonnet-4.5",
+		"anthropic/claude-3-7-sonnet",
+		"anthropic/claude-3.5-sonnet",
+		"anthropic/claude-3-sonnet",
+		"provider/custom",
+	];
+	expect(
+		recentModelGenerations(ids.map((id) => ({ id }))).map((m) => m.id),
+	).toEqual(
+		ids.filter(
+			(id) =>
+				!["anthropic/claude-opus-4.5", "anthropic/claude-3-sonnet"].includes(
+					id,
+				),
+		),
+	);
 });
 it("ignores malformed and non-tool entries", () => {
 	expect(

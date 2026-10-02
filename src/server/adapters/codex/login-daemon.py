@@ -23,6 +23,7 @@ TASK_RESULT_PATH = runtime_path("/tmp/ytimesy-task-result.json")
 SIDE_REQUEST_PATH = runtime_path("/tmp/ytimesy-side-request.json")
 SIDE_RESULT_PATH = runtime_path("/tmp/ytimesy-side-result.json")
 STOP_REQUEST_PATH = runtime_path("/tmp/ytimesy-stop-request.json")
+PEER_INBOX_PATH = runtime_path("/tmp/ytimesy-peer-inbox")
 PROJECT_CWD_PATH = runtime_path("/tmp/ytimesy-project-cwd")
 DISPLAY_PATH = runtime_path("/tmp/ytimesy-display")
 DEVELOPER_INSTRUCTIONS_PATH = runtime_path("/tmp/ytimesy-developer-instructions.txt")
@@ -915,6 +916,38 @@ def terminate_turn_terminals(proc, thread_id, items):
             return
 
 
+def steer_peer_messages(proc, thread_id, turn_id, in_flight):
+    if not turn_id or in_flight or not os.path.isdir(PEER_INBOX_PATH):
+        return
+    for name in sorted(os.listdir(PEER_INBOX_PATH)):
+        if not name.endswith(".json"):
+            continue
+        path = os.path.join(PEER_INBOX_PATH, name)
+        if os.path.exists(path + ".accepted"):
+            continue
+        message = read_json_file(path)
+        if not isinstance(message, dict) or not isinstance(message.get("text"), str):
+            continue
+        request_id = next_rpc_id()
+        send(proc, {"method": "turn/steer", "id": request_id, "params": {
+            "threadId": thread_id,
+            "expectedTurnId": turn_id,
+            "input": [{"type": "text", "text": message["text"]}],
+        }})
+        in_flight[request_id] = path
+
+
+def accept_peer_steer_reply(message, turn_id, in_flight):
+    path = in_flight.pop(message.get("id"), None)
+    if path is None:
+        return False
+    if (message.get("result") or {}).get("turnId") == turn_id and "error" not in message:
+        with open(path + ".accepted", "w", encoding="utf-8") as handle:
+            handle.write("accepted\n")
+    # A finished-turn race remains queued; never acknowledge a rejected steer.
+    return True
+
+
 def run_turn(proc, thread_id, model_id, text, on_items=None, effort=None, service_tier=None, read_only=False):
     apply_display_env()
     remote_error = check_remote_executor(proc)
@@ -974,9 +1007,12 @@ def run_turn(proc, thread_id, model_id, text, on_items=None, effort=None, servic
     executor_error = None
     stop_requested = False
     interrupt_sent = False
+    peer_requests = {}
     # A quiet socket is not a completed task. Keep reading until the provider
     # finishes or exits; short reads keep user cancellation responsive.
     while turn_obj is None:
+        if not stop_requested:
+            steer_peer_messages(proc, thread_id, turn_id, peer_requests)
         executor_error = health.check(proc)
         if executor_error:
             break
@@ -996,6 +1032,8 @@ def run_turn(proc, thread_id, model_id, text, on_items=None, effort=None, servic
         if executor_error:
             break
         if health_reply:
+            continue
+        if accept_peer_steer_reply(message, turn_id, peer_requests):
             continue
         if message.get("id") == request_id:
             if "error" in message:

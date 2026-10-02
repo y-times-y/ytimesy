@@ -1,4 +1,5 @@
 import { betterAuth } from "better-auth";
+import { captureServerAnalytics } from "../adapters/analytics";
 import { database } from "../adapters/database";
 import { persistAuthEmail } from "../adapters/email";
 import { serverConfig } from "../config";
@@ -71,6 +72,20 @@ export function authOptions() {
 				: {}),
 		},
 		user: { modelName: "auth_user" },
+		databaseHooks: {
+			user: {
+				create: {
+					after: async (user: { id: string; createdAt: Date }) => {
+						void captureServerAnalytics(
+							user.id,
+							"account_created",
+							{},
+							{ key: user.id, timestamp: user.createdAt },
+						);
+					},
+				},
+			},
+		},
 		session: { modelName: "auth_session", expiresIn: 60 * 60 * 24 * 7 },
 		account: {
 			modelName: "auth_account",

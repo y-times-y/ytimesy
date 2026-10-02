@@ -126,6 +126,28 @@ it("streams text and supplied reasoning, executes a tool, then continues to the 
 	});
 	expect(execute).toHaveBeenCalledOnce();
 	expect(model.doStreamCalls).toHaveLength(2);
+	expect(events.filter((event) => event.type === "usage")).toEqual([
+		{
+			type: "usage",
+			usage: {
+				inputTokens: 3,
+				outputTokens: 2,
+				uncachedInputTokens: 3,
+				cacheReadTokens: 0,
+				cacheWriteTokens: 0,
+			},
+		},
+		{
+			type: "usage",
+			usage: {
+				inputTokens: 6,
+				outputTokens: 4,
+				uncachedInputTokens: 6,
+				cacheReadTokens: 0,
+				cacheWriteTokens: 0,
+			},
+		},
+	]);
 	expect(events).toContainEqual({ type: "text-delta", id: "a", text: "Done" });
 	expect(events).toContainEqual({
 		type: "reasoning-delta",
@@ -142,7 +164,57 @@ it("streams text and supplied reasoning, executes a tool, then continues to the 
 	expect(mocks.close).toHaveBeenCalledOnce();
 });
 
+it("retains safe-point peer input across later model steps without restarting the run", async () => {
+	const toolStep = (id: string) =>
+		stream([
+			{ type: "stream-start", warnings: [] },
+			{ type: "tool-call", toolCallId: id, toolName: "inspect", input: "{}" },
+			{ ...finish, finishReason: { unified: "tool-calls", raw: "tool_calls" } },
+		]);
+	const model = new MockLanguageModelV4({
+		doStream: [toolStep("one"), toolStep("two"), stream([finish])],
+	});
+	mocks.model.mockReturnValue(model);
+	let step = 0;
+	const history = await runApiAgent({
+		userId: "alice",
+		connectionId: "connection",
+		modelId: "model",
+		messages: [{ role: "user", content: "Original task" }],
+		instructions: "Test",
+		tools: {
+			inspect: tool({
+				inputSchema: z.object({}),
+				execute: async () => "checked",
+			}),
+		},
+		signal: new AbortController().signal,
+		onEvent: async () => {},
+		onStep: async () => {},
+		prepareMessages: async (messages) =>
+			++step === 2
+				? [...messages, { role: "user", content: "Peer owns schema.ts" }]
+				: messages,
+	});
+	expect(model.doStreamCalls).toHaveLength(3);
+	expect(JSON.stringify(model.doStreamCalls[0])).not.toContain(
+		"Peer owns schema.ts",
+	);
+	expect(JSON.stringify(model.doStreamCalls[1])).toContain(
+		"Peer owns schema.ts",
+	);
+	expect(JSON.stringify(model.doStreamCalls[2])).toContain(
+		"Peer owns schema.ts",
+	);
+	expect(
+		history.filter(
+			(item) => item.role === "user" && item.content === "Peer owns schema.ts",
+		),
+	).toHaveLength(1);
+});
+
 it("summarizes older history before a model step and checkpoints the compacted messages", async () => {
+	const events: ApiAgentEvent[] = [];
 	const model = new MockLanguageModelV4({
 		doGenerate: async () => ({
 			content: [
@@ -176,7 +248,9 @@ it("summarizes older history before a model step and checkpoints the compacted m
 		instructions: "Test instructions",
 		tools: {},
 		signal: new AbortController().signal,
-		onEvent: async () => {},
+		onEvent: async (event) => {
+			events.push(event);
+		},
 		onStep: async (messages) => {
 			checkpoints.push(messages);
 		},
@@ -189,6 +263,10 @@ it("summarizes older history before a model step and checkpoints the compacted m
 	expect(JSON.stringify(checkpoints[0])).toContain(
 		"Earlier task was inspected",
 	);
+	expect(events.filter((event) => event.type === "usage")).toMatchObject([
+		{ usage: { inputTokens: 3, outputTokens: 2 } },
+		{ usage: { inputTokens: 6, outputTokens: 4 } },
+	]);
 });
 
 it("runs a listed model without a separate verification request", async () => {

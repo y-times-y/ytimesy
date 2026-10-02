@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { ArrowUp, Square, X } from "lucide-react";
 import { type KeyboardEvent, useEffect, useMemo, useState } from "react";
-import { SixDotSpinner } from "#/components/ui/six-dot-spinner";
+import { MatrixDotLoader } from "#/components/ui/matrix-dot-loader";
 import {
 	type AgentCompetition,
 	competitionModeAvailable,
@@ -13,6 +13,7 @@ import {
 	type AgentProviderId,
 	agentProviderById,
 } from "#/domain/agent-provider";
+import type { AgentTaskActivity } from "#/domain/child-task-activity";
 import {
 	claudeSessionRemembersSignIn,
 	rememberedClaudeModels,
@@ -44,6 +45,7 @@ import {
 	parseSlashDraft,
 	type SlashCommand,
 } from "#/domain/slash-command";
+import { captureAnalytics } from "#/features/analytics/client";
 import { authClient } from "#/features/auth/client";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
 import { ContextUsage } from "./context-usage";
@@ -74,10 +76,12 @@ export function SessionLauncher({
 	onOpenFile,
 	onOpenCandidate,
 	competitions = [],
+	childTasks = [],
 	allowComparison = true,
 	projects,
 	selectedProject,
 	onSelectProject,
+	onBranchChange,
 	listedTitle,
 	projectPickerOpen,
 	onProjectPickerOpenChange,
@@ -103,10 +107,12 @@ export function SessionLauncher({
 	onOpenFile?: (path: string) => void;
 	onOpenCandidate?: (sessionId: string) => void;
 	competitions?: readonly AgentCompetition[];
+	childTasks?: readonly AgentTaskActivity[];
 	allowComparison?: boolean;
 	projects: Project[];
 	selectedProject?: Project;
 	onSelectProject: (id: string) => void;
+	onBranchChange?: (branch: string) => void;
 	listedTitle?: string;
 	projectPickerOpen?: boolean;
 	onProjectPickerOpenChange?: (open: boolean) => void;
@@ -185,6 +191,10 @@ export function SessionLauncher({
 		],
 	);
 	const [attachments, setAttachments] = useState<File[]>([]);
+	const [branchDraft, setBranchDraft] = useState<string | null>(null);
+	useEffect(() => {
+		setBranchDraft(session.selectedBranch ?? null);
+	}, [session.selectedBranch]);
 	const [draft, setDraft] = useState("");
 	const [modelId, setModelId] = useState(session.listedModelId);
 	const [reasoningId, setReasoningId] = useState("");
@@ -329,6 +339,10 @@ export function SessionLauncher({
 
 	function sendText(text: string) {
 		if (!composerCanSend(text, false)) return;
+		captureAnalytics("prompt_submitted", {
+			runtime: harnessId,
+			attempts: leaderCount,
+		});
 		const userMessageId = crypto.randomUUID();
 		setOptimisticItems((current) => [
 			...current,
@@ -429,6 +443,7 @@ export function SessionLauncher({
 				Session
 			</h1>
 			<SessionTimeline
+				tasks={childTasks}
 				items={items}
 				turnStatus={turnStatus}
 				fill={followUpLayout}
@@ -443,6 +458,14 @@ export function SessionLauncher({
 						selectedProject={selectedProject}
 						onSelectProject={onSelectProject}
 						projectLocked={followUpLayout}
+						sessionId={session.agentSessionId}
+						selectedBranch={branchDraft ?? session.selectedBranch}
+						onBranchChange={(branch) => {
+							setBranchDraft(branch);
+							onBranchChange?.(branch);
+						}}
+						branchLocked={busy || turnStatus === "running"}
+						hasConversation={items.some((item) => item.kind === "userMessage")}
 						repairModel={
 							selectedModel && (harnessId === "api" || harnessId === "codex")
 								? {
@@ -593,7 +616,7 @@ export function SessionLauncher({
 									onClick={onStop}
 									title="Stop independent agents"
 								>
-									<SixDotSpinner />
+									<MatrixDotLoader />
 								</button>
 							) : turnStatus === "running" ? (
 								<button

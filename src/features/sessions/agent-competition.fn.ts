@@ -20,6 +20,7 @@ import { enqueueCompetition } from "#/server/jobs/queue";
 import { stopAgentCompetitionRun } from "#/server/services/agent-competition-run";
 import { apiModelCatalog } from "#/server/services/api-workspace-session";
 import { WorkspaceMachineService } from "#/server/services/capabilities";
+import { commitChatBranchForSubmission } from "#/server/services/session-branch";
 
 export const getAgentCompetitions = createServerFn({ method: "GET" })
 	.validator((data: { rootSessionId?: string } | undefined) => ({
@@ -81,6 +82,12 @@ export const startAgentCompetition = createServerFn({ method: "POST" })
 			data.attemptModelIds.some((id) => !availableIds.has(id))
 		)
 			throw new Error("Choose currently available models first.");
+		await commitChatBranchForSubmission({
+			userId: user.id,
+			projectId: data.projectId,
+			sessionId: root.id,
+			text: data.text,
+		});
 		const group = await createAgentCompetition({
 			userId: user.id,
 			projectId: data.projectId,

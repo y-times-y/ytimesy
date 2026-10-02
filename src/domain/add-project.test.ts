@@ -77,13 +77,14 @@ describe("add project", () => {
 		);
 	});
 
-	it("starts a Cursor-style ytimesy/slug-id branch when a repo is added", () => {
+	it("keeps the repository default until a chat submits its first task", () => {
 		expect(
 			addedProjectBranch({
 				fullName: "y-times-y/ytimesy",
 				repositoryId: 11,
+				defaultBranch: "main",
 			}),
-		).toBe("ytimesy/ytimesy-000b");
+		).toBe("main");
 	});
 
 	it("filters repositories by name and keeps a stable choice value", () => {

@@ -11,6 +11,16 @@ import {
 import type { WorkspaceMachines } from "./workspace-machines";
 
 describe("session workspace machines", () => {
+	it("isolates peer mailboxes and Claude hooks on shared machines", () => {
+		const text =
+			"/tmp/ytimesy-peer-inbox/job.json /tmp/ytimesy-peer-hook.py /tmp/ytimesy-peer-hooks.json";
+		expect(scopeSessionRuntimeText(text, "a")).not.toBe(
+			scopeSessionRuntimeText(text, "b"),
+		);
+		expect(scopeSessionRuntimeText(text, "a")).toContain(
+			"/tmp/ytimesy-sessions/a/ytimesy-peer-inbox/job.json",
+		);
+	});
 	it("scopes conversation state but leaves shared checkout paths alone", () => {
 		const sessionId = "task-123";
 		expect(

@@ -20,7 +20,47 @@ export const AUTHOR_LABELS: Record<string, string> = {
 	tencent: "Tencent",
 };
 const MAX_MODEL_AGE_SECONDS = 365 * 24 * 60 * 60;
-const DEFAULT_MODEL_CHOICES = 5;
+const RETAINED_MODEL_GENERATIONS = 3;
+
+function modelGeneration(id: string) {
+	const canonical = id.replace(/:.*$/, "");
+	const version = canonical.match(/\d+(?:[.-]\d{1,2}(?!\d))?/);
+	if (!version || Number(version[0].split(/[.-]/)[0]) >= 2000) return null;
+	const family = canonical.slice(0, version.index).replace(/[-.]$/, "");
+	const claudeTier = canonical.match(
+		/(?:^|[-/])(opus|sonnet|haiku)(?:-|$)/,
+	)?.[1];
+	return {
+		family: claudeTier ? `anthropic/claude-${claudeTier}` : family,
+		version: version[0].replace("-", "."),
+	};
+}
+
+/** Keep release generations, not three individual variants or recently republished aliases. */
+export function recentModelGenerations<T extends { id: string }>(
+	models: readonly T[],
+): T[] {
+	const generations = new Map<string, Set<string>>();
+	for (const model of models) {
+		const release = modelGeneration(model.id);
+		if (!release) continue;
+		const versions = generations.get(release.family) ?? new Set<string>();
+		versions.add(release.version);
+		generations.set(release.family, versions);
+	}
+	const retained = new Map(
+		[...generations].map(([family, versions]) => [
+			family,
+			[...versions]
+				.sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))
+				.slice(0, RETAINED_MODEL_GENERATIONS),
+		]),
+	);
+	return models.filter((model) => {
+		const release = modelGeneration(model.id);
+		return !release || retained.get(release.family)?.includes(release.version);
+	});
+}
 const OFFERED_GOOGLE_MODELS: readonly string[] = [
 	"gemini-3.8-flash",
 	"gemini-3.7-flash",
@@ -52,7 +92,7 @@ export function visibleModelChoices<
 	T extends Pick<BrowseModel, "label" | "author">,
 >(models: readonly T[], search: string): T[] {
 	const matching = models.filter((model) => matchesModelSearch(model, search));
-	return search.trim() ? matching : matching.slice(0, DEFAULT_MODEL_CHOICES);
+	return matching;
 }
 export const DIRECT_MODEL_ENDPOINTS: Record<string, string> = {
 	meta: "https://api.meta.ai/v1",
@@ -108,7 +148,11 @@ export function parseBrowseModels(
 	for (const row of rows) {
 		if (!isOpenRouterCodingModel(row)) continue;
 		const created = typeof row.created === "number" ? row.created : 0;
-		if (created < nowSeconds - MAX_MODEL_AGE_SECONDS) continue;
+		if (
+			created < nowSeconds - MAX_MODEL_AGE_SECONDS &&
+			!modelGeneration(row.id)
+		)
+			continue;
 		const author = row.id.split("/")[0];
 		if (!Object.hasOwn(AUTHOR_LABELS, author)) continue;
 		if (/^tencent\/hy4(?:[-:]|$)/i.test(row.id)) continue;
@@ -120,5 +164,7 @@ export function parseBrowseModels(
 			created,
 		});
 	}
-	return [...models.values()].sort((a, b) => b.created - a.created);
+	return recentModelGenerations([...models.values()]).sort(
+		(a, b) => b.created - a.created,
+	);
 }

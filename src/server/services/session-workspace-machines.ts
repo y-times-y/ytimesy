@@ -2,6 +2,9 @@ import type { AgentSessionRecord } from "#/server/adapters/agent-sessions";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 const SESSION_LOCAL_PATHS = [
+	"/tmp/ytimesy-peer-inbox",
+	"/tmp/ytimesy-peer-hook.py",
+	"/tmp/ytimesy-peer-hooks.json",
 	"/tmp/ytimesy-api-progress.json",
 	"/tmp/ytimesy-agent-task-tool-request.json",
 	"/tmp/ytimesy-agent-task-tool-response.json",

@@ -1,5 +1,29 @@
 export const agentTaskToolDefinitions = [
 	{
+		name: "list_peers",
+		description:
+			"Discover agents in your coordination group, including siblings and their bounded objectives. Competing implementations are isolated. No transcripts are broadcast.",
+		inputSchema: {
+			type: "object",
+			properties: {},
+			additionalProperties: false,
+		},
+	},
+	{
+		name: "send_peer_message",
+		description:
+			"Queue findings, ownership negotiation, or a handoff to a started peer in your coordination group. Active peers receive messages at their next runtime safe point without cancelling work; idle peers may be woken. This does not grant task-control permissions.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				taskId: { type: "string" },
+				message: { type: "string", minLength: 1, maxLength: 8000 },
+			},
+			required: ["taskId", "message"],
+			additionalProperties: false,
+		},
+	},
+	{
 		name: "create_task",
 		description:
 			"Draft a bounded child task without starting compute. The prompt must be complete because the child inherits no conversation.",

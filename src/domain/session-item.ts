@@ -1,4 +1,5 @@
 import type { AgentTodo } from "./agent-todos";
+import type { ApiTokenUsage } from "./api-token-usage";
 import { SessionItemId } from "./ids";
 import { visibleRuntimeUserText } from "./runtime-handoff";
 import {
@@ -15,6 +16,7 @@ export type ToolActivityStatus =
 	| "declined";
 
 export type UserMessageItem = {
+	readonly apiUsage?: ApiTokenUsage;
 	readonly kind: "userMessage";
 	readonly id: SessionItemId;
 	readonly text: string;

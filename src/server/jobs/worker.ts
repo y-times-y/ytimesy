@@ -14,12 +14,17 @@ import { createFreestyleWorkspaceMachines } from "../adapters/freestyle/workspac
 import { applyProjectEnvironment } from "../adapters/rigkit/apply";
 import { listReadyWorkspaceIds } from "../adapters/workspaces";
 import { startAgentCompetition } from "../services/agent-competition-run";
+import {
+	deliverAgentPeerMessage,
+	type PeerMessage,
+} from "../services/agent-peer-messaging";
 import { deliverAgentTaskEvents } from "../services/agent-task-event-delivery";
 import { reconcileRunningAgentTurns } from "../services/agent-turn-reconciliation";
 import { reconcileCodexRefreshRequests } from "../services/codex-refresh-reconciliation";
 import { captureSessionCheckpoint } from "../services/session-checkpoint";
 import { runApiTurn } from "./api-turn";
 import {
+	AGENT_PEER_MESSAGE_QUEUE,
 	AGENT_TASK_EVENT_QUEUE,
 	jobQueue,
 	PREPARE_WORKSPACE_QUEUE,
@@ -36,6 +41,13 @@ export async function startWorkspaceWorker() {
 	const queue = await jobQueue("worker");
 	const taskMachines = createFreestyleWorkspaceMachines(
 		await Effect.runPromise(readFreestyleApiKey()),
+	);
+	await queue.work<PeerMessage>(
+		AGENT_PEER_MESSAGE_QUEUE,
+		{ localConcurrency: 1 },
+		async ([job]) => {
+			await deliverAgentPeerMessage(taskMachines, job.data, job.id);
+		},
 	);
 	await queue.work<{ userId?: string; sessionId?: string }>(
 		SESSION_CHECKPOINT_QUEUE,

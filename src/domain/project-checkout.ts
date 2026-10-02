@@ -6,6 +6,8 @@ export type ProjectCheckout = {
 	readonly workingBranch: string;
 	readonly installationId: string;
 	readonly additionalRepositories?: ProjectCheckout[];
+	readonly preserveCurrentBranch?: boolean;
+	readonly retainExistingBranch?: boolean;
 };
 
 export function projectCheckoutPath(home: string, repoName: string): string {

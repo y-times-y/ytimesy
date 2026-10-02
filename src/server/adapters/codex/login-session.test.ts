@@ -20,3 +20,20 @@ it("surfaces a failed daemon restart instead of submitting to a dead process", a
 		),
 	).rejects.toThrow();
 });
+
+it("defers runtime upgrades while a native turn is running", async () => {
+	const machines = {
+		readTextFile: vi.fn(async (_id, path: string) =>
+			path.endsWith(".hash")
+				? "old-runtime-fingerprint"
+				: JSON.stringify({ stage: "authenticated", turnStatus: "running" }),
+		),
+		writeTextFile: vi.fn(),
+		exec: vi.fn(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
+	} as unknown as WorkspaceMachines;
+	await Effect.runPromise(
+		ensureCurrentLoginDaemon(machines, WorkspaceId("runner")),
+	);
+	expect(machines.exec).toHaveBeenCalledTimes(1);
+	expect(machines.writeTextFile).not.toHaveBeenCalled();
+});

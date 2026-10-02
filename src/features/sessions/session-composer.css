@@ -85,6 +85,75 @@
 	padding-left: 14px;
 	color: #d8d8d8;
 }
+.child-task-card {
+	margin: 8px 0;
+	border: 1px solid #ffffff16;
+	border-radius: 12px;
+	background: #ffffff03;
+	overflow: hidden;
+}
+.child-task-card > summary {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 13px 14px;
+	list-style: none;
+	cursor: pointer;
+}
+.child-task-card > summary::-webkit-details-marker {
+	display: none;
+}
+.child-task-card > summary:hover {
+	background: #ffffff04;
+}
+.child-task-card > summary:focus-visible {
+	outline: 1px solid #ffffff70;
+	outline-offset: -2px;
+}
+.child-task-card-copy {
+	flex: 1;
+	min-width: 0;
+}
+.child-task-card-copy strong {
+	display: block;
+	font-size: 13px;
+	font-weight: 500;
+	overflow-wrap: anywhere;
+}
+.child-task-card-copy small {
+	display: block;
+	margin-top: 4px;
+	font-size: 11px;
+	color: #888;
+}
+.child-task-card-status {
+	color: #aaa;
+	font-size: 11px;
+	white-space: nowrap;
+}
+.child-task-card-icon {
+	color: #aaa;
+	display: inline-flex;
+}
+.child-task-card[data-status="failed"] .child-task-card-status {
+	color: #e08c8c;
+}
+:where(.child-task-card[open] > summary) .competition-candidate-chevron {
+	transform: rotate(90deg);
+}
+.child-task-card-content {
+	border-top: 1px solid #ffffff10;
+	padding: 12px 14px;
+	max-height: 480px;
+	overflow-y: auto;
+	overscroll-behavior-y: contain;
+	scrollbar-width: thin;
+	scrollbar-color: #333 transparent;
+}
+.child-task-card-empty {
+	color: #888;
+	font-size: 12px;
+}
 .competition-turn-heading,
 .competition-candidate > summary {
 	display: flex;
@@ -166,64 +235,52 @@
 	border-color: #d78e8e;
 	background: #d78e8e;
 }
-.six-dot-spinner {
-	position: relative;
+.t-matrix {
+	--t-matrix-cycle: 1200ms;
+	--t-matrix-ease: cubic-bezier(0.4, 0, 0.2, 1);
+	--t-matrix-dot-size: 3px;
+	--t-matrix-gap: 2px;
+	--t-matrix-dim: 0.18;
 	width: 16px;
 	height: 16px;
-	display: inline-block;
+	display: inline-grid;
+	grid-template-columns: repeat(3, var(--t-matrix-dot-size));
+	grid-auto-rows: var(--t-matrix-dot-size);
+	gap: var(--t-matrix-gap);
+	place-content: center;
 	flex: none;
 }
-.six-dot-spinner i {
-	position: absolute;
-	width: 3px;
-	height: 3px;
-	border-radius: 1px;
+.t-matrix > i {
+	display: block;
 	background: currentColor;
-	opacity: 0.18;
-	animation: six-dot-chase 1.2s linear infinite;
+	opacity: var(--t-matrix-dim);
+	animation: t-matrix-orbit var(--t-matrix-cycle) var(--t-matrix-ease) infinite;
+	animation-delay: calc(
+		var(--t-matrix-step, 0) *
+		var(--t-matrix-cycle) /
+		8 -
+		var(--t-matrix-cycle)
+	);
 }
-.six-dot-spinner i:nth-child(1) {
-	left: 2px;
-	top: 2px;
-	animation-delay: 0s;
+.t-matrix > .t-matrix-center {
+	animation: none;
+	opacity: var(--t-matrix-dim);
 }
-.six-dot-spinner i:nth-child(2) {
-	left: 7px;
-	top: 2px;
-	animation-delay: 0.2s;
-}
-.six-dot-spinner i:nth-child(3) {
-	left: 12px;
-	top: 2px;
-	animation-delay: 0.4s;
-}
-.six-dot-spinner i:nth-child(4) {
-	left: 12px;
-	top: 11px;
-	animation-delay: 0.6s;
-}
-.six-dot-spinner i:nth-child(5) {
-	left: 7px;
-	top: 11px;
-	animation-delay: 0.8s;
-}
-.six-dot-spinner i:nth-child(6) {
-	left: 2px;
-	top: 11px;
-	animation-delay: 1s;
-}
-@keyframes six-dot-chase {
+@keyframes t-matrix-orbit {
 	0%,
-	16% {
+	100% {
 		opacity: 1;
 	}
-	35%,
-	100% {
-		opacity: 0.18;
+	12.5% {
+		opacity: 0.65;
+	}
+	37.5%,
+	87.5% {
+		opacity: var(--t-matrix-dim);
 	}
 }
 @media (prefers-reduced-motion: reduce) {
-	.six-dot-spinner i {
+	.t-matrix > i {
 		animation: none;
 		opacity: 0.7;
 	}
@@ -645,6 +702,12 @@ a.harness-login-action:hover {
 	scrollbar-width: thin;
 	scrollbar-color: #333 transparent;
 }
+:where(.child-task-card-content) > .session-timeline {
+	overflow: visible;
+	overscroll-behavior: auto;
+	flex: none;
+	height: auto;
+}
 .session-timeline li[data-kind] {
 	flex: 0 0 auto;
 	padding: 0;
@@ -986,21 +1049,6 @@ a.harness-login-action:hover {
 }
 details[open] > summary .session-activity-chevron {
 	transform: rotate(90deg);
-}
-.session-activity-spinner {
-	width: 12px;
-	height: 12px;
-	flex-shrink: 0;
-	margin-left: auto;
-	border: 1.5px solid rgba(255, 255, 255, 0.2);
-	border-top-color: #eee;
-	border-radius: 50%;
-	animation: session-spin 0.7s linear infinite;
-}
-@keyframes session-spin {
-	to {
-		transform: rotate(360deg);
-	}
 }
 .session-shell-prefix {
 	flex-shrink: 0;

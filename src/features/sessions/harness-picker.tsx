@@ -13,7 +13,7 @@ import {
 	type AgentProviderId,
 	offeredAgentProviders,
 } from "#/domain/agent-provider";
-import { AUTHOR_LABELS } from "#/domain/browse-models";
+import { AUTHOR_LABELS, recentModelGenerations } from "#/domain/browse-models";
 import { parseModelRouteId } from "#/domain/model-connection";
 import {
 	expandModelRuns,
@@ -103,7 +103,7 @@ export function HarnessPicker({
 		onModelIdChange(id);
 		setOpen(false);
 	}
-	const visibleModels = models.filter(
+	const visibleModels = recentModelGenerations(models).filter(
 		(candidate) =>
 			candidate.label.toLowerCase().includes(search.trim().toLowerCase()) &&
 			(!favoritesOnly ||
