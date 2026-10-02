@@ -23,6 +23,7 @@ import {
 	listProjectSecretsFn,
 	saveProjectSecretFn,
 } from "./project-secrets.fn";
+import { codexSubscriptionUsageFn } from "./subscription-usage.fn";
 
 type AccountView = {
 	readonly user: {
@@ -61,6 +62,15 @@ export function ProjectSettings({
 	onClose: () => void;
 }) {
 	const [section, setSection] = useState<SettingsSection>("account");
+	const readSubscriptionUsage = useServerFn(codexSubscriptionUsageFn);
+	const subscriptionUsage = useQuery({
+		queryKey: ["codex-subscription-usage"],
+		queryFn: () => readSubscriptionUsage(),
+		enabled: open && section === "agents",
+		staleTime: 30_000,
+		refetchInterval: open && section === "agents" ? 60_000 : false,
+		retry: false,
+	});
 	const account = useQuery({
 		queryKey: ["account"],
 		queryFn: () => requestJson<AccountView>("/api/account"),
@@ -142,7 +152,7 @@ export function ProjectSettings({
 						) : null}
 						{section === "agents" ? (
 							<AgentsSection
-								usage={codexUsage}
+								usage={subscriptionUsage.data ?? codexUsage}
 								account={
 									account.data?.agentAccount ?? { status: "disconnected" }
 								}

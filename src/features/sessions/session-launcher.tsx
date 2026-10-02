@@ -13,6 +13,7 @@ import {
 	type AgentProviderId,
 	agentProviderById,
 } from "#/domain/agent-provider";
+import { recordedContextUsage } from "#/domain/api-progress";
 import type { AgentTaskActivity } from "#/domain/child-task-activity";
 import {
 	claudeSessionRemembersSignIn,
@@ -526,10 +527,17 @@ export function SessionLauncher({
 						<div className="session-toolbar">
 							<SessionControls
 								contextIndicator={
-									harnessId === "codex" ? (
+									harnessId === "codex" ||
+									recordedContextUsage(session.items) ? (
 										<ContextUsage
-											context={session.usage?.context}
-											compacting={session.usage?.compacting}
+											context={
+												session.usage?.context ??
+												recordedContextUsage(session.items)?.context
+											}
+											compacting={
+												session.usage?.compacting ??
+												recordedContextUsage(session.items)?.compacting
+											}
 										/>
 									) : null
 								}
