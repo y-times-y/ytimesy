@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ModelMessage } from "ai";
 import type { SessionItem } from "#/domain/session-item";
+import { subscriptionTurnSettings } from "#/domain/subscription-turn";
 import { database } from "./database";
 
 export type ApiTurn = {
@@ -19,7 +20,7 @@ export type ApiTurn = {
 export async function enqueueApiTurn(input: {
 	sessionId: string;
 	userId: string;
-	connectionId: string;
+	connectionId: string | null;
 	revision: string;
 	modelId: string;
 	routeId: string;
@@ -30,10 +31,18 @@ export async function enqueueApiTurn(input: {
 	const client = await database().connect();
 	try {
 		await client.query("begin");
-		const connection = await client.query(
-			"select id from model_connection where id=$1 and user_id=$2 and revision=$3 for share",
-			[input.connectionId, input.userId, input.revision],
-		);
+		const subscription = subscriptionTurnSettings(input.revision);
+		if (subscription && input.connectionId !== null)
+			throw new Error("Subscription turns cannot use an API connection.");
+		const connection = subscription
+			? await client.query(
+					"select 1 from agent_account where user_id=$1 and provider='codex' and status='connected' and encrypted_codex_auth is not null for share",
+					[input.userId],
+				)
+			: await client.query(
+					"select id from model_connection where id=$1 and user_id=$2 and revision=$3 for share",
+					[input.connectionId, input.userId, input.revision],
+				);
 		if (!connection.rows.length)
 			throw new Error(
 				"The model connection changed or is no longer available.",
@@ -69,12 +78,13 @@ export async function enqueueApiTurn(input: {
 			],
 		);
 		await client.query(
-			`update agent_session set harness='api',listed_model_id=$3,items=$4,turn_status='running',updated_at=now() where id=$1 and user_id=$2`,
+			`update agent_session set harness=$5,listed_model_id=$3,items=$4,turn_status='running',updated_at=now() where id=$1 and user_id=$2`,
 			[
 				input.sessionId,
 				input.userId,
 				input.routeId,
 				JSON.stringify(input.items),
+				subscription ? "codex" : "api",
 			],
 		);
 		await client.query("commit");
@@ -84,6 +94,25 @@ export async function enqueueApiTurn(input: {
 	} finally {
 		client.release();
 	}
+}
+
+/** Resume the actual tool conversation only when transport and model remain compatible. */
+export async function previousTurnMessages(
+	userId: string,
+	sessionId: string,
+	modelId: string,
+	revision: string,
+) {
+	const result = await database().query<ApiTurn>(
+		"select * from api_turn where user_id=$1 and session_id=$2 order by created_at desc limit 1",
+		[userId, sessionId],
+	);
+	const previous = result.rows[0];
+	return previous?.state === "completed" &&
+		previous.model_id === modelId &&
+		previous.connection_revision === revision
+		? previous.messages
+		: null;
 }
 
 export async function claimApiTurn(): Promise<ApiTurn | null> {

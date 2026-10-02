@@ -19,7 +19,6 @@ import {
 } from "../adapters/checkpoints/storage";
 import { projectForOwner } from "../adapters/projects";
 import { repositoryDirectory } from "../adapters/repository-setup";
-import { codexRuntimeForSession } from "./codex-runtime";
 import { machinesForAgentSession } from "./session-workspace-machines";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -68,22 +67,13 @@ export async function captureSessionCheckpoint(
 		null,
 		transfer,
 	);
-	const runtime =
-		session.harness === "codex"
-			? await codexRuntimeForSession(selected, {
-					...session,
-					providerRef: session.providerRef,
-				})
-			: null;
-	if (runtime)
-		await runtime.machines.ensureRunning(WorkspaceId(runtime.workspaceId));
-	const native = runtime
-		? await exportGuestCheckpoint(
-				host(runtime.machines, runtime.workspaceId),
-				[],
-				runtime.root,
-				transfer,
-			)
+	// Retain archived legacy history without restarting its retired runner.
+	const native = previous?.runner_id
+		? ((
+				JSON.parse(
+					await downloadCheckpoint(userId, sessionId, previous.object_path),
+				) as { native?: unknown }
+			).native ?? null)
 		: null;
 	const latest = await agentSessionForOwner(userId, sessionId);
 	if (
@@ -110,7 +100,7 @@ export async function captureSessionCheckpoint(
 			path,
 			fingerprint,
 			executorId: session.providerRef,
-			runnerId: runtime?.workspaceId ?? null,
+			runnerId: previous?.runner_id ?? null,
 		});
 	} catch (error) {
 		await removeCheckpoint(path).catch(() => undefined);

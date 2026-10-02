@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { SessionItemId } from "../src/domain/ids";
+import { subscriptionTurnRevision } from "../src/domain/subscription-turn";
 import {
 	cancelApiTurn,
 	checkpointApiTurn,
@@ -31,6 +32,7 @@ const revision = randomUUID();
 beforeAll(async () => {
 	db = new PGlite();
 	await db.exec(`create role anon; create role authenticated;
+	create table agent_account(user_id text,provider text,status text,encrypted_codex_auth text); insert into agent_account values('alice','codex','connected','sealed-fixture');
 	create table workspace(id text primary key,user_id text); insert into workspace values('environment','alice');
 	create table auth_user(id text primary key); insert into auth_user values('alice'),('bob');
 	create table agent_session(id uuid primary key,user_id text references auth_user(id),parent_session_id uuid references agent_session(id),harness text constraint agent_session_harness_check check(harness in ('codex','claude','opencode')),turn_status text,listed_model_id text,items jsonb default '[]',task_state text,updated_at timestamptz default now());`);
@@ -68,6 +70,53 @@ function submit(userId = "alice") {
 		items: [],
 	});
 }
+
+it("runs the durable subscription lifecycle without a model_connection and keeps the Codex identity", async () => {
+	await enqueueApiTurn({
+		sessionId,
+		userId: "alice",
+		connectionId: null,
+		revision: subscriptionTurnRevision("high"),
+		modelId: "subscription-model",
+		routeId: "subscription-model",
+		messages: [{ role: "user", content: "test" }],
+		items: [],
+	});
+	const turn = await claimApiTurn();
+	expect(turn).toMatchObject({
+		connection_id: null,
+		model_id: "subscription-model",
+		state: "running",
+	});
+	if (!turn) throw new Error("Missing turn");
+	expect(await renewApiTurn(turn)).toBe(true);
+	await checkpointApiTurn(turn, [{ role: "assistant", content: "done" }], []);
+	expect(await finishApiTurn(turn, "completed", [])).toBe(true);
+	expect(
+		(
+			await db.query(
+				"select harness,turn_status from agent_session where id=$1",
+				[sessionId],
+			)
+		).rows,
+	).toEqual([{ harness: "codex", turn_status: "completed" }]);
+});
+
+it("rejects another owner's subscription before queue insertion", async () => {
+	await expect(
+		enqueueApiTurn({
+			sessionId,
+			userId: "bob",
+			connectionId: null,
+			revision: subscriptionTurnRevision(),
+			modelId: "subscription-model",
+			routeId: "subscription-model",
+			messages: [],
+			items: [],
+		}),
+	).rejects.toThrow("no longer available");
+	expect((await db.query("select id from api_turn")).rows).toHaveLength(0);
+});
 it("bounds environment diagnosis separately and rolls back account reservations on denial", async () => {
 	await reserveEnvironmentDiagnosisTokens("alice", "environment", 90_000);
 	await expect(

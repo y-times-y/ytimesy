@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { Effect } from "effect";
 import { Freestyle, FreestyleApiError } from "freestyle";
 import { pinnedCodexInstallCommand } from "#/domain/guest-cli-pin";
+import { closeDatabase, database } from "#/server/adapters/database";
 import { readFreestyleApiKey } from "#/server/adapters/freestyle/api-key";
 import {
 	JOB_WORKER_GUEST_CERT,
@@ -24,6 +25,17 @@ const guestLog = `${JOB_WORKER_GUEST_ROOT}/worker.log`;
 const rigkitBunVersion = "1.2.15";
 
 async function main() {
+	try {
+		const active = await database().query(
+			"select 1 from api_turn where state='running' limit 1",
+		);
+		if (active.rowCount)
+			throw new Error(
+				"Finish or cancel active model turns before redeploying the worker.",
+			);
+	} finally {
+		await closeDatabase();
+	}
 	const apiKey = Effect.runSync(readFreestyleApiKey());
 	const client = new Freestyle({ apiKey });
 	const vm = await ensureWorkerVm(client);

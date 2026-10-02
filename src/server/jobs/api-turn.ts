@@ -11,6 +11,7 @@ import {
 } from "#/domain/api-turn-failure";
 import { PREPARED_ENVIRONMENT_INSTRUCTIONS } from "#/domain/environment-context";
 import { SessionItemId, WorkspaceId } from "#/domain/ids";
+import { subscriptionTurnSettings } from "#/domain/subscription-turn";
 import { agentSessionForOwner } from "../adapters/agent-sessions";
 import { saveAgentTaskResultAndEvent } from "../adapters/agent-task-events";
 import {
@@ -22,9 +23,11 @@ import {
 import { reserveApiTokens } from "../adapters/api-usage-budget";
 import { PROJECT_CWD_PATH } from "../adapters/freestyle/clone-project";
 import { loadModelConnection } from "../adapters/model-connections";
+import { hasManagedCodexAuth } from "../auth/codex-managed-auth";
 import { bindAgentSessionMachine } from "../services/agent-session-machine";
 import { runApiAgent } from "../services/api-agent-runtime";
 import { apiAgentTools } from "../services/api-agent-tools";
+import { runCodexSubscriptionAgent } from "../services/codex-subscription-agent";
 import { injectApiPeerMessages } from "../services/peer-inbox";
 import {
 	ensureProjectCheckout,
@@ -61,21 +64,27 @@ export async function runApiTurn(machines: WorkspaceMachines, turn: ApiTurn) {
 		}
 		const owner = await agentSessionForOwner(turn.user_id, turn.session_id);
 		if (!owner) throw new Error("Task no longer exists.");
-		if (!turn.connection_id) throw new Error("Model connection was removed.");
-		const connection = await loadModelConnection(
-			turn.user_id,
-			turn.connection_id,
-		);
-		if (connection?.revision !== turn.connection_revision)
-			throw new Error(
-				"The API connection changed after this turn was submitted.",
+		const subscription = subscriptionTurnSettings(turn.connection_revision);
+		if (subscription) {
+			if (turn.connection_id || !(await hasManagedCodexAuth(turn.user_id)))
+				throw new Error("Reconnect Codex before continuing.");
+		} else {
+			if (!turn.connection_id) throw new Error("Model connection was removed.");
+			const connection = await loadModelConnection(
+				turn.user_id,
+				turn.connection_id,
 			);
+			if (connection?.revision !== turn.connection_revision)
+				throw new Error(
+					"The API connection changed after this turn was submitted.",
+				);
+		}
 		failureStage = "workspace";
 		const bound = await bindAgentSessionMachine(machines, {
 			userId: owner.userId,
 			projectId: owner.projectId,
 			sessionId: owner.id,
-			harness: "api",
+			harness: subscription ? "codex" : "api",
 		});
 		machines = machinesForAgentSession(machines, bound.session);
 		await machines.ensureRunning(WorkspaceId(bound.providerRef));
@@ -124,10 +133,17 @@ export async function runApiTurn(machines: WorkspaceMachines, turn: ApiTurn) {
 		});
 		let flushedAt = 0;
 		failureStage = "model";
-		await runApiAgent({
+		const runAgent = subscription
+			? runCodexSubscriptionAgent
+			: (input: Parameters<typeof runCodexSubscriptionAgent>[0]) =>
+					runApiAgent({ ...input, connectionId: turn.connection_id as string });
+		await runAgent({
 			cacheScopeId: owner.id,
 			userId: turn.user_id,
-			connectionId: turn.connection_id,
+			connectionId: turn.connection_id ?? undefined,
+			connectionRevision: turn.connection_revision,
+			reasoning: subscription?.reasoning,
+			fast: subscription?.fast,
 			modelId: turn.model_id,
 			messages,
 			instructions: `You are the ytimesy coding agent. Work in ${cwd}. Read repository instructions before editing. ${PREPARED_ENVIRONMENT_INSTRUCTIONS} ${AGENT_ORCHESTRATION_INSTRUCTIONS} ${agentSessionRoleInstructions(bound.session)}`,
@@ -148,20 +164,22 @@ export async function runApiTurn(machines: WorkspaceMachines, turn: ApiTurn) {
 				failureStage = "budget";
 				assertApiContextFits(history);
 				abort.signal.throwIfAborted();
-				await reserveApiTokens(
-					owner.userId,
-					owner.id,
-					Buffer.byteLength(JSON.stringify(history), "utf8") + 24_000,
-				);
+				if (!subscription)
+					await reserveApiTokens(
+						owner.userId,
+						owner.id,
+						Buffer.byteLength(JSON.stringify(history), "utf8") + 24_000,
+					);
 				failureStage = "model";
 			},
 			beforeCompaction: async (older) => {
 				failureStage = "budget";
-				await reserveApiTokens(
-					owner.userId,
-					owner.id,
-					Buffer.byteLength(JSON.stringify(older), "utf8") + 4_000,
-				);
+				if (!subscription)
+					await reserveApiTokens(
+						owner.userId,
+						owner.id,
+						Buffer.byteLength(JSON.stringify(older), "utf8") + 4_000,
+					);
 				failureStage = "model";
 			},
 			onEvent: async (event) => {

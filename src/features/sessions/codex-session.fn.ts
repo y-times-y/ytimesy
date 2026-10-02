@@ -122,6 +122,18 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" }).handler(
 			session: {
 				...emptyHarnessSession(),
 				snapshotAvailable,
+				...(snapshotAvailable
+					? {
+							connection: {
+								status: "authenticated" as const,
+								provider: "codex" as const,
+								authMode: "chatgpt" as const,
+								planType: null,
+								email: null,
+							},
+							canSend: true,
+						}
+					: {}),
 			},
 		};
 	},

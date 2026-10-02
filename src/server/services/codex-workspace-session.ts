@@ -121,6 +121,7 @@ function pausedCodexSessionView(
 export function readCodexWorkspaceSession(
 	machines: WorkspaceMachines,
 	scope: CodexSessionScope,
+	loginOnly = false,
 ): Effect.Effect<PublicCodexSession> {
 	return Effect.gen(function* () {
 		const hasCodexAuth = yield* Effect.tryPromise(() =>
@@ -144,11 +145,12 @@ export function readCodexWorkspaceSession(
 			);
 		}
 		const savedSession = peeked.session;
-		const runtime = savedSession
-			? yield* Effect.tryPromise(() =>
-					codexRuntimeForSession(machines, { ...savedSession, providerRef }),
-				)
-			: { machines, workspaceId: WorkspaceId(providerRef) };
+		const runtime =
+			savedSession && !loginOnly
+				? yield* Effect.tryPromise(() =>
+						codexRuntimeForSession(machines, { ...savedSession, providerRef }),
+					)
+				: { machines, workspaceId: WorkspaceId(providerRef) };
 		const running = yield* Effect.tryPromise(() =>
 			runtime.machines.isRunning(runtime.workspaceId),
 		);
@@ -235,26 +237,29 @@ export function connectCodexWorkspaceSession(
 			...scope,
 			sessionId: bound.session.id,
 		});
-		const runtime = yield* Effect.tryPromise(() =>
-			codexRuntimeForSession(
-				machines,
-				{ ...bound.session, providerRef: bound.providerRef },
-				true,
-			),
-		);
+		// Device-code login is transient on the existing executor; never provision the retired inference runner.
+		const runtime = { machines, workspaceId: WorkspaceId(bound.providerRef) };
 
-		const existing = yield* readCodexWorkspaceSession(machines, {
-			...scope,
-			sessionId: bound.session.id,
-			createNew: false,
-		});
-		if (existing.connection.status === "authenticated" && hasCodexAuth) {
-			yield* ensureCurrentLoginDaemon(runtime.machines, runtime.workspaceId);
-			return yield* readCodexWorkspaceSession(machines, {
+		const existing = yield* readCodexWorkspaceSession(
+			machines,
+			{
 				...scope,
 				sessionId: bound.session.id,
 				createNew: false,
-			});
+			},
+			true,
+		);
+		if (existing.connection.status === "authenticated" && hasCodexAuth) {
+			yield* ensureCurrentLoginDaemon(runtime.machines, runtime.workspaceId);
+			return yield* readCodexWorkspaceSession(
+				machines,
+				{
+					...scope,
+					sessionId: bound.session.id,
+					createNew: false,
+				},
+				true,
+			);
 		}
 		if (existing.connection.status === "awaiting_device_code") {
 			return existing;

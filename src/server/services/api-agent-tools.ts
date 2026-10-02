@@ -142,7 +142,7 @@ export function apiAgentTools(input: {
 								userId: session.userId,
 								projectId: session.projectId,
 								sessionId: session.id,
-								harnessId: "api",
+								harnessId: session.harness,
 							},
 							session,
 							{

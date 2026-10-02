@@ -63,7 +63,12 @@ export function applyApiProgress(
 			kind: "dynamicToolCall",
 			id,
 			tool: event.name,
-			status: event.type === "tool-call" ? "inProgress" : "completed",
+			status:
+				event.type === "tool-call"
+					? "inProgress"
+					: event.failed
+						? "failed"
+						: "completed",
 		};
 	else return [...items];
 	return existing

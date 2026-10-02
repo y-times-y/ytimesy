@@ -590,8 +590,6 @@ export async function deleteAgentSessionMachine(
 			const checkpoint = await checkpointForSession(input.userId, removed.id);
 			if (checkpoint) await removeCheckpoint(checkpoint.object_path);
 		}
-		if (removed.harness === "codex")
-			await machines.destroyCodexSession?.(input.userId, removed.id);
 	}
 	const refs = sessionMachineRefsToDestroy({
 		sessionProviderRef:

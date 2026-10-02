@@ -3,6 +3,30 @@ import { applyApiProgress, recordedContextUsage } from "./api-progress";
 import { SessionItemId } from "./ids";
 import { type SessionItem, sessionItemsFromUnknown } from "./session-item";
 
+it("settles a failed tool call instead of leaving its spinner running", () => {
+	const started = applyApiProgress([], "turn", {
+		type: "tool-call",
+		id: "call",
+		name: "read_file",
+		input: {},
+	});
+	const settled = applyApiProgress(started, "turn", {
+		type: "tool-result",
+		id: "call",
+		name: "read_file",
+		output: null,
+		failed: true,
+	});
+	expect(settled).toEqual([
+		{
+			kind: "dynamicToolCall",
+			id: "turn:call",
+			tool: "read_file",
+			status: "failed",
+		},
+	]);
+});
+
 it("updates only the current turn and persists current context independently of cumulative usage", () => {
 	const items: SessionItem[] = [
 		{ kind: "userMessage", id: SessionItemId("old"), text: "old" },

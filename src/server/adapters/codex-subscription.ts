@@ -2,6 +2,10 @@ import { z } from "zod";
 import type { CodexUsage } from "#/domain/codex-usage";
 import { PINNED_CODEX_CLI_VERSION } from "#/domain/guest-cli-pin";
 import {
+	type ListedModel,
+	listedReasoningFromRow,
+} from "#/domain/listed-model";
+import {
 	codexExternalTokens,
 	hasManagedCodexAuth,
 } from "../auth/codex-managed-auth";
@@ -90,30 +94,96 @@ export async function readCodexSubscriptionUsage(
 	return subscriptionLimits(await subscriptionRequest(userId, "wham/usage"));
 }
 
-export async function codexSubscriptionModel(userId: string, modelId: string) {
-	const catalog = z
-		.object({
-			models: z.array(
-				z.object({
-					slug: z.string(),
-					context_window: z.number().positive().optional(),
-				}),
-			),
-		})
-		.parse(
-			await subscriptionRequest(
-				userId,
-				`codex/models?client_version=${PINNED_CODEX_CLI_VERSION}`,
-			),
-		);
+const catalogSchema = z.object({
+	models: z.array(
+		z.object({
+			slug: z.string(),
+			display_name: z.string().optional(),
+			visibility: z.string().optional(),
+			supported_reasoning_levels: z
+				.array(z.object({ effort: z.string() }))
+				.optional(),
+			default_reasoning_level: z.string().optional(),
+			priority: z.number().optional(),
+			context_window: z.number().positive().optional(),
+		}),
+	),
+});
+const catalogs = new Map<
+	string,
+	{ expires: number; promise: Promise<z.infer<typeof catalogSchema>> }
+>();
+
+async function subscriptionCatalog(userId: string) {
+	if (!(await hasManagedCodexAuth(userId))) {
+		catalogs.delete(userId);
+		throw new Error("Connect Codex before starting this agent.");
+	}
+	const cached = catalogs.get(userId);
+	if (cached && cached.expires > Date.now()) return cached.promise;
+	if (catalogs.size >= 1000)
+		catalogs.delete(catalogs.keys().next().value as string);
+	const promise = subscriptionRequest(
+		userId,
+		`codex/models?client_version=${PINNED_CODEX_CLI_VERSION}`,
+	).then((value) => catalogSchema.parse(value));
+	catalogs.set(userId, { expires: Date.now() + 60_000, promise });
+	try {
+		return await promise;
+	} catch (error) {
+		catalogs.delete(userId);
+		throw error;
+	}
+}
+
+export async function codexSubscriptionCatalog(
+	userId: string,
+): Promise<ListedModel[]> {
+	const catalog = await subscriptionCatalog(userId);
+	return catalog.models
+		.filter((row) => row.visibility !== "hide")
+		.sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0))
+		.map((row) => ({
+			id: row.slug,
+			label: row.display_name ?? row.slug,
+			reasoning: listedReasoningFromRow({
+				supportedReasoningEfforts: row.supported_reasoning_levels?.map(
+					(level) => level.effort,
+				),
+				defaultReasoningEffort: row.default_reasoning_level,
+			}),
+		}));
+}
+
+export async function codexSubscriptionModel(
+	userId: string,
+	modelId: string,
+	reasoning?: string,
+	fast = false,
+) {
+	const catalog = await subscriptionCatalog(userId);
 	const selected = catalog.models.find((row) => row.slug === modelId);
 	if (!selected) throw new Error("Selected subscription model is unavailable.");
+	if (fast)
+		throw new Error(
+			"Fast mode is not available on this subscription transport.",
+		);
+	const effort = reasoning ?? selected.default_reasoning_level ?? "low";
+	if (
+		selected.supported_reasoning_levels?.length &&
+		!selected.supported_reasoning_levels.some(
+			(level) => level.effort === effort,
+		)
+	)
+		throw new Error("Selected reasoning level is unavailable for this model.");
 	const tokens = await codexExternalTokens(userId);
 	const transport: typeof fetch = async (url, init) => {
 		if (String(url) !== `${backend}/codex/responses`)
 			throw new Error("Unexpected subscription inference destination.");
 		const headers = new Headers(init?.headers);
-		headers.set("ChatGPT-Account-ID", tokens.chatgptAccountId);
+		const current = await codexExternalTokens(userId);
+		headers.set("Authorization", `Bearer ${current.accessToken}`);
+		headers.set("ChatGPT-Account-ID", current.chatgptAccountId);
 		return fetch(url, { ...init, headers, redirect: "error" });
 	};
 	return {
@@ -132,7 +202,7 @@ export async function codexSubscriptionModel(userId: string, modelId: string) {
 				openai: {
 					instructions,
 					store: false,
-					reasoningEffort: "low",
+					reasoningEffort: effort,
 					reasoningSummary: "auto",
 				},
 			},

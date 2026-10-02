@@ -1,5 +1,6 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import {
+	codexSubscriptionCatalog,
 	codexSubscriptionModel,
 	readCodexSubscriptionUsage,
 	subscriptionLimits,
@@ -17,6 +18,46 @@ beforeEach(() => {
 		chatgptAccountId: `account-${userId}`,
 	}));
 	mocks.connected.mockReset().mockResolvedValue(true);
+});
+
+it("uses the account catalog and requested reasoning without advertising unsupported fast mode", async () => {
+	vi.spyOn(globalThis, "fetch").mockResolvedValue(
+		new Response(
+			JSON.stringify({
+				models: [
+					{
+						slug: "modern",
+						display_name: "Modern Model",
+						context_window: 272000,
+						supported_reasoning_levels: [{ effort: "low" }, { effort: "high" }],
+						default_reasoning_level: "low",
+					},
+				],
+			}),
+		),
+	);
+	const models = await codexSubscriptionCatalog("reasoning-owner");
+	expect(models[0].label).toBe("Modern Model");
+	expect(models[0].supportsFastMode).toBeUndefined();
+	const runtime = await codexSubscriptionModel(
+		"reasoning-owner",
+		"modern",
+		"high",
+	);
+	expect(
+		runtime.requestSettings("instructions").providerOptions.openai
+			.reasoningEffort,
+	).toBe("high");
+	await expect(
+		codexSubscriptionModel("reasoning-owner", "modern", "ultra"),
+	).rejects.toThrow("reasoning");
+	await expect(
+		codexSubscriptionModel("reasoning-owner", "modern", "low", true),
+	).rejects.toThrow("Fast mode");
+	mocks.connected.mockResolvedValue(false);
+	await expect(codexSubscriptionCatalog("reasoning-owner")).rejects.toThrow(
+		"Connect Codex",
+	);
 });
 const window = {
 	used_percent: 29,
