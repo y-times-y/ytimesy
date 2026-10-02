@@ -2,17 +2,35 @@ import type { ApiAgentEvent } from "./api-agent-event";
 import { SessionItemId } from "./ids";
 import type { SessionItem } from "./session-item";
 
+export function recordedContextUsage(items: readonly SessionItem[]) {
+	for (let index = items.length - 1; index >= 0; index--) {
+		const item = items[index];
+		if (item.kind === "userMessage" && item.contextUsage)
+			return item.contextUsage;
+	}
+	return undefined;
+}
+
 export function applyApiProgress(
 	items: readonly SessionItem[],
 	turnId: string,
 	event: ApiAgentEvent,
 ): SessionItem[] {
-	if (event.type === "usage") {
+	if (event.type === "usage" || event.type === "context") {
 		let index = items.length - 1;
 		while (index >= 0 && items[index].kind !== "userMessage") index--;
 		return items.map((item, position) =>
 			position === index && item.kind === "userMessage"
-				? { ...item, apiUsage: event.usage }
+				? event.type === "usage"
+					? { ...item, apiUsage: event.usage }
+					: {
+							...item,
+							contextUsage: {
+								...item.contextUsage,
+								...(event.context ? { context: event.context } : {}),
+								compacting: event.compacting,
+							},
+						}
 				: item,
 		);
 	}

@@ -54,3 +54,39 @@ saved access token expires within three minutes. It allows at most four
 requests per route, no retries, one fixture-tool execution per route, and a
 60-second timeout per conversational turn. It must not be exposed as a public
 endpoint or used for automatic production fallback.
+
+## Usage wiring — 2026-10-01
+
+Settings now queries account-scoped subscription windows directly through an
+authenticated server function, independently of the native runner. The UI
+refreshes only while the Agents settings section is open, with a 30-second
+client stale time and a 60-second polling interval. Provider failures do not
+expose transport payloads or erase an existing native usage snapshot.
+
+`runCodexSubscriptionAgent` now uses the same `runModelAgent` streaming/tool
+loop as API runs. Its adapter resolves context capacity from the authenticated
+subscription catalog. Each completed step emits context based on that step's
+input plus output tokens, separately from cumulative billing usage. Compaction
+events preserve the previous count until fresh measured usage arrives. These
+events attach to the current user turn and survive JSON persistence; the
+composer can render them with the existing context ring and popover.
+
+Live verification through that shared loop produced one fixture-tool call and
+two successful conversational turns: 136 then 169 current-context tokens,
+against the returned 272,000-token capacity. Serialized/reloaded items retained
+the same context. Direct subscription metadata returned 30% used in the
+7-day window. No execution VM or native inference runner was started.
+
+Authenticated agent-browser verification opened Settings → Agents and observed
+the existing native snapshot (13%) replaced by the fresh direct reading (30%),
+with its reset timestamp and a new last-updated time. The existing chat's native
+context ring remained visible; the direct-loop context was verified through
+serialized events, not by switching that chat's runtime.
+
+Repeat with `CODEX_SUBSCRIPTION_PROOF=1 node --env-file=.env --import tsx
+scripts/prove-codex-subscription-usage.ts`. This proof creates no chats or VMs.
+
+This wires the direct adapter's telemetry and the live Settings query, but does
+not switch ordinary Codex chats or the durable job dispatcher away from the
+native runtime. That routing change is separate; the direct adapter is not
+represented as a fully deployed production runtime.
