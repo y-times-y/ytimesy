@@ -36,6 +36,10 @@ import type { ClaudeHomeRestore } from "#/server/adapters/claude/home-files";
 import { REMOVE_CODEX_CREDENTIAL_FILES } from "#/server/adapters/codex/credential-files";
 import { DEVELOPER_INSTRUCTIONS_PATH } from "#/server/adapters/freestyle/clone-project";
 import { ensureGuestCliPin } from "#/server/adapters/guest-cli-pin";
+import {
+	PEER_INBOX_PATH,
+	PEER_INBOX_SOURCE,
+} from "#/server/services/peer-inbox";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
 import { embedTaskToolDefinitions } from "../task-tool-source";
 
@@ -555,6 +559,7 @@ export function submitClaudeTask(
 		readonly reasoningEffort?: string;
 		readonly fast?: boolean;
 		readonly readOnly?: boolean;
+		readonly peerSessionId?: string;
 	},
 ): Effect.Effect<ClaudeAuthStatus> {
 	return Effect.gen(function* () {
@@ -611,6 +616,40 @@ export function submitClaudeTask(
 			),
 		);
 		const keyPrefix = `. ${KEY_ENV_PATH}\n: "\${ANTHROPIC_API_KEY:?Anthropic API key is required}"\n`;
+		yield* Effect.tryPromise(async () => {
+			await machines.writeTextFile(
+				workspaceId,
+				"/tmp/ytimesy-peer-hook.py",
+				PEER_INBOX_SOURCE,
+			);
+			await machines.writeTextFile(
+				workspaceId,
+				"/tmp/ytimesy-peer-hooks.json",
+				JSON.stringify({
+					hooks: Object.fromEntries(
+						[
+							"UserPromptSubmit",
+							"PostToolUse",
+							"PostToolUseFailure",
+							"Stop",
+						].map((event) => [
+							event,
+							[
+								{
+									hooks: [
+										{
+											type: "command",
+											command: `python3 /tmp/ytimesy-peer-hook.py ${PEER_INBOX_PATH} hook ${posixShellQuoted(input.peerSessionId ?? "unbound")}`,
+											timeout: 5,
+										},
+									],
+								},
+							],
+						]),
+					),
+				}),
+			);
+		});
 		const prompt = input.promptText ?? input.text;
 		const reasoningFlag = input.reasoningEffort
 			? ` --effort ${posixShellQuoted(input.reasoningEffort)}`
@@ -630,7 +669,7 @@ export function submitClaudeTask(
 				guestBash(
 					`${keyPrefix}
 (
-  python3 ${TURN_PTY_PATH} ${TURN_OUT_PATH} ${TURN_ERR_PATH} -- ${posixShellQuoted(claudeBin)} -p --output-format stream-json --verbose --include-partial-messages${permissionFlag} --strict-mcp-config --mcp-config ${TASK_TOOL_CONFIG_PATH} --append-system-prompt ${posixShellQuoted(systemPrompt?.trim() || AGENT_ORCHESTRATION_INSTRUCTIONS)} --model ${posixShellQuoted(input.modelId)}${reasoningFlag}${fastFlag} ${posixShellQuoted(prompt)}
+  python3 ${TURN_PTY_PATH} ${TURN_OUT_PATH} ${TURN_ERR_PATH} -- ${posixShellQuoted(claudeBin)} -p --output-format stream-json --verbose --include-partial-messages${permissionFlag} --strict-mcp-config --mcp-config ${TASK_TOOL_CONFIG_PATH} --settings /tmp/ytimesy-peer-hooks.json --append-system-prompt ${posixShellQuoted(systemPrompt?.trim() || AGENT_ORCHESTRATION_INSTRUCTIONS)} --model ${posixShellQuoted(input.modelId)}${reasoningFlag}${fastFlag} ${posixShellQuoted(prompt)}
   echo $? >${TURN_EXIT_PATH}
 ) >/dev/null 2>&1 &
 echo $! >${TURN_PID_PATH}`,

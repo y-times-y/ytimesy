@@ -102,7 +102,17 @@ describe("job queue connection lifecycle", () => {
 		const [a, b] = await Promise.all([first, second]);
 		expect(premature).toBe(false);
 		expect(a).toBe(b);
-		expect(fake.instances[0].createQueue).toHaveBeenCalledTimes(5);
+		expect(fake.instances[0].createQueue).toHaveBeenCalledTimes(6);
+		expect(fake.instances[0].createQueue).toHaveBeenCalledWith(
+			"agent-peer-message",
+			{
+				policy: "singleton",
+				retryLimit: 5760,
+				retryDelay: 15,
+				retryBackoff: false,
+				expireInSeconds: 1800,
+			},
+		);
 	});
 	it("closes a failed startup and lets the next request retry", async () => {
 		fake.start = async () => {

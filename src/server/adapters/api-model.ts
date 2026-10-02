@@ -4,6 +4,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import type { LanguageModel } from "ai";
 import type { ModelProvider } from "#/domain/model-connection";
+import { openRouterCacheFetch } from "./api-prompt-cache";
 
 export function connectedLanguageModel(
 	input: {
@@ -23,6 +24,15 @@ export function connectedLanguageModel(
 		case "google":
 			return createGoogleGenerativeAI(options)(input.modelId);
 		case "openrouter":
+			return createOpenAICompatible({
+				...options,
+				name: input.provider,
+				includeUsage: true,
+				fetch:
+					new URL(input.baseUrl).hostname === "openrouter.ai"
+						? openRouterCacheFetch(fetch)
+						: fetch,
+			})(input.modelId);
 		case "compatible":
 			return createOpenAICompatible({ ...options, name: input.provider })(
 				input.modelId,

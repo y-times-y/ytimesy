@@ -7,6 +7,15 @@ export function applyApiProgress(
 	turnId: string,
 	event: ApiAgentEvent,
 ): SessionItem[] {
+	if (event.type === "usage") {
+		let index = items.length - 1;
+		while (index >= 0 && items[index].kind !== "userMessage") index--;
+		return items.map((item, position) =>
+			position === index && item.kind === "userMessage"
+				? { ...item, apiUsage: event.usage }
+				: item,
+		);
+	}
 	if (event.type === "finish")
 		return items.map((item) =>
 			item.kind === "agentMessage" ? { ...item, streaming: false } : item,

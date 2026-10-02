@@ -2,6 +2,7 @@ import {
 	apiConversation,
 	assertApiContextFits,
 } from "#/domain/api-conversation";
+import { childTaskPublicItems } from "#/domain/child-task-activity";
 import { parseModelRouteId } from "#/domain/model-connection";
 import {
 	sessionItemsFromUnknown,
@@ -35,8 +36,10 @@ export async function readApiWorkspaceSession(scope: CodexSessionScope) {
 		...emptyCodexSession(),
 		models,
 		agentSessionId: session?.id ?? null,
+		selectedBranch:
+			session?.selectedBranch ?? session?.workingBranch ?? session?.taskBranch,
 		workspaceId: session?.providerRef ?? null,
-		items: sessionItemsFromUnknown(session?.items),
+		items: childTaskPublicItems(sessionItemsFromUnknown(session?.items)),
 		turnStatus: session?.turnStatus ?? "idle",
 		listedModelId:
 			session?.harness === "api" ? (session.listedModelId ?? "") : "",

@@ -4,6 +4,7 @@ import { agentSessionRoleInstructions } from "#/domain/agent-orchestration";
 import { PREPARED_ENVIRONMENT_INSTRUCTIONS } from "#/domain/environment-context";
 import { failureMessage } from "#/domain/failure-message";
 import type { WorkspaceId } from "#/domain/ids";
+import { posixShellQuoted } from "#/domain/posix-command";
 import {
 	type ProjectCheckout,
 	projectCheckoutFromFullName,
@@ -14,10 +15,8 @@ import {
 	projectFolderName,
 	repositoriesForProject,
 } from "#/domain/projects";
-import {
-	sessionCloneBranch,
-	sessionWorkingBranch,
-} from "#/domain/session-branch";
+import { sessionCloneBranch } from "#/domain/session-branch";
+import { sessionItemsFromUnknown } from "#/domain/session-item";
 import { agentSessionForOwner } from "#/server/adapters/agent-sessions";
 import {
 	DEVELOPER_INSTRUCTIONS_PATH,
@@ -84,6 +83,19 @@ function ensureSingleProjectCheckout(
 					`${reusedPath}\n`,
 				),
 			);
+			const branch = yield* Effect.tryPromise(() =>
+				machines.exec(
+					workspaceId,
+					`git -C ${posixShellQuoted(reusedPath)} branch --show-current`,
+					15_000,
+				),
+			);
+			const switching = branch.stdout.trim() !== checkout.workingBranch;
+			if (
+				checkout.retainExistingBranch ||
+				(checkout.preserveCurrentBranch && !switching)
+			)
+				return reusedPath;
 			yield* Effect.tryPromise(() =>
 				receiveBrokeredRepository(
 					{
@@ -92,9 +104,21 @@ function ensureSingleProjectCheckout(
 						writeTextFile: (path, text) =>
 							machines.writeTextFile(workspaceId, path, text),
 					},
-					{ ...checkout, destination: reusedPath, mode: "update" },
+					{
+						...checkout,
+						destination: reusedPath,
+						mode: switching ? "switch" : "update",
+					},
 				),
-			).pipe(Effect.catchAll(() => Effect.void));
+			).pipe(
+				Effect.catchAll((error) =>
+					switching
+						? Effect.fail(
+								error instanceof Error ? error : new Error(String(error)),
+							)
+						: Effect.void,
+				),
+			);
 			return reusedPath;
 		}
 		const home = yield* guestHome(machines, workspaceId);
@@ -138,14 +162,44 @@ export function writeDeveloperInstructions(
 export function loadTenantProjectCheckout(scope: {
 	readonly userId: string;
 	readonly projectId?: string;
-}): Effect.Effect<ProjectCheckout | null> {
+	readonly sessionId?: string;
+}): Effect.Effect<ProjectCheckout | null, Error> {
 	return Effect.tryPromise(async () => {
 		const project = scope.projectId
 			? await projectForOwner(scope.userId, scope.projectId)
 			: ((await listProjects(scope.userId))[0] ?? null);
 		if (!project) return null;
-		const checkout = await checkoutForProject(scope.userId, project);
+		let session = scope.sessionId
+			? await agentSessionForOwner(scope.userId, scope.sessionId)
+			: null;
+		if (session && session.projectId !== project.id)
+			throw new Error("This chat is not in the selected project.");
+		while (
+			session?.parentSessionId &&
+			!session.workingBranch &&
+			session.taskExecution !== "stacked"
+		) {
+			session = await agentSessionForOwner(
+				scope.userId,
+				session.parentSessionId,
+			);
+			if (!session || session.projectId !== project.id)
+				throw new Error("This task's parent is not available.");
+		}
+		const checkout = await checkoutForProject(
+			scope.userId,
+			session?.workingBranch
+				? { ...project, branch: session.baseBranch ?? session.workingBranch }
+				: project,
+			session?.workingBranch,
+		);
 		if (!checkout) return null;
+		const legacyConversation =
+			Boolean(session) &&
+			!session?.workingBranch &&
+			sessionItemsFromUnknown(session?.items).some(
+				(item) => item.kind === "userMessage",
+			);
 		const additionalRepositories = [];
 		for (const repository of repositoriesForProject(project).slice(1)) {
 			const additional = await checkoutForProject(scope.userId, {
@@ -154,11 +208,21 @@ export function loadTenantProjectCheckout(scope: {
 			});
 			if (additional) additionalRepositories.push(additional);
 		}
-		return { ...checkout, additionalRepositories };
-	}).pipe(Effect.catchAll(() => Effect.succeed(null)));
+		return {
+			...checkout,
+			retainExistingBranch: legacyConversation,
+			additionalRepositories,
+			preserveCurrentBranch:
+				Boolean(session?.workingBranch) || legacyConversation,
+		};
+	}).pipe(Effect.mapError((error) => new Error(failureMessage(error))));
 }
 
-async function checkoutForProject(userId: string, project: Project) {
+async function checkoutForProject(
+	userId: string,
+	project: Project,
+	workingBranch?: string | null,
+) {
 	const defaultBranch = await projectDefaultBranch(userId, project);
 	return projectCheckoutFromFullName({
 		fullName: project.fullName,
@@ -168,12 +232,7 @@ async function checkoutForProject(userId: string, project: Project) {
 			title: projectFolderName(project.fullName),
 			id: String(project.repositoryId),
 		}),
-		workingBranch: sessionWorkingBranch({
-			selectedBranch: project.branch,
-			defaultBranch,
-			title: projectFolderName(project.fullName),
-			id: String(project.repositoryId),
-		}),
+		workingBranch: workingBranch ?? project.branch,
 		installationId: project.installationId,
 	});
 }

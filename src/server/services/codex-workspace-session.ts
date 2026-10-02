@@ -55,6 +55,7 @@ export type PublicCodexSession = {
 	readonly snapshotAvailable: boolean;
 	readonly workspaceId: string | null;
 	readonly agentSessionId: string | null;
+	readonly selectedBranch?: string | null;
 	readonly connection: AgentConnection;
 	readonly models: readonly ListedModel[];
 	readonly listedModelId: string;

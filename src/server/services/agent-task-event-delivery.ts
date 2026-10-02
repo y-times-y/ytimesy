@@ -3,6 +3,7 @@ import {
 	competitionJudgeInstructions,
 	competitionJudgeQueueText,
 } from "#/domain/agent-competition";
+import { childTaskEventQueueText } from "#/domain/child-task-activity";
 import {
 	claimCompetitionJudge,
 	competitionCandidateIds,
@@ -102,7 +103,8 @@ async function deliverAgentTaskEvent(
 			},
 			{
 				modelId: parent.listedModelId,
-				text: taskEventMessage(event, child.title),
+				text: childTaskEventQueueText(event.id),
+				runtimeText: `${childTaskEventQueueText(event.id)}\n${taskEventMessage(event, child.title)}\n\nThis is an internal task event, not a new user request. The child activity and result are already visible in its expandable card. Do not repeat this notification or paste its full summary into the main chat. Review the evidence and give the user only your own concise synthesis or a necessary decision question.`,
 			},
 		),
 	);

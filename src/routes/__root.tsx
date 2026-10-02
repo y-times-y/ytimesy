@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
 import { useState } from "react";
+import { Analytics } from "../features/analytics/analytics";
 import { AppError, AppNotFound } from "../features/app/app-status";
 import { AuthProviders } from "../features/auth/auth-providers";
 
@@ -47,7 +48,10 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 			</head>
 			<body>
 				<QueryClientProvider client={queryClient}>
-					<AuthProviders>{children}</AuthProviders>
+					<AuthProviders>
+						<Analytics />
+						{children}
+					</AuthProviders>
 				</QueryClientProvider>
 
 				<Scripts />

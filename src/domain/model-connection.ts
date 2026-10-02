@@ -5,6 +5,7 @@ import {
 	isNonCodingModelId,
 	isShownInModelPicker,
 	openRouterModelLabel,
+	recentModelGenerations,
 } from "./browse-models";
 
 export const modelProvider = z.enum([
@@ -116,7 +117,7 @@ export function connectionModels(
 					.sort(
 						(a, b) => googleFlashModelRank(a.id) - googleFlashModelRank(b.id),
 					)
-			: connection.models;
+			: recentModelGenerations(connection.models);
 	const saved = new Map(connection.models.map((model) => [model.id, model]));
 	return browseModels
 		.filter((model) => isShownInModelPicker(model.author, model.id))

@@ -85,6 +85,10 @@ import {
 } from "#/server/proof/persist-claude-auth-snapshot";
 import { decryptHarnessApiKey } from "#/server/secrets/harness-key-store";
 import {
+	discoverAgentPeers,
+	queueAgentPeerMessage,
+} from "./agent-peer-messaging";
+import {
 	bindAgentSessionMachine,
 	bindPreparedAgentTaskMachine,
 	editAgentTaskDraft,
@@ -116,6 +120,7 @@ import {
 } from "./persist-session-view";
 import { preparePreparedGuest } from "./project-workspace";
 import { publishProject } from "./publication";
+import { commitChatBranchForSubmission } from "./session-branch";
 import { machinesForAgentSession } from "./session-workspace-machines";
 import { beginSharedDesktop } from "./workspace-desktop";
 import type { WorkspaceMachines } from "./workspace-machines";
@@ -424,6 +429,15 @@ export function sendHarnessWorkspaceTask(
 			const switching = previous && previous.harness !== scope.harnessId;
 			if (switching && previous.turnStatus === "running")
 				throw new Error("Stop the active turn before switching runtimes.");
+			if (scope.projectId)
+				yield* Effect.tryPromise(() =>
+					commitChatBranchForSubmission({
+						userId: scope.userId,
+						projectId: scope.projectId as string,
+						sessionId: scope.sessionId as string,
+						text: input.text,
+					}),
+				);
 			const runtimeText = switching
 				? runtimeHandoffPrompt(
 						sessionItemsFromUnknown(previous.items),
@@ -460,7 +474,16 @@ export function sendHarnessWorkspaceTask(
 		return sendHarnessSideTask(machines, scope, input);
 	}
 	if (scope.harnessId === "api")
-		return Effect.promise(() => sendApiWorkspaceTask(scope, input));
+		return Effect.promise(async () => {
+			if (scope.sessionId && scope.projectId)
+				await commitChatBranchForSubmission({
+					userId: scope.userId,
+					projectId: scope.projectId,
+					sessionId: scope.sessionId,
+					text: input.text,
+				});
+			return sendApiWorkspaceTask(scope, input);
+		});
 	if (scope.harnessId === "codex") {
 		return queueHarnessTurn(
 			machines,
@@ -712,6 +735,29 @@ export function runAgentTaskTool(
 			return yield* Effect.fail(
 				new Error(
 					"The comparison agent can inspect and select work, but cannot start or publish tasks.",
+				),
+			);
+		if (parent.userId !== scope.userId || parent.projectId !== scope.projectId)
+			throw new Error("The agent is not available in this project.");
+		if (request.tool === "list_peers") {
+			const peers = yield* Effect.tryPromise(() => discoverAgentPeers(parent));
+			return peers.map((task) => ({
+				taskId: task.id,
+				title: task.title,
+				objective: task.taskPrompt,
+				status: task.taskState,
+				turnStatus: task.turnStatus,
+				access: task.taskAccess,
+				modelId: task.listedModelId,
+			}));
+		}
+		if (request.tool === "send_peer_message")
+			return yield* Effect.tryPromise(() =>
+				queueAgentPeerMessage(
+					parent,
+					taskToolString(request.arguments, "taskId"),
+					taskToolString(request.arguments, "message"),
+					request.id,
 				),
 			);
 		if (request.tool === "create_task") {
@@ -1243,7 +1289,7 @@ function submitConnectedHarnessTask(
 ): Effect.Effect<PublicHarnessSession, unknown> {
 	return Effect.gen(function* () {
 		const followUp = sessionRecordHasConversation(session?.items);
-		if (!followUp) {
+		if (!followUp || session?.workingBranch) {
 			yield* preparePreparedGuest(machines, WorkspaceId(providerRef), scope);
 		}
 		beginSharedDesktop(machines, scope);
@@ -1259,7 +1305,7 @@ function submitConnectedHarnessTask(
 							: Promise.resolve(input.text),
 					);
 		const payload = { ...input, promptText };
-		if (followUp) {
+		if (followUp && !session?.workingBranch) {
 			void Effect.runPromise(
 				preparePreparedGuest(machines, WorkspaceId(providerRef), scope).pipe(
 					Effect.catchAll(() => Effect.void),
@@ -1317,6 +1363,7 @@ function submitConnectedHarnessTask(
 				);
 				status = yield* submitClaudeTask(machines, WorkspaceId(providerRef), {
 					...payload,
+					peerSessionId: session?.id,
 					modelId: listedModelId,
 					...(input.variant ? { reasoningEffort: input.variant } : {}),
 					...(input.fast ? { fast: true } : {}),

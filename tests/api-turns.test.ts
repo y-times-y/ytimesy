@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { SessionItemId } from "../src/domain/ids";
 import {
 	cancelApiTurn,
 	checkpointApiTurn,
@@ -99,6 +100,44 @@ it("switches runtime on the same session and freezes the model on the queued tur
 it("rejects another owner's session", async () => {
 	await expect(submit("bob")).rejects.toThrow();
 	expect(await claimApiTurn()).toBeNull();
+});
+it("checkpoints usage through reconnect and failed completion without a schema change", async () => {
+	await submit();
+	const turn = await claimApiTurn();
+	if (!turn) throw new Error("Missing turn");
+	const apiUsage = {
+		inputTokens: 100,
+		outputTokens: 10,
+		uncachedInputTokens: null,
+		cacheReadTokens: 80,
+		cacheWriteTokens: null,
+	};
+	const items = [
+		{
+			kind: "userMessage" as const,
+			id: SessionItemId("prompt"),
+			text: "Fixture",
+			apiUsage,
+		},
+	];
+	await checkpointApiTurn(turn, [], items);
+	expect(
+		(
+			await db.query<{ items: unknown }>(
+				"select items from agent_session where id=$1",
+				[sessionId],
+			)
+		).rows[0].items,
+	).toEqual(items);
+	await finishApiTurn(turn, "failed", items);
+	expect(
+		(
+			await db.query<{ items: unknown }>(
+				"select items from api_turn where id=$1",
+				[turn.id],
+			)
+		).rows[0].items,
+	).toEqual(items);
 });
 it("rejects a connection belonging to another owner", async () => {
 	await db.query("update agent_session set user_id='bob' where id=$1", [

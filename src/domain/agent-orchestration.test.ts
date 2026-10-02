@@ -21,6 +21,37 @@ it("distinguishes the root lead from writable and read-only children", () => {
 });
 
 describe("agent orchestration policy", () => {
+	it("starts authorized implementation without a redundant delegation question", () => {
+		for (const instructions of [
+			AGENT_ORCHESTRATION_INSTRUCTIONS,
+			agentSessionRoleInstructions({}),
+		]) {
+			expect(instructions).toContain("in the same turn");
+			expect(instructions).toContain("do not ask whether to create a child");
+			expect(instructions).toContain(
+				"authorization beyond the requested scope",
+			);
+			expect(instructions).toContain(
+				"wait, plan only, or avoid implementation",
+			);
+			expect(instructions).toContain(
+				"report-only requests without starting writing children",
+			);
+		}
+	});
+
+	it("preserves parallel writers and direct implementation by builders", () => {
+		expect(AGENT_ORCHESTRATION_INSTRUCTIONS).toContain(
+			"Run disjoint writers in parallel",
+		);
+		const builder = agentSessionRoleInstructions({
+			parentSessionId: "parent",
+			taskAccess: "read_write",
+		});
+		expect(builder).toContain("Implement your own bounded task directly");
+		expect(builder).not.toContain("draft and start at least one");
+	});
+
 	it("teaches leads to parallelize selectively and synthesize verified results", () => {
 		expect(AGENT_ORCHESTRATION_INSTRUCTIONS).toContain(
 			"continue useful read-only investigation",

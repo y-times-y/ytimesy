@@ -28,6 +28,7 @@ export async function diagnoseEnvironmentFailure(input: {
 	const prompt = environmentDiagnosisPrompt(input.failure, input.secrets);
 	let text = "";
 	await runApiAgent({
+		cacheScopeId: `environment:${input.workspaceId}`,
 		userId: input.userId,
 		connectionId: input.model.connectionId,
 		connectionRevision: input.model.revision,

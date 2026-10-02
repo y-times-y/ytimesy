@@ -7,6 +7,8 @@ import {
 	saveAgentTaskPublication,
 	saveAgentTaskReview,
 	saveAgentTaskState,
+	saveSessionBranchSelection,
+	saveSessionWorkingBranch,
 	selectAgentSessionHarness,
 } from "../src/server/adapters/agent-sessions";
 import { saveProject } from "../src/server/adapters/projects";
@@ -58,6 +60,7 @@ beforeAll(async () => {
 		"20260919161500_workspace_snapshot_source.sql",
 		"20260927210000_project_environments.sql",
 		"20260927220000_agent_competitions.sql",
+		"20260930220000_chat_branches.sql",
 	])
 		await db.exec(await readFile(`supabase/migrations/${file}`, "utf8"));
 	await db.exec(
@@ -65,6 +68,53 @@ beforeAll(async () => {
 	);
 });
 afterAll(() => db.close());
+
+it("persists branch drafts independently across chats and protects ownership", async () => {
+	const { project, workspaceId } = await readyWorkspace();
+	const a = await insertAgentSession({
+		userId: "alice",
+		projectId: project.id,
+		workspaceId,
+		harness: "codex",
+	});
+	const b = await insertAgentSession({
+		userId: "alice",
+		projectId: project.id,
+		workspaceId,
+		harness: "codex",
+	});
+	await saveSessionBranchSelection("alice", a.id, "feature");
+	const rows = await db.query<{
+		id: string;
+		selected_branch: string | null;
+		working_branch: string | null;
+	}>(
+		"select id,selected_branch,working_branch from agent_session where id in ($1,$2)",
+		[a.id, b.id],
+	);
+	expect(rows.rows.find((row) => row.id === a.id)?.selected_branch).toBe(
+		"feature",
+	);
+	expect(rows.rows.find((row) => row.id === b.id)?.selected_branch).toBeNull();
+	expect(rows.rows.every((row) => row.working_branch === null)).toBe(true);
+	expect(
+		(
+			await db.query<{ branch: string }>(
+				"select branch from project where id=$1",
+				[project.id],
+			)
+		).rows[0].branch,
+	).toBe("main");
+	await expect(
+		saveSessionBranchSelection("bob", a.id, "main"),
+	).rejects.toThrow();
+	await db.query("update agent_session set turn_status='running' where id=$1", [
+		a.id,
+	]);
+	await expect(
+		saveSessionWorkingBranch("alice", a.id, "main"),
+	).rejects.toThrow();
+});
 
 async function readyWorkspace() {
 	const project = await saveProject(

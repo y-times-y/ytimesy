@@ -8,14 +8,20 @@ import {
 } from "#/domain/agent-provider";
 import { chatsFromAgentSessions } from "#/domain/agent-session";
 import {
-	type AgentTask,
 	type AgentTaskAccess,
 	type AgentTaskExecution,
 	type AgentTaskPlacement,
 	agentTaskTree,
 } from "#/domain/agent-task";
+import {
+	type AgentTaskActivity,
+	childTaskPublicItems,
+} from "#/domain/child-task-activity";
 import { publicFailureMessage } from "#/domain/project-workspace";
-import type { SessionTurnStatus } from "#/domain/session-item";
+import {
+	type SessionTurnStatus,
+	sessionItemsFromUnknown,
+} from "#/domain/session-item";
 import {
 	agentSessionForOwner,
 	descendantAgentSessions,
@@ -23,6 +29,7 @@ import {
 } from "#/server/adapters/agent-sessions";
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
 import { requireUser } from "#/server/auth/auth";
+import { requireSameOrigin } from "#/server/http";
 import {
 	deleteAgentSessionMachine,
 	editAgentTaskDraft,
@@ -34,6 +41,7 @@ import {
 	requestAgentTaskWrapUp,
 	startPreparedAgentTask,
 } from "#/server/services/harness-workspace-session";
+import { selectChatBranch } from "#/server/services/session-branch";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
 
 export type PublicAgentChat = {
@@ -45,6 +53,29 @@ export type PublicAgentChat = {
 	readonly updatedAt?: string | null;
 	readonly workspaceId?: string | null;
 };
+
+export const selectProjectChatBranch = createServerFn({ method: "POST" })
+	.validator(
+		(data: { projectId: string; sessionId: string; branch: string }) => {
+			if (
+				![data.projectId, data.sessionId, data.branch].every(
+					(value) => typeof value === "string" && value.trim(),
+				)
+			)
+				throw new Error("Choose a chat and branch.");
+			return {
+				projectId: data.projectId.trim(),
+				sessionId: data.sessionId.trim(),
+				branch: data.branch.trim(),
+			};
+		},
+	)
+	.handler(async ({ data }) => {
+		requireSameOrigin(getRequest());
+		const user = await requireUser(getRequest().headers);
+		const session = await selectChatBranch({ ...data, userId: user.id });
+		return { selectedBranch: session.selectedBranch };
+	});
 
 function runWithMachines<A>(
 	run: (machines: WorkspaceMachines) => Promise<A>,
@@ -128,7 +159,7 @@ export const listProjectAgentTasks = createServerFn({ method: "GET" })
 			rootSessionId: data?.rootSessionId?.trim() ?? "",
 		}),
 	)
-	.handler(async ({ data }): Promise<readonly AgentTask[]> => {
+	.handler(async ({ data }): Promise<readonly AgentTaskActivity[]> => {
 		if (!data.projectId || !data.rootSessionId) return [];
 		const user = await requireUser(getRequest().headers);
 		const root = await agentSessionForOwner(user.id, data.rootSessionId);
@@ -136,10 +167,17 @@ export const listProjectAgentTasks = createServerFn({ method: "GET" })
 			return [];
 		}
 		const descendants = await descendantAgentSessions(user.id, root.id);
+		const byId = new Map(descendants.map((session) => [session.id, session]));
 		return agentTaskTree(
 			root.id,
 			descendants.filter((session) => session.title !== "Side chat"),
-		);
+		).map((task) => ({
+			...task,
+			items: childTaskPublicItems(
+				sessionItemsFromUnknown(byId.get(task.id)?.items),
+			),
+			turnStatus: byId.get(task.id)?.turnStatus ?? "idle",
+		}));
 	});
 
 type TaskDraftInput = {

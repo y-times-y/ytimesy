@@ -1,3 +1,4 @@
+import { Effect } from "effect";
 import {
 	AGENT_ORCHESTRATION_INSTRUCTIONS,
 	agentSessionRoleInstructions,
@@ -24,6 +25,11 @@ import { loadModelConnection } from "../adapters/model-connections";
 import { bindAgentSessionMachine } from "../services/agent-session-machine";
 import { runApiAgent } from "../services/api-agent-runtime";
 import { apiAgentTools } from "../services/api-agent-tools";
+import { injectApiPeerMessages } from "../services/peer-inbox";
+import {
+	ensureProjectCheckout,
+	loadTenantProjectCheckout,
+} from "../services/project-workspace";
 import { machinesForAgentSession } from "../services/session-workspace-machines";
 import type { WorkspaceMachines } from "../services/workspace-machines";
 
@@ -73,6 +79,22 @@ export async function runApiTurn(machines: WorkspaceMachines, turn: ApiTurn) {
 		});
 		machines = machinesForAgentSession(machines, bound.session);
 		await machines.ensureRunning(WorkspaceId(bound.providerRef));
+		if (bound.session.taskPlacement !== "shared") {
+			await Effect.runPromise(
+				Effect.gen(function* () {
+					const checkout = yield* loadTenantProjectCheckout({
+						userId: owner.userId,
+						projectId: owner.projectId,
+						sessionId: owner.id,
+					});
+					yield* ensureProjectCheckout(
+						machines,
+						WorkspaceId(bound.providerRef),
+						checkout,
+					);
+				}),
+			);
+		}
 		publishProgress = (turnStatus) =>
 			machines.writeTextFile(
 				WorkspaceId(bound.providerRef),
@@ -103,6 +125,7 @@ export async function runApiTurn(machines: WorkspaceMachines, turn: ApiTurn) {
 		let flushedAt = 0;
 		failureStage = "model";
 		await runApiAgent({
+			cacheScopeId: owner.id,
 			userId: turn.user_id,
 			connectionId: turn.connection_id,
 			modelId: turn.model_id,
@@ -110,6 +133,17 @@ export async function runApiTurn(machines: WorkspaceMachines, turn: ApiTurn) {
 			instructions: `You are the ytimesy coding agent. Work in ${cwd}. Read repository instructions before editing. ${PREPARED_ENVIRONMENT_INSTRUCTIONS} ${AGENT_ORCHESTRATION_INSTRUCTIONS} ${agentSessionRoleInstructions(bound.session)}`,
 			tools,
 			signal: abort.signal,
+			prepareMessages: (history) =>
+				injectApiPeerMessages(
+					machines,
+					WorkspaceId(bound.providerRef),
+					history,
+					async (injected) => {
+						messages = injected;
+						await checkpointApiTurn(turn, messages, items);
+					},
+					owner.id,
+				),
 			beforeStep: async (history) => {
 				failureStage = "budget";
 				assertApiContextFits(history);

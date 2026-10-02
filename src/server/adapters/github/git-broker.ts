@@ -19,6 +19,18 @@ export interface GitTransferHost {
 	readTextFile?(path: string): Promise<string | null>;
 }
 
+/** A switch preserves both local branch histories and refuses to carry dirty edits across them. */
+export function switchBrokeredBranchCommand(directory: string, branch: string) {
+	const dest = quote(directory);
+	const target = quote(branch);
+	return `test -z "$(git -C ${dest} status --porcelain)" || { echo 'Commit or stash uncommitted changes before switching branches.' >&2; exit 1; }
+if git -C ${dest} show-ref --verify --quiet ${quote(`refs/heads/${branch}`)}; then
+  git -C ${dest} -c core.hooksPath=/dev/null checkout ${target}
+else
+  git -C ${dest} -c core.hooksPath=/dev/null checkout -b ${target} FETCH_HEAD
+fi`;
+}
+
 type Repository = {
 	owner: string;
 	name: string;
@@ -109,7 +121,7 @@ export async function receiveBrokeredRepository(
 	input: Repository & {
 		destination: string;
 		workingBranch?: string;
-		mode: "clone" | "update";
+		mode: "clone" | "update" | "switch";
 	},
 ): Promise<string> {
 	const url = repositoryUrl(input);
@@ -121,12 +133,18 @@ export async function receiveBrokeredRepository(
 			"--branch",
 			input.workingBranch || input.branch,
 		]);
-		if (input.mode === "update") {
+		if (input.mode !== "clone") {
 			const state = await checked(
 				host,
 				`git -C ${quote(input.destination)} status --porcelain`,
 			);
-			if (state) return "dirty";
+			if (state) {
+				if (input.mode === "switch")
+					throw new Error(
+						"Commit or stash this chat's uncommitted changes before switching branches.",
+					);
+				return "dirty";
+			}
 		}
 		const token = await githubInstallationAccessToken(input.installationId, {
 			repositoryNames: [input.name],
@@ -170,7 +188,7 @@ umask 077
 base64 -d < ${quote(`${transfer}.b64`)} > ${quote(transfer)}
 ${input.mode === "clone" ? `test ! -e ${dest}\nmkdir -p ${dest}\ngit -C ${dest} init` : `test -z "$(git -C ${dest} status --porcelain)"`}
 git -C ${dest} -c core.hooksPath=/dev/null fetch --no-tags ${quote(transfer)} refs/heads/source
-${input.mode === "clone" ? `git -C ${dest} -c core.hooksPath=/dev/null checkout -b ${branch} FETCH_HEAD\ngit -C ${dest} remote add origin ${quote(url)}` : `git -C ${dest} -c core.hooksPath=/dev/null merge --ff-only FETCH_HEAD\ngit -C ${dest} -c core.hooksPath=/dev/null checkout -B ${branch}\ngit -C ${dest} remote set-url origin ${quote(url)}`}
+${input.mode === "clone" ? `git -C ${dest} -c core.hooksPath=/dev/null checkout -b ${branch} FETCH_HEAD\ngit -C ${dest} remote add origin ${quote(url)}` : input.mode === "switch" ? switchBrokeredBranchCommand(input.destination, input.workingBranch || input.branch) : `git -C ${dest} -c core.hooksPath=/dev/null merge --ff-only FETCH_HEAD\ngit -C ${dest} -c core.hooksPath=/dev/null checkout -B ${branch}\ngit -C ${dest} remote set-url origin ${quote(url)}`}
 echo updated`,
 			);
 			return "updated";

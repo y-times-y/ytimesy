@@ -48,7 +48,8 @@ it("does not save a repository outside the users GitHub access", async () => {
 	expect(adapter.save).not.toHaveBeenCalled();
 	expect(adapter.branch).not.toHaveBeenCalled();
 });
-it("saves the default ytimesy chat branch without requiring it on GitHub", async () => {
+it("normalizes the legacy generated project branch to the repository default", async () => {
+	adapter.branch.mockResolvedValue({});
 	adapter.authorize.mockResolvedValue({
 		fullName: "test/repo",
 		installationId: 1,
@@ -81,8 +82,12 @@ it("saves the default ytimesy chat branch without requiring it on GitHub", async
 			enqueue,
 		),
 	);
-	expect(adapter.branch).not.toHaveBeenCalled();
-	expect(adapter.save).toHaveBeenCalledOnce();
+	expect(adapter.branch).toHaveBeenCalledWith({
+		owner: "test",
+		repo: "repo",
+		branch: "main",
+	});
+	expect(adapter.save).toHaveBeenCalledWith("alice", expect.anything(), "main");
 });
 
 it("does not save a nonexistent branch", async () => {

@@ -12,6 +12,7 @@ const adapter = vi.hoisted(() => ({
 	create: vi.fn(),
 	workspace: vi.fn(),
 	push: vi.fn(),
+	peek: vi.fn(),
 }));
 vi.mock("../src/server/adapters/github/git-broker", () => ({
 	pushBrokeredRepository: adapter.push,
@@ -34,10 +35,7 @@ vi.mock("../src/server/adapters/workspaces", () => ({
 	readyWorkspaceForOwner: adapter.workspace,
 }));
 vi.mock("../src/server/services/agent-session-machine", () => ({
-	peekAgentSessionMachine: async () => ({
-		session: { id: "sess" },
-		providerRef: "memory:session",
-	}),
+	peekAgentSessionMachine: adapter.peek,
 }));
 
 const projectId = "11111111-1111-4111-8111-111111111111";
@@ -61,6 +59,10 @@ beforeEach(() => {
 	adapter.token.mockResolvedValue("user-token");
 	adapter.installationToken.mockResolvedValue("ghs_install");
 	adapter.push.mockResolvedValue(undefined);
+	adapter.peek.mockResolvedValue({
+		session: { id: "sess" },
+		providerRef: "memory:session",
+	});
 	adapter.project.mockResolvedValue({
 		id: projectId,
 		repositoryId: 2,
@@ -74,6 +76,38 @@ beforeEach(() => {
 		fullName: "acme/app",
 		defaultBranch: "master",
 	});
+});
+
+it("publishes the chat working branch against its selected starting branch", async () => {
+	vi.stubEnv("GITHUB_APP_BOT_USER_ID", "328807657");
+	vi.stubEnv("GITHUB_APP_SLUG", "ytimesy-cloud");
+	const runtime = await readyRuntime();
+	adapter.peek.mockResolvedValue({
+		session: {
+			id: "sess",
+			workingBranch: "ytimesy/task-sess",
+			baseBranch: "feature",
+		},
+		providerRef: "memory:session",
+	});
+	adapter.ahead.mockResolvedValue(1);
+	adapter.create.mockResolvedValue({
+		number: 9,
+		url: "https://github.example.test/acme/app/pull/9",
+		draft: true,
+	});
+	await Effect.runPromise(
+		publishProject(
+			"alice",
+			{ projectId, sessionId: "sess", title: "Task" },
+			runtime,
+		),
+	);
+	expect(adapter.create).toHaveBeenCalledWith(
+		"user-token",
+		"acme/app",
+		expect.objectContaining({ head: "ytimesy/task-sess", base: "feature" }),
+	);
 });
 
 it("does not create a pull request for another users project", async () => {

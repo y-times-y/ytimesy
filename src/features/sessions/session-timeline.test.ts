@@ -2,6 +2,7 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { AgentCompetition } from "#/domain/agent-competition";
+import type { AgentTaskActivity } from "#/domain/child-task-activity";
 import { SessionItemId } from "#/domain/ids";
 import type { SessionItem } from "#/domain/session-item";
 import { SessionTimeline } from "./session-timeline";
@@ -36,6 +37,75 @@ function renderTimeline(
 }
 
 describe("session timeline live collapse", () => {
+	it("renders one expandable child card with its own activity, not an internal handoff bubble", () => {
+		const child: AgentTaskActivity = {
+			id: "child",
+			parentSessionId: "root",
+			title: "Fix branch picker",
+			label: "Task 1",
+			depth: 1,
+			status: "done",
+			prompt: "Fix the picker",
+			placement: "fresh",
+			access: "read_write",
+			execution: "parallel",
+			dependsOnSessionId: null,
+			summary: "Implemented",
+			reviewState: "pending",
+			branch: null,
+			pullRequestUrl: null,
+			harnessId: "codex",
+			listedModelId: null,
+			createdAt: new Date(2000).toISOString(),
+			updatedAt: new Date(3000).toISOString(),
+			turnStatus: "completed",
+			items: [
+				{
+					kind: "userMessage",
+					id: SessionItemId("child-instructions"),
+					text: "Inspect the repository and implement the fix",
+				},
+				thought("child-thought", false),
+				readCall("child-read", "completed"),
+				{
+					kind: "agentMessage",
+					id: SessionItemId("result"),
+					text: "**Verified** the fix",
+				},
+			],
+		};
+		const html = renderToString(
+			createElement(SessionTimeline, {
+				turnStatus: "completed",
+				tasks: [child],
+				items: [
+					{
+						kind: "userMessage",
+						id: SessionItemId("prompt"),
+						text: "Fix it",
+						timing: { startedAt: 1000 },
+					},
+					{
+						kind: "userMessage",
+						id: SessionItemId("notice"),
+						text: "Fix branch picker finished. Its final summary is below:\n\nImplemented\n\nInspect its evidence and diff before accepting or publishing the result.",
+					},
+				],
+			}),
+		);
+		expect(html.match(/class="child-task-card"/g)).toHaveLength(1);
+		expect(html).toContain("<details");
+		expect(html).toContain("Fix branch picker");
+		expect(html).toContain('data-streamdown="strong">Verified</span>');
+		expect(html).toContain(
+			'<details class="session-work child-task-instructions">',
+		);
+		expect(html).toContain("Task instructions");
+		expect(html).toContain("Looking at the session timeline");
+		expect(html).toContain("read_file");
+		expect(html).not.toContain("Its final summary is below");
+		expect(html).not.toContain("Inspect its evidence and diff");
+	});
 	it("shows a persisted failure reason in the chat", () => {
 		const html = renderTimeline(
 			[

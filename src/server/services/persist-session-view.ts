@@ -3,6 +3,7 @@ import {
 	competitionPublicItems,
 } from "#/domain/agent-competition";
 import { sessionTurnStatusForPersist } from "#/domain/agent-session";
+import { childTaskPublicItems } from "#/domain/child-task-activity";
 import { listedModelPreferenceFromSessions } from "#/domain/listed-model";
 import {
 	briefingUpdateFromTurn,
@@ -43,6 +44,7 @@ import {
 	enqueueSessionCheckpoint,
 } from "#/server/jobs/queue";
 import type { PublicCodexSession } from "./codex-workspace-session";
+import { captureTurnTransition } from "./turn-analytics";
 
 export async function persistQueuedUserTurn(
 	session: AgentSessionRecord | null,
@@ -75,14 +77,21 @@ export async function persistBoundSessionView(
 		};
 	}
 	const stored = (await agentSessionById(session.id)) ?? session;
+	view = {
+		...view,
+		selectedBranch:
+			stored.selectedBranch ?? stored.workingBranch ?? stored.taskBranch,
+	};
 	const competition =
 		stored.candidateIndex && stored.parentSessionId
 			? await competitionForCandidate(stored.userId, stored.id)
 			: null;
 	const publicItems = (items: readonly SessionItem[]) =>
-		competition
-			? competitionCandidatePublicItems(items, competition.prompt)
-			: competitionPublicItems(items);
+		childTaskPublicItems(
+			competition
+				? competitionCandidatePublicItems(items, competition.prompt)
+				: competitionPublicItems(items),
+		);
 	const recordedItems = publicItems(sessionItemsFromUnknown(stored.items));
 	const providerItems = publicItems(view.items);
 	if (
@@ -92,7 +101,7 @@ export async function persistBoundSessionView(
 		await saveAgentModelCatalog(session.userId, session.harness, view.models);
 	}
 	let liveItems = sessionViewItems(providerItems, recordedItems);
-	const title = stored.candidateIndex
+	const title = stored.parentSessionId
 		? undefined
 		: sessionTitleFromItems(liveItems);
 	const submittedModelId = view.listedModelId.trim() || stored.listedModelId;
@@ -117,6 +126,7 @@ export async function persistBoundSessionView(
 		persistTurn,
 	);
 	const turnStatus = saved?.turnStatus ?? persistTurn ?? session.turnStatus;
+	if (saved) captureTurnTransition(stored, turnStatus, liveItems);
 	if (
 		process.env.SUPABASE_STORAGE_SERVICE_KEY &&
 		stored.turnStatus === "running" &&
@@ -174,7 +184,9 @@ export async function persistSessionTurnStatus(
 	turnStatus: SessionTurnStatus,
 ): Promise<void> {
 	if (!session) return;
-	await saveAgentSessionTurnStatus(session.id, turnStatus);
+	const stored = (await agentSessionById(session.id)) ?? session;
+	const saved = await saveAgentSessionTurnStatus(session.id, turnStatus);
+	if (saved) captureTurnTransition(stored, turnStatus, saved.items);
 }
 
 async function captureTurnTrace(

@@ -1,4 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { useServerFn } from "@tanstack/react-start";
 import {
 	Select,
 	SelectContent,
@@ -7,18 +8,12 @@ import {
 	SelectValue,
 } from "#/components/ui/select";
 import type { EnvironmentModelRequest } from "#/domain/environment-model";
-import { branchSwitchBlockedReason } from "../../domain/project-workspace";
-import { type Project, projectFolderName } from "../../domain/projects";
-import {
-	listedSessionBranches,
-	sessionWorkingBranch,
-} from "../../domain/session-branch";
+import type { Project } from "../../domain/projects";
+import { listedSessionBranches } from "../../domain/session-branch";
 import { requestJson } from "../projects/api";
 import { GithubSetupLink } from "../projects/github-setup-link";
-import {
-	WorkspaceStatus,
-	type WorkspaceView,
-} from "../projects/workspace-status";
+import { WorkspaceStatus } from "../projects/workspace-status";
+import { selectProjectChatBranch } from "./agent-session.fn";
 import { ProjectPicker } from "./project-picker";
 
 export function ProjectContext({
@@ -30,6 +25,11 @@ export function ProjectContext({
 	onProjectPickerOpenChange,
 	repairModel,
 	repairModelLabel,
+	sessionId,
+	selectedBranch,
+	onBranchChange,
+	branchLocked = false,
+	hasConversation = false,
 }: {
 	projects: Project[];
 	selectedProject?: Project;
@@ -39,6 +39,11 @@ export function ProjectContext({
 	onProjectPickerOpenChange?: (open: boolean) => void;
 	repairModel?: EnvironmentModelRequest;
 	repairModelLabel?: string;
+	sessionId?: string | null;
+	selectedBranch?: string | null;
+	onBranchChange?: (branch: string) => void;
+	branchLocked?: boolean;
+	hasConversation?: boolean;
 }) {
 	return (
 		<div className="session-context">
@@ -51,7 +56,15 @@ export function ProjectContext({
 					onOpenChange={onProjectPickerOpenChange}
 				/>
 			)}
-			<BranchSelect project={selectedProject} />
+			<BranchSelect
+				key={sessionId ?? selectedProject?.id}
+				project={selectedProject}
+				sessionId={sessionId}
+				selectedBranch={selectedBranch}
+				onBranchChange={onBranchChange}
+				locked={branchLocked}
+				hasConversation={hasConversation}
+			/>
 			{selectedProject && (
 				<WorkspaceStatus
 					projectId={selectedProject.id}
@@ -63,16 +76,22 @@ export function ProjectContext({
 	);
 }
 
-function BranchSelect({ project }: { project?: Project }) {
-	const queryClient = useQueryClient();
-	const workspace = useQuery({
-		queryKey: ["workspace", project?.id],
-		queryFn: () =>
-			requestJson<WorkspaceView | null>(
-				`/api/workspaces?projectId=${project?.id}`,
-			),
-		enabled: !!project,
-	});
+function BranchSelect({
+	project,
+	sessionId,
+	selectedBranch,
+	onBranchChange,
+	locked,
+	hasConversation,
+}: {
+	project?: Project;
+	sessionId?: string | null;
+	selectedBranch?: string | null;
+	onBranchChange?: (branch: string) => void;
+	locked?: boolean;
+	hasConversation?: boolean;
+}) {
+	const selectBranch = useServerFn(selectProjectChatBranch);
 	const branches = useQuery({
 		queryKey: [
 			"github",
@@ -88,38 +107,34 @@ function BranchSelect({ project }: { project?: Project }) {
 		retry: false,
 	});
 	const switchBranch = useMutation({
-		mutationFn: (branch: string) =>
-			requestJson<Project>("/api/projects", {
-				installationId: project?.installationId,
-				repositoryId: project?.repositoryId,
-				branch,
-			}),
-		onSuccess: () => {
-			void queryClient.invalidateQueries({ queryKey: ["projects"] });
-			void queryClient.invalidateQueries({
-				queryKey: ["workspace", project?.id],
+		mutationFn: async (branch: string) => {
+			if (!sessionId) return;
+			return selectBranch({
+				data: {
+					projectId: project?.id ?? "",
+					sessionId: sessionId ?? "",
+					branch,
+				},
 			});
+		},
+		onSuccess: (_result, branch) => {
+			onBranchChange?.(branch);
 		},
 	});
 	const remote = branches.data?.branches ?? [];
-	const workingBranch = project
-		? sessionWorkingBranch({
-				selectedBranch: project.branch,
-				defaultBranch: branches.data?.defaultBranch,
-				title: projectFolderName(project.fullName),
-				id: String(project.repositoryId),
-			})
-		: "";
+	const workingBranch =
+		selectedBranch ??
+		(hasConversation ? project?.branch : branches.data?.defaultBranch) ??
+		project?.branch ??
+		"";
 	const names = listedSessionBranches({
 		remoteBranches: [...(project ? [project.branch] : []), ...remote],
 		workingBranch,
 	});
-	const preparing = branchSwitchBlockedReason(workspace.data?.status);
 	const disabled =
 		!project ||
+		locked ||
 		switchBranch.isPending ||
-		workspace.isPending ||
-		Boolean(preparing) ||
 		branches.isPending ||
 		branches.isError;
 	const error = switchBranch.error ?? (project ? branches.error : null);

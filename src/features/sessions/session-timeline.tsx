@@ -1,7 +1,12 @@
-import { ChevronRight } from "lucide-react";
+import { Check, ChevronRight, CircleAlert, Clock3 } from "lucide-react";
 import { Fragment, type UIEvent, useEffect, useRef } from "react";
-import { SixDotSpinner } from "#/components/ui/six-dot-spinner";
+import { MatrixDotLoader } from "#/components/ui/matrix-dot-loader";
 import type { AgentCompetition } from "#/domain/agent-competition";
+import {
+	type AgentTaskActivity,
+	childTaskPromptId,
+	childTaskPublicItems,
+} from "#/domain/child-task-activity";
 import { commandActivityTitle } from "#/domain/command-activity-title";
 import { fileChangeTotals } from "#/domain/diff-preview";
 import {
@@ -43,20 +48,37 @@ export function SessionTimeline({
 	fill = false,
 	onOpenFile,
 	competitions = [],
+	tasks = [],
+	taskParentId,
 	onOpenCandidate,
 	autoScroll = true,
+	collapseInstructions = false,
 }: {
 	items: readonly SessionItem[];
 	turnStatus: SessionTurnStatus;
 	fill?: boolean;
 	onOpenFile?: (path: string) => void;
 	competitions?: readonly AgentCompetition[];
+	tasks?: readonly AgentTaskActivity[];
+	taskParentId?: string;
 	onOpenCandidate?: (sessionId: string) => void;
 	autoScroll?: boolean;
+	collapseInstructions?: boolean;
 }) {
 	const listRef = useRef<HTMLOListElement>(null);
 	const stickToEnd = useRef(true);
-	const visible = compactTimelineItems(items);
+	const visible = compactTimelineItems(childTaskPublicItems(items));
+	const candidateIds = new Set(
+		competitions.flatMap((group) =>
+			group.candidates.map((candidate) => candidate.id),
+		),
+	);
+	const childTasks = tasks.filter(
+		(task) =>
+			(taskParentId
+				? task.parentSessionId === taskParentId
+				: task.depth === 1) && !candidateIds.has(task.id),
+	);
 	const rows = groupTimelineRows(visible, turnStatus);
 	const fileChanges = fileChangesFromSessionItems(items);
 	const currentTurnIds = new Set<SessionItem["id"]>();
@@ -77,7 +99,13 @@ export function SessionTimeline({
 			list.scrollHeight - list.scrollTop - list.clientHeight < 64;
 	}
 
-	if (items.length === 0 && turnStatus !== "running" && !fill) return null;
+	if (
+		visible.length === 0 &&
+		childTasks.length === 0 &&
+		turnStatus !== "running" &&
+		!fill
+	)
+		return null;
 
 	return (
 		<ol
@@ -101,6 +129,7 @@ export function SessionTimeline({
 						<li data-kind={row.kind === "item" ? row.item.kind : row.kind}>
 							<TimelineRowView
 								row={row}
+								collapseInstructions={collapseInstructions}
 								turnRunning={
 									turnStatus === "running" && currentTurnIds.has(rowId)
 								}
@@ -116,13 +145,36 @@ export function SessionTimeline({
 							<li key={group.id} data-kind="competition">
 								<CompetitionTurn
 									group={group}
+									tasks={tasks}
 									onOpenCandidate={onOpenCandidate}
 								/>
 							</li>
 						))}
+						{row.kind === "item" && row.item.kind === "userMessage"
+							? childTasks
+									.filter(
+										(task) => childTaskPromptId(task, visible) === row.item.id,
+									)
+									.map((task) => (
+										<li key={`child:${task.id}`} data-kind="child-task">
+											<ChildTaskCard
+												task={task}
+												tasks={tasks}
+												onOpenFile={onOpenFile}
+											/>
+										</li>
+									))
+							: null}
 					</Fragment>
 				);
 			})}
+			{childTasks
+				.filter((task) => !childTaskPromptId(task, visible))
+				.map((task) => (
+					<li key={`child:${task.id}`} data-kind="child-task">
+						<ChildTaskCard task={task} tasks={tasks} onOpenFile={onOpenFile} />
+					</li>
+				))}
 			{!competitions.some((group) =>
 				["queued", "working"].includes(group.status),
 			) && showTurnWorking(items, turnStatus) ? (
@@ -134,11 +186,96 @@ export function SessionTimeline({
 	);
 }
 
+function ChildTaskCard({
+	task,
+	tasks,
+	onOpenFile,
+}: {
+	task: AgentTaskActivity;
+	tasks: readonly AgentTaskActivity[];
+	onOpenFile?: (path: string) => void;
+}) {
+	const children = tasks.filter((child) => child.parentSessionId === task.id);
+	const busy = task.status === "working" || task.status === "waiting";
+	const status =
+		task.status === "done"
+			? "Completed"
+			: task.status === "failed"
+				? "Failed"
+				: task.status === "draft"
+					? "Planned"
+					: busy
+						? "Working"
+						: "Idle";
+	const activity = childTaskPublicItems(task.items);
+	return (
+		<details className="child-task-card" data-status={task.status}>
+			<summary>
+				{busy ? (
+					<MatrixDotLoader />
+				) : (
+					<span className="child-task-card-icon" aria-hidden="true">
+						{task.status === "done" ? (
+							<Check size={14} />
+						) : task.status === "failed" ? (
+							<CircleAlert size={14} />
+						) : (
+							<Clock3 size={14} />
+						)}
+					</span>
+				)}
+				<span className="child-task-card-copy">
+					<strong>{task.title}</strong>
+					<small>
+						{task.label}
+						{task.listedModelId
+							? ` · ${listedModelDisplayName(parseModelRouteId(task.listedModelId)?.modelId ?? task.listedModelId)}`
+							: ""}
+					</small>
+				</span>
+				<span className="child-task-card-status">{status}</span>
+				<ChevronRight
+					className="competition-candidate-chevron"
+					size={14}
+					aria-hidden="true"
+				/>
+			</summary>
+			<div className="child-task-card-content">
+				{activity.length ? (
+					<SessionTimeline
+						items={activity}
+						turnStatus={task.turnStatus}
+						onOpenFile={onOpenFile}
+						autoScroll={false}
+						collapseInstructions
+					/>
+				) : task.summary ? (
+					<AgentMarkdown text={task.summary} onOpenFile={onOpenFile} />
+				) : (
+					<p className="child-task-card-empty">
+						{busy ? "Waiting for the first activity…" : "No activity yet."}
+					</p>
+				)}
+				{children.map((child) => (
+					<ChildTaskCard
+						key={child.id}
+						task={child}
+						tasks={tasks}
+						onOpenFile={onOpenFile}
+					/>
+				))}
+			</div>
+		</details>
+	);
+}
+
 function CompetitionTurn({
 	group,
+	tasks,
 	onOpenCandidate,
 }: {
 	group: AgentCompetition;
+	tasks: readonly AgentTaskActivity[];
 	onOpenCandidate?: (sessionId: string) => void;
 }) {
 	const candidatesFinished =
@@ -181,7 +318,7 @@ function CompetitionTurn({
 					>
 						<summary>
 							{["working", "waiting"].includes(status) ? (
-								<SixDotSpinner />
+								<MatrixDotLoader />
 							) : (
 								<span className="competition-agent-dot" data-status={status} />
 							)}
@@ -210,6 +347,8 @@ function CompetitionTurn({
 						{candidate ? (
 							<div className="competition-candidate-content">
 								<SessionTimeline
+									tasks={tasks}
+									taskParentId={candidate.id}
 									items={candidate.items.filter(
 										(item) => item.kind !== "userMessage",
 									)}
@@ -241,7 +380,7 @@ function CompetitionTurn({
 			})}
 			{candidatesFinished && ["judging", "complete"].includes(group.status) ? (
 				<p className="competition-judge">
-					{group.status === "judging" ? <SixDotSpinner /> : null}
+					{group.status === "judging" ? <MatrixDotLoader /> : null}
 					<span>
 						{group.status === "judging"
 							? "Judge reviewing results"
@@ -260,12 +399,14 @@ function CompetitionTurn({
 
 function TimelineRowView({
 	row,
+	collapseInstructions = false,
 	turnRunning,
 	isLastItem,
 	fileChanges,
 	onOpenFile,
 }: {
 	row: TimelineRow;
+	collapseInstructions?: boolean;
 	turnRunning: boolean;
 	isLastItem: boolean;
 	fileChanges: readonly FileChangeEntry[];
@@ -331,6 +472,7 @@ function TimelineRowView({
 	return (
 		<SessionItemView
 			item={row.item}
+			collapseInstructions={collapseInstructions}
 			thoughtInProgress={turnRunning && isLastItem}
 			turnRunning={turnRunning}
 			fileChanges={fileChanges}
@@ -341,6 +483,7 @@ function TimelineRowView({
 
 function SessionItemView({
 	item,
+	collapseInstructions = false,
 	nested = false,
 	thoughtInProgress = false,
 	turnRunning = false,
@@ -348,6 +491,7 @@ function SessionItemView({
 	onOpenFile,
 }: {
 	item: SessionItem;
+	collapseInstructions?: boolean;
 	nested?: boolean;
 	thoughtInProgress?: boolean;
 	turnRunning?: boolean;
@@ -360,6 +504,19 @@ function SessionItemView({
 		: "session-activity-title";
 	switch (item.kind) {
 		case "userMessage":
+			if (collapseInstructions) {
+				return (
+					<details className="session-work child-task-instructions">
+						<summary>
+							<span>Task instructions</span>
+							<ChevronRight size={12} className="session-activity-chevron" />
+						</summary>
+						<div className="session-work-items">
+							<AgentMarkdown text={item.text} onOpenFile={onOpenFile} />
+						</div>
+					</details>
+				);
+			}
 			return (
 				<div className="session-message" data-role="user">
 					<p>{item.text}</p>

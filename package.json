@@ -69,6 +69,8 @@
 		"octokit": "^5.0.5",
 		"pg": "8.23.0",
 		"pg-boss": "12.31.0",
+		"posthog-js": "1.435.6",
+		"posthog-node": "5.55.0",
 		"radix-ui": "^1.6.7",
 		"react": "^19.2.0",
 		"react-day-picker": "10.0.1",

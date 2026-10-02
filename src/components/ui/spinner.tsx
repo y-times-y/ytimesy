@@ -1,14 +1,13 @@
-import { cn } from "cn";
-import { Loader2Icon } from "lucide-react";
+import { MatrixDotLoader } from "./matrix-dot-loader";
 
-function Spinner({ className, ...props }: React.ComponentProps<"svg">) {
+function Spinner(props: React.ComponentProps<"span">) {
 	return (
-		<Loader2Icon
+		<MatrixDotLoader
 			data-slot="spinner"
 			role="status"
 			aria-label="Loading"
-			className={cn("size-4 animate-spin", className)}
 			{...props}
+			aria-hidden={undefined}
 		/>
 	);
 }

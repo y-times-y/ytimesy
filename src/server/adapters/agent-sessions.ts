@@ -7,10 +7,11 @@ import type {
 	AgentTaskReviewState,
 	AgentTaskStatus,
 } from "#/domain/agent-task";
+import { captureServerAnalytics } from "./analytics";
 import { database } from "./database";
 
 const SESSION_COLUMNS =
-	"id,user_id,project_id,workspace_id,harness,provider_ref,parent_session_id,candidate_index,title,briefing,items,listed_model_id,turn_status,status,task_prompt,task_state,task_placement,task_access,task_execution,depends_on_session_id,task_summary,task_review_state,task_branch,task_pull_request_url,created_at,updated_at";
+	"id,user_id,project_id,workspace_id,harness,provider_ref,parent_session_id,candidate_index,title,briefing,items,listed_model_id,turn_status,status,task_prompt,task_state,task_placement,task_access,task_execution,depends_on_session_id,task_summary,task_review_state,task_branch,task_pull_request_url,selected_branch,base_branch,working_branch,created_at,updated_at";
 
 export async function selectAgentSessionHarness(
 	userId: string,
@@ -55,6 +56,9 @@ export type AgentSessionRecord = {
 	taskSummary: string | null;
 	taskReviewState: AgentTaskReviewState | null;
 	taskBranch: string | null;
+	selectedBranch?: string | null;
+	baseBranch?: string | null;
+	workingBranch?: string | null;
 	taskPullRequestUrl: string | null;
 	createdAt: string;
 	updatedAt: string;
@@ -84,6 +88,9 @@ interface AgentSessionRow {
 	task_summary: string | null;
 	task_review_state: AgentTaskReviewState | null;
 	task_branch: string | null;
+	selected_branch: string | null;
+	base_branch: string | null;
+	working_branch: string | null;
 	task_pull_request_url: string | null;
 	created_at: Date | string;
 	updated_at: Date | string;
@@ -141,6 +148,39 @@ export async function agentSessionForOwner(userId: string, sessionId: string) {
 		[sessionId, userId],
 	);
 	return result.rows[0] ? toSession(result.rows[0]) : null;
+}
+
+/** Selection is a chat draft; it must never invalidate the project template. */
+export async function saveSessionBranchSelection(
+	userId: string,
+	sessionId: string,
+	branch: string,
+) {
+	const result = await database().query(
+		`update agent_session set selected_branch=$3, updated_at=now()
+		 where user_id=$1 and id=$2 and parent_session_id is null and turn_status <> 'running'
+		 returning ${SESSION_COLUMNS}`,
+		[userId, sessionId, branch],
+	);
+	if (!result.rows[0])
+		throw new Error("Stop the active turn before changing branches.");
+	return toSession(result.rows[0]);
+}
+
+export async function saveSessionWorkingBranch(
+	userId: string,
+	sessionId: string,
+	branch: string,
+	baseBranch?: string,
+) {
+	const result = await database().query(
+		`update agent_session set selected_branch=$3, working_branch=$3, base_branch=coalesce($4,base_branch), updated_at=now()
+		 where user_id=$1 and id=$2 and turn_status <> 'running' returning ${SESSION_COLUMNS}`,
+		[userId, sessionId, branch, baseBranch ?? null],
+	);
+	if (!result.rows[0])
+		throw new Error("Finish the active turn before submitting another task.");
+	return toSession(result.rows[0]);
 }
 
 export async function agentSessionById(sessionId: string) {
@@ -303,7 +343,21 @@ export async function insertAgentSession(input: {
 			...(input.competitionId ? [input.competitionId] : []),
 		],
 	);
-	return toSession(result.rows[0]);
+	const session = toSession(result.rows[0]);
+	void captureServerAnalytics(
+		session.userId,
+		"agent_created",
+		{
+			runtime: session.harness,
+			role: !session.parentSessionId
+				? "lead"
+				: session.taskAccess === "read_write"
+					? "builder"
+					: "reader",
+		},
+		{ key: session.id, timestamp: new Date(session.createdAt) },
+	);
+	return session;
 }
 
 export async function saveAgentTaskDraft(input: {
@@ -497,6 +551,9 @@ function toSession(row: AgentSessionRow): AgentSessionRecord {
 		taskSummary: row.task_summary,
 		taskReviewState: row.task_review_state,
 		taskBranch: row.task_branch,
+		selectedBranch: row.selected_branch ?? null,
+		baseBranch: row.base_branch ?? null,
+		workingBranch: row.working_branch ?? null,
 		taskPullRequestUrl: row.task_pull_request_url,
 		createdAt:
 			row.created_at instanceof Date
