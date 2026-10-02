@@ -29,6 +29,8 @@ export type ModelAgentInput = {
 	maxOutputTokens?: number;
 	maxSteps?: number;
 	modelId: string;
+	reasoning?: string;
+	fast?: boolean;
 	messages: ModelMessage[];
 	instructions: string;
 	tools: ToolSet;
@@ -209,6 +211,15 @@ export async function runModelAgent(
 						id: part.toolCallId,
 						name: part.toolName,
 						output: part.output,
+					});
+					break;
+				case "tool-error":
+					await input.onEvent({
+						type: "tool-result",
+						id: part.toolCallId,
+						name: part.toolName,
+						output: null,
+						failed: true,
 					});
 					break;
 				case "error":

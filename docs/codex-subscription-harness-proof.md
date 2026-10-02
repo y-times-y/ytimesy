@@ -1,5 +1,38 @@
 # Codex subscription with the ytimesy-owned model loop
 
+## Product cutover — 2026-10-01
+
+Ordinary Codex sends, child-task starts, reads, cancellation, progress streams,
+and peer-message delivery now use the shared ytimesy model loop in the durable
+server worker. The nullable connection field plus a versioned subscription
+transport discriminator reuses `api_turn` without a schema migration. A missing
+API connection never activates subscription billing. Owner-scoped device-code
+credentials remain encrypted; inference and refresh stay out of execution VMs.
+The native daemon remains a device-code-login adapter only, not an inference
+fallback. Reasoning settings are validated against the account catalog.
+
+Live browser verification queued a Codex subscription turn with no API connection,
+ran repository tools on its execution VM, persisted context, and continued with
+the actual model/tool history. The root repository has no README.md, so the first
+read correctly failed; the follow-up read package.json and returned `ytimesy`.
+A delegation test overlapped a worker redeploy and was marked disconnected rather
+than replayed. Worker deployment now refuses active durable turns.
+After deployment finished, a fresh verification created and started one shared
+read-only Codex child; both child and lead completed through durable model turns.
+The browser showed the completed child card and the lead's report of `ytimesy`.
+The native runner stayed paused during this test. Disposable test chats and their
+execution VM were removed afterward; no files or PRs were published. Final
+inventory also found and removed an unreferenced paused recovery VM belonging
+to the disposable test. Seven VMs were removed in total: five obsolete builds
+and two disposable test executors.
+
+The old per-user native runner was paused with automatic restart disabled; its
+disk and existing encrypted native-history checkpoints were retained. Five
+superseded build VMs were deleted after checking that they were not current
+templates, session executors, or checkpoint hosts and that private snapshots
+still existed. Current templates, executors, job worker, and an ambiguous legacy
+workspace were preserved. Historical evidence below predates this cutover.
+
 Live operator proof, 2026-10-01. This is not a production routing change.
 
 ## What ran

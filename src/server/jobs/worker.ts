@@ -20,7 +20,6 @@ import {
 } from "../services/agent-peer-messaging";
 import { deliverAgentTaskEvents } from "../services/agent-task-event-delivery";
 import { reconcileRunningAgentTurns } from "../services/agent-turn-reconciliation";
-import { reconcileCodexRefreshRequests } from "../services/codex-refresh-reconciliation";
 import { captureSessionCheckpoint } from "../services/session-checkpoint";
 import { runApiTurn } from "./api-turn";
 import {
@@ -34,7 +33,6 @@ import {
 } from "./queue";
 
 let turnSweep: ReturnType<typeof setInterval> | undefined;
-let codexRefreshSweep: ReturnType<typeof setInterval> | undefined;
 let apiTurnSweep: ReturnType<typeof setInterval> | undefined;
 
 export async function startWorkspaceWorker() {
@@ -181,22 +179,6 @@ export async function startWorkspaceWorker() {
 	if (apiTurnSweep) clearInterval(apiTurnSweep);
 	apiTurnSweep = setInterval(() => void runPendingApiTurn(), 1000);
 	apiTurnSweep.unref();
-	let refreshingCodex = false;
-	const refreshCodex = async () => {
-		if (refreshingCodex) return;
-		refreshingCodex = true;
-		try {
-			await reconcileCodexRefreshRequests(taskMachines);
-		} catch {
-			// A later sweep retries transient database and provider failures.
-		} finally {
-			refreshingCodex = false;
-		}
-	};
-	if (codexRefreshSweep) clearInterval(codexRefreshSweep);
-	codexRefreshSweep = setInterval(() => void refreshCodex(), 1_000);
-	codexRefreshSweep.unref();
-	void refreshCodex();
 	return queue;
 }
 
@@ -209,7 +191,6 @@ if (
 	const stop = async () => {
 		if (turnSweep) clearInterval(turnSweep);
 		if (apiTurnSweep) clearInterval(apiTurnSweep);
-		if (codexRefreshSweep) clearInterval(codexRefreshSweep);
 		await queue.stop({ graceful: true, timeout: 15000 });
 		await closeDatabase();
 		process.exit(0);

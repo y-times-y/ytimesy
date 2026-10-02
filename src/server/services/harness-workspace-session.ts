@@ -84,6 +84,7 @@ import {
 	refreshClaudeAuthSnapshotForUser,
 } from "#/server/proof/persist-claude-auth-snapshot";
 import { decryptHarnessApiKey } from "#/server/secrets/harness-key-store";
+import { hasManagedCodexAuth } from "../auth/codex-managed-auth";
 import {
 	discoverAgentPeers,
 	queueAgentPeerMessage,
@@ -103,15 +104,17 @@ import {
 	sendApiWorkspaceTask,
 	stopApiWorkspaceTask,
 } from "./api-workspace-session";
-import { codexRuntimeForSession } from "./codex-runtime";
+import {
+	readSubscriptionSession,
+	sendSubscriptionTask,
+	stopSubscriptionTask,
+} from "./codex-subscription-session";
 import {
 	type CodexSessionScope,
 	connectCodexWorkspaceSession,
 	emptyCodexSession,
 	type PublicCodexSession,
 	readCodexWorkspaceSession,
-	sendCodexWorkspaceTask,
-	stopCodexWorkspaceTurn,
 } from "./codex-workspace-session";
 import {
 	persistBoundSessionView,
@@ -170,6 +173,10 @@ export function startPreparedAgentTask(
 			if (task.harness === "api")
 				yield* Effect.tryPromise(() =>
 					sendApiWorkspaceTask(taskScope(scope, task), taskInput, true),
+				);
+			else if (task.harness === "codex")
+				yield* Effect.tryPromise(() =>
+					sendSubscriptionTask(taskScope(scope, task), taskInput, true),
 				);
 			else
 				yield* sendHarnessWorkspaceTask(
@@ -236,6 +243,17 @@ export function readHarnessWorkspaceSession(
 	machines: WorkspaceMachines,
 	scope: HarnessSessionScope,
 ): Effect.Effect<PublicHarnessSession> {
+	if (scope.harnessId === "codex")
+		return Effect.gen(function* () {
+			// Native daemon is used only to finish an explicitly initiated device-code login.
+			if (!(yield* Effect.promise(() => hasManagedCodexAuth(scope.userId))))
+				return yield* readCodexWorkspaceSession(machines, scope, true);
+			return yield* withSiblingSideChat(
+				machines,
+				scope,
+				Effect.promise(() => readSubscriptionSession(scope)),
+			);
+		});
 	if (scope.harnessId === "api")
 		return withSiblingSideChat(
 			machines,
@@ -255,7 +273,7 @@ function readHarnessWorkspaceSessionView(
 		return withSiblingSideChat(
 			machines,
 			scope,
-			readCodexWorkspaceSession(machines, scope),
+			Effect.promise(() => readSubscriptionSession(scope)),
 		);
 	}
 	return withSessionMachine(machines, scope, false, (providerRef, session) => {
@@ -298,11 +316,11 @@ export function connectHarnessWorkspaceSession(
 	if (scope.harnessId === "api")
 		return Effect.promise(() => readApiWorkspaceSession(scope));
 	if (scope.harnessId === "codex") {
-		return withSiblingSideChat(
-			machines,
-			scope,
-			connectCodexWorkspaceSession(machines, scope),
-		);
+		return Effect.gen(function* () {
+			if (yield* Effect.promise(() => hasManagedCodexAuth(scope.userId)))
+				return yield* Effect.promise(() => readSubscriptionSession(scope));
+			return yield* connectCodexWorkspaceSession(machines, scope);
+		});
 	}
 	const harnessName = agentProviderById(scope.harnessId).name;
 	return Effect.gen(function* () {
@@ -485,15 +503,7 @@ export function sendHarnessWorkspaceTask(
 			return sendApiWorkspaceTask(scope, input);
 		});
 	if (scope.harnessId === "codex") {
-		return queueHarnessTurn(
-			machines,
-			scope,
-			input.text,
-			sendCodexWorkspaceTask(machines, scope, {
-				...input,
-				text: input.runtimeText ?? input.text,
-			}),
-		);
+		return Effect.promise(() => sendSubscriptionTask(scope, input));
 	}
 	return queueHarnessTurn(
 		machines,
@@ -631,20 +641,14 @@ function serviceAgentTaskToolRequest(
 		);
 		if (
 			!parent ||
+			parent.harness === "codex" ||
+			parent.harness === "api" ||
 			parent.projectId !== scope.projectId ||
 			!parent.providerRef
 		) {
 			return;
 		}
-		const runtime =
-			parent.harness === "codex"
-				? yield* Effect.tryPromise(() =>
-						codexRuntimeForSession(machines, {
-							...parent,
-							providerRef: parent.providerRef as string,
-						}),
-					)
-				: { machines, workspaceId: WorkspaceId(parent.providerRef) };
+		const runtime = { machines, workspaceId: WorkspaceId(parent.providerRef) };
 		const workspaceId = runtime.workspaceId;
 		const requestText = yield* Effect.tryPromise(() =>
 			runtime.machines.readTextFile(workspaceId, AGENT_TASK_TOOL_REQUEST_PATH),
@@ -1011,7 +1015,7 @@ export function stopHarnessWorkspaceTurn(
 	if (scope.harnessId === "api")
 		return Effect.promise(() => stopApiWorkspaceTask(scope));
 	if (scope.harnessId === "codex") {
-		return stopCodexWorkspaceTurn(machines, scope);
+		return Effect.promise(() => stopSubscriptionTask(scope));
 	}
 	if (scope.harnessId === "opencode") {
 		return stopOpenCodeWorkspaceTurn(machines, scope);
@@ -1491,7 +1495,7 @@ function sendHarnessSideTask(
 		yield* Effect.tryPromise(() =>
 			machines.ensureRunning(WorkspaceId(bound.providerRef)),
 		);
-		if (scope.harnessId !== "api")
+		if (scope.harnessId !== "api" && scope.harnessId !== "codex")
 			yield* Effect.tryPromise(() =>
 				persistSessionTurnStatus(bound.session, "running"),
 			);
@@ -1504,18 +1508,19 @@ function sendHarnessSideTask(
 						),
 					)
 				: scope.harnessId === "codex"
-					? yield* sendCodexWorkspaceTask(
-							machines,
-							{
-								userId: scope.userId,
-								projectId: scope.projectId,
-								sessionId: bound.session.id,
-								createNew: false,
-							},
-							{
-								text: input.text,
-								modelId: input.modelId,
-							},
+					? yield* Effect.promise(() =>
+							sendSubscriptionTask(
+								{
+									userId: scope.userId,
+									projectId: scope.projectId,
+									sessionId: bound.session.id,
+									createNew: false,
+								},
+								{
+									text: input.text,
+									modelId: input.modelId,
+								},
+							),
 						)
 					: yield* submitConnectedHarnessTask(
 							machines,
@@ -1622,11 +1627,13 @@ function attachSiblingSideChat(
 			return mergeSideChat(main, null, scope.harnessId);
 		}
 		if (scope.harnessId === "codex") {
-			const side = yield* readCodexWorkspaceSession(machines, {
-				userId: scope.userId,
-				projectId: scope.projectId,
-				sessionId: child.id,
-			});
+			const side = yield* Effect.promise(() =>
+				readSubscriptionSession({
+					userId: scope.userId,
+					projectId: scope.projectId,
+					sessionId: child.id,
+				}),
+			);
 			return mergeSideChat(main, side, scope.harnessId);
 		}
 		const running = yield* Effect.tryPromise(() =>
