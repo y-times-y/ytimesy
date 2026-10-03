@@ -291,7 +291,7 @@ export const startProjectAgentTask = createServerFn({ method: "POST" })
 			data,
 		}): Promise<{
 			id: string;
-			machineId: string;
+			machineId: string | null;
 			placement: AgentTaskPlacement;
 		}> => {
 			const user = await requireUser(getRequest().headers);

@@ -37,6 +37,26 @@ function renderTimeline(
 }
 
 describe("session timeline live collapse", () => {
+	it("renders inspectable shell inputs and results rather than a bare tool label", () => {
+		const html = renderTimeline(
+			[
+				{
+					kind: "dynamicToolCall",
+					id: SessionItemId("call"),
+					tool: "bash",
+					status: "completed",
+					input: '{"command":"pnpm test"}',
+					output: "3 tests passed",
+				},
+			],
+			"completed",
+		);
+		expect(html).toContain(
+			'<details class="session-activity" data-kind="dynamicToolCall"',
+		);
+		expect(html).toContain("pnpm test");
+		expect(html).toContain("3 tests passed");
+	});
 	it("renders one expandable child card with its own activity, not an internal handoff bubble", () => {
 		const child: AgentTaskActivity = {
 			id: "child",
@@ -102,9 +122,18 @@ describe("session timeline live collapse", () => {
 		);
 		expect(html).toContain("Task instructions");
 		expect(html).toContain("Looking at the session timeline");
-		expect(html).toContain("read_file");
+		expect(html).toContain("read file");
 		expect(html).not.toContain("Its final summary is below");
 		expect(html).not.toContain("Inspect its evidence and diff");
+		const waiting = renderToString(
+			createElement(SessionTimeline, {
+				turnStatus: "completed",
+				items: [],
+				tasks: [{ ...child, turnStatus: "running", status: "working" }],
+			}),
+		);
+		expect(waiting).toContain("Waiting for child agents");
+		expect(waiting).not.toContain(">Thinking<");
 	});
 	it("shows a persisted failure reason in the chat", () => {
 		const html = renderTimeline(

@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import {
+	childTaskAnchorId,
 	childTaskEventQueueText,
 	childTaskPromptId,
 	childTaskPublicItems,
@@ -59,4 +60,40 @@ it("keeps a child attached to the prompt that started it after a follow-up", () 
 	expect(
 		childTaskPromptId({ createdAt: new Date(2000).toISOString() }, items),
 	).toBe("first");
+});
+
+it("anchors historical children to their creation tool without prompt timestamps", () => {
+	const items: SessionItem[] = [
+		{ kind: "userMessage", id: SessionItemId("first"), text: "Hi" },
+		{ kind: "agentMessage", id: SessionItemId("hi"), text: "Hello" },
+		{ kind: "userMessage", id: SessionItemId("second"), text: "Fix it" },
+		{
+			kind: "dynamicToolCall",
+			id: SessionItemId("create"),
+			tool: "create_task",
+			status: "completed",
+			output: JSON.stringify({ taskId: "child" }),
+		},
+		{ kind: "userMessage", id: SessionItemId("third"), text: "Another task" },
+	];
+	expect(
+		childTaskPromptId(
+			{ id: "child", createdAt: new Date(2000).toISOString() },
+			items,
+		),
+	).toBe("second");
+	expect(
+		childTaskAnchorId(
+			{ id: "child", createdAt: new Date(2000).toISOString() },
+			items,
+		),
+	).toBe("create");
+});
+
+it("does not incorrectly pin untraceable legacy children to the first prompt", () => {
+	expect(
+		childTaskPromptId({ createdAt: new Date(2000).toISOString() }, [
+			{ kind: "userMessage", id: SessionItemId("first"), text: "Hi" },
+		]),
+	).toBeUndefined();
 });

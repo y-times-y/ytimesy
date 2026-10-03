@@ -60,7 +60,11 @@ try {
 		once: async (_id: string, run: () => Promise<unknown>) => run(),
 	};
 	const files = apiAgentFileTools(context);
-	const commands = apiAgentCommandTools({ ...context, sessionId: id });
+	const commands = apiAgentCommandTools({
+		...context,
+		sessionId: id,
+		turnId: id,
+	});
 	const browser = apiAgentBrowserTools(context);
 	await invoke(files.create_file, { path: "proof.txt", content: "first\n" });
 	await invoke(files.replace_text, {

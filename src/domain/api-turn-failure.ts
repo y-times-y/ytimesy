@@ -14,6 +14,16 @@ export class SafeApiModelFailure extends Error {
 	}
 }
 
+export class IncompleteAgentTurn extends Error {
+	constructor(reason: string) {
+		super(
+			reason === "tool-calls"
+				? "The agent reached its tool-step limit without a final result. Work is preserved; continue this task instead of starting a duplicate."
+				: "The agent stopped without a complete final result. Work is preserved; continue this task.",
+		);
+	}
+}
+
 function providerErrorCode(data: unknown): string | undefined {
 	if (!data || typeof data !== "object") return undefined;
 	const record = data as Record<string, unknown>;
@@ -105,6 +115,7 @@ export function apiTurnFailureMessage(
 	stage: ApiTurnFailureStage,
 	error?: unknown,
 ): string {
+	if (error instanceof IncompleteAgentTurn) return error.message;
 	switch (stage) {
 		case "connection":
 			return "The selected API connection changed or was removed. Select a model again; no fallback was used.";

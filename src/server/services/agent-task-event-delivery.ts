@@ -4,6 +4,7 @@ import {
 	competitionJudgeQueueText,
 } from "#/domain/agent-competition";
 import { childTaskEventQueueText } from "#/domain/child-task-activity";
+import { WorkspaceId } from "#/domain/ids";
 import {
 	claimCompetitionJudge,
 	competitionCandidateIds,
@@ -14,6 +15,7 @@ import {
 	resetCompetitionJudge,
 } from "#/server/adapters/agent-competitions";
 import {
+	type AgentSessionRecord,
 	agentSessionForOwner,
 	descendantAgentSessions,
 } from "#/server/adapters/agent-sessions";
@@ -23,7 +25,18 @@ import {
 	deferAgentTaskEvent,
 	markAgentTaskEventDelivered,
 } from "#/server/adapters/agent-task-events";
+import {
+	acknowledgeServerPeerMessage,
+	removePendingServerPeerMessage,
+	serverPeerMessageAccepted,
+	stageServerPeerMessage,
+} from "#/server/adapters/server-peer-inbox";
 import { sendHarnessWorkspaceTask } from "./harness-workspace-session";
+import {
+	PEER_INBOX_PATH,
+	peerMessageAccepted,
+	stagePeerMessage,
+} from "./peer-inbox";
 import { machinesForAgentSession } from "./session-workspace-machines";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -83,19 +96,77 @@ async function deliverAgentTaskEvent(
 			await startCompetitionJudge(machines, event.userId, parent.id);
 		return;
 	}
+	await deliverParentTaskNotification(
+		machines,
+		parent,
+		event.id,
+		`${childTaskEventQueueText(event.id)}\nThis is an internal task event, not a new user request. The child activity and result are already visible in its expandable card. Do not repeat this notification or paste its full summary into the main chat. Review the evidence and give the user only your own concise synthesis or a necessary decision question.\n\n${taskEventMessage(event, child.title)}`,
+	);
+}
+
+/** Active turns consume the existing mailbox at safe points; idle turns wake normally. */
+export async function deliverParentTaskNotification(
+	machines: WorkspaceMachines,
+	parent: AgentSessionRecord,
+	notificationId: string,
+	runtimeText: string,
+) {
+	runtimeText =
+		runtimeText.length > 11000
+			? `${runtimeText.slice(0, 10500)}\n[Notification excerpt truncated. Read the child's full result with read_task before reviewing.]`
+			: runtimeText;
+	const serverHarness = parent.harness === "api" || parent.harness === "codex";
+	const scopedMachines = machinesForAgentSession(machines, parent);
+	if (await serverPeerMessageAccepted(parent.id, notificationId)) return;
+	if (
+		!serverHarness &&
+		parent.providerRef &&
+		(await peerMessageAccepted(
+			scopedMachines,
+			WorkspaceId(parent.providerRef),
+			notificationId,
+		))
+	)
+		return;
 	if (parent.turnStatus === "running") {
+		if (serverHarness)
+			await stageServerPeerMessage(parent.id, notificationId, runtimeText);
+		else {
+			if (!parent.providerRef)
+				throw new Error("The parent runtime is unavailable.");
+			await stagePeerMessage(
+				scopedMachines,
+				WorkspaceId(parent.providerRef),
+				notificationId,
+				runtimeText,
+				parent.id,
+			);
+		}
 		throw new Error(
-			"The parent is still working; deliver at its next idle point.",
+			"Task notification awaits the parent's next model safe point.",
 		);
+	}
+	if (serverHarness)
+		await removePendingServerPeerMessage(parent.id, notificationId);
+	else if (parent.providerRef) {
+		if (!/^[a-zA-Z0-9-]+$/.test(notificationId))
+			throw new Error("Invalid task notification ID.");
+		const removed = await scopedMachines.exec(
+			WorkspaceId(parent.providerRef),
+			`rm -f ${PEER_INBOX_PATH}/${notificationId}.json`,
+			10_000,
+		);
+		if (removed.exitCode !== 0)
+			throw new Error("The parent mailbox is unavailable.");
 	}
 	if (!parent.listedModelId) {
 		throw new Error("The parent has no model selection for its wakeup turn.");
 	}
 	const view = await Effect.runPromise(
 		sendHarnessWorkspaceTask(
-			machinesForAgentSession(machines, parent),
+			scopedMachines,
 			{
-				userId: event.userId,
+				userId: parent.userId,
 				projectId: parent.projectId,
 				sessionId: parent.id,
 				harnessId: parent.harness,
@@ -103,8 +174,8 @@ async function deliverAgentTaskEvent(
 			},
 			{
 				modelId: parent.listedModelId,
-				text: childTaskEventQueueText(event.id),
-				runtimeText: `${childTaskEventQueueText(event.id)}\n${taskEventMessage(event, child.title)}\n\nThis is an internal task event, not a new user request. The child activity and result are already visible in its expandable card. Do not repeat this notification or paste its full summary into the main chat. Review the evidence and give the user only your own concise synthesis or a necessary decision question.`,
+				text: childTaskEventQueueText(notificationId),
+				runtimeText,
 			},
 		),
 	);
@@ -115,6 +186,8 @@ async function deliverAgentTaskEvent(
 				: "The parent wakeup turn failed.",
 		);
 	}
+	await stageServerPeerMessage(parent.id, notificationId, runtimeText);
+	await acknowledgeServerPeerMessage(parent.id, notificationId);
 }
 
 /** The same durable judge launch can be retried without rerunning candidates. */

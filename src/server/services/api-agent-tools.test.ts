@@ -1,7 +1,45 @@
-import { describe, expect, it } from "vitest";
+import { Effect } from "effect";
+import { describe, expect, it, vi } from "vitest";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import { apiAgentTools } from "./api-agent-tools";
 import type { WorkspaceMachines } from "./workspace-machines";
+
+vi.mock("../adapters/agent-task-command-receipts", () => ({
+	claimAgentTaskCommand: vi.fn(async () => ({ kind: "claimed" })),
+	completeAgentTaskCommand: vi.fn(),
+	renewAgentTaskCommandClaim: vi.fn(),
+}));
+vi.mock("./harness-workspace-session", () => ({
+	runAgentTaskTool: vi.fn(() => Effect.succeed({ peers: [] })),
+}));
+
+it("keeps control-plane tools usable while the execution VM is unavailable", async () => {
+	const workspace = vi.fn(async () => {
+		throw new Error("VM unavailable");
+	});
+	const tools = apiAgentTools({
+		machines: {} as WorkspaceMachines,
+		session: {
+			id: "lead",
+			userId: "owner",
+			projectId: "project",
+			providerRef: null,
+			harness: "codex",
+			taskAccess: "read_only",
+		} as AgentSessionRecord,
+		workspace,
+		turnId: "turn",
+		signal: new AbortController().signal,
+	});
+	expect(workspace).not.toHaveBeenCalled();
+	expect(await executeInspectionTool(tools.list_peers, {})).toEqual({
+		peers: [],
+	});
+	expect(workspace).not.toHaveBeenCalled();
+	await expect(executeInspectionTool(tools.list_files, {})).rejects.toThrow(
+		"VM unavailable",
+	);
+});
 
 function leadTools() {
 	const commands: string[] = [];
@@ -42,6 +80,9 @@ async function executeInspectionTool(
 }
 
 describe("read-only API lead tools", () => {
+	it("does not offer a parent-only blocked-report tool to the root", () => {
+		expect(leadTools().tools.report_task_blocked).toBeUndefined();
+	});
 	it("can inspect files without receiving a shell-writing tool", async () => {
 		const { commands, tools } = leadTools();
 		expect(tools.bash).toBeUndefined();

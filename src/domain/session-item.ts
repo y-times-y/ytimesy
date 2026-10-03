@@ -87,6 +87,8 @@ export type DynamicToolCallItem = {
 	readonly kind: "dynamicToolCall";
 	readonly id: SessionItemId;
 	readonly tool: string;
+	readonly input?: string;
+	readonly output?: string;
 	readonly status: Exclude<ToolActivityStatus, "declined">;
 };
 
@@ -258,6 +260,7 @@ export function sessionItemsQueuedWithUser(
 				messageId ?? `queued-user-${items.length}-${queued.length}`,
 			),
 			text: queued,
+			timing: { startedAt: Date.now() },
 		},
 	];
 }

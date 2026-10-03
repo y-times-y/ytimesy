@@ -78,7 +78,7 @@ export async function enqueueApiTurn(input: {
 			],
 		);
 		await client.query(
-			`update agent_session set harness=$5,listed_model_id=$3,items=$4,turn_status='running',updated_at=now() where id=$1 and user_id=$2`,
+			`update agent_session set harness=$5,listed_model_id=$3,items=$4,turn_status='running',task_state=case when parent_session_id is null then task_state else 'working' end,updated_at=now() where id=$1 and user_id=$2`,
 			[
 				input.sessionId,
 				input.userId,
@@ -115,19 +115,33 @@ export async function previousTurnMessages(
 		: null;
 }
 
-export async function claimApiTurn(): Promise<ApiTurn | null> {
-	const result = await database().query<ApiTurn>(
-		`update api_turn set state='running',lease_id=$1,heartbeat_at=now(),updated_at=now()
-		 where id=(select id from api_turn where state='queued' order by created_at for update skip locked limit 1)
-		 returning *`,
-		[randomUUID()],
-	);
-	return result.rows[0] ?? null;
+export async function claimApiTurn(perUserLimit = 2): Promise<ApiTurn | null> {
+	const client = await database().connect();
+	try {
+		await client.query("begin");
+		// Admission is short and serialized across workers; model/tool work never holds this lock.
+		await client.query("select pg_advisory_xact_lock(81738419)");
+		const result = await client.query<ApiTurn>(
+			`update api_turn set state='running',lease_id=$1,heartbeat_at=now(),updated_at=now()
+			 where id=(select q.id from api_turn q where q.state='queued' and not q.cancel_requested
+			 and (select count(*) from api_turn r where r.user_id=q.user_id and r.state='running')<$2
+			 order by q.created_at for update skip locked limit 1) returning *`,
+			[randomUUID(), perUserLimit],
+		);
+		await client.query("commit");
+		return result.rows[0] ?? null;
+	} catch (error) {
+		await client.query("rollback");
+		throw error;
+	} finally {
+		client.release();
+	}
 }
 
 export async function renewApiTurn(turn: ApiTurn): Promise<boolean> {
 	const result = await database().query(
-		`update api_turn set heartbeat_at=now() where id=$1 and lease_id=$2 and state='running' and not cancel_requested returning id`,
+		`update api_turn set heartbeat_at=now() where id=$1 and lease_id=$2 and state='running' and not cancel_requested
+		 and heartbeat_at>=now()-interval '45 seconds' returning id`,
 		[turn.id, turn.lease_id],
 	);
 	return Boolean(result.rowCount);
@@ -140,11 +154,28 @@ export async function checkpointApiTurn(
 ) {
 	const result = await database().query(
 		`with saved as (update api_turn set messages=$3,items=$4,updated_at=now()
-		 where id=$1 and lease_id=$2 and state='running' returning session_id)
+		 where id=$1 and lease_id=$2 and state='running' and not cancel_requested
+		 and heartbeat_at>=now()-interval '45 seconds' returning session_id)
 		 update agent_session set items=$4,updated_at=now() where id in(select session_id from saved) returning id`,
 		[turn.id, turn.lease_id, JSON.stringify(messages), JSON.stringify(items)],
 	);
 	if (!result.rowCount) throw new Error("API turn lease was lost.");
+}
+
+/** Stream checkpoints avoid rewriting the model history on every text delta. */
+export async function publishApiTurnProgress(
+	turn: ApiTurn,
+	items: readonly SessionItem[],
+) {
+	const result = await database().query(
+		`with saved as (update api_turn set items=$3,updated_at=now()
+	 where id=$1 and lease_id=$2 and state='running' and not cancel_requested
+	 and heartbeat_at>=now()-interval '45 seconds' returning session_id)
+	 update agent_session set items=$3,updated_at=now() where id in(select session_id from saved) returning id`,
+		[turn.id, turn.lease_id, JSON.stringify(items)],
+	);
+	if (!result.rowCount)
+		throw new Error("API turn lease was lost or cancelled.");
 }
 
 export async function finishApiTurn(
@@ -152,28 +183,40 @@ export async function finishApiTurn(
 	state: "completed" | "failed" | "cancelled",
 	items: readonly SessionItem[],
 ) {
-	const result = await database().query(
-		`with saved as (update api_turn set state=$3,items=$4,updated_at=now()
-		 where id=$1 and lease_id=$2 and state='running' returning session_id)
-		 update agent_session set items=$4,turn_status=$5,
-		 task_state=case when parent_session_id is null then task_state when $5='completed' then 'done' when $5='failed' then 'failed' else 'idle' end,
-		 updated_at=now() where id in(select session_id from saved)`,
-		[
-			turn.id,
-			turn.lease_id,
-			state,
-			JSON.stringify(items),
-			state === "cancelled" ? "idle" : state,
-		],
+	return (await finalizeApiTurn(turn, state, items)) !== null;
+}
+
+/** Return the effective state so a stop racing with completion still stops owned commands. */
+export async function finalizeApiTurn(
+	turn: ApiTurn,
+	state: "completed" | "failed" | "cancelled",
+	items: readonly SessionItem[],
+) {
+	const result = await database().query<{
+		state: "completed" | "failed" | "cancelled";
+	}>(
+		`with saved as (update api_turn set state=case when cancel_requested then 'cancelled' else $3 end,items=$4,updated_at=now()
+		 where id=$1 and lease_id=$2 and state='running' and heartbeat_at>=now()-interval '45 seconds' returning session_id,state)
+		 update agent_session s set items=$4,turn_status=case when saved.state='cancelled' then 'idle' else saved.state end,
+		 task_state=case when parent_session_id is null then task_state when saved.state='completed' then 'done' when saved.state='failed' then 'failed' else 'idle' end,
+		 updated_at=now() from saved where s.id=saved.session_id returning saved.state`,
+		[turn.id, turn.lease_id, state, JSON.stringify(items)],
 	);
-	return Boolean(result.rowCount);
+	return result.rows[0]?.state ?? null;
 }
 
 export async function cancelApiTurn(userId: string, sessionId: string) {
-	await database().query(
-		"update api_turn set cancel_requested=true where user_id=$1 and session_id=$2 and state in ('queued','running')",
+	const result = await database().query<{
+		id: string;
+		lease_id: string | null;
+	}>(
+		`with cancelled as (update api_turn set cancel_requested=true,state=case when state='queued' then 'cancelled' else state end
+		 where user_id=$1 and session_id=$2 and state in ('queued','running') returning id,lease_id,session_id,state),
+		 updated as (update agent_session s set turn_status='idle',updated_at=now() from cancelled c where s.id=c.session_id and c.state='cancelled')
+		 select id,lease_id from cancelled`,
 		[userId, sessionId],
 	);
+	return result.rows;
 }
 
 /** Never replay a turn whose tool side effects may have happened before worker loss. */

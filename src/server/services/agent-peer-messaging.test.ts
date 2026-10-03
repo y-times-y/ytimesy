@@ -12,6 +12,14 @@ const fake = vi.hoisted(() => ({
 	sessions: new Map<string, AgentSessionRecord>(),
 	enqueue: vi.fn(),
 	send: vi.fn(),
+	stage: vi.fn(),
+	accepted: vi.fn(async () => false),
+	removePending: vi.fn(),
+}));
+vi.mock("../adapters/server-peer-inbox", () => ({
+	stageServerPeerMessage: fake.stage,
+	serverPeerMessageAccepted: fake.accepted,
+	removePendingServerPeerMessage: fake.removePending,
 }));
 vi.mock("../adapters/agent-sessions", () => ({
 	agentSessionForOwner: async (owner: string, id: string) => {
@@ -83,6 +91,7 @@ const message = {
 beforeEach(() => {
 	vi.clearAllMocks();
 	fake.sessions.clear();
+	fake.accepted.mockResolvedValue(false);
 	session("root", null);
 	session("a", "root");
 	session("b", "root");
@@ -173,12 +182,13 @@ describe("queued peer delivery", () => {
 		session("b", "root", { turnStatus: "running" });
 		await expect(
 			deliverAgentPeerMessage(machines, message, "job"),
-		).rejects.toThrow("staged");
-		expect(machines.exec).toHaveBeenCalledWith(
-			"executor",
-			expect.stringContaining("ytimesy-peer-inbox/job.json"),
-			10_000,
+		).rejects.toThrow("safe point");
+		expect(fake.stage).toHaveBeenCalledWith(
+			"b",
+			"job",
+			expect.stringContaining(message.message),
 		);
+		expect(machines.exec).not.toHaveBeenCalled();
 		expect(fake.send).not.toHaveBeenCalled();
 		session("b", "root", { turnStatus: "completed" });
 		await deliverAgentPeerMessage(machines, message, "job");
@@ -186,7 +196,7 @@ describe("queued peer delivery", () => {
 	});
 	it("finishes the queue job once an active runtime acknowledges the message", async () => {
 		session("b", "root", { turnStatus: "running" });
-		vi.mocked(machines.readTextFile).mockResolvedValueOnce("accepted\n");
+		fake.accepted.mockResolvedValueOnce(true);
 		await deliverAgentPeerMessage(machines, message, "job");
 		expect(fake.send).not.toHaveBeenCalled();
 		expect(machines.exec).not.toHaveBeenCalled();

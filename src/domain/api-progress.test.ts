@@ -3,6 +3,25 @@ import { applyApiProgress, recordedContextUsage } from "./api-progress";
 import { SessionItemId } from "./ids";
 import { type SessionItem, sessionItemsFromUnknown } from "./session-item";
 
+it("retains tool inputs and results for inspection", () => {
+	const started = applyApiProgress([], "turn", {
+		type: "tool-call",
+		id: "call",
+		name: "bash",
+		input: { command: "pnpm test" },
+	});
+	const completed = applyApiProgress(started, "turn", {
+		type: "tool-result",
+		id: "call",
+		name: "bash",
+		output: { stdout: "3 tests passed", exitCode: 0 },
+	});
+	expect(completed[0]).toMatchObject({
+		input: expect.stringContaining("pnpm test"),
+		output: expect.stringContaining("3 tests passed"),
+	});
+});
+
 it("settles a failed tool call instead of leaving its spinner running", () => {
 	const started = applyApiProgress([], "turn", {
 		type: "tool-call",
@@ -23,6 +42,8 @@ it("settles a failed tool call instead of leaving its spinner running", () => {
 			id: "turn:call",
 			tool: "read_file",
 			status: "failed",
+			input: "{}",
+			output: "null",
 		},
 	]);
 });

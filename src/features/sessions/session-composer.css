@@ -788,22 +788,6 @@ a.harness-login-action:hover {
 		background-position: -20% 0;
 	}
 }
-.session-message[data-streaming="true"] .session-markdown p:last-child::after,
-.session-message[data-streaming="true"] > p::after {
-	content: "";
-	display: inline-block;
-	width: 5px;
-	height: 13px;
-	margin-left: 3px;
-	vertical-align: -1px;
-	background: rgba(255, 255, 255, 0.72);
-	animation: session-caret 1s step-end infinite;
-}
-@keyframes session-caret {
-	50% {
-		opacity: 0;
-	}
-}
 .session-markdown {
 	display: flex;
 	flex-direction: column;

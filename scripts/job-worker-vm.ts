@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { Effect } from "effect";
 import { Freestyle, FreestyleApiError } from "freestyle";
 import { pinnedCodexInstallCommand } from "#/domain/guest-cli-pin";
+import { posixShellQuoted } from "#/domain/posix-command";
 import { closeDatabase, database } from "#/server/adapters/database";
 import { readFreestyleApiKey } from "#/server/adapters/freestyle/api-key";
 import {
@@ -19,6 +20,7 @@ import {
 	jobWorkerIdleNeedsUpdate,
 } from "#/server/adapters/freestyle/job-worker-vm";
 import { waitUntilVmRunning } from "#/server/adapters/freestyle/wait-until-running";
+import { realtimeDeliveryConfiguration } from "#/server/adapters/realtime-delivery";
 
 const guestArchive = `${JOB_WORKER_GUEST_ROOT}/app.tgz`;
 const guestLog = `${JOB_WORKER_GUEST_ROOT}/worker.log`;
@@ -40,6 +42,26 @@ async function main() {
 	const client = new Freestyle({ apiKey });
 	const vm = await ensureWorkerVm(client);
 	await waitUntilVmRunning(vm, "Job worker VM");
+	await run(
+		vm,
+		`set -e
+pids=$(pgrep -f '^node --import tsx src/server/jobs/worker.ts$' || true)
+if [ -n "$pids" ]; then
+  kill -TERM $pids
+  deadline=$((SECONDS + 60))
+  for pid in $pids; do
+    while kill -0 "$pid" 2>/dev/null; do
+      if [ "$SECONDS" -ge "$deadline" ]; then
+        echo 'Worker is still draining; deployment stopped without replacing files.' >&2
+        exit 1
+      fi
+      sleep 1
+    done
+  done
+fi`,
+		65_000,
+		"root",
+	);
 	await deployApp(vm);
 	await deploySecrets(vm);
 	await vm.fs.writeTextFile(
@@ -149,7 +171,12 @@ async function deployApp(vm: ReturnType<Freestyle["vms"]["ref"]>) {
 }
 
 async function deploySecrets(vm: ReturnType<Freestyle["vms"]["ref"]>) {
-	const envSource = await readFile(".env", "utf8");
+	const realtime = realtimeDeliveryConfiguration();
+	const envSource =
+		(await readFile(".env", "utf8")) +
+		(realtime
+			? `\nYTIMESY_REALTIME_URL=${JSON.stringify(realtime.url)}\nYTIMESY_REALTIME_SECRET=${JSON.stringify(realtime.secret)}\n`
+			: "");
 	const autoRefresh = process.env.YTIMESY_ENVIRONMENT_AUTO_REFRESH;
 	if (autoRefresh && !["true", "false"].includes(autoRefresh))
 		throw new Error("Environment auto-refresh must be true or false.");
@@ -229,7 +256,6 @@ fi
 if ! command -v codex >/dev/null 2>&1 && [ ! -x "$HOME/.codex/packages/standalone/current/codex" ]; then
   ${pinnedCodexInstallCommand()}
 fi
-pkill -f 'src/server/jobs/worker.ts' || true
 nohup ./start.sh >> ${guestLog} 2>&1 < /dev/null &
 sleep 3
 `;
@@ -242,7 +268,7 @@ async function run(
 	linuxUser?: string,
 ) {
 	const result = await vm.exec({
-		command: `bash -lc ${JSON.stringify(command)}`,
+		command: `bash -lc ${posixShellQuoted(command)}`,
 		timeoutMs,
 		...(linuxUser ? { linuxUser } : {}),
 	});

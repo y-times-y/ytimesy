@@ -2,6 +2,7 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Effect } from "effect";
 import type { EnvironmentModel } from "#/domain/environment-model";
+import { modelConcurrencyLimits } from "../adapters/agent-capacity";
 import {
 	markCompetitionStatus,
 	reconcileFinishedCompetitionJudges,
@@ -12,7 +13,12 @@ import { closeDatabase } from "../adapters/database";
 import { readFreestyleApiKey } from "../adapters/freestyle/api-key";
 import { createFreestyleWorkspaceMachines } from "../adapters/freestyle/workspace-machines";
 import { applyProjectEnvironment } from "../adapters/rigkit/apply";
+import { listenForQueuedTurns } from "../adapters/turn-queue-wake";
 import { listReadyWorkspaceIds } from "../adapters/workspaces";
+import {
+	recoverChildTurnEvents,
+	superviseAgentChildren,
+} from "../services/agent-child-supervision";
 import { startAgentCompetition } from "../services/agent-competition-run";
 import {
 	deliverAgentPeerMessage,
@@ -23,6 +29,10 @@ import { reconcileRunningAgentTurns } from "../services/agent-turn-reconciliatio
 import { captureSessionCheckpoint } from "../services/session-checkpoint";
 import { runApiTurn } from "./api-turn";
 import {
+	drainConversationDeliveries,
+	relayConversationDeliveries,
+} from "./conversation-delivery";
+import {
 	AGENT_PEER_MESSAGE_QUEUE,
 	AGENT_TASK_EVENT_QUEUE,
 	jobQueue,
@@ -31,9 +41,15 @@ import {
 	SESSION_CHECKPOINT_QUEUE,
 	START_COMPETITION_QUEUE,
 } from "./queue";
+import { TurnDispatcher } from "./turn-dispatcher";
 
 let turnSweep: ReturnType<typeof setInterval> | undefined;
 let apiTurnSweep: ReturnType<typeof setInterval> | undefined;
+let deliverySweep: ReturnType<typeof setInterval> | undefined;
+let stopTurnWake: (() => Promise<void>) | undefined;
+let dispatcher:
+	| TurnDispatcher<NonNullable<Awaited<ReturnType<typeof claimApiTurn>>>>
+	| undefined;
 
 export async function startWorkspaceWorker() {
 	const queue = await jobQueue("worker");
@@ -105,7 +121,7 @@ export async function startWorkspaceWorker() {
 	);
 	await queue.work<{ eventId?: string | null }>(
 		AGENT_TASK_EVENT_QUEUE,
-		{ localConcurrency: 4 },
+		{ localConcurrency: 4, pollingIntervalSeconds: 1 },
 		async ([job]) => {
 			await deliverAgentTaskEvents(taskMachines, job.data.eventId ?? undefined);
 		},
@@ -138,12 +154,19 @@ export async function startWorkspaceWorker() {
 		// The durable sweep is already registered.
 	}
 	let reconciling = false;
+	let supervisingAt = 0;
 	const reconcile = async () => {
 		if (reconciling) return;
 		reconciling = true;
 		try {
 			await reconcileRunningAgentTurns(taskMachines);
 			await reconcileFinishedCompetitionJudges();
+			await deliverAgentTaskEvents(taskMachines);
+			if (Date.now() - supervisingAt >= 30_000) {
+				supervisingAt = Date.now();
+				await recoverChildTurnEvents();
+				await superviseAgentChildren(taskMachines);
+			}
 		} catch {
 			// The next sweep retries after a database or provider outage.
 		} finally {
@@ -154,31 +177,37 @@ export async function startWorkspaceWorker() {
 	turnSweep = setInterval(() => void reconcile(), 2_000);
 	turnSweep.unref();
 	void reconcile();
-	let apiClaiming = false;
-	let apiRunning = 0;
-	const runPendingApiTurn = async () => {
-		if (apiClaiming || apiRunning >= 2) return;
-		apiClaiming = true;
-		try {
-			await expireApiTurnLeases();
-			const turn = await claimApiTurn();
-			if (turn) {
-				apiRunning++;
-				void runApiTurn(taskMachines, turn)
-					.catch(() => {})
-					.finally(() => {
-						apiRunning--;
-					});
-			}
-		} catch {
-			/* A later sweep retries database outages; running turns are never replayed. */
-		} finally {
-			apiClaiming = false;
-		}
-	};
+	const { worker: concurrency, perUser } = modelConcurrencyLimits();
+	dispatcher = new TurnDispatcher({
+		concurrency,
+		claim: () => claimApiTurn(perUser),
+		run: (turn) => runApiTurn(taskMachines, turn),
+		onError: () =>
+			console.warn(
+				"Model dispatch failed; the durable queue will be checked again.",
+			),
+	});
+	await stopTurnWake?.();
+	stopTurnWake = listenForQueuedTurns(() => dispatcher?.wake());
 	if (apiTurnSweep) clearInterval(apiTurnSweep);
-	apiTurnSweep = setInterval(() => void runPendingApiTurn(), 1000);
+	apiTurnSweep = setInterval(() => {
+		dispatcher?.wake();
+		void expireApiTurnLeases().catch(() => {});
+	}, 1000);
 	apiTurnSweep.unref();
+	dispatcher.wake();
+	let relaying = false;
+	if (deliverySweep) clearInterval(deliverySweep);
+	deliverySweep = setInterval(() => {
+		if (relaying) return;
+		relaying = true;
+		void relayConversationDeliveries()
+			.catch(() => {})
+			.finally(() => {
+				relaying = false;
+			});
+	}, 250);
+	deliverySweep.unref();
 	return queue;
 }
 
@@ -188,9 +217,21 @@ if (
 ) {
 	const queue = await startWorkspaceWorker();
 	console.info("ytimesy workspace worker is running.");
+	let stopping = false;
 	const stop = async () => {
+		if (stopping) return;
+		stopping = true;
 		if (turnSweep) clearInterval(turnSweep);
 		if (apiTurnSweep) clearInterval(apiTurnSweep);
+		console.info(
+			"Worker draining active model turns; no new turns will be claimed.",
+		);
+		const drain = dispatcher?.drain();
+		await stopTurnWake?.();
+		await drain;
+		if (deliverySweep) clearInterval(deliverySweep);
+		await relayConversationDeliveries().catch(() => {});
+		await drainConversationDeliveries();
 		await queue.stop({ graceful: true, timeout: 15000 });
 		await closeDatabase();
 		process.exit(0);

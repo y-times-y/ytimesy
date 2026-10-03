@@ -26,12 +26,14 @@ import {
 } from "../src/server/services/persist-session-view";
 
 let db: PGlite;
+const query = async (sql: string, params?: unknown[]) => {
+	const result = await db.query(sql, params);
+	return { ...result, rowCount: result.affectedRows ?? result.rows.length };
+};
 vi.mock("../src/server/adapters/database", () => ({
 	database: () => ({
-		query: async (sql: string, params?: unknown[]) => {
-			const result = await db.query(sql, params);
-			return { ...result, rowCount: result.affectedRows ?? result.rows.length };
-		},
+		query,
+		connect: async () => ({ query, release() {} }),
 	}),
 }));
 vi.mock("../src/server/config", () => ({
@@ -44,6 +46,7 @@ vi.mock("../src/server/config", () => ({
 beforeAll(async () => {
 	db = new PGlite();
 	await db.exec("create role anon; create role authenticated;");
+	await db.exec("create table api_turn(session_id uuid,state text)");
 	for (const file of [
 		"20260913010000_enable_automatic_rls.sql",
 		"20260913193000_identity_and_projects.sql",

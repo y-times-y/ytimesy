@@ -1,0 +1,329 @@
+import type {
+	DurableObjectNamespace,
+	DurableObjectState,
+} from "@cloudflare/workers-types";
+import {
+	type ConversationSnapshot,
+	conversationEvent,
+	conversationSnapshotSchema,
+	MAX_DELIVERY_BYTES,
+} from "../domain/conversation-delivery";
+import {
+	type ActiveConversationTurn,
+	TURN_COORDINATION_LEASE_MS,
+	turnControlSchema,
+} from "../domain/conversation-turn-control";
+import { verifyDeliveryRequest } from "../domain/delivery-auth";
+
+type RealtimeEnvironment = {
+	CONVERSATIONS: DurableObjectNamespace;
+	DELIVERY_SECRET: string;
+};
+const encoder = new TextEncoder();
+type SnapshotHead = { revision: string; chunks: number };
+
+async function boundedBody(request: Request) {
+	if (!request.body) return "";
+	const reader = request.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let bytes = 0;
+	try {
+		while (true) {
+			const next = await reader.read();
+			if (next.done) break;
+			bytes += next.value.byteLength;
+			if (bytes > MAX_DELIVERY_BYTES)
+				throw new Error("Delivery payload too large.");
+			chunks.push(next.value);
+		}
+	} finally {
+		await reader.cancel().catch(() => {});
+	}
+	const body = new Uint8Array(bytes);
+	let offset = 0;
+	for (const chunk of chunks) {
+		body.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	return new TextDecoder().decode(body);
+}
+
+/** One current snapshot per conversation; PG remains the transcript and inference authority. */
+export class ConversationRoom {
+	private latest: ConversationSnapshot | null = null;
+	private readonly subscribers = new Set<
+		(snapshot: ConversationSnapshot) => void
+	>();
+	constructor(private readonly state: DurableObjectState) {
+		state.blockConcurrencyWhile(async () => {
+			const head = await state.storage.get<SnapshotHead>("head");
+			if (!head) return;
+			const keys = Array.from(
+				{ length: head.chunks },
+				(_, index) => `snapshot:${index}`,
+			);
+			const stored = await state.storage.get<string>(keys);
+			const text = keys
+				.map((key) => {
+					const chunk = stored.get(key);
+					if (chunk === undefined)
+						throw new Error("Incomplete delivery snapshot.");
+					return chunk;
+				})
+				.join("");
+			this.latest = conversationSnapshotSchema.parse(JSON.parse(text));
+		});
+	}
+	async fetch(request: Request): Promise<Response> {
+		const url = new URL(request.url);
+		if (url.pathname.startsWith("/turn/")) return this.controlTurn(request);
+		if (request.method === "POST") {
+			const incoming = conversationSnapshotSchema.parse(await request.json());
+			if (incoming.sessionId !== incoming.progress.sessionId)
+				return new Response(null, { status: 400 });
+			if (
+				this.latest &&
+				(this.latest.userId !== incoming.userId ||
+					this.latest.sessionId !== incoming.sessionId)
+			)
+				return new Response(null, { status: 403 });
+			if (
+				!this.latest ||
+				BigInt(incoming.revision) > BigInt(this.latest.revision)
+			) {
+				await this.state.storage.transaction(async (transaction) => {
+					const current = await transaction.get<SnapshotHead>("head");
+					if (
+						!current ||
+						BigInt(incoming.revision) > BigInt(current.revision)
+					) {
+						const text = JSON.stringify(incoming);
+						const chunks = Math.ceil(text.length / 128_000);
+						const entries: Record<string, unknown> = {
+							head: { revision: incoming.revision, chunks },
+						};
+						// Each entry stays below the platform's 2 MiB key/value limit.
+						for (let index = 0; index < chunks; index++)
+							entries[`snapshot:${index}`] = text.slice(
+								index * 128_000,
+								(index + 1) * 128_000,
+							);
+						await transaction.put(entries);
+						for (let index = chunks; index < (current?.chunks ?? 0); index++)
+							await transaction.delete(`snapshot:${index}`);
+					}
+				});
+				// Storage awaits permit interleaving: never regress the in-memory broadcast either.
+				if (
+					!this.latest ||
+					BigInt(incoming.revision) > BigInt(this.latest.revision)
+				) {
+					this.latest = incoming;
+					for (const send of this.subscribers) send(incoming);
+				}
+			}
+			return new Response(null, { status: 204 });
+		}
+		if (
+			!this.latest ||
+			this.latest.userId !== url.searchParams.get("userId") ||
+			this.latest.sessionId !== url.searchParams.get("sessionId")
+		)
+			return new Response(null, { status: 404 });
+		if (this.subscribers.size >= 16) return new Response(null, { status: 429 });
+		const minimumRevision = url.searchParams.get("revision");
+		if (
+			minimumRevision &&
+			(!/^[1-9]\d{0,19}$/.test(minimumRevision) ||
+				BigInt(this.latest.revision) < BigInt(minimumRevision))
+		)
+			return new Response(null, { status: 409 });
+		const displaySessionId =
+			url.searchParams.get("displaySessionId") ?? this.latest.sessionId;
+		let stop = () => {};
+		let cancelled = false;
+		const stream = new ReadableStream<Uint8Array>(
+			{
+				start: (controller) => {
+					let ended = false;
+					let revision = 0n;
+					const send = (value: ConversationSnapshot) => {
+						if (ended || BigInt(value.revision) <= revision) return;
+						if ((controller.desiredSize ?? 0) <= 0) {
+							stop();
+							return;
+						}
+						revision = BigInt(value.revision);
+						controller.enqueue(
+							encoder.encode(conversationEvent(value, displaySessionId)),
+						);
+					};
+					const heartbeat = setInterval(() => {
+						if (!ended && (controller.desiredSize ?? 0) > 0)
+							controller.enqueue(encoder.encode(": heartbeat\n\n"));
+					}, 10_000);
+					// Bound authorization lifetime; EventSource reconnect rechecks the web user's ownership.
+					const expiry = setTimeout(() => stop(), 60_000);
+					stop = () => {
+						if (ended) return;
+						ended = true;
+						clearInterval(heartbeat);
+						clearTimeout(expiry);
+						this.subscribers.delete(send);
+						request.signal.removeEventListener("abort", stop);
+						if (!cancelled) controller.close();
+					};
+					this.subscribers.add(send);
+					request.signal.addEventListener("abort", stop, { once: true });
+					if (request.signal.aborted) stop();
+					else if (this.latest) send(this.latest);
+				},
+				cancel: () => {
+					cancelled = true;
+					stop();
+				},
+			},
+			{ highWaterMark: 64 * 1024, size: (chunk) => chunk.byteLength },
+		);
+		return new Response(stream, {
+			headers: {
+				"Content-Type": "text/event-stream",
+				"Cache-Control": "no-store, no-transform",
+			},
+		});
+	}
+	private async controlTurn(request: Request) {
+		const input = turnControlSchema.parse(await request.json());
+		const action = new URL(request.url).pathname.split("/").at(-1);
+		return this.state.storage.transaction(async (storage) => {
+			const identity = await storage.get<{ userId: string; sessionId: string }>(
+				"identity",
+			);
+			if (
+				identity &&
+				(identity.userId !== input.userId ||
+					identity.sessionId !== input.sessionId)
+			)
+				return new Response(null, { status: 403 });
+			await storage.put("identity", {
+				userId: input.userId,
+				sessionId: input.sessionId,
+			});
+			const current = await storage.get<ActiveConversationTurn>("active-turn");
+			const retired =
+				(await storage.get<Record<string, number>>("retired-turns")) ?? {};
+			for (const [id, expiry] of Object.entries(retired))
+				if (expiry <= Date.now()) delete retired[id];
+			const same =
+				current?.turnId === input.turnId && current?.leaseId === input.leaseId;
+			if (action === "acquire") {
+				if (retired[input.turnId] || Object.keys(retired).length >= 256)
+					return new Response(null, { status: 409 });
+				if (
+					current &&
+					((same && (current.cancelled || current.expiresAt <= Date.now())) ||
+						(!same && current.expiresAt > Date.now()))
+				)
+					return new Response(null, { status: 409 });
+			} else if (
+				!same ||
+				(current?.cancelled && action !== "release" && action !== "cancel") ||
+				(action === "renew" && current.expiresAt <= Date.now())
+			) {
+				return new Response(null, { status: 409 });
+			}
+			if (action === "release") {
+				retired[input.turnId] = Date.now() + 70_000;
+				await storage.put("retired-turns", retired);
+				await storage.delete("active-turn");
+				await storage.deleteAlarm();
+			} else {
+				if (current && !same) retired[current.turnId] = Date.now() + 70_000;
+				await storage.put("retired-turns", retired);
+				const next: ActiveConversationTurn = {
+					...input,
+					expiresAt: Date.now() + TURN_COORDINATION_LEASE_MS,
+					cancelled: action === "cancel",
+				};
+				await storage.put("active-turn", next);
+				await storage.setAlarm(next.expiresAt);
+			}
+			return new Response(null, { status: 204 });
+		});
+	}
+	async alarm() {
+		await this.state.storage.transaction(async (storage) => {
+			const turn = await storage.get<ActiveConversationTurn>("active-turn");
+			if (!turn) return;
+			if (turn.expiresAt <= Date.now()) {
+				const retired =
+					(await storage.get<Record<string, number>>("retired-turns")) ?? {};
+				for (const [id, expiry] of Object.entries(retired))
+					if (expiry <= Date.now()) delete retired[id];
+				retired[turn.turnId] = Date.now() + 70_000;
+				await storage.put("retired-turns", retired);
+				await storage.delete("active-turn");
+			} else await storage.setAlarm(turn.expiresAt);
+		});
+	}
+}
+
+export default {
+	async fetch(
+		request: Request,
+		environment: RealtimeEnvironment,
+	): Promise<Response> {
+		try {
+			const url = new URL(request.url);
+			if (
+				!(
+					(request.method === "POST" &&
+						(url.pathname === "/snapshot" ||
+							/^\/turn\/(acquire|renew|release|cancel)$/.test(url.pathname))) ||
+					(request.method === "GET" && url.pathname === "/stream")
+				)
+			)
+				return new Response(null, { status: 404 });
+			const body = await boundedBody(request);
+			if (
+				!(await verifyDeliveryRequest(
+					environment.DELIVERY_SECRET,
+					request,
+					body,
+				))
+			)
+				return new Response(null, { status: 401 });
+			const scope =
+				request.method === "POST"
+					? (url.pathname === "/snapshot"
+							? conversationSnapshotSchema
+							: turnControlSchema
+						).parse(JSON.parse(body))
+					: {
+							userId: url.searchParams.get("userId"),
+							sessionId: url.searchParams.get("sessionId"),
+						};
+			if (
+				!scope.userId ||
+				!scope.sessionId ||
+				!/^[a-f0-9-]{36}$/.test(scope.sessionId)
+			)
+				return new Response(null, { status: 400 });
+			const room = environment.CONVERSATIONS.get(
+				environment.CONVERSATIONS.idFromName(
+					JSON.stringify([scope.userId, scope.sessionId]),
+				),
+			);
+			// Worker types and the web app use separate DOM type declarations for Request/Response.
+			const forwarded = new Request(request.url, {
+				method: request.method,
+				headers: request.headers,
+				...(request.method === "POST" ? { body } : {}),
+				signal: request.signal,
+			});
+			return (await room.fetch(forwarded as never)) as unknown as Response;
+		} catch {
+			return new Response(null, { status: 400 });
+		}
+	},
+};

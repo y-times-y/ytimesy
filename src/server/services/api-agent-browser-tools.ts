@@ -2,10 +2,12 @@ import { randomUUID } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { type ToolSet, tool } from "ai";
 import { z } from "zod";
-import type { WorkspaceId } from "#/domain/ids";
 import { isPublicModelAddress } from "#/server/adapters/model-endpoint";
+import {
+	type AgentToolWorkspaceInput,
+	resolveToolWorkspace,
+} from "./agent-tool-workspace";
 import { ensureDesktopProcesses } from "./workspace-desktop";
-import type { WorkspaceMachines } from "./workspace-machines";
 
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
@@ -33,18 +35,21 @@ export async function safeBrowserUrl(value: string): Promise<string> {
 	return url.href;
 }
 
-export function apiAgentBrowserTools(input: {
-	machines: WorkspaceMachines;
-	vm: WorkspaceId;
-	readOnly: boolean;
-	signal: AbortSignal;
-	once: (id: string, run: () => Promise<unknown>) => Promise<unknown>;
-}): ToolSet {
-	const { machines, vm, signal, once } = input;
+export function apiAgentBrowserTools(
+	input: AgentToolWorkspaceInput & {
+		readOnly: boolean;
+		signal: AbortSignal;
+		once: (id: string, run: () => Promise<unknown>) => Promise<unknown>;
+	},
+): ToolSet {
+	const { signal, once } = input;
 	async function desktop() {
 		signal.throwIfAborted();
+		const workspace = await resolveToolWorkspace(input);
+		const { machines, vm } = workspace;
 		const result = await ensureDesktopProcesses(machines, vm);
 		if (result.exitCode) throw new Error("The shared desktop could not start.");
+		return workspace;
 	}
 	const tools: ToolSet = {
 		browser_open: tool({
@@ -54,7 +59,7 @@ export function apiAgentBrowserTools(input: {
 			execute: ({ url }, options) =>
 				once(options.toolCallId, async () => {
 					const target = await safeBrowserUrl(url);
-					await desktop();
+					const { machines, vm } = await desktop();
 					const command = `export DISPLAY=:0; browser=''; for attempt in $(seq 1 120); do browser=$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser || true); test -n "$browser" && break; sleep 1; done; test -n "$browser" || exit 127; nohup "$browser" --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --user-data-dir=/tmp/ytimesy-chrome-profile --new-window ${quote(target)} >/tmp/ytimesy-api-browser.log 2>&1 </dev/null &`;
 					const result = await machines.exec(vm, command, 135_000);
 					if (result.exitCode)
@@ -71,7 +76,7 @@ export function apiAgentBrowserTools(input: {
 				"Capture the task's shared desktop as an image. Do not use this to expose credentials or private account pages unnecessarily.",
 			inputSchema: z.object({}),
 			execute: async () => {
-				await desktop();
+				const { machines, vm } = await desktop();
 				const path = `/tmp/ytimesy-api-screenshot-${randomUUID()}.png`;
 				try {
 					const result = await machines.exec(
@@ -115,7 +120,7 @@ export function apiAgentBrowserTools(input: {
 		}),
 		execute: ({ x, y }, options) =>
 			once(options.toolCallId, async () => {
-				await desktop();
+				const { machines, vm } = await desktop();
 				const result = await machines.exec(
 					vm,
 					`DISPLAY=:0 xdotool mousemove ${x} ${y} click 1`,
@@ -132,7 +137,7 @@ export function apiAgentBrowserTools(input: {
 		inputSchema: z.object({ text: z.string().min(1).max(2_000) }),
 		execute: ({ text }, options) =>
 			once(options.toolCallId, async () => {
-				await desktop();
+				const { machines, vm } = await desktop();
 				const result = await machines.exec(
 					vm,
 					`DISPLAY=:0 xdotool type --clearmodifiers --delay 1 -- ${quote(text)}`,
@@ -151,7 +156,7 @@ export function apiAgentBrowserTools(input: {
 		}),
 		execute: ({ key }, options) =>
 			once(options.toolCallId, async () => {
-				await desktop();
+				const { machines, vm } = await desktop();
 				const result = await machines.exec(
 					vm,
 					`DISPLAY=:0 xdotool key ${quote(key)}`,
