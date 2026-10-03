@@ -6,6 +6,7 @@ export type ApiAgentEvent =
 	| { type: "usage"; usage: ApiTokenUsage }
 	| { type: "text-delta"; id: string; text: string }
 	| { type: "reasoning-delta"; id: string; text: string }
+	| { type: "reasoning-end"; id: string; durationSeconds: number }
 	| { type: "tool-call"; id: string; name: string; input: unknown }
 	| {
 			type: "tool-result";

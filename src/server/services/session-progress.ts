@@ -5,6 +5,7 @@ import {
 } from "../adapters/agent-sessions";
 import { watchSessionProgress } from "../adapters/freestyle/session-progress";
 import { progressAdapters } from "../adapters/session-progress";
+import { serverSessionProgressResponse } from "./server-session-progress";
 import { scopeSessionRuntimeText } from "./session-workspace-machines";
 
 export async function sessionProgressResponse(input: {
@@ -23,12 +24,18 @@ export async function sessionProgressResponse(input: {
 			: parent;
 	if (!session || session.projectId !== input.projectId)
 		return new Response(null, { status: 404 });
+	if (session.harness === "api" || session.harness === "codex")
+		return serverSessionProgressResponse({
+			userId: input.userId,
+			sessionId: session.id,
+			displaySessionId: input.sessionId,
+			signal: input.signal,
+		});
 	if (!session.providerRef || session.harness === "opencode")
 		return new Response(null, { status: 409 });
 	const apiKey = process.env.FREESTYLE_API_KEY;
 	if (!apiKey) return new Response(null, { status: 503 });
-	const adapter =
-		progressAdapters[session.harness === "codex" ? "api" : session.harness];
+	const adapter = progressAdapters[session.harness];
 	const providerRef = session.providerRef;
 	const paths = Object.fromEntries(
 		Object.entries(adapter.paths).map(([key, path]) => [

@@ -41,7 +41,7 @@ describe("assistant Markdown", () => {
 			);
 			expect(html).toContain('title="Open package.json"');
 			expect(html).toContain('class="session-file-name">package.json</span>');
-			expect(html).toContain("pnpm test");
+			expect(html.replace(/<[^>]+>/g, "")).toContain("pnpm test");
 		}
 	});
 	it("formats incomplete code fences while streaming without creating file buttons inside code", () => {

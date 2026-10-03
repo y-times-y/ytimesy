@@ -10,13 +10,25 @@ import {
 	claimApiTurn,
 	enqueueApiTurn,
 	expireApiTurnLeases,
+	finalizeApiTurn,
 	finishApiTurn,
+	publishApiTurnProgress,
 	renewApiTurn,
 } from "../src/server/adapters/api-turns";
 import {
 	reserveApiTokens,
 	reserveEnvironmentDiagnosisTokens,
 } from "../src/server/adapters/api-usage-budget";
+import {
+	claimConversationDeliveries,
+	conversationSnapshot,
+	settleConversationDelivery,
+} from "../src/server/adapters/conversation-delivery";
+import {
+	injectServerPeerMessages,
+	serverPeerMessageAccepted,
+	stageServerPeerMessage,
+} from "../src/server/adapters/server-peer-inbox";
 
 let db: PGlite;
 const query = async (sql: string, values: unknown[] = []) => {
@@ -45,6 +57,12 @@ beforeAll(async () => {
 	await db.exec(
 		await readFile("supabase/migrations/20260927203000_api_turns.sql", "utf8"),
 	);
+	await db.exec(
+		await readFile(
+			"supabase/migrations/20261001120000_conversation_delivery.sql",
+			"utf8",
+		),
+	);
 	await db.query(
 		`insert into model_connection(id,user_id,provider,label,base_url,sealed_credential,revision) values($1,'alice','openrouter','Test','https://openrouter.ai/api/v1','fixture',$2)`,
 		[connectionId, revision],
@@ -58,9 +76,9 @@ beforeEach(async () => {
 	);
 });
 afterAll(() => db.close());
-function submit(userId = "alice") {
+function submit(userId = "alice", targetSessionId = sessionId) {
 	return enqueueApiTurn({
-		sessionId,
+		sessionId: targetSessionId,
 		userId,
 		connectionId,
 		revision,
@@ -70,6 +88,141 @@ function submit(userId = "alice") {
 		items: [],
 	});
 }
+
+it("admits another user's queued work when one user reaches their shared worker limit", async () => {
+	const second = randomUUID();
+	const third = randomUUID();
+	const other = randomUUID();
+	await db.query(
+		"insert into agent_session(id,user_id,harness,turn_status) values($1,'alice','api','idle'),($2,'alice','api','idle'),($3,'bob','api','idle')",
+		[second, third, other],
+	);
+	await submit();
+	await submit("alice", second);
+	await submit("alice", third);
+	expect((await claimApiTurn(2))?.user_id).toBe("alice");
+	expect((await claimApiTurn(2))?.user_id).toBe("alice");
+	await db.query(
+		"insert into api_turn(id,session_id,user_id,model_id,connection_revision,state) values($1,$2,'bob','fixture','fixture','queued')",
+		[randomUUID(), other],
+	);
+	expect((await claimApiTurn(2))?.user_id).toBe("bob");
+	expect(await claimApiTurn(2)).toBeNull();
+});
+
+it("does not acknowledge peer input until the actual model history is checkpointed", async () => {
+	await stageServerPeerMessage(sessionId, "peer-one", "Finding from a peer");
+	await expect(
+		injectServerPeerMessages(sessionId, [], async () => {
+			throw new Error("DB outage");
+		}),
+	).rejects.toThrow("DB outage");
+	expect(await serverPeerMessageAccepted(sessionId, "peer-one")).toBe(false);
+	const saved: unknown[] = [];
+	const history = await injectServerPeerMessages(
+		sessionId,
+		[],
+		async (messages) => {
+			saved.push(messages);
+		},
+	);
+	expect(saved).toEqual([[{ role: "user", content: "Finding from a peer" }]]);
+	expect(await serverPeerMessageAccepted(sessionId, "peer-one")).toBe(true);
+	expect(
+		await injectServerPeerMessages(sessionId, history, async () => {
+			throw new Error("Should not checkpoint twice");
+		}),
+	).toEqual(history);
+});
+
+it("coalesces streamed checkpoints into one recoverable owner-scoped mailbox", async () => {
+	await submit();
+	const turn = await claimApiTurn();
+	if (!turn) throw new Error("Missing turn");
+	await publishApiTurnProgress(turn, [
+		{ kind: "agentMessage", id: SessionItemId("text"), text: "First" },
+	]);
+	const first = await conversationSnapshot("alice", sessionId);
+	await publishApiTurnProgress(turn, [
+		{
+			kind: "agentMessage",
+			id: SessionItemId("text"),
+			text: "First and second",
+		},
+	]);
+	const next = await conversationSnapshot("alice", sessionId);
+	expect(BigInt(next?.revision ?? "0")).toBeGreaterThan(
+		BigInt(first?.revision ?? "0"),
+	);
+	expect(next?.progress.items).toEqual([
+		{ kind: "agentMessage", id: "text", text: "First and second" },
+	]);
+	expect(await conversationSnapshot("bob", sessionId)).toBeNull();
+	expect(
+		(await db.query("select * from conversation_delivery")).rows,
+	).toHaveLength(1);
+	const deliveries = await claimConversationDeliveries();
+	expect(deliveries).toHaveLength(1);
+	await publishApiTurnProgress(turn, []);
+	await settleConversationDelivery(deliveries[0], true);
+	expect(await claimConversationDeliveries()).toHaveLength(1);
+});
+
+it("rejects streaming after cancellation or expiry without advancing delivery", async () => {
+	await submit();
+	const turn = await claimApiTurn();
+	if (!turn) throw new Error("Missing turn");
+	await db.query(
+		"update api_turn set heartbeat_at=now()-interval '46 seconds' where id=$1",
+		[turn.id],
+	);
+	await expect(publishApiTurnProgress(turn, [])).rejects.toThrow("lease");
+	expect(await renewApiTurn(turn)).toBe(false);
+	expect(await finalizeApiTurn(turn, "completed", [])).toBeNull();
+	await db.query("update api_turn set heartbeat_at=now() where id=$1", [
+		turn.id,
+	]);
+	await cancelApiTurn("alice", sessionId);
+	await expect(publishApiTurnProgress(turn, [])).rejects.toThrow("cancelled");
+	expect(await finalizeApiTurn(turn, "completed", [])).toBe("cancelled");
+	expect(
+		(
+			await db.query("select turn_status from agent_session where id=$1", [
+				sessionId,
+			])
+		).rows,
+	).toEqual([{ turn_status: "idle" }]);
+});
+
+it("backs off a failed room without blocking another room", async () => {
+	const other = randomUUID();
+	await db.query(
+		"insert into agent_session(id,user_id,harness,turn_status) values($1,'bob','api','idle')",
+		[other],
+	);
+	const deliveries = await claimConversationDeliveries();
+	expect(deliveries).toHaveLength(2);
+	const failed = deliveries.find(
+		(value) => value.snapshot.sessionId === sessionId,
+	);
+	const successful = deliveries.find(
+		(value) => value.snapshot.sessionId === other,
+	);
+	if (!failed || !successful) throw new Error("Missing delivery");
+	await settleConversationDelivery(failed, false);
+	await settleConversationDelivery(successful, true);
+	await db.query("update agent_session set items='[]' where id=$1", [
+		sessionId,
+	]);
+	// New streamed frames must not erase a failed room's retry deadline.
+	expect(await claimConversationDeliveries()).toHaveLength(0);
+	await db.query("update agent_session set items='[]' where id=$1", [other]);
+	expect(
+		(await claimConversationDeliveries()).map(
+			(value) => value.snapshot.sessionId,
+		),
+	).toEqual([other]);
+});
 
 it("runs the durable subscription lifecycle without a model_connection and keeps the Codex identity", async () => {
 	await enqueueApiTurn({

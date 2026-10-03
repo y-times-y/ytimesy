@@ -8,7 +8,10 @@ import {
 } from "ai";
 import type { ApiAgentEvent } from "#/domain/api-agent-event";
 import { type ApiTokenUsage, addApiTokenUsage } from "#/domain/api-token-usage";
-import { SafeApiModelFailure } from "#/domain/api-turn-failure";
+import {
+	IncompleteAgentTurn,
+	SafeApiModelFailure,
+} from "#/domain/api-turn-failure";
 import { modelRouteId } from "#/domain/model-connection";
 import { connectedLanguageModel } from "#/server/adapters/api-model";
 import { apiPromptCacheSettings } from "#/server/adapters/api-prompt-cache";
@@ -187,8 +190,23 @@ export async function runModelAgent(
 				await input.onStep(history);
 			},
 		});
+		const reasoningStarted = new Map<string, number>();
 		for await (const part of result.fullStream) {
 			switch (part.type) {
+				case "reasoning-start":
+					reasoningStarted.set(part.id, Date.now());
+					break;
+				case "reasoning-end":
+					await input.onEvent({
+						type: "reasoning-end",
+						id: part.id,
+						durationSeconds: Math.max(
+							0,
+							(Date.now() - (reasoningStarted.get(part.id) ?? Date.now())) /
+								1000,
+						),
+					});
+					break;
 				case "text-delta":
 				case "reasoning-delta":
 					await input.onEvent({
@@ -218,7 +236,10 @@ export async function runModelAgent(
 						type: "tool-result",
 						id: part.toolCallId,
 						name: part.toolName,
-						output: null,
+						output:
+							part.error instanceof Error
+								? part.error.message
+								: "Tool execution failed.",
 						failed: true,
 					});
 					break;
@@ -230,6 +251,7 @@ export async function runModelAgent(
 		}
 		const usage = await result.totalUsage;
 		const reason = await result.finishReason;
+		if (reason !== "stop") throw new IncompleteAgentTurn(reason);
 		await input.onEvent({
 			type: "finish",
 			inputTokens: usage.inputTokens ?? null,

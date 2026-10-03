@@ -80,8 +80,8 @@ export function taskStatusFromTurn(
 	turnStatus: SessionTurnStatus,
 	storedStatus?: AgentTaskStatus | null,
 ): AgentTaskStatus {
-	if (storedStatus) return storedStatus;
 	if (turnStatus === "running") return "working";
+	if (storedStatus) return storedStatus;
 	if (turnStatus === "completed") return "done";
 	if (turnStatus === "failed") return "failed";
 	return "idle";

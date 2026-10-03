@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { type ToolSet, tool } from "ai";
 import { z } from "zod";
-import type { WorkspaceId } from "#/domain/ids";
-import type { WorkspaceMachines } from "./workspace-machines";
+import {
+	type AgentToolWorkspaceInput,
+	resolveToolWorkspace,
+} from "./agent-tool-workspace";
 
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
@@ -47,21 +49,21 @@ finally:
         os.unlink(temporary)
 print(json.dumps({'path': request['path'], 'sha256': hashlib.sha256(content.encode()).hexdigest()}))`;
 
-export function apiAgentFileTools(input: {
-	machines: WorkspaceMachines;
-	vm: WorkspaceId;
-	cwd: string;
-	readOnly: boolean;
-	signal: AbortSignal;
-	once: (id: string, run: () => Promise<unknown>) => Promise<unknown>;
-}): ToolSet {
-	const { machines, vm, cwd, signal, once } = input;
+export function apiAgentFileTools(
+	input: AgentToolWorkspaceInput & {
+		readOnly: boolean;
+		signal: AbortSignal;
+		once: (id: string, run: () => Promise<unknown>) => Promise<unknown>;
+	},
+): ToolSet {
+	const { signal, once } = input;
 	const inspect_changes = tool({
 		description:
 			"Inspect repository status and the current tracked diff before editing or reporting completion.",
 		inputSchema: z.object({ path: z.string().max(2048).optional() }),
 		execute: async ({ path }) => {
 			signal.throwIfAborted();
+			const { machines, vm, cwd } = await resolveToolWorkspace(input);
 			const target = path ? ` -- ${quote(path)}` : "";
 			const result = await machines.exec(
 				vm,
@@ -81,6 +83,7 @@ export function apiAgentFileTools(input: {
 			inputSchema: z.object({}),
 			execute: async () => {
 				signal.throwIfAborted();
+				const { machines, vm, cwd } = await resolveToolWorkspace(input);
 				const result = await machines.exec(
 					vm,
 					`git -C ${quote(cwd)} diff --check && git -C ${quote(cwd)} diff --cached --check && git -C ${quote(cwd)} status --short`,
@@ -100,6 +103,7 @@ export function apiAgentFileTools(input: {
 	): Promise<unknown> {
 		return once(id, async () => {
 			signal.throwIfAborted();
+			const { machines, vm, cwd } = await resolveToolWorkspace(input);
 			const payload = `/tmp/ytimesy-api-edit-${randomUUID()}.json`;
 			await machines.writeTextFile(vm, payload, JSON.stringify(request));
 			try {

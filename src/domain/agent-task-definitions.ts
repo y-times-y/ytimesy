@@ -1,5 +1,15 @@
 export const agentTaskToolDefinitions = [
 	{
+		name: "read_task_capacity",
+		description:
+			"Read current worker/account capacity before planning parallel child launches. Availability is a snapshot, not a reservation; start_task enforces admission atomically.",
+		inputSchema: {
+			type: "object",
+			properties: {},
+			additionalProperties: false,
+		},
+	},
+	{
 		name: "list_peers",
 		description:
 			"Discover agents in your coordination group, including siblings and their bounded objectives. Competing implementations are isolated. No transcripts are broadcast.",

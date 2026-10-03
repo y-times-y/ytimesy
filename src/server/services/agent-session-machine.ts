@@ -39,7 +39,6 @@ import {
 	listAgentSessions,
 	saveAgentSessionProviderRef,
 	saveAgentTaskDraft,
-	saveAgentTaskState,
 	selectAgentSessionHarness,
 } from "#/server/adapters/agent-sessions";
 import { receiveBrokeredRepository } from "#/server/adapters/github/git-broker";
@@ -53,6 +52,7 @@ import {
 	saveTemplateSnapshot,
 	workspaceForProject,
 } from "#/server/adapters/workspaces";
+import { reserveAgentTaskStart } from "../adapters/agent-capacity";
 import { checkpointForSession } from "../adapters/checkpoints/records";
 import { removeCheckpoint } from "../adapters/checkpoints/storage";
 import { providerProjectTemplateSnapshot } from "./provider-project-template";
@@ -356,7 +356,8 @@ export async function prepareAgentTaskStart(input: {
 			: null,
 	);
 	if (dependencyBlock) throw new Error(dependencyBlock);
-	const started = await saveAgentTaskState(task.id, "working");
+	await reserveAgentTaskStart(input.userId, input.projectId, task.id);
+	const started = await agentSessionForOwner(input.userId, task.id);
 	if (!started) throw new Error("The task draft could not be started.");
 	return { task: started, predecessor };
 }

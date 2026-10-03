@@ -90,6 +90,50 @@ function run(events: ApiAgentEvent[], tools = {}) {
 	});
 }
 
+it("does not report a tool-step-limit stop as successful completion", async () => {
+	mocks.model.mockReturnValue(
+		new MockLanguageModelV4({
+			doStream: async () =>
+				stream([
+					{ type: "stream-start", warnings: [] },
+					{
+						type: "tool-call",
+						toolCallId: "call",
+						toolName: "inspect",
+						input: "{}",
+					},
+					{
+						...finish,
+						finishReason: { unified: "tool-calls", raw: "tool_calls" },
+					},
+				]),
+		}),
+	);
+	const events: ApiAgentEvent[] = [];
+	await expect(
+		runApiAgent({
+			userId: "alice",
+			connectionId: "connection",
+			modelId: "model",
+			messages: [{ role: "user", content: "Inspect" }],
+			instructions: "Inspect",
+			tools: {
+				inspect: tool({
+					inputSchema: z.object({}),
+					execute: async () => "result",
+				}),
+			},
+			signal: new AbortController().signal,
+			maxSteps: 1,
+			onEvent: async (event) => {
+				events.push(event);
+			},
+			onStep: async () => {},
+		}),
+	).rejects.toThrow("tool-step limit");
+	expect(events.some((event) => event.type === "finish")).toBe(false);
+});
+
 it("streams text and supplied reasoning, executes a tool, then continues to the answer", async () => {
 	const execute = vi.fn(async ({ path }: { path: string }) => `read ${path}`);
 	const model = new MockLanguageModelV4({

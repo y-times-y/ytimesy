@@ -1,0 +1,12 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ytimesy-realtime-development",
+  "main": "src/realtime/worker.ts",
+  "compatibility_date": "2026-10-01",
+  "durable_objects": {
+    "bindings": [{ "name": "CONVERSATIONS", "class_name": "ConversationRoom" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ConversationRoom"] }],
+  "observability": { "enabled": true },
+  "workers_dev": true
+}

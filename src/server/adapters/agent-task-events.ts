@@ -16,15 +16,14 @@ export type AgentTaskEvent = {
 export async function saveAgentTaskResultAndEvent(input: {
 	readonly sessionId: string;
 	readonly summary: string;
+	readonly turnId?: string;
 	readonly eventType: Extract<AgentTaskEventType, "completed" | "failed">;
 }) {
 	const summary = input.summary.trim();
 	if (!summary) return null;
-	const dedupeKey = taskEventDedupeKey(
-		input.sessionId,
-		input.eventType,
-		summary,
-	);
+	const dedupeKey = input.turnId
+		? `${input.sessionId}:${input.eventType}:${input.turnId}`
+		: taskEventDedupeKey(input.sessionId, input.eventType, summary);
 	const eventId = randomUUID();
 	const result = await database().query<{ id: string }>(
 		`with task as (

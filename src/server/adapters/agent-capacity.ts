@@ -1,0 +1,71 @@
+import { database } from "./database";
+
+export function modelConcurrencyLimits() {
+	const worker = Number(process.env.YTIMESY_MODEL_CONCURRENCY ?? "4");
+	const perUser = Number(process.env.YTIMESY_USER_TURN_CONCURRENCY ?? "8");
+	if (!Number.isInteger(worker) || worker < 2 || worker > 32)
+		throw new Error(
+			"Model concurrency must be between 2 and 32 to reserve leader capacity.",
+		);
+	if (!Number.isInteger(perUser) || perUser < 2 || perUser > 64)
+		throw new Error(
+			"Per-user concurrency must be between 2 and 64 to reserve leader capacity.",
+		);
+	return { worker, perUser, maxChildren: Math.min(worker, perUser) - 1 };
+}
+
+const OCCUPIED = `with occupied as (
+	select s.id,s.user_id,s.parent_session_id from agent_session s
+	where s.task_state='working' or s.turn_status='running'
+	or exists(select 1 from api_turn t where t.session_id=s.id and t.state in ('queued','running'))
+), counts as (
+	select count(*)::int as total,
+	count(*) filter(where user_id=$1)::int as owned,
+	count(*) filter(where parent_session_id is null)::int as leaders,
+	count(*) filter(where user_id=$1 and parent_session_id is null)::int as owned_leaders
+	from occupied
+)`;
+
+export async function agentCapacity(userId: string) {
+	const limits = modelConcurrencyLimits();
+	const result = await database().query<{ available: number }>(
+		`${OCCUPIED} select greatest(0,least($2-total-case when leaders=0 then 1 else 0 end,
+		$3-owned-case when owned_leaders=0 then 1 else 0 end))::int as available from counts`,
+		[userId, limits.worker, limits.perUser],
+	);
+	return { ...limits, available: result.rows[0]?.available ?? 0 };
+}
+
+/** Reserve before provisioning. Concurrent starts share the dispatcher's short admission lock. */
+export async function reserveAgentTaskStart(
+	userId: string,
+	projectId: string,
+	taskId: string,
+) {
+	const limits = modelConcurrencyLimits();
+	const client = await database().connect();
+	try {
+		await client.query("begin");
+		await client.query("select pg_advisory_xact_lock(81738419)");
+		const result = await client.query(
+			`${OCCUPIED} update agent_session set task_state='working',turn_status='running',updated_at=now()
+			where id=$4 and user_id=$1 and project_id=$5 and parent_session_id is not null
+			and task_state in ('draft','idle') and turn_status <> 'running'
+			and not exists(select 1 from api_turn t where t.session_id=$4 and t.state in ('queued','running'))
+			and (select total+case when leaders=0 then 1 else 0 end < $2
+			and owned+case when owned_leaders=0 then 1 else 0 end < $3 from counts)
+			returning id`,
+			[userId, limits.worker, limits.perUser, taskId, projectId],
+		);
+		if (!result.rowCount)
+			throw new Error(
+				`Child launch not admitted: capacity is full or the draft changed. At most ${limits.maxChildren} active children fit alongside a leader. Leave this task unstarted; steer existing children instead of creating replacements.`,
+			);
+		await client.query("commit");
+	} catch (error) {
+		await client.query("rollback");
+		throw error;
+	} finally {
+		client.release();
+	}
+}

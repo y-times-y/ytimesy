@@ -1,22 +1,25 @@
 import { randomUUID } from "node:crypto";
 import { type ToolSet, tool } from "ai";
 import { z } from "zod";
-import type { WorkspaceId } from "#/domain/ids";
-import type { WorkspaceMachines } from "./workspace-machines";
+import {
+	type AgentToolWorkspaceInput,
+	resolveToolWorkspace,
+} from "./agent-tool-workspace";
+import { scopedShellCommand } from "./api-command-scope";
 
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 const jobId = z.string().uuid();
 
-export function apiAgentCommandTools(input: {
-	machines: WorkspaceMachines;
-	vm: WorkspaceId;
-	cwd: string;
-	sessionId: string;
-	readOnly: boolean;
-	signal: AbortSignal;
-	once: (id: string, run: () => Promise<unknown>) => Promise<unknown>;
-}): ToolSet {
-	const { machines, vm, cwd, signal, once } = input;
+export function apiAgentCommandTools(
+	input: AgentToolWorkspaceInput & {
+		sessionId: string;
+		turnId: string;
+		readOnly: boolean;
+		signal: AbortSignal;
+		once: (id: string, run: () => Promise<unknown>) => Promise<unknown>;
+	},
+): ToolSet {
+	const { signal, once } = input;
 	const root = `/tmp/ytimesy-api-commands/${input.sessionId.replaceAll(/[^a-zA-Z0-9-]/g, "").slice(0, 64)}`;
 	const paths = (id: string) => ({
 		output: `${root}/${id}.output`,
@@ -30,6 +33,7 @@ export function apiAgentCommandTools(input: {
 			inputSchema: z.object({ id: jobId }),
 			execute: async ({ id }) => {
 				signal.throwIfAborted();
+				const { machines, vm } = await resolveToolWorkspace(input);
 				const path = paths(id);
 				const result = await machines.exec(
 					vm,
@@ -53,9 +57,10 @@ export function apiAgentCommandTools(input: {
 		execute: ({ command, maxSeconds }, options) =>
 			once(options.toolCallId, async () => {
 				signal.throwIfAborted();
+				const { machines, vm, cwd } = await resolveToolWorkspace(input);
 				const id = randomUUID();
 				const path = paths(id);
-				const job = `cd ${quote(cwd)} && timeout --kill-after=5s ${maxSeconds}s bash -lc ${quote(command)} >${quote(path.output)} 2>&1; printf '%s\\n' "$?" >${quote(path.status)}`;
+				const job = `${scopedShellCommand({ turnId: input.turnId, cwd, command, seconds: maxSeconds })} >${quote(path.output)} 2>&1; printf '%s\\n' "$?" >${quote(path.status)}`;
 				const result = await machines.exec(
 					vm,
 					`mkdir -p ${quote(root)} && : >${quote(path.output)} && tmux -L ytimesy-api new-session -d -s ${quote(path.session)} bash -lc ${quote(job)}`,
@@ -72,6 +77,7 @@ export function apiAgentCommandTools(input: {
 		execute: ({ id }, options) =>
 			once(options.toolCallId, async () => {
 				signal.throwIfAborted();
+				const { machines, vm } = await resolveToolWorkspace(input);
 				const path = paths(id);
 				const result = await machines.exec(
 					vm,

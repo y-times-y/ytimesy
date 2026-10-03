@@ -9,15 +9,17 @@ import {
 	sessionItemsQueuedWithUser,
 } from "#/domain/session-item";
 import { agentSessionForOwner } from "../adapters/agent-sessions";
-import { cancelApiTurn, enqueueApiTurn } from "../adapters/api-turns";
+import { enqueueApiTurn } from "../adapters/api-turns";
 import {
 	listModelConnections,
 	loadModelConnection,
 } from "../adapters/model-connections";
 import { openAgentSession } from "./agent-session-machine";
+import { cancelServerTurn } from "./cancel-server-turn";
 import {
 	type CodexSessionScope,
 	emptyCodexSession,
+	type PublicCodexSession,
 } from "./codex-workspace-session";
 import { availableApiModelRoutes } from "./model-connections";
 
@@ -25,7 +27,9 @@ export async function apiModelCatalog(userId: string) {
 	return availableApiModelRoutes(await listModelConnections(userId));
 }
 
-export async function readApiWorkspaceSession(scope: CodexSessionScope) {
+export async function readApiWorkspaceSession(
+	scope: CodexSessionScope,
+): Promise<PublicCodexSession> {
 	const session = scope.sessionId
 		? await agentSessionForOwner(scope.userId, scope.sessionId)
 		: null;
@@ -120,6 +124,6 @@ export async function sendApiWorkspaceTask(
 export async function stopApiWorkspaceTask(scope: CodexSessionScope) {
 	if (!scope.sessionId) throw new Error("Select a chat first.");
 	await readApiWorkspaceSession(scope);
-	await cancelApiTurn(scope.userId, scope.sessionId);
+	await cancelServerTurn(scope.userId, scope.sessionId);
 	return readApiWorkspaceSession(scope);
 }

@@ -53,6 +53,7 @@ async function fixture(readOnly = false) {
 		vm: WorkspaceId("test-vm"),
 		cwd: root,
 		sessionId,
+		turnId: sessionId,
 		readOnly,
 		signal: new AbortController().signal,
 		once: async (_id, execute) => execute(),

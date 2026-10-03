@@ -4,7 +4,7 @@ import { MatrixDotLoader } from "#/components/ui/matrix-dot-loader";
 import type { AgentCompetition } from "#/domain/agent-competition";
 import {
 	type AgentTaskActivity,
-	childTaskPromptId,
+	childTaskAnchorId,
 	childTaskPublicItems,
 } from "#/domain/child-task-activity";
 import { commandActivityTitle } from "#/domain/command-activity-title";
@@ -34,6 +34,11 @@ import {
 	groupTimelineRows,
 	type TimelineRow,
 } from "#/domain/timeline-activity";
+import {
+	toolCommand,
+	toolDetailTitle,
+	toolOutputText,
+} from "#/domain/tool-detail";
 import { ActivityIcon } from "./activity-icon";
 import { AgentMarkdown } from "./agent-markdown";
 import { FileChangeCounts } from "./file-change-counts";
@@ -150,26 +155,27 @@ export function SessionTimeline({
 								/>
 							</li>
 						))}
-						{row.kind === "item" && row.item.kind === "userMessage"
-							? childTasks
-									.filter(
-										(task) => childTaskPromptId(task, visible) === row.item.id,
-									)
-									.map((task) => (
-										<li key={`child:${task.id}`} data-kind="child-task">
-											<ChildTaskCard
-												task={task}
-												tasks={tasks}
-												onOpenFile={onOpenFile}
-											/>
-										</li>
-									))
-							: null}
+						{childTasks
+							.filter((task) => {
+								const anchor = childTaskAnchorId(task, visible);
+								return row.kind === "item"
+									? anchor === row.item.id
+									: row.items.some((item) => item.id === anchor);
+							})
+							.map((task) => (
+								<li key={`child:${task.id}`} data-kind="child-task">
+									<ChildTaskCard
+										task={task}
+										tasks={tasks}
+										onOpenFile={onOpenFile}
+									/>
+								</li>
+							))}
 					</Fragment>
 				);
 			})}
 			{childTasks
-				.filter((task) => !childTaskPromptId(task, visible))
+				.filter((task) => !childTaskAnchorId(task, visible))
 				.map((task) => (
 					<li key={`child:${task.id}`} data-kind="child-task">
 						<ChildTaskCard task={task} tasks={tasks} onOpenFile={onOpenFile} />
@@ -180,6 +186,14 @@ export function SessionTimeline({
 			) && showTurnWorking(items, turnStatus) ? (
 				<li data-kind="working">
 					<p className="session-working session-shimmer">Thinking</p>
+				</li>
+			) : null}
+			{turnStatus !== "running" &&
+			childTasks.some((task) => task.turnStatus === "running") ? (
+				<li data-kind="waiting-for-children">
+					<p className="session-working" role="status">
+						Waiting for child agents
+					</p>
 				</li>
 			) : null}
 		</ol>
@@ -199,7 +213,9 @@ function ChildTaskCard({
 	const busy = task.status === "working" || task.status === "waiting";
 	const status =
 		task.status === "done"
-			? "Completed"
+			? task.reviewState === "pending"
+				? "Awaiting review"
+				: "Completed"
 			: task.status === "failed"
 				? "Failed"
 				: task.status === "draft"
@@ -715,22 +731,46 @@ function SessionItemView({
 					</p>
 				</div>
 			);
-		case "dynamicToolCall":
+		case "dynamicToolCall": {
+			const command = toolCommand(item);
 			return (
-				<div
+				<details
 					className="session-activity"
 					data-kind="dynamicToolCall"
 					data-status={item.status}
 					data-live={live ? "true" : undefined}
 					data-nested={nested ? "true" : undefined}
 				>
-					<p>
+					<summary>
 						<ActivityIcon glyph={activityGlyphForToolName(item.tool)} />
-						<span className={titleClass}>{item.tool}</span>
+						<span className={titleClass}>{toolDetailTitle(item)}</span>
+						<ChevronRight size={12} className="session-activity-chevron" />
 						{activityStatus(item.status)}
-					</p>
-				</div>
+					</summary>
+					{item.input && (
+						<div className="session-command-detail">
+							<p className="session-activity-meta">Input</p>
+							{command ? (
+								<ShellCommandCode command={command} />
+							) : (
+								<pre className="session-output">{item.input}</pre>
+							)}
+						</div>
+					)}
+					{item.output && (
+						<div className="session-command-detail">
+							<p className="session-activity-meta">Result</p>
+							<pre className="session-output">
+								{toolOutputText(item.output)}
+							</pre>
+						</div>
+					)}
+					{!item.input && !item.output && (
+						<p>Details were not recorded for this older call.</p>
+					)}
+				</details>
 			);
+		}
 		case "webSearch":
 			return (
 				<div
@@ -784,7 +824,7 @@ function activityTitleIsLive(
 	thoughtInProgress: boolean,
 ): boolean {
 	if (item.kind === "reasoning") {
-		return turnRunning && thoughtInProgress;
+		return turnRunning && thoughtInProgress && item.durationSeconds == null;
 	}
 	return turnRunning && liveActivityStatus(item) === "inProgress";
 }

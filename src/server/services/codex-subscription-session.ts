@@ -10,14 +10,11 @@ import {
 } from "#/domain/session-item";
 import { subscriptionTurnRevision } from "#/domain/subscription-turn";
 import { agentSessionForOwner } from "../adapters/agent-sessions";
-import {
-	cancelApiTurn,
-	enqueueApiTurn,
-	previousTurnMessages,
-} from "../adapters/api-turns";
+import { enqueueApiTurn, previousTurnMessages } from "../adapters/api-turns";
 import { codexSubscriptionCatalog } from "../adapters/codex-subscription";
 import { hasManagedCodexAuth } from "../auth/codex-managed-auth";
 import { openAgentSession } from "./agent-session-machine";
+import { cancelServerTurn } from "./cancel-server-turn";
 import {
 	type CodexSessionScope,
 	emptyCodexSession,
@@ -122,6 +119,6 @@ export async function sendSubscriptionTask(
 export async function stopSubscriptionTask(scope: CodexSessionScope) {
 	await readSubscriptionSession(scope);
 	if (!scope.sessionId) throw new Error("Select a chat first.");
-	await cancelApiTurn(scope.userId, scope.sessionId);
+	await cancelServerTurn(scope.userId, scope.sessionId);
 	return readSubscriptionSession(scope);
 }

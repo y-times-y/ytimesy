@@ -13,9 +13,33 @@ export async function compactApiHistory(
 ): Promise<{ messages: ModelMessage[]; compacted: boolean }> {
 	if (bytes(messages) < COMPACT_AT_BYTES) return { messages, compacted: false };
 	const pruned = pruneMessages({
-		messages,
+		messages: messages.map((message, index) => {
+			if (message.role !== "tool" || index >= messages.length - 2)
+				return message;
+			return {
+				...message,
+				content: message.content.map((part) => {
+					if (part.type !== "tool-result") return part;
+					if (
+						!/^(read_file|list_files|bash|search_files|web_search|fetch_url)$/.test(
+							part.toolName,
+						)
+					)
+						return part;
+					const output = JSON.stringify(part.output);
+					if (output.length <= 4000) return part;
+					return {
+						...part,
+						output: {
+							type: "text" as const,
+							value: `Earlier tool output (excerpt; re-read the workspace for complete evidence):\n${output.slice(0, 2000)}`,
+						},
+					};
+				}),
+			};
+		}),
 		reasoning: "before-last-message",
-		toolCalls: "before-last-2-messages",
+		toolCalls: "none",
 		emptyMessages: "remove",
 	});
 	if (bytes(pruned) < COMPACT_AT_BYTES)

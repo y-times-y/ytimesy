@@ -1,4 +1,5 @@
-import { useMemo } from "react";
+import { Children, isValidElement, type ReactNode, useMemo } from "react";
+import "streamdown/styles.css";
 import {
 	CodeBlock,
 	type Components,
@@ -56,7 +57,7 @@ export function AgentMarkdown({
 			},
 			code: (props) => {
 				const { children, className } = props;
-				const text = String(children ?? "");
+				const text = markdownChildText(children);
 				if (!("data-block" in props)) {
 					const file = workspaceFileMention(text);
 					return file ? fileLink(file, text) : <code>{children}</code>;
@@ -88,6 +89,7 @@ export function AgentMarkdown({
 			className="session-markdown"
 			mode={streaming ? "streaming" : "static"}
 			isAnimating={streaming}
+			animated={streaming}
 			components={components}
 			plugins={{ code: codeHighlighter }}
 			rehypePlugins={markdownPlugins}
@@ -102,4 +104,16 @@ export function AgentMarkdown({
 
 function safeExternalLink(href: string | undefined) {
 	return href && /^(https?:\/\/|mailto:|#)/i.test(href) ? href : null;
+}
+
+function markdownChildText(children: ReactNode): string {
+	return Children.toArray(children)
+		.map((child) =>
+			typeof child === "string" || typeof child === "number"
+				? String(child)
+				: isValidElement<{ children?: ReactNode }>(child)
+					? markdownChildText(child.props.children)
+					: "",
+		)
+		.join("");
 }

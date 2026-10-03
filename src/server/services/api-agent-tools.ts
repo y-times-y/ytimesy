@@ -9,24 +9,31 @@ import {
 	completeAgentTaskCommand,
 	renewAgentTaskCommandClaim,
 } from "../adapters/agent-task-command-receipts";
+import type { AgentToolWorkspace } from "./agent-tool-workspace";
 import { apiAgentBrowserTools } from "./api-agent-browser-tools";
 import { apiAgentCommandTools } from "./api-agent-command-tools";
 import { apiAgentFileTools } from "./api-agent-file-tools";
+import { scopedShellCommand } from "./api-command-scope";
 import { runAgentTaskTool } from "./harness-workspace-session";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
-export function apiAgentTools(input: {
-	machines: WorkspaceMachines;
-	session: AgentSessionRecord;
-	cwd: string;
-	turnId: string;
-	signal: AbortSignal;
-}): ToolSet {
-	const { machines, session, cwd, signal } = input;
-	if (!session.providerRef) throw new Error("Task workspace is unavailable.");
-	const vm = WorkspaceId(session.providerRef);
+export function apiAgentTools(
+	input: {
+		machines: WorkspaceMachines;
+		session: AgentSessionRecord;
+		turnId: string;
+		signal: AbortSignal;
+	} & ({ cwd: string } | { workspace: () => Promise<AgentToolWorkspace> }),
+): ToolSet {
+	const { machines, session, signal } = input;
+	const workspace = async (): Promise<AgentToolWorkspace> => {
+		signal.throwIfAborted();
+		if ("workspace" in input) return input.workspace();
+		if (!session.providerRef) throw new Error("Task workspace is unavailable.");
+		return { machines, vm: WorkspaceId(session.providerRef), cwd: input.cwd };
+	};
 	async function once(id: string, run: () => Promise<unknown>) {
 		signal.throwIfAborted();
 		const requestId = `${input.turnId}:${id}`;
@@ -47,6 +54,7 @@ export function apiAgentTools(input: {
 		);
 		try {
 			const result = await run();
+			signal.throwIfAborted();
 			await completeAgentTaskCommand(session.id, {
 				id: requestId,
 				ok: true,
@@ -64,6 +72,7 @@ export function apiAgentTools(input: {
 			inputSchema: z.object({}),
 			execute: async () => {
 				signal.throwIfAborted();
+				const { machines, vm, cwd } = await workspace();
 				const result = await machines.exec(
 					vm,
 					`git -C ${quote(cwd)} ls-files --cached --others --exclude-standard`,
@@ -80,6 +89,7 @@ export function apiAgentTools(input: {
 			inputSchema: z.object({ query: z.string().min(1).max(200) }),
 			execute: async ({ query }) => {
 				signal.throwIfAborted();
+				const { machines, vm, cwd } = await workspace();
 				const result = await machines.exec(
 					vm,
 					`git -C ${quote(cwd)} grep -n -I -m 5 -e ${quote(query)} -- .`,
@@ -96,6 +106,7 @@ export function apiAgentTools(input: {
 			inputSchema: z.object({ path: z.string().max(2048) }),
 			execute: async ({ path }) => {
 				signal.throwIfAborted();
+				const { machines, vm, cwd } = await workspace();
 				const script = `import pathlib\nr=pathlib.Path(${JSON.stringify(cwd)}).resolve()\np=(r/${JSON.stringify(path)}).resolve()\nif not p.is_relative_to(r): raise ValueError('Path outside repository')\nwith p.open('r') as f: print(f.read(32000))`;
 				const result = await machines.exec(
 					vm,
@@ -114,9 +125,15 @@ export function apiAgentTools(input: {
 			inputSchema: z.object({ command: z.string().min(1).max(16000) }),
 			execute: ({ command }, options) =>
 				once(options.toolCallId, async () => {
+					const { machines, vm, cwd } = await workspace();
 					const result = await machines.exec(
 						vm,
-						`cd ${quote(cwd)} && timeout --kill-after=2s 30s bash -lc ${quote(command)}`,
+						scopedShellCommand({
+							turnId: input.turnId,
+							cwd,
+							command,
+							seconds: 30,
+						}),
 						35_000,
 					);
 					return {
@@ -128,6 +145,8 @@ export function apiAgentTools(input: {
 		});
 	}
 	for (const definition of agentTaskToolDefinitions) {
+		if (definition.name === "report_task_blocked" && !session.parentSessionId)
+			continue;
 		tools[definition.name] = tool({
 			description: definition.description,
 			inputSchema: jsonSchema<Record<string, unknown>>(
@@ -158,9 +177,7 @@ export function apiAgentTools(input: {
 	Object.assign(
 		tools,
 		apiAgentFileTools({
-			machines,
-			vm,
-			cwd,
+			workspace,
 			readOnly: session.taskAccess === "read_only",
 			signal,
 			once,
@@ -169,9 +186,8 @@ export function apiAgentTools(input: {
 	Object.assign(
 		tools,
 		apiAgentCommandTools({
-			machines,
-			vm,
-			cwd,
+			workspace,
+			turnId: input.turnId,
 			sessionId: session.id,
 			readOnly: session.taskAccess === "read_only",
 			signal,
@@ -181,8 +197,7 @@ export function apiAgentTools(input: {
 	Object.assign(
 		tools,
 		apiAgentBrowserTools({
-			machines,
-			vm,
+			workspace,
 			readOnly: session.taskAccess === "read_only",
 			signal,
 			once,

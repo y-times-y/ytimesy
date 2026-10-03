@@ -84,6 +84,7 @@ import {
 	refreshClaudeAuthSnapshotForUser,
 } from "#/server/proof/persist-claude-auth-snapshot";
 import { decryptHarnessApiKey } from "#/server/secrets/harness-key-store";
+import { agentCapacity } from "../adapters/agent-capacity";
 import { hasManagedCodexAuth } from "../auth/codex-managed-auth";
 import {
 	discoverAgentPeers,
@@ -99,11 +100,13 @@ import {
 	syncProjectContextForTask,
 } from "./agent-session-machine";
 import { agentTaskDiffScript } from "./agent-task-diff";
+import { deferredApiTurnWorkspace } from "./api-turn-workspace";
 import {
 	readApiWorkspaceSession,
 	sendApiWorkspaceTask,
 	stopApiWorkspaceTask,
 } from "./api-workspace-session";
+import { awaitStoppedTurn } from "./await-stopped-turn";
 import {
 	readSubscriptionSession,
 	sendSubscriptionTask,
@@ -139,7 +142,7 @@ export function startPreparedAgentTask(
 	scope: HarnessSessionScope,
 	taskSessionId: string,
 ): Effect.Effect<
-	{ id: string; machineId: string; placement: "shared" | "fresh" },
+	{ id: string; machineId: string | null; placement: "shared" | "fresh" },
 	unknown
 > {
 	return Effect.gen(function* () {
@@ -156,6 +159,46 @@ export function startPreparedAgentTask(
 				"The task draft is missing its prompt, model, or placement.",
 			);
 		}
+		if (task.harness === "api" || task.harness === "codex") {
+			const send =
+				task.harness === "api" ? sendApiWorkspaceTask : sendSubscriptionTask;
+			yield* Effect.tryPromise(() =>
+				send(
+					taskScope(scope, task),
+					{
+						text: task.taskPrompt as string,
+						modelId: task.listedModelId as string,
+					},
+					true,
+				),
+			).pipe(
+				Effect.tapError(() =>
+					Effect.tryPromise(() => saveAgentTaskState(task.id, "failed")),
+				),
+			);
+			return {
+				id: task.id,
+				machineId: task.providerRef,
+				placement: task.taskPlacement as "shared" | "fresh",
+			};
+		}
+		if (task.taskPlacement === "shared" && task.parentSessionId) {
+			const parent = yield* Effect.tryPromise(() =>
+				agentSessionForOwner(scope.userId, task.parentSessionId as string),
+			);
+			if (!parent || parent.projectId !== scope.projectId)
+				throw new Error("The shared parent task is unavailable.");
+			if (!parent.providerRef) {
+				// A data-only lead need not have touched files before starting a read-only child.
+				yield* Effect.tryPromise(() =>
+					deferredApiTurnWorkspace(
+						machines,
+						parent,
+						new AbortController().signal,
+					)(),
+				);
+			}
+		}
 		const taskMachines = machinesForAgentSession(machines, task);
 		const bound = yield* Effect.gen(function* () {
 			const machine = yield* Effect.tryPromise(() =>
@@ -170,20 +213,11 @@ export function startPreparedAgentTask(
 				text: task.taskPrompt as string,
 				modelId: task.listedModelId as string,
 			};
-			if (task.harness === "api")
-				yield* Effect.tryPromise(() =>
-					sendApiWorkspaceTask(taskScope(scope, task), taskInput, true),
-				);
-			else if (task.harness === "codex")
-				yield* Effect.tryPromise(() =>
-					sendSubscriptionTask(taskScope(scope, task), taskInput, true),
-				);
-			else
-				yield* sendHarnessWorkspaceTask(
-					taskMachines,
-					taskScope(scope, task),
-					taskInput,
-				);
+			yield* sendHarnessWorkspaceTask(
+				taskMachines,
+				taskScope(scope, task),
+				taskInput,
+			);
 			return machine;
 		}).pipe(
 			Effect.tapError(() =>
@@ -221,6 +255,13 @@ export function requestAgentTaskWrapUp(
 		const taskMachines = machinesForAgentSession(machines, task);
 		const targetScope = taskScope(scope, task);
 		yield* stopHarnessWorkspaceTurn(taskMachines, targetScope);
+		if (task.harness === "api" || task.harness === "codex")
+			yield* Effect.tryPromise(() =>
+				awaitStoppedTurn(
+					async () =>
+						(await agentSessionForOwner(scope.userId, task.id))?.turnStatus,
+				),
+			);
 		yield* sendHarnessWorkspaceTask(taskMachines, targetScope, {
 			modelId: selectedModel,
 			text: "Wrap up now. Stop expanding scope, preserve useful work, run only essential verification, and return a concise result with evidence and remaining uncertainty.",
@@ -743,6 +784,8 @@ export function runAgentTaskTool(
 			);
 		if (parent.userId !== scope.userId || parent.projectId !== scope.projectId)
 			throw new Error("The agent is not available in this project.");
+		if (request.tool === "read_task_capacity")
+			return yield* Effect.tryPromise(() => agentCapacity(scope.userId));
 		if (request.tool === "list_peers") {
 			const peers = yield* Effect.tryPromise(() => discoverAgentPeers(parent));
 			return peers.map((task) => ({
