@@ -14,11 +14,8 @@ import {
 } from "../../domain/publication";
 import { captureServerAnalytics } from "../adapters/analytics";
 import { workspaceRuntimeFromEnv } from "../adapters/freestyle/workspace-runtime";
-import {
-	authorizedRepository,
-	compareBranchAhead,
-	ensureDraftPullRequest,
-} from "../adapters/github";
+import { authorizedRepository, compareBranchAhead } from "../adapters/github";
+import { ensureAppDraftPullRequest } from "../adapters/github/app-pull-request";
 import { resolveGithubAppBot } from "../adapters/github/bot-identity";
 import { pushBrokeredRepository } from "../adapters/github/git-broker";
 import { projectForOwner } from "../adapters/projects";
@@ -208,7 +205,7 @@ export function publishProject(
 		});
 		if (blocked) return yield* reject(blocked);
 		const pullRequest = yield* Effect.tryPromise(() =>
-			ensureDraftPullRequest(token, repository.fullName, {
+			ensureAppDraftPullRequest(project.installationId, repository.fullName, {
 				title: input.title,
 				body: input.body ?? "",
 				head,

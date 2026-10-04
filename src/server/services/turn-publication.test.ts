@@ -18,7 +18,9 @@ vi.mock("../auth/github-connection", () => ({ githubAccessToken: deps.token }));
 vi.mock("../adapters/github", () => ({
 	authorizedRepository: deps.authorize,
 	compareBranchAhead: deps.ahead,
-	ensureDraftPullRequest: deps.pull,
+}));
+vi.mock("../adapters/github/app-pull-request", () => ({
+	ensureAppDraftPullRequest: deps.pull,
 }));
 vi.mock("../adapters/github/git-broker", () => ({
 	pushBrokeredRepository: deps.push,
