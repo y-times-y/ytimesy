@@ -118,6 +118,8 @@ for repo in data['repositories']:
   git(stage,'init')
   if repo.get('shallow'): (stage/'.git/shallow').write_text(repo['shallow'])
   git(stage,'bundle','verify',str(bundle));git(stage,'fetch',str(bundle),'HEAD');git(stage,'checkout','-b',repo['branch'],'FETCH_HEAD')
+  if any(line.split(' ',1)[-1].startswith('refs/ytimesy/') for line in subprocess.check_output(['git','bundle','list-heads',str(bundle)],text=True).splitlines()):
+   git(stage,'fetch',str(bundle),'refs/ytimesy/*:refs/ytimesy/*')
   if repo['work']: git(stage,'apply','--binary',input=dec(repo['work']))
   if repo['index']: git(stage,'apply','--cached','--binary',input=dec(repo['index']))
   for name,content in repo['files'].items():

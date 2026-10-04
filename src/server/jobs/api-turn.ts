@@ -11,6 +11,7 @@ import {
 } from "#/domain/api-turn-failure";
 import { PREPARED_ENVIRONMENT_INSTRUCTIONS } from "#/domain/environment-context";
 import { SessionItemId, WorkspaceId } from "#/domain/ids";
+import { posixShellCommand } from "#/domain/posix-command";
 import { agentSessionForOwner } from "../adapters/agent-sessions";
 import { saveAgentTaskResultAndEvent } from "../adapters/agent-task-events";
 import {
@@ -31,6 +32,7 @@ import {
 	loadTenantProjectCheckout,
 } from "../services/project-workspace";
 import { machinesForAgentSession } from "../services/session-workspace-machines";
+import { commitCompletedSessionTurn } from "../services/turn-commit";
 import type { WorkspaceMachines } from "../services/workspace-machines";
 
 export async function runApiTurn(machines: WorkspaceMachines, turn: ApiTurn) {
@@ -180,6 +182,21 @@ export async function runApiTurn(machines: WorkspaceMachines, turn: ApiTurn) {
 				failureStage = "model";
 			},
 		});
+		abort.signal.throwIfAborted();
+		failureStage = "commit";
+		await commitCompletedSessionTurn(
+			{ ...bound.session, providerRef: bound.providerRef },
+			items,
+			{
+				exec: (providerRef, argv, _env, timeout) =>
+					machines.exec(
+						WorkspaceId(providerRef),
+						posixShellCommand(argv),
+						timeout,
+					),
+			},
+		);
+		abort.signal.throwIfAborted();
 		failureStage = "saving";
 		const saved = await finishApiTurn(turn, "completed", items);
 		if (!saved) return;
