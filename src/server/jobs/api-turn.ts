@@ -194,6 +194,10 @@ export async function runApiTurn(machines: WorkspaceMachines, turn: ApiTurn) {
 						posixShellCommand(argv),
 						timeout,
 					),
+				writeTextFile: (providerRef, path, contents) =>
+					machines.writeTextFile(WorkspaceId(providerRef), path, contents),
+				readTextFile: (providerRef, path) =>
+					machines.readTextFile(WorkspaceId(providerRef), path),
 			},
 		);
 		abort.signal.throwIfAborted();

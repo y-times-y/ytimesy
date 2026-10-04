@@ -17,7 +17,7 @@ import { workspaceRuntimeFromEnv } from "../adapters/freestyle/workspace-runtime
 import {
 	authorizedRepository,
 	compareBranchAhead,
-	createDraftPullRequest,
+	ensureDraftPullRequest,
 } from "../adapters/github";
 import { resolveGithubAppBot } from "../adapters/github/bot-identity";
 import { pushBrokeredRepository } from "../adapters/github/git-broker";
@@ -129,6 +129,7 @@ export function publishProject(
 			repository.defaultBranch;
 		const head =
 			chatBranch?.workingBranch ||
+			chatBranch?.taskBranch ||
 			(input.sessionId
 				? workspacePublicationBranch(input.sessionId)
 				: publicationHeadBranch({
@@ -207,7 +208,7 @@ export function publishProject(
 		});
 		if (blocked) return yield* reject(blocked);
 		const pullRequest = yield* Effect.tryPromise(() =>
-			createDraftPullRequest(token, repository.fullName, {
+			ensureDraftPullRequest(token, repository.fullName, {
 				title: input.title,
 				body: input.body ?? "",
 				head,

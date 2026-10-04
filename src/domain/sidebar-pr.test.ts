@@ -113,6 +113,26 @@ describe("sidebarChatPrNeedFromPullRequest", () => {
 });
 
 describe("sidebarChatPrMarkForWorkspace", () => {
+	it("matches the chat's recorded branch before its legacy workspace branch", () => {
+		expect(
+			sidebarChatPrMarkForWorkspace({
+				workspaceId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+				workingBranch: "ytimesy/fix-parser-abcd",
+				pullRequests: [
+					{
+						number: 1,
+						url: "https://github.com/owner/repo/pull/1",
+						head: "ytimesy/fix-parser-abcd",
+						draft: true,
+						state: "open",
+						merged: false,
+						mergeable: null,
+						mergeableState: null,
+					},
+				],
+			})?.need,
+		).toBe("draft");
+	});
 	it("attaches both attention and ready marks to the matching workspace", () => {
 		const workspaceId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 		const head = workspacePublicationBranch(workspaceId);

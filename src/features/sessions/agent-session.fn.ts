@@ -50,6 +50,7 @@ export type PublicAgentChat = {
 	readonly harnessId?: AgentProviderId | null;
 	readonly updatedAt?: string | null;
 	readonly workspaceId?: string | null;
+	readonly workingBranch?: string | null;
 };
 
 function runWithMachines<A>(
@@ -117,6 +118,7 @@ export const startProjectAgentSession = createServerFn({ method: "POST" })
 			return {
 				id: session.id,
 				title: session.title,
+				workingBranch: session.workingBranch || session.taskBranch || null,
 				turnStatus: session.turnStatus,
 				listedModelId: session.listedModelId,
 				harnessId: session.harness,

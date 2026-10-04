@@ -76,6 +76,8 @@ export function chatsFromAgentSessions(
 		readonly harness?: AgentProviderId | null;
 		readonly updatedAt?: string | null;
 		readonly workspaceId?: string | null;
+		readonly workingBranch?: string | null;
+		readonly taskBranch?: string | null;
 	}[],
 ) {
 	return sessions
@@ -88,6 +90,9 @@ export function chatsFromAgentSessions(
 			harnessId: session.harness ?? null,
 			updatedAt: session.updatedAt ?? null,
 			workspaceId: session.workspaceId ?? null,
+			...(session.workingBranch || session.taskBranch
+				? { workingBranch: session.workingBranch || session.taskBranch }
+				: {}),
 		}));
 }
 

@@ -86,7 +86,7 @@ it.each([false, true])(
 		]);
 		expect(fixture.commit.mock.calls[0][0].providerRef).toBe("executor");
 		if (fails) {
-			expect(writes.at(-1)).toContain("automatic Git commit failed");
+			expect(writes.at(-1)).toContain("automatic Git handoff failed");
 			expect(writes.at(-1)).not.toContain('"turnStatus":"completed"');
 		}
 	},
