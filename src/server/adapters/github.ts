@@ -261,6 +261,48 @@ export async function createDraftPullRequest(
 	}
 }
 
+export async function ensureDraftPullRequest(
+	token: string,
+	fullName: string,
+	draft: { title: string; body: string; head: string; base: string },
+) {
+	const { owner, repo } = repositoryOwnerName(fullName);
+	const find = async () => {
+		const result = await githubClient(token).pulls.list({
+			owner,
+			repo,
+			state: "open",
+			head: `${owner}:${draft.head}`,
+			base: draft.base,
+			per_page: 100,
+		});
+		const existing = result.data.find(
+			(pull) =>
+				pull.head.ref === draft.head &&
+				pull.head.repo?.full_name === fullName &&
+				pull.base.ref === draft.base,
+		);
+		return existing
+			? {
+					number: existing.number,
+					url: existing.html_url,
+					draft: Boolean(existing.draft),
+				}
+			: null;
+	};
+	const existing = await find();
+	if (existing) return existing;
+	try {
+		return await createDraftPullRequest(token, fullName, draft);
+	} catch (error) {
+		if (error instanceof Response && error.status === 409) {
+			const raced = await find();
+			if (raced) return raced;
+		}
+		throw error;
+	}
+}
+
 export async function listSessionPullRequests(token: string, fullName: string) {
 	const { owner, repo } = repositoryOwnerName(fullName);
 	const github = githubClient(token);
@@ -271,7 +313,11 @@ export async function listSessionPullRequests(token: string, fullName: string) {
 		per_page: 100,
 	});
 	const ours = pulls
-		.filter((pull) => pull.head.ref.startsWith("ytimesy-"))
+		.filter(
+			(pull) =>
+				pull.head.ref.startsWith("ytimesy-") ||
+				pull.head.ref.startsWith("ytimesy/"),
+		)
 		.slice(0, 30);
 	return Promise.all(
 		ours.map(async (pull) => {

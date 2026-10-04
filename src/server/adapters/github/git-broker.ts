@@ -204,8 +204,18 @@ echo updated`,
 /** Pushes a verified guest bundle from a fresh bare repository with server-only auth. */
 export async function pushBrokeredRepository(
 	host: GitTransferHost,
-	input: Repository & { directory: string; baseBranch?: string },
+	input: Repository & {
+		directory: string;
+		baseBranch?: string;
+		revision?: string;
+	},
 ): Promise<void> {
+	if (
+		input.revision &&
+		!/^refs\/ytimesy\/turn-commits\/[a-f0-9]{64}$/.test(input.revision)
+	)
+		throw new Error("Invalid completed-turn revision.");
+	const revision = input.revision || "HEAD";
 	const url = repositoryUrl(input);
 	if (!host.readTextFile)
 		throw new Error(
@@ -223,7 +233,7 @@ export async function pushBrokeredRepository(
 				host,
 				`set -eu
 umask 077
-git -C ${quote(input.directory)} bundle create ${quote(transfer)} HEAD
+git -C ${quote(input.directory)} bundle create ${quote(transfer)} ${quote(revision)}
 test "$(wc -c < ${quote(transfer)})" -le ${MAX_BUNDLE_BYTES}
 base64 < ${quote(transfer)} > ${quote(`${transfer}.b64`)}`,
 			);
@@ -265,7 +275,7 @@ base64 < ${quote(transfer)} > ${quote(`${transfer}.b64`)}`,
 			"fetch",
 			"--no-tags",
 			bundle,
-			"HEAD:refs/heads/publish",
+			`${revision}:refs/heads/publish`,
 		]);
 		await git(
 			[

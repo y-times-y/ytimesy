@@ -297,6 +297,7 @@ export function WorkspaceHome({
 	const sidebarChats = (chats.data ?? []).map((chat) => {
 		const mark = sidebarChatPrMarkForWorkspace({
 			workspaceId: chat.workspaceId,
+			workingBranch: chat.workingBranch,
 			pullRequests: listedPullRequests,
 		});
 		return {
@@ -342,9 +343,25 @@ export function WorkspaceHome({
 		if (
 			activeSessionId &&
 			(session.turnStatus === "completed" || session.turnStatus === "failed")
-		)
+		) {
 			void agentTasks.refetch();
-	}, [activeSessionId, session.turnStatus, agentTasks.refetch]);
+			void pullRequests.refetch();
+			void chats.refetch();
+		}
+	}, [
+		activeSessionId,
+		session.turnStatus,
+		agentTasks.refetch,
+		pullRequests.refetch,
+		chats.refetch,
+	]);
+	const taskHandoffs = (agentTasks.data ?? [])
+		.filter((task) => task.pullRequestUrl)
+		.map((task) => `${task.id}:${task.pullRequestUrl}:${task.status}`)
+		.join("|");
+	useEffect(() => {
+		if (taskHandoffs) void pullRequests.refetch();
+	}, [taskHandoffs, pullRequests.refetch]);
 	selectedSessionIdRef.current = activeSessionId;
 	const requestDesktop = useCallback(() => {
 		if (desktopStartInFlight.current) return;
@@ -1324,12 +1341,15 @@ export function WorkspaceHome({
 									desktop={desktop}
 									onOpen={openInspector}
 									pullRequests={listedPullRequests.filter((pr) => {
-										const workspaceId = sidebarChats.find(
+										const chat = sidebarChats.find(
 											(chat) => chat.id === activeSessionId,
-										)?.workspaceId;
-										return workspaceId
-											? pr.head === workspacePublicationBranch(workspaceId)
-											: false;
+										);
+										const head =
+											chat?.workingBranch ||
+											(chat?.workspaceId
+												? workspacePublicationBranch(chat.workspaceId)
+												: null);
+										return Boolean(head && pr.head === head);
 									})}
 								/>
 							}

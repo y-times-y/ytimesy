@@ -7,6 +7,7 @@ import { commitCompletedSessionTurn } from "./turn-commit";
 
 const lookup = vi.hoisted(() => vi.fn());
 vi.mock("../adapters/projects", () => ({ projectForOwner: lookup }));
+vi.mock("./turn-publication", () => ({ publishCompletedSessionTurn: vi.fn() }));
 
 const session = {
 	id: "chat-1",

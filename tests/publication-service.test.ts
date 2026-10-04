@@ -29,7 +29,7 @@ vi.mock("../src/server/adapters/projects", () => ({
 vi.mock("../src/server/adapters/github", () => ({
 	authorizedRepository: adapter.authorize,
 	compareBranchAhead: adapter.ahead,
-	createDraftPullRequest: adapter.create,
+	ensureDraftPullRequest: adapter.create,
 }));
 vi.mock("../src/server/adapters/workspaces", () => ({
 	readyWorkspaceForOwner: adapter.workspace,
