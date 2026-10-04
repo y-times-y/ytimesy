@@ -5,6 +5,7 @@ export type ApiTurnFailureStage =
 	| "workspace"
 	| "budget"
 	| "model"
+	| "commit"
 	| "saving";
 
 export class SafeApiModelFailure extends Error {
@@ -135,5 +136,7 @@ export function apiTurnFailureMessage(
 			return apiModelFailureMessage(error);
 		case "saving":
 			return "The run could not save its latest progress. Check the workspace and connection before retrying.";
+		case "commit":
+			return "The model finished, but automatic Git commit failed. Your edits remain in the workspace. Check Git status and commit hooks in Terminal before continuing.";
 	}
 }
