@@ -26,6 +26,8 @@ import { Route as ApiGithubPullRequestsRouteImport } from './routes/api/github/p
 import { Route as ApiGithubRepositoriesRouteImport } from './routes/api/github/repositories'
 import { Route as ApiIdentityProvidersRouteImport } from './routes/api/identity/providers'
 import { Route as ApiProjectsPublishRouteImport } from './routes/api/projects/publish'
+import { Route as ApiSlackEventsRouteImport } from './routes/api/slack.events'
+import { Route as ApiSlackLinkRouteImport } from './routes/api/slack.link'
 import { Route as ApiWorkspacesRetryRouteImport } from './routes/api/workspaces.retry'
 
 const IndexRoute = IndexRouteImport.update({
@@ -113,6 +115,16 @@ const ApiProjectsPublishRoute = ApiProjectsPublishRouteImport.update({
   path: '/publish',
   getParentRoute: () => ApiProjectsRoute,
 } as any)
+const ApiSlackEventsRoute = ApiSlackEventsRouteImport.update({
+  id: '/api/slack/events',
+  path: '/api/slack/events',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiSlackLinkRoute = ApiSlackLinkRouteImport.update({
+  id: '/api/slack/link',
+  path: '/api/slack/link',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiWorkspacesRetryRoute = ApiWorkspacesRetryRouteImport.update({
   id: '/retry',
   path: '/retry',
@@ -137,6 +149,8 @@ export interface FileRoutesByFullPath {
   '/api/github/repositories': typeof ApiGithubRepositoriesRoute
   '/api/identity/providers': typeof ApiIdentityProvidersRoute
   '/api/projects/publish': typeof ApiProjectsPublishRoute
+  '/api/slack/events': typeof ApiSlackEventsRoute
+  '/api/slack/link': typeof ApiSlackLinkRoute
   '/api/workspaces/retry': typeof ApiWorkspacesRetryRoute
 }
 export interface FileRoutesByTo {
@@ -157,6 +171,8 @@ export interface FileRoutesByTo {
   '/api/github/repositories': typeof ApiGithubRepositoriesRoute
   '/api/identity/providers': typeof ApiIdentityProvidersRoute
   '/api/projects/publish': typeof ApiProjectsPublishRoute
+  '/api/slack/events': typeof ApiSlackEventsRoute
+  '/api/slack/link': typeof ApiSlackLinkRoute
   '/api/workspaces/retry': typeof ApiWorkspacesRetryRoute
 }
 export interface FileRoutesById {
@@ -178,6 +194,8 @@ export interface FileRoutesById {
   '/api/github/repositories': typeof ApiGithubRepositoriesRoute
   '/api/identity/providers': typeof ApiIdentityProvidersRoute
   '/api/projects/publish': typeof ApiProjectsPublishRoute
+  '/api/slack/events': typeof ApiSlackEventsRoute
+  '/api/slack/link': typeof ApiSlackLinkRoute
   '/api/workspaces/retry': typeof ApiWorkspacesRetryRoute
 }
 export interface FileRouteTypes {
@@ -200,6 +218,8 @@ export interface FileRouteTypes {
     | '/api/github/repositories'
     | '/api/identity/providers'
     | '/api/projects/publish'
+    | '/api/slack/events'
+    | '/api/slack/link'
     | '/api/workspaces/retry'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -220,6 +240,8 @@ export interface FileRouteTypes {
     | '/api/github/repositories'
     | '/api/identity/providers'
     | '/api/projects/publish'
+    | '/api/slack/events'
+    | '/api/slack/link'
     | '/api/workspaces/retry'
   id:
     | '__root__'
@@ -240,6 +262,8 @@ export interface FileRouteTypes {
     | '/api/github/repositories'
     | '/api/identity/providers'
     | '/api/projects/publish'
+    | '/api/slack/events'
+    | '/api/slack/link'
     | '/api/workspaces/retry'
   fileRoutesById: FileRoutesById
 }
@@ -260,6 +284,8 @@ export interface RootRouteChildren {
   ApiGithubPullRequestsRoute: typeof ApiGithubPullRequestsRoute
   ApiGithubRepositoriesRoute: typeof ApiGithubRepositoriesRoute
   ApiIdentityProvidersRoute: typeof ApiIdentityProvidersRoute
+  ApiSlackEventsRoute: typeof ApiSlackEventsRoute
+  ApiSlackLinkRoute: typeof ApiSlackLinkRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -383,6 +409,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiProjectsPublishRouteImport
       parentRoute: typeof ApiProjectsRoute
     }
+    '/api/slack/events': {
+      id: '/api/slack/events'
+      path: '/api/slack/events'
+      fullPath: '/api/slack/events'
+      preLoaderRoute: typeof ApiSlackEventsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/slack/link': {
+      id: '/api/slack/link'
+      path: '/api/slack/link'
+      fullPath: '/api/slack/link'
+      preLoaderRoute: typeof ApiSlackLinkRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/workspaces/retry': {
       id: '/api/workspaces/retry'
       path: '/retry'
@@ -434,16 +474,9 @@ const rootRouteChildren: RootRouteChildren = {
   ApiGithubPullRequestsRoute: ApiGithubPullRequestsRoute,
   ApiGithubRepositoriesRoute: ApiGithubRepositoriesRoute,
   ApiIdentityProvidersRoute: ApiIdentityProvidersRoute,
+  ApiSlackEventsRoute: ApiSlackEventsRoute,
+  ApiSlackLinkRoute: ApiSlackLinkRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { createStart } from '@tanstack/react-start'
-declare module '@tanstack/react-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-  }
-}
