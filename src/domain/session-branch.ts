@@ -1,5 +1,6 @@
 export const SESSION_BRANCH_PREFIX = "ytimesy";
 export const DEFAULT_CHAT_BRANCH = SESSION_BRANCH_PREFIX;
+const SESSION_BRANCH_SLUG_MAX_LENGTH = 24;
 
 export function isGeneratedSessionBranch(name: string): boolean {
 	const branch = name.trim();
@@ -10,14 +11,16 @@ export function isGeneratedSessionBranch(name: string): boolean {
 }
 
 export function sessionBranchSlug(text: string): string {
-	return (
-		text
-			.trim()
-			.toLowerCase()
-			.replace(/[^a-z0-9]+/g, "-")
-			.replace(/^-+|-+$/g, "")
-			.slice(0, 48) || "workspace"
-	);
+	const slug = text
+		.trim()
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "");
+	if (slug.length <= SESSION_BRANCH_SLUG_MAX_LENGTH) return slug || "workspace";
+	const shortened = slug.slice(0, SESSION_BRANCH_SLUG_MAX_LENGTH);
+	const wordBoundary = shortened.lastIndexOf("-");
+	if (slug[SESSION_BRANCH_SLUG_MAX_LENGTH] === "-") return shortened;
+	return wordBoundary > 0 ? shortened.slice(0, wordBoundary) : shortened;
 }
 
 export function sessionBranchSuffix(id: string): string {
