@@ -1,7 +1,6 @@
 import { PgBoss } from "pg-boss";
 import { ENVIRONMENT_JOB_TIMEOUT_SECONDS } from "#/domain/environment-build-limits";
 import type { EnvironmentModel } from "#/domain/environment-model";
-import type { SlackMessage } from "#/domain/slack";
 import { database } from "../adapters/database";
 import type { PeerMessage } from "../services/agent-peer-messaging";
 
@@ -11,7 +10,6 @@ export const AGENT_TASK_EVENT_QUEUE = "agent-task-event";
 export const AGENT_PEER_MESSAGE_QUEUE = "agent-peer-message";
 export const START_COMPETITION_QUEUE = "start-agent-competition";
 export const SESSION_CHECKPOINT_QUEUE = "session-checkpoint";
-export const SLACK_MESSAGE_QUEUE = "slack-message";
 
 export interface WorkspaceJobQueue {
 	enqueuePrepare(
@@ -98,25 +96,11 @@ async function startJobQueue(role: QueueRole): Promise<PgBoss> {
 			retryDelay: 15,
 			expireInSeconds: 15 * 60,
 		});
-		await boss.createQueue(SLACK_MESSAGE_QUEUE, {
-			policy: "singleton",
-			retryLimit: 3,
-			retryDelay: 15,
-			retryBackoff: true,
-			expireInSeconds: 30 * 60,
-		});
 		return boss;
 	} catch (error) {
 		await boss.stop({ graceful: false, timeout: 1000 }).catch(() => undefined);
 		throw error;
 	}
-}
-
-export async function enqueueSlackMessage(message: SlackMessage) {
-	const queue = await jobQueue();
-	return queue.send(SLACK_MESSAGE_QUEUE, message, {
-		singletonKey: `${message.installationId}:${message.threadId}:${message.messageId}`,
-	});
 }
 
 export async function enqueueAgentTaskEvent(eventId?: string) {
