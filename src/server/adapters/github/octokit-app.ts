@@ -25,6 +25,7 @@ export type GitHubAppListing = {
 		installationId: string;
 		repositoryNames?: string[];
 		contents?: "read" | "write";
+		pullRequests?: "read" | "write";
 	}) => Promise<string>;
 };
 
@@ -77,8 +78,15 @@ export function createOctokitGitHubListing(): GitHubAppListing {
 				...(input.repositoryNames
 					? { repositoryNames: input.repositoryNames }
 					: {}),
-				...(input.contents
-					? { permissions: { contents: input.contents } }
+				...(input.contents || input.pullRequests
+					? {
+							permissions: {
+								...(input.contents ? { contents: input.contents } : {}),
+								...(input.pullRequests
+									? { pull_requests: input.pullRequests }
+									: {}),
+							},
+						}
 					: {}),
 			});
 			if (

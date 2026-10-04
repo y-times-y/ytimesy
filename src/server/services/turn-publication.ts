@@ -6,11 +6,8 @@ import {
 	agentSessionForOwner,
 	saveAgentTaskPublication,
 } from "../adapters/agent-sessions";
-import {
-	authorizedRepository,
-	compareBranchAhead,
-	ensureDraftPullRequest,
-} from "../adapters/github";
+import { authorizedRepository, compareBranchAhead } from "../adapters/github";
+import { ensureAppDraftPullRequest } from "../adapters/github/app-pull-request";
 import { pushBrokeredRepository } from "../adapters/github/git-broker";
 import { projectForOwner } from "../adapters/projects";
 import { repositoryDirectory } from "../adapters/repository-setup";
@@ -109,14 +106,18 @@ export async function publishCompletedSessionTurn(
 		);
 		if ((await compareBranchAhead(token, repo.fullName, base, head)) < 1)
 			continue;
-		const pull = await ensureDraftPullRequest(token, repo.fullName, {
-			title:
-				session.title.replace(/\s+/g, " ").trim().slice(0, 100) ||
-				"Agent changes",
-			body: "Automatic draft handoff from ytimesy. Review the changes and verification evidence before merging.",
-			head,
-			base,
-		});
+		const pull = await ensureAppDraftPullRequest(
+			repo.installationId,
+			repo.fullName,
+			{
+				title:
+					session.title.replace(/\s+/g, " ").trim().slice(0, 100) ||
+					"Agent changes",
+				body: "Automatic draft handoff from ytimesy. Review the changes and verification evidence before merging.",
+				head,
+				base,
+			},
+		);
 		if (primary && session.parentSessionId)
 			await saveAgentTaskPublication(session.id, {
 				branch: head,
