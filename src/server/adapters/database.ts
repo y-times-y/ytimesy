@@ -1,10 +1,13 @@
 import { Pool } from "pg";
 import { serverConfig } from "../config";
+import { scopedDatabase } from "./database-scope";
 
 const processDatabase = globalThis as typeof globalThis & {
 	ytimesyDatabasePool?: Pool;
 };
 export function database() {
+	const scoped = scopedDatabase();
+	if (scoped) return scoped;
 	if (!processDatabase.ytimesyDatabasePool) {
 		const config = serverConfig();
 		const pool = new Pool({

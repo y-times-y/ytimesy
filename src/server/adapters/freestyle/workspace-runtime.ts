@@ -13,6 +13,11 @@ import {
 	productCreateVmFields,
 	productIdleTimeoutNeedsUpdate,
 } from "./product-vm";
+import {
+	admitVmCreate,
+	admitVmResume,
+	infrastructureAdmissionEnabled,
+} from "./usage-admission";
 import { waitUntilVmRunning } from "./wait-until-running";
 
 export class FreestyleWorkspaceRuntime implements WorkspaceRuntime {
@@ -27,21 +32,38 @@ export class FreestyleWorkspaceRuntime implements WorkspaceRuntime {
 		const existing = await this.findBySlug(slug);
 		if (existing) return this.recover(existing);
 		try {
-			const created = await this.client().vms.create({
-				...productCreateVmFields({
-					slug,
-					snapshotId: options?.snapshotId,
-				}),
-				...(options?.maxRunSeconds
-					? {
-							maxRunSeconds: options.maxRunSeconds,
-							maxRunTotalSeconds: options.maxRunSeconds,
-							automaticRestart: false,
-						}
-					: {}),
-			});
-			await waitUntilVmRunning(created.vm, "Workspace VM");
-			return created.vmId;
+			return await admitVmCreate(
+				this.client(),
+				slug,
+				options?.snapshotId ?? "freestyle/ubuntu-sm",
+				async (cap) => {
+					const created = await this.client().vms.create({
+						...productCreateVmFields({
+							slug,
+							snapshotId: options?.snapshotId,
+						}),
+						...(options?.maxRunSeconds
+							? {
+									maxRunSeconds: options.maxRunSeconds,
+									maxRunTotalSeconds: options.maxRunSeconds,
+									automaticRestart: false,
+								}
+							: {}),
+						...(cap === undefined
+							? {}
+							: {
+									maxRunTotalSeconds: Math.min(
+										cap,
+										options?.maxRunSeconds ?? cap,
+									),
+									automaticRestart: false,
+								}),
+					});
+					await waitUntilVmRunning(created.vm, "Workspace VM");
+					return created.vmId;
+				},
+				options?.maxRunSeconds,
+			);
 		} catch (cause) {
 			if (cause instanceof FreestyleApiError && cause.status === 409) {
 				const recovered = await this.findBySlug(slug);
@@ -51,9 +73,10 @@ export class FreestyleWorkspaceRuntime implements WorkspaceRuntime {
 		}
 	}
 
-	async recover(providerRef: string) {
+	async recover(providerRef: string, requiredSeconds = 60) {
 		const vm = this.client().vms.ref(providerRef);
 		const data = await vm.data();
+		await admitVmResume(vm, data, requiredSeconds);
 		if (productIdleTimeoutNeedsUpdate(data.idleTimeoutSeconds)) {
 			await vm
 				.update({ idleTimeoutSeconds: PRODUCT_IDLE_TIMEOUT_SECONDS })
@@ -72,6 +95,8 @@ export class FreestyleWorkspaceRuntime implements WorkspaceRuntime {
 		env: Record<string, string>,
 		timeoutMs: number,
 	) {
+		if (infrastructureAdmissionEnabled())
+			await this.recover(providerRef, Math.ceil(timeoutMs / 1000));
 		const vm = this.client().vms.ref(providerRef);
 		if (timeoutMs > FREESTYLE_EXEC_TIMEOUT_MS_MAX)
 			return runLongCommand(vm.pty, argv, env, timeoutMs);
@@ -88,6 +113,7 @@ export class FreestyleWorkspaceRuntime implements WorkspaceRuntime {
 	}
 
 	async writeTextFile(providerRef: string, path: string, contents: string) {
+		if (infrastructureAdmissionEnabled()) await this.recover(providerRef);
 		await this.client().vms.ref(providerRef).fs.writeTextFile(path, contents);
 	}
 

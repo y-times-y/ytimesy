@@ -1,6 +1,10 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { subscriptionTurnRevision } from "#/domain/subscription-turn";
-import { enqueueApiTurn, previousTurnMessages } from "./api-turns";
+import {
+	enqueueApiTurn,
+	inheritedSubscriptionSettings,
+	previousTurnMessages,
+} from "./api-turns";
 
 const mocks = vi.hoisted(() => ({ query: vi.fn(), release: vi.fn() }));
 vi.mock("./database", () => ({
@@ -20,6 +24,23 @@ const input = {
 	messages: [],
 	items: [],
 };
+
+it("inherits same-model subscription settings through owner-scoped ancestors", async () => {
+	mocks.query.mockResolvedValue({
+		rows: [{ connection_revision: subscriptionTurnRevision("medium", false) }],
+	});
+	expect(
+		await inheritedSubscriptionSettings("owner", "child", "model"),
+	).toEqual({ reasoning: "medium", fast: false });
+	expect(mocks.query).toHaveBeenCalledWith(
+		expect.stringContaining("t.model_id=$3"),
+		["child", "owner", "model"],
+	);
+	mocks.query.mockResolvedValue({ rows: [] });
+	expect(
+		await inheritedSubscriptionSettings("owner", "child", "other"),
+	).toBeNull();
+});
 
 it("checks owner subscription and queues Codex without an API connection", async () => {
 	mocks.query.mockImplementation(async (sql: string) => ({

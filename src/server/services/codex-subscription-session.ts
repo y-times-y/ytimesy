@@ -10,7 +10,11 @@ import {
 } from "#/domain/session-item";
 import { subscriptionTurnRevision } from "#/domain/subscription-turn";
 import { agentSessionForOwner } from "../adapters/agent-sessions";
-import { enqueueApiTurn, previousTurnMessages } from "../adapters/api-turns";
+import {
+	enqueueApiTurn,
+	inheritedSubscriptionSettings,
+	previousTurnMessages,
+} from "../adapters/api-turns";
 import { codexSubscriptionCatalog } from "../adapters/codex-subscription";
 import { hasManagedCodexAuth } from "../auth/codex-managed-auth";
 import { openAgentSession } from "./agent-session-machine";
@@ -82,7 +86,18 @@ export async function sendSubscriptionTask(
 	const view = await readSubscriptionSession(scope);
 	if (!view.models.some((model) => model.id === input.modelId))
 		throw new Error("Selected subscription model is unavailable.");
-	const revision = subscriptionTurnRevision(input.variant, input.fast);
+	const inherited =
+		input.variant === undefined && input.fast === undefined
+			? await inheritedSubscriptionSettings(
+					scope.userId,
+					scope.sessionId as string,
+					input.modelId,
+				)
+			: null;
+	const revision = subscriptionTurnRevision(
+		input.variant ?? inherited?.reasoning,
+		input.fast ?? inherited?.fast,
+	);
 	const items = sessionItemsQueuedWithUser(view.items, input.text);
 	const previous = await previousTurnMessages(
 		scope.userId,

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { SessionItemId } from "./ids";
 import {
 	completedTurnUpdatesProjectContext,
-	nextProjectBriefing,
 	projectContextDocument,
 	promptTextWithProjectContext,
 	relatedTracesForTask,
@@ -197,35 +196,6 @@ describe("traceSummaryFromTurn", () => {
 		).toBe(
 			"Seal the snapshot: Wrote template_snapshot_id after pnpm install.\nHow: Agents copy from the unused template, never from a dirty checkout.",
 		);
-	});
-});
-
-describe("nextProjectBriefing", () => {
-	it("starts from the first completed turn", () => {
-		expect(
-			nextProjectBriefing({
-				briefing: "  ",
-				summary: "OpenCode serve must start in the checkout.",
-			}),
-		).toBe("OpenCode serve must start in the checkout.");
-	});
-
-	it("does not duplicate a summary the briefing already has", () => {
-		expect(
-			nextProjectBriefing({
-				briefing: "OpenCode serve must start in the checkout.",
-				summary: "OpenCode serve must start in the checkout.",
-			}),
-		).toBe("OpenCode serve must start in the checkout.");
-	});
-
-	it("keeps only the latest briefing lines", () => {
-		expect(
-			nextProjectBriefing({
-				briefing: ["a", "b", "c", "d", "e", "f"].join("\n"),
-				summary: "g",
-			}),
-		).toBe(["b", "c", "d", "e", "f", "g"].join("\n"));
 	});
 });
 

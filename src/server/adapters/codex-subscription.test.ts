@@ -29,6 +29,7 @@ it("uses the account catalog and requested reasoning without advertising unsuppo
 						slug: "modern",
 						display_name: "Modern Model",
 						context_window: 272000,
+						auto_compact_token_limit: null,
 						supported_reasoning_levels: [{ effort: "low" }, { effort: "high" }],
 						default_reasoning_level: "low",
 					},
@@ -44,6 +45,9 @@ it("uses the account catalog and requested reasoning without advertising unsuppo
 		"modern",
 		"high",
 	);
+	expect(runtime.contextWindow).toBe(272000);
+	expect(runtime.autoCompactTokenLimit).toBeUndefined();
+	expect(runtime.compact).toBeTypeOf("function");
 	expect(
 		runtime.requestSettings("instructions").providerOptions.openai
 			.reasoningEffort,

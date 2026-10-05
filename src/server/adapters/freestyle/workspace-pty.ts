@@ -4,6 +4,7 @@ import {
 	WORKSPACE_PTY_SLUG,
 	workspacePtyCommand,
 } from "#/domain/workspace-terminal";
+import { admitVmResume } from "./usage-admission";
 import { waitUntilVmRunning } from "./wait-until-running";
 
 export async function openWorkspacePty(input: {
@@ -17,6 +18,7 @@ export async function openWorkspacePty(input: {
 	const client = new Freestyle({ apiKey: input.apiKey });
 	const vm = client.vms.ref(input.providerRef);
 	const data = await vm.data();
+	await admitVmResume(vm, data);
 	if (data.state === "paused" || data.state === "stopped") {
 		await vm.start();
 	}

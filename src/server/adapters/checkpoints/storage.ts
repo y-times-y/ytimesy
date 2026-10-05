@@ -110,3 +110,83 @@ export async function removeCheckpoint(path: string) {
 	});
 	if (!result.ok) throw new Error("Could not remove the private checkpoint.");
 }
+
+/** Listing is scoped by the trusted caller, never by a model-supplied object path. */
+export async function listContextArchives(
+	userId: string,
+	sessionId: string,
+	offset = 0,
+	limit = 3,
+) {
+	if (
+		!Number.isSafeInteger(offset) ||
+		offset < 0 ||
+		!Number.isSafeInteger(limit) ||
+		limit < 1 ||
+		limit > 10
+	)
+		throw new Error("Invalid archive page.");
+	const result = await request(`object/list/${BUCKET}`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({
+			prefix: checkpointObjectPrefix(userId, sessionId),
+			search: "context-",
+			offset,
+			limit,
+			sortBy: { column: "name", order: "asc" },
+		}),
+	});
+	if (!result.ok)
+		throw new Error("Could not list this chat's context archives.");
+	const rows: unknown = await result.json();
+	if (!Array.isArray(rows)) throw new Error("Invalid context archive listing.");
+	return rows.map((row) => {
+		if (
+			typeof row?.name !== "string" ||
+			!/^context-[0-9a-f-]{36}\.enc$/.test(row.name)
+		)
+			throw new Error("Invalid context archive name.");
+		return row.name.slice(0, -4) as string;
+	});
+}
+
+/** Delete only archived context objects beneath the already-authorized chat scope. */
+export async function removeContextArchives(userId: string, sessionId: string) {
+	const prefix = checkpointObjectPrefix(userId, sessionId);
+	for (let batch = 0; batch < 100; batch++) {
+		const result = await request(`object/list/${BUCKET}`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				prefix,
+				search: "context-",
+				limit: 100,
+				offset: 0,
+			}),
+		});
+		if (!result.ok)
+			throw new Error("Could not list context archives for deletion.");
+		const rows: unknown = await result.json();
+		if (!Array.isArray(rows))
+			throw new Error("Invalid context archive listing.");
+		if (!rows.length) return;
+		const paths = rows.map((row) => {
+			if (
+				typeof row.name !== "string" ||
+				!/^context-[0-9a-f-]{36}\.enc$/.test(row.name)
+			)
+				throw new Error("Unexpected context archive name; deletion stopped.");
+			return `${prefix}${row.name}`;
+		});
+		const removed = await request(`object/${BUCKET}`, {
+			method: "DELETE",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ prefixes: paths }),
+		});
+		if (!removed.ok) throw new Error("Could not delete context archives.");
+	}
+	throw new Error(
+		"Context archive deletion exceeded its bounded batch limit; retry chat deletion.",
+	);
+}

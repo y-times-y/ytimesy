@@ -54,6 +54,35 @@ function machines(overrides: {
 }
 
 describe("executeSessionMachinePlan", () => {
+	it("serializes copied status writes through the per-VM admission boundary", async () => {
+		const runtime = machines({});
+		let writing = false;
+		const write = runtime.api.writeTextFile;
+		runtime.api.writeTextFile = async (...args) => {
+			if (writing)
+				throw new Error(
+					"This workspace is already being prepared. Retry shortly.",
+				);
+			writing = true;
+			try {
+				await new Promise((resolve) => setTimeout(resolve, 1));
+				await write(...args);
+			} finally {
+				writing = false;
+			}
+		};
+		await executeSessionMachinePlan({
+			machines: runtime.api,
+			sessionId: "11111111-2222-3333-4444-555555555555",
+			sessionProviderRef: null,
+			workspaceId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+			templateSnapshotId: "snap-1",
+			templateProviderRef: "repo-vm",
+			saveTemplateSnapshot: async () => undefined,
+			saveSessionProviderRef: async () => undefined,
+		});
+		expect(runtime.writes.length).toBeGreaterThan(1);
+	});
 	it("copies the sealed project snapshot onto a new agent VM", async () => {
 		const runtime = machines({ copied: "agent-vm" });
 		const saved: string[] = [];

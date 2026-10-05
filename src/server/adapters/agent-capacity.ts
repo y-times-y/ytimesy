@@ -3,6 +3,8 @@ import { database } from "./database";
 export function modelConcurrencyLimits() {
 	const worker = Number(process.env.YTIMESY_MODEL_CONCURRENCY ?? "4");
 	const perUser = Number(process.env.YTIMESY_USER_TURN_CONCURRENCY ?? "8");
+	const fleet = Number(process.env.YTIMESY_FLEET_TURN_CONCURRENCY ?? worker);
+	const perTask = Number(process.env.YTIMESY_TASK_CHILD_CONCURRENCY ?? "3");
 	if (!Number.isInteger(worker) || worker < 2 || worker > 32)
 		throw new Error(
 			"Model concurrency must be between 2 and 32 to reserve leader capacity.",
@@ -11,7 +13,16 @@ export function modelConcurrencyLimits() {
 		throw new Error(
 			"Per-user concurrency must be between 2 and 64 to reserve leader capacity.",
 		);
-	return { worker, perUser, maxChildren: Math.min(worker, perUser) - 1 };
+	if (!Number.isInteger(fleet) || fleet < 2 || fleet > 10_000)
+		throw new Error("Fleet concurrency must be between 2 and 10000.");
+	if (!Number.isInteger(perTask) || perTask < 1 || perTask > 32)
+		throw new Error("Per-task child concurrency must be between 1 and 32.");
+	return {
+		worker,
+		fleet,
+		perUser,
+		maxChildren: Math.min(perTask, fleet - 1, perUser - 1),
+	};
 }
 
 const OCCUPIED = `with occupied as (
@@ -31,7 +42,7 @@ export async function agentCapacity(userId: string) {
 	const result = await database().query<{ available: number }>(
 		`${OCCUPIED} select greatest(0,least($2-total-case when leaders=0 then 1 else 0 end,
 		$3-owned-case when owned_leaders=0 then 1 else 0 end))::int as available from counts`,
-		[userId, limits.worker, limits.perUser],
+		[userId, limits.fleet, limits.perUser],
 	);
 	return { ...limits, available: result.rows[0]?.available ?? 0 };
 }
@@ -52,10 +63,18 @@ export async function reserveAgentTaskStart(
 			where id=$4 and user_id=$1 and project_id=$5 and parent_session_id is not null
 			and task_state in ('draft','idle') and turn_status <> 'running'
 			and not exists(select 1 from api_turn t where t.session_id=$4 and t.state in ('queued','running'))
+			and (select count(*) from occupied o where o.parent_session_id=agent_session.parent_session_id) < $6
 			and (select total+case when leaders=0 then 1 else 0 end < $2
 			and owned+case when owned_leaders=0 then 1 else 0 end < $3 from counts)
 			returning id`,
-			[userId, limits.worker, limits.perUser, taskId, projectId],
+			[
+				userId,
+				limits.fleet,
+				limits.perUser,
+				taskId,
+				projectId,
+				limits.maxChildren,
+			],
 		);
 		if (!result.rowCount)
 			throw new Error(

@@ -21,6 +21,71 @@ it("distinguishes the root lead from writable and read-only children", () => {
 });
 
 describe("agent orchestration policy", () => {
+	it("requires exact reviewed-patch integration in a writable child, not a writable lead", () => {
+		expect(AGENT_ORCHESTRATION_INSTRUCTIONS).toContain("import_reviewed_task");
+		expect(AGENT_ORCHESTRATION_INSTRUCTIONS).toContain(
+			"fresh writable integration child",
+		);
+		expect(AGENT_ORCHESTRATION_INSTRUCTIONS).toContain(
+			"The lead remains read-only",
+		);
+		expect(AGENT_ORCHESTRATION_INSTRUCTIONS).toContain(
+			"fail visibly on conflicts",
+		);
+	});
+	it("requires ready independent workstreams to launch before waiting", () => {
+		for (const instructions of [
+			AGENT_ORCHESTRATION_INSTRUCTIONS,
+			agentSessionRoleInstructions({}),
+		]) {
+			expect(instructions).toContain(
+				"file ownership, shared interfaces, and dependencies",
+			);
+			expect(instructions).toContain(
+				"start the ready workstreams in the same turn, before waiting",
+			);
+			expect(instructions).toContain(
+				"Do not default to one builder for a multi-workstream task",
+			);
+			expect(instructions).toContain(
+				"Agree shared interfaces in the child prompts before launch",
+			);
+			expect(instructions).toContain("available capacity permits only one");
+			expect(instructions).toContain("state the concrete reason");
+			expect(instructions).toContain("Do not split trivial edits");
+			expect(instructions).toContain("Preserve repository-required preflight");
+			expect(instructions).toContain(
+				"do not perform every builder's full implementation investigation before launching it",
+			);
+			expect(instructions).toContain("Delegate deeper reuse checks");
+			expect(instructions).toContain(
+				"requiring evidence before custom logic or acceptance",
+			);
+		}
+	});
+
+	it("does not impose the root decomposition policy on a bounded builder", () => {
+		expect(
+			agentSessionRoleInstructions({
+				parentSessionId: "lead",
+				taskAccess: "read_write",
+			}),
+		).not.toContain("Do not default to one builder");
+	});
+
+	it("yields idle leads for durable completion wakeups without making builders yield", () => {
+		const lead = agentSessionRoleInstructions({});
+		expect(lead).toContain(
+			"Durable child-completion notifications will wake you",
+		);
+		expect(lead).toContain("Do not repeatedly call list_tasks");
+		expect(
+			agentSessionRoleInstructions({
+				parentSessionId: "lead",
+				taskAccess: "read_write",
+			}),
+		).not.toContain("end this turn");
+	});
 	it("starts authorized implementation without a redundant delegation question", () => {
 		for (const instructions of [
 			AGENT_ORCHESTRATION_INSTRUCTIONS,

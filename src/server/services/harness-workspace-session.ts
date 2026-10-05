@@ -99,7 +99,6 @@ import {
 	prepareAgentTaskStart,
 	syncProjectContextForTask,
 } from "./agent-session-machine";
-import { agentTaskDiffScript } from "./agent-task-diff";
 import { deferredApiTurnWorkspace } from "./api-turn-workspace";
 import {
 	readApiWorkspaceSession,
@@ -126,6 +125,10 @@ import {
 } from "./persist-session-view";
 import { preparePreparedGuest } from "./project-workspace";
 import { publishProject } from "./publication";
+import {
+	captureTaskPatch,
+	importReviewedTaskChanges,
+} from "./reviewed-task-import";
 import { commitChatBranchForSubmission } from "./session-branch";
 import { machinesForAgentSession } from "./session-workspace-machines";
 import { beginSharedDesktop } from "./workspace-desktop";
@@ -770,6 +773,22 @@ export function runAgentTaskTool(
 ): Effect.Effect<unknown, unknown> {
 	return Effect.gen(function* () {
 		if (!scope.projectId) throw new Error("The project is not available.");
+		if (
+			request.tool === "publish_task" &&
+			process.env.YTIMESY_HARNESS_EVALUATION_ENABLED === "1"
+		) {
+			const { evaluationRunForTask } = yield* Effect.tryPromise(
+				() => import("../adapters/harness-evaluation"),
+			);
+			if (
+				yield* Effect.tryPromise(() =>
+					evaluationRunForTask(scope.userId, parent.id),
+				)
+			)
+				throw new Error(
+					"Evaluation runs cannot publish branches or pull requests.",
+				);
+		}
 		const competition =
 			!parent.parentSessionId && parent.taskAccess === "read_only"
 				? yield* Effect.tryPromise(() =>
@@ -862,6 +881,16 @@ export function runAgentTaskTool(
 			return { taskId: parent.id, status: "waiting" };
 		}
 
+		if (request.tool === "import_reviewed_task") {
+			return yield* Effect.tryPromise(() =>
+				importReviewedTaskChanges(
+					machines,
+					parent,
+					taskToolString(request.arguments, "taskId"),
+					taskToolString(request.arguments, "expectedSha256"),
+				),
+			);
+		}
 		const descendants = yield* Effect.tryPromise(() =>
 			descendantAgentSessions(scope.userId, parent.id),
 		);
@@ -928,28 +957,34 @@ export function runAgentTaskTool(
 			};
 		}
 		if (request.tool === "inspect_task_diff") {
+			const start = request.arguments.start ?? 0;
+			if (
+				typeof start !== "number" ||
+				!Number.isSafeInteger(start) ||
+				start < 0 ||
+				start > 8_388_608
+			)
+				throw new Error("Choose a valid bounded diff offset.");
 			if (!target.providerRef) {
 				throw new Error("The task has no machine to inspect.");
 			}
 			yield* Effect.tryPromise(() =>
 				machines.ensureRunning(WorkspaceId(target.providerRef as string)),
 			);
-			const diff = yield* Effect.tryPromise(() =>
-				machines.exec(
+			const patch = yield* Effect.tryPromise(() =>
+				captureTaskPatch(
+					machinesForAgentSession(machines, target),
 					WorkspaceId(target.providerRef as string),
-					`set -eu
-cd "$(cat /tmp/ytimesy-project-cwd)"
-${agentTaskDiffScript}`,
-					30_000,
 				),
 			);
-			if (diff.exitCode !== 0) {
-				throw new Error((diff.stderr || diff.stdout).trim() || "Diff failed.");
-			}
+			const diff = patch.bytes.toString("utf8");
 			return {
 				taskId: target.id,
-				diff: diff.stdout.slice(0, 60_000),
-				truncated: diff.stdout.length > 60_000,
+				diff: diff.slice(start, start + 60_000),
+				truncated: diff.length > start + 60_000,
+				nextStart: diff.length > start + 60_000 ? start + 60_000 : null,
+				sha256: patch.sha256,
+				base: patch.base,
 			};
 		}
 		if (request.tool === "mark_task_reviewed") {
@@ -1014,6 +1049,10 @@ ${agentTaskDiffScript}`,
 		const targetMachines = machinesForAgentSession(machines, target);
 		const message = taskToolString(request.arguments, "message");
 		if (!message) throw new Error("A task message is required.");
+		if (target.turnStatus === "running")
+			return yield* Effect.tryPromise(() =>
+				queueAgentPeerMessage(parent, target.id, message, request.id),
+			);
 		const modelId = target.listedModelId || parent.listedModelId || "";
 		if (!modelId) throw new Error("The task has no model selection.");
 		yield* sendHarnessWorkspaceTask(targetMachines, taskScope(scope, target), {

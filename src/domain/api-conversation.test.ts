@@ -31,6 +31,6 @@ it("scopes streamed item ids to each turn", () => {
 });
 it("rejects oversized context without silently truncating instructions", () => {
 	expect(() =>
-		assertApiContextFits([{ role: "user", content: "x".repeat(120001) }]),
+		assertApiContextFits([{ role: "user", content: "x".repeat(8_000_001) }]),
 	).toThrow("context");
 });

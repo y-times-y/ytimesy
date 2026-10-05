@@ -53,6 +53,23 @@ worker processes. Model execution never holds that admission lock. Shutdown stop
 new claims and waits for admitted turns; deployment stops before replacing files
 if the previous process has not drained.
 
+Fleet admission configuration (2026-10-03): `YTIMESY_MODEL_CONCURRENCY`
+controls each process (default 4); `YTIMESY_FLEET_TURN_CONCURRENCY` controls
+running Codex/API turns across all replicas (defaults to the local limit for
+backwards compatibility). Every replica must use the same fleet and account
+limits. `YTIMESY_TASK_CHILD_CONCURRENCY` separately bounds active direct children
+per parent (default 3), including preparations and queued turns. Scaling the
+fleet does not automatically increase a leader's fan-out. Rejected child starts
+leave their drafts unchanged; root turns can queue until execution capacity is
+available. The existing PostgreSQL admission transaction enforces both account
+and fleet dispatch ceilings without holding a lock during inference.
+
+This is a capacity safeguard, not a dollar budget or a 10,000-user load proof.
+The model loop still runs on the existing Node worker, not Cloudflare Workflows.
+VM retention cannot safely delete machines based only on age or settled-turn
+checkpoints: ignored files, LFS and submodule work are not backed up by the current
+format. No automatic VM deletion or infrastructure cutover is enabled here.
+
 Repository-backed tools lazily prepare their execution VM. Coordination tools and
 model safe-point peer input use server state instead. Peer acknowledgement follows
 the durable model-history checkpoint. Claude keeps its existing native runtime path.

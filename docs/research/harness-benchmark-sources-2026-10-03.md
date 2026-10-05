@@ -1,0 +1,35 @@
+# Public harness benchmark sources — 2026-10-03
+
+Use Terminal-Bench 2.0 for terminal/environment work and SWE-bench Pro public for repository patching. Freeze dataset revisions and task membership before comparing ytimesy against native Codex CLI. This research establishes source pins, not executable benchmark coverage or a score.
+
+## Verified pins
+
+| Track | Revision to record | Metadata evidence |
+| --- | --- | --- |
+| Harbor 0.23.0 | `1e5c5c6db929a10a140d05e606882c671ae20729` | [Release](https://github.com/harbor-framework/harbor/releases/tag/v0.23.0), published 2026-09-12; [annotated tag object](https://api.github.com/repos/harbor-framework/harbor/git/tags/3c305dc5611e3600afc3c818735a82322f0264f8) resolves to this commit. |
+| Terminal-Bench 2.0 | `terminal-bench@2.0`, 89 tasks; repository `harbor-framework/terminal-bench-2`, commit `69671fbaac6d67a7ef0dfec016cc38a64ef7a77c` | Every entry in Harbor 0.23.0's [frozen registry](https://github.com/harbor-framework/harbor/blob/1e5c5c6db929a10a140d05e606882c671ae20729/registry.json) uses this commit. [Commit metadata](https://api.github.com/repos/harbor-framework/terminal-bench-2/commits/69671fbaac6d67a7ef0dfec016cc38a64ef7a77c) confirms the revision exists. |
+| SWE-bench Pro public V1, Harbor adaptation | `swebenchpro@1.0`, 731 tasks; repository `harbor-framework/harbor-datasets`, commit `c8e8f3fac7097accaacf261d74c3d6f441de45b1` | The same [frozen registry](https://github.com/harbor-framework/harbor/blob/1e5c5c6db929a10a140d05e606882c671ae20729/registry.json) pins every entry to this commit; [commit metadata](https://api.github.com/repos/harbor-framework/harbor-datasets/commits/c8e8f3fac7097accaacf261d74c3d6f441de45b1) confirms it. |
+| SWE-bench Pro original public V1 data | Hugging Face `ScaleAI/SWE-bench_Pro`, tag `v1.0`, commit `7ab5114912baf22bb098818e604c02fe7ad2c11f` | [Version metadata](https://huggingface.co/api/datasets/ScaleAI/SWE-bench_Pro/revision/v1.0). V1 is separate from the present default config. |
+| SWE-bench Pro public V2 | Hugging Face commit `2d52cb3df914a3fcf80c7f66738b3a88ae37fc50`, config `default`, test split, 642 tasks; official task/tooling repository `scaleapi/SWE-bench_Pro-os`, commit `66f92766bba642462d4bbe5479e83f91f9211862` | [Dataset metadata](https://huggingface.co/api/datasets/ScaleAI/SWE-bench_Pro), [release commit metadata](https://api.github.com/repos/scaleapi/SWE-bench_Pro-os/commits/66f92766bba642462d4bbe5479e83f91f9211862), and [pinned V2 documentation](https://github.com/scaleapi/SWE-bench_Pro-os/blob/66f92766bba642462d4bbe5479e83f91f9211862/v2/README.md). |
+
+Do not rely on a mutable registry, repository branch, dataset default, or container tag for repeatability. Freeze the registry above explicitly: pinning the Harbor package alone does not prove which registry a run resolves. Container image digests and complete artifact checksums have **not** been independently verified here.
+
+## Which SWE-bench Pro track
+
+Prefer V2 for a new public evaluation: the author documents its 2026-09-22 release, 642 tasks across 11 repositories, and a separate HARD-51 subset. It removes 89 V1 tasks and changes instructions, grading and images. V1 remains useful for historical reproduction; label it explicitly and do not pool its scores with V2. These differences and release-gate results are author-reported, not independently rerun here. [Official V2 documentation](https://github.com/scaleapi/SWE-bench_Pro-os/blob/66f92766bba642462d4bbe5479e83f91f9211862/v2/README.md).
+
+Harbor 0.23.0's V1 adapter documents test-command augmentations, invalid reference patches in 15/731 tasks, linux/amd64 images, and parity experiments on small subsets. That does not establish full-dataset equivalence with the original pipeline. Its licensing summary also differs from V2's documentation; treat official task content as subject to upstream repository licenses, and verify redistribution before packaging. [Pinned adapter documentation](https://github.com/harbor-framework/harbor/blob/1e5c5c6db929a10a140d05e606882c671ae20729/adapters/swebenchpro/README.md), [V2 dataset card, documentation only](https://huggingface.co/datasets/ScaleAI/SWE-bench_Pro/raw/2d52cb3df914a3fcf80c7f66738b3a88ae37fc50/README.md).
+
+## Comparison boundary
+
+The implementation being evaluated is a production queue bridge with a native Codex CLI control, matched model/prompt/repository commit, and a networkless grader. Arbitrary Harbor filesystem tasks cannot currently be registered automatically as authorized GitHub projects. A source manifest is therefore not proof that all Terminal-Bench or SWE-bench Pro tasks can run through this bridge. The missing task-environment/project adapter must be implemented and verified before claiming full coverage. This is the implementation boundary supplied for this research, not a live execution finding.
+
+Harbor tasks include an instruction, environment specification and verifier; they are more than GitHub issues. [Pinned task-format documentation](https://github.com/harbor-framework/harbor/blob/1e5c5c6db929a10a140d05e606882c671ae20729/docs-mintlify/core-concepts/tasks/overview.mdx). V2's locked protocol uses an offline agent phase with only model-endpoint access, captures the patch, and grades it in a pristine sandbox; some verifier tasks fetch dependencies. A universally networkless grader is consequently a protocol variation unless dependencies are prepared and equivalent behavior is demonstrated. [V2 protocol](https://github.com/scaleapi/SWE-bench_Pro-os/blob/66f92766bba642462d4bbe5479e83f91f9211862/v2/README.md).
+
+Record CLI/build versions, model/reasoning settings, exact supplied prompts, context policy, tool availability, network rules, image digests, time/token limits, repetitions and infrastructure failures for both arms. Matched model and base commit alone do not establish fairness. A changed environment or subset supports an internal comparison under that recorded protocol, not automatic equivalence to a public leaderboard. Harbor network-policy enforcement is provider- and phase-dependent. [Pinned network-policy documentation](https://github.com/harbor-framework/harbor/blob/1e5c5c6db929a10a140d05e606882c671ae20729/docs-mintlify/core-concepts/tasks/network-policies.mdx).
+
+## Research integrity and verification
+
+Primary documentation and metadata were read using agent-browser and first-party HTTP endpoints. No paid inference, VM provisioning, benchmark execution, grading, migration, deployment or PR #15 import occurred.
+
+An initial read of the Hugging Face dataset landing page unexpectedly embedded dataset previews containing patches and tests. No preview content is copied into this note or used for recommendations; subsequent reads used documentation-only endpoints. This researcher context must not execute benchmark tasks or serve as an uncontaminated evaluation agent. The metadata pins above remain independently supported by registry/revision APIs and documentation. No task solution or protected test files were intentionally opened.

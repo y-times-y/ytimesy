@@ -183,15 +183,30 @@ export const agentTaskToolDefinitions = [
 	{
 		name: "inspect_task_diff",
 		description:
-			"Read a completed task's current diff before accepting its work.",
+			"Read a completed task's current diff and exact patch SHA-256 before accepting its work. Pass that hash to an integration builder; truncated diffs require further inspection before acceptance.",
 		inputSchema: {
 			type: "object",
 			properties: {
+				start: { type: "integer", minimum: 0, maximum: 8388608 },
 				taskId: {
 					type: "string",
 				},
 			},
 			required: ["taskId"],
+			additionalProperties: false,
+		},
+	},
+	{
+		name: "import_reviewed_task",
+		description:
+			"Writable builders only: import an exact unpublished Git patch from a completed, parent-reviewed sibling with the same base revision. expectedSha256 must come from the parent's inspect_task_diff result; changed patches fail. Use a fresh integration builder after parallel work is reviewed; do not resend source through messages. Conflicts fail without a forced merge. Verify the combined checkout and obtain its own review before publication.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				taskId: { type: "string" },
+				expectedSha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
+			},
+			required: ["taskId", "expectedSha256"],
 			additionalProperties: false,
 		},
 	},

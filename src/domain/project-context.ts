@@ -107,24 +107,6 @@ export function traceSummaryFromTurn(input: {
 	return combined.length > 800 ? `${combined.slice(0, 799)}…` : combined;
 }
 
-export function nextProjectBriefing(input: {
-	readonly briefing: string;
-	readonly summary: string;
-}): string {
-	const briefing = input.briefing.trim();
-	const summary = input.summary.trim();
-	if (!summary) return briefing;
-	if (!briefing) return clipBriefing(summary);
-	if (briefing.includes(summary.slice(0, Math.min(80, summary.length)))) {
-		return briefing;
-	}
-	const lines = `${briefing}\n${summary}`
-		.split("\n")
-		.map((line) => line.trim())
-		.filter(Boolean);
-	return clipBriefing(lines.slice(-6).join("\n"));
-}
-
 export function promptTextWithProjectContext(input: {
 	readonly task: string;
 	readonly document: string;
@@ -193,11 +175,8 @@ function areaFromPaths(paths: readonly string[]): string | null {
 	return unique[0] ?? null;
 }
 
-function clipBriefing(text: string) {
-	return text.length > 1200 ? `${text.slice(0, 1199)}…` : text;
-}
-
 function briefingLinesNewestFirst(briefing: string): string {
+	if (briefing.includes("<!-- ytimesy-knowledge:")) return briefing.trim();
 	return briefing
 		.split("\n")
 		.map((line) => line.trim())

@@ -2,6 +2,7 @@ import type {
 	DurableObjectNamespace,
 	DurableObjectState,
 } from "@cloudflare/workers-types";
+import { readBoundedRequestBody } from "../domain/bounded-request-body";
 import {
 	type ConversationSnapshot,
 	conversationEvent,
@@ -23,29 +24,7 @@ const encoder = new TextEncoder();
 type SnapshotHead = { revision: string; chunks: number };
 
 async function boundedBody(request: Request) {
-	if (!request.body) return "";
-	const reader = request.body.getReader();
-	const chunks: Uint8Array[] = [];
-	let bytes = 0;
-	try {
-		while (true) {
-			const next = await reader.read();
-			if (next.done) break;
-			bytes += next.value.byteLength;
-			if (bytes > MAX_DELIVERY_BYTES)
-				throw new Error("Delivery payload too large.");
-			chunks.push(next.value);
-		}
-	} finally {
-		await reader.cancel().catch(() => {});
-	}
-	const body = new Uint8Array(bytes);
-	let offset = 0;
-	for (const chunk of chunks) {
-		body.set(chunk, offset);
-		offset += chunk.byteLength;
-	}
-	return new TextDecoder().decode(body);
+	return readBoundedRequestBody(request, MAX_DELIVERY_BYTES);
 }
 
 /** One current snapshot per conversation; PG remains the transcript and inference authority. */

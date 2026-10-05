@@ -9,15 +9,6 @@ export async function loadProjectBriefing(projectId: string) {
 	return typeof result.rows[0]?.text === "string" ? result.rows[0].text : "";
 }
 
-export async function saveProjectBriefing(projectId: string, text: string) {
-	await database().query(
-		`insert into project_briefing(project_id, text, updated_at)
-		 values($1,$2,now())
-		 on conflict(project_id) do update set text=excluded.text, updated_at=now()`,
-		[projectId, text],
-	);
-}
-
 export async function listProjectTraces(projectId: string, limit = 24) {
 	const result = await database().query(
 		`select area, summary from project_trace

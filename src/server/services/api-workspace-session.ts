@@ -9,7 +9,7 @@ import {
 	sessionItemsQueuedWithUser,
 } from "#/domain/session-item";
 import { agentSessionForOwner } from "../adapters/agent-sessions";
-import { enqueueApiTurn } from "../adapters/api-turns";
+import { enqueueApiTurn, previousTurnMessages } from "../adapters/api-turns";
 import {
 	listModelConnections,
 	loadModelConnection,
@@ -100,7 +100,18 @@ export async function sendApiWorkspaceTask(
 		sessionItemsFromUnknown(session.items),
 		input.text,
 	);
-	const messages = apiConversation(items);
+	const previous = await previousTurnMessages(
+		scope.userId,
+		session.id,
+		selected.modelId,
+		connection.revision,
+	);
+	const messages = previous
+		? [
+				...previous,
+				{ role: "user" as const, content: input.runtimeText ?? input.text },
+			]
+		: apiConversation(items);
 	if (input.runtimeText)
 		messages[messages.length - 1] = {
 			role: "user",

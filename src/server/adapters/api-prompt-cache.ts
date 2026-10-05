@@ -23,7 +23,9 @@ export function apiPromptCacheSettings(input: {
 		return { headers: { "x-session-id": key } };
 	if (input.provider === "compatible") {
 		if (host === "api.x.ai") return { headers: { "x-grok-conv-id": key } };
-		if (host === "api.meta.ai" || host === "api.mistral.ai")
+		if (host === "api.meta.ai")
+			return { providerOptions: { openai: { promptCacheKey: key } } };
+		if (host === "api.mistral.ai")
 			return { providerOptions: { compatible: { prompt_cache_key: key } } };
 	}
 	return {};

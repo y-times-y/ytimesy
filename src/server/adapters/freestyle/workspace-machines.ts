@@ -2,6 +2,11 @@ import { randomBytes } from "node:crypto";
 import { Freestyle, FreestyleApiError } from "freestyle";
 import { isolatedAuthSnapshot } from "#/domain/auth-snapshot";
 import { type AuthSnapshotId, WorkspaceId } from "#/domain/ids";
+import {
+	effectiveMachineResources,
+	machineSize,
+	machineSizeId,
+} from "#/domain/machine-size";
 import { publicFailureMessage } from "#/domain/project-workspace";
 import { guestMutationBlockedReason } from "#/domain/workspace";
 import {
@@ -22,6 +27,7 @@ import {
 	PRODUCT_IDLE_TIMEOUT_SECONDS,
 	productCreateVmFields,
 	productIdleTimeoutNeedsUpdate,
+	WORKSPACE_METADATA_PURPOSE,
 } from "./product-vm";
 import {
 	PROOF_METADATA_PURPOSE,
@@ -30,7 +36,13 @@ import {
 	proofWorkspaceSlug,
 	requestedAuthSnapshotId,
 } from "./proof-vm";
+import {
+	admitVmCreate,
+	admitVmResume,
+	infrastructureAdmissionEnabled,
+} from "./usage-admission";
 import { waitUntilVmRunning } from "./wait-until-running";
+import { restoreRetainedWorkspace } from "./workspace-retention";
 
 function providerMessage(cause: unknown): string {
 	return publicFailureMessage(
@@ -46,6 +58,8 @@ export function createFreestyleWorkspaceMachines(
 	const freestyle = new Freestyle({ apiKey });
 
 	const machines: WorkspaceMachines = {
+		restoreRetainedSession: (userId, sessionId, oldVmId) =>
+			restoreRetainedWorkspace(freestyle, userId, sessionId, oldVmId),
 		destroyCodexSession: (userId, sessionId) =>
 			deleteFreestyleCodexSession(apiKey, userId, sessionId),
 		codexRuntime: (input) =>
@@ -131,6 +145,12 @@ export function createFreestyleWorkspaceMachines(
 			timeoutMs = 120_000,
 		): Promise<CommandOutput> {
 			try {
+				if (infrastructureAdmissionEnabled())
+					await resumeProductVm(
+						freestyle.vms.ref(workspaceId),
+						"Workspace VM",
+						Math.ceil(timeoutMs / 1000),
+					);
 				await rejectPausedGuestMutation(freestyle, workspaceId, "exec");
 				const result = await freestyle.vms.ref(workspaceId).exec({
 					command,
@@ -157,6 +177,8 @@ export function createFreestyleWorkspaceMachines(
 			contents: string,
 		): Promise<void> {
 			try {
+				if (infrastructureAdmissionEnabled())
+					await resumeProductVm(freestyle.vms.ref(workspaceId), "Workspace VM");
 				await rejectPausedGuestMutation(freestyle, workspaceId, "writeFile");
 				await freestyle.vms.ref(workspaceId).fs.writeTextFile(path, contents);
 			} catch (cause) {
@@ -308,26 +330,69 @@ export function createFreestyleWorkspaceMachines(
 			}
 		},
 
-		async provisionSession(slug, snapshotId) {
+		async provisionSession(slug, snapshotId, sizeId) {
+			const requested = machineSize(sizeId);
+			const requestedResources = {
+				cpu: requested.cpu,
+				memory: requested.memory,
+				storage: requested.storage,
+			};
 			try {
 				const existing = await findVmBySlug(freestyle, slug);
 				if (existing) {
+					await verifyCopiedMachineSize(freestyle.vms.ref(existing));
 					await resumeProductVm(
 						freestyle.vms.ref(existing),
 						"Agent session VM",
 					);
 					return WorkspaceId(existing);
 				}
-				const created = await freestyle.vms.create(
-					productCreateVmFields({ slug, snapshotId }),
+				return WorkspaceId(
+					await admitVmCreate(
+						freestyle,
+						slug,
+						snapshotId,
+						async (cap) => {
+							const created = await freestyle.vms.create({
+								...productCreateVmFields({ slug, snapshotId }),
+								metadata: {
+									purpose: WORKSPACE_METADATA_PURPOSE,
+									machine_size: requested.id,
+								},
+								...(cap === undefined
+									? {}
+									: { maxRunTotalSeconds: cap, automaticRestart: false }),
+							});
+							try {
+								await waitUntilVmRunning(created.vm, "Agent session VM");
+								const current = (await created.vm.data()).resources;
+								const target = effectiveMachineResources(
+									current,
+									requestedResources,
+								);
+								if (
+									target.cpu !== current.cpu ||
+									target.memory !== current.memory ||
+									target.storage !== current.storage
+								)
+									await created.vm.resize(target);
+							} catch (error) {
+								// This copy has not been handed to a chat or executed any user work.
+								await created.vm.delete().catch(() => undefined);
+								throw error;
+							}
+							return created.vmId;
+						},
+						300,
+						requestedResources,
+					),
 				);
-				await waitUntilVmRunning(created.vm, "Agent session VM");
-				return WorkspaceId(created.vmId);
 			} catch (cause) {
 				if (cause instanceof FreestyleApiError && cause.status === 409) {
 					const recovered = await findVmBySlug(freestyle, slug);
 					if (recovered) {
-						await waitUntilVmRunning(
+						await verifyCopiedMachineSize(freestyle.vms.ref(recovered));
+						await resumeProductVm(
 							freestyle.vms.ref(recovered),
 							"Agent session VM",
 						);
@@ -344,11 +409,32 @@ export function createFreestyleWorkspaceMachines(
 	return machines;
 }
 
+/** A failed resize must not become a silently undersized workspace on retry. Legacy VMs keep their existing shape. */
+async function verifyCopiedMachineSize(
+	vm: ReturnType<Freestyle["vms"]["ref"]>,
+) {
+	const data = await vm.data();
+	if (!data.metadata?.machine_size) return;
+	const requested = machineSize(
+		machineSizeId.parse(data.metadata.machine_size),
+	);
+	if (
+		data.resources.cpu < requested.cpu ||
+		data.resources.memory < requested.memory ||
+		data.resources.storage < requested.storage
+	)
+		throw new Error(
+			"Workspace sizing did not complete. The unbound machine needs recovery before it can be used.",
+		);
+}
+
 async function resumeProductVm(
 	vm: ReturnType<Freestyle["vms"]["ref"]>,
 	label: string,
+	requiredSeconds = 60,
 ) {
 	const data = await vm.data();
+	await admitVmResume(vm, data, requiredSeconds);
 	if (productIdleTimeoutNeedsUpdate(data.idleTimeoutSeconds)) {
 		await vm
 			.update({ idleTimeoutSeconds: PRODUCT_IDLE_TIMEOUT_SECONDS })
