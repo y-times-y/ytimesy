@@ -51,6 +51,15 @@ export function parseConnectedModels(
 			id,
 			label: typeof label === "string" ? label.slice(0, 160) : id,
 			toolStreamingVerified: false,
+			...(Number.isSafeInteger(
+				row.inputTokenLimit ?? row.max_input_tokens ?? row.context_length,
+			) &&
+			(row.inputTokenLimit ?? row.max_input_tokens ?? row.context_length) > 0
+				? {
+						contextWindow:
+							row.inputTokenLimit ?? row.max_input_tokens ?? row.context_length,
+					}
+				: {}),
 		});
 	}
 	return [...models.values()].sort((a, b) => a.label.localeCompare(b.label));

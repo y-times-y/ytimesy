@@ -3,7 +3,13 @@ import { MockLanguageModelV4 } from "ai/test";
 import { Effect } from "effect";
 import { beforeEach, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { type ApiAgentEvent, runApiAgent } from "./api-agent-runtime";
+import { nativeModelCompactor } from "../adapters/model-compaction";
+import {
+	type ApiAgentEvent,
+	runApiAgent,
+	runModelAgent,
+} from "./api-agent-runtime";
+import { runModelAgentStep } from "./model-agent-loop";
 import { verifyApiModel } from "./model-connections";
 
 const mocks = vi.hoisted(() => ({
@@ -60,6 +66,145 @@ const finish = {
 	usage,
 	finishReason: { unified: "stop" as const, raw: "stop" },
 };
+
+it.each([
+	{ historyLength: 95_000, previousContext: undefined },
+	{
+		historyLength: 9_000,
+		previousContext: { tokens: 32_000, modelContextWindow: 48_000 },
+	},
+])(
+	"uses native compaction with estimated or measured context ($historyLength), checkpoints opaque state and never streams it as a response",
+	async ({ historyLength, previousContext }) => {
+		const checkpoint = vi.fn();
+		const events: ApiAgentEvent[] = [];
+		let calls = 0;
+		const model = new MockLanguageModelV4({
+			doStream: async () =>
+				stream(
+					++calls === 1
+						? [
+								{
+									type: "custom",
+									kind: "openai.compaction",
+									providerMetadata: {
+										openai: {
+											type: "compaction",
+											itemId: "cmp-fixture",
+											encryptedContent: "opaque-fixture",
+										},
+									},
+								},
+								finish,
+							]
+						: [
+								{ type: "text-start", id: "reply" },
+								{ type: "text-delta", id: "reply", delta: "Done" },
+								{ type: "text-end", id: "reply" },
+								finish,
+							],
+				),
+		});
+		const requestSettings = (instructions: string) => ({
+			providerOptions: { openai: { instructions, store: false } },
+		});
+		const input = {
+			userId: "alice",
+			modelId: "model",
+			instructions: "Project knowledge stays here",
+			previousContext,
+			tools: {},
+			messages: [
+				{
+					role: "user" as const,
+					content: `Old request ${"x".repeat(historyLength)}`,
+				},
+				{ role: "assistant" as const, content: "Earlier findings" },
+				{ role: "user" as const, content: "Complete the pending task" },
+			],
+			signal: new AbortController().signal,
+			onStep: checkpoint,
+			onEvent: async (event: ApiAgentEvent) => {
+				events.push(event);
+			},
+		};
+		const result = await runModelAgent(input, {
+			model,
+			contextWindow: 48_000,
+			requestSettings,
+			compact: nativeModelCompactor(model, "openai", requestSettings),
+		});
+		expect(model.doGenerateCalls).toHaveLength(0);
+		expect(model.doStreamCalls).toHaveLength(2);
+		expect(model.doStreamCalls[0].providerOptions?.openai).toMatchObject({
+			compactionTrigger: true,
+		});
+		expect(JSON.stringify(model.doStreamCalls[1])).toContain("opaque-fixture");
+		expect(JSON.stringify(checkpoint.mock.calls[0])).not.toContain(
+			"x".repeat(1000),
+		);
+		expect(JSON.stringify(result)).toContain("Complete the pending task");
+		expect(JSON.stringify(events)).not.toContain("opaque-fixture");
+		expect(events.filter((event) => event.type === "context")).toMatchObject([
+			{ compacting: true },
+			{ compacting: false },
+			{
+				compacting: false,
+				context: { last: { totalTokens: 5 }, modelContextWindow: 48_000 },
+			},
+		]);
+		expect(events.find((event) => event.type === "finish")).toMatchObject({
+			inputTokens: 6,
+			outputTokens: 4,
+		});
+	},
+);
+
+it("durable one-step execution checkpoints a tool result without starting a second inference", async () => {
+	const inference = vi.fn(async () =>
+		stream([
+			{ type: "stream-start", warnings: [] },
+			{
+				type: "tool-call",
+				toolCallId: "inspect-1",
+				toolName: "inspect",
+				input: "{}",
+			},
+			{
+				...finish,
+				finishReason: { unified: "tool-calls" as const, raw: "tool_calls" },
+			},
+		]),
+	);
+	const events: ApiAgentEvent[] = [];
+	const checkpoint = vi.fn();
+	const result = await runModelAgentStep(
+		{
+			userId: "alice",
+			modelId: "model",
+			messages: [{ role: "user", content: "Inspect" }],
+			instructions: "Inspect",
+			tools: {
+				inspect: tool({
+					inputSchema: z.object({}),
+					execute: async () => "verified result",
+				}),
+			},
+			signal: new AbortController().signal,
+			onStep: checkpoint,
+			onEvent: async (event) => {
+				events.push(event);
+			},
+		},
+		{ model: new MockLanguageModelV4({ doStream: inference }) },
+	);
+	expect(inference).toHaveBeenCalledTimes(1);
+	expect(result.outcome).toBe("continue");
+	expect(result.messages.at(-1)?.role).toBe("tool");
+	expect(checkpoint).toHaveBeenCalledTimes(1);
+	expect(events.some((event) => event.type === "finish")).toBe(false);
+	expect(events.some((event) => event.type === "tool-result")).toBe(true);
+});
 beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.load.mockResolvedValue({
@@ -289,7 +434,8 @@ it("summarizes older history before a model step and checkpoints the compacted m
 			{ role: "assistant", content: "Earlier work" },
 			{ role: "user", content: "Continue the task" },
 		],
-		instructions: "Test instructions",
+		instructions:
+			"Test instructions. Shared project knowledge: branch picker already implemented in src/branches.ts",
 		tools: {},
 		signal: new AbortController().signal,
 		onEvent: async (event) => {
@@ -301,6 +447,9 @@ it("summarizes older history before a model step and checkpoints the compacted m
 	});
 	expect(model.doGenerateCalls).toHaveLength(1);
 	expect(model.doStreamCalls).toHaveLength(1);
+	expect(JSON.stringify(model.doStreamCalls[0])).toContain(
+		"branch picker already implemented in src/branches.ts",
+	);
 	expect(JSON.stringify(model.doStreamCalls[0])).not.toContain(
 		"x".repeat(1_000),
 	);
@@ -311,6 +460,45 @@ it("summarizes older history before a model step and checkpoints the compacted m
 		{ usage: { inputTokens: 3, outputTokens: 2 } },
 		{ usage: { inputTokens: 6, outputTokens: 4 } },
 	]);
+	expect(events.find((event) => event.type === "finish")).toMatchObject({
+		inputTokens: 6,
+		outputTokens: 4,
+	});
+});
+
+it("does not begin compaction inference after the run deadline", async () => {
+	const deadline = new AbortController();
+	const timeout = vi
+		.spyOn(AbortSignal, "timeout")
+		.mockReturnValue(deadline.signal);
+	const model = new MockLanguageModelV4({ doStream: stream([finish]) });
+	try {
+		await expect(
+			runModelAgent(
+				{
+					userId: "alice",
+					modelId: "model",
+					instructions: "Test",
+					tools: {},
+					messages: [
+						{ role: "user", content: "x".repeat(95000) },
+						{ role: "assistant", content: "Earlier work" },
+						{ role: "user", content: "Continue" },
+					],
+					signal: new AbortController().signal,
+					onEvent: async () => {},
+					onStep: async () => {},
+					beforeCompaction: async () => {
+						deadline.abort(new Error("Evaluation deadline"));
+					},
+				},
+				{ model },
+			),
+		).rejects.toThrow();
+		expect(model.doGenerateCalls).toHaveLength(0);
+	} finally {
+		timeout.mockRestore();
+	}
 });
 
 it("runs a listed model without a separate verification request", async () => {

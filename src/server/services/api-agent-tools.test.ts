@@ -1,8 +1,16 @@
 import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
+import { claimAgentTaskCommand } from "../adapters/agent-task-command-receipts";
+import { readModelContextArchive } from "../adapters/context-archives";
 import { apiAgentTools } from "./api-agent-tools";
+import { runAgentTaskTool } from "./harness-workspace-session";
 import type { WorkspaceMachines } from "./workspace-machines";
+
+vi.mock("../adapters/context-archives", async (original) => ({
+	...(await original<typeof import("../adapters/context-archives")>()),
+	readModelContextArchive: vi.fn(),
+}));
 
 vi.mock("../adapters/agent-task-command-receipts", () => ({
 	claimAgentTaskCommand: vi.fn(async () => ({ kind: "claimed" })),
@@ -41,6 +49,46 @@ it("keeps control-plane tools usable while the execution VM is unavailable", asy
 	);
 });
 
+it("reads archived evidence without a VM, bounded and scoped to the current chat", async () => {
+	vi.mocked(readModelContextArchive).mockResolvedValue([
+		{
+			role: "assistant",
+			content: [
+				{
+					type: "reasoning",
+					text: "Earlier finding",
+					providerOptions: { anthropic: { signature: "opaque-signature" } },
+				},
+			],
+		},
+	]);
+	const workspace = vi.fn(async () => {
+		throw new Error("VM unavailable");
+	});
+	const tools = apiAgentTools({
+		machines: {} as WorkspaceMachines,
+		session: { id: "chat", userId: "alice" } as AgentSessionRecord,
+		workspace,
+		turnId: "turn",
+		signal: new AbortController().signal,
+	});
+	const reference = "context-00000000-0000-0000-0000-000000000001";
+	const output = await executeInspectionTool(tools.read_context_archive, {
+		reference,
+		offset: 0,
+		limit: 5,
+		start: 0,
+	});
+	expect(readModelContextArchive).toHaveBeenCalledWith(
+		"alice",
+		"chat",
+		reference,
+	);
+	expect(JSON.stringify(output)).toContain("Earlier finding");
+	expect(JSON.stringify(output)).not.toContain("opaque-signature");
+	expect(workspace).not.toHaveBeenCalled();
+});
+
 function leadTools() {
 	const commands: string[] = [];
 	const machines = {
@@ -65,6 +113,32 @@ function leadTools() {
 		}),
 	};
 }
+
+it("separates repeated provider call IDs across durable steps", async () => {
+	for (const index of [1, 2]) {
+		const tools = apiAgentTools({
+			machines: {} as WorkspaceMachines,
+			session: { id: "lead", taskAccess: "read_only" } as AgentSessionRecord,
+			workspace: async () => {
+				throw new Error("No VM needed");
+			},
+			turnId: "turn",
+			toolCallPrefix: `step-${index}:`,
+			signal: new AbortController().signal,
+		});
+		await executeInspectionTool(tools.list_peers, {});
+		expect(claimAgentTaskCommand).toHaveBeenCalledWith(
+			"lead",
+			`turn:step-${index}:inspection`,
+		);
+		expect(runAgentTaskTool).toHaveBeenLastCalledWith(
+			expect.anything(),
+			expect.anything(),
+			expect.anything(),
+			expect.objectContaining({ id: `step-${index}:inspection` }),
+		);
+	}
+});
 
 async function executeInspectionTool(
 	tool: unknown,

@@ -6,9 +6,7 @@ import { sessionTurnStatusForPersist } from "#/domain/agent-session";
 import { childTaskPublicItems } from "#/domain/child-task-activity";
 import { listedModelPreferenceFromSessions } from "#/domain/listed-model";
 import {
-	briefingUpdateFromTurn,
 	completedTurnUpdatesProjectContext,
-	nextProjectBriefing,
 	traceAreaFromTurn,
 	traceSummaryFromTurn,
 } from "#/domain/project-context";
@@ -34,11 +32,7 @@ import {
 	saveAgentSessionTurnStatus,
 } from "#/server/adapters/agent-sessions";
 import { saveAgentTaskResultAndEvent } from "#/server/adapters/agent-task-events";
-import {
-	insertProjectTrace,
-	loadProjectBriefing,
-	saveProjectBriefing,
-} from "#/server/adapters/project-context";
+import { insertProjectTrace } from "#/server/adapters/project-context";
 import {
 	enqueueAgentTaskEvent,
 	enqueueSessionCheckpoint,
@@ -221,11 +215,4 @@ async function captureTurnTrace(
 		area,
 		summary,
 	});
-	const briefing = await loadProjectBriefing(session.projectId);
-	const fact = briefingUpdateFromTurn({ task, reply });
-	const updated = fact
-		? nextProjectBriefing({ briefing, summary: fact })
-		: briefing;
-	if (updated !== briefing)
-		await saveProjectBriefing(session.projectId, updated);
 }

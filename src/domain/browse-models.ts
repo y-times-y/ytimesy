@@ -5,6 +5,7 @@ export type BrowseModel = {
 	label: string;
 	author: string;
 	created: number;
+	contextWindow?: number;
 };
 export const AUTHOR_LABELS: Record<string, string> = {
 	anthropic: "Anthropic",
@@ -118,6 +119,7 @@ export function isOpenRouterCodingModel(row: unknown): row is {
 	id: string;
 	name: string;
 	created?: number;
+	context_length?: number;
 } {
 	if (!row || typeof row !== "object") return false;
 	const model = row as Record<string, unknown>;
@@ -162,6 +164,11 @@ export function parseBrowseModels(
 			label: openRouterModelLabel(row.name).slice(0, 160),
 			author,
 			created,
+			...(typeof row.context_length === "number" &&
+			Number.isSafeInteger(row.context_length) &&
+			row.context_length > 0
+				? { contextWindow: row.context_length }
+				: {}),
 		});
 	}
 	return recentModelGenerations([...models.values()]).sort(

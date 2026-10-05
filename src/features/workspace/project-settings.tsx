@@ -1,6 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { Bot, Folder, User, X } from "lucide-react";
+import { ScrollArea } from "radix-ui";
 import { type FormEvent, useEffect, useState } from "react";
 import { offeredAgentProviders } from "#/domain/agent-provider";
 import type { PublicProjectSecret } from "#/domain/project-secret";
@@ -18,6 +19,8 @@ import { AddProjectForm } from "../projects/add-project-form";
 import { requestJson } from "../projects/api";
 import { ModelConnections } from "../sessions/model-connections";
 import { GithubMark } from "./github-mark";
+import { InfrastructureUsage } from "./infrastructure-usage";
+import { MachineSizeSettings } from "./machine-size-settings";
 import {
 	deleteProjectSecretFn,
 	listProjectSecretsFn,
@@ -130,35 +133,56 @@ export function ProjectSettings({
 							);
 						})}
 					</nav>
-					<div className="settings-body">
-						{section === "account" ? (
-							<AccountSection
-								loading={account.isPending}
-								error={account.error?.message}
-								user={user}
-								onSignOut={onSignOut}
-							/>
-						) : null}
-						{section === "github" ? (
-							<GithubSection
-								loading={account.isPending}
-								connected={githubConnected}
-								projects={projects}
-								onProjectAdded={onProjectAdded}
-							/>
-						) : null}
-						{section === "project" ? (
-							<ProjectSecretsSection project={currentProject} />
-						) : null}
-						{section === "agents" ? (
-							<AgentsSection
-								usage={subscriptionUsage.data ?? codexUsage}
-								account={
-									account.data?.agentAccount ?? { status: "disconnected" }
-								}
-							/>
-						) : null}
-					</div>
+					<ScrollArea.Root className="settings-scroll-root">
+						<ScrollArea.Viewport className="settings-scroll-viewport">
+							<div className="settings-body">
+								{section === "account" ? (
+									<>
+										<AccountSection
+											loading={account.isPending}
+											error={account.error?.message}
+											user={user}
+											onSignOut={onSignOut}
+										/>
+										<InfrastructureUsage />
+									</>
+								) : null}
+								{section === "github" ? (
+									<GithubSection
+										loading={account.isPending}
+										connected={githubConnected}
+										projects={projects}
+										onProjectAdded={onProjectAdded}
+									/>
+								) : null}
+								{section === "project" ? (
+									<>
+										{currentProject ? (
+											<MachineSizeSettings
+												key={currentProject.id}
+												projectId={currentProject.id}
+											/>
+										) : null}
+										<ProjectSecretsSection project={currentProject} />
+									</>
+								) : null}
+								{section === "agents" ? (
+									<AgentsSection
+										usage={subscriptionUsage.data ?? codexUsage}
+										account={
+											account.data?.agentAccount ?? { status: "disconnected" }
+										}
+									/>
+								) : null}
+							</div>
+						</ScrollArea.Viewport>
+						<ScrollArea.Scrollbar
+							orientation="vertical"
+							className="settings-scrollbar"
+						>
+							<ScrollArea.Thumb className="settings-scroll-thumb" />
+						</ScrollArea.Scrollbar>
+					</ScrollArea.Root>
 				</div>
 			</section>
 		</div>

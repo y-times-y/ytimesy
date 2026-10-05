@@ -1,0 +1,11 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ytimesy-edge-executor-development",
+  "main": ".ytimesy/edge-executor.mjs",
+  "build": { "command": "node --import tsx scripts/build-edge-executor.ts" },
+  "account_id": "00000000000000000000000000000000",
+  "compatibility_date": "2026-10-04",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true, "traces": { "enabled": true } },
+  "workers_dev": true
+}

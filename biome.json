@@ -15,7 +15,8 @@
 			"vitest.config.ts",
 			"!src/routeTree.gen.ts",
 			"!src/**/*.py",
-			"tests/**"
+			"tests/**",
+			"benchmarks/evaluation/**"
 		]
 	},
 	"formatter": {

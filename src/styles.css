@@ -2295,8 +2295,150 @@ a.sidebar-chat-pr,
 }
 .settings-body {
 	min-width: 0;
-	overflow: auto;
 	padding: 20px 22px;
+}
+.settings-scroll-root {
+	min-width: 0;
+	min-height: 0;
+	position: relative;
+	overflow: hidden;
+}
+.settings-scroll-viewport {
+	width: 100%;
+	height: 100%;
+	overscroll-behavior: contain;
+}
+.settings-scrollbar {
+	display: flex;
+	width: 10px;
+	padding: 2px;
+	touch-action: none;
+	user-select: none;
+}
+.settings-scroll-thumb {
+	flex: 1;
+	border-radius: 99px;
+	background: #3a3a3a;
+}
+.settings-scroll-thumb:hover {
+	background: #555;
+}
+.machine-size-settings {
+	margin-bottom: 28px;
+}
+.machine-size-heading {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 12px;
+}
+.machine-size-heading > span {
+	color: #777;
+	font-size: 11px;
+}
+.machine-size-list {
+	display: grid;
+	gap: 6px;
+	margin-top: 16px;
+}
+.machine-size-option {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	width: 100%;
+	min-height: 74px;
+	padding: 13px 14px;
+	border: 1px solid #292929;
+	border-radius: 10px;
+	color: #eee;
+	background: #141414;
+	text-align: left;
+	transition:
+		background 120ms,
+		border-color 120ms;
+}
+.machine-size-option:hover {
+	background: #1b1b1b;
+	border-color: #444;
+}
+.machine-size-option[data-state="checked"] {
+	border-color: #777;
+	background: #202020;
+}
+.machine-size-option:focus-visible {
+	outline: 2px solid #ddd;
+	outline-offset: 3px;
+}
+.machine-size-option:disabled {
+	cursor: wait;
+	opacity: 0.65;
+}
+.machine-size-choice {
+	display: grid;
+	place-items: center;
+	width: 16px;
+	height: 16px;
+	flex: 0 0 auto;
+	border: 1px solid #666;
+	border-radius: 50%;
+}
+.machine-size-choice > span {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: #eee;
+}
+.machine-size-details {
+	display: grid;
+	flex: 1;
+	min-width: 0;
+	gap: 5px;
+}
+.machine-size-title {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	font-size: 13px;
+	font-weight: 550;
+}
+.machine-size-default {
+	color: #aaa;
+	font-size: 10px;
+	font-weight: 400;
+}
+.machine-size-description,
+.machine-size-note {
+	color: #888;
+	font-size: 12px;
+	line-height: 1.5;
+}
+.machine-size-resources {
+	display: grid;
+	flex: 0 0 auto;
+	gap: 5px;
+	text-align: right;
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+}
+.machine-size-resources > :where(span + span) {
+	color: #888;
+	font-size: 11px;
+}
+.machine-size-note {
+	margin: 12px 0 0;
+}
+@media (max-width: 520px) {
+	.machine-size-option {
+		flex-wrap: wrap;
+		gap: 10px;
+	}
+	.machine-size-resources {
+		padding-left: 26px;
+		width: 100%;
+		text-align: left;
+		display: flex;
+		gap: 12px;
+	}
 }
 .settings-body h3 {
 	margin: 0 0 8px;
@@ -2414,6 +2556,38 @@ a.sidebar-chat-pr,
 	font-size: 13px;
 	line-height: 18px;
 	text-wrap: pretty;
+}
+.settings-usage-admin {
+	display: grid;
+	gap: 12px;
+	margin-top: 20px;
+	padding-top: 16px;
+	border-top: 1px solid #242424;
+}
+.settings-section[aria-label="Cloud execution usage"] {
+	margin-top: 24px;
+}
+.settings-usage-admin label {
+	display: grid;
+	gap: 6px;
+	font-size: 12px;
+	color: #9a9a9a;
+}
+.settings-usage-admin input {
+	width: 100%;
+	padding: 9px 12px;
+	border: 1px solid #303030;
+	border-radius: 8px;
+	background: #191919;
+	color: #eee;
+}
+.settings-usage-admin > button {
+	justify-self: start;
+	padding: 8px 12px;
+	border-radius: 8px;
+	background: #eee;
+	color: #111;
+	font-size: 12px;
 }
 .settings-secret-list {
 	margin: 0 0 16px;

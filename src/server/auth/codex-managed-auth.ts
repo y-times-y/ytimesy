@@ -1,8 +1,3 @@
-import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { createInterface } from "node:readline";
 import type { WorkspaceId } from "#/domain/ids";
 import { database } from "../adapters/database";
 import type { WorkspaceMachines } from "../services/workspace-machines";
@@ -145,76 +140,66 @@ export async function codexExternalTokens(
 	}
 }
 
-async function refreshManagedCodexAuth(auth: ManagedCodexAuth) {
-	const directory = await mkdtemp(join(tmpdir(), "ytimesy-codex-auth-"));
-	const authPath = join(directory, "auth.json");
-	try {
-		await writeFile(authPath, JSON.stringify(auth), { mode: 0o600 });
-		await requestManagedRefresh(directory);
-		const updated = managedAuth(JSON.parse(await readFile(authPath, "utf8")));
-		if (codexAccessTokenExpiresAt(updated) < Date.now() + 60_000) {
-			throw new Error("Codex login refresh failed; reconnect Codex.");
-		}
-		return updated;
-	} finally {
-		await rm(directory, { recursive: true, force: true });
+const refreshedCredentials = z.object({
+	access_token: z.string().min(1),
+	refresh_token: z.string().min(1).nullish(),
+	id_token: z.string().min(1).nullish(),
+});
+
+/** Native Codex's refresh grant over HTTPS; persistence remains under the owner row lock. */
+export async function refreshManagedCodexAuth(
+	auth: ManagedCodexAuth,
+): Promise<ManagedCodexAuth> {
+	const response = await fetch("https://auth.openai.com/oauth/token", {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({
+			grant_type: "refresh_token",
+			refresh_token: auth.tokens.refresh_token,
+			client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
+		}),
+		redirect: "error",
+		signal: AbortSignal.timeout(25_000),
+	});
+	if (!response.ok) {
+		await response.body?.cancel().catch(() => {});
+		throw new Error("Codex login refresh failed; reconnect Codex.");
 	}
+	let value: z.infer<typeof refreshedCredentials>;
+	try {
+		value = refreshedCredentials.parse(
+			JSON.parse(await readBoundedRequestBody(response, 64 * 1024)),
+		);
+	} catch {
+		throw new Error("Codex login refresh returned incomplete credentials.");
+	}
+	const updated = managedAuth({
+		...auth,
+		tokens: {
+			...auth.tokens,
+			access_token: value.access_token,
+			refresh_token: value.refresh_token ?? auth.tokens.refresh_token,
+			...(value.id_token ? { id_token: value.id_token } : {}),
+		},
+	});
+	if (codexAccessTokenExpiresAt(updated) < Date.now() + 60_000)
+		throw new Error("Codex login refresh failed; reconnect Codex.");
+	const claims = JSON.parse(
+		Buffer.from(
+			updated.tokens.access_token.split(".")[1],
+			"base64url",
+		).toString(),
+	) as Record<string, unknown>;
+	const account = claims["https://api.openai.com/auth"];
+	if (
+		account &&
+		typeof account === "object" &&
+		"chatgpt_account_id" in account &&
+		account.chatgpt_account_id !== auth.tokens.account_id
+	)
+		throw new Error("Codex login account changed; reconnect Codex.");
+	return updated;
 }
 
-async function requestManagedRefresh(codexHome: string): Promise<void> {
-	const child = spawn(process.env.CODEX_BIN || "codex", ["app-server"], {
-		env: { ...process.env, CODEX_HOME: codexHome },
-		stdio: ["pipe", "pipe", "ignore"],
-	});
-	const processFailure = new Promise<never>((_, reject) => {
-		child.once("error", () =>
-			reject(new Error("Codex is unavailable on the auth service.")),
-		);
-	});
-	const lines = createInterface({ input: child.stdout });
-	const pending = new Map<number, (value: Record<string, unknown>) => void>();
-	lines.on("line", (line) => {
-		try {
-			const message = JSON.parse(line) as Record<string, unknown>;
-			if (typeof message.id === "number") pending.get(message.id)?.(message);
-		} catch {
-			// Ignore non-protocol output.
-		}
-	});
-	const request = (id: number, method: string, params: unknown) =>
-		new Promise<Record<string, unknown>>((resolve, reject) => {
-			const timeout = setTimeout(() => {
-				pending.delete(id);
-				reject(new Error("Codex login refresh timed out; reconnect Codex."));
-			}, 25_000);
-			pending.set(id, (message) => {
-				clearTimeout(timeout);
-				pending.delete(id);
-				resolve(message);
-			});
-			child.stdin.write(`${JSON.stringify({ id, method, params })}\n`);
-		});
-	try {
-		const initialized = await Promise.race([
-			processFailure,
-			request(1, "initialize", {
-				clientInfo: { name: "ytimesy", title: "ytimesy", version: "0.0.0" },
-				capabilities: { experimentalApi: true },
-			}),
-		]);
-		if (initialized.error)
-			throw new Error("Codex login refresh failed; reconnect Codex.");
-		child.stdin.write(
-			`${JSON.stringify({ method: "initialized", params: {} })}\n`,
-		);
-		const refreshed = await Promise.race([
-			processFailure,
-			request(2, "account/read", { refreshToken: true }),
-		]);
-		if (refreshed.error)
-			throw new Error("Codex login refresh failed; reconnect Codex.");
-	} finally {
-		child.kill();
-		lines.close();
-	}
-}
+import { z } from "zod";
+import { readBoundedRequestBody } from "#/domain/bounded-request-body";

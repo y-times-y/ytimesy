@@ -10,6 +10,7 @@ import {
 	hasManagedCodexAuth,
 } from "../auth/codex-managed-auth";
 import { connectedLanguageModel } from "./api-model";
+import { nativeModelCompactor } from "./model-compaction";
 
 const backend = "https://chatgpt.com/backend-api";
 const windowSchema = z.object({
@@ -106,6 +107,7 @@ const catalogSchema = z.object({
 			default_reasoning_level: z.string().optional(),
 			priority: z.number().optional(),
 			context_window: z.number().positive().optional(),
+			auto_compact_token_limit: z.number().positive().nullish(),
 		}),
 	),
 });
@@ -186,26 +188,30 @@ export async function codexSubscriptionModel(
 		headers.set("ChatGPT-Account-ID", current.chatgptAccountId);
 		return fetch(url, { ...init, headers, redirect: "error" });
 	};
+	const model = connectedLanguageModel(
+		{
+			provider: "openai",
+			baseUrl: `${backend}/codex`,
+			modelId,
+			apiKey: tokens.accessToken,
+		},
+		transport,
+	);
+	const requestSettings = (instructions: string) => ({
+		providerOptions: {
+			openai: {
+				instructions,
+				store: false,
+				reasoningEffort: effort,
+				reasoningSummary: "auto",
+			},
+		},
+	});
 	return {
-		model: connectedLanguageModel(
-			{
-				provider: "openai",
-				baseUrl: `${backend}/codex`,
-				modelId,
-				apiKey: tokens.accessToken,
-			},
-			transport,
-		),
+		model,
 		contextWindow: selected.context_window,
-		requestSettings: (instructions: string) => ({
-			providerOptions: {
-				openai: {
-					instructions,
-					store: false,
-					reasoningEffort: effort,
-					reasoningSummary: "auto",
-				},
-			},
-		}),
+		autoCompactTokenLimit: selected.auto_compact_token_limit ?? undefined,
+		requestSettings,
+		compact: nativeModelCompactor(model, "openai", requestSettings),
 	};
 }

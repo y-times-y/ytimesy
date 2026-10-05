@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { ModelMessage } from "ai";
 import type { SessionItem } from "#/domain/session-item";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
+import { modelConcurrencyLimits } from "./agent-capacity";
 import { database } from "./database";
 
 export type ApiTurn = {
@@ -16,6 +17,28 @@ export type ApiTurn = {
 	items: SessionItem[];
 	lease_id: string | null;
 };
+
+/** Internal child starts and wakeups retain the nearest same-model subscription selection. */
+export async function inheritedSubscriptionSettings(
+	userId: string,
+	sessionId: string,
+	modelId: string,
+) {
+	const result = await database().query<{ connection_revision: string }>(
+		`with recursive ancestors as (
+		 select id,parent_session_id,0 as depth from agent_session where id=$1 and user_id=$2
+		 union all select p.id,p.parent_session_id,a.depth+1 from agent_session p
+		 join ancestors a on p.id=a.parent_session_id where p.user_id=$2 and a.depth<8
+		) select t.connection_revision from ancestors a join api_turn t on t.session_id=a.id
+		 where t.user_id=$2 and t.model_id=$3 and t.connection_id is null
+		 and t.connection_revision like 'codex-subscription:v1:%'
+		 order by a.depth,t.created_at desc limit 1`,
+		[sessionId, userId, modelId],
+	);
+	return result.rows[0]
+		? subscriptionTurnSettings(result.rows[0].connection_revision)
+		: null;
+}
 
 export async function enqueueApiTurn(input: {
 	sessionId: string;
@@ -115,7 +138,19 @@ export async function previousTurnMessages(
 		: null;
 }
 
-export async function claimApiTurn(perUserLimit = 2): Promise<ApiTurn | null> {
+export async function claimApiTurn(
+	perUserLimit = 2,
+	fleetLimit = modelConcurrencyLimits().fleet,
+): Promise<ApiTurn | null> {
+	if (
+		!Number.isInteger(perUserLimit) ||
+		perUserLimit < 1 ||
+		perUserLimit > 64 ||
+		!Number.isInteger(fleetLimit) ||
+		fleetLimit < 1 ||
+		fleetLimit > 10_000
+	)
+		throw new Error("Turn admission limits must be positive bounded integers.");
 	const client = await database().connect();
 	try {
 		await client.query("begin");
@@ -125,8 +160,9 @@ export async function claimApiTurn(perUserLimit = 2): Promise<ApiTurn | null> {
 			`update api_turn set state='running',lease_id=$1,heartbeat_at=now(),updated_at=now()
 			 where id=(select q.id from api_turn q where q.state='queued' and not q.cancel_requested
 			 and (select count(*) from api_turn r where r.user_id=q.user_id and r.state='running')<$2
+			 and (select count(*) from api_turn r where r.state='running')<$3
 			 order by q.created_at for update skip locked limit 1) returning *`,
-			[randomUUID(), perUserLimit],
+			[randomUUID(), perUserLimit, fleetLimit],
 		);
 		await client.query("commit");
 		return result.rows[0] ?? null;

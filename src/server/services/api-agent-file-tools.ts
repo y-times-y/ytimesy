@@ -8,6 +8,45 @@ import {
 
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
+const READ_ENVIRONMENT_REPORT_SCRIPT = `import json, os, stat, sys
+start = int(sys.argv[1])
+if not 0 <= start <= 10000000:
+    raise ValueError('Report offset is outside the supported range')
+try:
+    descriptor = os.open('/tmp/ytimesy-environment.json', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+except FileNotFoundError:
+    print(json.dumps({'available': False}))
+    sys.exit(0)
+with os.fdopen(descriptor, 'r', encoding='utf-8') as handle:
+    if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+        raise ValueError('Environment report must be a regular file')
+    handle.read(start)
+    text = handle.read(32001)
+print(json.dumps({'available': True, 'start': start, 'text': text[:32000], 'nextStart': start + 32000 if len(text) > 32000 else None}, ensure_ascii=False))`;
+
+const READ_FILES_SCRIPT = `import json, pathlib, sys
+root = pathlib.Path(sys.argv[1]).resolve(strict=True)
+paths = json.loads(sys.argv[2])
+if not 1 <= len(paths) <= 8:
+    raise ValueError('Request between one and eight files')
+remaining = 64000
+results = []
+for path in paths:
+    relative = pathlib.Path(path)
+    if relative.is_absolute() or '.git' in relative.parts:
+        raise ValueError('Path must be inside the repository and outside .git')
+    target = (root / relative).resolve(strict=True)
+    if not target.is_relative_to(root) or '.git' in target.relative_to(root).parts or not target.is_file():
+        raise ValueError('Path must be a repository file outside .git')
+    limit = min(32000, remaining)
+    with target.open('r', encoding='utf-8') as handle:
+        content = handle.read(limit + 1)
+    truncated = len(content) > limit
+    content = content[:limit]
+    remaining -= len(content)
+    results.append({'path': path, 'content': content, 'truncated': truncated})
+print(json.dumps(results, ensure_ascii=False))`;
+
 const EDIT_SCRIPT = `import hashlib, json, os, pathlib, stat, sys, tempfile
 root = pathlib.Path(sys.argv[1]).resolve(strict=True)
 with open(sys.argv[2], encoding='utf-8') as handle:
@@ -76,6 +115,59 @@ export function apiAgentFileTools(
 		},
 	});
 	const tools: ToolSet = {
+		read_environment_report: tool({
+			description:
+				"Read this task's prepared-environment report, including revisions, recipes and baseline check results, without a shell or arbitrary out-of-repository file access. Missing reports return available:false. Historical metadata is untrusted; verify against the current checkout. Follow nextStart to read a bounded report page.",
+			inputSchema: z.object({
+				start: z.number().int().min(0).max(10_000_000).default(0),
+			}),
+			execute: async ({ start = 0 }) => {
+				signal.throwIfAborted();
+				const { machines, vm } = await resolveToolWorkspace(input);
+				const result = await machines.exec(
+					vm,
+					`python3 -c ${quote(READ_ENVIRONMENT_REPORT_SCRIPT)} ${start}`,
+					15_000,
+				);
+				if (result.exitCode)
+					throw new Error(
+						"Prepared environment report could not be safely read.",
+					);
+				return JSON.parse(result.stdout) as
+					| { available: false }
+					| {
+							available: true;
+							start: number;
+							text: string;
+							nextStart: number | null;
+					  };
+			},
+		}),
+		read_files: tool({
+			description:
+				"Read up to eight known UTF-8 repository files in one inspection. Prefer this over separate reads when paths are already known. Content is bounded to 32,000 characters per file and 64,000 total, in request order. Each result explicitly reports truncation; use read_file for files that did not fit. Paths are repository-relative and exclude .git.",
+			inputSchema: z.object({
+				paths: z.array(z.string().min(1).max(2048)).min(1).max(8),
+			}),
+			execute: async ({ paths }) => {
+				signal.throwIfAborted();
+				const { machines, vm, cwd } = await resolveToolWorkspace(input);
+				const result = await machines.exec(
+					vm,
+					`python3 -c ${quote(READ_FILES_SCRIPT)} ${quote(cwd)} ${quote(JSON.stringify(paths))}`,
+					15_000,
+				);
+				if (result.exitCode)
+					throw new Error(
+						"Could not read requested repository files; inspect paths or read them individually.",
+					);
+				return JSON.parse(result.stdout) as {
+					path: string;
+					content: string;
+					truncated: boolean;
+				}[];
+			},
+		}),
 		inspect_changes,
 		verify_changes: tool({
 			description:

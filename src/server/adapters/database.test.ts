@@ -51,3 +51,42 @@ it("reuses the process pool after a server module reload", async () => {
 	expect(second).toBe(first);
 	expect(pools.created).toBe(1);
 });
+
+it("keeps concurrent invocation pools separate from the process pool", async () => {
+	const { database } = await import("./database");
+	const { withDatabaseScope } = await import("./database-scope");
+	const processPool = database();
+	let firstPool: ReturnType<typeof database> | undefined;
+	let secondPool: ReturnType<typeof database> | undefined;
+	await Promise.all([
+		withDatabaseScope("postgres://first", async () => {
+			firstPool = database();
+			await Promise.resolve();
+			expect(database()).toBe(firstPool);
+		}),
+		withDatabaseScope("postgres://second", async () => {
+			secondPool = database();
+			await Promise.resolve();
+			expect(database()).toBe(secondPool);
+		}),
+	]);
+	expect(firstPool).not.toBe(secondPool);
+	expect(firstPool).not.toBe(processPool);
+	expect(secondPool).not.toBe(processPool);
+	expect(firstPool?.end).toHaveBeenCalledOnce();
+	expect(secondPool?.end).toHaveBeenCalledOnce();
+	expect(database()).toBe(processPool);
+});
+
+it("closes an invocation pool even when its operation fails", async () => {
+	const { database } = await import("./database");
+	const { withDatabaseScope } = await import("./database-scope");
+	let pool: ReturnType<typeof database> | undefined;
+	await expect(
+		withDatabaseScope("postgres://first", async () => {
+			pool = database();
+			throw new Error("operation failed");
+		}),
+	).rejects.toThrow("operation failed");
+	expect(pool?.end).toHaveBeenCalledOnce();
+});

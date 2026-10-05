@@ -1,10 +1,17 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
+import { createDeepSeek } from "@ai-sdk/deepseek";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import type { LanguageModel } from "ai";
 import type { ModelProvider } from "#/domain/model-connection";
 import { openRouterCacheFetch } from "./api-prompt-cache";
+import {
+	openRouterReasoningFetch,
+	withOpenRouterReasoning,
+} from "./openrouter-reasoning";
+import { preservedThinkingFetch } from "./preserved-thinking";
 
 export function connectedLanguageModel(
 	input: {
@@ -24,18 +31,29 @@ export function connectedLanguageModel(
 		case "google":
 			return createGoogleGenerativeAI(options)(input.modelId);
 		case "openrouter":
+			return withOpenRouterReasoning(
+				createOpenRouter({
+					...options,
+					fetch: openRouterReasoningFetch(
+						new URL(input.baseUrl).hostname === "openrouter.ai"
+							? openRouterCacheFetch(fetch)
+							: fetch,
+					),
+				})(input.modelId),
+			);
+		case "compatible":
+			if (
+				["https://api.x.ai", "https://api.meta.ai"].includes(
+					new URL(input.baseUrl).origin,
+				)
+			)
+				return createOpenAI(options).responses(input.modelId);
+			if (new URL(input.baseUrl).origin === "https://api.deepseek.com")
+				return createDeepSeek(options)(input.modelId);
 			return createOpenAICompatible({
 				...options,
 				name: input.provider,
-				includeUsage: true,
-				fetch:
-					new URL(input.baseUrl).hostname === "openrouter.ai"
-						? openRouterCacheFetch(fetch)
-						: fetch,
+				fetch: preservedThinkingFetch(input.baseUrl, fetch),
 			})(input.modelId);
-		case "compatible":
-			return createOpenAICompatible({ ...options, name: input.provider })(
-				input.modelId,
-			);
 	}
 }

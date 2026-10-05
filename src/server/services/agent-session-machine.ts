@@ -21,6 +21,7 @@ import {
 import { failureMessage, workspaceLooksGone } from "#/domain/failure-message";
 import { WorkspaceId } from "#/domain/ids";
 import { listedModelPreferenceFromSessions } from "#/domain/listed-model";
+import type { MachineSizeId } from "#/domain/machine-size";
 import { projectCheckoutFromFullName } from "#/domain/project-checkout";
 import {
 	PROJECT_CONTEXT_PATH,
@@ -46,6 +47,7 @@ import {
 	listProjectTraces,
 	loadProjectBriefing,
 } from "#/server/adapters/project-context";
+import { projectMachineSize } from "#/server/adapters/project-machine-size";
 import { projectForOwner } from "#/server/adapters/projects";
 import { repositoryDirectory } from "#/server/adapters/repository-setup";
 import {
@@ -54,7 +56,10 @@ import {
 } from "#/server/adapters/workspaces";
 import { reserveAgentTaskStart } from "../adapters/agent-capacity";
 import { checkpointForSession } from "../adapters/checkpoints/records";
-import { removeCheckpoint } from "../adapters/checkpoints/storage";
+import {
+	removeCheckpoint,
+	removeContextArchives,
+} from "../adapters/checkpoints/storage";
 import { providerProjectTemplateSnapshot } from "./provider-project-template";
 import { restoreSessionWorkspace } from "./session-checkpoint";
 import type { WorkspaceMachines } from "./workspace-machines";
@@ -401,6 +406,20 @@ export async function bindAgentSessionMachine(
 					session.id,
 					input.harness,
 				);
+	if (selectedSession.providerRef && machines.restoreRetainedSession) {
+		const recovered = await machines.restoreRetainedSession(
+			input.userId,
+			session.id,
+			selectedSession.providerRef,
+		);
+		if (recovered) {
+			await machines.ensureRunning(WorkspaceId(recovered));
+			return {
+				session: { ...selectedSession, providerRef: recovered },
+				providerRef: recovered,
+			};
+		}
+	}
 	const templateSnapshotId =
 		input.sourceSnapshotId ??
 		(session.providerRef
@@ -441,6 +460,9 @@ export async function bindAgentSessionMachine(
 			selectedSession.taskAccess === "read_only",
 		workspaceId: workspace.id,
 		templateSnapshotId,
+		machineSize: selectedSession.providerRef
+			? undefined
+			: await projectMachineSize(input.userId, input.projectId),
 		templateProviderRef: input.sourceSnapshotId ? null : workspace.providerRef,
 		saveTemplateSnapshot: (snapshotId) =>
 			saveTemplateSnapshot(workspace.id, snapshotId).then(() => undefined),
@@ -480,12 +502,18 @@ export async function bindPreparedAgentTaskMachine(
 		if (!parent?.providerRef) {
 			throw new Error("Start the parent workspace before sharing its state.");
 		}
-		await machines.ensureRunning(WorkspaceId(parent.providerRef));
-		const session = await saveAgentSessionProviderRef(
-			input.task.id,
+		const recovered = await machines.restoreRetainedSession?.(
+			input.userId,
+			parent.id,
 			parent.providerRef,
 		);
-		return { session, providerRef: parent.providerRef };
+		const parentProviderRef = recovered ?? parent.providerRef;
+		await machines.ensureRunning(WorkspaceId(parentProviderRef));
+		const session = await saveAgentSessionProviderRef(
+			input.task.id,
+			parentProviderRef,
+		);
+		return { session, providerRef: parentProviderRef };
 	} else if (
 		input.task.taskExecution === "stacked" &&
 		!input.predecessor?.taskBranch
@@ -590,6 +618,7 @@ export async function deleteAgentSessionMachine(
 		if (process.env.SUPABASE_STORAGE_SERVICE_KEY) {
 			const checkpoint = await checkpointForSession(input.userId, removed.id);
 			if (checkpoint) await removeCheckpoint(checkpoint.object_path);
+			await removeContextArchives(input.userId, removed.id);
 		}
 	}
 	const refs = sessionMachineRefsToDestroy({
@@ -621,6 +650,7 @@ export async function executeSessionMachinePlan(input: {
 	readonly restoreMissingWorkspace?: (newId: string) => Promise<void>;
 	readonly workspaceId: string;
 	readonly templateSnapshotId: string | null;
+	readonly machineSize?: MachineSizeId;
 	readonly templateProviderRef: string | null;
 	readonly authSnapshotId?: string | null;
 	readonly saveTemplateSnapshot: (snapshotId: string) => Promise<void>;
@@ -709,12 +739,17 @@ async function copyAgentSessionFromTemplate(
 		readonly templateProviderRef: string | null;
 		readonly saveTemplateSnapshot: (snapshotId: string) => Promise<void>;
 		readonly wait?: (ms: number) => Promise<void>;
+		readonly machineSize?: MachineSizeId;
 	},
 	snapshotId: string,
 ) {
 	const slug = agentSessionMachineSlug(input.sessionId);
 	try {
-		return await input.machines.provisionSession(slug, snapshotId);
+		return await input.machines.provisionSession(
+			slug,
+			snapshotId,
+			input.machineSize,
+		);
 	} catch (cause) {
 		const message = failureMessage(cause);
 		if (
@@ -729,11 +764,16 @@ async function copyAgentSessionFromTemplate(
 				projectEnvironmentSnapshotSlug(input.workspaceId),
 			);
 			await input.saveTemplateSnapshot(nextSnapshotId);
-			return await input.machines.provisionSession(slug, nextSnapshotId);
+			return await input.machines.provisionSession(
+				slug,
+				nextSnapshotId,
+				input.machineSize,
+			);
 		}
 		return await retryCopyAfterCapacityLag(input.machines, slug, snapshotId, {
 			cause,
 			wait: input.wait,
+			machineSize: input.machineSize,
 		});
 	}
 }
@@ -745,6 +785,7 @@ async function retryCopyAfterCapacityLag(
 	input: {
 		readonly cause: unknown;
 		readonly wait?: (ms: number) => Promise<void>;
+		readonly machineSize?: MachineSizeId;
 	},
 ) {
 	const wait =
@@ -759,7 +800,11 @@ async function retryCopyAfterCapacityLag(
 	)) {
 		await wait(delay);
 		try {
-			return await machines.provisionSession(slug, snapshotId);
+			return await machines.provisionSession(
+				slug,
+				snapshotId,
+				input.machineSize,
+			);
 		} catch (retryCause) {
 			cause = retryCause;
 			if (
@@ -788,11 +833,10 @@ async function resetCopiedSessionScratch(
 			machines.exec(copied, command, 15_000),
 		),
 	);
-	await Promise.all(
-		COPIED_SESSION_STATUS_RESETS.map((file) =>
-			machines.writeTextFile(copied, file.path, file.contents),
-		),
-	);
+	// Each guest write crosses the same non-blocking per-VM admission lock.
+	for (const file of COPIED_SESSION_STATUS_RESETS) {
+		await machines.writeTextFile(copied, file.path, file.contents);
+	}
 }
 
 export async function syncProjectContextForTask(

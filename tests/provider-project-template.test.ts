@@ -116,5 +116,6 @@ it("preserves the separate Claude project template path", async () => {
 	expect(provisionSession).toHaveBeenCalledWith(
 		expect.any(String),
 		"sh-private-auth",
+		"small",
 	);
 });

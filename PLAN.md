@@ -1,5 +1,54 @@
 # ytimesy v0
 
+### Project machine sizes — 2026-10-04
+
+New chat execution copies default to Large (4 vCPU, 16 GiB RAM, 32 GiB disk).
+Project settings offer Small (2/4/16), Medium (4/8/32), Large (4/16/32),
+and Ultra (8/16/64), with memory and disk in GiB. Preferences affect
+new machines only; existing workspaces and infrastructure hosts are not resized.
+Prepared snapshots remain reusable and are grown on copy. Freestyle cannot
+shrink a snapshot copy; inherited larger resources remain and are included
+in compute admission. Saving this preference requires the additive
+`20261004020000_project_machine_size.sql` development migration, applied to
+development. Live settings save/reload and desktop/320px custom scrolling were
+verified; new VM growth is covered by mocked provider tests, not a live allocation.
+
+Ultra replaces Extra Large by user decision (2026-10-04), reducing the requested
+RAM/disk to 16/64 GiB while retaining 8 vCPU. The stored `extra-large` identifier
+is unchanged for saved preferences and VM metadata; no migration is needed.
+Existing larger machines and snapshot floors remain unchanged. Freestyle's
+published disk limits use GB while its resize API uses MiB: verify actual
+account enforcement before claiming live maximum-size provisioning is proven.
+
+The default disk was reduced from 64 to 32 GiB by user decision on 2026-10-04;
+CPU and RAM are unchanged. Existing machines are not shrunk, and copies from
+larger templates still inherit their disk size. Repository data informs this
+starting policy but does not establish installed workspace requirements for
+most developers; see [disk sizing evidence](docs/research/repository-disk-sizing.md).
+
+Automatic resource sizing is deferred by user decision (2026-10-04). Keep the
+current default and manual project size preferences; do not add Auto mode or
+resize active workspaces automatically. Future work should measure project
+setup/build/test resource needs, evaluate completion time versus cost, and
+consider CPU, RAM, and disk independently with safety headroom and budget caps.
+See [Auto sizing research and future acceptance criteria](docs/research/freestyle-auto-sizing.md).
+
+### Development infrastructure admission — 2026-10-03
+
+Owner-scoped compute allowances are enabled in development with 30 standard VM
+minutes per user/month, a $500 monthly compute admission limit and a $7,000
+lifetime compute admission limit. Settings → Account exposes balances and
+genuine-authenticated, allowlisted admin grants/overrides. Native Freestyle
+runtime caps enforce prepaid execution; paused reconciliation revokes unused
+runtime before releasing holds. See [infrastructure allowances](docs/infrastructure-usage.md)
+for proofs and explicit exclusions. These limits do not cover the complete invoice.
+Existing VMs and production remain protected. Private snapshot retirement/recovery
+is enabled in development only for session VMs created after the fixed rollout
+cutover. Unsupported verification preserves the source VM. A development Cloudflare
+Workflows orchestrator records bounded model steps; provider SDK calls and tools
+still run on the trusted Node executor. This does not eliminate that host.
+See [model workflows](docs/model-workflows.md) and [workspace retention](docs/workspace-retention.md).
+
 Status: harness architecture updated on 2026-10-01. ytimesy owns recursive task orchestration and the Codex subscription model loop in its durable server worker. Native Codex is retained for device-code login and legacy recovery only, not ordinary inference. Claude Code remains a runtime adapter. OpenCode references in dated evidence below are historical and do not authorize new OpenCode sessions. Writers use snapshot-copy isolation; read-only child tasks share their parent's machine with session-scoped runtime state. Execution VMs remain separate from server-managed subscription access tokens and the model loop. Private Supabase Storage is selected for encrypted recovery checkpoints; frontend hosting remains undecided. Domain: ytimesy.com. Updated: 2026-10-01.
 
 ## Goal and proof
@@ -22,13 +71,19 @@ V0 is complete when Het connects a real private repository and his own agent acc
 
 Workspace isolation: a Project owns a prepared environment (Rigkit apply / clone-and-install, then a Freestyle snapshot or a warm spare that agents never edit). Every writer owns a distinct Freestyle VM copied from the template (`vms.create({ snapshotId })` or `vm.fork()` of the unused warm spare). Competing writers run in parallel with separate working trees, indexes, ports, PTYs, and previews. Read-only child tasks instead share the parent machine and exact working tree; session-scoped runtime files and provider read-only modes keep their conversations separate. Reconnect pauses/resumes the same machine identity. Each writer checkout uses its own branch for publication.
 
-Project context is an agent-context concern, not a VM concern and not a Codex-only concern. Root threads under the same Project may receive a durable briefing plus selected reasoning traces across runtime adapters. Child tasks are different: they start from their standalone task prompt alone and never receive the parent transcript, automatic sibling traces, or an implicit briefing. After a root session, keep selected traces and a short briefing update; do not require another root agent to replay the full transcript. Resume continues one session; forking a conversation is explicit.
+Project context is an agent-context concern, not a VM concern and not a Codex-only concern. The active cloud API/Codex model loop loads maintained, owner-scoped Markdown from the existing project briefing storage outside compactable conversation history. Non-competing leads maintain named capability/decision/source/agent-reported-verification entries with `remember_project`; successful root turns also record separate recent reports. Child tasks keep standalone prompts and receive only keyword-matched maintained entries, never parent transcripts or arbitrary sibling reports; children and competing leads cannot publish shared knowledge. All historical claims require current-checkout verification. Native adapters retain their separate context path. See [project knowledge boundaries](docs/project-knowledge.md). Resume continues one session; forking a conversation is explicit.
 
-Lead-agent policy is owned by ytimesy and injected through every runtime adapter. New root conversations are read-only leads: they may inspect, plan, coordinate, and answer simple questions, but a requested code change requires at least one fresh read-write Build child. Build children can implement their own bounded tasks directly and may delegate further when useful. Every task records a standalone prompt, runtime/model, read-only or read-write access, shared or fresh placement, parallel or stacked execution, and any stacked predecessor. Additional delegation is for bounded work where parallelism, specialization, or an adversarial pass materially improves the outcome. The lead chooses the smallest coherent task count; recursion is capped at three levels and provider capacity remains an infrastructure limit. Child prompts must be self-contained. Leads continue useful read-only investigation while children run, check status without tight polling, steer drift, and request wrap-up rather than waiting indefinitely. Completion and blocked questions enter a durable outbox that wakes an idle parent. Leads inspect and explicitly review child diffs before publication. Stacked work starts only after the predecessor is reviewed and published, from that pull-request branch rather than a VM snapshot.
+Lead-agent policy is owned by ytimesy and injected through every runtime adapter. New root conversations are read-only leads: they may inspect, plan, coordinate, and answer simple questions, but a requested code change requires at least one fresh read-write Build child. Build children can implement their own bounded tasks directly and may delegate further when useful. Every task records a standalone prompt, runtime/model, read-only or read-write access, shared or fresh placement, parallel or stacked execution, and any stacked predecessor. Additional delegation is for bounded work where parallelism, specialization, or an adversarial pass materially improves the outcome. The lead chooses the smallest coherent task count; recursion is capped at three levels and provider capacity remains an infrastructure limit. For substantial independent workstreams, the lead establishes file ownership and shared interfaces, then starts ready writers together before waiting for completion. One builder remains appropriate for small/tightly coupled changes or constrained capacity; the lead explains that choice briefly. This is shared model guidance, not a deterministic decomposition guarantee or a measured parallel speedup. Child prompts must be self-contained. Leads continue useful read-only investigation while children run, check status without tight polling, steer drift, and request wrap-up rather than waiting indefinitely. Completion and blocked questions enter a durable outbox that wakes an idle parent. Leads inspect and explicitly review child diffs before publication. Stacked work starts only after the predecessor is reviewed and published, from that pull-request branch rather than a VM snapshot.
 
 API-key and Codex subscription model loops run in the durable server worker and call VM-backed tools. Codex subscription transport is explicitly identified on each durable turn, never inferred from a missing API connection. Ordinary sends, children, progress and peer delivery no longer resolve the native runner. Codex account limits come directly from account metadata; context comes from persisted model-step usage. See [cutover evidence and support boundary](docs/codex-subscription-harness-proof.md). Earlier dated native-runner sections below are historical, not the active architecture.
 
+Cloud model-loop inspection supports `read_files` for up to eight known repository-relative UTF-8 files in one VM command. It is available to read-only leads and builders, reports truncation explicitly, limits content to 32,000 characters per file and 64,000 total, and rejects paths outside the repository or inside `.git`. This reduces inspection round trips without granting shell-writing authority to leads; it is not a code index or permission to skip required instructions and verification. See the [parallel follow-up measurements](docs/research/harness-parallel-followup-2026-10-04.md) for live usage and performance limitations.
+
+Unpublished parallel integration uses a fresh writable child, not edits by the lead or source retranscription in messages. The parent supplies completed, reviewed sibling IDs and patch hashes from `inspect_task_diff`; `import_reviewed_task` transfers exact binary-safe Git patches, rejects changed hashes, different base revisions, cross-owner/project/parent and competing-candidate access, and serializes imports with an OS file lock. Git conflicts fail without forced merging or partial reject application. Source indexes and commits remain unchanged; imports do not push, publish, or mark the integrated result reviewed. The integration child must verify its combined checkout and obtain its own review. Local regressions and a real three-VM fixture verify the transfer, not a new successful model-driven benchmark or production rollout.
+
 Peer coordination: `list_peers` exposes bounded objectives and status within the current owner/project/task tree; `send_peer_message` sends findings, duplicate-work handoffs, and file-ownership negotiations directly between agents. Each competing candidate subtree is a separate coordination group. Peer messages do not grant edit, start, review, or publication authority over another task, and no transcripts are automatically broadcast. The existing pg-boss worker retains each message until runtime acknowledgement, with 15-second retries over a bounded window (approximately 24 hours). Active Codex turns use native `turn/steer` with the expected turn ID; API runs checkpoint peer input at the next model-step boundary, before context compaction and budget checks; unmodified Claude Code receives context through UserPromptSubmit, PostToolUse, PostToolUseFailure and Stop hooks. Per-message mailbox files avoid overwrite, shared-task paths are session-scoped, and API/Claude consumers filter recipient identity so snapshot copies cannot inherit another task's pending messages. A finished-turn race falls back to the recipient's own runtime/model as a follow-up. Old active daemons are not restarted to install steering; they finish safely before upgrade. Delivery does not cancel commands, replay work, or modify already-streamed tokens. This is not a file lock or a transactional exactly-once inference guarantee: a crash between native acceptance and receipt persistence can still require transcript-based recovery. Fresh writer machines still need reviewed integration or stacked dependencies to share actual edits. Earlier bounded subscription-backed tests proved sibling discovery, native send_peer_message calls and deferred receipt. Automated coverage now also checks native steering acceptance/rejection, Claude hook context, recipient filtering, API checkpoint-before-acknowledgement and preservation across successive model steps. The protocol mechanisms are documented in the [Codex app-server reference](https://developers.openai.com/codex/app-server#steer-an-active-turn) and [Claude Code hooks reference](https://code.claude.com/docs/en/hooks). Live Claude/API peer coordination and autonomous multi-writer conflict negotiation are not established by the read-only Codex tests.
+
+The shared API/Codex loop uses model-window budgets and measured usage to trigger compaction. Codex subscription preserves native encrypted checkpoints; supported direct OpenAI, Grok 4.7 and explicitly capability-advertised Anthropic models use native compaction. OpenRouter structured reasoning and direct Muse Responses state are retained through checkpoints. Other API integrations summarize complete older turns only; custom prefix replacement beneath active Claude/Gemini reasoning fails safely. Native and fallback compaction save encrypted searchable archives; agents can find historical evidence and retrieve original message pointers within their authorized chat. This is keyword history search, not a semantic code index or recovery of discarded hidden reasoning. Followups preserve canonical completed-turn checkpoints for the same model and connection revision, while project knowledge stays outside compactable history. See [model compaction](docs/model-compaction.md) for capability rules, estimates, and live versus fixture verification.
 
 Historical routing proofs on 2026-09-28 established subscription-backed remote reads and provider-enforced read-only writes using Codex 0.157.1 and an executor initially running 0.147.0. A disconnected executor nevertheless returned a completed text-only turn, motivating independent health checks. An attempted Docker-container cutover on the privileged job worker failed because the container could not reach the restricted TLS route; host networking would have exposed worker-local services, and kernel firewall isolation was unavailable. That approach was removed. The active solution instead separates the credential-limited per-user runner from the privileged worker, adds encrypted recovery checkpoints and brokers Git authority on the server. The sections below record current implementation and bounded live evidence; no environment connection probe alone proves execution isolation or production readiness.
 
@@ -170,6 +225,31 @@ Dependency flow: UI → authenticated server entry → service → defined capab
 - Add an abstraction when it clarifies a real boundary, not merely to support an imagined future provider.
 
 ## Reliability and growth
+
+### Accepted workspace retention policy (2026-10-03)
+
+Use private full-disk recovery snapshots, not repository-only checkpoints, before
+recycling inactive workspace VMs. Target a rolling 90-day inactivity window,
+renewed by actual session use or resume, with conversation retention managed
+independently. Idle machines already pause after 180 seconds; automatic recycling
+is not enabled merely by accepting this policy.
+
+Keep managed credentials in the existing server vault and inject them at runtime.
+Full-disk snapshots can nevertheless contain user-created ignored files and local
+secrets. Treat them as sensitive, owner-scoped recovery artifacts; never reuse
+them as shared project templates or another user's environment.
+
+Before deleting a VM, require a verified restore of its private snapshot, an
+effective provider retention window compatible with the product promise, and a
+lifecycle fence preventing concurrent turn, terminal, desktop, or preview access.
+If any condition is unproven, preserve the VM. A Git-only checkpoint, a snapshot
+identifier, or a momentary paused-state check does not establish safe recycling.
+
+Freestyle snapshot inactivity counts creation of VMs from that snapshot, not
+resume of the original VM. Application-level activity tracking and retention
+reconciliation are therefore required; do not substitute an absolute 90-day TTL.
+This policy still requires implementation and a bounded disposable restore proof
+before enabling automatic VM deletion. See [workspace retention](docs/workspace-retention.md).
 
 Child launch admission (2026-10-02): the worker and task tools share validated `YTIMESY_MODEL_CONCURRENCY` / `YTIMESY_USER_TURN_CONCURRENCY` settings. `read_task_capacity` exposes current availability to every runtime; server model steps refresh that information even before the first child exists. Starting a child atomically reserves its existing task row under the dispatch admission lock before VM preparation or inference enqueue. Active preparations, queued/running turns, other conversations and native tasks consume capacity without double counting a session. Excess starts leave drafts unstarted with an actionable capacity error; they do not silently add more queued child runs. Current defaults support at most three active children alongside a leader. Availability is not a provider quota or a guarantee against later unrelated sends, provider throttling, process loss, or VM provisioning delays. This conservative policy assumes the existing single model worker; a multi-worker fleet needs explicit shared capacity configuration. No new schema or additional compute is required.
 

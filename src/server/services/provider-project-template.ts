@@ -133,7 +133,7 @@ async function buildProviderTemplate(
 	);
 	const vm = claim.providerRef
 		? WorkspaceId(claim.providerRef)
-		: await machines.provisionSession(slug, claim.authSnapshotId);
+		: await machines.provisionSession(slug, claim.authSnapshotId, "small");
 	await saveWorkspaceProviderTemplateMachine(
 		input.workspaceId,
 		claim.provider,

@@ -1,5 +1,6 @@
 import type { IsolatedAuthSnapshot } from "#/domain/auth-snapshot";
 import type { AuthSnapshotId, WorkspaceId } from "#/domain/ids";
+import type { MachineSizeId } from "#/domain/machine-size";
 
 export interface CommandOutput {
 	readonly exitCode: number;
@@ -21,6 +22,11 @@ export interface CreateProofWorkspaceOptions {
 }
 
 export interface WorkspaceMachines {
+	readonly restoreRetainedSession?: (
+		userId: string,
+		sessionId: string,
+		oldVmId: string,
+	) => Promise<string | null>;
 	readonly destroyCodexSession?: (
 		userId: string,
 		sessionId: string,
@@ -70,6 +76,7 @@ export interface WorkspaceMachines {
 	readonly provisionSession: (
 		slug: string,
 		snapshotId: string,
+		machineSize?: MachineSizeId,
 	) => Promise<WorkspaceId>;
 }
 

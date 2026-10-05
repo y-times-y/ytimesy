@@ -110,6 +110,29 @@ it("admits another user's queued work when one user reaches their shared worker 
 	expect(await claimApiTurn(2)).toBeNull();
 });
 
+it("shares a fleet ceiling across dispatchers and releases it when a turn settles", async () => {
+	const second = randomUUID();
+	await db.query(
+		"insert into agent_session(id,user_id,harness,turn_status) values($1,'alice','api','idle')",
+		[second],
+	);
+	await submit();
+	await submit("alice", second);
+	const first = await claimApiTurn(8, 1);
+	expect(first).not.toBeNull();
+	expect(await claimApiTurn(8, 1)).toBeNull();
+	if (!first) throw new Error("Missing first turn");
+	await finalizeApiTurn(first, "completed", []);
+	expect(await claimApiTurn(8, 1)).not.toBeNull();
+});
+
+it.each([0, NaN, 10_001])(
+	"rejects invalid fleet dispatch ceiling %s",
+	async (limit) => {
+		await expect(claimApiTurn(8, limit)).rejects.toThrow("bounded integers");
+	},
+);
+
 it("does not acknowledge peer input until the actual model history is checkpointed", async () => {
 	await stageServerPeerMessage(sessionId, "peer-one", "Finding from a peer");
 	await expect(

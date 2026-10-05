@@ -40,9 +40,9 @@ export function runtimeHandoffPrompt(
 }
 
 export function assertApiContextFits(messages: readonly ModelMessage[]) {
-	// Fail explicitly rather than silently discarding old instructions or tool results.
-	if (JSON.stringify(messages).length > 120_000)
+	// Transport/storage abuse bound, not a model context limit. The model loop compacts before inference.
+	if (JSON.stringify(messages).length > 8_000_000)
 		throw new Error(
-			"This conversation exceeds the API context safety limit. Start a new chat with a handoff summary.",
+			"This conversation exceeds the context transport safety limit. Start a new chat with a handoff summary.",
 		);
 }

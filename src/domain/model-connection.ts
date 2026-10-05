@@ -67,6 +67,7 @@ export type ConnectedModel = {
 	readonly id: string;
 	readonly label: string;
 	readonly toolStreamingVerified: boolean;
+	readonly contextWindow?: number;
 };
 export type PublicModelConnection = {
 	readonly id: string;
@@ -126,6 +127,7 @@ export function connectionModels(
 			label: model.label || saved.get(model.id)?.label || model.id,
 			toolStreamingVerified:
 				saved.get(model.id)?.toolStreamingVerified ?? false,
+			contextWindow: model.contextWindow ?? saved.get(model.id)?.contextWindow,
 		}));
 }
 

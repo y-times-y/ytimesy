@@ -22,6 +22,8 @@ beforeAll(async () => {
 beforeEach(async () => {
 	vi.stubEnv("YTIMESY_MODEL_CONCURRENCY", "4");
 	vi.stubEnv("YTIMESY_USER_TURN_CONCURRENCY", "8");
+	vi.stubEnv("YTIMESY_FLEET_TURN_CONCURRENCY", "4");
+	vi.stubEnv("YTIMESY_TASK_CHILD_CONCURRENCY", "3");
 	await db.exec(`truncate agent_session,api_turn;
 	insert into agent_session values('leader','alice','project',null,null,'running',now());
 	insert into agent_session select 'child-'||i,'alice','project','leader','draft','idle',now() from generate_series(1,6) i;`);
@@ -78,5 +80,24 @@ it("includes other conversations in available worker capacity", async () => {
 
 it("rejects invalid capacity instead of silently disabling the limit", () => {
 	vi.stubEnv("YTIMESY_MODEL_CONCURRENCY", "NaN");
+	expect(modelConcurrencyLimits).toThrow();
+});
+
+it("uses fleet capacity independently of each worker but bounds each parent's fan-out", async () => {
+	vi.stubEnv("YTIMESY_FLEET_TURN_CONCURRENCY", "16");
+	expect((await agentCapacity("alice")).available).toBe(7);
+	for (let i = 1; i <= 3; i++)
+		await reserveAgentTaskStart("alice", "project", `child-${i}`);
+	await expect(
+		reserveAgentTaskStart("alice", "project", "child-4"),
+	).rejects.toThrow();
+	await query(
+		"insert into agent_session values('second-leader','alice','project',null,null,'running',now()),('second-child','alice','project','second-leader','draft','idle',now())",
+	);
+	await reserveAgentTaskStart("alice", "project", "second-child");
+});
+
+it.each(["0", "NaN", "10001"])("rejects invalid fleet capacity %s", (value) => {
+	vi.stubEnv("YTIMESY_FLEET_TURN_CONCURRENCY", value);
 	expect(modelConcurrencyLimits).toThrow();
 });

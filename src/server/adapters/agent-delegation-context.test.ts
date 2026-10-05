@@ -38,5 +38,7 @@ it("reloads owner-scoped child identities without accumulating stale briefings",
 it("advertises capacity before the first child exists", async () => {
 	query.mockResolvedValue({ rows: [] });
 	const messages = await withDelegationContext("owner", "parent", []);
-	expect(JSON.stringify(messages)).toContain("2 additional launches available");
+	expect(JSON.stringify(messages)).toContain("2 additional slots available");
+	expect(JSON.stringify(messages)).toContain("worker fleet and your account");
+	expect(JSON.stringify(messages)).toContain("3 active children per parent");
 });

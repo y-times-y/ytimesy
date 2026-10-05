@@ -20,6 +20,10 @@ import {
 	jobWorkerIdleNeedsUpdate,
 } from "#/server/adapters/freestyle/job-worker-vm";
 import { waitUntilVmRunning } from "#/server/adapters/freestyle/wait-until-running";
+import {
+	modelWorkflowConfiguration,
+	modelWorkflowSigningSecret,
+} from "#/server/adapters/model-workflow-dispatch";
 import { realtimeDeliveryConfiguration } from "#/server/adapters/realtime-delivery";
 
 const guestArchive = `${JOB_WORKER_GUEST_ROOT}/app.tgz`;
@@ -178,6 +182,12 @@ async function deploySecrets(vm: ReturnType<Freestyle["vms"]["ref"]>) {
 			? `\nYTIMESY_REALTIME_URL=${JSON.stringify(realtime.url)}\nYTIMESY_REALTIME_SECRET=${JSON.stringify(realtime.secret)}\n`
 			: "");
 	const autoRefresh = process.env.YTIMESY_ENVIRONMENT_AUTO_REFRESH;
+	const workflows = modelWorkflowConfiguration();
+	const executorEnabled =
+		workflows || process.env.YTIMESY_MODEL_EXECUTOR_ENABLED === "true";
+	const evaluation = process.env.YTIMESY_HARNESS_EVALUATION_ENABLED;
+	if (evaluation && !["0", "1"].includes(evaluation))
+		throw new Error("Harness evaluation guard must be 0 or 1.");
 	if (autoRefresh && !["true", "false"].includes(autoRefresh))
 		throw new Error("Environment auto-refresh must be true or false.");
 	await vm.fs.writeTextFile(
@@ -188,7 +198,18 @@ async function deploySecrets(vm: ReturnType<Freestyle["vms"]["ref"]>) {
 		}) +
 			(autoRefresh
 				? `\nYTIMESY_ENVIRONMENT_AUTO_REFRESH=${autoRefresh}\n`
-				: ""),
+				: "") +
+			(evaluation
+				? `\nYTIMESY_HARNESS_EVALUATION_ENABLED=${evaluation}\n`
+				: "") +
+			(executorEnabled
+				? `\nYTIMESY_MODEL_EXECUTOR_ENABLED=true\nYTIMESY_MODEL_WORKFLOW_SECRET=${JSON.stringify(modelWorkflowSigningSecret())}\n`
+				: "") +
+			(workflows
+				? `\nYTIMESY_MODEL_WORKFLOWS=true\nYTIMESY_MODEL_WORKFLOW_URL=${JSON.stringify(workflows.url)}\n`
+				: executorEnabled
+					? "\nYTIMESY_MODEL_WORKFLOWS=false\n"
+					: ""),
 	);
 	const databaseUrl = process.env.DATABASE_URL ?? "";
 	const certFromUrl = new URL(databaseUrl).searchParams.get("sslrootcert");

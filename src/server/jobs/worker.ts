@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Effect } from "effect";
+import { Freestyle } from "freestyle";
 import type { EnvironmentModel } from "#/domain/environment-model";
 import { modelConcurrencyLimits } from "../adapters/agent-capacity";
 import {
@@ -11,7 +12,14 @@ import { claimApiTurn, expireApiTurnLeases } from "../adapters/api-turns";
 import { sessionsAwaitingCheckpoint } from "../adapters/checkpoints/records";
 import { closeDatabase } from "../adapters/database";
 import { readFreestyleApiKey } from "../adapters/freestyle/api-key";
+import { observeFleetCosts } from "../adapters/freestyle/fleet-costs";
+import { reconcileInfrastructureVms } from "../adapters/freestyle/usage-admission";
 import { createFreestyleWorkspaceMachines } from "../adapters/freestyle/workspace-machines";
+import { recycleIdleWorkspaces } from "../adapters/freestyle/workspace-retention";
+import {
+	dispatchModelWorkflow,
+	modelWorkflowConfiguration,
+} from "../adapters/model-workflow-dispatch";
 import { applyProjectEnvironment } from "../adapters/rigkit/apply";
 import { listenForQueuedTurns } from "../adapters/turn-queue-wake";
 import { listReadyWorkspaceIds } from "../adapters/workspaces";
@@ -32,6 +40,7 @@ import {
 	drainConversationDeliveries,
 	relayConversationDeliveries,
 } from "./conversation-delivery";
+import { startModelWorkflowExecutor } from "./model-workflow-executor";
 import {
 	AGENT_PEER_MESSAGE_QUEUE,
 	AGENT_TASK_EVENT_QUEUE,
@@ -46,7 +55,9 @@ import { TurnDispatcher } from "./turn-dispatcher";
 let turnSweep: ReturnType<typeof setInterval> | undefined;
 let apiTurnSweep: ReturnType<typeof setInterval> | undefined;
 let deliverySweep: ReturnType<typeof setInterval> | undefined;
+let infrastructureSweep: ReturnType<typeof setInterval> | undefined;
 let stopTurnWake: (() => Promise<void>) | undefined;
+let stopWorkflowExecutor: (() => Promise<void>) | undefined;
 let dispatcher:
 	| TurnDispatcher<NonNullable<Awaited<ReturnType<typeof claimApiTurn>>>>
 	| undefined;
@@ -177,11 +188,17 @@ export async function startWorkspaceWorker() {
 	turnSweep = setInterval(() => void reconcile(), 2_000);
 	turnSweep.unref();
 	void reconcile();
-	const { worker: concurrency, perUser } = modelConcurrencyLimits();
+	const { worker: concurrency, perUser, fleet } = modelConcurrencyLimits();
+	const workflows = modelWorkflowConfiguration();
+	if (workflows || process.env.YTIMESY_MODEL_EXECUTOR_ENABLED === "true")
+		stopWorkflowExecutor = await startModelWorkflowExecutor(taskMachines);
 	dispatcher = new TurnDispatcher({
 		concurrency,
-		claim: () => claimApiTurn(perUser),
-		run: (turn) => runApiTurn(taskMachines, turn),
+		claim: () => claimApiTurn(perUser, fleet),
+		run: async (turn) => {
+			if (workflows) await dispatchModelWorkflow(turn);
+			else await runApiTurn(taskMachines, turn);
+		},
 		onError: () =>
 			console.warn(
 				"Model dispatch failed; the durable queue will be checked again.",
@@ -208,6 +225,31 @@ export async function startWorkspaceWorker() {
 			});
 	}, 250);
 	deliverySweep.unref();
+	const infrastructureClient = new Freestyle({
+		apiKey: await Effect.runPromise(readFreestyleApiKey()),
+	});
+	let reconcilingUsage = false;
+	let fleetObservedAt = 0;
+	if (infrastructureSweep) clearInterval(infrastructureSweep);
+	infrastructureSweep = setInterval(() => {
+		if (reconcilingUsage) return;
+		reconcilingUsage = true;
+		void reconcileInfrastructureVms(infrastructureClient)
+			.then(async () => {
+				if (Date.now() - fleetObservedAt >= 300_000) {
+					await observeFleetCosts(infrastructureClient);
+					fleetObservedAt = Date.now();
+				}
+				await recycleIdleWorkspaces(infrastructureClient);
+			})
+			.catch(() => {
+				console.warn("Infrastructure reconciliation deferred.");
+			})
+			.finally(() => {
+				reconcilingUsage = false;
+			});
+	}, 60_000);
+	infrastructureSweep.unref();
 	return queue;
 }
 
@@ -223,12 +265,14 @@ if (
 		stopping = true;
 		if (turnSweep) clearInterval(turnSweep);
 		if (apiTurnSweep) clearInterval(apiTurnSweep);
+		if (infrastructureSweep) clearInterval(infrastructureSweep);
 		console.info(
 			"Worker draining active model turns; no new turns will be claimed.",
 		);
 		const drain = dispatcher?.drain();
 		await stopTurnWake?.();
 		await drain;
+		await stopWorkflowExecutor?.();
 		if (deliverySweep) clearInterval(deliverySweep);
 		await relayConversationDeliveries().catch(() => {});
 		await drainConversationDeliveries();

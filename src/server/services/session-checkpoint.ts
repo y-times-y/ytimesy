@@ -46,10 +46,6 @@ export async function captureSessionCheckpoint(
 		.update(JSON.stringify(session.items))
 		.digest("hex");
 	const previous = await checkpointForSession(userId, sessionId);
-	if (previous?.turn_fingerprint === fingerprint) {
-		await confirmUnchangedCheckpoint(userId, sessionId, fingerprint);
-		return;
-	}
 	const selected = machinesForAgentSession(machines, session);
 	await selected.ensureRunning(WorkspaceId(session.providerRef));
 	const project = await projectForOwner(userId, session.projectId);
@@ -68,17 +64,17 @@ export async function captureSessionCheckpoint(
 		transfer,
 	);
 	// Retain archived legacy history without restarting its retired runner.
-	const native = previous?.runner_id
-		? ((
-				JSON.parse(
-					await downloadCheckpoint(userId, sessionId, previous.object_path),
-				) as { native?: unknown }
-			).native ?? null)
+	const previousPayload = previous
+		? (JSON.parse(
+				await downloadCheckpoint(userId, sessionId, previous.object_path),
+			) as { workspace: string; native?: unknown })
 		: null;
+	const native = previous?.runner_id ? (previousPayload?.native ?? null) : null;
 	const latest = await agentSessionForOwner(userId, sessionId);
 	if (
 		!latest ||
 		latest.turnStatus === "running" ||
+		latest.providerRef !== session.providerRef ||
 		createHash("sha256")
 			.update("checkpoint-v2:")
 			.update(JSON.stringify(latest.items))
@@ -87,6 +83,15 @@ export async function captureSessionCheckpoint(
 		throw new Error(
 			"Conversation advanced while capturing its checkpoint; retrying.",
 		);
+	// Transcript equality says nothing about terminal edits. Deduplicate only a fresh file capture.
+	if (
+		previous?.executor_id === session.providerRef &&
+		previous.turn_fingerprint === fingerprint &&
+		previousPayload?.workspace === workspace
+	) {
+		await confirmUnchangedCheckpoint(userId, sessionId, fingerprint);
+		return;
+	}
 	const path = await uploadCheckpoint(
 		userId,
 		sessionId,
