@@ -11,7 +11,8 @@ import {
 	IncompleteAgentTurn,
 } from "#/domain/api-turn-failure";
 import { PREPARED_ENVIRONMENT_INSTRUCTIONS } from "#/domain/environment-context";
-import { SessionItemId } from "#/domain/ids";
+import { SessionItemId, WorkspaceId } from "#/domain/ids";
+import { posixShellCommand } from "#/domain/posix-command";
 import { PROJECT_KNOWLEDGE_INSTRUCTIONS } from "#/domain/project-knowledge";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
 import { withDelegationContext } from "../adapters/agent-delegation-context";
@@ -51,6 +52,7 @@ import {
 	recordCloudProjectReport,
 } from "../services/project-knowledge";
 import { machinesForAgentSession } from "../services/session-workspace-machines";
+import { commitCompletedSessionTurn } from "../services/turn-commit";
 import type { WorkspaceMachines } from "../services/workspace-machines";
 import { enqueueAgentTaskEvent } from "./queue";
 
@@ -340,6 +342,32 @@ export async function runApiTurn(
 				.some((item) => item.kind === "agentMessage" && item.text.trim())
 		)
 			throw new IncompleteAgentTurn("missing-final-result");
+		failureStage = "commit";
+		await commitCompletedSessionTurn(
+			{ ...owner, providerRef: execution?.vm ?? owner.providerRef },
+			items,
+			{
+				exec: (providerRef, argv, _env, timeout) =>
+					(execution?.machines ?? machines).exec(
+						WorkspaceId(providerRef),
+						posixShellCommand(argv),
+						timeout,
+					),
+				writeTextFile: (providerRef, path, contents) =>
+					(execution?.machines ?? machines).writeTextFile(
+						WorkspaceId(providerRef),
+						path,
+						contents,
+					),
+				readTextFile: (providerRef, path) =>
+					(execution?.machines ?? machines).readTextFile(
+						WorkspaceId(providerRef),
+						path,
+					),
+			},
+		);
+		abort.signal.throwIfAborted();
+		failureStage = "saving";
 		if (!(await coordinateConversationTurn("release", control)))
 			throw new Error(
 				"Conversation coordination lease was lost before completion.",

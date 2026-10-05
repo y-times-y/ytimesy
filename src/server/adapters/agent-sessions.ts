@@ -476,6 +476,7 @@ export async function saveAgentSessionItems(
 	title?: string,
 	listedModelId?: string | null,
 	turnStatus?: AgentSessionRecord["turnStatus"],
+	expectedRunningItems?: unknown,
 ) {
 	const result = await database().query(
 		`update agent_session
@@ -491,7 +492,7 @@ export async function saveAgentSessionItems(
 		       else 'idle'
 		     end,
 		     updated_at=now()
-		 where id=$1
+		 where id=$1 and ($6::jsonb is null or (turn_status='running' and items=$6::jsonb))
 		 returning ${SESSION_COLUMNS}`,
 		[
 			sessionId,
@@ -499,6 +500,9 @@ export async function saveAgentSessionItems(
 			title ?? null,
 			listedModelId?.trim() || null,
 			turnStatus ?? null,
+			expectedRunningItems === undefined
+				? null
+				: JSON.stringify(expectedRunningItems),
 		],
 	);
 	return result.rows[0] ? toSession(result.rows[0]) : null;

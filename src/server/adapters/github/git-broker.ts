@@ -189,6 +189,7 @@ base64 -d < ${quote(`${transfer}.b64`)} > ${quote(transfer)}
 ${input.mode === "clone" ? `test ! -e ${dest}\nmkdir -p ${dest}\ngit -C ${dest} init` : `test -z "$(git -C ${dest} status --porcelain)"`}
 git -C ${dest} -c core.hooksPath=/dev/null fetch --no-tags ${quote(transfer)} refs/heads/source
 ${input.mode === "clone" ? `git -C ${dest} -c core.hooksPath=/dev/null checkout -b ${branch} FETCH_HEAD\ngit -C ${dest} remote add origin ${quote(url)}` : input.mode === "switch" ? switchBrokeredBranchCommand(input.destination, input.workingBranch || input.branch) : `git -C ${dest} -c core.hooksPath=/dev/null merge --ff-only FETCH_HEAD\ngit -C ${dest} -c core.hooksPath=/dev/null checkout -B ${branch}\ngit -C ${dest} remote set-url origin ${quote(url)}`}
+${input.mode === "clone" || input.mode === "switch" ? `git -C ${dest} update-ref refs/ytimesy/base FETCH_HEAD` : ""}
 echo updated`,
 			);
 			return "updated";
@@ -203,8 +204,18 @@ echo updated`,
 /** Pushes a verified guest bundle from a fresh bare repository with server-only auth. */
 export async function pushBrokeredRepository(
 	host: GitTransferHost,
-	input: Repository & { directory: string; baseBranch?: string },
+	input: Repository & {
+		directory: string;
+		baseBranch?: string;
+		revision?: string;
+	},
 ): Promise<void> {
+	if (
+		input.revision &&
+		!/^refs\/ytimesy\/turn-commits\/[a-f0-9]{64}$/.test(input.revision)
+	)
+		throw new Error("Invalid completed-turn revision.");
+	const revision = input.revision || "HEAD";
 	const url = repositoryUrl(input);
 	if (!host.readTextFile)
 		throw new Error(
@@ -222,7 +233,7 @@ export async function pushBrokeredRepository(
 				host,
 				`set -eu
 umask 077
-git -C ${quote(input.directory)} bundle create ${quote(transfer)} HEAD
+git -C ${quote(input.directory)} bundle create ${quote(transfer)} ${quote(revision)}
 test "$(wc -c < ${quote(transfer)})" -le ${MAX_BUNDLE_BYTES}
 base64 < ${quote(transfer)} > ${quote(`${transfer}.b64`)}`,
 			);
@@ -264,7 +275,7 @@ base64 < ${quote(transfer)} > ${quote(`${transfer}.b64`)}`,
 			"fetch",
 			"--no-tags",
 			bundle,
-			"HEAD:refs/heads/publish",
+			`${revision}:refs/heads/publish`,
 		]);
 		await git(
 			[

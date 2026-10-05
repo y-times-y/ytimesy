@@ -18,11 +18,13 @@ trap 'rm -f "$temporary/index" "$temporary/index.lock" "$temporary/patch"; rmdir
 export GIT_INDEX_FILE="$temporary/index"
 git read-tree HEAD
 git -c core.fsmonitor=false -c core.hooksPath=/dev/null add -A -- .
-git diff --cached --binary --full-index --no-ext-diff HEAD -- . > "$temporary/patch"
+base=HEAD
+if git show-ref --verify --quiet refs/ytimesy/base; then base=refs/ytimesy/base; fi
+git diff --cached --binary --full-index --no-ext-diff "$base" -- . > "$temporary/patch"
 python3 -c 'import base64,json,pathlib,subprocess,sys
 p=pathlib.Path(sys.argv[1])
 if p.stat().st_size > ${MAX_PATCH_BYTES}: raise ValueError("Patch exceeds transfer limit")
-print(json.dumps({"base":subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip(),"patch":base64.b64encode(p.read_bytes()).decode()}))' "$temporary/patch"`;
+print(json.dumps({"base":subprocess.check_output(["git","rev-parse",sys.argv[2]],text=True).strip(),"patch":base64.b64encode(p.read_bytes()).decode()}))' "$temporary/patch" "$base"`;
 
 /** Git checks the complete patch before applying it; conflicts never use rejects or a forced overwrite. */
 export function applyTaskPatchCommand(input: {
@@ -73,7 +75,7 @@ function assertReviewedSibling(
 		);
 }
 
-/** Captures staged, unstaged and untracked changes through a temporary index, leaving the real index intact. */
+/** Captures committed and working-tree changes since the saved checkout base without changing the real index. */
 export async function captureTaskPatch(
 	machines: WorkspaceMachines,
 	vm: WorkspaceId,

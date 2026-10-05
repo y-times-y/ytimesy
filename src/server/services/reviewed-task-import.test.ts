@@ -163,6 +163,39 @@ it("imports exact staged, unstaged, untracked and binary changes without changin
 	for (const path of f.writes) await expect(readFile(path)).rejects.toThrow();
 });
 
+it("imports completed committed work from the saved checkout base", async () => {
+	const f = await fixture();
+	await f.git(f.sourcePath, "update-ref", "refs/ytimesy/base", "HEAD");
+	await f.git(f.sourcePath, "add", "-A");
+	await f.git(
+		f.sourcePath,
+		"-c",
+		"user.name=Test",
+		"-c",
+		"user.email=test@example.com",
+		"commit",
+		"-qm",
+		"Completed builder turn",
+	);
+	const transfer = await captureTaskPatch(f.machines, WorkspaceId("source-vm"));
+	expect(transfer.sha256).toBe(f.sha256);
+	expect(transfer.base).toBe(
+		(await f.git(f.destinationPath, "rev-parse", "HEAD")).stdout.trim(),
+	);
+	await importReviewedTaskChanges(
+		f.machines,
+		f.destination,
+		"source",
+		transfer.sha256,
+	);
+	expect(await readFile(join(f.destinationPath, "new file.txt"), "utf8")).toBe(
+		"你好\n",
+	);
+	expect(await readFile(join(f.destinationPath, "existing.txt"), "utf8")).toBe(
+		"after\n",
+	);
+});
+
 it("rejects a conflict atomically and preserves unrelated destination edits", async () => {
 	const f = await fixture();
 	await writeFile(

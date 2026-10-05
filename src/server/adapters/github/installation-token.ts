@@ -4,7 +4,11 @@ import { createOctokitGitHubListing } from "./octokit-app";
 
 export async function githubInstallationAccessToken(
 	installationId: number | string,
-	scope?: { repositoryNames: string[]; contents: "read" | "write" },
+	scope?: {
+		repositoryNames: string[];
+		contents: "read" | "write";
+		pullRequests?: "read" | "write";
+	},
 ) {
 	const credentials = await Effect.runPromise(readGitHubAppCredentials());
 	return createOctokitGitHubListing().installationToken({

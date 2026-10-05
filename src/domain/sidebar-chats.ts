@@ -11,6 +11,7 @@ export type SidebarChat = {
 	readonly harnessId?: AgentProviderId | null;
 	readonly updatedAt?: string | null;
 	readonly workspaceId?: string | null;
+	readonly workingBranch?: string | null;
 	readonly prUrl?: string | null;
 	readonly prNeed?: SidebarChatPrNeed | null;
 };

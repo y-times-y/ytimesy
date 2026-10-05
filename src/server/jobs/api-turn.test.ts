@@ -18,6 +18,10 @@ const mocks = vi.hoisted(() => ({
 	report: vi.fn(),
 	subscriptionRuntime: vi.fn(),
 	auth: vi.fn(),
+	commit: vi.fn(),
+}));
+vi.mock("../services/turn-commit", () => ({
+	commitCompletedSessionTurn: mocks.commit,
 }));
 vi.mock("../services/project-knowledge", () => ({
 	loadCloudProjectKnowledge: mocks.knowledge,
@@ -42,6 +46,7 @@ beforeEach(() => {
 	);
 	mocks.report.mockResolvedValue(undefined);
 	mocks.auth.mockResolvedValue(true);
+	mocks.commit.mockReset().mockResolvedValue(undefined);
 	mocks.owner.mockResolvedValue({
 		id: "session",
 		userId: "owner",
@@ -350,6 +355,7 @@ it("keeps a durable tool boundary running, preserving cumulative usage and disti
 	);
 	expect(result).toBe("continue");
 	expect(mocks.finalize).not.toHaveBeenCalled();
+	expect(mocks.commit).not.toHaveBeenCalled();
 	expect(mocks.result).not.toHaveBeenCalled();
 	const { checkpointApiTurn } = await import("../adapters/api-turns");
 	expect(checkpointApiTurn).toHaveBeenLastCalledWith(
@@ -366,6 +372,58 @@ it("keeps a durable tool boundary running, preserving cumulative usage and disti
 			}),
 		]),
 	);
+});
+
+it.each([false, true])(
+	"hands off completed turns before finalization; handoff failure=%s",
+	async (fails) => {
+		const order: string[] = [];
+		mocks.owner.mockResolvedValue({
+			id: "session",
+			userId: "owner",
+			projectId: "project",
+			harness: "api",
+			providerRef: "executor",
+			taskAccess: "read_write",
+			taskPlacement: "fresh",
+		});
+		mocks.runtime.mockImplementation(async (input) => {
+			order.push("model");
+			await input.onEvent({
+				type: "text-delta",
+				id: "reply",
+				text: "Completed changes",
+			});
+		});
+		mocks.commit.mockImplementation(async () => {
+			order.push("commit");
+			if (fails) throw new Error("Git handoff rejected");
+		});
+		mocks.finalize.mockImplementation(async (_turn, state) => {
+			order.push(state);
+			return state;
+		});
+		expect(await runApiTurn({} as WorkspaceMachines, childTurn)).toBe(
+			fails ? "failed" : "completed",
+		);
+		expect(order).toEqual(["model", "commit", fails ? "failed" : "completed"]);
+		expect(mocks.commit.mock.calls[0][0].providerRef).toBe("executor");
+		if (fails)
+			expect(mocks.finalize.mock.calls[0][2]).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						kind: "error",
+						message: expect.stringContaining("automatic Git handoff failed"),
+					}),
+				]),
+			);
+	},
+);
+
+it("does not commit or publish a turn with no final result", async () => {
+	mocks.runtime.mockResolvedValue([]);
+	expect(await runApiTurn({} as WorkspaceMachines, childTurn)).toBe("failed");
+	expect(mocks.commit).not.toHaveBeenCalled();
 });
 
 it("finishes a bounded step limit without starting inference or publishing a fake success", async () => {

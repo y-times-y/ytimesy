@@ -29,7 +29,9 @@ vi.mock("../src/server/adapters/projects", () => ({
 vi.mock("../src/server/adapters/github", () => ({
 	authorizedRepository: adapter.authorize,
 	compareBranchAhead: adapter.ahead,
-	createDraftPullRequest: adapter.create,
+}));
+vi.mock("../src/server/adapters/github/app-pull-request", () => ({
+	ensureAppDraftPullRequest: adapter.create,
 }));
 vi.mock("../src/server/adapters/workspaces", () => ({
 	readyWorkspaceForOwner: adapter.workspace,
@@ -104,7 +106,7 @@ it("publishes the chat working branch against its selected starting branch", asy
 		),
 	);
 	expect(adapter.create).toHaveBeenCalledWith(
-		"user-token",
+		1,
 		"acme/app",
 		expect.objectContaining({ head: "ytimesy/task-sess", base: "feature" }),
 	);
@@ -215,7 +217,7 @@ it("commits and pushes from the checkout before opening a draft pull request", a
 	expect(
 		runtime.files.some((file) => file.path === "/tmp/ytimesy-gh-token"),
 	).toBe(false);
-	expect(adapter.create).toHaveBeenCalledWith("user-token", "acme/app", {
+	expect(adapter.create).toHaveBeenCalledWith(1, "acme/app", {
 		title: "Ship feature",
 		body: "Ready for review.",
 		head: "feature",
@@ -248,7 +250,7 @@ it("publishes a workspace branch when the project is on the default branch", asy
 	await Effect.runPromise(
 		publishProject("alice", { projectId, title: "Ship feature" }, runtime),
 	);
-	expect(adapter.create).toHaveBeenCalledWith("user-token", "acme/app", {
+	expect(adapter.create).toHaveBeenCalledWith(1, "acme/app", {
 		title: "Ship feature",
 		body: "",
 		head: "ytimesy-222222222222",

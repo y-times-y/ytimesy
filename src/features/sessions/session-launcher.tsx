@@ -82,7 +82,6 @@ export function SessionLauncher({
 	projects,
 	selectedProject,
 	onSelectProject,
-	onBranchChange,
 	listedTitle,
 	projectPickerOpen,
 	onProjectPickerOpenChange,
@@ -113,7 +112,6 @@ export function SessionLauncher({
 	projects: Project[];
 	selectedProject?: Project;
 	onSelectProject: (id: string) => void;
-	onBranchChange?: (branch: string) => void;
 	listedTitle?: string;
 	projectPickerOpen?: boolean;
 	onProjectPickerOpenChange?: (open: boolean) => void;
@@ -192,10 +190,6 @@ export function SessionLauncher({
 		],
 	);
 	const [attachments, setAttachments] = useState<File[]>([]);
-	const [branchDraft, setBranchDraft] = useState<string | null>(null);
-	useEffect(() => {
-		setBranchDraft(session.selectedBranch ?? null);
-	}, [session.selectedBranch]);
 	const [draft, setDraft] = useState("");
 	const [modelId, setModelId] = useState(session.listedModelId);
 	const [reasoningId, setReasoningId] = useState("");
@@ -459,14 +453,6 @@ export function SessionLauncher({
 						selectedProject={selectedProject}
 						onSelectProject={onSelectProject}
 						projectLocked={followUpLayout}
-						sessionId={session.agentSessionId}
-						selectedBranch={branchDraft ?? session.selectedBranch}
-						onBranchChange={(branch) => {
-							setBranchDraft(branch);
-							onBranchChange?.(branch);
-						}}
-						branchLocked={busy || turnStatus === "running"}
-						hasConversation={items.some((item) => item.kind === "userMessage")}
 						repairModel={
 							selectedModel && (harnessId === "api" || harnessId === "codex")
 								? {

@@ -126,6 +126,30 @@ it("clones and pushes Git bundles while no guest command, file or remote contain
 			directory: guest,
 		});
 		expect((await git("show", "feature:file")).stdout).toBe("changed");
+		const revision = `refs/ytimesy/turn-commits/${"a".repeat(64)}`;
+		await execute("git", ["-C", guest, "update-ref", revision, "HEAD"]);
+		await writeFile(join(guest, "file"), "later turn");
+		await execute("git", ["-C", guest, "add", "."]);
+		await execute("git", [
+			"-C",
+			guest,
+			"-c",
+			"user.name=Test",
+			"-c",
+			"user.email=test@example.invalid",
+			"commit",
+			"-m",
+			"later",
+		]);
+		await pushBrokeredRepository(host, {
+			owner: "acme",
+			name: "app",
+			branch: "completed-turn",
+			installationId: 1,
+			directory: guest,
+			revision,
+		});
+		expect((await git("show", "completed-turn:file")).stdout).toBe("changed");
 		const shallow = join(temp, "shallow");
 		await execute("git", ["clone", "--depth=1", `file://${source}`, shallow]);
 		await pushBrokeredRepository(
@@ -151,7 +175,7 @@ it("clones and pushes Git bundles while no guest command, file or remote contain
 		const authenticated = transport.commands.filter(
 			({ env }) => env.GIT_CONFIG_VALUE_0,
 		);
-		expect(authenticated).toHaveLength(4);
+		expect(authenticated).toHaveLength(5);
 		for (const command of authenticated) {
 			expect(JSON.stringify(command.args)).not.toContain(
 				"broker-token-fixture",
