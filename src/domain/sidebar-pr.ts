@@ -65,11 +65,14 @@ export function sidebarChatPrNeedLabel(need: SidebarChatPrNeed) {
 
 export function sidebarChatPrMarkForWorkspace(input: {
 	readonly workspaceId?: string | null;
+	readonly workingBranch?: string | null;
 	readonly pullRequests: readonly ListedPullRequest[];
 }): SidebarChatPrMark | null {
 	const workspaceId = input.workspaceId?.trim();
-	if (!workspaceId) return null;
-	const head = workspacePublicationBranch(workspaceId);
+	const head =
+		input.workingBranch?.trim() ||
+		(workspaceId ? workspacePublicationBranch(workspaceId) : null);
+	if (!head) return null;
 	const pullRequest = input.pullRequests.find(
 		(row) => row.head === head || row.head.endsWith(`:${head}`),
 	);

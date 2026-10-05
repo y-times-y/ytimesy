@@ -199,7 +199,7 @@ export const agentTaskToolDefinitions = [
 	{
 		name: "import_reviewed_task",
 		description:
-			"Writable builders only: import an exact unpublished Git patch from a completed, parent-reviewed sibling with the same base revision. expectedSha256 must come from the parent's inspect_task_diff result; changed patches fail. Use a fresh integration builder after parallel work is reviewed; do not resend source through messages. Conflicts fail without a forced merge. Verify the combined checkout and obtain its own review before publication.",
+			"Writable builders only: import an exact Git patch from a completed, parent-reviewed sibling with the same base revision, including committed changes since its saved checkout base. expectedSha256 must come from the parent's inspect_task_diff result; changed patches fail. Use a fresh integration builder after parallel work is reviewed; do not resend source through messages. Conflicts fail without a forced merge. Verify the combined checkout and obtain its own review before accepting the result; successful turn completion automatically hands off a draft PR.",
 		inputSchema: {
 			type: "object",
 			properties: {

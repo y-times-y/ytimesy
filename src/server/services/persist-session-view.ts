@@ -39,6 +39,7 @@ import {
 } from "#/server/jobs/queue";
 import type { PublicCodexSession } from "./codex-workspace-session";
 import { captureTurnTransition } from "./turn-analytics";
+import { commitCompletedSessionTurn } from "./turn-commit";
 
 export async function persistQueuedUserTurn(
 	session: AgentSessionRecord | null,
@@ -107,6 +108,11 @@ export async function persistBoundSessionView(
 		liveLastUser: lastUserMessageText(providerItems),
 	});
 	const previous = recordedItems;
+	const completingTurn =
+		stored.turnStatus === "running" && persistTurn === "completed";
+	if (completingTurn) {
+		await commitCompletedSessionTurn(stored, liveItems);
+	}
 	liveItems = recordTurnTiming(
 		liveItems,
 		persistTurn ?? stored.turnStatus,
@@ -118,7 +124,18 @@ export async function persistBoundSessionView(
 		title === "New session" ? undefined : title,
 		submittedModelId?.trim() || session.listedModelId || null,
 		persistTurn,
+		completingTurn ? stored.items : undefined,
 	);
+	if (!saved && completingTurn) {
+		const latest = await agentSessionById(session.id);
+		return {
+			...view,
+			agentSessionId: session.id,
+			items: sessionItemsFromUnknown(latest?.items ?? stored.items),
+			turnStatus: latest?.turnStatus ?? stored.turnStatus,
+			canSend: latest ? latest.turnStatus !== "running" : false,
+		};
+	}
 	const turnStatus = saved?.turnStatus ?? persistTurn ?? session.turnStatus;
 	if (saved) captureTurnTransition(stored, turnStatus, liveItems);
 	if (

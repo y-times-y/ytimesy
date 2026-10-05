@@ -81,7 +81,6 @@ import {
 	deleteProjectAgentSession,
 	listProjectAgentSessions,
 	listProjectAgentTasks,
-	selectProjectChatBranch,
 	startProjectAgentSession,
 } from "../sessions/agent-session.fn";
 import {
@@ -170,11 +169,6 @@ export function WorkspaceHome({
 		enabled: Boolean(selectedProject?.id),
 	});
 	const startSession = useServerFn(startProjectAgentSession);
-	const selectChatBranch = useServerFn(selectProjectChatBranch);
-	const [pendingInitialBranch, setPendingInitialBranch] = useState<{
-		projectId: string;
-		branch: string;
-	} | null>(null);
 	const deleteSession = useServerFn(deleteProjectAgentSession);
 	const deleteProject = useServerFn(deleteOwnedProject);
 	const [projectsOpen, setProjectsOpen] = useState(false);
@@ -303,6 +297,7 @@ export function WorkspaceHome({
 	const sidebarChats = (chats.data ?? []).map((chat) => {
 		const mark = sidebarChatPrMarkForWorkspace({
 			workspaceId: chat.workspaceId,
+			workingBranch: chat.workingBranch,
 			pullRequests: listedPullRequests,
 		});
 		return {
@@ -314,57 +309,6 @@ export function WorkspaceHome({
 	const activeProjectId = selectedProject?.id;
 	const activeSessionId =
 		selectedSessionId ?? session.agentSessionId ?? undefined;
-	useEffect(() => {
-		if (!pendingInitialBranch || !activeSessionId) return;
-		if (pendingInitialBranch.projectId !== activeProjectId) {
-			setPendingInitialBranch(null);
-			return;
-		}
-		let cancelled = false;
-		void selectChatBranch({
-			data: {
-				projectId: pendingInitialBranch.projectId,
-				sessionId: activeSessionId,
-				branch: pendingInitialBranch.branch,
-			},
-		})
-			.then(() => {
-				if (cancelled) return;
-				setSession((current) => {
-					if (current.agentSessionId !== activeSessionId) return current;
-					const next = {
-						...current,
-						selectedBranch: pendingInitialBranch.branch,
-					};
-					rememberSessionView(next);
-					return next;
-				});
-			})
-			.catch((cause) => {
-				if (cancelled) return;
-				setSession((current) => ({
-					...current,
-					connection: {
-						status: "failed",
-						provider: harnessId,
-						message: publicFailureMessage(cause),
-					},
-				}));
-			})
-			.finally(() => {
-				if (!cancelled) setPendingInitialBranch(null);
-			});
-		return () => {
-			cancelled = true;
-		};
-	}, [
-		pendingInitialBranch,
-		activeSessionId,
-		activeProjectId,
-		selectChatBranch,
-		rememberSessionView,
-		harnessId,
-	]);
 	const agentTasks = useQuery({
 		queryKey: ["agent-tasks", activeProjectId, activeSessionId],
 		queryFn: () =>
@@ -399,9 +343,25 @@ export function WorkspaceHome({
 		if (
 			activeSessionId &&
 			(session.turnStatus === "completed" || session.turnStatus === "failed")
-		)
+		) {
 			void agentTasks.refetch();
-	}, [activeSessionId, session.turnStatus, agentTasks.refetch]);
+			void pullRequests.refetch();
+			void chats.refetch();
+		}
+	}, [
+		activeSessionId,
+		session.turnStatus,
+		agentTasks.refetch,
+		pullRequests.refetch,
+		chats.refetch,
+	]);
+	const taskHandoffs = (agentTasks.data ?? [])
+		.filter((task) => task.pullRequestUrl)
+		.map((task) => `${task.id}:${task.pullRequestUrl}:${task.status}`)
+		.join("|");
+	useEffect(() => {
+		if (taskHandoffs) void pullRequests.refetch();
+	}, [taskHandoffs, pullRequests.refetch]);
 	selectedSessionIdRef.current = activeSessionId;
 	const requestDesktop = useCallback(() => {
 		if (desktopStartInFlight.current) return;
@@ -786,11 +746,6 @@ export function WorkspaceHome({
 
 	function startNewChat(projectId?: string) {
 		const targetProjectId = projectId ?? selectedProject?.id;
-		if (
-			session.agentSessionId ||
-			pendingInitialBranch?.projectId !== targetProjectId
-		)
-			setPendingInitialBranch(null);
 		if (!targetProjectId) {
 			openAddProject();
 			return;
@@ -961,7 +916,6 @@ export function WorkspaceHome({
 	}
 
 	function openChat(id: string) {
-		setPendingInitialBranch(null);
 		setComposerDraft(false);
 		setProjectPickerOpen(false);
 		selectedSessionIdRef.current = id;
@@ -1112,36 +1066,13 @@ export function WorkspaceHome({
 							<SessionLauncher
 								childTasks={agentTasks.data ?? []}
 								key={session.agentSessionId ?? "new"}
-								onBranchChange={(branch) => {
-									if (!session.agentSessionId && activeProjectId)
-										setPendingInitialBranch({
-											projectId: activeProjectId,
-											branch,
-										});
-									setSession((current) => {
-										const next = { ...current, selectedBranch: branch };
-										rememberSessionView(next);
-										return next;
-									});
-								}}
-								session={
-									pendingInitialBranch &&
-									pendingInitialBranch.projectId === activeProjectId
-										? {
-												...session,
-												selectedBranch: pendingInitialBranch.branch,
-											}
-										: session
-								}
+								session={session}
 								competitions={competition.data ?? []}
 								allowComparison={Boolean(
 									activeSessionId &&
 										sidebarChats.some((chat) => chat.id === activeSessionId),
 								)}
-								busy={
-									composerBusy ||
-									Boolean(pendingInitialBranch && activeSessionId)
-								}
+								busy={composerBusy}
 								listedTitle={composerDraft ? undefined : listedTitle}
 								harnessId={harnessId}
 								onHarnessIdChange={(id) => {
@@ -1278,22 +1209,6 @@ export function WorkspaceHome({
 												return;
 											}
 											const pending = pendingSendRef.current;
-											if (pendingInitialBranch && scope.projectId) {
-												const sessionId =
-													scope.sessionId ?? current.agentSessionId;
-												if (!sessionId)
-													throw new Error(
-														"Wait for this chat to open before sending.",
-													);
-												await selectChatBranch({
-													data: {
-														projectId: scope.projectId,
-														sessionId,
-														branch: pendingInitialBranch.branch,
-													},
-												});
-												setPendingInitialBranch(null);
-											}
 											const next = await sendTask({
 												data: {
 													...scope,
@@ -1426,12 +1341,15 @@ export function WorkspaceHome({
 									desktop={desktop}
 									onOpen={openInspector}
 									pullRequests={listedPullRequests.filter((pr) => {
-										const workspaceId = sidebarChats.find(
+										const chat = sidebarChats.find(
 											(chat) => chat.id === activeSessionId,
-										)?.workspaceId;
-										return workspaceId
-											? pr.head === workspacePublicationBranch(workspaceId)
-											: false;
+										);
+										const head =
+											chat?.workingBranch ||
+											(chat?.workspaceId
+												? workspacePublicationBranch(chat.workspaceId)
+												: null);
+										return Boolean(head && pr.head === head);
 									})}
 								/>
 							}

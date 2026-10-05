@@ -29,7 +29,6 @@ import {
 } from "#/server/adapters/agent-sessions";
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
 import { requireUser } from "#/server/auth/auth";
-import { requireSameOrigin } from "#/server/http";
 import {
 	deleteAgentSessionMachine,
 	editAgentTaskDraft,
@@ -41,7 +40,6 @@ import {
 	requestAgentTaskWrapUp,
 	startPreparedAgentTask,
 } from "#/server/services/harness-workspace-session";
-import { selectChatBranch } from "#/server/services/session-branch";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
 
 export type PublicAgentChat = {
@@ -52,30 +50,8 @@ export type PublicAgentChat = {
 	readonly harnessId?: AgentProviderId | null;
 	readonly updatedAt?: string | null;
 	readonly workspaceId?: string | null;
+	readonly workingBranch?: string | null;
 };
-
-export const selectProjectChatBranch = createServerFn({ method: "POST" })
-	.validator(
-		(data: { projectId: string; sessionId: string; branch: string }) => {
-			if (
-				![data.projectId, data.sessionId, data.branch].every(
-					(value) => typeof value === "string" && value.trim(),
-				)
-			)
-				throw new Error("Choose a chat and branch.");
-			return {
-				projectId: data.projectId.trim(),
-				sessionId: data.sessionId.trim(),
-				branch: data.branch.trim(),
-			};
-		},
-	)
-	.handler(async ({ data }) => {
-		requireSameOrigin(getRequest());
-		const user = await requireUser(getRequest().headers);
-		const session = await selectChatBranch({ ...data, userId: user.id });
-		return { selectedBranch: session.selectedBranch };
-	});
 
 function runWithMachines<A>(
 	run: (machines: WorkspaceMachines) => Promise<A>,
@@ -142,6 +118,7 @@ export const startProjectAgentSession = createServerFn({ method: "POST" })
 			return {
 				id: session.id,
 				title: session.title,
+				workingBranch: session.workingBranch || session.taskBranch || null,
 				turnStatus: session.turnStatus,
 				listedModelId: session.listedModelId,
 				harnessId: session.harness,

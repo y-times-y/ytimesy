@@ -24,6 +24,7 @@ import {
 	persistBoundSessionView,
 	persistSessionTurnStatus,
 } from "../src/server/services/persist-session-view";
+import * as turnCommit from "../src/server/services/turn-commit";
 
 let db: PGlite;
 const query = async (sql: string, params?: unknown[]) => {
@@ -392,6 +393,85 @@ it("keeps a running turn across a paused read until a live harness view arrives"
 		],
 	});
 	expect(completed.turnStatus).toBe("completed");
+});
+
+it("commits before exposing completion and preserves retryable state on a Git failure", async () => {
+	const { project, workspaceId } = await readyWorkspace();
+	const session = await insertAgentSession({
+		userId: "alice",
+		projectId: project.id,
+		workspaceId,
+		harness: "opencode",
+		providerRef: "vm-writer",
+	});
+	await db.query(
+		"update agent_session set task_access='read_write',turn_status='running' where id=$1",
+		[session.id],
+	);
+	const view = {
+		...emptyCodexSession(),
+		connection: {
+			status: "authenticated" as const,
+			provider: "opencode" as const,
+			authMode: "local" as const,
+			planType: null,
+			email: null,
+		},
+		turnStatus: "completed" as const,
+		items: [
+			{ kind: "userMessage" as const, id: SessionItemId("u1"), text: "ping" },
+			{ kind: "agentMessage" as const, id: SessionItemId("a1"), text: "pong" },
+		],
+	};
+	const commit = vi.spyOn(turnCommit, "commitCompletedSessionTurn");
+	try {
+		commit.mockRejectedValueOnce(new Error("Git hook failed"));
+		await expect(persistBoundSessionView(session, view)).rejects.toThrow(
+			"Git hook failed",
+		);
+		expect(
+			(
+				await db.query<{ turn_status: string }>(
+					"select turn_status from agent_session where id=$1",
+					[session.id],
+				)
+			).rows[0].turn_status,
+		).toBe("running");
+		commit.mockImplementationOnce(async () => {
+			expect(
+				(
+					await db.query<{ turn_status: string }>(
+						"select turn_status from agent_session where id=$1",
+						[session.id],
+					)
+				).rows[0].turn_status,
+			).toBe("running");
+		});
+		expect((await persistBoundSessionView(session, view)).turnStatus).toBe(
+			"completed",
+		);
+		await persistBoundSessionView(session, view);
+		expect(commit).toHaveBeenCalledTimes(2);
+		await db.query(
+			"update agent_session set turn_status='running' where id=$1",
+			[session.id],
+		);
+		const followup = [
+			{ kind: "userMessage", id: SessionItemId("u2"), text: "Next task" },
+		];
+		commit.mockImplementationOnce(async () => {
+			await db.query("update agent_session set items=$2::jsonb where id=$1", [
+				session.id,
+				JSON.stringify(followup),
+			]);
+		});
+		const raced = await persistBoundSessionView(session, view);
+		expect(raced.turnStatus).toBe("running");
+		expect(raced.canSend).toBe(false);
+		expect(raced.items).toEqual(followup);
+	} finally {
+		commit.mockRestore();
+	}
 });
 
 it("opens a new chat without copying a VM and inherits the last listed model", async () => {
