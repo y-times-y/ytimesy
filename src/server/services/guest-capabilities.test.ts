@@ -27,6 +27,23 @@ it("asks a real TypeScript language server for references and a rename without e
 	const directory = await mkdtemp(join(tmpdir(), "ytimesy-language-fixture-"));
 	const file = join(directory, "index.ts");
 	const original = "export const answer = 42;\nconsole.log(answer);\n";
+	const stop = () =>
+		run(
+			process.execPath,
+			[
+				"--input-type=module",
+				"-e",
+				LANGUAGE_INTELLIGENCE_SOURCE,
+				process.cwd(),
+				JSON.stringify({
+					cwd: directory,
+					path: "index.ts",
+					onlyIfWarm: true,
+					shutdown: true,
+				}),
+			],
+			{ timeout: 10000 },
+		);
 	try {
 		await writeFile(file, original);
 		await writeFile(
@@ -75,16 +92,24 @@ setTimeout(() => {
 		expect(references.language).toBe("typescript");
 		expect(references.result).toHaveLength(2);
 		const rename = await invoke("rename_preview", { newName: "renamed" });
+		expect(rename.serverId).toBe(references.serverId);
 		expect(JSON.stringify(rename.result)).toContain('"newText":"renamed"');
 		expect(await readFile(file, "utf8")).toBe(original);
 		await writeFile(file, 'export const answer: number = "wrong";\n');
 		const diagnostics = await invoke("diagnostics");
+		expect(diagnostics.serverId).toBe(references.serverId);
 		expect(diagnostics.diagnosticsObserved).toBe(true);
 		expect(JSON.stringify(diagnostics.result)).toContain('"code":2322');
+		await stop();
+		await new Promise((resolve) => setTimeout(resolve, 200));
+		const coldDiagnostics = await invoke("diagnostics");
+		expect(coldDiagnostics.serverId).not.toBe(references.serverId);
+		expect(JSON.stringify(coldDiagnostics.result)).toContain('"code":2322');
 		await expect(
 			invoke("definition", { path: "../outside.ts" }),
 		).rejects.toThrow();
 	} finally {
+		await stop().catch(() => {});
 		await rm(directory, { recursive: true, force: true });
 	}
 }, 60000);

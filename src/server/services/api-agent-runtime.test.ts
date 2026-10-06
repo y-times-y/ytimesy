@@ -68,6 +68,103 @@ const finish = {
 	finishReason: { unified: "stop" as const, raw: "stop" },
 };
 
+it("adopts a background native checkpoint after the tool step without losing the live call/result pair", async () => {
+	let announceCompaction = () => {};
+	let announceTool = () => {};
+	const compactionStarted = new Promise<void>((resolve) => {
+		announceCompaction = resolve;
+	});
+	const toolStarted = new Promise<void>((resolve) => {
+		announceTool = resolve;
+	});
+	const compact = vi.fn(async () => {
+		announceCompaction();
+		await toolStarted;
+		return {
+			messages: [{ role: "assistant" as const, content: "earlier checkpoint" }],
+			usage: {
+				inputTokens: 20,
+				outputTokens: 5,
+				totalTokens: 25,
+				inputTokenDetails: {
+					noCacheTokens: 20,
+					cacheReadTokens: 0,
+					cacheWriteTokens: 0,
+				},
+				outputTokenDetails: { textTokens: 5, reasoningTokens: 0 },
+			},
+		};
+	});
+	const model = new MockLanguageModelV4({
+		doStream: async () =>
+			stream([
+				{
+					type: "tool-call",
+					toolCallId: "read-current",
+					toolName: "inspect",
+					input: "{}",
+				},
+				{
+					...finish,
+					finishReason: { unified: "tool-calls", raw: "tool_calls" },
+				},
+			]),
+	});
+	const archive = vi.fn(async () => "archive:fixture");
+	const result = await runModelAgentStep(
+		{
+			userId: "alice",
+			modelId: "model",
+			instructions: "Inspect",
+			knownTools: ["inspect"],
+			messages: [
+				{ role: "user", content: "previous request" },
+				{ role: "assistant", content: "e".repeat(10500) },
+				{ role: "user", content: "Inspect live task" },
+			],
+			tools: {
+				inspect: tool({
+					inputSchema: z.object({}),
+					execute: async () => {
+						announceTool();
+						await compactionStarted;
+						return "current evidence";
+					},
+				}),
+			},
+			signal: new AbortController().signal,
+			archiveHistory: archive,
+			onEvent: async () => {},
+			onStep: async () => {},
+		},
+		{
+			model,
+			compact,
+			contextWindow: 16000,
+			workingContextTokens: 4000,
+			backgroundCompaction: true,
+		},
+	);
+	expect(result.messages.at(-1)).toMatchObject({
+		role: "tool",
+		content: [{ output: { type: "text", value: "current evidence" } }],
+	});
+	expect(compact).toHaveBeenCalledTimes(1);
+	expect(archive).toHaveBeenCalledTimes(1);
+	expect(result.outcome).toBe("continue");
+	expect(result.messages[0]).toEqual({
+		role: "assistant",
+		content: "earlier checkpoint",
+	});
+	expect(result.messages[1]).toEqual({
+		role: "user",
+		content: "Inspect live task",
+	});
+	expect(JSON.stringify(result.messages)).toContain("read-current");
+	expect(result.messages.at(-1)?.role).toBe("tool");
+	expect(JSON.stringify(result.messages)).not.toContain("e".repeat(100));
+});
+
 it("budgets deferred schemas only after discovery, while preserving the hard input limit", async () => {
 	const optional = tool({
 		description: "Optional browser capability ".repeat(4000),

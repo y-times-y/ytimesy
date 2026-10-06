@@ -56,7 +56,7 @@ for pid in targets:
     try: os.killpg(pid,signal.SIGKILL)
     except ProcessLookupError: pass`;
 
-function commandScopeRoot(turnId: string) {
+export function commandScopeRoot(turnId: string) {
 	if (!/^[a-zA-Z0-9-]{1,80}$/.test(turnId))
 		throw new Error("Invalid command scope.");
 	return `/tmp/ytimesy-api-command-scopes/${turnId}`;

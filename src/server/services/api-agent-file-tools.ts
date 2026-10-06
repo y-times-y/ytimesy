@@ -17,6 +17,7 @@ import {
 } from "./repository-guidance";
 import { inspectRepositoryChangesCommand } from "./repository-inspection";
 import { repositoryToolPath } from "./repository-tool-path";
+import { editLanguage, warmEditDiagnostics } from "./warm-edit-diagnostics";
 
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
@@ -253,6 +254,7 @@ type FileEditReceipt = {
 	sha256?: string;
 	deleted?: boolean;
 	diagnosticSource?: string | null;
+	languageFeedback?: Awaited<ReturnType<typeof warmEditDiagnostics>>;
 };
 type BatchEditReceipt = {
 	completed: FileEditReceipt[];
@@ -264,6 +266,9 @@ type BatchEditReceipt = {
 function publicEditReceipt(edited: FileEditReceipt) {
 	return {
 		path: edited.path,
+		...(edited.languageFeedback
+			? { languageFeedback: edited.languageFeedback }
+			: {}),
 		...(edited.deleted
 			? { deleted: true }
 			: {
@@ -452,7 +457,27 @@ export function apiAgentFileTools(
 			);
 			if (result.exitCode)
 				throw new Error(result.stderr.slice(-1200) || "Could not edit file.");
-			return JSON.parse(result.stdout) as FileEditReceipt | BatchEditReceipt;
+			const receipt = JSON.parse(result.stdout) as
+				| FileEditReceipt
+				| BatchEditReceipt;
+			const completed = "completed" in receipt ? receipt.completed : [receipt];
+			const unavailableLanguages = new Set<string>();
+			for (const edited of completed) {
+				const language = editLanguage(edited.path);
+				if (!language) continue;
+				if (unavailableLanguages.has(language)) {
+					edited.languageFeedback = { available: false };
+					continue;
+				}
+				edited.languageFeedback = await warmEditDiagnostics(
+					{ machines, vm, cwd },
+					edited,
+					signal,
+				);
+				if (edited.languageFeedback?.available === false)
+					unavailableLanguages.add(language);
+			}
+			return receipt;
 		} finally {
 			await machines
 				.exec(vm, `rm -f ${quote(payload)}`, 10_000)

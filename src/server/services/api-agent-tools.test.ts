@@ -388,6 +388,7 @@ describe("read-only API lead tools", () => {
 			"browser_click",
 			"browser_type",
 			"browser_key",
+			"debug_node",
 		])
 			expect(tools[name]).toBeUndefined();
 		for (const name of [
@@ -401,7 +402,9 @@ describe("read-only API lead tools", () => {
 		await executeInspectionTool(tools.search_files, { query: "task" });
 		expect(commands).toEqual([
 			expect.stringContaining("ls-files --cached --others --exclude-standard"),
-			expect.stringContaining("grep --untracked --exclude-standard -n -I"),
+			expect.stringContaining(
+				"CREATE VIRTUAL TABLE IF NOT EXISTS contents USING fts5",
+			),
 		]);
 	});
 
