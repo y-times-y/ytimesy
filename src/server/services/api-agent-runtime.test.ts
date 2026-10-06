@@ -68,6 +68,83 @@ const finish = {
 	finishReason: { unified: "stop" as const, raw: "stop" },
 };
 
+it("projects earlier command output into recoverable receipts only on unbound routes", async () => {
+	for (const policy of ["whole-turns", "bound-prefix"] as const) {
+		const model = new MockLanguageModelV4({
+			doStream: async () => stream([finish]),
+		});
+		const body = "retained command log ".repeat(350);
+		const messages = [
+			{ role: "user" as const, content: "Earlier task" },
+			{
+				role: "assistant" as const,
+				content: [
+					{
+						type: "tool-call" as const,
+						toolName: "bash",
+						toolCallId: "historical",
+						input: { command: "test" },
+					},
+				],
+			},
+			{
+				role: "tool" as const,
+				content: [
+					{
+						type: "tool-result" as const,
+						toolName: "bash",
+						toolCallId: "historical",
+						output: {
+							type: "json" as const,
+							value: {
+								reference: "37ba9eb0-031e-4b82-9296-e4ce22f9ee7e",
+								exitCode: 1,
+								stopped: null,
+								stdout: body,
+								stderr: "failed",
+							},
+						},
+					},
+				],
+			},
+			{ role: "assistant" as const, content: "Test failed; repair needed." },
+			{ role: "user" as const, content: "Continue" },
+		];
+		const archive = vi.fn(async () => "archive:command");
+		await runModelAgent(
+			{
+				userId: "alice",
+				modelId: "model",
+				instructions: "Repair",
+				messages,
+				tools: {
+					bash: tool({
+						inputSchema: z.object({ command: z.string() }),
+						execute: async () => ({}),
+					}),
+				},
+				knownTools: ["bash"],
+				signal: new AbortController().signal,
+				archiveHistory: archive,
+				onEvent: async () => {},
+				onStep: async () => {},
+			},
+			{ model, archiveConsumedGuidance: true, fallbackContextPolicy: policy },
+		);
+		const request = JSON.stringify(model.doStreamCalls[0]);
+		if (policy === "whole-turns") {
+			expect(archive).toHaveBeenCalledExactlyOnceWith(messages);
+			expect(request).toContain("archivedOutput");
+			expect(request).not.toContain(body);
+		} else {
+			expect(archive).not.toHaveBeenCalled();
+			expect(request).toContain(body);
+		}
+		expect(request).toContain("failed");
+		expect(request).toContain("historical");
+	}
+});
+
 it("adopts a background native checkpoint after the tool step without losing the live call/result pair", async () => {
 	let announceCompaction = () => {};
 	let announceTool = () => {};

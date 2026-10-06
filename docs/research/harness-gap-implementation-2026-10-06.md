@@ -13,13 +13,23 @@ deployment, or paid evaluation infrastructure was modified.
 
 ## Implemented Batch
 
-- Local SQLite FTS5 trigram candidate index for eligible literal searches.
+- Local SQLite FTS5 trigram candidate index for eligible literal searches and
+  plain ASCII identifiers in default Git basic-regex mode. Whole-word matching
+  is available with `wordBoundary:true` and is confirmed by Git, not inferred
+  from tokenizer boundaries. Actual regex syntax still falls back to Git.
   Refreshes metadata and changed contents before querying. Git still owns final
-  matching, exclusions, filename formatting, and exit codes. Regex, short,
+  matching, exclusions, filename formatting, and exit codes. Regex syntax, short,
   non-ASCII, oversized repositories, unsupported SQLite builds, index failures,
   and concurrent inventory changes fall back to Git. No embeddings or external
   index upload. Private cache is outside the checkout. This is not a competitor's
   proprietary Instant Grep implementation or a proven performance improvement.
+  Corpora below 16 MiB remain on Git; index eligibility is bounded to 16-64 MiB.
+  This conservative routing boundary avoids index refresh cost on small trees;
+  it is not a measured crossover point or a large-repository speed guarantee.
+  Runtime indexing is opt-in with `YTIMESY_INDEXED_SEARCH_ENABLED=1`. The default
+  executes native Git directly without Python startup or inventory overhead.
+  No flag was enabled here. Index acceleration is an experimental capability,
+  not an absorbed or measured competitive advantage.
 - Warm project/language servers over private Unix sockets, using maintained
   `vscode-jsonrpc` transport. Document versions are refreshed on requests;
   initialization is shared. Requests serialize, stalled servers are terminated,
@@ -35,7 +45,12 @@ deployment, or paid evaluation infrastructure was modified.
   history is archived before replacement. Latest bodies and call/result identity
   remain intact. Partial reads do not supersede full evidence. Archive failure
   preserves original history. Existing provider-prefix restrictions remain.
-  Arbitrary command-output retirement is not yet implemented.
+  Earlier completed user turns also retire large captured command/search/list
+  bodies, check logs, and output pages into previews after exact archival. Exit,
+  stop, source-verification and paging metadata remain unchanged. Current-turn
+  outputs, unknown tools and small bodies remain intact. These previews are
+  explicitly incomplete historical evidence, with exact archive recovery.
+  This is not blanket removal of arbitrary tool output within an active turn.
 - Background native compaction for the known unbound OpenAI route. It overlaps
   a tool step, freezes only earlier completed user turns, preserves the live
   turn, meters native usage, and adopts only a matching exact prefix. Failed,
@@ -89,3 +104,25 @@ compaction fixture uses a discovered executable tool and mutually waits for
 both the tool and compactor to start, proving actual overlap in the mock runtime
 rather than relying on callback names. The final socket-identity hardening also
 passed the real language-server fixture separately.
+
+## Follow-up Batch
+
+The first implementation is committed as `b80a0c2`. Follow-up tests additionally
+exercise real default-regex identifier indexing, exact Git word boundaries,
+historical failure/stop preservation, archive failure, idempotent retirement,
+check-batch source metadata, Unicode previews and runtime bound-prefix exclusion.
+This is implementation coverage, not a measured Cursor performance comparison.
+
+Final follow-up validation passed 287 test files and 1,510 tests, with five
+pre-existing skips. Full repository Biome lint, application/workflow TypeScript,
+production build, and `git diff --check` passed. The native search fallback was
+also executed with hostile shell-looking query text; no injected command ran.
+
+A local five-repetition search timing check on this checkout compared exact
+outputs for `agentSessionForOwner` and `runModelAgentStep`. Direct Git took
+21-74 ms; the initially ungated index took 2,391 ms cold and 118-413 ms warm.
+These timings ran while regression tests were active and are not a controlled
+benchmark. They still expose overhead, not a demonstrated speed advantage.
+Default routing now avoids both index startup and inventory overhead. The opt-in
+indexed route still inventories corpora before falling back on small trees;
+further performance work and large-repository evaluation remain.
