@@ -67,25 +67,16 @@ deployment, or paid evaluation infrastructure was modified.
 
 ## Remaining Work
 
-These are still implementation work, not completed features:
+These are still execution or rollout work, not established advantages:
 
-1. Durable dependency-plan dispatch: persist bounded plans, claim ready nodes,
-   retain partial/uncertain launches across restarts, enforce account admission,
-   and require exact reviewed integration for multi-prerequisite joins. Reuse
-   existing task creation, admission, review, command receipts, and pg-boss.
-2. Mandatory authoritative completion gate for every writable builder: derive
-   checks from the clean baseline, retain real receipts, bind all relevant
-   sources before/after verification, and reject uncertain/stale/no-op evidence.
-   Existing background-command fencing and reviewed-integration checks are not
-   universal baseline verification. Model-authored `run_checks` alone is not an
-   authoritative contract.
-3. Continuous PR-repair rollout and end-to-end proof. Repair machinery already
+1. Continuous PR-repair rollout and end-to-end proof. Repair machinery already
    exists in the imported baseline; it remains disabled without explicit runtime
    configuration and deployed worker/webhook infrastructure. No flag was flipped
    and no paid or production execution was started here.
-4. Representative paired evaluation campaign. Existing evaluation runners and
-   regression gates are available, but implementing a campaign and running it
-   under controlled conditions remains. Tests/builds do not prove harness speed,
+2. Representative paired evaluation execution. Existing evaluation runners and
+   the new campaign sampling/preflight guard are available, but selecting real
+   independent tasks and running them under controlled conditions remains.
+   Tests/builds do not prove harness speed,
    quality, cost improvements, or live reliability.
 
 ## Verification Boundaries
@@ -126,3 +117,69 @@ benchmark. They still expose overhead, not a demonstrated speed advantage.
 Default routing now avoids both index startup and inventory overhead. The opt-in
 indexed route still inventories corpora before falling back on small trees;
 further performance work and large-repository evaluation remain.
+
+## Completion and Scheduling Batch
+
+- Writable task completion now requires baseline-selected checks before commit,
+  publication, completed status, or exact-patch acceptance. The control plane
+  pins the pristine initial Git baseline in its owner-scoped command journal.
+  Guest ref redefinition is rejected. Explicit user branch selection atomically
+  retires the prior baseline and completion receipts. Legacy dirty checkouts
+  without a pinned baseline fail closed and retain their edits.
+- Real command exits, stops and full-output references are retained. The entire
+  Git tree, including new nonignored files, and exact binary patch are compared
+  before/after checks; commit-time and post-hook tree checks prevent acceptance
+  of a later mutation. Unchanged work is not a passing verification receipt.
+  Interrupted attempts are not replayed. A failed gate preserves the checkout
+  for a new repair turn, rather than automatically invoking another model.
+- Changing verification recipes or package scripts requires a separately
+  approved pristine baseline. Dependency/lockfile edits alone do not redefine
+  the check contract. Unconfigured projects need an explicit recipe or baseline
+  test script. This is not a protected external grader: ignored dependencies,
+  runtime environment, guest Git object storage and test semantics remain
+  outside the Git-tree freshness guarantee. Integration currently reruns its
+  baseline checks at the universal gate; this cost is not a speed improvement.
+- `schedule_task_plan` persists up to twelve existing fresh writable API/Codex
+  drafts with fixed selected models. Critical-path priorities reuse the advisory
+  planner. Claims and heartbeats use the existing journal; pg-boss supplies a
+  durable queue and minute reconciliation backstop. Atomic admission also binds
+  the draft contract, preventing a changed model/prompt/dependency from launching
+  between inspection and reservation. No database migration was added.
+- Dependencies require completion and exact-hash lead review. Single parents
+  use stacked tasks. Explicit integration nodes combine two to eight reviewed
+  sibling patches without inference, recapture their exact identities, run
+  checks and retain a separately reviewable join. The join is not accepted
+  automatically. Independent ownership declarations are planning metadata,
+  not a filesystem sandbox. Claude native drafts are not supported by this
+  durable dispatcher because it relies on durable API-turn acceptance evidence.
+- Restart recovery observes queued turns or actual completion, never treats
+  an admission reservation as accepted inference, and blocks uncertain launches.
+  `read_task_plan` exposes preserved state; pause/cancel fences future dispatch.
+  Already started model tasks require their separate stop controls. Blocked
+  work cannot bypass uncertainty through pause/resume. Blocked notifications
+  reuse the task-event outbox without rewriting partial child runtime state.
+- Campaign preflight requires twelve distinct development problems across at
+  least three repositories, with two repetitions and two tasks each for
+  navigation, repair, multi-file, verification, coordination and long-context.
+  It rejects renamed duplicate problems and final holdouts, retains fixed model,
+  source, verifier and image pins, and prepares private manifests without
+  inference. These are sampling guardrails, not statistical power or a result.
+
+The prior signed PR-delivery proof is recorded in
+`benchmarks/evaluation/VERIFICATION-2026-10-05.md`: it demonstrated durable
+delivery and deduplication with zero inference. It did not demonstrate a model
+fixing a PR, and is not new live verification from this worktree. Continuous
+repair, paid evaluation and production activation remain disabled here.
+
+Final local regression validation passed 294 files and 1,539 tests, with five
+pre-existing skips. A preceding full run encountered an existing tmux fixture's
+interrupted-command result; its isolated rerun and subsequent full reruns passed.
+This was not established as a specific harness bug, and no unrelated production
+code or assertion was weakened to hide it. Final focused checks after receipt
+inspection/prompt-size hardening passed 35 tests. Full lint, application/workflow
+typechecks, production build and diff whitespace checks passed. Real Git and
+PostgreSQL-compatible fixtures verify baseline ownership, whole-tree mutations,
+check/commit failures, exclusive plan claims, contract-bound admission and
+blocked notification deduplication. They do not constitute live Linux execution,
+model performance, or a production rollout. The original checkout remains
+untouched and no migrations, pushes or paid/cloud runs were performed.

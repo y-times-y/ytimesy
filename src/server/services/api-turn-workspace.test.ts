@@ -9,6 +9,10 @@ const mocks = vi.hoisted(() => ({
 	root: vi.fn(),
 	child: vi.fn(),
 	checkout: vi.fn(),
+	baseline: vi.fn(async () => {}),
+}));
+vi.mock("./verification-baseline", () => ({
+	establishVerificationBaselines: mocks.baseline,
 }));
 vi.mock("../adapters/agent-sessions", () => ({
 	agentSessionForOwner: mocks.read,

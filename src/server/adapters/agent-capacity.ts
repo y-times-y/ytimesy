@@ -1,4 +1,7 @@
+import type { AgentSessionRecord } from "./agent-sessions";
 import { database } from "./database";
+
+export class ChildAdmissionDenied extends Error {}
 
 export function modelConcurrencyLimits() {
 	const worker = Number(process.env.YTIMESY_MODEL_CONCURRENCY ?? "4");
@@ -71,6 +74,7 @@ export async function reserveAgentTaskStart(
 	userId: string,
 	projectId: string,
 	taskId: string,
+	expectedDraft?: AgentSessionRecord,
 ) {
 	const limits = modelConcurrencyLimits();
 	const client = await database().connect();
@@ -81,6 +85,7 @@ export async function reserveAgentTaskStart(
 			`${OCCUPIED} update agent_session set task_state='working',turn_status='running',updated_at=now()
 			where id=$4 and user_id=$1 and project_id=$5 and parent_session_id is not null
 			and task_state in ('draft','idle') and turn_status <> 'running'
+			${expectedDraft ? "and jsonb_build_array(parent_session_id,task_prompt,listed_model_id,harness,task_placement,task_access,task_execution,depends_on_session_id,selected_branch,base_branch)=$7::jsonb" : ""}
 			and not exists(select 1 from api_turn t where t.session_id=$4 and t.state in ('queued','running'))
 			and (select count(*) from occupied o where o.parent_session_id=agent_session.parent_session_id) < $6
 			and (select total+case when leaders=0 then 1 else 0 end < $2
@@ -93,10 +98,26 @@ export async function reserveAgentTaskStart(
 				taskId,
 				projectId,
 				limits.maxChildren,
+				...(expectedDraft
+					? [
+							JSON.stringify([
+								expectedDraft.parentSessionId,
+								expectedDraft.taskPrompt,
+								expectedDraft.listedModelId,
+								expectedDraft.harness,
+								expectedDraft.taskPlacement,
+								expectedDraft.taskAccess,
+								expectedDraft.taskExecution,
+								expectedDraft.dependsOnSessionId,
+								expectedDraft.selectedBranch ?? null,
+								expectedDraft.baseBranch ?? null,
+							]),
+						]
+					: []),
 			],
 		);
 		if (!result.rowCount)
-			throw new Error(
+			throw new ChildAdmissionDenied(
 				`Child launch not admitted: capacity is full or the draft changed. At most ${limits.maxChildren} active children fit alongside a leader. Leave this task unstarted; steer existing children instead of creating replacements.`,
 			);
 		await client.query("commit");

@@ -7,6 +7,7 @@ import { evaluationRunForTask } from "../adapters/harness-evaluation";
 import { projectForOwner } from "../adapters/projects";
 import { repositoryDirectory } from "../adapters/repository-setup";
 import { automaticTurnCommitArgv } from "../adapters/turn-commit";
+import { verifyCompletedRepository } from "./completion-verification";
 import {
 	publishCompletedSessionTurn,
 	type TurnGitRuntime,
@@ -17,6 +18,7 @@ export async function commitCompletedSessionTurn(
 	session: AgentSessionRecord,
 	items: readonly SessionItem[],
 	runtime?: TurnGitRuntime,
+	signal?: AbortSignal,
 ) {
 	if (
 		!session.providerRef ||
@@ -24,11 +26,9 @@ export async function commitCompletedSessionTurn(
 		session.taskAccess === "read_only"
 	)
 		return;
-	if (
+	const evaluation =
 		process.env.YTIMESY_HARNESS_EVALUATION_ENABLED === "1" &&
-		(await evaluationRunForTask(session.userId, session.id))
-	)
-		return;
+		(await evaluationRunForTask(session.userId, session.id));
 	const project = await projectForOwner(session.userId, session.projectId);
 	if (!project)
 		throw new Error("The chat's project is unavailable for automatic commit.");
@@ -50,12 +50,24 @@ export async function commitCompletedSessionTurn(
 		.slice(0, 72);
 	const host = runtime ?? workspaceRuntimeFromEnv();
 	for (const repo of repositoriesForProject(project)) {
+		const directory = repositoryDirectory(repo.fullName);
+		const verification = await verifyCompletedRepository({
+			runtime: host,
+			providerRef: session.providerRef,
+			directory,
+			userId: session.userId,
+			sessionId: session.id,
+			turn,
+			signal,
+		});
+		if (evaluation) continue;
 		const result = await host.exec(
 			session.providerRef,
 			automaticTurnCommitArgv(
-				repositoryDirectory(repo.fullName),
+				directory,
 				turn,
 				`Agent: ${description || "Update workspace"}`,
+				verification.tree,
 			),
 			{},
 			60_000,
@@ -65,5 +77,6 @@ export async function commitCompletedSessionTurn(
 				`Automatic commit failed for ${repo.fullName}: ${(result.stderr || result.stdout).trim().slice(0, 500) || "Check Git status in Terminal and retry."}`,
 			);
 	}
+	if (evaluation) return;
 	await publishCompletedSessionTurn(session, host, turn);
 }

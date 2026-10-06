@@ -132,6 +132,43 @@ it("does not stage files during an unfinished merge", async () => {
 	});
 });
 
+it("fences edits after verification and never records an altered commit as complete", async () => {
+	await repository(async (repo) => {
+		await writeFile(join(repo, "tracked.txt"), "verified\n");
+		await exec("git", ["-C", repo, "add", "."]);
+		const tree = (await exec("git", ["-C", repo, "write-tree"])).stdout.trim();
+		const args = automaticTurnCommitArgv(
+			repo,
+			"c".repeat(64),
+			"verified",
+			tree,
+		);
+		await writeFile(join(repo, "tracked.txt"), "later edit\n");
+		await expect(exec(args[0], args.slice(1))).rejects.toThrow(
+			"Checkout changed after",
+		);
+		await writeFile(join(repo, "tracked.txt"), "verified\n");
+		const hook = join(repo, ".git/hooks/pre-commit");
+		await writeFile(
+			hook,
+			"#!/bin/sh\nprintf 'hook mutation\\n' > injected.txt\ngit add injected.txt\n",
+		);
+		await chmod(hook, 0o755);
+		await expect(exec(args[0], args.slice(1))).rejects.toThrow(
+			"Commit differs from",
+		);
+		await expect(
+			exec("git", [
+				"-C",
+				repo,
+				"show-ref",
+				"--verify",
+				`refs/ytimesy/turn-commits/${"c".repeat(64)}`,
+			]),
+		).rejects.toThrow();
+	});
+});
+
 it("retains the review base and completion receipts through checkpoint restoration", async () => {
 	await repository(async (repo) => {
 		await writeFile(join(repo, "tracked.txt"), "saved\n");

@@ -20,6 +20,9 @@ export async function acceptTaskPatch(
 		`with accepted as (
 		 update agent_session set task_review_state='reviewed',updated_at=now()
 		 where id=$1 and user_id=$2 and parent_session_id=$3 and task_state='done'
+		 and exists (select 1 from agent_task_command_receipt v where v.parent_session_id=$1 and v.status='done'
+		 and v.response->>'ok'='true' and v.response->'result'->>'type'='completion-verification'
+		 and v.response->'result'->>'patchSha256'=$6 and v.response->'result'->>'base'=$7)
 		 returning id
 		) insert into agent_task_command_receipt(parent_session_id,request_id,status,response,completed_at)
 		 select $3,$4,'done',$5::jsonb,now() from accepted
@@ -35,10 +38,14 @@ export async function acceptTaskPatch(
 				ok: true,
 				result: { type: "patch-review", ...patch },
 			}),
+			patch.sha256,
+			patch.base,
 		],
 	);
 	if (!result.rowCount)
-		throw new Error("Completed task changed before its review was accepted.");
+		throw new Error(
+			"Task changed or lacks authoritative baseline verification for the exact patch; acceptance was not recorded.",
+		);
 }
 
 export async function recordTaskImport(

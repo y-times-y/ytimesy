@@ -7,6 +7,12 @@ import { commitCompletedSessionTurn } from "./turn-commit";
 
 const lookup = vi.hoisted(() => vi.fn());
 const evaluation = vi.hoisted(() => vi.fn());
+const verification = vi.hoisted(() =>
+	vi.fn(async () => ({ status: "verified", tree: "a".repeat(40) })),
+);
+vi.mock("./completion-verification", () => ({
+	verifyCompletedRepository: verification,
+}));
 vi.mock("../adapters/harness-evaluation", () => ({
 	evaluationRunForTask: evaluation,
 }));
@@ -93,10 +99,26 @@ it("never commits or publishes registered evaluation tasks", async () => {
 		const { publishCompletedSessionTurn } = await import("./turn-publication");
 		vi.mocked(publishCompletedSessionTurn).mockClear();
 		await commitCompletedSessionTurn(session, items, runtime);
-		expect(lookup).not.toHaveBeenCalled();
+		expect(lookup).toHaveBeenCalledWith("alice", "project-1");
+		expect(verification).toHaveBeenCalledWith(
+			expect.objectContaining({ sessionId: session.id }),
+		);
 		expect(runtime.commands).toHaveLength(0);
 		expect(publishCompletedSessionTurn).not.toHaveBeenCalled();
 	} finally {
 		vi.unstubAllEnvs();
 	}
+});
+
+it("never commits or publishes when authoritative verification fails", async () => {
+	lookup.mockResolvedValue({ fullName: "owner/primary", branch: "main" });
+	verification.mockRejectedValueOnce(new Error("required check failed"));
+	const runtime = new MemoryWorkspaceRuntime();
+	const { publishCompletedSessionTurn } = await import("./turn-publication");
+	vi.mocked(publishCompletedSessionTurn).mockClear();
+	await expect(
+		commitCompletedSessionTurn(session, items, runtime),
+	).rejects.toThrow("required check failed");
+	expect(runtime.commands).toHaveLength(0);
+	expect(publishCompletedSessionTurn).not.toHaveBeenCalled();
 });
