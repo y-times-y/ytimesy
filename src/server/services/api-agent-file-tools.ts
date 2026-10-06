@@ -11,12 +11,19 @@ import {
 	resolveToolWorkspace,
 } from "./agent-tool-workspace";
 import { editDiagnostics } from "./edit-diagnostics";
+import { runGuestCapability } from "./guest-node-capability";
+import {
+	LANGUAGE_INTELLIGENCE_SOURCE,
+	languageQuery,
+} from "./language-intelligence";
+import { prepareRenameWrites, renameSources } from "./language-refactor";
 import {
 	archivedGuidanceDocuments,
 	knownGuidanceDocuments,
 } from "./repository-guidance";
 import { inspectRepositoryChangesCommand } from "./repository-inspection";
 import { repositoryToolPath } from "./repository-tool-path";
+import { structuredCodeTools } from "./structured-code-reads";
 import { editLanguage, warmEditDiagnostics } from "./warm-edit-diagnostics";
 
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
@@ -203,6 +210,8 @@ else:
         if hashlib.sha256(existing.encode()).hexdigest() != request['expectedSha256']:
             raise ValueError('File changed since inspection; read the latest file before patching')
         if request['operation'] == 'delete':
+            if validate_only:
+                return {'path': request['path']}
             target.unlink()
             return {'path': request['path'], 'deleted': True}
         content = request['content']
@@ -211,6 +220,8 @@ else:
         if existing.count(old) != 1:
             raise ValueError('Expected text must occur exactly once; inspect the latest file')
         content = existing.replace(old, request['new'], 1)
+if validate_only:
+    return {'path': request['path']}
 target.parent.mkdir(parents=True, exist_ok=True)
 if not target.parent.resolve().is_relative_to(root):
     raise ValueError('Parent directory escaped repository')
@@ -229,13 +240,18 @@ const EDIT_SCRIPT = `import fcntl, hashlib, json, os, pathlib, stat, sys, tempfi
 root = pathlib.Path(sys.argv[1]).resolve(strict=True)
 lock = open('/tmp/ytimesy-edit-lock-' + hashlib.sha256(str(root).encode()).hexdigest(), 'a')
 fcntl.flock(lock, fcntl.LOCK_EX)
-def apply_edit(request):
+def apply_edit(request, validate_only=False):
 ${EDIT_OPERATION_SCRIPT.trim()
 	.split("\n")
 	.map((line) => `    ${line}`)
 	.join("\n")}
 with open(sys.argv[2], encoding='utf-8') as handle:
     request = json.load(handle)
+if isinstance(request, dict) and 'preflight' in request:
+    requests = request['preflight']
+    for operation in requests:
+        apply_edit(operation, validate_only=True)
+    request = requests
 if isinstance(request, list):
     completed = []
     result = {'completed': completed, 'failedPath': None, 'unattemptedPaths': []}
@@ -430,6 +446,7 @@ export function apiAgentFileTools(
 			},
 		}),
 	};
+	Object.assign(tools, structuredCodeTools(input));
 	if (input.readOnly) return tools;
 	async function edit(
 		id: string,
@@ -444,11 +461,16 @@ export function apiAgentFileTools(
 	}
 	async function writeGuestEdits(
 		request: Record<string, string> | Record<string, string>[],
+		preflight = false,
 	): Promise<FileEditReceipt | BatchEditReceipt> {
 		signal.throwIfAborted();
 		const { machines, vm, cwd } = await resolveToolWorkspace(input);
 		const payload = `/tmp/ytimesy-api-edit-${randomUUID()}.json`;
-		await machines.writeTextFile(vm, payload, JSON.stringify(request));
+		await machines.writeTextFile(
+			vm,
+			payload,
+			JSON.stringify(preflight ? { preflight: request } : request),
+		);
 		try {
 			const result = await machines.exec(
 				vm,
@@ -484,6 +506,42 @@ export function apiAgentFileTools(
 				.catch(() => {});
 		}
 	}
+
+	tools.rename_symbol = tool({
+		description:
+			"Apply a language-server symbol rename across one to eight existing repository files. Supply 1-based UTF-16 position and newName. Reuses the warm server, obtains its edits and source snapshots, validates ranges, then preflights every source hash under our repository edit lock. Read the completed/failedPath receipt: filesystem failures can leave partial writes; never blindly replay. Does not move files or accept resource operations. Run project checks afterward; language edits do not prove behavior. Available only to writable builders.",
+		inputSchema: languageQuery
+			.omit({ operation: true })
+			.extend({ newName: z.string().min(1).max(200) }),
+		execute: (args, options) =>
+			once(options.toolCallId, async () => {
+				const request = languageQuery.parse({
+					...args,
+					operation: "rename_preview",
+				});
+				const workspace = await resolveToolWorkspace(input);
+				const sources = await runGuestCapability(
+					workspace,
+					"language",
+					LANGUAGE_INTELLIGENCE_SOURCE,
+					{ ...request, cwd: workspace.cwd, includeRenameSources: true },
+					renameSources,
+					signal,
+				);
+				const writes = prepareRenameWrites(sources);
+				const receipt = (await writeGuestEdits(
+					writes,
+					true,
+				)) as BatchEditReceipt;
+				return {
+					completed: receipt.completed.map(publicEditReceipt),
+					failedPath: receipt.failedPath,
+					unattemptedPaths: receipt.unattemptedPaths,
+					...(receipt.error ? { error: publicToolDetail(receipt.error) } : {}),
+				};
+			}),
+	});
+
 	tools.create_file = tool({
 		description:
 			"Create a new UTF-8 repository file. Fails if it already exists; never overwrites.",

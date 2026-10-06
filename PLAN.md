@@ -1,5 +1,14 @@
 # ytimesy v0
 
+### Structural reads and language refactors — 2026-10-06
+
+Isolated follow-up on `codex/omp-harness-gaps` adds bounded TS/JS structural
+reads with exact source follow-ups, applied language-server symbol renames for
+writable builders, and same-language query batching to reduce guest round trips.
+Cold TypeScript queries use the semantic server to avoid incomplete cross-file
+results. See [implementation and proof boundaries](docs/research/omp-harness-gap-implementation-2026-10-06.md).
+Local fixtures are separate from live cloud behavior and comparative performance.
+
 ### Indexed project memory — 2026-10-05
 
 The existing owner-scoped Markdown store now holds up to 120,000 characters,

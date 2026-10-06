@@ -9,6 +9,7 @@ const CORE_TOOLS = new Set([
 	"search_files",
 	"read_file",
 	"read_files",
+	"read_code",
 	"read_repository_guidance",
 	"read_environment_report",
 	"inspect_project_evidence",

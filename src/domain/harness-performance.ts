@@ -34,6 +34,9 @@ const toolNames = [
 	"browser_open",
 	"browser_inspect",
 	"inspect_code",
+	"inspect_code_batch",
+	"read_code",
+	"rename_symbol",
 	"plan_parallel_work",
 	"other",
 ] as const;
@@ -81,9 +84,13 @@ export function toolMetricCategory(
 ): z.infer<typeof harnessToolCategory> {
 	if (name.startsWith("browser_")) return "browser";
 	if (
-		["apply_patch", "apply_patches", "create_file", "replace_text"].includes(
-			name,
-		)
+		[
+			"apply_patch",
+			"apply_patches",
+			"create_file",
+			"replace_text",
+			"rename_symbol",
+		].includes(name)
 	)
 		return "edit";
 	if (
@@ -112,6 +119,8 @@ export function toolMetricCategory(
 			"read_context_archive",
 			"search_context_history",
 			"inspect_code",
+			"inspect_code_batch",
+			"read_code",
 		].includes(name)
 	)
 		return "read";
