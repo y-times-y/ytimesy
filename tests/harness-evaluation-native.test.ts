@@ -68,6 +68,8 @@ it("keeps native credentials isolated without breaking the prepared home and pac
 	});
 	const launch = execute.mock.calls[1][1];
 	expect(launch).toContain("export HOME=/home/ubuntu\n");
+	expect(launch).toContain("--sandbox danger-full-access");
+	expect(launch).not.toContain("--sandbox workspace-write");
 	expect(launch).toMatch(
 		/export CODEX_HOME='\/home\/ubuntu\/\.ytimesy-native-evaluation-[^']+'/,
 	);
@@ -75,6 +77,7 @@ it("keeps native credentials isolated without breaking the prepared home and pac
 		"export HOME='/home/ubuntu/.ytimesy-native-evaluation-",
 	);
 	expect(result.exitCode).toBe(0);
+	expect(result.executionIsolation).toBe("disposable-vm");
 	expect(mocks.destroy).toHaveBeenCalledWith(
 		machines,
 		expect.objectContaining({

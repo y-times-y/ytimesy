@@ -42,3 +42,16 @@ it("does not recommend a native tool unless it is actually offered", () => {
 		"Signed thinking",
 	);
 });
+
+it.each(["openai", "anthropic", "google", "other"] as const)(
+	"bounds unconditional %s guidance without weakening source or verification contracts",
+	(family) => {
+		const instructions = harnessModelToolInstructions(family, false);
+		expect(instructions.length).toBeLessThan(2200);
+		expect(instructions).toContain("Read current source");
+		expect(instructions).toContain("required bodies completely");
+		expect(instructions).toContain("Preserve every required check");
+		expect(instructions).toContain("actual exit and stop status");
+		expect(instructions).not.toContain("oldText");
+	},
+);

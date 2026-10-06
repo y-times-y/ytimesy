@@ -58,17 +58,5 @@ export function taskIntegrationChecks(input: {
 		throw new Error(
 			"A project test script or explicit verification recipe is required for automated integration.",
 		);
-	return names.map((name) => {
-		const script = scripts[name];
-		const reporting =
-			script === "vitest run"
-				? "--reporter=dot"
-				: script === "vite build"
-					? "--logLevel warn"
-					: null;
-		const command = `${manager} run ${name}`;
-		return reporting
-			? `${command}${manager === "npm" ? " --" : ""} ${reporting}`
-			: command;
-	});
+	return names.map((name) => `${manager} run ${name}`);
 }

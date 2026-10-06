@@ -3,6 +3,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { Effect } from "effect";
 import { beforeEach, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { SafeApiModelFailure } from "#/domain/api-turn-failure";
 import { nativeModelCompactor } from "../adapters/model-compaction";
 import {
 	type ApiAgentEvent,
@@ -66,6 +67,43 @@ const finish = {
 	usage,
 	finishReason: { unified: "stop" as const, raw: "stop" },
 };
+
+it("budgets deferred schemas only after discovery, while preserving the hard input limit", async () => {
+	const optional = tool({
+		description: "Optional browser capability ".repeat(4000),
+		inputSchema: z.object({ url: z.string() }),
+		execute: async () => ({}),
+	});
+	for (const knownTools of [[], ["browser_screenshot"]]) {
+		const model = new MockLanguageModelV4({
+			doStream: async () => stream([finish]),
+		});
+		const pending = runModelAgent(
+			{
+				userId: "alice",
+				modelId: "model",
+				instructions: "Keep every required check",
+				messages: [{ role: "user", content: "Inspect the task" }],
+				tools: { browser_screenshot: optional },
+				knownTools,
+				signal: new AbortController().signal,
+				onStep: async () => {},
+				onEvent: async () => {},
+			},
+			{ model, contextWindow: 12_000 },
+		);
+		if (knownTools.length) {
+			await expect(pending).rejects.toBeInstanceOf(SafeApiModelFailure);
+			expect(model.doStreamCalls).toHaveLength(0);
+		} else {
+			await pending;
+			expect(model.doStreamCalls).toHaveLength(1);
+			expect(JSON.stringify(model.doStreamCalls[0].tools)).not.toContain(
+				"Optional browser capability",
+			);
+		}
+	}
+});
 
 it("still rejects a native checkpoint exceeding the hard input limit without replacing original history", async () => {
 	const model = new MockLanguageModelV4();

@@ -33,13 +33,30 @@ it("asks a real TypeScript language server for references and a rename without e
 			join(directory, "tsconfig.json"),
 			JSON.stringify({ compilerOptions: { strict: true } }),
 		);
+		const delayedServer = join(directory, "delayed-server.mjs");
+		await writeFile(
+			delayedServer,
+			`import {spawn} from 'node:child_process';
+setTimeout(() => {
+ const child=spawn(${JSON.stringify(join(process.cwd(), "node_modules/.bin/typescript-language-server"))}, process.argv.slice(2), {stdio:'inherit'});
+ child.on('exit', code => {process.exitCode=code ?? 1;});
+}, 3000);`,
+		);
 		const invoke = async (operation: string, extra = {}) => {
+			// Reproduce a cold server that cannot possibly publish within 2.5s.
+			const source =
+				operation === "diagnostics"
+					? LANGUAGE_INTELLIGENCE_SOURCE.replace(
+							"const [command, ...args] = commands[language];",
+							`const command=process.execPath, args=[${JSON.stringify(delayedServer)}, '--stdio'];`,
+						)
+					: LANGUAGE_INTELLIGENCE_SOURCE;
 			const output = await run(
 				process.execPath,
 				[
 					"--input-type=module",
 					"-e",
-					LANGUAGE_INTELLIGENCE_SOURCE,
+					source,
 					process.cwd(),
 					JSON.stringify({
 						cwd: directory,
@@ -60,6 +77,10 @@ it("asks a real TypeScript language server for references and a rename without e
 		const rename = await invoke("rename_preview", { newName: "renamed" });
 		expect(JSON.stringify(rename.result)).toContain('"newText":"renamed"');
 		expect(await readFile(file, "utf8")).toBe(original);
+		await writeFile(file, 'export const answer: number = "wrong";\n');
+		const diagnostics = await invoke("diagnostics");
+		expect(diagnostics.diagnosticsObserved).toBe(true);
+		expect(JSON.stringify(diagnostics.result)).toContain('"code":2322');
 		await expect(
 			invoke("definition", { path: "../outside.ts" }),
 		).rejects.toThrow();

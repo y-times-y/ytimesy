@@ -5,22 +5,51 @@ import {
 	cloudAgentRoleInstructions,
 } from "./agent-orchestration";
 
+it("batches independent ready calls without batching evidence-dependent decisions", () => {
+	const lead = cloudAgentRoleInstructions({});
+	expect(lead).toContain("Use launch_ready_tasks for independent contracts");
+	expect(lead).toContain("Use batch_read for independent reads");
+	expect(lead).toContain("never batch dependent evidence or decisions");
+});
+
 it("prepares contract-based review while builders work and rejects stricter validation", () => {
 	const lead = cloudAgentRoleInstructions({});
 	expect(lead).toContain("while builders work");
 	expect(lead).toContain("allowed inputs adjacent to forbidden cases");
 	expect(lead).toContain("a stronger validation rule is a correctness bug");
 	expect(lead).toContain("ORIGINAL user contract");
+	expect(lead).toContain("reproduced failure before requesting repair");
+	expect(lead).toContain("one bounded diagnostic");
 });
 
-it("defaults independent nontrivial policy contracts to parallel owners without equating folders or purity with dependencies", () => {
+it("requires executable original-contract boundary evidence from both roles", () => {
+	for (const instructions of [
+		AGENT_ORCHESTRATION_INSTRUCTIONS,
+		cloudAgentRoleInstructions({}),
+		cloudAgentRoleInstructions({
+			parentSessionId: "lead",
+			taskAccess: "read_write",
+		}),
+	]) {
+		expect(instructions).toContain("retained executable evidence");
+		expect(instructions).toContain("original contract, not the implementation");
+		expect(instructions).toContain("first handoff");
+		expect(instructions).toContain("Inspect those results before acceptance");
+	}
+});
+
+it("compares independent deliverables on the complete critical path without folder bias", () => {
 	for (const lead of [
 		cloudAgentRoleInstructions({}),
 		agentSessionRoleInstructions({}),
 	]) {
-		expect(lead).toContain("default to concurrent owners");
-		expect(lead).toContain("boundary/error-order tests");
-		expect(lead).toContain("measured critical-path disadvantage");
+		expect(lead).not.toContain("default to concurrent owners");
+		expect(lead).toContain("one coherent builder");
+		expect(lead).toContain("eligible for concurrent owners within capacity");
+		expect(lead).toContain("do not dismiss testing as trivial generation");
+		expect(lead).not.toContain("bounded same-subsystem change");
+		expect(lead).toContain("additional orientation, review and integration");
+		expect(lead).toContain("complete verification ownership");
 		expect(lead).toContain("review early finishers while others run");
 	}
 });
@@ -32,6 +61,8 @@ it("keeps cloud role prompts concise without weakening delegation or verificatio
 		taskAccess: "read_write",
 	});
 	expect(lead).toContain("start at least one fresh read-write child");
+	expect(lead.length).toBeLessThan(6500);
+	expect(lead.length).toBeLessThan(AGENT_ORCHESTRATION_INSTRUCTIONS.length / 2);
 	expect(builder).toContain("Implement your own bounded task directly");
 	expect(builder).not.toContain("start at least one fresh read-write child");
 	expect(builder).toContain("repository-required preflight takes precedence");
@@ -63,7 +94,7 @@ it("requires stable final verification without redundant baseline runs", () => {
 			taskAccess: "read_write",
 		}),
 	]) {
-		expect(prompt).toContain("baseline");
+		expect(prompt.toLowerCase()).toContain("baseline");
 		expect(prompt).toContain("repository policy requires it");
 		expect(prompt).toContain("stable");
 		expect(prompt).toContain("semicolon-separated");
@@ -73,7 +104,7 @@ it("requires stable final verification without redundant baseline runs", () => {
 			parentSessionId: "lead",
 			taskAccess: "read_write",
 		}),
-	).toContain("Use project-configured formatting");
+	).toContain("project-configured formatting");
 });
 
 it("compares coordination cost and gives a sole builder complete verification ownership", () => {
@@ -92,7 +123,7 @@ it("compares coordination cost and gives a sole builder complete verification ow
 		"complete final project verification",
 	);
 	expect(AGENT_ORCHESTRATION_INSTRUCTIONS).toContain(
-		"substantial independent implementations",
+		"eligible for concurrent owners within capacity",
 	);
 	expect(AGENT_ORCHESTRATION_INSTRUCTIONS).toContain(
 		"Never skip required reading or verification",
@@ -130,7 +161,7 @@ describe("agent orchestration policy", () => {
 				"start the ready workstreams in the same turn, before waiting",
 			);
 			expect(instructions).toContain(
-				"Do not default to one builder for a multi-workstream task",
+				"Do not serialize useful independent work behind an unnecessary predecessor",
 			);
 			expect(instructions).toContain(
 				"Agree shared interfaces in the child prompts before launch",

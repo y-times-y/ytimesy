@@ -97,3 +97,35 @@ it("does not incorrectly pin untraceable legacy children to the first prompt", (
 		]),
 	).toBeUndefined();
 });
+
+it("anchors every batched child to its launch card rather than another prompt", () => {
+	const items: SessionItem[] = [
+		{
+			kind: "userMessage",
+			id: SessionItemId("prompt"),
+			text: "Implement the feature",
+		},
+		{
+			kind: "dynamicToolCall",
+			id: SessionItemId("batch"),
+			tool: "launch_ready_tasks",
+			status: "completed",
+			output: JSON.stringify({
+				tasks: [
+					{ id: "first", result: { taskId: "a" } },
+					{ id: "second", result: { taskId: "b" } },
+				],
+			}),
+		},
+		{
+			kind: "userMessage",
+			id: SessionItemId("later"),
+			text: "Another request",
+		},
+	];
+	for (const id of ["a", "b"]) {
+		const task = { id, createdAt: new Date(2000).toISOString() };
+		expect(childTaskPromptId(task, items)).toBe("prompt");
+		expect(childTaskAnchorId(task, items)).toBe("batch");
+	}
+});

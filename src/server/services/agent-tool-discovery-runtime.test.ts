@@ -83,6 +83,8 @@ it("executes SDK discovery, checkpoints the match and exposes it after a durable
 			input_tokens: 3,
 			output_tokens: 2,
 			outcome: "tool_calls",
+			prepared_prompt_characters: expect.any(Number),
+			prepared_tool_characters: expect.any(Number),
 		}),
 	);
 	expect(input.onModelMetric).toHaveBeenLastCalledWith(

@@ -126,6 +126,10 @@ for filename in sorted(set(files)):
     if len(skills) >= 100:
         break
 revision = subprocess.run(['git', '-C', str(root), 'rev-parse', 'HEAD'], capture_output=True, text=True, timeout=10)
+for instruction in instructions:
+    if instruction['nextStart'] is None and known_documents.get(instruction['path']) == instruction['sha256']:
+        del instruction['content']
+        instruction['alreadyInContext'] = True
 print(json.dumps({'revision': revision.stdout.strip() if revision.returncode == 0 else None, 'instructions': instructions, 'referencedDocuments': documents, 'configuration': configuration, 'documentLimitReached': document_limit_reached, 'skills': skills, 'skillLimitReached': len(skills) == 100, 'scopeFiles': scope_files, 'scopeFilesTruncated': inventory_truncated}, ensure_ascii=False))`;
 
 type GuidancePacket = {
@@ -135,7 +139,8 @@ type GuidancePacket = {
 	instructions: {
 		path: string;
 		sha256: string;
-		content: string;
+		content?: string;
+		alreadyInContext?: true;
 		nextStart: number | null;
 	}[];
 	skills: { path: string; sha256: string; header: string }[];
@@ -169,11 +174,11 @@ const archivedGuidanceBody = z.object({
 });
 
 /** A matching current hash can reuse a prior complete-read receipt, not its absent body. */
-function archivedGuidanceDocuments(messages: readonly ModelMessage[]) {
+export function archivedGuidanceDocuments(messages: readonly ModelMessage[]) {
 	const known: Record<
 		string,
 		{ sha256: string; archivedBody: z.infer<typeof archivedGuidanceBody> }
-	> = {};
+	> = Object.create(null);
 	for (const message of messages) {
 		if (message.role !== "tool") continue;
 		for (const part of message.content) {
@@ -211,8 +216,8 @@ const completeGuidanceDocument = z.object({
 });
 
 /** Only complete bodies still in the active transcript may suppress another copy. */
-function knownGuidanceDocuments(messages: readonly ModelMessage[]) {
-	const known: Record<string, string> = {};
+export function knownGuidanceDocuments(messages: readonly ModelMessage[]) {
+	const known: Record<string, string> = Object.create(null);
 	for (const message of messages) {
 		if (message.role !== "tool" || !Array.isArray(message.content)) continue;
 		for (const part of message.content) {
@@ -224,13 +229,15 @@ function knownGuidanceDocuments(messages: readonly ModelMessage[]) {
 				continue;
 			const packet = z
 				.object({
-					referencedDocuments: z.array(z.unknown()),
+					instructions: z.array(z.unknown()).optional(),
+					referencedDocuments: z.array(z.unknown()).optional(),
 					configuration: z.array(z.unknown()).optional(),
 				})
 				.safeParse(part.output.value);
 			if (!packet.success) continue;
 			for (const entry of [
-				...packet.data.referencedDocuments,
+				...(packet.data.instructions ?? []),
+				...(packet.data.referencedDocuments ?? []),
 				...(packet.data.configuration ?? []),
 			]) {
 				const document = completeGuidanceDocument.safeParse(entry);

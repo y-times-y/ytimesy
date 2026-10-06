@@ -19,6 +19,7 @@ import type {
 	ProofWorkspace,
 	WorkspaceMachines,
 } from "#/server/services/workspace-machines";
+import { abortableFreestyleFetch } from "./abortable-fetch";
 import {
 	deleteFreestyleCodexSession,
 	resolveFreestyleCodexRuntime,
@@ -54,8 +55,14 @@ function providerMessage(cause: unknown): string {
 
 export function createFreestyleWorkspaceMachines(
 	apiKey: string,
+	options: { signal?: AbortSignal } = {},
 ): WorkspaceMachines {
-	const freestyle = new Freestyle({ apiKey });
+	const freestyle = new Freestyle({
+		apiKey,
+		...(options.signal
+			? { fetch: abortableFreestyleFetch(options.signal) }
+			: {}),
+	});
 
 	const machines: WorkspaceMachines = {
 		restoreRetainedSession: (userId, sessionId, oldVmId) =>

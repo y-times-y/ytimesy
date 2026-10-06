@@ -12,6 +12,7 @@ import {
 import type { ApiAgentEvent } from "#/domain/api-agent-event";
 import { type ApiTokenUsage, addApiTokenUsage } from "#/domain/api-token-usage";
 import {
+	apiModelFailureClassification,
 	IncompleteAgentTurn,
 	SafeApiModelFailure,
 } from "#/domain/api-turn-failure";
@@ -91,7 +92,7 @@ export type ModelAgentRuntime = {
 	workingContextTokens?: number;
 	/** Coordination may need enough room to dispatch before compacting large guidance. */
 	coordinationWorkingContextTokens?: number;
-	/** Recoverable eviction of complete guidance bodies only after a later assistant observation. */
+	/** Recoverable retirement after a completed implementation/delegation decision; independent of hard-window pressure. */
 	archiveConsumedGuidance?: boolean;
 	prefetchInitialReads?: boolean;
 	fallbackContextPolicy?: FallbackContextPolicy;
@@ -122,9 +123,13 @@ async function executeModelSteps(
 	runtime: ModelAgentRuntime,
 	singleStep: boolean,
 ): Promise<ModelAgentStepResult> {
+	const modelFamily = harnessModelFamily(
+		typeof runtime.model === "string" ? "registry" : runtime.model.provider,
+		input.modelId,
+	);
 	input = {
 		...input,
-		instructions: `${input.instructions}\n${harnessModelToolInstructions(harnessModelFamily(typeof runtime.model === "string" ? "registry" : runtime.model.provider, input.modelId), input.tools.apply_patch?.type === "provider")}`,
+		instructions: `${input.instructions}\n${harnessModelToolInstructions(modelFamily, input.tools.apply_patch?.type === "provider")}`,
 	};
 	input.signal.throwIfAborted();
 	const cancelled = new AbortController();
@@ -139,9 +144,12 @@ async function executeModelSteps(
 		input.messages,
 		input.knownTools,
 		input.toolSurface,
+		modelFamily,
 	);
 	const reads = new Set<string>();
 	let activeToolCount = 0;
+	let preparedPromptCharacters = 0;
+	let preparedToolCharacters = 0;
 	for (const message of input.messages) {
 		if (typeof message.content === "string") continue;
 		for (const part of message.content) {
@@ -171,28 +179,39 @@ async function executeModelSteps(
 				}
 			: undefined;
 	const toolSchemas = await Promise.all(
-		Object.entries(input.tools).map(async ([name, definition]) => ({
+		Object.entries(tools).map(async ([name, definition]) => ({
 			name,
 			description: definition.description,
 			schema: await asSchema(definition.inputSchema).jsonSchema,
 		})),
 	);
-	const budget = modelContextBudget({
-		contextWindow: runtime.contextWindow,
-		maxOutputTokens: runtime.maxOutputTokens,
-		autoCompactTokenLimit: runtime.autoCompactTokenLimit,
-		workingContextTokens: workingContextTarget({
-			history,
-			implementation: input.toolSurface === "implementation",
-			workingContextTokens: runtime.workingContextTokens,
-			coordinationWorkingContextTokens:
-				runtime.coordinationWorkingContextTokens,
-		}),
-		fixedTokens: estimateContextTokens({
-			instructions: input.instructions,
-			tools: toolSchemas,
-		}),
-	});
+	const contextBudget = (messages: ModelMessage[]) => {
+		const visibleTools = discoverableAgentTools(
+			input.tools,
+			messages,
+			input.knownTools,
+			input.toolSurface,
+			modelFamily,
+		);
+		return modelContextBudget({
+			contextWindow: runtime.contextWindow,
+			maxOutputTokens: runtime.maxOutputTokens,
+			autoCompactTokenLimit: runtime.autoCompactTokenLimit,
+			workingContextTokens: workingContextTarget({
+				history: messages,
+				implementation: input.toolSurface === "implementation",
+				workingContextTokens: runtime.workingContextTokens,
+				coordinationWorkingContextTokens:
+					runtime.coordinationWorkingContextTokens,
+			}),
+			fixedTokens: estimateContextTokens({
+				instructions: input.instructions,
+				tools: toolSchemas.filter(
+					({ name }) => visibleTools[name]?.deferLoading !== true,
+				),
+			}),
+		});
+	};
 	const accumulated = { usage: null as ApiTokenUsage | null };
 	const recordUsage = async (usage: Parameters<typeof apiTokenUsage>[0]) => {
 		accumulated.usage = addApiTokenUsage(
@@ -220,6 +239,9 @@ async function executeModelSteps(
 						messages: history,
 						tools: input.tools,
 						coordination: input.toolSurface === "coordination",
+						cacheStablePrefix:
+							modelFamily === "openai" &&
+							runtime.fallbackContextPolicy !== "bound-prefix",
 						signal: runSignal,
 						onEvent: input.onEvent,
 					});
@@ -229,7 +251,10 @@ async function executeModelSteps(
 					}
 				}
 				history = (await input.prepareMessages?.(history)) ?? history;
-				if (runtime.archiveConsumedGuidance) {
+				if (
+					runtime.archiveConsumedGuidance &&
+					runtime.fallbackContextPolicy !== "bound-prefix"
+				) {
 					const projected = await archiveConsumedGuidance(
 						history,
 						input.archiveHistory,
@@ -241,6 +266,7 @@ async function executeModelSteps(
 					}
 				}
 				const estimatedHistory = estimateContextTokens(history);
+				const budget = contextBudget(history);
 				const contextTokens = contextTokenPressure(history, measured);
 				const compact = async (older: ModelMessage[]) => {
 					await input.onEvent({ type: "context", compacting: true });
@@ -343,10 +369,24 @@ async function executeModelSteps(
 			maxOutputTokens: runtime.maxOutputTokens,
 			stopWhen: isStepCount(input.maxSteps ?? 30),
 			// Provider errors can echo request credentials; publish only the sanitized error below.
-			onError: () => {},
+			onError: ({ error }) => {
+				console.warn(
+					"Model provider failed",
+					apiModelFailureClassification(error),
+				);
+			},
 			abortSignal: runSignal,
-			onLanguageModelCallStart: ({ tools: preparedTools }) => {
+			onLanguageModelCallStart: ({
+				tools: preparedTools,
+				instructions,
+				messages,
+			}) => {
 				activeToolCount = preparedTools?.length ?? 0;
+				preparedPromptCharacters = JSON.stringify({
+					instructions,
+					messages,
+				}).length;
+				preparedToolCharacters = JSON.stringify(preparedTools ?? []).length;
 			},
 			onLanguageModelCallEnd: ({ usage, performance, finishReason }) => {
 				const counts = apiTokenUsage(usage);
@@ -358,6 +398,8 @@ async function executeModelSteps(
 						input_tokens: counts.inputTokens,
 						output_tokens: counts.outputTokens,
 						cache_read_tokens: counts.cacheReadTokens,
+						prepared_prompt_characters: preparedPromptCharacters,
+						prepared_tool_characters: preparedToolCharacters,
 						outcome:
 							finishReason === "tool-calls"
 								? "tool_calls"

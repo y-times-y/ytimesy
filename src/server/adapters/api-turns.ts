@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ModelMessage } from "ai";
+import { Effect, Schedule } from "effect";
 import type { SessionItem } from "#/domain/session-item";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
 import { modelConcurrencyLimits } from "./agent-capacity";
@@ -203,12 +204,34 @@ export async function claimApiTurn(
 }
 
 export async function renewApiTurn(turn: ApiTurn): Promise<boolean> {
-	const result = await database().query(
-		`update api_turn set heartbeat_at=now() where id=$1 and lease_id=$2 and state='running' and not cancel_requested
+	// Only the idempotent, identity-fenced heartbeat may retry a disconnected socket.
+	// Cancellation, stale leases, pool saturation and SQL errors remain terminal.
+	const result = await Effect.runPromise(
+		Effect.tryPromise({
+			try: () =>
+				database().query(
+					`update api_turn set heartbeat_at=now() where id=$1 and lease_id=$2 and state='running' and not cancel_requested
 		 and heartbeat_at>=now()-interval '45 seconds' returning id`,
-		[turn.id, turn.lease_id],
+					[turn.id, turn.lease_id],
+				),
+			catch: (error) => error,
+		}).pipe(
+			Effect.retry({
+				schedule: Schedule.intersect(
+					Schedule.recurs(1),
+					Schedule.spaced("250 millis"),
+				),
+				while: (error) =>
+					typeof error === "object" &&
+					error !== null &&
+					"code" in error &&
+					["ECONNRESET", "EPIPE", "08006"].includes(String(error.code)),
+			}),
+			Effect.either,
+		),
 	);
-	return Boolean(result.rowCount);
+	if (result._tag === "Left") throw result.left;
+	return Boolean(result.right.rowCount);
 }
 
 export async function checkpointApiTurn(

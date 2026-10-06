@@ -1,8 +1,10 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import type { ModelMessage } from "ai";
 import { afterEach, expect, it, vi } from "vitest";
 import { WorkspaceId } from "#/domain/ids";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
@@ -80,11 +82,108 @@ async function fixture(
 	return { root, tools, commands, machines };
 }
 
-async function call(tool: unknown, input: object) {
+async function call(
+	tool: unknown,
+	input: object,
+	messages: ModelMessage[] = [],
+) {
 	return (
 		tool as { execute: (args: object, options: object) => Promise<unknown> }
-	).execute(input, { toolCallId: "edit" });
+	).execute(input, { toolCallId: "edit", messages });
 }
+
+it("reuses only freshly verified complete guidance reads and preserves explicit replay, changes and continuations", async () => {
+	const { root, tools } = await fixture();
+	const body = "Guidance 你\r\n".repeat(1800);
+	await writeFile(join(root, "PLAN.md"), body);
+	await writeFile(join(root, "source.ts"), body);
+	const sha256 = createHash("sha256").update(body).digest("hex");
+	const packet = (entry: object): ModelMessage[] => [
+		{
+			role: "tool",
+			content: [
+				{
+					type: "tool-result",
+					toolName: "read_repository_guidance",
+					toolCallId: "guide",
+					output: {
+						type: "json",
+						value: { referencedDocuments: JSON.parse(JSON.stringify([entry])) },
+					},
+				},
+			],
+		},
+	];
+	const complete = { path: "PLAN.md", sha256, content: body, nextStart: null };
+	const active = packet(complete);
+	expect(await call(tools.read_file, { path: "PLAN.md" }, active)).toEqual({
+		path: "PLAN.md",
+		sha256,
+		alreadyInContext: true,
+		nextStart: null,
+	});
+	expect(
+		await call(
+			tools.read_file,
+			{ path: "PLAN.md", repeatCompleteBody: true },
+			active,
+		),
+	).toMatchObject({ content: body, start: 0, nextStart: null });
+	expect(
+		await call(tools.read_file, { path: "PLAN.md", start: 100 }, active),
+	).toMatchObject({
+		content: Array.from(body).slice(100).join(""),
+		start: 100,
+	});
+	expect(
+		await call(tools.read_file, { path: "source.ts" }, active),
+	).toMatchObject({ content: body });
+	expect(
+		await call(
+			tools.read_file,
+			{ path: "PLAN.md" },
+			packet({ ...complete, nextStart: 100 }),
+		),
+	).toMatchObject({ content: body });
+	const archivedBody = {
+		reference: "context-00000000-0000-4000-8000-000000000000",
+		messageIndex: 1,
+		toolCallId: "guide",
+		characters: Array.from(body).length,
+		instruction: "Recover exact archived text when needed.",
+	};
+	const archived = packet({
+		path: "PLAN.md",
+		sha256,
+		nextStart: null,
+		archivedBody,
+	});
+	expect(
+		await call(tools.read_files, { paths: ["PLAN.md", "source.ts"] }, archived),
+	).toEqual([
+		{
+			path: "PLAN.md",
+			sha256,
+			previouslyRead: true,
+			archivedBody,
+			nextStart: null,
+		},
+		{ path: "source.ts", content: body, truncated: false },
+	]);
+	expect(
+		await call(
+			tools.read_file,
+			{ path: "PLAN.md", repeatCompleteBody: true },
+			archived,
+		),
+	).toMatchObject({ content: body });
+	await writeFile(join(root, "PLAN.md"), "Changed instructions");
+	for (const history of [active, archived])
+		expect(
+			await call(tools.read_file, { path: "PLAN.md" }, history),
+		).toMatchObject({ content: "Changed instructions" });
+	expect(active).toEqual(packet(complete));
+});
 
 it("inspects staged, unstaged and untracked content without changing the index or reading ignored/symlink targets", async () => {
 	const { root, tools } = await fixture();
@@ -150,7 +249,10 @@ it("verifies only successfully completed batches and does not repeat writes or v
 	};
 	const result = await call(tools.apply_patches, args);
 	expect(await readFile(join(root, "new.txt"), "utf8")).toBe("ready");
-	expect(verify).toHaveBeenCalledExactlyOnceWith(args.verification, "edit");
+	expect(verify).toHaveBeenCalledExactlyOnceWith(
+		{ ...args.verification, parallelChecks: false, outputView: "full" },
+		"edit",
+	);
 	expect(await call(tools.apply_patches, args)).toEqual(result);
 	expect(verify).toHaveBeenCalledTimes(1);
 });

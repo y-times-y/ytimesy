@@ -22,6 +22,8 @@ const mocks = vi.hoisted(() => ({
 	import: vi.fn(),
 	commit: vi.fn(),
 	exec: vi.fn(),
+	verify: vi.fn(),
+	sourceEvidence: vi.fn(),
 }));
 vi.mock("../adapters/agent-sessions", () => ({
 	agentSessionForOwner: mocks.session,
@@ -45,7 +47,8 @@ vi.mock("./api-command-scope", () => ({
 	scopedShellCommand: (input: { command: string }) => input.command,
 	stopApiTurnCommands: mocks.stop,
 }));
-vi.mock("./reviewed-task-import", () => ({
+vi.mock("./reviewed-task-import", async (importOriginal) => ({
+	...(await importOriginal<typeof import("./reviewed-task-import")>()),
 	captureTaskPatch: mocks.capture,
 	importReviewedTaskChanges: mocks.import,
 }));
@@ -53,8 +56,12 @@ vi.mock("./session-workspace-machines", () => ({
 	machinesForAgentSession: (machines: unknown) => machines,
 }));
 vi.mock("./turn-commit", () => ({ commitCompletedSessionTurn: mocks.commit }));
+vi.mock("./project-source-evidence", () => ({
+	inspectProjectSourceEvidence: mocks.sourceEvidence,
+}));
 vi.mock("./agent-output-artifacts", () => ({
 	agentOutputArtifacts: (input: { vm: string }) => ({
+		recordVerification: mocks.verify,
 		capture: async (command: string, seconds: number) => ({
 			reference: "00000000-0000-4000-8000-000000000001",
 			stopped: null,
@@ -146,6 +153,66 @@ const control = () => ({
 	signal: new AbortController().signal,
 	turnId: "turn",
 });
+
+it("binds additional contract checks and every baseline check to the same stable sources", async () => {
+	const proof = {
+		revision: "b".repeat(40),
+		dirty: true,
+		sources: [{ path: "changed.ts", sha256: "a".repeat(64) }],
+	};
+	mocks.sourceEvidence.mockResolvedValue(proof);
+	const result = await integrateTaskDraft(
+		machines,
+		parent,
+		draft.id,
+		sources,
+		control(),
+		{ sourcePaths: ["changed.ts"], additionalChecks: ["focused", "focused"] },
+	);
+	expect(result).toMatchObject({
+		status: "done",
+		checks: [
+			"focused",
+			"corepack pnpm run lint",
+			"corepack pnpm run typecheck",
+			"corepack pnpm run test",
+			"corepack pnpm run build",
+		],
+	});
+	expect(mocks.sourceEvidence).toHaveBeenCalledTimes(2);
+	expect(mocks.verify).toHaveBeenCalledTimes(6);
+	for (const [, binding] of mocks.verify.mock.calls)
+		expect(binding).toMatchObject({
+			before: proof,
+			after: proof,
+			sourcesStable: true,
+			cwd: "/repo",
+		});
+});
+
+it("retains stale integration evidence without committing or declaring success", async () => {
+	const before = {
+		revision: "b".repeat(40),
+		dirty: true,
+		sources: [{ path: "changed.ts", sha256: "a".repeat(64) }],
+	};
+	mocks.sourceEvidence.mockResolvedValueOnce(before).mockResolvedValueOnce({
+		...before,
+		sources: [{ path: "changed.ts", sha256: "c".repeat(64) }],
+	});
+	await expect(
+		integrateTaskDraft(machines, parent, draft.id, sources, control(), {
+			sourcePaths: ["changed.ts"],
+		}),
+	).resolves.toMatchObject({
+		status: "failed",
+		stage: "checking",
+		repairRequired: true,
+	});
+	expect(mocks.verify).toHaveBeenCalledTimes(5);
+	expect(mocks.commit).not.toHaveBeenCalled();
+	expect(mocks.state).not.toHaveBeenCalledWith(draft.id, "done");
+});
 beforeEach(() => {
 	vi.resetAllMocks();
 	mocks.session.mockImplementation(async (_owner: string, id: string) =>
@@ -180,6 +247,7 @@ beforeEach(() => {
 	mocks.capture.mockResolvedValue({
 		sha256: "c".repeat(64),
 		base: sources[0].base,
+		bytes: Buffer.from("complete combined diff"),
 	});
 	mocks.stop.mockResolvedValue(undefined);
 });
@@ -232,6 +300,28 @@ it("overlaps declared independent checks and records each result at its own stab
 		);
 });
 
+it("flags changes made during verification instead of presenting them as unchanged reviewed imports", async () => {
+	mocks.capture.mockResolvedValueOnce({
+		bytes: Buffer.from("imported"),
+		sha256: "a".repeat(64),
+		base: sources[0].base,
+	});
+	const result = await integrateTaskDraft(
+		machines,
+		parent,
+		draft.id,
+		sources,
+		control(),
+	);
+	expect(result).toMatchObject({
+		status: "done",
+		reviewRequired: true,
+		verificationChangedPatch: true,
+		diff: "complete combined diff",
+		sha256: "c".repeat(64),
+	});
+});
+
 it("imports reviewed siblings without a model turn and runs all baseline checks before requesting review", async () => {
 	const result = await integrateTaskDraft(
 		machines,
@@ -255,6 +345,11 @@ it("imports reviewed siblings without a model turn and runs all baseline checks 
 		status: "done",
 		reviewRequired: true,
 		sha256: "c".repeat(64),
+		diff: "complete combined diff",
+		truncated: false,
+		nextStart: null,
+		verificationChangedPatch: false,
+		sources,
 	});
 	expect(mocks.state).toHaveBeenCalledWith(draft.id, "done");
 	expect(result).toMatchObject({
