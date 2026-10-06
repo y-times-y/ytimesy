@@ -3,6 +3,7 @@ import {
 	assertApiContextFits,
 } from "#/domain/api-conversation";
 import { childTaskPublicItems } from "#/domain/child-task-activity";
+import { reconstructedContextTransition } from "#/domain/harness-model-profile";
 import { parseModelRouteId } from "#/domain/model-connection";
 import {
 	sessionItemsFromUnknown,
@@ -62,7 +63,12 @@ export async function readApiWorkspaceSession(
 
 export async function sendApiWorkspaceTask(
 	scope: CodexSessionScope,
-	input: { text: string; modelId: string; runtimeText?: string },
+	input: {
+		text: string;
+		modelId: string;
+		runtimeText?: string;
+		idempotencyKey?: string;
+	},
 	preparedTask = false,
 ) {
 	if (!scope.projectId)
@@ -106,7 +112,7 @@ export async function sendApiWorkspaceTask(
 		selected.modelId,
 		connection.revision,
 	);
-	const messages = previous
+	let messages = previous
 		? [
 				...previous,
 				{ role: "user" as const, content: input.runtimeText ?? input.text },
@@ -117,6 +123,8 @@ export async function sendApiWorkspaceTask(
 			role: "user",
 			content: input.runtimeText,
 		};
+	if (!previous)
+		messages = reconstructedContextTransition(messages, selected.modelId);
 	assertApiContextFits(messages);
 	await enqueueApiTurn({
 		userId: scope.userId,
@@ -128,6 +136,7 @@ export async function sendApiWorkspaceTask(
 		messages,
 		items,
 		preparedTask,
+		idempotencyKey: input.idempotencyKey,
 	});
 	return readApiWorkspaceSession(scope);
 }

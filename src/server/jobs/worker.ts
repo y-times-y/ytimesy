@@ -8,6 +8,7 @@ import {
 	markCompetitionStatus,
 	reconcileFinishedCompetitionJudges,
 } from "../adapters/agent-competitions";
+import { recoverInterruptedTaskIntegrations } from "../adapters/agent-task-events";
 import { claimApiTurn, expireApiTurnLeases } from "../adapters/api-turns";
 import { sessionsAwaitingCheckpoint } from "../adapters/checkpoints/records";
 import { closeDatabase } from "../adapters/database";
@@ -34,6 +35,7 @@ import {
 } from "../services/agent-peer-messaging";
 import { deliverAgentTaskEvents } from "../services/agent-task-event-delivery";
 import { reconcileRunningAgentTurns } from "../services/agent-turn-reconciliation";
+import { deliverPrRepairEvents } from "../services/pr-repair";
 import { captureSessionCheckpoint } from "../services/session-checkpoint";
 import { runApiTurn } from "./api-turn";
 import {
@@ -45,6 +47,7 @@ import {
 	AGENT_PEER_MESSAGE_QUEUE,
 	AGENT_TASK_EVENT_QUEUE,
 	jobQueue,
+	PR_REPAIR_QUEUE,
 	PREPARE_WORKSPACE_QUEUE,
 	REFRESH_WORKSPACE_QUEUE,
 	SESSION_CHECKPOINT_QUEUE,
@@ -72,6 +75,13 @@ export async function startWorkspaceWorker() {
 		{ localConcurrency: 1 },
 		async ([job]) => {
 			await deliverAgentPeerMessage(taskMachines, job.data, job.id);
+		},
+	);
+	await queue.work(
+		PR_REPAIR_QUEUE,
+		{ localConcurrency: 1, pollingIntervalSeconds: 1 },
+		async () => {
+			await deliverPrRepairEvents(taskMachines);
 		},
 	);
 	await queue.work<{ userId?: string; sessionId?: string }>(
@@ -176,7 +186,9 @@ export async function startWorkspaceWorker() {
 			if (Date.now() - supervisingAt >= 30_000) {
 				supervisingAt = Date.now();
 				await recoverChildTurnEvents();
+				await recoverInterruptedTaskIntegrations();
 				await superviseAgentChildren(taskMachines);
+				await deliverPrRepairEvents(taskMachines);
 			}
 		} catch {
 			// The next sweep retries after a database or provider outage.

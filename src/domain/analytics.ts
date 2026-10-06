@@ -1,9 +1,20 @@
 import { z } from "zod";
+import { harnessModelMetric, harnessToolMetric } from "./harness-performance";
 
 const surface = z.enum(["workspace", "onboarding", "auth", "other"]);
 const runtime = z.enum(["codex", "claude", "api", "opencode"]);
 const role = z.enum(["lead", "builder", "reader"]);
 export const serverAnalyticsEvents = {
+	harness_model_completed: harnessModelMetric.extend({
+		runtime,
+		role,
+		model_key: z.string().regex(/^[a-f0-9]{64}$/),
+	}),
+	harness_tool_completed: harnessToolMetric.extend({
+		runtime,
+		role,
+		model_key: z.string().regex(/^[a-f0-9]{64}$/),
+	}),
 	account_created: z.object({}),
 	agent_created: z.object({ runtime, role }),
 	turn_started: z.object({ runtime, role }),

@@ -1,6 +1,30 @@
 import { APICallError } from "ai";
 import { expect, it } from "vitest";
-import { apiTurnFailureMessage, SafeApiModelFailure } from "./api-turn-failure";
+import {
+	apiTurnFailureClassification,
+	apiTurnFailureMessage,
+	SafeApiModelFailure,
+} from "./api-turn-failure";
+
+it("logs only recognized failure classifications, never arbitrary error properties", () => {
+	expect(
+		apiTurnFailureClassification(
+			Object.assign(new Error("private query"), { code: "ECONNRESET" }),
+		),
+	).toEqual({ name: "Error", code: "ECONNRESET" });
+	expect(
+		apiTurnFailureClassification(
+			new DOMException("private host", "TimeoutError"),
+		),
+	).toEqual({ name: "TimeoutError", code: "unknown" });
+	expect(
+		apiTurnFailureClassification({
+			name: "PRIVATE",
+			code: "PRIVATE",
+			message: "secret",
+		}),
+	).toEqual({ name: "unknown", code: "unknown" });
+});
 
 it("distinguishes safe failure stages without exposing provider details", () => {
 	expect(apiTurnFailureMessage("workspace")).toContain("workspace");

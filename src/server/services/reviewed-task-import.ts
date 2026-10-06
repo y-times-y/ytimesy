@@ -5,6 +5,11 @@ import {
 	type AgentSessionRecord,
 	agentSessionForOwner,
 } from "../adapters/agent-sessions";
+import {
+	recordTaskImport,
+	taskPatchEvidence,
+} from "../adapters/task-patch-evidence";
+import type { AgentToolWorkspace } from "./agent-tool-workspace";
 import { deferredApiTurnWorkspace } from "./api-turn-workspace";
 import { machinesForAgentSession } from "./session-workspace-machines";
 import type { WorkspaceMachines } from "./workspace-machines";
@@ -31,15 +36,26 @@ export function applyTaskPatchCommand(input: {
 	directory: string;
 	base: string;
 	patchPath: string;
+	sha256: string;
 }) {
 	if (!/^[a-f0-9]{40,64}$/.test(input.base))
 		throw new Error("Invalid patch base.");
+	if (!/^[a-f0-9]{64}$/.test(input.sha256))
+		throw new Error("Invalid patch hash.");
 	return `set -eu
 cd ${quote(input.directory)}
 python3 -c ${quote("import fcntl, os, subprocess, sys\nwith os.fdopen(os.open('.git/ytimesy-import.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600), 'w') as lock:\n    fcntl.flock(lock.fileno(), fcntl.LOCK_EX)\n    subprocess.run(['sh', '-c', sys.argv[1]], check=True)")} ${quote(`set -eu
+if git show-ref --verify --quiet refs/ytimesy/imports/${input.sha256}; then
+ test "$(git rev-parse refs/ytimesy/imports/${input.sha256})" = ${quote(input.base)} || { echo 'Recorded import has a different base revision.' >&2; exit 1; }
+ exit 0
+fi
 test "$(git rev-parse HEAD)" = ${quote(input.base)} || { echo 'Integration checkout has a different base revision.' >&2; exit 1; }
-git -c core.hooksPath=/dev/null apply --check --binary -- ${quote(input.patchPath)}
-git -c core.hooksPath=/dev/null apply --binary -- ${quote(input.patchPath)}
+if git -c core.hooksPath=/dev/null apply --check --binary -- ${quote(input.patchPath)}; then
+ git -c core.hooksPath=/dev/null apply --binary -- ${quote(input.patchPath)}
+else
+ git -c core.hooksPath=/dev/null apply --reverse --check --binary -- ${quote(input.patchPath)}
+fi
+git update-ref refs/ytimesy/imports/${input.sha256} ${quote(input.base)}
 git status --short`)}
 `;
 }
@@ -114,7 +130,12 @@ export async function importReviewedTaskChanges(
 	destination: AgentSessionRecord,
 	sourceId: string,
 	expectedSha256: string,
+	preparedWorkspace?: AgentToolWorkspace,
 ) {
+	if (preparedWorkspace && preparedWorkspace.vm !== destination.providerRef)
+		throw new Error(
+			"Prepared import workspace does not match the destination.",
+		);
 	const source = await agentSessionForOwner(destination.userId, sourceId);
 	assertReviewedSibling(destination, source);
 	if (!/^[a-f0-9]{64}$/.test(expectedSha256))
@@ -123,13 +144,21 @@ export async function importReviewedTaskChanges(
 		);
 	if (!source?.providerRef)
 		throw new Error("Reviewed source workspace is unavailable.");
+	const evidence = await taskPatchEvidence(destination.userId, [
+		source.parentSessionId as string,
+	]);
+	const accepted = evidence.reviews.get(sourceId);
+	if (!accepted || accepted.sha256 !== expectedSha256)
+		throw new Error(
+			"Import must match the exact patch accepted by the parent review.",
+		);
 	const sourceMachines = machinesForAgentSession(machines, source);
 	const transfer = await captureTaskPatch(
 		sourceMachines,
 		WorkspaceId(source.providerRef),
 	);
 	const { bytes: patch, sha256 } = transfer;
-	if (sha256 !== expectedSha256)
+	if (sha256 !== expectedSha256 || transfer.base !== accepted.base)
 		throw new Error(
 			"Source changes differ from the inspected patch; request a new parent review.",
 		);
@@ -141,15 +170,27 @@ export async function importReviewedTaskChanges(
 	assertReviewedSibling(destination, current);
 	if (current?.providerRef !== source.providerRef)
 		throw new Error("Reviewed source workspace changed; inspect it again.");
+	const currentEvidence = await taskPatchEvidence(destination.userId, [
+		source.parentSessionId as string,
+	]);
+	const currentAcceptance = currentEvidence.reviews.get(sourceId);
+	if (
+		currentAcceptance?.sha256 !== sha256 ||
+		currentAcceptance.base !== transfer.base
+	)
+		throw new Error(
+			"Parent acceptance changed; request its current reviewed patch.",
+		);
 	const {
 		machines: targetMachines,
 		vm,
 		cwd,
-	} = await deferredApiTurnWorkspace(
+	} = preparedWorkspace ??
+	(await deferredApiTurnWorkspace(
 		machines,
 		destination,
 		new AbortController().signal,
-	)();
+	)());
 	if (vm === source.providerRef)
 		throw new Error("Integration requires an isolated writable workspace.");
 	const patchPath = `/tmp/ytimesy-import-${randomUUID()}.patch`;
@@ -157,21 +198,26 @@ export async function importReviewedTaskChanges(
 		directory: cwd,
 		base: transfer.base,
 		patchPath,
+		sha256,
 	});
+	const decodeCommand = `python3 -c ${quote("import base64, hashlib, pathlib, sys\npatch = base64.b64decode(pathlib.Path(sys.argv[2]).read_text(), validate=True)\nif hashlib.sha256(patch).hexdigest() != sys.argv[3]: raise ValueError('Transferred patch hash differs from reviewed patch')\nwith open(sys.argv[1], 'xb') as f: f.write(patch)")} ${quote(patchPath)} ${quote(`${patchPath}.b64`)} ${quote(sha256)}`;
 	try {
 		await targetMachines.writeTextFile(vm, `${patchPath}.b64`, transfer.patch);
-		const decoded = await targetMachines.exec(
+		// Decode and apply in one guest call; failed decoding cannot reach Git.
+		const applied = await targetMachines.exec(
 			vm,
-			`python3 -c ${quote("import base64, pathlib, sys\nwith open(sys.argv[1], 'xb') as f: f.write(base64.b64decode(pathlib.Path(sys.argv[2]).read_text(), validate=True))")} ${quote(patchPath)} ${quote(`${patchPath}.b64`)}`,
-			15_000,
+			`set -eu\n${decodeCommand}\n${command}`,
+			45_000,
 		);
-		if (decoded.exitCode)
-			throw new Error("Reviewed patch transfer could not be decoded safely.");
-		const applied = await targetMachines.exec(vm, command, 30_000);
 		if (applied.exitCode)
 			throw new Error(
-				"Reviewed patch conflicts or its base differs; inspect the destination. No forced merge was used.",
+				"Reviewed patch transfer failed, conflicts or its base differs; inspect the destination. No forced merge was used.",
 			);
+		await recordTaskImport(destination.userId, destination.id, {
+			taskId: sourceId,
+			sha256,
+			base: transfer.base,
+		});
 		return {
 			taskId: sourceId,
 			sha256,

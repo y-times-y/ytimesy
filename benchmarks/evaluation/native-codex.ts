@@ -131,9 +131,9 @@ git status --porcelain`,
 		const launch = await machines.exec(
 			vm.workspaceId,
 			`set -eu
+export HOME=/home/ubuntu
 export PATH="$HOME/.local/bin:$PATH"
 export CODEX_HOME=${quote(root)}
-export HOME=${quote(root)}
 unset OPENAI_API_KEY ANTHROPIC_API_KEY
 export YTIMESY_SUBSCRIPTION_ACCESS_TOKEN="$(python3 -c 'import json,os; print(json.load(open(os.environ["CODEX_HOME"]+"/auth.json"))["tokens"]["access_token"])')"
 chmod 600 "$CODEX_HOME/auth.json"

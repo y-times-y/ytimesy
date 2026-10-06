@@ -47,6 +47,25 @@ export async function agentCapacity(userId: string) {
 	return { ...limits, available: result.rows[0]?.available ?? 0 };
 }
 
+/** Planning sees the parent's occupied slots too; dispatch still owns atomic admission. */
+export async function availableChildSlots(
+	userId: string,
+	parentSessionId: string,
+) {
+	const capacity = await agentCapacity(userId);
+	const occupied = await database().query<{ active: number }>(
+		`${OCCUPIED} select count(*)::int as active from occupied where user_id=$1 and parent_session_id=$2`,
+		[userId, parentSessionId],
+	);
+	return Math.max(
+		0,
+		Math.min(
+			capacity.available,
+			capacity.maxChildren - (occupied.rows[0]?.active ?? capacity.maxChildren),
+		),
+	);
+}
+
 /** Reserve before provisioning. Concurrent starts share the dispatcher's short admission lock. */
 export async function reserveAgentTaskStart(
 	userId: string,

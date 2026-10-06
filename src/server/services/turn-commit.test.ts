@@ -6,6 +6,10 @@ import { MemoryWorkspaceRuntime } from "../adapters/workspace-runtime";
 import { commitCompletedSessionTurn } from "./turn-commit";
 
 const lookup = vi.hoisted(() => vi.fn());
+const evaluation = vi.hoisted(() => vi.fn());
+vi.mock("../adapters/harness-evaluation", () => ({
+	evaluationRunForTask: evaluation,
+}));
 vi.mock("../adapters/projects", () => ({ projectForOwner: lookup }));
 vi.mock("./turn-publication", () => ({ publishCompletedSessionTurn: vi.fn() }));
 
@@ -78,4 +82,21 @@ it("commits every owned repository on the executor and keeps identity stable acr
 		runtime,
 	);
 	expect(runtime.commands[4].argv[4]).not.toBe(runtime.commands[0].argv[4]);
+});
+
+it("never commits or publishes registered evaluation tasks", async () => {
+	vi.stubEnv("YTIMESY_HARNESS_EVALUATION_ENABLED", "1");
+	try {
+		evaluation.mockResolvedValue({ id: "evaluation" });
+		lookup.mockClear();
+		const runtime = new MemoryWorkspaceRuntime();
+		const { publishCompletedSessionTurn } = await import("./turn-publication");
+		vi.mocked(publishCompletedSessionTurn).mockClear();
+		await commitCompletedSessionTurn(session, items, runtime);
+		expect(lookup).not.toHaveBeenCalled();
+		expect(runtime.commands).toHaveLength(0);
+		expect(publishCompletedSessionTurn).not.toHaveBeenCalled();
+	} finally {
+		vi.unstubAllEnvs();
+	}
 });

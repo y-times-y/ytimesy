@@ -2,9 +2,106 @@ import type { ModelMessage } from "ai";
 import { expect, it, vi } from "vitest";
 import {
 	compactApiHistory,
+	contextMeasurement,
+	contextTokenPressure,
 	estimateContextTokens,
 	modelContextBudget,
+	workingContextTarget,
 } from "./api-agent-context";
+
+it("allows initial coordination headroom but bounds subsequent delegated reviews", () => {
+	const settings = {
+		workingContextTokens: 32_000,
+		coordinationWorkingContextTokens: 48_000,
+	};
+	const history: ModelMessage[] = [{ role: "user", content: "Implement" }];
+	expect(
+		workingContextTarget({ ...settings, history, implementation: false }),
+	).toBe(48_000);
+	expect(
+		workingContextTarget({ ...settings, history, implementation: true }),
+	).toBe(32_000);
+	history.push({
+		role: "assistant",
+		content: [
+			{
+				type: "tool-call",
+				toolName: "create_task",
+				toolCallId: "child",
+				input: {},
+			},
+		],
+	});
+	expect(
+		workingContextTarget({ ...settings, history, implementation: false }),
+	).toBe(32_000);
+	expect(
+		workingContextTarget({ history, implementation: false }),
+	).toBeUndefined();
+});
+
+it("uses measured reasoning usage without tokenizing its opaque encoding again", () => {
+	const history: ModelMessage[] = [
+		{ role: "user", content: "Implement" },
+		{
+			role: "assistant",
+			content: [
+				{
+					type: "reasoning",
+					text: "",
+					providerOptions: { openai: { encryptedContent: "x".repeat(180000) } },
+				},
+			],
+		},
+	];
+	const measurement = contextMeasurement([], history, 1000, 2000);
+	expect(contextTokenPressure(history, measurement)).toBe(3000);
+	expect(contextTokenPressure(history)).toBeGreaterThan(60000);
+	expect(
+		contextTokenPressure(
+			[...history, { role: "user", content: "New requirement" }],
+			measurement,
+		),
+	).toBeGreaterThan(3000);
+});
+
+it("counts unsent function results and subsequent injections on top of provider usage", () => {
+	const before: ModelMessage[] = [{ role: "user", content: "Read source" }];
+	const response: ModelMessage[] = [
+		{
+			role: "assistant",
+			content: [
+				{
+					type: "tool-call",
+					toolCallId: "call",
+					toolName: "read_file",
+					input: { path: "source.ts" },
+				},
+			],
+		},
+		{
+			role: "tool",
+			content: [
+				{
+					type: "tool-result",
+					toolCallId: "call",
+					toolName: "read_file",
+					output: { type: "text", value: "x".repeat(30000) },
+				},
+			],
+		},
+	];
+	const measurement = contextMeasurement(before, response, 500, 100);
+	expect(
+		contextTokenPressure([...before, ...response], measurement),
+	).toBeGreaterThan(10600);
+	expect(
+		contextTokenPressure(
+			[...before, ...response, { role: "user", content: "y".repeat(3000) }],
+			measurement,
+		),
+	).toBeGreaterThan(11600);
+});
 
 it("reserves output, instructions and tools within the selected model's token window", () => {
 	const small = modelContextBudget({
@@ -53,6 +150,26 @@ it("compacts the first long-running turn while retaining its request", async () 
 	expect(result.compacted).toBe(true);
 	expect(result.messages.slice(1)).toEqual([messages[0], messages[2]]);
 	expect(summarize).toHaveBeenCalled();
+});
+
+it("bounds the working checkpoint without expanding the provider's safety limit", () => {
+	const large = modelContextBudget({
+		contextWindow: 272000,
+		workingContextTokens: 32000,
+	});
+	expect(large.compactAtTokens).toBe(32000);
+	expect(large.inputLimitTokens).toBeGreaterThan(32000);
+	expect(
+		modelContextBudget({
+			contextWindow: 272000,
+			autoCompactTokenLimit: 24000,
+			workingContextTokens: 32000,
+		}).compactAtTokens,
+	).toBe(24000);
+	expect(
+		modelContextBudget({ contextWindow: 16000, workingContextTokens: 32000 })
+			.compactAtTokens,
+	).toBeLessThan(16000);
 });
 
 it("retains delegation identities when bounding earlier repository outputs", async () => {

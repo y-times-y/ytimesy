@@ -3,6 +3,17 @@ import { Effect } from "effect";
 import { z } from "zod";
 import { agentTaskToolDefinitions } from "#/domain/agent-task-definitions";
 import { WorkspaceId } from "#/domain/ids";
+import {
+	parallelWorkPlan,
+	scheduleParallelWork,
+} from "#/domain/parallel-work-plan";
+import { knowledgeForTask } from "#/domain/project-knowledge";
+import {
+	cachedSourceEvidence,
+	sourceEvidenceMatches,
+} from "#/domain/project-source-evidence";
+import { publicToolDetail } from "#/domain/tool-detail";
+import { availableChildSlots } from "../adapters/agent-capacity";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import {
 	claimAgentTaskCommand,
@@ -14,17 +25,37 @@ import {
 	readModelContextArchive,
 	searchModelContextArchives,
 } from "../adapters/context-archives";
+import { agentOutputArtifacts } from "./agent-output-artifacts";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 import { apiAgentBrowserTools } from "./api-agent-browser-tools";
-import { apiAgentCommandTools } from "./api-agent-command-tools";
+import {
+	apiAgentCommandTools,
+	verifyPatchedCheckout,
+} from "./api-agent-command-tools";
 import { readableHistory } from "./api-agent-context";
 import { apiAgentFileTools } from "./api-agent-file-tools";
+import { apiAgentLanguageTools } from "./api-agent-language-tools";
 import { scopedShellCommand } from "./api-command-scope";
 import { runAgentTaskTool } from "./harness-workspace-session";
-import { rememberCloudProjectKnowledge } from "./project-knowledge";
+import { loadCloudProjectMemoryDocument } from "./project-knowledge";
+import { projectMemoryTools } from "./project-memory-tools";
+import { inspectProjectSourceEvidence } from "./project-source-evidence";
+import { repositoryGuidanceTool } from "./repository-guidance";
+import { scopedToolExecution } from "./tool-execution-identity";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+const repositorySearchPath = z
+	.string()
+	.min(1)
+	.max(2048)
+	.refine(
+		(path) =>
+			!path.startsWith("/") &&
+			!/[\\\0]/.test(path) &&
+			!path.split("/").some((part) => part === ".." || part === ".git"),
+		"Use a repository-relative path outside .git without traversal.",
+	);
 
 export function apiAgentTools(
 	input: {
@@ -32,23 +63,39 @@ export function apiAgentTools(
 		session: AgentSessionRecord;
 		turnId: string;
 		toolCallPrefix?: string;
+		nativePatch?: boolean;
 		signal: AbortSignal;
 	} & ({ cwd: string } | { workspace: () => Promise<AgentToolWorkspace> }),
 ): ToolSet {
 	const { machines, session, signal } = input;
+	const executionIdentity = scopedToolExecution();
+	const readOnly =
+		!session.parentSessionId || session.taskAccess !== "read_write";
 	const workspace = async (): Promise<AgentToolWorkspace> => {
 		signal.throwIfAborted();
 		if ("workspace" in input) return input.workspace();
 		if (!session.providerRef) throw new Error("Task workspace is unavailable.");
 		return { machines, vm: WorkspaceId(session.providerRef), cwd: input.cwd };
 	};
+	const output = agentOutputArtifacts({
+		workspace,
+		sessionId: session.id,
+		signal,
+	});
 	async function once(id: string, run: () => Promise<unknown>) {
 		signal.throwIfAborted();
 		const requestId = `${input.turnId}:${input.toolCallPrefix ?? ""}${id}`;
+		const requestFingerprint = executionIdentity.fingerprint();
 		const receipt = await claimAgentTaskCommand(session.id, requestId);
 		if (receipt.kind === "done") {
+			if (receipt.response.requestFingerprint !== requestFingerprint)
+				throw new Error(
+					"Recorded tool inputs differ or predate input validation; inspect the existing outcome before making a new request. No operation was replayed.",
+				);
 			if (!receipt.response.ok)
-				throw new Error("The recorded tool call failed.");
+				throw new Error(
+					receipt.response.error || "The recorded tool call failed.",
+				);
 			return receipt.response.result;
 		}
 		if (receipt.kind === "processing")
@@ -60,69 +107,127 @@ export function apiAgentTools(
 				void renewAgentTaskCommandClaim(session.id, requestId).catch(() => {}),
 			10_000,
 		);
+		let executed = false;
 		try {
 			const result = await run();
+			executed = true;
 			signal.throwIfAborted();
 			await completeAgentTaskCommand(session.id, {
 				id: requestId,
+				requestFingerprint,
 				ok: true,
 				result,
 			});
 			return result;
+		} catch (error) {
+			if (!executed && !signal.aborted) {
+				const message = publicToolDetail(
+					error instanceof Error ? error.message : "Tool execution failed.",
+				);
+				const recorded = `Tool call failed: ${message} If this was a write, inspect its state before retrying; partial effects may exist.`;
+				await completeAgentTaskCommand(session.id, {
+					id: requestId,
+					requestFingerprint,
+					ok: false,
+					error: recorded,
+				}).catch(() => {});
+				throw new Error(recorded);
+			}
+			throw error;
 		} finally {
 			clearInterval(heartbeat);
 		}
 	}
 	const tools: ToolSet = {
+		...projectMemoryTools({ session, workspace, once }),
+		plan_parallel_work: tool({
+			description:
+				"Check a proposed bounded dependency graph and file ownership before launching children. Returns an advisory critical-path-first schedule using your explicit duration estimates and current capacity. Does not draft/start tasks or reserve slots. Unordered overlapping writers and cycles are rejected. Multiple prerequisites require reviewed integration before starting their dependent child, not a single stacked predecessor.",
+			inputSchema: parallelWorkPlan,
+			execute: async (plan) => {
+				const available = Math.min(
+					await availableChildSlots(session.userId, session.id),
+					5,
+				);
+				if (available < 1)
+					return {
+						status: "no-capacity",
+						instruction:
+							"Steer or wait for existing children; do not start duplicate tasks.",
+					};
+				return {
+					...scheduleParallelWork(plan, available),
+					capacity: available,
+					reservation: false,
+				};
+			},
+		}),
+		inspect_project_evidence: tool({
+			description:
+				"Validate cached project discovery packets against this checkout's revision, cleanliness and exact tracked-file hashes. sources_current means only source freshness, not semantic correctness or verified tests. Stale or missing evidence requires investigation; never infer current implementation from old Markdown alone.",
+			inputSchema: z.object({ task: z.string().min(1).max(2000) }),
+			execute: async ({ task }) => {
+				const document = await loadCloudProjectMemoryDocument(session);
+				const packets = cachedSourceEvidence(
+					knowledgeForTask(document, task, true),
+				);
+				if (!packets.length) return { available: false, entries: [] };
+				const checkout = await workspace();
+				return {
+					available: true,
+					entries: await Promise.all(
+						packets.map(async (packet) => {
+							const current = await inspectProjectSourceEvidence(
+								checkout,
+								packet.evidence.sources.map((source) => source.path),
+							);
+							return {
+								key: packet.key,
+								status: sourceEvidenceMatches(packet.evidence, current)
+									? "sources_current"
+									: "stale_or_unverifiable",
+								current,
+							};
+						}),
+					),
+				};
+			},
+		}),
+		read_repository_guidance: repositoryGuidanceTool({ workspace, signal }),
 		list_files: tool({
 			description:
-				"List tracked and untracked repository files before choosing what to inspect.",
-			inputSchema: z.object({}),
-			execute: async () => {
+				"List tracked and non-ignored untracked repository files. Scope path to the task's known directory; omit it only for an unknown repository layout. Paths are literal, not Git pathspec patterns.",
+			inputSchema: z.object({ path: repositorySearchPath.optional() }),
+			execute: async ({ path }) => {
+				const scope =
+					path === undefined
+						? ""
+						: ` -- ${quote(repositorySearchPath.parse(path))}`;
 				signal.throwIfAborted();
-				const { machines, vm, cwd } = await workspace();
-				const result = await machines.exec(
-					vm,
-					`git -C ${quote(cwd)} ls-files --cached --others --exclude-standard`,
-					15_000,
+				const { cwd } = await workspace();
+				const result = await output.capture(
+					`git --literal-pathspecs -C ${quote(cwd)} ls-files --cached --others --exclude-standard${scope}`,
 				);
-				if (result.exitCode)
-					throw new Error("Could not list repository files.");
-				return result.stdout.slice(0, 32_000);
+				return result;
 			},
 		}),
 		search_files: tool({
 			description:
-				"Search tracked repository text without changing the workspace.",
-			inputSchema: z.object({ query: z.string().min(1).max(200) }),
-			execute: async ({ query }) => {
+				"Search tracked and non-ignored untracked repository text. Scope path to known task code; the path is literal, not a Git pattern. Default query is a Git regular expression; literal:true searches exact text. Exit 1 means no matches, not an execution error. No per-file match cutoff. Follow stdoutNextStart using read_tool_output and the returned reference for complete results; output_limit explicitly marks incomplete evidence.",
+			inputSchema: z.object({
+				query: z.string().min(1).max(200),
+				literal: z.boolean().default(false),
+				path: repositorySearchPath.optional(),
+			}),
+			execute: async ({ query, literal = false, path }) => {
+				const scope =
+					path === undefined ? "." : repositorySearchPath.parse(path);
 				signal.throwIfAborted();
-				const { machines, vm, cwd } = await workspace();
-				const result = await machines.exec(
-					vm,
-					`git -C ${quote(cwd)} grep -n -I -m 5 -e ${quote(query)} -- .`,
-					15_000,
+				const { cwd } = await workspace();
+				const result = await output.capture(
+					`git --literal-pathspecs -C ${quote(cwd)} grep --untracked --exclude-standard -n -I ${literal ? "-F " : ""}-e ${quote(query)} -- ${quote(scope)}`,
 				);
-				if (result.exitCode > 1)
-					throw new Error("Could not search repository files.");
-				return result.stdout.slice(0, 32_000);
-			},
-		}),
-		read_file: tool({
-			description:
-				"Read a UTF-8 file inside the repository. Output is bounded.",
-			inputSchema: z.object({ path: z.string().max(2048) }),
-			execute: async ({ path }) => {
-				signal.throwIfAborted();
-				const { machines, vm, cwd } = await workspace();
-				const script = `import pathlib\nr=pathlib.Path(${JSON.stringify(cwd)}).resolve()\np=(r/${JSON.stringify(path)}).resolve()\nif not p.is_relative_to(r): raise ValueError('Path outside repository')\nwith p.open('r') as f: print(f.read(32000))`;
-				const result = await machines.exec(
-					vm,
-					`python3 -c ${quote(script)}`,
-					15_000,
-				);
-				if (result.exitCode) throw new Error("Could not read repository file.");
-				return result.stdout;
+				return result;
 			},
 		}),
 		read_context_archive: tool({
@@ -179,52 +284,23 @@ export function apiAgentTools(
 				),
 		}),
 	};
-	if (!session.parentSessionId && session.candidateIndex == null) {
-		tools.remember_project = tool({
-			description:
-				"Maintain one named entry in shared project Markdown. Save reusable discoveries with repository/source pointers and honest verification status, not raw transcripts or secrets. Reuse its key to correct stale facts. This does not commit a repository file or publish code.",
-			inputSchema: z.object({
-				key: z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/),
-				title: z.string().min(1).max(80),
-				content: z.string().min(1).max(2000),
-				sources: z.array(z.string().min(1).max(256)).min(1).max(8),
-				status: z.enum([
-					"observed",
-					"implemented",
-					"tested",
-					"live_verified",
-					"proposed",
-				]),
-			}),
-			execute: (entry, options) =>
-				once(options.toolCallId, () =>
-					rememberCloudProjectKnowledge(session, entry),
-				),
-		});
-	}
-	if (session.taskAccess !== "read_only") {
+	if (!readOnly) {
 		tools.bash = tool({
 			description:
 				"Run a shell command in this task's isolated repository. Do not publish changes unless authorized. Commands are bounded to 30 seconds; do not launch detached work.",
 			inputSchema: z.object({ command: z.string().min(1).max(16000) }),
 			execute: ({ command }, options) =>
 				once(options.toolCallId, async () => {
-					const { machines, vm, cwd } = await workspace();
-					const result = await machines.exec(
-						vm,
+					const { cwd } = await workspace();
+					return output.capture(
 						scopedShellCommand({
 							turnId: input.turnId,
 							cwd,
 							command,
 							seconds: 30,
 						}),
-						35_000,
+						30,
 					);
-					return {
-						...result,
-						stdout: result.stdout.slice(0, 32000),
-						stderr: result.stderr.slice(0, 8000),
-					};
 				}),
 		});
 	}
@@ -253,6 +329,7 @@ export function apiAgentTools(
 								tool: definition.name,
 								arguments: args,
 							},
+							{ signal: options.abortSignal ?? signal, turnId: input.turnId },
 						),
 					),
 				),
@@ -262,18 +339,59 @@ export function apiAgentTools(
 		tools,
 		apiAgentFileTools({
 			workspace,
-			readOnly: session.taskAccess === "read_only",
+			readOnly,
+			nativePatch: input.nativePatch,
+			output,
 			signal,
 			once,
+			verifyBatch: readOnly
+				? undefined
+				: async ({ formatCommand, commands, maxSeconds }, id) => {
+						return verifyPatchedCheckout({
+							signal,
+							format: formatCommand
+								? async () => {
+										const { cwd } = await workspace();
+										return output.capture(
+											scopedShellCommand({
+												turnId: input.turnId,
+												cwd,
+												command: formatCommand,
+												seconds: 30,
+											}),
+											35,
+										);
+									}
+								: undefined,
+							check: async () => {
+								if (!tools.run_checks.execute)
+									throw new Error(
+										"Verification executor is unavailable; inspect the edited checkout.",
+									);
+								return tools.run_checks.execute(
+									{ commands, maxSeconds },
+									{
+										toolCallId: `${id}:verification`,
+										messages: [],
+										abortSignal: signal,
+										context: {},
+									},
+								);
+							},
+						});
+					},
 		}),
 	);
+	tools.read_tool_output = output.readTool;
+	Object.assign(tools, apiAgentLanguageTools({ workspace, signal }));
 	Object.assign(
 		tools,
 		apiAgentCommandTools({
 			workspace,
+			output,
 			turnId: input.turnId,
 			sessionId: session.id,
-			readOnly: session.taskAccess === "read_only",
+			readOnly,
 			signal,
 			once,
 		}),
@@ -282,10 +400,10 @@ export function apiAgentTools(
 		tools,
 		apiAgentBrowserTools({
 			workspace,
-			readOnly: session.taskAccess === "read_only",
+			readOnly,
 			signal,
 			once,
 		}),
 	);
-	return tools;
+	return executionIdentity.wrap(tools);
 }

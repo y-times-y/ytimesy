@@ -2,6 +2,16 @@ import { createHash } from "node:crypto";
 import type { generateText } from "ai";
 import type { ModelProvider } from "#/domain/model-connection";
 
+export function promptCacheScopeKey(input: {
+	userId: string;
+	connectionId: string;
+	scopeId: string;
+}) {
+	return createHash("sha256")
+		.update(JSON.stringify([input.userId, input.connectionId, input.scopeId]))
+		.digest("hex");
+}
+
 export function apiPromptCacheSettings(input: {
 	provider: ModelProvider;
 	baseUrl: string;
@@ -9,9 +19,7 @@ export function apiPromptCacheSettings(input: {
 	connectionId: string;
 	scopeId: string;
 }): Pick<Parameters<typeof generateText>[0], "providerOptions" | "headers"> {
-	const key = createHash("sha256")
-		.update(JSON.stringify([input.userId, input.connectionId, input.scopeId]))
-		.digest("hex");
+	const key = promptCacheScopeKey(input);
 	const host = new URL(input.baseUrl).hostname;
 	if (input.provider === "anthropic" && host === "api.anthropic.com")
 		return {

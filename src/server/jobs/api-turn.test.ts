@@ -2,6 +2,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { SessionItemId } from "#/domain/ids";
 import { subscriptionTurnRevision } from "#/domain/subscription-turn";
 import type { ApiTurn } from "../adapters/api-turns";
+import { coordinateConversationTurn } from "../adapters/conversation-turn-control";
 import type { WorkspaceMachines } from "../services/workspace-machines";
 import { runApiTurn } from "./api-turn";
 
@@ -19,6 +20,12 @@ const mocks = vi.hoisted(() => ({
 	subscriptionRuntime: vi.fn(),
 	auth: vi.fn(),
 	commit: vi.fn(),
+	commandCompletions: vi.fn(),
+	progress: vi.fn(),
+	checkpoint: vi.fn(),
+}));
+vi.mock("../services/api-agent-command-tools", () => ({
+	completedAgentCommands: mocks.commandCompletions,
 }));
 vi.mock("../services/turn-commit", () => ({
 	commitCompletedSessionTurn: mocks.commit,
@@ -30,8 +37,8 @@ vi.mock("../services/project-knowledge", () => ({
 vi.mock("../adapters/api-turns", () => ({
 	renewApiTurn: mocks.renew,
 	finalizeApiTurn: mocks.finalize,
-	checkpointApiTurn: vi.fn(),
-	publishApiTurnProgress: vi.fn(),
+	checkpointApiTurn: mocks.checkpoint,
+	publishApiTurnProgress: mocks.progress,
 }));
 vi.mock("../adapters/conversation-turn-control", () => ({
 	coordinateConversationTurn: vi.fn(async () => true),
@@ -41,12 +48,17 @@ vi.mock("../adapters/agent-sessions", () => ({
 }));
 beforeEach(() => {
 	vi.clearAllMocks();
+	mocks.progress.mockReset().mockResolvedValue(undefined);
+	mocks.checkpoint.mockReset().mockResolvedValue(undefined);
+	vi.mocked(coordinateConversationTurn).mockReset().mockResolvedValue(true);
 	mocks.knowledge.mockResolvedValue(
 		"## Existing capabilities\nBranch selection is implemented in branch.ts.",
 	);
 	mocks.report.mockResolvedValue(undefined);
 	mocks.auth.mockResolvedValue(true);
 	mocks.commit.mockReset().mockResolvedValue(undefined);
+	mocks.stop.mockReset().mockResolvedValue(undefined);
+	mocks.commandCompletions.mockReset().mockResolvedValue([]);
 	mocks.owner.mockResolvedValue({
 		id: "session",
 		userId: "owner",
@@ -59,6 +71,91 @@ beforeEach(() => {
 	mocks.result.mockResolvedValue("event");
 	mocks.enqueue.mockResolvedValue("job");
 });
+
+it("refuses publication when leftover command fencing cannot be confirmed", async () => {
+	mocks.stepRuntime.mockImplementation(async (input) => {
+		await input.tools.workspace();
+		await input.onEvent({ type: "text-delta", id: "reply", text: "Finished." });
+		return { messages: input.messages, outcome: "completed" };
+	});
+	mocks.stop.mockRejectedValueOnce(new Error("Cancellation uncertain"));
+	const turn = {
+		id: "turn",
+		session_id: "session",
+		user_id: "owner",
+		connection_id: "connection",
+		connection_revision: "revision",
+		model_id: "model",
+		state: "running",
+		messages: [],
+		items: [],
+		lease_id: "lease",
+	} as ApiTurn;
+	expect(
+		await runApiTurn({} as WorkspaceMachines, turn, {
+			index: 1,
+			signal: new AbortController().signal,
+		}),
+	).toBe("failed");
+	expect(mocks.commit).not.toHaveBeenCalled();
+	expect(mocks.finalize).toHaveBeenCalledWith(
+		expect.anything(),
+		"failed",
+		expect.anything(),
+	);
+});
+
+it.each(["running", "completed"])(
+	"does not publish a final answer before %s background work has been reviewed",
+	async (state) => {
+		const id = "b6794616-ec28-4390-831f-7d3ddf9f8621";
+		if (state === "completed")
+			mocks.commandCompletions.mockResolvedValue([
+				{ id, status: 0, stopped: null },
+			]);
+		mocks.stepRuntime.mockImplementation(async (input) => {
+			await input.onEvent({
+				type: "text-delta",
+				id: "reply",
+				text: "Finished.",
+			});
+			return { messages: input.messages, outcome: "completed" };
+		});
+		const turn = {
+			id: "turn",
+			session_id: "session",
+			user_id: "owner",
+			connection_id: "connection",
+			connection_revision: "revision",
+			model_id: "model",
+			state: "running",
+			messages: [],
+			items: [
+				{
+					kind: "dynamicToolCall",
+					id: SessionItemId("background"),
+					tool: "start_command",
+					status: "completed",
+					output: JSON.stringify({ id, status: "running" }),
+				},
+			],
+			lease_id: "lease",
+		} as ApiTurn;
+		expect(
+			await runApiTurn({} as WorkspaceMachines, turn, {
+				index: 1,
+				signal: new AbortController().signal,
+			}),
+		).toBe("continue");
+		expect(mocks.commit).not.toHaveBeenCalled();
+		expect(mocks.finalize).not.toHaveBeenCalled();
+		expect(mocks.stop).not.toHaveBeenCalled();
+		expect(coordinateConversationTurn).not.toHaveBeenCalledWith(
+			"release",
+			expect.anything(),
+		);
+	},
+);
 vi.mock("../adapters/model-connections", () => ({
 	loadModelConnection: vi.fn(async () => ({ revision: "revision" })),
 }));
@@ -161,6 +258,9 @@ it("uses the same project knowledge and completion capture for Codex subscriptio
 	} as ApiTurn;
 	expect(await runApiTurn({} as WorkspaceMachines, turn)).toBe("completed");
 	expect(mocks.subscriptionRuntime).toHaveBeenCalledOnce();
+	expect(mocks.subscriptionRuntime.mock.calls[0][0].tools.nativePatch).toBe(
+		false,
+	);
 	expect(mocks.runtime).not.toHaveBeenCalled();
 	expect(mocks.report).toHaveBeenCalledOnce();
 });
@@ -221,6 +321,20 @@ it("classifies heartbeat failures without logging database error details", async
 		const run = runApiTurn({} as WorkspaceMachines, childTurn);
 		await vi.advanceTimersByTimeAsync(1001);
 		await run;
+		expect(mocks.finalize).toHaveBeenCalledWith(
+			expect.anything(),
+			"failed",
+			expect.anything(),
+		);
+		expect(mocks.result).toHaveBeenCalledWith(
+			expect.objectContaining({
+				eventType: "failed",
+				summary: expect.stringContaining(
+					"heartbeat or coordination service became unavailable",
+				),
+			}),
+		);
+		expect(mocks.enqueue).toHaveBeenCalledWith("event");
 		expect(warn).toHaveBeenCalledWith("Turn heartbeat failed", {
 			stage: "database-renewal",
 			code: "ECONNRESET",
@@ -297,6 +411,65 @@ it("immediately queues a completed child's parent event", async () => {
 	expect(mocks.enqueue).toHaveBeenCalledWith("event");
 });
 
+it("consumes streaming deltas without waiting for storage but drains before checkpoint and completion", async () => {
+	let release: () => void = () => {};
+	const pending = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	mocks.progress
+		.mockResolvedValueOnce(undefined)
+		.mockImplementationOnce(() => pending);
+	mocks.runtime.mockImplementation(async (input) => {
+		await input.onEvent({ type: "text-delta", id: "reply", text: "First" });
+		await input.onEvent({ type: "text-delta", id: "reply", text: " second" });
+		expect(mocks.progress).toHaveBeenCalledTimes(2);
+		const checkpoint = input.onStep(input.messages);
+		await Promise.resolve();
+		expect(mocks.checkpoint).not.toHaveBeenCalled();
+		expect(mocks.finalize).not.toHaveBeenCalled();
+		release();
+		await checkpoint;
+		return input.messages;
+	});
+	await runApiTurn({} as WorkspaceMachines, childTurn);
+	expect(mocks.checkpoint).toHaveBeenCalled();
+	expect(mocks.finalize).toHaveBeenCalledWith(
+		expect.anything(),
+		"completed",
+		expect.anything(),
+	);
+});
+
+it("classifies asynchronous progress-storage errors as failures rather than user cancellations", async () => {
+	const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+	try {
+		mocks.progress
+			.mockResolvedValueOnce(undefined)
+			.mockRejectedValueOnce(new Error("private database detail"));
+		mocks.runtime.mockImplementation(async (input) => {
+			await input.onEvent({ type: "text-delta", id: "reply", text: "First" });
+			await input.onStep(input.messages);
+			return input.messages;
+		});
+		expect(await runApiTurn({} as WorkspaceMachines, childTurn)).toBe("failed");
+		expect(mocks.finalize).toHaveBeenCalledWith(
+			expect.anything(),
+			"failed",
+			expect.arrayContaining([
+				expect.objectContaining({
+					kind: "error",
+					message: expect.stringContaining("progress could not be saved"),
+				}),
+			]),
+		);
+		expect(JSON.stringify(mocks.finalize.mock.calls)).not.toContain(
+			"private database detail",
+		);
+	} finally {
+		warn.mockRestore();
+	}
+});
+
 it("saves and queues child failures, including failures before runtime startup", async () => {
 	mocks.owner.mockResolvedValue({
 		id: "session",
@@ -311,6 +484,39 @@ it("saves and queues child failures, including failures before runtime startup",
 		expect.objectContaining({ sessionId: "session", eventType: "failed" }),
 	);
 	expect(mocks.enqueue).toHaveBeenCalledWith("event");
+});
+
+it("distinguishes completion coordination failures from progress-save failures without logging details", async () => {
+	const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+	try {
+		vi.mocked(coordinateConversationTurn).mockImplementation(async (action) => {
+			if (action === "release")
+				throw new DOMException("private host and token", "TimeoutError");
+			return true;
+		});
+		mocks.runtime.mockImplementation(async (input) =>
+			input.onEvent({ type: "text-delta", id: "answer", text: "Done" }),
+		);
+		await runApiTurn({} as WorkspaceMachines, childTurn);
+		expect(warn).toHaveBeenCalledWith("API turn failed", {
+			stage: "coordination",
+			name: "TimeoutError",
+			code: "unknown",
+		});
+		expect(JSON.stringify(warn.mock.calls)).not.toContain("private host");
+		expect(mocks.finalize).toHaveBeenCalledWith(
+			expect.anything(),
+			"failed",
+			expect.arrayContaining([
+				expect.objectContaining({
+					kind: "error",
+					message: expect.stringContaining("coordinator"),
+				}),
+			]),
+		);
+	} finally {
+		warn.mockRestore();
+	}
 });
 
 it("keeps a durable tool boundary running, preserving cumulative usage and distinct stream IDs", async () => {

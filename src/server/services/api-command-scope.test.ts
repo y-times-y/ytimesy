@@ -9,6 +9,34 @@ import { scopedShellCommand, stopApiTurnCommands } from "./api-command-scope";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 const run = promisify(execFile);
+it.runIf(process.platform === "linux")(
+	"captures noninteractive output without inherited forced color",
+	async () => {
+		const turnId = crypto.randomUUID();
+		try {
+			const result = await run(
+				"bash",
+				[
+					"-lc",
+					scopedShellCommand({
+						turnId,
+						cwd: "/tmp",
+						command:
+							'python3 -c \'import os; print(os.environ.get("NO_COLOR"), os.environ.get("FORCE_COLOR"), os.environ.get("TERM"))\'',
+						seconds: 5,
+					}),
+				],
+				{ env: { ...process.env, FORCE_COLOR: "1" } },
+			);
+			expect(result.stdout.trim()).toBe("1 None dumb");
+		} finally {
+			await rm(`/tmp/ytimesy-api-command-scopes/${turnId}`, {
+				recursive: true,
+				force: true,
+			});
+		}
+	},
+);
 it("rejects a command scope that could escape its own directory", () => {
 	expect(() =>
 		scopedShellCommand({

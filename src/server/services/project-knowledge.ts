@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from "node:crypto";
 import {
 	completedTurnUpdatesProjectContext,
 	relatedTracesForTask,
@@ -7,6 +8,9 @@ import {
 import {
 	knowledgeForTask,
 	type ProjectKnowledgeEntry,
+	projectKnowledgeSections,
+	projectMemoryMaintenance,
+	searchProjectKnowledge,
 	updateProjectKnowledge,
 } from "#/domain/project-knowledge";
 import {
@@ -18,17 +22,106 @@ import { publicToolDetail } from "#/domain/tool-detail";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import { database } from "../adapters/database";
 
-export async function loadCloudProjectKnowledge(
+const memoryRevision = (text: string) =>
+	createHash("sha256").update(text).digest("hex");
+
+export async function loadCloudProjectMemoryDocument(
 	session: AgentSessionRecord,
-	task: string,
-): Promise<string> {
+) {
 	const result = await database().query<{ text: string }>(
 		`select b.text from project_briefing b join project p on p.id=b.project_id
 		 where p.id=$1 and p.user_id=$2`,
 		[session.projectId, session.userId],
 	);
+	return result.rows[0]?.text ?? "";
+}
+
+export async function searchCloudProjectMemory(
+	session: AgentSessionRecord,
+	query: string,
+	offset = 0,
+) {
+	const document = await loadCloudProjectMemoryDocument(session);
+	const entries = query.trim()
+		? searchProjectKnowledge(document, query)
+		: projectKnowledgeSections(document);
+	return {
+		revision: memoryRevision(document),
+		maintenance: projectMemoryMaintenance(document),
+		total: entries.length,
+		nextOffset: offset + 12 < entries.length ? offset + 12 : null,
+		entries: entries.slice(offset, offset + 12).map((entry) => ({
+			key: entry.key,
+			title: entry.title,
+			reference: `memory/${entry.key}`,
+			excerpt: publicToolDetail(entry.text).slice(0, 500),
+		})),
+	};
+}
+
+export async function readCloudProjectMemory(
+	session: AgentSessionRecord,
+	key: string,
+) {
+	const document = await loadCloudProjectMemoryDocument(session);
+	const entry = projectKnowledgeSections(document).find(
+		(entry) => entry.key === key,
+	);
+	return {
+		revision: memoryRevision(document),
+		key,
+		found: Boolean(entry),
+		text: entry ? publicToolDetail(entry.text) : null,
+	};
+}
+
+export async function readCloudProjectMemoryHistory(
+	session: AgentSessionRecord,
+	key: string,
+	offset = 0,
+	revisionId?: string,
+) {
+	const result = await database().query<{
+		id: string;
+		previous_text: string;
+		next_text: string;
+		operation: string;
+		created_at: Date;
+		session_id: string | null;
+		document_revision: string;
+	}>(
+		`select r.id,r.previous_text,r.next_text,r.operation,r.created_at,r.session_id,r.document_revision from project_memory_revision r
+		 join project p on p.id=r.project_id where p.id=$1 and p.user_id=$2 and r.memory_key=$3 and ($5::uuid is null or r.id=$5)
+		 order by r.created_at desc,r.id desc limit 6 offset $4`,
+		[session.projectId, session.userId, key, offset, revisionId ?? null],
+	);
+	return {
+		nextOffset: result.rows.length > 5 ? offset + 5 : null,
+		entries: result.rows.slice(0, 5).map((row) => ({
+			id: row.id,
+			operation: row.operation,
+			createdAt: row.created_at,
+			sessionId: row.session_id,
+			documentRevision: row.document_revision,
+			previous: publicToolDetail(row.previous_text).slice(
+				0,
+				revisionId ? 16000 : 600,
+			),
+			next: publicToolDetail(row.next_text).slice(0, revisionId ? 16000 : 600),
+			abbreviated:
+				!revisionId &&
+				(row.previous_text.length > 600 || row.next_text.length > 600),
+		})),
+	};
+}
+
+export async function loadCloudProjectKnowledge(
+	session: AgentSessionRecord,
+	task: string,
+): Promise<string> {
+	const document = await loadCloudProjectMemoryDocument(session);
 	const knowledge = knowledgeForTask(
-		result.rows[0]?.text ?? "",
+		document,
 		task,
 		Boolean(session.parentSessionId),
 	);
@@ -94,7 +187,47 @@ export async function recordCloudProjectReport(
 export async function rememberCloudProjectKnowledge(
 	session: AgentSessionRecord,
 	entry: ProjectKnowledgeEntry,
-): Promise<{ saved: true; key: string }> {
+	expectedRevision?: string,
+): Promise<{ saved: true; key: string; revision: string }> {
+	const revision = await changeCloudProjectMemory(session, {
+		entries: [entry],
+		removeKeys: [],
+		expectedRevision,
+		operation: "remember",
+	});
+	return { saved: true, key: entry.key, revision };
+}
+
+/** Atomic replacement/removal with a document fence; an agent cannot consolidate a stale read. */
+export async function consolidateCloudProjectMemory(
+	session: AgentSessionRecord,
+	input: {
+		entries: ProjectKnowledgeEntry[];
+		removeKeys: string[];
+		expectedRevision: string;
+	},
+) {
+	const revision = await changeCloudProjectMemory(session, {
+		...input,
+		operation: "consolidate",
+	});
+	return {
+		saved: true,
+		updatedKeys: input.entries.map((entry) => entry.key),
+		removedKeys: input.removeKeys,
+		revision,
+	};
+}
+
+async function changeCloudProjectMemory(
+	session: AgentSessionRecord,
+	input: {
+		entries: ProjectKnowledgeEntry[];
+		removeKeys: string[];
+		expectedRevision?: string;
+		operation: "remember" | "consolidate";
+	},
+) {
 	if (
 		session.parentSessionId ||
 		(session.candidateIndex !== null && session.candidateIndex !== undefined)
@@ -114,19 +247,78 @@ export async function rememberCloudProjectKnowledge(
 			"select text from project_briefing where project_id=$1",
 			[session.projectId],
 		);
-		const text = updateProjectKnowledge(existing.rows[0]?.text ?? "", {
-			...entry,
-			title: publicToolDetail(entry.title),
-			content: publicToolDetail(entry.content),
-			sources: entry.sources.map((source) => publicToolDetail(source)),
-		});
+		const previous = existing.rows[0]?.text ?? "";
+		if (
+			input.expectedRevision !== undefined &&
+			memoryRevision(previous) !== input.expectedRevision
+		)
+			throw new Error(
+				"Project memory changed. Read it again before updating or consolidating.",
+			);
+		const keys = [
+			...input.entries.map((entry) => entry.key),
+			...input.removeKeys,
+		];
+		if (
+			!keys.length ||
+			keys.length > 16 ||
+			new Set(keys).size !== keys.length ||
+			keys.some((key) => !/^[a-z0-9][a-z0-9-]{0,63}$/.test(key))
+		)
+			throw new Error(
+				"Use distinct memory keys, at most sixteen changes per consolidation.",
+			);
+		let text = previous;
+		for (const key of input.removeKeys) {
+			const section = projectKnowledgeSections(text).find(
+				(entry) => entry.key === key,
+			);
+			if (!section) throw new Error("Memory to remove no longer exists.");
+			text = text.replace(section.text, "").trim();
+		}
+		for (const entry of input.entries)
+			text = updateProjectKnowledge(text, {
+				...entry,
+				title: publicToolDetail(entry.title),
+				content: publicToolDetail(entry.content),
+				sources: entry.sources.map((source) => publicToolDetail(source)),
+			});
+		for (const key of input.removeKeys) {
+			if (text.includes(`[[memory/${key}]]`))
+				throw new Error(
+					"Update linked notes before removing their target topic.",
+				);
+		}
+		for (const key of keys) {
+			const before =
+				projectKnowledgeSections(previous).find((entry) => entry.key === key)
+					?.text ?? "";
+			const after =
+				projectKnowledgeSections(text).find((entry) => entry.key === key)
+					?.text ?? "";
+			if (before === after) continue;
+			await client.query(
+				`insert into project_memory_revision(id,project_id,session_id,memory_key,document_revision,operation,previous_text,next_text)
+			 values($1,$2,$3,$4,$5,$6,$7,$8)`,
+				[
+					randomUUID(),
+					session.projectId,
+					session.id,
+					key,
+					memoryRevision(text),
+					input.operation,
+					publicToolDetail(before),
+					publicToolDetail(after),
+				],
+			);
+		}
 		await client.query(
 			`insert into project_briefing(project_id,text,updated_at) values($1,$2,now())
 		 on conflict(project_id) do update set text=excluded.text,updated_at=now()`,
 			[session.projectId, text],
 		);
 		await client.query("commit");
-		return { saved: true, key: entry.key };
+		return memoryRevision(text);
 	} catch (error) {
 		await client.query("rollback");
 		throw error;

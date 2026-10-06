@@ -1,5 +1,80 @@
 # ytimesy v0
 
+### Indexed project memory — 2026-10-05
+
+The existing owner-scoped Markdown store now holds up to 120,000 characters,
+while turn-start context uses a compact index and bounded task-relevant notes.
+Cloud agents can search all topics, follow linked notes, inspect revision history,
+and consolidate duplicates/stale facts within a normal lead turn. Updates are
+revision-fenced and serialized; old versions persist in a private additive table.
+The development migration and zero-inference database proof passed. No separate
+memory service, upstream package, paid maintenance agent or persistent VM was
+introduced. Live model compliance and competitive gains are not established.
+See [project memory](docs/project-knowledge.md).
+
+### Harness gap implementation — 2026-10-05
+
+The cloud harness now uses maintained V4A patch application, native public OpenAI
+API patch wire support, durable deferred tool discovery, role-scoped prompts, repository
+instruction/skill discovery, retrievable command/search output, revision-scoped
+project evidence, immediate syntax diagnostics, explicitly safe verification
+overlap, background completion publication gating, and privacy-filtered per-tool
+and per-model metrics. Read-only leadership and exact final acceptance remain.
+See the [implementation and proof boundaries](docs/research/harness-gap-implementation-2026-10-05.md).
+These are local implementation contracts, not proof of competitive speed or code
+quality. Live provider acceptance and a fresh paired comparison remain separate.
+
+The Codex subscription backend rejects the public API's built-in `apply_patch`
+tool. Subscription writers therefore use the existing function-based V4A patch
+tool; this is an explicit transport capability, not a change of model or billing.
+A live function-tool request executed the actual editor and passed an independent
+exact-file check. The failed paired run remains recorded separately; fixing tool
+compatibility alone does not establish a performance advantage.
+
+The function-tool rerun passed all 562 protected assertions with three concurrent
+isolated builders and reviewed deterministic integration. It took 401,025 ms
+against the recorded native control's 214,951 ms and used more tokens. Required
+environment/review/integration tools are now immediately discoverable, but this
+follow-up's performance benefit is unmeasured. Speed and token-efficiency
+superiority remain unmet; see the [rerun evidence](benchmarks/evaluation/VERIFICATION-2026-10-05-SUBSCRIPTION-RERUN.md).
+
+### Harness verification follow-up — 2026-10-05
+
+Writer acceptance records the exact inspected patch hash and base revision
+atomically in the existing command journal. Reviewed imports require matching
+acceptance and retain idempotency markers under Git checkpointed refs. Evaluation
+grades one real reviewed integration checkout; it never synthesizes a successful
+result by stitching independent child patches in the grader. Registered
+evaluations pin the snapshot's local branch and skip publication without changing
+ordinary writable-turn draft handoffs.
+
+Cloud file reads expose bounded continuation pages rather than silently
+truncating single-file reads. Codex subscription cache affinity is scoped to
+the owner, account and chat, and account changes fail safely. The coordination
+adapter allows one bounded retry of transient renewals only; exhausted heartbeat
+failures notify the parent instead of silently becoming cancelled children.
+Delegation snapshots append only when changed and never rewrite earlier messages
+or opaque reasoning, preserving the provider's reusable conversation prefix.
+These changes are locally verified and tested on disposable infrastructure,
+not deployed to production. Correctness passed the private development grader,
+but speed superiority and general coding-quality parity are **not established**.
+See [dated verification](benchmarks/evaluation/VERIFICATION-2026-10-05.md).
+
+Reviewed sibling integration now has a deterministic cloud-harness tool:
+`integrate_reviewed_tasks`. It executes a fresh writable child draft through
+existing machine admission, exact reviewed-patch imports and scoped commands,
+without starting an integration model turn. Checks come from the clean base's
+environment recipe or package scripts; changed verification/dependency policy,
+conflicts and failed checks fail visibly and preserve the checkout for agent
+repair. The lead must still inspect and accept the combined patch. A settled
+lead turn atomically fails interrupted integration children and emits a durable
+notification rather than replaying uncertain commands. Native runtime adapters
+without cancellable cloud tool context retain the integration-builder fallback.
+Guidance calls for reviewing children as they finish, focused builder checks,
+and one final combined required-check pass, without weakening repository policy.
+This path is locally verified; live speed and cost improvements require the
+frozen paired comparison, not an architectural assumption.
+
 ### Project machine sizes — 2026-10-04
 
 New chat execution copies default to Large (4 vCPU, 16 GiB RAM, 32 GiB disk).

@@ -24,6 +24,7 @@ import {
 	productionEvaluationSnapshot,
 	submitProductionEvaluation,
 } from "./production";
+import { readEvaluationSnapshot } from "./read-snapshot";
 
 /** No inference on import. Operator inputs stay outside the public application and coding workspaces. */
 export async function runPairedEvaluation(input: {
@@ -31,6 +32,8 @@ export async function runPairedEvaluation(input: {
 	repositoryPath: string;
 	outputPath: string;
 	userId: string;
+	/** Rerun only the selected implementation against an already-recorded control. */
+	arms?: readonly ("ytimesy" | "native-codex")[];
 	signal?: AbortSignal;
 }) {
 	input.signal?.throwIfAborted();
@@ -88,7 +91,9 @@ export async function runPairedEvaluation(input: {
 					`ytimesy-eval-${randomUUID().slice(0, 8)}`,
 				);
 				const sharedPreparationMs = Date.now() - preparationStarted;
-				for (const arm of pair.arms) {
+				for (const arm of pair.arms.filter(
+					(arm) => !input.arms || input.arms.includes(arm),
+				)) {
 					input.signal?.throwIfAborted();
 					const started = Date.now();
 					let patches: string[] = [];
@@ -123,16 +128,14 @@ export async function runPairedEvaluation(input: {
 							);
 							const deadline =
 								Date.now() + protocol.limits.durationSeconds * 1000;
-							let observed = await productionEvaluationSnapshot(
-								input.userId,
-								attempt.rootId,
+							let observed = await readEvaluationSnapshot(() =>
+								productionEvaluationSnapshot(input.userId, attempt.rootId),
 							);
 							while (!observed.settled && Date.now() < deadline) {
 								input.signal?.throwIfAborted();
 								await new Promise((done) => setTimeout(done, 1000));
-								observed = await productionEvaluationSnapshot(
-									input.userId,
-									attempt.rootId,
+								observed = await readEvaluationSnapshot(() =>
+									productionEvaluationSnapshot(input.userId, attempt.rootId),
 								);
 								await writeFile(
 									join(directory, "active-attempt.json"),
@@ -145,9 +148,8 @@ export async function runPairedEvaluation(input: {
 									{ mode: 0o600 },
 								);
 							}
-							evidence = await productionEvaluationEvidence(
-								input.userId,
-								attempt.rootId,
+							evidence = await readEvaluationSnapshot(() =>
+								productionEvaluationEvidence(input.userId, attempt.rootId),
 							);
 							failureStage = "harness";
 							patches = (

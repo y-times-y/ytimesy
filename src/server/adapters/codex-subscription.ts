@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { CodexUsage } from "#/domain/codex-usage";
 import { PINNED_CODEX_CLI_VERSION } from "#/domain/guest-cli-pin";
@@ -10,6 +11,7 @@ import {
 	hasManagedCodexAuth,
 } from "../auth/codex-managed-auth";
 import { connectedLanguageModel } from "./api-model";
+import { promptCacheScopeKey } from "./api-prompt-cache";
 import { nativeModelCompactor } from "./model-compaction";
 
 const backend = "https://chatgpt.com/backend-api";
@@ -162,6 +164,7 @@ export async function codexSubscriptionModel(
 	modelId: string,
 	reasoning?: string,
 	fast = false,
+	cacheScopeId: string = randomUUID(),
 ) {
 	const catalog = await subscriptionCatalog(userId);
 	const selected = catalog.models.find((row) => row.slug === modelId);
@@ -179,13 +182,22 @@ export async function codexSubscriptionModel(
 	)
 		throw new Error("Selected reasoning level is unavailable for this model.");
 	const tokens = await codexExternalTokens(userId);
+	const cacheKey = promptCacheScopeKey({
+		userId,
+		connectionId: `codex-subscription:${tokens.chatgptAccountId}`,
+		scopeId: cacheScopeId,
+	});
 	const transport: typeof fetch = async (url, init) => {
 		if (String(url) !== `${backend}/codex/responses`)
 			throw new Error("Unexpected subscription inference destination.");
 		const headers = new Headers(init?.headers);
 		const current = await codexExternalTokens(userId);
+		if (current.chatgptAccountId !== tokens.chatgptAccountId)
+			throw new Error("Subscription account changed; restart this turn.");
 		headers.set("Authorization", `Bearer ${current.accessToken}`);
 		headers.set("ChatGPT-Account-ID", current.chatgptAccountId);
+		// The pinned native ChatGPT transport derives cache affinity from this header.
+		headers.set("session-id", cacheKey);
 		return fetch(url, { ...init, headers, redirect: "error" });
 	};
 	const model = connectedLanguageModel(
@@ -202,6 +214,7 @@ export async function codexSubscriptionModel(
 			openai: {
 				instructions,
 				store: false,
+				promptCacheKey: cacheKey,
 				reasoningEffort: effort,
 				reasoningSummary: "auto",
 			},
@@ -210,6 +223,12 @@ export async function codexSubscriptionModel(
 	return {
 		model,
 		contextWindow: selected.context_window,
+		// Operate below the maximum window to avoid replaying large orientation
+		// documents at every coding step. Native compaction preserves opaque state.
+		workingContextTokens: 64_000,
+		coordinationWorkingContextTokens: 48_000,
+		archiveConsumedGuidance: true,
+		prefetchInitialReads: true,
 		autoCompactTokenLimit: selected.auto_compact_token_limit ?? undefined,
 		requestSettings,
 		compact: nativeModelCompactor(model, "openai", requestSettings),

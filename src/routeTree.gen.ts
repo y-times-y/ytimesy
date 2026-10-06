@@ -23,6 +23,7 @@ import { Route as ApiGithubCallbackRouteImport } from './routes/api/github/callb
 import { Route as ApiGithubConnectRouteImport } from './routes/api/github/connect'
 import { Route as ApiGithubDisconnectRouteImport } from './routes/api/github/disconnect'
 import { Route as ApiGithubPullRequestsRouteImport } from './routes/api/github/pull-requests'
+import { Route as ApiGithubRepairEventsRouteImport } from './routes/api/github/repair-events'
 import { Route as ApiGithubRepositoriesRouteImport } from './routes/api/github/repositories'
 import { Route as ApiIdentityProvidersRouteImport } from './routes/api/identity/providers'
 import { Route as ApiProjectsPublishRouteImport } from './routes/api/projects/publish'
@@ -98,6 +99,11 @@ const ApiGithubPullRequestsRoute = ApiGithubPullRequestsRouteImport.update({
   path: '/api/github/pull-requests',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiGithubRepairEventsRoute = ApiGithubRepairEventsRouteImport.update({
+  id: '/api/github/repair-events',
+  path: '/api/github/repair-events',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiGithubRepositoriesRoute = ApiGithubRepositoriesRouteImport.update({
   id: '/api/github/repositories',
   path: '/api/github/repositories',
@@ -134,6 +140,7 @@ export interface FileRoutesByFullPath {
   '/api/github/connect': typeof ApiGithubConnectRoute
   '/api/github/disconnect': typeof ApiGithubDisconnectRoute
   '/api/github/pull-requests': typeof ApiGithubPullRequestsRoute
+  '/api/github/repair-events': typeof ApiGithubRepairEventsRoute
   '/api/github/repositories': typeof ApiGithubRepositoriesRoute
   '/api/identity/providers': typeof ApiIdentityProvidersRoute
   '/api/projects/publish': typeof ApiProjectsPublishRoute
@@ -154,6 +161,7 @@ export interface FileRoutesByTo {
   '/api/github/connect': typeof ApiGithubConnectRoute
   '/api/github/disconnect': typeof ApiGithubDisconnectRoute
   '/api/github/pull-requests': typeof ApiGithubPullRequestsRoute
+  '/api/github/repair-events': typeof ApiGithubRepairEventsRoute
   '/api/github/repositories': typeof ApiGithubRepositoriesRoute
   '/api/identity/providers': typeof ApiIdentityProvidersRoute
   '/api/projects/publish': typeof ApiProjectsPublishRoute
@@ -175,6 +183,7 @@ export interface FileRoutesById {
   '/api/github/connect': typeof ApiGithubConnectRoute
   '/api/github/disconnect': typeof ApiGithubDisconnectRoute
   '/api/github/pull-requests': typeof ApiGithubPullRequestsRoute
+  '/api/github/repair-events': typeof ApiGithubRepairEventsRoute
   '/api/github/repositories': typeof ApiGithubRepositoriesRoute
   '/api/identity/providers': typeof ApiIdentityProvidersRoute
   '/api/projects/publish': typeof ApiProjectsPublishRoute
@@ -197,6 +206,7 @@ export interface FileRouteTypes {
     | '/api/github/connect'
     | '/api/github/disconnect'
     | '/api/github/pull-requests'
+    | '/api/github/repair-events'
     | '/api/github/repositories'
     | '/api/identity/providers'
     | '/api/projects/publish'
@@ -217,6 +227,7 @@ export interface FileRouteTypes {
     | '/api/github/connect'
     | '/api/github/disconnect'
     | '/api/github/pull-requests'
+    | '/api/github/repair-events'
     | '/api/github/repositories'
     | '/api/identity/providers'
     | '/api/projects/publish'
@@ -237,6 +248,7 @@ export interface FileRouteTypes {
     | '/api/github/connect'
     | '/api/github/disconnect'
     | '/api/github/pull-requests'
+    | '/api/github/repair-events'
     | '/api/github/repositories'
     | '/api/identity/providers'
     | '/api/projects/publish'
@@ -258,6 +270,7 @@ export interface RootRouteChildren {
   ApiGithubConnectRoute: typeof ApiGithubConnectRoute
   ApiGithubDisconnectRoute: typeof ApiGithubDisconnectRoute
   ApiGithubPullRequestsRoute: typeof ApiGithubPullRequestsRoute
+  ApiGithubRepairEventsRoute: typeof ApiGithubRepairEventsRoute
   ApiGithubRepositoriesRoute: typeof ApiGithubRepositoriesRoute
   ApiIdentityProvidersRoute: typeof ApiIdentityProvidersRoute
 }
@@ -362,6 +375,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiGithubPullRequestsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/github/repair-events': {
+      id: '/api/github/repair-events'
+      path: '/api/github/repair-events'
+      fullPath: '/api/github/repair-events'
+      preLoaderRoute: typeof ApiGithubRepairEventsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/github/repositories': {
       id: '/api/github/repositories'
       path: '/api/github/repositories'
@@ -432,6 +452,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiGithubConnectRoute: ApiGithubConnectRoute,
   ApiGithubDisconnectRoute: ApiGithubDisconnectRoute,
   ApiGithubPullRequestsRoute: ApiGithubPullRequestsRoute,
+  ApiGithubRepairEventsRoute: ApiGithubRepairEventsRoute,
   ApiGithubRepositoriesRoute: ApiGithubRepositoriesRoute,
   ApiIdentityProvidersRoute: ApiIdentityProvidersRoute,
 }

@@ -60,6 +60,7 @@ export function competitionJudgeToolAllowed(tool: AgentTaskToolName) {
 	return (
 		tool === "list_tasks" ||
 		tool === "inspect_task_diff" ||
+		tool === "read_task_output" ||
 		tool === "mark_task_reviewed" ||
 		tool === "select_competition_winner"
 	);

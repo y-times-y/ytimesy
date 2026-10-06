@@ -1,12 +1,11 @@
-import {
-	AGENT_ORCHESTRATION_INSTRUCTIONS,
-	agentSessionRoleInstructions,
-} from "#/domain/agent-orchestration";
+import { createHash } from "node:crypto";
+import { cloudAgentRoleInstructions } from "#/domain/agent-orchestration";
 import { assertApiContextFits } from "#/domain/api-conversation";
 import { applyApiProgress, recordedContextUsage } from "#/domain/api-progress";
 import { addApiTokenUsage } from "#/domain/api-token-usage";
 import {
 	type ApiTurnFailureStage,
+	apiTurnFailureClassification,
 	apiTurnFailureMessage,
 	IncompleteAgentTurn,
 } from "#/domain/api-turn-failure";
@@ -18,6 +17,7 @@ import { subscriptionTurnSettings } from "#/domain/subscription-turn";
 import { withDelegationContext } from "../adapters/agent-delegation-context";
 import { agentSessionForOwner } from "../adapters/agent-sessions";
 import { saveAgentTaskResultAndEvent } from "../adapters/agent-task-events";
+import { captureServerAnalytics } from "../adapters/analytics";
 import {
 	type ApiTurn,
 	checkpointApiTurn,
@@ -38,11 +38,16 @@ import {
 import { loadModelConnection } from "../adapters/model-connections";
 import { injectServerPeerMessages } from "../adapters/server-peer-inbox";
 import { hasManagedCodexAuth } from "../auth/codex-managed-auth";
+import { discoveredToolsFromSession } from "../services/agent-tool-discovery";
 import type { AgentToolWorkspace } from "../services/agent-tool-workspace";
 import { runApiAgent, runApiAgentStep } from "../services/api-agent-runtime";
 import { apiAgentTools } from "../services/api-agent-tools";
 import { stopApiTurnCommands } from "../services/api-command-scope";
 import { deferredApiTurnWorkspace } from "../services/api-turn-workspace";
+import {
+	pendingAgentCommandIds,
+	withBackgroundCommandContext,
+} from "../services/background-command-context";
 import {
 	runCodexSubscriptionAgent,
 	runCodexSubscriptionAgentStep,
@@ -52,7 +57,9 @@ import {
 	recordCloudProjectReport,
 } from "../services/project-knowledge";
 import { machinesForAgentSession } from "../services/session-workspace-machines";
+import { analyticsAgentRole } from "../services/turn-analytics";
 import { commitCompletedSessionTurn } from "../services/turn-commit";
+import { turnProgressWriter } from "../services/turn-progress-writer";
 import type { WorkspaceMachines } from "../services/workspace-machines";
 import { enqueueAgentTaskEvent } from "./queue";
 
@@ -94,6 +101,19 @@ export async function runApiTurn(
 		| undefined;
 	let heartbeatBusy = false;
 	let heartbeatPending: Promise<void> | undefined;
+	let heartbeatFailed = false;
+	let progressFailed = false;
+	const progress = turnProgressWriter(
+		(snapshot) => publishApiTurnProgress(turn, snapshot),
+		() => {
+			progressFailed = true;
+			abort.abort(new Error("Turn progress could not be saved."));
+		},
+	);
+	const saveCheckpoint = async () => {
+		await progress.drain();
+		await checkpointApiTurn(turn, messages, items);
+	};
 	let failureStage: ApiTurnFailureStage = "connection";
 	const control = {
 		userId: turn.user_id,
@@ -130,18 +150,10 @@ export async function runApiTurn(
 				}
 			})
 			.catch((error: unknown) => {
-				// Only classifications belong in logs: database errors may contain secrets.
-				const code =
-					error && typeof error === "object" && "code" in error
-						? String(error.code)
-						: "unknown";
+				heartbeatFailed = true;
 				console.warn("Turn heartbeat failed", {
 					stage: heartbeatStage,
-					code: /^[A-Z0-9_]{1,32}$/.test(code) ? code : "unknown",
-					name:
-						error instanceof Error && /^[A-Za-z]{1,32}$/.test(error.name)
-							? error.name
-							: "unknown",
+					...apiTurnFailureClassification(error),
 				});
 				abort.abort(
 					new Error(
@@ -154,12 +166,14 @@ export async function runApiTurn(
 			});
 	}, 1000);
 	try {
+		failureStage = "coordination";
 		if (
 			!turn.lease_id ||
 			!(await coordinateConversationTurn("acquire", control))
 		)
 			throw new Error("The conversation is already running or was stopped.");
 		coordinated = true;
+		failureStage = "connection";
 		lastCoordinationRenewal = Date.now();
 		if (!(await renewApiTurn(turn))) {
 			abort.abort();
@@ -170,6 +184,9 @@ export async function runApiTurn(
 		if (process.env.YTIMESY_HARNESS_EVALUATION_ENABLED === "1")
 			evaluation = await evaluationRunForTask(owner.userId, owner.id);
 		const subscription = subscriptionTurnSettings(turn.connection_revision);
+		// The subscription endpoint rejects the public Responses apply_patch tool.
+		// Writers retain the same V4A editor through its function-tool schema.
+		let nativePatch = false;
 		if (subscription) {
 			if (turn.connection_id || !(await hasManagedCodexAuth(turn.user_id)))
 				throw new Error("Reconnect Codex before continuing.");
@@ -183,6 +200,9 @@ export async function runApiTurn(
 				throw new Error(
 					"The API connection changed after this turn was submitted.",
 				);
+			nativePatch =
+				connection.provider === "openai" &&
+				connection.baseUrl.startsWith("https://api.openai.com/");
 		}
 		const prepareWorkspace = deferredApiTurnWorkspace(
 			machines,
@@ -195,7 +215,10 @@ export async function runApiTurn(
 		};
 		machines = machinesForAgentSession(machines, owner);
 		publishProgress = async (turnStatus) => {
-			if (turnStatus === "running") await publishApiTurnProgress(turn, items);
+			if (turnStatus === "running") {
+				progress.offer(items);
+				await progress.drain();
+			}
 		};
 		await publishProgress("running");
 		const tools = apiAgentTools({
@@ -203,6 +226,7 @@ export async function runApiTurn(
 			session: owner,
 			workspace,
 			turnId: turn.id,
+			nativePatch,
 			toolCallPrefix: step ? `step-${step.index}:` : undefined,
 			signal: abort.signal,
 		});
@@ -216,6 +240,7 @@ export async function runApiTurn(
 				: (owner.taskPrompt ?? owner.title),
 		);
 		let flushedAt = 0;
+		let metricIndex = 0;
 		failureStage = "model";
 		if (step?.limitReached) throw new IncompleteAgentTurn("tool-calls");
 		const runAgent = subscription
@@ -241,15 +266,61 @@ export async function runApiTurn(
 			connectionId: turn.connection_id ?? undefined,
 			connectionRevision: turn.connection_revision,
 			reasoning: subscription?.reasoning,
+			knownTools: discoveredToolsFromSession(items),
+			toolSurface: owner.parentSessionId ? "implementation" : "coordination",
+			onToolMetric: (metric) => {
+				void captureServerAnalytics(
+					owner.userId,
+					"harness_tool_completed",
+					{
+						...metric,
+						runtime: owner.harness,
+						role: analyticsAgentRole(owner),
+						model_key: createHash("sha256").update(turn.model_id).digest("hex"),
+					},
+					{
+						key: `${turn.id}:${step?.index ?? 0}:tool-${metricIndex++}`,
+						timestamp: new Date(),
+					},
+				);
+			},
+			onModelMetric: (metric) => {
+				void captureServerAnalytics(
+					owner.userId,
+					"harness_model_completed",
+					{
+						...metric,
+						runtime: owner.harness,
+						role: analyticsAgentRole(owner),
+						model_key: createHash("sha256").update(turn.model_id).digest("hex"),
+					},
+					{
+						key: `${turn.id}:${step?.index ?? 0}:model-${metricIndex++}`,
+						timestamp: new Date(),
+					},
+				);
+			},
 			fast: subscription?.fast,
 			modelId: turn.model_id,
 			messages,
 			archiveHistory: (history) =>
 				archiveModelContext(owner.userId, owner.id, history),
-			instructions: `You are the ytimesy coding agent. Repository tools operate in this task's prepared checkout; paths are relative to that repository. Read repository instructions before editing. ${PREPARED_ENVIRONMENT_INSTRUCTIONS} Use read_environment_report for that setup report; do not pass its /tmp path to repository file readers. ${AGENT_ORCHESTRATION_INSTRUCTIONS} ${agentSessionRoleInstructions(owner)}\n${PROJECT_KNOWLEDGE_INSTRUCTIONS}\nShared project knowledge (historical data, verify against this checkout):\n${JSON.stringify(projectKnowledge)}`,
+			instructions: `You are the ytimesy coding agent. Repository tools operate in this task's prepared checkout; paths are relative to that repository. Call read_repository_guidance before implementation and for nested paths; read applicable instructions and skill bodies completely. Search optional tools with search_tools. ${PREPARED_ENVIRONMENT_INSTRUCTIONS} Use read_environment_report for that setup report; do not pass its /tmp path to repository file readers. ${cloudAgentRoleInstructions(owner)}\n${PROJECT_KNOWLEDGE_INSTRUCTIONS}\nShared project knowledge (historical data, verify against this checkout):\n${JSON.stringify(projectKnowledge)}`,
 			tools,
 			signal: abort.signal,
 			prepareMessages: async (history) => {
+				history = await withBackgroundCommandContext({
+					workspace,
+					sessionId: owner.id,
+					items,
+					messages: history,
+					signal: abort.signal,
+					checkpoint: async (injected) => {
+						messages = injected;
+						await saveCheckpoint();
+						await publishProgress?.("running");
+					},
+				});
 				const current = await withDelegationContext(
 					owner.userId,
 					owner.id,
@@ -257,7 +328,7 @@ export async function runApiTurn(
 				);
 				return injectServerPeerMessages(owner.id, current, async (injected) => {
 					messages = injected;
-					await checkpointApiTurn(turn, messages, items);
+					await saveCheckpoint();
 				});
 			},
 			beforeStep: async (history) => {
@@ -313,26 +384,57 @@ export async function runApiTurn(
 				if (evaluation && event.type === "usage")
 					await recordEvaluationUsage(evaluation, turn.id, event.usage);
 				if (Date.now() - flushedAt >= 250 || event.type === "finish") {
-					failureStage = "saving";
-					await publishProgress?.("running");
-					failureStage = "model";
+					progress.offer(items);
+					if (event.type === "finish") await progress.drain();
 					flushedAt = Date.now();
 				}
 			},
 			onStep: async (history) => {
 				failureStage = "saving";
 				messages = history;
-				await checkpointApiTurn(turn, messages, items);
+				await saveCheckpoint();
 				failureStage = "model";
 			},
 		});
 		failureStage = "saving";
 		abort.signal.throwIfAborted();
 		if (step && !Array.isArray(result) && result.outcome === "continue") {
-			await checkpointApiTurn(turn, messages, items);
+			await saveCheckpoint();
 			// Retain the same DO lease across step boundaries; only terminal outcomes release it.
 			coordinated = false;
 			return "continue";
+		}
+		// A model stop is not proof that detached verification finished. Re-observe at the publication boundary.
+		const historyBeforeCompletion = messages;
+		const finalHistory = await withBackgroundCommandContext({
+			workspace,
+			sessionId: owner.id,
+			items,
+			messages,
+			signal: abort.signal,
+			checkpoint: async (injected) => {
+				messages = injected;
+				await saveCheckpoint();
+				await publishProgress?.("running");
+			},
+		});
+		const pendingCommands = pendingAgentCommandIds(items);
+		if (pendingCommands.length || finalHistory !== historyBeforeCompletion) {
+			if (step) {
+				messages = pendingCommands.length
+					? [
+							...finalHistory,
+							{
+								role: "user",
+								content: `Execution completion gate: these owned background commands are still running: ${JSON.stringify(pendingCommands)}. Use wait_command and inspect their output; do not finalize or claim passing checks until they settle. This is runtime status, not a new user request.`,
+							},
+						]
+					: finalHistory;
+				await saveCheckpoint();
+				coordinated = false;
+				return "continue";
+			}
+			throw new IncompleteAgentTurn("background-command-review-required");
 		}
 		let lastUser = items.length - 1;
 		while (lastUser >= 0 && items[lastUser].kind !== "userMessage") lastUser--;
@@ -343,6 +445,9 @@ export async function runApiTurn(
 		)
 			throw new IncompleteAgentTurn("missing-final-result");
 		failureStage = "commit";
+		// Fence even commands whose acknowledgement was lost before it reached the durable cards.
+		// Unlike best-effort cancellation on failure, publication requires a confirmed stop.
+		if (execution) await stopApiTurnCommands(execution, turn.id);
 		await commitCompletedSessionTurn(
 			{ ...owner, providerRef: execution?.vm ?? owner.providerRef },
 			items,
@@ -367,12 +472,14 @@ export async function runApiTurn(
 			},
 		);
 		abort.signal.throwIfAborted();
-		failureStage = "saving";
+		failureStage = "coordination";
 		if (!(await coordinateConversationTurn("release", control)))
 			throw new Error(
 				"Conversation coordination lease was lost before completion.",
 			);
 		coordinated = false;
+		failureStage = "saving";
+		await progress.drain();
 		const saved = await finalizeApiTurn(turn, "completed", items);
 		if (saved !== "completed") {
 			abort.abort();
@@ -402,14 +509,23 @@ export async function runApiTurn(
 		}
 		return "completed";
 	} catch (error) {
+		await progress.drain().catch(() => {});
+		if (!abort.signal.aborted || heartbeatFailed || progressFailed)
+			console.warn("API turn failed", {
+				stage: failureStage,
+				...apiTurnFailureClassification(error),
+			});
+		const failureMessage = progressFailed
+			? "Turn progress could not be saved. Inspect the task before retrying."
+			: abort.signal.aborted
+				? `Run stopped. ${abort.signal.reason instanceof Error && ["Turn ownership or cancellation state changed.", "Conversation coordination lease was lost.", "Turn heartbeat or coordination service became unavailable."].includes(abort.signal.reason.message) ? `${abort.signal.reason.message} ` : ""}Inspect any in-flight command before continuing.`
+				: apiTurnFailureMessage(failureStage, error);
 		items = [
 			...items,
 			{
 				kind: "error",
 				id: SessionItemId(`${turn.id}:error`),
-				message: abort.signal.aborted
-					? `Run stopped. ${abort.signal.reason instanceof Error && ["Turn ownership or cancellation state changed.", "Conversation coordination lease was lost.", "Turn heartbeat or coordination service became unavailable."].includes(abort.signal.reason.message) ? `${abort.signal.reason.message} ` : ""}Inspect any in-flight command before continuing.`
-					: apiTurnFailureMessage(failureStage, error),
+				message: failureMessage,
 			},
 		];
 		items = applyApiProgress(items, turn.id, {
@@ -420,7 +536,9 @@ export async function runApiTurn(
 		});
 		const saved = await finalizeApiTurn(
 			turn,
-			abort.signal.aborted ? "cancelled" : "failed",
+			abort.signal.aborted && !heartbeatFailed && !progressFailed
+				? "cancelled"
+				: "failed",
 			items,
 		);
 		if (saved)
@@ -432,7 +550,7 @@ export async function runApiTurn(
 				sessionId: turn.session_id,
 				turnId: turn.id,
 				eventType: "failed",
-				summary: apiTurnFailureMessage(failureStage, error),
+				summary: failureMessage,
 			});
 			if (eventId) await enqueueAgentTaskEvent(eventId).catch(() => {});
 		}

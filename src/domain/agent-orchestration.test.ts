@@ -2,7 +2,42 @@ import { describe, expect, it } from "vitest";
 import {
 	AGENT_ORCHESTRATION_INSTRUCTIONS,
 	agentSessionRoleInstructions,
+	cloudAgentRoleInstructions,
 } from "./agent-orchestration";
+
+it("prepares contract-based review while builders work and rejects stricter validation", () => {
+	const lead = cloudAgentRoleInstructions({});
+	expect(lead).toContain("while builders work");
+	expect(lead).toContain("allowed inputs adjacent to forbidden cases");
+	expect(lead).toContain("a stronger validation rule is a correctness bug");
+	expect(lead).toContain("ORIGINAL user contract");
+});
+
+it("defaults independent nontrivial policy contracts to parallel owners without equating folders or purity with dependencies", () => {
+	for (const lead of [
+		cloudAgentRoleInstructions({}),
+		agentSessionRoleInstructions({}),
+	]) {
+		expect(lead).toContain("default to concurrent owners");
+		expect(lead).toContain("boundary/error-order tests");
+		expect(lead).toContain("measured critical-path disadvantage");
+		expect(lead).toContain("review early finishers while others run");
+	}
+});
+
+it("keeps cloud role prompts concise without weakening delegation or verification", () => {
+	const lead = cloudAgentRoleInstructions({});
+	const builder = cloudAgentRoleInstructions({
+		parentSessionId: "lead",
+		taskAccess: "read_write",
+	});
+	expect(lead).toContain("start at least one fresh read-write child");
+	expect(builder).toContain("Implement your own bounded task directly");
+	expect(builder).not.toContain("start at least one fresh read-write child");
+	expect(builder).toContain("repository-required preflight takes precedence");
+	expect(builder).toContain("read_task_capacity");
+	expect(builder.length).toBeLessThan(lead.length / 2);
+});
 
 it("distinguishes the root lead from writable and read-only children", () => {
 	expect(agentSessionRoleInstructions({})).toContain("read-only lead");
@@ -20,17 +55,67 @@ it("distinguishes the root lead from writable and read-only children", () => {
 	).toContain("do not edit files");
 });
 
+it("requires stable final verification without redundant baseline runs", () => {
+	for (const prompt of [
+		cloudAgentRoleInstructions({}),
+		cloudAgentRoleInstructions({
+			parentSessionId: "lead",
+			taskAccess: "read_write",
+		}),
+	]) {
+		expect(prompt).toContain("baseline");
+		expect(prompt).toContain("repository policy requires it");
+		expect(prompt).toContain("stable");
+		expect(prompt).toContain("semicolon-separated");
+	}
+	expect(
+		cloudAgentRoleInstructions({
+			parentSessionId: "lead",
+			taskAccess: "read_write",
+		}),
+	).toContain("Use project-configured formatting");
+});
+
+it("compares coordination cost and gives a sole builder complete verification ownership", () => {
+	expect(AGENT_ORCHESTRATION_INSTRUCTIONS).toContain(
+		"Independent signatures alone do not justify duplicating mandatory orientation",
+	);
+	expect(AGENT_ORCHESTRATION_INSTRUCTIONS).toContain(
+		"Preserve every exact acceptance condition and all tests",
+	);
+	expect(AGENT_ORCHESTRATION_INSTRUCTIONS).toContain("parallel critical path");
+	expect(AGENT_ORCHESTRATION_INSTRUCTIONS).toContain("longest builder path");
+	expect(AGENT_ORCHESTRATION_INSTRUCTIONS).toContain(
+		"boundary-test generation",
+	);
+	expect(AGENT_ORCHESTRATION_INSTRUCTIONS).toContain(
+		"complete final project verification",
+	);
+	expect(AGENT_ORCHESTRATION_INSTRUCTIONS).toContain(
+		"substantial independent implementations",
+	);
+	expect(AGENT_ORCHESTRATION_INSTRUCTIONS).toContain(
+		"Never skip required reading or verification",
+	);
+});
+
 describe("agent orchestration policy", () => {
 	it("requires exact reviewed-patch integration in a writable child, not a writable lead", () => {
-		expect(AGENT_ORCHESTRATION_INSTRUCTIONS).toContain("import_reviewed_task");
 		expect(AGENT_ORCHESTRATION_INSTRUCTIONS).toContain(
-			"fresh writable integration child",
+			"integrate_reviewed_tasks",
+		);
+		expect(AGENT_ORCHESTRATION_INSTRUCTIONS).toContain(
+			"fresh writable integration draft",
 		);
 		expect(AGENT_ORCHESTRATION_INSTRUCTIONS).toContain(
 			"The lead remains read-only",
 		);
 		expect(AGENT_ORCHESTRATION_INSTRUCTIONS).toContain(
-			"fail visibly on conflicts",
+			"If imports conflict, verification fails",
+		);
+		expect(AGENT_ORCHESTRATION_INSTRUCTIONS).toContain("same checkout");
+		expect(AGENT_ORCHESTRATION_INSTRUCTIONS).toContain(
+			"without model inference",
 		);
 	});
 	it("requires ready independent workstreams to launch before waiting", () => {

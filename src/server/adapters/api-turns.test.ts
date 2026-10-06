@@ -1,6 +1,7 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { subscriptionTurnRevision } from "#/domain/subscription-turn";
 import {
+	claimApiTurn,
 	enqueueApiTurn,
 	inheritedSubscriptionSettings,
 	previousTurnMessages,
@@ -24,6 +25,57 @@ const input = {
 	messages: [],
 	items: [],
 };
+
+it("bounds admission in the actual transaction before acquiring its lock", async () => {
+	mocks.query.mockImplementation(async (sql: string) => ({
+		rows: sql.includes("pg_try_advisory")
+			? [{ acquired: true }]
+			: sql.startsWith("update api_turn")
+				? [{ id: "turn" }]
+				: [],
+	}));
+	expect(await claimApiTurn(2, 8)).toEqual({ id: "turn" });
+	expect(mocks.query.mock.calls.slice(0, 4).map(([sql]) => sql)).toEqual([
+		"begin",
+		"set local idle_in_transaction_session_timeout = '30s'",
+		"set local statement_timeout = '20s'",
+		"select pg_try_advisory_xact_lock(81738419) as acquired",
+	]);
+	expect(mocks.query).toHaveBeenLastCalledWith("commit");
+	expect(mocks.release).toHaveBeenCalledWith(false);
+});
+
+it("does not wait or claim a turn when another worker owns admission", async () => {
+	mocks.query.mockResolvedValue({ rows: [{ acquired: false }] });
+	expect(await claimApiTurn(2, 8)).toBeNull();
+	expect(
+		mocks.query.mock.calls.some(([sql]) => sql.startsWith("update api_turn")),
+	).toBe(false);
+	expect(mocks.query).toHaveBeenLastCalledWith("commit");
+	expect(mocks.release).toHaveBeenCalledWith(false);
+});
+
+it("discards a connection whose rollback failed without hiding the claim error", async () => {
+	const failure = new Error("connection lost during claim");
+	mocks.query.mockImplementation(async (sql: string) => {
+		if (sql.includes("pg_try_advisory")) throw failure;
+		if (sql === "rollback") throw new Error("rollback unavailable");
+		return { rows: [] };
+	});
+	await expect(claimApiTurn(2, 8)).rejects.toBe(failure);
+	expect(mocks.release).toHaveBeenCalledWith(true);
+});
+
+it("rolls back and releases a healthy connection after a claim failure", async () => {
+	const failure = new Error("statement timed out");
+	mocks.query.mockImplementation(async (sql: string) => {
+		if (sql.includes("pg_try_advisory")) throw failure;
+		return { rows: [] };
+	});
+	await expect(claimApiTurn(2, 8)).rejects.toBe(failure);
+	expect(mocks.query).toHaveBeenLastCalledWith("rollback");
+	expect(mocks.release).toHaveBeenCalledWith(false);
+});
 
 it("inherits same-model subscription settings through owner-scoped ancestors", async () => {
 	mocks.query.mockResolvedValue({

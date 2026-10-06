@@ -20,6 +20,14 @@ const mocks = vi.hoisted(() => ({
 	remove: vi.fn(),
 	cancel: vi.fn(),
 	send: vi.fn(),
+	evidence: vi.fn(),
+	patch: vi.fn(),
+}));
+vi.mock("../src/server/adapters/task-patch-evidence", () => ({
+	taskPatchEvidence: mocks.evidence,
+}));
+vi.mock("../src/server/services/reviewed-task-import", () => ({
+	captureTaskPatch: mocks.patch,
 }));
 vi.mock("../src/server/adapters/database", () => ({
 	database: () => ({ query: mocks.query }),
@@ -101,7 +109,27 @@ beforeEach(() => {
 	mocks.owner.mockResolvedValue(root);
 	mocks.children.mockResolvedValue([child]);
 	mocks.query.mockResolvedValue({ rows: [{ count: "0", id: "run" }] });
-	exec.mockResolvedValue({ exitCode: 0, stdout: task.commit, stderr: "" });
+	mocks.evidence.mockResolvedValue({
+		reviews: new Map([
+			[
+				child.id,
+				{ taskId: child.id, base: task.commit, sha256: "a".repeat(64) },
+			],
+		]),
+		imports: [],
+	});
+	mocks.patch.mockResolvedValue({
+		base: task.commit,
+		sha256: "a".repeat(64),
+		bytes: Buffer.from("verified patch"),
+	});
+	exec.mockImplementation(async (_vm, command: string) => ({
+		exitCode: 0,
+		stdout: command.includes("symbolic-ref")
+			? "evaluation-frozen"
+			: task.commit,
+		stderr: "",
+	}));
 	mocks.send.mockReturnValue(
 		Effect.succeed({ connection: { status: "connected" } }),
 	);
@@ -109,12 +137,28 @@ beforeEach(() => {
 
 it("uses normal production submission with the frozen prompt, model and reasoning", async () => {
 	await openProductionEvaluation(machines, "alice", task, protocol);
+	expect(mocks.query).toHaveBeenCalledWith(
+		expect.stringContaining(
+			"selected_branch=$3,working_branch=$3,base_branch=$4",
+		),
+		[root.id, "alice", "evaluation-frozen", task.branch],
+	);
 	await submitProductionEvaluation(machines, "alice", attempt, task, protocol);
 	expect(mocks.send).toHaveBeenCalledWith(
 		machines,
 		expect.objectContaining({ sessionId: root.id, harnessId: "codex" }),
 		{ text: task.prompt, modelId: "model", variant: "medium", fast: false },
 	);
+});
+
+it("rejects detached snapshots before registering a billable run", async () => {
+	exec.mockResolvedValueOnce({ exitCode: 0, stdout: task.commit, stderr: "" });
+	exec.mockResolvedValueOnce({ exitCode: 1, stdout: "", stderr: "detached" });
+	await expect(
+		openProductionEvaluation(machines, "alice", task, protocol),
+	).rejects.toThrow("valid local branch");
+	expect(mocks.query).not.toHaveBeenCalled();
+	expect(mocks.remove).toHaveBeenCalled();
 });
 
 it("cleans up only its new chat when the checkout is dirty or unpinned", async () => {
@@ -187,4 +231,60 @@ it("closes admission before cancelling and deleting the disposable tree", async 
 	expect(mocks.cancel.mock.invocationCallOrder[1]).toBeLessThan(
 		mocks.remove.mock.invocationCallOrder[0],
 	);
+});
+
+it("rejects final checkout edits after acceptance", async () => {
+	mocks.patch.mockResolvedValue({
+		base: task.commit,
+		sha256: "b".repeat(64),
+		bytes: Buffer.from("changed after review"),
+	});
+	await expect(
+		exportReviewedEvaluationPatches(machines, "alice", root.id, task.commit),
+	).rejects.toThrow("accepted review");
+});
+
+it("exports one fully integrated reviewed checkout, not disconnected child patches", async () => {
+	const sibling = {
+		...child,
+		id: "33333333-3333-4333-8333-333333333333",
+		providerRef: "sibling-vm",
+	};
+	const integrated = {
+		...child,
+		id: "44444444-4444-4444-8444-444444444444",
+		providerRef: "integrated-vm",
+	};
+	const reviews = new Map(
+		[child, sibling, integrated].map((writer) => [
+			writer.id,
+			{ taskId: writer.id, base: task.commit, sha256: "a".repeat(64) },
+		]),
+	);
+	const imported = (id: string) => ({
+		taskId: id,
+		destinationId: integrated.id,
+		base: task.commit,
+		sha256: "a".repeat(64),
+	});
+	mocks.children.mockResolvedValue([child, sibling, integrated]);
+	mocks.evidence.mockResolvedValue({ reviews, imports: [imported(child.id)] });
+	await expect(
+		exportReviewedEvaluationPatches(machines, "alice", root.id, task.commit),
+	).rejects.toThrow("every writable task");
+	mocks.evidence.mockResolvedValue({
+		reviews,
+		imports: [imported(child.id), imported(sibling.id)],
+	});
+	mocks.patch.mockClear();
+	expect(
+		await exportReviewedEvaluationPatches(
+			machines,
+			"alice",
+			root.id,
+			task.commit,
+		),
+	).toEqual([{ taskId: integrated.id, patch: "verified patch" }]);
+	expect(mocks.patch).toHaveBeenCalledOnce();
+	expect(mocks.patch.mock.calls[0][1]).toBe("integrated-vm");
 });

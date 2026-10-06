@@ -1,5 +1,50 @@
 export const agentTaskToolDefinitions = [
 	{
+		name: "read_task_output",
+		description:
+			"Read retained stdout or stderr evidence from an authorized descendant task. Use background:true for a background command ID to also observe its actual completion status; otherwise provide a tool output reference. Use this for child verification; read_tool_output and read_command are scoped to your own session. Follow nextStart for complete retained output. Does not execute a new check or grant access to unrelated tasks.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				taskId: { type: "string" },
+				reference: { type: "string", format: "uuid" },
+				background: { type: "boolean" },
+				stream: { type: "string", enum: ["stdout", "stderr"] },
+				start: { type: "integer", minimum: 0, maximum: 32000000 },
+			},
+			required: ["taskId", "reference"],
+			additionalProperties: false,
+		},
+	},
+	{
+		name: "integrate_reviewed_tasks",
+		description:
+			"Integrate two or more exact reviewed siblings into a fresh writable child draft without model inference, then run baseline project checks. Successful results include checkResults with actual exits, stopped status and retained output references; use read_task_output with this task ID and those references, not another model turn or duplicate successful checks merely to fetch evidence. Do not start_task first. Conflicts or failed checks preserve the child for agent repair. The combined diff still requires lead review.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				taskId: { type: "string" },
+				sources: {
+					type: "array",
+					minItems: 2,
+					maxItems: 8,
+					items: {
+						type: "object",
+						properties: {
+							taskId: { type: "string" },
+							sha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
+							base: { type: "string", pattern: "^[a-f0-9]{40,64}$" },
+						},
+						required: ["taskId", "sha256", "base"],
+						additionalProperties: false,
+					},
+				},
+			},
+			required: ["taskId", "sources"],
+			additionalProperties: false,
+		},
+	},
+	{
 		name: "read_task_capacity",
 		description:
 			"Read current worker/account capacity before planning parallel child launches. Availability is a snapshot, not a reservation; start_task enforces admission atomically.",
@@ -36,10 +81,11 @@ export const agentTaskToolDefinitions = [
 	{
 		name: "create_task",
 		description:
-			"Draft a bounded child task without starting compute. The prompt must be complete because the child inherits no conversation.",
+			"Draft a bounded child task. Defaults to no compute. Set startImmediately:true only for a complete, ready task after checking capacity; it uses the same validated start and admission path without a second model round trip. Rejected starts retain and return the draft ID. The child inherits no conversation, so include all requirements and repository preflight.",
 		inputSchema: {
 			type: "object",
 			properties: {
+				startImmediately: { type: "boolean" },
 				title: {
 					type: "string",
 				},
@@ -213,10 +259,11 @@ export const agentTaskToolDefinitions = [
 	{
 		name: "mark_task_reviewed",
 		description:
-			"Record that the parent inspected and accepted a completed task's result.",
+			"Accept a completed task's result. For writable tasks supply expectedSha256 from inspect_task_diff; changed patches are rejected. The returned hash is the accepted identity for integration.",
 		inputSchema: {
 			type: "object",
 			properties: {
+				expectedSha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
 				taskId: {
 					type: "string",
 				},

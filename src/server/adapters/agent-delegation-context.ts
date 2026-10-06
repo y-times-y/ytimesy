@@ -15,20 +15,22 @@ export async function withDelegationContext(
 		 where user_id=$1 and parent_session_id=$2 order by created_at desc limit 30`,
 		[userId, sessionId],
 	);
-	const history = messages.filter(
-		(message) =>
-			!(
+	const latest = [...messages]
+		.reverse()
+		.find(
+			(message) =>
 				message.role === "assistant" &&
 				typeof message.content === "string" &&
-				message.content.startsWith(PREFIX)
-			),
-	);
+				message.content.startsWith(PREFIX),
+		);
 	const capacity = await agentCapacity(userId);
+	const content = `${PREFIX}${JSON.stringify(tasks.rows)}\nExecution capacity: at most ${capacity.maxChildren} active children per parent; ${capacity.available} additional slots available across the worker fleet and your account, subject to that per-parent limit. This is a current snapshot, not a reservation. start_task atomically checks capacity before dispatch; rejected tasks stay unstarted. Do not plan more simultaneous children than this limit. Reuse or steer existing tasks for the same objective. Do not create replacement children just because a turn ended or a task is queued. Parallel children should have distinct bounded objectives unless the user explicitly requests competing implementations. The newest delegated-task snapshot supersedes earlier snapshots; earlier entries describe historical status only.`;
+	if (latest?.content === content) return messages;
 	return [
-		...history,
+		...messages,
 		{
 			role: "assistant",
-			content: `${PREFIX}${JSON.stringify(tasks.rows)}\nExecution capacity: at most ${capacity.maxChildren} active children per parent; ${capacity.available} additional slots available across the worker fleet and your account, subject to that per-parent limit. This is a current snapshot, not a reservation. start_task atomically checks capacity before dispatch; rejected tasks stay unstarted. Do not plan more simultaneous children than this limit. Reuse or steer existing tasks for the same objective. Do not create replacement children just because a turn ended or a task is queued. Parallel children should have distinct bounded objectives unless the user explicitly requests competing implementations.`,
+			content,
 		},
 	];
 }
