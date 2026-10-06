@@ -76,3 +76,35 @@ it("does not propagate ingestion failures", async () => {
 		),
 	).resolves.toBeUndefined();
 });
+
+it("records per-tool timing and model buckets but strips private payloads", async () => {
+	const { captureServerAnalytics } = await import("./analytics");
+	await captureServerAnalytics(
+		"owner",
+		"harness_tool_completed",
+		{
+			runtime: "api",
+			role: "builder",
+			tool_name: "read_file",
+			error_class: "none",
+			category: "read",
+			duration_ms: 42,
+			outcome: "completed",
+			repeated_read: true,
+			model_key: "a".repeat(64),
+			...{
+				input: "PRIVATE_SOURCE",
+				output: "PRIVATE_RESULT",
+				modelId: "PRIVATE_MODEL",
+			},
+		},
+		{ key: "private-task", timestamp: new Date() },
+	);
+	const sent = sdk.captureImmediate.mock.calls[0]?.[0];
+	expect(sent.properties).toMatchObject({
+		duration_ms: 42,
+		repeated_read: true,
+		tool_name: "read_file",
+	});
+	expect(JSON.stringify(sent)).not.toContain("PRIVATE_");
+});

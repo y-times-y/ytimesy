@@ -25,6 +25,7 @@ export type AgentTaskToolResponse = {
 	readonly ok: boolean;
 	readonly result?: unknown;
 	readonly error?: string;
+	readonly requestFingerprint?: string;
 };
 
 export function parseAgentTaskToolRequest(

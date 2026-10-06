@@ -172,6 +172,7 @@ export function nativeModelCompactor(
 			...settings,
 			messages: input.messages,
 			tools: declarations,
+			toolChoice: "none",
 			providerOptions: {
 				...settings.providerOptions,
 				[provider]: {
@@ -191,6 +192,7 @@ export function nativeModelCompactor(
 			if (event.type === "error" || event.type === "abort")
 				throw new Error(
 					"Native context compaction failed; history was preserved.",
+					{ cause: event.type === "error" ? event.error : input.signal.reason },
 				);
 		}
 		const messages = (await result.response).messages;

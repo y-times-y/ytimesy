@@ -67,15 +67,93 @@ const finish = {
 	finishReason: { unified: "stop" as const, raw: "stop" },
 };
 
+it("still rejects a native checkpoint exceeding the hard input limit without replacing original history", async () => {
+	const model = new MockLanguageModelV4();
+	const checkpoint = vi.fn();
+	const compact = vi.fn(async () => ({
+		messages: [
+			{
+				role: "assistant" as const,
+				content: [
+					{
+						type: "custom" as const,
+						kind: "openai.compaction" as const,
+						providerOptions: {
+							openai: {
+								itemId: "oversized",
+								encryptedContent: "e".repeat(180_000),
+							},
+						},
+					},
+				],
+			},
+		],
+		usage: {
+			inputTokens: 12_000,
+			outputTokens: 10,
+			totalTokens: 12_010,
+			inputTokenDetails: {
+				noCacheTokens: 12_000,
+				cacheReadTokens: 0,
+				cacheWriteTokens: 0,
+			},
+			outputTokenDetails: { textTokens: 0, reasoningTokens: 10 },
+		},
+	}));
+	await expect(
+		runModelAgent(
+			{
+				userId: "alice",
+				modelId: "model",
+				instructions: "Keep the task",
+				messages: [{ role: "user", content: "Continue the task" }],
+				previousContext: { tokens: 12_000, modelContextWindow: 48_000 },
+				tools: {},
+				signal: new AbortController().signal,
+				onStep: checkpoint,
+				onEvent: async () => {},
+			},
+			{ model, contextWindow: 48_000, workingContextTokens: 4_000, compact },
+		),
+	).rejects.toThrow();
+	expect(compact).toHaveBeenCalledOnce();
+	expect(model.doStreamCalls).toHaveLength(0);
+	expect(checkpoint).not.toHaveBeenCalled();
+});
+
 it.each([
-	{ historyLength: 95_000, previousContext: undefined },
+	{
+		historyLength: 95_000,
+		checkpointSuffix: 0,
+		previousContext: undefined,
+		workingContextTokens: undefined,
+	},
 	{
 		historyLength: 9_000,
 		previousContext: { tokens: 32_000, modelContextWindow: 48_000 },
+		checkpointSuffix: 0,
+		workingContextTokens: undefined,
+	},
+	{
+		historyLength: 9_000,
+		previousContext: { tokens: 12_000, modelContextWindow: 48_000 },
+		checkpointSuffix: 0,
+		workingContextTokens: 8_000,
+	},
+	{
+		historyLength: 9_000,
+		previousContext: { tokens: 12_000, modelContextWindow: 48_000 },
+		checkpointSuffix: 24_000,
+		workingContextTokens: 4_000,
 	},
 ])(
 	"uses native compaction with estimated or measured context ($historyLength), checkpoints opaque state and never streams it as a response",
-	async ({ historyLength, previousContext }) => {
+	async ({
+		historyLength,
+		previousContext,
+		workingContextTokens,
+		checkpointSuffix,
+	}) => {
 		const checkpoint = vi.fn();
 		const events: ApiAgentEvent[] = [];
 		let calls = 0;
@@ -91,7 +169,7 @@ it.each([
 										openai: {
 											type: "compaction",
 											itemId: "cmp-fixture",
-											encryptedContent: "opaque-fixture",
+											encryptedContent: `opaque-fixture${"e".repeat(checkpointSuffix)}`,
 										},
 									},
 								},
@@ -131,6 +209,7 @@ it.each([
 		const result = await runModelAgent(input, {
 			model,
 			contextWindow: 48_000,
+			workingContextTokens,
 			requestSettings,
 			compact: nativeModelCompactor(model, "openai", requestSettings),
 		});
@@ -204,6 +283,46 @@ it("durable one-step execution checkpoints a tool result without starting a seco
 	expect(checkpoint).toHaveBeenCalledTimes(1);
 	expect(events.some((event) => event.type === "finish")).toBe(false);
 	expect(events.some((event) => event.type === "tool-result")).toBe(true);
+});
+
+it("does not compact provider-measured small context merely because opaque state has a large wire encoding", async () => {
+	const compact = vi.fn();
+	const model = new MockLanguageModelV4({ doStream: stream([finish]) });
+	const messages = [
+		{ role: "user" as const, content: "Original request" },
+		{
+			role: "assistant" as const,
+			content: [
+				{
+					type: "reasoning" as const,
+					text: "",
+					providerOptions: {
+						openai: { encryptedContent: "opaque".repeat(30000) },
+					},
+				},
+			],
+		},
+		{ role: "user" as const, content: "Continue" },
+	];
+	await runModelAgent(
+		{
+			userId: "alice",
+			modelId: "model",
+			instructions: "Test",
+			messages,
+			previousContext: { tokens: 2000, modelContextWindow: 16000 },
+			tools: {},
+			signal: new AbortController().signal,
+			onStep: async () => {},
+			onEvent: async () => {},
+		},
+		{ model, contextWindow: 16000, workingContextTokens: 4000, compact },
+	);
+	expect(compact).not.toHaveBeenCalled();
+	expect(model.doStreamCalls).toHaveLength(1);
+	expect(JSON.stringify(model.doStreamCalls[0])).toContain(
+		"opaque".repeat(30000),
+	);
 });
 beforeEach(() => {
 	vi.clearAllMocks();
@@ -550,7 +669,7 @@ it("rejects a changed queued connection before contacting the provider", async (
 	expect(mocks.model).not.toHaveBeenCalled();
 });
 
-it("does not log raw provider failures, retry, or fall back", async () => {
+it("does not log or retry unclassified failures and never falls back", async () => {
 	const log = vi.spyOn(console, "error").mockImplementation(() => {});
 	const model = new MockLanguageModelV4({
 		doStream: async () => {
@@ -566,6 +685,88 @@ it("does not log raw provider failures, retry, or fall back", async () => {
 	} finally {
 		log.mockRestore();
 	}
+});
+
+it("retries one retryable request-start failure without replaying completed tools", async () => {
+	let calls = 0;
+	const execute = vi.fn(async () => "checked");
+	const model = new MockLanguageModelV4({
+		doStream: async () => {
+			if (++calls === 1)
+				throw new APICallError({
+					message: "private temporary error",
+					url: "https://example.com",
+					requestBodyValues: {},
+					statusCode: 503,
+				});
+			return stream(
+				calls === 2
+					? [
+							{
+								type: "tool-call",
+								toolCallId: "once",
+								toolName: "inspect",
+								input: "{}",
+							},
+							{
+								...finish,
+								finishReason: { unified: "tool-calls", raw: "tool_calls" },
+							},
+						]
+					: [finish],
+			);
+		},
+	});
+	await runModelAgent(
+		{
+			userId: "alice",
+			modelId: "model",
+			instructions: "Test",
+			messages: [{ role: "user", content: "Inspect" }],
+			tools: { inspect: tool({ inputSchema: z.object({}), execute }) },
+			knownTools: ["inspect"],
+			signal: new AbortController().signal,
+			onStep: async () => {},
+			onEvent: async () => {},
+		},
+		{ model },
+	);
+	expect(model.doStreamCalls).toHaveLength(3);
+	expect(execute).toHaveBeenCalledOnce();
+});
+
+it("does not retry after streaming has exposed output", async () => {
+	const model = new MockLanguageModelV4({
+		doStream: stream([
+			{ type: "text-start", id: "reply" },
+			{ type: "text-delta", id: "reply", delta: "Started" },
+			{
+				type: "error",
+				error: new APICallError({
+					message: "private stream failure",
+					url: "https://example.com",
+					requestBodyValues: {},
+					statusCode: 503,
+				}),
+			},
+		]),
+	});
+	await expect(
+		runModelAgent(
+			{
+				userId: "alice",
+				modelId: "model",
+				instructions: "Test",
+				messages: [{ role: "user", content: "Inspect" }],
+				tools: {},
+				signal: new AbortController().signal,
+				onStep: async () => {},
+				onEvent: async () => {},
+			},
+			{ model },
+		),
+	).rejects.toThrow();
+	expect(model.doStreamCalls).toHaveLength(1);
 });
 
 it("turns a provider rate limit into an actionable error without echoing its response", async () => {

@@ -1,3 +1,4 @@
+import { generateText } from "ai";
 import { beforeEach, expect, it, vi } from "vitest";
 import {
 	codexSubscriptionCatalog,
@@ -18,6 +19,73 @@ beforeEach(() => {
 		chatgptAccountId: `account-${userId}`,
 	}));
 	mocks.connected.mockReset().mockResolvedValue(true);
+});
+
+it("keeps subscription cache routing stable per account and chat through the real SDK", async () => {
+	const fetch = vi
+		.spyOn(globalThis, "fetch")
+		.mockImplementation(async (url) => {
+			if (String(url).includes("/models"))
+				return new Response(
+					JSON.stringify({
+						models: [{ slug: "cached-model", context_window: 272000 }],
+					}),
+				);
+			throw new Error("fixture-stop");
+		});
+	const runtime = await codexSubscriptionModel(
+		"cache-owner",
+		"cached-model",
+		"low",
+		false,
+		"chat-one",
+	);
+	const same = await codexSubscriptionModel(
+		"cache-owner",
+		"cached-model",
+		"low",
+		false,
+		"chat-one",
+	);
+	const other = await codexSubscriptionModel(
+		"cache-owner",
+		"cached-model",
+		"low",
+		false,
+		"chat-two",
+	);
+	const settings = runtime.requestSettings("instructions");
+	const key = settings.providerOptions.openai.promptCacheKey;
+	expect(key).toMatch(/^[a-f0-9]{64}$/);
+	expect(
+		same.requestSettings("instructions").providerOptions.openai.promptCacheKey,
+	).toBe(key);
+	expect(
+		other.requestSettings("instructions").providerOptions.openai.promptCacheKey,
+	).not.toBe(key);
+	await expect(
+		generateText({
+			model: runtime.model,
+			prompt: "unchanged",
+			maxRetries: 0,
+			...settings,
+		}),
+	).rejects.toThrow("fixture-stop");
+	const request = fetch.mock.calls.at(-1)?.[1];
+	expect(new Headers(request?.headers).get("session-id")).toBe(key);
+	expect(JSON.parse(request?.body as string).prompt_cache_key).toBe(key);
+	mocks.auth.mockResolvedValue({
+		accessToken: "different-account-token",
+		chatgptAccountId: "different-account",
+	});
+	await expect(
+		generateText({
+			model: runtime.model,
+			prompt: "unchanged",
+			maxRetries: 0,
+			...settings,
+		}),
+	).rejects.toThrow("account changed");
 });
 
 it("uses the account catalog and requested reasoning without advertising unsupported fast mode", async () => {
@@ -46,6 +114,8 @@ it("uses the account catalog and requested reasoning without advertising unsuppo
 		"high",
 	);
 	expect(runtime.contextWindow).toBe(272000);
+	expect(runtime.workingContextTokens).toBe(64_000);
+	expect(runtime.coordinationWorkingContextTokens).toBe(48_000);
 	expect(runtime.autoCompactTokenLimit).toBeUndefined();
 	expect(runtime.compact).toBeTypeOf("function");
 	expect(

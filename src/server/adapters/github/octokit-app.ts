@@ -26,6 +26,7 @@ export type GitHubAppListing = {
 		repositoryNames?: string[];
 		contents?: "read" | "write";
 		pullRequests?: "read" | "write";
+		checks?: "read";
 	}) => Promise<string>;
 };
 
@@ -78,9 +79,10 @@ export function createOctokitGitHubListing(): GitHubAppListing {
 				...(input.repositoryNames
 					? { repositoryNames: input.repositoryNames }
 					: {}),
-				...(input.contents || input.pullRequests
+				...(input.contents || input.pullRequests || input.checks
 					? {
 							permissions: {
+								...(input.checks ? { checks: input.checks } : {}),
 								...(input.contents ? { contents: input.contents } : {}),
 								...(input.pullRequests
 									? { pull_requests: input.pullRequests }

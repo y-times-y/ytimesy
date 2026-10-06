@@ -4,6 +4,7 @@ import {
 } from "#/domain/api-conversation";
 import { recordedContextUsage } from "#/domain/api-progress";
 import { childTaskPublicItems } from "#/domain/child-task-activity";
+import { reconstructedContextTransition } from "#/domain/harness-model-profile";
 import {
 	sessionItemsFromUnknown,
 	sessionItemsQueuedWithUser,
@@ -70,6 +71,7 @@ export async function sendSubscriptionTask(
 		runtimeText?: string;
 		variant?: string;
 		fast?: boolean;
+		idempotencyKey?: string;
 	},
 	preparedTask = false,
 ) {
@@ -105,7 +107,7 @@ export async function sendSubscriptionTask(
 		input.modelId,
 		revision,
 	);
-	const messages = previous
+	let messages = previous
 		? [
 				...previous,
 				{ role: "user" as const, content: input.runtimeText ?? input.text },
@@ -116,6 +118,8 @@ export async function sendSubscriptionTask(
 			role: "user",
 			content: input.runtimeText,
 		};
+	if (!previous)
+		messages = reconstructedContextTransition(messages, input.modelId);
 	assertApiContextFits(messages);
 	await enqueueApiTurn({
 		userId: scope.userId,
@@ -127,6 +131,7 @@ export async function sendSubscriptionTask(
 		messages,
 		items,
 		preparedTask,
+		idempotencyKey: input.idempotencyKey,
 	});
 	return readSubscriptionSession(scope);
 }

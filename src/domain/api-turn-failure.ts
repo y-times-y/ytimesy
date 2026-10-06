@@ -1,4 +1,4 @@
-import { APICallError } from "ai";
+import { APICallError, RetryError } from "ai";
 
 export type ApiTurnFailureStage =
 	| "connection"
@@ -6,7 +6,57 @@ export type ApiTurnFailureStage =
 	| "budget"
 	| "model"
 	| "commit"
+	| "coordination"
 	| "saving";
+
+const FAILURE_NAMES = new Set([
+	"Error",
+	"TypeError",
+	"TimeoutError",
+	"AbortError",
+	"SafeApiModelFailure",
+	"APICallError",
+	"AI_APICallError",
+	"RetryableCoordinationFailure",
+]);
+const FAILURE_CODES = new Set([
+	"ECONNRESET",
+	"ETIMEDOUT",
+	"ENOTFOUND",
+	"ECONNREFUSED",
+	"EPIPE",
+	"EAI_AGAIN",
+	"23505",
+	"40001",
+	"40P01",
+	"55P03",
+	"57014",
+	"53300",
+	"57P01",
+	"08000",
+	"08003",
+	"08006",
+	"08001",
+	"08004",
+	"08007",
+	"08P01",
+]);
+
+/** Only predefined diagnostic categories may leave the worker; error text never does. */
+export function apiTurnFailureClassification(error: unknown) {
+	const name = error instanceof Error ? error.name : "unknown";
+	const code =
+		error &&
+		typeof error === "object" &&
+		"code" in error &&
+		typeof error.code === "string"
+			? error.code
+			: "unknown";
+	return {
+		name: FAILURE_NAMES.has(name) ? name : "unknown",
+		code: FAILURE_CODES.has(code) ? code : "unknown",
+	};
+}
 
 export class SafeApiModelFailure extends Error {
 	constructor(error: unknown) {
@@ -38,6 +88,9 @@ function providerErrorCode(data: unknown): string | undefined {
 }
 
 export function apiModelFailureMessage(error: unknown): string {
+	// Retry wrappers carry raw request data; classify only their final error, with a bounded unwrap.
+	for (let depth = 0; depth < 3 && RetryError.isInstance(error); depth++)
+		error = error.lastError;
 	if (error instanceof SafeApiModelFailure) return error.message;
 	if (APICallError.isInstance(error)) {
 		const code = providerErrorCode(error.data);
@@ -147,6 +200,8 @@ export function apiTurnFailureMessage(
 			return apiModelFailureMessage(error);
 		case "saving":
 			return "The run could not save its latest progress. Check the workspace and connection before retrying.";
+		case "coordination":
+			return "The conversation coordinator could not confirm this turn's ownership or completion. Work is preserved; inspect the latest task state before continuing.";
 		case "commit":
 			return "The model finished, but automatic Git handoff failed. Your edits and local commits remain in the workspace. Check Git status, commit hooks, and GitHub access before continuing.";
 	}

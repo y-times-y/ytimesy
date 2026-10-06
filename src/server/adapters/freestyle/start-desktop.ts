@@ -61,7 +61,7 @@ write_desktop_launchers() {
 [Desktop Entry]
 Type=Application
 Name=Chrome
-Exec=/bin/sh -c 'bin=$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser); exec "$bin" --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --no-default-browser-check --disable-session-crashed-bubble --test-type --user-data-dir=/tmp/ytimesy-chrome-profile'
+Exec=/bin/sh -c 'bin=$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser); exec "$bin" --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --no-default-browser-check --disable-session-crashed-bubble --test-type --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=/tmp/ytimesy-chrome-profile'
 Icon=google-chrome
 Terminal=false
 EOF
@@ -213,7 +213,7 @@ cat > "$DESK_DIR/chrome.desktop" <<'EOF'
 [Desktop Entry]
 Type=Application
 Name=Chrome
-Exec=/bin/sh -c 'bin=$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser); exec "$bin" --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --no-default-browser-check --disable-session-crashed-bubble --test-type --user-data-dir=/tmp/ytimesy-chrome-profile'
+Exec=/bin/sh -c 'bin=$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser); exec "$bin" --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --no-default-browser-check --disable-session-crashed-bubble --test-type --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=/tmp/ytimesy-chrome-profile'
 Icon=google-chrome
 Terminal=false
 EOF

@@ -121,6 +121,8 @@ async function ensureWorkerVm(client: Freestyle) {
 		}
 		return vm;
 	}
+	if (process.env.YTIMESY_WORKER_EXISTING_ONLY === "1")
+		throw new Error("The approved worker is missing; no VM will be created.");
 	try {
 		const created = await client.vms.create(jobWorkerCreateVmFields());
 		return created.vm;
@@ -186,6 +188,9 @@ async function deploySecrets(vm: ReturnType<Freestyle["vms"]["ref"]>) {
 	const executorEnabled =
 		workflows || process.env.YTIMESY_MODEL_EXECUTOR_ENABLED === "true";
 	const evaluation = process.env.YTIMESY_HARNESS_EVALUATION_ENABLED;
+	const prRepair = process.env.YTIMESY_PR_REPAIR_ENABLED;
+	if (prRepair && !["0", "1"].includes(prRepair))
+		throw new Error("PR repair guard must be 0 or 1.");
 	if (evaluation && !["0", "1"].includes(evaluation))
 		throw new Error("Harness evaluation guard must be 0 or 1.");
 	if (autoRefresh && !["true", "false"].includes(autoRefresh))
@@ -202,6 +207,7 @@ async function deploySecrets(vm: ReturnType<Freestyle["vms"]["ref"]>) {
 			(evaluation
 				? `\nYTIMESY_HARNESS_EVALUATION_ENABLED=${evaluation}\n`
 				: "") +
+			(prRepair ? `\nYTIMESY_PR_REPAIR_ENABLED=${prRepair}\n` : "") +
 			(executorEnabled
 				? `\nYTIMESY_MODEL_EXECUTOR_ENABLED=true\nYTIMESY_MODEL_WORKFLOW_SECRET=${JSON.stringify(modelWorkflowSigningSecret())}\n`
 				: "") +

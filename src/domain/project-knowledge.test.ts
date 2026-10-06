@@ -1,7 +1,11 @@
 import { expect, it } from "vitest";
 import {
 	knowledgeForTask,
+	PROJECT_KNOWLEDGE_CONTEXT_LIMIT,
+	PROJECT_KNOWLEDGE_LIMIT,
 	type ProjectKnowledgeEntry,
+	projectMemoryMaintenance,
+	searchProjectKnowledge,
 	updateProjectKnowledge,
 } from "./project-knowledge";
 
@@ -36,6 +40,21 @@ it("maintains named Markdown entries without dropping earlier capabilities", () 
 	expect(document).toContain("Corrected implementation location.");
 });
 
+it("requests duplicate consolidation without deleting or trusting any note", () => {
+	const document = updateProjectKnowledge(updateProjectKnowledge("", branch), {
+		...branch,
+		key: "duplicate",
+	});
+	expect(projectMemoryMaintenance(document)).toMatchObject({
+		recommended: true,
+		duplicates: [["branch-selection", "duplicate"]],
+	});
+	expect(knowledgeForTask(document, "anything", false)).toContain(
+		"Memory maintenance recommended",
+	);
+	expect(document).toContain("ytimesy-knowledge:duplicate");
+});
+
 it("gives children relevant entries without legacy briefing or unrelated context", () => {
 	const document = updateProjectKnowledge(
 		updateProjectKnowledge("Old sibling reply", branch),
@@ -57,13 +76,15 @@ it("gives children relevant entries without legacy briefing or unrelated context
 		knowledgeForTask(document, "Fix branch selection", true),
 	).not.toContain("Old sibling reply");
 	expect(knowledgeForTask(document, "Change avatar", true)).toBe("");
-	expect(knowledgeForTask(document, "Change avatar", false)).toBe(document);
+	expect(knowledgeForTask(document, "Change avatar", false)).toContain(
+		"[[memory/branch-selection]]",
+	);
 });
 
 it("rejects overflow and reserved markers rather than silently truncating knowledge", () => {
-	expect(() => updateProjectKnowledge("x".repeat(12000), branch)).toThrow(
-		"full",
-	);
+	expect(() =>
+		updateProjectKnowledge("x".repeat(PROJECT_KNOWLEDGE_LIMIT), branch),
+	).toThrow("full");
 	expect(() => updateProjectKnowledge("", { ...branch, key: ".*" })).toThrow(
 		"key",
 	);
@@ -73,4 +94,21 @@ it("rejects overflow and reserved markers rather than silently truncating knowle
 			content: "<!-- /ytimesy-knowledge -->",
 		}),
 	).toThrow("markers");
+});
+
+it("keeps prompt memory bounded while searching the complete larger store", () => {
+	let document = "";
+	for (let index = 0; index < 30; index++)
+		document = updateProjectKnowledge(document, {
+			...branch,
+			key: `topic-${index}`,
+			title: `Topic ${index}`,
+			content: `Feature${index} ${"x".repeat(2000)}`,
+		});
+	expect(document.length).toBeGreaterThan(12000);
+	expect(
+		knowledgeForTask(document, "Feature29", false).length,
+	).toBeLessThanOrEqual(PROJECT_KNOWLEDGE_CONTEXT_LIMIT);
+	expect(searchProjectKnowledge(document, "Feature29")[0].key).toBe("topic-29");
+	expect(searchProjectKnowledge(document, ".*")).toEqual([]);
 });

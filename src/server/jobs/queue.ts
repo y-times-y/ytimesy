@@ -10,6 +10,7 @@ export const AGENT_TASK_EVENT_QUEUE = "agent-task-event";
 export const AGENT_PEER_MESSAGE_QUEUE = "agent-peer-message";
 export const START_COMPETITION_QUEUE = "start-agent-competition";
 export const SESSION_CHECKPOINT_QUEUE = "session-checkpoint";
+export const PR_REPAIR_QUEUE = "pr-repair";
 
 export interface WorkspaceJobQueue {
 	enqueuePrepare(
@@ -96,6 +97,12 @@ async function startJobQueue(role: QueueRole): Promise<PgBoss> {
 			retryDelay: 15,
 			expireInSeconds: 15 * 60,
 		});
+		await boss.createQueue(PR_REPAIR_QUEUE, {
+			policy: "singleton",
+			retryLimit: 2,
+			retryDelay: 15,
+			expireInSeconds: 180,
+		});
 		return boss;
 	} catch (error) {
 		await boss.stop({ graceful: false, timeout: 1000 }).catch(() => undefined);
@@ -109,6 +116,14 @@ export async function enqueueAgentTaskEvent(eventId?: string) {
 		AGENT_TASK_EVENT_QUEUE,
 		{ eventId: eventId ?? null },
 		eventId ? { singletonKey: eventId } : undefined,
+	);
+}
+
+export async function enqueuePrRepair() {
+	return (await jobQueue()).send(
+		PR_REPAIR_QUEUE,
+		{},
+		{ singletonKey: "repair-sweep" },
 	);
 }
 

@@ -17,6 +17,30 @@ const finish = {
 	finishReason: { unified: "stop" as const, raw: "completed" },
 };
 
+it("preserves a compaction provider failure as its cause without exposing it as chat text", async () => {
+	const failure = new Error("fixture provider failure");
+	const model = new MockLanguageModelV4({
+		doStream: async () => ({
+			stream: simulateReadableStream({
+				chunks: [{ type: "error" as const, error: failure }],
+				initialDelayInMs: null,
+				chunkDelayInMs: null,
+			}),
+		}),
+	});
+	await expect(
+		nativeModelCompactor(model, "openai", () => ({}))({
+			messages: [{ role: "user", content: "Keep the requirement" }],
+			instructions: "Stable instructions",
+			tools: {},
+			signal: new AbortController().signal,
+		}),
+	).rejects.toMatchObject({
+		message: "Native context compaction failed; history was preserved.",
+		cause: failure,
+	});
+});
+
 it("uses SDK wire conversion for xAI's explicit compact endpoint and replays its encrypted result", async () => {
 	const fetch = vi.fn(
 		async (_url: Parameters<typeof globalThis.fetch>[0], _init?: RequestInit) =>
@@ -136,6 +160,7 @@ it("keeps encrypted compaction state replayable across JSON checkpoints without 
 		store: false,
 		instructions: "Stable project context",
 	});
+	expect(model.doStreamCalls[0].toolChoice).toEqual({ type: "none" });
 	expect(JSON.parse(JSON.stringify(result.messages))).toEqual(result.messages);
 	expect(JSON.stringify(result.messages)).toContain("opaque-fixture");
 	expect(result.messages[0]).toMatchObject({

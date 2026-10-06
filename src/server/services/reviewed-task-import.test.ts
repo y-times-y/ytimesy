@@ -15,7 +15,16 @@ import { WorkspaceId } from "#/domain/ids";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import type { WorkspaceMachines } from "./workspace-machines";
 
-const mocks = vi.hoisted(() => ({ session: vi.fn(), workspace: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+	session: vi.fn(),
+	workspace: vi.fn(),
+	evidence: vi.fn(),
+	record: vi.fn(),
+}));
+vi.mock("../adapters/task-patch-evidence", () => ({
+	taskPatchEvidence: mocks.evidence,
+	recordTaskImport: mocks.record,
+}));
 vi.mock("../adapters/agent-sessions", () => ({
 	agentSessionForOwner: mocks.session,
 }));
@@ -118,6 +127,20 @@ async function fixture() {
 		cwd: destinationPath,
 	});
 	const { sha256 } = await captureTaskPatch(machines, WorkspaceId("source-vm"));
+	mocks.evidence.mockResolvedValue({
+		reviews: new Map([
+			[
+				source.id,
+				{
+					taskId: source.id,
+					sha256,
+					base: (await git(destinationPath, "rev-parse", "HEAD")).stdout.trim(),
+				},
+			],
+		]),
+		imports: [],
+	});
+	mocks.record.mockReset().mockResolvedValue(undefined);
 	commands.length = 0;
 	return {
 		sha256,
@@ -196,6 +219,107 @@ it("imports completed committed work from the saved checkout base", async () => 
 	);
 });
 
+it("recovers an applied patch even when the guest import marker was not saved", async () => {
+	const f = await fixture();
+	await importReviewedTaskChanges(
+		f.machines,
+		f.destination,
+		"source",
+		f.sha256,
+	);
+	await f.git(
+		f.destinationPath,
+		"update-ref",
+		"-d",
+		`refs/ytimesy/imports/${f.sha256}`,
+	);
+	await expect(
+		importReviewedTaskChanges(f.machines, f.destination, "source", f.sha256),
+	).resolves.toMatchObject({ status: "imported" });
+	expect(await readFile(join(f.destinationPath, "existing.txt"), "utf8")).toBe(
+		"after\n",
+	);
+	expect(mocks.record).toHaveBeenCalledTimes(2);
+});
+
+it("rejects acceptance changed during source capture before preparing the destination", async () => {
+	const f = await fixture();
+	const evidence = await mocks.evidence();
+	mocks.evidence
+		.mockResolvedValueOnce(evidence)
+		.mockResolvedValueOnce({ reviews: new Map(), imports: [] });
+	await expect(
+		importReviewedTaskChanges(f.machines, f.destination, "source", f.sha256),
+	).rejects.toThrow("acceptance changed");
+	expect(mocks.workspace).not.toHaveBeenCalled();
+});
+
+it("decodes and applies in one guest call while retaining separate cleanup", async () => {
+	const f = await fixture();
+	await importReviewedTaskChanges(
+		f.machines,
+		f.destination,
+		"source",
+		f.sha256,
+	);
+	expect(f.commands).toHaveLength(3); // Source export, target decode/apply, cleanup.
+	expect(f.commands[1]).toContain("base64.b64decode");
+	expect(f.commands[1]).toContain(
+		"git -c core.hooksPath=/dev/null apply --check",
+	);
+	expect(f.commands[2]).toContain("rm -f --");
+});
+
+it("reuses the integration workspace without re-preparing its checkout", async () => {
+	const f = await fixture();
+	await importReviewedTaskChanges(
+		f.machines,
+		f.destination,
+		"source",
+		f.sha256,
+		{
+			machines: f.machines,
+			vm: WorkspaceId("destination-vm"),
+			cwd: f.destinationPath,
+		},
+	);
+	expect(mocks.workspace).not.toHaveBeenCalled();
+	expect(mocks.record).toHaveBeenCalledWith(
+		"owner",
+		"destination",
+		expect.objectContaining({ sha256: f.sha256 }),
+	);
+});
+
+it("rejects a prepared workspace belonging to a different destination", async () => {
+	const f = await fixture();
+	await expect(
+		importReviewedTaskChanges(f.machines, f.destination, "source", f.sha256, {
+			machines: f.machines,
+			vm: WorkspaceId("other-vm"),
+			cwd: f.destinationPath,
+		}),
+	).rejects.toThrow("does not match the destination");
+	expect(f.commands).toHaveLength(0);
+	expect(f.writes).toHaveLength(0);
+});
+
+it("rejects transfer corruption before Git and cleans up without an import receipt", async () => {
+	const f = await fixture();
+	const originalWrite = f.machines.writeTextFile.bind(f.machines);
+	vi.spyOn(f.machines, "writeTextFile").mockImplementation((vm, path) =>
+		originalWrite(vm, path, Buffer.from("tampered patch").toString("base64")),
+	);
+	await expect(
+		importReviewedTaskChanges(f.machines, f.destination, "source", f.sha256),
+	).rejects.toThrow("transfer failed");
+	expect(await readFile(join(f.destinationPath, "existing.txt"), "utf8")).toBe(
+		"before\n",
+	);
+	expect(mocks.record).not.toHaveBeenCalled();
+	for (const path of f.writes) await expect(readFile(path)).rejects.toThrow();
+});
+
 it("rejects a conflict atomically and preserves unrelated destination edits", async () => {
 	const f = await fixture();
 	await writeFile(
@@ -214,6 +338,30 @@ it("rejects a conflict atomically and preserves unrelated destination edits", as
 	await expect(
 		readFile(join(f.destinationPath, "new file.txt")),
 	).rejects.toThrow();
+});
+
+it("recovers a lost database receipt without applying the patch twice", async () => {
+	const f = await fixture();
+	mocks.record.mockRejectedValueOnce(new Error("Receipt connection lost"));
+	await expect(
+		importReviewedTaskChanges(f.machines, f.destination, "source", f.sha256),
+	).rejects.toThrow("Receipt connection lost");
+	expect(await readFile(join(f.destinationPath, "existing.txt"), "utf8")).toBe(
+		"after\n",
+	);
+	await expect(
+		importReviewedTaskChanges(f.machines, f.destination, "source", f.sha256),
+	).resolves.toMatchObject({ status: "imported" });
+	expect(mocks.record).toHaveBeenCalledTimes(2);
+});
+
+it("rejects an unaccepted patch identity before preparing the integration machine", async () => {
+	const f = await fixture();
+	mocks.evidence.mockResolvedValue({ reviews: new Map(), imports: [] });
+	await expect(
+		importReviewedTaskChanges(f.machines, f.destination, "source", f.sha256),
+	).rejects.toThrow("accepted by the parent");
+	expect(mocks.workspace).not.toHaveBeenCalled();
 });
 
 it("rejects a different base before applying any files", async () => {
@@ -237,7 +385,7 @@ it("rejects a different base before applying any files", async () => {
 	);
 });
 
-it("serializes overlapping imports and refuses to overwrite the first result", async () => {
+it("serializes identical imports and safely reuses the already-applied result", async () => {
 	const f = await fixture();
 	const results = await Promise.allSettled([
 		importReviewedTaskChanges(f.machines, f.destination, "source", f.sha256),
@@ -245,9 +393,9 @@ it("serializes overlapping imports and refuses to overwrite the first result", a
 	]);
 	expect(
 		results.filter((result) => result.status === "fulfilled"),
-	).toHaveLength(1);
+	).toHaveLength(2);
 	expect(results.filter((result) => result.status === "rejected")).toHaveLength(
-		1,
+		0,
 	);
 	expect(await readFile(join(f.destinationPath, "existing.txt"), "utf8")).toBe(
 		"after\n",
@@ -321,6 +469,8 @@ it("does not apply a patch through a destination symlink outside the checkout", 
 		f.machines,
 		WorkspaceId("source-vm"),
 	);
+	const previous = await mocks.evidence();
+	previous.reviews.get("source").sha256 = sha256;
 	await expect(
 		importReviewedTaskChanges(f.machines, f.destination, "source", sha256),
 	).rejects.toThrow("conflicts");

@@ -59,6 +59,12 @@ beforeAll(async () => {
 	);
 	await db.exec(
 		await readFile(
+			"supabase/migrations/20261005160000_agent_pr_repair.sql",
+			"utf8",
+		),
+	);
+	await db.exec(
+		await readFile(
 			"supabase/migrations/20261001120000_conversation_delivery.sql",
 			"utf8",
 		),
@@ -88,6 +94,23 @@ function submit(userId = "alice", targetSessionId = sessionId) {
 		items: [],
 	});
 }
+
+it("recovers a lost repair wakeup acknowledgement without queuing a second turn", async () => {
+	const input = {
+		sessionId,
+		userId: "alice",
+		connectionId,
+		revision,
+		modelId: "test-model",
+		routeId: `api/${connectionId}/test-model`,
+		messages: [{ role: "user" as const, content: "repair" }],
+		items: [],
+		idempotencyKey: "repair-unique",
+	};
+	await enqueueApiTurn(input);
+	await enqueueApiTurn(input);
+	expect((await db.query("select * from api_turn")).rows).toHaveLength(1);
+});
 
 it("admits another user's queued work when one user reaches their shared worker limit", async () => {
 	const second = randomUUID();

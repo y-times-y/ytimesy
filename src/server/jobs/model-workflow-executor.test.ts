@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { signDeliveryRequest } from "#/domain/delivery-auth";
 import type { WorkspaceMachines } from "../services/workspace-machines";
 import { executeWorkflowRequest } from "./model-workflow-executor";
@@ -8,6 +8,10 @@ const mocks = vi.hoisted(() => ({
 	finalize: vi.fn(),
 	complete: vi.fn(),
 	run: vi.fn(),
+	stage: vi.fn(),
+}));
+vi.mock("../services/pr-repair-webhook", () => ({
+	stageVerifiedPrRepairSignal: mocks.stage,
 }));
 vi.mock("../adapters/model-workflow-steps", () => ({
 	claimModelWorkflowStep: mocks.claim,
@@ -41,6 +45,45 @@ beforeEach(() => {
 		remainingMs: 1000,
 	});
 	mocks.run.mockResolvedValue("continue");
+});
+afterEach(() => vi.unstubAllEnvs());
+
+it("persists only authenticated, explicitly enabled repair references without running inference", async () => {
+	const endpoint = "https://executor.example/pr-repair-event";
+	const delivery = {
+		deliveryId: step.turnId,
+		signal: {
+			repositoryId: 1,
+			fullName: "owner/repo",
+			installationId: 1,
+			headSha: "a".repeat(40),
+			kind: "check_run",
+			sourceId: 3,
+			prNumber: null,
+		},
+	};
+	const body = JSON.stringify(delivery);
+	const headers = await signDeliveryRequest(secret, "POST", endpoint, body);
+	const unsigned = new Request(endpoint, { method: "POST", body });
+	expect(
+		(await executeWorkflowRequest(unsigned, secret, machines)).status,
+	).toBe(401);
+	vi.stubEnv("YTIMESY_PR_REPAIR_ENABLED", "1");
+	expect(
+		(
+			await executeWorkflowRequest(
+				new Request(endpoint, { method: "POST", body, headers }),
+				secret,
+				machines,
+			)
+		).status,
+	).toBe(200);
+	expect(mocks.stage).toHaveBeenCalledWith(
+		delivery.deliveryId,
+		delivery.signal,
+	);
+	expect(mocks.run).not.toHaveBeenCalled();
+	expect(mocks.claim).not.toHaveBeenCalled();
 });
 
 it("rejects unauthenticated, oversized, malformed and credential-bearing requests before execution", async () => {

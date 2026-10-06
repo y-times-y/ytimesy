@@ -77,6 +77,7 @@ import {
 	refreshOpenCodeAuthStatus,
 	submitOpenCodeTask,
 } from "#/server/adapters/opencode/serve-session";
+import { acceptTaskPatch } from "#/server/adapters/task-patch-evidence";
 import { readyWorkspaceForOwner } from "#/server/adapters/workspaces";
 import { enqueueAgentTaskEvent } from "#/server/jobs/queue";
 import {
@@ -476,6 +477,7 @@ export function sendHarnessWorkspaceTask(
 		readonly variant?: string;
 		readonly fast?: boolean;
 		readonly runtimeText?: string;
+		readonly idempotencyKey?: string;
 	},
 ): Effect.Effect<PublicHarnessSession> {
 	if (
@@ -770,6 +772,7 @@ export function runAgentTaskTool(
 	scope: HarnessSessionScope,
 	parent: AgentSessionRecord,
 	request: NonNullable<ReturnType<typeof parseAgentTaskToolRequest>>,
+	control?: { signal: AbortSignal; turnId: string },
 ): Effect.Effect<unknown, unknown> {
 	return Effect.gen(function* () {
 		if (!scope.projectId) throw new Error("The project is not available.");
@@ -803,6 +806,47 @@ export function runAgentTaskTool(
 			);
 		if (parent.userId !== scope.userId || parent.projectId !== scope.projectId)
 			throw new Error("The agent is not available in this project.");
+		if (request.tool === "integrate_reviewed_tasks") {
+			if (!control)
+				throw new Error(
+					"Automated integration requires the cancellable cloud harness; use an integration builder with this runtime.",
+				);
+			const { integrateTaskDraft } = yield* Effect.tryPromise(
+				() => import("./automated-task-integration"),
+			);
+			const { assertPatchIdentity } = yield* Effect.tryPromise(
+				() => import("#/domain/task-patch-evidence"),
+			);
+			const raw = request.arguments.sources;
+			if (!Array.isArray(raw))
+				throw new Error("Reviewed sources are required.");
+			const sources = raw.map((source) => {
+				if (
+					!source ||
+					typeof source !== "object" ||
+					typeof source.taskId !== "string" ||
+					typeof source.sha256 !== "string" ||
+					typeof source.base !== "string"
+				)
+					throw new Error("Invalid reviewed patch identity.");
+				const identity = {
+					taskId: source.taskId,
+					sha256: source.sha256,
+					base: source.base,
+				};
+				assertPatchIdentity(identity);
+				return identity;
+			});
+			return yield* Effect.tryPromise(() =>
+				integrateTaskDraft(
+					machines,
+					parent,
+					taskToolString(request.arguments, "taskId"),
+					sources,
+					control,
+				),
+			);
+		}
 		if (request.tool === "read_task_capacity")
 			return yield* Effect.tryPromise(() => agentCapacity(scope.userId));
 		if (request.tool === "list_peers") {
@@ -827,6 +871,12 @@ export function runAgentTaskTool(
 				),
 			);
 		if (request.tool === "create_task") {
+			const startImmediately = request.arguments.startImmediately;
+			if (
+				startImmediately !== undefined &&
+				typeof startImmediately !== "boolean"
+			)
+				throw new Error("startImmediately must be a boolean.");
 			const title = taskToolString(request.arguments, "title");
 			const prompt = taskToolString(request.arguments, "prompt");
 			if (!title || !prompt)
@@ -857,13 +907,34 @@ export function runAgentTaskTool(
 						taskToolString(request.arguments, "dependsOnTaskId") || null,
 				}),
 			);
-			return {
+			const draft = {
 				taskId: task.id,
 				title: task.title,
 				status: "draft",
 				placement: task.taskPlacement,
 				execution: task.taskExecution,
 			};
+			if (!startImmediately) return draft;
+			return yield* startPreparedAgentTask(machines, scope, task.id).pipe(
+				Effect.map((started) => ({
+					...draft,
+					status: "working",
+					machineId: started.machineId,
+				})),
+				Effect.catchAll(() =>
+					Effect.tryPromise(() =>
+						agentSessionForOwner(scope.userId, task.id),
+					).pipe(
+						Effect.catchAll(() => Effect.succeed(null)),
+						Effect.map((current) => ({
+							...draft,
+							status: current?.taskState ?? "unknown",
+							startError:
+								"Task ID retained. Start was not confirmed; inspect capacity and task state before retrying this same task. Do not create a replacement.",
+						})),
+					),
+				),
+			);
 		}
 		if (request.tool === "report_task_blocked") {
 			if (!parent.parentSessionId) {
@@ -910,6 +981,21 @@ export function runAgentTaskTool(
 		const taskId = taskToolString(request.arguments, "taskId");
 		const target = taskRows.find((row) => row.id === taskId);
 		if (!target) throw new Error("That descendant task is not available.");
+		if (request.tool === "read_task_output") {
+			const { readAuthorizedTaskOutput } = yield* Effect.tryPromise(
+				() => import("./task-output-evidence"),
+			);
+			return yield* Effect.tryPromise(() =>
+				readAuthorizedTaskOutput({
+					machines: machinesForAgentSession(machines, target),
+					task: target,
+					ownerId: scope.userId,
+					projectId: scope.projectId as string,
+					page: request.arguments,
+					signal: control?.signal ?? AbortSignal.timeout(20000),
+				}),
+			);
+		}
 		if (request.tool === "edit_task") {
 			const title = taskToolString(request.arguments, "title");
 			const prompt = taskToolString(request.arguments, "prompt");
@@ -991,11 +1077,44 @@ export function runAgentTaskTool(
 			if (target.taskState !== "done") {
 				throw new Error("Only a completed task can be marked reviewed.");
 			}
-			const reviewed = yield* Effect.tryPromise(() =>
-				saveAgentTaskReview(target.id, "reviewed"),
+			if (target.taskAccess !== "read_write") {
+				const reviewed = yield* Effect.tryPromise(() =>
+					saveAgentTaskReview(target.id, "reviewed"),
+				);
+				if (!reviewed) throw new Error("The task review could not be saved.");
+				return { taskId: target.id, reviewState: "reviewed" };
+			}
+			if (!target.providerRef || !target.parentSessionId)
+				throw new Error("Writable review workspace is unavailable.");
+			const expectedSha256 = taskToolString(
+				request.arguments,
+				"expectedSha256",
 			);
-			if (!reviewed) throw new Error("The task review could not be saved.");
-			return { taskId: target.id, reviewState: "reviewed" };
+			if (!/^[a-f0-9]{64}$/.test(expectedSha256))
+				throw new Error("Provide the exact patch hash from inspect_task_diff.");
+			const patch = yield* Effect.tryPromise(() =>
+				captureTaskPatch(
+					machinesForAgentSession(machines, target),
+					WorkspaceId(target.providerRef as string),
+				),
+			);
+			if (patch.sha256 !== expectedSha256)
+				throw new Error(
+					"Task changed after inspection; inspect its exact diff again before accepting.",
+				);
+			yield* Effect.tryPromise(() =>
+				acceptTaskPatch(scope.userId, target.parentSessionId as string, {
+					taskId: target.id,
+					sha256: patch.sha256,
+					base: patch.base,
+				}),
+			);
+			return {
+				taskId: target.id,
+				reviewState: "reviewed",
+				sha256: patch.sha256,
+				base: patch.base,
+			};
 		}
 		if (request.tool === "select_competition_winner") {
 			yield* Effect.tryPromise(() =>

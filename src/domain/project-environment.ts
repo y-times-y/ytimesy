@@ -20,11 +20,30 @@ export const environmentRecipe = z
 			.default([]),
 		verify: z.array(command).max(20).default([]),
 		checks: z.array(command).max(20).default([]),
+		parallelChecks: z.array(z.array(command).min(2).max(4)).max(10).default([]),
 		services: z.array(environmentService).max(12).default([]),
 		timeoutSeconds: z.number().int().min(1).max(3600).default(900),
 	})
 	.strict()
 	.superRefine((recipe, ctx) => {
+		const checks = [...new Set([...recipe.verify, ...recipe.checks])];
+		const grouped = new Set<string>();
+		for (const group of recipe.parallelChecks) {
+			const start = checks.indexOf(group[0]);
+			if (
+				start < 0 ||
+				group.some(
+					(item, index) => checks[start + index] !== item || grouped.has(item),
+				)
+			) {
+				ctx.addIssue({
+					code: "custom",
+					message:
+						"Parallel check groups must contain distinct contiguous checks in declared verification order.",
+				});
+			}
+			for (const item of group) grouped.add(item);
+		}
 		if (
 			new Set(recipe.services.map((service) => service.name)).size !==
 			recipe.services.length

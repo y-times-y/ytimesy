@@ -9,10 +9,62 @@ export type ContextBudget = {
 export const estimateContextTokens = (value: unknown) =>
 	Math.ceil(Buffer.byteLength(JSON.stringify(value), "utf8") / 3);
 
+export type ContextMeasurement = {
+	tokens: number;
+	estimatedHistory: number;
+};
+
+export function workingContextTarget(input: {
+	history: ModelMessage[];
+	implementation: boolean;
+	workingContextTokens?: number;
+	coordinationWorkingContextTokens?: number;
+}) {
+	const delegationStarted = input.history.some(
+		(message) =>
+			message.role === "assistant" &&
+			Array.isArray(message.content) &&
+			message.content.some(
+				(part) => part.type === "tool-call" && part.toolName === "create_task",
+			),
+	);
+	return input.implementation || delegationStarted
+		? input.workingContextTokens
+		: (input.coordinationWorkingContextTokens ?? input.workingContextTokens);
+}
+
+/** Provider usage already counts encoded reasoning. Estimate only the history added since that measurement. */
+export function contextTokenPressure(
+	history: ModelMessage[],
+	measurement?: ContextMeasurement,
+) {
+	const estimate = estimateContextTokens(history);
+	return measurement
+		? Math.max(0, measurement.tokens + estimate - measurement.estimatedHistory)
+		: estimate;
+}
+
+/** Function results were produced after inference, so they are not included in that call's usage. */
+export function contextMeasurement(
+	historyBeforeStep: ModelMessage[],
+	response: ModelMessage[],
+	inputTokens: number,
+	outputTokens: number,
+): ContextMeasurement {
+	return {
+		tokens: inputTokens + outputTokens,
+		estimatedHistory: estimateContextTokens([
+			...historyBeforeStep,
+			...response.filter((message) => message.role !== "tool"),
+		]),
+	};
+}
+
 export function modelContextBudget(input: {
 	contextWindow?: number;
 	maxOutputTokens?: number;
 	autoCompactTokenLimit?: number;
+	workingContextTokens?: number;
 	fixedTokens?: number;
 }): ContextBudget {
 	const window = input.contextWindow ?? 48_000;
@@ -32,6 +84,7 @@ export function modelContextBudget(input: {
 			512,
 			Math.min(
 				input.autoCompactTokenLimit ?? Math.floor(inputLimitTokens * 0.8),
+				input.workingContextTokens ?? inputLimitTokens,
 				inputLimitTokens - 512,
 			),
 		),

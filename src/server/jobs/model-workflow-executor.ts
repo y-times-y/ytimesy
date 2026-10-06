@@ -6,6 +6,7 @@ import {
 	MAX_WORKFLOW_MODEL_STEPS,
 	workflowStepSchema,
 } from "#/domain/model-workflow";
+import { prRepairDelivery } from "#/domain/pr-repair-signal";
 import { finalizeApiTurn } from "../adapters/api-turns";
 import { coordinateConversationTurn } from "../adapters/conversation-turn-control";
 import { modelWorkflowSigningSecret } from "../adapters/model-workflow-dispatch";
@@ -13,6 +14,7 @@ import {
 	claimModelWorkflowStep,
 	completeModelWorkflowStep,
 } from "../adapters/model-workflow-steps";
+import { stageVerifiedPrRepairSignal } from "../services/pr-repair-webhook";
 import type { WorkspaceMachines } from "../services/workspace-machines";
 import { runApiTurn } from "./api-turn";
 
@@ -22,9 +24,10 @@ export async function executeWorkflowRequest(
 	secret: string,
 	machines: WorkspaceMachines | (() => WorkspaceMachines),
 ) {
+	const path = new URL(request.url).pathname;
 	if (
 		request.method !== "POST" ||
-		new URL(request.url).pathname !== "/model-step"
+		!["/model-step", "/pr-repair-event"].includes(path)
 	)
 		return new Response(null, { status: 404 });
 	let body: string;
@@ -40,6 +43,17 @@ export async function executeWorkflowRequest(
 		value = JSON.parse(body);
 	} catch {
 		return new Response(null, { status: 400 });
+	}
+	if (path === "/pr-repair-event") {
+		if (process.env.YTIMESY_PR_REPAIR_ENABLED !== "1")
+			return new Response(null, { status: 503 });
+		const delivery = prRepairDelivery.safeParse(value);
+		if (!delivery.success) return new Response(null, { status: 400 });
+		await stageVerifiedPrRepairSignal(
+			delivery.data.deliveryId,
+			delivery.data.signal,
+		);
+		return Response.json({ accepted: true });
 	}
 	const parsed = workflowStepSchema.safeParse(value);
 	if (!parsed.success) return new Response(null, { status: 400 });

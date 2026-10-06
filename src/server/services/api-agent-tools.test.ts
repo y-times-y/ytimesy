@@ -1,7 +1,10 @@
 import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
-import { claimAgentTaskCommand } from "../adapters/agent-task-command-receipts";
+import {
+	claimAgentTaskCommand,
+	completeAgentTaskCommand,
+} from "../adapters/agent-task-command-receipts";
 import { readModelContextArchive } from "../adapters/context-archives";
 import { apiAgentTools } from "./api-agent-tools";
 import { runAgentTaskTool } from "./harness-workspace-session";
@@ -14,8 +17,8 @@ vi.mock("../adapters/context-archives", async (original) => ({
 
 vi.mock("../adapters/agent-task-command-receipts", () => ({
 	claimAgentTaskCommand: vi.fn(async () => ({ kind: "claimed" })),
-	completeAgentTaskCommand: vi.fn(),
-	renewAgentTaskCommandClaim: vi.fn(),
+	completeAgentTaskCommand: vi.fn(async () => {}),
+	renewAgentTaskCommandClaim: vi.fn(async () => {}),
 }));
 vi.mock("./harness-workspace-session", () => ({
 	runAgentTaskTool: vi.fn(() => Effect.succeed({ peers: [] })),
@@ -47,6 +50,62 @@ it("keeps control-plane tools usable while the execution VM is unavailable", asy
 	await expect(executeInspectionTool(tools.list_files, {})).rejects.toThrow(
 		"VM unavailable",
 	);
+});
+
+it("records failed execution and replays its cause without repeating a potentially partial effect", async () => {
+	const { tools } = leadTools();
+	vi.mocked(claimAgentTaskCommand).mockResolvedValueOnce({ kind: "claimed" });
+	vi.mocked(runAgentTaskTool).mockImplementationOnce(() =>
+		Effect.fail(new Error("Peer unavailable")),
+	);
+	await expect(executeInspectionTool(tools.list_peers, {})).rejects.toThrow(
+		"Peer unavailable",
+	);
+	const completed = vi.mocked(completeAgentTaskCommand).mock.calls.at(-1)?.[1];
+	expect(completed).toMatchObject({
+		ok: false,
+		error: expect.stringContaining("partial effects may exist"),
+	});
+	if (!completed) throw new Error("Failure receipt was not persisted");
+	vi.mocked(claimAgentTaskCommand).mockResolvedValueOnce({
+		kind: "done",
+		response: completed,
+	});
+	const calls = vi.mocked(runAgentTaskTool).mock.calls.length;
+	await expect(executeInspectionTool(tools.list_peers, {})).rejects.toThrow(
+		"Peer unavailable",
+	);
+	expect(runAgentTaskTool).toHaveBeenCalledTimes(calls);
+});
+
+it("refuses a reused call ID with changed arguments before executing another operation", async () => {
+	const { tools } = leadTools();
+	vi.mocked(claimAgentTaskCommand).mockResolvedValueOnce({ kind: "claimed" });
+	await executeInspectionTool(tools.list_peers, {});
+	const completed = vi.mocked(completeAgentTaskCommand).mock.calls.at(-1)?.[1];
+	if (!completed) throw new Error("Tool receipt was not persisted");
+	vi.mocked(claimAgentTaskCommand).mockResolvedValueOnce({
+		kind: "done",
+		response: completed,
+	});
+	const calls = vi.mocked(runAgentTaskTool).mock.calls.length;
+	await expect(
+		executeInspectionTool(tools.list_peers, { changed: true }),
+	).rejects.toThrow("No operation was replayed");
+	expect(runAgentTaskTool).toHaveBeenCalledTimes(calls);
+});
+
+it("does not infer matching inputs from a legacy receipt without a fingerprint", async () => {
+	const { tools } = leadTools();
+	vi.mocked(claimAgentTaskCommand).mockResolvedValueOnce({
+		kind: "done",
+		response: { id: "inspection", ok: true, result: { peers: [] } },
+	});
+	const calls = vi.mocked(runAgentTaskTool).mock.calls.length;
+	await expect(executeInspectionTool(tools.list_peers, {})).rejects.toThrow(
+		"predate input validation",
+	);
+	expect(runAgentTaskTool).toHaveBeenCalledTimes(calls);
 });
 
 it("reads archived evidence without a VM, bounded and scoped to the current chat", async () => {
@@ -94,7 +153,19 @@ function leadTools() {
 	const machines = {
 		exec: async (_vm: string, command: string) => {
 			commands.push(command);
-			return { exitCode: 0, stdout: "README.md\n", stderr: "" };
+			return {
+				exitCode: 0,
+				stdout: JSON.stringify({
+					exitCode: 0,
+					stdout: "README.md\n",
+					stderr: "",
+					reference: "fixture",
+					stopped: null,
+					stdoutNextStart: null,
+					stderrNextStart: null,
+				}),
+				stderr: "",
+			};
 		},
 	} as unknown as WorkspaceMachines;
 	const session = {
@@ -136,6 +207,10 @@ it("separates repeated provider call IDs across durable steps", async () => {
 			expect.anything(),
 			expect.anything(),
 			expect.objectContaining({ id: `step-${index}:inspection` }),
+			expect.objectContaining({
+				signal: expect.any(AbortSignal),
+				turnId: "turn",
+			}),
 		);
 	}
 });
@@ -154,6 +229,30 @@ async function executeInspectionTool(
 }
 
 describe("read-only API lead tools", () => {
+	it("does not enable writes from a legacy root access flag", () => {
+		const tools = apiAgentTools({
+			machines: {} as WorkspaceMachines,
+			session: {
+				id: "lead",
+				taskAccess: "read_write",
+				parentSessionId: null,
+			} as AgentSessionRecord,
+			workspace: async () => {
+				throw new Error("unused");
+			},
+			turnId: "turn",
+			signal: new AbortController().signal,
+		});
+		for (const name of [
+			"create_file",
+			"replace_text",
+			"apply_patch",
+			"bash",
+			"start_command",
+			"browser_click",
+		])
+			expect(tools[name]).toBeUndefined();
+	});
 	it("does not offer a parent-only blocked-report tool to the root", () => {
 		expect(leadTools().tools.report_task_blocked).toBeUndefined();
 	});
@@ -180,8 +279,8 @@ describe("read-only API lead tools", () => {
 		await executeInspectionTool(tools.list_files, {});
 		await executeInspectionTool(tools.search_files, { query: "task" });
 		expect(commands).toEqual([
-			"git -C '/workspace/repo' ls-files --cached --others --exclude-standard",
-			"git -C '/workspace/repo' grep -n -I -m 5 -e 'task' -- .",
+			expect.stringContaining("ls-files --cached --others --exclude-standard"),
+			expect.stringContaining("grep --untracked --exclude-standard -n -I"),
 		]);
 	});
 
@@ -190,6 +289,41 @@ describe("read-only API lead tools", () => {
 		await executeInspectionTool(tools.search_files, {
 			query: "a'; touch /tmp/unwanted; echo 'b",
 		});
-		expect(commands[0]).toContain("'a'\\''; touch /tmp/unwanted; echo '\\''b'");
+		expect(commands[0]).toContain("touch /tmp/unwanted");
+		expect(commands[0]).toContain("python3 -c");
+	});
+
+	it("scopes listings and searches to literal task paths without Git pathspec expansion", async () => {
+		const { commands, tools } = leadTools();
+		await executeInspectionTool(tools.list_files, { path: "src/domain" });
+		await executeInspectionTool(tools.search_files, {
+			query: "validator",
+			path: "src/[policy]",
+		});
+		expect(commands[0]).toContain("--literal-pathspecs");
+		expect(commands[0]).toContain("--exclude-standard --");
+		expect(commands[1]).toContain("--literal-pathspecs");
+		expect(commands[1]).toContain("src/[policy]");
+	});
+
+	it("rejects out-of-repository and metadata search scopes before guest execution", async () => {
+		const { commands, tools } = leadTools();
+		for (const path of [
+			"/tmp",
+			"../other",
+			"src/../../other",
+			".git/config",
+			"src/.git",
+			"src\\other",
+			"src\0other",
+		]) {
+			await expect(
+				executeInspectionTool(tools.list_files, { path }),
+			).rejects.toThrow();
+			await expect(
+				executeInspectionTool(tools.search_files, { query: "secret", path }),
+			).rejects.toThrow();
+		}
+		expect(commands).toEqual([]);
 	});
 });

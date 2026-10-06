@@ -3,6 +3,7 @@ import { repositoriesForProject } from "#/domain/projects";
 import { lastUserMessageText, type SessionItem } from "#/domain/session-item";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import { workspaceRuntimeFromEnv } from "../adapters/freestyle/workspace-runtime";
+import { evaluationRunForTask } from "../adapters/harness-evaluation";
 import { projectForOwner } from "../adapters/projects";
 import { repositoryDirectory } from "../adapters/repository-setup";
 import { automaticTurnCommitArgv } from "../adapters/turn-commit";
@@ -21,6 +22,11 @@ export async function commitCompletedSessionTurn(
 		!session.providerRef ||
 		session.taskPlacement === "shared" ||
 		session.taskAccess === "read_only"
+	)
+		return;
+	if (
+		process.env.YTIMESY_HARNESS_EVALUATION_ENABLED === "1" &&
+		(await evaluationRunForTask(session.userId, session.id))
 	)
 		return;
 	const project = await projectForOwner(session.userId, session.projectId);

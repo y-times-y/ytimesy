@@ -6,12 +6,14 @@ import type {
 import { WorkspaceId } from "#/domain/ids";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
 import { subscriptionTurnRevision } from "#/domain/subscription-turn";
+import { integratedTaskWriter } from "#/domain/task-patch-evidence";
 import {
 	agentSessionForOwner,
 	descendantAgentSessions,
 } from "#/server/adapters/agent-sessions";
 import { database } from "#/server/adapters/database";
 import { projectForOwner } from "#/server/adapters/projects";
+import { taskPatchEvidence } from "#/server/adapters/task-patch-evidence";
 import {
 	bindAgentSessionMachine,
 	deleteAgentSessionMachine,
@@ -19,6 +21,7 @@ import {
 } from "#/server/services/agent-session-machine";
 import { cancelServerTurn } from "#/server/services/cancel-server-turn";
 import { sendHarnessWorkspaceTask } from "#/server/services/harness-workspace-session";
+import { captureTaskPatch } from "#/server/services/reviewed-task-import";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
 
 export const evaluationPatchScript = (commit: string) => `set -eu
@@ -49,11 +52,6 @@ export async function openProductionEvaluation(
 		title: `Evaluation ${task.id}`,
 	});
 	try {
-		// Pin this new chat only. Never switch the user's project or other chats.
-		await database().query(
-			"update agent_session set selected_branch=$3,working_branch=$3,base_branch=$3 where id=$1 and user_id=$2",
-			[root.id, userId, task.branch],
-		);
 		await bindAgentSessionMachine(machines, {
 			userId,
 			projectId: project.id,
@@ -72,6 +70,19 @@ export async function openProductionEvaluation(
 			throw new Error(
 				`Evaluation checkout is dirty or differs from the pinned commit: ${head.stdout.trim()}`,
 			);
+		const branch = await machines.exec(
+			WorkspaceId(bound.providerRef),
+			'cd "$(cat /tmp/ytimesy-project-cwd)" && git symbolic-ref --short HEAD && git check-ref-format --branch "$(git symbolic-ref --short HEAD)" >/dev/null',
+			15000,
+		);
+		if (branch.exitCode !== 0 || !branch.stdout.trim())
+			throw new Error("Evaluation snapshot must have a valid local branch.");
+		// Lazy checkout preparation must retain the frozen snapshot, not fetch a
+		// mutable remote branch. Children inherit this chat's working branch.
+		await database().query(
+			"update agent_session set selected_branch=$3,working_branch=$3,base_branch=$4 where id=$1 and user_id=$2",
+			[root.id, userId, branch.stdout.trim(), task.branch],
+		);
 		const revision = subscriptionTurnRevision(protocol.reasoning, false);
 		const registered = await database().query<{ id: string }>(
 			`insert into harness_evaluation_run(user_id,root_session_id,model_id,connection_revision,deadline,max_requests,max_tokens)
@@ -194,17 +205,31 @@ export async function exportReviewedEvaluationPatches(
 		throw new Error(
 			"Writable builders did not have distinct isolated execution machines.",
 		);
-	return Promise.all(
-		writers.map(async (writer) => {
-			const output = await machines.exec(
-				WorkspaceId(writer.providerRef as string),
-				evaluationPatchScript(commit),
-				30000,
-			);
-			if (output.exitCode) throw new Error("Builder patch export failed.");
-			return { taskId: writer.id, patch: output.stdout };
-		}),
+	const evidence = await taskPatchEvidence(userId, [
+		rootId,
+		...snapshot.children.map((child) => child.id),
+	]);
+	const selected = integratedTaskWriter(
+		writers,
+		evidence.imports,
+		evidence.reviews,
 	);
+	const accepted = evidence.reviews.get(selected.id);
+	if (!accepted)
+		throw new Error("Final checkout has no exact accepted review.");
+	const patch = await captureTaskPatch(
+		machines,
+		WorkspaceId(selected.providerRef as string),
+	);
+	if (
+		patch.base !== commit ||
+		patch.base !== accepted.base ||
+		patch.sha256 !== accepted.sha256
+	)
+		throw new Error(
+			"Final checkout differs from its accepted review or frozen base.",
+		);
+	return [{ taskId: selected.id, patch: patch.bytes.toString("utf8") }];
 }
 
 /** Capture durable traces and guard counters before disposable-session deletion cascades them away. */

@@ -50,6 +50,7 @@ export async function enqueueApiTurn(input: {
 	messages: ModelMessage[];
 	items: readonly SessionItem[];
 	preparedTask?: boolean;
+	idempotencyKey?: string;
 }) {
 	const client = await database().connect();
 	try {
@@ -74,6 +75,16 @@ export async function enqueueApiTurn(input: {
 			"select id,turn_status,parent_session_id,task_state from agent_session where id=$1 and user_id=$2 for update",
 			[input.sessionId, input.userId],
 		);
+		if (input.idempotencyKey) {
+			const existing = await client.query(
+				"select id from api_turn where session_id=$1 and user_id=$2 and idempotency_key=$3",
+				[input.sessionId, input.userId, input.idempotencyKey],
+			);
+			if (existing.rows.length) {
+				await client.query("commit");
+				return;
+			}
+		}
 		if (
 			!session.rows[0] ||
 			(session.rows[0].turn_status === "running" &&
@@ -87,8 +98,8 @@ export async function enqueueApiTurn(input: {
 				"Finish or stop the current turn before sending another prompt.",
 			);
 		await client.query(
-			`insert into api_turn(id,session_id,user_id,connection_id,connection_revision,model_id,state,messages,items)
-			 values($1,$2,$3,$4,$5,$6,'queued',$7,$8)`,
+			`insert into api_turn(id,session_id,user_id,connection_id,connection_revision,model_id,state,messages,items,idempotency_key)
+			 values($1,$2,$3,$4,$5,$6,'queued',$7,$8,$9)`,
 			[
 				randomUUID(),
 				input.sessionId,
@@ -98,6 +109,7 @@ export async function enqueueApiTurn(input: {
 				input.modelId,
 				JSON.stringify(input.messages),
 				JSON.stringify(input.items),
+				input.idempotencyKey ?? null,
 			],
 		);
 		await client.query(
@@ -152,10 +164,21 @@ export async function claimApiTurn(
 	)
 		throw new Error("Turn admission limits must be positive bounded integers.");
 	const client = await database().connect();
+	let discardConnection = false;
 	try {
 		await client.query("begin");
 		// Admission is short and serialized across workers; model/tool work never holds this lock.
-		await client.query("select pg_advisory_xact_lock(81738419)");
+		// Poolers may ignore startup settings. Enforce the bounds inside this transaction,
+		// including when a worker disappears after claiming a turn but before committing.
+		await client.query("set local idle_in_transaction_session_timeout = '30s'");
+		await client.query("set local statement_timeout = '20s'");
+		const admission = await client.query<{ acquired: boolean }>(
+			"select pg_try_advisory_xact_lock(81738419) as acquired",
+		);
+		if (!admission.rows[0]?.acquired) {
+			await client.query("commit");
+			return null;
+		}
 		const result = await client.query<ApiTurn>(
 			`update api_turn set state='running',lease_id=$1,heartbeat_at=now(),updated_at=now()
 			 where id=(select q.id from api_turn q where q.state='queued' and not q.cancel_requested
@@ -167,10 +190,15 @@ export async function claimApiTurn(
 		await client.query("commit");
 		return result.rows[0] ?? null;
 	} catch (error) {
-		await client.query("rollback");
+		try {
+			await client.query("rollback");
+		} catch {
+			// Never return an uncertain transaction to the pool, or hide its original failure.
+			discardConnection = true;
+		}
 		throw error;
 	} finally {
-		client.release();
+		client.release(discardConnection);
 	}
 }
 

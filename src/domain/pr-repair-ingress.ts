@@ -1,0 +1,64 @@
+import { Webhooks } from "@octokit/webhooks";
+import { z } from "zod";
+import { readBoundedRequestBody } from "./bounded-request-body";
+import { parsePrRepairSignal, type prRepairDelivery } from "./pr-repair-signal";
+
+export function prRepairExecutorUrl(origin: string) {
+	const target = new URL(origin);
+	if (
+		target.protocol !== "https:" ||
+		target.username ||
+		target.password ||
+		target.port ||
+		target.pathname !== "/" ||
+		target.search ||
+		target.hash ||
+		!/^ytimesy-model-executor-(?:vm)?[a-f0-9]{32}\.style\.dev$/.test(
+			target.hostname,
+		)
+	)
+		throw new Error("Not an approved development executor.");
+	return new URL("/pr-repair-event", target).href;
+}
+
+/** Authenticate raw bytes before retaining minimal identifiers for a later GitHub re-fetch. */
+export async function acceptPrRepairWebhook(
+	request: Request,
+	secret: string,
+	schedule: (delivery: z.infer<typeof prRepairDelivery>) => Promise<void>,
+) {
+	if (
+		request.method !== "POST" ||
+		new URL(request.url).pathname !== "/github-repair"
+	)
+		return new Response(null, { status: 404 });
+	if (!secret) return new Response(null, { status: 503 });
+	const delivery = z.uuid().safeParse(request.headers.get("x-github-delivery"));
+	const signature = request.headers.get("x-hub-signature-256") ?? "";
+	if (!delivery.success || !/^sha256=[a-f0-9]{64}$/.test(signature))
+		return new Response(null, { status: 401 });
+	let body: string;
+	try {
+		body = await readBoundedRequestBody(request, 1_000_000);
+	} catch {
+		return new Response(null, { status: 413 });
+	}
+	if (!(await new Webhooks({ secret }).verify(body, signature)))
+		return new Response(null, { status: 401 });
+	let signal: ReturnType<typeof parsePrRepairSignal>;
+	try {
+		signal = parsePrRepairSignal(
+			request.headers.get("x-github-event") ?? "",
+			JSON.parse(body),
+		);
+	} catch {
+		return new Response(null, { status: 400 });
+	}
+	if (!signal) return Response.json({ accepted: true, ignored: true });
+	try {
+		await schedule({ deliveryId: delivery.data, signal });
+	} catch {
+		return new Response(null, { status: 503 });
+	}
+	return Response.json({ accepted: true }, { status: 202 });
+}

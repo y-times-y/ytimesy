@@ -7,6 +7,12 @@ import {
 	type AgentToolWorkspaceInput,
 	resolveToolWorkspace,
 } from "./agent-tool-workspace";
+import {
+	BROWSER_INSPECTION_SOURCE,
+	browserAssertion,
+	browserInspection,
+} from "./browser-inspection";
+import { runGuestCapability } from "./guest-node-capability";
 import { ensureDesktopProcesses } from "./workspace-desktop";
 
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
@@ -52,6 +58,26 @@ export function apiAgentBrowserTools(
 		return workspace;
 	}
 	const tools: ToolSet = {
+		browser_inspect: tool({
+			description:
+				"Inspect an already-open shared browser page: rendered text and control structure (without input values), selector/text/visibility assertions, and console/network observations during a bounded interval. This is not historical logging. Do not inspect private account pages or expose secrets unnecessarily.",
+			inputSchema: z.object({
+				url: z.url().max(2048),
+				assertions: z.array(browserAssertion).max(20).default([]),
+				observeMilliseconds: z.number().int().min(0).max(10000).default(0),
+			}),
+			execute: async (args) => {
+				const url = await safeBrowserUrl(args.url);
+				return runGuestCapability(
+					await desktop(),
+					"browser",
+					BROWSER_INSPECTION_SOURCE,
+					{ ...args, url },
+					browserInspection,
+					signal,
+				);
+			},
+		}),
 		browser_open: tool({
 			description:
 				"Open an HTTP or HTTPS URL in the task's shared Linux desktop browser. The user can watch in the Desktop tab.",
@@ -60,7 +86,7 @@ export function apiAgentBrowserTools(
 				once(options.toolCallId, async () => {
 					const target = await safeBrowserUrl(url);
 					const { machines, vm } = await desktop();
-					const command = `export DISPLAY=:0; browser=''; for attempt in $(seq 1 120); do browser=$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser || true); test -n "$browser" && break; sleep 1; done; test -n "$browser" || exit 127; nohup "$browser" --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --user-data-dir=/tmp/ytimesy-chrome-profile --new-window ${quote(target)} >/tmp/ytimesy-api-browser.log 2>&1 </dev/null &`;
+					const command = `export DISPLAY=:0; browser=''; for attempt in $(seq 1 120); do browser=$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser || true); test -n "$browser" && break; sleep 1; done; test -n "$browser" || exit 127; nohup "$browser" --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=/tmp/ytimesy-chrome-profile --new-window ${quote(target)} >/tmp/ytimesy-api-browser.log 2>&1 </dev/null &`;
 					const result = await machines.exec(vm, command, 135_000);
 					if (result.exitCode)
 						throw new Error(

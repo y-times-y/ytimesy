@@ -1,5 +1,9 @@
 # Verification — 2026-10-03
 
+Later local work and additional live failures/results are recorded separately
+in [2026-10-05 verification](VERIFICATION-2026-10-05.md). The results below
+remain the historical October 3 evidence, not the latest status.
+
 Implementation is on the existing `codex/realtime-server-delivery` working tree, based on `9f06cca14599463f2e185874258f5eb2d6c9e3b1`. PR #15 was not imported, merged or deployed. Changes remain uncommitted.
 
 ## Independently reproduced runtime regressions
