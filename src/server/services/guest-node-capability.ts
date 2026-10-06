@@ -4,6 +4,7 @@ import { publicToolDetail } from "#/domain/tool-detail";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 
 const packages = {
+	debugger: ["vscode-jsonrpc@9.0.3"],
 	browser: ["playwright-core@1.63.0"],
 	language: [
 		"vscode-jsonrpc@9.0.3",
@@ -19,6 +20,7 @@ export function guestCapabilityCommand(
 	capability: keyof typeof packages,
 	source: string,
 	arguments_: unknown,
+	options: { onlyInstalled?: boolean } = {},
 ) {
 	const dependencies = packages[capability];
 	const digest = createHash("sha256")
@@ -26,6 +28,8 @@ export function guestCapabilityCommand(
 		.digest("hex")
 		.slice(0, 16);
 	const directory = `/tmp/ytimesy-capability-${capability}-${digest}`;
+	if (options.onlyInstalled)
+		return `if test -f ${quote(`${directory}/ready`)}; then timeout --kill-after=5s 55s node --input-type=module -e ${quote(source)} ${quote(directory)} ${quote(JSON.stringify(arguments_))}; else printf '%s\\n' '{"available":false}'; fi`;
 	return `set -eu
 mkdir -p ${quote(directory)}
 (
@@ -45,11 +49,12 @@ export async function runGuestCapability<T>(
 	arguments_: unknown,
 	resultSchema: z.ZodType<T>,
 	signal: AbortSignal,
+	options: { onlyInstalled?: boolean } = {},
 ): Promise<T> {
 	signal.throwIfAborted();
 	const result = await workspace.machines.exec(
 		workspace.vm,
-		guestCapabilityCommand(capability, source, arguments_),
+		guestCapabilityCommand(capability, source, arguments_, options),
 		180_000,
 	);
 	signal.throwIfAborted();
