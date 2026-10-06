@@ -1,0 +1,129 @@
+{
+  "node": "v25.9.0",
+  "runtime": {
+    "typescript": "6.0.2",
+    "languageServer": "6.0.1",
+    "jsonrpc": "9.0.3"
+  },
+  "groups": [
+    {
+      "arm": "before",
+      "kind": "cold_references",
+      "n": 8,
+      "medianMs": 664.5092705000015,
+      "minMs": 655.8442500000001,
+      "maxMs": 841.674584,
+      "correct": 0
+    },
+    {
+      "arm": "before",
+      "kind": "warm_sequential",
+      "n": 24,
+      "medianMs": 177.0641659999992,
+      "minMs": 165.2475830000003,
+      "maxMs": 202.5510000000013,
+      "correct": 24
+    },
+    {
+      "arm": "after",
+      "kind": "cold_references",
+      "n": 8,
+      "medianMs": 661.2941874999997,
+      "minMs": 651.3887499999996,
+      "maxMs": 687.9922499999993,
+      "correct": 8
+    },
+    {
+      "arm": "after",
+      "kind": "warm_sequential",
+      "n": 24,
+      "medianMs": 168.89249949999794,
+      "minMs": 163.95579200000066,
+      "maxMs": 209.48279100000036,
+      "correct": 24
+    },
+    {
+      "arm": "after",
+      "kind": "warm_batch",
+      "n": 24,
+      "medianMs": 88.89343749999807,
+      "minMs": 84.58283300000039,
+      "maxMs": 102.25249999999869,
+      "correct": 24
+    }
+  ],
+  "pairs": [
+    {
+      "i": 0,
+      "batchReductionPercent": 48.41947311692556,
+      "sameArmReductionPercent": 47.337875983333355
+    },
+    {
+      "i": 1,
+      "batchReductionPercent": 52.859233619980564,
+      "sameArmReductionPercent": 47.493990110468985
+    },
+    {
+      "i": 2,
+      "batchReductionPercent": 49.80379731514064,
+      "sameArmReductionPercent": 47.69573049585515
+    },
+    {
+      "i": 3,
+      "batchReductionPercent": 49.01741344083693,
+      "sameArmReductionPercent": 49.619414971724
+    },
+    {
+      "i": 4,
+      "batchReductionPercent": 41.4510731357394,
+      "sameArmReductionPercent": 46.379294779485406
+    },
+    {
+      "i": 5,
+      "batchReductionPercent": 44.245534087967044,
+      "sameArmReductionPercent": 46.21869219844209
+    },
+    {
+      "i": 6,
+      "batchReductionPercent": 45.76525302012258,
+      "sameArmReductionPercent": 45.931635797888084
+    },
+    {
+      "i": 7,
+      "batchReductionPercent": 51.59702578492621,
+      "sameArmReductionPercent": 46.45246620552328
+    }
+  ],
+  "outlines": [
+    {
+      "path": "src/server/services/api-agent-file-tools.ts",
+      "fullMs": 30.79839600000014,
+      "outlineMs": 198.93806249999943,
+      "fullBytes": 31567,
+      "outlineBytes": 7618,
+      "reductionPercent": 75.86720309183642,
+      "status": "ok",
+      "truncated": false
+    },
+    {
+      "path": "src/server/services/model-agent-loop.ts",
+      "fullMs": 30.73193800000081,
+      "outlineMs": 195.75625000000036,
+      "fullBytes": 23435,
+      "outlineBytes": 6221,
+      "reductionPercent": 73.45423511841263,
+      "status": "ok",
+      "truncated": false
+    },
+    {
+      "path": "src/server/services/warm-language-intelligence.ts",
+      "fullMs": 31.69224949999989,
+      "outlineMs": 191.11264549999942,
+      "fullBytes": 12939,
+      "outlineBytes": 481,
+      "reductionPercent": 96.28255661179381,
+      "status": "ok",
+      "truncated": false
+    }
+  ]
+}
