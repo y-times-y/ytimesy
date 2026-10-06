@@ -1,5 +1,65 @@
 export const agentTaskToolDefinitions = [
 	{
+		name: "schedule_task_plan",
+		description:
+			"Persist a bounded dependency plan over existing untouched fresh writable API/Codex sibling drafts with explicitly selected models. Dispatch survives worker restarts and uses atomic account admission. Every prerequisite must finish and receive exact-hash lead review. A task can have one stacked predecessor; two to eight prerequisites require an explicit integration node that combines their reviewed patches without inference. Does not review work or select models. Only one nonterminal plan per root lead. Declared ownership is planning metadata, not a filesystem sandbox.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				tasks: {
+					type: "array",
+					minItems: 1,
+					maxItems: 12,
+					items: {
+						type: "object",
+						properties: {
+							id: { type: "string", pattern: "^[a-z][a-z0-9-]{0,40}$" },
+							taskId: { type: "string", format: "uuid" },
+							kind: { type: "string", enum: ["task", "integration"] },
+							objective: { type: "string", minLength: 1, maxLength: 1000 },
+							estimatedSeconds: { type: "integer", minimum: 1, maximum: 36000 },
+							owns: { type: "array", maxItems: 20, items: { type: "string" } },
+							dependsOn: {
+								type: "array",
+								maxItems: 12,
+								items: { type: "string" },
+							},
+						},
+						required: ["id", "taskId", "objective", "estimatedSeconds", "owns"],
+						additionalProperties: false,
+					},
+				},
+			},
+			required: ["tasks"],
+			additionalProperties: false,
+		},
+	},
+	{
+		name: "read_task_plan",
+		description:
+			"Read the persisted plan and per-node pending, dispatching, started, reviewed-done, failed or uncertain states without waking a VM. Started is not completion; blocked/uncertain operations are never blindly replayed.",
+		inputSchema: {
+			type: "object",
+			properties: { planId: { type: "string", pattern: "^[a-f0-9]{64}$" } },
+			required: ["planId"],
+			additionalProperties: false,
+		},
+	},
+	{
+		name: "control_task_plan",
+		description:
+			"Pause/resume safe future plan dispatch or cancel the plan. Does not stop already started model tasks; an in-flight integration may stop when its claim is lost. Use stop_task separately for active tasks. Blocked/uncertain work cannot be resumed automatically: inspect preserved work before cancelling and creating another plan.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				planId: { type: "string", pattern: "^[a-f0-9]{64}$" },
+				action: { type: "string", enum: ["pause", "resume", "cancel"] },
+			},
+			required: ["planId", "action"],
+			additionalProperties: false,
+		},
+	},
+	{
 		name: "read_task_checks",
 		description:
 			"Read up to eight retained foreground child checks in one bundle: actual completion statuses, stdout/stderr tails, omission warnings and full-log pointers. Shared sourceProofs are freshly checked once and referenced by index. Require zero exit, no stop, and sourcesCurrent:true; hashes do not establish semantic correctness. Recover full logs with read_task_output for failures or uncertainty. Missing proof or completion is not success.",
@@ -275,7 +335,7 @@ export const agentTaskToolDefinitions = [
 	{
 		name: "inspect_task_diff",
 		description:
-			"Read a completed task's current diff and exact patch SHA-256 before accepting its work. Pass that hash to an integration builder; truncated diffs require further inspection before acceptance.",
+			"Read a completed task's current diff and exact patch SHA-256 before accepting its work. completionVerification contains server-owned baseline check commands and retained output references matching this observed exact patch, or null if unavailable. These checks are not semantic correctness or a protected external grade. Read retained references with read_task_output on this child when needed. Pass the patch hash to an integration builder; truncated diffs require further inspection before acceptance.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -305,7 +365,7 @@ export const agentTaskToolDefinitions = [
 	{
 		name: "mark_task_reviewed",
 		description:
-			"Accept a completed task's result after original-contract review. Writers require expectedSha256 from inspect_task_diff. Supply verificationReferences for source-bound checks: every supplied receipt must have zero exit, no stop and unchanged current declared sources. Invalid/stale evidence rejects acceptance. Omitted references retain legacy manual review, not verified-check proof. Hashes do not prove semantics. Returned hash identifies accepted integration input.",
+			"Accept a completed task's result after original-contract review. Writers require expectedSha256 from inspect_task_diff and the server's authoritative baseline-check receipt for that exact patch. Completion runs required project checks on the whole unchanged tree; a model-selected smoke check cannot replace them. Optional verificationReferences add source-bound evidence: every supplied receipt must have zero exit, no stop and current unchanged declared sources. Hashes and passing checks do not prove semantics. Returned hash identifies accepted integration input.",
 		inputSchema: {
 			type: "object",
 			properties: {

@@ -97,3 +97,12 @@ it("keeps a long-running command leased while its owner is alive", async () => {
 		kind: "processing",
 	});
 });
+
+it("rejects renewal after an uncertain operation has settled", async () => {
+	await expect(renewAgentTaskCommandClaim(parent, "missing")).rejects.toThrow(
+		"no longer processing",
+	);
+	await expect(
+		renewAgentTaskCommandClaim(parent, "call-stale"),
+	).rejects.toThrow("no longer processing");
+});

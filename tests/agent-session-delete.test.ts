@@ -61,6 +61,8 @@ beforeAll(async () => {
 		"20260915110000_agent_session_turn_status.sql",
 		"20260921230000_agent_task_lifecycle.sql",
 		"20260921231000_agent_task_events.sql",
+		"20260923010000_agent_task_command_receipts.sql",
+		"20260923013000_agent_task_command_heartbeat.sql",
 		"20260919161500_workspace_snapshot_source.sql",
 		"20260927210000_project_environments.sql",
 		"20260927220000_agent_competitions.sql",
@@ -87,7 +89,27 @@ it("persists branch drafts independently across chats and protects ownership", a
 		workspaceId,
 		harness: "codex",
 	});
+	await db.query(
+		"insert into agent_task_command_receipt(parent_session_id,request_id,status) values($1,'verification-baseline:/repo','processing'),($1,'completion-verification:turn:/repo','processing'),($1,'other-operation','processing'),($2,'verification-baseline:/repo','processing')",
+		[a.id, b.id],
+	);
 	await saveSessionBranchSelection("alice", a.id, "feature");
+	expect(
+		(
+			await db.query(
+				"select request_id from agent_task_command_receipt where parent_session_id=$1",
+				[a.id],
+			)
+		).rows,
+	).toEqual([{ request_id: "other-operation" }]);
+	expect(
+		(
+			await db.query(
+				"select request_id from agent_task_command_receipt where parent_session_id=$1",
+				[b.id],
+			)
+		).rows,
+	).toHaveLength(1);
 	const rows = await db.query<{
 		id: string;
 		selected_branch: string | null;

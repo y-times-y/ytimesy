@@ -80,7 +80,11 @@ export async function integrateTaskDraft(
 	parent: AgentSessionRecord,
 	destinationId: string,
 	sources: readonly TaskPatchIdentity[],
-	control: { signal: AbortSignal; turnId: string },
+	control: {
+		signal: AbortSignal;
+		turnId: string;
+		expectedDraft?: AgentSessionRecord;
+	},
 	verification: z.input<typeof integrationVerificationRequest> = {},
 ) {
 	control.signal.throwIfAborted();
@@ -142,6 +146,7 @@ export async function integrateTaskDraft(
 		userId: parent.userId,
 		projectId: parent.projectId,
 		taskSessionId: destinationId,
+		expectedDraft: control.expectedDraft,
 	});
 	const targetMachines = machinesForAgentSession(machines, task);
 	const items: SessionItem[] = [
@@ -374,7 +379,7 @@ export async function integrateTaskDraft(
 			text: `Server integration completed. All baseline project checks passed. The combined patch still requires the lead's exact-diff review. Retained verification receipts: ${JSON.stringify(checkResults)}. Each stdout/stderr preview is complete when its corresponding nextStart is null; do not reread complete unchanged output. Otherwise read the remaining output with read_task_output using this task ID, reference, stream and nextStart; follow continuation cursors. These references belong to this integration task, not the lead's machine. Do not rerun successful checks merely to retrieve their output.`,
 		});
 		control.signal.throwIfAborted();
-		await commitCompletedSessionTurn(bound, items);
+		await commitCompletedSessionTurn(bound, items, undefined, control.signal);
 		await saveAgentSessionItems(
 			task.id,
 			items,

@@ -32,6 +32,27 @@ this change. Native results record `executionIsolation: disposable-vm`.
 
 ## Reproducible local setup
 
+For a broader development campaign, prepare a private manifest containing
+`version: 1`, the committed `harnessRevision`, the existing `protocol` object,
+and `assignments` entries with `taskId` and `category`. Categories are
+`navigation`, `repair`, `multi-file`, `verification`, `coordination`, and
+`long-context`. Use at least two distinct problems per category, twelve total,
+three repositories and two repetitions. Repetitions and renamed identical
+problems are not independent samples. These minimums are development sampling
+guardrails, not a power calculation or final parity criterion.
+
+```sh
+node --import tsx scripts/prepare-harness-campaign.ts \
+  /private/campaign.json /private/new-campaign-directory
+```
+
+Preparation validates the manifest and local harness revision, then writes
+private campaign/protocol files without inference, deployment or billing.
+Use the resulting protocol with the existing paired runner only after all live
+preconditions above are satisfied. Local revision availability does not verify
+the deployed worker. No real campaign task selection or run is implied by the
+synthetic validator fixtures.
+
 Use Python 3.12 with an isolated, ignored environment:
 
 ```sh
