@@ -10,6 +10,8 @@ import {
 	resolveToolWorkspace,
 } from "./agent-tool-workspace";
 import { editDiagnostics } from "./edit-diagnostics";
+import { inspectRepositoryChangesCommand } from "./repository-inspection";
+import { repositoryToolPath } from "./repository-tool-path";
 
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
@@ -232,18 +234,17 @@ export function apiAgentFileTools(
 	}
 	const inspect_changes = tool({
 		description:
-			"Inspect repository status and the current tracked diff before editing or reporting completion.",
-		inputSchema: z.object({ path: z.string().max(2048).optional() }),
+			"Inspect repository status, staged/unstaged diffs and every nonignored untracked regular file before editing or reporting completion. New files are included without staging or changing the index. Paths are literal repository-relative scopes; symlinks are reported but their targets are not read. Full output is retained with continuation cursors when output capture is available. Binary new files show Git's binary-difference notice, not decoded content.",
+		inputSchema: z.object({ path: repositoryToolPath.optional() }),
 		execute: async ({ path }) => {
 			signal.throwIfAborted();
 			const { machines, vm, cwd } = await resolveToolWorkspace(input);
-			const target = path ? ` -- ${quote(path)}` : "";
-			const command = `git -C ${quote(cwd)} status --short${target} && git -C ${quote(cwd)} diff --no-ext-diff${target} && git -C ${quote(cwd)} diff --cached --no-ext-diff${target}`;
+			const command = inspectRepositoryChangesCommand(cwd, path);
 			if (input.output) return input.output.capture(command);
 			const result = await machines.exec(vm, command, 20_000);
 			if (result.exitCode)
 				throw new Error("Could not inspect repository changes.");
-			return result.stdout.slice(0, 48_000);
+			return result.stdout;
 		},
 	});
 	const tools: ToolSet = {

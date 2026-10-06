@@ -41,21 +41,11 @@ import { loadCloudProjectMemoryDocument } from "./project-knowledge";
 import { projectMemoryTools } from "./project-memory-tools";
 import { inspectProjectSourceEvidence } from "./project-source-evidence";
 import { repositoryGuidanceTool } from "./repository-guidance";
+import { repositoryToolPath as repositorySearchPath } from "./repository-tool-path";
 import { scopedToolExecution } from "./tool-execution-identity";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-const repositorySearchPath = z
-	.string()
-	.min(1)
-	.max(2048)
-	.refine(
-		(path) =>
-			!path.startsWith("/") &&
-			!/[\\\0]/.test(path) &&
-			!path.split("/").some((part) => part === ".." || part === ".git"),
-		"Use a repository-relative path outside .git without traversal.",
-	);
 
 export function apiAgentTools(
 	input: {

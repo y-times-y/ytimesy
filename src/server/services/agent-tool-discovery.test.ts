@@ -13,6 +13,42 @@ const definition = () =>
 		execute: async () => ({}),
 	});
 
+it("keeps ordinary edits/checks/review immediate but lazily loads uncommon workflow schemas without losing permission or discovery", () => {
+	const tools = Object.fromEntries(
+		[
+			"start_command",
+			"plan_parallel_work",
+			"edit_task",
+			"read_project_memory",
+			"inspect_changes",
+			"apply_patches",
+			"run_checks",
+			"inspect_task_diff",
+			"read_task_output",
+		].map((name) => [name, definition()]),
+	);
+	const lead = discoverableAgentTools(tools, [], [], "coordination");
+	for (const name of [
+		"start_command",
+		"plan_parallel_work",
+		"edit_task",
+		"read_project_memory",
+		"inspect_changes",
+	]) {
+		expect(lead[name].deferLoading).toBe(true);
+		expect(lead[name].execute).toBe(tools[name].execute);
+	}
+	for (const name of ["inspect_task_diff", "read_task_output"])
+		expect(lead[name].deferLoading).toBe(false);
+	const builder = discoverableAgentTools(tools, [], [], "implementation");
+	for (const name of ["inspect_changes", "apply_patches", "run_checks"])
+		expect(builder[name].deferLoading).toBe(false);
+	expect(
+		discoverableAgentTools(tools, [], ["start_command"]).start_command
+			.deferLoading,
+	).toBe(false);
+});
+
 it("prefers the batch editor for new builders while preserving discovered aliases and providers without it", () => {
 	const tools = {
 		apply_patches: definition(),
