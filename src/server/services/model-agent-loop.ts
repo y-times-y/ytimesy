@@ -44,6 +44,7 @@ import {
 } from "./api-agent-context";
 import { BackgroundHistoryCompaction } from "./background-history-compaction";
 import { archiveConsumedGuidance } from "./consumed-guidance";
+import { archiveEarlierToolOutput } from "./retired-tool-output";
 import { archiveSupersededReads } from "./superseded-reads";
 
 export type { ApiAgentEvent } from "#/domain/api-agent-event";
@@ -323,8 +324,12 @@ async function executeModelSteps(
 						history,
 						input.archiveHistory,
 					);
-					const projected = await archiveSupersededReads(
+					const reads = await archiveSupersededReads(
 						guidance,
+						input.archiveHistory,
+					);
+					const projected = await archiveEarlierToolOutput(
+						reads,
 						input.archiveHistory,
 					);
 					if (projected !== history) {

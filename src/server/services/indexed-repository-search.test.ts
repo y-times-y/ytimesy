@@ -1,6 +1,13 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import {
+	access,
+	mkdir,
+	mkdtemp,
+	realpath,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -11,6 +18,10 @@ import {
 } from "./indexed-repository-search";
 
 const run = promisify(execFile);
+const fixtureIndexSource = INDEXED_SEARCH_SOURCE.replace(
+	"MIN_INDEX_BYTES = 16 * 1024 * 1024",
+	"MIN_INDEX_BYTES = 0",
+);
 
 it("matches Git across warm refreshes, exclusions, scoped queries, and unsupported text", async () => {
 	const cwd = await realpath(
@@ -24,7 +35,8 @@ it("matches Git across warm refreshes, exclusions, scoped queries, and unsupport
 		query: string,
 		literal = true,
 		path = ".",
-		source = INDEXED_SEARCH_SOURCE,
+		source = fixtureIndexSource,
+		wordBoundary = false,
 	) => {
 		const invoke = async (command: string, args: string[]) => {
 			try {
@@ -42,7 +54,7 @@ it("matches Git across warm refreshes, exclusions, scoped queries, and unsupport
 		const indexed = await invoke("python3", [
 			"-c",
 			source,
-			JSON.stringify({ cwd, query, literal, path }),
+			JSON.stringify({ cwd, query, literal, wordBoundary, path }),
 		]);
 		const direct = await invoke("git", [
 			"--literal-pathspecs",
@@ -54,6 +66,7 @@ it("matches Git across warm refreshes, exclusions, scoped queries, and unsupport
 			"-n",
 			"-I",
 			...(literal ? ["-F"] : []),
+			...(wordBoundary ? ["-w"] : []),
 			"-e",
 			query,
 			"--",
@@ -80,7 +93,15 @@ it("matches Git across warm refreshes, exclusions, scoped queries, and unsupport
 			Buffer.from([110, 101, 101, 100, 108, 101, 255, 10]),
 		);
 		await writeFile(join(cwd, "binary.txt"), Buffer.from("needle\0"));
-		await search("needle");
+		await search("needle", false, ".", INDEXED_SEARCH_SOURCE);
+		await expect(
+			run("python3", [
+				"-c",
+				"import os,sys; assert not os.path.exists(sys.argv[1])",
+				join(cache, "index.sqlite"),
+			]),
+		).resolves.toBeDefined();
+		await search("needle", false);
 		const inspect = await run("python3", [
 			"-c",
 			"import sqlite3,sys,json; c=sqlite3.connect(sys.argv[1]); print(json.dumps(list(c.execute('select path from contents order by path'))))",
@@ -94,6 +115,16 @@ it("matches Git across warm refreshes, exclusions, scoped queries, and unsupport
 		await writeFile(join(cwd, "tracked.ts"), "needle after edit\n");
 		await search("needle");
 		await search("needle", true, "src[1]");
+		await writeFile(
+			join(cwd, "words.ts"),
+			"needle\nneedles\nprefix_needle\n(needle)\n",
+		);
+		const words = await search("needle", false, ".", fixtureIndexSource, true);
+		expect(words.stdout).toContain("words.ts:1:needle");
+		expect(words.stdout).toContain("words.ts:4:(needle)");
+		expect(words.stdout).not.toContain("words.ts:2:");
+		expect(words.stdout).not.toContain("words.ts:3:");
+		await search("need.*", false, ".", fixtureIndexSource, true);
 		await rm(join(cwd, "src[1]", "untracked.ts"));
 		await search("needle");
 		await search("ne", true);
@@ -104,7 +135,7 @@ it("matches Git across warm refreshes, exclusions, scoped queries, and unsupport
 			"needle",
 			true,
 			".",
-			INDEXED_SEARCH_SOURCE.replace(
+			fixtureIndexSource.replace(
 				"tokenize='trigram'",
 				"tokenize='nonexistent'",
 			),
@@ -121,6 +152,42 @@ it("shell-quotes executable source and JSON input", () => {
 		path: ".",
 		query: "'; touch /tmp/unwanted; '",
 		literal: true,
+		useIndex: true,
 	});
 	expect(command).toContain("'\\''; touch /tmp/unwanted; '\\''");
+});
+
+it("defaults to native Git without index startup or inventory overhead", () => {
+	const command = repositorySearchCommand({
+		cwd: "/repo",
+		query: "identifier",
+		literal: false,
+		path: "src/[literal]",
+		wordBoundary: true,
+	});
+	expect(command).toBe(
+		"git --literal-pathspecs -C '/repo' grep --untracked --exclude-standard -n -I -w -e 'identifier' -- 'src/[literal]'",
+	);
+	expect(command).not.toContain("python3");
+});
+
+it("executes hostile query text as data on the native fallback", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "ytimesy-search-quote-"));
+	try {
+		await run("git", ["init", "-q", cwd]);
+		await writeFile(join(cwd, "source.txt"), "ordinary content\n");
+		const marker = join(cwd, "unexpected");
+		const command = repositorySearchCommand({
+			cwd,
+			path: ".",
+			literal: true,
+			query: `'; touch ${marker}; echo '`,
+		});
+		await expect(run("bash", ["-lc", command])).rejects.toMatchObject({
+			code: 1,
+		});
+		await expect(access(marker)).rejects.toThrow();
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
 });

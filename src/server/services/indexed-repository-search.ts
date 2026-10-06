@@ -5,15 +5,20 @@ export function repositorySearchCommand(input: {
 	query: string;
 	literal: boolean;
 	path: string;
+	wordBoundary?: boolean;
+	useIndex?: boolean;
 }) {
+	if (!input.useIndex)
+		return `git --literal-pathspecs -C ${quote(input.cwd)} grep --untracked --exclude-standard -n -I ${input.literal ? "-F " : ""}${input.wordBoundary ? "-w " : ""}-e ${quote(input.query)} -- ${quote(input.path)}`;
 	return `python3 -c ${quote(INDEXED_SEARCH_SOURCE)} ${quote(JSON.stringify(input))}`;
 }
 
 // The index only selects candidates. Git owns matching, exclusions, and output.
 export const INDEXED_SEARCH_SOURCE = String.raw`
-import hashlib, json, os, sqlite3, stat, subprocess, sys, tempfile, time
+import hashlib, json, os, re, sqlite3, stat, subprocess, sys, tempfile, time
 
 request = json.loads(sys.argv[1])
+MIN_INDEX_BYTES = 16 * 1024 * 1024
 root = os.path.realpath(request['cwd'])
 query = request['query']
 scope = request['path']
@@ -21,6 +26,8 @@ git = ['git', '--literal-pathspecs', '-C', root]
 grep = git + ['grep', '--untracked', '--exclude-standard', '-n', '-I']
 if request['literal']:
     grep += ['-F']
+if request.get('wordBoundary', False):
+    grep += ['-w']
 grep += ['-e', query, '--']
 
 def fallback():
@@ -68,10 +75,15 @@ def private_cache():
 def indexed():
     # FTS5 trigram cannot narrow short terms. Non-ASCII and multiline queries
     # retain Git semantics without depending on tokenizer Unicode behavior.
-    if not request['literal'] or len(query) < 3 or not query.isascii() or '\n' in query or '\r' in query:
+    # Plain identifiers have the same mandatory text in Git's basic regex mode.
+    # Do not infer required substrings from actual regex syntax.
+    plain_identifier = re.fullmatch(r'[A-Za-z0-9_]+', query) is not None
+    if (not request['literal'] and not plain_identifier) or len(query) < 3 or not query.isascii() or '\n' in query or '\r' in query:
         return fallback()
     before = inventory()
-    if len(before) > 10000 or sum(item[2] for item in before.values() if item) > 64 * 1024 * 1024:
+    corpus_bytes = sum(item[2] for item in before.values() if item)
+    # Git's native scan wins on small corpora; avoid SQLite refresh/query overhead.
+    if len(before) > 10000 or corpus_bytes < MIN_INDEX_BYTES or corpus_bytes > 64 * 1024 * 1024:
         return fallback()
     deadline = time.monotonic() + 8
     connection = sqlite3.connect(private_cache(), timeout=0.2)
