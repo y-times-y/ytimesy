@@ -705,6 +705,7 @@ it("only offers inspection to a read-only lead", async () => {
 		"read_file",
 		"inspect_changes",
 		"verify_changes",
+		"read_code",
 	]);
 });
 

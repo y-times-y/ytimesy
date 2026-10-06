@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, realpath, stat, lstat, unlink } from 'node:fs/promises';
 import { resolve, sep, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
 import { createConnection, createServer } from 'node:net';
 const require = createRequire(process.argv[1] + '/package.json');
 const { createMessageConnection, StreamMessageReader, StreamMessageWriter } = require('vscode-jsonrpc/node');
@@ -14,7 +14,7 @@ const input = JSON.parse(process.argv[2]);
 const root = await realpath(input.cwd);
 const language = /\.[cm]?tsx?$/.test(input.path) ? 'typescript' : /\.[cm]?jsx?$/.test(input.path) ? 'javascript' : /\.py$/.test(input.path) ? 'python' : /\.rs$/.test(input.path) ? 'rust' : /\.go$/.test(input.path) ? 'go' : null;
 if (!language) throw new Error('No configured language server for this file type.');
-const identity = createHash('sha256').update(JSON.stringify([root, language, process.argv[1]])).digest('hex').slice(0, 20);
+const identity = createHash('sha256').update(JSON.stringify([root, language, process.argv[1], 'semantic-rename-v1'])).digest('hex').slice(0, 20);
 const directory = join(tmpdir(), 'yt-lsp-' + process.getuid() + '-' + identity);
 await mkdir(directory, { mode: 0o700 }).catch(error => { if(error.code !== 'EEXIST') throw error; });
 const directoryInfo = await lstat(directory);
@@ -55,7 +55,7 @@ if (!input.daemon) {
   let timeout;
   try {
     const result = await Promise.race([
-      connection.sendRequest(input.shutdown ? 'shutdown' : 'inspect', input),
+      input.requests ? (async () => { const results = []; for (const request of input.requests) results.push(await connection.sendRequest('inspect', {...request, cwd: input.cwd})); return {results}; })() : connection.sendRequest(input.shutdown ? 'shutdown' : 'inspect', input),
       new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('Language request timed out.')), 40000); })
     ]);
     console.log(JSON.stringify(input.onlyIfWarm ? { available: true, ...result } : result));
@@ -119,7 +119,7 @@ if (!input.daemon) {
   connection.onRequest('workspace/applyEdit', () => ({ applied: false, failureReason: 'This capability only previews edits.' }));
   connection.listen();
   const initialized = (async () => {
-    await connection.sendRequest('initialize', { processId: process.pid, rootUri: pathToFileURL(root).href, workspaceFolders: [{uri: pathToFileURL(root).href, name: 'task'}], capabilities: {workspace: {configuration: true}, textDocument: {publishDiagnostics: {versionSupport: true}}} });
+    await connection.sendRequest('initialize', { processId: process.pid, rootUri: pathToFileURL(root).href, workspaceFolders: [{uri: pathToFileURL(root).href, name: 'task'}], initializationOptions: {tsserver: {useSyntaxServer: 'never'}}, capabilities: {workspace: {configuration: true}, textDocument: {publishDiagnostics: {versionSupport: true}}} });
     await connection.sendNotification('initialized', {});
   })();
   initialized.catch(shutdown);
@@ -155,7 +155,7 @@ if (!input.daemon) {
     await initialized;
     const uri = pathToFileURL(file).href;
     const previous = documents.get(uri);
-    const document = {version: (previous?.version ?? 0) + 1, observed: false, diagnostics: [], truncated: false, resolve: null};
+    const document = {text, version: (previous?.version ?? 0) + 1, observed: false, diagnostics: [], truncated: false, resolve: null};
     document.ready = new Promise(resolve => { document.resolve = resolve; });
     documents.set(uri, document);
     if (previous) await connection.sendNotification('textDocument/didChange', {textDocument: {uri, version: document.version}, contentChanges: [{text}]});
@@ -167,6 +167,27 @@ if (!input.daemon) {
       finally { clearTimeout(timeout); }
       result = document.diagnostics;
     } else result = await connection.sendRequest(methods[request.operation], {textDocument: {uri}, position, ...(request.operation === 'references' ? {context: {includeDeclaration: true}} : {}), ...(request.operation === 'rename_preview' ? {newName: request.newName} : {})});
+    if (request.includeRenameSources) {
+      if (request.operation !== 'rename_preview') throw new Error('Source snapshots require a rename preview.');
+      if (result?.documentChanges || result?.changeAnnotations) throw new Error('Unsupported rename edit contract; no edits applied.');
+      const changes = Object.entries(result?.changes ?? {});
+      if (!changes.length || changes.length > 8) throw new Error('Rename must affect one to eight existing files.');
+      let size = 0;
+      const files = [];
+      for (const [targetUri, edits] of changes) {
+        const target = fileURLToPath(targetUri);
+        const relative = target.slice(root.length + 1);
+        if (!target.startsWith(root + sep) || relative.split(sep).includes('.git') || (await realpath(target)) !== target) throw new Error('Rename target escapes repository or traverses a symlink.');
+        if ((await stat(target)).size > 200000) throw new Error('Rename source exceeds limit.');
+        const content = await readFile(target, 'utf8');
+        size += Buffer.byteLength(content);
+        if (size > 200000 || !Array.isArray(edits) || edits.length > 500) throw new Error('Rename exceeds batch limit.');
+        const open = documents.get(targetUri);
+        if (open && open.text !== content) throw new Error('Open document changed since language inspection; request a fresh rename.');
+        files.push({path: relative, content, sha256: createHash('sha256').update(content).digest('hex'), edits});
+      }
+      return {files};
+    }
     let truncated = document.truncated;
     if (Array.isArray(result) && result.length > 100) { result = result.slice(0, 100); truncated = true; }
     if (JSON.stringify(result).length > 100000) throw new Error('Language result exceeds the limit; narrow the query. No edits were applied.');
