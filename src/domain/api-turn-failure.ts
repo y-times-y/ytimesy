@@ -65,6 +65,44 @@ export class SafeApiModelFailure extends Error {
 	}
 }
 
+const PROVIDER_FAILURE_CODES = new Set([
+	"internal_error",
+	"server_error",
+	"invalid_request_error",
+	"invalid_request",
+	"invalid_tool_arguments",
+	"unsupported_tool",
+	"context_length_exceeded",
+	"rate_limit_exceeded",
+	"insufficient_quota",
+	"insufficient_credits",
+	"invalid_api_key",
+	"model_not_found",
+	"invalid_model",
+	"content_filter",
+]);
+
+/** Bounded diagnostics only: never log a provider message, body, URL or request. */
+export function apiModelFailureClassification(error: unknown) {
+	for (let depth = 0; depth < 3 && RetryError.isInstance(error); depth++)
+		error = error.lastError;
+	const status = APICallError.isInstance(error) ? error.statusCode : undefined;
+	const code = APICallError.isInstance(error)
+		? providerErrorCode(error.data)
+		: undefined;
+	return {
+		...apiTurnFailureClassification(error),
+		httpStatus:
+			Number.isInteger(status) &&
+			status !== undefined &&
+			status >= 100 &&
+			status <= 599
+				? status
+				: null,
+		providerCode: code && PROVIDER_FAILURE_CODES.has(code) ? code : "unknown",
+	};
+}
+
 export class IncompleteAgentTurn extends Error {
 	constructor(reason: string) {
 		super(
@@ -128,6 +166,8 @@ export function apiModelFailureMessage(error: unknown): string {
 		)
 			return "This model does not support the tool calls needed for coding. Choose another model. No fallback was used.";
 		switch (error.statusCode) {
+			case 200:
+				return "The provider accepted the request but its response stream failed. Work is preserved; inspect it before continuing. No fallback or stream replay was used.";
 			case 401:
 				return "The provider rejected this API key (HTTP 401). Update the key in Model connections. No fallback was used.";
 			case 402:

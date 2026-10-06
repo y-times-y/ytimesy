@@ -1,6 +1,8 @@
+import { z } from "zod";
 import { apiTurnFailureClassification } from "#/domain/api-turn-failure";
 import { SessionItemId } from "#/domain/ids";
 import { posixShellCommand } from "#/domain/posix-command";
+import { sourceEvidenceContentsMatch } from "#/domain/project-source-evidence";
 import type { SessionItem } from "#/domain/session-item";
 import { taskVerificationPlan } from "#/domain/task-integration-checks";
 import {
@@ -22,13 +24,20 @@ import {
 } from "./agent-session-machine";
 import { scopedShellCommand, stopApiTurnCommands } from "./api-command-scope";
 import { deferredApiTurnWorkspace } from "./api-turn-workspace";
+import { inspectProjectSourceEvidence } from "./project-source-evidence";
 import {
 	captureTaskPatch,
 	importReviewedTaskChanges,
+	taskPatchPreview,
 } from "./reviewed-task-import";
 import { machinesForAgentSession } from "./session-workspace-machines";
 import { commitCompletedSessionTurn } from "./turn-commit";
 import type { WorkspaceMachines } from "./workspace-machines";
+
+export const integrationVerificationRequest = z.object({
+	sourcePaths: z.array(z.string().min(1).max(2048)).min(1).max(8).optional(),
+	additionalChecks: z.array(z.string().min(1).max(16000)).max(8).default([]),
+});
 
 const BASE_CHECKS = `import json, subprocess, sys
 def git(*args): return subprocess.check_output(['git',*args],text=True)
@@ -72,8 +81,11 @@ export async function integrateTaskDraft(
 	destinationId: string,
 	sources: readonly TaskPatchIdentity[],
 	control: { signal: AbortSignal; turnId: string },
+	verification: z.input<typeof integrationVerificationRequest> = {},
 ) {
 	control.signal.throwIfAborted();
+	const { sourcePaths, additionalChecks } =
+		integrationVerificationRequest.parse(verification);
 	if (
 		parent.parentSessionId ||
 		parent.candidateIndex != null ||
@@ -192,7 +204,12 @@ export async function integrateTaskDraft(
 		);
 		if (policy.exitCode)
 			throw new Error("Could not read baseline verification policy.");
-		const verificationPlan = taskVerificationPlan(JSON.parse(policy.stdout));
+		const baselinePlan = taskVerificationPlan(JSON.parse(policy.stdout));
+		const baselineCommands = new Set(baselinePlan.flat());
+		const verificationPlan = [...new Set(additionalChecks)]
+			.filter((command) => !baselineCommands.has(command))
+			.map((command) => [command])
+			.concat(baselinePlan);
 		const commands = verificationPlan.flat();
 		stage = "importing";
 		for (const source of sources) {
@@ -224,8 +241,19 @@ export async function integrateTaskDraft(
 			throw new Error(
 				"Verification policy or dependency configuration changed. Inspect and verify this integration with an agent rather than automatically executing changed check scripts.",
 			);
+		const importedPatch = await captureTaskPatch(
+			workspace.machines,
+			workspace.vm,
+		);
 		stage = "checking";
 		const verificationWorkspace = workspace;
+		const before = sourcePaths
+			? await inspectProjectSourceEvidence(
+					verificationWorkspace,
+					sourcePaths,
+					true,
+				)
+			: null;
 		const artifacts = agentOutputArtifacts({
 			...verificationWorkspace,
 			sessionId: task.id,
@@ -240,6 +268,7 @@ export async function integrateTaskDraft(
 			stderr: string;
 			stdoutNextStart: number | null;
 			stderrNextStart: number | null;
+			sourceBound?: boolean;
 		}[] = [];
 		let checkIndex = 0;
 		const runCheck = async (command: string) => {
@@ -315,6 +344,28 @@ export async function integrateTaskDraft(
 				if (failed?.status === "rejected") throw failed.reason;
 			}
 		}
+		if (before && sourcePaths) {
+			const after = await inspectProjectSourceEvidence(
+				verificationWorkspace,
+				sourcePaths,
+				true,
+			);
+			const sourcesStable = sourceEvidenceContentsMatch(before, after);
+			for (const result of checkResults) {
+				await artifacts.recordVerification(result.reference, {
+					command: result.command,
+					cwd: verificationWorkspace.cwd,
+					before,
+					after,
+					sourcesStable,
+				});
+				result.sourceBound = true;
+			}
+			if (!sourcesStable)
+				throw new Error(
+					"Declared integration sources changed during verification; retained checks are not current proof.",
+				);
+		}
 		stage = "handoff";
 		const patch = await captureTaskPatch(workspace.machines, workspace.vm);
 		items.push({
@@ -343,8 +394,11 @@ export async function integrateTaskDraft(
 			taskId: task.id,
 			status: "done",
 			reviewRequired: true,
-			sha256: patch.sha256,
-			base: patch.base,
+			...taskPatchPreview(patch),
+			sources,
+			verificationChangedPatch:
+				patch.sha256 !== importedPatch.sha256 ||
+				patch.base !== importedPatch.base,
 			checks: commands,
 			checkResults,
 		};

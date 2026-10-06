@@ -2,12 +2,15 @@ import { randomUUID } from "node:crypto";
 import { type ToolSet, tool } from "ai";
 import { Effect } from "effect";
 import { z } from "zod";
+import { checkExecutionGroups } from "#/domain/check-execution-groups";
+import { sourceEvidenceContentsMatch } from "#/domain/project-source-evidence";
 import type { agentOutputArtifacts } from "./agent-output-artifacts";
 import {
 	type AgentToolWorkspaceInput,
 	resolveToolWorkspace,
 } from "./agent-tool-workspace";
 import { scopedShellCommand } from "./api-command-scope";
+import { inspectProjectSourceEvidence } from "./project-source-evidence";
 
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 const jobId = z.string().uuid();
@@ -19,13 +22,37 @@ export async function verifyPatchedCheckout(input: {
 		Awaited<ReturnType<ReturnType<typeof agentOutputArtifacts>["capture"]>>
 	>;
 	check: () => Promise<unknown>;
+	preflight?: () => Promise<unknown>;
 }) {
 	input.signal.throwIfAborted();
 	const formatting = input.format ? await input.format() : null;
 	if (formatting && (formatting.exitCode !== 0 || formatting.stopped !== null))
 		return { formatting, checks: null };
 	input.signal.throwIfAborted();
-	return { formatting, checks: await input.check() };
+	const preflightChecks = input.preflight ? await input.preflight() : undefined;
+	if (input.preflight) {
+		const receipts = z
+			.array(
+				z.object({
+					exitCode: z.number().int(),
+					stopped: z.enum(["timeout", "output_limit"]).nullable(),
+				}),
+			)
+			.min(1)
+			.parse(preflightChecks);
+		if (
+			receipts.some(
+				(receipt) => receipt.exitCode !== 0 || receipt.stopped !== null,
+			)
+		)
+			return { formatting, preflightChecks, checks: null };
+	}
+	input.signal.throwIfAborted();
+	return {
+		formatting,
+		...(input.preflight ? { preflightChecks } : {}),
+		checks: await input.check(),
+	};
 }
 const commandRoot = (sessionId: string) =>
 	`/tmp/ytimesy-api-commands/${sessionId.replaceAll(/[^a-zA-Z0-9-]/g, "").slice(0, 64)}`;
@@ -169,40 +196,134 @@ export function apiAgentCommandTools(
 		const output = input.output;
 		const checksSchema = z.object({
 			commands: z.array(z.string().min(1).max(16_000)).min(1).max(8),
+			parallel: z.boolean().default(false),
+			groups: z
+				.array(z.array(z.number().int().min(0).max(7)).min(1).max(2))
+				.min(1)
+				.max(8)
+				.optional(),
 			maxSeconds: z.number().int().min(1).max(120).default(120),
+			sourcePaths: z
+				.array(z.string().min(1).max(2048))
+				.min(1)
+				.max(8)
+				.optional(),
+			outputView: z.enum(["full", "summary"]).default("full"),
 		});
 		tools.run_checks = tool({
 			description:
-				"Run independent verification commands for a stable checkout in one call, with at most two running concurrently. Returns each command's actual exit code, stop reason, retained output reference and continuation cursors in input order. Never omit required project checks. A zero exit with no stop is success; timeout/output-limit is not. Read incomplete output through read_tool_output. Do not mix edits or formatting commands with checks, or edit the tree while checks run. Prefer this over separate start/wait/read polling steps for checks within two minutes.",
+				"Run required checks on a stable formatted tree; preserve every actual exit and stop reason. sourcePaths binds up to eight declared files to before/after hashes; changed or unavailable sources make passed:false even with exit 0. Cover all changed files across batches. outputView:summary returns bounded tails and omitted-output recovery pointers, not complete logs; retrieve full output for failures or uncertainty. Default full preserves existing behavior. parallel:true overlaps at most two genuinely independent checks; no edits or shared generated-file writes during checks. No dropped checks or invented success.",
 			inputSchema: checksSchema,
 			execute: (arguments_, options) =>
 				once(options.toolCallId, async () => {
-					const { commands, maxSeconds } = checksSchema.parse(arguments_);
+					const {
+						commands,
+						maxSeconds,
+						parallel,
+						groups,
+						sourcePaths,
+						outputView,
+					} = checksSchema.parse(arguments_);
+					const executionGroups = checkExecutionGroups(
+						commands.length,
+						groups,
+						parallel,
+					);
 					signal.throwIfAborted();
-					const { cwd } = await resolveToolWorkspace(input);
-					return Effect.runPromise(
-						Effect.forEach(
-							commands,
-							(command) =>
-								Effect.promise(async () => {
-									signal.throwIfAborted();
-									const result = await output.capture(
-										scopedShellCommand({
-											turnId: input.turnId,
-											cwd,
-											command,
-											seconds: maxSeconds,
+					const workspace = await resolveToolWorkspace(input);
+					const { cwd } = workspace;
+					const before = sourcePaths
+						? await inspectProjectSourceEvidence(workspace, sourcePaths, true)
+						: null;
+					const results = [];
+					for (const group of executionGroups)
+						results.push(
+							...(await Effect.runPromise(
+								Effect.forEach(
+									group.map((index) => commands[index]),
+									(command) =>
+										Effect.promise(async () => {
+											signal.throwIfAborted();
+											const result = await output.capture(
+												scopedShellCommand({
+													turnId: input.turnId,
+													cwd,
+													command,
+													seconds: maxSeconds,
+												}),
+												maxSeconds + 5,
+											);
+											return {
+												command,
+												...result,
+												passed:
+													result.exitCode === 0 && result.stopped === null,
+											};
 										}),
-										maxSeconds + 5,
-									);
-									return {
-										command,
-										...result,
-										passed: result.exitCode === 0 && result.stopped === null,
-									};
-								}),
-							{ concurrency: 2 },
-						),
+									{ concurrency: 2 },
+								),
+							)),
+						);
+					const after =
+						before && sourcePaths
+							? await inspectProjectSourceEvidence(workspace, sourcePaths, true)
+							: null;
+					return Promise.all(
+						results.map(async (result) => {
+							const verification =
+								before && after
+									? {
+											command: result.command,
+											cwd,
+											before,
+											after,
+											sourcesStable: sourceEvidenceContentsMatch(before, after),
+										}
+									: null;
+							if (verification)
+								await output.recordVerification(result.reference, verification);
+							const summaries =
+								outputView === "summary"
+									? await Promise.all(
+											(["stdout", "stderr"] as const).map((stream) =>
+												output.read({
+													reference: result.reference,
+													stream,
+													view: "summary",
+												}),
+											),
+										)
+									: null;
+							return {
+								...result,
+								...(verification
+									? {
+											verification,
+											passed: result.passed && verification.sourcesStable,
+										}
+									: {}),
+								...(summaries
+									? {
+											stdout: summaries[0].content,
+											stderr: summaries[1].content,
+											outputView: "summary",
+											outputSummaries: summaries.map(
+												({
+													content: _content,
+													verification: _verification,
+													...metadata
+												}) => metadata,
+											),
+											stdoutNextStart: summaries[0].omittedCharacters
+												? 0
+												: null,
+											stderrNextStart: summaries[1].omittedCharacters
+												? 0
+												: null,
+										}
+									: {}),
+							};
+						}),
 					);
 				}),
 		});

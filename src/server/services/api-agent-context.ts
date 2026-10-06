@@ -25,7 +25,9 @@ export function workingContextTarget(input: {
 			message.role === "assistant" &&
 			Array.isArray(message.content) &&
 			message.content.some(
-				(part) => part.type === "tool-call" && part.toolName === "create_task",
+				(part) =>
+					part.type === "tool-call" &&
+					["create_task", "launch_ready_tasks"].includes(part.toolName),
 			),
 	);
 	return input.implementation || delegationStarted

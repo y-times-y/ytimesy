@@ -16,6 +16,42 @@ const run = promisify(execFile);
 const roots: string[] = [];
 const commandRoots: string[] = [];
 
+it("blocks expensive checks after failed preflight while preserving the failure receipt", async () => {
+	const check = vi.fn();
+	const failure = [
+		{
+			command: "typecheck",
+			exitCode: 2,
+			stopped: null,
+			reference: "actual-output",
+		},
+	];
+	expect(
+		await verifyPatchedCheckout({
+			signal: new AbortController().signal,
+			preflight: async () => failure,
+			check,
+		}),
+	).toMatchObject({ preflightChecks: failure, checks: null });
+	expect(check).not.toHaveBeenCalled();
+});
+
+it("runs every final check after successful preflight on the stable formatted tree", async () => {
+	const stages: string[] = [];
+	await verifyPatchedCheckout({
+		signal: new AbortController().signal,
+		preflight: async () => {
+			stages.push("preflight");
+			return [{ exitCode: 0, stopped: null }];
+		},
+		check: async () => {
+			stages.push("final");
+			return [{ exitCode: 0, stopped: null }];
+		},
+	});
+	expect(stages).toEqual(["preflight", "final"]);
+});
+
 it("can verify without formatting when no formatting stage is required", async () => {
 	const check = vi.fn().mockResolvedValue([{ exitCode: 0, stopped: null }]);
 	expect(
@@ -168,78 +204,162 @@ async function call(tool: unknown, input: object) {
 	).execute(input, { toolCallId: crypto.randomUUID() });
 }
 
-it("runs independent checks with bounded concurrency, ordered evidence and replay protection", async () => {
-	let active = 0;
-	let peak = 0;
-	let sequence = 0;
-	const capture = vi.fn(async () => {
-		const index = sequence++;
-		active++;
-		peak = Math.max(peak, active);
-		await new Promise((resolve) => setTimeout(resolve, index === 0 ? 25 : 5));
-		active--;
-		return {
-			reference: `evidence-${index}`,
-			exitCode: index === 1 ? 1 : 0,
-			stopped: index === 2 ? ("timeout" as const) : null,
-			stdout: "retained diagnostic",
-			stderr: "",
-			stdoutNextStart: index === 0 ? 32000 : null,
-			stderrNextStart: null,
+it.each([false, true, "groups"] as const)(
+	"runs checks with explicit overlap (%s), ordered evidence and replay protection",
+	async (parallel) => {
+		let active = 0;
+		let peak = 0;
+		let sequence = 0;
+		const capture = vi.fn(async () => {
+			const index = sequence++;
+			if (parallel === "groups" && index === 2) expect(active).toBe(0);
+			active++;
+			peak = Math.max(peak, active);
+			await new Promise((resolve) => setTimeout(resolve, index === 0 ? 25 : 5));
+			active--;
+			return {
+				reference: `evidence-${index}`,
+				exitCode: index === 1 ? 1 : 0,
+				stopped: index === 2 ? ("timeout" as const) : null,
+				stdout: "retained diagnostic",
+				stderr: "",
+				stdoutNextStart: index === 0 ? 32000 : null,
+				stderrNextStart: null,
+			};
+		});
+		const receipts = new Map<string, unknown>();
+		const input = {
+			machines: {} as WorkspaceMachines,
+			vm: WorkspaceId("test"),
+			cwd: "/repo",
+			sessionId: crypto.randomUUID(),
+			turnId: crypto.randomUUID(),
+			readOnly: false,
+			signal: new AbortController().signal,
+			once: async (id: string, run: () => Promise<unknown>) => {
+				if (!receipts.has(id)) receipts.set(id, await run());
+				return receipts.get(id);
+			},
+			output: { capture } as unknown as ReturnType<typeof agentOutputArtifacts>,
 		};
-	});
-	const receipts = new Map<string, unknown>();
-	const input = {
-		machines: {} as WorkspaceMachines,
-		vm: WorkspaceId("test"),
-		cwd: "/repo",
-		sessionId: crypto.randomUUID(),
-		turnId: crypto.randomUUID(),
-		readOnly: false,
-		signal: new AbortController().signal,
-		once: async (id: string, run: () => Promise<unknown>) => {
-			if (!receipts.has(id)) receipts.set(id, await run());
-			return receipts.get(id);
-		},
-		output: { capture } as unknown as ReturnType<typeof agentOutputArtifacts>,
-	};
-	const tools = apiAgentCommandTools(input);
-	const check = tools.run_checks as {
-		execute: (args: object, options: object) => Promise<unknown>;
-	};
-	const args = { commands: ["lint", "test", "build"] };
-	const result = await check.execute(args, { toolCallId: "checks" });
-	expect(peak).toBe(2);
-	expect(result).toMatchObject([
-		{
-			command: "lint",
-			passed: true,
-			reference: "evidence-0",
-			stdoutNextStart: 32000,
-		},
-		{ command: "test", passed: false, exitCode: 1 },
-		{ command: "build", passed: false, stopped: "timeout" },
-	]);
-	expect(await check.execute(args, { toolCallId: "checks" })).toEqual(result);
-	expect(capture).toHaveBeenCalledTimes(3);
-	expect(
-		apiAgentCommandTools({ ...input, readOnly: true }).run_checks,
-	).toBeUndefined();
-	await expect(
-		check.execute({ commands: [] }, { toolCallId: "empty" }),
-	).rejects.toThrow();
-	await expect(
-		check.execute(
-			{ commands: ["test"], maxSeconds: 121 },
-			{ toolCallId: "too-long" },
-		),
-	).rejects.toThrow();
-});
+		const tools = apiAgentCommandTools(input);
+		const check = tools.run_checks as {
+			execute: (args: object, options: object) => Promise<unknown>;
+		};
+		const args = {
+			commands: ["lint", "test", "build"],
+			...(parallel === "groups"
+				? { groups: [[0, 1], [2]] }
+				: parallel
+					? { parallel }
+					: {}),
+		};
+		const result = await check.execute(args, { toolCallId: "checks" });
+		expect(peak).toBe(parallel ? 2 : 1);
+		expect(result).toMatchObject([
+			{
+				command: "lint",
+				passed: true,
+				reference: "evidence-0",
+				stdoutNextStart: 32000,
+			},
+			{ command: "test", passed: false, exitCode: 1 },
+			{ command: "build", passed: false, stopped: "timeout" },
+		]);
+		expect(await check.execute(args, { toolCallId: "checks" })).toEqual(result);
+		expect(capture).toHaveBeenCalledTimes(3);
+		expect(
+			apiAgentCommandTools({ ...input, readOnly: true }).run_checks,
+		).toBeUndefined();
+		await expect(
+			check.execute({ commands: [] }, { toolCallId: "empty" }),
+		).rejects.toThrow();
+		await expect(
+			check.execute(
+				{ commands: ["test"], maxSeconds: 121 },
+				{ toolCallId: "too-long" },
+			),
+		).rejects.toThrow();
+	},
+);
 
 it("keeps long-running commands out of the read-only lead", async () => {
 	const { tools } = await fixture(true);
 	expect(Object.keys(tools)).toEqual(["read_command"]);
 });
+
+it.each([false, true])(
+	"binds compact check receipts to declared sources; changed=%s",
+	async (changed) => {
+		const before = {
+			revision: "a".repeat(40),
+			dirty: true,
+			sources: [{ path: "new.ts", sha256: "b".repeat(64) }],
+		};
+		const after = changed
+			? { ...before, sources: [{ path: "new.ts", sha256: "c".repeat(64) }] }
+			: before;
+		const exec = vi
+			.fn()
+			.mockResolvedValueOnce({ exitCode: 0, stdout: JSON.stringify(before) })
+			.mockResolvedValueOnce({ exitCode: 0, stdout: JSON.stringify(after) });
+		const reference = crypto.randomUUID();
+		const recordVerification = vi.fn();
+		const read = vi
+			.fn()
+			.mockResolvedValue({ content: "last lines", omittedCharacters: 12000 });
+		const capture = vi.fn().mockResolvedValue({
+			reference,
+			exitCode: 0,
+			stopped: null,
+			stdout: "large log",
+			stderr: "",
+			stdoutNextStart: null,
+			stderrNextStart: null,
+		});
+		const tools = apiAgentCommandTools({
+			machines: { exec } as unknown as WorkspaceMachines,
+			vm: WorkspaceId("test"),
+			cwd: "/repo",
+			sessionId: crypto.randomUUID(),
+			turnId: crypto.randomUUID(),
+			readOnly: false,
+			signal: new AbortController().signal,
+			once: async (_id, run) => run(),
+			output: { capture, recordVerification, read } as unknown as ReturnType<
+				typeof agentOutputArtifacts
+			>,
+		});
+		const check = tools.run_checks as {
+			execute: (args: object, options: object) => Promise<unknown>;
+		};
+		const result = await check.execute(
+			{ commands: ["test"], sourcePaths: ["new.ts"], outputView: "summary" },
+			{ toolCallId: "bound" },
+		);
+		expect(result).toMatchObject([
+			{
+				passed: !changed,
+				exitCode: 0,
+				stdout: "last lines",
+				stdoutNextStart: 0,
+				verification: {
+					command: "test",
+					cwd: "/repo",
+					before,
+					after,
+					sourcesStable: !changed,
+				},
+			},
+		]);
+		expect(recordVerification).toHaveBeenCalledWith(
+			reference,
+			expect.objectContaining({ before, after }),
+		);
+		expect(capture).toHaveBeenCalledOnce();
+		expect(read).toHaveBeenCalledTimes(2);
+	},
+);
 
 it.runIf(process.platform === "linux")(
 	"defers unfinished wait output without advancing its cursor and preserves live reads",

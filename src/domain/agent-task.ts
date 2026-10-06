@@ -55,6 +55,34 @@ export type AgentTask = {
 	readonly updatedAt: string;
 };
 
+export function agentTaskStatusReceipt(
+	task: AgentTask,
+	includePrompts = false,
+) {
+	if (includePrompts) return task;
+	const { prompt: _assignment, ...status } = task;
+	return status;
+}
+
+export function agentTaskSummaryPage(
+	summary: string | null,
+	start: unknown = 0,
+) {
+	if (
+		typeof start !== "number" ||
+		!Number.isSafeInteger(start) ||
+		start < 0 ||
+		start > 32_000_000
+	)
+		throw new Error("Summary start must be a non-negative safe integer.");
+	const characters = Array.from(summary ?? "");
+	return {
+		content: characters.slice(start, start + 4000).join(""),
+		start,
+		nextStart: start + 4000 < characters.length ? start + 4000 : null,
+	};
+}
+
 type TaskSession = {
 	readonly id: string;
 	readonly parentSessionId: string | null;

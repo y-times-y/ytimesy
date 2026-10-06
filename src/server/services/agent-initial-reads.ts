@@ -8,6 +8,8 @@ export async function prefetchInitialAgentReads(input: {
 	messages: ModelMessage[];
 	tools: ToolSet;
 	coordination: boolean;
+	/** Fresh unbound OpenAI history only; signed/prefix-bound providers keep their original order. */
+	cacheStablePrefix?: boolean;
 	signal: AbortSignal;
 	onEvent: (event: ApiAgentEvent) => Promise<void>;
 }): Promise<ModelMessage[]> {
@@ -17,7 +19,12 @@ export async function prefetchInitialAgentReads(input: {
 		return input.messages;
 	const requests = [
 		{ name: "read_repository_guidance", arguments: { scope: "." } },
-		{ name: "read_environment_report", arguments: {} },
+		...(!input.coordination
+			? [
+					{ name: "read_environment_report", arguments: {} },
+					{ name: "inspect_changes", arguments: {} },
+				]
+			: []),
 		...(input.coordination
 			? [{ name: "read_task_capacity", arguments: {} }]
 			: []),
@@ -27,7 +34,11 @@ export async function prefetchInitialAgentReads(input: {
 			const execute = input.tools[request.name]?.execute;
 			if (typeof execute !== "function") return null;
 			input.signal.throwIfAborted();
-			const id = `call_prefetch_${randomUUID().replaceAll("-", "")}`;
+			// These reads occur once in a fresh history. Stable local IDs let unchanged
+			// guidance precede task-specific input without defeating prefix caching.
+			const id = input.cacheStablePrefix
+				? `call_prefetch_${request.name}`
+				: `call_prefetch_${randomUUID().replaceAll("-", "")}`;
 			await input.onEvent({
 				type: "tool-call",
 				id,
@@ -54,7 +65,7 @@ export async function prefetchInitialAgentReads(input: {
 	input.signal.throwIfAborted();
 	const reads = results.filter((result) => result !== null);
 	return [
-		...input.messages,
+		...(input.cacheStablePrefix ? [] : input.messages),
 		{
 			role: "assistant",
 			content: reads.map((read) => ({
@@ -73,5 +84,6 @@ export async function prefetchInitialAgentReads(input: {
 				output: { type: "json", value: read.output },
 			})),
 		},
+		...(input.cacheStablePrefix ? input.messages : []),
 	];
 }

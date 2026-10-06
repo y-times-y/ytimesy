@@ -55,7 +55,11 @@ beforeEach(() => {
 	fake.state.mockResolvedValue(undefined);
 });
 const call = (
-	tool: "create_task" | "read_task_output",
+	tool:
+		| "create_task"
+		| "read_task_output"
+		| "read_task_summary"
+		| "mark_task_reviewed",
 	args: Record<string, unknown>,
 	machines = {} as WorkspaceMachines,
 	userId = "owner",
@@ -68,6 +72,55 @@ const call = (
 			{ id: "call", tool, arguments: args },
 		),
 	);
+
+it("reads the complete latest child handoff without waking a model or requiring a VM", async () => {
+	const summary = `${"x".repeat(4000)}exact receipt reference`;
+	fake.descendants.mockResolvedValue([
+		{
+			...child,
+			taskState: "done",
+			taskSummary: "Short status preview",
+			items: [{ kind: "agentMessage", id: "final", text: summary }],
+		},
+	]);
+	await expect(call("read_task_summary", { taskId: "child" })).resolves.toEqual(
+		{
+			taskId: "child",
+			state: "done",
+			content: "x".repeat(4000),
+			start: 0,
+			nextStart: 4000,
+		},
+	);
+	await expect(
+		call("read_task_summary", { taskId: "child", start: 4000 }),
+	).resolves.toMatchObject({
+		content: "exact receipt reference",
+		nextStart: null,
+	});
+	await expect(
+		call("read_task_summary", { taskId: "unrelated" }),
+	).rejects.toThrow("descendant task");
+	await expect(
+		call("read_task_summary", { taskId: "child" }, undefined, "foreign"),
+	).rejects.toThrow("not available in this project");
+	expect(fake.prepare).not.toHaveBeenCalled();
+	expect(fake.send).not.toHaveBeenCalled();
+});
+
+it("rejects a mismatched descendant owner or project before exposing its summary", async () => {
+	for (const foreign of [
+		{ ...child, userId: "foreign" },
+		{ ...child, projectId: "unrelated-project" },
+	]) {
+		fake.descendants.mockResolvedValue([
+			{ ...foreign, taskSummary: "Private result" },
+		]);
+		await expect(
+			call("read_task_summary", { taskId: "child" }),
+		).rejects.toThrow("summary is not available in this project");
+	}
+});
 
 it("keeps ordinary creation draft-only and launches a complete ready draft through normal admission when requested", async () => {
 	const args = {
@@ -183,6 +236,97 @@ it("rejects unrelated tasks and foreign owners before reading any guest evidence
 	).rejects.toThrow("not available in this project");
 	expect(exec).not.toHaveBeenCalled();
 });
+
+it.each(["failed", "stale", "unbound"])(
+	"rejects %s supplied verification before accepting a writer",
+	async (failure) => {
+		fake.descendants.mockResolvedValue([
+			{
+				...child,
+				taskState: "done",
+				taskAccess: "read_write",
+				providerRef: "child-vm",
+			},
+		]);
+		const source = {
+			revision: "a".repeat(40),
+			dirty: true,
+			sources: [{ path: "source.ts", sha256: "b".repeat(64) }],
+		};
+		const reference = "631bb044-cf28-4409-8aab-dceeb230f24a";
+		const exec = vi
+			.fn()
+			.mockResolvedValueOnce({
+				exitCode: 0,
+				stdout: JSON.stringify([
+					{
+						stdout: {
+							reference,
+							content: "check output",
+							completion: {
+								status: failure === "failed" ? 1 : 0,
+								stopped: null,
+							},
+							...(failure === "unbound"
+								? {}
+								: {
+										verification: {
+											command: "test",
+											cwd: "/repo",
+											before: source,
+											after: source,
+											sourcesStable: true,
+										},
+									}),
+						},
+						stderr: {
+							reference,
+							content: "",
+							completion: {
+								status: failure === "failed" ? 1 : 0,
+								stopped: null,
+							},
+							...(failure === "unbound"
+								? {}
+								: {
+										verification: {
+											command: "test",
+											cwd: "/repo",
+											before: source,
+											after: source,
+											sourcesStable: true,
+										},
+									}),
+						},
+					},
+				]),
+			})
+			.mockResolvedValueOnce({
+				exitCode: 0,
+				stdout: JSON.stringify(
+					failure === "stale"
+						? {
+								...source,
+								sources: [{ path: "source.ts", sha256: "c".repeat(64) }],
+							}
+						: source,
+				),
+			});
+		await expect(
+			call(
+				"mark_task_reviewed",
+				{
+					taskId: "child",
+					expectedSha256: "d".repeat(64),
+					verificationReferences: [reference],
+				},
+				{ exec, ensureRunning: vi.fn() } as unknown as WorkspaceMachines,
+			),
+		).rejects.toThrow("current unchanged declared sources");
+		expect(fake.send).not.toHaveBeenCalled();
+		expect(exec).toHaveBeenCalledTimes(failure === "unbound" ? 1 : 2);
+	},
+);
 
 it("includes independently observed background completion and rejects malformed evidence references", async () => {
 	fake.descendants.mockResolvedValue([{ ...child, providerRef: "child-vm" }]);

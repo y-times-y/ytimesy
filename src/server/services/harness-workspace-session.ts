@@ -1,11 +1,16 @@
 import { Cause, Duration, Effect } from "effect";
+import { z } from "zod";
 import { competitionJudgeToolAllowed } from "#/domain/agent-competition";
 import type { AgentConnection } from "#/domain/agent-connection";
 import {
 	type AgentProviderId,
 	agentProviderById,
 } from "#/domain/agent-provider";
-import { agentTaskTree } from "#/domain/agent-task";
+import {
+	agentTaskStatusReceipt,
+	agentTaskSummaryPage,
+	agentTaskTree,
+} from "#/domain/agent-task";
 import {
 	AGENT_TASK_TOOL_REQUEST_PATH,
 	AGENT_TASK_TOOL_RESPONSE_PATH,
@@ -129,6 +134,7 @@ import { publishProject } from "./publication";
 import {
 	captureTaskPatch,
 	importReviewedTaskChanges,
+	taskPatchPreview,
 } from "./reviewed-task-import";
 import { commitChatBranchForSubmission } from "./session-branch";
 import { machinesForAgentSession } from "./session-workspace-machines";
@@ -844,6 +850,12 @@ export function runAgentTaskTool(
 					taskToolString(request.arguments, "taskId"),
 					sources,
 					control,
+					{
+						sourcePaths: request.arguments.sourcePaths as string[] | undefined,
+						additionalChecks: request.arguments.additionalChecks as
+							| string[]
+							| undefined,
+					},
 				),
 			);
 		}
@@ -969,7 +981,10 @@ export function runAgentTaskTool(
 		if (request.tool === "list_tasks") {
 			const byId = new Map(taskRows.map((row) => [row.id, row]));
 			return agentTaskTree(parent.id, taskRows).map((task) => ({
-				...task,
+				...agentTaskStatusReceipt(
+					task,
+					request.arguments.includePrompts === true,
+				),
 				summary:
 					task.summary ??
 					lastAgentMessageText(
@@ -981,6 +996,37 @@ export function runAgentTaskTool(
 		const taskId = taskToolString(request.arguments, "taskId");
 		const target = taskRows.find((row) => row.id === taskId);
 		if (!target) throw new Error("That descendant task is not available.");
+		if (request.tool === "read_task_summary") {
+			if (
+				target.userId !== scope.userId ||
+				target.projectId !== scope.projectId
+			)
+				throw new Error("The task summary is not available in this project.");
+			return {
+				taskId: target.id,
+				state: target.taskState,
+				...agentTaskSummaryPage(
+					lastAgentMessageText(sessionItemsFromUnknown(target.items)) ??
+						target.taskSummary,
+					request.arguments.start,
+				),
+			};
+		}
+		if (request.tool === "read_task_checks") {
+			const { readAuthorizedTaskChecks } = yield* Effect.tryPromise(
+				() => import("./task-output-evidence"),
+			);
+			return yield* Effect.tryPromise(() =>
+				readAuthorizedTaskChecks({
+					machines: machinesForAgentSession(machines, target),
+					task: target,
+					ownerId: scope.userId,
+					projectId: scope.projectId as string,
+					references: request.arguments.references,
+					signal: control?.signal ?? AbortSignal.timeout(20000),
+				}),
+			);
+		}
 		if (request.tool === "read_task_output") {
 			const { readAuthorizedTaskOutput } = yield* Effect.tryPromise(
 				() => import("./task-output-evidence"),
@@ -1063,14 +1109,9 @@ export function runAgentTaskTool(
 					WorkspaceId(target.providerRef as string),
 				),
 			);
-			const diff = patch.bytes.toString("utf8");
 			return {
 				taskId: target.id,
-				diff: diff.slice(start, start + 60_000),
-				truncated: diff.length > start + 60_000,
-				nextStart: diff.length > start + 60_000 ? start + 60_000 : null,
-				sha256: patch.sha256,
-				base: patch.base,
+				...taskPatchPreview(patch, start),
 			};
 		}
 		if (request.tool === "mark_task_reviewed") {
@@ -1086,12 +1127,44 @@ export function runAgentTaskTool(
 			}
 			if (!target.providerRef || !target.parentSessionId)
 				throw new Error("Writable review workspace is unavailable.");
+			if (request.arguments.verificationReferences !== undefined) {
+				const references = z
+					.array(z.uuid())
+					.min(1)
+					.max(8)
+					.parse(request.arguments.verificationReferences);
+				const { readAuthorizedTaskChecks, requireCurrentTaskCheck } =
+					yield* Effect.tryPromise(() => import("./task-output-evidence"));
+				const bundle = yield* Effect.tryPromise(() =>
+					readAuthorizedTaskChecks({
+						machines: machinesForAgentSession(machines, target),
+						task: target,
+						ownerId: scope.userId,
+						projectId: scope.projectId as string,
+						references,
+						signal: control?.signal ?? AbortSignal.timeout(20000),
+					}),
+				);
+				for (const check of bundle.checks) {
+					const proof =
+						check.sourceProof === null
+							? null
+							: bundle.sourceProofs[check.sourceProof];
+					requireCurrentTaskCheck({
+						completion: check.completion,
+						verification: proof,
+						sourcesCurrent: proof?.sourcesCurrent,
+					});
+				}
+			}
 			const expectedSha256 = taskToolString(
 				request.arguments,
 				"expectedSha256",
 			);
 			if (!/^[a-f0-9]{64}$/.test(expectedSha256))
-				throw new Error("Provide the exact patch hash from inspect_task_diff.");
+				throw new Error(
+					"Provide the exact patch hash from the inspected diff receipt.",
+				);
 			const patch = yield* Effect.tryPromise(() =>
 				captureTaskPatch(
 					machinesForAgentSession(machines, target),

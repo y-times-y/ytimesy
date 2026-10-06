@@ -101,6 +101,8 @@ export async function runApiTurn(
 		| undefined;
 	let heartbeatBusy = false;
 	let heartbeatPending: Promise<void> | undefined;
+	let coordinationHeartbeatPending: Promise<void> | undefined;
+	let coordinationHeartbeatBusy = false;
 	let heartbeatFailed = false;
 	let progressFailed = false;
 	const progress = turnProgressWriter(
@@ -125,34 +127,11 @@ export async function runApiTurn(
 	let lastCoordinationRenewal = 0;
 	let evaluation: EvaluationRun | null = null;
 	const heartbeat = setInterval(() => {
-		if (heartbeatBusy) return;
-		heartbeatBusy = true;
-		let heartbeatStage = "database-renewal";
-		heartbeatPending = renewApiTurn(turn)
-			.then(async (alive) => {
-				if (!alive)
-					abort.abort(
-						new Error("Turn ownership or cancellation state changed."),
-					);
-				if (evaluation) {
-					heartbeatStage = "evaluation-guard";
-					await assertEvaluationActive(evaluation);
-				}
-				if (
-					alive &&
-					coordinated &&
-					Date.now() - lastCoordinationRenewal >= 10_000
-				) {
-					heartbeatStage = "coordination-renewal";
-					if (!(await coordinateConversationTurn("renew", control)))
-						abort.abort(new Error("Conversation coordination lease was lost."));
-					lastCoordinationRenewal = Date.now();
-				}
-			})
-			.catch((error: unknown) => {
+		const guardHeartbeat = (stage: string, operation: Promise<void>) =>
+			operation.catch((error: unknown) => {
 				heartbeatFailed = true;
 				console.warn("Turn heartbeat failed", {
-					stage: heartbeatStage,
+					stage,
 					...apiTurnFailureClassification(error),
 				});
 				abort.abort(
@@ -160,7 +139,41 @@ export async function runApiTurn(
 						"Turn heartbeat or coordination service became unavailable.",
 					),
 				);
-			})
+			});
+		if (
+			coordinated &&
+			!coordinationHeartbeatBusy &&
+			!abort.signal.aborted &&
+			Date.now() - lastCoordinationRenewal >= 10_000
+		) {
+			coordinationHeartbeatBusy = true;
+			coordinationHeartbeatPending = guardHeartbeat(
+				"coordination-renewal",
+				coordinateConversationTurn("renew", control).then((alive) => {
+					if (!alive)
+						abort.abort(new Error("Conversation coordination lease was lost."));
+					else lastCoordinationRenewal = Date.now();
+				}),
+			).finally(() => {
+				coordinationHeartbeatBusy = false;
+			});
+		}
+		if (heartbeatBusy || abort.signal.aborted) return;
+		heartbeatBusy = true;
+		const databaseHeartbeat = guardHeartbeat(
+			"database-renewal",
+			renewApiTurn(turn).then(async (alive) => {
+				if (!alive)
+					abort.abort(
+						new Error("Turn ownership or cancellation state changed."),
+					);
+			}),
+		);
+		const evaluationHeartbeat = evaluation
+			? guardHeartbeat("evaluation-guard", assertEvaluationActive(evaluation))
+			: Promise.resolve();
+		heartbeatPending = Promise.all([databaseHeartbeat, evaluationHeartbeat])
+			.then(() => {})
 			.finally(() => {
 				heartbeatBusy = false;
 			});
@@ -559,6 +572,7 @@ export async function runApiTurn(
 	} finally {
 		clearInterval(heartbeat);
 		await heartbeatPending;
+		await coordinationHeartbeatPending;
 		if (abort.signal.aborted) stopCommands();
 		await commandStop;
 		abort.signal.removeEventListener("abort", stopCommands);

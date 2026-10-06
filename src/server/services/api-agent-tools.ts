@@ -36,10 +36,12 @@ import { readableHistory } from "./api-agent-context";
 import { apiAgentFileTools } from "./api-agent-file-tools";
 import { apiAgentLanguageTools } from "./api-agent-language-tools";
 import { scopedShellCommand } from "./api-command-scope";
+import { batchedAgentReads } from "./batched-agent-reads";
 import { runAgentTaskTool } from "./harness-workspace-session";
 import { loadCloudProjectMemoryDocument } from "./project-knowledge";
 import { projectMemoryTools } from "./project-memory-tools";
 import { inspectProjectSourceEvidence } from "./project-source-evidence";
+import { launchReadyTasks, readyTaskLaunch } from "./ready-task-launch";
 import { repositoryGuidanceTool } from "./repository-guidance";
 import { repositoryToolPath as repositorySearchPath } from "./repository-tool-path";
 import { scopedToolExecution } from "./tool-execution-identity";
@@ -325,6 +327,40 @@ export function apiAgentTools(
 				),
 		});
 	}
+	const createTask = executionIdentity.wrap({ create_task: tools.create_task })
+		.create_task.execute;
+	tools.launch_ready_tasks = tool({
+		description:
+			"Launch two to five fully specified independent writable contracts in one call. Each needs unique id, disjoint owns paths, title and standalone prompt including required preflight and verification. Uses fresh machines, existing per-child admission/journals, and retained draft IDs on rejected starts. Capacity and ownership are checked before creation; admission can still change concurrently. Not for dependent work or filler tasks. Inspect every returned outcome; never replay an uncertain batch or create replacements.",
+		inputSchema: readyTaskLaunch,
+		execute: (request, options) =>
+			once(options.toolCallId, () =>
+				launchReadyTasks({
+					request,
+					available: () => availableChildSlots(session.userId, session.id),
+					signal: options.abortSignal ?? signal,
+					launch: async (task, index) => {
+						if (!createTask) throw new Error("Task creation is unavailable.");
+						return createTask(
+							{
+								title: task.title,
+								prompt: `${task.prompt}\n\nDeclared write ownership: ${JSON.stringify(task.owns)}. Keep edits within these paths; report any necessary scope change to the lead before editing outside them.`,
+								...(task.modelId ? { modelId: task.modelId } : {}),
+								...(task.harness ? { harness: task.harness } : {}),
+								startImmediately: true,
+								placement: "fresh",
+								access: "read_write",
+								execution: "parallel",
+							},
+							{
+								...options,
+								toolCallId: `${options.toolCallId}:child:${index}`,
+							},
+						);
+					},
+				}),
+			),
+	});
 	Object.assign(
 		tools,
 		apiAgentFileTools({
@@ -336,9 +372,49 @@ export function apiAgentTools(
 			once,
 			verifyBatch: readOnly
 				? undefined
-				: async ({ formatCommand, commands, maxSeconds }, id) => {
+				: async (
+						{
+							formatCommand,
+							preflightCommands,
+							commands,
+							maxSeconds,
+							parallelChecks,
+							groups,
+							sourcePaths,
+							outputView,
+						},
+						id,
+					) => {
+						const runChecks = async (
+							stageCommands: string[],
+							stage: string,
+						) => {
+							if (!tools.run_checks.execute)
+								throw new Error(
+									"Verification executor is unavailable; inspect the edited checkout.",
+								);
+							return tools.run_checks.execute(
+								{
+									commands: stageCommands,
+									maxSeconds,
+									parallel: stage === "verification" && parallelChecks,
+									groups: stage === "verification" ? groups : undefined,
+									sourcePaths,
+									outputView,
+								},
+								{
+									toolCallId: `${id}:${stage}`,
+									messages: [],
+									abortSignal: signal,
+									context: {},
+								},
+							);
+						};
 						return verifyPatchedCheckout({
 							signal,
+							preflight: preflightCommands
+								? () => runChecks(preflightCommands, "preflight")
+								: undefined,
 							format: formatCommand
 								? async () => {
 										const { cwd } = await workspace();
@@ -353,21 +429,7 @@ export function apiAgentTools(
 										);
 									}
 								: undefined,
-							check: async () => {
-								if (!tools.run_checks.execute)
-									throw new Error(
-										"Verification executor is unavailable; inspect the edited checkout.",
-									);
-								return tools.run_checks.execute(
-									{ commands, maxSeconds },
-									{
-										toolCallId: `${id}:verification`,
-										messages: [],
-										abortSignal: signal,
-										context: {},
-									},
-								);
-							},
+							check: () => runChecks(commands, "verification"),
 						});
 					},
 		}),
@@ -395,5 +457,6 @@ export function apiAgentTools(
 			once,
 		}),
 	);
+	tools.batch_read = batchedAgentReads(executionIdentity.wrap(tools), signal);
 	return executionIdentity.wrap(tools);
 }

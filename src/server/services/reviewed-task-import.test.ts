@@ -38,7 +38,33 @@ vi.mock("./session-workspace-machines", () => ({
 import {
 	captureTaskPatch,
 	importReviewedTaskChanges,
+	taskPatchPreview,
 } from "./reviewed-task-import";
+
+it("returns complete or continuable diff pages with the unchanged full-patch identity", () => {
+	const patch = {
+		bytes: Buffer.from(`${"a".repeat(60000)}tail`),
+		sha256: "a".repeat(64),
+		base: "b".repeat(40),
+	};
+	expect(taskPatchPreview(patch)).toEqual({
+		diff: "a".repeat(60000),
+		truncated: true,
+		nextStart: 60000,
+		sha256: patch.sha256,
+		base: patch.base,
+	});
+	expect(taskPatchPreview(patch, 60000)).toEqual({
+		diff: "tail",
+		truncated: false,
+		nextStart: null,
+		sha256: patch.sha256,
+		base: patch.base,
+	});
+	expect(
+		taskPatchPreview({ ...patch, bytes: Buffer.from("complete") }),
+	).toMatchObject({ diff: "complete", truncated: false, nextStart: null });
+});
 
 const run = promisify(execFile);
 const roots: string[] = [];

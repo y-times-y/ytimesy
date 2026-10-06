@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { openai } from "@ai-sdk/openai";
 import { applyDiff } from "@openai/agents-core/utils";
-import { type ToolSet, tool } from "ai";
+import { type ModelMessage, type ToolSet, tool } from "ai";
 import { z } from "zod";
+import { checkExecutionGroups } from "#/domain/check-execution-groups";
 import { publicToolDetail } from "#/domain/tool-detail";
 import type { agentOutputArtifacts } from "./agent-output-artifacts";
 import {
@@ -10,16 +11,62 @@ import {
 	resolveToolWorkspace,
 } from "./agent-tool-workspace";
 import { editDiagnostics } from "./edit-diagnostics";
+import {
+	archivedGuidanceDocuments,
+	knownGuidanceDocuments,
+} from "./repository-guidance";
 import { inspectRepositoryChangesCommand } from "./repository-inspection";
 import { repositoryToolPath } from "./repository-tool-path";
 
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
-export const patchVerification = z.object({
-	formatCommand: z.string().min(1).max(16_000).optional(),
-	commands: z.array(z.string().min(1).max(16_000)).min(1).max(8),
-	maxSeconds: z.number().int().min(1).max(120).default(120),
-});
+export const patchVerification = z
+	.object({
+		formatCommand: z.string().min(1).max(16_000).optional(),
+		preflightCommands: z
+			.array(z.string().min(1).max(16_000))
+			.min(1)
+			.max(8)
+			.describe(
+				"Fast prerequisites such as typechecking and focused tests. Final commands run only if every preflight command succeeds. Failed or stopped preflight leaves final checks unrun, never passed. At most eight commands across both stages.",
+			)
+			.optional(),
+		commands: z.array(z.string().min(1).max(16_000)).min(1).max(8),
+		groups: z
+			.array(z.array(z.number().int().min(0).max(7)).min(1).max(2))
+			.min(1)
+			.max(8)
+			.optional(),
+		sourcePaths: z.array(z.string().min(1).max(2048)).min(1).max(8).optional(),
+		outputView: z.enum(["full", "summary"]).default("full"),
+		parallelChecks: z
+			.boolean()
+			.default(false)
+			.describe(
+				"Overlap final checks only when verified independent with no shared generated-file/cache mutations. Preflight always runs in order.",
+			),
+		maxSeconds: z.number().int().min(1).max(120).default(120),
+	})
+	.refine(
+		(request) =>
+			request.commands.length + (request.preflightCommands?.length ?? 0) <= 8,
+		"Verification supports at most eight total preflight and final commands.",
+	)
+	.superRefine((request, context) => {
+		try {
+			checkExecutionGroups(
+				request.commands.length,
+				request.groups,
+				request.parallelChecks,
+			);
+		} catch {
+			context.addIssue({
+				code: "custom",
+				message:
+					"Verification groups must partition final commands exactly once and cannot combine with parallelChecks.",
+			});
+		}
+	});
 
 type RepositoryFileRead = {
 	path: string;
@@ -27,6 +74,28 @@ type RepositoryFileRead = {
 	truncated: boolean;
 };
 type RepositoryFileReadFailure = { path: string; error: "not-a-file" };
+type RepositoryGuidanceReadReceipt = {
+	path: string;
+	sha256: string;
+	nextStart: null;
+} & (
+	| { alreadyInContext: true }
+	| {
+			previouslyRead: true;
+			archivedBody: ReturnType<
+				typeof archivedGuidanceDocuments
+			>[string]["archivedBody"];
+	  }
+);
+type RepositoryFileBatch = (
+	| RepositoryFileRead
+	| RepositoryFileReadFailure
+	| RepositoryGuidanceReadReceipt
+)[];
+type FileReadGuidance = {
+	messages: readonly ModelMessage[];
+	repeatCompleteBody: boolean;
+};
 type RepositoryFilePage = {
 	path: string;
 	start: number;
@@ -50,7 +119,7 @@ with os.fdopen(descriptor, 'r', encoding='utf-8') as handle:
     text = handle.read(32001)
 print(json.dumps({'available': True, 'start': start, 'text': text[:32000], 'nextStart': start + 32000 if len(text) > 32000 else None}, ensure_ascii=False))`;
 
-const READ_FILES_SCRIPT = `import json, pathlib, sys
+const READ_FILES_SCRIPT = `import hashlib, json, pathlib, sys
 root = pathlib.Path(sys.argv[1]).resolve(strict=True)
 paths = json.loads(sys.argv[2])
 options = json.loads(sys.argv[3])
@@ -64,6 +133,8 @@ if not 0 <= start <= 10000000 or (page and len(paths) != 1):
 if not 1 <= len(paths) <= 8:
     raise ValueError('Request between one and eight files')
 remaining = max(64000, maximum)
+known_documents = options.get('knownDocuments', {})
+archived_documents = options.get('archivedDocuments', {})
 results = []
 for path in paths:
     relative = pathlib.Path(path)
@@ -77,6 +148,20 @@ for path in paths:
             raise ValueError('Requested repository file is unavailable')
         results.append({'path': path, 'error': 'not-a-file'})
         continue
+    name = target.relative_to(root).as_posix()
+    if start == 0 and (name in known_documents or name in archived_documents):
+        digest = hashlib.sha256()
+        with target.open('rb') as handle:
+            for chunk in iter(lambda: handle.read(65536), b''):
+                digest.update(chunk)
+        sha256 = digest.hexdigest()
+        if known_documents.get(name) == sha256:
+            results.append({'path': path, 'sha256': sha256, 'alreadyInContext': True, 'nextStart': None})
+            continue
+        archived = archived_documents.get(name)
+        if archived and archived['sha256'] == sha256:
+            results.append({'path': path, 'sha256': sha256, 'previouslyRead': True, 'archivedBody': archived['archivedBody'], 'nextStart': None})
+            continue
     limit = min(maximum, remaining)
     with target.open('r', encoding='utf-8', newline='') as handle:
         handle.read(start)
@@ -204,33 +289,42 @@ export function apiAgentFileTools(
 	const { signal, once } = input;
 	function readRepositoryFiles(
 		paths: string[],
+		start: number,
+		maxCharacters?: number,
+	): Promise<RepositoryFilePage>;
+	function readRepositoryFiles(
+		paths: string[],
 		start: undefined,
 		maxCharacters?: number,
-	): Promise<(RepositoryFileRead | RepositoryFileReadFailure)[]>;
+		guidance?: FileReadGuidance,
+	): Promise<RepositoryFileBatch>;
 	function readRepositoryFiles(
 		paths: string[],
 		start: number,
 		maxCharacters?: number,
-	): Promise<RepositoryFilePage>;
+		guidance?: FileReadGuidance,
+	): Promise<RepositoryFilePage | RepositoryGuidanceReadReceipt>;
 	async function readRepositoryFiles(
 		paths: string[],
 		start?: number,
 		maxCharacters = 32000,
+		guidance?: FileReadGuidance,
 	): Promise<
-		(RepositoryFileRead | RepositoryFileReadFailure)[] | RepositoryFilePage
+		RepositoryFileBatch | RepositoryFilePage | RepositoryGuidanceReadReceipt
 	> {
 		signal.throwIfAborted();
 		const { machines, vm, cwd } = await resolveToolWorkspace(input);
 		const result = await machines.exec(
 			vm,
-			`python3 -c ${quote(READ_FILES_SCRIPT)} ${quote(cwd)} ${quote(JSON.stringify(paths))} ${quote(JSON.stringify({ start: start ?? null, maxCharacters }))}`,
+			`python3 -c ${quote(READ_FILES_SCRIPT)} ${quote(cwd)} ${quote(JSON.stringify(paths))} ${quote(JSON.stringify({ start: start ?? null, maxCharacters, ...(guidance && !guidance.repeatCompleteBody ? { knownDocuments: knownGuidanceDocuments(guidance.messages), archivedDocuments: archivedGuidanceDocuments(guidance.messages) } : {}) }))}`,
 			15_000,
 		);
 		if (result.exitCode)
 			throw new Error("Could not safely read requested repository files.");
 		return JSON.parse(result.stdout) as
-			| (RepositoryFileRead | RepositoryFileReadFailure)[]
-			| RepositoryFilePage;
+			| RepositoryFileBatch
+			| RepositoryFilePage
+			| RepositoryGuidanceReadReceipt;
 	}
 	const inspect_changes = tool({
 		description:
@@ -278,24 +372,38 @@ export function apiAgentFileTools(
 		}),
 		read_files: tool({
 			description:
-				"Read up to eight known UTF-8 repository files in one inspection. Prefer batching known paths over separate reads. Missing/non-file paths return a per-path error, not empty file content; existing safe files still return their contents. Unsafe paths reject the request. Defaults: 32,000 characters per file, 64,000 total. For complete required instructions/skills or a known large source, request maxCharacters up to 128,000; total is max(64,000,maxCharacters), in request order. Each successful result explicitly reports truncation; use read_file to continue files that did not fit. Paths are repository-relative and exclude .git.",
+				"Read up to eight known UTF-8 repository files in one inspection. Prefer batching known paths over separate reads. Missing/non-file paths return a per-path error, not empty file content. Unsafe paths reject the request. Defaults: 32,000 characters per file, 64,000 total; maxCharacters may be 128,000 for large required bodies. Total is max(64,000,maxCharacters), in request order. Follow truncation with read_file. Only guidance/configuration already supplied completely by read_repository_guidance may return a fresh hash-verified receipt instead of duplicating text: alreadyInContext means its full body is still active; previouslyRead links its exact archive, not an active body. Set repeatCompleteBody:true when you need the text again. Ordinary source files always return content. Paths exclude .git.",
 			inputSchema: z.object({
 				paths: z.array(z.string().min(1).max(2048)).min(1).max(8),
 				maxCharacters: z.number().int().min(1).max(128000).default(32000),
+				repeatCompleteBody: z.boolean().default(false),
 			}),
-			execute: ({ paths, maxCharacters = 32000 }) =>
-				readRepositoryFiles(paths, undefined, maxCharacters),
+			execute: (
+				{ paths, maxCharacters = 32000, repeatCompleteBody = false },
+				options,
+			) =>
+				readRepositoryFiles(paths, undefined, maxCharacters, {
+					messages: options.messages ?? [],
+					repeatCompleteBody,
+				}),
 		}),
 		read_file: tool({
 			description:
-				"Read a bounded UTF-8 repository file page. Defaults to 32,000 characters; request maxCharacters up to 128,000 for a complete required instruction/skill or known large source without repeated continuation calls. Follow nextStart until null when the complete file is required; start is a Unicode-character offset, not a line number. Paths are repository-relative and exclude .git. Prefer read_files for several known paths.",
+				"Read a bounded UTF-8 repository file page. Defaults to 32,000 characters; maxCharacters may be 128,000 for large required bodies. Follow nextStart until null; start is a Unicode-character offset, not a line number. At start:0 only unchanged guidance/configuration already supplied completely by read_repository_guidance may return a hash-verified alreadyInContext or previouslyRead/archive receipt instead of duplicate content. This preserves prior complete reading; it is not missing-file content. Set repeatCompleteBody:true for actual text when a detail has been forgotten. Continuations and ordinary source files always return content. Paths exclude .git. Prefer read_files for several known paths.",
 			inputSchema: z.object({
 				path: z.string().min(1).max(2048),
 				start: z.number().int().min(0).max(10_000_000).default(0),
 				maxCharacters: z.number().int().min(1).max(128000).default(32000),
+				repeatCompleteBody: z.boolean().default(false),
 			}),
-			execute: ({ path, start = 0, maxCharacters = 32000 }) =>
-				readRepositoryFiles([path], start, maxCharacters),
+			execute: (
+				{ path, start = 0, maxCharacters = 32000, repeatCompleteBody = false },
+				options,
+			) =>
+				readRepositoryFiles([path], start, maxCharacters, {
+					messages: options.messages ?? [],
+					repeatCompleteBody,
+				}),
 		}),
 		inspect_changes,
 		verify_changes: tool({

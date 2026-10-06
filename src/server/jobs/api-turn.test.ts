@@ -360,6 +360,40 @@ const childTurn = {
 	lease_id: "00000000-0000-4000-8000-000000000002",
 } as ApiTurn;
 
+it("renews coordination while a database heartbeat is waiting", async () => {
+	vi.useFakeTimers();
+	let completeHeartbeat: (alive: boolean) => void = () => {};
+	let completeModel: () => void = () => {};
+	try {
+		mocks.renew.mockResolvedValueOnce(true).mockImplementation(
+			() =>
+				new Promise<boolean>((resolve) => {
+					completeHeartbeat = resolve;
+				}),
+		);
+		mocks.runtime.mockImplementation(
+			() =>
+				new Promise<void>((resolve) => {
+					completeModel = resolve;
+				}),
+		);
+		const run = runApiTurn({} as WorkspaceMachines, childTurn);
+		await vi.advanceTimersByTimeAsync(20_001);
+		expect(
+			vi
+				.mocked(coordinateConversationTurn)
+				.mock.calls.filter(([action]) => action === "renew"),
+		).toHaveLength(2);
+		completeHeartbeat(true);
+		completeModel();
+		await run;
+	} finally {
+		completeHeartbeat(true);
+		completeModel();
+		vi.useRealTimers();
+	}
+});
+
 it("awaits an in-flight heartbeat before the invocation can close its database pool", async () => {
 	vi.useFakeTimers();
 	try {
