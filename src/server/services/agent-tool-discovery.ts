@@ -59,6 +59,23 @@ const SINGLE_EDIT_ALIASES = new Set([
 	"apply_patch",
 ]);
 
+const OPTIONAL_WORKFLOW_TOOLS = new Set([
+	"start_command",
+	"read_command",
+	"wait_command",
+	"read_project_memory",
+	"plan_parallel_work",
+	"edit_task",
+	"start_task",
+]);
+const LEAD_OPTIONAL_INVESTIGATION_TOOLS = new Set([
+	"list_files",
+	"inspect_changes",
+	"inspect_project_evidence",
+	"search_project_memory",
+	"read_tool_output",
+]);
+
 /** Reconstruct discovery from the durable journal, not SDK process-local state. */
 export function discoverableAgentTools(
 	tools: ToolSet,
@@ -107,6 +124,9 @@ export function discoverableAgentTools(
 					deferLoading:
 						!known.has(name) &&
 						(!CORE_TOOLS.has(name) ||
+							OPTIONAL_WORKFLOW_TOOLS.has(name) ||
+							(toolSurface === "coordination" &&
+								LEAD_OPTIONAL_INVESTIGATION_TOOLS.has(name)) ||
 							(toolSurface === "implementation" &&
 								(COORDINATION_TOOLS.has(name) ||
 									(Boolean(tools.apply_patches) &&

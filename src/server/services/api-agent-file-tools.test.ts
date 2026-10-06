@@ -86,6 +86,55 @@ async function call(tool: unknown, input: object) {
 	).execute(input, { toolCallId: "edit" });
 }
 
+it("inspects staged, unstaged and untracked content without changing the index or reading ignored/symlink targets", async () => {
+	const { root, tools } = await fixture();
+	await writeFile(join(root, "tracked.ts"), "original\n");
+	await writeFile(join(root, ".gitignore"), "ignored-secret\n");
+	await run("git", ["-C", root, "add", "."]);
+	await run("git", [
+		"-C",
+		root,
+		"-c",
+		"user.name=Test",
+		"-c",
+		"user.email=test@example.invalid",
+		"commit",
+		"-qm",
+		"base",
+	]);
+	await writeFile(join(root, "tracked.ts"), "staged\n");
+	await run("git", ["-C", root, "add", "tracked.ts"]);
+	await writeFile(join(root, "tracked.ts"), "unstaged\n");
+	await writeFile(join(root, "new [*] '$x;.ts"), "new source\n");
+	await writeFile(join(root, "ignored-secret"), "SECRET_NOT_READ");
+	const outside = await fixture();
+	await writeFile(
+		join(outside.root, "private.txt"),
+		"EXTERNAL_SECRET_NOT_READ",
+	);
+	await symlink(join(outside.root, "private.txt"), join(root, "external-link"));
+	await writeFile(join(root, "binary.bin"), Buffer.from([0, 1, 2]));
+	const before = await readFile(join(root, ".git/index"));
+	const result = await call(tools.inspect_changes, {});
+	expect(result).toContain("+staged");
+	expect(result).toContain("+unstaged");
+	expect(result).toContain("+new source");
+	expect(result).toContain("Binary files");
+	expect(result).toContain("Untracked path not read");
+	expect(result).not.toContain("SECRET_NOT_READ");
+	expect(await readFile(join(root, ".git/index"))).toEqual(before);
+	expect(
+		await call(tools.inspect_changes, { path: "new [*] '$x;.ts" }),
+	).toContain("+new source");
+});
+
+it("rejects traversal, absolute and git-internal inspection scopes before execution", async () => {
+	const { tools, commands } = await fixture();
+	for (const path of ["../outside", "/tmp", ".git/index", "a\\b", "a\0b"])
+		await expect(call(tools.inspect_changes, { path })).rejects.toThrow();
+	expect(commands).toEqual([]);
+});
+
 it("verifies only successfully completed batches and does not repeat writes or verification on replay", async () => {
 	const verify = vi
 		.fn()
