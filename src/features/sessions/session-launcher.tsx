@@ -49,7 +49,12 @@ import {
 import { captureAnalytics } from "#/features/analytics/client";
 import { authClient } from "#/features/auth/client";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
+import {
+	getConversationRecoveryPoints,
+	restoreConversationPoint,
+} from "./agent-session.fn";
 import { ContextUsage } from "./context-usage";
+import { ConversationRecovery } from "./conversation-recovery";
 import { HarnessLogin } from "./harness-login";
 import {
 	composerListedModels,
@@ -76,6 +81,8 @@ export function SessionLauncher({
 	onOpenInspector,
 	onOpenFile,
 	onOpenCandidate,
+	onRecovered,
+	initialDraft = "",
 	competitions = [],
 	childTasks = [],
 	allowComparison = true,
@@ -106,6 +113,8 @@ export function SessionLauncher({
 	onOpenInspector: (view: InspectorView) => void;
 	onOpenFile?: (path: string) => void;
 	onOpenCandidate?: (sessionId: string) => void;
+	onRecovered?: (sessionId: string, prompt: string | null) => Promise<void>;
+	initialDraft?: string;
 	competitions?: readonly AgentCompetition[];
 	childTasks?: readonly AgentTaskActivity[];
 	allowComparison?: boolean;
@@ -190,7 +199,31 @@ export function SessionLauncher({
 		],
 	);
 	const [attachments, setAttachments] = useState<File[]>([]);
-	const [draft, setDraft] = useState("");
+	const loadRecovery = useServerFn(getConversationRecoveryPoints);
+	const recoverPoint = useServerFn(restoreConversationPoint);
+	const recoveryPoints = useQuery({
+		queryKey: [
+			"conversation-recovery",
+			selectedProject?.id,
+			session.agentSessionId,
+			session.items.length,
+			session.turnStatus,
+		],
+		enabled:
+			!!selectedProject?.id &&
+			!!session.agentSessionId &&
+			(harnessId === "codex" || harnessId === "api"),
+		queryFn: () => {
+			if (!selectedProject || !session.agentSessionId) return [];
+			return loadRecovery({
+				data: {
+					projectId: selectedProject.id,
+					sessionId: session.agentSessionId,
+				},
+			});
+		},
+	});
+	const [draft, setDraft] = useState(initialDraft);
 	const [modelId, setModelId] = useState(session.listedModelId);
 	const [reasoningId, setReasoningId] = useState("");
 	const [fast, setFast] = useState(false);
@@ -438,6 +471,37 @@ export function SessionLauncher({
 				Session
 			</h1>
 			<SessionTimeline
+				recoveryControls={
+					onRecovered && selectedProject && session.agentSessionId
+						? (messageId) => {
+								const point = recoveryPoints.data?.find(
+									(point) => point.messageId === messageId,
+								);
+								if (!point) return null;
+								return (
+									<ConversationRecovery
+										codeAvailable={point.codeAvailable}
+										busy={busy || session.turnStatus === "running"}
+										onRecover={async (mode) => {
+											if (!session.agentSessionId)
+												throw new Error("Session is unavailable.");
+											const recovered = await recoverPoint({
+												data: {
+													projectId: selectedProject.id,
+													sessionId: session.agentSessionId,
+													messageId,
+													mode,
+												},
+											});
+											await onRecovered(recovered.id, recovered.prompt);
+											if (recovered.prompt) setDraft(recovered.prompt);
+											await recoveryPoints.refetch();
+										}}
+									/>
+								);
+							}
+						: undefined
+				}
 				tasks={childTasks}
 				items={items}
 				turnStatus={turnStatus}

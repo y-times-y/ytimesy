@@ -68,6 +68,65 @@ const finish = {
 	finishReason: { unified: "stop" as const, raw: "stop" },
 };
 
+it("rehydrates exact instructions after foreground compaction before the next model call", async () => {
+	const model = new MockLanguageModelV4({
+		doStream: async () => stream([finish]),
+	});
+	const restore = vi.fn(async (messages: import("ai").ModelMessage[]) => [
+		...messages,
+		{
+			role: "assistant" as const,
+			content: "Exact repository requirement: preserve wire format",
+		},
+	]);
+	const afterTools = vi.fn(
+		async (messages: import("ai").ModelMessage[]) => messages,
+	);
+	await runModelAgent(
+		{
+			userId: "alice",
+			modelId: "model",
+			instructions: "Implement",
+			messages: [
+				{ role: "user", content: "Earlier task" },
+				{ role: "assistant", content: "e".repeat(30000) },
+				{ role: "user", content: "Continue" },
+			],
+			tools: {},
+			signal: new AbortController().signal,
+			onEvent: async () => {},
+			onStep: async () => {},
+			archiveHistory: async () => "archive:fixture",
+			restoreInstructions: restore,
+			afterTools,
+		},
+		{
+			model,
+			contextWindow: 16000,
+			workingContextTokens: 4000,
+			compact: async () => ({
+				messages: [{ role: "assistant", content: "Compacted earlier work" }],
+				usage: {
+					inputTokens: 1,
+					outputTokens: 1,
+					totalTokens: 2,
+					inputTokenDetails: {
+						noCacheTokens: 1,
+						cacheReadTokens: 0,
+						cacheWriteTokens: 0,
+					},
+					outputTokenDetails: { textTokens: 1, reasoningTokens: 0 },
+				},
+			}),
+		},
+	);
+	expect(restore).toHaveBeenCalledOnce();
+	expect(JSON.stringify(model.doStreamCalls[0])).toContain(
+		"Exact repository requirement",
+	);
+	expect(afterTools).toHaveBeenCalledOnce();
+});
+
 it("projects earlier command output into recoverable receipts only on unbound routes", async () => {
 	for (const policy of ["whole-turns", "bound-prefix"] as const) {
 		const model = new MockLanguageModelV4({

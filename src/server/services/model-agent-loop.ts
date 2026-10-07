@@ -75,6 +75,8 @@ export type ModelAgentInput = {
 	prepareMessages?: (messages: ModelMessage[]) => Promise<ModelMessage[]>;
 	beforeCompaction?: (messages: ModelMessage[]) => Promise<void>;
 	archiveHistory?: (messages: ModelMessage[]) => Promise<string>;
+	restoreInstructions?: (messages: ModelMessage[]) => Promise<ModelMessage[]>;
+	afterTools?: (messages: ModelMessage[]) => Promise<ModelMessage[]>;
 };
 
 /** Shared streaming/tool loop; credential transports stay in their provider adapters. */
@@ -237,7 +239,14 @@ async function executeModelSteps(
 			wait,
 		);
 		if (projected !== history) {
-			history = projected;
+			history = (await input.restoreInstructions?.(projected)) ?? projected;
+			if (
+				estimateContextTokens(history) >=
+				contextBudget(history).inputLimitTokens
+			)
+				throw new Error(
+					"Restored repository instructions exceed the model context budget.",
+				);
 			measured = undefined;
 			await input.onStep(history);
 		}
@@ -429,6 +438,14 @@ async function executeModelSteps(
 				}
 				history = prepared.messages;
 				if (prepared.compacted) {
+					history = (await input.restoreInstructions?.(history)) ?? history;
+					if (
+						estimateContextTokens(history) >=
+						contextBudget(history).inputLimitTokens
+					)
+						throw new Error(
+							"Restored repository instructions exceed the model context budget.",
+						);
 					measured = undefined;
 					await input.onStep(history);
 				}
@@ -543,6 +560,7 @@ async function executeModelSteps(
 				}
 				const historyBeforeStep = history;
 				history = [...historyBeforeStep, ...step.response.messages];
+				history = (await input.afterTools?.(history)) ?? history;
 				if (
 					step.usage.inputTokens !== undefined &&
 					step.usage.outputTokens !== undefined

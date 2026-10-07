@@ -179,7 +179,12 @@ vi.mock("../services/codex-subscription-agent", () => ({
 	runCodexSubscriptionAgentStep: vi.fn(),
 }));
 vi.mock("../services/api-agent-tools", () => ({
-	apiAgentTools: (input: unknown) => input,
+	apiAgentTools: (input: unknown) =>
+		Object.fromEntries(
+			Object.entries(input as Record<string, unknown>).filter(
+				([, value]) => value !== undefined,
+			),
+		),
 }));
 vi.mock("../services/api-command-scope", () => ({
 	stopApiTurnCommands: mocks.stop,

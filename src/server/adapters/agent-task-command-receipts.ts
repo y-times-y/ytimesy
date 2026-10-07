@@ -1,6 +1,17 @@
 import type { AgentTaskToolResponse } from "#/domain/agent-task-tool";
 import { database } from "./database";
 
+export async function completedLifecycleContinuations(
+	sessionId: string,
+	turnId: string,
+) {
+	const { rows } = await database().query(
+		`select count(*)::int as count from agent_task_command_receipt where parent_session_id=$1 and starts_with(request_id,$2) and status='done' and response->>'ok'='true' and response->'result'->>'continue'='true'`,
+		[sessionId, `${turnId}:lifecycle-stop-decision:`],
+	);
+	return Number(rows[0]?.count ?? 0);
+}
+
 type CommandReceipt =
 	| { readonly kind: "claimed" }
 	| { readonly kind: "processing" }
