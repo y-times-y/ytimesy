@@ -1,7 +1,14 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { openAsBlob } from "node:fs";
-import { mkdir, open, readdir, readFile, writeFile } from "node:fs/promises";
+import {
+	chmod,
+	mkdir,
+	open,
+	readdir,
+	readFile,
+	writeFile,
+} from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { symmetricEncrypt } from "better-auth/crypto";
 import { createTwoFilesPatch } from "diff";
@@ -229,6 +236,7 @@ try {
 	} finally {
 		await command(["git", "update-ref", "-d", taskRef, taskCommit]);
 	}
+	await chmod(join(directory, "baseline.bundle"), 0o600);
 	const templateSlug = `ytimesy-isolated-eval-${runId}`;
 	await save("resources.json", {
 		runId,
@@ -321,7 +329,7 @@ mkdir -p .ytimesy
 		}),
 	);
 	const snapshot = await created.vm.snapshot({
-		slug: `ytimesy-isolated-eval-snapshot-${runId}`,
+		slug: `ytimesy-eval-snapshot-${runId}`,
 		autoDeleteSeconds: 3600,
 	});
 	snapshotId = snapshot.snapshotId;
