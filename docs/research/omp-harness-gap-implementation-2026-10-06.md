@@ -136,3 +136,17 @@ ceiling; each arm permits ten requests, no unmetered native compaction. Private
 attempt counters, traces and patches are ignored. Cleanup deletes the owned VM.
 Results belong in the separate performance report. A single pair cannot establish
 general coding superiority or performance parity with OMP/competitor.
+
+
+## Final live evidence and diagnostic wait correction
+
+The live builder comparison and subsequent fix are documented in
+[the end-to-end report](omp-harness-end-to-end-2026-10-06.md). Both model-generated
+code patches passed the unchanged protected verifier after byte-verified setup
+artifact normalization. The initial expanded arm was slower because optional
+push diagnostics blocked edit receipts. Edit feedback now polls immediately;
+explicit diagnostics retain their bounded wait. A delayed real-server regression
+fixture passed, and the same actual VM refactor/check/grade sequence improved
+from 53.384 seconds to 5.156 seconds with both grades passing. This retest used no
+model requests; it is not another paired model coding result. Eighteen actual
+model calls were consumed, and all six created VMs were confirmed deleted.

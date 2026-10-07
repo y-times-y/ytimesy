@@ -431,8 +431,10 @@ try {
 		await checked(
 			`ln -s ${quote(join(guestCapabilityDirectory("language"), "node_modules"))} ${quote(join(cwd, "node_modules"))}`,
 		);
-		await checked(
-			`printf '%s\\n' node_modules '._*' >> ${quote(join(cwd, ".git/info/exclude"))}`,
+		await machines.writeTextFile(
+			vm,
+			join(cwd, ".git/info/exclude"),
+			"node_modules\n._*\n",
 		);
 		if ((await checked(`git -C ${quote(cwd)} status --porcelain`)).trim())
 			throw new Error("Evaluation fixture is dirty before inference.");
