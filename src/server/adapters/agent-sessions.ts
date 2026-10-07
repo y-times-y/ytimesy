@@ -157,9 +157,17 @@ export async function saveSessionBranchSelection(
 	branch: string,
 ) {
 	const result = await database().query(
-		`update agent_session set selected_branch=$3, updated_at=now()
+		`with selected as (
+		 update agent_session set selected_branch=$3, updated_at=now()
 		 where user_id=$1 and id=$2 and parent_session_id is null and turn_status <> 'running'
-		 returning ${SESSION_COLUMNS}`,
+		 returning ${SESSION_COLUMNS}
+		), retired as (
+		 delete from agent_task_command_receipt receipt using selected
+		 where receipt.parent_session_id=selected.id
+		 and (receipt.request_id like 'verification-baseline:%'
+		      or receipt.request_id like 'completion-verification:%')
+		)
+		 select * from selected`,
 		[userId, sessionId, branch],
 	);
 	if (!result.rows[0])

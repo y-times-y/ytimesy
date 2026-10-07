@@ -1,4 +1,5 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
+import { build } from "esbuild";
 import { agentSessionMachineSlug } from "#/domain/agent-session";
 import {
 	PINNED_CODEX_CLI_VERSION,
@@ -22,6 +23,21 @@ import {
 } from "#/server/services/agent-session-machine";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
 import { evaluationPatchScript } from "./production";
+
+let proxyBundle: Promise<string> | undefined;
+function nativeProxyBundle() {
+	proxyBundle ??= build({
+		entryPoints: [
+			new URL("./native-budget-proxy.ts", import.meta.url).pathname,
+		],
+		bundle: true,
+		write: false,
+		platform: "node",
+		format: "esm",
+		target: "node22",
+	}).then((result) => result.outputFiles[0].text);
+	return proxyBundle;
+}
 
 /** Native harness control on a disposable copy of the same clean environment. */
 export async function runNativeCodexEvaluation(input: {
@@ -107,6 +123,24 @@ git status --porcelain`,
 				},
 			}),
 		);
+		const proofToken = randomBytes(32).toString("hex");
+		await machines.writeTextFile(
+			vm.workspaceId,
+			`${root}/proxy.mjs`,
+			await nativeProxyBundle(),
+		);
+		await machines.writeTextFile(
+			vm.workspaceId,
+			`${root}/proxy-config.json`,
+			JSON.stringify({
+				accessToken: tokens.accessToken,
+				accountId: tokens.chatgptAccountId,
+				proofToken,
+				modelId: protocol.modelId,
+				reasoning: protocol.reasoning,
+				...protocol.limits,
+			}),
+		);
 		await machines.writeTextFile(
 			vm.workspaceId,
 			`${root}/config.toml`,
@@ -114,12 +148,13 @@ git status --porcelain`,
 				'model_provider = "evaluation_subscription"',
 				"[model_providers.evaluation_subscription]",
 				'name = "Existing Codex subscription"',
-				'base_url = "https://chatgpt.com/backend-api/codex"',
-				'env_key = "YTIMESY_SUBSCRIPTION_ACCESS_TOKEN"',
+				'base_url = "http://127.0.0.1:PROXY_PORT/v1"',
+				'env_key = "YTIMESY_EVALUATION_PROOF_TOKEN"',
 				'wire_api = "responses"',
 				"requires_openai_auth = false",
 				"supports_websockets = false",
-				`http_headers = { "ChatGPT-Account-ID" = ${JSON.stringify(tokens.chatgptAccountId)} }`,
+				"request_max_retries = 0",
+				"stream_max_retries = 0",
 			].join("\n"),
 		);
 		await machines.writeTextFile(
@@ -135,8 +170,16 @@ export HOME=/home/ubuntu
 export PATH="$HOME/.local/bin:$PATH"
 export CODEX_HOME=${quote(root)}
 unset OPENAI_API_KEY ANTHROPIC_API_KEY
-export YTIMESY_SUBSCRIPTION_ACCESS_TOKEN="$(python3 -c 'import json,os; print(json.load(open(os.environ["CODEX_HOME"]+"/auth.json"))["tokens"]["access_token"])')"
-chmod 600 "$CODEX_HOME/auth.json"
+export YTIMESY_EVALUATION_PROOF_TOKEN="$(python3 -c 'import json,os; print(json.load(open(os.environ["CODEX_HOME"]+"/proxy-config.json"))["proofToken"])')"
+chmod 600 "$CODEX_HOME/auth.json" "$CODEX_HOME/proxy-config.json"
+nohup node "$CODEX_HOME/proxy.mjs" "$CODEX_HOME/proxy-config.json" "$CODEX_HOME/proxy-state.json" "$CODEX_HOME/proxy-port" > "$CODEX_HOME/proxy-stderr" 2>&1 < /dev/null &
+echo $! > "$CODEX_HOME/proxy-pid"
+for attempt in $(seq 1 10); do
+  test -s "$CODEX_HOME/proxy-port" && break
+  sleep 1
+done
+test -s "$CODEX_HOME/proxy-port"
+python3 -c 'import os; from pathlib import Path; p=Path(os.environ["CODEX_HOME"]); c=p/"config.toml"; c.write_text(c.read_text().replace("PROXY_PORT",(p/"proxy-port").read_text().strip()))'
 cd "$(cat /tmp/ytimesy-project-cwd)"
 nohup sh -c ${quote(`timeout --signal=TERM --kill-after=5s ${protocol.limits.durationSeconds}s codex exec --json --color never --model ${quote(protocol.modelId)} -c ${quote(`model_reasoning_effort="${protocol.reasoning}"`)} --sandbox danger-full-access - < ${quote(`${root}/prompt.txt`)} > ${quote(`${root}/events.jsonl`)} 2> ${quote(`${root}/stderr`)}; result=$?; printf '%s' "$result" > ${quote(`${root}/exit-code`)}`)} < /dev/null > /dev/null 2>&1 &
 `,
@@ -167,6 +210,18 @@ nohup sh -c ${quote(`timeout --signal=TERM --kill-after=5s ${protocol.limits.dur
 			"";
 		const stderr =
 			(await machines.readTextFile(vm.workspaceId, `${root}/stderr`)) ?? "";
+		const budgetEvidence = JSON.parse(
+			(await machines.readTextFile(
+				vm.workspaceId,
+				`${root}/proxy-state.json`,
+			)) ?? "null",
+		);
+		if (
+			!budgetEvidence ||
+			!Number.isInteger(budgetEvidence.requests) ||
+			!Number.isInteger(budgetEvidence.observedTokens)
+		)
+			throw new Error("Native transport budget evidence is unavailable.");
 		const output = await machines.exec(
 			vm.workspaceId,
 			evaluationPatchScript(task.commit),
@@ -184,8 +239,9 @@ nohup sh -c ${quote(`timeout --signal=TERM --kill-after=5s ${protocol.limits.dur
 			// Nested Linux sandboxing otherwise rejects child-process tests with EPERM.
 			executionIsolation: "disposable-vm",
 			vmId: vm.workspaceId,
-			requestLimitEnforced: false,
-			tokenLimitEnforced: false,
+			requestLimitEnforced: true,
+			tokenLimitEnforced: true,
+			budgetEvidence,
 		};
 	} finally {
 		// Destroy the exact disposable VM, never the user runner or template.

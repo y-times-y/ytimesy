@@ -95,6 +95,19 @@ it("never stores raw provider text in the safe failure", () => {
 	expect(apiTurnFailureMessage("model", failure)).toBe(failure.message);
 });
 
+it("identifies missing local archive configuration without publishing arbitrary error text", () => {
+	expect(
+		new SafeApiModelFailure(
+			new Error("Private checkpoint storage is not configured."),
+		).message,
+	).toContain("harness configuration failure");
+	expect(
+		new SafeApiModelFailure(
+			new Error("Private checkpoint storage is not configured. secret"),
+		).message,
+	).not.toContain("secret");
+});
+
 it("distinguishes context and usage budgets", () => {
 	expect(
 		apiTurnFailureMessage(

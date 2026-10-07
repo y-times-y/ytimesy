@@ -327,6 +327,7 @@ export async function prepareAgentTaskStart(input: {
 	readonly userId: string;
 	readonly projectId: string;
 	readonly taskSessionId: string;
+	readonly expectedDraft?: AgentSessionRecord;
 }) {
 	const task = await agentSessionForOwner(input.userId, input.taskSessionId);
 	if (
@@ -361,7 +362,12 @@ export async function prepareAgentTaskStart(input: {
 			: null,
 	);
 	if (dependencyBlock) throw new Error(dependencyBlock);
-	await reserveAgentTaskStart(input.userId, input.projectId, task.id);
+	await reserveAgentTaskStart(
+		input.userId,
+		input.projectId,
+		task.id,
+		input.expectedDraft,
+	);
 	const started = await agentSessionForOwner(input.userId, task.id);
 	if (!started) throw new Error("The task draft could not be started.");
 	return { task: started, predecessor };

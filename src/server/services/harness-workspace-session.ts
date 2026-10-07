@@ -83,6 +83,7 @@ import {
 	refreshClaudeAuthStatus,
 	submitClaudeTask,
 } from "#/server/adapters/claude/login-session";
+import { PROJECT_CWD_PATH } from "#/server/adapters/freestyle/clone-project";
 import {
 	abortOpenCodeTurn,
 	connectOpenCode,
@@ -91,6 +92,7 @@ import {
 	submitOpenCodeTask,
 } from "#/server/adapters/opencode/serve-session";
 import { acceptTaskPatch } from "#/server/adapters/task-patch-evidence";
+import { findCompletedVerification } from "#/server/adapters/turn-verification";
 import { readyWorkspaceForOwner } from "#/server/adapters/workspaces";
 import { enqueueAgentTaskEvent } from "#/server/jobs/queue";
 import {
@@ -159,6 +161,7 @@ export function startPreparedAgentTask(
 	machines: WorkspaceMachines,
 	scope: HarnessSessionScope,
 	taskSessionId: string,
+	expectedDraft?: AgentSessionRecord,
 ): Effect.Effect<
 	{ id: string; machineId: string | null; placement: "shared" | "fresh" },
 	unknown
@@ -170,6 +173,7 @@ export function startPreparedAgentTask(
 				userId: scope.userId,
 				projectId: scope.projectId as string,
 				taskSessionId,
+				expectedDraft,
 			}),
 		);
 		if (!task.taskPrompt || !task.listedModelId || !task.taskPlacement) {
@@ -829,6 +833,36 @@ export function runAgentTaskTool(
 			);
 		if (parent.userId !== scope.userId || parent.projectId !== scope.projectId)
 			throw new Error("The agent is not available in this project.");
+		if (request.tool === "schedule_task_plan") {
+			const { scheduleDurableWork } = yield* Effect.tryPromise(
+				() => import("./durable-work-plan"),
+			);
+			return yield* Effect.tryPromise(() =>
+				scheduleDurableWork(parent, request.id, request.arguments),
+			);
+		}
+		if (
+			request.tool === "read_task_plan" ||
+			request.tool === "control_task_plan"
+		) {
+			const { readWorkPlan, setWorkPlanStatus } = yield* Effect.tryPromise(
+				() => import("../adapters/work-plans"),
+			);
+			const id = z
+				.string()
+				.regex(/^[a-f0-9]{64}$/)
+				.parse(request.arguments.planId);
+			if (request.tool === "read_task_plan")
+				return yield* Effect.tryPromise(() =>
+					readWorkPlan(parent.userId, parent.id, id),
+				);
+			const action = z
+				.enum(["pause", "resume", "cancel"])
+				.parse(request.arguments.action);
+			return yield* Effect.tryPromise(() =>
+				setWorkPlanStatus(parent.userId, parent.id, id, action),
+			);
+		}
 		if (request.tool === "integrate_reviewed_tasks") {
 			if (!control)
 				throw new Error(
@@ -1260,9 +1294,24 @@ export function runAgentTaskTool(
 					WorkspaceId(target.providerRef as string),
 				),
 			);
+			const cwd = yield* Effect.tryPromise(() =>
+				machinesForAgentSession(machines, target).readTextFile(
+					WorkspaceId(target.providerRef as string),
+					PROJECT_CWD_PATH,
+				),
+			);
+			const completionVerification = cwd?.trim()
+				? yield* Effect.tryPromise(() =>
+						findCompletedVerification(scope.userId, target.id, cwd.trim(), {
+							base: patch.base,
+							patchSha256: patch.sha256,
+						}),
+					)
+				: null;
 			return {
 				taskId: target.id,
 				...taskPatchPreview(patch, start),
+				completionVerification,
 			};
 		}
 		if (request.tool === "mark_task_reviewed") {

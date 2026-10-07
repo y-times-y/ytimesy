@@ -8,6 +8,7 @@ import {
 import { readModelContextArchive } from "../adapters/context-archives";
 import { apiAgentTools } from "./api-agent-tools";
 import { runAgentTaskTool } from "./harness-workspace-session";
+import { repositorySearchCommand } from "./indexed-repository-search";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 vi.mock("../adapters/context-archives", async (original) => ({
@@ -439,6 +440,7 @@ describe("read-only API lead tools", () => {
 			"browser_click",
 			"browser_type",
 			"browser_key",
+			"debug_node",
 		])
 			expect(tools[name]).toBeUndefined();
 		for (const name of [
@@ -462,7 +464,26 @@ describe("read-only API lead tools", () => {
 			query: "a'; touch /tmp/unwanted; echo 'b",
 		});
 		expect(commands[0]).toContain("touch /tmp/unwanted");
-		expect(commands[0]).toContain("python3 -c");
+		const command = repositorySearchCommand({
+			cwd: "/workspace/repo",
+			query: "a'; touch /tmp/unwanted; echo 'b",
+			literal: false,
+			path: ".",
+		});
+		expect(commands[0]).toContain(`'${command.replaceAll("'", "'\\''")}'`);
+	});
+
+	it("uses the experimental index only when explicitly enabled", async () => {
+		vi.stubEnv("YTIMESY_INDEXED_SEARCH_ENABLED", "1");
+		try {
+			const { commands, tools } = leadTools();
+			await executeInspectionTool(tools.search_files, { query: "identifier" });
+			expect(commands[0]).toContain(
+				"CREATE VIRTUAL TABLE IF NOT EXISTS contents USING fts5",
+			);
+		} finally {
+			vi.unstubAllEnvs();
+		}
 	});
 
 	it("scopes listings and searches to literal task paths without Git pathspec expansion", async () => {

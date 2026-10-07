@@ -35,6 +35,7 @@ import {
 } from "../services/agent-peer-messaging";
 import { deliverAgentTaskEvents } from "../services/agent-task-event-delivery";
 import { reconcileRunningAgentTurns } from "../services/agent-turn-reconciliation";
+import { dispatchDurableWork } from "../services/durable-work-plan";
 import { deliverPrRepairEvents } from "../services/pr-repair";
 import { captureSessionCheckpoint } from "../services/session-checkpoint";
 import { runApiTurn } from "./api-turn";
@@ -52,6 +53,7 @@ import {
 	REFRESH_WORKSPACE_QUEUE,
 	SESSION_CHECKPOINT_QUEUE,
 	START_COMPETITION_QUEUE,
+	WORK_PLAN_QUEUE,
 } from "./queue";
 import { TurnDispatcher } from "./turn-dispatcher";
 
@@ -69,6 +71,19 @@ export async function startWorkspaceWorker() {
 	const queue = await jobQueue("worker");
 	const taskMachines = createFreestyleWorkspaceMachines(
 		await Effect.runPromise(readFreestyleApiKey()),
+	);
+	await queue.work(
+		WORK_PLAN_QUEUE,
+		{ localConcurrency: 1, pollingIntervalSeconds: 1 },
+		async () => {
+			await dispatchDurableWork(taskMachines);
+		},
+	);
+	await queue.schedule(
+		WORK_PLAN_QUEUE,
+		"* * * * *",
+		{},
+		{ singletonKey: "plan-sweep" },
 	);
 	await queue.work<PeerMessage>(
 		AGENT_PEER_MESSAGE_QUEUE,

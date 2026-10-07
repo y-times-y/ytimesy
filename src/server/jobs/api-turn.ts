@@ -527,6 +527,7 @@ export async function runApiTurn(
 						path,
 					),
 			},
+			abort.signal,
 		);
 		abort.signal.throwIfAborted();
 		failureStage = "coordination";

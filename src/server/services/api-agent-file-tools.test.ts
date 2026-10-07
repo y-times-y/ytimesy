@@ -373,7 +373,15 @@ it("executes an eight-file create batch once while retaining diagnostics", async
 		})),
 	})) as { completed: unknown[] };
 	expect(result.completed).toHaveLength(8);
-	expect(commands).toHaveLength(2); // One edit execution and its exact payload cleanup.
+	expect(
+		commands.filter((command) => command.startsWith("python3 -c")),
+	).toHaveLength(1);
+	expect(
+		commands.filter((command) => command.startsWith("rm -f")),
+	).toHaveLength(1);
+	expect(
+		commands.filter((command) => command.includes('"onlyIfWarm":true')),
+	).toHaveLength(1);
 });
 
 it("rejects invalid batch context before any file is written", async () => {

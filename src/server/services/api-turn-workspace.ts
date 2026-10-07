@@ -15,6 +15,7 @@ import {
 	loadTenantProjectCheckout,
 } from "./project-workspace";
 import { machinesForAgentSession } from "./session-workspace-machines";
+import { establishVerificationBaselines } from "./verification-baseline";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 /** Only repository-backed tool execution waits for a VM; model and coordination tools do not. */
@@ -31,6 +32,7 @@ export function deferredApiTurnWorkspace(
 		return prepared;
 	};
 	async function prepare(): Promise<AgentToolWorkspace> {
+		let additionalRepositoryNames: string[] = [];
 		if (ancestors.includes(owner.id) || ancestors.length > 8)
 			throw new Error("Invalid shared task ancestry.");
 		if (owner.taskPlacement === "shared") {
@@ -79,6 +81,9 @@ export function deferredApiTurnWorkspace(
 						projectId: owner.projectId,
 						sessionId: owner.id,
 					});
+					additionalRepositoryNames = (
+						checkout?.additionalRepositories ?? []
+					).map((repo) => repo.name);
 					yield* ensureProjectCheckout(scoped, vm, checkout);
 				}),
 			);
@@ -86,6 +91,18 @@ export function deferredApiTurnWorkspace(
 		const cwd = (await scoped.readTextFile(vm, PROJECT_CWD_PATH))?.trim();
 		if (!cwd?.startsWith("/"))
 			throw new Error("Prepared repository path is unavailable.");
+		if (
+			bound.session.taskPlacement !== "shared" &&
+			bound.session.taskAccess !== "read_only"
+		)
+			await establishVerificationBaselines({
+				machines: scoped,
+				vm,
+				cwd,
+				userId: owner.userId,
+				sessionId: owner.id,
+				additionalRepositoryNames,
+			});
 		return { machines: scoped, vm, cwd };
 	}
 }
