@@ -1,0 +1,515 @@
+{
+  "conclusion": "All six raw protected grades passed. No overall speed advantage on this repeated development fixture: treatment mean elapsed time increased 24.1%.",
+  "baseline": "d99892899b207e490cde7e09dddefb166c830ddd",
+  "treatment": "ac71cdfc7c6bcfd75d3927c1c0c3417626d290c5",
+  "taskCommit": "0b2e06f65ab4600ca7961616b69cbeda78a3199f",
+  "verifierSha256": "33f822d2984aa3d44dbcb87449a9cd862118bf24e131dd4ed14c3ea1b203b781",
+  "graderImage": "sha256:8e9ff7af2ea858808cad599b3bb381cda3a9942a59a736516b1d20f63e22b8da",
+  "protocolSha256": "528a760c7f1b6f6e9ff1f961d66c1e1538ae51a63f92fac7a2e0dd56817c9847",
+  "protocol": {
+    "repetitions": 3,
+    "arms": [
+      {
+        "pair": 1,
+        "arm": "before"
+      },
+      {
+        "pair": 1,
+        "arm": "after"
+      },
+      {
+        "pair": 2,
+        "arm": "after"
+      },
+      {
+        "pair": 2,
+        "arm": "before"
+      },
+      {
+        "pair": 3,
+        "arm": "before"
+      },
+      {
+        "pair": 3,
+        "arm": "after"
+      }
+    ],
+    "model": "gpt-6.1-sol",
+    "reasoning": "low",
+    "requestsPerArm": 10,
+    "requestLimit": 60,
+    "maxOutputTokens": 6000,
+    "armTimeoutMs": 200000,
+    "vmLifetimeSeconds": 1800,
+    "vmDollars": 5,
+    "approval": "5-usd-60-requests"
+  },
+  "scope": "Existing builder model loop and VM tool implementations; excludes production queue, leader delegation, review and DB journal durability.",
+  "graderSelftest": {
+    "broken": false,
+    "correct": true
+  },
+  "resources": {
+    "cpu": 2,
+    "memory": 4096,
+    "storage": 16384
+  },
+  "liveCapabilities": {
+    "pythonPreparation": "passed",
+    "persistentServiceAndWarmLsp": "passed",
+    "outline": "passed",
+    "fileMoveImports": "passed",
+    "organizeImports": "passed",
+    "pythonDapBreakpointLocalsStepAndStaleFence": "passed",
+    "inferenceRequests": 0
+  },
+  "summary": {
+    "before": {
+      "passed": 3,
+      "arms": 3,
+      "meanElapsedMs": 33802,
+      "medianElapsedMs": 35443,
+      "requests": 23,
+      "input_tokens": 335258,
+      "cache_read_tokens": 224128,
+      "output_tokens": 2227,
+      "modelDurationMs": 80414.163416,
+      "toolDurationMs": 14077.457166000051
+    },
+    "after": {
+      "passed": 3,
+      "arms": 3,
+      "meanElapsedMs": 41950.666666666664,
+      "medianElapsedMs": 38686,
+      "requests": 30,
+      "input_tokens": 457036,
+      "cache_read_tokens": 332800,
+      "output_tokens": 2386,
+      "modelDurationMs": 104415.56204300003,
+      "toolDurationMs": 15399.820705999955
+    }
+  },
+  "percentChanges": {
+    "meanElapsedMs": 24.107054809380113,
+    "medianElapsedMs": 9.14990266061,
+    "requests": 30.434782608695656,
+    "input_tokens": 36.323667145899584
+  },
+  "arms": [
+    {
+      "pair": 1,
+      "arm": "before",
+      "elapsedMs": 37028,
+      "requests": 8,
+      "passed": true,
+      "assertions": 92,
+      "finalResponse": true,
+      "input_tokens": 116940,
+      "cache_read_tokens": 76032,
+      "output_tokens": 783,
+      "modelDurationMs": 29367.147541999984,
+      "toolDurationMs": 5404.391167000009,
+      "tools": [
+        {
+          "name": "read_files",
+          "durationMs": 92.62575000000652,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "search_tools",
+          "durationMs": 0.7521669999987353,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "bash",
+          "durationMs": 536.6398750000008,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "apply_patches",
+          "durationMs": 941.0077089999977,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "run_checks",
+          "durationMs": 3544.4540409999972,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "inspect_changes",
+          "durationMs": 198.40766700000677,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "read_tool_output",
+          "durationMs": 90.50395800000115,
+          "outcome": "completed",
+          "errorClass": "none"
+        }
+      ],
+      "patchSha256": "ef242a3e848e9716a54575a6e2de96f38f03870eea8dffdfa7a46d7ada716233",
+      "traceSha256": "7aeaee086f8a23cd1a4461123d32e3dff6f05024a949e1e2e79af27fd984e139"
+    },
+    {
+      "pair": 1,
+      "arm": "after",
+      "elapsedMs": 37005,
+      "requests": 10,
+      "passed": true,
+      "assertions": 92,
+      "finalResponse": true,
+      "input_tokens": 151316,
+      "cache_read_tokens": 108544,
+      "output_tokens": 686,
+      "modelDurationMs": 29993.90779300002,
+      "toolDurationMs": 5011.019333000004,
+      "tools": [
+        {
+          "name": "read_files",
+          "durationMs": 118.32875000000058,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "search_tools",
+          "durationMs": 0.1557499999908032,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "rename_symbol",
+          "durationMs": 2228.2672919999895,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "rename_file",
+          "durationMs": 401.41341600001033,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "read_code",
+          "durationMs": 57.107499999998254,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "apply_patches",
+          "durationMs": 641.9685829999944,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "run_checks",
+          "durationMs": 1180.3012089999975,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "inspect_changes",
+          "durationMs": 153.51862500001153,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "read_tool_output",
+          "durationMs": 229.95820800001093,
+          "outcome": "completed",
+          "errorClass": "none"
+        }
+      ],
+      "patchSha256": "ef242a3e848e9716a54575a6e2de96f38f03870eea8dffdfa7a46d7ada716233",
+      "traceSha256": "31d4e5e361f34687b67fa0dc0e6c995abaf3b9bc2b06815d35ee9886a70f8a63"
+    },
+    {
+      "pair": 2,
+      "arm": "after",
+      "elapsedMs": 50161,
+      "requests": 10,
+      "passed": true,
+      "assertions": 92,
+      "finalResponse": true,
+      "input_tokens": 155149,
+      "cache_read_tokens": 110976,
+      "output_tokens": 1038,
+      "modelDurationMs": 41829.97858400001,
+      "toolDurationMs": 6303.170165000003,
+      "tools": [
+        {
+          "name": "read_files",
+          "durationMs": 83.51645799999824,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "search_tools",
+          "durationMs": 0.3262090000062017,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "rename_symbol",
+          "durationMs": 2038.914540999991,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "rename_file",
+          "durationMs": 640.3243750000111,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "read_code",
+          "durationMs": 55.34795799999847,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "apply_patches",
+          "durationMs": 556.5164159999986,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "run_checks",
+          "durationMs": 2630.214458000002,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "inspect_changes",
+          "durationMs": 212.5782500000205,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "read_tool_output",
+          "durationMs": 85.43149999997695,
+          "outcome": "completed",
+          "errorClass": "none"
+        }
+      ],
+      "patchSha256": "ef242a3e848e9716a54575a6e2de96f38f03870eea8dffdfa7a46d7ada716233",
+      "traceSha256": "47dd08d29b37b2824a1381038b4cafd3298d83e7f56139ca7b79fb164efbf989"
+    },
+    {
+      "pair": 2,
+      "arm": "before",
+      "elapsedMs": 35443,
+      "requests": 8,
+      "passed": true,
+      "assertions": 92,
+      "finalResponse": true,
+      "input_tokens": 116021,
+      "cache_read_tokens": 75392,
+      "output_tokens": 733,
+      "modelDurationMs": 28481.28474999999,
+      "toolDurationMs": 4511.3499569999985,
+      "tools": [
+        {
+          "name": "read_files",
+          "durationMs": 80.27208300001803,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "search_tools",
+          "durationMs": 0.26374999998370185,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "bash",
+          "durationMs": 460.9765829999815,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "apply_patches",
+          "durationMs": 563.4147079999966,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "run_checks",
+          "durationMs": 3205.1135420000064,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "inspect_changes",
+          "durationMs": 134.3449580000015,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "read_tool_output",
+          "durationMs": 66.96433300001081,
+          "outcome": "completed",
+          "errorClass": "none"
+        }
+      ],
+      "patchSha256": "ef242a3e848e9716a54575a6e2de96f38f03870eea8dffdfa7a46d7ada716233",
+      "traceSha256": "52271de0d8e269ecc305360361c1cae791a29d6dbb3b01435469c315775c471d"
+    },
+    {
+      "pair": 3,
+      "arm": "before",
+      "elapsedMs": 28935,
+      "requests": 7,
+      "passed": true,
+      "assertions": 92,
+      "finalResponse": true,
+      "input_tokens": 102297,
+      "cache_read_tokens": 72704,
+      "output_tokens": 711,
+      "modelDurationMs": 22565.731124000013,
+      "toolDurationMs": 4161.716042000044,
+      "tools": [
+        {
+          "name": "read_files",
+          "durationMs": 75.14537499999278,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "bash",
+          "durationMs": 334.0471250000119,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "apply_patches",
+          "durationMs": 522.9971669999941,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "run_checks",
+          "durationMs": 2964.563292000006,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "inspect_changes",
+          "durationMs": 198.96504200002528,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "read_tool_output",
+          "durationMs": 65.99804100001347,
+          "outcome": "completed",
+          "errorClass": "none"
+        }
+      ],
+      "patchSha256": "ef242a3e848e9716a54575a6e2de96f38f03870eea8dffdfa7a46d7ada716233",
+      "traceSha256": "7b2f3dd534225ca2988468b9d754d7e97224dac65be4ed225a4bcb53460cc43b"
+    },
+    {
+      "pair": 3,
+      "arm": "after",
+      "elapsedMs": 38686,
+      "requests": 10,
+      "passed": true,
+      "assertions": 92,
+      "finalResponse": true,
+      "input_tokens": 150571,
+      "cache_read_tokens": 113280,
+      "output_tokens": 662,
+      "modelDurationMs": 32591.675665999996,
+      "toolDurationMs": 4085.631207999948,
+      "tools": [
+        {
+          "name": "read_files",
+          "durationMs": 91.71587499999441,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "search_tools",
+          "durationMs": 0.1663750000006985,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "rename_symbol",
+          "durationMs": 1863.9543750000012,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "rename_file",
+          "durationMs": 273.8618750000023,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "read_code",
+          "durationMs": 79.89816699997755,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "apply_patches",
+          "durationMs": 425.5497500000056,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "run_checks",
+          "durationMs": 1076.8679999999877,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "inspect_changes",
+          "durationMs": 200.16241599997738,
+          "outcome": "completed",
+          "errorClass": "none"
+        },
+        {
+          "name": "read_tool_output",
+          "durationMs": 73.45437500000116,
+          "outcome": "completed",
+          "errorClass": "none"
+        }
+      ],
+      "patchSha256": "ef242a3e848e9716a54575a6e2de96f38f03870eea8dffdfa7a46d7ada716233",
+      "traceSha256": "37a1b99cbebfaa7d8e2ba6871f592f8d3ee46e97f6c3a6c82f596659f6b08b36"
+    }
+  ],
+  "budget": {
+    "approvedVmDollars": 5,
+    "approvedModelRequests": 60,
+    "actualModelRequests": 53,
+    "disposableVms": 1,
+    "snapshotsCreated": 0,
+    "vmLifetimeCeilingSeconds": 1800,
+    "conservativeComputeStorageDollars": 0.14,
+    "transferReserveDollars": 1,
+    "invoiceAudited": false,
+    "priceSource": "https://www.freestyle.sh/pricing",
+    "priceCheckedDate": "2026-10-06"
+  },
+  "cleanup": {
+    "confirmedAbsent": true,
+    "providerStatus": 404,
+    "checkedAt": "2026-10-07T00:41:05.209Z"
+  },
+  "limitations": [
+    "Repeated development fixture with alternating pair order and one shared VM; repetitions are not independent tasks or a holdout.",
+    "No native-Codex or Oh My Pi performance comparison.",
+    "Shared account/provider variation and three repetitions of one known task; no confidence interval or general superiority claim.",
+    "Dependency installation and zero-inference capability preparation are outside coding-arm latency; elapsed time includes model, tools, patch capture and protected grading.",
+    "Go/Rust/native debugger environments and production queue/leader/reviewer/deployment are outside this proof."
+  ]
+}

@@ -8,6 +8,10 @@ Live evidence: both model-generated patches passed the protected code verifier
 regression and were removed from edit receipts; a real VM tool pipeline improved
 53.4s to 5.2s. This is not a general model-performance claim. See the
 [end-to-end report](docs/research/omp-harness-end-to-end-2026-10-06.md).
+Fresh final-fix model proof: all six raw protected grades passed across three
+matched pairs, but mean coding time increased 33.8s to 42.0s (+24.1%) and model
+requests increased 23 to 30. Speed superiority remains unmet. See the
+[final model evidence](docs/research/omp-harness-final-model-proof-2026-10-06.md).
 The controlled live builder probe is distinct from the full production queue,
 leader/delegation/review evaluator; local fixtures alone do not establish model
 outcome or hosted speed improvements.
