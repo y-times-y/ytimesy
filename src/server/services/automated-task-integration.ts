@@ -1,6 +1,7 @@
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import { apiTurnFailureClassification } from "#/domain/api-turn-failure";
-import { SessionItemId } from "#/domain/ids";
+import { SessionItemId, WorkspaceId } from "#/domain/ids";
 import { posixShellCommand } from "#/domain/posix-command";
 import { sourceEvidenceContentsMatch } from "#/domain/project-source-evidence";
 import type { SessionItem } from "#/domain/session-item";
@@ -24,6 +25,7 @@ import {
 } from "./agent-session-machine";
 import { scopedShellCommand, stopApiTurnCommands } from "./api-command-scope";
 import { deferredApiTurnWorkspace } from "./api-turn-workspace";
+import { verifyCompletedRepository } from "./completion-verification";
 import { inspectProjectSourceEvidence } from "./project-source-evidence";
 import {
 	captureTaskPatch,
@@ -213,9 +215,12 @@ export async function integrateTaskDraft(
 		const baselineCommands = new Set(baselinePlan.flat());
 		const verificationPlan = [...new Set(additionalChecks)]
 			.filter((command) => !baselineCommands.has(command))
-			.map((command) => [command])
-			.concat(baselinePlan);
-		const commands = verificationPlan.flat();
+			.filter(
+				(command) =>
+					command !== "git diff --check && git diff --cached --check",
+			)
+			.map((command) => [command]);
+		const commands = [...verificationPlan.flat(), ...baselinePlan.flat()];
 		stage = "importing";
 		for (const source of sources) {
 			control.signal.throwIfAborted();
@@ -335,11 +340,14 @@ export async function integrateTaskDraft(
 				throw new Error(
 					"Combined project checks failed; continue this integration task with an agent. All started checks settled; later checks were not run after failure.",
 				);
+			return {
+				command,
+				reference: result.reference,
+				exitCode: 0 as const,
+				stopped: null,
+			};
 		};
-		for (const group of [
-			["git diff --check && git diff --cached --check"],
-			...verificationPlan,
-		]) {
+		for (const group of verificationPlan) {
 			// Explicit independence only; cap guest pressure at two concurrent checks.
 			for (let offset = 0; offset < group.length; offset += 2) {
 				const results = await Promise.allSettled(
@@ -349,6 +357,25 @@ export async function integrateTaskDraft(
 				if (failed?.status === "rejected") throw failed.reason;
 			}
 		}
+		const completion = await verifyCompletedRepository({
+			runtime: {
+				exec: (vm, argv, _env, timeout) =>
+					verificationWorkspace.machines.exec(
+						WorkspaceId(vm),
+						posixShellCommand(argv),
+						timeout,
+					),
+			},
+			providerRef: verificationWorkspace.vm,
+			directory: verificationWorkspace.cwd,
+			userId: parent.userId,
+			sessionId: task.id,
+			turn: createHash("sha256").update(control.turnId).digest("hex"),
+			signal: control.signal,
+			executeCheck: runCheck,
+		});
+		if (completion.status !== "verified")
+			throw new Error("Integration produced no changed checkout to verify.");
 		if (before && sourcePaths) {
 			const after = await inspectProjectSourceEvidence(
 				verificationWorkspace,

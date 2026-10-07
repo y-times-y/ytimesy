@@ -131,6 +131,25 @@ it("matches Git across warm refreshes, exclusions, scoped queries, and unsupport
 		await search("needle|before", false);
 		await search('"token"');
 		await search("missing");
+		await writeFile(join(cwd, "false-candidate.ts"), "nee but no full term\n");
+		await search("needle");
+		await writeFile(join(cwd, "punctuation.ts"), 'a b\n***needle\n"to other\n');
+		await search("a b");
+		await search("***needle");
+		await search('"token"');
+		// Upgrade disposable legacy caches, rather than querying positional data as v2.
+		await run("python3", [
+			"-c",
+			"import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute('PRAGMA user_version=0'); c.execute('DELETE FROM contents'); c.commit()",
+			join(cache, "index.sqlite"),
+		]);
+		await search("needle");
+		const version = await run("python3", [
+			"-c",
+			"import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute('PRAGMA user_version').fetchone()[0])",
+			join(cache, "index.sqlite"),
+		]);
+		expect(version.stdout.trim()).toBe("2");
 		await search(
 			"needle",
 			true,

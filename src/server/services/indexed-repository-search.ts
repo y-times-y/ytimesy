@@ -89,12 +89,16 @@ def indexed():
     connection = sqlite3.connect(private_cache(), timeout=0.2)
     try:
         connection.execute('BEGIN IMMEDIATE')
+        if connection.execute('PRAGMA user_version').fetchone()[0] != 2:
+            connection.execute('DROP TABLE IF EXISTS contents')
+            connection.execute('DROP TABLE IF EXISTS files')
+            connection.execute('PRAGMA user_version = 2')
         connection.execute('CREATE TABLE IF NOT EXISTS files (path TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, searchable INTEGER NOT NULL)')
-        connection.execute("CREATE VIRTUAL TABLE IF NOT EXISTS contents USING fts5(path UNINDEXED, body, tokenize='trigram')")
-        cached = dict(connection.execute('SELECT path, fingerprint FROM files'))
+        connection.execute("CREATE VIRTUAL TABLE IF NOT EXISTS contents USING fts5(path UNINDEXED, body, tokenize='trigram', detail=none, columnsize=0)")
+        cached = {path: (fingerprint, rowid) for path, fingerprint, rowid in connection.execute('SELECT path, fingerprint, rowid FROM files')}
         if scope == '.':
             for removed in cached.keys() - before.keys():
-                connection.execute('DELETE FROM contents WHERE path = ?', (removed,))
+                connection.execute('DELETE FROM contents WHERE rowid = ?', (cached[removed][1],))
                 connection.execute('DELETE FROM files WHERE path = ?', (removed,))
             cached = {path: value for path, value in cached.items() if path in before}
         if len(cached.keys() | before.keys()) > 20000:
@@ -103,7 +107,7 @@ def indexed():
             if time.monotonic() > deadline:
                 raise TimeoutError('Index refresh exceeded budget')
             encoded = json.dumps(fingerprint)
-            if cached.get(path) == encoded:
+            if cached.get(path, (None, None))[0] == encoded:
                 continue
             body = None
             if fingerprint and fingerprint[2] <= 1024 * 1024:
@@ -114,12 +118,16 @@ def indexed():
                         body = content.decode('utf-8')
                 except (OSError, UnicodeError):
                     pass
-            connection.execute('DELETE FROM contents WHERE path = ?', (path,))
-            connection.execute('INSERT OR REPLACE INTO files VALUES (?, ?, ?)', (path, encoded, int(body is not None)))
+            if path in cached:
+                connection.execute('DELETE FROM contents WHERE rowid = ?', (cached[path][1],))
+            connection.execute('INSERT INTO files VALUES (?, ?, ?) ON CONFLICT(path) DO UPDATE SET fingerprint=excluded.fingerprint, searchable=excluded.searchable', (path, encoded, int(body is not None)))
             if body is not None:
-                connection.execute('INSERT INTO contents VALUES (?, ?)', (path, body))
+                rowid = connection.execute('SELECT rowid FROM files WHERE path = ?', (path,)).fetchone()[0]
+                connection.execute('INSERT INTO contents(rowid, path, body) VALUES (?, ?, ?)', (rowid, path, body))
         # A scoped refresh must not retire entries outside the requested scope.
-        expression = '"' + query.replace('"', '""') + '"'
+        # Positionless trigrams reduce storage. One mandatory trigram is a
+        # superset of exact matches; Git still decides the final result.
+        expression = '"' + query[:3].replace('"', '""') + '"'
         candidates = set(row[0] for row in connection.execute('SELECT path FROM contents WHERE contents MATCH ?', (expression,)))
         candidates.update(row[0] for row in connection.execute('SELECT path FROM files WHERE searchable = 0'))
         candidates.intersection_update(before)
