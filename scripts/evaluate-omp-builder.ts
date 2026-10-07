@@ -415,8 +415,10 @@ try {
 		const gitArchive = join(directory, "fixture-git.tar");
 		await command(["tar", "-cf", gitArchive, "-C", fixture, ".git"]);
 		const archive = await readFile(gitArchive);
+		const archivePath = `/tmp/omp-fixture-${arm}.b64`;
+		await machines.writeTextFile(vm, archivePath, archive.toString("base64"));
 		await checked(
-			`printf '%s' ${quote(archive.toString("base64"))} | base64 -d | tar -xf - -C ${quote(cwd)}`,
+			`base64 -d ${quote(archivePath)} | tar -xf - -C ${quote(cwd)} && rm ${quote(archivePath)}`,
 		);
 		await checked(
 			`ln -s ${quote(join(guestCapabilityDirectory("language"), "node_modules"))} ${quote(join(cwd, "node_modules"))}`,
