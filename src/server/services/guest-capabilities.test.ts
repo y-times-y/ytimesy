@@ -54,8 +54,17 @@ it("asks a real TypeScript language server for references and a rename without e
 		await writeFile(
 			delayedServer,
 			`import {spawn} from 'node:child_process';
+import {createRequire} from 'node:module';
+const require=createRequire(${JSON.stringify(join(process.cwd(), "package.json"))});
+const {StreamMessageReader,StreamMessageWriter}=require('vscode-jsonrpc/node');
 setTimeout(() => {
- const child=spawn(${JSON.stringify(join(process.cwd(), "node_modules/.bin/typescript-language-server"))}, process.argv.slice(2), {stdio:'inherit'});
+ const child=spawn(${JSON.stringify(join(process.cwd(), "node_modules/.bin/typescript-language-server"))}, process.argv.slice(2), {stdio:['pipe','pipe','inherit']});
+ process.stdin.pipe(child.stdin);
+ const writer=new StreamMessageWriter(process.stdout);
+ new StreamMessageReader(child.stdout).listen(message => {
+   if(message.method==='textDocument/publishDiagnostics')setTimeout(() => writer.write(message),3000);
+   else void writer.write(message);
+ });
  child.on('exit', code => {process.exitCode=code ?? 1;});
 }, 3000);`,
 		);
@@ -105,6 +114,16 @@ setTimeout(() => {
 		const coldDiagnostics = await invoke("diagnostics");
 		expect(coldDiagnostics.serverId).not.toBe(references.serverId);
 		expect(JSON.stringify(coldDiagnostics.result)).toContain('"code":2322');
+		// A delayed publisher must not block edit feedback, while explicit inspection
+		// still waits for current diagnostics rather than claiming a clean project.
+		await writeFile(file, 'export const answer: number = "still wrong";\n');
+		const pollStarted = performance.now();
+		const polled = await invoke("diagnostics", { diagnosticWaitMs: 0 });
+		expect(performance.now() - pollStarted).toBeLessThan(2500);
+		expect(polled.diagnosticsObserved).toBe(false);
+		const observed = await invoke("diagnostics");
+		expect(observed.diagnosticsObserved).toBe(true);
+		expect(JSON.stringify(observed.result)).toContain('"code":2322');
 		await expect(
 			invoke("definition", { path: "../outside.ts" }),
 		).rejects.toThrow();

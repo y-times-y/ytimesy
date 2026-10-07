@@ -74,8 +74,31 @@ export function sessionScopedWorkspaceMachines(
 	const root = sessionRuntimeRoot(sessionId);
 	const prepare = (command: string) =>
 		`mkdir -p '${root}'\n${scopeSessionRuntimeText(command, sessionId)}`;
+	const invokeCapability = base.runCapability;
 	const scoped: WorkspaceMachines = {
 		...base,
+		...(invokeCapability
+			? {
+					runCapability: (workspaceId, request, signal) =>
+						invokeCapability(
+							workspaceId,
+							{
+								...request,
+								source: scopeSessionRuntimeText(request.source, sessionId),
+								arguments:
+									request.arguments === undefined
+										? undefined
+										: JSON.parse(
+												scopeSessionRuntimeText(
+													JSON.stringify(request.arguments),
+													sessionId,
+												),
+											),
+							},
+							signal,
+						),
+				}
+			: {}),
 		exec: (workspaceId, command, timeoutMs) =>
 			base.exec(workspaceId, prepare(command), timeoutMs),
 		writeTextFile: async (workspaceId, path, contents) => {

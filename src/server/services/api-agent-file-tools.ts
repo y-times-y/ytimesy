@@ -11,12 +11,19 @@ import {
 	resolveToolWorkspace,
 } from "./agent-tool-workspace";
 import { editDiagnostics } from "./edit-diagnostics";
+import { runGuestCapability } from "./guest-node-capability";
+import {
+	LANGUAGE_INTELLIGENCE_SOURCE,
+	languageQuery,
+} from "./language-intelligence";
+import { prepareRenameWrites, renameSources } from "./language-refactor";
 import {
 	archivedGuidanceDocuments,
 	knownGuidanceDocuments,
 } from "./repository-guidance";
 import { inspectRepositoryChangesCommand } from "./repository-inspection";
 import { repositoryToolPath } from "./repository-tool-path";
+import { structuredCodeTools } from "./structured-code-reads";
 import { editLanguage, warmEditDiagnostics } from "./warm-edit-diagnostics";
 
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
@@ -208,10 +215,12 @@ else:
     with target.open('r', encoding='utf-8', newline='') as handle:
         existing = handle.read()
     mode = stat.S_IMODE(target.stat().st_mode)
-    if request['operation'] in ('write', 'delete'):
+    if request['operation'] in ('write', 'delete', 'move'):
         if hashlib.sha256(existing.encode()).hexdigest() != request['expectedSha256']:
             raise ValueError('File changed since inspection; read the latest file before patching')
         if request['operation'] == 'delete':
+            if validate_only:
+                return {'path': request['path']}
             target.unlink()
             return {'path': request['path'], 'deleted': True}
         content = request['content']
@@ -220,6 +229,30 @@ else:
         if existing.count(old) != 1:
             raise ValueError('Expected text must occur exactly once; inspect the latest file')
         content = existing.replace(old, request['new'], 1)
+if request['operation'] == 'move':
+    destination_relative = pathlib.Path(request['newPath'])
+    if destination_relative.is_absolute() or '.git' in destination_relative.parts or '..' in destination_relative.parts:
+        raise ValueError('Invalid move destination')
+    destination = root / destination_relative
+    if destination.exists() or destination.is_symlink():
+        raise ValueError('Move destination already exists')
+    if not destination.parent.is_dir() or destination.parent.resolve() != destination.parent or not destination.parent.resolve().is_relative_to(root):
+        raise ValueError('Move destination parent must exist inside the repository without symlinks')
+    if validate_only:
+        return {'path': request['path']}
+    descriptor, temporary = tempfile.mkstemp(prefix='.ytimesy-move-', dir=destination.parent)
+    try:
+        with os.fdopen(descriptor, 'w', encoding='utf-8', newline='') as handle:
+            handle.write(content)
+        os.chmod(temporary, mode)
+        os.link(temporary, destination)
+        target.unlink()
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    return {'path': request['newPath'], 'previousPath': request['path'], 'sha256': hashlib.sha256(content.encode()).hexdigest(), 'diagnosticSource': content if len(content) <= 32000 else None}
+if validate_only:
+    return {'path': request['path']}
 target.parent.mkdir(parents=True, exist_ok=True)
 if not target.parent.resolve().is_relative_to(root):
     raise ValueError('Parent directory escaped repository')
@@ -238,13 +271,18 @@ const EDIT_SCRIPT = `import fcntl, hashlib, json, os, pathlib, stat, sys, tempfi
 root = pathlib.Path(sys.argv[1]).resolve(strict=True)
 lock = open('/tmp/ytimesy-edit-lock-' + hashlib.sha256(str(root).encode()).hexdigest(), 'a')
 fcntl.flock(lock, fcntl.LOCK_EX)
-def apply_edit(request):
+def apply_edit(request, validate_only=False):
 ${EDIT_OPERATION_SCRIPT.trim()
 	.split("\n")
 	.map((line) => `    ${line}`)
 	.join("\n")}
 with open(sys.argv[2], encoding='utf-8') as handle:
     request = json.load(handle)
+if isinstance(request, dict) and 'preflight' in request:
+    requests = request['preflight']
+    for operation in requests:
+        apply_edit(operation, validate_only=True)
+    request = requests
 if isinstance(request, list):
     completed = []
     result = {'completed': completed, 'failedPath': None, 'unattemptedPaths': []}
@@ -439,6 +477,7 @@ export function apiAgentFileTools(
 			},
 		}),
 	};
+	Object.assign(tools, structuredCodeTools(input));
 	if (input.readOnly) return tools;
 	async function edit(
 		id: string,
@@ -453,11 +492,16 @@ export function apiAgentFileTools(
 	}
 	async function writeGuestEdits(
 		request: Record<string, string> | Record<string, string>[],
+		preflight = false,
 	): Promise<FileEditReceipt | BatchEditReceipt> {
 		signal.throwIfAborted();
 		const { machines, vm, cwd } = await resolveToolWorkspace(input);
 		const payload = `/tmp/ytimesy-api-edit-${randomUUID()}.json`;
-		await machines.writeTextFile(vm, payload, JSON.stringify(request));
+		await machines.writeTextFile(
+			vm,
+			payload,
+			JSON.stringify(preflight ? { preflight: request } : request),
+		);
 		try {
 			const result = await machines.exec(
 				vm,
@@ -493,6 +537,116 @@ export function apiAgentFileTools(
 				.catch(() => {});
 		}
 	}
+
+	tools.rename_symbol = tool({
+		description:
+			"Apply a language-server symbol rename across one to eight existing repository files. Supply 1-based UTF-16 position and newName. Reuses the warm server, obtains its edits and source snapshots, validates ranges, then preflights every source hash under our repository edit lock. Read the completed/failedPath receipt: filesystem failures can leave partial writes; never blindly replay. Does not move files or accept resource operations. Run project checks afterward; language edits do not prove behavior. Available only to writable builders.",
+		inputSchema: languageQuery
+			.omit({ operation: true })
+			.extend({ newName: z.string().min(1).max(200) }),
+		execute: (args, options) =>
+			once(options.toolCallId, async () => {
+				const request = languageQuery.parse({
+					...args,
+					operation: "rename_preview",
+				});
+				const workspace = await resolveToolWorkspace(input);
+				const sources = await runGuestCapability(
+					workspace,
+					"language",
+					LANGUAGE_INTELLIGENCE_SOURCE,
+					{ ...request, cwd: workspace.cwd, includeRenameSources: true },
+					renameSources,
+					signal,
+				);
+				const writes = prepareRenameWrites(sources);
+				const receipt = (await writeGuestEdits(
+					writes,
+					true,
+				)) as BatchEditReceipt;
+				return {
+					completed: receipt.completed.map(publicEditReceipt),
+					failedPath: receipt.failedPath,
+					unattemptedPaths: receipt.unattemptedPaths,
+					...(receipt.error ? { error: publicToolDetail(receipt.error) } : {}),
+				};
+			}),
+	});
+	tools.apply_code_action = tool({
+		description:
+			"Apply a textual language-server code action previously returned by inspect_code operation code_actions. Repeat its selection/kind and supply index plus sha256. Requeries and rejects changed/disabled actions, commands and server resource operations. All source hashes preflight under the edit lock; inspect partial-failure receipts and run project checks afterward.",
+		inputSchema: languageQuery.omit({ operation: true, newName: true }).extend({
+			actionIndex: z.number().int().min(0).max(99),
+			actionSha256: z.string().regex(/^[a-f0-9]{64}$/),
+		}),
+		execute: (args, options) =>
+			once(options.toolCallId, async () => {
+				const workspace = await resolveToolWorkspace(input);
+				const sources = await runGuestCapability(
+					workspace,
+					"language",
+					LANGUAGE_INTELLIGENCE_SOURCE,
+					{
+						...args,
+						operation: "code_actions",
+						cwd: workspace.cwd,
+						includeRenameSources: true,
+					},
+					renameSources,
+					signal,
+				);
+				const receipt = (await writeGuestEdits(
+					prepareRenameWrites(sources),
+					true,
+				)) as BatchEditReceipt;
+				return {
+					...receipt,
+					completed: receipt.completed.map(publicEditReceipt),
+				};
+			}),
+	});
+	tools.rename_file = tool({
+		description:
+			"Move one existing source file and update semantic imports/references through workspace/willRenameFiles. Requires a configured server with file-move support and an existing destination parent. Never overwrites a destination. Preflights every source hash and destination under the edit lock, preserves source permissions, and rejects server resource operations. Inspect partial-failure receipts and run checks afterward.",
+		inputSchema: z.object({
+			path: repositoryToolPath,
+			newPath: repositoryToolPath,
+		}),
+		execute: (args, options) =>
+			once(options.toolCallId, async () => {
+				if (editLanguage(args.path) !== editLanguage(args.newPath))
+					throw new Error("Move must preserve the configured source language.");
+				const workspace = await resolveToolWorkspace(input);
+				const sources = await runGuestCapability(
+					workspace,
+					"language",
+					LANGUAGE_INTELLIGENCE_SOURCE,
+					{
+						...args,
+						operation: "rename_file_preview",
+						line: 1,
+						column: 1,
+						cwd: workspace.cwd,
+						includeRenameSources: true,
+					},
+					renameSources,
+					signal,
+				);
+				const writes = prepareRenameWrites(sources);
+				const original = writes.find((file) => file.path === args.path);
+				if (!original) throw new Error("Move source snapshot is missing.");
+				const move = { ...original, operation: "move", newPath: args.newPath };
+				const receipt = (await writeGuestEdits(
+					[...writes.filter((file) => file.path !== args.path), move],
+					true,
+				)) as BatchEditReceipt;
+				return {
+					...receipt,
+					completed: receipt.completed.map(publicEditReceipt),
+				};
+			}),
+	});
+
 	tools.create_file = tool({
 		description:
 			"Create a new UTF-8 repository file. Fails if it already exists; never overwrites.",

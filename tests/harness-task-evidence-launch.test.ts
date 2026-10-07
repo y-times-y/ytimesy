@@ -18,6 +18,10 @@ const fake = vi.hoisted(() => ({
 	assignment: vi.fn(),
 	integrate: vi.fn(),
 	reserved: vi.fn(),
+	completion: vi.fn(),
+}));
+vi.mock("#/server/adapters/turn-verification", () => ({
+	findCompletedVerification: fake.completion,
 }));
 vi.mock("#/server/services/automated-task-integration", () => ({
 	integrateTaskDraft: fake.integrate,
@@ -86,6 +90,7 @@ beforeEach(async () => {
 	fake.retained.mockResolvedValue(new Map());
 	fake.assignment.mockResolvedValue(null);
 	fake.reserved.mockResolvedValue(false);
+	fake.completion.mockResolvedValue(null);
 	fake.checks.mockImplementation(
 		(
 			await vi.importActual<
@@ -471,8 +476,19 @@ it("retrieves a completed handoff and durable check references in one read witho
 		checks: [{ reference, completion: { status: 0, stopped: null } }],
 		sourceProofs: [],
 	});
+	const completionVerification = {
+		type: "completion-verification",
+		directory: "/repo",
+		turn: "b".repeat(64),
+		base: "base",
+		tree: "d".repeat(40),
+		patchSha256: "a".repeat(64),
+		checks: receipt,
+	};
+	fake.completion.mockResolvedValue(completionVerification);
 	const machines = {
 		ensureRunning: vi.fn(async () => {}),
+		readTextFile: vi.fn(async () => "/repo"),
 	} as unknown as WorkspaceMachines;
 	await expect(
 		call("read_task_handoff", { taskId: "child" }, machines),
@@ -482,6 +498,11 @@ it("retrieves a completed handoff and durable check references in one read witho
 		remainingReferences: [],
 		discoveryIncomplete: false,
 		summary: { content: "Implemented" },
+		completionVerification,
+	});
+	expect(fake.completion).toHaveBeenCalledWith("owner", "child", "/repo", {
+		base: "base",
+		patchSha256: "a".repeat(64),
 	});
 	expect(fake.retained).toHaveBeenCalledWith({
 		userId: "owner",

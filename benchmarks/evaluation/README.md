@@ -132,6 +132,45 @@ Generate a descriptive paired report with:
 
 Reports reject missing/duplicate arms and changed protocol hashes. Infrastructure failures remain in the denominator. Repetitions are averaged per task before task-cluster confidence intervals, rather than being treated as extra independent problems. Small/constant samples have no reported interval. No automatic acceptance or parity decision is made.
 
+### Final Oh My Pi gap builder comparison
+
+`scripts/evaluate-omp-builder.ts --proof` compares `d998928` against the clean
+committed current checkout through their actual model loops and VM tools. It
+does not exercise the full production queue described above. Protected grading
+must reject the broken fixture and accept a known correct patch before inference.
+
+Run the zero-spend preflight with:
+
+```sh
+node --import tsx scripts/evaluate-omp-builder.ts --proof --repetitions=3
+```
+
+After fresh approval, add `--live` and set `YTIMESY_OMP_PROOF_APPROVED` to
+`5-usd-60-requests` for three pairs, or `5-usd-20-requests` with
+`--repetitions=1` for one pair. These values record actual human authorization;
+setting them does not itself grant authorization. All actual provider invocations,
+including retries, consume one persisted shared counter before transmission.
+There is no API fallback. An exclusive active-attempt file prevents concurrent
+starts and reruns from silently resetting that counter. Previous experiment
+counters remain intact under `.ytimesy/omp-builder-e2e`; the new proof uses
+`.ytimesy/omp-builder-proof`.
+
+The three-pair order is before/after, after/before, before/after. Every arm starts
+from a clean copy of the same frozen task, with the same model, reasoning, ten
+request maximum, 6,000 output-token maximum and 200-second model/tool deadline.
+Dependencies are preinstalled equally. The one disposable VM has a provider
+lifetime of 1,800 seconds; protected grading runs on the host without network
+or guest credentials. Source commit, task commit, prompt, verifier, image,
+budgets and ordering contribute to the recorded protocol SHA-256.
+
+Report every pair's correctness, elapsed time, requests and observed token/tool
+metrics, including failures. Call an observed latency improvement only if the
+completed treatment arms pass raw protected grading; do not normalize source
+patches or hide failed attempts. Compare paired time changes and both median
+and mean time. This repeated development fixture estimates run variability
+for one known task. It cannot establish independent-task statistical evidence,
+general coding superiority or production leader/reviewer performance.
+
 ## Stop and recovery
 
 SIGINT/SIGTERM requests graceful cleanup. Production cleanup closes the durable guard first, cancels the tree and destroys only that disposable tree. Native cleanup destroys its exact proof VM. Snapshot cleanup destroys only the snapshot created by this run. `active-attempt.json` identifies the attempt for recovery. SIGKILL, host loss and provider cleanup failures still require operator reconciliation; do not assume a `finally` block survived a crash. Check the actual Freestyle inventory and pending turns after every pilot.

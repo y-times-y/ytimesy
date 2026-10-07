@@ -1,0 +1,363 @@
+{
+  "date": "2026-10-06",
+  "modelCodingPair": {
+    "baseline": "d99892899b207e490cde7e09dddefb166c830ddd",
+    "treatment": "c28aaa21aa6c9451a9fd0445907eae3a7e8d978c",
+    "model": "gpt-6.1-sol",
+    "reasoning": "low",
+    "taskCommit": "842a615313ef1771476ac2eee012669d710516ab",
+    "verifierSha256": "33f822d2984aa3d44dbcb87449a9cd862118bf24e131dd4ed14c3ea1b203b781",
+    "graderImage": "sha256:8e9ff7af2ea858808cad599b3bb381cda3a9942a59a736516b1d20f63e22b8da",
+    "arms": [
+      {
+        "arm": "before",
+        "elapsedMs": 39149,
+        "modelRequests": 8,
+        "finished": true,
+        "inputTokens": 115216,
+        "outputTokens": 867,
+        "cacheReadTokens": 74112,
+        "modelDurationMs": 32756.499957000007,
+        "toolDurationMs": 5627.518126000003,
+        "tools": [
+          {
+            "tool_name": "read_files",
+            "category": "read",
+            "error_class": "none",
+            "duration_ms": 88.96191700000054,
+            "outcome": "completed",
+            "repeated_read": false
+          },
+          {
+            "tool_name": "bash",
+            "category": "command",
+            "error_class": "none",
+            "duration_ms": 444.1213330000028,
+            "outcome": "completed",
+            "repeated_read": false
+          },
+          {
+            "tool_name": "bash",
+            "category": "command",
+            "error_class": "none",
+            "duration_ms": 434.5683749999953,
+            "outcome": "completed",
+            "repeated_read": false
+          },
+          {
+            "tool_name": "apply_patches",
+            "category": "edit",
+            "error_class": "none",
+            "duration_ms": 563.1502919999984,
+            "outcome": "completed",
+            "repeated_read": false
+          },
+          {
+            "tool_name": "run_checks",
+            "category": "command",
+            "error_class": "none",
+            "duration_ms": 3840.787500000006,
+            "outcome": "completed",
+            "repeated_read": false
+          },
+          {
+            "tool_name": "inspect_changes",
+            "category": "read",
+            "error_class": "none",
+            "duration_ms": 185.60916700000234,
+            "outcome": "completed",
+            "repeated_read": false
+          },
+          {
+            "tool_name": "read_tool_output",
+            "category": "read",
+            "error_class": "none",
+            "duration_ms": 70.31954199999745,
+            "outcome": "completed",
+            "repeated_read": false
+          }
+        ],
+        "rawGrading": {
+          "passed": false,
+          "failure": "scope",
+          "detail": "Patch changed a protected or unrelated path."
+        },
+        "artifactNormalizedGrading": {
+          "passed": true,
+          "failure": null,
+          "detail": "{\"passed\":true,\"assertions\":92}\n",
+          "exitCode": 0
+        }
+      },
+      {
+        "arm": "after",
+        "elapsedMs": 89971,
+        "modelRequests": 10,
+        "finished": true,
+        "inputTokens": 237392,
+        "outputTokens": 700,
+        "cacheReadTokens": 179200,
+        "modelDurationMs": 34104.53845900005,
+        "toolDurationMs": 55109.96283199999,
+        "tools": [
+          {
+            "tool_name": "read_files",
+            "category": "read",
+            "error_class": "none",
+            "duration_ms": 98.35516700000153,
+            "outcome": "completed",
+            "repeated_read": false
+          },
+          {
+            "tool_name": "search_tools",
+            "category": "discovery",
+            "error_class": "none",
+            "duration_ms": 0.6957910000055563,
+            "outcome": "completed",
+            "repeated_read": false
+          },
+          {
+            "tool_name": "rename_symbol",
+            "category": "edit",
+            "error_class": "none",
+            "duration_ms": 3149.261832999997,
+            "outcome": "completed",
+            "repeated_read": false
+          },
+          {
+            "tool_name": "rename_file",
+            "category": "edit",
+            "error_class": "none",
+            "duration_ms": 32327.907041,
+            "outcome": "completed",
+            "repeated_read": false
+          },
+          {
+            "tool_name": "read_files",
+            "category": "read",
+            "error_class": "none",
+            "duration_ms": 67.81091699999524,
+            "outcome": "completed",
+            "repeated_read": false
+          },
+          {
+            "tool_name": "apply_patches",
+            "category": "edit",
+            "error_class": "none",
+            "duration_ms": 16013.947167000006,
+            "outcome": "completed",
+            "repeated_read": false
+          },
+          {
+            "tool_name": "run_checks",
+            "category": "command",
+            "error_class": "none",
+            "duration_ms": 3198.7595830000064,
+            "outcome": "completed",
+            "repeated_read": false
+          },
+          {
+            "tool_name": "inspect_changes",
+            "category": "read",
+            "error_class": "none",
+            "duration_ms": 181.31599999999162,
+            "outcome": "completed",
+            "repeated_read": false
+          },
+          {
+            "tool_name": "read_tool_output",
+            "category": "read",
+            "error_class": "none",
+            "duration_ms": 71.90933299998869,
+            "outcome": "completed",
+            "repeated_read": false
+          }
+        ],
+        "rawGrading": {
+          "passed": false,
+          "failure": "scope",
+          "detail": "Patch changed a protected or unrelated path."
+        },
+        "artifactNormalizedGrading": {
+          "passed": true,
+          "failure": null,
+          "detail": "{\"passed\":true,\"assertions\":92}\n",
+          "exitCode": 0
+        }
+      }
+    ],
+    "artifactNormalization": {
+      "removedPaths": [
+        "._.git",
+        "node_modules"
+      ],
+      "metadataBlob": "a963ad17b1a3295341a1c14053fc8c12b7686ac9",
+      "dependencyLinkBlob": "061c59822862e73d23f36efc8012b9c96c88c03c",
+      "reason": "Both were injected by operator setup before inference, identically in both arms. Byte identities verified against uploaded archive and configured guest dependency path. All other changes remain subject to the original frozen scope and verifier.",
+      "rawResultsPreserved": true,
+      "additionalModelRequests": 0
+    },
+    "totalActualModelRequests": 18,
+    "scope": "Existing builder model loop and VM tool implementations; excludes production queue, leader delegation, review and DB journal durability."
+  },
+  "diagnosticWaitFix": {
+    "baseline": "c28aaa21aa6c9451a9fd0445907eae3a7e8d978c",
+    "treatment": "e6313d4fb3a406d06da887babc68f1f96d13fb7b",
+    "scope": "Scripted production tool pipeline on one real VM. No model coding/selection comparison; isolates optional diagnostic wait regression.",
+    "inferenceRequests": 0,
+    "arms": [
+      {
+        "arm": "before",
+        "elapsedMs": 53384,
+        "timings": [
+          {
+            "name": "inspect_code",
+            "durationMs": 2661
+          },
+          {
+            "name": "rename_symbol",
+            "durationMs": 2737
+          },
+          {
+            "name": "rename_file",
+            "durationMs": 31029
+          },
+          {
+            "name": "inspect_code",
+            "durationMs": 51
+          },
+          {
+            "name": "apply_code_action",
+            "durationMs": 15306
+          },
+          {
+            "name": "replace_text",
+            "durationMs": 694
+          },
+          {
+            "name": "replace_text",
+            "durationMs": 146
+          },
+          {
+            "name": "run_checks",
+            "durationMs": 1472
+          }
+        ],
+        "grading": {
+          "passed": true,
+          "failure": null,
+          "detail": "{\"passed\":true,\"assertions\":92}\n",
+          "exitCode": 0
+        }
+      },
+      {
+        "arm": "after",
+        "elapsedMs": 5156,
+        "timings": [
+          {
+            "name": "inspect_code",
+            "durationMs": 1433
+          },
+          {
+            "name": "rename_symbol",
+            "durationMs": 390
+          },
+          {
+            "name": "rename_file",
+            "durationMs": 316
+          },
+          {
+            "name": "inspect_code",
+            "durationMs": 538
+          },
+          {
+            "name": "apply_code_action",
+            "durationMs": 166
+          },
+          {
+            "name": "replace_text",
+            "durationMs": 178
+          },
+          {
+            "name": "replace_text",
+            "durationMs": 133
+          },
+          {
+            "name": "run_checks",
+            "durationMs": 1788
+          }
+        ],
+        "grading": {
+          "passed": true,
+          "failure": null,
+          "detail": "{\"passed\":true,\"assertions\":92}\n",
+          "exitCode": 0
+        }
+      }
+    ],
+    "elapsedReductionPercent": 90.34167540836205
+  },
+  "liveCapabilities": {
+    "pythonPreparation": "passed",
+    "persistentServiceAndWarmLsp": "passed",
+    "outline": "passed",
+    "fileMoveImports": "passed",
+    "organizeImports": "passed",
+    "pythonDapBreakpointLocalsStepAndStaleFence": "passed",
+    "inferenceRequests": 0
+  },
+  "cleanup": {
+    "verifiedAt": "2026-10-07T00:25:12.528Z",
+    "count": 6,
+    "results": [
+      {
+        "exists": false
+      },
+      {
+        "exists": false
+      },
+      {
+        "exists": false
+      },
+      {
+        "exists": false
+      },
+      {
+        "exists": false
+      },
+      {
+        "exists": false
+      }
+    ]
+  },
+  "approved": {
+    "vmDollars": 5,
+    "modelRequests": 20
+  },
+  "budget": {
+    "actualModelRequests": 18,
+    "createdVms": 6,
+    "snapshotsCreated": 0,
+    "conservativeComputeStorageLifetimeCeilingDollars": 0.77,
+    "combinedTransferReserveDollars": 1,
+    "estimatedTotalReservationDollars": 1.77,
+    "invoiceVerified": false,
+    "pricingSource": "https://www.freestyle.sh/pricing"
+  },
+  "limitations": [
+    "One synthetic task pair; sequential order and shared VM; no statistical/general superiority claim.",
+    "Model coding pair used pre-fix treatment; post-fix comparison was a scripted production tool pipeline, not another paired model coding trial.",
+    "Excludes production queue, leader/delegation/review and durable DB tool journal.",
+    "Python DAP and six grammar languages tested; installed Go/Rust compilers and non-Python native debugger adapters require separate environment proofs."
+  ],
+  "validation": {
+    "testFilesPassed": 293,
+    "testsPassed": 1517,
+    "skipped": 5,
+    "productionBuild": "passed",
+    "applicationTypecheck": "passed",
+    "workflowTypecheck": "passed",
+    "changedFileBiomeWarningsAsErrors": "passed",
+    "gitDiffCheck": "passed"
+  }
+}

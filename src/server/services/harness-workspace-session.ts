@@ -1158,9 +1158,24 @@ export function runAgentTaskTool(
 						: Promise.resolve(null),
 				]),
 			);
+			const cwd = yield* Effect.tryPromise(() =>
+				taskMachines.readTextFile(
+					WorkspaceId(target.providerRef as string),
+					PROJECT_CWD_PATH,
+				),
+			);
+			const completionVerification = cwd?.trim()
+				? yield* Effect.tryPromise(() =>
+						findCompletedVerification(scope.userId, target.id, cwd.trim(), {
+							base: patch.base,
+							patchSha256: patch.sha256,
+						}),
+					)
+				: null;
 			return {
 				taskId: target.id,
 				diff: taskPatchPreview(patch, start),
+				completionVerification,
 				summary: agentTaskSummaryPage(
 					lastAgentMessageText(sessionItemsFromUnknown(target.items)) ??
 						target.taskSummary,

@@ -22,6 +22,16 @@ export interface CreateProofWorkspaceOptions {
 }
 
 export interface WorkspaceMachines {
+	readonly runCapability?: (
+		workspaceId: WorkspaceId,
+		request: {
+			capability: "language" | "debugger" | "browser";
+			source: string;
+			arguments: unknown;
+			onlyInstalled?: boolean;
+		},
+		signal: AbortSignal,
+	) => Promise<CommandOutput>;
 	readonly restoreRetainedSession?: (
 		userId: string,
 		sessionId: string,

@@ -41,6 +41,7 @@ function pathsFrom(value: unknown): string[] {
 	const record = value as Record<string, unknown>;
 	return [
 		typeof record.path === "string" ? record.path : null,
+		typeof record.newPath === "string" ? record.newPath : null,
 		...(Array.isArray(record.paths)
 			? record.paths.filter((path): path is string => typeof path === "string")
 			: []),
@@ -90,9 +91,11 @@ export function automaticRepositoryContext(input: {
 		const entries =
 			name === "read_repository_guidance"
 				? ((output as { instructions?: unknown[] })?.instructions ?? [])
-				: Array.isArray(output)
-					? output
-					: [output];
+				: name === "read_code"
+					? ((output as { files?: unknown[] })?.files ?? [])
+					: Array.isArray(output)
+						? output
+						: [output];
 		for (const entry of entries) {
 			const parsed = source.safeParse(entry);
 			if (!parsed.success || !pathsFrom(parsed.data).length) continue;

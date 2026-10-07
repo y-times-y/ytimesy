@@ -23,7 +23,7 @@ export function editLanguage(path: string) {
 
 export async function warmEditDiagnostics(
 	workspace: AgentToolWorkspace,
-	edit: { path: string; deleted?: boolean },
+	edit: { path: string; deleted?: boolean; previousPath?: string },
 	signal: AbortSignal,
 ) {
 	if (!editLanguage(edit.path)) return undefined;
@@ -39,6 +39,7 @@ export async function warmEditDiagnostics(
 				line: 1,
 				column: 1,
 				onlyIfWarm: true,
+				diagnosticWaitMs: 0,
 			},
 			feedback,
 			signal,

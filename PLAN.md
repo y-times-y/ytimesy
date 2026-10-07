@@ -1,5 +1,23 @@
 # ytimesy v0
 
+Follow-up harness scope (2026-10-06, isolated implementation): persistent guest
+capability transport, maintained grammar outlines, source-fenced file moves and
+text-only code actions, pinned Python/Go/Rust server preparation, and owned DAP
+sessions are implemented. Native compilers/debugger binaries remain environment
+prerequisites. See [implementation and validation boundaries](docs/research/omp-harness-gap-implementation-2026-10-06.md).
+Live evidence: both model-generated patches passed the protected code verifier
+(after verified evaluator-artifact removal). Optional diagnostic waits caused a
+regression and were removed from edit receipts; a real VM tool pipeline improved
+53.4s to 5.2s. This is not a general model-performance claim. See the
+[end-to-end report](docs/research/omp-harness-end-to-end-2026-10-06.md).
+Fresh final-fix model proof: all six raw protected grades passed across three
+matched pairs, but mean coding time increased 33.8s to 42.0s (+24.1%) and model
+requests increased 23 to 30. Speed superiority remains unmet. See the
+[final model evidence](docs/research/omp-harness-final-model-proof-2026-10-06.md).
+The controlled live builder probe is distinct from the full production queue,
+leader/delegation/review evaluator; local fixtures alone do not establish model
+outcome or hosted speed improvements.
+
 ### Claude-inspired harness behaviors — 2026-10-06
 
 The custom model loop now automatically loads scoped repository instructions,
@@ -9,6 +27,15 @@ recovery and forks. Permission rules are excluded. Existing Git and command-jour
 storage are reused; no schema migration is required. A local behavioral regression
 command and PR workflow cover these contracts without paid inference.
 See [behavior, configuration and proof boundaries](docs/claude-harness-gaps.md).
+
+### Structural reads and language refactors — 2026-10-06
+
+Isolated follow-up on `codex/omp-harness-gaps` adds bounded TS/JS structural
+reads with exact source follow-ups, applied language-server symbol renames for
+writable builders, and same-language query batching to reduce guest round trips.
+Cold TypeScript queries use the semantic server to avoid incomplete cross-file
+results. See [implementation and proof boundaries](docs/research/omp-harness-gap-implementation-2026-10-06.md).
+Local fixtures are separate from live cloud behavior and comparative performance.
 
 ### Indexed project memory — 2026-10-05
 
