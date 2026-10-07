@@ -1672,3 +1672,37 @@ details[open] > summary .session-activity-chevron {
 .session-command-detail .session-activity-meta {
 	padding: 6px 0 0;
 }
+
+.conversation-recovery {
+	color: var(--muted-foreground);
+	font-size: 12px;
+	margin-top: 6px;
+}
+.conversation-recovery button {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	padding: 4px 7px;
+	border-radius: 5px;
+}
+.conversation-recovery button:hover:not(:disabled) {
+	background: var(--muted);
+	color: var(--foreground);
+}
+.conversation-recovery button:disabled {
+	opacity: 0.5;
+}
+.conversation-recovery-options {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+	padding: 8px;
+	margin-top: 5px;
+	border: 1px solid var(--border);
+	border-radius: 7px;
+	max-width: 440px;
+}
+.conversation-recovery-explanation {
+	flex-basis: 100%;
+	margin: 0 0 4px;
+}

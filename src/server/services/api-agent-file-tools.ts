@@ -71,6 +71,7 @@ export const patchVerification = z
 
 type RepositoryFileRead = {
 	path: string;
+	sha256?: string;
 	content: string;
 	truncated: boolean;
 };
@@ -99,6 +100,7 @@ type FileReadGuidance = {
 };
 type RepositoryFilePage = {
 	path: string;
+	sha256?: string;
 	start: number;
 	content: string;
 	nextStart: number | null;
@@ -163,17 +165,24 @@ for path in paths:
         if archived and archived['sha256'] == sha256:
             results.append({'path': path, 'sha256': sha256, 'previouslyRead': True, 'archivedBody': archived['archivedBody'], 'nextStart': None})
             continue
+    before = target.stat()
+    digest = hashlib.sha256()
+    with target.open('rb') as handle:
+        for chunk in iter(lambda: handle.read(65536), b''):
+            digest.update(chunk)
     limit = min(maximum, remaining)
     with target.open('r', encoding='utf-8', newline='') as handle:
         handle.read(start)
         content = handle.read(limit + 1)
+    after = target.stat()
+    fingerprint = {'sha256': digest.hexdigest()} if (before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) == (after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns) else {}
     truncated = len(content) > limit
     content = content[:limit]
     remaining -= len(content)
     if page:
-        results.append({'path': path, 'start': start, 'content': content, 'nextStart': start + len(content) if truncated else None})
+        results.append({'path': path, **fingerprint, 'start': start, 'content': content, 'nextStart': start + len(content) if truncated else None})
     else:
-        results.append({'path': path, 'content': content, 'truncated': truncated})
+        results.append({'path': path, **fingerprint, 'content': content, 'truncated': truncated})
 print(json.dumps(results[0] if page else results, ensure_ascii=False))`;
 
 const EDIT_OPERATION_SCRIPT = `

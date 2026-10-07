@@ -143,6 +143,10 @@ export function WorkspaceHome({
 		projects.data?.[0];
 	const [selectedSessionId, setSelectedSessionId] = useState<string>();
 	const [session, setSession] = useState(initialSession);
+	const [recoveryDraft, setRecoveryDraft] = useState<{
+		id: string;
+		prompt: string;
+	} | null>(null);
 	const currentSessionRef = useRef(session);
 	currentSessionRef.current = session;
 	const pullRequests = useQuery({
@@ -1064,6 +1068,27 @@ export function WorkspaceHome({
 							data-layout={followUpLayout ? "chat" : "empty"}
 						>
 							<SessionLauncher
+								initialDraft={
+									recoveryDraft?.id === session.agentSessionId
+										? recoveryDraft.prompt
+										: ""
+								}
+								onRecovered={async (id, prompt) => {
+									const projectId = selectedProject?.id;
+									if (!projectId) return;
+									setRecoveryDraft({ id, prompt: prompt ?? "" });
+									sessionViews.current.delete(id);
+									openChat(id);
+									const epoch = sessionEpoch.current;
+									const next = await getCodexSession({
+										data: { projectId, sessionId: id, harnessId },
+									});
+									if (epoch !== sessionEpoch.current) return;
+									rememberSessionView(next);
+									setSession(next);
+									await chats.refetch();
+									await agentTasks.refetch();
+								}}
 								childTasks={agentTasks.data ?? []}
 								key={session.agentSessionId ?? "new"}
 								session={session}

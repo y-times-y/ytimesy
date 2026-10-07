@@ -1,5 +1,15 @@
 # ytimesy v0
 
+### Claude-inspired harness behaviors — 2026-10-06
+
+The custom model loop now automatically loads scoped repository instructions,
+rehydrates root instructions after compaction, detects stale read evidence,
+supports baseline-pinned lifecycle workflows, and provides conversation/code
+recovery and forks. Permission rules are excluded. Existing Git and command-journal
+storage are reused; no schema migration is required. A local behavioral regression
+command and PR workflow cover these contracts without paid inference.
+See [behavior, configuration and proof boundaries](docs/claude-harness-gaps.md).
+
 ### Indexed project memory — 2026-10-05
 
 The existing owner-scoped Markdown store now holds up to 120,000 characters,
