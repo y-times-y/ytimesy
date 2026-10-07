@@ -1,4 +1,5 @@
 import { Check, ChevronRight, CircleAlert, Clock3 } from "lucide-react";
+import type { ReactNode } from "react";
 import { Fragment, type UIEvent, useEffect, useRef } from "react";
 import { MatrixDotLoader } from "#/components/ui/matrix-dot-loader";
 import type { AgentCompetition } from "#/domain/agent-competition";
@@ -58,7 +59,9 @@ export function SessionTimeline({
 	onOpenCandidate,
 	autoScroll = true,
 	collapseInstructions = false,
+	recoveryControls,
 }: {
+	recoveryControls?: (messageId: string) => ReactNode;
 	items: readonly SessionItem[];
 	turnStatus: SessionTurnStatus;
 	fill?: boolean;
@@ -145,6 +148,9 @@ export function SessionTimeline({
 								fileChanges={fileChanges}
 								onOpenFile={onOpenFile}
 							/>
+							{row.kind === "item" && row.item.kind === "userMessage"
+								? recoveryControls?.(row.item.id)
+								: null}
 						</li>
 						{attached.map((group) => (
 							<li key={group.id} data-kind="competition">

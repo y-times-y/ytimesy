@@ -4,6 +4,10 @@ import { Effect, Schedule } from "effect";
 import type { SessionItem } from "#/domain/session-item";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
 import { modelConcurrencyLimits } from "./agent-capacity";
+import {
+	recordConversationPoint,
+	recoveredConversation,
+} from "./conversation-recovery";
 import { database } from "./database";
 
 export type ApiTurn = {
@@ -98,6 +102,7 @@ export async function enqueueApiTurn(input: {
 			throw new Error(
 				"Finish or stop the current turn before sending another prompt.",
 			);
+		await recordConversationPoint(client, input);
 		await client.query(
 			`insert into api_turn(id,session_id,user_id,connection_id,connection_revision,model_id,state,messages,items,idempotency_key)
 			 values($1,$2,$3,$4,$5,$6,'queued',$7,$8,$9)`,
@@ -139,6 +144,13 @@ export async function previousTurnMessages(
 	modelId: string,
 	revision: string,
 ) {
+	const recovered = await recoveredConversation(
+		userId,
+		sessionId,
+		modelId,
+		revision,
+	);
+	if (recovered !== null) return recovered.messages;
 	const result = await database().query<ApiTurn>(
 		"select * from api_turn where user_id=$1 and session_id=$2 order by created_at desc limit 1",
 		[userId, sessionId],

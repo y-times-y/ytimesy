@@ -342,3 +342,39 @@ export const deleteProjectAgentSession = createServerFn({ method: "POST" })
 		);
 		return { id: data.sessionId };
 	});
+
+export const getConversationRecoveryPoints = createServerFn({ method: "GET" })
+	.validator((data: { projectId: string; sessionId: string }) => ({
+		projectId: data.projectId,
+		sessionId: data.sessionId,
+	}))
+	.handler(async ({ data }) => {
+		const user = await requireUser(getRequest().headers);
+		const { listConversationRecoveryPoints } = await import(
+			"#/server/services/conversation-recovery"
+		);
+		return listConversationRecoveryPoints(
+			user.id,
+			data.projectId,
+			data.sessionId,
+		);
+	});
+
+export const restoreConversationPoint = createServerFn({ method: "POST" })
+	.validator(
+		(data: {
+			projectId: string;
+			sessionId: string;
+			messageId: string;
+			mode: "conversation" | "code" | "both" | "fork";
+		}) => data,
+	)
+	.handler(async ({ data }) => {
+		const user = await requireUser(getRequest().headers);
+		const { recoverConversation } = await import(
+			"#/server/services/conversation-recovery"
+		);
+		return runWithMachines((machines) =>
+			recoverConversation(machines, user.id, data),
+		);
+	});
