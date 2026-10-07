@@ -76,9 +76,13 @@ protected grade. Initial server warmup is outside the pipeline wall time.
 
 The measured pipeline was **90.3% faster**, about **10.4×**. This establishes the
 specific wait removal, not a new model-coding success or token-efficiency result.
-The final implementation has not received another complete paired model coding
-trial. Eighteen of the twenty approved model requests were used; two remain,
-which is insufficient to repeat the full comparison under the same budget.
+At completion of this initial experiment, the final implementation had not
+received another complete paired model coding trial. Eighteen of the twenty
+approved model requests were used; two remained, insufficient for a full pair.
+With fresh approval, [three final-fix pairs](omp-harness-final-model-proof-2026-10-06.md)
+subsequently passed all six raw protected grades, but mean coding time was
+24.1% slower than baseline. The scripted tool speedup did not establish an
+overall model-coding speed advantage.
 
 ## Live integration, safety and budget
 
