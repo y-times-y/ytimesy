@@ -12,8 +12,12 @@ const invalidInvocations = [
 	["--live", "11"],
 ] as const;
 it.each(
-	["prove-harness-verification", "prove-repository-search-linux"].flatMap(
-		(script) => invalidInvocations.map(([flag, cap]) => [script, flag, cap]),
+	[
+		"prove-harness-verification",
+		"prove-repository-search-linux",
+		"evaluate-isolated-harness",
+	].flatMap((script) =>
+		invalidInvocations.map(([flag, cap]) => [script, flag, cap]),
 	),
 )(
 	"rejects unapproved invocation %s %s %s before setup or provisioning",

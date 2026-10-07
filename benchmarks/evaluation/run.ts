@@ -34,6 +34,7 @@ export async function runPairedEvaluation(input: {
 	userId: string;
 	/** Rerun only the selected implementation against an already-recorded control. */
 	arms?: readonly ("ytimesy" | "native-codex")[];
+	onSnapshotCreated?: (snapshotId: string) => Promise<void>;
 	signal?: AbortSignal;
 }) {
 	input.signal?.throwIfAborted();
@@ -94,6 +95,7 @@ export async function runPairedEvaluation(input: {
 					`ytimesy-eval-${randomUUID().slice(0, 8)}`,
 				);
 				const sharedPreparationMs = Date.now() - preparationStarted;
+				await input.onSnapshotCreated?.(snapshotId);
 				for (const arm of pair.arms.filter(
 					(arm) => !input.arms || input.arms.includes(arm),
 				)) {
@@ -282,7 +284,7 @@ export async function runPairedEvaluation(input: {
 						beforeQuota,
 						afterQuota,
 						limitations: [
-							"Native CLI does not expose the product request-count guard or a hard token-output cap.",
+							"Native requests use a loopback observed-usage guard; it is not a security boundary against guest root.",
 							"Token threshold is observed after each response; a last request can exceed it.",
 							"VM provider cost must be reconciled independently; no invented dollar total.",
 							"Resource and network equivalence requires operator verification before any parity claim.",

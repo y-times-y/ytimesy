@@ -48,7 +48,10 @@ it("keeps native credentials isolated without breaking the prepared home and pac
 		provisionSession: async () => "native-vm",
 		exec: execute,
 		writeTextFile: vi.fn(),
-		readTextFile: async () => "",
+		readTextFile: async (_vm: string, path: string) =>
+			path.endsWith("proxy-state.json")
+				? JSON.stringify({ requests: 1, observedTokens: 20, stopped: false })
+				: "",
 	} as unknown as WorkspaceMachines;
 	const result = await runNativeCodexEvaluation({
 		machines,
@@ -63,7 +66,7 @@ it("keeps native credentials isolated without breaking the prepared home and pac
 		protocol: {
 			modelId: "gpt-6.1-sol",
 			reasoning: "medium",
-			limits: { durationSeconds: 600 },
+			limits: { durationSeconds: 600, modelRequests: 20, tokens: 10000 },
 		} as EvaluationProtocol,
 	});
 	const launch = execute.mock.calls[1][1];
@@ -78,6 +81,9 @@ it("keeps native credentials isolated without breaking the prepared home and pac
 	);
 	expect(result.exitCode).toBe(0);
 	expect(result.executionIsolation).toBe("disposable-vm");
+	expect(result.requestLimitEnforced).toBe(true);
+	expect(result.tokenLimitEnforced).toBe(true);
+	expect(launch).not.toContain("YTIMESY_SUBSCRIPTION_ACCESS_TOKEN");
 	expect(mocks.destroy).toHaveBeenCalledWith(
 		machines,
 		expect.objectContaining({
