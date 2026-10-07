@@ -138,6 +138,12 @@ async function withApiModel<T>(
 			maxOutputTokens: input.maxOutputTokens ?? 8192,
 			contextWindow: context.contextWindow,
 			fallbackContextPolicy: boundPrefix ? "bound-prefix" : "whole-turns",
+			// Enable retirement only for the known unbound OpenAI reasoning contract.
+			// Unknown compatible routes and prefix-bound providers retain observations.
+			archiveConsumedGuidance:
+				connection.provider === "openai" ||
+				(connection.provider === "openrouter" &&
+					/^openai\//.test(input.modelId)),
 			requestSettings,
 			compact:
 				context.nativeCompaction === "xai" ||

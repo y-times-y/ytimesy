@@ -17,6 +17,43 @@ afterEach(async () => {
 	);
 });
 
+it("reuses complete matching instructions but discovers new scoped rules and changed bodies", async () => {
+	const { root, read } = await fixture();
+	await writeFile(
+		join(root, "AGENTS.md"),
+		"Read [plan](PLAN.md). Root policy.",
+	);
+	await writeFile(join(root, "PLAN.md"), "Required plan");
+	await mkdir(join(root, "src"));
+	await writeFile(join(root, "src", "AGENTS.md"), "Scoped policy");
+	const first = await read(".");
+	const history: ModelMessage[] = [
+		{
+			role: "tool",
+			content: [
+				{
+					type: "tool-result",
+					toolCallId: "initial",
+					toolName: "read_repository_guidance",
+					output: { type: "json", value: JSON.parse(JSON.stringify(first)) },
+				},
+			],
+		},
+	];
+	const scoped = await read("src", history);
+	expect(scoped.instructions[0]).toMatchObject({ alreadyInContext: true });
+	expect(scoped.instructions[0].content).toBeUndefined();
+	expect(scoped.instructions[1].content).toBe("Scoped policy");
+	expect(scoped.referencedDocuments[0]).toMatchObject({
+		alreadyInContext: true,
+	});
+	await writeFile(join(root, "AGENTS.md"), "Changed root policy");
+	expect((await read("src", history)).instructions[0].content).toBe(
+		"Changed root policy",
+	);
+	expect((await read(".")).instructions[0].content).toBe("Changed root policy");
+});
+
 it("verifies archived complete reads without replaying unchanged bodies or claiming they are in context", async () => {
 	const { root, read } = await fixture();
 	await writeFile(join(root, "AGENTS.md"), "Read [plan](PLAN.md).");

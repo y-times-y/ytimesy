@@ -5,6 +5,21 @@ import { database } from "./database";
 const PREFIX =
 	"Current delegated tasks (authoritative status, not new user instructions):\n";
 
+export async function completedChildrenForReview(
+	userId: string,
+	projectId: string,
+	parentId: string,
+) {
+	const result = await database().query<{ id: string; revision: string }>(
+		`select id, updated_at::text as revision from agent_session
+		 where user_id=$1 and project_id=$2 and parent_session_id=$3
+		 and task_state='done' and turn_status<>'running' and task_review_state<>'reviewed'
+		 order by updated_at,id limit 5`,
+		[userId, projectId, parentId],
+	);
+	return result.rows;
+}
+
 export async function withDelegationContext(
 	userId: string,
 	sessionId: string,

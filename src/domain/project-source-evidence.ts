@@ -45,10 +45,31 @@ export function sourceEvidenceMatches(
 	current: ProjectSourceEvidence,
 ) {
 	return (
-		saved.revision !== null &&
-		saved.revision === current.revision &&
 		!saved.dirty &&
 		!current.dirty &&
+		sourceEvidenceContentsMatch(saved, current)
+	);
+}
+
+/** Verification can run on intentional edits; every declared source must still match exactly. */
+export function sourceEvidenceContentsMatch(
+	saved: ProjectSourceEvidence,
+	current: ProjectSourceEvidence,
+) {
+	return (
+		saved.revision !== null &&
+		saved.revision === current.revision &&
+		sourceEvidenceFileHashesMatch(saved, current)
+	);
+}
+
+/** A publication commit may change HEAD without changing the checked source bytes. */
+export function sourceEvidenceFileHashesMatch(
+	saved: ProjectSourceEvidence,
+	current: ProjectSourceEvidence,
+) {
+	return (
+		current.revision !== null &&
 		saved.sources.length > 0 &&
 		saved.sources.every(
 			(source) =>

@@ -50,9 +50,15 @@ const connection = createMessageConnection(new StreamMessageReader(child.stdout)
 child.on('error', error => { console.error('Language server unavailable: ' + error.code); connection.dispose(); process.exitCode = 1; });
 let diagnostics = [];
 let diagnosticsObserved = false;
+let resolveDiagnostics;
+const diagnosticsReady = new Promise(resolve => { resolveDiagnostics = resolve; });
 const uri = pathToFileURL(file).href;
 connection.onNotification('textDocument/publishDiagnostics', value => {
-  if (value.uri === uri) { diagnosticsObserved = true; diagnostics = value.diagnostics.slice(0, 100); }
+  if (value.uri === uri && (value.version === undefined || value.version === 1)) {
+    diagnosticsObserved = true;
+    diagnostics = value.diagnostics.slice(0, 100);
+    resolveDiagnostics();
+  }
 });
 connection.onRequest('workspace/configuration', value => value.items.map(() => null));
 connection.onRequest('workspace/applyEdit', () => ({ applied: false, failureReason: 'This capability only previews edits.' }));
@@ -68,7 +74,13 @@ try {
   const methods = { definition: 'textDocument/definition', references: 'textDocument/references', hover: 'textDocument/hover', rename_preview: 'textDocument/rename' };
   let result;
   if (input.operation === 'diagnostics') {
-    await new Promise(resolve => setTimeout(resolve, 2500));
+    let timeout;
+    try {
+      // Project loading can outlast 2.5 seconds on a cold language server.
+      // Wait for its actual notification, not an assumed clean-file deadline.
+      // The watchdog still bounds hung servers and missing evidence stays explicit.
+      await Promise.race([diagnosticsReady, new Promise(resolve => { timeout = setTimeout(resolve, 15000); })]);
+    } finally { clearTimeout(timeout); }
     result = diagnostics;
   } else {
     if (input.operation === 'rename_preview' && !input.newName) throw new Error('newName is required for a rename preview.');

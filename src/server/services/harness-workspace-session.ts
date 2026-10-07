@@ -1,11 +1,16 @@
 import { Cause, Duration, Effect } from "effect";
+import { z } from "zod";
 import { competitionJudgeToolAllowed } from "#/domain/agent-competition";
 import type { AgentConnection } from "#/domain/agent-connection";
 import {
 	type AgentProviderId,
 	agentProviderById,
 } from "#/domain/agent-provider";
-import { agentTaskTree } from "#/domain/agent-task";
+import {
+	agentTaskStatusReceipt,
+	agentTaskSummaryPage,
+	agentTaskTree,
+} from "#/domain/agent-task";
 import {
 	AGENT_TASK_TOOL_REQUEST_PATH,
 	AGENT_TASK_TOOL_RESPONSE_PATH,
@@ -41,6 +46,11 @@ import {
 	sessionRecordHasConversation,
 } from "#/domain/session-item";
 import { canSubmitComposer, canSubmitSideChat } from "#/domain/session-policy";
+import {
+	taskCheckJournalIds,
+	taskHandoffReferences,
+} from "#/domain/task-handoff";
+import { requireAssignedTaskChecks } from "#/domain/task-verification-assignment";
 import type { WorkspaceLifecycle } from "#/domain/workspace";
 import {
 	competitionForOwner,
@@ -58,9 +68,12 @@ import {
 	sideAgentSession,
 } from "#/server/adapters/agent-sessions";
 import {
+	assignedTaskVerification,
 	claimAgentTaskCommand,
 	completeAgentTaskCommand,
+	isServerControlledIntegration,
 	renewAgentTaskCommandClaim,
+	retainedTaskCheckResults,
 } from "#/server/adapters/agent-task-command-receipts";
 import { saveAgentTaskBlockedEvent } from "#/server/adapters/agent-task-events";
 import { captureClaudeHome } from "#/server/adapters/claude/home-files";
@@ -129,6 +142,7 @@ import { publishProject } from "./publication";
 import {
 	captureTaskPatch,
 	importReviewedTaskChanges,
+	taskPatchPreview,
 } from "./reviewed-task-import";
 import { commitChatBranchForSubmission } from "./session-branch";
 import { machinesForAgentSession } from "./session-workspace-machines";
@@ -490,6 +504,15 @@ export function sendHarnessWorkspaceTask(
 			const previous = yield* Effect.tryPromise(() =>
 				agentSessionForOwner(scope.userId, scope.sessionId as string),
 			);
+			if (
+				previous &&
+				(yield* Effect.tryPromise(() =>
+					isServerControlledIntegration(previous),
+				))
+			)
+				throw new Error(
+					"Batch integration is server-controlled until a visible integration failure requires repair.",
+				);
 			const switching = previous && previous.harness !== scope.harnessId;
 			if (switching && previous.turnStatus === "running")
 				throw new Error("Stop the active turn before switching runtimes.");
@@ -837,6 +860,41 @@ export function runAgentTaskTool(
 				assertPatchIdentity(identity);
 				return identity;
 			});
+			const assignments = yield* Effect.tryPromise(() =>
+				Promise.all(
+					sources.map((source) =>
+						assignedTaskVerification(
+							scope.userId,
+							scope.projectId as string,
+							source.taskId,
+						),
+					),
+				),
+			);
+			const declaredAdditional = z
+				.array(z.string().min(1).max(16000))
+				.max(8)
+				.parse(request.arguments.additionalChecks ?? []);
+			const additionalChecks = [
+				...new Set([
+					...declaredAdditional,
+					...assignments.flatMap((assignment) => assignment?.finalChecks ?? []),
+				]),
+			];
+			const assignedPaths = assignments.flatMap(
+				(assignment) => assignment?.sourcePaths ?? [],
+			);
+			const sourcePaths = assignedPaths.length
+				? [
+						...new Set([
+							...assignedPaths,
+							...z
+								.array(z.string().min(1))
+								.max(8)
+								.parse(request.arguments.sourcePaths ?? []),
+						]),
+					]
+				: (request.arguments.sourcePaths as string[] | undefined);
 			return yield* Effect.tryPromise(() =>
 				integrateTaskDraft(
 					machines,
@@ -844,6 +902,10 @@ export function runAgentTaskTool(
 					taskToolString(request.arguments, "taskId"),
 					sources,
 					control,
+					{
+						sourcePaths,
+						additionalChecks,
+					},
 				),
 			);
 		}
@@ -969,7 +1031,10 @@ export function runAgentTaskTool(
 		if (request.tool === "list_tasks") {
 			const byId = new Map(taskRows.map((row) => [row.id, row]));
 			return agentTaskTree(parent.id, taskRows).map((task) => ({
-				...task,
+				...agentTaskStatusReceipt(
+					task,
+					request.arguments.includePrompts === true,
+				),
 				summary:
 					task.summary ??
 					lastAgentMessageText(
@@ -981,6 +1046,138 @@ export function runAgentTaskTool(
 		const taskId = taskToolString(request.arguments, "taskId");
 		const target = taskRows.find((row) => row.id === taskId);
 		if (!target) throw new Error("That descendant task is not available.");
+		if (
+			[
+				"start_task",
+				"send_task_message",
+				"request_task_wrap_up",
+				"edit_task",
+			].includes(request.tool) &&
+			target.taskState !== "failed"
+		) {
+			if (yield* Effect.tryPromise(() => isServerControlledIntegration(target)))
+				throw new Error(
+					"This batch integration task is server-controlled. Do not start, steer or message a model there. mark_task_reviewed stages accepted siblings; integrate_reviewed_tasks runs final checks after every source is reviewed. Agent repair is allowed only after a visible integration failure.",
+				);
+		}
+		if (request.tool === "read_task_handoff") {
+			if (
+				target.userId !== scope.userId ||
+				target.projectId !== scope.projectId
+			)
+				throw new Error("The task handoff is not available in this project.");
+			if (target.taskState !== "done" || target.turnStatus === "running")
+				throw new Error("Only a completed task has a review handoff.");
+			if (!target.providerRef)
+				throw new Error("The task has no machine to inspect.");
+			const start = z
+				.number()
+				.int()
+				.min(0)
+				.max(8_388_608)
+				.parse(request.arguments.start ?? 0);
+			const items = sessionItemsFromUnknown(target.items);
+			const checkCalls = taskCheckJournalIds(items);
+			const retained = yield* Effect.tryPromise(() =>
+				retainedTaskCheckResults({
+					userId: scope.userId,
+					projectId: scope.projectId as string,
+					sessionId: target.id,
+					requestIds: checkCalls.slice(-64),
+				}),
+			);
+			const discovered = taskHandoffReferences(items, retained);
+			const references =
+				request.arguments.references === undefined
+					? discovered.references.slice(0, 8)
+					: z.array(z.uuid()).min(1).max(8).parse(request.arguments.references);
+			const taskMachines = machinesForAgentSession(machines, target);
+			const assignment = yield* Effect.tryPromise(() =>
+				assignedTaskVerification(
+					scope.userId,
+					scope.projectId as string,
+					target.id,
+				),
+			);
+			const signal = control?.signal ?? AbortSignal.timeout(20000);
+			yield* Effect.tryPromise(() =>
+				taskMachines.ensureRunning(WorkspaceId(target.providerRef as string)),
+			);
+			const { readAuthorizedTaskChecks } = yield* Effect.tryPromise(
+				() => import("./task-output-evidence"),
+			);
+			const [patch, checks] = yield* Effect.tryPromise(() =>
+				Promise.all([
+					captureTaskPatch(
+						taskMachines,
+						WorkspaceId(target.providerRef as string),
+					),
+					references.length
+						? readAuthorizedTaskChecks({
+								machines: taskMachines,
+								task: target,
+								ownerId: scope.userId,
+								projectId: scope.projectId as string,
+								references,
+								signal,
+							})
+						: Promise.resolve(null),
+				]),
+			);
+			return {
+				taskId: target.id,
+				diff: taskPatchPreview(patch, start),
+				summary: agentTaskSummaryPage(
+					lastAgentMessageText(sessionItemsFromUnknown(target.items)) ??
+						target.taskSummary,
+				),
+				checks,
+				verificationReferences: references,
+				verificationAssignment: assignment,
+				remainingReferences: discovered.references.filter(
+					(reference) => !references.includes(reference),
+				),
+				failedAttemptReferences: discovered.failedReferences.slice(-8),
+				failedAttemptsOmitted: Math.max(
+					0,
+					discovered.failedReferences.length - 8,
+				),
+				discoveryIncomplete: discovered.incomplete || checkCalls.length > 64,
+				instruction:
+					"Check every required command and owned source against the original contract. Missing, incomplete or stale evidence is not success; retrieve retained outputs without waking the builder. Follow remaining references and diff/summary cursors before acceptance.",
+			};
+		}
+		if (request.tool === "read_task_summary") {
+			if (
+				target.userId !== scope.userId ||
+				target.projectId !== scope.projectId
+			)
+				throw new Error("The task summary is not available in this project.");
+			return {
+				taskId: target.id,
+				state: target.taskState,
+				...agentTaskSummaryPage(
+					lastAgentMessageText(sessionItemsFromUnknown(target.items)) ??
+						target.taskSummary,
+					request.arguments.start,
+				),
+			};
+		}
+		if (request.tool === "read_task_checks") {
+			const { readAuthorizedTaskChecks } = yield* Effect.tryPromise(
+				() => import("./task-output-evidence"),
+			);
+			return yield* Effect.tryPromise(() =>
+				readAuthorizedTaskChecks({
+					machines: machinesForAgentSession(machines, target),
+					task: target,
+					ownerId: scope.userId,
+					projectId: scope.projectId as string,
+					references: request.arguments.references,
+					signal: control?.signal ?? AbortSignal.timeout(20000),
+				}),
+			);
+		}
 		if (request.tool === "read_task_output") {
 			const { readAuthorizedTaskOutput } = yield* Effect.tryPromise(
 				() => import("./task-output-evidence"),
@@ -1063,14 +1260,9 @@ export function runAgentTaskTool(
 					WorkspaceId(target.providerRef as string),
 				),
 			);
-			const diff = patch.bytes.toString("utf8");
 			return {
 				taskId: target.id,
-				diff: diff.slice(start, start + 60_000),
-				truncated: diff.length > start + 60_000,
-				nextStart: diff.length > start + 60_000 ? start + 60_000 : null,
-				sha256: patch.sha256,
-				base: patch.base,
+				...taskPatchPreview(patch, start),
 			};
 		}
 		if (request.tool === "mark_task_reviewed") {
@@ -1086,12 +1278,68 @@ export function runAgentTaskTool(
 			}
 			if (!target.providerRef || !target.parentSessionId)
 				throw new Error("Writable review workspace is unavailable.");
+			const assignment = yield* Effect.tryPromise(() =>
+				assignedTaskVerification(
+					scope.userId,
+					scope.projectId as string,
+					target.id,
+				),
+			);
+			if (assignment && request.arguments.verificationReferences === undefined)
+				throw new Error(
+					"Assigned verification requires current complete check receipts before acceptance.",
+				);
+			if (request.arguments.verificationReferences !== undefined) {
+				const references = z
+					.array(z.uuid())
+					.min(1)
+					.max(8)
+					.parse(request.arguments.verificationReferences);
+				const { readAuthorizedTaskChecks, requireCurrentTaskCheck } =
+					yield* Effect.tryPromise(() => import("./task-output-evidence"));
+				const bundle = yield* Effect.tryPromise(() =>
+					readAuthorizedTaskChecks({
+						machines: machinesForAgentSession(machines, target),
+						task: target,
+						ownerId: scope.userId,
+						projectId: scope.projectId as string,
+						references,
+						signal: control?.signal ?? AbortSignal.timeout(20000),
+					}),
+				);
+				for (const check of bundle.checks) {
+					const proof =
+						check.sourceProof === null
+							? null
+							: bundle.sourceProofs[check.sourceProof];
+					requireCurrentTaskCheck({
+						completion: check.completion,
+						verification: proof,
+						sourcesCurrent: proof?.sourcesCurrent,
+					});
+				}
+				if (assignment)
+					requireAssignedTaskChecks(
+						assignment,
+						bundle.checks.map((check) => ({
+							command: check.command,
+							sourcePaths:
+								check.sourceProof === null
+									? []
+									: bundle.sourceProofs[check.sourceProof].after.sources.map(
+											(source) => source.path,
+										),
+						})),
+					);
+			}
 			const expectedSha256 = taskToolString(
 				request.arguments,
 				"expectedSha256",
 			);
 			if (!/^[a-f0-9]{64}$/.test(expectedSha256))
-				throw new Error("Provide the exact patch hash from inspect_task_diff.");
+				throw new Error(
+					"Provide the exact patch hash from the inspected diff receipt.",
+				);
 			const patch = yield* Effect.tryPromise(() =>
 				captureTaskPatch(
 					machinesForAgentSession(machines, target),
@@ -1109,11 +1357,33 @@ export function runAgentTaskTool(
 					base: patch.base,
 				}),
 			);
+			const staging =
+				control && !parent.parentSessionId && parent.candidateIndex == null
+					? yield* Effect.tryPromise(async () => {
+							const { stageReviewedBatchTask } = await import(
+								"./automated-task-integration"
+							);
+							return stageReviewedBatchTask(
+								machines,
+								parent,
+								{ taskId: target.id, sha256: patch.sha256, base: patch.base },
+								control,
+							).catch(() => {
+								control.signal.throwIfAborted();
+								return {
+									status: "unavailable",
+									instruction:
+										"Acceptance is saved. Inspect the batch integration task before continuing; automatic staging was unavailable and no acceptance was replayed.",
+								};
+							});
+						})
+					: null;
 			return {
 				taskId: target.id,
 				reviewState: "reviewed",
 				sha256: patch.sha256,
 				base: patch.base,
+				...(staging ? { integration: staging } : {}),
 			};
 		}
 		if (request.tool === "select_competition_winner") {

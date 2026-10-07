@@ -543,3 +543,143 @@ with a shorter explicit critical-path policy; trivial or genuinely coupled edits
 may still use one builder. Local checks: 278 files / 1,432 passes / five platform
 skips, targeted updated context regressions, typecheck, fresh production build with
 its existing chunk warning, scoped Biome and diff check. No live win is implied.
+
+Trial `d805347a-1d7c-43ab-be7a-539075b9c117` passed all **562 protected assertions**
+in **349,187 ms**, using **993,436 input / 13,096 output tokens** (**1,006,532
+total**, 590,208 cache-read). Three independent builders ran concurrently in
+separate task VMs; the leader reviewed the first result before the others finished.
+Main-agent complete-patch review passed, including allowed literal-percent paths,
+error ordering, prototype-safe keys, detached service objects and the six-file
+scope. This is not a performance win. Owned resources and exact temporary grant
+were removed at 2026-10-06 05:54:57 UTC; unrelated resources were preserved.
+
+The next candidate uses Git's literal-path/no-index diff to inspect nonignored
+untracked files as well as staged and unstaged changes, without changing the real
+index, invoking text converters, or following untracked symlinks. Real-Git tests
+cover awkward filenames, binary files, ignored secrets and external symlink targets.
+Uncommon tool schemas load through existing deferred discovery; editing, required
+checks and task review remain immediately available. Complete bootstrap guidance
+still reaches first inference intact. After a completed model-initiated preflight
+read, large referenced-document bodies can move to the existing encrypted archive,
+without summarization; exact recovery, source hashes, instructions and opaque
+reasoning remain available. Matching stale active-body markers become recoverable
+receipts rather than falsely claiming the body is still in context. Pending reads,
+bootstrap reads and explicit tool failures do not trigger archival. These changes
+are not a verified live improvement yet.
+
+Trial `14af1c8a-e1a6-450b-8ab5-907039609c79` passed **562 protected assertions**
+in **315,709 ms**, using **923,156 input / 11,851 output tokens** (**935,007 total**,
+576,128 cache-read). Main-agent complete-patch review passed: whole-string names,
+ordered errors, prototype-safe own keys, exact percent-encoding predicate including
+valid literal-percent neighbors, detached service objects and only the six allowed
+files. Complete new-file inspection worked without a redundant shell diff. Mandatory
+PLAN rereads and deep reuse investigation still dominated builder context; later
+combined inspection remained a separate model round trip. No joint performance win.
+Owned resources and exact temporary grant were removed at 2026-10-06 06:13:14 UTC;
+the three unrelated VMs and two snapshots were preserved. Local candidate checks
+passed 278 files / 1,437 tests with five platform skips, typecheck, build and lint.
+
+Next candidate returns the already captured combined patch directly with successful
+integration check receipts. Shared bounded pagination preserves full-patch hash/base;
+incomplete pages still require continuation, changed work still fails hash-bound
+acceptance, and the leader must still review the original contract. Independent
+review acknowledgements and creation of an unstarted integration draft may share
+one batch; importing waits for successful acknowledgement. Initial-read guidance is
+made explicit for builders, without claiming incomplete pages or archived receipts
+are document bodies. No verifier, model, reasoning level or required check changed.
+
+Trial `5c4a5aaa-1bea-4ecd-970c-aa4cf799fd54` passed **562 protected assertions**
+in **419,665 ms**, using **742,914 input / 13,918 output tokens** (**756,832 total**,
+456,576 cache-read). Main-agent full-patch review passed, including prototype-safe
+keys, whole-string names, exact allowed-path neighbors, ordered errors, detached
+outputs and the six-file scope. The combined diff was returned directly with
+integration results. One builder avoided the repeated PLAN read; two did not.
+The last combined review remained slow. Local checks passed 278 files / 1,438 tests
+with five platform skips, typecheck/build/scoped lint. Owned resources and exact
+temporary grant removed at 2026-10-06 06:29:52 UTC; unrelated resources preserved.
+Neither performance target was met.
+
+The next candidate lets the model request scoped preflight rather than injecting
+root-only bootstrap reads that prompted duplicate reads. Required guidance remains
+available through the same authorized tool and must be read completely. Task-status
+receipts omit assignments by default with explicit opt-in; UI task data is unchanged.
+Integration captures the imported patch before checks and again afterward, returning
+whether verification changed it. Existing exact-source reviews remain useful for an
+unchanged integration; combined ownership, interactions, complete checks and final
+hash-bound acceptance still require review. Changed combined code requires renewed
+review. No checks or correctness requirements are removed.
+
+Trial `174ce046-9fa9-4d15-9a42-c3e8f7cc2e62` ended in **452,164 ms** with
+**844,893 input / 12,950 output tokens** (**857,843 total**, 482,816 cache-read).
+One builder failed at the provider boundary; the leader launched a replacement.
+The frozen harness gate rejected the run because every builder must finish and
+be reviewed before grading. It therefore has no protected-assertion or independent
+code-quality pass and is not a performance win. Owned disposable resources and
+the exact temporary grant were withdrawn at 2026-10-06 06:42:57 UTC; unrelated
+resources were preserved. Model-requested preflight did not prevent PLAN rereads.
+
+Next candidate reuses complete guidance/configuration bodies through the existing
+file-read tools only after checking the current checkout hash. Active bodies yield
+an already-in-context receipt; archived bodies yield an accurate recoverable-read
+receipt, not a claim that text remains active. Explicit replay, changed hashes,
+incomplete prior reads, ordinary source files and continuation pages still read
+actual text. It reuses the existing guidance parsers rather than introducing a
+separate cache or skipping required reading. Frozen model/settings/checks unchanged.
+
+Trial `6690ce15-bbbf-4f76-a543-7689432de018` settled its complete task tree,
+but the evaluator never produced a grade or final result. Its process remained
+waiting for more than eight hours. It is an infrastructure failure, not a win;
+completed task timestamps are not a substitute for verified end-to-end timing.
+Read-only investigation showed SDK background polling had no shared cancellation
+signal. Observed evidence was saved privately before closing the exact disposable
+tree, deleting its project and withdrawing its temporary allowance. Other resources
+were preserved. No protected or independent code-quality pass is claimed.
+
+The next candidate makes independent contracts eligible for parallelism rather
+than forcing a split. The lead weighs useful concurrent implementation against
+orientation, review and integration; a sole coherent builder explicitly owns the
+complete required verification. Substantial independent work can still launch in
+parallel, and early finishers remain reviewable while siblings run. Complete
+guidance is retained during source investigation instead of being archived after
+the first read. Both policy/retention regressions failed before and passed after
+the change; policy tests do not prove a live speed improvement.
+
+Evaluation transport now supplies one operation cancellation signal to the SDK's
+documented fetch override, including background polls and preserving individual
+request cancellation. Cleanup uses a separate bounded signal. An actual SDK with
+fixture HTTP 202 responses verifies cancellation stops further transport calls;
+remote provider operations can still finish after cancellation and are not blindly
+replayed. An explicitly ungraded observation checkpoint precedes patch export and
+grading. These changes do not alter the verifier, model, reasoning, token limit,
+required project checks or acceptance gates.
+
+Trial `3742aa40-963f-4d85-944c-e0642e690cd7` passed **562 protected assertions**
+in **501,483 ms**, with **660,735 input / 9,848 output tokens** (**670,583 total**,
+344,576 cache-read). Main-agent full-patch review passed: exactly six new allowed
+files, root-only family detection, strict whole-string names, ordered errors,
+prototype-safe exact own values, detached service objects and valid literal-percent
+neighbors. The lead chose one coherent builder with final verification ownership,
+avoiding a separate integration machine. No complete PLAN reread occurred in the
+builder's initial implementation. However, a generated test's TypeScript error
+caused repeat verification, and missing foreground completion metadata caused an
+unnecessary leader/builder evidence follow-up. Neither performance target was met.
+Disposable machines, template snapshot and exact temporary grant were removed at
+2026-10-06 15:50:46 UTC. Unrelated resources were preserved. No native inference ran.
+
+Follow-up fixes retain foreground command exit/stopped receipts beside existing
+session-owned output artifacts, readable from either stream. Missing legacy receipts
+remain explicitly unavailable; malformed receipts cannot become success. A real
+local subprocess regression failed before and passed after this correction.
+Patch verification now has optional fast preflight commands before final checks,
+reusing the existing bounded check executor rather than adding a scheduler.
+Failed/stopped preflight preserves its actual evidence and leaves final checks
+unrun, not passed. Final checks still run after successful prerequisites, and all
+commands retain the shared eight-command limit. These follow-up fixes are locally
+verified, not included in the live timing above or claimed as a measured speedup.
+
+Final local verification for these follow-up fixes: **279 test files passed,
+1,447 tests passed, five platform skips**. Typecheck (including workflow types),
+production build, full lint and `git diff --check` passed. Foreground completion
+coverage uses real subprocesses through the authorized child-output reader, for
+success, failure, timeout, missing legacy metadata and malformed receipts. No
+production deployment, schema changes, commits or pushes were performed.

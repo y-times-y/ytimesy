@@ -15,13 +15,21 @@ const completeDocument = z
 
 const implementationDecisions = new Set([
 	"create_task",
+	"launch_ready_tasks",
 	"apply_patches",
 	"apply_patch",
 	"replace_text",
 	"create_file",
 ]);
+type ArchivedGuidanceBody = {
+	reference: string;
+	messageIndex: number;
+	toolCallId: string;
+	characters: number;
+	instruction: string;
+};
 
-/** Retain complete guidance through preflight; a completed implementation decision permits recoverable archival. */
+/** Keep guidance during investigation; a later completed implementation/delegation decision permits recoverable archival. */
 export async function archiveConsumedGuidance(
 	messages: ModelMessage[],
 	archive?: (messages: ModelMessage[]) => Promise<string>,
@@ -33,6 +41,9 @@ export async function archiveConsumedGuidance(
 			message.content.some(
 				(part) =>
 					part.type === "tool-result" &&
+					!part.toolCallId.startsWith("call_prefetch_") &&
+					part.output.type !== "error-text" &&
+					part.output.type !== "error-json" &&
 					implementationDecisions.has(part.toolName),
 			)
 				? index
@@ -40,6 +51,7 @@ export async function archiveConsumedGuidance(
 		-1,
 	);
 	let reference: string | undefined;
+	const archivedDocuments = new Map<string, ArchivedGuidanceBody>();
 	const projected: ModelMessage[] = [];
 	for (const [messageIndex, message] of messages.entries()) {
 		if (message.role !== "tool" || messageIndex >= lastDecision) {
@@ -71,17 +83,19 @@ export async function archiveConsumedGuidance(
 				}
 				reference ??= await archive(messages);
 				const { content: body, ...metadata } = document.data;
-				documents.push({
-					...metadata,
-					archivedBody: {
-						reference,
-						messageIndex,
-						toolCallId: part.toolCallId,
-						characters: Array.from(body).length,
-						instruction:
-							"Previously supplied complete body, now archived without summarization; archiving does not undo that reading. A fresh read_repository_guidance verifies its current hash without replaying an unchanged body. Recover exact text with search_context_history/read_context_archive or reread this path when a specific detail has been forgotten. This receipt is not the body or current checkout proof.",
-					},
-				});
+				const archivedBody = {
+					reference,
+					messageIndex,
+					toolCallId: part.toolCallId,
+					characters: Array.from(body).length,
+					instruction:
+						"Previously supplied complete body, now archived without summarization; archiving does not undo that reading. A fresh read_repository_guidance verifies its current hash without replaying an unchanged body. Recover exact text with search_context_history/read_context_archive or reread this path when a specific detail has been forgotten. This receipt is not the body or current checkout proof.",
+				};
+				archivedDocuments.set(
+					JSON.stringify([metadata.path, metadata.sha256]),
+					archivedBody,
+				);
+				documents.push({ ...metadata, archivedBody });
 				changed = true;
 			}
 			content.push(
@@ -98,5 +112,48 @@ export async function archiveConsumedGuidance(
 		}
 		projected.push({ ...message, content });
 	}
-	return reference ? projected : messages;
+	if (!reference) return messages;
+	return projected.map((message) => {
+		if (message.role !== "tool") return message;
+		const content = message.content.map((part) => {
+			if (
+				part.type !== "tool-result" ||
+				part.toolName !== "read_repository_guidance" ||
+				part.output.type !== "json"
+			)
+				return part;
+			const packet = guidancePacket.safeParse(part.output.value);
+			if (!packet.success) return part;
+			return {
+				...part,
+				output: {
+					type: "json" as const,
+					value: {
+						...packet.data,
+						referencedDocuments: packet.data.referencedDocuments.map(
+							(entry) => {
+								if (
+									!entry ||
+									typeof entry !== "object" ||
+									Array.isArray(entry) ||
+									entry.alreadyInContext !== true ||
+									entry.nextStart !== null
+								)
+									return entry;
+								const archivedBody = archivedDocuments.get(
+									JSON.stringify([entry.path, entry.sha256]),
+								);
+								if (!archivedBody) return entry;
+								const { alreadyInContext: _consumed, ...metadata } = entry;
+								return { ...metadata, previouslyRead: true, archivedBody };
+							},
+						),
+					},
+				},
+			};
+		});
+		return content.every((part, index) => part === message.content[index])
+			? message
+			: { ...message, content };
+	});
 }

@@ -1,10 +1,12 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { subscriptionTurnRevision } from "#/domain/subscription-turn";
 import {
+	type ApiTurn,
 	claimApiTurn,
 	enqueueApiTurn,
 	inheritedSubscriptionSettings,
 	previousTurnMessages,
+	renewApiTurn,
 } from "./api-turns";
 
 const mocks = vi.hoisted(() => ({ query: vi.fn(), release: vi.fn() }));
@@ -25,6 +27,35 @@ const input = {
 	messages: [],
 	items: [],
 };
+
+it("retries a disconnected heartbeat once with the same fenced turn identity", async () => {
+	const error = Object.assign(new Error("private connection details"), {
+		code: "ECONNRESET",
+	});
+	mocks.query.mockRejectedValueOnce(error).mockResolvedValue({ rowCount: 1 });
+	expect(await renewApiTurn({ id: "turn", lease_id: "lease" } as ApiTurn)).toBe(
+		true,
+	);
+	expect(mocks.query).toHaveBeenCalledTimes(2);
+	expect(mocks.query.mock.calls[0]).toEqual(mocks.query.mock.calls[1]);
+	expect(mocks.query.mock.calls[0][0]).toContain(
+		"heartbeat_at>=now()-interval '45 seconds'",
+	);
+});
+
+it("does not retry a rejected lease or an authentication error", async () => {
+	const turn = { id: "turn", lease_id: "lease" } as ApiTurn;
+	mocks.query.mockResolvedValueOnce({ rowCount: 0 });
+	expect(await renewApiTurn(turn)).toBe(false);
+	expect(mocks.query).toHaveBeenCalledOnce();
+	mocks.query.mockReset();
+	const error = Object.assign(new Error("private credentials"), {
+		code: "28P01",
+	});
+	mocks.query.mockRejectedValue(error);
+	await expect(renewApiTurn(turn)).rejects.toBe(error);
+	expect(mocks.query).toHaveBeenCalledOnce();
+});
 
 it("bounds admission in the actual transaction before acquiring its lock", async () => {
 	mocks.query.mockImplementation(async (sql: string) => ({

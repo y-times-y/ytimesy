@@ -36,10 +36,16 @@ import { readableHistory } from "./api-agent-context";
 import { apiAgentFileTools } from "./api-agent-file-tools";
 import { apiAgentLanguageTools } from "./api-agent-language-tools";
 import { scopedShellCommand } from "./api-command-scope";
+import { batchedAgentReads } from "./batched-agent-reads";
 import { runAgentTaskTool } from "./harness-workspace-session";
 import { loadCloudProjectMemoryDocument } from "./project-knowledge";
 import { projectMemoryTools } from "./project-memory-tools";
 import { inspectProjectSourceEvidence } from "./project-source-evidence";
+import {
+	launchReadyTasks,
+	readyTaskLaunch,
+	readyTaskPrompt,
+} from "./ready-task-launch";
 import { repositoryGuidanceTool } from "./repository-guidance";
 import { repositoryToolPath as repositorySearchPath } from "./repository-tool-path";
 import { scopedToolExecution } from "./tool-execution-identity";
@@ -325,6 +331,62 @@ export function apiAgentTools(
 				),
 		});
 	}
+	const createTask = executionIdentity.wrap({ create_task: tools.create_task })
+		.create_task.execute;
+	tools.launch_ready_tasks = tool({
+		description:
+			"Launch two to five substantial independent writable contracts with unique id, disjoint owns, title, standalone prompt, focusedChecks and exact verificationPaths. Assign finalChecks once; duplicate focused/final commands need explicit repository-required perBuilderChecks. A server-created unstarted integration draft is returned for root batches; accepting early finishers stages patches there, final checks wait for every source. Never duplicate this draft. Optional performancePlan rejects estimated splits whose savings do not cover added coordination; estimates are not measured guarantees. Prefer one coherent builder for small/coupled work. Requirements are not proof; preserve every user/repository check. Existing isolated machines, admission and journals apply. Inspect every outcome; never replay uncertain effects.",
+		inputSchema: readyTaskLaunch,
+		execute: (request, options) =>
+			once(options.toolCallId, () =>
+				launchReadyTasks({
+					request,
+					available: () => availableChildSlots(session.userId, session.id),
+					signal: options.abortSignal ?? signal,
+					prepareIntegration:
+						!session.parentSessionId && session.candidateIndex == null
+							? async () => {
+									if (!createTask)
+										throw new Error("Task creation is unavailable.");
+									return createTask(
+										{
+											title: "Integrate reviewed changes",
+											prompt:
+												"Integrate only the exact reviewed siblings from this ready batch. Preserve every original requirement. Run the combined required checks after all batch sources are reviewed; the lead must accept the combined diff.",
+											startImmediately: false,
+											placement: "fresh",
+											access: "read_write",
+											execution: "parallel",
+										},
+										{
+											...options,
+											toolCallId: `${options.toolCallId}:integration`,
+										},
+									);
+								}
+							: undefined,
+					launch: async (task, index) => {
+						if (!createTask) throw new Error("Task creation is unavailable.");
+						return createTask(
+							{
+								title: task.title,
+								prompt: readyTaskPrompt(task, readyTaskLaunch.parse(request)),
+								...(task.modelId ? { modelId: task.modelId } : {}),
+								...(task.harness ? { harness: task.harness } : {}),
+								startImmediately: true,
+								placement: "fresh",
+								access: "read_write",
+								execution: "parallel",
+							},
+							{
+								...options,
+								toolCallId: `${options.toolCallId}:child:${index}`,
+							},
+						);
+					},
+				}),
+			),
+	});
 	Object.assign(
 		tools,
 		apiAgentFileTools({
@@ -336,9 +398,49 @@ export function apiAgentTools(
 			once,
 			verifyBatch: readOnly
 				? undefined
-				: async ({ formatCommand, commands, maxSeconds }, id) => {
+				: async (
+						{
+							formatCommand,
+							preflightCommands,
+							commands,
+							maxSeconds,
+							parallelChecks,
+							groups,
+							sourcePaths,
+							outputView,
+						},
+						id,
+					) => {
+						const runChecks = async (
+							stageCommands: string[],
+							stage: string,
+						) => {
+							if (!tools.run_checks.execute)
+								throw new Error(
+									"Verification executor is unavailable; inspect the edited checkout.",
+								);
+							return tools.run_checks.execute(
+								{
+									commands: stageCommands,
+									maxSeconds,
+									parallel: stage === "verification" && parallelChecks,
+									groups: stage === "verification" ? groups : undefined,
+									sourcePaths,
+									outputView,
+								},
+								{
+									toolCallId: `${id}:${stage}`,
+									messages: [],
+									abortSignal: signal,
+									context: {},
+								},
+							);
+						};
 						return verifyPatchedCheckout({
 							signal,
+							preflight: preflightCommands
+								? () => runChecks(preflightCommands, "preflight")
+								: undefined,
 							format: formatCommand
 								? async () => {
 										const { cwd } = await workspace();
@@ -353,21 +455,7 @@ export function apiAgentTools(
 										);
 									}
 								: undefined,
-							check: async () => {
-								if (!tools.run_checks.execute)
-									throw new Error(
-										"Verification executor is unavailable; inspect the edited checkout.",
-									);
-								return tools.run_checks.execute(
-									{ commands, maxSeconds },
-									{
-										toolCallId: `${id}:verification`,
-										messages: [],
-										abortSignal: signal,
-										context: {},
-									},
-								);
-							},
+							check: () => runChecks(commands, "verification"),
 						});
 					},
 		}),
@@ -395,5 +483,6 @@ export function apiAgentTools(
 			once,
 		}),
 	);
+	tools.batch_read = batchedAgentReads(executionIdentity.wrap(tools), signal);
 	return executionIdentity.wrap(tools);
 }

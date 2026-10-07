@@ -176,7 +176,31 @@ Development evidence: the private bucket was created and the additive checkpoint
 
 The disposable daily-flow drill then deleted a real builder execution VM and removed only that chat's native runner directory after capturing its checkpoint. Sending to the same chat created a replacement executor, restored both untracked implementation files, preserved the exact native thread ID, and reran the existing Node test successfully without recreating files. The shared runner VM itself was retained to protect sibling chats: physical loss and replacement of that entire host is not separately live-tested. Existing user VMs and chats were preserved.
 
+### Verification ownership — 2026-10-06
+
+The cloud batch launcher requires disjoint write ownership, focused checks and exact verification files for each builder, and one combined final-check assignment. Duplicate focused/final commands reject before launch unless explicitly required by repository policy. Assignments use the existing owner-scoped durable command journal, not an additional schema. Batched writer acceptance requires current successful receipts for every assigned command and file, alongside unchanged exact-hash review. `read_task_handoff` combines bounded diff, summary and authorized check evidence without another model turn, including recovery of clipped receipt identities. Deterministic integration carries final requirements from the journal and retains unchanged baseline checks. Declarations do not prove complete changed-file coverage or semantic correctness; full original-contract review remains mandatory. Over-limit integration uses a normal builder instead of omitting requirements. Local tests, including real PGlite queries, passed; no live speed improvement or deployment of this latest workflow is established. See [retained trials and optimization boundaries](docs/research/harness-optimization-progress-2026-10-06.md).
+
 ### Daily coding-flow verification — 2026-09-30
+
+Cloud root coordination now collects completed-child review evidence at model safe
+points, once per observed task revision. Packets retain complete bounded diff pages,
+summary cursors, actual check status, source-currentness, assignments and unresolved
+evidence; full logs remain child-scoped retrievable artifacts. Conversation history
+and opaque reasoning are append-only. Acceptance independently checks receipts and
+the inspected hash; an automatic packet is never semantic acceptance.
+
+Successful ready batches create one journal-bound unstarted integration draft.
+Accepting an early finisher stages that exact patch in the isolated integration
+checkout while slower builders continue. Staging uses normal admission, records a
+checkout fingerprint and releases its active task slot afterward; no model turn or
+final checks start. Finalization requires every batch source, unchanged staging
+fingerprints and current exact reviews, then retains the clean-baseline and original
+required checks. Changed or uncertain work stays available for repair, not replay.
+Optional explicit timing estimates reject splits whose savings cannot cover added
+coordination; estimates are advisory, not measured guarantees. Server root paths
+support this pipeline; native runtime adapters keep their existing manual handoff.
+No new schema or persistent compute is introduced. Live performance is recorded in
+the dated optimization log, separately from local tests.
 
 A subscription-backed read-only lead created one isolated writable builder, reviewed its two-file diff and test evidence, and marked it reviewed. Browser reload retained the conversation; Overview showed the completed child with a struck-through title. Early attempts exposed builders reinterpreting the generic lead policy and delegating the entire task again. Preparation now appends the session's explicit role after shared policy for both native runtimes; API turns use the same role function. The corrected live run produced exactly one builder with no descendants.
 

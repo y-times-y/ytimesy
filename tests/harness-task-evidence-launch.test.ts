@@ -12,6 +12,36 @@ const fake = vi.hoisted(() => ({
 	send: vi.fn(),
 	owner: vi.fn(),
 	state: vi.fn(),
+	checks: vi.fn(),
+	retained: vi.fn(),
+	patch: vi.fn(),
+	assignment: vi.fn(),
+	integrate: vi.fn(),
+	reserved: vi.fn(),
+}));
+vi.mock("#/server/services/automated-task-integration", () => ({
+	integrateTaskDraft: fake.integrate,
+	stageReviewedBatchTask: async () => null,
+}));
+vi.mock("#/server/adapters/agent-task-command-receipts", async (original) => ({
+	...(await original<
+		typeof import("#/server/adapters/agent-task-command-receipts")
+	>()),
+	retainedTaskCheckResults: fake.retained,
+	assignedTaskVerification: fake.assignment,
+	isServerControlledIntegration: fake.reserved,
+}));
+vi.mock("#/server/services/task-output-evidence", async (original) => ({
+	...(await original<
+		typeof import("#/server/services/task-output-evidence")
+	>()),
+	readAuthorizedTaskChecks: fake.checks,
+}));
+vi.mock("#/server/services/reviewed-task-import", async (original) => ({
+	...(await original<
+		typeof import("#/server/services/reviewed-task-import")
+	>()),
+	captureTaskPatch: fake.patch,
 }));
 vi.mock("#/server/adapters/agent-sessions", () => ({
 	descendantAgentSessions: fake.descendants,
@@ -45,7 +75,7 @@ const child = {
 	taskState: "draft",
 	providerRef: null,
 } as AgentSessionRecord;
-beforeEach(() => {
+beforeEach(async () => {
 	vi.resetAllMocks();
 	fake.descendants.mockResolvedValue([child]);
 	fake.open.mockResolvedValue(child);
@@ -53,9 +83,35 @@ beforeEach(() => {
 	fake.send.mockResolvedValue(undefined);
 	fake.owner.mockResolvedValue(child);
 	fake.state.mockResolvedValue(undefined);
+	fake.retained.mockResolvedValue(new Map());
+	fake.assignment.mockResolvedValue(null);
+	fake.reserved.mockResolvedValue(false);
+	fake.checks.mockImplementation(
+		(
+			await vi.importActual<
+				typeof import("#/server/services/task-output-evidence")
+			>("#/server/services/task-output-evidence")
+		).readAuthorizedTaskChecks,
+	);
+	fake.patch.mockImplementation(
+		(
+			await vi.importActual<
+				typeof import("#/server/services/reviewed-task-import")
+			>("#/server/services/reviewed-task-import")
+		).captureTaskPatch,
+	);
 });
 const call = (
-	tool: "create_task" | "read_task_output",
+	tool:
+		| "create_task"
+		| "read_task_output"
+		| "read_task_summary"
+		| "read_task_handoff"
+		| "mark_task_reviewed"
+		| "start_task"
+		| "send_task_message"
+		| "request_task_wrap_up"
+		| "edit_task",
 	args: Record<string, unknown>,
 	machines = {} as WorkspaceMachines,
 	userId = "owner",
@@ -68,6 +124,115 @@ const call = (
 			{ id: "call", tool, arguments: args },
 		),
 	);
+
+it.each([
+	"start_task",
+	"send_task_message",
+	"request_task_wrap_up",
+	"edit_task",
+] as const)(
+	"blocks %s on the server integration draft before model dispatch",
+	async (tool) => {
+		fake.reserved.mockResolvedValue(true);
+		await expect(
+			call(tool, {
+				taskId: child.id,
+				message: "Wait for the batch",
+				title: "Changed",
+				prompt: "Changed",
+			}),
+		).rejects.toThrow("server-controlled");
+		expect(fake.prepare).not.toHaveBeenCalled();
+		expect(fake.send).not.toHaveBeenCalled();
+	},
+);
+
+it("retains durable final checks and source bindings even when the leader omits them", async () => {
+	fake.assignment.mockResolvedValue({
+		commands: ["focused"],
+		sourcePaths: ["src/a.ts"],
+		finalChecks: ["required contract"],
+	});
+	fake.integrate.mockResolvedValue({ status: "done" });
+	await Effect.runPromise(
+		runAgentTaskTool(
+			{} as WorkspaceMachines,
+			{
+				userId: "owner",
+				projectId: "project",
+				sessionId: "lead",
+				harnessId: "api",
+			},
+			parent,
+			{
+				id: "integration",
+				tool: "integrate_reviewed_tasks",
+				arguments: {
+					taskId: "integration-child",
+					sources: [
+						{ taskId: "child", sha256: "a".repeat(64), base: "b".repeat(40) },
+					],
+					sourcePaths: ["src/extra.ts"],
+					additionalChecks: ["extra contract"],
+				},
+			},
+			{ turnId: "turn", signal: new AbortController().signal },
+		),
+	);
+	expect(fake.integrate.mock.calls[0]?.[5]).toEqual({
+		sourcePaths: ["src/a.ts", "src/extra.ts"],
+		additionalChecks: ["extra contract", "required contract"],
+	});
+});
+
+it("reads the complete latest child handoff without waking a model or requiring a VM", async () => {
+	const summary = `${"x".repeat(4000)}exact receipt reference`;
+	fake.descendants.mockResolvedValue([
+		{
+			...child,
+			taskState: "done",
+			taskSummary: "Short status preview",
+			items: [{ kind: "agentMessage", id: "final", text: summary }],
+		},
+	]);
+	await expect(call("read_task_summary", { taskId: "child" })).resolves.toEqual(
+		{
+			taskId: "child",
+			state: "done",
+			content: "x".repeat(4000),
+			start: 0,
+			nextStart: 4000,
+		},
+	);
+	await expect(
+		call("read_task_summary", { taskId: "child", start: 4000 }),
+	).resolves.toMatchObject({
+		content: "exact receipt reference",
+		nextStart: null,
+	});
+	await expect(
+		call("read_task_summary", { taskId: "unrelated" }),
+	).rejects.toThrow("descendant task");
+	await expect(
+		call("read_task_summary", { taskId: "child" }, undefined, "foreign"),
+	).rejects.toThrow("not available in this project");
+	expect(fake.prepare).not.toHaveBeenCalled();
+	expect(fake.send).not.toHaveBeenCalled();
+});
+
+it("rejects a mismatched descendant owner or project before exposing its summary", async () => {
+	for (const foreign of [
+		{ ...child, userId: "foreign" },
+		{ ...child, projectId: "unrelated-project" },
+	]) {
+		fake.descendants.mockResolvedValue([
+			{ ...foreign, taskSummary: "Private result" },
+		]);
+		await expect(
+			call("read_task_summary", { taskId: "child" }),
+		).rejects.toThrow("summary is not available in this project");
+	}
+});
 
 it("keeps ordinary creation draft-only and launches a complete ready draft through normal admission when requested", async () => {
 	const args = {
@@ -182,6 +347,197 @@ it("rejects unrelated tasks and foreign owners before reading any guest evidence
 		),
 	).rejects.toThrow("not available in this project");
 	expect(exec).not.toHaveBeenCalled();
+});
+
+it.each(["failed", "stale", "unbound"])(
+	"rejects %s supplied verification before accepting a writer",
+	async (failure) => {
+		fake.descendants.mockResolvedValue([
+			{
+				...child,
+				taskState: "done",
+				taskAccess: "read_write",
+				providerRef: "child-vm",
+			},
+		]);
+		const source = {
+			revision: "a".repeat(40),
+			dirty: true,
+			sources: [{ path: "source.ts", sha256: "b".repeat(64) }],
+		};
+		const reference = "631bb044-cf28-4409-8aab-dceeb230f24a";
+		const exec = vi
+			.fn()
+			.mockResolvedValueOnce({
+				exitCode: 0,
+				stdout: JSON.stringify([
+					{
+						stdout: {
+							reference,
+							content: "check output",
+							completion: {
+								status: failure === "failed" ? 1 : 0,
+								stopped: null,
+							},
+							...(failure === "unbound"
+								? {}
+								: {
+										verification: {
+											command: "test",
+											cwd: "/repo",
+											before: source,
+											after: source,
+											sourcesStable: true,
+										},
+									}),
+						},
+						stderr: {
+							reference,
+							content: "",
+							completion: {
+								status: failure === "failed" ? 1 : 0,
+								stopped: null,
+							},
+							...(failure === "unbound"
+								? {}
+								: {
+										verification: {
+											command: "test",
+											cwd: "/repo",
+											before: source,
+											after: source,
+											sourcesStable: true,
+										},
+									}),
+						},
+					},
+				]),
+			})
+			.mockResolvedValueOnce({
+				exitCode: 0,
+				stdout: JSON.stringify(
+					failure === "stale"
+						? {
+								...source,
+								sources: [{ path: "source.ts", sha256: "c".repeat(64) }],
+							}
+						: source,
+				),
+			});
+		await expect(
+			call(
+				"mark_task_reviewed",
+				{
+					taskId: "child",
+					expectedSha256: "d".repeat(64),
+					verificationReferences: [reference],
+				},
+				{ exec, ensureRunning: vi.fn() } as unknown as WorkspaceMachines,
+			),
+		).rejects.toThrow("current unchanged declared sources");
+		expect(fake.send).not.toHaveBeenCalled();
+		expect(exec).toHaveBeenCalledTimes(failure === "unbound" ? 1 : 2);
+	},
+);
+
+it("retrieves a completed handoff and durable check references in one read without inference", async () => {
+	const reference = "00000000-0000-4000-8000-000000000001";
+	const receipt = [{ command: "test", reference, exitCode: 0, stopped: null }];
+	fake.descendants.mockResolvedValue([
+		{
+			...child,
+			taskState: "done",
+			turnStatus: "completed",
+			providerRef: "vm-123",
+			taskSummary: "Implemented",
+			items: [
+				{
+					kind: "dynamicToolCall",
+					id: "turn:check",
+					tool: "run_checks",
+					status: "completed",
+					output: "clipped UI output",
+				},
+			],
+		},
+	]);
+	fake.retained.mockResolvedValue(new Map([["turn:check", receipt]]));
+	fake.patch.mockResolvedValue({
+		base: "base",
+		sha256: "a".repeat(64),
+		bytes: Buffer.from("patch"),
+	});
+	fake.checks.mockResolvedValue({
+		checks: [{ reference, completion: { status: 0, stopped: null } }],
+		sourceProofs: [],
+	});
+	const machines = {
+		ensureRunning: vi.fn(async () => {}),
+	} as unknown as WorkspaceMachines;
+	await expect(
+		call("read_task_handoff", { taskId: "child" }, machines),
+	).resolves.toMatchObject({
+		taskId: "child",
+		verificationReferences: [reference],
+		remainingReferences: [],
+		discoveryIncomplete: false,
+		summary: { content: "Implemented" },
+	});
+	expect(fake.retained).toHaveBeenCalledWith({
+		userId: "owner",
+		projectId: "project",
+		sessionId: "child",
+		requestIds: ["turn:check"],
+	});
+	expect(fake.checks).toHaveBeenCalledWith(
+		expect.objectContaining({
+			references: [reference],
+			ownerId: "owner",
+			projectId: "project",
+		}),
+	);
+	expect(fake.prepare).not.toHaveBeenCalled();
+	expect(fake.send).not.toHaveBeenCalled();
+});
+
+it("rejects foreign, incomplete and unrelated handoffs before any evidence or VM access", async () => {
+	await expect(call("read_task_handoff", { taskId: "child" })).rejects.toThrow(
+		"completed task",
+	);
+	fake.descendants.mockResolvedValue([
+		{ ...child, userId: "someone-else", taskState: "done" },
+	]);
+	await expect(call("read_task_handoff", { taskId: "child" })).rejects.toThrow(
+		"not available in this project",
+	);
+	await expect(
+		call("read_task_handoff", { taskId: "unrelated" }),
+	).rejects.toThrow("descendant task");
+	expect(fake.retained).not.toHaveBeenCalled();
+	expect(fake.checks).not.toHaveBeenCalled();
+});
+
+it("requires verification receipts for durable assignments without weakening legacy review", async () => {
+	fake.descendants.mockResolvedValue([
+		{
+			...child,
+			taskState: "done",
+			taskAccess: "read_write",
+			providerRef: "vm-123",
+		},
+	]);
+	fake.assignment.mockResolvedValue({
+		commands: ["test"],
+		sourcePaths: ["src/a.ts"],
+		finalChecks: ["test all"],
+	});
+	await expect(
+		call("mark_task_reviewed", {
+			taskId: "child",
+			expectedSha256: "a".repeat(64),
+		}),
+	).rejects.toThrow("requires current complete check receipts");
+	expect(fake.patch).not.toHaveBeenCalled();
 });
 
 it("includes independently observed background completion and rejects malformed evidence references", async () => {

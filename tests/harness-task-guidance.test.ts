@@ -10,6 +10,13 @@ const fake = vi.hoisted(() => ({
 	capture: vi.fn(),
 	accept: vi.fn(),
 }));
+vi.mock("#/server/adapters/agent-task-command-receipts", async (original) => ({
+	...(await original<
+		typeof import("#/server/adapters/agent-task-command-receipts")
+	>()),
+	assignedTaskVerification: vi.fn(async () => null),
+	isServerControlledIntegration: vi.fn(async () => false),
+}));
 vi.mock("#/server/adapters/agent-sessions", () => ({
 	descendantAgentSessions: fake.descendants,
 }));

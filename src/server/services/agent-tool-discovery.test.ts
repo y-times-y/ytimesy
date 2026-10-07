@@ -13,6 +13,28 @@ const definition = () =>
 		execute: async () => ({}),
 	});
 
+it("offers Anthropic's preferred exact edit immediately without adding all edit aliases", () => {
+	const tools = {
+		replace_text: definition(),
+		apply_patches: definition(),
+		create_file: definition(),
+	};
+	const result = discoverableAgentTools(
+		tools,
+		[],
+		[],
+		"implementation",
+		"anthropic",
+	);
+	expect(result.replace_text.deferLoading).toBe(false);
+	expect(result.apply_patches.deferLoading).toBe(false);
+	expect(result.create_file.deferLoading).toBe(true);
+	expect(
+		discoverableAgentTools(tools, [], [], "implementation", "openai")
+			.replace_text.deferLoading,
+	).toBe(true);
+});
+
 it("keeps ordinary edits/checks/review immediate but lazily loads uncommon workflow schemas without losing permission or discovery", () => {
 	const tools = Object.fromEntries(
 		[
@@ -24,6 +46,7 @@ it("keeps ordinary edits/checks/review immediate but lazily loads uncommon workf
 			"apply_patches",
 			"run_checks",
 			"inspect_task_diff",
+			"read_task_summary",
 			"read_task_output",
 		].map((name) => [name, definition()]),
 	);
@@ -38,7 +61,11 @@ it("keeps ordinary edits/checks/review immediate but lazily loads uncommon workf
 		expect(lead[name].deferLoading).toBe(true);
 		expect(lead[name].execute).toBe(tools[name].execute);
 	}
-	for (const name of ["inspect_task_diff", "read_task_output"])
+	for (const name of [
+		"inspect_task_diff",
+		"read_task_output",
+		"read_task_summary",
+	])
 		expect(lead[name].deferLoading).toBe(false);
 	const builder = discoverableAgentTools(tools, [], [], "implementation");
 	for (const name of ["inspect_changes", "apply_patches", "run_checks"])

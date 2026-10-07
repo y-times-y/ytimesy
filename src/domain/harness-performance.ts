@@ -70,6 +70,8 @@ export const harnessModelMetric = z.object({
 	input_tokens: z.number().int().nonnegative().nullable(),
 	output_tokens: z.number().int().nonnegative().nullable(),
 	cache_read_tokens: z.number().int().nonnegative().nullable(),
+	prepared_prompt_characters: z.number().int().nonnegative().optional(),
+	prepared_tool_characters: z.number().int().nonnegative().optional(),
 	outcome: z.enum(["completed", "tool_calls", "limited", "failed"]),
 });
 export type HarnessModelMetric = z.infer<typeof harnessModelMetric>;

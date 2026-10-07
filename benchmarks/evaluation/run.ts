@@ -65,12 +65,15 @@ export async function runPairedEvaluation(input: {
 	const directory = resolve(input.outputPath, randomUUID());
 	await mkdir(directory, { recursive: true, mode: 0o700 });
 	await writeFile(join(directory, "protocol.json"), bytes, { mode: 0o600 });
-	const machines = createFreestyleWorkspaceMachines(key);
+	const operationSignal = input.signal ?? AbortSignal.timeout(45 * 60 * 1000);
+	const machines = createFreestyleWorkspaceMachines(key, {
+		signal: operationSignal,
+	});
 	const beforeQuota = await readCodexSubscriptionUsage(input.userId);
 	const results: unknown[] = [];
 	try {
 		for (const pair of pairedEvaluationSchedule(protocol)) {
-			input.signal?.throwIfAborted();
+			operationSignal.throwIfAborted();
 			const preparationStarted = Date.now();
 			// One clean prepared checkout yields both environments; coding starts only afterward.
 			const attempt = await openProductionEvaluation(
@@ -94,7 +97,7 @@ export async function runPairedEvaluation(input: {
 				for (const arm of pair.arms.filter(
 					(arm) => !input.arms || input.arms.includes(arm),
 				)) {
-					input.signal?.throwIfAborted();
+					operationSignal.throwIfAborted();
 					const started = Date.now();
 					let patches: string[] = [];
 					let evidence: unknown;
@@ -108,7 +111,7 @@ export async function runPairedEvaluation(input: {
 								snapshotId,
 								task: pair.task,
 								protocol,
-								signal: input.signal,
+								signal: operationSignal,
 							});
 							patches = native.patches;
 							evidence = { ...native, patches: undefined };
@@ -132,7 +135,7 @@ export async function runPairedEvaluation(input: {
 								productionEvaluationSnapshot(input.userId, attempt.rootId),
 							);
 							while (!observed.settled && Date.now() < deadline) {
-								input.signal?.throwIfAborted();
+								operationSignal.throwIfAborted();
 								await new Promise((done) => setTimeout(done, 1000));
 								observed = await readEvaluationSnapshot(() =>
 									productionEvaluationSnapshot(input.userId, attempt.rootId),
@@ -150,6 +153,26 @@ export async function runPairedEvaluation(input: {
 							}
 							evidence = await readEvaluationSnapshot(() =>
 								productionEvaluationEvidence(input.userId, attempt.rootId),
+							);
+							// Preserve observations even if patch transport or grading later fails.
+							// This checkpoint is not a grade or an accepted performance result.
+							await writeFile(
+								join(
+									directory,
+									`${pair.task.id}-${pair.repetition}-${arm}-observed.json`,
+								),
+								redactEvaluationText(
+									JSON.stringify(
+										{
+											status: "ungraded",
+											executionMs: Date.now() - started,
+											evidence,
+										},
+										null,
+										2,
+									),
+								),
+								{ mode: 0o600 },
 							);
 							failureStage = "harness";
 							patches = (
@@ -230,10 +253,21 @@ export async function runPairedEvaluation(input: {
 				}
 			} finally {
 				try {
-					await closeProductionEvaluation(machines, input.userId, attempt);
+					// Provider cancellation does not cancel remote work. Cleanup has its own
+					// bounded transport and must inspect/delete the registered resources.
+					const cleanupMachines = createFreestyleWorkspaceMachines(key, {
+						signal: AbortSignal.timeout(120000),
+					});
+					await closeProductionEvaluation(
+						cleanupMachines,
+						input.userId,
+						attempt,
+					);
 				} finally {
 					if (snapshotId)
-						await machines.destroySnapshot(AuthSnapshotId(snapshotId));
+						await createFreestyleWorkspaceMachines(key, {
+							signal: AbortSignal.timeout(120000),
+						}).destroySnapshot(AuthSnapshotId(snapshotId));
 				}
 			}
 		}

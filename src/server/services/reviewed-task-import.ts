@@ -91,6 +91,21 @@ function assertReviewedSibling(
 		);
 }
 
+export function taskPatchPreview(
+	patch: { bytes: Buffer; sha256: string; base: string },
+	start = 0,
+) {
+	const diff = patch.bytes.toString("utf8");
+	const nextStart = diff.length > start + 60_000 ? start + 60_000 : null;
+	return {
+		diff: diff.slice(start, start + 60_000),
+		truncated: nextStart !== null,
+		nextStart,
+		sha256: patch.sha256,
+		base: patch.base,
+	};
+}
+
 /** Captures committed and working-tree changes since the saved checkout base without changing the real index. */
 export async function captureTaskPatch(
 	machines: WorkspaceMachines,

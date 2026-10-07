@@ -8,6 +8,15 @@ This is an operator-only development evaluation bridge, not a second model loop 
 
 `native-codex.ts` runs pinned native Codex CLI on a disposable snapshot of the same initial clean environment, at the same model, reasoning, prompt and Git commit. Only a short-lived subscription access credential and identity token enter that control VM; refresh credentials and application authority remain server-side. Its explicit Responses provider uses the same existing Codex subscription backend as production; this is a transport-configured native harness, not a test of the default CLI workspace-routing authentication. The native process has a wall-clock deadline and its VM has a TTL. The native control does **not** currently enforce the product's request-count/token guard. Its network/sandbox policy differs from the production execution path, and builtin connector startup can fail independently. Therefore these runs are development diagnostics, not an equivalent-budget final comparison.
 
+As of 2026-10-06, the disposable VM is the native control's OS isolation
+boundary (`--sandbox danger-full-access` inside that VM). Product guest commands
+already use that VM boundary. A zero-inference reproduction found that adding
+Codex's nested `workspace-write` sandbox only to native causes unchanged daemon
+tests to fail with `spawnSync python3 EPERM`; the full-suite control timed out.
+That failed control is retained and must not be counted as a harness advantage.
+No host execution, refresh credentials or application authority is granted by
+this change. Native results record `executionIsolation: disposable-vm`.
+
 `grader.ts` clones the local repository at the pinned task commit, integrates returned patches, rejects edits outside the explicit allowed paths and runs a hash-pinned verifier in a networkless, capability-restricted Docker container. The verifier is not sent to either coding agent. Image, verifier hash and commit availability are checked before inference. Use an image that already contains test dependencies: grading cannot download them.
 
 `harbor_agent.py` is a Harbor 0.23.0 external agent adapter. It invokes the same production bridge and applies the reviewed patches in Harbor's verifier environment. It rejects differing instructions, model IDs or commits. It supports tasks mapped to prepared, authorized Git repositories; it does **not** yet import arbitrary Terminal-Bench filesystem environments into Freestyle. Keep that distinction in reports.

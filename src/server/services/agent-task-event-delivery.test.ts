@@ -131,6 +131,19 @@ function event(eventType: AgentTaskEvent["eventType"]): AgentTaskEvent {
 }
 
 describe("task event messages", () => {
+	it("uses a compact completion signal with retained summary access only for automatic-review roots", () => {
+		const message = taskEventMessage(event("completed"), "Audit API", true);
+		expect(message).toContain("child-1");
+		expect(message).toContain("next model step");
+		expect(message).toContain("Completion is not acceptance");
+		expect(message).not.toContain("Evidence here");
+		expect(taskEventMessage(event("failed"), "Audit API", true)).toContain(
+			"Evidence here",
+		);
+		expect(taskEventMessage(event("blocked"), "Audit API", true)).toContain(
+			"Evidence here",
+		);
+	});
 	it("asks the parent to review a completed child", () => {
 		expect(taskEventMessage(event("completed"), "Audit API")).toContain(
 			"Audit API finished",

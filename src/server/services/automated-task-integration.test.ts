@@ -22,6 +22,9 @@ const mocks = vi.hoisted(() => ({
 	import: vi.fn(),
 	commit: vi.fn(),
 	exec: vi.fn(),
+	verify: vi.fn(),
+	sourceEvidence: vi.fn(),
+	batch: vi.fn(),
 }));
 vi.mock("../adapters/agent-sessions", () => ({
 	agentSessionForOwner: mocks.session,
@@ -30,6 +33,9 @@ vi.mock("../adapters/agent-sessions", () => ({
 }));
 vi.mock("../adapters/agent-task-events", () => ({
 	saveAgentTaskResultAndEvent: mocks.event,
+}));
+vi.mock("../adapters/agent-task-command-receipts", () => ({
+	readyBatchIntegration: mocks.batch,
 }));
 vi.mock("../adapters/task-patch-evidence", () => ({
 	taskPatchEvidence: mocks.evidence,
@@ -45,7 +51,8 @@ vi.mock("./api-command-scope", () => ({
 	scopedShellCommand: (input: { command: string }) => input.command,
 	stopApiTurnCommands: mocks.stop,
 }));
-vi.mock("./reviewed-task-import", () => ({
+vi.mock("./reviewed-task-import", async (importOriginal) => ({
+	...(await importOriginal<typeof import("./reviewed-task-import")>()),
 	captureTaskPatch: mocks.capture,
 	importReviewedTaskChanges: mocks.import,
 }));
@@ -53,8 +60,12 @@ vi.mock("./session-workspace-machines", () => ({
 	machinesForAgentSession: (machines: unknown) => machines,
 }));
 vi.mock("./turn-commit", () => ({ commitCompletedSessionTurn: mocks.commit }));
+vi.mock("./project-source-evidence", () => ({
+	inspectProjectSourceEvidence: mocks.sourceEvidence,
+}));
 vi.mock("./agent-output-artifacts", () => ({
 	agentOutputArtifacts: (input: { vm: string }) => ({
+		recordVerification: mocks.verify,
 		capture: async (command: string, seconds: number) => ({
 			reference: "00000000-0000-4000-8000-000000000001",
 			stopped: null,
@@ -68,6 +79,7 @@ vi.mock("./agent-output-artifacts", () => ({
 import {
 	baselineTaskVerificationCommand,
 	integrateTaskDraft,
+	stageReviewedBatchTask,
 } from "./automated-task-integration";
 
 it("reads the reviewed base in a real fresh checkout without a saved base ref", async () => {
@@ -146,8 +158,276 @@ const control = () => ({
 	signal: new AbortController().signal,
 	turnId: "turn",
 });
+
+function stagedDestination() {
+	return {
+		...draft,
+		providerRef: "integration-vm",
+		taskState: "idle",
+		items: [
+			{
+				kind: "userMessage",
+				id: "older-turn:integration",
+				text: "Original integration contract",
+			},
+			{
+				kind: "dynamicToolCall",
+				id: "stage",
+				tool: "integration_stage",
+				status: "completed",
+				input: "{}",
+				output: JSON.stringify({
+					sha256: "c".repeat(64),
+					base: sources[0].base,
+					sources: [sources[0]],
+				}),
+			},
+		],
+	} as AgentSessionRecord;
+}
+
+it("stages the first reviewed patch while other siblings remain active, without checks or inference", async () => {
+	const bound = {
+		...draft,
+		providerRef: "integration-vm",
+		taskState: "working",
+	};
+	mocks.session.mockResolvedValueOnce(draft).mockResolvedValueOnce(bound);
+	mocks.capture.mockResolvedValueOnce({
+		sha256: "e".repeat(64),
+		base: sources[0].base,
+		bytes: Buffer.alloc(0),
+	});
+	expect(
+		await stageReviewedBatchTask(machines, parent, sources[0], control()),
+	).toMatchObject({
+		taskId: draft.id,
+		status: "staged",
+		finalChecksStarted: false,
+		sources: [sources[0]],
+	});
+	expect(mocks.import).toHaveBeenCalledOnce();
+	expect(mocks.exec).not.toHaveBeenCalled();
+	expect(mocks.commit).not.toHaveBeenCalled();
+	expect(mocks.state).toHaveBeenLastCalledWith(draft.id, "idle");
+	expect(mocks.save.mock.calls.at(-1)?.[1]).toEqual(
+		expect.arrayContaining([
+			expect.objectContaining({
+				tool: "integration_stage",
+				status: "completed",
+			}),
+		]),
+	);
+});
+
+it("reuses the staged checkout, verifies its fingerprint and releases the occupied slot after each import", async () => {
+	const idle = stagedDestination();
+	mocks.session
+		.mockResolvedValueOnce(idle)
+		.mockResolvedValueOnce({ ...idle, taskState: "working" });
+	mocks.prepare.mockResolvedValue({ task: idle, predecessor: null });
+	expect(
+		await stageReviewedBatchTask(machines, parent, sources[1], control()),
+	).toMatchObject({ status: "staged", sources });
+	expect(mocks.state).toHaveBeenLastCalledWith(draft.id, "idle");
+	const saved = mocks.save.mock.calls.at(-1)?.[1];
+	expect(saved[0].id).toBe("turn:integration");
+});
+
+it("rejects unrelated checkout changes before importing another patch", async () => {
+	const idle = stagedDestination();
+	mocks.session
+		.mockResolvedValueOnce(idle)
+		.mockResolvedValueOnce({ ...idle, taskState: "working" });
+	mocks.prepare.mockResolvedValue({ task: idle, predecessor: null });
+	mocks.capture.mockResolvedValueOnce({
+		sha256: "d".repeat(64),
+		base: sources[0].base,
+		bytes: Buffer.from("user changed checkout"),
+	});
+	expect(
+		await stageReviewedBatchTask(machines, parent, sources[1], control()),
+	).toMatchObject({ status: "failed", repairRequired: true });
+	expect(mocks.import).not.toHaveBeenCalled();
+	expect(mocks.state).toHaveBeenLastCalledWith(draft.id, "failed");
+});
+
+it("does not stage legacy, competing, busy, or revised already-imported work", async () => {
+	mocks.batch.mockResolvedValueOnce(null);
+	expect(
+		await stageReviewedBatchTask(machines, parent, sources[0], control()),
+	).toBeNull();
+	expect(
+		await stageReviewedBatchTask(
+			machines,
+			{ ...parent, candidateIndex: 0 },
+			sources[0],
+			control(),
+		),
+	).toBeNull();
+	mocks.session.mockResolvedValueOnce({ ...draft, taskState: "working" });
+	expect(
+		await stageReviewedBatchTask(machines, parent, sources[0], control()),
+	).toMatchObject({ status: "not_staged" });
+	mocks.session.mockResolvedValueOnce(stagedDestination());
+	await expect(
+		stageReviewedBatchTask(
+			machines,
+			parent,
+			{ ...sources[0], sha256: "d".repeat(64) },
+			control(),
+		),
+	).rejects.toThrow("re-reviewed");
+	expect(mocks.prepare).not.toHaveBeenCalled();
+	expect(mocks.import).not.toHaveBeenCalled();
+});
+
+it("finalizes an unchanged journal-bound staged checkout with every batch source", async () => {
+	const idle = stagedDestination();
+	mocks.session.mockImplementation(async (_owner, id) =>
+		id === draft.id
+			? idle
+			: { ...draft, id, taskState: "done", taskReviewState: "reviewed" },
+	);
+	mocks.prepare.mockResolvedValue({ task: idle, predecessor: null });
+	expect(
+		await integrateTaskDraft(machines, parent, draft.id, sources, control()),
+	).toMatchObject({ status: "done", reviewRequired: true });
+	expect(mocks.import).toHaveBeenCalledTimes(2);
+	expect(mocks.state).toHaveBeenLastCalledWith(draft.id, "done");
+	expect(mocks.save.mock.calls[0][1][0].id).toBe("turn:integration");
+});
+
+it("does not finalize a prepared batch while a required source is omitted", async () => {
+	const idle = stagedDestination();
+	mocks.session.mockResolvedValue(idle);
+	mocks.batch.mockResolvedValue({
+		taskId: draft.id,
+		sourceTaskIds: [...sources.map((source) => source.taskId), "unfinished"],
+	});
+	await expect(
+		integrateTaskDraft(machines, parent, draft.id, sources, control()),
+	).rejects.toThrow("fresh writable");
+	expect(mocks.exec).not.toHaveBeenCalled();
+	expect(mocks.prepare).not.toHaveBeenCalled();
+});
+
+it("preserves the integration for repair after cancellation; never runs final checks", async () => {
+	mocks.session
+		.mockResolvedValueOnce(draft)
+		.mockResolvedValueOnce({ ...draft, providerRef: "integration-vm" });
+	mocks.capture.mockResolvedValueOnce({
+		sha256: "e".repeat(64),
+		base: sources[0].base,
+		bytes: Buffer.alloc(0),
+	});
+	const abort = new AbortController();
+	mocks.import.mockImplementationOnce(async () => {
+		abort.abort();
+	});
+	expect(
+		await stageReviewedBatchTask(machines, parent, sources[0], {
+			signal: abort.signal,
+			turnId: "turn",
+		}),
+	).toMatchObject({ status: "failed" });
+	expect(mocks.exec).not.toHaveBeenCalled();
+	expect(mocks.state).toHaveBeenLastCalledWith(draft.id, "failed");
+});
+
+it("does not duplicate unchanged baseline checks through bare package-script aliases", async () => {
+	const result = await integrateTaskDraft(
+		machines,
+		parent,
+		draft.id,
+		sources,
+		control(),
+		{
+			sourcePaths: ["changed.ts"],
+			additionalChecks: [
+				"pnpm test",
+				"pnpm run lint",
+				"corepack pnpm typecheck",
+				"pnpm build",
+			],
+		},
+	);
+	expect(result).toMatchObject({
+		status: "done",
+		checks: [
+			"corepack pnpm run lint",
+			"corepack pnpm run typecheck",
+			"corepack pnpm run test",
+			"corepack pnpm run build",
+		],
+	});
+});
+
+it("binds additional contract checks and every baseline check to the same stable sources", async () => {
+	const proof = {
+		revision: "b".repeat(40),
+		dirty: true,
+		sources: [{ path: "changed.ts", sha256: "a".repeat(64) }],
+	};
+	mocks.sourceEvidence.mockResolvedValue(proof);
+	const result = await integrateTaskDraft(
+		machines,
+		parent,
+		draft.id,
+		sources,
+		control(),
+		{ sourcePaths: ["changed.ts"], additionalChecks: ["focused", "focused"] },
+	);
+	expect(result).toMatchObject({
+		status: "done",
+		checks: [
+			"focused",
+			"corepack pnpm run lint",
+			"corepack pnpm run typecheck",
+			"corepack pnpm run test",
+			"corepack pnpm run build",
+		],
+	});
+	expect(mocks.sourceEvidence).toHaveBeenCalledTimes(2);
+	expect(mocks.verify).toHaveBeenCalledTimes(6);
+	for (const [, binding] of mocks.verify.mock.calls)
+		expect(binding).toMatchObject({
+			before: proof,
+			after: proof,
+			sourcesStable: true,
+			cwd: "/repo",
+		});
+});
+
+it("retains stale integration evidence without committing or declaring success", async () => {
+	const before = {
+		revision: "b".repeat(40),
+		dirty: true,
+		sources: [{ path: "changed.ts", sha256: "a".repeat(64) }],
+	};
+	mocks.sourceEvidence.mockResolvedValueOnce(before).mockResolvedValueOnce({
+		...before,
+		sources: [{ path: "changed.ts", sha256: "c".repeat(64) }],
+	});
+	await expect(
+		integrateTaskDraft(machines, parent, draft.id, sources, control(), {
+			sourcePaths: ["changed.ts"],
+		}),
+	).resolves.toMatchObject({
+		status: "failed",
+		stage: "checking",
+		repairRequired: true,
+	});
+	expect(mocks.verify).toHaveBeenCalledTimes(5);
+	expect(mocks.commit).not.toHaveBeenCalled();
+	expect(mocks.state).not.toHaveBeenCalledWith(draft.id, "done");
+});
 beforeEach(() => {
 	vi.resetAllMocks();
+	mocks.batch.mockResolvedValue({
+		taskId: draft.id,
+		sourceTaskIds: sources.map((source) => source.taskId),
+	});
 	mocks.session.mockImplementation(async (_owner: string, id: string) =>
 		id === draft.id
 			? draft
@@ -180,6 +460,7 @@ beforeEach(() => {
 	mocks.capture.mockResolvedValue({
 		sha256: "c".repeat(64),
 		base: sources[0].base,
+		bytes: Buffer.from("complete combined diff"),
 	});
 	mocks.stop.mockResolvedValue(undefined);
 });
@@ -232,6 +513,28 @@ it("overlaps declared independent checks and records each result at its own stab
 		);
 });
 
+it("flags changes made during verification instead of presenting them as unchanged reviewed imports", async () => {
+	mocks.capture.mockResolvedValueOnce({
+		bytes: Buffer.from("imported"),
+		sha256: "a".repeat(64),
+		base: sources[0].base,
+	});
+	const result = await integrateTaskDraft(
+		machines,
+		parent,
+		draft.id,
+		sources,
+		control(),
+	);
+	expect(result).toMatchObject({
+		status: "done",
+		reviewRequired: true,
+		verificationChangedPatch: true,
+		diff: "complete combined diff",
+		sha256: "c".repeat(64),
+	});
+});
+
 it("imports reviewed siblings without a model turn and runs all baseline checks before requesting review", async () => {
 	const result = await integrateTaskDraft(
 		machines,
@@ -255,8 +558,26 @@ it("imports reviewed siblings without a model turn and runs all baseline checks 
 		status: "done",
 		reviewRequired: true,
 		sha256: "c".repeat(64),
+		diff: "complete combined diff",
+		truncated: false,
+		nextStart: null,
+		verificationChangedPatch: false,
+		sources,
 	});
 	expect(mocks.state).toHaveBeenCalledWith(draft.id, "done");
+	for (const receipt of (result as { checkResults: object[] }).checkResults) {
+		expect(receipt).not.toHaveProperty("stdout");
+		expect(receipt).not.toHaveProperty("stderr");
+		expect(receipt).not.toHaveProperty("stdoutNextStart");
+	}
+	const retainedItems = mocks.save.mock.calls.at(-1)?.[1];
+	expect(
+		retainedItems.find(
+			(item: { kind: string; tool?: string }) =>
+				item.kind === "dynamicToolCall" &&
+				item.tool === "integration_check_evidence",
+		).output,
+	).toContain('"stdout"');
 	expect(result).toMatchObject({
 		checkResults: expect.arrayContaining([
 			expect.objectContaining({
@@ -462,10 +783,24 @@ it("preserves output cursors for successful checks rather than rerunning or clai
 				command: "corepack pnpm run test",
 				exitCode: 0,
 				stopped: null,
-				stdoutNextStart: 32000,
 			}),
 		]),
 	});
+	const retained = mocks.save.mock.calls
+		.at(-1)?.[1]
+		.filter(
+			(item: { tool?: string }) => item.tool === "integration_check_evidence",
+		)
+		.map((item: { output: string }) => JSON.parse(item.output));
+	expect(retained).toEqual(
+		expect.arrayContaining([
+			expect.objectContaining({
+				command: "corepack pnpm run test",
+				stdoutNextStart: 32000,
+				stdout: "first page",
+			}),
+		]),
+	);
 	expect(
 		mocks.exec.mock.calls.filter(
 			([, command]) => command === "corepack pnpm run test",
@@ -473,7 +808,7 @@ it("preserves output cursors for successful checks rather than rerunning or clai
 	).toHaveLength(1);
 });
 
-it("includes complete short check output and Unicode-safe continuation offsets for long previews", async () => {
+it("retains short diagnostics and Unicode-safe continuation offsets without sending logs to the lead", async () => {
 	const implementation = mocks.exec.getMockImplementation();
 	if (!implementation) throw new Error("Missing fixture executor");
 	mocks.exec.mockImplementation((vm, command, timeout) =>
@@ -498,13 +833,27 @@ it("includes complete short check output and Unicode-safe continuation offsets f
 		checkResults: expect.arrayContaining([
 			expect.objectContaining({
 				command: "corepack pnpm run test",
+				stderrPresent: true,
+			}),
+		]),
+	});
+	const retained = mocks.save.mock.calls
+		.at(-1)?.[1]
+		.filter(
+			(item: { tool?: string }) => item.tool === "integration_check_evidence",
+		)
+		.map((item: { output: string }) => JSON.parse(item.output));
+	expect(retained).toEqual(
+		expect.arrayContaining([
+			expect.objectContaining({
+				command: "corepack pnpm run test",
 				stdout: "😀".repeat(2048),
 				stdoutNextStart: 2048,
 				stderr: "Warning remains visible",
 				stderrNextStart: null,
 			}),
 		]),
-	});
+	);
 });
 
 it.each(["timeout", "output_limit"])(

@@ -1,18 +1,23 @@
+import { z } from "zod";
 import { apiTurnFailureClassification } from "#/domain/api-turn-failure";
 import { SessionItemId } from "#/domain/ids";
 import { posixShellCommand } from "#/domain/posix-command";
+import { sourceEvidenceContentsMatch } from "#/domain/project-source-evidence";
 import type { SessionItem } from "#/domain/session-item";
+import { sessionItemsFromUnknown } from "#/domain/session-item";
 import { taskVerificationPlan } from "#/domain/task-integration-checks";
 import {
 	assertPatchIdentity,
 	type TaskPatchIdentity,
 } from "#/domain/task-patch-evidence";
+import { verificationCommandIdentity } from "#/domain/task-verification-assignment";
 import {
 	type AgentSessionRecord,
 	agentSessionForOwner,
 	saveAgentSessionItems,
 	saveAgentTaskState,
 } from "../adapters/agent-sessions";
+import { readyBatchIntegration } from "../adapters/agent-task-command-receipts";
 import { saveAgentTaskResultAndEvent } from "../adapters/agent-task-events";
 import { taskPatchEvidence } from "../adapters/task-patch-evidence";
 import { agentOutputArtifacts } from "./agent-output-artifacts";
@@ -22,13 +27,20 @@ import {
 } from "./agent-session-machine";
 import { scopedShellCommand, stopApiTurnCommands } from "./api-command-scope";
 import { deferredApiTurnWorkspace } from "./api-turn-workspace";
+import { inspectProjectSourceEvidence } from "./project-source-evidence";
 import {
 	captureTaskPatch,
 	importReviewedTaskChanges,
+	taskPatchPreview,
 } from "./reviewed-task-import";
 import { machinesForAgentSession } from "./session-workspace-machines";
 import { commitCompletedSessionTurn } from "./turn-commit";
 import type { WorkspaceMachines } from "./workspace-machines";
+
+export const integrationVerificationRequest = z.object({
+	sourcePaths: z.array(z.string().min(1).max(2048)).min(1).max(8).optional(),
+	additionalChecks: z.array(z.string().min(1).max(16000)).max(8).default([]),
+});
 
 const BASE_CHECKS = `import json, subprocess, sys
 def git(*args): return subprocess.check_output(['git',*args],text=True)
@@ -65,6 +77,225 @@ export function baselineTaskVerificationCommand(
 	return `cd ${posixShellCommand([directory])} && ${posixShellCommand(["python3", "-c", BASE_CHECKS, base])}`;
 }
 
+const stagedPatch = z.object({
+	sha256: z.string().regex(/^[a-f0-9]{64}$/),
+	base: z.string().regex(/^[a-f0-9]{40,64}$/),
+	sources: z
+		.array(
+			z.object({
+				taskId: z.string(),
+				sha256: z.string().regex(/^[a-f0-9]{64}$/),
+				base: z.string().regex(/^[a-f0-9]{40,64}$/),
+			}),
+		)
+		.min(1)
+		.max(5),
+});
+
+function previousIntegrationStage(task: AgentSessionRecord) {
+	const item = sessionItemsFromUnknown(task.items)
+		.reverse()
+		.find(
+			(item) =>
+				item.kind === "dynamicToolCall" &&
+				item.tool === "integration_stage" &&
+				item.status === "completed",
+		);
+	if (item?.kind !== "dynamicToolCall" || !item.output) return null;
+	return stagedPatch.parse(JSON.parse(item.output));
+}
+
+function requireIntegrationChild(
+	parent: AgentSessionRecord,
+	destination: AgentSessionRecord | null,
+) {
+	if (
+		parent.parentSessionId ||
+		parent.candidateIndex != null ||
+		!parent.projectId ||
+		!destination ||
+		destination.userId !== parent.userId ||
+		destination.parentSessionId !== parent.id ||
+		destination.projectId !== parent.projectId ||
+		destination.taskAccess !== "read_write" ||
+		destination.taskPlacement !== "fresh" ||
+		destination.taskExecution !== "parallel" ||
+		destination.candidateIndex != null
+	)
+		throw new Error(
+			"Automated integration requires an isolated writable direct child of a non-competing root.",
+		);
+	return destination;
+}
+
+/** Compare with the last server checkpoint before resuming. Terminal/model edits require repair, not silent import. */
+async function requireUnchangedIntegration(
+	machines: WorkspaceMachines,
+	workspace: { vm: import("#/domain/ids").WorkspaceId },
+	previous: z.infer<typeof stagedPatch> | null,
+) {
+	const current = await captureTaskPatch(machines, workspace.vm);
+	if (
+		previous
+			? current.sha256 !== previous.sha256 || current.base !== previous.base
+			: current.bytes.length !== 0
+	)
+		throw new Error(
+			"Integration checkout changed outside its staged imports; inspect and repair it with an agent.",
+		);
+	return current;
+}
+
+/** The first accepted patch opens the server-owned integration checkout while slower builders continue. No checks or inference start here. */
+export async function stageReviewedBatchTask(
+	machines: WorkspaceMachines,
+	parent: AgentSessionRecord,
+	source: TaskPatchIdentity,
+	control: { signal: AbortSignal; turnId: string },
+) {
+	if (parent.parentSessionId || parent.candidateIndex != null) return null;
+	const batch = await readyBatchIntegration(
+		parent.userId,
+		parent.projectId,
+		parent.id,
+		source.taskId,
+	);
+	if (!batch || batch.taskId === source.taskId) return null;
+	control.signal.throwIfAborted();
+	const destination = requireIntegrationChild(
+		parent,
+		await agentSessionForOwner(parent.userId, batch.taskId),
+	);
+	if (
+		!(destination.taskState === "draft" && !destination.providerRef) &&
+		!(destination.taskState === "idle" && destination.providerRef)
+	)
+		return {
+			taskId: batch.taskId,
+			status: "not_staged",
+			instruction:
+				"Integration is busy or needs repair. Acceptance is saved; do not replay it. Inspect the integration task before final checks.",
+		};
+	const previous = previousIntegrationStage(destination);
+	if (destination.providerRef && !previous)
+		throw new Error("Missing server integration checkpoint.");
+	if (
+		previous?.sources.some(
+			(entry) =>
+				entry.taskId === source.taskId &&
+				(entry.sha256 !== source.sha256 || entry.base !== source.base),
+		)
+	)
+		throw new Error(
+			"Previously staged source was re-reviewed with different content; agent repair required.",
+		);
+	const { task, predecessor } = await prepareAgentTaskStart({
+		userId: parent.userId,
+		projectId: parent.projectId,
+		taskSessionId: batch.taskId,
+	});
+	const targetMachines = machinesForAgentSession(machines, task);
+	const items = sessionItemsFromUnknown(destination.items);
+	if (items[0]?.kind === "userMessage")
+		items[0] = {
+			...items[0],
+			id: SessionItemId(`${control.turnId}:integration`),
+		};
+	if (!items.length)
+		items.push({
+			kind: "userMessage",
+			id: SessionItemId(`${control.turnId}:integration`),
+			text:
+				task.taskPrompt ??
+				"Stage reviewed sibling patches; final checks wait for the complete batch.",
+		});
+	try {
+		await saveAgentSessionItems(
+			task.id,
+			items,
+			undefined,
+			task.listedModelId,
+			"running",
+		);
+		await bindPreparedAgentTaskMachine(targetMachines, {
+			userId: parent.userId,
+			projectId: parent.projectId,
+			task,
+			predecessor,
+		});
+		const bound = await agentSessionForOwner(parent.userId, task.id);
+		if (!bound) throw new Error("Integration workspace disappeared.");
+		const workspace = await deferredApiTurnWorkspace(
+			targetMachines,
+			bound,
+			control.signal,
+		)();
+		const current = await requireUnchangedIntegration(
+			workspace.machines,
+			workspace,
+			previous,
+		);
+		if (current.base !== source.base)
+			throw new Error("Reviewed patch has a different integration base.");
+		await importReviewedTaskChanges(
+			targetMachines,
+			bound,
+			source.taskId,
+			source.sha256,
+			workspace,
+		);
+		const patch = await captureTaskPatch(workspace.machines, workspace.vm);
+		control.signal.throwIfAborted();
+		const sources = [
+			...(previous?.sources.filter((entry) => entry.taskId !== source.taskId) ??
+				[]),
+			source,
+		];
+		items.push({
+			kind: "dynamicToolCall",
+			id: SessionItemId(`${task.id}:stage:${source.sha256}`),
+			tool: "integration_stage",
+			input: JSON.stringify(source),
+			output: JSON.stringify({
+				sha256: patch.sha256,
+				base: patch.base,
+				sources,
+			}),
+			status: "completed",
+		});
+		await saveAgentSessionItems(
+			task.id,
+			items,
+			undefined,
+			task.listedModelId,
+			"idle",
+		);
+		await saveAgentTaskState(task.id, "idle");
+		return {
+			taskId: task.id,
+			status: "staged",
+			finalChecksStarted: false,
+			sources,
+		};
+	} catch {
+		items.push({
+			kind: "error",
+			id: SessionItemId(`${task.id}:stage-failure`),
+			message:
+				"Incremental integration stopped. Acceptance remains saved; inspect preserved imports before repair. No checks or model turn were started.",
+		});
+		await saveAgentSessionItems(
+			task.id,
+			items,
+			undefined,
+			task.listedModelId,
+			"failed",
+		);
+		await saveAgentTaskState(task.id, "failed");
+		return { taskId: task.id, status: "failed", repairRequired: true };
+	}
+}
+
 /** Executes a draft, not a model turn. Any uncertain or failed operation preserves the checkout for agent repair. */
 export async function integrateTaskDraft(
 	machines: WorkspaceMachines,
@@ -72,8 +303,11 @@ export async function integrateTaskDraft(
 	destinationId: string,
 	sources: readonly TaskPatchIdentity[],
 	control: { signal: AbortSignal; turnId: string },
+	verification: z.input<typeof integrationVerificationRequest> = {},
 ) {
 	control.signal.throwIfAborted();
+	const { sourcePaths, additionalChecks } =
+		integrationVerificationRequest.parse(verification);
 	if (
 		parent.parentSessionId ||
 		parent.candidateIndex != null ||
@@ -92,12 +326,38 @@ export async function integrateTaskDraft(
 	if (sources.some((source) => source.base !== sources[0].base))
 		throw new Error("All reviewed siblings must share one base revision.");
 	const destination = await agentSessionForOwner(parent.userId, destinationId);
+	const staged = destination ? previousIntegrationStage(destination) : null;
+	const batch = staged
+		? await readyBatchIntegration(
+				parent.userId,
+				parent.projectId,
+				parent.id,
+				destinationId,
+			)
+		: null;
+	const resumable =
+		destination?.taskState === "idle" &&
+		destination.providerRef &&
+		staged &&
+		batch?.taskId === destinationId &&
+		batch.sourceTaskIds.length === sources.length &&
+		batch.sourceTaskIds.every((id) =>
+			sources.some((source) => source.taskId === id),
+		) &&
+		staged.sources.every((entry) =>
+			sources.some(
+				(source) =>
+					source.taskId === entry.taskId &&
+					source.sha256 === entry.sha256 &&
+					source.base === entry.base,
+			),
+		);
 	if (
 		!destination ||
 		destination.parentSessionId !== parent.id ||
 		destination.projectId !== parent.projectId ||
-		destination.taskState !== "draft" ||
-		destination.providerRef ||
+		(!resumable &&
+			(destination.taskState !== "draft" || destination.providerRef)) ||
 		destination.taskAccess !== "read_write" ||
 		destination.taskPlacement !== "fresh" ||
 		destination.taskExecution !== "parallel" ||
@@ -132,15 +392,22 @@ export async function integrateTaskDraft(
 		taskSessionId: destinationId,
 	});
 	const targetMachines = machinesForAgentSession(machines, task);
-	const items: SessionItem[] = [
-		{
-			kind: "userMessage",
+	const items: SessionItem[] = resumable
+		? sessionItemsFromUnknown(destination.items)
+		: [
+				{
+					kind: "userMessage",
+					id: SessionItemId(`${control.turnId}:integration`),
+					text:
+						task.taskPrompt ??
+						"Integrate reviewed sibling patches and run baseline project checks.",
+				},
+			];
+	if (items[0]?.kind === "userMessage")
+		items[0] = {
+			...items[0],
 			id: SessionItemId(`${control.turnId}:integration`),
-			text:
-				task.taskPrompt ??
-				"Integrate reviewed sibling patches and run baseline project checks.",
-		},
-	];
+		};
 	let workspace:
 		| Awaited<ReturnType<ReturnType<typeof deferredApiTurnWorkspace>>>
 		| undefined;
@@ -184,6 +451,8 @@ export async function integrateTaskDraft(
 			control.signal,
 		)();
 		control.signal.throwIfAborted();
+		if (resumable)
+			await requireUnchangedIntegration(workspace.machines, workspace, staged);
 		stage = "policy";
 		const policy = await workspace.machines.exec(
 			workspace.vm,
@@ -192,7 +461,17 @@ export async function integrateTaskDraft(
 		);
 		if (policy.exitCode)
 			throw new Error("Could not read baseline verification policy.");
-		const verificationPlan = taskVerificationPlan(JSON.parse(policy.stdout));
+		const baselinePlan = taskVerificationPlan(JSON.parse(policy.stdout));
+		const baselineCommands = new Set(
+			baselinePlan.flat().map(verificationCommandIdentity),
+		);
+		const verificationPlan = [...new Set(additionalChecks)]
+			.filter(
+				(command) =>
+					!baselineCommands.has(verificationCommandIdentity(command)),
+			)
+			.map((command) => [command])
+			.concat(baselinePlan);
 		const commands = verificationPlan.flat();
 		stage = "importing";
 		for (const source of sources) {
@@ -224,8 +503,19 @@ export async function integrateTaskDraft(
 			throw new Error(
 				"Verification policy or dependency configuration changed. Inspect and verify this integration with an agent rather than automatically executing changed check scripts.",
 			);
+		const importedPatch = await captureTaskPatch(
+			workspace.machines,
+			workspace.vm,
+		);
 		stage = "checking";
 		const verificationWorkspace = workspace;
+		const before = sourcePaths
+			? await inspectProjectSourceEvidence(
+					verificationWorkspace,
+					sourcePaths,
+					true,
+				)
+			: null;
 		const artifacts = agentOutputArtifacts({
 			...verificationWorkspace,
 			sessionId: task.id,
@@ -240,6 +530,7 @@ export async function integrateTaskDraft(
 			stderr: string;
 			stdoutNextStart: number | null;
 			stderrNextStart: number | null;
+			sourceBound?: boolean;
 		}[] = [];
 		let checkIndex = 0;
 		const runCheck = async (command: string) => {
@@ -315,12 +606,47 @@ export async function integrateTaskDraft(
 				if (failed?.status === "rejected") throw failed.reason;
 			}
 		}
+		if (before && sourcePaths) {
+			const after = await inspectProjectSourceEvidence(
+				verificationWorkspace,
+				sourcePaths,
+				true,
+			);
+			const sourcesStable = sourceEvidenceContentsMatch(before, after);
+			for (const result of checkResults) {
+				await artifacts.recordVerification(result.reference, {
+					command: result.command,
+					cwd: verificationWorkspace.cwd,
+					before,
+					after,
+					sourcesStable,
+				});
+				result.sourceBound = true;
+			}
+			if (!sourcesStable)
+				throw new Error(
+					"Declared integration sources changed during verification; retained checks are not current proof.",
+				);
+		}
 		stage = "handoff";
 		const patch = await captureTaskPatch(workspace.machines, workspace.vm);
+		// Logs remain in the retained task evidence, not repeated in the lead's control-plane response.
+		const reviewChecks = checkResults.map(
+			({
+				stdout: _stdout,
+				stderr,
+				stdoutNextStart: _stdoutNextStart,
+				stderrNextStart,
+				...receipt
+			}) => ({
+				...receipt,
+				stderrPresent: stderr.length > 0 || stderrNextStart !== null,
+			}),
+		);
 		items.push({
 			kind: "agentMessage",
 			id: SessionItemId(`${task.id}:result`),
-			text: `Server integration completed. All baseline project checks passed. The combined patch still requires the lead's exact-diff review. Retained verification receipts: ${JSON.stringify(checkResults)}. Each stdout/stderr preview is complete when its corresponding nextStart is null; do not reread complete unchanged output. Otherwise read the remaining output with read_task_output using this task ID, reference, stream and nextStart; follow continuation cursors. These references belong to this integration task, not the lead's machine. Do not rerun successful checks merely to retrieve their output.`,
+			text: `Server integration completed. All baseline project checks passed. The combined patch still requires the lead's exact-diff review. Retained verification receipts: ${JSON.stringify(reviewChecks)}. Full logs remain available with read_task_output using this task ID, reference, stream and start 0; follow returned continuation cursors when retrieving them. Retrieve logs for failures, uncertainty or an explicit user/repository requirement, not simply to reread successful output. These references belong to this integration task, not the lead's machine. Do not rerun successful checks merely to retrieve their output.`,
 		});
 		control.signal.throwIfAborted();
 		await commitCompletedSessionTurn(bound, items);
@@ -343,10 +669,13 @@ export async function integrateTaskDraft(
 			taskId: task.id,
 			status: "done",
 			reviewRequired: true,
-			sha256: patch.sha256,
-			base: patch.base,
+			...taskPatchPreview(patch),
+			sources,
+			verificationChangedPatch:
+				patch.sha256 !== importedPatch.sha256 ||
+				patch.base !== importedPatch.base,
 			checks: commands,
-			checkResults,
+			checkResults: reviewChecks,
 		};
 	} catch (error) {
 		stop();
