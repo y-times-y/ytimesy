@@ -87,7 +87,7 @@ export function inspectEvaluationCampaign(raw: unknown) {
 		limitations: [
 			"Category balance is a development sampling rule, not proof of representativeness or statistical power.",
 			"Local revision availability does not verify the deployed worker revision or its guard configuration.",
-			"Native control request/token limits are not equivalent; observed token thresholds are not dollar caps.",
+			"Native loopback and product durable guards use observed token thresholds, not dollar caps; concurrency can affect overshoot.",
 			"No result, superiority claim or deployment approval follows from preflight.",
 		],
 	};

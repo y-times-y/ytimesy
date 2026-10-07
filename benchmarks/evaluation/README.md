@@ -6,7 +6,17 @@ This is an operator-only development evaluation bridge, not a second model loop 
 
 `production.ts` creates a disposable chat in an existing, operator-owned, prepared project. It uses `sendHarnessWorkspaceTask`, the durable production queue and the ordinary leader/builder/reviewer tools. Completion requires the entire child tree and completion outbox to settle. Every writable builder must be done, reviewed and on a distinct execution VM. Publication through `publish_task` is disabled for evaluation descendants.
 
-`native-codex.ts` runs pinned native Codex CLI on a disposable snapshot of the same initial clean environment, at the same model, reasoning, prompt and Git commit. Only a short-lived subscription access credential and identity token enter that control VM; refresh credentials and application authority remain server-side. Its explicit Responses provider uses the same existing Codex subscription backend as production; this is a transport-configured native harness, not a test of the default CLI workspace-routing authentication. The native process has a wall-clock deadline and its VM has a TTL. The native control does **not** currently enforce the product's request-count/token guard. Its network/sandbox policy differs from the production execution path, and builtin connector startup can fail independently. Therefore these runs are development diagnostics, not an equivalent-budget final comparison.
+`native-codex.ts` runs pinned native Codex CLI on a disposable snapshot of the same initial clean environment, at the same model, reasoning, prompt and Git commit. Only a short-lived subscription access credential and identity token enter that control VM; refresh credentials and application authority remain server-side. Its explicit Responses provider uses the same existing Codex subscription backend as production; this is a transport-configured native harness, not a test of the default CLI workspace-routing authentication. The native process has a wall-clock deadline and its VM has a TTL.
+
+The native transport now passes through an operator-only loopback proxy. It pins
+model/reasoning, counts each forwarded request, reads provider usage using the
+maintained eventsource-parser SSE parser, and rejects further requests after the
+same observed-token threshold. Missing or malformed usage fails closed; native
+transport retries are disabled. One in-flight response can overshoot the token
+threshold. Product concurrency can produce more than one in-flight overshoot.
+The proxy is not a security boundary against guest root and is not the native
+CLI's unmodified default transport. Builtin connector startup can still fail
+independently. These remain development diagnostics, not final parity evidence.
 
 As of 2026-10-06, the disposable VM is the native control's OS isolation
 boundary (`--sandbox danger-full-access` inside that VM). Product guest commands
@@ -31,6 +41,36 @@ this change. Native results record `executionIsolation: disposable-vm`.
 6. Verify current VM prices, capacity and a conservative maximum resource envelope against the approved spend **before** launching. The bridge does not pretend token limits are dollar caps. Product thresholds are checked before requests and after usage arrives; concurrent in-flight responses can overshoot the observed-token threshold. No API billing fallback is permitted.
 
 ## Reproducible local setup
+
+`scripts/evaluate-isolated-harness.ts` runs a counterbalanced development pilot
+without replacing a shared worker. It requires a clean committed worktree,
+existing operator-owned prepared ytimesy environment, Docker's locally cached
+PostgreSQL 13 and pinned Node grader images, and at least 45 minutes remaining
+on the current Codex access credential. It applies existing migrations only to
+an owned loopback/TLS PostgreSQL container, uses a fresh encryption secret and
+an access-only authentication copy with an unusable refresh placeholder, and
+starts the actual durable worker locally. It does not deploy shared migrations,
+copy OAuth/GitHub credentials, refresh the connected account, publish changes,
+or change shared grants. The source template is copied, never modified.
+
+After explicit spend/quota approval, use the existing development credentials:
+
+```sh
+YTIMESY_EVALUATION_USER_ID='<operator-user-id>' \
+node --env-file=/absolute/development/.env --import tsx \
+  scripts/evaluate-isolated-harness.ts --live 10 \
+  /absolute/development /private/new-isolated-pilot
+```
+
+This first pilot has one repository problem, two repetitions and four arm
+attempts. It is not a representative campaign. Both arms use a 300-second
+deadline, 40 requests and a 400,000 observed-token threshold. Protected grader
+negative/positive controls run before inference. Ordinary builder checks use a
+focused baseline environment recipe, not the entire project suite. Compute
+admission reserves the declared approval minus $0.50 in the isolated database,
+leaving headroom for the template, prior proof allocation, storage and transfer;
+this is not invoice-reconciled spend. Owned session identities and snapshots are
+recorded privately for cleanup. SIGKILL still requires operator reconciliation.
 
 For a broader development campaign, prepare a private manifest containing
 `version: 1`, the committed `harnessRevision`, the existing `protocol` object,
