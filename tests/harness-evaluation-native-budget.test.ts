@@ -130,6 +130,40 @@ it("counts split SSE usage and prevents a request beyond the limit", async () =>
 		"https://chatgpt.com/backend-api/codex/responses",
 	);
 });
+it("ends at response.completed without waiting for upstream EOF", async () => {
+	let cancelled = false;
+	const completed = await stream().text();
+	const transport = vi.fn<typeof fetch>().mockImplementation(
+		async () =>
+			new Response(
+				new ReadableStream({
+					start(controller) {
+						controller.enqueue(new TextEncoder().encode(completed));
+					},
+					cancel() {
+						cancelled = true;
+					},
+				}),
+			),
+	);
+	const proxy = await start(transport);
+	const response = await fetch(proxy.url, {
+		method: "POST",
+		signal: AbortSignal.timeout(500),
+		headers: { authorization: `Bearer ${configuration.proofToken}` },
+		body: JSON.stringify({
+			model: configuration.modelId,
+			reasoning: { effort: "medium" },
+			stream: true,
+		}),
+	});
+	await expect(response.text()).resolves.toContain("response.completed");
+	expect(cancelled).toBe(true);
+	expect(proxy.snapshot()).toMatchObject({
+		observedTokens: 110,
+		stopped: false,
+	});
+});
 it("allows one in-flight token overshoot then stops before another request", async () => {
 	const transport = vi
 		.fn<typeof fetch>()

@@ -55,6 +55,8 @@ export function nativeBudgetProxy(
 		observedTokens: 0,
 		stopped: false,
 		inFlight: false,
+		failureStage: null as string | null,
+		upstreamStatus: null as number | null,
 	};
 	const persist = async () => options.persist?.({ ...state, deadline });
 	const server = createServer(async (request, response) => {
@@ -87,6 +89,7 @@ export function nativeBudgetProxy(
 			if (!response.writableEnded) abort.abort();
 		});
 		let accounted = false;
+		let stage = "request-validation";
 		try {
 			const body = await boundedBody(request);
 			const parsed = z
@@ -100,7 +103,9 @@ export function nativeBudgetProxy(
 			if (!parsed) return reject(400);
 			if (Date.now() >= deadline) return reject(429);
 			state.requests += 1;
+			stage = "request-persistence";
 			await persist();
+			stage = "upstream-request";
 			const upstream = await transport(
 				"https://chatgpt.com/backend-api/codex/responses",
 				{
@@ -122,19 +127,21 @@ export function nativeBudgetProxy(
 			);
 			if (!upstream.ok || !upstream.body) {
 				state.stopped = true;
+				state.failureStage = "upstream-http";
+				state.upstreamStatus = upstream.status;
 				await upstream.body?.cancel();
 				return reject(502);
 			}
+			stage = "response-stream";
 			const parser = createParser({
 				maxBufferSize: 4_000_000,
 				onError: (error) => {
 					if (error.type === "max-buffer-size-exceeded") throw error;
 				},
 				onEvent: (event) => {
-					if (event.data === "[DONE]") return;
+					if (accounted || event.data === "[DONE]") return;
 					const value = JSON.parse(event.data);
 					if (value.type !== "response.completed") return;
-					if (accounted) throw new Error("Duplicate response completion.");
 					const usage = completedResponse.parse(value).response.usage;
 					state.observedTokens += usage.input_tokens + usage.output_tokens;
 					accounted = true;
@@ -149,19 +156,28 @@ export function nativeBudgetProxy(
 				parser.feed(decoder.decode(chunk, { stream: true }));
 				if (!response.write(chunk))
 					await once(response, "drain", { signal: abort.signal });
+				if (accounted) break;
 			}
 			parser.feed(decoder.decode());
-			if (!accounted) state.stopped = true;
+			if (!accounted) {
+				state.stopped = true;
+				state.failureStage = "missing-usage";
+			}
+			stage = "usage-persistence";
 			await persist();
 			response.end();
 		} catch {
-			state.stopped = true;
+			if (!accounted || stage === "usage-persistence") {
+				state.stopped = true;
+				state.failureStage = stage;
+			}
 			if (response.headersSent) response.destroy();
 			else reject(400);
 		} finally {
 			state.inFlight = false;
 			await persist().catch(() => {
 				state.stopped = true;
+				state.failureStage = "final-persistence";
 			});
 		}
 	});
