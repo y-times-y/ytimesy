@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { beforeEach, expect, it, vi } from "vitest";
 import { WorkspaceId } from "#/domain/ids";
+import { taskVerificationPlan } from "#/domain/task-integration-checks";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -24,6 +25,7 @@ const mocks = vi.hoisted(() => ({
 	exec: vi.fn(),
 	verify: vi.fn(),
 	sourceEvidence: vi.fn(),
+	completion: vi.fn(),
 }));
 vi.mock("../adapters/agent-sessions", () => ({
 	agentSessionForOwner: mocks.session,
@@ -56,6 +58,9 @@ vi.mock("./session-workspace-machines", () => ({
 	machinesForAgentSession: (machines: unknown) => machines,
 }));
 vi.mock("./turn-commit", () => ({ commitCompletedSessionTurn: mocks.commit }));
+vi.mock("./completion-verification", () => ({
+	verifyCompletedRepository: mocks.completion,
+}));
 vi.mock("./project-source-evidence", () => ({
 	inspectProjectSourceEvidence: mocks.sourceEvidence,
 }));
@@ -250,6 +255,37 @@ beforeEach(() => {
 		bytes: Buffer.from("complete combined diff"),
 	});
 	mocks.stop.mockResolvedValue(undefined);
+	mocks.completion.mockImplementation(async ({ executeCheck }) => {
+		const policy = await mocks.exec.mock.results[0].value;
+		for (const group of [
+			["git diff --check && git diff --cached --check"],
+			...taskVerificationPlan(JSON.parse(policy.stdout)),
+		]) {
+			for (let offset = 0; offset < group.length; offset += 2) {
+				const settled = await Promise.allSettled(
+					group.slice(offset, offset + 2).map(executeCheck),
+				);
+				const failed = settled.find((result) => result.status === "rejected");
+				if (failed?.status === "rejected") throw failed.reason;
+			}
+		}
+		return { status: "verified" };
+	});
+});
+
+it("does not commit when the whole-checkout gate rejects the integration", async () => {
+	mocks.completion.mockRejectedValue(
+		new Error("Checkout changed during checks"),
+	);
+	const result = await integrateTaskDraft(
+		machines,
+		parent,
+		draft.id,
+		sources,
+		control(),
+	);
+	expect(result).toMatchObject({ status: "failed", stage: "checking" });
+	expect(mocks.commit).not.toHaveBeenCalled();
 });
 
 it("overlaps declared independent checks and records each result at its own stable item index", async () => {

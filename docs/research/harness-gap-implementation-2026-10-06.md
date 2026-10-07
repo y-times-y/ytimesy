@@ -137,8 +137,12 @@ further performance work and large-repository evaluation remain.
   the check contract. Unconfigured projects need an explicit recipe or baseline
   test script. This is not a protected external grader: ignored dependencies,
   runtime environment, guest Git object storage and test semantics remain
-  outside the Git-tree freshness guarantee. Integration currently reruns its
-  baseline checks at the universal gate; this cost is not a speed improvement.
+  outside the Git-tree freshness guarantee. Integration now executes its
+  baseline checks through the universal gate, retaining the existing progress
+  and output capture. The commit gate reuses the resulting server-owned receipt
+  only for the exact unchanged whole tree and complete required command set,
+  avoiding a second baseline-check run. Additional lead-defined checks remain
+  separate; they do not substitute for baseline checks.
 - `schedule_task_plan` persists up to twelve existing fresh writable API/Codex
   drafts with fixed selected models. Critical-path priorities reuse the advisory
   planner. Claims and heartbeats use the existing journal; pg-boss supplies a
@@ -183,3 +187,53 @@ check/commit failures, exclusive plan claims, contract-bound admission and
 blocked notification deduplication. They do not constitute live Linux execution,
 model performance, or a production rollout. The original checkout remains
 untouched and no migrations, pushes or paid/cloud runs were performed.
+
+## Follow-Up: Integration Reuse And Search Cost
+
+The integration executor is an internal server callback, not a model-supplied
+receipt endpoint. The gate still selects commands from the pinned baseline,
+validates exact command names, zero exits, null stops and UUID output references,
+owns the verification journal, and compares the complete checkout before and
+after checks. New real-Git fixtures prove callback execution, exact-tree reuse,
+rejection of mismatched command receipts, and rejection of new undeclared files.
+Integration fixtures prove a failed whole-checkout gate prevents commit.
+
+The experimental search cache now uses SQLite's positionless FTS5 trigrams and
+stable row IDs for refresh/deletion. This removes repeated full-content table
+scans during construction and refresh. A required three-character substring
+selects a superset of candidates; native Git still owns exact matching, regex
+fallback, word boundaries, output and exclusions. Disposable legacy caches are
+rebuilt transactionally. Git remains the default and the index remains opt-in.
+
+Reproduce the zero-inference synthetic test with
+`pnpm exec tsx scripts/benchmark-repository-search.ts 16 32 64`.
+Each corpus has exactly the stated ASCII bytes, 64 KiB code-shaped files and a
+rare marker. Every cold, warm, edited and absent query compares stdout, stderr
+and exit status with Git. Files and caches are removed afterward.
+
+Observed sequential local timings in milliseconds on this macOS machine:
+
+| Corpus | Previous Cold Index | Revised Cold Index | Revised Warm Index (3 Runs) | Git Warm (3 Runs) |
+| --- | --- | --- | --- | --- |
+| 16 MiB / 256 files | 2653 | 632 | 89-92 | 23-24 |
+| 32 MiB / 512 files | 5191 | 1192 | 93-103 | 29-30 |
+| 64 MiB / 1024 files | 8128, refresh rolled back | 2656 | 116-127 | 43-59 |
+
+The previous 64 MiB cache exceeded its refresh budget on every sampled query
+and fell back to Git with no persisted files. The revised cache indexed all
+1,024 files. All 18 revised comparisons were identical to Git. Revised edited
+queries took 94/103/126 ms versus Git's 24/29/44 ms. This improves experimental
+index construction, but does not show a search-speed advantage over Git.
+Python startup, complete inventory and validation overhead remain. Synthetic
+code, shared-machine timing and three warm repetitions are not representative
+agent benchmarks, statistical confidence, or a competitor comparison. An initial
+benchmark version accidentally exceeded the 64 MiB limit by its appended
+marker; that fixture was corrected before the table above was collected.
+
+Follow-up focused tests passed 38 tests, then the full regression suite passed
+294 files and 1,542 tests with five pre-existing skips under the normal test
+timeouts. Application TypeScript, full lint, production build and diff whitespace
+checks passed. The first combined
+focused run hit a five-second real-process fixture
+timeout; an isolated single-worker run passed, followed by the expanded search
+fixtures. This does not establish the cause of the timing variation.

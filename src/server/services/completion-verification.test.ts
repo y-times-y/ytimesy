@@ -147,6 +147,56 @@ it("never saves a verification receipt for failed baseline checks", async () => 
 	);
 });
 
+it("reuses server integration capture once while retaining the whole-tree gate", async () => {
+	const input = await fixture();
+	const executeCheck = vi.fn(async (command: string) => {
+		await run("bash", [
+			"-lc",
+			`cd ${posixShellCommand([input.directory])} && ${command}`,
+		]);
+		return {
+			command,
+			reference: randomUUID(),
+			exitCode: 0 as const,
+			stopped: null,
+		};
+	});
+	const first = await verifyCompletedRepository({ ...input, executeCheck });
+	expect(first.status).toBe("verified");
+	if (first.status !== "verified") throw new Error("Missing verification");
+	expect(executeCheck).toHaveBeenCalledTimes(2);
+	records.find.mockResolvedValue(first.receipt);
+	await verifyCompletedRepository(input);
+	expect(executeCheck).toHaveBeenCalledTimes(2);
+	expect(input.commands.every((argv) => argv[0] === "python3")).toBe(true);
+});
+
+it("rejects invalid server executor receipts and new undeclared changes", async () => {
+	const input = await fixture();
+	await expect(
+		verifyCompletedRepository({
+			...input,
+			executeCheck: async () => ({
+				command: "different",
+				reference: randomUUID(),
+				exitCode: 0,
+				stopped: null,
+			}),
+		}),
+	).rejects.toThrow("different command");
+	expect(records.save).not.toHaveBeenCalled();
+	await expect(
+		verifyCompletedRepository({
+			...input,
+			executeCheck: async (command) => {
+				await writeFile(join(input.directory, "unlisted.txt"), "new");
+				return { command, reference: randomUUID(), exitCode: 0, stopped: null };
+			},
+		}),
+	).rejects.toThrow("Checkout changed during");
+	expect(records.save).not.toHaveBeenCalled();
+});
+
 it("rejects changes to undeclared or new sources during verification", async () => {
 	const input = await fixture(
 		"require('node:fs').writeFileSync('previously-undeclared.txt', 'mutation');",

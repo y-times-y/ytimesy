@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
 	type CompletedVerification,
+	completedVerification,
 	completionSnapshot,
 } from "#/domain/completion-verification";
 import { WorkspaceId } from "#/domain/ids";
@@ -54,6 +55,10 @@ export async function verifyCompletedRepository(input: {
 	sessionId: string;
 	turn: string;
 	signal?: AbortSignal;
+	/** Server-owned integrations can retain their existing progress UI and command capture. Never expose this through a model tool. */
+	executeCheck?: (
+		command: string,
+	) => Promise<CompletedVerification["checks"][number]>;
 }) {
 	const signal = input.signal ?? AbortSignal.timeout(15 * 60_000);
 	signal.throwIfAborted();
@@ -169,6 +174,16 @@ export async function verifyCompletedRepository(input: {
 				const settled = await Promise.allSettled(
 					group.slice(offset, offset + 2).map(async (command) => {
 						signal.throwIfAborted();
+						if (input.executeCheck) {
+							const check = completedVerification.shape.checks.element.parse(
+								await input.executeCheck(command),
+							);
+							if (check.command !== command)
+								throw new Error(
+									"Verification executor returned a different command.",
+								);
+							return check;
+						}
 						const output = await artifacts.capture(
 							scopedShellCommand({
 								turnId,
