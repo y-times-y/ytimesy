@@ -75,17 +75,21 @@ export function childTaskAnchorId(
 		turn
 			.filter(
 				(item) =>
-					item.kind === "dynamicToolCall" && item.tool.endsWith("create_task"),
+					item.kind === "dynamicToolCall" && isTaskCreationTool(item.tool),
 			)
 			.at(-1)?.id ?? promptId
 	);
+}
+
+function isTaskCreationTool(name: string) {
+	return name.endsWith("create_task") || name.endsWith("launch_ready_tasks");
 }
 
 function isTaskCreation(item: SessionItem, taskId?: string) {
 	if (
 		!taskId ||
 		item.kind !== "dynamicToolCall" ||
-		!item.tool.endsWith("create_task") ||
+		!isTaskCreationTool(item.tool) ||
 		!item.output
 	)
 		return false;

@@ -59,11 +59,11 @@ it("runs all baseline project checks rather than model-selected smoke commands",
 	).toEqual([
 		"corepack pnpm run lint",
 		"corepack pnpm run typecheck",
-		"corepack pnpm run test --reporter=dot",
-		"corepack pnpm run build --logLevel warn",
+		"corepack pnpm run test",
+		"corepack pnpm run build",
 	]);
 });
-it("forwards reporting flags only for recognized direct scripts, with npm's separator", () => {
+it("preserves configured scripts without adding reporting or suppression flags", () => {
 	expect(
 		taskIntegrationChecks({
 			recipe: null,
@@ -72,10 +72,7 @@ it("forwards reporting flags only for recognized direct scripts, with npm's sepa
 				scripts: { test: "vitest run", build: "vite build" },
 			}),
 		}),
-	).toEqual([
-		"npm run test -- --reporter=dot",
-		"npm run build -- --logLevel warn",
-	]);
+	).toEqual(["npm run test", "npm run build"]);
 	expect(
 		taskIntegrationChecks({
 			recipe: null,

@@ -1,8 +1,10 @@
 import { type ModelMessage, type ToolSet, toolSearch } from "ai";
+import type { HarnessModelFamily } from "#/domain/harness-model-profile";
 import type { SessionItem } from "#/domain/session-item";
 
 // Common coding and coordination operations should never require a search round trip.
 const CORE_TOOLS = new Set([
+	"batch_read",
 	"list_files",
 	"search_files",
 	"read_file",
@@ -26,11 +28,15 @@ const CORE_TOOLS = new Set([
 	"read_task_capacity",
 	"plan_parallel_work",
 	"create_task",
+	"launch_ready_tasks",
 	"edit_task",
 	"start_task",
 	"list_tasks",
 	"inspect_task_diff",
+	"read_task_handoff",
+	"read_task_summary",
 	"read_task_output",
+	"read_task_checks",
 	"mark_task_reviewed",
 	"integrate_reviewed_tasks",
 	"send_task_message",
@@ -43,11 +49,15 @@ const COORDINATION_TOOLS = new Set([
 	"read_task_capacity",
 	"plan_parallel_work",
 	"create_task",
+	"launch_ready_tasks",
 	"edit_task",
 	"start_task",
 	"list_tasks",
 	"inspect_task_diff",
+	"read_task_handoff",
+	"read_task_summary",
 	"read_task_output",
+	"read_task_checks",
 	"mark_task_reviewed",
 	"integrate_reviewed_tasks",
 	"send_task_message",
@@ -82,6 +92,7 @@ export function discoverableAgentTools(
 	messages: ModelMessage[],
 	checkpointTools: readonly string[] = [],
 	toolSurface: "coordination" | "implementation" = "coordination",
+	modelFamily?: HarnessModelFamily,
 ): ToolSet {
 	if (Object.keys(tools).length === 0) return tools;
 	const known = new Set<string>(checkpointTools);
@@ -131,6 +142,7 @@ export function discoverableAgentTools(
 								(COORDINATION_TOOLS.has(name) ||
 									(Boolean(tools.apply_patches) &&
 										SINGLE_EDIT_ALIASES.has(name) &&
+										!(modelFamily === "anthropic" && name === "replace_text") &&
 										definition.type !== "provider")))),
 				},
 			]),

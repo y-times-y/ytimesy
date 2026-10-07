@@ -1,8 +1,42 @@
 export const agentTaskToolDefinitions = [
 	{
+		name: "read_task_checks",
+		description:
+			"Read up to eight retained foreground child checks in one bundle: actual completion statuses, stdout/stderr tails, omission warnings and full-log pointers. Shared sourceProofs are freshly checked once and referenced by index. Require zero exit, no stop, and sourcesCurrent:true; hashes do not establish semantic correctness. Recover full logs with read_task_output for failures or uncertainty. Missing proof or completion is not success.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				taskId: { type: "string" },
+				references: {
+					type: "array",
+					items: { type: "string", format: "uuid" },
+					minItems: 1,
+					maxItems: 8,
+					uniqueItems: true,
+				},
+			},
+			required: ["taskId", "references"],
+			additionalProperties: false,
+		},
+	},
+	{
+		name: "read_task_summary",
+		description:
+			"Read a bounded page of an authorized descendant's latest recorded message without waking it or preparing a VM. Follow nextStart to retrieve references omitted from list_tasks. This is agent-reported text, not verified command completion; read_task_output verifies its receipts. Never wake a finished child merely to resend stored information.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				taskId: { type: "string" },
+				start: { type: "integer", minimum: 0, maximum: 32000000 },
+			},
+			required: ["taskId"],
+			additionalProperties: false,
+		},
+	},
+	{
 		name: "read_task_output",
 		description:
-			"Read retained stdout or stderr evidence from an authorized descendant task. Use background:true for a background command ID to also observe its actual completion status; otherwise provide a tool output reference. Use this for child verification; read_tool_output and read_command are scoped to your own session. Follow nextStart for complete retained output. Does not execute a new check or grant access to unrelated tasks.",
+			"Read authorized child stdout/stderr and actual completion.status/stopped. view:summary returns a bounded tail, omission count, normalized UTF-8 content hash and fullOutput pointer; it is not the full log. Source-bound receipts include freshly checked sourcesCurrent for their declared files, not semantic correctness. Recover full pages for failures or uncertain details. Foreground references use background:false; only background IDs use background:true. Missing completion is not success. No new check or unrelated-task access.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -10,6 +44,7 @@ export const agentTaskToolDefinitions = [
 				reference: { type: "string", format: "uuid" },
 				background: { type: "boolean" },
 				stream: { type: "string", enum: ["stdout", "stderr"] },
+				view: { type: "string", enum: ["page", "summary"] },
 				start: { type: "integer", minimum: 0, maximum: 32000000 },
 			},
 			required: ["taskId", "reference"],
@@ -19,11 +54,22 @@ export const agentTaskToolDefinitions = [
 	{
 		name: "integrate_reviewed_tasks",
 		description:
-			"Integrate two or more exact reviewed siblings into a fresh writable child draft without model inference, then run baseline project checks. Successful results include checkResults with actual exits, stopped status and retained output references; use read_task_output with this task ID and those references, not another model turn or duplicate successful checks merely to fetch evidence. Do not start_task first. Conflicts or failed checks preserve the child for agent repair. The combined diff still requires lead review.",
+			"Finalize the server-created batch integration draft after every batch sibling is reviewed, or integrate exact reviewed siblings into a fresh writable legacy draft. No inference; baseline checks remain unchanged. Early mark_task_reviewed calls stage patches in the batch draft while other builders work; do not create a duplicate or start_task first. Staged checkout fingerprints and complete batch membership are checked before final commands. Batched final-check and exact-file assignments cannot be omitted. additionalChecks adds original-contract requirements, never replaces baseline. sourcePaths must cover all changed files (up to eight); over-limit assignments require an integration builder, not dropped checks. Results retain actual exits/stops, full-log references and combined diff/hash. Recover missing logs with read_task_output, incomplete receipts with read_task_checks, and remaining diff pages with inspect_task_diff. Failures preserve the same child for repair. Exact-hash semantic acceptance remains required.",
 		inputSchema: {
 			type: "object",
 			properties: {
 				taskId: { type: "string" },
+				sourcePaths: {
+					type: "array",
+					items: { type: "string", minLength: 1, maxLength: 2048 },
+					minItems: 1,
+					maxItems: 8,
+				},
+				additionalChecks: {
+					type: "array",
+					items: { type: "string", minLength: 1, maxLength: 16000 },
+					maxItems: 8,
+				},
 				sources: {
 					type: "array",
 					minItems: 2,
@@ -172,10 +218,10 @@ export const agentTaskToolDefinitions = [
 	{
 		name: "list_tasks",
 		description:
-			"Read the status and latest result summary of descendant tasks.",
+			"Read the status and latest result summary of descendant tasks. Prompts are omitted by default to avoid replaying unchanged assignments; request includePrompts:true when their exact scope is needed.",
 		inputSchema: {
 			type: "object",
-			properties: {},
+			properties: { includePrompts: { type: "boolean" } },
 			additionalProperties: false,
 		},
 	},
@@ -243,6 +289,27 @@ export const agentTaskToolDefinitions = [
 		},
 	},
 	{
+		name: "read_task_handoff",
+		description:
+			"Read one completed descendant's current exact diff, paged final summary and source-bound check bundle without waking a model. Discovers latest run_checks receipts automatically; failed attempts and incomplete discovery remain explicit. At most eight checks per read; remainingReferences and diff/summary cursors require further reads. Optional references retrieves known missing pages. Never treats summaries or missing checks as success; original-contract review and hash-bound acceptance remain required.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				taskId: { type: "string" },
+				start: { type: "integer", minimum: 0, maximum: 8388608 },
+				references: {
+					type: "array",
+					minItems: 1,
+					maxItems: 8,
+					uniqueItems: true,
+					items: { type: "string", format: "uuid" },
+				},
+			},
+			required: ["taskId"],
+			additionalProperties: false,
+		},
+	},
+	{
 		name: "import_reviewed_task",
 		description:
 			"Writable builders only: import an exact Git patch from a completed, parent-reviewed sibling with the same base revision, including committed changes since its saved checkout base. expectedSha256 must come from the parent's inspect_task_diff result; changed patches fail. Use a fresh integration builder after parallel work is reviewed; do not resend source through messages. Conflicts fail without a forced merge. Verify the combined checkout and obtain its own review before accepting the result; successful turn completion automatically hands off a draft PR.",
@@ -259,10 +326,16 @@ export const agentTaskToolDefinitions = [
 	{
 		name: "mark_task_reviewed",
 		description:
-			"Accept a completed task's result. For writable tasks supply expectedSha256 from inspect_task_diff; changed patches are rejected. The returned hash is the accepted identity for integration.",
+			"Accept a completed task's result after original-contract review. Writers require expectedSha256 from inspect_task_diff or read_task_handoff. Batched writers require verificationReferences covering every durably assigned command and exact verification file. Every supplied receipt must have zero exit, no stop and unchanged current declared sources. Invalid/stale evidence rejects acceptance. Unassigned legacy tasks retain manual review when references are omitted, not verified-check proof. Hashes and declared file bindings do not prove semantic correctness or complete changed-file coverage: inspect the full diff. Returned hash identifies accepted integration input.",
 		inputSchema: {
 			type: "object",
 			properties: {
+				verificationReferences: {
+					type: "array",
+					minItems: 1,
+					maxItems: 8,
+					items: { type: "string", format: "uuid" },
+				},
 				expectedSha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
 				taskId: {
 					type: "string",

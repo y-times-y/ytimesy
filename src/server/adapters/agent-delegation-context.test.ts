@@ -1,11 +1,29 @@
 import { expect, it, vi } from "vitest";
-import { withDelegationContext } from "./agent-delegation-context";
+import {
+	completedChildrenForReview,
+	withDelegationContext,
+} from "./agent-delegation-context";
 
 const query = vi.hoisted(() => vi.fn());
 vi.mock("./database", () => ({ database: () => ({ query }) }));
 vi.mock("./agent-capacity", () => ({
 	agentCapacity: async () => ({ maxChildren: 3, available: 2 }),
 }));
+
+it("collects only completed unreviewed direct children in the owner's project", async () => {
+	query.mockResolvedValue({ rows: [{ id: "child", revision: "one" }] });
+	expect(
+		await completedChildrenForReview("owner", "project", "parent"),
+	).toEqual([{ id: "child", revision: "one" }]);
+	const [sql, parameters] = query.mock.calls.at(-1) ?? [];
+	expect(sql).toContain(
+		"user_id=$1 and project_id=$2 and parent_session_id=$3",
+	);
+	expect(sql).toContain("task_state='done'");
+	expect(sql).toContain("task_review_state<>'reviewed'");
+	expect(sql).toContain("limit 5");
+	expect(parameters).toEqual(["owner", "project", "parent"]);
+});
 
 it("appends owner-scoped changes with explicit historical snapshot semantics", async () => {
 	query.mockResolvedValue({

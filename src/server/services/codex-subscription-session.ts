@@ -11,6 +11,7 @@ import {
 } from "#/domain/session-item";
 import { subscriptionTurnRevision } from "#/domain/subscription-turn";
 import { agentSessionForOwner } from "../adapters/agent-sessions";
+import { isServerControlledIntegration } from "../adapters/agent-task-command-receipts";
 import {
 	enqueueApiTurn,
 	inheritedSubscriptionSettings,
@@ -85,6 +86,16 @@ export async function sendSubscriptionTask(
 		});
 		scope = { ...scope, sessionId: opened.id };
 	}
+	const task = await agentSessionForOwner(
+		scope.userId,
+		scope.sessionId as string,
+	);
+	if (!task || task.projectId !== scope.projectId)
+		throw new Error("Session is not available.");
+	if (await isServerControlledIntegration(task))
+		throw new Error(
+			"Batch integration is server-controlled until a visible integration failure requires repair.",
+		);
 	const view = await readSubscriptionSession(scope);
 	if (!view.models.some((model) => model.id === input.modelId))
 		throw new Error("Selected subscription model is unavailable.");

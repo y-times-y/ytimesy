@@ -1,6 +1,7 @@
 import { APICallError } from "ai";
 import { expect, it } from "vitest";
 import {
+	apiModelFailureClassification,
 	apiTurnFailureClassification,
 	apiTurnFailureMessage,
 	SafeApiModelFailure,
@@ -64,6 +65,27 @@ it("uses structured provider codes when HTTP 400 is too broad", () => {
 		error: { code: "context_length_exceeded" },
 	});
 	expect(apiTurnFailureMessage("model", error)).toContain("context window");
+});
+
+it("classifies accepted-request stream failures without leaking payloads", () => {
+	const error = providerFailure(200, {
+		error: { code: "internal_error", message: "secret" },
+	});
+	expect(apiModelFailureClassification(error)).toMatchObject({
+		httpStatus: 200,
+		providerCode: "internal_error",
+	});
+	expect(apiTurnFailureMessage("model", error)).toContain(
+		"response stream failed",
+	);
+	expect(JSON.stringify(apiModelFailureClassification(error))).not.toContain(
+		"secret",
+	);
+	expect(
+		apiModelFailureClassification(
+			providerFailure(200, { error: { code: "sk-secret" } }),
+		).providerCode,
+	).toBe("unknown");
 });
 
 it("never stores raw provider text in the safe failure", () => {

@@ -9,6 +9,75 @@ const fresh: ModelMessage[] = [
 	{ role: "user", content: "The exact original request" },
 ];
 
+it("prefetches a builder's actual working-tree state once using the existing read tool", async () => {
+	const input = readTools();
+	const inspect = vi
+		.fn()
+		.mockResolvedValue({ tracked: "user edit", untracked: ["notes.md"] });
+	const tools = {
+		...input.tools,
+		inspect_changes: tool({ inputSchema: z.object({}), execute: inspect }),
+	};
+	const options = {
+		tools,
+		coordination: false,
+		signal: new AbortController().signal,
+		onEvent: async () => {},
+	};
+	const messages = await prefetchInitialAgentReads({
+		...options,
+		messages: fresh,
+	});
+	expect(inspect).toHaveBeenCalledOnce();
+	expect(JSON.stringify(messages)).toContain("user edit");
+	expect(JSON.stringify(messages)).toContain("notes.md");
+	await prefetchInitialAgentReads({ ...options, messages });
+	expect(inspect).toHaveBeenCalledOnce();
+	await prefetchInitialAgentReads({
+		...options,
+		messages: fresh,
+		coordination: true,
+	});
+	expect(inspect).toHaveBeenCalledOnce();
+});
+
+it("keeps identical fresh OpenAI preflight prefixes independent of the task prompt", async () => {
+	const input = readTools();
+	const first = await prefetchInitialAgentReads({
+		messages: fresh,
+		tools: input.tools,
+		coordination: false,
+		cacheStablePrefix: true,
+		signal: new AbortController().signal,
+		onEvent: async () => {},
+	});
+	const otherRequest: ModelMessage[] = [
+		{ role: "user", content: "Another exact contract" },
+	];
+	const second = await prefetchInitialAgentReads({
+		messages: otherRequest,
+		tools: input.tools,
+		coordination: false,
+		cacheStablePrefix: true,
+		signal: new AbortController().signal,
+		onEvent: async () => {},
+	});
+	expect(first.slice(0, -1)).toEqual(second.slice(0, -1));
+	expect(first.at(-1)).toBe(fresh[0]);
+	expect(second.at(-1)).toBe(otherRequest[0]);
+	expect(JSON.stringify(first)).toContain("Exact mandatory body");
+	expect(
+		await prefetchInitialAgentReads({
+			messages: first,
+			tools: input.tools,
+			coordination: false,
+			cacheStablePrefix: true,
+			signal: new AbortController().signal,
+			onEvent: async () => {},
+		}),
+	).toBe(first);
+});
+
 function readTools() {
 	const guidance = vi.fn().mockResolvedValue({
 		instructions: [{ path: "AGENTS.md", content: "Exact mandatory body" }],
@@ -52,16 +121,16 @@ it("uses only existing authorized reads and preserves actual complete results an
 		{ scope: "." },
 		expect.objectContaining({ messages: fresh }),
 	);
-	expect(input.environment).toHaveBeenCalledOnce();
+	expect(input.environment).not.toHaveBeenCalled();
 	expect(input.capacity).toHaveBeenCalledOnce();
 	expect(
 		onEvent.mock.calls.filter(([event]) => event.type === "tool-call"),
-	).toHaveLength(3);
+	).toHaveLength(2);
 	expect(
 		onEvent.mock.calls.filter(([event]) => event.type === "tool-result"),
-	).toHaveLength(3);
+	).toHaveLength(2);
 	expect(JSON.stringify(messages)).toContain("Exact mandatory body");
-	expect(JSON.stringify(messages)).toContain('"available":false');
+	expect(input.capacity).toHaveBeenCalledOnce();
 	const resumed = await prefetchInitialAgentReads({
 		messages,
 		tools: input.tools,
@@ -109,6 +178,7 @@ it("checkpoints real preflight before the first inference, including full guidan
 	const input = readTools();
 	const checkpoint = vi.fn();
 	const model = new MockLanguageModelV4({
+		provider: "openai.responses",
 		doStream: async () => {
 			expect(checkpoint).toHaveBeenCalledOnce();
 			return {
@@ -157,6 +227,7 @@ it("checkpoints real preflight before the first inference, including full guidan
 	expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain(
 		"The exact original request",
 	);
+	expect(model.doStreamCalls[0].prompt.at(-1)?.role).toBe("user");
 });
 
 it("does not infer or checkpoint fabricated guidance when its read fails", async () => {

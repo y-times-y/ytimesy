@@ -138,7 +138,7 @@ unset OPENAI_API_KEY ANTHROPIC_API_KEY
 export YTIMESY_SUBSCRIPTION_ACCESS_TOKEN="$(python3 -c 'import json,os; print(json.load(open(os.environ["CODEX_HOME"]+"/auth.json"))["tokens"]["access_token"])')"
 chmod 600 "$CODEX_HOME/auth.json"
 cd "$(cat /tmp/ytimesy-project-cwd)"
-nohup sh -c ${quote(`timeout --signal=TERM --kill-after=5s ${protocol.limits.durationSeconds}s codex exec --json --color never --model ${quote(protocol.modelId)} -c ${quote(`model_reasoning_effort="${protocol.reasoning}"`)} --sandbox workspace-write - < ${quote(`${root}/prompt.txt`)} > ${quote(`${root}/events.jsonl`)} 2> ${quote(`${root}/stderr`)}; result=$?; printf '%s' "$result" > ${quote(`${root}/exit-code`)}`)} < /dev/null > /dev/null 2>&1 &
+nohup sh -c ${quote(`timeout --signal=TERM --kill-after=5s ${protocol.limits.durationSeconds}s codex exec --json --color never --model ${quote(protocol.modelId)} -c ${quote(`model_reasoning_effort="${protocol.reasoning}"`)} --sandbox danger-full-access - < ${quote(`${root}/prompt.txt`)} > ${quote(`${root}/events.jsonl`)} 2> ${quote(`${root}/stderr`)}; result=$?; printf '%s' "$result" > ${quote(`${root}/exit-code`)}`)} < /dev/null > /dev/null 2>&1 &
 `,
 			15000,
 		);
@@ -180,6 +180,9 @@ nohup sh -c ${quote(`timeout --signal=TERM --kill-after=5s ${protocol.limits.dur
 			patches: [output.stdout],
 			durationMs: Date.now() - started,
 			cliVersion: PINNED_CODEX_CLI_VERSION,
+			// The disposable VM supplies isolation, matching production guest commands.
+			// Nested Linux sandboxing otherwise rejects child-process tests with EPERM.
+			executionIsolation: "disposable-vm",
 			vmId: vm.workspaceId,
 			requestLimitEnforced: false,
 			tokenLimitEnforced: false,

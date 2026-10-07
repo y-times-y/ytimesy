@@ -55,6 +55,7 @@ it("keeps subscription cache routing stable per account and chat through the rea
 		"chat-two",
 	);
 	const settings = runtime.requestSettings("instructions");
+	expect(runtime.prefetchInitialReads).toBe(true);
 	const key = settings.providerOptions.openai.promptCacheKey;
 	expect(key).toMatch(/^[a-f0-9]{64}$/);
 	expect(
@@ -74,6 +75,7 @@ it("keeps subscription cache routing stable per account and chat through the rea
 	const request = fetch.mock.calls.at(-1)?.[1];
 	expect(new Headers(request?.headers).get("session-id")).toBe(key);
 	expect(JSON.parse(request?.body as string).prompt_cache_key).toBe(key);
+	expect(JSON.parse(request?.body as string).parallel_tool_calls).toBe(true);
 	mocks.auth.mockResolvedValue({
 		accessToken: "different-account-token",
 		chatgptAccountId: "different-account",

@@ -217,17 +217,22 @@ export async function codexSubscriptionModel(
 				promptCacheKey: cacheKey,
 				reasoningEffort: effort,
 				reasoningSummary: "auto",
+				// Independent tool calls may share a response. Authorization and
+				// write/lease fencing remain enforced by each tool's executor.
+				parallelToolCalls: true,
 			},
 		},
 	});
 	return {
 		model,
 		contextWindow: selected.context_window,
-		// Operate below the maximum window to avoid replaying large orientation
-		// documents at every coding step. Native compaction preserves opaque state.
+		// Fully consumed long guidance is archived after an implementation decision;
+		// remaining working-context pressure uses opaque native compaction.
 		workingContextTokens: 64_000,
 		coordinationWorkingContextTokens: 48_000,
 		archiveConsumedGuidance: true,
+		// Initial reads use a stable preflight prefix; complete current bodies and
+		// hashed read receipts prevent a second mandatory-guidance fetch.
 		prefetchInitialReads: true,
 		autoCompactTokenLimit: selected.auto_compact_token_limit ?? undefined,
 		requestSettings,

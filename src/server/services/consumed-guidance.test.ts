@@ -85,6 +85,56 @@ it("keeps newly returned guidance complete until a later assistant has observed 
 	expect(archive).not.toHaveBeenCalled();
 });
 
+it("never rewrites prefix-bound provider observations even when retirement is enabled", async () => {
+	const messages = history();
+	implemented(messages);
+	const archive = vi.fn();
+	const model = new MockLanguageModelV4({
+		doStream: async () => ({
+			stream: simulateReadableStream({
+				initialDelayInMs: null,
+				chunkDelayInMs: null,
+				chunks: [
+					{
+						type: "finish",
+						finishReason: { unified: "stop", raw: "stop" },
+						usage: {
+							inputTokens: {
+								total: 3,
+								noCache: 3,
+								cacheRead: 0,
+								cacheWrite: 0,
+							},
+							outputTokens: { total: 2, text: 2, reasoning: 0 },
+						},
+					},
+				],
+			}),
+		}),
+	});
+	await runModelAgentStep(
+		{
+			userId: "owner",
+			modelId: "model",
+			instructions: "Keep signed thinking intact",
+			messages,
+			tools: {},
+			signal: new AbortController().signal,
+			archiveHistory: archive,
+			onEvent: async () => {},
+			onStep: async () => {},
+		},
+		{
+			model,
+			contextWindow: 200_000,
+			archiveConsumedGuidance: true,
+			fallbackContextPolicy: "bound-prefix",
+		},
+	);
+	expect(archive).not.toHaveBeenCalled();
+	expect(JSON.stringify(model.doStreamCalls[0])).toContain("🙂".repeat(20000));
+});
+
 it("archives after the first completed implementation decision, before another inference replays the body", async () => {
 	const messages = history();
 	implemented(messages);
@@ -231,7 +281,7 @@ it("checkpoints the recoverable projection before inference and preserves native
 			},
 			onEvent: async () => {},
 		},
-		{ model, contextWindow: 128000, archiveConsumedGuidance: true },
+		{ model, contextWindow: 32000, archiveConsumedGuidance: true },
 	);
 	expect(order.slice(0, 3)).toEqual(["archive", "checkpoint", "inference"]);
 	const replay = JSON.stringify(model.doStreamCalls[0].prompt);
@@ -241,7 +291,64 @@ it("checkpoints the recoverable projection before inference and preserves native
 	expect(replay).not.toContain("🙂");
 });
 
-it("keeps guidance through preflight source inspection before any implementation decision", async () => {
+it("retires consumed complete bodies after implementation even below working-context pressure", async () => {
+	const messages = history();
+	implemented(messages);
+	const original = structuredClone(messages);
+	const archive = vi.fn().mockResolvedValue("context-reference");
+	const checkpoint = vi.fn();
+	const model = new MockLanguageModelV4({
+		doStream: async () => ({
+			stream: simulateReadableStream({
+				initialDelayInMs: null,
+				chunkDelayInMs: null,
+				chunks: [
+					{
+						type: "finish",
+						finishReason: { unified: "stop", raw: "stop" },
+						usage: {
+							inputTokens: {
+								total: 3,
+								noCache: 3,
+								cacheRead: 0,
+								cacheWrite: 0,
+							},
+							outputTokens: { total: 1, text: 1, reasoning: 0 },
+						},
+					},
+				],
+			}),
+		}),
+	});
+	await runModelAgentStep(
+		{
+			userId: "owner",
+			modelId: "fixture",
+			instructions: "Keep all requirements",
+			messages,
+			tools: {},
+			signal: new AbortController().signal,
+			archiveHistory: archive,
+			onStep: checkpoint,
+			onEvent: async () => {},
+		},
+		{ model, contextWindow: 128000, archiveConsumedGuidance: true },
+	);
+	expect(archive).toHaveBeenCalledExactlyOnceWith(original);
+	expect(checkpoint.mock.calls[0]?.[0]).not.toEqual(original);
+	expect(messages).toEqual(original);
+	expect(JSON.stringify(model.doStreamCalls[0].prompt)).not.toContain(
+		"🙂".repeat(20000),
+	);
+	expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain(
+		"context-reference",
+	);
+	expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain(
+		"Follow every requirement",
+	);
+});
+
+it("keeps guidance while a model-initiated preflight read is still pending", async () => {
 	const messages = history();
 	messages.push({
 		role: "assistant",
@@ -257,4 +364,84 @@ it("keeps guidance through preflight source inspection before any implementation
 	const archive = vi.fn();
 	expect(await archiveConsumedGuidance(messages, archive)).toBe(messages);
 	expect(archive).not.toHaveBeenCalled();
+});
+
+it("keeps complete guidance through source investigation rather than inducing a full reread before the first edit", async () => {
+	for (const [toolCallId, output, consumed] of [
+		["call_prefetch_source", { type: "json", value: { files: [] } }, false],
+		["source", { type: "error-text", value: "Unavailable" }, false],
+		["source", { type: "json", value: { files: [] } }, false],
+	] as const) {
+		const messages = history();
+		messages.push({
+			role: "tool",
+			content: [
+				{ type: "tool-result", toolName: "read_files", toolCallId, output },
+			],
+		});
+		const archive = vi.fn().mockResolvedValue("context-reference");
+		const projected = await archiveConsumedGuidance(messages, archive);
+		expect(archive).toHaveBeenCalledTimes(consumed ? 1 : 0);
+		expect(JSON.stringify(projected).includes("🙂")).toBe(!consumed);
+	}
+});
+
+it("replaces matching stale active-body markers with recoverable receipts, without changing other hashes", async () => {
+	const messages = history();
+	implemented(messages);
+	messages.push({
+		role: "tool",
+		content: [
+			{
+				type: "tool-result",
+				toolCallId: "again",
+				toolName: "read_repository_guidance",
+				output: {
+					type: "json",
+					value: {
+						referencedDocuments: [
+							{
+								path: "PLAN.md",
+								sha256: "hash",
+								nextStart: null,
+								alreadyInContext: true,
+							},
+							{
+								path: "PLAN.md",
+								sha256: "changed",
+								nextStart: null,
+								alreadyInContext: true,
+							},
+						],
+					},
+				},
+			},
+		],
+	});
+	const original = structuredClone(messages);
+	const projected = await archiveConsumedGuidance(
+		messages,
+		vi.fn().mockResolvedValue("context-reference"),
+	);
+	const last = projected.at(-1);
+	if (
+		last?.role !== "tool" ||
+		last.content[0].type !== "tool-result" ||
+		last.content[0].output.type !== "json"
+	)
+		throw new Error("Missing marker");
+	expect(last.content[0].output.value).toMatchObject({
+		referencedDocuments: [
+			{
+				path: "PLAN.md",
+				previouslyRead: true,
+				archivedBody: { reference: "context-reference" },
+			},
+			{ path: "PLAN.md", sha256: "changed", alreadyInContext: true },
+		],
+	});
+	expect(JSON.stringify(last.content[0].output.value)).not.toContain(
+		'"sha256":"hash","nextStart":null,"alreadyInContext":true',
+	);
+	expect(messages).toEqual(original);
 });
