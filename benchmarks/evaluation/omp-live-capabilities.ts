@@ -80,8 +80,7 @@ export async function proveOmpGuestCapabilities(
 	});
 	assert.ok(prepared.prepared.every((item) => item.available));
 	const outline = await invoke("read_code", {
-		path: "main.py",
-		view: "outline",
+		files: [{ path: "main.py", view: "outline" }],
 	});
 	assert.ok(JSON.stringify(outline).includes("sha256"));
 	await invoke("rename_file", { path: "index.ts", newPath: "moved.ts" });
