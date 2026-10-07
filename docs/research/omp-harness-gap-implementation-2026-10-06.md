@@ -20,8 +20,7 @@ untouched. No paid model calls, VMs, migrations or deployment are needed.
   annotated edits, symlink targets, oversized or invalid responses fail closed.
   Filesystem failure during application can still leave partial edits; receipts
   identify completed, failed and unattempted files. This is not a multi-file
-  filesystem transaction. Project checks remain required. File-move refactors
-  and arbitrary code actions are not implemented.
+  filesystem transaction. Project checks remain required. This initial checkpoint was expanded below.
 - `inspect_code_batch`: two to four independent same-language queries share
   one guest execution and one warm-server connection. This reduces VM round
   trips and client startup, while the language server retains its serialized
@@ -56,14 +55,84 @@ rename, receipt replay, stale-file preflight, CRLF, Unicode handling and read-on
 exclusion. It does not prove Freestyle tool latency, live model tool selection,
 production behavior or comparative coding quality/cost.
 
-Structural outlines currently support TypeScript/JavaScript syntax, not OMP's
-full language catalog. Symbol refactors require a functioning configured server;
-Python/Rust/Go still require guest server binaries. Other debugger runtimes,
-file renames and a persistent native guest tool service remain separate scope.
+These were the initial checkpoint limits; the follow-up implementation below
+adds broader outlines, setup, file moves, actions, guest persistence and DAP.
 
-## Checks
+## Initial checkpoint checks
 
 Full suite: 290 files passed, 1,513 tests passed, five existing skips.
 Application and workflow TypeScript checks, production build, changed-file
 Biome with warnings treated as errors, and `git diff --check` passed.
 No live model/Freestyle run or OMP paired benchmark was performed.
+
+
+## Follow-up implementation
+
+`read_code` now uses pinned web-tree-sitter 0.25.10 and maintained Repomix WASM
+artifacts 0.1.17 for Python, Rust, Go, C/C++, C#, Java, Ruby, PHP, Swift, Dart,
+Solidity, CSS and Vue. TypeScript/JavaScript keep the existing compiler parser.
+Large declarations omit bodies; use exact source ranges before edits. Six actual
+language grammars are covered by integration tests. This is not a full syntax
+catalog or proof every grammar handles every declaration.
+
+`rename_file` requests the server's willRenameFiles edits, snapshots affected
+sources and uses the existing edit lock/hash fences. It refuses overwrites,
+symlink paths, missing parents and unsupported resource edits. The source moves
+last; partial filesystem failures still require receipt inspection.
+`apply_code_action` re-queries an action and checks source/resolved-edit identity
+before application. Text-only workspace edits are supported; server commands
+and resource operations remain rejected. Opaque server IDs are excluded from
+identity because TypeScript changes them between identical requests.
+
+The Freestyle adapter now starts an authenticated HTTPS guest capability service
+once and reuses it for subsequent language/browser/debugger operations. Its
+purpose is to remove repeated VM exec and guest client startup. The VM owns
+processes and dependencies; admission and pause guards run on every invocation.
+The endpoint uses a 256-bit private bearer token, rejects browser Origin headers,
+uses bounded requests/results, and expires after five idle minutes. Uncertain
+responses are never replayed automatically. Session path scoping and the native
+runner's explicit transport exclusion preserve existing boundaries.
+
+`prepare_code_tools` pins pyright 1.1.414, debugpy 1.8.20, gopls 0.21.0,
+Delve 1.27.2 and checksum-verified rust-analyzer 2026-10-05. Go/Rust project
+compilers and native debugger binaries are environment prerequisites; the tool
+does not install system packages or modify project manifests. Existing utilities
+and maintained parsers/protocol libraries were preferred. Product-specific code
+handles source fences, session ownership, bounded results and lifecycle.
+
+`debug_program` uses the standard DAP ProtocolClient from Microsoft's MIT-licensed
+package, supporting Python/debugpy, Go/Delve, installed LLDB, DAP-capable GDB,
+.NET/netcoredbg and repository-configured stdio adapters. It launches owned
+programs, supports initial/replacement breakpoints, stack/scopes/variables,
+continue/pause/step/stop, and rejects stale pause references. It does not attach
+to unrelated processes or evaluate arbitrary expressions. Python is covered by
+an actual debugpy fixture; other adapters require environment-specific live proof.
+
+Tree-sitter is MIT licensed; Repomix's artifact package is Unlicense, and individual
+upstream grammars retain their own licenses. Microsoft protocol/document packages
+and pyright are MIT licensed. Exact dependency versions and lockfile are committed.
+
+## Follow-up validation and evaluation boundary
+
+Full local suite: 293 files, 1,517 passing tests and five skips. The new integration
+fixtures exercise the actual persistent HTTP service, semantic TS server, file
+move/import edits, organize-imports action, grammar outlines and Python debugger.
+The Python fixture is conditional on an installed ignored debugpy runtime.
+Production build and application/workflow type checks are separate checks.
+
+`scripts/evaluate-omp-builder.ts` compares frozen source at d998928 with this
+implementation through each revision's existing builder model loop and actual VM
+tools. It is a development probe, not the full production queue evaluator. It
+excludes leader delegation, review and durable database tool journals. It uses
+one synthetic pricing/refactor task pair, the same model/reasoning and clean Git
+fixture, and a protected networkless Docker verifier. The verifier checks hidden
+arithmetic cases, import consolidation, helper preservation, scope, and typechecks.
+The operator proves that the original fixture fails and a known correct patch
+passes before any model requests. The hidden verifier stays outside coding VMs.
+
+Approval: up to $5 VM spend and 20 actual inference invocations, including retries.
+One disposable VM has a 30-minute provider lifetime and conservative resource
+ceiling; each arm permits ten requests, no unmetered native compaction. Private
+attempt counters, traces and patches are ignored. Cleanup deletes the owned VM.
+Results belong in the separate performance report. A single pair cannot establish
+general coding superiority or performance parity with OMP/Cursor.

@@ -19,7 +19,7 @@ export function apiAgentLanguageTools(
 	return {
 		inspect_code_batch: tool({
 			description:
-				"Run two to four independent read-only language queries for the same language/project in one VM execution and one warm-server connection. Supports definitions, references, hover, diagnostics and rename previews. Does not apply edits. All requests must target the same language; use separate batches for TS and JS. Avoid batching requests that depend on each other's result.",
+				"Run two to four independent read-only language queries for the same language/project in one VM execution and one warm-server connection. Supports definitions, references, hover, diagnostics, code actions and rename previews. Does not apply edits. All requests must target the same language; use separate batches for TS and JS. Avoid batching requests that depend on each other's result.",
 			inputSchema: batch,
 			execute: async (args) => {
 				const { requests } = batch.parse(args);
@@ -44,7 +44,7 @@ export function apiAgentLanguageTools(
 		}),
 		inspect_code: tool({
 			description:
-				"Use a language server in the task VM for definitions, references, hover/type information, observed diagnostics, or a rename preview. Read-only: no edits are applied. Positions are 1-based UTF-16. TypeScript/JavaScript have pinned tooling; Python/Rust/Go require their language-server binary in the VM. Diagnostics are observations, not proof a full typecheck passed.",
+				"Use a language server in the task VM for definitions, references, hover/type information, observed diagnostics, a rename preview, or code_actions. Code-action selections use line/column and optional endLine/endColumn plus kind; returned index and sha256 fence apply_code_action. Read-only: no edits are applied. Positions are 1-based UTF-16. TypeScript/JavaScript have pinned tooling; Python/Rust/Go require their language-server binary in the VM. Diagnostics are observations, not proof a full typecheck passed.",
 			inputSchema: languageQuery,
 			execute: async (args) => {
 				const workspace = await resolveToolWorkspace(input);

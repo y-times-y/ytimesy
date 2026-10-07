@@ -7,6 +7,40 @@ import { expect, it } from "vitest";
 import { STRUCTURED_CODE_READ_SOURCE } from "./structured-code-reads";
 
 const run = promisify(execFile);
+it("uses maintained grammars to outline multiple languages without exposing function bodies", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "yt-multilang-outline-"));
+	const fixtures = {
+		"main.py":
+			"class Service:\n    def greet(self, name):\n        return 'hidden-body'\n",
+		"main.rs":
+			'struct Service {}\nimpl Service { fn greet(&self) -> &str { "hidden-body" } }\n',
+		"main.go": 'package main\nfunc greet() string { return "hidden-body" }\n',
+		"main.java": 'class Service { String greet() { return "hidden-body"; } }',
+		"main.cpp":
+			'class Service {};\nconst char* greet() { return "hidden-body"; }',
+		"main.rb": "class Service\n  def greet\n    'hidden-body'\n  end\nend\n",
+	};
+	try {
+		for (const [path, content] of Object.entries(fixtures)) {
+			await writeFile(join(cwd, path), content);
+			const output = await run(process.execPath, [
+				"--input-type=module",
+				"-e",
+				STRUCTURED_CODE_READ_SOURCE,
+				process.cwd(),
+				JSON.stringify({ cwd, files: [{ path, view: "outline" }] }),
+			]);
+			const outline = JSON.parse(output.stdout).files[0];
+			expect(outline.status, path).toBe("ok");
+			expect(outline.declarations.length, path).toBeGreaterThan(0);
+			expect(JSON.stringify(outline.declarations), path).not.toContain(
+				"hidden-body",
+			);
+		}
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
 it("reads outlines and exact CRLF/Unicode ranges in one process, fences stale reads and rejects escapes", async () => {
 	const cwd = await mkdtemp(join(tmpdir(), "yt-code-outline-"));
 	const invoke = async (files: object[]) =>
@@ -29,11 +63,11 @@ it("reads outlines and exact CRLF/Unicode ranges in one process, fences stale re
 		const source =
 			'export function greet(name: string) {\r\n  return "hello 😀" + name;\r\n}\r\nexport class Service {\r\n  run() { return greet("you"); }\r\n}\r\n';
 		await writeFile(join(cwd, "index.ts"), source);
-		await writeFile(join(cwd, "other.py"), "def greet():\n    return 1\n");
+		await writeFile(join(cwd, "other.txt"), "def greet():\n    return 1\n");
 		const outline = (
 			await invoke([
 				{ path: "index.ts", view: "outline" },
-				{ path: "other.py", view: "outline" },
+				{ path: "other.txt", view: "outline" },
 			])
 		).files;
 		expect(outline[0].status).toBe("ok");
