@@ -14,7 +14,7 @@ const input = JSON.parse(process.argv[2]);
 const root = await realpath(input.cwd);
 const language = /\.[cm]?tsx?$/.test(input.path) ? 'typescript' : /\.[cm]?jsx?$/.test(input.path) ? 'javascript' : /\.py$/.test(input.path) ? 'python' : /\.rs$/.test(input.path) ? 'rust' : /\.go$/.test(input.path) ? 'go' : null;
 if (!language) throw new Error('No configured language server for this file type.');
-const identity = createHash('sha256').update(JSON.stringify([root, language, process.argv[1], 'semantic-refactor-v2'])).digest('hex').slice(0, 20);
+const identity = createHash('sha256').update(JSON.stringify([root, language, process.argv[1], 'semantic-refactor-v3'])).digest('hex').slice(0, 20);
 const directory = join(tmpdir(), 'yt-lsp-' + process.getuid() + '-' + identity);
 await mkdir(directory, { mode: 0o700 }).catch(error => { if(error.code !== 'EEXIST') throw error; });
 const directoryInfo = await lstat(directory);
@@ -177,9 +177,15 @@ if (!input.daemon) {
     }
     let result;
     if (request.operation === 'diagnostics') {
-      let timeout;
-      try { await Promise.race([document.ready, new Promise(resolve => { timeout = setTimeout(resolve, 15000); })]); }
-      finally { clearTimeout(timeout); }
+      const waitMs = request.diagnosticWaitMs ?? 15000;
+      if (!Number.isInteger(waitMs) || waitMs < 0 || waitMs > 15000) throw new Error('Invalid diagnostics wait budget.');
+      // Edit receipts poll current observations without waiting for an optional server push.
+      // Explicit inspect_code diagnostics retain the full bounded observation wait.
+      if (waitMs > 0 && !document.observed) {
+        let timeout;
+        try { await Promise.race([document.ready, new Promise(resolve => { timeout = setTimeout(resolve, waitMs); })]); }
+        finally { clearTimeout(timeout); }
+      }
       result = document.diagnostics;
     } else if (request.operation === 'code_actions') {
       const end = {line:(request.endLine ?? request.line) - 1, character:(request.endColumn ?? request.column) - 1};

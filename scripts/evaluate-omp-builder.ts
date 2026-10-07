@@ -413,7 +413,15 @@ try {
 		}
 		// Same fixture Git history including exact frozen commit, no auth/config from host.
 		const gitArchive = join(directory, "fixture-git.tar");
-		await command(["tar", "-cf", gitArchive, "-C", fixture, ".git"]);
+		await command([
+			"tar",
+			...(process.platform === "darwin" ? ["--no-mac-metadata"] : []),
+			"-cf",
+			gitArchive,
+			"-C",
+			fixture,
+			".git",
+		]);
 		const archive = await readFile(gitArchive);
 		const archivePath = `/tmp/omp-fixture-${arm}.b64`;
 		await machines.writeTextFile(vm, archivePath, archive.toString("base64"));
@@ -423,6 +431,11 @@ try {
 		await checked(
 			`ln -s ${quote(join(guestCapabilityDirectory("language"), "node_modules"))} ${quote(join(cwd, "node_modules"))}`,
 		);
+		await checked(
+			`printf '%s\\n' node_modules '._*' >> ${quote(join(cwd, ".git/info/exclude"))}`,
+		);
+		if ((await checked(`git -C ${quote(cwd)} status --porcelain`)).trim())
+			throw new Error("Evaluation fixture is dirty before inference.");
 		const armMachines = {
 			...machines,
 			runCapability:
