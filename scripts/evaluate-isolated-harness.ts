@@ -23,6 +23,11 @@ import {
 import { runPairedEvaluation } from "../benchmarks/evaluation/run";
 import { pinnedCodexInstallCommand } from "../src/domain/guest-cli-pin";
 import { posixShellCommand } from "../src/domain/posix-command";
+import { removeContextArchives } from "../src/server/adapters/checkpoints/storage";
+import {
+	archiveModelContext,
+	readModelContextArchive,
+} from "../src/server/adapters/context-archives";
 import { closeDatabase, database } from "../src/server/adapters/database";
 import { GUEST_INTERNET_FIREWALL } from "../src/server/adapters/freestyle/proof-vm";
 import { codexAccessTokenExpiresAt } from "../src/server/auth/codex-managed-auth";
@@ -95,6 +100,7 @@ let snapshotId: string | undefined;
 let containerCreated = false;
 let creationAttempted = false;
 const knownSessionSlugs = new Set<string>();
+const ownedArchiveSessions = new Set<string>();
 const ownedSnapshots = new Set<string>();
 let sessionWatcher: ReturnType<typeof setInterval> | undefined;
 let watcherPending: Promise<void> | undefined;
@@ -142,6 +148,37 @@ try {
 		data: JSON.stringify(auth),
 	});
 	await closeDatabase();
+	if (
+		process.env.SUPABASE_STORAGE_URL !== `https://${reference}.supabase.co` ||
+		!process.env.SUPABASE_STORAGE_SERVICE_KEY
+	)
+		throw new Error(
+			"Approved development private archive storage is required before inference.",
+		);
+	process.env.BETTER_AUTH_SECRET = localSecret;
+	const archiveSession = randomUUID();
+	ownedArchiveSessions.add(archiveSession);
+	const archiveMessages = [
+		{ role: "user" as const, content: "Isolated archive round-trip control." },
+	];
+	const archiveReference = await archiveModelContext(
+		userId,
+		archiveSession,
+		archiveMessages,
+	);
+	if (
+		JSON.stringify(
+			await readModelContextArchive(userId, archiveSession, archiveReference),
+		) !== JSON.stringify(archiveMessages)
+	)
+		throw new Error(
+			"Private archive round-trip control failed before inference.",
+		);
+	await removeContextArchives(userId, archiveSession);
+	await save("archive-preflight.json", {
+		roundTripPassed: true,
+		scopedSession: archiveSession,
+	});
 	await command([
 		"openssl",
 		"req",
@@ -366,6 +403,9 @@ mkdir -p .ytimesy
 		BETTER_AUTH_SECRET: localSecret,
 		DATABASE_URL: localUrl.toString(),
 		FREESTYLE_API_KEY: process.env.FREESTYLE_API_KEY ?? "",
+		SUPABASE_STORAGE_URL: process.env.SUPABASE_STORAGE_URL ?? "",
+		SUPABASE_STORAGE_SERVICE_KEY:
+			process.env.SUPABASE_STORAGE_SERVICE_KEY ?? "",
 		GITHUB_OAUTH_CLIENT_ID: "evaluation-disabled",
 		GITHUB_OAUTH_CLIENT_SECRET: "evaluation-disabled",
 		GITHUB_APP_CLIENT_ID: "evaluation-disabled",
@@ -590,10 +630,12 @@ return [...new Set(values.filter((value): value is string => typeof value === 's
 				templateMaximumSeconds: 600,
 			});
 			const sessions = await local.query("select id from agent_session");
-			for (const row of sessions.rows)
+			for (const row of sessions.rows) {
+				ownedArchiveSessions.add(String(row.id));
 				knownSessionSlugs.add(
 					`ytimesy-ag-${String(row.id).replaceAll("-", "").slice(0, 16)}`,
 				);
+			}
 			await save("remaining-session-slugs.json", [...knownSessionSlugs]);
 		} catch {
 			cleanupErrors.push("Could not capture remaining session identities.");
@@ -612,6 +654,13 @@ return [...new Set(values.filter((value): value is string => typeof value === 's
 		if (worker.exitCode === null) {
 			worker.kill("SIGKILL");
 			cleanupErrors.push("Worker required forced termination.");
+		}
+	}
+	for (const sessionId of ownedArchiveSessions) {
+		try {
+			await removeContextArchives(userId, sessionId);
+		} catch {
+			cleanupErrors.push(`Owned archive cleanup failed: ${sessionId}`);
 		}
 	}
 	for (const slug of knownSessionSlugs) {
