@@ -97,3 +97,12 @@ test substitutes only the Linux process fence; production fence behavior has its
 own existing tests. Browser fixture checks are not authenticated cloud/VM proofs.
 Competitive quality/speed and representative model compliance still require the
 existing paired evaluation machinery with identical task/model/environment budgets.
+
+An additional real Linux smoke proof is available as
+`pnpm exec tsx scripts/prove-claude-harness-linux.ts`. It uses a disposable local
+Git repository and the actual Linux process fence without mocking it. It covers
+scoped-instruction edit deferral, stale reads, compaction reload, Git rewind and
+backup restoration, lifecycle hook replay/feedback/Stop continuation, returned
+failure receipts, TERM-resistant cancellation and rejected late starts.
+The PR workflow also runs this proof. See the [verification report](verification/claude-harness-2026-10-06.md)
+for the current local evidence and outstanding cloud verification.

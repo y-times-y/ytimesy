@@ -160,3 +160,67 @@ it("does not provision a VM or execute hooks for a read-only task", async () => 
 	expect(await hooks.stop([])).toBe(false);
 	expect(workspace).not.toHaveBeenCalled();
 });
+
+it("dispatches failure hooks for returned patch/command failure receipts while preserving their contents", async () => {
+	const fixture = await localHarnessWorkspace();
+	try {
+		await mkdir(join(fixture.root, ".ytimesy"));
+		await writeFile(
+			join(fixture.root, ".ytimesy/hooks.json"),
+			JSON.stringify({
+				version: 1,
+				hooks: [
+					{
+						event: "PostToolUse",
+						command: `printf '{"message":"success event"}'`,
+					},
+					{
+						event: "PostToolUseFailure",
+						command: `printf '{"message":"failure event"}'`,
+					},
+				],
+			}),
+		);
+		await fixture.run("git", ["-C", fixture.root, "add", "."]);
+		await fixture.run("git", ["-C", fixture.root, "commit", "-qm", "hooks"]);
+		const baseline = (
+			await fixture.run("git", ["-C", fixture.root, "rev-parse", "HEAD"])
+		).stdout.trim();
+		const hooks = harnessLifecycleHooks({
+			workspace: async () => fixture.workspace,
+			turnId: randomUUID(),
+			readOnly: false,
+			signal: new AbortController().signal,
+			baseline: async () => baseline,
+			once: (_id, run) => run(),
+		});
+		for (const [index, receipt] of [
+			{ status: "failed", output: "patch rejected" },
+			{ exitCode: 1, stdout: "check failed" },
+			{ ok: false, error: "unavailable" },
+		].entries()) {
+			const wrapped = hooks.wrap({
+				operation: tool({
+					inputSchema: z.object({}),
+					execute: async () => receipt,
+				}),
+			});
+			expect(
+				await wrapped.operation.execute?.(
+					{},
+					{
+						toolCallId: String(index),
+						messages: [],
+						context: {},
+						abortSignal: new AbortController().signal,
+					},
+				),
+			).toEqual(receipt);
+			const feedback = JSON.stringify(hooks.drain([]));
+			expect(feedback).toContain("failure event");
+			expect(feedback).not.toContain("success event");
+		}
+	} finally {
+		await fixture.cleanup();
+	}
+});
