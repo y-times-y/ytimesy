@@ -1,3 +1,12 @@
+Follow-up harness scope (2026-10-06, isolated implementation): persistent guest
+capability transport, maintained grammar outlines, source-fenced file moves and
+text-only code actions, pinned Python/Go/Rust server preparation, and owned DAP
+sessions are implemented. Native compilers/debugger binaries remain environment
+prerequisites. See [implementation and validation boundaries](docs/research/omp-harness-gap-implementation-2026-10-06.md).
+The controlled live builder probe is distinct from the full production queue,
+leader/delegation/review evaluator; local fixtures alone do not establish model
+outcome or hosted speed improvements.
+
 # ytimesy v0
 
 ### Structural reads and language refactors — 2026-10-06

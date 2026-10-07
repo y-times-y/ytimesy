@@ -6,6 +6,7 @@ import {
 } from "./agent-tool-workspace";
 import { runGuestCapability } from "./guest-node-capability";
 import { repositoryToolPath } from "./repository-tool-path";
+import { TREE_SITTER_OUTLINE_SOURCE } from "./tree-sitter-outlines";
 
 const selection = z.discriminatedUnion("view", [
 	z.object({ path: repositoryToolPath, view: z.literal("outline") }),
@@ -31,7 +32,7 @@ export function structuredCodeTools(
 	return {
 		read_code: tool({
 			description:
-				"Inspect up to four files in one VM request. Use outline first for large TS/JS/TSX/JSX files: parser-derived declarations, signatures, class members and 1-based line spans without bodies. Outlines are incomplete source evidence; follow with lines for exact content. Line ranges support any UTF-8 file and may bind expectedSha256 from the outline to reject changes. Unsupported outlines return an explicit status; use read_file instead. Source files max 1 MiB; combined selected text max 60,000 characters; narrow oversized ranges. Does not execute repository code or start a language server.",
+				"Inspect up to four files in one VM request. Use outline for locating declarations in large files, then read exact source. TS/JS/TSX/JSX use TypeScript; Python, Rust, Go, C/C++, C#, Java, Ruby, PHP, Swift, Dart, Solidity, CSS and Vue use maintained Tree-sitter grammars: parser-derived declarations, signatures, class members and 1-based line spans without bodies. Outlines are incomplete source evidence; follow with lines for exact content. Line ranges support any UTF-8 file and may bind expectedSha256 from the outline to reject changes. Prefer read_file for small files. Unsupported outlines return an explicit status; use read_file instead. Source files max 1 MiB; combined selected text max 60,000 characters; narrow oversized ranges. Does not execute repository code or start a language server.",
 			inputSchema: codeReadRequest,
 			execute: async (args) => {
 				const request = codeReadRequest.parse(args);
@@ -57,7 +58,8 @@ import {resolve, sep} from 'node:path';
 import {createHash} from 'node:crypto';
 import {TextDecoder} from 'node:util';
 const require = createRequire(process.argv[1] + '/package.json');
-const ts = require('typescript');
+const {TextDocument} = require('vscode-languageserver-textdocument');
+${TREE_SITTER_OUTLINE_SOURCE}
 const input = JSON.parse(process.argv[2]);
 const root = await realpath(input.cwd);
 if (!Array.isArray(input.files) || input.files.length < 1 || input.files.length > 4) throw new Error('Invalid read batch.');
@@ -78,9 +80,9 @@ for (const request of input.files) {
   if (request.view === 'lines') {
     if (!Number.isInteger(request.startLine) || !Number.isInteger(request.endLine) || request.startLine < 1 || request.endLine < request.startLine || request.endLine > lines.length || request.endLine - request.startLine >= 1000) throw new Error('Invalid or oversized line range.');
     const start = request.startLine, end = request.endLine;
-    const source = ts.createSourceFile(request.path, content, ts.ScriptTarget.Latest, true);
-    const from = source.getPositionOfLineAndCharacter(start - 1, 0);
-    const to = end < lines.length ? source.getPositionOfLineAndCharacter(end, 0) : content.length;
+    const source = TextDocument.create(request.path, '', 0, content);
+    const from = source.offsetAt({line:start-1,character:0});
+    const to = end < lines.length ? source.offsetAt({line:end,character:0}) : content.length;
     const text = content.slice(from, to);
     characters += text.length;
     if (characters > 60000) throw new Error('Selected text exceeds batch limit; narrow ranges or use read_file.');
@@ -88,7 +90,8 @@ for (const request of input.files) {
     continue;
   }
   if (request.view !== 'outline') throw new Error('Unknown view.');
-  if (!/\.[cm]?[jt]sx?$/.test(request.path)) { files.push({...metadata, view:'outline', status:'unsupported', instruction:'Use read_file or a line selection for exact source.'}); continue; }
+  if (!/\.[cm]?[jt]sx?$/.test(request.path)) { files.push(await treeSitterOutline(request.path, content, metadata)); continue; }
+  const ts = require('typescript');
   const source = ts.createSourceFile(request.path, content, ts.ScriptTarget.Latest, true);
   const declarations = [];
   let omitted = 0;

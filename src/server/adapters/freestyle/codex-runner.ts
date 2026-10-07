@@ -108,6 +108,8 @@ export PATH="/opt/ytimesy-codex/node_modules/.bin:$PATH"
 umask 077`;
 	const machines: WorkspaceMachines = {
 		...base,
+		// Runner commands require the scoped environment and target guard in exec.
+		runCapability: undefined,
 		exec: (id, command, timeoutMs) => {
 			assertTarget(id);
 			return base.exec(

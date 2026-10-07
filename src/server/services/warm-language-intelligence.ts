@@ -3,7 +3,7 @@ export const WARM_LANGUAGE_INTELLIGENCE_SOURCE = String.raw`
 import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, realpath, stat, lstat, unlink } from 'node:fs/promises';
+import { mkdir, readFile, realpath, stat, lstat, unlink, access } from 'node:fs/promises';
 import { resolve, sep, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL, fileURLToPath } from 'node:url';
@@ -14,7 +14,7 @@ const input = JSON.parse(process.argv[2]);
 const root = await realpath(input.cwd);
 const language = /\.[cm]?tsx?$/.test(input.path) ? 'typescript' : /\.[cm]?jsx?$/.test(input.path) ? 'javascript' : /\.py$/.test(input.path) ? 'python' : /\.rs$/.test(input.path) ? 'rust' : /\.go$/.test(input.path) ? 'go' : null;
 if (!language) throw new Error('No configured language server for this file type.');
-const identity = createHash('sha256').update(JSON.stringify([root, language, process.argv[1], 'semantic-rename-v1'])).digest('hex').slice(0, 20);
+const identity = createHash('sha256').update(JSON.stringify([root, language, process.argv[1], 'semantic-refactor-v2'])).digest('hex').slice(0, 20);
 const directory = join(tmpdir(), 'yt-lsp-' + process.getuid() + '-' + identity);
 await mkdir(directory, { mode: 0o700 }).catch(error => { if(error.code !== 'EEXIST') throw error; });
 const directoryInfo = await lstat(directory);
@@ -98,7 +98,8 @@ if (!input.daemon) {
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
   const tsServer = process.argv[1] + '/node_modules/.bin/typescript-language-server';
-  const commands = { typescript: [tsServer, '--stdio'], javascript: [tsServer, '--stdio'], python: ['pyright-langserver', '--stdio'], rust: ['rust-analyzer'], go: ['gopls', 'serve'] };
+  const installed = async name => {const file=process.argv[1]+'/bin/'+name;return await access(file).then(()=>file,()=>name);};
+  const commands = { typescript: [tsServer, '--stdio'], javascript: [tsServer, '--stdio'], python: [process.argv[1] + '/node_modules/.bin/pyright-langserver', '--stdio'], rust: [await installed('rust-analyzer')], go: [await installed('gopls'), 'serve'] };
   const [command, ...args] = commands[language];
   child = spawn(command, args, { cwd: root, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
   child.stderr.on('data', () => {});
@@ -118,8 +119,10 @@ if (!input.daemon) {
   connection.onRequest('workspace/configuration', value => value.items.map(() => null));
   connection.onRequest('workspace/applyEdit', () => ({ applied: false, failureReason: 'This capability only previews edits.' }));
   connection.listen();
+  let serverCapabilities;
   const initialized = (async () => {
-    await connection.sendRequest('initialize', { processId: process.pid, rootUri: pathToFileURL(root).href, workspaceFolders: [{uri: pathToFileURL(root).href, name: 'task'}], initializationOptions: {tsserver: {useSyntaxServer: 'never'}}, capabilities: {workspace: {configuration: true}, textDocument: {publishDiagnostics: {versionSupport: true}}} });
+    const initializedResult = await connection.sendRequest('initialize', { processId: process.pid, rootUri: pathToFileURL(root).href, workspaceFolders: [{uri: pathToFileURL(root).href, name: 'task'}], initializationOptions: {tsserver: {useSyntaxServer: 'never'}}, capabilities: {workspace: {configuration: true, workspaceEdit: {documentChanges: true}, fileOperations: {willRename:true, didRename:true}}, textDocument: {publishDiagnostics: {versionSupport: true}, codeAction: {codeActionLiteralSupport: {codeActionKind: {valueSet:['quickfix','refactor','source.organizeImports']}}, resolveSupport: {properties:['edit']}}}} });
+    serverCapabilities = initializedResult.capabilities;
     await connection.sendNotification('initialized', {});
   })();
   initialized.catch(shutdown);
@@ -141,6 +144,15 @@ if (!input.daemon) {
       documents.delete(uri);
       return {closed: true};
     }
+    if (request.previousPath) {
+      const oldFile = resolve(root, request.previousPath), newFile = resolve(root, request.path);
+      if (![oldFile,newFile].every(file => file.startsWith(root + sep) && !file.slice(root.length + 1).split(sep).includes('.git'))) throw new Error('Invalid file-move notification.');
+      await initialized;
+      const oldUri = pathToFileURL(oldFile).href;
+      if (documents.has(oldUri)) await connection.sendNotification('textDocument/didClose', {textDocument:{uri:oldUri}});
+      documents.delete(oldUri);
+      await connection.sendNotification('workspace/didRenameFiles', {files:[{oldUri,newUri:pathToFileURL(newFile).href}]});
+    }
     const file = await realpath(resolve(root, request.path));
     if (!file.startsWith(root + sep) || file.slice(root.length + 1).split(sep).includes('.git')) throw new Error('The requested file is outside repository source files.');
     if ((await stat(file)).size > 1000000) throw new Error('File exceeds the language inspection limit.');
@@ -149,29 +161,66 @@ if (!input.daemon) {
     const position = {line: request.line - 1, character: request.column - 1};
     const lines = text.split('\n');
     if (!Number.isInteger(position.line) || !Number.isInteger(position.character) || position.line < 0 || position.character < 0 || position.line >= lines.length || position.character > lines[position.line].length) throw new Error('Position is outside the file. Columns use UTF-16 units.');
-    const methods = {definition: 'textDocument/definition', references: 'textDocument/references', hover: 'textDocument/hover', rename_preview: 'textDocument/rename'};
-    if (request.operation !== 'diagnostics' && !methods[request.operation]) throw new Error('Unsupported language operation.');
+    const methods = {code_actions: 'textDocument/codeAction', definition: 'textDocument/definition', references: 'textDocument/references', hover: 'textDocument/hover', rename_preview: 'textDocument/rename'};
+    if (!['diagnostics','rename_file_preview'].includes(request.operation) && !methods[request.operation]) throw new Error('Unsupported language operation.');
     if (request.operation === 'rename_preview' && !request.newName) throw new Error('newName is required for a rename preview.');
     await initialized;
     const uri = pathToFileURL(file).href;
     const previous = documents.get(uri);
-    const document = {text, version: (previous?.version ?? 0) + 1, observed: false, diagnostics: [], truncated: false, resolve: null};
-    document.ready = new Promise(resolve => { document.resolve = resolve; });
-    documents.set(uri, document);
-    if (previous) await connection.sendNotification('textDocument/didChange', {textDocument: {uri, version: document.version}, contentChanges: [{text}]});
-    else await connection.sendNotification('textDocument/didOpen', {textDocument: {uri, languageId: language, version: document.version, text}});
+    const unchanged = previous?.text === text;
+    const document = unchanged ? previous : {text, version: (previous?.version ?? 0) + 1, observed: false, diagnostics: [], truncated: false, resolve: null};
+    if (!unchanged) {
+      document.ready = new Promise(resolve => { document.resolve = resolve; });
+      documents.set(uri, document);
+      if (previous) await connection.sendNotification('textDocument/didChange', {textDocument: {uri, version: document.version}, contentChanges: [{text}]});
+      else await connection.sendNotification('textDocument/didOpen', {textDocument: {uri, languageId: language, version: document.version, text}});
+    }
     let result;
     if (request.operation === 'diagnostics') {
       let timeout;
       try { await Promise.race([document.ready, new Promise(resolve => { timeout = setTimeout(resolve, 15000); })]); }
       finally { clearTimeout(timeout); }
       result = document.diagnostics;
+    } else if (request.operation === 'code_actions') {
+      const end = {line:(request.endLine ?? request.line) - 1, character:(request.endColumn ?? request.column) - 1};
+      if (end.line < position.line || end.line >= lines.length || end.character < 0 || end.character > lines[end.line].length || (end.line === position.line && end.character < position.character)) throw new Error('Invalid action selection.');
+      let actions = await connection.sendRequest('textDocument/codeAction', {textDocument:{uri}, range:{start:position, end}, context:{diagnostics:document.diagnostics, triggerKind:1, ...(request.kind ? {only:[request.kind]} : {})}}) ?? [];
+      // Server data IDs may change between requests. Fence the fresh source and resolved edit, not opaque lookup IDs.
+      if (serverCapabilities.codeActionProvider?.resolveProvider) {
+        const resolved = [];
+        for (const action of actions.slice(0,100)) resolved.push(action.command || action.disabled ? action : await connection.sendRequest('codeAction/resolve', action));
+        actions = resolved;
+      }
+      const actionDigest = action => createHash('sha256').update(JSON.stringify([text,action.title,action.kind??null,action.edit??null,action.command??null,action.disabled??null])).digest('hex');
+      if (request.actionIndex !== undefined) {
+        let action = actions[request.actionIndex];
+        if (!action || actionDigest(action) !== request.actionSha256) throw new Error('Code action changed; inspect available actions again.');
+        if (action.disabled) throw new Error('The selected code action is disabled.');
+        if (action.command || !action.edit) throw new Error('This action requires server commands or has no textual edits; it cannot be safely applied by the fenced editor.');
+        result = action.edit;
+      } else result = actions.slice(0,100).map((action,index) => ({index, title:action.title, kind:action.kind ?? null, sha256:actionDigest(action), disabled:action.disabled ?? null, requiresCommand:Boolean(action.command)}));
+    } else if (request.operation === 'rename_file_preview') {
+      if (!serverCapabilities.workspace?.fileOperations?.willRename) throw new Error('Language server does not support semantic file moves.');
+      const destination = resolve(root, request.newPath);
+      if (!destination.startsWith(root + sep) || destination.slice(root.length + 1).split(sep).includes('.git') || (await realpath(resolve(destination, '..'))) !== resolve(destination, '..')) throw new Error('Invalid move destination or parent symlink.');
+      if (await lstat(destination).then(() => true, () => false)) throw new Error('Move destination already exists.');
+      result = await connection.sendRequest('workspace/willRenameFiles', {files:[{oldUri:uri, newUri:pathToFileURL(destination).href}]}) ?? {changes:{}};
     } else result = await connection.sendRequest(methods[request.operation], {textDocument: {uri}, position, ...(request.operation === 'references' ? {context: {includeDeclaration: true}} : {}), ...(request.operation === 'rename_preview' ? {newName: request.newName} : {})});
     if (request.includeRenameSources) {
-      if (request.operation !== 'rename_preview') throw new Error('Source snapshots require a rename preview.');
-      if (result?.documentChanges || result?.changeAnnotations) throw new Error('Unsupported rename edit contract; no edits applied.');
-      const changes = Object.entries(result?.changes ?? {});
-      if (!changes.length || changes.length > 8) throw new Error('Rename must affect one to eight existing files.');
+      if (!['rename_preview','rename_file_preview','code_actions'].includes(request.operation)) throw new Error('Source snapshots require a refactor request.');
+      if (result?.changeAnnotations || (result?.changes && result?.documentChanges)) throw new Error('Unsupported or ambiguous workspace edit; no edits applied.');
+      const changeMap = {...result?.changes};
+      for (const edit of result?.documentChanges ?? []) {
+        if (!edit.textDocument || !Array.isArray(edit.edits) || edit.kind) throw new Error('Resource operations are not allowed in server edits.');
+        const targetUri = edit.textDocument.uri;
+        const version = edit.textDocument.version;
+        if (version !== null && version !== undefined && documents.get(targetUri)?.version !== version) throw new Error('Language edit version differs from inspected source.');
+        if (changeMap[targetUri]) throw new Error('Duplicate workspace edit target.');
+        changeMap[targetUri] = edit.edits;
+      }
+      if (request.operation === 'rename_file_preview' && !changeMap[uri]) changeMap[uri] = [];
+      const changes = Object.entries(changeMap);
+      if (!changes.length || changes.length > 8) throw new Error('Refactor must affect one to eight existing files.');
       let size = 0;
       const files = [];
       for (const [targetUri, edits] of changes) {

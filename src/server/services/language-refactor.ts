@@ -20,7 +20,7 @@ export const renameSources = z.object({
 				path: repositoryToolPath,
 				content: z.string().max(200_000),
 				sha256: z.string().regex(/^[a-f0-9]{64}$/),
-				edits: z.array(textEdit).min(1).max(500),
+				edits: z.array(textEdit).max(500),
 			}),
 		)
 		.min(1)
