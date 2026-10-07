@@ -44,14 +44,17 @@ this change. Native results record `executionIsolation: disposable-vm`.
 
 `scripts/evaluate-isolated-harness.ts` runs a counterbalanced development pilot
 without replacing a shared worker. It requires a clean committed worktree,
-existing operator-owned prepared ytimesy environment, Docker's locally cached
+existing operator-owned ytimesy project, Docker's locally cached
 PostgreSQL 13 and pinned Node grader images, and at least 45 minutes remaining
 on the current Codex access credential. It applies existing migrations only to
 an owned loopback/TLS PostgreSQL container, uses a fresh encryption secret and
 an access-only authentication copy with an unusable refresh placeholder, and
 starts the actual durable worker locally. It does not deploy shared migrations,
 copy OAuth/GitHub credentials, refresh the connected account, publish changes,
-or change shared grants. The source template is copied, never modified.
+or change shared grants. A new public Ubuntu VM receives only a bundle of the
+older task-source commit, installs its locked dependencies and pinned native
+CLI, then yields the same private snapshot for both arms. The evaluator's
+verifier/reference source is absent from that commit and its Git history.
 
 After explicit spend/quota approval, use the existing development credentials:
 
