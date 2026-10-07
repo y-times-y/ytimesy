@@ -237,3 +237,23 @@ checks passed. The first combined
 focused run hit a five-second real-process fixture
 timeout; an isolated single-worker run passed, followed by the expanded search
 fixtures. This does not establish the cause of the timing variation.
+
+## Subsequent Live Proof
+
+With fresh user approval capped at $10, the actual baseline, completion receipt,
+commit fence and Linux process-cancellation services passed disposable Freestyle
+and development PostgreSQL probes. A fixed-model direct operator invocation of
+the production model/tool loop repaired one tiny synthetic fixture in 18.7
+seconds and passed 12 independent post-run assertions. The durable worker,
+full lead/builder pipeline and PR repair were not exercised. Failed proof-adapter
+attempts are retained rather than counted as passes.
+
+All 18 synthetic Linux search comparisons matched Git, but no consistent
+indexed-search speed advantage was observed, so the index remains opt-in.
+All proof-owned VMs and database fixtures were confirmed removed; shared worker
+and concurrent-agent resources were preserved. Five bounded small VMs, including
+failed attempts, had an aggregate maximum standard-rate compute/storage envelope
+below $0.12, not invoice-reconciled total spend. See the complete conditions,
+failures, limitations and reproduction commands in
+[the live proof](../../benchmarks/evaluation/VERIFICATION-2026-10-06-HARNESS-MECHANICS.md).
+This is functional proof, not Cursor parity or representative model performance.
