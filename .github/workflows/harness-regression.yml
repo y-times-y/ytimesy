@@ -16,8 +16,11 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm harness:regression
+      - run: pnpm exec tsx scripts/prove-claude-harness-linux.ts > .ytimesy/harness-linux-proof.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: harness-behavior-results
-          path: .ytimesy/harness-regression.xml
+          path: |
+            .ytimesy/harness-regression.xml
+            .ytimesy/harness-linux-proof.json

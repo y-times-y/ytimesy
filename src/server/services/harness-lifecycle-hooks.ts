@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { ModelMessage, ToolSet } from "ai";
 import { z } from "zod";
+import { reportedToolFailure } from "#/domain/harness-performance";
 import { posixShellQuoted } from "#/domain/posix-command";
 import { agentOutputArtifacts } from "./agent-output-artifacts";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
@@ -184,7 +185,9 @@ export function harnessLifecycleHooks(input: {
 									throw error;
 								}
 								await postTool(
-									"PostToolUse",
+									reportedToolFailure(result)
+										? "PostToolUseFailure"
+										: "PostToolUse",
 									options.toolCallId,
 									{ input: args, output: result },
 									name,
