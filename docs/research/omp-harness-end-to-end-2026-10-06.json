@@ -349,5 +349,15 @@
     "Model coding pair used pre-fix treatment; post-fix comparison was a scripted production tool pipeline, not another paired model coding trial.",
     "Excludes production queue, leader/delegation/review and durable DB tool journal.",
     "Python DAP and six grammar languages tested; installed Go/Rust compilers and non-Python native debugger adapters require separate environment proofs."
-  ]
+  ],
+  "validation": {
+    "testFilesPassed": 293,
+    "testsPassed": 1517,
+    "skipped": 5,
+    "productionBuild": "passed",
+    "applicationTypecheck": "passed",
+    "workflowTypecheck": "passed",
+    "changedFileBiomeWarningsAsErrors": "passed",
+    "gitDiffCheck": "passed"
+  }
 }

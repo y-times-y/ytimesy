@@ -101,7 +101,9 @@ const report: { [key: string]: unknown } = {
 	inferenceRequests: 0,
 	arms: [],
 };
-const client = new Freestyle({ apiKey: process.env.FREESTYLE_API_KEY });
+const key = process.env.FREESTYLE_API_KEY;
+if (!key) throw new Error("VM connection unavailable.");
+const client = new Freestyle({ apiKey: key });
 let vmId: string | undefined;
 const started = Date.now();
 const persist = () =>
@@ -132,7 +134,7 @@ try {
 			guest.resources.storage <= 32768,
 	);
 	report.resources = guest.resources;
-	const base = createFreestyleWorkspaceMachines(process.env.FREESTYLE_API_KEY);
+	const base = createFreestyleWorkspaceMachines(key);
 	const machines: WorkspaceMachines = {
 		...base,
 		runCapability: undefined,
