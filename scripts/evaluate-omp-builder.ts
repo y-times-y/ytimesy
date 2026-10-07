@@ -18,6 +18,7 @@ import {
 	ompBuilderPrompt,
 	ompBuilderVerifier,
 } from "../benchmarks/evaluation/omp-builder-fixture";
+import { ompBuilderProtocol } from "../benchmarks/evaluation/omp-builder-protocol";
 import { proveOmpGuestCapabilities } from "../benchmarks/evaluation/omp-live-capabilities";
 import type { EvaluationTask } from "../src/domain/harness-evaluation";
 import { WorkspaceId } from "../src/domain/ids";
@@ -70,16 +71,39 @@ if (process.env.YTIMESY_OMP_ISOLATED_MODULES !== "1") {
 				},
 			},
 		);
+		const forwardStop = () => child.kill("SIGTERM");
+		process.once("SIGINT", forwardStop);
+		process.once("SIGTERM", forwardStop);
 		child.once("error", reject);
-		child.once("exit", (code) => resolveStatus(code ?? 1));
+		child.once("exit", (code) => {
+			process.off("SIGINT", forwardStop);
+			process.off("SIGTERM", forwardStop);
+			resolveStatus(code ?? 1);
+		});
 	});
 	process.exit(status);
 }
 
 const live = process.argv.includes("--live");
+const proof = process.argv.includes("--proof");
+const repetitionArgument = process.argv.find((value) =>
+	value.startsWith("--repetitions="),
+);
+const protocol = ompBuilderProtocol(
+	Number(repetitionArgument?.split("=")[1] ?? 1),
+);
+if (!proof && protocol.repetitions !== 1)
+	throw new Error("Repeated evaluations require --proof and fresh approval.");
+if (live && process.env.YTIMESY_OMP_PROOF_APPROVED !== protocol.approval)
+	throw new Error(
+		`Fresh approval required: ${protocol.approval}. Do not reuse previous approvals.`,
+	);
+const artifactRoot = resolve(
+	proof ? ".ytimesy/omp-builder-proof" : ".ytimesy/omp-builder-e2e",
+);
 const root = process.cwd(),
-	directory = resolve(".ytimesy/omp-builder-e2e", randomUUID());
-const activePath = resolve(".ytimesy/omp-builder-e2e/active.json");
+	directory = join(artifactRoot, randomUUID());
+const activePath = join(artifactRoot, "active.json");
 const baseline = "d998928";
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
 async function command(args: string[], cwd = root, input?: string) {
@@ -268,10 +292,26 @@ const report: { [key: string]: unknown } = {
 	verifierSha256: task.verifier.sha256,
 	graderImage: image,
 	graderSelftest: { broken: broken.passed, correct: correct.passed },
-	approved: { vmDollars: 5, modelRequests: 20 },
+	protocol,
+	protocolSha256: hash(
+		JSON.stringify({
+			protocol,
+			baseline,
+			treatment,
+			taskCommit: commit,
+			prompt: ompBuilderPrompt,
+			verifierSha256: task.verifier.sha256,
+			image,
+		}),
+	),
+	budget: {
+		vmDollars: protocol.vmDollars,
+		modelRequests: protocol.requestLimit,
+		approved: live,
+	},
 	arms: [],
 	limitations: [
-		"One synthetic task pair, sequential order and shared VM: descriptive evidence only.",
+		"Repeated development fixture with alternating pair order and one shared VM; repetitions are not independent tasks or a holdout.",
 		"No native-Codex or Oh My Pi performance comparison.",
 	],
 };
@@ -300,25 +340,40 @@ const active = {
 	vmId: "",
 	requests: 0,
 	started: new Date().toISOString(),
-	approvedRequests: 20,
-	approvedVmDollars: 5,
+	approvedRequests: protocol.requestLimit,
+	approvedVmDollars: protocol.vmDollars,
+	protocolSha256: report.protocolSha256,
 };
 const persist = () => privateFile(activePath, JSON.stringify(active, null, 2));
-await persist();
+try {
+	await writeFile(activePath, JSON.stringify(active, null, 2), {
+		mode: 0o600,
+		flag: "wx",
+	});
+} catch (error) {
+	await closeDatabase();
+	throw error;
+}
+const cancelled = new AbortController();
+const stop = () =>
+	cancelled.abort(new Error("Operator cancelled builder proof"));
+process.once("SIGINT", stop);
+process.once("SIGTERM", stop);
 try {
 	const created = await client.vms.create({
 		slug: `ytimesy-omp-builder-${randomUUID().slice(0, 8)}`,
 		snapshotId: CHEAP_BASE_SNAPSHOT,
 		firewall: GUEST_INTERNET_FIREWALL,
-		ttlSeconds: 1800,
-		maxRunTotalSeconds: 1800,
-		idleTimeoutSeconds: 1800,
+		ttlSeconds: protocol.vmLifetimeSeconds,
+		maxRunTotalSeconds: protocol.vmLifetimeSeconds,
+		idleTimeoutSeconds: protocol.vmLifetimeSeconds,
 		automaticRestart: false,
 		metadata: { purpose: "ytimesy-omp-builder-evaluation" },
 	});
 	vmId = created.vmId;
 	active.vmId = vmId;
 	await persist();
+	cancelled.signal.throwIfAborted();
 	const running = await waitUntilVmRunning(
 		created.vm,
 		"OMP paired builder evaluation",
@@ -360,8 +415,12 @@ try {
 		},
 	};
 	const vm = WorkspaceId(vmId),
-		deadline = AbortSignal.timeout(1500000);
+		deadline = AbortSignal.any([
+			cancelled.signal,
+			AbortSignal.timeout(1500000),
+		]);
 	const checked = async (command: string, timeout = 30000) => {
+		deadline.throwIfAborted();
 		const value = await machines.exec(vm, command, timeout);
 		if (value.exitCode)
 			throw new Error(`Guest setup failed: ${value.stderr.slice(-2000)}`);
@@ -401,11 +460,11 @@ try {
 	console.info("Zero-inference real VM capability proof passed.");
 	const load = async (path: string, module: string) =>
 		import(pathToFileURL(join(path, `src/server/${module}.ts`)).href);
-	for (const [arm, path] of [
-		["before", source],
-		["after", root],
-	] as const) {
-		const cwd = `/home/ubuntu/omp-builder-${arm}`;
+	for (const { pair, arm } of protocol.arms) {
+		deadline.throwIfAborted();
+		const path = arm === "before" ? source : root;
+		const label = `${pair}-${arm}`;
+		const cwd = `/home/ubuntu/omp-builder-${label}`;
 		await checked(`mkdir -p ${quote(cwd)}`);
 		for (const [name, content] of Object.entries(files)) {
 			await checked(`mkdir -p ${quote(join(cwd, name, ".."))}`);
@@ -423,7 +482,7 @@ try {
 			".git",
 		]);
 		const archive = await readFile(gitArchive);
-		const archivePath = `/tmp/omp-fixture-${arm}.b64`;
+		const archivePath = `/tmp/omp-fixture-${label}.b64`;
 		await machines.writeTextFile(vm, archivePath, archive.toString("base64"));
 		await checked(
 			`base64 -d ${quote(archivePath)} | tar -xf - -C ${quote(cwd)} && rm ${quote(archivePath)}`,
@@ -447,7 +506,10 @@ try {
 						)
 					: undefined,
 		};
-		const signal = AbortSignal.any([deadline, AbortSignal.timeout(420000)]),
+		const signal = AbortSignal.any([
+				deadline,
+				AbortSignal.timeout(protocol.armTimeoutMs),
+			]),
 			sessionId = randomUUID(),
 			turnId = randomUUID();
 		const receipts = new Map<string, Promise<unknown>>();
@@ -523,7 +585,10 @@ try {
 				const value = Reflect.get(target, property, receiver);
 				if (property === "doStream" || property === "doGenerate")
 					return async (...args: unknown[]) => {
-						if (requests >= 10 || totalRequests >= 20)
+						if (
+							requests >= protocol.requestsPerArm ||
+							totalRequests >= protocol.requestLimit
+						)
 							throw new Error("Approved model request limit reached.");
 						requests++;
 						totalRequests++;
@@ -540,7 +605,7 @@ try {
 		const armStarted = Date.now();
 		let failure: string | null = null;
 		console.info(
-			`${arm}: running frozen pricing task with at most 10 model requests.`,
+			`${label}: running frozen pricing task with at most ${protocol.requestsPerArm} model requests.`,
 		);
 		try {
 			await (await load(path, "services/model-agent-loop")).runModelAgent(
@@ -548,8 +613,8 @@ try {
 					userId,
 					modelId: "gpt-6.1-sol",
 					reasoning: "low",
-					maxSteps: 10,
-					maxOutputTokens: 6000,
+					maxSteps: protocol.requestsPerArm,
+					maxOutputTokens: protocol.maxOutputTokens,
 					messages: [{ role: "user", content: ompBuilderPrompt }],
 					instructions: `You are the builder for this isolated TypeScript/Python repository at ${cwd}. Read repository guidance before implementation. Use available inspection, editing and verification tools. Finish the requested task and report observed checks. Do not publish, delegate, or access another project.`,
 					tools,
@@ -571,13 +636,14 @@ try {
 		const patch = await checked(
 			`cd ${quote(cwd)} && evaluation_index=$(mktemp /tmp/omp-evaluation-index.XXXXXX) && GIT_INDEX_FILE="$evaluation_index" git read-tree HEAD && GIT_INDEX_FILE="$evaluation_index" git add -A -- . && GIT_INDEX_FILE="$evaluation_index" git diff --cached --binary ${quote(commit)} -- .; rm -f "$evaluation_index"`,
 		);
-		await privateFile(join(directory, `${arm}.patch`), `${patch}\n`);
+		await privateFile(join(directory, `${label}.patch`), `${patch}\n`);
 		await privateFile(
-			join(directory, `${arm}.trace.json`),
+			join(directory, `${label}.trace.json`),
 			JSON.stringify({ events, metrics }, null, 2),
 		);
 		const grading = await grade([`${patch}\n`]);
 		const result = {
+			pair,
 			arm,
 			requests,
 			elapsedMs: Date.now() - armStarted,
@@ -590,6 +656,7 @@ try {
 		await privateFile(reportPath, JSON.stringify(report, null, 2));
 		console.info(
 			JSON.stringify({
+				pair,
 				arm,
 				requests,
 				elapsedMs: result.elapsedMs,
@@ -598,14 +665,31 @@ try {
 			}),
 		);
 	}
+} catch (error) {
+	report.failure = error instanceof Error ? error.message : "Evaluation failed";
+	throw error;
 } finally {
-	if (vmId) {
-		await client.vms.ref(vmId).delete();
-		report.vmDeleted = true;
+	try {
+		if (vmId) {
+			await client.vms.ref(vmId).delete();
+			report.vmDeleted = true;
+		}
+	} catch (error) {
+		report.cleanupFailure =
+			error instanceof Error ? error.message : "VM cleanup failed";
+		process.exitCode = 1;
+	} finally {
+		report.totalRequests = totalRequests;
+		report.totalElapsedMs = Date.now() - started;
+		try {
+			await privateFile(reportPath, JSON.stringify(report, null, 2));
+		} finally {
+			process.off("SIGINT", stop);
+			process.off("SIGTERM", stop);
+			await closeDatabase();
+		}
+		console.info(
+			`Private results: ${reportPath}; VM deletion recorded in report.`,
+		);
 	}
-	report.totalRequests = totalRequests;
-	report.totalElapsedMs = Date.now() - started;
-	await privateFile(reportPath, JSON.stringify(report, null, 2));
-	await closeDatabase();
-	console.info(`Private results: ${reportPath}; disposable VM deleted.`);
 }
