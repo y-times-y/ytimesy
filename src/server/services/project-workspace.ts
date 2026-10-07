@@ -32,6 +32,7 @@ import { listProjects, projectForOwner } from "#/server/adapters/projects";
 import { githubAccessToken } from "#/server/auth/github-connection";
 import { startEnvironmentServices } from "./environment-services";
 import { injectProjectSecrets } from "./project-secrets";
+import { establishVerificationBaselines } from "./verification-baseline";
 import type { DesktopScope } from "./workspace-desktop";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -265,14 +266,32 @@ export function preparePreparedGuest(
 			workspaceId,
 			scope,
 		);
-		yield* Effect.tryPromise(() =>
-			startEnvironmentServices(machines, workspaceId),
-		);
 		const session = scope.sessionId
 			? yield* Effect.tryPromise(() =>
 					agentSessionForOwner(scope.userId, scope.sessionId as string),
 				)
 			: null;
+		if (
+			cwd &&
+			session &&
+			session.taskAccess !== "read_only" &&
+			session.taskPlacement !== "shared"
+		)
+			yield* Effect.tryPromise(() =>
+				establishVerificationBaselines({
+					machines,
+					vm: workspaceId,
+					cwd,
+					userId: scope.userId,
+					sessionId: session.id,
+					additionalRepositoryNames: (
+						checkout?.additionalRepositories ?? []
+					).map((repo) => repo.name),
+				}),
+			);
+		yield* Effect.tryPromise(() =>
+			startEnvironmentServices(machines, workspaceId),
+		);
 		yield* writeDeveloperInstructions(
 			machines,
 			workspaceId,

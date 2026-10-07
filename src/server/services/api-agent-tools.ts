@@ -38,6 +38,8 @@ import { apiAgentLanguageTools } from "./api-agent-language-tools";
 import { scopedShellCommand } from "./api-command-scope";
 import { batchedAgentReads } from "./batched-agent-reads";
 import { runAgentTaskTool } from "./harness-workspace-session";
+import { repositorySearchCommand } from "./indexed-repository-search";
+import { nodeDebuggerTools } from "./node-debugger";
 import { loadCloudProjectMemoryDocument } from "./project-knowledge";
 import { projectMemoryTools } from "./project-memory-tools";
 import { inspectProjectSourceEvidence } from "./project-source-evidence";
@@ -209,19 +211,32 @@ export function apiAgentTools(
 		}),
 		search_files: tool({
 			description:
-				"Search tracked and non-ignored untracked repository text. Scope path to known task code; the path is literal, not a Git pattern. Default query is a Git regular expression; literal:true searches exact text. Exit 1 means no matches, not an execution error. No per-file match cutoff. Follow stdoutNextStart using read_tool_output and the returned reference for complete results; output_limit explicitly marks incomplete evidence.",
+				"Search tracked and non-ignored untracked repository text. Prefer literal:true for exact text. Default query is a Git regular expression; wordBoundary:true requires Git whole-word matching. When experimental indexing is enabled, eligible literal queries and plain ASCII identifiers in larger repositories use a refreshed local text index with Git-confirmed matches; other queries use Git search. Scope path to known task code; the path is literal, not a Git pattern. Exit 1 means no matches, not an execution error. No per-file match cutoff. Follow stdoutNextStart using read_tool_output and the returned reference for complete results; output_limit explicitly marks incomplete evidence.",
 			inputSchema: z.object({
 				query: z.string().min(1).max(200),
 				literal: z.boolean().default(false),
+				wordBoundary: z.boolean().default(false),
 				path: repositorySearchPath.optional(),
 			}),
-			execute: async ({ query, literal = false, path }) => {
+			execute: async ({
+				query,
+				literal = false,
+				wordBoundary = false,
+				path,
+			}) => {
 				const scope =
 					path === undefined ? "." : repositorySearchPath.parse(path);
 				signal.throwIfAborted();
 				const { cwd } = await workspace();
 				const result = await output.capture(
-					`git --literal-pathspecs -C ${quote(cwd)} grep --untracked --exclude-standard -n -I ${literal ? "-F " : ""}-e ${quote(query)} -- ${quote(scope)}`,
+					repositorySearchCommand({
+						cwd,
+						query,
+						literal,
+						wordBoundary,
+						useIndex: process.env.YTIMESY_INDEXED_SEARCH_ENABLED === "1",
+						path: scope,
+					}),
 				);
 				return result;
 			},
@@ -462,6 +477,17 @@ export function apiAgentTools(
 	);
 	tools.read_tool_output = output.readTool;
 	Object.assign(tools, apiAgentLanguageTools({ workspace, signal }));
+	if (!readOnly)
+		Object.assign(
+			tools,
+			nodeDebuggerTools({
+				workspace,
+				signal,
+				ownerSessionId: session.id,
+				turnId: input.turnId,
+				once,
+			}),
+		);
 	Object.assign(
 		tools,
 		apiAgentCommandTools({

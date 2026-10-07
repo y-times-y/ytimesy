@@ -68,6 +68,180 @@ const finish = {
 	finishReason: { unified: "stop" as const, raw: "stop" },
 };
 
+it("projects earlier command output into recoverable receipts only on unbound routes", async () => {
+	for (const policy of ["whole-turns", "bound-prefix"] as const) {
+		const model = new MockLanguageModelV4({
+			doStream: async () => stream([finish]),
+		});
+		const body = "retained command log ".repeat(350);
+		const messages = [
+			{ role: "user" as const, content: "Earlier task" },
+			{
+				role: "assistant" as const,
+				content: [
+					{
+						type: "tool-call" as const,
+						toolName: "bash",
+						toolCallId: "historical",
+						input: { command: "test" },
+					},
+				],
+			},
+			{
+				role: "tool" as const,
+				content: [
+					{
+						type: "tool-result" as const,
+						toolName: "bash",
+						toolCallId: "historical",
+						output: {
+							type: "json" as const,
+							value: {
+								reference: "37ba9eb0-031e-4b82-9296-e4ce22f9ee7e",
+								exitCode: 1,
+								stopped: null,
+								stdout: body,
+								stderr: "failed",
+							},
+						},
+					},
+				],
+			},
+			{ role: "assistant" as const, content: "Test failed; repair needed." },
+			{ role: "user" as const, content: "Continue" },
+		];
+		const archive = vi.fn(async () => "archive:command");
+		await runModelAgent(
+			{
+				userId: "alice",
+				modelId: "model",
+				instructions: "Repair",
+				messages,
+				tools: {
+					bash: tool({
+						inputSchema: z.object({ command: z.string() }),
+						execute: async () => ({}),
+					}),
+				},
+				knownTools: ["bash"],
+				signal: new AbortController().signal,
+				archiveHistory: archive,
+				onEvent: async () => {},
+				onStep: async () => {},
+			},
+			{ model, archiveConsumedGuidance: true, fallbackContextPolicy: policy },
+		);
+		const request = JSON.stringify(model.doStreamCalls[0]);
+		if (policy === "whole-turns") {
+			expect(archive).toHaveBeenCalledExactlyOnceWith(messages);
+			expect(request).toContain("archivedOutput");
+			expect(request).not.toContain(body);
+		} else {
+			expect(archive).not.toHaveBeenCalled();
+			expect(request).toContain(body);
+		}
+		expect(request).toContain("failed");
+		expect(request).toContain("historical");
+	}
+});
+
+it("adopts a background native checkpoint after the tool step without losing the live call/result pair", async () => {
+	let announceCompaction = () => {};
+	let announceTool = () => {};
+	const compactionStarted = new Promise<void>((resolve) => {
+		announceCompaction = resolve;
+	});
+	const toolStarted = new Promise<void>((resolve) => {
+		announceTool = resolve;
+	});
+	const compact = vi.fn(async () => {
+		announceCompaction();
+		await toolStarted;
+		return {
+			messages: [{ role: "assistant" as const, content: "earlier checkpoint" }],
+			usage: {
+				inputTokens: 20,
+				outputTokens: 5,
+				totalTokens: 25,
+				inputTokenDetails: {
+					noCacheTokens: 20,
+					cacheReadTokens: 0,
+					cacheWriteTokens: 0,
+				},
+				outputTokenDetails: { textTokens: 5, reasoningTokens: 0 },
+			},
+		};
+	});
+	const model = new MockLanguageModelV4({
+		doStream: async () =>
+			stream([
+				{
+					type: "tool-call",
+					toolCallId: "read-current",
+					toolName: "inspect",
+					input: "{}",
+				},
+				{
+					...finish,
+					finishReason: { unified: "tool-calls", raw: "tool_calls" },
+				},
+			]),
+	});
+	const archive = vi.fn(async () => "archive:fixture");
+	const result = await runModelAgentStep(
+		{
+			userId: "alice",
+			modelId: "model",
+			instructions: "Inspect",
+			knownTools: ["inspect"],
+			messages: [
+				{ role: "user", content: "previous request" },
+				{ role: "assistant", content: "e".repeat(10500) },
+				{ role: "user", content: "Inspect live task" },
+			],
+			tools: {
+				inspect: tool({
+					inputSchema: z.object({}),
+					execute: async () => {
+						announceTool();
+						await compactionStarted;
+						return "current evidence";
+					},
+				}),
+			},
+			signal: new AbortController().signal,
+			archiveHistory: archive,
+			onEvent: async () => {},
+			onStep: async () => {},
+		},
+		{
+			model,
+			compact,
+			contextWindow: 16000,
+			workingContextTokens: 4000,
+			backgroundCompaction: true,
+		},
+	);
+	expect(result.messages.at(-1)).toMatchObject({
+		role: "tool",
+		content: [{ output: { type: "text", value: "current evidence" } }],
+	});
+	expect(compact).toHaveBeenCalledTimes(1);
+	expect(archive).toHaveBeenCalledTimes(1);
+	expect(result.outcome).toBe("continue");
+	expect(result.messages[0]).toEqual({
+		role: "assistant",
+		content: "earlier checkpoint",
+	});
+	expect(result.messages[1]).toEqual({
+		role: "user",
+		content: "Inspect live task",
+	});
+	expect(JSON.stringify(result.messages)).toContain("read-current");
+	expect(result.messages.at(-1)?.role).toBe("tool");
+	expect(JSON.stringify(result.messages)).not.toContain("e".repeat(100));
+});
+
 it("budgets deferred schemas only after discovery, while preserving the hard input limit", async () => {
 	const optional = tool({
 		description: "Optional browser capability ".repeat(4000),

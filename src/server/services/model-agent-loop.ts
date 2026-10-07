@@ -42,7 +42,10 @@ import {
 	modelContextBudget,
 	workingContextTarget,
 } from "./api-agent-context";
+import { BackgroundHistoryCompaction } from "./background-history-compaction";
 import { archiveConsumedGuidance } from "./consumed-guidance";
+import { archiveEarlierToolOutput } from "./retired-tool-output";
+import { archiveSupersededReads } from "./superseded-reads";
 
 export type { ApiAgentEvent } from "#/domain/api-agent-event";
 
@@ -95,6 +98,7 @@ export type ModelAgentRuntime = {
 	/** Recoverable retirement after a completed implementation/delegation decision; independent of hard-window pressure. */
 	archiveConsumedGuidance?: boolean;
 	prefetchInitialReads?: boolean;
+	backgroundCompaction?: boolean;
 	fallbackContextPolicy?: FallbackContextPolicy;
 	compact?: (
 		input: NativeCompactionInput,
@@ -213,12 +217,68 @@ async function executeModelSteps(
 		});
 	};
 	const accumulated = { usage: null as ApiTokenUsage | null };
+	const backgroundCompaction = new BackgroundHistoryCompaction();
 	const recordUsage = async (usage: Parameters<typeof apiTokenUsage>[0]) => {
 		accumulated.usage = addApiTokenUsage(
 			accumulated.usage,
 			apiTokenUsage(usage),
 		);
 		await input.onEvent({ type: "usage", usage: accumulated.usage });
+	};
+	const consumeBackground = async (wait = false) => {
+		if (!input.archiveHistory) return;
+		const projected = await backgroundCompaction.consume(
+			history,
+			input.archiveHistory,
+			(messages) =>
+				estimateContextTokens(messages) < estimateContextTokens(history) &&
+				estimateContextTokens(messages) <
+					contextBudget(messages).inputLimitTokens,
+			wait,
+		);
+		if (projected !== history) {
+			history = projected;
+			measured = undefined;
+			await input.onStep(history);
+		}
+	};
+	const startBackground = () => {
+		const compact = runtime.compact;
+		if (
+			!runtime.backgroundCompaction ||
+			!compact ||
+			!input.archiveHistory ||
+			runtime.fallbackContextPolicy === "bound-prefix" ||
+			backgroundCompaction.running
+		)
+			return;
+		const budget = contextBudget(history);
+		const pressure = contextTokenPressure(history, measured);
+		if (
+			pressure < budget.compactAtTokens * 0.85 ||
+			pressure >= budget.compactAtTokens
+		)
+			return;
+		const lastUser = history.reduce(
+			(last, message, index) => (message.role === "user" ? index : last),
+			-1,
+		);
+		// Keep the live user turn outside the frozen prefix, including its tool pairs.
+		if (lastUser <= 0) return;
+		const older = history.slice(0, lastUser);
+		if (estimateContextTokens(older) < budget.compactAtTokens * 0.5) return;
+		backgroundCompaction.start(older, async (frozen) => {
+			await input.beforeCompaction?.(frozen);
+			runSignal.throwIfAborted();
+			const checkpoint = await compact({
+				messages: frozen,
+				instructions: input.instructions,
+				tools,
+				signal: runSignal,
+			});
+			await recordUsage(checkpoint.usage);
+			return checkpoint.messages;
+		});
 	};
 	try {
 		const result = streamText({
@@ -234,6 +294,11 @@ async function executeModelSteps(
 			tools,
 			prepareStep: async () => {
 				runSignal.throwIfAborted();
+				await consumeBackground(
+					backgroundCompaction.running &&
+						contextTokenPressure(history, measured) >=
+							contextBudget(history).compactAtTokens,
+				);
 				if (runtime.prefetchInitialReads) {
 					const prefetched = await prefetchInitialAgentReads({
 						messages: history,
@@ -255,8 +320,16 @@ async function executeModelSteps(
 					runtime.archiveConsumedGuidance &&
 					runtime.fallbackContextPolicy !== "bound-prefix"
 				) {
-					const projected = await archiveConsumedGuidance(
+					const guidance = await archiveConsumedGuidance(
 						history,
+						input.archiveHistory,
+					);
+					const reads = await archiveSupersededReads(
+						guidance,
+						input.archiveHistory,
+					);
+					const projected = await archiveEarlierToolOutput(
+						reads,
 						input.archiveHistory,
 					);
 					if (projected !== history) {
@@ -414,6 +487,9 @@ async function executeModelSteps(
 					/* Metrics cannot interrupt inference. */
 				}
 			},
+			onToolExecutionStart: () => {
+				startBackground();
+			},
 			onToolExecutionEnd: ({ toolCall, toolOutput, toolExecutionMs }) => {
 				const category = toolMetricCategory(toolCall.toolName);
 				const key =
@@ -539,6 +615,7 @@ async function executeModelSteps(
 					throw new Error("Model run cancelled.");
 			}
 		}
+		await consumeBackground(true);
 		const usage = accumulated.usage ?? apiTokenUsage(await result.totalUsage);
 		const reason = await result.finishReason;
 		if (singleStep && reason === "tool-calls")
@@ -553,5 +630,6 @@ async function executeModelSteps(
 		return { messages: history, outcome: "completed" };
 	} finally {
 		cancelled.abort();
+		await backgroundCompaction.settle();
 	}
 }

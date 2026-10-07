@@ -182,9 +182,11 @@ export async function renewAgentTaskCommandClaim(
 	parentSessionId: string,
 	requestId: string,
 ) {
-	await database().query(
+	const renewed = await database().query(
 		`update agent_task_command_receipt set updated_at=now()
 		 where parent_session_id=$1 and request_id=$2 and status='processing'`,
 		[parentSessionId, requestId],
 	);
+	if (!renewed.rowCount)
+		throw new Error("The command journal claim is no longer processing.");
 }

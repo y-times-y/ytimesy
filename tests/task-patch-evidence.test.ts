@@ -6,6 +6,7 @@ import {
 	recordTaskImport,
 	taskPatchEvidence,
 } from "../src/server/adapters/task-patch-evidence";
+import { recordCompletedVerification } from "../src/server/adapters/turn-verification";
 
 let db: PGlite;
 vi.mock("../src/server/adapters/database", () => ({
@@ -44,6 +45,25 @@ beforeAll(async () => {
 });
 afterAll(() => db.close());
 it("atomically accepts the exact hash using the existing command journal", async () => {
+	await expect(acceptTaskPatch("owner", parent, patch)).rejects.toThrow(
+		"lacks authoritative",
+	);
+	await recordCompletedVerification("owner", source, {
+		type: "completion-verification",
+		directory: "/repo",
+		turn: "c".repeat(64),
+		base: patch.base,
+		tree: "d".repeat(40),
+		patchSha256: patch.sha256,
+		checks: [
+			{
+				command: "npm test",
+				reference: crypto.randomUUID(),
+				exitCode: 0,
+				stopped: null,
+			},
+		],
+	});
 	await acceptTaskPatch("owner", parent, patch);
 	expect(
 		(
