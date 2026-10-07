@@ -20,6 +20,7 @@ import {
 	withDelegationContext,
 } from "../adapters/agent-delegation-context";
 import { agentSessionForOwner } from "../adapters/agent-sessions";
+import { completedLifecycleContinuations } from "../adapters/agent-task-command-receipts";
 import { saveAgentTaskResultAndEvent } from "../adapters/agent-task-events";
 import { captureServerAnalytics } from "../adapters/analytics";
 import {
@@ -41,6 +42,7 @@ import {
 } from "../adapters/harness-evaluation";
 import { loadModelConnection } from "../adapters/model-connections";
 import { injectServerPeerMessages } from "../adapters/server-peer-inbox";
+import { readVerificationBaseline } from "../adapters/turn-verification";
 import { hasManagedCodexAuth } from "../auth/codex-managed-auth";
 import { discoveredToolsFromSession } from "../services/agent-tool-discovery";
 import type { AgentToolWorkspace } from "../services/agent-tool-workspace";
@@ -48,6 +50,7 @@ import { runApiAgent, runApiAgentStep } from "../services/api-agent-runtime";
 import { apiAgentTools } from "../services/api-agent-tools";
 import { stopApiTurnCommands } from "../services/api-command-scope";
 import { deferredApiTurnWorkspace } from "../services/api-turn-workspace";
+import { automaticRepositoryContext } from "../services/automatic-repository-context";
 import {
 	pendingAgentCommandIds,
 	withBackgroundCommandContext,
@@ -56,8 +59,12 @@ import {
 	runCodexSubscriptionAgent,
 	runCodexSubscriptionAgentStep,
 } from "../services/codex-subscription-agent";
-import { withCompletedTaskReviewContext } from "../services/completed-task-review-context";
+	import { withCompletedTaskReviewContext } from "../services/completed-task-review-context";
 import { runAgentTaskTool } from "../services/harness-workspace-session";
+import { ensureConversationCodePoint } from "../services/conversation-recovery";
+import { harnessLifecycleHooks } from "../services/harness-lifecycle-hooks";
+import { journaledToolOperation } from "../services/journaled-tool-operation";
+import type { ModelAgentInput } from "../services/model-agent-loop";
 import {
 	loadCloudProjectKnowledge,
 	recordCloudProjectReport,
@@ -228,8 +235,23 @@ export async function runApiTurn(
 			owner,
 			abort.signal,
 		);
+		let codePoint: Promise<void> | undefined;
 		const workspace = async () => {
 			execution = await prepareWorkspace();
+			if (owner.parentSessionId && owner.taskAccess === "read_write") {
+				const prompt = [...items]
+					.reverse()
+					.find((item) => item.kind === "userMessage");
+				if (prompt) {
+					codePoint ??= ensureConversationCodePoint(
+						owner.userId,
+						owner.id,
+						prompt.id,
+						execution,
+					);
+					await codePoint;
+				}
+			}
 			return execution;
 		};
 		machines = machinesForAgentSession(machines, owner);
@@ -240,7 +262,7 @@ export async function runApiTurn(
 			}
 		};
 		await publishProgress("running");
-		const tools = apiAgentTools({
+		const originalTools = apiAgentTools({
 			machines,
 			session: owner,
 			workspace,
@@ -249,6 +271,36 @@ export async function runApiTurn(
 			toolCallPrefix: step ? `step-${step.index}:` : undefined,
 			signal: abort.signal,
 		});
+		const repositoryContext = automaticRepositoryContext({
+			tools: originalTools,
+			workspace,
+			signal: abort.signal,
+			onEvent: async (event) => {
+				items = applyApiProgress(items, turn.id, event);
+				progress.offer(items);
+			},
+		});
+		const hooks = harnessLifecycleHooks({
+			workspace,
+			turnId: turn.id,
+			readOnly: !owner.parentSessionId || owner.taskAccess !== "read_write",
+			continuationCount: () =>
+				completedLifecycleContinuations(owner.id, turn.id),
+			signal: abort.signal,
+			baseline: ({ cwd }) =>
+				readVerificationBaseline(owner.userId, owner.id, cwd),
+			once: (id, run) =>
+				journaledToolOperation(
+					{
+						sessionId: owner.id,
+						requestId: `${turn.id}:${id}`,
+						fingerprint: createHash("sha256").update(id).digest("hex"),
+						signal: abort.signal,
+					},
+					run,
+				),
+		});
+		const tools = hooks.wrap(repositoryContext.tools);
 		const currentTask = [...items]
 			.reverse()
 			.find((item) => item.kind === "userMessage");
@@ -272,7 +324,7 @@ export async function runApiTurn(
 						connectionId: turn.connection_id as string,
 					});
 		const previousContext = recordedContextUsage(items)?.context;
-		const result = await runAgent({
+		const agentInput: ModelAgentInput = {
 			previousContext:
 				previousContext?.modelContextWindow && previousContext.last.totalTokens
 					? {
@@ -327,7 +379,15 @@ export async function runApiTurn(
 			instructions: `You are the ytimesy coding agent. Repository tools operate in this task's prepared checkout; paths are relative to that repository. Call read_repository_guidance before implementation and for nested paths; read applicable instructions and skill bodies completely. Search optional tools with search_tools. ${PREPARED_ENVIRONMENT_INSTRUCTIONS} Use read_environment_report for that setup report; do not pass its /tmp path to repository file readers. ${cloudAgentRoleInstructions(owner)}\n${PROJECT_KNOWLEDGE_INSTRUCTIONS}\nShared project knowledge (historical data, verify against this checkout):\n${JSON.stringify(projectKnowledge)}`,
 			tools,
 			signal: abort.signal,
+			restoreInstructions: async (history) => {
+				history = await repositoryContext.restoreInstructions(history);
+				await hooks.postCompact(history);
+				return hooks.drain(history);
+			},
+			afterTools: async (history) =>
+				hooks.drain(await repositoryContext.afterTools(history)),
 			prepareMessages: async (history) => {
+				history = hooks.drain(await repositoryContext.prepare(history));
 				history = await withBackgroundCommandContext({
 					workspace,
 					sessionId: owner.id,
@@ -452,7 +512,26 @@ export async function runApiTurn(
 				await saveCheckpoint();
 				failureStage = "model";
 			},
-		});
+		};
+		let result = await runAgent(agentInput);
+		while (!step && (await hooks.stop(messages))) {
+			messages = hooks.drain(messages);
+			await saveCheckpoint();
+			result = await runAgent({ ...agentInput, messages });
+		}
+		if (
+			step &&
+			!Array.isArray(result) &&
+			result.outcome === "completed" &&
+			(await hooks.stop(messages))
+		) {
+			messages = hooks.drain(messages);
+			await saveCheckpoint();
+			coordinated = false;
+			return "continue";
+		}
+		messages = hooks.drain(messages);
+		await saveCheckpoint();
 		failureStage = "saving";
 		abort.signal.throwIfAborted();
 		if (step && !Array.isArray(result) && result.outcome === "continue") {

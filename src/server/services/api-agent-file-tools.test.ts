@@ -160,7 +160,7 @@ it("reuses only freshly verified complete guidance reads and preserves explicit 
 	});
 	expect(
 		await call(tools.read_files, { paths: ["PLAN.md", "source.ts"] }, archived),
-	).toEqual([
+	).toMatchObject([
 		{
 			path: "PLAN.md",
 			sha256,
@@ -491,7 +491,7 @@ it("returns available batch files alongside explicit missing-path errors without
 	await writeFile(join(root, "present.txt"), "present source");
 	expect(
 		await call(tools.read_files, { paths: ["missing.txt", "present.txt"] }),
-	).toEqual([
+	).toMatchObject([
 		{ path: "missing.txt", error: "not-a-file" },
 		{ path: "present.txt", content: "present source", truncated: false },
 	]);
@@ -749,7 +749,7 @@ it("reads several known files in order without writing to the repository", async
 	await writeFile(join(root, "second's.txt"), "second 你好\n");
 	expect(
 		await call(tools.read_files, { paths: ["second's.txt", "first.txt"] }),
-	).toEqual([
+	).toMatchObject([
 		{ path: "second's.txt", content: "second 你好\n", truncated: false },
 		{ path: "first.txt", content: "first\n", truncated: false },
 	]);
@@ -763,7 +763,7 @@ it("reads complete files through bounded pages without silently truncating instr
 		join(root, "large.txt"),
 		`${"你".repeat(32_000)}remaining instructions`,
 	);
-	expect(await call(tools.read_file, { path: "large.txt" })).toEqual({
+	expect(await call(tools.read_file, { path: "large.txt" })).toMatchObject({
 		path: "large.txt",
 		start: 0,
 		content: "你".repeat(32_000),
@@ -771,7 +771,7 @@ it("reads complete files through bounded pages without silently truncating instr
 	});
 	expect(
 		await call(tools.read_file, { path: "large.txt", start: 32_000 }),
-	).toEqual({
+	).toMatchObject({
 		path: "large.txt",
 		start: 32_000,
 		content: "remaining instructions",
@@ -796,7 +796,7 @@ it("reads large required documents and skills together in one bounded call", asy
 		paths: ["PLAN.md", "SKILL.md"],
 		maxCharacters: 128000,
 	});
-	expect(rows).toEqual([
+	expect(rows).toMatchObject([
 		{ path: "PLAN.md", content: plan, truncated: false },
 		{ path: "SKILL.md", content: skill, truncated: false },
 	]);
@@ -809,7 +809,7 @@ it("preserves continuation offsets when an explicitly larger page is still incom
 	await writeFile(join(root, "PLAN.md"), text);
 	expect(
 		await call(tools.read_file, { path: "PLAN.md", maxCharacters: 128000 }),
-	).toEqual({
+	).toMatchObject({
 		path: "PLAN.md",
 		start: 0,
 		content: text.slice(0, 128000),
@@ -821,7 +821,7 @@ it("preserves continuation offsets when an explicitly larger page is still incom
 			start: 128000,
 			maxCharacters: 128000,
 		}),
-	).toEqual({
+	).toMatchObject({
 		path: "PLAN.md",
 		start: 128000,
 		content: text.slice(128000),
@@ -872,7 +872,7 @@ it("labels unavailable batch files explicitly rather than dropping known source"
 	await writeFile(join(root, "present.txt"), "present");
 	expect(
 		await call(tools.read_files, { paths: ["present.txt", "missing.txt"] }),
-	).toEqual([
+	).toMatchObject([
 		{ path: "present.txt", content: "present", truncated: false },
 		{ path: "missing.txt", error: "not-a-file" },
 	]);

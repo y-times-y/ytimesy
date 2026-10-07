@@ -12,14 +12,8 @@ import {
 	cachedSourceEvidence,
 	sourceEvidenceMatches,
 } from "#/domain/project-source-evidence";
-import { publicToolDetail } from "#/domain/tool-detail";
 import { availableChildSlots } from "../adapters/agent-capacity";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
-import {
-	claimAgentTaskCommand,
-	completeAgentTaskCommand,
-	renewAgentTaskCommandClaim,
-} from "../adapters/agent-task-command-receipts";
 import {
 	contextArchiveReference,
 	readModelContextArchive,
@@ -39,6 +33,7 @@ import { scopedShellCommand } from "./api-command-scope";
 import { batchedAgentReads } from "./batched-agent-reads";
 import { runAgentTaskTool } from "./harness-workspace-session";
 import { repositorySearchCommand } from "./indexed-repository-search";
+import { journaledToolOperation } from "./journaled-tool-operation";
 import { nodeDebuggerTools } from "./node-debugger";
 import { loadCloudProjectMemoryDocument } from "./project-knowledge";
 import { projectMemoryTools } from "./project-memory-tools";
@@ -80,62 +75,16 @@ export function apiAgentTools(
 		sessionId: session.id,
 		signal,
 	});
-	async function once(id: string, run: () => Promise<unknown>) {
-		signal.throwIfAborted();
-		const requestId = `${input.turnId}:${input.toolCallPrefix ?? ""}${id}`;
-		const requestFingerprint = executionIdentity.fingerprint();
-		const receipt = await claimAgentTaskCommand(session.id, requestId);
-		if (receipt.kind === "done") {
-			if (receipt.response.requestFingerprint !== requestFingerprint)
-				throw new Error(
-					"Recorded tool inputs differ or predate input validation; inspect the existing outcome before making a new request. No operation was replayed.",
-				);
-			if (!receipt.response.ok)
-				throw new Error(
-					receipt.response.error || "The recorded tool call failed.",
-				);
-			return receipt.response.result;
-		}
-		if (receipt.kind === "processing")
-			throw new Error(
-				"Tool outcome is uncertain; inspect the workspace before retrying.",
-			);
-		const heartbeat = setInterval(
-			() =>
-				void renewAgentTaskCommandClaim(session.id, requestId).catch(() => {}),
-			10_000,
+	const once = (id: string, run: () => Promise<unknown>) =>
+		journaledToolOperation(
+			{
+				sessionId: session.id,
+				requestId: `${input.turnId}:${input.toolCallPrefix ?? ""}${id}`,
+				fingerprint: executionIdentity.fingerprint(),
+				signal,
+			},
+			run,
 		);
-		let executed = false;
-		try {
-			const result = await run();
-			executed = true;
-			signal.throwIfAborted();
-			await completeAgentTaskCommand(session.id, {
-				id: requestId,
-				requestFingerprint,
-				ok: true,
-				result,
-			});
-			return result;
-		} catch (error) {
-			if (!executed && !signal.aborted) {
-				const message = publicToolDetail(
-					error instanceof Error ? error.message : "Tool execution failed.",
-				);
-				const recorded = `Tool call failed: ${message} If this was a write, inspect its state before retrying; partial effects may exist.`;
-				await completeAgentTaskCommand(session.id, {
-					id: requestId,
-					requestFingerprint,
-					ok: false,
-					error: recorded,
-				}).catch(() => {});
-				throw new Error(recorded);
-			}
-			throw error;
-		} finally {
-			clearInterval(heartbeat);
-		}
-	}
 	const tools: ToolSet = {
 		...projectMemoryTools({ session, workspace, once }),
 		plan_parallel_work: tool({
