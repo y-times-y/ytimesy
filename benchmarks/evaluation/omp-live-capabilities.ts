@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import type { ToolSet } from "ai";
+import { z } from "zod";
 import type { AgentToolWorkspace } from "../../src/server/services/agent-tool-workspace";
 import { apiAgentFileTools } from "../../src/server/services/api-agent-file-tools";
 import { apiAgentLanguageTools } from "../../src/server/services/api-agent-language-tools";
@@ -43,7 +44,10 @@ export async function proveOmpGuestCapabilities(
 		signal.throwIfAborted();
 		const execute = tools[name]?.execute;
 		if (!execute) throw new Error(`Missing capability ${name}`);
-		return (await execute(args, {
+		const schema = tools[name].inputSchema;
+		if (!(schema instanceof z.ZodType))
+			throw new Error("Proof tool requires a Zod schema");
+		return (await execute(schema.parse(args), {
 			toolCallId: randomUUID(),
 			messages: [],
 			context: undefined,
@@ -114,7 +118,7 @@ export async function proveOmpGuestCapabilities(
 		column: 1,
 		kind: "source.organizeImports",
 		actionIndex: choices[0].index,
-		sha256: choices[0].sha256,
+		actionSha256: choices[0].sha256,
 	});
 	const batch = await invoke("inspect_code_batch", {
 		requests: [
