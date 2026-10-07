@@ -99,6 +99,11 @@ const ownedSnapshots = new Set<string>();
 let sessionWatcher: ReturnType<typeof setInterval> | undefined;
 let watcherPending: Promise<void> | undefined;
 const cleanupErrors: string[] = [];
+const operatorAbort = new AbortController();
+const requestStop = () =>
+	operatorAbort.abort(new Error("Operator requested evaluation cleanup."));
+process.on("SIGINT", requestStop);
+process.on("SIGTERM", requestStop);
 let failure: unknown;
 const log = await open(join(directory, "worker.log"), "wx", 0o600);
 try {
@@ -246,6 +251,7 @@ try {
 		declaredApprovalUsd: cap,
 	});
 	creationAttempted = true;
+	operatorAbort.signal.throwIfAborted();
 	const created = await freestyle.vms.create({
 		firewall: GUEST_INTERNET_FIREWALL,
 		slug: templateSlug,
@@ -297,6 +303,7 @@ git checkout -B evaluation-frozen '${taskCommit}'
 test "$(git rev-parse HEAD)" = '${taskCommit}'
 test ! -e scripts/evaluate-isolated-harness.ts
 test -z "$(git status --porcelain)"
+git update-ref refs/ytimesy/base HEAD
 git remote set-url origin https://github.com/y-times-y/ytimesy.git
 git config user.name 'Evaluation fixture'
 git config user.email 'evaluation@ytimesy.invalid'
@@ -307,6 +314,7 @@ corepack enable --install-directory "$HOME/.local/bin"
 corepack prepare pnpm@10.20.0 --activate
 pnpm install --frozen-lockfile
 ${pinnedCodexInstallCommand()}
+test -z "$(git status --porcelain)"
 mkdir -p .ytimesy
 `,
 		]),
@@ -546,12 +554,16 @@ return [...new Set(values.filter((value): value is string => typeof value === 's
 			computeAdmissionUsd: cap - 0.5,
 		}),
 	);
+	operatorAbort.signal.throwIfAborted();
 	const result = await runPairedEvaluation({
 		protocolPath: join(directory, "protocol.json"),
 		repositoryPath: process.cwd(),
 		outputPath: join(directory, "results"),
 		userId,
-		signal: AbortSignal.timeout(30 * 60 * 1000),
+		signal: AbortSignal.any([
+			operatorAbort.signal,
+			AbortSignal.timeout(30 * 60 * 1000),
+		]),
 		onSnapshotCreated: async (id) => {
 			ownedSnapshots.add(id);
 			await save("owned-pair-snapshots.json", [...ownedSnapshots]);
@@ -570,6 +582,13 @@ return [...new Set(values.filter((value): value is string => typeof value === 's
 	await watcherPending;
 	if (local) {
 		try {
+			const reservations = await local.query(
+				"select coalesce(sum(reserved_micro_usd),0)::text as allocatedComputeEnvelopeMicroUsd from infrastructure_usage_reservation",
+			);
+			await save("allocation-envelope.json", {
+				reservations: reservations.rows,
+				templateMaximumSeconds: 600,
+			});
 			const sessions = await local.query("select id from agent_session");
 			for (const row of sessions.rows)
 				knownSessionSlugs.add(
@@ -689,6 +708,8 @@ return [...new Set(values.filter((value): value is string => typeof value === 's
 		sharedDevelopmentDatabaseMutated: false,
 		sharedWorkerReplaced: false,
 	});
+	process.off("SIGINT", requestStop);
+	process.off("SIGTERM", requestStop);
 }
 if (failure || cleanupErrors.length)
 	throw new AggregateError(
