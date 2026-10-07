@@ -14,6 +14,7 @@ import {
 	runEvaluatorCommand,
 } from "../benchmarks/evaluation/grader";
 import { runPairedEvaluation } from "../benchmarks/evaluation/run";
+import { pinnedCodexInstallCommand } from "../src/domain/guest-cli-pin";
 import { posixShellCommand } from "../src/domain/posix-command";
 import { closeDatabase, database } from "../src/server/adapters/database";
 import { GUEST_INTERNET_FIREWALL } from "../src/server/adapters/freestyle/proof-vm";
@@ -106,7 +107,7 @@ try {
 		[userId],
 	);
 	const sourceProject = await database().query(
-		`select p.*,w.template_snapshot_id from project p join workspace w on w.project_id=p.id where p.user_id=$1 and p.full_name='y-times-y/ytimesy' and w.template_source_sha='ffb92b004ab9901b25df6d6850949455b6513b44'`,
+		`select p.* from project p where p.user_id=$1 and p.full_name='y-times-y/ytimesy' and p.id='c3e47f8b-588f-48da-83dc-44fa89e93788'`,
 		[userId],
 	);
 	if (
@@ -224,7 +225,6 @@ try {
 			"create",
 			join(directory, "baseline.bundle"),
 			taskRef,
-			"^ffb92b004ab9901b25df6d6850949455b6513b44",
 		]);
 	} finally {
 		await command(["git", "update-ref", "-d", taskRef, taskCommit]);
@@ -241,7 +241,7 @@ try {
 	const created = await freestyle.vms.create({
 		firewall: GUEST_INTERNET_FIREWALL,
 		slug: templateSlug,
-		snapshotId: sourceProject.rows[0].template_snapshot_id,
+		snapshotId: "freestyle/ubuntu-sm",
 		metadata: {
 			purpose: "ytimesy-isolated-evaluation-template",
 			evaluation_id: runId,
@@ -266,6 +266,7 @@ try {
 		if ((await created.vm.data()).state === "running") break;
 		await new Promise((done) => setTimeout(done, 1000));
 	}
+	await created.vm.resize({ cpu: 4, memory: 16384, storage: 32768 });
 	const resources = (await created.vm.data()).resources;
 	if (
 		resources.cpu > 4 ||
@@ -282,18 +283,26 @@ try {
 			"bash",
 			"-lc",
 			`set -eu
+git clone --branch '${taskRef.replace("refs/heads/", "")}' /home/ubuntu/evaluation.bundle /home/ubuntu/ytimesy
 cd /home/ubuntu/ytimesy
-test -z "$(git status --porcelain)"
-git fetch /home/ubuntu/evaluation.bundle '${taskRef}'
-git checkout -B evaluation-frozen FETCH_HEAD
+git checkout -B evaluation-frozen '${taskCommit}'
 test "$(git rev-parse HEAD)" = '${taskCommit}'
 test ! -e scripts/evaluate-isolated-harness.ts
 test -z "$(git status --porcelain)"
-test -d node_modules
+git remote set-url origin https://github.com/y-times-y/ytimesy.git
+git config user.name 'Evaluation fixture'
+git config user.email 'evaluation@ytimesy.invalid'
+export HOME=/home/ubuntu
+export PATH="$HOME/.local/bin:$HOME/.codex/packages/standalone/current:$HOME/.codex/bin:$PATH"
+mkdir -p "$HOME/.local/bin"
+corepack enable --install-directory "$HOME/.local/bin"
+corepack prepare pnpm@10.20.0 --activate
+pnpm install --frozen-lockfile
+${pinnedCodexInstallCommand()}
 mkdir -p .ytimesy
 `,
 		]),
-		timeoutMs: 120000,
+		timeoutMs: 300000,
 	});
 	if (prepared.statusCode !== 0)
 		throw new Error(
@@ -307,7 +316,7 @@ mkdir -p .ytimesy
 		"/home/ubuntu/ytimesy/.ytimesy/environment.json",
 		JSON.stringify({
 			checks: [
-				"pnpm exec vitest run src/domain/listed-model.test.ts --maxWorkers=1",
+				"$HOME/.local/bin/pnpm exec vitest run src/domain/listed-model.test.ts --maxWorkers=1",
 			],
 		}),
 	);
