@@ -1,0 +1,279 @@
+{
+  "date": "2026-10-06",
+  "baseline": "d7b80952ee61b56e7b627e46a5a403431ab085c3",
+  "new": "755ee5e07d7203289477e980efcc4d429f9c0570",
+  "model": "gpt-6.1-sol",
+  "reasoning": "low",
+  "scope": "local actual model loop; no cloud orchestration or native competitor benchmark",
+  "image": "sha256:43ce618452b29610b682ea77e384dcb8c57308957a7eb65734a47d76a7ff47dc",
+  "taskSetSha256": "3d547f60f0aea485efaf7d7d4bce6b3a569368b55e0e8b9ecc06265c0669a53c",
+  "toolNames": [
+    "read_file",
+    "read_files",
+    "list_files",
+    "create_file",
+    "replace_text",
+    "bash",
+    "read_repository_guidance",
+    "inspect_changes"
+  ],
+  "limits": {
+    "requestsPerAttempt": 8,
+    "outputTokensPerRequest": 2048,
+    "secondsPerAttempt": 150,
+    "repetitions": 1
+  },
+  "results": [
+    {
+      "arm": "base",
+      "task": "ordinary-bug",
+      "repeat": 0,
+      "elapsedMs": 20628.764458,
+      "usage": {
+        "inputTokens": 11050,
+        "outputTokens": 496,
+        "uncachedInputTokens": 3242,
+        "cacheReadTokens": 7808,
+        "cacheWriteTokens": 0
+      },
+      "requests": 5,
+      "toolCalls": 5,
+      "toolFailures": 0,
+      "modelMs": 16735.383167,
+      "commands": 12,
+      "commandMs": 4970.069250999998,
+      "mutated": false,
+      "continuations": 0,
+      "error": null,
+      "grade": {
+        "passed": true
+      },
+      "patchStat": " src/clamp.cjs | 2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)\n",
+      "usageMethod": "Final cumulative event, checked against sum of per-request metrics"
+    },
+    {
+      "arm": "new",
+      "task": "ordinary-bug",
+      "repeat": 0,
+      "elapsedMs": 28085.823458,
+      "usage": {
+        "inputTokens": 15796,
+        "outputTokens": 658,
+        "uncachedInputTokens": 5556,
+        "cacheReadTokens": 10240,
+        "cacheWriteTokens": 0
+      },
+      "requests": 6,
+      "toolCalls": 7,
+      "toolFailures": 0,
+      "modelMs": 20894.293041999994,
+      "commands": 24,
+      "commandMs": 9044.999251,
+      "mutated": false,
+      "continuations": 0,
+      "error": null,
+      "grade": {
+        "passed": true
+      },
+      "patchStat": " checks.cjs    | 20 +++++++++++++++++++-\n src/clamp.cjs |  2 +-\n 2 files changed, 20 insertions(+), 2 deletions(-)\n",
+      "usageMethod": "Final cumulative event, checked against sum of per-request metrics"
+    },
+    {
+      "arm": "base",
+      "task": "nested-guidance",
+      "repeat": 0,
+      "elapsedMs": 25097.980499999998,
+      "usage": {
+        "inputTokens": 11253,
+        "outputTokens": 414,
+        "uncachedInputTokens": 5621,
+        "cacheReadTokens": 5632,
+        "cacheWriteTokens": 0
+      },
+      "requests": 5,
+      "toolCalls": 5,
+      "toolFailures": 0,
+      "modelMs": 21280.862459,
+      "commands": 12,
+      "commandMs": 4932.278626000001,
+      "mutated": false,
+      "continuations": 0,
+      "error": null,
+      "grade": {
+        "passed": true
+      },
+      "patchStat": " src/tags/index.cjs | 4 +++-\n 1 file changed, 3 insertions(+), 1 deletion(-)\n",
+      "usageMethod": "Final cumulative event, checked against sum of per-request metrics"
+    },
+    {
+      "arm": "new",
+      "task": "nested-guidance",
+      "repeat": 0,
+      "elapsedMs": 23929.59675,
+      "usage": {
+        "inputTokens": 16270,
+        "outputTokens": 467,
+        "uncachedInputTokens": 4366,
+        "cacheReadTokens": 11904,
+        "cacheWriteTokens": 0
+      },
+      "requests": 6,
+      "toolCalls": 6,
+      "toolFailures": 0,
+      "modelMs": 17033.198124,
+      "commands": 22,
+      "commandMs": 8241.300502999999,
+      "mutated": false,
+      "continuations": 0,
+      "error": null,
+      "grade": {
+        "passed": true
+      },
+      "patchStat": " src/tags/index.cjs | 5 ++++-\n 1 file changed, 4 insertions(+), 1 deletion(-)\n",
+      "usageMethod": "Final cumulative event, checked against sum of per-request metrics"
+    },
+    {
+      "arm": "base",
+      "task": "stale-source",
+      "repeat": 0,
+      "elapsedMs": 29459.745625,
+      "usage": {
+        "inputTokens": 14145,
+        "outputTokens": 321,
+        "uncachedInputTokens": 3265,
+        "cacheReadTokens": 10880,
+        "cacheWriteTokens": 0
+      },
+      "requests": 7,
+      "toolCalls": 6,
+      "toolFailures": 0,
+      "modelMs": 25427.948916,
+      "commands": 13,
+      "commandMs": 4372.097376999999,
+      "mutated": true,
+      "continuations": 0,
+      "error": null,
+      "grade": {
+        "passed": true
+      },
+      "patchStat": " config.json | 2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)\n",
+      "usageMethod": "Final cumulative event, checked against sum of per-request metrics"
+    },
+    {
+      "arm": "new",
+      "task": "stale-source",
+      "repeat": 0,
+      "elapsedMs": 21592.722333,
+      "usage": {
+        "inputTokens": 12795,
+        "outputTokens": 289,
+        "uncachedInputTokens": 3579,
+        "cacheReadTokens": 9216,
+        "cacheWriteTokens": 0
+      },
+      "requests": 6,
+      "toolCalls": 5,
+      "toolFailures": 0,
+      "modelMs": 15868.057456999999,
+      "commands": 19,
+      "commandMs": 6529.492125999998,
+      "mutated": true,
+      "continuations": 0,
+      "error": null,
+      "grade": {
+        "passed": true
+      },
+      "patchStat": " config.json | 2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)\n",
+      "usageMethod": "Final cumulative event, checked against sum of per-request metrics"
+    },
+    {
+      "arm": "base",
+      "task": "completion-hook",
+      "repeat": 0,
+      "elapsedMs": 22803.423875,
+      "usage": {
+        "inputTokens": 12063,
+        "outputTokens": 501,
+        "uncachedInputTokens": 3487,
+        "cacheReadTokens": 8576,
+        "cacheWriteTokens": 0
+      },
+      "requests": 5,
+      "toolCalls": 5,
+      "toolFailures": 0,
+      "modelMs": 18299.811,
+      "commands": 12,
+      "commandMs": 5666.975084000001,
+      "mutated": false,
+      "continuations": 0,
+      "error": null,
+      "grade": {
+        "passed": true
+      },
+      "patchStat": " src/slug.cjs | 2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)\n",
+      "usageMethod": "Final cumulative event, checked against sum of per-request metrics"
+    },
+    {
+      "arm": "new",
+      "task": "completion-hook",
+      "repeat": 0,
+      "elapsedMs": 36113.209084,
+      "usage": {
+        "inputTokens": 17744,
+        "outputTokens": 447,
+        "uncachedInputTokens": 4560,
+        "cacheReadTokens": 13184,
+        "cacheWriteTokens": 0
+      },
+      "requests": 6,
+      "toolCalls": 5,
+      "toolFailures": 0,
+      "modelMs": 26765.551876999998,
+      "commands": 23,
+      "commandMs": 10147.875083999996,
+      "mutated": false,
+      "continuations": 0,
+      "error": null,
+      "grade": {
+        "passed": true
+      },
+      "patchStat": " src/slug.cjs | 2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)\n",
+      "usageMethod": "Final cumulative event, checked against sum of per-request metrics"
+    }
+  ],
+  "totals": {
+    "base": {
+      "elapsedMs": 97989.914458,
+      "tokens": 50243,
+      "inputTokens": 48511,
+      "outputTokens": 1732,
+      "uncachedInputTokens": 15615,
+      "cacheReadTokens": 32896,
+      "requests": 22,
+      "toolCalls": 21,
+      "commands": 49
+    },
+    "new": {
+      "elapsedMs": 109721.35162500001,
+      "tokens": 64466,
+      "inputTokens": 62605,
+      "outputTokens": 1861,
+      "uncachedInputTokens": 18061,
+      "cacheReadTokens": 44544,
+      "requests": 24,
+      "toolCalls": 23,
+      "commands": 88
+    }
+  },
+  "audit": {
+    "excludedCompletedInfrastructureTrials": 4,
+    "excludedSetupErrorBeforeInference": 1,
+    "interruptedInfrastructureTrial": 1,
+    "excludedMeasuredTokens": 84700,
+    "validMeasuredTokens": 114709,
+    "totalKnownMeasuredTokens": 199409,
+    "interruptedTrialTokens": "not captured",
+    "initialSharedWeeklyUsagePercent": 87,
+    "finalSharedWeeklyUsagePercent": 90
+  }
+}
