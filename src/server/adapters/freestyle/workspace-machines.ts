@@ -13,6 +13,10 @@ import {
 	WorkspaceCommandError,
 	WorkspaceProvisionError,
 } from "#/server/services/errors";
+import {
+	guestServiceHostname,
+	persistentGuestCapabilityRunner,
+} from "#/server/services/persistent-guest-capability";
 import type {
 	CommandOutput,
 	CreateProofWorkspaceOptions,
@@ -413,7 +417,20 @@ export function createFreestyleWorkspaceMachines(
 			}
 		},
 	};
-	return machines;
+	const invokeCapability = persistentGuestCapabilityRunner(
+		machines,
+		(vm, port) => machines.exposeHttp(vm, port, guestServiceHostname(vm, port)),
+	);
+	return {
+		...machines,
+		runCapability: async (vm, request, signal) => {
+			signal.throwIfAborted();
+			if (infrastructureAdmissionEnabled())
+				await resumeProductVm(freestyle.vms.ref(vm), "Workspace VM", 180);
+			await rejectPausedGuestMutation(freestyle, vm, "exec");
+			return invokeCapability(vm, request, signal);
+		},
+	};
 }
 
 /** A failed resize must not become a silently undersized workspace on retry. Legacy VMs keep their existing shape. */

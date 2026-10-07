@@ -6,6 +6,8 @@ const readName = z.enum([
 	"inspect_changes",
 	"search_files",
 	"read_files",
+	"read_code",
+	"inspect_code_batch",
 	"inspect_project_evidence",
 	"search_project_memory",
 	"inspect_task_diff",

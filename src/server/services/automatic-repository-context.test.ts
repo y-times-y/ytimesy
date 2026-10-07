@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ModelMessage, ToolSet } from "ai";
@@ -128,6 +129,134 @@ it("does not inspect or rewrite repository state when no repository tools are av
 	const messages: ModelMessage[] = [{ role: "user", content: "Hello" }];
 	expect(await context.prepare(messages)).toBe(messages);
 	expect(workspace).not.toHaveBeenCalled();
+});
+
+it("retains freshness evidence from structured code reads", async () => {
+	const fixture = await localHarnessWorkspace();
+	try {
+		await mkdir(join(fixture.root, "src"));
+		const source = "export const value = 1;\n";
+		await writeFile(join(fixture.root, "src/file.ts"), source);
+		const signal = new AbortController().signal;
+		const context = automaticRepositoryContext({
+			workspace: async () => fixture.workspace,
+			signal,
+			onEvent: vi.fn(async () => {}),
+			tools: {
+				read_repository_guidance: repositoryGuidanceTool({
+					...fixture.workspace,
+					signal,
+				}),
+				read_code: tool({
+					inputSchema: z.object({
+						files: z.array(z.object({ path: z.string() })),
+					}),
+					execute: async () => ({
+						files: [
+							{
+								path: "src/file.ts",
+								sha256: createHash("sha256").update(source).digest("hex"),
+							},
+						],
+					}),
+				}),
+			},
+		});
+		let history = await context.prepare([
+			{ role: "user", content: "Inspect source" },
+		]);
+		const output = await context.tools.read_code.execute?.(
+			{ files: [{ path: "src/file.ts" }] },
+			{
+				toolCallId: "read",
+				messages: history,
+				abortSignal: signal,
+				context: {},
+			},
+		);
+		history = await context.afterTools([
+			...history,
+			{
+				role: "tool",
+				content: [
+					{
+						type: "tool-result",
+						toolCallId: "read",
+						toolName: "read_code",
+						output: { type: "json", value: JSON.parse(JSON.stringify(output)) },
+					},
+				],
+			},
+		]);
+		await writeFile(
+			join(fixture.root, "src/file.ts"),
+			"export const value = 2;\n",
+		);
+		history = await context.prepare(history);
+		expect(
+			history.filter(
+				(message) =>
+					typeof message.content === "string" &&
+					message.content.startsWith("Runtime source freshness notice"),
+			),
+		).toHaveLength(1);
+		expect(await context.prepare(history)).toEqual(history);
+	} finally {
+		await fixture.cleanup();
+	}
+});
+
+it("delivers rename destination instructions before allowing the move", async () => {
+	const fixture = await localHarnessWorkspace();
+	try {
+		await mkdir(join(fixture.root, "destination"));
+		await writeFile(
+			join(fixture.root, "destination/AGENTS.md"),
+			"Destination requirement: preserve exports.",
+		);
+		const signal = new AbortController().signal;
+		const execute = vi.fn(async () => ({ moved: true }));
+		const context = automaticRepositoryContext({
+			workspace: async () => fixture.workspace,
+			signal,
+			onEvent: vi.fn(async () => {}),
+			tools: {
+				read_repository_guidance: repositoryGuidanceTool({
+					...fixture.workspace,
+					signal,
+				}),
+				rename_file: tool({
+					inputSchema: z.object({ path: z.string(), newPath: z.string() }),
+					execute,
+				}),
+			},
+		});
+		let history = await context.prepare([
+			{ role: "user", content: "Move the file" },
+		]);
+		const input = { path: "file.ts", newPath: "destination/file.ts" };
+		const options = {
+			toolCallId: "move",
+			messages: history,
+			abortSignal: signal,
+			context: {},
+		};
+		expect(
+			await context.tools.rename_file.execute?.(input, options),
+		).toMatchObject({ retryRequired: true });
+		expect(execute).not.toHaveBeenCalled();
+		history = await context.afterTools(history);
+		expect(JSON.stringify(history)).toContain("Destination requirement");
+		expect(
+			await context.tools.rename_file.execute?.(input, {
+				...options,
+				messages: history,
+			}),
+		).toEqual({ moved: true });
+		expect(execute).toHaveBeenCalledOnce();
+	} finally {
+		await fixture.cleanup();
+	}
 });
 
 it("defers a scoped edit until the model has received new instructions, including nested patch operations", async () => {

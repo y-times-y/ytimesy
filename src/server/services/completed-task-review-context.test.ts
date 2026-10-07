@@ -107,6 +107,35 @@ it("collects once per completed revision, preserves opaque history and retries o
 	expect(readHandoff).toHaveBeenCalledTimes(2);
 });
 
+it("preserves authoritative baseline receipts alongside compact child evidence", () => {
+	const completionVerification = {
+		type: "completion-verification",
+		directory: "/repo",
+		turn: "b".repeat(64),
+		base: "c".repeat(40),
+		tree: "d".repeat(40),
+		patchSha256: "a".repeat(64),
+		checks: [
+			{
+				command: "test all",
+				reference: "00000000-0000-4000-8000-000000000001",
+				exitCode: 0,
+				stopped: null,
+			},
+		],
+	};
+	expect(
+		compactTaskReviewPacket({ ...handoff, completionVerification }),
+	).toMatchObject({ completionVerification });
+	expect(compactTaskReviewPacket(handoff).completionVerification).toBeNull();
+	expect(() =>
+		compactTaskReviewPacket({
+			...handoff,
+			completionVerification: { ...completionVerification, tree: "invalid" },
+		}),
+	).toThrow();
+});
+
 it("does not turn missing evidence into success or repeatedly wake an unavailable child", async () => {
 	const readHandoff = vi.fn(async () => {
 		throw new Error("private provider message");

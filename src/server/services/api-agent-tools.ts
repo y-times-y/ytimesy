@@ -31,6 +31,8 @@ import { apiAgentFileTools } from "./api-agent-file-tools";
 import { apiAgentLanguageTools } from "./api-agent-language-tools";
 import { scopedShellCommand } from "./api-command-scope";
 import { batchedAgentReads } from "./batched-agent-reads";
+import { codeToolingTools } from "./code-tooling";
+import { dapDebuggerTools } from "./dap-debugger";
 import { runAgentTaskTool } from "./harness-workspace-session";
 import { repositorySearchCommand } from "./indexed-repository-search";
 import { journaledToolOperation } from "./journaled-tool-operation";
@@ -436,6 +438,14 @@ export function apiAgentTools(
 				turnId: input.turnId,
 				once,
 			}),
+			dapDebuggerTools({
+				workspace,
+				signal,
+				ownerSessionId: session.id,
+				turnId: input.turnId,
+				once,
+			}),
+			codeToolingTools({ workspace, signal, once }),
 		);
 	Object.assign(
 		tools,

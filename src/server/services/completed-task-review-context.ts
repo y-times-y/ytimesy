@@ -1,8 +1,10 @@
 import type { ModelMessage } from "ai";
 import { z } from "zod";
+import { completedVerification } from "#/domain/completion-verification";
 
 const handoffSchema = z.object({
 	taskId: z.string(),
+	completionVerification: completedVerification.nullable().default(null),
 	diff: z.unknown(),
 	summary: z.unknown(),
 	checks: z
