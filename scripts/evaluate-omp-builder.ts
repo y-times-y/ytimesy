@@ -1,5 +1,7 @@
+import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { cp, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { type ToolSet, tool } from "ai";
@@ -34,6 +36,45 @@ import {
 	persistentGuestCapabilityRunner,
 } from "../src/server/services/persistent-guest-capability";
 import type { WorkspaceMachines } from "../src/server/services/workspace-machines";
+
+// Each archived package must resolve its own # imports, not the caller's tsconfig paths.
+if (process.env.YTIMESY_OMP_ISOLATED_MODULES !== "1") {
+	const config = resolve(".ytimesy/omp-evaluation-tsconfig.json");
+	await mkdir(resolve(".ytimesy"), { recursive: true, mode: 0o700 });
+	await writeFile(
+		config,
+		JSON.stringify({
+			compilerOptions: {
+				module: "ESNext",
+				moduleResolution: "Bundler",
+				target: "ES2022",
+			},
+		}),
+		{ mode: 0o600 },
+	);
+	const status = await new Promise<number>((resolveStatus, reject) => {
+		const child = spawn(
+			process.execPath,
+			[
+				"--import",
+				"tsx",
+				new URL(import.meta.url).pathname,
+				...process.argv.slice(2),
+			],
+			{
+				stdio: "inherit",
+				env: {
+					...process.env,
+					TSX_TSCONFIG_PATH: config,
+					YTIMESY_OMP_ISOLATED_MODULES: "1",
+				},
+			},
+		);
+		child.once("error", reject);
+		child.once("exit", (code) => resolveStatus(code ?? 1));
+	});
+	process.exit(status);
+}
 
 const live = process.argv.includes("--live");
 const root = process.cwd(),
@@ -90,6 +131,14 @@ await symlink(join(root, ".secrets"), join(source, ".secrets"), "dir").catch(
 		if (error.code !== "EEXIST") throw error;
 	},
 );
+const baselineResolver = createRequire(
+	join(source, "src/server/services/model-agent-loop.ts"),
+);
+if (
+	baselineResolver.resolve("#/domain/harness-model-profile") !==
+	join(source, "src/domain/harness-model-profile.ts")
+)
+	throw new Error("Baseline imports escaped their frozen revision.");
 const fixture = join(directory, "fixture");
 await mkdir(fixture, { recursive: true });
 const files = ompBuilderFiles();
@@ -346,6 +395,7 @@ try {
 			cwd: "/home/ubuntu/omp-capability-proof",
 		},
 		deadline,
+		(stage) => console.info(`Live capability proof: ${stage}`),
 	);
 	await privateFile(reportPath, JSON.stringify(report, null, 2));
 	console.info("Zero-inference real VM capability proof passed.");

@@ -24,6 +24,7 @@ type ProofResult = {
 export async function proveOmpGuestCapabilities(
 	workspace: AgentToolWorkspace,
 	signal: AbortSignal,
+	onStage: (stage: string) => void = () => {},
 ) {
 	const sessionId = randomUUID();
 	const input = {
@@ -78,11 +79,13 @@ export async function proveOmpGuestCapabilities(
 		"main.py",
 		"counter = 41\nlabel = 'before'\ncounter += 1\nlabel = 'after'\nprint(counter, label)\n",
 	);
+	onStage("prepare Python language/debugger");
 	const prepared = await invoke("prepare_code_tools", {
 		runtime: "python",
 		debugger: true,
 	});
 	assert.ok(prepared.prepared.every((item) => item.available));
+	onStage("outline, file move and code action");
 	const outline = await invoke("read_code", {
 		files: [{ path: "main.py", view: "outline" }],
 	});
@@ -120,6 +123,7 @@ export async function proveOmpGuestCapabilities(
 		actionIndex: choices[0].index,
 		actionSha256: choices[0].sha256,
 	});
+	onStage("warm LSP batch");
 	const batch = await invoke("inspect_code_batch", {
 		requests: [
 			{ path: "moved.ts", operation: "references", line: 1, column: 14 },
@@ -128,6 +132,7 @@ export async function proveOmpGuestCapabilities(
 	});
 	assert.equal(batch.results.length, 2);
 	assert.ok(batch.results[0].result.length >= 2);
+	onStage("Python DAP launch/breakpoint/locals/step");
 	let state = await invoke("debug_program", {
 		action: "start",
 		adapter: "python",
