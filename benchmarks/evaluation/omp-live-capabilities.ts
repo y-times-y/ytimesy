@@ -157,9 +157,9 @@ export async function proveOmpGuestCapabilities(
 				frameId: state.frames[0].id,
 				pauseId,
 			});
-		const reference = scopes.scopes.find((item) =>
-			/local/i.test(item.name),
-		).reference;
+		const local = scopes.scopes.find((item) => /local/i.test(item.name));
+		assert.ok(local, "Paused Python frame has a locals scope");
+		const reference = local.reference;
 		const variables = await invoke("debug_program", {
 			action: "variables",
 			debuggerId,
