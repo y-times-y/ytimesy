@@ -130,6 +130,11 @@ export function apiModelFailureMessage(error: unknown): string {
 	for (let depth = 0; depth < 3 && RetryError.isInstance(error); depth++)
 		error = error.lastError;
 	if (error instanceof SafeApiModelFailure) return error.message;
+	if (
+		error instanceof Error &&
+		error.message === "Private checkpoint storage is not configured."
+	)
+		return "Private checkpoint storage is not configured. Work and original context were preserved; configure archive storage before continuing. This is a harness configuration failure, not a provider rejection.";
 	if (APICallError.isInstance(error)) {
 		const code = providerErrorCode(error.data);
 		const detail = `${error.message} ${error.responseBody ?? ""}`.slice(
