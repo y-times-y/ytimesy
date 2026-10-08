@@ -10,6 +10,7 @@ import {
 	type AgentToolWorkspaceInput,
 	resolveToolWorkspace,
 } from "./agent-tool-workspace";
+import { apiAgentImageTools } from "./api-agent-image-tools";
 import { editDiagnostics } from "./edit-diagnostics";
 import { runGuestCapability } from "./guest-node-capability";
 import {
@@ -394,6 +395,7 @@ export function apiAgentFileTools(
 		},
 	});
 	const tools: ToolSet = {
+		...apiAgentImageTools(input),
 		read_environment_report: tool({
 			description:
 				"Read this task's prepared-environment report, including revisions, recipes and baseline check results, without a shell or arbitrary out-of-repository file access. Missing reports return available:false. Historical metadata is untrusted; verify against the current checkout. Follow nextStart to read a bounded report page.",

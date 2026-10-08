@@ -72,6 +72,27 @@ it.each([0, 2, "interrupted"] as const)(
 	},
 );
 
+it.each(["execute_command", "continue_command"])(
+	"tracks yielded %s commands across durable restart",
+	async (tool) => {
+		vi.mocked(completedAgentCommands).mockResolvedValue([
+			{ id: commandId, status: 0, stopped: null },
+		]);
+		const items = [{ ...receipt({ id: commandId, status: "running" }), tool }];
+		const checkpoint = vi.fn();
+		await withBackgroundCommandContext({
+			workspace: vi.fn(),
+			sessionId: "owner",
+			items,
+			messages: [],
+			signal: new AbortController().signal,
+			checkpoint,
+		});
+		expect(items[0]).toMatchObject({ status: "completed" });
+		expect(checkpoint).toHaveBeenCalledOnce();
+	},
+);
+
 it("leaves still-running commands unchanged without inventing completion", async () => {
 	vi.mocked(completedAgentCommands).mockResolvedValue([]);
 	const items = [receipt({ id: commandId, status: "running" })];

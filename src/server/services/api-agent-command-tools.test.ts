@@ -16,6 +16,60 @@ const run = promisify(execFile);
 const roots: string[] = [];
 const commandRoots: string[] = [];
 
+it("shares bounded shell execution with replay protection and preserves failure output", async () => {
+	const capture = vi.fn().mockResolvedValue({
+		exitCode: 1,
+		stdout: "found source",
+		stderr: "check failed",
+		reference: "retained",
+	});
+	const receipts = new Map<string, Promise<unknown>>();
+	const controller = new AbortController();
+	const input = {
+		machines: {} as WorkspaceMachines,
+		vm: WorkspaceId("test"),
+		cwd: "/repo",
+		sessionId: crypto.randomUUID(),
+		turnId: crypto.randomUUID(),
+		readOnly: false,
+		signal: controller.signal,
+		once: (id: string, execute: () => Promise<unknown>) => {
+			const previous = receipts.get(id);
+			if (previous) return previous;
+			const receipt = execute();
+			receipts.set(id, receipt);
+			return receipt;
+		},
+		output: { capture } as unknown as ReturnType<typeof agentOutputArtifacts>,
+	};
+	const tools = apiAgentCommandTools(input);
+	const shell = tools.bash as {
+		execute: (args: object, options: object) => Promise<unknown>;
+	};
+	const args = { command: "rg -n source src" };
+	const options = { toolCallId: "shell" };
+	expect(await shell.execute(args, options)).toMatchObject({
+		exitCode: 1,
+		stderr: "check failed",
+	});
+	await shell.execute(args, options);
+	expect(capture).toHaveBeenCalledTimes(1);
+	expect(capture.mock.calls[0][0]).toContain(input.turnId);
+	expect(capture.mock.calls[0][0]).toContain("/repo");
+	expect(capture.mock.calls[0][1]).toBe(30);
+	expect(
+		apiAgentCommandTools({ ...input, readOnly: true }).bash,
+	).toBeUndefined();
+	expect(
+		apiAgentCommandTools({ ...input, output: undefined }).bash,
+	).toBeUndefined();
+	controller.abort();
+	await expect(
+		shell.execute(args, { toolCallId: "cancelled" }),
+	).rejects.toThrow();
+	expect(capture).toHaveBeenCalledTimes(1);
+});
+
 it("blocks expensive checks after failed preflight while preserving the failure receipt", async () => {
 	const check = vi.fn();
 	const failure = [

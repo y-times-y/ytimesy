@@ -52,6 +52,8 @@ it.each(["openai", "anthropic", "google", "other"] as const)(
 		expect(instructions).toContain("required bodies completely");
 		expect(instructions).toContain("Preserve every required check");
 		expect(instructions).toContain("actual exit and stop status");
+		expect(instructions).toContain("execute_command with rg");
+		expect(instructions).not.toContain("discover replace_text");
 		expect(instructions).not.toContain("oldText");
 	},
 );

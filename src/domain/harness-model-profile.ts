@@ -45,8 +45,8 @@ export function harnessModelToolInstructions(
 		family === "openai" && nativePatch
 			? "Prefer native apply_patch with its documented V4A operation schema, never shell patches."
 			: family === "anthropic"
-				? "For small edits discover replace_text and supply exact uniquely matching old/new text. Batch coherent multi-file changes with apply_patches (V4A)."
-				: "Batch coherent edits with apply_patches (V4A); discover replace_text for small exact old/new replacements.";
+				? "Use replace_text for small exact uniquely matching old/new edits; apply_patch or apply_patches for V4A patches."
+				: "Use apply_patch for V4A patches or replace_text for small exact old/new edits; apply_patches can batch coherent changes.";
 	const context =
 		family === "anthropic"
 			? "Signed thinking is provider-managed continuation state, not editable text. Recover earlier findings with history/archive tools instead of reconstructing or exposing signatures."
@@ -55,8 +55,9 @@ export function harnessModelToolInstructions(
 				: "Opaque reasoning is provider-managed state. Use recoverable source/tool evidence, not guessed reasoning, after compaction.";
 	return [
 		`Harness tool profile v2 (${family}): ${editing} ${context}`,
-		"Read current source before edits; reread after stale/ambiguous rejection. Never invent missing source from truncated output. Use read_code outlines to locate declarations in large supported source files, then exact line selections before editing. Prefer direct reads for small files; unsupported outlines require ordinary reads. Batch independent code inspections with inspect_code_batch; discover rename_symbol for symbol refactors, rename_file for semantic file moves, and inspect_code code_actions plus apply_code_action for fenced textual actions. For non-Node debugging discover prepare_code_tools and debug_program; use debug_node for Node. Order dependent calls and writes.",
-		"Use scoped read_repository_guidance: ancestor instructions, referencedDocuments and scopeFiles are included. Read required bodies completely (read_files supports maxCharacters:128000); follow truncation cursors. Reuse unchanged complete evidence, not filename inventories as absence proof; reread after changes or genuine uncertainty. Discover optional tools with search_tools.",
+		"When offered, use execute_command with rg, Git and project CLIs; resume a yielded id with continue_command (stdin, EOF, wait, output pages), never restart it. stop_command cancels. Use view_image for repository image pixels. Independent tool calls run together in one response; sequence dependent calls and writes.",
+		"Read current source before edits; reread after stale/ambiguous rejection. Never invent truncated source. Optional tools are discoverable with search_tools: structured search, read_code outlines, inspect_code_batch, apply_patches, LSP inspection/refactors, debugging, memory and delegation. Outlines locate declarations, not replace exact source reads. Use rename_symbol for symbol refactors, rename_file for semantic moves, inspect_code code_actions plus apply_code_action for fenced actions. Order dependent calls and writes.",
+		"Use scoped read_repository_guidance: ancestor instructions, referencedDocuments and scopeFiles are included. Read required bodies completely (read_files supports maxCharacters:128000); follow truncation cursors. Reuse unchanged complete evidence, not filename inventories as absence proof; reread after changes or genuine uncertainty.",
 		"Include implementation and tests in one coherent patch when no intermediate observation is needed. Use apply_patches.verification for formatting, fast preflightCommands, then all required checks; otherwise use run_checks. Follow configured lint rules. Biome formatting must use --error-on-warnings; no unsafe fixes, suppressed diagnostics or weakened policy.",
 		"Verify the stable final tree; inspect resulting changes. Preserve every required check and full retained evidence. Concise runner reporting is allowed only without filtering tests or hiding warnings/errors. Each command needs its actual exit and stop status; include output references in the handoff.",
 	].join(" ");

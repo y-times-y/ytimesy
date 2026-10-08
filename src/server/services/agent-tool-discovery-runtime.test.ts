@@ -4,6 +4,87 @@ import { expect, it, vi } from "vitest";
 import { z } from "zod";
 import { runModelAgentStep } from "./model-agent-loop";
 
+it("executes independent ordinary tool calls concurrently in one model step", async () => {
+	let release = () => {};
+	const first = vi.fn(
+		() =>
+			new Promise((resolve) => {
+				release = () => resolve({ content: "first source" });
+			}),
+	);
+	const second = vi.fn(async () => ({ content: "second source" }));
+	const model = new MockLanguageModelV4({
+		doStream: async () => ({
+			stream: simulateReadableStream({
+				initialDelayInMs: null,
+				chunkDelayInMs: null,
+				chunks: [
+					{
+						type: "tool-call",
+						toolCallId: "first",
+						toolName: "read_file",
+						input: '{"path":"first.ts"}',
+					},
+					{
+						type: "tool-call",
+						toolCallId: "second",
+						toolName: "read_files",
+						input: '{"paths":["second.ts"]}',
+					},
+					{
+						type: "finish",
+						finishReason: { unified: "tool-calls", raw: "tool_calls" },
+						usage: {
+							inputTokens: {
+								total: 3,
+								noCache: 3,
+								cacheRead: 0,
+								cacheWrite: 0,
+							},
+							outputTokens: { total: 2, text: 2, reasoning: 0 },
+						},
+					},
+				],
+			}),
+		}),
+	});
+	const pending = runModelAgentStep(
+		{
+			userId: "owner",
+			modelId: "model",
+			instructions: "Inspect independent sources",
+			messages: [{ role: "user", content: "Inspect" }],
+			toolSurface: "implementation",
+			tools: {
+				read_file: tool({
+					inputSchema: z.object({ path: z.string() }),
+					execute: first,
+				}),
+				read_files: tool({
+					inputSchema: z.object({ paths: z.array(z.string()) }),
+					execute: second,
+				}),
+			},
+			signal: new AbortController().signal,
+			onEvent: vi.fn(),
+			onStep: vi.fn(),
+		},
+		{ model },
+	);
+	try {
+		await vi.waitFor(() => {
+			expect(first).toHaveBeenCalledOnce();
+			expect(second).toHaveBeenCalledOnce();
+		});
+	} finally {
+		release();
+	}
+	const result = await pending;
+	expect(model.doStreamCalls).toHaveLength(1);
+	expect(JSON.stringify(result.messages)).toContain("first source");
+	expect(JSON.stringify(result.messages)).toContain("second source");
+});
+
 it("executes SDK discovery, checkpoints the match and exposes it after a durable restart", async () => {
 	const model = new MockLanguageModelV4({
 		doStream: async () => ({
