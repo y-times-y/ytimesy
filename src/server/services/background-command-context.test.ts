@@ -9,7 +9,9 @@ vi.mock("./api-agent-command-tools", () => ({
 	completedAgentCommands: vi.fn(),
 }));
 const commandId = "b6794616-ec28-4390-831f-7d3ddf9f8621";
-const receipt = (output: object): SessionItem => ({
+const receipt = (
+	output: object,
+): Extract<SessionItem, { kind: "dynamicToolCall" }> => ({
 	kind: "dynamicToolCall",
 	id: SessionItemId("command-card"),
 	tool: "start_command",
@@ -17,6 +19,20 @@ const receipt = (output: object): SessionItem => ({
 	output: JSON.stringify(output),
 });
 beforeEach(() => vi.resetAllMocks());
+
+it("retains yielded Browser Use command ids for cancellation and completion across compaction", async () => {
+	const { pendingAgentCommandIds } = await import(
+		"./background-command-context"
+	);
+	expect(
+		pendingAgentCommandIds([
+			{
+				...receipt({ id: commandId, status: "running" }),
+				tool: "browser_execute",
+			},
+		]),
+	).toEqual([commandId]);
+});
 
 it("does not resolve a workspace or checkpoint without valid pending commands", async () => {
 	const workspace = vi.fn();

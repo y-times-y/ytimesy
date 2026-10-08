@@ -78,6 +78,15 @@ export function automaticRepositoryContext(input: {
 	const invalidated = new Set<string>();
 
 	function observe(name: string, output: unknown) {
+		if (name === "compose_tools") {
+			for (const entry of (
+				output as {
+					steps?: { tool: string; status: string; result: unknown }[];
+				}
+			)?.steps ?? [])
+				if (entry.status === "completed") observe(entry.tool, entry.result);
+			return;
+		}
 		if (name === "batch_read") {
 			for (const entry of (
 				output as {

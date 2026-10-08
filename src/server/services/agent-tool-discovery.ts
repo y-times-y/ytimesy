@@ -48,6 +48,9 @@ const CORE_TOOLS = new Set([
 // Keep everyday coding and evidence retrieval immediate; specialists remain
 // discoverable and stay loaded after use, including across compaction.
 const BUILDER_CORE_TOOLS = new Set([
+	"compose_tools",
+	"update_plan",
+	"read_work_plan",
 	"execute_command",
 	"continue_command",
 	"view_image",

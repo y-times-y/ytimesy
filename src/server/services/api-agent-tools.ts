@@ -31,6 +31,7 @@ import { apiAgentFileTools } from "./api-agent-file-tools";
 import { apiAgentLanguageTools } from "./api-agent-language-tools";
 import { scopedShellCommand } from "./api-command-scope";
 import { batchedAgentReads } from "./batched-agent-reads";
+import { builderWorkTools } from "./builder-work-state";
 import { codeToolingTools } from "./code-tooling";
 import { dapDebuggerTools } from "./dap-debugger";
 import { runAgentTaskTool } from "./harness-workspace-session";
@@ -88,6 +89,12 @@ export function apiAgentTools(
 			run,
 		);
 	const tools: ToolSet = {
+		...builderWorkTools({
+			userId: session.userId,
+			sessionId: session.id,
+			signal,
+			once,
+		}),
 		...projectMemoryTools({ session, workspace, once }),
 		plan_parallel_work: tool({
 			description:
@@ -444,6 +451,8 @@ export function apiAgentTools(
 		apiAgentBrowserTools({
 			workspace,
 			readOnly,
+			sessionId: session.id,
+			executeCommand: tools.execute_command?.execute,
 			signal,
 			once,
 		}),

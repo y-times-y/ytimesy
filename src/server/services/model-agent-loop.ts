@@ -43,6 +43,7 @@ import {
 	workingContextTarget,
 } from "./api-agent-context";
 import { BackgroundHistoryCompaction } from "./background-history-compaction";
+import { composedAgentTools } from "./composed-agent-tools";
 import { archiveConsumedGuidance } from "./consumed-guidance";
 import { archiveEarlierToolOutput } from "./retired-tool-output";
 import { archiveSupersededReads } from "./superseded-reads";
@@ -135,6 +136,12 @@ async function executeModelSteps(
 	);
 	input = {
 		...input,
+		tools: composedAgentTools({
+			tools: input.tools,
+			signal: input.signal,
+			onEvent: input.onEvent,
+			onToolMetric: input.onToolMetric,
+		}),
 		instructions: `${input.instructions}\n${harnessModelToolInstructions(modelFamily, input.tools.apply_patch?.type === "provider")}`,
 	};
 	input.signal.throwIfAborted();
