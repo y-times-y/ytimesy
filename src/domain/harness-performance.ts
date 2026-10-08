@@ -14,6 +14,9 @@ const toolNames = [
 	"apply_patch",
 	"apply_patches",
 	"bash",
+	"execute_command",
+	"continue_command",
+	"view_image",
 	"start_command",
 	"read_command",
 	"wait_command",
@@ -103,6 +106,8 @@ export function toolMetricCategory(
 	if (
 		[
 			"bash",
+			"execute_command",
+			"continue_command",
 			"start_command",
 			"stop_command",
 			"read_command",
@@ -119,6 +124,7 @@ export function toolMetricCategory(
 	if (
 		[
 			"read_file",
+			"view_image",
 			"read_files",
 			"search_files",
 			"list_files",

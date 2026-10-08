@@ -4,7 +4,7 @@ import type { AgentToolWorkspace } from "./agent-tool-workspace";
 
 const RUN = `import json, os, pathlib, signal, subprocess, sys
 root=pathlib.Path(sys.argv[1]); root.mkdir(parents=True,exist_ok=True)
-if (root/'stopped').exists(): sys.exit(130)
+if (root/'stopped').exists() or (root/(sys.argv[2]+'.stopped')).exists(): sys.exit(130)
 record=root/(sys.argv[2]+'.json')
 environment=os.environ.copy()
 environment.pop('FORCE_COLOR',None)
@@ -23,7 +23,7 @@ def stop(*_):
         except ProcessLookupError: pass
         process.wait()
 signal.signal(signal.SIGTERM,stop); signal.signal(signal.SIGHUP,stop)
-if (root/'stopped').exists(): stop()
+if (root/'stopped').exists() or (root/(sys.argv[2]+'.stopped')).exists(): stop()
 try:
     try: result=process.wait(timeout=int(sys.argv[5]))
     except subprocess.TimeoutExpired: stop(); result=124
@@ -35,9 +35,11 @@ sys.exit(result if result>=0 else 128-result)`;
 
 const STOP = `import json, os, pathlib, signal, sys, time
 root=pathlib.Path(sys.argv[1])
-root.mkdir(parents=True,exist_ok=True); (root/'stopped').touch()
+root.mkdir(parents=True,exist_ok=True)
+command = sys.argv[2] if len(sys.argv)>2 else None
+(root/(command+'.stopped' if command else 'stopped')).touch()
 targets=[]
-for record in root.glob('*.json'):
+for record in ([root/(command+'.json')] if command else root.glob('*.json')):
     try:
         saved=json.loads(record.read_text()); pid=int(saved['pid'])
         tick=pathlib.Path('/proc/'+str(pid)+'/stat').read_text().rsplit(')',1)[1].split()[19]
@@ -66,17 +68,41 @@ export function scopedShellCommand(input: {
 	cwd: string;
 	command: string;
 	seconds: number;
+	commandId?: string;
 }) {
+	if (input.commandId) commandScopeRoot(input.commandId);
 	return posixShellCommand([
 		"python3",
 		"-c",
 		RUN,
 		commandScopeRoot(input.turnId),
-		randomUUID(),
+		input.commandId ?? randomUUID(),
 		input.cwd,
 		input.command,
 		String(input.seconds),
 	]);
+}
+
+/** Cancel one recorded process group, fenced by its Linux PID start time. */
+export async function stopApiCommand(
+	workspace: AgentToolWorkspace,
+	turnId: string,
+	commandId: string,
+) {
+	commandScopeRoot(commandId);
+	const result = await workspace.machines.exec(
+		workspace.vm,
+		posixShellCommand([
+			"python3",
+			"-c",
+			STOP,
+			commandScopeRoot(turnId),
+			commandId,
+		]),
+		10000,
+	);
+	if (result.exitCode !== 0)
+		throw new Error("Could not confirm cancellation of this owned command.");
 }
 export async function stopApiTurnCommands(
 	workspace: AgentToolWorkspace,

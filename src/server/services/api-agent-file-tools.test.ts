@@ -92,6 +92,56 @@ async function call(
 	).execute(input, { toolCallId: "edit", messages });
 }
 
+it("wires the shared shell and command lifecycle into production writers, not read-only leads", async () => {
+	const { root, machines } = await fixture();
+	const input = {
+		machines,
+		cwd: root,
+		session: {
+			id: "shell-wiring-test",
+			parentSessionId: "parent-test",
+			userId: "owner",
+			providerRef: "test-vm",
+			taskAccess: "read_write",
+		} as AgentSessionRecord,
+		turnId: "shell-wiring-test",
+		signal: new AbortController().signal,
+	};
+	const writer = apiAgentTools(input);
+	for (const name of [
+		"bash",
+		"execute_command",
+		"continue_command",
+		"start_command",
+		"wait_command",
+		"read_command",
+		"stop_command",
+		"run_checks",
+	])
+		expect(writer[name]?.execute).toBeTypeOf("function");
+	const lead = apiAgentTools({
+		...input,
+		session: { ...input.session, taskAccess: "read_only" },
+	});
+	for (const name of [
+		"bash",
+		"execute_command",
+		"continue_command",
+		"start_command",
+		"wait_command",
+		"stop_command",
+		"run_checks",
+	])
+		expect(lead[name]).toBeUndefined();
+	expect(lead.read_command.execute).toBeTypeOf("function");
+	expect(
+		apiAgentTools({
+			...input,
+			session: { ...input.session, parentSessionId: null },
+		}).bash,
+	).toBeUndefined();
+});
+
 it("reuses only freshly verified complete guidance reads and preserves explicit replay, changes and continuations", async () => {
 	const { root, tools } = await fixture();
 	const body = "Guidance 你\r\n".repeat(1800);
@@ -700,6 +750,7 @@ it("does not edit through a symlink", async () => {
 it("only offers inspection to a read-only lead", async () => {
 	const { tools } = await fixture(true);
 	expect(Object.keys(tools)).toEqual([
+		"view_image",
 		"read_environment_report",
 		"read_files",
 		"read_file",
