@@ -18,10 +18,6 @@ import { observeFleetCosts } from "../adapters/freestyle/fleet-costs";
 import { reconcileInfrastructureVms } from "../adapters/freestyle/usage-admission";
 import { createFreestyleWorkspaceMachines } from "../adapters/freestyle/workspace-machines";
 import { recycleIdleWorkspaces } from "../adapters/freestyle/workspace-retention";
-import {
-	dispatchModelWorkflow,
-	modelWorkflowConfiguration,
-} from "../adapters/model-workflow-dispatch";
 import { applyProjectEnvironment } from "../adapters/rigkit/apply";
 import { listenForQueuedTurns } from "../adapters/turn-queue-wake";
 import { listReadyWorkspaceIds } from "../adapters/workspaces";
@@ -45,7 +41,6 @@ import {
 	drainConversationDeliveries,
 	relayConversationDeliveries,
 } from "./conversation-delivery";
-import { startModelWorkflowExecutor } from "./model-workflow-executor";
 import {
 	AGENT_PEER_MESSAGE_QUEUE,
 	AGENT_TASK_EVENT_QUEUE,
@@ -64,12 +59,23 @@ let apiTurnSweep: ReturnType<typeof setInterval> | undefined;
 let deliverySweep: ReturnType<typeof setInterval> | undefined;
 let infrastructureSweep: ReturnType<typeof setInterval> | undefined;
 let stopTurnWake: (() => Promise<void>) | undefined;
-let stopWorkflowExecutor: (() => Promise<void>) | undefined;
 let dispatcher:
 	| TurnDispatcher<NonNullable<Awaited<ReturnType<typeof claimApiTurn>>>>
 	| undefined;
 
+/**
+ * Local in-process runner for harness evaluation against an isolated database.
+ * Application environments execute on Cloudflare; this must never share their queue.
+ */
 export async function startWorkspaceWorker(machines?: WorkspaceMachines) {
+	if (
+		process.env.YTIMESY_BACKGROUND_WORKFLOW_URL ||
+		configuredTurnExecutor(process.env.YTIMESY_MODEL_EXECUTION_TARGET) !==
+			"node"
+	)
+		throw new Error(
+			"The local runner cannot start while Cloudflare execution is configured.",
+		);
 	const queue = await jobQueue("worker");
 	const taskMachines =
 		machines ??
@@ -226,23 +232,11 @@ export async function startWorkspaceWorker(machines?: WorkspaceMachines) {
 	turnSweep.unref();
 	void reconcile();
 	const { worker: concurrency, perUser, fleet } = modelConcurrencyLimits();
-	const workflows = modelWorkflowConfiguration();
-	const executor = configuredTurnExecutor(
-		process.env.YTIMESY_MODEL_EXECUTION_TARGET,
-	);
-	if (executor === "durable-object" && !workflows)
-		throw new Error("Durable Object execution requires Workflow dispatch.");
-	if (
-		(workflows && executor === "node") ||
-		process.env.YTIMESY_MODEL_EXECUTOR_ENABLED === "true"
-	)
-		stopWorkflowExecutor = await startModelWorkflowExecutor(taskMachines);
 	dispatcher = new TurnDispatcher({
 		concurrency,
-		claim: () => claimApiTurn(perUser, fleet, executor),
+		claim: () => claimApiTurn(perUser, fleet, "node"),
 		run: async (turn) => {
-			if (workflows) await dispatchModelWorkflow(turn);
-			else await runApiTurn(taskMachines, turn);
+			await runApiTurn(taskMachines, turn);
 		},
 		onError: () =>
 			console.warn(
@@ -303,7 +297,7 @@ export async function startWorkspaceWorker(machines?: WorkspaceMachines) {
 
 export async function runWorkspaceWorker(machines?: WorkspaceMachines) {
 	const queue = await startWorkspaceWorker(machines);
-	console.info("ytimesy workspace worker is running.");
+	console.info("ytimesy local runner is running.");
 	let stopping = false;
 	const stop = async () => {
 		if (stopping) return;
@@ -326,7 +320,6 @@ export async function stopWorkspaceWorker(
 	const drain = dispatcher?.drain();
 	await stopTurnWake?.();
 	await drain;
-	await stopWorkflowExecutor?.();
 	if (deliverySweep) clearInterval(deliverySweep);
 	await relayConversationDeliveries().catch(() => {});
 	await drainConversationDeliveries();

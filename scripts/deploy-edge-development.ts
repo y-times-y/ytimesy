@@ -43,10 +43,10 @@ secrets.ENVIRONMENT_WORKFLOW_SECRET =
 	process.env.YTIMESY_ENVIRONMENT_WORKFLOW_SECRET ||
 	derived("ytimesy:environment-workflows:development:v1");
 secrets.GIT_PROXY_ENABLED = "1";
-secrets.MODEL_EXECUTION_ENABLED = "0";
-secrets.ENVIRONMENT_EXECUTION_ENABLED = "0";
-secrets.BACKGROUND_EXECUTION_ENABLED = "0";
-secrets.YTIMESY_BACKGROUND_CRON_ENABLED = "0";
+secrets.MODEL_EXECUTION_ENABLED = "1";
+secrets.ENVIRONMENT_EXECUTION_ENABLED = "1";
+secrets.BACKGROUND_EXECUTION_ENABLED = "1";
+secrets.YTIMESY_BACKGROUND_CRON_ENABLED = "1";
 secrets.YTIMESY_MODEL_EXECUTION_TARGET = "durable-object";
 secrets.BACKGROUND_WORKFLOW_SECRET =
 	process.env.YTIMESY_BACKGROUND_WORKFLOW_SECRET ||
@@ -59,6 +59,7 @@ for (const name of [
 	"YTIMESY_TOOLS_SNAPSHOT_ID",
 	"YTIMESY_CODEX_RELAY_URL",
 	"YTIMESY_CODEX_RELAY_SECRET",
+	"YTIMESY_PR_REPAIR_ENABLED",
 ] as const) {
 	if (process.env[name]) secrets[name] = process.env[name];
 }
@@ -123,5 +124,5 @@ function wrangler(args: string[], input?: string) {
 wrangler(["deploy"]);
 wrangler(["secret", "bulk"], JSON.stringify(secrets));
 console.log(
-	"Development Git proxy enabled. Model and environment cutover remain disabled.",
+	"Development edge enabled: model turns, environments, background jobs and Git proxy.",
 );
