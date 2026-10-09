@@ -4,12 +4,12 @@ import { resolve } from "node:path";
 import { redactEvaluationText } from "../benchmarks/evaluation/artifacts";
 import { evaluationBuilderContext } from "../benchmarks/evaluation/builder-context";
 import { evaluationBuilderTools } from "../benchmarks/evaluation/builder-tools";
+import { localContextArchives } from "../benchmarks/evaluation/local-context-archives";
 import { createOperatorEvaluationDatabase } from "../benchmarks/evaluation/operator-database";
 import { createTerminalBenchMachines } from "../benchmarks/evaluation/terminal-bench-machines";
 import { loadTerminalBenchTask } from "../benchmarks/evaluation/terminal-bench-task";
 import { gradeTerminalBenchArtifact } from "../benchmarks/evaluation/terminal-bench-verifier";
 import type { HarnessModelMetric } from "../src/domain/harness-performance";
-import { removeContextArchives } from "../src/server/adapters/checkpoints/storage";
 import { codexSubscriptionModel } from "../src/server/adapters/codex-subscription";
 import {
 	archiveModelContext,
@@ -57,6 +57,10 @@ const cancel = () =>
 	stop.abort(new Error("Operator stopped builder evaluation"));
 process.on("SIGINT", cancel);
 process.on("SIGTERM", cancel);
+if (!process.env.YTIMESY_EVALUATION_CODEX_AUTH_FILE)
+	throw new Error(
+		"This private pilot requires local Codex sign-in; remote database access is disabled.",
+	);
 const local = await createOperatorEvaluationDatabase(output);
 process.env.DATABASE_URL = local.databaseUrl;
 process.env.BETTER_AUTH_SECRET = local.secret;
@@ -64,20 +68,34 @@ let requests = 0;
 const metrics: HarnessModelMetric[] = [];
 const events: unknown[] = [];
 const toolMetrics: unknown[] = [];
-const signal = AbortSignal.any([stop.signal, AbortSignal.timeout(30 * 60_000)]);
 const sessionId = randomUUID();
+const archives = localContextArchives(
+	`${output}/context-archives`,
+	local.userId,
+	sessionId,
+);
 try {
 	// Fail before VM allocation or inference if recoverable context is unavailable.
-	const reference = await archiveModelContext(local.userId, sessionId, []);
+	const reference = await archiveModelContext(
+		local.userId,
+		sessionId,
+		[],
+		archives.storage,
+	);
 	const restored = await readModelContextArchive(
 		local.userId,
 		sessionId,
 		reference,
+		archives.storage,
 	);
 	if (restored.length) throw new Error("Archive preflight failed.");
 	const prepared = await bridge.prepare(task);
 	console.log(`${task.id}: pinned task guest prepared.`);
 	await bridge.machines.ensureRunning(prepared.vmId);
+	const signal = AbortSignal.any([
+		stop.signal,
+		AbortSignal.timeout(30 * 60_000),
+	]);
 	const workspace = {
 		machines: bridge.machines,
 		vm: prepared.vmId,
@@ -88,6 +106,7 @@ try {
 	};
 	const context = evaluationBuilderContext({
 		tools: evaluationBuilderTools(workspace),
+		storage: archives.storage,
 		workspace,
 		userId: local.userId,
 		sessionId,
@@ -103,6 +122,7 @@ try {
 		reasoning: "max",
 		fast: false,
 		billing: "codex-subscription",
+		archiveBackend: "encrypted local pilot storage; no Supabase network calls",
 		originalPrompt: task.instruction,
 		image: task.image,
 		resources: task.resources,
@@ -244,10 +264,7 @@ try {
 } finally {
 	const failures: string[] = [];
 	for (const [label, operation] of [
-		[
-			"owned context archives",
-			() => removeContextArchives(local.userId, sessionId),
-		],
+		["owned context archives", () => archives.close()],
 		["owned provider resources", () => bridge.cleanup()],
 		["database connection", closeDatabase],
 		["disposable database", () => local.close()],
