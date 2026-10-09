@@ -290,76 +290,97 @@
 }
 .harness-login {
 	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 10px;
+	margin: 8px 8px 2px;
+	padding: 9px 10px;
+	border: 1px solid #262626;
+	border-radius: 9px;
+	background: #181818;
+}
+.harness-login-mark {
+	display: grid;
+	place-items: center;
+	flex: 0 0 28px;
+	width: 28px;
+	height: 28px;
+	border: 1px solid #333;
+	border-radius: 7px;
+	color: #d6d6d6;
+}
+.harness-login-text {
+	display: flex;
+	/* Narrow composers move the action below instead of squeezing the copy. */
+	flex: 1 1 220px;
 	flex-direction: column;
-	gap: 8px;
-	padding: 12px 14px 4px;
+	align-items: flex-start;
+	min-width: 0;
 }
-.harness-login-copy,
-.harness-login-code {
-	margin: 0;
+.harness-login-text strong {
 	font-size: 12px;
-	line-height: 1.45;
-	color: #8d8d8d;
-}
-.harness-login-code {
-	font-size: 13px;
-	letter-spacing: 0.06em;
+	font-weight: 500;
+	line-height: 1.4;
 	color: #ececec;
 }
-.harness-login-row {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	min-width: 0;
+.harness-login-text small {
+	margin-top: 1px;
+	font-size: 11px;
+	line-height: 1.4;
+	color: #8f8f8f;
 }
-.harness-login-input {
-	flex: 1;
-	min-width: 0;
-	min-height: 28px;
-	padding: 0 10px;
-	border: 1px solid #2e2e2e;
-	border-radius: 8px;
-	background: #121212;
-	color: #eee;
-	font: inherit;
+.harness-login-code {
+	margin-top: 7px;
+	padding: 3px 8px;
+	border: 1px solid #333;
+	border-radius: 6px;
+	background: #111;
+	color: #f2f2f2;
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 	font-size: 13px;
-}
-.harness-login-input::placeholder {
-	color: rgba(255, 255, 255, 0.35);
-}
-.harness-login-input:focus-visible {
-	outline: none;
-	border-color: #808080;
+	letter-spacing: 0.12em;
+	user-select: all;
 }
 .harness-login-action {
 	display: inline-flex;
+	flex: 0 0 auto;
+	margin-left: auto;
 	align-items: center;
 	justify-content: center;
+	gap: 4px;
 	min-height: 28px;
-	padding: 0 10px;
-	border: 1px solid #3a3a3a;
-	border-radius: 8px;
+	padding: 0 11px;
+	border: 1px solid transparent;
+	border-radius: 7px;
 	background: #ececec;
 	color: #151515;
 	font: inherit;
 	font-size: 12px;
+	font-weight: 500;
 	text-decoration: none;
 	white-space: nowrap;
+	transition:
+		background-color 140ms ease-out,
+		color 140ms ease-out;
 }
 .harness-login-action:hover {
 	background: #fff;
 }
+.harness-login-action:focus-visible {
+	outline: 2px solid #aaa;
+	outline-offset: 2px;
+}
 .harness-login-action:disabled {
 	cursor: not-allowed;
-	background: #777;
-	color: #363636;
-	border-color: transparent;
+	background: #3a3a3a;
+	color: #8a8a8a;
 }
-a.harness-login-action {
+.harness-login-link {
+	border-color: #3a3a3a;
 	background: transparent;
 	color: #ececec;
 }
-a.harness-login-action:hover {
+.harness-login-link:hover {
 	background: #ffffff0a;
 	color: #fff;
 }
