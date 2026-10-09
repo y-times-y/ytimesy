@@ -207,6 +207,54 @@ This repairs diagnostic evidence; it is not a speculative networking fix or
 permission to replay interrupted streams. Performance remains unproven until
 the next frozen run completes and is measured.
 
+### Frozen fix/check cadence result
+
+The single builder attempt on `abc6e18` completed normally: protected reward 1,
+11 requests, 697.346 seconds, 258,008 input and 22,362 output tokens, with
+62,424 uncached input and 195,584 cache-read tokens. Accounting is reported for
+the completed turn. Nineteen model-authored regression tests and diff checks
+passed. Task/configuration and independent protected grading stayed unchanged.
+
+This remains essentially tied with the prior completed 696.315-second run,
+with 5.0% more total tokens. It did not beat the historical native mean.
+The first coherent fix reached passing symptom checks before the persistent
+test suite; however, a 17,537-character test-creation batch still took 188.2
+seconds. Model time totals 658.4 seconds; tool execution is not the dominant gap.
+
+The late cosmetic edits exposed a deterministic editor issue: both create diffs
+included final newlines, but the maintained create parser discarded them.
+After tests passed, another 59.9-second model request inspected changes, added
+those newlines and reran checks. The exact contribution of the newline issue
+within that request is not isolated, so the full duration is not a guaranteed
+recoverable speedup. Owned-resource cleanup passed; live inventory returned to
+four VMs/five snapshots and no evaluation database container remained.
+Private evidence: `.ytimesy/terminal-bench-cadence-20261008/session-window-debug/`.
+
+### Explicit create terminators and project-native regression coverage
+
+The shared editor now restores a final newline explicitly supplied in a create
+diff, including an intentional trailing blank line. Unterminated create diffs
+remain unterminated, exact-content create operations are unchanged, and update
+operations retain the maintained parser's original line-ending behavior. Real
+file-tool regressions reproduced the defect before the fix; no path/write fence
+or protected-file rule is bypassed.
+
+Shared guidance now extends existing regression suites, but prefers compact
+reproducible checks when no suite exists rather than universally imposing a new
+permanent scaffold. Behavior/edge-case coverage, every required check and final
+review remain mandatory. The original benchmark request does not require a new
+test framework; native reference trajectories also use substantial executable
+checks without persisting a suite. This changes verification packaging, not
+grader acceptance or permission to omit verification. Its performance effect
+must be measured separately; no task-specific assertions or solution were added.
+
+Separately, [official custom-tool documentation](https://developers.openai.com/api/docs/guides/function-calling)
+and the installed SDK expose plain-text custom inputs. A single subscription
+no-op probe invoked its custom tool once, but failed the exact `ok` payload
+criterion. This establishes backend tool acceptance only, not correct patch
+handling or a latency benefit. It is not enabled in the builder or folded into
+benchmark metrics. No VM, API billing or remote database was used for that probe.
+
 ## Trace-driven builder efficiency follow-up
 
 The next isolated change targets the observed tool and evidence overhead, not
