@@ -212,3 +212,61 @@ it("passes cancellation to upstream inference without adding a turn deadline", a
 	abort.abort();
 	expect(fetch.mock.calls[0][1]?.signal?.aborted).toBe(true);
 });
+it("force-refreshes a revoked but unexpired token once and resends the rejected request", async () => {
+	auth
+		.mockResolvedValueOnce({
+			accessToken: "revoked-token",
+			chatgptAccountId: "owner-account",
+		})
+		.mockResolvedValueOnce({
+			accessToken: "fresh-token",
+			chatgptAccountId: "owner-account",
+		});
+	const fetch = vi
+		.spyOn(globalThis, "fetch")
+		.mockResolvedValueOnce(new Response(null, { status: 401 }))
+		.mockResolvedValueOnce(Response.json({ ok: true }));
+	const response = await subscriptionFetch("owner", "codex/responses", {
+		method: "POST",
+		body: "{}",
+	});
+	expect(response.status).toBe(200);
+	expect(auth).toHaveBeenNthCalledWith(2, "owner", true);
+	expect(fetch).toHaveBeenCalledTimes(2);
+	expect(
+		new Headers(fetch.mock.calls[1][1]?.headers).get("authorization"),
+	).toBe("Bearer fresh-token");
+});
+it("returns a second 401 instead of looping, and does not resend streamed bodies", async () => {
+	const fetch = vi
+		.spyOn(globalThis, "fetch")
+		.mockImplementation(async () => new Response(null, { status: 401 }));
+	expect((await subscriptionFetch("owner", "wham/usage")).status).toBe(401);
+	expect(fetch).toHaveBeenCalledTimes(2);
+	fetch.mockClear();
+	const stream = new ReadableStream<Uint8Array>();
+	expect(
+		(
+			await subscriptionFetch("owner", "codex/responses", {
+				method: "POST",
+				body: stream,
+			})
+		).status,
+	).toBe(401);
+	expect(fetch).toHaveBeenCalledOnce();
+});
+it("relay force-refreshes once on 401 before reporting upstream rejection", async () => {
+	const fetch = vi
+		.spyOn(globalThis, "fetch")
+		.mockResolvedValueOnce(new Response(null, { status: 401 }))
+		.mockResolvedValueOnce(Response.json({ plan_type: "free" }));
+	const response = await handleCodexSubscriptionRelay(
+		await signed({
+			userId: "owner",
+			operation: { kind: "metadata", path: "wham/usage" },
+		}),
+	);
+	expect(response.status).toBe(200);
+	expect(auth).toHaveBeenLastCalledWith("owner", true);
+	expect(fetch).toHaveBeenCalledTimes(2);
+});
