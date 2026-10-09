@@ -745,6 +745,22 @@ it("applies maintained V4A create/update/delete operations and rejects bad conte
 	await expect(readFile(join(root, "patch.txt"))).rejects.toThrow();
 });
 
+it.each([
+	["+first\n+second\n", "first\nsecond\n"],
+	["+first\n+\n", "first\n\n"],
+	["+first\r\n+second\r\n", "first\nsecond\n"],
+	["+first\n+second", "first\nsecond"],
+])(
+	"preserves explicit final newlines in create diffs %j",
+	async (diff, expected) => {
+		const { root, tools } = await fixture();
+		await call(tools.apply_patches, {
+			operations: [{ type: "create_file", path: "created.txt", diff }],
+		});
+		expect(await readFile(join(root, "created.txt"), "utf8")).toBe(expected);
+	},
+);
+
 it("never grants patch writes to the read-only leader", async () => {
 	const { tools } = await fixture(true);
 	expect(tools.apply_patch).toBeUndefined();

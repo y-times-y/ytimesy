@@ -699,7 +699,10 @@ export function apiAgentFileTools(
 	): Promise<Record<string, string>> => {
 		const validated = patchOperation.parse(operation);
 		if (validated.type === "create_file") {
-			const content = applyDiff("", validated.diff, "create");
+			const created = applyDiff("", validated.diff, "create");
+			// The maintained parser strips the terminal diff newline; preserve an
+			// explicitly supplied terminator without changing unterminated content.
+			const content = validated.diff.endsWith("\n") ? `${created}\n` : created;
 			if (content.length > 1_000_000)
 				throw new Error("Patch result exceeds the supported file size.");
 			return { operation: "create", path: validated.path, content };

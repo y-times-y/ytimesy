@@ -12,6 +12,13 @@ it("requests early executable feedback without sacrificing durable regression co
 	expect(instructions).toContain("persist regression coverage");
 	expect(instructions).toContain("immediately check it");
 	expect(instructions).toContain("Do not front-load");
+	expect(instructions).toContain(
+		"persist regression coverage in existing suites",
+	);
+	expect(instructions).toContain(
+		"without a suite, prefer compact reproducible checks",
+	);
+	expect(instructions).toContain("never weaken tests");
 	expect(instructions).toContain("Preserve every required check");
 });
 
