@@ -334,7 +334,35 @@ compact view while runtime events retain the full result. An older one-step
 fixture was also strengthened to discover its fixture tool explicitly and assert
 the actual successful output instead of accepting any tool-result event. This
 projection currently applies to direct `run_checks` calls; composition retains
-its full leaf results. Its live performance effect is not yet measured.
+its full leaf results.
+
+### Compact-receipt live result and request-accounting follow-up
+
+Commit `224e9d2` completed the unchanged protected task with reward 1 in
+731.661 seconds. It reported 240,500 total tokens (220,047 input, 20,453
+output), including 173,184 cached input and 46,863 uncached input tokens.
+Twelve authored tests and the original protected verifier passed. No compaction
+or tool failures occurred. Owned resources were deleted; provider inventory
+returned to four VMs/five snapshots and no evaluation database container remained.
+
+Compared with the preceding completed 758.284-second attempt, this was 3.5%
+faster with 46.4% fewer reported tokens. It still did not beat the historical
+native mean of 541.4374 seconds. These are individual familiar-task observations,
+not a paired serving-condition comparison or universal code-quality advantage.
+
+The run counted 12 attempted requests but retained only 11 successful model
+metrics. Their durations sum to 631.868 seconds; tools sum to 24.441 seconds
+and may overlap. Thus the remaining elapsed time cannot all be attributed to
+model reasoning. A failed request-start retry is a hypothesis, not an observed
+cause. The original frozen result's `reported` completeness label is too strong
+for that unexplained attempt: token totals remain reported lower bounds until
+the missing attempt is classified. Its result file is preserved unchanged.
+
+The next evaluator records sanitized request-start outcomes and durations using
+the existing failure classifier. It neither consumes returned streams nor retries
+calls itself; it labels usage incomplete after any failed start. Two tests verify
+stream identity, exact original-error propagation, single invocation and secret
+redaction. This is measurement-only instrumentation, not a claimed speed fix.
 
 Local verification: 64 focused runtime, artifact, command and completion tests
 passed (two skipped); TypeScript, Biome and production build passed. No complete

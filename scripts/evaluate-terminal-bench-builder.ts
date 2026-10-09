@@ -6,6 +6,10 @@ import { evaluationBuilderContext } from "../benchmarks/evaluation/builder-conte
 import { evaluationBuilderTools } from "../benchmarks/evaluation/builder-tools";
 import { localContextArchives } from "../benchmarks/evaluation/local-context-archives";
 import { createOperatorEvaluationDatabase } from "../benchmarks/evaluation/operator-database";
+import {
+	type EvaluationRequestObservation,
+	observeEvaluationRequest,
+} from "../benchmarks/evaluation/request-observation";
 import { createTerminalBenchMachines } from "../benchmarks/evaluation/terminal-bench-machines";
 import { loadTerminalBenchTask } from "../benchmarks/evaluation/terminal-bench-task";
 import { gradeTerminalBenchArtifact } from "../benchmarks/evaluation/terminal-bench-verifier";
@@ -77,6 +81,7 @@ const local = await createOperatorEvaluationDatabase(output);
 process.env.DATABASE_URL = local.databaseUrl;
 process.env.BETTER_AUTH_SECRET = local.secret;
 let requests = 0;
+const requestObservations: EvaluationRequestObservation[] = [];
 const metrics: HarnessModelMetric[] = [];
 const events: ApiAgentEvent[] = [];
 const toolMetrics: unknown[] = [];
@@ -179,7 +184,14 @@ try {
 							throw new Error("Frozen evaluation guard reached.");
 						requests++;
 						await save("progress", { requests, observedTokens: tokens });
-						return value.apply(target, args);
+						return observeEvaluationRequest(
+							{ request: requests, method: property },
+							() => value.apply(target, args),
+							async (observation) => {
+								requestObservations.push(observation);
+								await save("request-attempts", requestObservations);
+							},
+						);
 					};
 				return typeof value === "function" ? value.bind(target) : value;
 			},
@@ -247,7 +259,13 @@ try {
 			noLeader: true,
 			...evaluationTokenUsage(events),
 			usageAccounting: "cumulative usage including compaction",
-			usageCompleteness: failure ? "incomplete" : "reported",
+			usageCompleteness:
+				failure ||
+				requestObservations.some(
+					(attempt) => attempt.outcome === "start_failed",
+				)
+					? "incomplete"
+					: "reported",
 		});
 		console.log(
 			`${task.id}: official reward ${reward}; failure ${failure ?? "none"}.`,
