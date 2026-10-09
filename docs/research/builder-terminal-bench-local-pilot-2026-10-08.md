@@ -8,6 +8,8 @@ The operator approved a fresh $5 disposable Freestyle cap and existing Codex sub
 
 Four original task prompts, pinned task/verifier images and declared artifacts are used in order: session-window-debug, wal-recovery-ordering, nextjs-performance, bun-sourcemap-leak. Each gets one model attempt. The first three are familiar evaluation tasks, not unseen holdouts. Hidden tests run on a separate verifier VM and are never exposed to the builder. Passing these tests is not independent proof of general code quality.
 
+During Next.js, the operator withdrew the fourth task: finish Next.js and its grader, then stop. A private campaign `stop-new-tasks` marker blocks later invocations before credential lookup, database creation, VM allocation or inference. A no-resource Bun preflight verified this intentional early rejection. Bun is not a failed model attempt; it is cancelled by the operator.
+
 Model: GPT-6.1 Sol through the subscription transport, Max reasoning, Fast explicitly off. Limits: 128 model requests including native compaction, 4 million reported input-plus-output tokens, 30 minutes per builder turn. Cached tokens are already included in input. Guest resources: 2 vCPU / 4 GiB host with a 16 GiB disk; original task containers and sidecars share that allocation.
 
 The Supabase quota blocker is bypassed only in this evaluator: encrypted local archives use the existing history recovery/search APIs; a disposable loopback PostgreSQL container receives the operator's genuine local Codex identity and an encrypted access credential. Source credentials are never rewritten or sent into task/verifier guests. The temporary archive key exists only in process memory; this is not a production crash-recovery or cloud-durability guarantee.
@@ -25,7 +27,7 @@ Session's initially reported 369,586 tokens becomes **422,162**, including one c
 | session-window-debug | 1 | 699.575 | 16 | 395351 | 26811 | 240640 | 422162 |
 | wal-recovery-ordering | 1 | 928.495 | 20 | 682711 | 33322 | 495232 | 716033 |
 | nextjs-performance | pending | — | — | — | — | — | — |
-| bun-sourcemap-leak | pending | — | — | — | — | — | — |
+| bun-sourcemap-leak | not run: operator cancelled | — | 0 | — | — | — | — |
 
 Private artifacts: `.ytimesy/terminal-bench-four-20261008/<task>-local-v2/`. They contain protocol, progress, trace, artifact export, original verifier execution/reward and exact owned-resource cleanup records. They must not be committed.
 
@@ -42,6 +44,8 @@ Our session attempt is 29.2% slower and uses 12.7% more total tokens than that s
 Session records 549.3 seconds in normal model requests and 32.7 summed tool seconds; WAL records 727.0 and 58.5 respectively. Model-request metrics exclude compaction time. Tool totals may overlap, so subtracting them from wall time does not precisely isolate overhead. Still, these traces do not support tool transport being the dominant delay. Compaction and uncached-prefix churn deserve investigation after this frozen pilot, rather than another blind transport optimization.
 
 The inspected subscription adapter sets `workingContextTokens: 64_000`. `modelContextBudget` takes the minimum of this and the model's own compaction/input limits. This deliberately forces earlier compaction, independent of a larger available context window. It is a concrete follow-up candidate, not proof that raising it will improve latency or correctness. Do not change it during the frozen pilot.
+
+The cumulative-minus-normal-metric usage difference is 48,170 input / 4,406 output / 3,456 cached input for session compaction, and 62,979 / 4,780 / 3,968 for WAL compaction. Cache reuse drops sharply on the first ordinary step after each compaction. Early tool discovery also changes the exposed schema; initial session steps have no cache reads. These observations motivate separately testing context thresholds and stable tool/guidance prefixes, not assuming either change guarantees a win. Public native compaction accounting completeness has not been independently audited.
 
 ## Verification and outstanding work
 

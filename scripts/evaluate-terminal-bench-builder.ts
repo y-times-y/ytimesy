@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { redactEvaluationText } from "../benchmarks/evaluation/artifacts";
 import { evaluationBuilderContext } from "../benchmarks/evaluation/builder-context";
@@ -36,6 +36,12 @@ if (
 const output = resolve(outputPath);
 if (!output.startsWith(`${resolve(".ytimesy")}/`))
 	throw new Error("Evaluation output must remain private.");
+try {
+	await access(resolve(output, "..", "stop-new-tasks"));
+	throw new Error("Operator stopped new tasks in this evaluation campaign.");
+} catch (error) {
+	if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+}
 const key = process.env.FREESTYLE_API_KEY;
 if (!key) throw new Error("Missing disposable compute connection.");
 await mkdir(resolve(output, ".."), { recursive: true, mode: 0o700 });
