@@ -26,6 +26,7 @@ import { Route as ApiGithubPullRequestsRouteImport } from './routes/api/github/p
 import { Route as ApiGithubRepairEventsRouteImport } from './routes/api/github/repair-events'
 import { Route as ApiGithubRepositoriesRouteImport } from './routes/api/github/repositories'
 import { Route as ApiIdentityProvidersRouteImport } from './routes/api/identity/providers'
+import { Route as ApiInternalCodexTransportRouteImport } from './routes/api/internal/codex-transport'
 import { Route as ApiProjectsPublishRouteImport } from './routes/api/projects/publish'
 import { Route as ApiWorkspacesRetryRouteImport } from './routes/api/workspaces.retry'
 
@@ -114,6 +115,12 @@ const ApiIdentityProvidersRoute = ApiIdentityProvidersRouteImport.update({
   path: '/api/identity/providers',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiInternalCodexTransportRoute =
+  ApiInternalCodexTransportRouteImport.update({
+    id: '/api/internal/codex-transport',
+    path: '/api/internal/codex-transport',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiProjectsPublishRoute = ApiProjectsPublishRouteImport.update({
   id: '/publish',
   path: '/publish',
@@ -143,6 +150,7 @@ export interface FileRoutesByFullPath {
   '/api/github/repair-events': typeof ApiGithubRepairEventsRoute
   '/api/github/repositories': typeof ApiGithubRepositoriesRoute
   '/api/identity/providers': typeof ApiIdentityProvidersRoute
+  '/api/internal/codex-transport': typeof ApiInternalCodexTransportRoute
   '/api/projects/publish': typeof ApiProjectsPublishRoute
   '/api/workspaces/retry': typeof ApiWorkspacesRetryRoute
 }
@@ -164,6 +172,7 @@ export interface FileRoutesByTo {
   '/api/github/repair-events': typeof ApiGithubRepairEventsRoute
   '/api/github/repositories': typeof ApiGithubRepositoriesRoute
   '/api/identity/providers': typeof ApiIdentityProvidersRoute
+  '/api/internal/codex-transport': typeof ApiInternalCodexTransportRoute
   '/api/projects/publish': typeof ApiProjectsPublishRoute
   '/api/workspaces/retry': typeof ApiWorkspacesRetryRoute
 }
@@ -186,6 +195,7 @@ export interface FileRoutesById {
   '/api/github/repair-events': typeof ApiGithubRepairEventsRoute
   '/api/github/repositories': typeof ApiGithubRepositoriesRoute
   '/api/identity/providers': typeof ApiIdentityProvidersRoute
+  '/api/internal/codex-transport': typeof ApiInternalCodexTransportRoute
   '/api/projects/publish': typeof ApiProjectsPublishRoute
   '/api/workspaces/retry': typeof ApiWorkspacesRetryRoute
 }
@@ -209,6 +219,7 @@ export interface FileRouteTypes {
     | '/api/github/repair-events'
     | '/api/github/repositories'
     | '/api/identity/providers'
+    | '/api/internal/codex-transport'
     | '/api/projects/publish'
     | '/api/workspaces/retry'
   fileRoutesByTo: FileRoutesByTo
@@ -230,6 +241,7 @@ export interface FileRouteTypes {
     | '/api/github/repair-events'
     | '/api/github/repositories'
     | '/api/identity/providers'
+    | '/api/internal/codex-transport'
     | '/api/projects/publish'
     | '/api/workspaces/retry'
   id:
@@ -251,6 +263,7 @@ export interface FileRouteTypes {
     | '/api/github/repair-events'
     | '/api/github/repositories'
     | '/api/identity/providers'
+    | '/api/internal/codex-transport'
     | '/api/projects/publish'
     | '/api/workspaces/retry'
   fileRoutesById: FileRoutesById
@@ -273,6 +286,7 @@ export interface RootRouteChildren {
   ApiGithubRepairEventsRoute: typeof ApiGithubRepairEventsRoute
   ApiGithubRepositoriesRoute: typeof ApiGithubRepositoriesRoute
   ApiIdentityProvidersRoute: typeof ApiIdentityProvidersRoute
+  ApiInternalCodexTransportRoute: typeof ApiInternalCodexTransportRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -396,6 +410,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiIdentityProvidersRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/internal/codex-transport': {
+      id: '/api/internal/codex-transport'
+      path: '/api/internal/codex-transport'
+      fullPath: '/api/internal/codex-transport'
+      preLoaderRoute: typeof ApiInternalCodexTransportRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/projects/publish': {
       id: '/api/projects/publish'
       path: '/publish'
@@ -455,6 +476,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiGithubRepairEventsRoute: ApiGithubRepairEventsRoute,
   ApiGithubRepositoriesRoute: ApiGithubRepositoriesRoute,
   ApiIdentityProvidersRoute: ApiIdentityProvidersRoute,
+  ApiInternalCodexTransportRoute: ApiInternalCodexTransportRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

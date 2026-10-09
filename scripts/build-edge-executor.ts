@@ -10,13 +10,22 @@ await build({
 	bundle: true,
 	format: "esm",
 	banner: {
-		js: 'import { createRequire as workerCreateRequire } from "node:module"; const require = workerCreateRequire("/bundle/edge-executor.mjs");',
+		js: 'import { createRequire as workerCreateRequire } from "node:module"; const __filename = "/bundle/edge-executor.mjs"; const __dirname = "/bundle"; const require = workerCreateRequire(__filename);',
 	},
 	platform: "neutral",
 	conditions: ["workerd", "worker", "browser"],
 	mainFields: ["module", "main"],
 	external: ["node:*", "cloudflare:*", ...builtinModules],
 	plugins: [
+		{
+			name: "freestyle-worker-pty-transport",
+			setup(builder) {
+				builder.onResolve({ filter: /^ws$/ }, ({ importer }) => {
+					if (!importer.includes("/freestyle/")) return;
+					return { path: resolve("src/server/edge/freestyle-websocket.ts") };
+				});
+			},
+		},
 		{
 			name: "guest-program-assets",
 			setup(builder) {

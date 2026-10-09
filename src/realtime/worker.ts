@@ -1,7 +1,4 @@
-import type {
-	DurableObjectNamespace,
-	DurableObjectState,
-} from "@cloudflare/workers-types";
+import type { DurableObjectNamespace } from "@cloudflare/workers-types";
 import { readBoundedRequestBody } from "../domain/bounded-request-body";
 import {
 	type ConversationSnapshot,
@@ -23,6 +20,26 @@ type RealtimeEnvironment = {
 const encoder = new TextEncoder();
 type SnapshotHead = { revision: string; chunks: number };
 
+// This narrow storage port works with both workers-types and Wrangler's generated
+// runtime declarations without coupling chat state to either SDK's full global types.
+interface ConversationStorage {
+	get<T>(key: string): Promise<T | undefined>;
+	get<T>(keys: string[]): Promise<Map<string, T>>;
+	put(key: string, value: unknown): Promise<void>;
+	put(entries: Record<string, unknown>): Promise<void>;
+	delete(key: string): Promise<boolean>;
+	deleteAlarm(): Promise<void>;
+	setAlarm(time: number): Promise<void>;
+}
+interface ConversationRoomState {
+	storage: ConversationStorage & {
+		transaction<T>(
+			run: (storage: ConversationStorage) => Promise<T>,
+		): Promise<T>;
+	};
+	blockConcurrencyWhile<T>(run: () => Promise<T>): Promise<T>;
+}
+
 async function boundedBody(request: Request) {
 	return readBoundedRequestBody(request, MAX_DELIVERY_BYTES);
 }
@@ -33,7 +50,7 @@ export class ConversationRoom {
 	private readonly subscribers = new Set<
 		(snapshot: ConversationSnapshot) => void
 	>();
-	constructor(private readonly state: DurableObjectState) {
+	constructor(private readonly state: ConversationRoomState) {
 		state.blockConcurrencyWhile(async () => {
 			const head = await state.storage.get<SnapshotHead>("head");
 			if (!head) return;
@@ -252,57 +269,72 @@ export default {
 		request: Request,
 		environment: RealtimeEnvironment,
 	): Promise<Response> {
-		try {
-			const url = new URL(request.url);
-			if (
-				!(
-					(request.method === "POST" &&
-						(url.pathname === "/snapshot" ||
-							/^\/turn\/(acquire|renew|release|cancel)$/.test(url.pathname))) ||
-					(request.method === "GET" && url.pathname === "/stream")
-				)
-			)
-				return new Response(null, { status: 404 });
-			const body = await boundedBody(request);
-			if (
-				!(await verifyDeliveryRequest(
-					environment.DELIVERY_SECRET,
-					request,
-					body,
-				))
-			)
-				return new Response(null, { status: 401 });
-			const scope =
-				request.method === "POST"
-					? (url.pathname === "/snapshot"
-							? conversationSnapshotSchema
-							: turnControlSchema
-						).parse(JSON.parse(body))
-					: {
-							userId: url.searchParams.get("userId"),
-							sessionId: url.searchParams.get("sessionId"),
-						};
-			if (
-				!scope.userId ||
-				!scope.sessionId ||
-				!/^[a-f0-9-]{36}$/.test(scope.sessionId)
-			)
-				return new Response(null, { status: 400 });
-			const room = environment.CONVERSATIONS.get(
-				environment.CONVERSATIONS.idFromName(
-					JSON.stringify([scope.userId, scope.sessionId]),
-				),
-			);
-			// Worker types and the web app use separate DOM type declarations for Request/Response.
-			const forwarded = new Request(request.url, {
-				method: request.method,
-				headers: request.headers,
-				...(request.method === "POST" ? { body } : {}),
-				signal: request.signal,
-			});
-			return (await room.fetch(forwarded as never)) as unknown as Response;
-		} catch {
-			return new Response(null, { status: 400 });
-		}
+		return routeRealtimeRequest(
+			request,
+			environment.DELIVERY_SECRET,
+			async (scope, forwarded) => {
+				const room = environment.CONVERSATIONS.get(
+					environment.CONVERSATIONS.idFromName(
+						JSON.stringify([scope.userId, scope.sessionId]),
+					),
+				);
+				return (await room.fetch(forwarded as never)) as unknown as Response;
+			},
+		);
 	},
 };
+
+/** Shared authenticated routing permits realtime and model execution to use the same chat DO. */
+export async function routeRealtimeRequest(
+	request: Request,
+	secret: string,
+	forward: (
+		scope: { userId: string; sessionId: string },
+		request: Request,
+	) => Promise<Response>,
+): Promise<Response> {
+	try {
+		const url = new URL(request.url);
+		if (
+			!(
+				(request.method === "POST" &&
+					(url.pathname === "/snapshot" ||
+						/^\/turn\/(acquire|renew|release|cancel)$/.test(url.pathname))) ||
+				(request.method === "GET" && url.pathname === "/stream")
+			)
+		)
+			return new Response(null, { status: 404 });
+		const body = await boundedBody(request);
+		if (!(await verifyDeliveryRequest(secret, request, body)))
+			return new Response(null, { status: 401 });
+		const scope =
+			request.method === "POST"
+				? (url.pathname === "/snapshot"
+						? conversationSnapshotSchema
+						: turnControlSchema
+					).parse(JSON.parse(body))
+				: {
+						userId: url.searchParams.get("userId"),
+						sessionId: url.searchParams.get("sessionId"),
+					};
+		if (
+			!scope.userId ||
+			!scope.sessionId ||
+			!/^[a-f0-9-]{36}$/.test(scope.sessionId)
+		)
+			return new Response(null, { status: 400 });
+		// Worker types and the web app use separate DOM type declarations for Request/Response.
+		const forwarded = new Request(request.url, {
+			method: request.method,
+			headers: request.headers,
+			...(request.method === "POST" ? { body } : {}),
+			signal: request.signal,
+		});
+		return await forward(
+			{ userId: scope.userId, sessionId: scope.sessionId },
+			forwarded,
+		);
+	} catch {
+		return new Response(null, { status: 400 });
+	}
+}

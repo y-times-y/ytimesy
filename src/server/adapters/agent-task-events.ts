@@ -84,7 +84,10 @@ export async function saveAgentTaskBlockedEvent(input: {
 	const result = await database().query<{ id: string }>(
 		`with task as (
 		 update agent_session
-		 set task_state='waiting', turn_status='idle', updated_at=now()
+		 set task_state='waiting', turn_status=case when exists(
+		  select 1 from api_turn where session_id=agent_session.id
+		  and user_id=agent_session.user_id and state in ('queued','running')
+		 ) then 'running' else 'idle' end, updated_at=now()
 		 where id=$1 and parent_session_id is not null
 		 returning user_id,parent_session_id
 		), inserted as (

@@ -25,7 +25,7 @@ export async function claimModelWorkflowStep(
 			>(
 				`select *,heartbeat_at>=now()-interval '45 seconds' as fresh,
 				 state='running' and not cancel_requested and heartbeat_at>=now()-interval '45 seconds' as alive
-			 from api_turn where id=$1 and lease_id=$2 for update`,
+			 from api_turn where id=$1 and lease_id=$2 and executor='node' for update`,
 				[request.turnId, request.leaseId],
 			)
 		).rows[0];

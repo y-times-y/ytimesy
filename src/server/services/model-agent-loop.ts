@@ -14,6 +14,7 @@ import { type ApiTokenUsage, addApiTokenUsage } from "#/domain/api-token-usage";
 import {
 	apiModelFailureClassification,
 	IncompleteAgentTurn,
+	InitialAgentReadFailure,
 	SafeApiModelFailure,
 } from "#/domain/api-turn-failure";
 import {
@@ -28,6 +29,7 @@ import {
 	toolFailureClass,
 	toolMetricCategory,
 } from "#/domain/harness-performance";
+import { modelStepLimit } from "#/domain/model-workflow";
 import type { apiPromptCacheSettings } from "#/server/adapters/api-prompt-cache";
 import { apiTokenUsage } from "#/server/adapters/api-token-usage";
 import type { NativeCompactionInput } from "../adapters/model-compaction";
@@ -150,7 +152,6 @@ async function executeModelSteps(
 		input.messages,
 		input.knownTools,
 		input.toolSurface,
-		modelFamily,
 	);
 	const reads = new Set<string>();
 	let activeToolCount = 0;
@@ -197,7 +198,6 @@ async function executeModelSteps(
 			messages,
 			input.knownTools,
 			input.toolSurface,
-			modelFamily,
 		);
 		return modelContextBudget({
 			contextWindow: runtime.contextWindow,
@@ -457,11 +457,15 @@ async function executeModelSteps(
 			maxRetries: 1,
 			streamRetries: 0,
 			maxOutputTokens: runtime.maxOutputTokens,
-			stopWhen: isStepCount(input.maxSteps ?? 30),
+			stopWhen: isStepCount(
+				input.maxSteps ?? modelStepLimit(input.toolSurface ?? "coordination"),
+			),
 			// Provider errors can echo request credentials; publish only the sanitized error below.
 			onError: ({ error }) => {
 				console.warn(
-					"Model provider failed",
+					error instanceof InitialAgentReadFailure
+						? "Agent preparation failed"
+						: "Model provider failed",
 					apiModelFailureClassification(error),
 				);
 			},
@@ -628,6 +632,7 @@ async function executeModelSteps(
 					});
 					break;
 				case "error":
+					if (part.error instanceof InitialAgentReadFailure) throw part.error;
 					throw new SafeApiModelFailure(part.error);
 				case "abort":
 					throw new Error("Model run cancelled.");

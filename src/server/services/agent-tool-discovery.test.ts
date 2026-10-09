@@ -13,26 +13,16 @@ const definition = () =>
 		execute: async () => ({}),
 	});
 
-it("offers Anthropic's preferred exact edit immediately without adding all edit aliases", () => {
+it("offers exact editing immediately for every model without adding all edit aliases", () => {
 	const tools = {
 		replace_text: definition(),
 		apply_patches: definition(),
 		create_file: definition(),
 	};
-	const result = discoverableAgentTools(
-		tools,
-		[],
-		[],
-		"implementation",
-		"anthropic",
-	);
+	const result = discoverableAgentTools(tools, [], [], "implementation");
 	expect(result.replace_text.deferLoading).toBe(false);
 	expect(result.apply_patches.deferLoading).toBe(false);
 	expect(result.create_file.deferLoading).toBe(true);
-	expect(
-		discoverableAgentTools(tools, [], [], "implementation", "openai")
-			.replace_text.deferLoading,
-	).toBe(true);
 });
 
 it("keeps ordinary edits/checks/review immediate but lazily loads uncommon workflow schemas without losing permission or discovery", () => {
@@ -85,8 +75,9 @@ it("prefers the batch editor for new builders while preserving discovered aliase
 	};
 	const builder = discoverableAgentTools(tools, [], [], "implementation");
 	expect(builder.apply_patches.deferLoading).toBe(false);
-	for (const name of ["apply_patch", "create_file", "replace_text"])
+	for (const name of ["apply_patch", "create_file"])
 		expect(builder[name].deferLoading).toBe(true);
+	expect(builder.replace_text.deferLoading).toBe(false);
 	expect(
 		discoverableAgentTools(tools, [], ["replace_text"], "implementation")
 			.replace_text.deferLoading,
@@ -110,6 +101,23 @@ it("prefers the batch editor for new builders while preserving discovered aliase
 		"implementation",
 	);
 	expect(native.apply_patch.deferLoading).toBe(false);
+});
+
+it("offers LSP inspection and complete memory reads without a discovery request", () => {
+	const tools = {
+		inspect_code: definition(),
+		inspect_code_batch: definition(),
+		read_project_memory: definition(),
+		debug_program: definition(),
+	};
+	const builder = discoverableAgentTools(tools, [], [], "implementation");
+	for (const name of [
+		"inspect_code",
+		"inspect_code_batch",
+		"read_project_memory",
+	])
+		expect(builder[name].deferLoading).toBe(false);
+	expect(builder.debug_program.deferLoading).toBe(true);
 });
 
 it("keeps common operations immediate and defers optional schemas without mutating permissions", () => {

@@ -6,13 +6,24 @@ import {
 	type EnvironmentModel,
 	environmentModel,
 } from "#/domain/environment-model";
+import { dispatchEnvironmentWorkflow } from "../environment-workflow-dispatch";
 
 /** Bun owns Rigkit's SQLite engine; the Node web/queue processes never import it. */
 export async function applyProjectEnvironment(
 	workspaceId: string,
 	force = false,
 	repairModel: EnvironmentModel | null = null,
+	requestId?: string,
 ): Promise<void> {
+	if (
+		await dispatchEnvironmentWorkflow(
+			workspaceId,
+			force,
+			repairModel,
+			requestId,
+		)
+	)
+		return;
 	if (!/^[a-f0-9-]{36}$/i.test(workspaceId))
 		throw new Error("Invalid workspace ID.");
 	const root = resolve(

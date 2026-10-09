@@ -6,8 +6,42 @@ import {
 	agentTaskTree,
 	canSpawnAgentTask,
 	MAX_AGENT_TASK_DEPTH,
+	taskExecutionCapabilities,
 	validateAgentTaskPlan,
 } from "./agent-task";
+
+it("reports command access without granting commands to cloud read-only roles", () => {
+	for (const harness of ["api", "codex"] as const) {
+		expect(
+			taskExecutionCapabilities({
+				harness,
+				parentSessionId: "lead",
+				taskAccess: "read_only",
+			}),
+		).toEqual({ commandExecution: false, workspaceEdits: false });
+		expect(
+			taskExecutionCapabilities({
+				harness,
+				parentSessionId: "lead",
+				taskAccess: "read_write",
+			}),
+		).toEqual({ commandExecution: true, workspaceEdits: true });
+		expect(
+			taskExecutionCapabilities({
+				harness,
+				parentSessionId: null,
+				taskAccess: "read_write",
+			}),
+		).toEqual({ commandExecution: false, workspaceEdits: false });
+	}
+	expect(
+		taskExecutionCapabilities({
+			harness: "claude",
+			parentSessionId: "lead",
+			taskAccess: "read_only",
+		}),
+	).toEqual({ commandExecution: true, workspaceEdits: false });
+});
 
 it("pages complete recorded summaries without splitting Unicode or implying verification", () => {
 	const summary = `${"🙂".repeat(4001)} retained-output-reference`;

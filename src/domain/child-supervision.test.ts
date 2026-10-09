@@ -7,7 +7,12 @@ it("does not wake leaders for ordinary short or progressing child turns", () => 
 });
 it("checks a quiet child after two minutes and bounds repeated checks", () => {
 	expect(childSupervisionSlot(0, 0, 120000)).toBe(1);
-	expect(childSupervisionSlot(0, 300000, 300000)).toBe(2);
-	expect(childSupervisionSlot(0, 600000, 600000)).toBe(3);
+	expect(childSupervisionSlot(0, 0, 300000)).toBe(2);
+	expect(childSupervisionSlot(0, 0, 600000)).toBe(3);
+	expect(childSupervisionSlot(0, 900000, 900000)).toBe(3);
+});
+it("avoids periodic inference for progressing builders but retains a long-running check-in", () => {
+	expect(childSupervisionSlot(0, 300000, 300000)).toBeNull();
+	expect(childSupervisionSlot(0, 600000, 600000)).toBeNull();
 	expect(childSupervisionSlot(0, 900000, 900000)).toBe(3);
 });

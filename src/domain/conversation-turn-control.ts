@@ -12,3 +12,31 @@ export type ActiveConversationTurn = TurnControl & {
 	cancelled: boolean;
 };
 export const TURN_COORDINATION_LEASE_MS = 30_000;
+
+export type TurnControlAction = "acquire" | "renew" | "release" | "cancel";
+export type CoordinationFailureReason =
+	| { kind: "http"; status: number }
+	| { kind: "transport"; category: "timeout" | "network" };
+
+/** Contains only bounded diagnostics, never response bodies, URLs or credentials. */
+export class CoordinationFailure extends Error {
+	constructor(
+		readonly action: TurnControlAction,
+		readonly failure: CoordinationFailureReason,
+		readonly attempts: number,
+	) {
+		const reason =
+			failure.kind === "http" ? `HTTP ${failure.status}` : failure.category;
+		super(
+			`Conversation coordination failed during ${action} (${reason}, ${attempts} attempt${attempts === 1 ? "" : "s"}). Execution stopped; inspect preserved work before continuing. No model fallback or stream replay was used.`,
+		);
+		this.name = "CoordinationFailure";
+	}
+	get retryable() {
+		return (
+			this.failure.kind === "transport" ||
+			this.failure.status === 429 ||
+			this.failure.status >= 500
+		);
+	}
+}

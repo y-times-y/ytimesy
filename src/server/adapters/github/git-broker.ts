@@ -4,7 +4,16 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { switchBrokeredBranchCommand } from "#/domain/git-branch-switch";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
+
+export { switchBrokeredBranchCommand } from "#/domain/git-branch-switch";
+
+import {
+	gitProxyConfiguration,
+	pushProxiedRepository,
+	receiveProxiedRepository,
+} from "./git-proxy-transfer";
 import { githubInstallationAccessToken } from "./installation-token";
 
 const execute = promisify(execFile);
@@ -19,19 +28,9 @@ export interface GitTransferHost {
 	readTextFile?(path: string): Promise<string | null>;
 }
 
-/** A switch preserves both local branch histories and refuses to carry dirty edits across them. */
-export function switchBrokeredBranchCommand(directory: string, branch: string) {
-	const dest = quote(directory);
-	const target = quote(branch);
-	return `test -z "$(git -C ${dest} status --porcelain)" || { echo 'Commit or stash uncommitted changes before switching branches.' >&2; exit 1; }
-if git -C ${dest} show-ref --verify --quiet ${quote(`refs/heads/${branch}`)}; then
-  git -C ${dest} -c core.hooksPath=/dev/null checkout ${target}
-else
-  git -C ${dest} -c core.hooksPath=/dev/null checkout -b ${target} FETCH_HEAD
-fi`;
-}
-
 type Repository = {
+	userId?: string;
+	projectId?: string;
 	owner: string;
 	name: string;
 	branch: string;
@@ -124,6 +123,7 @@ export async function receiveBrokeredRepository(
 		mode: "clone" | "update" | "switch";
 	},
 ): Promise<string> {
+	if (gitProxyConfiguration()) return receiveProxiedRepository(host, input);
 	const url = repositoryUrl(input);
 	await checked(host, "rm -f /tmp/ytimesy-gh-token");
 	return withGitBroker(async (git, directory) => {
@@ -210,6 +210,7 @@ export async function pushBrokeredRepository(
 		revision?: string;
 	},
 ): Promise<void> {
+	if (gitProxyConfiguration()) return pushProxiedRepository(host, input);
 	if (
 		input.revision &&
 		!/^refs\/ytimesy\/turn-commits\/[a-f0-9]{64}$/.test(input.revision)

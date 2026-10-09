@@ -1,0 +1,33 @@
+# Native Codex recorded inference calls: session-window-debug
+
+Verified 2026-10-08 against the public [Harbor job](https://hub.harborframework.com/jobs/299f37fe-9a7f-51f4-9619-af26e8312fd7), using agent-browser and read-only requests to its public trajectory API. No inference, benchmark environments, grading, or other compute resources were started.
+
+The five scored trials record **13, 13, 13, 8, and 14 model inference calls**: **61 total, 12.2 mean, 13 median**, range 8–14. The four successful trials average **13.25** calls. These are recorded LLM generations, not token counts or tool calls. Native configuration is Codex `0.159.0`, `openai/gpt-6.1-sol`, reasoning effort `max`; see the [earlier task-results note](native-codex-terminal-bench-task-results-2026-10-07.md) for configuration and reward evidence.
+
+| Trial | Reward | Recorded LLM calls | All trajectory steps | Tool calls | Public count source |
+| --- | ---: | ---: | ---: | ---: | --- |
+| [e2d28cd8](https://hub.harborframework.com/jobs/299f37fe-9a7f-51f4-9619-af26e8312fd7/trials/524fbff7-08a1-5003-9f33-335374dbd2ae) | 1 | 13 | 16 | 12 | [Trajectory JSON](https://hub.harborframework.com/api/trials/524fbff7-08a1-5003-9f33-335374dbd2ae/trajectory?jobId=299f37fe-9a7f-51f4-9619-af26e8312fd7&trajectory_path=trials%2F524fbff7-08a1-5003-9f33-335374dbd2ae%2Ftrajectory.json) |
+| [1deba976](https://hub.harborframework.com/jobs/299f37fe-9a7f-51f4-9619-af26e8312fd7/trials/ec4e0b0c-4296-53bf-b93d-986936644cea) | 1 | 13 | 16 | 12 | [Trajectory JSON](https://hub.harborframework.com/api/trials/ec4e0b0c-4296-53bf-b93d-986936644cea/trajectory?jobId=299f37fe-9a7f-51f4-9619-af26e8312fd7&trajectory_path=trials%2Fec4e0b0c-4296-53bf-b93d-986936644cea%2Ftrajectory.json) |
+| [60de77c7](https://hub.harborframework.com/jobs/299f37fe-9a7f-51f4-9619-af26e8312fd7/trials/fcdc838b-547f-51d2-9ba0-5fb80601cb4e) | 1 | 13 | 16 | 12 | [Trajectory JSON](https://hub.harborframework.com/api/trials/fcdc838b-547f-51d2-9ba0-5fb80601cb4e/trajectory?jobId=299f37fe-9a7f-51f4-9619-af26e8312fd7&trajectory_path=trials%2Ffcdc838b-547f-51d2-9ba0-5fb80601cb4e%2Ftrajectory.json) |
+| [7db54950](https://hub.harborframework.com/jobs/299f37fe-9a7f-51f4-9619-af26e8312fd7/trials/6373d49f-e610-5fda-bf00-8cfedcdb233a) | 0 | 8 | 11 | 7 | [Trajectory JSON](https://hub.harborframework.com/api/trials/6373d49f-e610-5fda-bf00-8cfedcdb233a/trajectory?jobId=299f37fe-9a7f-51f4-9619-af26e8312fd7&trajectory_path=trials%2F6373d49f-e610-5fda-bf00-8cfedcdb233a%2Ftrajectory.json) |
+| [bd2bf104](https://hub.harborframework.com/jobs/299f37fe-9a7f-51f4-9619-af26e8312fd7/trials/1c91e1f0-053c-52ad-9761-f83e58981fe8) | 1 | 14 | 17 | 13 | [Trajectory JSON](https://hub.harborframework.com/api/trials/1c91e1f0-053c-52ad-9761-f83e58981fe8/trajectory?jobId=299f37fe-9a7f-51f4-9619-af26e8312fd7&trajectory_path=trials%2F1c91e1f0-053c-52ad-9761-f83e58981fe8%2Ftrajectory.json) |
+
+## Count definition and checks
+
+All five JSON responses returned HTTP 200 and schema `ATIF-v1.7`. Each agent step has `source: "agent"`, `model_name`, a top-level `llm_call_count: 1`, and `extra.api_call_id`. The sum of `llm_call_count` across agent steps is the count above. Within each trial the count of distinct, nonempty `extra.api_call_id` values independently matches that sum. No call IDs or message contents were saved in this note.
+
+Each trajectory contains one system step and two user steps, so its total step count exceeds recorded inference calls by three. Tool calls are `sum(step.tool_calls.length)` and total 56 across the five trials. Each trial has a final agent generation without a tool call, making its tool count one lower than its generation count. Browser metadata (step-header count, role counts, and model-header count) independently matches the JSON.
+
+This is evidence for recorded model inference calls/generations. The public trace does not establish whether transport retries, failed requests, or other unrecorded upstream calls occurred. Do not describe these figures as a separately audited network-request total. They also do not measure context size or explain why a different harness succeeds or fails.
+
+## Retrieval boundary
+
+Extraction returned only schema names, step IDs, role counts, `llm_call_count`, presence/uniqueness counts for API IDs, and tool-array lengths. It did not inspect hidden tests or expand trajectory/tool details. The trial page defaults to Trajectory; an initial unrestricted browser snapshot unexpectedly exposed collapsed public solution/tool previews. That approach was stopped and replaced with metadata-only extraction. No solution content is reproduced or used for the count, and no hidden tests were opened.
+
+## Native runtime configuration and instruction boundary
+
+The first trial's [public Config and Lock metadata](https://hub.harborframework.com/jobs/299f37fe-9a7f-51f4-9619-af26e8312fd7/trials/524fbff7-08a1-5003-9f33-335374dbd2ae), independently extracted through agent-browser, records Codex `0.159.0`, reasoning effort `max`, `openai/gpt-6.1-sol`, and `credential_mode: "direct"`. Config names the `OPENAI_API_KEY` secret; Lock names the same environment variable. This establishes the recorded API-key credential mode, but does not independently audit billing invoices or credential ownership. Config's `extra_instructions` is empty; Lock's top-level `skills`, `agent.skills`, and `agent.mcp_servers` are empty.
+
+Empty benchmark skill arrays do **not** mean the native system prompt has no bundled skills. A separate metadata-only extraction of the first three non-agent steps in the [public trajectory](https://hub.harborframework.com/api/trials/524fbff7-08a1-5003-9f33-335374dbd2ae/trajectory?jobId=299f37fe-9a7f-51f4-9619-af26e8312fd7&trajectory_path=trials%2F524fbff7-08a1-5003-9f33-335374dbd2ae%2Ftrajectory.json) confirms the system lists bundled `imagegen`, `openai-docs`, `skill-creator`, and `skill-installer`. It states `danger-full-access`, approval policy `never`, and enabled network access. The environment user step records `/app`, `bash`, and `Etc/UTC`; the task user step states a 28,800-second completion budget. These extractions read only the relevant instruction/environment fields in non-agent messages and did not read agent solution messages.
+
+The public Lock does not expose absolute context-window or output-token caps, CPU count, RAM, or disk size. The prompt's stated completion budget is not proof of independently enforced runtime timeout. Local task TOML values of 2 CPU, 4 GiB RAM, and 10 GiB disk cannot be attributed to this native trial without verifying task-digest parity and effective environment provisioning.

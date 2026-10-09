@@ -1,118 +1,80 @@
-import { spawnSync } from "node:child_process";
-import { Effect } from "effect";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { REMOVE_CODEX_CREDENTIAL_FILES } from "../src/server/adapters/codex/credential-files";
+import { beforeEach, expect, it, vi } from "vitest";
 import { diagnoseEnvironmentFailure } from "../src/server/adapters/codex/environment-diagnosis";
 
 const mocks = vi.hoisted(() => ({
-	hasAuth: vi.fn(),
-	tokens: vi.fn(),
-	configure: vi.fn(),
-	submit: vi.fn(),
-	read: vi.fn(),
-	stop: vi.fn(),
-	exec: vi.fn(),
-	write: vi.fn(),
+	auth: vi.fn(),
+	model: vi.fn(),
+	run: vi.fn(),
 }));
-vi.mock("node:timers/promises", () => ({ setTimeout: async () => {} }));
 vi.mock("../src/server/auth/codex-managed-auth", () => ({
-	hasManagedCodexAuth: mocks.hasAuth,
-	codexExternalTokens: mocks.tokens,
+	hasManagedCodexAuth: mocks.auth,
 }));
-vi.mock("../src/server/adapters/freestyle/workspace-machines", () => ({
-	createFreestyleWorkspaceMachines: () => ({
-		exec: mocks.exec,
-		writeTextFile: mocks.write,
-	}),
+vi.mock("../src/server/adapters/codex-subscription", () => ({
+	codexSubscriptionModel: mocks.model,
 }));
-vi.mock("../src/server/adapters/codex/login-session", () => ({
-	configureCodexExternalAuth: mocks.configure,
-	submitCodexTask: mocks.submit,
-	readLoginStatus: mocks.read,
-	stopCodexLoginDaemon: mocks.stop,
+vi.mock("../src/server/services/model-agent-loop", () => ({
+	runModelAgent: mocks.run,
 }));
 const input = {
-	modelId: "listed-model",
 	userId: "alice",
-	vm: "vm-builder",
-	directory: "/home/ubuntu/repo",
-	failure: { exitCode: 1, stdout: "secret-value missing gcc", stderr: "" },
-	secrets: { TOKEN: "secret-value" },
+	modelId: "listed-model",
+	vm: "builder",
+	directory: "/repo",
+	failure: { exitCode: 1, stdout: "private-token missing gcc", stderr: "" },
+	secrets: { TOKEN: "private-token" },
 };
 beforeEach(() => {
 	vi.resetAllMocks();
-	vi.stubEnv("FREESTYLE_API_KEY", "test-key");
-	mocks.hasAuth.mockResolvedValue(true);
-	mocks.tokens.mockResolvedValue({ accessToken: "token" });
-	mocks.configure.mockReturnValue(
-		Effect.succeed({
-			stage: "authenticated",
-			models: [{ id: "listed-model" }],
-			turn: null,
-		}),
+	mocks.auth.mockResolvedValue(true);
+	mocks.model.mockResolvedValue({ model: "subscription-model" });
+	mocks.run.mockImplementation(async (request) =>
+		request.onEvent({ type: "text-delta", text: '{"action":"retry-install"}' }),
 	);
-	mocks.submit.mockReturnValue(Effect.succeed({ stage: "authenticated" }));
-	mocks.read.mockReturnValue(
-		Effect.succeed({
-			stage: "authenticated",
-			turnStatus: "idle",
-			turn: { status: "completed", text: '{"action":"retry-install"}' },
-		}),
-	);
-	mocks.stop.mockReturnValue(Effect.void);
-	mocks.exec.mockResolvedValue({ exitCode: 0, stdout: "", stderr: "" });
-	mocks.write.mockResolvedValue(undefined);
 });
-afterEach(() => vi.unstubAllEnvs());
-it("uses syntactically valid shell for credential cleanup", () => {
-	const result = spawnSync("bash", ["-n"], {
-		input: REMOVE_CODEX_CREDENTIAL_FILES,
-		encoding: "utf8",
-	});
-	expect(result.stderr).toBe("");
-	expect(result.status).toBe(0);
-});
-it("uses listed subscription model in isolated read-only diagnosis mode and cleans credentials", async () => {
-	await expect(diagnoseEnvironmentFailure(input)).resolves.toEqual({
+it("uses the selected subscription and shared tool-less loop without VM auth", async () => {
+	expect(await diagnoseEnvironmentFailure(input)).toEqual({
 		action: "retry-install",
 	});
-	expect(mocks.configure.mock.calls[0][3]).toEqual({ diagnosisOnly: true });
-	const request = mocks.submit.mock.calls[0][2];
-	expect(request.readOnly).toBe(true);
-	expect(request.modelId).toBe("listed-model");
-	expect(request.text).not.toContain("secret-value");
-	expect(request.text).toContain("[REDACTED]");
-	expect(mocks.stop).toHaveBeenCalledOnce();
-	expect(mocks.exec.mock.calls[0][1]).toContain(
-		"ytimesy-codex-external-tokens.json",
+	expect(mocks.model).toHaveBeenCalledWith(
+		"alice",
+		"listed-model",
+		undefined,
+		false,
+		"environment:builder",
 	);
+	const request = mocks.run.mock.calls[0][0];
+	expect(request).toMatchObject({
+		tools: {},
+		maxSteps: 1,
+		maxOutputTokens: 512,
+	});
+	expect(request.messages[0].content).not.toContain("private-token");
+	expect(request.messages[0].content).toContain("[REDACTED]");
+	expect(request.signal).toBeInstanceOf(AbortSignal);
 });
-it("does not fall back to an API without a Codex connection", async () => {
-	mocks.hasAuth.mockResolvedValue(false);
+it("does not select a fallback without subscription access", async () => {
+	mocks.auth.mockResolvedValue(false);
 	await expect(diagnoseEnvironmentFailure(input)).rejects.toThrow(
 		"Connect Codex",
 	);
-	expect(mocks.configure).not.toHaveBeenCalled();
+	expect(mocks.model).not.toHaveBeenCalled();
+	expect(mocks.run).not.toHaveBeenCalled();
 });
-it("cleans up after invalid model output and never returns shell commands", async () => {
-	mocks.read.mockReturnValue(
-		Effect.succeed({
-			stage: "authenticated",
-			turnStatus: "idle",
-			turn: {
-				status: "completed",
-				text: '{"action":"shell","command":"unsafe"}',
-			},
+it("rejects arbitrary model-written commands", async () => {
+	mocks.run.mockImplementation(async (request) =>
+		request.onEvent({
+			type: "text-delta",
+			text: '{"action":"shell","command":"unsafe"}',
 		}),
 	);
 	await expect(diagnoseEnvironmentFailure(input)).rejects.toThrow(
 		"unsupported repair",
 	);
-	expect(mocks.stop).toHaveBeenCalledOnce();
 });
-it("blocks continuation if credential cleanup fails", async () => {
-	mocks.exec.mockResolvedValue({ exitCode: 1 });
+it("does not hide authentication or inference failures", async () => {
+	mocks.run.mockRejectedValue(new Error("subscription unavailable"));
 	await expect(diagnoseEnvironmentFailure(input)).rejects.toThrow(
-		"activation is blocked",
+		"subscription unavailable",
 	);
+	expect(mocks.run).toHaveBeenCalledOnce();
 });

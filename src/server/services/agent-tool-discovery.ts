@@ -1,5 +1,4 @@
 import { type ModelMessage, type ToolSet, toolSearch } from "ai";
-import type { HarnessModelFamily } from "#/domain/harness-model-profile";
 import type { SessionItem } from "#/domain/session-item";
 
 // Common coding and coordination operations should never require a search round trip.
@@ -10,6 +9,8 @@ const CORE_TOOLS = new Set([
 	"read_file",
 	"read_files",
 	"read_code",
+	"inspect_code",
+	"inspect_code_batch",
 	"read_repository_guidance",
 	"read_environment_report",
 	"inspect_project_evidence",
@@ -64,17 +65,12 @@ const COORDINATION_TOOLS = new Set([
 	"send_task_message",
 ]);
 
-const SINGLE_EDIT_ALIASES = new Set([
-	"create_file",
-	"replace_text",
-	"apply_patch",
-]);
+const SINGLE_EDIT_ALIASES = new Set(["create_file", "apply_patch"]);
 
 const OPTIONAL_WORKFLOW_TOOLS = new Set([
 	"start_command",
 	"read_command",
 	"wait_command",
-	"read_project_memory",
 	"plan_parallel_work",
 	"edit_task",
 	"start_task",
@@ -93,7 +89,6 @@ export function discoverableAgentTools(
 	messages: ModelMessage[],
 	checkpointTools: readonly string[] = [],
 	toolSurface: "coordination" | "implementation" = "coordination",
-	modelFamily?: HarnessModelFamily,
 ): ToolSet {
 	if (Object.keys(tools).length === 0) return tools;
 	const known = new Set<string>(checkpointTools);
@@ -138,12 +133,12 @@ export function discoverableAgentTools(
 						(!CORE_TOOLS.has(name) ||
 							OPTIONAL_WORKFLOW_TOOLS.has(name) ||
 							(toolSurface === "coordination" &&
-								LEAD_OPTIONAL_INVESTIGATION_TOOLS.has(name)) ||
+								(LEAD_OPTIONAL_INVESTIGATION_TOOLS.has(name) ||
+									name === "read_project_memory")) ||
 							(toolSurface === "implementation" &&
 								(COORDINATION_TOOLS.has(name) ||
 									(Boolean(tools.apply_patches) &&
 										SINGLE_EDIT_ALIASES.has(name) &&
-										!(modelFamily === "anthropic" && name === "replace_text") &&
 										definition.type !== "provider")))),
 				},
 			]),

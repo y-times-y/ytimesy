@@ -6,12 +6,12 @@
 		"#/*": "./src/*"
 	},
 	"scripts": {
-		"dev": "node --env-file-if-exists=.env node_modules/vite/bin/vite.js dev --host 0.0.0.0 --port 3000",
+		"dev": "node --env-file-if-exists=.env --import tsx scripts/development-server.ts",
 		"start:worker": "node --import tsx src/server/jobs/worker.ts",
 		"generate-routes": "tsr generate",
 		"build": "vite build",
 		"preview": "vite preview",
-		"typecheck": "pnpm generate-routes && tsc --noEmit && pnpm typecheck:workflows",
+		"typecheck": "pnpm generate-routes && tsc --noEmit && pnpm typecheck:workflows && pnpm typecheck:edge-executor",
 		"typecheck:workflows": "wrangler types --config wrangler.model-workflows.jsonc --include-env false .ytimesy/model-workflow-runtime.d.ts && wrangler types --config wrangler.pr-repair.jsonc --env-interface PrRepairEnvironment --strict-vars false .ytimesy/pr-repair-runtime.d.ts && tsc --noEmit --project tsconfig.workflows.json",
 		"lint": "biome check .",
 		"format": "biome check --write .",
@@ -20,6 +20,8 @@
 		"harness:regression": "vitest run src/server/services/automatic-repository-context.test.ts src/server/services/harness-lifecycle-hooks.test.ts src/server/services/conversation-code-checkpoint.test.ts src/server/adapters/conversation-recovery.test.ts src/server/services/api-agent-runtime.test.ts src/server/jobs/api-turn.test.ts src/domain/harness-regression-gate.test.ts tests/harness-evaluation-grader.test.ts tests/harness-evaluation-campaign.test.ts src/server/services/api-command-scope.test.ts --maxWorkers=2 --reporter=default --reporter=junit --outputFile.junit=.ytimesy/harness-regression.xml",
 		"worker": "node --env-file-if-exists=.env --import tsx src/server/jobs/worker.ts",
 		"worker:vm": "node --env-file-if-exists=.env --import tsx scripts/job-worker-vm.ts",
+		"build:edge-executor": "wrangler types --config wrangler.edge-executor.jsonc --env-interface EdgeExecutorEnvironment .ytimesy/edge-executor-runtime.d.ts && node --import tsx scripts/build-edge-executor.ts",
+		"typecheck:edge-executor": "pnpm build:edge-executor && tsc --noEmit --project tsconfig.edge-executor.json",
 		"prove:workspace": "tsx scripts/prove-workspace.ts",
 		"prove:codex-login": "tsx scripts/codex-login.ts",
 		"prove:codex-login:status": "tsx scripts/codex-login-status.ts",

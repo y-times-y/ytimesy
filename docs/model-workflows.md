@@ -9,6 +9,45 @@ worker or an elimination of its compute cost.
 
 ## Direct edge executor migration (not enabled)
 
+### Per-chat DO execution boundary — 2026-10-08
+
+The staged edge entry now routes signed model-step references to a
+`ModelConversation` Durable Object keyed by the database-owned `[userId, sessionId]`.
+Each Workflow generation invokes the existing `runApiTurn` harness inside that DO,
+not a second loop or a proxy to the Node model executor. The DO persists its bound
+conversation identity; owner/session mismatches fail closed. Authentication and
+bounded reference validation precede owner lookup. Original signatures and abort
+signals are retained through forwarding. PostgreSQL step receipts remain the
+authority for completed replay and uncertain-operation rejection; the separate
+realtime room keeps its existing lease/cancellation and streaming responsibilities.
+
+`MODEL_EXECUTION_ENABLED` defaults to `0` in the validated runtime configuration.
+Only an explicit deployment override of `1` admits model steps.
+No active executor URL was changed,
+no Worker deployed, and no Node host stopped. A DO binding is not proof that the
+complete harness can run without Node. The existing migration requirements below
+still apply, including the trusted Linux brokerage, Rigkit service, Hyperdrive,
+request-owned queue/analytics resources, and queue/event/maintenance dispatch.
+In particular, the process-global pg-boss producer must not be reused after its
+request-scoped database pool closes.
+
+`pnpm typecheck:edge-executor` generates binding/runtime types and checks the
+staged bundle separately from DOM/Node application types. Scalar secrets are
+validated by a runtime schema rather than declaring generated required
+`ProcessEnv` fields that would wrongly require application credentials inside the
+Git broker's deliberately sanitized subprocess environment. Install
+`DATABASE_URL` and `MODEL_WORKFLOW_SECRET` as secrets, never config values.
+
+Local verification exercises the real bundle in workerd for unsigned rejection,
+unknown routes and disabled signed execution, plus unit routing and existing
+receipt tests. These checks do not run a signed enabled model step, instantiate
+and restart a populated model DO, or prove repository tools/recovery. Before
+enabling, prove real subscription and API inference, parallel independent chats
+and children, peer wakeups, repository edits/publication, cancellation,
+browser disconnect, DO restart and uncertain-operation fencing. Only after those
+checks may the active executor switch; retire the Node host only after its other
+job responsibilities have moved.
+
 `wrangler.edge-executor.jsonc` and `src/server/edge/executor.ts` stage the same
 owner-scoped execution handler for Cloudflare Workers. The build embeds trusted
 Python guest-program assets rather than reading a developer filesystem at
@@ -49,14 +88,23 @@ outcomes; an unfinished receipt fails closed instead of repeating uncertain paid
 inference or edits. Workflow step retries are disabled. Provider tool IDs are
 namespaced per step so repeated IDs cannot reuse another step's tool receipt.
 
-The turn has a shared 30-minute deadline and 30 model steps. Step 31 settles the
-limit without inference. Cancellation between steps settles the turn without
+The turn has a shared 30-minute deadline. Coordination retains a 30-generation
+limit; implementation children have a 128-generation limit. The next step settles
+the relevant limit without inference. Token/evaluation admission remains enforced
+before each generation; the higher builder ceiling is not a larger time or token
+budget. Cancellation between steps settles the turn without
 inference. Cancellation during a step uses the existing abort/command-stop path.
 Lease expiry or a lost executor does not promise automatic recovery of an
 uncertain operation; inspection is required. Cloudflare availability does not
 remove the executor or database dependency.
 
 ## Development rollout
+
+The builder-specific step ceiling is staged locally, not deployed. Apply
+`20261008010000_builder_workflow_step_limit.sql` before deploying the matching
+Workflow and executor code together. The original database constraint admits only
+31 receipts, so a code-only rollout cannot support longer builder turns. The
+migration preserves existing receipts and their access restrictions.
 
 Run `scripts/deploy-model-workflows-development.ts --apply` with the existing
 development environment to stage the separate Worker and executor. Add `--enable`
@@ -80,6 +128,10 @@ and token totals were unchanged. This proves completed-step replay, not recovery
 after an unknown side effect. Cancellation, step fencing, and API-provider paths
 also have automated tests. No production rollout or 10,000-user capacity test is
 implied by these checks.
+
+For the 2026-10-08 DO execution migration and its current gates, see
+[edge architecture migration](./edge-architecture-migration.md). The October 4
+results below exercised the previous executor, not the new DO model loop.
 
 Normal queued dispatch was subsequently enabled in development and verified with
 turn `929efb79-8b96-4b3e-b0d8-4c5a4e1ac4db`: two completed receipts, 4,552 input

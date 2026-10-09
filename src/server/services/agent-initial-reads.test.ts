@@ -2,6 +2,10 @@ import { type ModelMessage, simulateReadableStream, tool } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { expect, it, vi } from "vitest";
 import { z } from "zod";
+import {
+	apiTurnFailureMessage,
+	InitialAgentReadFailure,
+} from "#/domain/api-turn-failure";
 import { prefetchInitialAgentReads } from "./agent-initial-reads";
 import { runModelAgentStep } from "./model-agent-loop";
 
@@ -249,7 +253,62 @@ it("does not infer or checkpoint fabricated guidance when its read fails", async
 			},
 			{ model, contextWindow: 128000, prefetchInitialReads: true },
 		),
-	).rejects.toThrow();
+	).rejects.toThrow(InitialAgentReadFailure);
 	expect(model.doStreamCalls).toHaveLength(0);
 	expect(checkpoint).not.toHaveBeenCalled();
+});
+
+it("settles started reads after cancellation without leaking the underlying error", async () => {
+	const input = readTools();
+	const controller = new AbortController();
+	input.guidance.mockImplementation(async () => {
+		controller.abort(new Error("Cancelled"));
+		throw new Error("secret provider token");
+	});
+	const onEvent = vi.fn();
+	await expect(
+		prefetchInitialAgentReads({
+			messages: fresh,
+			tools: input.tools,
+			coordination: false,
+			signal: controller.signal,
+			onEvent,
+		}),
+	).rejects.toThrow("Cancelled");
+	const events = onEvent.mock.calls.map(([event]) => event);
+	expect(events.filter((event) => event.type === "tool-result")).toHaveLength(
+		events.filter((event) => event.type === "tool-call").length,
+	);
+	expect(JSON.stringify(events)).not.toContain("secret provider token");
+	expect(
+		apiTurnFailureMessage(
+			"model",
+			new InitialAgentReadFailure("read_repository_guidance"),
+		),
+	).toContain("Workspace preparation failed");
+});
+
+it("settles every initial read receipt when workspace preparation fails", async () => {
+	const input = readTools();
+	input.guidance.mockRejectedValue(new Error("Workspace preparation failed"));
+	const onEvent = vi.fn();
+	await expect(
+		prefetchInitialAgentReads({
+			messages: fresh,
+			tools: input.tools,
+			coordination: false,
+			signal: new AbortController().signal,
+			onEvent,
+		}),
+	).rejects.toThrow();
+	const calls = onEvent.mock.calls
+		.map(([event]) => event)
+		.filter((event) => event.type === "tool-call");
+	const results = onEvent.mock.calls
+		.map(([event]) => event)
+		.filter((event) => event.type === "tool-result");
+	expect(results.map((event) => event.id).sort()).toEqual(
+		calls.map((event) => event.id).sort(),
+	);
+	expect(results.some((event) => event.failed)).toBe(true);
 });

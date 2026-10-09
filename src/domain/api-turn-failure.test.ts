@@ -5,7 +5,21 @@ import {
 	apiTurnFailureClassification,
 	apiTurnFailureMessage,
 	SafeApiModelFailure,
+	SubscriptionMetadataFailure,
 } from "./api-turn-failure";
+
+it("preserves safe metadata failure categories in the visible model-stage error", () => {
+	for (const reason of [
+		"timeout",
+		"transport",
+		"invalid-response",
+		403,
+	] as const) {
+		const error = new SubscriptionMetadataFailure(reason);
+		expect(apiTurnFailureMessage("model", error)).toBe(error.message);
+		expect(error.message).toContain("No inference was started");
+	}
+});
 
 it("logs only recognized failure classifications, never arbitrary error properties", () => {
 	expect(

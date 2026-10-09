@@ -10,6 +10,7 @@ import {
 	type EnvironmentBuildInput,
 	finishEnvironmentBuild,
 	provisionEnvironmentBuild,
+	recoverExpiredEnvironmentBuilds,
 	verifyEnvironmentRepositories,
 } from "../src/server/services/environment-build";
 
@@ -61,6 +62,41 @@ beforeAll(async () => {
 		insert into workspace(id,user_id,project_id,status,template_snapshot_id,provider_ref) values('${input.workspaceId}','alice','11111111-1111-4111-8111-111111111111','ready','previous-snapshot','previous-machine');`);
 });
 afterAll(() => db.close());
+
+it("keeps an interrupted build recoverable when pausing fails, then recovers it without a new request", async () => {
+	const runtime = new MemoryWorkspaceRuntime();
+	const id = await claimEnvironmentBuild(input, runtime);
+	const vm = await provisionEnvironmentBuild(input, id, runtime);
+	await db.query(
+		"update environment_build set created_at=now()-interval '71 minutes' where id=$1",
+		[id],
+	);
+	const pause = vi
+		.spyOn(runtime, "pause")
+		.mockRejectedValueOnce(new Error("provider unavailable"));
+	expect(await recoverExpiredEnvironmentBuilds(runtime)).toEqual({
+		recovered: 0,
+		failed: 1,
+	});
+	expect(
+		(
+			await db.query<{ status: string }>(
+				"select status from environment_build where id=$1",
+				[id],
+			)
+		).rows[0].status,
+	).toBe("running");
+	expect(await recoverExpiredEnvironmentBuilds(runtime)).toEqual({
+		recovered: 1,
+		failed: 0,
+	});
+	expect(runtime.paused).toEqual([vm]);
+	expect(pause).toHaveBeenCalledTimes(2);
+	expect(await recoverExpiredEnvironmentBuilds(runtime)).toEqual({
+		recovered: 0,
+		failed: 0,
+	});
+});
 
 it("preserves the last working snapshot when verification fails and pauses only the new builder", async () => {
 	const runtime = new MemoryWorkspaceRuntime({

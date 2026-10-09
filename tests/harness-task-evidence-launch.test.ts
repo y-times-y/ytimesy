@@ -204,6 +204,7 @@ it("reads the complete latest child handoff without waking a model or requiring 
 		{
 			taskId: "child",
 			state: "done",
+			capabilities: { commandExecution: false, workspaceEdits: false },
 			content: "x".repeat(4000),
 			start: 0,
 			nextStart: 4000,

@@ -7,6 +7,7 @@ import {
 	descendantAgentSessions,
 } from "../adapters/agent-sessions";
 import { isServerControlledIntegration } from "../adapters/agent-task-command-receipts";
+import { hasActiveApiTurn } from "../adapters/api-turns";
 import {
 	removePendingServerPeerMessage,
 	serverPeerMessageAccepted,
@@ -113,6 +114,8 @@ export async function queueAgentPeerMessage(
 }
 
 /** Revalidate on delivery; queued messages grant neither task-control nor publication authority. */
+export class PeerMessagePendingError extends Error {}
+
 export async function deliverAgentPeerMessage(
 	machines: WorkspaceMachines,
 	message: PeerMessage,
@@ -162,12 +165,18 @@ export async function deliverAgentPeerMessage(
 		)
 	)
 		return;
-	if (recipient.turnStatus === "running") {
+	if (
+		recipient.turnStatus === "running" ||
+		(serverHarness && (await hasActiveApiTurn(recipient.userId, recipient.id)))
+	) {
 		if (serverHarness) {
 			await stageServerPeerMessage(recipient.id, messageId, runtimeText);
-			throw new Error("Peer message awaits a server model safe point.");
+			throw new PeerMessagePendingError(
+				"Peer message awaits a server model safe point.",
+			);
 		}
-		if (!runtime) throw new Error("Peer runtime is not available yet.");
+		if (!runtime)
+			throw new PeerMessagePendingError("Peer runtime is not available yet.");
 		await stagePeerMessage(
 			runtime.machines,
 			runtime.workspaceId,
@@ -175,7 +184,7 @@ export async function deliverAgentPeerMessage(
 			runtimeText,
 			recipient.id,
 		);
-		throw new Error(
+		throw new PeerMessagePendingError(
 			"Peer message is staged; retry until the active runtime acknowledges it.",
 		);
 	}

@@ -6,6 +6,7 @@ import {
 	streamText,
 	tool,
 } from "ai";
+import { z } from "zod";
 import { connectedLanguageModel } from "../src/server/adapters/api-model";
 import { database } from "../src/server/adapters/database";
 import { codexAccessTokenExpiresAt } from "../src/server/auth/codex-managed-auth";
@@ -85,7 +86,10 @@ try {
 					.clone()
 					.json()
 					.catch(() => null);
-				const code = body?.error?.code;
+				const parsed = z
+					.object({ error: z.object({ code: z.string() }) })
+					.safeParse(body);
+				const code = parsed.success ? parsed.data.error.code : undefined;
 				if (typeof code === "string" && /^[a-zA-Z0-9_.-]{1,100}$/.test(code))
 					errorCodes.push(code);
 			}

@@ -1,9 +1,16 @@
 import { randomUUID } from "node:crypto";
 import type { ModelMessage } from "ai";
 import { Effect, Schedule } from "effect";
+import { ApiTurnCancelled } from "#/domain/api-turn-failure";
 import type { SessionItem } from "#/domain/session-item";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
+import {
+	configuredTurnExecutor,
+	type TurnExecutor,
+} from "#/domain/turn-executor";
 import { modelConcurrencyLimits } from "./agent-capacity";
+import { dispatchBackgroundJob } from "./background-job-dispatch";
+import { wakeConversationProgress } from "./conversation-progress-wake";
 import {
 	recordConversationPoint,
 	recoveredConversation,
@@ -43,6 +50,15 @@ export async function inheritedSubscriptionSettings(
 	return result.rows[0]
 		? subscriptionTurnSettings(result.rows[0].connection_revision)
 		: null;
+}
+
+/** A child may report waiting before its model loop exits; UI status is not a turn lease. */
+export async function hasActiveApiTurn(userId: string, sessionId: string) {
+	const result = await database().query<{ active: boolean }>(
+		"select exists(select 1 from api_turn where user_id=$1 and session_id=$2 and state in ('queued','running')) as active",
+		[userId, sessionId],
+	);
+	return result.rows[0]?.active ?? false;
 }
 
 export async function enqueueApiTurn(input: {
@@ -104,8 +120,8 @@ export async function enqueueApiTurn(input: {
 			);
 		await recordConversationPoint(client, input);
 		await client.query(
-			`insert into api_turn(id,session_id,user_id,connection_id,connection_revision,model_id,state,messages,items,idempotency_key)
-			 values($1,$2,$3,$4,$5,$6,'queued',$7,$8,$9)`,
+			`insert into api_turn(id,session_id,user_id,connection_id,connection_revision,model_id,state,messages,items,idempotency_key,executor)
+			 values($1,$2,$3,$4,$5,$6,'queued',$7,$8,$9,$10)`,
 			[
 				randomUUID(),
 				input.sessionId,
@@ -116,6 +132,7 @@ export async function enqueueApiTurn(input: {
 				JSON.stringify(input.messages),
 				JSON.stringify(input.items),
 				input.idempotencyKey ?? null,
+				configuredTurnExecutor(process.env.YTIMESY_MODEL_EXECUTION_TARGET),
 			],
 		);
 		await client.query(
@@ -134,6 +151,26 @@ export async function enqueueApiTurn(input: {
 		throw error;
 	} finally {
 		client.release();
+	}
+	if (
+		configuredTurnExecutor(process.env.YTIMESY_MODEL_EXECUTION_TARGET) ===
+		"durable-object"
+	) {
+		try {
+			if (
+				!(await dispatchBackgroundJob({
+					id: randomUUID(),
+					kind: "model-admission",
+				}))
+			)
+				console.warn(
+					"Cloudflare turn wake is unavailable; queued turn awaits recovery.",
+				);
+		} catch {
+			console.warn(
+				"Cloudflare turn wake deferred; queued turn awaits recovery.",
+			);
+		}
 	}
 }
 
@@ -166,6 +203,8 @@ export async function previousTurnMessages(
 export async function claimApiTurn(
 	perUserLimit = 2,
 	fleetLimit = modelConcurrencyLimits().fleet,
+	executor: TurnExecutor = "node",
+	sessionId?: string,
 ): Promise<ApiTurn | null> {
 	if (
 		!Number.isInteger(perUserLimit) ||
@@ -193,12 +232,13 @@ export async function claimApiTurn(
 			return null;
 		}
 		const result = await client.query<ApiTurn>(
-			`update api_turn set state='running',lease_id=$1,heartbeat_at=now(),updated_at=now()
-			 where id=(select q.id from api_turn q where q.state='queued' and not q.cancel_requested
+			`update api_turn set state='running',lease_id=$1,heartbeat_at=now(),updated_at=now(),executor=$4
+			 where id=(select q.id from api_turn q where q.state='queued' and q.executor=$4 and not q.cancel_requested
+			 and ($5::uuid is null or q.session_id=$5::uuid)
 			 and (select count(*) from api_turn r where r.user_id=q.user_id and r.state='running')<$2
 			 and (select count(*) from api_turn r where r.state='running')<$3
 			 order by q.created_at for update skip locked limit 1) returning *`,
-			[randomUUID(), perUserLimit, fleetLimit],
+			[randomUUID(), perUserLimit, fleetLimit, executor, sessionId ?? null],
 		);
 		await client.query("commit");
 		return result.rows[0] ?? null;
@@ -259,6 +299,7 @@ export async function checkpointApiTurn(
 		[turn.id, turn.lease_id, JSON.stringify(messages), JSON.stringify(items)],
 	);
 	if (!result.rowCount) throw new Error("API turn lease was lost.");
+	await wakeConversationProgress();
 }
 
 /** Stream checkpoints avoid rewriting the model history on every text delta. */
@@ -273,8 +314,15 @@ export async function publishApiTurnProgress(
 	 update agent_session set items=$3,updated_at=now() where id in(select session_id from saved) returning id`,
 		[turn.id, turn.lease_id, JSON.stringify(items)],
 	);
-	if (!result.rowCount)
-		throw new Error("API turn lease was lost or cancelled.");
+	if (!result.rowCount) {
+		const cancelled = await database().query(
+			"select 1 from api_turn where id=$1 and lease_id=$2 and user_id=$3 and cancel_requested",
+			[turn.id, turn.lease_id, turn.user_id],
+		);
+		if (cancelled.rows.length) throw new ApiTurnCancelled();
+		throw new Error("API turn lease was lost.");
+	}
+	await wakeConversationProgress();
 }
 
 export async function finishApiTurn(
@@ -301,6 +349,7 @@ export async function finalizeApiTurn(
 		 updated_at=now() from saved where s.id=saved.session_id returning saved.state`,
 		[turn.id, turn.lease_id, state, JSON.stringify(items)],
 	);
+	if (result.rows[0]) await wakeConversationProgress();
 	return result.rows[0]?.state ?? null;
 }
 

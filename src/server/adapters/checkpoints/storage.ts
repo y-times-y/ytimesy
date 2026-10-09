@@ -30,7 +30,12 @@ export async function ensurePrivateCheckpointBucket() {
 	const found = await request(`bucket/${BUCKET}`);
 	if (found.ok) {
 		const bucket = await found.json();
-		if (bucket.public !== false)
+		if (
+			!bucket ||
+			typeof bucket !== "object" ||
+			!("public" in bucket) ||
+			bucket.public !== false
+		)
 			throw new Error("Checkpoint bucket must be private.");
 		return;
 	}

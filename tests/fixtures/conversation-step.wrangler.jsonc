@@ -1,0 +1,7 @@
+{
+  "name": "local-conversation-receipt-test",
+  "main": "conversation-step-worker.mjs",
+  "compatibility_date": "2026-10-08",
+  "durable_objects": { "bindings": [{ "name": "RECEIPTS", "class_name": "ReceiptFixture" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ReceiptFixture"] }]
+}

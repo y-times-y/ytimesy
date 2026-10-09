@@ -28,6 +28,8 @@ export type ProjectCheckoutHost = {
  * an authenticated provider image. GitHub auth stays on the server broker.
  */
 export async function prepareProjectCheckout(input: {
+	readonly userId?: string;
+	readonly projectId?: string;
 	readonly host: ProjectCheckoutHost;
 	readonly owner: string;
 	readonly name: string;

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { VmPty } from "freestyle";
+import { FreestyleApiError, type VmPty } from "freestyle";
 import { posixShellCommand } from "#/domain/posix-command";
 import type { RuntimeCommandResult } from "../workspace-runtime";
 
@@ -63,6 +63,10 @@ export async function runLongCommand(
 		clearTimeout(timer);
 		try {
 			await pty.close(session?.sessionId ?? slug);
+		} catch (error) {
+			// Exited guest sessions are already gone; other cleanup failures remain errors.
+			if (!(error instanceof FreestyleApiError && error.status === 404))
+				throw error;
 		} finally {
 			session?.detach();
 		}

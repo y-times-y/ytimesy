@@ -26,10 +26,11 @@ deployment, or paid evaluation infrastructure was modified.
   Corpora below 16 MiB remain on Git; index eligibility is bounded to 16-64 MiB.
   This conservative routing boundary avoids index refresh cost on small trees;
   it is not a measured crossover point or a large-repository speed guarantee.
-  Runtime indexing is opt-in with `YTIMESY_INDEXED_SEARCH_ENABLED=1`. The default
-  executes native Git directly without Python startup or inventory overhead.
-  No flag was enabled here. Index acceleration is an experimental capability,
-  not an absorbed or measured competitive advantage.
+  At the time of this report runtime indexing was opt-in. As of 2026-10-08,
+  it is enabled by default; `YTIMESY_INDEXED_SEARCH_ENABLED=0` opts out.
+  Unsupported queries bypass Python; unsupported corpora and unavailable
+  Python/SQLite fall back to Git. This is lexical candidate retrieval, not
+  semantic search or a measured competitive advantage.
 - Warm project/language servers over private Unix sockets, using maintained
   `vscode-jsonrpc` transport. Document versions are refreshed on requests;
   initialization is shared. Requests serialize, stalled servers are terminated,

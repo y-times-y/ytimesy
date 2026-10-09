@@ -1,4 +1,6 @@
 export type ProjectCheckout = {
+	readonly userId?: string;
+	readonly projectId?: string;
 	readonly owner: string;
 	readonly name: string;
 	readonly fullName: string;
@@ -16,6 +18,8 @@ export function projectCheckoutPath(home: string, repoName: string): string {
 }
 
 export function projectCheckoutFromFullName(input: {
+	readonly userId?: string;
+	readonly projectId?: string;
 	readonly fullName: string;
 	readonly branch: string;
 	readonly workingBranch?: string;
@@ -27,6 +31,8 @@ export function projectCheckoutFromFullName(input: {
 	const name = input.fullName.slice(slash + 1);
 	if (!owner || !name) return null;
 	return {
+		...(input.userId ? { userId: input.userId } : {}),
+		...(input.projectId ? { projectId: input.projectId } : {}),
 		owner,
 		name,
 		fullName: input.fullName,

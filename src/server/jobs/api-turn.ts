@@ -5,13 +5,16 @@ import { assertApiContextFits } from "#/domain/api-conversation";
 import { applyApiProgress, recordedContextUsage } from "#/domain/api-progress";
 import { addApiTokenUsage } from "#/domain/api-token-usage";
 import {
+	ApiTurnCancelled,
 	type ApiTurnFailureStage,
 	apiTurnFailureClassification,
 	apiTurnFailureMessage,
 	IncompleteAgentTurn,
 } from "#/domain/api-turn-failure";
+import { CoordinationFailure } from "#/domain/conversation-turn-control";
 import { PREPARED_ENVIRONMENT_INSTRUCTIONS } from "#/domain/environment-context";
 import { SessionItemId, WorkspaceId } from "#/domain/ids";
+import { modelStepLimit } from "#/domain/model-workflow";
 import { posixShellCommand } from "#/domain/posix-command";
 import { PROJECT_KNOWLEDGE_INSTRUCTIONS } from "#/domain/project-knowledge";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
@@ -117,10 +120,15 @@ export async function runApiTurn(
 	let coordinationHeartbeatPending: Promise<void> | undefined;
 	let coordinationHeartbeatBusy = false;
 	let heartbeatFailed = false;
+	let coordinationFailure: CoordinationFailure | undefined;
 	let progressFailed = false;
 	const progress = turnProgressWriter(
 		(snapshot) => publishApiTurnProgress(turn, snapshot),
-		() => {
+		(error) => {
+			if (error instanceof ApiTurnCancelled) {
+				abort.abort(error);
+				return;
+			}
 			progressFailed = true;
 			abort.abort(new Error("Turn progress could not be saved."));
 		},
@@ -143,6 +151,7 @@ export async function runApiTurn(
 		const guardHeartbeat = (stage: string, operation: Promise<void>) =>
 			operation.catch((error: unknown) => {
 				heartbeatFailed = true;
+				if (error instanceof CoordinationFailure) coordinationFailure ??= error;
 				console.warn("Turn heartbeat failed", {
 					stage,
 					...apiTurnFailureClassification(error),
@@ -313,7 +322,11 @@ export async function runApiTurn(
 		let flushedAt = 0;
 		let metricIndex = 0;
 		failureStage = "model";
-		if (step?.limitReached) throw new IncompleteAgentTurn("tool-calls");
+		const toolSurface = owner.parentSessionId
+			? "implementation"
+			: "coordination";
+		if (step && (step.limitReached || step.index > modelStepLimit(toolSurface)))
+			throw new IncompleteAgentTurn("tool-calls");
 		const runAgent = subscription
 			? step
 				? runCodexSubscriptionAgentStep
@@ -338,7 +351,7 @@ export async function runApiTurn(
 			connectionRevision: turn.connection_revision,
 			reasoning: subscription?.reasoning,
 			knownTools: discoveredToolsFromSession(items),
-			toolSurface: owner.parentSessionId ? "implementation" : "coordination",
+			toolSurface,
 			onToolMetric: (metric) => {
 				void captureServerAnalytics(
 					owner.userId,
@@ -649,22 +662,26 @@ export async function runApiTurn(
 		await progress.drain().catch(() => {});
 		if (!abort.signal.aborted || heartbeatFailed || progressFailed)
 			console.warn("API turn failed", {
-				stage: failureStage,
-				...apiTurnFailureClassification(error),
+				stage: coordinationFailure ? "coordination" : failureStage,
+				...apiTurnFailureClassification(coordinationFailure ?? error),
 			});
 		const failureMessage = progressFailed
 			? "Turn progress could not be saved. Inspect the task before retrying."
-			: abort.signal.aborted
-				? `Run stopped. ${abort.signal.reason instanceof Error && ["Turn ownership or cancellation state changed.", "Conversation coordination lease was lost.", "Turn heartbeat or coordination service became unavailable."].includes(abort.signal.reason.message) ? `${abort.signal.reason.message} ` : ""}Inspect any in-flight command before continuing.`
-				: apiTurnFailureMessage(failureStage, error);
-		items = [
-			...items,
-			{
-				kind: "error",
-				id: SessionItemId(`${turn.id}:error`),
-				message: failureMessage,
-			},
-		];
+			: coordinationFailure
+				? apiTurnFailureMessage("coordination", coordinationFailure)
+				: abort.signal.aborted
+					? `Run stopped. ${abort.signal.reason instanceof Error && ["Turn ownership or cancellation state changed.", "Conversation coordination lease was lost.", "Turn heartbeat or coordination service became unavailable."].includes(abort.signal.reason.message) ? `${abort.signal.reason.message} ` : ""}Inspect any in-flight command before continuing.`
+					: apiTurnFailureMessage(failureStage, error);
+		const userCancelled = abort.signal.reason instanceof ApiTurnCancelled;
+		if (!userCancelled)
+			items = [
+				...items,
+				{
+					kind: "error",
+					id: SessionItemId(`${turn.id}:error`),
+					message: failureMessage,
+				},
+			];
 		items = applyApiProgress(items, turn.id, {
 			type: "finish",
 			inputTokens: null,

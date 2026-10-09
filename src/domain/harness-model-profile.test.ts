@@ -49,6 +49,8 @@ it.each(["openai", "anthropic", "google", "other"] as const)(
 		const instructions = harnessModelToolInstructions(family, false);
 		expect(instructions.length).toBeLessThan(2200);
 		expect(instructions).toContain("Read current source");
+		expect(instructions).toContain("LSP inspection is available");
+		expect(instructions).toContain("unavailable analysis as a clean result");
 		expect(instructions).toContain("required bodies completely");
 		expect(instructions).toContain("Preserve every required check");
 		expect(instructions).toContain("actual exit and stop status");

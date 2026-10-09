@@ -1,4 +1,5 @@
 import { Effect } from "effect";
+import { completionSnapshot } from "#/domain/completion-verification";
 import type {
 	EvaluationProtocol,
 	EvaluationTask,
@@ -6,6 +7,7 @@ import type {
 import { WorkspaceId } from "#/domain/ids";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
 import { subscriptionTurnRevision } from "#/domain/subscription-turn";
+import { taskVerificationPlan } from "#/domain/task-integration-checks";
 import { integratedTaskWriter } from "#/domain/task-patch-evidence";
 import {
 	agentSessionForOwner,
@@ -20,6 +22,7 @@ import {
 	openAgentSession,
 } from "#/server/services/agent-session-machine";
 import { cancelServerTurn } from "#/server/services/cancel-server-turn";
+import { COMPLETION_SNAPSHOT_SOURCE } from "#/server/services/completion-verification";
 import { sendHarnessWorkspaceTask } from "#/server/services/harness-workspace-session";
 import { captureTaskPatch } from "#/server/services/reviewed-task-import";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
@@ -77,6 +80,27 @@ export async function openProductionEvaluation(
 		);
 		if (branch.exitCode !== 0 || !branch.stdout.trim())
 			throw new Error("Evaluation snapshot must have a valid local branch.");
+		const completionPolicy = await machines.exec(
+			WorkspaceId(bound.providerRef),
+			`python3 -c ${quote(COMPLETION_SNAPSHOT_SOURCE)} "$(cat /tmp/ytimesy-project-cwd)" ${quote(task.commit)}`,
+			30_000,
+		);
+		if (completionPolicy.exitCode !== 0)
+			throw new Error(
+				"Evaluation completion baseline could not be inspected. No model request was started.",
+			);
+		const pristine = completionSnapshot.parse(
+			JSON.parse(completionPolicy.stdout),
+		);
+		if (
+			pristine.base !== task.commit ||
+			pristine.changed ||
+			pristine.policyChanged
+		)
+			throw new Error(
+				"Evaluation completion baseline is not pristine. No model request was started.",
+			);
+		taskVerificationPlan(pristine);
 		// Lazy checkout preparation must retain the frozen snapshot, not fetch a
 		// mutable remote branch. Children inherit this chat's working branch.
 		await database().query(

@@ -226,6 +226,8 @@ async function checkoutForProject(
 ) {
 	const defaultBranch = await projectDefaultBranch(userId, project);
 	return projectCheckoutFromFullName({
+		userId,
+		projectId: project.id,
 		fullName: project.fullName,
 		branch: sessionCloneBranch({
 			selectedBranch: project.branch,

@@ -45,8 +45,8 @@ export function harnessModelToolInstructions(
 		family === "openai" && nativePatch
 			? "Prefer native apply_patch with its documented V4A operation schema, never shell patches."
 			: family === "anthropic"
-				? "For small edits discover replace_text and supply exact uniquely matching old/new text. Batch coherent multi-file changes with apply_patches (V4A)."
-				: "Batch coherent edits with apply_patches (V4A); discover replace_text for small exact old/new replacements.";
+				? "For small edits use replace_text with uniquely matching old/new text. Batch coherent multi-file changes with apply_patches (V4A)."
+				: "Batch coherent edits with apply_patches (V4A); use replace_text for small exact old/new replacements.";
 	const context =
 		family === "anthropic"
 			? "Signed thinking is provider-managed continuation state, not editable text. Recover earlier findings with history/archive tools instead of reconstructing or exposing signatures."
@@ -54,9 +54,10 @@ export function harnessModelToolInstructions(
 				? "Thought signatures are provider-managed continuation state. Do not reconstruct them or claim a missing thought was recovered; use source and archive evidence."
 				: "Opaque reasoning is provider-managed state. Use recoverable source/tool evidence, not guessed reasoning, after compaction.";
 	return [
-		`Harness tool profile v2 (${family}): ${editing} ${context}`,
+		`Harness tool profile v3 (${family}): ${editing} ${context}`,
 		"Read current source before edits; reread after stale/ambiguous rejection. Never invent missing source from truncated output. Use read_code outlines to locate declarations in large supported source files, then exact line selections before editing. Prefer direct reads for small files; unsupported outlines require ordinary reads. Batch independent code inspections with inspect_code_batch; discover rename_symbol for symbol refactors, rename_file for semantic file moves, and inspect_code code_actions plus apply_code_action for fenced textual actions. For non-Node debugging discover prepare_code_tools and debug_program; use debug_node for Node. Order dependent calls and writes.",
-		"Use scoped read_repository_guidance: ancestor instructions, referencedDocuments and scopeFiles are included. Read required bodies completely (read_files supports maxCharacters:128000); follow truncation cursors. Reuse unchanged complete evidence, not filename inventories as absence proof; reread after changes or genuine uncertainty. Discover optional tools with search_tools.",
+		"LSP inspection is available: inspect_code finds definitions, references, hover and diagnostics; inspect_code_batch batches queries. Missing server? Discover prepare_code_tools; never treat unavailable analysis as a clean result.",
+		"Use scoped read_repository_guidance for ancestor instructions and referenced documents. Read required bodies completely; follow truncation cursors. Reuse unchanged complete evidence, not inventories as absence proof; reread changed source. Discover optional tools with search_tools.",
 		"Include implementation and tests in one coherent patch when no intermediate observation is needed. Use apply_patches.verification for formatting, fast preflightCommands, then all required checks; otherwise use run_checks. Follow configured lint rules. Biome formatting must use --error-on-warnings; no unsafe fixes, suppressed diagnostics or weakened policy.",
 		"Verify the stable final tree; inspect resulting changes. Preserve every required check and full retained evidence. Concise runner reporting is allowed only without filtering tests or hiding warnings/errors. Each command needs its actual exit and stop status; include output references in the handoff.",
 	].join(" ");

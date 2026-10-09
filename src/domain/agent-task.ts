@@ -25,6 +25,17 @@ export type AgentTaskAccess = "read_only" | "read_write";
 export type AgentTaskExecution = "parallel" | "stacked";
 export type AgentTaskReviewState = "pending" | "reviewed" | "rejected";
 
+/** Cloud read-only tasks expose inspection tools, not arbitrary shell execution. Native adapters enforce their own command sandbox. */
+export function taskExecutionCapabilities(task: {
+	readonly harness: AgentProviderId;
+	readonly parentSessionId: string | null;
+	readonly taskAccess: string | null;
+}) {
+	const cloud = task.harness === "codex" || task.harness === "api";
+	const writable = !!task.parentSessionId && task.taskAccess === "read_write";
+	return { commandExecution: !cloud || writable, workspaceEdits: writable };
+}
+
 export type AgentTaskPlan = {
 	readonly prompt: string;
 	readonly placement: AgentTaskPlacement;

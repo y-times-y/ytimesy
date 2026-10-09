@@ -10,6 +10,7 @@ import {
 	agentTaskStatusReceipt,
 	agentTaskSummaryPage,
 	agentTaskTree,
+	taskExecutionCapabilities,
 } from "#/domain/agent-task";
 import {
 	AGENT_TASK_TOOL_REQUEST_PATH,
@@ -76,6 +77,7 @@ import {
 	retainedTaskCheckResults,
 } from "#/server/adapters/agent-task-command-receipts";
 import { saveAgentTaskBlockedEvent } from "#/server/adapters/agent-task-events";
+import { hasActiveApiTurn } from "#/server/adapters/api-turns";
 import { captureClaudeHome } from "#/server/adapters/claude/home-files";
 import {
 	type ClaudeAuthStatus,
@@ -1009,6 +1011,7 @@ export function runAgentTaskTool(
 				status: "draft",
 				placement: task.taskPlacement,
 				execution: task.taskExecution,
+				capabilities: taskExecutionCapabilities(task),
 			};
 			if (!startImmediately) return draft;
 			return yield* startPreparedAgentTask(machines, scope, task.id).pipe(
@@ -1064,17 +1067,21 @@ export function runAgentTaskTool(
 		const taskRows = descendants.filter((row) => row.title !== "Side chat");
 		if (request.tool === "list_tasks") {
 			const byId = new Map(taskRows.map((row) => [row.id, row]));
-			return agentTaskTree(parent.id, taskRows).map((task) => ({
-				...agentTaskStatusReceipt(
-					task,
-					request.arguments.includePrompts === true,
-				),
-				summary:
-					task.summary ??
-					lastAgentMessageText(
-						sessionItemsFromUnknown(byId.get(task.id)?.items),
+			return agentTaskTree(parent.id, taskRows).map((task) => {
+				const row = byId.get(task.id);
+				if (!row)
+					throw new Error("Task tree references an unavailable session.");
+				return {
+					...agentTaskStatusReceipt(
+						task,
+						request.arguments.includePrompts === true,
 					),
-			}));
+					capabilities: taskExecutionCapabilities(row),
+					summary:
+						task.summary ??
+						lastAgentMessageText(sessionItemsFromUnknown(row.items)),
+				};
+			});
 		}
 
 		const taskId = taskToolString(request.arguments, "taskId");
@@ -1205,6 +1212,7 @@ export function runAgentTaskTool(
 			return {
 				taskId: target.id,
 				state: target.taskState,
+				capabilities: taskExecutionCapabilities(target),
 				...agentTaskSummaryPage(
 					lastAgentMessageText(sessionItemsFromUnknown(target.items)) ??
 						target.taskSummary,
@@ -1499,19 +1507,61 @@ export function runAgentTaskTool(
 			const wrapped = yield* requestAgentTaskWrapUp(machines, scope, target.id);
 			return { taskId: wrapped.id, status: "working" };
 		}
-		const targetMachines = machinesForAgentSession(machines, target);
 		const message = taskToolString(request.arguments, "message");
 		if (!message) throw new Error("A task message is required.");
-		if (target.turnStatus === "running")
+		const requiresCommands = z
+			.boolean()
+			.parse(request.arguments.requiresCommandExecution ?? false);
+		const resumeCompleted = z
+			.boolean()
+			.parse(request.arguments.resumeCompleted ?? false);
+		const capabilities = taskExecutionCapabilities(target);
+		if (requiresCommands && !capabilities.commandExecution)
+			throw new Error(
+				"This read-only task cannot execute commands. Use an authorized isolated verification task; do not wake this child to run tests.",
+			);
+		if (
+			target.taskState === "done" &&
+			target.turnStatus !== "running" &&
+			!resumeCompleted
+		)
+			return {
+				taskId: target.id,
+				status: "completed",
+				delivered: false,
+				capabilities,
+				...agentTaskSummaryPage(
+					lastAgentMessageText(sessionItemsFromUnknown(target.items)) ??
+						target.taskSummary,
+				),
+				instruction:
+					"The child is already complete; no message was delivered and no turn started. Follow read_task_summary cursors for its full result. Set resumeCompleted:true only for genuinely new authorized work.",
+			};
+		if (
+			target.turnStatus === "running" ||
+			((target.harness === "api" || target.harness === "codex") &&
+				(yield* Effect.tryPromise(() =>
+					hasActiveApiTurn(target.userId, target.id),
+				)))
+		)
 			return yield* Effect.tryPromise(() =>
 				queueAgentPeerMessage(parent, target.id, message, request.id),
 			);
 		const modelId = target.listedModelId || parent.listedModelId || "";
 		if (!modelId) throw new Error("The task has no model selection.");
-		yield* sendHarnessWorkspaceTask(targetMachines, taskScope(scope, target), {
-			text: message,
-			modelId,
-		});
+		const targetMachines = machinesForAgentSession(machines, target);
+		const sent = yield* sendHarnessWorkspaceTask(
+			targetMachines,
+			taskScope(scope, target),
+			{
+				text: message,
+				modelId,
+			},
+		);
+		if (sent.connection.status === "failed")
+			throw new Error(
+				sent.connection.message ?? "The child follow-up could not start.",
+			);
 		return { taskId: target.id, status: "working" };
 	});
 }

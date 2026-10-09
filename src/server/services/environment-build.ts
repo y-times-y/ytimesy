@@ -238,6 +238,8 @@ export async function prepareEnvironmentRepositories(
 		await event(`Preparing ${repo.fullName}.`);
 		const [owner, name] = repo.fullName.split("/");
 		const directory = await prepareProjectCheckout({
+			userId: input.userId,
+			projectId: input.projectId,
 			host,
 			owner,
 			name,
@@ -320,14 +322,20 @@ export async function prepareEnvironmentRepositories(
 		}
 		prepared.push({ ...repo, directory, recipe });
 	}
-	const ports = prepared.flatMap((repo) =>
+	assertDistinctEnvironmentServicePorts(prepared);
+	return prepared;
+}
+
+export function assertDistinctEnvironmentServicePorts(
+	repositories: PreparedRepository[],
+) {
+	const ports = repositories.flatMap((repo) =>
 		repo.recipe.services.map((service) => service.port),
 	);
 	if (new Set(ports).size !== ports.length)
 		throw new Error(
 			"Repositories in one environment must use distinct service ports.",
 		);
-	return prepared;
 }
 
 async function updateInitialBuildStatus(
@@ -450,7 +458,7 @@ export async function activateEnvironmentBuild(
 }
 
 export async function finishEnvironmentBuild(
-	input: EnvironmentBuildInput,
+	input: Pick<EnvironmentBuildInput, "workspaceId" | "userId">,
 	id: string,
 	runtime: WorkspaceRuntime = workspaceRuntimeFromEnv(),
 ) {
@@ -463,31 +471,64 @@ export async function finishEnvironmentBuild(
 	const providerRef =
 		build?.provider_ref ||
 		(await runtime.findBySlug(`ytimesy-build-${id}`).catch(() => null));
-	try {
-		if (build?.status === "running") {
-			const message =
-				"Environment build did not complete. Check the repository setup commands and retry.";
-			const failed = await database().query(
-				"update environment_build set status='failed',error_message=$2,completed_at=now() where id=$1 and status='running' returning id",
-				[id, message],
+	// Keep interrupted builds discoverable until pausing succeeds. A failed pause
+	// must not turn a running build into a terminal row that recovery would skip.
+	if (providerRef) await runtime.pause?.(providerRef);
+	if (build?.status === "running") {
+		const message =
+			"Environment build did not complete. Check the repository setup commands and retry.";
+		const failed = await database().query(
+			"update environment_build set status='failed',error_message=$2,completed_at=now() where id=$1 and status='running' returning id",
+			[id, message],
+		);
+		if (failed.rows.length)
+			void captureServerAnalytics(
+				input.userId,
+				"environment_finished",
+				{
+					outcome: "failed",
+				},
+				{ key: id, timestamp: new Date() },
 			);
-			if (failed.rows.length)
-				void captureServerAnalytics(
-					input.userId,
-					"environment_finished",
-					{
-						outcome: "failed",
-					},
-					{ key: id, timestamp: new Date() },
-				);
-			const workspace = await workspaceById(input.workspaceId);
-			if (!workspace?.templateSnapshotId)
-				await saveWorkspaceStatus(input.workspaceId, "failed", message);
-			await recordWorkspaceEvent(input.userId, input.workspaceId, message);
-		}
-	} finally {
-		if (providerRef) await runtime.pause?.(providerRef);
+		const workspace = await workspaceById(input.workspaceId);
+		if (!workspace?.templateSnapshotId)
+			await saveWorkspaceStatus(input.workspaceId, "failed", message);
+		await recordWorkspaceEvent(input.userId, input.workspaceId, message);
 	}
+}
+
+/** Recover interrupted setup independently of a new user request; never replace a ready template. */
+export async function recoverExpiredEnvironmentBuilds(
+	runtime: WorkspaceRuntime = workspaceRuntimeFromEnv(),
+) {
+	const expired = await database().query<{
+		id: string;
+		workspace_id: string;
+		user_id: string;
+	}>(
+		`select b.id,b.workspace_id,w.user_id from environment_build b
+		 join workspace w on w.id=b.workspace_id where b.status='running'
+		 and b.created_at < now()-($1 * interval '1 second')
+		 order by b.created_at limit 16`,
+		[ENVIRONMENT_BUILD_RECOVERY_SECONDS],
+	);
+	const recovered = await Promise.allSettled(
+		expired.rows.map((row) =>
+			finishEnvironmentBuild(
+				{
+					workspaceId: row.workspace_id,
+					userId: row.user_id,
+				},
+				row.id,
+				runtime,
+			),
+		),
+	);
+	return {
+		recovered: recovered.filter((result) => result.status === "fulfilled")
+			.length,
+		failed: recovered.filter((result) => result.status === "rejected").length,
+	};
 }
 
 /** Authorization/source failures happen before a build claim but must not leave setup queued. */

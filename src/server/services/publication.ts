@@ -187,6 +187,8 @@ export function publishProject(
 				},
 				{
 					owner: checkout.owner,
+					userId,
+					projectId: input.projectId,
 					name: checkout.name,
 					branch: head,
 					baseBranch: base,

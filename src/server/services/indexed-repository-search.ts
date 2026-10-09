@@ -1,5 +1,8 @@
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
+export const indexedRepositorySearchEnabled = (setting: string | undefined) =>
+	setting === undefined || setting === "1";
+
 export function repositorySearchCommand(input: {
 	cwd: string;
 	query: string;
@@ -8,9 +11,16 @@ export function repositorySearchCommand(input: {
 	wordBoundary?: boolean;
 	useIndex?: boolean;
 }) {
-	if (!input.useIndex)
-		return `git --literal-pathspecs -C ${quote(input.cwd)} grep --untracked --exclude-standard -n -I ${input.literal ? "-F " : ""}${input.wordBoundary ? "-w " : ""}-e ${quote(input.query)} -- ${quote(input.path)}`;
-	return `python3 -c ${quote(INDEXED_SEARCH_SOURCE)} ${quote(JSON.stringify(input))}`;
+	const direct = `git --literal-pathspecs -C ${quote(input.cwd)} grep --untracked --exclude-standard -n -I ${input.literal ? "-F " : ""}${input.wordBoundary ? "-w " : ""}-e ${quote(input.query)} -- ${quote(input.path)}`;
+	if (
+		!input.useIndex ||
+		input.query.length < 3 ||
+		[...input.query].some((character) => character.charCodeAt(0) > 127) ||
+		/[\r\n]/.test(input.query) ||
+		(!input.literal && !/^[A-Za-z0-9_]+$/.test(input.query))
+	)
+		return direct;
+	return `if command -v python3 >/dev/null 2>&1; then python3 -c ${quote(INDEXED_SEARCH_SOURCE)} ${quote(JSON.stringify(input))}; else ${direct}; fi`;
 }
 
 // The index only selects candidates. Git owns matching, exclusions, and output.

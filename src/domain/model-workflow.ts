@@ -1,7 +1,16 @@
 import { z } from "zod";
 
-export const MAX_WORKFLOW_MODEL_STEPS = 30;
+const COORDINATION_MODEL_STEPS = 30;
+const IMPLEMENTATION_MODEL_STEPS = 128;
+export const MAX_WORKFLOW_MODEL_STEPS = IMPLEMENTATION_MODEL_STEPS;
 export const MODEL_WORKFLOW_DEADLINE_MS = 30 * 60 * 1000;
+
+/** More tool iterations do not extend a turn's deadline or bypass token admission. */
+export function modelStepLimit(surface: "coordination" | "implementation") {
+	return surface === "implementation"
+		? IMPLEMENTATION_MODEL_STEPS
+		: COORDINATION_MODEL_STEPS;
+}
 export const workflowTurnSchema = z
 	.object({
 		turnId: z.uuid(),

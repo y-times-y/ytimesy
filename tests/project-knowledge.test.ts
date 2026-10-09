@@ -80,7 +80,7 @@ it("makes maintained Markdown available to a new root and relevant children", as
 			{ ...session, parentSessionId: "parent" },
 			"Change avatar",
 		),
-	).toBe("");
+	).toContain("[[memory/branches]]");
 	await rememberCloudProjectKnowledge(session, {
 		...entry,
 		content: "Corrected path",

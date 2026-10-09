@@ -68,6 +68,16 @@ it("does not repeat an acknowledged check-in across restarts", async () => {
 	await superviseAgentChildren({} as never, 120000);
 	expect(mocks.notify).not.toHaveBeenCalled();
 });
+it("leaves progressing children alone until the bounded long-running check-in", async () => {
+	for (const now of [300000, 600000, 900000]) {
+		mocks.query.mockResolvedValue({
+			rows: [{ ...child, updated_at: new Date(now) }],
+		});
+		await superviseAgentChildren({} as never, now);
+	}
+	expect(mocks.notify).toHaveBeenCalledOnce();
+	expect(mocks.notify.mock.calls[0][2]).toBe("supervision-turn-3");
+});
 it("rechecks child state before waking the parent", async () => {
 	mocks.owner.mockImplementation(async (_owner, id) => ({
 		id,

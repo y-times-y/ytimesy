@@ -2,6 +2,9 @@ import { randomUUID } from "node:crypto";
 import type { ModelMessage, ToolSet } from "ai";
 import { z } from "zod";
 import type { ApiAgentEvent } from "#/domain/api-agent-event";
+import { InitialAgentReadFailure } from "#/domain/api-turn-failure";
+
+const initialReadOutput = z.json();
 
 /** Execute the existing authorized read tools before the first inference, not a model-authored plan or a substitute for reading. */
 export async function prefetchInitialAgentReads(input: {
@@ -17,19 +20,22 @@ export async function prefetchInitialAgentReads(input: {
 		return input.messages;
 	if (typeof input.tools.read_repository_guidance?.execute !== "function")
 		return input.messages;
-	const requests = [
+	const requests: {
+		name: ConstructorParameters<typeof InitialAgentReadFailure>[0];
+		arguments: Record<string, string>;
+	}[] = [
 		{ name: "read_repository_guidance", arguments: { scope: "." } },
 		...(!input.coordination
-			? [
+			? ([
 					{ name: "read_environment_report", arguments: {} },
 					{ name: "inspect_changes", arguments: {} },
-				]
+				] as const)
 			: []),
 		...(input.coordination
-			? [{ name: "read_task_capacity", arguments: {} }]
+			? ([{ name: "read_task_capacity", arguments: {} }] as const)
 			: []),
 	];
-	const results = await Promise.all(
+	const settled = await Promise.allSettled(
 		requests.map(async (request) => {
 			const execute = input.tools[request.name]?.execute;
 			if (typeof execute !== "function") return null;
@@ -45,14 +51,28 @@ export async function prefetchInitialAgentReads(input: {
 				name: request.name,
 				input: request.arguments,
 			});
-			const value = await execute(request.arguments, {
-				toolCallId: id,
-				messages: input.messages,
-				abortSignal: input.signal,
-				context: {},
-			});
-			input.signal.throwIfAborted();
-			const output = z.json().parse(value);
+			let output: z.infer<typeof initialReadOutput>;
+			try {
+				const value = await execute(request.arguments, {
+					toolCallId: id,
+					messages: input.messages,
+					abortSignal: input.signal,
+					context: {},
+				});
+				input.signal.throwIfAborted();
+				output = initialReadOutput.parse(value);
+			} catch {
+				const failure = new InitialAgentReadFailure(request.name);
+				await input.onEvent({
+					type: "tool-result",
+					id,
+					name: request.name,
+					output: { error: failure.message },
+					failed: true,
+				});
+				input.signal.throwIfAborted();
+				throw failure;
+			}
 			await input.onEvent({
 				type: "tool-result",
 				id,
@@ -63,6 +83,11 @@ export async function prefetchInitialAgentReads(input: {
 		}),
 	);
 	input.signal.throwIfAborted();
+	const failure = settled.find((result) => result.status === "rejected");
+	if (failure?.status === "rejected") throw failure.reason;
+	const results = settled.flatMap((result) =>
+		result.status === "fulfilled" ? [result.value] : [],
+	);
 	const reads = results.filter((result) => result !== null);
 	return [
 		...(input.cacheStablePrefix ? [] : input.messages),

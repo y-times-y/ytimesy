@@ -146,7 +146,7 @@ it("records outcomes only after execution and does not leak messages into the re
 	expect(mocks.complete).toHaveBeenCalledWith(step, "continue");
 });
 
-it("fences expired turns immediately and makes step 31 a no-inference failure", async () => {
+it("fences expired turns immediately and makes the overflow step a no-inference failure", async () => {
 	mocks.claim.mockResolvedValue({ kind: "claimed", turn: {}, remainingMs: 0 });
 	mocks.run.mockImplementation(async (_machines, _turn, options) => {
 		expect(options.signal.aborted).toBe(true);
@@ -154,7 +154,7 @@ it("fences expired turns immediately and makes step 31 a no-inference failure", 
 		return "cancelled";
 	});
 	await executeWorkflowRequest(
-		await request(JSON.stringify({ ...step, index: 31 })),
+		await request(JSON.stringify({ ...step, index: 129 })),
 		secret,
 		machines,
 	);

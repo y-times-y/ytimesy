@@ -77,6 +77,7 @@ export function cloudAgentRoleInstructions(session: {
 	if (!session.parentSessionId)
 		return [
 			"You are the read-only lead: inspect, coordinate and answer simple questions directly; never edit the root workspace.",
+			"Check capabilities; read completed child summaries.",
 			LEAD_IMPLEMENTATION_POLICY,
 			CONTRACT_BOUNDARY_EVIDENCE_POLICY,
 			LEAD_INDEPENDENT_CONTRACT_POLICY,
@@ -92,6 +93,11 @@ export function cloudAgentRoleInstructions(session: {
 		].join(" ");
 	return [
 		agentSessionRoleInstructions(session),
+		...(session.taskAccess !== "read_write"
+			? [
+					"This cloud read-only child has no shell/test runner. Do not search for or promise command execution; report source-only verification limits and ask the lead for an authorized isolated verification task when executable evidence is necessary.",
+				]
+			: []),
 		COMPLETION_GATE_POLICY,
 		CONTRACT_BOUNDARY_EVIDENCE_POLICY,
 		BUILDER_CHECK_RECEIPT_POLICY,

@@ -6,6 +6,7 @@ import {
 	mkdtemp,
 	realpath,
 	rm,
+	symlink,
 	writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -14,10 +15,18 @@ import { promisify } from "node:util";
 import { expect, it } from "vitest";
 import {
 	INDEXED_SEARCH_SOURCE,
+	indexedRepositorySearchEnabled,
 	repositorySearchCommand,
 } from "./indexed-repository-search";
 
 const run = promisify(execFile);
+
+it("enables indexed search by default with an explicit operator opt-out", () => {
+	expect(indexedRepositorySearchEnabled(undefined)).toBe(true);
+	expect(indexedRepositorySearchEnabled("1")).toBe(true);
+	expect(indexedRepositorySearchEnabled("0")).toBe(false);
+	expect(indexedRepositorySearchEnabled("invalid")).toBe(false);
+});
 const fixtureIndexSource = INDEXED_SEARCH_SOURCE.replace(
 	"MIN_INDEX_BYTES = 16 * 1024 * 1024",
 	"MIN_INDEX_BYTES = 0",
@@ -206,6 +215,36 @@ it("executes hostile query text as data on the native fallback", async () => {
 			code: 1,
 		});
 		await expect(access(marker)).rejects.toThrow();
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+it("keeps search usable without Python and bypasses index startup for regexes", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "ytimesy-search-fallback-"));
+	try {
+		await run("git", ["init", "-q", cwd]);
+		await writeFile(join(cwd, "source.txt"), "identifier\n");
+		const bin = join(cwd, "bin");
+		await mkdir(bin);
+		const git = (await run("which", ["git"])).stdout.trim();
+		await symlink(git, join(bin, "git"));
+		const search = { cwd, path: ".", literal: true, useIndex: true };
+		const result = await run(
+			"/bin/sh",
+			[
+				"-c",
+				repositorySearchCommand({
+					...search,
+					query: "identifier",
+				}),
+			],
+			{ env: { ...process.env, PATH: bin } },
+		);
+		expect(result.stdout).toBe("source.txt:1:identifier\n");
+		expect(
+			repositorySearchCommand({ ...search, literal: false, query: "foo.*bar" }),
+		).not.toContain("python3");
 	} finally {
 		await rm(cwd, { recursive: true, force: true });
 	}
