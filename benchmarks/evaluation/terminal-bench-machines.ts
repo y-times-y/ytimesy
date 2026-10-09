@@ -16,6 +16,7 @@ import type {
 	CommandOutput,
 	WorkspaceMachines,
 } from "../../src/server/services/workspace-machines";
+import { terminalBenchHostCommand } from "./terminal-bench-host-command";
 
 const pinnedImage = z.string().regex(/^[\w./:-]+@sha256:[a-f0-9]{64}$/);
 const artifactPath = z
@@ -137,7 +138,7 @@ export const terminalBenchExecCommand = (command: string, timeoutMs: number) =>
 	]);
 
 export const terminalBenchShellPrerequisites = `apt-get update -qq
-apt-get install -y -qq git python3 curl xz-utils ca-certificates ripgrep
+apt-get install -y -qq git python3 curl xz-utils ca-certificates ripgrep tmux
 rg --version
 printf 'ytimesy-rg-preflight\\n' | rg --fixed-strings --quiet ytimesy-rg-preflight`;
 
@@ -173,24 +174,7 @@ export function createTerminalBenchMachines(input: {
 		command: string,
 		timeoutMs = 120000,
 	): Promise<CommandOutput> => {
-		const bounded = Math.max(1000, Math.min(timeoutMs, 1820000));
-		const result = await owned(id).exec({
-			command: posixShellCommand([
-				"timeout",
-				"--signal=TERM",
-				"--kill-after=5s",
-				String(Math.max(1, Math.ceil((bounded - 10000) / 1000))),
-				"bash",
-				"-lc",
-				command,
-			]),
-			timeoutMs: bounded,
-		});
-		return {
-			exitCode: result.statusCode ?? 124,
-			stdout: result.stdout ?? "",
-			stderr: result.stderr ?? "",
-		};
+		return terminalBenchHostCommand(owned(id), command, timeoutMs);
 	};
 	const checkedHostExec = async (
 		id: string,
