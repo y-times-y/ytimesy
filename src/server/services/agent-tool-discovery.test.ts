@@ -13,6 +13,31 @@ const definition = () =>
 		execute: async () => ({}),
 	});
 
+it("keeps everyday editor schemas stable after their first use and checkpoint restore", () => {
+	const tools = {
+		apply_patch: definition(),
+		apply_patches: definition(),
+		run_checks: definition(),
+		inspect_changes: definition(),
+		browser_open: definition(),
+	};
+	const initial = discoverableAgentTools(tools, [], [], "implementation");
+	const restored = discoverableAgentTools(
+		tools,
+		[],
+		["apply_patches"],
+		"implementation",
+	);
+	for (const [name, original] of Object.entries(tools)) {
+		expect(restored[name].deferLoading).toBe(initial[name].deferLoading);
+		expect(restored[name].execute).toBe(original.execute);
+	}
+	expect(initial.apply_patches.deferLoading).toBe(false);
+	expect(initial.browser_open.deferLoading).toBe(true);
+	expect(tools.apply_patches.deferLoading).toBeUndefined();
+	expect(initial.publish_task).toBeUndefined();
+});
+
 it("offers exact edits immediately across model families", () => {
 	const tools = {
 		replace_text: definition(),
@@ -27,7 +52,7 @@ it("offers exact edits immediately across model families", () => {
 		"anthropic",
 	);
 	expect(result.replace_text.deferLoading).toBe(false);
-	expect(result.apply_patches.deferLoading).toBe(true);
+	expect(result.apply_patches.deferLoading).toBe(false);
 	expect(result.create_file.deferLoading).toBe(false);
 	expect(
 		discoverableAgentTools(tools, [], [], "implementation", "openai")
@@ -84,7 +109,7 @@ it("exposes familiar patch tools alongside the batch editor without changing exe
 		replace_text: definition(),
 	};
 	const builder = discoverableAgentTools(tools, [], [], "implementation");
-	expect(builder.apply_patches.deferLoading).toBe(true);
+	expect(builder.apply_patches.deferLoading).toBe(false);
 	for (const name of ["apply_patch", "create_file", "replace_text"])
 		expect(builder[name].deferLoading).toBe(false);
 	expect(
@@ -140,7 +165,6 @@ it("keeps specialist workflows optional and retains their discovered executors",
 		"read_code",
 		"inspect_code",
 		"inspect_code_batch",
-		"apply_patches",
 		"rename_symbol",
 		"debug_node",
 		"browser_open",
