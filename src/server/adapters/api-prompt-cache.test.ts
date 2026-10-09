@@ -108,7 +108,7 @@ it.each([
 	"google/gemini-3.8-flash",
 	"qwen/qwen3-coder-plus",
 ])(
-	"adds one gateway breakpoint for %s without changing content or tools",
+	"marks the final tool result for %s without changing other content or tools",
 	async (model) => {
 		const fetch = vi.fn<typeof globalThis.fetch>(
 			async () => new Response("{}"),
@@ -148,11 +148,19 @@ it.each([
 			{ body: JSON.stringify(body) },
 		);
 		const sent = JSON.parse(fetch.mock.calls[0][1]?.body as string);
-		expect(sent.messages[1].content[1].cache_control).toEqual({
-			type: "ephemeral",
-		});
-		delete sent.messages[1].content[1].cache_control;
-		expect(sent).toEqual(body);
+		const ephemeral = { type: "ephemeral" };
+		// The breakpoint follows the final tool result so the tool loop is cached.
+		expect(sent.messages[3].content).toEqual([
+			{ type: "text", text: "File content", cache_control: ephemeral },
+		]);
+		expect(sent.messages[0].content).toEqual(
+			model.startsWith("anthropic/")
+				? [{ type: "text", text: "Stable system", cache_control: ephemeral }]
+				: "Stable system",
+		);
+		expect(sent.messages[1]).toEqual(body.messages[1]);
+		expect(sent.messages[2]).toEqual(body.messages[2]);
+		expect(sent.tools).toEqual(body.tools);
 	},
 );
 

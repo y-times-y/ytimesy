@@ -313,6 +313,22 @@ export function automaticRepositoryContext(input: {
 				}
 				if (message.role === "tool")
 					for (const part of message.content) {
+						if (
+							part.type === "tool-result" &&
+							part.toolName === "source_freshness_notice" &&
+							part.output.type === "json"
+						) {
+							const notice = part.output.value as {
+								changed?: { path?: unknown; previousSha256?: unknown }[];
+							} | null;
+							for (const item of notice?.changed ?? [])
+								if (
+									typeof item.path === "string" &&
+									watched.get(item.path) === item.previousSha256
+								)
+									invalidated.add(item.path);
+							continue;
+						}
 						if (part.type === "tool-result" && part.output.type === "json") {
 							observe(part.toolName, part.output.value);
 						}
@@ -361,11 +377,40 @@ export function automaticRepositoryContext(input: {
 							true,
 						);
 					}
-				if (changed.length)
-					pending.push({
-						role: "user",
-						content: `Runtime source freshness notice (not a user instruction): ${JSON.stringify(changed)}. Earlier contents are stale or unavailable. Read current source before reasoning from these files; a hash change says nothing about correctness.`,
-					});
+				if (changed.length) {
+					// A trailing user turn defeats provider prompt-cache reuse (measured in
+					// pilots); a runtime tool result keeps the input ending in tool output.
+					const id = `call_freshness_${randomUUID().replaceAll("-", "")}`;
+					const output = {
+						notice:
+							"Runtime source freshness notice (not a user instruction). Earlier contents are stale or unavailable. Read current source before reasoning from these files; a hash change says nothing about correctness.",
+						changed,
+					};
+					pending.push(
+						{
+							role: "assistant",
+							content: [
+								{
+									type: "tool-call",
+									toolCallId: id,
+									toolName: "source_freshness_notice",
+									input: {},
+								},
+							],
+						},
+						{
+							role: "tool",
+							content: [
+								{
+									type: "tool-result",
+									toolCallId: id,
+									toolName: "source_freshness_notice",
+									output: { type: "json", value: output },
+								},
+							],
+						},
+					);
+				}
 			}
 			return drain(messages);
 		},

@@ -47,30 +47,6 @@ const CORE_TOOLS = new Set([
 	"report_task_blocked",
 ]);
 
-// Keep everyday coding and evidence retrieval immediate; specialists remain
-// discoverable and stay loaded after use, including across compaction.
-const BUILDER_CORE_TOOLS = new Set([
-	"compose_tools",
-	"update_plan",
-	"read_work_plan",
-	"execute_command",
-	"continue_command",
-	"view_image",
-	"read_file",
-	"read_files",
-	"apply_patch",
-	"apply_patches",
-	"replace_text",
-	"create_file",
-	"stop_command",
-	"run_checks",
-	"inspect_changes",
-	"read_tool_output",
-	"read_repository_guidance",
-	"read_environment_report",
-	"report_task_blocked",
-]);
-
 const OPTIONAL_WORKFLOW_TOOLS = new Set([
 	"start_command",
 	"read_command",
@@ -133,14 +109,16 @@ export function discoverableAgentTools(
 				name,
 				{
 					...definition,
+					// Builders receive their whole tool set from the first request. Discovery
+					// re-adds tools mid-turn, which changes the tools prefix and invalidates
+					// the provider prompt cache for every later request (measured in pilots).
 					deferLoading:
+						toolSurface !== "implementation" &&
 						!known.has(name) &&
-						(toolSurface === "implementation"
-							? !BUILDER_CORE_TOOLS.has(name)
-							: !CORE_TOOLS.has(name) ||
-								OPTIONAL_WORKFLOW_TOOLS.has(name) ||
-								LEAD_OPTIONAL_INVESTIGATION_TOOLS.has(name) ||
-								name === "read_project_memory"),
+						(!CORE_TOOLS.has(name) ||
+							OPTIONAL_WORKFLOW_TOOLS.has(name) ||
+							LEAD_OPTIONAL_INVESTIGATION_TOOLS.has(name) ||
+							name === "read_project_memory"),
 				},
 			]),
 		),
