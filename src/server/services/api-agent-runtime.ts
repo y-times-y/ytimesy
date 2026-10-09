@@ -162,12 +162,9 @@ async function prepareApiModel<T>(
 			contextWindow: context.contextWindow,
 			fallbackContextPolicy: boundPrefix ? "bound-prefix" : "whole-turns",
 			backgroundCompaction: connection.provider === "openai",
-			// Enable retirement only for the known unbound OpenAI reasoning contract.
-			// Unknown compatible routes and prefix-bound providers retain observations.
-			archiveConsumedGuidance:
-				connection.provider === "openai" ||
-				(connection.provider === "openrouter" &&
-					/^openai\//.test(input.modelId)),
+			// Preserve cached prefixes between compactions. Fresh source evidence is
+			// appended by the repository-context service, not rewritten into history.
+			archiveConsumedGuidance: false,
 			requestSettings,
 			compact:
 				context.nativeCompaction === "xai" ||

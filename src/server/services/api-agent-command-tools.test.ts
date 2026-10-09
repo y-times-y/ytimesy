@@ -16,6 +16,60 @@ const run = promisify(execFile);
 const roots: string[] = [];
 const commandRoots: string[] = [];
 
+it("shares bounded shell execution with replay protection and preserves failure output", async () => {
+	const capture = vi.fn().mockResolvedValue({
+		exitCode: 1,
+		stdout: "found source",
+		stderr: "check failed",
+		reference: "retained",
+	});
+	const receipts = new Map<string, Promise<unknown>>();
+	const controller = new AbortController();
+	const input = {
+		machines: {} as WorkspaceMachines,
+		vm: WorkspaceId("test"),
+		cwd: "/repo",
+		sessionId: crypto.randomUUID(),
+		turnId: crypto.randomUUID(),
+		readOnly: false,
+		signal: controller.signal,
+		once: (id: string, execute: () => Promise<unknown>) => {
+			const previous = receipts.get(id);
+			if (previous) return previous;
+			const receipt = execute();
+			receipts.set(id, receipt);
+			return receipt;
+		},
+		output: { capture } as unknown as ReturnType<typeof agentOutputArtifacts>,
+	};
+	const tools = apiAgentCommandTools(input);
+	const shell = tools.bash as {
+		execute: (args: object, options: object) => Promise<unknown>;
+	};
+	const args = { command: "rg -n source src" };
+	const options = { toolCallId: "shell" };
+	expect(await shell.execute(args, options)).toMatchObject({
+		exitCode: 1,
+		stderr: "check failed",
+	});
+	await shell.execute(args, options);
+	expect(capture).toHaveBeenCalledTimes(1);
+	expect(capture.mock.calls[0][0]).toContain(input.turnId);
+	expect(capture.mock.calls[0][0]).toContain("/repo");
+	expect(capture.mock.calls[0][1]).toBe(30);
+	expect(
+		apiAgentCommandTools({ ...input, readOnly: true }).bash,
+	).toBeUndefined();
+	expect(
+		apiAgentCommandTools({ ...input, output: undefined }).bash,
+	).toBeUndefined();
+	controller.abort();
+	await expect(
+		shell.execute(args, { toolCallId: "cancelled" }),
+	).rejects.toThrow();
+	expect(capture).toHaveBeenCalledTimes(1);
+});
+
 it("blocks expensive checks after failed preflight while preserving the failure receipt", async () => {
 	const check = vi.fn();
 	const failure = [
@@ -34,6 +88,40 @@ it("blocks expensive checks after failed preflight while preserving the failure 
 		}),
 	).toMatchObject({ preflightChecks: failure, checks: null });
 	expect(check).not.toHaveBeenCalled();
+});
+
+it("retains failure diagnostics even when compact check output is the default", async () => {
+	const diagnostic = {
+		reference: "failure",
+		exitCode: 1,
+		stopped: null,
+		stdout: "context",
+		stderr: "actual failure",
+		stdoutNextStart: 32000,
+		stderrNextStart: null,
+	};
+	const read = vi.fn();
+	const tools = apiAgentCommandTools({
+		machines: {} as WorkspaceMachines,
+		vm: WorkspaceId("test"),
+		cwd: "/repo",
+		sessionId: crypto.randomUUID(),
+		turnId: crypto.randomUUID(),
+		readOnly: false,
+		signal: new AbortController().signal,
+		once: async (_id, run) => run(),
+		output: {
+			capture: vi.fn().mockResolvedValue(diagnostic),
+			read,
+		} as unknown as ReturnType<typeof agentOutputArtifacts>,
+	});
+	const check = tools.run_checks as {
+		execute: (args: object, options: object) => Promise<unknown>;
+	};
+	expect(
+		await check.execute({ commands: ["check"] }, { toolCallId: "failed" }),
+	).toMatchObject([{ ...diagnostic, passed: false }]);
+	expect(read).not.toHaveBeenCalled();
 });
 
 it("runs every final check after successful preflight on the stable formatted tree", async () => {
@@ -204,7 +292,7 @@ async function call(tool: unknown, input: object) {
 	).execute(input, { toolCallId: crypto.randomUUID() });
 }
 
-it.each([false, true, "groups"] as const)(
+it.each([false, true, "groups", "groups-with-shorthand"] as const)(
 	"runs checks with explicit overlap (%s), ordered evidence and replay protection",
 	async (parallel) => {
 		let active = 0;
@@ -212,7 +300,7 @@ it.each([false, true, "groups"] as const)(
 		let sequence = 0;
 		const capture = vi.fn(async () => {
 			const index = sequence++;
-			if (parallel === "groups" && index === 2) expect(active).toBe(0);
+			if (typeof parallel === "string" && index === 2) expect(active).toBe(0);
 			active++;
 			peak = Math.max(peak, active);
 			await new Promise((resolve) => setTimeout(resolve, index === 0 ? 25 : 5));
@@ -248,8 +336,12 @@ it.each([false, true, "groups"] as const)(
 		};
 		const args = {
 			commands: ["lint", "test", "build"],
-			...(parallel === "groups"
-				? { groups: [[0, 1], [2]] }
+			outputView: "full",
+			...(typeof parallel === "string"
+				? {
+						groups: [[0, 1], [2]],
+						parallel: parallel === "groups-with-shorthand",
+					}
 				: parallel
 					? { parallel }
 					: {}),
@@ -334,7 +426,7 @@ it.each([false, true])(
 			execute: (args: object, options: object) => Promise<unknown>;
 		};
 		const result = await check.execute(
-			{ commands: ["test"], sourcePaths: ["new.ts"], outputView: "summary" },
+			{ commands: ["test"], sourcePaths: ["new.ts"] },
 			{ toolCallId: "bound" },
 		);
 		expect(result).toMatchObject([
@@ -358,6 +450,50 @@ it.each([false, true])(
 		);
 		expect(capture).toHaveBeenCalledOnce();
 		expect(read).toHaveBeenCalledTimes(2);
+		const convert = tools.run_checks.toModelOutput;
+		if (!convert) throw new Error("Check tool needs a model-output adapter");
+		const modelOutput = await convert({
+			toolCallId: "bound",
+			input: { commands: ["test"] },
+			output: result,
+		});
+		if (changed) expect(modelOutput).toEqual({ type: "json", value: result });
+		else {
+			expect(modelOutput).toMatchObject({
+				type: "json",
+				value: [
+					{
+						passed: true,
+						verification: {
+							sourcesStable: true,
+							sourcePaths: ["new.ts"],
+							fullEvidence: {
+								reference,
+								stream: "stdout",
+								start: 0,
+								view: "page",
+							},
+						},
+					},
+				],
+			});
+			expect(JSON.stringify(modelOutput)).not.toContain(
+				before.sources[0].sha256,
+			);
+			// Full evidence remains in the original event and persisted receipt.
+			expect(result).toMatchObject([{ verification: { before, after } }]);
+			const detailed = (result as Record<string, unknown>[]).map((entry) => ({
+				...entry,
+				outputView: "full",
+			}));
+			expect(
+				await convert({
+					toolCallId: "bound",
+					input: { commands: ["test"] },
+					output: detailed,
+				}),
+			).toEqual({ type: "json", value: detailed });
+		}
 	},
 );
 

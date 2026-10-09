@@ -3,6 +3,7 @@ import { agentOutputArtifacts } from "../../src/server/services/agent-output-art
 import type { AgentToolWorkspace } from "../../src/server/services/agent-tool-workspace";
 import { apiAgentCommandTools } from "../../src/server/services/api-agent-command-tools";
 import { apiAgentFileTools } from "../../src/server/services/api-agent-file-tools";
+import { apiAgentImageTools } from "../../src/server/services/api-agent-image-tools";
 import { apiAgentLanguageTools } from "../../src/server/services/api-agent-language-tools";
 import { apiAgentSearchTools } from "../../src/server/services/api-agent-search-tools";
 import { batchedAgentReads } from "../../src/server/services/batched-agent-reads";
@@ -38,6 +39,7 @@ export function evaluationBuilderTools(
 		...apiAgentFileTools({ ...execution, output, nativePatch: false }),
 		...apiAgentSearchTools({ ...execution, output }),
 		...apiAgentLanguageTools(execution),
+		...apiAgentImageTools(execution),
 		...apiAgentCommandTools({ ...execution, output }),
 		...nodeDebuggerTools(execution),
 		...dapDebuggerTools(execution),

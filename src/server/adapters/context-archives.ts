@@ -13,13 +13,25 @@ export const contextArchiveReference = z
 	.string()
 	.regex(/^context-[0-9a-f-]{36}$/);
 
+export type ContextArchiveStorage = {
+	uploadCheckpoint: typeof uploadCheckpoint;
+	downloadCheckpoint: typeof downloadCheckpoint;
+	listContextArchives: typeof listContextArchives;
+};
+const remoteStorage: ContextArchiveStorage = {
+	uploadCheckpoint,
+	downloadCheckpoint,
+	listContextArchives,
+};
+
 export async function archiveModelContext(
 	userId: string,
 	sessionId: string,
 	messages: ModelMessage[],
+	storage: ContextArchiveStorage = remoteStorage,
 ) {
 	const reference = `context-${randomUUID()}`;
-	await uploadCheckpoint(
+	await storage.uploadCheckpoint(
 		userId,
 		sessionId,
 		reference,
@@ -37,12 +49,18 @@ export async function searchModelContextArchives(
 	signal: AbortSignal,
 	messageOffset = 0,
 	alternativeQueries: string[] = [],
+	storage: ContextArchiveStorage = remoteStorage,
 ) {
 	z.string().trim().min(1).max(200).parse(query);
 	z.array(z.string().trim().min(1).max(200)).max(4).parse(alternativeQueries);
 	z.number().int().min(0).parse(messageOffset);
 	signal.throwIfAborted();
-	const references = await listContextArchives(userId, sessionId, offset, 3);
+	const references = await storage.listContextArchives(
+		userId,
+		sessionId,
+		offset,
+		3,
+	);
 	const candidates = [];
 	for (const reference of references) {
 		signal.throwIfAborted();
@@ -50,6 +68,7 @@ export async function searchModelContextArchives(
 			userId,
 			sessionId,
 			reference,
+			storage,
 		);
 		signal.throwIfAborted();
 		for (const match of searchContextMessages(
@@ -85,9 +104,10 @@ export async function readModelContextArchive(
 	userId: string,
 	sessionId: string,
 	reference: string,
+	storage: ContextArchiveStorage = remoteStorage,
 ): Promise<ModelMessage[]> {
 	contextArchiveReference.parse(reference);
-	const payload = await downloadCheckpoint(
+	const payload = await storage.downloadCheckpoint(
 		userId,
 		sessionId,
 		`${checkpointObjectPrefix(userId, sessionId)}${reference}.enc`,

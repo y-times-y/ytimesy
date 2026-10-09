@@ -1,15 +1,25 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { redactEvaluationText } from "../benchmarks/evaluation/artifacts";
 import { evaluationBuilderContext } from "../benchmarks/evaluation/builder-context";
 import { evaluationBuilderTools } from "../benchmarks/evaluation/builder-tools";
+import { localContextArchives } from "../benchmarks/evaluation/local-context-archives";
 import { createOperatorEvaluationDatabase } from "../benchmarks/evaluation/operator-database";
+import {
+	type EvaluationRequestObservation,
+	observeEvaluationRequest,
+} from "../benchmarks/evaluation/request-observation";
 import { createTerminalBenchMachines } from "../benchmarks/evaluation/terminal-bench-machines";
 import { loadTerminalBenchTask } from "../benchmarks/evaluation/terminal-bench-task";
 import { gradeTerminalBenchArtifact } from "../benchmarks/evaluation/terminal-bench-verifier";
+import {
+	evaluationObservedTokens,
+	evaluationTokenUsage,
+} from "../benchmarks/evaluation/token-usage";
+import type { ApiAgentEvent } from "../src/domain/api-agent-event";
+import { apiModelFailureClassification } from "../src/domain/api-turn-failure";
 import type { HarnessModelMetric } from "../src/domain/harness-performance";
-import { removeContextArchives } from "../src/server/adapters/checkpoints/storage";
 import { codexSubscriptionModel } from "../src/server/adapters/codex-subscription";
 import {
 	archiveModelContext,
@@ -31,9 +41,16 @@ if (
 const output = resolve(outputPath);
 if (!output.startsWith(`${resolve(".ytimesy")}/`))
 	throw new Error("Evaluation output must remain private.");
+try {
+	await access(resolve(output, "..", "stop-new-tasks"));
+	throw new Error("Operator stopped new tasks in this evaluation campaign.");
+} catch (error) {
+	if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+}
 const key = process.env.FREESTYLE_API_KEY;
 if (!key) throw new Error("Missing disposable compute connection.");
-await mkdir(output, { recursive: true, mode: 0o700 });
+await mkdir(resolve(output, ".."), { recursive: true, mode: 0o700 });
+await mkdir(output, { mode: 0o700 });
 const save = (name: string, data: unknown) =>
 	writeFile(
 		`${output}/${name}.json`,
@@ -41,6 +58,9 @@ const save = (name: string, data: unknown) =>
 		{ mode: 0o600 },
 	);
 const { task } = await loadTerminalBenchTask(resolve(taskPath));
+console.log(
+	`${task.id}: operator preflight (${mode}); no inference until guest prerequisites pass.`,
+);
 const runId = randomUUID();
 const bridge = createTerminalBenchMachines({
 	apiKey: key,
@@ -53,26 +73,46 @@ const cancel = () =>
 	stop.abort(new Error("Operator stopped builder evaluation"));
 process.on("SIGINT", cancel);
 process.on("SIGTERM", cancel);
+if (!process.env.YTIMESY_EVALUATION_CODEX_AUTH_FILE)
+	throw new Error(
+		"This private pilot requires local Codex sign-in; remote database access is disabled.",
+	);
 const local = await createOperatorEvaluationDatabase(output);
 process.env.DATABASE_URL = local.databaseUrl;
 process.env.BETTER_AUTH_SECRET = local.secret;
 let requests = 0;
+const requestObservations: EvaluationRequestObservation[] = [];
 const metrics: HarnessModelMetric[] = [];
-const events: unknown[] = [];
+const events: ApiAgentEvent[] = [];
 const toolMetrics: unknown[] = [];
-const signal = AbortSignal.any([stop.signal, AbortSignal.timeout(30 * 60_000)]);
 const sessionId = randomUUID();
+const archives = localContextArchives(
+	`${output}/context-archives`,
+	local.userId,
+	sessionId,
+);
 try {
 	// Fail before VM allocation or inference if recoverable context is unavailable.
-	const reference = await archiveModelContext(local.userId, sessionId, []);
+	const reference = await archiveModelContext(
+		local.userId,
+		sessionId,
+		[],
+		archives.storage,
+	);
 	const restored = await readModelContextArchive(
 		local.userId,
 		sessionId,
 		reference,
+		archives.storage,
 	);
 	if (restored.length) throw new Error("Archive preflight failed.");
 	const prepared = await bridge.prepare(task);
+	console.log(`${task.id}: pinned task guest prepared.`);
 	await bridge.machines.ensureRunning(prepared.vmId);
+	const signal = AbortSignal.any([
+		stop.signal,
+		AbortSignal.timeout(30 * 60_000),
+	]);
 	const workspace = {
 		machines: bridge.machines,
 		vm: prepared.vmId,
@@ -83,6 +123,7 @@ try {
 	};
 	const context = evaluationBuilderContext({
 		tools: evaluationBuilderTools(workspace),
+		storage: archives.storage,
 		workspace,
 		userId: local.userId,
 		sessionId,
@@ -98,8 +139,13 @@ try {
 		reasoning: "max",
 		fast: false,
 		billing: "codex-subscription",
+		archiveBackend: "encrypted local pilot storage; no Supabase network calls",
 		originalPrompt: task.instruction,
 		image: task.image,
+		resources: task.resources,
+		guestPrerequisites: "git, python3, Node, and installed/exercised ripgrep",
+		sourceSha256: task.sourceSha256,
+		publicFastMode: "assumed off by operator; not verified",
 		tools: Object.keys(tools),
 		requestLimit: 128,
 		timeoutSeconds: 1800,
@@ -133,18 +179,19 @@ try {
 				if (property === "doStream" || property === "doGenerate")
 					return async (...args: unknown[]) => {
 						signal.throwIfAborted();
-						const tokens = metrics.reduce(
-							(total, metric) =>
-								total +
-								(metric.input_tokens ?? 0) +
-								(metric.output_tokens ?? 0),
-							0,
-						);
+						const tokens = evaluationObservedTokens(events);
 						if (requests >= 128 || tokens >= 4000000)
 							throw new Error("Frozen evaluation guard reached.");
 						requests++;
 						await save("progress", { requests, observedTokens: tokens });
-						return value.apply(target, args);
+						return observeEvaluationRequest(
+							{ request: requests, method: property },
+							() => value.apply(target, args),
+							async (observation) => {
+								requestObservations.push(observation);
+								await save("request-attempts", requestObservations);
+							},
+						);
 					};
 				return typeof value === "function" ? value.bind(target) : value;
 			},
@@ -156,6 +203,7 @@ try {
 			runtime.requestSettings,
 		);
 		const started = Date.now();
+		console.log(`${task.id}: builder started; gpt-6.1-sol / max / Fast off.`);
 		let failure: string | null = null;
 		try {
 			await runModelAgent(
@@ -183,8 +231,12 @@ try {
 			);
 		} catch (error) {
 			failure = error instanceof Error ? error.message : "Builder failed";
+			await save("model-failure", apiModelFailureClassification(error));
 		}
 		const agentSeconds = (Date.now() - started) / 1000;
+		console.log(
+			`${task.id}: builder stopped after ${agentSeconds.toFixed(1)}s / ${requests} requests; running separate official grader.`,
+		);
 		await stopApiTurnCommands(workspace, workspace.turnId);
 		await save("trace", { events, metrics, toolMetrics });
 		const bytes = await bridge.exportArtifacts(prepared.vmId, task.artifacts);
@@ -205,19 +257,19 @@ try {
 			requests,
 			agentSeconds,
 			noLeader: true,
-			inputTokens: metrics.reduce(
-				(total, metric) => total + (metric.input_tokens ?? 0),
-				0,
-			),
-			outputTokens: metrics.reduce(
-				(total, metric) => total + (metric.output_tokens ?? 0),
-				0,
-			),
-			cacheReadTokens: metrics.reduce(
-				(total, metric) => total + (metric.cache_read_tokens ?? 0),
-				0,
-			),
+			...evaluationTokenUsage(events),
+			usageAccounting: "cumulative usage including compaction",
+			usageCompleteness:
+				failure ||
+				requestObservations.some(
+					(attempt) => attempt.outcome === "start_failed",
+				)
+					? "incomplete"
+					: "reported",
 		});
+		console.log(
+			`${task.id}: official reward ${reward}; failure ${failure ?? "none"}.`,
+		);
 	}
 } catch (error) {
 	await save("failure", {
@@ -228,10 +280,7 @@ try {
 } finally {
 	const failures: string[] = [];
 	for (const [label, operation] of [
-		[
-			"owned context archives",
-			() => removeContextArchives(local.userId, sessionId),
-		],
+		["owned context archives", () => archives.close()],
 		["owned provider resources", () => bridge.cleanup()],
 		["database connection", closeDatabase],
 		["disposable database", () => local.close()],

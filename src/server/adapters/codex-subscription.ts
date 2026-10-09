@@ -88,6 +88,7 @@ async function subscriptionRequest(userId: string, path: string) {
 			headers: {
 				Accept: "application/json",
 				"User-Agent": "ytimesy/1.0",
+				Connection: "close",
 			},
 			// Return redirects for bounded HTTP diagnostics; never forward credentials.
 			redirect: "manual",
@@ -226,6 +227,9 @@ export async function codexSubscriptionModel(
 		const headers = new Headers(init?.headers);
 		// The pinned native ChatGPT transport derives cache affinity from this header.
 		headers.set("session-id", cacheKey);
+		// Long reasoning steps leave unrelated pooled HTTP/1 sockets idle. Do not
+		// retain them across steps; this does not retry or replay a returned stream.
+		headers.set("Connection", "close");
 		return subscriptionFetch(
 			userId,
 			"codex/responses",
@@ -259,11 +263,10 @@ export async function codexSubscriptionModel(
 	return {
 		model,
 		contextWindow: selected.context_window,
-		// Fully consumed long guidance is archived after an implementation decision;
-		// remaining working-context pressure uses opaque native compaction.
-		workingContextTokens: 64_000,
-		coordinationWorkingContextTokens: 48_000,
-		archiveConsumedGuidance: true,
+		// Keep the reusable prompt prefix until the catalog's compaction limit (or
+		// the existing safety budget) is reached. Editing earlier tool receipts
+		// saves visible tokens but invalidates cached input after that position.
+		archiveConsumedGuidance: false,
 		// Initial reads use a stable preflight prefix; complete current bodies and
 		// hashed read receipts prevent a second mandatory-guidance fetch.
 		prefetchInitialReads: true,

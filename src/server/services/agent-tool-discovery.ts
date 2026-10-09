@@ -1,4 +1,5 @@
 import { type ModelMessage, type ToolSet, toolSearch } from "ai";
+import type { HarnessModelFamily } from "#/domain/harness-model-profile";
 import type { SessionItem } from "#/domain/session-item";
 
 // Common coding and coordination operations should never require a search round trip.
@@ -26,6 +27,7 @@ const CORE_TOOLS = new Set([
 	"start_command",
 	"read_command",
 	"wait_command",
+	"stop_command",
 	"run_checks",
 	"read_task_capacity",
 	"plan_parallel_work",
@@ -45,27 +47,29 @@ const CORE_TOOLS = new Set([
 	"report_task_blocked",
 ]);
 
-// Builders can still discover and invoke coordination tools when further delegation
-// is needed. Their ordinary coding requests need not repeatedly carry those schemas.
-const COORDINATION_TOOLS = new Set([
-	"read_task_capacity",
-	"plan_parallel_work",
-	"create_task",
-	"launch_ready_tasks",
-	"edit_task",
-	"start_task",
-	"list_tasks",
-	"inspect_task_diff",
-	"read_task_handoff",
-	"read_task_summary",
-	"read_task_output",
-	"read_task_checks",
-	"mark_task_reviewed",
-	"integrate_reviewed_tasks",
-	"send_task_message",
+// Keep everyday coding and evidence retrieval immediate; specialists remain
+// discoverable and stay loaded after use, including across compaction.
+const BUILDER_CORE_TOOLS = new Set([
+	"compose_tools",
+	"update_plan",
+	"read_work_plan",
+	"execute_command",
+	"continue_command",
+	"view_image",
+	"read_file",
+	"read_files",
+	"apply_patch",
+	"apply_patches",
+	"replace_text",
+	"create_file",
+	"stop_command",
+	"run_checks",
+	"inspect_changes",
+	"read_tool_output",
+	"read_repository_guidance",
+	"read_environment_report",
+	"report_task_blocked",
 ]);
-
-const SINGLE_EDIT_ALIASES = new Set(["create_file", "apply_patch"]);
 
 const OPTIONAL_WORKFLOW_TOOLS = new Set([
 	"start_command",
@@ -89,6 +93,7 @@ export function discoverableAgentTools(
 	messages: ModelMessage[],
 	checkpointTools: readonly string[] = [],
 	toolSurface: "coordination" | "implementation" = "coordination",
+	_modelFamily?: HarnessModelFamily,
 ): ToolSet {
 	if (Object.keys(tools).length === 0) return tools;
 	const known = new Set<string>(checkpointTools);
@@ -130,16 +135,12 @@ export function discoverableAgentTools(
 					...definition,
 					deferLoading:
 						!known.has(name) &&
-						(!CORE_TOOLS.has(name) ||
-							OPTIONAL_WORKFLOW_TOOLS.has(name) ||
-							(toolSurface === "coordination" &&
-								(LEAD_OPTIONAL_INVESTIGATION_TOOLS.has(name) ||
-									name === "read_project_memory")) ||
-							(toolSurface === "implementation" &&
-								(COORDINATION_TOOLS.has(name) ||
-									(Boolean(tools.apply_patches) &&
-										SINGLE_EDIT_ALIASES.has(name) &&
-										definition.type !== "provider")))),
+						(toolSurface === "implementation"
+							? !BUILDER_CORE_TOOLS.has(name)
+							: !CORE_TOOLS.has(name) ||
+								OPTIONAL_WORKFLOW_TOOLS.has(name) ||
+								LEAD_OPTIONAL_INVESTIGATION_TOOLS.has(name) ||
+								name === "read_project_memory"),
 				},
 			]),
 		),

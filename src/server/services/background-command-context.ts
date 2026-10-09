@@ -9,7 +9,12 @@ function pendingCommandReceipts(items: readonly SessionItem[]) {
 	return items.flatMap((item, index) => {
 		if (
 			item.kind !== "dynamicToolCall" ||
-			item.tool !== "start_command" ||
+			![
+				"start_command",
+				"execute_command",
+				"continue_command",
+				"browser_execute",
+			].includes(item.tool) ||
 			!item.output
 		)
 			return [];

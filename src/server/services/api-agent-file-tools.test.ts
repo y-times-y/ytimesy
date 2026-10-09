@@ -1,6 +1,13 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import {
+	mkdtemp,
+	readFile,
+	rename,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -91,6 +98,56 @@ async function call(
 		tool as { execute: (args: object, options: object) => Promise<unknown> }
 	).execute(input, { toolCallId: "edit", messages });
 }
+
+it("wires the shared shell and command lifecycle into production writers, not read-only leads", async () => {
+	const { root, machines } = await fixture();
+	const input = {
+		machines,
+		cwd: root,
+		session: {
+			id: "shell-wiring-test",
+			parentSessionId: "parent-test",
+			userId: "owner",
+			providerRef: "test-vm",
+			taskAccess: "read_write",
+		} as AgentSessionRecord,
+		turnId: "shell-wiring-test",
+		signal: new AbortController().signal,
+	};
+	const writer = apiAgentTools(input);
+	for (const name of [
+		"bash",
+		"execute_command",
+		"continue_command",
+		"start_command",
+		"wait_command",
+		"read_command",
+		"stop_command",
+		"run_checks",
+	])
+		expect(writer[name]?.execute).toBeTypeOf("function");
+	const lead = apiAgentTools({
+		...input,
+		session: { ...input.session, taskAccess: "read_only" },
+	});
+	for (const name of [
+		"bash",
+		"execute_command",
+		"continue_command",
+		"start_command",
+		"wait_command",
+		"stop_command",
+		"run_checks",
+	])
+		expect(lead[name]).toBeUndefined();
+	expect(lead.read_command.execute).toBeTypeOf("function");
+	expect(
+		apiAgentTools({
+			...input,
+			session: { ...input.session, parentSessionId: null },
+		}).bash,
+	).toBeUndefined();
+});
 
 it("reuses only freshly verified complete guidance reads and preserves explicit replay, changes and continuations", async () => {
 	const { root, tools } = await fixture();
@@ -234,6 +291,85 @@ it("rejects traversal, absolute and git-internal inspection scopes before execut
 	expect(commands).toEqual([]);
 });
 
+it("offers stat-only inspection without repeating source bodies or changing the index", async () => {
+	const { root, tools } = await fixture();
+	await writeFile(join(root, "new.txt"), "PRIVATE_SOURCE_BODY\n".repeat(2000));
+	const result = await call(tools.inspect_changes, { view: "stat" });
+	expect(result).toContain("new.txt");
+	expect(result).toContain("2000 insertions");
+	expect(result).not.toContain("PRIVATE_SOURCE_BODY");
+	expect(String(result).length).toBeLessThan(500);
+	await expect(readFile(join(root, ".git/index"))).rejects.toMatchObject({
+		code: "ENOENT",
+	});
+});
+
+it("does not advertise batch verification when its callback is unavailable", async () => {
+	const { tools } = await fixture();
+	expect(tools.apply_patches.description).not.toContain(
+		"optional verification",
+	);
+	expect(tools.apply_patches.description).toContain("run_checks separately");
+});
+
+it("reports an unstaged move as a compact rename without changing the real index", async () => {
+	const { root, tools } = await fixture();
+	const body = `${Array.from(
+		{ length: 727 },
+		(_, i) => `export const value${i} = ${i};`,
+	).join("\n")}\n`;
+	await writeFile(join(root, "old.ts"), body);
+	await run("git", ["-C", root, "add", "."]);
+	await run("git", [
+		"-C",
+		root,
+		"-c",
+		"user.name=Test",
+		"-c",
+		"user.email=test@example.invalid",
+		"commit",
+		"-qm",
+		"base",
+	]);
+	await rename(join(root, "old.ts"), join(root, "new.ts"));
+	await writeFile(
+		join(root, "new.ts"),
+		body.replace("value0 = 0", "value0 = 1"),
+	);
+	const before = await readFile(join(root, ".git/index"));
+	const result = await call(tools.inspect_changes, {});
+	if (typeof result !== "string") throw new Error("Expected a complete diff");
+	expect(result).toContain("rename from old.ts");
+	expect(result).toContain("rename to new.ts");
+	expect(result).toContain("+export const value0 = 1;");
+	expect(result.length).toBeLessThan(1000);
+	expect(await readFile(join(root, ".git/index"))).toEqual(before);
+});
+
+it("includes unborn repository changes without invoking clean/process filters or creating its real index", async () => {
+	const { root, tools } = await fixture();
+	await writeFile(join(root, ".gitattributes"), "*.ts filter=guard\n");
+	await writeFile(join(root, "new.ts"), "export const answer = 42;\n");
+	await run("git", [
+		"-C",
+		root,
+		"config",
+		"filter.guard.clean",
+		"touch filter-ran; cat",
+	]);
+	await run("git", ["-C", root, "config", "filter.guard.process", "exit 91"]);
+	await run("git", ["-C", root, "config", "filter.guard.required", "true"]);
+	expect(await call(tools.inspect_changes, {})).toContain(
+		"+export const answer = 42;",
+	);
+	await expect(readFile(join(root, "filter-ran"))).rejects.toMatchObject({
+		code: "ENOENT",
+	});
+	await expect(readFile(join(root, ".git/index"))).rejects.toMatchObject({
+		code: "ENOENT",
+	});
+});
+
 it("verifies only successfully completed batches and does not repeat writes or verification on replay", async () => {
 	const verify = vi
 		.fn()
@@ -250,7 +386,7 @@ it("verifies only successfully completed batches and does not repeat writes or v
 	const result = await call(tools.apply_patches, args);
 	expect(await readFile(join(root, "new.txt"), "utf8")).toBe("ready");
 	expect(verify).toHaveBeenCalledExactlyOnceWith(
-		{ ...args.verification, parallelChecks: false, outputView: "full" },
+		{ ...args.verification, parallelChecks: false, outputView: "summary" },
 		"edit",
 	);
 	expect(await call(tools.apply_patches, args)).toEqual(result);
@@ -609,6 +745,22 @@ it("applies maintained V4A create/update/delete operations and rejects bad conte
 	await expect(readFile(join(root, "patch.txt"))).rejects.toThrow();
 });
 
+it.each([
+	["+first\n+second\n", "first\nsecond\n"],
+	["+first\n+\n", "first\n\n"],
+	["+first\r\n+second\r\n", "first\nsecond\n"],
+	["+first\n+second", "first\nsecond"],
+])(
+	"preserves explicit final newlines in create diffs %j",
+	async (diff, expected) => {
+		const { root, tools } = await fixture();
+		await call(tools.apply_patches, {
+			operations: [{ type: "create_file", path: "created.txt", diff }],
+		});
+		expect(await readFile(join(root, "created.txt"), "utf8")).toBe(expected);
+	},
+);
+
 it("never grants patch writes to the read-only leader", async () => {
 	const { tools } = await fixture(true);
 	expect(tools.apply_patch).toBeUndefined();
@@ -700,6 +852,7 @@ it("does not edit through a symlink", async () => {
 it("only offers inspection to a read-only lead", async () => {
 	const { tools } = await fixture(true);
 	expect(Object.keys(tools)).toEqual([
+		"view_image",
 		"read_environment_report",
 		"read_files",
 		"read_file",

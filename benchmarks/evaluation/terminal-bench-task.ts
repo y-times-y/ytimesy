@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { parse } from "yaml";
 import { terminalBenchTaskSchema } from "./terminal-bench-machines";
 
@@ -9,7 +10,10 @@ export async function loadTerminalBenchTask(taskPath: string) {
 	const bytes = await readFile(`${taskPath}/task.toml`);
 	const config = JSON.parse(
 		execFileSync(
-			".ytimesy/evaluation-venv/bin/python",
+			resolve(
+				process.env.YTIMESY_EVALUATION_SUPPORT_ROOT ?? ".",
+				".ytimesy/evaluation-venv/bin/python",
+			),
 			[
 				"-c",
 				"import json,tomllib,sys; from harbor.models.task.task import strip_canary; c=tomllib.load(open(sys.argv[1], 'rb')); c['instruction']=strip_canary(open(sys.argv[2]).read()); print(json.dumps(c))",
@@ -53,6 +57,7 @@ export async function loadTerminalBenchTask(taskPath: string) {
 	});
 	return {
 		task,
+		verifierTimeoutSeconds: config.verifier.timeout_sec as number,
 		verifierImage: config.verifier.environment.docker_image as string,
 	};
 }

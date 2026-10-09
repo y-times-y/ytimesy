@@ -40,13 +40,26 @@ export function harnessModelFamily(
 export function harnessModelToolInstructions(
 	family: HarnessModelFamily,
 	nativePatch: boolean,
+	availableTools?: readonly string[],
 ) {
+	const offered = (name: string) =>
+		!availableTools || availableTools.includes(name);
+	const planning = [
+		offered("update_plan")
+			? "Keep multi-step progress/evidence in update_plan."
+			: "",
+		offered("read_work_plan")
+			? "read_work_plan recovers it after restart."
+			: "",
+	]
+		.filter(Boolean)
+		.join(" ");
 	const editing =
 		family === "openai" && nativePatch
 			? "Prefer native apply_patch with its documented V4A operation schema, never shell patches."
 			: family === "anthropic"
-				? "For small edits use replace_text with uniquely matching old/new text. Batch coherent multi-file changes with apply_patches (V4A)."
-				: "Batch coherent edits with apply_patches (V4A); use replace_text for small exact old/new replacements.";
+				? "Use replace_text for small exact uniquely matching old/new edits; apply_patch or apply_patches for V4A patches."
+				: "Use apply_patch for V4A patches or replace_text for small exact old/new edits; apply_patches can batch coherent changes.";
 	const context =
 		family === "anthropic"
 			? "Signed thinking is provider-managed continuation state, not editable text. Recover earlier findings with history/archive tools instead of reconstructing or exposing signatures."
@@ -54,11 +67,13 @@ export function harnessModelToolInstructions(
 				? "Thought signatures are provider-managed continuation state. Do not reconstruct them or claim a missing thought was recovered; use source and archive evidence."
 				: "Opaque reasoning is provider-managed state. Use recoverable source/tool evidence, not guessed reasoning, after compaction.";
 	return [
-		`Harness tool profile v3 (${family}): ${editing} ${context}`,
-		"Read current source before edits; reread after stale/ambiguous rejection. Never invent missing source from truncated output. Use read_code outlines to locate declarations in large supported source files, then exact line selections before editing. Prefer direct reads for small files; unsupported outlines require ordinary reads. Batch independent code inspections with inspect_code_batch; discover rename_symbol for symbol refactors, rename_file for semantic file moves, and inspect_code code_actions plus apply_code_action for fenced textual actions. For non-Node debugging discover prepare_code_tools and debug_program; use debug_node for Node. Order dependent calls and writes.",
-		"LSP inspection is available: inspect_code finds definitions, references, hover and diagnostics; inspect_code_batch batches queries. Missing server? Discover prepare_code_tools; never treat unavailable analysis as a clean result.",
-		"Use scoped read_repository_guidance for ancestor instructions and referenced documents. Read required bodies completely; follow truncation cursors. Reuse unchanged complete evidence, not inventories as absence proof; reread changed source. Discover optional tools with search_tools.",
-		"Include implementation and tests in one coherent patch when no intermediate observation is needed. Use apply_patches.verification for formatting, fast preflightCommands, then all required checks; otherwise use run_checks. Follow configured lint rules. Biome formatting must use --error-on-warnings; no unsafe fixes, suppressed diagnostics or weakened policy.",
-		"Verify the stable final tree; inspect resulting changes. Preserve every required check and full retained evidence. Concise runner reporting is allowed only without filtering tests or hiding warnings/errors. Each command needs its actual exit and stop status; include output references in the handoff.",
+		`Harness tool profile v8 (${family}): ${editing} ${context}`,
+		"Only offered tools are callable; do not search for absent capabilities. Use execute_command with rg, Git and project CLIs; resume yielded ids with continue_command, never restart them. stop_command cancels; view_image supplies pixels. Parallelize independent calls; compose_tools sequences steps and writes.",
+		planning,
+		"Read current source before edits; reread stale rejections. Never invent truncated source. Choose the least expensive safe workflow; use LSP when semantic uncertainty warrants it. Discover specialists with search_tools. Outlines locate, not replace source.",
+		"Use scoped read_repository_guidance; read required bodies completely with truncation cursors. Do not reread entire files just written; inventory with inspect_changes view:stat, review scoped full diffs. Reread uncertain regions.",
+		"Run the smallest executable reproduction before extensive test scaffolding. Derive expected behavior from requirements, not your patch. Fix one coherent behavior and immediately check it before expanding. Do not front-load redesign. Then persist regression coverage in existing suites; without a suite, prefer compact reproducible checks. Cover interactions; never weaken tests or invent semantics.",
+		"Batch edits/checks; apply_patches.verification only when offered, else compose_tools or run_checks. Use the configured formatter; otherwise match existing style, never invent line limits or polish untouched code. Biome: --error-on-warnings, no unsafe fixes.",
+		"Use run_checks outputView:summary; retrieve logs for failures, warnings or uncertainty. Preserve every required check and full evidence. Each command needs its actual exit and stop status and output reference. After final review and required checks pass on the stable tree, finish unless a concrete defect remains.",
 	].join(" ");
 }

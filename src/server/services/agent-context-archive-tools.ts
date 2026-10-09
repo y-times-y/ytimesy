@@ -1,6 +1,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 import {
+	type ContextArchiveStorage,
 	contextArchiveReference,
 	readModelContextArchive,
 	searchModelContextArchives,
@@ -12,6 +13,7 @@ export function agentContextArchiveTools(input: {
 	userId: string;
 	sessionId: string;
 	signal: AbortSignal;
+	storage?: ContextArchiveStorage;
 }) {
 	return {
 		read_context_archive: tool({
@@ -29,6 +31,7 @@ export function agentContextArchiveTools(input: {
 					input.userId,
 					input.sessionId,
 					reference,
+					input.storage,
 				);
 				input.signal.throwIfAborted();
 				const text = JSON.stringify(
@@ -65,6 +68,7 @@ export function agentContextArchiveTools(input: {
 					input.signal,
 					messageOffset,
 					alternativeQueries,
+					input.storage,
 				),
 		}),
 	};

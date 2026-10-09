@@ -16,6 +16,7 @@ import type { WorkspaceMachines } from "./workspace-machines";
 // Linux /proc-based ownership has separate tests. This fixture verifies real tmux/capture transport on macOS.
 vi.mock("./api-command-scope", () => ({
 	scopedShellCommand: ({ command }: { command: string }) => command,
+	stopApiCommand: async () => {},
 }));
 const run = promisify(execFile);
 const roots: string[] = [];
@@ -71,6 +72,59 @@ async function fixture() {
 		).execute(args, { toolCallId: randomUUID() });
 	return { call, workspace, sessionId, signal };
 }
+
+it("yields a running command, accepts literal stdin and resumes without reexecution", async () => {
+	const { call } = await fixture();
+	const started = (await call("execute_command", {
+		command: `python3 -u -c 'import sys; print("READY", flush=True); value=input(); print("RECEIVED:"+value, flush=True)'`,
+		maxSeconds: 30,
+		yieldSeconds: 1,
+	})) as { id: string; status: string; stdout: string };
+	expect(started).toMatchObject({
+		status: "running",
+		stdout: expect.stringContaining("READY"),
+	});
+	const completed = await call("continue_command", {
+		id: started.id,
+		chars: "literal '; $(not-a-command)\n",
+		seconds: 2,
+	});
+	expect(completed).toMatchObject({
+		id: started.id,
+		status: 0,
+		stdout: expect.stringContaining("RECEIVED:literal '; $(not-a-command)"),
+	});
+	await expect(
+		call("continue_command", {
+			id: started.id,
+			chars: "late input",
+			seconds: 0,
+		}),
+	).rejects.toThrow("not running");
+});
+
+it("returns completed commands without requiring a second model request", async () => {
+	const { call } = await fixture();
+	expect(
+		await call("execute_command", {
+			command: "printf immediate",
+			maxSeconds: 30,
+			yieldSeconds: 2,
+		}),
+	).toMatchObject({ status: 0, stdout: "immediate", nextStart: null });
+});
+
+it("sends EOF to an owned interactive command and retains failed exits", async () => {
+	const { call } = await fixture();
+	const started = (await call("execute_command", {
+		command: `python3 -u -c 'import sys; data=sys.stdin.read(); print("BYTES:"+str(len(data))); sys.exit(3)'`,
+		maxSeconds: 30,
+		yieldSeconds: 0,
+	})) as { id: string };
+	expect(
+		await call("continue_command", { id: started.id, eof: true, seconds: 2 }),
+	).toMatchObject({ status: 3, stdout: expect.stringContaining("BYTES:0") });
+});
 
 it("waits without model polling and retrieves complete background output beyond the initial page", async () => {
 	const { call, workspace, sessionId, signal } = await fixture();

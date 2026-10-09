@@ -16,6 +16,7 @@ import type {
 	CommandOutput,
 	WorkspaceMachines,
 } from "../../src/server/services/workspace-machines";
+import { terminalBenchHostCommand } from "./terminal-bench-host-command";
 
 const pinnedImage = z.string().regex(/^[\w./:-]+@sha256:[a-f0-9]{64}$/);
 const artifactPath = z
@@ -130,11 +131,16 @@ export const terminalBenchExecCommand = (command: string, timeoutMs: number) =>
 		"timeout",
 		"--signal=TERM",
 		"--kill-after=5s",
-		String(Math.max(1, Math.min(290, Math.ceil(timeoutMs / 1000)))),
+		String(Math.max(1, Math.min(1800, Math.ceil(timeoutMs / 1000)))),
 		"bash",
 		"-lc",
 		command,
 	]);
+
+export const terminalBenchShellPrerequisites = `apt-get update -qq
+apt-get install -y -qq git python3 curl xz-utils ca-certificates ripgrep tmux
+rg --version
+printf 'ytimesy-rg-preflight\\n' | rg --fixed-strings --quiet ytimesy-rg-preflight`;
 
 /** One guest VM per writer. Docker runs pinned task images and sidecars;
  * snapshots preserve the prepared environment. No platform credentials enter
@@ -168,24 +174,7 @@ export function createTerminalBenchMachines(input: {
 		command: string,
 		timeoutMs = 120000,
 	): Promise<CommandOutput> => {
-		const bounded = Math.max(1000, Math.min(timeoutMs, 300000));
-		const result = await owned(id).exec({
-			command: posixShellCommand([
-				"timeout",
-				"--signal=TERM",
-				"--kill-after=5s",
-				String(Math.max(1, Math.ceil((bounded - 10000) / 1000))),
-				"bash",
-				"-lc",
-				command,
-			]),
-			timeoutMs: bounded,
-		});
-		return {
-			exitCode: result.statusCode ?? 124,
-			stdout: result.stdout ?? "",
-			stderr: result.stderr ?? "",
-		};
+		return terminalBenchHostCommand(owned(id), command, timeoutMs);
 	};
 	const checkedHostExec = async (
 		id: string,
@@ -334,8 +323,7 @@ export function createTerminalBenchMachines(input: {
 		const installed = await machines.exec(
 			id,
 			`set -eu
-apt-get update -qq
-apt-get install -y -qq git python3 curl xz-utils ca-certificates
+${terminalBenchShellPrerequisites}
 if ! command -v node >/dev/null; then
  curl -fsSL https://nodejs.org/dist/v22.20.0/node-v22.20.0-linux-x64.tar.xz -o /tmp/ytimesy-node.tar.xz
  curl -fsSL https://nodejs.org/dist/v22.20.0/SHASUMS256.txt -o /tmp/ytimesy-node-checksums
