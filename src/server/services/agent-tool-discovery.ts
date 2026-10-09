@@ -57,6 +57,7 @@ const BUILDER_CORE_TOOLS = new Set([
 	"read_file",
 	"read_files",
 	"apply_patch",
+	"apply_patches",
 	"replace_text",
 	"create_file",
 	"stop_command",

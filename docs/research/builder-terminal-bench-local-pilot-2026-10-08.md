@@ -136,6 +136,18 @@ Docker reports no evaluation database containers. No Supabase calls, deployment,
 publication or second task occurred. The resource envelope stayed bounded; an
 actual Freestyle invoice was not fetched.
 
+## Earlier-feedback and stable-editor follow-up
+
+The public native trajectory comparison motivates two shared builder changes:
+make the existing batch editor immediate instead of discovering it mid-turn,
+and obtain a small executable debugging reproduction before preparing extensive
+test scaffolding. Specialists remain deferred. Permissions, edit executors,
+source fences, required checks, opaque context and Max reasoning are unchanged.
+Guidance requires persistent regression coverage after the fix; temporary probes
+are not a substitute for deliverable tests. No task-specific solution or public
+trajectory content enters the evaluator prompt. These are tested contracts and
+behavioral guidance, not guaranteed model compliance or a proven speedup.
+
 ## Trace-driven builder efficiency follow-up
 
 The next isolated change targets the observed tool and evidence overhead, not

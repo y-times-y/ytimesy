@@ -67,12 +67,13 @@ export function harnessModelToolInstructions(
 				? "Thought signatures are provider-managed continuation state. Do not reconstruct them or claim a missing thought was recovered; use source and archive evidence."
 				: "Opaque reasoning is provider-managed state. Use recoverable source/tool evidence, not guessed reasoning, after compaction.";
 	return [
-		`Harness tool profile v3 (${family}): ${editing} ${context}`,
+		`Harness tool profile v4 (${family}): ${editing} ${context}`,
 		"Only offered tools are callable; do not search for absent capabilities. Use execute_command with rg, Git and project CLIs; resume yielded ids with continue_command, never restart them. stop_command cancels; view_image supplies pixels. Independent calls run together; compose_tools links result-dependent steps with explicit write ordering.",
 		planning,
-		"Read current source before edits; reread stale/ambiguous rejections. Never invent truncated source. Choose the least expensive safe workflow: batch known edits; use LSP when semantic uncertainty warrants it. Discover offered specialists with search_tools. Outlines locate declarations, not replace source.",
-		"Use scoped read_repository_guidance; read required bodies completely and follow truncation cursors. Reuse unchanged complete evidence. Do not reread entire files just written alongside their full diff; inspect_changes view:stat inventories changes, then scope full review by path. Reread only uncertain regions. Always review final changes.",
-		"Implement the smallest coherent fix and focused regression tests; use table-driven cases instead of repeated scaffolding. Keep edge coverage. Batch known edits and checks; use apply_patches.verification only when offered, otherwise compose_tools or run_checks. Use the configured formatter once before checks, not manual line-by-line polishing or invented style rules. Biome requires --error-on-warnings; no unsafe fixes or weakened policy.",
+		"Read current source before edits; reread stale rejections. Never invent truncated source. Choose the least expensive safe workflow; use LSP when semantic uncertainty warrants it. Discover specialists with search_tools. Outlines locate, not replace source.",
+		"Use scoped read_repository_guidance; read required bodies completely using truncation cursors. Reuse complete evidence. Do not reread entire files just written alongside their diff; inventory with inspect_changes view:stat, then review scoped full diffs. Reread uncertain regions.",
+		"For debugging, run the smallest executable reproduction before extensive test scaffolding. Use its evidence to make a coherent fix, then persist regression coverage for changed behavior and edge cases; table-driven tests avoid duplicate scaffolding. Do not omit tests to save time.",
+		"Batch known edits/checks; apply_patches.verification only when offered, otherwise compose_tools or run_checks. Use the configured formatter, not invented style rules. Biome requires --error-on-warnings; no unsafe fixes or weakened policy.",
 		"Use run_checks outputView:summary; retrieve omitted logs for failures, warnings or uncertainty. Preserve every required check and full retained evidence. Each command needs its actual exit and stop status and output reference. After final review and required checks pass on the stable tree, finish unless a concrete unresolved defect remains.",
 	].join(" ");
 }

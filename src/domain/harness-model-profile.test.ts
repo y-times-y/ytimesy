@@ -5,6 +5,14 @@ import {
 	reconstructedContextTransition,
 } from "./harness-model-profile";
 
+it("requests early executable feedback without sacrificing durable regression coverage", () => {
+	const instructions = harnessModelToolInstructions("openai", false);
+	expect(instructions).toContain("smallest executable reproduction");
+	expect(instructions).toContain("before extensive test scaffolding");
+	expect(instructions).toContain("persist regression coverage");
+	expect(instructions).toContain("Preserve every required check");
+});
+
 it("does not send a builder searching for absent planning or delegation tools", () => {
 	const instructions = harnessModelToolInstructions("openai", false, [
 		"execute_command",
