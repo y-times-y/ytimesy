@@ -1,5 +1,8 @@
-import { generateText } from "ai";
+import { generateText, simulateReadableStream } from "ai";
+import { MockLanguageModelV4 } from "ai/test";
 import { beforeEach, expect, it, vi } from "vitest";
+import { modelContextBudget } from "../services/api-agent-context";
+import { runModelAgentStep } from "../services/model-agent-loop";
 import {
 	codexSubscriptionCatalog,
 	codexSubscriptionModel,
@@ -116,8 +119,9 @@ it("uses the account catalog and requested reasoning without advertising unsuppo
 		"high",
 	);
 	expect(runtime.contextWindow).toBe(272000);
-	expect(runtime.workingContextTokens).toBe(64_000);
-	expect(runtime.coordinationWorkingContextTokens).toBe(48_000);
+	expect(runtime).not.toHaveProperty("workingContextTokens");
+	expect(runtime).not.toHaveProperty("coordinationWorkingContextTokens");
+	expect(runtime.archiveConsumedGuidance).toBe(false);
 	expect(runtime.autoCompactTokenLimit).toBeUndefined();
 	expect(runtime.compact).toBeTypeOf("function");
 	expect(
@@ -135,6 +139,104 @@ it("uses the account catalog and requested reasoning without advertising unsuppo
 		"Connect Codex",
 	);
 });
+it.each([
+	{ measuredTokens: 70_000, providerLimit: null, compacted: false },
+	{ measuredTokens: 210_000, providerLimit: null, compacted: true },
+	{ measuredTokens: 70_000, providerLimit: 60_000, compacted: true },
+])(
+	"uses provider context pressure rather than a fixed 64K checkpoint ($measuredTokens, $providerLimit)",
+	async ({ measuredTokens, providerLimit, compacted }) => {
+		vi.spyOn(globalThis, "fetch").mockResolvedValue(
+			new Response(
+				JSON.stringify({
+					models: [
+						{
+							slug: "context-policy",
+							context_window: 272_000,
+							auto_compact_token_limit: providerLimit,
+						},
+					],
+				}),
+			),
+		);
+		const runtime = await codexSubscriptionModel(
+			`context-owner-${measuredTokens}-${providerLimit}`,
+			"context-policy",
+		);
+		const model = new MockLanguageModelV4({
+			doStream: async () => ({
+				stream: simulateReadableStream({
+					initialDelayInMs: null,
+					chunkDelayInMs: null,
+					chunks: [
+						{
+							type: "finish",
+							finishReason: { unified: "stop", raw: "stop" },
+							usage: {
+								inputTokens: {
+									total: 3,
+									noCache: 3,
+									cacheRead: 0,
+									cacheWrite: 0,
+								},
+								outputTokens: { total: 2, text: 2, reasoning: 0 },
+							},
+						},
+					],
+				}),
+			}),
+		});
+		const compact = vi.fn(async () => ({
+			messages: [{ role: "assistant" as const, content: "Native checkpoint" }],
+			usage: {
+				inputTokens: 10,
+				outputTokens: 2,
+				totalTokens: 12,
+				inputTokenDetails: {
+					noCacheTokens: 10,
+					cacheReadTokens: 0,
+					cacheWriteTokens: 0,
+				},
+				outputTokenDetails: { textTokens: 2, reasoningTokens: 0 },
+			},
+		}));
+		const archive = vi.fn(async () => "archive:fixture");
+		const restore = vi.fn(async (messages: import("ai").ModelMessage[]) => [
+			...messages,
+			{ role: "assistant" as const, content: "Restored exact instructions" },
+		]);
+		await runModelAgentStep(
+			{
+				userId: "context-owner",
+				modelId: "context-policy",
+				instructions: "Follow repository instructions",
+				messages: [{ role: "user", content: "Continue the implementation" }],
+				tools: {},
+				previousContext: {
+					tokens: measuredTokens,
+					modelContextWindow: 272_000,
+				},
+				signal: new AbortController().signal,
+				archiveHistory: archive,
+				restoreInstructions: restore,
+				onEvent: async () => {},
+				onStep: async () => {},
+			},
+			{ ...runtime, model, compact },
+		);
+		expect(compact).toHaveBeenCalledTimes(compacted ? 1 : 0);
+		expect(archive).toHaveBeenCalledTimes(compacted ? 1 : 0);
+		expect(restore).toHaveBeenCalledTimes(compacted ? 1 : 0);
+		if (compacted)
+			expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain(
+				"Restored exact instructions",
+			);
+		const budget = modelContextBudget(runtime);
+		expect(budget.compactAtTokens).toBeLessThan(budget.inputLimitTokens);
+		if (providerLimit) expect(budget.compactAtTokens).toBe(providerLimit);
+		else expect(budget.compactAtTokens).toBeGreaterThan(64_000);
+	},
+);
 const window = {
 	used_percent: 29,
 	limit_window_seconds: 604800,
