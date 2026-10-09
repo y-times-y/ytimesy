@@ -33,7 +33,8 @@ it("keeps everyday editor schemas stable after their first use and checkpoint re
 		expect(restored[name].execute).toBe(original.execute);
 	}
 	expect(initial.apply_patches.deferLoading).toBe(false);
-	expect(initial.browser_open.deferLoading).toBe(true);
+	// Builder tool sets are fixed for the whole turn to keep the cached prefix stable.
+	expect(initial.browser_open.deferLoading).toBe(false);
 	expect(tools.apply_patches.deferLoading).toBeUndefined();
 	expect(initial.publish_task).toBeUndefined();
 });
@@ -151,7 +152,7 @@ it("exposes the complete builder command lifecycle without discovery", () => {
 	).toBeUndefined();
 });
 
-it("keeps specialist workflows optional and retains their discovered executors", () => {
+it("sends builder specialist workflows from the first request with their executors", () => {
 	const names = [
 		"batch_read",
 		"list_files",
@@ -171,7 +172,7 @@ it("keeps specialist workflows optional and retains their discovered executors",
 	const first = discoverableAgentTools(tools, [], [], "implementation");
 	const resumed = discoverableAgentTools(tools, [], names, "implementation");
 	for (const name of names) {
-		expect(first[name].deferLoading).toBe(true);
+		expect(first[name].deferLoading).toBe(false);
 		expect(resumed[name].deferLoading).toBe(false);
 		expect(first[name].execute).toBe(tools[name].execute);
 		expect(resumed[name].execute).toBe(tools[name].execute);
@@ -265,7 +266,7 @@ it("does not create a tool surface for tool-free turns", () => {
 	expect(discoverableAgentTools({}, [])).toEqual({});
 });
 
-it("defers unused builder coordination schemas without removing permissions or coding tools", () => {
+it("keeps builder coordination schemas loaded so the tool prefix never changes mid-turn", () => {
 	const tools = {
 		read_file: definition(),
 		create_task: definition(),
@@ -273,8 +274,8 @@ it("defers unused builder coordination schemas without removing permissions or c
 	};
 	const builder = discoverableAgentTools(tools, [], [], "implementation");
 	expect(builder.read_file.deferLoading).toBe(false);
-	expect(builder.create_task.deferLoading).toBe(true);
-	expect(builder.read_task_output.deferLoading).toBe(true);
+	expect(builder.create_task.deferLoading).toBe(false);
+	expect(builder.read_task_output.deferLoading).toBe(false);
 	expect(builder.create_task.execute).toBe(tools.create_task.execute);
 	expect(builder.search_tools).toBeDefined();
 	expect(discoverableAgentTools(tools, []).create_task.deferLoading).toBe(

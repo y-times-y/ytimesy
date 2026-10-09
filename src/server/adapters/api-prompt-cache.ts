@@ -65,24 +65,6 @@ export function openRouterCacheFetch(
 		)
 			return fetch(url, init);
 		if (!Array.isArray(body.messages)) return fetch(url, init);
-		// Block markers preserve gateway endpoint choice; top-level Claude caching can restrict routing.
-		const message = body.messages.findLast(
-			(value: { role?: string; content?: unknown }) =>
-				(value.role === "user" || value.role === "assistant") &&
-				(typeof value.content === "string" || Array.isArray(value.content)),
-		);
-		if (!message) return fetch(url, init);
-		const content =
-			typeof message.content === "string"
-				? [{ type: "text", text: message.content }]
-				: message.content;
-		const lastText = content.findLastIndex(
-			(part: { type?: string; text?: unknown }) =>
-				part.type === "text" &&
-				typeof part.text === "string" &&
-				part.text.length > 0,
-		);
-		if (lastText < 0) return fetch(url, init);
 		// Do not add another breakpoint when the caller has already configured caching.
 		if (
 			body.cache_control ||
@@ -93,11 +75,64 @@ export function openRouterCacheFetch(
 			)
 		)
 			return fetch(url, init);
-		message.content = content.map((part: unknown, index: number) =>
-			index === lastText
-				? { ...(part as object), cache_control: { type: "ephemeral" } }
-				: part,
-		);
+		// Block markers preserve gateway endpoint choice; top-level Claude caching can restrict routing.
+		// Tool loops end in tool results or tool-call-only assistant turns, so the
+		// breakpoint must follow the final message of any role, not the last user text.
+		const marked = [
+			body.messages.findLastIndex((value: unknown) => markable(value)),
+		];
+		if (model.startsWith("anthropic/")) {
+			const system = body.messages.findIndex(
+				(value: { role?: string }) => value.role === "system",
+			);
+			if (
+				system >= 0 &&
+				markable(body.messages[system]) &&
+				system !== marked[0]
+			)
+				marked.push(system);
+		}
+		if (marked[0] < 0) return fetch(url, init);
+		for (const index of marked)
+			body.messages[index] = withBreakpoint(body.messages[index]);
 		return fetch(url, { ...init, body: JSON.stringify(body) });
+	};
+}
+
+type TextPart = { type?: string; text?: unknown };
+
+function textParts(content: unknown): TextPart[] | null {
+	if (typeof content === "string")
+		return content.length ? [{ type: "text", text: content }] : null;
+	return Array.isArray(content) ? (content as TextPart[]) : null;
+}
+
+function lastTextIndex(parts: TextPart[]) {
+	for (let index = parts.length - 1; index >= 0; index--) {
+		const part = parts[index];
+		if (part.type === "text" && typeof part.text === "string" && part.text)
+			return index;
+	}
+	return -1;
+}
+
+function markable(value: unknown) {
+	const message = value as { role?: string; content?: unknown };
+	if (!["system", "user", "assistant", "tool"].includes(message.role ?? ""))
+		return false;
+	const parts = textParts(message.content);
+	return parts !== null && lastTextIndex(parts) >= 0;
+}
+
+function withBreakpoint(value: { content?: unknown }) {
+	const parts = textParts(value.content) ?? [];
+	const index = lastTextIndex(parts);
+	return {
+		...value,
+		content: parts.map((part, position) =>
+			position === index
+				? { ...part, cache_control: { type: "ephemeral" } }
+				: part,
+		),
 	};
 }

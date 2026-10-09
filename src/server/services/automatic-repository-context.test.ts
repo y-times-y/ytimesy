@@ -293,11 +293,17 @@ it("loads nested instructions, detects external changes once, and rehydrates exa
 		await writeFile(join(root, "src/file.ts"), "export const value = 2;\n");
 		history = await context.prepare(history);
 		expect(history.slice(0, cachedPrefix.length)).toEqual(cachedPrefix);
+		// Ending in tool output (not a user turn) keeps the provider cache reusable.
+		expect(history.at(-1)?.role).toBe("tool");
 		expect(
 			history.filter(
 				(message) =>
-					typeof message.content === "string" &&
-					message.content.startsWith("Runtime source freshness notice"),
+					message.role === "tool" &&
+					message.content.some(
+						(part) =>
+							part.type === "tool-result" &&
+							part.toolName === "source_freshness_notice",
+					),
 			),
 		).toHaveLength(1);
 		expect(await context.prepare(history)).toEqual(history);
@@ -310,8 +316,12 @@ it("loads nested instructions, detects external changes once, and rehydrates exa
 		expect(
 			(await restarted.prepare(history)).filter(
 				(message) =>
-					typeof message.content === "string" &&
-					message.content.startsWith("Runtime source freshness notice"),
+					message.role === "tool" &&
+					message.content.some(
+						(part) =>
+							part.type === "tool-result" &&
+							part.toolName === "source_freshness_notice",
+					),
 			),
 		).toHaveLength(1);
 		const restored = await context.restoreInstructions([
@@ -412,8 +422,12 @@ it("retains freshness evidence from structured code reads", async () => {
 		expect(
 			history.filter(
 				(message) =>
-					typeof message.content === "string" &&
-					message.content.startsWith("Runtime source freshness notice"),
+					message.role === "tool" &&
+					message.content.some(
+						(part) =>
+							part.type === "tool-result" &&
+							part.toolName === "source_freshness_notice",
+					),
 			),
 		).toHaveLength(1);
 		expect(await context.prepare(history)).toEqual(history);
