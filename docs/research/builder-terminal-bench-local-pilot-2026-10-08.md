@@ -490,3 +490,31 @@ are empty and no evaluation database container remains. Live provider inventory
 returned to four VMs/five snapshots belonging to other work. The $5 resource
 envelope was retained; no actual invoice was fetched. Nothing was deployed,
 published, merged to main or pushed.
+
+### Fresh-connection result and incremental-feedback follow-up
+
+The frozen `dc72c81` transport-only attempt completed normally in 583.433
+seconds, with 10 requests and 195,652 reported tokens (178,881 input; 16,771
+output; 48,065 uncached input). Its unchanged protected grader returned reward
+**0**. This is not an accepted performance improvement. Owned cleanup passed;
+provider inventory returned to the unrelated baseline of four VMs/five snapshots.
+
+The trace reached a small executable reproduction in its third model request
+(28.219 seconds for that request), then spent 307.812 seconds generating its
+first coherent patch, including 7,250 reported reasoning tokens. A later
+110.124-second request generated a regression file. Early reproduction therefore
+did not remove the long patch-generation step or guarantee correctness.
+Model-authored checks passed, but that is not equivalent to the protected grade.
+No hidden grader source was inspected to tailor the next attempt.
+
+Shared profile v8 (`a0a58d0`) strengthens requirement-backed expectations and
+incremental coherent fix/check feedback rather than adding specialist tools,
+task hints, lower reasoning, or weaker verification. Ten instruction-contract
+tests, TypeScript checking, changed-file Biome and whitespace checks passed.
+This is guidance, not an enforced scheduler or a proven performance gain.
+
+The fresh attempt under `terminal-bench-incremental-feedback-20261008/`
+failed preflight with `fetch failed`, zero model requests, no owned cloud
+resources, and successful cleanup. Provider inventory was independently
+reachable afterward. An unchanged retry has a separate output directory so
+the failed attempt is retained. Its outcome will be recorded separately.
