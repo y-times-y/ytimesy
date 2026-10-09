@@ -617,18 +617,6 @@
 	font-size: 12px;
 	color: #fca5a5;
 }
-.harness-picker .harness-login {
-	margin: 6px;
-	padding: 8px;
-	min-width: 0;
-}
-.harness-picker .harness-login-row {
-	flex-wrap: wrap;
-}
-.harness-picker .harness-login-input {
-	min-width: 0;
-	width: 100%;
-}
 .model-picker-connect {
 	margin: 0 10px 10px;
 	border: 1px solid #555;
