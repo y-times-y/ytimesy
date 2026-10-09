@@ -88,3 +88,50 @@ Validation: the regression reproduced premature compaction before the fix. After
 the fix, 96 focused tests and the full suite passed (1,697 passed, seven skipped).
 Typecheck including workflow types, Biome, production build and `git diff --check`
 passed. No production deployment or Supabase operation was performed.
+
+## Single-task cache-fix rerun
+
+The operator approved a fresh $5 disposable-resource cap and subscription use for
+**session-window-debug only**. One builder attempt ran commit `96dc51f`; no native
+control or other task ran. Private evidence is in
+`.ytimesy/terminal-bench-cache-fix-20261008/session-window-debug/`.
+The task prompt, source hash, image, resources, model, reasoning, Fast setting and
+request/token/time guards match the preceding session attempt exactly.
+
+| Metric | Previous builder | Cache-fix builder | Public native mean |
+| --- | ---: | ---: | ---: |
+| Official reward | 1 | 1 | 4/5 trials passed |
+| Agent seconds | 699.575 | 903.952 | 541.4374 |
+| Requests, including compaction | 16 | 18 | not verified |
+| Input + output tokens | 422162 | 976950 | 374445.2 |
+| Uncached input tokens | 154711 | 156573 | 49888.6 |
+| Output tokens | 26811 | 30105 | 28196.6 |
+| Input cache hit rate | 60.87% | 83.46% | 85.59% |
+| Native compactions | 1 | 0 | not verified |
+
+**No performance win:** this attempt was 29.2% slower than the preceding builder
+and 67.0% slower than the historical native mean. Total tokens rose 131.4% versus
+the previous builder and 160.9% versus that native mean. Cache percentage improved,
+but uncached input rose 1.2%; larger retained history added substantial cached
+input instead of reducing the overall work. Subscription usage is not an API bill,
+and no actual cost advantage is established.
+
+The fifth model call alone took 417.607 seconds and returned 16,008 output tokens.
+After that implementation, the builder continued through self-tests, inspections,
+additional edits and verification. The complete model metrics sum to about 885.8
+seconds; tool durations sum to 37.4 seconds and may overlap. Removing compaction
+did not remove lengthy model generation or the extra verification/edit rounds.
+The trace does not establish that the larger context policy caused all of this
+regression: these are single stochastic attempts, not repeated paired trials.
+
+The independent unmodified grader returned reward 1; the model completed normally,
+not at a deadline. This establishes task correctness under that grader, not broad
+code-quality superiority. Public native billing, infrastructure, effective limits
+and Fast setting retain the comparison limitations above.
+
+Builder/verifier cleanup passed with empty owned VM/snapshot registries. Live
+provider inventory returned to the pre-run four VMs/five snapshots belonging to
+other work; none were deleted. The owned local archive contains no files, and
+Docker reports no evaluation database containers. No Supabase calls, deployment,
+publication or second task occurred. The resource envelope stayed bounded; an
+actual Freestyle invoice was not fetched.
