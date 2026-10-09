@@ -1,4 +1,5 @@
 import type { ModelMessage } from "ai";
+import { ApiModelPreparationFailure } from "#/domain/api-turn-failure";
 import { modelRouteId } from "#/domain/model-connection";
 import { connectedLanguageModel } from "#/server/adapters/api-model";
 import { apiPromptCacheSettings } from "#/server/adapters/api-prompt-cache";
@@ -36,11 +37,28 @@ async function withApiModel<T>(
 	input: ModelAgentInput & { connectionId: string },
 	run: (runtime: ModelAgentRuntime) => Promise<T>,
 ): Promise<T> {
+	let stage: string = "connection";
+	try {
+		return await prepareApiModel(input, run, (next) => {
+			stage = next;
+		});
+	} catch (error) {
+		if (stage === "inference" || !(error instanceof TypeError)) throw error;
+		throw new ApiModelPreparationFailure(stage);
+	}
+}
+
+async function prepareApiModel<T>(
+	input: ModelAgentInput & { connectionId: string },
+	run: (runtime: ModelAgentRuntime) => Promise<T>,
+	onStage: (stage: string) => void,
+): Promise<T> {
 	input.signal.throwIfAborted();
 	const connection = await loadModelConnection(
 		input.userId,
 		input.connectionId,
 	);
+	onStage("catalog");
 	if (
 		input.connectionRevision &&
 		connection?.revision !== input.connectionRevision
@@ -57,33 +75,37 @@ async function withApiModel<T>(
 		throw new Error(
 			"The selected model is no longer available on this connection.",
 		);
+	onStage("transport");
 	const transport = modelEndpointTransport(connection.baseUrl);
-	const apiKey = await connectionApiKey(input.userId, connection);
-	const model = connectedLanguageModel(
-		{
-			...connection,
-			modelId: input.modelId,
-			apiKey,
-		},
-		transport.fetch,
-	);
-	const cacheSettings = apiPromptCacheSettings({
-		...connection,
-		userId: input.userId,
-		connectionId: input.connectionId,
-		scopeId: input.cacheScopeId ?? "default",
-	});
-	const origin = new URL(connection.baseUrl).origin;
-	const responsesRoute =
-		connection.provider === "openai" ||
-		(connection.provider === "compatible" &&
-			["https://api.x.ai", "https://api.meta.ai"].includes(origin));
-	const boundPrefix =
-		connection.provider === "anthropic" ||
-		connection.provider === "google" ||
-		(connection.provider === "openrouter" &&
-			/^(anthropic|google)\//.test(input.modelId));
 	try {
+		onStage("credential");
+		const apiKey = await connectionApiKey(input.userId, connection);
+		onStage("model");
+		const model = connectedLanguageModel(
+			{
+				...connection,
+				modelId: input.modelId,
+				apiKey,
+			},
+			transport.fetch,
+		);
+		const cacheSettings = apiPromptCacheSettings({
+			...connection,
+			userId: input.userId,
+			connectionId: input.connectionId,
+			scopeId: input.cacheScopeId ?? "default",
+		});
+		const origin = new URL(connection.baseUrl).origin;
+		const responsesRoute =
+			connection.provider === "openai" ||
+			(connection.provider === "compatible" &&
+				["https://api.x.ai", "https://api.meta.ai"].includes(origin));
+		const boundPrefix =
+			connection.provider === "anthropic" ||
+			connection.provider === "google" ||
+			(connection.provider === "openrouter" &&
+				/^(anthropic|google)\//.test(input.modelId));
+		onStage("context");
 		const context = await readModelContext(
 			{
 				...connection,
@@ -132,6 +154,7 @@ async function withApiModel<T>(
 								}
 							: {}),
 					};
+		onStage("inference");
 		return await run({
 			model,
 			cacheSettings,

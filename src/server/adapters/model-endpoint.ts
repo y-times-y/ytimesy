@@ -3,6 +3,22 @@ import ipaddr from "ipaddr.js";
 import { Agent, fetch as transportFetch } from "undici";
 import { publicModelEndpoint } from "#/domain/model-connection";
 
+type ModelEndpointTransport = {
+	fetch: typeof globalThis.fetch;
+	close: () => Promise<void>;
+};
+const endpointFactory = new AsyncLocalStorage<
+	(baseUrl: string) => ModelEndpointTransport
+>();
+
+/** Request-local capability: the edge adapter never falls back to a Node socket. */
+export function withModelEndpointFactory<T>(
+	factory: (baseUrl: string) => ModelEndpointTransport,
+	run: () => T,
+): T {
+	return endpointFactory.run(factory, run);
+}
+
 export function isPublicModelAddress(address: string): boolean {
 	try {
 		return ipaddr.process(address).range() === "unicast";
@@ -13,6 +29,8 @@ export function isPublicModelAddress(address: string): boolean {
 
 /** Validate at socket connection time, not just when saving: DNS can change after validation. */
 export function modelEndpointTransport(baseUrl: string) {
+	const scoped = endpointFactory.getStore();
+	if (scoped) return scoped(baseUrl);
 	const allowed = new URL(publicModelEndpoint(baseUrl));
 	const dispatcher = new Agent({
 		connect: {
@@ -82,3 +100,5 @@ export function modelEndpointTransport(baseUrl: string) {
 	};
 	return { fetch, close: () => dispatcher.close() };
 }
+
+import { AsyncLocalStorage } from "node:async_hooks";

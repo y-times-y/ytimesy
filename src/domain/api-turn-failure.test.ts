@@ -58,6 +58,26 @@ function providerFailure(statusCode: number, data?: unknown) {
 	});
 }
 
+it("explains provider age confirmation without blaming the key or exposing raw errors", () => {
+	const error = new APICallError({
+		message: "Provider rejected request",
+		url: "https://openrouter.ai/api/v1/chat/completions",
+		requestBodyValues: { apiKey: "sk-private-do-not-show" },
+		statusCode: 403,
+		responseBody: JSON.stringify({
+			error: {
+				message:
+					"This model requires 18+ age confirmation. sk-private-do-not-show",
+			},
+		}),
+	});
+	const message = apiTurnFailureMessage("model", error);
+	expect(message).toContain("one-time 18+ age confirmation");
+	expect(message).toContain("model selector");
+	expect(message).not.toContain("sk-private");
+	expect(message).not.toContain("key does not have access");
+});
+
 it.each([
 	[401, "API key"],
 	[402, "insufficient credit"],
@@ -80,6 +100,28 @@ it("uses structured provider codes when HTTP 400 is too broad", () => {
 	});
 	expect(apiTurnFailureMessage("model", error)).toContain("context window");
 });
+
+it.each([
+	"Requests ending with a model turn are not supported.",
+	"Assistant prefill is not supported for this model.",
+	"Prefilling assistant responses is not supported for this model.",
+])(
+	"explains unsupported assistant prefill without echoing provider data: %s",
+	(reason) => {
+		const error = new APICallError({
+			message: reason,
+			url: "https://example.com/v1/chat/completions",
+			requestBodyValues: { apiKey: "sk-private" },
+			responseBody: JSON.stringify({
+				error: { message: `${reason} sk-private` },
+			}),
+			statusCode: 400,
+		});
+		const visible = apiTurnFailureMessage("model", error);
+		expect(visible).toContain("conversation-format failure");
+		expect(visible).not.toContain("sk-private");
+	},
+);
 
 it("classifies accepted-request stream failures without leaking payloads", () => {
 	const error = providerFailure(200, {

@@ -47,6 +47,7 @@ it("appends owner-scoped changes with explicit historical snapshot semantics", a
 		["owner", "parent"],
 	);
 	expect(second).toHaveLength(3);
+	expect(second.at(-1)?.role).toBe("user");
 	expect(JSON.stringify(second)).toContain("child");
 	expect(JSON.stringify(second)).toContain("Reuse or steer existing tasks");
 	expect(JSON.stringify(second.at(-1))).not.toContain("working");

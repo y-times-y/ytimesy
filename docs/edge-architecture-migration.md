@@ -4,6 +4,30 @@ Development status, 2026-10-08. This is a staged migration, not a completed Node
 
 ### Latest cutover gate
 
+#### End-to-end verification refresh, 2026-10-08
+
+Live development proofs now establish:
+
+- Codex subscription inference in the chat DO, actual reads from a disposable task VM, positive token usage, and persisted SSE reconnect. Active cancellation was fenced; the observed settlement was 196 ms.
+- A forced DO restart during real inference preserved its uncertain processing receipt. Replaying that model step returned 409. The deployed Background Workflow recovered the expired turn without replaying uncertain work; a fresh subsequent turn completed and read a new random marker.
+- Environment clone, exact selected branch, dependency installation marker, verification, private snapshot activation, and setup-VM pause. Isolated Git push and fetch readback also passed.
+- OpenRouter/OpenAI `gpt-6-luna` completed the same read-only model/tool proof in 20,330 ms, with 9,317 input and 156 output tokens. Positive usage/context and SSE reconnect were verified. This is a transport proof, not a coding-speed benchmark.
+- The local app was temporarily configured for edge dispatch. A real browser composer submission showed Thinking, completed through a `durable-object` turn, recorded usage/context, and restored its answer after reload. This used the existing loopback QA identity, not a new hosted OAuth login test.
+
+The API proof exposed two native edge transport boundaries: Node socket transport is not appropriate there, and Cloudflare rejects `redirect: "error"` even during Request construction. Request-local native fetch now normalizes that mode before construction, uses manual redirects, and rejects redirect responses without forwarding credentials. Fixed official provider origins/API paths are enforced. Arbitrary custom endpoints remain unsupported in the edge executor rather than losing the Node adapter's DNS/address protections.
+
+The initial OpenRouter Google `gemini-3.8-flash` and Anthropic `claude-fable-5.1` proofs returned HTTP 400. Google's captured rejection was "Requests ending with a model turn are not supported." Runtime status observations had been appended as assistant messages, inadvertently requesting assistant prefill. New observations now use input messages; legacy assistant-ending history receives an append-only continuation boundary. Existing signed/encrypted provider history is not rewritten. Regression assertions reproduced the old failure before the fix. Provider-prefill errors now report a conversation-format problem rather than suggesting invalid keys or missing credit. Direct provider keys were not available for separate live tests.
+
+The corrected Google route passed the full deployed model/tool proof in 27,312 ms; the corrected Anthropic route passed in 30,376 ms. Both independently verified the VM file read, final marker, positive usage/context, and reconnect SSE. These are bounded compatibility proofs, not coding-performance benchmarks. Both disposable VMs and isolated sessions were deleted and the execution gate restored. The corrected normal development Worker is version `2fd974fb-b33a-478f-ab57-f5356f01eea0`; temporary provider diagnostic endpoints are absent.
+
+The full local suite recorded 1,793 passes and six skips; typecheck and production build passed. Additional targeted tests cover native redirect normalization/rejection and bounded preparation errors. Disposable proof VMs were deleted. Execution gates and local dispatch were restored after the browser test; no permanent Node retirement or production cutover was performed.
+
+After the assistant-prefill fix, the full suite recorded 1,797 passes and six skips (337 passing files, one skipped file). Full project/workflow/edge typecheck, production build, selected Biome checks, and `git diff --check` passed. The regression coverage also verifies that the continuation boundary preserves opaque provider history and that surfaced prefill errors do not expose credentials.
+
+Further live provider coverage used the same deployed DO/Workflow proof, saved OpenRouter connection, random VM-file marker, and no fallback. Grok `4.7` (21,174 ms), Z.ai `glm-5.3-flash` (23,977 ms), DeepSeek `v4.1-flash` (22,925 ms), Moonshot `kimi-k3` (15,505 ms), and Mistral `large-4-0` (21,269 ms) passed real tool execution, final marker, positive usage/context, and persisted stream reconnect. Meta `muse-spark-1.3` returned HTTP 403 before inference; it remains unverified with this connection, not a passing result. Every disposable test VM and isolated session was deleted and the execution gate restored. These results cover the named models through OpenRouter, not every model variant or direct-provider credential path.
+
+The following paragraphs retain earlier verification history; this refresh supersedes their statements that active cancellation/restart and live environment activation were untested.
+
 Live isolated Git proxy push and fetch readback passed. A subscription turn also
 passed active cancellation fencing (212 ms observed settlement), followed by a
 completed fresh turn and persisted streaming reconnect. That test exposed a

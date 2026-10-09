@@ -36,6 +36,7 @@ import { executeWorkflowRequest } from "../jobs/model-workflow-executor";
 import { SqliteConversationSteps } from "./conversation-step-storage";
 import type { EdgeExecutorEnvironment } from "./environment";
 import { authorizeGitProxy } from "./github-git-authorization";
+import { withEdgeModelEndpoints } from "./model-endpoint";
 
 export { BackgroundJobWorkflow } from "./background-job-workflow";
 export { ProjectEnvironmentWorkflow } from "./environment-workflow";
@@ -124,7 +125,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 					() =>
 						withCodexSubscriptionEgress(
 							(input, options) => this.env.CODEX_EGRESS.fetch(input, options),
-							run,
+							() => withEdgeModelEndpoints(run),
 						),
 				),
 		);

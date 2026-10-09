@@ -13,6 +13,7 @@ import { readFreestyleApiKey } from "../adapters/freestyle/api-key";
 import { createFreestyleWorkspaceMachines } from "../adapters/freestyle/workspace-machines";
 import { deliverBackgroundJob } from "../services/background-job-delivery";
 import type { EdgeExecutorEnvironment } from "./environment";
+import { withEdgeModelEndpoints } from "./model-endpoint";
 
 /** Only an explicitly staged peer message is retried; uncertain side effects fail closed. */
 export class BackgroundJobWorkflow extends WorkflowEntrypoint<
@@ -74,11 +75,13 @@ export class BackgroundJobWorkflow extends WorkflowEntrypoint<
 										]);
 										return "delivered";
 									}
-									return deliverBackgroundJob(
-										createFreestyleWorkspaceMachines(
-											Effect.runSync(readFreestyleApiKey()),
+									return withEdgeModelEndpoints(() =>
+										deliverBackgroundJob(
+											createFreestyleWorkspaceMachines(
+												Effect.runSync(readFreestyleApiKey()),
+											),
+											job,
 										),
-										job,
 									);
 								},
 							),

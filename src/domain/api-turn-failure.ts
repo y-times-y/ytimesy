@@ -24,6 +24,8 @@ const FAILURE_NAMES = new Set([
 	"TimeoutError",
 	"AbortError",
 	"SafeApiModelFailure",
+	"ApiModelPreparationFailure",
+	"UnsupportedEdgeModelEndpoint",
 	"InitialAgentReadFailure",
 	"APICallError",
 	"AI_APICallError",
@@ -85,6 +87,25 @@ export class SafeApiModelFailure extends Error {
 	}
 }
 
+export class UnsupportedEdgeModelEndpoint extends Error {
+	constructor() {
+		super(
+			"Custom model endpoints are not supported by the Cloudflare executor. Select an official provider connection.",
+		);
+		this.name = "UnsupportedEdgeModelEndpoint";
+	}
+}
+
+/** Local preparation failures must not be mislabeled as provider inference failures. */
+export class ApiModelPreparationFailure extends Error {
+	constructor(stage: string) {
+		super(
+			`API model preparation failed during ${["connection", "catalog", "transport", "credential", "model", "context"].includes(stage) ? stage : "configuration"}. No inference was started. Check the connection configuration before retrying.`,
+		);
+		this.name = "ApiModelPreparationFailure";
+	}
+}
+
 /** Catalog/usage failures are not inference failures. Never retain upstream bodies. */
 export class SubscriptionMetadataFailure extends Error {
 	constructor(
@@ -135,6 +156,12 @@ const PROVIDER_FAILURE_CODES = new Set([
 	"content_filter",
 ]);
 
+function rejectsAssistantPrefill(detail: string) {
+	return /requests ending with a model turn|assistant prefill.{0,50}not supported|prefilling.{0,80}not supported/i.test(
+		detail,
+	);
+}
+
 /** Bounded diagnostics only: never log a provider message, body, URL or request. */
 export function apiModelFailureClassification(error: unknown) {
 	for (let depth = 0; depth < 3 && RetryError.isInstance(error); depth++)
@@ -182,7 +209,12 @@ export function apiModelFailureMessage(error: unknown): string {
 	// Retry wrappers carry raw request data; classify only their final error, with a bounded unwrap.
 	for (let depth = 0; depth < 3 && RetryError.isInstance(error); depth++)
 		error = error.lastError;
-	if (error instanceof SafeApiModelFailure) return error.message;
+	if (
+		error instanceof SafeApiModelFailure ||
+		error instanceof UnsupportedEdgeModelEndpoint ||
+		error instanceof ApiModelPreparationFailure
+	)
+		return error.message;
 	if (
 		error instanceof Error &&
 		error.message === "Private checkpoint storage is not configured."
@@ -199,6 +231,10 @@ export function apiModelFailureMessage(error: unknown): string {
 			error.statusCode === 400 ||
 			error.statusCode === 413 ||
 			error.statusCode === 422;
+		if (error.statusCode === 403 && /18\+ age confirmation/i.test(detail))
+			return "OpenRouter requires a one-time 18+ age confirmation for this model. Open Meta in the model selector and choose Confirm 18+, complete it in OpenRouter, then retry. Your work is preserved. No fallback was used.";
+		if (error.statusCode === 400 && rejectsAssistantPrefill(detail))
+			return "The provider rejected an assistant-prefill request (HTTP 400). This is a conversation-format failure, not an API-key or credit problem. Work is preserved; retry the turn. No fallback was used.";
 		if (code === "insufficient_quota" || code === "insufficient_credits")
 			return "The provider account has insufficient credit or quota. Add credit or choose a funded connection. No fallback was used.";
 		if (code === "rate_limit_exceeded")

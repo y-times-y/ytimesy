@@ -34,7 +34,7 @@ export async function withDelegationContext(
 		.reverse()
 		.find(
 			(message) =>
-				message.role === "assistant" &&
+				(message.role === "assistant" || message.role === "user") &&
 				typeof message.content === "string" &&
 				message.content.startsWith(PREFIX),
 		);
@@ -44,7 +44,7 @@ export async function withDelegationContext(
 	return [
 		...messages,
 		{
-			role: "assistant",
+			role: "user",
 			content,
 		},
 	];

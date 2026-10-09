@@ -252,7 +252,7 @@ export function automaticRepositoryContext(input: {
 			const ledger = watched.size
 				? [
 						{
-							role: "assistant" as const,
+							role: "user" as const,
 							content: `Runtime source read ledger: ${JSON.stringify([...watched].map(([path, sha256]) => ({ path, sha256 })))}`,
 						},
 					]
@@ -267,7 +267,7 @@ export function automaticRepositoryContext(input: {
 			// Durable step mode reconstructs read evidence from the saved transcript.
 			for (const message of messages) {
 				if (
-					message.role === "assistant" &&
+					(message.role === "assistant" || message.role === "user") &&
 					typeof message.content === "string" &&
 					message.content.startsWith("Runtime source read ledger: ")
 				) {
@@ -282,7 +282,7 @@ export function automaticRepositoryContext(input: {
 				}
 
 				if (
-					message.role === "assistant" &&
+					(message.role === "assistant" || message.role === "user") &&
 					typeof message.content === "string" &&
 					message.content.startsWith(
 						"Runtime source freshness notice (not a user instruction): ",
@@ -354,7 +354,7 @@ export function automaticRepositoryContext(input: {
 					}
 				if (changed.length)
 					pending.push({
-						role: "assistant",
+						role: "user",
 						content: `Runtime source freshness notice (not a user instruction): ${JSON.stringify(changed)}. Earlier contents are stale or unavailable. Read current source before reasoning from these files; a hash change says nothing about correctness.`,
 					});
 			}
