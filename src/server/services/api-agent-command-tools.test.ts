@@ -450,6 +450,50 @@ it.each([false, true])(
 		);
 		expect(capture).toHaveBeenCalledOnce();
 		expect(read).toHaveBeenCalledTimes(2);
+		const convert = tools.run_checks.toModelOutput;
+		if (!convert) throw new Error("Check tool needs a model-output adapter");
+		const modelOutput = await convert({
+			toolCallId: "bound",
+			input: { commands: ["test"] },
+			output: result,
+		});
+		if (changed) expect(modelOutput).toEqual({ type: "json", value: result });
+		else {
+			expect(modelOutput).toMatchObject({
+				type: "json",
+				value: [
+					{
+						passed: true,
+						verification: {
+							sourcesStable: true,
+							sourcePaths: ["new.ts"],
+							fullEvidence: {
+								reference,
+								stream: "stdout",
+								start: 0,
+								view: "page",
+							},
+						},
+					},
+				],
+			});
+			expect(JSON.stringify(modelOutput)).not.toContain(
+				before.sources[0].sha256,
+			);
+			// Full evidence remains in the original event and persisted receipt.
+			expect(result).toMatchObject([{ verification: { before, after } }]);
+			const detailed = (result as Record<string, unknown>[]).map((entry) => ({
+				...entry,
+				outputView: "full",
+			}));
+			expect(
+				await convert({
+					toolCallId: "bound",
+					input: { commands: ["test"] },
+					output: detailed,
+				}),
+			).toEqual({ type: "json", value: detailed });
+		}
 	},
 );
 

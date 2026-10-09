@@ -299,6 +299,47 @@ including runtime metric propagation and real command/check execution fixtures;
 typecheck with workflow types, Biome (937 files), production build and diff
 whitespace checks passed. The full suite was not rerun. No deployment occurred.
 
+### Frozen check-plan attempt: interrupted transport, not a speed win
+
+Commit `0856642` stopped after 272.020 seconds and three attempted requests.
+The protected grader returned reward 0: the implementation request did not
+complete. The retained safe error classification is HTTP 200 `AI_APICallError`,
+with a `TypeError` cause and nested `UND_ERR_SOCKET`. This identifies a socket
+disconnect while consuming the successful response; it does not establish
+which network peer closed the connection. It was not silently replayed.
+
+Only two requests reported usage: 11,829 input, 3,233 output and 15,062 total
+tokens, including 7,989 uncached input and 3,840 cache-read tokens. These are an
+**incomplete lower bound**, not the attempt's full cost. The 94.4-second second
+request reported 2,474 reasoning and 565 text tokens. No timing improvement is
+accepted from this failed turn. Evidence remains private at
+`.ytimesy/terminal-bench-check-plan-20261008/session-window-debug/`.
+All owned VM/snapshot registries emptied, cleanup passed, live inventory returned
+to four VMs/five snapshots and no evaluation database container remained.
+
+### Compact stable-check evidence without weakening verification
+
+The previous completed trace returned 21,664 characters from check-tool results;
+before/after verification fields alone occupied 10,512 characters across five
+successful receipts. The SDK's existing `toModelOutput` extension now sends
+successful, source-stable summary checks as source-path/stability receipts with
+an owned output-reference pointer to complete verification evidence. It leaves
+actual execution results, UI events, persisted before/after hashes, logs,
+cancellation and server completion checks intact. Full-view, failed and unstable
+receipts remain unchanged. No prior prefix-bound conversation item is rewritten.
+
+Regression tests verify the projection and recovery pointer, unchanged detailed
+and unstable views, and actual SDK checkpointing: model history contains the
+compact view while runtime events retain the full result. An older one-step
+fixture was also strengthened to discover its fixture tool explicitly and assert
+the actual successful output instead of accepting any tool-result event. This
+projection currently applies to direct `run_checks` calls; composition retains
+its full leaf results. Its live performance effect is not yet measured.
+
+Local verification: 64 focused runtime, artifact, command and completion tests
+passed (two skipped); TypeScript, Biome and production build passed. No complete
+suite or production deployment is claimed.
+
 Separately, [official custom-tool documentation](https://developers.openai.com/api/docs/guides/function-calling)
 and the installed SDK expose plain-text custom inputs. A single subscription
 no-op probe invoked its custom tool once, but failed the exact `ok` payload

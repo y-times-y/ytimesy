@@ -578,6 +578,7 @@ it("durable one-step execution checkpoints a tool result without starting a seco
 			modelId: "model",
 			messages: [{ role: "user", content: "Inspect" }],
 			instructions: "Inspect",
+			knownTools: ["inspect"],
 			tools: {
 				inspect: tool({
 					inputSchema: z.object({}),
@@ -597,7 +598,66 @@ it("durable one-step execution checkpoints a tool result without starting a seco
 	expect(result.messages.at(-1)?.role).toBe("tool");
 	expect(checkpoint).toHaveBeenCalledTimes(1);
 	expect(events.some((event) => event.type === "finish")).toBe(false);
-	expect(events.some((event) => event.type === "tool-result")).toBe(true);
+	expect(events.find((event) => event.type === "tool-result")).toMatchObject({
+		output: "verified result",
+	});
+});
+
+it("retains full tool events while checkpointing the SDK's compact model view", async () => {
+	const evidence = {
+		passed: true,
+		reference: "receipt",
+		fullEvidence: "retained-full-proof",
+	};
+	const events: ApiAgentEvent[] = [];
+	const result = await runModelAgentStep(
+		{
+			userId: "alice",
+			modelId: "model",
+			instructions: "Inspect",
+			messages: [{ role: "user", content: "Inspect" }],
+			knownTools: ["inspect"],
+			tools: {
+				inspect: tool({
+					inputSchema: z.object({}),
+					execute: async () => evidence,
+					toModelOutput: () => ({
+						type: "json",
+						value: { passed: true, reference: "receipt" },
+					}),
+				}),
+			},
+			signal: new AbortController().signal,
+			onStep: async () => {},
+			onEvent: async (event) => {
+				events.push(event);
+			},
+		},
+		{
+			model: new MockLanguageModelV4({
+				doStream: async () =>
+					stream([
+						{
+							type: "tool-call",
+							toolCallId: "inspect-1",
+							toolName: "inspect",
+							input: "{}",
+						},
+						{
+							...finish,
+							finishReason: { unified: "tool-calls", raw: "tool_calls" },
+						},
+					]),
+			}),
+		},
+	);
+	expect(events.find((event) => event.type === "tool-result")).toMatchObject({
+		output: evidence,
+	});
+	expect(JSON.stringify(result.messages.at(-1))).toContain("receipt");
+	expect(JSON.stringify(result.messages.at(-1))).not.toContain(
+		"retained-full-proof",
+	);
 });
 
 it("does not compact provider-measured small context merely because opaque state has a large wire encoding", async () => {
