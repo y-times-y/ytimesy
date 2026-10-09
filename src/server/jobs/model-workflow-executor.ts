@@ -1,35 +1,37 @@
-import { createServer } from "node:http";
 import { applyApiProgress } from "#/domain/api-progress";
 import { readBoundedRequestBody } from "#/domain/bounded-request-body";
 import { verifyDeliveryRequest } from "#/domain/delivery-auth";
 import {
 	MAX_WORKFLOW_MODEL_STEPS,
+	type WorkflowStep,
+	type WorkflowStepOutcome,
 	workflowStepSchema,
 } from "#/domain/model-workflow";
 import { prRepairDelivery } from "#/domain/pr-repair-signal";
-import { finalizeApiTurn } from "../adapters/api-turns";
+import { type ApiTurn, finalizeApiTurn } from "../adapters/api-turns";
 import { coordinateConversationTurn } from "../adapters/conversation-turn-control";
-import { modelWorkflowSigningSecret } from "../adapters/model-workflow-dispatch";
-import {
-	claimModelWorkflowStep,
-	completeModelWorkflowStep,
-} from "../adapters/model-workflow-steps";
 import { stageVerifiedPrRepairSignal } from "../services/pr-repair-webhook";
 import type { WorkspaceMachines } from "../services/workspace-machines";
 import { runApiTurn } from "./api-turn";
+
+export type WorkflowStepClaim =
+	| { kind: "claimed"; turn: ApiTurn; remainingMs: number }
+	| { kind: "done"; outcome: WorkflowStepOutcome }
+	| { kind: "cancelled"; turn: ApiTurn }
+	| { kind: "unavailable" };
+
+/** Receipts are claimed before any inference or tool side effect; unknown outcomes never replay. */
+export interface WorkflowStepReceipts {
+	claim(step: WorkflowStep): Promise<WorkflowStepClaim>;
+	complete(step: WorkflowStep, outcome: WorkflowStepOutcome): Promise<void>;
+}
 
 /** Only signed reference-only requests reach the existing owner-scoped execution path. */
 export async function executeWorkflowRequest(
 	request: Request,
 	secret: string,
 	machines: WorkspaceMachines | (() => WorkspaceMachines),
-	receipts: {
-		claim: typeof claimModelWorkflowStep;
-		complete: typeof completeModelWorkflowStep;
-	} = {
-		claim: claimModelWorkflowStep,
-		complete: completeModelWorkflowStep,
-	},
+	receipts?: WorkflowStepReceipts,
 ) {
 	const path = new URL(request.url).pathname;
 	if (
@@ -64,6 +66,7 @@ export async function executeWorkflowRequest(
 	}
 	const parsed = workflowStepSchema.safeParse(value);
 	if (!parsed.success) return new Response(null, { status: 400 });
+	if (!receipts) return new Response(null, { status: 404 });
 	const claim = await receipts.claim(parsed.data);
 	if (claim.kind === "unavailable") return new Response(null, { status: 409 });
 	if (claim.kind === "done") return Response.json({ outcome: claim.outcome });
@@ -102,60 +105,4 @@ export async function executeWorkflowRequest(
 	);
 	await receipts.complete(parsed.data, outcome);
 	return Response.json({ outcome });
-}
-
-/** A transport/execution service, not an in-memory workflow registry. No model history crosses HTTP. */
-export async function startModelWorkflowExecutor(machines: WorkspaceMachines) {
-	const secret = modelWorkflowSigningSecret();
-	const port = Number(process.env.YTIMESY_MODEL_EXECUTOR_PORT ?? 8789);
-	if (!Number.isInteger(port) || port < 1024 || port > 65535)
-		throw new Error("Invalid model executor port.");
-	const server = createServer(async (incoming, outgoing) => {
-		const disconnected = new AbortController();
-		outgoing.on("close", () => {
-			if (!outgoing.writableEnded) disconnected.abort();
-		});
-		try {
-			const parts: Buffer[] = [];
-			let length = 0;
-			for await (const part of incoming) {
-				length += part.length;
-				if (length > 1024) {
-					outgoing.writeHead(413).end();
-					return;
-				}
-				parts.push(part);
-			}
-			const headers = new Headers();
-			for (const [name, value] of Object.entries(incoming.headers))
-				if (typeof value === "string") headers.set(name, value);
-			const response = await executeWorkflowRequest(
-				new Request(`http://executor.local${incoming.url}`, {
-					method: incoming.method,
-					headers,
-					...(incoming.method === "POST"
-						? { body: Buffer.concat(parts).toString("utf8") }
-						: {}),
-					signal: disconnected.signal,
-				}),
-				secret,
-				machines,
-			);
-			outgoing.writeHead(response.status, Object.fromEntries(response.headers));
-			outgoing.end(await response.text());
-		} catch {
-			// Provider/SQL failures may include credentials; never serialize their raw messages.
-			outgoing.writeHead(503).end();
-		}
-	});
-	server.requestTimeout = 5000;
-	server.headersTimeout = 5000;
-	await new Promise<void>((resolve, reject) => {
-		server.once("error", reject);
-		server.listen(port, "0.0.0.0", resolve);
-	});
-	return () =>
-		new Promise<void>((resolve, reject) => {
-			server.close((error) => (error ? reject(error) : resolve()));
-		});
 }

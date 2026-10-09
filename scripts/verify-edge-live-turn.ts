@@ -48,7 +48,6 @@ process.env.YTIMESY_MODEL_EXECUTION_TARGET = "durable-object";
 // This approved operator proof uses its own provider-enforced seven-minute cap,
 // not the account's already-spent product allowance. No shared setting changes.
 process.env.YTIMESY_INFRASTRUCTURE_ADMISSION = "false";
-process.env.YTIMESY_MODEL_WORKFLOWS = "true";
 process.env.YTIMESY_MODEL_WORKFLOW_URL = origin;
 process.env.YTIMESY_REALTIME_URL = origin;
 process.env.YTIMESY_REALTIME_SECRET ||= JSON.parse(

@@ -92,15 +92,19 @@ it("loads the real harness bundle in workerd and rejects unsigned calls before d
 	).toBe(401);
 });
 
-it("keeps non-model routes out of the model execution service", async () => {
+it("accepts only signed repair intake and keeps it disabled until enabled", async () => {
+	const url = "http://localhost/pr-repair-event";
+	const body = "{}";
+	expect((await worker.fetch(url, { method: "POST", body })).status).toBe(401);
 	expect(
 		(
-			await worker.fetch("http://localhost/pr-repair-event", {
+			await worker.fetch(url, {
 				method: "POST",
-				body: "{}",
+				body,
+				headers: await signDeliveryRequest(secret, "POST", url, body),
 			})
 		).status,
-	).toBe(404);
+	).toBe(503);
 });
 
 it("does not admit a model Workflow while development cutover is disabled", async () => {

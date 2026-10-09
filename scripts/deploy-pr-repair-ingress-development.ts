@@ -4,14 +4,8 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect } from "effect";
-import { Freestyle } from "freestyle";
 import { App } from "octokit";
 import { closeDatabase, database } from "#/server/adapters/database";
-import { readFreestyleApiKey } from "#/server/adapters/freestyle/api-key";
-import {
-	JOB_WORKER_METADATA_PURPOSE,
-	JOB_WORKER_SLUG,
-} from "#/server/adapters/freestyle/job-worker-vm";
 import { readGitHubAppCredentials } from "#/server/adapters/github/credentials";
 import { modelWorkflowSigningSecret } from "#/server/adapters/model-workflow-dispatch";
 
@@ -20,6 +14,7 @@ const config = "wrangler.pr-repair.jsonc";
 const endpoint =
 	"https://ytimesy-pr-repair-development.example-account.workers.dev/github-repair";
 const repository = "repos/y-times-y/ytimesy";
+const edgeOrigin = "https://ytimesy-edge-executor-development.example-account.workers.dev";
 
 function command(args: string[], input?: string, env = process.env) {
 	const result = spawnSync("pnpm", args, {
@@ -42,7 +37,7 @@ function github<T>(args: string[], input?: object): T {
 	return JSON.parse(result.stdout) as T;
 }
 
-/** Reuses an owned dev executor; never creates compute or changes the shared App hook. */
+/** Forwards to the development edge executor; never creates compute or changes the shared App hook. */
 async function main() {
 	if (!process.argv.includes("--apply"))
 		throw new Error("Explicit --apply is required.");
@@ -68,26 +63,6 @@ async function main() {
 	} finally {
 		await closeDatabase();
 	}
-	const freestyle = new Freestyle({
-		apiKey: Effect.runSync(readFreestyleApiKey()),
-	});
-	const { vms } = await freestyle.vms.list({
-		slug: JOB_WORKER_SLUG,
-		metadata: `purpose:${JOB_WORKER_METADATA_PURPOSE}`,
-		limit: 2,
-	});
-	if (vms.length !== 1)
-		throw new Error("Expected one owned development worker; no VM created.");
-	const hostname = `ytimesy-model-executor-${vms[0].id.replaceAll("-", "")}.style.dev`;
-	const routes = await freestyle.tls.rules.list({ vmId: vms[0].id });
-	if (
-		!routes.rules.some(
-			(route) => route.domain === hostname && route.destination.port === 8789,
-		)
-	)
-		throw new Error(
-			"The existing signed executor route must be configured first.",
-		);
 	const credentials = await Effect.runPromise(readGitHubAppCredentials());
 	const app = new App({
 		appId: credentials.appId,
@@ -137,7 +112,7 @@ async function main() {
 			"--config",
 			config,
 			"--var",
-			`REPAIR_EXECUTOR_URL:https://${hostname}`,
+			`REPAIR_EXECUTOR_URL:${edgeOrigin}`,
 			"--secrets-file",
 			secretsFile,
 		]);
@@ -172,10 +147,8 @@ async function main() {
 		);
 		return;
 	}
-	command(["worker:vm"], undefined, {
+	command(["exec", "tsx", "scripts/deploy-edge-development.ts"], undefined, {
 		...process.env,
-		YTIMESY_WORKER_EXISTING_ONLY: "1",
-		YTIMESY_MODEL_EXECUTOR_ENABLED: "true",
 		YTIMESY_PR_REPAIR_ENABLED: "1",
 	});
 	const hook = github<{ id: number }>(

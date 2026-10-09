@@ -18,12 +18,10 @@ export function modelWorkflowSigningSecret() {
 		.digest("hex");
 }
 
-export function modelWorkflowConfiguration() {
-	if (process.env.YTIMESY_MODEL_WORKFLOWS !== "true") return null;
+function modelWorkflowConfiguration() {
 	const endpoint = process.env.YTIMESY_MODEL_WORKFLOW_URL;
+	if (!endpoint) return null;
 	const secret = modelWorkflowSigningSecret();
-	if (!endpoint)
-		throw new Error("Model workflow dispatch is enabled but not configured.");
 	const url = new URL(endpoint);
 	if (
 		url.protocol !== "https:" ||
@@ -37,6 +35,7 @@ export function modelWorkflowConfiguration() {
 	return { url: url.origin, secret };
 }
 
+/** Starts the edge Workflow for a turn the caller already claimed (operator proofs). */
 export async function dispatchModelWorkflow(turn: ApiTurn) {
 	const config = modelWorkflowConfiguration();
 	if (!config || !turn.lease_id)

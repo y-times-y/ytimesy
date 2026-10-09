@@ -29,10 +29,12 @@ import { database } from "../adapters/database";
 import { withDatabaseScope } from "../adapters/database-scope";
 import { readFreestyleApiKey } from "../adapters/freestyle/api-key";
 import { createFreestyleWorkspaceMachines } from "../adapters/freestyle/workspace-machines";
-import type { claimModelWorkflowStep } from "../adapters/model-workflow-steps";
 import { withConversationPublisher } from "../adapters/realtime-delivery";
 import { relayConversationDeliveriesOnce } from "../jobs/conversation-delivery";
-import { executeWorkflowRequest } from "../jobs/model-workflow-executor";
+import {
+	executeWorkflowRequest,
+	type WorkflowStepClaim,
+} from "../jobs/model-workflow-executor";
 import { SqliteConversationSteps } from "./conversation-step-storage";
 import type { EdgeExecutorEnvironment } from "./environment";
 import { authorizeGitProxy } from "./github-git-authorization";
@@ -133,9 +135,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	async alarm() {
 		await this.room.alarm();
 	}
-	private async claim(
-		step: WorkflowStep,
-	): ReturnType<typeof claimModelWorkflowStep> {
+	private async claim(step: WorkflowStep): Promise<WorkflowStepClaim> {
 		const receipt = this.steps.read(step);
 		if (receipt?.state === "done" && receipt.outcome)
 			return { kind: "done", outcome: receipt.outcome };
@@ -366,6 +366,29 @@ export default {
 					{ id: parsed.data.id, params: parsed.data },
 				]);
 				return new Response(null, { status: 202 });
+			}
+			if (new URL(request.url).pathname === "/pr-repair-event") {
+				const secrets = executorSecrets.parse(env);
+				return await withDatabaseScope(
+					env.HYPERDRIVE.connectionString,
+					() =>
+						withBackgroundJobDispatcher(
+							async (job) => {
+								await env.BACKGROUND_JOBS.createBatch([
+									{ id: job.id, params: job },
+								]);
+							},
+							() =>
+								executeWorkflowRequest(
+									request,
+									secrets.MODEL_WORKFLOW_SECRET,
+									() => {
+										throw new Error("Repair intake does not run model steps.");
+									},
+								),
+						),
+					null,
+				);
 			}
 			if (new URL(request.url).pathname === "/start") {
 				if (request.method !== "POST")
