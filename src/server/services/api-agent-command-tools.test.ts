@@ -90,6 +90,40 @@ it("blocks expensive checks after failed preflight while preserving the failure 
 	expect(check).not.toHaveBeenCalled();
 });
 
+it("retains failure diagnostics even when compact check output is the default", async () => {
+	const diagnostic = {
+		reference: "failure",
+		exitCode: 1,
+		stopped: null,
+		stdout: "context",
+		stderr: "actual failure",
+		stdoutNextStart: 32000,
+		stderrNextStart: null,
+	};
+	const read = vi.fn();
+	const tools = apiAgentCommandTools({
+		machines: {} as WorkspaceMachines,
+		vm: WorkspaceId("test"),
+		cwd: "/repo",
+		sessionId: crypto.randomUUID(),
+		turnId: crypto.randomUUID(),
+		readOnly: false,
+		signal: new AbortController().signal,
+		once: async (_id, run) => run(),
+		output: {
+			capture: vi.fn().mockResolvedValue(diagnostic),
+			read,
+		} as unknown as ReturnType<typeof agentOutputArtifacts>,
+	});
+	const check = tools.run_checks as {
+		execute: (args: object, options: object) => Promise<unknown>;
+	};
+	expect(
+		await check.execute({ commands: ["check"] }, { toolCallId: "failed" }),
+	).toMatchObject([{ ...diagnostic, passed: false }]);
+	expect(read).not.toHaveBeenCalled();
+});
+
 it("runs every final check after successful preflight on the stable formatted tree", async () => {
 	const stages: string[] = [];
 	await verifyPatchedCheckout({
@@ -302,6 +336,7 @@ it.each([false, true, "groups"] as const)(
 		};
 		const args = {
 			commands: ["lint", "test", "build"],
+			outputView: "full",
 			...(parallel === "groups"
 				? { groups: [[0, 1], [2]] }
 				: parallel
@@ -388,7 +423,7 @@ it.each([false, true])(
 			execute: (args: object, options: object) => Promise<unknown>;
 		};
 		const result = await check.execute(
-			{ commands: ["test"], sourcePaths: ["new.ts"], outputView: "summary" },
+			{ commands: ["test"], sourcePaths: ["new.ts"] },
 			{ toolCallId: "bound" },
 		);
 		expect(result).toMatchObject([

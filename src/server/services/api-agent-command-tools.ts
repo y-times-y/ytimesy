@@ -268,11 +268,11 @@ export function apiAgentCommandTools(
 				.min(1)
 				.max(8)
 				.optional(),
-			outputView: z.enum(["full", "summary"]).default("full"),
+			outputView: z.enum(["full", "summary"]).default("summary"),
 		});
 		tools.run_checks = tool({
 			description:
-				"Run required checks on a stable formatted tree; preserve every actual exit and stop reason. sourcePaths binds up to eight declared files to before/after hashes; changed or unavailable sources make passed:false even with exit 0. Cover all changed files across batches. outputView:summary returns bounded tails and omitted-output recovery pointers, not complete logs; retrieve full output for failures or uncertainty. Default full preserves existing behavior. parallel:true overlaps at most two genuinely independent checks; no edits or shared generated-file writes during checks. No dropped checks or invented success.",
+				"Run required checks on a stable formatted tree; preserve every actual exit and stop reason. sourcePaths binds up to eight declared files to before/after hashes; changed or unavailable sources make passed:false even with exit 0. Cover all changed files across batches. Default outputView:summary returns bounded tails and omitted-output recovery pointers, not complete logs; retrieve full output for failures, warnings or uncertainty. outputView:full returns the first complete-output page. parallel:true overlaps at most two genuinely independent checks; no edits or shared generated-file writes during checks. No dropped checks or invented success.",
 			inputSchema: checksSchema,
 			execute: (arguments_, options) =>
 				once(options.toolCallId, async () => {
@@ -343,7 +343,7 @@ export function apiAgentCommandTools(
 							if (verification)
 								await output.recordVerification(result.reference, verification);
 							const summaries =
-								outputView === "summary"
+								outputView === "summary" && result.passed
 									? await Promise.all(
 											(["stdout", "stderr"] as const).map((stream) =>
 												output.read({

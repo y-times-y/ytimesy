@@ -142,7 +142,7 @@ async function executeModelSteps(
 			onEvent: input.onEvent,
 			onToolMetric: input.onToolMetric,
 		}),
-		instructions: `${input.instructions}\n${harnessModelToolInstructions(modelFamily, input.tools.apply_patch?.type === "provider")}`,
+		instructions: `${input.instructions}\n${harnessModelToolInstructions(modelFamily, input.tools.apply_patch?.type === "provider", Object.keys(input.tools))}`,
 	};
 	input.signal.throwIfAborted();
 	const cancelled = new AbortController();

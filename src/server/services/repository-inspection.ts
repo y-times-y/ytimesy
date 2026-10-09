@@ -4,6 +4,7 @@ import { repositoryToolPath } from "./repository-tool-path";
 const INSPECT = `import os, pathlib, shutil, subprocess, sys, tempfile
 root = pathlib.Path(sys.argv[1]).resolve(strict=True)
 scope = sys.argv[2]
+diff_view = ['--stat'] if sys.argv[3] == 'stat' else []
 if not (root / scope).resolve().is_relative_to(root):
     raise ValueError('Inspection scope escaped repository')
 git = ['git', '--literal-pathspecs', '-C', str(root), '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null']
@@ -14,7 +15,7 @@ if configured.returncode not in (0, 1): raise RuntimeError('Filter configuration
 for driver in sorted(set(key.rsplit('.', 1)[0] for key in configured.stdout.decode().splitlines())):
     for setting in ('clean=', 'smudge=', 'process=', 'required=false'):
         git += ['-c', driver + '.' + setting]
-for arguments in (['status', '--short', '--untracked-files=all'], ['diff', '--cached', '--no-ext-diff', '--no-textconv', '--find-renames']):
+for arguments in (['status', '--short', '--untracked-files=all'], ['diff', '--cached', '--no-ext-diff', '--no-textconv', '--find-renames'] + diff_view):
     subprocess.run(git + arguments + ['--', scope], env=environment, check=True, timeout=20)
 files = subprocess.check_output(git + ['ls-files', '--others', '--exclude-standard', '-z', '--', scope], timeout=20).decode().split('\\0')
 regular = []
@@ -33,15 +34,20 @@ with tempfile.TemporaryDirectory(prefix='ytimesy-inspect-') as temporary:
     private_environment = dict(environment, GIT_INDEX_FILE=str(private_index))
     if regular:
         subprocess.run(git + ['add', '--intent-to-add', '--pathspec-from-file=-', '--pathspec-file-nul'], input=('\\0'.join(regular) + '\\0').encode(), env=private_environment, check=True, timeout=20)
-    subprocess.run(git + ['diff', '--no-ext-diff', '--no-textconv', '--find-renames', '--', scope], env=private_environment, check=True, timeout=20)`;
+    subprocess.run(git + ['diff', '--no-ext-diff', '--no-textconv', '--find-renames'] + diff_view + ['--', scope], env=private_environment, check=True, timeout=20)`;
 
 /** A disposable index lets Git detect unstaged renames, retaining staged evidence without altering the real index. */
-export function inspectRepositoryChangesCommand(directory: string, path = ".") {
+export function inspectRepositoryChangesCommand(
+	directory: string,
+	path = ".",
+	view: "full" | "stat" = "full",
+) {
 	return posixShellCommand([
 		"python3",
 		"-c",
 		INSPECT,
 		directory,
 		repositoryToolPath.parse(path),
+		view,
 	]);
 }
