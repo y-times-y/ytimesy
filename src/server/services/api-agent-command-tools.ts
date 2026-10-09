@@ -4,7 +4,11 @@ import { Effect } from "effect";
 import { z } from "zod";
 import { checkExecutionGroups } from "#/domain/check-execution-groups";
 import { sourceEvidenceContentsMatch } from "#/domain/project-source-evidence";
-import type { agentOutputArtifacts } from "./agent-output-artifacts";
+import type {
+	AgentOutput,
+	agentOutputArtifacts,
+	verificationReceiptSchema,
+} from "./agent-output-artifacts";
 import {
 	type AgentToolWorkspaceInput,
 	resolveToolWorkspace,
@@ -14,6 +18,12 @@ import { inspectProjectSourceEvidence } from "./project-source-evidence";
 
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 const jobId = z.string().uuid();
+type CheckResult = AgentOutput & {
+	command: string;
+	passed: boolean;
+	verification?: z.infer<typeof verificationReceiptSchema>;
+	outputView?: "summary";
+};
 
 /** Formatting must finish successfully before any checks observe the edited checkout. */
 export async function verifyPatchedCheckout(input: {
@@ -280,6 +290,33 @@ export function apiAgentCommandTools(
 			description:
 				"Run required checks on a stable formatted tree; preserve every actual exit and stop reason. sourcePaths binds up to eight declared files to before/after hashes; changed or unavailable sources make passed:false even with exit 0. Cover all changed files across batches. Default outputView:summary returns bounded tails and omitted-output recovery pointers, not complete logs; retrieve full output for failures, warnings or uncertainty. outputView:full returns the first complete-output page. parallel:true overlaps at most two genuinely independent checks; no edits or shared generated-file writes during checks. No dropped checks or invented success.",
 			inputSchema: checksSchema,
+			// The SDK keeps execution events intact; only model history uses this view.
+			toModelOutput: ({ output }) => ({
+				type: "json",
+				value: output.map((result: CheckResult) => {
+					if (
+						result.outputView !== "summary" ||
+						!result.passed ||
+						!result.verification?.sourcesStable
+					)
+						return result;
+					return {
+						...result,
+						verification: {
+							sourcesStable: true,
+							sourcePaths: result.verification.after.sources.map(
+								(source) => source.path,
+							),
+							fullEvidence: {
+								reference: result.reference,
+								stream: "stdout",
+								start: 0,
+								view: "page",
+							},
+						},
+					};
+				}),
+			}),
 			execute: (arguments_, options) =>
 				once(options.toolCallId, async () => {
 					const {
