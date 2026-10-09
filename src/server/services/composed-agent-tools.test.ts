@@ -201,3 +201,37 @@ it("validates all static arguments before a preceding mutation can execute", asy
 	).rejects.toThrow("No tools started");
 	expect(write).not.toHaveBeenCalled();
 });
+
+it("composes authorized semantic edits and batched patches in explicit order, retaining wrapper identities", async () => {
+	const calls: string[] = [];
+	const tools = Object.fromEntries(
+		["rename_symbol", "rename_file", "apply_patches"].map((name) => [
+			name,
+			tool({
+				inputSchema: z.object({}),
+				execute: async (_args, options) => {
+					calls.push(`${name}:${options.toolCallId}`);
+					return { completed: [], failedPath: null };
+				},
+			}),
+		]),
+	);
+	const { run } = fixture(tools);
+	expect(
+		await run([
+			{ id: "symbol", tool: "rename_symbol", arguments: {}, dependsOn: [] },
+			{ id: "file", tool: "rename_file", arguments: {}, dependsOn: ["symbol"] },
+			{
+				id: "patch",
+				tool: "apply_patches",
+				arguments: {},
+				dependsOn: ["symbol", "file"],
+			},
+		]),
+	).toMatchObject({ status: "completed" });
+	expect(calls).toEqual([
+		"rename_symbol:plan:step:symbol",
+		"rename_file:plan:step:file",
+		"apply_patches:plan:step:patch",
+	]);
+});

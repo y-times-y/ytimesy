@@ -29,6 +29,9 @@ const reads = new Set([
 const writes = new Set([
 	"apply_patch",
 	"replace_text",
+	"apply_patches",
+	"rename_symbol",
+	"rename_file",
 	"create_file",
 	"execute_command",
 	"continue_command",
