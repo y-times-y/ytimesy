@@ -202,12 +202,13 @@ export async function createOperatorEvaluationDatabase(directory: string) {
 			pool: local,
 			async close() {
 				await local?.end();
-				await command(["docker", "rm", "--force", container]);
+				await command(["docker", "rm", "--force", "--volumes", container]);
 			},
 		};
 	} catch (error) {
 		await local?.end();
-		if (created) await command(["docker", "rm", "--force", container]);
+		if (created)
+			await command(["docker", "rm", "--force", "--volumes", container]);
 		throw error;
 	}
 }
