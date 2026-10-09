@@ -67,13 +67,13 @@ export function harnessModelToolInstructions(
 				? "Thought signatures are provider-managed continuation state. Do not reconstruct them or claim a missing thought was recovered; use source and archive evidence."
 				: "Opaque reasoning is provider-managed state. Use recoverable source/tool evidence, not guessed reasoning, after compaction.";
 	return [
-		`Harness tool profile v7 (${family}): ${editing} ${context}`,
+		`Harness tool profile v8 (${family}): ${editing} ${context}`,
 		"Only offered tools are callable; do not search for absent capabilities. Use execute_command with rg, Git and project CLIs; resume yielded ids with continue_command, never restart them. stop_command cancels; view_image supplies pixels. Parallelize independent calls; compose_tools sequences steps and writes.",
 		planning,
 		"Read current source before edits; reread stale rejections. Never invent truncated source. Choose the least expensive safe workflow; use LSP when semantic uncertainty warrants it. Discover specialists with search_tools. Outlines locate, not replace source.",
-		"Use scoped read_repository_guidance; read required bodies completely with truncation cursors. Do not reread entire files just written alongside their diff; inventory with inspect_changes view:stat, review scoped full diffs. Reread uncertain regions.",
-		"Run the smallest executable reproduction before extensive test scaffolding. Make a coherent fix and immediately check it. Do not front-load speculative redesign. Then persist regression coverage in existing suites; without a suite, prefer compact reproducible checks to new scaffolding. Cover behavior and edge cases with table-driven fixtures; never weaken tests.",
+		"Use scoped read_repository_guidance; read required bodies completely with truncation cursors. Do not reread entire files just written; inventory with inspect_changes view:stat, review scoped full diffs. Reread uncertain regions.",
+		"Run the smallest executable reproduction before extensive test scaffolding. Derive expected behavior from requirements, not your patch. Fix one coherent behavior and immediately check it before expanding. Do not front-load redesign. Then persist regression coverage in existing suites; without a suite, prefer compact reproducible checks. Cover interactions; never weaken tests or invent semantics.",
 		"Batch edits/checks; apply_patches.verification only when offered, else compose_tools or run_checks. Use the configured formatter; otherwise match existing style, never invent line limits or polish untouched code. Biome: --error-on-warnings, no unsafe fixes.",
-		"Use run_checks outputView:summary; retrieve omitted logs for failures, warnings or uncertainty. Preserve every required check and full retained evidence. Each command needs its actual exit and stop status and output reference. After final review and required checks pass on the stable tree, finish unless a concrete unresolved defect remains.",
+		"Use run_checks outputView:summary; retrieve logs for failures, warnings or uncertainty. Preserve every required check and full evidence. Each command needs its actual exit and stop status and output reference. After final review and required checks pass on the stable tree, finish unless a concrete defect remains.",
 	].join(" ");
 }
