@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { SubscriptionMetadataFailure } from "#/domain/api-turn-failure";
+import {
+	CodexReconnectRequired,
+	SubscriptionMetadataFailure,
+} from "#/domain/api-turn-failure";
 import { readBoundedRequestBody } from "#/domain/bounded-request-body";
 import type { CodexUsage } from "#/domain/codex-usage";
 import { PINNED_CODEX_CLI_VERSION } from "#/domain/guest-cli-pin";
@@ -91,6 +94,7 @@ async function subscriptionRequest(userId: string, path: string) {
 			signal,
 		});
 	} catch (error) {
+		if (error instanceof CodexReconnectRequired) throw error;
 		throw new SubscriptionMetadataFailure(
 			signal.aborted ||
 				(error instanceof Error && error.name === "TimeoutError")
@@ -193,7 +197,11 @@ export async function codexSubscriptionModel(
 ) {
 	const catalog = await subscriptionCatalog(userId);
 	const selected = catalog.models.find((row) => row.slug === modelId);
-	if (!selected) throw new Error("Selected subscription model is unavailable.");
+	// Plans change which models a ChatGPT account may use; the catalog is per account.
+	if (!selected)
+		throw new Error(
+			"The selected model is no longer available on your current Codex plan. Choose another model.",
+		);
 	if (fast)
 		throw new Error(
 			"Fast mode is not available on this subscription transport.",

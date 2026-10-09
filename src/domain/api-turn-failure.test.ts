@@ -4,6 +4,7 @@ import {
 	apiModelFailureClassification,
 	apiTurnFailureClassification,
 	apiTurnFailureMessage,
+	CodexReconnectRequired,
 	SafeApiModelFailure,
 	SubscriptionMetadataFailure,
 } from "./api-turn-failure";
@@ -174,4 +175,14 @@ it("distinguishes context and usage budgets", () => {
 	expect(apiTurnFailureMessage("budget", new Error("usage limit"))).toContain(
 		"safety limit",
 	);
+});
+
+it("tells the user to reconnect Codex even when the SDK wraps the refresh failure", () => {
+	const wrapped = new Error("Cannot connect to API", {
+		cause: new CodexReconnectRequired(),
+	});
+	expect(apiTurnFailureMessage("model", wrapped)).toContain("reconnect Codex");
+	expect(
+		apiTurnFailureMessage("model", new CodexReconnectRequired()),
+	).toContain("reconnect Codex");
 });

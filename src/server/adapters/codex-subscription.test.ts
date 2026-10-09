@@ -254,6 +254,6 @@ it("does not silently use another model when the catalog has no match", async ()
 		),
 	);
 	await expect(codexSubscriptionModel("alice", "selected")).rejects.toThrow(
-		"unavailable",
+		"no longer available on your current Codex plan",
 	);
 });
