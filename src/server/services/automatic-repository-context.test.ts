@@ -75,8 +75,10 @@ it("loads nested instructions, detects external changes once, and rehydrates exa
 		expect(output).toMatchObject({
 			sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
 		});
+		const cachedPrefix = structuredClone(history);
 		await writeFile(join(root, "src/file.ts"), "export const value = 2;\n");
 		history = await context.prepare(history);
+		expect(history.slice(0, cachedPrefix.length)).toEqual(cachedPrefix);
 		expect(
 			history.filter(
 				(message) =>

@@ -60,3 +60,31 @@ All three official graders returned reward 1 and exit 0. Every valid task report
 Bun's output directory was never created: its queued process exited at the campaign stop guard, before resource allocation or inference. No further pilot runs were started. Earlier zero-inference attempts (Supabase quota preflight and the provider's five-minute execution limit) are preserved and excluded from model results. The quota attempt's remote cleanup could not be confirmed; it reported no successful new upload and started no VM. Existing remote archives were not deleted.
 
 The approved disposable resource envelope remained bounded; no persistent hosting or API-paid model fallback was used. Actual billing/transfer charges were not fetched, so the $5 approval and resource-envelope estimate must not be presented as an audited invoice.
+
+## Post-pilot context/cache fix
+
+The frozen pilot above is unchanged. The follow-up removes the subscription
+adapter's 64K implementation and 48K coordination overrides. Compaction now uses
+the catalog's `auto_compact_token_limit`, bounded by the existing input safety
+budget; absent a catalog threshold, the shared 80%-of-safe-input policy applies.
+This does not send the entire advertised window without output/schema headroom.
+
+Subscription and API adapters no longer retire consumed guidance, superseded reads
+or earlier command output after each edit. Those history rewrites were permitted
+even below context pressure and could invalidate cached prefixes. Keep exact
+observations until actual compaction instead. Repository-context updates still
+append fresh instructions and stale-source notices; write fences, archive/search
+recovery, opaque native checkpoints and post-compaction instruction restoration
+are unchanged. Deferred tool discovery remains enabled rather than loading every
+specialist schema to chase cache hits.
+
+Local regressions cover measured 70K retention on a 272K model, later compaction,
+an explicit smaller provider threshold, exact instruction restoration, retained
+OpenAI/OpenRouter output and opaque reasoning, and append-only source freshness.
+No new live inference was run. Better cache hit rate, latency, cost and correctness
+must be measured; this implementation is not proof of beating native Codex.
+
+Validation: the regression reproduced premature compaction before the fix. After
+the fix, 96 focused tests and the full suite passed (1,697 passed, seven skipped).
+Typecheck including workflow types, Biome, production build and `git diff --check`
+passed. No production deployment or Supabase operation was performed.

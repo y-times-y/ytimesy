@@ -625,6 +625,82 @@ function run(events: ApiAgentEvent[], tools = {}) {
 	});
 }
 
+it.each(["openai", "openrouter"] as const)(
+	"preserves earlier cached tool output on the %s route",
+	async (provider) => {
+		const modelId =
+			provider === "openai" ? "gpt-6.1-sol" : "openai/gpt-6.1-sol";
+		mocks.load.mockResolvedValue({
+			id: "connection",
+			provider,
+			revision: `cache-prefix-${provider}`,
+			sealedCredential: "sealed",
+			baseUrl:
+				provider === "openai"
+					? "https://api.openai.com/v1"
+					: "https://openrouter.ai/api/v1",
+			models: [
+				{ id: modelId, toolStreamingVerified: true, contextWindow: 272_000 },
+			],
+		});
+		const model = new MockLanguageModelV4({
+			doStream: async () => stream([finish]),
+		});
+		mocks.model.mockReturnValue(model);
+		const body = "complete earlier command evidence ".repeat(600);
+		const archive = vi.fn(async () => "archive:fixture");
+		await runApiAgent({
+			userId: "alice",
+			connectionId: "connection",
+			modelId,
+			instructions: "Continue safely",
+			tools: {},
+			messages: [
+				{ role: "user", content: "Investigate" },
+				{
+					role: "assistant",
+					content: [
+						{
+							type: "tool-call",
+							toolCallId: "earlier-command",
+							toolName: "bash",
+							input: { command: "test" },
+						},
+					],
+				},
+				{
+					role: "tool",
+					content: [
+						{
+							type: "tool-result",
+							toolCallId: "earlier-command",
+							toolName: "bash",
+							output: {
+								type: "json",
+								value: {
+									reference: "37ba9eb0-031e-4b82-9296-e4ce22f9ee7e",
+									exitCode: 1,
+									stopped: null,
+									stdout: body,
+									stderr: "failed",
+								},
+							},
+						},
+					],
+				},
+				{ role: "assistant", content: "Observed the failure" },
+				{ role: "user", content: "Continue" },
+			],
+			signal: new AbortController().signal,
+			archiveHistory: archive,
+			onEvent: async () => {},
+			onStep: async () => {},
+		});
+		expect(archive).not.toHaveBeenCalled();
+		expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain(body);
+	},
+);
+
 it("does not report a tool-step-limit stop as successful completion", async () => {
 	mocks.model.mockReturnValue(
 		new MockLanguageModelV4({
