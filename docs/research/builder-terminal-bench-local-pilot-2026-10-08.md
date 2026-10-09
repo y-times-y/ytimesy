@@ -364,6 +364,38 @@ calls itself; it labels usage incomplete after any failed start. Two tests verif
 stream identity, exact original-error propagation, single invocation and secret
 redaction. This is measurement-only instrumentation, not a claimed speed fix.
 
+### Request-start diagnostic run: protected pass, interrupted completion
+
+Commit `fdac3fc` ran the unchanged production builder. The protected snapshot
+passed (reward 1), but the turn failed before its final response after 654.607
+seconds and 11 attempted requests. Its nine completed metrics report 152,017
+tokens (132,532 input, 19,485 output), with 90,624 cached and 41,908 uncached
+input. These remain incomplete lower bounds, not an accepted successful run.
+Private evidence is retained at
+`.ytimesy/terminal-bench-request-start-20261008/session-window-debug/`.
+
+The first nine starts returned streams in about one second. Attempt 10 failed
+before returning headers with `UND_ERR_SOCKET`; the existing SDK retry failed
+with `EPIPE`. The two measured start durations were 30 and 120 milliseconds.
+Thus this particular failure did not itself consume a long retry delay. Normal
+model metrics sum to 628.254 seconds and tool metrics to 24.236 seconds, which
+may overlap. The large earlier unexplained gap is not reproduced or explained
+retrospectively. The main patch response consumed 271.4 seconds, including
+6,533 reported reasoning tokens; the following review step consumed 115.7
+seconds with 3,025 reasoning tokens. No native-control run or hidden grader
+inspection occurred. Cleanup receipts and actual inventory verified that owned
+resources were removed, leaving four VMs/five snapshots and no local database.
+
+The subsequent reliability mitigation uses standard `Connection: close` on
+subscription metadata and inference requests so this Node HTTP/1 transport does
+not retain idle sockets across long model steps. A real loopback HTTP server and
+the actual SDK reproduce keep-alive retention before the change and verify
+separate sockets afterward. Existing cache affinity, owner/account authentication,
+destination restrictions, aborts and retry policy remain unchanged. This does
+not prove which peer closed the failed live sockets, prevent every network
+failure, replay interrupted streams or establish a speed advantage. Additional
+TLS setup may increase start latency; its live tradeoff must be measured.
+
 Local verification: 64 focused runtime, artifact, command and completion tests
 passed (two skipped); TypeScript, Biome and production build passed. No complete
 suite or production deployment is claimed.

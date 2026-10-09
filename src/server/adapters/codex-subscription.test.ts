@@ -1,3 +1,4 @@
+import { createServer } from "node:http";
 import { generateText, simulateReadableStream } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { beforeEach, expect, it, vi } from "vitest";
@@ -77,6 +78,7 @@ it("keeps subscription cache routing stable per account and chat through the rea
 	).rejects.toThrow("fixture-stop");
 	const request = fetch.mock.calls.at(-1)?.[1];
 	expect(new Headers(request?.headers).get("session-id")).toBe(key);
+	expect(new Headers(request?.headers).get("connection")).toBe("close");
 	expect(JSON.parse(request?.body as string).prompt_cache_key).toBe(key);
 	expect(JSON.parse(request?.body as string).parallel_tool_calls).toBe(true);
 	mocks.auth.mockResolvedValue({
@@ -91,6 +93,65 @@ it("keeps subscription cache routing stable per account and chat through the rea
 			...settings,
 		}),
 	).rejects.toThrow("account changed");
+});
+
+it("does not retain idle subscription sockets between long model steps", async () => {
+	const realFetch = globalThis.fetch;
+	const connections = new Set<unknown>();
+	const headers: (string | undefined)[] = [];
+	const server = createServer((request, response) => {
+		connections.add(request.socket);
+		headers.push(request.headers.connection);
+		request.resume();
+		if (request.url === "/models") {
+			response.setHeader("Content-Type", "application/json");
+			response.end(JSON.stringify({ models: [{ slug: "socket-fixture" }] }));
+		} else {
+			response.setHeader("Content-Type", "text/event-stream");
+			response.end("data: [DONE]\n\n");
+		}
+	});
+	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+	const address = server.address();
+	if (!address || typeof address === "string")
+		throw new Error("Missing fixture port");
+	const origin = `http://127.0.0.1:${address.port}`;
+	vi.spyOn(globalThis, "fetch").mockImplementation((url, init) =>
+		realFetch(
+			`${origin}/${String(url).includes("/models") ? "models" : "responses"}`,
+			init,
+		),
+	);
+	try {
+		const runtime = await codexSubscriptionModel(
+			"socket-owner",
+			"socket-fixture",
+		);
+		if (typeof runtime.model === "string")
+			throw new Error("Expected concrete model");
+		for (let index = 0; index < 2; index++) {
+			const response = await runtime.model.doStream({
+				prompt: [
+					{ role: "user", content: [{ type: "text", text: "fixture" }] },
+				],
+			});
+			const reader = response.stream.getReader();
+			try {
+				while (!(await reader.read()).done) {
+					/* Drain the actual SDK stream before starting another request. */
+				}
+			} finally {
+				reader.releaseLock();
+			}
+		}
+		expect(headers).toEqual(["close", "close", "close"]);
+		expect(connections.size).toBe(3);
+	} finally {
+		server.closeAllConnections();
+		await new Promise<void>((resolve, reject) =>
+			server.close((error) => (error ? reject(error) : resolve())),
+		);
+	}
 });
 
 it("uses the account catalog and requested reasoning without advertising unsupported fast mode", async () => {
@@ -289,6 +350,7 @@ it("scopes every metadata request to its authenticated owner and returns no secr
 			headers: {
 				Authorization: "Bearer token-alice",
 				"ChatGPT-Account-ID": "account-alice",
+				Connection: "close",
 			},
 			redirect: "error",
 		}),
