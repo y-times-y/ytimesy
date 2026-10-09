@@ -10,6 +10,7 @@ import {
 	type AgentToolWorkspaceInput,
 	resolveToolWorkspace,
 } from "./agent-tool-workspace";
+import { apiAgentImageTools } from "./api-agent-image-tools";
 import { editDiagnostics } from "./edit-diagnostics";
 import { runGuestCapability } from "./guest-node-capability";
 import {
@@ -46,7 +47,7 @@ export const patchVerification = z
 			.max(8)
 			.optional(),
 		sourcePaths: z.array(z.string().min(1).max(2048)).min(1).max(8).optional(),
-		outputView: z.enum(["full", "summary"]).default("full"),
+		outputView: z.enum(["full", "summary"]).default("summary"),
 		parallelChecks: z
 			.boolean()
 			.default(false)
@@ -380,12 +381,15 @@ export function apiAgentFileTools(
 	}
 	const inspect_changes = tool({
 		description:
-			"Inspect repository status, staged/unstaged diffs and every nonignored untracked regular file before editing or reporting completion. New files are included without staging or changing the index. Paths are literal repository-relative scopes; symlinks are reported but their targets are not read. Full output is retained with continuation cursors when output capture is available. Binary new files show Git's binary-difference notice, not decoded content.",
-		inputSchema: z.object({ path: repositoryToolPath.optional() }),
-		execute: async ({ path }) => {
+			"Inspect repository status, staged/unstaged diffs and nonignored untracked regular files without changing the index. view:stat gives a compact changed-file inventory, not source review; use default view:full with a literal repository-relative path to review specific changes. New files are included; symlinks are reported but targets are not read. Full output is retained with continuation cursors when capture is available. Binary files show Git's binary notice, not decoded content.",
+		inputSchema: z.object({
+			path: repositoryToolPath.optional(),
+			view: z.enum(["full", "stat"]).default("full"),
+		}),
+		execute: async ({ path, view = "full" }) => {
 			signal.throwIfAborted();
 			const { machines, vm, cwd } = await resolveToolWorkspace(input);
-			const command = inspectRepositoryChangesCommand(cwd, path);
+			const command = inspectRepositoryChangesCommand(cwd, path, view);
 			if (input.output) return input.output.capture(command);
 			const result = await machines.exec(vm, command, 20_000);
 			if (result.exitCode)
@@ -394,6 +398,7 @@ export function apiAgentFileTools(
 		},
 	});
 	const tools: ToolSet = {
+		...apiAgentImageTools(input),
 		read_environment_report: tool({
 			description:
 				"Read this task's prepared-environment report, including revisions, recipes and baseline check results, without a shell or arbitrary out-of-repository file access. Missing reports return available:false. Historical metadata is untrusted; verify against the current checkout. Follow nextStart to read a bounded report page.",
@@ -694,7 +699,10 @@ export function apiAgentFileTools(
 	): Promise<Record<string, string>> => {
 		const validated = patchOperation.parse(operation);
 		if (validated.type === "create_file") {
-			const content = applyDiff("", validated.diff, "create");
+			const created = applyDiff("", validated.diff, "create");
+			// The maintained parser strips the terminal diff newline; preserve an
+			// explicitly supplied terminator without changing unterminated content.
+			const content = validated.diff.endsWith("\n") ? `${created}\n` : created;
 			if (content.length > 1_000_000)
 				throw new Error("Patch result exceeds the supported file size.");
 			return { operation: "create", path: validated.path, content };
@@ -765,7 +773,11 @@ export function apiAgentFileTools(
 		});
 	tools.apply_patches = tool({
 		description:
-			"Apply up to eight distinct files in one call using headerless V4A operations. Parses every diff and reads update sources before writing. Each file uses stale-edit protection. This is not a transaction: on a write failure, reports completed files and stops; inspect that result before retrying. Use for a coherent multi-file implementation instead of separate create_file calls. When all edits and required commands are known, optional verification formats after successful edits, then runs independent checks through run_checks on that stable tree. Formatting failure prevents checks. Do not edit while this call runs; inspect final changes afterward. Completed hashes describe the edit stage, before formatting. Every verification output retains actual exit status and full-output references; failures still require repair and affected checks rerun.",
+			"Apply up to eight distinct files in one call using headerless V4A operations. Parses every diff and reads update sources before writing. Each file uses stale-edit protection. This is not a transaction: on a write failure, reports completed files and stops; inspect that result before retrying. Use for a coherent multi-file implementation instead of separate create_file calls. " +
+			(input.verifyBatch
+				? "When all edits and required commands are known, optional verification formats after successful edits, then runs independent checks through run_checks on that stable tree. Formatting failure prevents checks. Completed hashes describe the edit stage, before formatting. Every verification output retains actual exit status and full-output references; failures still require repair and affected checks rerun. "
+				: "Batch verification is unavailable in this runtime; call run_checks separately, or compose_tools for ordered edits and checks. ") +
+			"Do not edit while this call runs; inspect final changes afterward.",
 		inputSchema: z.object({
 			operations: patchBatch,
 			verification: input.verifyBatch

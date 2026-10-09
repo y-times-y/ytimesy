@@ -145,6 +145,38 @@ it("classifies accepted-request stream failures without leaking payloads", () =>
 	).toBe("unknown");
 });
 
+it("retains bounded transport cause categories through safe wrapping", () => {
+	const socket = Object.assign(new Error("private socket headers"), {
+		code: "UND_ERR_SOCKET",
+	});
+	const error = new APICallError({
+		message: "private response",
+		url: "https://private.example",
+		requestBodyValues: { token: "sk-private" },
+		statusCode: 200,
+		cause: new TypeError("private fetch", { cause: socket }),
+	});
+	const classification = apiModelFailureClassification(error);
+	expect(classification.causes).toEqual([
+		{ name: "TypeError", code: "unknown" },
+		{ name: "Error", code: "UND_ERR_SOCKET" },
+	]);
+	expect(apiModelFailureClassification(new SafeApiModelFailure(error))).toEqual(
+		classification,
+	);
+	expect(JSON.stringify(classification)).not.toContain("private");
+});
+
+it("bounds cyclic cause chains and excludes arbitrary codes", () => {
+	const error = Object.assign(new Error("secret"), {
+		code: "secret",
+		cause: undefined as unknown,
+	});
+	error.cause = error;
+	const classification = apiModelFailureClassification(error);
+	expect(classification.causes).toEqual([{ name: "Error", code: "unknown" }]);
+});
+
 it("never stores raw provider text in the safe failure", () => {
 	const failure = new SafeApiModelFailure(providerFailure(429));
 	expect(failure.message).toContain("rate limit");

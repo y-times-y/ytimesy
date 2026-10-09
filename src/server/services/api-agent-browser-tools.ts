@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { type ToolSet, tool } from "ai";
 import { z } from "zod";
+import { browserUseCommand } from "#/server/adapters/browser-use-cli";
 import { isPublicModelAddress } from "#/server/adapters/model-endpoint";
 import {
 	type AgentToolWorkspaceInput,
@@ -44,6 +45,8 @@ export async function safeBrowserUrl(value: string): Promise<string> {
 export function apiAgentBrowserTools(
 	input: AgentToolWorkspaceInput & {
 		readOnly: boolean;
+		sessionId?: string;
+		executeCommand?: NonNullable<ToolSet[string]["execute"]>;
 		signal: AbortSignal;
 		once: (id: string, run: () => Promise<unknown>) => Promise<unknown>;
 	},
@@ -137,6 +140,29 @@ export function apiAgentBrowserTools(
 		}),
 	};
 	if (input.readOnly) return tools;
+	if (input.sessionId && input.executeCommand) {
+		const sessionId = input.sessionId;
+		const executeCommand = input.executeCommand;
+		tools.browser_execute = tool({
+			description:
+				"Run Browser Use CLI Python in this task VM's shared Chrome (no separate paid browser or model). Helpers: new_tab(url), page_info(), js(code), cdp(method, **params), fill_input(selector,text), click_at_xy(x,y), wait_for_load(), capture_screenshot(path). Open one task tab and reuse it across calls. Inspect AX/DOM, interact, then assert the outcome; use browser_screenshot for pixels. Read CLI help/skill through execute_command if needed. Never expose secrets or approve account changes without permission. Commands may yield: continue_command resumes the returned id; never restart it. Only writable builders can execute Python.",
+			inputSchema: z.object({
+				code: z.string().min(1).max(12000),
+				maxSeconds: z.number().int().min(30).max(600).default(300),
+			}),
+			execute: async ({ code, maxSeconds }, options) => {
+				await desktop();
+				return executeCommand(
+					{
+						command: browserUseCommand(sessionId, code),
+						maxSeconds,
+						yieldSeconds: 1,
+					},
+					options,
+				);
+			},
+		});
+	}
 	tools.browser_click = tool({
 		description:
 			"Click coordinates in the shared desktop, then call browser_screenshot to observe the result. Never approve purchases or account changes without user authorization.",

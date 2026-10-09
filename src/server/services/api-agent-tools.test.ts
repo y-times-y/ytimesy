@@ -315,6 +315,7 @@ it("reads archived evidence without a VM, bounded and scoped to the current chat
 		"alice",
 		"chat",
 		reference,
+		undefined,
 	);
 	expect(JSON.stringify(output)).toContain("Earlier finding");
 	expect(JSON.stringify(output)).not.toContain("opaque-signature");
@@ -458,7 +459,7 @@ describe("read-only API lead tools", () => {
 		]);
 	});
 
-	 it("quotes search input so it cannot become another command", async () => {
+	it("quotes search input so it cannot become another command", async () => {
 		const { commands, tools } = leadTools();
 		await executeInspectionTool(tools.search_files, {
 			query: "a'; touch /tmp/unwanted; echo 'b",

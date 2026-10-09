@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	terminalBenchCompose,
 	terminalBenchExecCommand,
+	terminalBenchShellPrerequisites,
 	terminalBenchTaskSchema,
 	terminalBenchVerificationSetup,
 } from "../benchmarks/evaluation/terminal-bench-machines";
@@ -22,6 +23,25 @@ const fixture = () =>
 	});
 
 describe("Terminal-Bench task boundary", () => {
+	it("installs and exercises ripgrep before model inference", () => {
+		expect(terminalBenchShellPrerequisites).toContain(
+			"ca-certificates ripgrep",
+		);
+		expect(terminalBenchShellPrerequisites).toContain("rg --version");
+		expect(terminalBenchShellPrerequisites).toContain(
+			"rg --fixed-strings --quiet",
+		);
+	});
+	it("preserves the original ten-minute verifier deadline", () => {
+		expect(terminalBenchExecCommand("bash /tests/test.sh", 600000)).toContain(
+			"'600' 'bash' '-lc'",
+		);
+	});
+	it("preserves the WAL verifier's original thirty-minute deadline", () => {
+		expect(terminalBenchExecCommand("bash /tests/test.sh", 1800000)).toContain(
+			"'1800' 'bash' '-lc'",
+		);
+	});
 	it("freezes operator checks without mounting a hidden grader", () => {
 		const setup = terminalBenchVerificationSetup(
 			environmentRecipe.parse({ checks: ["python3 -m compileall -q app"] }),

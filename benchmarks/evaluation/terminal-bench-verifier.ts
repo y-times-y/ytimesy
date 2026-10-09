@@ -13,7 +13,14 @@ export async function gradeTerminalBenchArtifact(input: {
 	artifacts: Uint8Array;
 	signal?: AbortSignal;
 }) {
-	const { task, verifierImage } = await loadTerminalBenchTask(input.taskPath);
+	const { task, verifierImage, verifierTimeoutSeconds } =
+		await loadTerminalBenchTask(input.taskPath);
+	if (
+		!Number.isInteger(verifierTimeoutSeconds) ||
+		verifierTimeoutSeconds < 1 ||
+		verifierTimeoutSeconds > 1800
+	)
+		throw new Error("Unsupported original verifier timeout.");
 	const bridge = createTerminalBenchMachines({
 		apiKey: input.apiKey,
 		runId: input.runId,
@@ -54,7 +61,7 @@ export async function gradeTerminalBenchArtifact(input: {
 		const result = await bridge.machines.exec(
 			grader.vmId,
 			"mkdir -p /logs/verifier && bash /tests/test.sh",
-			290000,
+			verifierTimeoutSeconds * 1000,
 		);
 		await writeFile(
 			`${input.output}/verifier-execution.json`,

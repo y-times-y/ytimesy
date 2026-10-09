@@ -3,6 +3,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { symmetricEncrypt } from "better-auth/crypto";
 import { Pool } from "pg";
+import { z } from "zod";
 import { closeDatabase, database } from "../../src/server/adapters/database";
 import { codexAccessTokenExpiresAt } from "../../src/server/auth/codex-managed-auth";
 import { unseal } from "../../src/server/auth/token-vault";
@@ -22,33 +23,87 @@ async function command(argv: string[]) {
  * credential into an owned loopback database. No source database mutations,
  * GitHub authority, refresh token, or production job queue is copied. */
 export async function createOperatorEvaluationDatabase(directory: string) {
-	const reference = (
-		await readFile("supabase/.temp/project-ref", "utf8")
-	).trim();
-	const sourceUrl = new URL(process.env.DATABASE_URL ?? "");
-	if (
-		reference !== "exampledevprojectref" ||
-		!sourceUrl.username.includes(reference)
-	)
-		throw new Error("Expected the linked development credential source.");
-	const cert = sourceUrl.searchParams.get("sslrootcert");
-	if (cert) sourceUrl.searchParams.set("sslrootcert", resolve(cert));
-	process.env.DATABASE_URL = sourceUrl.toString();
-	const result = await database().query<{
+	const localAuthFile = process.env.YTIMESY_EVALUATION_CODEX_AUTH_FILE;
+	let owner: {
 		id: string;
 		name: string;
 		email: string;
-		encrypted_codex_auth: string;
-		plan_type: string;
-	}>(
-		`select u.id,u.name,u.email,a.encrypted_codex_auth,a.plan_type from auth_user u join agent_account a on a.user_id=u.id where a.provider='codex' and a.status='connected' and ($1::text is null or u.id=$1)`,
-		[process.env.YTIMESY_EVALUATION_USER_ID ?? null],
-	);
-	if (result.rows.length !== 1)
-		throw new Error("Select exactly one connected evaluation owner.");
-	const owner = result.rows[0];
-	const auth = JSON.parse(await unseal(owner.encrypted_codex_auth));
-	await closeDatabase();
+		plan_type: string | null;
+	};
+	let auth: {
+		auth_mode: "chatgpt";
+		tokens: {
+			access_token: string;
+			refresh_token: string;
+			account_id: string;
+			id_token: string;
+		};
+	};
+	if (localAuthFile) {
+		auth = z
+			.object({
+				auth_mode: z.literal("chatgpt"),
+				tokens: z.object({
+					access_token: z.string().min(1),
+					refresh_token: z.string().min(1),
+					account_id: z.string().min(1),
+					id_token: z.string().min(1),
+				}),
+			})
+			.parse(JSON.parse(await readFile(localAuthFile, "utf8")));
+		const identity = z
+			.object({
+				sub: z.string().min(1),
+				email: z.email(),
+				name: z.string().optional(),
+			})
+			.parse(
+				JSON.parse(
+					Buffer.from(
+						auth.tokens.id_token.split(".")[1],
+						"base64url",
+					).toString(),
+				),
+			);
+		owner = {
+			id: identity.sub,
+			name: identity.name ?? identity.email,
+			email: identity.email,
+			plan_type: null,
+		};
+	} else {
+		const sourceRoot = resolve(
+			process.env.YTIMESY_EVALUATION_SUPPORT_ROOT ?? ".",
+		);
+		const reference = (
+			await readFile(join(sourceRoot, "supabase/.temp/project-ref"), "utf8")
+		).trim();
+		const sourceUrl = new URL(process.env.DATABASE_URL ?? "");
+		if (
+			reference !== "exampledevprojectref" ||
+			!sourceUrl.username.includes(reference)
+		)
+			throw new Error("Expected the linked development credential source.");
+		const cert = sourceUrl.searchParams.get("sslrootcert");
+		if (cert)
+			sourceUrl.searchParams.set("sslrootcert", resolve(sourceRoot, cert));
+		process.env.DATABASE_URL = sourceUrl.toString();
+		const result = await database().query<{
+			id: string;
+			name: string;
+			email: string;
+			encrypted_codex_auth: string;
+			plan_type: string;
+		}>(
+			`select u.id,u.name,u.email,a.encrypted_codex_auth,a.plan_type from auth_user u join agent_account a on a.user_id=u.id where a.provider='codex' and a.status='connected' and ($1::text is null or u.id=$1)`,
+			[process.env.YTIMESY_EVALUATION_USER_ID ?? null],
+		);
+		if (result.rows.length !== 1)
+			throw new Error("Select exactly one connected evaluation owner.");
+		owner = result.rows[0];
+		auth = JSON.parse(await unseal(result.rows[0].encrypted_codex_auth));
+		await closeDatabase();
+	}
 	if (codexAccessTokenExpiresAt(auth) < Date.now() + 2 * 3600000)
 		throw new Error(
 			"Codex access needs two hours remaining; this pilot cannot rotate the source refresh credential.",
@@ -147,12 +202,13 @@ export async function createOperatorEvaluationDatabase(directory: string) {
 			pool: local,
 			async close() {
 				await local?.end();
-				await command(["docker", "rm", "--force", container]);
+				await command(["docker", "rm", "--force", "--volumes", container]);
 			},
 		};
 	} catch (error) {
 		await local?.end();
-		if (created) await command(["docker", "rm", "--force", container]);
+		if (created)
+			await command(["docker", "rm", "--force", "--volumes", container]);
 		throw error;
 	}
 }

@@ -27,6 +27,7 @@ import { apiAgentLanguageTools } from "./api-agent-language-tools";
 import { apiAgentSearchTools } from "./api-agent-search-tools";
 import { scopedShellCommand } from "./api-command-scope";
 import { batchedAgentReads } from "./batched-agent-reads";
+import { builderWorkTools } from "./builder-work-state";
 import { codeToolingTools } from "./code-tooling";
 import { dapDebuggerTools } from "./dap-debugger";
 import { runAgentTaskTool } from "./harness-workspace-session";
@@ -80,6 +81,12 @@ export function apiAgentTools(
 			run,
 		);
 	const tools: ToolSet = {
+		...builderWorkTools({
+			userId: session.userId,
+			sessionId: session.id,
+			signal,
+			once,
+		}),
 		...projectMemoryTools({ session, workspace, once }),
 		plan_parallel_work: tool({
 			description:
@@ -142,26 +149,6 @@ export function apiAgentTools(
 			signal,
 		}),
 	};
-	if (!readOnly) {
-		tools.bash = tool({
-			description:
-				"Run a shell command in this task's isolated repository. Do not publish changes unless authorized. Commands are bounded to 30 seconds; do not launch detached work.",
-			inputSchema: z.object({ command: z.string().min(1).max(16000) }),
-			execute: ({ command }, options) =>
-				once(options.toolCallId, async () => {
-					const { cwd } = await workspace();
-					return output.capture(
-						scopedShellCommand({
-							turnId: input.turnId,
-							cwd,
-							command,
-							seconds: 30,
-						}),
-						30,
-					);
-				}),
-		});
-	}
 	for (const definition of agentTaskToolDefinitions) {
 		if (definition.name === "report_task_blocked" && !session.parentSessionId)
 			continue;
@@ -360,6 +347,8 @@ export function apiAgentTools(
 		apiAgentBrowserTools({
 			workspace,
 			readOnly,
+			sessionId: session.id,
+			executeCommand: tools.execute_command?.execute,
 			signal,
 			once,
 		}),

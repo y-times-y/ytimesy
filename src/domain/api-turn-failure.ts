@@ -38,6 +38,11 @@ const FAILURE_CODES = new Set([
 	"ECONNREFUSED",
 	"EPIPE",
 	"EAI_AGAIN",
+	"UND_ERR_SOCKET",
+	"UND_ERR_HEADERS_TIMEOUT",
+	"UND_ERR_BODY_TIMEOUT",
+	"UND_ERR_CONNECT_TIMEOUT",
+	"ERR_STREAM_PREMATURE_CLOSE",
 	"23505",
 	"40001",
 	"40P01",
@@ -81,9 +86,12 @@ export function apiTurnFailureClassification(error: unknown) {
 }
 
 export class SafeApiModelFailure extends Error {
+	readonly classification: ApiModelFailureClassification;
+
 	constructor(error: unknown) {
 		super(apiModelFailureMessage(error));
 		this.name = "SafeApiModelFailure";
+		this.classification = apiModelFailureClassification(error);
 	}
 }
 
@@ -160,6 +168,14 @@ export class InitialAgentReadFailure extends Error {
 	}
 }
 
+type ApiModelFailureClassification = ReturnType<
+	typeof apiTurnFailureClassification
+> & {
+	httpStatus: number | null;
+	providerCode: string;
+	causes: ReturnType<typeof apiTurnFailureClassification>[];
+};
+
 const PROVIDER_FAILURE_CODES = new Set([
 	"internal_error",
 	"server_error",
@@ -184,9 +200,12 @@ function rejectsAssistantPrefill(detail: string) {
 }
 
 /** Bounded diagnostics only: never log a provider message, body, URL or request. */
-export function apiModelFailureClassification(error: unknown) {
+export function apiModelFailureClassification(
+	error: unknown,
+): ApiModelFailureClassification {
 	for (let depth = 0; depth < 3 && RetryError.isInstance(error); depth++)
 		error = error.lastError;
+	if (error instanceof SafeApiModelFailure) return error.classification;
 	const status = APICallError.isInstance(error) ? error.statusCode : undefined;
 	const code = APICallError.isInstance(error)
 		? providerErrorCode(error.data)
@@ -201,7 +220,21 @@ export function apiModelFailureClassification(error: unknown) {
 				? status
 				: null,
 		providerCode: code && PROVIDER_FAILURE_CODES.has(code) ? code : "unknown",
+		causes: modelFailureCauses(error),
 	};
+}
+
+function modelFailureCauses(error: unknown) {
+	const causes: ReturnType<typeof apiTurnFailureClassification>[] = [];
+	const seen = new Set<unknown>();
+	for (let depth = 0; depth < 4; depth++) {
+		if (!error || typeof error !== "object" || !("cause" in error)) break;
+		error = error.cause;
+		if (!error || seen.has(error)) break;
+		seen.add(error);
+		causes.push(apiTurnFailureClassification(error));
+	}
+	return causes;
 }
 
 export class IncompleteAgentTurn extends Error {

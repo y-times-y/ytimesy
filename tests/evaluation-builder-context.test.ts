@@ -45,6 +45,7 @@ it("wires production guidance restoration and owner-scoped recoverable archives 
 		"owner",
 		"isolated-builder",
 		prepared,
+		undefined,
 	);
 	await context.afterTools(prepared);
 	await context.restoreInstructions(history);

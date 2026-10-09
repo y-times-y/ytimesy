@@ -31,7 +31,10 @@ import {
 } from "#/domain/harness-performance";
 import { modelStepLimit } from "#/domain/model-workflow";
 import type { apiPromptCacheSettings } from "#/server/adapters/api-prompt-cache";
-import { apiTokenUsage } from "#/server/adapters/api-token-usage";
+import {
+	apiOutputTokenDetails,
+	apiTokenUsage,
+} from "#/server/adapters/api-token-usage";
 import type { NativeCompactionInput } from "../adapters/model-compaction";
 import { prefetchInitialAgentReads } from "./agent-initial-reads";
 import { discoverableAgentTools } from "./agent-tool-discovery";
@@ -45,6 +48,7 @@ import {
 	workingContextTarget,
 } from "./api-agent-context";
 import { BackgroundHistoryCompaction } from "./background-history-compaction";
+import { composedAgentTools } from "./composed-agent-tools";
 import { archiveConsumedGuidance } from "./consumed-guidance";
 import { archiveEarlierToolOutput } from "./retired-tool-output";
 import { archiveSupersededReads } from "./superseded-reads";
@@ -137,7 +141,13 @@ async function executeModelSteps(
 	);
 	input = {
 		...input,
-		instructions: `${input.instructions}\n${harnessModelToolInstructions(modelFamily, input.tools.apply_patch?.type === "provider")}`,
+		tools: composedAgentTools({
+			tools: input.tools,
+			signal: input.signal,
+			onEvent: input.onEvent,
+			onToolMetric: input.onToolMetric,
+		}),
+		instructions: `${input.instructions}\n${harnessModelToolInstructions(modelFamily, input.tools.apply_patch?.type === "provider", Object.keys(input.tools))}`,
 	};
 	input.signal.throwIfAborted();
 	const cancelled = new AbortController();
@@ -495,6 +505,7 @@ async function executeModelSteps(
 			},
 			onLanguageModelCallEnd: ({ usage, performance, finishReason }) => {
 				const counts = apiTokenUsage(usage);
+				const outputDetails = apiOutputTokenDetails(usage);
 				try {
 					input.onModelMetric?.({
 						duration_ms: Math.max(0, performance.responseTimeMs),
@@ -502,6 +513,8 @@ async function executeModelSteps(
 						active_tools: activeToolCount,
 						input_tokens: counts.inputTokens,
 						output_tokens: counts.outputTokens,
+						text_output_tokens: outputDetails.textTokens,
+						reasoning_output_tokens: outputDetails.reasoningTokens,
 						cache_read_tokens: counts.cacheReadTokens,
 						prepared_prompt_characters: preparedPromptCharacters,
 						prepared_tool_characters: preparedToolCharacters,

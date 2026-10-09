@@ -13,7 +13,32 @@ const definition = () =>
 		execute: async () => ({}),
 	});
 
-it("offers exact editing immediately for every model without adding all edit aliases", () => {
+it("keeps everyday editor schemas stable after their first use and checkpoint restore", () => {
+	const tools = {
+		apply_patch: definition(),
+		apply_patches: definition(),
+		run_checks: definition(),
+		inspect_changes: definition(),
+		browser_open: definition(),
+	};
+	const initial = discoverableAgentTools(tools, [], [], "implementation");
+	const restored = discoverableAgentTools(
+		tools,
+		[],
+		["apply_patches"],
+		"implementation",
+	);
+	for (const [name, original] of Object.entries(tools)) {
+		expect(restored[name].deferLoading).toBe(initial[name].deferLoading);
+		expect(restored[name].execute).toBe(original.execute);
+	}
+	expect(initial.apply_patches.deferLoading).toBe(false);
+	expect(initial.browser_open.deferLoading).toBe(true);
+	expect(tools.apply_patches.deferLoading).toBeUndefined();
+	expect(initial.publish_task).toBeUndefined();
+});
+
+it("offers exact edits immediately across model families", () => {
 	const tools = {
 		replace_text: definition(),
 		apply_patches: definition(),
@@ -22,7 +47,11 @@ it("offers exact editing immediately for every model without adding all edit ali
 	const result = discoverableAgentTools(tools, [], [], "implementation");
 	expect(result.replace_text.deferLoading).toBe(false);
 	expect(result.apply_patches.deferLoading).toBe(false);
-	expect(result.create_file.deferLoading).toBe(true);
+	expect(result.create_file.deferLoading).toBe(false);
+	expect(
+		discoverableAgentTools(tools, [], [], "implementation", "openai")
+			.replace_text.deferLoading,
+	).toBe(false);
 });
 
 it("keeps ordinary edits/checks/review immediate but lazily loads uncommon workflow schemas without losing permission or discovery", () => {
@@ -58,7 +87,7 @@ it("keeps ordinary edits/checks/review immediate but lazily loads uncommon workf
 	])
 		expect(lead[name].deferLoading).toBe(false);
 	const builder = discoverableAgentTools(tools, [], [], "implementation");
-	for (const name of ["inspect_changes", "apply_patches", "run_checks"])
+	for (const name of ["inspect_changes", "run_checks"])
 		expect(builder[name].deferLoading).toBe(false);
 	expect(
 		discoverableAgentTools(tools, [], ["start_command"]).start_command
@@ -66,7 +95,7 @@ it("keeps ordinary edits/checks/review immediate but lazily loads uncommon workf
 	).toBe(false);
 });
 
-it("prefers the batch editor for new builders while preserving discovered aliases and providers without it", () => {
+it("exposes familiar patch tools alongside the batch editor without changing executors", () => {
 	const tools = {
 		apply_patches: definition(),
 		apply_patch: definition(),
@@ -75,9 +104,8 @@ it("prefers the batch editor for new builders while preserving discovered aliase
 	};
 	const builder = discoverableAgentTools(tools, [], [], "implementation");
 	expect(builder.apply_patches.deferLoading).toBe(false);
-	for (const name of ["apply_patch", "create_file"])
-		expect(builder[name].deferLoading).toBe(true);
-	expect(builder.replace_text.deferLoading).toBe(false);
+	for (const name of ["apply_patch", "create_file", "replace_text"])
+		expect(builder[name].deferLoading).toBe(false);
 	expect(
 		discoverableAgentTools(tools, [], ["replace_text"], "implementation")
 			.replace_text.deferLoading,
@@ -103,21 +131,65 @@ it("prefers the batch editor for new builders while preserving discovered aliase
 	expect(native.apply_patch.deferLoading).toBe(false);
 });
 
-it("offers LSP inspection and complete memory reads without a discovery request", () => {
-	const tools = {
-		inspect_code: definition(),
-		inspect_code_batch: definition(),
-		read_project_memory: definition(),
-		debug_program: definition(),
-	};
+it("exposes the complete builder command lifecycle without discovery", () => {
+	const names = [
+		"execute_command",
+		"continue_command",
+		"view_image",
+		"read_file",
+		"read_files",
+		"stop_command",
+	];
+	const tools = Object.fromEntries(names.map((name) => [name, definition()]));
 	const builder = discoverableAgentTools(tools, [], [], "implementation");
-	for (const name of [
+	for (const name of names) {
+		expect(builder[name].deferLoading).toBe(false);
+		expect(builder[name].execute).toBe(tools[name].execute);
+	}
+	expect(
+		discoverableAgentTools({}, [], [], "implementation").bash,
+	).toBeUndefined();
+});
+
+it("keeps specialist workflows optional and retains their discovered executors", () => {
+	const names = [
+		"batch_read",
+		"list_files",
+		"search_files",
+		"read_code",
 		"inspect_code",
 		"inspect_code_batch",
+		"rename_symbol",
+		"debug_node",
+		"browser_open",
+		"search_project_memory",
 		"read_project_memory",
-	])
-		expect(builder[name].deferLoading).toBe(false);
-	expect(builder.debug_program.deferLoading).toBe(true);
+		"create_task",
+		"send_task_message",
+	];
+	const tools = Object.fromEntries(names.map((name) => [name, definition()]));
+	const first = discoverableAgentTools(tools, [], [], "implementation");
+	const resumed = discoverableAgentTools(tools, [], names, "implementation");
+	for (const name of names) {
+		expect(first[name].deferLoading).toBe(true);
+		expect(resumed[name].deferLoading).toBe(false);
+		expect(first[name].execute).toBe(tools[name].execute);
+		expect(resumed[name].execute).toBe(tools[name].execute);
+	}
+});
+
+it("keeps project instructions, retained evidence and blocked-task reporting immediate", () => {
+	const names = [
+		"read_repository_guidance",
+		"read_environment_report",
+		"read_tool_output",
+		"inspect_changes",
+		"run_checks",
+		"report_task_blocked",
+	];
+	const tools = Object.fromEntries(names.map((name) => [name, definition()]));
+	const builder = discoverableAgentTools(tools, [], [], "implementation");
+	for (const name of names) expect(builder[name].deferLoading).toBe(false);
 });
 
 it("keeps common operations immediate and defers optional schemas without mutating permissions", () => {

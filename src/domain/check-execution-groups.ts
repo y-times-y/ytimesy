@@ -1,4 +1,4 @@
-/** Explicit groups partition every command exactly once; groups finish in order. */
+/** Explicit groups override the shorthand, partition every command once, and finish in order. */
 export function checkExecutionGroups(
 	commandCount: number,
 	groups?: readonly (readonly number[])[],
@@ -19,10 +19,6 @@ export function checkExecutionGroups(
 	)
 		throw new Error(
 			"Check groups must include every command exactly once, with at most two independent commands per group.",
-		);
-	if (parallel)
-		throw new Error(
-			"Use either explicit check groups or parallel:true, not both.",
 		);
 	return groups.map((group) => [...group]);
 }

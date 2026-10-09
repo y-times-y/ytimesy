@@ -1,6 +1,6 @@
 import type { LanguageModelUsage } from "ai";
 import { expect, it } from "vitest";
-import { apiTokenUsage } from "./api-token-usage";
+import { apiOutputTokenDetails, apiTokenUsage } from "./api-token-usage";
 
 const usage: LanguageModelUsage = {
 	inputTokens: 100,
@@ -13,6 +13,20 @@ const usage: LanguageModelUsage = {
 	},
 	outputTokenDetails: { textTokens: 10, reasoningTokens: 0 },
 };
+
+it("preserves zero and missing output details while rejecting invalid counts", () => {
+	expect(apiOutputTokenDetails(usage)).toEqual({
+		textTokens: 10,
+		reasoningTokens: 0,
+	});
+	for (const count of [undefined, -1, Number.NaN, 1.5])
+		expect(
+			apiOutputTokenDetails({
+				...usage,
+				outputTokenDetails: { textTokens: count, reasoningTokens: count },
+			}),
+		).toEqual({ textTokens: null, reasoningTokens: null });
+});
 
 it("preserves gateway cache-write accounting from raw SDK usage", () => {
 	expect(

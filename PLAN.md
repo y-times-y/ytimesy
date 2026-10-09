@@ -1,5 +1,14 @@
 # ytimesy v0
 
+Context/cache follow-up (2026-10-08, isolated builder worktree): subscription
+compaction follows catalog limits and the shared safe-input budget, without the
+previous 64K/48K operating overrides. Subscription/API adapters retain exact
+history until compaction rather than retiring earlier observations after edits.
+Fresh instructions and source invalidations append; archive recovery, opaque
+reasoning, write fences and instruction restoration remain. Local regressions
+are distinct from unmeasured live cache/latency gains. See the
+[post-pilot fix](docs/research/builder-terminal-bench-local-pilot-2026-10-08.md#post-pilot-contextcache-fix).
+
 Follow-up harness scope (2026-10-06, isolated implementation): persistent guest
 capability transport, maintained grammar outlines, source-fenced file moves and
 text-only code actions, pinned Python/Go/Rust server preparation, and owned DAP

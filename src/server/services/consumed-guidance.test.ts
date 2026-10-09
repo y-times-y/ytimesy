@@ -85,55 +85,83 @@ it("keeps newly returned guidance complete until a later assistant has observed 
 	expect(archive).not.toHaveBeenCalled();
 });
 
-it("never rewrites prefix-bound provider observations even when retirement is enabled", async () => {
-	const messages = history();
-	implemented(messages);
-	const archive = vi.fn();
-	const model = new MockLanguageModelV4({
-		doStream: async () => ({
-			stream: simulateReadableStream({
-				initialDelayInMs: null,
-				chunkDelayInMs: null,
-				chunks: [
-					{
-						type: "finish",
-						finishReason: { unified: "stop", raw: "stop" },
-						usage: {
-							inputTokens: {
-								total: 3,
-								noCache: 3,
-								cacheRead: 0,
-								cacheWrite: 0,
-							},
-							outputTokens: { total: 2, text: 2, reasoning: 0 },
-						},
+it.each([
+	{
+		fallbackContextPolicy: "bound-prefix" as const,
+		archiveConsumedGuidance: true,
+	},
+	{
+		fallbackContextPolicy: "whole-turns" as const,
+		archiveConsumedGuidance: false,
+	},
+])(
+	"preserves complete observations when prefix binding or cache policy requires it ($fallbackContextPolicy, $archiveConsumedGuidance)",
+	async (policy) => {
+		const messages = history();
+		implemented(messages);
+		messages.push({
+			role: "assistant",
+			content: [
+				{
+					type: "reasoning",
+					text: "",
+					providerOptions: {
+						openai: { encryptedContent: "unchanged-opaque-state" },
 					},
-				],
+				},
+			],
+		});
+		const archive = vi.fn();
+		const model = new MockLanguageModelV4({
+			doStream: async () => ({
+				stream: simulateReadableStream({
+					initialDelayInMs: null,
+					chunkDelayInMs: null,
+					chunks: [
+						{
+							type: "finish",
+							finishReason: { unified: "stop", raw: "stop" },
+							usage: {
+								inputTokens: {
+									total: 3,
+									noCache: 3,
+									cacheRead: 0,
+									cacheWrite: 0,
+								},
+								outputTokens: { total: 2, text: 2, reasoning: 0 },
+							},
+						},
+					],
+				}),
 			}),
-		}),
-	});
-	await runModelAgentStep(
-		{
-			userId: "owner",
-			modelId: "model",
-			instructions: "Keep signed thinking intact",
-			messages,
-			tools: {},
-			signal: new AbortController().signal,
-			archiveHistory: archive,
-			onEvent: async () => {},
-			onStep: async () => {},
-		},
-		{
-			model,
-			contextWindow: 200_000,
-			archiveConsumedGuidance: true,
-			fallbackContextPolicy: "bound-prefix",
-		},
-	);
-	expect(archive).not.toHaveBeenCalled();
-	expect(JSON.stringify(model.doStreamCalls[0])).toContain("🙂".repeat(20000));
-});
+		});
+		await runModelAgentStep(
+			{
+				userId: "owner",
+				modelId: "model",
+				instructions: "Keep signed thinking intact",
+				messages,
+				tools: {},
+				signal: new AbortController().signal,
+				archiveHistory: archive,
+				onEvent: async () => {},
+				onStep: async () => {},
+			},
+			{
+				model,
+				contextWindow: 200_000,
+				...policy,
+			},
+		);
+		expect(archive).not.toHaveBeenCalled();
+		expect(JSON.stringify(model.doStreamCalls[0])).toContain(
+			"🙂".repeat(20000),
+		);
+		expect(JSON.stringify(model.doStreamCalls[0])).toContain(
+			"unchanged-opaque-state",
+		);
+	},
+);
 
 it("archives after the first completed implementation decision, before another inference replays the body", async () => {
 	const messages = history();
