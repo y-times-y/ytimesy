@@ -148,6 +148,48 @@ are not a substitute for deliverable tests. No task-specific solution or public
 trajectory content enters the evaluator prompt. These are tested contracts and
 behavioral guidance, not guaranteed model compliance or a proven speedup.
 
+### Frozen earlier-feedback live result
+
+One private builder-only attempt ran `cc1b5ad` on the unchanged familiar
+`session-window-debug` task. Prompt, source hash, image, resources, model,
+Max reasoning, Fast off and request/token/time limits match the previous attempt.
+No native control, leader, Supabase request or publication ran.
+
+The protected original grader passed (reward 1, exit 0), but the model turn
+did **not** complete: request nine failed with `Failed to process successful
+response`. The last model-authored check had 25/26 tests passing, with one
+watermark assertion still failing. Protected-grader success does not erase that
+unfinished work or establish broad code quality.
+
+Recorded agent time was **817.524 seconds**, versus **696.315 seconds** for the
+previous completed builder attempt. Nine requests were attempted; only eight
+returned usage. Reported input/output total was 192,844 tokens, including 45,626
+uncached input tokens. These are incomplete accounting lower bounds, not a
+completed-run token-efficiency win. This attempt does not beat the historical
+public native mean of 541.4374 seconds; public API versus subscription transport
+and unknown native Fast configuration remain comparison limitations.
+
+The intended behaviors did occur: the first small executable reproduction ran
+in request two, after roughly 36 seconds of model calls, and the immediate tool
+inventory remained stable at 17 tools. However, requests three and four still
+consumed 532.7 seconds preparing analysis/tests, including a 20,384-character
+test patch. Earlier feedback and stable schemas did not solve generation volume
+or guarantee lower end-to-end latency.
+
+The installed SDK uses the saved failure message for response-handler or body
+stream errors. The evaluator retained only the message, not its underlying
+cause, so the exact network/parser cause is undetermined. No automatic replay
+or fallback was performed. A subsequent diagnostic improvement must preserve
+only allowlisted error categories, never credentials or raw request bodies.
+
+Local verification before inference passed 1,704 tests (seven skipped),
+typecheck, lint, production build and diff checks. Both owned VM/snapshot
+registries are empty and cleanup receipts passed; the local evaluation database
+was removed. Provider inventory returned to four VMs/five snapshots belonging
+to other work. The disposable-resource envelope was $5; no invoice was fetched.
+Private evidence lives under
+`.ytimesy/terminal-bench-feedback-20261008/session-window-debug/`.
+
 ## Trace-driven builder efficiency follow-up
 
 The next isolated change targets the observed tool and evidence overhead, not
