@@ -55,5 +55,8 @@ it.each(["openai", "anthropic", "google", "other"] as const)(
 		expect(instructions).toContain("execute_command with rg");
 		expect(instructions).not.toContain("discover replace_text");
 		expect(instructions).not.toContain("oldText");
+		expect(instructions).toContain("least expensive safe workflow");
+		expect(instructions).toContain("when semantic uncertainty warrants");
+		expect(instructions).not.toContain("Use rename_symbol, rename_file");
 	},
 );

@@ -1,6 +1,13 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import {
+	mkdtemp,
+	readFile,
+	rename,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -282,6 +289,64 @@ it("rejects traversal, absolute and git-internal inspection scopes before execut
 	for (const path of ["../outside", "/tmp", ".git/index", "a\\b", "a\0b"])
 		await expect(call(tools.inspect_changes, { path })).rejects.toThrow();
 	expect(commands).toEqual([]);
+});
+
+it("reports an unstaged move as a compact rename without changing the real index", async () => {
+	const { root, tools } = await fixture();
+	const body = `${Array.from(
+		{ length: 727 },
+		(_, i) => `export const value${i} = ${i};`,
+	).join("\n")}\n`;
+	await writeFile(join(root, "old.ts"), body);
+	await run("git", ["-C", root, "add", "."]);
+	await run("git", [
+		"-C",
+		root,
+		"-c",
+		"user.name=Test",
+		"-c",
+		"user.email=test@example.invalid",
+		"commit",
+		"-qm",
+		"base",
+	]);
+	await rename(join(root, "old.ts"), join(root, "new.ts"));
+	await writeFile(
+		join(root, "new.ts"),
+		body.replace("value0 = 0", "value0 = 1"),
+	);
+	const before = await readFile(join(root, ".git/index"));
+	const result = await call(tools.inspect_changes, {});
+	if (typeof result !== "string") throw new Error("Expected a complete diff");
+	expect(result).toContain("rename from old.ts");
+	expect(result).toContain("rename to new.ts");
+	expect(result).toContain("+export const value0 = 1;");
+	expect(result.length).toBeLessThan(1000);
+	expect(await readFile(join(root, ".git/index"))).toEqual(before);
+});
+
+it("includes unborn repository changes without invoking clean/process filters or creating its real index", async () => {
+	const { root, tools } = await fixture();
+	await writeFile(join(root, ".gitattributes"), "*.ts filter=guard\n");
+	await writeFile(join(root, "new.ts"), "export const answer = 42;\n");
+	await run("git", [
+		"-C",
+		root,
+		"config",
+		"filter.guard.clean",
+		"touch filter-ran; cat",
+	]);
+	await run("git", ["-C", root, "config", "filter.guard.process", "exit 91"]);
+	await run("git", ["-C", root, "config", "filter.guard.required", "true"]);
+	expect(await call(tools.inspect_changes, {})).toContain(
+		"+export const answer = 42;",
+	);
+	await expect(readFile(join(root, "filter-ran"))).rejects.toMatchObject({
+		code: "ENOENT",
+	});
+	await expect(readFile(join(root, ".git/index"))).rejects.toMatchObject({
+		code: "ENOENT",
+	});
 });
 
 it("verifies only successfully completed batches and does not repeat writes or verification on replay", async () => {
