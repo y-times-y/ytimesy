@@ -10,6 +10,8 @@ it("requests early executable feedback without sacrificing durable regression co
 	expect(instructions).toContain("smallest executable reproduction");
 	expect(instructions).toContain("before extensive test scaffolding");
 	expect(instructions).toContain("persist regression coverage");
+	expect(instructions).toContain("immediately check it");
+	expect(instructions).toContain("Do not front-load");
 	expect(instructions).toContain("Preserve every required check");
 });
 

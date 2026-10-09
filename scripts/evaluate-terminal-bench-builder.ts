@@ -14,6 +14,7 @@ import {
 	evaluationTokenUsage,
 } from "../benchmarks/evaluation/token-usage";
 import type { ApiAgentEvent } from "../src/domain/api-agent-event";
+import { apiModelFailureClassification } from "../src/domain/api-turn-failure";
 import type { HarnessModelMetric } from "../src/domain/harness-performance";
 import { codexSubscriptionModel } from "../src/server/adapters/codex-subscription";
 import {
@@ -218,6 +219,7 @@ try {
 			);
 		} catch (error) {
 			failure = error instanceof Error ? error.message : "Builder failed";
+			await save("model-failure", apiModelFailureClassification(error));
 		}
 		const agentSeconds = (Date.now() - started) / 1000;
 		console.log(
@@ -245,6 +247,7 @@ try {
 			noLeader: true,
 			...evaluationTokenUsage(events),
 			usageAccounting: "cumulative usage including compaction",
+			usageCompleteness: failure ? "incomplete" : "reported",
 		});
 		console.log(
 			`${task.id}: official reward ${reward}; failure ${failure ?? "none"}.`,
