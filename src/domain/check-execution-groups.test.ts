@@ -5,6 +5,7 @@ it("keeps default checks serial and preserves explicit ordered groups", () => {
 	expect(checkExecutionGroups(3)).toEqual([[0], [1], [2]]);
 	expect(checkExecutionGroups(3, [[0, 2], [1]])).toEqual([[0, 2], [1]]);
 	expect(checkExecutionGroups(3, undefined, true)).toEqual([[0, 1, 2]]);
+	expect(checkExecutionGroups(3, [[0, 1], [2]], true)).toEqual([[0, 1], [2]]);
 });
 
 it("rejects dropped, duplicated, invalid and oversized groups", () => {
@@ -20,5 +21,4 @@ it("rejects dropped, duplicated, invalid and oversized groups", () => {
 			"every command exactly once",
 		);
 	}
-	expect(() => checkExecutionGroups(2, [[0, 1]], true)).toThrow("either");
 });

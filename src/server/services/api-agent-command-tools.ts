@@ -256,12 +256,18 @@ export function apiAgentCommandTools(
 		});
 		const checksSchema = z.object({
 			commands: z.array(z.string().min(1).max(16_000)).min(1).max(8),
-			parallel: z.boolean().default(false),
+			parallel: z
+				.boolean()
+				.default(false)
+				.describe("Shorthand for independent checks when groups is omitted."),
 			groups: z
 				.array(z.array(z.number().int().min(0).max(7)).min(1).max(2))
 				.min(1)
 				.max(8)
-				.optional(),
+				.optional()
+				.describe(
+					"Ordered groups of up to two independent command indices. Includes every command exactly once; overrides parallel.",
+				),
 			maxSeconds: z.number().int().min(1).max(120).default(120),
 			sourcePaths: z
 				.array(z.string().min(1).max(2048))

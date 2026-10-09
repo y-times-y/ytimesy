@@ -68,6 +68,50 @@ const finish = {
 	finishReason: { unified: "stop" as const, raw: "stop" },
 };
 
+it.each([true, false])(
+	"records reported output components without guessing missing reasoning (%s)",
+	async (reported) => {
+		const metric = vi.fn();
+		const model = new MockLanguageModelV4({
+			doStream: async () =>
+				stream([
+					{
+						...finish,
+						usage: {
+							...usage,
+							outputTokens: {
+								total: 11,
+								text: reported ? 3 : undefined,
+								reasoning: reported ? 8 : undefined,
+							},
+						},
+					},
+				]),
+		});
+		await runModelAgent(
+			{
+				userId: "alice",
+				modelId: "model",
+				instructions: "Implement",
+				messages: [{ role: "user", content: "Fixture" }],
+				tools: {},
+				signal: new AbortController().signal,
+				onEvent: async () => {},
+				onStep: async () => {},
+				onModelMetric: metric,
+			},
+			{ model },
+		);
+		expect(metric).toHaveBeenCalledWith(
+			expect.objectContaining({
+				output_tokens: 11,
+				text_output_tokens: reported ? 3 : null,
+				reasoning_output_tokens: reported ? 8 : null,
+			}),
+		);
+	},
+);
+
 it("rehydrates exact instructions after foreground compaction before the next model call", async () => {
 	const model = new MockLanguageModelV4({
 		doStream: async () => stream([finish]),

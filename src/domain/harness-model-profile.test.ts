@@ -45,6 +45,8 @@ it("preserves offered planning and recommends bounded evidence instead of duplic
 	expect(instructions).toContain("read_work_plan");
 	expect(instructions).toContain("outputView:summary");
 	expect(instructions).toContain("configured formatter");
+	expect(instructions).toContain("never invent line limits");
+	expect(instructions).toContain("match existing style");
 	expect(instructions).toContain("Do not reread entire");
 });
 

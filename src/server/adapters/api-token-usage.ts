@@ -7,6 +7,14 @@ function tokenCount(value: unknown): number | null {
 		: null;
 }
 
+/** Missing provider details remain unknown, not zero or inferred from totals. */
+export function apiOutputTokenDetails(usage: LanguageModelUsage) {
+	return {
+		textTokens: tokenCount(usage.outputTokenDetails.textTokens),
+		reasoningTokens: tokenCount(usage.outputTokenDetails.reasoningTokens),
+	};
+}
+
 export function apiTokenUsage(usage: LanguageModelUsage): ApiTokenUsage {
 	const raw = usage.raw;
 	const details = raw?.prompt_tokens_details;
