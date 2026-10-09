@@ -304,6 +304,14 @@ it("offers stat-only inspection without repeating source bodies or changing the 
 	});
 });
 
+it("does not advertise batch verification when its callback is unavailable", async () => {
+	const { tools } = await fixture();
+	expect(tools.apply_patches.description).not.toContain(
+		"optional verification",
+	);
+	expect(tools.apply_patches.description).toContain("run_checks separately");
+});
+
 it("reports an unstaged move as a compact rename without changing the real index", async () => {
 	const { root, tools } = await fixture();
 	const body = `${Array.from(

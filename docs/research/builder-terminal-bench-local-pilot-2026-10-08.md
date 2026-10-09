@@ -167,3 +167,55 @@ typecheck including workflow types, Biome, production build and diff whitespace
 checks passed. An earlier accidentally unbounded suite invocation caused local
 resource-contention timeouts and was stopped; the correctly bounded rerun above
 is the reported result. No production deployment or database migration occurred.
+
+### Frozen follow-up live result
+
+The operator's request to fix and rerun used the same single-task disposable
+envelope, without a native-control rerun or Supabase calls. One inference attempt
+ran commit `de119b6`. An initial metadata launch failed before allocation/inference
+because the worktree lacked the evaluation Python; the unchanged existing support
+root was supplied explicitly. Both attempts are retained privately. The actual
+run is `.ytimesy/terminal-bench-trace-fix-20261008/session-window-debug-rerun/`.
+Task prompt, source hash, pinned image, resources, Max reasoning, Fast off and
+request/token/time limits match the preceding attempts.
+
+| Metric | Regressed builder | Trace-fix builder | Earlier builder | Public native mean |
+| --- | ---: | ---: | ---: | ---: |
+| Official reward | 1 | 1 | 1 | 4/5 trials passed |
+| Agent seconds | 903.952 | 696.315 | 699.575 | 541.4374 |
+| Requests including compaction | 18 | 10 | 16 | not verified |
+| Input + output tokens | 976950 | 267080 | 422162 | 374445.2 |
+| Uncached input tokens | 156573 | 62111 | 154711 | 49888.6 |
+| Output tokens | 30105 | 21673 | 26811 | 28196.6 |
+
+This attempt was 23.0% faster and used 72.7% fewer total tokens than the regressed
+trace. Against the earlier builder it was essentially tied on time (-0.5%), with
+36.7% fewer tokens. Against the historical native mean it remained 28.6% slower,
+with 28.7% fewer total tokens but 24.5% more uncached input. Subscription usage
+is not an API invoice. These are familiar-task single-attempt observations,
+not statistically established superiority, dollar savings or broad code quality.
+
+The trace no longer searches for absent planning tools, rereads complete source
+after writing it, or cycles through manual formatting. It runs 18 model-authored
+tests, including arrival-order coverage, and uses compact successful-check
+receipts, a stat inventory and scoped final source diffs. Failed baseline
+regressions retain their diagnostics. Working input ends at 47,481 tokens versus
+101,820 previously. No compaction occurs. Model time sums to 668.8 seconds; tool
+time sums to 38.6 seconds and may overlap. Initial analysis and test generation
+still dominate (306.4 and 179.4 seconds), so generation discipline is not solved.
+
+The new trace also exposed a pilot-only capability mismatch: its file tools lack
+the production batch-verification callback, but their description and shared
+instructions advertised optional verification. An attempted edit was rejected
+before writes; the builder recovered through composition/separate checks. A
+post-run regression now verifies that absent callbacks do not advertise that
+feature, and the shared instructions condition its use on availability. This
+description-only follow-up was locally tested after the frozen live attempt;
+its performance effect is unmeasured and is not folded into the numbers above.
+
+The separate original protected grader returned reward 1 and exit 0. Both owned
+VM/snapshot registries are empty, both cleanup receipts passed, local archives
+are empty and no evaluation database container remains. Live provider inventory
+returned to four VMs/five snapshots belonging to other work. The $5 resource
+envelope was retained; no actual invoice was fetched. Nothing was deployed,
+published, merged to main or pushed.

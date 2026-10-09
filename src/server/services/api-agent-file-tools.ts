@@ -770,7 +770,11 @@ export function apiAgentFileTools(
 		});
 	tools.apply_patches = tool({
 		description:
-			"Apply up to eight distinct files in one call using headerless V4A operations. Parses every diff and reads update sources before writing. Each file uses stale-edit protection. This is not a transaction: on a write failure, reports completed files and stops; inspect that result before retrying. Use for a coherent multi-file implementation instead of separate create_file calls. When all edits and required commands are known, optional verification formats after successful edits, then runs independent checks through run_checks on that stable tree. Formatting failure prevents checks. Do not edit while this call runs; inspect final changes afterward. Completed hashes describe the edit stage, before formatting. Every verification output retains actual exit status and full-output references; failures still require repair and affected checks rerun.",
+			"Apply up to eight distinct files in one call using headerless V4A operations. Parses every diff and reads update sources before writing. Each file uses stale-edit protection. This is not a transaction: on a write failure, reports completed files and stops; inspect that result before retrying. Use for a coherent multi-file implementation instead of separate create_file calls. " +
+			(input.verifyBatch
+				? "When all edits and required commands are known, optional verification formats after successful edits, then runs independent checks through run_checks on that stable tree. Formatting failure prevents checks. Completed hashes describe the edit stage, before formatting. Every verification output retains actual exit status and full-output references; failures still require repair and affected checks rerun. "
+				: "Batch verification is unavailable in this runtime; call run_checks separately, or compose_tools for ordered edits and checks. ") +
+			"Do not edit while this call runs; inspect final changes afterward.",
 		inputSchema: z.object({
 			operations: patchBatch,
 			verification: input.verifyBatch
