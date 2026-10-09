@@ -518,3 +518,36 @@ failed preflight with `fetch failed`, zero model requests, no owned cloud
 resources, and successful cleanup. Provider inventory was independently
 reachable afterward. An unchanged retry has a separate output directory so
 the failed attempt is retained. Its outcome will be recorded separately.
+
+#### Incremental-feedback live result
+
+The unchanged retry completed normally with protected reward **1**, 610.030
+agent seconds, and 12 requests. Reported usage was 268,110 total tokens:
+249,770 input, 18,340 output, 52,010 uncached input and 197,760 cached input.
+No request-start failures were recorded. The shared profile implementation was
+frozen at `a0a58d0`; the subsequent commit changed documentation only.
+
+Against the earlier completed passing `de119b6` run (696.315 seconds), this
+single attempt was 12.4% faster. Total tokens were essentially flat (+0.4%),
+uncached input decreased 16.3%, and output decreased 15.4%. Against the public
+native mean (541.4374 seconds), it remains 12.7% slower despite 28.4% fewer
+total tokens. The public API/subscription serving mismatch, familiar task and
+single treatment attempt prevent causal or general-superiority claims.
+The immediately preceding transport-only run was faster (583.433 seconds) but
+failed the grader; it is not an accepted quality-preserving baseline win.
+
+The first reproduction followed source inspection, the initial patch request
+took 184.528 seconds versus 307.812 in the failed transport-only attempt, and
+focused checks immediately followed the patch. Subsequent behavior corrections
+and verification stayed in the trace. Final review still generated a 14,674-
+character test patch in a 121.406-second request. The agent reports 14 passing
+model-authored tests; the separate original protected grader also passed. These
+facts establish this task's acceptance, not absence of all bugs or better broad
+code quality than native Codex.
+
+Both owned resource registries are empty, both cleanup receipts passed, and
+independent Freestyle inventory returned to four unrelated VMs/five snapshots.
+No hidden grader code, production database, native control, deployment,
+publication or persistent compute was used. The $5 resource envelope was kept;
+actual invoice cost was not fetched. The zero-inference failed preflight remains
+separate rather than being erased or counted as a completed coding attempt.
