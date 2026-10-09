@@ -80,6 +80,7 @@ async function subscriptionRequest(userId: string, path: string) {
 		headers: {
 			Authorization: `Bearer ${tokens.accessToken}`,
 			"ChatGPT-Account-ID": tokens.chatgptAccountId,
+			Connection: "close",
 		},
 		redirect: "error",
 		signal: AbortSignal.timeout(7_000),
@@ -198,6 +199,9 @@ export async function codexSubscriptionModel(
 		headers.set("ChatGPT-Account-ID", current.chatgptAccountId);
 		// The pinned native ChatGPT transport derives cache affinity from this header.
 		headers.set("session-id", cacheKey);
+		// Long reasoning steps leave unrelated pooled HTTP/1 sockets idle. Do not
+		// retain them across steps; this does not retry or replay a returned stream.
+		headers.set("Connection", "close");
 		return fetch(url, { ...init, headers, redirect: "error" });
 	};
 	const model = connectedLanguageModel(
