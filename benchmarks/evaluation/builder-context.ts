@@ -1,5 +1,8 @@
 import type { ToolSet } from "ai";
-import { archiveModelContext } from "../../src/server/adapters/context-archives";
+import {
+	archiveModelContext,
+	type ContextArchiveStorage,
+} from "../../src/server/adapters/context-archives";
 import { agentContextArchiveTools } from "../../src/server/services/agent-context-archive-tools";
 import type { AgentToolWorkspace } from "../../src/server/services/agent-tool-workspace";
 import { automaticRepositoryContext } from "../../src/server/services/automatic-repository-context";
@@ -13,6 +16,7 @@ export function evaluationBuilderContext(input: {
 	sessionId: string;
 	signal: AbortSignal;
 	onEvent: ModelAgentInput["onEvent"];
+	storage?: ContextArchiveStorage;
 }) {
 	const context = automaticRepositoryContext({
 		tools: {
@@ -29,6 +33,11 @@ export function evaluationBuilderContext(input: {
 		afterTools: context.afterTools,
 		restoreInstructions: context.restoreInstructions,
 		archiveHistory: (history: Parameters<typeof archiveModelContext>[2]) =>
-			archiveModelContext(input.userId, input.sessionId, history),
+			archiveModelContext(
+				input.userId,
+				input.sessionId,
+				history,
+				input.storage,
+			),
 	};
 }
