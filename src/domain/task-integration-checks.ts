@@ -1,5 +1,17 @@
 import { parseEnvironmentRecipe } from "./project-environment";
 
+/** Missing policy is an admission/configuration problem, not a failed Git operation. */
+export class VerificationPolicyFailure extends Error {
+	constructor(readonly reason: "missing-checks" | "missing-test-script") {
+		super(
+			reason === "missing-checks"
+				? "Configure project verification checks before automated integration. Work is preserved; no verification receipt or publication was accepted."
+				: "A project test script or explicit verification recipe is required for automated integration. Work is preserved; no verification receipt or publication was accepted.",
+		);
+		this.name = "VerificationPolicyFailure";
+	}
+}
+
 /** Only the clean baseline may assert independence; default checks remain ordered and serial. */
 export function taskVerificationPlan(
 	input: Parameters<typeof taskIntegrationChecks>[0],
@@ -26,10 +38,7 @@ export function taskIntegrationChecks(input: {
 	if (input.recipe) {
 		const recipe = parseEnvironmentRecipe(input.recipe);
 		const commands = [...new Set([...recipe.verify, ...recipe.checks])];
-		if (!commands.length)
-			throw new Error(
-				"Configure project verification checks before automated integration.",
-			);
+		if (!commands.length) throw new VerificationPolicyFailure("missing-checks");
 		return commands;
 	}
 	const manifest: unknown = input.manifest ? JSON.parse(input.manifest) : null;
@@ -40,9 +49,7 @@ export function taskIntegrationChecks(input: {
 		!manifest.scripts ||
 		typeof manifest.scripts !== "object"
 	)
-		throw new Error(
-			"Configure project verification checks before automated integration.",
-		);
+		throw new VerificationPolicyFailure("missing-checks");
 	const scripts = manifest.scripts as Record<string, unknown>;
 	const manager = input.files.includes("pnpm-lock.yaml")
 		? "corepack pnpm"
@@ -55,8 +62,6 @@ export function taskIntegrationChecks(input: {
 		(name) => typeof scripts[name] === "string" && scripts[name].trim(),
 	);
 	if (!names.includes("test"))
-		throw new Error(
-			"A project test script or explicit verification recipe is required for automated integration.",
-		);
+		throw new VerificationPolicyFailure("missing-test-script");
 	return names.map((name) => `${manager} run ${name}`);
 }

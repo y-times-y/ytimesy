@@ -50,7 +50,12 @@ export function responsesEndpointCompactor(input: {
 				);
 				if (!response.ok) return response;
 				const result = await response.json();
-				if (!Array.isArray(result.output))
+				if (
+					!result ||
+					typeof result !== "object" ||
+					!("output" in result) ||
+					!Array.isArray(result.output)
+				)
 					throw new Error("Invalid native compaction output.");
 				const originalUsers = context.messages.filter(
 					(message) => message.role === "user",

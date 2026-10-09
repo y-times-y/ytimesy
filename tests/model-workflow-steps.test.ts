@@ -3,6 +3,8 @@ import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import {
 	driveModelWorkflow,
+	MAX_WORKFLOW_MODEL_STEPS,
+	modelStepLimit,
 	type WorkflowStep,
 	type WorkflowStepOutcome,
 	workflowTurnSchema,
@@ -34,17 +36,29 @@ beforeAll(async () => {
 	 create table api_turn(id uuid primary key,lease_id uuid,state text,cancel_requested boolean,heartbeat_at timestamptz);`);
 	await db.exec(
 		readFileSync(
+			"supabase/migrations/20261008120000_api_turn_executor.sql",
+			"utf8",
+		),
+	);
+	await db.exec(
+		readFileSync(
 			"supabase/migrations/20261004010000_model_workflow_steps.sql",
+			"utf8",
+		),
+	);
+	await db.exec(
+		readFileSync(
+			"supabase/migrations/20261008010000_builder_workflow_step_limit.sql",
 			"utf8",
 		),
 	);
 }, 15_000);
 beforeEach(async () => {
 	await db.exec("truncate api_turn cascade");
-	await query("insert into api_turn values($1,$2,'running',false,now())", [
-		request.turnId,
-		request.leaseId,
-	]);
+	await query(
+		"insert into api_turn(id,lease_id,state,cancel_requested,heartbeat_at) values($1,$2,'running',false,now())",
+		[request.turnId, request.leaseId],
+	);
 });
 afterAll(async () => {
 	await db.close();
@@ -65,6 +79,18 @@ it("never re-executes a processing receipt and reuses a confirmed outcome", asyn
 	});
 	expect((await claimModelWorkflowStep({ ...request, index: 2 })).kind).toBe(
 		"claimed",
+	);
+});
+
+it("rejects DO-assigned turns on the legacy executor before creating a receipt", async () => {
+	await query("update api_turn set state='queued'");
+	await query("update api_turn set executor='durable-object',state='running'");
+	expect(await claimModelWorkflowStep(request)).toEqual({
+		kind: "unavailable",
+	});
+	expect((await query("select * from model_workflow_step")).rows).toEqual([]);
+	await expect(query("update api_turn set executor='node'")).rejects.toThrow(
+		"cannot change executor",
 	);
 });
 
@@ -118,6 +144,48 @@ it("denies browser access to receipts", async () => {
 	expect(result.rows[0]).toEqual({ relrowsecurity: true, can_read: false });
 });
 
+it("persists every builder step through bounded termination without replay", async () => {
+	for (let index = 1; index <= MAX_WORKFLOW_MODEL_STEPS + 1; index++) {
+		const step = { ...request, index };
+		expect((await claimModelWorkflowStep(step)).kind).toBe("claimed");
+		const outcome =
+			index === MAX_WORKFLOW_MODEL_STEPS + 1 ? "failed" : "continue";
+		await completeModelWorkflowStep(step, outcome);
+		expect(await claimModelWorkflowStep(step)).toEqual({
+			kind: "done",
+			outcome,
+		});
+	}
+	const receipts = await query(
+		"select count(*)::integer as count from model_workflow_step",
+	);
+	expect(receipts.rows[0]).toEqual({ count: MAX_WORKFLOW_MODEL_STEPS + 1 });
+	await expect(
+		query(
+			"insert into model_workflow_step(turn_id,lease_id,step_index,state) values($1,$2,$3,'processing')",
+			[request.turnId, request.leaseId, MAX_WORKFLOW_MODEL_STEPS + 2],
+		),
+	).rejects.toThrow(/check constraint/);
+});
+
+it("upgrades the original constraint without replacing existing receipts", async () => {
+	await claimModelWorkflowStep(request);
+	await completeModelWorkflowStep(request, "continue");
+	await db.exec(`alter table model_workflow_step
+	 drop constraint model_workflow_step_step_index_check,
+	 add constraint model_workflow_step_step_index_check check(step_index between 1 and 31)`);
+	await db.exec(
+		readFileSync(
+			"supabase/migrations/20261008010000_builder_workflow_step_limit.sql",
+			"utf8",
+		),
+	);
+	expect(await claimModelWorkflowStep(request)).toEqual({
+		kind: "done",
+		outcome: "continue",
+	});
+});
+
 it("durable replay skips finished callbacks and stops on the terminal outcome", async () => {
 	const saved = new Map<string, WorkflowStepOutcome>();
 	const execute = vi.fn(async (step: WorkflowStep) =>
@@ -159,10 +227,27 @@ it("does not retry unknown side effects, and performs a no-inference terminal st
 	);
 	expect(failure).toHaveBeenCalledTimes(1);
 	const bounded = vi.fn(async (step: WorkflowStep) =>
-		step.index === 31 ? ("failed" as const) : ("continue" as const),
+		step.index === MAX_WORKFLOW_MODEL_STEPS + 1
+			? ("failed" as const)
+			: ("continue" as const),
 	);
 	expect(await driveModelWorkflow(request, recorded, bounded)).toEqual({
 		outcome: "failed",
 	});
-	expect(bounded).toHaveBeenCalledTimes(31);
+	expect(bounded).toHaveBeenCalledTimes(MAX_WORKFLOW_MODEL_STEPS + 1);
+});
+
+it("preserves the leader limit while admitting a longer builder workflow", async () => {
+	expect(modelStepLimit("coordination")).toBe(30);
+	expect(modelStepLimit("implementation")).toBe(128);
+	const execute = vi.fn(async (step: WorkflowStep) =>
+		step.index === 74 ? ("completed" as const) : ("continue" as const),
+	);
+	const result = await driveModelWorkflow(
+		request,
+		async (_name, run) => run(),
+		execute,
+	);
+	expect(result).toEqual({ outcome: "completed" });
+	expect(execute).toHaveBeenCalledTimes(74);
 });

@@ -75,7 +75,12 @@ it("gives children relevant entries without legacy briefing or unrelated context
 	expect(
 		knowledgeForTask(document, "Fix branch selection", true),
 	).not.toContain("Old sibling reply");
-	expect(knowledgeForTask(document, "Change avatar", true)).toBe("");
+	expect(knowledgeForTask(document, "Change avatar", true)).toContain(
+		"[[memory/branch-selection]]",
+	);
+	expect(knowledgeForTask(document, "Change avatar", true)).not.toContain(
+		"Invoices",
+	);
 	expect(knowledgeForTask(document, "Change avatar", false)).toContain(
 		"[[memory/branch-selection]]",
 	);

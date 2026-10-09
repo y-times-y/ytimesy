@@ -23,6 +23,13 @@ export async function executeWorkflowRequest(
 	request: Request,
 	secret: string,
 	machines: WorkspaceMachines | (() => WorkspaceMachines),
+	receipts: {
+		claim: typeof claimModelWorkflowStep;
+		complete: typeof completeModelWorkflowStep;
+	} = {
+		claim: claimModelWorkflowStep,
+		complete: completeModelWorkflowStep,
+	},
 ) {
 	const path = new URL(request.url).pathname;
 	if (
@@ -57,7 +64,7 @@ export async function executeWorkflowRequest(
 	}
 	const parsed = workflowStepSchema.safeParse(value);
 	if (!parsed.success) return new Response(null, { status: 400 });
-	const claim = await claimModelWorkflowStep(parsed.data);
+	const claim = await receipts.claim(parsed.data);
 	if (claim.kind === "unavailable") return new Response(null, { status: 409 });
 	if (claim.kind === "done") return Response.json({ outcome: claim.outcome });
 	if (claim.kind === "cancelled") {
@@ -93,7 +100,7 @@ export async function executeWorkflowRequest(
 			limitReached: parsed.data.index > MAX_WORKFLOW_MODEL_STEPS,
 		},
 	);
-	await completeModelWorkflowStep(parsed.data, outcome);
+	await receipts.complete(parsed.data, outcome);
 	return Response.json({ outcome });
 }
 

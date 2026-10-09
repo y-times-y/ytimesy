@@ -1,0 +1,102 @@
+import {
+	GitProxyFailure,
+	type GitProxyGrant,
+} from "../../domain/github-git-proxy";
+import { database } from "../adapters/database";
+import { authorizedRepository, githubClient } from "../adapters/github";
+import { githubInstallationAccessToken } from "../adapters/github/installation-token";
+import { githubAccessToken } from "../auth/github-connection";
+
+/** Re-check current owner and GitHub access on every operation, including after disconnect. */
+export async function authorizeGitProxy(grant: GitProxyGrant) {
+	const repository = (
+		await database()
+			.query<{ repositoryId: number }>(
+				`select r.repository_id::float8 as "repositoryId"
+		 from project_repository r join project p on p.id=r.project_id
+		 where p.id=$1 and p.user_id=$2 and r.installation_id=$3 and r.full_name=$4`,
+				[
+					grant.projectId,
+					grant.userId,
+					grant.installationId,
+					`${grant.owner}/${grant.name}`,
+				],
+			)
+			.catch((cause: unknown) => {
+				const message = cause instanceof Error ? cause.message : "";
+				const code =
+					cause instanceof Error && "code" in cause ? cause.code : null;
+				const allowed = new Set([
+					"ENOTFOUND",
+					"ECONNREFUSED",
+					"ECONNRESET",
+					"ETIMEDOUT",
+					"ENOENT",
+					"ERR_TLS_CERT_ALTNAME_INVALID",
+					"UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+					"CERT_HAS_EXPIRED",
+					"DEPTH_ZERO_SELF_SIGNED_CERT",
+					"SELF_SIGNED_CERT_IN_CHAIN",
+				]);
+				console.warn("Git proxy database failed.", {
+					databaseErrorType:
+						cause instanceof Error &&
+						["Error", "TypeError", "RangeError", "AggregateError"].includes(
+							cause.name,
+						)
+							? cause.name
+							: "other",
+					databaseReason:
+						cause instanceof Error && /timeout/i.test(cause.message)
+							? "connect-timeout"
+							: cause instanceof Error &&
+									/cross.request|different request/i.test(cause.message)
+								? "request-ownership"
+								: cause instanceof Error &&
+										/ssl|tls|certific/i.test(cause.message)
+									? "tls"
+									: cause instanceof Error &&
+											/not implemented/i.test(cause.message)
+										? "unsupported-runtime"
+										: /terminated|closed/i.test(message)
+											? "connection-closed"
+											: /undefined|null/i.test(message)
+												? "runtime-property"
+												: /socket|stream/i.test(message)
+													? "socket-runtime"
+													: "unknown",
+					databaseCode:
+						typeof code === "string" &&
+						(allowed.has(code) || /^[0-9A-Z]{5}$/.test(code))
+							? code
+							: "unknown",
+				});
+				throw new GitProxyFailure("database");
+			})
+	).rows[0];
+	if (!repository) return null;
+	const userToken = await githubAccessToken(grant.userId).catch(() => {
+		throw new GitProxyFailure("user-connection");
+	});
+	await authorizedRepository(
+		userToken,
+		grant.installationId,
+		repository.repositoryId,
+	).catch(() => {
+		throw new GitProxyFailure("repository-access");
+	});
+	if (grant.access === "write") {
+		const access = await githubClient(userToken)
+			.repos.get({ owner: grant.owner, repo: grant.name })
+			.catch(() => {
+				throw new GitProxyFailure("repository-access");
+			});
+		if (!access.data.permissions?.push) return null;
+	}
+	return githubInstallationAccessToken(grant.installationId, {
+		repositoryNames: [grant.name],
+		contents: grant.access,
+	}).catch(() => {
+		throw new GitProxyFailure("installation-token");
+	});
+}

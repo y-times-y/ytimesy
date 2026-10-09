@@ -143,6 +143,8 @@ async function buildProviderTemplate(
 	await machines.ensureRunning(vm);
 	const homeResult = await machines.exec(vm, "printenv HOME", 15_000);
 	await prepareProjectCheckout({
+		userId: input.userId,
+		projectId: input.projectId,
 		host: {
 			exec: (command, timeoutMs) =>
 				machines.exec(

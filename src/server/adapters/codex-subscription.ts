@@ -1,17 +1,20 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import { SubscriptionMetadataFailure } from "#/domain/api-turn-failure";
+import { readBoundedRequestBody } from "#/domain/bounded-request-body";
 import type { CodexUsage } from "#/domain/codex-usage";
 import { PINNED_CODEX_CLI_VERSION } from "#/domain/guest-cli-pin";
 import {
 	type ListedModel,
 	listedReasoningFromRow,
 } from "#/domain/listed-model";
-import {
-	codexExternalTokens,
-	hasManagedCodexAuth,
-} from "../auth/codex-managed-auth";
+import { hasManagedCodexAuth } from "../auth/codex-managed-auth";
 import { connectedLanguageModel } from "./api-model";
 import { promptCacheScopeKey } from "./api-prompt-cache";
+import {
+	subscriptionConnection,
+	subscriptionFetch,
+} from "./codex-subscription-transport";
 import { nativeModelCompactor } from "./model-compaction";
 
 const backend = "https://chatgpt.com/backend-api";
@@ -75,18 +78,40 @@ export function subscriptionLimits(
 }
 
 async function subscriptionRequest(userId: string, path: string) {
-	const tokens = await codexExternalTokens(userId);
-	const response = await fetch(`${backend}/${path}`, {
-		headers: {
-			Authorization: `Bearer ${tokens.accessToken}`,
-			"ChatGPT-Account-ID": tokens.chatgptAccountId,
-		},
-		redirect: "error",
-		signal: AbortSignal.timeout(7_000),
-	});
-	if (!response.ok)
-		throw new Error(`Subscription metadata unavailable (${response.status}).`);
-	return response.json() as Promise<unknown>;
+	const signal = AbortSignal.timeout(7_000);
+	let response: Response;
+	try {
+		response = await subscriptionFetch(userId, path, {
+			headers: {
+				Accept: "application/json",
+				"User-Agent": "ytimesy/1.0",
+			},
+			// Return redirects for bounded HTTP diagnostics; never forward credentials.
+			redirect: "manual",
+			signal,
+		});
+	} catch (error) {
+		throw new SubscriptionMetadataFailure(
+			signal.aborted ||
+				(error instanceof Error && error.name === "TimeoutError")
+				? "timeout"
+				: "transport",
+		);
+	}
+	if (!response.ok) {
+		const challenge = response.headers.get("cf-mitigated") === "challenge";
+		await response.body?.cancel().catch(() => {});
+		throw new SubscriptionMetadataFailure(
+			challenge ? "access-challenge" : response.status,
+		);
+	}
+	try {
+		return JSON.parse(
+			await readBoundedRequestBody(response, 2 * 1024 * 1024),
+		) as unknown;
+	} catch {
+		throw new SubscriptionMetadataFailure("invalid-response");
+	}
 }
 
 /** Account-scoped metadata only: no runner/VM wake and no model inference. */
@@ -181,7 +206,7 @@ export async function codexSubscriptionModel(
 		)
 	)
 		throw new Error("Selected reasoning level is unavailable for this model.");
-	const tokens = await codexExternalTokens(userId);
+	const tokens = await subscriptionConnection(userId);
 	const cacheKey = promptCacheScopeKey({
 		userId,
 		connectionId: `codex-subscription:${tokens.chatgptAccountId}`,
@@ -191,14 +216,14 @@ export async function codexSubscriptionModel(
 		if (String(url) !== `${backend}/codex/responses`)
 			throw new Error("Unexpected subscription inference destination.");
 		const headers = new Headers(init?.headers);
-		const current = await codexExternalTokens(userId);
-		if (current.chatgptAccountId !== tokens.chatgptAccountId)
-			throw new Error("Subscription account changed; restart this turn.");
-		headers.set("Authorization", `Bearer ${current.accessToken}`);
-		headers.set("ChatGPT-Account-ID", current.chatgptAccountId);
 		// The pinned native ChatGPT transport derives cache affinity from this header.
 		headers.set("session-id", cacheKey);
-		return fetch(url, { ...init, headers, redirect: "error" });
+		return subscriptionFetch(
+			userId,
+			"codex/responses",
+			{ ...init, method: "POST", headers },
+			tokens.chatgptAccountId,
+		);
 	};
 	const model = connectedLanguageModel(
 		{

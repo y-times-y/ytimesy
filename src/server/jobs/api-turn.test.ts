@@ -1,4 +1,6 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import { ApiTurnCancelled } from "#/domain/api-turn-failure";
+import { CoordinationFailure } from "#/domain/conversation-turn-control";
 import { SessionItemId } from "#/domain/ids";
 import { subscriptionTurnRevision } from "#/domain/subscription-turn";
 import type { ApiTurn } from "../adapters/api-turns";
@@ -352,6 +354,153 @@ it("classifies heartbeat failures without logging database error details", async
 	}
 });
 
+it("keeps coordinator failure primary when renewal aborts the provider stream", async () => {
+	const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+	vi.useFakeTimers();
+	try {
+		vi.mocked(coordinateConversationTurn).mockImplementation(async (action) => {
+			if (action === "renew")
+				throw new CoordinationFailure(
+					"renew",
+					{ kind: "http", status: 503 },
+					2,
+				);
+			return true;
+		});
+		mocks.runtime.mockImplementation(async (input) => {
+			await input.tools.workspace();
+			await new Promise<void>((resolve) =>
+				input.signal.addEventListener("abort", () => resolve(), { once: true }),
+			);
+			throw new Error("private provider stream and credentials");
+		});
+		const run = runApiTurn({} as WorkspaceMachines, childTurn);
+		await vi.advanceTimersByTimeAsync(10_001);
+		await run;
+		expect(mocks.commit).not.toHaveBeenCalled();
+		expect(mocks.stop).toHaveBeenCalled();
+		expect(mocks.finalize).toHaveBeenCalledWith(
+			expect.anything(),
+			"failed",
+			expect.anything(),
+		);
+		expect(mocks.result).toHaveBeenCalledWith(
+			expect.objectContaining({
+				eventType: "failed",
+				summary: expect.stringContaining("HTTP 503, 2 attempts"),
+			}),
+		);
+		expect(warn).toHaveBeenCalledWith(
+			"API turn failed",
+			expect.objectContaining({
+				stage: "coordination",
+				name: "CoordinationFailure",
+				attempts: 2,
+			}),
+		);
+		expect(JSON.stringify(warn.mock.calls)).not.toContain("private provider");
+	} finally {
+		vi.useRealTimers();
+		warn.mockRestore();
+	}
+});
+
+it("stops a writer on lease conflict without retrying inference or publication", async () => {
+	vi.useFakeTimers();
+	try {
+		vi.mocked(coordinateConversationTurn).mockImplementation(
+			async (action) => action !== "renew",
+		);
+		mocks.runtime.mockImplementation(async (input) => {
+			await input.tools.workspace();
+			await new Promise<void>((resolve) =>
+				input.signal.addEventListener("abort", () => resolve(), { once: true }),
+			);
+			input.signal.throwIfAborted();
+		});
+		const run = runApiTurn({} as WorkspaceMachines, childTurn);
+		await vi.advanceTimersByTimeAsync(10_001);
+		expect(await run).toBe("cancelled");
+		expect(mocks.runtime).toHaveBeenCalledOnce();
+		expect(mocks.commit).not.toHaveBeenCalled();
+		expect(mocks.stop).toHaveBeenCalledOnce();
+		expect(
+			vi
+				.mocked(coordinateConversationTurn)
+				.mock.calls.filter(([action]) => action === "renew"),
+		).toHaveLength(1);
+	} finally {
+		vi.useRealTimers();
+	}
+});
+
+it("fences a resumed parent against a real isolated coordinator outage", async () => {
+	const { startEvaluationCoordinator } = await import(
+		"../../../benchmarks/evaluation/coordination"
+	);
+	const actual = await vi.importActual<
+		typeof import("../adapters/conversation-turn-control")
+	>("../adapters/conversation-turn-control");
+	vi.mocked(coordinateConversationTurn).mockImplementation(
+		actual.coordinateConversationTurn,
+	);
+	const coordinator = await startEvaluationCoordinator();
+	const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+	const fetcher = globalThis.fetch;
+	const resumed = {
+		...childTurn,
+		session_id: "11111111-1111-4111-8111-111111111111",
+	};
+	const previous = {
+		userId: resumed.user_id,
+		sessionId: resumed.session_id,
+		turnId: "22222222-2222-4222-8222-222222222222",
+		leaseId: "33333333-3333-4333-8333-333333333333",
+	};
+	try {
+		expect(await actual.coordinateConversationTurn("acquire", previous)).toBe(
+			true,
+		);
+		expect(await actual.coordinateConversationTurn("release", previous)).toBe(
+			true,
+		);
+		vi.stubGlobal(
+			"fetch",
+			async (input: RequestInfo | URL, init?: RequestInit) =>
+				String(input).endsWith("/turn/renew")
+					? new Response(null, { status: 503 })
+					: fetcher(input, init),
+		);
+		mocks.runtime.mockImplementation(async (input) => {
+			await input.tools.workspace();
+			await new Promise<void>((resolve) =>
+				input.signal.addEventListener("abort", () => resolve(), { once: true }),
+			);
+			throw new Error("aborted provider stream");
+		});
+		expect(await runApiTurn({} as WorkspaceMachines, resumed)).toBe("failed");
+		expect(mocks.commit).not.toHaveBeenCalled();
+		expect(mocks.stop).toHaveBeenCalledOnce();
+		expect(mocks.result).toHaveBeenCalledWith(
+			expect.objectContaining({
+				summary: expect.stringContaining("HTTP 503, 2 attempts"),
+			}),
+		);
+		vi.unstubAllGlobals();
+		expect(
+			await actual.coordinateConversationTurn("renew", {
+				...previous,
+				turnId: resumed.id,
+				leaseId: String(resumed.lease_id),
+			}),
+		).toBe(false);
+	} finally {
+		vi.unstubAllGlobals();
+		warn.mockRestore();
+		await coordinator.close();
+	}
+}, 30_000);
+
 const childTurn = {
 	id: "00000000-0000-4000-8000-000000000001",
 	session_id: "session",
@@ -507,6 +656,25 @@ it("classifies asynchronous progress-storage errors as failures rather than user
 	} finally {
 		warn.mockRestore();
 	}
+});
+
+it("does not show a storage failure for progress fenced by the user's cancellation", async () => {
+	mocks.progress
+		.mockResolvedValueOnce(undefined)
+		.mockRejectedValueOnce(new ApiTurnCancelled());
+	mocks.runtime.mockImplementation(async (input) => {
+		await input.onEvent({ type: "text-delta", id: "reply", text: "First" });
+		await input.onStep(input.messages);
+		return input.messages;
+	});
+	expect(await runApiTurn({} as WorkspaceMachines, childTurn)).toBe(
+		"cancelled",
+	);
+	expect(mocks.finalize).toHaveBeenCalledWith(
+		expect.anything(),
+		"cancelled",
+		expect.not.arrayContaining([expect.objectContaining({ kind: "error" })]),
+	);
 });
 
 it("saves and queues child failures, including failures before runtime startup", async () => {
@@ -691,4 +859,53 @@ it("finishes a bounded step limit without starting inference or publishing a fak
 			}),
 		]),
 	);
+});
+
+it.each([false, true])(
+	"keeps the 30-step leader bound and admits builder step 31 (builder: %s)",
+	async (builder) => {
+		mocks.owner.mockResolvedValue({
+			id: "session",
+			userId: "owner",
+			projectId: "project",
+			harness: "api",
+			...(builder
+				? {
+						parentSessionId: "parent",
+						taskAccess: "read_write",
+						taskPlacement: "fresh",
+					}
+				: {}),
+		});
+		mocks.stepRuntime.mockResolvedValue({ messages: [], outcome: "continue" });
+		expect(
+			await runApiTurn({} as WorkspaceMachines, childTurn, {
+				index: 31,
+				signal: new AbortController().signal,
+			}),
+		).toBe(builder ? "continue" : "failed");
+		if (builder) expect(mocks.stepRuntime).toHaveBeenCalledOnce();
+		else expect(mocks.stepRuntime).not.toHaveBeenCalled();
+		expect(mocks.commit).not.toHaveBeenCalled();
+	},
+);
+
+it("settles builder overflow without inference even if the caller omits its limit flag", async () => {
+	mocks.owner.mockResolvedValue({
+		id: "session",
+		userId: "owner",
+		projectId: "project",
+		harness: "api",
+		parentSessionId: "parent",
+		taskAccess: "read_write",
+		taskPlacement: "fresh",
+	});
+	expect(
+		await runApiTurn({} as WorkspaceMachines, childTurn, {
+			index: 129,
+			signal: new AbortController().signal,
+		}),
+	).toBe("failed");
+	expect(mocks.stepRuntime).not.toHaveBeenCalled();
+	expect(mocks.commit).not.toHaveBeenCalled();
 });

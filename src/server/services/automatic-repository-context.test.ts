@@ -11,6 +11,220 @@ import { automaticRepositoryContext } from "./automatic-repository-context";
 import { batchedAgentReads } from "./batched-agent-reads";
 import { repositoryGuidanceTool } from "./repository-guidance";
 
+it("retains loaded nested guidance across durable model-step reconstruction", async () => {
+	const fixture = await localHarnessWorkspace();
+	try {
+		await mkdir(join(fixture.root, "src"));
+		await writeFile(
+			join(fixture.root, "src/file.ts"),
+			"export const value = 1;",
+		);
+		const signal = new AbortController().signal;
+		const events = vi.fn(async () => {});
+		const base = {
+			...apiAgentFileTools({
+				...fixture.workspace,
+				readOnly: true,
+				signal,
+				once: (_id, run) => run(),
+			}),
+			read_repository_guidance: repositoryGuidanceTool({
+				...fixture.workspace,
+				signal,
+			}),
+		};
+		const create = () =>
+			automaticRepositoryContext({
+				tools: base,
+				workspace: async () => fixture.workspace,
+				signal,
+				onEvent: events,
+			});
+		const first = create();
+		let history = await first.prepare([
+			{ role: "user", content: "Inspect src/file.ts" },
+		]);
+		await first.tools.read_file.execute?.(
+			{ path: "src/file.ts" },
+			{
+				toolCallId: "first",
+				messages: history,
+				abortSignal: signal,
+				context: {},
+			},
+		);
+		history = await first.afterTools(history);
+		const before = events.mock.calls.length;
+		const resumed = create();
+		history = await resumed.prepare(history);
+		await resumed.tools.read_file.execute?.(
+			{ path: "src/file.ts" },
+			{
+				toolCallId: "second",
+				messages: history,
+				abortSignal: signal,
+				context: {},
+			},
+		);
+		expect(events.mock.calls.slice(before)).toEqual([]);
+	} finally {
+		await fixture.cleanup();
+	}
+});
+
+it("does not trust failed or invalid guidance receipts as a loaded scope", async () => {
+	for (const value of [
+		{ error: "Failed" },
+		{ scope: "../src", instructions: [] },
+	]) {
+		const execute = vi.fn().mockResolvedValue({ scope: ".", instructions: [] });
+		const context = automaticRepositoryContext({
+			tools: {
+				read_repository_guidance: tool({
+					inputSchema: z.object({ scope: z.string() }),
+					execute,
+				}),
+			},
+			workspace: vi.fn(),
+			signal: new AbortController().signal,
+			onEvent: async () => {},
+		});
+		await context.prepare([
+			{
+				role: "tool",
+				content: [
+					{
+						type: "tool-result",
+						toolCallId: "old",
+						toolName: "read_repository_guidance",
+						output: { type: "json", value },
+					},
+				],
+			},
+		]);
+		expect(execute).toHaveBeenCalledOnce();
+	}
+});
+
+it("refreshes changed nested instructions after reconstructing loaded scopes", async () => {
+	const fixture = await localHarnessWorkspace();
+	try {
+		await mkdir(join(fixture.root, "src"));
+		await writeFile(
+			join(fixture.root, "src/AGENTS.md"),
+			"Old nested requirement.",
+		);
+		const signal = new AbortController().signal;
+		const create = () =>
+			automaticRepositoryContext({
+				tools: {
+					read_repository_guidance: repositoryGuidanceTool({
+						...fixture.workspace,
+						signal,
+					}),
+				},
+				workspace: async () => fixture.workspace,
+				signal,
+				onEvent: async () => {},
+			});
+		const first = create();
+		const history = await first.prepare([
+			{
+				role: "tool",
+				content: [
+					{
+						type: "tool-result",
+						toolCallId: "nested",
+						toolName: "read_repository_guidance",
+						output: {
+							type: "json",
+							value: z.json().parse(
+								await repositoryGuidanceTool({
+									...fixture.workspace,
+									signal,
+								}).execute?.(
+									{ scope: "src" },
+									{
+										toolCallId: "nested",
+										messages: [],
+										abortSignal: signal,
+										context: {},
+									},
+								),
+							),
+						},
+					},
+				],
+			},
+		]);
+		await writeFile(
+			join(fixture.root, "src/AGENTS.md"),
+			"New nested requirement.",
+		);
+		expect(JSON.stringify(await create().prepare(history))).toContain(
+			"New nested requirement.",
+		);
+	} finally {
+		await fixture.cleanup();
+	}
+});
+
+it("reuses surviving complete guidance after compaction but reloads missing and changed bodies", async () => {
+	const fixture = await localHarnessWorkspace();
+	try {
+		await writeFile(join(fixture.root, "AGENTS.md"), "Always verify changes.");
+		await writeFile(join(fixture.root, "package.json"), '{"name":"fixture"}');
+		const signal = new AbortController().signal;
+		const context = automaticRepositoryContext({
+			tools: {
+				read_repository_guidance: repositoryGuidanceTool({
+					...fixture.workspace,
+					signal,
+				}),
+			},
+			workspace: async () => fixture.workspace,
+			signal,
+			onEvent: vi.fn(async () => {}),
+		});
+		const history = await context.prepare([
+			{ role: "user", content: "Review" },
+		]);
+		const restored = await context.restoreInstructions(history);
+		const original = JSON.stringify(history);
+		const appended = JSON.stringify(restored.slice(history.length));
+		expect(original).toContain("Always verify changes.");
+		expect(appended).not.toContain("Always verify changes.");
+		expect(appended).not.toContain('\\"name\\":\\"fixture\\"');
+		expect(appended).toContain("alreadyInContext");
+		expect(appended).toContain('"scopeFilesAlreadyInContext":true');
+		expect(appended).toContain('"scopeFiles":[]');
+		const missing = await context.restoreInstructions([
+			{ role: "assistant", content: "Summary" },
+		]);
+		expect(JSON.stringify(missing)).toContain("Always verify changes.");
+		expect(JSON.stringify(missing)).toContain(
+			'"scopeFiles":["AGENTS.md","package.json","source.txt"]',
+		);
+		await writeFile(
+			join(fixture.root, "new-file.ts"),
+			"export const fresh = true;",
+		);
+		const changedInventory = await context.restoreInstructions(history);
+		expect(JSON.stringify(changedInventory.slice(history.length))).toContain(
+			"new-file.ts",
+		);
+		await writeFile(
+			join(fixture.root, "AGENTS.md"),
+			"New requirement: test boundaries.",
+		);
+		expect(
+			JSON.stringify(await context.restoreInstructions(history)),
+		).toContain("New requirement: test boundaries.");
+	} finally {
+		await fixture.cleanup();
+	}
+});
+
 it("loads nested instructions, detects external changes once, and rehydrates exact root guidance after compaction", async () => {
 	const fixture = await localHarnessWorkspace();
 	try {

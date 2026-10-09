@@ -59,6 +59,12 @@ beforeAll(async () => {
 	);
 	await db.exec(
 		await readFile(
+			"supabase/migrations/20261008120000_api_turn_executor.sql",
+			"utf8",
+		),
+	);
+	await db.exec(
+		await readFile(
 			"supabase/migrations/20261005160000_agent_pr_repair.sql",
 			"utf8",
 		),
@@ -75,6 +81,7 @@ beforeAll(async () => {
 	);
 });
 beforeEach(async () => {
+	vi.stubEnv("YTIMESY_MODEL_EXECUTION_TARGET", "node");
 	await db.exec("truncate api_turn,agent_session,api_usage_budget cascade");
 	await db.query(
 		"insert into agent_session(id,user_id,harness,turn_status) values($1,'alice','codex','idle')",
@@ -94,6 +101,47 @@ function submit(userId = "alice", targetSessionId = sessionId) {
 		items: [],
 	});
 }
+
+it("assigns one immutable executor when admitting a turn", async () => {
+	vi.stubEnv("YTIMESY_MODEL_EXECUTION_TARGET", "durable-object");
+	await submit();
+	expect(await claimApiTurn(2, 8, "node")).toBeNull();
+	const turn = await claimApiTurn(2, 8, "durable-object");
+	expect(turn).not.toBeNull();
+	expect(
+		(await query("select executor from api_turn where id=$1", [turn?.id]))
+			.rows[0],
+	).toEqual({ executor: "durable-object" });
+	await expect(
+		query("update api_turn set executor='node' where id=$1", [turn?.id]),
+	).rejects.toThrow("cannot change executor");
+	await query("update api_turn set state='completed' where id=$1", [turn?.id]);
+	await expect(
+		query("update api_turn set executor='node' where id=$1", [turn?.id]),
+	).rejects.toThrow("cannot change executor");
+});
+
+it("does not let the Cloudflare dispatcher claim a legacy Node turn", async () => {
+	await submit();
+	expect(await claimApiTurn(2, 8, "durable-object")).toBeNull();
+	expect(await claimApiTurn(2, 8, "node")).not.toBeNull();
+});
+
+it("isolated admission cannot claim another chat's queued turn", async () => {
+	const otherSessionId = randomUUID();
+	await db.query(
+		"insert into agent_session(id,user_id,harness,turn_status) values($1,'alice','codex','idle')",
+		[otherSessionId],
+	);
+	await submit();
+	await submit("alice", otherSessionId);
+	const turn = await claimApiTurn(2, 8, "node", otherSessionId);
+	expect(turn?.session_id).toBe(otherSessionId);
+	expect(
+		(await query("select state from api_turn where session_id=$1", [sessionId]))
+			.rows[0],
+	).toEqual({ state: "queued" });
+});
 
 it("recovers a lost repair wakeup acknowledgement without queuing a second turn", async () => {
 	const input = {

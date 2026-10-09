@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import type { AgentSessionRecord } from "#/server/adapters/agent-sessions";
 import { runAgentTaskTool } from "#/server/services/harness-workspace-session";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
@@ -9,6 +9,19 @@ const fake = vi.hoisted(() => ({
 	queue: vi.fn(),
 	capture: vi.fn(),
 	accept: vi.fn(),
+	send: vi.fn(),
+	owner: vi.fn(),
+	activeTurn: vi.fn(async () => false),
+}));
+vi.mock("#/server/adapters/api-turns", () => ({
+	hasActiveApiTurn: fake.activeTurn,
+}));
+beforeEach(() => fake.activeTurn.mockReset().mockResolvedValue(false));
+vi.mock("#/server/services/session-branch", () => ({
+	commitChatBranchForSubmission: vi.fn(async () => {}),
+}));
+vi.mock("#/server/services/codex-subscription-session", () => ({
+	sendSubscriptionTask: fake.send,
 }));
 vi.mock("#/server/adapters/agent-task-command-receipts", async (original) => ({
 	...(await original<
@@ -19,6 +32,7 @@ vi.mock("#/server/adapters/agent-task-command-receipts", async (original) => ({
 }));
 vi.mock("#/server/adapters/agent-sessions", () => ({
 	descendantAgentSessions: fake.descendants,
+	agentSessionForOwner: fake.owner,
 }));
 vi.mock("#/server/services/agent-peer-messaging", () => ({
 	queueAgentPeerMessage: fake.queue,
@@ -89,18 +103,116 @@ it("accepts only the writable patch hash the lead actually inspected", async () 
 	});
 });
 
-it("stages leader guidance for an active child without starting a second turn", async () => {
-	const parent = {
-		id: "lead",
-		userId: "owner",
-		projectId: "project",
-		harness: "codex",
-		taskAccess: null,
-	} as AgentSessionRecord;
+it.each(["running", "idle"])(
+	"stages guidance for an active child whose visible status is %s",
+	async (turnStatus) => {
+		const parent = {
+			id: "lead",
+			userId: "owner",
+			projectId: "project",
+			harness: "codex",
+			taskAccess: null,
+		} as AgentSessionRecord;
+		fake.descendants.mockResolvedValue([
+			{
+				id: "child",
+				title: "Implement parser",
+				turnStatus,
+				taskState: "waiting",
+				harness: "codex",
+			},
+		]);
+		fake.activeTurn.mockResolvedValueOnce(true);
+		fake.queue.mockResolvedValue({ taskId: "child", status: "queued" });
+		expect(
+			await Effect.runPromise(
+				runAgentTaskTool(
+					{} as WorkspaceMachines,
+					{
+						userId: "owner",
+						projectId: "project",
+						sessionId: "lead",
+						harnessId: "codex",
+					},
+					parent,
+					{
+						id: "guidance",
+						tool: "send_task_message",
+						arguments: {
+							taskId: "child",
+							message: "Please summarize your progress.",
+						},
+					},
+				),
+			),
+		).toEqual({ taskId: "child", status: "queued" });
+		expect(fake.queue).toHaveBeenCalledWith(
+			parent,
+			"child",
+			"Please summarize your progress.",
+			"guidance",
+		);
+	},
+);
+
+it("rejects command-dependent guidance to a cloud read-only child before queuing or waking it", async () => {
+	fake.queue.mockClear();
 	fake.descendants.mockResolvedValue([
-		{ id: "child", title: "Implement parser", turnStatus: "running" },
+		{
+			id: "child",
+			harness: "codex",
+			parentSessionId: "lead",
+			taskAccess: "read_only",
+			taskState: "done",
+			turnStatus: "idle",
+		},
 	]);
-	fake.queue.mockResolvedValue({ taskId: "child", status: "queued" });
+	await expect(
+		Effect.runPromise(
+			runAgentTaskTool(
+				{} as WorkspaceMachines,
+				{
+					userId: "owner",
+					projectId: "project",
+					sessionId: "lead",
+					harnessId: "codex",
+				},
+				{
+					id: "lead",
+					harness: "codex",
+					userId: "owner",
+					projectId: "project",
+				} as AgentSessionRecord,
+				{
+					id: "diagnostic",
+					tool: "send_task_message",
+					arguments: {
+						taskId: "child",
+						message: "Run a diagnostic.",
+						requiresCommandExecution: true,
+					},
+				},
+			),
+		),
+	).rejects.toThrow("cannot execute commands");
+	expect(fake.queue).not.toHaveBeenCalled();
+});
+
+it("returns a completed child's retained summary without waking it for an ordinary message", async () => {
+	fake.queue.mockClear();
+	fake.descendants.mockResolvedValue([
+		{
+			id: "child",
+			harness: "codex",
+			parentSessionId: "lead",
+			taskAccess: "read_only",
+			taskState: "done",
+			turnStatus: "idle",
+			items: [
+				{ id: "result", kind: "agentMessage", text: "Source review complete." },
+			],
+		},
+	]);
 	expect(
 		await Effect.runPromise(
 			runAgentTaskTool(
@@ -111,22 +223,160 @@ it("stages leader guidance for an active child without starting a second turn", 
 					sessionId: "lead",
 					harnessId: "codex",
 				},
-				parent,
 				{
-					id: "guidance",
+					id: "lead",
+					harness: "codex",
+					userId: "owner",
+					projectId: "project",
+				} as AgentSessionRecord,
+				{
+					id: "summary",
+					tool: "send_task_message",
+					arguments: { taskId: "child", message: "Summarize." },
+				},
+			),
+		),
+	).toMatchObject({
+		status: "completed",
+		delivered: false,
+		content: "Source review complete.",
+	});
+	expect(fake.queue).not.toHaveBeenCalled();
+});
+
+it("can explicitly resume a completed child for new authorized work", async () => {
+	fake.send
+		.mockReset()
+		.mockResolvedValue({ connection: { status: "connected" } });
+	fake.owner.mockResolvedValue({ harness: "codex" });
+	fake.descendants.mockResolvedValue([
+		{
+			id: "child",
+			harness: "codex",
+			parentSessionId: "lead",
+			listedModelId: "model",
+			taskAccess: "read_only",
+			taskState: "done",
+			turnStatus: "idle",
+		},
+	]);
+	expect(
+		await Effect.runPromise(
+			runAgentTaskTool(
+				{} as WorkspaceMachines,
+				{
+					userId: "owner",
+					projectId: "project",
+					sessionId: "lead",
+					harnessId: "codex",
+				},
+				{
+					id: "lead",
+					harness: "codex",
+					userId: "owner",
+					projectId: "project",
+				} as AgentSessionRecord,
+				{
+					id: "followup",
 					tool: "send_task_message",
 					arguments: {
 						taskId: "child",
-						message: "Please summarize your progress.",
+						message: "Inspect the newly changed source.",
+						resumeCompleted: true,
 					},
 				},
 			),
 		),
-	).toEqual({ taskId: "child", status: "queued" });
-	expect(fake.queue).toHaveBeenCalledWith(
-		parent,
-		"child",
-		"Please summarize your progress.",
-		"guidance",
+	).toMatchObject({ status: "working" });
+	expect(fake.send).toHaveBeenCalledWith(
+		expect.objectContaining({ sessionId: "child" }),
+		expect.objectContaining({ text: "Inspect the newly changed source." }),
 	);
+});
+
+it("allows command-dependent guidance to an active writable child", async () => {
+	fake.queue.mockReset().mockResolvedValue({ delivered: true });
+	fake.descendants.mockResolvedValue([
+		{
+			id: "child",
+			harness: "codex",
+			parentSessionId: "lead",
+			taskAccess: "read_write",
+			taskState: "working",
+			turnStatus: "running",
+		},
+	]);
+	await Effect.runPromise(
+		runAgentTaskTool(
+			{} as WorkspaceMachines,
+			{
+				userId: "owner",
+				projectId: "project",
+				sessionId: "lead",
+				harnessId: "codex",
+			},
+			{
+				id: "lead",
+				harness: "codex",
+				userId: "owner",
+				projectId: "project",
+			} as AgentSessionRecord,
+			{
+				id: "diagnostic",
+				tool: "send_task_message",
+				arguments: {
+					taskId: "child",
+					message: "Run the required tests.",
+					requiresCommandExecution: true,
+				},
+			},
+		),
+	);
+	expect(fake.queue).toHaveBeenCalledOnce();
+});
+
+it("reports a failed explicit resume rather than claiming the child is working", async () => {
+	fake.owner.mockResolvedValue({ harness: "codex" });
+	fake.send.mockResolvedValue({
+		connection: { status: "failed", message: "Connection expired." },
+	});
+	fake.descendants.mockResolvedValue([
+		{
+			id: "child",
+			harness: "codex",
+			parentSessionId: "lead",
+			listedModelId: "model",
+			taskAccess: "read_only",
+			taskState: "done",
+			turnStatus: "idle",
+		},
+	]);
+	await expect(
+		Effect.runPromise(
+			runAgentTaskTool(
+				{} as WorkspaceMachines,
+				{
+					userId: "owner",
+					projectId: "project",
+					sessionId: "lead",
+					harnessId: "codex",
+				},
+				{
+					id: "lead",
+					harness: "codex",
+					userId: "owner",
+					projectId: "project",
+				} as AgentSessionRecord,
+				{
+					id: "followup",
+					tool: "send_task_message",
+					arguments: {
+						taskId: "child",
+						message: "Inspect the new source.",
+						resumeCompleted: true,
+					},
+				},
+			),
+		),
+	).rejects.toThrow("Connection expired.");
 });

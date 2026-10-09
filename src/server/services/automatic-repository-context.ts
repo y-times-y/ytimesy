@@ -88,6 +88,29 @@ export function automaticRepositoryContext(input: {
 			return;
 		}
 		if (!reads.has(name) && name !== "read_repository_guidance") return;
+		if (name === "read_repository_guidance") {
+			// Durable steps reconstruct this wrapper. Surviving receipts establish
+			// which scopes were already supplied; process memory does not.
+			const receipt = z
+				.object({
+					scope: z.string().optional(),
+					instructions: z.array(z.unknown()),
+				})
+				.safeParse(output);
+			if (receipt.success) {
+				const scope = receipt.data.scope ?? ".";
+				if (
+					scope === "." ||
+					(scope.length > 0 &&
+						!scope.startsWith("/") &&
+						!scope.includes("\\") &&
+						scope
+							.split("/")
+							.every((segment) => segment !== ".." && segment !== ".git"))
+				)
+					loadedScopes.add(scope);
+			}
+		}
 		const entries =
 			name === "read_repository_guidance"
 				? ((output as { instructions?: unknown[] })?.instructions ?? [])
@@ -122,7 +145,7 @@ export function automaticRepositoryContext(input: {
 		const output = z.json().parse(
 			await execute(args, {
 				toolCallId: id,
-				messages: force ? [] : messages,
+				messages,
 				abortSignal: input.signal,
 				context: {},
 			}),
@@ -286,20 +309,6 @@ export function automaticRepositoryContext(input: {
 						}
 					}
 			}
-			if (
-				!loadedScopes.size &&
-				messages.some(
-					(message) =>
-						message.role === "tool" &&
-						message.content.some(
-							(part) =>
-								part.type === "tool-result" &&
-								part.toolName === "read_repository_guidance" &&
-								part.output.type === "json",
-						),
-				)
-			)
-				loadedScopes.add(".");
 			if (!loadedScopes.size && input.tools.read_repository_guidance?.execute)
 				await load(".");
 			if (watched.size) {

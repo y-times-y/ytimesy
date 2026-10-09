@@ -3,6 +3,7 @@ import { pathToFileURL } from "node:url";
 import { Effect } from "effect";
 import { Freestyle } from "freestyle";
 import type { EnvironmentModel } from "#/domain/environment-model";
+import { configuredTurnExecutor } from "#/domain/turn-executor";
 import { modelConcurrencyLimits } from "../adapters/agent-capacity";
 import {
 	markCompetitionStatus,
@@ -38,6 +39,7 @@ import { reconcileRunningAgentTurns } from "../services/agent-turn-reconciliatio
 import { dispatchDurableWork } from "../services/durable-work-plan";
 import { deliverPrRepairEvents } from "../services/pr-repair";
 import { captureSessionCheckpoint } from "../services/session-checkpoint";
+import type { WorkspaceMachines } from "../services/workspace-machines";
 import { runApiTurn } from "./api-turn";
 import {
 	drainConversationDeliveries,
@@ -67,11 +69,13 @@ let dispatcher:
 	| TurnDispatcher<NonNullable<Awaited<ReturnType<typeof claimApiTurn>>>>
 	| undefined;
 
-export async function startWorkspaceWorker() {
+export async function startWorkspaceWorker(machines?: WorkspaceMachines) {
 	const queue = await jobQueue("worker");
-	const taskMachines = createFreestyleWorkspaceMachines(
-		await Effect.runPromise(readFreestyleApiKey()),
-	);
+	const taskMachines =
+		machines ??
+		createFreestyleWorkspaceMachines(
+			await Effect.runPromise(readFreestyleApiKey()),
+		);
 	await queue.work(
 		WORK_PLAN_QUEUE,
 		{ localConcurrency: 1, pollingIntervalSeconds: 1 },
@@ -135,6 +139,7 @@ export async function startWorkspaceWorker() {
 			job.data.workspaceId,
 			true,
 			job.data.repairModel ?? null,
+			job.id,
 		);
 	});
 	await queue.work<{ workspaceId?: string }>(
@@ -143,7 +148,12 @@ export async function startWorkspaceWorker() {
 		async ([job]) => {
 			if (process.env.YTIMESY_ENVIRONMENT_AUTO_REFRESH === "false") return;
 			if (job.data.workspaceId) {
-				await applyProjectEnvironment(job.data.workspaceId);
+				await applyProjectEnvironment(
+					job.data.workspaceId,
+					false,
+					null,
+					job.id,
+				);
 				return;
 			}
 			for (const workspaceId of await listReadyWorkspaceIds()) {
@@ -217,11 +227,19 @@ export async function startWorkspaceWorker() {
 	void reconcile();
 	const { worker: concurrency, perUser, fleet } = modelConcurrencyLimits();
 	const workflows = modelWorkflowConfiguration();
-	if (workflows || process.env.YTIMESY_MODEL_EXECUTOR_ENABLED === "true")
+	const executor = configuredTurnExecutor(
+		process.env.YTIMESY_MODEL_EXECUTION_TARGET,
+	);
+	if (executor === "durable-object" && !workflows)
+		throw new Error("Durable Object execution requires Workflow dispatch.");
+	if (
+		(workflows && executor === "node") ||
+		process.env.YTIMESY_MODEL_EXECUTOR_ENABLED === "true"
+	)
 		stopWorkflowExecutor = await startModelWorkflowExecutor(taskMachines);
 	dispatcher = new TurnDispatcher({
 		concurrency,
-		claim: () => claimApiTurn(perUser, fleet),
+		claim: () => claimApiTurn(perUser, fleet, executor),
 		run: async (turn) => {
 			if (workflows) await dispatchModelWorkflow(turn);
 			else await runApiTurn(taskMachines, turn);
@@ -252,6 +270,9 @@ export async function startWorkspaceWorker() {
 			});
 	}, 250);
 	deliverySweep.unref();
+	// Injected operator adapters own resource reconciliation themselves. Never
+	// reconcile the shared provider fleet while consuming an isolated job queue.
+	if (machines) return queue;
 	const infrastructureClient = new Freestyle({
 		apiKey: await Effect.runPromise(readFreestyleApiKey()),
 	});
@@ -280,33 +301,41 @@ export async function startWorkspaceWorker() {
 	return queue;
 }
 
-if (
-	process.argv[1] &&
-	import.meta.url === pathToFileURL(resolve(process.argv[1])).href
-) {
-	const queue = await startWorkspaceWorker();
+export async function runWorkspaceWorker(machines?: WorkspaceMachines) {
+	const queue = await startWorkspaceWorker(machines);
 	console.info("ytimesy workspace worker is running.");
 	let stopping = false;
 	const stop = async () => {
 		if (stopping) return;
 		stopping = true;
-		if (turnSweep) clearInterval(turnSweep);
-		if (apiTurnSweep) clearInterval(apiTurnSweep);
-		if (infrastructureSweep) clearInterval(infrastructureSweep);
-		console.info(
-			"Worker draining active model turns; no new turns will be claimed.",
-		);
-		const drain = dispatcher?.drain();
-		await stopTurnWake?.();
-		await drain;
-		await stopWorkflowExecutor?.();
-		if (deliverySweep) clearInterval(deliverySweep);
-		await relayConversationDeliveries().catch(() => {});
-		await drainConversationDeliveries();
-		await queue.stop({ graceful: true, timeout: 15000 });
+		await stopWorkspaceWorker(queue);
 		await closeDatabase();
 		process.exit(0);
 	};
 	process.on("SIGINT", () => void stop());
 	process.on("SIGTERM", () => void stop());
+}
+
+/** Operator embeddings and the CLI share the same drain path. */
+export async function stopWorkspaceWorker(
+	queue: Awaited<ReturnType<typeof startWorkspaceWorker>>,
+) {
+	if (turnSweep) clearInterval(turnSweep);
+	if (apiTurnSweep) clearInterval(apiTurnSweep);
+	if (infrastructureSweep) clearInterval(infrastructureSweep);
+	const drain = dispatcher?.drain();
+	await stopTurnWake?.();
+	await drain;
+	await stopWorkflowExecutor?.();
+	if (deliverySweep) clearInterval(deliverySweep);
+	await relayConversationDeliveries().catch(() => {});
+	await drainConversationDeliveries();
+	await queue.stop({ graceful: true, timeout: 15000 });
+}
+
+if (
+	process.argv[1] &&
+	import.meta.url === pathToFileURL(resolve(process.argv[1])).href
+) {
+	await runWorkspaceWorker();
 }

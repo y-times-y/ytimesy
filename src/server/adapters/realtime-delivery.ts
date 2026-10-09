@@ -1,7 +1,18 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { ConversationSnapshot } from "#/domain/conversation-delivery";
 import { MAX_DELIVERY_BYTES } from "#/domain/conversation-delivery";
 import { signDeliveryRequest } from "#/domain/delivery-auth";
 import { realtimeDevelopmentConfiguration } from "./realtime-development-config";
+
+const publisher = new AsyncLocalStorage<
+	(snapshot: ConversationSnapshot) => Promise<boolean>
+>();
+export function withConversationPublisher<T>(
+	publish: (snapshot: ConversationSnapshot) => Promise<boolean>,
+	run: () => Promise<T>,
+) {
+	return publisher.run(publish, run);
+}
 
 export function realtimeDeliveryConfiguration() {
 	const development =
@@ -27,6 +38,8 @@ export function realtimeDeliveryConfiguration() {
 export async function publishConversationSnapshot(
 	snapshot: ConversationSnapshot,
 ) {
+	const publish = publisher.getStore();
+	if (publish) return publish(snapshot);
 	const config = realtimeDeliveryConfiguration();
 	if (!config) return false;
 	const body = JSON.stringify(snapshot);

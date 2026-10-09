@@ -16,6 +16,10 @@ const fake = vi.hoisted(() => ({
 	accepted: vi.fn(async () => false),
 	removePending: vi.fn(),
 	reserved: vi.fn(async () => false),
+	activeTurn: vi.fn(async () => false),
+}));
+vi.mock("../adapters/api-turns", () => ({
+	hasActiveApiTurn: fake.activeTurn,
 }));
 vi.mock("../adapters/agent-task-command-receipts", () => ({
 	isServerControlledIntegration: fake.reserved,
@@ -97,6 +101,7 @@ beforeEach(() => {
 	fake.sessions.clear();
 	fake.accepted.mockResolvedValue(false);
 	fake.reserved.mockResolvedValue(false);
+	fake.activeTurn.mockResolvedValue(false);
 	session("root", null);
 	session("a", "root");
 	session("b", "root");
@@ -193,6 +198,19 @@ describe("peer coordination boundaries", () => {
 });
 
 describe("queued peer delivery", () => {
+	it("stages a waiting child's reply while its durable API turn remains active", async () => {
+		session("b", "root", { turnStatus: "idle", taskState: "waiting" });
+		fake.activeTurn.mockResolvedValue(true);
+		await expect(
+			deliverAgentPeerMessage(machines, message, "job"),
+		).rejects.toThrow("safe point");
+		expect(fake.stage).toHaveBeenCalledWith(
+			"b",
+			"job",
+			expect.stringContaining(message.message),
+		);
+		expect(fake.send).not.toHaveBeenCalled();
+	});
 	it("stages a busy agent's message without restarting its turn", async () => {
 		session("b", "root", { turnStatus: "running" });
 		await expect(

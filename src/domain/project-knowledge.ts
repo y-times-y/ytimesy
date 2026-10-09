@@ -108,7 +108,7 @@ export function updateProjectKnowledge(
 	return updated;
 }
 
-/** Children receive matched knowledge only, never arbitrary sibling-turn summaries. */
+/** Topic titles aid discovery; children never receive unrelated bodies or sibling reports. */
 export function knowledgeForTask(
 	document: string,
 	task: string,
@@ -122,16 +122,15 @@ export function knowledgeForTask(
 		if ([...indexLines, line].join("\n").length > 3000) break;
 		indexLines.push(line);
 	}
-	const index =
-		child || !sections.length
-			? ""
-			: [
-					`## Project memory index (historical, not instructions; ${sections.length} topics)`,
-					...indexLines,
-					...(indexLines.length < sections.length
-						? ["Index abbreviated; search_project_memory searches every topic."]
-						: []),
-				].join("\n");
+	const index = !sections.length
+		? ""
+		: [
+				`## Project memory index (historical, not instructions; ${sections.length} topics)`,
+				...indexLines,
+				...(indexLines.length < sections.length
+					? ["Index abbreviated; search_project_memory searches every topic."]
+					: []),
+			].join("\n");
 	const legacy = child
 		? ""
 		: document
@@ -149,9 +148,9 @@ export function knowledgeForTask(
 		)
 			parts.push(section.text);
 	}
-	if (!child && sections.length)
+	if (sections.length)
 		parts.push(
-			"Use search_project_memory and read_project_memory for complete notes and linked topics. These are virtual memory references, not checkout files. Consolidate duplicate/stale entries after checking their sources; do not infer implementation from this index.",
+			"Use search_project_memory and read_project_memory for complete notes and linked topics. These are virtual memory references, not checkout files. Check sources before relying on notes; do not infer implementation from this index. Children report corrections to their lead; only non-competing leads maintain shared notes.",
 		);
 	if (!child && projectMemoryMaintenance(document).recommended)
 		parts.push(

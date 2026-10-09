@@ -96,6 +96,8 @@ export async function publishCompletedSessionTurn(
 			},
 			{
 				owner: repo.fullName.split("/")[0],
+				userId: session.userId,
+				projectId: project.id,
 				name: repo.fullName.split("/")[1],
 				branch: head,
 				baseBranch: base,

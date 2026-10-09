@@ -101,8 +101,19 @@ const attempt = {
 	projectId: root.id,
 	vmId: root.providerRef,
 };
+const completionBaseline = {
+	base: task.commit,
+	tree: "a".repeat(40),
+	patchSha256: "b".repeat(64),
+	changed: false,
+	policyChanged: false,
+	recipe: JSON.stringify({ checks: ["npm test"] }),
+	manifest: null,
+	files: [],
+};
 beforeEach(() => {
 	vi.clearAllMocks();
+	exec.mockReset();
 	vi.stubEnv("YTIMESY_HARNESS_EVALUATION_ENABLED", "1");
 	mocks.project.mockResolvedValue({ id: root.id, fullName: "owner/repo" });
 	mocks.open.mockResolvedValue(root);
@@ -127,12 +138,38 @@ beforeEach(() => {
 		exitCode: 0,
 		stdout: command.includes("symbolic-ref")
 			? "evaluation-frozen"
-			: task.commit,
+			: command.includes("Saved baseline differs")
+				? JSON.stringify(completionBaseline)
+				: task.commit,
 		stderr: "",
 	}));
 	mocks.send.mockReturnValue(
 		Effect.succeed({ connection: { status: "connected" } }),
 	);
+});
+
+it("rejects missing completion policy before registering or submitting paid inference", async () => {
+	exec.mockResolvedValueOnce({ exitCode: 0, stdout: task.commit, stderr: "" });
+	exec.mockResolvedValueOnce({
+		exitCode: 0,
+		stdout: "evaluation-frozen",
+		stderr: "",
+	});
+	exec.mockResolvedValueOnce({
+		exitCode: 0,
+		stdout: JSON.stringify({ ...completionBaseline, recipe: null }),
+		stderr: "",
+	});
+	await expect(
+		openProductionEvaluation(machines, "alice", task, protocol),
+	).rejects.toThrow("Configure project verification checks");
+	expect(
+		mocks.query.mock.calls.some(([sql]) =>
+			sql.includes("insert into harness_evaluation_run"),
+		),
+	).toBe(false);
+	expect(mocks.send).not.toHaveBeenCalled();
+	expect(mocks.remove).toHaveBeenCalled();
 });
 
 it("uses normal production submission with the frozen prompt, model and reasoning", async () => {

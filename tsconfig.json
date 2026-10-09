@@ -1,6 +1,12 @@
 {
 	"include": ["**/*.ts", "**/*.tsx"],
-	"exclude": ["node_modules", "src/workflows", ".ytimesy", ".generated"],
+	"exclude": [
+		"node_modules",
+		"src/workflows",
+		"src/server/edge",
+		".ytimesy",
+		".generated"
+	],
 	"compilerOptions": {
 		"target": "ES2022",
 		"jsx": "react-jsx",

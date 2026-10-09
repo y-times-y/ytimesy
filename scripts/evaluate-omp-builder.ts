@@ -86,12 +86,20 @@ if (process.env.YTIMESY_OMP_ISOLATED_MODULES !== "1") {
 
 const live = process.argv.includes("--live");
 const proof = process.argv.includes("--proof");
+const currentOnly = process.argv.includes("--current-only");
 const repetitionArgument = process.argv.find((value) =>
 	value.startsWith("--repetitions="),
 );
 const protocol = ompBuilderProtocol(
 	Number(repetitionArgument?.split("=")[1] ?? 1),
 );
+if (currentOnly) {
+	if (protocol.repetitions !== 1)
+		throw new Error("Current-only diagnostics run exactly once.");
+	protocol.arms = protocol.arms.filter((arm) => arm.arm === "after");
+	protocol.requestLimit = protocol.requestsPerArm;
+	protocol.approval = `5-usd-${protocol.requestLimit}-requests`;
+}
 if (!proof && protocol.repetitions !== 1)
 	throw new Error("Repeated evaluations require --proof and fresh approval.");
 if (live && process.env.YTIMESY_OMP_PROOF_APPROVED !== protocol.approval)
@@ -282,6 +290,7 @@ if (!correct.passed)
 	throw new Error(`Known correct patch failed: ${correct.detail}`);
 const treatment = await command(["git", "rev-parse", "HEAD"]);
 const report: { [key: string]: unknown } = {
+	currentOnly,
 	scope:
 		"Existing builder model loop and VM tool implementations; excludes production queue, leader delegation, review and DB journal durability.",
 	baseline: await command(["git", "rev-parse", baseline]),
@@ -322,7 +331,17 @@ if (!live) {
 	);
 	process.exit(0);
 }
-if (await command(["git", "status", "--porcelain", "--untracked-files=no"]))
+if (currentOnly) {
+	// A diagnostic may inspect uncommitted work, but must preserve its exact source.
+	await cp(join(root, "src"), join(directory, "current-source"), {
+		recursive: true,
+	});
+	report.trackedDiffSha256 = hash(
+		await command(["git", "diff", "--binary", "HEAD"]),
+	);
+} else if (
+	await command(["git", "status", "--porcelain", "--untracked-files=no"])
+)
 	throw new Error("Commit implementation before live comparison.");
 const owners = await database().query<{ user_id: string }>(
 	"select user_id from agent_account where provider='codex' and status='connected' and encrypted_codex_auth is not null",

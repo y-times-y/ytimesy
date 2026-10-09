@@ -30,7 +30,10 @@ replace maintained Markdown. If this optional report write fails, a completed
 turn remains completed and the server logs a generic warning; no retry outbox
 is implemented for this secondary write.
 
-Children receive up to four ranked lexical matches. They do not
+Children receive a bounded topic-title index plus up to four ranked lexical matches.
+The index lets them discover existing capabilities even when their task's wording
+does not match a note. Titles are not proof; full notes and source checks remain
+necessary. They do not
 inherit parent transcripts, arbitrary legacy briefing text, or sibling reports,
 and cannot write shared knowledge. They report findings to their lead. Competing
 leads cannot publish shared entries/reports before their work is selected.

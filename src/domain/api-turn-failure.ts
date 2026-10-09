@@ -1,4 +1,13 @@
 import { APICallError, RetryError } from "ai";
+import { CoordinationFailure } from "./conversation-turn-control";
+import { VerificationPolicyFailure } from "./task-integration-checks";
+
+export class ApiTurnCancelled extends Error {
+	constructor() {
+		super("API turn was cancelled.");
+		this.name = "ApiTurnCancelled";
+	}
+}
 
 export type ApiTurnFailureStage =
 	| "connection"
@@ -15,6 +24,7 @@ const FAILURE_NAMES = new Set([
 	"TimeoutError",
 	"AbortError",
 	"SafeApiModelFailure",
+	"InitialAgentReadFailure",
 	"APICallError",
 	"AI_APICallError",
 	"RetryableCoordinationFailure",
@@ -44,6 +54,16 @@ const FAILURE_CODES = new Set([
 
 /** Only predefined diagnostic categories may leave the worker; error text never does. */
 export function apiTurnFailureClassification(error: unknown) {
+	if (error instanceof VerificationPolicyFailure)
+		return { name: error.name, code: "unknown", reason: error.reason };
+	if (error instanceof CoordinationFailure)
+		return {
+			name: error.name,
+			code: "unknown",
+			action: error.action,
+			attempts: error.attempts,
+			failure: error.failure,
+		};
 	const name = error instanceof Error ? error.name : "unknown";
 	const code =
 		error &&
@@ -62,6 +82,39 @@ export class SafeApiModelFailure extends Error {
 	constructor(error: unknown) {
 		super(apiModelFailureMessage(error));
 		this.name = "SafeApiModelFailure";
+	}
+}
+
+/** Catalog/usage failures are not inference failures. Never retain upstream bodies. */
+export class SubscriptionMetadataFailure extends Error {
+	constructor(
+		readonly reason:
+			| "timeout"
+			| "transport"
+			| "invalid-response"
+			| "access-challenge"
+			| number,
+	) {
+		super(
+			`Codex subscription metadata ${typeof reason === "number" ? `was rejected (HTTP ${reason})` : `failed (${reason})`}. No inference was started. Retry or reconnect Codex.`,
+		);
+		this.name = "SubscriptionMetadataFailure";
+	}
+}
+
+/** A local preparation failure must not be presented as a provider rejection. */
+export class InitialAgentReadFailure extends Error {
+	constructor(
+		read:
+			| "read_repository_guidance"
+			| "read_environment_report"
+			| "inspect_changes"
+			| "read_task_capacity",
+	) {
+		super(
+			`Workspace preparation failed during ${read}. No model request was started. Repair or reconnect the environment before retrying.`,
+		);
+		this.name = "InitialAgentReadFailure";
 	}
 }
 
@@ -214,7 +267,11 @@ export function apiTurnFailureMessage(
 	stage: ApiTurnFailureStage,
 	error?: unknown,
 ): string {
+	if (error instanceof CoordinationFailure) return error.message;
 	if (error instanceof IncompleteAgentTurn) return error.message;
+	if (error instanceof InitialAgentReadFailure) return error.message;
+	if (error instanceof SubscriptionMetadataFailure) return error.message;
+	if (error instanceof VerificationPolicyFailure) return error.message;
 	switch (stage) {
 		case "connection":
 			return "The selected API connection changed or was removed. Select a model again; no fallback was used.";

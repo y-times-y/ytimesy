@@ -130,9 +130,10 @@ for instruction in instructions:
     if instruction['nextStart'] is None and known_documents.get(instruction['path']) == instruction['sha256']:
         del instruction['content']
         instruction['alreadyInContext'] = True
-print(json.dumps({'revision': revision.stdout.strip() if revision.returncode == 0 else None, 'instructions': instructions, 'referencedDocuments': documents, 'configuration': configuration, 'documentLimitReached': document_limit_reached, 'skills': skills, 'skillLimitReached': len(skills) == 100, 'scopeFiles': scope_files, 'scopeFilesTruncated': inventory_truncated}, ensure_ascii=False))`;
+print(json.dumps({'scope': scope.relative_to(root).as_posix(), 'revision': revision.stdout.strip() if revision.returncode == 0 else None, 'instructions': instructions, 'referencedDocuments': documents, 'configuration': configuration, 'documentLimitReached': document_limit_reached, 'skills': skills, 'skillLimitReached': len(skills) == 100, 'scopeFiles': scope_files, 'scopeFilesTruncated': inventory_truncated}, ensure_ascii=False))`;
 
 type GuidancePacket = {
+	scope: string;
 	scopeFiles: string[];
 	scopeFilesTruncated: boolean;
 	revision: string | null;
@@ -248,6 +249,40 @@ export function knownGuidanceDocuments(messages: readonly ModelMessage[]) {
 	return known;
 }
 
+/** Reuse only an identical inventory body retained in the active transcript, after a fresh disk scan. */
+function inventoryAlreadyInContext(
+	messages: readonly ModelMessage[],
+	packet: GuidancePacket,
+) {
+	const inventory = z.object({
+		scope: z.string(),
+		scopeFiles: z.array(z.string()),
+		scopeFilesTruncated: z.boolean(),
+		scopeFilesAlreadyInContext: z.literal(false).optional(),
+	});
+	for (const message of messages) {
+		if (message.role !== "tool") continue;
+		for (const part of message.content) {
+			if (
+				part.type !== "tool-result" ||
+				part.toolName !== "read_repository_guidance" ||
+				part.output.type !== "json"
+			)
+				continue;
+			const previous = inventory.safeParse(part.output.value);
+			if (
+				previous.success &&
+				previous.data.scope === packet.scope &&
+				previous.data.scopeFilesTruncated === packet.scopeFilesTruncated &&
+				JSON.stringify(previous.data.scopeFiles) ===
+					JSON.stringify(packet.scopeFiles)
+			)
+				return true;
+		}
+	}
+	return false;
+}
+
 /** Fresh revision and source hashes make guidance verifiable after branch switches or compaction. */
 export function repositoryGuidanceTool(
 	input: AgentToolWorkspaceInput & { signal: AbortSignal },
@@ -269,6 +304,13 @@ export function repositoryGuidanceTool(
 			const packet = JSON.parse(result.stdout) as GuidancePacket;
 			return {
 				...packet,
+				...(inventoryAlreadyInContext(options.messages, packet)
+					? {
+							scopeFiles: [],
+							scopeFilesAlreadyInContext: true,
+							scopeFileCount: packet.scopeFiles.length,
+						}
+					: {}),
 				skills: packet.skills.map(({ header, ...source }) => {
 					const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(
 						header,

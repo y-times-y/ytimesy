@@ -558,6 +558,8 @@ async function checkoutStackedTaskBase(
 	const project = await projectForOwner(input.userId, input.projectId);
 	const checkout = project
 		? projectCheckoutFromFullName({
+				userId: input.userId,
+				projectId: input.projectId,
 				fullName: project.fullName,
 				branch: project.branch,
 				installationId: project.installationId,

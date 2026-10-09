@@ -4,8 +4,21 @@
   "main": ".ytimesy/edge-executor.mjs",
   "build": { "command": "node --import tsx scripts/build-edge-executor.ts" },
   "account_id": "f45021db74a97feaafae2e3e131d4d82",
-  "compatibility_date": "2026-10-04",
+  "compatibility_date": "2026-10-08",
   "compatibility_flags": ["nodejs_compat"],
+  "vpc_networks": [{ "binding": "CODEX_EGRESS", "network_id": "cf1:network", "remote": true }],
+  "durable_objects": {
+    "bindings": [{ "name": "MODEL_CONVERSATIONS", "class_name": "ModelConversation" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ModelConversation"] }],
+  "workflows": [
+    { "name": "ytimesy-project-environments-development", "binding": "PROJECT_ENVIRONMENTS", "class_name": "ProjectEnvironmentWorkflow" },
+    { "name": "ytimesy-edge-model-turns-development", "binding": "MODEL_TURNS", "class_name": "EdgeModelTurnWorkflow" },
+    { "name": "ytimesy-background-jobs-development", "binding": "BACKGROUND_JOBS", "class_name": "BackgroundJobWorkflow" }
+  ],
+  "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "9403f3ee7ca24e16a43f903d10745dfb", "localConnectionString": "postgres://test:test@127.0.0.1:1/test" }],
+  "secrets": { "required": [] },
   "observability": { "enabled": true, "traces": { "enabled": true } },
+  "triggers": { "crons": ["* * * * *"] },
   "workers_dev": true
 }

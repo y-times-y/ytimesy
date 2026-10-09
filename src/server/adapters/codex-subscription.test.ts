@@ -21,6 +21,47 @@ beforeEach(() => {
 	mocks.connected.mockReset().mockResolvedValue(true);
 });
 
+it("reports bounded catalog HTTP diagnostics without exposing provider bodies", async () => {
+	vi.spyOn(globalThis, "fetch").mockResolvedValue(
+		new Response("private-upstream-body", { status: 403 }),
+	);
+	await expect(codexSubscriptionCatalog("metadata-http-owner")).rejects.toThrow(
+		"metadata was rejected (HTTP 403)",
+	);
+});
+
+it("distinguishes catalog timeout from an inference failure", async () => {
+	vi.spyOn(globalThis, "fetch").mockRejectedValue(
+		new DOMException("private destination", "TimeoutError"),
+	);
+	await expect(
+		codexSubscriptionCatalog("metadata-timeout-owner"),
+	).rejects.toThrow("metadata failed (timeout). No inference was started");
+});
+
+it("does not follow subscription redirects or attempt to solve access challenges", async () => {
+	const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+		new Response(null, {
+			status: 302,
+			headers: { location: "https://untrusted.example/login" },
+		}),
+	);
+	await expect(codexSubscriptionCatalog("redirect-owner")).rejects.toThrow(
+		"HTTP 302",
+	);
+	expect(fetch).toHaveBeenCalledTimes(1);
+	expect(fetch.mock.calls[0][1]?.redirect).toBe("manual");
+	fetch.mockResolvedValue(
+		new Response("private challenge body", {
+			status: 403,
+			headers: { "cf-mitigated": "challenge" },
+		}),
+	);
+	await expect(codexSubscriptionCatalog("challenge-owner")).rejects.toThrow(
+		"access-challenge",
+	);
+});
+
 it("keeps subscription cache routing stable per account and chat through the real SDK", async () => {
 	const fetch = vi
 		.spyOn(globalThis, "fetch")
@@ -184,13 +225,17 @@ it("scopes every metadata request to its authenticated owner and returns no secr
 	expect(fetch).toHaveBeenCalledWith(
 		"https://chatgpt.com/backend-api/wham/usage",
 		expect.objectContaining({
-			headers: {
-				Authorization: "Bearer token-alice",
-				"ChatGPT-Account-ID": "account-alice",
-			},
-			redirect: "error",
+			redirect: "manual",
 		}),
 	);
+	expect(
+		Object.fromEntries(new Headers(fetch.mock.calls[0][1]?.headers)),
+	).toMatchObject({
+		authorization: "Bearer token-alice",
+		"chatgpt-account-id": "account-alice",
+		accept: "application/json",
+		"user-agent": "ytimesy/1.0",
+	});
 	expect(JSON.stringify(usage)).not.toContain("token-alice");
 	await readCodexSubscriptionUsage("bob");
 	expect(mocks.auth).toHaveBeenLastCalledWith("bob");

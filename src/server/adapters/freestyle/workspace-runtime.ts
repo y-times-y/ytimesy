@@ -21,7 +21,13 @@ import {
 import { waitUntilVmRunning } from "./wait-until-running";
 
 export class FreestyleWorkspaceRuntime implements WorkspaceRuntime {
-	constructor(private readonly apiKey: string) {}
+	constructor(
+		private readonly apiKey: string,
+		private readonly options: {
+			fetch?: typeof fetch;
+			streamSetupCommands?: boolean;
+		} = {},
+	) {}
 
 	async findBySlug(slug: string) {
 		const { vms } = await this.client().vms.list({ slug, limit: 1 });
@@ -98,7 +104,10 @@ export class FreestyleWorkspaceRuntime implements WorkspaceRuntime {
 		if (infrastructureAdmissionEnabled())
 			await this.recover(providerRef, Math.ceil(timeoutMs / 1000));
 		const vm = this.client().vms.ref(providerRef);
-		if (timeoutMs > FREESTYLE_EXEC_TIMEOUT_MS_MAX)
+		if (
+			timeoutMs > FREESTYLE_EXEC_TIMEOUT_MS_MAX ||
+			(this.options.streamSetupCommands && timeoutMs > 30_000)
+		)
 			return runLongCommand(vm.pty, argv, env, timeoutMs);
 		const result = await vm.exec({
 			command: posixShellCommand(argv),
@@ -156,14 +165,15 @@ export class FreestyleWorkspaceRuntime implements WorkspaceRuntime {
 	}
 
 	private client() {
-		return new Freestyle({ apiKey: this.apiKey });
+		return new Freestyle({ apiKey: this.apiKey, fetch: this.options.fetch });
 	}
 }
 
 export function workspaceRuntimeFromEnv(
 	env: NodeJS.ProcessEnv = process.env,
+	options?: ConstructorParameters<typeof FreestyleWorkspaceRuntime>[1],
 ): WorkspaceRuntime {
 	const apiKey = env.FREESTYLE_API_KEY?.trim();
 	if (!apiKey) return new UnconfiguredWorkspaceRuntime();
-	return new FreestyleWorkspaceRuntime(apiKey);
+	return new FreestyleWorkspaceRuntime(apiKey, options);
 }

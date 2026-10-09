@@ -1,7 +1,13 @@
+import { randomUUID } from "node:crypto";
 import { PgBoss } from "pg-boss";
 import { ENVIRONMENT_JOB_TIMEOUT_SECONDS } from "#/domain/environment-build-limits";
 import type { EnvironmentModel } from "#/domain/environment-model";
+import {
+	backgroundJobId,
+	dispatchBackgroundJob,
+} from "../adapters/background-job-dispatch";
 import { database } from "../adapters/database";
+import { scopedDatabase, scopedResource } from "../adapters/database-scope";
 import type { PeerMessage } from "../services/agent-peer-messaging";
 
 export const PREPARE_WORKSPACE_QUEUE = "prepare-workspace";
@@ -24,9 +30,22 @@ type QueueRole = "producer" | "worker";
 const processQueues = globalThis as typeof globalThis & {
 	ytimesyJobQueues?: Partial<Record<QueueRole, Promise<PgBoss>>>;
 };
+const producerResource = Symbol("request-job-producer");
 
 /** Share startup across callers and hot reloads; jobs use the application's bounded pool. */
 export function jobQueue(role: QueueRole = "producer"): Promise<PgBoss> {
+	if (scopedDatabase()) {
+		if (role !== "producer")
+			throw new Error("A request cannot start a persistent job worker.");
+		const producer = scopedResource(
+			producerResource,
+			() => startJobQueue("producer"),
+			(boss) => boss.stop({ graceful: false, timeout: 1000 }),
+		);
+		if (!producer)
+			throw new Error("Request job producer scope is unavailable.");
+		return producer;
+	}
 	processQueues.ytimesyJobQueues ??= {};
 	const queues = processQueues.ytimesyJobQueues;
 	if (!queues[role]) {
@@ -118,6 +137,15 @@ async function startJobQueue(role: QueueRole): Promise<PgBoss> {
 }
 
 export async function enqueueAgentTaskEvent(eventId?: string) {
+	const id = randomUUID();
+	if (
+		await dispatchBackgroundJob({
+			id,
+			kind: "task-event",
+			eventId: eventId ?? null,
+		})
+	)
+		return id;
 	const queue = await jobQueue();
 	return queue.send(
 		AGENT_TASK_EVENT_QUEUE,
@@ -127,6 +155,8 @@ export async function enqueueAgentTaskEvent(eventId?: string) {
 }
 
 export async function enqueuePrRepair() {
+	const id = randomUUID();
+	if (await dispatchBackgroundJob({ id, kind: "pr-repair" })) return id;
 	return (await jobQueue()).send(
 		PR_REPAIR_QUEUE,
 		{},
@@ -135,6 +165,8 @@ export async function enqueuePrRepair() {
 }
 
 export async function enqueueWorkPlan() {
+	const id = randomUUID();
+	if (await dispatchBackgroundJob({ id, kind: "work-plan" })) return id;
 	return (await jobQueue()).send(
 		WORK_PLAN_QUEUE,
 		{},
@@ -146,6 +178,15 @@ export async function enqueuePeerMessage(
 	message: PeerMessage,
 	requestKey: string,
 ) {
+	const id = backgroundJobId(requestKey);
+	if (
+		await dispatchBackgroundJob({
+			id,
+			kind: "peer-message",
+			...message,
+		})
+	)
+		return id;
 	const queue = await jobQueue();
 	return queue.send(AGENT_PEER_MESSAGE_QUEUE, message, {
 		singletonKey: requestKey,
@@ -153,6 +194,9 @@ export async function enqueuePeerMessage(
 }
 
 export async function enqueueCompetition(rootSessionId: string) {
+	const id = randomUUID();
+	if (await dispatchBackgroundJob({ id, kind: "competition", rootSessionId }))
+		return id;
 	const queue = await jobQueue();
 	return queue.send(
 		START_COMPETITION_QUEUE,
@@ -165,6 +209,11 @@ export async function enqueueSessionCheckpoint(
 	userId: string,
 	sessionId: string,
 ) {
+	const id = randomUUID();
+	if (
+		await dispatchBackgroundJob({ id, kind: "checkpoint", userId, sessionId })
+	)
+		return id;
 	const queue = await jobQueue();
 	return queue.send(
 		SESSION_CHECKPOINT_QUEUE,
@@ -175,6 +224,17 @@ export async function enqueueSessionCheckpoint(
 
 export const postgresJobQueue: WorkspaceJobQueue = {
 	async enqueuePrepare(workspaceId, repairModel) {
+		const id = randomUUID();
+		if (
+			await dispatchBackgroundJob({
+				id,
+				kind: "prepare",
+				workspaceId,
+				force: true,
+				repairModel: repairModel ?? null,
+			})
+		)
+			return id;
 		const queue = await jobQueue();
 		return queue.send(
 			PREPARE_WORKSPACE_QUEUE,

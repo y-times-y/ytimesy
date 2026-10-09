@@ -287,7 +287,8 @@ export const agentTaskToolDefinitions = [
 	},
 	{
 		name: "send_task_message",
-		description: "Send focused follow-up guidance to a descendant task.",
+		description:
+			"Send focused follow-up guidance to a descendant task. Set requiresCommandExecution:true for test/shell diagnostics; unavailable capabilities reject without waking it. Completed tasks return their retained summary unless resumeCompleted:true explicitly requests new work. Inspect capabilities from create_task/list_tasks; cloud read-only tasks cannot run commands.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -297,6 +298,8 @@ export const agentTaskToolDefinitions = [
 				message: {
 					type: "string",
 				},
+				requiresCommandExecution: { type: "boolean" },
+				resumeCompleted: { type: "boolean" },
 			},
 			required: ["taskId", "message"],
 			additionalProperties: false,

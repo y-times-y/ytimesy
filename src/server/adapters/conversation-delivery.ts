@@ -37,17 +37,21 @@ export async function conversationSnapshot(userId: string, sessionId: string) {
 }
 
 /** Release the PG connection before WAN delivery. Failed rooms receive their own retry deadline. */
-export async function claimConversationDeliveries(limit = 16) {
+export async function claimConversationDeliveries(
+	limit = 16,
+	sessionId?: string,
+) {
 	const leaseId = randomUUID();
 	const result = await database().query<DeliveryRow>(
 		`with claimed as (
 	 update conversation_delivery set lease_id=$1,lease_until=now()+interval '15 seconds'
 	 where session_id in(select session_id from conversation_delivery
 	 where revision>delivered_revision and retry_at<=now() and (lease_until is null or lease_until<now())
+	 and ($3::uuid is null or session_id=$3::uuid)
 	 order by retry_at for update skip locked limit $2) returning session_id,revision)
 	 select s.user_id,s.id session_id,c.revision::text,s.items,s.turn_status
 	 from claimed c join agent_session s on s.id=c.session_id`,
-		[leaseId, limit],
+		[leaseId, limit, sessionId ?? null],
 	);
 	return result.rows.map((row) => ({ snapshot: snapshot(row), leaseId }));
 }

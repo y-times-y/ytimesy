@@ -5,6 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+	apiTurnFailureClassification,
+	apiTurnFailureMessage,
+} from "#/domain/api-turn-failure";
 import { posixShellCommand } from "#/domain/posix-command";
 import { verifyCompletedRepository } from "./completion-verification";
 
@@ -45,16 +49,18 @@ afterEach(async () => {
 
 async function fixture(
 	check = "if (require('node:fs').readFileSync('source.txt','utf8') !== 'fixed\\n') process.exit(7);",
+	configuredChecks = true,
 ) {
 	const scratch = await mkdtemp(join(tmpdir(), "yt-completion-"));
 	roots.push(scratch);
 	const directory = join(scratch, "repo");
 	await mkdir(join(directory, ".ytimesy"), { recursive: true });
 	await run("git", ["init", "-q", directory]);
-	await writeFile(
-		join(directory, ".ytimesy/environment.json"),
-		JSON.stringify({ checks: ["node check.cjs"] }),
-	);
+	if (configuredChecks)
+		await writeFile(
+			join(directory, ".ytimesy/environment.json"),
+			JSON.stringify({ checks: ["node check.cjs"] }),
+		);
 	await writeFile(join(directory, "check.cjs"), check);
 	await writeFile(join(directory, "source.txt"), "initial\n");
 	await run("git", ["-C", directory, "add", "."]);
@@ -109,6 +115,29 @@ async function fixture(
 		turn: "a".repeat(64),
 	};
 }
+
+it("reports missing baseline verification policy instead of suggesting a Git authentication fix", async () => {
+	const input = await fixture(undefined, false);
+	let failure: unknown;
+	try {
+		await verifyCompletedRepository(input);
+	} catch (error) {
+		failure = error;
+	}
+	expect(failure).toBeInstanceOf(Error);
+	expect(apiTurnFailureClassification(failure)).toMatchObject({
+		name: "VerificationPolicyFailure",
+		reason: "missing-checks",
+	});
+	expect(apiTurnFailureMessage("commit", failure)).toContain(
+		"Configure project verification checks",
+	);
+	expect(apiTurnFailureMessage("commit", failure)).not.toContain(
+		"GitHub access",
+	);
+	expect(records.claim).not.toHaveBeenCalled();
+	expect(records.save).not.toHaveBeenCalled();
+});
 
 it("selects baseline commands, retains real completion references and reuses only the exact full tree", async () => {
 	const input = await fixture();
