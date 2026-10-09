@@ -1,8 +1,10 @@
+import type { AgentConnection } from "#/domain/agent-connection";
 import {
 	apiConversation,
 	assertApiContextFits,
 } from "#/domain/api-conversation";
 import { recordedContextUsage } from "#/domain/api-progress";
+import { CodexReconnectRequired } from "#/domain/api-turn-failure";
 import { childTaskPublicItems } from "#/domain/child-task-activity";
 import { reconstructedContextTransition } from "#/domain/harness-model-profile";
 import {
@@ -18,6 +20,7 @@ import {
 	previousTurnMessages,
 } from "../adapters/api-turns";
 import { codexSubscriptionCatalog } from "../adapters/codex-subscription";
+import { loadAgentAccount } from "../auth/agent-account";
 import { hasManagedCodexAuth } from "../auth/codex-managed-auth";
 import { openAgentSession } from "./agent-session-machine";
 import { cancelServerTurn } from "./cancel-server-turn";
@@ -36,8 +39,28 @@ export async function readSubscriptionSession(
 		: null;
 	if (scope.sessionId && (!session || session.projectId !== scope.projectId))
 		throw new Error("Session is not in this project.");
-	const connected = await hasManagedCodexAuth(scope.userId);
-	const models = connected ? await codexSubscriptionCatalog(scope.userId) : [];
+	let connected = await hasManagedCodexAuth(scope.userId);
+	let models: Awaited<ReturnType<typeof codexSubscriptionCatalog>> = [];
+	try {
+		if (connected) models = await codexSubscriptionCatalog(scope.userId);
+	} catch (error) {
+		// A rejected refresh has just marked the account expired; show sign-in instead.
+		if (!(error instanceof CodexReconnectRequired)) throw error;
+		connected = false;
+	}
+	const account = await loadAgentAccount(scope.userId);
+	const connection: AgentConnection =
+		connected && account.status === "connected"
+			? {
+					status: "authenticated",
+					provider: "codex",
+					authMode: "chatgpt",
+					planType: account.planType,
+					email: account.email,
+				}
+			: account.status === "expired"
+				? { status: "expired", provider: "codex", message: account.message }
+				: { status: "disconnected" };
 	const items = childTaskPublicItems(sessionItemsFromUnknown(session?.items));
 	return {
 		...emptyCodexSession(),
@@ -52,15 +75,7 @@ export async function readSubscriptionSession(
 			session?.harness === "codex" ? (session.listedModelId ?? "") : "",
 		turnStatus: session?.turnStatus ?? "idle",
 		canSend: connected && models.length > 0,
-		connection: connected
-			? {
-					status: "authenticated",
-					provider: "codex",
-					authMode: "chatgpt",
-					planType: null,
-					email: null,
-				}
-			: { status: "disconnected" },
+		connection,
 	};
 }
 

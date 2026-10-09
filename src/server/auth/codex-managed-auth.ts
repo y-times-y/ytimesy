@@ -1,3 +1,4 @@
+import { CodexReconnectRequired } from "#/domain/api-turn-failure";
 import type { WorkspaceId } from "#/domain/ids";
 import { database } from "../adapters/database";
 import type { WorkspaceMachines } from "../services/workspace-machines";
@@ -34,6 +35,30 @@ function managedAuth(value: unknown): ManagedCodexAuth {
 		throw new Error("Codex login is incomplete; reconnect Codex.");
 	}
 	return value as ManagedCodexAuth;
+}
+
+/** ChatGPT embeds the current plan in each access token. */
+function codexPlanType(auth: ManagedCodexAuth): string | null {
+	try {
+		const claims = JSON.parse(
+			Buffer.from(
+				auth.tokens.access_token.split(".")[1] ?? "",
+				"base64url",
+			).toString(),
+		) as Record<string, unknown>;
+		const account = claims["https://api.openai.com/auth"];
+		if (
+			account &&
+			typeof account === "object" &&
+			"chatgpt_plan_type" in account
+		)
+			return typeof account.chatgpt_plan_type === "string"
+				? account.chatgpt_plan_type
+				: null;
+	} catch {
+		// The plan is display metadata; expiry checks validate the token itself.
+	}
+	return null;
 }
 
 export function codexAccessTokenExpiresAt(auth: ManagedCodexAuth): number {
@@ -124,10 +149,27 @@ export async function codexExternalTokens(
 			forceRefresh ||
 			codexAccessTokenExpiresAt(auth) < Date.now() + 300_000
 		) {
-			auth = await refreshManagedCodexAuth(auth);
+			try {
+				auth = await refreshManagedCodexAuth(auth);
+			} catch (error) {
+				// Persist the expired state so the UI asks for sign-in instead of every
+				// request retrying a dead grant. The sealed login is kept for diagnosis.
+				if (error instanceof CodexReconnectRequired) {
+					await client.query(
+						"update agent_account set status='expired',message=$2,updated_at=now() where user_id=$1 and provider='codex'",
+						[
+							userId,
+							"Your Codex login expired or was revoked. Reconnect Codex.",
+						],
+					);
+					await client.query("commit");
+				}
+				throw error;
+			}
+			// Plan changes surface on refresh; keep the displayed plan current.
 			await client.query(
-				"update agent_account set encrypted_codex_auth=$2,updated_at=now() where user_id=$1 and provider='codex'",
-				[userId, await seal(JSON.stringify(auth))],
+				"update agent_account set encrypted_codex_auth=$2,plan_type=coalesce($3,plan_type),updated_at=now() where user_id=$1 and provider='codex'",
+				[userId, await seal(JSON.stringify(auth)), codexPlanType(auth)],
 			);
 		}
 		await client.query("commit");
@@ -163,7 +205,12 @@ export async function refreshManagedCodexAuth(
 	});
 	if (!response.ok) {
 		await response.body?.cancel().catch(() => {});
-		throw new Error("Codex login refresh failed; reconnect Codex.");
+		// 400/401/403 reject the grant itself; anything else may be transient.
+		if ([400, 401, 403].includes(response.status))
+			throw new CodexReconnectRequired();
+		throw new Error(
+			"Codex login refresh is temporarily unavailable; retry shortly.",
+		);
 	}
 	let value: z.infer<typeof refreshedCredentials>;
 	try {
@@ -183,7 +230,7 @@ export async function refreshManagedCodexAuth(
 		},
 	});
 	if (codexAccessTokenExpiresAt(updated) < Date.now() + 60_000)
-		throw new Error("Codex login refresh failed; reconnect Codex.");
+		throw new CodexReconnectRequired();
 	const claims = JSON.parse(
 		Buffer.from(
 			updated.tokens.access_token.split(".")[1],

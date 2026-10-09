@@ -123,6 +123,27 @@ export class SubscriptionMetadataFailure extends Error {
 	}
 }
 
+/** The stored subscription login was definitively rejected; only the user can sign in again. */
+export class CodexReconnectRequired extends Error {
+	constructor() {
+		super(
+			"Codex login refresh failed; reconnect Codex in Settings → Agents, then retry. This request was not sent.",
+		);
+		this.name = "CodexReconnectRequired";
+	}
+}
+
+/** Provider SDKs may wrap transport errors; find the typed reconnect cause. */
+function reconnectCause(
+	error: unknown,
+	depth = 0,
+): CodexReconnectRequired | null {
+	if (error instanceof CodexReconnectRequired) return error;
+	if (depth > 4 || !(error instanceof Error) || !("cause" in error))
+		return null;
+	return reconnectCause(error.cause, depth + 1);
+}
+
 /** A local preparation failure must not be presented as a provider rejection. */
 export class InitialAgentReadFailure extends Error {
 	constructor(
@@ -308,6 +329,8 @@ export function apiTurnFailureMessage(
 	if (error instanceof InitialAgentReadFailure) return error.message;
 	if (error instanceof SubscriptionMetadataFailure) return error.message;
 	if (error instanceof VerificationPolicyFailure) return error.message;
+	const reconnect = reconnectCause(error);
+	if (reconnect) return reconnect.message;
 	switch (stage) {
 		case "connection":
 			return "The selected API connection changed or was removed. Select a model again; no fallback was used.";

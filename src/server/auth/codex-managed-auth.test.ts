@@ -1,5 +1,11 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { refreshManagedCodexAuth } from "./codex-managed-auth";
+import { CodexReconnectRequired } from "#/domain/api-turn-failure";
+import { database } from "../adapters/database";
+import {
+	codexExternalTokens,
+	refreshManagedCodexAuth,
+} from "./codex-managed-auth";
+import { seal, unseal } from "./token-vault";
 
 vi.mock("../adapters/database", () => ({ database: vi.fn() }));
 vi.mock("./token-vault", () => ({ seal: vi.fn(), unseal: vi.fn() }));
@@ -9,11 +15,15 @@ afterEach(() => vi.unstubAllGlobals());
 function accessToken(
 	accountId = "account",
 	expiresAt = Date.now() + 3_600_000,
+	planType?: string,
 ) {
 	return `header.${Buffer.from(
 		JSON.stringify({
 			exp: Math.floor(expiresAt / 1000),
-			"https://api.openai.com/auth": { chatgpt_account_id: accountId },
+			"https://api.openai.com/auth": {
+				chatgpt_account_id: accountId,
+				...(planType ? { chatgpt_plan_type: planType } : {}),
+			},
 		}),
 	).toString("base64url")}.signature`;
 }
@@ -77,8 +87,8 @@ it("does not expose rejection bodies or retry a potentially rotated grant", asyn
 		async () => new Response("private server diagnostics", { status: 401 }),
 	);
 	vi.stubGlobal("fetch", fetch);
-	await expect(refreshManagedCodexAuth(auth)).rejects.toThrow(
-		"Codex login refresh failed; reconnect Codex.",
+	await expect(refreshManagedCodexAuth(auth)).rejects.toBeInstanceOf(
+		CodexReconnectRequired,
 	);
 	expect(fetch).toHaveBeenCalledOnce();
 });
@@ -106,8 +116,8 @@ it("rejects expired access tokens", async () => {
 			}),
 		),
 	);
-	await expect(refreshManagedCodexAuth(auth)).rejects.toThrow(
-		"Codex login refresh failed; reconnect Codex.",
+	await expect(refreshManagedCodexAuth(auth)).rejects.toBeInstanceOf(
+		CodexReconnectRequired,
 	);
 });
 
@@ -121,4 +131,85 @@ it("rejects an access token for a different ChatGPT account", async () => {
 	await expect(refreshManagedCodexAuth(auth)).rejects.toThrow(
 		"Codex login account changed; reconnect Codex.",
 	);
+});
+
+it("treats only definitive grant rejections as requiring sign-in", async () => {
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async () => new Response(null, { status: 503 })),
+	);
+	await expect(refreshManagedCodexAuth(auth)).rejects.toThrow(
+		"temporarily unavailable",
+	);
+	await expect(refreshManagedCodexAuth(auth)).rejects.not.toBeInstanceOf(
+		CodexReconnectRequired,
+	);
+});
+
+function storedAccount(stored: object) {
+	const queries: Array<{ sql: string; values?: unknown[] }> = [];
+	const client = {
+		query: vi.fn(async (sql: string, values?: unknown[]) => {
+			queries.push({ sql, values });
+			return sql.startsWith("select")
+				? { rows: [{ encrypted_codex_auth: "sealed" }] }
+				: { rows: [] };
+		}),
+		release: vi.fn(),
+	};
+	vi.mocked(database).mockReturnValue({
+		connect: async () => client,
+	} as never);
+	vi.mocked(unseal).mockResolvedValue(JSON.stringify(stored));
+	vi.mocked(seal).mockResolvedValue("resealed");
+	return queries;
+}
+
+it("commits an expired account state when the refresh grant is rejected", async () => {
+	const queries = storedAccount(auth);
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async () => new Response(null, { status: 401 })),
+	);
+	await expect(codexExternalTokens("owner", true)).rejects.toBeInstanceOf(
+		CodexReconnectRequired,
+	);
+	const statements = queries.map((query) => query.sql);
+	const expired = statements.findIndex((sql) =>
+		sql.includes("status='expired'"),
+	);
+	expect(expired).toBeGreaterThan(-1);
+	expect(statements[expired + 1]).toBe("commit");
+	expect(
+		statements.some((sql) => sql.includes("encrypted_codex_auth=$2")),
+	).toBe(false);
+});
+
+it("keeps a transient refresh failure from expiring the account", async () => {
+	const queries = storedAccount(auth);
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async () => new Response(null, { status: 502 })),
+	);
+	await expect(codexExternalTokens("owner", true)).rejects.toThrow(
+		"temporarily unavailable",
+	);
+	expect(queries.some((query) => query.sql.includes("status='expired'"))).toBe(
+		false,
+	);
+});
+
+it("records the plan carried by a refreshed token", async () => {
+	const queries = storedAccount(auth);
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async () =>
+			Response.json({
+				access_token: accessToken("account", Date.now() + 3_600_000, "free"),
+			}),
+		),
+	);
+	await codexExternalTokens("owner", true);
+	const update = queries.find((query) => query.sql.includes("plan_type="));
+	expect(update?.values).toEqual(["owner", "resealed", "free"]);
 });
