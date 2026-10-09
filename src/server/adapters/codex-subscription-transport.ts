@@ -134,18 +134,37 @@ export async function subscriptionFetch(
 				: operation.parse({ kind: "metadata", path });
 		return relayRequest(userId, request, accountId, init?.signal);
 	}
-	const tokens = await codexExternalTokens(userId);
-	if (accountId && accountId !== tokens.chatgptAccountId)
-		throw new Error("Subscription account changed; restart this turn.");
-	headers.set("Authorization", `Bearer ${tokens.accessToken}`);
-	headers.set("ChatGPT-Account-ID", tokens.chatgptAccountId);
-	headers.set("User-Agent", "ytimesy/1.0");
 	const request = subscriptionEgress.getStore() ?? fetch;
-	return request(`${backend}/${path}`, {
-		...init,
-		headers,
-		redirect: "manual",
+	return withRevokedTokenRetry(init?.body, async (forceRefresh) => {
+		const tokens = forceRefresh
+			? await codexExternalTokens(userId, true)
+			: await codexExternalTokens(userId);
+		if (accountId && accountId !== tokens.chatgptAccountId)
+			throw new Error("Subscription account changed; restart this turn.");
+		headers.set("Authorization", `Bearer ${tokens.accessToken}`);
+		headers.set("ChatGPT-Account-ID", tokens.chatgptAccountId);
+		headers.set("User-Agent", "ytimesy/1.0");
+		return request(`${backend}/${path}`, {
+			...init,
+			headers,
+			redirect: "manual",
+		});
 	});
+}
+
+/**
+ * A plan change can revoke an access token before its embedded expiry. HTTP 401 means
+ * the request was rejected unprocessed, so one forced refresh and resend cannot duplicate work.
+ */
+async function withRevokedTokenRetry(
+	body: RequestInit["body"],
+	send: (forceRefresh: boolean) => Promise<Response>,
+) {
+	const response = await send(false);
+	if (response.status !== 401 || !(body == null || typeof body === "string"))
+		return response;
+	await response.body?.cancel();
+	return send(true);
 }
 
 /** Server-to-server only; fixed destinations, fresh owner credentials, no retries or logs. */
@@ -179,35 +198,42 @@ export async function handleCodexSubscriptionRelay(
 		return new Response(null, { status: 400 });
 	}
 	try {
-		const tokens = await codexExternalTokens(input.userId);
+		let tokens = await codexExternalTokens(input.userId);
 		if (input.accountId && input.accountId !== tokens.chatgptAccountId)
 			return new Response(null, { status: 409 });
-		if (input.operation.kind === "identity")
+		const operation = input.operation;
+		if (operation.kind === "identity")
 			return Response.json(
 				{ accountId: tokens.chatgptAccountId },
 				{ headers: { "Cache-Control": "no-store" } },
 			);
-		const metadata = input.operation.kind === "metadata";
-		const headers = new Headers({
-			Authorization: `Bearer ${tokens.accessToken}`,
-			"ChatGPT-Account-ID": tokens.chatgptAccountId,
-			"User-Agent": "ytimesy/1.0",
-			Accept: metadata ? "application/json" : "text/event-stream",
-			"Content-Type": "application/json",
-		});
-		if (input.operation.kind === "inference" && input.operation.sessionId)
-			headers.set("session-id", input.operation.sessionId);
+		const metadata = operation.kind === "metadata";
+		const body = operation.kind === "inference" ? operation.body : undefined;
 		const signal = metadata
 			? AbortSignal.any([request.signal, AbortSignal.timeout(7_000)])
 			: request.signal;
-		const response = await fetch(`${backend}/${input.operation.path}`, {
-			method: metadata ? "GET" : "POST",
-			headers,
-			signal,
-			redirect: "manual",
-			...(input.operation.kind === "inference"
-				? { body: input.operation.body }
-				: {}),
+		const response = await withRevokedTokenRetry(body, async (forceRefresh) => {
+			if (forceRefresh) {
+				tokens = await codexExternalTokens(input.userId, true);
+				if (input.accountId && input.accountId !== tokens.chatgptAccountId)
+					return new Response(null, { status: 409 });
+			}
+			const headers = new Headers({
+				Authorization: `Bearer ${tokens.accessToken}`,
+				"ChatGPT-Account-ID": tokens.chatgptAccountId,
+				"User-Agent": "ytimesy/1.0",
+				Accept: metadata ? "application/json" : "text/event-stream",
+				"Content-Type": "application/json",
+			});
+			if (operation.kind === "inference" && operation.sessionId)
+				headers.set("session-id", operation.sessionId);
+			return fetch(`${backend}/${operation.path}`, {
+				method: metadata ? "GET" : "POST",
+				headers,
+				signal,
+				redirect: "manual",
+				...(body === undefined ? {} : { body }),
+			});
 		});
 		if (!response.ok) {
 			await response.body?.cancel();
