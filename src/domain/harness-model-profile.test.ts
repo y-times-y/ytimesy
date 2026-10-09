@@ -20,6 +20,11 @@ it("requests early executable feedback without sacrificing durable regression co
 	);
 	expect(instructions).toContain("never weaken tests");
 	expect(instructions).toContain("Preserve every required check");
+	expect(instructions).toContain("Derive expected behavior from requirements");
+	expect(instructions).toContain("not your patch");
+	expect(instructions).toContain("Fix one coherent behavior");
+	expect(instructions).toContain("before expanding");
+	expect(instructions).toContain("never weaken tests or invent semantics");
 });
 
 it("does not send a builder searching for absent planning or delegation tools", () => {
