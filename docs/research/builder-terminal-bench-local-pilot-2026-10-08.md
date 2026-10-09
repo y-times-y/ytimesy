@@ -190,6 +190,23 @@ to other work. The disposable-resource envelope was $5; no invoice was fetched.
 Private evidence lives under
 `.ytimesy/terminal-bench-feedback-20261008/session-window-debug/`.
 
+### Fix/check cadence and failure observability follow-up
+
+The next shared profile explicitly asks for a coherent implementation and an
+immediate check after reproduction, rather than front-loading exhaustive test
+scaffolding or speculative redesign. It still requires persisted regressions,
+edge cases, final review and all required checks. No reasoning level, timeout,
+grading rule or task-specific implementation hint changes.
+
+Failure classification now retains a maximum of four allowlisted cause
+categories, including transport/socket timeout codes. Safe user-facing wrappers
+retain only those categories, not raw errors, bodies, URLs, headers or secrets.
+The private evaluator saves this classification and explicitly labels failed
+turn usage incomplete. Cyclic chains and secret exclusion are regression tested.
+This repairs diagnostic evidence; it is not a speculative networking fix or
+permission to replay interrupted streams. Performance remains unproven until
+the next frozen run completes and is measured.
+
 ## Trace-driven builder efficiency follow-up
 
 The next isolated change targets the observed tool and evidence overhead, not
