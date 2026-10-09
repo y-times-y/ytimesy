@@ -47,7 +47,7 @@ export const patchVerification = z
 			.max(8)
 			.optional(),
 		sourcePaths: z.array(z.string().min(1).max(2048)).min(1).max(8).optional(),
-		outputView: z.enum(["full", "summary"]).default("full"),
+		outputView: z.enum(["full", "summary"]).default("summary"),
 		parallelChecks: z
 			.boolean()
 			.default(false)
@@ -381,12 +381,15 @@ export function apiAgentFileTools(
 	}
 	const inspect_changes = tool({
 		description:
-			"Inspect repository status, staged/unstaged diffs and every nonignored untracked regular file before editing or reporting completion. New files are included without staging or changing the index. Paths are literal repository-relative scopes; symlinks are reported but their targets are not read. Full output is retained with continuation cursors when output capture is available. Binary new files show Git's binary-difference notice, not decoded content.",
-		inputSchema: z.object({ path: repositoryToolPath.optional() }),
-		execute: async ({ path }) => {
+			"Inspect repository status, staged/unstaged diffs and nonignored untracked regular files without changing the index. view:stat gives a compact changed-file inventory, not source review; use default view:full with a literal repository-relative path to review specific changes. New files are included; symlinks are reported but targets are not read. Full output is retained with continuation cursors when capture is available. Binary files show Git's binary notice, not decoded content.",
+		inputSchema: z.object({
+			path: repositoryToolPath.optional(),
+			view: z.enum(["full", "stat"]).default("full"),
+		}),
+		execute: async ({ path, view = "full" }) => {
 			signal.throwIfAborted();
 			const { machines, vm, cwd } = await resolveToolWorkspace(input);
-			const command = inspectRepositoryChangesCommand(cwd, path);
+			const command = inspectRepositoryChangesCommand(cwd, path, view);
 			if (input.output) return input.output.capture(command);
 			const result = await machines.exec(vm, command, 20_000);
 			if (result.exitCode)

@@ -291,6 +291,19 @@ it("rejects traversal, absolute and git-internal inspection scopes before execut
 	expect(commands).toEqual([]);
 });
 
+it("offers stat-only inspection without repeating source bodies or changing the index", async () => {
+	const { root, tools } = await fixture();
+	await writeFile(join(root, "new.txt"), "PRIVATE_SOURCE_BODY\n".repeat(2000));
+	const result = await call(tools.inspect_changes, { view: "stat" });
+	expect(result).toContain("new.txt");
+	expect(result).toContain("2000 insertions");
+	expect(result).not.toContain("PRIVATE_SOURCE_BODY");
+	expect(String(result).length).toBeLessThan(500);
+	await expect(readFile(join(root, ".git/index"))).rejects.toMatchObject({
+		code: "ENOENT",
+	});
+});
+
 it("reports an unstaged move as a compact rename without changing the real index", async () => {
 	const { root, tools } = await fixture();
 	const body = `${Array.from(
@@ -365,7 +378,7 @@ it("verifies only successfully completed batches and does not repeat writes or v
 	const result = await call(tools.apply_patches, args);
 	expect(await readFile(join(root, "new.txt"), "utf8")).toBe("ready");
 	expect(verify).toHaveBeenCalledExactlyOnceWith(
-		{ ...args.verification, parallelChecks: false, outputView: "full" },
+		{ ...args.verification, parallelChecks: false, outputView: "summary" },
 		"edit",
 	);
 	expect(await call(tools.apply_patches, args)).toEqual(result);

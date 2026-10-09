@@ -135,3 +135,35 @@ other work; none were deleted. The owned local archive contains no files, and
 Docker reports no evaluation database containers. No Supabase calls, deployment,
 publication or second task occurred. The resource envelope stayed bounded; an
 actual Freestyle invoice was not fetched.
+
+## Trace-driven builder efficiency follow-up
+
+The next isolated change targets the observed tool and evidence overhead, not
+the protected task solution. Shared model instructions receive the actual tool
+inventory and no longer advertise absent planning tools. They recommend the
+smallest coherent implementation, focused/table-driven regression coverage,
+configured formatting before checks, and finishing after final review and
+required checks pass unless a concrete defect remains. These are behavioral
+instructions, not deterministic bounds on model reasoning or test generation.
+
+The existing check-summary path is now the default, including patch-and-verify
+batches. Actual failed/stopped checks keep their diagnostic page. Successful
+checks retain exact exit/stop status, source fences and full recoverable logs;
+compact reporting is explicitly not a complete-log inspection. Explicit full
+output remains available. Git inspection adds optional `view:stat` using native
+Git statistics and the existing disposable index; full/scoped review remains
+the default. It does not suppress untracked files or alter the real index.
+
+Regression tests reproduced absent-tool advertising, full-output defaults and
+source-body duplication before the fixes. Afterward the focused tool/discovery
+tests passed. A real Git fixture requires the stat response to stay below 500
+characters for a 2,000-line new file while retaining its filename/line counts;
+full review and source/hash/read guards remain covered. No tool removes earlier
+conversation history or opaque reasoning to reduce the measured token count.
+Live performance must be reported separately after the unchanged task rerun.
+
+Local validation: the bounded full suite passed 1,701 tests (seven skipped);
+typecheck including workflow types, Biome, production build and diff whitespace
+checks passed. An earlier accidentally unbounded suite invocation caused local
+resource-contention timeouts and was stopped; the correctly bounded rerun above
+is the reported result. No production deployment or database migration occurred.

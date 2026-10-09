@@ -5,6 +5,32 @@ import {
 	reconstructedContextTransition,
 } from "./harness-model-profile";
 
+it("does not send a builder searching for absent planning or delegation tools", () => {
+	const instructions = harnessModelToolInstructions("openai", false, [
+		"execute_command",
+		"apply_patch",
+		"run_checks",
+		"inspect_changes",
+		"read_file",
+	]);
+	expect(instructions).not.toContain("update_plan");
+	expect(instructions).not.toContain("read_work_plan");
+	expect(instructions).not.toContain("delegation");
+	expect(instructions).toContain("Only offered tools");
+});
+
+it("preserves offered planning and recommends bounded evidence instead of duplicate full reads", () => {
+	const instructions = harnessModelToolInstructions("openai", false, [
+		"update_plan",
+		"read_work_plan",
+	]);
+	expect(instructions).toContain("update_plan");
+	expect(instructions).toContain("read_work_plan");
+	expect(instructions).toContain("outputView:summary");
+	expect(instructions).toContain("configured formatter");
+	expect(instructions).toContain("Do not reread entire");
+});
+
 it("keeps the current user request last and explains reconstructed history without forwarding opaque state", () => {
 	const current = { role: "user" as const, content: "Continue" };
 	const history = [

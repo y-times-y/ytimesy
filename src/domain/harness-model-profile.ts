@@ -40,7 +40,20 @@ export function harnessModelFamily(
 export function harnessModelToolInstructions(
 	family: HarnessModelFamily,
 	nativePatch: boolean,
+	availableTools?: readonly string[],
 ) {
+	const offered = (name: string) =>
+		!availableTools || availableTools.includes(name);
+	const planning = [
+		offered("update_plan")
+			? "Keep multi-step progress/evidence in update_plan."
+			: "",
+		offered("read_work_plan")
+			? "read_work_plan recovers it after restart."
+			: "",
+	]
+		.filter(Boolean)
+		.join(" ");
 	const editing =
 		family === "openai" && nativePatch
 			? "Prefer native apply_patch with its documented V4A operation schema, never shell patches."
@@ -54,11 +67,12 @@ export function harnessModelToolInstructions(
 				? "Thought signatures are provider-managed continuation state. Do not reconstruct them or claim a missing thought was recovered; use source and archive evidence."
 				: "Opaque reasoning is provider-managed state. Use recoverable source/tool evidence, not guessed reasoning, after compaction.";
 	return [
-		`Harness tool profile v2 (${family}): ${editing} ${context}`,
-		"Use execute_command with rg, Git and project CLIs; resume yielded ids with continue_command (input, EOF, wait, pages), never restart them. stop_command cancels. view_image supplies pixels. Independent calls run together; compose_tools links known result-dependent steps with explicit write ordering. Keep multi-step progress/evidence in update_plan; read_work_plan recovers it after restart.",
-		"Read current source before edits; reread stale/ambiguous rejections. Never invent truncated source. Choose the least expensive safe workflow: batch known edits; use LSP renames/code actions when semantic uncertainty warrants them, not for every small refactor. Discover specialists with search_tools: outlines, LSP, debugging, memory, delegation, browser_execute. Outlines locate declarations, not replace source.",
-		"Use scoped read_repository_guidance: ancestor instructions, referencedDocuments and scopeFiles are included. Read required bodies completely (read_files supports maxCharacters:128000); follow truncation cursors. Reuse unchanged complete evidence, not filename inventories as absence proof; reread after changes or genuine uncertainty.",
-		"Patch implementation and tests together when no intermediate observation is needed. Use apply_patches.verification for formatting, preflightCommands and required checks, or run_checks. Biome formatting requires --error-on-warnings; no unsafe fixes, suppressed diagnostics or weakened policy.",
-		"Verify the stable final tree; inspect resulting changes. Preserve every required check and full retained evidence. Concise runner reporting is allowed only without filtering tests or hiding warnings/errors. Each command needs its actual exit and stop status; include output references in the handoff.",
+		`Harness tool profile v3 (${family}): ${editing} ${context}`,
+		"Only offered tools are callable; do not search for absent capabilities. Use execute_command with rg, Git and project CLIs; resume yielded ids with continue_command, never restart them. stop_command cancels; view_image supplies pixels. Independent calls run together; compose_tools links result-dependent steps with explicit write ordering.",
+		planning,
+		"Read current source before edits; reread stale/ambiguous rejections. Never invent truncated source. Choose the least expensive safe workflow: batch known edits; use LSP when semantic uncertainty warrants it. Discover offered specialists with search_tools. Outlines locate declarations, not replace source.",
+		"Use scoped read_repository_guidance; read required bodies completely and follow truncation cursors. Reuse unchanged complete evidence. Do not reread entire files just written alongside their full diff; inspect_changes view:stat inventories changes, then scope full review by path. Reread only uncertain regions. Always review final changes.",
+		"Implement the smallest coherent fix and focused regression tests; use table-driven cases instead of repeated scaffolding. Preserve necessary edge coverage. Batch known edits and checks using apply_patches.verification. Use the configured formatter once before checks, not manual line-by-line polishing or invented style rules. Biome requires --error-on-warnings; no unsafe fixes or weakened policy.",
+		"Use run_checks outputView:summary; retrieve omitted logs for failures, warnings or uncertainty. Preserve every required check and full retained evidence. Each command needs its actual exit and stop status and output reference. After final review and required checks pass on the stable tree, finish unless a concrete unresolved defect remains.",
 	].join(" ");
 }
