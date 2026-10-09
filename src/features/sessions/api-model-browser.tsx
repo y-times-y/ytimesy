@@ -36,6 +36,7 @@ import {
 } from "./model-connections.fn";
 import { ModelProviderLogo } from "./model-provider-logo";
 import { ModelRunCount } from "./model-run-count";
+import { ProviderConfirmation } from "./provider-confirmation";
 
 export function ApiModelBrowser({
 	author,
@@ -250,6 +251,10 @@ export function ApiModelBrowser({
 					{save.error ? <p role="alert">{save.error.message}</p> : null}
 				</div>
 			) : null}
+			<ProviderConfirmation
+				author={author}
+				connectionProvider={activeConnection?.provider}
+			/>
 			{visibleConnected.map((model) => {
 				const route = modelRouteId(model.connectionId, model.id);
 				const selectedRun = modelRuns.find((run) => run.modelId === route);

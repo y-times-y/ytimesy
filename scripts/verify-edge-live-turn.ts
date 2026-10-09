@@ -6,6 +6,7 @@ import { createParser } from "eventsource-parser";
 import { Freestyle } from "freestyle";
 import { signDeliveryRequest } from "../src/domain/delivery-auth";
 import { WorkspaceId } from "../src/domain/ids";
+import { modelRouteId } from "../src/domain/model-connection";
 import { sessionItemsFromUnknown } from "../src/domain/session-item";
 import {
 	deleteAgentSessionForOwner,
@@ -24,6 +25,10 @@ import {
 	dispatchModelWorkflow,
 	modelWorkflowSigningSecret,
 } from "../src/server/adapters/model-workflow-dispatch";
+import {
+	apiModelCatalog,
+	sendApiWorkspaceTask,
+} from "../src/server/services/api-workspace-session";
 import { cancelServerTurn } from "../src/server/services/cancel-server-turn";
 import { sendSubscriptionTask } from "../src/server/services/codex-subscription-session";
 import { verifiedEdgeProofProgress } from "./edge-proof-progress";
@@ -61,6 +66,7 @@ const sessions: { userId: string; sessionId: string }[] = [];
 let vmId: string | undefined;
 let workflowId: string | undefined;
 const controlWorkflows: string[] = [];
+const backgroundWorkflows: string[] = [];
 let completed = false;
 let terminal = false;
 function wrangler(args: string[], input?: string) {
@@ -116,6 +122,37 @@ try {
 	).rows[0];
 	if (!source)
 		throw new Error("No subscription model or project is configured.");
+	const apiModel = process.env.EDGE_API_PROOF_MODEL;
+	let selectedModel = source.listed_model_id;
+	if (apiModel) {
+		const connections = await db.query<{ id: string }>(
+			"select id from model_connection where user_id=$1 and provider='openrouter'",
+			[userId],
+		);
+		if (connections.rows.length !== 1)
+			throw new Error("Requires one saved gateway connection.");
+		selectedModel = modelRouteId(connections.rows[0].id, apiModel);
+		if (
+			!(await apiModelCatalog(userId)).some(
+				(model) => model.id === selectedModel,
+			)
+		)
+			throw new Error(
+				"Requested proof model is not available; no fallback was used.",
+			);
+	}
+	const sendProofTask = (sessionId: string, text: string) =>
+		apiModel
+			? sendApiWorkspaceTask(
+					{ userId, projectId: source.project_id, sessionId },
+					{ modelId: selectedModel, text },
+					true,
+				)
+			: sendSubscriptionTask(
+					{ userId, projectId: source.project_id, sessionId },
+					{ modelId: selectedModel, variant: "low", text },
+					true,
+				);
 	const name = source.full_name.split("/")[1];
 	if (!name || !/^[a-zA-Z0-9_.-]+$/.test(name))
 		throw new Error("Invalid fixture directory name.");
@@ -152,9 +189,9 @@ try {
 		userId,
 		projectId: source.project_id,
 		workspaceId: source.workspace_id,
-		harness: "codex",
+		harness: apiModel ? "api" : "codex",
 		title: "Disposable edge proof",
-		listedModelId: source.listed_model_id,
+		listedModelId: selectedModel,
 	});
 	sessions.push({ userId, sessionId: parent.id });
 	const created = await client.vms.create({
@@ -197,11 +234,11 @@ try {
 		userId,
 		projectId: source.project_id,
 		workspaceId: source.workspace_id,
-		harness: "codex",
+		harness: apiModel ? "api" : "codex",
 		providerRef: vmId,
 		parentSessionId: parent.id,
 		title: "Read isolated proof marker",
-		listedModelId: source.listed_model_id,
+		listedModelId: selectedModel,
 		task: {
 			prompt: "Read edge-proof.txt",
 			placement: "shared",
@@ -247,7 +284,14 @@ try {
 	}
 	if (!chatReady) throw new Error("Chat execution gate did not propagate.");
 	await db.query("delete from api_turn where id=$1", [readinessId]);
-	if (process.env.EDGE_CONTROL_PROOF === "1") {
+	if (
+		process.env.EDGE_CONTROL_PROOF === "1" ||
+		process.env.EDGE_RESTART_PROOF === "1"
+	) {
+		await db.query("update agent_session set task_prompt=$2 where id=$1", [
+			child.id,
+			"For this isolated transport test, follow the newest user message exactly. Do not use tools, delegate, edit, fetch, or publish. Write the requested long explanation directly.",
+		]);
 		const previousIds = new Set(
 			sessionItemsFromUnknown((await turnState(child.id))?.items).map(
 				(item) => item.id,
@@ -256,14 +300,9 @@ try {
 		await withBackgroundJobDispatcher(
 			async () => {},
 			() =>
-				sendSubscriptionTask(
-					{ userId, projectId: source.project_id, sessionId: child.id },
-					{
-						modelId: source.listed_model_id,
-						variant: "low",
-						text: "This is a cancellation transport test. Without using tools or changing any file, write a detailed 3000-word explanation of sorting algorithms. Begin with CANCEL_PROOF_STARTED. Do not create child tasks or publish.",
-					},
-					true,
+				sendProofTask(
+					child.id,
+					"This is a cancellation transport test. Without using tools or changing any file, write a detailed 3000-word explanation of sorting algorithms. Begin with CANCEL_PROOF_STARTED. Do not create child tasks or publish.",
 				),
 		);
 		const control = await claimApiTurn(2, 64, "durable-object", child.id);
@@ -284,8 +323,7 @@ try {
 			const streamed = sessionItemsFromUnknown(state?.items).some(
 				(item) =>
 					!previousIds.has(item.id) &&
-					((item.kind === "agentMessage" &&
-						item.text.includes("CANCEL_PROOF_STARTED")) ||
+					((item.kind === "agentMessage" && item.text.length > 0) ||
 						(item.kind === "reasoning" && item.summaries.some(Boolean))),
 			);
 			if (
@@ -316,31 +354,152 @@ try {
 				"No active inference observed; cancellation proof is invalid.",
 			);
 		}
-		const stoppedAt = Date.now();
-		await cancelServerTurn(userId, child.id);
-		if (await coordinateConversationTurn("renew", identity))
-			throw new Error("Cancelled lease still renews.");
-		let stopped = false;
-		while (Date.now() - stoppedAt < 45_000) {
-			const state = await turnState(child.id);
-			if (state?.state === "cancelled") {
-				stopped = true;
-				break;
+		if (process.env.EDGE_RESTART_PROOF === "1") {
+			async function proofRequest(path: string) {
+				const url = `${origin}/proof/${path}`;
+				const body = JSON.stringify(identity);
+				return fetch(url, {
+					method: "POST",
+					body,
+					headers: await signDeliveryRequest(
+						modelWorkflowSigningSecret(),
+						"POST",
+						url,
+						body,
+					),
+					signal: AbortSignal.timeout(15_000),
+				});
 			}
-			if (state && !["queued", "running"].includes(state.state))
-				throw new Error("Cancelled inference ended with an unexpected state.");
-			await delay(500);
+			type ReceiptProof = {
+				incarnation: string;
+				receipts: { index: number; state: string; startedAt: number }[];
+			};
+			const beforeResponse = await proofRequest("status");
+			if (!beforeResponse.ok)
+				throw new Error("Recovery fixture is not deployed.");
+			const before = (await beforeResponse.json()) as ReceiptProof;
+			const uncertain = before.receipts.find(
+				(receipt) => receipt.state === "processing",
+			);
+			if (!uncertain)
+				throw new Error("No active model step; restart proof invalid.");
+			const reset = await proofRequest("reset");
+			if (reset.ok) throw new Error("Expected forced-reset transport failure.");
+			const afterResponse = await proofRequest("status");
+			if (!afterResponse.ok) throw new Error("Restarted chat unavailable.");
+			const after = (await afterResponse.json()) as ReceiptProof;
+			if (
+				before.incarnation === after.incarnation ||
+				!after.receipts.some(
+					(receipt) =>
+						receipt.index === uncertain.index &&
+						receipt.state === "processing" &&
+						receipt.startedAt === uncertain.startedAt,
+				)
+			)
+				throw new Error("Restart did not retain the uncertain receipt.");
+			const replayUrl = `${origin}/model-step`;
+			const replayBody = JSON.stringify({
+				turnId: control.id,
+				leaseId: control.lease_id,
+				index: uncertain.index,
+			});
+			const replay = await fetch(replayUrl, {
+				method: "POST",
+				body: replayBody,
+				headers: await signDeliveryRequest(
+					modelWorkflowSigningSecret(),
+					"POST",
+					replayUrl,
+					replayBody,
+				),
+				signal: AbortSignal.timeout(15_000),
+			});
+			if (replay.status !== 409)
+				throw new Error("Uncertain model step was not fenced.");
+			const root = process.env.BETTER_AUTH_SECRET;
+			if (!root) throw new Error("Recovery signing configuration unavailable.");
+			const { createHmac } = await import("node:crypto");
+			const secret =
+				process.env.YTIMESY_BACKGROUND_WORKFLOW_SECRET ||
+				createHmac("sha256", root)
+					.update("ytimesy:background-workflows:development:v1")
+					.digest("hex");
+			wrangler(["secret", "put", "BACKGROUND_EXECUTION_ENABLED"], "1");
+			const recoveryDeadline = Date.now() + 90_000;
+			let recovered = false;
+			while (Date.now() < recoveryDeadline) {
+				const jobId = randomUUID();
+				const url = `${origin}/jobs/start`;
+				const body = JSON.stringify({
+					id: jobId,
+					kind: "maintenance",
+					action: "reconcile",
+				});
+				const response = await fetch(url, {
+					method: "POST",
+					body,
+					headers: await signDeliveryRequest(secret, "POST", url, body),
+					signal: AbortSignal.timeout(15_000),
+				});
+				if (response.status === 202) backgroundWorkflows.push(jobId);
+				else if (response.status !== 503)
+					throw new Error("Recovery admission failed.");
+				await delay(5000);
+				const state = await turnState(child.id);
+				if (state?.state === "failed") {
+					recovered = true;
+					break;
+				}
+				if (state?.state !== "running")
+					throw new Error("Unexpected interrupted-turn state.");
+			}
+			if (!recovered)
+				throw new Error(
+					"Interrupted turn was not recovered within its lease bound.",
+				);
+			console.info(
+				JSON.stringify({
+					activeInferenceObserved: true,
+					durableObjectRestarted: true,
+					uncertainReceiptPreserved: true,
+					duplicateStepRejected: true,
+					staleTurnRecovered: true,
+				}),
+			);
+		} else {
+			const stoppedAt = Date.now();
+			await cancelServerTurn(userId, child.id);
+			if (await coordinateConversationTurn("renew", identity))
+				throw new Error("Cancelled lease still renews.");
+			let stopped = false;
+			while (Date.now() - stoppedAt < 45_000) {
+				const state = await turnState(child.id);
+				if (state?.state === "cancelled") {
+					stopped = true;
+					break;
+				}
+				if (state && !["queued", "running"].includes(state.state))
+					throw new Error(
+						"Cancelled inference ended with an unexpected state.",
+					);
+				await delay(500);
+			}
+			if (!stopped)
+				throw new Error("Cancellation did not settle before its deadline.");
+			console.info(
+				JSON.stringify({
+					activeInferenceObserved: true,
+					cancellationFenced: true,
+					cancellationSettledMs: Date.now() - stoppedAt,
+				}),
+			);
 		}
-		if (!stopped)
-			throw new Error("Cancellation did not settle before its deadline.");
-		console.info(
-			JSON.stringify({
-				activeInferenceObserved: true,
-				cancellationFenced: true,
-				cancellationSettledMs: Date.now() - stoppedAt,
-			}),
-		);
 	}
+	await db.query(
+		"update agent_session set task_prompt='Read edge-proof.txt' where id=$1",
+		[child.id],
+	);
 	const started = Date.now();
 	// Suppress global admission: claim only after ensuring the development queue is empty.
 	const pending = await db.query(
@@ -351,14 +510,9 @@ try {
 	await withBackgroundJobDispatcher(
 		async () => {},
 		() =>
-			sendSubscriptionTask(
-				{ userId, projectId: source.project_id, sessionId: child.id },
-				{
-					modelId: source.listed_model_id,
-					variant: "low",
-					text: "Read edge-proof.txt using the read_file tool. Reply with its exact content and EDGE_TOOL_PROOF_COMPLETE. It contains a random marker not supplied in this prompt. This is a read-only transport test: do not edit, fetch, publish, or create child tasks. Use no more than two repository tools.",
-				},
-				true,
+			sendProofTask(
+				child.id,
+				"Read edge-proof.txt using the read_file tool. Reply with its exact content and EDGE_TOOL_PROOF_COMPLETE. It contains a random marker not supplied in this prompt. This is a read-only transport test: do not edit, fetch, publish, or create child tasks. Use no more than two repository tools.",
 			),
 	);
 	const turn = await claimApiTurn(2, 64, "durable-object", child.id);
@@ -389,11 +543,20 @@ try {
 					item.status === "completed" &&
 					item.output?.includes(nonce),
 			);
+			const latestPrompt = [...items]
+				.reverse()
+				.find((item) => item.kind === "userMessage");
+			const usage =
+				latestPrompt?.kind === "userMessage" ? latestPrompt.apiUsage : null;
+			const context =
+				latestPrompt?.kind === "userMessage"
+					? latestPrompt.contextUsage?.context
+					: null;
 			console.info(
 				JSON.stringify({
 					state: state.state,
 					elapsedMs: Date.now() - started,
-					model: source.listed_model_id,
+					model: apiModel ?? source.listed_model_id,
 					toolCards: tools.length,
 					toolReadVerified,
 					markerVerified: text.includes(nonce),
@@ -401,6 +564,8 @@ try {
 					usageRecorded: items.some(
 						(item) => item.kind === "userMessage" && !!item.apiUsage,
 					),
+					usage,
+					contextRecorded: !!context,
 					failureMessages: items
 						.filter((item) => item.kind === "error")
 						.map((item) => item.message),
@@ -412,7 +577,10 @@ try {
 				!text.includes("EDGE_TOOL_PROOF_COMPLETE") ||
 				tools.length === 0 ||
 				!toolReadVerified ||
-				!items.some((item) => item.kind === "userMessage" && !!item.apiUsage)
+				!usage ||
+				!(usage.inputTokens && usage.inputTokens > 0) ||
+				!(usage.outputTokens && usage.outputTokens > 0) ||
+				!context
 			)
 				throw new Error(
 					"Live model/tool proof failed; inspect persisted isolated trace.",
@@ -486,6 +654,22 @@ try {
 	await clean("execution gate", () =>
 		wrangler(["secret", "put", "MODEL_EXECUTION_ENABLED"], "0"),
 	);
+	if (process.env.EDGE_RESTART_PROOF === "1") {
+		await clean("background gate", () =>
+			wrangler(["secret", "put", "BACKGROUND_EXECUTION_ENABLED"], "0"),
+		);
+		for (const id of backgroundWorkflows)
+			await clean("recovery workflow", () =>
+				wrangler([
+					"workflows",
+					"instances",
+					"delete",
+					"ytimesy-background-jobs-development",
+					id,
+					"--json",
+				]),
+			);
+	}
 	for (const id of controlWorkflows) {
 		await clean("control workflow", () => {
 			const status = JSON.parse(

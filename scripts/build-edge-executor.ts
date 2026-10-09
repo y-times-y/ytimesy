@@ -5,7 +5,11 @@ import { build } from "esbuild";
 
 // Guest programs remain repository assets; Workers cannot read files from the developer's checkout.
 await build({
-	entryPoints: ["src/server/edge/executor.ts"],
+	entryPoints: [
+		process.env.EDGE_RECOVERY_PROOF_BUILD === "1"
+			? "tests/fixtures/edge-recovery-worker.ts"
+			: "src/server/edge/executor.ts",
+	],
 	outfile: ".ytimesy/edge-executor.mjs",
 	bundle: true,
 	format: "esm",

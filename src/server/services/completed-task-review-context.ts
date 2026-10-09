@@ -70,7 +70,7 @@ export async function withCompletedTaskReviewContext(input: {
 	const seen = new Set<string>();
 	for (const message of input.messages) {
 		if (
-			message.role !== "assistant" ||
+			(message.role !== "assistant" && message.role !== "user") ||
 			typeof message.content !== "string" ||
 			!message.content.startsWith(PREFIX)
 		)
@@ -98,7 +98,7 @@ export async function withCompletedTaskReviewContext(input: {
 		...input.messages,
 		...results.map(
 			(result, index): ModelMessage => ({
-				role: "assistant",
+				role: "user",
 				content:
 					PREFIX +
 					JSON.stringify({

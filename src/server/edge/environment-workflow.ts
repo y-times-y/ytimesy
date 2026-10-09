@@ -25,6 +25,7 @@ import {
 	verifyEnvironmentRepositories,
 } from "../services/environment-build";
 import type { EdgeExecutorEnvironment } from "./environment";
+import { withEdgeModelEndpoints } from "./model-endpoint";
 
 const configuration = z.object({
 	DATABASE_URL: z.string().min(1),
@@ -73,7 +74,7 @@ export class ProjectEnvironmentWorkflow extends WorkflowEntrypoint<
 								withCodexSubscriptionEgress(
 									(input, options) =>
 										this.env.CODEX_EGRESS.fetch(input, options),
-									run,
+									() => withEdgeModelEndpoints(run),
 								),
 							null,
 						);

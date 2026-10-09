@@ -238,7 +238,7 @@ export function harnessLifecycleHooks(input: {
 			const updated: ModelMessage[] = [
 				...messages,
 				...pending.map((content) => ({
-					role: "assistant" as const,
+					role: "user" as const,
 					content: NOTICE + content,
 				})),
 			];

@@ -90,6 +90,7 @@ it("collects once per completed revision, preserves opaque history and retries o
 		signal: new AbortController().signal,
 	};
 	const first = await withCompletedTaskReviewContext(input);
+	expect(first.at(-1)?.role).toBe("user");
 	expect(first.slice(0, 2)).toEqual(original);
 	expect(first[1]).toBe(opaque);
 	const unchanged = await withCompletedTaskReviewContext({

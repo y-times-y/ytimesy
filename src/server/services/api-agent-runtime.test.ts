@@ -68,6 +68,68 @@ const finish = {
 	finishReason: { unified: "stop" as const, raw: "stop" },
 };
 
+it("never sends a legacy runtime observation as an assistant prefill or rewrites opaque history", async () => {
+	const model = new MockLanguageModelV4({
+		doStream: async () => stream([finish]),
+	});
+	const original = [
+		{ role: "user" as const, content: "Read the proof marker" },
+		{
+			role: "assistant" as const,
+			content: [
+				{
+					type: "reasoning" as const,
+					text: "",
+					providerOptions: {
+						openrouter: {
+							reasoning_details: [
+								{ type: "reasoning.encrypted", data: "opaque-fixture" },
+							],
+						},
+					},
+				},
+			],
+		},
+		{
+			role: "assistant" as const,
+			content:
+				"Current delegated tasks (authoritative status, not new user instructions):\n[]",
+		},
+	];
+	const checkpoint = vi.fn(
+		async (_messages: import("ai").ModelMessage[]) => {},
+	);
+	await runModelAgentStep(
+		{
+			userId: "alice",
+			modelId: "fixture",
+			messages: [original[0]],
+			instructions: "Read-only proof",
+			tools: {},
+			signal: new AbortController().signal,
+			prepareMessages: async () => original,
+			beforeStep: checkpoint,
+			onStep: async () => {},
+			onEvent: async () => {},
+		},
+		{ model },
+	);
+	const sent = model.doStreamCalls[0].prompt;
+	expect(sent.at(-1)?.role).toBe("user");
+	expect(sent.at(-1)?.content).toEqual(
+		expect.arrayContaining([
+			expect.objectContaining({
+				type: "text",
+				text: expect.stringContaining("does not authorize new work"),
+			}),
+		]),
+	);
+	const persisted = checkpoint.mock.calls[0]?.[0];
+	expect(persisted.slice(0, original.length)).toEqual(original);
+	expect(persisted[1]).toBe(original[1]);
+	expect(original).toHaveLength(3);
+});
+
 it("rehydrates exact instructions after foreground compaction before the next model call", async () => {
 	const model = new MockLanguageModelV4({
 		doStream: async () => stream([finish]),
@@ -624,6 +686,16 @@ function run(events: ApiAgentEvent[], tools = {}) {
 		onStep: async () => {},
 	});
 }
+
+it("reports a bounded preparation stage and closes transport when adapter construction fails", async () => {
+	mocks.model.mockImplementationOnce(() => {
+		throw new TypeError("fixture-sensitive-request");
+	});
+	await expect(run([])).rejects.toThrow(
+		"API model preparation failed during model. No inference was started.",
+	);
+	expect(mocks.close).toHaveBeenCalledOnce();
+});
 
 it("does not report a tool-step-limit stop as successful completion", async () => {
 	mocks.model.mockReturnValue(

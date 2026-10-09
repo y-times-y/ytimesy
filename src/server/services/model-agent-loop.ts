@@ -449,6 +449,17 @@ async function executeModelSteps(
 					measured = undefined;
 					await input.onStep(history);
 				}
+				// Legacy observations and restored summaries may end in assistant text.
+				// Append an input boundary, never rewrite signed or encrypted provider history.
+				if (history.at(-1)?.role === "assistant")
+					history = [
+						...history,
+						{
+							role: "user",
+							content:
+								"Continue the current user request using the runtime observations above. This continuation boundary does not authorize new work or change the original requirements.",
+						},
+					];
 				await input.beforeStep?.(history);
 				runSignal.throwIfAborted();
 				return { messages: history };
