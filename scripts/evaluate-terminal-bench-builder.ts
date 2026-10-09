@@ -9,6 +9,11 @@ import { createOperatorEvaluationDatabase } from "../benchmarks/evaluation/opera
 import { createTerminalBenchMachines } from "../benchmarks/evaluation/terminal-bench-machines";
 import { loadTerminalBenchTask } from "../benchmarks/evaluation/terminal-bench-task";
 import { gradeTerminalBenchArtifact } from "../benchmarks/evaluation/terminal-bench-verifier";
+import {
+	evaluationObservedTokens,
+	evaluationTokenUsage,
+} from "../benchmarks/evaluation/token-usage";
+import type { ApiAgentEvent } from "../src/domain/api-agent-event";
 import type { HarnessModelMetric } from "../src/domain/harness-performance";
 import { codexSubscriptionModel } from "../src/server/adapters/codex-subscription";
 import {
@@ -66,7 +71,7 @@ process.env.DATABASE_URL = local.databaseUrl;
 process.env.BETTER_AUTH_SECRET = local.secret;
 let requests = 0;
 const metrics: HarnessModelMetric[] = [];
-const events: unknown[] = [];
+const events: ApiAgentEvent[] = [];
 const toolMetrics: unknown[] = [];
 const sessionId = randomUUID();
 const archives = localContextArchives(
@@ -162,13 +167,7 @@ try {
 				if (property === "doStream" || property === "doGenerate")
 					return async (...args: unknown[]) => {
 						signal.throwIfAborted();
-						const tokens = metrics.reduce(
-							(total, metric) =>
-								total +
-								(metric.input_tokens ?? 0) +
-								(metric.output_tokens ?? 0),
-							0,
-						);
+						const tokens = evaluationObservedTokens(events);
 						if (requests >= 128 || tokens >= 4000000)
 							throw new Error("Frozen evaluation guard reached.");
 						requests++;
@@ -238,18 +237,8 @@ try {
 			requests,
 			agentSeconds,
 			noLeader: true,
-			inputTokens: metrics.reduce(
-				(total, metric) => total + (metric.input_tokens ?? 0),
-				0,
-			),
-			outputTokens: metrics.reduce(
-				(total, metric) => total + (metric.output_tokens ?? 0),
-				0,
-			),
-			cacheReadTokens: metrics.reduce(
-				(total, metric) => total + (metric.cache_read_tokens ?? 0),
-				0,
-			),
+			...evaluationTokenUsage(events),
+			usageAccounting: "cumulative usage including compaction",
 		});
 		console.log(
 			`${task.id}: official reward ${reward}; failure ${failure ?? "none"}.`,
