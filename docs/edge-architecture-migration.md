@@ -4,6 +4,21 @@ Development status, 2026-10-08. This is a staged migration, not a completed Node
 
 ### Latest cutover gate
 
+#### Node worker retired from application execution, 2026-10-09
+
+`pnpm dev` always executes on the development edge (DO turns, environment and
+background Workflows, Git proxy); there is no Node job host. The edge deploy now
+enables model, environment, background and cron execution, and PR-repair webhooks
+are staged by the edge rather than the Node executor VM. The Node model-step HTTP
+executor, its PostgreSQL step receipts, the `model-workflows` Worker and the
+job-worker VM deploy were removed. `src/server/jobs/worker.ts` survives only as the
+isolated local runner for harness evaluation and refuses to start when edge
+execution is configured. Live proof after deploy (version `7b99a46d`): an
+OpenRouter `openai/gpt-6-luna` turn completed in 20.3 s with a verified VM file
+read, usage/context and stream reconnect; cron background jobs completed. The saved
+Codex subscription returned HTTP 401 (expired) and must be reconnected before the
+subscription path can be re-proven.
+
 #### End-to-end verification refresh, 2026-10-08
 
 Live development proofs now establish:

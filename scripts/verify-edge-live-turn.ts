@@ -155,8 +155,8 @@ try {
 	const name = source.full_name.split("/")[1];
 	if (!name || !/^[a-zA-Z0-9_.-]+$/.test(name))
 		throw new Error("Invalid fixture directory name.");
-	wrangler(["secret", "put", "MODEL_EXECUTION_ENABLED"], "1");
-	// Wait for propagation using an unassigned turn; this cannot run inference.
+	// Execution is permanently enabled by the edge deploy. Confirm it with an
+	// unassigned turn; this cannot run inference.
 	const url = `${origin}/start`;
 	const body = JSON.stringify({
 		turnId: randomUUID(),
@@ -424,7 +424,6 @@ try {
 				createHmac("sha256", root)
 					.update("ytimesy:background-workflows:development:v1")
 					.digest("hex");
-			wrangler(["secret", "put", "BACKGROUND_EXECUTION_ENABLED"], "1");
 			const recoveryDeadline = Date.now() + 90_000;
 			let recovered = false;
 			while (Date.now() < recoveryDeadline) {
@@ -650,13 +649,7 @@ try {
 			cleanupFailures.push(label);
 		}
 	}
-	await clean("execution gate", () =>
-		wrangler(["secret", "put", "MODEL_EXECUTION_ENABLED"], "0"),
-	);
 	if (process.env.EDGE_RESTART_PROOF === "1") {
-		await clean("background gate", () =>
-			wrangler(["secret", "put", "BACKGROUND_EXECUTION_ENABLED"], "0"),
-		);
 		for (const id of backgroundWorkflows)
 			await clean("recovery workflow", () =>
 				wrangler([
@@ -753,5 +746,5 @@ try {
 		console.error(`Proof cleanup incomplete: ${cleanupFailures.join(", ")}.`);
 		process.exitCode = 1;
 	} else
-		console.info("Development model gate disabled; isolated sessions removed.");
+		console.info("Isolated proof sessions removed.");
 }
