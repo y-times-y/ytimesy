@@ -29,7 +29,10 @@ import {
 	toolMetricCategory,
 } from "#/domain/harness-performance";
 import type { apiPromptCacheSettings } from "#/server/adapters/api-prompt-cache";
-import { apiTokenUsage } from "#/server/adapters/api-token-usage";
+import {
+	apiOutputTokenDetails,
+	apiTokenUsage,
+} from "#/server/adapters/api-token-usage";
 import type { NativeCompactionInput } from "../adapters/model-compaction";
 import { prefetchInitialAgentReads } from "./agent-initial-reads";
 import { discoverableAgentTools } from "./agent-tool-discovery";
@@ -487,6 +490,7 @@ async function executeModelSteps(
 			},
 			onLanguageModelCallEnd: ({ usage, performance, finishReason }) => {
 				const counts = apiTokenUsage(usage);
+				const outputDetails = apiOutputTokenDetails(usage);
 				try {
 					input.onModelMetric?.({
 						duration_ms: Math.max(0, performance.responseTimeMs),
@@ -494,6 +498,8 @@ async function executeModelSteps(
 						active_tools: activeToolCount,
 						input_tokens: counts.inputTokens,
 						output_tokens: counts.outputTokens,
+						text_output_tokens: outputDetails.textTokens,
+						reasoning_output_tokens: outputDetails.reasoningTokens,
 						cache_read_tokens: counts.cacheReadTokens,
 						prepared_prompt_characters: preparedPromptCharacters,
 						prepared_tool_characters: preparedToolCharacters,

@@ -248,6 +248,57 @@ checks without persisting a suite. This changes verification packaging, not
 grader acceptance or permission to omit verification. Its performance effect
 must be measured separately; no task-specific assertions or solution were added.
 
+### Frozen terminator/workflow result
+
+The single builder attempt on `31cb9bb` completed normally and passed the
+separate unmodified protected grader (reward 1, exit 0). It took **758.284
+seconds**, 14 requests, 426,215 input and 22,784 output tokens: **448,999 total**,
+including 64,615 uncached input and 361,600 cache-read tokens. All 21 authored
+regressions, syntax compilation and read-only-file/diff checks passed. No leader
+or compaction ran. The task, Max reasoning, Fast-off configuration and resource
+limits stayed frozen. This is 8.7% slower and uses 60.1% more total tokens than
+the preceding completed run; it does not beat the historical native mean.
+
+The newline repair cycle disappeared, but the builder still created a substantial
+new suite. Its initial fix/check cadence was followed by a 112.9-second test/edit
+request and repeated final-review requests. It also invented an 88-column scan
+despite finding no configured formatter, then made cosmetic edits and repeated
+review/checks. A valid explicit execution-group plan was rejected solely because
+`parallel:true` was also supplied, requiring another model request. The grouping
+failure is deterministic; the exact latency attributable to formatting versus
+useful review within each request is not isolated. These observations do not
+justify weakening regression coverage or reducing reasoning effort.
+
+Both owned-resource registries are empty and cleanup receipts passed. Live
+inventory returned to four VMs/five snapshots; no evaluation database container
+remains. Evidence is private at
+`.ytimesy/terminal-bench-terminator-20261008/session-window-debug/`. No actual
+invoice was fetched; the disposable resource envelope stayed bounded.
+
+### Execution-plan ergonomics and reasoning observability follow-up
+
+Explicit check groups now override the convenience `parallel` flag. Every
+command must still occur exactly once, each group has at most two independent
+checks, groups finish in order, and the executor keeps its concurrency limit,
+cancellation, source fences, exit/stop evidence and replay protection. The
+real overlapping-execution fixture covers both arguments together; malformed
+plans still fail. The tool schema documents precedence instead of forcing a
+recovery request for a harmless redundant flag.
+
+Shared guidance requires the configured formatter, or matching existing style
+when none is configured; it forbids inventing line limits or polishing untouched
+code. It does not suppress lint rules or required checks. Model-call metrics
+add optional reported text/reasoning token counts through the installed SDK's
+usage fields and existing safe count validation. Missing values remain null,
+not inferred or zero; no reasoning content is collected. This will distinguish
+reasoning/generation work in future traces. These changes are not counted as
+measured improvements until a completed frozen rerun.
+
+Local verification for this follow-up: 117 focused tests passed (two skipped),
+including runtime metric propagation and real command/check execution fixtures;
+typecheck with workflow types, Biome (937 files), production build and diff
+whitespace checks passed. The full suite was not rerun. No deployment occurred.
+
 Separately, [official custom-tool documentation](https://developers.openai.com/api/docs/guides/function-calling)
 and the installed SDK expose plain-text custom inputs. A single subscription
 no-op probe invoked its custom tool once, but failed the exact `ok` payload

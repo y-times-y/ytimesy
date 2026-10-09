@@ -292,7 +292,7 @@ async function call(tool: unknown, input: object) {
 	).execute(input, { toolCallId: crypto.randomUUID() });
 }
 
-it.each([false, true, "groups"] as const)(
+it.each([false, true, "groups", "groups-with-shorthand"] as const)(
 	"runs checks with explicit overlap (%s), ordered evidence and replay protection",
 	async (parallel) => {
 		let active = 0;
@@ -300,7 +300,7 @@ it.each([false, true, "groups"] as const)(
 		let sequence = 0;
 		const capture = vi.fn(async () => {
 			const index = sequence++;
-			if (parallel === "groups" && index === 2) expect(active).toBe(0);
+			if (typeof parallel === "string" && index === 2) expect(active).toBe(0);
 			active++;
 			peak = Math.max(peak, active);
 			await new Promise((resolve) => setTimeout(resolve, index === 0 ? 25 : 5));
@@ -337,8 +337,11 @@ it.each([false, true, "groups"] as const)(
 		const args = {
 			commands: ["lint", "test", "build"],
 			outputView: "full",
-			...(parallel === "groups"
-				? { groups: [[0, 1], [2]] }
+			...(typeof parallel === "string"
+				? {
+						groups: [[0, 1], [2]],
+						parallel: parallel === "groups-with-shorthand",
+					}
 				: parallel
 					? { parallel }
 					: {}),

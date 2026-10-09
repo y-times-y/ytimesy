@@ -1,10 +1,36 @@
 import { expect, it } from "vitest";
 import {
+	harnessModelMetric,
 	harnessToolMetric,
 	reportedToolFailure,
 	toolFailureClass,
 	toolMetricCategory,
 } from "./harness-performance";
+
+it("accepts optional reported reasoning counts without retaining private output", () => {
+	const metric = {
+		duration_ms: 1,
+		first_output_ms: null,
+		active_tools: 0,
+		input_tokens: 5,
+		output_tokens: 3,
+		cache_read_tokens: null,
+		outcome: "completed",
+	};
+	expect(harnessModelMetric.parse(metric)).toEqual(metric);
+	expect(
+		harnessModelMetric.parse({
+			...metric,
+			reasoning_output_tokens: 2,
+			text_output_tokens: 1,
+			reasoning: "PRIVATE",
+		}),
+	).toEqual({ ...metric, reasoning_output_tokens: 2, text_output_tokens: 1 });
+	expect(
+		harnessModelMetric.safeParse({ ...metric, reasoning_output_tokens: -1 })
+			.success,
+	).toBe(false);
+});
 
 it("counts explicit failed outcomes, not just thrown SDK errors", () => {
 	for (const value of [

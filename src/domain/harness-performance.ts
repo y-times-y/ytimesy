@@ -84,6 +84,8 @@ export const harnessModelMetric = z.object({
 	active_tools: z.number().int().nonnegative(),
 	input_tokens: z.number().int().nonnegative().nullable(),
 	output_tokens: z.number().int().nonnegative().nullable(),
+	text_output_tokens: z.number().int().nonnegative().nullable().optional(),
+	reasoning_output_tokens: z.number().int().nonnegative().nullable().optional(),
 	cache_read_tokens: z.number().int().nonnegative().nullable(),
 	prepared_prompt_characters: z.number().int().nonnegative().optional(),
 	prepared_tool_characters: z.number().int().nonnegative().optional(),
