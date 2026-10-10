@@ -30,9 +30,10 @@ export const terminalBenchTaskSchema = z
 		image: pinnedImage,
 		artifacts: z.array(artifactPath).min(1),
 		compose: z.record(z.string(), z.unknown()),
+		// Tasks declare their own size; VMs are resized to match (within a cap).
 		resources: z.object({
-			cpus: z.literal(2),
-			memoryMb: z.literal(4096),
+			cpus: z.number().int().min(1).max(8),
+			memoryMb: z.number().int().min(1024).max(16384),
 			storageMb: z.number().int().min(10240).max(16384),
 		}),
 		agentTimeoutSeconds: z.number().int().positive().max(28800),
@@ -145,6 +146,26 @@ printf 'ytimesy-rg-preflight\\n' | rg --fixed-strings --quiet ytimesy-rg-preflig
 /** One guest VM per writer. Docker runs pinned task images and sidecars;
  * snapshots preserve the prepared environment. No platform credentials enter
  * guests. This is an operator-only adapter, not a production VM provider. */
+/**
+ * Freestyle reports temporary capacity pressure before creating anything; a
+ * later attempt is safe because no VM exists yet. Other errors fail at once.
+ */
+async function retryCapacity<T>(create: () => Promise<T>) {
+	for (let attempt = 1; ; attempt++) {
+		try {
+			return await create();
+		} catch (error) {
+			const transient =
+				error instanceof Error &&
+				/under pressure|resource limits are being prepared/i.test(
+					error.message,
+				);
+			if (!transient || attempt >= 8) throw error;
+			await new Promise((done) => setTimeout(done, 30_000 * attempt));
+		}
+	}
+}
+
 export function createTerminalBenchMachines(input: {
 	apiKey: string;
 	runId: string;
@@ -188,33 +209,49 @@ export function createTerminalBenchMachines(input: {
 			);
 		return result.stdout;
 	};
-	async function create(slug: string, snapshotId: string) {
+	async function create(
+		slug: string,
+		snapshotId: string,
+		requested?: TerminalBenchTask["resources"],
+	) {
 		if (reservations >= (input.maxVms ?? 12))
 			throw new Error("Pilot VM allocation cap reached.");
 		if (snapshotId !== "freestyle/ubuntu-sm" && !snapshotIds.has(snapshotId))
 			throw new Error("Snapshot is outside this evaluation.");
 		reservations++;
-		const created = await client.vms.create({
-			slug,
-			snapshotId,
-			firewall: GUEST_INTERNET_FIREWALL,
-			metadata: { purpose: "terminal-bench-pilot", evaluation_id: input.runId },
-			ttlSeconds: 5400,
-			autoDeleteSeconds: 5400,
-			maxRunSeconds: 3600,
-			maxRunTotalSeconds: 3600,
-			automaticRestart: false,
-			idleTimeoutSeconds: 180,
-		});
+		const created = await retryCapacity(() =>
+			client.vms.create({
+				slug,
+				snapshotId,
+				firewall: GUEST_INTERNET_FIREWALL,
+				metadata: {
+					purpose: "terminal-bench-pilot",
+					evaluation_id: input.runId,
+				},
+				ttlSeconds: 5400,
+				autoDeleteSeconds: 5400,
+				maxRunSeconds: 3600,
+				maxRunTotalSeconds: 3600,
+				automaticRestart: false,
+				idleTimeoutSeconds: 180,
+			}),
+		);
 		vmIds.add(created.vmId);
 		await persist();
 		const data = await waitUntilVmRunning(created.vm, "Terminal-Bench VM");
+		// Match the task's declared CPU and memory, as production resizes copies.
+		const target = {
+			cpu: Math.max(data.resources.cpu, requested?.cpus ?? 0),
+			memory: Math.max(data.resources.memory, requested?.memoryMb ?? 0),
+			storage: data.resources.storage,
+		};
 		if (
-			data.resources.cpu > 2 ||
-			data.resources.memory > 4096 ||
-			data.resources.storage > 16384
+			target.cpu !== data.resources.cpu ||
+			target.memory !== data.resources.memory
 		)
-			throw new Error("Task VM exceeds the pilot resource envelope.");
+			await created.vm.resize(target);
+		if (target.cpu > 8 || target.memory > 16384 || target.storage > 16384)
+			throw new Error("Task VM exceeds the evaluation resource envelope.");
 		return WorkspaceId(created.vmId);
 	}
 	const unsupported = async (): Promise<never> => {
@@ -304,6 +341,7 @@ export function createTerminalBenchMachines(input: {
 		const id = await create(
 			`ytimesy-tbench-${randomUUID()}`,
 			"freestyle/ubuntu-sm",
+			task.resources,
 		);
 		await checkedHostExec(
 			id,
