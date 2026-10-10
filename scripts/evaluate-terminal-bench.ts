@@ -16,6 +16,7 @@ import {
 import { createTerminalBenchMachines } from "../benchmarks/evaluation/terminal-bench-machines";
 import { loadTerminalBenchTask } from "../benchmarks/evaluation/terminal-bench-task";
 import { terminalBenchUsage } from "../benchmarks/evaluation/terminal-bench-usage";
+import { gradeTerminalBenchArtifact } from "../benchmarks/evaluation/terminal-bench-verifier";
 import type {
 	EvaluationProtocol,
 	EvaluationTask,
@@ -86,6 +87,8 @@ Object.assign(process.env, {
 	GITHUB_APP_CLIENT_SECRET: "isolated-evaluation",
 	GITHUB_APP_SLUG: "isolated-evaluation",
 	YTIMESY_HARNESS_EVALUATION_ENABLED: "1",
+	// Encrypted checkpoints and context archives stay in the private output.
+	YTIMESY_EVALUATION_CHECKPOINT_DIR: `${output}/checkpoints`,
 	YTIMESY_INFRASTRUCTURE_ADMISSION: "false",
 	YTIMESY_MODEL_CONCURRENCY: "4",
 	YTIMESY_USER_TURN_CONCURRENCY: "4",
@@ -128,14 +131,14 @@ try {
 	await removeCheckpoint(archivePath);
 	archivePath = undefined;
 	const setupStarted = Date.now();
-	const verificationRecipe =
-		task.id === "session-window-debug"
-			? environmentRecipe.parse({
-					version: 1,
-					checks: ["python3 -m compileall -q app"],
-					timeoutSeconds: 60,
-				})
-			: undefined;
+	// Production's completion gate requires a declared project check. The
+	// builder-only arm has no gate, so every task gets the same neutral check:
+	// it adds no task knowledge and correctness is left to the hidden grader.
+	const verificationRecipe = environmentRecipe.parse({
+		version: 1,
+		checks: ["true"],
+		timeoutSeconds: 60,
+	});
 	const template = await bridge.prepare(task, verificationRecipe);
 	const projectId = randomUUID(),
 		workspaceId = randomUUID();
@@ -171,7 +174,13 @@ try {
 		seed: 0,
 		repetitions: 1,
 		graderImage: verifierImage,
-		limits: { durationSeconds: 1800, modelRequests: 100, tokens: 4_000_000 },
+		// Same budget as the builder-only arm: the task's own agent limit, and
+		// request/token ceilings high enough never to bind before it.
+		limits: {
+			durationSeconds: task.agentTimeoutSeconds ?? 1800,
+			modelRequests: 800,
+			tokens: 100_000_000,
+		},
 		tasks: [evaluationTask],
 	};
 	await save("protocol", {
@@ -182,7 +191,7 @@ try {
 		verificationBoundary:
 			"Project admission checks syntax only; correctness requires the unchanged separate hidden grader.",
 		limitations: [
-			"Diagnostic 30-minute/4M-token/100-request cap, not the published 8-hour configuration",
+			"Task agent time limit; 800-request and 100M-token ceilings across the whole lead/builder tree",
 			"Task Docker images augmented with harness prerequisites",
 			"Operator worker local; each writer on a separate 2-vCPU/4-GiB Freestyle VM",
 		],
@@ -241,7 +250,10 @@ try {
 			local.userId,
 			attempt.rootId,
 		);
-		while (!state.settled && Date.now() - started < 1830000) {
+		while (
+			!state.settled &&
+			Date.now() - started < protocol.limits.durationSeconds * 1000 + 30_000
+		) {
 			cancelled.signal.throwIfAborted();
 			await new Promise((done) => setTimeout(done, 1000));
 			state = await productionEvaluationSnapshot(local.userId, attempt.rootId);
@@ -265,8 +277,19 @@ try {
 		const bytes = await bridge.exportArtifacts(
 			selected.providerRef,
 			task.artifacts,
+			task.collectCommands,
 		);
 		await writeFile(`${output}/artifacts.tar.gz`, bytes, { mode: 0o600 });
+		const agentSeconds = (Date.now() - started) / 1000;
+		await mkdir(`${output}/official-grade`, { mode: 0o700 });
+		const reward = await gradeTerminalBenchArtifact({
+			apiKey: key,
+			runId: randomUUID(),
+			taskPath: resolve(taskPath),
+			output: `${output}/official-grade`,
+			artifacts: bytes,
+		});
+		console.log(`${task.id}: official reward ${reward}.`);
 		const usage = terminalBenchUsage(evidence.turns);
 		await save("result", {
 			completed: true,
@@ -274,7 +297,8 @@ try {
 			task: task.id,
 			model: protocol.modelId,
 			reasoning: protocol.reasoning,
-			agentSeconds: (Date.now() - started) / 1000,
+			reward,
+			agentSeconds,
 			setupSeconds: (started - setupStarted) / 1000,
 			usage,
 			artifactSha256: createHash("sha256").update(bytes).digest("hex"),
