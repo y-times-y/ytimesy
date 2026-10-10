@@ -1,0 +1,404 @@
+{
+	"job": "299f37fe-9a7f-51f4-9619-af26e8312fd7",
+	"agent": "codex",
+	"model": "gpt-6.1-sol max",
+	"source": "https://hub.harborframework.com (public job page)",
+	"tasks": {
+		"atrx-vep-crispr": {
+			"passes": 1,
+			"trials": 5,
+			"meanCostUsd": 0.548,
+			"meanSeconds": 715
+		},
+		"batched-eval-parity": {
+			"passes": 2,
+			"trials": 5,
+			"meanCostUsd": 0.798,
+			"meanSeconds": 1138
+		},
+		"biped-contact-dynamics": {
+			"passes": 4,
+			"trials": 5,
+			"meanCostUsd": 2.826,
+			"meanSeconds": 3690
+		},
+		"bun-sourcemap-leak": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 0.498,
+			"meanSeconds": 755
+		},
+		"cad-model": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 0.35,
+			"meanSeconds": 547
+		},
+		"cargo-flight-dispatch": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 0.532,
+			"meanSeconds": 800
+		},
+		"coq-block-bound": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 0.57,
+			"meanSeconds": 797
+		},
+		"ctr-optimization": {
+			"passes": 4,
+			"trials": 5,
+			"meanCostUsd": 4.818,
+			"meanSeconds": 17700
+		},
+		"cumulative-layout-shift": {
+			"passes": 3,
+			"trials": 4,
+			"meanCostUsd": 4.834,
+			"meanSeconds": 20364
+		},
+		"data-anonymization": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 1.514,
+			"meanSeconds": 2925
+		},
+		"distributed-dedup": {
+			"passes": 4,
+			"trials": 5,
+			"meanCostUsd": 2.814,
+			"meanSeconds": 5107
+		},
+		"embedding-drift-monitor": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 0.796,
+			"meanSeconds": 1250
+		},
+		"fin-saccr-rwa": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 1.36,
+			"meanSeconds": 1308
+		},
+		"foodstuff-beta-activity": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 0.42,
+			"meanSeconds": 398
+		},
+		"formal-crypto": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 1.182,
+			"meanSeconds": 2006
+		},
+		"fp8-rmsnorm-gemm": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 3.552,
+			"meanSeconds": 4586
+		},
+		"freecad-impeller": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 0.914,
+			"meanSeconds": 1191
+		},
+		"freecad-platform-drawing": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 0.494,
+			"meanSeconds": 573
+		},
+		"freecad-spring-clip": {
+			"passes": 2,
+			"trials": 5,
+			"meanCostUsd": 0.632,
+			"meanSeconds": 870
+		},
+		"freight-dispatch-shift": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 1.926,
+			"meanSeconds": 3003
+		},
+		"glycan-ms2-elucidation": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 0.274,
+			"meanSeconds": 453
+		},
+		"gsea-proteomics": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 0.652,
+			"meanSeconds": 707
+		},
+		"heat-pump-warranty": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 0.69,
+			"meanSeconds": 534
+		},
+		"hof-topology-interpenetration": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 0.734,
+			"meanSeconds": 762
+		},
+		"html-js-filter": {
+			"passes": 1,
+			"trials": 5,
+			"meanCostUsd": 1.96,
+			"meanSeconds": 3231
+		},
+		"interleaved-vigenere": {
+			"passes": 3,
+			"trials": 5,
+			"meanCostUsd": 0.672,
+			"meanSeconds": 1137
+		},
+		"intrastat-meldung": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 1.124,
+			"meanSeconds": 1205
+		},
+		"jax-speedrun-gpu": {
+			"passes": 3,
+			"trials": 5,
+			"meanCostUsd": 13.468,
+			"meanSeconds": 27168
+		},
+		"ks-solver-cpp": {
+			"passes": 3,
+			"trials": 4,
+			"meanCostUsd": 4.474,
+			"meanSeconds": 7632
+		},
+		"kv-live-surgery": {
+			"passes": 4,
+			"trials": 5,
+			"meanCostUsd": 3.67,
+			"meanSeconds": 5124
+		},
+		"lake-temp-glm": {
+			"passes": 3,
+			"trials": 5,
+			"meanCostUsd": 4.972,
+			"meanSeconds": 8974
+		},
+		"layout-config-recreation": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 4.078,
+			"meanSeconds": 4920
+		},
+		"layout-config-recreation2": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 0.534,
+			"meanSeconds": 637
+		},
+		"legacy-utility-triage": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 1.624,
+			"meanSeconds": 1762
+		},
+		"live-database-cutover": {
+			"passes": 1,
+			"trials": 5,
+			"meanCostUsd": 6.148,
+			"meanSeconds": 8316
+		},
+		"math-eval-grader": {
+			"passes": 2,
+			"trials": 5,
+			"meanCostUsd": 1.156,
+			"meanSeconds": 1554
+		},
+		"medical-claims-processing": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 1.51,
+			"meanSeconds": 1615
+		},
+		"mp-checkpoint-consolidation": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 1.0,
+			"meanSeconds": 1412
+		},
+		"music-harmony": {
+			"passes": 1,
+			"trials": 5,
+			"meanCostUsd": 1.118,
+			"meanSeconds": 1444
+		},
+		"mvcc-lsm-compaction": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 0.322,
+			"meanSeconds": 949
+		},
+		"nextjs-performance": {
+			"passes": 4,
+			"trials": 5,
+			"meanCostUsd": 2.042,
+			"meanSeconds": 2652
+		},
+		"ontology-kg-querying": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 1.634,
+			"meanSeconds": 2369
+		},
+		"payments-pipeline-fix": {
+			"passes": 4,
+			"trials": 5,
+			"meanCostUsd": 1.56,
+			"meanSeconds": 2553
+		},
+		"photonic-waveguide-routing": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 1.32,
+			"meanSeconds": 2229
+		},
+		"pretrain-shard-corruption": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 3.032,
+			"meanSeconds": 3723
+		},
+		"production-planning": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 0.71,
+			"meanSeconds": 959
+		},
+		"protein-autointerp-disulfide": {
+			"passes": 1,
+			"trials": 5,
+			"meanCostUsd": 0.72,
+			"meanSeconds": 1035
+		},
+		"react-lead-form": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 1.066,
+			"meanSeconds": 1407
+		},
+		"retro-console-soc": {
+			"passes": 4,
+			"trials": 5,
+			"meanCostUsd": 2.792,
+			"meanSeconds": 3660
+		},
+		"risk-scorer-replay": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 0.95,
+			"meanSeconds": 1357
+		},
+		"roy-polymorph-cn": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 0.234,
+			"meanSeconds": 371
+		},
+		"rs-archive-clone": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 3.274,
+			"meanSeconds": 3966
+		},
+		"satb-audio-transcription": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 0.788,
+			"meanSeconds": 1032
+		},
+		"session-window-debug": {
+			"passes": 4,
+			"trials": 5,
+			"meanCostUsd": 0.436,
+			"meanSeconds": 867
+		},
+		"sglang-qwen-burst": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 2.962,
+			"meanSeconds": 3169
+		},
+		"shadow-relay": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 0.328,
+			"meanSeconds": 493
+		},
+		"sound-change-cascade": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 0.46,
+			"meanSeconds": 726
+		},
+		"takens-embedding-lean": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 4.542,
+			"meanSeconds": 3469
+		},
+		"telecom-entity-resolution": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 2.192,
+			"meanSeconds": 3151
+		},
+		"uefi-bootkit": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 2.08,
+			"meanSeconds": 1787
+		},
+		"vba-userform-port": {
+			"passes": 1,
+			"trials": 5,
+			"meanCostUsd": 3.122,
+			"meanSeconds": 3948
+		},
+		"vf2-speedup-networkx": {
+			"passes": 3,
+			"trials": 5,
+			"meanCostUsd": 2.858,
+			"meanSeconds": 4145
+		},
+		"vllm-deepseek-streaming": {
+			"passes": 0,
+			"trials": 5,
+			"meanCostUsd": 1.432,
+			"meanSeconds": 1660
+		},
+		"vpp-loss-divergence": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 0.494,
+			"meanSeconds": 709
+		},
+		"wal-recovery-ordering": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 0.512,
+			"meanSeconds": 1034
+		},
+		"wdm-design": {
+			"passes": 5,
+			"trials": 5,
+			"meanCostUsd": 3.758,
+			"meanSeconds": 7409
+		}
+	}
+}
