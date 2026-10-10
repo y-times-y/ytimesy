@@ -84,7 +84,8 @@ export function harnessModelToolInstructions(
 			`Harness tool profile v9-shell (${family}): ${editing} ${context}`,
 			"Work in a tight loop with execute_command (rg, sed -n, git, project CLIs): reproduce the problem with the smallest executable check early, make one focused edit, rerun the check, then run the project's existing tests. Resume long commands with continue_command; stop_command cancels.",
 			planning,
-			"Derive expected behavior from the task requirements, cover every case they state, and never weaken tests. Review your change with git diff instead of rereading whole files. Finish once the change is verified.",
+			"Fix first: verify with quick reproduction commands and the existing tests; add new test files only when the task or repository conventions ask for them. Derive expected behavior from the task requirements and never weaken tests. Review your change with git diff instead of rereading whole files.",
+			"Before finishing, go back through the task statement and confirm each stated symptom or requirement is covered by a check you actually ran; fix any gap, then finish.",
 		]
 			.filter(Boolean)
 			.join(" ");
