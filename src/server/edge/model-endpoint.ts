@@ -35,10 +35,25 @@ export function edgeModelEndpointTransport(
 			)
 		)
 			throw new Error("Model endpoint origin or API path changed.");
-		const response = await transport(request, {
-			redirect: "manual",
-			signal: AbortSignal.any([request.signal, AbortSignal.timeout(120_000)]),
-		});
+		// Bound only the wait for the response to start; long reasoning streams
+		// legitimately outlast two minutes.
+		const started = new AbortController();
+		const timer = setTimeout(
+			() =>
+				started.abort(
+					new DOMException("Model endpoint timed out.", "TimeoutError"),
+				),
+			120_000,
+		);
+		let response: Response;
+		try {
+			response = await transport(request, {
+				redirect: "manual",
+				signal: AbortSignal.any([request.signal, started.signal]),
+			});
+		} finally {
+			clearTimeout(timer);
+		}
 		if (response.status >= 300 && response.status < 400) {
 			await response.body?.cancel();
 			throw new Error("Model endpoint redirect refused.");

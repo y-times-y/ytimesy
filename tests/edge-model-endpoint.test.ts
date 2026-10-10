@@ -122,3 +122,43 @@ it("selects the native factory only within the edge invocation", async () => {
 	const nodeTransport = modelEndpointTransport("https://gateway.example/v1");
 	await nodeTransport.close();
 });
+
+it("bounds only the wait for a response, so long reasoning streams are not cut at two minutes", async () => {
+	vi.useFakeTimers();
+	try {
+		let passed: AbortSignal | undefined;
+		const fetch = vi.fn<typeof globalThis.fetch>(async (_input, init) => {
+			passed = init?.signal ?? undefined;
+			return new Response("data: started\n\n");
+		});
+		const transport = edgeModelEndpointTransport(
+			"https://openrouter.ai/api/v1",
+			fetch,
+		);
+		await transport.fetch("https://openrouter.ai/api/v1/chat/completions", {
+			method: "POST",
+			body: "{}",
+		});
+		await vi.advanceTimersByTimeAsync(10 * 60_000);
+		expect(passed?.aborted).toBe(false);
+
+		const stalled = edgeModelEndpointTransport(
+			"https://openrouter.ai/api/v1",
+			(_input, init) =>
+				new Promise<Response>((_resolve, reject) =>
+					init?.signal?.addEventListener("abort", () =>
+						reject(init.signal?.reason),
+					),
+				),
+		);
+		const pending = stalled.fetch(
+			"https://openrouter.ai/api/v1/chat/completions",
+			{ method: "POST", body: "{}" },
+		);
+		const outcome = expect(pending).rejects.toThrow("timed out");
+		await vi.advanceTimersByTimeAsync(121_000);
+		await outcome;
+	} finally {
+		vi.useRealTimers();
+	}
+});

@@ -8,6 +8,21 @@ import type { ModelAgentRuntime } from "../../src/server/services/model-agent-lo
 export const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
 
 /**
+ * Long reasoning steps leave pooled sockets idle long enough to be reset
+ * mid-response (observed ETIMEDOUT). Match the subscription transport: never
+ * reuse a socket across model requests. This does not retry or replay streams.
+ */
+function freshConnectionFetch(
+	fetch: typeof globalThis.fetch,
+): typeof globalThis.fetch {
+	return (input, init) => {
+		const headers = new Headers(init?.headers);
+		headers.set("Connection", "close");
+		return fetch(input, { ...init, headers });
+	};
+}
+
+/**
  * Public OpenAI API counterpart of the tuned subscription runtime: same
  * instructions placement, cache affinity, reasoning summary and parallel tools.
  * Matches the public native Codex run: max effort, standard (non-fast) mode.
@@ -30,7 +45,7 @@ export async function openAiSolRuntime(input: {
 			apiKey,
 			modelId: input.modelId,
 		},
-		input.fetch ?? globalThis.fetch.bind(globalThis),
+		freshConnectionFetch(input.fetch ?? globalThis.fetch.bind(globalThis)),
 	);
 	const promptCacheKey = createHash("sha256")
 		.update(`ytimesy:evaluation:${input.cacheScope}`)
