@@ -110,3 +110,24 @@ it.each(["openai", "anthropic", "google", "other"] as const)(
 		expect(instructions).not.toContain("Use rename_symbol, rename_file");
 	},
 );
+
+it("gives a shell-shaped surface shell guidance without naming tools it was not offered", () => {
+	const instructions = harnessModelToolInstructions("openai", true, [
+		"execute_command",
+		"continue_command",
+		"stop_command",
+		"apply_patch",
+		"view_image",
+		"read_repository_guidance",
+	]);
+	expect(instructions).toContain("v9-shell");
+	expect(instructions).toContain("reproduce the problem");
+	for (const absent of ["run_checks", "inspect_changes", "compose_tools"])
+		expect(instructions).not.toContain(absent);
+	expect(
+		harnessModelToolInstructions("openai", true, [
+			"execute_command",
+			"run_checks",
+		]),
+	).toContain("v8");
+});

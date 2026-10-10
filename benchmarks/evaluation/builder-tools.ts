@@ -19,6 +19,7 @@ export function evaluationBuilderTools(
 		sessionId: string;
 		turnId: string;
 	},
+	options: { nativePatch?: boolean } = {},
 ): ToolSet {
 	const receipts = new Map<string, Promise<unknown>>();
 	const execution = {
@@ -36,7 +37,11 @@ export function evaluationBuilderTools(
 	};
 	const output = agentOutputArtifacts(execution);
 	const tools: ToolSet = {
-		...apiAgentFileTools({ ...execution, output, nativePatch: false }),
+		...apiAgentFileTools({
+			...execution,
+			output,
+			nativePatch: options.nativePatch ?? false,
+		}),
 		...apiAgentSearchTools({ ...execution, output }),
 		...apiAgentLanguageTools(execution),
 		...apiAgentImageTools(execution),

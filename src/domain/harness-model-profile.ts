@@ -66,6 +66,28 @@ export function harnessModelToolInstructions(
 			: family === "google"
 				? "Thought signatures are provider-managed continuation state. Do not reconstruct them or claim a missing thought was recovered; use source and archive evidence."
 				: "Opaque reasoning is provider-managed state. Use recoverable source/tool evidence, not guessed reasoning, after compaction.";
+	// A shell-shaped surface (like native Codex) gets shell-centric guidance
+	// instead of instructions for specialist tools it was not offered.
+	const SPECIALISTS = [
+		"run_checks",
+		"inspect_changes",
+		"compose_tools",
+		"apply_patches",
+		"replace_text",
+		"batch_read",
+	];
+	if (
+		availableTools?.includes("execute_command") &&
+		!SPECIALISTS.some((name) => offered(name))
+	)
+		return [
+			`Harness tool profile v9-shell (${family}): ${editing} ${context}`,
+			"Work in a tight loop with execute_command (rg, sed -n, git, project CLIs): reproduce the problem with the smallest executable check early, make one focused edit, rerun the check, then run the project's existing tests. Resume long commands with continue_command; stop_command cancels.",
+			planning,
+			"Derive expected behavior from the task requirements, cover every case they state, and never weaken tests. Review your change with git diff instead of rereading whole files. Finish once the change is verified.",
+		]
+			.filter(Boolean)
+			.join(" ");
 	return [
 		`Harness tool profile v8 (${family}): ${editing} ${context}`,
 		"Only offered tools are callable; do not search for absent capabilities. Use execute_command with rg, Git and project CLIs; resume yielded ids with continue_command, never restart them. stop_command cancels; view_image supplies pixels. Parallelize independent calls; compose_tools sequences steps and writes.",

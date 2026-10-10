@@ -162,8 +162,29 @@ try {
 		sessionId,
 		turnId: randomUUID(),
 	};
+	// "shell" offers a native-Codex-shaped surface; the default keeps every tool.
+	const toolset =
+		process.env.YTIMESY_EVALUATION_TOOLSET === "shell" ? "shell" : "full";
+	const builderTools = evaluationBuilderTools(workspace, {
+		nativePatch: route === "openai-sol" && toolset === "shell",
+	});
+	const SHELL_TOOLS = new Set([
+		"execute_command",
+		"continue_command",
+		"stop_command",
+		"apply_patch",
+		"view_image",
+		"read_repository_guidance",
+	]);
 	const context = evaluationBuilderContext({
-		tools: evaluationBuilderTools(workspace),
+		tools:
+			toolset === "shell"
+				? Object.fromEntries(
+						Object.entries(builderTools).filter(([name]) =>
+							SHELL_TOOLS.has(name),
+						),
+					)
+				: builderTools,
 		storage: archives.storage,
 		workspace,
 		userId: local.userId,
@@ -180,6 +201,7 @@ try {
 		reasoning: "max",
 		fast: false,
 		billing: arm.billing,
+		toolset,
 		archiveBackend: "encrypted local pilot storage; no Supabase network calls",
 		originalPrompt: task.instruction,
 		image: task.image,
