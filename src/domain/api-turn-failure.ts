@@ -92,6 +92,9 @@ export class SafeApiModelFailure extends Error {
 		super(apiModelFailureMessage(error));
 		this.name = "SafeApiModelFailure";
 		this.classification = apiModelFailureClassification(error);
+		// Operator diagnostics only: not `cause`, which user-facing failure
+		// messages unwrap, and not enumerable, so it is never serialized.
+		Object.defineProperty(this, "providerError", { value: error });
 	}
 }
 

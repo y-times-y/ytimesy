@@ -322,7 +322,12 @@ try {
 			);
 		} catch (error) {
 			failure = error instanceof Error ? error.message : "Builder failed";
-			await save("model-failure", apiModelFailureClassification(error));
+			await save("model-failure", {
+				...apiModelFailureClassification(error),
+				// Private and redacted: the operator needs the raw chain to diagnose
+				// transport failures that the user-facing classification hides.
+				chain: errorChain(error),
+			});
 		}
 		const agentSeconds = (Date.now() - started) / 1000;
 		console.log(
@@ -390,4 +395,25 @@ try {
 	process.off("SIGINT", cancel);
 	process.off("SIGTERM", cancel);
 	if (failures.length) process.exitCode = 1;
+}
+
+function errorChain(error: unknown) {
+	const chain: { name: string; message: string; stack?: string }[] = [];
+	for (let current = error, depth = 0; current && depth < 6; depth++) {
+		if (!(current instanceof Error)) {
+			chain.push({
+				name: typeof current,
+				message: String(current).slice(0, 2000),
+			});
+			break;
+		}
+		chain.push({
+			name: current.name,
+			message: current.message.slice(0, 2000),
+			stack: current.stack?.split("\n").slice(0, 8).join("\n"),
+		});
+		current =
+			(current as { providerError?: unknown }).providerError ?? current.cause;
+	}
+	return chain;
 }

@@ -5,9 +5,30 @@ export type ContextBudget = {
 	inputLimitTokens: number;
 };
 
+// Providers bill an image by its pixels, not its base64 length: a 1.15 MP
+// screenshot is about 1,600 tokens, while its encoding can exceed 400 KB.
+const IMAGE_TOKENS = 2_000;
+
 /** Conservative estimate, not provider-measured usage or a universal tokenizer. */
-export const estimateContextTokens = (value: unknown) =>
-	Math.ceil(Buffer.byteLength(JSON.stringify(value), "utf8") / 3);
+export const estimateContextTokens = (value: unknown) => {
+	let images = 0;
+	const text = JSON.stringify(value, (_key, item: unknown) => {
+		if (
+			item &&
+			typeof item === "object" &&
+			"mediaType" in item &&
+			typeof item.mediaType === "string" &&
+			item.mediaType.startsWith("image/")
+		) {
+			images++;
+			return null;
+		}
+		return item;
+	});
+	return (
+		Math.ceil(Buffer.byteLength(text ?? "", "utf8") / 3) + images * IMAGE_TOKENS
+	);
+};
 
 export type ContextMeasurement = {
 	tokens: number;
