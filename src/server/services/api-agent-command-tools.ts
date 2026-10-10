@@ -486,9 +486,14 @@ export function apiAgentCommandTools(
 		inputSchema: z.object({
 			command: z.string().min(1).max(16000),
 			maxSeconds: z.number().int().min(30).max(600).default(300),
-			yieldSeconds: z.number().int().min(0).max(10).default(1),
+			// Returns as soon as the command finishes; a one-second default made
+			// every slower check cost an extra continue_command model step.
+			yieldSeconds: z.number().int().min(0).max(30).default(10),
 		}),
-		execute: async ({ command, maxSeconds = 300, yieldSeconds = 1 }, options) =>
+		execute: async (
+			{ command, maxSeconds = 300, yieldSeconds = 10 },
+			options,
+		) =>
 			once(options.toolCallId, () =>
 				launchCommand(command, maxSeconds, yieldSeconds),
 			),
@@ -512,10 +517,10 @@ export function apiAgentCommandTools(
 				.optional(),
 			eof: z.boolean().default(false),
 			start: z.number().int().min(0).max(100000000).default(0),
-			seconds: z.number().int().min(0).max(55).default(1),
+			seconds: z.number().int().min(0).max(55).default(10),
 		}),
 		execute: async (
-			{ id, chars, eof = false, start = 0, seconds = 1 },
+			{ id, chars, eof = false, start = 0, seconds = 10 },
 			options,
 		) => {
 			jobId.parse(id);
