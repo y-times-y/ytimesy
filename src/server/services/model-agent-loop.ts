@@ -503,8 +503,9 @@ async function executeModelSteps(
 				runSignal.throwIfAborted();
 				return { messages: history };
 			},
-			// SDK retries only retryable request-start failures. Never replay a stream after output/tool execution.
-			maxRetries: 1,
+			// SDK retries only retryable request-start failures (with backoff, like
+			// native Codex's request retries). Never replay a stream after output/tool execution.
+			maxRetries: 4,
 			streamRetries: 0,
 			maxOutputTokens: runtime.maxOutputTokens,
 			stopWhen: isStepCount(
