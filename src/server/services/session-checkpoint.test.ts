@@ -74,6 +74,7 @@ beforeEach(() => {
 		executor_id: "vm",
 		runner_id: null,
 		turn_fingerprint: fingerprint,
+		workspace_sha256: createHash("sha256").update("before").digest("hex"),
 	});
 	mocks.download.mockResolvedValue(
 		JSON.stringify({ workspace: "before", native: null }),
@@ -92,8 +93,14 @@ it("captures terminal edits even when the transcript fingerprint is unchanged", 
 		expect.any(String),
 		JSON.stringify({ workspace: "after", native: null }),
 	);
-	expect(mocks.save).toHaveBeenCalled();
+	expect(mocks.save).toHaveBeenCalledWith(
+		expect.objectContaining({
+			workspaceSha256: createHash("sha256").update("after").digest("hex"),
+		}),
+	);
 	expect(mocks.remove).toHaveBeenCalledWith("old");
+	// The previous object is never downloaded just to compare workspaces.
+	expect(mocks.download).not.toHaveBeenCalled();
 });
 
 it("deduplicates storage only after comparing a fresh capture", async () => {
@@ -102,6 +109,28 @@ it("deduplicates storage only after comparing a fresh capture", async () => {
 	expect(mocks.capture).toHaveBeenCalled();
 	expect(mocks.confirm).toHaveBeenCalledWith("owner", "chat", fingerprint);
 	expect(mocks.upload).not.toHaveBeenCalled();
+	expect(mocks.download).not.toHaveBeenCalled();
+});
+
+it("downloads the previous checkpoint only to retain legacy runner state", async () => {
+	mocks.previous.mockResolvedValue({
+		object_path: "old",
+		executor_id: "vm",
+		runner_id: "legacy-runner",
+		turn_fingerprint: fingerprint,
+		workspace_sha256: null,
+	});
+	mocks.download.mockResolvedValue(
+		JSON.stringify({ workspace: "before", native: { thread: "t" } }),
+	);
+	await captureSessionCheckpoint(machines, "owner", "chat");
+	expect(mocks.download).toHaveBeenCalledWith("owner", "chat", "old");
+	expect(mocks.upload).toHaveBeenCalledWith(
+		"owner",
+		"chat",
+		expect.any(String),
+		JSON.stringify({ workspace: "after", native: { thread: "t" } }),
+	);
 });
 
 it("does not confirm or replace a checkpoint when capture fails", async () => {
