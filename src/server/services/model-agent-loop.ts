@@ -90,7 +90,36 @@ export async function runModelAgent(
 	input: ModelAgentInput,
 	runtime: ModelAgentRuntime,
 ): Promise<ModelMessage[]> {
-	return (await executeModelSteps(input, runtime, false)).messages;
+	let result = await executeModelSteps(input, runtime, false);
+	// A progress note is not a final answer; keep sampling as native Codex does.
+	for (
+		let resumes = 0;
+		resumes < 3 && endsWithCommentary(result.messages);
+		resumes++
+	)
+		result = await executeModelSteps(
+			{ ...input, messages: result.messages },
+			runtime,
+			false,
+		);
+	return result.messages;
+}
+
+/**
+ * OpenAI coding models label mid-turn progress messages "commentary" and the
+ * real answer "final_answer". A step that stops on commentary without a tool
+ * call has not finished the user's request.
+ */
+export function endsWithCommentary(messages: readonly ModelMessage[]) {
+	const last = messages.at(-1);
+	if (last?.role !== "assistant" || typeof last.content === "string")
+		return false;
+	if (last.content.some((part) => part.type === "tool-call")) return false;
+	const text = [...last.content].reverse().find((part) => part.type === "text");
+	return (
+		(text?.providerOptions?.openai as { phase?: unknown } | undefined)
+			?.phase === "commentary"
+	);
 }
 
 export type ModelAgentRuntime = {
@@ -665,7 +694,11 @@ async function executeModelSteps(
 		await consumeBackground(true);
 		const usage = accumulated.usage ?? apiTokenUsage(await result.totalUsage);
 		const reason = await result.finishReason;
-		if (singleStep && reason === "tool-calls")
+		if (
+			singleStep &&
+			(reason === "tool-calls" ||
+				(reason === "stop" && endsWithCommentary(history)))
+		)
 			return { messages: history, outcome: "continue" };
 		if (reason !== "stop") throw new IncompleteAgentTurn(reason);
 		await input.onEvent({
