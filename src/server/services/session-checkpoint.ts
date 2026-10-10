@@ -63,13 +63,16 @@ export async function captureSessionCheckpoint(
 		null,
 		transfer,
 	);
-	// Retain archived legacy history without restarting its retired runner.
-	const previousPayload = previous
-		? (JSON.parse(
-				await downloadCheckpoint(userId, sessionId, previous.object_path),
-			) as { workspace: string; native?: unknown })
+	const workspaceSha256 = createHash("sha256").update(workspace).digest("hex");
+	// Only legacy checkpoints carry runner state worth retaining, so only they
+	// are downloaded; the workspace comparison uses the stored hash.
+	const native = previous?.runner_id
+		? ((
+				JSON.parse(
+					await downloadCheckpoint(userId, sessionId, previous.object_path),
+				) as { native?: unknown }
+			).native ?? null)
 		: null;
-	const native = previous?.runner_id ? (previousPayload?.native ?? null) : null;
 	const latest = await agentSessionForOwner(userId, sessionId);
 	if (
 		!latest ||
@@ -87,7 +90,7 @@ export async function captureSessionCheckpoint(
 	if (
 		previous?.executor_id === session.providerRef &&
 		previous.turn_fingerprint === fingerprint &&
-		previousPayload?.workspace === workspace
+		previous.workspace_sha256 === workspaceSha256
 	) {
 		await confirmUnchangedCheckpoint(userId, sessionId, fingerprint);
 		return;
@@ -106,6 +109,7 @@ export async function captureSessionCheckpoint(
 			fingerprint,
 			executorId: session.providerRef,
 			runnerId: previous?.runner_id ?? null,
+			workspaceSha256,
 		});
 	} catch (error) {
 		await removeCheckpoint(path).catch(() => undefined);
