@@ -1367,3 +1367,39 @@ it("does not verify a text-only completion", async () => {
 	).rejects.toThrow();
 	expect(mocks.verified).not.toHaveBeenCalled();
 });
+
+it("sends the requested reasoning effort to Anthropic models instead of their default", async () => {
+	mocks.load.mockResolvedValue({
+		id: "connection",
+		provider: "anthropic",
+		revision: "revision",
+		baseUrl: "https://api.anthropic.com/v1",
+		sealedCredential: "sealed",
+		models: [
+			{
+				id: "claude-opus-5-5",
+				toolStreamingVerified: true,
+				contextWindow: 1_000_000,
+			},
+		],
+	});
+	const model = new MockLanguageModelV4({
+		doStream: async () => stream([finish]),
+	});
+	mocks.model.mockReturnValue(model);
+	await runApiAgent({
+		userId: "alice",
+		connectionId: "connection",
+		modelId: "claude-opus-5-5",
+		reasoning: "max",
+		messages: [{ role: "user", content: "Test" }],
+		instructions: "Test instructions",
+		tools: {},
+		signal: new AbortController().signal,
+		onEvent: async () => {},
+		onStep: async () => {},
+	});
+	expect(model.doStreamCalls[0]?.providerOptions?.anthropic).toMatchObject({
+		effort: "max",
+	});
+});

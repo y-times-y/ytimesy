@@ -11,6 +11,10 @@ import { loadModelConnection } from "#/server/adapters/model-connections";
 import { readModelContext } from "#/server/adapters/model-context";
 import { modelEndpointTransport } from "#/server/adapters/model-endpoint";
 import {
+	apiReasoningEffort,
+	withReasoningEffort,
+} from "../adapters/api-reasoning-effort";
+import {
 	type ModelAgentInput,
 	type ModelAgentRuntime,
 	runModelAgent,
@@ -122,7 +126,14 @@ async function prepareApiModel<T>(
 			},
 			transport.fetch,
 		);
+		const effort = apiReasoningEffort(input.reasoning);
 		const requestSettings = (instructions: string) =>
+			withReasoningEffort(
+				baseRequestSettings(instructions),
+				connection.provider,
+				effort,
+			);
+		const baseRequestSettings = (instructions: string) =>
 			responsesRoute
 				? {
 						...cacheSettings,
