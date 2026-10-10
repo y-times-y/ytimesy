@@ -92,19 +92,93 @@ export async function runModelAgent(
 	input: ModelAgentInput,
 	runtime: ModelAgentRuntime,
 ): Promise<ModelMessage[]> {
-	let result = await executeModelSteps(input, runtime, false);
+	let result = await executeWithStreamRetries(input, runtime);
 	// A progress note is not a final answer; keep sampling as native Codex does.
 	for (
 		let resumes = 0;
 		resumes < 3 && endsWithCommentary(result.messages);
 		resumes++
 	)
-		result = await executeModelSteps(
+		result = await executeWithStreamRetries(
 			{ ...input, messages: result.messages },
 			runtime,
-			false,
 		);
 	return result.messages;
+}
+
+const STREAM_RETRIES = 4;
+
+/**
+ * A connection that drops mid-response (read ETIMEDOUT, reset, terminated)
+ * would otherwise end the whole run. Resume from the last completed step, but
+ * only when the interrupted step had not yet emitted a tool call: nothing ran,
+ * so sampling that step again cannot repeat a side effect.
+ */
+async function executeWithStreamRetries(
+	input: ModelAgentInput,
+	runtime: ModelAgentRuntime,
+) {
+	let committed = input.messages;
+	let toolCallStarted = false;
+	const tracked: ModelAgentInput = {
+		...input,
+		onEvent: async (event) => {
+			if (event.type === "tool-call") toolCallStarted = true;
+			await input.onEvent(event);
+		},
+		onStep: async (messages) => {
+			committed = messages;
+			toolCallStarted = false;
+			await input.onStep(messages);
+		},
+	};
+	for (let attempt = 0; ; attempt++) {
+		try {
+			return await executeModelSteps(
+				{ ...tracked, messages: committed },
+				runtime,
+				false,
+			);
+		} catch (error) {
+			if (
+				attempt >= STREAM_RETRIES ||
+				toolCallStarted ||
+				input.signal.aborted ||
+				!interruptedStream(error)
+			)
+				throw error;
+			toolCallStarted = false;
+			await new Promise((done) => setTimeout(done, 2_000 * (attempt + 1)));
+		}
+	}
+}
+
+const INTERRUPTED_STREAM =
+	/\b(ETIMEDOUT|ECONNRESET|EPIPE|ENETUNREACH|EAI_AGAIN|UND_ERR_SOCKET|terminated|fetch failed|other side closed)\b/;
+
+/** Network-level interruption anywhere in the failure chain, not a provider rejection. */
+export function interruptedStream(error: unknown) {
+	for (let current = error, depth = 0; current && depth < 8; depth++) {
+		if (typeof current !== "object") break;
+		const record = current as {
+			message?: unknown;
+			code?: unknown;
+			statusCode?: unknown;
+			providerError?: unknown;
+			cause?: unknown;
+		};
+		if (typeof record.statusCode === "number" && record.statusCode !== 200)
+			return false;
+		if (
+			(typeof record.code === "string" &&
+				INTERRUPTED_STREAM.test(record.code)) ||
+			(typeof record.message === "string" &&
+				INTERRUPTED_STREAM.test(record.message))
+		)
+			return true;
+		current = record.providerError ?? record.cause;
+	}
+	return false;
 }
 
 /**
