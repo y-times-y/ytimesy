@@ -1304,10 +1304,12 @@ it("does not retry after streaming has exposed output", async () => {
 	expect(model.doStreamCalls).toHaveLength(1);
 });
 
-it("turns a provider rate limit into an actionable error without echoing its response", async () => {
+it("retries a provider rate limit with backoff, then reports an actionable error without echoing its response", async () => {
+	let attempts = 0;
 	mocks.model.mockReturnValue(
 		new MockLanguageModelV4({
 			doStream: async () => {
+				attempts++;
 				throw new APICallError({
 					message: "secret-provider-response",
 					url: "https://example.com/v1/chat/completions",
@@ -1317,12 +1319,20 @@ it("turns a provider rate limit into an actionable error without echoing its res
 			},
 		}),
 	);
-	const message = await run([]).then(
-		() => "",
-		(error: Error) => error.message,
-	);
-	expect(message).toContain("rate limit");
-	expect(message).not.toContain("secret-provider-response");
+	vi.useFakeTimers();
+	try {
+		const pending = run([]).then(
+			() => "",
+			(error: Error) => error.message,
+		);
+		await vi.advanceTimersByTimeAsync(120_000);
+		const message = await pending;
+		expect(attempts).toBe(5);
+		expect(message).toContain("rate limit");
+		expect(message).not.toContain("secret-provider-response");
+	} finally {
+		vi.useRealTimers();
+	}
 });
 
 it("requires the exact streamed verification tool and never executes it", async () => {
