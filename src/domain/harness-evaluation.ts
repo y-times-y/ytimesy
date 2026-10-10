@@ -24,10 +24,11 @@ export const evaluationProtocolSchema = z
 		seed: z.number().int().nonnegative(),
 		repetitions: z.number().int().min(1).max(20),
 		graderImage: z.string().regex(/^.+@sha256:[a-f0-9]{64}$/),
+		// Benchmark tasks declare limits up to eight hours (Terminal-Bench 4).
 		limits: z.object({
-			durationSeconds: z.number().int().min(30).max(1800),
-			modelRequests: z.number().int().min(1).max(100),
-			tokens: z.number().int().min(1000).max(4_000_000),
+			durationSeconds: z.number().int().min(30).max(28_800),
+			modelRequests: z.number().int().min(1).max(1_000),
+			tokens: z.number().int().min(1000).max(200_000_000),
 		}),
 		tasks: z
 			.array(

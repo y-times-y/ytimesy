@@ -96,3 +96,23 @@ it("stops archive deletion if storage returns a name outside the context namespa
 	);
 	expect(fetch).toHaveBeenCalledTimes(1);
 });
+
+it("keeps isolated evaluation checkpoints on local disk without contacting storage", async () => {
+	const { mkdtemp } = await import("node:fs/promises");
+	const { tmpdir } = await import("node:os");
+	const { join } = await import("node:path");
+	const directory = await mkdtemp(join(tmpdir(), "ytimesy-checkpoints-"));
+	vi.stubEnv("YTIMESY_HARNESS_EVALUATION_ENABLED", "1");
+	vi.stubEnv("YTIMESY_EVALUATION_CHECKPOINT_DIR", directory);
+	const fetch = vi.fn<typeof globalThis.fetch>();
+	vi.stubGlobal("fetch", fetch);
+	await ensurePrivateCheckpointBucket();
+	const archive = `context-${"0".repeat(8)}-0000-0000-0000-${"0".repeat(12)}`;
+	const path = await uploadCheckpoint("alice", "chat", archive, "payload");
+	expect(await downloadCheckpoint("alice", "chat", path)).toBe("payload");
+	expect(await listContextArchives("alice", "chat", 0, 3)).toEqual([archive]);
+	await removeContextArchives("alice", "chat");
+	expect(await listContextArchives("alice", "chat", 0, 3)).toEqual([]);
+	expect(fetch).not.toHaveBeenCalled();
+	vi.unstubAllEnvs();
+});

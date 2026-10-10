@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { dirname, resolve, sep } from "node:path";
 import { seal, unseal } from "#/server/auth/token-vault";
 
 const BUCKET = "ytimesy-checkpoints";
@@ -12,7 +14,62 @@ function configuration() {
 	return { url, key };
 }
 
+/** Isolated evaluations keep their encrypted checkpoints on local disk, never in shared storage. */
+function evaluationCheckpointDirectory() {
+	const directory = process.env.YTIMESY_EVALUATION_CHECKPOINT_DIR;
+	return directory && process.env.YTIMESY_HARNESS_EVALUATION_ENABLED === "1"
+		? resolve(directory)
+		: null;
+}
+
+/** Emulates the five storage calls below against files, so callers are unchanged. */
+async function localRequest(
+	directory: string,
+	path: string,
+	options: RequestInit,
+): Promise<Response> {
+	const method = options.method ?? "GET";
+	const json = (value: unknown) => new Response(JSON.stringify(value));
+	const object = (name: string) => {
+		const target = resolve(directory, name);
+		if (!target.startsWith(`${directory}${sep}`))
+			throw new Error("Checkpoint path escaped local evaluation storage.");
+		return target;
+	};
+	if (path.startsWith("bucket")) return json({ public: false });
+	const body = () => JSON.parse(String(options.body ?? "{}"));
+	if (path === `object/list/${BUCKET}`) {
+		const { prefix, search = "", offset = 0, limit = 100 } = body();
+		const names = await readdir(object(prefix)).catch(() => [] as string[]);
+		return json(
+			names
+				.filter((name) => name.startsWith(search))
+				.sort()
+				.slice(offset, offset + limit)
+				.map((name) => ({ name })),
+		);
+	}
+	if (path === `object/${BUCKET}` && method === "DELETE") {
+		for (const prefix of body().prefixes as string[])
+			await rm(object(prefix), { force: true });
+		return json({});
+	}
+	const name = path.slice(`object/${BUCKET}/`.length);
+	if (method === "POST") {
+		await mkdir(dirname(object(name)), { recursive: true, mode: 0o700 });
+		await writeFile(object(name), String(options.body), { mode: 0o600 });
+		return json({});
+	}
+	try {
+		return new Response(await readFile(object(name), "utf8"));
+	} catch {
+		return new Response("not found", { status: 404 });
+	}
+}
+
 async function request(path: string, options: RequestInit = {}) {
+	const local = evaluationCheckpointDirectory();
+	if (local) return localRequest(local, path, options);
 	const { url, key } = configuration();
 	return fetch(`${url}/storage/v1/${path}`, {
 		...options,
