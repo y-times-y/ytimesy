@@ -304,6 +304,7 @@ try {
 					...context,
 					signal,
 					maxSteps: arm.requestLimit,
+					turnTimeoutMs: timeoutSeconds * 1000,
 					messages: [{ role: "user", content: task.instruction }],
 					instructions:
 						"You are the ytimesy builder. Complete the user's task in /app. Use the repository tools for inspection, editing and verification. Read applicable repository guidance before editing. Do not publish, delegate, or access another project. Report the actual checks and any unresolved problems.",

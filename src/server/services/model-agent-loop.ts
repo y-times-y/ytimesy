@@ -57,6 +57,8 @@ export type { ApiAgentEvent } from "#/domain/api-agent-event";
 
 /** Run from a durable worker with owner-authorized VM tools. No credentials enter the VM or event stream. */
 export type ModelAgentInput = {
+	/** Whole-turn deadline; defaults to 30 minutes. Benchmarks pass the task limit. */
+	turnTimeoutMs?: number;
 	userId: string;
 	connectionId?: string;
 	connectionRevision?: string;
@@ -183,7 +185,7 @@ async function executeModelSteps(
 	const runSignal = AbortSignal.any([
 		input.signal,
 		cancelled.signal,
-		AbortSignal.timeout(30 * 60 * 1000),
+		AbortSignal.timeout(input.turnTimeoutMs ?? 30 * 60 * 1000),
 	]);
 	const { model, cacheSettings = {} } = runtime;
 	const tools = discoverableAgentTools(
