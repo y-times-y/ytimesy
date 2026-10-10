@@ -21,7 +21,8 @@ import { terminalBenchHostCommand } from "./terminal-bench-host-command";
 const pinnedImage = z.string().regex(/^[\w./:-]+@sha256:[a-f0-9]{64}$/);
 const artifactPath = z
 	.string()
-	.regex(/^\/app(?:\/[\w./-]*)?\/?$/)
+	// Tasks export from the working tree or from /tmp (e.g. a submitted patch).
+	.regex(/^\/(?:app|tmp)(?:\/[\w./-]*)?\/?$/)
 	.refine((path) => !path.split("/").includes(".."));
 export const terminalBenchTaskSchema = z
 	.object({
