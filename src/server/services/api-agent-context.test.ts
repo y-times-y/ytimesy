@@ -371,3 +371,32 @@ it("retires only complete older turns for provider-specific fallback", async () 
 	);
 	expect(result.messages.slice(1)).toEqual([messages[2]]);
 });
+
+it("counts an image by a fixed pixel budget, not its base64 length", () => {
+	const image = (bytes: number) => ({
+		type: "file",
+		data: { type: "data", data: "A".repeat(bytes) },
+		mediaType: "image/png",
+	});
+	const history: ModelMessage[] = [
+		{
+			role: "tool",
+			content: [
+				{
+					type: "tool-result",
+					toolCallId: "call",
+					toolName: "view_image",
+					output: {
+						type: "content",
+						value: [1, 2, 3, 4].map(() => image(350_000)) as never,
+					},
+				},
+			],
+		},
+	];
+	// Four 350 KB screenshots once estimated ~470k tokens and ended the run
+	// although the provider measured ~37k; each now counts 2,000 tokens.
+	expect(estimateContextTokens(history)).toBeLessThan(9_000);
+	expect(estimateContextTokens(history)).toBeGreaterThan(8_000);
+	expect(estimateContextTokens({ text: "x".repeat(3000) })).toBe(1004);
+});
