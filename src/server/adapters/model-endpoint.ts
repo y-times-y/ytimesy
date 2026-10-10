@@ -33,6 +33,11 @@ export function modelEndpointTransport(baseUrl: string) {
 	if (scoped) return scoped(baseUrl);
 	const allowed = new URL(publicModelEndpoint(baseUrl));
 	const dispatcher = new Agent({
+		// Bound the wait for a response to start and silence between streamed
+		// chunks, not the whole response: max-effort reasoning steps often stream
+		// for longer than two minutes.
+		headersTimeout: 120_000,
+		bodyTimeout: 300_000,
 		connect: {
 			lookup(hostname, options, callback) {
 				void lookup(hostname, { all: true, verbatim: true })
@@ -84,10 +89,7 @@ export function modelEndpointTransport(baseUrl: string) {
 		if (ipaddr.isValid(literal) && !isPublicModelAddress(literal))
 			throw new Error("Model endpoints must use public addresses.");
 		const request = new Request(input, init);
-		const signal = AbortSignal.any([
-			AbortSignal.timeout(120_000),
-			request.signal,
-		]);
+		const signal = request.signal;
 		return (await transportFetch(target, {
 			method: request.method,
 			headers: [...request.headers],

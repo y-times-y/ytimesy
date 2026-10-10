@@ -24,9 +24,11 @@ async function keyFile(contents: string) {
 
 it("calls GPT-6.1 Sol through the Responses API at max effort with stable cache affinity", async () => {
 	const bodies: Record<string, unknown>[] = [];
+	const connections: (string | null)[] = [];
 	const urls: string[] = [];
 	const fetch: typeof globalThis.fetch = async (url, init) => {
 		urls.push(String(url));
+		connections.push(new Headers(init?.headers).get("connection"));
 		bodies.push(JSON.parse(String(init?.body)));
 		return Response.json({
 			id: "resp_fixture",
@@ -69,6 +71,7 @@ it("calls GPT-6.1 Sol through the Responses API at max effort with stable cache 
 	expect(bodies[0]).not.toHaveProperty("service_tier");
 	expect(bodies[0].prompt_cache_key).toBe(bodies[1].prompt_cache_key);
 	expect(runtime.compact).toBeDefined();
+	expect(connections).toEqual(["close", "close"]);
 });
 
 it("estimates GPT-6.1 Sol spend from cumulative usage", () => {
