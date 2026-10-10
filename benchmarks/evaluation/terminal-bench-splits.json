@@ -1,0 +1,107 @@
+{
+	"seed": "ytimesy-terminal-bench-4-heldout-2026-10-10",
+	"rule": {
+		"MAX_CODEX_COST_USD": 2.1,
+		"MAX_CODEX_SECONDS": 3600,
+		"QUOTAS": {
+			"always": {
+				"validation": 3,
+				"test": 6
+			},
+			"sometimes": {
+				"validation": 1,
+				"test": 3
+			},
+			"never": {
+				"validation": 2,
+				"test": 3
+			}
+		}
+	},
+	"dev": [
+		"atrx-vep-crispr",
+		"bun-sourcemap-leak",
+		"cargo-flight-dispatch",
+		"freecad-spring-clip",
+		"heat-pump-warranty",
+		"interleaved-vigenere",
+		"mvcc-lsm-compaction",
+		"session-window-debug",
+		"shadow-relay",
+		"wal-recovery-ordering"
+	],
+	"validation": [
+		"cad-model",
+		"data-anonymization",
+		"freecad-platform-drawing",
+		"layout-config-recreation2",
+		"nextjs-performance",
+		"react-lead-form"
+	],
+	"test": [
+		"batched-eval-parity",
+		"coq-block-bound",
+		"fin-saccr-rwa",
+		"freecad-impeller",
+		"html-js-filter",
+		"music-harmony",
+		"ontology-kg-querying",
+		"photonic-waveguide-routing",
+		"production-planning",
+		"risk-scorer-replay",
+		"sound-change-cascade",
+		"uefi-bootkit"
+	],
+	"reserve": [
+		"embedding-drift-monitor",
+		"foodstuff-beta-activity",
+		"formal-crypto",
+		"hof-topology-interpenetration",
+		"satb-audio-transcription",
+		"vllm-deepseek-streaming"
+	],
+	"excluded": {
+		"atrx-vep-crispr": "dev",
+		"biped-contact-dynamics": "Codex trial cost",
+		"bun-sourcemap-leak": "dev",
+		"cargo-flight-dispatch": "dev",
+		"ctr-optimization": "Codex trial cost",
+		"cumulative-layout-shift": "Codex trial cost",
+		"distributed-dedup": "Codex trial cost",
+		"fp8-rmsnorm-gemm": "Codex trial cost",
+		"freecad-spring-clip": "dev",
+		"freight-dispatch-shift": "unsupported by evaluator",
+		"glycan-ms2-elucidation": "unsupported by evaluator",
+		"gsea-proteomics": "unsupported by evaluator",
+		"heat-pump-warranty": "dev",
+		"interleaved-vigenere": "dev",
+		"intrastat-meldung": "unsupported by evaluator",
+		"jax-speedrun-gpu": "Codex trial cost",
+		"ks-solver-cpp": "Codex trial cost",
+		"kv-live-surgery": "Codex trial cost",
+		"lake-temp-glm": "Codex trial cost",
+		"layout-config-recreation": "Codex trial cost",
+		"legacy-utility-triage": "unsupported by evaluator",
+		"live-database-cutover": "Codex trial cost",
+		"math-eval-grader": "unsupported by evaluator",
+		"medical-claims-processing": "unsupported by evaluator",
+		"mp-checkpoint-consolidation": "unsupported by evaluator",
+		"mvcc-lsm-compaction": "dev",
+		"payments-pipeline-fix": "unsupported by evaluator",
+		"pretrain-shard-corruption": "Codex trial cost",
+		"protein-autointerp-disulfide": "unsupported by evaluator",
+		"retro-console-soc": "Codex trial cost",
+		"roy-polymorph-cn": "unsupported by evaluator",
+		"rs-archive-clone": "Codex trial cost",
+		"session-window-debug": "dev",
+		"sglang-qwen-burst": "Codex trial cost",
+		"shadow-relay": "dev",
+		"takens-embedding-lean": "Codex trial cost",
+		"telecom-entity-resolution": "Codex trial cost",
+		"vba-userform-port": "Codex trial cost",
+		"vf2-speedup-networkx": "Codex trial cost",
+		"vpp-loss-divergence": "unsupported by evaluator",
+		"wal-recovery-ordering": "dev",
+		"wdm-design": "Codex trial cost"
+	}
+}
