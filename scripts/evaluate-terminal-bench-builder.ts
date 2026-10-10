@@ -328,7 +328,11 @@ try {
 		);
 		await stopApiTurnCommands(workspace, workspace.turnId);
 		await save("trace", { events, metrics, toolMetrics });
-		const bytes = await bridge.exportArtifacts(prepared.vmId, task.artifacts);
+		const bytes = await bridge.exportArtifacts(
+			prepared.vmId,
+			task.artifacts,
+			task.collectCommands,
+		);
 		await writeFile(`${output}/artifacts.tar.gz`, bytes, { mode: 0o600 });
 		const gradeOutput = `${output}/official-grade`;
 		await mkdir(gradeOutput, { mode: 0o700 });

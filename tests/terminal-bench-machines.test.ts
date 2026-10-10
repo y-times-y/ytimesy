@@ -18,6 +18,7 @@ const fixture = () =>
 		compose: { services: { main: { image, command: ["sleep", "infinity"] } } },
 		resources: { cpus: 2, memoryMb: 4096, storageMb: 10240 },
 		agentTimeoutSeconds: 28800,
+		collectCommands: [],
 		verifierMode: "separate",
 		sourceSha256: "b".repeat(64),
 	});

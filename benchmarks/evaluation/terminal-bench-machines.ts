@@ -38,6 +38,8 @@ export const terminalBenchTaskSchema = z
 			storageMb: z.number().int().min(10240).max(16384),
 		}),
 		agentTimeoutSeconds: z.number().int().positive().max(28800),
+		// Harbor's agent-side [[verifier.collect]] steps (e.g. diff into a patch).
+		collectCommands: z.array(z.string().min(1).max(8000)).max(8),
 		verifierMode: z.literal("separate"),
 		sourceSha256: z.string().regex(/^[a-f0-9]{64}$/),
 	})
@@ -401,8 +403,22 @@ git rev-parse HEAD`,
 		await owned(id).pause();
 		return { vmId: id, snapshotId, commit };
 	}
-	async function exportArtifacts(id: string, paths: readonly string[]) {
+	async function exportArtifacts(
+		id: string,
+		paths: readonly string[],
+		collectCommands: readonly string[] = [],
+	) {
 		for (const path of paths) artifactPath.parse(path);
+		// Run the task's own collection steps first, as Harbor does before export.
+		for (const command of collectCommands) {
+			const collected = await machines.exec(
+				WorkspaceId(id),
+				`bash -lc ${quote(command)}`,
+				120000,
+			);
+			if (collected.exitCode)
+				throw new Error("Task artifact collection failed.");
+		}
 		const remote = "/home/ubuntu/terminal-bench-artifacts.tar.gz";
 		const tar = `tar --exclude=.git --exclude=.ytimesy -czf /tmp/ytimesy-benchmark-artifacts.tar.gz -C / ${paths.map((path) => quote(path.replace(/^\//, ""))).join(" ")}`;
 		const result = await machines.exec(WorkspaceId(id), tar, 60000);
