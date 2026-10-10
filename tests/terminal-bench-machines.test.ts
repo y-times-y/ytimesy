@@ -120,6 +120,38 @@ describe("Terminal-Bench task boundary", () => {
 			terminalBenchTaskSchema.parse({ ...fixture(), artifacts: [path] }),
 		).toThrow();
 	});
+	it.each(["/", "/usr", "/var/"])("rejects system directory %s", (path) => {
+		expect(() =>
+			terminalBenchTaskSchema.parse({ ...fixture(), artifacts: [path] }),
+		).toThrow();
+	});
+	it("accepts task-owned paths and sidecar artifacts in Harbor's form", () => {
+		const task = terminalBenchTaskSchema.parse({
+			...fixture(),
+			artifacts: [
+				"/results/output.csv",
+				{ source: "/audit/log.jsonl", service: "legacy-app" },
+				{ source: "/workspace/app", exclude: ["node_modules"] },
+			],
+			collectCommands: [{ command: "true", service: "loadgen" }],
+			resources: { cpus: 2, memoryMb: 4096, storageMb: 20480 },
+		});
+		expect(task.artifacts).toEqual([
+			{ source: "/results/output.csv", service: "main", exclude: [] },
+			{ source: "/audit/log.jsonl", service: "legacy-app", exclude: [] },
+			{ source: "/workspace/app", service: "main", exclude: ["node_modules"] },
+		]);
+	});
+	it("allows only ptrace as an added task capability", () => {
+		const task = fixture();
+		const main = (
+			task.compose.services as Record<string, Record<string, unknown>>
+		).main;
+		main.cap_add = ["SYS_PTRACE"];
+		expect(() => terminalBenchCompose(task)).not.toThrow();
+		main.cap_add = ["SYS_ADMIN"];
+		expect(() => terminalBenchCompose(task)).toThrow();
+	});
 	it("quotes model shell text inside the isolated container command", () => {
 		const command = terminalBenchExecCommand("echo 'hello'; $(id)", 1500);
 		expect(command).toContain("'--user' 'root' 'main'");
