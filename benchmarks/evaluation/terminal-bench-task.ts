@@ -48,6 +48,20 @@ export async function loadTerminalBenchTask(taskPath: string) {
 			storageMb: config.environment.storage_mb,
 		},
 		agentTimeoutSeconds: config.agent.timeout_sec,
+		collectCommands: (
+			(config.verifier.collect ?? []) as {
+				command?: unknown;
+				service?: unknown;
+			}[]
+		).map((step) => {
+			if (step.service && step.service !== "main")
+				throw new Error(
+					"Collection steps outside the main service are unsupported.",
+				);
+			if (typeof step.command !== "string")
+				throw new Error("Collection step has no command.");
+			return step.command;
+		}),
 		verifierMode: config.verifier.environment_mode,
 		sourceSha256: createHash("sha256")
 			.update(bytes)
