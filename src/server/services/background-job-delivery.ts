@@ -9,6 +9,7 @@ import {
 	dispatchBackgroundJob,
 } from "../adapters/background-job-dispatch";
 import { sessionsAwaitingCheckpoint } from "../adapters/checkpoints/records";
+import { checkpointStorageConfigured } from "../adapters/checkpoints/storage";
 import { readFreestyleApiKey } from "../adapters/freestyle/api-key";
 import { observeFleetCosts } from "../adapters/freestyle/fleet-costs";
 import { reconcileInfrastructureVms } from "../adapters/freestyle/usage-admission";
@@ -55,7 +56,7 @@ export async function deliverBackgroundJob(
 					await relayConversationDeliveriesOnce();
 					break;
 				case "checkpoints":
-					if (process.env.SUPABASE_STORAGE_SERVICE_KEY)
+					if (checkpointStorageConfigured())
 						for (const session of await sessionsAwaitingCheckpoint())
 							await enqueueSessionCheckpoint(session.user_id, session.id);
 					break;

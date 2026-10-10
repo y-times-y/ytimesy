@@ -13,6 +13,7 @@ import type {
 	CodexRuntime,
 	WorkspaceMachines,
 } from "#/server/services/workspace-machines";
+import { checkpointStorageConfigured } from "../checkpoints/storage";
 import {
 	CHEAP_BASE_SNAPSHOT,
 	PRODUCT_IDLE_TIMEOUT_SECONDS,
@@ -187,7 +188,7 @@ async function resolveRuntime(
 		: null;
 	let { vms } = await client.vms.list({ slug, limit: 1 });
 	const checkpoint =
-		input.provision && process.env.SUPABASE_STORAGE_SERVICE_KEY
+		input.provision && checkpointStorageConfigured()
 			? await checkpointForSession(input.userId, input.sessionId)
 			: null;
 	if (!vms.length && sourceBinding && !checkpoint)

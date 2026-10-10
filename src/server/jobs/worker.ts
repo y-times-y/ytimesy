@@ -12,6 +12,7 @@ import {
 import { recoverInterruptedTaskIntegrations } from "../adapters/agent-task-events";
 import { claimApiTurn, expireApiTurnLeases } from "../adapters/api-turns";
 import { sessionsAwaitingCheckpoint } from "../adapters/checkpoints/records";
+import { checkpointStorageConfigured } from "../adapters/checkpoints/storage";
 import { closeDatabase } from "../adapters/database";
 import { readFreestyleApiKey } from "../adapters/freestyle/api-key";
 import { observeFleetCosts } from "../adapters/freestyle/fleet-costs";
@@ -113,7 +114,7 @@ export async function startWorkspaceWorker(machines?: WorkspaceMachines) {
 		SESSION_CHECKPOINT_QUEUE,
 		{ localConcurrency: 1 },
 		async ([job]) => {
-			if (!process.env.SUPABASE_STORAGE_SERVICE_KEY) return;
+			if (!checkpointStorageConfigured()) return;
 			if (!job.data.userId || !job.data.sessionId) {
 				for (const session of await sessionsAwaitingCheckpoint())
 					await queue.send(
@@ -130,7 +131,7 @@ export async function startWorkspaceWorker(machines?: WorkspaceMachines) {
 			);
 		},
 	);
-	if (process.env.SUPABASE_STORAGE_SERVICE_KEY)
+	if (checkpointStorageConfigured())
 		await queue.schedule(
 			SESSION_CHECKPOINT_QUEUE,
 			"* * * * *",
