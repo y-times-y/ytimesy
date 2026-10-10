@@ -9,6 +9,10 @@ import {
 import { evaluationBuilderContext } from "../benchmarks/evaluation/builder-context";
 import { evaluationBuilderTools } from "../benchmarks/evaluation/builder-tools";
 import { localContextArchives } from "../benchmarks/evaluation/local-context-archives";
+import {
+	estimatedSolCostUsd,
+	openAiSolRuntime,
+} from "../benchmarks/evaluation/openai-sol";
 import { createOperatorEvaluationDatabase } from "../benchmarks/evaluation/operator-database";
 import {
 	type EvaluationRequestObservation,
@@ -40,11 +44,12 @@ if (!taskPath || !outputPath || !["preflight", "run"].includes(mode))
 	throw new Error("Specify original task, private output, and preflight/run.");
 // Each arm keeps its own billing approval; the Codex arm's frozen limits are unchanged.
 const route =
-	process.env.YTIMESY_EVALUATION_ROUTE === "bedrock-opus"
-		? "bedrock-opus"
-		: "codex-subscription";
+	(["bedrock-opus", "openai-sol"] as const).find(
+		(candidate) => candidate === process.env.YTIMESY_EVALUATION_ROUTE,
+	) ?? "codex-subscription";
 if (mode === "run" && process.env.YTIMESY_EVALUATION_APPROVED !== route)
 	throw new Error(`Evaluation approval for ${route} required.`);
+const trialUsdCap = Number(process.env.YTIMESY_EVALUATION_TRIAL_USD_CAP ?? 20);
 const arm =
 	route === "bedrock-opus"
 		? {
@@ -52,15 +57,23 @@ const arm =
 				billing: "aws-bedrock",
 				requestLimit: 400,
 				tokenLimit: null,
-				usdCap: Number(process.env.YTIMESY_EVALUATION_TRIAL_USD_CAP ?? 20),
+				usdCap: trialUsdCap,
 			}
-		: {
-				modelId: "gpt-6.1-sol",
-				billing: "codex-subscription",
-				requestLimit: 128,
-				tokenLimit: 4000000,
-				usdCap: null,
-			};
+		: route === "openai-sol"
+			? {
+					modelId: "gpt-6.1-sol",
+					billing: "openai-api",
+					requestLimit: 400,
+					tokenLimit: null,
+					usdCap: trialUsdCap,
+				}
+			: {
+					modelId: "gpt-6.1-sol",
+					billing: "codex-subscription",
+					requestLimit: 128,
+					tokenLimit: 4000000,
+					usdCap: null,
+				};
 if (arm.usdCap !== null && !(arm.usdCap > 0 && arm.usdCap <= 100))
 	throw new Error("Trial spending cap must be between $0 and $100.");
 const output = resolve(outputPath);
@@ -136,7 +149,7 @@ try {
 	await bridge.machines.ensureRunning(prepared.vmId);
 	// The Opus arm uses the task's official agent limit, as the public run did.
 	const timeoutSeconds =
-		route === "bedrock-opus" ? (task.agentTimeoutSeconds ?? 1800) : 1800;
+		route === "codex-subscription" ? 1800 : (task.agentTimeoutSeconds ?? 1800);
 	const signal = AbortSignal.any([
 		stop.signal,
 		AbortSignal.timeout(timeoutSeconds * 1000),
@@ -195,13 +208,19 @@ try {
 		const runtime: ModelAgentRuntime =
 			route === "bedrock-opus"
 				? await bedrockClaudeRuntime({ modelId: arm.modelId, effort: "max" })
-				: await codexSubscriptionModel(
-						local.userId,
-						"gpt-6.1-sol",
-						"max",
-						false,
-						workspace.sessionId,
-					);
+				: route === "openai-sol"
+					? await openAiSolRuntime({
+							modelId: arm.modelId,
+							effort: "max",
+							cacheScope: workspace.sessionId,
+						})
+					: await codexSubscriptionModel(
+							local.userId,
+							"gpt-6.1-sol",
+							"max",
+							false,
+							workspace.sessionId,
+						);
 		const model = runtime.model;
 		if (typeof model === "string")
 			throw new Error("Expected a concrete subscription transport.");
@@ -212,9 +231,11 @@ try {
 					return async (...args: unknown[]) => {
 						signal.throwIfAborted();
 						const tokens = evaluationObservedTokens(events);
-						const estimatedUsd = estimatedOpusCostUsd(
-							evaluationTokenUsage(events),
-						);
+						const estimatedUsd = (
+							route === "openai-sol"
+								? estimatedSolCostUsd
+								: estimatedOpusCostUsd
+						)(evaluationTokenUsage(events));
 						if (
 							requests >= arm.requestLimit ||
 							(arm.tokenLimit !== null && tokens >= arm.tokenLimit) ||
@@ -240,7 +261,7 @@ try {
 			},
 		});
 		// Rebind native compaction to the guarded transport so its requests count too.
-		if (route === "codex-subscription" && runtime.requestSettings)
+		if (route !== "bedrock-opus" && runtime.requestSettings)
 			runtime.compact = nativeModelCompactor(
 				runtime.model,
 				"openai",
