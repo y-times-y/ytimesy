@@ -1498,3 +1498,87 @@ it("recognizes only a trailing commentary message without tool calls as unfinish
 		]),
 	).toBe(false);
 });
+
+function droppedConnection() {
+	const timeout = Object.assign(new Error("read ETIMEDOUT"), {
+		code: "ETIMEDOUT",
+	});
+	return new APICallError({
+		message: "Failed to process successful response",
+		url: "https://chatgpt.com/backend-api/codex/responses",
+		requestBodyValues: {},
+		statusCode: 200,
+		cause: new TypeError("terminated", { cause: timeout }),
+	});
+}
+
+it("resumes from the last completed step when the connection drops before any tool call", async () => {
+	let call = 0;
+	const model = new MockLanguageModelV4({
+		doStream: async () =>
+			call++ === 0
+				? stream([
+						{ type: "reasoning-start", id: "r" },
+						{ type: "reasoning-delta", id: "r", delta: "Thinking" },
+						{ type: "error", error: droppedConnection() },
+					])
+				: stream([
+						{ type: "text-start", id: "a" },
+						{ type: "text-delta", id: "a", delta: "Done." },
+						{ type: "text-end", id: "a" },
+						finish,
+					]),
+	});
+	const messages = await runModelAgent(
+		{
+			userId: "alice",
+			modelId: "gpt-6.1-sol",
+			instructions: "Implement",
+			messages: [{ role: "user", content: "Fixture" }],
+			tools: {},
+			signal: new AbortController().signal,
+			onEvent: async () => {},
+			onStep: async () => {},
+		},
+		{ model },
+	);
+	expect(call).toBe(2);
+	expect(JSON.stringify(messages)).toContain("Done.");
+});
+
+it("does not resample a step whose tool call already started", async () => {
+	let call = 0;
+	const execute = vi.fn(async () => "ran");
+	const model = new MockLanguageModelV4({
+		doStream: async () => {
+			call++;
+			return stream([
+				{
+					type: "tool-call",
+					toolCallId: "c1",
+					toolName: "write",
+					input: "{}",
+				},
+				{ type: "error", error: droppedConnection() },
+			]);
+		},
+	});
+	await expect(
+		runModelAgent(
+			{
+				userId: "alice",
+				modelId: "gpt-6.1-sol",
+				instructions: "Implement",
+				messages: [{ role: "user", content: "Fixture" }],
+				tools: {
+					write: tool({ inputSchema: z.object({}), execute }),
+				},
+				signal: new AbortController().signal,
+				onEvent: async () => {},
+				onStep: async () => {},
+			},
+			{ model },
+		),
+	).rejects.toThrow();
+	expect(call).toBe(1);
+});
