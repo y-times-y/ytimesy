@@ -28,6 +28,7 @@ import {
 import type { ApiAgentEvent } from "../src/domain/api-agent-event";
 import { apiModelFailureClassification } from "../src/domain/api-turn-failure";
 import type { HarnessModelMetric } from "../src/domain/harness-performance";
+import { posixShellQuoted as quote } from "../src/domain/posix-command";
 import { codexSubscriptionModel } from "../src/server/adapters/codex-subscription";
 import {
 	archiveModelContext,
@@ -42,7 +43,7 @@ import { runModelAgent } from "../src/server/services/model-agent-loop";
 const [taskPath, outputPath, mode] = process.argv.slice(2);
 if (!taskPath || !outputPath || !["preflight", "run"].includes(mode))
 	throw new Error("Specify original task, private output, and preflight/run.");
-// Each arm keeps its own billing approval; the Codex arm's frozen limits are unchanged.
+// Each arm keeps its own billing approval.
 const route =
 	(["bedrock-opus", "openai-sol"] as const).find(
 		(candidate) => candidate === process.env.YTIMESY_EVALUATION_ROUTE,
@@ -68,10 +69,11 @@ const arm =
 					usdCap: trialUsdCap,
 				}
 			: {
+					// Same limits as the API arm, so either transport measures one harness.
 					modelId: "gpt-6.1-sol",
 					billing: "codex-subscription",
-					requestLimit: 128,
-					tokenLimit: 4000000,
+					requestLimit: 400,
+					tokenLimit: null,
 					usdCap: null,
 				};
 if (arm.usdCap !== null && !(arm.usdCap > 0 && arm.usdCap <= 100))
@@ -147,9 +149,8 @@ try {
 	const prepared = await bridge.prepare(task);
 	console.log(`${task.id}: pinned task guest prepared.`);
 	await bridge.machines.ensureRunning(prepared.vmId);
-	// The Opus arm uses the task's official agent limit, as the public run did.
-	const timeoutSeconds =
-		route === "codex-subscription" ? 1800 : (task.agentTimeoutSeconds ?? 1800);
+	// Every arm uses the task's official agent limit, as the public runs did.
+	const timeoutSeconds = task.agentTimeoutSeconds ?? 1800;
 	const signal = AbortSignal.any([
 		stop.signal,
 		AbortSignal.timeout(timeoutSeconds * 1000),
@@ -219,7 +220,7 @@ try {
 	});
 	const pristine = await bridge.machines.exec(
 		prepared.vmId,
-		"cd /app && git status --porcelain",
+		`cd ${quote(prepared.cwd)} && git status --porcelain`,
 		15000,
 	);
 	if (pristine.exitCode || pristine.stdout.trim())
