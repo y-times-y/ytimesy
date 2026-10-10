@@ -130,13 +130,18 @@ for instruction in instructions:
     if instruction['nextStart'] is None and known_documents.get(instruction['path']) == instruction['sha256']:
         del instruction['content']
         instruction['alreadyInContext'] = True
-print(json.dumps({'scope': scope.relative_to(root).as_posix(), 'revision': revision.stdout.strip() if revision.returncode == 0 else None, 'instructions': instructions, 'referencedDocuments': documents, 'configuration': configuration, 'documentLimitReached': document_limit_reached, 'skills': skills, 'skillLimitReached': len(skills) == 100, 'scopeFiles': scope_files, 'scopeFilesTruncated': inventory_truncated}, ensure_ascii=False))`;
+# Every nested instruction file, so a model need not probe directories for them.
+listed = subprocess.run(['git', '-C', str(root), 'ls-files', '-co', '--exclude-standard', '--', '*AGENTS.md', '*CLAUDE.md'], capture_output=True, text=True, timeout=10)
+nested = sorted(line for line in listed.stdout.splitlines() if '/' in line and pathlib.PurePosixPath(line).name in ('AGENTS.md', 'CLAUDE.md')) if listed.returncode == 0 else None
+print(json.dumps({'scope': scope.relative_to(root).as_posix(), 'revision': revision.stdout.strip() if revision.returncode == 0 else None, 'nestedInstructionFiles': nested[:50] if nested is not None else None, 'nestedInstructionFilesTruncated': nested is not None and len(nested) > 50, 'instructions': instructions, 'referencedDocuments': documents, 'configuration': configuration, 'documentLimitReached': document_limit_reached, 'skills': skills, 'skillLimitReached': len(skills) == 100, 'scopeFiles': scope_files, 'scopeFilesTruncated': inventory_truncated}, ensure_ascii=False))`;
 
 type GuidancePacket = {
 	scope: string;
 	scopeFiles: string[];
 	scopeFilesTruncated: boolean;
 	revision: string | null;
+	nestedInstructionFiles: string[] | null;
+	nestedInstructionFilesTruncated: boolean;
 	instructions: {
 		path: string;
 		sha256: string;
@@ -289,7 +294,7 @@ export function repositoryGuidanceTool(
 ) {
 	return tool({
 		description:
-			"Read root and ancestor AGENTS.md/CLAUDE.md instructions for a repository-relative scope, plus available skill names and descriptions. Prefetches up to eight documents referenced by simple inline local .md links in those instructions, bounded to 128,000 total characters, without recursion or network access. Check referencedDocuments and nextStart before rereading a document: complete bodies are already supplied. Unreferenced skills stay deferred; read matching skill bodies when needed. This is not exhaustive Markdown link parsing; follow other required references yourself. Call before implementation; nested instructions apply only to their directory. Source hashes and revision describe this checkout. Follow every required incomplete page with read_file; documentLimitReached means additional links were not prefetched. Includes bounded root package/build/test/format configuration (32,000 total characters) with hashes and continuation cursors; configuration previews are not full bodies when nextStart is non-null. alreadyInContext marks only matching complete bodies still in the current transcript.",
+			"Read root and ancestor AGENTS.md/CLAUDE.md instructions for a repository-relative scope, plus available skill names and descriptions. Prefetches up to eight documents referenced by simple inline local .md links in those instructions, bounded to 128,000 total characters, without recursion or network access. Check referencedDocuments and nextStart before rereading a document: complete bodies are already supplied. Unreferenced skills stay deferred; read matching skill bodies when needed. This is not exhaustive Markdown link parsing; follow other required references yourself. Call before implementation; nested instructions apply only to their directory. nestedInstructionFiles lists every nested AGENTS.md/CLAUDE.md in the repository (null when unknown): read a nested scope only for a listed path; an empty list means no other directory has guidance. Source hashes and revision describe this checkout. Follow every required incomplete page with read_file; documentLimitReached means additional links were not prefetched. Includes bounded root package/build/test/format configuration (32,000 total characters) with hashes and continuation cursors; configuration previews are not full bodies when nextStart is non-null. alreadyInContext marks only matching complete bodies still in the current transcript.",
 		inputSchema: z.object({ scope: z.string().min(1).max(2048).default(".") }),
 		execute: async ({ scope = "." }, options) => {
 			input.signal.throwIfAborted();

@@ -120,7 +120,7 @@ it("gives a shell-shaped surface shell guidance without naming tools it was not 
 		"view_image",
 		"read_repository_guidance",
 	]);
-	expect(instructions).toContain("v11-shell");
+	expect(instructions).toContain("v12-shell");
 	expect(instructions).toContain("reproduce the problem");
 	for (const absent of ["run_checks", "inspect_changes", "compose_tools"])
 		expect(instructions).not.toContain(absent);
