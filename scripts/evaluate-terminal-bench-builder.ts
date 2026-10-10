@@ -157,7 +157,7 @@ try {
 	const workspace = {
 		machines: bridge.machines,
 		vm: prepared.vmId,
-		cwd: "/app",
+		cwd: prepared.cwd,
 		signal,
 		sessionId,
 		turnId: randomUUID(),

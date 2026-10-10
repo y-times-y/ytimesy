@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { terminalBenchCompose } from "../benchmarks/evaluation/terminal-bench-machines";
 import { loadTerminalBenchTask } from "../benchmarks/evaluation/terminal-bench-task";
 
 /**
@@ -60,7 +61,9 @@ for (const id of (await readdir(tasksRoot)).sort()) {
 		excluded[id] = "Codex trial duration";
 	else {
 		try {
-			await loadTerminalBenchTask(resolve(tasksRoot, id));
+			terminalBenchCompose(
+				(await loadTerminalBenchTask(resolve(tasksRoot, id))).task,
+			);
 		} catch {
 			excluded[id] = "unsupported by evaluator";
 			continue;

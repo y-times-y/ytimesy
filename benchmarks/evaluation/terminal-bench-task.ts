@@ -24,6 +24,9 @@ export async function loadTerminalBenchTask(taskPath: string) {
 		),
 	);
 	const instruction = config.instruction as string;
+	// Guests have no accelerators; a GPU task would fail for the wrong reason.
+	if ((config.environment.gpus ?? 0) > 0)
+		throw new Error("GPU tasks are unsupported.");
 	let compose: Record<string, unknown>;
 	try {
 		compose = parse(
@@ -53,15 +56,10 @@ export async function loadTerminalBenchTask(taskPath: string) {
 				command?: unknown;
 				service?: unknown;
 			}[]
-		).map((step) => {
-			if (step.service && step.service !== "main")
-				throw new Error(
-					"Collection steps outside the main service are unsupported.",
-				);
-			if (typeof step.command !== "string")
-				throw new Error("Collection step has no command.");
-			return step.command;
-		}),
+		).map((step) => ({
+			command: step.command,
+			service: step.service ?? "main",
+		})),
 		verifierMode: config.verifier.environment_mode,
 		sourceSha256: createHash("sha256")
 			.update(bytes)

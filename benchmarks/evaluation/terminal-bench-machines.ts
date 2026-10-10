@@ -19,27 +19,68 @@ import type {
 import { terminalBenchHostCommand } from "./terminal-bench-host-command";
 
 const pinnedImage = z.string().regex(/^[\w./:-]+@sha256:[a-f0-9]{64}$/);
+// The grader replaces each artifact path before restoring it, so whole system
+// directories are refused; any task-owned absolute path is accepted.
+const SYSTEM_DIRECTORIES = new Set(
+	"bin boot dev etc lib lib64 proc root run sbin sys usr var".split(" "),
+);
 const artifactPath = z
 	.string()
-	// Tasks export from the working tree or from /tmp (e.g. a submitted patch).
-	.regex(/^\/(?:app|tmp)(?:\/[\w./-]*)?\/?$/)
-	.refine((path) => !path.split("/").includes(".."));
+	.regex(/^\/[\w./-]+$/)
+	.refine((path) => !path.split("/").includes(".."))
+	.refine((path) => {
+		const parts = path.split("/").filter(Boolean);
+		return parts.length > 1 || !SYSTEM_DIRECTORIES.has(parts[0] ?? "");
+	});
+const serviceName = z.string().regex(/^[a-z0-9-]+$/);
+// Harbor's form: a path in main, or { source, service, exclude }. Every entry
+// is restored at its source path in the grader, whichever service produced it.
+const artifact = z
+	.union([
+		artifactPath,
+		z.object({
+			source: artifactPath,
+			service: serviceName.optional(),
+			exclude: z
+				.array(z.string().regex(/^[^\0\n]+$/))
+				.max(32)
+				.optional(),
+			destination: z.string().optional(),
+		}),
+	])
+	.transform((entry) =>
+		typeof entry === "string"
+			? { source: entry, service: "main", exclude: [] as string[] }
+			: {
+					source: entry.source,
+					service: entry.service ?? "main",
+					exclude: entry.exclude ?? [],
+				},
+	);
+export type TerminalBenchArtifact = z.output<typeof artifact>;
 export const terminalBenchTaskSchema = z
 	.object({
 		id: z.string().regex(/^[a-z0-9-]+$/),
 		instruction: z.string().min(1),
 		image: pinnedImage,
-		artifacts: z.array(artifactPath).min(1),
+		artifacts: z.array(artifact).min(1),
 		compose: z.record(z.string(), z.unknown()),
-		// Tasks declare their own size; VMs are resized to match (within a cap).
+		// Tasks declare their own size; VMs grow to match (within a cap).
 		resources: z.object({
 			cpus: z.number().int().min(1).max(8),
 			memoryMb: z.number().int().min(1024).max(16384),
-			storageMb: z.number().int().min(10240).max(16384),
+			storageMb: z.number().int().min(1024).max(51200),
 		}),
 		agentTimeoutSeconds: z.number().int().positive().max(28800),
 		// Harbor's agent-side [[verifier.collect]] steps (e.g. diff into a patch).
-		collectCommands: z.array(z.string().min(1).max(8000)).max(8),
+		collectCommands: z
+			.array(
+				z.object({
+					command: z.string().min(1).max(8000),
+					service: serviceName,
+				}),
+			)
+			.max(8),
 		verifierMode: z.literal("separate"),
 		sourceSha256: z.string().regex(/^[a-f0-9]{64}$/),
 	})
@@ -84,6 +125,10 @@ export function terminalBenchCompose(task: TerminalBenchTask) {
 			"working_dir",
 			"stdin_open",
 			"tty",
+			// Resource hints for the task's own containers; no host authority.
+			"shm_size",
+			"cpus",
+			"cap_add",
 		]);
 		if (Object.keys(service).some((key) => !allowed.has(key)))
 			throw new Error(`Unsupported task service configuration: ${name}`);
@@ -94,7 +139,9 @@ export function terminalBenchCompose(task: TerminalBenchTask) {
 			service.ports ||
 			service.privileged ||
 			service.devices ||
-			service.cap_add ||
+			// Debugging a live task process needs ptrace inside its own container.
+			(service.cap_add !== undefined &&
+				JSON.stringify(service.cap_add) !== '["SYS_PTRACE"]') ||
 			service.pid ||
 			service.ipc ||
 			service.userns_mode
@@ -242,19 +289,21 @@ export function createTerminalBenchMachines(input: {
 		vmIds.add(created.vmId);
 		await persist();
 		const data = await waitUntilVmRunning(created.vm, "Terminal-Bench VM");
-		// Match the task's declared CPU and memory, as production resizes copies.
+		// Match the task's declared size, as production resizes copies. Disk only
+		// grows, and only while running; the guest holds images and the task.
 		const target = {
 			cpu: Math.max(data.resources.cpu, requested?.cpus ?? 0),
 			memory: Math.max(data.resources.memory, requested?.memoryMb ?? 0),
-			storage: data.resources.storage,
+			storage: Math.max(data.resources.storage, requested?.storageMb ?? 0),
 		};
+		if (target.cpu > 8 || target.memory > 16384 || target.storage > 51200)
+			throw new Error("Task VM exceeds the evaluation resource envelope.");
 		if (
 			target.cpu !== data.resources.cpu ||
-			target.memory !== data.resources.memory
+			target.memory !== data.resources.memory ||
+			target.storage !== data.resources.storage
 		)
 			await created.vm.resize(target);
-		if (target.cpu > 8 || target.memory > 16384 || target.storage > 16384)
-			throw new Error("Task VM exceeds the evaluation resource envelope.");
 		return WorkspaceId(created.vmId);
 	}
 	const unsupported = async (): Promise<never> => {
@@ -364,6 +413,8 @@ export function createTerminalBenchMachines(input: {
 		const installed = await machines.exec(
 			id,
 			`set -eu
+# The image's working directory is the project; images rooted at / use /app.
+project=$(pwd)
 ${terminalBenchShellPrerequisites}
 if ! command -v node >/dev/null; then
  curl -fsSL https://nodejs.org/dist/v22.20.0/node-v22.20.0-linux-x64.tar.xz -o /tmp/ytimesy-node.tar.xz
@@ -373,7 +424,8 @@ if ! command -v node >/dev/null; then
  tar -xJf /tmp/ytimesy-node.tar.xz -C /usr/local --strip-components=1
  rm /tmp/ytimesy-node.tar.xz
 fi
-cd /app
+if [ "$project" = / ]; then project=/app; mkdir -p /app; fi
+cd "$project"
 git init --initial-branch=evaluation-frozen
 git config user.name 'Evaluation fixture'
 git config user.email 'evaluation@ytimesy.invalid'
@@ -384,8 +436,9 @@ git commit --allow-empty -m 'Frozen benchmark environment'
 git update-ref refs/ytimesy/base HEAD
 git remote add origin ${quote(`https://github.com/terminal-bench/${task.id}.git`)}
 mkdir -p "$HOME"
-ln -s /app "$HOME/${task.id}"
-printf '/app\n' > /tmp/ytimesy-project-cwd
+ln -s "$project" "$HOME/${task.id}"
+printf '%s\n' "$project" > /tmp/ytimesy-project-cwd
+printf '%s\n' "$project"
 git rev-parse HEAD`,
 			300000,
 		);
@@ -393,40 +446,81 @@ git rev-parse HEAD`,
 			throw new Error(
 				`Task harness prerequisites failed: ${installed.stderr.slice(-1200)}`,
 			);
-		const commit = installed.stdout.trim().split("\n").at(-1) as string;
-		if (!/^[a-f0-9]{40}$/.test(commit))
+		const [cwd, commit] = installed.stdout.trim().split("\n").slice(-2) as [
+			string,
+			string,
+		];
+		if (!/^[a-f0-9]{40}$/.test(commit) || !/^\/[\w./-]*$/.test(cwd))
 			throw new Error("Frozen task checkout is unavailable.");
 		const snapshotId = await machines.snapshotEnvironment(
 			id,
 			`ytimesy-tbench-${randomUUID()}`,
 		);
 		await owned(id).pause();
-		return { vmId: id, snapshotId, commit };
+		return { vmId: id, snapshotId, commit, cwd };
 	}
 	async function exportArtifacts(
 		id: string,
-		paths: readonly string[],
-		collectCommands: readonly string[] = [],
+		artifacts: readonly TerminalBenchArtifact[],
+		collectCommands: TerminalBenchTask["collectCommands"] = [],
 	) {
-		for (const path of paths) artifactPath.parse(path);
 		// Run the task's own collection steps first, as Harbor does before export.
-		for (const command of collectCommands) {
-			const collected = await machines.exec(
-				WorkspaceId(id),
-				`bash -lc ${quote(command)}`,
-				120000,
-			);
+		for (const step of collectCommands) {
+			const collected =
+				step.service === "main"
+					? await machines.exec(
+							WorkspaceId(id),
+							`bash -lc ${quote(step.command)}`,
+							120000,
+						)
+					: await hostExec(
+							id,
+							posixShellCommand([
+								...composeArguments,
+								"exec",
+								"-T",
+								"--user",
+								"root",
+								step.service,
+								"sh",
+								"-c",
+								step.command,
+							]),
+							120000,
+						);
 			if (collected.exitCode)
 				throw new Error("Task artifact collection failed.");
 		}
+		// Copy each entry out of the service that produced it into one tree that
+		// mirrors source paths. Missing entries are skipped, as Harbor does; the
+		// grader then judges their absence.
+		const stage = "/home/ubuntu/terminal-bench-stage";
 		const remote = "/home/ubuntu/terminal-bench-artifacts.tar.gz";
-		const tar = `tar --exclude=.git --exclude=.ytimesy -czf /tmp/ytimesy-benchmark-artifacts.tar.gz -C / ${paths.map((path) => quote(path.replace(/^\//, ""))).join(" ")}`;
-		const result = await machines.exec(WorkspaceId(id), tar, 60000);
-		if (result.exitCode) throw new Error("Task artifact capture failed.");
+		const copies = artifacts.map((entry) => {
+			artifactPath.parse(entry.source);
+			const source = entry.source.replace(/\/+$/, "");
+			const parent = `${stage}${source.slice(0, source.lastIndexOf("/"))}`;
+			const excludes = [".git", ".ytimesy", ...entry.exclude]
+				.map((pattern) => `--exclude=${quote(pattern)}`)
+				.join(" ");
+			return `container=$(${posixShellCommand([...composeArguments, "ps", "-q", entry.service])})
+sudo mkdir -p ${quote(parent)}
+sudo docker cp "$container:"${quote(source)} - | sudo tar -x -C ${quote(parent)} ${excludes} || echo ${quote(`artifact unavailable: ${source}`)} >&2`;
+		});
 		await checkedHostExec(
 			id,
-			`container=$(sudo docker compose --project-name ytimesy-bench -f /home/ubuntu/terminal-bench-compose.json ps -q main)\nsudo docker cp "$container:/tmp/ytimesy-benchmark-artifacts.tar.gz" ${quote(remote)}\nsudo chown ubuntu:ubuntu ${quote(remote)}\ntest "$(stat -c %s ${quote(remote)})" -le 67108864`,
-			60000,
+			`set -u -o pipefail
+sudo rm -rf ${quote(stage)} && mkdir -p ${quote(stage)}
+${copies.join("\n")}
+cd ${quote(stage)}
+set --
+for entry in ${artifacts.map((entry) => quote(entry.source.replace(/^\/+|\/+$/g, ""))).join(" ")}; do
+  if sudo test -e "$entry" || sudo test -L "$entry"; then set -- "$@" "$entry"; fi
+done
+sudo tar -czf ${quote(remote)} --files-from=/dev/null "$@"
+sudo chown ubuntu:ubuntu ${quote(remote)}
+test "$(stat -c %s ${quote(remote)})" -le 67108864`,
+			120000,
 		);
 		return owned(id).fs.readFile(remote);
 	}
@@ -460,9 +554,11 @@ git rev-parse HEAD`,
 	async function restoreArtifacts(
 		id: string,
 		bytes: Uint8Array,
-		paths: readonly string[],
+		artifacts: readonly TerminalBenchArtifact[],
 	) {
-		for (const path of paths) artifactPath.parse(path);
+		const paths = artifacts.map((entry) =>
+			artifactPath.parse(entry.source.replace(/\/+$/, "")),
+		);
 		await copyArchive(id, bytes);
 		const code =
 			"import json,pathlib,shutil,sys,tarfile; allowed=json.loads(sys.argv[1]); a=tarfile.open('/tmp/ytimesy-evaluator-input.tar.gz'); members=a.getmembers(); assert all(not pathlib.PurePosixPath(m.name).is_absolute() and '..' not in pathlib.PurePosixPath(m.name).parts and (m.isfile() or m.isdir()) and any('/'+m.name.rstrip('/')==p.rstrip('/') or ('/'+m.name).startswith(p.rstrip('/')+'/') for p in allowed) for m in members), 'Unsafe task artifact'; [(shutil.rmtree(p) if p.is_dir() and not p.is_symlink() else p.unlink()) for s in allowed if (p:=pathlib.Path(s)).exists() or p.is_symlink()]; a.extractall('/',members=members)";
