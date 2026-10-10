@@ -10,7 +10,7 @@ import {
 	runApiAgent,
 	runModelAgent,
 } from "./api-agent-runtime";
-import { runModelAgentStep } from "./model-agent-loop";
+import { endsWithCommentary, runModelAgentStep } from "./model-agent-loop";
 import { verifyApiModel } from "./model-connections";
 
 const mocks = vi.hoisted(() => ({
@@ -1402,4 +1402,89 @@ it("sends the requested reasoning effort to Anthropic models instead of their de
 	expect(model.doStreamCalls[0]?.providerOptions?.anthropic).toMatchObject({
 		effort: "max",
 	});
+});
+
+it("keeps sampling after a commentary progress note until the final answer", async () => {
+	const responses = [
+		[
+			{
+				type: "text-start" as const,
+				id: "note",
+				providerMetadata: { openai: { itemId: "note", phase: "commentary" } },
+			},
+			{ type: "text-delta" as const, id: "note", delta: "I'll build it next." },
+			{
+				type: "text-end" as const,
+				id: "note",
+				providerMetadata: { openai: { itemId: "note", phase: "commentary" } },
+			},
+			finish,
+		],
+		[
+			{
+				type: "text-start" as const,
+				id: "answer",
+				providerMetadata: {
+					openai: { itemId: "answer", phase: "final_answer" },
+				},
+			},
+			{ type: "text-delta" as const, id: "answer", delta: "Done." },
+			{
+				type: "text-end" as const,
+				id: "answer",
+				providerMetadata: {
+					openai: { itemId: "answer", phase: "final_answer" },
+				},
+			},
+			finish,
+		],
+	];
+	let call = 0;
+	const model = new MockLanguageModelV4({
+		doStream: async () => stream(responses[Math.min(call++, 1)]),
+	});
+	const messages = await runModelAgent(
+		{
+			userId: "alice",
+			modelId: "gpt-6.1-sol",
+			instructions: "Implement",
+			messages: [{ role: "user", content: "Fixture" }],
+			tools: {},
+			signal: new AbortController().signal,
+			onEvent: async () => {},
+			onStep: async () => {},
+		},
+		{ model },
+	);
+	expect(call).toBe(2);
+	expect(JSON.stringify(messages)).toContain("Done.");
+});
+
+it("recognizes only a trailing commentary message without tool calls as unfinished", () => {
+	const note = (phase: string) => ({
+		role: "assistant" as const,
+		content: [
+			{
+				type: "text" as const,
+				text: "x",
+				providerOptions: { openai: { phase } },
+			},
+		],
+	});
+	expect(endsWithCommentary([note("commentary")])).toBe(true);
+	expect(endsWithCommentary([note("final_answer")])).toBe(false);
+	expect(endsWithCommentary([{ role: "assistant", content: "plain" }])).toBe(
+		false,
+	);
+	expect(
+		endsWithCommentary([
+			{
+				role: "assistant",
+				content: [
+					...note("commentary").content,
+					{ type: "tool-call", toolCallId: "c", toolName: "t", input: {} },
+				],
+			},
+		]),
+	).toBe(false);
 });
