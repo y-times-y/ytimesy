@@ -57,6 +57,7 @@ import {
 import { reserveAgentTaskStart } from "../adapters/agent-capacity";
 import { checkpointForSession } from "../adapters/checkpoints/records";
 import {
+	checkpointStorageConfigured,
 	removeCheckpoint,
 	removeContextArchives,
 } from "../adapters/checkpoints/storage";
@@ -442,7 +443,7 @@ export async function bindAgentSessionMachine(
 		machines,
 		sessionId: session.id,
 		sessionProviderRef: session.providerRef,
-		restoreMissingWorkspace: process.env.SUPABASE_STORAGE_SERVICE_KEY
+		restoreMissingWorkspace: checkpointStorageConfigured()
 			? async (newId) => {
 					const checkpoint = await checkpointForSession(
 						input.userId,
@@ -623,7 +624,7 @@ export async function deleteAgentSessionMachine(
 	const workspace = await workspaceForProject(input.userId, input.projectId);
 	const children = await descendantAgentSessions(input.userId, session.id);
 	for (const removed of [session, ...children]) {
-		if (process.env.SUPABASE_STORAGE_SERVICE_KEY) {
+		if (checkpointStorageConfigured()) {
 			const checkpoint = await checkpointForSession(input.userId, removed.id);
 			if (checkpoint) await removeCheckpoint(checkpoint.object_path);
 			await removeContextArchives(input.userId, removed.id);

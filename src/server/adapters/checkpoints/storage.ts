@@ -2,9 +2,19 @@ import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve, sep } from "node:path";
 import { seal, unseal } from "#/server/auth/token-vault";
+import { r2Configuration, r2Request } from "./r2";
 
 const BUCKET = "ytimesy-checkpoints";
 const MAX_BYTES = 48 * 1024 * 1024;
+
+/** Whether any private checkpoint backend (evaluation disk, R2 or Supabase) is set up. */
+export function checkpointStorageConfigured() {
+	return Boolean(
+		evaluationCheckpointDirectory() ||
+			r2Configuration() ||
+			process.env.SUPABASE_STORAGE_SERVICE_KEY,
+	);
+}
 
 function configuration() {
 	const url = process.env.SUPABASE_STORAGE_URL;
@@ -70,6 +80,9 @@ async function localRequest(
 async function request(path: string, options: RequestInit = {}) {
 	const local = evaluationCheckpointDirectory();
 	if (local) return localRequest(local, path, options);
+	// R2 replaces Supabase Storage when configured: same object paths, no egress fees.
+	const r2 = r2Configuration();
+	if (r2) return r2Request(r2, BUCKET, path, options);
 	const { url, key } = configuration();
 	return fetch(`${url}/storage/v1/${path}`, {
 		...options,

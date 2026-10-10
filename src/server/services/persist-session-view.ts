@@ -37,6 +37,7 @@ import {
 	enqueueAgentTaskEvent,
 	enqueueSessionCheckpoint,
 } from "#/server/jobs/queue";
+import { checkpointStorageConfigured } from "../adapters/checkpoints/storage";
 import type { PublicCodexSession } from "./codex-workspace-session";
 import { captureTurnTransition } from "./turn-analytics";
 import { commitCompletedSessionTurn } from "./turn-commit";
@@ -139,7 +140,7 @@ export async function persistBoundSessionView(
 	const turnStatus = saved?.turnStatus ?? persistTurn ?? session.turnStatus;
 	if (saved) captureTurnTransition(stored, turnStatus, liveItems);
 	if (
-		process.env.SUPABASE_STORAGE_SERVICE_KEY &&
+		checkpointStorageConfigured() &&
 		stored.turnStatus === "running" &&
 		(turnStatus === "completed" || turnStatus === "failed")
 	) {
