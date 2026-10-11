@@ -278,10 +278,12 @@ export function createTerminalBenchMachines(input: {
 					purpose: "terminal-bench-pilot",
 					evaluation_id: input.runId,
 				},
-				ttlSeconds: 5400,
-				autoDeleteSeconds: 5400,
-				maxRunSeconds: 3600,
-				maxRunTotalSeconds: 3600,
+				// Long tasks run past an hour (Codex averages up to 54 min on some);
+				// a 1 h cap stopped a finished agent before its artifacts were exported.
+				ttlSeconds: 14400,
+				autoDeleteSeconds: 14400,
+				maxRunSeconds: 10800,
+				maxRunTotalSeconds: 10800,
 				automaticRestart: false,
 				idleTimeoutSeconds: 180,
 			}),
