@@ -102,3 +102,12 @@ export function serializeAgentTaskToolResponse(
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+
+/** Briefs carry goal, constraints, success checks and key findings; builders read the source themselves. */
+export const TASK_BRIEF_MAX_CHARACTERS = 2500;
+
+export function taskBriefTooLong(prompt: string) {
+	return prompt.length > TASK_BRIEF_MAX_CHARACTERS
+		? `Brief is ${prompt.length} characters; keep it under ${TASK_BRIEF_MAX_CHARACTERS}: goal, constraints, success checks and key findings with paths. Do not restate source the builder will read.`
+		: null;
+}

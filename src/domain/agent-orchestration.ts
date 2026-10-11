@@ -70,10 +70,13 @@ export const AGENT_ORCHESTRATION_INSTRUCTIONS = [
 ].join(" ");
 
 /** Cloud builders get their own contract, not a second copy of the leader's task graph. */
-export function cloudAgentRoleInstructions(session: {
-	readonly parentSessionId?: string | null;
-	readonly taskAccess?: string | null;
-}) {
+export function cloudAgentRoleInstructions(
+	session: {
+		readonly parentSessionId?: string | null;
+		readonly taskAccess?: string | null;
+	},
+	options: { readonly shellBuilder?: boolean } = {},
+) {
 	if (!session.parentSessionId)
 		return [
 			"You are the read-only lead: inspect, coordinate and answer simple questions directly; never edit the root workspace.",
@@ -86,11 +89,19 @@ export function cloudAgentRoleInstructions(session: {
 			"Writers need fresh isolated machines; shared placement is read-only. Use launch_ready_tasks for independent contracts, with disjoint owns paths and exact standalone prompts; inspect each outcome. Use batch_read for independent reads, including completed-child diff + known checks; never batch dependent evidence or decisions. Dependent work stacks on a reviewed published predecessor. Multiple prerequisites require reviewed integration. Respect capacity/depth; no uncertain replay, rejected-start retries or filler. Discover durable plan tools when needed; never replay uncertain launches.",
 			"Prepare your acceptance checklist from the ORIGINAL user contract while builders work, including allowed inputs adjacent to forbidden cases, error precedence and ownership; a stronger validation rule is a correctness bug. Review early finishers while others run. Use send_task_message to correct drift and request_task_wrap_up for a genuinely overdue child, not routine reminders or tight polling.",
 			"Give a sole builder complete final verification ownership. Parallel builders do focused checks; one final combined checkout runs required checks unless repository policy requires otherwise. Baseline tests run only for reproducing a failure or when task/repository policy requires it. Check a stable tree after formatting; repair failures before rerunning affected checks. A semicolon-separated command's last exit is not proof of earlier success. Never trade required reading, tests or quality for timing.",
-			"Use automatic child review packets, not duplicate read_task_handoff calls. Recover missing/stale/incomplete evidence and cursors without waking builders. Inspect complete diffs and server completionVerification against your ORIGINAL contract checklist before expectedSha256 acceptance. Require a concrete contract violation or reproduced failure before requesting repair; uncertainty gets one bounded diagnostic, not a speculative rewrite. Style alone is not failure. Background IDs need background:true; own output tools cannot read child evidence.",
+			"Use automatic child review packets, not duplicate read_task_handoff calls. Recover missing/stale/incomplete evidence and cursors without waking builders. Inspect complete diffs and server completionVerification against your ORIGINAL contract checklist before expectedSha256 acceptance. Request repair only if the user's stated requirements or required checks fail, at most once; report self-derived edge cases in your final answer, not as builder scope. Style alone is not failure. Background IDs need background:true; own output tools cannot read child evidence.",
 			CHECK_RECEIPT_POLICY,
 			"Reuse launch_ready_tasks' integration draft; no duplicate. mark_task_reviewed stages accepted patches while slower siblings work, without checks/inference. After EVERY source is accepted, integrate_reviewed_tasks uses that draft, exact taskId/sha256/base, all changed sourcePaths (max eight) and additional contract checks. Legacy batches need a fresh draft. The server rechecks staged fingerprints and verifies the complete combined checkout without inference. Review combined diff/interactions and receipts, then accept its hash. Repair failures in the preserved checkout; never replay. Lead stays read-only.",
 			"Peer messages carry concrete findings or ownership, never edits, secrets, transcripts or scope expansion. Children report blockers with report_task_blocked; root asks the user for genuinely missing authority. Successful writers automatically commit/push draft PRs except evaluations; publish_task retrieves/retries handoff, never merge without authority.",
 			"Use complete guidance already supplied, including call_prefetch_ bodies; archival does not undo reading. Recover specific missing details, not blanket rereads; follow cursors. Resolve every delegated task and verify important claims before your final response. When no useful independent work remains, yield a truthful progress update; durable completion notifications wake you. Yielding is not completion; do not poll list_tasks tightly.",
+		].join(" ");
+	if (options.shellBuilder)
+		return [
+			agentSessionRoleInstructions(session),
+			COMPLETION_GATE_POLICY,
+			CHECK_ARTIFACT_CLEANUP_POLICY,
+			"Stay within the brief's scope; reuse maintained solutions. report_task_blocked for a missing decision, access or authority.",
+			"Your handoff is the lead's review packet: the complete change, the exact commands you ran with their actual exit status, and anything unverified. Inspect your full diff against the original contract before handing off. Writers commit/push draft PRs on success except evaluations; no self-acceptance or unauthorized merge.",
 		].join(" ");
 	return [
 		agentSessionRoleInstructions(session),

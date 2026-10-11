@@ -60,6 +60,7 @@ import {
 	pendingAgentCommandIds,
 	withBackgroundCommandContext,
 } from "../services/background-command-context";
+import { builderShellTools } from "../services/builder-shell-surface";
 import { withBuilderWorkState } from "../services/builder-work-state";
 import {
 	runCodexSubscriptionAgent,
@@ -318,9 +319,15 @@ export async function runApiTurn(
 			.find((item) => item.kind === "userMessage");
 		const planMode =
 			currentTask?.kind === "userMessage" && currentTask.mode === "plan";
+		// Writable builders get the validated shell surface; leads keep coordination tools.
+		const shellBuilder =
+			Boolean(owner.parentSessionId) && owner.taskAccess === "read_write";
+		const surfaceTools = shellBuilder
+			? builderShellTools(repositoryContext.tools)
+			: repositoryContext.tools;
 		const tools = planMode
-			? withPlanMode(hooks.wrap(repositoryContext.tools))
-			: hooks.wrap(repositoryContext.tools);
+			? withPlanMode(hooks.wrap(surfaceTools))
+			: hooks.wrap(surfaceTools);
 		if (planMode) messages = withPlanModeNotice(messages);
 		const projectKnowledge = await loadCloudProjectKnowledge(
 			owner,
@@ -405,7 +412,7 @@ export async function runApiTurn(
 			messages,
 			archiveHistory: (history) =>
 				archiveModelContext(owner.userId, owner.id, history),
-			instructions: `You are the ytimesy coding agent. Repository tools operate in this task's prepared checkout; paths are relative to that repository. Call read_repository_guidance before implementation and for nested paths; read applicable instructions and skill bodies completely. Search optional tools with search_tools. ${PREPARED_ENVIRONMENT_INSTRUCTIONS} Use read_environment_report for that setup report; do not pass its /tmp path to repository file readers. ${cloudAgentRoleInstructions(owner)}\n${PROJECT_KNOWLEDGE_INSTRUCTIONS}\nShared project knowledge (historical data, verify against this checkout):\n${JSON.stringify(projectKnowledge)}`,
+			instructions: `You are the ytimesy coding agent. Repository tools operate in this task's prepared checkout; paths are relative to that repository. Call read_repository_guidance before implementation and for nested paths; read applicable instructions and skill bodies completely.${shellBuilder ? "" : " Search optional tools with search_tools."} ${PREPARED_ENVIRONMENT_INSTRUCTIONS} Use read_environment_report for that setup report; do not pass its /tmp path to repository file readers. ${cloudAgentRoleInstructions(owner, { shellBuilder })}\n${PROJECT_KNOWLEDGE_INSTRUCTIONS}\nShared project knowledge (historical data, verify against this checkout):\n${JSON.stringify(projectKnowledge)}`,
 			tools,
 			signal: abort.signal,
 			restoreInstructions: async (history) => {

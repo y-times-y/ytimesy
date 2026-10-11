@@ -17,6 +17,7 @@ import {
 	AGENT_TASK_TOOL_RESPONSE_PATH,
 	parseAgentTaskToolRequest,
 	serializeAgentTaskToolResponse,
+	taskBriefTooLong,
 	taskToolAccess,
 	taskToolExecution,
 	taskToolHarness,
@@ -980,6 +981,8 @@ export function runAgentTaskTool(
 			const prompt = taskToolString(request.arguments, "prompt");
 			if (!title || !prompt)
 				throw new Error("Task title and prompt are required.");
+			const briefTooLong = taskBriefTooLong(prompt);
+			if (briefTooLong) throw new Error(briefTooLong);
 			const harnessId = taskToolHarness(request.arguments, parent.harness);
 			const modelId =
 				taskToolString(request.arguments, "modelId") ||
@@ -1254,6 +1257,8 @@ export function runAgentTaskTool(
 		if (request.tool === "edit_task") {
 			const title = taskToolString(request.arguments, "title");
 			const prompt = taskToolString(request.arguments, "prompt");
+			const briefTooLong = prompt ? taskBriefTooLong(prompt) : null;
+			if (briefTooLong) throw new Error(briefTooLong);
 			const harness = taskToolHarness(request.arguments, target.harness);
 			const modelId =
 				taskToolString(request.arguments, "modelId") ||

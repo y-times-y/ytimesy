@@ -11,7 +11,8 @@ const readyTask = parallelWorkPlan.shape.tasks.element
 	.omit({ estimatedSeconds: true, dependsOn: true, objective: true })
 	.extend({
 		title: z.string().trim().min(1).max(200),
-		prompt: z.string().min(1).max(32000),
+		// Same brief bound as create_task; ownership and checks are appended by the server.
+		prompt: z.string().min(1).max(2500),
 		owns: parallelWorkPlan.shape.tasks.element.shape.owns.min(1),
 		focusedChecks: checkCommands,
 		verificationPaths: parallelWorkPlan.shape.tasks.element.shape.owns
