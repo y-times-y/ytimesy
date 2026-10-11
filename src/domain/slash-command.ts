@@ -5,7 +5,8 @@ export type SlashCommandId =
 	| "files"
 	| "diff"
 	| "terminal"
-	| "desktop";
+	| "desktop"
+	| "custom";
 
 export type SlashCommandAvailability = "ready" | "unavailable";
 
@@ -16,7 +17,63 @@ export type SlashCommand = {
 	readonly description: string;
 	readonly availability: SlashCommandAvailability;
 	readonly unavailableReason?: string;
+	/** Prompt template for a repository-defined command (id "custom"). */
+	readonly template?: string;
+	readonly argumentHint?: string;
 };
+
+/** Repository commands live in .claude/commands or .agents/commands as <name>.md. */
+export const PROJECT_COMMAND_PATH =
+	/^(?:\.claude|\.agents)\/commands\/([a-z0-9][a-z0-9_-]{0,47})\.md$/;
+const BUILT_IN_TRIGGERS = new Set([
+	"stop",
+	"retry",
+	"model",
+	"files",
+	"diff",
+	"terminal",
+	"desktop",
+]);
+
+/** Parses optional `description` / `argument-hint` frontmatter; the rest is the template. */
+export function projectCommandFromFile(
+	path: string,
+	text: string,
+): SlashCommand | null {
+	const name = PROJECT_COMMAND_PATH.exec(path)?.[1];
+	if (!name || BUILT_IN_TRIGGERS.has(name)) return null;
+	const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
+	const fields = new Map<string, string>();
+	for (const line of frontmatter?.[1].split(/\r?\n/) ?? []) {
+		const field = /^([a-z-]+):\s*(.*)$/.exec(line.trim());
+		if (field) fields.set(field[1], field[2].replace(/^["']|["']$/g, ""));
+	}
+	const template = (
+		frontmatter ? text.slice(frontmatter[0].length) : text
+	).trim();
+	if (!template) return null;
+	return {
+		id: "custom",
+		trigger: `/${name}`,
+		label: name,
+		description:
+			fields.get("description")?.slice(0, 200) ||
+			template.split("\n")[0].slice(0, 120),
+		availability: "ready",
+		template,
+		argumentHint: fields.get("argument-hint")?.slice(0, 80),
+	};
+}
+
+/** $ARGUMENTS takes the whole argument, $1..$9 its words; otherwise it is appended. */
+export function expandProjectCommand(template: string, argument: string) {
+	const words = argument.split(/\s+/).filter(Boolean);
+	if (!/\$ARGUMENTS|\$[1-9]/.test(template))
+		return argument ? `${template}\n\n${argument}` : template;
+	return template
+		.replaceAll("$ARGUMENTS", argument)
+		.replace(/\$([1-9])/g, (_match, index) => words[Number(index) - 1] ?? "");
+}
 
 export type SlashDraft = {
 	readonly query: string;

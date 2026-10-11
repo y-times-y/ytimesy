@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
 	composerSlashCommands,
+	expandProjectCommand,
 	matchingSlashCommands,
 	parseSlashDraft,
+	projectCommandFromFile,
 } from "./slash-command";
 
 const connected = composerSlashCommands({
@@ -53,5 +55,57 @@ describe("slash commands", () => {
 				(command) => command.id,
 			),
 		).toEqual(["retry", "model", "files", "diff", "terminal", "desktop"]);
+	});
+});
+
+describe("repository commands", () => {
+	it("reads name, frontmatter and template from a command file", () => {
+		expect(
+			projectCommandFromFile(
+				".claude/commands/review-pr.md",
+				'---\ndescription: "Review a pull request"\nargument-hint: <number>\n---\nReview PR #$1 for correctness.\n',
+			),
+		).toEqual({
+			id: "custom",
+			trigger: "/review-pr",
+			label: "review-pr",
+			description: "Review a pull request",
+			availability: "ready",
+			template: "Review PR #$1 for correctness.",
+			argumentHint: "<number>",
+		});
+		expect(
+			projectCommandFromFile(".agents/commands/fix.md", "Fix the build.\nMore")
+				?.description,
+		).toBe("Fix the build.");
+	});
+
+	it("ignores nested, unsafe, empty and built-in-shadowing files", () => {
+		for (const path of [
+			".claude/commands/nested/x.md",
+			".claude/commands/../secret.md",
+			".claude/commands/Upper.md",
+			"commands/x.md",
+			".claude/commands/stop.md",
+		])
+			expect(projectCommandFromFile(path, "Do it")).toBeNull();
+		expect(
+			projectCommandFromFile(".claude/commands/empty.md", "---\na: b\n---\n"),
+		).toBeNull();
+	});
+
+	it("expands arguments into the template", () => {
+		expect(expandProjectCommand("Fix $ARGUMENTS now", "the login bug")).toBe(
+			"Fix the login bug now",
+		);
+		expect(expandProjectCommand("Compare $1 with $2", "main dev")).toBe(
+			"Compare main with dev",
+		);
+		expect(expandProjectCommand("Summarize the repo", "focus on auth")).toBe(
+			"Summarize the repo\n\nfocus on auth",
+		);
+		expect(expandProjectCommand("Summarize the repo", "")).toBe(
+			"Summarize the repo",
+		);
 	});
 });
