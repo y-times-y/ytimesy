@@ -10,6 +10,7 @@ import {
 	apiTurnFailureClassification,
 	apiTurnFailureMessage,
 	IncompleteAgentTurn,
+	LifecycleHookRefusal,
 } from "#/domain/api-turn-failure";
 import { CoordinationFailure } from "#/domain/conversation-turn-control";
 import { PREPARED_ENVIRONMENT_INSTRUCTIONS } from "#/domain/environment-context";
@@ -329,6 +330,13 @@ export async function runApiTurn(
 			: "coordination";
 		if (step && (step.limitReached || step.index > modelStepLimit(toolSurface)))
 			throw new IncompleteAgentTurn("tool-calls");
+		// Once per turn, before its first model request; replayed steps reuse the journal.
+		if (!step || step.index === 0) {
+			const submitted = await hooks.userPromptSubmit(
+				currentTask?.kind === "userMessage" ? currentTask.text : "",
+			);
+			if (submitted.block) throw new LifecycleHookRefusal(submitted.reason);
+		}
 		const runAgent = subscription
 			? step
 				? runCodexSubscriptionAgentStep

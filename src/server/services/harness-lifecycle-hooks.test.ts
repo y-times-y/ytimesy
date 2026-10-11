@@ -224,3 +224,121 @@ it("dispatches failure hooks for returned patch/command failure receipts while p
 		await fixture.cleanup();
 	}
 });
+
+async function hooksFrom(config: unknown) {
+	const fixture = await localHarnessWorkspace();
+	await mkdir(join(fixture.root, ".ytimesy"));
+	await writeFile(
+		join(fixture.root, ".ytimesy/hooks.json"),
+		JSON.stringify(config),
+	);
+	await fixture.run("git", ["-C", fixture.root, "add", "."]);
+	await fixture.run("git", ["-C", fixture.root, "commit", "-qm", "hooks"]);
+	const baseline = (
+		await fixture.run("git", ["-C", fixture.root, "rev-parse", "HEAD"])
+	).stdout.trim();
+	const hooks = harnessLifecycleHooks({
+		workspace: async () => fixture.workspace,
+		turnId: randomUUID(),
+		readOnly: false,
+		signal: new AbortController().signal,
+		baseline: async () => baseline,
+		once: (_id, run) => run(),
+	});
+	return { fixture, hooks };
+}
+const callOptions = (toolCallId: string) => ({
+	toolCallId,
+	messages: [],
+	abortSignal: new AbortController().signal,
+	context: {},
+});
+
+it("lets PreToolUse refuse a call before it runs, and fails closed when the hook breaks", async () => {
+	const { fixture, hooks } = await hooksFrom({
+		version: 1,
+		hooks: [
+			{
+				event: "PreToolUse",
+				tool: "execute_command",
+				command: `case "$YTIMESY_HOOK_INPUT" in *"rm -rf"*) printf '{"block":true,"message":"destructive command"}';; *) printf '{"message":"allowed by policy"}';; esac`,
+			},
+			{ event: "PreToolUse", tool: "broken_tool", command: "exit 3" },
+		],
+	});
+	try {
+		const ran: string[] = [];
+		const tools = hooks.wrap({
+			execute_command: tool({
+				inputSchema: z.object({ command: z.string() }),
+				execute: async ({ command }) => {
+					ran.push(command);
+					return { status: 0 };
+				},
+			}),
+			broken_tool: tool({
+				inputSchema: z.object({}),
+				execute: async () => {
+					ran.push("broken");
+					return {};
+				},
+			}),
+			unguarded: tool({
+				inputSchema: z.object({}),
+				execute: async () => ({ ok: true }),
+			}),
+		});
+		expect(
+			await tools.execute_command.execute?.(
+				{ command: "rm -rf /data" },
+				callOptions("a"),
+			),
+		).toEqual({
+			blocked: true,
+			error: "Blocked by a repository PreToolUse hook: destructive command",
+		});
+		expect(
+			await tools.execute_command.execute?.(
+				{ command: "ls" },
+				callOptions("b"),
+			),
+		).toEqual({ status: 0 });
+		expect(JSON.stringify(hooks.drain([]))).toContain("allowed by policy");
+		const broken = (await tools.broken_tool.execute?.(
+			{},
+			callOptions("c"),
+		)) as { blocked: boolean; error: string };
+		expect(broken.blocked).toBe(true);
+		expect(broken.error).toContain("hook failed");
+		expect(await tools.unguarded.execute?.({}, callOptions("d"))).toEqual({
+			ok: true,
+		});
+		expect(ran).toEqual(["ls"]);
+	} finally {
+		await fixture.cleanup();
+	}
+});
+
+it("lets UserPromptSubmit refuse a turn or add context to it", async () => {
+	const { fixture, hooks } = await hooksFrom({
+		version: 1,
+		hooks: [
+			{
+				event: "UserPromptSubmit",
+				command: `case "$YTIMESY_HOOK_INPUT" in *deploy*) printf '{"block":true,"message":"deploys go through CI"}';; *) printf '{"message":"use pnpm, not npm"}';; esac`,
+			},
+		],
+	});
+	try {
+		expect(await hooks.userPromptSubmit("deploy to production")).toEqual({
+			block: true,
+			reason: "deploys go through CI",
+		});
+		expect(await hooks.userPromptSubmit("fix the parser")).toEqual({
+			block: false,
+		});
+		expect(JSON.stringify(hooks.drain([]))).toContain("use pnpm, not npm");
+	} finally {
+		await fixture.cleanup();
+	}
+});

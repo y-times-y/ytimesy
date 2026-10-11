@@ -356,6 +356,14 @@ export function apiModelFailureMessage(error: unknown): string {
 	return "The model request failed without a usable provider reason. Check the connection and retry. No fallback was used.";
 }
 
+/** A repository UserPromptSubmit hook refused the turn; shown to the user verbatim. */
+export class LifecycleHookRefusal extends Error {
+	constructor(reason: string) {
+		super(`Blocked by a repository UserPromptSubmit hook: ${reason}`);
+		this.name = "LifecycleHookRefusal";
+	}
+}
+
 export function apiTurnFailureMessage(
 	stage: ApiTurnFailureStage,
 	error?: unknown,
@@ -365,6 +373,7 @@ export function apiTurnFailureMessage(
 	if (error instanceof InitialAgentReadFailure) return error.message;
 	if (error instanceof SubscriptionMetadataFailure) return error.message;
 	if (error instanceof VerificationPolicyFailure) return error.message;
+	if (error instanceof LifecycleHookRefusal) return error.message;
 	const reconnect = reconnectCause(error);
 	if (reconnect) return reconnect.message;
 	switch (stage) {
