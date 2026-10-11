@@ -29,6 +29,7 @@ import { Route as ApiIdentityProvidersRouteImport } from './routes/api/identity/
 import { Route as ApiInternalCodexTransportRouteImport } from './routes/api/internal/codex-transport'
 import { Route as ApiProjectsPublishRouteImport } from './routes/api/projects/publish'
 import { Route as ApiWorkspacesRetryRouteImport } from './routes/api/workspaces.retry'
+import { Route as ApiMcpOauthCallbackRouteImport } from './routes/api/mcp/oauth/callback'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -131,6 +132,11 @@ const ApiWorkspacesRetryRoute = ApiWorkspacesRetryRouteImport.update({
   path: '/retry',
   getParentRoute: () => ApiWorkspacesRoute,
 } as any)
+const ApiMcpOauthCallbackRoute = ApiMcpOauthCallbackRouteImport.update({
+  id: '/api/mcp/oauth/callback',
+  path: '/api/mcp/oauth/callback',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -153,6 +159,7 @@ export interface FileRoutesByFullPath {
   '/api/internal/codex-transport': typeof ApiInternalCodexTransportRoute
   '/api/projects/publish': typeof ApiProjectsPublishRoute
   '/api/workspaces/retry': typeof ApiWorkspacesRetryRoute
+  '/api/mcp/oauth/callback': typeof ApiMcpOauthCallbackRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -175,6 +182,7 @@ export interface FileRoutesByTo {
   '/api/internal/codex-transport': typeof ApiInternalCodexTransportRoute
   '/api/projects/publish': typeof ApiProjectsPublishRoute
   '/api/workspaces/retry': typeof ApiWorkspacesRetryRoute
+  '/api/mcp/oauth/callback': typeof ApiMcpOauthCallbackRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -198,6 +206,7 @@ export interface FileRoutesById {
   '/api/internal/codex-transport': typeof ApiInternalCodexTransportRoute
   '/api/projects/publish': typeof ApiProjectsPublishRoute
   '/api/workspaces/retry': typeof ApiWorkspacesRetryRoute
+  '/api/mcp/oauth/callback': typeof ApiMcpOauthCallbackRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -222,6 +231,7 @@ export interface FileRouteTypes {
     | '/api/internal/codex-transport'
     | '/api/projects/publish'
     | '/api/workspaces/retry'
+    | '/api/mcp/oauth/callback'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -244,6 +254,7 @@ export interface FileRouteTypes {
     | '/api/internal/codex-transport'
     | '/api/projects/publish'
     | '/api/workspaces/retry'
+    | '/api/mcp/oauth/callback'
   id:
     | '__root__'
     | '/'
@@ -266,6 +277,7 @@ export interface FileRouteTypes {
     | '/api/internal/codex-transport'
     | '/api/projects/publish'
     | '/api/workspaces/retry'
+    | '/api/mcp/oauth/callback'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -287,6 +299,7 @@ export interface RootRouteChildren {
   ApiGithubRepositoriesRoute: typeof ApiGithubRepositoriesRoute
   ApiIdentityProvidersRoute: typeof ApiIdentityProvidersRoute
   ApiInternalCodexTransportRoute: typeof ApiInternalCodexTransportRoute
+  ApiMcpOauthCallbackRoute: typeof ApiMcpOauthCallbackRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -431,6 +444,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiWorkspacesRetryRouteImport
       parentRoute: typeof ApiWorkspacesRoute
     }
+    '/api/mcp/oauth/callback': {
+      id: '/api/mcp/oauth/callback'
+      path: '/api/mcp/oauth/callback'
+      fullPath: '/api/mcp/oauth/callback'
+      preLoaderRoute: typeof ApiMcpOauthCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -477,6 +497,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiGithubRepositoriesRoute: ApiGithubRepositoriesRoute,
   ApiIdentityProvidersRoute: ApiIdentityProvidersRoute,
   ApiInternalCodexTransportRoute: ApiInternalCodexTransportRoute,
+  ApiMcpOauthCallbackRoute: ApiMcpOauthCallbackRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

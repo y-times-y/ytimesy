@@ -11,6 +11,7 @@ import {
 import { addMcpServer } from "../adapters/mcp-servers";
 import { saveInstall } from "../adapters/plugin-installs";
 import { fetchPinnedPlugin } from "../adapters/plugin-source";
+import { requiresOAuth } from "./mcp-oauth";
 import { connectMcpTools } from "./mcp-tools";
 
 /**
@@ -63,21 +64,30 @@ export async function installCatalogPlugin(input: {
 		throw new Error(
 			`Could not connect ${wrongCredential.map((server) => server.name).join(", ")}. Check the plugin's settings.`,
 		);
-	// Servers with no credential in their config expect sign-in (OAuth), which is
-	// not supported yet: the plugin installs with its skills and commands only.
-	const needsSignIn = candidates.filter((server) =>
-		unavailable.has(server.name),
-	);
-	const servers = candidates
-		.filter((server) => !unavailable.has(server.name))
-		.map(({ usesCredential: _usesCredential, ...server }) => server);
+	// Servers with no credential in their config sign the user in (OAuth): they
+	// install as OAuth servers and join turns once the user signs in.
+	const servers: {
+		name: string;
+		url: string;
+		headers: Record<string, string>;
+		auth: "headers" | "oauth";
+	}[] = [];
+	const unreachable: string[] = [];
+	for (const { usesCredential: _usesCredential, ...server } of candidates)
+		if (!unavailable.has(server.name))
+			servers.push({ ...server, auth: "headers" });
+		else if (await requiresOAuth(server.url, input.mcpFetch))
+			servers.push({ ...server, headers: {}, auth: "oauth" });
+		else unreachable.push(server.name);
 	const unsupported = [
 		...plugin.unsupported,
-		...needsSignIn.map(
-			(server) =>
-				`MCP server ${server.name} needs sign-in (OAuth), not supported yet`,
+		...unreachable.map(
+			(name) => `MCP server ${name} could not be reached at install`,
 		),
 	];
+	const needsSignIn = servers
+		.filter((server) => server.auth === "oauth")
+		.map((server) => server.name);
 	const id = randomUUID();
 	await saveInstall({
 		id,
@@ -102,5 +112,5 @@ export async function installCatalogPlugin(input: {
 			projectId: input.projectId,
 			pluginId: id,
 		});
-	return { id, plugin: plugin.displayName, unsupported };
+	return { id, plugin: plugin.displayName, unsupported, needsSignIn };
 }
