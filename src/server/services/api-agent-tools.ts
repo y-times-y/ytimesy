@@ -53,12 +53,15 @@ export function apiAgentTools(
 		toolCallPrefix?: string;
 		nativePatch?: boolean;
 		signal: AbortSignal;
+		/** A Fusion lead edits its own workspace even though it is a root session. */
+		writable?: boolean;
 	} & ({ cwd: string } | { workspace: () => Promise<AgentToolWorkspace> }),
 ): ToolSet {
 	const { machines, session, signal } = input;
 	const executionIdentity = scopedToolExecution();
 	const readOnly =
-		!session.parentSessionId || session.taskAccess !== "read_write";
+		!input.writable &&
+		(!session.parentSessionId || session.taskAccess !== "read_write");
 	const workspace = async (): Promise<AgentToolWorkspace> => {
 		signal.throwIfAborted();
 		if ("workspace" in input) return input.workspace();

@@ -69,6 +69,12 @@ const trackedDiff = execFileSync("git", ["diff", "--binary", "HEAD"], {
 	encoding: "utf8",
 });
 const runId = randomUUID();
+// Fusion arm: the lead model runs the root session and edits its workspace
+// with a sidekick (YTIMESY_FUSION_SIDEKICK_MODEL); no child tasks.
+const fusionSidekick = process.env.YTIMESY_FUSION_SIDEKICK_MODEL?.trim();
+const leadModel = fusionSidekick
+	? process.env.YTIMESY_FUSION_LEAD_MODEL?.trim() || "gpt-6-astra"
+	: "gpt-6.1-sol";
 const key = process.env.FREESTYLE_API_KEY;
 if (!key) throw new Error("Missing evaluation provider connection.");
 const local = await createOperatorEvaluationDatabase(output);
@@ -118,8 +124,9 @@ try {
 	coordinator = await startEvaluationCoordinator();
 	await save("coordinator-preflight", coordinator.preflight);
 	const models = await codexSubscriptionCatalog(local.userId);
-	if (!models.some((model) => model.id === "gpt-6.1-sol"))
-		throw new Error("Pinned subscription model is unavailable.");
+	for (const pinned of [leadModel, fusionSidekick].filter(Boolean))
+		if (!models.some((model) => model.id === pinned))
+			throw new Error(`Pinned subscription model ${pinned} is unavailable.`);
 	archivePath = await uploadCheckpoint(
 		local.userId,
 		archiveSession,
@@ -172,7 +179,7 @@ try {
 		version: 1,
 		phase: "development",
 		baseline,
-		modelId: "gpt-6.1-sol",
+		modelId: leadModel,
 		reasoning: "max",
 		seed: 0,
 		repetitions: 1,
@@ -325,19 +332,22 @@ try {
 			attempt.rootId,
 		);
 		await save("evidence", evidence);
-		const patches = await exportReviewedEvaluationPatches(
-			bridge.machines,
-			local.userId,
-			attempt.rootId,
-			template.commit,
-		);
-		const selected = evidence.children.find(
-			(child) => child.id === patches[0].taskId,
-		);
-		if (!selected?.providerRef)
-			throw new Error("Reviewed artifact source is missing.");
+		// Fusion edits the root workspace; lead/builder hands off reviewed child work.
+		let source: string | null | undefined = evidence.root.providerRef;
+		if (!fusionSidekick) {
+			const patches = await exportReviewedEvaluationPatches(
+				bridge.machines,
+				local.userId,
+				attempt.rootId,
+				template.commit,
+			);
+			source = evidence.children.find(
+				(child) => child.id === patches[0].taskId,
+			)?.providerRef;
+		}
+		if (!source) throw new Error("Artifact source is missing.");
 		const bytes = await bridge.exportArtifacts(
-			selected.providerRef,
+			source,
 			task.artifacts,
 			task.collectCommands,
 		);
@@ -358,7 +368,10 @@ try {
 			rootId: attempt.rootId,
 			task: task.id,
 			model: protocol.modelId,
+			sidekickModel: fusionSidekick ?? null,
 			reasoning: protocol.reasoning,
+			// Lead and sidekick together, from the evaluation guard's counter.
+			observedTokens: Number(evidence.limits?.observed_tokens ?? 0),
 			reward,
 			agentSeconds,
 			setupSeconds: (started - setupStarted) / 1000,

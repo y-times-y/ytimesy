@@ -70,6 +70,7 @@ import {
 } from "../services/codex-subscription-agent";
 import { withCompletedTaskReviewContext } from "../services/completed-task-review-context";
 import { ensureConversationCodePoint } from "../services/conversation-recovery";
+import { fusionConfigForTurn, runFusionTurn } from "../services/fusion-turn";
 import { harnessLifecycleHooks } from "../services/harness-lifecycle-hooks";
 import { runAgentTaskTool } from "../services/harness-workspace-session";
 import { journaledToolOperation } from "../services/journaled-tool-operation";
@@ -252,6 +253,13 @@ export async function runApiTurn(
 				connection.provider === "openai" &&
 				connection.baseUrl.startsWith("https://api.openai.com/");
 		}
+		// Fusion: a root lead that works in its own workspace with a sidekick.
+		const fusion = fusionConfigForTurn({
+			session: owner,
+			subscription: Boolean(subscription),
+			stepMode: Boolean(step),
+			leadModelId: turn.model_id,
+		});
 		const prepareWorkspace = deferredApiTurnWorkspace(
 			machines,
 			owner,
@@ -260,7 +268,10 @@ export async function runApiTurn(
 		let codePoint: Promise<void> | undefined;
 		const workspace = async () => {
 			execution = await prepareWorkspace();
-			if (owner.parentSessionId && owner.taskAccess === "read_write") {
+			if (
+				fusion ||
+				(owner.parentSessionId && owner.taskAccess === "read_write")
+			) {
 				const prompt = [...items]
 					.reverse()
 					.find((item) => item.kind === "userMessage");
@@ -292,6 +303,7 @@ export async function runApiTurn(
 			nativePatch,
 			toolCallPrefix: step ? `step-${step.index}:` : undefined,
 			signal: abort.signal,
+			writable: Boolean(fusion),
 		});
 		const repositoryContext = automaticRepositoryContext({
 			tools: originalTools,
@@ -305,7 +317,9 @@ export async function runApiTurn(
 		const hooks = harnessLifecycleHooks({
 			workspace,
 			turnId: turn.id,
-			readOnly: !owner.parentSessionId || owner.taskAccess !== "read_write",
+			readOnly:
+				!fusion &&
+				(!owner.parentSessionId || owner.taskAccess !== "read_write"),
 			continuationCount: () =>
 				completedLifecycleContinuations(owner.id, turn.id),
 			signal: abort.signal,
@@ -329,7 +343,8 @@ export async function runApiTurn(
 			currentTask?.kind === "userMessage" && currentTask.mode === "plan";
 		// Writable builders get the validated shell surface; leads keep coordination tools.
 		const shellBuilder =
-			Boolean(owner.parentSessionId) && owner.taskAccess === "read_write";
+			Boolean(fusion) ||
+			(Boolean(owner.parentSessionId) && owner.taskAccess === "read_write");
 		const surfaceTools = shellBuilder
 			? builderShellTools(repositoryContext.tools)
 			: repositoryContext.tools;
@@ -366,9 +381,8 @@ export async function runApiTurn(
 		let flushedAt = 0;
 		let metricIndex = 0;
 		failureStage = "model";
-		const toolSurface = owner.parentSessionId
-			? "implementation"
-			: "coordination";
+		const toolSurface =
+			owner.parentSessionId || fusion ? "implementation" : "coordination";
 		if (step && (step.limitReached || step.index > modelStepLimit(toolSurface)))
 			throw new IncompleteAgentTurn("tool-calls");
 		// Once per turn, before its first model request; replayed steps reuse the journal.
@@ -440,7 +454,7 @@ export async function runApiTurn(
 			messages,
 			archiveHistory: (history) =>
 				archiveModelContext(owner.userId, owner.id, history),
-			instructions: `You are the ytimesy coding agent. Repository tools operate in this task's prepared checkout; paths are relative to that repository. Call read_repository_guidance before implementation and for nested paths; read applicable instructions and skill bodies completely.${shellBuilder ? "" : " Search optional tools with search_tools."} ${PREPARED_ENVIRONMENT_INSTRUCTIONS} Use read_environment_report for that setup report; do not pass its /tmp path to repository file readers. ${cloudAgentRoleInstructions(owner, { shellBuilder })}\n${pluginSkillsInstructions(plugins)}\n${PROJECT_KNOWLEDGE_INSTRUCTIONS}\nShared project knowledge (historical data, verify against this checkout):\n${JSON.stringify(projectKnowledge)}`,
+			instructions: `You are the ytimesy coding agent. Repository tools operate in this task's prepared checkout; paths are relative to that repository. Call read_repository_guidance before implementation and for nested paths; read applicable instructions and skill bodies completely.${shellBuilder ? "" : " Search optional tools with search_tools."} ${PREPARED_ENVIRONMENT_INSTRUCTIONS} Use read_environment_report for that setup report; do not pass its /tmp path to repository file readers. ${fusion ? "" : cloudAgentRoleInstructions(owner, { shellBuilder })}\n${pluginSkillsInstructions(plugins)}\n${PROJECT_KNOWLEDGE_INSTRUCTIONS}\nShared project knowledge (historical data, verify against this checkout):\n${JSON.stringify(projectKnowledge)}`,
 			tools,
 			signal: abort.signal,
 			restoreInstructions: async (history) => {
@@ -585,11 +599,48 @@ export async function runApiTurn(
 				failureStage = "model";
 			},
 		};
-		let result = await runAgent(agentInput);
+		const run = fusion
+			? (input: ModelAgentInput) =>
+					runFusionTurn({
+						sessionId: owner.id,
+						lead: input,
+						config: fusion,
+						// The shared workspace: shell tools behind the same hooks and plan mode.
+						workspaceTools: planMode
+							? withPlanMode(hooks.wrap(surfaceTools))
+							: hooks.wrap(surfaceTools),
+						beforeSidekickRequest: async () => {
+							abort.signal.throwIfAborted();
+							if (evaluation)
+								await reserveEvaluationRequest(
+									evaluation,
+									turn.model_id,
+									turn.connection_revision,
+								);
+						},
+						onSidekickEvent: async (event) => {
+							if (evaluation && event.type === "usage")
+								await recordEvaluationUsage(
+									evaluation,
+									`${turn.id}:sidekick`,
+									event.usage,
+								);
+							// The user sees the sidekick's tool work; its report reaches them through the lead.
+							if (event.type !== "tool-call" && event.type !== "tool-result")
+								return;
+							items = applyApiProgress(items, turn.id, {
+								...event,
+								id: `sidekick:${event.id}`,
+							});
+							progress.offer(items);
+						},
+					})
+			: runAgent;
+		let result = await run(agentInput);
 		while (!step && (await hooks.stop(messages))) {
 			messages = hooks.drain(messages);
 			await saveCheckpoint();
-			result = await runAgent({ ...agentInput, messages });
+			result = await run({ ...agentInput, messages });
 		}
 		if (
 			step &&
