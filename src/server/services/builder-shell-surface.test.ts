@@ -36,3 +36,31 @@ it("keeps only the validated shell surface, which selects the shell prompt profi
 		"v12-shell",
 	);
 });
+
+it("offers a shell surface exactly as given, without compose_tools or search_tools", async () => {
+	const { discoverableAgentTools } = await import("./agent-tool-discovery");
+	const { composedAgentTools } = await import("./composed-agent-tools");
+	const { isShellSurface } = await import("#/domain/harness-model-profile");
+	const make = () =>
+		tool({ inputSchema: z.object({}), execute: async () => ({}) });
+	const shell = { execute_command: make(), apply_patch: make() };
+	expect(isShellSurface(Object.keys(shell))).toBe(true);
+	expect(
+		Object.keys(discoverableAgentTools(shell, [], [], "implementation")),
+	).toEqual(["execute_command", "apply_patch"]);
+	const specialist = { execute_command: make(), run_checks: make() };
+	expect(isShellSurface(Object.keys(specialist))).toBe(false);
+	expect(
+		Object.keys(discoverableAgentTools(specialist, [], [], "implementation")),
+	).toContain("search_tools");
+	// The loop skips composition for shell surfaces; specialist surfaces still compose.
+	expect(
+		Object.keys(
+			composedAgentTools({
+				tools: specialist,
+				signal: new AbortController().signal,
+				onEvent: async () => {},
+			}),
+		),
+	).toContain("compose_tools");
+});

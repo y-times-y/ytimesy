@@ -30,8 +30,8 @@ it("prepares contract-based review while builders work and rejects stricter vali
 	expect(lead).toContain("allowed inputs adjacent to forbidden cases");
 	expect(lead).toContain("a stronger validation rule is a correctness bug");
 	expect(lead).toContain("ORIGINAL user contract");
-	expect(lead).toContain("required checks fail, at most once");
-	expect(lead).toContain("self-derived edge cases in your final answer");
+	expect(lead).toContain("reproduced failure or a concrete violation");
+	expect(lead).toContain("the diagnostic and the fix in one message");
 });
 
 it("requires executable original-contract boundary evidence from both roles", () => {
@@ -79,7 +79,8 @@ it("keeps cloud role prompts concise without weakening delegation or verificatio
 	expect(builder).not.toContain("start at least one fresh read-write child");
 	expect(builder).toContain("repository-required preflight takes precedence");
 	expect(builder).toContain("read_task_capacity");
-	expect(builder.length).toBeLessThan(lead.length / 2);
+	// Absolute bound: the lead prompt shrank, so a ratio no longer measures bloat.
+	expect(builder.length).toBeLessThan(3500);
 });
 
 it("distinguishes the root lead from writable and read-only children", () => {
@@ -285,5 +286,5 @@ it("gives shell builders a short role without specialist-tool instructions", () 
 		/run_checks|apply_patches|batch_read|inspect_changes/,
 	);
 	expect(shell.length).toBeLessThan(1500);
-	expect(cloudAgentRoleInstructions({})).toContain("at most once");
+	expect(cloudAgentRoleInstructions({})).toContain("not run_checks receipts");
 });

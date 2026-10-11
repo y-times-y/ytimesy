@@ -1,5 +1,6 @@
 import { type ModelMessage, type ToolSet, toolSearch } from "ai";
 import type { HarnessModelFamily } from "#/domain/harness-model-profile";
+import { isShellSurface } from "#/domain/harness-model-profile";
 import type { SessionItem } from "#/domain/session-item";
 
 // Common coding and coordination operations should never require a search round trip.
@@ -122,7 +123,10 @@ export function discoverableAgentTools(
 				},
 			]),
 		),
-		search_tools: toolSearch(),
+		// A shell-shaped surface is offered exactly as given, like native Codex.
+		...(isShellSurface(Object.keys(tools))
+			? {}
+			: { search_tools: toolSearch() }),
 	};
 }
 
