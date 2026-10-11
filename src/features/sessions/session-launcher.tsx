@@ -42,6 +42,7 @@ import {
 } from "#/domain/session-item";
 import {
 	composerSlashCommands,
+	expandProjectCommand,
 	matchingSlashCommands,
 	parseSlashDraft,
 	type SlashCommand,
@@ -49,6 +50,7 @@ import {
 import { captureAnalytics } from "#/features/analytics/client";
 import { authClient } from "#/features/auth/client";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
+import { listProjectCommandsFn } from "../workspace/explorer.fn";
 import {
 	getConversationRecoveryPoints,
 	restoreConversationPoint,
@@ -224,6 +226,22 @@ export function SessionLauncher({
 		},
 	});
 	const [draft, setDraft] = useState(initialDraft);
+	const loadProjectCommands = useServerFn(listProjectCommandsFn);
+	const projectCommands = useQuery({
+		queryKey: ["project-commands", selectedProject?.id, session.agentSessionId],
+		// Only when the user starts a slash command; never wakes a paused VM.
+		enabled: !!selectedProject?.id && draft.startsWith("/"),
+		staleTime: 60_000,
+		queryFn: () =>
+			selectedProject
+				? loadProjectCommands({
+						data: {
+							projectId: selectedProject.id,
+							sessionId: session.agentSessionId ?? undefined,
+						},
+					})
+				: [],
+	});
 	const [modelId, setModelId] = useState(session.listedModelId);
 	const [reasoningId, setReasoningId] = useState("");
 	const [fast, setFast] = useState(false);
@@ -303,7 +321,16 @@ export function SessionLauncher({
 		],
 	);
 	const visibleSlashCommands = slashDraft
-		? matchingSlashCommands(slashDraft, slashCommands)
+		? matchingSlashCommands(slashDraft, [
+				...slashCommands,
+				...(projectCommands.data ?? []).map((command) => ({
+					...command,
+					availability: composerReady
+						? command.availability
+						: ("unavailable" as const),
+					unavailableReason: "Wait for the current run to finish",
+				})),
+			])
 		: [];
 
 	useEffect(() => {
@@ -404,6 +431,13 @@ export function SessionLauncher({
 
 	function runSlashCommand(command: SlashCommand) {
 		if (command.availability !== "ready") return;
+		if (command.id === "custom" && command.template) {
+			setDraft("");
+			sendText(
+				expandProjectCommand(command.template, slashDraft?.argument ?? ""),
+			);
+			return;
+		}
 		if (command.id === "stop") {
 			onStop();
 			setDraft("");

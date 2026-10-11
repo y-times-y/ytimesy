@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { getRequest } from "@tanstack/react-start/server";
 import { Effect } from "effect";
 import type { WorkspaceFilePreview } from "#/domain/file-preview";
+import type { SlashCommand } from "#/domain/slash-command";
 import type {
 	WorkspaceExplorerListing,
 	WorkspaceSourceFile,
@@ -12,6 +13,7 @@ import { requireUser } from "#/server/auth/auth";
 import { WorkspaceMachineService } from "#/server/services/capabilities";
 import {
 	type ExplorerScope,
+	listProjectCommands,
 	listWorkspaceExplorer,
 	readWorkspaceExplorerFile,
 	readWorkspaceFilePreview,
@@ -121,4 +123,17 @@ export const readWorkspacePreviewFn = createServerFn({ method: "GET" })
 		return runWithMachines((machines) =>
 			readWorkspaceFilePreview(machines, scope, data.path ?? "", data.revision),
 		);
+	});
+
+export const listProjectCommandsFn = createServerFn({ method: "GET" })
+	.validator(optionalProjectId)
+	.handler(async ({ data }): Promise<SlashCommand[]> => {
+		try {
+			const scope = await requireScope(data.projectId, data.sessionId);
+			return await runWithMachines((machines) =>
+				listProjectCommands(machines, scope),
+			);
+		} catch {
+			return [];
+		}
 	});

@@ -9,6 +9,10 @@ import {
 } from "#/domain/project-files";
 import { projectFolderName, repositoriesForProject } from "#/domain/projects";
 import {
+	projectCommandFromFile,
+	type SlashCommand,
+} from "#/domain/slash-command";
+import {
 	parseWorkspaceExplorerListing,
 	type WorkspaceExplorerListing,
 	type WorkspaceSourceFile,
@@ -38,6 +42,51 @@ fi
 echo "PROJECT_CWD=$CWD"
 git -C "$CWD" ls-files -co --exclude-standard
 `;
+
+const READ_PROJECT_COMMANDS = `import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+found = []
+for folder in ('.claude/commands', '.agents/commands'):
+    base = root / folder
+    if not base.is_dir() or base.is_symlink():
+        continue
+    for path in sorted(base.glob('*.md'))[:50]:
+        if path.is_file() and not path.is_symlink():
+            found.append({'path': f'{folder}/{path.name}', 'text': path.read_bytes()[:16000].decode('utf-8', 'replace')})
+print(json.dumps(found[:50]))`;
+
+/** Repository-defined slash commands, read without starting a paused VM. */
+export function listProjectCommands(
+	machines: WorkspaceMachines,
+	scope: ExplorerScope,
+): Effect.Effect<SlashCommand[]> {
+	return withRunningCheckout(machines, scope, (workspaceId, root) =>
+		root
+			? Effect.tryPromise(() =>
+					machines.exec(
+						workspaceId,
+						`python3 -c ${posixShellQuoted(READ_PROJECT_COMMANDS)} ${posixShellQuoted(root)}`,
+						15_000,
+					),
+				).pipe(
+					Effect.map((result) => {
+						const files = JSON.parse(result.stdout) as {
+							path: string;
+							text: string;
+						}[];
+						const commands = new Map<string, SlashCommand>();
+						for (const file of files) {
+							const command = projectCommandFromFile(file.path, file.text);
+							if (command && !commands.has(command.trigger))
+								commands.set(command.trigger, command);
+						}
+						return [...commands.values()];
+					}),
+					Effect.catchAll(() => Effect.succeed([] as SlashCommand[])),
+				)
+			: Effect.succeed([] as SlashCommand[]),
+	).pipe(Effect.map((commands) => commands ?? []));
+}
 
 /**
  * Lists the checkout without starting a paused VM. Files falls back to

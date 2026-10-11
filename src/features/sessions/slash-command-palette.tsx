@@ -1,5 +1,6 @@
 import {
 	Files,
+	FileText,
 	FolderTree,
 	Monitor,
 	RotateCcw,
@@ -17,6 +18,7 @@ const icons: Record<SlashCommandId, typeof Square> = {
 	diff: Files,
 	terminal: SquareTerminal,
 	desktop: Monitor,
+	custom: FileText,
 };
 
 export function SlashCommandPalette({
@@ -37,7 +39,7 @@ export function SlashCommandPalette({
 				const Icon = icons[command.id];
 				const ready = command.availability === "ready";
 				return (
-					<div key={command.id} role="presentation">
+					<div key={command.trigger} role="presentation">
 						<button
 							type="button"
 							role="option"
@@ -55,7 +57,11 @@ export function SlashCommandPalette({
 								<span>{command.label}</span>
 								<small>{command.description}</small>
 							</span>
-							<code className="slash-command-trigger">{command.trigger}</code>
+							<code className="slash-command-trigger">
+								{command.argumentHint
+									? `${command.trigger} ${command.argumentHint}`
+									: command.trigger}
+							</code>
 						</button>
 					</div>
 				);
