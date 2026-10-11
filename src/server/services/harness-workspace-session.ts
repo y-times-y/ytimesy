@@ -498,6 +498,7 @@ export function sendHarnessWorkspaceTask(
 		readonly fast?: boolean;
 		readonly runtimeText?: string;
 		readonly idempotencyKey?: string;
+		readonly mode?: "plan";
 	},
 ): Effect.Effect<PublicHarnessSession> {
 	if (

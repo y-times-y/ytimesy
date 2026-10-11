@@ -71,6 +71,7 @@ import { harnessLifecycleHooks } from "../services/harness-lifecycle-hooks";
 import { runAgentTaskTool } from "../services/harness-workspace-session";
 import { journaledToolOperation } from "../services/journaled-tool-operation";
 import type { ModelAgentInput } from "../services/model-agent-loop";
+import { withPlanMode, withPlanModeNotice } from "../services/plan-mode";
 import {
 	loadCloudProjectKnowledge,
 	recordCloudProjectReport,
@@ -312,10 +313,15 @@ export async function runApiTurn(
 					run,
 				),
 		});
-		const tools = hooks.wrap(repositoryContext.tools);
 		const currentTask = [...items]
 			.reverse()
 			.find((item) => item.kind === "userMessage");
+		const planMode =
+			currentTask?.kind === "userMessage" && currentTask.mode === "plan";
+		const tools = planMode
+			? withPlanMode(hooks.wrap(repositoryContext.tools))
+			: hooks.wrap(repositoryContext.tools);
+		if (planMode) messages = withPlanModeNotice(messages);
 		const projectKnowledge = await loadCloudProjectKnowledge(
 			owner,
 			currentTask?.kind === "userMessage"

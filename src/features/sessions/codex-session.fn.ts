@@ -165,6 +165,7 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 			createNew?: boolean;
 			variant?: string;
 			fast?: boolean;
+			mode?: string;
 		}) => {
 			const text = data.text.trim();
 			const modelId = data.modelId.trim();
@@ -184,6 +185,7 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 				createNew: data.createNew === true,
 				...(variant ? { variant } : {}),
 				...(data.fast === true ? { fast: true } : {}),
+				...(data.mode === "plan" ? { mode: "plan" as const } : {}),
 			};
 		},
 	)

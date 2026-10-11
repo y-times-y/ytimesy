@@ -69,6 +69,7 @@ export async function sendApiWorkspaceTask(
 		modelId: string;
 		runtimeText?: string;
 		idempotencyKey?: string;
+		mode?: "plan";
 	},
 	preparedTask = false,
 ) {
@@ -110,6 +111,8 @@ export async function sendApiWorkspaceTask(
 	const items = sessionItemsQueuedWithUser(
 		sessionItemsFromUnknown(session.items),
 		input.text,
+		undefined,
+		input.mode,
 	);
 	const previous = await previousTurnMessages(
 		scope.userId,

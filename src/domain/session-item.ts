@@ -22,6 +22,8 @@ export type UserMessageItem = {
 	readonly kind: "userMessage";
 	readonly id: SessionItemId;
 	readonly text: string;
+	/** "plan": investigate and propose only; implementation waits for approval. */
+	readonly mode?: "plan";
 	readonly timing?: {
 		readonly startedAt: number;
 		readonly completedAt?: number;
@@ -248,6 +250,7 @@ export function sessionItemsQueuedWithUser(
 	items: readonly SessionItem[],
 	text: string,
 	messageId?: string,
+	mode?: "plan",
 ): SessionItem[] {
 	const queued = text.trim();
 	if (!queued) return [...items];
@@ -260,6 +263,7 @@ export function sessionItemsQueuedWithUser(
 				messageId ?? `queued-user-${items.length}-${queued.length}`,
 			),
 			text: queued,
+			...(mode ? { mode } : {}),
 			timing: { startedAt: Date.now() },
 		},
 	];

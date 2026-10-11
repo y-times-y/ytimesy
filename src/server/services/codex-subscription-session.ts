@@ -88,6 +88,7 @@ export async function sendSubscriptionTask(
 		variant?: string;
 		fast?: boolean;
 		idempotencyKey?: string;
+		mode?: "plan";
 	},
 	preparedTask = false,
 ) {
@@ -126,7 +127,12 @@ export async function sendSubscriptionTask(
 		input.variant ?? inherited?.reasoning,
 		input.fast ?? inherited?.fast,
 	);
-	const items = sessionItemsQueuedWithUser(view.items, input.text);
+	const items = sessionItemsQueuedWithUser(
+		view.items,
+		input.text,
+		undefined,
+		input.mode,
+	);
 	const previous = await previousTurnMessages(
 		scope.userId,
 		scope.sessionId as string,

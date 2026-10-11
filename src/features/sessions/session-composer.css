@@ -465,6 +465,27 @@
 	background: #ffffff18;
 	border-color: #ffffff30;
 }
+.session-plan-toggle {
+	height: 26px;
+	margin-right: 8px;
+	padding: 0 10px;
+	flex-shrink: 0;
+	border: 1px solid #ffffff1f;
+	border-radius: 8px;
+	background: transparent;
+	color: var(--text-muted);
+	font-size: 12px;
+	font-weight: 500;
+}
+.session-plan-toggle:hover {
+	color: #e6e6e6;
+	border-color: #ffffff30;
+}
+.session-plan-toggle[aria-pressed="true"] {
+	color: #fff;
+	background: #ffffff18;
+	border-color: #ffffff40;
+}
 .session-send {
 	display: grid;
 	place-items: center;
