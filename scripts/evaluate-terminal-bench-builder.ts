@@ -244,6 +244,10 @@ try {
 							false,
 							workspace.sessionId,
 						);
+		// Same context as the API arm and Codex's public job (272K): the live
+		// subscription catalog raised Sol's default window on 2026-10-11.
+		runtime.contextWindow = 272_000;
+		runtime.autoCompactTokenLimit = undefined;
 		const model = runtime.model;
 		if (typeof model === "string")
 			throw new Error("Expected a concrete subscription transport.");
