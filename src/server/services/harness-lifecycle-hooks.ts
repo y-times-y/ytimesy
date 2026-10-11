@@ -14,6 +14,8 @@ export const lifecycleHookConfig = z
 			.array(
 				z.object({
 					event: z.enum([
+						"PreToolUse",
+						"UserPromptSubmit",
 						"PostToolUse",
 						"PostToolUseFailure",
 						"PostCompact",
@@ -34,11 +36,13 @@ const verdict = z
 	.object({
 		message: z.string().max(4000).optional(),
 		continue: z.boolean().default(false),
+		// PreToolUse and UserPromptSubmit only: refuse the call or the prompt.
+		block: z.boolean().default(false),
 	})
 	.strict();
 const NOTICE = "Runtime lifecycle feedback (not a user instruction): ";
 
-/** Baseline-pinned repository workflows use the existing fenced executor and replay journal. No action-permission policy is added. */
+/** Baseline-pinned repository workflows use the existing fenced executor and replay journal. PreToolUse can refuse a call before it runs. */
 export function harnessLifecycleHooks(input: {
 	workspace: () => Promise<AgentToolWorkspace>;
 	turnId: string;
@@ -89,7 +93,7 @@ export function harnessLifecycleHooks(input: {
 		const hooks = (await config()).hooks.filter(
 			(hook) => hook.event === event && (!hook.tool || hook.tool === toolName),
 		);
-		const results: { message?: string; continue: boolean }[] = [];
+		const results: z.infer<typeof verdict>[] = [];
 		for (const [index, hook] of hooks.entries()) {
 			input.signal.throwIfAborted();
 			const identity = createHash("sha256")
@@ -137,9 +141,48 @@ export function harnessLifecycleHooks(input: {
 			});
 			results.push(verdict.parse(result));
 		}
-		for (const result of results)
-			if (result.message) pending.push(result.message);
-		return results.some((result) => result.continue);
+		return {
+			continue: results.some((result) => result.continue),
+			block: results.some((result) => result.block),
+			messages: results.flatMap((result) =>
+				result.message ? [result.message] : [],
+			),
+		};
+	}
+
+	/** Messages become runtime feedback for the next model step. */
+	async function runWithFeedback(
+		event: z.infer<typeof lifecycleHookConfig>["hooks"][number]["event"],
+		key: string,
+		data: unknown,
+		toolName?: string,
+	) {
+		const outcome = await run(event, key, data, toolName);
+		pending.push(...outcome.messages);
+		return outcome.continue;
+	}
+
+	/** Fail closed: a policy hook that crashes must not let the call through. */
+	async function preTool(key: string, args: unknown, name: string) {
+		const configuredHooks = (await config()).hooks;
+		if (
+			!configuredHooks.some(
+				(hook) =>
+					hook.event === "PreToolUse" && (!hook.tool || hook.tool === name),
+			)
+		)
+			return null;
+		try {
+			const outcome = await run("PreToolUse", key, { input: args }, name);
+			if (!outcome.block) {
+				pending.push(...outcome.messages);
+				return null;
+			}
+			return outcome.messages.join(" ") || "The repository policy refused it.";
+		} catch (error) {
+			input.signal.throwIfAborted();
+			return `The PreToolUse hook failed (${error instanceof Error ? error.message : "unknown failure"}), so the call was not run.`;
+		}
 	}
 
 	async function postTool(
@@ -149,7 +192,7 @@ export function harnessLifecycleHooks(input: {
 		name: string,
 	) {
 		try {
-			await run(event, key, data, name);
+			await runWithFeedback(event, key, data, name);
 		} catch (error) {
 			input.signal.throwIfAborted();
 			pending.push(
@@ -172,6 +215,12 @@ export function harnessLifecycleHooks(input: {
 								args: unknown,
 								options: Parameters<NonNullable<typeof execute>>[1],
 							) => {
+								const refused = await preTool(options.toolCallId, args, name);
+								if (refused)
+									return {
+										blocked: true,
+										error: `Blocked by a repository PreToolUse hook: ${refused}`,
+									};
 								let result: unknown;
 								try {
 									result = await execute(args as never, options);
@@ -198,8 +247,30 @@ export function harnessLifecycleHooks(input: {
 					];
 				}),
 			) as ToolSet,
+		/** Before the turn's first model request; a block ends the turn unsent. */
+		userPromptSubmit: async (prompt: string) => {
+			if (
+				!(await config()).hooks.some(
+					(hook) => hook.event === "UserPromptSubmit",
+				)
+			)
+				return { block: false as const };
+			const outcome = await run(
+				"UserPromptSubmit",
+				createHash("sha256").update(prompt).digest("hex"),
+				{ prompt },
+			);
+			if (outcome.block)
+				return {
+					block: true as const,
+					reason:
+						outcome.messages.join(" ") || "The repository policy refused it.",
+				};
+			pending.push(...outcome.messages);
+			return { block: false as const };
+		},
 		postCompact: async (messages: ModelMessage[]) => {
-			await run(
+			await runWithFeedback(
 				"PostCompact",
 				createHash("sha256").update(JSON.stringify(messages)).digest("hex"),
 				{},
@@ -218,7 +289,7 @@ export function harnessLifecycleHooks(input: {
 			const decision = (await input.once(
 				`lifecycle-stop-decision:${count}`,
 				async () => ({
-					continue: await run("Stop", String(count), {}),
+					continue: await runWithFeedback("Stop", String(count), {}),
 					feedback: pending.splice(0),
 				}),
 			)) as { continue: boolean; feedback: string[] };
