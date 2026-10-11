@@ -37,6 +37,23 @@ export function harnessModelFamily(
 	return "other";
 }
 
+const SPECIALIST_TOOLS = [
+	"run_checks",
+	"inspect_changes",
+	"compose_tools",
+	"apply_patches",
+	"replace_text",
+	"batch_read",
+];
+
+/** A shell-shaped surface (like native Codex): a command tool and no specialist tools. */
+export function isShellSurface(toolNames: readonly string[]) {
+	return (
+		toolNames.includes("execute_command") &&
+		!SPECIALIST_TOOLS.some((name) => toolNames.includes(name))
+	);
+}
+
 export function harnessModelToolInstructions(
 	family: HarnessModelFamily,
 	nativePatch: boolean,
@@ -68,18 +85,7 @@ export function harnessModelToolInstructions(
 				: "Opaque reasoning is provider-managed state. Use recoverable source/tool evidence, not guessed reasoning, after compaction.";
 	// A shell-shaped surface (like native Codex) gets shell-centric guidance
 	// instead of instructions for specialist tools it was not offered.
-	const SPECIALISTS = [
-		"run_checks",
-		"inspect_changes",
-		"compose_tools",
-		"apply_patches",
-		"replace_text",
-		"batch_read",
-	];
-	if (
-		availableTools?.includes("execute_command") &&
-		!SPECIALISTS.some((name) => offered(name))
-	)
+	if (availableTools && isShellSurface(availableTools))
 		return [
 			`Harness tool profile v12-shell (${family}): Edit with apply_patch, or from execute_command when you can make the edit and run its check in the same command. ${context}`,
 			"Inspect with execute_command (rg, sed -n, git, project CLIs), reading related files together in one command rather than slice by slice, and reproduce the problem with the smallest executable check early. Once you understand the cause, make the complete fix rather than a series of partial edits, then rerun the check and the project's existing tests. Resume long commands with continue_command; stop_command cancels.",

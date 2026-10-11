@@ -20,6 +20,7 @@ import {
 import {
 	harnessModelFamily,
 	harnessModelToolInstructions,
+	isShellSurface,
 } from "#/domain/harness-model-profile";
 import {
 	type HarnessModelMetric,
@@ -246,12 +247,14 @@ async function executeModelSteps(
 	);
 	input = {
 		...input,
-		tools: composedAgentTools({
-			tools: input.tools,
-			signal: input.signal,
-			onEvent: input.onEvent,
-			onToolMetric: input.onToolMetric,
-		}),
+		tools: isShellSurface(Object.keys(input.tools))
+			? input.tools
+			: composedAgentTools({
+					tools: input.tools,
+					signal: input.signal,
+					onEvent: input.onEvent,
+					onToolMetric: input.onToolMetric,
+				}),
 		instructions: `${input.instructions}\n${harnessModelToolInstructions(modelFamily, input.tools.apply_patch?.type === "provider", Object.keys(input.tools))}`,
 	};
 	input.signal.throwIfAborted();
