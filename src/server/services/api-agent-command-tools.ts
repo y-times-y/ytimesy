@@ -117,6 +117,9 @@ export async function completedAgentCommands(
 		)
 		.parse(JSON.parse(result.stdout));
 }
+const WRITE_JOB_SCRIPT =
+	"import base64,os,sys; fd=os.open(sys.argv[1],os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600); os.write(fd,base64.b64decode(sys.argv[2])); os.close(fd)";
+
 const READ_COMMAND_SCRIPT = `import json, os, pathlib, stat, subprocess, sys, time
 output, status, session, start, seconds = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), int(sys.argv[5])
 if not 0 <= start <= 100000000 or not 0 <= seconds <= 55:
@@ -213,9 +216,12 @@ export function apiAgentCommandTools(
 			observeSeconds === undefined
 				? ""
 				: ` && python3 -c ${quote(READ_COMMAND_SCRIPT)} ${quote(path.output)} ${quote(path.status)} ${quote(path.session)} 0 ${observeSeconds} ${quote(input.output ? `${input.output.directory}/${id}.stdout` : path.output)} live`;
+		// tmux rejects commands over ~16 KB ("command too long"), so the job is
+		// written to a script file first and tmux only runs that file.
+		const script = `${root}/${id}.sh`;
 		const result = await machines.exec(
 			vm,
-			`mkdir -p ${quote(root)} && : >${quote(path.output)} && tmux -L ytimesy-api new-session -d -s ${quote(path.session)} bash -lc ${quote(job)}${observation}`,
+			`mkdir -p ${quote(root)} && python3 -c ${quote(WRITE_JOB_SCRIPT)} ${quote(script)} ${Buffer.from(job, "utf8").toString("base64")} && : >${quote(path.output)} && tmux -L ytimesy-api new-session -d -s ${quote(path.session)} bash ${quote(script)}${observation}`,
 			15000 + (observeSeconds ?? 0) * 1000,
 		);
 		if (result.exitCode)
