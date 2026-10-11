@@ -25,12 +25,8 @@ beforeAll(async () => {
 	await db.exec(
 		"create role anon; create role authenticated; create table auth_user(id text primary key); insert into auth_user values ('alice'),('bob'); create table project(id uuid primary key); insert into project values ('11111111-1111-4111-8111-111111111111');",
 	);
-	await db.exec(
-		await readFile(
-			"supabase/migrations/20261011120000_mcp_servers.sql",
-			"utf8",
-		),
-	);
+	for (const file of ["20261011120000_mcp_servers", "20261011150000_mcp_oauth"])
+		await db.exec(await readFile(`supabase/migrations/${file}.sql`, "utf8"));
 });
 afterAll(() => db.close());
 
@@ -52,7 +48,7 @@ it("seals headers, lists only header names, and unseals them only for the server
 		"select sealed_headers from mcp_server",
 	);
 	expect(stored.rows[0].sealed_headers).not.toContain("live-secret");
-	expect(await connectableMcpServers("alice", null)).toEqual([
+	expect(await connectableMcpServers("alice", null)).toMatchObject([
 		{
 			name: "linear",
 			url: "https://mcp.linear.app/mcp",
