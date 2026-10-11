@@ -8,6 +8,9 @@ import { coordinateConversationTurn } from "../adapters/conversation-turn-contro
 import type { WorkspaceMachines } from "../services/workspace-machines";
 import { runApiTurn } from "./api-turn";
 
+// These cases cover the lead path; builder-direct (the default) has its own tests.
+process.env.YTIMESY_ROOT_AGENT_MODE = "lead";
+
 const mocks = vi.hoisted(() => ({
 	renew: vi.fn(),
 	finalize: vi.fn(),

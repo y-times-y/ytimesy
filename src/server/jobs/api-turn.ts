@@ -18,6 +18,7 @@ import { SessionItemId, WorkspaceId } from "#/domain/ids";
 import { modelStepLimit } from "#/domain/model-workflow";
 import { posixShellCommand } from "#/domain/posix-command";
 import { PROJECT_KNOWLEDGE_INSTRUCTIONS } from "#/domain/project-knowledge";
+import { rootAgentMode } from "#/domain/root-agent-mode";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
 import {
 	completedChildrenForReview,
@@ -261,6 +262,9 @@ export async function runApiTurn(
 			stepMode: Boolean(step),
 			leadModelId: turn.model_id,
 		});
+		// Builder-direct (launch default): the root chat is the builder itself.
+		const direct =
+			!owner.parentSessionId && !fusion && rootAgentMode() === "builder";
 		const prepareWorkspace = deferredApiTurnWorkspace(
 			machines,
 			owner,
@@ -271,6 +275,7 @@ export async function runApiTurn(
 			execution = await prepareWorkspace();
 			if (
 				fusion ||
+				direct ||
 				(owner.parentSessionId && owner.taskAccess === "read_write")
 			) {
 				const prompt = [...items]
@@ -304,7 +309,7 @@ export async function runApiTurn(
 			nativePatch,
 			toolCallPrefix: step ? `step-${step.index}:` : undefined,
 			signal: abort.signal,
-			writable: Boolean(fusion),
+			writable: Boolean(fusion) || direct,
 		});
 		const repositoryContext = automaticRepositoryContext({
 			tools: originalTools,
@@ -320,6 +325,7 @@ export async function runApiTurn(
 			turnId: turn.id,
 			readOnly:
 				!fusion &&
+				!direct &&
 				(!owner.parentSessionId || owner.taskAccess !== "read_write"),
 			continuationCount: () =>
 				completedLifecycleContinuations(owner.id, turn.id),
@@ -345,6 +351,7 @@ export async function runApiTurn(
 		// Writable builders get the validated shell surface; leads keep coordination tools.
 		const shellBuilder =
 			Boolean(fusion) ||
+			direct ||
 			(Boolean(owner.parentSessionId) && owner.taskAccess === "read_write");
 		const surfaceTools = shellBuilder
 			? builderShellTools(repositoryContext.tools)
@@ -401,7 +408,9 @@ export async function runApiTurn(
 		let metricIndex = 0;
 		failureStage = "model";
 		const toolSurface =
-			owner.parentSessionId || fusion ? "implementation" : "coordination";
+			owner.parentSessionId || fusion || direct
+				? "implementation"
+				: "coordination";
 		if (step && (step.limitReached || step.index > modelStepLimit(toolSurface)))
 			throw new IncompleteAgentTurn("tool-calls");
 		// Once per turn, before its first model request; replayed steps reuse the journal.
@@ -476,7 +485,7 @@ export async function runApiTurn(
 			messages,
 			archiveHistory: (history) =>
 				archiveModelContext(owner.userId, owner.id, history),
-			instructions: `You are the ytimesy coding agent. Repository tools operate in this task's prepared checkout; paths are relative to that repository. Call read_repository_guidance before implementation and for nested paths; read applicable instructions and skill bodies completely.${shellBuilder ? "" : " Search optional tools with search_tools."} ${PREPARED_ENVIRONMENT_INSTRUCTIONS} Use read_environment_report for that setup report; do not pass its /tmp path to repository file readers. ${fusion ? "" : cloudAgentRoleInstructions(owner, { shellBuilder })}\n${pluginSkillsInstructions(plugins)}\n${PROJECT_KNOWLEDGE_INSTRUCTIONS}\nShared project knowledge (historical data, verify against this checkout):\n${JSON.stringify(projectKnowledge)}`,
+			instructions: `You are the ytimesy coding agent. Repository tools operate in this task's prepared checkout; paths are relative to that repository. Call read_repository_guidance before implementation and for nested paths; read applicable instructions and skill bodies completely.${shellBuilder ? "" : " Search optional tools with search_tools."} ${PREPARED_ENVIRONMENT_INSTRUCTIONS} Use read_environment_report for that setup report; do not pass its /tmp path to repository file readers. ${fusion ? "" : cloudAgentRoleInstructions(owner, { shellBuilder, direct })}\n${pluginSkillsInstructions(plugins)}\n${PROJECT_KNOWLEDGE_INSTRUCTIONS}\nShared project knowledge (historical data, verify against this checkout):\n${JSON.stringify(projectKnowledge)}`,
 			tools,
 			signal: abort.signal,
 			restoreInstructions: async (history) => {

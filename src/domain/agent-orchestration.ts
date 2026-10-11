@@ -75,8 +75,17 @@ export function cloudAgentRoleInstructions(
 		readonly parentSessionId?: string | null;
 		readonly taskAccess?: string | null;
 	},
-	options: { readonly shellBuilder?: boolean } = {},
+	options: { readonly shellBuilder?: boolean; readonly direct?: boolean } = {},
 ) {
+	// Builder-direct: the chat itself is the builder, exactly as benchmarked.
+	if (options.direct)
+		return [
+			"You are the coding agent for this chat: work directly in this workspace. Inspect, implement, run the checks and answer the user yourself; there is no lead and no delegation.",
+			COMPLETION_GATE_POLICY,
+			CHECK_ARTIFACT_CLEANUP_POLICY,
+			"Answer questions directly without changing files. Ask the user only for a genuinely missing decision, access or authority; otherwise choose the most reasonable interpretation and state it.",
+			"Your final answer to the user: what you changed, the exact commands you ran with their actual exit status, and anything unverified. Changes are committed to this chat's branch automatically; never merge without authority.",
+		].join(" ");
 	if (!session.parentSessionId)
 		return [
 			"You are the read-only lead: inspect, coordinate and answer simple questions directly; never edit the root workspace.",
