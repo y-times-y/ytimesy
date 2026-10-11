@@ -45,6 +45,7 @@ import {
 	recordEvaluationUsage,
 	reserveEvaluationRequest,
 } from "../adapters/harness-evaluation";
+import { connectableMcpServers } from "../adapters/mcp-servers";
 import { loadModelConnection } from "../adapters/model-connections";
 import { injectServerPeerMessages } from "../adapters/server-peer-inbox";
 import { readVerificationBaseline } from "../adapters/turn-verification";
@@ -71,6 +72,7 @@ import { ensureConversationCodePoint } from "../services/conversation-recovery";
 import { harnessLifecycleHooks } from "../services/harness-lifecycle-hooks";
 import { runAgentTaskTool } from "../services/harness-workspace-session";
 import { journaledToolOperation } from "../services/journaled-tool-operation";
+import { connectMcpTools } from "../services/mcp-tools";
 import type { ModelAgentInput } from "../services/model-agent-loop";
 import { withPlanMode, withPlanModeNotice } from "../services/plan-mode";
 import {
@@ -150,6 +152,7 @@ export async function runApiTurn(
 		leaseId: turn.lease_id as string,
 	};
 	let coordinated = false;
+	let closeMcp: (() => Promise<void>) | undefined;
 	let lastCoordinationRenewal = 0;
 	let evaluation: EvaluationRun | null = null;
 	const heartbeat = setInterval(() => {
@@ -325,10 +328,22 @@ export async function runApiTurn(
 		const surfaceTools = shellBuilder
 			? builderShellTools(repositoryContext.tools)
 			: repositoryContext.tools;
+		// The user's remote MCP servers are called from here; credentials never reach the VM.
+		const mcp = await connectMcpTools(
+			await connectableMcpServers(owner.userId, owner.projectId ?? null),
+			{ signal: abort.signal },
+		);
+		closeMcp = mcp.close;
+		const withMcp = { ...surfaceTools, ...mcp.tools };
 		const tools = planMode
-			? withPlanMode(hooks.wrap(surfaceTools))
-			: hooks.wrap(surfaceTools);
+			? withPlanMode(hooks.wrap(withMcp))
+			: hooks.wrap(withMcp);
 		if (planMode) messages = withPlanModeNotice(messages);
+		if (mcp.unavailable.length) {
+			const notice = `MCP servers unavailable this turn (connection or credentials failed): ${mcp.unavailable.join(", ")}. Their tools are not offered; continue without them.`;
+			if (!messages.some((message) => message.content === notice))
+				messages = [...messages, { role: "user", content: notice }];
+		}
 		const projectKnowledge = await loadCloudProjectKnowledge(
 			owner,
 			currentTask?.kind === "userMessage"
@@ -742,6 +757,7 @@ export async function runApiTurn(
 		abort.abort();
 		return saved === "cancelled" ? "cancelled" : "failed";
 	} finally {
+		await closeMcp?.().catch(() => {});
 		clearInterval(heartbeat);
 		await heartbeatPending;
 		await coordinationHeartbeatPending;

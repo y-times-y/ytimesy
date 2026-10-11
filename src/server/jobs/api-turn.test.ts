@@ -26,6 +26,9 @@ const mocks = vi.hoisted(() => ({
 	progress: vi.fn(),
 	checkpoint: vi.fn(),
 }));
+vi.mock("../adapters/mcp-servers", () => ({
+	connectableMcpServers: async () => [],
+}));
 vi.mock("../services/api-agent-command-tools", () => ({
 	completedAgentCommands: mocks.commandCompletions,
 }));
