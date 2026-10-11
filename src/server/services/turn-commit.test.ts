@@ -122,3 +122,26 @@ it("never commits or publishes when authoritative verification fails", async () 
 	expect(runtime.commands).toHaveLength(0);
 	expect(publishCompletedSessionTurn).not.toHaveBeenCalled();
 });
+
+it("verifies and commits under the checkout's recorded path, wherever its home directory is", async () => {
+	lookup.mockResolvedValue({
+		fullName: "owner/primary",
+		branch: "main",
+		repositories: [
+			{ fullName: "owner/primary", branch: "main" },
+			{ fullName: "owner/secondary", branch: "main" },
+		],
+	});
+	verification.mockClear();
+	const runtime = Object.assign(new MemoryWorkspaceRuntime(), {
+		readTextFile: async (_providerRef: string, path: string) =>
+			path === "/tmp/ytimesy-project-cwd" ? "/root/primary\n" : null,
+	});
+	await commitCompletedSessionTurn(session, items, runtime);
+	expect(
+		(verification.mock.calls as unknown as [{ directory: string }][]).map(
+			([input]) => input.directory,
+		),
+	).toEqual(["/root/primary", "/root/secondary"]);
+	expect(runtime.commands[0].argv[3]).toBe("/root/primary");
+});

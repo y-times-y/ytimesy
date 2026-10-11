@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
-import { repositoriesForProject } from "#/domain/projects";
+import { posix } from "node:path";
+import { projectFolderName, repositoriesForProject } from "#/domain/projects";
 import { lastUserMessageText, type SessionItem } from "#/domain/session-item";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
+import { PROJECT_CWD_PATH } from "../adapters/freestyle/clone-project";
 import { workspaceRuntimeFromEnv } from "../adapters/freestyle/workspace-runtime";
 import { evaluationRunForTask } from "../adapters/harness-evaluation";
 import { projectForOwner } from "../adapters/projects";
@@ -49,8 +51,21 @@ export async function commitCompletedSessionTurn(
 		.trim()
 		.slice(0, 72);
 	const host = runtime ?? workspaceRuntimeFromEnv();
+	// Baselines are pinned under the checkout's recorded path ($HOME/<repo>),
+	// not a fixed home directory, so completion must look them up the same way.
+	const recorded = (
+		await host.readTextFile?.(session.providerRef, PROJECT_CWD_PATH)
+	)?.trim();
+	const projectDirectory = recorded?.startsWith("/") ? recorded : null;
 	for (const repo of repositoriesForProject(project)) {
-		const directory = repositoryDirectory(repo.fullName);
+		const directory = !projectDirectory
+			? repositoryDirectory(repo.fullName)
+			: repo.fullName === project.fullName
+				? projectDirectory
+				: posix.join(
+						posix.dirname(projectDirectory),
+						projectFolderName(repo.fullName),
+					);
 		const verification = await verifyCompletedRepository({
 			runtime: host,
 			providerRef: session.providerRef,
