@@ -9,7 +9,15 @@ export type SessionActivityGlyph =
 	| "web"
 	| "mcp"
 	| "error"
-	| "tool";
+	| "tool"
+	| "delegate"
+	| "wait"
+	| "message"
+	| "takeover"
+	| "image"
+	| "guide"
+	| "stop"
+	| "test";
 
 const SEARCH_TOOLS = new Set([
 	"grep",

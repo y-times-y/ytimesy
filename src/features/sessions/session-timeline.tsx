@@ -36,6 +36,7 @@ import {
 	type TimelineRow,
 } from "#/domain/timeline-activity";
 import {
+	toolActivity,
 	toolCommand,
 	toolDetailTitle,
 	toolOutputText,
@@ -739,6 +740,7 @@ function SessionItemView({
 			);
 		case "dynamicToolCall": {
 			const command = toolCommand(item);
+			const activity = toolActivity(item);
 			return (
 				<details
 					className="session-activity"
@@ -748,8 +750,32 @@ function SessionItemView({
 					data-nested={nested ? "true" : undefined}
 				>
 					<summary>
-						<ActivityIcon glyph={activityGlyphForToolName(item.tool)} />
-						<span className={titleClass}>{toolDetailTitle(item)}</span>
+						<ActivityIcon
+							glyph={
+								item.status === "failed"
+									? "error"
+									: (activity.glyph ?? activityGlyphForToolName(item.tool))
+							}
+						/>
+						<span className={titleClass} title={toolDetailTitle(item)}>
+							<span className="session-tool-verb">{activity.verb}</span>
+							{activity.target ? (
+								activity.code ? (
+									<code className="session-tool-target">{activity.target}</code>
+								) : (
+									<span className="session-tool-target">{activity.target}</span>
+								)
+							) : null}
+							{activity.added || activity.removed ? (
+								<span className="session-tool-stats">
+									<span data-sign="added">+{activity.added ?? 0}</span>
+									<span data-sign="removed">−{activity.removed ?? 0}</span>
+								</span>
+							) : null}
+							{activity.note ? (
+								<span className="session-tool-note">{activity.note}</span>
+							) : null}
+						</span>
 						<ChevronRight size={12} className="session-activity-chevron" />
 						{activityStatus(item.status)}
 					</summary>

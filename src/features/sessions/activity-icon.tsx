@@ -1,14 +1,22 @@
 import {
+	BookOpen,
 	Brain,
 	FilePenLine,
 	Files,
 	FileText,
+	FlaskConical,
 	Globe,
+	Hand,
+	Hourglass,
+	Image,
 	ListChecks,
+	MessageSquare,
 	Plug,
 	Search,
+	Square,
 	SquareTerminal,
 	TriangleAlert,
+	Users,
 	Wrench,
 } from "lucide-react";
 import type { SessionActivityGlyph } from "#/domain/session-activity";
@@ -25,6 +33,14 @@ const icons = {
 	mcp: Plug,
 	error: TriangleAlert,
 	tool: Wrench,
+	delegate: Users,
+	wait: Hourglass,
+	message: MessageSquare,
+	takeover: Hand,
+	image: Image,
+	guide: BookOpen,
+	stop: Square,
+	test: FlaskConical,
 } as const;
 
 export function ActivityIcon({ glyph }: { glyph: SessionActivityGlyph }) {
