@@ -553,3 +553,31 @@ it.runIf(process.platform === "linux")(
 		expect(output.stdout).toContain("command-complete");
 	},
 );
+
+it("launches long commands from a script file so tmux's 16 KB limit cannot reject them", async () => {
+	const launched: string[] = [];
+	const tools = apiAgentCommandTools({
+		machines: {
+			exec: async (_vm: unknown, command: string) => {
+				launched.push(command);
+				return { exitCode: 0, stdout: "{}", stderr: "" };
+			},
+		} as unknown as WorkspaceMachines,
+		vm: WorkspaceId("test"),
+		cwd: "/repo",
+		sessionId: crypto.randomUUID(),
+		turnId: crypto.randomUUID(),
+		readOnly: false,
+		signal: new AbortController().signal,
+		once: (_id, execute) => execute(),
+	});
+	const command = `python3 - <<'PY'\n${"print('padding')\n".repeat(800)}PY`;
+	await (
+		tools.execute_command as {
+			execute: (args: object, options: object) => Promise<unknown>;
+		}
+	).execute({ command }, { toolCallId: "long" });
+	const tmux = launched[0].slice(launched[0].indexOf("tmux -L ytimesy-api"));
+	expect(tmux).toMatch(/new-session -d -s '[^']+' bash '[^']+\.sh'/);
+	expect(tmux.split(" && python3")[0].length).toBeLessThan(300);
+});
