@@ -33,7 +33,7 @@ it("keeps only the validated shell surface, which selects the shell prompt profi
 		"report_task_blocked",
 	]);
 	expect(harnessModelToolInstructions("openai", true, kept)).toContain(
-		"v12-shell",
+		"v13-shell",
 	);
 });
 
