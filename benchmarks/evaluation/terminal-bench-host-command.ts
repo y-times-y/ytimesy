@@ -31,7 +31,7 @@ export async function terminalBenchHostCommand(
 	if (launch.statusCode !== 0)
 		throw new Error("Long benchmark command launch was not confirmed.");
 	const read =
-		"import json,pathlib,sys; p=pathlib.Path(sys.argv[1]); s=p/'status'; sys.exit(3) if not s.exists() else print(json.dumps({'exitCode':int(s.read_text()),'stdout':(p/'stdout').read_text(errors='replace'),'stderr':(p/'stderr').read_text(errors='replace')}))";
+		"import json,pathlib,sys; p=pathlib.Path(sys.argv[1]); s=p/'status'; t=s.read_text().strip() if s.exists() else ''; sys.exit(3) if not t else print(json.dumps({'exitCode':int(t),'stdout':(p/'stdout').read_text(errors='replace'),'stderr':(p/'stderr').read_text(errors='replace')}))";
 	const deadline = Date.now() + bounded;
 	// One failed status read (a transient exec/API error) must not abandon a
 	// healthy command; give up only after several in a row.
@@ -51,7 +51,9 @@ export async function terminalBenchHostCommand(
 				.parse(JSON.parse(result.stdout ?? ""));
 		if (result.statusCode !== 3) {
 			if (++failedReads >= 5)
-				throw new Error("Long benchmark command observation failed.");
+				throw new Error(
+					`Long benchmark command observation failed (status ${result.statusCode}): ${String(result.stderr ?? result.stdout ?? "").slice(-400)}`,
+				);
 			await new Promise((done) => setTimeout(done, 2000 * failedReads));
 			continue;
 		}
