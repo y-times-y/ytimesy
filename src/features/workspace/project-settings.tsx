@@ -17,6 +17,7 @@ import {
 } from "#/domain/workspace-settings";
 import { AddProjectForm } from "../projects/add-project-form";
 import { requestJson } from "../projects/api";
+import { McpServers } from "../sessions/mcp-servers";
 import { ModelConnections } from "../sessions/model-connections";
 import { GithubMark } from "./github-mark";
 import { InfrastructureUsage } from "./infrastructure-usage";
@@ -435,6 +436,7 @@ function AgentsSection({
 				))}
 			</ul>
 			<ModelConnections />
+			<McpServers />
 			<CodexSubscriptionUsage usage={usage} />
 		</>
 	);

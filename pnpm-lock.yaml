@@ -17,6 +17,9 @@ importers:
       '@ai-sdk/google':
         specifier: 4.0.82
         version: 4.0.82(zod@4.6.4)
+      '@ai-sdk/mcp':
+        specifier: 2.0.60
+        version: 2.0.60(zod@4.6.4)
       '@ai-sdk/openai':
         specifier: 4.0.78
         version: 4.0.78(zod@4.6.4)
@@ -317,6 +320,12 @@ packages:
 
   '@ai-sdk/google@4.0.82':
     resolution: {integrity: sha512-2zPYyBSyIcywLtOEJRxlrtXjBjz4KxEU19Qqg/Dk8I9BrsB08+ghG2jv155dtuDZj8qZMrh6LO8J+Wt5O4xVhg==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      zod: ^3.25.76 || ^4.1.8
+
+  '@ai-sdk/mcp@2.0.60':
+    resolution: {integrity: sha512-/veUBdZ3u/Kg/F5J2IPq8ePC2sxbtPsteZ9idUWLdmavxI46xbT/ygwWT+jOSp6I4x8p0z618fFdVSNVOyLL4g==}
     engines: {node: '>=22'}
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
@@ -6231,6 +6240,14 @@ snapshots:
     dependencies:
       '@ai-sdk/provider': 4.0.18
       '@ai-sdk/provider-utils': 5.0.49(zod@4.6.4)
+      zod: 4.6.4
+
+  '@ai-sdk/mcp@2.0.60(zod@4.6.4)':
+    dependencies:
+      '@ai-sdk/provider': 4.0.18
+      '@ai-sdk/provider-utils': 5.0.49(zod@4.6.4)
+      cross-spawn: 7.0.6
+      pkce-challenge: 5.0.1
       zod: 4.6.4
 
   '@ai-sdk/openai-compatible@3.0.57(zod@4.6.4)':
