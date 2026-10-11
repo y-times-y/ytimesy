@@ -3,7 +3,7 @@ import { Effect } from "effect";
 import { cloudAgentRoleInstructions } from "#/domain/agent-orchestration";
 import { assertApiContextFits } from "#/domain/api-conversation";
 import { applyApiProgress, recordedContextUsage } from "#/domain/api-progress";
-import { addApiTokenUsage } from "#/domain/api-token-usage";
+import { type ApiTokenUsage, addApiTokenUsage } from "#/domain/api-token-usage";
 import {
 	ApiTurnCancelled,
 	type ApiTurnFailureStage,
@@ -74,6 +74,7 @@ import { fusionConfigForTurn, runFusionTurn } from "../services/fusion-turn";
 import { harnessLifecycleHooks } from "../services/harness-lifecycle-hooks";
 import { runAgentTaskTool } from "../services/harness-workspace-session";
 import { journaledToolOperation } from "../services/journaled-tool-operation";
+import { turnOAuthProvider } from "../services/mcp-oauth";
 import { connectMcpTools } from "../services/mcp-tools";
 import type { ModelAgentInput } from "../services/model-agent-loop";
 import { withPlanMode, withPlanModeNotice } from "../services/plan-mode";
@@ -350,7 +351,25 @@ export async function runApiTurn(
 			: repositoryContext.tools;
 		// The user's remote MCP servers are called from here; credentials never reach the VM.
 		const mcp = await connectMcpTools(
-			await connectableMcpServers(owner.userId, owner.projectId ?? null),
+			await Promise.all(
+				(await connectableMcpServers(owner.userId, owner.projectId ?? null))
+					// OAuth servers join once the user has signed in.
+					.filter((server) => server.auth !== "oauth" || server.sealedOAuth)
+					.map(async (server) => ({
+						name: server.name,
+						url: server.url,
+						headers: server.headers,
+						authProvider:
+							server.auth === "oauth"
+								? await turnOAuthProvider({
+										userId: owner.userId,
+										serverId: server.id,
+										sealedOAuth: server.sealedOAuth,
+										appUrl: process.env.APP_URL ?? "http://localhost:3000",
+									})
+								: undefined,
+					})),
+			),
 			{ signal: abort.signal },
 		);
 		closeMcp = mcp.close;
@@ -402,6 +421,9 @@ export async function runApiTurn(
 						connectionId: turn.connection_id as string,
 					});
 		const previousContext = recordedContextUsage(items)?.context;
+		// Fusion: the evaluation guard counts lead and sidekick tokens together.
+		let leadUsage: ApiTokenUsage | null = null;
+		let sidekickUsage: ApiTokenUsage | null = null;
 		const agentInput: ModelAgentInput = {
 			previousContext:
 				previousContext?.modelContextWindow && previousContext.last.totalTokens
@@ -584,8 +606,14 @@ export async function runApiTurn(
 						),
 					};
 				items = applyApiProgress(items, turn.id, event);
-				if (evaluation && event.type === "usage")
-					await recordEvaluationUsage(evaluation, turn.id, event.usage);
+				if (evaluation && event.type === "usage") {
+					leadUsage = event.usage;
+					await recordEvaluationUsage(
+						evaluation,
+						turn.id,
+						addApiTokenUsage(sidekickUsage, event.usage),
+					);
+				}
 				if (Date.now() - flushedAt >= 250 || event.type === "finish") {
 					progress.offer(items);
 					if (event.type === "finish") await progress.drain();
@@ -619,12 +647,15 @@ export async function runApiTurn(
 								);
 						},
 						onSidekickEvent: async (event) => {
-							if (evaluation && event.type === "usage")
+							// Both counters only grow, so their sum is a valid cumulative checkpoint.
+							if (evaluation && event.type === "usage") {
+								sidekickUsage = event.usage;
 								await recordEvaluationUsage(
 									evaluation,
-									`${turn.id}:sidekick`,
-									event.usage,
+									turn.id,
+									addApiTokenUsage(leadUsage, event.usage),
 								);
+							}
 							// The user sees the sidekick's tool work; its report reaches them through the lead.
 							if (event.type !== "tool-call" && event.type !== "tool-result")
 								return;

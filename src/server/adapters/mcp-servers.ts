@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { seal, unseal } from "#/server/auth/token-vault";
 import { database } from "./database";
@@ -15,6 +15,8 @@ export const mcpServerInput = z.object({
 		.default({}),
 	projectId: z.string().uuid().nullable().default(null),
 	pluginId: z.string().min(1).max(200).nullable().default(null),
+	/** "oauth": the server signs the user in (MCP authorization) instead of headers. */
+	auth: z.enum(["headers", "oauth"]).default("headers"),
 });
 
 /** What clients may see: header names only, never their values. */
@@ -26,6 +28,9 @@ export type PublicMcpServer = {
 	projectId: string | null;
 	pluginId: string | null;
 	enabled: boolean;
+	auth: "headers" | "oauth";
+	/** OAuth servers: whether the user has signed in. */
+	signedIn: boolean;
 };
 
 type Row = {
@@ -37,6 +42,8 @@ type Row = {
 	project_id: string | null;
 	plugin_id: string | null;
 	enabled: boolean;
+	auth: "headers" | "oauth";
+	sealed_oauth: string | null;
 };
 
 const publicServer = (row: Row): PublicMcpServer => ({
@@ -47,6 +54,8 @@ const publicServer = (row: Row): PublicMcpServer => ({
 	projectId: row.project_id,
 	pluginId: row.plugin_id,
 	enabled: row.enabled,
+	auth: row.auth,
+	signedIn: row.auth === "oauth" && row.sealed_oauth !== null,
 });
 
 export async function addMcpServer(
@@ -56,8 +65,8 @@ export async function addMcpServer(
 	const server = mcpServerInput.parse(input);
 	const names = Object.keys(server.headers);
 	const { rows } = await database().query<Row>(
-		`insert into mcp_server(id,user_id,project_id,name,url,sealed_headers,header_names,plugin_id)
-		 values($1,$2,$3,$4,$5,$6,$7,$8) returning *`,
+		`insert into mcp_server(id,user_id,project_id,name,url,sealed_headers,header_names,plugin_id,auth)
+		 values($1,$2,$3,$4,$5,$6,$7,$8,$9) returning *`,
 		[
 			randomUUID(),
 			userId,
@@ -67,6 +76,7 @@ export async function addMcpServer(
 			names.length ? await seal(JSON.stringify(server.headers)) : null,
 			names,
 			server.pluginId,
+			server.auth,
 		],
 	);
 	return publicServer(rows[0]);
@@ -112,6 +122,9 @@ export async function connectableMcpServers(
 	);
 	return Promise.all(
 		rows.map(async (row) => ({
+			id: row.id,
+			auth: row.auth,
+			sealedOAuth: row.sealed_oauth,
 			name: row.name,
 			url: row.url,
 			headers: row.sealed_headers
@@ -122,4 +135,69 @@ export async function connectableMcpServers(
 				: {},
 		})),
 	);
+}
+
+/** Server-side only: one server with its sealed OAuth record. */
+export async function mcpServerForOwner(userId: string, id: string) {
+	const { rows } = await database().query<Row>(
+		"select * from mcp_server where user_id=$1 and id=$2",
+		[userId, id],
+	);
+	const row = rows[0];
+	return row
+		? {
+				id: row.id,
+				url: row.url,
+				auth: row.auth,
+				sealedOAuth: row.sealed_oauth,
+			}
+		: null;
+}
+
+export async function saveMcpOAuth(
+	userId: string,
+	id: string,
+	sealedOAuth: string | null,
+) {
+	await database().query(
+		"update mcp_server set sealed_oauth=$3, updated_at=now() where user_id=$1 and id=$2 and auth='oauth'",
+		[userId, id, sealedOAuth],
+	);
+}
+
+const stateHash = (state: string) =>
+	createHash("sha256").update(state).digest("hex");
+
+export async function saveMcpOAuthState(
+	userId: string,
+	serverId: string,
+	state: string,
+	verifier: string,
+) {
+	await database().query(
+		"delete from mcp_oauth_state where expires_at < now()",
+	);
+	await database().query(
+		`insert into mcp_oauth_state(state_hash,user_id,server_id,encrypted_verifier,expires_at)
+		 values($1,$2,$3,$4,now()+interval '10 minutes')`,
+		[stateHash(state), userId, serverId, await seal(verifier)],
+	);
+}
+
+/** One-time: the state is consumed whether or not the exchange succeeds. */
+export async function takeMcpOAuthState(userId: string, state: string) {
+	const { rows } = await database().query<{
+		server_id: string;
+		encrypted_verifier: string;
+	}>(
+		"delete from mcp_oauth_state where state_hash=$1 and user_id=$2 and expires_at>now() returning server_id, encrypted_verifier",
+		[stateHash(state), userId],
+	);
+	const row = rows[0];
+	return row
+		? {
+				serverId: row.server_id,
+				verifier: await unseal(row.encrypted_verifier),
+			}
+		: null;
 }

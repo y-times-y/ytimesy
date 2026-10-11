@@ -1,10 +1,16 @@
-import { createMCPClient, type MCPClient } from "@ai-sdk/mcp";
+import {
+	createMCPClient,
+	type MCPClient,
+	type OAuthClientProvider,
+} from "@ai-sdk/mcp";
 import type { ToolSet } from "ai";
 
 export type ConnectableMcpServer = {
 	name: string;
 	url: string;
 	headers: Record<string, string>;
+	/** OAuth servers: stored tokens, refreshed by the SDK. */
+	authProvider?: OAuthClientProvider;
 };
 
 const CALL_TIMEOUT_MS = 60_000;
@@ -44,6 +50,7 @@ export async function connectMcpTools(
 					type: "http",
 					url: server.url,
 					headers: server.headers,
+					...(server.authProvider ? { authProvider: server.authProvider } : {}),
 					redirect: "error",
 					...(options.fetch ? { fetch: options.fetch } : {}),
 				},

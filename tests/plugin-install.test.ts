@@ -49,6 +49,7 @@ beforeAll(async () => {
 	for (const file of [
 		"20261011120000_mcp_servers.sql",
 		"20261011130000_plugin_installs.sql",
+		"20261011150000_mcp_oauth.sql",
 	])
 		await db.exec(await readFile(`supabase/migrations/${file}`, "utf8"));
 	const root = await mkdtemp(join(tmpdir(), "ytimesy-install-"));
@@ -182,7 +183,7 @@ it("installs only catalog plugins, requires their settings, and registers their 
 	expect(await listMcpServers("alice")).toEqual([]);
 });
 
-it("installs a sign-in (OAuth) plugin with its commands and marks its MCP server as needing sign-in", async () => {
+it("installs a sign-in (OAuth) plugin with its commands and an OAuth MCP server awaiting sign-in", async () => {
 	const root = await mkdtemp(join(tmpdir(), "ytimesy-oauth-"));
 	const files: Record<string, string> = {
 		"p/.claude-plugin/plugin.json": JSON.stringify({ name: "Linear" }),
@@ -207,15 +208,15 @@ it("installs a sign-in (OAuth) plugin with its commands and marks its MCP server
 		fetch: (async () => new Response(bytes)) as typeof fetch,
 		mcpFetch: (async () => new Response(null, { status: 401 })) as typeof fetch,
 	});
-	expect(installed.unsupported.join(" ")).toContain(
-		"linear-linear needs sign-in",
-	);
+	expect(installed.needsSignIn).toEqual(["linear-linear"]);
 	const [install] = await listInstalls("alice");
 	expect(install).toMatchObject({
 		pluginName: "linear",
 		commands: ["triage"],
-		mcpServers: [],
+		mcpServers: ["linear-linear"],
 	});
-	expect(await listMcpServers("alice")).toEqual([]);
+	expect(await listMcpServers("alice")).toMatchObject([
+		{ name: "linear-linear", auth: "oauth", signedIn: false, headerNames: [] },
+	]);
 	await removeInstall("alice", installed.id);
 });

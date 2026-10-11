@@ -7,6 +7,7 @@ import {
 	getMcpServersFn,
 	removeMcpServerFn,
 	setMcpServerEnabledFn,
+	startMcpOAuthFn,
 } from "./mcp-servers.fn";
 
 /** Remote MCP servers the agent can use; called from our server, keys never shown again. */
@@ -16,6 +17,7 @@ export function McpServers() {
 	const addServer = useServerFn(addMcpServerFn);
 	const toggleServer = useServerFn(setMcpServerEnabledFn);
 	const deleteServer = useServerFn(removeMcpServerFn);
+	const startSignIn = useServerFn(startMcpOAuthFn);
 	const servers = useQuery({
 		queryKey: ["mcp-servers"],
 		queryFn: () => getServers(),
@@ -39,7 +41,8 @@ export function McpServers() {
 			}),
 		onSuccess: (result) => {
 			update(result.servers);
-			setAdded(result.toolCount);
+			if (result.signIn) signIn.mutate(result.signIn);
+			else setAdded(result.toolCount);
 			setName("");
 			setUrl("");
 			setHeaderValue("");
@@ -54,14 +57,24 @@ export function McpServers() {
 		mutationFn: (id: string) => deleteServer({ data: { id } }),
 		onSuccess: update,
 	});
-	const busy = add.isPending || toggle.isPending || remove.isPending;
+	// OAuth servers: the provider's sign-in page, then back to /api/mcp/oauth/callback.
+	const signIn = useMutation({
+		mutationFn: (id: string) => startSignIn({ data: { id } }),
+		onSuccess: (result) => {
+			if (result.url) window.location.assign(result.url);
+			else void servers.refetch();
+		},
+	});
+	const busy =
+		add.isPending || toggle.isPending || remove.isPending || signIn.isPending;
 	return (
 		<section aria-label="MCP servers">
 			<h3>MCP servers</h3>
 			<p className="settings-copy">
 				Connect remote (HTTPS) MCP servers such as Linear, Sentry or your own
-				API. Our server calls them for the agent; headers are encrypted, never
-				shown again, and never enter the workspace.
+				API. Leave the header empty for servers that sign you in (OAuth). Our
+				server calls them for the agent; credentials are encrypted, never shown
+				again, and never enter the workspace.
 			</p>
 			{servers.isError ? (
 				<p role="alert">
@@ -77,11 +90,26 @@ export function McpServers() {
 							? ` · headers: ${server.headerNames.join(", ")}`
 							: ""}
 						{server.pluginId ? ` · from plugin ${server.pluginId}` : ""}
+						{server.auth === "oauth"
+							? server.signedIn
+								? " · signed in"
+								: " · needs sign-in"
+							: ""}
 					</p>
 					<p className="settings-copy">
 						Tools appear to the agent as mcp__{server.name}__…
 					</p>
 					<div className="model-connection-actions">
+						{server.auth === "oauth" ? (
+							<button
+								type="button"
+								className="settings-secondary"
+								disabled={busy}
+								onClick={() => signIn.mutate(server.id)}
+							>
+								{server.signedIn ? "Sign in again" : "Sign in"}
+							</button>
+						) : null}
 						<button
 							type="button"
 							className="settings-secondary"
@@ -159,9 +187,9 @@ export function McpServers() {
 			{added !== null ? (
 				<p className="settings-copy">Connected · {added} tools available.</p>
 			) : null}
-			{add.error || toggle.error || remove.error ? (
+			{add.error || toggle.error || remove.error || signIn.error ? (
 				<p role="alert">
-					{(add.error ?? toggle.error ?? remove.error)?.message}
+					{(add.error ?? toggle.error ?? remove.error ?? signIn.error)?.message}
 				</p>
 			) : null}
 		</section>
