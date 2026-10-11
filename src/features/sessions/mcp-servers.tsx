@@ -89,7 +89,7 @@ export function McpServers() {
 						{server.headerNames.length
 							? ` · headers: ${server.headerNames.join(", ")}`
 							: ""}
-						{server.pluginId ? ` · from plugin ${server.pluginId}` : ""}
+						{server.pluginId ? " · from a plugin" : ""}
 						{server.auth === "oauth"
 							? server.signedIn
 								? " · signed in"

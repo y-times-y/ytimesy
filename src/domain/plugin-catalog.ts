@@ -23,7 +23,7 @@ export type PluginCatalogEntry = {
 
 // Reviewed 2026-10-11 from Anthropic's official marketplace (anthropics/claude-plugins-official@f359d43);
 // each entry was fetched and parsed at this exact commit. Sign-in (OAuth) MCP servers install as
-// skills/commands only until OAuth support lands.
+// OAuth servers that join turns once the user signs in.
 export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
 	{
 		id: "github",

@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { useState } from "react";
+import { getMcpServersFn, startMcpOAuthFn } from "./mcp-servers.fn";
 import {
 	getPluginsFn,
 	installPluginFn,
@@ -15,15 +16,32 @@ export function Plugins() {
 	const install = useServerFn(installPluginFn);
 	const toggle = useServerFn(setPluginEnabledFn);
 	const uninstall = useServerFn(uninstallPluginFn);
+	const getServers = useServerFn(getMcpServersFn);
+	const startSignIn = useServerFn(startMcpOAuthFn);
 	const plugins = useQuery({
 		queryKey: ["plugins"],
 		queryFn: () => getPlugins(),
+	});
+	// Shared with the MCP servers panel: which plugin servers still need sign-in.
+	const servers = useQuery({
+		queryKey: ["mcp-servers"],
+		queryFn: () => getServers(),
 	});
 	const [config, setConfig] = useState<Record<string, Record<string, string>>>(
 		{},
 	);
 	const refresh = () =>
-		queryClient.invalidateQueries({ queryKey: ["plugins"] });
+		Promise.all([
+			queryClient.invalidateQueries({ queryKey: ["plugins"] }),
+			queryClient.invalidateQueries({ queryKey: ["mcp-servers"] }),
+		]);
+	const signIn = useMutation({
+		mutationFn: (id: string) => startSignIn({ data: { id } }),
+		onSuccess: (result) => {
+			if (result.url) window.location.assign(result.url);
+			else void refresh();
+		},
+	});
 	const installMutation = useMutation({
 		mutationFn: (catalogId: string) =>
 			install({
@@ -43,7 +61,8 @@ export function Plugins() {
 	const busy =
 		installMutation.isPending ||
 		toggleMutation.isPending ||
-		uninstallMutation.isPending;
+		uninstallMutation.isPending ||
+		signIn.isPending;
 	const installedIds = new Set(
 		plugins.data?.installed.map((row) => row.catalogId),
 	);
@@ -79,6 +98,24 @@ export function Plugins() {
 						</p>
 					) : null}
 					<div className="model-connection-actions">
+						{servers.data
+							?.filter(
+								(server) =>
+									server.pluginId === row.id &&
+									server.auth === "oauth" &&
+									!server.signedIn,
+							)
+							.map((server) => (
+								<button
+									type="button"
+									className="settings-primary"
+									key={server.id}
+									disabled={busy}
+									onClick={() => signIn.mutate(server.id)}
+								>
+									Sign in to {server.name}
+								</button>
+							))}
 						<button
 							type="button"
 							className="settings-secondary"
