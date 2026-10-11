@@ -1,4 +1,5 @@
-import { gunzipSync } from "node:zlib";
+import { Readable } from "node:stream";
+import { createGunzip } from "node:zlib";
 
 /** A reviewed plugin pinned to an exact commit; what we reviewed is what installs. */
 export type PinnedPluginSource = {
@@ -9,7 +10,8 @@ export type PinnedPluginSource = {
 	path: string;
 };
 
-const MAX_ARCHIVE = 20 * 1024 * 1024;
+// Monorepos can be large; only the plugin folder is kept, the rest is skipped while streaming.
+const MAX_SCANNED = 500 * 1024 * 1024;
 const MAX_TEXT_FILE = 256 * 1024;
 const MAX_FILES = 2000;
 
@@ -19,59 +21,116 @@ function field(block: Buffer, offset: number, length: number) {
 	return raw.subarray(0, end === -1 ? raw.length : end).toString("utf8");
 }
 
-/** Minimal ustar/pax reader for GitHub tarballs: regular files only, bounded. */
-export function readTarball(gzipped: Uint8Array) {
-	const archive = gunzipSync(gzipped, { maxOutputLength: MAX_ARCHIVE });
-	const files = new Map<string, Buffer>();
-	let offset = 0;
-	let longName: string | undefined;
-	while (offset + 512 <= archive.length) {
-		const header = archive.subarray(offset, offset + 512);
-		if (header.every((byte) => byte === 0)) break;
-		const size = Number.parseInt(field(header, 124, 12).trim() || "0", 8);
-		const type = String.fromCharCode(header[156] || 48);
-		const body = archive.subarray(offset + 512, offset + 512 + size);
-		offset += 512 + Math.ceil(size / 512) * 512;
-		if (type === "x") {
-			// pax extended header: "<len> key=value\n" records; path overrides the name.
-			const path = /\d+ path=([^\n]*)\n/.exec(body.toString("utf8"))?.[1];
-			if (path) longName = path;
-			continue;
-		}
-		if (type === "L") {
-			longName = body.toString("utf8").replace(/\0+$/, "");
-			continue;
-		}
-		if (type === "g") continue;
-		const prefix = field(header, 345, 155);
-		const name =
-			longName ??
-			(prefix ? `${prefix}/${field(header, 0, 100)}` : field(header, 0, 100));
-		longName = undefined;
-		if (type !== "0" && type !== "\0") continue;
-		if (files.size >= MAX_FILES)
-			throw new Error("Plugin archive has too many files.");
-		files.set(name, Buffer.from(body));
-	}
-	return files;
+/** Plugin-relative path for a GitHub tarball entry, or null when outside the plugin. */
+function pluginRelative(name: string, root: string) {
+	// GitHub prefixes every entry with "<owner>-<repo>-<sha>/".
+	const relative = name.split("/").slice(1).join("/");
+	if (root && !relative.startsWith(`${root}/`)) return null;
+	const path = root ? relative.slice(root.length + 1) : relative;
+	if (!path || path.split("/").some((part) => part === ".." || part === ""))
+		return null;
+	return path;
 }
 
-/** Plugin files relative to the plugin root; only .md/.json keep their contents. */
-export function pluginFilesFromArchive(
-	archive: ReadonlyMap<string, Buffer>,
+/**
+ * Streams a gzipped GitHub tarball (ustar/pax), keeping only regular files in
+ * the plugin folder; .md/.json keep their contents, others are kept by path.
+ */
+export async function pluginFilesFromTarball(
+	gzipped: AsyncIterable<Uint8Array> | Uint8Array,
 	pluginPath: string,
 ) {
 	const root = pluginPath.replace(/^\/+|\/+$/g, "");
 	const files = new Map<string, string>();
-	for (const [name, body] of archive) {
-		// GitHub prefixes every entry with "<owner>-<repo>-<sha>/".
-		const relative = name.split("/").slice(1).join("/");
-		if (root && !relative.startsWith(`${root}/`)) continue;
-		const path = root ? relative.slice(root.length + 1) : relative;
-		if (!path || path.split("/").some((part) => part === ".." || part === ""))
-			continue;
-		const text = /\.(md|json)$/.test(path) && body.length <= MAX_TEXT_FILE;
-		files.set(path, text ? body.toString("utf8") : "");
+	const source =
+		gzipped instanceof Uint8Array
+			? Readable.from([gzipped])
+			: Readable.from(gzipped);
+	let pending = Buffer.alloc(0);
+	let scanned = 0;
+	let longName: string | undefined;
+	let current:
+		| {
+				remaining: number;
+				padding: number;
+				path: string | null;
+				type: string;
+				parts: Buffer[];
+				size: number;
+		  }
+		| undefined;
+	const finishEntry = () => {
+		if (!current) return;
+		const body = Buffer.concat(current.parts);
+		if (current.type === "x") {
+			const path = /\d+ path=([^\n]*)\n/.exec(body.toString("utf8"))?.[1];
+			if (path) longName = path;
+		} else if (current.type === "L") {
+			longName = body.toString("utf8").replace(/\0+$/, "");
+		} else if (
+			current.path !== null &&
+			(current.type === "0" || current.type === "\0")
+		) {
+			if (files.size >= MAX_FILES)
+				throw new Error("Plugin has too many files.");
+			const text =
+				/\.(md|json)$/.test(current.path) && current.size <= MAX_TEXT_FILE;
+			files.set(current.path, text ? body.toString("utf8") : "");
+		}
+		current = undefined;
+	};
+	for await (const chunk of source.pipe(createGunzip())) {
+		scanned += chunk.length;
+		if (scanned > MAX_SCANNED) throw new Error("Plugin archive is too large.");
+		pending = Buffer.concat([pending, chunk as Buffer]);
+		while (true) {
+			if (current) {
+				const take = Math.min(current.remaining, pending.length);
+				// Keep bytes only for metadata records and wanted text files.
+				const keep =
+					current.type === "x" ||
+					current.type === "L" ||
+					(current.path !== null && current.size <= MAX_TEXT_FILE);
+				if (keep) current.parts.push(pending.subarray(0, take));
+				pending = pending.subarray(take);
+				current.remaining -= take;
+				if (current.remaining > 0) break;
+				const padding = Math.min(current.padding, pending.length);
+				pending = pending.subarray(padding);
+				current.padding -= padding;
+				if (current.padding > 0) break;
+				finishEntry();
+				continue;
+			}
+			if (pending.length < 512) break;
+			const header = pending.subarray(0, 512);
+			pending = pending.subarray(512);
+			if (header.every((byte) => byte === 0)) continue;
+			const size = Number.parseInt(field(header, 124, 12).trim() || "0", 8);
+			const type = String.fromCharCode(header[156] || 48);
+			let path: string | null = null;
+			if (type !== "x" && type !== "L" && type !== "g") {
+				const prefix = field(header, 345, 155);
+				const name =
+					longName ??
+					(prefix
+						? `${prefix}/${field(header, 0, 100)}`
+						: field(header, 0, 100));
+				longName = undefined;
+				path = pluginRelative(name, root);
+			}
+			current = {
+				remaining: size,
+				padding: (512 - (size % 512)) % 512,
+				path,
+				type,
+				parts: [],
+				size,
+			};
+			if (size === 0) {
+				finishEntry();
+			}
+		}
 	}
 	return files;
 }
@@ -90,12 +149,12 @@ export async function fetchPinnedPlugin(
 		);
 	const response = await fetchImpl(
 		`https://codeload.github.com/${source.owner}/${source.repo}/tar.gz/${source.sha}`,
-		{ redirect: "error", signal: AbortSignal.timeout(30_000) },
+		{ redirect: "error", signal: AbortSignal.timeout(120_000) },
 	);
-	if (!response.ok)
+	if (!response.ok || !response.body)
 		throw new Error(`Could not download the plugin (${response.status}).`);
-	const bytes = new Uint8Array(await response.arrayBuffer());
-	if (bytes.length > MAX_ARCHIVE)
-		throw new Error("Plugin archive is too large.");
-	return pluginFilesFromArchive(readTarball(bytes), source.path);
+	return pluginFilesFromTarball(
+		response.body as unknown as AsyncIterable<Uint8Array>,
+		source.path,
+	);
 }

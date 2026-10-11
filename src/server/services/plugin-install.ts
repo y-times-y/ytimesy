@@ -3,7 +3,11 @@ import {
 	PLUGIN_CATALOG,
 	type PluginCatalogEntry,
 } from "#/domain/plugin-catalog";
-import { parsePlugin, resolvePluginHeaders } from "#/domain/plugin-package";
+import {
+	parsePlugin,
+	resolvePluginHeaders,
+	resolvePluginValue,
+} from "#/domain/plugin-package";
 import { addMcpServer } from "../adapters/mcp-servers";
 import { saveInstall } from "../adapters/plugin-installs";
 import { fetchPinnedPlugin } from "../adapters/plugin-source";
@@ -34,17 +38,46 @@ export async function installCatalogPlugin(input: {
 			throw new Error(
 				`"${option.title}" is required to install ${plugin.displayName}.`,
 			);
-	const servers = plugin.mcpServers.map((server) => ({
-		name: `${plugin.name}-${server.name}`.slice(0, 32),
-		url: server.url,
-		headers: resolvePluginHeaders(server.headers, input.config),
-	}));
-	const probe = await connectMcpTools(servers, { fetch: input.mcpFetch });
+	const candidates = plugin.mcpServers.map((server) => {
+		const url = resolvePluginValue(server.url, input.config);
+		if (!url.startsWith("https://"))
+			throw new Error(`${server.name} must resolve to an HTTPS URL.`);
+		return {
+			name: `${plugin.name}-${server.name}`.slice(0, 32),
+			url,
+			headers: resolvePluginHeaders(server.headers, input.config),
+			// A server whose config takes a credential from the user's settings.
+			usesCredential: Object.values({
+				url: server.url,
+				...server.headers,
+			}).some((value) => value.includes("${")),
+		};
+	});
+	const probe = await connectMcpTools(candidates, { fetch: input.mcpFetch });
 	await probe.close();
-	if (probe.unavailable.length)
+	const unavailable = new Set(probe.unavailable);
+	const wrongCredential = candidates.filter(
+		(server) => unavailable.has(server.name) && server.usesCredential,
+	);
+	if (wrongCredential.length)
 		throw new Error(
-			`Could not connect ${probe.unavailable.join(", ")}. Check the plugin's settings.`,
+			`Could not connect ${wrongCredential.map((server) => server.name).join(", ")}. Check the plugin's settings.`,
 		);
+	// Servers with no credential in their config expect sign-in (OAuth), which is
+	// not supported yet: the plugin installs with its skills and commands only.
+	const needsSignIn = candidates.filter((server) =>
+		unavailable.has(server.name),
+	);
+	const servers = candidates
+		.filter((server) => !unavailable.has(server.name))
+		.map(({ usesCredential: _usesCredential, ...server }) => server);
+	const unsupported = [
+		...plugin.unsupported,
+		...needsSignIn.map(
+			(server) =>
+				`MCP server ${server.name} needs sign-in (OAuth), not supported yet`,
+		),
+	];
 	const id = randomUUID();
 	await saveInstall({
 		id,
@@ -58,7 +91,7 @@ export async function installCatalogPlugin(input: {
 			skills: plugin.skills,
 			commands: plugin.commands,
 			mcpServers: servers.map((server) => server.name),
-			unsupported: plugin.unsupported,
+			unsupported,
 			version: plugin.version,
 			description: plugin.description,
 		},
@@ -69,5 +102,5 @@ export async function installCatalogPlugin(input: {
 			projectId: input.projectId,
 			pluginId: id,
 		});
-	return { id, plugin: plugin.displayName, unsupported: plugin.unsupported };
+	return { id, plugin: plugin.displayName, unsupported };
 }
