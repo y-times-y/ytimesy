@@ -1,6 +1,10 @@
 // biome-ignore-all lint/suspicious/noTemplateCurlyInString: plugin configs use literal ${user_config.KEY} placeholders.
 import { expect, it } from "vitest";
-import { parsePlugin, resolvePluginHeaders } from "./plugin-package";
+import {
+	parsePlugin,
+	resolvePluginHeaders,
+	resolvePluginValue,
+} from "./plugin-package";
 
 const files = (entries: Record<string, string>) =>
 	new Map(Object.entries(entries));
@@ -97,10 +101,18 @@ it("uses the manifest's command map and refuses paths that escape the plugin", (
 			"x",
 		),
 	).toThrow("Invalid skills path");
-	expect(() =>
+	expect(
 		parsePlugin(
 			files({
 				".claude-plugin/plugin.json": JSON.stringify({ name: "Bad Name" }),
+			}),
+			"x",
+		).name,
+	).toBe("bad-name");
+	expect(() =>
+		parsePlugin(
+			files({
+				".claude-plugin/plugin.json": JSON.stringify({ name: "bad@name" }),
 			}),
 			"x",
 		),
@@ -123,4 +135,42 @@ it("fills ${user_config.KEY} in headers and requires every referenced value", ()
 			{},
 		),
 	).toThrow("api_token");
+});
+
+it("reads bare .mcp.json server maps and turns ${VAR} placeholders into settings", () => {
+	const plugin = parsePlugin(
+		files({
+			".claude-plugin/plugin.json": JSON.stringify({ name: "GitHub" }),
+			".mcp.json": JSON.stringify({
+				github: {
+					type: "http",
+					url: "https://api.githubcopilot.com/mcp/",
+					headers: { Authorization: "Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}" },
+				},
+				dd: {
+					type: "http",
+					url: "https://${DD_DOMAIN:-mcp.datadoghq.com}/v1/mcp",
+				},
+			}),
+		}),
+		"x",
+	);
+	expect(plugin.name).toBe("github");
+	expect(plugin.mcpServers.map((server) => server.name)).toEqual([
+		"github",
+		"dd",
+	]);
+	expect(plugin.userConfig).toMatchObject({
+		GITHUB_PERSONAL_ACCESS_TOKEN: { sensitive: true, required: true },
+		DD_DOMAIN: { required: false },
+	});
+	expect(
+		resolvePluginValue("https://${DD_DOMAIN:-mcp.datadoghq.com}/v1/mcp", {}),
+	).toBe("https://mcp.datadoghq.com/v1/mcp");
+	expect(
+		resolvePluginHeaders(
+			{ Authorization: "Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}" },
+			{ GITHUB_PERSONAL_ACCESS_TOKEN: "ghp_x" },
+		),
+	).toEqual({ Authorization: "Bearer ghp_x" });
 });

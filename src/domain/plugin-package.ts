@@ -68,7 +68,7 @@ const manifestSchema = z
 		name: z.string(),
 		displayName: z.string().max(80).optional(),
 		version: z.string().max(40).optional(),
-		description: z.string().max(500).optional(),
+		description: z.string().optional(),
 		skills: z.union([z.string(), z.array(z.string())]).optional(),
 		commands: z
 			.union([
@@ -114,6 +114,8 @@ export function parsePlugin(
 	const manifest = rawManifest
 		? manifestSchema.parse(JSON.parse(rawManifest))
 		: manifestSchema.parse({ name: fallbackName });
+	// Some published plugins capitalize their name; namespace under its kebab form.
+	manifest.name = manifest.name.trim().toLowerCase().replace(/\s+/g, "-");
 	if (!PLUGIN_NAME.test(manifest.name))
 		throw new Error(`Plugin name "${manifest.name}" must be kebab-case.`);
 
@@ -203,26 +205,26 @@ export function parsePlugin(
 	// MCP: .mcp.json first, then manifest entries; remote HTTP only.
 	const serverMaps: unknown[] = [];
 	const mcpFile = files.get(".mcp.json");
-	if (mcpFile)
-		serverMaps.push(
-			(JSON.parse(mcpFile) as { mcpServers?: unknown }).mcpServers ?? {},
-		);
+	// .mcp.json is either { mcpServers: { ... } } or a bare server map.
+	const serverMap = (file: string) => {
+		const parsed = JSON.parse(file) as { mcpServers?: unknown };
+		return parsed.mcpServers ?? parsed;
+	};
+	if (mcpFile) serverMaps.push(serverMap(mcpFile));
 	for (const entry of [manifest.mcpServers ?? []].flat()) {
 		if (typeof entry === "string") {
 			const path = pluginPath(entry);
 			const file = path ? files.get(path) : undefined;
-			if (path?.endsWith(".json") && file)
-				serverMaps.push(
-					(JSON.parse(file) as { mcpServers?: unknown }).mcpServers ?? {},
-				);
+			if (path?.endsWith(".json") && file) serverMaps.push(serverMap(file));
 			else unsupported.push(`MCP bundle or path ${entry}`);
 		} else serverMaps.push(entry);
 	}
 	const servers = new Map<string, PluginMcpServer>();
 	for (const map of serverMaps)
-		for (const [name, raw] of Object.entries(
+		for (const [rawName, raw] of Object.entries(
 			(map ?? {}) as Record<string, unknown>,
 		)) {
+			const name = rawName.toLowerCase();
 			const server = raw as {
 				type?: string;
 				url?: string;
@@ -260,16 +262,32 @@ export function parsePlugin(
 		else if (path.startsWith("agents/")) unsupported.push("agents");
 		else if (path.startsWith("bin/")) unsupported.push("executables (bin/)");
 
+	// ${VAR} / ${VAR:-default} in MCP URLs and headers become settings to fill in.
+	const settings: Record<string, PluginUserConfigOption> = {};
+	for (const server of servers.values())
+		for (const value of [server.url, ...Object.values(server.headers)])
+			for (const match of value.matchAll(PLACEHOLDER)) {
+				const [, userConfigKey, variable, fallback] = match;
+				const key = userConfigKey ?? variable;
+				if (!key || settings[key] || manifest.userConfig?.[key]) continue;
+				settings[key] = {
+					title: key,
+					description: `Required by the ${server.name} MCP server`,
+					sensitive: /TOKEN|KEY|SECRET|PASSWORD/i.test(key),
+					required: fallback === undefined,
+				};
+			}
 	return {
 		name: manifest.name,
 		displayName: manifest.displayName ?? manifest.name,
 		version: manifest.version ?? null,
-		description: manifest.description ?? "",
+		description: (manifest.description ?? "").slice(0, 500),
 		skills: skills.slice(0, MAX_ITEMS),
 		commands: commands.slice(0, MAX_ITEMS),
 		mcpServers: [...servers.values()].slice(0, MAX_ITEMS),
-		userConfig: Object.fromEntries(
-			Object.entries(manifest.userConfig ?? {}).map(([key, option]) => [
+		userConfig: Object.fromEntries([
+			...Object.entries(settings),
+			...Object.entries(manifest.userConfig ?? {}).map(([key, option]) => [
 				key,
 				{
 					title: option.title,
@@ -278,12 +296,31 @@ export function parsePlugin(
 					required: option.required === true,
 				},
 			]),
-		),
+		]),
 		unsupported: [...new Set(unsupported)],
 	};
 }
 
-/** Substitutes ${user_config.KEY}; a missing required value is an install error. */
+const PLACEHOLDER =
+	/\$\{(?:user_config\.([A-Za-z_][A-Za-z0-9_]*)|([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?)\}/g;
+
+/** Substitutes ${user_config.KEY}, ${VAR} and ${VAR:-default}; a missing required value is an error. */
+export function resolvePluginValue(
+	value: string,
+	config: Record<string, string>,
+) {
+	return value.replace(
+		PLACEHOLDER,
+		(_match, userConfigKey, variable, fallback) => {
+			const key = userConfigKey ?? variable;
+			const resolved = config[key] || fallback;
+			if (resolved === undefined)
+				throw new Error(`Plugin setting "${key}" is required.`);
+			return resolved;
+		},
+	);
+}
+
 export function resolvePluginHeaders(
 	headers: Record<string, string>,
 	config: Record<string, string>,
@@ -291,15 +328,7 @@ export function resolvePluginHeaders(
 	return Object.fromEntries(
 		Object.entries(headers).map(([key, value]) => [
 			key,
-			value.replace(
-				/\$\{user_config\.([A-Za-z_][A-Za-z0-9_]*)\}/g,
-				(_match, name) => {
-					const resolved = config[name];
-					if (resolved === undefined)
-						throw new Error(`Plugin setting "${name}" is required for ${key}.`);
-					return resolved;
-				},
-			),
+			resolvePluginValue(value, config),
 		]),
 	);
 }
