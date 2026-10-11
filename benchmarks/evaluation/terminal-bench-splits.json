@@ -28,13 +28,13 @@
 		"mvcc-lsm-compaction",
 		"session-window-debug",
 		"shadow-relay",
-		"wal-recovery-ordering"
+		"wal-recovery-ordering",
+		"nextjs-performance"
 	],
 	"validation": [
 		"fin-saccr-rwa",
 		"intrastat-meldung",
 		"medical-claims-processing",
-		"nextjs-performance",
 		"uefi-bootkit",
 		"vpp-loss-divergence"
 	],
@@ -103,5 +103,8 @@
 		"vf2-speedup-networkx": "Codex trial cost",
 		"wal-recovery-ordering": "dev",
 		"wdm-design": "Codex trial cost"
+	},
+	"moved": {
+		"nextjs-performance": "validation -> dev on 2026-10-11: a local Codex development session (2026-09-27 to 2026-10-08) read its instruction.md and tests/docker-compose.yaml and ran its oracle and diagnostic jobs before the splits were frozen, so it is not unseen."
 	}
 }
