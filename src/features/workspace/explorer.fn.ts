@@ -9,6 +9,7 @@ import type {
 	WorkspaceSourceWrite,
 } from "#/domain/workspace-explorer";
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
+import { enabledPluginComponents } from "#/server/adapters/plugin-installs";
 import { requireUser } from "#/server/auth/auth";
 import { WorkspaceMachineService } from "#/server/services/capabilities";
 import {
@@ -130,9 +131,27 @@ export const listProjectCommandsFn = createServerFn({ method: "GET" })
 	.handler(async ({ data }): Promise<SlashCommand[]> => {
 		try {
 			const scope = await requireScope(data.projectId, data.sessionId);
-			return await runWithMachines((machines) =>
-				listProjectCommands(machines, scope),
-			);
+			const [repository, plugins] = await Promise.all([
+				runWithMachines((machines) => listProjectCommands(machines, scope)),
+				enabledPluginComponents(scope.userId, scope.projectId ?? null),
+			]);
+			// Plugin commands are namespaced /<plugin>:<command>, as in Claude Code.
+			return [
+				...repository,
+				...plugins.flatMap(({ plugin, commands }) =>
+					commands.map(
+						(command): SlashCommand => ({
+							id: "custom",
+							trigger: `/${plugin}:${command.name}`,
+							label: `${plugin}:${command.name}`,
+							description: command.description,
+							availability: "ready",
+							template: command.template,
+							argumentHint: command.argumentHint,
+						}),
+					),
+				),
+			];
 		} catch {
 			return [];
 		}

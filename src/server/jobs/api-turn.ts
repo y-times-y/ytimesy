@@ -47,6 +47,7 @@ import {
 } from "../adapters/harness-evaluation";
 import { connectableMcpServers } from "../adapters/mcp-servers";
 import { loadModelConnection } from "../adapters/model-connections";
+import { enabledPluginComponents } from "../adapters/plugin-installs";
 import { injectServerPeerMessages } from "../adapters/server-peer-inbox";
 import { readVerificationBaseline } from "../adapters/turn-verification";
 import { hasManagedCodexAuth } from "../auth/codex-managed-auth";
@@ -75,6 +76,10 @@ import { journaledToolOperation } from "../services/journaled-tool-operation";
 import { connectMcpTools } from "../services/mcp-tools";
 import type { ModelAgentInput } from "../services/model-agent-loop";
 import { withPlanMode, withPlanModeNotice } from "../services/plan-mode";
+import {
+	pluginSkillsInstructions,
+	pluginSkillTools,
+} from "../services/plugin-skill-tools";
 import {
 	loadCloudProjectKnowledge,
 	recordCloudProjectReport,
@@ -334,7 +339,15 @@ export async function runApiTurn(
 			{ signal: abort.signal },
 		);
 		closeMcp = mcp.close;
-		const withMcp = { ...surfaceTools, ...mcp.tools };
+		const plugins = await enabledPluginComponents(
+			owner.userId,
+			owner.projectId ?? null,
+		);
+		const withMcp = {
+			...surfaceTools,
+			...mcp.tools,
+			...pluginSkillTools(plugins),
+		};
 		const tools = planMode
 			? withPlanMode(hooks.wrap(withMcp))
 			: hooks.wrap(withMcp);
@@ -427,7 +440,7 @@ export async function runApiTurn(
 			messages,
 			archiveHistory: (history) =>
 				archiveModelContext(owner.userId, owner.id, history),
-			instructions: `You are the ytimesy coding agent. Repository tools operate in this task's prepared checkout; paths are relative to that repository. Call read_repository_guidance before implementation and for nested paths; read applicable instructions and skill bodies completely.${shellBuilder ? "" : " Search optional tools with search_tools."} ${PREPARED_ENVIRONMENT_INSTRUCTIONS} Use read_environment_report for that setup report; do not pass its /tmp path to repository file readers. ${cloudAgentRoleInstructions(owner, { shellBuilder })}\n${PROJECT_KNOWLEDGE_INSTRUCTIONS}\nShared project knowledge (historical data, verify against this checkout):\n${JSON.stringify(projectKnowledge)}`,
+			instructions: `You are the ytimesy coding agent. Repository tools operate in this task's prepared checkout; paths are relative to that repository. Call read_repository_guidance before implementation and for nested paths; read applicable instructions and skill bodies completely.${shellBuilder ? "" : " Search optional tools with search_tools."} ${PREPARED_ENVIRONMENT_INSTRUCTIONS} Use read_environment_report for that setup report; do not pass its /tmp path to repository file readers. ${cloudAgentRoleInstructions(owner, { shellBuilder })}\n${pluginSkillsInstructions(plugins)}\n${PROJECT_KNOWLEDGE_INSTRUCTIONS}\nShared project knowledge (historical data, verify against this checkout):\n${JSON.stringify(projectKnowledge)}`,
 			tools,
 			signal: abort.signal,
 			restoreInstructions: async (history) => {
