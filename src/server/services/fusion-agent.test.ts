@@ -194,9 +194,7 @@ it("hands the task back to the lead when the classifier says the sidekick is out
 		classifier: '{"decision":"return_to_lead","reason":"repeating failures"}',
 	});
 	const transcript = JSON.stringify(await fusion.run());
-	expect(transcript).toContain(
-		"handed the task back (classifier): repeating failures",
-	);
+	expect(transcript).toContain("handed the task back: repeating failures");
 	expect(transcript).toContain("I took over.");
 });
 
@@ -255,4 +253,64 @@ it("switches the sidekick to the upgrade model at compaction when the classifier
 	const transcript = JSON.stringify(await fusion.run(state));
 	expect(transcript).toContain("Upgraded sidekick: finished after the switch.");
 	expect(state.modelId).toBe("gpt-6-astra");
+});
+
+it("shows the lead the sidekick's progress and delivers feedback while it works", async () => {
+	const fusion = harness({
+		lead: [
+			call("d", "delegate_to_sidekick", {
+				task: "Fix it",
+				constraints: [],
+				success_criteria: ["tests pass"],
+			}),
+			call("w1", "wait_for_sidekick", { seconds: 1 }),
+			call("m", "message_sidekick", {
+				feedback: "Focus on flush, not compaction.",
+			}),
+			call("w2", "wait_for_sidekick", { seconds: 10 }),
+			say("Reviewed."),
+		],
+		sidekick: [
+			call("s1", "execute_command", { command: "make repro" }),
+			call("s2", "execute_command", { command: "make test" }),
+			say("Report: flush fixed; make test passed."),
+		],
+		slowCommand: 1500,
+	});
+	const transcript = JSON.stringify(await fusion.run());
+	expect(transcript).toContain('"status":"running"');
+	expect(transcript).toContain("make repro");
+	expect(transcript).toContain('"queued":true');
+	expect(transcript).toContain("Report: flush fixed; make test passed.");
+	// The feedback reached the sidekick's own context mid-run.
+	const prompts = JSON.stringify(
+		fusion.sidekick.model.doStreamCalls.map((request) => request.prompt),
+	);
+	expect(prompts).toContain("Focus on flush, not compaction.");
+});
+
+it("hands back a sidekick that passes its step budget, with what it found", async () => {
+	const fusion = harness({
+		lead: [
+			call("d", "delegate_to_sidekick", {
+				task: "Explore",
+				constraints: [],
+				success_criteria: ["a report"],
+				step_budget: 5,
+			}),
+			call("w", "wait_for_sidekick", { seconds: 10 }),
+			say("Taking over with its notes."),
+		],
+		sidekick: Array.from({ length: 30 }, (_, step) =>
+			call(`s${step}`, "execute_command", { command: `probe ${step}` }),
+		),
+	});
+	const transcript = JSON.stringify(await fusion.run());
+	expect(transcript).toContain("passed its 5-step budget without reporting");
+	expect(transcript).toContain("Its last actions");
+	expect(fusion.commands.length).toBeLessThanOrEqual(12);
+	const prompts = JSON.stringify(
+		fusion.sidekick.model.doStreamCalls.map((request) => request.prompt),
+	);
+	expect(prompts).toContain("reached your 5-step budget");
 });

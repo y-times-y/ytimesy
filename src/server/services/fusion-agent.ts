@@ -86,7 +86,8 @@ export function fusionLeadInstructions(config: FusionConfig) {
 		"Fusion lead: you and a cost-effective sidekick are both fully capable agents with your own tools and context, working in the same workspace.",
 		"You decide which tasks to give the sidekick and which tasks to do yourself. Take minimal actions and only read what is absolutely necessary. By default, delegate and monitor, while you make the significant decisions: the plan, the interpretation of ambiguity, and the final review.",
 		`Hand the sidekick a brief for each task you delegate with delegate_to_sidekick: the task, its constraints and its success criteria. ${tuning.prescriptiveBriefs ? "This sidekick needs prescriptive briefs: name the files, approach and checks." : "This sidekick can decide implementation details itself; brief the goal, constraints and success criteria."} ${tuning.delegateInitialExploration ? "You may delegate initial exploration." : "Do the exploration needed for planning yourself; do not delegate it."}`,
-		"Exchange only briefs, results and feedback: wait_for_sidekick returns its result, message_sidekick sends feedback. Always review the sidekick's work yourself in the workspace (for example with git diff and the required checks) against the user's original request, and identify problems. When the sidekick is out of its depth, take_control and finish the work yourself.",
+		"Each round trip costs time and tokens: by default give one complete brief per task (explore, implement, verify) with a step_budget that fits it, and split exploration from implementation only when a decision genuinely needs you. Do not repeat reading the sidekick is doing.",
+		"Exchange only briefs, results and feedback: wait_for_sidekick returns its result or its progress, message_sidekick sends feedback (also while it works, to steer it). Always review the sidekick's work yourself in the workspace (for example with git diff and the required checks) against the user's original request, and identify problems. When the sidekick is out of its depth, take_control and finish the work yourself.",
 		"While the sidekick is working, the workspace belongs to it: wait, send feedback, or take control before changing files or running commands. The user only talks to you; your final answer reports what was done and verified.",
 	].join(" ");
 }
@@ -95,7 +96,7 @@ export function fusionSidekickInstructions(config: FusionConfig) {
 	const tuning = fusionTuning(config.sidekickModelId);
 	return [
 		"Fusion sidekick: you are a fully capable agent with your own tools and context. The lead delegates tasks to you with a brief of constraints and success criteria.",
-		"Explore the code, implement the changes, run the tests, and report back. Your final message is your report to the lead: what you changed, the exact commands you ran with their results, and anything unresolved.",
+		"Explore the code, implement the changes, run the tests, and report back within your step budget. Your final message is your report to the lead: what you changed, the exact commands you ran with their results, and anything unresolved.",
 		tuning.sidekickPushback
 			? "If the brief conflicts with what you find in the code, push back in your report with the evidence."
 			: "Follow the brief; report blockers instead of changing the plan.",
@@ -132,12 +133,13 @@ export async function classifySidekick(
 	brief: string,
 	events: readonly ApiAgentEvent[],
 	signal: AbortSignal,
+	progress?: { steps: number; budget: number },
 ): Promise<ClassifierDecision> {
 	const { text } = await generateText({
 		model: runtime.model,
 		abortSignal: signal,
 		maxRetries: 1,
-		prompt: `You monitor a coding sidekick. Decide whether it should continue, switch to a stronger model, or hand the task back to the lead because it is out of its depth (stalled, repeating failures, or working against the brief). Reply with JSON only: {"decision":"continue"|"switch_model"|"return_to_lead","reason":"..."}.\n\nBrief:\n${brief.slice(0, 4000)}\n\nRecent work:\n${recentWork(events)}`,
+		prompt: `You monitor a coding sidekick. Decide whether it should continue, switch to a stronger model, or hand the task back to the lead because it is out of its depth (stalled, repeating failures, or working against the brief). Reply with JSON only: {"decision":"continue"|"switch_model"|"return_to_lead","reason":"..."}.${progress ? ` It has used ${progress.steps} of a ${progress.budget}-step budget; hand back when it is near the budget without converging on a result.` : ""}\n\nBrief:\n${brief.slice(0, 4000)}\n\nRecent work:\n${recentWork(events)}`,
 	});
 	const json = /\{[\s\S]*\}/.exec(text)?.[0];
 	const parsed = json ? classifierSchema.safeParse(JSON.parse(json)) : null;
@@ -152,7 +154,18 @@ type SidekickRun = {
 	report?: string;
 	promise: Promise<void>;
 	abort: AbortController;
+	/** What the lead sees while monitoring. */
+	steps: number;
+	budget: number;
+	recent: string[];
+	note?: string;
+	/** Lead feedback delivered at the sidekick's next step. */
+	feedback: string[];
 };
+
+const DEFAULT_STEP_BUDGET = 40;
+/** Steps past the budget before an unreported run is handed back. */
+const BUDGET_GRACE = 6;
 
 /** Thrown inside the sidekick loop to stop it for a model switch or hand-back. */
 class SidekickInterrupt extends Error {
@@ -221,14 +234,31 @@ export async function runFusionAgent(input: {
 		runUsage = null;
 	};
 
-	async function runSidekick(brief: string, opening: ModelMessage) {
+	async function runSidekick(
+		brief: string,
+		opening: ModelMessage,
+		budget = DEFAULT_STEP_BUDGET,
+	) {
 		const abort = new AbortController();
 		const run: SidekickRun = {
 			brief,
 			status: "running",
 			abort,
 			promise: Promise.resolve(),
+			steps: 0,
+			budget,
+			recent: [],
+			feedback: [],
 		};
+		// Whatever the sidekick learned, for reports that end without its own.
+		const partial = () =>
+			[
+				run.note ? `Its latest notes:\n${run.note.slice(0, 2000)}` : "",
+				run.recent.length ? `Its last actions:\n${run.recent.join("\n")}` : "",
+			]
+				.filter(Boolean)
+				.join("\n\n");
+		let budgetNoticed = false;
 		run.promise = (async () => {
 			let messages: ModelMessage[] = [...sidekick.messages, opening];
 			let pendingSwitch: string | undefined;
@@ -254,6 +284,11 @@ export async function runFusionAgent(input: {
 							signal: AbortSignal.any([input.lead.signal, abort.signal]),
 							onEvent: async (event) => {
 								sidekickEvents.push(event);
+								if (event.type === "tool-call")
+									run.recent = [
+										...run.recent,
+										`${event.name} ${JSON.stringify(event.input).slice(0, 140)}`,
+									].slice(-6);
 								if (event.type === "usage") {
 									runUsage = event.usage;
 									event = {
@@ -267,12 +302,18 @@ export async function runFusionAgent(input: {
 							// classifier every few steps (a thrown hand-back stops the loop here).
 							beforeStep: async () => {
 								await input.beforeSidekickRequest?.();
+								if (steps >= run.budget + BUDGET_GRACE)
+									throw new SidekickInterrupt(
+										"return_to_lead",
+										`it passed its ${run.budget}-step budget without reporting`,
+									);
 								if (steps === 0 || steps % every !== 0) return;
 								const decision = await classifySidekick(
 									classifier,
 									brief,
 									sidekickEvents,
 									input.lead.signal,
+									{ steps, budget: run.budget },
 								);
 								if (decision.decision === "return_to_lead")
 									throw new SidekickInterrupt(
@@ -284,8 +325,27 @@ export async function runFusionAgent(input: {
 							},
 							onStep: async (history) => {
 								steps++;
+								run.steps = steps;
+								run.note = lastText(history) || run.note;
 								messages = history;
 								sidekick.messages = history;
+							},
+							// Lead feedback and the budget notice arrive between steps.
+							prepareMessages: async (history) => {
+								const injected: ModelMessage[] = run.feedback
+									.splice(0)
+									.map((text) => ({
+										role: "user",
+										content: `Feedback from the lead while you work:\n${text}`,
+									}));
+								if (steps >= run.budget && !budgetNoticed) {
+									budgetNoticed = true;
+									injected.push({
+										role: "user",
+										content: `You have reached your ${run.budget}-step budget. Stop and send your report now: what you found, what you changed, the commands you ran with their results, and what is left.`,
+									});
+								}
+								return injected.length ? [...history, ...injected] : history;
 							},
 							// Model switches happen at compaction, which discards the cache anyway.
 							beforeCompaction: async () => {
@@ -330,13 +390,23 @@ export async function runFusionAgent(input: {
 							run.report = "The lead took control; the sidekick stopped.";
 						} else {
 							run.status = "failed";
-							run.report = `The sidekick failed: ${caught instanceof Error ? caught.message : "unknown error"}`;
+							run.report = [
+								`The sidekick failed: ${caught instanceof Error ? caught.message : "unknown error"}`,
+								partial(),
+							]
+								.filter(Boolean)
+								.join("\n\n");
 						}
 						return;
 					}
 					if (error.kind === "return_to_lead") {
 						run.status = "returned";
-						run.report = `The sidekick handed the task back (classifier): ${error.reason}. Its work so far is in the workspace.`;
+						run.report = [
+							`The sidekick handed the task back: ${error.reason}. Its work so far is in the workspace.`,
+							partial(),
+						]
+							.filter(Boolean)
+							.join("\n\n");
 						return;
 					}
 					// Switch model: continue from a summary, since provider reasoning
@@ -402,8 +472,15 @@ export async function runFusionAgent(input: {
 				task: z.string().min(1).max(4000),
 				constraints: z.array(z.string().max(500)).max(12),
 				success_criteria: z.array(z.string().max(500)).min(1).max(12),
+				step_budget: z
+					.number()
+					.int()
+					.min(5)
+					.max(120)
+					.default(DEFAULT_STEP_BUDGET)
+					.describe("Tool steps the sidekick may use before it must report."),
 			}),
-			execute: async ({ task, constraints, success_criteria }) => {
+			execute: async ({ task, constraints, success_criteria, step_budget }) => {
 				if (sidekickActive())
 					return {
 						error:
@@ -418,13 +495,21 @@ export async function runFusionAgent(input: {
 				]
 					.filter(Boolean)
 					.join("\n\n");
-				await runSidekick(brief, { role: "user", content: brief });
-				return { delegated: true, model: sidekick.modelId };
+				const budget = step_budget ?? DEFAULT_STEP_BUDGET;
+				await runSidekick(
+					`${brief}\n\nStep budget: report within ${budget} tool steps.`,
+					{
+						role: "user",
+						content: `${brief}\n\nStep budget: report within ${budget} tool steps.`,
+					},
+					budget,
+				);
+				return { delegated: true, model: sidekick.modelId, budget };
 			},
 		}),
 		wait_for_sidekick: tool({
 			description:
-				"Monitor the sidekick: wait up to the given seconds and return its result when it has reported.",
+				"Monitor the sidekick: wait up to the given seconds; returns its report when done, otherwise its progress (steps used, recent actions, latest notes).",
 			inputSchema: z.object({
 				seconds: z.number().int().min(1).max(600).default(300),
 			}),
@@ -436,24 +521,31 @@ export async function runFusionAgent(input: {
 					new Promise((done) => setTimeout(done, seconds * 1000)),
 				]);
 				return run.status === "running"
-					? { status: "running" }
+					? {
+							status: "running",
+							steps: run.steps,
+							budget: run.budget,
+							recentActions: run.recent,
+							latestNote: run.note?.slice(0, 1500),
+						}
 					: { status: run.status, report: run.report };
 			},
 		}),
 		message_sidekick: tool({
 			description:
-				"Send the sidekick feedback on its result; it continues in its own context and reports back.",
+				"Send the sidekick feedback. While it works, the feedback reaches it at its next step; after it reports, it continues in its own context and reports back.",
 			inputSchema: z.object({ feedback: z.string().min(1).max(4000) }),
 			execute: async ({ feedback }) => {
-				if (sidekickActive())
-					return {
-						error:
-							"The sidekick is still working; wait for its report before sending feedback.",
-					};
-				await runSidekick(current?.brief ?? feedback, {
-					role: "user",
-					content: `Feedback from the lead:\n${feedback}`,
-				});
+				const run = current;
+				if (run?.status === "running") {
+					run.feedback.push(feedback);
+					return { queued: true, deliveredAt: "the sidekick's next step" };
+				}
+				await runSidekick(
+					run?.brief ?? feedback,
+					{ role: "user", content: `Feedback from the lead:\n${feedback}` },
+					run?.budget,
+				);
 				return { sent: true };
 			},
 		}),
