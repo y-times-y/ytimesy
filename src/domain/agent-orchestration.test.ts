@@ -30,8 +30,8 @@ it("prepares contract-based review while builders work and rejects stricter vali
 	expect(lead).toContain("allowed inputs adjacent to forbidden cases");
 	expect(lead).toContain("a stronger validation rule is a correctness bug");
 	expect(lead).toContain("ORIGINAL user contract");
-	expect(lead).toContain("reproduced failure before requesting repair");
-	expect(lead).toContain("one bounded diagnostic");
+	expect(lead).toContain("required checks fail, at most once");
+	expect(lead).toContain("self-derived edge cases in your final answer");
 });
 
 it("requires executable original-contract boundary evidence from both roles", () => {
@@ -272,4 +272,18 @@ describe("agent orchestration policy", () => {
 			"runtime capacity errors",
 		);
 	});
+});
+
+it("gives shell builders a short role without specialist-tool instructions", () => {
+	const shell = cloudAgentRoleInstructions(
+		{ parentSessionId: "lead", taskAccess: "read_write" },
+		{ shellBuilder: true },
+	);
+	expect(shell).toContain("Implement your own bounded task directly");
+	expect(shell).toContain("report_task_blocked");
+	expect(shell).not.toMatch(
+		/run_checks|apply_patches|batch_read|inspect_changes/,
+	);
+	expect(shell.length).toBeLessThan(1500);
+	expect(cloudAgentRoleInstructions({})).toContain("at most once");
 });

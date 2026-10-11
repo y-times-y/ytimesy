@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	parseAgentTaskToolRequest,
 	serializeAgentTaskToolResponse,
+	taskBriefTooLong,
 	taskToolAccess,
 	taskToolExecution,
 	taskToolHarness,
@@ -70,4 +71,9 @@ describe("agent task tool protocol", () => {
 			serializeAgentTaskToolResponse({ id: "call-1", ok: true, result: [] }),
 		).toBe('{"id":"call-1","ok":true,"result":[]}\n');
 	});
+});
+
+it("bounds task briefs so leads cannot restate the repository", () => {
+	expect(taskBriefTooLong("x".repeat(2500))).toBeNull();
+	expect(taskBriefTooLong("x".repeat(2501))).toContain("2501 characters");
 });
