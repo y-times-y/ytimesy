@@ -202,6 +202,7 @@ export function WorkspaceHome({
 		modelId: string;
 		variant?: string;
 		fast?: boolean;
+		mode?: "plan";
 	} | null>(null);
 	const sessionViews = useRef(new Map<string, PublicCodexSession>());
 	const bumpSessionEpoch = useCallback(() => {
@@ -1189,6 +1190,7 @@ export function WorkspaceHome({
 											? { variant: options.reasoningId }
 											: {}),
 										...(options?.fast ? { fast: true } : {}),
+										...(options?.mode ? { mode: options.mode } : {}),
 									};
 									setBusyChatIds((ids) => withBusyChat(ids, chatId));
 									setSession((current) => ({
@@ -1247,6 +1249,7 @@ export function WorkspaceHome({
 														? { variant: pending.variant }
 														: {}),
 													...(pending?.fast ? { fast: true } : {}),
+													...(pending?.mode ? { mode: pending.mode } : {}),
 												},
 											});
 											applySessionView(epoch, next);

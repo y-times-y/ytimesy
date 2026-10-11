@@ -613,3 +613,19 @@ describe("session items", () => {
 		).toBe(false);
 	});
 });
+
+it("records plan mode on the queued user message only when requested", () => {
+	const [planned] = sessionItemsQueuedWithUser(
+		[],
+		"Refactor auth",
+		"m1",
+		"plan",
+	);
+	expect(planned).toMatchObject({
+		kind: "userMessage",
+		text: "Refactor auth",
+		mode: "plan",
+	});
+	const [plain] = sessionItemsQueuedWithUser([], "Refactor auth", "m2");
+	expect(plain).not.toHaveProperty("mode");
+});
