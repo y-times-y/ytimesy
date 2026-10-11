@@ -24,6 +24,7 @@ import type {
 import { SessionItemId, WorkspaceId } from "../src/domain/ids";
 import { posixShellCommand } from "../src/domain/posix-command";
 import { environmentRecipe } from "../src/domain/project-environment";
+import { rootAgentMode } from "../src/domain/root-agent-mode";
 import { agentSessionForOwner } from "../src/server/adapters/agent-sessions";
 import {
 	downloadCheckpoint,
@@ -334,7 +335,8 @@ try {
 		await save("evidence", evidence);
 		// Fusion edits the root workspace; lead/builder hands off reviewed child work.
 		let source: string | null | undefined = evidence.root.providerRef;
-		if (!fusionSidekick) {
+		// Lead mode hands off reviewed child work; Fusion and builder-direct edit the root VM.
+		if (!fusionSidekick && rootAgentMode() === "lead") {
 			const patches = await exportReviewedEvaluationPatches(
 				bridge.machines,
 				local.userId,
