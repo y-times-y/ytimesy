@@ -416,5 +416,7 @@ try {
 	await cleanup("application database connection", closeDatabase);
 	await cleanup("local evaluation database", () => local.close());
 	await save("cleanup", { complete: failures.length === 0, failures });
-	if (failures.length) process.exitCode = 1;
+	// The job queue keeps retrying against the closed database and would hold
+	// the process open forever, stalling the next trial in the queue.
+	process.exit(failures.length ? 1 : (process.exitCode ?? 0));
 }
