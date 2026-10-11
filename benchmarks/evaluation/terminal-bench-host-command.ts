@@ -33,6 +33,9 @@ export async function terminalBenchHostCommand(
 	const read =
 		"import json,pathlib,sys; p=pathlib.Path(sys.argv[1]); s=p/'status'; sys.exit(3) if not s.exists() else print(json.dumps({'exitCode':int(s.read_text()),'stdout':(p/'stdout').read_text(errors='replace'),'stderr':(p/'stderr').read_text(errors='replace')}))";
 	const deadline = Date.now() + bounded;
+	// One failed status read (a transient exec/API error) must not abandon a
+	// healthy command; give up only after several in a row.
+	let failedReads = 0;
 	while (Date.now() < deadline) {
 		const result = await host.exec({
 			command: `python3 -c ${quote(read)} ${quote(directory)}`,
@@ -46,8 +49,13 @@ export async function terminalBenchHostCommand(
 					stderr: z.string(),
 				})
 				.parse(JSON.parse(result.stdout ?? ""));
-		if (result.statusCode !== 3)
-			throw new Error("Long benchmark command observation failed.");
+		if (result.statusCode !== 3) {
+			if (++failedReads >= 5)
+				throw new Error("Long benchmark command observation failed.");
+			await new Promise((done) => setTimeout(done, 2000 * failedReads));
+			continue;
+		}
+		failedReads = 0;
 		await new Promise((done) => setTimeout(done, 2000));
 	}
 	throw new Error(
