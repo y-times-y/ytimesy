@@ -19,6 +19,7 @@ import { AddProjectForm } from "../projects/add-project-form";
 import { requestJson } from "../projects/api";
 import { McpServers } from "../sessions/mcp-servers";
 import { ModelConnections } from "../sessions/model-connections";
+import { Plugins } from "../sessions/plugins";
 import { GithubMark } from "./github-mark";
 import { InfrastructureUsage } from "./infrastructure-usage";
 import { MachineSizeSettings } from "./machine-size-settings";
@@ -436,6 +437,7 @@ function AgentsSection({
 				))}
 			</ul>
 			<ModelConnections />
+			<Plugins />
 			<McpServers />
 			<CodexSubscriptionUsage usage={usage} />
 		</>

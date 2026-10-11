@@ -12,6 +12,13 @@ export type PluginCatalogEntry = {
 	readonly repo: string;
 	readonly sha: string;
 	readonly path: string;
+	/** The plugin's userConfig fields, copied at review so the UI can ask before installing. */
+	readonly settings?: readonly {
+		readonly key: string;
+		readonly title: string;
+		readonly description: string;
+		readonly sensitive: boolean;
+	}[];
 };
 
 export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [];
