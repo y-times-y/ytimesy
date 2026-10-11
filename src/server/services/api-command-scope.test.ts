@@ -123,3 +123,20 @@ it.runIf(process.platform === "linux")(
 	},
 	10_000,
 );
+
+it("keeps quote-heavy scripts linear in size through nested shell layers", () => {
+	// A Python heredoc full of single quotes, like the agent's scripts.
+	const script = `python3 - <<'PY'\n${"print('a', 'b', {'k': 'v'})\n".repeat(120)}PY`;
+	const scoped = scopedShellCommand({
+		turnId: crypto.randomUUID(),
+		cwd: "/app",
+		command: script,
+		seconds: 30,
+	});
+	// Wrap it the way tmux, bash -lc and docker exec do: quote it twice more.
+	const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+	const nested = quote(quote(scoped));
+	expect(scoped).toContain(Buffer.from(script).toString("base64"));
+	expect(nested.length).toBeLessThan(scoped.length * 2);
+	expect(nested.length).toBeLessThan(script.length * 4 + 8_000);
+});

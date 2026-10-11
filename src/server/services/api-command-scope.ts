@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { posixShellCommand } from "#/domain/posix-command";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 
-const RUN = `import json, os, pathlib, signal, subprocess, sys
+const RUN = `import base64, json, os, pathlib, signal, subprocess, sys
 root=pathlib.Path(sys.argv[1]); root.mkdir(parents=True,exist_ok=True)
 if (root/'stopped').exists() or (root/(sys.argv[2]+'.stopped')).exists(): sys.exit(130)
 record=root/(sys.argv[2]+'.json')
@@ -10,7 +10,7 @@ environment=os.environ.copy()
 environment.pop('FORCE_COLOR',None)
 environment['NO_COLOR']='1'
 environment['TERM']='dumb'
-process=subprocess.Popen(['bash','-lc',sys.argv[4]],cwd=sys.argv[3],env=environment,start_new_session=True)
+process=subprocess.Popen(['bash','-lc',base64.b64decode(sys.argv[4]).decode('utf-8')],cwd=sys.argv[3],env=environment,start_new_session=True)
 tick=pathlib.Path('/proc/'+str(process.pid)+'/stat').read_text().rsplit(')',1)[1].split()[19]
 temporary=record.with_suffix('.tmp')
 temporary.write_text(json.dumps({'pid':process.pid,'start':tick})); temporary.replace(record)
@@ -78,7 +78,11 @@ export function scopedShellCommand(input: {
 		commandScopeRoot(input.turnId),
 		input.commandId ?? randomUUID(),
 		input.cwd,
-		input.command,
+		// Base64 has no quotes: each shell layer around this (tmux, bash -lc,
+		// docker exec) then adds a constant instead of multiplying every quote
+		// in the agent's script. Quote-heavy 3 KB heredocs used to exceed the
+		// VM exec limit (64 KiB) and were rejected.
+		Buffer.from(input.command, "utf8").toString("base64"),
 		String(input.seconds),
 	]);
 }
