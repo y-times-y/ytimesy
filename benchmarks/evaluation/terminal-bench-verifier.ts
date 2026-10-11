@@ -68,13 +68,23 @@ export async function gradeTerminalBenchArtifact(input: {
 			JSON.stringify(result),
 			{ mode: 0o600 },
 		);
-		const raw = await bridge.machines.readTextFile(
-			grader.vmId,
-			"/logs/verifier/reward.txt",
-		);
-		if (!raw || !["0", "1", "0.0", "1.0"].includes(raw.trim()))
+		// Harbor verifiers write reward.txt or reward.json; either may hold a
+		// fraction. Only an exact 1 counts as a pass, as in Harbor's pass counts.
+		const readReward = async (path: string) =>
+			bridge.machines.readTextFile(grader.vmId, path).catch(() => null);
+		const text = (await readReward("/logs/verifier/reward.txt"))?.trim();
+		let score = text ? Number(text) : Number.NaN;
+		if (!Number.isFinite(score)) {
+			const json = await readReward("/logs/verifier/reward.json");
+			try {
+				score = Number(JSON.parse(json ?? "null")?.reward);
+			} catch {
+				score = Number.NaN;
+			}
+		}
+		if (!Number.isFinite(score) || score < 0 || score > 1)
 			throw new Error("Official verifier did not produce a valid reward.");
-		const reward = Number(raw.trim());
+		const reward = score;
 		await writeFile(
 			`${input.output}/result.json`,
 			JSON.stringify({
