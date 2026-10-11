@@ -269,7 +269,8 @@ try {
 						await save("progress", {
 							requests,
 							observedTokens: tokens,
-							...(arm.usdCap !== null ? { estimatedUsd } : {}),
+							// API-equivalent cost for every route, like Codex's public numbers.
+							estimatedUsd,
 						});
 						return observeEvaluationRequest(
 							{ request: requests, method: property },
@@ -358,6 +359,10 @@ try {
 			agentSeconds,
 			noLeader: true,
 			...evaluationTokenUsage(events),
+			// Priced at API list rates on every route (Plus included), like Codex's public cost.
+			estimatedUsd: (route === "bedrock-opus"
+				? estimatedOpusCostUsd
+				: estimatedSolCostUsd)(evaluationTokenUsage(events)),
 			usageAccounting: "cumulative usage including compaction",
 			usageCompleteness:
 				failure ||
