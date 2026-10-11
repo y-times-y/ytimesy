@@ -13,8 +13,9 @@ import {
 import { SessionItemId } from "./ids";
 
 it("offers independent agents on new messages and follow-ups for supported runtimes", () => {
-	expect(competitionModeAvailable({ harnessId: "codex" })).toBe(true);
-	expect(competitionModeAvailable({ harnessId: "api" })).toBe(true);
+	// Held back from launch.
+	expect(competitionModeAvailable({ harnessId: "codex" })).toBe(false);
+	expect(competitionModeAvailable({ harnessId: "api" })).toBe(false);
 	expect(competitionModeAvailable({ harnessId: "claude" })).toBe(false);
 	expect(leaderCount.safeParse(5).success).toBe(true);
 	expect(leaderCount.safeParse(6).success).toBe(false);

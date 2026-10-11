@@ -2,7 +2,10 @@ import { createServerFn } from "@tanstack/react-start";
 import { getRequest } from "@tanstack/react-start/server";
 import { Effect } from "effect";
 import { z } from "zod";
-import { leaderCount } from "#/domain/agent-competition";
+import {
+	leaderCount,
+	MULTIPLE_MODELS_ENABLED,
+} from "#/domain/agent-competition";
 import { parseRuntimeId } from "#/domain/agent-provider";
 import { parallelAttemptModelIds } from "#/domain/parallel-models";
 import {
@@ -57,6 +60,8 @@ export const startAgentCompetition = createServerFn({ method: "POST" })
 	.handler(async ({ data }) => {
 		requireSameOrigin(getRequest());
 		const user = await requireUser(getRequest().headers);
+		if (!MULTIPLE_MODELS_ENABLED)
+			throw new Error("Multiple-model attempts are not available yet.");
 		if (!data.text || !data.modelId || !data.projectId || !data.rootSessionId)
 			throw new Error(
 				"Choose a project, model, and task before starting agents.",

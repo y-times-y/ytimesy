@@ -27,10 +27,16 @@ export type CompetitionCandidate = {
 	items: readonly SessionItem[];
 };
 
+/** Multiple-model attempts are held back from launch until they are ready. */
+export const MULTIPLE_MODELS_ENABLED = false;
+
 export function competitionModeAvailable(input: {
 	harnessId: AgentProviderId;
 }) {
-	return input.harnessId === "codex" || input.harnessId === "api";
+	return (
+		MULTIPLE_MODELS_ENABLED &&
+		(input.harnessId === "codex" || input.harnessId === "api")
+	);
 }
 
 export function competitionSendIsEnabled(input: {
