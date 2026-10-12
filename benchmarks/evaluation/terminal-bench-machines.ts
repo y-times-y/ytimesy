@@ -409,7 +409,9 @@ export function createTerminalBenchMachines(input: {
 		await checkedHostExec(
 			id,
 			posixShellCommand([...composeArguments, "up", "--detach", "--wait"]),
-			600000,
+			// Large task images (some ~8 GB, with 20-minute build allowances) need
+			// longer than 10 minutes to pull; 30 minutes is the runner's maximum.
+			1_800_000,
 		);
 		// Harness prerequisites only; no task implementation or verifier assets.
 		const installed = await machines.exec(
