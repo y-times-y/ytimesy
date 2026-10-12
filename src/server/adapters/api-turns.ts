@@ -16,6 +16,7 @@ import {
 	recoveredConversation,
 } from "./conversation-recovery";
 import { database } from "./database";
+import { mirrorTurnHistory } from "./turn-history-mirror";
 
 export type ApiTurn = {
 	id: string;
@@ -200,6 +201,13 @@ export async function previousTurnMessages(
 		: null;
 }
 
+/**
+ * The chat DO loads its turn's history itself (once per turn), so admission for
+ * it returns identities only rather than the whole conversation.
+ */
+const CLAIM_IDENTITY_COLUMNS =
+	"id,session_id,user_id,connection_id,connection_revision,model_id,state,lease_id,'[]'::jsonb as messages,'[]'::jsonb as items";
+
 export async function claimApiTurn(
 	perUserLimit = 2,
 	fleetLimit = modelConcurrencyLimits().fleet,
@@ -237,7 +245,8 @@ export async function claimApiTurn(
 			 and ($5::uuid is null or q.session_id=$5::uuid)
 			 and (select count(*) from api_turn r where r.user_id=q.user_id and r.state='running')<$2
 			 and (select count(*) from api_turn r where r.state='running')<$3
-			 order by q.created_at for update skip locked limit 1) returning *`,
+			 order by q.created_at for update skip locked limit 1)
+			 returning ${executor === "durable-object" ? CLAIM_IDENTITY_COLUMNS : "*"}`,
 			[randomUUID(), perUserLimit, fleetLimit, executor, sessionId ?? null],
 		);
 		await client.query("commit");
@@ -291,14 +300,16 @@ export async function checkpointApiTurn(
 	messages: ModelMessage[],
 	items: readonly SessionItem[],
 ) {
-	const result = await database().query(
+	const result = await database().query<{ version: string }>(
 		`with saved as (update api_turn set messages=$3,items=$4,updated_at=now()
 		 where id=$1 and lease_id=$2 and state='running' and not cancel_requested
-		 and heartbeat_at>=now()-interval '45 seconds' returning session_id)
-		 update agent_session set items=$4,updated_at=now() where id in(select session_id from saved) returning id`,
+		 and heartbeat_at>=now()-interval '45 seconds' returning session_id,updated_at)
+		 update agent_session set items=$4,updated_at=now() where id in(select session_id from saved)
+		 returning (select updated_at::text from saved) as version`,
 		[turn.id, turn.lease_id, JSON.stringify(messages), JSON.stringify(items)],
 	);
-	if (!result.rowCount) throw new Error("API turn lease was lost.");
+	if (!result.rows[0]) throw new Error("API turn lease was lost.");
+	mirrorTurnHistory(turn.id, result.rows[0].version, { messages, items });
 	await wakeConversationProgress();
 }
 
@@ -307,14 +318,17 @@ export async function publishApiTurnProgress(
 	turn: ApiTurn,
 	items: readonly SessionItem[],
 ) {
-	const result = await database().query(
+	const result = await database().query<{ version: string }>(
 		`with saved as (update api_turn set items=$3,updated_at=now()
 	 where id=$1 and lease_id=$2 and state='running' and not cancel_requested
-	 and heartbeat_at>=now()-interval '45 seconds' returning session_id)
-	 update agent_session set items=$3,updated_at=now() where id in(select session_id from saved) returning id`,
+	 and heartbeat_at>=now()-interval '45 seconds' returning session_id,updated_at)
+	 update agent_session set items=$3,updated_at=now() where id in(select session_id from saved)
+	 returning (select updated_at::text from saved) as version`,
 		[turn.id, turn.lease_id, JSON.stringify(items)],
 	);
-	if (!result.rowCount) {
+	if (result.rows[0])
+		mirrorTurnHistory(turn.id, result.rows[0].version, { items });
+	else {
 		const cancelled = await database().query(
 			"select 1 from api_turn where id=$1 and lease_id=$2 and user_id=$3 and cancel_requested",
 			[turn.id, turn.lease_id, turn.user_id],
@@ -367,8 +381,8 @@ export async function cancelApiTurn(userId: string, sessionId: string) {
 	return result.rows;
 }
 
-/** Never replay a turn whose tool side effects may have happened before worker loss. */
 /**
+ * Never replay a turn whose tool side effects may have happened before worker loss.
  * Chat Durable Objects resume their own interrupted steps (alarm retries back off
  * for up to about two minutes), so their turns get a longer grace period.
  */

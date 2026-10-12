@@ -142,6 +142,23 @@ export async function listAgentSessions(userId: string, projectId: string) {
 	return result.rows.map((row: AgentSessionRow) => toSession(row));
 }
 
+/**
+ * Session metadata without its chat history, for callers that already hold the
+ * items (the turn executor has the turn's copy); avoids reading the history back.
+ */
+export async function agentSessionMetadataForOwner(
+	userId: string,
+	sessionId: string,
+): Promise<Omit<AgentSessionRecord, "items"> | null> {
+	const result = await database().query(
+		`select ${SESSION_COLUMNS.replace(",items,", ",null as items,")} from agent_session where id=$1 and user_id=$2`,
+		[sessionId, userId],
+	);
+	if (!result.rows[0]) return null;
+	const { items: _items, ...metadata } = toSession(result.rows[0]);
+	return metadata;
+}
+
 export async function agentSessionForOwner(userId: string, sessionId: string) {
 	const result = await database().query(
 		`select ${SESSION_COLUMNS} from agent_session where id=$1 and user_id=$2`,
