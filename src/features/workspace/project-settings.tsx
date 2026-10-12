@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { Bot, Folder, User, X } from "lucide-react";
+import { Blocks, Bot, Folder, Plug, User, X } from "lucide-react";
 import { ScrollArea } from "radix-ui";
 import { type FormEvent, useEffect, useState } from "react";
 import { offeredAgentProviders } from "#/domain/agent-provider";
@@ -45,6 +45,8 @@ const sectionIcon = {
 	github: GithubMark,
 	project: Folder,
 	agents: Bot,
+	plugins: Blocks,
+	mcp: Plug,
 } as const;
 
 export function ProjectSettings({
@@ -168,6 +170,8 @@ export function ProjectSettings({
 										<ProjectSecretsSection project={currentProject} />
 									</>
 								) : null}
+								{section === "plugins" ? <Plugins /> : null}
+								{section === "mcp" ? <McpServers /> : null}
 								{section === "agents" ? (
 									<AgentsSection
 										usage={subscriptionUsage.data ?? codexUsage}
@@ -437,8 +441,6 @@ function AgentsSection({
 				))}
 			</ul>
 			<ModelConnections />
-			<Plugins />
-			<McpServers />
 			<CodexSubscriptionUsage usage={usage} />
 		</>
 	);

@@ -2,7 +2,13 @@ import type { AgentProviderId } from "./agent-provider";
 import { agentProviderById } from "./agent-provider";
 import type { UserAgentAccount } from "./user-agent-account";
 
-export type SettingsSection = "account" | "github" | "project" | "agents";
+export type SettingsSection =
+	| "account"
+	| "github"
+	| "project"
+	| "agents"
+	| "plugins"
+	| "mcp";
 
 export function settingsNavItems(): readonly {
 	readonly id: SettingsSection;
@@ -13,6 +19,8 @@ export function settingsNavItems(): readonly {
 		{ id: "github", label: "GitHub" },
 		{ id: "project", label: "Project" },
 		{ id: "agents", label: "Agents" },
+		{ id: "plugins", label: "Plugins" },
+		{ id: "mcp", label: "MCP servers" },
 	];
 }
 
