@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	modelConnectionInput,
 	modelRouteId,
+	officialProviderEndpoint,
 	parseModelRouteId,
 	publicModelEndpoint,
 } from "./model-connection";
@@ -36,5 +37,40 @@ describe("model connections", () => {
 		).toEqual({ connectionId, modelId: "vendor/model:version" });
 		expect(parseModelRouteId("api/wrong/model")).toBeNull();
 		expect(parseModelRouteId(`api/${connectionId}/%xx`)).toBeNull();
+	});
+});
+
+describe("officialProviderEndpoint", () => {
+	it("accepts only the provider's own API origin", () => {
+		expect(
+			officialProviderEndpoint({
+				provider: "openai",
+				baseUrl: "https://api.openai.com/v1",
+			}),
+		).toBe(true);
+		expect(
+			officialProviderEndpoint({
+				provider: "anthropic",
+				baseUrl: "https://api.anthropic.com/v1",
+			}),
+		).toBe(true);
+		expect(
+			officialProviderEndpoint({
+				provider: "openai",
+				baseUrl: "https://proxy.example.com/v1",
+			}),
+		).toBe(false);
+		expect(
+			officialProviderEndpoint({
+				provider: "compatible",
+				baseUrl: "https://api.openai.com/v1",
+			}),
+		).toBe(false);
+		expect(
+			officialProviderEndpoint({
+				provider: "openrouter",
+				baseUrl: "https://openrouter.ai/api/v1",
+			}),
+		).toBe(true);
 	});
 });

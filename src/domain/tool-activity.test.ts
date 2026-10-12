@@ -70,3 +70,45 @@ it("describes tool calls as short sentences with the right icon", () => {
 	).toMatchObject({ verb: "Viewed", target: "shot.png", glyph: "image" });
 	expect(toolActivity(call("some_new_tool", {})).verb).toBe("Some new tool");
 });
+
+it("describes provider-hosted web searches and page opens", () => {
+	expect(
+		toolActivity(
+			call(
+				"web_search",
+				{},
+				{
+					action: {
+						type: "search",
+						query: "bun latest release",
+						queries: ["bun latest release", "deno latest release"],
+					},
+				},
+			),
+		),
+	).toMatchObject({
+		verb: "Searched the web",
+		target: "bun latest release",
+		note: "2 queries",
+		glyph: "search",
+	});
+	expect(
+		toolActivity(
+			call(
+				"web_search",
+				{},
+				{ action: { type: "openPage", url: "https://bun.sh/blog" } },
+			),
+		),
+	).toMatchObject({
+		verb: "Opened",
+		target: "https://bun.sh/blog",
+		glyph: "search",
+	});
+	expect(
+		toolActivity(call("web_search", { query: "vite 8 migration guide" })),
+	).toMatchObject({
+		verb: "Searched the web",
+		target: "vite 8 migration guide",
+	});
+});
