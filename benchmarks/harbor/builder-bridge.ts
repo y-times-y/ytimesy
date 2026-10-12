@@ -22,14 +22,19 @@ import { estimatedSolCostUsd, openAiSolRuntime } from "../evaluation/openai-sol"
 import { evaluationTokenUsage } from "../evaluation/token-usage";
 
 const REQUEST = "@@YTIMESY_HARBOR@@";
-const { instruction, cwd, logsDir, timeoutSeconds } = JSON.parse(
+const { instruction, cwd, logsDir, timeoutSeconds, mcpServers = [] } = JSON.parse(
 	process.argv[2] ?? "{}",
 ) as {
 	instruction: string;
 	cwd: string;
 	logsDir: string;
 	timeoutSeconds: number;
+	mcpServers?: string[];
 };
+// The task's MCP servers, reachable through a helper in the task container.
+const mcpNote = mcpServers.length
+	? ` MCP servers are available in this environment: ${mcpServers.join(", ")}. Use them through execute_command: \`mcp-call <server> list\` lists a server's tools and arguments; \`mcp-call <server> call <tool> '<json arguments>'\` calls one. Each server keeps one session, so state such as an open browser page persists between calls.`
+	: "";
 
 type Reply = { id: number; exitCode: number; stdout?: string; stderr?: string };
 const pending = new Map<number, (reply: Reply) => void>();
@@ -136,7 +141,8 @@ try {
 			messages: [{ role: "user", content: instruction }],
 			// Identical to the builder evaluator's instructions.
 			instructions:
-				"You are the ytimesy builder. Complete the user's task in /app. Use the repository tools for inspection, editing and verification. Read applicable repository guidance before editing. Do not publish, delegate, or access another project. Report the actual checks and any unresolved problems.",
+				"You are the ytimesy builder. Complete the user's task in /app. Use the repository tools for inspection, editing and verification. Read applicable repository guidance before editing. Do not publish, delegate, or access another project. Report the actual checks and any unresolved problems." +
+					mcpNote,
 			onEvent: async (event) => {
 				events.push(event);
 				// Progress for operators: one stderr line per tool call and usage update.
