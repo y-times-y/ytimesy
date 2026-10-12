@@ -44,7 +44,8 @@ const poll = async (state: State, file: string, limitMs: number) => {
 if (mode === "start") {
 	const args = rest[0] === "--" ? rest.slice(1) : rest;
 	const jobName = args[args.indexOf("--job-name") + 1];
-	const harness = execFileSync("git", ["rev-parse", "--short", "HEAD"]).toString().trim();
+	// One agent-version label for every job, so Harbor groups all trials together.
+const harness = process.env.YTIMESY_HARNESS_COMMIT ?? execFileSync("git", ["rev-parse", "--short", "HEAD"]).toString().trim();
 	const created = await client.vms.create({
 		slug: `ytimesy-coordinator-${Date.now()}`,
 		snapshotId: "freestyle/ubuntu-sm",

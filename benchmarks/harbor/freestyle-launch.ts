@@ -20,7 +20,8 @@ if (!datasetDir || !outDir || !tasks.length)
 const trials = Number(trialsArg);
 const concurrency = Number(concurrencyArg);
 const client = new Freestyle({ apiKey: process.env.FREESTYLE_API_KEY as string });
-const harness = execFileSync("git", ["rev-parse", "--short", "HEAD"]).toString().trim();
+// One agent-version label for every job, so Harbor groups all trials together.
+const harness = process.env.YTIMESY_HARNESS_COMMIT ?? execFileSync("git", ["rev-parse", "--short", "HEAD"]).toString().trim();
 const HARBOR = "harbor==0.24.0";
 await mkdir(outDir, { recursive: true });
 const log = (line: string) =>
