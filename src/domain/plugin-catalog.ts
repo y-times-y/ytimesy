@@ -13,6 +13,11 @@ export type PluginCatalogEntry = {
 	readonly sha: string;
 	readonly path: string;
 	/** The plugin's userConfig fields, copied at review so the UI can ask before installing. */
+	/**
+	 * Reviewed URL per MCP server name that signs each user in with their own account,
+	 * for providers whose plugin points at a shared keyless endpoint.
+	 */
+	readonly signInUrls?: Readonly<Record<string, string>>;
 	readonly settings?: readonly {
 		readonly key: string;
 		readonly title: string;
@@ -171,6 +176,19 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
 		repo: "agent-skills",
 		sha: "827249744ed96416d799b68fb6bf033f4068b18a",
 		path: "plugins/neon-postgres",
+	},
+	{
+		// Exa's own plugin (exa-labs/exa-mcp-server, reviewed 2026-10-12). Its plugin points at the
+		// shared keyless endpoint; ?login makes each user sign in to their own Exa account.
+		id: "exa",
+		displayName: "Exa web search",
+		description:
+			"Exa web search, page fetching and multi-step research for any model. Each user signs in to their own Exa account.",
+		owner: "exa-labs",
+		repo: "exa-mcp-server",
+		sha: "e9c3b0126a3373eb1aeaca162e84d0791ff4c7f7",
+		path: "",
+		signInUrls: { exa: "https://mcp.exa.ai/mcp?login" },
 	},
 	{
 		id: "context7",

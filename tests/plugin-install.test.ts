@@ -220,3 +220,54 @@ it("installs a sign-in (OAuth) plugin with its commands and an OAuth MCP server 
 	]);
 	await removeInstall("alice", installed.id);
 });
+
+it("signs each user in through a reviewed sign-in URL instead of a shared keyless endpoint", async () => {
+	const root = await mkdtemp(join(tmpdir(), "ytimesy-signin-"));
+	const files: Record<string, string> = {
+		"p/.claude-plugin/plugin.json": JSON.stringify({
+			name: "exa",
+			mcpServers: {
+				exa: {
+					type: "http",
+					url: "https://mcp.exa.ai/mcp?client=claude-code-plugin",
+				},
+			},
+		}),
+	};
+	for (const [path, text] of Object.entries(files)) {
+		await mkdir(dirname(join(root, `acme-p-x/${path}`)), { recursive: true });
+		await writeFile(join(root, `acme-p-x/${path}`), text);
+	}
+	execFileSync("tar", ["-czf", join(root, "a.tgz"), "-C", root, "acme-p-x"]);
+	const bytes = new Uint8Array(await readFile(join(root, "a.tgz")));
+	await rm(root, { recursive: true, force: true });
+	const contacted: string[] = [];
+	const installed = await installCatalogPlugin({
+		userId: "alice",
+		catalogId: "exa",
+		projectId: null,
+		config: {},
+		catalog: [
+			{
+				...entry,
+				id: "exa",
+				path: "p",
+				signInUrls: { exa: "https://mcp.exa.ai/mcp?login" },
+			},
+		],
+		fetch: (async () => new Response(bytes)) as typeof fetch,
+		mcpFetch: (async (input: RequestInfo | URL) => {
+			contacted.push(String(input));
+			return new Response(null, { status: 401 });
+		}) as typeof fetch,
+	});
+	expect(installed.needsSignIn).toEqual(["exa-exa"]);
+	// The shared keyless endpoint from the plugin's own config is never contacted.
+	expect(
+		contacted.every((url) => url.startsWith("https://mcp.exa.ai/mcp?login")),
+	).toBe(true);
+	expect(await listMcpServers("alice")).toMatchObject([
+		{ name: "exa-exa", auth: "oauth", signedIn: false },
+	]);
+	await removeInstall("alice", installed.id);
+});

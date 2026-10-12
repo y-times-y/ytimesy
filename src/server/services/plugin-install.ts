@@ -40,7 +40,9 @@ export async function installCatalogPlugin(input: {
 				`"${option.title}" is required to install ${plugin.displayName}.`,
 			);
 	const candidates = plugin.mcpServers.map((server) => {
-		const url = resolvePluginValue(server.url, input.config);
+		const url =
+			entry.signInUrls?.[server.name] ??
+			resolvePluginValue(server.url, input.config);
 		if (!url.startsWith("https://"))
 			throw new Error(`${server.name} must resolve to an HTTPS URL.`);
 		return {
