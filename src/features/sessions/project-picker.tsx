@@ -151,10 +151,10 @@ export function ProjectPicker({
 				<ChevronDown className="size-3" />
 			</PopoverTrigger>
 			<PopoverContent
-				side="top"
+				side="bottom"
 				align="start"
 				collisionPadding={12}
-				// Stay above the composer and scroll within the space there instead of flipping over it.
+				// Always opens below the trigger and scrolls within the space there.
 				avoidCollisions={false}
 				className="project-picker"
 				data-creating={addingProject || undefined}
