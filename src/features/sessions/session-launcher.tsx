@@ -246,9 +246,6 @@ export function SessionLauncher({
 	const [modelId, setModelId] = useState(session.listedModelId);
 	const [reasoningId, setReasoningId] = useState("");
 	const [fast, setFast] = useState(false);
-	// Plan mode stays on until turned off; enforced server-side for app runtimes.
-	const [planMode, setPlanMode] = useState(false);
-	const planModeAvailable = harnessId === "api" || harnessId === "codex";
 	const [multipleModels, setMultipleModels] = useState(false);
 	const [modelRuns, setModelRuns] = useState<ModelRun[]>([]);
 	const attemptModelIds = expandModelRuns(modelRuns);
@@ -417,9 +414,6 @@ export function SessionLauncher({
 				? { reasoningId: reasoning.id }
 				: {}),
 			...(leaderCount === 1 && fast ? { fast: true } : {}),
-			...(leaderCount === 1 && planMode && planModeAvailable
-				? { mode: "plan" as const }
-				: {}),
 			...(competitionMode && leaderCount > 1
 				? { leaderCount, attemptModelIds, userMessageId }
 				: {}),
@@ -707,21 +701,6 @@ export function SessionLauncher({
 									})
 								}
 							/>
-							{planModeAvailable ? (
-								<button
-									type="button"
-									className="session-plan-toggle"
-									aria-pressed={planMode}
-									title={
-										planMode
-											? "Plan mode: the agent proposes a plan and waits for approval. Click to turn off."
-											: "Plan first: investigate and propose a plan before any changes"
-									}
-									onClick={() => setPlanMode((value) => !value)}
-								>
-									Plan
-								</button>
-							) : null}
 							{turnStatus === "running" && activeCompetition ? (
 								<button
 									type="button"
