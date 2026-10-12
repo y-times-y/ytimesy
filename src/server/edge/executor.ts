@@ -14,6 +14,7 @@ import {
 } from "../../domain/model-conversation-routing";
 import {
 	type WorkflowStep,
+	type WorkflowTurn,
 	workflowTurnSchema,
 } from "../../domain/model-workflow";
 import { ConversationRoom, routeRealtimeRequest } from "../../realtime/worker";
@@ -32,6 +33,7 @@ import { createFreestyleWorkspaceMachines } from "../adapters/freestyle/workspac
 import { withConversationPublisher } from "../adapters/realtime-delivery";
 import { relayConversationDeliveriesOnce } from "../jobs/conversation-delivery";
 import {
+	executeModelStep,
 	executeWorkflowRequest,
 	type WorkflowStepClaim,
 } from "../jobs/model-workflow-executor";
@@ -43,7 +45,6 @@ import { withEdgeModelEndpoints } from "./model-endpoint";
 
 export { BackgroundJobRunner } from "./background-jobs";
 export { ProjectEnvironmentWorkflow } from "./environment-workflow";
-export { EdgeModelTurnWorkflow } from "./model-turn-workflow";
 
 // Validate scalar secrets separately: generated ProcessEnv requirements must not
 // force application credentials into the deliberately sanitized Git subprocess environment.
@@ -63,6 +64,23 @@ const environmentSecrets = z.object({
 	ENVIRONMENT_WORKFLOW_SECRET: z.string().min(32),
 	ENVIRONMENT_EXECUTION_ENABLED: z.literal("1"),
 });
+
+/** One step must finish inside a single alarm, which Cloudflare stops after 15 minutes. */
+const STEP_BUDGET_MS = 14 * 60 * 1000;
+/** Consecutive unfinished attempts (restarts or infrastructure errors) of one step before the turn is abandoned. */
+const MAX_STEP_RESUMES = 3;
+
+type ActiveTurn = {
+	userId: string;
+	sessionId: string;
+	turnId: string;
+	/** The admitted lease; step receipts are keyed by it. */
+	leaseId: string;
+	/** The lease Postgres currently accepts writes for; rotated on every resume. */
+	currentLeaseId: string;
+	stepIndex: number;
+	resumes: number;
+};
 
 async function resolveModelConversation(step: WorkflowStep) {
 	const result = await database().query<{ userId: string; sessionId: string }>(
@@ -133,14 +151,193 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 				),
 		);
 	}
-	async alarm() {
-		await this.room.alarm();
+	/**
+	 * Admits a claimed turn; this chat's alarms then run its steps one at a time.
+	 * Idempotent for the same turn; false while a different turn is active here.
+	 */
+	async startTurn(
+		scope: { userId: string; sessionId: string },
+		turn: WorkflowTurn,
+	) {
+		if (!this.bindIdentity(scope)) return false;
+		const active = this.activeTurn();
+		if (active)
+			return active.turnId === turn.turnId && active.leaseId === turn.leaseId;
+		this.ctx.storage.sql.exec(
+			"insert into turn_loop values(1,?,?,?,?,?,1,0)",
+			scope.userId,
+			scope.sessionId,
+			turn.turnId,
+			turn.leaseId,
+			turn.leaseId,
+		);
+		await this.wake("turn", Date.now());
+		return true;
 	}
-	private async claim(step: WorkflowStep): Promise<WorkflowStepClaim> {
+	private activeTurn() {
+		return this.ctx.storage.sql
+			.exec<ActiveTurn>(
+				`select user_id as userId,session_id as sessionId,turn_id as turnId,
+				 lease_id as leaseId,current_lease_id as currentLeaseId,
+				 step_index as stepIndex,resumes from turn_loop`,
+			)
+			.toArray()[0];
+	}
+	/** The turn loop and the room's lease expiry share this object's single alarm. */
+	private async wake(purpose: "turn" | "room", at: number | null) {
+		if (at === null)
+			this.ctx.storage.sql.exec(
+				"delete from conversation_wake where purpose=?",
+				purpose,
+			);
+		else
+			this.ctx.storage.sql.exec(
+				"insert into conversation_wake values(?,?) on conflict(purpose) do update set at=excluded.at",
+				purpose,
+				at,
+			);
+		const next = this.ctx.storage.sql
+			.exec<{ at: number | null }>(
+				"select min(at) as at from conversation_wake",
+			)
+			.toArray()[0]?.at;
+		if (next == null) await this.ctx.storage.deleteAlarm();
+		else await this.ctx.storage.setAlarm(next);
+	}
+	/**
+	 * A deploy or crash that resets this object mid-step makes Cloudflare re-run
+	 * the alarm; the step's receipt is still "processing", so it is resumed.
+	 */
+	async alarm() {
+		const due = new Set(
+			this.ctx.storage.sql
+				.exec<{ purpose: string }>(
+					"select purpose from conversation_wake where at<=?",
+					Date.now(),
+				)
+				.toArray()
+				.map((row) => row.purpose),
+		);
+		if (due.has("room")) {
+			await this.wake("room", null);
+			await this.room.alarm();
+		}
+		if (due.has("turn")) await this.advanceTurn();
+	}
+	private async endTurn() {
+		this.ctx.storage.sql.exec("delete from turn_loop");
+		await this.wake("turn", null);
+	}
+	private async advanceTurn() {
+		const active = this.activeTurn();
+		if (!active) return this.wake("turn", null);
+		const step = {
+			turnId: active.turnId,
+			leaseId: active.leaseId,
+			index: active.stepIndex,
+		};
+		if (active.resumes >= MAX_STEP_RESUMES) {
+			// Stop driving it; lease expiry marks the turn failed and tells the user.
+			console.warn("Chat step kept failing; turn abandoned.", {
+				index: step.index,
+			});
+			return this.endTurn();
+		}
+		const resume = this.steps.read(step)?.state === "processing";
+		// Counts consecutive attempts that did not finish this step.
+		this.ctx.storage.sql.exec("update turn_loop set resumes=resumes+1");
+		if (executorSecrets.parse(this.env).MODEL_EXECUTION_ENABLED !== "1")
+			return this.endTurn();
+		let outcome: Awaited<ReturnType<typeof executeModelStep>>;
+		try {
+			outcome = await withDatabaseScope(
+				this.env.HYPERDRIVE.connectionString,
+				() =>
+					this.withLocalConversation(active, () =>
+						withBackgroundJobDispatcher(
+							async (job) => {
+								await startBackgroundJob(this.env, job);
+							},
+							() =>
+								withConversationProgressWake(
+									() => relayConversationDeliveriesOnce(active.sessionId),
+									() =>
+										executeModelStep(
+											step,
+											() =>
+												createFreestyleWorkspaceMachines(
+													Effect.runSync(readFreestyleApiKey()),
+												),
+											{
+												claim: (claimed, resumed) =>
+													this.claim(claimed, resumed),
+												complete: async (finished, result) => {
+													if (!this.steps.finish(finished, result))
+														throw new Error(
+															"Conversation receipt was not saved.",
+														);
+												},
+											},
+											AbortSignal.timeout(STEP_BUDGET_MS),
+											resume,
+										),
+								),
+						),
+					),
+				null,
+			);
+		} catch {
+			// Unknown outcome: a started step keeps its receipt and is resumed next time.
+			console.warn("Chat step failed; retrying.", { index: step.index });
+			return this.wake("turn", Date.now() + 5_000 * (active.resumes + 1));
+		}
+		if (outcome === "continue") {
+			this.ctx.storage.sql.exec(
+				"update turn_loop set step_index=step_index+1,resumes=0",
+			);
+			return this.wake("turn", Date.now());
+		}
+		await this.endTurn();
+		if (
+			outcome !== "unavailable" &&
+			process.env.BACKGROUND_EXECUTION_ENABLED === "1"
+		)
+			await startBackgroundJob(this.env, {
+				id: backgroundJobId(`completed:${step.turnId}:${step.leaseId}`),
+				kind: "model-admission",
+			});
+	}
+	private async claim(
+		step: WorkflowStep,
+		resume = false,
+	): Promise<WorkflowStepClaim> {
 		const receipt = this.steps.read(step);
 		if (receipt?.state === "done" && receipt.outcome)
 			return { kind: "done", outcome: receipt.outcome };
-		if (receipt) return { kind: "unavailable" };
+		if (receipt && !resume) return { kind: "unavailable" };
+		const active = this.activeTurn();
+		let leaseId =
+			active?.turnId === step.turnId && active.leaseId === step.leaseId
+				? active.currentLeaseId
+				: step.leaseId;
+		if (receipt) {
+			// A reset can leave the previous attempt running as a zombie that still
+			// reaches Postgres. Rotating the lease rejects its writes and stops it.
+			const rotated = crypto.randomUUID();
+			const renewed = await database().query(
+				`update api_turn set lease_id=$3,heartbeat_at=now() where id=$1 and lease_id=$2
+				 and state='running' and executor='durable-object'`,
+				[step.turnId, leaseId, rotated],
+			);
+			if (!renewed.rowCount) return { kind: "unavailable" };
+			leaseId = rotated;
+			this.ctx.storage.sql.exec(
+				"update turn_loop set current_lease_id=?",
+				rotated,
+			);
+			if (!(await this.room.reclaim({ turnId: step.turnId, leaseId })))
+				return { kind: "unavailable" };
+		}
 		const turn = (
 			await database().query<
 				ApiTurn & { fresh: boolean; cancel_requested: boolean; legacy: boolean }
@@ -148,7 +345,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 				`select t.*,heartbeat_at>=now()-interval '45 seconds' as fresh,
 			 exists(select 1 from model_workflow_step s where s.turn_id=t.id) as legacy
 			 from api_turn t where t.id=$1 and t.lease_id=$2 and t.executor='durable-object'`,
-				[step.turnId, step.leaseId],
+				[step.turnId, leaseId],
 			)
 		).rows[0];
 		if (!turn || turn.legacy) return { kind: "unavailable" };
@@ -161,7 +358,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		if (turn.state !== "running" || !turn.fresh) return { kind: "unavailable" };
 		if (turn.cancel_requested) return { kind: "cancelled", turn };
 		// No await between reading and inserting: concurrent requests cannot claim the same step.
-		const claimed = claimConversationStep(this.steps, step);
+		const claimed = claimConversationStep(this.steps, step, Date.now(), resume);
 		return claimed.kind === "claimed" ? { ...claimed, turn } : claimed;
 	}
 	async fetch(request: Request) {
@@ -235,10 +432,19 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 
 	constructor(ctx: DurableObjectState, env: EdgeExecutorEnvironment) {
 		super(ctx, env);
-		this.room = new ConversationRoom(ctx);
+		this.room = new ConversationRoom(ctx, (at: number | null) =>
+			this.wake("room", at),
+		);
 		this.steps = new SqliteConversationSteps(ctx.storage.sql);
 		ctx.storage.sql.exec(
 			"create table if not exists conversation_identity(id integer primary key check(id=1),name text not null)",
+		);
+		ctx.storage.sql.exec(`create table if not exists turn_loop(
+			id integer primary key check(id=1), user_id text not null, session_id text not null,
+			turn_id text not null, lease_id text not null, current_lease_id text not null,
+			step_index integer not null, resumes integer not null)`);
+		ctx.storage.sql.exec(
+			"create table if not exists conversation_wake(purpose text primary key,at integer not null)",
 		);
 	}
 }
@@ -429,10 +635,13 @@ export default {
 					() => resolveModelConversation({ ...turn.data, index: 1 }),
 					null,
 				);
-				if (!scope) return new Response(null, { status: 409 });
-				await env.MODEL_TURNS.createBatch([
-					{ id: `${turn.data.turnId}-${turn.data.leaseId}`, params: turn.data },
-				]);
+				if (
+					!scope ||
+					!(await env.MODEL_CONVERSATIONS.getByName(
+						modelConversationName(scope),
+					).startTurn(scope, turn.data))
+				)
+					return new Response(null, { status: 409 });
 				return new Response(null, { status: 202 });
 			}
 			if (new URL(request.url).pathname === "/environment/start") {

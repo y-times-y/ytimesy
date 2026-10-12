@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
@@ -17,59 +16,6 @@ const endpoint =
 	"https://ytimesy-edge-executor-development.example-account.workers.dev/model-step";
 const turnIds = [randomUUID(), randomUUID()];
 const leaseId = randomUUID();
-const workflowName = "ytimesy-edge-model-turns-development";
-const workflowId = `${turnIds[0]}-${leaseId}`;
-let workflowRequested = false;
-function workflowCommand(action: "describe" | "delete") {
-	try {
-		return execFileSync(
-			"pnpm",
-			[
-				"exec",
-				"wrangler",
-				"workflows",
-				"instances",
-				action,
-				workflowName,
-				workflowId,
-				"--json",
-				"--config",
-				"wrangler.edge-executor.jsonc",
-			],
-			{
-				encoding: "utf8",
-				stdio: ["pipe", "pipe", "pipe"],
-				timeout: 30_000,
-			},
-		);
-	} catch {
-		throw new Error(`Development proof Workflow ${action} failed.`);
-	}
-}
-function executionGate(value: "0" | "1") {
-	try {
-		execFileSync(
-			"pnpm",
-			[
-				"exec",
-				"wrangler",
-				"secret",
-				"put",
-				"MODEL_EXECUTION_ENABLED",
-				"--config",
-				"wrangler.edge-executor.jsonc",
-			],
-			{
-				input: value,
-				stdio: ["pipe", "pipe", "pipe"],
-				timeout: 60_000,
-			},
-		);
-	} catch {
-		throw new Error("Development execution gate update failed.");
-	}
-}
-
 /** Terminal synthetic turns exercise the deployed DO routing without inference or repository tools. */
 try {
 	for (const [index, id] of turnIds.entries()) {
@@ -84,7 +30,6 @@ try {
 				"No development chat is available for the routing proof.",
 			);
 	}
-	executionGate("1");
 	const secret = modelWorkflowSigningSecret();
 	for (const [index, id] of turnIds.entries()) {
 		for (let attempt = 0; attempt < 2; attempt++) {
@@ -121,7 +66,7 @@ try {
 	}
 	const startUrl = new URL("/start", endpoint).href;
 	const admission = JSON.stringify({ turnId: turnIds[0], leaseId });
-	workflowRequested = true;
+	// The chat admits the turn; repeating the admission is idempotent.
 	for (let attempt = 0; attempt < 2; attempt++) {
 		const response = await fetch(startUrl, {
 			method: "POST",
@@ -130,41 +75,18 @@ try {
 			signal: AbortSignal.timeout(30_000),
 		});
 		if (response.status !== 202)
-			throw new Error(
-				`Development Workflow admission failed (${response.status}).`,
-			);
+			throw new Error(`Chat turn admission failed (${response.status}).`);
 	}
-	let status = "unknown";
-	for (let attempt = 0; attempt < 10; attempt++) {
-		const result = JSON.parse(workflowCommand("describe")) as {
-			status: string;
-		};
-		status = result.status;
-		if (status === "complete") break;
-		if (status === "errored" || status === "terminated")
-			throw new Error(`Development proof Workflow ${status}.`);
-		await delay(1000);
-	}
-	if (status !== "complete")
-		throw new Error("Development proof Workflow did not complete.");
 	console.log(
-		"Live development DO terminal routing/reconnect, Node ownership rejection, and binding-based Workflow completion passed. No inference or VMs used.",
+		"Live development DO terminal routing/reconnect, Node ownership rejection, and chat turn admission passed. No inference or VMs used.",
 	);
 } finally {
 	try {
-		executionGate("0");
+		await database().query(
+			"delete from api_turn where id=any($1::uuid[]) and model_id='routing-proof'",
+			[turnIds],
+		);
 	} finally {
-		try {
-			if (workflowRequested) workflowCommand("delete");
-		} finally {
-			try {
-				await database().query(
-					"delete from api_turn where id=any($1::uuid[]) and model_id='routing-proof'",
-					[turnIds],
-				);
-			} finally {
-				await closeDatabase();
-			}
-		}
+		await closeDatabase();
 	}
 }

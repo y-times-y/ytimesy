@@ -11,7 +11,6 @@ import executor, {
 
 export {
 	BackgroundJobRunner,
-	EdgeModelTurnWorkflow,
 	ProjectEnvironmentWorkflow,
 } from "../../src/server/edge/executor";
 
@@ -93,11 +92,12 @@ export default {
 				const result = await database().query(
 					`select 1 from api_turn t join agent_session s on s.id=t.session_id
 				 join agent_session p on p.id=s.parent_session_id
-				 where t.id=$1 and t.lease_id=$2 and t.user_id=$3 and s.id=$4
-				 and s.user_id=$3 and p.user_id=$3 and t.executor='durable-object'
+				 where t.id=$1 and t.user_id=$2 and s.id=$3
+				 and s.user_id=$2 and p.user_id=$2 and t.executor='durable-object'
 				 and s.title='Read isolated proof marker' and p.title='Disposable edge proof'
 				 and s.task_access='read_only'`,
-					[scope.turnId, scope.leaseId, scope.userId, scope.sessionId],
+					// Not the lease: a resumed turn runs under a rotated one; receipts keep the original.
+					[scope.turnId, scope.userId, scope.sessionId],
 				);
 				return result.rowCount === 1;
 			},

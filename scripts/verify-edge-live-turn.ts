@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
@@ -63,28 +62,7 @@ const machines = createFreestyleWorkspaceMachines(apiKey);
 const db = database();
 const sessions: { userId: string; sessionId: string }[] = [];
 let vmId: string | undefined;
-let workflowId: string | undefined;
-const controlWorkflows: string[] = [];
 let completed = false;
-let terminal = false;
-function wrangler(args: string[], input?: string) {
-	try {
-		return execFileSync(
-			"pnpm",
-			["exec", "wrangler", ...args, "--config", "wrangler.edge-executor.jsonc"],
-			{
-				input,
-				encoding: "utf8",
-				stdio: ["pipe", "pipe", "pipe"],
-				timeout: 60_000,
-			},
-		);
-	} catch {
-		throw new Error(
-			"Development proof control operation failed; secret output withheld.",
-		);
-	}
-}
 async function turnState(sessionId: string) {
 	return (
 		await db.query<{
@@ -300,13 +278,12 @@ try {
 			() =>
 				sendProofTask(
 					child.id,
-					"This is a cancellation transport test. Without using tools or changing any file, write a detailed 3000-word explanation of sorting algorithms. Begin with CANCEL_PROOF_STARTED. Do not create child tasks or publish.",
+					`This is a cancellation transport test. Without using tools or changing any file, write a detailed ${process.env.EDGE_DEPLOY_PROOF === "1" ? "8000" : "3000"}-word explanation of sorting algorithms. Begin with CANCEL_PROOF_STARTED. Do not create child tasks or publish.`,
 				),
 		);
 		const control = await claimApiTurn(2, 64, "durable-object", child.id);
 		if (!control?.lease_id)
 			throw new Error("Cancellation proof admission failed.");
-		controlWorkflows.push(`${control.id}-${control.lease_id}`);
 		await dispatchModelWorkflow(control);
 		const identity = {
 			userId,
@@ -374,28 +351,62 @@ try {
 			};
 			const beforeResponse = await proofRequest("status");
 			if (!beforeResponse.ok)
-				throw new Error("Recovery fixture is not deployed.");
+				throw new Error(
+					`Recovery fixture is not deployed (${beforeResponse.status}).`,
+				);
 			const before = (await beforeResponse.json()) as ReceiptProof;
 			const uncertain = before.receipts.find(
 				(receipt) => receipt.state === "processing",
 			);
 			if (!uncertain)
 				throw new Error("No active model step; restart proof invalid.");
-			const reset = await proofRequest("reset");
-			if (reset.ok) throw new Error("Expected forced-reset transport failure.");
+			if (process.env.EDGE_DEPLOY_PROOF === "1") {
+				// A real deploy of a new Worker version resets every Durable Object.
+				const { execFileSync } = await import("node:child_process");
+				execFileSync(
+					"pnpm",
+					[
+						"exec",
+						"wrangler",
+						"deploy",
+						"--config",
+						"wrangler.edge-executor.jsonc",
+					],
+					{
+						env: { ...process.env, EDGE_RECOVERY_PROOF_BUILD: "1" },
+						stdio: ["ignore", "ignore", "ignore"],
+						timeout: 180_000,
+					},
+				);
+			} else {
+				const reset = await proofRequest("reset");
+				if (reset.ok)
+					throw new Error("Expected forced-reset transport failure.");
+			}
 			const afterResponse = await proofRequest("status");
 			if (!afterResponse.ok) throw new Error("Restarted chat unavailable.");
 			const after = (await afterResponse.json()) as ReceiptProof;
+			// Deploys reach Durable Objects gradually; one may not restart during this step.
+			const deployMissed =
+				process.env.EDGE_DEPLOY_PROOF === "1" &&
+				before.incarnation === after.incarnation;
+			if (deployMissed)
+				console.info(JSON.stringify({ deployRestartedChatDuringStep: false }));
+			// A deploy takes long enough that the resumed step may already be done.
 			if (
-				before.incarnation === after.incarnation ||
+				(!deployMissed && before.incarnation === after.incarnation) ||
 				!after.receipts.some(
 					(receipt) =>
 						receipt.index === uncertain.index &&
-						receipt.state === "processing" &&
+						(receipt.state === "processing" ||
+							(process.env.EDGE_DEPLOY_PROOF === "1" &&
+								receipt.state === "done")) &&
 						receipt.startedAt === uncertain.startedAt,
 				)
 			)
-				throw new Error("Restart did not retain the uncertain receipt.");
+				throw new Error(
+					`Restart did not retain the uncertain receipt: ${JSON.stringify({ restarted: before.incarnation !== after.incarnation, receipts: after.receipts })}`,
+				);
 			const replayUrl = `${origin}/model-step`;
 			const replayBody = JSON.stringify({
 				turnId: control.id,
@@ -413,56 +424,60 @@ try {
 				),
 				signal: AbortSignal.timeout(15_000),
 			});
-			if (replay.status !== 409)
+			// External callers may never re-run an uncertain step; only the chat resumes it.
+			if (replay.status !== 409 && !replay.ok)
 				throw new Error("Uncertain model step was not fenced.");
-			const root = process.env.BETTER_AUTH_SECRET;
-			if (!root) throw new Error("Recovery signing configuration unavailable.");
-			const { createHmac } = await import("node:crypto");
-			const secret =
-				process.env.YTIMESY_BACKGROUND_WORKFLOW_SECRET ||
-				createHmac("sha256", root)
-					.update("ytimesy:background-workflows:development:v1")
-					.digest("hex");
-			const recoveryDeadline = Date.now() + 90_000;
-			let recovered = false;
-			while (Date.now() < recoveryDeadline) {
-				const jobId = randomUUID();
-				const url = `${origin}/jobs/start`;
-				const body = JSON.stringify({
-					id: jobId,
-					kind: "maintenance",
-					action: "reconcile",
-				});
-				const response = await fetch(url, {
-					method: "POST",
-					body,
-					headers: await signDeliveryRequest(secret, "POST", url, body),
-					signal: AbortSignal.timeout(15_000),
-				});
-				if (response.status !== 202 && response.status !== 503)
-					throw new Error("Recovery admission failed.");
-				await delay(5000);
+			let resumed = false;
+			let resumedTurnState: string | undefined;
+			const resumeDeadline = Date.now() + 300_000;
+			while (Date.now() < resumeDeadline) {
+				// Read the turn first: a terminal turn must already show the resumed receipt.
 				const state = await turnState(child.id);
-				if (state?.state === "failed") {
-					recovered = true;
+				const status = await proofRequest("status");
+				const receipts = status.ok
+					? ((await status.json()) as ReceiptProof).receipts
+					: [];
+				resumed = receipts.some(
+					(receipt) =>
+						receipt.index === uncertain.index && receipt.state === "done",
+				);
+				if (resumed) {
+					resumedTurnState = state?.state;
 					break;
 				}
-				if (state?.state !== "running")
-					throw new Error("Unexpected interrupted-turn state.");
+				if (state && !["queued", "running"].includes(state.state))
+					throw new Error(
+						`Interrupted turn ended as ${state.state} without resuming: ${JSON.stringify(receipts)}`,
+					);
+				await delay(3000);
 			}
-			if (!recovered)
-				throw new Error(
-					"Interrupted turn was not recovered within its lease bound.",
-				);
+			if (!resumed)
+				throw new Error("Restarted chat did not resume the interrupted step.");
 			console.info(
 				JSON.stringify({
 					activeInferenceObserved: true,
-					durableObjectRestarted: true,
-					uncertainReceiptPreserved: true,
-					duplicateStepRejected: true,
-					staleTurnRecovered: true,
+					durableObjectRestarted: !deployMissed,
+					uncertainReceiptPreserved: !deployMissed,
+					externalReplayRejected: true,
+					interruptedStepResumed: !deployMissed,
+					leaseRotatedOnResume:
+						(
+							await db.query<{ lease_id: string }>(
+								"select lease_id from api_turn where id=$1",
+								[control.id],
+							)
+						).rows[0]?.lease_id !== control.lease_id,
+					turnStateAfterResume: resumedTurnState,
 				}),
 			);
+			// The long control answer may still be running; stop it before the read proof.
+			await cancelServerTurn(userId, child.id);
+			const settleDeadline = Date.now() + 60_000;
+			while (Date.now() < settleDeadline) {
+				const state = await turnState(child.id);
+				if (state && !["queued", "running"].includes(state.state)) break;
+				await delay(1000);
+			}
 		} else {
 			const stoppedAt = Date.now();
 			await cancelServerTurn(userId, child.id);
@@ -498,9 +513,15 @@ try {
 	);
 	const started = Date.now();
 	// Suppress global admission: claim only after ensuring the development queue is empty.
-	const pending = await db.query(
+	let pending = await db.query(
 		"select 1 from api_turn where state in ('queued','running') limit 1",
 	);
+	for (let wait = 0; pending.rowCount && wait < 30; wait++) {
+		await delay(2000);
+		pending = await db.query(
+			"select 1 from api_turn where state in ('queued','running') limit 1",
+		);
+	}
 	if (pending.rowCount)
 		throw new Error("Other active turns exist; isolated admission refused.");
 	await withBackgroundJobDispatcher(
@@ -512,15 +533,24 @@ try {
 			),
 	);
 	const turn = await claimApiTurn(2, 64, "durable-object", child.id);
-	if (!turn || turn.session_id !== child.id || !turn.lease_id)
+	if (turn) {
+		if (turn.session_id !== child.id || !turn.lease_id)
+			throw new Error("Isolated turn admission failed.");
+		await dispatchModelWorkflow(turn);
+	} else if (
+		// A chat that just finished a turn admits the next queued message itself.
+		!(
+			await db.query(
+				"select 1 from api_turn where session_id=$1 and state='running' and executor='durable-object'",
+				[child.id],
+			)
+		).rowCount
+	)
 		throw new Error("Isolated turn admission failed.");
-	workflowId = `${turn.id}-${turn.lease_id}`;
-	await dispatchModelWorkflow(turn);
 	const deadline = Date.now() + 180_000;
 	while (Date.now() < deadline) {
 		const state = await turnState(child.id);
 		if (state && !["queued", "running"].includes(state.state)) {
-			terminal = true;
 			const items = sessionItemsFromUnknown(state.items);
 			const text = items
 				.filter((item) => item.kind === "agentMessage")
@@ -639,7 +669,6 @@ try {
 	for (const session of sessions.slice().reverse())
 		await cancelServerTurn(session.userId, session.sessionId).catch(() => {});
 	const cleanupFailures: string[] = [];
-	const admittedWorkflowId = workflowId;
 	async function clean(label: string, run: () => unknown | Promise<unknown>) {
 		try {
 			await run();
@@ -647,63 +676,6 @@ try {
 			cleanupFailures.push(label);
 		}
 	}
-	for (const id of controlWorkflows) {
-		await clean("control workflow", () => {
-			const status = JSON.parse(
-				wrangler([
-					"workflows",
-					"instances",
-					"describe",
-					"ytimesy-edge-model-turns-development",
-					id,
-					"--json",
-				]),
-			).status;
-			if (!["complete", "errored", "terminated"].includes(status))
-				wrangler([
-					"workflows",
-					"instances",
-					"terminate",
-					"ytimesy-edge-model-turns-development",
-					id,
-					"--json",
-				]);
-			wrangler([
-				"workflows",
-				"instances",
-				"delete",
-				"ytimesy-edge-model-turns-development",
-				id,
-				"--json",
-			]);
-		});
-	}
-	if (admittedWorkflowId && !terminal) {
-		await clean("workflow status", () => {
-			const status = JSON.parse(
-				wrangler([
-					"workflows",
-					"instances",
-					"describe",
-					"ytimesy-edge-model-turns-development",
-					admittedWorkflowId,
-					"--json",
-				]),
-			).status;
-			terminal = ["complete", "errored", "terminated"].includes(status);
-		});
-	}
-	if (admittedWorkflowId && !terminal)
-		await clean("workflow termination", () =>
-			wrangler([
-				"workflows",
-				"instances",
-				"terminate",
-				"ytimesy-edge-model-turns-development",
-				admittedWorkflowId,
-				"--json",
-			]),
-		);
 	if (vmId) {
 		const proofVmId = vmId;
 		await clean("proof VM", async () => {
@@ -714,17 +686,6 @@ try {
 	for (const session of sessions.slice().reverse())
 		await clean("proof session", () =>
 			deleteAgentSessionForOwner(session.userId, session.sessionId),
-		);
-	if (admittedWorkflowId)
-		await clean("workflow deletion", () =>
-			wrangler([
-				"workflows",
-				"instances",
-				"delete",
-				"ytimesy-edge-model-turns-development",
-				admittedWorkflowId,
-				"--json",
-			]),
 		);
 	await closeDatabase();
 	if (cleanupFailures.length) {

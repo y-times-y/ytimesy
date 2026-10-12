@@ -18,19 +18,35 @@ export interface ConversationStepStorage {
 	finish(step: WorkflowStep, outcome: WorkflowStepOutcome): boolean;
 }
 
-/** A receipt with an unknown outcome is a replay fence, never permission to retry inference. */
+/**
+ * A receipt with an unknown outcome is a replay fence. Only the chat's own turn
+ * loop may lift it, by resuming after a restart; the resumed step is told which
+ * tool calls already ran instead of replaying them.
+ */
 export function claimConversationStep(
 	storage: ConversationStepStorage,
 	step: WorkflowStep,
 	now = Date.now(),
+	resume = false,
 ):
-	| { kind: "claimed"; remainingMs: number }
+	| { kind: "claimed"; remainingMs: number; resumed?: true }
 	| { kind: "done"; outcome: WorkflowStepOutcome }
 	| { kind: "unavailable" } {
 	const existing = storage.read(step);
 	if (existing?.state === "done" && existing.outcome)
 		return { kind: "done", outcome: existing.outcome };
-	if (existing) return { kind: "unavailable" };
+	if (existing) {
+		if (!resume) return { kind: "unavailable" };
+		const firstStartedAt = storage.firstStartedAt(step) ?? existing.startedAt;
+		return {
+			kind: "claimed",
+			resumed: true,
+			remainingMs: Math.max(
+				0,
+				MODEL_WORKFLOW_DEADLINE_MS - (now - firstStartedAt),
+			),
+		};
+	}
 	if (step.index > 1) {
 		const previous = storage.read({ ...step, index: step.index - 1 });
 		if (previous?.state !== "done" || previous.outcome !== "continue")
