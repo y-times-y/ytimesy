@@ -14,6 +14,8 @@ describe("workspace settings", () => {
 			"github",
 			"project",
 			"agents",
+			"plugins",
+			"mcp",
 		]);
 	});
 
