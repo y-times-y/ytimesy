@@ -16,9 +16,11 @@ import asyncio
 import json
 import math
 import os
+import shlex
 from pathlib import Path
 
 from harbor.agents.base import BaseAgent
+from harbor.agents.capabilities import AgentCapabilities
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
@@ -49,6 +51,10 @@ printf '%s\n' "$project"
 
 
 class YtimesyAgent(BaseAgent):
+    # Task-supplied skills go where our builder discovers them (.agents/skills),
+    # as Harbor's Codex agent copies them into Codex's skills directory.
+    capabilities = AgentCapabilities(skills=True)
+
     @staticmethod
     def name() -> str:
         return "ytimesy"
@@ -63,6 +69,16 @@ class YtimesyAgent(BaseAgent):
                 f"ytimesy prerequisites failed: {(result.stderr or result.stdout or '')[-800:]}"
             )
         self.cwd = (result.stdout or "/app").strip().splitlines()[-1]
+        if self.skills_dir:
+            project = shlex.quote(self.cwd)
+            skills = await environment.exec(
+                f"mkdir -p {project}/.agents/skills && cp -r {shlex.quote(self.skills_dir)}/* {project}/.agents/skills/ 2>/dev/null; "
+                f"grep -qx '.agents/' {project}/.git/info/exclude 2>/dev/null || echo '.agents/' >> {project}/.git/info/exclude",
+                timeout_sec=120,
+                user="root",
+            )
+            if skills.return_code != 0:
+                self.logger.warning("ytimesy: copying skills failed: %s", skills.stderr)
 
     async def run(
         self, instruction: str, environment: BaseEnvironment, context: AgentContext

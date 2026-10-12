@@ -41,7 +41,63 @@ const poll = async (state: State, file: string, limitMs: number) => {
 	throw new Error(`${file} not written in time`);
 };
 
-if (mode === "start") {
+if (mode === "start-script") {
+	// Bootstraps a coordinator with everything both jobs need, then runs a
+	// local script on it: Daytona harbor runs and/or the Freestyle launcher.
+	const [script] = rest;
+	const harness = process.env.YTIMESY_HARNESS_COMMIT ?? execFileSync("git", ["rev-parse", "--short", "HEAD"]).toString().trim();
+	const created = await client.vms.create({
+		slug: `ytimesy-coordinator-${Date.now()}`,
+		snapshotId: "freestyle/ubuntu-sm",
+		firewall: GUEST_INTERNET_FIREWALL,
+		ttlSeconds: 86400,
+		autoDeleteSeconds: 86400,
+		maxRunSeconds: 86400,
+		maxRunTotalSeconds: 86400,
+		idleTimeoutSeconds: null,
+		automaticRestart: false,
+		metadata: { purpose: "harbor-coordinator" },
+	} as never);
+	const state: State = { vmId: created.vmId, jobName: "tb4-full-daytona", harness };
+	await writeFile(statePath, JSON.stringify(state, null, 2));
+	const data = await waitUntilVmRunning(created.vm, "coordinator");
+	await created.vm.resize({ cpu: 16, memory: 32768, storage: Math.max(data.resources.storage, 40960) });
+	console.log(`coordinator VM ${created.vmId} (16 CPU / 32 GB); bootstrapping`);
+	const vm = created.vm;
+	await vm.fs.writeTextFile(
+		"/opt/bootstrap.sh",
+		`set -eu
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq && apt-get install -y -qq python3 curl xz-utils git >/dev/null
+curl -fsSL https://nodejs.org/dist/v22.20.0/node-v22.20.0-linux-x64.tar.xz | tar -xJ -C /usr/local --strip-components=1
+curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh >/dev/null
+mkdir -p /opt/ytimesy/benchmarks/harbor /opt/ytimesy/.secrets /opt/ytimesy/.ytimesy/freestyle-harbor /opt/jobs /opt/freestyle-jobs
+touch /opt/ytimesy/benchmarks/__init__.py /opt/ytimesy/benchmarks/harbor/__init__.py
+uvx --from ${HARBOR} --with daytona harbor --version
+`,
+	);
+	await vm.fs.writeTextFile("/opt/bootstrap-wrapper.sh", "bash /opt/bootstrap.sh > /opt/bootstrap.log 2>&1; echo $? > /opt/bootstrap.exit\n");
+	await sh(state, "nohup setsid bash /opt/bootstrap-wrapper.sh >/dev/null 2>&1 &");
+	const booted = await poll(state, "/opt/bootstrap.exit", 1_200_000);
+	if (booted !== "0") throw new Error(`bootstrap failed: ${await sh(state, "tail -c 800 /opt/bootstrap.log")}`);
+	const bundle = await readFile(".ytimesy/freestyle-harbor/builder-bridge.mjs");
+	await vm.fs.writeFile("/opt/ytimesy/builder-bridge.mjs", bundle);
+	await vm.fs.writeFile("/opt/ytimesy/.ytimesy/freestyle-harbor/builder-bridge.mjs", bundle);
+	await vm.fs.writeFile("/opt/ytimesy/freestyle-launch.mjs", await readFile(".ytimesy/freestyle-harbor/freestyle-launch.mjs"));
+	await vm.fs.writeFile("/opt/ytimesy/dataset.tgz", await readFile(".ytimesy/freestyle-harbor/dataset.tgz"));
+	await vm.fs.writeFile("/opt/ytimesy/benchmarks/harbor/ytimesy_agent.py", await readFile("benchmarks/harbor/ytimesy_agent.py"));
+	for (const key of ["openai-api-key", "daytona-api-key"])
+		await vm.fs.writeTextFile(`/opt/ytimesy/.secrets/${key}`, (await readFile(`.secrets/${key}`, "utf8")).trim());
+	await vm.fs.writeTextFile("/opt/ytimesy/.secrets/freestyle-api-key", (process.env.FREESTYLE_API_KEY as string).trim());
+	await sh(state, "chmod 600 /opt/ytimesy/.secrets/* && cd /opt/ytimesy && tar xzf dataset.tgz");
+	// Trials already collected elsewhere are not rerun (the launcher skips existing archives).
+	for (const archive of (await import("node:fs")).readdirSync(".ytimesy/harbor-jobs/freestyle").filter((f) => f.endsWith(".tgz")))
+		await vm.fs.writeFile(`/opt/freestyle-jobs/${archive}`, await readFile(`.ytimesy/harbor-jobs/freestyle/${archive}`));
+	await vm.fs.writeTextFile("/opt/run.sh", `export YTIMESY_HARNESS_COMMIT=${harness}\n${await readFile(script, "utf8")}`);
+	await vm.fs.writeTextFile("/opt/run-wrapper.sh", "bash /opt/run.sh > /opt/run.log 2>&1; echo $? > /opt/run.exit\n");
+	await sh(state, "nohup setsid bash /opt/run-wrapper.sh >/dev/null 2>&1 &");
+	console.log("coordinator script started");
+} else if (mode === "start") {
 	const args = rest[0] === "--" ? rest.slice(1) : rest;
 	const jobName = args[args.indexOf("--job-name") + 1];
 	// One agent-version label for every job, so Harbor groups all trials together.

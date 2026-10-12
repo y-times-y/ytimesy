@@ -64,8 +64,24 @@ async function runTrial(task: string, attempt: number) {
 		log(`${name}: already collected`);
 		return;
 	} catch {}
+	if ((process.env.YTIMESY_SKIP_TRIALS ?? "").split(",").includes(name)) {
+		log(`${name}: skipped (running elsewhere)`);
+		return;
+	}
 	const want = await resources(task);
-	const created = await client.vms.create({
+	// Capacity errors are retried with backoff; they are not trial outcomes.
+	const createVm = async (options: object) => {
+		for (let attempt = 1; ; attempt++) {
+			try {
+				return await client.vms.create(options as never);
+			} catch (error) {
+				if (attempt >= 20) throw error;
+				log(`${name}: VM create failed (${(error as Error).message.slice(0, 80)}); retrying`);
+				await new Promise((r) => setTimeout(r, Math.min(300_000, 15_000 * attempt)));
+			}
+		}
+	};
+	const created = await createVm({
 		slug: `ytimesy-harbor-${task}-${attempt}-${Date.now()}`.slice(0, 60),
 		snapshotId: "freestyle/ubuntu-sm",
 		firewall: GUEST_INTERNET_FIREWALL,
@@ -76,7 +92,7 @@ async function runTrial(task: string, attempt: number) {
 		idleTimeoutSeconds: null,
 		automaticRestart: false,
 		metadata: { purpose: "terminal-bench-harbor", trial: name },
-	} as never);
+	});
 	const vm = created.vm;
 	// One exec is capped at 5 minutes, so long steps run detached and are polled.
 	const sh = async (command: string, timeoutMs = 240_000) => {
@@ -112,14 +128,28 @@ async function runTrial(task: string, attempt: number) {
 	try {
 		const data = await waitUntilVmRunning(vm, name);
 		// The task's own size plus headroom for Docker and the Harbor coordinator.
-		const target = {
-			cpu: Math.min(16, Math.max(data.resources.cpu, want.cpu + 2)),
-			memory: Math.min(32768, Math.max(data.resources.memory, want.memory + 4096)),
-			storage: Math.max(data.resources.storage, Math.min(want.storage + 25600, 76800)),
+		// Headroom when the plan allows it (8 vCPUs per VM); otherwise the task's exact size.
+		const storage = Math.max(data.resources.storage, Math.min(want.storage + 25600, 76800));
+		const exact = {
+			cpu: Math.max(data.resources.cpu, want.cpu),
+			memory: Math.max(data.resources.memory, want.memory),
+			storage,
 		};
-		await vm.resize(target).catch(async () =>
-			vm.resize({ ...target, storage: Math.max(data.resources.storage, 51200) }),
-		);
+		const target = {
+			cpu: Math.min(8, Math.max(exact.cpu, want.cpu + 2)),
+			memory: Math.max(exact.memory, want.memory + 4096),
+			storage,
+		};
+		await vm
+			.resize(exact.cpu > 8 ? exact : target)
+			.catch(() => vm.resize(exact))
+			.catch(() => vm.resize({ ...exact, storage: Math.max(data.resources.storage, 51200) }));
+		// Freestyle applies CPU changes on start(); verify inside the guest.
+		await vm.start();
+		await waitUntilVmRunning(vm, name);
+		const cpus = Number((await sh("nproc").catch(() => "0")).trim());
+		if (cpus < want.cpu)
+			throw new Error(`VM has ${cpus} CPUs after resize; task needs ${want.cpu}`);
 		log(`${name}: VM ${created.vmId} ${JSON.stringify(target)}; bootstrapping`);
 		await detached("bootstrap", BOOTSTRAP, 1_800_000);
 		await vm.fs.writeFile("/opt/ytimesy/builder-bridge.mjs", files.bundle);
