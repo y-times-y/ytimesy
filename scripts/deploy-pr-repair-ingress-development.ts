@@ -14,7 +14,8 @@ const config = "wrangler.pr-repair.jsonc";
 const endpoint =
 	"https://ytimesy-pr-repair-development.hetkp8044.workers.dev/github-repair";
 const repository = "repos/y-times-y/ytimesy";
-const edgeOrigin = "https://ytimesy-edge-executor-development.hetkp8044.workers.dev";
+const edgeOrigin =
+	"https://ytimesy-edge-executor-development.hetkp8044.workers.dev";
 
 function command(args: string[], input?: string, env = process.env) {
 	const result = spawnSync("pnpm", args, {

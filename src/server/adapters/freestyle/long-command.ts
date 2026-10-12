@@ -34,6 +34,7 @@ export async function runLongCommand(
 	void completed.catch(() => undefined);
 	const decoder = new TextDecoder();
 	let session: Awaited<ReturnType<VmPty["open"]>> | undefined;
+	let result: RuntimeCommandResult;
 	try {
 		timer = setTimeout(() => finish(124), timeoutMs + 15_000);
 		session = await pty.open({
@@ -58,17 +59,34 @@ export async function runLongCommand(
 			onClose: fail,
 		});
 		const exitCode = await completed;
-		return { exitCode, stdout: output + decoder.decode(), stderr: "" };
-	} finally {
+		result = { exitCode, stdout: output + decoder.decode(), stderr: "" };
+	} catch (error) {
+		// The command's own failure wins; cleanup still runs but cannot replace it.
 		clearTimeout(timer);
-		try {
-			await pty.close(session?.sessionId ?? slug);
-		} catch (error) {
-			// Exited guest sessions are already gone; other cleanup failures remain errors.
-			if (!(error instanceof FreestyleApiError && error.status === 404))
-				throw error;
-		} finally {
-			session?.detach();
-		}
+		await closeSession(pty, session, slug);
+		throw error;
+	}
+	clearTimeout(timer);
+	const cleanupError = await closeSession(pty, session, slug);
+	if (cleanupError) throw cleanupError;
+	return result;
+}
+
+/** Closes (kills) the guest session; returns a cleanup failure instead of throwing it. */
+async function closeSession(
+	pty: Pick<VmPty, "close">,
+	session: Awaited<ReturnType<VmPty["open"]>> | undefined,
+	slug: string,
+): Promise<unknown> {
+	try {
+		await pty.close(session?.sessionId ?? slug);
+		return undefined;
+	} catch (error) {
+		// Exited guest sessions are already gone; other cleanup failures remain errors.
+		return error instanceof FreestyleApiError && error.status === 404
+			? undefined
+			: error;
+	} finally {
+		session?.detach();
 	}
 }
