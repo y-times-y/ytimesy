@@ -285,6 +285,29 @@ export function toolActivity(item: DynamicToolCallItem): ToolActivity {
 			};
 		case "take_control":
 			return { verb: "Took control from sidekick", glyph: "takeover" };
+		case "web_search":
+		case "google_search": {
+			// Provider-hosted search: the query is in the input (Anthropic) or the result's action (OpenAI).
+			const action =
+				output && typeof output.action === "object" && output.action
+					? (output.action as Record<string, unknown>)
+					: undefined;
+			const queries = Array.isArray(action?.queries)
+				? (action.queries as unknown[]).filter(
+						(query): query is string => typeof query === "string",
+					)
+				: [];
+			const query =
+				text("query") ??
+				(typeof action?.query === "string" ? action.query : queries[0]);
+			const url = typeof action?.url === "string" ? action.url : undefined;
+			return {
+				verb: url ? "Opened" : "Searched the web",
+				target: url ?? (query ? clip(query, 80) : undefined),
+				note: queries.length > 1 ? `${queries.length} queries` : undefined,
+				glyph: "search",
+			};
+		}
 		case "read_plugin_skill":
 			return {
 				verb: "Read skill",

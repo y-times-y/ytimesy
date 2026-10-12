@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { ToolSet } from "ai";
 import { Effect } from "effect";
 import { cloudAgentRoleInstructions } from "#/domain/agent-orchestration";
 import { assertApiContextFits } from "#/domain/api-conversation";
@@ -15,6 +16,7 @@ import {
 import { CoordinationFailure } from "#/domain/conversation-turn-control";
 import { PREPARED_ENVIRONMENT_INSTRUCTIONS } from "#/domain/environment-context";
 import { SessionItemId, WorkspaceId } from "#/domain/ids";
+import { officialProviderEndpoint } from "#/domain/model-connection";
 import { modelStepLimit } from "#/domain/model-workflow";
 import { posixShellCommand } from "#/domain/posix-command";
 import { PROJECT_KNOWLEDGE_INSTRUCTIONS } from "#/domain/project-knowledge";
@@ -48,6 +50,7 @@ import {
 } from "../adapters/harness-evaluation";
 import { connectableMcpServers } from "../adapters/mcp-servers";
 import { loadModelConnection } from "../adapters/model-connections";
+import { nativeWebSearchTools } from "../adapters/native-web-search";
 import { enabledPluginComponents } from "../adapters/plugin-installs";
 import { injectServerPeerMessages } from "../adapters/server-peer-inbox";
 import { readVerificationBaseline } from "../adapters/turn-verification";
@@ -238,6 +241,8 @@ export async function runApiTurn(
 		// The subscription endpoint rejects the public Responses apply_patch tool.
 		// Writers retain the same V4A editor through its function-tool schema.
 		let nativePatch = false;
+		// The provider's hosted web search, on direct connections to official endpoints only.
+		let webSearch: ToolSet = {};
 		if (subscription) {
 			if (turn.connection_id || !(await hasManagedCodexAuth(turn.user_id)))
 				throw new Error("Reconnect Codex before continuing.");
@@ -254,6 +259,8 @@ export async function runApiTurn(
 			nativePatch =
 				connection.provider === "openai" &&
 				connection.baseUrl.startsWith("https://api.openai.com/");
+			if (officialProviderEndpoint(connection))
+				webSearch = nativeWebSearchTools(connection.provider);
 		}
 		// Fusion: a root lead that works in its own workspace with a sidekick.
 		const fusion = fusionConfigForTurn({
@@ -388,6 +395,7 @@ export async function runApiTurn(
 			...surfaceTools,
 			...mcp.tools,
 			...pluginSkillTools(plugins),
+			...webSearch,
 		};
 		const tools = planMode
 			? withPlanMode(hooks.wrap(withMcp))

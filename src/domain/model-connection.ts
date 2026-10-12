@@ -30,6 +30,20 @@ export const MODEL_PROVIDERS: Record<
 	compatible: { label: "OpenAI-compatible endpoint", baseUrl: null },
 };
 
+/** True when the connection talks to its provider's own API, not a proxy or custom host. */
+export function officialProviderEndpoint(connection: {
+	provider: ModelProvider;
+	baseUrl: string;
+}): boolean {
+	const official = MODEL_PROVIDERS[connection.provider]?.baseUrl;
+	if (!official || !connection.baseUrl) return false;
+	try {
+		return new URL(connection.baseUrl).origin === new URL(official).origin;
+	} catch {
+		return false;
+	}
+}
+
 export function publicModelEndpoint(value: string): string {
 	const url = new URL(value);
 	if (

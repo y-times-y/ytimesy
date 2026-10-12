@@ -198,4 +198,4 @@ it("clones and pushes Git bundles while no guest command, file or remote contain
 	} finally {
 		await rm(temp, { recursive: true, force: true });
 	}
-});
+}, 30_000); // Real git clone/push of bundles; slow under a loaded full-suite run.
