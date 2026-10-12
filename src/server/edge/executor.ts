@@ -35,12 +35,13 @@ import {
 	executeWorkflowRequest,
 	type WorkflowStepClaim,
 } from "../jobs/model-workflow-executor";
+import { runBackgroundJob, startBackgroundJob } from "./background-jobs";
 import { SqliteConversationSteps } from "./conversation-step-storage";
 import type { EdgeExecutorEnvironment } from "./environment";
 import { authorizeGitProxy } from "./github-git-authorization";
 import { withEdgeModelEndpoints } from "./model-endpoint";
 
-export { BackgroundJobWorkflow } from "./background-job-workflow";
+export { BackgroundJobRunner } from "./background-jobs";
 export { ProjectEnvironmentWorkflow } from "./environment-workflow";
 export { EdgeModelTurnWorkflow } from "./model-turn-workflow";
 
@@ -200,9 +201,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 								async (job) => {
 									if (process.env.BACKGROUND_EXECUTION_ENABLED !== "1")
 										throw new Error("Background execution is disabled.");
-									await this.env.BACKGROUND_JOBS.createBatch([
-										{ id: job.id, params: job },
-									]);
+									await startBackgroundJob(this.env, job);
 								},
 								() =>
 									withConversationProgressWake(
@@ -292,15 +291,23 @@ export default {
 					action: "refresh",
 				}),
 			);
-		await env.BACKGROUND_JOBS.createBatch(
+		// Periodic jobs are short and the next tick retries them, so they run here
+		// directly instead of each starting a durable instance every minute.
+		const results = await Promise.allSettled(
 			jobs
 				.filter(
 					(job) =>
 						job.kind !== "model-admission" ||
 						process.env.MODEL_EXECUTION_ENABLED === "1",
 				)
-				.map((job) => ({ id: job.id, params: job })),
+				.map((job) => runBackgroundJob(env, job)),
 		);
+		for (const [index, result] of results.entries())
+			if (result.status === "rejected")
+				console.warn("Scheduled job failed.", {
+					kind: jobs[index].kind,
+					action: "action" in jobs[index] ? jobs[index].action : undefined,
+				});
 	},
 	async fetch(request: Request, env: EdgeExecutorEnvironment) {
 		let stage = "ingress";
@@ -362,10 +369,11 @@ export default {
 					env.ENVIRONMENT_EXECUTION_ENABLED !== "1"
 				)
 					return new Response(null, { status: 503 });
-				await env.BACKGROUND_JOBS.createBatch([
-					{ id: parsed.data.id, params: parsed.data },
-				]);
-				return new Response(null, { status: 202 });
+				// Re-admitting the same signed job is a no-op that reports its state.
+				return Response.json(
+					{ state: await startBackgroundJob(env, parsed.data) },
+					{ status: 202 },
+				);
 			}
 			if (new URL(request.url).pathname === "/pr-repair-event") {
 				const secrets = executorSecrets.parse(env);
@@ -374,9 +382,7 @@ export default {
 					() =>
 						withBackgroundJobDispatcher(
 							async (job) => {
-								await env.BACKGROUND_JOBS.createBatch([
-									{ id: job.id, params: job },
-								]);
+								await startBackgroundJob(env, job);
 							},
 							() =>
 								executeWorkflowRequest(

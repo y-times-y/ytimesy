@@ -15,13 +15,18 @@ import {
 import { backgroundJobId } from "../adapters/background-job-dispatch";
 import { database } from "../adapters/database";
 import { withDatabaseScope } from "../adapters/database-scope";
+import { startBackgroundJob } from "./background-jobs";
 import type { EdgeExecutorEnvironment } from "./environment";
 
 const outcomeSchema = z
 	.object({ outcome: z.enum(["continue", "completed", "failed", "cancelled"]) })
 	.strict();
 
-/** Orchestration calls the chat DO binding directly; no Linux executor or public callback is required. */
+/**
+ * Orchestration calls the chat DO binding directly; no Linux executor or public callback is required.
+ * A Workflow, not a DO alarm: one model step may exceed the 15-minute alarm limit
+ * (docs/edge-architecture-migration.md#why-two-cloudflare-workflows-remain-decision-2026-10-12).
+ */
 export class EdgeModelTurnWorkflow extends WorkflowEntrypoint<
 	EdgeExecutorEnvironment,
 	WorkflowTurn
@@ -88,9 +93,7 @@ export class EdgeModelTurnWorkflow extends WorkflowEntrypoint<
 					const id = backgroundJobId(
 						`completed:${turn.turnId}:${turn.leaseId}`,
 					);
-					await this.env.BACKGROUND_JOBS.createBatch([
-						{ id, params: { id, kind: "model-admission" } },
-					]);
+					await startBackgroundJob(this.env, { id, kind: "model-admission" });
 					return true;
 				},
 			);

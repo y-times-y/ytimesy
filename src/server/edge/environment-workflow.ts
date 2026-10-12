@@ -34,7 +34,11 @@ const configuration = z.object({
 	YTIMESY_GIT_PROXY_SECRET: z.string().min(32),
 });
 
-/** The existing preparation recipe runs directly in durable steps, not a Bun subprocess. */
+/**
+ * The existing preparation recipe runs directly in durable steps, not a Bun subprocess.
+ * A Workflow, not a DO alarm: install and verify steps may exceed the 15-minute alarm limit
+ * (docs/edge-architecture-migration.md#why-two-cloudflare-workflows-remain-decision-2026-10-12).
+ */
 export class ProjectEnvironmentWorkflow extends WorkflowEntrypoint<
 	EdgeExecutorEnvironment,
 	EnvironmentWorkflowRequest

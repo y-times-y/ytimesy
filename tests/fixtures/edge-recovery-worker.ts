@@ -10,7 +10,7 @@ import executor, {
 } from "../../src/server/edge/executor";
 
 export {
-	BackgroundJobWorkflow,
+	BackgroundJobRunner,
 	EdgeModelTurnWorkflow,
 	ProjectEnvironmentWorkflow,
 } from "../../src/server/edge/executor";

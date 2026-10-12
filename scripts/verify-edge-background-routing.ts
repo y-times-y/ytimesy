@@ -5,7 +5,6 @@ import { signDeliveryRequest } from "../src/domain/delivery-auth";
 
 // Fixed development surface. An absent sender makes this proof read-only: no inference or VM calls.
 const configuration = "wrangler.edge-executor.jsonc";
-const workflow = "ytimesy-background-jobs-development";
 const url =
 	"https://ytimesy-edge-executor-development.hetkp8044.workers.dev/jobs/start";
 const id = randomUUID();
@@ -43,59 +42,40 @@ function wrangler(args: string[], input?: string) {
 		);
 	}
 }
-let requested = false;
+async function admit() {
+	for (let propagation = 0; propagation < 30; propagation++) {
+		const response = await fetch(url, {
+			method: "POST",
+			body,
+			headers: await signDeliveryRequest(secret, "POST", url, body),
+			signal: AbortSignal.timeout(10_000),
+		});
+		if (response.status === 202)
+			return ((await response.json()) as { state: string }).state;
+		if (response.status !== 503)
+			throw new Error(`Background proof rejected (${response.status}).`);
+		await delay(2000);
+	}
+	throw new Error("Background proof gate did not propagate.");
+}
 try {
 	wrangler(["secret", "put", "BACKGROUND_EXECUTION_ENABLED"], "1");
 	console.log("Development background gate enabled for the read-only proof.");
-	for (let repeat = 0; repeat < 2; repeat++) {
-		requested = true;
-		let accepted = false;
-		for (let propagation = 0; propagation < 30; propagation++) {
-			const response = await fetch(url, {
-				method: "POST",
-				body,
-				headers: await signDeliveryRequest(secret, "POST", url, body),
-				signal: AbortSignal.timeout(10_000),
-			});
-			if (response.status === 202) {
-				accepted = true;
-				break;
-			}
-			if (response.status !== 503)
-				throw new Error(`Background proof rejected (${response.status}).`);
-			await delay(2000);
-		}
-		if (!accepted) throw new Error("Background proof gate did not propagate.");
-	}
-	console.log("Repeated background admission accepted.");
-	let completed = false;
-	for (let attempt = 0; attempt < 12; attempt++) {
-		const status = JSON.parse(
-			wrangler(["workflows", "instances", "describe", workflow, id, "--json"]),
-		) as { status: string };
-		if (status.status === "complete") {
-			completed = true;
-			break;
-		}
-		if (status.status === "errored")
-			throw new Error("Background proof Workflow failed.");
+	// Re-admitting the same job ID reports the one runner's state without rerunning it.
+	let state = await admit();
+	for (
+		let attempt = 0;
+		attempt < 12 && !["done", "failed"].includes(state);
+		attempt++
+	) {
 		await delay(1000);
+		state = await admit();
 	}
-	if (!completed)
-		throw new Error("Background proof did not complete within its bound.");
+	if (state !== "done")
+		throw new Error(`Background proof job ended as ${state}.`);
 	console.log(
-		"Live background Workflow completed; repeated admission reused one identity. No inference or VMs were used.",
+		"Live background job completed; repeated admission reused one identity. No inference or VMs were used.",
 	);
 } finally {
-	try {
-		wrangler(["secret", "put", "BACKGROUND_EXECUTION_ENABLED"], "0");
-	} finally {
-		if (requested) {
-			const instances = JSON.parse(
-				wrangler(["workflows", "instances", "list", workflow, "--json"]),
-			) as { id: string }[];
-			if (instances.some((instance) => instance.id === id))
-				wrangler(["workflows", "instances", "delete", workflow, id, "--json"]);
-		}
-	}
+	wrangler(["secret", "put", "BACKGROUND_EXECUTION_ENABLED"], "0");
 }

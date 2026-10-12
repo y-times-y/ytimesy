@@ -8,13 +8,18 @@
   "compatibility_flags": ["nodejs_compat"],
   "vpc_networks": [{ "binding": "CODEX_EGRESS", "network_id": "cf1:network", "remote": true }],
   "durable_objects": {
-    "bindings": [{ "name": "MODEL_CONVERSATIONS", "class_name": "ModelConversation" }]
+    "bindings": [
+      { "name": "MODEL_CONVERSATIONS", "class_name": "ModelConversation" },
+      { "name": "BACKGROUND_JOBS", "class_name": "BackgroundJobRunner" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ModelConversation"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["ModelConversation"] },
+    { "tag": "v2", "new_sqlite_classes": ["BackgroundJobRunner"] }
+  ],
   "workflows": [
     { "name": "ytimesy-project-environments-development", "binding": "PROJECT_ENVIRONMENTS", "class_name": "ProjectEnvironmentWorkflow" },
-    { "name": "ytimesy-edge-model-turns-development", "binding": "MODEL_TURNS", "class_name": "EdgeModelTurnWorkflow" },
-    { "name": "ytimesy-background-jobs-development", "binding": "BACKGROUND_JOBS", "class_name": "BackgroundJobWorkflow" }
+    { "name": "ytimesy-edge-model-turns-development", "binding": "MODEL_TURNS", "class_name": "EdgeModelTurnWorkflow" }
   ],
   "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "9403f3ee7ca24e16a43f903d10745dfb", "localConnectionString": "postgres://test:test@127.0.0.1:1/test" }],
   "secrets": { "required": [] },
