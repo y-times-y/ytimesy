@@ -129,8 +129,13 @@ it("renews the lease and chat coordination before resuming", async () => {
 					fresh: true,
 					legacy: false,
 					cancel_requested: false,
+					version: "v1",
 				},
 			],
+		})
+		.mockResolvedValueOnce({
+			rowCount: 1,
+			rows: [{ messages: [{ role: "user", content: "hi" }], items: [] }],
 		});
 	mocks.step.mockImplementation(
 		async (step, _machines, receipts, _signal, resume) => {
@@ -154,6 +159,8 @@ it("renews the lease and chat coordination before resuming", async () => {
 	const rotated = mocks.query.mock.calls[0][1][2];
 	expect(rotated).not.toBe(turn.leaseId);
 	expect(mocks.query.mock.calls[1][1]).toEqual([turn.turnId, rotated]);
+	expect(mocks.query.mock.calls[1][0]).not.toContain("t.*");
+	expect(mocks.query.mock.calls[2][0]).toContain("select messages,items");
 	expect(
 		sql.exec("select current_lease_id as l from turn_loop").toArray(),
 	).toEqual([]);

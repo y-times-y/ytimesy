@@ -27,7 +27,7 @@ import {
 	completedChildrenForReview,
 	withDelegationContext,
 } from "../adapters/agent-delegation-context";
-import { agentSessionForOwner } from "../adapters/agent-sessions";
+import { agentSessionMetadataForOwner } from "../adapters/agent-sessions";
 import { completedLifecycleContinuations } from "../adapters/agent-task-command-receipts";
 import { saveAgentTaskResultAndEvent } from "../adapters/agent-task-events";
 import { captureServerAnalytics } from "../adapters/analytics";
@@ -247,7 +247,12 @@ export async function runApiTurn(
 			abort.abort();
 			abort.signal.throwIfAborted();
 		}
-		const owner = await agentSessionForOwner(turn.user_id, turn.session_id);
+		// The turn already carries the session's items (every write mirrors both).
+		const metadata = await agentSessionMetadataForOwner(
+			turn.user_id,
+			turn.session_id,
+		);
+		const owner = metadata && { ...metadata, items: turn.items };
 		if (!owner) throw new Error("Task no longer exists.");
 		if (process.env.YTIMESY_HARNESS_EVALUATION_ENABLED === "1")
 			evaluation = await evaluationRunForTask(owner.userId, owner.id);

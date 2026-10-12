@@ -31,6 +31,7 @@ import { withDatabaseScope } from "../adapters/database-scope";
 import { readFreestyleApiKey } from "../adapters/freestyle/api-key";
 import { createFreestyleWorkspaceMachines } from "../adapters/freestyle/workspace-machines";
 import { withConversationPublisher } from "../adapters/realtime-delivery";
+import { withTurnHistoryMirror } from "../adapters/turn-history-mirror";
 import { relayConversationDeliveriesOnce } from "../jobs/conversation-delivery";
 import {
 	executeModelStep,
@@ -42,6 +43,7 @@ import { SqliteConversationSteps } from "./conversation-step-storage";
 import type { EdgeExecutorEnvironment } from "./environment";
 import { authorizeGitProxy } from "./github-git-authorization";
 import { withEdgeModelEndpoints } from "./model-endpoint";
+import { TurnHistoryCache } from "./turn-history-cache";
 
 export { BackgroundJobRunner } from "./background-jobs";
 export { ProjectEnvironment } from "./project-environment";
@@ -95,6 +97,7 @@ async function resolveModelConversation(step: WorkflowStep) {
 /** Fresh turns use DO receipts; legacy Node turns must finish on their original executor. */
 export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	private readonly steps: SqliteConversationSteps;
+	private readonly history: TurnHistoryCache;
 	private readonly room: ConversationRoom;
 	private bindIdentity(scope: { userId: string; sessionId: string }) {
 		const name = modelConversationName(scope);
@@ -225,6 +228,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		if (due.has("turn")) await this.advanceTurn();
 	}
 	private async endTurn() {
+		this.history.clear();
 		this.ctx.storage.sql.exec("delete from turn_loop");
 		await this.wake("turn", null);
 	}
@@ -262,24 +266,29 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 								withConversationProgressWake(
 									() => relayConversationDeliveriesOnce(active.sessionId),
 									() =>
-										executeModelStep(
-											step,
+										withTurnHistoryMirror(
+											(turnId, version, written) =>
+												this.history.write(turnId, version, written),
 											() =>
-												createFreestyleWorkspaceMachines(
-													Effect.runSync(readFreestyleApiKey()),
+												executeModelStep(
+													step,
+													() =>
+														createFreestyleWorkspaceMachines(
+															Effect.runSync(readFreestyleApiKey()),
+														),
+													{
+														claim: (claimed, resumed) =>
+															this.claim(claimed, resumed),
+														complete: async (finished, result) => {
+															if (!this.steps.finish(finished, result))
+																throw new Error(
+																	"Conversation receipt was not saved.",
+																);
+														},
+													},
+													AbortSignal.timeout(STEP_BUDGET_MS),
+													resume,
 												),
-											{
-												claim: (claimed, resumed) =>
-													this.claim(claimed, resumed),
-												complete: async (finished, result) => {
-													if (!this.steps.finish(finished, result))
-														throw new Error(
-															"Conversation receipt was not saved.",
-														);
-												},
-											},
-											AbortSignal.timeout(STEP_BUDGET_MS),
-											resume,
 										),
 								),
 						),
@@ -338,24 +347,46 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			if (!(await this.room.reclaim({ turnId: step.turnId, leaseId })))
 				return { kind: "unavailable" };
 		}
-		const turn = (
+		// The history (messages, items) is the bulk of a turn row; it comes from
+		// this chat's copy unless another writer changed the turn since.
+		const row = (
 			await database().query<
-				ApiTurn & { fresh: boolean; cancel_requested: boolean; legacy: boolean }
+				Omit<ApiTurn, "messages" | "items"> & {
+					fresh: boolean;
+					cancel_requested: boolean;
+					legacy: boolean;
+					version: string;
+				}
 			>(
-				`select t.*,heartbeat_at>=now()-interval '45 seconds' as fresh,
+				`select t.id,t.session_id,t.user_id,t.connection_id,t.connection_revision,t.model_id,
+			 t.state,t.lease_id,t.cancel_requested,t.updated_at::text as version,
+			 heartbeat_at>=now()-interval '45 seconds' as fresh,
 			 exists(select 1 from model_workflow_step s where s.turn_id=t.id) as legacy
 			 from api_turn t where t.id=$1 and t.lease_id=$2 and t.executor='durable-object'`,
 				[step.turnId, leaseId],
 			)
 		).rows[0];
-		if (!turn || turn.legacy) return { kind: "unavailable" };
+		if (!row || row.legacy) return { kind: "unavailable" };
 		if (
-			turn.state === "completed" ||
-			turn.state === "failed" ||
-			turn.state === "cancelled"
+			row.state === "completed" ||
+			row.state === "failed" ||
+			row.state === "cancelled"
 		)
-			return { kind: "done", outcome: turn.state };
-		if (turn.state !== "running" || !turn.fresh) return { kind: "unavailable" };
+			return { kind: "done", outcome: row.state };
+		if (row.state !== "running" || !row.fresh) return { kind: "unavailable" };
+		let history = this.history.read(row.id, row.version);
+		if (!history) {
+			const loaded = (
+				await database().query<Pick<ApiTurn, "messages" | "items">>(
+					"select messages,items from api_turn where id=$1 and lease_id=$2",
+					[row.id, leaseId],
+				)
+			).rows[0];
+			if (!loaded) return { kind: "unavailable" };
+			history = loaded;
+			this.history.write(row.id, row.version, loaded);
+		}
+		const turn = { ...row, ...history };
 		if (turn.cancel_requested) return { kind: "cancelled", turn };
 		// No await between reading and inserting: concurrent requests cannot claim the same step.
 		const claimed = claimConversationStep(this.steps, step, Date.now(), resume);
@@ -436,6 +467,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			this.wake("room", at),
 		);
 		this.steps = new SqliteConversationSteps(ctx.storage.sql);
+		this.history = new TurnHistoryCache(ctx.storage.sql);
 		ctx.storage.sql.exec(
 			"create table if not exists conversation_identity(id integer primary key check(id=1),name text not null)",
 		);

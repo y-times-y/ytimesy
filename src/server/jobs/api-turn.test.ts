@@ -56,6 +56,7 @@ vi.mock("../adapters/conversation-turn-control", () => ({
 }));
 vi.mock("../adapters/agent-sessions", () => ({
 	agentSessionForOwner: mocks.owner,
+	agentSessionMetadataForOwner: mocks.owner,
 }));
 beforeEach(() => {
 	vi.clearAllMocks();
