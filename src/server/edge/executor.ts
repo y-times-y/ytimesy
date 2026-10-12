@@ -44,7 +44,7 @@ import { authorizeGitProxy } from "./github-git-authorization";
 import { withEdgeModelEndpoints } from "./model-endpoint";
 
 export { BackgroundJobRunner } from "./background-jobs";
-export { ProjectEnvironmentWorkflow } from "./environment-workflow";
+export { ProjectEnvironment } from "./project-environment";
 
 // Validate scalar secrets separately: generated ProcessEnv requirements must not
 // force application credentials into the deliberately sanitized Git subprocess environment.
@@ -671,9 +671,9 @@ export default {
 				}
 				const parsed = environmentWorkflowRequest.safeParse(value);
 				if (!parsed.success) return new Response(null, { status: 400 });
-				await env.PROJECT_ENVIRONMENTS.createBatch([
-					{ id: parsed.data.requestId, params: parsed.data },
-				]);
+				await env.PROJECT_ENVIRONMENTS.getByName(parsed.data.workspaceId).start(
+					parsed.data,
+				);
 				return new Response(null, { status: 202 });
 			}
 			if (new URL(request.url).pathname.startsWith("/git/")) {

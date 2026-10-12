@@ -11,7 +11,7 @@ import executor, {
 
 export {
 	BackgroundJobRunner,
-	ProjectEnvironmentWorkflow,
+	ProjectEnvironment,
 } from "../../src/server/edge/executor";
 
 const proofScope = z

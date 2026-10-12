@@ -1,4 +1,4 @@
-import { execFile, execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { createHmac, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -59,24 +59,6 @@ let repository:
 			name: string;
 	  }
 	| undefined;
-function wrangler(args: string[], input?: string) {
-	try {
-		return execFileSync(
-			"pnpm",
-			["exec", "wrangler", ...args, "--config", "wrangler.edge-executor.jsonc"],
-			{
-				input,
-				encoding: "utf8",
-				stdio: ["pipe", "pipe", "pipe"],
-				timeout: 60_000,
-			},
-		);
-	} catch {
-		throw new Error(
-			"Environment proof control failed; private diagnostics withheld.",
-		);
-	}
-}
 const host = {
 	async exec(command: string, timeout: number) {
 		try {
@@ -177,7 +159,6 @@ try {
 	projectId = project.id;
 	const workspace = await insertQueuedWorkspace(source.userId, project.id);
 	workspaceId = workspace.id;
-	wrangler(["secret", "put", "ENVIRONMENT_EXECUTION_ENABLED"], "1");
 	const url = `${origin}/environment/start`;
 	const body = JSON.stringify({
 		requestId: id,
@@ -204,27 +185,17 @@ try {
 	const deadline = Date.now() + 240_000;
 	let verified = false;
 	while (Date.now() < deadline) {
-		const status = JSON.parse(
-			wrangler([
-				"workflows",
-				"instances",
-				"describe",
-				"ytimesy-project-environments-development",
-				id,
-				"--json",
-			]),
-		) as { status: string };
-		if (status.status === "errored") {
-			await writeFile(
-				".ytimesy/environment-proof-diagnostic.json",
-				JSON.stringify(status),
-				{ mode: 0o600 },
-			);
+		const latest = (
+			await database().query<{ status: string; error_message: string | null }>(
+				"select status,error_message from environment_build where workspace_id=$1 order by created_at desc limit 1",
+				[workspaceId],
+			)
+		).rows[0];
+		if (latest?.status === "failed")
 			throw new Error(
-				"Environment Workflow failed; isolated build retained for cleanup.",
+				`Environment build failed (${latest.error_message ?? "no message"}); isolated build retained for cleanup.`,
 			);
-		}
-		if (status.status === "complete") {
+		if (latest?.status === "ready") {
 			const build = (
 				await database().query<{
 					status: string;
@@ -285,7 +256,7 @@ try {
 			}
 			verified = true;
 			console.info(
-				"Live environment Workflow: clone, install, verify, private snapshot activation, and setup-VM pause passed.",
+				"Live environment build (project Durable Object): clone, install, verify, private snapshot activation, and setup-VM pause passed.",
 			);
 			break;
 		}
@@ -301,40 +272,6 @@ try {
 			failures.push(name);
 		}
 	};
-	await clean("execution gate", () =>
-		wrangler(["secret", "put", "ENVIRONMENT_EXECUTION_ENABLED"], "0"),
-	);
-	if (admitted)
-		await clean("Workflow", () => {
-			const workflow = "ytimesy-project-environments-development";
-			const status = JSON.parse(
-				wrangler([
-					"workflows",
-					"instances",
-					"describe",
-					workflow,
-					id,
-					"--json",
-				]),
-			) as { status: string };
-			if (!["complete", "errored", "terminated"].includes(status.status))
-				wrangler([
-					"workflows",
-					"instances",
-					"terminate",
-					workflow,
-					id,
-					"--json",
-				]);
-			return wrangler([
-				"workflows",
-				"instances",
-				"delete",
-				"ytimesy-project-environments-development",
-				id,
-				"--json",
-			]);
-		});
 	if (workspaceId) {
 		const builds = (
 			await database().query<{
@@ -382,8 +319,5 @@ try {
 			`Environment proof cleanup incomplete: ${failures.join(", ")}.`,
 		);
 		process.exitCode = 1;
-	} else
-		console.info(
-			"Disposable environment proof resources removed; execution gate disabled.",
-		);
+	} else console.info("Disposable environment proof resources removed.");
 }

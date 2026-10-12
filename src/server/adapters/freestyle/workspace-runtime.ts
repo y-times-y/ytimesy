@@ -1,10 +1,12 @@
 import { Freestyle, FreestyleApiError } from "freestyle";
 import { posixShellCommand } from "#/domain/posix-command";
+import { resumableCommand } from "../resumable-commands";
 import {
 	UnconfiguredWorkspaceRuntime,
 	type WorkspaceProvisionOptions,
 	type WorkspaceRuntime,
 } from "../workspace-runtime";
+import { runDetachedCommand } from "./detached-command";
 import { runLongCommand } from "./long-command";
 import {
 	FREESTYLE_EXEC_TIMEOUT_MS_MAX,
@@ -107,8 +109,26 @@ export class FreestyleWorkspaceRuntime implements WorkspaceRuntime {
 		if (
 			timeoutMs > FREESTYLE_EXEC_TIMEOUT_MS_MAX ||
 			(this.options.streamSetupCommands && timeoutMs > 30_000)
-		)
+		) {
+			const resumable = resumableCommand();
+			if (resumable)
+				return runDetachedCommand(
+					async (command) => {
+						const result = await vm.exec({ command, timeoutMs: 30_000 });
+						return {
+							exitCode: result.statusCode ?? 124,
+							stdout: result.stdout ?? "",
+							stderr: result.stderr ?? "",
+						};
+					},
+					resumable.commandId,
+					argv,
+					env,
+					timeoutMs,
+					resumable.deadline,
+				);
 			return runLongCommand(vm.pty, argv, env, timeoutMs);
+		}
 		const result = await vm.exec({
 			command: posixShellCommand(argv),
 			env,

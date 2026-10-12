@@ -12,7 +12,7 @@ how a chat turn runs.
 | DO `ModelConversation` (one per chat) | Runs the chat's turns itself: one model step per alarm, SQLite step receipts, the live stream and turn coordination | No Workflow. Admission calls `startTurn`; each step's alarm sets the next one |
 | DO `BackgroundJobRunner` (one per job ID) | On-demand short jobs: turn admission, peer messages, competitions, checkpoints, environment admission | Idempotent by job ID; retries only a pending peer message every 15 s; a failed or interrupted run fails closed |
 | Cron (every minute, in the Worker) | Periodic short jobs: admission, reconcile, supervise, delivery, checkpoints, task events, PR repair, work plans; infrastructure every 5 min, environment refresh hourly | Run directly in the scheduled handler; the next tick retries |
-| Workflow `ProjectEnvironmentWorkflow` | Clone, install, verify, snapshot a project environment | Install/verify commands wait on the VM for up to 65 minutes. Being moved to a per-project DO with detached commands |
+| DO `ProjectEnvironment` (one per workspace) | Clone, install, verify, snapshot a project environment as recorded stages, one alarm at a time | Long commands run detached on the VM; see "Environment builds" below |
 
 **The 15-minute rule.** A DO alarm and a cron invocation each stop after 15
 minutes of wall time; a Workflow step has no limit. A chat step fits: it is one
@@ -44,9 +44,24 @@ and checks that the step resumes under a rotated lease and the turn completes. A
 `EDGE_DEPLOY_PROOF=1` to use a real deploy instead; a deploy may not reach the chat
 inside the step window, which the proof reports.
 
-`BackgroundJobWorkflow` and `EdgeModelTurnWorkflow` were removed on 2026-10-12. The
-first ran 8+ instances a minute for jobs that take seconds; the second only waited
-on the chat DO, and it could not survive a chat restart mid-step anyway.
+**Environment builds.** Install and verify commands may run for up to 65 minutes,
+longer than one alarm. `ProjectEnvironment` records each stage in its SQLite and
+journals every VM command a stage runs by its position. Long commands run detached
+on the VM (`runDetachedCommand`: `setsid`, a 0600 script deleted on exit, the guest
+`timeout` as the bound) under an ID derived from request, stage and position. When
+an alarm's 13-minute budget runs out, or the object restarts, the next alarm
+re-runs the stage: finished commands come from the journal (a re-clone can never
+wipe an install in progress) and the running one is re-attached, not relaunched.
+Stages with effects outside the VM (`claim-build`, `activate-snapshot`) fail closed
+if interrupted; provisioning is idempotent by VM slug; cleanup is retried. Detached
+command logs are deleted before the template snapshot. Proof:
+`EDGE_ENVIRONMENT_PROOF=1 scripts/verify-edge-environment.ts`.
+
+There are no Cloudflare Workflows. `BackgroundJobWorkflow`, `EdgeModelTurnWorkflow`
+and `ProjectEnvironmentWorkflow` were removed on 2026-10-12: the first ran 8+
+instances a minute for jobs that take seconds, the second only waited on the chat
+DO and could not survive a chat restart mid-step, and the third held a connection
+open on the VM for the whole install.
 
 ### Latest cutover gate
 
@@ -127,7 +142,7 @@ with six skipped (the subsequently added Git timeout regression also passed).
 - `ModelConversation` owns SQLite model-step receipts and the same chat's persisted streaming snapshot and live turn coordinator. Model execution, progress publication, cancellation and renewal address one owner-scoped DO identity. Persist before inference; an unknown outcome fences replay. Completed receipts, predecessor ordering, and the original deadline survive restart. Legacy PG-receipted turns are rejected by the DO path.
 - Development migration `20261008120000_api_turn_executor.sql` records Node versus DO assignment at admission. Admitted and terminal turns cannot switch executor. Legacy step claims and DO routing reject assignments to the other executor; existing turns default to Node.
 - `ModelConversation` drives its own turns on alarms (see the execution model above). Step receipts persist references/outcomes, not conversation content; an interrupted step is resumed only by the owning chat, under a rotated lease, with its started tool calls reported to the model instead of replayed.
-- `ProjectEnvironmentWorkflow` runs the existing environment recipe directly in Cloudflare steps: resolve sources, claim, provision, checkout/install, verify, activate snapshot, finish/pause. Repository scripts still run in Freestyle. Credentials and secret values do not enter Workflow parameters or returned step values.
+- `ProjectEnvironment` runs the existing environment recipe as recorded stages: resolve sources, claim, provision, checkout/install, verify, activate snapshot, finish/pause. Repository scripts still run in Freestyle. Credentials and secret values do not enter admission requests or recorded stage results.
 - Background jobs (task-event, peer-message, competition, checkpoint, PR-repair, work-plan and maintenance handlers) run without a Workflow: cron runs the periodic ones directly, and on-demand jobs run in a per-job `BackgroundJobRunner` DO. An explicitly pending peer message is retried by alarm every 15 seconds; unknown failures and interrupted runs are not retried. Signed admissions preserve job identities across uncertain HTTP acknowledgement, and re-admitting a job reports its state.
 - PostgreSQL still owns users, projects, authorization, queryable conversation history, task records, accounting, and project memory. It currently also owns admission, heartbeat/cancellation, checkpoints, and queued job delivery. Those hot execution responsibilities have **not** been cut over to DO storage yet.
 - Freestyle still supplies each task's Linux execution environment, filesystem, tools, and desktop. This change does not resize or delete existing machines.
@@ -135,8 +150,7 @@ with six skipped (the subsequently added Git timeout regression also passed).
 ## Deployed development resources
 
 - Worker: `ytimesy-edge-executor-development`
-- DO namespaces: `MODEL_CONVERSATIONS` (SQLite migration `v1`), `BACKGROUND_JOBS` (`BackgroundJobRunner`, migration `v2`)
-- Workflow: `ytimesy-project-environments-development`
+- DO namespaces: `MODEL_CONVERSATIONS` (SQLite migration `v1`), `BACKGROUND_JOBS` (`BackgroundJobRunner`, `v2`), `PROJECT_ENVIRONMENTS` (`ProjectEnvironment`, `v3`)
 - Hyperdrive: `ytimesy-development-postgres`; query caching disabled, origin connection cap 5, `verify-full` with the existing Supabase CA
 
 The Git proxy is enabled for signed requests. Model, environment, background execution and the minute recovery schedule remain independently gated and disabled outside bounded proofs. The application URLs remain opt-in; the running app has not been switched away from its existing executor.

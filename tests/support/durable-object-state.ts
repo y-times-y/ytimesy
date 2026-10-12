@@ -17,6 +17,7 @@ export function durableObjectState() {
 		delete(key: string): Promise<boolean>;
 		transaction<T>(run: (txn: Storage) => Promise<T>): Promise<T>;
 		setAlarm(at: number): Promise<void>;
+		getAlarm(): Promise<number | null>;
 		deleteAlarm(): Promise<void>;
 	};
 	const storage: Storage = {
@@ -40,6 +41,9 @@ export function durableObjectState() {
 		},
 		async setAlarm(at: number) {
 			alarm.at = at;
+		},
+		async getAlarm() {
+			return alarm.at;
 		},
 		async deleteAlarm() {
 			alarm.at = null;

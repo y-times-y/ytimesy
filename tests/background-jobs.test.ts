@@ -39,7 +39,13 @@ function environment() {
 					},
 				}),
 			},
-			PROJECT_ENVIRONMENTS: { createBatch },
+			PROJECT_ENVIRONMENTS: {
+				getByName: (name: string) => ({
+					start: async (request: unknown) => {
+						await createBatch([{ name, request }]);
+					},
+				}),
+			},
 			ENVIRONMENT_EXECUTION_ENABLED: "1",
 		} as never,
 	};
@@ -129,8 +135,8 @@ it("preserves the refresh recipe and job identity when admitting environment wor
 	});
 	expect(createBatch).toHaveBeenCalledWith([
 		{
-			id,
-			params: {
+			name: "w",
+			request: {
 				requestId: id,
 				workspaceId: "w",
 				force: false,
