@@ -69,6 +69,10 @@ async function runTrial(task: string, attempt: number) {
 		return;
 	}
 	const want = await resources(task);
+	// Plan limits (Freestyle: 8 vCPUs per VM). A capped task runs with fewer CPUs
+	// than specified, recorded by Harbor as --override-cpus and disclosed.
+	const cap = Number(process.env.YTIMESY_CPU_CAP ?? 0);
+	if (cap && want.cpu > cap) want.cpu = cap;
 	// Capacity errors are retried with backoff; they are not trial outcomes.
 	const createVm = async (options: object) => {
 		for (let attempt = 1; ; attempt++) {
@@ -157,10 +161,12 @@ async function runTrial(task: string, attempt: number) {
 		await vm.fs.writeTextFile("/opt/ytimesy/.secrets/openai-api-key", files.key);
 		await sh("chmod 600 /opt/ytimesy/.secrets/openai-api-key");
 		log(`${name}: harbor run started`);
+		// Harbor and our bridge share the VM with the task, so they run at the lowest
+		// CPU priority: the task's own processes always get the CPUs first.
 		// The official run; Harbor enforces the task's own timeouts inside.
 		await detached(
 			"harbor",
-			`cd /opt/ytimesy && export YTIMESY_REPO=/opt/ytimesy YTIMESY_BRIDGE_BUNDLE=/opt/ytimesy/builder-bridge.mjs YTIMESY_HARNESS_VERSION=v13-shell-${harness} PYTHONPATH=/opt/ytimesy && uvx --from ${HARBOR} harbor run -d terminal-bench/terminal-bench@4.0.0 -i terminal-bench/${task} -k 1 -n 1 -a benchmarks.harbor.ytimesy_agent:YtimesyAgent -e docker --jobs-dir /opt/jobs --job-name ${name}`,
+			`cd /opt/ytimesy && export YTIMESY_REPO=/opt/ytimesy YTIMESY_BRIDGE_BUNDLE=/opt/ytimesy/builder-bridge.mjs YTIMESY_HARNESS_VERSION=v13-shell-${harness} PYTHONPATH=/opt/ytimesy && nice -n 19 uvx --from ${HARBOR} harbor run -d terminal-bench/terminal-bench@4.0.0 -i terminal-bench/${task} -k 1 -n 1 -a benchmarks.harbor.ytimesy_agent:YtimesyAgent -e docker --jobs-dir /opt/jobs --job-name ${name} ${process.env.YTIMESY_HARBOR_EXTRA ?? ""}`,
 			10 * 3600_000,
 		).catch((error) => log(`${name}: harbor run: ${(error as Error).message.slice(0, 200)}`));
 		await sh(`cp /opt/harbor.log /opt/jobs/${name}/freestyle-run.log 2>/dev/null || true`);
