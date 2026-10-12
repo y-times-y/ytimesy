@@ -30,6 +30,7 @@ const log = (line: string) =>
 const files = {
 	bundle: await readFile(".ytimesy/freestyle-harbor/builder-bridge.mjs"),
 	agent: await readFile("benchmarks/harbor/ytimesy_agent.py"),
+	mcp: await readFile("benchmarks/harbor/mcp_call.py"),
 	key: (await readFile(".secrets/openai-api-key", "utf8")).trim(),
 };
 
@@ -148,16 +149,29 @@ async function runTrial(task: string, attempt: number) {
 			.resize(exact.cpu > 8 ? exact : target)
 			.catch(() => vm.resize(exact))
 			.catch(() => vm.resize({ ...exact, storage: Math.max(data.resources.storage, 51200) }));
-		// Freestyle applies CPU changes on start(); verify inside the guest.
+		// Freestyle applies CPU changes on start() and hot-plugs them a few seconds
+		// later; verify inside the guest once they are online.
 		await vm.start();
 		await waitUntilVmRunning(vm, name);
-		const cpus = Number((await sh("nproc").catch(() => "0")).trim());
+		let cpus = 0;
+		for (let wait = 0; wait < 18; wait++) {
+			cpus = Number((await sh("nproc").catch(() => "0")).trim());
+			if (cpus >= want.cpu) break;
+			await new Promise((r) => setTimeout(r, 10_000));
+		}
 		if (cpus < want.cpu)
 			throw new Error(`VM has ${cpus} CPUs after resize; task needs ${want.cpu}`);
 		log(`${name}: VM ${created.vmId} ${JSON.stringify(target)}; bootstrapping`);
 		await detached("bootstrap", BOOTSTRAP, 1_800_000);
+		// Docker reads the CPU count when the daemon starts; restart it now that the
+		// hot-plugged CPUs are online and confirm Docker sees the task's CPUs.
+		await sh("systemctl restart docker");
+		const dockerCpus = Number((await sh("docker info --format '{{.NCPU}}'").catch(() => "0")).trim());
+		if (dockerCpus < want.cpu)
+			throw new Error(`Docker sees ${dockerCpus} CPUs; task needs ${want.cpu}`);
 		await vm.fs.writeFile("/opt/ytimesy/builder-bridge.mjs", files.bundle);
 		await vm.fs.writeFile("/opt/ytimesy/benchmarks/harbor/ytimesy_agent.py", files.agent);
+		await vm.fs.writeFile("/opt/ytimesy/benchmarks/harbor/mcp_call.py", files.mcp);
 		await vm.fs.writeTextFile("/opt/ytimesy/.secrets/openai-api-key", files.key);
 		await sh("chmod 600 /opt/ytimesy/.secrets/openai-api-key");
 		log(`${name}: harbor run started`);
@@ -170,15 +184,37 @@ async function runTrial(task: string, attempt: number) {
 			10 * 3600_000,
 		).catch((error) => log(`${name}: harbor run: ${(error as Error).message.slice(0, 200)}`));
 		await sh(`cp /opt/harbor.log /opt/jobs/${name}/freestyle-run.log 2>/dev/null || true`);
+		// A failure before the agent started is infrastructure, not a trial outcome:
+		// report it so the trial is retried on a fresh VM.
+		const started = (
+			await sh(
+				`python3 -c "import json,glob;r=[json.load(open(f)) for f in glob.glob('/opt/jobs/${name}/*__*/result.json')];print(int(bool(r and (r[0].get('agent_execution') or {}).get('started_at'))))"`,
+			).catch(() => "0")
+		).trim();
+		if (started !== "1") {
+			const why = await sh(
+				`python3 -c "import json,glob;r=[json.load(open(f)) for f in glob.glob('/opt/jobs/${name}/*__*/result.json')];print((r[0].get('exception_info') or {}).get('exception_message','')[-600:] if r else 'no result')"; tail -c 600 /opt/harbor.log`,
+			).catch((error) => (error as Error).message);
+			throw new Error(`trial failed before the agent started: ${why.replace(/\s+/g, " ")}`);
+		}
 		await sh(`cd /opt/jobs && tar czf /opt/job.tgz ${name}`);
 		const archive = await vm.fs.readFile("/opt/job.tgz");
 		await writeFile(done, archive);
 		execFileSync("tar", ["xzf", done, "-C", outDir]);
 		log(`${name}: collected (${archive.length} bytes)`);
+		return true;
 	} catch (error) {
-		log(`${name}: FAILED ${(error as Error).message.slice(0, 300)}`);
+		log(`${name}: FAILED ${(error as Error).message.slice(0, 1400)}`);
+		return false;
 	} finally {
 		await client.vms.ref(created.vmId).delete().catch(() => {});
+	}
+}
+
+async function runTrialWithRetries(task: string, attempt: number) {
+	for (let tries = 1; tries <= 3; tries++) {
+		if ((await runTrial(task, attempt)) !== false) return;
+		log(`tb4-freestyle-${task}-${attempt}: infrastructure retry ${tries}`);
 	}
 }
 
@@ -189,7 +225,7 @@ log(`${queue.length} trials on Freestyle (harness ${harness}), ${concurrency} at
 await Promise.all(
 	Array.from({ length: concurrency }, async () => {
 		for (let item = queue.shift(); item; item = queue.shift())
-			await runTrial(item[0], item[1]);
+			await runTrialWithRetries(item[0], item[1]);
 	}),
 );
 log("all Freestyle trials finished");

@@ -34,18 +34,36 @@ project=$(pwd)
 if command -v apt-get >/dev/null; then
   apt-get update -qq
   apt-get install -y -qq git python3 curl xz-utils ca-certificates ripgrep tmux >/dev/null
+elif command -v dnf >/dev/null; then
+  dnf install -y -q git python3 curl xz ca-certificates ripgrep tmux >/dev/null || true
+elif command -v yum >/dev/null; then
+  yum install -y -q git python3 curl xz ca-certificates tmux >/dev/null || true
+elif command -v apk >/dev/null; then
+  apk add -q git python3 curl xz ca-certificates ripgrep tmux bash >/dev/null || true
+fi
+# Distributions without a ripgrep package get the official static build.
+if ! command -v rg >/dev/null; then
+  curl -fsSL https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/ripgrep-14.1.1-x86_64-unknown-linux-musl.tar.gz \
+    | tar -xz -C /usr/local/bin --strip-components=1 ripgrep-14.1.1-x86_64-unknown-linux-musl/rg
 fi
 rg --version >/dev/null
 if [ "$project" = / ]; then project=/app; mkdir -p /app; fi
 cd "$project"
+# Setup runs as root; the project may belong to the image's agent user, which git
+# would otherwise refuse as "dubious ownership" for every user but the owner.
+git config --system --add safe.directory "$project"
 if [ ! -d .git ]; then
-  git init -q --initial-branch=evaluation-frozen
+  # Older git releases lack --initial-branch; set the branch name separately.
+  git init -q && git symbolic-ref HEAD refs/heads/evaluation-frozen
   git config user.name 'Evaluation fixture'
   git config user.email 'evaluation@ytimesy.invalid'
   printf '\nnode_modules/\n.next/\n.ytimesy/\n__pycache__/\n' >> .git/info/exclude
   git add -A
   git commit -q --allow-empty -m 'Frozen benchmark environment'
 fi
+# Setup runs as root; images that run the agent as another user own the project,
+# so the repository must belong to that owner too.
+chown -R "$(stat -c %u:%g .)" .git
 printf '%s\n' "$project"
 """
 
@@ -53,7 +71,9 @@ printf '%s\n' "$project"
 class YtimesyAgent(BaseAgent):
     # Task-supplied skills go where our builder discovers them (.agents/skills),
     # as Harbor's Codex agent copies them into Codex's skills directory.
-    capabilities = AgentCapabilities(skills=True)
+    # Task MCP servers (sse / streamable-http) are reachable from the task's network,
+    # so the builder calls them through the mcp-call helper installed in the container.
+    capabilities = AgentCapabilities(skills=True, mcp_servers=True)
 
     @staticmethod
     def name() -> str:
@@ -73,12 +93,23 @@ class YtimesyAgent(BaseAgent):
             project = shlex.quote(self.cwd)
             skills = await environment.exec(
                 f"mkdir -p {project}/.agents/skills && cp -r {shlex.quote(self.skills_dir)}/* {project}/.agents/skills/ 2>/dev/null; "
-                f"grep -qx '.agents/' {project}/.git/info/exclude 2>/dev/null || echo '.agents/' >> {project}/.git/info/exclude",
+                f"grep -qx '.agents/' {project}/.git/info/exclude 2>/dev/null || echo '.agents/' >> {project}/.git/info/exclude; "
+                f"chown -R \"$(stat -c %u:%g {project})\" {project}/.agents {project}/.git",
                 timeout_sec=120,
                 user="root",
             )
             if skills.return_code != 0:
                 self.logger.warning("ytimesy: copying skills failed: %s", skills.stderr)
+        self.mcp_names = []
+        remote = [s for s in self.mcp_servers if s.transport in ("sse", "streamable-http") and s.url]
+        if remote:
+            Path(self.logs_dir).mkdir(parents=True, exist_ok=True)
+            config = Path(self.logs_dir) / "mcp-servers.json"
+            config.write_text(json.dumps([{"name": s.name, "transport": s.transport, "url": s.url} for s in remote]))
+            await environment.upload_file(config, "/etc/ytimesy-mcp.json")
+            await environment.upload_file(Path(__file__).with_name("mcp_call.py"), "/usr/local/bin/mcp-call")
+            await environment.exec("chmod 755 /usr/local/bin/mcp-call", timeout_sec=30, user="root")
+            self.mcp_names = [s.name for s in remote]
 
     async def run(
         self, instruction: str, environment: BaseEnvironment, context: AgentContext
@@ -89,6 +120,7 @@ class YtimesyAgent(BaseAgent):
             {
                 "instruction": instruction,
                 "cwd": getattr(self, "cwd", "/app"),
+                "mcpServers": getattr(self, "mcp_names", []),
                 "logsDir": str(logs),
                 # Harbor enforces the task's own agent timeout; this is only a backstop.
                 "timeoutSeconds": 8 * 3600,
