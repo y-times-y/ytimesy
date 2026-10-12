@@ -2,16 +2,19 @@ import { readFile } from "node:fs/promises";
 import { createServer } from "vite";
 import { z } from "zod";
 
-const EDGE_ORIGIN = "https://ytimesy-edge-executor-development.example-account.workers.dev";
+const EDGE_ORIGIN =
+	"https://ytimesy-edge-executor-development.example-account.workers.dev";
 
 /** Development executes on Cloudflare DOs and Workflows; there is no Node job host. */
-async function useEdgeExecution() {
+async function configureEdgeExecution() {
 	if (
 		!new URL(process.env.DATABASE_URL ?? "").username.includes(
 			"exampledevprojectref",
 		)
 	)
-		throw new Error("Edge development execution requires the development database.");
+		throw new Error(
+			"Edge development execution requires the development database.",
+		);
 	const realtime = z
 		.object({ secret: z.string().min(32) })
 		.parse(
@@ -27,7 +30,7 @@ async function useEdgeExecution() {
 	});
 }
 
-await useEdgeExecution();
+await configureEdgeExecution();
 const server = await createServer({
 	server: { host: "0.0.0.0", port: 3000, strictPort: true },
 });

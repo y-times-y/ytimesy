@@ -71,7 +71,8 @@ it("persists only authenticated, explicitly enabled repair references without ru
 			await executeWorkflowRequest(
 				new Request(endpoint, { method: "POST", body, headers }),
 				secret,
-				machines, receipts,
+				machines,
+				receipts,
 			)
 		).status,
 	).toBe(200);
@@ -90,9 +91,9 @@ it("rejects unauthenticated, oversized, malformed and credential-bearing request
 		[await request("{"), 400],
 		[await request(JSON.stringify({ ...step, apiKey: "forbidden" })), 400],
 	] as const)
-		expect((await executeWorkflowRequest(input, secret, machines, receipts)).status).toBe(
-			status,
-		);
+		expect(
+			(await executeWorkflowRequest(input, secret, machines, receipts)).status,
+		).toBe(status);
 	expect(mocks.claim).not.toHaveBeenCalled();
 	expect(mocks.run).not.toHaveBeenCalled();
 });
@@ -106,7 +107,8 @@ it("reuses only known outcomes and refuses uncertain processing without replay",
 	).toEqual({ outcome: "completed" });
 	mocks.claim.mockResolvedValueOnce({ kind: "unavailable" });
 	expect(
-		(await executeWorkflowRequest(await request(), secret, machines, receipts)).status,
+		(await executeWorkflowRequest(await request(), secret, machines, receipts))
+			.status,
 	).toBe(409);
 	expect(mocks.run).not.toHaveBeenCalled();
 });
@@ -125,7 +127,8 @@ it("settles a between-step cancellation without inference or waiting for lease e
 	expect(mocks.run).not.toHaveBeenCalled();
 	mocks.finalize.mockResolvedValue(null);
 	expect(
-		(await executeWorkflowRequest(await request(), secret, machines, receipts)).status,
+		(await executeWorkflowRequest(await request(), secret, machines, receipts))
+			.status,
 	).toBe(409);
 });
 
@@ -137,7 +140,8 @@ it("records outcomes only after execution and does not leak messages into the re
 	const response = await executeWorkflowRequest(
 		await request(),
 		secret,
-		machines, receipts,
+		machines,
+		receipts,
 	);
 	expect(await response.json()).toEqual({ outcome: "continue" });
 	expect(mocks.complete).toHaveBeenCalledWith(step, "continue");
@@ -153,6 +157,7 @@ it("fences expired turns immediately and makes the overflow step a no-inference 
 	await executeWorkflowRequest(
 		await request(JSON.stringify({ ...step, index: 129 })),
 		secret,
-		machines, receipts,
+		machines,
+		receipts,
 	);
 });

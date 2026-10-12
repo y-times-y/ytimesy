@@ -745,6 +745,5 @@ try {
 	if (cleanupFailures.length) {
 		console.error(`Proof cleanup incomplete: ${cleanupFailures.join(", ")}.`);
 		process.exitCode = 1;
-	} else
-		console.info("Isolated proof sessions removed.");
+	} else console.info("Isolated proof sessions removed.");
 }
