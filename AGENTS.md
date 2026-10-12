@@ -11,3 +11,5 @@ Use agent-browser for browser research and UI verification, as requested by the 
 The first release must include Diff, Terminal, and Desktop. ytimesy owns the harness; Codex and Claude Code are its offered runtime adapters. OpenCode is legacy-only and must not be offered for new sessions or delegated tasks. Freestyle, TanStack Start, and Effect are selected. Consult PLAN.md for unresolved provider choices rather than silently treating proposals as decisions.
 
 Before database schema changes, Supabase setup, or migration deployment, read [Supabase and GitHub workflow](PLAN.md#supabase-and-github-workflow). It records the selected provider, migration ownership, integration settings, and unverified setup state.
+
+Cloudflare execution: before removing a Workflow or moving long-running work into a Durable Object alarm or cron, read [Why two Cloudflare Workflows remain](docs/edge-architecture-migration.md#why-two-cloudflare-workflows-remain-decision-2026-10-12). Alarms and cron stop after 15 minutes; chat-turn steps and environment builds can run longer.

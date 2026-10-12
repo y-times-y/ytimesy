@@ -65,7 +65,6 @@ const sessions: { userId: string; sessionId: string }[] = [];
 let vmId: string | undefined;
 let workflowId: string | undefined;
 const controlWorkflows: string[] = [];
-const backgroundWorkflows: string[] = [];
 let completed = false;
 let terminal = false;
 function wrangler(args: string[], input?: string) {
@@ -440,8 +439,7 @@ try {
 					headers: await signDeliveryRequest(secret, "POST", url, body),
 					signal: AbortSignal.timeout(15_000),
 				});
-				if (response.status === 202) backgroundWorkflows.push(jobId);
-				else if (response.status !== 503)
+				if (response.status !== 202 && response.status !== 503)
 					throw new Error("Recovery admission failed.");
 				await delay(5000);
 				const state = await turnState(child.id);
@@ -648,19 +646,6 @@ try {
 		} catch {
 			cleanupFailures.push(label);
 		}
-	}
-	if (process.env.EDGE_RESTART_PROOF === "1") {
-		for (const id of backgroundWorkflows)
-			await clean("recovery workflow", () =>
-				wrangler([
-					"workflows",
-					"instances",
-					"delete",
-					"ytimesy-background-jobs-development",
-					id,
-					"--json",
-				]),
-			);
 	}
 	for (const id of controlWorkflows) {
 		await clean("control workflow", () => {

@@ -6,7 +6,7 @@ import { signDeliveryRequest } from "#/domain/delivery-auth";
 type Dispatch = (job: BackgroundJob) => Promise<void>;
 const binding = new AsyncLocalStorage<Dispatch>();
 
-/** Convert an existing idempotency key into a bounded Workflow identity. */
+/** Convert an existing idempotency key into a bounded background job identity. */
 export function backgroundJobId(key: string) {
 	const hash = createHash("sha256")
 		.update(`ytimesy:background-job:v1:${key}`)
@@ -53,7 +53,7 @@ export async function dispatchBackgroundJob(
 		secret.length < 32
 	)
 		throw new Error(
-			"Background Workflow requires an HTTPS origin and signing secret.",
+			"Background job admission requires an HTTPS origin and signing secret.",
 		);
 	const url = new URL("/jobs/start", origin).href;
 	const body = JSON.stringify(job);

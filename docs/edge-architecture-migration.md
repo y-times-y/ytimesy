@@ -2,6 +2,31 @@
 
 Development status, 2026-10-08. This is a staged migration, not a completed Node retirement.
 
+## Why two Cloudflare Workflows remain (decision, 2026-10-12)
+
+Read this before removing a Workflow or moving long work into a Durable Object alarm.
+
+| Runs on | What | Why there |
+| --- | --- | --- |
+| Workflow `EdgeModelTurnWorkflow` | Drives a chat turn: one durable step per model step (up to 129), each a call into the chat DO | One step is a model call plus a tool command and may take up to 30 minutes (`MODEL_WORKFLOW_DEADLINE_MS`), e.g. a long build or test run |
+| Workflow `ProjectEnvironmentWorkflow` | Clone, install, verify, snapshot a project environment | Install/verify steps may take up to 65 minutes |
+| DO `ModelConversation` | The chat itself: model steps, SQLite receipts, live stream | Runs each step while the Workflow waits on it |
+| DO `BackgroundJobRunner` (one per job ID) | On-demand short jobs: turn admission, peer messages, competitions, checkpoints, environment admission | Idempotent by job ID; retries only a pending peer message every 15 s; a failed or interrupted run fails closed |
+| Cron (every minute, in the Worker) | Periodic short jobs: admission, reconcile, supervise, delivery, checkpoints, task events, PR repair, work plans; infrastructure every 5 min, environment refresh hourly | Run directly in the scheduled handler; the next tick retries |
+
+The rule is Cloudflare's wall-time limits: a DO alarm and a cron invocation each
+stop after **15 minutes**. A Workflow step, or a DO request whose caller stays
+connected, has no wall-time limit. So anything that can exceed 15 minutes stays in
+a Workflow, and everything short runs without one.
+
+`BackgroundJobWorkflow` was removed for this reason: its jobs take seconds to a few
+minutes, and cron was starting 8+ instances a minute (about 11,000 a day), mostly
+with nothing to do.
+
+To remove the remaining two, long tool commands would have to become resumable
+(detached on the VM, polled by successive alarms under 15 minutes). That changes
+how the benchmarked harness runs tools and needs re-validation, so it was not done.
+
 ### Latest cutover gate
 
 #### Node worker retired from application execution, 2026-10-09
@@ -82,17 +107,16 @@ with six skipped (the subsequently added Git timeout regression also passed).
 - Development migration `20261008120000_api_turn_executor.sql` records Node versus DO assignment at admission. Admitted and terminal turns cannot switch executor. Legacy step claims and DO routing reject assignments to the other executor; existing turns default to Node.
 - `EdgeModelTurnWorkflow` calls the chat DO namespace binding directly. Its recorded steps persist references/outcomes, not conversation content; uncertain inference has no automatic retry. The Node callback server is not started when the dispatcher explicitly selects the DO target.
 - `ProjectEnvironmentWorkflow` runs the existing environment recipe directly in Cloudflare steps: resolve sources, claim, provision, checkout/install, verify, activate snapshot, finish/pause. Repository scripts still run in Freestyle. Credentials and secret values do not enter Workflow parameters or returned step values.
-- `BackgroundJobWorkflow` invokes existing task-event, peer-message, competition, checkpoint, PR-repair, work-plan and maintenance handlers. Explicit peer safe-point waits sleep durably; unknown failures are not blindly retried. Signed admissions preserve job identities across uncertain HTTP acknowledgement. Cloudflare invocations dispatch through Workflow bindings rather than requiring a Node job host.
+- Background jobs (task-event, peer-message, competition, checkpoint, PR-repair, work-plan and maintenance handlers) run without a Workflow: cron runs the periodic ones directly, and on-demand jobs run in a per-job `BackgroundJobRunner` DO. An explicitly pending peer message is retried by alarm every 15 seconds; unknown failures and interrupted runs are not retried. Signed admissions preserve job identities across uncertain HTTP acknowledgement, and re-admitting a job reports its state.
 - PostgreSQL still owns users, projects, authorization, queryable conversation history, task records, accounting, and project memory. It currently also owns admission, heartbeat/cancellation, checkpoints, and queued job delivery. Those hot execution responsibilities have **not** been cut over to DO storage yet.
 - Freestyle still supplies each task's Linux execution environment, filesystem, tools, and desktop. This change does not resize or delete existing machines.
 
 ## Deployed development resources
 
 - Worker: `ytimesy-edge-executor-development`
-- DO namespace: `MODEL_CONVERSATIONS`, SQLite migration `v1`
+- DO namespaces: `MODEL_CONVERSATIONS` (SQLite migration `v1`), `BACKGROUND_JOBS` (`BackgroundJobRunner`, migration `v2`)
 - Workflow: `ytimesy-project-environments-development`
 - Model Workflow: `ytimesy-edge-model-turns-development`
-- Background Workflow: `ytimesy-background-jobs-development`
 - Hyperdrive: `ytimesy-development-postgres`; query caching disabled, origin connection cap 5, `verify-full` with the existing Supabase CA
 
 The Git proxy is enabled for signed requests. Model, environment, background execution and the minute recovery schedule remain independently gated and disabled outside bounded proofs. The application URLs remain opt-in; the running app has not been switched away from its existing executor.
