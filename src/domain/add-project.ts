@@ -143,3 +143,20 @@ export function projectPickerRows(input: {
 		left.fullName.localeCompare(right.fullName),
 	);
 }
+
+/** Picker sections that never reshuffle while repositories load: added projects
+ * first (the selected one pinned on top), then GitHub repositories not yet added. */
+export function projectPickerSections(input: {
+	readonly projects: readonly Project[];
+	readonly repositories: readonly RepositoryChoice[];
+	readonly query: string;
+	readonly selectedProjectId?: string;
+}) {
+	const rows = projectPickerRows(input);
+	return {
+		projects: rows
+			.filter((row) => row.project)
+			.sort((left, right) => Number(right.selected) - Number(left.selected)),
+		repositories: rows.filter((row) => !row.project),
+	};
+}

@@ -1,5 +1,19 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronDown, GitBranch, RefreshCw } from "lucide-react";
+import {
+	keepPreviousData,
+	useMutation,
+	useQuery,
+	useQueryClient,
+} from "@tanstack/react-query";
+import {
+	Check,
+	ChevronDown,
+	ExternalLink,
+	GitBranch,
+	Layers,
+	Plus,
+	RefreshCw,
+	Search,
+} from "lucide-react";
 import { useMemo, useState } from "react";
 import {
 	Popover,
@@ -8,7 +22,7 @@ import {
 } from "#/components/ui/popover";
 import {
 	addedProjectBranch,
-	projectPickerRows,
+	projectPickerSections,
 	scratchRepositoryName,
 } from "#/domain/add-project";
 import type { Project, RepositoryChoice } from "#/domain/projects";
@@ -47,7 +61,9 @@ export function ProjectPicker({
 				installationUrl: string;
 			}>("/api/github/repositories"),
 		retry: false,
-		enabled: pickerOpen,
+		// Loaded with the composer and cached, so opening the picker never waits on GitHub.
+		staleTime: 5 * 60_000,
+		placeholderData: keepPreviousData,
 	});
 	const connection = useMutation({
 		mutationFn: () => requestJson<{ url: string }>("/api/github/connect", {}),
@@ -84,9 +100,9 @@ export function ProjectPicker({
 			setScratchName("");
 		},
 	});
-	const rows = useMemo(
+	const sections = useMemo(
 		() =>
-			projectPickerRows({
+			projectPickerSections({
 				projects,
 				repositories: repositories.data?.repositories ?? [],
 				query,
@@ -96,7 +112,7 @@ export function ProjectPicker({
 	);
 	const scratch = scratchRepositoryName(scratchName);
 
-	function choose(row: (typeof rows)[number]) {
+	function choose(row: (typeof sections.projects)[number]) {
 		if (row.project) {
 			onSelectProject(row.project.id);
 			setPickerOpen(false);
@@ -138,6 +154,8 @@ export function ProjectPicker({
 				side="top"
 				align="start"
 				collisionPadding={12}
+				// Stay above the composer and scroll within the space there instead of flipping over it.
+				avoidCollisions={false}
 				className="project-picker"
 				data-creating={addingProject || undefined}
 			>
@@ -154,44 +172,73 @@ export function ProjectPicker({
 					/>
 				) : (
 					<>
-						<input
-							className="project-picker-search"
-							type="search"
-							placeholder="Search repositories"
-							value={query}
-							onChange={(event) => setQuery(event.target.value)}
-							aria-label="Search repositories"
-						/>
+						<label className="model-picker-search project-picker-search">
+							<Search size={16} aria-hidden="true" />
+							<input
+								type="search"
+								placeholder="Search repositories"
+								value={query}
+								onChange={(event) => setQuery(event.target.value)}
+								aria-label="Search repositories"
+							/>
+						</label>
 						<div
 							className="project-picker-list"
 							role="listbox"
 							aria-label="Projects"
 						>
-							{rows.map((row) => (
+							{sections.projects.length ? (
+								<>
+									<p className="project-picker-heading">Projects</p>
+									{sections.projects.map((row) => (
+										<PickerRow
+											key={row.key}
+											row={row}
+											disabled={save.isPending || create.isPending}
+											onChoose={() => choose(row)}
+										/>
+									))}
+								</>
+							) : null}
+							<div className="project-picker-heading-row">
+								<p className="project-picker-heading">GitHub repositories</p>
 								<button
-									key={row.key}
 									type="button"
-									role="option"
-									aria-selected={row.selected}
-									className="project-picker-choice"
-									data-selected={row.selected ? "true" : undefined}
-									disabled={save.isPending || create.isPending}
-									onClick={() => choose(row)}
+									className="project-picker-refresh"
+									aria-label="Refresh repositories"
+									title="Refresh repositories"
+									disabled={repositories.isFetching}
+									onClick={() => void repositories.refetch()}
 								>
-									<GitBranch size={14} />
-									<span>{row.fullName}</span>
-									{row.selected ? <Check size={14} /> : null}
+									<RefreshCw
+										size={12}
+										data-spinning={repositories.isFetching || undefined}
+									/>
 								</button>
-							))}
-							{rows.length === 0 ? (
+							</div>
+							{repositories.isPending ? (
+								<div className="project-picker-skeleton" aria-busy="true">
+									<span />
+									<span />
+									<span />
+								</div>
+							) : (
+								sections.repositories.map((row) => (
+									<PickerRow
+										key={row.key}
+										row={row}
+										disabled={save.isPending || create.isPending}
+										onChoose={() => choose(row)}
+									/>
+								))
+							)}
+							{!repositories.isPending && sections.repositories.length === 0 ? (
 								<p className="project-picker-empty">
-									{repositories.isPending
-										? "Loading repositories…"
-										: query.trim()
-											? "No repositories match."
-											: repositories.data
-												? "No repositories yet."
-												: "Connect GitHub to see repositories."}
+									{query.trim()
+										? "No repositories match."
+										: repositories.data
+											? "Every repository is already a project."
+											: "Connect GitHub to see repositories."}
 								</p>
 							) : null}
 						</div>
@@ -204,7 +251,6 @@ export function ProjectPicker({
 								}}
 							>
 								<input
-									className="project-picker-search"
 									type="text"
 									placeholder="Repository name"
 									value={scratchName}
@@ -220,12 +266,10 @@ export function ProjectPicker({
 							</form>
 						) : null}
 						<div className="project-picker-actions">
-							<button type="button" onClick={() => setAddingProject(true)}>
-								New project · select repositories
-							</button>
 							{creating ? null : (
 								<button type="button" onClick={() => setCreating(true)}>
-									Create repository
+									<Plus size={13} />
+									New repo
 								</button>
 							)}
 							{repositories.data?.installationUrl ? (
@@ -234,7 +278,8 @@ export function ProjectPicker({
 									target="_blank"
 									rel="noreferrer"
 								>
-									Add repositories
+									<ExternalLink size={13} />
+									Add from GitHub
 								</a>
 							) : (
 								<button
@@ -242,16 +287,13 @@ export function ProjectPicker({
 									disabled={connection.isPending}
 									onClick={() => connection.mutate()}
 								>
+									<ExternalLink size={13} />
 									{connection.isPending ? "Opening GitHub…" : "Connect GitHub"}
 								</button>
 							)}
-							<button
-								type="button"
-								disabled={repositories.isFetching}
-								onClick={() => void repositories.refetch()}
-							>
-								<RefreshCw size={12} />
-								Refresh
+							<button type="button" onClick={() => setAddingProject(true)}>
+								<Layers size={13} />
+								Multi-repo
 							</button>
 						</div>
 						{save.error ||
@@ -269,5 +311,39 @@ export function ProjectPicker({
 				)}
 			</PopoverContent>
 		</Popover>
+	);
+}
+
+/** One repository row: name first, owner as secondary text, like the model picker. */
+function PickerRow({
+	row,
+	disabled,
+	onChoose,
+}: {
+	row: { fullName: string; selected: boolean };
+	disabled: boolean;
+	onChoose: () => void;
+}) {
+	const slash = row.fullName.indexOf("/");
+	const name = slash > 0 ? row.fullName.slice(slash + 1) : row.fullName;
+	const owner = slash > 0 ? row.fullName.slice(0, slash) : undefined;
+	return (
+		<button
+			type="button"
+			role="option"
+			aria-selected={row.selected}
+			className="project-picker-choice"
+			data-selected={row.selected ? "true" : undefined}
+			disabled={disabled}
+			onClick={onChoose}
+			title={row.fullName}
+		>
+			<GitBranch size={14} aria-hidden="true" />
+			<span className="project-picker-name">
+				<strong>{name}</strong>
+				{owner ? <small>{owner}</small> : null}
+			</span>
+			{row.selected ? <Check size={14} aria-hidden="true" /> : null}
+		</button>
 	);
 }

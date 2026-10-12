@@ -6,6 +6,7 @@ import {
 	filterRepositories,
 	projectPickerLists,
 	projectPickerRows,
+	projectPickerSections,
 	repositoryChoiceValue,
 	repositoryIsAdded,
 	scratchRepositoryName,
@@ -158,5 +159,41 @@ describe("add project", () => {
 		]);
 		expect(scratchRepositoryName("  New_App.1 ")).toBe("New_App.1");
 		expect(scratchRepositoryName("bad name")).toBe(null);
+	});
+});
+
+describe("projectPickerSections", () => {
+	it("pins the selected project first and keeps unadded repositories in their own section", () => {
+		const project = (id: string, fullName: string, repositoryId: number) =>
+			({
+				id,
+				installationId: 1,
+				repositoryId,
+				fullName,
+				branch: "main",
+			}) as never;
+		const sections = projectPickerSections({
+			projects: [project("a", "acme/alpha", 1), project("z", "zeta/zed", 2)],
+			repositories: [
+				{
+					installationId: 1,
+					repositoryId: 1,
+					fullName: "acme/alpha",
+					defaultBranch: "main",
+				},
+				{
+					installationId: 1,
+					repositoryId: 3,
+					fullName: "acme/beta",
+					defaultBranch: "main",
+				},
+			],
+			query: "",
+			selectedProjectId: "z",
+		});
+		expect(sections.projects.map((row) => row.project?.id)).toEqual(["z", "a"]);
+		expect(sections.repositories.map((row) => row.fullName)).toEqual([
+			"acme/beta",
+		]);
 	});
 });
