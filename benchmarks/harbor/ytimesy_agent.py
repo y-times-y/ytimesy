@@ -79,8 +79,15 @@ class YtimesyAgent(BaseAgent):
             }
         )
         stderr = open(logs / "ytimesy-bridge.log", "wb")
+        # On remote hosts the bridge ships as one bundled file (no repo checkout).
+        bundle = os.environ.get("YTIMESY_BRIDGE_BUNDLE")
+        command = (
+            ["node", bundle, arguments]
+            if bundle
+            else ["node", "--env-file=.env", "--import", "tsx", str(BRIDGE), arguments]
+        )
         process = await asyncio.create_subprocess_exec(
-            "node", "--env-file=.env", "--import", "tsx", str(BRIDGE), arguments,
+            *command,
             cwd=REPO,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
