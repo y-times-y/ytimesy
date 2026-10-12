@@ -16,6 +16,7 @@ import {
 import { CoordinationFailure } from "#/domain/conversation-turn-control";
 import { PREPARED_ENVIRONMENT_INSTRUCTIONS } from "#/domain/environment-context";
 import { SessionItemId, WorkspaceId } from "#/domain/ids";
+import { prepareInterruptedStep } from "#/domain/interrupted-step";
 import { officialProviderEndpoint } from "#/domain/model-connection";
 import { modelStepLimit } from "#/domain/model-workflow";
 import { posixShellCommand } from "#/domain/posix-command";
@@ -107,7 +108,13 @@ export type ApiTurnStepOutcome =
 export async function runApiTurn(
 	machines: WorkspaceMachines,
 	turn: ApiTurn,
-	step?: { index: number; signal: AbortSignal; limitReached?: boolean },
+	step?: {
+		index: number;
+		signal: AbortSignal;
+		limitReached?: boolean;
+		/** The same step is being re-run after its executor restarted mid-step. */
+		resumed?: boolean;
+	},
 ): Promise<ApiTurnStepOutcome> {
 	const abort = new AbortController();
 	const stopForDeadline = () =>
@@ -119,6 +126,13 @@ export async function runApiTurn(
 		? [...items].reverse().find((item) => item.kind === "userMessage")
 		: undefined;
 	let messages = turn.messages;
+	if (step?.resumed)
+		({ messages, items } = prepareInterruptedStep(
+			messages,
+			items,
+			turn.id,
+			step.index,
+		));
 	let execution: AgentToolWorkspace | undefined;
 	let commandStop: Promise<void> | undefined;
 	const stopCommands = () => {

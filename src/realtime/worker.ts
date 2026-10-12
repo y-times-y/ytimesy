@@ -50,7 +50,23 @@ export class ConversationRoom {
 	private readonly subscribers = new Set<
 		(snapshot: ConversationSnapshot) => void
 	>();
-	constructor(private readonly state: ConversationRoomState) {
+	/**
+	 * `schedule` lets a host object that also uses the alarm (the chat DO's turn
+	 * loop) multiplex it; by default the room owns the alarm.
+	 */
+	private readonly schedule: (at: number | null) => Promise<void>;
+	constructor(
+		private readonly state: ConversationRoomState,
+		// The realtime Worker instantiates this class as a Durable Object, passing its env here.
+		schedule?: unknown,
+	) {
+		this.schedule =
+			typeof schedule === "function"
+				? (schedule as (at: number | null) => Promise<void>)
+				: (at) =>
+						at === null
+							? state.storage.deleteAlarm()
+							: state.storage.setAlarm(at);
 		state.blockConcurrencyWhile(async () => {
 			const head = await state.storage.get<SnapshotHead>("head");
 			if (!head) return;
@@ -232,7 +248,7 @@ export class ConversationRoom {
 				retired[input.turnId] = Date.now() + 70_000;
 				await storage.put("retired-turns", retired);
 				await storage.delete("active-turn");
-				await storage.deleteAlarm();
+				await this.schedule(null);
 			} else {
 				if (current && !same) retired[current.turnId] = Date.now() + 70_000;
 				await storage.put("retired-turns", retired);
@@ -242,9 +258,42 @@ export class ConversationRoom {
 					cancelled: action === "cancel",
 				};
 				await storage.put("active-turn", next);
-				await storage.setAlarm(next.expiresAt);
+				await this.schedule(next.expiresAt);
 			}
 			return new Response(null, { status: 204 });
+		});
+	}
+	/**
+	 * The chat's own turn loop resuming a step after its object restarted, under a
+	 * rotated lease: the coordination lease may have lapsed meanwhile, but a
+	 * cancelled turn or one replaced by a newer turn stays stopped.
+	 */
+	async reclaim(input: { turnId: string; leaseId: string }) {
+		return this.state.storage.transaction(async (storage) => {
+			const current = await storage.get<ActiveConversationTurn>("active-turn");
+			// The resuming chat rotates the lease, so the turn ID alone identifies it.
+			if (current) {
+				const same = current.turnId === input.turnId;
+				if (same ? current.cancelled : current.expiresAt > Date.now())
+					return false;
+			}
+			const retired =
+				(await storage.get<Record<string, number>>("retired-turns")) ?? {};
+			delete retired[input.turnId];
+			await storage.put("retired-turns", retired);
+			const identity = await storage.get<{ userId: string; sessionId: string }>(
+				"identity",
+			);
+			if (!identity) return false;
+			const next: ActiveConversationTurn = {
+				...identity,
+				...input,
+				expiresAt: Date.now() + TURN_COORDINATION_LEASE_MS,
+				cancelled: false,
+			};
+			await storage.put("active-turn", next);
+			await this.schedule(next.expiresAt);
+			return true;
 		});
 	}
 	async alarm() {
@@ -259,7 +308,7 @@ export class ConversationRoom {
 				retired[turn.turnId] = Date.now() + 70_000;
 				await storage.put("retired-turns", retired);
 				await storage.delete("active-turn");
-			} else await storage.setAlarm(turn.expiresAt);
+			} else await this.schedule(turn.expiresAt);
 		});
 	}
 }

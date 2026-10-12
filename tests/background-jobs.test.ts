@@ -26,12 +26,19 @@ import {
 
 const id = "00000000-0000-4000-8000-000000000001";
 function environment() {
-	const createBatch = vi.fn(async () => []);
+	const createBatch = vi.fn(async (_batch: unknown[]) => []);
 	return {
 		createBatch,
 		env: {
 			HYPERDRIVE: { connectionString: "fixture" },
-			MODEL_TURNS: { createBatch },
+			MODEL_CONVERSATIONS: {
+				getByName: (name: string) => ({
+					startTurn: async (scope: unknown, turn: unknown) => {
+						await createBatch([{ name, scope, turn }]);
+						return true;
+					},
+				}),
+			},
 			PROJECT_ENVIRONMENTS: { createBatch },
 			ENVIRONMENT_EXECUTION_ENABLED: "1",
 		} as never,
@@ -139,15 +146,17 @@ it("claims only Cloudflare turns and dispatches their persisted lease identities
 		.mockResolvedValueOnce({
 			id,
 			lease_id: "00000000-0000-4000-8000-000000000002",
+			user_id: "u",
+			session_id: "s",
 		})
 		.mockResolvedValueOnce(null);
 	const { env, createBatch } = environment();
 	await runBackgroundJob(env, { id, kind: "model-admission" });
 	expect(handlers.claim.mock.calls[0][2]).toBe("durable-object");
 	expect(createBatch).toHaveBeenCalledWith([
-		{
-			id: `${id}-00000000-0000-4000-8000-000000000002`,
-			params: { turnId: id, leaseId: "00000000-0000-4000-8000-000000000002" },
-		},
+		expect.objectContaining({
+			scope: { userId: "u", sessionId: "s" },
+			turn: { turnId: id, leaseId: "00000000-0000-4000-8000-000000000002" },
+		}),
 	]);
 });

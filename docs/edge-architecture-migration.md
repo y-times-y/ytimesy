@@ -2,30 +2,51 @@
 
 Development status, 2026-10-08. This is a staged migration, not a completed Node retirement.
 
-## Why two Cloudflare Workflows remain (decision, 2026-10-12)
+## Cloudflare execution model (decision, 2026-10-12)
 
-Read this before removing a Workflow or moving long work into a Durable Object alarm.
+Read this before adding a Workflow, moving work into an alarm or cron, or changing
+how a chat turn runs.
 
-| Runs on | What | Why there |
+| Runs on | What | Notes |
 | --- | --- | --- |
-| Workflow `EdgeModelTurnWorkflow` | Drives a chat turn: one durable step per model step (up to 129), each a call into the chat DO | One step is a model call plus a tool command and may take up to 30 minutes (`MODEL_WORKFLOW_DEADLINE_MS`), e.g. a long build or test run |
-| Workflow `ProjectEnvironmentWorkflow` | Clone, install, verify, snapshot a project environment | Install/verify steps may take up to 65 minutes |
-| DO `ModelConversation` | The chat itself: model steps, SQLite receipts, live stream | Runs each step while the Workflow waits on it |
+| DO `ModelConversation` (one per chat) | Runs the chat's turns itself: one model step per alarm, SQLite step receipts, the live stream and turn coordination | No Workflow. Admission calls `startTurn`; each step's alarm sets the next one |
 | DO `BackgroundJobRunner` (one per job ID) | On-demand short jobs: turn admission, peer messages, competitions, checkpoints, environment admission | Idempotent by job ID; retries only a pending peer message every 15 s; a failed or interrupted run fails closed |
 | Cron (every minute, in the Worker) | Periodic short jobs: admission, reconcile, supervise, delivery, checkpoints, task events, PR repair, work plans; infrastructure every 5 min, environment refresh hourly | Run directly in the scheduled handler; the next tick retries |
+| Workflow `ProjectEnvironmentWorkflow` | Clone, install, verify, snapshot a project environment | Install/verify commands wait on the VM for up to 65 minutes. Being moved to a per-project DO with detached commands |
 
-The rule is Cloudflare's wall-time limits: a DO alarm and a cron invocation each
-stop after **15 minutes**. A Workflow step, or a DO request whose caller stays
-connected, has no wall-time limit. So anything that can exceed 15 minutes stays in
-a Workflow, and everything short runs without one.
+**The 15-minute rule.** A DO alarm and a cron invocation each stop after 15
+minutes of wall time; a Workflow step has no limit. A chat step fits: it is one
+model call plus tool calls that each return within about a minute, because agent
+commands already run detached in tmux on the VM (`start_command` / `wait_command`).
+Each step gets a 14-minute budget (`STEP_BUDGET_MS`); the turn keeps its 30-minute
+deadline across steps.
 
-`BackgroundJobWorkflow` was removed for this reason: its jobs take seconds to a few
-minutes, and cron was starting 8+ instances a minute (about 11,000 a day), mostly
-with nothing to do.
+**Restarts resume, they do not fail the turn.** Deploys, runtime updates and
+evictions restart Durable Objects; in-flight work is stopped when it next touches
+DO storage, but its network calls (Postgres, providers, VM) can keep running for a
+while. On restart Cloudflare re-fires the alarm, the step's receipt is still
+`processing`, and the chat resumes it:
 
-To remove the remaining two, long tool commands would have to become resumable
-(detached on the VM, polled by successive alarms under 15 minutes). That changes
-how the benchmarked harness runs tools and needs re-validation, so it was not done.
+1. It rotates the turn's lease in Postgres, so the old attempt's writes are
+   rejected and it stops (no two attempts ever write the same turn).
+2. It re-takes the chat's coordination lease (`ConversationRoom.reclaim`).
+3. It re-runs the model call with a notice listing the tool calls that had already
+   started (`prepareInterruptedStep`); unfinished ones are marked interrupted and
+   never replayed automatically. Commands keep running on the VM.
+
+Three consecutive unfinished attempts of one step abandon the turn; lease expiry
+(3 minutes for chat turns) then marks it failed for the user. External callers of
+`/model-step` can never resume a step; only the owning chat can.
+
+Proof: `EDGE_LIVE_PROOF=1 EDGE_RESTART_PROOF=1 scripts/verify-edge-live-turn.ts`
+(needs the `EDGE_RECOVERY_PROOF_BUILD=1` deploy) force-resets a chat mid-inference
+and checks that the step resumes under a rotated lease and the turn completes. Add
+`EDGE_DEPLOY_PROOF=1` to use a real deploy instead; a deploy may not reach the chat
+inside the step window, which the proof reports.
+
+`BackgroundJobWorkflow` and `EdgeModelTurnWorkflow` were removed on 2026-10-12. The
+first ran 8+ instances a minute for jobs that take seconds; the second only waited
+on the chat DO, and it could not survive a chat restart mid-step anyway.
 
 ### Latest cutover gate
 
@@ -105,7 +126,7 @@ with six skipped (the subsequently added Git timeout regression also passed).
 - A shared Worker streams Git smart HTTP to a fixed GitHub origin. Expiring signed grants are owner/project/repository scoped; reusable GitHub tokens remain server-side. Current user access is rechecked on each operation, and writes additionally require the user's push permission. Redirects, arbitrary upstream URLs, and read-to-write escalation are rejected.
 - `ModelConversation` owns SQLite model-step receipts and the same chat's persisted streaming snapshot and live turn coordinator. Model execution, progress publication, cancellation and renewal address one owner-scoped DO identity. Persist before inference; an unknown outcome fences replay. Completed receipts, predecessor ordering, and the original deadline survive restart. Legacy PG-receipted turns are rejected by the DO path.
 - Development migration `20261008120000_api_turn_executor.sql` records Node versus DO assignment at admission. Admitted and terminal turns cannot switch executor. Legacy step claims and DO routing reject assignments to the other executor; existing turns default to Node.
-- `EdgeModelTurnWorkflow` calls the chat DO namespace binding directly. Its recorded steps persist references/outcomes, not conversation content; uncertain inference has no automatic retry. The Node callback server is not started when the dispatcher explicitly selects the DO target.
+- `ModelConversation` drives its own turns on alarms (see the execution model above). Step receipts persist references/outcomes, not conversation content; an interrupted step is resumed only by the owning chat, under a rotated lease, with its started tool calls reported to the model instead of replayed.
 - `ProjectEnvironmentWorkflow` runs the existing environment recipe directly in Cloudflare steps: resolve sources, claim, provision, checkout/install, verify, activate snapshot, finish/pause. Repository scripts still run in Freestyle. Credentials and secret values do not enter Workflow parameters or returned step values.
 - Background jobs (task-event, peer-message, competition, checkpoint, PR-repair, work-plan and maintenance handlers) run without a Workflow: cron runs the periodic ones directly, and on-demand jobs run in a per-job `BackgroundJobRunner` DO. An explicitly pending peer message is retried by alarm every 15 seconds; unknown failures and interrupted runs are not retried. Signed admissions preserve job identities across uncertain HTTP acknowledgement, and re-admitting a job reports its state.
 - PostgreSQL still owns users, projects, authorization, queryable conversation history, task records, accounting, and project memory. It currently also owns admission, heartbeat/cancellation, checkpoints, and queued job delivery. Those hot execution responsibilities have **not** been cut over to DO storage yet.
@@ -116,7 +137,6 @@ with six skipped (the subsequently added Git timeout regression also passed).
 - Worker: `ytimesy-edge-executor-development`
 - DO namespaces: `MODEL_CONVERSATIONS` (SQLite migration `v1`), `BACKGROUND_JOBS` (`BackgroundJobRunner`, migration `v2`)
 - Workflow: `ytimesy-project-environments-development`
-- Model Workflow: `ytimesy-edge-model-turns-development`
 - Hyperdrive: `ytimesy-development-postgres`; query caching disabled, origin connection cap 5, `verify-full` with the existing Supabase CA
 
 The Git proxy is enabled for signed requests. Model, environment, background execution and the minute recovery schedule remain independently gated and disabled outside bounded proofs. The application URLs remain opt-in; the running app has not been switched away from its existing executor.

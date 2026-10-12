@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { Effect } from "effect";
 import { type BackgroundJob, backgroundJob } from "../../domain/background-job";
+import { modelConversationName } from "../../domain/model-conversation-routing";
 import { modelConcurrencyLimits } from "../adapters/agent-capacity";
 import { claimApiTurn } from "../adapters/api-turns";
 import { withBackgroundJobDispatcher } from "../adapters/background-job-dispatch";
@@ -19,7 +20,7 @@ const RECORD_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
  * Background jobs are short (seconds to a few minutes), so they run inside one
  * Worker invocation: the cron handler runs its periodic jobs directly, and
  * on-demand jobs run in a per-job BackgroundJobRunner. Long work is handed to
- * the model-turn and environment Workflows instead (see docs/edge-architecture-migration.md).
+ * the chat DO turn loop or the environment Workflow instead (see docs/edge-architecture-migration.md).
  */
 export function runBackgroundJob(
 	env: EdgeExecutorEnvironment,
@@ -45,12 +46,18 @@ export function runBackgroundJob(
 							);
 							if (!turn) break;
 							if (!turn.lease_id) throw new Error("Claimed turn has no lease.");
-							await env.MODEL_TURNS.createBatch([
-								{
-									id: `${turn.id}-${turn.lease_id}`,
-									params: { turnId: turn.id, leaseId: turn.lease_id },
-								},
-							]);
+							const scope = {
+								userId: turn.user_id,
+								sessionId: turn.session_id,
+							};
+							if (
+								!(await env.MODEL_CONVERSATIONS.getByName(
+									modelConversationName(scope),
+								).startTurn(scope, { turnId: turn.id, leaseId: turn.lease_id }))
+							)
+								console.warn(
+									"Chat already runs another turn; lease expiry will fail this one.",
+								);
 						}
 						return "delivered";
 					}

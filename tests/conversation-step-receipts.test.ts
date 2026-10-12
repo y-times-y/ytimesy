@@ -77,4 +77,21 @@ describe("chat-local step receipts", () => {
 			claimConversationStep(receipts, { ...step, leaseId: "other", index: 2 }),
 		).toEqual({ kind: "unavailable" });
 	});
+	it("lets only an explicit resume re-run an interrupted step", () => {
+		const receipts = storage();
+		claimConversationStep(receipts, step, 100);
+		expect(claimConversationStep(receipts, step, 700)).toEqual({
+			kind: "unavailable",
+		});
+		expect(claimConversationStep(receipts, step, 700, true)).toEqual({
+			kind: "claimed",
+			resumed: true,
+			remainingMs: MODEL_WORKFLOW_DEADLINE_MS - 600,
+		});
+		receipts.finish(step, "continue");
+		expect(claimConversationStep(receipts, step, 800, true)).toEqual({
+			kind: "done",
+			outcome: "continue",
+		});
+	});
 });

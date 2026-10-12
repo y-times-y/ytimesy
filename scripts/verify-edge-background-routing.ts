@@ -1,10 +1,8 @@
-import { execFileSync } from "node:child_process";
 import { createHmac, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { signDeliveryRequest } from "../src/domain/delivery-auth";
 
-// Fixed development surface. An absent sender makes this proof read-only: no inference or VM calls.
-const configuration = "wrangler.edge-executor.jsonc";
+// Fixed development surface (deployed with execution enabled). An absent sender makes this proof read-only: no inference or VM calls.
 const url =
 	"https://ytimesy-edge-executor-development.hetkp8044.workers.dev/jobs/start";
 const id = randomUUID();
@@ -24,24 +22,6 @@ const body = JSON.stringify({
 	recipientId: randomUUID(),
 	message: "Non-billable routing proof; no sender exists.",
 });
-function wrangler(args: string[], input?: string) {
-	try {
-		return execFileSync(
-			"pnpm",
-			["exec", "wrangler", ...args, "--config", configuration],
-			{
-				input,
-				encoding: "utf8",
-				stdio: ["pipe", "pipe", "pipe"],
-				timeout: 60_000,
-			},
-		);
-	} catch {
-		throw new Error(
-			"Development background proof command failed; secrets were not logged.",
-		);
-	}
-}
 async function admit() {
 	for (let propagation = 0; propagation < 30; propagation++) {
 		const response = await fetch(url, {
@@ -58,9 +38,7 @@ async function admit() {
 	}
 	throw new Error("Background proof gate did not propagate.");
 }
-try {
-	wrangler(["secret", "put", "BACKGROUND_EXECUTION_ENABLED"], "1");
-	console.log("Development background gate enabled for the read-only proof.");
+{
 	// Re-admitting the same job ID reports the one runner's state without rerunning it.
 	let state = await admit();
 	for (
@@ -76,6 +54,4 @@ try {
 	console.log(
 		"Live background job completed; repeated admission reused one identity. No inference or VMs were used.",
 	);
-} finally {
-	wrangler(["secret", "put", "BACKGROUND_EXECUTION_ENABLED"], "0");
 }

@@ -37,7 +37,7 @@ const configuration = z.object({
 /**
  * The existing preparation recipe runs directly in durable steps, not a Bun subprocess.
  * A Workflow, not a DO alarm: install and verify steps may exceed the 15-minute alarm limit
- * (docs/edge-architecture-migration.md#why-two-cloudflare-workflows-remain-decision-2026-10-12).
+ * (docs/edge-architecture-migration.md#cloudflare-execution-model-decision-2026-10-12).
  */
 export class ProjectEnvironmentWorkflow extends WorkflowEntrypoint<
 	EdgeExecutorEnvironment,

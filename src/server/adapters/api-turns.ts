@@ -368,10 +368,15 @@ export async function cancelApiTurn(userId: string, sessionId: string) {
 }
 
 /** Never replay a turn whose tool side effects may have happened before worker loss. */
+/**
+ * Chat Durable Objects resume their own interrupted steps (alarm retries back off
+ * for up to about two minutes), so their turns get a longer grace period.
+ */
 export async function expireApiTurnLeases() {
 	await database().query(`with expired as (
 	 update api_turn set state='failed',updated_at=now()
-	 where state='running' and heartbeat_at < now()-interval '45 seconds'
+	 where state='running' and heartbeat_at < now()-case when executor='durable-object'
+	  then interval '3 minutes' else interval '45 seconds' end
 	 returning session_id,id
 	) update agent_session s set turn_status='failed',
 	 items=s.items || jsonb_build_array(jsonb_build_object('kind','error','id',e.id::text || ':lost','message','The worker disconnected. Inspect the workspace before continuing; uncertain tool calls were not replayed.')),

@@ -15,14 +15,20 @@ import type { WorkspaceMachines } from "../services/workspace-machines";
 import { runApiTurn } from "./api-turn";
 
 export type WorkflowStepClaim =
-	| { kind: "claimed"; turn: ApiTurn; remainingMs: number }
+	| {
+			kind: "claimed";
+			turn: ApiTurn;
+			remainingMs: number;
+			/** A previous attempt of this step was interrupted and is being re-run. */
+			resumed?: boolean;
+	  }
 	| { kind: "done"; outcome: WorkflowStepOutcome }
 	| { kind: "cancelled"; turn: ApiTurn }
 	| { kind: "unavailable" };
 
-/** Receipts are claimed before any inference or tool side effect; unknown outcomes never replay. */
+/** Receipts are claimed before any inference or tool side effect; an unknown outcome is only re-run when the owner explicitly resumes it. */
 export interface WorkflowStepReceipts {
-	claim(step: WorkflowStep): Promise<WorkflowStepClaim>;
+	claim(step: WorkflowStep, resume?: boolean): Promise<WorkflowStepClaim>;
 	complete(step: WorkflowStep, outcome: WorkflowStepOutcome): Promise<void>;
 }
 
@@ -67,9 +73,32 @@ export async function executeWorkflowRequest(
 	const parsed = workflowStepSchema.safeParse(value);
 	if (!parsed.success) return new Response(null, { status: 400 });
 	if (!receipts) return new Response(null, { status: 404 });
-	const claim = await receipts.claim(parsed.data);
-	if (claim.kind === "unavailable") return new Response(null, { status: 409 });
-	if (claim.kind === "done") return Response.json({ outcome: claim.outcome });
+	const outcome = await executeModelStep(
+		parsed.data,
+		machines,
+		receipts,
+		request.signal,
+	);
+	return outcome === "unavailable"
+		? new Response(null, { status: 409 })
+		: Response.json({ outcome });
+}
+
+/**
+ * Runs one claimed model step. "unavailable" means the step may not run here: it
+ * belongs to another executor, its predecessor did not continue, or a previous
+ * attempt has an unknown outcome and this caller did not ask to resume it.
+ */
+export async function executeModelStep(
+	step: WorkflowStep,
+	machines: WorkspaceMachines | (() => WorkspaceMachines),
+	receipts: WorkflowStepReceipts,
+	signal: AbortSignal,
+	resume = false,
+): Promise<WorkflowStepOutcome | "unavailable"> {
+	const claim = await receipts.claim(step, resume);
+	if (claim.kind === "unavailable") return "unavailable";
+	if (claim.kind === "done") return claim.outcome;
 	if (claim.kind === "cancelled") {
 		const items = applyApiProgress(claim.turn.items, claim.turn.id, {
 			type: "finish",
@@ -78,31 +107,31 @@ export async function executeWorkflowRequest(
 			outputTokens: null,
 		});
 		const saved = await finalizeApiTurn(claim.turn, "cancelled", items);
-		if (saved !== "cancelled") return new Response(null, { status: 409 });
+		if (saved !== "cancelled") return "unavailable";
 		await coordinateConversationTurn("release", {
 			userId: claim.turn.user_id,
 			sessionId: claim.turn.session_id,
 			turnId: claim.turn.id,
-			leaseId: parsed.data.leaseId,
+			leaseId: step.leaseId,
 		}).catch(() => {});
-		return Response.json({ outcome: "cancelled" });
+		return "cancelled";
 	}
 	const expired = new AbortController();
 	if (claim.remainingMs === 0) expired.abort();
-	const signal = AbortSignal.any([
-		request.signal,
-		expired.signal,
-		AbortSignal.timeout(claim.remainingMs),
-	]);
 	const outcome = await runApiTurn(
 		typeof machines === "function" ? machines() : machines,
 		claim.turn,
 		{
-			index: parsed.data.index,
-			signal,
-			limitReached: parsed.data.index > MAX_WORKFLOW_MODEL_STEPS,
+			index: step.index,
+			signal: AbortSignal.any([
+				signal,
+				expired.signal,
+				AbortSignal.timeout(claim.remainingMs),
+			]),
+			limitReached: step.index > MAX_WORKFLOW_MODEL_STEPS,
+			resumed: claim.resumed,
 		},
 	);
-	await receipts.complete(parsed.data, outcome);
-	return Response.json({ outcome });
+	await receipts.complete(step, outcome);
+	return outcome;
 }
