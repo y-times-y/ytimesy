@@ -20,7 +20,7 @@ const RECORD_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
  * Background jobs are short (seconds to a few minutes), so they run inside one
  * Worker invocation: the cron handler runs its periodic jobs directly, and
  * on-demand jobs run in a per-job BackgroundJobRunner. Long work is handed to
- * the chat DO turn loop or the environment Workflow instead (see docs/edge-architecture-migration.md).
+ * the chat or project-environment Durable Objects instead (see docs/edge-architecture-migration.md).
  */
 export function runBackgroundJob(
 	env: EdgeExecutorEnvironment,
@@ -64,17 +64,12 @@ export function runBackgroundJob(
 					if (job.kind === "prepare") {
 						if (env.ENVIRONMENT_EXECUTION_ENABLED !== "1")
 							throw new Error("Environment execution is disabled.");
-						await env.PROJECT_ENVIRONMENTS.createBatch([
-							{
-								id: job.id,
-								params: {
-									requestId: job.id,
-									workspaceId: job.workspaceId,
-									force: job.force,
-									repairModel: job.repairModel,
-								},
-							},
-						]);
+						await env.PROJECT_ENVIRONMENTS.getByName(job.workspaceId).start({
+							requestId: job.id,
+							workspaceId: job.workspaceId,
+							force: job.force,
+							repairModel: job.repairModel,
+						});
 						return "delivered";
 					}
 					return withEdgeModelEndpoints(() =>

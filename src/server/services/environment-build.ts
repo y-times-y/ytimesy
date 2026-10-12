@@ -22,6 +22,7 @@ import { sessionCloneBranch } from "#/domain/session-branch";
 import { toolsSnapshotIdFromEnv } from "#/domain/workspace-boot-snapshot";
 import { captureServerAnalytics } from "../adapters/analytics";
 import { database } from "../adapters/database";
+import { DETACHED_COMMAND_ROOT } from "../adapters/freestyle/detached-command";
 import { workspaceRuntimeFromEnv } from "../adapters/freestyle/workspace-runtime";
 import { authorizedRepository, repositoryBranchSha } from "../adapters/github";
 import { loadProjectSecretsForOwner } from "../adapters/project-secrets";
@@ -428,6 +429,8 @@ export async function activateEnvironmentBuild(
 		`${prepared[0].directory}\n`,
 	);
 	await removeCodexCredentialsFromProjectTemplate(runtime, vm);
+	// Setup command logs may echo secrets; they must not reach the task template.
+	await runtime.exec(vm, ["rm", "-rf", DETACHED_COMMAND_ROOT], {}, 15_000);
 	const snapshotId = await runtime.snapshot(vm, `ytimesy-env-${id}`);
 	const result = await database().query(
 		`with activated as (

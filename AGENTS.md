@@ -12,4 +12,4 @@ The first release must include Diff, Terminal, and Desktop. ytimesy owns the har
 
 Before database schema changes, Supabase setup, or migration deployment, read [Supabase and GitHub workflow](PLAN.md#supabase-and-github-workflow). It records the selected provider, migration ownership, integration settings, and unverified setup state.
 
-Cloudflare execution: before adding a Workflow, moving work into a Durable Object alarm or cron, or changing how chat turns run or resume, read [Cloudflare execution model](docs/edge-architecture-migration.md#cloudflare-execution-model-decision-2026-10-12). Alarms and cron stop after 15 minutes, and Durable Objects restart on every deploy.
+Cloudflare execution: there are no Workflows. Before adding one, moving work into a Durable Object alarm or cron, or changing how chat turns or environment builds run or resume, read [Cloudflare execution model](docs/edge-architecture-migration.md#cloudflare-execution-model-decision-2026-10-12). Alarms and cron stop after 15 minutes, and Durable Objects restart on every deploy.

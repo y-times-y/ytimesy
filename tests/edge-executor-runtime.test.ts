@@ -26,7 +26,7 @@ afterAll(async () => {
 	await worker?.stop();
 });
 
-it("rejects unsigned background jobs before admitting any Workflow", async () => {
+it("rejects unsigned background jobs before admitting any job", async () => {
 	expect(
 		(
 			await worker.fetch("http://localhost/jobs/start", {
@@ -107,7 +107,7 @@ it("accepts only signed repair intake and keeps it disabled until enabled", asyn
 	).toBe(503);
 });
 
-it("does not admit a model Workflow while development cutover is disabled", async () => {
+it("does not admit a chat turn while development cutover is disabled", async () => {
 	const url = "http://localhost/start";
 	const body = JSON.stringify({
 		turnId: "00000000-0000-4000-8000-000000000001",
