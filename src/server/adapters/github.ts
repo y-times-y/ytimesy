@@ -445,6 +445,7 @@ export async function pullRequestDetail(
 		base: pull.data.base.ref,
 		author: author.login,
 		authorAvatarUrl: author.avatarUrl,
+		createdAt: pull.data.created_at,
 		updatedAt: pull.data.updated_at,
 		mergeable: pull.data.mergeable ?? null,
 		mergeableState: pull.data.mergeable_state ?? null,

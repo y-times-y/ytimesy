@@ -24,11 +24,14 @@ export function AgentMarkdown({
 	streaming = false,
 	fileChanges = [],
 	onOpenFile,
+	fileMentions = true,
 }: {
 	text: string;
 	streaming?: boolean;
 	fileChanges?: readonly FileChangeEntry[];
 	onOpenFile?: (path: string) => void;
+	/** Off for text that is not about this workspace, such as GitHub comments. */
+	fileMentions?: boolean;
 }) {
 	const components = useMemo<Components>(() => {
 		function fileLink(path: string, label: string) {
@@ -43,7 +46,7 @@ export function AgentMarkdown({
 		}
 		return {
 			a: ({ href, children }) => {
-				const file = workspaceFileMention(href ?? "");
+				const file = fileMentions && workspaceFileMention(href ?? "");
 				if (file)
 					return fileLink(file, typeof children === "string" ? children : file);
 				const safe = safeExternalLink(href);
@@ -59,7 +62,7 @@ export function AgentMarkdown({
 				const { children, className } = props;
 				const text = markdownChildText(children);
 				if (!("data-block" in props)) {
-					const file = workspaceFileMention(text);
+					const file = fileMentions && workspaceFileMention(text);
 					return file ? fileLink(file, text) : <code>{children}</code>;
 				}
 				return (
@@ -83,7 +86,7 @@ export function AgentMarkdown({
 				);
 			},
 		};
-	}, [fileChanges, onOpenFile]);
+	}, [fileChanges, onOpenFile, fileMentions]);
 	return (
 		<Streamdown
 			className="session-markdown"
