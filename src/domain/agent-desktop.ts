@@ -30,7 +30,7 @@ export function sharedDesktopDeveloperInstructions(input: {
 export function visualQaInstructions(via: "tools" | "shell"): string {
 	const how =
 		via === "tools"
-			? "Start the app with execute_command (a dev server in the background), open it with browser_open on its localhost URL, then browser_screenshot and look at the image; use browser_inspect, browser_click, browser_type and browser_key to check behavior. The first browser tool starts the shared desktop, which the user can watch in the Desktop tab."
+			? "Start the app with execute_command (a dev server in the background), open it with browser_open on its localhost URL, then browser_screenshot and look at the image; use browser_inspect to check text, console and network, and, when offered, browser_execute (Browser Use) to click, type and assert behavior. For windows outside Chrome (native dialogs, other apps), run xdotool through execute_command with DISPLAY=:0. The first browser tool starts the shared desktop, which the user can watch in the Desktop tab."
 			: `Start the app (a dev server in the background), open its localhost URL in Chrome on DISPLAY=${SHARED_DISPLAY}, save a screenshot with scrot and view the image; use xdotool to check behavior.`;
 	return `Visual QA: when a change affects what a user sees (pages, components, styles, layout) or the task asks you to check the UI, verify it on the shared desktop before reporting done. ${how} Fix what the screenshot shows is wrong. In the final report, state the URL you checked and what the screenshot showed, or why visual QA was not possible.`;
 }
