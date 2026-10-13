@@ -11,6 +11,8 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as OnboardingRouteImport } from './routes/onboarding'
+import { Route as PrivacyRouteImport } from './routes/privacy'
+import { Route as TermsRouteImport } from './routes/terms'
 import { Route as ApiAccountRouteImport } from './routes/api/account'
 import { Route as ApiProjectsRouteImport } from './routes/api/projects'
 import { Route as ApiWorkspacesRouteImport } from './routes/api/workspaces'
@@ -40,6 +42,16 @@ const IndexRoute = IndexRouteImport.update({
 const OnboardingRoute = OnboardingRouteImport.update({
   id: '/onboarding',
   path: '/onboarding',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PrivacyRoute = PrivacyRouteImport.update({
+  id: '/privacy',
+  path: '/privacy',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TermsRoute = TermsRouteImport.update({
+  id: '/terms',
+  path: '/terms',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiAccountRoute = ApiAccountRouteImport.update({
@@ -147,6 +159,8 @@ const ApiMcpOauthCallbackRoute = ApiMcpOauthCallbackRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/onboarding': typeof OnboardingRoute
+  '/privacy': typeof PrivacyRoute
+  '/terms': typeof TermsRoute
   '/api/account': typeof ApiAccountRoute
   '/api/projects': typeof ApiProjectsRouteWithChildren
   '/api/workspaces': typeof ApiWorkspacesRouteWithChildren
@@ -171,6 +185,8 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/onboarding': typeof OnboardingRoute
+  '/privacy': typeof PrivacyRoute
+  '/terms': typeof TermsRoute
   '/api/account': typeof ApiAccountRoute
   '/api/projects': typeof ApiProjectsRouteWithChildren
   '/api/workspaces': typeof ApiWorkspacesRouteWithChildren
@@ -196,6 +212,8 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/onboarding': typeof OnboardingRoute
+  '/privacy': typeof PrivacyRoute
+  '/terms': typeof TermsRoute
   '/api/account': typeof ApiAccountRoute
   '/api/projects': typeof ApiProjectsRouteWithChildren
   '/api/workspaces': typeof ApiWorkspacesRouteWithChildren
@@ -222,6 +240,8 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/onboarding'
+    | '/privacy'
+    | '/terms'
     | '/api/account'
     | '/api/projects'
     | '/api/workspaces'
@@ -246,6 +266,8 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/onboarding'
+    | '/privacy'
+    | '/terms'
     | '/api/account'
     | '/api/projects'
     | '/api/workspaces'
@@ -270,6 +292,8 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/onboarding'
+    | '/privacy'
+    | '/terms'
     | '/api/account'
     | '/api/projects'
     | '/api/workspaces'
@@ -295,6 +319,8 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   OnboardingRoute: typeof OnboardingRoute
+  PrivacyRoute: typeof PrivacyRoute
+  TermsRoute: typeof TermsRoute
   ApiAccountRoute: typeof ApiAccountRoute
   ApiProjectsRoute: typeof ApiProjectsRouteWithChildren
   ApiWorkspacesRoute: typeof ApiWorkspacesRouteWithChildren
@@ -329,6 +355,20 @@ declare module '@tanstack/react-router' {
       path: '/onboarding'
       fullPath: '/onboarding'
       preLoaderRoute: typeof OnboardingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/privacy': {
+      id: '/privacy'
+      path: '/privacy'
+      fullPath: '/privacy'
+      preLoaderRoute: typeof PrivacyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/terms': {
+      id: '/terms'
+      path: '/terms'
+      fullPath: '/terms'
+      preLoaderRoute: typeof TermsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/account': {
@@ -501,6 +541,8 @@ const ApiWorkspacesRouteWithChildren = ApiWorkspacesRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   OnboardingRoute: OnboardingRoute,
+  PrivacyRoute: PrivacyRoute,
+  TermsRoute: TermsRoute,
   ApiAccountRoute: ApiAccountRoute,
   ApiProjectsRoute: ApiProjectsRouteWithChildren,
   ApiWorkspacesRoute: ApiWorkspacesRouteWithChildren,
