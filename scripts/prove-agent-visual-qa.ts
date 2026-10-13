@@ -71,8 +71,8 @@ try {
 			workspace_id: string;
 			listed_model_id: string;
 		}>(
-			"select s.project_id,s.workspace_id,s.listed_model_id from agent_session s where s.user_id=$1 and s.harness='codex' and s.listed_model_id is not null order by s.updated_at desc limit 1",
-			[userId],
+			"select s.project_id,s.workspace_id,s.listed_model_id from agent_session s where s.user_id=$1 and s.harness='codex' and s.listed_model_id is not null and ($2::uuid is null or s.project_id=$2) order by s.updated_at desc limit 1",
+			[userId, process.env.VISUAL_QA_PROJECT_ID ?? null],
 		)
 	).rows[0];
 	if (!source) throw new Error("No subscription model is configured.");
