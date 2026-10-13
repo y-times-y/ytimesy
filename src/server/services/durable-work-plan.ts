@@ -309,7 +309,6 @@ export async function dispatchDurableWork(machines: WorkspaceMachines) {
 					const started = await Effect.runPromise(
 						Effect.either(
 							startPreparedAgentTask(
-								machines,
 								{
 									userId: parent.userId,
 									projectId: parent.projectId,

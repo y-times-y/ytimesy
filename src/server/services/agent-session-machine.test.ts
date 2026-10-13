@@ -54,35 +54,6 @@ function machines(overrides: {
 }
 
 describe("executeSessionMachinePlan", () => {
-	it("serializes copied status writes through the per-VM admission boundary", async () => {
-		const runtime = machines({});
-		let writing = false;
-		const write = runtime.api.writeTextFile;
-		runtime.api.writeTextFile = async (...args) => {
-			if (writing)
-				throw new Error(
-					"This workspace is already being prepared. Retry shortly.",
-				);
-			writing = true;
-			try {
-				await new Promise((resolve) => setTimeout(resolve, 1));
-				await write(...args);
-			} finally {
-				writing = false;
-			}
-		};
-		await executeSessionMachinePlan({
-			machines: runtime.api,
-			sessionId: "11111111-2222-3333-4444-555555555555",
-			sessionProviderRef: null,
-			workspaceId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-			templateSnapshotId: "snap-1",
-			templateProviderRef: "repo-vm",
-			saveTemplateSnapshot: async () => undefined,
-			saveSessionProviderRef: async () => undefined,
-		});
-		expect(runtime.writes.length).toBeGreaterThan(1);
-	});
 	it("copies the sealed project snapshot onto a new agent VM", async () => {
 		const runtime = machines({ copied: "agent-vm" });
 		const saved: string[] = [];
@@ -108,30 +79,6 @@ describe("executeSessionMachinePlan", () => {
 			{ slug: "ytimesy-ag-1111111122223333", snapshotId: "snap-1" },
 		]);
 		expect(saved).toEqual(["agent-vm"]);
-	});
-
-	it("copies a new Claude chat from the private auth snapshot", async () => {
-		const runtime = machines({ copied: "agent-vm" });
-		const result = await executeSessionMachinePlan({
-			machines: runtime.api,
-			sessionId: "11111111-2222-3333-4444-555555555555",
-			sessionProviderRef: null,
-			workspaceId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-			templateSnapshotId: "snap-1",
-			templateProviderRef: "repo-vm",
-			authSnapshotId: "sh-claude-auth",
-			saveTemplateSnapshot: async () => {
-				throw new Error("snapshot already sealed");
-			},
-			saveSessionProviderRef: async () => undefined,
-		});
-		expect(result.planKind).toBe("copy-snapshot");
-		expect(runtime.provisioned).toEqual([
-			{
-				slug: "ytimesy-ag-1111111122223333",
-				snapshotId: "sh-claude-auth",
-			},
-		]);
 	});
 
 	it("copies from the snapshot when the unused template VM is gone", async () => {
@@ -176,26 +123,10 @@ describe("executeSessionMachinePlan", () => {
 		expect(runtime.commands.some((command) => command.includes("bash"))).toBe(
 			false,
 		);
-		expect(runtime.writes).toContainEqual({
-			path: "/tmp/ytimesy-opencode-status.json",
-			contents: `${JSON.stringify({ stage: "missing" })}\n`,
-		});
-		expect(runtime.writes).toContainEqual({
-			path: "/tmp/ytimesy-claude-auth-status.json",
-			contents: `${JSON.stringify({ stage: "missing" })}\n`,
-		});
-		expect(runtime.writes).toContainEqual({
-			path: "/tmp/ytimesy-auth-status.json",
-			contents: `${JSON.stringify({ stage: "missing" })}\n`,
-		});
-		expect(
-			runtime.writes.some((write) =>
-				write.path.endsWith("ytimesy-opencode-serve.pid"),
-			),
-		).toBe(false);
+		expect(runtime.writes).toEqual([]);
 	});
 
-	it("still overwrites copied status when guest rm cannot delete sticky /tmp files", async () => {
+	it("still binds the copy when guest rm cannot delete sticky /tmp files", async () => {
 		const runtime = machines({ copied: "agent-vm", execExitCode: 1 });
 		const result = await executeSessionMachinePlan({
 			machines: runtime.api,
@@ -208,10 +139,6 @@ describe("executeSessionMachinePlan", () => {
 			saveSessionProviderRef: async () => undefined,
 		});
 		expect(result.providerRef).toBe("agent-vm");
-		expect(runtime.writes).toContainEqual({
-			path: "/tmp/ytimesy-opencode-status.json",
-			contents: `${JSON.stringify({ stage: "missing" })}\n`,
-		});
 	});
 
 	it("resumes the same agent VM for later turns", async () => {

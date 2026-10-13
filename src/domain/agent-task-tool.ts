@@ -4,15 +4,7 @@ import type {
 	AgentTaskExecution,
 	AgentTaskPlacement,
 } from "./agent-task";
-import {
-	type AgentTaskToolName,
-	agentTaskToolDefinitions,
-} from "./agent-task-definitions";
-
-export const AGENT_TASK_TOOL_REQUEST_PATH =
-	"/tmp/ytimesy-agent-task-tool-request.json";
-export const AGENT_TASK_TOOL_RESPONSE_PATH =
-	"/tmp/ytimesy-agent-task-tool-response.json";
+import type { AgentTaskToolName } from "./agent-task-definitions";
 
 export type AgentTaskToolRequest = {
 	readonly id: string;
@@ -28,30 +20,6 @@ export type AgentTaskToolResponse = {
 	readonly requestFingerprint?: string;
 };
 
-export function parseAgentTaskToolRequest(
-	text: string | null,
-): AgentTaskToolRequest | null {
-	if (!text?.trim()) return null;
-	try {
-		const value = JSON.parse(text) as Record<string, unknown>;
-		if (typeof value.id !== "string" || !value.id.trim()) return null;
-		const tool = agentTaskToolDefinitions.find(
-			(tool) => tool.name === value.tool,
-		);
-		if (!tool) {
-			return null;
-		}
-		if (!isRecord(value.arguments)) return null;
-		return {
-			id: value.id,
-			tool: tool.name,
-			arguments: value.arguments,
-		};
-	} catch {
-		return null;
-	}
-}
-
 export function taskToolString(
 	arguments_: Record<string, unknown>,
 	key: string,
@@ -63,10 +31,9 @@ export function taskToolString(
 export function taskToolHarness(
 	arguments_: Record<string, unknown>,
 	fallback: AgentProviderId,
-): "codex" | "claude" | "api" {
+): AgentProviderId {
 	const value = taskToolString(arguments_, "harness");
-	if (value === "codex" || value === "claude" || value === "api") return value;
-	return fallback === "claude" || fallback === "api" ? fallback : "codex";
+	return value === "codex" || value === "api" ? value : fallback;
 }
 
 export function taskToolPlacement(
@@ -91,16 +58,6 @@ export function taskToolExecution(
 	return taskToolString(arguments_, "execution") === "stacked"
 		? "stacked"
 		: "parallel";
-}
-
-export function serializeAgentTaskToolResponse(
-	response: AgentTaskToolResponse,
-) {
-	return `${JSON.stringify(response)}\n`;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** Briefs carry goal, constraints, success checks and key findings; builders read the source themselves. */

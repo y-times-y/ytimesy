@@ -9,7 +9,7 @@ afterEach(() => vi.unstubAllGlobals());
 
 it("namespaces favorites by provider", () => {
 	expect(favoriteModelKey("codex", "same")).not.toBe(
-		favoriteModelKey("claude", "same"),
+		favoriteModelKey("api", "same"),
 	);
 });
 

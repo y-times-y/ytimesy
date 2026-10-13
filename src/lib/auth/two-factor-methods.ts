@@ -48,29 +48,3 @@ export function storeTwoFactorMethods(methods?: unknown) {
 		// The challenge falls back to every method when storage is unavailable.
 	}
 }
-
-/** Read the stored methods, falling back to every supported challenge. */
-export function readTwoFactorMethods(): TwoFactorMethod[] {
-	if (typeof sessionStorage === "undefined") return TWO_FACTOR_METHODS;
-
-	try {
-		const stored = sessionStorage.getItem(TWO_FACTOR_METHODS_STORAGE_KEY);
-		if (!stored) return TWO_FACTOR_METHODS;
-
-		const methods = parseTwoFactorMethods(JSON.parse(stored));
-		return methods.length ? methods : TWO_FACTOR_METHODS;
-	} catch {
-		return TWO_FACTOR_METHODS;
-	}
-}
-
-/** Clear stored method hints after the challenge finishes or is abandoned. */
-export function clearTwoFactorMethods() {
-	if (typeof sessionStorage === "undefined") return;
-
-	try {
-		sessionStorage.removeItem(TWO_FACTOR_METHODS_STORAGE_KEY);
-	} catch {
-		// Stale method hints are harmless and must not block navigation.
-	}
-}

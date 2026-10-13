@@ -14,15 +14,6 @@ export function isUsableWorkspace(workspace: WorkspaceLifecycle): workspace is {
 	return workspace.status === "running";
 }
 
-export function workspaceProviderId(
-	workspace: WorkspaceLifecycle,
-): WorkspaceId | undefined {
-	if (workspace.status === "running" || workspace.status === "paused") {
-		return workspace.workspaceId;
-	}
-	return undefined;
-}
-
 /**
  * Freestyle `exec` and `fs.writeTextFile` boot a paused VM. Reads do not.
  * Callers that only need a transcript must not mutate the guest.

@@ -1,6 +1,5 @@
 import { randomBytes } from "node:crypto";
 import { Freestyle, FreestyleApiError } from "freestyle";
-import { isolatedAuthSnapshot } from "#/domain/auth-snapshot";
 import { type AuthSnapshotId, WorkspaceId } from "#/domain/ids";
 import {
 	effectiveMachineResources,
@@ -25,10 +24,6 @@ import type {
 } from "#/server/services/workspace-machines";
 import { abortableFreestyleFetch } from "./abortable-fetch";
 import {
-	deleteFreestyleCodexSession,
-	resolveFreestyleCodexRuntime,
-} from "./codex-runner";
-import {
 	PRODUCT_IDLE_TIMEOUT_SECONDS,
 	productCreateVmFields,
 	productIdleTimeoutNeedsUpdate,
@@ -36,7 +31,6 @@ import {
 } from "./product-vm";
 import {
 	PROOF_METADATA_PURPOSE,
-	privateAuthSnapshotFields,
 	proofCreateVmFields,
 	proofWorkspaceSlug,
 	requestedAuthSnapshotId,
@@ -82,10 +76,6 @@ export function createFreestyleWorkspaceMachines(
 	const machines: WorkspaceMachines = {
 		restoreRetainedSession: (userId, sessionId, oldVmId) =>
 			restoreRetainedWorkspace(freestyle, userId, sessionId, oldVmId),
-		destroyCodexSession: (userId, sessionId) =>
-			deleteFreestyleCodexSession(apiKey, userId, sessionId),
-		codexRuntime: (input) =>
-			resolveFreestyleCodexRuntime(apiKey, machines, input),
 		async createProofWorkspace(
 			options: CreateProofWorkspaceOptions = {},
 		): Promise<ProofWorkspace> {
@@ -110,39 +100,6 @@ export function createFreestyleWorkspaceMachines(
 				throw new WorkspaceProvisionError({
 					operation: "create",
 					message: providerMessage(cause),
-				});
-			}
-		},
-
-		async snapshotAuthenticatedWorkspace(workspaceId, provider = "codex") {
-			try {
-				const created = await freestyle.vms
-					.ref(workspaceId)
-					.snapshot(
-						privateAuthSnapshotFields(provider, randomBytes(4).toString("hex")),
-					);
-				if (created.snapshot.public) {
-					await freestyle.vms.snapshots
-						.delete(created.snapshotId)
-						.catch(() => undefined);
-					throw new WorkspaceProvisionError({
-						operation: "snapshot",
-						message:
-							"Freestyle returned a public snapshot; deleted it because credentials cannot live in a shared image",
-						providerWorkspaceId: workspaceId,
-					});
-				}
-				return isolatedAuthSnapshot({
-					snapshotId: created.snapshotId,
-					sourceWorkspaceId: workspaceId,
-					public: created.snapshot.public,
-				});
-			} catch (cause) {
-				if (cause instanceof WorkspaceProvisionError) throw cause;
-				throw new WorkspaceProvisionError({
-					operation: "snapshot",
-					message: providerMessage(cause),
-					providerWorkspaceId: workspaceId,
 				});
 			}
 		},

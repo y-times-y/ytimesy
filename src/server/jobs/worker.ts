@@ -32,7 +32,6 @@ import {
 	type PeerMessage,
 } from "../services/agent-peer-messaging";
 import { deliverAgentTaskEvents } from "../services/agent-task-event-delivery";
-import { reconcileRunningAgentTurns } from "../services/agent-turn-reconciliation";
 import { dispatchDurableWork } from "../services/durable-work-plan";
 import { deliverPrRepairEvents } from "../services/pr-repair";
 import { captureSessionCheckpoint } from "../services/session-checkpoint";
@@ -184,7 +183,7 @@ export async function startWorkspaceWorker(machines?: WorkspaceMachines) {
 		{ localConcurrency: 1 },
 		async ([job]) => {
 			try {
-				await startAgentCompetition(taskMachines, job.data.rootSessionId);
+				await startAgentCompetition(job.data.rootSessionId);
 			} catch {
 				await markCompetitionStatus(
 					job.data.rootSessionId,
@@ -212,7 +211,6 @@ export async function startWorkspaceWorker(machines?: WorkspaceMachines) {
 		if (reconciling) return;
 		reconciling = true;
 		try {
-			await reconcileRunningAgentTurns(taskMachines);
 			await reconcileFinishedCompetitionJudges();
 			await deliverAgentTaskEvents(taskMachines);
 			if (Date.now() - supervisingAt >= 30_000) {

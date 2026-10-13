@@ -1,18 +1,12 @@
 import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
-import { WorkspaceId } from "../src/domain/ids";
 import {
 	disconnectAgentAccount,
 	loadAgentAccount,
-	loadAgentSnapshotId,
-	saveConnectedAgentAccount,
 } from "../src/server/auth/agent-account";
-import {
-	captureManagedCodexAuth,
-	codexExternalTokens,
-} from "../src/server/auth/codex-managed-auth";
-import type { WorkspaceMachines } from "../src/server/services/workspace-machines";
+import { codexExternalTokens } from "../src/server/auth/codex-managed-auth";
+import { seal } from "../src/server/auth/token-vault";
 
 let db: PGlite;
 vi.mock("../src/server/adapters/database", () => ({
@@ -59,30 +53,14 @@ beforeAll(async () => {
 });
 afterAll(() => db.close());
 
-it("encrypts snapshot ids and keeps accounts isolated by user", async () => {
-	await saveConnectedAgentAccount("alice", {
-		provider: "codex",
-		snapshotId: "snap-secret",
-		planType: "prolite",
-		email: "alice@example.test",
-	});
-	const stored = await db.query<{ encrypted_snapshot_id: string }>(
-		"select encrypted_snapshot_id from agent_account where user_id='alice'",
+async function storeLogin(userId: string, login: string) {
+	await db.query(
+		"insert into agent_account(user_id,provider,status,encrypted_codex_auth,plan_type) values($1,'codex','connected',$2,'prolite')",
+		[userId, await seal(login)],
 	);
-	expect(stored.rows[0].encrypted_snapshot_id).not.toContain("snap-secret");
-	expect(await loadAgentAccount("alice")).toEqual({
-		status: "expired",
-		message: "Reconnect Codex to update its login.",
-	});
-	expect(await loadAgentSnapshotId("alice")).toBe("snap-secret");
-	expect(await loadAgentAccount("bob")).toEqual({ status: "disconnected" });
-	expect(await loadAgentSnapshotId("bob")).toBeNull();
-	await disconnectAgentAccount("alice");
-	expect(await loadAgentAccount("alice")).toEqual({ status: "disconnected" });
-	expect(await loadAgentSnapshotId("alice")).toBeNull();
-});
+}
 
-it("stores one encrypted managed login after device-code sign-in", async () => {
+it("reads a stored ChatGPT login and keeps accounts isolated by user", async () => {
 	const payload = Buffer.from(
 		JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 }),
 	).toString("base64url");
@@ -94,16 +72,7 @@ it("stores one encrypted managed login after device-code sign-in", async () => {
 			account_id: "account-test-only",
 		},
 	});
-	const machines = {
-		exec: async () => ({ exitCode: 0, stdout: "/home/ubuntu\n", stderr: "" }),
-		readTextFile: async () => login,
-	} as unknown as WorkspaceMachines;
-	await captureManagedCodexAuth(
-		"alice",
-		machines,
-		WorkspaceId("vm-login"),
-		"prolite",
-	);
+	await storeLogin("alice", login);
 	const stored = await db.query<{ encrypted_codex_auth: string }>(
 		"select encrypted_codex_auth from agent_account where user_id='alice'",
 	);
@@ -113,9 +82,13 @@ it("stores one encrypted managed login after device-code sign-in", async () => {
 	expect(await loadAgentAccount("alice")).toMatchObject({
 		status: "connected",
 		provider: "codex",
+		planType: "prolite",
 	});
 	expect(await codexExternalTokens("alice")).toEqual({
 		accessToken: `header.${payload}.signature`,
 		chatgptAccountId: "account-test-only",
 	});
+	expect(await loadAgentAccount("bob")).toEqual({ status: "disconnected" });
+	await disconnectAgentAccount("alice");
+	expect(await loadAgentAccount("alice")).toEqual({ status: "disconnected" });
 });

@@ -18,7 +18,7 @@ export async function saveAgentModelCatalog(
 	provider: AgentProviderId,
 	models: readonly ListedModel[],
 ): Promise<void> {
-	if (provider === "opencode" || models.length === 0) return;
+	if (models.length === 0) return;
 	await database().query(
 		`insert into agent_model_catalog(user_id,provider,models) values($1,$2,$3::jsonb)
 		 on conflict(user_id,provider) do update set models=excluded.models,updated_at=now()

@@ -27,7 +27,6 @@ import {
 	PeerMessagePendingError,
 } from "./agent-peer-messaging";
 import { deliverAgentTaskEvents } from "./agent-task-event-delivery";
-import { reconcileRunningAgentTurns } from "./agent-turn-reconciliation";
 import { dispatchDurableWork } from "./durable-work-plan";
 import { recoverExpiredEnvironmentBuilds } from "./environment-build";
 import { deliverPrRepairEvents } from "./pr-repair";
@@ -44,7 +43,6 @@ export async function deliverBackgroundJob(
 				case "reconcile":
 					await recoverExpiredEnvironmentBuilds();
 					await expireApiTurnLeases();
-					await reconcileRunningAgentTurns(machines);
 					await reconcileFinishedCompetitionJudges();
 					break;
 				case "supervise":
@@ -94,7 +92,7 @@ export async function deliverBackgroundJob(
 			}
 			break;
 		case "competition":
-			await startAgentCompetition(machines, job.rootSessionId);
+			await startAgentCompetition(job.rootSessionId);
 			break;
 		case "checkpoint":
 			await captureSessionCheckpoint(machines, job.userId, job.sessionId);

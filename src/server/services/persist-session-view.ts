@@ -17,7 +17,6 @@ import {
 	type SessionItem,
 	type SessionTurnStatus,
 	sessionItemsFromUnknown,
-	sessionItemsQueuedWithUser,
 	sessionTitleFromItems,
 	sessionViewItems,
 } from "#/domain/session-item";
@@ -41,24 +40,6 @@ import { checkpointStorageConfigured } from "../adapters/checkpoints/storage";
 import type { PublicCodexSession } from "./codex-workspace-session";
 import { captureTurnTransition } from "./turn-analytics";
 import { commitCompletedSessionTurn } from "./turn-commit";
-
-export async function persistQueuedUserTurn(
-	session: AgentSessionRecord | null,
-	view: PublicCodexSession,
-	text: string,
-): Promise<PublicCodexSession> {
-	return persistBoundSessionView(session, {
-		...view,
-		turnStatus: "running",
-		items: recordTurnTiming(
-			sessionItemsQueuedWithUser(sessionItemsFromUnknown(session?.items), text),
-			"running",
-			Date.now(),
-			true,
-		),
-		canSend: false,
-	});
-}
 
 export async function persistBoundSessionView(
 	session: AgentSessionRecord | null,

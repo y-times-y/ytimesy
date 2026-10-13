@@ -66,10 +66,6 @@ export const startAgentCompetition = createServerFn({ method: "POST" })
 			throw new Error(
 				"Choose a project, model, and task before starting agents.",
 			);
-		if (data.harnessId === "claude")
-			throw new Error(
-				"Use a connected subscription or API model for independent agents.",
-			);
 		const root = await agentSessionForOwner(user.id, data.rootSessionId);
 		if (!root || root.projectId !== data.projectId || root.parentSessionId)
 			throw new Error("Start independent agents from a project chat.");

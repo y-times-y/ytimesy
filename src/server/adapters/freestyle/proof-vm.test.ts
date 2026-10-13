@@ -2,10 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
 	GUEST_INTERNET_FIREWALL,
 	PROOF_METADATA_PURPOSE,
-	privateAuthSnapshotFields,
-	privateCodexAuthSnapshotFields,
-	proofAuthSnapshotSlug,
-	proofClaudeAuthSnapshotSlug,
 	proofCreateVmFields,
 	requestedAuthSnapshotId,
 } from "./proof-vm";
@@ -22,7 +18,7 @@ describe("proofCreateVmFields", () => {
 		});
 	});
 
-	it("boots from a private auth snapshot when one is supplied", () => {
+	it("boots from a snapshot when one is supplied", () => {
 		expect(
 			proofCreateVmFields({
 				slug: "ytimesy-proof-efgh",
@@ -38,22 +34,6 @@ describe("proofCreateVmFields", () => {
 			ttlSeconds: 45 * 60,
 			idleTimeoutSeconds: -1,
 			snapshotId: "sh-user-codex",
-		});
-	});
-});
-
-describe("privateCodexAuthSnapshotFields", () => {
-	it("names a private user snapshot rather than a shared base image", () => {
-		expect(privateCodexAuthSnapshotFields("a1b2")).toEqual({
-			slug: proofAuthSnapshotSlug("a1b2"),
-			displayName: "ytimesy isolated Codex ChatGPT login",
-			autoDeleteSeconds: -1,
-		});
-		expect(privateCodexAuthSnapshotFields("a1b2")).not.toHaveProperty("public");
-		expect(privateAuthSnapshotFields("claude", "a1b2")).toEqual({
-			slug: proofClaudeAuthSnapshotSlug("a1b2"),
-			displayName: "ytimesy isolated Claude Code login",
-			autoDeleteSeconds: -1,
 		});
 	});
 });

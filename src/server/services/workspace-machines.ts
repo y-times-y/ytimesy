@@ -1,4 +1,3 @@
-import type { IsolatedAuthSnapshot } from "#/domain/auth-snapshot";
 import type { AuthSnapshotId, WorkspaceId } from "#/domain/ids";
 import type { MachineSizeId } from "#/domain/machine-size";
 
@@ -37,24 +36,12 @@ export interface WorkspaceMachines {
 		sessionId: string,
 		oldVmId: string,
 	) => Promise<string | null>;
-	readonly destroyCodexSession?: (
-		userId: string,
-		sessionId: string,
-	) => Promise<void>;
-	readonly codexRuntime?: (input: {
-		readonly userId: string;
-		readonly sessionId: string;
-		readonly executorId: WorkspaceId;
-		readonly executorMachines: WorkspaceMachines;
-		readonly provision: boolean;
-	}) => Promise<CodexRuntime | null>;
 	readonly createProofWorkspace: (
 		options?: CreateProofWorkspaceOptions,
 	) => Promise<ProofWorkspace>;
-	readonly snapshotAuthenticatedWorkspace: (
-		workspaceId: WorkspaceId,
-		provider?: "codex" | "claude",
-	) => Promise<IsolatedAuthSnapshot>;
+	/** Retired with the VM logins; kept optional only for the evaluation harness's machine fake. */
+	readonly snapshotAuthenticatedWorkspace?: () => Promise<unknown>;
+	/** Deletes a VM snapshot (evaluations remove their environment snapshots with this). */
 	readonly destroySnapshot: (snapshotId: AuthSnapshotId) => Promise<void>;
 	readonly exec: (
 		workspaceId: WorkspaceId,
@@ -88,10 +75,4 @@ export interface WorkspaceMachines {
 		snapshotId: string,
 		machineSize?: MachineSizeId,
 	) => Promise<WorkspaceId>;
-}
-
-export interface CodexRuntime {
-	readonly machines: WorkspaceMachines;
-	readonly workspaceId: WorkspaceId;
-	readonly root: string;
 }

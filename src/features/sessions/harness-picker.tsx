@@ -36,7 +36,6 @@ import {
 import { ModelPickerSettings } from "./model-picker-settings";
 import { ModelProviderLogo } from "./model-provider-logo";
 import { ModelRunCount } from "./model-run-count";
-import { ProviderApiKeyInput } from "./provider-api-key-input";
 
 export function HarnessPicker({
 	connectionContent,
@@ -83,12 +82,8 @@ export function HarnessPicker({
 	const selected =
 		options.find((option) => option.id === harnessId) ?? options[0];
 	const [open, setOpen] = useState(false);
-	const [browse, setBrowse] = useState(
-		harnessId === "api" || harnessId === "claude",
-	);
-	const [apiProvider, setApiProvider] = useState(
-		harnessId === "claude" ? "anthropic" : "openai",
-	);
+	const [browse, setBrowse] = useState(harnessId === "api");
+	const [apiProvider, setApiProvider] = useState("openai");
 	const [search, setSearch] = useState("");
 	const [favoritesOnly, setFavoritesOnly] = useState(false);
 	const [favorites, setFavorites] = useState<readonly string[]>([]);
@@ -326,11 +321,7 @@ export function HarnessPicker({
 									<p className="model-browser-caption">ChatGPT subscription</p>
 								) : null}
 								<div className="model-picker-list">
-									{harnessId === "claude" ? (
-										<ProviderApiKeyInput onSaved={onConnect} />
-									) : (
-										connectionContent
-									)}
+									{connectionContent}
 									{visibleModels.map((candidate) => {
 										const favorite = favorites.includes(
 											favoriteModelKey(harnessId, candidate.id),
@@ -409,7 +400,7 @@ export function HarnessPicker({
 												: "No favorites for this provider yet"}
 										</p>
 									) : null}
-									{models.length === 0 && harnessId !== "claude" ? (
+									{models.length === 0 ? (
 										<div aria-busy={catalogStatus === "loading"}>
 											<p className="model-picker-status" role="status">
 												{catalogStatus === "loading"

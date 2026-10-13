@@ -101,29 +101,6 @@ export async function markWorkspaceQueued(userId: string, workspaceId: string) {
 	return result.rows[0] ? toWorkspace(result.rows[0]) : null;
 }
 
-export async function claimWorkspaceForJob(workspaceId: string) {
-	const result = await database().query(
-		`update workspace set status='provisioning', error_message=null, updated_at=now()
-		 where id=$1 and status in ('queued','failed')
-		 returning ${WORKSPACE_COLUMNS}`,
-		[workspaceId],
-	);
-	return result.rows[0] ? toWorkspace(result.rows[0]) : null;
-}
-
-export async function saveProviderRef(
-	workspaceId: string,
-	providerRef: string,
-) {
-	const result = await database().query(
-		`update workspace set provider_ref=$2, updated_at=now()
-		 where id=$1
-		 returning ${WORKSPACE_COLUMNS}`,
-		[workspaceId, providerRef],
-	);
-	return toWorkspace(result.rows[0]);
-}
-
 export async function saveTemplateSnapshot(
 	workspaceId: string,
 	snapshotId: string,
@@ -149,21 +126,6 @@ export async function saveWorkspaceStatus(
 		[workspaceId, status, errorMessage],
 	);
 	return toWorkspace(result.rows[0]);
-}
-
-export async function saveTemplateSource(
-	workspaceId: string,
-	sourceRef: string,
-	sourceSha: string,
-) {
-	const result = await database().query(
-		`update workspace
-		 set template_source_ref=$2, template_source_sha=$3, updated_at=now()
-		 where id=$1
-		 returning ${WORKSPACE_COLUMNS}`,
-		[workspaceId, sourceRef, sourceSha],
-	);
-	return result.rows[0] ? toWorkspace(result.rows[0]) : null;
 }
 
 export async function listReadyWorkspaceIds() {

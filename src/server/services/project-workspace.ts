@@ -1,6 +1,5 @@
 import { Effect } from "effect";
 import { sharedDesktopDeveloperInstructions } from "#/domain/agent-desktop";
-import { agentSessionRoleInstructions } from "#/domain/agent-orchestration";
 import { PREPARED_ENVIRONMENT_INSTRUCTIONS } from "#/domain/environment-context";
 import { failureMessage } from "#/domain/failure-message";
 import type { WorkspaceId } from "#/domain/ids";
@@ -27,13 +26,8 @@ import {
 } from "#/server/adapters/freestyle/clone-project";
 import { authorizedRepository } from "#/server/adapters/github";
 import { receiveBrokeredRepository } from "#/server/adapters/github/git-broker";
-import { ensureGuestCliPin } from "#/server/adapters/guest-cli-pin";
 import { listProjects, projectForOwner } from "#/server/adapters/projects";
 import { githubAccessToken } from "#/server/auth/github-connection";
-import { startEnvironmentServices } from "./environment-services";
-import { injectProjectSecrets } from "./project-secrets";
-import { establishVerificationBaselines } from "./verification-baseline";
-import type { DesktopScope } from "./workspace-desktop";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 /**
@@ -252,61 +246,6 @@ async function projectDefaultBranch(userId: string, project: Project) {
 	} catch {
 		return project.branch;
 	}
-}
-
-export function preparePreparedGuest(
-	machines: WorkspaceMachines,
-	workspaceId: WorkspaceId,
-	scope: DesktopScope,
-): Effect.Effect<void, Error> {
-	return Effect.gen(function* () {
-		yield* ensureGuestCliPin(machines, workspaceId);
-		const checkout = yield* loadTenantProjectCheckout(scope);
-		const cwd = yield* ensureProjectCheckout(machines, workspaceId, checkout);
-		const secretNames = yield* injectProjectSecrets(
-			machines,
-			workspaceId,
-			scope,
-		);
-		const session = scope.sessionId
-			? yield* Effect.tryPromise(() =>
-					agentSessionForOwner(scope.userId, scope.sessionId as string),
-				)
-			: null;
-		if (
-			cwd &&
-			session &&
-			session.taskAccess !== "read_only" &&
-			session.taskPlacement !== "shared"
-		)
-			yield* Effect.tryPromise(() =>
-				establishVerificationBaselines({
-					machines,
-					vm: workspaceId,
-					cwd,
-					userId: scope.userId,
-					sessionId: session.id,
-					additionalRepositoryNames: (
-						checkout?.additionalRepositories ?? []
-					).map((repo) => repo.name),
-				}),
-			);
-		yield* Effect.tryPromise(() =>
-			startEnvironmentServices(machines, workspaceId),
-		);
-		yield* writeDeveloperInstructions(
-			machines,
-			workspaceId,
-			cwd ?? "/home/ubuntu",
-			secretNames,
-			checkout
-				? [checkout, ...(checkout.additionalRepositories ?? [])].map(
-						(repo) => repo.fullName,
-					)
-				: [],
-			agentSessionRoleInstructions(session ?? {}),
-		);
-	});
 }
 
 function guestHome(

@@ -1,7 +1,6 @@
 import type { AgentProviderId } from "#/domain/agent-provider";
 import {
 	agentSessionMachineSlug,
-	COPIED_SESSION_STATUS_RESETS,
 	copiedSessionScratchResetCommands,
 	projectEnvironmentSnapshotSlug,
 	type SessionMachinePlan,
@@ -23,12 +22,6 @@ import { WorkspaceId } from "#/domain/ids";
 import { listedModelPreferenceFromSessions } from "#/domain/listed-model";
 import type { MachineSizeId } from "#/domain/machine-size";
 import { projectCheckoutFromFullName } from "#/domain/project-checkout";
-import {
-	PROJECT_CONTEXT_PATH,
-	projectContextDocument,
-	promptTextWithProjectContext,
-	relatedTracesForTask,
-} from "#/domain/project-context";
 import { workspaceEnvironmentIsReady } from "#/domain/project-workspace";
 import {
 	type AgentSessionRecord,
@@ -43,10 +36,6 @@ import {
 	selectAgentSessionHarness,
 } from "#/server/adapters/agent-sessions";
 import { receiveBrokeredRepository } from "#/server/adapters/github/git-broker";
-import {
-	listProjectTraces,
-	loadProjectBriefing,
-} from "#/server/adapters/project-context";
 import { projectMachineSize } from "#/server/adapters/project-machine-size";
 import { projectForOwner } from "#/server/adapters/projects";
 import { repositoryDirectory } from "#/server/adapters/repository-setup";
@@ -61,7 +50,6 @@ import {
 	removeCheckpoint,
 	removeContextArchives,
 } from "../adapters/checkpoints/storage";
-import { providerProjectTemplateSnapshot } from "./provider-project-template";
 import { restoreSessionWorkspace } from "./session-checkpoint";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -284,9 +272,6 @@ export async function editAgentTaskDraft(input: {
 		dependsOnSessionId: input.dependsOnSessionId,
 	});
 	if (invalidPlan) throw new Error(invalidPlan);
-	if (input.harness === "opencode") {
-		throw new Error("This runtime is no longer offered for new tasks.");
-	}
 	if (!input.title.trim() || !input.modelId.trim()) {
 		throw new Error("A task title and model are required.");
 	}
@@ -428,17 +413,7 @@ export async function bindAgentSessionMachine(
 		}
 	}
 	const templateSnapshotId =
-		input.sourceSnapshotId ??
-		(session.providerRef
-			? workspace.templateSnapshotId
-			: await providerProjectTemplateSnapshot({
-					machines,
-					userId: input.userId,
-					projectId: input.projectId,
-					workspaceId: workspace.id,
-					projectSnapshotId: workspace.templateSnapshotId,
-					harness: input.harness,
-				}));
+		input.sourceSnapshotId ?? workspace.templateSnapshotId;
 	const executed = await executeSessionMachinePlan({
 		machines,
 		sessionId: session.id,
@@ -610,7 +585,7 @@ export async function peekAgentSessionMachine(input: {
  * snapshots existed only drops the row.
  */
 export async function deleteAgentSessionMachine(
-	machines: Pick<WorkspaceMachines, "destroy" | "destroyCodexSession">,
+	machines: Pick<WorkspaceMachines, "destroy">,
 	input: {
 		readonly userId: string;
 		readonly projectId: string;
@@ -661,7 +636,6 @@ export async function executeSessionMachinePlan(input: {
 	readonly templateSnapshotId: string | null;
 	readonly machineSize?: MachineSizeId;
 	readonly templateProviderRef: string | null;
-	readonly authSnapshotId?: string | null;
 	readonly saveTemplateSnapshot: (snapshotId: string) => Promise<void>;
 	readonly saveSessionProviderRef: (providerRef: string) => Promise<void>;
 	readonly wait?: (ms: number) => Promise<void>;
@@ -677,7 +651,6 @@ export async function executeSessionMachinePlan(input: {
 		sessionProviderRef: input.sessionProviderRef,
 		templateSnapshotId: snapshotId,
 		templateProviderRef: input.templateProviderRef,
-		authSnapshotId: input.authSnapshotId,
 	});
 	if (plan.kind === "needs-snapshot") {
 		await input.machines.ensureRunning(WorkspaceId(plan.providerRef));
@@ -690,7 +663,6 @@ export async function executeSessionMachinePlan(input: {
 			sessionProviderRef: input.sessionProviderRef,
 			templateSnapshotId: snapshotId,
 			templateProviderRef: input.templateProviderRef,
-			authSnapshotId: input.authSnapshotId,
 		});
 	}
 	if (plan.kind === "blocked") throw new Error(plan.reason);
@@ -830,8 +802,7 @@ async function retryCopyAfterCapacityLag(
 /**
  * Guest `rm` of `/tmp` can fail when the snapshot files are root-owned
  * (sticky bit). Freestyle `exec` is not a shell, so reset uses one direct
- * `rm -rf` argv instead of `bash -lc`. Status files are overwritten through
- * the FS API so Connect cannot reload the template chat.
+ * `rm -rf` argv instead of `bash -lc`.
  */
 async function resetCopiedSessionScratch(
 	machines: Pick<WorkspaceMachines, "exec" | "writeTextFile">,
@@ -842,32 +813,4 @@ async function resetCopiedSessionScratch(
 			machines.exec(copied, command, 15_000),
 		),
 	);
-	// Each guest write crosses the same non-blocking per-VM admission lock.
-	for (const file of COPIED_SESSION_STATUS_RESETS) {
-		await machines.writeTextFile(copied, file.path, file.contents);
-	}
-}
-
-export async function syncProjectContextForTask(
-	machines: Pick<WorkspaceMachines, "writeTextFile">,
-	providerRef: string,
-	input: { readonly projectId: string; readonly task: string },
-): Promise<string> {
-	const briefing = await loadProjectBriefing(input.projectId);
-	const traces = relatedTracesForTask(
-		await listProjectTraces(input.projectId),
-		input.task,
-	);
-	const document = projectContextDocument({ briefing, traces });
-	if (document) {
-		await machines.writeTextFile(
-			WorkspaceId(providerRef),
-			PROJECT_CONTEXT_PATH,
-			`${document}\n`,
-		);
-	}
-	return promptTextWithProjectContext({
-		task: input.task,
-		document,
-	});
 }

@@ -1,7 +1,5 @@
 import { CodexReconnectRequired } from "#/domain/api-turn-failure";
-import type { WorkspaceId } from "#/domain/ids";
 import { database } from "../adapters/database";
-import type { WorkspaceMachines } from "../services/workspace-machines";
 import { CODEX_OAUTH_CLIENT_ID, CODEX_OAUTH_ISSUER } from "./codex-oauth";
 import { seal, unseal } from "./token-vault";
 
@@ -85,39 +83,6 @@ export async function hasManagedCodexAuth(userId: string): Promise<boolean> {
 		[userId],
 	);
 	return (result.rowCount ?? 0) > 0;
-}
-
-/** Moves the one-time device-code login into encrypted server state. */
-export async function captureManagedCodexAuth(
-	userId: string,
-	machines: WorkspaceMachines,
-	workspaceId: WorkspaceId,
-	planType: string | null,
-): Promise<void> {
-	const locate = await machines.exec(workspaceId, "printenv HOME", 15_000);
-	if (locate.exitCode !== 0) throw new Error("Cannot locate Codex login.");
-	const home = locate.stdout.trim();
-	if (!home.startsWith("/") || home.includes("\n")) {
-		throw new Error("Cannot locate Codex login.");
-	}
-	const contents = await machines.readTextFile(
-		workspaceId,
-		`${home}/.codex/auth.json`,
-	);
-	if (!contents) throw new Error("Codex login was not saved; reconnect Codex.");
-	const auth = managedAuth(JSON.parse(contents) as unknown);
-	if (codexAccessTokenExpiresAt(auth) < Date.now() + 60_000) {
-		throw new Error("Codex login has expired; reconnect Codex.");
-	}
-	await database().query(
-		`insert into agent_account(user_id,provider,status,encrypted_codex_auth,encrypted_snapshot_id,plan_type)
-		 values($1,'codex','connected',$2,null,$3)
-		 on conflict(user_id,provider) do update set
-		 status='connected',encrypted_codex_auth=excluded.encrypted_codex_auth,
-		 encrypted_snapshot_id=null,plan_type=excluded.plan_type,
-		 message=null,updated_at=now()`,
-		[userId, await seal(contents), planType],
-	);
 }
 
 function externalTokens(auth: ManagedCodexAuth): CodexExternalTokens {

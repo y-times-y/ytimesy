@@ -6,7 +6,7 @@ import { sessionModelsFromListed } from "./model-capabilities";
 
 describe("model picker trigger", () => {
 	const props = {
-		harnessId: "claude" as const,
+		harnessId: "codex" as const,
 		onHarnessIdChange: () => {},
 		onModelIdChange: () => {},
 		modelsEnabled: false,
@@ -32,6 +32,6 @@ describe("model picker trigger", () => {
 			}),
 		);
 		expect(html).toContain("<span>Select model</span>");
-		expect(html).not.toContain("<span>Claude</span>");
+		expect(html).not.toContain("<span>Codex</span>");
 	});
 });

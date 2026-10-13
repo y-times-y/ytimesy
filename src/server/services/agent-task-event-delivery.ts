@@ -4,7 +4,6 @@ import {
 	competitionJudgeQueueText,
 } from "#/domain/agent-competition";
 import { childTaskEventQueueText } from "#/domain/child-task-activity";
-import { WorkspaceId } from "#/domain/ids";
 import {
 	claimCompetitionJudge,
 	competitionCandidateIds,
@@ -32,11 +31,6 @@ import {
 	stageServerPeerMessage,
 } from "#/server/adapters/server-peer-inbox";
 import { sendHarnessWorkspaceTask } from "./harness-workspace-session";
-import {
-	PEER_INBOX_PATH,
-	peerMessageAccepted,
-	stagePeerMessage,
-} from "./peer-inbox";
 import { machinesForAgentSession } from "./session-workspace-machines";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -100,7 +94,7 @@ async function deliverAgentTaskEvent(
 		machines,
 		parent,
 		event.id,
-		`${childTaskEventQueueText(event.id)}\nThis is an internal task event, not a new user request. The child activity and result are already visible in its expandable card. Do not repeat this notification or paste its full summary into the main chat. Review the evidence and give the user only your own concise synthesis or a necessary decision question.\n\n${taskEventMessage(event, child.title, !parent.parentSessionId && parent.candidateIndex == null && (parent.harness === "api" || parent.harness === "codex"))}`,
+		`${childTaskEventQueueText(event.id)}\nThis is an internal task event, not a new user request. The child activity and result are already visible in its expandable card. Do not repeat this notification or paste its full summary into the main chat. Review the evidence and give the user only your own concise synthesis or a necessary decision question.\n\n${taskEventMessage(event, child.title, !parent.parentSessionId && parent.candidateIndex == null)}`,
 	);
 }
 
@@ -115,50 +109,15 @@ export async function deliverParentTaskNotification(
 		runtimeText.length > 11000
 			? `${runtimeText.slice(0, 10500)}\n[Notification excerpt truncated. Read the child's full result with read_task before reviewing.]`
 			: runtimeText;
-	const serverHarness = parent.harness === "api" || parent.harness === "codex";
 	const scopedMachines = machinesForAgentSession(machines, parent);
 	if (await serverPeerMessageAccepted(parent.id, notificationId)) return;
-	if (
-		!serverHarness &&
-		parent.providerRef &&
-		(await peerMessageAccepted(
-			scopedMachines,
-			WorkspaceId(parent.providerRef),
-			notificationId,
-		))
-	)
-		return;
 	if (parent.turnStatus === "running") {
-		if (serverHarness)
-			await stageServerPeerMessage(parent.id, notificationId, runtimeText);
-		else {
-			if (!parent.providerRef)
-				throw new Error("The parent runtime is unavailable.");
-			await stagePeerMessage(
-				scopedMachines,
-				WorkspaceId(parent.providerRef),
-				notificationId,
-				runtimeText,
-				parent.id,
-			);
-		}
+		await stageServerPeerMessage(parent.id, notificationId, runtimeText);
 		throw new Error(
 			"Task notification awaits the parent's next model safe point.",
 		);
 	}
-	if (serverHarness)
-		await removePendingServerPeerMessage(parent.id, notificationId);
-	else if (parent.providerRef) {
-		if (!/^[a-zA-Z0-9-]+$/.test(notificationId))
-			throw new Error("Invalid task notification ID.");
-		const removed = await scopedMachines.exec(
-			WorkspaceId(parent.providerRef),
-			`rm -f ${PEER_INBOX_PATH}/${notificationId}.json`,
-			10_000,
-		);
-		if (removed.exitCode !== 0)
-			throw new Error("The parent mailbox is unavailable.");
-	}
+	await removePendingServerPeerMessage(parent.id, notificationId);
 	if (!parent.listedModelId) {
 		throw new Error("The parent has no model selection for its wakeup turn.");
 	}

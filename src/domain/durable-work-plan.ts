@@ -12,7 +12,6 @@ export const durableWorkPlanRequest = z.object({
 		.min(1)
 		.max(12),
 });
-export type WorkPlanRequest = z.infer<typeof durableWorkPlanRequest>;
 
 export const durableWorkPlan = z.object({
 	type: z.literal("work-plan"),

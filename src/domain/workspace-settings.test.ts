@@ -34,7 +34,7 @@ describe("workspace settings", () => {
 	it("does not invent a signed-in harness from a missing account", () => {
 		expect(
 			harnessSettingsCopy({
-				id: "opencode",
+				id: "codex",
 				account: { status: "disconnected" },
 			}),
 		).toMatch(/composer/);

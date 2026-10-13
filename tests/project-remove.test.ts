@@ -76,14 +76,14 @@ it("destroys session and template VMs, then drops the project row", async () => 
 		userId: "alice",
 		projectId: project.id,
 		workspaceId,
-		harness: "opencode",
+		harness: "codex",
 		providerRef: "vm-agent",
 	});
 	await insertAgentSession({
 		userId: "alice",
 		projectId: project.id,
 		workspaceId,
-		harness: "opencode",
+		harness: "codex",
 		providerRef: "vm-side",
 		parentSessionId: parent.id,
 	});

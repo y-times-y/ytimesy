@@ -1,11 +1,7 @@
-import { Cause, Duration, Effect } from "effect";
+import { Effect } from "effect";
 import { z } from "zod";
 import { competitionJudgeToolAllowed } from "#/domain/agent-competition";
-import type { AgentConnection } from "#/domain/agent-connection";
-import {
-	type AgentProviderId,
-	agentProviderById,
-} from "#/domain/agent-provider";
+import type { AgentProviderId } from "#/domain/agent-provider";
 import {
 	agentTaskStatusReceipt,
 	agentTaskSummaryPage,
@@ -13,10 +9,7 @@ import {
 	taskExecutionCapabilities,
 } from "#/domain/agent-task";
 import {
-	AGENT_TASK_TOOL_REQUEST_PATH,
-	AGENT_TASK_TOOL_RESPONSE_PATH,
-	parseAgentTaskToolRequest,
-	serializeAgentTaskToolResponse,
+	type AgentTaskToolRequest,
 	taskBriefTooLong,
 	taskToolAccess,
 	taskToolExecution,
@@ -25,29 +18,14 @@ import {
 	taskToolString,
 } from "#/domain/agent-task-tool";
 import { runtimeHandoffPrompt } from "#/domain/api-conversation";
-import {
-	claudeSessionRemembersSignIn,
-	rememberedClaudeModels,
-} from "#/domain/claude-auth";
 import { canResumeDisconnectedFollowUp } from "#/domain/harness-access";
 import { WorkspaceId } from "#/domain/ids";
-import {
-	listedFastModeId,
-	listedModelDisplayName,
-	listedModelPreferenceFromSessions,
-	modelIdToSubmit,
-	preferredListedModelId,
-} from "#/domain/listed-model";
-import {
-	harnessConnectBlockedReason,
-	publicFailureMessage,
-} from "#/domain/project-workspace";
+import { publicFailureMessage } from "#/domain/project-workspace";
 import {
 	lastAgentMessageText,
 	sessionItemsFromUnknown,
-	sessionRecordHasConversation,
 } from "#/domain/session-item";
-import { canSubmitComposer, canSubmitSideChat } from "#/domain/session-policy";
+import { canSubmitSideChat } from "#/domain/session-policy";
 import {
 	taskCheckJournalIds,
 	taskHandoffReferences,
@@ -62,7 +40,6 @@ import {
 	type AgentSessionRecord,
 	agentSessionForOwner,
 	descendantAgentSessions,
-	listUserProviderRefs,
 	saveAgentTaskPublication,
 	saveAgentTaskReview,
 	saveAgentTaskState,
@@ -71,38 +48,15 @@ import {
 } from "#/server/adapters/agent-sessions";
 import {
 	assignedTaskVerification,
-	claimAgentTaskCommand,
-	completeAgentTaskCommand,
 	isServerControlledIntegration,
-	renewAgentTaskCommandClaim,
 	retainedTaskCheckResults,
 } from "#/server/adapters/agent-task-command-receipts";
 import { saveAgentTaskBlockedEvent } from "#/server/adapters/agent-task-events";
 import { hasActiveApiTurn } from "#/server/adapters/api-turns";
-import { captureClaudeHome } from "#/server/adapters/claude/home-files";
-import {
-	type ClaudeAuthStatus,
-	connectClaudeCode,
-	refreshClaudeAuthStatus,
-	submitClaudeTask,
-} from "#/server/adapters/claude/login-session";
 import { PROJECT_CWD_PATH } from "#/server/adapters/freestyle/clone-project";
-import {
-	abortOpenCodeTurn,
-	connectOpenCode,
-	type OpenCodeAuthStatus,
-	refreshOpenCodeAuthStatus,
-	submitOpenCodeTask,
-} from "#/server/adapters/opencode/serve-session";
 import { acceptTaskPatch } from "#/server/adapters/task-patch-evidence";
 import { findCompletedVerification } from "#/server/adapters/turn-verification";
-import { readyWorkspaceForOwner } from "#/server/adapters/workspaces";
 import { enqueueAgentTaskEvent } from "#/server/jobs/queue";
-import {
-	persistClaudeAuthSnapshotForUser,
-	refreshClaudeAuthSnapshotForUser,
-} from "#/server/proof/persist-claude-auth-snapshot";
-import { decryptHarnessApiKey } from "#/server/secrets/harness-key-store";
 import { agentCapacity } from "../adapters/agent-capacity";
 import {
 	discoverAgentPeers,
@@ -110,14 +64,10 @@ import {
 } from "./agent-peer-messaging";
 import {
 	bindAgentSessionMachine,
-	bindPreparedAgentTaskMachine,
 	editAgentTaskDraft,
 	openAgentTask,
-	peekAgentSessionMachine,
 	prepareAgentTaskStart,
-	syncProjectContextForTask,
 } from "./agent-session-machine";
-import { deferredApiTurnWorkspace } from "./api-turn-workspace";
 import {
 	readApiWorkspaceSession,
 	sendApiWorkspaceTask,
@@ -136,12 +86,6 @@ import {
 	emptyCodexSession,
 	type PublicCodexSession,
 } from "./codex-workspace-session";
-import {
-	persistBoundSessionView,
-	persistQueuedUserTurn,
-	persistSessionTurnStatus,
-} from "./persist-session-view";
-import { preparePreparedGuest } from "./project-workspace";
 import { publishProject } from "./publication";
 import {
 	captureTaskPatch,
@@ -150,7 +94,6 @@ import {
 } from "./reviewed-task-import";
 import { commitChatBranchForSubmission } from "./session-branch";
 import { machinesForAgentSession } from "./session-workspace-machines";
-import { beginSharedDesktop } from "./workspace-desktop";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 export type HarnessSessionScope = CodexSessionScope & {
@@ -160,7 +103,6 @@ export type HarnessSessionScope = CodexSessionScope & {
 export type PublicHarnessSession = PublicCodexSession;
 
 export function startPreparedAgentTask(
-	machines: WorkspaceMachines,
 	scope: HarnessSessionScope,
 	taskSessionId: string,
 	expectedDraft?: AgentSessionRecord,
@@ -170,7 +112,7 @@ export function startPreparedAgentTask(
 > {
 	return Effect.gen(function* () {
 		if (!scope.projectId) throw new Error("The project is not available.");
-		const { task, predecessor } = yield* Effect.tryPromise(() =>
+		const { task } = yield* Effect.tryPromise(() =>
 			prepareAgentTaskStart({
 				userId: scope.userId,
 				projectId: scope.projectId as string,
@@ -183,74 +125,25 @@ export function startPreparedAgentTask(
 				"The task draft is missing its prompt, model, or placement.",
 			);
 		}
-		if (task.harness === "api" || task.harness === "codex") {
-			const send =
-				task.harness === "api" ? sendApiWorkspaceTask : sendSubscriptionTask;
-			yield* Effect.tryPromise(() =>
-				send(
-					taskScope(scope, task),
-					{
-						text: task.taskPrompt as string,
-						modelId: task.listedModelId as string,
-					},
-					true,
-				),
-			).pipe(
-				Effect.tapError(() =>
-					Effect.tryPromise(() => saveAgentTaskState(task.id, "failed")),
-				),
-			);
-			return {
-				id: task.id,
-				machineId: task.providerRef,
-				placement: task.taskPlacement as "shared" | "fresh",
-			};
-		}
-		if (task.taskPlacement === "shared" && task.parentSessionId) {
-			const parent = yield* Effect.tryPromise(() =>
-				agentSessionForOwner(scope.userId, task.parentSessionId as string),
-			);
-			if (!parent || parent.projectId !== scope.projectId)
-				throw new Error("The shared parent task is unavailable.");
-			if (!parent.providerRef) {
-				// A data-only lead need not have touched files before starting a read-only child.
-				yield* Effect.tryPromise(() =>
-					deferredApiTurnWorkspace(
-						machines,
-						parent,
-						new AbortController().signal,
-					)(),
-				);
-			}
-		}
-		const taskMachines = machinesForAgentSession(machines, task);
-		const bound = yield* Effect.gen(function* () {
-			const machine = yield* Effect.tryPromise(() =>
-				bindPreparedAgentTaskMachine(taskMachines, {
-					userId: scope.userId,
-					projectId: scope.projectId as string,
-					task,
-					predecessor,
-				}),
-			);
-			const taskInput = {
-				text: task.taskPrompt as string,
-				modelId: task.listedModelId as string,
-			};
-			yield* sendHarnessWorkspaceTask(
-				taskMachines,
+		const send =
+			task.harness === "api" ? sendApiWorkspaceTask : sendSubscriptionTask;
+		yield* Effect.tryPromise(() =>
+			send(
 				taskScope(scope, task),
-				taskInput,
-			);
-			return machine;
-		}).pipe(
+				{
+					text: task.taskPrompt as string,
+					modelId: task.listedModelId as string,
+				},
+				true,
+			),
+		).pipe(
 			Effect.tapError(() =>
 				Effect.tryPromise(() => saveAgentTaskState(task.id, "failed")),
 			),
 		);
 		return {
 			id: task.id,
-			machineId: bound.providerRef,
+			machineId: task.providerRef,
 			placement: task.taskPlacement as "shared" | "fresh",
 		};
 	});
@@ -269,23 +162,17 @@ export function requestAgentTaskWrapUp(
 		if (!task || task.projectId !== scope.projectId || !task.parentSessionId) {
 			throw new Error("The task is not available.");
 		}
-		if (task.harness === "claude" && task.turnStatus === "running") {
-			throw new Error(
-				"This runtime cannot be interrupted safely yet. Wait for its current turn before requesting a wrap-up.",
-			);
-		}
 		const selectedModel = modelId || task.listedModelId;
 		if (!selectedModel) throw new Error("The task has no model selection.");
 		const taskMachines = machinesForAgentSession(machines, task);
 		const targetScope = taskScope(scope, task);
 		yield* stopHarnessWorkspaceTurn(taskMachines, targetScope);
-		if (task.harness === "api" || task.harness === "codex")
-			yield* Effect.tryPromise(() =>
-				awaitStoppedTurn(
-					async () =>
-						(await agentSessionForOwner(scope.userId, task.id))?.turnStatus,
-				),
-			);
+		yield* Effect.tryPromise(() =>
+			awaitStoppedTurn(
+				async () =>
+					(await agentSessionForOwner(scope.userId, task.id))?.turnStatus,
+			),
+		);
 		yield* sendHarnessWorkspaceTask(taskMachines, targetScope, {
 			modelId: selectedModel,
 			text: "Wrap up now. Stop expanding scope, preserve useful work, run only essential verification, and return a concise result with evidence and remaining uncertainty.",
@@ -300,180 +187,25 @@ export function emptyHarnessSession(
 	return emptyCodexSession(snapshotAvailable);
 }
 
-/**
- * Renders the stored agent transcript without starting a paused VM.
- * Connect wakes the machine when the user actually resumes that chat.
- */
+/** The stored transcript and connection; reading never starts a VM. */
 export function readHarnessWorkspaceSession(
-	machines: WorkspaceMachines,
 	scope: HarnessSessionScope,
 ): Effect.Effect<PublicHarnessSession> {
-	if (scope.harnessId === "codex")
-		return withSiblingSideChat(
-			machines,
-			scope,
-			Effect.promise(() => readSubscriptionLoginSession(scope)),
-		);
-	if (scope.harnessId === "api")
-		return withSiblingSideChat(
-			machines,
-			scope,
-			Effect.promise(() => readApiWorkspaceSession(scope)),
-		);
-	return serviceAgentTaskToolRequest(machines, scope).pipe(
-		Effect.flatMap(() => readHarnessWorkspaceSessionView(machines, scope)),
-	);
+	return Effect.promise(() =>
+		scope.harnessId === "codex"
+			? readSubscriptionLoginSession(scope)
+			: readApiWorkspaceSession(scope),
+	).pipe(Effect.flatMap((session) => attachSiblingSideChat(scope, session)));
 }
 
-function readHarnessWorkspaceSessionView(
-	machines: WorkspaceMachines,
-	scope: HarnessSessionScope,
-): Effect.Effect<PublicHarnessSession> {
-	if (scope.harnessId === "codex") {
-		return withSiblingSideChat(
-			machines,
-			scope,
-			Effect.promise(() => readSubscriptionSession(scope)),
-		);
-	}
-	return withSessionMachine(machines, scope, false, (providerRef, session) => {
-		if (scope.harnessId === "claude") {
-			return refreshClaudeAuthStatus(machines, WorkspaceId(providerRef)).pipe(
-				Effect.tap((status) =>
-					rememberClaudeHome(
-						machines,
-						WorkspaceId(providerRef),
-						scope.userId,
-						status,
-					),
-				),
-				Effect.map((status) => viewFromClaude(status, providerRef)),
-				Effect.flatMap((view) =>
-					Effect.tryPromise(() => persistBoundSessionView(session, view)),
-				),
-				Effect.flatMap((view) => attachSiblingSideChat(machines, scope, view)),
-			);
-		}
-		return refreshOpenCodeAuthStatus(machines, WorkspaceId(providerRef)).pipe(
-			Effect.map((status) => viewFromOpenCode(status, providerRef)),
-			Effect.flatMap((view) =>
-				Effect.tryPromise(() => persistBoundSessionView(session, view)),
-			),
-			Effect.flatMap((view) => attachSiblingSideChat(machines, scope, view)),
-		);
-	});
-}
-
-/**
- * Starts the selected harness on this agent session's VM. Claude Sign in
- * only resumes or copies that VM and starts Anthropic's login. Checkout
- * waits for Send. Stored keys never count as signed in on their own.
- */
+/** Connect: API models read their connection; Codex starts a ChatGPT sign-in when needed. */
 export function connectHarnessWorkspaceSession(
-	machines: WorkspaceMachines,
 	scope: HarnessSessionScope,
 ): Effect.Effect<PublicHarnessSession> {
-	if (scope.harnessId === "api")
-		return Effect.promise(() => readApiWorkspaceSession(scope));
-	if (scope.harnessId === "codex")
-		return Effect.promise(() => connectSubscriptionSession(scope));
-	const harnessName = agentProviderById(scope.harnessId).name;
-	return Effect.gen(function* () {
-		const workspace = yield* Effect.tryPromise(() =>
-			readyWorkspaceForOwner(scope.userId, scope.projectId),
-		);
-		const blocked = harnessConnectBlockedReason(
-			workspace,
-			harnessName,
-			scope.harnessId === "opencode" ? "connect" : "sign_in",
-		);
-		if (blocked || !scope.projectId) {
-			return {
-				...emptyHarnessSession(),
-				connection: {
-					status: "failed" as const,
-					provider: scope.harnessId,
-					message:
-						blocked ??
-						(scope.harnessId === "opencode"
-							? `Prepare a workspace before connecting ${harnessName}.`
-							: `Prepare a workspace before signing in to ${harnessName}.`),
-				},
-			};
-		}
-		const bound = yield* Effect.tryPromise(() =>
-			bindAgentSessionMachine(machines, {
-				userId: scope.userId,
-				projectId: scope.projectId as string,
-				harness: scope.harnessId,
-				sessionId: scope.sessionId,
-				createNew: scope.createNew,
-			}),
-		);
-		yield* Effect.tryPromise(() =>
-			machines.ensureRunning(WorkspaceId(bound.providerRef)),
-		);
-		if (scope.harnessId !== "claude") {
-			yield* preparePreparedGuest(
-				machines,
-				WorkspaceId(bound.providerRef),
-				scope,
-			);
-		}
-		beginSharedDesktop(machines, scope);
-		const apiKey = yield* Effect.tryPromise(() =>
-			decryptHarnessApiKey(scope.userId, scope.harnessId),
-		);
-		if (scope.harnessId === "claude") {
-			const siblings = yield* Effect.tryPromise(() =>
-				listUserProviderRefs(scope.userId, bound.providerRef),
-			);
-			const status = yield* connectClaudeCode(
-				machines,
-				WorkspaceId(bound.providerRef),
-				apiKey,
-				{ userId: scope.userId, siblingProviderRefs: siblings },
-			);
-			yield* rememberClaudeHome(
-				machines,
-				WorkspaceId(bound.providerRef),
-				scope.userId,
-				status,
-			);
-			return yield* Effect.tryPromise(() =>
-				persistBoundSessionView(
-					bound.session,
-					viewFromClaude(status, bound.providerRef),
-				),
-			);
-		}
-		const status = yield* connectOpenCode(
-			machines,
-			WorkspaceId(bound.providerRef),
-			apiKey,
-			{
-				discardCopiedTranscript: !sessionRecordHasConversation(
-					bound.session.items,
-				),
-			},
-		);
-		return yield* Effect.tryPromise(() =>
-			persistBoundSessionView(
-				bound.session,
-				viewFromOpenCode(status, bound.providerRef),
-			),
-		);
-	}).pipe(
-		Effect.catchAll((cause) =>
-			Effect.succeed({
-				...emptyHarnessSession(),
-				connection: {
-					status: "failed" as const,
-					provider: scope.harnessId,
-					message: publicFailureMessage(cause),
-				},
-			}),
-		),
+	return Effect.promise(() =>
+		scope.harnessId === "api"
+			? readApiWorkspaceSession(scope)
+			: connectSubscriptionSession(scope),
 	);
 }
 
@@ -568,230 +300,14 @@ export function sendHarnessWorkspaceTask(
 				});
 			return sendApiWorkspaceTask(scope, input);
 		});
-	if (scope.harnessId === "codex") {
-		return Effect.promise(() => sendSubscriptionTask(scope, input));
-	}
-	return queueHarnessTurn(
-		machines,
-		scope,
-		input.text,
-		withSessionMachine(machines, scope, true, (providerRef, session) =>
-			submitConnectedHarnessTask(machines, scope, providerRef, session, {
-				...input,
-				text: input.runtimeText ?? input.text,
-			}).pipe(
-				Effect.flatMap((view) => attachSiblingSideChat(machines, scope, view)),
-			),
-		),
-	);
-}
-
-/**
- * Persists the user turn before provisioning, then waits only until the
- * provider accepts the request. Turn supervision continues in the background.
- */
-function queueHarnessTurn(
-	machines: WorkspaceMachines,
-	scope: HarnessSessionScope,
-	text: string,
-	submit: Effect.Effect<PublicHarnessSession>,
-): Effect.Effect<PublicHarnessSession> {
-	return Effect.gen(function* () {
-		if (!scope.projectId) return emptyHarnessSession();
-		const peeked = yield* Effect.tryPromise(() =>
-			peekAgentSessionMachine({
-				userId: scope.userId,
-				projectId: scope.projectId as string,
-				sessionId: scope.sessionId,
-			}),
-		);
-		const queued = yield* Effect.tryPromise(() =>
-			persistQueuedUserTurn(
-				peeked.session,
-				peeked.providerRef
-					? pausedHarnessSessionView(scope, peeked.providerRef, peeked.session)
-					: {
-							...emptyHarnessSession(),
-							items: sessionItemsFromUnknown(peeked.session?.items),
-						},
-				text,
-			),
-		);
-		const launched = yield* submit.pipe(
-			Effect.flatMap((view) =>
-				Effect.tryPromise(() =>
-					persistBoundSessionView(peeked.session, {
-						...view,
-						items: queued.items,
-					}),
-				),
-			),
-			Effect.catchAll((cause) =>
-				Effect.tryPromise(() =>
-					persistBoundSessionView(peeked.session, {
-						...queued,
-						turnStatus: "failed",
-						connection: {
-							status: "failed",
-							provider: scope.harnessId,
-							message: publicFailureMessage(cause),
-						},
-					}),
-				),
-			),
-		);
-		if (launched.turnStatus === "running") {
-			void Effect.runPromise(
-				superviseHarnessTurn(machines, scope, launched).pipe(
-					Effect.catchAll(() => Effect.void),
-				),
-			);
-		}
-		return yield* attachSiblingSideChat(machines, scope, launched);
-	}).pipe(
-		Effect.catchAll((cause) =>
-			Effect.succeed({
-				...emptyHarnessSession(),
-				connection: {
-					status: "failed" as const,
-					provider: scope.harnessId,
-					message: publicFailureMessage(cause),
-				},
-			}),
-		),
-	);
-}
-
-const TASK_SUPERVISION_POLLS = 1_800;
-const activeAgentTaskToolRequests = new Set<string>();
-
-/**
- * Keeps provider state and task-tool requests moving after the browser closes.
- * The VM remains the execution boundary; the control plane owns orchestration.
- */
-function superviseHarnessTurn(
-	machines: WorkspaceMachines,
-	scope: HarnessSessionScope,
-	initial: PublicHarnessSession,
-): Effect.Effect<PublicHarnessSession> {
-	return Effect.gen(function* () {
-		let current = initial;
-		for (
-			let poll = 0;
-			poll < TASK_SUPERVISION_POLLS && current.turnStatus === "running";
-			poll += 1
-		) {
-			yield* serviceAgentTaskToolRequest(machines, scope);
-			yield* Effect.sleep(Duration.seconds(1));
-			current = yield* readHarnessWorkspaceSessionView(machines, {
-				...scope,
-				createNew: false,
-			});
-		}
-		return current;
-	});
-}
-
-/**
- * Drains one provider-local request. The bound session scopes every operation,
- * so a model cannot address another user's task by guessing an identifier.
- */
-function serviceAgentTaskToolRequest(
-	machines: WorkspaceMachines,
-	scope: HarnessSessionScope,
-): Effect.Effect<void> {
-	return Effect.gen(function* () {
-		if (!scope.projectId || !scope.sessionId) return;
-		const parent = yield* Effect.tryPromise(() =>
-			agentSessionForOwner(scope.userId, scope.sessionId as string),
-		);
-		if (
-			!parent ||
-			parent.harness === "codex" ||
-			parent.harness === "api" ||
-			parent.projectId !== scope.projectId ||
-			!parent.providerRef
-		) {
-			return;
-		}
-		const runtime = { machines, workspaceId: WorkspaceId(parent.providerRef) };
-		const workspaceId = runtime.workspaceId;
-		const requestText = yield* Effect.tryPromise(() =>
-			runtime.machines.readTextFile(workspaceId, AGENT_TASK_TOOL_REQUEST_PATH),
-		).pipe(Effect.catchAll(() => Effect.succeed(null)));
-		const request = parseAgentTaskToolRequest(requestText);
-		if (!request) return;
-		const responseText = yield* Effect.tryPromise(() =>
-			runtime.machines.readTextFile(workspaceId, AGENT_TASK_TOOL_RESPONSE_PATH),
-		).pipe(Effect.catchAll(() => Effect.succeed(null)));
-		if (agentTaskToolResponseId(responseText) === request.id) return;
-		const receipt = yield* Effect.tryPromise(() =>
-			claimAgentTaskCommand(parent.id, request.id),
-		);
-		if (receipt.kind === "processing") return;
-		if (receipt.kind === "done") {
-			yield* Effect.tryPromise(() =>
-				runtime.machines.writeTextFile(
-					workspaceId,
-					AGENT_TASK_TOOL_RESPONSE_PATH,
-					serializeAgentTaskToolResponse(receipt.response),
-				),
-			);
-			return;
-		}
-		const inFlightKey = `${parent.id}:${request.id}`;
-		if (activeAgentTaskToolRequests.has(inFlightKey)) return;
-		activeAgentTaskToolRequests.add(inFlightKey);
-		const heartbeat = setInterval(
-			() =>
-				void renewAgentTaskCommandClaim(parent.id, request.id).catch(
-					() => undefined,
-				),
-			10_000,
-		);
-		heartbeat.unref();
-		yield* Effect.gen(function* () {
-			const response = yield* runAgentTaskTool(
-				machines,
-				scope,
-				parent,
-				request,
-			).pipe(
-				Effect.map((result) => ({ id: request.id, ok: true as const, result })),
-				Effect.catchAllCause((cause) =>
-					Effect.succeed({
-						id: request.id,
-						ok: false as const,
-						error: publicFailureMessage(Cause.squash(cause)),
-					}),
-				),
-			);
-			yield* Effect.tryPromise(() =>
-				completeAgentTaskCommand(parent.id, response),
-			);
-			yield* Effect.tryPromise(() =>
-				runtime.machines.writeTextFile(
-					workspaceId,
-					AGENT_TASK_TOOL_RESPONSE_PATH,
-					serializeAgentTaskToolResponse(response),
-				),
-			);
-		}).pipe(
-			Effect.ensuring(
-				Effect.sync(() => {
-					clearInterval(heartbeat);
-					activeAgentTaskToolRequests.delete(inFlightKey);
-				}),
-			),
-		);
-	}).pipe(Effect.catchAll(() => Effect.void));
+	return Effect.promise(() => sendSubscriptionTask(scope, input));
 }
 
 export function runAgentTaskTool(
 	machines: WorkspaceMachines,
 	scope: HarnessSessionScope,
 	parent: AgentSessionRecord,
-	request: NonNullable<ReturnType<typeof parseAgentTaskToolRequest>>,
+	request: AgentTaskToolRequest,
 	control?: { signal: AbortSignal; turnId: string },
 ): Effect.Effect<unknown, unknown> {
 	return Effect.gen(function* () {
@@ -1007,7 +523,7 @@ export function runAgentTaskTool(
 				capabilities: taskExecutionCapabilities(task),
 			};
 			if (!startImmediately) return draft;
-			return yield* startPreparedAgentTask(machines, scope, task.id).pipe(
+			return yield* startPreparedAgentTask(scope, task.id).pipe(
 				Effect.map((started) => ({
 					...draft,
 					status: "working",
@@ -1283,7 +799,7 @@ export function runAgentTaskTool(
 			return { taskId: edited.id, status: "draft" };
 		}
 		if (request.tool === "start_task") {
-			const started = yield* startPreparedAgentTask(machines, scope, target.id);
+			const started = yield* startPreparedAgentTask(scope, target.id);
 			return {
 				taskId: started.id,
 				status: "working",
@@ -1574,16 +1090,6 @@ function taskScope(
 	};
 }
 
-function agentTaskToolResponseId(text: string | null): string | null {
-	if (!text?.trim()) return null;
-	try {
-		const value = JSON.parse(text) as { id?: unknown };
-		return typeof value.id === "string" ? value.id : null;
-	} catch {
-		return null;
-	}
-}
-
 export function stopHarnessWorkspaceTurn(
 	machines: WorkspaceMachines,
 	scope: HarnessSessionScope,
@@ -1592,446 +1098,11 @@ export function stopHarnessWorkspaceTurn(
 	if (input?.lane === "side") {
 		return stopHarnessSideTurn(machines, scope);
 	}
-	if (scope.harnessId === "api")
-		return Effect.promise(() => stopApiWorkspaceTask(scope));
-	if (scope.harnessId === "codex") {
-		return Effect.promise(() => stopSubscriptionTask(scope));
-	}
-	if (scope.harnessId === "opencode") {
-		return stopOpenCodeWorkspaceTurn(machines, scope);
-	}
-	return stopClaudeWorkspaceTurn(machines, scope);
-}
-
-/**
- * Abort talks to a live OpenCode serve. A paused VM is already stopped;
- * persist idle without booting so Stop does not consume compute allowance.
- */
-function stopOpenCodeWorkspaceTurn(
-	machines: WorkspaceMachines,
-	scope: HarnessSessionScope,
-): Effect.Effect<PublicHarnessSession> {
-	return Effect.gen(function* () {
-		if (!scope.projectId) return emptyHarnessSession();
-		const bound = yield* Effect.tryPromise(() =>
-			peekAgentSessionMachine({
-				userId: scope.userId,
-				projectId: scope.projectId as string,
-				sessionId: scope.sessionId,
-			}),
-		);
-		const providerRef = bound.providerRef;
-		if (!providerRef) {
-			return yield* persistIdleStoppedSession(bound.session, null);
-		}
-		const running = yield* Effect.tryPromise(() =>
-			machines.isRunning(WorkspaceId(providerRef)),
-		);
-		if (!running) {
-			const paused = yield* persistIdleStoppedSession(
-				bound.session,
-				pausedHarnessSessionView(scope, providerRef, bound.session),
-			);
-			return yield* attachSiblingSideChat(machines, scope, paused);
-		}
-		const status = yield* abortOpenCodeTurn(machines, WorkspaceId(providerRef));
-		const view = yield* Effect.tryPromise(() =>
-			persistBoundSessionView(
-				bound.session,
-				viewFromOpenCode(status, providerRef),
-			),
-		);
-		return yield* attachSiblingSideChat(machines, scope, view);
-	}).pipe(
-		Effect.catchAll((cause) =>
-			Effect.succeed({
-				...emptyHarnessSession(),
-				connection: {
-					status: "failed" as const,
-					provider: "opencode" as const,
-					message: publicFailureMessage(cause),
-				},
-			}),
-		),
+	return Effect.promise(() =>
+		scope.harnessId === "api"
+			? stopApiWorkspaceTask(scope)
+			: stopSubscriptionTask(scope),
 	);
-}
-
-/**
- * Claude Code has no abort adapter yet. A paused VM is already stopped;
- * persist idle without booting so Stop does not consume compute allowance.
- */
-function stopClaudeWorkspaceTurn(
-	machines: WorkspaceMachines,
-	scope: HarnessSessionScope,
-): Effect.Effect<PublicHarnessSession> {
-	return Effect.gen(function* () {
-		if (!scope.projectId) return emptyHarnessSession();
-		const bound = yield* Effect.tryPromise(() =>
-			peekAgentSessionMachine({
-				userId: scope.userId,
-				projectId: scope.projectId as string,
-				sessionId: scope.sessionId,
-			}),
-		);
-		const providerRef = bound.providerRef;
-		if (!providerRef) {
-			return yield* persistIdleStoppedSession(bound.session, null);
-		}
-		const running = yield* Effect.tryPromise(() =>
-			machines.isRunning(WorkspaceId(providerRef)),
-		);
-		if (!running) {
-			const paused = yield* persistIdleStoppedSession(
-				bound.session,
-				pausedHarnessSessionView(scope, providerRef, bound.session),
-			);
-			return yield* attachSiblingSideChat(machines, scope, paused);
-		}
-		return yield* readHarnessWorkspaceSession(machines, scope);
-	}).pipe(
-		Effect.catchAll((cause) =>
-			Effect.succeed({
-				...emptyHarnessSession(),
-				connection: {
-					status: "failed" as const,
-					provider: "claude" as const,
-					message: publicFailureMessage(cause),
-				},
-			}),
-		),
-	);
-}
-
-function persistIdleStoppedSession(
-	session: Awaited<ReturnType<typeof peekAgentSessionMachine>>["session"],
-	view: PublicHarnessSession | null,
-) {
-	return Effect.gen(function* () {
-		yield* Effect.tryPromise(() => persistSessionTurnStatus(session, "idle"));
-		const persisted = yield* Effect.tryPromise(() =>
-			persistBoundSessionView(
-				session,
-				view ?? { ...emptyHarnessSession(), turnStatus: "idle" },
-			),
-		);
-		return { ...persisted, turnStatus: "idle" as const };
-	});
-}
-
-/**
- * Send/connect start the session VM. Read returns the stored transcript
- * when that VM is paused so switching chats does not wait on a boot.
- */
-function withSessionMachine(
-	machines: WorkspaceMachines,
-	scope: HarnessSessionScope,
-	provision: boolean,
-	run: (
-		providerRef: string,
-		session: Awaited<ReturnType<typeof peekAgentSessionMachine>>["session"],
-	) => Effect.Effect<PublicHarnessSession, unknown>,
-): Effect.Effect<PublicHarnessSession> {
-	return Effect.gen(function* () {
-		if (!scope.projectId) return emptyHarnessSession();
-		const bound = provision
-			? yield* Effect.tryPromise(() =>
-					bindAgentSessionMachine(machines, {
-						userId: scope.userId,
-						projectId: scope.projectId as string,
-						harness: scope.harnessId,
-						sessionId: scope.sessionId,
-						createNew: scope.createNew,
-					}),
-				)
-			: yield* Effect.tryPromise(() =>
-					peekAgentSessionMachine({
-						userId: scope.userId,
-						projectId: scope.projectId as string,
-						sessionId: scope.sessionId,
-					}),
-				);
-		const providerRef = bound.providerRef;
-		if (!providerRef) {
-			return yield* Effect.tryPromise(() =>
-				persistBoundSessionView(bound.session, emptyHarnessSession()),
-			);
-		}
-		if (provision) {
-			yield* Effect.tryPromise(() =>
-				machines.ensureRunning(WorkspaceId(providerRef)),
-			);
-			return yield* run(providerRef, bound.session);
-		}
-		const running = yield* Effect.tryPromise(() =>
-			machines.isRunning(WorkspaceId(providerRef)),
-		);
-		if (!running) {
-			const paused = yield* Effect.tryPromise(() =>
-				persistBoundSessionView(
-					bound.session,
-					pausedHarnessSessionView(scope, providerRef, bound.session),
-				),
-			);
-			return yield* attachSiblingSideChat(machines, scope, paused);
-		}
-		return yield* run(providerRef, bound.session).pipe(
-			Effect.catchAll(() =>
-				Effect.tryPromise(() =>
-					persistBoundSessionView(bound.session, emptyHarnessSession()),
-				),
-			),
-		);
-	}).pipe(
-		Effect.catchAll((cause) =>
-			Effect.succeed({
-				...emptyHarnessSession(),
-				connection: {
-					status: "failed" as const,
-					provider: scope.harnessId,
-					message: publicFailureMessage(cause),
-				},
-			}),
-		),
-	);
-}
-
-function viewFromClaude(
-	status: ClaudeAuthStatus,
-	workspaceId: string,
-): PublicHarnessSession {
-	const models = status.stage === "authenticated" ? status.models : [];
-	const view = viewFromConnection(
-		connectionFromClaude(status),
-		workspaceId,
-		models,
-		status.stage === "authenticated" ? status.turnStatus : "idle",
-		status.stage === "authenticated" ? status.items : [],
-	);
-	return {
-		...view,
-		listedModelId:
-			status.stage === "authenticated" ? preferredListedModelId(models) : "",
-	};
-}
-
-function viewFromOpenCode(
-	status: OpenCodeAuthStatus,
-	workspaceId: string,
-): PublicHarnessSession {
-	return viewFromConnection(
-		connectionFromOpenCode(status),
-		workspaceId,
-		status.stage === "authenticated" ? status.models : [],
-		status.stage === "authenticated" ? status.turnStatus : "idle",
-		status.stage === "authenticated" ? status.items : [],
-	);
-}
-
-function viewFromConnection(
-	connection: AgentConnection,
-	workspaceId: string,
-	models: PublicHarnessSession["models"],
-	turnStatus: PublicHarnessSession["turnStatus"],
-	items: PublicHarnessSession["items"],
-): PublicHarnessSession {
-	const workspace: WorkspaceLifecycle = {
-		status: "running",
-		workspaceId: WorkspaceId(workspaceId),
-	};
-	return {
-		snapshotAvailable: false,
-		workspaceId,
-		agentSessionId: null,
-		connection,
-		models,
-		listedModelId: "",
-		blockedListedModelIds: [],
-		canSend: canSubmitComposer(workspace, connection, turnStatus),
-		canSendSide: canSubmitSideChat(workspace, connection, "idle"),
-		turnStatus,
-		items,
-		sideTurnStatus: "idle",
-		sideItems: [],
-	};
-}
-
-/**
- * A follow-up on a paused VM starts that harness if needed, then submits.
- * Stored keys are attached during connect; they are not treated as signed in.
- */
-function submitConnectedHarnessTask(
-	machines: WorkspaceMachines,
-	scope: HarnessSessionScope,
-	providerRef: string,
-	session: AgentSessionRecord | null,
-	input: {
-		readonly text: string;
-		readonly modelId: string;
-		readonly variant?: string;
-		readonly fast?: boolean;
-	},
-): Effect.Effect<PublicHarnessSession, unknown> {
-	return Effect.gen(function* () {
-		const followUp = sessionRecordHasConversation(session?.items);
-		if (!followUp || session?.workingBranch) {
-			yield* preparePreparedGuest(machines, WorkspaceId(providerRef), scope);
-		}
-		beginSharedDesktop(machines, scope);
-		const promptText =
-			followUp || session?.parentSessionId
-				? input.text
-				: yield* Effect.tryPromise(() =>
-						scope.projectId
-							? syncProjectContextForTask(machines, providerRef, {
-									projectId: scope.projectId,
-									task: input.text,
-								})
-							: Promise.resolve(input.text),
-					);
-		const payload = { ...input, promptText };
-		if (followUp && !session?.workingBranch) {
-			void Effect.runPromise(
-				preparePreparedGuest(machines, WorkspaceId(providerRef), scope).pipe(
-					Effect.catchAll(() => Effect.void),
-				),
-			);
-		}
-		const apiKey = yield* Effect.tryPromise(() =>
-			decryptHarnessApiKey(scope.userId, scope.harnessId),
-		);
-		if (scope.harnessId === "claude") {
-			let status = yield* connectClaudeCode(
-				machines,
-				WorkspaceId(providerRef),
-				apiKey,
-			);
-			yield* rememberClaudeHome(
-				machines,
-				WorkspaceId(providerRef),
-				scope.userId,
-				status,
-				false,
-			);
-			let listedModelId = "";
-			if (status.stage === "authenticated") {
-				const preference = listedModelPreferenceFromSessions({
-					harness: session?.harness ?? scope.harnessId,
-					sessions: session
-						? [
-								{
-									harness: session.harness,
-									listedModelId: session.listedModelId,
-									items: session.items,
-								},
-							]
-						: [],
-				});
-				listedModelId = modelIdToSubmit(input.modelId, status.models, {
-					lastUsedId: preference.listedModelId,
-					excludedIds: preference.blockedListedModelIds,
-				});
-				if (!listedModelId) {
-					return yield* Effect.tryPromise(() =>
-						persistBoundSessionView(session, {
-							...viewFromClaude(status, providerRef),
-							connection: {
-								status: "failed",
-								provider: "claude",
-								message: "Claude Code did not list a model to run.",
-							},
-						}),
-					);
-				}
-				yield* Effect.tryPromise(() =>
-					persistSessionTurnStatus(session, "running"),
-				);
-				status = yield* submitClaudeTask(machines, WorkspaceId(providerRef), {
-					...payload,
-					peerSessionId: session?.id,
-					modelId: listedModelId,
-					...(input.variant ? { reasoningEffort: input.variant } : {}),
-					...(input.fast ? { fast: true } : {}),
-					...(session?.taskAccess === "read_only" ? { readOnly: true } : {}),
-				});
-			}
-			return yield* Effect.tryPromise(() =>
-				persistBoundSessionView(session, {
-					...viewFromClaude(status, providerRef),
-					listedModelId,
-				}),
-			);
-		}
-		let status = yield* refreshOpenCodeAuthStatus(
-			machines,
-			WorkspaceId(providerRef),
-		);
-		if (status.stage !== "authenticated") {
-			status = yield* connectOpenCode(
-				machines,
-				WorkspaceId(providerRef),
-				apiKey,
-				{
-					discardCopiedTranscript: !sessionRecordHasConversation(
-						session?.items,
-					),
-				},
-			);
-		}
-		let listedModelId = "";
-		if (status.stage === "authenticated") {
-			const preference = listedModelPreferenceFromSessions({
-				harness: session?.harness ?? scope.harnessId,
-				sessions: session
-					? [
-							{
-								harness: session.harness,
-								listedModelId: session.listedModelId,
-								items: session.items,
-							},
-						]
-					: [],
-			});
-			listedModelId = modelIdToSubmit(input.modelId, status.models, {
-				lastUsedId: preference.listedModelId,
-				excludedIds: preference.blockedListedModelIds,
-			});
-			if (!listedModelId) {
-				return yield* Effect.tryPromise(() =>
-					persistBoundSessionView(session, {
-						...viewFromOpenCode(status, providerRef),
-						connection: {
-							status: "failed",
-							provider: "opencode",
-							message: "OpenCode did not list a model to run.",
-						},
-					}),
-				);
-			}
-			yield* Effect.tryPromise(() =>
-				persistSessionTurnStatus(session, "running"),
-			);
-			const listed = status.models.find((model) => model.id === listedModelId);
-			const listedFast = listedFastModeId(listed ?? {});
-			const listedVariant =
-				input.variant?.trim() &&
-				listed?.reasoning?.levels.some(
-					(level) => level.id === input.variant?.trim(),
-				)
-					? input.variant.trim()
-					: undefined;
-			status = yield* submitOpenCodeTask(machines, WorkspaceId(providerRef), {
-				...payload,
-				modelId: listedModelId,
-				variant: input.fast && listedFast ? listedFast : listedVariant,
-			});
-		}
-		return yield* Effect.tryPromise(() =>
-			persistBoundSessionView(session, {
-				...viewFromOpenCode(status, providerRef),
-				listedModelId,
-			}),
-		);
-	});
 }
 
 /**
@@ -2075,10 +1146,6 @@ function sendHarnessSideTask(
 		yield* Effect.tryPromise(() =>
 			machines.ensureRunning(WorkspaceId(bound.providerRef)),
 		);
-		if (scope.harnessId !== "api" && scope.harnessId !== "codex")
-			yield* Effect.tryPromise(() =>
-				persistSessionTurnStatus(bound.session, "running"),
-			);
 		const sideView =
 			scope.harnessId === "api"
 				? yield* Effect.promise(() =>
@@ -2087,29 +1154,21 @@ function sendHarnessSideTask(
 							input,
 						),
 					)
-				: scope.harnessId === "codex"
-					? yield* Effect.promise(() =>
-							sendSubscriptionTask(
-								{
-									userId: scope.userId,
-									projectId: scope.projectId,
-									sessionId: bound.session.id,
-									createNew: false,
-								},
-								{
-									text: input.text,
-									modelId: input.modelId,
-								},
-							),
-						)
-					: yield* submitConnectedHarnessTask(
-							machines,
-							scope,
-							bound.providerRef,
-							bound.session,
-							input,
-						);
-		const main = yield* readHarnessWorkspaceSession(machines, {
+				: yield* Effect.promise(() =>
+						sendSubscriptionTask(
+							{
+								userId: scope.userId,
+								projectId: scope.projectId,
+								sessionId: bound.session.id,
+								createNew: false,
+							},
+							{
+								text: input.text,
+								modelId: input.modelId,
+							},
+						),
+					);
+		const main = yield* readHarnessWorkspaceSession({
 			...scope,
 			createNew: false,
 		});
@@ -2151,7 +1210,7 @@ function stopHarnessSideTurn(
 			sideAgentSession(scope.userId, scope.sessionId as string),
 		);
 		if (!child) {
-			return yield* readHarnessWorkspaceSession(machines, scope);
+			return yield* readHarnessWorkspaceSession(scope);
 		}
 		const stopped = yield* stopHarnessWorkspaceTurn(machines, {
 			userId: scope.userId,
@@ -2160,7 +1219,7 @@ function stopHarnessSideTurn(
 			harnessId: child.harness,
 			createNew: false,
 		});
-		const main = yield* readHarnessWorkspaceSession(machines, {
+		const main = yield* readHarnessWorkspaceSession({
 			...scope,
 			createNew: false,
 		});
@@ -2179,20 +1238,7 @@ function stopHarnessSideTurn(
 	);
 }
 
-function withSiblingSideChat(
-	machines: WorkspaceMachines,
-	scope: HarnessSessionScope,
-	view: Effect.Effect<PublicHarnessSession>,
-): Effect.Effect<PublicHarnessSession> {
-	return view.pipe(
-		Effect.flatMap((session) =>
-			attachSiblingSideChat(machines, scope, session),
-		),
-	);
-}
-
 function attachSiblingSideChat(
-	machines: WorkspaceMachines,
 	scope: HarnessSessionScope,
 	main: PublicHarnessSession,
 ): Effect.Effect<PublicHarnessSession> {
@@ -2206,47 +1252,15 @@ function attachSiblingSideChat(
 		if (!child?.providerRef) {
 			return mergeSideChat(main, null, scope.harnessId);
 		}
-		if (scope.harnessId === "codex") {
-			const side = yield* Effect.promise(() =>
-				readSubscriptionSession({
-					userId: scope.userId,
-					projectId: scope.projectId,
-					sessionId: child.id,
-				}),
-			);
-			return mergeSideChat(main, side, scope.harnessId);
-		}
-		const running = yield* Effect.tryPromise(() =>
-			machines.isRunning(WorkspaceId(child.providerRef as string)),
-		);
-		if (!running) {
-			const stored = yield* Effect.tryPromise(() =>
-				persistBoundSessionView(child, emptyHarnessSession()),
-			);
-			return mergeSideChat(main, stored, scope.harnessId);
-		}
-		if (scope.harnessId === "claude") {
-			const status = yield* refreshClaudeAuthStatus(
-				machines,
-				WorkspaceId(child.providerRef),
-			);
-			const side = yield* Effect.tryPromise(() =>
-				persistBoundSessionView(
-					child,
-					viewFromClaude(status, child.providerRef as string),
-				),
-			);
-			return mergeSideChat(main, side, scope.harnessId);
-		}
-		const status = yield* refreshOpenCodeAuthStatus(
-			machines,
-			WorkspaceId(child.providerRef),
-		);
-		const side = yield* Effect.tryPromise(() =>
-			persistBoundSessionView(
-				child,
-				viewFromOpenCode(status, child.providerRef as string),
-			),
+		const sideScope = {
+			userId: scope.userId,
+			projectId: scope.projectId,
+			sessionId: child.id,
+		};
+		const side = yield* Effect.promise(() =>
+			scope.harnessId === "codex"
+				? readSubscriptionSession(sideScope)
+				: readApiWorkspaceSession(sideScope),
 		);
 		return mergeSideChat(main, side, scope.harnessId);
 	}).pipe(
@@ -2293,134 +1307,4 @@ function mergeSideChat(
 				side.turnStatus,
 			) || canResumeSide,
 	};
-}
-
-function pausedHarnessSessionView(
-	scope: HarnessSessionScope,
-	workspaceId: string,
-	session: { readonly listedModelId?: string | null } | null,
-): PublicHarnessSession {
-	const listedModelId = session?.listedModelId?.trim() ?? "";
-	if (
-		scope.harnessId === "claude" &&
-		claudeSessionRemembersSignIn(listedModelId)
-	) {
-		const models = rememberedClaudeModels(listedModelId);
-		return {
-			...emptyHarnessSession(),
-			workspaceId,
-			connection: {
-				status: "authenticated",
-				provider: "claude",
-				authMode: "subscription",
-				planType: null,
-				email: null,
-			},
-			models,
-			listedModelId,
-			canSend: true,
-			canSendSide: true,
-		};
-	}
-	const view = emptyHarnessSession();
-	const listedModels = listedModelId
-		? [
-				{
-					id: listedModelId,
-					label: listedModelDisplayName(listedModelId) || listedModelId,
-				},
-			]
-		: [];
-	return {
-		...view,
-		workspaceId,
-		models: listedModels,
-		listedModelId,
-		canSend: canResumeDisconnectedFollowUp({
-			harnessId: scope.harnessId,
-			connection: view.connection,
-			turnStatus: "idle",
-			snapshotAvailable: view.snapshotAvailable,
-			listedModelId,
-		}),
-		canSendSide: canResumeDisconnectedFollowUp({
-			harnessId: scope.harnessId,
-			connection: view.connection,
-			turnStatus: "idle",
-			snapshotAvailable: view.snapshotAvailable,
-			listedModelId,
-		}),
-	};
-}
-
-function connectionFromClaude(status: ClaudeAuthStatus): AgentConnection {
-	if (status.stage === "authenticated") {
-		return {
-			status: "authenticated",
-			provider: "claude",
-			authMode: status.authMode,
-			planType: status.planType,
-			email: null,
-		};
-	}
-	if (status.stage === "awaiting_device_code") {
-		return {
-			status: "awaiting_device_code",
-			provider: "claude",
-			loginId: status.loginId,
-			verificationUrl: status.verificationUrl,
-			userCode: "",
-		};
-	}
-	if (status.stage === "failed") {
-		return {
-			status: "failed",
-			provider: "claude",
-			message: status.message,
-		};
-	}
-	return { status: "disconnected" };
-}
-
-function rememberClaudeHome(
-	machines: WorkspaceMachines,
-	workspaceId: WorkspaceId,
-	userId: string,
-	status: ClaudeAuthStatus,
-	snapshot: "ensure" | "replace" | false = "ensure",
-): Effect.Effect<void> {
-	if (status.stage !== "authenticated" || status.authMode === "apikey")
-		return Effect.void;
-	return Effect.gen(function* () {
-		yield* captureClaudeHome(machines, workspaceId, userId);
-		if (!snapshot) return;
-		const persist =
-			snapshot === "replace"
-				? refreshClaudeAuthSnapshotForUser
-				: persistClaudeAuthSnapshotForUser;
-		yield* persist(userId, machines, workspaceId, {
-			planType: status.planType,
-			email: null,
-		});
-	});
-}
-
-function connectionFromOpenCode(status: OpenCodeAuthStatus): AgentConnection {
-	if (status.stage === "authenticated") {
-		return {
-			status: "authenticated",
-			provider: "opencode",
-			authMode: status.authMode,
-			planType: status.planType,
-			email: null,
-		};
-	}
-	if (status.stage === "failed") {
-		return {
-			status: "failed",
-			provider: "opencode",
-			message: status.message,
-		};
-	}
-	return { status: "disconnected" };
 }

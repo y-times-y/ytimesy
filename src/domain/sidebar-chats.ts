@@ -1,5 +1,4 @@
 import type { AgentProviderId } from "./agent-provider";
-import { claudeSessionRemembersSignIn } from "./claude-auth";
 import { isTurnRunning, type SessionTurnStatus } from "./session-item";
 import type { SidebarChatPrNeed } from "./sidebar-pr";
 
@@ -303,25 +302,6 @@ export function listedChatModelId(
 	chatId: string,
 ): string {
 	return chats.find((chat) => chat.id === chatId)?.listedModelId?.trim() ?? "";
-}
-
-/**
- * Claude sign-in is per user, not per chat. A new composer can reuse the
- * model id from any earlier Claude chat so Send is not blocked by Sign in.
- */
-export function rememberedClaudeModelIdFromChats(
-	chats: readonly SidebarChat[],
-): string {
-	const claudeFirst = chats.find(
-		(chat) =>
-			chat.harnessId === "claude" &&
-			claudeSessionRemembersSignIn(chat.listedModelId),
-	);
-	if (claudeFirst?.listedModelId) return claudeFirst.listedModelId.trim();
-	const any = chats.find((chat) =>
-		claudeSessionRemembersSignIn(chat.listedModelId),
-	);
-	return any?.listedModelId?.trim() ?? "";
 }
 
 export function listedChatHarnessId(

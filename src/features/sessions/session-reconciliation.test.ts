@@ -28,7 +28,7 @@ it("keeps sessions, providers, projects and turn epochs in distinct cache entrie
 	for (const next of [
 		{ ...selection, sessionId: "other" },
 		{ ...selection, projectId: "other" },
-		{ ...selection, harnessId: "claude" as const },
+		{ ...selection, harnessId: "api" as const },
 	]) {
 		expect(sessionReconciliationQuery(next, 1).queryKey).not.toEqual(base);
 	}

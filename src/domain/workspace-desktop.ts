@@ -1,9 +1,6 @@
 import { failureMessage, workspaceLooksGone } from "./failure-message";
 import { publicFailureMessage } from "./project-workspace";
 
-export const SHARED_DESKTOP_WIDTH = 1440;
-export const SHARED_DESKTOP_HEIGHT = 900;
-
 export type WorkspaceDesktop =
 	| { readonly status: "stopped" }
 	| { readonly status: "starting" }
