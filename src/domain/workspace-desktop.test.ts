@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	agentDesktopActivityInTurn,
 	desktopCanBeControlled,
 	desktopClientViewerUrl,
 	desktopFailedBecauseWorkspaceGone,
@@ -115,5 +116,32 @@ describe("workspace desktop", () => {
 		).toMatchObject({
 			actionLabel: "Retry desktop",
 		});
+	});
+});
+
+describe("agentDesktopActivityInTurn", () => {
+	const items = [
+		{ kind: "userMessage", id: "u1" },
+		{ kind: "dynamicToolCall", id: "old", tool: "browser_open" },
+		{ kind: "userMessage", id: "u2" },
+		{ kind: "dynamicToolCall", id: "t1", tool: "execute_command" },
+		{ kind: "dynamicToolCall", id: "t2", tool: "browser_open" },
+		{ kind: "dynamicToolCall", id: "t3", tool: "browser_screenshot" },
+	];
+	it("finds the first desktop tool call of the running turn only", () => {
+		expect(agentDesktopActivityInTurn({ turnStatus: "running", items })).toBe(
+			"t2",
+		);
+		expect(
+			agentDesktopActivityInTurn({
+				turnStatus: "running",
+				items: items.slice(0, 4),
+			}),
+		).toBeNull();
+	});
+	it("ignores settled turns", () => {
+		expect(
+			agentDesktopActivityInTurn({ turnStatus: "completed", items }),
+		).toBeNull();
 	});
 });

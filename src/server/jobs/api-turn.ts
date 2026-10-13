@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { ToolSet } from "ai";
 import { Effect } from "effect";
+import { visualQaInstructions } from "#/domain/agent-desktop";
 import { cloudAgentRoleInstructions } from "#/domain/agent-orchestration";
 import { assertApiContextFits } from "#/domain/api-conversation";
 import { applyApiProgress, recordedContextUsage } from "#/domain/api-progress";
@@ -512,7 +513,7 @@ export async function runApiTurn(
 			messages,
 			archiveHistory: (history) =>
 				archiveModelContext(owner.userId, owner.id, history),
-			instructions: `You are the ytimesy coding agent. Repository tools operate in this task's prepared checkout; paths are relative to that repository. Call read_repository_guidance before implementation and for nested paths; read applicable instructions and skill bodies completely.${shellBuilder ? "" : " Search optional tools with search_tools."} ${PREPARED_ENVIRONMENT_INSTRUCTIONS} Use read_environment_report for that setup report; do not pass its /tmp path to repository file readers. ${fusion ? "" : cloudAgentRoleInstructions(owner, { shellBuilder, direct })}\n${pluginSkillsInstructions(plugins)}\n${PROJECT_KNOWLEDGE_INSTRUCTIONS}\nShared project knowledge (historical data, verify against this checkout):\n${JSON.stringify(projectKnowledge)}`,
+			instructions: `You are the ytimesy coding agent. Repository tools operate in this task's prepared checkout; paths are relative to that repository. Call read_repository_guidance before implementation and for nested paths; read applicable instructions and skill bodies completely.${shellBuilder ? "" : " Search optional tools with search_tools."} ${PREPARED_ENVIRONMENT_INSTRUCTIONS} Use read_environment_report for that setup report; do not pass its /tmp path to repository file readers. ${fusion ? "" : cloudAgentRoleInstructions(owner, { shellBuilder, direct })}${shellBuilder && "browser_screenshot" in tools ? ` ${visualQaInstructions("tools")}` : ""}\n${pluginSkillsInstructions(plugins)}\n${PROJECT_KNOWLEDGE_INSTRUCTIONS}\nShared project knowledge (historical data, verify against this checkout):\n${JSON.stringify(projectKnowledge)}`,
 			tools,
 			signal: abort.signal,
 			restoreInstructions: async (history) => {

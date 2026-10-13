@@ -15,6 +15,14 @@ export const BUILDER_SHELL_TOOLS = new Set([
 	"read_repository_guidance",
 	"read_environment_report",
 	"report_task_blocked",
+	// Product-only: visual QA on the shared desktop. The Terminal-Bench bridge
+	// builds its own tool set, so these do not change the measured surface.
+	"browser_open",
+	"browser_screenshot",
+	"browser_inspect",
+	"browser_click",
+	"browser_type",
+	"browser_key",
 ]);
 
 export function builderShellTools(tools: ToolSet): ToolSet {

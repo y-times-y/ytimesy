@@ -136,3 +136,26 @@ export function desktopViewerUrlForMachine(providerRef: string) {
 export function desktopPortIsListening(output: string) {
 	return output.includes("YTIMESY_DESKTOP_UP");
 }
+
+/**
+ * The agent's first shared-desktop tool call in the running turn: the moment
+ * the Desktop tab should catch up with a desktop the agent started itself.
+ */
+export function agentDesktopActivityInTurn(input: {
+	readonly turnStatus: string | undefined;
+	readonly items: readonly { kind: string; id: string; tool?: string }[];
+}): string | null {
+	if (input.turnStatus !== "running") return null;
+	let turnStart = 0;
+	input.items.forEach((item, index) => {
+		if (item.kind === "userMessage") turnStart = index;
+	});
+	return (
+		input.items
+			.slice(turnStart)
+			.find(
+				(item) =>
+					item.kind === "dynamicToolCall" && item.tool?.startsWith("browser_"),
+			)?.id ?? null
+	);
+}

@@ -64,3 +64,41 @@ it("offers a shell surface exactly as given, without compose_tools or search_too
 		),
 	).toContain("compose_tools");
 });
+
+it("lets the product builder do visual QA without leaving the shell surface", async () => {
+	const { discoverableAgentTools } = await import("./agent-tool-discovery");
+	const { isShellSurface } = await import("#/domain/harness-model-profile");
+	const make = () =>
+		tool({ inputSchema: z.object({}), execute: async () => ({}) });
+	const browser = [
+		"browser_open",
+		"browser_screenshot",
+		"browser_inspect",
+		"browser_click",
+		"browser_type",
+		"browser_key",
+	];
+	const kept = Object.keys(
+		builderShellTools(
+			Object.fromEntries(
+				["execute_command", "apply_patch", "browser_execute", ...browser].map(
+					(name) => [name, make()],
+				),
+			),
+		),
+	);
+	expect(kept).toEqual(["execute_command", "apply_patch", ...browser]);
+	expect(isShellSurface(kept)).toBe(true);
+	const offered = discoverableAgentTools(
+		Object.fromEntries(kept.map((name) => [name, make()])),
+		[],
+		[],
+		"implementation",
+	);
+	expect(Object.keys(offered)).not.toContain("search_tools");
+	expect(
+		Object.values(offered).every(
+			(definition) => !(definition as { deferLoading?: boolean }).deferLoading,
+		),
+	).toBe(true);
+});
