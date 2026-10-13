@@ -256,8 +256,7 @@ export async function advanceCodexDeviceLogin(
 			});
 		await client.query(
 			`update agent_account set status='connected',encrypted_codex_auth=$2,
-			 encrypted_snapshot_id=null,plan_type=$3,message=null,
-			 encrypted_device_login=null,updated_at=now()
+			 plan_type=$3,message=null,encrypted_device_login=null,updated_at=now()
 			 where user_id=$1 and provider='codex'`,
 			[userId, await seal(JSON.stringify(auth)), codexPlanType(auth)],
 		);
