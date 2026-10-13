@@ -194,7 +194,7 @@ export async function requiresOAuth(
 	try {
 		const response = await fetchFn(url, {
 			method: "POST",
-			redirect: "error",
+			redirect: "manual",
 			signal: AbortSignal.timeout(10_000),
 			headers: {
 				"Content-Type": "application/json",

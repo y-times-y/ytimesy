@@ -60,7 +60,7 @@ it("refreshes over the fixed native OAuth endpoint without invoking a CLI", asyn
 		"https://auth.openai.com/oauth/token",
 		expect.objectContaining({
 			method: "POST",
-			redirect: "error",
+			redirect: "manual",
 			signal: expect.any(AbortSignal),
 		}),
 	);

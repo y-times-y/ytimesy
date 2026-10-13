@@ -96,7 +96,7 @@ export function modelEndpointTransport(baseUrl: string) {
 			body: request.body,
 			duplex: request.body ? "half" : undefined,
 			signal,
-			redirect: "error",
+			redirect: "manual",
 			dispatcher,
 		} as Parameters<typeof transportFetch>[1])) as unknown as Response;
 	};

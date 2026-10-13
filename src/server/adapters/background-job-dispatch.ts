@@ -63,7 +63,7 @@ export async function dispatchBackgroundJob(
 			const response = await executorFetch(url, {
 				method: "POST",
 				body,
-				redirect: "error",
+				redirect: "manual",
 				signal: AbortSignal.timeout(10_000),
 				headers: {
 					...(await signDeliveryRequest(secret, "POST", url, body)),

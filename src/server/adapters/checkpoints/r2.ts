@@ -99,7 +99,7 @@ async function r2Fetch(
 	const body = options.body ?? "";
 	return fetch(url, {
 		method,
-		redirect: "error",
+		redirect: "manual",
 		signal: AbortSignal.timeout(60_000),
 		headers: signedR2Headers({ method, url, body, ...config }),
 		...(options.body === undefined ? {} : { body }),

@@ -76,7 +76,7 @@ it("normalizes Node-only redirect mode before constructing the edge Request", as
 		);
 		await expect(
 			transport.fetch("https://openrouter.ai/api/v1/models", {
-				redirect: "error",
+				redirect: "manual",
 			}),
 		).resolves.toBeInstanceOf(Response);
 	} finally {

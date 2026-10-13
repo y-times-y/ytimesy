@@ -149,7 +149,7 @@ export async function fetchPinnedPlugin(
 		);
 	const response = await fetchImpl(
 		`https://codeload.github.com/${source.owner}/${source.repo}/tar.gz/${source.sha}`,
-		{ redirect: "error", signal: AbortSignal.timeout(120_000) },
+		{ redirect: "manual", signal: AbortSignal.timeout(120_000) },
 	);
 	if (!response.ok || !response.body)
 		throw new Error(`Could not download the plugin (${response.status}).`);

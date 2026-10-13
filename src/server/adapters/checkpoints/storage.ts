@@ -86,7 +86,7 @@ async function request(path: string, options: RequestInit = {}) {
 	const { url, key } = configuration();
 	return fetch(`${url}/storage/v1/${path}`, {
 		...options,
-		redirect: "error",
+		redirect: "manual",
 		signal: AbortSignal.timeout(60_000),
 		headers: {
 			apikey: key,
