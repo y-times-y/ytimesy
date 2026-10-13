@@ -137,8 +137,13 @@ export class BackgroundJobRunner extends DurableObject<EdgeExecutorEnvironment> 
 		let outcome: "delivered" | "pending";
 		try {
 			outcome = await runBackgroundJob(this.env, record.job);
-		} catch {
-			await this.finish(record, "failed", "error");
+		} catch (error) {
+			// Messages can carry provider or SQL diagnostics; log the class only.
+			await this.finish(
+				record,
+				"failed",
+				`error:${error instanceof Error ? error.name : "unknown"}`,
+			);
 			return;
 		}
 		if (outcome === "delivered") {
