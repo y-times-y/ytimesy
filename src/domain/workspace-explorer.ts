@@ -6,6 +6,8 @@ export const MAX_WORKSPACE_SOURCE_CHARS = 200_000;
 export type WorkspaceExplorerListing = {
 	readonly root: string | null;
 	readonly paths: readonly string[];
+	/** Why there is nothing to list: no machine for this chat yet, or it is asleep. */
+	readonly machine?: "none" | "asleep";
 };
 
 export type WorkspaceSourceFile = {

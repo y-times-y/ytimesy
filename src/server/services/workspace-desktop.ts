@@ -74,10 +74,15 @@ export function readWorkspaceDesktop(
  * display through a same-origin viewer. Chrome install continues in the
  * background so Connect is not blocked.
  */
-export function startWorkspaceDesktop(
+/**
+ * Makes sure this chat has its own machine and that it is running: a new or
+ * forked chat gets a copy of the project's machine on first use (a minute or
+ * two), and an asleep one is started. Null when the project isn't ready yet.
+ */
+export function ensureSessionMachine(
 	machines: WorkspaceMachines,
 	scope: DesktopScope,
-): Effect.Effect<WorkspaceDesktop> {
+): Effect.Effect<string | null, unknown> {
 	return Effect.gen(function* () {
 		const workspace = yield* Effect.tryPromise(() =>
 			readyWorkspaceForOwner(scope.userId, scope.projectId),
@@ -86,12 +91,8 @@ export function startWorkspaceDesktop(
 			!workspace ||
 			!workspaceEnvironmentIsReady(workspace) ||
 			!scope.projectId
-		) {
-			return {
-				status: "failed" as const,
-				reason: START_HARNESS_BEFORE_DESKTOP,
-			};
-		}
+		)
+			return null;
 		const peeked = yield* Effect.tryPromise(() =>
 			peekAgentSessionMachine({
 				userId: scope.userId,
@@ -100,12 +101,7 @@ export function startWorkspaceDesktop(
 			}),
 		);
 		const existing = peeked.session;
-		if (!existing) {
-			return {
-				status: "failed" as const,
-				reason: START_HARNESS_BEFORE_DESKTOP,
-			};
-		}
+		if (!existing) return null;
 		let providerRef = copiedAgentMachineRef({
 			sessionProviderRef: peeked.providerRef,
 			templateProviderRef: workspace.providerRef,
@@ -124,17 +120,27 @@ export function startWorkspaceDesktop(
 				templateProviderRef: workspace.providerRef,
 			});
 		}
-		if (!providerRef) {
+		if (!providerRef) return null;
+		const ref = providerRef;
+		yield* Effect.tryPromise(() => machines.ensureRunning(WorkspaceId(ref)));
+		return ref;
+	});
+}
+
+export function startWorkspaceDesktop(
+	machines: WorkspaceMachines,
+	scope: DesktopScope,
+): Effect.Effect<WorkspaceDesktop> {
+	return Effect.gen(function* () {
+		const key = scopeKey(scope);
+		const providerRef = yield* ensureSessionMachine(machines, scope);
+		if (!providerRef || !scope.projectId) {
 			return {
 				status: "failed" as const,
 				reason: START_HARNESS_BEFORE_DESKTOP,
 			};
 		}
-		const key = scopeKey(scope);
 		desktops.set(key, { status: "starting" });
-		yield* Effect.tryPromise(() =>
-			machines.ensureRunning(WorkspaceId(providerRef)),
-		);
 		const started = yield* Effect.tryPromise(() =>
 			ensureDesktopProcesses(machines, providerRef),
 		);
@@ -170,7 +176,7 @@ export function startWorkspaceDesktop(
 			{
 				status: "running",
 				viewerUrl: desktopClientViewerUrl({
-					projectId: scope.projectId,
+					projectId: scope.projectId as string,
 					sessionId: scope.sessionId,
 				}),
 				display: ":0",

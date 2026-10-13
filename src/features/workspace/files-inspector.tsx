@@ -19,6 +19,7 @@ import {
 	listWorkspaceExplorerFn,
 	readWorkspacePreviewFn,
 	readWorkspaceSourceFn,
+	wakeWorkspaceMachineFn,
 	writeWorkspaceSourceFn,
 } from "./explorer.fn";
 import {
@@ -54,6 +55,15 @@ export function FilesInspector({
 	const listExplorer = useServerFn(listWorkspaceExplorerFn);
 	const readSource = useServerFn(readWorkspaceSourceFn);
 	const readPreview = useServerFn(readWorkspacePreviewFn);
+	const wakeMachine = useServerFn(wakeWorkspaceMachineFn);
+	const queryClient = useQueryClient();
+	const wake = useMutation({
+		mutationFn: () => wakeMachine({ data: { projectId, sessionId } }),
+		onSettled: () =>
+			queryClient.invalidateQueries({
+				queryKey: ["workspace-explorer", projectId, sessionId],
+			}),
+	});
 	const explorer = useQuery({
 		queryKey: ["workspace-explorer", projectId, sessionId],
 		queryFn: () =>
@@ -130,12 +140,43 @@ export function FilesInspector({
 				/>
 				{treeOpen ? (
 					<nav className="file-tree" aria-label="Workspace files">
+						{explorer.data?.machine ? (
+							<div className="file-tree-machine">
+								<p>
+									{wake.isPending
+										? explorer.data.machine === "none"
+											? "Setting up this chat's computer. The first time takes a minute or two."
+											: "Waking this chat's computer…"
+										: wake.data && !wake.data.ready
+											? "This project's environment isn't ready yet."
+											: explorer.data.machine === "none"
+												? "This chat doesn't have its own computer yet, so there are no files to show."
+												: "This chat's computer is asleep to save minutes."}
+									{tree.length && !wake.isPending
+										? " Showing this chat's changes only."
+										: ""}
+								</p>
+								<button
+									type="button"
+									className="file-tree-machine-button"
+									disabled={wake.isPending}
+									onClick={() => wake.mutate()}
+								>
+									{explorer.data.machine === "none"
+										? "Set up computer"
+										: "Wake computer"}
+								</button>
+								{wake.error ? <p role="alert">{wake.error.message}</p> : null}
+							</div>
+						) : null}
 						{tree.length === 0 ? (
-							<p className="file-tree-empty">
-								{explorer.isPending
-									? "Loading files…"
-									: "The workspace tree will appear here."}
-							</p>
+							explorer.data?.machine ? null : (
+								<p className="file-tree-empty">
+									{explorer.isPending
+										? "Loading files…"
+										: "No files in this checkout."}
+								</p>
+							)
 						) : (
 							<FileTreeNodes
 								nodes={tree}

@@ -12,7 +12,9 @@ import type {
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
 import { enabledPluginComponents } from "#/server/adapters/plugin-installs";
 import { requireUser } from "#/server/auth/auth";
+import { requireSameOrigin } from "#/server/http";
 import { WorkspaceMachineService } from "#/server/services/capabilities";
+import { ensureSessionMachine } from "#/server/services/workspace-desktop";
 import {
 	type ExplorerScope,
 	listProjectCommands,
@@ -81,6 +83,20 @@ export const listWorkspaceExplorerFn = createServerFn({ method: "GET" })
 		} catch {
 			return { root: null, paths: [] };
 		}
+	});
+
+/** Sets up or wakes this chat's machine so Files, Terminal and Desktop can use it. */
+export const wakeWorkspaceMachineFn = createServerFn({ method: "POST" })
+	.validator(optionalProjectId)
+	.handler(async ({ data }): Promise<{ ready: boolean }> => {
+		requireSameOrigin(getRequest());
+		const scope = await requireScope(data.projectId, data.sessionId);
+		const ref = await runWithMachines((machines) =>
+			ensureSessionMachine(machines, scope).pipe(
+				Effect.catchAll(() => Effect.succeed(null)),
+			),
+		);
+		return { ready: ref !== null };
 	});
 
 export const readWorkspaceSourceFn = createServerFn({ method: "GET" })
