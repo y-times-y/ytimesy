@@ -125,12 +125,6 @@ export type SessionItem =
 	| ErrorSessionItem
 	| UnknownSessionItem;
 
-export function isConversationItem(
-	item: SessionItem,
-): item is UserMessageItem | AgentMessageItem {
-	return item.kind === "userMessage" || item.kind === "agentMessage";
-}
-
 export function sessionRecordHasConversation(items: unknown): boolean {
 	if (!Array.isArray(items)) return false;
 	return items.some((item) => {
@@ -205,31 +199,6 @@ export function lastAgentMessageText(
 	return null;
 }
 
-export function reasoningSummariesFromTurn(
-	items: readonly SessionItem[],
-): string[] {
-	let start = 0;
-	for (let index = 0; index < items.length; index += 1) {
-		const item = items[index];
-		if (
-			item?.kind === "userMessage" &&
-			item.text.trim() &&
-			!isWorkspacePreamble(item.text)
-		) {
-			start = index + 1;
-		}
-	}
-	const summaries: string[] = [];
-	for (const item of items.slice(start)) {
-		if (item.kind !== "reasoning") continue;
-		for (const summary of item.summaries) {
-			const trimmed = summary.trim();
-			if (trimmed) summaries.push(trimmed);
-		}
-	}
-	return summaries;
-}
-
 export function sessionItemsFromUnknown(value: unknown): SessionItem[] {
 	return Array.isArray(value)
 		? normalizeRuntimeUserMessages(value as SessionItem[])
@@ -267,69 +236,6 @@ export function sessionItemsQueuedWithUser(
 			timing: { startedAt: Date.now() },
 		},
 	];
-}
-
-export function sessionViewItems(
-	live: readonly SessionItem[],
-	recorded: readonly SessionItem[],
-): SessionItem[] {
-	const normalizedRecorded = normalizeRuntimeUserMessages(recorded);
-	const merged = mergeSessionViewItems(
-		normalizeRuntimeUserMessages(live),
-		normalizedRecorded,
-	);
-	const recordedUsers = normalizedRecorded.filter(
-		(item) => item.kind === "userMessage",
-	);
-	let ordinal = 0;
-	let matchingPrefix = true;
-	return merged.map((item) => {
-		if (item.kind !== "userMessage") return item;
-		const previous = recordedUsers[ordinal++];
-		matchingPrefix = matchingPrefix && previous?.text === item.text;
-		return matchingPrefix && previous?.timing
-			? { ...item, timing: previous.timing }
-			: item;
-	});
-}
-
-function mergeSessionViewItems(
-	live: readonly SessionItem[],
-	recorded: readonly SessionItem[],
-): SessionItem[] {
-	const ahead = transcriptAheadOfPeer(live, recorded);
-	if (ahead) {
-		const tree = (ahead === recorded ? live : recorded).filter(
-			(item) => item.kind === "fileChange",
-		);
-		const withoutTree = ahead.filter((item) => item.kind !== "fileChange");
-		return tree.length === 0 ? [...ahead] : [...withoutTree, ...tree];
-	}
-	if (sessionRecordHasConversation(live)) return [...live];
-	if (!sessionRecordHasConversation(recorded)) return [...live];
-	const tree = live.filter((item) => item.kind === "fileChange");
-	const withoutTree = recorded.filter((item) => item.kind !== "fileChange");
-	return tree.length === 0 ? [...recorded] : [...withoutTree, ...tree];
-}
-
-function transcriptAheadOfPeer(
-	left: readonly SessionItem[],
-	right: readonly SessionItem[],
-): SessionItem[] | null {
-	const leftUser = lastUserMessageText(left);
-	const rightUser = lastUserMessageText(right);
-	if (!leftUser || !rightUser || leftUser === rightUser) return null;
-	const leftHasRight = userTextsFromItems(left).includes(rightUser);
-	const rightHasLeft = userTextsFromItems(right).includes(leftUser);
-	if (leftHasRight && !rightHasLeft) return [...left];
-	if (rightHasLeft && !leftHasRight) return [...right];
-	return null;
-}
-
-function userTextsFromItems(items: readonly SessionItem[]): string[] {
-	return items
-		.filter((item) => item.kind === "userMessage")
-		.map((item) => item.text);
 }
 
 export function sessionViewShouldReplaceOpenTurn(input: {
@@ -436,17 +342,6 @@ export function sessionTurnLooksSettled(
 	}
 	const last = compactTimelineItems(items).at(-1);
 	return last?.kind === "agentMessage" || last?.kind === "error";
-}
-
-export function persistableTurnStatusFromTranscript(input: {
-	readonly liveStatus: SessionTurnStatus;
-	readonly items: readonly SessionItem[];
-}): SessionTurnStatus {
-	if (input.liveStatus !== "running" || !sessionTurnLooksSettled(input.items)) {
-		return input.liveStatus;
-	}
-	const last = compactTimelineItems(input.items).at(-1);
-	return last?.kind === "error" ? "failed" : "completed";
 }
 
 export function showTurnWorking(

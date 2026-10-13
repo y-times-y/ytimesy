@@ -4,7 +4,7 @@ import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import {
 	addMcpServer,
 	connectableMcpServers,
-	listMcpServers,
+	listMcpServersWithOAuth,
 	removeMcpServer,
 	setMcpServerEnabled,
 } from "../src/server/adapters/mcp-servers";
@@ -41,9 +41,11 @@ it("seals headers, lists only header names, and unseals them only for the server
 		headerNames: ["Authorization"],
 		enabled: true,
 	});
-	expect(JSON.stringify(await listMcpServers("alice"))).not.toContain(
-		"live-secret",
-	);
+	expect(
+		JSON.stringify(
+			(await listMcpServersWithOAuth("alice")).map((entry) => entry.server),
+		),
+	).not.toContain("live-secret");
 	const stored = await db.query<{ sealed_headers: string }>(
 		"select sealed_headers from mcp_server",
 	);
@@ -55,7 +57,9 @@ it("seals headers, lists only header names, and unseals them only for the server
 			headers: { Authorization: "Bearer live-secret" },
 		},
 	]);
-	expect(await listMcpServers("bob")).toEqual([]);
+	expect(
+		(await listMcpServersWithOAuth("bob")).map((entry) => entry.server),
+	).toEqual([]);
 	expect(await connectableMcpServers("bob", null)).toEqual([]);
 });
 
@@ -77,9 +81,11 @@ it("scopes project servers, honours disable, and rejects non-HTTPS URLs", async 
 		(await connectableMcpServers("alice", project)).map((s) => s.name),
 	).toEqual(["linear"]);
 	await removeMcpServer("alice", scoped.id);
-	expect((await listMcpServers("alice")).map((s) => s.name)).toEqual([
-		"linear",
-	]);
+	expect(
+		(await listMcpServersWithOAuth("alice"))
+			.map((entry) => entry.server)
+			.map((s) => s.name),
+	).toEqual(["linear"]);
 	await expect(
 		addMcpServer("alice", { name: "plain", url: "http://example.com/mcp" }),
 	).rejects.toThrow();

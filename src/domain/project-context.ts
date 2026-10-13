@@ -5,25 +5,6 @@ export type ProjectTrace = {
 	readonly summary: string;
 };
 
-export function projectContextDocument(input: {
-	readonly briefing: string;
-	readonly traces: readonly ProjectTrace[];
-}): string {
-	const briefing = briefingLinesNewestFirst(input.briefing);
-	const traces = input.traces
-		.map((trace) => {
-			const summary = trace.summary.trim();
-			if (!summary) return null;
-			const area = trace.area?.trim();
-			return area ? `- ${area}: ${summary}` : `- ${summary}`;
-		})
-		.filter((line): line is string => Boolean(line));
-	const parts: string[] = [];
-	if (briefing) parts.push(`## Project briefing\n${briefing}`);
-	if (traces.length) parts.push(`## Related traces\n${traces.join("\n")}`);
-	return parts.join("\n\n");
-}
-
 export function relatedTracesForTask(
 	traces: readonly ProjectTrace[],
 	task: string,
@@ -105,16 +86,6 @@ export function traceSummaryFromTurn(input: {
 	return combined.length > 800 ? `${combined.slice(0, 799)}…` : combined;
 }
 
-export function promptTextWithProjectContext(input: {
-	readonly task: string;
-	readonly document: string;
-}): string {
-	const document = input.document.trim();
-	const task = input.task;
-	if (!document) return task;
-	return `Shared project context from sibling agents:\n\n${document}\n\n---\n\n${task}`;
-}
-
 /**
  * Related traces key off this path so the next agent gets how a sibling
  * figured out the same area, not every thought from every session.
@@ -173,16 +144,6 @@ function areaFromPaths(paths: readonly string[]): string | null {
 	return unique[0] ?? null;
 }
 
-function briefingLinesNewestFirst(briefing: string): string {
-	if (briefing.includes("<!-- ytimesy-knowledge:")) return briefing.trim();
-	return briefing
-		.split("\n")
-		.map((line) => line.trim())
-		.filter((line) => line && !isPingBriefingLine(line))
-		.reverse()
-		.join("\n");
-}
-
 function isExactReplyEcho(task: string, reply: string): boolean {
 	const token = reply.trim();
 	if (!token || token.length > 80 || /\s/.test(token)) return false;
@@ -196,9 +157,4 @@ function isExactReplyEcho(task: string, reply: string): boolean {
 function isExactReplyEchoTrace(summary: string): boolean {
 	if (/\nHow:/i.test(summary)) return false;
 	return /^reply with exactly .+: \S{1,80}$/i.test(summary.trim());
-}
-
-function isPingBriefingLine(line: string): boolean {
-	if (isExactReplyEchoTrace(line)) return true;
-	return /do not edit files\.: \S{1,80}$/i.test(line);
 }

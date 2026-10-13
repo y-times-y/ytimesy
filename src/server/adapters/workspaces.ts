@@ -155,18 +155,6 @@ export async function recordWorkspaceEvent(
 	);
 }
 
-export async function listWorkspaceEvents(
-	userId: string,
-	workspaceId: string,
-	limit = 50,
-) {
-	const result = await database().query(
-		"select message,created_at from workspace_event where workspace_id=$1 and user_id=$2 order by created_at desc limit $3",
-		[workspaceId, userId, limit],
-	);
-	return result.rows as { message: string; created_at: Date }[];
-}
-
 function toWorkspace(row: WorkspaceRow): ProjectWorkspace {
 	return {
 		id: row.id,

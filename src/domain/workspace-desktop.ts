@@ -23,18 +23,6 @@ export function desktopStartFailureReason(cause: unknown): string {
 	);
 }
 
-export function desktopFailedBecauseWorkspaceGone(cause: unknown): boolean {
-	return workspaceLooksGone(failureMessage(cause));
-}
-
-export function desktopViewerUrl(desktop: WorkspaceDesktop): string | null {
-	return desktop.status === "running" ? desktop.viewerUrl : null;
-}
-
-export function desktopCanBeControlled(desktop: WorkspaceDesktop): boolean {
-	return desktop.status === "running" && Boolean(desktop.viewerUrl);
-}
-
 export function desktopInspectorShouldStart(input: {
 	readonly tabActive: boolean;
 	readonly projectId?: string;
@@ -124,10 +112,6 @@ export function desktopHostname(providerRef: string) {
 		.slice(-12)
 		.toLowerCase();
 	return `ytimesy-desk-${slug || "local"}.style.dev`;
-}
-
-export function desktopViewerUrlForMachine(providerRef: string) {
-	return desktopEmbedUrl(`https://${desktopHostname(providerRef)}`);
 }
 
 export function desktopPortIsListening(output: string) {

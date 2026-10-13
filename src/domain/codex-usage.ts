@@ -33,7 +33,3 @@ const usageSchema = z.object({
 		.optional(),
 });
 export type CodexUsage = z.infer<typeof usageSchema>;
-export function parseCodexUsage(value: unknown): CodexUsage | undefined {
-	const result = usageSchema.safeParse(value);
-	return result.success ? result.data : undefined;
-}

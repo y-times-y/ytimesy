@@ -3,10 +3,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { Effect } from "effect";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { saveProject } from "../src/server/adapters/projects";
-import {
-	listWorkspaceEvents,
-	workspaceForProject,
-} from "../src/server/adapters/workspaces";
+import { workspaceForProject } from "../src/server/adapters/workspaces";
 import { enqueueProjectWorkspace } from "../src/server/services/workspaces";
 
 let db: PGlite;
@@ -123,7 +120,12 @@ it("records queue failures without storing secrets", async () => {
 			},
 		}),
 	);
-	const events = await listWorkspaceEvents("alice", queued.id);
+	const events = (
+		await db.query<{ message: string }>(
+			"select message from workspace_event where workspace_id=$1 order by created_at desc",
+			[queued.id],
+		)
+	).rows;
 	expect(events[0].message).not.toContain("ghp_");
 	expect(events[0].message).toContain("Job queue is unavailable");
 });

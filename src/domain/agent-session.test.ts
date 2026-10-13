@@ -3,13 +3,11 @@ import {
 	agentSessionMachineSlug,
 	chatsFromAgentSessions,
 	copiedAgentMachineRef,
-	copiedSessionScratchFileResetCommand,
 	copiedSessionScratchResetCommand,
 	copiedSessionScratchResetCommands,
 	projectEnvironmentSnapshotSlug,
 	sessionMachinePlan,
 	sessionMachineRefsToDestroy,
-	sessionTurnStatusForPersist,
 	shouldResealProjectSnapshotAfterCopyFailure,
 	workspaceCopyCapacityRetryDelaysMs,
 } from "./agent-session";
@@ -204,56 +202,6 @@ describe("agent session names", () => {
 				workspaceId: null,
 			},
 		]);
-	});
-});
-
-describe("sessionTurnStatusForPersist", () => {
-	it("does not overwrite a stored running turn on a paused disconnect", () => {
-		expect(
-			sessionTurnStatusForPersist({
-				liveStatus: "idle",
-				liveConnection: "disconnected",
-			}),
-		).toBeUndefined();
-	});
-
-	it("takes the live harness status once that VM is connected", () => {
-		expect(
-			sessionTurnStatusForPersist({
-				liveStatus: "completed",
-				liveConnection: "authenticated",
-			}),
-		).toBe("completed");
-		expect(
-			sessionTurnStatusForPersist({
-				liveStatus: "failed",
-				liveConnection: "failed",
-			}),
-		).toBe("failed");
-		expect(
-			sessionTurnStatusForPersist({
-				liveStatus: "idle",
-				liveConnection: "authenticated",
-				storedStatus: "running",
-			}),
-		).toBeUndefined();
-		expect(
-			sessionTurnStatusForPersist({
-				liveStatus: "completed",
-				liveConnection: "authenticated",
-				storedStatus: "running",
-				storedLastUser: "list the files",
-				liveLastUser: "tell me a joke",
-			}),
-		).toBeUndefined();
-	});
-});
-
-describe("copiedSessionScratchFileResetCommand", () => {
-	it("is a direct rm so Freestyle exec does not need a shell", () => {
-		expect(copiedSessionScratchFileResetCommand()).toBe(
-			"rm -f /tmp/ytimesy-opencode-status.json /tmp/ytimesy-claude-auth-status.json /tmp/ytimesy-auth-status.json /tmp/ytimesy-opencode-serve.pid /tmp/ytimesy-opencode-serve.log /tmp/ytimesy-opencode-http-body /tmp/ytimesy-opencode-auth.json /tmp/ytimesy-opencode-auth-result.txt /tmp/ytimesy-task-request.json /tmp/ytimesy-task-result.json /tmp/ytimesy-side-request.json /tmp/ytimesy-side-result.json /tmp/ytimesy-project-context.md",
-		);
 	});
 });
 

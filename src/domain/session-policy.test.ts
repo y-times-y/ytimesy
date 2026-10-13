@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { canStartAgentTurn, isAuthenticatedAgent } from "./agent-connection";
+import { canStartAgentTurn } from "./agent-connection";
 import { WorkspaceId } from "./ids";
-import { canSendSessionTask, canSubmitComposer } from "./session-policy";
+import { canSendSessionTask } from "./session-policy";
 import { isUsableWorkspace } from "./workspace";
 
 describe("agent connection", () => {
@@ -14,7 +14,6 @@ describe("agent connection", () => {
 			userCode: "ABCD-1234",
 		};
 
-		expect(isAuthenticatedAgent(pending)).toBe(false);
 		expect(canStartAgentTurn(pending)).toBe(false);
 	});
 
@@ -27,7 +26,6 @@ describe("agent connection", () => {
 			email: null,
 		};
 
-		expect(isAuthenticatedAgent(authenticated)).toBe(true);
 		expect(canStartAgentTurn(authenticated)).toBe(true);
 	});
 });
@@ -63,25 +61,5 @@ describe("session send policy", () => {
 				},
 			),
 		).toBe(false);
-	});
-});
-
-describe("composer submit policy", () => {
-	it("blocks a second task while the current turn is running", () => {
-		const running = {
-			status: "running" as const,
-			workspaceId: WorkspaceId("vm_1"),
-		};
-		const authenticated = {
-			status: "authenticated" as const,
-			provider: "codex" as const,
-			authMode: "chatgpt" as const,
-			planType: null,
-			email: null,
-		};
-
-		expect(canSubmitComposer(running, authenticated, "idle")).toBe(true);
-		expect(canSubmitComposer(running, authenticated, "running")).toBe(false);
-		expect(canSubmitComposer(running, authenticated, "completed")).toBe(true);
 	});
 });

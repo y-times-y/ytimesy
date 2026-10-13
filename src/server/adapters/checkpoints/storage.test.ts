@@ -2,7 +2,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
 	checkpointObjectPrefix,
 	downloadCheckpoint,
-	ensurePrivateCheckpointBucket,
 	listContextArchives,
 	removeContextArchives,
 	uploadCheckpoint,
@@ -65,10 +64,6 @@ it("encrypts before upload and rejects another owner's object before network acc
 		true,
 	);
 });
-it("rejects a public bucket", async () => {
-	vi.stubGlobal("fetch", async () => Response.json({ public: true }));
-	await expect(ensurePrivateCheckpointBucket()).rejects.toThrow("private");
-});
 
 it("deletes only context archives in the authorized chat prefix", async () => {
 	const name = "context-00000000-0000-0000-0000-000000000001.enc";
@@ -106,7 +101,6 @@ it("keeps isolated evaluation checkpoints on local disk without contacting stora
 	vi.stubEnv("YTIMESY_EVALUATION_CHECKPOINT_DIR", directory);
 	const fetch = vi.fn<typeof globalThis.fetch>();
 	vi.stubGlobal("fetch", fetch);
-	await ensurePrivateCheckpointBucket();
 	const archive = `context-${"0".repeat(8)}-0000-0000-0000-${"0".repeat(12)}`;
 	const path = await uploadCheckpoint("alice", "chat", archive, "payload");
 	expect(await downloadCheckpoint("alice", "chat", path)).toBe("payload");

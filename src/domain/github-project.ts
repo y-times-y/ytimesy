@@ -1,7 +1,5 @@
 import { ProjectId } from "./ids";
 
-const GITHUB_PROJECT_ID = /^github:([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/;
-
 export type GitHubRepository = {
 	readonly owner: string;
 	readonly name: string;
@@ -66,30 +64,9 @@ export function githubProjectId(fullName: string): ProjectId {
 	return ProjectId(`github:${trimmed}`);
 }
 
-export function parseGitHubProjectId(
-	projectId: ProjectId,
-): { owner: string; name: string } | null {
-	const match = GITHUB_PROJECT_ID.exec(projectId);
-	if (!match) return null;
-	return { owner: match[1], name: match[2] };
-}
-
 export function githubRepositoryName(fullName: string): string {
 	const parsed = fullName.trim().split("/");
 	return parsed.length === 2 && parsed[1] ? parsed[1] : fullName.trim();
-}
-
-export function projectPickerLabel(
-	project: PublicGitHubProject,
-	siblings: readonly PublicGitHubProject[],
-): string {
-	const name = githubRepositoryName(project.fullName);
-	const clashing = siblings.some(
-		(other) =>
-			other.projectId !== project.projectId &&
-			githubRepositoryName(other.fullName) === name,
-	);
-	return clashing ? project.fullName : name;
 }
 
 export function gitHubRepositoryFromApi(
@@ -139,45 +116,6 @@ export function listedGitHubProject(
 	};
 }
 
-export function githubAppInstallUrl(slug: string): string {
-	const cleaned = slug.trim();
-	if (!cleaned) throw new Error("GitHub App slug is required");
-	return `https://github.com/apps/${cleaned}/installations/new`;
-}
-
-export function gitHubProjectCatalog(input: {
-	credentialsPresent: boolean;
-	installUrl: string | null;
-	installationCount: number;
-	repositories: readonly GitHubRepository[];
-	error?: string;
-}): GitHubProjectCatalog {
-	if (input.error) {
-		return {
-			status: "failed",
-			message: input.error,
-			installUrl: input.installUrl,
-		};
-	}
-	if (!input.credentialsPresent) {
-		return {
-			status: "unconfigured",
-			message: "GitHub App credentials are not configured.",
-		};
-	}
-	if (input.installationCount === 0) {
-		return { status: "no_installations", installUrl: input.installUrl };
-	}
-	if (input.repositories.length === 0) {
-		return { status: "no_repositories", installUrl: input.installUrl };
-	}
-	return {
-		status: "ready",
-		projects: input.repositories.map(listedGitHubProject),
-		installUrl: input.installUrl,
-	};
-}
-
 export function catalogStatusCopy(
 	catalog: GitHubProjectCatalog,
 ): string | null {
@@ -193,90 +131,6 @@ export function catalogStatusCopy(
 		case "ready":
 			return null;
 	}
-}
-
-export function resolveSelectedProject(input: {
-	projects: readonly ListedGitHubProject[];
-	saved: SelectedGitHubProject | null;
-}): SelectedGitHubProject | null {
-	if (input.saved) {
-		const match = input.projects.find(
-			(project) => project.projectId === input.saved?.projectId,
-		);
-		if (match) {
-			return {
-				projectId: match.projectId,
-				branch: input.saved.branch.trim() || match.repository.defaultBranch,
-			};
-		}
-	}
-	if (input.projects.length !== 1) return null;
-	const only = input.projects[0];
-	return {
-		projectId: only.projectId,
-		branch: only.repository.defaultBranch,
-	};
-}
-
-export function branchesForPicker(
-	branches: readonly string[],
-	defaultBranch: string,
-): readonly string[] {
-	const names = [
-		...new Set(branches.map((branch) => branch.trim()).filter(Boolean)),
-	];
-	if (defaultBranch && !names.includes(defaultBranch)) {
-		names.unshift(defaultBranch);
-	}
-	return names;
-}
-
-export function resolveSelectedBranch(
-	selected: SelectedGitHubProject,
-	branches: readonly string[],
-	defaultBranch: string,
-): string {
-	if (branches.includes(selected.branch)) return selected.branch;
-	if (branches.includes(defaultBranch)) return defaultBranch;
-	return selected.branch || defaultBranch;
-}
-
-export function selectionNeedsPersist(
-	saved: SelectedGitHubProject | null,
-	resolved: SelectedGitHubProject | null,
-): boolean {
-	if (!resolved) return saved !== null;
-	if (!saved) return true;
-	return (
-		saved.projectId !== resolved.projectId || saved.branch !== resolved.branch
-	);
-}
-
-export function publicProjectPicker(input: {
-	catalog: GitHubProjectCatalog;
-	selected: SelectedGitHubProject | null;
-	branches: readonly string[];
-}): PublicProjectPicker {
-	const projects =
-		input.catalog.status === "ready"
-			? input.catalog.projects.map((project) => ({
-					projectId: project.projectId,
-					fullName: project.repository.fullName,
-					defaultBranch: project.repository.defaultBranch,
-					private: project.repository.private,
-				}))
-			: [];
-	const installUrl =
-		input.catalog.status === "unconfigured" ? null : input.catalog.installUrl;
-	return {
-		status: input.catalog.status,
-		projects,
-		selectedProjectId: input.selected?.projectId ?? null,
-		selectedBranch: input.selected?.branch ?? null,
-		branches: input.branches,
-		installUrl,
-		message: catalogStatusCopy(input.catalog),
-	};
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

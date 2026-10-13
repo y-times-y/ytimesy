@@ -4,12 +4,9 @@ import {
 	addProjectCopy,
 	addProjectPhase,
 	filterRepositories,
-	projectPickerLists,
 	projectPickerRows,
 	projectPickerSections,
 	repositoryChoiceValue,
-	repositoryIsAdded,
-	scratchRepositoryName,
 } from "./add-project";
 
 describe("add project", () => {
@@ -106,59 +103,6 @@ describe("add project", () => {
 		expect(filterRepositories(repositories, "yti")).toEqual([repositories[0]]);
 		expect(repositoryChoiceValue(repositories[0])).toBe("1:11");
 		expect(addProjectCopy("connect").title).toBe("Connect GitHub");
-	});
-
-	it("lets the composer picker add a GitHub repo that is not a project yet", () => {
-		const ytimesy = {
-			installationId: 1,
-			repositoryId: 11,
-			fullName: "y-times-y/ytimesy",
-			defaultBranch: "master",
-		};
-		const notes = {
-			installationId: 1,
-			repositoryId: 12,
-			fullName: "het/notes",
-			defaultBranch: "main",
-		};
-		expect(
-			repositoryIsAdded([{ installationId: 1, repositoryId: 11 }], notes),
-		).toBe(false);
-		expect(
-			projectPickerLists({
-				projects: [{ ...ytimesy, id: "p1", branch: "ytimesy/ytimesy-000b" }],
-				repositories: [ytimesy, notes],
-				query: "",
-			}),
-		).toEqual({
-			added: [{ ...ytimesy, id: "p1", branch: "ytimesy/ytimesy-000b" }],
-			available: [notes],
-		});
-		expect(
-			projectPickerRows({
-				projects: [{ ...ytimesy, id: "p1", branch: "ytimesy/ytimesy-000b" }],
-				repositories: [ytimesy, notes],
-				query: "",
-				selectedProjectId: "p1",
-			}),
-		).toEqual([
-			{
-				key: "1:12",
-				fullName: "het/notes",
-				selected: false,
-				project: undefined,
-				repository: notes,
-			},
-			{
-				key: "1:11",
-				fullName: "y-times-y/ytimesy",
-				selected: true,
-				project: { ...ytimesy, id: "p1", branch: "ytimesy/ytimesy-000b" },
-				repository: ytimesy,
-			},
-		]);
-		expect(scratchRepositoryName("  New_App.1 ")).toBe("New_App.1");
-		expect(scratchRepositoryName("bad name")).toBe(null);
 	});
 });
 

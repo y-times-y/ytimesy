@@ -78,22 +78,6 @@ export function sessionCloneBranch(input: {
 	return "";
 }
 
-export function listedSessionBranches(input: {
-	readonly remoteBranches: readonly string[];
-	readonly workingBranch?: string;
-}): string[] {
-	const remotes = input.remoteBranches
-		.map((branch) => branch.trim())
-		.filter((branch) => branch && branch !== SESSION_BRANCH_PREFIX);
-	const working = input.workingBranch?.trim();
-	return [
-		...new Set([
-			...(working && isGeneratedSessionBranch(working) ? [working] : []),
-			...remotes,
-		]),
-	];
-}
-
 export function sessionBranchChangeRestartsWorkspace(input: {
 	readonly from: string;
 	readonly to: string;
@@ -114,15 +98,5 @@ export function sessionBranchChangeRestartsWorkspace(input: {
 			title: input.title,
 			id: input.id,
 		})
-	);
-}
-
-export function canSelectSessionBranch(input: {
-	readonly branch: string;
-	readonly remoteBranches: readonly string[];
-}): boolean {
-	return (
-		isGeneratedSessionBranch(input.branch) ||
-		input.remoteBranches.includes(input.branch)
 	);
 }

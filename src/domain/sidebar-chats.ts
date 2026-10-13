@@ -103,15 +103,6 @@ export function sidebarHasAttentionChat(input: {
 	});
 }
 
-export function chatsListedInSidebar(input: {
-	projectSelected: boolean;
-	hasUserMessage: boolean;
-	title: string;
-}): readonly SidebarChat[] {
-	if (!input.projectSelected || !input.hasUserMessage) return [];
-	return [{ id: "current", title: input.title }];
-}
-
 export function sidebarChatsEmptyCopy(input: {
 	loading: boolean;
 	projectSelected: boolean;
@@ -252,23 +243,6 @@ export function sidebarChatIsRunning(input: {
 		return input.openTurnStatus === "running";
 	}
 	return input.turnStatus === "running";
-}
-
-export function sidebarHasRunningChat(input: {
-	readonly chats: readonly SidebarChat[];
-	readonly busyChatIds: readonly string[];
-	readonly openChatId?: string;
-	readonly openTurnStatus?: SessionTurnStatus;
-}): boolean {
-	return input.chats.some((chat) =>
-		sidebarChatIsRunning({
-			chatId: chat.id,
-			turnStatus: chat.turnStatus,
-			busyChatIds: input.busyChatIds,
-			openChatId: input.openChatId,
-			openTurnStatus: input.openTurnStatus,
-		}),
-	);
 }
 
 export function withChatTurnStatus(

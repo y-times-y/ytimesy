@@ -192,19 +192,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export function modelIdToSubmit(
-	requested: string,
-	models: readonly { readonly id: string }[],
-	options?: ListedModelPreference,
-): string {
-	return (
-		submittedListedModelId(requested, models, options) ||
-		requested.trim() ||
-		options?.lastUsedId?.trim() ||
-		""
-	);
-}
-
 export type ListedModelPreference = {
 	readonly lastUsedId?: string;
 	readonly excludedIds?: readonly string[];

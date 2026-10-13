@@ -96,34 +96,6 @@ async function request(path: string, options: RequestInit = {}) {
 	});
 }
 
-export async function ensurePrivateCheckpointBucket() {
-	const found = await request(`bucket/${BUCKET}`);
-	if (found.ok) {
-		const bucket = await found.json();
-		if (
-			!bucket ||
-			typeof bucket !== "object" ||
-			!("public" in bucket) ||
-			bucket.public !== false
-		)
-			throw new Error("Checkpoint bucket must be private.");
-		return;
-	}
-	if (found.status !== 404 && found.status !== 400)
-		throw new Error("Cannot inspect private checkpoint storage.");
-	const created = await request("bucket", {
-		method: "POST",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({
-			id: BUCKET,
-			name: BUCKET,
-			public: false,
-			file_size_limit: MAX_BYTES,
-		}),
-	});
-	if (!created.ok) throw new Error("Cannot create private checkpoint storage.");
-}
-
 export function checkpointObjectPrefix(userId: string, sessionId: string) {
 	return `${createHash("sha256").update(userId).digest("hex")}/${createHash("sha256").update(sessionId).digest("hex")}/`;
 }

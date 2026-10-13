@@ -88,12 +88,6 @@ export async function addMcpServer(
 	return publicServer(rows[0]);
 }
 
-export async function listMcpServers(
-	userId: string,
-): Promise<PublicMcpServer[]> {
-	return (await listMcpServersWithOAuth(userId)).map((entry) => entry.server);
-}
-
 /** Server-side only: each server with its sealed OAuth record, for sign-in checks. */
 export async function listMcpServersWithOAuth(userId: string) {
 	const { rows } = await database().query<Row>(

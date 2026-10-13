@@ -95,27 +95,3 @@ export function competitionCandidatePublicItems(
 			: item,
 	);
 }
-
-/** Runtime-only judge input is not a user-authored chat message. */
-export function competitionPublicItems(
-	items: readonly SessionItem[],
-): SessionItem[] {
-	const hasJudgePrompt = items.some(
-		(item) =>
-			item.kind === "userMessage" &&
-			item.text.startsWith("Compare independent implementations for: ") &&
-			item.text.includes(competitionJudgeInstructions),
-	);
-	return items.filter(
-		(item) =>
-			item.kind !== "userMessage" ||
-			(!(
-				item.text === competitionJudgeQueueText ||
-				(hasJudgePrompt && item.text === "Comparing agent results")
-			) &&
-				!(
-					item.text.startsWith("Compare independent implementations for: ") &&
-					item.text.includes(competitionJudgeInstructions)
-				)),
-	);
-}

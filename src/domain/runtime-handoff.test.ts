@@ -2,11 +2,7 @@ import { expect, it } from "vitest";
 import { apiConversation, runtimeHandoffPrompt } from "./api-conversation";
 import { SessionItemId } from "./ids";
 import { visibleRuntimeUserText } from "./runtime-handoff";
-import {
-	compactTimelineItems,
-	sessionItemsFromUnknown,
-	sessionViewItems,
-} from "./session-item";
+import { compactTimelineItems, sessionItemsFromUnknown } from "./session-item";
 
 it("keeps handoff evidence internal across native echoes, stored history and the timeline", () => {
 	const prompt = "Read package.json.\nDo not edit files.";
@@ -19,18 +15,9 @@ it("keeps handoff evidence internal across native echoes, stored history and the
 		id: SessionItemId("native"),
 		text: envelope,
 	};
-	const recorded = {
-		...native,
-		id: SessionItemId("queued"),
-		text: prompt,
-		timing: { startedAt: 1000 },
-	};
 	expect(visibleRuntimeUserText(envelope)).toBe(prompt);
 	expect(sessionItemsFromUnknown([native])[0]).toMatchObject({ text: prompt });
 	expect(compactTimelineItems([native])[0]).toMatchObject({ text: prompt });
-	expect(sessionViewItems([native], [recorded])).toEqual([
-		{ ...native, text: prompt, timing: recorded.timing },
-	]);
 	expect(apiConversation([native])).toEqual([
 		{ role: "user", content: prompt },
 	]);

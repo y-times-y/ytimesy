@@ -1,4 +1,3 @@
-import type { AgentConnection } from "./agent-connection";
 import type { AgentProviderId } from "./agent-provider";
 import { isWorkspaceAtCapacity, workspaceLooksGone } from "./failure-message";
 import type { SessionTurnStatus } from "./session-item";
@@ -92,33 +91,6 @@ export function chatsFromAgentSessions(
 		}));
 }
 
-/**
- * A paused chat read is disconnected and does not know whether a sibling
- * send already marked this row running. Leave the stored status until a
- * live harness view replaces it.
- */
-export function sessionTurnStatusForPersist(input: {
-	readonly liveStatus: SessionTurnStatus;
-	readonly liveConnection: AgentConnection["status"];
-	readonly storedStatus?: SessionTurnStatus;
-	readonly storedLastUser?: string | null;
-	readonly liveLastUser?: string | null;
-}): SessionTurnStatus | undefined {
-	if (input.liveConnection === "disconnected") return undefined;
-	if (input.storedStatus === "running" && input.liveStatus === "idle") {
-		return undefined;
-	}
-	if (
-		input.storedStatus === "running" &&
-		input.liveStatus === "completed" &&
-		input.storedLastUser &&
-		input.storedLastUser !== input.liveLastUser
-	) {
-		return undefined;
-	}
-	return input.liveStatus;
-}
-
 /** Prepared snapshots from the native-runtime era can still hold these; copies remove them. */
 export const COPIED_SESSION_SCRATCH_PATHS = [
 	"/tmp/ytimesy-opencode-status.json",
@@ -153,10 +125,6 @@ export const COPIED_SESSION_SCRATCH_TREES = [
 	"/root/.local/state/opencode",
 	"/root/.codex/sessions",
 ] as const;
-
-export function copiedSessionScratchFileResetCommand() {
-	return `rm -f ${COPIED_SESSION_SCRATCH_PATHS.join(" ")}`;
-}
 
 export function copiedSessionScratchResetCommand() {
 	return `rm -rf ${[

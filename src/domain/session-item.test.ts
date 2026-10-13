@@ -3,191 +3,17 @@ import { SessionItemId } from "./ids";
 import {
 	compactTimelineItems,
 	fileChangesFromSessionItems,
-	isConversationItem,
 	isTurnRunning,
 	lastAgentMessageText,
 	lastUserMessageText,
-	liveActivityStatus,
-	persistableTurnStatusFromTranscript,
-	reasoningSummariesFromTurn,
 	type SessionItem,
 	sessionItemsQueuedWithUser,
-	sessionRecordHasConversation,
 	sessionTitleFromItems,
 	sessionUsesFollowUpLayout,
-	sessionViewItems,
-	sessionViewShouldReplaceOpenTurn,
-	showTurnWorking,
 	visibleSessionItems,
 } from "./session-item";
 
 describe("session items", () => {
-	it("keeps user and agent text separate from tool activity", () => {
-		const user: SessionItem = {
-			kind: "userMessage",
-			id: SessionItemId("user-1"),
-			text: "run echo",
-		};
-		const command: SessionItem = {
-			kind: "commandExecution",
-			id: SessionItemId("cmd-1"),
-			command: "echo hi",
-			cwd: "/tmp",
-			status: "completed",
-			output: "hi\n",
-			exitCode: 0,
-		};
-
-		expect(isConversationItem(user)).toBe(true);
-		expect(isConversationItem(command)).toBe(false);
-		expect(sessionRecordHasConversation([user, command])).toBe(true);
-		expect(sessionRecordHasConversation([command])).toBe(false);
-		expect(sessionRecordHasConversation([])).toBe(false);
-		expect(sessionRecordHasConversation(null)).toBe(false);
-		expect(sessionViewItems([command], [user, command])).toEqual([
-			user,
-			command,
-		]);
-		expect(sessionItemsQueuedWithUser([user], "run echo")).toEqual([user]);
-		expect(sessionItemsQueuedWithUser([user], "list the files")).toMatchObject([
-			{ text: "run echo" },
-			{ kind: "userMessage", text: "list the files" },
-		]);
-		expect(
-			sessionViewItems(
-				[
-					user,
-					{ kind: "agentMessage", id: SessionItemId("old"), text: "pong" },
-				],
-				[
-					user,
-					{ kind: "agentMessage", id: SessionItemId("old"), text: "pong" },
-					{
-						kind: "userMessage",
-						id: SessionItemId("next"),
-						text: "list the files",
-					},
-				],
-			),
-		).toMatchObject([
-			{ text: "run echo" },
-			{ text: "pong" },
-			{ text: "list the files" },
-		]);
-		expect(
-			sessionViewItems(
-				[
-					user,
-					{
-						kind: "userMessage",
-						id: SessionItemId("next"),
-						text: "list the files",
-					},
-				],
-				[
-					user,
-					{ kind: "agentMessage", id: SessionItemId("old"), text: "pong" },
-				],
-			),
-		).toMatchObject([{ text: "run echo" }, { text: "list the files" }]);
-		expect(
-			sessionViewShouldReplaceOpenTurn({
-				currentStatus: "running",
-				nextStatus: "idle",
-				currentItems: [
-					{
-						kind: "userMessage",
-						id: SessionItemId("next"),
-						text: "list the files",
-					},
-				],
-				nextItems: [user],
-			}),
-		).toBe(false);
-		expect(
-			sessionViewShouldReplaceOpenTurn({
-				currentStatus: "running",
-				nextStatus: "completed",
-				currentItems: [
-					{
-						kind: "userMessage",
-						id: SessionItemId("next"),
-						text: "list the files",
-					},
-				],
-				nextItems: [
-					{
-						kind: "userMessage",
-						id: SessionItemId("next"),
-						text: "list the files",
-					},
-				],
-			}),
-		).toBe(false);
-		expect(
-			sessionViewShouldReplaceOpenTurn({
-				currentStatus: "running",
-				nextStatus: "completed",
-				currentItems: [
-					{
-						kind: "userMessage",
-						id: SessionItemId("next"),
-						text: "list the files",
-					},
-				],
-				nextItems: [
-					{
-						kind: "userMessage",
-						id: SessionItemId("next"),
-						text: "list the files",
-					},
-					{
-						kind: "agentMessage",
-						id: SessionItemId("done"),
-						text: "pong",
-					},
-				],
-			}),
-		).toBe(true);
-		expect(
-			sessionViewItems(
-				[
-					{
-						kind: "fileChange",
-						id: SessionItemId("tree"),
-						status: "completed",
-						changes: [
-							{
-								path: "README.md",
-								change: "update",
-								additions: 1,
-								deletions: 0,
-								preview: null,
-							},
-						],
-					},
-				],
-				[user],
-			),
-		).toEqual([
-			user,
-			{
-				kind: "fileChange",
-				id: SessionItemId("tree"),
-				status: "completed",
-				changes: [
-					{
-						path: "README.md",
-						change: "update",
-						additions: 1,
-						deletions: 0,
-						preview: null,
-					},
-				],
-			},
-		]);
-	});
-
 	it("does not treat a completed turn as still running", () => {
 		expect(isTurnRunning("running")).toBe(true);
 		expect(isTurnRunning("completed")).toBe(false);
@@ -361,38 +187,6 @@ describe("session items", () => {
 		).toBe("Wrote template_snapshot_id.");
 	});
 
-	it("reads reasoning summaries from the latest turn", () => {
-		expect(
-			reasoningSummariesFromTurn([
-				{
-					kind: "userMessage",
-					id: SessionItemId("user-old"),
-					text: "old task",
-				},
-				{
-					kind: "reasoning",
-					id: SessionItemId("reason-old"),
-					summaries: ["stale"],
-				},
-				{
-					kind: "userMessage",
-					id: SessionItemId("user-1"),
-					text: "Seal the snapshot",
-				},
-				{
-					kind: "reasoning",
-					id: SessionItemId("reason-1"),
-					summaries: ["Snapshot ids are on the unused template."],
-				},
-				{
-					kind: "agentMessage",
-					id: SessionItemId("agent-1"),
-					text: "Wrote template_snapshot_id.",
-				},
-			]),
-		).toEqual(["Snapshot ids are on the unused template."]);
-	});
-
 	it("uses the first line of the latest user message as the session title", () => {
 		expect(sessionTitleFromItems([])).toBe("New session");
 		expect(
@@ -471,87 +265,6 @@ describe("session items", () => {
 				},
 			]).map((item) => item.id),
 		).toEqual([SessionItemId("user-1")]);
-	});
-
-	it("does not add a second Thinking row while a thought is already open", () => {
-		expect(
-			showTurnWorking(
-				[
-					{
-						kind: "userMessage",
-						id: SessionItemId("user-1"),
-						text: "look",
-					},
-					{
-						kind: "reasoning",
-						id: SessionItemId("r1"),
-						summaries: ["checking the repo"],
-					},
-				],
-				"running",
-			),
-		).toBe(false);
-		expect(
-			showTurnWorking(
-				[
-					{
-						kind: "userMessage",
-						id: SessionItemId("user-1"),
-						text: "look",
-					},
-				],
-				"running",
-			),
-		).toBe(true);
-		expect(
-			showTurnWorking(
-				[
-					{
-						kind: "userMessage",
-						id: SessionItemId("user-1"),
-						text: "look",
-					},
-					{
-						kind: "agentMessage",
-						id: SessionItemId("agent-1"),
-						text: "done",
-					},
-				],
-				"running",
-			),
-		).toBe(false);
-		expect(
-			liveActivityStatus({
-				kind: "dynamicToolCall",
-				id: SessionItemId("t1"),
-				tool: "read",
-				status: "inProgress",
-			}),
-		).toBe("inProgress");
-		expect(
-			persistableTurnStatusFromTranscript({
-				liveStatus: "running",
-				items: [
-					{
-						kind: "userMessage",
-						id: SessionItemId("user-1"),
-						text: "look",
-					},
-					{
-						kind: "agentMessage",
-						id: SessionItemId("agent-1"),
-						text: "done",
-					},
-				],
-			}),
-		).toBe("completed");
-		expect(
-			liveActivityStatus({
-				kind: "reasoning",
-				id: SessionItemId("r1"),
-				summaries: ["checking"],
-			}),
-		).toBe("inProgress");
 	});
 
 	it("collects Diff files from shell heredoc writes", () => {
