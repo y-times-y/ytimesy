@@ -120,10 +120,7 @@ export const listProjectAgentTasks = createServerFn({ method: "GET" })
 		}
 		const descendants = await descendantAgentSessions(user.id, root.id);
 		const byId = new Map(descendants.map((session) => [session.id, session]));
-		return agentTaskTree(
-			root.id,
-			descendants.filter((session) => session.title !== "Side chat"),
-		).map((task) => ({
+		return agentTaskTree(root.id, descendants).map((task) => ({
 			...task,
 			items: childTaskPublicItems(
 				sessionItemsFromUnknown(byId.get(task.id)?.items),

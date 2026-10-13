@@ -64,7 +64,6 @@ export async function publishConversationSnapshot(
 }
 export async function subscribeConversationSnapshot(
 	snapshot: ConversationSnapshot,
-	displaySessionId: string,
 	signal: AbortSignal,
 ) {
 	const config = realtimeDeliveryConfiguration();
@@ -72,7 +71,6 @@ export async function subscribeConversationSnapshot(
 	const query = new URLSearchParams({
 		userId: snapshot.userId,
 		sessionId: snapshot.sessionId,
-		displaySessionId,
 		revision: snapshot.revision,
 	});
 	const url = `${config.url}/stream?${query}`;

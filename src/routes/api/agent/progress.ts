@@ -6,7 +6,6 @@ import { sessionProgressResponse } from "#/server/services/session-progress";
 const selection = z.object({
 	projectId: z.string().uuid(),
 	sessionId: z.string().uuid(),
-	lane: z.enum(["main", "side"]).default("main"),
 });
 
 export const Route = createFileRoute("/api/agent/progress")({

@@ -1,6 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getRequest } from "@tanstack/react-start/server";
-import { Effect } from "effect";
 import { z } from "zod";
 import {
 	leaderCount,
@@ -15,14 +14,12 @@ import {
 } from "#/server/adapters/agent-competitions";
 import { loadAgentModelCatalog } from "#/server/adapters/agent-model-catalog";
 import { agentSessionForOwner } from "#/server/adapters/agent-sessions";
-import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
 import { requireUser } from "#/server/auth/auth";
 import { hasManagedCodexAuth } from "#/server/auth/codex-managed-auth";
 import { requireSameOrigin } from "#/server/http";
 import { enqueueCompetition } from "#/server/jobs/queue";
 import { stopAgentCompetitionRun } from "#/server/services/agent-competition-run";
 import { apiModelCatalog } from "#/server/services/api-workspace-session";
-import { WorkspaceMachineService } from "#/server/services/capabilities";
 import { commitChatBranchForSubmission } from "#/server/services/session-branch";
 
 export const getAgentCompetitions = createServerFn({ method: "GET" })
@@ -121,12 +118,5 @@ export const stopAgentCompetition = createServerFn({ method: "POST" })
 	.handler(async ({ data }) => {
 		requireSameOrigin(getRequest());
 		const user = await requireUser(getRequest().headers);
-		return Effect.runPromise(
-			Effect.gen(function* () {
-				const machines = yield* WorkspaceMachineService;
-				return yield* Effect.tryPromise(() =>
-					stopAgentCompetitionRun(machines, user.id, data.rootSessionId),
-				);
-			}).pipe(Effect.provide(FreestyleWorkspaceMachinesLive)),
-		);
+		return stopAgentCompetitionRun(user.id, data.rootSessionId);
 	});

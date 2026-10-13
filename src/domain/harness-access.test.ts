@@ -8,7 +8,6 @@ import {
 	harnessLoginIsPending,
 	harnessLoginShouldShow,
 	harnessRequiresAccountLogin,
-	runningTurnShouldPoll,
 	selectedHarnessIsConnected,
 } from "./harness-access";
 
@@ -194,63 +193,5 @@ describe("harness access", () => {
 				modelId: "api/00000000-0000-4000-8000-000000000000/gpt-6.1-sol",
 			}),
 		).toBe(true);
-	});
-});
-
-describe("runningTurnShouldPoll", () => {
-	it("polls an authenticated running turn after Send returns", () => {
-		expect(
-			runningTurnShouldPoll({
-				turnStatus: "running",
-				sideTurnStatus: "idle",
-				connectionStatus: "authenticated",
-				composerBusy: false,
-			}),
-		).toBe(true);
-		expect(
-			runningTurnShouldPoll({
-				turnStatus: "idle",
-				sideTurnStatus: "running",
-				connectionStatus: "authenticated",
-				composerBusy: false,
-			}),
-		).toBe(true);
-	});
-
-	it("keeps polling a running turn even while Send is still in flight", () => {
-		expect(
-			runningTurnShouldPoll({
-				turnStatus: "running",
-				sideTurnStatus: "idle",
-				connectionStatus: "authenticated",
-				composerBusy: true,
-			}),
-		).toBe(true);
-	});
-
-	it("keeps reconciling running turns after a disconnected view without polling idle workspaces", () => {
-		expect(
-			runningTurnShouldPoll({
-				turnStatus: "running",
-				sideTurnStatus: "idle",
-				connectionStatus: "disconnected",
-				composerBusy: false,
-			}),
-		).toBe(true);
-		expect(
-			runningTurnShouldPoll({
-				turnStatus: "idle",
-				sideTurnStatus: "idle",
-				connectionStatus: "disconnected",
-			}),
-		).toBe(false);
-		expect(
-			runningTurnShouldPoll({
-				turnStatus: "completed",
-				sideTurnStatus: "idle",
-				connectionStatus: "authenticated",
-				composerBusy: false,
-			}),
-		).toBe(false);
 	});
 });

@@ -202,21 +202,6 @@ export async function childAgentSession(
 	return children[0] ?? null;
 }
 
-export async function sideAgentSession(
-	userId: string,
-	parentSessionId: string,
-) {
-	const result = await database().query(
-		`select ${SESSION_COLUMNS}
-		 from agent_session
-		 where user_id=$1 and parent_session_id=$2 and title='Side chat'
-		 order by created_at asc
-		 limit 1`,
-		[userId, parentSessionId],
-	);
-	return result.rows[0] ? toSession(result.rows[0]) : null;
-}
-
 export async function childAgentSessions(
 	userId: string,
 	parentSessionId: string,

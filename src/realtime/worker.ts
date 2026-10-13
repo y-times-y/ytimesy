@@ -150,8 +150,6 @@ export class ConversationRoom {
 				BigInt(this.latest.revision) < BigInt(minimumRevision))
 		)
 			return new Response(null, { status: 409 });
-		const displaySessionId =
-			url.searchParams.get("displaySessionId") ?? this.latest.sessionId;
 		let stop = () => {};
 		let cancelled = false;
 		const stream = new ReadableStream<Uint8Array>(
@@ -166,9 +164,7 @@ export class ConversationRoom {
 							return;
 						}
 						revision = BigInt(value.revision);
-						controller.enqueue(
-							encoder.encode(conversationEvent(value, displaySessionId)),
-						);
+						controller.enqueue(encoder.encode(conversationEvent(value)));
 					};
 					const heartbeat = setInterval(() => {
 						if (!ended && (controller.desiredSize ?? 0) > 0)

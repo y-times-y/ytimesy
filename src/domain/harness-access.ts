@@ -113,15 +113,6 @@ export function canResumeDisconnectedFollowUp(input: {
 
 export const RUNNING_TURN_POLL_MS = 700;
 
-export function runningTurnShouldPoll(input: {
-	readonly turnStatus: SessionTurnStatus;
-	readonly sideTurnStatus: SessionTurnStatus;
-	readonly connectionStatus: AgentConnection["status"];
-	readonly composerBusy?: boolean;
-}): boolean {
-	return isTurnRunning(input.turnStatus) || isTurnRunning(input.sideTurnStatus);
-}
-
 export function composerCanStartSignIn(input: {
 	readonly harnessId: AgentProviderId;
 	readonly connection: AgentConnection;
