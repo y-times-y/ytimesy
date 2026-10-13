@@ -14,7 +14,6 @@
 		"typecheck:workflows": "wrangler types --config wrangler.pr-repair.jsonc --env-interface PrRepairEnvironment --strict-vars false .ytimesy/pr-repair-runtime.d.ts && tsc --noEmit --project tsconfig.workflows.json",
 		"lint": "biome check .",
 		"format": "biome check --write .",
-		"cloud:proof": "node --env-file=.env --import tsx scripts/cloud-proof/freestyle.ts",
 		"test": "vitest run",
 		"harness:regression": "vitest run src/server/services/automatic-repository-context.test.ts src/server/services/harness-lifecycle-hooks.test.ts src/server/services/conversation-code-checkpoint.test.ts src/server/adapters/conversation-recovery.test.ts src/server/services/api-agent-runtime.test.ts src/server/jobs/api-turn.test.ts src/domain/harness-regression-gate.test.ts tests/harness-evaluation-grader.test.ts tests/harness-evaluation-campaign.test.ts src/server/services/api-command-scope.test.ts --maxWorkers=2 --reporter=default --reporter=junit --outputFile.junit=.ytimesy/harness-regression.xml",
 		"build:edge-executor": "wrangler types --config wrangler.edge-executor.jsonc --env-interface EdgeExecutorEnvironment .ytimesy/edge-executor-runtime.d.ts && node --import tsx scripts/build-edge-executor.ts",
