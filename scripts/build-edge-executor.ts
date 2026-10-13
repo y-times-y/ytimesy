@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { builtinModules } from "node:module";
 import { dirname, resolve } from "node:path";
 import { build } from "esbuild";
+import { inlineGuestPrograms } from "./guest-program-assets";
 
 // Guest programs remain repository assets; Workers cannot read files from the developer's checkout.
 await build({
@@ -35,17 +36,12 @@ await build({
 			setup(builder) {
 				builder.onLoad({ filter: /\.ts$/ }, async ({ path }) => {
 					if (!path.includes("/src/server/")) return;
-					let contents = await readFile(path, "utf8");
-					const pattern =
-						/readFileSync\(\s*new URL\("([^"\n]+\.py)", import\.meta\.url\),\s*"utf8",?\s*\)/g;
-					for (const match of [...contents.matchAll(pattern)]) {
-						const asset = await readFile(
-							resolve(dirname(path), match[1]),
-							"utf8",
-						);
-						contents = contents.replace(match[0], JSON.stringify(asset));
-					}
-					return { contents, loader: "ts", resolveDir: dirname(path) };
+					const contents = await readFile(path, "utf8");
+					return {
+						contents: (await inlineGuestPrograms(path, contents)) ?? contents,
+						loader: "ts",
+						resolveDir: dirname(path),
+					};
 				});
 			},
 		},

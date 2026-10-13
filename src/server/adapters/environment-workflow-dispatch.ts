@@ -2,6 +2,7 @@ import { createHmac, randomUUID } from "node:crypto";
 import { signDeliveryRequest } from "#/domain/delivery-auth";
 import type { EnvironmentModel } from "#/domain/environment-model";
 import { environmentWorkflowRequest } from "#/domain/environment-workflow";
+import { executorFetch } from "./executor-fetch";
 
 /** Queue retries pass the original job ID so a lost response cannot create a second Workflow. */
 export async function dispatchEnvironmentWorkflow(
@@ -45,7 +46,7 @@ export async function dispatchEnvironmentWorkflow(
 	const url = new URL("/environment/start", origin).href;
 	for (let attempt = 0; attempt < 2; attempt++) {
 		try {
-			const response = await fetch(url, {
+			const response = await executorFetch(url, {
 				method: "POST",
 				headers: {
 					...(await signDeliveryRequest(secret, "POST", url, body)),

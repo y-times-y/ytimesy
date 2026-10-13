@@ -6,6 +6,7 @@ import {
 	type TurnControlAction,
 } from "#/domain/conversation-turn-control";
 import { signDeliveryRequest } from "#/domain/delivery-auth";
+import { executorFetch } from "./executor-fetch";
 import { realtimeDeliveryConfiguration } from "./realtime-delivery";
 
 const local = new AsyncLocalStorage<
@@ -35,7 +36,7 @@ export async function coordinateConversationTurn(
 	const request = Effect.tryPromise({
 		try: async () => {
 			attempts++;
-			const response = await fetch(url, {
+			const response = await executorFetch(url, {
 				method: "POST",
 				headers: {
 					...(await signDeliveryRequest(config.secret, "POST", url, body)),

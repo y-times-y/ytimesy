@@ -98,6 +98,9 @@ export function authOptions() {
 			errorURL: `${config.APP_URL}/auth/sign-in`,
 		},
 		verification: { modelName: "auth_verification" },
+		// Cloudflare sets cf-connecting-ip to the visitor's address and clients
+		// cannot spoof it; rate limits are per visitor rather than one shared bucket.
+		advanced: { ipAddress: { ipAddressHeaders: ["cf-connecting-ip"] } },
 		rateLimit: {
 			enabled: true,
 			storage: "database" as const,
@@ -108,9 +111,16 @@ export function authOptions() {
 function createAuth() {
 	return betterAuth(authOptions());
 }
-let instance: ReturnType<typeof createAuth> | undefined;
+// One instance per database pool: on Workers each request has its own pool, and
+// an instance must never hold another request's (already closed) connections.
+const instances = new WeakMap<object, ReturnType<typeof createAuth>>();
 export function auth() {
-	instance ??= createAuth();
+	const pool = database();
+	let instance = instances.get(pool);
+	if (!instance) {
+		instance = createAuth();
+		instances.set(pool, instance);
+	}
 	return instance;
 }
 export async function requireUser(headers: Headers) {

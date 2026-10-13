@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, createHmac } from "node:crypto";
 import { type BackgroundJob, backgroundJob } from "#/domain/background-job";
 import { signDeliveryRequest } from "#/domain/delivery-auth";
+import { executorFetch } from "./executor-fetch";
 
 type Dispatch = (job: BackgroundJob) => Promise<void>;
 const binding = new AsyncLocalStorage<Dispatch>();
@@ -59,7 +60,7 @@ export async function dispatchBackgroundJob(
 	const body = JSON.stringify(job);
 	for (let attempt = 0; attempt < 2; attempt++) {
 		try {
-			const response = await fetch(url, {
+			const response = await executorFetch(url, {
 				method: "POST",
 				body,
 				redirect: "error",
