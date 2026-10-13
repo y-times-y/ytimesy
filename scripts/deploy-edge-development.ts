@@ -48,6 +48,18 @@ secrets.ENVIRONMENT_EXECUTION_ENABLED = "1";
 secrets.BACKGROUND_EXECUTION_ENABLED = "1";
 secrets.YTIMESY_BACKGROUND_CRON_ENABLED = "1";
 secrets.YTIMESY_MODEL_EXECUTION_TARGET = "durable-object";
+// Turns, builds and jobs start VMs here; without admission their runtime caps
+// are never extended and usage isn't held against the allowance.
+secrets.YTIMESY_INFRASTRUCTURE_ADMISSION = "true";
+for (const name of [
+	"YTIMESY_USER_MONTHLY_MICRO_USD",
+	"YTIMESY_FLEET_MONTHLY_MICRO_USD",
+	"YTIMESY_FLEET_LIFETIME_MICRO_USD",
+] as const) {
+	const value = process.env[name];
+	if (!value) throw new Error(`Development deployment is missing ${name}.`);
+	secrets[name] = value;
+}
 secrets.BACKGROUND_WORKFLOW_SECRET =
 	process.env.YTIMESY_BACKGROUND_WORKFLOW_SECRET ||
 	derived("ytimesy:background-workflows:development:v1");
