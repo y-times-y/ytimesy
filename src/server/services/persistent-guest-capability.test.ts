@@ -3,9 +3,11 @@ import { randomBytes } from "node:crypto";
 import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { expect, it } from "vitest";
+import { WorkspaceId } from "#/domain/ids";
 import { LANGUAGE_INTELLIGENCE_SOURCE } from "./language-intelligence";
 import { PERSISTENT_GUEST_SOURCE } from "./persistent-guest-capability";
 import { STRUCTURED_CODE_READ_SOURCE } from "./structured-code-reads";
+import type { WorkspaceMachines } from "./workspace-machines";
 
 const run = promisify(execFile);
 it("authenticates a real reusable guest process, preserves per-request arguments and rejects browser origins", async () => {
@@ -143,3 +145,28 @@ it("authenticates a real reusable guest process, preserves per-request arguments
 		await rm(packages, { recursive: true, force: true });
 	}
 }, 30000);
+
+it("names the failing stage and cause without leaking the bearer token", async () => {
+	const { persistentGuestCapabilityRunner } = await import(
+		"./persistent-guest-capability"
+	);
+	const machines = {
+		exec: async () => ({
+			exitCode: 0,
+			stdout: JSON.stringify({ port: 4000, token: "a".repeat(64) }),
+			stderr: "",
+		}),
+	} as unknown as WorkspaceMachines;
+	const run = persistentGuestCapabilityRunner(machines, async () => {
+		throw new TypeError("fetch failed: Bearer secret-token");
+	});
+	await expect(
+		run(
+			WorkspaceId("vm"),
+			{ capability: "browser", source: "", arguments: {} },
+			new AbortController().signal,
+		),
+	).rejects.toThrow(
+		"Guest service request failed at start (TypeError: fetch failed: Bearer [redacted])",
+	);
+});
