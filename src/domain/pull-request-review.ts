@@ -12,6 +12,26 @@ export type PullRequestReview = {
 	readonly submittedAt: string | null;
 };
 
+export type PullRequestPerson = {
+	readonly login: string;
+	readonly avatarUrl: string | null;
+	readonly bot: boolean;
+};
+
+/** One entry of the PR conversation: a comment, a review, or an inline code comment. */
+export type PullRequestComment = {
+	readonly id: string;
+	readonly kind: "comment" | "review" | "inline";
+	readonly author: PullRequestPerson;
+	readonly body: string;
+	readonly createdAt: string;
+	readonly url: string | null;
+	readonly reviewState?: string;
+	readonly path?: string;
+	readonly line?: number | null;
+	readonly diffHunk?: string;
+};
+
 export type PullRequestDetail = {
 	readonly number: number;
 	readonly title: string;
@@ -22,6 +42,7 @@ export type PullRequestDetail = {
 	readonly headSha: string;
 	readonly base: string;
 	readonly author: string;
+	readonly authorAvatarUrl: string | null;
 	readonly updatedAt: string;
 	readonly mergeable: boolean | null;
 	readonly mergeableState: string | null;
@@ -32,7 +53,43 @@ export type PullRequestDetail = {
 	readonly checks: readonly PullRequestCheck[];
 	readonly reviews: readonly PullRequestReview[];
 	readonly files: readonly FileChangeEntry[];
+	readonly conversation: readonly PullRequestComment[];
+	readonly participants: readonly PullRequestPerson[];
 };
+
+export type ListedRepositoryPullRequest = {
+	readonly number: number;
+	readonly title: string;
+	readonly author: string;
+	readonly draft: boolean;
+};
+
+type GithubUser = {
+	login?: string;
+	avatar_url?: string;
+	type?: string;
+} | null;
+
+export function pullRequestPerson(user: GithubUser): PullRequestPerson {
+	const login = user?.login ?? "ghost";
+	return {
+		login,
+		avatarUrl: user?.avatar_url ?? null,
+		bot: user?.type === "Bot" || login.endsWith("[bot]"),
+	};
+}
+
+/** Everyone who wrote in the conversation, author first, each once. */
+export function pullRequestParticipants(
+	author: PullRequestPerson,
+	conversation: readonly PullRequestComment[],
+): PullRequestPerson[] {
+	const people = new Map<string, PullRequestPerson>([[author.login, author]]);
+	for (const entry of conversation)
+		if (!people.has(entry.author.login))
+			people.set(entry.author.login, entry.author);
+	return [...people.values()];
+}
 
 /** GitHub's per-file patch is hunks only; give it file headers so it parses as a unified diff. */
 export function pullRequestFileChange(file: {

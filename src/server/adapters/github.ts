@@ -3,8 +3,12 @@ import { z } from "zod";
 import type { RepositoryChoice } from "../../domain/projects";
 import {
 	checkState,
+	type ListedRepositoryPullRequest,
+	type PullRequestComment,
 	type PullRequestDetail,
 	pullRequestFileChange,
+	pullRequestParticipants,
+	pullRequestPerson,
 } from "../../domain/pull-request-review";
 import { serverConfig } from "../config";
 
@@ -353,7 +357,7 @@ export async function pullRequestDetail(
 ): Promise<PullRequestDetail> {
 	const { owner, repo } = repositoryOwnerName(fullName);
 	const github = githubClient(token);
-	const [pull, files, reviews] = await Promise.all([
+	const [pull, files, reviews, comments, inline] = await Promise.all([
 		github.pulls.get({ owner, repo, pull_number: number }),
 		github.paginate(github.pulls.listFiles, {
 			owner,
@@ -367,7 +371,52 @@ export async function pullRequestDetail(
 			pull_number: number,
 			per_page: 100,
 		}),
+		github.issues.listComments({
+			owner,
+			repo,
+			issue_number: number,
+			per_page: 100,
+		}),
+		github.pulls.listReviewComments({
+			owner,
+			repo,
+			pull_number: number,
+			per_page: 100,
+		}),
 	]);
+	const conversation: PullRequestComment[] = [
+		...comments.data.map((comment) => ({
+			id: `comment:${comment.id}`,
+			kind: "comment" as const,
+			author: pullRequestPerson(comment.user),
+			body: comment.body ?? "",
+			createdAt: comment.created_at,
+			url: comment.html_url,
+		})),
+		...reviews.data
+			.filter((review) => review.state !== "PENDING" && review.body?.trim())
+			.map((review) => ({
+				id: `review:${review.id}`,
+				kind: "review" as const,
+				author: pullRequestPerson(review.user),
+				body: review.body ?? "",
+				createdAt: review.submitted_at ?? pull.data.created_at,
+				url: review.html_url,
+				reviewState: review.state,
+			})),
+		...inline.data.map((comment) => ({
+			id: `inline:${comment.id}`,
+			kind: "inline" as const,
+			author: pullRequestPerson(comment.user),
+			body: comment.body,
+			createdAt: comment.created_at,
+			url: comment.html_url,
+			path: comment.path,
+			line: comment.line ?? comment.original_line ?? null,
+			diffHunk: comment.diff_hunk.split("\n").slice(-8).join("\n"),
+		})),
+	].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+	const author = pullRequestPerson(pull.data.user);
 	const head = pull.data.head.sha;
 	const [runs, statuses] = await Promise.all([
 		github.checks
@@ -394,7 +443,8 @@ export async function pullRequestDetail(
 		head: pull.data.head.ref,
 		headSha: pull.data.head.sha,
 		base: pull.data.base.ref,
-		author: pull.data.user?.login ?? "",
+		author: author.login,
+		authorAvatarUrl: author.avatarUrl,
 		updatedAt: pull.data.updated_at,
 		mergeable: pull.data.mergeable ?? null,
 		mergeableState: pull.data.mergeable_state ?? null,
@@ -422,7 +472,29 @@ export async function pullRequestDetail(
 				submittedAt: review.submitted_at ?? null,
 			})),
 		files: files.map(pullRequestFileChange),
+		conversation,
+		participants: pullRequestParticipants(author, conversation),
 	};
+}
+
+/** Open pull requests in the repository, for reviewing any of them in-app. */
+export async function listOpenPullRequests(
+	token: string,
+	fullName: string,
+): Promise<ListedRepositoryPullRequest[]> {
+	const { owner, repo } = repositoryOwnerName(fullName);
+	const pulls = await githubClient(token).pulls.list({
+		owner,
+		repo,
+		state: "open",
+		per_page: 50,
+	});
+	return pulls.data.map((pull) => ({
+		number: pull.number,
+		title: pull.title,
+		author: pull.user?.login ?? "",
+		draft: Boolean(pull.draft),
+	}));
 }
 
 export async function markPullRequestReady(

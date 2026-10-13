@@ -1390,13 +1390,11 @@ export function WorkspaceHome({
 							sessionId={activeSessionId}
 							onStartDesktop={requestDesktop}
 							pullRequest={
-								sessionPullRequest &&
-								selectedProject?.installationId &&
-								selectedProject?.repositoryId
+								selectedProject?.installationId && selectedProject?.repositoryId
 									? {
 											installationId: selectedProject.installationId,
 											repositoryId: selectedProject.repositoryId,
-											number: sessionPullRequest.number,
+											number: sessionPullRequest?.number,
 										}
 									: undefined
 							}

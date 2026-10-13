@@ -1,5 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+	Bot,
+	ChevronDown,
 	CircleCheck,
 	CircleDashed,
 	CircleX,
@@ -8,10 +10,14 @@ import {
 	GitPullRequest,
 	MessageSquare,
 } from "lucide-react";
+import { DropdownMenu } from "radix-ui";
 import { useState } from "react";
 import type {
+	ListedRepositoryPullRequest,
 	PullRequestCheck,
+	PullRequestComment,
 	PullRequestDetail,
+	PullRequestPerson,
 } from "#/domain/pull-request-review";
 import { requestJson } from "../projects/api";
 import { AgentMarkdown } from "../sessions/agent-markdown";
@@ -19,9 +25,14 @@ import { FileChangeCounts } from "../sessions/file-change-counts";
 import { DiffInspector } from "./diff-inspector";
 import "./pull-request-inspector.css";
 
-export type PullRequestSource = {
+export type PullRequestRepository = {
 	readonly installationId: number;
 	readonly repositoryId: number;
+	/** The chat's own pull request, opened first when there is one. */
+	readonly number?: number;
+};
+
+export type PullRequestSource = PullRequestRepository & {
 	readonly number: number;
 };
 
@@ -38,11 +49,188 @@ function CheckIcon({ state }: { state: PullRequestCheck["state"] }) {
 	return <CircleDashed size={14} data-tone="wait" />;
 }
 
-/** Review a chat's pull request without leaving ytimesy. */
+function Avatar({
+	person,
+	size = 20,
+}: {
+	person: PullRequestPerson;
+	size?: number;
+}) {
+	return person.avatarUrl ? (
+		<img
+			className="pr-avatar"
+			src={`${person.avatarUrl}${person.avatarUrl.includes("?") ? "&" : "?"}s=${size * 2}`}
+			alt=""
+			width={size}
+			height={size}
+		/>
+	) : (
+		<span className="pr-avatar" style={{ width: size, height: size }} />
+	);
+}
+
+const kindLabel: Record<PullRequestComment["kind"], string> = {
+	comment: "commented",
+	review: "reviewed",
+	inline: "commented on",
+};
+
+function timeAgo(iso: string) {
+	const minutes = Math.round((Date.now() - Date.parse(iso)) / 60_000);
+	if (minutes < 60) return `${Math.max(minutes, 1)}m ago`;
+	const hours = Math.round(minutes / 60);
+	if (hours < 48) return `${hours}h ago`;
+	const days = Math.round(hours / 24);
+	if (days < 60) return `${days}d ago`;
+	return new Date(iso).toLocaleDateString();
+}
+
+function Conversation({ entries }: { entries: readonly PullRequestComment[] }) {
+	return (
+		<section className="pr-conversation" aria-label="Conversation">
+			<h3>
+				Conversation <span>{entries.length}</span>
+			</h3>
+			<ol>
+				{entries.map((entry) => (
+					<li key={entry.id} className="pr-comment">
+						<Avatar person={entry.author} size={24} />
+						<div className="pr-comment-main">
+							<p className="pr-comment-head">
+								<strong>{entry.author.login.replace(/\[bot\]$/, "")}</strong>
+								{entry.author.bot ? (
+									<span className="pr-bot">
+										<Bot size={11} /> bot
+									</span>
+								) : null}
+								<span className="pr-review-muted">
+									{kindLabel[entry.kind]}
+									{entry.kind === "inline" && entry.path ? (
+										<>
+											{" "}
+											<code>
+												{entry.path}
+												{entry.line ? `:${entry.line}` : ""}
+											</code>
+										</>
+									) : null}
+									{entry.reviewState && entry.reviewState !== "COMMENTED"
+										? ` · ${entry.reviewState.toLowerCase().replaceAll("_", " ")}`
+										: ""}
+									{" · "}
+									{entry.url ? (
+										<a href={entry.url} target="_blank" rel="noreferrer">
+											{timeAgo(entry.createdAt)}
+										</a>
+									) : (
+										timeAgo(entry.createdAt)
+									)}
+								</span>
+							</p>
+							{entry.diffHunk ? (
+								<pre className="pr-comment-hunk">
+									{entry.diffHunk.split("\n").map((line, index) => (
+										<span
+											// biome-ignore lint/suspicious/noArrayIndexKey: hunk lines have no identity
+											key={index}
+											data-sign={
+												line.startsWith("+")
+													? "add"
+													: line.startsWith("-")
+														? "del"
+														: line.startsWith("@@")
+															? "hunk"
+															: undefined
+											}
+										>
+											{line}
+											{"\n"}
+										</span>
+									))}
+								</pre>
+							) : null}
+							<div className="pr-comment-body">
+								<AgentMarkdown text={entry.body} />
+							</div>
+						</div>
+					</li>
+				))}
+			</ol>
+		</section>
+	);
+}
+
+/** Review any open pull request of the project's repository without leaving ytimesy. */
 export function PullRequestInspector({
+	repository,
+}: {
+	repository: PullRequestRepository;
+}) {
+	const list = useQuery({
+		queryKey: ["pull-requests", "open", repository.repositoryId],
+		queryFn: () =>
+			requestJson<{ pullRequests: ListedRepositoryPullRequest[] }>(
+				`/api/github/pull-request?${new URLSearchParams({
+					installationId: String(repository.installationId),
+					repositoryId: String(repository.repositoryId),
+				})}`,
+			),
+	});
+	const [picked, setPicked] = useState<number | undefined>();
+	const open = list.data?.pullRequests ?? [];
+	const number = picked ?? repository.number ?? open[0]?.number;
+	if (number === undefined)
+		return (
+			<p className="pr-review-status" role={list.error ? "alert" : undefined}>
+				{list.isPending
+					? "Loading pull requests…"
+					: (list.error?.message ??
+						"No open pull requests in this repository.")}
+			</p>
+		);
+	const picker =
+		open.length > 1 || (open.length === 1 && open[0]?.number !== number) ? (
+			<DropdownMenu.Root>
+				<DropdownMenu.Trigger asChild>
+					<button type="button" className="pr-picker">
+						{open.length} open <ChevronDown size={12} />
+					</button>
+				</DropdownMenu.Trigger>
+				<DropdownMenu.Portal>
+					<DropdownMenu.Content
+						className="inspector-view-menu pr-picker-menu"
+						sideOffset={6}
+						align="end"
+					>
+						{open.map((pr) => (
+							<DropdownMenu.Item
+								key={pr.number}
+								data-active={pr.number === number}
+								onSelect={() => setPicked(pr.number)}
+							>
+								<span className="pr-review-muted">#{pr.number}</span>
+								<span className="pr-picker-title">{pr.title}</span>
+							</DropdownMenu.Item>
+						))}
+					</DropdownMenu.Content>
+				</DropdownMenu.Portal>
+			</DropdownMenu.Root>
+		) : null;
+	return (
+		<PullRequestReview
+			key={number}
+			source={{ ...repository, number }}
+			picker={picker}
+		/>
+	);
+}
+
+function PullRequestReview({
 	source,
+	picker,
 }: {
 	source: PullRequestSource;
+	picker: React.ReactNode;
 }) {
 	const cache = useQueryClient();
 	const key = ["pull-request", source.repositoryId, source.number] as const;
@@ -104,11 +292,24 @@ export function PullRequestInspector({
 					<h2>
 						{pr.title} <span>#{pr.number}</span>
 					</h2>
+					{picker}
 				</div>
-				<p className="pr-review-meta">
-					<code>{pr.head}</code> into <code>{pr.base}</code>
-					{pr.author ? ` · opened by ${pr.author}` : ""}
-				</p>
+				<div className="pr-review-meta">
+					{pr.participants.length ? (
+						<span
+							className="pr-avatars"
+							title={pr.participants.map((person) => person.login).join(", ")}
+						>
+							{pr.participants.slice(0, 6).map((person) => (
+								<Avatar key={person.login} person={person} size={18} />
+							))}
+						</span>
+					) : null}
+					<span>
+						{pr.author ? <strong>{pr.author}</strong> : null} wants to merge{" "}
+						<code>{pr.head}</code> into <code>{pr.base}</code>
+					</span>
+				</div>
 				<div className="pr-review-actions">
 					<a
 						className="settings-secondary"
@@ -237,6 +438,9 @@ export function PullRequestInspector({
 					<summary>Description</summary>
 					<AgentMarkdown text={pr.body} />
 				</details>
+			) : null}
+			{pr.conversation.length ? (
+				<Conversation entries={pr.conversation} />
 			) : null}
 			{pr.files.length ? (
 				<DiffInspector changes={pr.files} />

@@ -8,7 +8,7 @@ import { DiffInspector } from "./diff-inspector";
 import { FilesInspector } from "./files-inspector";
 import {
 	PullRequestInspector,
-	type PullRequestSource,
+	type PullRequestRepository,
 } from "./pull-request-inspector";
 import { TerminalInspector } from "./terminal-inspector";
 
@@ -28,9 +28,9 @@ const views = {
 	},
 	pr: {
 		label: "Pull request",
-		title: "No pull request yet.",
+		title: "No repository connected.",
 		description:
-			"When the agent opens a pull request for this chat, you can review and merge it here.",
+			"Connect this project to a GitHub repository to review its pull requests here.",
 	},
 	terminal: {
 		label: "Terminal",
@@ -72,7 +72,7 @@ export function WorkspaceInspector({
 	projectId?: string;
 	sessionId?: string;
 	overview: ReactNode;
-	pullRequest?: PullRequestSource;
+	pullRequest?: PullRequestRepository;
 }) {
 	const [openedViews, setOpenedViews] = useState<ToolsView[]>([]);
 	useEffect(() => {
@@ -177,7 +177,10 @@ export function WorkspaceInspector({
 					sessionId={sessionId}
 				/>
 			) : activeView === "pr" && pullRequest ? (
-				<PullRequestInspector key={pullRequest.number} source={pullRequest} />
+				<PullRequestInspector
+					key={`${pullRequest.repositoryId}:${pullRequest.number ?? ""}`}
+					repository={pullRequest}
+				/>
 			) : activeView === "desktop" ? null : activeView === "terminal" ? (
 				<TerminalInspector
 					key={`${projectId ?? ""}:${sessionId ?? ""}`}
