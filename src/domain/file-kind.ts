@@ -59,22 +59,6 @@ const EXTENSION_KIND: Record<string, FileKind> = {
 	lock: "lock",
 };
 
-const BASENAME_KIND: Record<string, FileKind> = {
-	dockerfile: "config",
-	makefile: "config",
-	license: "markdown",
-	".gitignore": "config",
-	".npmrc": "config",
-	".nvmrc": "config",
-	"package.json": "json",
-	"tsconfig.json": "json",
-	"pnpm-lock.yaml": "lock",
-	"package-lock.json": "lock",
-	"bun.lock": "lock",
-	"cargo.lock": "lock",
-	"yarn.lock": "lock",
-};
-
 export function fileBasename(path: string): string {
 	const trimmed = path.replace(/\\/g, "/");
 	const parts = trimmed.split("/");
@@ -102,65 +86,4 @@ export function fileTypeIconName(path: string): string {
 					? "shellscript"
 					: kind;
 	return (language ? languages[language] : undefined) ?? setiFileIcons.file;
-}
-
-export function fileKindFromPath(path: string): FileKind {
-	const basename = fileBasename(path);
-	const lower = basename.toLowerCase();
-	if (
-		/\.(?:test|spec)\.[^.]+$/i.test(basename) ||
-		path.includes("/__tests__/")
-	) {
-		return "test";
-	}
-	const named = BASENAME_KIND[lower];
-	if (named) return named;
-	const dot = lower.lastIndexOf(".");
-	if (dot <= 0) return "unknown";
-	return EXTENSION_KIND[lower.slice(dot + 1)] ?? "unknown";
-}
-
-export function fileKindBadge(kind: FileKind): string {
-	switch (kind) {
-		case "typescript":
-			return "TS";
-		case "tsx":
-			return "TX";
-		case "javascript":
-			return "JS";
-		case "jsx":
-			return "JX";
-		case "json":
-			return "{}";
-		case "markdown":
-			return "MD";
-		case "css":
-			return "CSS";
-		case "html":
-			return "<>";
-		case "python":
-			return "PY";
-		case "yaml":
-			return "YML";
-		case "shell":
-			return ">_";
-		case "rust":
-			return "RS";
-		case "go":
-			return "GO";
-		case "toml":
-			return "TM";
-		case "svg":
-			return "SVG";
-		case "image":
-			return "IMG";
-		case "lock":
-			return "LCK";
-		case "config":
-			return "CFG";
-		case "test":
-			return "TST";
-		case "unknown":
-			return "";
-	}
 }

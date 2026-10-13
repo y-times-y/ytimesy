@@ -10,32 +10,8 @@ export function repositoryDirectory(fullName: string) {
 	return `/home/ubuntu/${repo}`;
 }
 
-export function cloneRepositoryArgv(
-	fullName: string,
-	branch: string,
-	directory: string,
-) {
-	const [owner, repo] = fullName.split("/");
-	if (!owner || !repo) throw new Error("Repository name is missing.");
-	return [
-		"git",
-		"clone",
-		"--branch",
-		branch,
-		"--single-branch",
-		"--depth",
-		"1",
-		`https://github.com/${owner}/${repo}.git`,
-		directory,
-	];
-}
-
 export function githubCloneEnv(token: string) {
 	return githubGitHttpEnv(token);
-}
-
-export function githubPushEnv(token: string) {
-	return githubCloneEnv(token);
 }
 
 export function githubBotCommitHookPath(directory: string) {
@@ -96,14 +72,6 @@ export function checkoutBranchArgv(directory: string, branch: string) {
 		"bash",
 		"-lc",
 		`cd ${shellSingleQuote(directory)} && git checkout -B ${shellSingleQuote(branch)}`,
-	];
-}
-
-export function pushBranchArgv(directory: string, branch: string) {
-	return [
-		"bash",
-		"-lc",
-		`cd ${shellSingleQuote(directory)} && git push -u origin HEAD:${shellSingleQuote(branch)}`,
 	];
 }
 

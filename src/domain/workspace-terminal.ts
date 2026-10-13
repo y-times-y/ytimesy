@@ -11,10 +11,6 @@ export type TerminalClientControl = {
 	readonly rows: number;
 };
 
-export function isWorkspacePtySlug(value: string) {
-	return /^[a-z](?:[a-z0-9-]*[a-z0-9])?$/.test(value) && !/^\d+$/.test(value);
-}
-
 export function clampPtySize(cols: number, rows: number) {
 	return {
 		cols: Math.min(300, Math.max(20, Math.floor(cols) || 80)),

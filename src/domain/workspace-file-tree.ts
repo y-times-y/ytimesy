@@ -23,15 +23,6 @@ type DraftDir = {
 	readonly files: Map<string, FileChangeEntry | undefined>;
 };
 
-export function workspaceFileTree(
-	changes: readonly FileChangeEntry[],
-): readonly WorkspaceTreeNode[] {
-	return workspaceExplorerTree(
-		changes.map((change) => change.path),
-		changes,
-	);
-}
-
 export function workspaceExplorerTree(
 	paths: readonly string[],
 	changes: readonly FileChangeEntry[] = [],

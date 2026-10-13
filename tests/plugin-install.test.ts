@@ -7,7 +7,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import {
 	connectableMcpServers,
-	listMcpServers,
+	listMcpServersWithOAuth,
 } from "../src/server/adapters/mcp-servers";
 import {
 	enabledPluginComponents,
@@ -159,15 +159,19 @@ it("installs only catalog plugins, requires their settings, and registers their 
 		skills: ["triage"],
 		mcpServers: ["linear-tools-api"],
 	});
-	const [server] = await listMcpServers("alice");
+	const [server] = (await listMcpServersWithOAuth("alice")).map(
+		(entry) => entry.server,
+	);
 	expect(server).toMatchObject({
 		name: "linear-tools-api",
 		pluginId: installed.id,
 		headerNames: ["Authorization"],
 	});
-	expect(JSON.stringify(await listMcpServers("alice"))).not.toContain(
-		"tok-123",
-	);
+	expect(
+		JSON.stringify(
+			(await listMcpServersWithOAuth("alice")).map((entry) => entry.server),
+		),
+	).not.toContain("tok-123");
 	expect((await connectableMcpServers("alice", null))[0].headers).toEqual({
 		Authorization: "Bearer tok-123",
 	});
@@ -180,7 +184,9 @@ it("installs only catalog plugins, requires their settings, and registers their 
 	expect(await connectableMcpServers("alice", null)).toEqual([]);
 	await removeInstall("alice", installed.id);
 	expect(await listInstalls("alice")).toEqual([]);
-	expect(await listMcpServers("alice")).toEqual([]);
+	expect(
+		(await listMcpServersWithOAuth("alice")).map((entry) => entry.server),
+	).toEqual([]);
 });
 
 it("installs a sign-in (OAuth) plugin with its commands and an OAuth MCP server awaiting sign-in", async () => {
@@ -215,7 +221,9 @@ it("installs a sign-in (OAuth) plugin with its commands and an OAuth MCP server 
 		commands: ["triage"],
 		mcpServers: ["linear-linear"],
 	});
-	expect(await listMcpServers("alice")).toMatchObject([
+	expect(
+		(await listMcpServersWithOAuth("alice")).map((entry) => entry.server),
+	).toMatchObject([
 		{
 			name: "linear-linear",
 			auth: "oauth",
@@ -271,7 +279,9 @@ it("signs each user in through a reviewed sign-in URL instead of a shared keyles
 	expect(
 		contacted.every((url) => url.startsWith("https://mcp.exa.ai/mcp?login")),
 	).toBe(true);
-	expect(await listMcpServers("alice")).toMatchObject([
+	expect(
+		(await listMcpServersWithOAuth("alice")).map((entry) => entry.server),
+	).toMatchObject([
 		{ name: "exa-exa", auth: "oauth", signIn: "needs-sign-in" },
 	]);
 	await removeInstall("alice", installed.id);

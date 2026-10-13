@@ -30,11 +30,3 @@ export async function loadToolsSnapshotSetting(): Promise<string | undefined> {
 	const value = await loadProductSetting(TOOLS_SNAPSHOT_SETTING_KEY);
 	return toolsSnapshotIdFromRecord({ snapshotId: value });
 }
-
-export async function saveToolsSnapshotSetting(
-	snapshotId: string,
-): Promise<void> {
-	const stored = toolsSnapshotIdFromRecord({ snapshotId });
-	if (!stored) throw new Error("A private tools snapshot id is required.");
-	await saveProductSetting(TOOLS_SNAPSHOT_SETTING_KEY, stored);
-}

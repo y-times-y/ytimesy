@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-	countDiffLineChanges,
-	countFileChangeLines,
-	readDiffLineCounts,
-} from "./diff-stats";
+import { countDiffLineChanges, countFileChangeLines } from "./diff-stats";
 
 describe("countDiffLineChanges", () => {
 	it("counts added and removed lines and ignores file headers", () => {
@@ -17,13 +13,6 @@ describe("countDiffLineChanges", () => {
 +also
 `),
 		).toEqual({ additions: 2, deletions: 1 });
-	});
-
-	it("prefers explicit counts when the provider already sent them", () => {
-		expect(readDiffLineCounts(12, 3, "+ignored\n-ignored")).toEqual({
-			additions: 12,
-			deletions: 3,
-		});
 	});
 
 	it("counts a whole new file when Codex sends the contents instead of a unified diff", () => {

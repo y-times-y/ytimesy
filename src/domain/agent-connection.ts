@@ -29,12 +29,6 @@ export type AgentConnection =
 			readonly message: string;
 	  };
 
-export function isAuthenticatedAgent(
-	connection: AgentConnection,
-): connection is Extract<AgentConnection, { status: "authenticated" }> {
-	return connection.status === "authenticated";
-}
-
 export function canStartAgentTurn(connection: AgentConnection): boolean {
 	return connection.status === "authenticated";
 }

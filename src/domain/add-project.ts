@@ -75,19 +75,6 @@ export function filterProjects(
 	);
 }
 
-export function projectPickerLists(input: {
-	readonly projects: readonly Project[];
-	readonly repositories: readonly RepositoryChoice[];
-	readonly query: string;
-}) {
-	return {
-		added: filterProjects(input.projects, input.query),
-		available: filterRepositories(input.repositories, input.query).filter(
-			(repository) => !repositoryIsAdded(input.projects, repository),
-		),
-	};
-}
-
 export function scratchRepositoryName(value: string) {
 	const name = value.trim();
 	return /^[A-Za-z0-9_.-]{1,100}$/.test(name) ? name : null;

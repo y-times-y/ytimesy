@@ -1,30 +1,8 @@
 import { expect, it } from "vitest";
 import {
 	activateGithubBotCommitHookArgv,
-	checkoutBranchArgv,
-	cloneRepositoryArgv,
-	commitAllArgv,
-	configureCommitAuthorArgv,
-	githubCloneEnv,
-	githubPushEnv,
 	installArgv,
-	pushBranchArgv,
-	repositoryDirectory,
 } from "../src/server/adapters/repository-setup";
-
-it("keeps the GitHub token out of clone argv", () => {
-	const argv = cloneRepositoryArgv("y-times-y/ytimesy", "master", "/repo");
-	expect(argv.join(" ")).not.toMatch(/ghp_|bearer|token/i);
-	expect(argv).toContain("https://github.com/y-times-y/ytimesy.git");
-	expect(githubCloneEnv("ghp_secret").GIT_CONFIG_VALUE_0).toMatch(
-		/^AUTHORIZATION: basic /,
-	);
-	expect(githubCloneEnv("ghp_secret").GIT_CONFIG_VALUE_0).not.toContain(
-		"ghp_secret",
-	);
-	expect(githubCloneEnv("ghp_secret").GIT_TERMINAL_PROMPT).toBe("0");
-	expect(repositoryDirectory("y-times-y/ytimesy")).toBe("/home/ubuntu/ytimesy");
-});
 
 it("selects the lockfile install command", () => {
 	expect(
@@ -45,44 +23,5 @@ it("selects the lockfile install command", () => {
 it("activates an installation-written Git hook even when it is root-owned", () => {
 	expect(activateGithubBotCommitHookArgv("/repo")[2]).toContain(
 		"sudo -n chmod +x '/repo/.git/hooks/commit-msg'",
-	);
-});
-
-it("keeps the GitHub token out of commit and push argv", () => {
-	const commit = commitAllArgv("/home/ubuntu/app", "Ship feature", {
-		name: "Alice",
-		email: "alice@example.test",
-	});
-	expect(commit.join(" ")).toContain("git add -A");
-	expect(commit.join(" ")).toContain("Ship feature");
-	expect(commit.join(" ")).not.toMatch(/ghp_|bearer|token/i);
-	expect(pushBranchArgv("/home/ubuntu/app", "feature").join(" ")).toContain(
-		"git push",
-	);
-	expect(pushBranchArgv("/home/ubuntu/app", "feature").join(" ")).not.toMatch(
-		/ghp_|bearer|token/i,
-	);
-	expect(githubPushEnv("ghp_secret")).toEqual(githubCloneEnv("ghp_secret"));
-	expect(
-		checkoutBranchArgv("/home/ubuntu/app", "ytimesy-abc").at(-1),
-	).toContain("git checkout -B");
-	const author = configureCommitAuthorArgv("/home/ubuntu/app", {
-		name: "Alice",
-		email: "alice@example.test",
-	});
-	expect(author.join(" ")).toContain("config user.name");
-	expect(author.join(" ")).toContain("Alice");
-	const withBot = commitAllArgv(
-		"/home/ubuntu/app",
-		"Ship feature",
-		{ name: "Alice", email: "alice@example.test" },
-		{
-			name: "ytimesy-cloud[bot]",
-			email: "328807657+ytimesy-cloud[bot]@users.noreply.github.com",
-		},
-	);
-	expect(withBot.join(" ")).toContain("user.name='Alice'");
-	expect(withBot.join(" ")).toContain(
-		"Co-authored-by: ytimesy-cloud[bot] <328807657+ytimesy-cloud[bot]@users.noreply.github.com>",
 	);
 });

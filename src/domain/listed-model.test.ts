@@ -8,7 +8,6 @@ import {
 	listedModelSupportsFastMode,
 	listedReasoningFromRow,
 	listedReasoningFromVariants,
-	modelIdToSubmit,
 	preferredListedModelId,
 	sessionListedModelIsBlocked,
 	submittedListedModelId,
@@ -197,16 +196,6 @@ describe("listedModelSupportsFastMode", () => {
 		expect(listedFastModeId({ serviceTiers: [{ name: "Flex" }] })).toBe(
 			undefined,
 		);
-	});
-});
-
-describe("modelIdToSubmit", () => {
-	it("keeps the requested id when the catalog is still empty", () => {
-		expect(
-			modelIdToSubmit("opencode/big-pickle", [], {
-				lastUsedId: "opencode/big-pickle",
-			}),
-		).toBe("opencode/big-pickle");
 	});
 });
 

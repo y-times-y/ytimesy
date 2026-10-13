@@ -4,7 +4,7 @@ import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import {
 	addMcpServer,
 	connectableMcpServers,
-	listMcpServers,
+	listMcpServersWithOAuth,
 } from "../src/server/adapters/mcp-servers";
 import {
 	finishMcpOAuth,
@@ -175,9 +175,9 @@ it("signs a user in to an OAuth MCP server and uses the tokens in turns", async 
 	expect(issued).toBe(1);
 	expect(registered).toBe(1);
 	// Listing without a check never claims a sign-in; the check connects for real.
-	expect(await listMcpServers("alice")).toMatchObject([
-		{ signIn: "needs-sign-in" },
-	]);
+	expect(
+		(await listMcpServersWithOAuth("alice")).map((entry) => entry.server),
+	).toMatchObject([{ signIn: "needs-sign-in" }]);
 	expect(await signInState()).toBe("signed-in");
 	// The state is single-use.
 	await expect(

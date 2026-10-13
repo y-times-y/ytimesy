@@ -2,60 +2,11 @@ import { describe, expect, it } from "vitest";
 import { SessionItemId } from "./ids";
 import {
 	completedTurnUpdatesProjectContext,
-	projectContextDocument,
-	promptTextWithProjectContext,
 	relatedTracesForTask,
 	traceAreaFromTask,
 	traceAreaFromTurn,
 	traceSummaryFromTurn,
 } from "./project-context";
-
-describe("projectContextDocument", () => {
-	it("omits empty briefing and traces", () => {
-		expect(projectContextDocument({ briefing: "  ", traces: [] })).toBe("");
-	});
-
-	it("renders briefing and sibling traces for the next agent", () => {
-		expect(
-			projectContextDocument({
-				briefing: "Lockfile installs use corepack.",
-				traces: [
-					{ area: "prepare", summary: "nvm must be sourced before pnpm" },
-					{
-						area: null,
-						summary:
-							"Seal the snapshot: Wrote template_snapshot_id.\nHow: Copy from the unused template.",
-					},
-					{ area: null, summary: "  " },
-				],
-			}),
-		).toBe(
-			[
-				"## Project briefing",
-				"Lockfile installs use corepack.",
-				"",
-				"## Related traces",
-				"- prepare: nvm must be sourced before pnpm",
-				"- Seal the snapshot: Wrote template_snapshot_id.\nHow: Copy from the unused template.",
-			].join("\n"),
-		);
-	});
-
-	it("puts the newest durable briefing line first for the next agent", () => {
-		expect(
-			projectContextDocument({
-				briefing: [
-					"Lockfile installs use corepack.",
-					"Reply with exactly ytimesy-ctx-1a0a3daa754: ytimesy-ctx-1a0a3daa754",
-					"Reply with exactly turn-text-proof-58b4: turn-text-proof-58b4",
-				].join("\n"),
-				traces: [],
-			}),
-		).toBe(
-			["## Project briefing", "Lockfile installs use corepack."].join("\n"),
-		);
-	});
-});
 
 describe("relatedTracesForTask", () => {
 	const traces = [
@@ -195,37 +146,6 @@ describe("traceSummaryFromTurn", () => {
 			}),
 		).toBe(
 			"Seal the snapshot: Wrote template_snapshot_id after pnpm install.\nHow: Agents copy from the unused template, never from a dirty checkout.",
-		);
-	});
-});
-
-describe("promptTextWithProjectContext", () => {
-	it("leaves the task unchanged when there is no shared context", () => {
-		expect(
-			promptTextWithProjectContext({
-				task: "Fix the desktop viewer",
-				document: "  ",
-			}),
-		).toBe("Fix the desktop viewer");
-	});
-
-	it("prepends sibling briefing without replacing the task", () => {
-		expect(
-			promptTextWithProjectContext({
-				task: "Fix the desktop viewer",
-				document: "## Project briefing\nnoVNC maps display :0",
-			}),
-		).toBe(
-			[
-				"Shared project context from sibling agents:",
-				"",
-				"## Project briefing",
-				"noVNC maps display :0",
-				"",
-				"---",
-				"",
-				"Fix the desktop viewer",
-			].join("\n"),
 		);
 	});
 });

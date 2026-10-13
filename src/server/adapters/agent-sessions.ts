@@ -455,28 +455,6 @@ export async function saveAgentSessionItems(
 	return result.rows[0] ? toSession(result.rows[0]) : null;
 }
 
-export async function saveAgentSessionTurnStatus(
-	sessionId: string,
-	turnStatus: AgentSessionRecord["turnStatus"],
-) {
-	const result = await database().query(
-		`update agent_session
-		 set turn_status=$2,
-		     task_state=case
-		       when parent_session_id is null or task_state='draft' then task_state
-		       when $2='running' then 'working'
-		       when $2='completed' then 'done'
-		       when $2='failed' then 'failed'
-		       else 'idle'
-		     end,
-		     updated_at=now()
-		 where id=$1
-		 returning ${SESSION_COLUMNS}`,
-		[sessionId, turnStatus],
-	);
-	return result.rows[0] ? toSession(result.rows[0]) : null;
-}
-
 function toSession(row: AgentSessionRow): AgentSessionRecord {
 	return {
 		id: row.id,

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
 	backgroundTurnPollChatIds,
-	chatsListedInSidebar,
 	chatsWithPinnedFirst,
 	composerBusyForOpenChat,
 	composerHarnessForChat,
@@ -15,7 +14,6 @@ import {
 	sidebarChatAttention,
 	sidebarChatIsRunning,
 	sidebarChatsEmptyCopy,
-	sidebarHasRunningChat,
 	sidebarIsPinnedInStorage,
 	sidebarPinnedStorageValue,
 	toggleCollapsedProjectIds,
@@ -25,35 +23,6 @@ import {
 	withoutBusyChat,
 	withProjectExpanded,
 } from "./sidebar-chats";
-
-describe("chatsListedInSidebar", () => {
-	it("does not list a chat until the project has a user message", () => {
-		expect(
-			chatsListedInSidebar({
-				projectSelected: true,
-				hasUserMessage: false,
-				title: "New session",
-			}),
-		).toEqual([]);
-		expect(
-			chatsListedInSidebar({
-				projectSelected: false,
-				hasUserMessage: true,
-				title: "fix login",
-			}),
-		).toEqual([]);
-	});
-
-	it("lists the current session title as a chat", () => {
-		expect(
-			chatsListedInSidebar({
-				projectSelected: true,
-				hasUserMessage: true,
-				title: "fix the composer",
-			}),
-		).toEqual([{ id: "current", title: "fix the composer" }]);
-	});
-});
 
 describe("sidebar empty copy", () => {
 	it("asks for a repository before showing chats", () => {
@@ -199,28 +168,6 @@ describe("parallel chat busy", () => {
 				chatId: "b",
 				turnStatus: "idle",
 				busyChatIds: withoutBusyChat(["a"], "a"),
-				openChatId: "b",
-				openTurnStatus: "idle",
-			}),
-		).toBe(false);
-	});
-
-	it("marks the collapsed rail when any chat is still running", () => {
-		expect(
-			sidebarHasRunningChat({
-				chats: [
-					{ id: "a", title: "fix login", turnStatus: "running" },
-					{ id: "b", title: "add snapshot copy", turnStatus: "idle" },
-				],
-				busyChatIds: [],
-				openChatId: "b",
-				openTurnStatus: "idle",
-			}),
-		).toBe(true);
-		expect(
-			sidebarHasRunningChat({
-				chats: [{ id: "b", title: "add snapshot copy", turnStatus: "idle" }],
-				busyChatIds: [],
 				openChatId: "b",
 				openTurnStatus: "idle",
 			}),

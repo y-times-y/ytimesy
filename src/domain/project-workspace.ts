@@ -26,10 +26,6 @@ export interface ProjectWorkspace {
 	updatedAt: string;
 }
 
-export function workspaceSlug(workspaceId: string) {
-	return `ytimesy-ws-${workspaceId}`;
-}
-
 export function canStartPrepare(status: WorkspaceStatus | undefined) {
 	return status === undefined || status === "queued" || status === "failed";
 }
@@ -47,14 +43,6 @@ export type WorkspaceEnvironmentState = Pick<
 	templateSnapshotId?: string | null;
 	errorMessage?: string | null;
 };
-
-export function workspaceSessionMachineRef(
-	workspace: Pick<ProjectWorkspace, "status" | "providerRef"> | null,
-) {
-	if (workspace?.status === "ready" && workspace.providerRef)
-		return workspace.providerRef;
-	return null;
-}
 
 /**
  * Agents copy from the sealed snapshot. The unused template VM is optional
@@ -85,25 +73,6 @@ export function blocksDuplicateProvision(status: WorkspaceStatus) {
 		status === "provisioning" ||
 		status === "cloning" ||
 		status === "installing"
-	);
-}
-
-export function needsMachineCreate(
-	status: WorkspaceStatus,
-	providerRef: string | null,
-) {
-	return status === "provisioning" && providerRef === null;
-}
-
-export function needsMachineRecover(
-	status: WorkspaceStatus,
-	providerRef: string | null,
-) {
-	return (
-		providerRef !== null &&
-		(status === "provisioning" ||
-			status === "cloning" ||
-			status === "installing")
 	);
 }
 

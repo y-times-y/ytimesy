@@ -15,11 +15,6 @@ function useIsReauthenticationSignIn() {
 	);
 }
 
-export type ReauthenticationActionProps = {
-	className?: string;
-	showTitle?: boolean;
-};
-
 export function ReauthenticationNotice() {
 	const auth = useAuth();
 	const isReauthenticationSignIn = useIsReauthenticationSignIn();

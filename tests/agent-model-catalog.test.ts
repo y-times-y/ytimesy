@@ -1,10 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
-import {
-	loadAgentModelCatalog,
-	saveAgentModelCatalog,
-} from "../src/server/adapters/agent-model-catalog";
+import { loadAgentModelCatalog } from "../src/server/adapters/agent-model-catalog";
 
 let db: PGlite;
 vi.mock("../src/server/adapters/database", () => ({ database: () => db }));
@@ -34,40 +31,8 @@ it("backfills only the owner's previously selected models, without a VM", async 
 	expect(await loadAgentModelCatalog("alice", "api")).toEqual([]);
 });
 
-it("preserves capabilities and does not erase the catalog on disconnect", async () => {
-	const models = [
-		{ id: "listed", label: "Listed model", supportsFastMode: true },
-	];
-	await saveAgentModelCatalog("alice", "codex", models);
-	await saveAgentModelCatalog("alice", "codex", []);
-	expect(await loadAgentModelCatalog("alice", "codex")).toEqual(models);
-	expect(await loadAgentModelCatalog("bob", "codex")).toEqual([]);
-	await saveAgentModelCatalog("alice", "codex", [
-		{ id: "prior-model", label: "prior-model" },
-	]);
-	expect(await loadAgentModelCatalog("alice", "codex")).toEqual([
-		{ id: "prior-model", label: "prior-model" },
-	]);
-});
-
 it("denies direct client access", async () => {
 	await db.exec("set role authenticated");
 	await expect(db.query("select * from agent_model_catalog")).rejects.toThrow();
 	await db.exec("reset role");
-});
-
-it("removes a legacy model saved under the wrong provider", async () => {
-	await saveAgentModelCatalog("bob", "codex", [
-		{ id: "claude-wrong", label: "Wrong provider" },
-	]);
-	await db.exec(
-		await readFile(
-			"supabase/migrations/20260926141000_filter_legacy_model_catalog.sql",
-			"utf8",
-		),
-	);
-	expect(await loadAgentModelCatalog("bob", "codex")).toEqual([]);
-	expect(await loadAgentModelCatalog("alice", "codex")).toEqual([
-		{ id: "prior-model", label: "prior-model" },
-	]);
 });

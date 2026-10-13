@@ -2,44 +2,11 @@ import { sessionBranchName } from "#/domain/session-branch";
 import { sessionItemsFromUnknown } from "#/domain/session-item";
 import {
 	agentSessionForOwner,
-	saveSessionBranchSelection,
 	saveSessionWorkingBranch,
 } from "#/server/adapters/agent-sessions";
-import { authorizedRepository, githubClient } from "#/server/adapters/github";
+import { authorizedRepository } from "#/server/adapters/github";
 import { projectForOwner } from "#/server/adapters/projects";
 import { githubAccessToken } from "#/server/auth/github-connection";
-
-export async function selectChatBranch(input: {
-	userId: string;
-	projectId: string;
-	sessionId: string;
-	branch: string;
-}) {
-	const session = await agentSessionForOwner(input.userId, input.sessionId);
-	const project = await projectForOwner(input.userId, input.projectId);
-	if (
-		!session ||
-		!project ||
-		session.projectId !== project.id ||
-		session.parentSessionId
-	)
-		throw new Error("This chat is not available.");
-	if (session.turnStatus === "running")
-		throw new Error("Stop the active turn before changing branches.");
-	if (
-		input.branch !== session.workingBranch &&
-		input.branch !== session.taskBranch
-	) {
-		const token = await githubAccessToken(input.userId);
-		const [owner, repo] = project.fullName.split("/");
-		await githubClient(token).repos.getBranch({
-			owner,
-			repo,
-			branch: input.branch,
-		});
-	}
-	return saveSessionBranchSelection(input.userId, session.id, input.branch);
-}
 
 /** Called at submission, never by the picker or a background chat read. */
 export async function commitChatBranchForSubmission(input: {

@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-	canSelectSessionBranch,
 	isGeneratedSessionBranch,
-	listedSessionBranches,
 	sessionBranchChangeRestartsWorkspace,
 	sessionBranchName,
 	sessionCloneBranch,
@@ -116,24 +114,6 @@ describe("session working branch", () => {
 				id: "11",
 			}),
 		).toBe("");
-	});
-
-	it("lists the generated working branch first, never a bare ytimesy name", () => {
-		expect(
-			listedSessionBranches({
-				remoteBranches: ["main", "feature", "ytimesy"],
-				workingBranch: "ytimesy/ytimesy-000b",
-			}),
-		).toEqual(["ytimesy/ytimesy-000b", "main", "feature"]);
-		expect(
-			canSelectSessionBranch({
-				branch: "ytimesy/ytimesy-000b",
-				remoteBranches: ["main"],
-			}),
-		).toBe(true);
-		expect(
-			canSelectSessionBranch({ branch: "missing", remoteBranches: ["main"] }),
-		).toBe(false);
 	});
 
 	it("does not remake the workspace when main and the generated branch are the same checkout", () => {

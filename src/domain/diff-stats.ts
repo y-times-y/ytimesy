@@ -47,17 +47,3 @@ export function countFileChangeLines(
 	if (change === "delete") return { additions: 0, deletions: lines };
 	return emptyDiffLineCounts();
 }
-
-export function readDiffLineCounts(
-	additions: unknown,
-	deletions: unknown,
-	diff: string | null | undefined,
-): DiffLineCounts {
-	if (typeof additions === "number" && typeof deletions === "number") {
-		return {
-			additions: Math.max(0, additions),
-			deletions: Math.max(0, deletions),
-		};
-	}
-	return countDiffLineChanges(diff);
-}

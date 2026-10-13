@@ -1,24 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
 	clampPtySize,
-	isWorkspacePtySlug,
 	parseTerminalClientMessage,
 	terminalConnectBlockedReason,
 	terminalInspectorPrompt,
 	terminalInspectorShouldAttach,
 	terminalSessionBlockedReason,
-	WORKSPACE_PTY_SLUG,
 	workspacePtyCommand,
 } from "./workspace-terminal";
 
 describe("workspace terminal", () => {
-	it("names the reconnectable PTY with a stable slug", () => {
-		expect(isWorkspacePtySlug(WORKSPACE_PTY_SLUG)).toBe(true);
-		expect(WORKSPACE_PTY_SLUG).toBe("main");
-		expect(isWorkspacePtySlug("12345")).toBe(false);
-		expect(isWorkspacePtySlug("Main")).toBe(false);
-	});
-
 	it("clamps PTY dimensions and parses resize frames", () => {
 		expect(clampPtySize(0, 0)).toEqual({ cols: 80, rows: 24 });
 		expect(clampPtySize(10, 4)).toEqual({ cols: 20, rows: 8 });
