@@ -1,7 +1,5 @@
 import type { SessionItem } from "./session-item";
 
-export const PROJECT_CONTEXT_PATH = "/tmp/ytimesy-project-context.md";
-
 export type ProjectTrace = {
 	readonly area: string | null;
 	readonly summary: string;

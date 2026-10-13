@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-	agentSecretsDeveloperNote,
 	agentSecretsEnvFile,
 	agentSecretsEnvPath,
 	parseProjectSecretName,
@@ -18,14 +17,6 @@ describe("project secrets", () => {
 		expect(agentSecretsEnvPath("/home/ubuntu/")).toBe(
 			"/home/ubuntu/.ytimesy-agent-secrets.env",
 		);
-	});
-
-	it("lists secret names for the agent and never includes values", () => {
-		const note = agentSecretsDeveloperNote(["GH_TOKEN", "OPENAI_API_KEY"]);
-		expect(note).toContain("GH_TOKEN");
-		expect(note).toContain("OPENAI_API_KEY");
-		expect(note).toMatch(/Never print/);
-		expect(note).not.toContain("sk-");
 	});
 
 	it("rejects reserved or malformed names", () => {

@@ -1,6 +1,4 @@
 import { Effect } from "effect";
-import { sharedDesktopDeveloperInstructions } from "#/domain/agent-desktop";
-import { PREPARED_ENVIRONMENT_INSTRUCTIONS } from "#/domain/environment-context";
 import { failureMessage } from "#/domain/failure-message";
 import type { WorkspaceId } from "#/domain/ids";
 import { posixShellQuoted } from "#/domain/posix-command";
@@ -18,8 +16,6 @@ import { sessionCloneBranch } from "#/domain/session-branch";
 import { sessionItemsFromUnknown } from "#/domain/session-item";
 import { agentSessionForOwner } from "#/server/adapters/agent-sessions";
 import {
-	DEVELOPER_INSTRUCTIONS_PATH,
-	PROJECT_CONTEXT_PATH,
 	PROJECT_CWD_PATH,
 	preparedCheckoutPathFromReuse,
 	reusePreparedCheckoutCommand,
@@ -58,8 +54,6 @@ function ensureSingleProjectCheckout(
 ): Effect.Effect<string | null, Error> {
 	return Effect.gen(function* () {
 		if (!checkout) {
-			const home = yield* guestHome(machines, workspaceId);
-			yield* writeDeveloperInstructions(machines, workspaceId, home);
 			return null;
 		}
 		const reused = yield* Effect.tryPromise(() =>
@@ -129,26 +123,8 @@ function ensureSingleProjectCheckout(
 				{ ...checkout, destination, mode: "clone" },
 			),
 		);
-		yield* writeDeveloperInstructions(machines, workspaceId, destination);
 		return destination;
 	}).pipe(Effect.mapError((cause) => new Error(failureMessage(cause))));
-}
-
-export function writeDeveloperInstructions(
-	machines: WorkspaceMachines,
-	workspaceId: WorkspaceId,
-	cwd: string,
-	secretNames: readonly string[] = [],
-	repositories: readonly string[] = [],
-	roleInstructions = "",
-): Effect.Effect<void> {
-	return Effect.tryPromise(() =>
-		machines.writeTextFile(
-			workspaceId,
-			DEVELOPER_INSTRUCTIONS_PATH,
-			`${sharedDesktopDeveloperInstructions({ cwd, secretNames })} If ${PROJECT_CONTEXT_PATH} exists, treat it as this project's shared briefing and sibling traces. ${PREPARED_ENVIRONMENT_INSTRUCTIONS}\n${repositories.length > 1 ? `Project repositories (separate Git roots under the home directory): ${repositories.join(", ")}. Inspect each repository's instructions before editing it; commit and review each repository independently.\n` : ""}${roleInstructions}\n`,
-		),
-	).pipe(Effect.catchAll(() => Effect.void));
 }
 
 /**
