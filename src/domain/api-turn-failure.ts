@@ -262,10 +262,22 @@ function providerErrorCode(data: unknown): string | undefined {
 		: undefined;
 }
 
+/** Workspace failures raised while preparing a model step, worded for the user. */
+const WORKSPACE_STEP_FAILURES = [
+	"Commit or stash this chat's uncommitted changes before switching branches.",
+] as const;
+
 export function apiModelFailureMessage(error: unknown): string {
 	// Retry wrappers carry raw request data; classify only their final error, with a bounded unwrap.
 	for (let depth = 0; depth < 3 && RetryError.isInstance(error); depth++)
 		error = error.lastError;
+	if (error instanceof Error) {
+		const known = WORKSPACE_STEP_FAILURES.find((message) =>
+			error.message.includes(message),
+		);
+		if (known)
+			return `The workspace could not be prepared: ${known} No model request was started.`;
+	}
 	if (
 		error instanceof SafeApiModelFailure ||
 		error instanceof UnsupportedEdgeModelEndpoint ||

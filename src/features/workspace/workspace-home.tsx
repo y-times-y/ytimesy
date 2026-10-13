@@ -96,6 +96,7 @@ import {
 import { SessionLauncher } from "../sessions/session-launcher";
 import { sessionReconciliationQuery } from "../sessions/session-reconciliation";
 import { getWorkspaceDesktop, startWorkspaceDesktopFn } from "./desktop.fn";
+import { readWorkspaceChangesFn } from "./explorer.fn";
 import { ProjectSettings } from "./project-settings";
 import { ProjectSidebar } from "./project-sidebar";
 import { useCompactLayout } from "./use-compact-layout";
@@ -291,7 +292,26 @@ export function WorkspaceHome({
 	const stopTurn = useServerFn(stopCodexSessionTurn);
 	const loadDesktop = useServerFn(getWorkspaceDesktop);
 	const startDesktop = useServerFn(startWorkspaceDesktopFn);
-	const fileChanges = fileChangesFromSessionItems(session.items);
+	const readChanges = useServerFn(readWorkspaceChangesFn);
+	// Git in the workspace is the source of truth for what changed; the
+	// transcript only fills in while the machine is asleep.
+	const gitChanges = useQuery({
+		queryKey: ["workspace-changes", selectedProject?.id, selectedSessionId],
+		queryFn: () =>
+			readChanges({
+				data: { projectId: selectedProject?.id, sessionId: selectedSessionId },
+			}),
+		enabled: Boolean(selectedProject?.id && selectedSessionId),
+		refetchInterval: session.turnStatus === "running" ? 10_000 : 60_000,
+		staleTime: 5_000,
+	});
+	const refetchChanges = gitChanges.refetch;
+	useEffect(() => {
+		// A finished turn is when the agent's edits settle; show them right away.
+		if (session.turnStatus !== "running") void refetchChanges();
+	}, [session.turnStatus, refetchChanges]);
+	const fileChanges =
+		gitChanges.data ?? fileChangesFromSessionItems(session.items);
 	const splitRatio = inspectorSplitRatio({
 		custom: customSplit,
 		wide: inspectorPaneIsWide(inspectorView),

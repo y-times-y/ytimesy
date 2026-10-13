@@ -2211,7 +2211,7 @@ a.sidebar-chat-pr,
 .settings-overlay {
 	position: fixed;
 	inset: 0;
-	z-index: 40;
+	z-index: 200;
 	display: grid;
 	place-items: center;
 }
@@ -2219,20 +2219,22 @@ a.sidebar-chat-pr,
 	position: absolute;
 	inset: 0;
 	border: 0;
-	background: #00000099;
+	background: #000000b3;
+	backdrop-filter: blur(2px);
 }
 .settings-panel {
 	position: relative;
 	z-index: 1;
 	display: flex;
 	flex-direction: column;
-	width: min(760px, calc(100vw - 32px));
-	height: min(620px, calc(100vh - 32px));
+	width: min(880px, calc(100vw - 32px));
+	height: min(680px, calc(100vh - 32px));
 	overflow: hidden;
 	padding: 0;
 	border: 1px solid #2a2a2a;
 	border-radius: 16px;
 	background: #121212;
+	box-shadow: 0 24px 80px #00000099;
 }
 .settings-close {
 	display: grid;
@@ -2264,7 +2266,7 @@ a.sidebar-chat-pr,
 }
 .settings-shell {
 	display: grid;
-	grid-template-columns: 168px minmax(0, 1fr);
+	grid-template-columns: 196px minmax(0, 1fr);
 	min-height: 0;
 	flex: 1;
 }
@@ -2295,7 +2297,7 @@ a.sidebar-chat-pr,
 }
 .settings-body {
 	min-width: 0;
-	padding: 20px 22px;
+	padding: 24px 28px 32px;
 }
 .settings-scroll-root {
 	min-width: 0;
@@ -3053,4 +3055,266 @@ a.sidebar-chat-pr,
 .integration-icon-button:hover {
 	background: #ffffff0c;
 	color: #f87171;
+}
+
+/* Settings building blocks: a section header, grouped rows and fields. */
+.settings-section-head {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 16px;
+	margin-bottom: 16px;
+}
+.settings-section-head h3 {
+	margin: 0 0 4px;
+}
+.settings-section-head p {
+	margin: 0;
+	color: #9a9a9a;
+	font-size: 13px;
+	line-height: 18px;
+	text-wrap: pretty;
+}
+.settings-section + .settings-section,
+.settings-section-gap {
+	margin-top: 32px;
+}
+.settings-group {
+	margin: 0 0 12px;
+	padding: 0;
+	overflow: hidden;
+	border: 1px solid #242424;
+	border-radius: 12px;
+	background: #0f0f0f;
+	list-style: none;
+}
+.settings-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16px;
+	min-height: 56px;
+	padding: 12px 14px;
+}
+.settings-row + .settings-row {
+	border-top: 1px solid #1f1f1f;
+}
+.settings-row-main {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	min-width: 0;
+}
+.settings-row-text {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+.settings-row-title {
+	overflow: hidden;
+	color: #ededed;
+	font-size: 13px;
+	font-weight: 550;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.settings-row-meta {
+	overflow: hidden;
+	color: #8a8a8a;
+	font-size: 12px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.settings-row-actions {
+	display: flex;
+	flex-shrink: 0;
+	align-items: center;
+	gap: 8px;
+}
+.settings-row-icon {
+	display: grid;
+	flex-shrink: 0;
+	place-items: center;
+	width: 32px;
+	height: 32px;
+	border: 1px solid #262626;
+	border-radius: 8px;
+	background: #161616;
+	color: #d6d6d6;
+}
+.settings-badge {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 2px 8px;
+	border: 1px solid #2a2a2a;
+	border-radius: 99px;
+	color: #9a9a9a;
+	font-size: 11px;
+	white-space: nowrap;
+}
+.settings-badge::before {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: #5a5a5a;
+	content: "";
+}
+.settings-badge[data-tone="ok"] {
+	border-color: #1f3d2a;
+	color: #86efac;
+}
+.settings-badge[data-tone="ok"]::before {
+	background: #4ade80;
+}
+.settings-chip {
+	padding: 1px 6px;
+	border: 1px solid #2a2a2a;
+	border-radius: 6px;
+	color: #9a9a9a;
+	font-family: var(--font-mono, ui-monospace, monospace);
+	font-size: 11px;
+}
+.settings-empty {
+	padding: 20px 14px;
+	color: #8a8a8a;
+	font-size: 13px;
+	text-align: center;
+}
+.settings-field {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	min-width: 0;
+}
+.settings-field > span {
+	color: #9a9a9a;
+	font-size: 12px;
+}
+.settings-field input,
+.settings-input {
+	width: 100%;
+	min-width: 0;
+	height: 34px;
+	padding: 0 10px;
+	border: 1px solid #2a2a2a;
+	border-radius: 8px;
+	background: #0b0b0b;
+	color: #f2f2f2;
+	font-size: 13px;
+}
+.settings-field input:focus-visible,
+.settings-input:focus-visible {
+	border-color: #4a4a4a;
+	outline: none;
+}
+.settings-form-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 12px;
+	padding: 14px;
+}
+.settings-form-grid > .settings-field-wide {
+	grid-column: 1 / -1;
+}
+.settings-form-actions {
+	display: flex;
+	grid-column: 1 / -1;
+	justify-content: flex-end;
+	gap: 8px;
+}
+.settings-meter {
+	height: 6px;
+	margin: 10px 0 8px;
+	overflow: hidden;
+	border-radius: 99px;
+	background: #1f1f1f;
+}
+.settings-meter > span {
+	display: block;
+	height: 100%;
+	border-radius: inherit;
+	background: #e5e5e5;
+}
+.settings-meter[data-tone="low"] > span {
+	background: #f87171;
+}
+.settings-usage-figure {
+	display: flex;
+	align-items: baseline;
+	gap: 6px;
+	color: #ededed;
+	font-size: 20px;
+	font-weight: 550;
+	font-variant-numeric: tabular-nums;
+}
+.settings-usage-figure small {
+	color: #8a8a8a;
+	font-size: 13px;
+	font-weight: 400;
+}
+.settings-group-body {
+	padding: 14px;
+}
+.settings-primary:disabled,
+.settings-secondary:disabled {
+	cursor: not-allowed;
+	opacity: 0.5;
+}
+.settings-primary:hover {
+	background: #ffffff;
+}
+@media (max-width: 640px) {
+	.settings-form-grid {
+		grid-template-columns: 1fr;
+	}
+	.settings-row {
+		flex-wrap: wrap;
+	}
+}
+
+/* Radix ScrollArea wraps content in display:table, which grows to fit wide rows. */
+.settings-scroll-viewport > div {
+	display: block !important;
+	min-width: 0 !important;
+}
+.settings-chip {
+	max-width: 220px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.settings-row-main,
+.settings-row-text {
+	flex: 1 1 auto;
+}
+.settings-project-select {
+	min-width: 180px;
+}
+
+.settings-primary,
+.settings-secondary {
+	white-space: nowrap;
+}
+.codex-usage-window {
+	margin-top: 12px;
+}
+.codex-usage-line {
+	display: flex;
+	justify-content: space-between;
+	color: #d6d6d6;
+	font-size: 13px;
+	font-variant-numeric: tabular-nums;
+}
+.codex-usage-window .settings-meter {
+	margin: 6px 0 4px;
+}
+
+.settings-panel [data-slot="select-trigger"] {
+	height: 32px;
+	font-size: 13px;
+}
+.settings-section-head + .machine-size-settings {
+	margin-top: 8px;
 }

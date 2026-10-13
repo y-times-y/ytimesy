@@ -3,6 +3,13 @@ import { useServerFn } from "@tanstack/react-start";
 import { useState } from "react";
 import "./model-connections.css";
 import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "#/components/ui/select";
+import {
 	availableConnectionModels,
 	MODEL_PROVIDERS,
 	type ModelProvider,
@@ -55,6 +62,7 @@ export function ModelConnections() {
 			}),
 		onSuccess: (rows) => {
 			update(rows);
+			setAdding(false);
 			setApiKey("");
 			setReplacing(undefined);
 			setLabel("");
@@ -71,192 +79,236 @@ export function ModelConnections() {
 		onSuccess: update,
 	});
 	const busy = save.isPending || remove.isPending || verify.isPending;
+	const [adding, setAdding] = useState(false);
+	const formOpen = adding || Boolean(replacing);
+	function closeForm() {
+		setAdding(false);
+		setReplacing(undefined);
+		setApiKey("");
+		setLabel("");
+		setBaseUrl("");
+	}
 	return (
-		<section aria-label="Model API connections">
-			<h3>Model connections</h3>
-			<p className="settings-copy">
-				Add or replace keys here. Choose which saved connection to use in the
-				model selector.
-			</p>
-			<p className="settings-copy">
-				Use your own API account. Keys are encrypted, never shown again, and
-				never used as a fallback for a subscription.
-			</p>
-			{connections.isError ? (
-				<p role="alert">
-					Could not load connections. Check the database migration and retry.
-				</p>
-			) : null}
-			{connections.data?.map((connection) => {
-				const visibleIds = new Set(
-					availableConnectionModels([connection], codingModels.data ?? []).map(
-						(row) => row.id,
-					),
-				);
-				const visibleModels = connection.models.filter((row) =>
-					visibleIds.has(modelRouteId(connection.id, row.id)),
-				);
-				const model = visibleModels.find(
-					(row) => row.id === (selected[connection.id] ?? visibleModels[0]?.id),
-				);
-				return (
-					<div
-						className="settings-card model-connection-card"
-						key={connection.id}
-					>
-						<strong>{connection.label}</strong>
-						<p className="settings-copy">
-							{MODEL_PROVIDERS[connection.provider].label} · Your API account
-						</p>
-						<label htmlFor={`model-${connection.id}`}>Discovered model</label>
-						<select
-							id={`model-${connection.id}`}
-							value={model?.id ?? ""}
-							onChange={(event) =>
-								setSelected({
-									...selected,
-									[connection.id]: event.target.value,
-								})
-							}
-						>
-							{visibleModels.map((row) => (
-								<option key={row.id} value={row.id}>
-									{row.label}
-									{row.toolStreamingVerified ? " · verified" : ""}
-								</option>
-							))}
-						</select>
-						<p className="settings-copy">
-							{model?.toolStreamingVerified
-								? "Streaming tool calls verified."
-								: "Listing alone does not confirm coding compatibility."}{" "}
-							Verification sends one small billable request to your provider.
-						</p>
-						<div className="model-connection-actions">
-							<button
-								type="button"
-								className="settings-secondary"
-								disabled={busy || !model}
-								onClick={() =>
-									model &&
-									verify.mutate({
-										connectionId: connection.id,
-										modelId: model.id,
-									})
-								}
-							>
-								{verify.isPending &&
-								verify.variables?.connectionId === connection.id
-									? "Verifying…"
-									: "Verify model (uses API credit)"}
-							</button>
-							<button
-								type="button"
-								className="settings-secondary"
-								disabled={busy}
-								onClick={() => {
-									setReplacing(connection.id);
-									setProvider(connection.provider);
-									setLabel(connection.label);
-									setBaseUrl(connection.baseUrl);
-									setApiKey("");
-								}}
-							>
-								Replace key
-							</button>
-							<button
-								type="button"
-								className="settings-secondary"
-								disabled={busy}
-								onClick={() => remove.mutate(connection.id)}
-							>
-								Disconnect
-							</button>
-						</div>
-					</div>
-				);
-			})}
-			<form
-				className="settings-secret-form model-connection-form"
-				onSubmit={(event) => {
-					event.preventDefault();
-					save.mutate();
-				}}
-			>
-				<h4>
-					{replacing ? "Replace connection credentials" : "Add connection"}
-				</h4>
-				<label htmlFor="model-provider">Provider</label>
-				<select
-					id="model-provider"
-					value={provider}
-					onChange={(event) => {
-						setProvider(event.target.value as ModelProvider);
-						setApiKey("");
-					}}
-					disabled={busy || Boolean(replacing)}
-				>
-					{Object.entries(MODEL_PROVIDERS).map(([id, row]) => (
-						<option key={id} value={id}>
-							{row.label}
-						</option>
-					))}
-				</select>
-				<label htmlFor="model-label">Connection name</label>
-				<input
-					id="model-label"
-					maxLength={80}
-					value={label}
-					placeholder={MODEL_PROVIDERS[provider].label}
-					onChange={(event) => setLabel(event.target.value)}
-				/>
-				{provider === "compatible" ? (
-					<>
-						<label htmlFor="model-endpoint">Public HTTPS base URL</label>
-						<input
-							id="model-endpoint"
-							type="url"
-							required
-							value={baseUrl}
-							placeholder="https://gateway.example.com/v1"
-							onChange={(event) => setBaseUrl(event.target.value)}
-						/>
-					</>
-				) : null}
-				<label htmlFor="model-key">API key</label>
-				<input
-					id="model-key"
-					type="password"
-					required
-					minLength={8}
-					maxLength={4096}
-					autoComplete="off"
-					spellCheck={false}
-					value={apiKey}
-					onChange={(event) => setApiKey(event.target.value)}
-				/>
-				<button
-					type="submit"
-					className="settings-secondary"
-					disabled={busy || !apiKey}
-				>
-					{save.isPending ? "Discovering models…" : "Save and discover models"}
-				</button>
-				{replacing ? (
+		<section
+			aria-label="Model API connections"
+			className="settings-section settings-section-gap"
+		>
+			<header className="settings-section-head">
+				<div>
+					<h3>API keys</h3>
+					<p>
+						Use your own model provider account. Keys are encrypted, never shown
+						again, and never used in place of a subscription.
+					</p>
+				</div>
+				{formOpen ? null : (
 					<button
 						type="button"
 						className="settings-secondary"
-						onClick={() => {
-							setReplacing(undefined);
-							setApiKey("");
-							setLabel("");
-							setBaseUrl("");
-						}}
+						onClick={() => setAdding(true)}
 					>
-						Cancel replacement
+						Add API key
 					</button>
-				) : null}
-			</form>
+				)}
+			</header>
+			{connections.isError ? (
+				<p role="alert">Could not load your API keys. Please retry.</p>
+			) : null}
+			{connections.data?.length ? (
+				<ul className="settings-group">
+					{connections.data.map((connection) => {
+						const visibleIds = new Set(
+							availableConnectionModels(
+								[connection],
+								codingModels.data ?? [],
+							).map((row) => row.id),
+						);
+						const visibleModels = connection.models.filter((row) =>
+							visibleIds.has(modelRouteId(connection.id, row.id)),
+						);
+						const model = visibleModels.find(
+							(row) =>
+								row.id === (selected[connection.id] ?? visibleModels[0]?.id),
+						);
+						return (
+							<li key={connection.id} className="model-connection-item">
+								<div className="settings-row">
+									<div className="settings-row-text">
+										<span className="settings-row-title">
+											{connection.label}
+										</span>
+										<span className="settings-row-meta">
+											{MODEL_PROVIDERS[connection.provider].label} ·{" "}
+											{visibleModels.length} coding models
+										</span>
+									</div>
+									<div className="settings-row-actions">
+										<button
+											type="button"
+											className="settings-secondary"
+											disabled={busy}
+											onClick={() => {
+												setAdding(false);
+												setReplacing(connection.id);
+												setProvider(connection.provider);
+												setLabel(connection.label);
+												setBaseUrl(connection.baseUrl);
+												setApiKey("");
+											}}
+										>
+											Replace key
+										</button>
+										<button
+											type="button"
+											className="settings-secondary"
+											disabled={busy}
+											onClick={() => remove.mutate(connection.id)}
+										>
+											Remove
+										</button>
+									</div>
+								</div>
+								{visibleModels.length ? (
+									<div className="model-connection-verify">
+										<Select
+											value={model?.id ?? ""}
+											onValueChange={(value) =>
+												setSelected({ ...selected, [connection.id]: value })
+											}
+										>
+											<SelectTrigger
+												className="model-connection-select"
+												aria-label={`Model for ${connection.label}`}
+											>
+												<SelectValue placeholder="Choose a model" />
+											</SelectTrigger>
+											<SelectContent>
+												{visibleModels.map((row) => (
+													<SelectItem key={row.id} value={row.id}>
+														{row.label}
+													</SelectItem>
+												))}
+											</SelectContent>
+										</Select>
+										{model?.toolStreamingVerified ? (
+											<span className="settings-badge" data-tone="ok">
+												Tools verified
+											</span>
+										) : (
+											<button
+												type="button"
+												className="settings-secondary"
+												disabled={busy || !model}
+												title="Sends one small billable request to your provider"
+												onClick={() =>
+													model &&
+													verify.mutate({
+														connectionId: connection.id,
+														modelId: model.id,
+													})
+												}
+											>
+												{verify.isPending &&
+												verify.variables?.connectionId === connection.id
+													? "Checking…"
+													: "Check tool support"}
+											</button>
+										)}
+									</div>
+								) : null}
+							</li>
+						);
+					})}
+				</ul>
+			) : connections.data && !formOpen ? (
+				<div className="settings-group settings-empty">No API keys yet.</div>
+			) : null}
+			{formOpen ? (
+				<form
+					className="settings-group settings-form-grid"
+					onSubmit={(event) => {
+						event.preventDefault();
+						save.mutate();
+					}}
+				>
+					<div className="settings-field">
+						<span>Provider</span>
+						<Select
+							value={provider}
+							disabled={busy || Boolean(replacing)}
+							onValueChange={(value) => {
+								setProvider(value as ModelProvider);
+								setApiKey("");
+							}}
+						>
+							<SelectTrigger aria-label="Provider">
+								<SelectValue />
+							</SelectTrigger>
+							<SelectContent>
+								{Object.entries(MODEL_PROVIDERS).map(([id, row]) => (
+									<SelectItem key={id} value={id}>
+										{row.label}
+									</SelectItem>
+								))}
+							</SelectContent>
+						</Select>
+					</div>
+					<label className="settings-field">
+						<span>Name</span>
+						<input
+							maxLength={80}
+							value={label}
+							placeholder={MODEL_PROVIDERS[provider].label}
+							onChange={(event) => setLabel(event.target.value)}
+						/>
+					</label>
+					{provider === "compatible" ? (
+						<label className="settings-field settings-field-wide">
+							<span>Public HTTPS base URL</span>
+							<input
+								type="url"
+								required
+								value={baseUrl}
+								placeholder="https://gateway.example.com/v1"
+								onChange={(event) => setBaseUrl(event.target.value)}
+							/>
+						</label>
+					) : null}
+					<label className="settings-field settings-field-wide">
+						<span>API key</span>
+						<input
+							type="password"
+							required
+							minLength={8}
+							maxLength={4096}
+							autoComplete="off"
+							spellCheck={false}
+							value={apiKey}
+							onChange={(event) => setApiKey(event.target.value)}
+						/>
+					</label>
+					<div className="settings-form-actions">
+						<button
+							type="button"
+							className="settings-secondary"
+							onClick={closeForm}
+						>
+							Cancel
+						</button>
+						<button
+							type="submit"
+							className="settings-primary"
+							disabled={busy || !apiKey}
+						>
+							{save.isPending
+								? "Finding models…"
+								: replacing
+									? "Replace key"
+									: "Save key"}
+						</button>
+					</div>
+				</form>
+			) : null}
 			{save.error || remove.error || verify.error ? (
 				<p role="alert">
 					{(save.error ?? remove.error ?? verify.error)?.message}

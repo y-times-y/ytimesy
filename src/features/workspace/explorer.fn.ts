@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { getRequest } from "@tanstack/react-start/server";
 import { Effect } from "effect";
 import type { WorkspaceFilePreview } from "#/domain/file-preview";
+import type { FileChangeEntry } from "#/domain/session-item";
 import type { SlashCommand } from "#/domain/slash-command";
 import type {
 	WorkspaceExplorerListing,
@@ -18,6 +19,7 @@ import {
 	listWorkspaceExplorer,
 	readWorkspaceExplorerFile,
 	readWorkspaceFilePreview,
+	readWorkspaceGitChanges,
 	writeWorkspaceExplorerFile,
 } from "#/server/services/workspace-explorer";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
@@ -154,5 +156,19 @@ export const listProjectCommandsFn = createServerFn({ method: "GET" })
 			];
 		} catch {
 			return [];
+		}
+	});
+
+/** Git-backed changes for the chat's workspace; null when its machine is asleep. */
+export const readWorkspaceChangesFn = createServerFn({ method: "GET" })
+	.validator(optionalProjectId)
+	.handler(async ({ data }): Promise<FileChangeEntry[] | null> => {
+		try {
+			const scope = await requireScope(data.projectId, data.sessionId);
+			return await runWithMachines((machines) =>
+				readWorkspaceGitChanges(machines, scope),
+			);
+		} catch {
+			return null;
 		}
 	});

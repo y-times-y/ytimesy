@@ -4,11 +4,20 @@ import { WorkspaceProvisionError } from "#/server/services/errors";
 
 class VmStillStarting extends Error {}
 
+/** Freestyle can take over a minute to finish pausing an idle machine. */
+const WAIT_SECONDS = 180;
+
+/**
+ * Waits for a machine the caller wants running. A machine caught mid-pause
+ * (idle timeout) cannot be started until the pause completes, so once it
+ * settles as paused it is started here instead of timing out.
+ */
 export async function waitUntilVmRunning(
 	vm: Vm,
 	label: string,
 	signal?: AbortSignal,
 ) {
+	let started = false;
 	const read = Effect.tryPromise(() => vm.data()).pipe(
 		Effect.flatMap((data) => {
 			if (data.state === "stopped") {
@@ -20,16 +29,22 @@ export async function waitUntilVmRunning(
 					}),
 				);
 			}
-			return data.state === "running"
-				? Effect.succeed(data)
-				: Effect.fail(new VmStillStarting());
+			if (data.state === "running") return Effect.succeed(data);
+			if (data.state === "paused" && !started) {
+				started = true;
+				return Effect.tryPromise(() => vm.start()).pipe(
+					Effect.catchAll(() => Effect.void),
+					Effect.flatMap(() => Effect.fail(new VmStillStarting())),
+				);
+			}
+			return Effect.fail(new VmStillStarting());
 		}),
 	);
 	const result = await Effect.runPromise(
 		read.pipe(
 			Effect.retry({
 				schedule: Schedule.intersect(
-					Schedule.recurs(29),
+					Schedule.recurs(WAIT_SECONDS - 1),
 					Schedule.spaced("1 second"),
 				),
 				while: (cause) => cause instanceof VmStillStarting,

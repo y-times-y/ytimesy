@@ -418,6 +418,30 @@ export async function activateEnvironmentBuild(
 	runtime: WorkspaceRuntime = workspaceRuntimeFromEnv(),
 ) {
 	await assertBuildSecretsCurrent(input);
+	// Chats start by switching the checkout to their own branch, which refuses
+	// over uncommitted changes. Setup often rewrites tracked files (generated
+	// code, lockfile drift); the template must start clean.
+	for (const repo of prepared) {
+		const reset = await runtime.exec(
+			vm,
+			[
+				"bash",
+				"-lc",
+				`cd ${quote(repo.directory)} && git diff --name-only HEAD && git reset --hard --quiet HEAD`,
+			],
+			{},
+			60_000,
+		);
+		const files = reset.stdout.split("\n").filter(Boolean);
+		if (reset.exitCode !== 0)
+			throw new Error(`Could not clean the ${repo.fullName} checkout.`);
+		if (files.length)
+			await recordWorkspaceEvent(
+				input.userId,
+				input.workspaceId,
+				`${repo.fullName}: setup changed ${files.length} tracked ${files.length === 1 ? "file" : "files"} (${files.slice(0, 3).join(", ")}${files.length > 3 ? ", …" : ""}); restored so chats start from a clean checkout.`,
+			).catch(() => undefined);
+	}
 	await runtime.writeTextFile(
 		vm,
 		"/tmp/ytimesy-environment.json",

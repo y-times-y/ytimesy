@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { PGlite } from "@electric-sql/pglite";
-import type { Freestyle, VmData } from "freestyle";
+import { type Freestyle, FreestyleApiError, type VmData } from "freestyle";
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { utcUsageMonth } from "../src/domain/infrastructure-usage";
 import {
 	admitVmCreate,
 	admitVmResume,
+	reconcileInfrastructureVms,
 	reconcilePausedVm,
 } from "../src/server/adapters/freestyle/usage-admission";
 import {
@@ -27,7 +28,7 @@ vi.mock("../src/server/adapters/database", () => ({
 beforeAll(async () => {
 	db = new PGlite();
 	await db.exec(
-		"create role anon; create role authenticated; create table auth_user(id text primary key); insert into auth_user values('alice'),('bob'),('admin'); create table workspace(id text,user_id text); create table agent_session(id text,user_id text); create table environment_build(id text,workspace_id text); insert into workspace values('one','alice'); insert into environment_build values('build-one','one');",
+		"create role anon; create role authenticated; create table auth_user(id text primary key); insert into auth_user values('alice'),('bob'),('admin'); create table workspace(id text,user_id text); create table agent_session(id text,user_id text); create table environment_build(id text,workspace_id text); insert into workspace values('one','alice'),('two','alice'); insert into environment_build values('build-one','one');",
 	);
 	await db.exec(
 		readFileSync(
@@ -524,4 +525,50 @@ it("uses UTC month boundaries and keeps infrastructure tables unavailable to bro
 			)
 		).rows,
 	).toEqual([{ allowed: false }]);
+});
+
+it("settles stopped VMs like paused ones and converts a deleted VM's hold into usage", async () => {
+	enableVmAllowance();
+	await admitVmCreate(
+		{} as Freestyle,
+		"ytimesy-ws-one",
+		"freestyle/ubuntu-sm",
+		async () => "vm-stopped",
+	);
+	await admitVmCreate(
+		{} as Freestyle,
+		"ytimesy-ws-two",
+		"freestyle/ubuntu-sm",
+		async () => "vm-deleted",
+	);
+	const stopped = {
+		id: "vm-stopped",
+		slug: "ytimesy-ws-one",
+		state: "stopped",
+		resources: { cpu: 2, memory: 4096, storage: 16384 },
+		totalRunSeconds: 10,
+		maxRunTotalSeconds: 300,
+	} as VmData;
+	const client = {
+		vms: {
+			ref: (id: string) => ({
+				data: async () => {
+					if (id === "vm-deleted")
+						throw new FreestyleApiError(404, {
+							code: "NOT_FOUND",
+							message: "not found",
+						} as never);
+					return stopped;
+				},
+				update: async (input: { maxRunTotalSeconds: number }) => {
+					stopped.maxRunTotalSeconds = input.maxRunTotalSeconds;
+				},
+			}),
+		},
+	} as unknown as Freestyle;
+	await reconcileInfrastructureVms(client);
+	const usage = await userInfrastructureUsage("alice");
+	expect(usage.reservedMicroUsd).toBe(0);
+	// The stopped VM pays for its 10 seconds; the deleted one keeps its whole hold.
+	expect(usage.consumedMicroUsd).toBe(Math.ceil((10 * 132240) / 3600) + 13224);
 });

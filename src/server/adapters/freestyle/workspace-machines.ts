@@ -386,11 +386,47 @@ export function createFreestyleWorkspaceMachines(
 									target.memory !== current.memory ||
 									target.storage !== current.storage
 								)
-									await created.vm.resize(target);
+									await created.vm.resize(target).catch(async (error) => {
+										// A resize takes about as long as the provider gateway's
+										// timeout; a 5xx there often means it is still finishing.
+										if (
+											!(
+												error instanceof FreestyleApiError &&
+												error.status >= 500
+											) ||
+											!(await resizeLands(created.vm, target))
+										)
+											throw error;
+									});
 							} catch (error) {
 								// This copy has not been handed to a chat or executed any user work.
 								await created.vm.delete().catch(() => undefined);
-								throw error;
+								if (
+									!(error instanceof FreestyleApiError && error.status >= 500)
+								)
+									throw error;
+								// The provider's resize is unavailable: run the chat at the
+								// template's size rather than fail it. Without a machine_size
+								// tag the later size check accepts this copy.
+								console.warn(
+									"Machine resize unavailable; using template size.",
+									{
+										requested: requested.id,
+										status: error.status,
+									},
+								);
+								const fallback = await freestyle.vms.create({
+									...productCreateVmFields({ slug, snapshotId }),
+									metadata: {
+										purpose: WORKSPACE_METADATA_PURPOSE,
+										machine_size_requested: requested.id,
+									},
+									...(cap === undefined
+										? {}
+										: { maxRunTotalSeconds: cap, automaticRestart: false }),
+								});
+								await waitUntilVmRunning(fallback.vm, "Agent session VM");
+								return fallback.vmId;
 							}
 							return created.vmId;
 						},
@@ -434,6 +470,25 @@ export function createFreestyleWorkspaceMachines(
 }
 
 /** A failed resize must not become a silently undersized workspace on retry. Legacy VMs keep their existing shape. */
+/** Polls for up to a minute for a resize the provider reported as failed. */
+async function resizeLands(
+	vm: ReturnType<Freestyle["vms"]["ref"]>,
+	target: { cpu: number; memory: number; storage: number },
+) {
+	for (let attempt = 0; attempt < 30; attempt++) {
+		const resources = (await vm.data().catch(() => null))?.resources;
+		if (
+			resources &&
+			resources.cpu >= target.cpu &&
+			resources.memory >= target.memory &&
+			resources.storage >= target.storage
+		)
+			return true;
+		await new Promise((resolve) => setTimeout(resolve, 2_000));
+	}
+	return false;
+}
+
 async function verifyCopiedMachineSize(
 	vm: ReturnType<Freestyle["vms"]["ref"]>,
 ) {

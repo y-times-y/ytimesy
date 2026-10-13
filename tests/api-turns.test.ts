@@ -482,6 +482,7 @@ it("fails expired leases instead of replaying uncertain side effects", async () 
 	).toEqual({ turn_status: "failed" });
 });
 it("shares a root task budget with children and rolls back a rejected account reservation", async () => {
+	vi.stubEnv("YTIMESY_API_TASK_DAILY_TOKENS", "500000");
 	const childId = randomUUID();
 	await db.query(
 		"insert into agent_session(id,user_id,parent_session_id,harness,turn_status) values($1,'alice',$2,'api','idle')",
@@ -501,4 +502,5 @@ it("shares a root task budget with children and rolls back a rejected account re
 	await expect(reserveApiTokens("bob", sessionId, 10)).rejects.toThrow(
 		"hierarchy",
 	);
+	vi.unstubAllEnvs();
 });
