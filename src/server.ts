@@ -1,4 +1,5 @@
 import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
+import { handleWorkerSocket } from "./server/sockets/worker-sockets";
 import type { WebWorkerEnvironment } from "./server/web/environment";
 import { withWebRequestScope } from "./server/web/request-scope";
 
@@ -18,7 +19,7 @@ export default createServerEntry({
 		return withWebRequestScope(
 			env,
 			(work) => context.waitUntil(work),
-			async () => handler.fetch(request),
+			async () => handleWorkerSocket(request) ?? handler.fetch(request),
 		);
 	},
 });
