@@ -1261,6 +1261,41 @@ a.sidebar-chat-pr,
 	padding: 6px 4px 8px;
 	border-left: 1px solid rgba(255, 255, 255, 0.08);
 }
+.file-tree-machine {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 10px;
+	margin: 4px 0 10px;
+	padding: 12px;
+	border: 1px solid #ffffff12;
+	border-radius: 10px;
+	color: #a3a3a3;
+	font-size: 12px;
+	line-height: 18px;
+}
+.file-tree-machine p {
+	margin: 0;
+}
+.file-tree-machine [role="alert"] {
+	color: #f08a8a;
+}
+.file-tree-machine-button {
+	height: 28px;
+	padding: 0 10px;
+	border: 0;
+	border-radius: 7px;
+	background: #f2f2f2;
+	color: #111;
+	font: inherit;
+	font-size: 12px;
+	font-weight: 500;
+	cursor: pointer;
+}
+.file-tree-machine-button:disabled {
+	cursor: default;
+	opacity: 0.5;
+}
 .file-tree-empty {
 	margin: 12px 10px;
 	color: rgba(255, 255, 255, 0.45);

@@ -115,7 +115,38 @@ export function listWorkspaceExplorer(
 			}),
 			Effect.catchAll(() => Effect.succeed(emptyListing())),
 		),
-	).pipe(Effect.map((listing) => listing ?? emptyListing()));
+	).pipe(
+		Effect.flatMap((listing) =>
+			listing
+				? Effect.succeed(listing)
+				: idleMachine(machines, scope).pipe(
+						Effect.map((machine) => ({ ...emptyListing(), machine })),
+					),
+		),
+	);
+}
+
+/** Why the checkout can't be read: this chat has no machine yet, or it is asleep. */
+function idleMachine(
+	machines: WorkspaceMachines,
+	scope: ExplorerScope,
+): Effect.Effect<"none" | "asleep" | undefined> {
+	const projectId = scope.projectId?.trim();
+	if (!projectId) return Effect.succeed(undefined);
+	return Effect.gen(function* () {
+		const peeked = yield* Effect.tryPromise(() =>
+			peekAgentSessionMachine({
+				userId: scope.userId,
+				projectId,
+				sessionId: scope.sessionId,
+			}),
+		);
+		if (!peeked.providerRef) return "none" as const;
+		const running = yield* Effect.tryPromise(() =>
+			machines.isRunning(WorkspaceId(peeked.providerRef as string)),
+		);
+		return running ? undefined : ("asleep" as const);
+	}).pipe(Effect.catchAll(() => Effect.succeed(undefined)));
 }
 
 export function readWorkspaceExplorerFile(

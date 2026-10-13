@@ -70,7 +70,7 @@ export function desktopInspectorPrompt(input: {
 		return {
 			title: "Starting desktop…",
 			description:
-				"This is the desktop the agent uses for QA. You watch and control the same screen.",
+				"Getting this chat's computer ready. A new or forked chat gets its own copy the first time, which takes a minute or two.",
 			actionLabel: null,
 		};
 	}
