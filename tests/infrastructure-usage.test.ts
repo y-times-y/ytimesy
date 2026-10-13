@@ -48,6 +48,12 @@ beforeAll(async () => {
 			"utf8",
 		),
 	);
+	await db.exec(
+		readFileSync(
+			"supabase/migrations/20261013060000_infrastructure_vm_lease.sql",
+			"utf8",
+		),
+	);
 });
 beforeEach(async () => {
 	vi.stubEnv("YTIMESY_ADMIN_USER_IDS", "admin");
@@ -56,7 +62,7 @@ beforeEach(async () => {
 	vi.stubEnv("YTIMESY_FLEET_LIFETIME_MICRO_USD", "1000");
 	vi.stubEnv("YTIMESY_INFRASTRUCTURE_ADMISSION", "false");
 	await db.exec(
-		"truncate infrastructure_vm_admission,infrastructure_usage_reservation,infrastructure_usage_adjustment,infrastructure_usage_policy;",
+		"truncate infrastructure_vm_lease,infrastructure_vm_admission,infrastructure_usage_reservation,infrastructure_usage_adjustment,infrastructure_usage_policy;",
 	);
 });
 afterAll(async () => {

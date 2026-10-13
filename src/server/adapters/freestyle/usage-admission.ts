@@ -56,36 +56,52 @@ async function ownerForSlug(slug: string, client: PoolClient) {
 	return result.rows[0].user_id;
 }
 
-/** Lock waits are bounded explicitly: session poolers may ignore startup timeouts. Fleet locks never span network calls. */
+const LEASE_SECONDS = 90;
+const LEASE_WAIT_MS = 20_000;
+
+/**
+ * Serializes admission per VM with an expiring lease row, not a session lock:
+ * an edge invocation can die before unlocking, and a lease then simply expires.
+ * Operations hold it only for a few provider reads/updates, well under the lease.
+ * Fleet locks never span network calls.
+ */
 export async function lockedVm<T>(
 	slug: string,
 	operation: (client: PoolClient) => Promise<T>,
+	options: { waitMs?: number; pollMs?: number } = {},
 ) {
 	const client = await database().connect();
-	let locked = false;
-	let reusable = false;
+	const holder = randomUUID();
+	let leased = false;
+	let destroy = false;
 	try {
-		const timeout = await client.query<{ statement_timeout: string }>(
-			"show statement_timeout",
-		);
-		await client.query("select set_config('statement_timeout','20s',false)");
-		await client.query(
-			"select pg_advisory_lock(hashtextextended($1,81738421))",
-			[slug],
-		);
-		locked = true;
-		await client.query("select set_config('statement_timeout',$1,false)", [
-			timeout.rows[0].statement_timeout,
-		]);
-		reusable = true;
+		const deadline = Date.now() + (options.waitMs ?? LEASE_WAIT_MS);
+		while (!leased) {
+			const acquired = await client.query(
+				`insert into infrastructure_vm_lease(slug,holder,expires_at)
+				 values($1,$2,now()+make_interval(secs=>$3))
+				 on conflict(slug) do update set holder=excluded.holder, expires_at=excluded.expires_at
+				 where infrastructure_vm_lease.expires_at < now()
+				 returning holder`,
+				[slug, holder, LEASE_SECONDS],
+			);
+			leased = acquired.rows.length > 0;
+			if (leased) break;
+			if (Date.now() >= deadline)
+				throw new Error(
+					"Another operation is updating this machine's usage. Try again shortly.",
+				);
+			await new Promise((resolve) =>
+				setTimeout(resolve, options.pollMs ?? 250),
+			);
+		}
 		return await operation(client);
 	} finally {
-		let destroy = !reusable;
 		try {
-			if (locked)
+			if (leased)
 				await client.query(
-					"select pg_advisory_unlock(hashtextextended($1,81738421))",
-					[slug],
+					"delete from infrastructure_vm_lease where slug=$1 and holder=$2",
+					[slug, holder],
 				);
 		} catch {
 			destroy = true;

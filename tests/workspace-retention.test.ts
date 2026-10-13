@@ -43,6 +43,7 @@ beforeAll(async () => {
 		"20261003021000_infrastructure_vm_identity",
 		"20261003022000_workspace_retention",
 		"20261003024000_infrastructure_zero_runtime",
+		"20261013060000_infrastructure_vm_lease",
 	])
 		await db.exec(readFileSync(`supabase/migrations/${file}.sql`, "utf8"));
 });
@@ -53,7 +54,7 @@ beforeEach(async () => {
 	vi.stubEnv("YTIMESY_FLEET_MONTHLY_MICRO_USD", "500000000");
 	vi.stubEnv("YTIMESY_FLEET_LIFETIME_MICRO_USD", "7000000000");
 	await db.exec(
-		"truncate workspace_retention,infrastructure_vm_admission,infrastructure_usage_reservation,agent_session,api_turn;",
+		"truncate workspace_retention,infrastructure_vm_lease,infrastructure_vm_admission,infrastructure_usage_reservation,agent_session,api_turn;",
 	);
 	await query(
 		"insert into agent_session values($1,'alice','project','source','completed','fresh')",
