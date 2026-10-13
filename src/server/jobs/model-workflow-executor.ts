@@ -27,7 +27,7 @@ export type WorkflowStepClaim =
 	| { kind: "unavailable" };
 
 /** Receipts are claimed before any inference or tool side effect; an unknown outcome is only re-run when the owner explicitly resumes it. */
-export interface WorkflowStepReceipts {
+interface WorkflowStepReceipts {
 	claim(step: WorkflowStep, resume?: boolean): Promise<WorkflowStepClaim>;
 	complete(step: WorkflowStep, outcome: WorkflowStepOutcome): Promise<void>;
 }

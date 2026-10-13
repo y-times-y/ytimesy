@@ -13,7 +13,7 @@ import { SignOut } from "./sign-out";
 import { SignUp } from "./sign-up";
 import { VerifyEmail } from "./verify-email";
 
-export type AuthProps = {
+type AuthProps = {
 	className?: string;
 	path?: string;
 	socialLayout?: SocialLayout;

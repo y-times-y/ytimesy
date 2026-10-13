@@ -21,7 +21,7 @@ export type ListedPullRequest = {
 	readonly mergeableState: string | null;
 };
 
-export type SidebarChatPrMark = {
+type SidebarChatPrMark = {
 	readonly need: SidebarChatPrNeed;
 	readonly url: string;
 	readonly label: string;

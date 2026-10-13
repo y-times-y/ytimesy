@@ -3,10 +3,6 @@ import {
 	type SocialProviderId,
 } from "#/domain/identity-providers";
 
-export type { SocialProviderId };
-
-export { offeredSocialProviders };
-
 export function googleOAuthConfigured(config: {
 	GOOGLE_CLIENT_ID?: string;
 	GOOGLE_CLIENT_SECRET?: string;

@@ -12,7 +12,7 @@ export type PluginComponents = {
 	description: string;
 };
 
-export type PublicPluginInstall = {
+type PublicPluginInstall = {
 	id: string;
 	catalogId: string;
 	pluginName: string;

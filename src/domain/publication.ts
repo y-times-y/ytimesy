@@ -3,7 +3,7 @@ import {
 	workspaceEnvironmentIsReady,
 } from "./project-workspace";
 
-export type BranchComparison = {
+type BranchComparison = {
 	head: string;
 	base: string;
 	aheadBy: number;
@@ -56,7 +56,7 @@ export function publicationCommitAuthor(user: {
 	);
 }
 
-export function publicationHumanAuthor(user: {
+function publicationHumanAuthor(user: {
 	readonly name?: string | null;
 	readonly email?: string | null;
 }): PublicationAuthor | null {

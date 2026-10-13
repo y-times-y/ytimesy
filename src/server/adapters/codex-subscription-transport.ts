@@ -55,7 +55,7 @@ function relaySecret() {
 		throw new Error("Subscription relay signing key is missing.");
 	return key;
 }
-export function codexRelayConfigured() {
+function codexRelayConfigured() {
 	return (
 		!subscriptionEgress.getStore() && !!process.env.YTIMESY_CODEX_RELAY_URL
 	);

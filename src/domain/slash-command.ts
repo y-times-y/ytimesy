@@ -23,7 +23,7 @@ export type SlashCommand = {
 };
 
 /** Repository commands live in .claude/commands or .agents/commands as <name>.md. */
-export const PROJECT_COMMAND_PATH =
+const PROJECT_COMMAND_PATH =
 	/^(?:\.claude|\.agents)\/commands\/([a-z0-9][a-z0-9_-]{0,47})\.md$/;
 const BUILT_IN_TRIGGERS = new Set([
 	"stop",
@@ -75,12 +75,12 @@ export function expandProjectCommand(template: string, argument: string) {
 		.replace(/\$([1-9])/g, (_match, index) => words[Number(index) - 1] ?? "");
 }
 
-export type SlashDraft = {
+type SlashDraft = {
 	readonly query: string;
 	readonly argument: string;
 };
 
-export type SlashCommandContext = {
+type SlashCommandContext = {
 	readonly authenticated: boolean;
 	readonly requiresAccountLogin: boolean;
 	readonly turnRunning: boolean;
@@ -165,10 +165,7 @@ export function composerSlashCommands(
 	];
 }
 
-export function slashCommandMatches(
-	command: SlashCommand,
-	query: string,
-): boolean {
+function slashCommandMatches(command: SlashCommand, query: string): boolean {
 	if (query.length === 0) return true;
 	if (command.trigger.slice(1).startsWith(query)) return true;
 	if (command.id.startsWith(query)) return true;

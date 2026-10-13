@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 const command = z.string().trim().min(1).max(16_384);
-export const environmentService = z
+const environmentService = z
 	.object({
 		name: z.string().regex(/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/),
 		command,

@@ -5,7 +5,7 @@ import { useMemo } from "react";
 import { cn } from "#/lib/utils.ts";
 import { ProviderButton } from "./provider-button";
 
-export type ProviderButtonsProps = {
+type ProviderButtonsProps = {
 	socialLayout?: SocialLayout;
 	view?: AuthView;
 };

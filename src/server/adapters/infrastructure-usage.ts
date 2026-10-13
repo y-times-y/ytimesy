@@ -13,7 +13,7 @@ type BudgetLimits = {
 	lifetimeFleetMicroUsd: number;
 };
 
-export function infrastructureUsageLimits(): BudgetLimits {
+function infrastructureUsageLimits(): BudgetLimits {
 	const read = (name: string) => {
 		const value = process.env[name];
 		if (!value?.trim()) throw new Error(`${name} must be configured.`);

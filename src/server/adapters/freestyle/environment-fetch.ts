@@ -1,4 +1,4 @@
-export type EnvironmentRequestCounts = {
+type EnvironmentRequestCounts = {
 	requests: number;
 	backgroundPolls: number;
 };

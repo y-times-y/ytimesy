@@ -1,4 +1,4 @@
-export type FilePreviewKind = "markdown" | "svg" | "image" | "code";
+type FilePreviewKind = "markdown" | "svg" | "image" | "code";
 
 export type WorkspaceFilePreview =
 	| { kind: "text"; text: string }

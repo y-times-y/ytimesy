@@ -5,7 +5,7 @@ import {
 
 export const WORKSPACE_PTY_SLUG = "main";
 
-export type TerminalClientControl = {
+type TerminalClientControl = {
 	readonly type: "resize";
 	readonly cols: number;
 	readonly rows: number;
@@ -83,13 +83,13 @@ export function terminalInspectorPrompt(input: {
 	};
 }
 
-export const WORKSPACE_GUEST_HOSTNAME = "ytimesy";
+const WORKSPACE_GUEST_HOSTNAME = "ytimesy";
 
-export function workspaceGuestPrompt() {
+function workspaceGuestPrompt() {
 	return "\\u@ytimesy:\\w\\$ ";
 }
 
-export function workspaceGuestIdentityCommand() {
+function workspaceGuestIdentityCommand() {
 	return [
 		`hostname ${WORKSPACE_GUEST_HOSTNAME} 2>/dev/null || true`,
 		`export HOSTNAME=${WORKSPACE_GUEST_HOSTNAME}`,

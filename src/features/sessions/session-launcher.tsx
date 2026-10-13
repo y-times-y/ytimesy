@@ -66,7 +66,7 @@ import { SessionTimeline } from "./session-timeline";
 import { SlashCommandPalette } from "./slash-command-palette";
 import { TaskInput } from "./task-input";
 
-export type InspectorView = "files" | "diff" | "terminal" | "desktop";
+type InspectorView = "files" | "diff" | "terminal" | "desktop";
 
 export function SessionLauncher({
 	session,

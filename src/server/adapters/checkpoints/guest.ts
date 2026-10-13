@@ -2,7 +2,7 @@ import { posixShellQuoted as quote } from "#/domain/posix-command";
 import type { GitTransferHost } from "../github/git-broker";
 
 /** Export only Git work and per-chat native state, never auth files or dependencies. */
-export function exportCheckpointScript(
+function exportCheckpointScript(
 	repositories: readonly string[],
 	nativeRoot: string | null,
 	output: string,

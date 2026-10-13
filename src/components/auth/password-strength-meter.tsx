@@ -18,7 +18,7 @@ const segmentColors: Record<FilledLevel, string> = {
 	strong: "bg-emerald-500",
 };
 
-export type PasswordStrengthMeterProps = {
+type PasswordStrengthMeterProps = {
 	/** The password as typed. Renders nothing while it is empty. */
 	password: string;
 	className?: string;

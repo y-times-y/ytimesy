@@ -5,12 +5,12 @@ import {
 } from "#/domain/github-project";
 import type { GitHubAppCredentials } from "./credentials";
 
-export type AuthorizedGitHubListing = {
+type AuthorizedGitHubListing = {
 	readonly installationCount: number;
 	readonly repositories: readonly GitHubRepository[];
 };
 
-export type GitHubAppListing = {
+type GitHubAppListing = {
 	readonly listAuthorized: (
 		credentials: GitHubAppCredentials,
 	) => Promise<AuthorizedGitHubListing>;

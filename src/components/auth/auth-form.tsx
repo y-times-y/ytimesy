@@ -48,7 +48,7 @@ const { fieldContext, formContext, useFieldContext, useFormContext } =
 
 const DEFAULT_AUTH_FORM_SERVER_ERROR = "Unable to submit this form. Try again.";
 
-export function focusFirstInvalidAuthFormControl(form: HTMLFormElement) {
+function focusFirstInvalidAuthFormControl(form: HTMLFormElement) {
 	requestAnimationFrame(() => {
 		form
 			.querySelector<HTMLElement>(
@@ -86,7 +86,7 @@ function AuthFormServerError() {
 	);
 }
 
-export function setAuthFormServerError(
+function setAuthFormServerError(
 	form: AnyFormApi,
 	error: unknown,
 	fallbackMessage: string,
@@ -100,14 +100,11 @@ export function setAuthFormServerError(
 	});
 }
 
-export function clearAuthFormServerError(form: AnyFormApi) {
+function clearAuthFormServerError(form: AnyFormApi) {
 	form.setErrorMap({ onServer: { fields: {} } });
 }
 
-export function clearAuthFormFieldServerError(
-	form: AnyFormApi,
-	fieldName: string,
-) {
+function clearAuthFormFieldServerError(form: AnyFormApi, fieldName: string) {
 	form.setErrorMap({ onServer: undefined });
 	if (!fieldName) return;
 
@@ -121,7 +118,7 @@ export function clearAuthFormFieldServerError(
 	}));
 }
 
-export async function submitAuthForm(
+async function submitAuthForm(
 	form: AnyFormApi,
 	serverErrorMessage = DEFAULT_AUTH_FORM_SERVER_ERROR,
 ) {

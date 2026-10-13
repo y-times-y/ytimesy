@@ -5,7 +5,7 @@ import {
 	type ModelProvider,
 } from "#/domain/model-connection";
 
-export function isProviderCodingModel(
+function isProviderCodingModel(
 	provider: ModelProvider,
 	row: Record<string, unknown>,
 	id: string,

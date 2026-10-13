@@ -1,4 +1,4 @@
-export type TwoFactorMethod = "totp" | "otp";
+type TwoFactorMethod = "totp" | "otp";
 
 const TWO_FACTOR_METHODS: TwoFactorMethod[] = ["totp", "otp"];
 
@@ -11,8 +11,7 @@ export const TWO_FACTOR_PLUGIN_ID = "twoFactor";
  * Only the non-sensitive method names are stored, never a code, token, or the
  * two-factor cookie, which stays HTTP-only.
  */
-export const TWO_FACTOR_METHODS_STORAGE_KEY =
-	"better-auth-ui.two-factor-methods";
+const TWO_FACTOR_METHODS_STORAGE_KEY = "better-auth-ui.two-factor-methods";
 
 type TwoFactorRedirect = {
 	twoFactorRedirect: true;
@@ -29,7 +28,7 @@ export function isTwoFactorRedirect(data: unknown): data is TwoFactorRedirect {
 }
 
 /** Narrow arbitrary method names to the challenge views this UI supports. */
-export function parseTwoFactorMethods(methods?: unknown): TwoFactorMethod[] {
+function parseTwoFactorMethods(methods?: unknown): TwoFactorMethod[] {
 	if (!Array.isArray(methods)) return [];
 
 	return TWO_FACTOR_METHODS.filter((method) => methods.includes(method));

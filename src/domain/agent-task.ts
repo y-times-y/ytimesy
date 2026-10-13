@@ -34,7 +34,7 @@ export function taskExecutionCapabilities(task: {
 	return { commandExecution: writable, workspaceEdits: writable };
 }
 
-export type AgentTaskPlan = {
+type AgentTaskPlan = {
 	readonly prompt: string;
 	readonly placement: AgentTaskPlacement;
 	readonly access: AgentTaskAccess;
@@ -113,7 +113,7 @@ type TaskSession = {
 	readonly taskPullRequestUrl?: string | null;
 };
 
-export function taskStatusFromTurn(
+function taskStatusFromTurn(
 	turnStatus: SessionTurnStatus,
 	storedStatus?: AgentTaskStatus | null,
 ): AgentTaskStatus {

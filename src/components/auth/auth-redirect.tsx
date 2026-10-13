@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react";
 import { Spinner } from "#/components/ui/spinner.tsx";
 import { cn } from "#/lib/utils.ts";
 
-export type AuthRedirectProps = {
+type AuthRedirectProps = {
 	className?: string;
 };
 

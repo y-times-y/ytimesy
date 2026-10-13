@@ -5,7 +5,7 @@ import {
 } from "#/domain/local-qa-identity";
 import { database } from "../adapters/database";
 
-export type LocalQaUser = {
+type LocalQaUser = {
 	readonly id: string;
 	readonly name: string;
 	readonly email: string;

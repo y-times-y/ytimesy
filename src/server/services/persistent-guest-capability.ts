@@ -211,7 +211,7 @@ armIdle();
 `;
 
 /** Class and a short message: enough to tell a TLS, DNS, timeout or HTTP failure apart. */
-export function guestServiceFailure(error: unknown) {
+function guestServiceFailure(error: unknown) {
 	if (!(error instanceof Error)) return "unknown";
 	const message = error.message.replaceAll(
 		/Bearer\s+\S+/g,

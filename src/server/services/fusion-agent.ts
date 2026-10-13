@@ -33,7 +33,7 @@ import {
  *   back, and which exploration is delegated.
  */
 
-export type FusionPairTuning = {
+type FusionPairTuning = {
 	/** "Paired with a weaker sidekick, [the lead] needs to provide more prescriptive briefs." */
 	readonly prescriptiveBriefs: boolean;
 	/** "With stronger sidekicks, encouraging pushback can help catch mistakes in the lead's plan." */
@@ -53,7 +53,7 @@ const WEAK: FusionPairTuning = {
 	delegateInitialExploration: false,
 };
 /** Tuned per sidekick model; unknown models get the conservative (weak) policy. */
-export const FUSION_PAIR_TUNING: Record<string, FusionPairTuning> = {
+const FUSION_PAIR_TUNING: Record<string, FusionPairTuning> = {
 	"gpt-6.1-sol": STRONG,
 	"gpt-6-astra": STRONG,
 	"gpt-6-sol": STRONG,
@@ -62,7 +62,7 @@ export const FUSION_PAIR_TUNING: Record<string, FusionPairTuning> = {
 	"gpt-6-luna": WEAK,
 	"gpt-5.6-luna": WEAK,
 };
-export const fusionTuning = (sidekickModelId: string) =>
+const fusionTuning = (sidekickModelId: string) =>
 	FUSION_PAIR_TUNING[sidekickModelId] ?? WEAK;
 
 export type FusionConfig = {
@@ -80,7 +80,7 @@ export type SidekickState = {
 	messages: ModelMessage[];
 };
 
-export function fusionLeadInstructions(config: FusionConfig) {
+function fusionLeadInstructions(config: FusionConfig) {
 	const tuning = fusionTuning(config.sidekickModelId);
 	return [
 		"Fusion lead: you and a cost-effective sidekick are both fully capable agents with your own tools and context, working in the same workspace.",
@@ -92,7 +92,7 @@ export function fusionLeadInstructions(config: FusionConfig) {
 	].join(" ");
 }
 
-export function fusionSidekickInstructions(config: FusionConfig) {
+function fusionSidekickInstructions(config: FusionConfig) {
 	const tuning = fusionTuning(config.sidekickModelId);
 	return [
 		"Fusion sidekick: you are a fully capable agent with your own tools and context. The lead delegates tasks to you with a brief of constraints and success criteria.",
@@ -128,7 +128,7 @@ function recentWork(events: readonly ApiAgentEvent[]) {
 		.join("\n");
 }
 
-export async function classifySidekick(
+async function classifySidekick(
 	runtime: ModelAgentRuntime,
 	brief: string,
 	events: readonly ApiAgentEvent[],

@@ -1,6 +1,6 @@
 import type { ModelMessage } from "ai";
 
-export type HistoryMatch = {
+type HistoryMatch = {
 	messageIndex: number;
 	excerpt: string;
 	score: number;

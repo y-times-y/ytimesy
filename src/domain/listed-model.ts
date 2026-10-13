@@ -85,7 +85,7 @@ export function listedReasoningFromVariants(
 	};
 }
 
-export function listedVariantIds(variants: unknown): readonly string[] {
+function listedVariantIds(variants: unknown): readonly string[] {
 	if (Array.isArray(variants)) {
 		return variants.filter(
 			(value): value is string =>
@@ -197,7 +197,7 @@ export type ListedModelPreference = {
 	readonly excludedIds?: readonly string[];
 };
 
-export type ListedModelSessionHint = {
+type ListedModelSessionHint = {
 	readonly harness: string;
 	readonly listedModelId: string | null;
 	readonly items: unknown;

@@ -4,7 +4,7 @@ import { DESKTOP_PATH, runDesktopSession } from "./desktop-session";
 import { runTerminalSession, TERMINAL_PATH } from "./terminal-session";
 
 /** Adapts a Workers WebSocket (already accepted) to the shared session code. */
-export function workerSocket(socket: WebSocket): ClientSocket {
+function workerSocket(socket: WebSocket): ClientSocket {
 	return {
 		get open() {
 			return socket.readyState === WebSocket.OPEN;

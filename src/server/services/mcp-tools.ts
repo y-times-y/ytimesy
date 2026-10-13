@@ -6,7 +6,7 @@ import {
 import type { ToolSet } from "ai";
 import { redirectRefusingFetch } from "../adapters/workers-fetch";
 
-export type ConnectableMcpServer = {
+type ConnectableMcpServer = {
 	name: string;
 	url: string;
 	headers: Record<string, string>;

@@ -2,7 +2,7 @@ import type { ErrorComponentProps } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { OnboardingShell } from "../auth/onboarding-shell";
 
-export function AppStatus({
+function AppStatus({
 	title,
 	detail,
 	children,
@@ -58,7 +58,7 @@ export function appErrorDetail(error: unknown) {
 	return "Try again, or go home.";
 }
 
-export function isUserFacingAppError(message: string) {
+function isUserFacingAppError(message: string) {
 	const text = message.trim();
 	if (!text || text.length > 140) return false;
 	if (!/\s/.test(text)) return false;

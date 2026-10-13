@@ -48,7 +48,7 @@ const reference = z
 		}),
 	})
 	.strict();
-export const toolComposition = z.object({
+const toolComposition = z.object({
 	steps: z
 		.array(
 			z.object({

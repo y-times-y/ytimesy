@@ -12,7 +12,7 @@ const snapshot = z.object({
 	head: hash,
 	ref: z.string().regex(/^refs\/ytimesy\/recovery\/[a-zA-Z0-9-]+$/),
 });
-export const CODE_CHECKPOINT_SCRIPT = `import fcntl,hashlib,json,os,pathlib,subprocess,sys,tempfile
+const CODE_CHECKPOINT_SCRIPT = `import fcntl,hashlib,json,os,pathlib,subprocess,sys,tempfile
 root,ref=sys.argv[1:3]
 requestedRoot=root
 root=str(pathlib.Path(root).resolve(strict=True))

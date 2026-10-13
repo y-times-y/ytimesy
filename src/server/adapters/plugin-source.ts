@@ -2,7 +2,7 @@ import { Readable } from "node:stream";
 import { createGunzip } from "node:zlib";
 
 /** A reviewed plugin pinned to an exact commit; what we reviewed is what installs. */
-export type PinnedPluginSource = {
+type PinnedPluginSource = {
 	owner: string;
 	repo: string;
 	sha: string;
@@ -36,7 +36,7 @@ function pluginRelative(name: string, root: string) {
  * Streams a gzipped GitHub tarball (ustar/pax), keeping only regular files in
  * the plugin folder; .md/.json keep their contents, others are kept by path.
  */
-export async function pluginFilesFromTarball(
+async function pluginFilesFromTarball(
 	gzipped: AsyncIterable<Uint8Array> | Uint8Array,
 	pluginPath: string,
 ) {

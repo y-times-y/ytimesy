@@ -150,7 +150,7 @@ export async function deliverParentTaskNotification(
 }
 
 /** The same durable judge launch can be retried without rerunning candidates. */
-export async function startCompetitionJudge(
+async function startCompetitionJudge(
 	machines: WorkspaceMachines,
 	userId: string,
 	rootSessionId: string,

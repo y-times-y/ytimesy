@@ -2,7 +2,7 @@ import { useLastLoginMethod } from "@better-auth-ui/react";
 
 import { Badge } from "#/components/ui/badge.tsx";
 
-export type LastUsedBadgeProps = {
+type LastUsedBadgeProps = {
 	/** Login method IDs that should display the indicator. */
 	method: string | string[];
 	/** Use the shorter label in constrained layouts. */

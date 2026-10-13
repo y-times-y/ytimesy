@@ -12,12 +12,6 @@ export class MissingGitHubAppCredentials extends Data.TaggedError(
 	readonly message: string;
 }> {}
 
-export class GitHubAppRequestError extends Data.TaggedError(
-	"GitHubAppRequestError",
-)<{
-	readonly message: string;
-}> {}
-
 export class WorkspaceProvisionError extends Data.TaggedError(
 	"WorkspaceProvisionError",
 )<{
@@ -32,14 +26,4 @@ export class WorkspaceCommandError extends Data.TaggedError(
 	readonly operation: "exec" | "writeFile" | "readFile";
 	readonly message: string;
 	readonly providerWorkspaceId: string;
-}> {}
-
-export class CodexInstallError extends Data.TaggedError("CodexInstallError")<{
-	readonly message: string;
-	readonly providerWorkspaceId: string;
-}> {}
-
-export class CodexProtocolError extends Data.TaggedError("CodexProtocolError")<{
-	readonly message: string;
-	readonly stage: "initialize" | "accountRead" | "loginStart" | "parse";
 }> {}

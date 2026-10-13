@@ -22,7 +22,7 @@ import { cn } from "#/lib/utils.ts";
 import { isAuthFormFieldInvalid, useAuthForm } from "./auth-form";
 import { RESET_LINK_SENT_STORAGE_KEY } from "./reset-link-sent";
 
-export type ForgotPasswordProps = {
+type ForgotPasswordProps = {
 	className?: string;
 };
 

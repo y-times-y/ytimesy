@@ -23,7 +23,7 @@ import { Spinner } from "#/components/ui/spinner.tsx";
 import { cn } from "#/lib/utils.ts";
 import { LastUsedBadge } from "./last-login-method/last-used-badge";
 
-export type ProviderButtonProps = {
+type ProviderButtonProps = {
 	provider: AuthSocialProvider;
 	display?: "full" | "name" | "icon";
 	view?: AuthView;

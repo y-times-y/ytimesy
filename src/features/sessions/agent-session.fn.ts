@@ -31,7 +31,7 @@ import {
 import { WorkspaceMachineService } from "#/server/services/capabilities";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
 
-export type PublicAgentChat = {
+type PublicAgentChat = {
 	readonly id: string;
 	readonly title: string;
 	readonly turnStatus: SessionTurnStatus;

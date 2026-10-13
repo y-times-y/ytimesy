@@ -102,10 +102,6 @@ export function desktopRemoteOrigin(hostname: string) {
 	return `https://${hostname.replace(/\/$/, "")}`;
 }
 
-export function desktopEmbedUrl(origin: string): string {
-	return `${origin.replace(/\/$/, "")}/`;
-}
-
 export function desktopHostname(providerRef: string) {
 	const slug = providerRef
 		.replaceAll(/[^a-zA-Z0-9]/g, "")

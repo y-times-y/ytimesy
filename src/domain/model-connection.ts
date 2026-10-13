@@ -110,7 +110,7 @@ function isProDuplicate(modelId: string, catalogIds: ReadonlySet<string>) {
 	return modelId.endsWith("-pro") && catalogIds.has(modelId.slice(0, -4));
 }
 
-export type ApiModelReasoning = {
+type ApiModelReasoning = {
 	readonly levels: readonly [
 		{ id: string; label: string },
 		...{ id: string; label: string }[],

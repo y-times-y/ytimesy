@@ -15,7 +15,7 @@ export type SidebarChat = {
 	readonly prNeed?: SidebarChatPrNeed | null;
 };
 
-export type SidebarChatAttention = "running" | "attention" | "idle";
+type SidebarChatAttention = "running" | "attention" | "idle";
 
 export const CHAT_SEEN_STORAGE_KEY = "ytimesy-chat-seen";
 

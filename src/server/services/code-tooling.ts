@@ -55,7 +55,7 @@ export function codeToolingTools(
 	};
 }
 
-export const CODE_TOOLING_SOURCE = `
+const CODE_TOOLING_SOURCE = `
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {mkdir,writeFile,rename,chmod,access} from 'node:fs/promises';

@@ -1,4 +1,4 @@
-export const MAX_USAGE_MICRO_USD = 1_000_000_000_000;
+const MAX_USAGE_MICRO_USD = 1_000_000_000_000;
 
 export function validUsageAmount(amount: number) {
 	if (

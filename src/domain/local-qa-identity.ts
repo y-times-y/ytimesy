@@ -1,11 +1,11 @@
-export type LocalQaUserCandidate = {
+type LocalQaUserCandidate = {
 	readonly id: string;
 	readonly github: boolean;
 	readonly hasProject: boolean;
 	readonly lastSessionAt: string | null;
 };
 
-export function hostnameFromHostHeader(host: string | undefined) {
+function hostnameFromHostHeader(host: string | undefined) {
 	if (!host) return "";
 	if (host.startsWith("[")) {
 		const end = host.indexOf("]");

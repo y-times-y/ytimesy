@@ -4,7 +4,7 @@
  * "lead": a read-only lead that delegates to builder tasks. Fusion is chosen
  * separately when a sidekick model is configured.
  */
-export type RootAgentMode = "builder" | "lead";
+type RootAgentMode = "builder" | "lead";
 
 export function rootAgentMode(
 	value = process.env.YTIMESY_ROOT_AGENT_MODE,

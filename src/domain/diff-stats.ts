@@ -1,9 +1,9 @@
-export type DiffLineCounts = {
+type DiffLineCounts = {
 	readonly additions: number;
 	readonly deletions: number;
 };
 
-export function emptyDiffLineCounts(): DiffLineCounts {
+function emptyDiffLineCounts(): DiffLineCounts {
 	return { additions: 0, deletions: 0 };
 }
 
@@ -27,7 +27,7 @@ export function countDiffLineChanges(
 	return { additions, deletions };
 }
 
-export function countWholeFileLines(diff: string | null | undefined): number {
+function countWholeFileLines(diff: string | null | undefined): number {
 	if (!diff) return 0;
 	return diff.split("\n").filter((line) => line.length > 0).length;
 }

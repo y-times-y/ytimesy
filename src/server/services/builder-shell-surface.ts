@@ -6,7 +6,7 @@ import type { ToolSet } from "ai";
  * (run_checks, apply_patches, inspect_changes, plans) cost more turns than
  * they saved in measured builder runs. The prompt profile follows the tools.
  */
-export const BUILDER_SHELL_TOOLS = new Set([
+const BUILDER_SHELL_TOOLS = new Set([
 	"execute_command",
 	"continue_command",
 	"stop_command",

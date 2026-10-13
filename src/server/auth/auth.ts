@@ -9,7 +9,7 @@ import {
 } from "./local-qa-identity";
 import { authTrustedOrigins, googleOAuthConfigured } from "./providers";
 
-export function authOptions() {
+function authOptions() {
 	const config = serverConfig();
 	return {
 		database: database(),

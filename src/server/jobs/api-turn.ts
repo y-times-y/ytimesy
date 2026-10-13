@@ -99,11 +99,7 @@ import { turnProgressWriter } from "../services/turn-progress-writer";
 import type { WorkspaceMachines } from "../services/workspace-machines";
 import { enqueueAgentTaskEvent } from "./queue";
 
-export type ApiTurnStepOutcome =
-	| "continue"
-	| "completed"
-	| "failed"
-	| "cancelled";
+type ApiTurnStepOutcome = "continue" | "completed" | "failed" | "cancelled";
 
 /** Step mode is for the external durable orchestrator; the default preserves the local worker. */
 export async function runApiTurn(

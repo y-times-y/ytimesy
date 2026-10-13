@@ -40,7 +40,7 @@ import {
 } from "./auth-form";
 import { ProviderButtons, type SocialLayout } from "./provider-buttons";
 
-export type SignUpProps = {
+type SignUpProps = {
 	className?: string;
 	socialLayout?: SocialLayout;
 	socialPosition?: "top" | "bottom";

@@ -6,7 +6,7 @@ import type {
 	WorkspaceRuntime,
 } from "../adapters/workspace-runtime";
 
-export type DiagnoseEnvironmentFailure = (
+type DiagnoseEnvironmentFailure = (
 	failure: RuntimeCommandResult,
 ) => Promise<EnvironmentRepairPlan>;
 
