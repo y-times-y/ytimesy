@@ -170,7 +170,7 @@ Workflows orchestrator records bounded model steps; provider SDK calls and tools
 still run on the trusted Node executor. This does not eliminate that host.
 See [model workflows](docs/model-workflows.md) and [workspace retention](docs/workspace-retention.md).
 
-Status: harness architecture updated on 2026-10-01. ytimesy owns recursive task orchestration and the Codex subscription model loop in its durable server worker. Native Codex is retained for device-code login and legacy recovery only, not ordinary inference. Claude Code remains a runtime adapter. OpenCode references in dated evidence below are historical and do not authorize new OpenCode sessions. Writers use snapshot-copy isolation; read-only child tasks share their parent's machine with session-scoped runtime state. Execution VMs remain separate from server-managed subscription access tokens and the model loop. Private Supabase Storage is selected for encrypted recovery checkpoints; frontend hosting remains undecided. Domain: ytimesy.com. Updated: 2026-10-01.
+Status: harness architecture updated on 2026-10-13. ytimesy runs only its own harness: recursive task orchestration and the model loop run on the server (Cloudflare Durable Objects), with two model sources — `codex` (the user's ChatGPT subscription) and `api` (the user's API connections). ChatGPT sign-in is a device-code flow run by the web server; no agent CLI or login daemon runs in a VM. The native Codex, Claude Code and OpenCode runtime adapters and side chat were removed on 2026-10-13; dated evidence below that mentions them is historical. Writers use snapshot-copy isolation; read-only child tasks share their parent's machine with session-scoped runtime state. Execution VMs never hold subscription credentials. Domain: ytimesy.com. Updated: 2026-10-13.
 
 ## Goal and proof
 
@@ -184,7 +184,7 @@ V0 is complete when Het connects a real private repository and his own agent acc
 
 1. Sign in; install a GitHub App with selected-repository access.
 2. Choose a repository and branch. Prepare a project environment snapshot (dependencies, project configuration, and necessary credentials). Each agent session then gets its own Freestyle VM copied from that snapshot.
-3. ytimesy provides the harness. Codex and Claude Code are runtime adapters beneath it; OpenCode is retained only for existing sessions and is not offered for new work. The composer defaults to Codex. Users select models listed by the connected runtime. Subscription sign-in and bring-your-own API key are both options; stored keys are encrypted at rest (AES-256-GCM) and never returned in plaintext. Do not silently fall back to paid inference. Claude Code must stay unmodified; do not offer Claude.ai login inside ytimesy, intermediate Anthropic billing, or use Anthropic marks as ytimesy branding. Never invent model names.
+3. ytimesy provides the harness and runs it on the server. Users pick a model source — their ChatGPT subscription (`codex`, the composer default) or their own API connections (`api`) — then a model listed by that source. API keys are encrypted at rest (AES-256-GCM) and never returned in plaintext. Do not silently fall back to paid inference. Never invent model names.
 4. Start and steer an agent session. Show messages, tool activity, progress, approvals, cancellation, and actionable failures.
 5. Inspect that session's workspace through Files, Diff, Terminal, and Desktop. Files is a tree of this chat's working-tree edits; clicking a file the agent mentioned opens that file with red/green diff coloring. Desktop is a shared Linux display the agent can computer-use and the user can watch and control. App preview is a window on that desktop, not a separate Tools tab. The terminal is explicitly required in v0.
 6. Continue active work independently of the web application request or browser connection. Reconnect to retained sessions; expose expired authentication and recovery states clearly.
@@ -194,7 +194,7 @@ Workspace isolation: a Project owns a prepared environment (Rigkit apply / clone
 
 Project context is an agent-context concern, not a VM concern and not a Codex-only concern. The active cloud API/Codex model loop loads maintained, owner-scoped Markdown from the existing project briefing storage outside compactable conversation history. Non-competing leads maintain named capability/decision/source/agent-reported-verification entries with `remember_project`; successful root turns also record separate recent reports. Child tasks keep standalone prompts and receive a bounded shared topic-title index plus keyword-matched maintained entries, never parent transcripts or arbitrary sibling reports; children and competing leads cannot publish shared knowledge. All historical claims require current-checkout verification. Native adapters retain their separate context path. See [project knowledge boundaries](docs/project-knowledge.md). Resume continues one session; forking a conversation is explicit.
 
-Lead-agent policy is owned by ytimesy and injected through every runtime adapter. New root conversations are read-only leads: they may inspect, plan, coordinate, and answer simple questions, but a requested code change requires at least one fresh read-write Build child. Build children can implement their own bounded tasks directly and may delegate further when useful. Every task records a standalone prompt, runtime/model, read-only or read-write access, shared or fresh placement, parallel or stacked execution, and any stacked predecessor. Additional delegation is for bounded work where parallelism, specialization, or an adversarial pass materially improves the outcome. The lead chooses the smallest coherent task count; recursion is capped at three levels and provider capacity remains an infrastructure limit. For substantial independent workstreams, the lead establishes file ownership and shared interfaces, then starts ready writers together before waiting for completion. One builder remains appropriate for small/tightly coupled changes or constrained capacity; the lead explains that choice briefly. This is shared model guidance, not a deterministic decomposition guarantee or a measured parallel speedup. Child prompts must be self-contained. Leads continue useful read-only investigation while children run, check status without tight polling, steer drift, and request wrap-up rather than waiting indefinitely. Completion and blocked questions enter a durable outbox that wakes an idle parent. Completed writable tasks automatically push a draft PR; leads inspect and explicitly review child diffs and evidence before accepting the work. Stacked work starts only after the predecessor is reviewed and published, from that pull-request branch rather than a VM snapshot.
+Lead-agent policy is owned by ytimesy and injected by its harness. New root conversations are read-only leads: they may inspect, plan, coordinate, and answer simple questions, but a requested code change requires at least one fresh read-write Build child. Build children can implement their own bounded tasks directly and may delegate further when useful. Every task records a standalone prompt, runtime/model, read-only or read-write access, shared or fresh placement, parallel or stacked execution, and any stacked predecessor. Additional delegation is for bounded work where parallelism, specialization, or an adversarial pass materially improves the outcome. The lead chooses the smallest coherent task count; recursion is capped at three levels and provider capacity remains an infrastructure limit. For substantial independent workstreams, the lead establishes file ownership and shared interfaces, then starts ready writers together before waiting for completion. One builder remains appropriate for small/tightly coupled changes or constrained capacity; the lead explains that choice briefly. This is shared model guidance, not a deterministic decomposition guarantee or a measured parallel speedup. Child prompts must be self-contained. Leads continue useful read-only investigation while children run, check status without tight polling, steer drift, and request wrap-up rather than waiting indefinitely. Completion and blocked questions enter a durable outbox that wakes an idle parent. Completed writable tasks automatically push a draft PR; leads inspect and explicitly review child diffs and evidence before accepting the work. Stacked work starts only after the predecessor is reviewed and published, from that pull-request branch rather than a VM snapshot.
 
 API-key and Codex subscription model loops run in the durable server worker and call VM-backed tools. Codex subscription transport is explicitly identified on each durable turn, never inferred from a missing API connection. Ordinary sends, children, progress and peer delivery no longer resolve the native runner. Codex account limits come directly from account metadata; context comes from persisted model-step usage. See [cutover evidence and support boundary](docs/codex-subscription-harness-proof.md). Earlier dated native-runner sections below are historical, not the active architecture.
 
@@ -244,7 +244,7 @@ fingerprints and current exact reviews, then retains the clean-baseline and orig
 required checks. Changed or uncertain work stays available for repair, not replay.
 Optional explicit timing estimates reject splits whose savings cannot cover added
 coordination; estimates are advisory, not measured guarantees. Server root paths
-support this pipeline; native runtime adapters keep their existing manual handoff.
+support this pipeline.
 No new schema or persistent compute is introduced. Live performance is recorded in
 the dated optimization log, separately from local tests.
 
@@ -278,9 +278,7 @@ ytimesy has its own monochrome visual identity: Inter interface typography from 
 
 Codex onboarding target: Connect Codex → copy a one-time code → authorize on OpenAI's page → automatically detect completion. Preserve progress and support expiry/retry/reconnection. Never ask for secrets in chat. Provider usage remains billed to the user's supported subscription or explicitly selected API account; infrastructure usage is separate.
 
-Claude onboarding target: run unmodified Claude Code in the user's workspace VM and complete Anthropic's own sign-in in that binary. Each end user brings their own Claude subscription or API key. Do not collect Claude.ai passwords in ytimesy chat, wrap Claude.ai login in the ytimesy origin, or bill Anthropic usage through ytimesy.
 
-Legacy OpenCode sessions remain readable and resumable during migration, but new sessions and delegated tasks must use Codex or Claude Code.
 
 ## Stack decisions
 
@@ -298,7 +296,7 @@ Product analytics (2026-10-01): PostHog is configured in local development with 
 | GitHub | GitHub App and Octokit |
 | UI | Tailwind and shadcn/ui preset `b1D0dv72` (Radix Mira, neutral, Inter) |
 | Terminal | xterm.js connected to the workspace PTY |
-| Jobs | pg-boss in PostgreSQL schema `job_queue`; separately runnable `pnpm worker` |
+| Jobs | Cloudflare Durable Objects (one per chat, project environment and background-job runner) with alarms and a minute cron; pg-boss (`job_queue`) serves only the local evaluation runner |
 | Live transport | Reconnectable agent events; WebSockets for terminal; exact transport to validate |
 | Large artifacts | Object storage; provider not chosen |
 
@@ -408,8 +406,8 @@ Million-developer scalability is an architectural ambition, not a verified launc
 - Limit concurrency and apply backpressure. Record infrastructure usage from the beginning.
 - Preserve durable event ordering/cursors for reconnect; distinguish cached UI data from the authoritative session record.
 - Effect retries and finalizers do not replace durable recovery or orphan reconciliation.
-- Cancellation of a run is distinct from deleting its workspace VM. Delete chat destroys that session's VM and any side-chat copies. It must not delete the project snapshot, the template VM, or other agents' VMs. A session that was attached to the template before snapshots existed only drops the row.
-- Keep Codex's rotating refresh credential in one encrypted server-side account record, not in project or worker snapshots. A one-time device-code login is captured into that record, then removed from its execution VM. PostgreSQL row locking serializes refresh through Codex's managed app-server auth mode. Execution VMs receive only an access token and account ID through the experimental external-token app-server mode; the control plane services refresh requests. A worker must not receive the refresh token. Legacy private login snapshots are not an active product auth path. Claude Code's auth handling is separate. Define logout, deletion, expiry, and crash-recovery behavior before broad rollout.
+- Cancellation of a run is distinct from deleting its workspace VM. Delete chat destroys that session's VM and its child task copies. It must not delete the project snapshot, the template VM, or other agents' VMs. A session that was attached to the template before snapshots existed only drops the row.
+- Keep Codex's rotating refresh credential in one encrypted server-side account record (`agent_account.encrypted_codex_auth`), never in VMs or snapshots. The web server obtains it through the ChatGPT device-code flow (`src/server/auth/codex-device-login.ts`) and refreshes it under a PostgreSQL row lock; the model loop uses the access token server-side. Define logout, deletion, expiry, and crash-recovery behavior before broad rollout.
 - GitHub authority is repository-scoped and brokered wherever practical. Untrusted repository code must not gain platform authority.
 - App previews and terminals require access control. Browser preview content is untrusted and must not inherit application-origin privileges.
 
@@ -419,7 +417,7 @@ Million-developer scalability is an architectural ambition, not a verified launc
 Scaffold TanStack Start with TypeScript, lint/typecheck/build scripts, and a clean ytimesy app shell. Introduce the first domain models and Effect service boundary through a real narrow operation. Use honest empty/unconfigured states; do not fabricate repos, sessions, or successful connections.
 
 ### 2. Integration proof
-Verify official Codex remote login and app-server protocol in a user-isolated Freestyle workspace. Verify official Claude Code in the same class of workspace with user-owned credentials. Verify the ytimesy task protocol through Codex dynamic tools and Claude MCP, including recursive isolation, concurrency limits, steering, wrap-up, and synthesis. Verify Rigkit installation/setup operations and authentication interaction. Establish supported versions and cleanup behavior. User subscription access is not interchangeable with a general inference API.
+Verify the ytimesy task protocol (recursive isolation, concurrency limits, steering, wrap-up and synthesis) through the server harness, and Rigkit installation/setup operations. Establish supported versions and cleanup behavior. User subscription access is not interchangeable with a general inference API.
 
 ### 3. Identity, records, and GitHub
 Integrate Better Auth with Supabase PostgreSQL, implement migrations and tenant-scoped access, install GitHub App, and list authorized repositories. Save project/branch selection. Configuration requiring user/provider account access may remain a clearly reported blocker, not mocked success.
@@ -444,9 +442,6 @@ Run typecheck and production build for structural changes. Unit-test meaningful 
 - TanStack Start: https://tanstack.com/start/latest/docs/framework/react/overview
 - Effect: https://effect.website/docs/getting-started/introduction/
 - Codex auth: https://developers.openai.com/codex/auth
-- Claude hosting/auth constraints: https://code.claude.com/docs/en/legal-and-compliance
-- OpenCode server: https://opencode.ai/docs/server/
-- OpenCode Zen (including free models): https://dev.opencode.ai/docs/zen/
 
 Recheck versioned APIs before implementing. Validate subscription connection using the official provider protocol; a successful login alone does not establish supported execution or token lifecycle behavior. Prior research notes are historical context, not a substitute for current documentation.
 
@@ -488,7 +483,7 @@ Still blocked:
 
 ### Goal
 
-Use ytimesy to work on its own repository with a real cloud coding agent. Preserve the approved UI while building the first complete flow: sign in → connect this repository → choose a harness (Codex, Claude Code, or OpenCode) → launch a Freestyle workspace → send a task → inspect changes, terminal, and desktop → publish explicitly.
+Use ytimesy to work on its own repository with a real cloud coding agent. Preserve the approved UI while building the first complete flow: sign in → connect this repository → choose a model source (ChatGPT subscription or API connection) → launch a Freestyle workspace → send a task → inspect changes, terminal, and desktop → publish explicitly.
 
 ### Current evidence and limits
 
@@ -510,21 +505,21 @@ Milestone 2 live check (2026-09-13):
 
 Keep the plain monochrome workspace, Inter typography, compact growing composer, responsive panels, hover-revealed sidebar rail, and model-specific reasoning controls. The approved logo is the faceted rising-bar Y in `public/brand/mark.svg`. `mark-light.svg` is light artwork for dark backgrounds; `mark-dark.svg` is dark artwork for light backgrounds. Keep the current logo and avoid restarting brand exploration.
 
-Offered harnesses are Codex, Claude Code, and OpenCode. Pick a harness, then its models. Subscription sign-in and encrypted BYOK are both options. Desktop replaces Preview in Tools: a shared display for computer use that the user can also control.
+Model sources are the user's ChatGPT subscription and their API connections; pick a source, then its models. Desktop replaces Preview in Tools: a shared display for computer use that the user can also control.
 
 Each new agent session is a new VM copied from the project's prepared snapshot. The unused template is never attached as an agent. Resume is the same VM; a second agent is another copy. Fork only from a clean template so agent B does not inherit agent A's dirty tree.
 
 Shared project context is injected into the new agent's session, independent of that VM copy and of which provider is running. Include sibling reasoning traces, not only compacted facts.
 
-First project setup boots a prebaked tools image (Codex, Claude Code, and OpenCode CLIs), applies the user's private provider auth snapshot, then clone/install with caches and snapshot. Later agents copy that snapshot with no setup wait.
+First project setup boots a prebaked tools image, then clone/install with caches and snapshot. Later agents copy that snapshot with no setup wait.
 
 Use the installed self-documenting-code skill. Keep routes thin and put provider operations behind explicit adapters. Do not fabricate integration success or silently substitute paid model API access for the user's subscription.
 
 ### Local setup and verification
 
-Run `pnpm install --frozen-lockfile`, then `pnpm dev` (port 3000). To match the existing local browser, run `pnpm exec vite dev --host 127.0.0.1 --port 3001`. Run `pnpm worker` in a second process to drain workspace-preparation jobs. Run `pnpm lint`, `pnpm typecheck`, `pnpm test`, and `pnpm build` before handing off structural changes. `pnpm prove:codex-login` starts a live ChatGPT device-code login unless a private auth snapshot already exists (`FREESTYLE_API_KEY` required). After authorization, `pnpm prove:codex-login:status` records that snapshot. Use agent-browser for UI checks. Screenshots and credentials must remain out of Git. Do not mint Better Auth sessions or invent users. Loopback development reuses the existing GitHub user so local QA can open the workspace.
+Run `pnpm install --frozen-lockfile`, then `pnpm dev` (port 3000). To match the existing local browser, run `pnpm exec vite dev --host 127.0.0.1 --port 3001`. Model turns, environment builds and background jobs run on the development edge executor (Cloudflare Durable Objects); `src/server/jobs/worker.ts` remains only as the local runner for harness evaluations. Run `pnpm lint`, `pnpm typecheck`, `pnpm test`, and `pnpm build` before handing off structural changes. Use agent-browser for UI checks. Screenshots and credentials must remain out of Git. Do not mint Better Auth sessions or invent users. Loopback development reuses the existing GitHub user so local QA can open the workspace.
 
-### Next step
+### Next step (2026-09-15, historical)
 
 Stopped at the 8am Pacific wrap above. After vCPU-hours reset: GitHub-authenticated Diff / Terminal / Desktop / reconnect / publish, Claude Code live sign-in, and a hosting decision. Do not mint Better Auth sessions or invent users. Loopback development reuses the existing GitHub user. Do not start Freestyle VMs until `vm.start` works. Do not delete the template VM.
 
