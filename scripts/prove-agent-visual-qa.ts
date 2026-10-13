@@ -54,6 +54,7 @@ const task =
 	"On the landing page, add a blue 'Subscribe' button under the main heading. Verify it renders correctly.";
 
 let vmId: string | undefined;
+let slug: string | undefined;
 let session: { userId: string; sessionId: string } | undefined;
 try {
 	const owners = (
@@ -99,8 +100,9 @@ try {
 		)
 	).rows[0]?.template_snapshot_id;
 	if (!snapshotId) throw new Error("The project has no prepared environment.");
+	slug = `ytimesy-ag-${chat.id.replaceAll("-", "").slice(0, 16)}`;
 	const created = await client.vms.create({
-		slug: `ytimesy-ag-${chat.id.replaceAll("-", "").slice(0, 16)}`,
+		slug,
 		snapshotId,
 		firewall: GUEST_INTERNET_FIREWALL,
 		maxRunTotalSeconds: 2400,
@@ -143,6 +145,18 @@ try {
 			break;
 		}
 		await delay(5000);
+	}
+	// A settled turn queues its checkpoint; the capture runs on the edge.
+	let checkpointSaved = false;
+	for (let wait = 0; final && wait < 36 && !checkpointSaved; wait++) {
+		checkpointSaved = Boolean(
+			(
+				await db.query("select 1 from session_checkpoint where session_id=$1", [
+					chat.id,
+				])
+			).rowCount,
+		);
+		if (!checkpointSaved) await delay(5000);
 	}
 	const items = sessionItemsFromUnknown(final?.items);
 	const tools = items.flatMap((item) =>
@@ -196,6 +210,7 @@ try {
 			report,
 		),
 		changed: diff.stdout.trim().length > 0,
+		checkpointSaved,
 	};
 	await mkdir(evidenceDirectory, { recursive: true });
 	await writeFile(
@@ -210,6 +225,17 @@ try {
 } finally {
 	if (session)
 		await cancelServerTurn(session.userId, session.sessionId).catch(() => {});
+	// A create can land and still answer 409 on the SDK's retry.
+	if (!vmId && slug)
+		vmId = await client.vms
+			.list({ limit: 100 } as never)
+			.then(
+				(page) =>
+					(page as { vms?: { id: string; slug?: string }[] }).vms?.find(
+						(listed) => listed.slug === slug,
+					)?.id,
+			)
+			.catch(() => undefined);
 	if (vmId)
 		await client.vms
 			.delete(vmId)
