@@ -2949,30 +2949,35 @@ a.sidebar-chat-pr,
 .integration-switch {
 	position: relative;
 	flex: none;
-	width: 34px;
-	height: 20px;
+	width: 28px;
+	height: 16px;
 	padding: 0;
 	border: 0;
 	border-radius: 999px;
-	background: #333;
+	background: #3a3a3a;
 	cursor: pointer;
-	transition: background 120ms;
+	transition: background-color 140ms ease-out;
 }
 .integration-switch span {
 	position: absolute;
 	top: 2px;
 	left: 2px;
-	width: 16px;
-	height: 16px;
+	width: 12px;
+	height: 12px;
 	border-radius: 50%;
-	background: #fff;
-	transition: transform 120ms;
+	background: #e5e5e5;
+	transition: transform 140ms ease-out;
 }
 .integration-switch[aria-checked="true"] {
-	background: #22c55e;
+	background: #3b82f6;
 }
 .integration-switch[aria-checked="true"] span {
-	transform: translateX(14px);
+	background: #fff;
+	transform: translateX(12px);
+}
+.integration-switch:focus-visible {
+	outline: 2px solid #3b82f680;
+	outline-offset: 2px;
 }
 .integration-grid {
 	display: grid;
@@ -3631,8 +3636,11 @@ a.sidebar-chat-pr,
 	height: 24px;
 }
 .settings-panel .integration-list {
+	border: 0;
 	border-top: 1px solid #ffffff12;
 	border-bottom: 1px solid #ffffff12;
+	border-radius: 0;
+	background: transparent;
 }
 .settings-panel .integration-row {
 	padding: 10px 2px;
@@ -3665,4 +3673,22 @@ a.sidebar-chat-pr,
 .settings-panel .integration-button:hover {
 	background: #ffffff1a;
 	color: #f4f4f4;
+}
+/* Installed and browsable plugins share one logo treatment. */
+.settings-panel .integration-logo:not(.integration-logo-letter) {
+	width: 24px;
+	height: 24px;
+	border: 0;
+	background: none;
+}
+.settings-panel .integration-logo svg,
+.settings-panel .integration-logo img {
+	width: 22px;
+	height: 22px;
+}
+.settings-panel .integration-logo-letter {
+	width: 24px;
+	height: 24px;
+	border-radius: 6px;
+	font-size: 11px;
 }
