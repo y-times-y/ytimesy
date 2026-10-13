@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { ConversationSnapshot } from "#/domain/conversation-delivery";
 import { MAX_DELIVERY_BYTES } from "#/domain/conversation-delivery";
 import { signDeliveryRequest } from "#/domain/delivery-auth";
+import { executorFetch } from "./executor-fetch";
 import { realtimeDevelopmentConfiguration } from "./realtime-development-config";
 
 const publisher = new AsyncLocalStorage<
@@ -46,7 +47,7 @@ export async function publishConversationSnapshot(
 	if (Buffer.byteLength(body) > MAX_DELIVERY_BYTES)
 		throw new Error("Conversation snapshot exceeds delivery limit.");
 	const url = `${config.url}/snapshot`;
-	const response = await fetch(url, {
+	const response = await executorFetch(url, {
 		method: "POST",
 		headers: {
 			...(await signDeliveryRequest(config.secret, "POST", url, body)),
@@ -76,7 +77,7 @@ export async function subscribeConversationSnapshot(
 	});
 	const url = `${config.url}/stream?${query}`;
 	const subscribe = async () =>
-		fetch(url, {
+		executorFetch(url, {
 			headers: await signDeliveryRequest(config.secret, "GET", url),
 			signal,
 		});

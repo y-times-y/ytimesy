@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // The web app (TanStack Start). Built with YTIMESY_TARGET=cloudflare; see vite.config.ts.
+  "name": "ytimesy-web-development",
+  "main": "./src/server.ts",
+  "account_id": "f45021db74a97feaafae2e3e131d4d82",
+  "compatibility_date": "2026-10-08",
+  "compatibility_flags": ["nodejs_compat"],
+  "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "9403f3ee7ca24e16a43f903d10745dfb" }],
+  "vpc_networks": [{ "binding": "CODEX_EGRESS", "network_id": "cf1:network", "remote": true }],
+  "services": [{ "binding": "EXECUTOR", "service": "ytimesy-edge-executor-development", "remote": true }],
+  "vars": { "YTIMESY_DATABASE_VIA_HYPERDRIVE": "1" },
+  "observability": { "enabled": true },
+  // Not public: no routes, no workers.dev URL and no preview URLs until launch.
+  "workers_dev": false,
+  "preview_urls": false
+}

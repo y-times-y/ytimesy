@@ -7,6 +7,10 @@ const MASTER_KEY_PATH = ".ytimesy/secrets.key";
 export async function loadSecretMasterKey(): Promise<Uint8Array> {
 	const fromEnv = process.env.YTIMESY_SECRETS_KEY?.trim();
 	if (fromEnv) return decodeMasterKey(fromEnv);
+	// A replacement key would make every stored secret undecryptable, so deployed
+	// environments must be given the original; only local development may create one.
+	if (process.env.YTIMESY_ENVIRONMENT === "production")
+		throw new Error("YTIMESY_SECRETS_KEY is required in production.");
 	try {
 		const stored = (await readFile(MASTER_KEY_PATH, "utf8")).trim();
 		if (stored) return decodeMasterKey(stored);

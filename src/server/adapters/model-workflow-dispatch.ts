@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto";
 import { signDeliveryRequest } from "#/domain/delivery-auth";
 import type { ApiTurn } from "./api-turns";
+import { executorFetch } from "./executor-fetch";
 
 /** Domain-separated key; only this derived key is shared with the development Workflow. */
 export function modelWorkflowSigningSecret() {
@@ -42,7 +43,7 @@ export async function dispatchModelWorkflow(turn: ApiTurn) {
 		throw new Error("Cannot dispatch an unowned workflow turn.");
 	const url = `${config.url}/start`;
 	const body = JSON.stringify({ turnId: turn.id, leaseId: turn.lease_id });
-	const response = await fetch(url, {
+	const response = await executorFetch(url, {
 		method: "POST",
 		headers: {
 			...(await signDeliveryRequest(config.secret, "POST", url, body)),
