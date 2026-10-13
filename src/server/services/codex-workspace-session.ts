@@ -14,11 +14,8 @@ export type PublicCodexSession = {
 	readonly listedModelId: string;
 	readonly blockedListedModelIds: readonly string[];
 	readonly canSend: boolean;
-	readonly canSendSide: boolean;
 	readonly turnStatus: SessionTurnStatus;
 	readonly items: readonly SessionItem[];
-	readonly sideTurnStatus: SessionTurnStatus;
-	readonly sideItems: readonly SessionItem[];
 };
 
 export type CodexSessionScope = {
@@ -42,10 +39,7 @@ export function emptyCodexSession(
 		listedModelId: "",
 		blockedListedModelIds: [],
 		canSend: false,
-		canSendSide: false,
 		turnStatus: "idle",
 		items: [],
-		sideTurnStatus: "idle",
-		sideItems: [],
 	};
 }

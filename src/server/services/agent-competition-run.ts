@@ -19,8 +19,6 @@ import {
 	startPreparedAgentTask,
 	stopHarnessWorkspaceTurn,
 } from "./harness-workspace-session";
-import { machinesForAgentSession } from "./session-workspace-machines";
-import type { WorkspaceMachines } from "./workspace-machines";
 
 /** A retry reuses its numbered candidate instead of copying another machine. */
 export async function startAgentCompetition(rootSessionId: string) {
@@ -85,7 +83,6 @@ export async function startAgentCompetition(rootSessionId: string) {
 }
 
 export async function stopAgentCompetitionRun(
-	machines: WorkspaceMachines,
 	userId: string,
 	rootSessionId: string,
 ) {
@@ -108,7 +105,7 @@ export async function stopAgentCompetitionRun(
 			candidate.taskState === "waiting"
 		) {
 			await Effect.runPromise(
-				stopHarnessWorkspaceTurn(machinesForAgentSession(machines, candidate), {
+				stopHarnessWorkspaceTurn({
 					userId,
 					projectId: root.projectId,
 					sessionId: candidate.id,
@@ -121,7 +118,7 @@ export async function stopAgentCompetitionRun(
 	}
 	if (group.status === "judging")
 		await Effect.runPromise(
-			stopHarnessWorkspaceTurn(machinesForAgentSession(machines, root), {
+			stopHarnessWorkspaceTurn({
 				userId,
 				projectId: root.projectId,
 				sessionId: root.id,

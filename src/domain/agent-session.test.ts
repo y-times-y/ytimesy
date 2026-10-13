@@ -187,11 +187,11 @@ describe("agent session names", () => {
 		]);
 	});
 
-	it("hides side-chat children from the sidebar", () => {
+	it("hides child sessions from the sidebar", () => {
 		expect(
 			chatsFromAgentSessions([
 				{ id: "s1", title: "fix login", parentSessionId: null },
-				{ id: "side", title: "Side chat", parentSessionId: "s1" },
+				{ id: "child", title: "Child task", parentSessionId: "s1" },
 			]),
 		).toEqual([
 			{
@@ -282,7 +282,7 @@ describe("sessionMachineRefsToDestroy", () => {
 		).toEqual(["vm-side"]);
 	});
 
-	it("deletes the agent copy and its side-chat copy", () => {
+	it("deletes the agent copy and its child copies", () => {
 		expect(
 			sessionMachineRefsToDestroy({
 				sessionProviderRef: "vm-a",

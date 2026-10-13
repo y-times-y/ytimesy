@@ -48,7 +48,6 @@ async function stream(
 	try {
 		const response = await subscribeConversationSnapshot(
 			snapshot,
-			sessionId,
 			controller.signal,
 		);
 		const reader = response?.body?.getReader();

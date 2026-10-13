@@ -82,7 +82,6 @@ export function sidebarHasAttentionChat(input: {
 	readonly seenKeys: readonly string[];
 	readonly busyChatIds?: readonly string[];
 	readonly openTurnStatus?: SessionTurnStatus;
-	readonly openSideTurnStatus?: SessionTurnStatus;
 }): boolean {
 	const seen = new Set(input.seenKeys);
 	return input.chats.some((chat) => {
@@ -92,7 +91,6 @@ export function sidebarHasAttentionChat(input: {
 			busyChatIds: input.busyChatIds ?? [],
 			openChatId: input.selectedChatId,
 			openTurnStatus: input.openTurnStatus,
-			openSideTurnStatus: input.openSideTurnStatus,
 		});
 		return (
 			sidebarChatAttention({
@@ -248,14 +246,10 @@ export function sidebarChatIsRunning(input: {
 	readonly busyChatIds: readonly string[];
 	readonly openChatId?: string;
 	readonly openTurnStatus?: SessionTurnStatus;
-	readonly openSideTurnStatus?: SessionTurnStatus;
 }): boolean {
 	if (input.busyChatIds.includes(input.chatId)) return true;
 	if (input.chatId === input.openChatId) {
-		return (
-			input.openTurnStatus === "running" ||
-			input.openSideTurnStatus === "running"
-		);
+		return input.openTurnStatus === "running";
 	}
 	return input.turnStatus === "running";
 }
@@ -265,7 +259,6 @@ export function sidebarHasRunningChat(input: {
 	readonly busyChatIds: readonly string[];
 	readonly openChatId?: string;
 	readonly openTurnStatus?: SessionTurnStatus;
-	readonly openSideTurnStatus?: SessionTurnStatus;
 }): boolean {
 	return input.chats.some((chat) =>
 		sidebarChatIsRunning({
@@ -274,7 +267,6 @@ export function sidebarHasRunningChat(input: {
 			busyChatIds: input.busyChatIds,
 			openChatId: input.openChatId,
 			openTurnStatus: input.openTurnStatus,
-			openSideTurnStatus: input.openSideTurnStatus,
 		}),
 	);
 }

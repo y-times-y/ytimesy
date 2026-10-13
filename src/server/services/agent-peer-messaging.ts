@@ -65,10 +65,7 @@ export async function discoverAgentPeers(sender: AgentSessionRecord) {
 		if (!added) break;
 	}
 	return [root, ...descendants].filter(
-		(task) =>
-			allowed.has(task.id) &&
-			task.id !== sender.id &&
-			task.title !== "Side chat",
+		(task) => allowed.has(task.id) && task.id !== sender.id,
 	);
 }
 

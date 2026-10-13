@@ -580,7 +580,7 @@ export async function peekAgentSessionMachine(input: {
 }
 
 /**
- * Deletes this agent session and its side-chat copy. The project snapshot and
+ * Deletes this agent session and its child copies. The project snapshot and
  * template VM stay. A session that was attached to the template before
  * snapshots existed only drops the row.
  */

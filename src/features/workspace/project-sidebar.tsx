@@ -64,7 +64,6 @@ interface ProjectSidebarProps {
 	selectedChatId?: string;
 	busyChatIds?: readonly string[];
 	openTurnStatus?: SessionTurnStatus;
-	openSideTurnStatus?: SessionTurnStatus;
 	hasUserMessage?: boolean;
 	onSelectChat?: (id: string) => void;
 	onNewChat: (projectId?: string) => void;
@@ -85,7 +84,6 @@ export function ProjectSidebar({
 	selectedChatId,
 	busyChatIds = [],
 	openTurnStatus,
-	openSideTurnStatus,
 	hasUserMessage = false,
 	onSelectChat,
 	onNewChat,
@@ -136,7 +134,6 @@ export function ProjectSidebar({
 		seenKeys,
 		busyChatIds,
 		openTurnStatus,
-		openSideTurnStatus,
 	});
 
 	function cancelClose() {
@@ -222,7 +219,6 @@ export function ProjectSidebar({
 			busyChatIds,
 			openChatId: selectedChatId,
 			openTurnStatus,
-			openSideTurnStatus,
 		});
 		return sidebarChatAttention({
 			running,

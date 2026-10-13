@@ -611,7 +611,7 @@ try {
 				throw new Error(
 					"Live model/tool proof failed; inspect persisted isolated trace.",
 				);
-			const streamUrl = `${origin}/stream?${new URLSearchParams({ userId, sessionId: child.id, displaySessionId: child.id, revision: "1" })}`;
+			const streamUrl = `${origin}/stream?${new URLSearchParams({ userId, sessionId: child.id, revision: "1" })}`;
 			const stream = await fetch(streamUrl, {
 				headers: await signDeliveryRequest(realtimeSecret, "GET", streamUrl),
 				signal: AbortSignal.timeout(10_000),

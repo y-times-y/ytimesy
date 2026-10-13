@@ -15,9 +15,6 @@ export const conversationSnapshotSchema = z.object({
 export type ConversationSnapshot = z.infer<typeof conversationSnapshotSchema>;
 export const MAX_DELIVERY_BYTES = 4 * 1024 * 1024;
 
-export function conversationEvent(
-	snapshot: ConversationSnapshot,
-	displaySessionId = snapshot.sessionId,
-) {
-	return `retry: 250\nid: ${snapshot.revision}\nevent: progress\ndata: ${JSON.stringify({ ...snapshot.progress, sessionId: displaySessionId })}\n\n`;
+export function conversationEvent(snapshot: ConversationSnapshot) {
+	return `retry: 250\nid: ${snapshot.revision}\nevent: progress\ndata: ${JSON.stringify({ ...snapshot.progress, sessionId: snapshot.sessionId })}\n\n`;
 }

@@ -164,7 +164,6 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 		(data: {
 			text: string;
 			modelId: string;
-			lane?: "main" | "side";
 			projectId?: string;
 			harnessId?: string;
 			sessionId?: string;
@@ -176,13 +175,10 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 			const text = data.text.trim();
 			const modelId = data.modelId.trim();
 			if (!text) throw new Error("Task text is required");
-			if (data.lane === "side")
-				throw new Error("Side chat is no longer available.");
 			const variant = data.variant?.trim();
 			return {
 				text,
 				modelId,
-				lane: "main" as const,
 				projectId: data.projectId?.trim() || undefined,
 				harnessId: data.harnessId
 					? parseHarnessId(data.harnessId)
@@ -208,22 +204,7 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 	});
 
 export const stopCodexSessionTurn = createServerFn({ method: "POST" })
-	.validator(
-		(
-			data:
-				| {
-						projectId?: string;
-						harnessId?: string;
-						sessionId?: string;
-						createNew?: boolean;
-						lane?: "main" | "side";
-				  }
-				| undefined,
-		) => ({
-			...optionalSessionInput(data),
-			lane: data?.lane === "side" ? ("side" as const) : ("main" as const),
-		}),
-	)
+	.validator(optionalSessionInput)
 	.handler(async ({ data }): Promise<PublicCodexSession> => {
 		const scope = await requireScope(
 			data.projectId,
@@ -231,7 +212,5 @@ export const stopCodexSessionTurn = createServerFn({ method: "POST" })
 			data.sessionId,
 			data.createNew,
 		);
-		return runWithMachines((machines) =>
-			stopHarnessWorkspaceTurn(machines, scope, { lane: data.lane }),
-		);
+		return Effect.runPromise(stopHarnessWorkspaceTurn(scope));
 	});

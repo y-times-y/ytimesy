@@ -1,22 +1,16 @@
 import type { SessionItem, SessionTurnStatus } from "./session-item";
 
-export type LiveProgressMarks = Partial<
-	Record<
-		"main" | "side",
-		{
-			readonly sessionId: string;
-			readonly receivedAt: number;
-		}
-	>
->;
+/** When the live progress stream last delivered this chat's turn. */
+export type LiveProgressMark = {
+	readonly sessionId: string;
+	readonly receivedAt: number;
+} | null;
 
 export function progressIsFresh(
-	marks: LiveProgressMarks | null,
-	lane: "main" | "side",
+	mark: LiveProgressMark,
 	sessionId: string | null,
 	now: number,
 ) {
-	const mark = marks?.[lane];
 	return Boolean(
 		mark && mark.sessionId === sessionId && now - mark.receivedAt < 20_000,
 	);

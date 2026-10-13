@@ -67,7 +67,6 @@ try {
 	try {
 		const stream = await subscribeConversationSnapshot(
 			snapshot,
-			session.id,
 			controller.signal,
 		);
 		const reader = stream?.body?.getReader();

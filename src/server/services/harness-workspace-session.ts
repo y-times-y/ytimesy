@@ -18,20 +18,17 @@ import {
 	taskToolString,
 } from "#/domain/agent-task-tool";
 import { runtimeHandoffPrompt } from "#/domain/api-conversation";
-import { canResumeDisconnectedFollowUp } from "#/domain/harness-access";
 import { WorkspaceId } from "#/domain/ids";
 import { publicFailureMessage } from "#/domain/project-workspace";
 import {
 	lastAgentMessageText,
 	sessionItemsFromUnknown,
 } from "#/domain/session-item";
-import { canSubmitSideChat } from "#/domain/session-policy";
 import {
 	taskCheckJournalIds,
 	taskHandoffReferences,
 } from "#/domain/task-handoff";
 import { requireAssignedTaskChecks } from "#/domain/task-verification-assignment";
-import type { WorkspaceLifecycle } from "#/domain/workspace";
 import {
 	competitionForOwner,
 	selectCompetitionWinner,
@@ -44,7 +41,6 @@ import {
 	saveAgentTaskReview,
 	saveAgentTaskState,
 	selectAgentSessionHarness,
-	sideAgentSession,
 } from "#/server/adapters/agent-sessions";
 import {
 	assignedTaskVerification,
@@ -63,7 +59,6 @@ import {
 	queueAgentPeerMessage,
 } from "./agent-peer-messaging";
 import {
-	bindAgentSessionMachine,
 	editAgentTaskDraft,
 	openAgentTask,
 	prepareAgentTaskStart,
@@ -77,7 +72,6 @@ import { awaitStoppedTurn } from "./await-stopped-turn";
 import {
 	connectSubscriptionSession,
 	readSubscriptionLoginSession,
-	readSubscriptionSession,
 	sendSubscriptionTask,
 	stopSubscriptionTask,
 } from "./codex-subscription-session";
@@ -166,7 +160,7 @@ export function requestAgentTaskWrapUp(
 		if (!selectedModel) throw new Error("The task has no model selection.");
 		const taskMachines = machinesForAgentSession(machines, task);
 		const targetScope = taskScope(scope, task);
-		yield* stopHarnessWorkspaceTurn(taskMachines, targetScope);
+		yield* stopHarnessWorkspaceTurn(targetScope);
 		yield* Effect.tryPromise(() =>
 			awaitStoppedTurn(
 				async () =>
@@ -195,7 +189,7 @@ export function readHarnessWorkspaceSession(
 		scope.harnessId === "codex"
 			? readSubscriptionLoginSession(scope)
 			: readApiWorkspaceSession(scope),
-	).pipe(Effect.flatMap((session) => attachSiblingSideChat(scope, session)));
+	);
 }
 
 /** Connect: API models read their connection; Codex starts a ChatGPT sign-in when needed. */
@@ -209,13 +203,13 @@ export function connectHarnessWorkspaceSession(
 	);
 }
 
+/** `_machines` is unused; it stays so the evaluation harness's call shape is unchanged. */
 export function sendHarnessWorkspaceTask(
-	machines: WorkspaceMachines,
+	_machines: WorkspaceMachines,
 	scope: HarnessSessionScope,
 	input: {
 		readonly text: string;
 		readonly modelId: string;
-		readonly lane?: "main" | "side";
 		readonly variant?: string;
 		readonly fast?: boolean;
 		readonly runtimeText?: string;
@@ -226,8 +220,7 @@ export function sendHarnessWorkspaceTask(
 	if (
 		scope.harnessId !== "api" &&
 		input.runtimeText === undefined &&
-		scope.sessionId &&
-		input.lane !== "side"
+		scope.sessionId
 	) {
 		return Effect.gen(function* () {
 			const previous = yield* Effect.tryPromise(() =>
@@ -269,7 +262,7 @@ export function sendHarnessWorkspaceTask(
 						scope.harnessId,
 					),
 				);
-			return yield* sendHarnessWorkspaceTask(machines, scope, {
+			return yield* sendHarnessWorkspaceTask(_machines, scope, {
 				...input,
 				runtimeText,
 			});
@@ -285,9 +278,6 @@ export function sendHarnessWorkspaceTask(
 				}),
 			),
 		);
-	}
-	if (input.lane === "side") {
-		return sendHarnessSideTask(machines, scope, input);
 	}
 	if (scope.harnessId === "api")
 		return Effect.promise(async () => {
@@ -573,7 +563,7 @@ export function runAgentTaskTool(
 		const descendants = yield* Effect.tryPromise(() =>
 			descendantAgentSessions(scope.userId, parent.id),
 		);
-		const taskRows = descendants.filter((row) => row.title !== "Side chat");
+		const taskRows = descendants;
 		if (request.tool === "list_tasks") {
 			const byId = new Map(taskRows.map((row) => [row.id, row]));
 			return agentTaskTree(parent.id, taskRows).map((task) => {
@@ -1091,220 +1081,11 @@ function taskScope(
 }
 
 export function stopHarnessWorkspaceTurn(
-	machines: WorkspaceMachines,
 	scope: HarnessSessionScope,
-	input?: { readonly lane?: "main" | "side" },
 ): Effect.Effect<PublicHarnessSession> {
-	if (input?.lane === "side") {
-		return stopHarnessSideTurn(machines, scope);
-	}
 	return Effect.promise(() =>
 		scope.harnessId === "api"
 			? stopApiWorkspaceTask(scope)
 			: stopSubscriptionTask(scope),
 	);
-}
-
-/**
- * Side chat is a second agent session VM copied from the same project
- * snapshot. Codex uses that copy's main lane so it does not share the
- * parent's checkout. Read of the parent stays paused-safe.
- */
-function sendHarnessSideTask(
-	machines: WorkspaceMachines,
-	scope: HarnessSessionScope,
-	input: {
-		readonly text: string;
-		readonly modelId: string;
-	},
-): Effect.Effect<PublicHarnessSession> {
-	return Effect.gen(function* () {
-		if (!scope.projectId || !scope.sessionId) {
-			return {
-				...emptyHarnessSession(),
-				connection: {
-					status: "failed" as const,
-					provider: scope.harnessId,
-					message: "Open a chat before starting a side agent.",
-				},
-			};
-		}
-		const existing = yield* Effect.tryPromise(() =>
-			sideAgentSession(scope.userId, scope.sessionId as string),
-		);
-		const bound = yield* Effect.tryPromise(() =>
-			bindAgentSessionMachine(machines, {
-				userId: scope.userId,
-				projectId: scope.projectId as string,
-				harness: scope.harnessId,
-				sessionId: existing?.id,
-				createNew: !existing,
-				parentSessionId: scope.sessionId,
-				title: "Side chat",
-			}),
-		);
-		yield* Effect.tryPromise(() =>
-			machines.ensureRunning(WorkspaceId(bound.providerRef)),
-		);
-		const sideView =
-			scope.harnessId === "api"
-				? yield* Effect.promise(() =>
-						sendApiWorkspaceTask(
-							{ ...scope, sessionId: bound.session.id, createNew: false },
-							input,
-						),
-					)
-				: yield* Effect.promise(() =>
-						sendSubscriptionTask(
-							{
-								userId: scope.userId,
-								projectId: scope.projectId,
-								sessionId: bound.session.id,
-								createNew: false,
-							},
-							{
-								text: input.text,
-								modelId: input.modelId,
-							},
-						),
-					);
-		const main = yield* readHarnessWorkspaceSession({
-			...scope,
-			createNew: false,
-		});
-		return mergeSideChat(main, sideView, scope.harnessId);
-	}).pipe(
-		Effect.catchAll((cause) =>
-			Effect.succeed({
-				...emptyHarnessSession(),
-				connection: {
-					status: "failed" as const,
-					provider: scope.harnessId,
-					message: publicFailureMessage(cause),
-				},
-			}),
-		),
-	);
-}
-
-/**
- * Side Stop targets the child session VM. It does not copy a new machine
- * and does not abort the parent's running turn.
- */
-function stopHarnessSideTurn(
-	machines: WorkspaceMachines,
-	scope: HarnessSessionScope,
-): Effect.Effect<PublicHarnessSession> {
-	return Effect.gen(function* () {
-		if (!scope.projectId || !scope.sessionId) {
-			return {
-				...emptyHarnessSession(),
-				connection: {
-					status: "failed" as const,
-					provider: scope.harnessId,
-					message: "Open a chat before stopping a side agent.",
-				},
-			};
-		}
-		const child = yield* Effect.tryPromise(() =>
-			sideAgentSession(scope.userId, scope.sessionId as string),
-		);
-		if (!child) {
-			return yield* readHarnessWorkspaceSession(scope);
-		}
-		const stopped = yield* stopHarnessWorkspaceTurn(machines, {
-			userId: scope.userId,
-			projectId: scope.projectId,
-			sessionId: child.id,
-			harnessId: child.harness,
-			createNew: false,
-		});
-		const main = yield* readHarnessWorkspaceSession({
-			...scope,
-			createNew: false,
-		});
-		return mergeSideChat(main, stopped, scope.harnessId);
-	}).pipe(
-		Effect.catchAll((cause) =>
-			Effect.succeed({
-				...emptyHarnessSession(),
-				connection: {
-					status: "failed" as const,
-					provider: scope.harnessId,
-					message: publicFailureMessage(cause),
-				},
-			}),
-		),
-	);
-}
-
-function attachSiblingSideChat(
-	scope: HarnessSessionScope,
-	main: PublicHarnessSession,
-): Effect.Effect<PublicHarnessSession> {
-	if (!scope.sessionId) {
-		return Effect.succeed(mergeSideChat(main, null, scope.harnessId));
-	}
-	return Effect.gen(function* () {
-		const child = yield* Effect.tryPromise(() =>
-			sideAgentSession(scope.userId, scope.sessionId as string),
-		);
-		if (!child?.providerRef) {
-			return mergeSideChat(main, null, scope.harnessId);
-		}
-		const sideScope = {
-			userId: scope.userId,
-			projectId: scope.projectId,
-			sessionId: child.id,
-		};
-		const side = yield* Effect.promise(() =>
-			scope.harnessId === "codex"
-				? readSubscriptionSession(sideScope)
-				: readApiWorkspaceSession(sideScope),
-		);
-		return mergeSideChat(main, side, scope.harnessId);
-	}).pipe(
-		Effect.catchAll(() =>
-			Effect.succeed(mergeSideChat(main, null, scope.harnessId)),
-		),
-	);
-}
-
-function mergeSideChat(
-	main: PublicHarnessSession,
-	side: PublicHarnessSession | null,
-	harnessId: AgentProviderId,
-): PublicHarnessSession {
-	const workspace: WorkspaceLifecycle = {
-		status: "running",
-		workspaceId: WorkspaceId(
-			side?.workspaceId ?? main.workspaceId ?? "pending",
-		),
-	};
-	const canResumeSide = canResumeDisconnectedFollowUp({
-		harnessId,
-		connection: main.connection,
-		turnStatus: main.turnStatus,
-		snapshotAvailable: main.snapshotAvailable,
-	});
-	if (!side) {
-		return {
-			...main,
-			canSendSide:
-				canSubmitSideChat(workspace, main.connection, "idle") || canResumeSide,
-		};
-	}
-	return {
-		...main,
-		sideItems: side.items,
-		sideTurnStatus: side.turnStatus,
-		canSendSide:
-			canSubmitSideChat(
-				workspace,
-				side.connection.status === "authenticated"
-					? side.connection
-					: main.connection,
-				side.turnStatus,
-			) || canResumeSide,
-	};
 }

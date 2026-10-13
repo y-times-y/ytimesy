@@ -6,16 +6,11 @@ import { subscribeConversationSnapshot } from "../adapters/realtime-delivery";
 export async function serverSessionProgressResponse(input: {
 	userId: string;
 	sessionId: string;
-	displaySessionId: string;
 	signal: AbortSignal;
 }) {
 	const initial = await conversationSnapshot(input.userId, input.sessionId);
 	if (!initial) return new Response(null, { status: 404 });
-	const realtime = await subscribeConversationSnapshot(
-		initial,
-		input.displaySessionId,
-		input.signal,
-	);
+	const realtime = await subscribeConversationSnapshot(initial, input.signal);
 	if (realtime) return realtime;
 	const encoder = new TextEncoder();
 	let stop = () => {};
@@ -26,9 +21,7 @@ export async function serverSessionProgressResponse(input: {
 				let ended = false;
 				let busy = false;
 				let revision = initial.revision;
-				controller.enqueue(
-					encoder.encode(conversationEvent(initial, input.displaySessionId)),
-				);
+				controller.enqueue(encoder.encode(conversationEvent(initial)));
 				const poll = setInterval(() => {
 					if (ended || busy) return;
 					busy = true;
@@ -41,11 +34,7 @@ export async function serverSessionProgressResponse(input: {
 							}
 							if (BigInt(next.revision) > BigInt(revision)) {
 								revision = next.revision;
-								controller.enqueue(
-									encoder.encode(
-										conversationEvent(next, input.displaySessionId),
-									),
-								);
+								controller.enqueue(encoder.encode(conversationEvent(next)));
 							}
 						})
 						.catch(stop)

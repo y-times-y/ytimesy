@@ -1,14 +1,10 @@
 import { afterEach, expect, it, vi } from "vitest";
-import {
-	agentSessionForOwner,
-	sideAgentSession,
-} from "../adapters/agent-sessions";
+import { agentSessionForOwner } from "../adapters/agent-sessions";
 import { serverSessionProgressResponse } from "./server-session-progress";
 import { sessionProgressResponse } from "./session-progress";
 
 vi.mock("../adapters/agent-sessions", () => ({
 	agentSessionForOwner: vi.fn(),
-	sideAgentSession: vi.fn(),
 }));
 vi.mock("./server-session-progress", () => ({
 	serverSessionProgressResponse: vi.fn(
@@ -46,7 +42,6 @@ it.each(["codex", "api"])(
 		expect(serverSessionProgressResponse).toHaveBeenCalledWith({
 			userId: "owner",
 			sessionId: "session",
-			displaySessionId: "session",
 			signal: scope.signal,
 		});
 	},
@@ -57,19 +52,4 @@ it("rejects missing ownership and cross-project access before opening delivery",
 	mockSession({ ...record, projectId: "other" });
 	expect((await sessionProgressResponse(scope)).status).toBe(404);
 	expect(serverSessionProgressResponse).not.toHaveBeenCalled();
-});
-it("resolves the owned side session before server subscription", async () => {
-	mockSession(record);
-	vi.mocked(sideAgentSession).mockResolvedValue({
-		...record,
-		id: "side",
-		harness: "api",
-	} as Awaited<ReturnType<typeof sideAgentSession>>);
-	await sessionProgressResponse({ ...scope, lane: "side" });
-	expect(serverSessionProgressResponse).toHaveBeenCalledWith({
-		userId: "owner",
-		sessionId: "side",
-		displaySessionId: "session",
-		signal: scope.signal,
-	});
 });

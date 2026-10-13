@@ -12,7 +12,6 @@ import { shouldPollAgentTasks } from "#/domain/agent-task";
 import {
 	harnessLoginIsPending,
 	RUNNING_TURN_POLL_MS,
-	runningTurnShouldPoll,
 } from "#/domain/harness-access";
 import {
 	inspectorPaneIsWide,
@@ -32,7 +31,7 @@ import {
 	sessionViewShouldReplaceOpenTurn,
 } from "#/domain/session-item";
 import {
-	type LiveProgressMarks,
+	type LiveProgressMark,
 	progressIsFresh,
 	progressMatchesTurn,
 	type SessionProgress,
@@ -249,7 +248,7 @@ export function WorkspaceHome({
 		},
 		[queryClient, selectedProject?.id],
 	);
-	const liveProgress = useRef<LiveProgressMarks | null>({});
+	const liveProgress = useRef<LiveProgressMark>(null);
 	const applySessionView = useCallback(
 		(epoch: number, next: PublicCodexSession) => {
 			if (epoch !== sessionEpoch.current) return;
@@ -271,22 +270,11 @@ export function WorkspaceHome({
 				return;
 			}
 			setSession((current) => {
-				const fresh = (lane: "main" | "side") =>
-					progressIsFresh(
-						liveProgress.current,
-						lane,
-						next.agentSessionId,
-						Date.now(),
-					);
-				next = {
-					...next,
-					...(next.turnStatus === "running" && fresh("main")
-						? { items: current.items }
-						: {}),
-					...(next.sideTurnStatus === "running" && fresh("side")
-						? { sideItems: current.sideItems }
-						: {}),
-				};
+				if (
+					next.turnStatus === "running" &&
+					progressIsFresh(liveProgress.current, next.agentSessionId, Date.now())
+				)
+					next = { ...next, items: current.items };
 				if (
 					!sessionViewShouldReplaceOpenTurn({
 						currentStatus: current.turnStatus,
@@ -593,12 +581,7 @@ export function WorkspaceHome({
 
 	const pollSession =
 		harnessLoginIsPending(session.connection) ||
-		runningTurnShouldPoll({
-			turnStatus: session.turnStatus,
-			sideTurnStatus: session.sideTurnStatus,
-			connectionStatus: session.connection.status,
-			composerBusy,
-		});
+		isTurnRunning(session.turnStatus);
 	const sessionRead = useQuery({
 		...sessionReconciliationQuery(
 			{
@@ -689,105 +672,72 @@ export function WorkspaceHome({
 		if (
 			!activeProjectId ||
 			!activeSessionId ||
-			(session.turnStatus !== "running" && session.sideTurnStatus !== "running")
+			session.turnStatus !== "running"
 		)
 			return;
 		const epoch = sessionEpoch.current;
-		const sources = (["main", "side"] as const).flatMap((lane) => {
+		const source = new EventSource(
+			`/api/agent/progress?${new URLSearchParams({ projectId: activeProjectId, sessionId: activeSessionId })}`,
+		);
+		let lastRevision = "";
+		source.addEventListener("progress", (event: MessageEvent) => {
 			if (
-				(lane === "main" ? session.turnStatus : session.sideTurnStatus) !==
-				"running"
+				epoch !== sessionEpoch.current ||
+				selectedSessionIdRef.current !== activeSessionId
 			)
-				return [];
-			const source = new EventSource(
-				`/api/agent/progress?${new URLSearchParams({ projectId: activeProjectId, sessionId: activeSessionId, lane })}`,
-			);
-			let lastRevision = "";
-			source.addEventListener("progress", (event: MessageEvent) => {
-				if (
-					epoch !== sessionEpoch.current ||
-					selectedSessionIdRef.current !== activeSessionId
-				)
-					return;
-				if (event.lastEventId && event.lastEventId === lastRevision) return;
-				let progress: SessionProgress;
-				try {
-					progress = JSON.parse(event.data);
-				} catch {
-					return;
-				}
-				if (
-					progress.sessionId !== activeSessionId ||
-					!Array.isArray(progress.items)
-				)
-					return;
-				if (
-					!progressMatchesTurn(
-						lane === "main"
-							? currentSessionRef.current.items
-							: currentSessionRef.current.sideItems,
-						progress.items,
-					)
-				)
-					return;
-				lastRevision = event.lastEventId;
-				liveProgress.current ??= {};
-				liveProgress.current[lane] = {
-					sessionId: activeSessionId,
-					receivedAt: Date.now(),
-				};
-				setSession((current) => {
-					if (
-						!progressMatchesTurn(
-							lane === "main" ? current.items : current.sideItems,
-							progress.items,
-						)
-					)
-						return current;
-					if (lane === "side")
-						return {
-							...current,
-							sideItems: progress.items,
-							sideTurnStatus: progress.turnStatus,
-						};
-					return {
-						...current,
-						items: progress.items,
-						turnStatus: progress.turnStatus,
-						usage: progress.usage ?? current.usage,
-					};
-				});
-				if (
-					progress.turnStatus === "completed" ||
-					progress.turnStatus === "failed"
-				) {
-					void getCodexSession({
-						data: {
-							projectId: activeProjectId,
-							sessionId: activeSessionId,
-							harnessId,
-						},
-					})
-						.then((next) => applySessionViewRef.current(epoch, next))
-						.catch(() => undefined);
-				}
-			});
-			source.onerror = () => {
-				if (liveProgress.current) delete liveProgress.current[lane];
+				return;
+			if (event.lastEventId && event.lastEventId === lastRevision) return;
+			let progress: SessionProgress;
+			try {
+				progress = JSON.parse(event.data);
+			} catch {
+				return;
+			}
+			if (
+				progress.sessionId !== activeSessionId ||
+				!Array.isArray(progress.items)
+			)
+				return;
+			if (!progressMatchesTurn(currentSessionRef.current.items, progress.items))
+				return;
+			lastRevision = event.lastEventId;
+			liveProgress.current = {
+				sessionId: activeSessionId,
+				receivedAt: Date.now(),
 			};
-			return [source];
+			setSession((current) =>
+				progressMatchesTurn(current.items, progress.items)
+					? {
+							...current,
+							items: progress.items,
+							turnStatus: progress.turnStatus,
+							usage: progress.usage ?? current.usage,
+						}
+					: current,
+			);
+			if (
+				progress.turnStatus === "completed" ||
+				progress.turnStatus === "failed"
+			) {
+				void getCodexSession({
+					data: {
+						projectId: activeProjectId,
+						sessionId: activeSessionId,
+						harnessId,
+					},
+				})
+					.then((next) => applySessionViewRef.current(epoch, next))
+					.catch(() => undefined);
+			}
 		});
-		return () => {
-			for (const source of sources) source.close();
-			liveProgress.current = {};
+		source.onerror = () => {
+			liveProgress.current = null;
 		};
-	}, [
-		activeProjectId,
-		activeSessionId,
-		session.turnStatus,
-		session.sideTurnStatus,
-		harnessId,
-	]);
+		return () => {
+			source.close();
+			liveProgress.current = null;
+		};
+	}, [activeProjectId, activeSessionId, session.turnStatus, harnessId]);
 
 	const backgroundIds = backgroundTurnPollChatIds({
 		chats: sidebarChats,
@@ -855,10 +805,7 @@ export function WorkspaceHome({
 			selectedBranch: undefined,
 			items: [],
 			turnStatus: "idle",
-			sideItems: [],
-			sideTurnStatus: "idle",
 			canSend: false,
-			canSendSide: false,
 		}));
 		setComposerDraft(true);
 		setProjectPickerOpen(true);
@@ -885,11 +832,8 @@ export function WorkspaceHome({
 			models: [],
 			items: [],
 			turnStatus: "idle",
-			sideItems: [],
-			sideTurnStatus: "idle",
 			connection: { status: "disconnected" },
 			canSend: false,
-			canSendSide: false,
 		}));
 		void startSession({
 			data: { projectId: targetProjectId, harnessId: newChatHarnessId },
@@ -907,11 +851,8 @@ export function WorkspaceHome({
 					listedModelId: created.listedModelId || current.listedModelId,
 					items: [],
 					turnStatus: "idle",
-					sideItems: [],
-					sideTurnStatus: "idle",
 					connection: { status: "disconnected" },
 					canSend: false,
-					canSendSide: false,
 				}));
 				void chats.refetch();
 			})
@@ -925,7 +866,6 @@ export function WorkspaceHome({
 						message: publicFailureMessage(cause),
 					},
 					canSend: false,
-					canSendSide: false,
 				}));
 			});
 	}
@@ -954,11 +894,8 @@ export function WorkspaceHome({
 				selectedBranch: undefined,
 				items: [],
 				turnStatus: "idle",
-				sideItems: [],
-				sideTurnStatus: "idle",
 				connection: { status: "disconnected" },
 				canSend: false,
-				canSendSide: false,
 			}));
 		}
 		void deleteSession({
@@ -975,7 +912,6 @@ export function WorkspaceHome({
 						message: publicFailureMessage(cause),
 					},
 					canSend: false,
-					canSendSide: false,
 				}));
 			});
 	}
@@ -1007,11 +943,8 @@ export function WorkspaceHome({
 				selectedBranch: undefined,
 				items: [],
 				turnStatus: "idle",
-				sideItems: [],
-				sideTurnStatus: "idle",
 				connection: { status: "disconnected" },
 				canSend: false,
-				canSendSide: false,
 			}));
 		}
 		void deleteProject({ data: { projectId } })
@@ -1026,7 +959,6 @@ export function WorkspaceHome({
 						message: publicFailureMessage(cause),
 					},
 					canSend: false,
-					canSendSide: false,
 				}));
 			});
 	}
@@ -1068,11 +1000,8 @@ export function WorkspaceHome({
 			listedModelId: listedModelId || current.listedModelId,
 			items: [],
 			turnStatus: listedTurn,
-			sideItems: [],
-			sideTurnStatus: "idle",
 			connection: { status: "disconnected" },
 			canSend: false,
-			canSendSide: false,
 		}));
 	}
 
@@ -1100,7 +1029,6 @@ export function WorkspaceHome({
 				selectedChatId={activeSessionId}
 				busyChatIds={busyChatIds}
 				openTurnStatus={openTurnStatus}
-				openSideTurnStatus={session.sideTurnStatus}
 				hasUserMessage={hasUserMessage}
 				onSelectChat={openChat}
 				onNewChat={startNewChat}
@@ -1274,7 +1202,6 @@ export function WorkspaceHome({
 											...current,
 											agentSessionId: null,
 											items: [],
-											sideItems: [],
 										}));
 									}
 									const scope = startsNewChat
