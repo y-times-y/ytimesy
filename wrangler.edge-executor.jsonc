@@ -29,7 +29,9 @@
     // workers_dev is off under the launch gate. VM guests reach the Git proxy and
     // realtime endpoints over the public URL on development; production needs a
     // route for them (behind Access with a service token, or a dedicated hostname)
-    // before chats can push or stream.
+    // before chats can push or stream. YTIMESY_ENVIRONMENT=production is set by the
+    // deploy script like the other flags: a vars block here changes the generated
+    // ProcessEnv type and breaks the executor typecheck.
     "production": {
       "name": "ytimesy-edge-executor-production",
       "vpc_networks": [{ "binding": "CODEX_EGRESS", "network_id": "cf1:network", "remote": true }],
@@ -42,7 +44,6 @@
       },
       "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "00000000000000000000000000000001" }],
       "secrets": { "required": [] },
-      "vars": { "YTIMESY_ENVIRONMENT": "production" },
       "triggers": { "crons": ["* * * * *"] },
       "workers_dev": false
     }
