@@ -13,5 +13,18 @@
   "observability": { "enabled": true },
   // Not public: no routes, no workers.dev URL and no preview URLs until launch.
   "workers_dev": false,
-  "preview_urls": false
+  "preview_urls": false,
+  "env": {
+    // Production (not deployed yet). Reachable only through a route behind
+    // Cloudflare Access until launch; bindings are restated because they do not inherit.
+    "production": {
+      "name": "ytimesy-web-production",
+      "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "00000000000000000000000000000001" }],
+      "vpc_networks": [{ "binding": "CODEX_EGRESS", "network_id": "cf1:network", "remote": true }],
+      "services": [{ "binding": "EXECUTOR", "service": "ytimesy-edge-executor-production", "remote": true }],
+      "vars": { "YTIMESY_DATABASE_VIA_HYPERDRIVE": "1", "YTIMESY_ENVIRONMENT": "production" },
+      "workers_dev": false,
+      "preview_urls": false
+    }
+  }
 }
