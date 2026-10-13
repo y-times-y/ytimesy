@@ -15,7 +15,7 @@ export function browseModels(): Promise<BrowseModel[]> {
 				"https://openrouter.ai/api/v1/models?sort=top-weekly",
 				{
 					signal: AbortSignal.timeout(8000),
-					redirect: "error",
+					redirect: "manual",
 				},
 			);
 			if (!response.ok) throw new Error("Model catalog unavailable.");

@@ -5,6 +5,7 @@ import {
 	type PublicMcpServer,
 	saveMcpOAuth,
 } from "../adapters/mcp-servers";
+import { redirectRefusingFetch } from "../adapters/workers-fetch";
 import { seal } from "../auth/token-vault";
 import { serverConfig } from "../config";
 import {
@@ -47,8 +48,7 @@ export async function mcpSignInState(input: {
 				type: "http",
 				url: input.url,
 				authProvider: provider,
-				redirect: "error",
-				...(input.fetchFn ? { fetch: input.fetchFn } : {}),
+				fetch: redirectRefusingFetch(input.fetchFn),
 			},
 			initializationOptions: { signal: AbortSignal.timeout(CHECK_TIMEOUT_MS) },
 		});

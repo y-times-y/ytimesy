@@ -89,7 +89,7 @@ export function persistentGuestCapabilityRunner(
 				await installations.get(installation);
 			const response = await fetch(`${remote.origin}/execute`, {
 				method: "POST",
-				redirect: "error",
+				redirect: "manual",
 				signal: AbortSignal.any([signal, AbortSignal.timeout(60000)]),
 				headers: {
 					authorization: `Bearer ${remote.token}`,

@@ -69,7 +69,7 @@ it("preserves Request method, headers, body and abort while forbidding redirects
 	const options = mocks.fetch.mock.calls[0][1];
 	expect(options.method).toBe("POST");
 	expect(options.headers).toContainEqual(["authorization", "Bearer fixture"]);
-	expect(options.redirect).toBe("error");
+	expect(options.redirect).toBe("manual");
 	expect(await new Response(options.body).text()).toBe("fixture-body");
 	abort.abort();
 	expect(options.signal.aborted).toBe(true);

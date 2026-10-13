@@ -64,7 +64,7 @@ export async function readModelContext(
 									"anthropic-beta": "compact-2026-09-04",
 								},
 					signal: AbortSignal.timeout(3000),
-					redirect: "error",
+					redirect: "manual",
 				},
 			);
 			if (response.ok) {

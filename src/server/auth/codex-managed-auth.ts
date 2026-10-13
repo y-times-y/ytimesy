@@ -200,7 +200,7 @@ export async function refreshManagedCodexAuth(
 			refresh_token: auth.tokens.refresh_token,
 			client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
 		}),
-		redirect: "error",
+		redirect: "manual",
 		signal: AbortSignal.timeout(25_000),
 	});
 	if (!response.ok) {

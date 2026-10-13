@@ -4,6 +4,7 @@ import {
 	type OAuthClientProvider,
 } from "@ai-sdk/mcp";
 import type { ToolSet } from "ai";
+import { redirectRefusingFetch } from "../adapters/workers-fetch";
 
 export type ConnectableMcpServer = {
 	name: string;
@@ -51,8 +52,7 @@ export async function connectMcpTools(
 					url: server.url,
 					headers: server.headers,
 					...(server.authProvider ? { authProvider: server.authProvider } : {}),
-					redirect: "error",
-					...(options.fetch ? { fetch: options.fetch } : {}),
+					fetch: redirectRefusingFetch(options.fetch),
 				},
 				initializationOptions: {
 					signal: AbortSignal.any([
