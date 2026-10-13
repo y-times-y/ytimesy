@@ -522,6 +522,39 @@ export async function finishEnvironmentBuild(
 			await saveWorkspaceStatus(input.workspaceId, "failed", message);
 		await recordWorkspaceEvent(input.userId, input.workspaceId, message);
 	}
+	await releaseFinishedBuildMachines(input.workspaceId, runtime);
+}
+
+/**
+ * Deletes VMs of this workspace's finished builds (failed builders, superseded
+ * templates) once no workspace or chat points at them. A failed deletion stays
+ * unreleased and is retried when the next build finishes.
+ */
+export async function releaseFinishedBuildMachines(
+	workspaceId: string,
+	runtime: WorkspaceRuntime = workspaceRuntimeFromEnv(),
+) {
+	if (!runtime.delete) return { released: 0, failed: 0 };
+	const { rows } = await database().query<{ id: string; provider_ref: string }>(
+		`select b.id,b.provider_ref from environment_build b
+		 where b.workspace_id=$1 and b.status in ('ready','failed')
+		   and b.provider_ref is not null and b.provider_released_at is null
+		   and not exists (select 1 from workspace w where w.provider_ref=b.provider_ref)
+		   and not exists (select 1 from agent_session s where s.provider_ref=b.provider_ref)
+		 order by b.created_at limit 16`,
+		[workspaceId],
+	);
+	let released = 0;
+	for (const row of rows)
+		try {
+			await runtime.delete(row.provider_ref);
+			await database().query(
+				"update environment_build set provider_released_at=now() where id=$1",
+				[row.id],
+			);
+			released += 1;
+		} catch {}
+	return { released, failed: rows.length - released };
 }
 
 /** Recover interrupted setup independently of a new user request; never replace a ready template. */
