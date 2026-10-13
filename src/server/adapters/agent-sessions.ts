@@ -109,28 +109,6 @@ export async function listProjectProviderRefs(
 	return result.rows.map((row: { provider_ref: string }) => row.provider_ref);
 }
 
-export async function listUserProviderRefs(
-	userId: string,
-	excludeProviderRef?: string,
-): Promise<string[]> {
-	const result = await database().query(
-		`select provider_ref
-		 from agent_session
-		 where user_id=$1 and provider_ref is not null
-		 order by updated_at desc`,
-		[userId],
-	);
-	const seen = new Set<string>();
-	const refs: string[] = [];
-	for (const row of result.rows as { provider_ref: string }[]) {
-		const ref = row.provider_ref.trim();
-		if (!ref || ref === excludeProviderRef || seen.has(ref)) continue;
-		seen.add(ref);
-		refs.push(ref);
-	}
-	return refs;
-}
-
 export async function listAgentSessions(userId: string, projectId: string) {
 	const result = await database().query(
 		`select ${SESSION_COLUMNS}
@@ -214,36 +192,6 @@ export async function agentSessionById(sessionId: string) {
 		[sessionId],
 	);
 	return result.rows[0] ? toSession(result.rows[0]) : null;
-}
-
-export async function runningAgentSessions(limit = 20) {
-	const result = await database().query(
-		`select ${SESSION_COLUMNS} from agent_session
-		 where turn_status='running' and provider_ref is not null
-		 order by updated_at asc limit $1`,
-		[limit],
-	);
-	return result.rows.map((row: AgentSessionRow) => toSession(row));
-}
-
-export async function runningCodexSessions(limit = 100) {
-	const result = await database().query<{
-		id: string;
-		user_id: string;
-		provider_ref: string;
-		task_placement: AgentTaskPlacement | null;
-	}>(
-		`select id,user_id,provider_ref,task_placement from agent_session
-		 where turn_status='running' and harness='codex' and provider_ref is not null
-		 order by updated_at asc limit $1`,
-		[limit],
-	);
-	return result.rows.map((row) => ({
-		id: row.id,
-		userId: row.user_id,
-		providerRef: row.provider_ref,
-		taskPlacement: row.task_placement,
-	}));
 }
 
 export async function childAgentSession(
@@ -467,17 +415,6 @@ export async function saveAgentTaskPublication(
 		 where id=$1 and parent_session_id is not null
 		 returning ${SESSION_COLUMNS}`,
 		[sessionId, input.branch, input.pullRequestUrl],
-	);
-	return result.rows[0] ? toSession(result.rows[0]) : null;
-}
-
-export async function saveAgentTaskSummary(sessionId: string, summary: string) {
-	const result = await database().query(
-		`update agent_session
-		 set task_summary=$2, updated_at=now()
-		 where id=$1 and parent_session_id is not null
-		 returning ${SESSION_COLUMNS}`,
-		[sessionId, summary.trim() || null],
 	);
 	return result.rows[0] ? toSession(result.rows[0]) : null;
 }

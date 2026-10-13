@@ -95,9 +95,7 @@ export const getCodexSession = createServerFn({ method: "GET" })
 			data.createNew,
 		);
 		if (!scope) return emptyHarnessSession();
-		return runWithMachines((machines) =>
-			readHarnessWorkspaceSession(machines, scope),
-		);
+		return Effect.runPromise(readHarnessWorkspaceSession(scope));
 	});
 
 export const getWorkspaceBootstrap = createServerFn({ method: "GET" }).handler(
@@ -158,9 +156,7 @@ export const connectCodexSession = createServerFn({ method: "POST" })
 			data.sessionId,
 			data.createNew,
 		);
-		return runWithMachines((machines) =>
-			connectHarnessWorkspaceSession(machines, scope),
-		);
+		return Effect.runPromise(connectHarnessWorkspaceSession(scope));
 	});
 
 export const sendCodexSessionTask = createServerFn({ method: "POST" })

@@ -273,6 +273,3 @@ export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
 		path: "plugins/frontend-design",
 	},
 ];
-
-export const PLUGIN_REQUEST_URL =
-	process.env.YTIMESY_PLUGIN_REQUEST_URL ?? null;

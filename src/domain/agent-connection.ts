@@ -1,6 +1,6 @@
-import { type AgentProviderId, agentProviderById } from "./agent-provider";
+import type { AgentProviderId } from "./agent-provider";
 
-export type AgentAuthMode = "chatgpt" | "apikey" | "subscription" | "local";
+export type AgentAuthMode = "chatgpt" | "apikey";
 
 export type AgentConnection =
 	| { readonly status: "disconnected" }
@@ -45,13 +45,4 @@ export function connectedProviderId(
 	if (connection.status === "disconnected") return null;
 	if (connection.status === "authenticated") return connection.provider;
 	return null;
-}
-
-export function connectedAgentStatus(
-	connection: AgentConnection,
-): string | null {
-	if (connection.status !== "authenticated") return null;
-	const name = agentProviderById(connection.provider).name;
-	if (connection.authMode === "apikey") return `${name} · API key`;
-	return connection.planType ? `${name} · ${connection.planType}` : name;
 }

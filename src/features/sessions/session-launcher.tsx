@@ -16,10 +16,6 @@ import {
 import { recordedContextUsage } from "#/domain/api-progress";
 import type { AgentTaskActivity } from "#/domain/child-task-activity";
 import {
-	claudeSessionRemembersSignIn,
-	rememberedClaudeModels,
-} from "#/domain/claude-auth";
-import {
 	canResumeDisconnectedFollowUp,
 	composerCanStartSignIn,
 	composerSendIsEnabled,
@@ -128,33 +124,30 @@ export function SessionLauncher({
 	projectPickerOpen?: boolean;
 	onProjectPickerOpenChange?: (open: boolean) => void;
 }) {
-	const harnessReady =
-		selectedHarnessIsConnected(session.connection, harnessId) ||
-		(harnessId === "claude" &&
-			claudeSessionRemembersSignIn(session.listedModelId));
+	const harnessReady = selectedHarnessIsConnected(
+		session.connection,
+		harnessId,
+	);
 	const canResumeFollowUp = canResumeDisconnectedFollowUp({
 		harnessId,
 		connection: session.connection,
 		turnStatus: session.turnStatus,
 		snapshotAvailable: session.snapshotAvailable,
-		listedModelId: session.listedModelId,
 	});
 	const composerReady = (harnessReady && session.canSend) || canResumeFollowUp;
 	const listedCatalog =
 		session.models.length > 0
 			? session.models
-			: harnessId === "claude" && session.listedModelId
-				? rememberedClaudeModels(session.listedModelId)
-				: session.listedModelId
-					? [
-							{
-								id: session.listedModelId,
-								label:
-									listedModelDisplayName(session.listedModelId) ||
-									session.listedModelId,
-							},
-						]
-					: [];
+			: session.listedModelId
+				? [
+						{
+							id: session.listedModelId,
+							label:
+								listedModelDisplayName(session.listedModelId) ||
+								session.listedModelId,
+						},
+					]
+				: [];
 	const loadCatalog = useServerFn(getAgentModelCatalog);
 	const identity = authClient.useSession();
 	const queryClient = useQueryClient();
@@ -293,7 +286,6 @@ export function SessionLauncher({
 			connection: session.connection,
 			turnStatus,
 			snapshotAvailable: session.snapshotAvailable,
-			listedModelId: session.listedModelId,
 			canSend: session.canSend,
 			busy,
 			draft: text,

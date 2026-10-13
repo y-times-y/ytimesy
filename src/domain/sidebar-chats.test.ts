@@ -10,7 +10,6 @@ import {
 	listedChatTurnStatus,
 	newChatIsActive,
 	projectFolderIsExpanded,
-	rememberedClaudeModelIdFromChats,
 	selectedChatIdAfterDelete,
 	sessionViewAppliesToOpenChat,
 	sidebarChatAttention,
@@ -258,7 +257,7 @@ describe("parallel chat busy", () => {
 						id: "a",
 						title: "fix login",
 						listedModelId: "opencode/big-pickle",
-						harnessId: "opencode",
+						harnessId: "api",
 					},
 					{ id: "b", title: "add snapshot copy" },
 				],
@@ -271,56 +270,35 @@ describe("parallel chat busy", () => {
 					{
 						id: "a",
 						title: "fix login",
-						harnessId: "opencode",
+						harnessId: "api",
 					},
 					{ id: "b", title: "add snapshot copy" },
 				],
 				"a",
 				"codex",
 			),
-		).toBe("opencode");
+		).toBe("api");
 		expect(
 			listedChatHarnessId(
 				[{ id: "b", title: "add snapshot copy" }],
 				"b",
-				"opencode",
+				"api",
 			),
-		).toBe("opencode");
+		).toBe("api");
 		expect(
 			composerHarnessForChat({
 				listedHarnessId: "codex",
-				connectionProvider: "opencode",
-				fallback: "opencode",
+				connectionProvider: "api",
+				fallback: "api",
 			}),
 		).toBe("codex");
 		expect(
 			composerHarnessForChat({
 				listedHarnessId: null,
-				connectionProvider: "claude",
-				fallback: "opencode",
+				connectionProvider: "api",
+				fallback: "codex",
 			}),
-		).toBe("claude");
-		expect(
-			rememberedClaudeModelIdFromChats([
-				{
-					id: "a",
-					title: "OpenCode chat",
-					harnessId: "opencode",
-					listedModelId: "opencode/muse",
-				},
-				{
-					id: "b",
-					title: "Claude chat",
-					harnessId: "claude",
-					listedModelId: "fable",
-				},
-			]),
-		).toBe("fable");
-		expect(
-			rememberedClaudeModelIdFromChats([
-				{ id: "a", title: "empty", harnessId: "opencode" },
-			]),
-		).toBe("");
+		).toBe("api");
 	});
 });
 

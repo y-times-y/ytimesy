@@ -2,6 +2,7 @@ import {
 	type AgentCompetition,
 	competitionCandidatePublicItems,
 } from "#/domain/agent-competition";
+import type { AgentProviderId } from "#/domain/agent-provider";
 import type { SessionItem } from "#/domain/session-item";
 import { database } from "./database";
 
@@ -103,7 +104,7 @@ export async function createAgentCompetition(input: {
 	projectId: string;
 	rootSessionId: string;
 	prompt: string;
-	harness: "codex" | "claude" | "api";
+	harness: AgentProviderId;
 	modelId: string;
 	leaderCount: number;
 	attemptModelIds: readonly string[];
@@ -169,7 +170,7 @@ export async function competitionRuntime(rootSessionId: string) {
 		user_id: string;
 		project_id: string;
 		prompt: string;
-		harness: "codex" | "claude" | "api";
+		harness: AgentProviderId;
 		model_id: string;
 		leader_count: number;
 		attempt_model_ids: string[] | null;

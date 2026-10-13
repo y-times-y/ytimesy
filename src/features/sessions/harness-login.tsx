@@ -19,8 +19,7 @@ export function HarnessLogin({
 	onConnect: () => void;
 }) {
 	const provider = agentProviderById(harnessId);
-	const access = harnessAccess(provider, connection, null);
-	if (harnessId === "claude") return null;
+	const access = harnessAccess(provider, connection);
 	if (
 		access.readiness !== "authorizing" &&
 		access.readiness !== "failed" &&

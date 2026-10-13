@@ -35,17 +35,6 @@ describe("sessionMachinePlan", () => {
 		).toEqual({ kind: "copy-snapshot", snapshotId: "sh-template" });
 	});
 
-	it("copies a new Claude chat from the private auth snapshot", () => {
-		expect(
-			sessionMachinePlan({
-				sessionProviderRef: null,
-				templateSnapshotId: "sh-template",
-				templateProviderRef: "vm-template",
-				authSnapshotId: "sh-claude-auth",
-			}),
-		).toEqual({ kind: "copy-snapshot", snapshotId: "sh-claude-auth" });
-	});
-
 	it("copies from the snapshot when the unused template VM is gone", () => {
 		expect(
 			sessionMachinePlan({
@@ -182,7 +171,7 @@ describe("agent session names", () => {
 					id: "s1",
 					title: "fix login",
 					listedModelId: "opencode/big-pickle",
-					harness: "opencode",
+					harness: "api",
 				},
 			]),
 		).toEqual([
@@ -191,7 +180,7 @@ describe("agent session names", () => {
 				title: "fix login",
 				turnStatus: "idle",
 				listedModelId: "opencode/big-pickle",
-				harnessId: "opencode",
+				harnessId: "api",
 				updatedAt: null,
 				workspaceId: null,
 			},

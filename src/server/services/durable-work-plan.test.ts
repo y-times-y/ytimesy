@@ -129,7 +129,7 @@ beforeEach(() => {
 		mocks.history.push(structuredClone(plan));
 	});
 	mocks.slots.mockReset().mockResolvedValue(1);
-	mocks.start.mockReset().mockImplementation((_machines, _scope, id) =>
+	mocks.start.mockReset().mockImplementation((_scope, id) =>
 		Effect.sync(() => {
 			mocks.launched.add(id);
 			(mocks.tasks.get(id) as AgentSessionRecord).taskState = "working";
@@ -174,7 +174,7 @@ it("dispatches critical-path-ready drafts within capacity, saving intent before 
 	});
 	await dispatchDurableWork({} as never);
 	expect(mocks.start).toHaveBeenCalledOnce();
-	expect(mocks.start.mock.calls[0][2]).toBe(b.id);
+	expect(mocks.start.mock.calls[0][1]).toBe(b.id);
 	expect(
 		mocks.history.some(
 			(plan) =>

@@ -69,6 +69,10 @@ beforeAll(async () => {
 		"20260930220000_chat_branches.sql",
 	])
 		await db.exec(await readFile(`supabase/migrations/${file}`, "utf8"));
+	// The harness constraint from 20260927203000_api_turns (this schema builds api_turn itself).
+	await db.exec(
+		"alter table agent_session drop constraint agent_session_harness_check; alter table agent_session add constraint agent_session_harness_check check (harness in ('codex','claude','opencode','api'))",
+	);
 	await db.exec(
 		`insert into auth_user(id,name,email,"emailVerified") values('alice','Alice','alice@example.test',true),('bob','Bob','bob@example.test',true)`,
 	);
@@ -180,7 +184,7 @@ it("persists the selected runtime before a reused chat starts polling", async ()
 		userId: "alice",
 		projectId: project.id,
 		workspaceId,
-		harness: "claude",
+		harness: "api",
 		providerRef: "vm-agent",
 		listedModelId: "claude-old",
 	});
@@ -210,7 +214,7 @@ it("does not switch a running turn or another owner's runtime", async () => {
 		userId: "alice",
 		projectId: project.id,
 		workspaceId,
-		harness: "claude",
+		harness: "api",
 		providerRef: "vm-agent",
 	});
 	await expect(
@@ -228,7 +232,7 @@ it("does not switch a running turn or another owner's runtime", async () => {
 				session.id,
 			])
 		).rows,
-	).toEqual([{ harness: "claude" }]);
+	).toEqual([{ harness: "api" }]);
 });
 
 it("destroys agent copies and side-chat copies, never the template VM", async () => {
@@ -237,14 +241,14 @@ it("destroys agent copies and side-chat copies, never the template VM", async ()
 		userId: "alice",
 		projectId: project.id,
 		workspaceId,
-		harness: "opencode",
+		harness: "api",
 		providerRef: "vm-agent",
 	});
 	await insertAgentSession({
 		userId: "alice",
 		projectId: project.id,
 		workspaceId,
-		harness: "opencode",
+		harness: "api",
 		providerRef: "vm-side",
 		parentSessionId: parent.id,
 	});
@@ -276,7 +280,7 @@ it("drops a leftover template-bound session row without deleting the template VM
 		userId: "alice",
 		projectId: project.id,
 		workspaceId,
-		harness: "opencode",
+		harness: "api",
 		providerRef: "vm-template",
 	});
 	const destroyed: string[] = [];
@@ -344,7 +348,7 @@ it("does not let another user delete a session", async () => {
 		userId: "alice",
 		projectId: project.id,
 		workspaceId,
-		harness: "opencode",
+		harness: "api",
 		providerRef: "vm-agent",
 	});
 	await expect(
@@ -369,7 +373,7 @@ it("stores the listed model last submitted on an agent session", async () => {
 		userId: "alice",
 		projectId: project.id,
 		workspaceId,
-		harness: "opencode",
+		harness: "api",
 		providerRef: "vm-agent",
 		listedModelId: "opencode/big-pickle",
 	});
@@ -387,7 +391,7 @@ it("keeps a running turn across a paused read until a live harness view arrives"
 		userId: "alice",
 		projectId: project.id,
 		workspaceId,
-		harness: "opencode",
+		harness: "api",
 		providerRef: "vm-agent",
 	});
 	expect(session.turnStatus).toBe("idle");
@@ -403,8 +407,8 @@ it("keeps a running turn across a paused read until a live harness view arrives"
 		...emptyCodexSession(),
 		connection: {
 			status: "authenticated",
-			provider: "opencode",
-			authMode: "local",
+			provider: "codex",
+			authMode: "chatgpt",
 			planType: null,
 			email: null,
 		},
@@ -423,7 +427,7 @@ it("commits before exposing completion and preserves retryable state on a Git fa
 		userId: "alice",
 		projectId: project.id,
 		workspaceId,
-		harness: "opencode",
+		harness: "api",
 		providerRef: "vm-writer",
 	});
 	await db.query(
@@ -434,8 +438,8 @@ it("commits before exposing completion and preserves retryable state on a Git fa
 		...emptyCodexSession(),
 		connection: {
 			status: "authenticated" as const,
-			provider: "opencode" as const,
-			authMode: "local" as const,
+			provider: "codex" as const,
+			authMode: "chatgpt" as const,
 			planType: null,
 			email: null,
 		},
@@ -502,14 +506,14 @@ it("opens a new chat without copying a VM and inherits the last listed model", a
 		userId: "alice",
 		projectId: project.id,
 		workspaceId,
-		harness: "opencode",
+		harness: "api",
 		providerRef: "vm-sibling",
 		listedModelId: "opencode/big-pickle",
 	});
 	const opened = await openAgentSession({
 		userId: "alice",
 		projectId: project.id,
-		harness: "opencode",
+		harness: "api",
 	});
 	expect(opened.providerRef).toBeNull();
 	expect(opened.title).toBe("New session");

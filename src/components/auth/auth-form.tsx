@@ -8,17 +8,21 @@ import {
 	normalizeAuthFormServerError,
 	validateAdditionalFieldRequired,
 	validateAdditionalFieldValue,
+	validateStringLength,
 } from "@better-auth-ui/core";
+import { useAuth } from "@better-auth-ui/react";
 import {
 	type AnyFormApi,
 	createFormHook,
 	createFormHookContexts,
 } from "@tanstack/react-form";
+import { Eye, EyeOff } from "lucide-react";
 import {
 	type ComponentProps,
 	type FormEvent,
 	type ReactNode,
 	useRef,
+	useState,
 } from "react";
 
 import { Button } from "#/components/ui/button.tsx";
@@ -29,8 +33,15 @@ import {
 	FieldLabel,
 } from "#/components/ui/field.tsx";
 import { Input } from "#/components/ui/input.tsx";
+import {
+	InputGroup,
+	InputGroupAddon,
+	InputGroupButton,
+	InputGroupInput,
+} from "#/components/ui/input-group.tsx";
 import { Spinner } from "#/components/ui/spinner.tsx";
 import { AdditionalField, type AdditionalFieldProps } from "./additional-field";
+import { PasswordStrengthMeter } from "./password-strength-meter";
 
 const { fieldContext, formContext, useFieldContext, useFormContext } =
 	createFormHookContexts();
@@ -108,23 +119,6 @@ export function clearAuthFormFieldServerError(
 		errorMap: { ...current.errorMap, onServer: undefined },
 		errorSourceMap: { ...current.errorSourceMap, onServer: undefined },
 	}));
-}
-
-export async function runAuthFormAction(
-	form: AnyFormApi,
-	action: () => Promise<unknown>,
-	serverErrorMessage = DEFAULT_AUTH_FORM_SERVER_ERROR,
-) {
-	clearAuthFormServerError(form);
-	try {
-		await action();
-		return true;
-	} catch (error) {
-		if (!form.state.errorMap.onServer) {
-			setAuthFormServerError(form, error, serverErrorMessage);
-		}
-		return false;
-	}
 }
 
 export async function submitAuthForm(
@@ -298,14 +292,84 @@ function AuthFormAdditionalField(props: AuthFormAdditionalFieldProps) {
 	);
 }
 
-export const {
-	useAppForm: useAuthForm,
-	withFieldGroup: withAuthFieldGroup,
-	withForm: withAuthForm,
-} = createFormHook({
+/** A new-password input with a show/hide toggle; `error` overrides the field's own error. */
+function AuthFormPasswordField({
+	label,
+	placeholder,
+	minLength,
+	maxLength,
+	disabled,
+	error,
+	onValueChange,
+	showStrength = false,
+}: {
+	label: ReactNode;
+	placeholder?: string;
+	minLength?: number;
+	maxLength?: number;
+	disabled?: boolean;
+	error?: ReactNode;
+	onValueChange?: () => void;
+	showStrength?: boolean;
+}) {
+	const field = useFieldContext<string>();
+	const { localization } = useAuth();
+	const [visible, setVisible] = useState(false);
+	const isInvalid = isAuthFormFieldInvalid(field.state.meta) || Boolean(error);
+	const toggleLabel = visible
+		? localization.auth.hidePassword
+		: localization.auth.showPassword;
+
+	return (
+		<Field data-invalid={isInvalid}>
+			<FieldLabel htmlFor={field.name}>{label}</FieldLabel>
+
+			<InputGroup>
+				<InputGroupInput
+					id={field.name}
+					name={field.name}
+					type={visible ? "text" : "password"}
+					autoComplete="new-password"
+					placeholder={placeholder}
+					required
+					minLength={minLength}
+					maxLength={maxLength}
+					disabled={disabled}
+					onBlur={field.handleBlur}
+					onChange={(event) => {
+						field.handleChange(event.target.value);
+						onValueChange?.();
+					}}
+					aria-invalid={isInvalid}
+					value={field.state.value}
+				/>
+
+				<InputGroupAddon align="inline-end">
+					<InputGroupButton
+						size="icon-xs"
+						aria-label={toggleLabel}
+						title={toggleLabel}
+						onClick={() => setVisible((current) => !current)}
+					>
+						{visible ? <EyeOff /> : <Eye />}
+					</InputGroupButton>
+				</InputGroupAddon>
+			</InputGroup>
+
+			{error ? <FieldError>{error}</FieldError> : <AuthFormFieldError />}
+
+			{showStrength ? (
+				<PasswordStrengthMeter password={field.state.value} />
+			) : null}
+		</Field>
+	);
+}
+
+export const { useAppForm: useAuthForm } = createFormHook({
 	fieldComponents: {
 		AuthFormAdditionalField,
 		AuthFormFieldError,
+		AuthFormPasswordField,
 		AuthFormTextField,
 	},
 	fieldContext,
@@ -343,4 +407,27 @@ export function getAuthAdditionalFieldValidators(
 				DEFAULT_ADDITIONAL_FIELD_VALIDATION_DEBOUNCE_MS)
 			: undefined,
 	};
+}
+
+/** The configured password length rules, shared by new-password and confirm fields. */
+export function passwordLengthError(
+	value: string,
+	limits:
+		| { minPasswordLength?: number; maxPasswordLength?: number }
+		| undefined,
+	messages: { tooLong: string; tooShort: string; fieldRequired: string },
+) {
+	return validateStringLength(value, {
+		maxLength: limits?.maxPasswordLength,
+		maxLengthMessage: messages.tooLong.replace(
+			"{{max}}",
+			String(limits?.maxPasswordLength),
+		),
+		minLength: limits?.minPasswordLength,
+		minLengthMessage: messages.tooShort.replace(
+			"{{min}}",
+			String(limits?.minPasswordLength),
+		),
+		requiredMessage: messages.fieldRequired,
+	});
 }

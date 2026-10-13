@@ -9,28 +9,6 @@ import {
 import type { WorkspaceMachines } from "./workspace-machines";
 
 describe("session workspace machines", () => {
-	it("isolates peer mailboxes and Claude hooks on shared machines", () => {
-		const text =
-			"/tmp/ytimesy-peer-inbox/job.json /tmp/ytimesy-peer-hook.py /tmp/ytimesy-peer-hooks.json";
-		expect(scopeSessionRuntimeText(text, "a")).not.toBe(
-			scopeSessionRuntimeText(text, "b"),
-		);
-		expect(scopeSessionRuntimeText(text, "a")).toContain(
-			"/tmp/ytimesy-sessions/a/ytimesy-peer-inbox/job.json",
-		);
-	});
-	it("scopes conversation state but leaves shared checkout paths alone", () => {
-		const sessionId = "task-123";
-		expect(
-			scopeSessionRuntimeText(
-				"read /tmp/ytimesy-task-request.json and /tmp/ytimesy-project-cwd",
-				sessionId,
-			),
-		).toBe(
-			"read /tmp/ytimesy-sessions/task-123/ytimesy-task-request.json and /tmp/ytimesy-project-cwd",
-		);
-	});
-
 	it("keeps external Codex token and refresh files private to each shared session", () => {
 		const root = sessionRuntimeRoot("task-123");
 		expect(
@@ -73,25 +51,31 @@ describe("session workspace machines", () => {
 
 		await scoped.writeTextFile(
 			workspaceId,
-			"/tmp/ytimesy-auth-status.json",
-			"/tmp/ytimesy-task-result.json",
+			"/tmp/ytimesy-codex-external-tokens.json",
+			"/tmp/ytimesy-codex-refresh-request.json",
 		);
-		await scoped.readTextFile(workspaceId, "/tmp/ytimesy-auth-status.json");
-		await scoped.exec(workspaceId, "rm /tmp/ytimesy-stop-request.json");
+		await scoped.readTextFile(
+			workspaceId,
+			"/tmp/ytimesy-codex-external-tokens.json",
+		);
+		await scoped.exec(
+			workspaceId,
+			"rm /tmp/ytimesy-codex-refresh-response.json",
+		);
 
 		const root = sessionRuntimeRoot("task-123");
 		expect(writeTextFile).toHaveBeenCalledWith(
 			workspaceId,
-			`${root}/ytimesy-auth-status.json`,
-			`${root}/ytimesy-task-result.json`,
+			`${root}/ytimesy-codex-external-tokens.json`,
+			`${root}/ytimesy-codex-refresh-request.json`,
 		);
 		expect(readTextFile).toHaveBeenCalledWith(
 			workspaceId,
-			`${root}/ytimesy-auth-status.json`,
+			`${root}/ytimesy-codex-external-tokens.json`,
 		);
 		expect(exec).toHaveBeenLastCalledWith(
 			workspaceId,
-			`mkdir -p '${root}'\nrm ${root}/ytimesy-stop-request.json`,
+			`mkdir -p '${root}'\nrm ${root}/ytimesy-codex-refresh-response.json`,
 			undefined,
 		);
 	});

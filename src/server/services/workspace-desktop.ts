@@ -34,21 +34,6 @@ export type DesktopScope = {
 };
 
 /**
- * Starts the shared display without blocking Connect or Send on Chrome
- * install. Failures stay on the Desktop tab.
- */
-export function beginSharedDesktop(
-	machines: WorkspaceMachines,
-	scope: DesktopScope,
-): void {
-	void Effect.runPromise(
-		startWorkspaceDesktop(machines, scope).pipe(
-			Effect.catchAll(() => Effect.void),
-		),
-	);
-}
-
-/**
  * Recovers a running desktop on the prepared project VM, or returns the
  * last in-memory status for this owner and project.
  */

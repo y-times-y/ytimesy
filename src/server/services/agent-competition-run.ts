@@ -23,10 +23,7 @@ import { machinesForAgentSession } from "./session-workspace-machines";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 /** A retry reuses its numbered candidate instead of copying another machine. */
-export async function startAgentCompetition(
-	machines: WorkspaceMachines,
-	rootSessionId: string,
-) {
+export async function startAgentCompetition(rootSessionId: string) {
 	const group = await competitionRuntime(rootSessionId);
 	if (
 		!group ||
@@ -64,7 +61,6 @@ export async function startAgentCompetition(
 		try {
 			await Effect.runPromise(
 				startPreparedAgentTask(
-					machines,
 					{
 						userId: group.user_id,
 						projectId: group.project_id,

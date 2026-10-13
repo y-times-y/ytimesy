@@ -1,104 +1,70 @@
 import { describe, expect, it } from "vitest";
-import {
-	CLAUDE_PROVIDER,
-	CODEX_PROVIDER,
-	OPENCODE_PROVIDER,
-} from "./agent-provider";
+import { API_PROVIDER, CODEX_PROVIDER } from "./agent-provider";
 import {
 	canResumeDisconnectedFollowUp,
-	claudeAuthNeedsPaste,
 	composerCanStartSignIn,
 	composerSendIsEnabled,
 	harnessAccess,
 	harnessLoginIsPending,
 	harnessLoginShouldShow,
 	harnessRequiresAccountLogin,
-	offeredHarnessAccess,
 	runningTurnShouldPoll,
 	selectedHarnessIsConnected,
-	shouldAutoResumeHarnessSession,
 } from "./harness-access";
 
+const codexSignedIn = {
+	status: "authenticated" as const,
+	provider: "codex" as const,
+	authMode: "chatgpt" as const,
+	planType: "pro",
+	email: null,
+};
+const codexAwaitingCode = {
+	status: "awaiting_device_code" as const,
+	provider: "codex" as const,
+	loginId: "ABCD-1234",
+	verificationUrl: "https://auth.openai.com/codex/device",
+	userCode: "ABCD-1234",
+};
+
 describe("harness access", () => {
-	it("lists every offered harness and mutes account logins that are not signed in", () => {
-		const rows = offeredHarnessAccess({ status: "disconnected" });
-		expect(rows.map((row) => row.provider.id)).toEqual([
-			"codex",
-			"claude",
-			"api",
-		]);
-		expect(rows.map((row) => row.muted)).toEqual([true, true, true]);
-		expect(rows.map((row) => row.statusLabel)).toEqual([
-			"Not signed in",
-			"Not signed in",
-			"Not connected",
-		]);
+	it("mutes an unsigned Codex row and offers sign in", () => {
+		expect(
+			harnessAccess(CODEX_PROVIDER, { status: "disconnected" }),
+		).toMatchObject({
+			readiness: "unsigned",
+			muted: true,
+			statusLabel: "Not signed in",
+			subscriptionAction: "sign_in",
+			subscriptionActionLabel: "Sign in",
+		});
+		expect(harnessRequiresAccountLogin("codex")).toBe(true);
+		expect(harnessRequiresAccountLogin("api")).toBe(false);
 	});
 
 	it("offers ChatGPT resume when a Codex snapshot is saved", () => {
-		const rows = offeredHarnessAccess(
+		const access = harnessAccess(
+			CODEX_PROVIDER,
 			{ status: "disconnected" },
-			{},
 			{ codexSnapshotAvailable: true },
 		);
-		expect(rows[0]?.statusLabel).toBe("Saved workspace");
-		expect(rows[0]?.subscriptionActionLabel).toBe("Resume");
-		expect(rows[0]?.summary).toContain("saved workspace");
+		expect(access.statusLabel).toBe("Saved workspace");
+		expect(access.subscriptionActionLabel).toBe("Resume");
+		expect(access.summary).toContain("saved workspace");
 	});
 
-	it("keeps OpenCode selectable without an account login", () => {
+	it("points API models at Settings until a connection exists", () => {
 		expect(
-			harnessAccess(OPENCODE_PROVIDER, { status: "disconnected" }, null),
+			harnessAccess(API_PROVIDER, { status: "disconnected" }),
 		).toMatchObject({
 			readiness: "unsigned",
-			muted: false,
 			statusLabel: "Not connected",
-			subscriptionAction: "connect",
+			subscriptionAction: null,
 		});
 	});
 
-	it("offers sign in on Codex and Claude", () => {
-		const rows = offeredHarnessAccess({ status: "disconnected" });
-		expect(rows.map((row) => row.subscriptionAction)).toEqual([
-			"sign_in",
-			"sign_in",
-			null,
-		]);
-		expect(rows.map((row) => row.subscriptionActionLabel)).toEqual([
-			"Sign in",
-			"Sign in",
-			null,
-		]);
-		expect(harnessRequiresAccountLogin("opencode")).toBe(false);
-		expect(harnessRequiresAccountLogin("claude")).toBe(true);
-	});
-
-	it("does not treat a saved key as a connected harness", () => {
-		const claude = harnessAccess(
-			CLAUDE_PROVIDER,
-			{ status: "disconnected" },
-			"••••xyz1",
-		);
-		expect(claude.muted).toBe(true);
-		expect(claude.statusLabel).toBe("Key saved");
-		expect(claude.summary).toContain("stored");
-		expect(claude.subscriptionAction).toBe("sign_in");
-		expect(
-			selectedHarnessIsConnected({ status: "disconnected" }, "claude"),
-		).toBe(false);
-	});
-
 	it("unmutes only the provider that is actually signed in", () => {
-		const connection = {
-			status: "authenticated" as const,
-			provider: "codex" as const,
-			authMode: "chatgpt" as const,
-			planType: "pro",
-			email: null,
-		};
-		const rows = offeredHarnessAccess(connection);
-		expect(rows[0]?.muted).toBe(false);
-		expect(harnessAccess(CODEX_PROVIDER, connection, null)).toEqual({
+		expect(harnessAccess(CODEX_PROVIDER, codexSignedIn)).toEqual({
 			provider: CODEX_PROVIDER,
 			readiness: "ready",
 			muted: false,
@@ -106,310 +72,16 @@ describe("harness access", () => {
 			summary: "pro",
 			subscriptionAction: null,
 			subscriptionActionLabel: null,
-			apiKeyHint: null,
 			userCode: null,
 			verificationUrl: null,
 		});
-		expect(harnessAccess(OPENCODE_PROVIDER, connection, null).muted).toBe(
-			false,
-		);
-		expect(selectedHarnessIsConnected(connection, "codex")).toBe(true);
-		expect(selectedHarnessIsConnected(connection, "claude")).toBe(false);
-	});
-
-	it("unmutes OpenCode as connected without a login", () => {
-		const connection = {
-			status: "authenticated" as const,
-			provider: "opencode" as const,
-			authMode: "local" as const,
-			planType: null,
-			email: null,
-		};
-		expect(harnessAccess(OPENCODE_PROVIDER, connection, null)).toMatchObject({
-			readiness: "ready",
-			muted: false,
-			statusLabel: "Connected",
-			summary: "Running on this workspace",
-			subscriptionAction: null,
-		});
-		expect(selectedHarnessIsConnected(connection, "opencode")).toBe(true);
-	});
-
-	it("does not Connect on select even if the last view was authenticated", () => {
-		expect(
-			shouldAutoResumeHarnessSession({
-				harnessId: "opencode",
-				connection: { status: "disconnected" },
-			}),
-		).toBe(false);
-		expect(
-			shouldAutoResumeHarnessSession({
-				harnessId: "codex",
-				connection: { status: "disconnected" },
-			}),
-		).toBe(false);
-		expect(
-			shouldAutoResumeHarnessSession({
-				harnessId: "opencode",
-				connection: {
-					status: "authenticated",
-					provider: "opencode",
-					authMode: "local",
-					planType: null,
-					email: null,
-				},
-			}),
-		).toBe(false);
-		expect(
-			shouldAutoResumeHarnessSession({
-				harnessId: "claude",
-				connection: {
-					status: "authenticated",
-					provider: "claude",
-					authMode: "subscription",
-					planType: null,
-					email: null,
-				},
-			}),
-		).toBe(false);
-	});
-
-	it("lets a follow-up or side send resume OpenCode or a saved Codex workspace without auto-booting on select", () => {
-		expect(
-			composerCanStartSignIn({
-				harnessId: "codex",
-				connection: { status: "disconnected" },
-				snapshotAvailable: true,
-				busy: false,
-				draft: "Add a follow up",
-				slashDraft: false,
-			}),
-		).toBe(false);
-		expect(
-			canResumeDisconnectedFollowUp({
-				harnessId: "opencode",
-				connection: { status: "disconnected" },
-				turnStatus: "idle",
-			}),
-		).toBe(true);
-		expect(
-			canResumeDisconnectedFollowUp({
-				harnessId: "codex",
-				connection: { status: "disconnected" },
-				turnStatus: "idle",
-				snapshotAvailable: true,
-			}),
-		).toBe(true);
-		expect(
-			canResumeDisconnectedFollowUp({
-				harnessId: "codex",
-				connection: { status: "disconnected" },
-				turnStatus: "idle",
-			}),
-		).toBe(false);
-		expect(
-			canResumeDisconnectedFollowUp({
-				harnessId: "claude",
-				connection: { status: "disconnected" },
-				turnStatus: "idle",
-			}),
-		).toBe(false);
-		expect(
-			canResumeDisconnectedFollowUp({
-				harnessId: "claude",
-				connection: { status: "disconnected" },
-				turnStatus: "idle",
-				listedModelId: "fable",
-			}),
-		).toBe(true);
-		expect(
-			canResumeDisconnectedFollowUp({
-				harnessId: "opencode",
-				connection: { status: "disconnected" },
-				turnStatus: "running",
-			}),
-		).toBe(false);
-		expect(
-			canResumeDisconnectedFollowUp({
-				harnessId: "opencode",
-				connection: {
-					status: "failed",
-					provider: "opencode",
-					message: "serve failed",
-				},
-				turnStatus: "idle",
-			}),
-		).toBe(false);
-	});
-
-	it("enables Send on a disconnected OpenCode follow-up before Connect", () => {
-		expect(
-			composerSendIsEnabled({
-				harnessId: "opencode",
-				connection: { status: "disconnected" },
-				turnStatus: "idle",
-				canSend: false,
-				busy: false,
-				draft: "Add a follow up",
-				modelId: "",
-				slashDraft: false,
-			}),
-		).toBe(true);
-		expect(
-			composerSendIsEnabled({
-				harnessId: "claude",
-				connection: { status: "disconnected" },
-				turnStatus: "idle",
-				canSend: false,
-				busy: false,
-				draft: "Add a follow up",
-				modelId: "",
-				slashDraft: false,
-			}),
-		).toBe(true);
-		expect(
-			composerCanStartSignIn({
-				harnessId: "claude",
-				connection: { status: "disconnected" },
-				busy: false,
-				draft: "Add a follow up",
-				slashDraft: false,
-			}),
-		).toBe(true);
-		expect(
-			composerSendIsEnabled({
-				harnessId: "claude",
-				connection: {
-					status: "awaiting_device_code",
-					provider: "claude",
-					loginId: "claude-auth",
-					verificationUrl: "https://claude.com/cai/oauth/authorize",
-					userCode: "",
-				},
-				turnStatus: "idle",
-				canSend: false,
-				busy: false,
-				draft: "Add a follow up",
-				modelId: "",
-				slashDraft: false,
-			}),
-		).toBe(false);
-		expect(
-			harnessLoginShouldShow({
-				harnessReady: false,
-				harnessId: "claude",
-				connection: { status: "disconnected" },
-			}),
-		).toBe(false);
-		expect(
-			harnessLoginShouldShow({
-				harnessReady: false,
-				harnessId: "claude",
-				connection: {
-					status: "awaiting_device_code",
-					provider: "claude",
-					loginId: "claude-auth",
-					verificationUrl: "https://claude.com/cai/oauth/authorize",
-					userCode: "",
-				},
-			}),
-		).toBe(true);
-		expect(
-			composerSendIsEnabled({
-				harnessId: "opencode",
-				connection: {
-					status: "authenticated",
-					provider: "opencode",
-					authMode: "local",
-					planType: null,
-					email: null,
-				},
-				turnStatus: "idle",
-				canSend: true,
-				busy: false,
-				draft: "Add a follow up",
-				modelId: "",
-				slashDraft: false,
-			}),
-		).toBe(false);
-		expect(
-			composerSendIsEnabled({
-				harnessId: "opencode",
-				connection: {
-					status: "authenticated",
-					provider: "opencode",
-					authMode: "local",
-					planType: null,
-					email: null,
-				},
-				turnStatus: "idle",
-				canSend: true,
-				busy: false,
-				draft: "Add a follow up",
-				modelId: "opencode/muse-spark-1.3-contributor-free",
-				slashDraft: false,
-			}),
-		).toBe(true);
-	});
-
-	it("keeps Anthropic's URL on the authorizing Claude row", () => {
-		const access = harnessAccess(
-			CLAUDE_PROVIDER,
-			{
-				status: "awaiting_device_code",
-				provider: "claude",
-				loginId: "claude-auth",
-				verificationUrl:
-					"https://claude.ai/oauth/authorize?code=true&client_id=abc",
-				userCode: "",
-			},
-			null,
-		);
-		expect(access).toMatchObject({
-			readiness: "authorizing",
-			muted: true,
-			subscriptionActionLabel: "Open Anthropic",
-			userCode: "",
-			verificationUrl:
-				"https://claude.ai/oauth/authorize?code=true&client_id=abc",
-		});
-		expect(access.summary).toMatch(/Anthropic/);
-		expect(access.summary).toMatch(/paste it here/);
-		expect(
-			claudeAuthNeedsPaste({
-				status: "awaiting_device_code",
-				provider: "claude",
-				loginId: "claude-auth",
-				verificationUrl:
-					"https://claude.ai/oauth/authorize?code=true&client_id=abc",
-				userCode: "",
-			}),
-		).toBe(true);
-		expect(
-			harnessLoginIsPending({
-				status: "awaiting_device_code",
-				provider: "claude",
-				loginId: "claude-auth",
-				verificationUrl:
-					"https://claude.ai/oauth/authorize?code=true&client_id=abc",
-				userCode: "",
-			}),
-		).toBe(true);
+		expect(harnessAccess(API_PROVIDER, codexSignedIn).muted).toBe(true);
+		expect(selectedHarnessIsConnected(codexSignedIn, "codex")).toBe(true);
+		expect(selectedHarnessIsConnected(codexSignedIn, "api")).toBe(false);
 	});
 
 	it("keeps the device code on the authorizing Codex row", () => {
-		const access = harnessAccess(
-			CODEX_PROVIDER,
-			{
-				status: "awaiting_device_code",
-				provider: "codex",
-				loginId: "login-1",
-				verificationUrl: "https://auth.openai.com/codex/device",
-				userCode: "ABCD-1234",
-			},
-			null,
-		);
-		expect(access).toMatchObject({
+		expect(harnessAccess(CODEX_PROVIDER, codexAwaitingCode)).toMatchObject({
 			readiness: "authorizing",
 			muted: true,
 			statusLabel: "Authorizing",
@@ -417,15 +89,111 @@ describe("harness access", () => {
 			userCode: "ABCD-1234",
 			verificationUrl: "https://auth.openai.com/codex/device",
 		});
+		expect(harnessLoginIsPending(codexAwaitingCode)).toBe(true);
 		expect(
-			claudeAuthNeedsPaste({
-				status: "awaiting_device_code",
-				provider: "codex",
-				loginId: "login-1",
-				verificationUrl: "https://auth.openai.com/codex/device",
-				userCode: "ABCD-1234",
+			harnessLoginShouldShow({
+				harnessReady: false,
+				harnessId: "codex",
+				connection: codexAwaitingCode,
+			}),
+		).toBe(true);
+		expect(
+			harnessLoginShouldShow({
+				harnessReady: false,
+				harnessId: "codex",
+				connection: { status: "disconnected" },
 			}),
 		).toBe(false);
+	});
+
+	it("lets a follow-up resume a saved Codex workspace without auto-booting", () => {
+		expect(
+			composerCanStartSignIn({
+				harnessId: "codex",
+				connection: { status: "disconnected" },
+				snapshotAvailable: true,
+				busy: false,
+				draft: "Add a follow up",
+				slashDraft: false,
+			}),
+		).toBe(false);
+		expect(
+			canResumeDisconnectedFollowUp({
+				harnessId: "codex",
+				connection: { status: "disconnected" },
+				turnStatus: "idle",
+				snapshotAvailable: true,
+			}),
+		).toBe(true);
+		expect(
+			canResumeDisconnectedFollowUp({
+				harnessId: "codex",
+				connection: { status: "disconnected" },
+				turnStatus: "idle",
+			}),
+		).toBe(false);
+		expect(
+			canResumeDisconnectedFollowUp({
+				harnessId: "codex",
+				connection: { status: "disconnected" },
+				turnStatus: "running",
+				snapshotAvailable: true,
+			}),
+		).toBe(false);
+		expect(
+			canResumeDisconnectedFollowUp({
+				harnessId: "api",
+				connection: { status: "disconnected" },
+				turnStatus: "idle",
+				snapshotAvailable: true,
+			}),
+		).toBe(false);
+	});
+
+	it("starts a Codex sign-in from Send, but not while a code is pending", () => {
+		const input = {
+			harnessId: "codex" as const,
+			busy: false,
+			draft: "Fix the build",
+			slashDraft: false,
+		};
+		expect(
+			composerCanStartSignIn({
+				...input,
+				connection: { status: "disconnected" },
+			}),
+		).toBe(true);
+		expect(
+			composerCanStartSignIn({ ...input, connection: codexAwaitingCode }),
+		).toBe(false);
+		expect(
+			composerSendIsEnabled({
+				...input,
+				connection: codexAwaitingCode,
+				turnStatus: "idle",
+				canSend: false,
+				modelId: "",
+			}),
+		).toBe(false);
+	});
+
+	it("enables API sends only for a routed model", () => {
+		const input = {
+			harnessId: "api" as const,
+			connection: { status: "disconnected" as const },
+			turnStatus: "idle" as const,
+			canSend: false,
+			busy: false,
+			draft: "Fix the build",
+			slashDraft: false,
+		};
+		expect(composerSendIsEnabled({ ...input, modelId: "" })).toBe(false);
+		expect(
+			composerSendIsEnabled({
+				...input,
+				modelId: "api/00000000-0000-4000-8000-000000000000/gpt-6.1-sol",
+			}),
+		).toBe(true);
 	});
 });
 
@@ -467,13 +235,6 @@ describe("runningTurnShouldPoll", () => {
 				sideTurnStatus: "idle",
 				connectionStatus: "disconnected",
 				composerBusy: false,
-			}),
-		).toBe(true);
-		expect(
-			runningTurnShouldPoll({
-				turnStatus: "idle",
-				sideTurnStatus: "running",
-				connectionStatus: "disconnected",
 			}),
 		).toBe(true);
 		expect(

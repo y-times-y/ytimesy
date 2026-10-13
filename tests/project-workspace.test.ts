@@ -3,8 +3,6 @@ import {
 	blocksDuplicateProvision,
 	branchSwitchBlockedReason,
 	canStartPrepare,
-	codexConnectBlockedReason,
-	harnessConnectBlockedReason,
 	needsMachineCreate,
 	needsMachineRecover,
 	publicFailureMessage,
@@ -130,27 +128,6 @@ it("only exposes a Codex session machine after the workspace is ready", () => {
 			providerRef: "vm-1",
 		}),
 	).toBe("vm-1");
-	expect(codexConnectBlockedReason(null)).toMatch(/Prepare a workspace/);
-	expect(harnessConnectBlockedReason(null, "Claude Code")).toBe(
-		"Prepare a workspace before signing in to Claude Code.",
-	);
-	expect(harnessConnectBlockedReason(null, "OpenCode", "connect")).toBe(
-		"Prepare a workspace before connecting OpenCode.",
-	);
-	expect(
-		codexConnectBlockedReason({
-			status: "cloning",
-			providerRef: "vm-1",
-			errorMessage: null,
-		}),
-	).toMatch(/Wait for workspace preparation/);
-	expect(
-		codexConnectBlockedReason({
-			status: "failed",
-			providerRef: null,
-			errorMessage: "GitHub access expired or was denied. Reconnect GitHub.",
-		}),
-	).toBe("GitHub access expired or was denied. Reconnect GitHub.");
 	expect(workspaceEnvironmentIsReady(null)).toBe(false);
 	expect(
 		workspaceEnvironmentIsReady({
@@ -159,24 +136,4 @@ it("only exposes a Codex session machine after the workspace is ready", () => {
 			templateSnapshotId: "sh-template",
 		}),
 	).toBe(true);
-	expect(
-		harnessConnectBlockedReason(
-			{
-				status: "ready",
-				providerRef: null,
-				templateSnapshotId: "sh-codex-auth",
-				errorMessage: null,
-			},
-			"OpenCode",
-			"connect",
-		),
-	).toBeNull();
-	expect(
-		codexConnectBlockedReason({
-			status: "ready",
-			providerRef: null,
-			templateSnapshotId: "sh-codex-auth",
-			errorMessage: null,
-		}),
-	).toBeNull();
 });

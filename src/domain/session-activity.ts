@@ -68,13 +68,3 @@ export function activityGlyphForToolName(tool: string): SessionActivityGlyph {
 	if (key.includes("grep") || key.includes("search")) return "search";
 	return "tool";
 }
-
-export function activityTitleForToolName(tool: string): string {
-	const glyph = activityGlyphForToolName(tool);
-	if (glyph === "search") return tool || "Search";
-	if (glyph === "read") return tool || "Read";
-	if (glyph === "edit") return tool || "Edit";
-	if (glyph === "shell") return tool || "Shell";
-	if (glyph === "web") return tool || "Search";
-	return tool || "Tool";
-}

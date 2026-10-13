@@ -126,21 +126,9 @@ startModelWorkflowExecutor(createFreestyleWorkspaceMachines('no-inference-or-com
 	});
 	const guestRoot = "/home/ubuntu/ytimesy-repair-proof";
 	await created.vm.exec({
-		command: `mkdir -p ${guestRoot} /home/ubuntu/adapters`,
+		command: `mkdir -p ${guestRoot}`,
 		timeoutMs: 10000,
 	});
-	for (const [source, target] of [
-		[
-			"src/server/adapters/peer-inbox.py",
-			"/home/ubuntu/adapters/peer-inbox.py",
-		],
-		["src/server/adapters/claude/turn-pty.py", `${guestRoot}/turn-pty.py`],
-		[
-			"src/server/adapters/claude/task-tool-server.py",
-			`${guestRoot}/task-tool-server.py`,
-		],
-	])
-		await created.vm.fs.writeTextFile(target, await readFile(source, "utf8"));
 	await created.vm.fs.writeTextFile(
 		`${guestRoot}/executor.mjs`,
 		await readFile(entry, "utf8"),

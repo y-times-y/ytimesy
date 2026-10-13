@@ -26,13 +26,9 @@ export function sessionMachinePlan(input: {
 	readonly sessionProviderRef: string | null;
 	readonly templateSnapshotId: string | null;
 	readonly templateProviderRef: string | null;
-	readonly authSnapshotId?: string | null;
 }): SessionMachinePlan {
 	if (input.sessionProviderRef)
 		return { kind: "resume", providerRef: input.sessionProviderRef };
-	const authSnapshotId = input.authSnapshotId?.trim();
-	if (authSnapshotId)
-		return { kind: "copy-snapshot", snapshotId: authSnapshotId };
 	if (input.templateSnapshotId)
 		return { kind: "copy-snapshot", snapshotId: input.templateSnapshotId };
 	if (input.templateProviderRef)
@@ -123,15 +119,11 @@ export function sessionTurnStatusForPersist(input: {
 	return input.liveStatus;
 }
 
-export const COPIED_OPENCODE_STATUS_PATH = "/tmp/ytimesy-opencode-status.json";
-export const COPIED_CLAUDE_STATUS_PATH = "/tmp/ytimesy-claude-auth-status.json";
-
-export const COPIED_CODEX_STATUS_PATH = "/tmp/ytimesy-auth-status.json";
-
+/** Prepared snapshots from the native-runtime era can still hold these; copies remove them. */
 export const COPIED_SESSION_SCRATCH_PATHS = [
-	COPIED_OPENCODE_STATUS_PATH,
-	COPIED_CLAUDE_STATUS_PATH,
-	COPIED_CODEX_STATUS_PATH,
+	"/tmp/ytimesy-opencode-status.json",
+	"/tmp/ytimesy-claude-auth-status.json",
+	"/tmp/ytimesy-auth-status.json",
 	"/tmp/ytimesy-opencode-serve.pid",
 	"/tmp/ytimesy-opencode-serve.log",
 	"/tmp/ytimesy-opencode-http-body",
@@ -142,21 +134,6 @@ export const COPIED_SESSION_SCRATCH_PATHS = [
 	"/tmp/ytimesy-side-request.json",
 	"/tmp/ytimesy-side-result.json",
 	"/tmp/ytimesy-project-context.md",
-] as const;
-
-export const COPIED_SESSION_STATUS_RESETS = [
-	{
-		path: COPIED_OPENCODE_STATUS_PATH,
-		contents: `${JSON.stringify({ stage: "missing" })}\n`,
-	},
-	{
-		path: COPIED_CLAUDE_STATUS_PATH,
-		contents: `${JSON.stringify({ stage: "missing" })}\n`,
-	},
-	{
-		path: COPIED_CODEX_STATUS_PATH,
-		contents: `${JSON.stringify({ stage: "missing" })}\n`,
-	},
 ] as const;
 
 export const COPIED_SESSION_DB_FILES = [
@@ -179,14 +156,6 @@ export const COPIED_SESSION_SCRATCH_TREES = [
 
 export function copiedSessionScratchFileResetCommand() {
 	return `rm -f ${COPIED_SESSION_SCRATCH_PATHS.join(" ")}`;
-}
-
-export function copiedSessionScratchDatabaseResetCommand() {
-	return `rm -f ${COPIED_SESSION_DB_FILES.join(" ")}`;
-}
-
-export function copiedSessionScratchTreeResetCommand() {
-	return `rm -rf ${COPIED_SESSION_SCRATCH_TREES.join(" ")}`;
 }
 
 export function copiedSessionScratchResetCommand() {

@@ -154,29 +154,3 @@ export async function restoreSessionWorkspace(
 			throw new Error("Could not restore the repository remote.");
 	}
 }
-
-export async function restoreSessionNativeState(
-	machines: WorkspaceMachines,
-	userId: string,
-	sessionId: string,
-	runnerId: string,
-	root: string,
-) {
-	const checkpoint = await checkpointForSession(userId, sessionId);
-	if (!checkpoint)
-		throw new Error(
-			"No recoverable Codex checkpoint exists for this conversation.",
-		);
-	const payload = JSON.parse(
-		await downloadCheckpoint(userId, sessionId, checkpoint.object_path),
-	);
-	if (!payload.native)
-		throw new Error("This checkpoint has no saved Codex history.");
-	await restoreGuestCheckpoint(
-		host(machines, runnerId),
-		payload.native,
-		[],
-		root,
-		`/tmp/ytimesy-restore-${randomUUID()}`,
-	);
-}

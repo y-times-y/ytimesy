@@ -3,9 +3,7 @@ import {
 	type AgentProvider,
 	type AgentProviderId,
 	agentProviderById,
-	offeredAgentProviders,
 } from "./agent-provider";
-import { claudeSessionRemembersSignIn } from "./claude-auth";
 import { parseModelRouteId } from "./model-connection";
 import { isTurnRunning, type SessionTurnStatus } from "./session-item";
 
@@ -18,7 +16,6 @@ export type HarnessReadiness =
 
 export type HarnessSubscriptionAction =
 	| "sign_in"
-	| "connect"
 	| "open_provider"
 	| "retry"
 	| "sign_in_again";
@@ -31,41 +28,19 @@ export type HarnessAccess = {
 	readonly summary: string;
 	readonly subscriptionAction: HarnessSubscriptionAction | null;
 	readonly subscriptionActionLabel: string | null;
-	readonly apiKeyHint: string | null;
 	readonly userCode: string | null;
 	readonly verificationUrl: string | null;
 };
 
-export function offeredHarnessAccess(
-	connection: AgentConnection,
-	apiKeyHints: Readonly<Partial<Record<AgentProviderId, string>>> = {},
-	options: { readonly codexSnapshotAvailable?: boolean } = {},
-): readonly HarnessAccess[] {
-	return offeredAgentProviders().map((provider) =>
-		harnessAccess(
-			provider,
-			connection,
-			apiKeyHints[provider.id] ?? null,
-			options,
-		),
-	);
-}
-
 export function harnessAccess(
 	provider: AgentProvider,
 	connection: AgentConnection,
-	apiKeyHint: string | null,
 	options: { readonly codexSnapshotAvailable?: boolean } = {},
 ): HarnessAccess {
 	const forThisProvider =
 		connection.status !== "disconnected" && connection.provider === provider.id;
 	if (forThisProvider && connection.status === "authenticated") {
-		return readyAccess(
-			provider,
-			connection.authMode,
-			connection.planType,
-			apiKeyHint,
-		);
+		return readyAccess(provider, connection.authMode, connection.planType);
 	}
 	if (forThisProvider && connection.status === "awaiting_device_code") {
 		return {
@@ -78,7 +53,6 @@ export function harnessAccess(
 				: `Open ${provider.authorizeWith} to finish signing in. If it shows a code, paste it here.`,
 			subscriptionAction: "open_provider",
 			subscriptionActionLabel: `Open ${provider.authorizeWith}`,
-			apiKeyHint,
 			userCode: connection.userCode,
 			verificationUrl: connection.verificationUrl,
 		};
@@ -92,7 +66,6 @@ export function harnessAccess(
 			summary: connection.message,
 			subscriptionAction: "retry",
 			subscriptionActionLabel: "Try again",
-			apiKeyHint,
 			userCode: null,
 			verificationUrl: null,
 		};
@@ -106,23 +79,15 @@ export function harnessAccess(
 			summary: connection.message,
 			subscriptionAction: "sign_in_again",
 			subscriptionActionLabel: "Sign in again",
-			apiKeyHint,
 			userCode: null,
 			verificationUrl: null,
 		};
 	}
-	return unsignedAccess(provider, apiKeyHint, options);
+	return unsignedAccess(provider, options);
 }
 
 export function harnessLoginIsPending(connection: AgentConnection): boolean {
 	return connection.status === "awaiting_device_code";
-}
-
-export function claudeAuthNeedsPaste(connection: AgentConnection): boolean {
-	return (
-		connection.status === "awaiting_device_code" &&
-		connection.provider === "claude"
-	);
 }
 
 export function selectedHarnessIsConnected(
@@ -134,38 +99,16 @@ export function selectedHarnessIsConnected(
 	);
 }
 
-/**
- * Connect starts a paused VM. Reloading or selecting a chat that last looked
- * authenticated must not Connect — Send still resumes through
- * {@link canResumeDisconnectedFollowUp}.
- */
-export function shouldAutoResumeHarnessSession(_input: {
-	readonly harnessId: AgentProviderId;
-	readonly connection: AgentConnection;
-}): boolean {
-	return false;
-}
-
-/**
- * Selecting a paused chat must not boot its VM. A follow-up or a side-agent
- * send may still start that harness: OpenCode can connect without an account;
- * Codex can resume a saved workspace; Claude can resume a chat that already
- * stored a Claude model after Anthropic sign-in.
- */
+/** A Codex follow-up can resume while signed in (the saved login) even if the view looks disconnected. */
 export function canResumeDisconnectedFollowUp(input: {
 	readonly harnessId: AgentProviderId;
 	readonly connection: AgentConnection;
 	readonly turnStatus: SessionTurnStatus;
 	readonly snapshotAvailable?: boolean;
-	readonly listedModelId?: string | null;
 }): boolean {
 	if (isTurnRunning(input.turnStatus)) return false;
 	if (input.connection.status !== "disconnected") return false;
-	if (input.harnessId === "claude") {
-		return claudeSessionRemembersSignIn(input.listedModelId);
-	}
-	if (input.harnessId === "codex") return Boolean(input.snapshotAvailable);
-	return input.harnessId === "opencode";
+	return input.harnessId === "codex" && Boolean(input.snapshotAvailable);
 }
 
 export const RUNNING_TURN_POLL_MS = 700;
@@ -198,8 +141,7 @@ export function composerCanStartSignIn(input: {
 		input.snapshotAvailable
 	)
 		return false;
-	if (input.connection.status === "awaiting_device_code") return false;
-	return input.harnessId === "claude" || input.harnessId === "codex";
+	return input.connection.status !== "awaiting_device_code";
 }
 
 export function composerSendIsEnabled(input: {
@@ -207,7 +149,6 @@ export function composerSendIsEnabled(input: {
 	readonly connection: AgentConnection;
 	readonly turnStatus: SessionTurnStatus;
 	readonly snapshotAvailable?: boolean;
-	readonly listedModelId?: string | null;
 	readonly canSend: boolean;
 	readonly busy: boolean;
 	readonly draft: string;
@@ -232,10 +173,7 @@ export function composerSendIsEnabled(input: {
 	return true;
 }
 
-/**
- * Sign in is not a wall. Show this only while Anthropic is waiting for a
- * paste, or after a failed/expired login. Send starts a first login.
- */
+/** Sign in is not a wall: show it while a code waits for approval or after a failed/expired login. Send starts a first login. */
 export function harnessLoginShouldShow(input: {
 	readonly harnessReady: boolean;
 	readonly connection: AgentConnection;
@@ -245,7 +183,6 @@ export function harnessLoginShouldShow(input: {
 	const access = harnessAccess(
 		agentProviderById(input.harnessId),
 		input.connection,
-		null,
 	);
 	return (
 		access.readiness === "authorizing" ||
@@ -257,56 +194,25 @@ export function harnessLoginShouldShow(input: {
 export function harnessRequiresAccountLogin(
 	harnessId: AgentProviderId,
 ): boolean {
-	return harnessId === "codex" || harnessId === "claude";
+	return harnessId === "codex";
 }
 
 function readyAccess(
 	provider: AgentProvider,
 	authMode: AgentAuthMode,
 	planType: string | null,
-	apiKeyHint: string | null,
 ): HarnessAccess {
-	if (authMode === "apikey") {
-		return {
-			provider,
-			readiness: "ready",
-			muted: false,
-			statusLabel: "API key",
-			summary: "Using a stored API key",
-			subscriptionAction: null,
-			subscriptionActionLabel: null,
-			apiKeyHint,
-			userCode: null,
-			verificationUrl: null,
-		};
-	}
-	if (authMode === "local") {
-		return {
-			provider,
-			readiness: "ready",
-			muted: false,
-			statusLabel: "Connected",
-			summary: planType ?? "Running on this workspace",
-			subscriptionAction: null,
-			subscriptionActionLabel: null,
-			apiKeyHint,
-			userCode: null,
-			verificationUrl: null,
-		};
-	}
 	return {
 		provider,
 		readiness: "ready",
 		muted: false,
-		statusLabel: "Signed in",
-		summary: planType
-			? planType
-			: provider.signInMethod
-				? `Signed in with ${provider.signInMethod}`
-				: "Running on this workspace",
+		statusLabel: authMode === "apikey" ? "API key" : "Signed in",
+		summary:
+			authMode === "apikey"
+				? "Using a stored API key"
+				: (planType ?? `Signed in with ${provider.signInMethod}`),
 		subscriptionAction: null,
 		subscriptionActionLabel: null,
-		apiKeyHint,
 		userCode: null,
 		verificationUrl: null,
 	};
@@ -314,7 +220,6 @@ function readyAccess(
 
 function unsignedAccess(
 	provider: AgentProvider,
-	apiKeyHint: string | null,
 	options: { readonly codexSnapshotAvailable?: boolean } = {},
 ): HarnessAccess {
 	if (provider.id === "api")
@@ -326,61 +231,23 @@ function unsignedAccess(
 			summary: "Add an API connection in Settings, then select a model.",
 			subscriptionAction: null,
 			subscriptionActionLabel: null,
-			apiKeyHint: null,
 			userCode: null,
 			verificationUrl: null,
 		};
-	if (provider.id === "claude") {
-		return {
-			provider,
-			readiness: "unsigned",
-			muted: true,
-			statusLabel: apiKeyHint ? "Key saved" : "Not signed in",
-			summary: apiKeyHint
-				? `Key ${apiKeyHint} is stored. Send a task to finish signing in.`
-				: "Type a task and send. Anthropic opens if you still need to sign in.",
-			subscriptionAction: "sign_in",
-			subscriptionActionLabel: "Sign in",
-			apiKeyHint,
-			userCode: null,
-			verificationUrl: null,
-		};
-	}
-	if (provider.id === "opencode") {
-		return {
-			provider,
-			readiness: "unsigned",
-			muted: false,
-			statusLabel: apiKeyHint ? "Key saved" : "Not connected",
-			summary: apiKeyHint
-				? `Key ${apiKeyHint} is stored. Connect OpenCode to attach it. No account is required.`
-				: "Connect OpenCode on the workspace. No account is required. Paste a provider key only if you want extra models.",
-			subscriptionAction: "connect",
-			subscriptionActionLabel: "Connect",
-			apiKeyHint,
-			userCode: null,
-			verificationUrl: null,
-		};
-	}
 	return {
 		provider,
 		readiness: "unsigned",
 		muted: true,
 		statusLabel: options.codexSnapshotAvailable
 			? "Saved workspace"
-			: apiKeyHint
-				? "Key saved"
-				: "Not signed in",
+			: "Not signed in",
 		summary: options.codexSnapshotAvailable
 			? "Resume ChatGPT from the saved workspace."
-			: apiKeyHint
-				? `Key ${apiKeyHint} is stored. Sign in with ChatGPT to use Codex.`
-				: "Sign in with ChatGPT, or paste an API key.",
+			: "Sign in with ChatGPT to use Codex.",
 		subscriptionAction: "sign_in",
 		subscriptionActionLabel: options.codexSnapshotAvailable
 			? "Resume"
 			: "Sign in",
-		apiKeyHint,
 		userCode: null,
 		verificationUrl: null,
 	};

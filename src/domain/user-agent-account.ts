@@ -9,7 +9,3 @@ export type UserAgentAccount =
 			email: string | null;
 	  }
 	| { status: "expired"; message: string };
-
-export function agentAccountIsReady(account: UserAgentAccount) {
-	return account.status === "connected";
-}

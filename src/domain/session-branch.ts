@@ -1,5 +1,4 @@
 export const SESSION_BRANCH_PREFIX = "ytimesy";
-export const DEFAULT_CHAT_BRANCH = SESSION_BRANCH_PREFIX;
 const SESSION_BRANCH_SLUG_MAX_LENGTH = 24;
 
 export function isGeneratedSessionBranch(name: string): boolean {

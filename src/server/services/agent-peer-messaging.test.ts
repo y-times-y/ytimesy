@@ -234,7 +234,7 @@ describe("queued peer delivery", () => {
 		expect(fake.send).not.toHaveBeenCalled();
 		expect(machines.exec).not.toHaveBeenCalled();
 	});
-	for (const harness of ["codex", "claude", "api"] as const)
+	for (const harness of ["codex", "api"] as const)
 		it(`wakes an idle ${harness} peer through its own adapter`, async () => {
 			session("b", "root", { harness });
 			await deliverAgentPeerMessage(machines, message, "job");
@@ -262,7 +262,7 @@ describe("queued peer delivery", () => {
 		await deliverAgentPeerMessage(machines, message, "job");
 		expect(fake.send).toHaveBeenCalledTimes(1);
 	});
-	it("recognizes the native runtime's full prompt when retrying delivery", async () => {
+	it("recognizes the full runtime prompt when retrying delivery", async () => {
 		await deliverAgentPeerMessage(machines, message, "job");
 		const text = fake.send.mock.calls[0][2].runtimeText;
 		session("b", "root", {

@@ -50,24 +50,12 @@ importers:
       '@fontsource-variable/inter':
         specifier: ^5.3.0
         version: 5.3.0
-      '@iconify-json/catppuccin':
-        specifier: ^1.2.17
-        version: 1.2.17
-      '@iconify-json/vscode-icons':
-        specifier: ^1.2.78
-        version: 1.2.78
       '@iconify/react':
         specifier: ^6.0.2
         version: 6.0.2(react@19.3.0)
-      '@iconify/types':
-        specifier: ^2.0.0
-        version: 2.0.0
       '@novnc/novnc':
         specifier: ^1.7.0
         version: 1.7.0
-      '@octokit/app':
-        specifier: 16.1.4
-        version: 16.1.4
       '@octokit/rest':
         specifier: 22.0.1
         version: 22.0.1
@@ -231,9 +219,6 @@ importers:
       '@electric-sql/pglite':
         specifier: 0.5.8
         version: 0.5.8
-      '@iconify-json/simple-icons':
-        specifier: 1.2.97
-        version: 1.2.97
       '@repomix/tree-sitter-wasms':
         specifier: 0.1.17
         version: 0.1.17
@@ -1462,15 +1447,6 @@ packages:
     engines: {node: '>=20'}
     peerDependencies:
       hono: ^4
-
-  '@iconify-json/catppuccin@1.2.17':
-    resolution: {integrity: sha512-l1pFOADEUlw+j7V+yfFzBowdE4deeMuI4amqfKaN+7uTI9B0Ho24C86DitQk5zb62NkEM9poOyfuG7WS2bw6jg==}
-
-  '@iconify-json/simple-icons@1.2.97':
-    resolution: {integrity: sha512-Z6PmM6jvWVU7rmLzqbxCLJA7SeqCnK6lMHXtjyzHPLZebwuoojBEcHHycppahDzEeN9xujRkrV5J8QpOhMyNrg==}
-
-  '@iconify-json/vscode-icons@1.2.78':
-    resolution: {integrity: sha512-IGRmD43uJjD3H7wa9BgY5XVIgh2LZiuSxATvTfhmVEoIC44qEwuXmMSY3RDmKXwLfG69zOd13pyiCqTwQN/5JQ==}
 
   '@iconify/react@6.0.2':
     resolution: {integrity: sha512-SMmC2sactfpJD427WJEDN6PMyznTFMhByK9yLW0gOTtnjzzbsi/Ke/XqsumsavFPwNiXs8jSiYeZTmLCLwO+Fg==}
@@ -7160,18 +7136,6 @@ snapshots:
   '@hono/node-server@2.1.1(hono@4.13.7)':
     dependencies:
       hono: 4.13.7
-
-  '@iconify-json/catppuccin@1.2.17':
-    dependencies:
-      '@iconify/types': 2.0.0
-
-  '@iconify-json/simple-icons@1.2.97':
-    dependencies:
-      '@iconify/types': 2.0.0
-
-  '@iconify-json/vscode-icons@1.2.78':
-    dependencies:
-      '@iconify/types': 2.0.0
 
   '@iconify/react@6.0.2(react@19.3.0)':
     dependencies:

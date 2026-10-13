@@ -13,8 +13,6 @@ const mocks = vi.hoisted(() => ({
 	remove: vi.fn(),
 	ack: vi.fn(),
 	send: vi.fn(),
-	nativeAccepted: vi.fn(),
-	nativeStage: vi.fn(),
 }));
 vi.mock("../adapters/server-peer-inbox", () => ({
 	serverPeerMessageAccepted: mocks.accepted,
@@ -28,15 +26,9 @@ vi.mock("./harness-workspace-session", () => ({
 vi.mock("./session-workspace-machines", () => ({
 	machinesForAgentSession: (machines: unknown) => machines,
 }));
-vi.mock("./peer-inbox", () => ({
-	PEER_INBOX_PATH: "/tmp/ytimesy-peer-inbox",
-	peerMessageAccepted: mocks.nativeAccepted,
-	stagePeerMessage: mocks.nativeStage,
-}));
 beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.accepted.mockResolvedValue(false);
-	mocks.nativeAccepted.mockResolvedValue(false);
 	mocks.send.mockReturnValue(
 		Effect.succeed({
 			connection: { status: "authenticated" },
@@ -90,18 +82,6 @@ it("falls back to one idle wakeup when the active turn ended before consuming it
 	expect(mocks.remove).toHaveBeenCalledWith("parent", "event-1");
 	expect(mocks.send).toHaveBeenCalledTimes(1);
 	expect(mocks.ack).toHaveBeenCalledWith("parent", "event-1");
-});
-it("uses the native hook mailbox for a running Claude leader", async () => {
-	await expect(
-		deliverParentTaskNotification(
-			{} as never,
-			{ ...parent, harness: "claude", providerRef: "vm" },
-			"event-1",
-			"Child finished",
-		),
-	).rejects.toThrow("safe point");
-	expect(mocks.nativeStage).toHaveBeenCalled();
-	expect(mocks.send).not.toHaveBeenCalled();
 });
 it("bounds long child summaries before staging them in the mailbox", async () => {
 	await expect(

@@ -202,7 +202,7 @@ export const agentTaskToolDefinitions = [
 					type: "string",
 				},
 				harness: {
-					enum: ["codex", "claude", "api"],
+					enum: ["codex", "api"],
 				},
 				placement: {
 					enum: ["shared", "fresh"],
@@ -241,7 +241,7 @@ export const agentTaskToolDefinitions = [
 					type: "string",
 				},
 				harness: {
-					enum: ["codex", "claude", "api"],
+					enum: ["codex", "api"],
 				},
 				placement: {
 					enum: ["shared", "fresh"],

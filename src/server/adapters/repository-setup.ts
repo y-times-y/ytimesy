@@ -107,10 +107,6 @@ export function pushBranchArgv(directory: string, branch: string) {
 	];
 }
 
-export function commitCreatedOutput(stdout: string) {
-	return !stdout.includes("YTIMESY_NO_COMMIT");
-}
-
 export function installArgv(directory: string, lockfiles: string[]) {
 	if (!lockfiles.includes("package.json")) {
 		return ["bash", "-lc", `cd ${shellSingleQuote(directory)} && true`];

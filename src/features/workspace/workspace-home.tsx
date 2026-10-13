@@ -7,13 +7,8 @@ import { connectedProviderId } from "#/domain/agent-connection";
 import {
 	type AgentProviderId,
 	DEFAULT_COMPOSER_HARNESS_ID,
-	offeredAgentProviderId,
 } from "#/domain/agent-provider";
 import { shouldPollAgentTasks } from "#/domain/agent-task";
-import {
-	claudeSessionRemembersSignIn,
-	rememberedClaudeModels,
-} from "#/domain/claude-auth";
 import {
 	harnessLoginIsPending,
 	RUNNING_TURN_POLL_MS,
@@ -49,7 +44,6 @@ import {
 	listedChatHarnessId,
 	listedChatModelId,
 	listedChatTurnStatus,
-	rememberedClaudeModelIdFromChats,
 	SIDEBAR_PINNED_STORAGE_KEY,
 	type SidebarChat,
 	selectedChatIdAfterDelete,
@@ -481,40 +475,6 @@ export function WorkspaceHome({
 		};
 	}
 
-	function rememberedClaudeId(forHarness: AgentProviderId = harnessId) {
-		return (
-			(forHarness === "claude" &&
-			claudeSessionRemembersSignIn(session.listedModelId)
-				? session.listedModelId
-				: "") ||
-			(forHarness === "claude"
-				? listedChatModelId(sidebarChats, activeSessionId ?? "")
-				: "") ||
-			rememberedClaudeModelIdFromChats(sidebarChats)
-		);
-	}
-
-	function applyRememberedClaude(id: AgentProviderId) {
-		if (id !== "claude") return;
-		const listed = rememberedClaudeId(id);
-		if (!claudeSessionRemembersSignIn(listed)) return;
-		setSession((current) => ({
-			...current,
-			connection: {
-				status: "authenticated",
-				provider: "claude",
-				authMode: "subscription",
-				planType: null,
-				email: null,
-			},
-			models:
-				current.models.length > 0
-					? current.models
-					: rememberedClaudeModels(listed),
-			listedModelId: listed || current.listedModelId,
-		}));
-	}
-
 	useEffect(() => {
 		const mobile =
 			compact ||
@@ -912,7 +872,7 @@ export function WorkspaceHome({
 			return;
 		}
 		if (projectId) setSelectedProjectId(projectId);
-		const newChatHarnessId = offeredAgentProviderId(harnessId);
+		const newChatHarnessId = harnessId;
 		setHarnessId(newChatHarnessId);
 		setComposerDraft(false);
 		setProjectPickerOpen(false);
@@ -1274,7 +1234,6 @@ export function WorkspaceHome({
 								onHarnessIdChange={(id) => {
 									if (session.turnStatus === "running") return;
 									setHarnessId(id);
-									applyRememberedClaude(id);
 								}}
 								onConnect={() => {
 									const epoch = sessionEpoch.current;

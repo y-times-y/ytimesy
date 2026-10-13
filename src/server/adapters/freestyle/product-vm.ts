@@ -29,15 +29,6 @@ export function productCreateVmFields(input: {
 	};
 }
 
-export function privateProjectEnvironmentSnapshotFields(workspaceId: string) {
-	return {
-		slug: `ytimesy-pe-${workspaceId.replaceAll("-", "").slice(0, 16)}`,
-		displayName: "ytimesy project environment",
-		autoDeleteSeconds: -1,
-		public: false as const,
-	};
-}
-
 export function freestyleExecTimeoutMs(requestedMs: number) {
 	return Math.min(Math.max(1, requestedMs), FREESTYLE_EXEC_TIMEOUT_MS_MAX);
 }

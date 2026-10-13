@@ -67,31 +67,6 @@ export function workspaceEnvironmentIsReady(
 	return Boolean(workspace.providerRef || workspace.templateSnapshotId);
 }
 
-export function harnessConnectBlockedReason(
-	workspace: WorkspaceEnvironmentState | null,
-	harnessName: string,
-	kind: "sign_in" | "connect" = "sign_in",
-) {
-	const action =
-		kind === "connect"
-			? `connecting ${harnessName}`
-			: `signing in to ${harnessName}`;
-	if (workspaceEnvironmentIsReady(workspace)) return null;
-	if (!workspace) return `Prepare a workspace before ${action}.`;
-	if (workspace.status === "failed")
-		return (
-			workspace.errorMessage ??
-			`Workspace preparation failed. Retry, then finish ${action}.`
-		);
-	return `Wait for workspace preparation to finish before ${action}.`;
-}
-
-export function codexConnectBlockedReason(
-	workspace: WorkspaceEnvironmentState | null,
-) {
-	return harnessConnectBlockedReason(workspace, "Codex");
-}
-
 export function branchSwitchBlockedReason(
 	status: WorkspaceStatus | undefined,
 ): string | null {

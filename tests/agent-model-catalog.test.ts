@@ -14,7 +14,7 @@ beforeAll(async () => {
 		create table auth_user(id text primary key);
 		create table agent_session(user_id text, harness text, listed_model_id text);
 		insert into auth_user values ('alice'),('bob');
-		insert into agent_session values ('alice','claude','prior-model'),('alice','claude','prior-model');`);
+		insert into agent_session values ('alice','codex','prior-model'),('alice','codex','prior-model');`);
 	await db.exec(
 		await readFile(
 			"supabase/migrations/20260926140000_agent_model_catalog.sql",
@@ -27,11 +27,11 @@ afterAll(async () => {
 });
 
 it("backfills only the owner's previously selected models, without a VM", async () => {
-	expect(await loadAgentModelCatalog("alice", "claude")).toEqual([
+	expect(await loadAgentModelCatalog("alice", "codex")).toEqual([
 		{ id: "prior-model", label: "prior-model" },
 	]);
-	expect(await loadAgentModelCatalog("bob", "claude")).toEqual([]);
-	expect(await loadAgentModelCatalog("alice", "codex")).toEqual([]);
+	expect(await loadAgentModelCatalog("bob", "codex")).toEqual([]);
+	expect(await loadAgentModelCatalog("alice", "api")).toEqual([]);
 });
 
 it("preserves capabilities and does not erase the catalog on disconnect", async () => {
@@ -43,10 +43,10 @@ it("preserves capabilities and does not erase the catalog on disconnect", async 
 	expect(await loadAgentModelCatalog("alice", "codex")).toEqual(models);
 	expect(await loadAgentModelCatalog("bob", "codex")).toEqual([]);
 	await saveAgentModelCatalog("alice", "codex", [
-		{ id: "new", label: "New model" },
+		{ id: "prior-model", label: "prior-model" },
 	]);
 	expect(await loadAgentModelCatalog("alice", "codex")).toEqual([
-		{ id: "new", label: "New model" },
+		{ id: "prior-model", label: "prior-model" },
 	]);
 });
 
@@ -57,8 +57,8 @@ it("denies direct client access", async () => {
 });
 
 it("removes a legacy model saved under the wrong provider", async () => {
-	await saveAgentModelCatalog("bob", "claude", [
-		{ id: "gpt-wrong", label: "Wrong provider" },
+	await saveAgentModelCatalog("bob", "codex", [
+		{ id: "claude-wrong", label: "Wrong provider" },
 	]);
 	await db.exec(
 		await readFile(
@@ -66,8 +66,8 @@ it("removes a legacy model saved under the wrong provider", async () => {
 			"utf8",
 		),
 	);
-	expect(await loadAgentModelCatalog("bob", "claude")).toEqual([]);
-	expect(await loadAgentModelCatalog("alice", "claude")).toEqual([
+	expect(await loadAgentModelCatalog("bob", "codex")).toEqual([]);
+	expect(await loadAgentModelCatalog("alice", "codex")).toEqual([
 		{ id: "prior-model", label: "prior-model" },
 	]);
 });
