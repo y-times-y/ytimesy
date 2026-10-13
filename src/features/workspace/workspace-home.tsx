@@ -65,6 +65,7 @@ import {
 	sidebarChatPrMarkForWorkspace,
 } from "#/domain/sidebar-pr";
 import {
+	agentDesktopActivityInTurn,
 	desktopInspectorShouldStart,
 	type WorkspaceDesktop,
 } from "#/domain/workspace-desktop";
@@ -593,6 +594,41 @@ export function WorkspaceHome({
 			);
 		});
 	}, [loadDesktop, activeProjectId, activeSessionId]);
+
+	// The agent starts the desktop itself for visual QA; show it working.
+	const agentDesktopActivity = agentDesktopActivityInTurn({
+		turnStatus: session.turnStatus,
+		items: session.items,
+	});
+	const followedAgentDesktop = useRef<string | null>(null);
+	const inspectorOpenRef = useRef(inspectorOpen);
+	inspectorOpenRef.current = inspectorOpen;
+	const followedSessionId = useRef(activeSessionId);
+	followedSessionId.current = activeSessionId;
+	useEffect(() => {
+		if (
+			!agentDesktopActivity ||
+			!activeProjectId ||
+			followedAgentDesktop.current === agentDesktopActivity
+		)
+			return;
+		followedAgentDesktop.current = agentDesktopActivity;
+		if (!inspectorOpenRef.current) {
+			setInspectorView("desktop");
+			setInspectorOpen(true);
+		}
+		let attempts = 0;
+		const refresh = () =>
+			void loadDesktop({
+				data: { projectId: activeProjectId, sessionId: activeSessionId },
+			}).then((next) => {
+				if (followedSessionId.current !== activeSessionId) return;
+				if (next.status === "running") setDesktop(next);
+				// The desktop may still be starting when the first tool call shows.
+				else if (++attempts < 12) window.setTimeout(refresh, 5_000);
+			});
+		refresh();
+	}, [agentDesktopActivity, activeProjectId, activeSessionId, loadDesktop]);
 
 	const pollSession =
 		harnessLoginIsPending(session.connection) ||

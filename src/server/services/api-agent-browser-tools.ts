@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { type ToolSet, tool } from "ai";
 import { z } from "zod";
+import { desktopHostname } from "#/domain/workspace-desktop";
 import { browserUseCommand } from "#/server/adapters/browser-use-cli";
 import { isPublicModelAddress } from "#/server/adapters/model-endpoint";
 import {
@@ -52,12 +53,19 @@ export function apiAgentBrowserTools(
 	},
 ): ToolSet {
 	const { signal, once } = input;
+	let viewerExposed: Promise<unknown> | undefined;
 	async function desktop() {
 		signal.throwIfAborted();
 		const workspace = await resolveToolWorkspace(input);
 		const { machines, vm } = workspace;
 		const result = await ensureDesktopProcesses(machines, vm);
 		if (result.exitCode) throw new Error("The shared desktop could not start.");
+		// Route the Desktop tab's viewer to a desktop the agent started, as the
+		// tab's own start does. Viewing is optional; the agent's QA is not.
+		viewerExposed ??= machines
+			.exposeHttp(vm, 6080, desktopHostname(vm))
+			.catch(() => undefined);
+		await viewerExposed;
 		return workspace;
 	}
 	const tools: ToolSet = {
