@@ -28,6 +28,8 @@ export interface WorkspaceRuntime {
 	snapshot(providerRef: string, slug: string): Promise<string>;
 	snapshotExists?(snapshotId: string): Promise<boolean>;
 	pause?(providerRef: string): Promise<void>;
+	/** Succeeds when the machine is already gone. */
+	delete?(providerRef: string): Promise<void>;
 }
 
 export class UnconfiguredWorkspaceRuntime implements WorkspaceRuntime {
@@ -113,6 +115,12 @@ export class MemoryWorkspaceRuntime implements WorkspaceRuntime {
 		if (![...this.machines.values()].includes(providerRef))
 			throw new Error("Workspace machine is missing.");
 		this.paused.push(providerRef);
+	}
+	readonly deleted: string[] = [];
+	async delete(providerRef: string) {
+		for (const [slug, ref] of this.machines)
+			if (ref === providerRef) this.machines.delete(slug);
+		this.deleted.push(providerRef);
 	}
 }
 
