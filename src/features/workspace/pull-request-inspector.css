@@ -478,7 +478,7 @@
 	font-size: 11.5px;
 	line-height: 18px;
 }
-.pr-hunk pre span {
+.pr-hunk pre > span {
 	display: block;
 	padding: 0 10px 0 0;
 	white-space: pre;
