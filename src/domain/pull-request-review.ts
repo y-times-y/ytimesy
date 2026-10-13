@@ -43,6 +43,7 @@ export type PullRequestDetail = {
 	readonly base: string;
 	readonly author: string;
 	readonly authorAvatarUrl: string | null;
+	readonly createdAt: string;
 	readonly updatedAt: string;
 	readonly mergeable: boolean | null;
 	readonly mergeableState: string | null;

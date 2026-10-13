@@ -1066,9 +1066,9 @@ a.sidebar-chat-pr,
 }
 .diff-file {
 	overflow: hidden;
-	border: 1px solid rgba(255, 255, 255, 0.08);
+	border: 1px solid #ffffff12;
 	border-radius: 10px;
-	background: #1b1b1b;
+	background: #141414;
 }
 .diff-file > summary {
 	display: flex;
@@ -1129,26 +1129,26 @@ a.sidebar-chat-pr,
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-	color: #fff;
-	font-size: 14px;
+	color: #ededed;
+	font-size: 13px;
 }
 .diff-preview {
-	--diff-background-color: #1b1b1b;
+	--diff-background-color: #141414;
 	--diff-text-color: #ededed;
 	--diff-font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-	--diff-gutter-insert-background-color: #253025;
+	--diff-gutter-insert-background-color: #3fb9501f;
 	--diff-gutter-insert-text-color: #8ddb9d;
-	--diff-gutter-delete-background-color: #352424;
+	--diff-gutter-delete-background-color: #f851491f;
 	--diff-gutter-delete-text-color: #ffa5a2;
-	--diff-code-insert-background-color: #253025;
-	--diff-code-delete-background-color: #352424;
+	--diff-code-insert-background-color: #3fb95014;
+	--diff-code-delete-background-color: #f8514914;
 	margin: 0;
 	padding: 8px 0;
 	overflow: auto;
-	background: #1b1b1b;
+	background: #141414;
 	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-	font-size: 13px;
-	line-height: 21px;
+	font-size: 12px;
+	line-height: 20px;
 }
 .diff-preview-empty {
 	margin: 0;
@@ -1168,7 +1168,7 @@ a.sidebar-chat-pr,
 	min-width: 100%;
 }
 .diff-preview .diff-line {
-	line-height: 21px;
+	line-height: 20px;
 }
 .diff-preview .diff-gutter-col:first-child,
 .diff-preview .diff-line > .diff-gutter:first-child {
