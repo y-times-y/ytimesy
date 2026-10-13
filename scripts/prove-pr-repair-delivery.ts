@@ -134,10 +134,6 @@ startModelWorkflowExecutor(createFreestyleWorkspaceMachines('no-inference-or-com
 			"src/server/adapters/peer-inbox.py",
 			"/home/ubuntu/adapters/peer-inbox.py",
 		],
-		[
-			"src/server/adapters/codex/login-daemon.py",
-			`${guestRoot}/login-daemon.py`,
-		],
 		["src/server/adapters/claude/turn-pty.py", `${guestRoot}/turn-pty.py`],
 		[
 			"src/server/adapters/claude/task-tool-server.py",

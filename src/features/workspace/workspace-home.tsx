@@ -89,6 +89,7 @@ import {
 import {
 	connectCodexSession,
 	getCodexSession,
+	pollCodexLogin,
 	sendCodexSessionTask,
 	stopCodexSessionTurn,
 } from "../sessions/codex-session.fn";
@@ -664,6 +665,65 @@ export function WorkspaceHome({
 				sessionRead.data.view,
 			);
 	}, [sessionRead.data]);
+
+	// A ChatGPT sign-in is per user, not per chat: poll it even from a new-chat
+	// draft, then load the now-connected models and send state.
+	const pollLogin = useServerFn(pollCodexLogin);
+	const codexLogin = useQuery({
+		queryKey: ["codex-device-login"],
+		queryFn: () => pollLogin(),
+		enabled:
+			session.connection.status === "awaiting_device_code" &&
+			session.connection.provider === "codex",
+		refetchInterval: 3_000,
+		refetchIntervalInBackground: true,
+		gcTime: 0,
+	});
+	useEffect(() => {
+		const login = codexLogin.data;
+		if (!login || login.status === "pending") return;
+		setSession((current) =>
+			current.connection.status !== "awaiting_device_code"
+				? current
+				: {
+						...current,
+						connection:
+							login.status === "failed"
+								? {
+										status: "failed",
+										provider: "codex",
+										message: login.message,
+									}
+								: login.status === "connected"
+									? {
+											status: "authenticated",
+											provider: "codex",
+											authMode: "chatgpt",
+											planType: null,
+											email: null,
+										}
+									: { status: "disconnected" },
+					},
+		);
+		if (login.status !== "connected") return;
+		void queryClient.invalidateQueries({ queryKey: ["agent-model-catalog"] });
+		void getCodexSession({
+			data: {
+				projectId: activeProjectId ?? undefined,
+				sessionId: activeSessionId ?? undefined,
+				harnessId: "codex",
+			},
+		})
+			.then((next) =>
+				setSession((current) => ({
+					...current,
+					connection: next.connection,
+					models: next.models,
+					canSend: next.canSend,
+				})),
+			)
+			.catch(() => undefined);
+	}, [codexLogin.data, activeProjectId, activeSessionId, queryClient]);
 
 	useEffect(() => {
 		if (

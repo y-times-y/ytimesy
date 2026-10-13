@@ -5,13 +5,11 @@ import { agentTaskToolDefinitions } from "#/domain/agent-task-definitions";
 import { embedTaskToolDefinitions } from "./task-tool-source";
 
 describe("shared task tool definitions", () => {
-	for (const provider of ["codex", "claude"]) {
+	for (const provider of ["claude"]) {
 		it(`embeds the same schemas into the ${provider} adapter`, () => {
-			const filename =
-				provider === "codex" ? "login-daemon.py" : "task-tool-server.py";
 			const source = embedTaskToolDefinitions(
 				readFileSync(
-					new URL(`./${provider}/${filename}`, import.meta.url),
+					new URL(`./${provider}/task-tool-server.py`, import.meta.url),
 					"utf8",
 				),
 			);

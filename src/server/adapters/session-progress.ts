@@ -5,7 +5,6 @@ import {
 import { sessionItemsFromUnknown } from "#/domain/session-item";
 import type { SessionProgress } from "#/domain/session-progress";
 import { parseClaudeAuthStatus } from "./claude/login-session";
-import { parseCodexLoginStatus } from "./codex/login-status";
 
 export type ProgressFiles = Record<string, string | null>;
 
@@ -28,20 +27,6 @@ export const progressAdapters = {
 			} catch {
 				return null;
 			}
-		},
-	},
-	codex: {
-		paths: { status: "/tmp/ytimesy-auth-status.json" },
-		parse(files: ProgressFiles, sessionId: string): SessionProgress | null {
-			const status = parseCodexLoginStatus(files.status);
-			return status.stage === "authenticated"
-				? {
-						sessionId,
-						items: status.items,
-						turnStatus: status.turnStatus,
-						...(status.usage ? { usage: status.usage } : {}),
-					}
-				: null;
 		},
 	},
 	claude: {

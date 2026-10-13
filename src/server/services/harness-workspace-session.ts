@@ -104,7 +104,6 @@ import {
 } from "#/server/proof/persist-claude-auth-snapshot";
 import { decryptHarnessApiKey } from "#/server/secrets/harness-key-store";
 import { agentCapacity } from "../adapters/agent-capacity";
-import { hasManagedCodexAuth } from "../auth/codex-managed-auth";
 import {
 	discoverAgentPeers,
 	queueAgentPeerMessage,
@@ -126,16 +125,16 @@ import {
 } from "./api-workspace-session";
 import { awaitStoppedTurn } from "./await-stopped-turn";
 import {
+	connectSubscriptionSession,
+	readSubscriptionLoginSession,
 	readSubscriptionSession,
 	sendSubscriptionTask,
 	stopSubscriptionTask,
 } from "./codex-subscription-session";
 import {
 	type CodexSessionScope,
-	connectCodexWorkspaceSession,
 	emptyCodexSession,
 	type PublicCodexSession,
-	readCodexWorkspaceSession,
 } from "./codex-workspace-session";
 import {
 	persistBoundSessionView,
@@ -310,16 +309,11 @@ export function readHarnessWorkspaceSession(
 	scope: HarnessSessionScope,
 ): Effect.Effect<PublicHarnessSession> {
 	if (scope.harnessId === "codex")
-		return Effect.gen(function* () {
-			// Native daemon is used only to finish an explicitly initiated device-code login.
-			if (!(yield* Effect.promise(() => hasManagedCodexAuth(scope.userId))))
-				return yield* readCodexWorkspaceSession(machines, scope, true);
-			return yield* withSiblingSideChat(
-				machines,
-				scope,
-				Effect.promise(() => readSubscriptionSession(scope)),
-			);
-		});
+		return withSiblingSideChat(
+			machines,
+			scope,
+			Effect.promise(() => readSubscriptionLoginSession(scope)),
+		);
 	if (scope.harnessId === "api")
 		return withSiblingSideChat(
 			machines,
@@ -381,13 +375,8 @@ export function connectHarnessWorkspaceSession(
 ): Effect.Effect<PublicHarnessSession> {
 	if (scope.harnessId === "api")
 		return Effect.promise(() => readApiWorkspaceSession(scope));
-	if (scope.harnessId === "codex") {
-		return Effect.gen(function* () {
-			if (yield* Effect.promise(() => hasManagedCodexAuth(scope.userId)))
-				return yield* Effect.promise(() => readSubscriptionSession(scope));
-			return yield* connectCodexWorkspaceSession(machines, scope);
-		});
-	}
+	if (scope.harnessId === "codex")
+		return Effect.promise(() => connectSubscriptionSession(scope));
 	const harnessName = agentProviderById(scope.harnessId).name;
 	return Effect.gen(function* () {
 		const workspace = yield* Effect.tryPromise(() =>

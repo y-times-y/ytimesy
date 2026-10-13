@@ -2,19 +2,6 @@ import { describe, expect, it } from "vitest";
 import { progressAdapters } from "./session-progress";
 
 describe("provider-independent progress", () => {
-	it("does not emit authentication payloads", () => {
-		expect(
-			progressAdapters.codex.parse(
-				{
-					status: JSON.stringify({
-						stage: "awaiting_device_code",
-						userCode: "secret",
-					}),
-				},
-				"s",
-			),
-		).toBeNull();
-	});
 	it("normalizes Claude partial text, stable replay IDs and completion", () => {
 		const files = {
 			status: JSON.stringify({
