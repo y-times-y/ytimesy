@@ -149,12 +149,11 @@ export function WorkspaceOverview({
 						Pull requests <span>{pullRequests.length}</span>
 					</h2>
 					{pullRequests.map((pr) => (
-						<a
+						<button
 							key={pr.number}
+							type="button"
 							className="overview-pr"
-							href={pr.url}
-							target="_blank"
-							rel="noreferrer"
+							onClick={() => onOpen("pr")}
 						>
 							<GitPullRequest size={16} />
 							<span>
@@ -164,7 +163,7 @@ export function WorkspaceOverview({
 								</small>
 							</span>
 							<ChevronRight size={14} />
-						</a>
+						</button>
 					))}
 				</section>
 			) : null}

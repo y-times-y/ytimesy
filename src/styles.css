@@ -3318,3 +3318,351 @@ a.sidebar-chat-pr,
 .settings-section-head + .machine-size-settings {
 	margin-top: 8px;
 }
+
+/* ── Settings, aligned with the model picker's language ───────────────────
+   Flat hairline lists instead of boxed cards, quiet ghost buttons, small
+   muted group labels, 13px type. Later rules override the first pass. */
+.settings-backdrop {
+	background: #000000a6;
+	backdrop-filter: none;
+}
+.settings-panel {
+	width: min(860px, calc(100vw - 32px));
+	height: min(640px, calc(100vh - 32px));
+	border: 1px solid #3b3b3b;
+	border-radius: 14px;
+	background: #1c1c1c;
+	box-shadow: 0 24px 64px #0009;
+}
+.settings-panel-head {
+	min-height: 48px;
+	padding: 0 14px 0 18px;
+	border-bottom: 1px solid #ffffff12;
+}
+.settings-panel-head h2 {
+	font-size: 14px;
+	font-weight: 550;
+}
+.settings-shell {
+	grid-template-columns: 184px minmax(0, 1fr);
+}
+.settings-nav {
+	gap: 1px;
+	padding: 10px 8px;
+	border-right: 1px solid #ffffff12;
+	background: #191919;
+}
+.settings-nav button {
+	min-height: 30px;
+	padding: 0 9px;
+	border-radius: 7px;
+	color: #a3a3a3;
+	font-size: 13px;
+}
+.settings-nav button svg {
+	opacity: 0.8;
+}
+.settings-nav button:hover {
+	background: #ffffff0d;
+	color: #ececec;
+}
+.settings-nav button[aria-current="page"] {
+	background: #ffffff14;
+	color: #f4f4f4;
+}
+.settings-body {
+	max-width: 640px;
+	padding: 22px 28px 40px;
+}
+.settings-body h3,
+.settings-section-head h3 {
+	margin: 0;
+	color: #ececec;
+	font-size: 13px;
+	font-weight: 550;
+}
+.settings-section-head {
+	align-items: center;
+	margin-bottom: 8px;
+}
+.settings-section-head p {
+	margin-top: 2px;
+	color: #8f8f8f;
+	font-size: 12px;
+	line-height: 17px;
+}
+.settings-section + .settings-section,
+.settings-section-gap {
+	margin-top: 28px;
+}
+/* Flat list: hairlines between rows, one hairline above and below the group. */
+.settings-group {
+	margin: 0 0 8px;
+	overflow: visible;
+	border: 0;
+	border-top: 1px solid #ffffff12;
+	border-bottom: 1px solid #ffffff12;
+	border-radius: 0;
+	background: transparent;
+}
+.settings-row {
+	min-height: 48px;
+	padding: 9px 2px;
+}
+.settings-row + .settings-row,
+.model-connection-item + .model-connection-item {
+	border-top: 1px solid #ffffff0d;
+}
+.settings-row-title {
+	color: #ececec;
+	font-size: 13px;
+	font-weight: 500;
+}
+.settings-row-meta {
+	color: #8f8f8f;
+	font-size: 12px;
+}
+.settings-row-icon {
+	width: 18px;
+	height: 18px;
+	border: 0;
+	background: transparent;
+	color: #a3a3a3;
+}
+.settings-identity img,
+.settings-initials {
+	width: 32px;
+	height: 32px;
+}
+/* Quiet ghost buttons, as in the picker; the primary action stays solid. */
+.settings-secondary {
+	min-height: 28px;
+	padding: 0 10px;
+	border: 1px solid transparent;
+	border-radius: 7px;
+	background: #ffffff0d;
+	color: #d4d4d4;
+	font-size: 12px;
+}
+.settings-secondary:hover {
+	background: #ffffff1a;
+	color: #f4f4f4;
+}
+.settings-primary {
+	min-height: 28px;
+	padding: 0 12px;
+	border-radius: 7px;
+	font-size: 12px;
+	font-weight: 550;
+}
+.settings-badge {
+	gap: 6px;
+	padding: 0;
+	border: 0;
+	color: #8f8f8f;
+	font-size: 12px;
+}
+.settings-badge[data-tone="ok"] {
+	color: #a3a3a3;
+}
+.settings-chip {
+	border: 0;
+	padding: 2px 6px;
+	border-radius: 5px;
+	background: #ffffff0d;
+	color: #a3a3a3;
+}
+.settings-empty {
+	padding: 16px 2px;
+	color: #8f8f8f;
+	font-size: 12px;
+	text-align: left;
+}
+.settings-group-body {
+	padding: 12px 2px;
+}
+.settings-form-grid {
+	padding: 12px 2px;
+	gap: 10px;
+}
+.settings-field > span {
+	color: #8f8f8f;
+	font-size: 12px;
+}
+.settings-field input,
+.settings-input,
+.settings-panel [data-slot="select-trigger"] {
+	height: 30px;
+	border: 1px solid #ffffff17;
+	border-radius: 7px;
+	background: #ffffff08;
+	font-size: 13px;
+}
+.settings-field input:focus-visible,
+.settings-input:focus-visible {
+	border-color: #ffffff33;
+	background: #ffffff0d;
+}
+.settings-meter {
+	height: 4px;
+	margin: 8px 0 6px;
+	background: #ffffff14;
+}
+.settings-meter > span {
+	background: #d4d4d4;
+}
+.settings-usage-figure {
+	font-size: 15px;
+}
+.settings-usage-figure small {
+	font-size: 12px;
+}
+/* Machine sizes as a flat radio list. */
+.machine-size-list {
+	gap: 0;
+	border-top: 1px solid #ffffff12;
+	border-bottom: 1px solid #ffffff12;
+}
+.machine-size-option {
+	padding: 10px 2px;
+	border: 0;
+	border-radius: 0;
+	background: transparent;
+}
+.machine-size-option + .machine-size-option {
+	border-top: 1px solid #ffffff0d;
+}
+.machine-size-option:hover {
+	background: #ffffff08;
+}
+.machine-size-option[data-state="checked"] {
+	border-color: transparent;
+	background: transparent;
+}
+.machine-size-title {
+	font-size: 13px;
+	font-weight: 500;
+}
+.machine-size-description,
+.machine-size-resources,
+.machine-size-note {
+	color: #8f8f8f;
+	font-size: 12px;
+}
+.machine-size-heading h3 {
+	font-size: 13px;
+}
+.codex-usage-line {
+	font-size: 12px;
+}
+
+.settings-row .settings-identity {
+	margin: 0;
+}
+
+/* Plugins and MCP inside Settings: the same flat list as the other sections. */
+.settings-panel .integrations-label {
+	margin: 18px 0 6px;
+	color: #8f8f8f;
+	font-size: 12px;
+	font-weight: 500;
+	letter-spacing: 0;
+	text-transform: none;
+}
+.settings-panel .integration-grid {
+	display: flex;
+	flex-direction: column;
+	gap: 0;
+	border-top: 1px solid #ffffff12;
+	border-bottom: 1px solid #ffffff12;
+}
+.settings-panel .integration-card {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: center;
+	column-gap: 16px;
+	row-gap: 2px;
+	padding: 10px 2px;
+	border: 0;
+	border-radius: 0;
+	background: transparent;
+}
+.settings-panel .integration-card + .integration-card {
+	border-top: 1px solid #ffffff0d;
+}
+.settings-panel .integration-card-head {
+	grid-column: 1;
+	gap: 10px;
+	font-size: 13px;
+}
+.settings-panel .integration-card-head strong {
+	font-weight: 500;
+}
+.settings-panel .integration-card .integration-desc {
+	grid-column: 1;
+	margin: 0 0 0 34px;
+	color: #8f8f8f;
+	font-size: 12px;
+	-webkit-line-clamp: 1;
+	line-clamp: 1;
+}
+.settings-panel .integration-card .integration-field {
+	grid-column: 1 / -1;
+	margin-left: 34px;
+}
+.settings-panel .integration-card > .integration-button {
+	grid-column: 2;
+	grid-row: 1 / span 2;
+	min-height: 28px;
+	padding: 0 10px;
+	border: 1px solid transparent;
+	border-radius: 7px;
+	background: #ffffff0d;
+	color: #d4d4d4;
+	font-size: 12px;
+}
+.settings-panel .integration-card > .integration-button:hover {
+	background: #ffffff1a;
+}
+.settings-panel .integration-card-head img,
+.settings-panel .integration-card-head svg,
+.settings-panel .integration-card-head > :first-child {
+	width: 24px;
+	height: 24px;
+}
+.settings-panel .integration-list {
+	border-top: 1px solid #ffffff12;
+	border-bottom: 1px solid #ffffff12;
+}
+.settings-panel .integration-row {
+	padding: 10px 2px;
+	border: 0;
+	background: transparent;
+}
+.settings-panel .integration-row + .integration-row {
+	border-top: 1px solid #ffffff0d;
+}
+.settings-panel .integrations-head h3,
+.settings-panel .integrations-head h4 {
+	font-size: 13px;
+}
+.settings-section-head + .machine-size-settings,
+.settings-panel .machine-size-settings {
+	margin-top: 22px;
+}
+.model-connection-verify {
+	padding: 0 2px 12px;
+}
+.settings-panel .integration-button {
+	min-height: 28px;
+	padding: 0 10px;
+	border: 1px solid transparent;
+	border-radius: 7px;
+	background: #ffffff0d;
+	color: #d4d4d4;
+	font-size: 12px;
+}
+.settings-panel .integration-button:hover {
+	background: #ffffff1a;
+	color: #f4f4f4;
+}
