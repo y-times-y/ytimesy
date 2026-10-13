@@ -337,7 +337,7 @@ export async function admitVmCreate(
 export async function reconcilePausedVm(vm: Vm) {
 	if (!infrastructureAdmissionEnabled()) return;
 	const data = await vm.data();
-	if (!data.slug || data.state !== "paused" || data.totalRunSeconds == null)
+	if (!data.slug || !settledState(data.state) || data.totalRunSeconds == null)
 		return;
 	await lockedVm(data.slug, async (client) => {
 		const result = await client.query<Admission>(
@@ -347,12 +347,12 @@ export async function reconcilePausedVm(vm: Vm) {
 		const row = result.rows[0];
 		if (!row || row.vm_id !== data.id) return;
 		const current = await vm.data();
-		if (current.state !== "paused" || current.totalRunSeconds == null) return;
+		if (!settledState(current.state) || current.totalRunSeconds == null) return;
 		const cap = Math.floor(current.totalRunSeconds);
 		await vm.update({ maxRunTotalSeconds: cap, automaticRestart: false });
 		const confirmed = await vm.data();
 		if (
-			confirmed.state !== "paused" ||
+			!settledState(confirmed.state) ||
 			confirmed.maxRunTotalSeconds !== cap ||
 			confirmed.totalRunSeconds !== current.totalRunSeconds
 		)
@@ -377,6 +377,37 @@ export async function reconcilePausedVm(vm: Vm) {
 	});
 }
 
+/** A paused or stopped VM accrues no runtime, so its hold can be settled. */
+function settledState(state: string | null | undefined) {
+	return state === "paused" || state === "stopped";
+}
+
+/**
+ * A VM deleted before its hold was settled (normal deletion pauses, and so
+ * settles, first) has no runtime left to read: its prepaid hold becomes usage,
+ * so deleting a VM can never turn into free compute.
+ */
+async function settleDeletedVm(vmId: string) {
+	const row = (
+		await database().query<{
+			reservation_id: string;
+			user_id: string;
+			reserved_micro_usd: string;
+		}>(
+			`select a.reservation_id,a.user_id,r.reserved_micro_usd from infrastructure_vm_admission a
+			 join infrastructure_usage_reservation r on r.id=a.reservation_id
+			 where a.vm_id=$1 and r.consumed_micro_usd is null`,
+			[vmId],
+		)
+	).rows[0];
+	if (!row) return;
+	await settleInfrastructureUsage({
+		id: row.reservation_id,
+		userId: row.user_id,
+		consumedMicroUsd: Number(row.reserved_micro_usd),
+	});
+}
+
 export async function reconcileInfrastructureVms(client: Freestyle) {
 	if (!infrastructureAdmissionEnabled()) return;
 	const result = await database().query<{ vm_id: string }>(
@@ -393,7 +424,13 @@ export async function reconcileInfrastructureVms(client: Freestyle) {
 			)
 				await admitVmResume(vm, data, 120);
 			else await reconcilePausedVm(vm);
-		} catch {
+		} catch (error) {
+			if (error instanceof FreestyleApiError && error.status === 404) {
+				await settleDeletedVm(row.vm_id).catch(() =>
+					console.warn("Deleted VM usage could not be settled yet."),
+				);
+				continue;
+			}
 			console.warn(
 				"VM usage reconciliation deferred; its reservation remains protected.",
 			);

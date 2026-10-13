@@ -1,5 +1,21 @@
 import type { CodexUsage } from "#/domain/codex-usage";
 
+function windowLabel(minutes?: number | null) {
+	if (!minutes) return "Usage window";
+	if (minutes % (60 * 24 * 7) === 0) return "Weekly limit";
+	if (minutes % 60 === 0) return `${minutes / 60}-hour limit`;
+	return `${minutes}-minute limit`;
+}
+
+function resetLabel(resetsAt?: number | null) {
+	if (!resetsAt) return null;
+	return `Resets ${new Date(resetsAt * 1000).toLocaleString(undefined, {
+		weekday: "short",
+		hour: "numeric",
+		minute: "2-digit",
+	})}`;
+}
+
 export function CodexSubscriptionUsage({ usage }: { usage?: CodexUsage }) {
 	const buckets = usage?.limits?.rateLimitsByLimitId;
 	const limits =
@@ -10,33 +26,41 @@ export function CodexSubscriptionUsage({ usage }: { usage?: CodexUsage }) {
 				: [];
 	return (
 		<section
-			className="settings-card codex-subscription-usage"
+			className="settings-group settings-group-body codex-subscription-usage"
 			aria-label="Codex subscription usage"
 		>
-			<strong>Codex subscription · shared across your account</strong>
+			<p className="settings-row-title">ChatGPT subscription limits</p>
 			{limits.length ? (
 				limits.map(([id, bucket]) => (
 					<div key={id}>
-						{limits.length > 1 ? <p>{bucket.limitName ?? id}</p> : null}
+						{limits.length > 1 ? (
+							<p className="settings-row-meta">{bucket.limitName ?? id}</p>
+						) : null}
 						{[bucket.primary, bucket.secondary].map((window, index) =>
 							window ? (
-								<div key={index === 0 ? "primary" : "secondary"}>
-									<span>
-										{window.windowDurationMins
-											? `${window.windowDurationMins / 60}h window`
-											: "Usage window"}{" "}
-										· {window.usedPercent}% used
-									</span>
-									<meter
-										min={0}
-										max={100}
-										value={window.usedPercent}
+								<div
+									key={index === 0 ? "primary" : "secondary"}
+									className="codex-usage-window"
+								>
+									<div className="codex-usage-line">
+										<span>{windowLabel(window.windowDurationMins)}</span>
+										<span>{window.usedPercent}% used</span>
+									</div>
+									<div
+										className="settings-meter"
+										data-tone={window.usedPercent >= 85 ? "low" : undefined}
+										role="meter"
 										aria-label="Subscription usage"
-									/>
+										aria-valuemin={0}
+										aria-valuemax={100}
+										aria-valuenow={window.usedPercent}
+									>
+										<span style={{ width: `${window.usedPercent}%` }} />
+									</div>
 									{window.resetsAt ? (
-										<small>
-											Resets {new Date(window.resetsAt * 1000).toLocaleString()}
-										</small>
+										<p className="settings-row-meta">
+											{resetLabel(window.resetsAt)}
+										</p>
 									) : null}
 								</div>
 							) : null,
@@ -44,13 +68,8 @@ export function CodexSubscriptionUsage({ usage }: { usage?: CodexUsage }) {
 					</div>
 				))
 			) : (
-				<p>Subscription usage unavailable.</p>
+				<p className="settings-row-meta">Subscription usage unavailable.</p>
 			)}
-			{usage?.updatedAt ? (
-				<small>
-					Last updated {new Date(usage.updatedAt * 1000).toLocaleTimeString()}
-				</small>
-			) : null}
 		</section>
 	);
 }

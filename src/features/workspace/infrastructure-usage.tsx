@@ -23,6 +23,56 @@ const minutes = (amount: number) =>
 		maximumFractionDigits: 1,
 	});
 
+const wholeMinutes = (amount: number) =>
+	Math.max(
+		0,
+		Math.floor(amount / MICRO_USD_PER_STANDARD_MINUTE),
+	).toLocaleString("en-US");
+
+function UsageSummary({
+	usage,
+}: {
+	usage: {
+		remainingMicroUsd: number;
+		allowanceMicroUsd: number;
+		consumedMicroUsd: number;
+		reservedMicroUsd: number;
+	};
+}) {
+	const share =
+		usage.allowanceMicroUsd > 0
+			? Math.min(
+					1,
+					Math.max(0, usage.remainingMicroUsd / usage.allowanceMicroUsd),
+				)
+			: 0;
+	return (
+		<div className="settings-group settings-group-body">
+			<div className="settings-usage-figure">
+				{wholeMinutes(usage.remainingMicroUsd)}
+				<small>of {wholeMinutes(usage.allowanceMicroUsd)} minutes left</small>
+			</div>
+			<div
+				className="settings-meter"
+				data-tone={share < 0.15 ? "low" : undefined}
+				role="meter"
+				aria-label="Cloud minutes left"
+				aria-valuemin={0}
+				aria-valuemax={100}
+				aria-valuenow={Math.round(share * 100)}
+			>
+				<span style={{ width: `${share * 100}%` }} />
+			</div>
+			<p className="settings-row-meta">
+				{wholeMinutes(usage.consumedMicroUsd)} used
+				{usage.reservedMicroUsd > 0
+					? ` · ${wholeMinutes(usage.reservedMicroUsd)} held for running machines`
+					: ""}
+			</p>
+		</div>
+	);
+}
+
 export function InfrastructureUsage() {
 	const readUsage = useServerFn(infrastructureUsageFn);
 	const readUsers = useServerFn(infrastructureUsersFn);
@@ -90,29 +140,22 @@ export function InfrastructureUsage() {
 	}
 	return (
 		<section className="settings-section" aria-label="Cloud execution usage">
-			<h3>Cloud execution</h3>
-			<p className="settings-copy">
-				Cloud minutes reset monthly in UTC. Larger machines consume more
-				minutes. Model billing is separate.
-			</p>
+			<header className="settings-section-head">
+				<div>
+					<h3>Cloud minutes</h3>
+					<p>
+						Time your agents' machines run this month (UTC). Larger machines use
+						minutes faster. Model usage is billed by your model provider.
+					</p>
+				</div>
+			</header>
 			{usage.isPending ? (
 				<p className="settings-copy">Checking usage…</p>
 			) : null}
 			{usage.error ? (
 				<p role="alert">Cloud usage is unavailable. Please retry.</p>
 			) : null}
-			{usage.data ? (
-				<>
-					<p>
-						{minutes(usage.data.remainingMicroUsd)} cloud minutes remaining of{" "}
-						{minutes(usage.data.allowanceMicroUsd)}
-					</p>
-					<p className="settings-copy">
-						Used {minutes(usage.data.consumedMicroUsd)} · Reserved{" "}
-						{minutes(usage.data.reservedMicroUsd)}
-					</p>
-				</>
-			) : null}
+			{usage.data ? <UsageSummary usage={usage.data} /> : null}
 			{usage.data?.admin ? (
 				<form onSubmit={submit} className="settings-usage-admin">
 					<h4>Admin allowance controls</h4>
@@ -214,12 +257,6 @@ export function InfrastructureUsage() {
 				</section>
 			) : null}
 			{usage.data?.admin ? <InfrastructureStatements /> : null}
-			{usage.data?.requiresAdminSignIn ? (
-				<p className="settings-copy">
-					Administrator controls require a real sign-in, not the local preview
-					identity. <a href="/auth/sign-in">Sign in</a>
-				</p>
-			) : null}
 			{usage.data?.admin && audit.data?.length ? (
 				<details className="settings-usage-admin">
 					<summary>Recent allowance changes</summary>

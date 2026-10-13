@@ -1,6 +1,7 @@
 import { posix } from "node:path";
 import { Effect } from "effect";
 import type { WorkspaceFilePreview } from "#/domain/file-preview";
+import { parseGitDiffChanges } from "#/domain/git-diff";
 import { WorkspaceId } from "#/domain/ids";
 import { posixShellQuoted } from "#/domain/posix-command";
 import {
@@ -8,6 +9,7 @@ import {
 	resolveProjectFile,
 } from "#/domain/project-files";
 import { projectFolderName, repositoriesForProject } from "#/domain/projects";
+import type { FileChangeEntry } from "#/domain/session-item";
 import {
 	projectCommandFromFile,
 	type SlashCommand,
@@ -21,6 +23,7 @@ import {
 	workspaceSourceWriteText,
 } from "#/domain/workspace-explorer";
 import { PROJECT_CWD_PATH } from "#/server/adapters/freestyle/clone-project";
+import { agentSessionMetadataForOwner } from "../adapters/agent-sessions";
 import { projectForOwner } from "../adapters/projects";
 import { peekAgentSessionMachine } from "./agent-session-machine";
 import { filePreviewCommand } from "./file-preview-command";
@@ -228,6 +231,65 @@ export function readWorkspaceFilePreview(
 				},
 		),
 	);
+}
+
+/**
+ * Everything the chat changed against the branch it started from: committed,
+ * staged, unstaged and new files, read from git in the workspace. Null when the
+ * machine is asleep (it is never started for this).
+ */
+export function readWorkspaceGitChanges(
+	machines: WorkspaceMachines,
+	scope: ExplorerScope,
+): Effect.Effect<FileChangeEntry[] | null> {
+	return withRunningCheckout(machines, scope, (workspaceId, _root, roots) =>
+		Effect.gen(function* () {
+			const session = scope.sessionId
+				? yield* Effect.tryPromise(() =>
+						agentSessionMetadataForOwner(
+							scope.userId,
+							scope.sessionId as string,
+						),
+					).pipe(Effect.catchAll(() => Effect.succeed(null)))
+				: null;
+			const base = session?.baseBranch || session?.selectedBranch || "";
+			const changes: FileChangeEntry[] = [];
+			for (const [index, root] of roots.entries()) {
+				const result = yield* Effect.tryPromise(() =>
+					machines.exec(
+						workspaceId,
+						`bash -c ${posixShellQuoted(gitChangesScript(root.directory, index === 0 ? base : ""))}`,
+						20_000,
+					),
+				);
+				if (result.exitCode !== 0) return null;
+				changes.push(
+					...parseGitDiffChanges(
+						result.stdout,
+						roots.length > 1 ? `${root.name}/` : "",
+					),
+				);
+			}
+			return changes;
+		}).pipe(Effect.catchAll(() => Effect.succeed(null))),
+	);
+}
+
+/** Diff against the merge base with the chat's base branch, plus untracked files. */
+function gitChangesScript(directory: string, base: string) {
+	return `set -o pipefail
+cd ${posixShellQuoted(directory)} || exit 3
+base=""
+for ref in ${base ? `${posixShellQuoted(`origin/${base}`)} ${posixShellQuoted(base)} ` : ""}'@{upstream}' origin/HEAD; do
+  base=$(git merge-base HEAD "$ref" 2>/dev/null) && break
+done
+[ -n "$base" ] || base=HEAD
+{
+  git -c core.quotepath=off diff --no-color --find-renames "$base" --
+  git ls-files -z --others --exclude-standard | head -z -n 200 | while IFS= read -r -d '' file; do
+    git -c core.quotepath=off diff --no-color --no-index -- /dev/null "$file" || true
+  done
+} | head -c 4000000`;
 }
 
 function withRunningCheckout<A>(

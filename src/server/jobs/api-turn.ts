@@ -841,6 +841,14 @@ export async function runApiTurn(
 			console.warn("API turn failed", {
 				stage: coordinationFailure ? "coordination" : failureStage,
 				...apiTurnFailureClassification(coordinationFailure ?? error),
+				// Development diagnostics only: messages can contain provider details.
+				...(process.env.YTIMESY_DEBUG_TURN_ERRORS === "1" &&
+				error instanceof Error
+					? {
+							debug: `${error.name}: ${error.message}`.slice(0, 400),
+							stack: error.stack?.split("\n").slice(0, 6).join(" | "),
+						}
+					: {}),
 			});
 		const failureMessage = progressFailed
 			? "Turn progress could not be saved. Inspect the task before retrying."
@@ -848,7 +856,8 @@ export async function runApiTurn(
 				? apiTurnFailureMessage("coordination", coordinationFailure)
 				: abort.signal.aborted
 					? `Run stopped. ${abort.signal.reason instanceof Error && ["Turn ownership or cancellation state changed.", "Conversation coordination lease was lost.", "Turn heartbeat or coordination service became unavailable."].includes(abort.signal.reason.message) ? `${abort.signal.reason.message} ` : ""}Inspect any in-flight command before continuing.`
-					: apiTurnFailureMessage(failureStage, error);
+					: apiTurnFailureMessage(failureStage, error) +
+						developmentFailureDetail(error);
 		const userCancelled = abort.signal.reason instanceof ApiTurnCancelled;
 		if (!userCancelled)
 			items = [
@@ -899,4 +908,21 @@ export async function runApiTurn(
 		if (coordinated)
 			await coordinateConversationTurn("release", control).catch(() => {});
 	}
+}
+
+/** Development diagnostics only (YTIMESY_DEBUG_TURN_ERRORS=1): the provider's own error. */
+function developmentFailureDetail(error: unknown) {
+	if (
+		process.env.YTIMESY_DEBUG_TURN_ERRORS !== "1" ||
+		!(error instanceof Error)
+	)
+		return "";
+	const inner = (error as { providerError?: unknown }).providerError;
+	const detail =
+		inner instanceof Error
+			? `${inner.name}: ${inner.message} ${JSON.stringify((inner as { responseBody?: unknown }).responseBody ?? "")}`
+			: inner
+				? JSON.stringify(inner)
+				: `${error.name}: ${error.message}`;
+	return ` [debug ${detail.slice(0, 600)}]`;
 }
