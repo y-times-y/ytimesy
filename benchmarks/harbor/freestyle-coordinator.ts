@@ -50,10 +50,10 @@ if (mode === "start-script") {
 		slug: `ytimesy-coordinator-${Date.now()}`,
 		snapshotId: "freestyle/ubuntu-sm",
 		firewall: GUEST_INTERNET_FIREWALL,
-		ttlSeconds: 86400,
-		autoDeleteSeconds: 86400,
-		maxRunSeconds: 86400,
-		maxRunTotalSeconds: 86400,
+		// Never auto-delete a VM that holds results (a 24h autoDeleteSeconds lost the
+		// 2026-10-12 run's files). Runtime is capped at 4 days; stopping keeps the disk.
+		maxRunSeconds: 345600,
+		maxRunTotalSeconds: 345600,
 		idleTimeoutSeconds: null,
 		automaticRestart: false,
 		metadata: { purpose: "harbor-coordinator" },
@@ -61,8 +61,9 @@ if (mode === "start-script") {
 	const state: State = { vmId: created.vmId, jobName: "tb4-full-daytona", harness };
 	await writeFile(statePath, JSON.stringify(state, null, 2));
 	const data = await waitUntilVmRunning(created.vm, "coordinator");
-	await created.vm.resize({ cpu: 16, memory: 32768, storage: Math.max(data.resources.storage, 40960) });
-	console.log(`coordinator VM ${created.vmId} (16 CPU / 32 GB); bootstrapping`);
+	// The Freestyle plan caps a VM at 8 vCPUs; trial sandboxes run elsewhere (Daytona/Modal).
+	await created.vm.resize({ cpu: 8, memory: 16384, storage: Math.max(data.resources.storage, 40960) });
+	console.log(`coordinator VM ${created.vmId} (8 CPU / 16 GB); bootstrapping`);
 	const vm = created.vm;
 	await vm.fs.writeTextFile(
 		"/opt/bootstrap.sh",
@@ -89,10 +90,18 @@ uvx --from ${HARBOR} --with daytona harbor --version
 	for (const key of ["openai-api-key", "daytona-api-key"])
 		await vm.fs.writeTextFile(`/opt/ytimesy/.secrets/${key}`, (await readFile(`.secrets/${key}`, "utf8")).trim());
 	await vm.fs.writeTextFile("/opt/ytimesy/.secrets/freestyle-api-key", (process.env.FREESTYLE_API_KEY as string).trim());
-	await sh(state, "chmod 600 /opt/ytimesy/.secrets/* && cd /opt/ytimesy && tar xzf dataset.tgz");
+	// Modal (GPU trials) and the R2 bucket that receives each finished trial.
+	const { existsSync, readdirSync } = await import("node:fs");
+	const modalConfig = `${process.env.HOME}/.modal.toml`;
+	if (existsSync(modalConfig)) await vm.fs.writeTextFile("/root/.modal.toml", await readFile(modalConfig, "utf8"));
+	const r2 = ["R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_CHECKPOINT_BUCKET"];
+	if (r2.every((name) => process.env[name]))
+		await vm.fs.writeTextFile("/opt/ytimesy/.secrets/r2.env", r2.map((name) => `${name}=${process.env[name]}`).join("\n"));
+	await sh(state, "chmod 600 /opt/ytimesy/.secrets/* /root/.modal.toml 2>/dev/null; cd /opt/ytimesy && tar xzf dataset.tgz");
 	// Trials already collected elsewhere are not rerun (the launcher skips existing archives).
-	for (const archive of (await import("node:fs")).readdirSync(".ytimesy/harbor-jobs/freestyle").filter((f) => f.endsWith(".tgz")))
-		await vm.fs.writeFile(`/opt/freestyle-jobs/${archive}`, await readFile(`.ytimesy/harbor-jobs/freestyle/${archive}`));
+	const collected = ".ytimesy/harbor-jobs/freestyle";
+	for (const archive of existsSync(collected) ? readdirSync(collected).filter((f) => f.endsWith(".tgz")) : [])
+		await vm.fs.writeFile(`/opt/freestyle-jobs/${archive}`, await readFile(`${collected}/${archive}`));
 	await vm.fs.writeTextFile("/opt/run.sh", `export YTIMESY_HARNESS_COMMIT=${harness}\n${await readFile(script, "utf8")}`);
 	await vm.fs.writeTextFile("/opt/run-wrapper.sh", "bash /opt/run.sh > /opt/run.log 2>&1; echo $? > /opt/run.exit\n");
 	await sh(state, "nohup setsid bash /opt/run-wrapper.sh >/dev/null 2>&1 &");
@@ -106,10 +115,10 @@ const harness = process.env.YTIMESY_HARNESS_COMMIT ?? execFileSync("git", ["rev-
 		slug: `ytimesy-coordinator-${Date.now()}`,
 		snapshotId: "freestyle/ubuntu-sm",
 		firewall: GUEST_INTERNET_FIREWALL,
-		ttlSeconds: 86400,
-		autoDeleteSeconds: 86400,
-		maxRunSeconds: 86400,
-		maxRunTotalSeconds: 86400,
+		// Never auto-delete a VM that holds results (a 24h autoDeleteSeconds lost the
+		// 2026-10-12 run's files). Runtime is capped at 4 days; stopping keeps the disk.
+		maxRunSeconds: 345600,
+		maxRunTotalSeconds: 345600,
 		idleTimeoutSeconds: null,
 		automaticRestart: false,
 		metadata: { purpose: "harbor-coordinator", job: jobName },
