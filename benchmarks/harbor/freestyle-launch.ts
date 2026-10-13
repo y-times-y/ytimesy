@@ -70,10 +70,14 @@ async function runTrial(task: string, attempt: number) {
 		return;
 	}
 	const want = await resources(task);
-	// Plan limits (Freestyle: 8 vCPUs per VM). A capped task runs with fewer CPUs
-	// than specified, recorded by Harbor as --override-cpus and disclosed.
+	// Plan limits (Freestyle: 8 vCPUs per VM). Capping runs a task with fewer CPUs
+	// than specified, so it is opt-in and must be disclosed with the results.
 	const cap = Number(process.env.YTIMESY_CPU_CAP ?? 0);
 	if (cap && want.cpu > cap) want.cpu = cap;
+	if (want.cpu > 8)
+		throw new Error(
+			`${name} needs ${want.cpu} vCPUs; a Freestyle VM is capped at 8. Run it elsewhere or set YTIMESY_CPU_CAP=8 and disclose the cap.`,
+		);
 	// Capacity errors are retried with backoff; they are not trial outcomes.
 	const createVm = async (options: object) => {
 		for (let attempt = 1; ; attempt++) {
@@ -146,7 +150,7 @@ async function runTrial(task: string, attempt: number) {
 			storage,
 		};
 		await vm
-			.resize(exact.cpu > 8 ? exact : target)
+			.resize(target)
 			.catch(() => vm.resize(exact))
 			.catch(() => vm.resize({ ...exact, storage: Math.max(data.resources.storage, 51200) }));
 		// Freestyle applies CPU changes on start() and hot-plugs them a few seconds

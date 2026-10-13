@@ -126,8 +126,9 @@ const harness = process.env.YTIMESY_HARNESS_COMMIT ?? execFileSync("git", ["rev-
 	const state: State = { vmId: created.vmId, jobName, harness };
 	await writeFile(statePath, JSON.stringify(state, null, 2));
 	const data = await waitUntilVmRunning(created.vm, "coordinator");
-	await created.vm.resize({ cpu: 16, memory: 32768, storage: Math.max(data.resources.storage, 40960) });
-	console.log(`coordinator VM ${created.vmId} (16 CPU / 32 GB); bootstrapping`);
+	// The Freestyle plan caps a VM at 8 vCPUs.
+	await created.vm.resize({ cpu: 8, memory: 16384, storage: Math.max(data.resources.storage, 40960) });
+	console.log(`coordinator VM ${created.vmId} (8 CPU / 16 GB); bootstrapping`);
 	const vm = created.vm;
 	await vm.fs.writeTextFile(
 		"/opt/bootstrap.sh",
