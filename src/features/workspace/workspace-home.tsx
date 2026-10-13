@@ -223,6 +223,8 @@ export function WorkspaceHome({
 	const [projectPickerOpen, setProjectPickerOpen] = useState(false);
 	const composerDraftRef = useRef(false);
 	composerDraftRef.current = composerDraft;
+	/** Set from a draft send until its new chat's first view arrives. */
+	const pendingNewChatRef = useRef(false);
 	const sessionEpoch = useRef(0);
 	const selectedSessionIdRef = useRef<string | undefined>(undefined);
 	const pendingSendRef = useRef<{
@@ -256,6 +258,11 @@ export function WorkspaceHome({
 		(epoch: number, next: PublicCodexSession) => {
 			if (epoch !== sessionEpoch.current) return;
 			if (composerDraftRef.current) return;
+			if (pendingNewChatRef.current && next.agentSessionId) {
+				// The draft send's new chat: adopt it before the open-chat check.
+				pendingNewChatRef.current = false;
+				selectedSessionIdRef.current = next.agentSessionId;
+			}
 			const openChatId = selectedSessionIdRef.current;
 			if (
 				openChatId &&
@@ -555,7 +562,13 @@ export function WorkspaceHome({
 	}, [activeProjectId]);
 
 	useEffect(() => {
-		if (composerDraft || selectedSessionId || !chats.data?.[0]) return;
+		if (
+			composerDraft ||
+			selectedSessionId ||
+			pendingNewChatRef.current ||
+			!chats.data?.[0]
+		)
+			return;
 		const first = chats.data[0];
 		setSelectedSessionId(first.id);
 		if (first.harnessId) setHarnessId(first.harnessId);
@@ -1191,8 +1204,28 @@ export function WorkspaceHome({
 								}}
 								onSend={(text, modelId, options) => {
 									const epoch = sessionEpoch.current;
-									const scope = sessionScope();
-									const chatId = activeSessionId;
+									// The new-chat draft starts a new chat. Forget the previously open
+									// one first: applySessionView drops updates while the draft flag is
+									// set or when they belong to a different open chat.
+									const startsNewChat = composerDraftRef.current;
+									if (startsNewChat) {
+										pendingNewChatRef.current = true;
+										composerDraftRef.current = false;
+										selectedSessionIdRef.current = undefined;
+										setComposerDraft(false);
+										setProjectPickerOpen(false);
+										setSelectedSessionId(undefined);
+										setSession((current) => ({
+											...current,
+											agentSessionId: null,
+											items: [],
+											sideItems: [],
+										}));
+									}
+									const scope = startsNewChat
+										? { ...sessionScope(), sessionId: undefined }
+										: sessionScope();
+									const chatId = startsNewChat ? undefined : activeSessionId;
 									if (options?.leaderCount) {
 										setBusyChatIds((ids) => withBusyChat(ids, chatId));
 										setSession((current) => ({
@@ -1323,6 +1356,7 @@ export function WorkspaceHome({
 											pendingSendRef.current = null;
 										} catch (cause) {
 											pendingSendRef.current = null;
+											pendingNewChatRef.current = false;
 											if (epoch !== sessionEpoch.current) return;
 											setSession((current) => ({
 												...current,
