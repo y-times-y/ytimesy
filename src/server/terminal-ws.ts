@@ -1,20 +1,13 @@
 import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";
-import { WebSocket, WebSocketServer } from "ws";
-import { publicFailureMessage } from "#/domain/project-workspace";
-import {
-	clampPtySize,
-	parseTerminalClientMessage,
-} from "#/domain/workspace-terminal";
-import { projectForOwner } from "./adapters/projects";
-import { repositoryDirectory } from "./adapters/repository-setup";
-import { requireUser } from "./auth/auth";
-import { DESKTOP_PATH, handleDesktopSocket } from "./desktop-ws";
-import { connectWorkspaceTerminal } from "./services/workspace-terminal";
+import { WebSocketServer } from "ws";
+import { DESKTOP_PATH, runDesktopSession } from "./sockets/desktop-session";
+import { nodeClientSocket, openNodeRemoteSocket } from "./sockets/node-sockets";
+import { runTerminalSession, TERMINAL_PATH } from "./sockets/terminal-session";
 
-const TERMINAL_PATH = "/api/terminal";
 const attached = new WeakSet<Server>();
 
+/** Local Node dev server only; on Workers see sockets/worker-sockets.ts. */
 export function attachTerminalUpgrade(httpServer: Server) {
 	const bind = () => {
 		if (attached.has(httpServer)) return;
@@ -30,18 +23,16 @@ export function attachTerminalUpgrade(httpServer: Server) {
 		httpServer.removeAllListeners("upgrade");
 		httpServer.on("upgrade", (request, socket, head) => {
 			const url = new URL(request.url ?? "/", "http://localhost");
-			if (url.pathname === DESKTOP_PATH) {
-				wss.handleUpgrade(request, socket, head, (ws) => {
-					void handleDesktopSocket(ws, request, url);
-				});
-				return;
-			}
-			if (url.pathname !== TERMINAL_PATH) {
+			if (url.pathname !== DESKTOP_PATH && url.pathname !== TERMINAL_PATH) {
 				for (const listener of existing) listener(request, socket, head);
 				return;
 			}
 			wss.handleUpgrade(request, socket, head, (ws) => {
-				void handleTerminalSocket(ws, request, url);
+				const client = nodeClientSocket(ws);
+				const headers = headersFromNode(request);
+				void (url.pathname === TERMINAL_PATH
+					? runTerminalSession(client, headers, url)
+					: runDesktopSession(client, headers, url, openNodeRemoteSocket));
 			});
 		});
 	};
@@ -49,105 +40,13 @@ export function attachTerminalUpgrade(httpServer: Server) {
 	else httpServer.once("listening", bind);
 }
 
-async function handleTerminalSocket(
-	socket: WebSocket,
-	request: IncomingMessage,
-	url: URL,
-) {
-	try {
-		const user = await requireUser(headersFromNode(request));
-		const projectId = url.searchParams.get("projectId")?.trim() ?? "";
-		if (!projectId) {
-			sendTerminalError(socket, "Select a project to use the terminal.");
-			socket.close();
-			return;
-		}
-		const project = await projectForOwner(user.id, projectId);
-		if (!project) {
-			sendTerminalError(socket, "Project is not available.");
-			socket.close();
-			return;
-		}
-		const size = clampPtySize(
-			Number(url.searchParams.get("cols")),
-			Number(url.searchParams.get("rows")),
-		);
-		const pty = await connectWorkspaceTerminal({
-			userId: user.id,
-			projectId,
-			sessionId: url.searchParams.get("sessionId")?.trim() || undefined,
-			directory: repositoryDirectory(project.fullName),
-			cols: size.cols,
-			rows: size.rows,
-			onData: (data) => {
-				if (socket.readyState === WebSocket.OPEN) socket.send(data);
-			},
-			onError: (cause) => {
-				sendTerminalError(socket, publicFailureMessage(cause));
-			},
-		});
-		socket.on("message", (raw, isBinary) => {
-			if (!isBinary) {
-				const text =
-					typeof raw === "string"
-						? raw
-						: Buffer.isBuffer(raw)
-							? raw.toString("utf8")
-							: new TextDecoder().decode(raw as ArrayBuffer);
-				const control = parseTerminalClientMessage(text);
-				if (control) {
-					pty.resize({ cols: control.cols, rows: control.rows });
-					return;
-				}
-				pty.write(text);
-				return;
-			}
-			pty.write(toUint8Array(raw));
-		});
-		socket.on("close", () => {
-			pty.detach();
-		});
-	} catch (cause) {
-		const message =
-			cause instanceof Response
-				? cause.status === 401
-					? "Sign in required."
-					: await cause.text()
-				: publicFailureMessage(cause);
-		sendTerminalError(socket, message || "Terminal failed to connect.");
-		socket.close();
-	}
-}
-
-function sendTerminalError(socket: WebSocket, message: string) {
-	if (
-		socket.readyState === WebSocket.OPEN ||
-		socket.readyState === WebSocket.CONNECTING
-	) {
-		try {
-			socket.send(JSON.stringify({ type: "error", message }));
-		} catch {
-			// The browser already dropped the socket.
-		}
-	}
-}
-
 function headersFromNode(request: IncomingMessage) {
 	const headers = new Headers();
 	for (const [key, value] of Object.entries(request.headers)) {
 		if (value === undefined) continue;
-		if (Array.isArray(value)) {
+		if (Array.isArray(value))
 			for (const item of value) headers.append(key, item);
-		} else {
-			headers.set(key, value);
-		}
+		else headers.set(key, value);
 	}
 	return headers;
-}
-
-function toUint8Array(raw: WebSocket.RawData) {
-	if (raw instanceof Uint8Array) return raw;
-	if (Buffer.isBuffer(raw)) return new Uint8Array(raw);
-	if (Array.isArray(raw)) return Buffer.concat(raw);
-	return new Uint8Array(raw as ArrayBuffer);
 }

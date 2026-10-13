@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import {
 	type ClaudeHomeFiles,
 	claudeHomeFilesAreUsable,
@@ -9,15 +9,11 @@ import {
 	type EncryptedSecret,
 	encryptSecret,
 } from "#/domain/encrypted-secret";
+import { database } from "../adapters/database";
 import { loadSecretMasterKey } from "./master-key";
 
-export const CLAUDE_HOME_STORE_PATH = ".ytimesy/claude-homes.json";
-
-type StoredClaudeHome = {
-	readonly userId: string;
-	readonly encrypted: EncryptedSecret;
-	readonly updatedAt: string;
-};
+/** Where development kept these before they moved to Postgres; read once to import. */
+const LEGACY_STORE_PATH = ".ytimesy/claude-homes.json";
 
 export async function saveClaudeHomeForUser(
 	userId: string,
@@ -25,51 +21,55 @@ export async function saveClaudeHomeForUser(
 ): Promise<void> {
 	if (!userId.trim() || !claudeHomeFilesAreUsable(home.files)) return;
 	const masterKey = await loadSecretMasterKey();
-	const record: StoredClaudeHome = {
-		userId,
-		encrypted: encryptSecret(masterKey, JSON.stringify({ files: home.files })),
-		updatedAt: new Date().toISOString(),
-	};
-	const records = (await readRecords()).filter(
-		(entry) => entry.userId !== userId,
+	await database().query(
+		`insert into claude_home(user_id,encrypted,updated_at) values($1,$2,now())
+		 on conflict(user_id) do update set encrypted=excluded.encrypted,updated_at=now()`,
+		[
+			userId,
+			JSON.stringify(
+				encryptSecret(masterKey, JSON.stringify({ files: home.files })),
+			),
+		],
 	);
-	records.push(record);
-	await mkdir(".ytimesy", { recursive: true });
-	await writeFile(CLAUDE_HOME_STORE_PATH, `${JSON.stringify(records)}\n`, {
-		mode: 0o600,
-	});
 }
 
 export async function loadClaudeHomeForUser(
 	userId: string,
 ): Promise<ClaudeHomeFiles | null> {
 	if (!userId.trim()) return null;
-	const record = (await readRecords()).find((entry) => entry.userId === userId);
-	if (!record) return null;
-	const masterKey = await loadSecretMasterKey();
-	return parseClaudeHomeDump(decryptSecret(masterKey, record.encrypted));
-}
-
-async function readRecords(): Promise<StoredClaudeHome[]> {
-	try {
-		const parsed: unknown = JSON.parse(
-			await readFile(CLAUDE_HOME_STORE_PATH, "utf8"),
-		);
-		if (!Array.isArray(parsed)) return [];
-		return parsed.filter(isRecord);
-	} catch {
-		return [];
-	}
-}
-
-function isRecord(value: unknown): value is StoredClaudeHome {
-	if (typeof value !== "object" || value === null) return false;
-	const entry = value as Partial<StoredClaudeHome>;
-	return (
-		typeof entry.userId === "string" &&
-		typeof entry.updatedAt === "string" &&
-		isEncrypted(entry.encrypted)
+	const stored = (
+		await database().query<{ encrypted: unknown }>(
+			"select encrypted from claude_home where user_id=$1",
+			[userId],
+		)
+	).rows[0]?.encrypted;
+	const encrypted = isEncrypted(stored) ? stored : await importLegacy(userId);
+	if (!encrypted) return null;
+	return parseClaudeHomeDump(
+		decryptSecret(await loadSecretMasterKey(), encrypted),
 	);
+}
+
+/** Development only: carries a login over from the old local file. */
+async function importLegacy(userId: string) {
+	if (process.env.YTIMESY_ENVIRONMENT === "production") return null;
+	let records: unknown;
+	try {
+		records = JSON.parse(await readFile(LEGACY_STORE_PATH, "utf8"));
+	} catch {
+		return null;
+	}
+	const record = Array.isArray(records)
+		? (records as { userId?: unknown; encrypted?: unknown }[]).find(
+				(entry) => entry.userId === userId,
+			)
+		: undefined;
+	if (!record || !isEncrypted(record.encrypted)) return null;
+	await database().query(
+		"insert into claude_home(user_id,encrypted) values($1,$2) on conflict(user_id) do nothing",
+		[userId, JSON.stringify(record.encrypted)],
+	);
+	return record.encrypted;
 }
 
 function isEncrypted(value: unknown): value is EncryptedSecret {
