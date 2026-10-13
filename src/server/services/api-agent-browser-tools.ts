@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { type ToolSet, tool } from "ai";
 import { z } from "zod";
+import { publicToolDetail } from "#/domain/tool-detail";
 import { desktopHostname } from "#/domain/workspace-desktop";
 import { browserUseCommand } from "#/server/adapters/browser-use-cli";
 import { isPublicModelAddress } from "#/server/adapters/model-endpoint";
@@ -59,7 +60,10 @@ export function apiAgentBrowserTools(
 		const workspace = await resolveToolWorkspace(input);
 		const { machines, vm } = workspace;
 		const result = await ensureDesktopProcesses(machines, vm);
-		if (result.exitCode) throw new Error("The shared desktop could not start.");
+		if (result.exitCode)
+			throw new Error(
+				`The shared desktop could not start (exit ${result.exitCode}). ${publicToolDetail(`${result.stderr}\n${result.stdout}`.trim()).slice(-1200)}`.trim(),
+			);
 		// Route the Desktop tab's viewer to a desktop the agent started, as the
 		// tab's own start does. Viewing is optional; the agent's QA is not.
 		viewerExposed ??= machines

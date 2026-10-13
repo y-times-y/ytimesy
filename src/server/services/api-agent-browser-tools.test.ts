@@ -56,3 +56,31 @@ it("exposes the Desktop tab viewer once when the agent starts the desktop itself
 	expect(exposeHttp).toHaveBeenCalledOnce();
 	expect(exposeHttp).toHaveBeenCalledWith(vm, 6080, desktopHostname(vm));
 });
+
+it("says why the shared desktop could not start", async () => {
+	const machines = {
+		exec: vi.fn(async () => ({
+			exitCode: 100,
+			stdout: "",
+			stderr: "E: Could not get lock /var/lib/dpkg/lock-frontend",
+		})),
+		writeTextFile: vi.fn(async () => {}),
+		exposeHttp: vi.fn(async () => "https://viewer"),
+	} as unknown as WorkspaceMachines;
+	const tools = apiAgentBrowserTools({
+		machines,
+		vm: WorkspaceId("vm-agent"),
+		cwd: "/home/ubuntu/app",
+		readOnly: false,
+		signal: new AbortController().signal,
+		once: (_id, run) => run(),
+	});
+	await expect(
+		(
+			tools.browser_screenshot.execute as (
+				i: object,
+				o: object,
+			) => Promise<unknown>
+		)({}, { toolCallId: "a", messages: [] }),
+	).rejects.toThrow(/could not start \(exit 100\)\. E: Could not get lock/);
+});

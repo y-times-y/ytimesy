@@ -59,6 +59,7 @@ export function persistentGuestCapabilityRunner(
 				60000,
 			);
 		if (!connections.has(vm)) connections.set(vm, connect(vm));
+		let stage = "start";
 		try {
 			const remote = await connections.get(vm);
 			if (!remote) throw new Error("Guest service connection is unavailable.");
@@ -85,8 +86,10 @@ export function persistentGuestCapabilityRunner(
 						}),
 				);
 			}
+			stage = "install";
 			if (installations.has(installation))
 				await installations.get(installation);
+			stage = "request";
 			const response = await fetch(`${remote.origin}/execute`, {
 				method: "POST",
 				redirect: "manual",
@@ -118,7 +121,7 @@ export function persistentGuestCapabilityRunner(
 			for (const key of installations.keys())
 				if (key.startsWith(`${vm}:`)) installations.delete(key);
 			throw new Error(
-				"Guest service request failed; its outcome may be uncertain. Inspect state before retrying.",
+				`Guest service request failed at ${stage} (${guestServiceFailure(error)}); its outcome may be uncertain. Inspect state before retrying.`,
 				{ cause: error },
 			);
 		}
@@ -206,6 +209,16 @@ await writeFile(record+'.tmp',JSON.stringify({port:server.address().port,token:i
 await rename(record+'.tmp',record);
 armIdle();
 `;
+
+/** Class and a short message: enough to tell a TLS, DNS, timeout or HTTP failure apart. */
+export function guestServiceFailure(error: unknown) {
+	if (!(error instanceof Error)) return "unknown";
+	const message = error.message.replaceAll(
+		/Bearer\s+\S+/g,
+		"Bearer [redacted]",
+	);
+	return `${error.name}: ${message}`.slice(0, 200);
+}
 
 export function guestServiceHostname(vm: string, port: number) {
 	return `ytimesy-tools-${createHash("sha256").update(vm).digest("hex").slice(0, 12)}-${port}.style.dev`;
