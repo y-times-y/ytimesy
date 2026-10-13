@@ -20,9 +20,7 @@ export const BUILDER_SHELL_TOOLS = new Set([
 	"browser_open",
 	"browser_screenshot",
 	"browser_inspect",
-	"browser_click",
-	"browser_type",
-	"browser_key",
+	"browser_execute",
 ]);
 
 export function builderShellTools(tools: ToolSet): ToolSet {

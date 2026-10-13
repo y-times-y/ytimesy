@@ -252,13 +252,13 @@ it("restores search matches and earlier calls across durable single-step invocat
 		{
 			browser_screenshot: definition(),
 			publish_task: definition(),
-			browser_click: definition(),
+			browser_execute: definition(),
 		},
 		messages,
 	);
 	expect(result.browser_screenshot.deferLoading).toBe(false);
 	expect(result.publish_task.deferLoading).toBe(false);
-	expect(result.browser_click.deferLoading).toBe(true);
+	expect(result.browser_execute.deferLoading).toBe(true);
 	expect(result.forbidden).toBeUndefined();
 });
 

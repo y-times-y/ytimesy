@@ -423,7 +423,7 @@ describe("read-only API lead tools", () => {
 			"apply_patch",
 			"bash",
 			"start_command",
-			"browser_click",
+			"browser_execute",
 		])
 			expect(tools[name]).toBeUndefined();
 	});
@@ -438,9 +438,7 @@ describe("read-only API lead tools", () => {
 			"replace_text",
 			"start_command",
 			"stop_command",
-			"browser_click",
-			"browser_type",
-			"browser_key",
+			"browser_execute",
 			"debug_node",
 		])
 			expect(tools[name]).toBeUndefined();

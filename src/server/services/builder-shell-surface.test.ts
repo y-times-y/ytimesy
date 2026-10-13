@@ -74,16 +74,15 @@ it("lets the product builder do visual QA without leaving the shell surface", as
 		"browser_open",
 		"browser_screenshot",
 		"browser_inspect",
-		"browser_click",
-		"browser_type",
-		"browser_key",
+		"browser_execute",
 	];
 	const kept = Object.keys(
 		builderShellTools(
 			Object.fromEntries(
-				["execute_command", "apply_patch", "browser_execute", ...browser].map(
-					(name) => [name, make()],
-				),
+				["execute_command", "apply_patch", ...browser].map((name) => [
+					name,
+					make(),
+				]),
 			),
 		),
 	);

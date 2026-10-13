@@ -1,4 +1,5 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { Freestyle } from "freestyle";
 import { WorkspaceId } from "../src/domain/ids";
@@ -52,6 +53,69 @@ const evidenceDirectory = `.ytimesy/visual-qa-proof/${new Date().toISOString().s
 const task =
 	process.env.VISUAL_QA_TASK ??
 	"On the landing page, add a blue 'Subscribe' button under the main heading. Verify it renders correctly.";
+
+const record = process.env.VISUAL_QA_RECORD === "1";
+const frames = "/var/tmp/ytimesy-recording";
+const timeline = new Map<
+	string,
+	{ tool: string; startedAt: number; endedAt?: number }
+>();
+
+/** Pull the frames in chunks and encode them locally as an 8x timelapse. */
+async function saveRecording(vm: WorkspaceId, started: number) {
+	await machines.exec(vm, "pkill -f ytimesy-recording || true", 10_000);
+	const names = (
+		await machines.exec(vm, `ls ${frames} 2>/dev/null | sort`, 15_000)
+	).stdout
+		.split("\n")
+		.map((name) => name.trim())
+		.filter((name) => /^\d+\.jpg$/.test(name));
+	if (!names.length) return undefined;
+	const local = `${evidenceDirectory}/run-${run}-frames`;
+	await rm(local, { recursive: true, force: true });
+	await mkdir(local, { recursive: true });
+	for (let index = 0; index < names.length; index += 25) {
+		const chunk = names.slice(index, index + 25);
+		const result = await machines.exec(
+			vm,
+			`cd ${frames} && tar cf - ${chunk.join(" ")} | base64 -w0`,
+			60_000,
+		);
+		const archive = `${local}/chunk.tar`;
+		await writeFile(archive, Buffer.from(result.stdout.trim(), "base64"));
+		execFileSync("tar", ["xf", archive, "-C", local]);
+		await rm(archive);
+	}
+	// Each frame's name is its capture time; firstFrameAt lines it up with the timeline.
+	const list = names.map((name) => `file '${name}'\nduration 0.125`).join("\n");
+	await writeFile(`${local}/frames.txt`, `${list}\n`);
+	const output = `${evidenceDirectory}/run-${run}.mp4`;
+	execFileSync(
+		"ffmpeg",
+		[
+			"-y",
+			"-loglevel",
+			"error",
+			"-f",
+			"concat",
+			"-safe",
+			"0",
+			"-i",
+			`${local}/frames.txt`,
+			"-vf",
+			"scale=1440:-2,format=yuv420p",
+			"-r",
+			"8",
+			output,
+		],
+		{ stdio: "inherit" },
+	);
+	return {
+		path: output,
+		frames: names.length,
+		firstFrameAt: Math.round((Number(names[0].slice(0, -4)) - started) / 1000),
+	};
+}
 
 let vmId: string | undefined;
 let slug: string | undefined;
@@ -117,6 +181,14 @@ try {
 		chat.id,
 	]);
 	await waitUntilVmRunning(created.vm, "Visual QA proof");
+	// Optional recording: about one JPEG a second of the shared display, from
+	// whenever the agent starts it. The recorder never starts the display.
+	if (record)
+		await machines.exec(
+			vm,
+			`mkdir -p ${frames} && nohup sh -c 'while :; do if command -v scrot >/dev/null && pgrep -x Xvfb >/dev/null; then DISPLAY=:0 scrot -q 40 ${frames}/$(date +%s%3N).jpg 2>/dev/null; fi; sleep 1; done' >/dev/null 2>&1 &`,
+			15_000,
+		);
 
 	const started = Date.now();
 	await withBackgroundJobDispatcher(
@@ -132,6 +204,8 @@ try {
 	if (turn?.lease_id) await dispatchModelWorkflow(turn);
 
 	let final: { state: string; items: unknown } | undefined;
+	// A timed-out turn has no final row; keep the last items seen so its tools are still reported.
+	let lastItems: unknown;
 	const deadline = Date.now() + 25 * 60_000;
 	while (Date.now() < deadline) {
 		const state = (
@@ -140,11 +214,23 @@ try {
 				[chat.id],
 			)
 		).rows[0];
+		lastItems = state?.items ?? lastItems;
+		// Seconds since the task was sent, sampled every few seconds.
+		for (const item of sessionItemsFromUnknown(state?.items))
+			if (item.kind === "dynamicToolCall") {
+				const at = Math.round((Date.now() - started) / 1000);
+				const seen = timeline.get(item.id) ?? {
+					tool: item.tool,
+					startedAt: at,
+				};
+				if (item.status !== "inProgress") seen.endedAt ??= at;
+				timeline.set(item.id, seen);
+			}
 		if (state && !["queued", "running"].includes(state.state)) {
 			final = state;
 			break;
 		}
-		await delay(5000);
+		await delay(3000);
 	}
 	// A settled turn queues its checkpoint; the capture runs on the edge.
 	let checkpointSaved = false;
@@ -158,13 +244,14 @@ try {
 		);
 		if (!checkpointSaved) await delay(5000);
 	}
-	const items = sessionItemsFromUnknown(final?.items);
+	const items = sessionItemsFromUnknown(final?.items ?? lastItems);
 	const tools = items.flatMap((item) =>
 		item.kind === "dynamicToolCall"
 			? [
 					{
 						tool: item.tool,
 						status: item.status,
+						...timeline.get(item.id),
 						...(item.status === "failed"
 							? { output: String(item.output ?? "").slice(0, 2000) }
 							: {}),
@@ -187,6 +274,7 @@ try {
 		'cd "$(cat /tmp/ytimesy-project-cwd)" && git status --short && git diff --stat HEAD',
 		15_000,
 	);
+	const video = record ? await saveRecording(vm, started) : undefined;
 	const report = items
 		.filter((item) => item.kind === "agentMessage")
 		.map((item) => item.text)
@@ -211,6 +299,16 @@ try {
 		),
 		changed: diff.stdout.trim().length > 0,
 		checkpointSaved,
+		firstBrowserToolAt: tools.find((call) => call.tool.startsWith("browser_"))
+			?.startedAt,
+		lastEditAt: tools.filter((call) => call.tool === "apply_patch").at(-1)
+			?.startedAt,
+		browserSeconds: browserTools.reduce(
+			(total, call) =>
+				total + Math.max(0, (call.endedAt ?? 0) - (call.startedAt ?? 0)),
+			0,
+		),
+		video,
 	};
 	await mkdir(evidenceDirectory, { recursive: true });
 	await writeFile(
