@@ -102,6 +102,50 @@ export function isCodingModelId(provider: ModelProvider, id: string): boolean {
 	return true;
 }
 
+/**
+ * OpenRouter lists "<model>-pro" as its own model: the same model with a "pro"
+ * reasoning mode. It is not a separate model or reasoning level, so it is hidden.
+ */
+function isProDuplicate(modelId: string, catalogIds: ReadonlySet<string>) {
+	return modelId.endsWith("-pro") && catalogIds.has(modelId.slice(0, -4));
+}
+
+export type ApiModelReasoning = {
+	readonly levels: readonly [
+		{ id: string; label: string },
+		...{ id: string; label: string }[],
+	];
+	readonly defaultLevelId: string;
+};
+
+const reasoningLabels: Record<string, string> = {
+	low: "Low",
+	medium: "Medium",
+	high: "High",
+	xhigh: "Extra high",
+	max: "Max",
+};
+
+/** Effort levels the API runtime sends, per model family; null when none apply. */
+export function apiModelReasoning(
+	provider: ModelProvider,
+	modelId: string,
+): ApiModelReasoning | null {
+	const family = provider === "openrouter" ? modelId.split("/")[0] : provider;
+	const ids =
+		family === "openai"
+			? ["low", "medium", "high", "xhigh"]
+			: family === "anthropic"
+				? ["low", "medium", "high", "xhigh", "max"]
+				: null;
+	if (!ids) return null;
+	const [first, ...rest] = ids.map((id) => ({
+		id,
+		label: reasoningLabels[id] ?? id,
+	}));
+	return { levels: [first, ...rest], defaultLevelId: "medium" };
+}
+
 export function modelRouteId(connectionId: string, modelId: string): string {
 	return `api/${connectionId}/${encodeURIComponent(modelId)}`;
 }
@@ -113,10 +157,14 @@ export function availableConnectionModels(
 	return connections.flatMap((connection) =>
 		connectionModels(connection, browseModels)
 			.filter((model) => isCodingModelId(connection.provider, model.id))
-			.map((model) => ({
-				id: modelRouteId(connection.id, model.id),
-				label: `${connection.provider === "openrouter" ? openRouterModelLabel(model.label) : model.label} · ${connection.label}`,
-			})),
+			.map((model) => {
+				const reasoning = apiModelReasoning(connection.provider, model.id);
+				return {
+					id: modelRouteId(connection.id, model.id),
+					label: `${connection.provider === "openrouter" ? openRouterModelLabel(model.label) : model.label} · ${connection.label}`,
+					...(reasoning ? { reasoning } : {}),
+				};
+			}),
 	);
 }
 
@@ -125,17 +173,24 @@ export function connectionModels(
 	connection: PublicModelConnection,
 	browseModels: readonly BrowseModel[],
 ): readonly ConnectedModel[] {
-	if (connection.provider !== "openrouter")
+	if (connection.provider !== "openrouter") {
+		const ids = new Set(connection.models.map((model) => model.id));
+		const models = connection.models.filter(
+			(model) => !isProDuplicate(model.id, ids),
+		);
 		return connection.provider === "google"
-			? connection.models
+			? models
 					.filter((model) => isShownInModelPicker("google", model.id))
 					.sort(
 						(a, b) => googleFlashModelRank(a.id) - googleFlashModelRank(b.id),
 					)
-			: recentModelGenerations(connection.models);
+			: recentModelGenerations(models);
+	}
 	const saved = new Map(connection.models.map((model) => [model.id, model]));
+	const catalogIds = new Set(browseModels.map((model) => model.id));
 	return browseModels
 		.filter((model) => isShownInModelPicker(model.author, model.id))
+		.filter((model) => !isProDuplicate(model.id, catalogIds))
 		.map((model) => ({
 			id: model.id,
 			label: model.label || saved.get(model.id)?.label || model.id,

@@ -5,84 +5,69 @@ const mocks = vi.hoisted(() => ({ query: vi.fn(), release: vi.fn() }));
 vi.mock("../database", () => ({
 	database: () => ({ connect: async () => mocks }),
 }));
+const leased = { rows: [{ holder: "h" }] };
+const busy = { rows: [] };
 beforeEach(() => {
 	vi.clearAllMocks();
-	mocks.query
-		.mockReset()
-		.mockResolvedValue({ rows: [{ statement_timeout: "2min" }] });
+	mocks.query.mockReset().mockResolvedValue(leased);
 });
 
-it("waits through PostgreSQL rather than rejecting normal admission contention", async () => {
+it("runs under a lease and releases it", async () => {
 	const operation = vi.fn(async () => "admitted");
 	expect(await lockedVm("workspace", operation)).toBe("admitted");
-	expect(mocks.query).toHaveBeenNthCalledWith(
-		3,
-		"select pg_advisory_lock(hashtextextended($1,81738421))",
-		["workspace"],
+	expect(mocks.query.mock.calls[0][0]).toContain(
+		"insert into infrastructure_vm_lease",
 	);
-	expect(mocks.query).toHaveBeenNthCalledWith(
-		2,
-		"select set_config('statement_timeout','20s',false)",
-	);
-	expect(mocks.query).toHaveBeenNthCalledWith(
-		4,
-		"select set_config('statement_timeout',$1,false)",
-		["2min"],
-	);
+	expect(mocks.query.mock.calls[0][0]).toContain("expires_at < now()");
 	expect(operation).toHaveBeenCalledWith(mocks);
+	expect(mocks.query.mock.calls.at(-1)?.[0]).toBe(
+		"delete from infrastructure_vm_lease where slug=$1 and holder=$2",
+	);
 	expect(mocks.release).toHaveBeenCalledWith(false);
 });
 
-it("unlocks on operation failure before returning the session to the pool", async () => {
+it("waits for a held lease, then proceeds once it is free or expired", async () => {
+	mocks.query
+		.mockResolvedValueOnce(busy)
+		.mockResolvedValueOnce(busy)
+		.mockResolvedValue(leased);
+	expect(await lockedVm("workspace", async () => "done", { pollMs: 1 })).toBe(
+		"done",
+	);
+	expect(
+		mocks.query.mock.calls.filter(([sql]) =>
+			String(sql).includes("insert into infrastructure_vm_lease"),
+		),
+	).toHaveLength(3);
+});
+
+it("gives up after the wait without running the operation", async () => {
+	mocks.query.mockResolvedValue(busy);
+	const operation = vi.fn();
+	await expect(
+		lockedVm("workspace", operation, { waitMs: 5, pollMs: 1 }),
+	).rejects.toThrow("Another operation is updating");
+	expect(operation).not.toHaveBeenCalled();
+	expect(
+		mocks.query.mock.calls.some(([sql]) => String(sql).startsWith("delete")),
+	).toBe(false);
+});
+
+it("releases the lease when the operation fails", async () => {
 	await expect(
 		lockedVm("workspace", async () => {
 			throw new Error("failed");
 		}),
 	).rejects.toThrow("failed");
-	expect(mocks.query).toHaveBeenLastCalledWith(
-		"select pg_advisory_unlock(hashtextextended($1,81738421))",
-		["workspace"],
+	expect(mocks.query.mock.calls.at(-1)?.[0]).toContain(
+		"delete from infrastructure_vm_lease",
 	);
 	expect(mocks.release).toHaveBeenCalledWith(false);
 });
 
-it("discards uncertain sessions after an acquisition timeout without running the operation", async () => {
+it("discards the connection when releasing the lease fails", async () => {
 	mocks.query
-		.mockResolvedValueOnce({ rows: [{ statement_timeout: "2min" }] })
-		.mockResolvedValueOnce({ rows: [] })
-		.mockRejectedValueOnce(new Error("statement timeout"));
-	const operation = vi.fn();
-	await expect(lockedVm("workspace", operation)).rejects.toThrow(
-		"statement timeout",
-	);
-	expect(operation).not.toHaveBeenCalled();
-	expect(mocks.release).toHaveBeenCalledWith(true);
-});
-
-it("unlocks and discards a session if restoring its timeout fails", async () => {
-	mocks.query
-		.mockResolvedValueOnce({ rows: [{ statement_timeout: "2min" }] })
-		.mockResolvedValueOnce({ rows: [] })
-		.mockResolvedValueOnce({ rows: [] })
-		.mockRejectedValueOnce(new Error("restore failed"));
-	const operation = vi.fn();
-	await expect(lockedVm("workspace", operation)).rejects.toThrow(
-		"restore failed",
-	);
-	expect(operation).not.toHaveBeenCalled();
-	expect(mocks.query).toHaveBeenLastCalledWith(
-		"select pg_advisory_unlock(hashtextextended($1,81738421))",
-		["workspace"],
-	);
-	expect(mocks.release).toHaveBeenCalledWith(true);
-});
-
-it("discards a session when unlock fails", async () => {
-	mocks.query
-		.mockResolvedValueOnce({ rows: [{ statement_timeout: "2min" }] })
-		.mockResolvedValueOnce({ rows: [] })
-		.mockResolvedValueOnce({ rows: [] })
-		.mockResolvedValueOnce({ rows: [] })
+		.mockResolvedValueOnce(leased)
 		.mockRejectedValueOnce(new Error("connection lost"));
 	expect(await lockedVm("workspace", async () => "done")).toBe("done");
 	expect(mocks.release).toHaveBeenCalledWith(true);
