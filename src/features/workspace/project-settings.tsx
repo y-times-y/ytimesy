@@ -68,8 +68,11 @@ export function ProjectSettings({
 	onProjectAdded,
 	onSignOut,
 	onClose,
+	initialSection,
 }: {
 	open: boolean;
+	/** The section to show when the panel opens, e.g. after an OAuth round trip. */
+	initialSection?: SettingsSection;
 	codexUsage?: CodexUsage;
 	projectId?: string;
 	projects: readonly Project[];
@@ -79,6 +82,9 @@ export function ProjectSettings({
 	onClose: () => void;
 }) {
 	const [section, setSection] = useState<SettingsSection>("account");
+	useEffect(() => {
+		if (open && initialSection) setSection(initialSection);
+	}, [open, initialSection]);
 	const [settingsProjectId, setSettingsProjectId] = useState<string>();
 	const readSubscriptionUsage = useServerFn(codexSubscriptionUsageFn);
 	const subscriptionUsage = useQuery({

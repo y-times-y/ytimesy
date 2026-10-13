@@ -12,6 +12,7 @@ import {
 	setMcpServerEnabledFn,
 	startMcpOAuthFn,
 } from "./mcp-servers.fn";
+import { rememberMcpSignInReturn } from "./mcp-sign-in-return";
 
 /** Plugin servers are named <plugin>-<server>; "linear-linear" reads as "Linear". */
 function serverLabel(name: string) {
@@ -40,10 +41,15 @@ export function McpServers() {
 		queryClient.setQueryData(["mcp-servers"], next);
 	// OAuth servers: the provider's sign-in page, then back to /api/mcp/oauth/callback.
 	const signIn = useMutation({
-		mutationFn: (id: string) => startSignIn({ data: { id } }),
+		mutationFn: async (id: string) => ({
+			id,
+			...(await startSignIn({ data: { id } })),
+		}),
 		onSuccess: (result) => {
-			if (result.url) window.location.assign(result.url);
-			else void servers.refetch();
+			if (result.url) {
+				rememberMcpSignInReturn("mcp", result.id);
+				window.location.assign(result.url);
+			} else void servers.refetch();
 		},
 	});
 	const add = useMutation({
@@ -176,7 +182,7 @@ export function McpServers() {
 			{servers.data?.length ? (
 				<ul className="integration-list">
 					{servers.data.map((server) => {
-						const needsSignIn = server.auth === "oauth" && !server.signedIn;
+						const needsSignIn = server.signIn === "needs-sign-in";
 						return (
 							<li className="integration-row" key={server.id}>
 								<BrandLogo
@@ -193,6 +199,10 @@ export function McpServers() {
 											<StatusBadge tone="muted">Off</StatusBadge>
 										) : needsSignIn ? (
 											<StatusBadge tone="warning">Needs sign-in</StatusBadge>
+										) : server.signIn === "unreachable" ? (
+											<StatusBadge tone="muted">Can't reach server</StatusBadge>
+										) : server.signIn === "signed-in" ? (
+											<StatusBadge tone="success">Signed in</StatusBadge>
 										) : (
 											<StatusBadge tone="success">Connected</StatusBadge>
 										)}

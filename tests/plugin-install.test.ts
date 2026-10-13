@@ -216,7 +216,12 @@ it("installs a sign-in (OAuth) plugin with its commands and an OAuth MCP server 
 		mcpServers: ["linear-linear"],
 	});
 	expect(await listMcpServers("alice")).toMatchObject([
-		{ name: "linear-linear", auth: "oauth", signedIn: false, headerNames: [] },
+		{
+			name: "linear-linear",
+			auth: "oauth",
+			signIn: "needs-sign-in",
+			headerNames: [],
+		},
 	]);
 	await removeInstall("alice", installed.id);
 });
@@ -267,7 +272,7 @@ it("signs each user in through a reviewed sign-in URL instead of a shared keyles
 		contacted.every((url) => url.startsWith("https://mcp.exa.ai/mcp?login")),
 	).toBe(true);
 	expect(await listMcpServers("alice")).toMatchObject([
-		{ name: "exa-exa", auth: "oauth", signedIn: false },
+		{ name: "exa-exa", auth: "oauth", signIn: "needs-sign-in" },
 	]);
 	await removeInstall("alice", installed.id);
 });

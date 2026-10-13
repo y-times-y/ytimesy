@@ -29,9 +29,14 @@ export type PublicMcpServer = {
 	pluginId: string | null;
 	enabled: boolean;
 	auth: "headers" | "oauth";
-	/** OAuth servers: whether the user has signed in. */
-	signedIn: boolean;
+	/**
+	 * OAuth servers: whether sign-in works, as last checked against the server.
+	 * Never "signed-in" unless a request with the user's token succeeded.
+	 */
+	signIn: McpSignInState | null;
 };
+
+export type McpSignInState = "signed-in" | "needs-sign-in" | "unreachable";
 
 type Row = {
 	id: string;
@@ -55,7 +60,8 @@ const publicServer = (row: Row): PublicMcpServer => ({
 	pluginId: row.plugin_id,
 	enabled: row.enabled,
 	auth: row.auth,
-	signedIn: row.auth === "oauth" && row.sealed_oauth !== null,
+	// Unchecked rows never claim a sign-in; the service verifies before listing.
+	signIn: row.auth === "oauth" ? "needs-sign-in" : null,
 });
 
 export async function addMcpServer(
@@ -85,11 +91,19 @@ export async function addMcpServer(
 export async function listMcpServers(
 	userId: string,
 ): Promise<PublicMcpServer[]> {
+	return (await listMcpServersWithOAuth(userId)).map((entry) => entry.server);
+}
+
+/** Server-side only: each server with its sealed OAuth record, for sign-in checks. */
+export async function listMcpServersWithOAuth(userId: string) {
 	const { rows } = await database().query<Row>(
 		"select * from mcp_server where user_id=$1 order by name",
 		[userId],
 	);
-	return rows.map(publicServer);
+	return rows.map((row) => ({
+		server: publicServer(row),
+		sealedOAuth: row.auth === "oauth" ? row.sealed_oauth : null,
+	}));
 }
 
 export async function setMcpServerEnabled(
