@@ -20,8 +20,13 @@ import type {
 	PullRequestDetail,
 	PullRequestPerson,
 } from "#/domain/pull-request-review";
+import { sourceLanguageFromPath } from "#/domain/source-language";
 import { requestJson } from "../projects/api";
 import { AgentMarkdown } from "../sessions/agent-markdown";
+import {
+	HighlightedTokens,
+	useHighlightedLines,
+} from "../sessions/highlighted-code";
 import { DiffInspector } from "./diff-inspector";
 import "./pull-request-inspector.css";
 
@@ -139,6 +144,11 @@ function Hunk({ entry }: { entry: PullRequestComment }) {
 		.split("\n")
 		.filter((line) => !line.startsWith("@@"))
 		.slice(-6);
+	const code = lines.map((line) => line.slice(1));
+	const highlighted = useHighlightedLines(
+		code.join("\n"),
+		sourceLanguageFromPath(entry.path ?? ""),
+	);
 	return (
 		<figure className="pr-hunk">
 			<figcaption>
@@ -160,7 +170,10 @@ function Hunk({ entry }: { entry: PullRequestComment }) {
 						data-target={index === lines.length - 1 || undefined}
 					>
 						<i>{line[0] === "+" || line[0] === "-" ? line[0] : " "}</i>
-						{line.slice(1)}
+						<HighlightedTokens
+							text={code[index] ?? ""}
+							tokens={highlighted?.[index]}
+						/>
 						{"\n"}
 					</span>
 				))}
