@@ -1,5 +1,12 @@
 import { database } from "../database";
 
+export type CheckpointStage =
+	| "wake"
+	| "export"
+	| "upload"
+	| "save"
+	| "advanced";
+
 /** Backstop for a crash between saving a settled turn and enqueueing its backup. */
 export async function sessionsAwaitingCheckpoint() {
 	const { rows } = await database().query<{ user_id: string; id: string }>(
@@ -7,9 +14,31 @@ export async function sessionsAwaitingCheckpoint() {
          left join session_checkpoint c on c.session_id=s.id
          where s.provider_ref is not null and s.turn_status in ('completed','failed')
            and (c.session_id is null or s.updated_at>c.created_at)
+           and not exists (select 1 from session_checkpoint_failure f where f.session_id=s.id and f.retry_after>now())
          order by s.updated_at desc limit 100`,
 	);
 	return rows;
+}
+
+/** Backs off 5 minutes, doubling to a day, so a failing capture cannot keep its VM awake. */
+export async function recordCheckpointFailure(
+	sessionId: string,
+	stage: CheckpointStage,
+) {
+	await database().query(
+		`insert into session_checkpoint_failure(session_id,failures,stage,retry_after)
+         select id,1,$2,now()+interval '5 minutes' from agent_session where id=$1
+         on conflict(session_id) do update set failures=session_checkpoint_failure.failures+1,stage=excluded.stage,failed_at=now(),
+           retry_after=now()+least(interval '5 minutes'*power(2,least(session_checkpoint_failure.failures,9)),interval '1 day')`,
+		[sessionId, stage],
+	);
+}
+
+export async function clearCheckpointFailure(sessionId: string) {
+	await database().query(
+		"delete from session_checkpoint_failure where session_id=$1",
+		[sessionId],
+	);
 }
 
 export async function checkpointForSession(userId: string, sessionId: string) {
