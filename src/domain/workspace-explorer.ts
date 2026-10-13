@@ -1,7 +1,7 @@
 import { visibleWorkspacePath } from "./visible-workspace-path";
 
-export const MAX_WORKSPACE_EXPLORER_PATHS = 4000;
-export const MAX_WORKSPACE_SOURCE_CHARS = 200_000;
+const MAX_WORKSPACE_EXPLORER_PATHS = 4000;
+const MAX_WORKSPACE_SOURCE_CHARS = 200_000;
 
 export type WorkspaceExplorerListing = {
 	readonly root: string | null;

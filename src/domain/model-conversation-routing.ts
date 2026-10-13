@@ -2,7 +2,7 @@ import { readBoundedRequestBody } from "./bounded-request-body";
 import { verifyDeliveryRequest } from "./delivery-auth";
 import { type WorkflowStep, workflowStepSchema } from "./model-workflow";
 
-export type ModelConversationScope = { userId: string; sessionId: string };
+type ModelConversationScope = { userId: string; sessionId: string };
 
 export function modelConversationName(scope: ModelConversationScope) {
 	return JSON.stringify([scope.userId, scope.sessionId]);

@@ -1,4 +1,3 @@
-import { githubGitHttpEnv } from "#/domain/github-git-auth";
 import {
 	commitCoAuthorTrailer,
 	type PublicationAuthor,
@@ -8,10 +7,6 @@ export function repositoryDirectory(fullName: string) {
 	const repo = fullName.split("/")[1];
 	if (!repo) throw new Error("Repository name is missing.");
 	return `/home/ubuntu/${repo}`;
-}
-
-export function githubCloneEnv(token: string) {
-	return githubGitHttpEnv(token);
 }
 
 export function githubBotCommitHookPath(directory: string) {

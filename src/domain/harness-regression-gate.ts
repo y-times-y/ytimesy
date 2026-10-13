@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
-export const regressionGateInput = z.object({
+const regressionGateInput = z.object({
 	protocolSha256: sha256,
 	expectedTaskIds: z.array(z.string().min(1)).min(1),
 	repetitions: z.number().int().positive(),

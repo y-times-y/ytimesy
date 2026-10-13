@@ -3,7 +3,7 @@ import type { AgentProviderId } from "#/domain/agent-provider";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
 import { getCodexSession } from "./codex-session.fn";
 
-export type SessionReadSelection = {
+type SessionReadSelection = {
 	projectId: string;
 	sessionId: string;
 	harnessId: AgentProviderId;

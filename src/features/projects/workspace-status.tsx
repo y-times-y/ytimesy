@@ -5,7 +5,7 @@ import { workspacePrepareShowsStatus } from "#/domain/project-workspace";
 import { requestJson } from "./api";
 import { GithubSetupLink } from "./github-setup-link";
 
-export interface WorkspaceView {
+interface WorkspaceView {
 	id: string;
 	projectId: string;
 	status:

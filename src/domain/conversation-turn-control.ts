@@ -14,7 +14,7 @@ export type ActiveConversationTurn = TurnControl & {
 export const TURN_COORDINATION_LEASE_MS = 30_000;
 
 export type TurnControlAction = "acquire" | "renew" | "release" | "cancel";
-export type CoordinationFailureReason =
+type CoordinationFailureReason =
 	| { kind: "http"; status: number }
 	| { kind: "transport"; category: "timeout" | "network" };
 

@@ -11,7 +11,7 @@ export function childTaskEventQueueText(eventId: string) {
 	return `${INTERNAL_EVENT_PREFIX}${eventId}`;
 }
 
-export function isInternalChildTaskMessage(text: string): boolean {
+function isInternalChildTaskMessage(text: string): boolean {
 	return (
 		text.startsWith(INTERNAL_EVENT_PREFIX) ||
 		((/^[^\n]+ (finished|failed)\. Its final summary is below:\n\n/.test(

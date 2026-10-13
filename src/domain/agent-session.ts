@@ -51,9 +51,7 @@ export function shouldResealProjectSnapshotAfterCopyFailure(message: string) {
  * Freestyle can keep reporting the VM cap for a short time after Delete
  * chat destroys a machine. Retry the copy; do not reseal the template.
  */
-export const WORKSPACE_COPY_CAPACITY_RETRY_DELAYS_MS = [
-	4_000, 8_000, 16_000,
-] as const;
+const WORKSPACE_COPY_CAPACITY_RETRY_DELAYS_MS = [4_000, 8_000, 16_000] as const;
 
 export function workspaceCopyCapacityRetryDelaysMs(message: string) {
 	return isWorkspaceAtCapacity(message)
@@ -92,7 +90,7 @@ export function chatsFromAgentSessions(
 }
 
 /** Prepared snapshots from the native-runtime era can still hold these; copies remove them. */
-export const COPIED_SESSION_SCRATCH_PATHS = [
+const COPIED_SESSION_SCRATCH_PATHS = [
 	"/tmp/ytimesy-opencode-status.json",
 	"/tmp/ytimesy-claude-auth-status.json",
 	"/tmp/ytimesy-auth-status.json",
@@ -108,7 +106,7 @@ export const COPIED_SESSION_SCRATCH_PATHS = [
 	"/tmp/ytimesy-project-context.md",
 ] as const;
 
-export const COPIED_SESSION_DB_FILES = [
+const COPIED_SESSION_DB_FILES = [
 	"/home/ubuntu/.local/share/opencode/opencode.db",
 	"/home/ubuntu/.local/share/opencode/opencode.db-wal",
 	"/home/ubuntu/.local/share/opencode/opencode.db-shm",
@@ -117,7 +115,7 @@ export const COPIED_SESSION_DB_FILES = [
 	"/root/.local/share/opencode/opencode.db-shm",
 ] as const;
 
-export const COPIED_SESSION_SCRATCH_TREES = [
+const COPIED_SESSION_SCRATCH_TREES = [
 	"/home/ubuntu/.local/share/opencode/log",
 	"/home/ubuntu/.local/state/opencode",
 	"/home/ubuntu/.codex/sessions",

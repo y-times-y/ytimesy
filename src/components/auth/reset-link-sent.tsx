@@ -18,7 +18,7 @@ import { useIsHydrated } from "./use-is-hydrated";
 /** `sessionStorage` key the forgot-password form stores the submitted email under. */
 export const RESET_LINK_SENT_STORAGE_KEY = "better-auth-ui.reset-link-sent";
 
-export type ResetLinkSentProps = {
+type ResetLinkSentProps = {
 	className?: string;
 };
 

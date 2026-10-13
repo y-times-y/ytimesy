@@ -137,7 +137,7 @@ export function responsesEndpointCompactor(input: {
 	};
 }
 
-export function isNativeCompactionMessage(message: ModelMessage): boolean {
+function isNativeCompactionMessage(message: ModelMessage): boolean {
 	return (
 		message.role === "assistant" &&
 		Array.isArray(message.content) &&

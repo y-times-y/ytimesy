@@ -17,7 +17,7 @@ const tokenResponse = z.object({
 	refresh_token: z.string().optional(),
 	expires_in: z.number().optional(),
 });
-export interface GithubCredentials {
+interface GithubCredentials {
 	accessToken: string;
 	refreshToken?: string;
 	expiresAt: number | null;
@@ -236,7 +236,7 @@ export async function compareBranchAhead(
 	}
 }
 
-export async function createDraftPullRequest(
+async function createDraftPullRequest(
 	token: string,
 	fullName: string,
 	draft: { title: string; body: string; head: string; base: string },

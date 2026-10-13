@@ -1,5 +1,5 @@
-export const INSPECTOR_SPLIT_MIN = 0.32;
-export const INSPECTOR_SPLIT_MAX = 0.72;
+const INSPECTOR_SPLIT_MIN = 0.32;
+const INSPECTOR_SPLIT_MAX = 0.72;
 export const INSPECTOR_SPLIT_DEFAULT = 0.42;
 export const CHAT_PANE_MIN_WIDTH = 320;
 export const INSPECTOR_PANE_MIN_WIDTH = 360;

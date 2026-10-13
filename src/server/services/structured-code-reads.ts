@@ -21,7 +21,7 @@ const selection = z.discriminatedUnion("view", [
 			.optional(),
 	}),
 ]);
-export const codeReadRequest = z.object({
+const codeReadRequest = z.object({
 	files: z.array(selection).min(1).max(4),
 });
 const result = z.object({ files: z.array(z.unknown()).max(4) });

@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { toolsSnapshotIdFromRecord } from "#/domain/workspace-boot-snapshot";
 import { loadToolsSnapshotSetting } from "#/server/adapters/product-settings";
 
-export const TOOLS_SNAPSHOT_STATE_PATH = ".ytimesy/tools-snapshot.json";
+const TOOLS_SNAPSHOT_STATE_PATH = ".ytimesy/tools-snapshot.json";
 
 export async function readToolsSnapshotId(
 	path = TOOLS_SNAPSHOT_STATE_PATH,

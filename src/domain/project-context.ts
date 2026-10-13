@@ -1,6 +1,6 @@
 import type { SessionItem } from "./session-item";
 
-export type ProjectTrace = {
+type ProjectTrace = {
 	readonly area: string | null;
 	readonly summary: string;
 };
@@ -47,16 +47,14 @@ export function completedTurnUpdatesProjectContext(input: {
 	return Boolean(reply.includes(" ") || reply.length > 80);
 }
 
-export function durableProjectTraces(
-	traces: readonly ProjectTrace[],
-): ProjectTrace[] {
+function durableProjectTraces(traces: readonly ProjectTrace[]): ProjectTrace[] {
 	return traces.filter(
 		(trace) =>
 			Boolean(trace.area?.trim()) || !isExactReplyEchoTrace(trace.summary),
 	);
 }
 
-export function briefingUpdateFromTurn(input: {
+function briefingUpdateFromTurn(input: {
 	readonly task: string;
 	readonly reply: string;
 }): string | null {

@@ -22,7 +22,7 @@ type OAuthRecord = {
 	authorizationServer?: OAuthAuthorizationServerInformation;
 };
 
-export class McpSignInRequired extends Error {
+class McpSignInRequired extends Error {
 	constructor(readonly authorizationUrl?: URL) {
 		super("This MCP server needs sign-in.");
 	}

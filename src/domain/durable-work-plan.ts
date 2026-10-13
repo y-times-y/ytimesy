@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { parallelWorkPlan, scheduleParallelWork } from "./parallel-work-plan";
 
-export const durableWorkPlanRequest = z.object({
+const durableWorkPlanRequest = z.object({
 	tasks: z
 		.array(
 			parallelWorkPlan.shape.tasks.element.extend({

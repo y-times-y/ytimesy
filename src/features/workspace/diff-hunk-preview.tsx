@@ -12,7 +12,7 @@ import {
 	useHighlightedLines,
 } from "../sessions/highlighted-code";
 
-export function diffViewHunk(preview: DiffPreviewHunk): HunkData {
+function diffViewHunk(preview: DiffPreviewHunk): HunkData {
 	const changes = preview.lines.map((line): ChangeData => {
 		if (line.oldNumber === null)
 			return {

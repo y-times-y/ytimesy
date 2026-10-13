@@ -3,7 +3,7 @@ import { database } from "../adapters/database";
 import { CODEX_OAUTH_CLIENT_ID, CODEX_OAUTH_ISSUER } from "./codex-oauth";
 import { seal, unseal } from "./token-vault";
 
-export type ManagedCodexAuth = {
+type ManagedCodexAuth = {
 	readonly auth_mode: "chatgpt";
 	readonly tokens: {
 		readonly access_token: string;
@@ -13,7 +13,7 @@ export type ManagedCodexAuth = {
 	};
 };
 
-export type CodexExternalTokens = {
+type CodexExternalTokens = {
 	readonly accessToken: string;
 	readonly chatgptAccountId: string;
 	readonly chatgptPlanType?: string;

@@ -5,10 +5,3 @@ export function unwrapShellCommand(command: string): string {
 	const afterCd = inner.match(/^cd\s+\S+\s+&&\s+([\s\S]+)$/);
 	return (afterCd?.[1] ?? inner).trim();
 }
-
-export function stripHeredocBodies(command: string): string {
-	return command
-		.replace(/<<(['"]?)(\w+)\1\n[\s\S]*?\n\2\b/g, "")
-		.replace(/<<(['"]?)\w+\1[\s\S]*$/, "")
-		.trim();
-}

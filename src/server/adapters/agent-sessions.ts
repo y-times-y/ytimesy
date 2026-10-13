@@ -202,10 +202,7 @@ export async function childAgentSession(
 	return children[0] ?? null;
 }
 
-export async function childAgentSessions(
-	userId: string,
-	parentSessionId: string,
-) {
+async function childAgentSessions(userId: string, parentSessionId: string) {
 	const result = await database().query(
 		`select ${SESSION_COLUMNS}
 		 from agent_session

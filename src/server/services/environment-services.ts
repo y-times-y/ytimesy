@@ -4,7 +4,7 @@ import { posixShellQuoted as quote } from "#/domain/posix-command";
 import { environmentRecipe } from "#/domain/project-environment";
 import type { WorkspaceMachines } from "./workspace-machines";
 
-export const preparedEnvironment = z.object({
+const preparedEnvironment = z.object({
 	version: z.literal(1),
 	repositories: z
 		.array(

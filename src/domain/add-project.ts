@@ -1,6 +1,6 @@
 import type { Project, RepositoryChoice } from "./projects";
 
-export type AddProjectPhase = "loading" | "connect" | "choose";
+type AddProjectPhase = "loading" | "connect" | "choose";
 
 export function addProjectPhase(input: {
 	readonly loading: boolean;
@@ -49,18 +49,7 @@ export function repositoryChoiceValue(repository: RepositoryChoice) {
 	return `${repository.installationId}:${repository.repositoryId}`;
 }
 
-export function repositoryIsAdded(
-	projects: readonly Pick<Project, "installationId" | "repositoryId">[],
-	repository: Pick<RepositoryChoice, "installationId" | "repositoryId">,
-) {
-	return projects.some(
-		(project) =>
-			project.installationId === repository.installationId &&
-			project.repositoryId === repository.repositoryId,
-	);
-}
-
-export function filterProjects(
+function filterProjects(
 	projects: readonly Project[],
 	query: string,
 ): Project[] {
@@ -80,7 +69,7 @@ export function scratchRepositoryName(value: string) {
 	return /^[A-Za-z0-9_.-]{1,100}$/.test(name) ? name : null;
 }
 
-export type ProjectPickerRow = {
+type ProjectPickerRow = {
 	readonly key: string;
 	readonly fullName: string;
 	readonly selected: boolean;

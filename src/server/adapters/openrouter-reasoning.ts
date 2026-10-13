@@ -56,7 +56,7 @@ export function openRouterReasoningFetch(
 }
 
 /** The provider returns encrypted-only state at finish; AI SDK checkpoints need a content part. */
-export const openRouterReasoningMiddleware: LanguageModelMiddleware = {
+const openRouterReasoningMiddleware: LanguageModelMiddleware = {
 	specificationVersion: "v4",
 	transformParams: async ({ params }) => ({
 		...params,

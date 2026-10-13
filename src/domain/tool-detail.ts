@@ -83,7 +83,7 @@ export function publicToolDetail(
 }
 
 /** A tool row as a short sentence: "Ran `make test`", "Edited lsm_db.h +12 −3". */
-export type ToolActivity = {
+type ToolActivity = {
 	verb: string;
 	target?: string;
 	/** Commands and paths render in monospace. */

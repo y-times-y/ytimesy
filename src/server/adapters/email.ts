@@ -1,7 +1,7 @@
 import { seal } from "../auth/token-vault";
 import { database } from "./database";
 
-export type AuthEmailPurpose = "verify-email" | "reset-password";
+type AuthEmailPurpose = "verify-email" | "reset-password";
 
 export async function persistAuthEmail(input: {
 	to: string;

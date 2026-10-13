@@ -5,7 +5,7 @@ import { createHash, createHmac } from "node:crypto";
  * Only node:crypto is used, so the same code runs in Node and in Workers
  * with nodejs_compat.
  */
-export type R2Configuration = {
+type R2Configuration = {
 	accountId: string;
 	accessKeyId: string;
 	secretAccessKey: string;

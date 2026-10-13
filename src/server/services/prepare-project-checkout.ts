@@ -11,7 +11,7 @@ import {
 	listLockfilesArgv,
 } from "#/server/adapters/repository-setup";
 
-export type ProjectCheckoutHost = {
+type ProjectCheckoutHost = {
 	readonly exec: (
 		command: string,
 		timeoutMs: number,

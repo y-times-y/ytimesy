@@ -1,6 +1,6 @@
 import { posixShellQuoted } from "./posix-command";
 
-export const AGENT_SECRETS_ENV_NAME = ".ytimesy-agent-secrets.env";
+const AGENT_SECRETS_ENV_NAME = ".ytimesy-agent-secrets.env";
 
 const RESERVED_SECRET_NAMES = new Set([
 	"PATH",

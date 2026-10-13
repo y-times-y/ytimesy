@@ -61,7 +61,7 @@ export function taskToolExecution(
 }
 
 /** Briefs carry goal, constraints, success checks and key findings; builders read the source themselves. */
-export const TASK_BRIEF_MAX_CHARACTERS = 2500;
+const TASK_BRIEF_MAX_CHARACTERS = 2500;
 
 export function taskBriefTooLong(prompt: string) {
 	return prompt.length > TASK_BRIEF_MAX_CHARACTERS

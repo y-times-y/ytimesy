@@ -5,7 +5,7 @@ import type { SettingsSection } from "#/domain/workspace-settings";
  * sessionStorage: it survives the round trip through the provider in this tab
  * and nothing about it needs to reach the server.
  */
-export type McpSignInReturn = {
+type McpSignInReturn = {
 	readonly path: string;
 	readonly section: SettingsSection;
 	readonly serverId: string;
@@ -40,7 +40,7 @@ export function takeMcpSignInReturn(): McpSignInReturn | null {
 	}
 }
 
-export type McpSignInResult = "ok" | "cancelled" | "failed";
+type McpSignInResult = "ok" | "cancelled" | "failed";
 
 export function mcpSignInResult(search: string): McpSignInResult | null {
 	const value = new URLSearchParams(search).get("mcpSignIn");

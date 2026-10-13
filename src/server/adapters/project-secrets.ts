@@ -3,7 +3,7 @@ import type { EncryptedSecret } from "#/domain/encrypted-secret";
 import type { PublicProjectSecret } from "#/domain/project-secret";
 import { database } from "./database";
 
-export type StoredProjectSecret = PublicProjectSecret & {
+type StoredProjectSecret = PublicProjectSecret & {
 	readonly encrypted: EncryptedSecret;
 };
 

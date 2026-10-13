@@ -48,7 +48,7 @@ function repositoryUrl(input: Repository) {
 }
 
 /** Git never checks out untrusted files or inherits application secrets on the broker. */
-export async function withGitBroker<T>(
+async function withGitBroker<T>(
 	operation: (
 		git: (args: string[], token?: string) => Promise<string>,
 		directory: string,

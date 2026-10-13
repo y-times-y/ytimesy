@@ -1,6 +1,6 @@
 import setiFileIcons from "./seti-file-icons.json";
 
-export type FileKind =
+type FileKind =
 	| "typescript"
 	| "tsx"
 	| "javascript"

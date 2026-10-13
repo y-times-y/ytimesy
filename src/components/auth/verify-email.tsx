@@ -17,7 +17,7 @@ import { cn } from "#/lib/utils.ts";
 import { OpenEmailButton } from "./open-email-button";
 import { useIsHydrated } from "./use-is-hydrated";
 
-export type VerifyEmailProps = {
+type VerifyEmailProps = {
 	className?: string;
 };
 

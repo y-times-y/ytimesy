@@ -1,4 +1,4 @@
-export const SESSION_BRANCH_PREFIX = "ytimesy";
+const SESSION_BRANCH_PREFIX = "ytimesy";
 const SESSION_BRANCH_SLUG_MAX_LENGTH = 24;
 
 export function isGeneratedSessionBranch(name: string): boolean {
@@ -9,7 +9,7 @@ export function isGeneratedSessionBranch(name: string): boolean {
 	);
 }
 
-export function sessionBranchSlug(text: string): string {
+function sessionBranchSlug(text: string): string {
 	const slug = text
 		.trim()
 		.toLowerCase()
@@ -22,7 +22,7 @@ export function sessionBranchSlug(text: string): string {
 	return wordBoundary > 0 ? shortened.slice(0, wordBoundary) : shortened;
 }
 
-export function sessionBranchSuffix(id: string): string {
+function sessionBranchSuffix(id: string): string {
 	const trimmed = id.trim();
 	if (/^\d+$/.test(trimmed)) {
 		return Number(trimmed).toString(16).padStart(4, "0").slice(-4);

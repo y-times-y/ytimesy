@@ -32,7 +32,7 @@ if p.stat().st_size > ${MAX_PATCH_BYTES}: raise ValueError("Patch exceeds transf
 print(json.dumps({"base":subprocess.check_output(["git","rev-parse",sys.argv[2]],text=True).strip(),"patch":base64.b64encode(p.read_bytes()).decode()}))' "$temporary/patch" "$base"`;
 
 /** Git checks the complete patch before applying it; conflicts never use rejects or a forced overwrite. */
-export function applyTaskPatchCommand(input: {
+function applyTaskPatchCommand(input: {
 	directory: string;
 	base: string;
 	patchPath: string;

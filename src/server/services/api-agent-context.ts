@@ -1,6 +1,6 @@
 import type { ModelMessage } from "ai";
 
-export type ContextBudget = {
+type ContextBudget = {
 	compactAtTokens: number;
 	inputLimitTokens: number;
 };
@@ -30,7 +30,7 @@ export const estimateContextTokens = (value: unknown) => {
 	);
 };
 
-export type ContextMeasurement = {
+type ContextMeasurement = {
 	tokens: number;
 	estimatedHistory: number;
 };

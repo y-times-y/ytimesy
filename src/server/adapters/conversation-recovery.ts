@@ -21,7 +21,7 @@ export type ConversationPoint = {
 		ref: string;
 	};
 };
-export const transcriptFingerprint = (items: unknown) =>
+const transcriptFingerprint = (items: unknown) =>
 	createHash("sha256").update(JSON.stringify(items)).digest("hex");
 
 /** Called inside turn admission's session lock, before the new prompt can execute. */

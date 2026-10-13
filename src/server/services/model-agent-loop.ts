@@ -158,7 +158,7 @@ const INTERRUPTED_STREAM =
 	/\b(ETIMEDOUT|ECONNRESET|EPIPE|ENETUNREACH|EAI_AGAIN|UND_ERR_SOCKET|terminated|fetch failed|other side closed)\b/;
 
 /** Network-level interruption anywhere in the failure chain, not a provider rejection. */
-export function interruptedStream(error: unknown) {
+function interruptedStream(error: unknown) {
 	for (let current = error, depth = 0; current && depth < 8; depth++) {
 		if (typeof current !== "object") break;
 		const record = current as {
@@ -223,7 +223,7 @@ export type ModelAgentRuntime = {
 	};
 };
 
-export type ModelAgentStepResult = {
+type ModelAgentStepResult = {
 	messages: ModelMessage[];
 	outcome: "continue" | "completed";
 };

@@ -37,7 +37,7 @@ export type PullRequestRepository = {
 	readonly number?: number;
 };
 
-export type PullRequestSource = PullRequestRepository & {
+type PullRequestSource = PullRequestRepository & {
 	readonly number: number;
 };
 

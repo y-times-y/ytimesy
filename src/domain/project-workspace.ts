@@ -3,7 +3,7 @@ import {
 	isWorkspaceComputeAllowanceExhausted,
 } from "./failure-message";
 
-export const workspaceStatuses = [
+const workspaceStatuses = [
 	"queued",
 	"provisioning",
 	"cloning",
@@ -88,7 +88,7 @@ export function publicFailureMessage(error: unknown) {
 	).slice(0, 300);
 }
 
-export function workspaceCapacityMessage(message: string) {
+function workspaceCapacityMessage(message: string) {
 	if (isWorkspaceAtCapacity(message)) {
 		return "This workspace plan is at its limit. Delete an unused agent session or raise the quota before starting another. Pausing does not free a slot.";
 	}

@@ -19,7 +19,7 @@ import { FieldDescription, FieldGroup } from "#/components/ui/field.tsx";
 import { cn } from "#/lib/utils.ts";
 import { passwordLengthError, useAuthForm } from "./auth-form";
 
-export type ResetPasswordProps = {
+type ResetPasswordProps = {
 	className?: string;
 };
 

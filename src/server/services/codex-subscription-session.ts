@@ -36,7 +36,7 @@ import {
 } from "./codex-workspace-session";
 
 /** Database transcript and account catalog only. Reading a chat never starts native Codex or a VM. */
-export async function readSubscriptionSession(
+async function readSubscriptionSession(
 	scope: CodexSessionScope,
 ): Promise<PublicCodexSession> {
 	const session = scope.sessionId
@@ -112,7 +112,7 @@ export async function connectSubscriptionSession(
 	}
 }
 
-export function deviceLoginConnection(
+function deviceLoginConnection(
 	login: CodexDeviceLogin,
 ): AgentConnection | null {
 	if (login.status === "pending")

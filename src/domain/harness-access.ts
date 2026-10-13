@@ -7,20 +7,20 @@ import {
 import { parseModelRouteId } from "./model-connection";
 import { isTurnRunning, type SessionTurnStatus } from "./session-item";
 
-export type HarnessReadiness =
+type HarnessReadiness =
 	| "ready"
 	| "authorizing"
 	| "unsigned"
 	| "failed"
 	| "expired";
 
-export type HarnessSubscriptionAction =
+type HarnessSubscriptionAction =
 	| "sign_in"
 	| "open_provider"
 	| "retry"
 	| "sign_in_again";
 
-export type HarnessAccess = {
+type HarnessAccess = {
 	readonly provider: AgentProvider;
 	readonly readiness: HarnessReadiness;
 	readonly muted: boolean;

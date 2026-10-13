@@ -94,7 +94,7 @@ export type HarnessSessionScope = CodexSessionScope & {
 	readonly harnessId: AgentProviderId;
 };
 
-export type PublicHarnessSession = PublicCodexSession;
+type PublicHarnessSession = PublicCodexSession;
 
 export function startPreparedAgentTask(
 	scope: HarnessSessionScope,
@@ -143,7 +143,7 @@ export function startPreparedAgentTask(
 	});
 }
 
-export function requestAgentTaskWrapUp(
+function requestAgentTaskWrapUp(
 	machines: WorkspaceMachines,
 	scope: HarnessSessionScope,
 	taskSessionId: string,

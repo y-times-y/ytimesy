@@ -3,7 +3,7 @@ import type { ModelMessage } from "ai";
 import { downloadCheckpoint, uploadCheckpoint } from "./checkpoints/storage";
 import { database } from "./database";
 
-export type StoredSidekick = { modelId: string; messages: ModelMessage[] };
+type StoredSidekick = { modelId: string; messages: ModelMessage[] };
 
 /** The sidekick's context for a Fusion lead session, or a fresh one. */
 export async function loadSidekick(

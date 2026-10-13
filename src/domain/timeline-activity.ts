@@ -38,9 +38,7 @@ export function isExplorationItem(item: SessionItem): boolean {
 	return false;
 }
 
-export function explorationCounts(
-	items: readonly SessionItem[],
-): ExplorationCounts {
+function explorationCounts(items: readonly SessionItem[]): ExplorationCounts {
 	let files = 0;
 	let searches = 0;
 	for (const item of items) {

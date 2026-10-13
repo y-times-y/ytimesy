@@ -7,7 +7,7 @@ import type { SessionItem } from "#/domain/session-item";
  * (api_turn.updated_at) it produced, so the chat Durable Object can keep the
  * turn's history locally instead of reading it back from Postgres each step.
  */
-export type TurnHistoryMirror = (
+type TurnHistoryMirror = (
 	turnId: string,
 	version: string,
 	history: { messages?: ModelMessage[]; items: readonly SessionItem[] },

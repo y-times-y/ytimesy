@@ -12,19 +12,19 @@ export type PluginCommand = {
 	argumentHint?: string;
 	template: string;
 };
-export type PluginMcpServer = {
+type PluginMcpServer = {
 	name: string;
 	url: string;
 	/** Values may hold ${user_config.KEY}; resolved with the user's saved config. */
 	headers: Record<string, string>;
 };
-export type PluginUserConfigOption = {
+type PluginUserConfigOption = {
 	title: string;
 	description: string;
 	sensitive: boolean;
 	required: boolean;
 };
-export type ParsedPlugin = {
+type ParsedPlugin = {
 	name: string;
 	displayName: string;
 	version: string | null;

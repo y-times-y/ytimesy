@@ -46,7 +46,7 @@ import { LastUsedBadge } from "./last-login-method/last-used-badge";
 import { ProviderButtons, type SocialLayout } from "./provider-buttons";
 import { ReauthenticationNotice } from "./reauthentication";
 
-export type SignInProps = {
+type SignInProps = {
 	className?: string;
 	socialLayout?: SocialLayout;
 	socialPosition?: "top" | "bottom";
