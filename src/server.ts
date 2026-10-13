@@ -2,6 +2,7 @@ import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
 import { handleWorkerSocket } from "./server/sockets/worker-sockets";
 import type { WebWorkerEnvironment } from "./server/web/environment";
 import { withWebRequestScope } from "./server/web/request-scope";
+import { withSecurityHeaders } from "./server/web/security-headers";
 
 type WorkerContext = { waitUntil(work: Promise<unknown>): void };
 
@@ -15,11 +16,15 @@ export default createServerEntry({
 			WebWorkerEnvironment | undefined,
 			WorkerContext | undefined,
 		];
-		if (!env?.HYPERDRIVE || !context) return handler.fetch(request);
+		if (!env?.HYPERDRIVE || !context)
+			return withSecurityHeaders(await handler.fetch(request));
 		return withWebRequestScope(
 			env,
 			(work) => context.waitUntil(work),
-			async () => handleWorkerSocket(request) ?? handler.fetch(request),
+			async () =>
+				withSecurityHeaders(
+					await (handleWorkerSocket(request) ?? handler.fetch(request)),
+				),
 		);
 	},
 });
