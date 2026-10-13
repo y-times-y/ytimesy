@@ -63,10 +63,6 @@ export async function recoverConversation(
 		const row = selected.rows[0];
 		if (!row || row.turn_status === "running")
 			throw new Error("Stop the active turn before using recovery.");
-		if (row.harness === "opencode" || row.harness === "claude")
-			throw new Error(
-				"Conversation recovery is available for the custom Codex and API harnesses.",
-			);
 		const active = await client.query(
 			`with recursive descendants as (
       select id from agent_session where user_id=$1 and parent_session_id=$2

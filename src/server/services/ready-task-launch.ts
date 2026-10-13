@@ -19,7 +19,7 @@ const readyTask = parallelWorkPlan.shape.tasks.element
 			.min(1)
 			.max(8),
 		modelId: z.string().min(1).optional(),
-		harness: z.enum(["codex", "claude", "api"]).optional(),
+		harness: z.enum(["codex", "api"]).optional(),
 	});
 
 export const readyTaskLaunch = z.object({

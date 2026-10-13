@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { canStartAgentTurn, isAuthenticatedAgent } from "./agent-connection";
 import { WorkspaceId } from "./ids";
-import {
-	canSendSessionTask,
-	canSubmitComposer,
-} from "./session-policy";
+import { canSendSessionTask, canSubmitComposer } from "./session-policy";
 import { isUsableWorkspace } from "./workspace";
 
 describe("agent connection", () => {

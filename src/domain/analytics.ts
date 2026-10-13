@@ -2,7 +2,7 @@ import { z } from "zod";
 import { harnessModelMetric, harnessToolMetric } from "./harness-performance";
 
 const surface = z.enum(["workspace", "onboarding", "auth", "other"]);
-const runtime = z.enum(["codex", "claude", "api", "opencode"]);
+const runtime = z.enum(["codex", "api"]);
 const role = z.enum(["lead", "builder", "reader"]);
 export const serverAnalyticsEvents = {
 	harness_model_completed: harnessModelMetric.extend({
@@ -38,7 +38,7 @@ export type ServerAnalyticsProperties<E extends ServerAnalyticsEvent> = z.input<
 export const analyticsEvents = {
 	app_viewed: z.object({ surface }),
 	prompt_submitted: z.object({
-		runtime: z.enum(["codex", "claude", "api", "opencode"]),
+		runtime: z.enum(["codex", "api"]),
 		attempts: z.number().int().min(1).max(5),
 	}),
 	inspector_opened: z.object({

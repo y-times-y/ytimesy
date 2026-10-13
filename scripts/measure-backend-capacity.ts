@@ -47,7 +47,7 @@ try {
 	create table auth_user(id text primary key);
 	create table model_connection(id uuid primary key);
 	create table agent_session(id uuid primary key,user_id text not null,project_id uuid,
-	harness text constraint agent_session_harness_check check(harness in ('codex','claude','opencode')),
+	harness text constraint agent_session_harness_check check(harness in ('codex')),
 	items jsonb not null default '[]',turn_status text not null default 'idle',task_state text,parent_session_id uuid,updated_at timestamptz not null default now());
 	create index agent_session_owner on agent_session(user_id,project_id,updated_at desc);`);
 	const turns = await readFile(

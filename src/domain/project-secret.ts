@@ -57,8 +57,3 @@ export function agentSecretsEnvFile(
 		.map((secret) => `export ${secret.name}=${posixShellQuoted(secret.value)}`)
 		.join("\n")}\n`;
 }
-
-export function agentSecretsDeveloperNote(names: readonly string[]) {
-	if (names.length === 0) return "";
-	return ` Project secrets are already exported as ${names.join(", ")}. Use those environment variables. Never print, log, echo, or quote their values.`;
-}
