@@ -530,7 +530,7 @@ Provider credentials and account-side configuration are not included in the repo
 
 ### Integration proof progress — 2026-09-13
 
-The operator runner and recovery commands are in [scripts/cloud-proof/README.md](scripts/cloud-proof/README.md). Use that guide when continuing the first live Codex task. `pnpm cloud:proof status` refreshes actual state; this record is not proof that an ephemeral VM still exists.
+The native Codex proof runner this section used (`scripts/cloud-proof`) was removed with the native runtimes on 2026-10-13.
 
 Verified live: the configured Freestyle API key lists VMs and creates `ytimesy-codex-proof` from `freestyle/ubuntu-sm` (2 CPU, 4 GiB RAM). Remote Node 24.20.0 and Git 2.43.0 work. Codex 0.152.1 installed under the guest ubuntu user's directory. Its device-auth flow returns an OpenAI authorization code. The app-server initialize/account-read flow works; the test correctly fails before inference while signed out. Het completed device authorization. A live turn using the discovered default model `gpt-5.6-sol` completed and wrote exactly `ytimesy cloud proof` plus a newline to `proof.txt`. The runner read the file independently and verified its exact contents. No API key fallback was used.
 
