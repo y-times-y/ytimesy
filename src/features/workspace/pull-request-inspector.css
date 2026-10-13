@@ -1,0 +1,139 @@
+.pr-review {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+	overflow: auto;
+}
+.pr-review-head {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 16px 18px 12px;
+	border-bottom: 1px solid #1f1f1f;
+}
+.pr-review-title {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+}
+.pr-review-title h2 {
+	margin: 0;
+	color: #ededed;
+	font-size: 15px;
+	font-weight: 550;
+	line-height: 20px;
+}
+.pr-review-title h2 span {
+	color: #8a8a8a;
+	font-weight: 400;
+}
+.pr-review-state {
+	display: inline-flex;
+	flex-shrink: 0;
+	align-items: center;
+	gap: 5px;
+	margin-top: 1px;
+	padding: 2px 8px;
+	border-radius: 99px;
+	background: #1f1f1f;
+	color: #bdbdbd;
+	font-size: 11px;
+}
+.pr-review-state[data-state="open"] {
+	background: #12301d;
+	color: #86efac;
+}
+.pr-review-state[data-state="merged"] {
+	background: #26173d;
+	color: #c4b5fd;
+}
+.pr-review-state[data-state="closed"] {
+	background: #3a1414;
+	color: #fca5a5;
+}
+.pr-review-meta {
+	margin: 0;
+	color: #8a8a8a;
+	font-size: 12px;
+}
+.pr-review-meta code {
+	color: #bdbdbd;
+	font-size: 11px;
+}
+.pr-review-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+.pr-review-actions a {
+	gap: 6px;
+}
+.pr-review-summary {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 14px;
+	padding: 10px 18px;
+	border-bottom: 1px solid #1f1f1f;
+	color: #9a9a9a;
+	font-size: 12px;
+}
+.pr-review-summary span {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+}
+.pr-review-summary [data-tone="ok"],
+.pr-review-checks [data-tone="ok"] {
+	color: #4ade80;
+}
+.pr-review-summary [data-tone="bad"],
+.pr-review-checks [data-tone="bad"] {
+	color: #f87171;
+}
+.pr-review-summary [data-tone="wait"],
+.pr-review-checks [data-tone="wait"] {
+	color: #fbbf24;
+}
+.pr-review-section {
+	padding: 10px 18px;
+	border-bottom: 1px solid #1f1f1f;
+	font-size: 13px;
+}
+.pr-review-section summary {
+	color: #d6d6d6;
+	cursor: pointer;
+	font-size: 12px;
+	font-weight: 550;
+}
+.pr-review-checks {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	margin: 10px 0 2px;
+	padding: 0;
+	list-style: none;
+}
+.pr-review-checks li {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	color: #d6d6d6;
+	font-size: 12px;
+}
+.pr-review-checks a {
+	color: inherit;
+}
+.pr-review-muted {
+	color: #8a8a8a;
+}
+.pr-review-body {
+	max-height: 320px;
+	overflow: auto;
+}
+.pr-review-status {
+	margin: 0;
+	padding: 18px;
+	color: #9a9a9a;
+	font-size: 13px;
+}

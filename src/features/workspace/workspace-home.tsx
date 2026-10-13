@@ -980,6 +980,16 @@ export function WorkspaceHome({
 		}));
 	}
 
+	const activeChat = sidebarChats.find((chat) => chat.id === activeSessionId);
+	const activeHead =
+		activeChat?.workingBranch ||
+		(activeChat?.workspaceId
+			? workspacePublicationBranch(activeChat.workspaceId)
+			: null);
+	const sessionPullRequests = listedPullRequests.filter(
+		(pr) => Boolean(activeHead) && pr.head === activeHead,
+	);
+	const sessionPullRequest = sessionPullRequests[0];
 	return (
 		<div className="workspace-shell" data-projects-collapsed={!projectsOpen}>
 			<ProjectSidebar
@@ -1379,6 +1389,17 @@ export function WorkspaceHome({
 							projectId={selectedProject?.id}
 							sessionId={activeSessionId}
 							onStartDesktop={requestDesktop}
+							pullRequest={
+								sessionPullRequest &&
+								selectedProject?.installationId &&
+								selectedProject?.repositoryId
+									? {
+											installationId: selectedProject.installationId,
+											repositoryId: selectedProject.repositoryId,
+											number: sessionPullRequest.number,
+										}
+									: undefined
+							}
 							overview={
 								<WorkspaceOverview
 									tasks={agentTasks.data ?? []}
@@ -1388,17 +1409,7 @@ export function WorkspaceHome({
 									repository={selectedProject?.fullName}
 									desktop={desktop}
 									onOpen={openInspector}
-									pullRequests={listedPullRequests.filter((pr) => {
-										const chat = sidebarChats.find(
-											(chat) => chat.id === activeSessionId,
-										);
-										const head =
-											chat?.workingBranch ||
-											(chat?.workspaceId
-												? workspacePublicationBranch(chat.workspaceId)
-												: null);
-										return Boolean(head && pr.head === head);
-									})}
+									pullRequests={sessionPullRequests}
 								/>
 							}
 						/>

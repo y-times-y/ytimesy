@@ -1,6 +1,11 @@
 import { Octokit } from "@octokit/rest";
 import { z } from "zod";
 import type { RepositoryChoice } from "../../domain/projects";
+import {
+	checkState,
+	type PullRequestDetail,
+	pullRequestFileChange,
+} from "../../domain/pull-request-review";
 import { serverConfig } from "../config";
 
 const tokenResponse = z.object({
@@ -338,4 +343,116 @@ export async function listSessionPullRequests(token: string, fullName: string) {
 			};
 		}),
 	);
+}
+
+/** Everything the in-app review panel shows for one ytimesy pull request. */
+export async function pullRequestDetail(
+	token: string,
+	fullName: string,
+	number: number,
+): Promise<PullRequestDetail> {
+	const { owner, repo } = repositoryOwnerName(fullName);
+	const github = githubClient(token);
+	const [pull, files, reviews] = await Promise.all([
+		github.pulls.get({ owner, repo, pull_number: number }),
+		github.paginate(github.pulls.listFiles, {
+			owner,
+			repo,
+			pull_number: number,
+			per_page: 100,
+		}),
+		github.pulls.listReviews({
+			owner,
+			repo,
+			pull_number: number,
+			per_page: 100,
+		}),
+	]);
+	const head = pull.data.head.sha;
+	const [runs, statuses] = await Promise.all([
+		github.checks
+			.listForRef({ owner, repo, ref: head, per_page: 100 })
+			.then((response) => response.data.check_runs)
+			.catch(() => []),
+		github.repos
+			.getCombinedStatusForRef({ owner, repo, ref: head })
+			.then((response) => response.data.statuses)
+			.catch(() => []),
+	]);
+	return {
+		number: pull.data.number,
+		title: pull.data.title,
+		body: pull.data.body ?? "",
+		url: pull.data.html_url,
+		state: pull.data.merged
+			? "merged"
+			: pull.data.state === "closed"
+				? "closed"
+				: pull.data.draft
+					? "draft"
+					: "open",
+		head: pull.data.head.ref,
+		headSha: pull.data.head.sha,
+		base: pull.data.base.ref,
+		author: pull.data.user?.login ?? "",
+		updatedAt: pull.data.updated_at,
+		mergeable: pull.data.mergeable ?? null,
+		mergeableState: pull.data.mergeable_state ?? null,
+		additions: pull.data.additions,
+		deletions: pull.data.deletions,
+		changedFiles: pull.data.changed_files,
+		comments: pull.data.comments + pull.data.review_comments,
+		checks: [
+			...runs.map((run) => ({
+				name: run.name,
+				state: checkState(run),
+				url: run.html_url ?? null,
+			})),
+			...statuses.map((status) => ({
+				name: status.context,
+				state: checkState(status),
+				url: status.target_url ?? null,
+			})),
+		],
+		reviews: reviews.data
+			.filter((review) => review.state !== "PENDING")
+			.map((review) => ({
+				author: review.user?.login ?? "",
+				state: review.state,
+				submittedAt: review.submitted_at ?? null,
+			})),
+		files: files.map(pullRequestFileChange),
+	};
+}
+
+export async function markPullRequestReady(
+	token: string,
+	fullName: string,
+	number: number,
+) {
+	const { owner, repo } = repositoryOwnerName(fullName);
+	const github = githubClient(token);
+	const pull = await github.pulls.get({ owner, repo, pull_number: number });
+	if (!pull.data.draft) return;
+	await github.graphql(
+		"mutation($id: ID!) { markPullRequestReadyForReview(input: { pullRequestId: $id }) { pullRequest { isDraft } } }",
+		{ id: pull.data.node_id },
+	);
+}
+
+/** Squash-merges only the head commit the user reviewed. */
+export async function mergePullRequest(
+	token: string,
+	fullName: string,
+	number: number,
+	expectedHeadSha: string,
+) {
+	const { owner, repo } = repositoryOwnerName(fullName);
+	await githubClient(token).pulls.merge({
+		owner,
+		repo,
+		pull_number: number,
+		merge_method: "squash",
+		sha: expectedHeadSha,
+	});
 }

@@ -6,9 +6,13 @@ import type { WorkspaceDesktop } from "#/domain/workspace-desktop";
 import { DesktopInspector } from "./desktop-inspector";
 import { DiffInspector } from "./diff-inspector";
 import { FilesInspector } from "./files-inspector";
+import {
+	PullRequestInspector,
+	type PullRequestSource,
+} from "./pull-request-inspector";
 import { TerminalInspector } from "./terminal-inspector";
 
-export type ToolsView = "files" | "diff" | "terminal" | "desktop";
+export type ToolsView = "files" | "diff" | "pr" | "terminal" | "desktop";
 export type InspectorView = ToolsView | "overview";
 
 const views = {
@@ -21,6 +25,12 @@ const views = {
 		label: "Diff",
 		title: "No changes yet.",
 		description: "Changes from this turn will appear here.",
+	},
+	pr: {
+		label: "Pull request",
+		title: "No pull request yet.",
+		description:
+			"When the agent opens a pull request for this chat, you can review and merge it here.",
 	},
 	terminal: {
 		label: "Terminal",
@@ -48,6 +58,7 @@ export function WorkspaceInspector({
 	projectId,
 	sessionId,
 	overview,
+	pullRequest,
 }: {
 	collapsed: boolean;
 	activeView: InspectorView;
@@ -61,6 +72,7 @@ export function WorkspaceInspector({
 	projectId?: string;
 	sessionId?: string;
 	overview: ReactNode;
+	pullRequest?: PullRequestSource;
 }) {
 	const [openedViews, setOpenedViews] = useState<ToolsView[]>([]);
 	useEffect(() => {
@@ -164,6 +176,8 @@ export function WorkspaceInspector({
 					projectId={projectId}
 					sessionId={sessionId}
 				/>
+			) : activeView === "pr" && pullRequest ? (
+				<PullRequestInspector key={pullRequest.number} source={pullRequest} />
 			) : activeView === "desktop" ? null : activeView === "terminal" ? (
 				<TerminalInspector
 					key={`${projectId ?? ""}:${sessionId ?? ""}`}
