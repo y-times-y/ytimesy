@@ -12,6 +12,7 @@ import {
 	startMcpOAuth,
 	turnOAuthProvider,
 } from "../src/server/services/mcp-oauth";
+import { mcpSignInState } from "../src/server/services/mcp-sign-in-status";
 import { connectMcpTools } from "../src/server/services/mcp-tools";
 
 let db: PGlite;
@@ -44,6 +45,8 @@ const AUTH = "https://auth.example.com";
 const APP = "https://app.example.com";
 const bearers: string[] = [];
 let registered = 0;
+/** The access token the MCP server currently honours; changing it revokes. */
+let acceptedToken = "access-1";
 let issued = 0;
 
 /** A remote MCP server behind the MCP authorization spec, plus its OAuth server. */
@@ -53,7 +56,7 @@ const provider = (async (input: RequestInfo | URL, init?: RequestInit) => {
 	if (url.href === MCP) {
 		const bearer = new Headers(init?.headers).get("authorization") ?? "";
 		bearers.push(bearer);
-		if (bearer !== "Bearer access-1")
+		if (bearer !== `Bearer ${acceptedToken}`)
 			return new Response(null, {
 				status: 401,
 				headers: {
@@ -130,7 +133,18 @@ it("signs a user in to an OAuth MCP server and uses the tokens in turns", async 
 		url: MCP,
 		auth: "oauth",
 	});
-	expect(server).toMatchObject({ auth: "oauth", signedIn: false });
+	expect(server).toMatchObject({ auth: "oauth", signIn: "needs-sign-in" });
+	const signInState = async () => {
+		const [stored] = await connectableMcpServers("alice", null);
+		return mcpSignInState({
+			userId: "alice",
+			serverId: stored.id,
+			url: stored.url,
+			sealedOAuth: stored.sealedOAuth,
+			appUrl: APP,
+			fetchFn: provider,
+		});
+	};
 
 	const authorize = new URL(
 		(await startMcpOAuth({
@@ -148,6 +162,8 @@ it("signs a user in to an OAuth MCP server and uses the tokens in turns", async 
 	expect(authorize.searchParams.get("code_challenge_method")).toBe("S256");
 	const state = authorize.searchParams.get("state") as string;
 	expect(state.length).toBeGreaterThan(20);
+	// Starting sign-in stores the registered client, but that is not a sign-in.
+	expect(await signInState()).toBe("needs-sign-in");
 
 	await finishMcpOAuth({
 		userId: "alice",
@@ -158,7 +174,11 @@ it("signs a user in to an OAuth MCP server and uses the tokens in turns", async 
 	});
 	expect(issued).toBe(1);
 	expect(registered).toBe(1);
-	expect(await listMcpServers("alice")).toMatchObject([{ signedIn: true }]);
+	// Listing without a check never claims a sign-in; the check connects for real.
+	expect(await listMcpServers("alice")).toMatchObject([
+		{ signIn: "needs-sign-in" },
+	]);
+	expect(await signInState()).toBe("signed-in");
 	// The state is single-use.
 	await expect(
 		finishMcpOAuth({
@@ -222,4 +242,25 @@ it("reports an OAuth server whose sign-in is missing as unavailable, without red
 	);
 	expect(mcp.unavailable).toEqual(["sentry"]);
 	await mcp.close();
+});
+
+it("reports a revoked sign-in and an unreachable server honestly", async () => {
+	const [stored] = await connectableMcpServers("alice", null);
+	const check = (fetchFn: typeof fetch) =>
+		mcpSignInState({
+			userId: "alice",
+			serverId: stored.id,
+			url: stored.url,
+			sealedOAuth: stored.sealedOAuth,
+			appUrl: APP,
+			fetchFn,
+		});
+	const offline = (async () => {
+		throw new TypeError("fetch failed");
+	}) as typeof fetch;
+	expect(await check(offline)).toBe("unreachable");
+	// The server stops honouring the token and the refresh is refused.
+	acceptedToken = "access-2";
+	expect(await check(provider)).toBe("needs-sign-in");
+	acceptedToken = "access-1";
 });

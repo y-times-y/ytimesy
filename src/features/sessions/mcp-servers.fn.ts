@@ -3,7 +3,6 @@ import { getRequest } from "@tanstack/react-start/server";
 import { z } from "zod";
 import {
 	addMcpServer,
-	listMcpServers,
 	mcpServerInput,
 	removeMcpServer,
 	setMcpServerEnabled,
@@ -12,12 +11,13 @@ import { requireUser } from "#/server/auth/auth";
 import { serverConfig } from "#/server/config";
 import { requireSameOrigin } from "#/server/http";
 import { requiresOAuth, startMcpOAuth } from "#/server/services/mcp-oauth";
+import { listMcpServersChecked } from "#/server/services/mcp-sign-in-status";
 import { connectMcpTools } from "#/server/services/mcp-tools";
 
 export const getMcpServersFn = createServerFn({ method: "GET" }).handler(
 	async () => {
 		const user = await requireUser(getRequest().headers);
-		return listMcpServers(user.id);
+		return listMcpServersChecked(user.id);
 	},
 );
 
@@ -45,7 +45,7 @@ export const addMcpServerFn = createServerFn({ method: "POST" })
 			) {
 				const server = await addMcpServer(user.id, { ...data, auth: "oauth" });
 				return {
-					servers: await listMcpServers(user.id),
+					servers: await listMcpServersChecked(user.id),
 					toolCount: 0,
 					signIn: server.id,
 				};
@@ -55,7 +55,11 @@ export const addMcpServerFn = createServerFn({ method: "POST" })
 			);
 		}
 		await addMcpServer(user.id, data);
-		return { servers: await listMcpServers(user.id), toolCount, signIn: null };
+		return {
+			servers: await listMcpServersChecked(user.id),
+			toolCount,
+			signIn: null,
+		};
 	});
 
 export const setMcpServerEnabledFn = createServerFn({ method: "POST" })
@@ -70,7 +74,7 @@ export const setMcpServerEnabledFn = createServerFn({ method: "POST" })
 		requireSameOrigin(request);
 		const user = await requireUser(request.headers);
 		await setMcpServerEnabled(user.id, data.id, data.enabled);
-		return listMcpServers(user.id);
+		return listMcpServersChecked(user.id);
 	});
 
 export const removeMcpServerFn = createServerFn({ method: "POST" })
@@ -82,7 +86,7 @@ export const removeMcpServerFn = createServerFn({ method: "POST" })
 		requireSameOrigin(request);
 		const user = await requireUser(request.headers);
 		await removeMcpServer(user.id, data.id);
-		return listMcpServers(user.id);
+		return listMcpServersChecked(user.id);
 	});
 
 /** Returns the provider's sign-in URL, or null when the stored sign-in still works. */

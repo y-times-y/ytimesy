@@ -5,6 +5,7 @@ import { useState } from "react";
 import { BrandLogo } from "./brand-logo";
 import { IntegrationSwitch, StatusBadge } from "./integration-controls";
 import { getMcpServersFn, startMcpOAuthFn } from "./mcp-servers.fn";
+import { rememberMcpSignInReturn } from "./mcp-sign-in-return";
 import {
 	getPluginsFn,
 	installPluginFn,
@@ -43,10 +44,15 @@ export function Plugins() {
 			queryClient.invalidateQueries({ queryKey: ["mcp-servers"] }),
 		]);
 	const signIn = useMutation({
-		mutationFn: (id: string) => startSignIn({ data: { id } }),
+		mutationFn: async (id: string) => ({
+			id,
+			...(await startSignIn({ data: { id } })),
+		}),
 		onSuccess: (result) => {
-			if (result.url) window.location.assign(result.url);
-			else void refresh();
+			if (result.url) {
+				rememberMcpSignInReturn("plugins", result.id);
+				window.location.assign(result.url);
+			} else void refresh();
 		},
 	});
 	const installMutation = useMutation({
@@ -109,11 +115,15 @@ export function Plugins() {
 					<ul className="integration-list">
 						{installed.map((row) => {
 							const entry = catalog.find((item) => item.id === row.catalogId);
-							const pending = (servers.data ?? []).filter(
+							const oauth = (servers.data ?? []).filter(
 								(server) =>
-									server.pluginId === row.id &&
-									server.auth === "oauth" &&
-									!server.signedIn,
+									server.pluginId === row.id && server.auth === "oauth",
+							);
+							const pending = oauth.filter(
+								(server) => server.signIn === "needs-sign-in",
+							);
+							const unreachable = oauth.filter(
+								(server) => server.signIn === "unreachable",
 							);
 							const parts = [
 								row.commands.length && count(row.commands.length, "command"),
@@ -131,8 +141,16 @@ export function Plugins() {
 										<div className="integration-status">
 											{!row.enabled ? (
 												<StatusBadge tone="muted">Off</StatusBadge>
+											) : servers.isPending ? (
+												<StatusBadge tone="muted">Checking…</StatusBadge>
 											) : pending.length ? (
 												<StatusBadge tone="warning">Needs sign-in</StatusBadge>
+											) : unreachable.length ? (
+												<StatusBadge tone="muted">
+													Can't reach server
+												</StatusBadge>
+											) : oauth.length ? (
+												<StatusBadge tone="success">Signed in</StatusBadge>
 											) : (
 												<StatusBadge tone="success">Ready</StatusBadge>
 											)}

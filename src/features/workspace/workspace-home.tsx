@@ -2,6 +2,7 @@ import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { Maximize2, Minimize2, PanelRight } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import { connectedProviderId } from "#/domain/agent-connection";
 import {
 	type AgentProviderId,
@@ -67,6 +68,7 @@ import {
 	desktopInspectorShouldStart,
 	type WorkspaceDesktop,
 } from "#/domain/workspace-desktop";
+import type { SettingsSection } from "#/domain/workspace-settings";
 import { captureAnalytics } from "#/features/analytics/client";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
 import { authClient } from "../auth/client";
@@ -89,6 +91,10 @@ import {
 	sendCodexSessionTask,
 	stopCodexSessionTurn,
 } from "../sessions/codex-session.fn";
+import {
+	mcpSignInResult,
+	takeMcpSignInReturn,
+} from "../sessions/mcp-sign-in-return";
 import {
 	preferredSessionModelId,
 	sessionModelsFromListed,
@@ -192,6 +198,27 @@ export function WorkspaceHome({
 	const [desktopBusy, setDesktopBusy] = useState(false);
 	const desktopStartInFlight = useRef(false);
 	const [settingsOpen, setSettingsOpen] = useState(false);
+	const [settingsSection, setSettingsSection] = useState<SettingsSection>();
+	// Back from an MCP provider's sign-in page: reopen the panel that started it.
+	useEffect(() => {
+		const result = mcpSignInResult(window.location.search);
+		if (!result) return;
+		const back = takeMcpSignInReturn();
+		const here = new URL(window.location.href);
+		here.searchParams.delete("mcpSignIn");
+		window.history.replaceState(
+			window.history.state,
+			"",
+			`${here.pathname}${here.search}${here.hash}`,
+		);
+		setSettingsSection(back?.section ?? "plugins");
+		setSettingsOpen(true);
+		void queryClient.invalidateQueries({ queryKey: ["mcp-servers"] });
+		void queryClient.invalidateQueries({ queryKey: ["plugins"] });
+		if (result === "ok") toast.success("Signed in.");
+		else if (result === "cancelled") toast("Sign-in was cancelled.");
+		else toast.error("Sign-in didn't complete. Try again.");
+	}, [queryClient]);
 	const [composerDraft, setComposerDraft] = useState(false);
 	const [projectPickerOpen, setProjectPickerOpen] = useState(false);
 	const composerDraftRef = useRef(false);
@@ -1010,7 +1037,10 @@ export function WorkspaceHome({
 				onNewChat={startNewChat}
 				onDeleteChat={deleteChat}
 				onDeleteProject={removeProject}
-				onOpenSettings={() => setSettingsOpen(true)}
+				onOpenSettings={() => {
+					setSettingsSection(undefined);
+					setSettingsOpen(true);
+				}}
 			/>
 			<ProjectSettings
 				codexUsage={session.usage}
@@ -1026,6 +1056,7 @@ export function WorkspaceHome({
 					void signOut();
 				}}
 				onClose={() => setSettingsOpen(false)}
+				initialSection={settingsSection}
 			/>
 			<main
 				ref={workspaceMainRef}
