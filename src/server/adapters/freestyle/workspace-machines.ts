@@ -49,7 +49,18 @@ import {
 import { waitUntilVmRunning } from "./wait-until-running";
 import { restoreRetainedWorkspace } from "./workspace-retention";
 
+/** The provider refused the machine shape itself, e.g. above the plan's per-VM vCPU cap. */
+class MachineSizeRejected extends Error {
+	constructor(readonly size: ReturnType<typeof machineSize>) {
+		super(
+			`The provider rejected the ${size.name} machine size (${size.cpu} vCPU, ${size.memory / 1024} GiB). Choose a smaller machine size in project settings.`,
+		);
+		this.name = "MachineSizeRejected";
+	}
+}
+
 function providerMessage(cause: unknown): string {
+	if (cause instanceof MachineSizeRejected) return cause.message;
 	return publicFailureMessage(
 		cause instanceof FreestyleApiError || cause instanceof Error
 			? cause
@@ -387,6 +398,12 @@ export function createFreestyleWorkspaceMachines(
 									target.storage !== current.storage
 								)
 									await created.vm.resize(target).catch(async (error) => {
+										if (
+											error instanceof FreestyleApiError &&
+											error.status >= 400 &&
+											error.status < 500
+										)
+											throw new MachineSizeRejected(requested);
 										// A resize takes about as long as the provider gateway's
 										// timeout; a 5xx there often means it is still finishing.
 										if (

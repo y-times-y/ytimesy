@@ -1,3 +1,4 @@
+import { FreestyleApiError } from "freestyle";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createFreestyleWorkspaceMachines } from "./workspace-machines";
 
@@ -159,4 +160,25 @@ it("does not accept a leftover undersized copy after an uncertain resize failure
 	).rejects.toThrow();
 	expect(provider.resize).not.toHaveBeenCalled();
 	expect(provider.remove).not.toHaveBeenCalled();
+});
+
+it("says the provider rejected the size instead of reporting a full plan", async () => {
+	provider.remove.mockResolvedValue(undefined);
+	provider.resize.mockRejectedValueOnce(
+		new FreestyleApiError(400, {
+			code: "LIMIT_EXCEEDED",
+			message: "vCPU limit exceeded",
+		} as never),
+	);
+	const failure = createFreestyleWorkspaceMachines("test").provisionSession(
+		"test-copy",
+		"sh-template",
+		"extra-large",
+	);
+	await expect(failure).rejects.toThrow(
+		"The provider rejected the Ultra machine size (8 vCPU, 16 GiB). Choose a smaller machine size in project settings.",
+	);
+	await expect(failure).rejects.not.toThrow(/LIMIT_EXCEEDED|at its limit/);
+	expect(provider.remove).toHaveBeenCalledOnce();
+	expect(provider.create).toHaveBeenCalledOnce();
 });
