@@ -9,6 +9,7 @@ import {
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
 import { listProjects } from "#/server/adapters/projects";
 import { requireUser } from "#/server/auth/auth";
+import { advanceCodexDeviceLogin } from "#/server/auth/codex-device-login";
 import { hasManagedCodexAuth } from "#/server/auth/codex-managed-auth";
 import { requireSameOrigin } from "#/server/http";
 import { WorkspaceMachineService } from "#/server/services/capabilities";
@@ -136,6 +137,15 @@ export const getWorkspaceBootstrap = createServerFn({ method: "GET" }).handler(
 					: {}),
 			},
 		};
+	},
+);
+
+/** Advances a pending ChatGPT sign-in; the composer polls this while it waits. */
+export const pollCodexLogin = createServerFn({ method: "POST" }).handler(
+	async () => {
+		requireSameOrigin(getRequest());
+		const user = await requireUser(getRequest().headers);
+		return advanceCodexDeviceLogin(user.id);
 	},
 );
 

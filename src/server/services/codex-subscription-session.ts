@@ -21,6 +21,11 @@ import {
 } from "../adapters/api-turns";
 import { codexSubscriptionCatalog } from "../adapters/codex-subscription";
 import { loadAgentAccount } from "../auth/agent-account";
+import {
+	type CodexDeviceLogin,
+	readCodexDeviceLogin,
+	startCodexDeviceLogin,
+} from "../auth/codex-device-login";
 import { hasManagedCodexAuth } from "../auth/codex-managed-auth";
 import { openAgentSession } from "./agent-session-machine";
 import { cancelServerTurn } from "./cancel-server-turn";
@@ -77,6 +82,58 @@ export async function readSubscriptionSession(
 		canSend: connected && models.length > 0,
 		connection,
 	};
+}
+
+/** The chat view, showing a ChatGPT sign-in the server is waiting on. */
+export async function readSubscriptionLoginSession(
+	scope: CodexSessionScope,
+): Promise<PublicCodexSession> {
+	const view = await readSubscriptionSession(scope);
+	if (view.connection.status === "authenticated") return view;
+	return withDeviceLogin(view, await readCodexDeviceLogin(scope.userId));
+}
+
+/** Connect: an unconnected account starts a server-side ChatGPT sign-in. */
+export async function connectSubscriptionSession(
+	scope: CodexSessionScope,
+): Promise<PublicCodexSession> {
+	const view = await readSubscriptionSession(scope);
+	if (view.connection.status === "authenticated") return view;
+	try {
+		return withDeviceLogin(view, await startCodexDeviceLogin(scope.userId));
+	} catch (cause) {
+		return withDeviceLogin(view, {
+			status: "failed",
+			message:
+				cause instanceof Error
+					? cause.message
+					: "Could not start ChatGPT sign-in.",
+		});
+	}
+}
+
+export function deviceLoginConnection(
+	login: CodexDeviceLogin,
+): AgentConnection | null {
+	if (login.status === "pending")
+		return {
+			status: "awaiting_device_code",
+			provider: "codex",
+			loginId: login.userCode,
+			verificationUrl: login.verificationUrl,
+			userCode: login.userCode,
+		};
+	if (login.status === "failed")
+		return { status: "failed", provider: "codex", message: login.message };
+	return null;
+}
+
+function withDeviceLogin(
+	view: PublicCodexSession,
+	login: CodexDeviceLogin,
+): PublicCodexSession {
+	const connection = deviceLoginConnection(login);
+	return connection ? { ...view, connection, canSend: false } : view;
 }
 
 export async function sendSubscriptionTask(

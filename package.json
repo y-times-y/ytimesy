@@ -20,11 +20,6 @@
 		"build:edge-executor": "wrangler types --config wrangler.edge-executor.jsonc --env-interface EdgeExecutorEnvironment .ytimesy/edge-executor-runtime.d.ts && node --import tsx scripts/build-edge-executor.ts",
 		"typecheck:edge-executor": "pnpm build:edge-executor && tsc --noEmit --project tsconfig.edge-executor.json",
 		"prove:workspace": "tsx scripts/prove-workspace.ts",
-		"prove:codex-login": "tsx scripts/codex-login.ts",
-		"prove:codex-login:status": "tsx scripts/codex-login-status.ts",
-		"prove:codex-login:resume": "tsx scripts/codex-login-resume.ts",
-		"prove:codex-login:snapshot": "tsx scripts/codex-login-snapshot.ts",
-		"prove:codex-login:cleanup": "tsx scripts/codex-login-cleanup.ts",
 		"db:migrate": "node --env-file-if-exists=.env --import tsx scripts/db-migrate.ts"
 	},
 	"dependencies": {

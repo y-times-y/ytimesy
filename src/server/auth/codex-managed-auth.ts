@@ -2,9 +2,10 @@ import { CodexReconnectRequired } from "#/domain/api-turn-failure";
 import type { WorkspaceId } from "#/domain/ids";
 import { database } from "../adapters/database";
 import type { WorkspaceMachines } from "../services/workspace-machines";
+import { CODEX_OAUTH_CLIENT_ID, CODEX_OAUTH_ISSUER } from "./codex-oauth";
 import { seal, unseal } from "./token-vault";
 
-type ManagedCodexAuth = {
+export type ManagedCodexAuth = {
 	readonly auth_mode: "chatgpt";
 	readonly tokens: {
 		readonly access_token: string;
@@ -20,7 +21,7 @@ export type CodexExternalTokens = {
 	readonly chatgptPlanType?: string;
 };
 
-function managedAuth(value: unknown): ManagedCodexAuth {
+export function managedAuth(value: unknown): ManagedCodexAuth {
 	if (!value || typeof value !== "object")
 		throw new Error("Codex login is missing.");
 	const record = value as Record<string, unknown>;
@@ -38,7 +39,7 @@ function managedAuth(value: unknown): ManagedCodexAuth {
 }
 
 /** ChatGPT embeds the current plan in each access token. */
-function codexPlanType(auth: ManagedCodexAuth): string | null {
+export function codexPlanType(auth: ManagedCodexAuth): string | null {
 	try {
 		const claims = JSON.parse(
 			Buffer.from(
@@ -192,13 +193,13 @@ const refreshedCredentials = z.object({
 export async function refreshManagedCodexAuth(
 	auth: ManagedCodexAuth,
 ): Promise<ManagedCodexAuth> {
-	const response = await fetch("https://auth.openai.com/oauth/token", {
+	const response = await fetch(`${CODEX_OAUTH_ISSUER}/oauth/token`, {
 		method: "POST",
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify({
 			grant_type: "refresh_token",
 			refresh_token: auth.tokens.refresh_token,
-			client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
+			client_id: CODEX_OAUTH_CLIENT_ID,
 		}),
 		redirect: "manual",
 		signal: AbortSignal.timeout(25_000),
