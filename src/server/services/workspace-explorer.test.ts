@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect } from "effect";
 import { expect, it, vi } from "vitest";
-import { listProjectCommands } from "./workspace-explorer";
+import {
+	parseWorkspaceDiffOutput,
+	WORKSPACE_DIFF_TRUNCATED_NOTE,
+} from "#/domain/git-diff";
+import { gitChangesScript, listProjectCommands } from "./workspace-explorer";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 vi.mock("./agent-session-machine", () => ({
@@ -81,4 +85,51 @@ it("returns nothing, without waking it, when the machine is paused", async () =>
 		),
 	).toEqual([]);
 	expect(exec).not.toHaveBeenCalled();
+});
+
+it("returns a capped diff with a truncation note instead of failing on huge changes", async () => {
+	const root = await mkdtemp(join(tmpdir(), "ytimesy-diff-"));
+	try {
+		const git = (...args: string[]) =>
+			spawnSync("git", [
+				"-C",
+				root,
+				"-c",
+				"user.name=t",
+				"-c",
+				"user.email=t@t",
+				...args,
+			]);
+		git("init", "-q");
+		await writeFile(join(root, "small.txt"), "one\n");
+		await writeFile(join(root, "big.txt"), "seed\n");
+		git("add", ".");
+		git("commit", "-qm", "base");
+		await writeFile(join(root, "small.txt"), "two\n");
+		await writeFile(
+			join(root, "big.txt"),
+			"x".repeat(99).concat("\n").repeat(50_000),
+		);
+		const result = spawnSync("bash", ["-c", gitChangesScript(root, "")], {
+			maxBuffer: 64 * 1024 * 1024,
+		});
+		expect(result.status).toBe(0);
+		const { changes, truncated } = parseWorkspaceDiffOutput(
+			result.stdout.toString(),
+		);
+		expect(truncated).toBe(true);
+		expect(changes.map((change) => change.path)).toContain("big.txt");
+		expect(changes.at(-1)?.preview).toContain(WORKSPACE_DIFF_TRUNCATED_NOTE);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+it("leaves an ordinary diff unmarked", () => {
+	const { changes, truncated } = parseWorkspaceDiffOutput(
+		"diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-a\n+b\n",
+	);
+	expect(truncated).toBe(false);
+	expect(changes).toHaveLength(1);
+	expect(changes[0]?.preview).not.toContain("truncated");
 });

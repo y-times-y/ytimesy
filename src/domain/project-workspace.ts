@@ -1,3 +1,4 @@
+import { WORKSPACE_QUEUE_STALL_SECONDS } from "./environment-build-limits";
 import {
 	isWorkspaceAtCapacity,
 	isWorkspaceComputeAllowanceExhausted,
@@ -28,6 +29,19 @@ export interface ProjectWorkspace {
 
 export function canStartPrepare(status: WorkspaceStatus | undefined) {
 	return status === undefined || status === "queued" || status === "failed";
+}
+
+/** Queued long enough that the prepare job was probably never handed off. */
+export function workspacePrepareStalled(
+	workspace: { readonly status: WorkspaceStatus; readonly updatedAt: string },
+	now: number,
+) {
+	const queuedAt = Date.parse(workspace.updatedAt);
+	return (
+		workspace.status === "queued" &&
+		Number.isFinite(queuedAt) &&
+		now - queuedAt >= WORKSPACE_QUEUE_STALL_SECONDS * 1000
+	);
 }
 
 export function workspacePrepareShowsStatus(

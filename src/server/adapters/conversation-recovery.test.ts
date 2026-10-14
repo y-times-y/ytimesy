@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import { PGlite } from "@electric-sql/pglite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { SessionItemId } from "#/domain/ids";
-import { recoverConversation } from "../services/conversation-recovery";
+import {
+	ownsWritableCheckout,
+	recoverConversation,
+} from "../services/conversation-recovery";
 import type { WorkspaceMachines } from "../services/workspace-machines";
 import {
 	conversationPoint,
@@ -13,6 +16,20 @@ import {
 
 const holder = vi.hoisted(() => ({ query: vi.fn(), connect: vi.fn() }));
 vi.mock("./database", () => ({ database: () => holder }));
+const code = vi.hoisted(() => ({
+	capture: vi.fn(),
+	restore: vi.fn(),
+}));
+vi.mock("../services/conversation-code-checkpoint", () => ({
+	captureConversationCode: code.capture,
+	restoreConversationCode: code.restore,
+}));
+vi.mock("./agent-sessions", () => ({
+	agentSessionForOwner: async (_userId: string, id: string) => ({
+		id,
+		taskPlacement: null,
+	}),
+}));
 let db: PGlite;
 const session = randomUUID(),
 	project = randomUUID();
@@ -151,4 +168,77 @@ it("rejects other owners, running turns, active children, and code-less recovery
 	await expect(
 		recoverConversation({} as WorkspaceMachines, "alice", input),
 	).rejects.toThrow("child tasks");
+});
+
+it("restores a builder-direct root chat's own checkout to its code point", async () => {
+	const snapshot = (tree: string) => ({
+		cwd: "/workspace/repo",
+		tree: tree.repeat(40),
+		indexTree: tree.repeat(40),
+		head: "c".repeat(40),
+		ref: `refs/ytimesy/recovery/${tree}`,
+	});
+	await db.query(
+		"update agent_task_command_receipt set response=jsonb_set(response,'{result,code}',$2::jsonb) where parent_session_id=$1",
+		[session, JSON.stringify(snapshot("a"))],
+	);
+	await db.query("update agent_session set provider_ref='vm-1' where id=$1", [
+		session,
+	]);
+	code.capture.mockResolvedValue(snapshot("b"));
+	code.restore.mockResolvedValue(undefined);
+	const ensureRunning = vi.fn(async () => {});
+	const recovered = await recoverConversation(
+		{ ensureRunning } as unknown as WorkspaceMachines,
+		"alice",
+		{
+			projectId: project,
+			sessionId: session,
+			messageId: "first",
+			mode: "code",
+		},
+	);
+	expect(recovered).toEqual({ id: session, prompt: null });
+	expect(ensureRunning).toHaveBeenCalledWith("vm-1");
+	expect(code.restore).toHaveBeenCalledWith(
+		expect.objectContaining({ vm: "vm-1", cwd: "/workspace/repo" }),
+		snapshot("a"),
+		snapshot("b"),
+	);
+	// A root chat is not a reviewable task; code-only restore leaves review state alone.
+	expect(
+		(
+			await db.query<{ task_review_state: unknown }>(
+				"select task_review_state from agent_session where id=$1",
+				[session],
+			)
+		).rows[0].task_review_state,
+	).toBeNull();
+});
+
+it("only rewinds checkouts a session owns", () => {
+	expect(ownsWritableCheckout({ provider_ref: "vm" })).toBe(true);
+	expect(ownsWritableCheckout({ provider_ref: null })).toBe(false);
+	expect(
+		ownsWritableCheckout({
+			provider_ref: "vm",
+			parent_session_id: "p",
+			task_access: "read_write",
+		}),
+	).toBe(true);
+	expect(
+		ownsWritableCheckout({
+			provider_ref: "vm",
+			parent_session_id: "p",
+			task_access: "read_only",
+		}),
+	).toBe(false);
+	expect(
+		ownsWritableCheckout({
+			provider_ref: "vm",
+			parent_session_id: "p",
+			task_access: "read_write",
+			task_placement: "shared",
+		}),
+	).toBe(false);
 });

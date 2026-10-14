@@ -1,7 +1,11 @@
 import { posix } from "node:path";
 import { Effect } from "effect";
 import type { WorkspaceFilePreview } from "#/domain/file-preview";
-import { parseGitDiffChanges } from "#/domain/git-diff";
+import {
+	parseWorkspaceDiffOutput,
+	WORKSPACE_DIFF_BYTE_LIMIT,
+	WORKSPACE_DIFF_TRUNCATED_MARKER,
+} from "#/domain/git-diff";
 import { WorkspaceId } from "#/domain/ids";
 import { posixShellQuoted } from "#/domain/posix-command";
 import {
@@ -295,10 +299,10 @@ export function readWorkspaceGitChanges(
 				);
 				if (result.exitCode !== 0) return null;
 				changes.push(
-					...parseGitDiffChanges(
+					...parseWorkspaceDiffOutput(
 						result.stdout,
 						roots.length > 1 ? `${root.name}/` : "",
-					),
+					).changes,
 				);
 			}
 			return changes;
@@ -307,20 +311,28 @@ export function readWorkspaceGitChanges(
 }
 
 /** Diff against the merge base with the chat's base branch, plus untracked files. */
-function gitChangesScript(directory: string, base: string) {
-	return `set -o pipefail
-cd ${posixShellQuoted(directory)} || exit 3
+export function gitChangesScript(directory: string, base: string) {
+	return `cd ${posixShellQuoted(directory)} || exit 3
 base=""
 for ref in ${base ? `${posixShellQuoted(`origin/${base}`)} ${posixShellQuoted(base)} ` : ""}'@{upstream}' origin/HEAD; do
   base=$(git merge-base HEAD "$ref" 2>/dev/null) && break
 done
 [ -n "$base" ] || base=HEAD
+out=$(mktemp) || exit 4
+trap 'rm -f "$out"' EXIT
+# Capping with head stops the writers with SIGPIPE; the status is not a failure.
 {
   git -c core.quotepath=off diff --no-color --find-renames "$base" --
   git ls-files -z --others --exclude-standard | head -z -n 200 | while IFS= read -r -d '' file; do
     git -c core.quotepath=off diff --no-color --no-index -- /dev/null "$file" || true
   done
-} | head -c 4000000`;
+} | head -c ${WORKSPACE_DIFF_BYTE_LIMIT + 1} > "$out"
+if [ "$(wc -c < "$out")" -gt ${WORKSPACE_DIFF_BYTE_LIMIT} ]; then
+  head -c ${WORKSPACE_DIFF_BYTE_LIMIT} "$out"
+  printf '\\n%s\\n' ${WORKSPACE_DIFF_TRUNCATED_MARKER}
+else
+  cat "$out"
+fi`;
 }
 
 function withRunningCheckout<A>(

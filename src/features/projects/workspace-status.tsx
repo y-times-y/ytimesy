@@ -1,7 +1,10 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import type { EnvironmentModelRequest } from "#/domain/environment-model";
-import { workspacePrepareShowsStatus } from "#/domain/project-workspace";
+import {
+	workspacePrepareShowsStatus,
+	workspacePrepareStalled,
+} from "#/domain/project-workspace";
 import { requestJson } from "./api";
 import { GithubSetupLink } from "./github-setup-link";
 
@@ -77,11 +80,16 @@ export function WorkspaceStatus({
 				<GithubSetupLink message={workspace.error.message} />
 			</p>
 		);
-	if (!current || !workspacePrepareShowsStatus(current.status)) return null;
+	if (!current) return null;
+	// Polling while queued re-renders this, so the stall check advances with time.
+	const stalled = workspacePrepareStalled(current, Date.now());
+	if (!stalled && !workspacePrepareShowsStatus(current.status)) return null;
 	return (
 		<p className="workspace-status" role="alert">
 			<span>
-				{current.errorMessage ?? "Workspace preparation failed."}
+				{stalled
+					? "Environment setup has not started yet."
+					: (current.errorMessage ?? "Workspace preparation failed.")}
 				{current.errorMessage ? (
 					<>
 						{" "}

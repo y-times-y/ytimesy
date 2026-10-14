@@ -12,6 +12,11 @@ import {
 	configuredTurnExecutor,
 	type TurnExecutor,
 } from "#/domain/turn-executor";
+import {
+	captureTurnFinished,
+	captureTurnStarted,
+	type TurnAnalyticsSession,
+} from "../services/turn-analytics";
 import { modelConcurrencyLimits } from "./agent-capacity";
 import { dispatchBackgroundJob } from "./background-job-dispatch";
 import { wakeConversationProgress } from "./conversation-progress-wake";
@@ -101,6 +106,8 @@ export async function enqueueApiTurn(input: {
 	settings?: ApiTurnSettings;
 }) {
 	const client = await database().connect();
+	let turnId: string | undefined;
+	let started: TurnAnalyticsSession | undefined;
 	try {
 		await client.query("begin");
 		const subscription = subscriptionTurnSettings(input.revision);
@@ -120,7 +127,7 @@ export async function enqueueApiTurn(input: {
 				"The model connection changed or is no longer available.",
 			);
 		const session = await client.query(
-			"select id,turn_status,parent_session_id,task_state from agent_session where id=$1 and user_id=$2 for update",
+			"select id,turn_status,parent_session_id,task_state,task_access from agent_session where id=$1 and user_id=$2 for update",
 			[input.sessionId, input.userId],
 		);
 		if (input.idempotencyKey) {
@@ -146,11 +153,18 @@ export async function enqueueApiTurn(input: {
 				"Finish or stop the current turn before sending another prompt.",
 			);
 		await recordConversationPoint(client, input);
+		turnId = randomUUID();
+		started = {
+			userId: input.userId,
+			harness: subscription ? "codex" : "api",
+			parentSessionId: session.rows[0].parent_session_id ?? null,
+			taskAccess: session.rows[0].task_access ?? null,
+		};
 		await client.query(
 			`insert into api_turn(id,session_id,user_id,connection_id,connection_revision,model_id,state,messages,items,idempotency_key,executor,settings)
 			 values($1,$2,$3,$4,$5,$6,'queued',$7,$8,$9,$10,$11)`,
 			[
-				randomUUID(),
+				turnId,
 				input.sessionId,
 				input.userId,
 				input.connectionId,
@@ -180,6 +194,7 @@ export async function enqueueApiTurn(input: {
 	} finally {
 		client.release();
 	}
+	if (turnId && started) void captureTurnStarted(started, turnId, new Date());
 	if (
 		configuredTurnExecutor(process.env.YTIMESY_MODEL_EXECUTION_TARGET) ===
 		"durable-object"
@@ -389,32 +404,71 @@ export async function finalizeApiTurn(
 	state: "completed" | "failed" | "cancelled",
 	items: readonly SessionItem[],
 ) {
-	const result = await database().query<{
-		state: "completed" | "failed" | "cancelled";
-	}>(
+	const result = await database().query<
+		{ state: "completed" | "failed" | "cancelled" } & SettledTurnRow
+	>(
 		`with saved as (update api_turn set state=case when cancel_requested then 'cancelled' else $3 end,items=$4,updated_at=now()
-		 where id=$1 and lease_id=$2 and state='running' and heartbeat_at>=now()-interval '45 seconds' returning session_id,state)
+		 where id=$1 and lease_id=$2 and state='running' and heartbeat_at>=now()-interval '45 seconds' returning id,session_id,state,created_at)
 		 update agent_session s set items=$4,turn_status=case when saved.state='cancelled' then 'idle' else saved.state end,
 		 task_state=case when parent_session_id is null then task_state when saved.state='completed' then 'done' when saved.state='failed' then 'failed' else 'idle' end,
-		 updated_at=now() from saved where s.id=saved.session_id returning saved.state`,
+		 updated_at=now() from saved where s.id=saved.session_id returning ${SETTLED_TURN_COLUMNS}`,
 		[turn.id, turn.lease_id, state, JSON.stringify(items)],
 	);
+	captureSettledTurns(result.rows);
 	if (result.rows[0]) await wakeConversationProgress();
 	return result.rows[0]?.state ?? null;
 }
 
 export async function cancelApiTurn(userId: string, sessionId: string) {
-	const result = await database().query<{
-		id: string;
-		lease_id: string | null;
-	}>(
+	const result = await database().query<
+		{ id: string; lease_id: string | null } & Partial<SettledTurnRow>
+	>(
 		`with cancelled as (update api_turn set cancel_requested=true,state=case when state='queued' then 'cancelled' else state end
-		 where user_id=$1 and session_id=$2 and state in ('queued','running') returning id,lease_id,session_id,state),
-		 updated as (update agent_session s set turn_status='idle',updated_at=now() from cancelled c where s.id=c.session_id and c.state='cancelled')
-		 select id,lease_id from cancelled`,
+		 where user_id=$1 and session_id=$2 and state in ('queued','running') returning id,lease_id,session_id,state,created_at),
+		 updated as (update agent_session s set turn_status='idle',updated_at=now() from cancelled c where s.id=c.session_id and c.state='cancelled'
+		  returning ${SETTLED_TURN_COLUMNS.replaceAll("saved.", "c.")})
+		 select c.id,c.lease_id,u.* from cancelled c left join updated u on u.turn_id=c.id`,
 		[userId, sessionId],
 	);
-	return result.rows;
+	// A queued turn settles here; a running one settles when its executor finalizes it.
+	captureSettledTurns(
+		result.rows.filter((row): row is typeof row & SettledTurnRow =>
+			Boolean(row.turn_id),
+		),
+	);
+	return result.rows.map(({ id, lease_id }) => ({ id, lease_id }));
+}
+
+/** The settled turn plus the session fields its analytics event is categorized by. */
+type SettledTurnRow = {
+	turn_id: string;
+	state: "completed" | "failed" | "cancelled";
+	started_at: Date | string | null;
+	user_id: string;
+	harness: string;
+	parent_session_id: string | null;
+	task_access: string | null;
+};
+const SETTLED_TURN_COLUMNS =
+	"saved.id as turn_id,saved.state,saved.created_at as started_at,s.user_id,s.harness,s.parent_session_id,s.task_access";
+
+function captureSettledTurns(rows: readonly SettledTurnRow[]) {
+	const endedAt = new Date();
+	for (const row of rows)
+		void captureTurnFinished(
+			{
+				userId: row.user_id,
+				harness: row.harness,
+				parentSessionId: row.parent_session_id,
+				taskAccess: row.task_access,
+			},
+			row.turn_id,
+			row.state,
+			{
+				startedAt: row.started_at ? new Date(row.started_at) : null,
+				endedAt,
+			},
+		);
 }
 
 /**
@@ -423,13 +477,14 @@ export async function cancelApiTurn(userId: string, sessionId: string) {
  * for up to about two minutes), so their turns get a longer grace period.
  */
 export async function expireApiTurnLeases() {
-	await database().query(`with expired as (
+	const result = await database().query<SettledTurnRow>(`with saved as (
 	 update api_turn set state='failed',updated_at=now()
 	 where state='running' and heartbeat_at < now()-case when executor='durable-object'
 	  then interval '3 minutes' else interval '45 seconds' end
-	 returning session_id,id
+	 returning session_id,id,state,created_at
 	) update agent_session s set turn_status='failed',
-	 items=s.items || jsonb_build_array(jsonb_build_object('kind','error','id',e.id::text || ':lost','message','The worker disconnected. Inspect the workspace before continuing; uncertain tool calls were not replayed.')),
+	 items=s.items || jsonb_build_array(jsonb_build_object('kind','error','id',saved.id::text || ':lost','message','The worker disconnected. Inspect the workspace before continuing; uncertain tool calls were not replayed.')),
 	 task_state=case when parent_session_id is null then task_state else 'failed' end,updated_at=now()
-	 from expired e where s.id=e.session_id`);
+	 from saved where s.id=saved.session_id returning ${SETTLED_TURN_COLUMNS}`);
+	captureSettledTurns(result.rows ?? []);
 }

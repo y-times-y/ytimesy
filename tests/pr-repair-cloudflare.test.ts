@@ -5,7 +5,7 @@ import {
 	prRepairExecutorUrl,
 } from "../src/domain/pr-repair-ingress";
 
-it("accepts current vm-prefixed and legacy normalized executor IDs, rejecting other origins", () => {
+it("accepts the development edge executor and legacy executor IDs, rejecting other origins", () => {
 	const host = `ytimesy-model-executor-vm${"a".repeat(32)}.style.dev`;
 	expect(prRepairExecutorUrl(`https://${host}`)).toBe(
 		`https://${host}/pr-repair-event`,
@@ -15,7 +15,14 @@ it("accepts current vm-prefixed and legacy normalized executor IDs, rejecting ot
 			`https://ytimesy-model-executor-${"a".repeat(32)}.style.dev`,
 		),
 	).toContain("/pr-repair-event");
+	const edge =
+		"https://ytimesy-edge-executor-development.hetkp8044.workers.dev";
+	expect(prRepairExecutorUrl(edge)).toBe(`${edge}/pr-repair-event`);
+	expect(prRepairExecutorUrl(`${edge}/`)).toBe(`${edge}/pr-repair-event`);
 	for (const origin of [
+		"https://ytimesy-edge-executor-development.attacker.workers.dev",
+		"https://ytimesy-edge-executor-development.hetkp8044.workers.dev.evil.example",
+		"http://ytimesy-edge-executor-development.hetkp8044.workers.dev",
 		`http://${host}`,
 		`https://user@${host}`,
 		`https://${host}:444`,
