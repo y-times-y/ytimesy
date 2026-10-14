@@ -7,6 +7,7 @@ import {
 	redactInfrastructure,
 	redactSecrets,
 	workspacePrepareShowsStatus,
+	workspacePrepareStalled,
 } from "../src/domain/project-workspace";
 
 it("allows branch switch once prepare is idle or failed", () => {
@@ -99,4 +100,18 @@ it("does not name the workspace host in public errors", () => {
 			),
 		),
 	).not.toMatch(/style\.dev|vnc\.html|noVNC|Freestyle/i);
+});
+
+it("flags a prepare request that stayed queued past the stall timeout", () => {
+	const queuedAt = "2026-10-14T12:00:00.000Z";
+	const at = (minutes: number) => Date.parse(queuedAt) + minutes * 60_000;
+	const queued = { status: "queued" as const, updatedAt: queuedAt };
+	expect(workspacePrepareStalled(queued, at(1))).toBe(false);
+	expect(workspacePrepareStalled(queued, at(6))).toBe(true);
+	expect(
+		workspacePrepareStalled({ ...queued, status: "provisioning" }, at(60)),
+	).toBe(false);
+	expect(workspacePrepareStalled({ ...queued, updatedAt: "" }, at(60))).toBe(
+		false,
+	);
 });
