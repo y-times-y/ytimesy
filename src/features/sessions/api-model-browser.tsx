@@ -9,16 +9,15 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "#/components/ui/select";
+import { API_MODEL_LIST, apiModelSections } from "#/domain/api-model-list";
 import {
 	AUTHOR_LABELS,
 	directModelProvider,
-	openRouterModelLabel,
 	visibleModelChoices,
 } from "#/domain/browse-models";
 import {
 	availableConnectionModels,
 	connectionModels,
-	isCodingModelId,
 	modelRouteId,
 	type PublicModelConnection,
 } from "#/domain/model-connection";
@@ -83,14 +82,7 @@ export function ApiModelBrowser({
 		selectedRoute ?? "",
 		author ? chosenConnections[author] : undefined,
 	);
-	const authors = author
-		? [author]
-		: [
-				...new Set([
-					...Object.keys(AUTHOR_LABELS),
-					...(catalog.data ?? []).map((model) => model.author),
-				]),
-			];
+	const authors = author ? [author] : apiModelSections();
 	const connected = authors.flatMap((modelAuthor) => {
 		const source = author
 			? activeConnection
@@ -102,32 +94,17 @@ export function ApiModelBrowser({
 			connectionModels(connection, catalog.data ?? [])
 				.filter(
 					(model) =>
-						isCodingModelId(connection.provider, model.id) &&
-						(connection.provider !== "openrouter" ||
-							model.id.startsWith(`${modelAuthor}/`)),
+						connection.provider !== "openrouter" ||
+						model.id.startsWith(`${modelAuthor}/`),
 				)
 				.map((model) => ({
 					...model,
 					author: modelAuthor,
-					label:
-						connection.provider === "openrouter"
-							? openRouterModelLabel(model.label)
-							: model.label,
 					connectionId: connection.id,
 				})),
 		);
 	});
-	const catalogOrder = new Map(
-		(catalog.data ?? []).map((model, index) => [model.id, index]),
-	);
-	const catalogRank = (model: { id: string; author: string }) =>
-		catalogOrder.get(model.id) ??
-		catalogOrder.get(`${model.author}/${model.id}`) ??
-		Number.MAX_SAFE_INTEGER;
-	const visibleConnected = visibleModelChoices(
-		connected.sort((a, b) => catalogRank(a) - catalogRank(b)),
-		search,
-	);
+	const visibleConnected = visibleModelChoices(connected, search);
 	function update(rows: PublicModelConnection[]) {
 		client.setQueryData(["model-connections"], rows);
 		if (identity.data?.user.id)
@@ -151,13 +128,17 @@ export function ApiModelBrowser({
 		},
 	});
 	const locked = visibleModelChoices(
-		(catalog.data ?? []).filter(
+		API_MODEL_LIST.filter(
 			(model) =>
 				authors.includes(model.author) &&
 				!(author
 					? activeConnection
 					: providerConnections(model.author, connections.data ?? []).length),
-		),
+		).map((model) => ({
+			id: model.openRouterId,
+			label: model.label,
+			author: model.author,
+		})),
 		search,
 	);
 	return (

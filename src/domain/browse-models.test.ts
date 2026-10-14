@@ -2,7 +2,6 @@ import { expect, it } from "vitest";
 import {
 	directModelProvider,
 	matchesModelSearch,
-	openRouterModelLabel,
 	parseBrowseModels,
 	recentModelGenerations,
 	visibleModelChoices,
@@ -10,65 +9,6 @@ import {
 import { availableConnectionModels } from "./model-connection";
 
 const now = 1_790_000_000;
-const row = (id: string, created = now) => ({
-	id,
-	name: `Provider: ${id}`,
-	created,
-	supported_parameters: ["tools"],
-	architecture: { output_modalities: ["text"] },
-});
-it("puts recent models first without aging out a retained predecessor", () => {
-	const models = parseBrowseModels(
-		{
-			data: [
-				row("google/gemini-3.6-flash", now - 366 * 86_400),
-				row("openai/model", now - 30),
-				row("google/gemini-3.7-flash", now - 20),
-				row("google/gemini-3.7-flash", now - 20),
-				row("anthropic/newest"),
-				row("google/batch:batch"),
-				row("~google/alias"),
-				{
-					...row("openai/audio"),
-					architecture: { output_modalities: ["text", "audio"] },
-				},
-				row("qwen/qwen3.8-omni-flash"),
-				row("mistralai/voxtral-small-24b"),
-				row("xiaomi/mimo-v2.6-flash"),
-				row("minimax/minimax-m3"),
-				row("nvidia/nemotron-3-super"),
-				row("tencent/hy4-preview"),
-				row("tencent/hy3"),
-				{ id: "image-only" },
-			],
-		},
-		now,
-	);
-	expect(models.map((model) => model.id)).toEqual([
-		"anthropic/newest",
-		"tencent/hy3",
-		"google/gemini-3.7-flash",
-		"openai/model",
-		"google/gemini-3.6-flash",
-	]);
-});
-it("offers only the selected Google Flash models", () => {
-	expect(
-		parseBrowseModels({
-			data: [
-				row("google/gemini-3.8-flash"),
-				row("google/gemini-3.7-flash"),
-				row("google/gemini-3.6-flash"),
-				row("google/gemini-3.1-pro-preview"),
-				row("google/gemini-3.8-flash:free"),
-			],
-		}).map((model) => model.id),
-	).toEqual([
-		"google/gemini-3.8-flash",
-		"google/gemini-3.7-flash",
-		"google/gemini-3.6-flash",
-	]);
-});
 it("searches model names, provider IDs, and provider names", () => {
 	const model = { label: "Gemini 3.8 Flash", author: "google" };
 	expect(matchesModelSearch(model, "gemini")).toBe(true);
@@ -122,22 +62,6 @@ it("keeps Claude tiers independent, handles older version ordering, and preserve
 		),
 	);
 });
-it("ignores malformed and non-tool entries", () => {
-	expect(
-		parseBrowseModels({
-			data: [
-				null,
-				{},
-				{ ...row("google/malformed"), architecture: { output_modalities: {} } },
-			],
-		}),
-	).toEqual([]);
-	expect(() => parseBrowseModels({})).toThrow("unavailable");
-});
-it("shows gateway models without repeating the selected provider name", () => {
-	expect(openRouterModelLabel("OpenAI: GPT-6 Sol")).toBe("GPT-6 Sol");
-	expect(openRouterModelLabel("GPT-6 Sol")).toBe("GPT-6 Sol");
-});
 it("keeps subscription access separate from direct API providers", () => {
 	expect(directModelProvider("codex")).toBeNull();
 	expect(directModelProvider("openai")).toBe("openai");
@@ -145,7 +69,7 @@ it("keeps subscription access separate from direct API providers", () => {
 	expect(directModelProvider("deepseek")).toBe("compatible");
 	expect(directModelProvider("unknown")).toBeNull();
 });
-it("offers listed chat models immediately and retains the connection identity", () => {
+it("offers only listed models, with our labels, through the connection", () => {
 	const id = "12345678-1234-4123-8123-123456789012";
 	expect(
 		availableConnectionModels(
@@ -185,10 +109,13 @@ it("offers listed chat models immediately and retains the connection identity", 
 			],
 		),
 	).toEqual([
-		{ id: `api/${id}/google%2Fgemini-3.8-flash`, label: "Model · Personal" },
+		{
+			id: `api/${id}/google%2Fgemini-3.8-flash`,
+			label: "Gemini 3.8 Flash · Personal",
+		},
 	]);
 });
-it("filters saved direct Google connections to the same three models", () => {
+it("a direct key unlocks only its own maker's listed models", () => {
 	const id = "12345678-1234-4123-8123-123456789012";
 	expect(
 		availableConnectionModels(
@@ -220,9 +147,9 @@ it("filters saved direct Google connections to the same three models", () => {
 			],
 			[],
 		).map((model) => model.label),
-	).toEqual(["Gemini 3.8 Flash · Google key", "Gemini 3.6 Flash · Google key"]);
+	).toEqual(["Gemini 3.8 Flash · Google key"]);
 });
-it("offers new gateway models without reconnecting an existing key", () => {
+it("never offers a model the list does not name, even one a gateway just added", () => {
 	const id = "12345678-1234-4123-8123-123456789012";
 	expect(
 		availableConnectionModels(
@@ -245,5 +172,25 @@ it("offers new gateway models without reconnecting an existing key", () => {
 				},
 			],
 		),
-	).toEqual([{ id: `api/${id}/z-ai%2Fglm-5.3`, label: "GLM 5.3 · Personal" }]);
+	).toEqual([]);
+});
+
+it("reads the gateway catalog's ids and context sizes without filtering it", () => {
+	expect(
+		parseBrowseModels({
+			data: [
+				{
+					id: "openai/gpt-6-sol",
+					name: "OpenAI: GPT-6 Sol",
+					context_length: 400_000,
+				},
+				{ id: "vendor/audio", name: "Audio" },
+				{ id: 42 },
+			],
+		}).map((model) => [model.id, model.contextWindow]),
+	).toEqual([
+		["openai/gpt-6-sol", 400_000],
+		["vendor/audio", undefined],
+	]);
+	expect(() => parseBrowseModels({})).toThrow("unavailable");
 });

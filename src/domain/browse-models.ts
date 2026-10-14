@@ -20,7 +20,6 @@ export const AUTHOR_LABELS: Record<string, string> = {
 	"z-ai": "Z.ai",
 	tencent: "Tencent",
 };
-const MAX_MODEL_AGE_SECONDS = 365 * 24 * 60 * 60;
 const RETAINED_MODEL_GENERATIONS = 3;
 
 function modelGeneration(id: string) {
@@ -62,21 +61,6 @@ export function recentModelGenerations<T extends { id: string }>(
 		return !release || retained.get(release.family)?.includes(release.version);
 	});
 }
-const OFFERED_GOOGLE_MODELS: readonly string[] = [
-	"gemini-3.8-flash",
-	"gemini-3.7-flash",
-	"gemini-3.6-flash",
-];
-
-export function googleFlashModelRank(id: string): number {
-	return OFFERED_GOOGLE_MODELS.indexOf(id.replace(/^google\//, ""));
-}
-
-export function isShownInModelPicker(author: string, id: string): boolean {
-	if (author !== "google") return true;
-	return googleFlashModelRank(id) !== -1;
-}
-
 export function matchesModelSearch(
 	model: Pick<BrowseModel, "label" | "author">,
 	search: string,
@@ -107,71 +91,27 @@ export function directModelProvider(author: string): ModelProvider | null {
 		? author
 		: null;
 }
-export function openRouterModelLabel(name: string): string {
-	return name.replace(/^[^:]+: /, "");
-}
-export function isNonCodingModelId(id: string): boolean {
-	return /(?:audio|embedding|image|realtime|search|transcri|tts|safeguard|guard|moderation|classifier|rerank|voxtral|omni)/i.test(
-		id,
-	);
-}
-export function isOpenRouterCodingModel(row: unknown): row is {
-	id: string;
-	name: string;
-	created?: number;
-	context_length?: number;
-} {
-	if (!row || typeof row !== "object") return false;
-	const model = row as Record<string, unknown>;
-	const architecture = model.architecture as
-		| { output_modalities?: unknown }
-		| undefined;
-	return (
-		typeof model.id === "string" &&
-		typeof model.name === "string" &&
-		model.id.length <= 512 &&
-		!model.id.endsWith(":batch") &&
-		!model.id.startsWith("~") &&
-		!isNonCodingModelId(model.id) &&
-		Array.isArray(model.supported_parameters) &&
-		model.supported_parameters.includes("tools") &&
-		Array.isArray(architecture?.output_modalities) &&
-		architecture.output_modalities.length === 1 &&
-		architecture.output_modalities[0] === "text"
-	);
-}
-export function parseBrowseModels(
-	value: unknown,
-	nowSeconds = Math.floor(Date.now() / 1000),
-): BrowseModel[] {
+/** OpenRouter's public catalog: confirms a listed model exists and gives its context size. */
+export function parseBrowseModels(value: unknown): BrowseModel[] {
 	const rows = (value as { data?: unknown })?.data;
 	if (!Array.isArray(rows)) throw new Error("Model catalog unavailable.");
 	const models = new Map<string, BrowseModel>();
 	for (const row of rows) {
-		if (!isOpenRouterCodingModel(row)) continue;
-		const created = typeof row.created === "number" ? row.created : 0;
-		if (
-			created < nowSeconds - MAX_MODEL_AGE_SECONDS &&
-			!modelGeneration(row.id)
-		)
-			continue;
-		const author = row.id.split("/")[0];
-		if (!Object.hasOwn(AUTHOR_LABELS, author)) continue;
-		if (/^tencent\/hy4(?:[-:]|$)/i.test(row.id)) continue;
-		if (!isShownInModelPicker(author, row.id)) continue;
-		models.set(row.id, {
-			id: row.id,
-			label: openRouterModelLabel(row.name).slice(0, 160),
-			author,
-			created,
-			...(typeof row.context_length === "number" &&
-			Number.isSafeInteger(row.context_length) &&
-			row.context_length > 0
-				? { contextWindow: row.context_length }
+		if (!row || typeof row !== "object") continue;
+		const model = row as Record<string, unknown>;
+		if (typeof model.id !== "string" || model.id.length > 512) continue;
+		models.set(model.id, {
+			id: model.id,
+			label:
+				typeof model.name === "string" ? model.name.slice(0, 160) : model.id,
+			author: model.id.split("/")[0] ?? "",
+			created: typeof model.created === "number" ? model.created : 0,
+			...(typeof model.context_length === "number" &&
+			Number.isSafeInteger(model.context_length) &&
+			model.context_length > 0
+				? { contextWindow: model.context_length }
 				: {}),
 		});
 	}
-	return recentModelGenerations([...models.values()]).sort(
-		(a, b) => b.created - a.created,
-	);
+	return [...models.values()];
 }

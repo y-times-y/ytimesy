@@ -1,12 +1,6 @@
 import { z } from "zod";
-import {
-	type BrowseModel,
-	googleFlashModelRank,
-	isNonCodingModelId,
-	isShownInModelPicker,
-	openRouterModelLabel,
-	recentModelGenerations,
-} from "./browse-models";
+import { API_MODEL_LIST } from "./api-model-list";
+import { type BrowseModel, DIRECT_MODEL_ENDPOINTS } from "./browse-models";
 
 export const modelProvider = z.enum([
 	"openai",
@@ -92,24 +86,6 @@ export type PublicModelConnection = {
 	readonly revision: string;
 };
 
-export function isCodingModelId(provider: ModelProvider, id: string): boolean {
-	if (id.endsWith(":batch") || isNonCodingModelId(id)) return false;
-	if (provider === "anthropic") return id.startsWith("claude-");
-	if (provider === "google")
-		return id.startsWith("gemini-") && !id.includes("live");
-	if (provider === "openai") return /^(?:gpt-|chatgpt-|o[1-9](?:-|$))/.test(id);
-	if (provider === "openrouter") return true;
-	return true;
-}
-
-/**
- * OpenRouter lists "<model>-pro" as its own model: the same model with a "pro"
- * reasoning mode. It is not a separate model or reasoning level, so it is hidden.
- */
-function isProDuplicate(modelId: string, catalogIds: ReadonlySet<string>) {
-	return modelId.endsWith("-pro") && catalogIds.has(modelId.slice(0, -4));
-}
-
 type ApiModelReasoning = {
 	readonly levels: readonly [
 		{ id: string; label: string },
@@ -155,49 +131,66 @@ export function availableConnectionModels(
 	browseModels: readonly BrowseModel[],
 ) {
 	return connections.flatMap((connection) =>
-		connectionModels(connection, browseModels)
-			.filter((model) => isCodingModelId(connection.provider, model.id))
-			.map((model) => {
-				const reasoning = apiModelReasoning(connection.provider, model.id);
-				return {
-					id: modelRouteId(connection.id, model.id),
-					label: `${connection.provider === "openrouter" ? openRouterModelLabel(model.label) : model.label} · ${connection.label}`,
-					...(reasoning ? { reasoning } : {}),
-				};
-			}),
+		connectionModels(connection, browseModels).map((model) => {
+			const reasoning = apiModelReasoning(connection.provider, model.id);
+			return {
+				id: modelRouteId(connection.id, model.id),
+				label: `${model.label} · ${connection.label}`,
+				...(reasoning ? { reasoning } : {}),
+			};
+		}),
 	);
 }
 
-/** A saved gateway key grants access to the current public catalog, not only its login-time snapshot. */
+/** The maker whose own key this connection is, or null for a gateway or unknown host. */
+function directAuthor(connection: PublicModelConnection): string | null {
+	if (connection.provider === "compatible")
+		return (
+			Object.entries(DIRECT_MODEL_ENDPOINTS).find(
+				([, endpoint]) => endpoint === connection.baseUrl,
+			)?.[0] ?? null
+		);
+	return connection.provider === "openrouter" ? null : connection.provider;
+}
+
+/**
+ * The listed models this connection serves, in list order. Only API_MODEL_LIST
+ * decides what is offered; the connection's catalog (and, for OpenRouter, the
+ * current public catalog) only confirms the key can use an entry.
+ */
 export function connectionModels(
 	connection: PublicModelConnection,
 	browseModels: readonly BrowseModel[],
 ): readonly ConnectedModel[] {
-	if (connection.provider !== "openrouter") {
-		const ids = new Set(connection.models.map((model) => model.id));
-		const models = connection.models.filter(
-			(model) => !isProDuplicate(model.id, ids),
-		);
-		return connection.provider === "google"
-			? models
-					.filter((model) => isShownInModelPicker("google", model.id))
-					.sort(
-						(a, b) => googleFlashModelRank(a.id) - googleFlashModelRank(b.id),
-					)
-			: recentModelGenerations(models);
-	}
 	const saved = new Map(connection.models.map((model) => [model.id, model]));
-	const catalogIds = new Set(browseModels.map((model) => model.id));
-	return browseModels
-		.filter((model) => isShownInModelPicker(model.author, model.id))
-		.filter((model) => !isProDuplicate(model.id, catalogIds))
-		.map((model) => ({
-			id: model.id,
-			label: model.label || saved.get(model.id)?.label || model.id,
-			toolStreamingVerified:
-				saved.get(model.id)?.toolStreamingVerified ?? false,
-			contextWindow: model.contextWindow ?? saved.get(model.id)?.contextWindow,
-		}));
+	const browsed = new Map(browseModels.map((model) => [model.id, model]));
+	const author = directAuthor(connection);
+	return API_MODEL_LIST.flatMap((entry) => {
+		const id =
+			connection.provider === "openrouter"
+				? entry.openRouterId
+				: entry.author === author
+					? entry.directId
+					: undefined;
+		if (!id) return [];
+		const offered =
+			saved.has(id) ||
+			(connection.provider === "openrouter" && browsed.has(id));
+		if (!offered) return [];
+		return [
+			{
+				id,
+				label: entry.label,
+				toolStreamingVerified: saved.get(id)?.toolStreamingVerified ?? false,
+				...((browsed.get(id)?.contextWindow ?? saved.get(id)?.contextWindow)
+					? {
+							contextWindow:
+								browsed.get(id)?.contextWindow ?? saved.get(id)?.contextWindow,
+						}
+					: {}),
+			},
+		];
+	});
 }
 
 export function parseModelRouteId(

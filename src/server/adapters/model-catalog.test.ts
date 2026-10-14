@@ -4,7 +4,7 @@ import {
 	parseConnectedModels,
 } from "./model-catalog";
 
-it("deduplicates model IDs without claiming tool support", () => {
+it("records every model the key can access once, without claiming tool support", () => {
 	expect(
 		parseConnectedModels("openrouter", {
 			data: [
@@ -36,7 +36,13 @@ it("deduplicates model IDs without claiming tool support", () => {
 			],
 		}),
 	).toEqual([
+		{ id: "vendor/audio", label: "Audio", toolStreamingVerified: false },
 		{ id: "vendor/code", label: "Code", toolStreamingVerified: false },
+		{
+			id: "vendor/code:batch",
+			label: "Code (batch)",
+			toolStreamingVerified: false,
+		},
 	]);
 });
 it("filters Google embedding-only models", () => {
@@ -54,18 +60,6 @@ it("filters Google embedding-only models", () => {
 	).toEqual([
 		{ id: "gemini-chat", label: "Chat", toolStreamingVerified: false },
 	]);
-});
-it("hides native non-coding model families", () => {
-	expect(
-		parseConnectedModels("openai", {
-			data: [
-				{ id: "gpt-6-sol" },
-				{ id: "gpt-audio" },
-				{ id: "gpt-5-image" },
-				{ id: "text-embedding-3-large" },
-			],
-		}).map((model) => model.id),
-	).toEqual(["gpt-6-sol"]);
 });
 it("follows pagination and authenticates using the provider header", async () => {
 	const fetch = vi

@@ -13,6 +13,7 @@ import {
 	type AgentProviderId,
 	offeredAgentProviders,
 } from "#/domain/agent-provider";
+import { apiModelSections } from "#/domain/api-model-list";
 import { AUTHOR_LABELS, recentModelGenerations } from "#/domain/browse-models";
 import { parseModelRouteId } from "#/domain/model-connection";
 import {
@@ -231,25 +232,27 @@ export function HarnessPicker({
 									<AgentProviderMark provider={option.id} size={21} />
 								</button>
 							))}
-						{Object.entries(AUTHOR_LABELS).map(([id, label]) => (
-							<button
-								type="button"
-								key={id}
-								title={label}
-								aria-label={label}
-								aria-pressed={browse && apiProvider === id}
-								onClick={() => {
-									if (harnessId !== "api" && multipleModels)
-										onMultipleModelsChange?.(false);
-									setBrowse(true);
-									setApiProvider(id);
-									setFavoritesOnly(false);
-									setSearch("");
-								}}
-							>
-								<ModelProviderLogo provider={id} size={21} />
-							</button>
-						))}
+						{apiModelSections()
+							.map((id) => [id, AUTHOR_LABELS[id] ?? id] as const)
+							.map(([id, label]) => (
+								<button
+									type="button"
+									key={id}
+									title={label}
+									aria-label={label}
+									aria-pressed={browse && apiProvider === id}
+									onClick={() => {
+										if (harnessId !== "api" && multipleModels)
+											onMultipleModelsChange?.(false);
+										setBrowse(true);
+										setApiProvider(id);
+										setFavoritesOnly(false);
+										setSearch("");
+									}}
+								>
+									<ModelProviderLogo provider={id} size={21} />
+								</button>
+							))}
 					</nav>
 					<section
 						className="model-picker-catalog"
