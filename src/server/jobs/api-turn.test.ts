@@ -1072,3 +1072,56 @@ it("still reports a lost turn lease that the user did not ask to stop", async ()
 		vi.useRealTimers();
 	}
 });
+
+it.each([
+	["a child", { parentSessionId: "parent" }],
+	["a root chat", {}],
+])(
+	"fails %s out of time with a time-limit message and notifies its parent",
+	async (_kind, extra) => {
+		mocks.owner.mockResolvedValue({
+			id: "session",
+			userId: "owner",
+			projectId: "project",
+			harness: "api",
+			...extra,
+		});
+		mocks.stepRuntime.mockImplementation(hangUntilAborted);
+		const deadline = new AbortController();
+		const outcome = runApiTurn({} as WorkspaceMachines, childTurn, {
+			index: 3,
+			signal: deadline.signal,
+		});
+		await vi.waitFor(() => expect(mocks.stepRuntime).toHaveBeenCalled());
+		deadline.abort(new DOMException("Turn deadline reached.", "TimeoutError"));
+		expect(await outcome).toBe("failed");
+		expect(mocks.finalize).toHaveBeenCalledWith(
+			expect.anything(),
+			"failed",
+			expect.arrayContaining([
+				expect.objectContaining({
+					kind: "error",
+					message: expect.stringContaining("reached its time limit"),
+				}),
+			]),
+		);
+		expect(mocks.result).toHaveBeenCalledWith(
+			expect.objectContaining({
+				eventType: "failed",
+				summary: expect.stringContaining("reached its time limit"),
+			}),
+		);
+	},
+);
+
+it("keeps an interrupted durable step that was not out of time a plain stop", async () => {
+	mocks.stepRuntime.mockImplementation(hangUntilAborted);
+	const request = new AbortController();
+	const outcome = runApiTurn({} as WorkspaceMachines, childTurn, {
+		index: 2,
+		signal: request.signal,
+	});
+	await vi.waitFor(() => expect(mocks.stepRuntime).toHaveBeenCalled());
+	request.abort();
+	expect(await outcome).toBe("cancelled");
+});

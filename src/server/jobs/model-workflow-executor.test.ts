@@ -151,6 +151,8 @@ it("fences expired turns immediately and makes the overflow step a no-inference 
 	mocks.claim.mockResolvedValue({ kind: "claimed", turn: {}, remainingMs: 0 });
 	mocks.run.mockImplementation(async (_machines, _turn, options) => {
 		expect(options.signal.aborted).toBe(true);
+		// A time limit, not a user stop.
+		expect(options.signal.reason.name).toBe("TimeoutError");
 		expect(options.limitReached).toBe(true);
 		return "cancelled";
 	});
