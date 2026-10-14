@@ -13,20 +13,13 @@ import { agentContextArchiveTools } from "./agent-context-archive-tools";
 import { agentOutputArtifacts } from "./agent-output-artifacts";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 import { apiAgentBrowserTools } from "./api-agent-browser-tools";
-import {
-	apiAgentCommandTools,
-	verifyPatchedCheckout,
-} from "./api-agent-command-tools";
+import { apiAgentCommandTools } from "./api-agent-command-tools";
 import { apiAgentFileTools } from "./api-agent-file-tools";
 import { apiAgentLanguageTools } from "./api-agent-language-tools";
 import { apiAgentSearchTools } from "./api-agent-search-tools";
-import { scopedShellCommand } from "./api-command-scope";
 import { batchedAgentReads } from "./batched-agent-reads";
-import { codeToolingTools } from "./code-tooling";
-import { dapDebuggerTools } from "./dap-debugger";
 import { runAgentTaskTool } from "./harness-workspace-session";
 import { journaledToolOperation } from "./journaled-tool-operation";
-import { nodeDebuggerTools } from "./node-debugger";
 import { loadCloudProjectMemoryDocument } from "./project-knowledge";
 import { projectMemoryTools } from "./project-memory-tools";
 import { inspectProjectSourceEvidence } from "./project-source-evidence";
@@ -155,91 +148,10 @@ export function apiAgentTools(
 			output,
 			signal,
 			once,
-			verifyBatch: readOnly
-				? undefined
-				: async (
-						{
-							formatCommand,
-							preflightCommands,
-							commands,
-							maxSeconds,
-							parallelChecks,
-							groups,
-							sourcePaths,
-							outputView,
-						},
-						id,
-					) => {
-						const runChecks = async (
-							stageCommands: string[],
-							stage: string,
-						) => {
-							if (!tools.run_checks.execute)
-								throw new Error(
-									"Verification executor is unavailable; inspect the edited checkout.",
-								);
-							return tools.run_checks.execute(
-								{
-									commands: stageCommands,
-									maxSeconds,
-									parallel: stage === "verification" && parallelChecks,
-									groups: stage === "verification" ? groups : undefined,
-									sourcePaths,
-									outputView,
-								},
-								{
-									toolCallId: `${id}:${stage}`,
-									messages: [],
-									abortSignal: signal,
-									context: {},
-								},
-							);
-						};
-						return verifyPatchedCheckout({
-							signal,
-							preflight: preflightCommands
-								? () => runChecks(preflightCommands, "preflight")
-								: undefined,
-							format: formatCommand
-								? async () => {
-										const { cwd } = await workspace();
-										return output.capture(
-											scopedShellCommand({
-												turnId: input.turnId,
-												cwd,
-												command: formatCommand,
-												seconds: 30,
-											}),
-											35,
-										);
-									}
-								: undefined,
-							check: () => runChecks(commands, "verification"),
-						});
-					},
 		}),
 	);
 	tools.read_tool_output = output.readTool;
 	Object.assign(tools, apiAgentLanguageTools({ workspace, signal }));
-	if (!readOnly)
-		Object.assign(
-			tools,
-			nodeDebuggerTools({
-				workspace,
-				signal,
-				ownerSessionId: session.id,
-				turnId: input.turnId,
-				once,
-			}),
-			dapDebuggerTools({
-				workspace,
-				signal,
-				ownerSessionId: session.id,
-				turnId: input.turnId,
-				once,
-			}),
-			codeToolingTools({ workspace, signal, once }),
-		);
 	Object.assign(
 		tools,
 		apiAgentCommandTools({
