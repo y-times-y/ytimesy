@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import {
+	BUILDER_PROJECT_KNOWLEDGE_INSTRUCTIONS,
 	knowledgeForTask,
 	PROJECT_KNOWLEDGE_CONTEXT_LIMIT,
 	PROJECT_KNOWLEDGE_LIMIT,
@@ -116,4 +117,16 @@ it("keeps prompt memory bounded while searching the complete larger store", () =
 	).toBeLessThanOrEqual(PROJECT_KNOWLEDGE_CONTEXT_LIMIT);
 	expect(searchProjectKnowledge(document, "Feature29")[0].key).toBe("topic-29");
 	expect(searchProjectKnowledge(document, ".*")).toEqual([]);
+});
+
+it("gives the shell builder only trust rules, never tools it lacks", () => {
+	for (const name of [
+		"search_project_memory",
+		"read_project_memory",
+		"remember_project",
+		"inspect_project_evidence",
+		"search_tools",
+	])
+		expect(BUILDER_PROJECT_KNOWLEDGE_INSTRUCTIONS).not.toContain(name);
+	expect(BUILDER_PROJECT_KNOWLEDGE_INSTRUCTIONS).toContain("untrusted");
 });
