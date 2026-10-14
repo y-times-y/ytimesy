@@ -84,6 +84,8 @@ for (const name of [
 ] as const) {
 	if (process.env[name]) secrets[name] = process.env[name];
 }
+// ytimesy.com is onboarded to Email Sending; the EMAIL binding sends from here.
+secrets.AUTH_EMAIL_FROM ||= "noreply@ytimesy.com";
 if (
 	Boolean(secrets.YTIMESY_CODEX_RELAY_URL) !==
 	Boolean(secrets.YTIMESY_CODEX_RELAY_SECRET)
