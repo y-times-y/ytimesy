@@ -319,14 +319,22 @@ for ref in ${base ? `${posixShellQuoted(`origin/${base}`)} ${posixShellQuoted(ba
 done
 [ -n "$base" ] || base=HEAD
 out=$(mktemp) || exit 4
-trap 'rm -f "$out"' EXIT
-# Capping with head stops the writers with SIGPIPE; the status is not a failure.
+failed=$(mktemp) || exit 4
+trap 'rm -f "$out" "$failed"' EXIT
+# Capping with head stops the writers with SIGPIPE (status 141), which is not
+# a failure; any other failing status is, so the panel never shows a failed
+# diff as "no changes". pipefail would also count the SIGPIPE.
 {
   git -c core.quotepath=off diff --no-color --find-renames "$base" --
+  status=$?
+  [ "$status" -eq 0 ] || [ "$status" -eq 141 ] || echo diff > "$failed"
   git ls-files -z --others --exclude-standard | head -z -n 200 | while IFS= read -r -d '' file; do
     git -c core.quotepath=off diff --no-color --no-index -- /dev/null "$file" || true
   done
+  status=\${PIPESTATUS[0]}
+  [ "$status" -eq 0 ] || [ "$status" -eq 141 ] || echo untracked > "$failed"
 } | head -c ${WORKSPACE_DIFF_BYTE_LIMIT + 1} > "$out"
+[ -s "$failed" ] && exit 5
 if [ "$(wc -c < "$out")" -gt ${WORKSPACE_DIFF_BYTE_LIMIT} ]; then
   head -c ${WORKSPACE_DIFF_BYTE_LIMIT} "$out"
   printf '\\n%s\\n' ${WORKSPACE_DIFF_TRUNCATED_MARKER}

@@ -126,6 +126,19 @@ it("returns a capped diff with a truncation note instead of failing on huge chan
 	}
 });
 
+it("fails instead of reporting no changes when git diff fails", async () => {
+	const root = await mkdtemp(join(tmpdir(), "ytimesy-diff-failure-"));
+	try {
+		// No commit yet: there is no HEAD to diff against.
+		spawnSync("git", ["-C", root, "init", "-q"]);
+		await writeFile(join(root, "new.txt"), "new\n");
+		const result = spawnSync("bash", ["-c", gitChangesScript(root, "")]);
+		expect(result.status).not.toBe(0);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
 it("leaves an ordinary diff unmarked", () => {
 	const { changes, truncated } = parseWorkspaceDiffOutput(
 		"diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-a\n+b\n",
