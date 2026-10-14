@@ -67,7 +67,6 @@ import {
 	renewApiTurn,
 } from "../adapters/api-turns";
 import { reserveApiTokens } from "../adapters/api-usage-budget";
-import { readBuilderWorkState } from "../adapters/builder-work-state";
 import { archiveModelContext } from "../adapters/context-archives";
 import { coordinateConversationTurn } from "../adapters/conversation-turn-control";
 import {
@@ -96,7 +95,6 @@ import {
 	withBackgroundCommandContext,
 } from "../services/background-command-context";
 import { builderShellTools } from "../services/builder-shell-surface";
-import { withBuilderWorkState } from "../services/builder-work-state";
 import {
 	runCodexSubscriptionAgent,
 	runCodexSubscriptionAgentStep,
@@ -698,10 +696,6 @@ async function runApiTurnAttempt(
 			signal: abort.signal,
 			restoreInstructions: async (history) => {
 				history = await repositoryContext.restoreInstructions(history);
-				history = withBuilderWorkState(
-					history,
-					await readBuilderWorkState(owner.userId, owner.id),
-				);
 				await hooks.postCompact(history);
 				return hooks.drain(history);
 			},
@@ -709,10 +703,6 @@ async function runApiTurnAttempt(
 				hooks.drain(await repositoryContext.afterTools(history)),
 			prepareMessages: async (history) => {
 				history = hooks.drain(await repositoryContext.prepare(history));
-				history = withBuilderWorkState(
-					history,
-					await readBuilderWorkState(owner.userId, owner.id),
-				);
 				history = await withBackgroundCommandContext({
 					workspace,
 					sessionId: owner.id,
