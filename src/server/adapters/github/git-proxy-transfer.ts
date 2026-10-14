@@ -45,10 +45,22 @@ async function checked(
 	timeoutMs = 15_000,
 ) {
 	const result = await host.exec(command, timeoutMs);
-	if (result.exitCode !== 0)
+	if (result.exitCode !== 0) {
+		// Operators need the cause; capability URLs never reach the log.
+		console.warn("Workspace Git proxy transfer failed", {
+			exitCode: result.exitCode,
+			stderr: String((result as { stderr?: unknown }).stderr ?? "")
+				.replace(/https?:\/\/\S+/g, "<url>")
+				.trim()
+				.split("\n")
+				.slice(-3)
+				.join(" | ")
+				.slice(0, 400),
+		});
 		throw new Error(
 			"Workspace Git proxy transfer failed; check repository access.",
 		);
+	}
 	return result.stdout.trim();
 }
 

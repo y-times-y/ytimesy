@@ -311,3 +311,17 @@ it("leaves non-machine failures to the existing provider wording", () => {
 		"without a usable provider reason",
 	);
 });
+
+it("says the repository could not be fetched when a Git proxy transfer fails", () => {
+	const fetch = new Error(
+		"Workspace Git proxy transfer failed; check repository access.",
+	);
+	for (const error of [
+		fetch,
+		new SafeApiModelFailure(new Error("fiber failure", { cause: fetch })),
+	]) {
+		const message = apiModelFailureMessage(error);
+		expect(message).toContain("could not fetch its repository from GitHub");
+		expect(message).not.toContain("model request failed");
+	}
+});
