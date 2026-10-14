@@ -2,6 +2,7 @@ import { APICallError } from "ai";
 import { expect, it } from "vitest";
 import {
 	apiModelFailureClassification,
+	apiModelFailureMessage,
 	apiTurnFailureClassification,
 	apiTurnFailureMessage,
 	CodexReconnectRequired,
@@ -217,4 +218,17 @@ it("tells the user to reconnect Codex even when the SDK wraps the refresh failur
 	expect(
 		apiTurnFailureMessage("model", new CodexReconnectRequired()),
 	).toContain("reconnect Codex");
+});
+
+it("says the provider is overloaded when a streamed error reports it", () => {
+	const overloaded = new Error(
+		"Our servers are currently overloaded. Please try again later.",
+	);
+	overloaded.name = "AI_StreamProviderError";
+	expect(apiModelFailureMessage(overloaded)).toBe(
+		"The provider is overloaded right now. Work is preserved; retry this turn in a minute. No fallback was used.",
+	);
+	expect(apiModelFailureMessage(new Error("something else"))).toContain(
+		"without a usable provider reason",
+	);
 });

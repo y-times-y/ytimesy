@@ -394,6 +394,9 @@ export function apiModelFailureMessage(error: unknown): string {
 			return "The provider could not be reached or returned a temporary error. Retry this turn. No fallback was used.";
 	}
 	if (error instanceof Error) {
+		// Streamed provider errors arrive without an HTTP status; only their wording says why.
+		if (/overloaded|over capacity|capacity constraints/i.test(error.message))
+			return "The provider is overloaded right now. Work is preserved; retry this turn in a minute. No fallback was used.";
 		if (error.message.includes("selected model is no longer available"))
 			return "The selected model is no longer available on this connection. Choose another model. No fallback was used.";
 		if (error.name === "TimeoutError")
