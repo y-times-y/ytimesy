@@ -37,6 +37,7 @@ import { AgentProviderMark } from "../sessions/agent-provider-mark";
 import { McpServers } from "../sessions/mcp-servers";
 import { ModelConnections } from "../sessions/model-connections";
 import { getModelConnections } from "../sessions/model-connections.fn";
+import { ModelFailoverSettings } from "../sessions/model-failover-settings";
 import { Plugins } from "../sessions/plugins";
 import { GithubMark } from "./github-mark";
 import { InfrastructureUsage } from "./infrastructure-usage";
@@ -872,6 +873,7 @@ function AgentsSection({
 				<CodexSubscriptionUsage usage={usage} />
 			</section>
 			<ModelConnections />
+			<ModelFailoverSettings />
 		</>
 	);
 }

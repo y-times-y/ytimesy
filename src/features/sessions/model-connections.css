@@ -16,3 +16,12 @@
 		flex-wrap: wrap;
 	}
 }
+.model-failover-order {
+	margin-top: 8px;
+}
+.model-failover-move {
+	display: grid;
+	place-items: center;
+	width: 28px;
+	padding: 0;
+}

@@ -97,8 +97,9 @@ export function ModelConnections() {
 				<div>
 					<h3>API keys</h3>
 					<p>
-						Use your own model provider account. Keys are encrypted, never shown
-						again, and never used in place of a subscription.
+						Use your own model provider account. Keys are encrypted and never
+						shown again. A key stands in for a subscription only during an
+						outage, when automatic failover (below) is on.
 					</p>
 				</div>
 				{formOpen ? null : (
