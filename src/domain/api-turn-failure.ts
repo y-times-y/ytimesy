@@ -164,7 +164,21 @@ function machineFailureReason(message: string) {
  * A machine (VM) failure worded as one: it must never read as a model or
  * provider-inference failure. Null when the error is not a machine failure.
  */
+const REPOSITORY_FETCH_FAILURE =
+	"The chat could not fetch its repository from GitHub. Check that ytimesy still has access to the repository, then retry; your work is preserved.";
+
+/** A Git proxy clone or update failed; the model was never asked. */
+function repositoryFetchFailed(error: unknown, depth = 0): boolean {
+	if (depth > 4 || !(error instanceof Error)) return false;
+	if (/Workspace Git proxy transfer failed/.test(error.message)) return true;
+	const inner =
+		(error as { providerError?: unknown }).providerError ??
+		(RetryError.isInstance(error) ? error.lastError : error.cause);
+	return repositoryFetchFailed(inner, depth + 1);
+}
+
 export function machineFailureMessage(error: unknown): string | null {
+	if (repositoryFetchFailed(error)) return REPOSITORY_FETCH_FAILURE;
 	const found = machineError(error);
 	if (!found) return null;
 	const reason = machineFailureReason(found.message);
