@@ -131,7 +131,7 @@ it("rejects a gateway format the installed SDK would silently drop", async () =>
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			apiKey: "fixture",
-			modelId: "fixture-model",
+			modelId: "openai/gpt-6.1-sol",
 		},
 		fetch,
 	);

@@ -107,11 +107,6 @@ export const API_MODEL_LIST: readonly ListedApiModel[] = [
 		label: "DeepSeek V4.1 Flash",
 		openRouterId: "deepseek/deepseek-v4.1-flash",
 	},
-	{
-		author: "z-ai",
-		label: "GLM 5.3 Prime",
-		openRouterId: "z-ai/glm-5.3-prime",
-	},
 	{ author: "z-ai", label: "GLM 5.3", openRouterId: "z-ai/glm-5.3" },
 	{
 		author: "moonshotai",
@@ -128,4 +123,33 @@ export const API_MODEL_LIST: readonly ListedApiModel[] = [
 /** Selector sections in list order. */
 export function apiModelSections(): readonly string[] {
 	return [...new Set(API_MODEL_LIST.map((model) => model.author))];
+}
+
+/**
+ * Each maker's own OpenRouter providers. OpenRouter requests are pinned to
+ * these with fallbacks off, so a listed model never runs on a third-party
+ * host (or a third party's quantization) even through an OpenRouter key.
+ */
+const OFFICIAL_OPENROUTER_PROVIDERS: Readonly<
+	Record<string, readonly string[]>
+> = {
+	openai: ["openai"],
+	anthropic: ["anthropic"],
+	google: ["google-ai-studio", "google-vertex"],
+	"x-ai": ["xai"],
+	meta: ["meta"],
+	deepseek: ["deepseek"],
+	"z-ai": ["z-ai"],
+	moonshotai: ["moonshotai"],
+	qwen: ["alibaba"],
+};
+
+/** The official providers for a listed OpenRouter model, or null when it is not listed. */
+export function officialOpenRouterProviders(
+	openRouterId: string,
+): readonly string[] | null {
+	const entry = API_MODEL_LIST.find(
+		(model) => model.openRouterId === openRouterId,
+	);
+	return entry ? (OFFICIAL_OPENROUTER_PROVIDERS[entry.author] ?? null) : null;
 }
