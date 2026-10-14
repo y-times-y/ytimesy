@@ -107,9 +107,19 @@ it("locks edits only once the agent enters plan mode, mid-turn", async () => {
 		blocked: true,
 	});
 	expect(ran).toHaveBeenCalledTimes(1);
+	const proposed = await tools.propose_plan.execute?.(
+		{ plan: "1. Migrate" },
+		options,
+	);
+	// The transcript reads the accepted plan from the result; the model is not sent it again.
+	expect(proposed).toMatchObject({ proposed: true, plan: "1. Migrate" });
 	expect(
-		await tools.propose_plan.execute?.({ plan: "1. Migrate" }, options),
-	).toMatchObject({ proposed: true });
+		await tools.propose_plan.toModelOutput?.({
+			toolCallId: "c",
+			input: { plan: "1. Migrate" },
+			output: proposed,
+		}),
+	).toEqual({ type: "json", value: { proposed: true, next: proposed.next } });
 });
 
 it("starts locked when the transcript says a plan is in progress", () => {

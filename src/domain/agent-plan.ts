@@ -9,23 +9,30 @@ export const PLAN_TEXT_LIMIT = 20_000;
 export type AgentPlanState =
 	/** No plan in progress: the agent may edit. */
 	| { readonly kind: "none" }
-	/** The agent entered plan mode and has not proposed yet. */
+	/** The agent entered plan mode during the current turn and has not proposed yet. */
 	| { readonly kind: "planning" }
 	/** A proposed plan waits for the user; any reply without approval asks for a revision. */
 	| { readonly kind: "proposed"; readonly planId: SessionItem["id"] };
 
 /**
- * Where planning stands before the next turn, from the transcript alone.
- * Only an approval lifts it; other replies are feedback on the plan.
+ * Where planning stands before the next step or turn, from the transcript alone.
+ * A proposed plan stays until it is approved; other replies are feedback on it.
+ * Entering plan mode locks only the turn that entered it: a turn that ended
+ * without proposing (stopped, failed, or the agent never proposed) shows the
+ * user nothing to approve, so it must not lock the turns after it.
  */
 export function agentPlanState(items: readonly SessionItem[]): AgentPlanState {
+	let laterTurn = false;
 	for (let index = items.length - 1; index >= 0; index--) {
 		const item = items[index];
-		if (item.kind === "userMessage" && item.approvesPlan)
-			return { kind: "none" };
+		if (item.kind === "userMessage") {
+			if (item.approvesPlan) return { kind: "none" };
+			laterTurn = true;
+		}
 		if (item.kind === "planProposal")
 			return { kind: "proposed", planId: item.id };
 		if (
+			!laterTurn &&
 			item.kind === "dynamicToolCall" &&
 			item.tool === ENTER_PLAN_MODE_TOOL &&
 			item.status === "completed"
