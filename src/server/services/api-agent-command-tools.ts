@@ -14,6 +14,12 @@ import {
 	resolveToolWorkspace,
 } from "./agent-tool-workspace";
 import { scopedShellCommand, stopApiCommand } from "./api-command-scope";
+import {
+	COMMAND_WAIT_DEFAULT_SECONDS,
+	COMMAND_WAIT_MAX_SECONDS,
+	COMMAND_WAIT_STALL_SECONDS,
+	waitForCommand,
+} from "./command-wait";
 import { inspectProjectSourceEvidence } from "./project-source-evidence";
 
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
@@ -147,7 +153,7 @@ elif subprocess.run(['tmux', '-L', 'ytimesy-api', 'has-session', '-t', session],
 if len(sys.argv) > 6 and pathlib.Path(sys.argv[6]).exists():
     output = sys.argv[6]
 if seconds > 0 and state == 'running' and not (len(sys.argv)>7 and sys.argv[7]=='live'):
-    print(json.dumps({'status': state, 'stopped': stopped, 'stdout': '', 'start': start, 'nextStart': start, 'outputDeferred': True}))
+    print(json.dumps({'status': state, 'stopped': stopped, 'stdout': '', 'start': start, 'nextStart': start, 'outputDeferred': True, 'outputBytes': os.path.getsize(output) if os.path.exists(output) else 0}))
     sys.exit(0)
 descriptor = os.open(output, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
 with os.fdopen(descriptor, encoding='utf-8', errors='replace') as handle:
@@ -155,7 +161,8 @@ with os.fdopen(descriptor, encoding='utf-8', errors='replace') as handle:
         raise ValueError('Output must be a regular file')
     handle.read(start)
     text = handle.read(32001)
-print(json.dumps({'status': state, 'stopped': stopped, 'stdout': text[:32000], 'start': start, 'nextStart': start + 32000 if len(text) > 32000 else None}, ensure_ascii=False))`;
+# While running, the cursor marks the current end so the next read returns only newer output.
+print(json.dumps({'status': state, 'stopped': stopped, 'stdout': text[:32000], 'start': start, 'nextStart': start + 32000 if len(text) > 32000 else start + len(text) if state == 'running' else None}, ensure_ascii=False))`;
 
 export function apiAgentCommandTools(
 	input: AgentToolWorkspaceInput & {
@@ -165,6 +172,8 @@ export function apiAgentCommandTools(
 		signal: AbortSignal;
 		once: (id: string, run: () => Promise<unknown>) => Promise<unknown>;
 		output?: ReturnType<typeof agentOutputArtifacts>;
+		/** Latest epoch ms a command wait may end: the step budget or turn deadline minus a margin. */
+		waitDeadlineAt?: number;
 	},
 ): ToolSet {
 	const { signal, once } = input;
@@ -188,9 +197,11 @@ export function apiAgentCommandTools(
 			throw new Error("Command was not found in this agent session.");
 		return JSON.parse(result.stdout) as {
 			status: number | "running" | "interrupted";
+			stopped?: "timeout" | "output_limit" | null;
 			stdout: string;
 			start: number;
 			nextStart: number | null;
+			outputBytes?: number;
 		};
 	};
 	const launchCommand = async (
@@ -488,7 +499,7 @@ export function apiAgentCommandTools(
 	});
 	tools.execute_command = tool({
 		description:
-			"Run a repository shell command (rg, Git, project CLIs). Returns output and actual status if finished, or an owned id if still running after yieldSeconds. Continue the SAME command with continue_command; never restart just because it yielded. Bounded to ten minutes. No detached work, credentials, or publication without authorization.",
+			"Run a repository shell command (rg, Git, project CLIs). Returns output and actual status if finished, or an owned id if still running after yieldSeconds. Continue the SAME command with continue_command, which waits for it to finish; never restart just because it yielded. Bounded to ten minutes. No detached work, credentials, or publication without authorization.",
 		inputSchema: z.object({
 			command: z.string().min(1).max(16000),
 			maxSeconds: z.number().int().min(30).max(600).default(300),
@@ -506,7 +517,7 @@ export function apiAgentCommandTools(
 	});
 	tools.continue_command = tool({
 		description:
-			"Continue an owned command: optionally send literal stdin text and/or EOF, then wait and read output at start. Does not restart it. Read all continuation pages and actual exit/stop status before claiming success. Never send credentials. Use stop_command to cancel.",
+			"Continue an owned command: optionally send literal stdin text and/or EOF, then wait for it and read output at start. The wait ends as soon as the command exits, or after seconds (default 300, or 10 after input), or early if output stalls for 3 minutes; then it returns output and status. Prefer one long wait over repeated short checks; pass a small seconds only to peek at progress. While running, nextStart is the current end: pass it as start to read only newer output. Does not restart it. Read all continuation pages and actual exit/stop status before claiming success. Never send credentials. Use stop_command to cancel a hung or runaway command.",
 		inputSchema: z.object({
 			id: jobId,
 			chars: z
@@ -523,10 +534,10 @@ export function apiAgentCommandTools(
 				.optional(),
 			eof: z.boolean().default(false),
 			start: z.number().int().min(0).max(100000000).default(0),
-			seconds: z.number().int().min(0).max(55).default(10),
+			seconds: z.number().int().min(0).max(COMMAND_WAIT_MAX_SECONDS).optional(),
 		}),
 		execute: async (
-			{ id, chars, eof = false, start = 0, seconds = 10 },
+			{ id, chars, eof = false, start = 0, seconds },
 			options,
 		) => {
 			jobId.parse(id);
@@ -547,7 +558,33 @@ export function apiAgentCommandTools(
 					return { id, inputSent: true };
 				});
 			}
-			return { id, ...(await readCommand(id, start, seconds)) };
+			const waitSeconds =
+				seconds ?? (chars || eof ? 10 : COMMAND_WAIT_DEFAULT_SECONDS);
+			const wait = waitSeconds
+				? await waitForCommand({
+						observe: (chunk) => readCommand(id, start, chunk),
+						seconds: waitSeconds,
+						signal,
+						deadlineAt: input.waitDeadlineAt,
+					})
+				: { reason: "elapsed" as const, waitedSeconds: 0 };
+			const page = await readCommand(id, start);
+			if (page.status !== "running") return { id, ...page };
+			const { outputBytes: _bytes, ...running } = page;
+			return {
+				id,
+				...running,
+				waitedSeconds: wait.waitedSeconds,
+				...(wait.reason === "stalled"
+					? {
+							note: `No new output for ${COMMAND_WAIT_STALL_SECONDS} s; it may be hung or waiting for input. Continue waiting, send input, or stop_command.`,
+						}
+					: wait.reason === "deadline"
+						? {
+								note: "Wait cut short by the time left in this step; continue_command again to keep waiting.",
+							}
+						: {}),
+			};
 		},
 	});
 	return tools;

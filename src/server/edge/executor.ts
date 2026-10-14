@@ -348,6 +348,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 													},
 													AbortSignal.timeout(STEP_BUDGET_MS),
 													resume,
+													STEP_BUDGET_MS,
 												),
 										),
 								),

@@ -26,7 +26,7 @@ afterEach(async () => {
 	);
 });
 
-async function fixture() {
+async function fixture(waitDeadlineAt?: number) {
 	const cwd = await mkdtemp(join(tmpdir(), "ytimesy-command-output-"));
 	const sessionId = randomUUID();
 	roots.push(
@@ -63,6 +63,7 @@ async function fixture() {
 		signal,
 		output,
 		once: async (_id, fn) => fn(),
+		waitDeadlineAt,
 	});
 	const call = async (name: string, args: object) =>
 		(
@@ -112,6 +113,46 @@ it("returns completed commands without requiring a second model request", async 
 			yieldSeconds: 2,
 		}),
 	).toMatchObject({ status: 0, stdout: "immediate", nextStart: null });
+});
+
+it("waits for a running command in one call and returns partial output with a newer-output cursor when cut short", async () => {
+	const { call } = await fixture();
+	const started = (await call("execute_command", {
+		command: "printf 'early\\n'; sleep 3; printf 'finished\\n'",
+		maxSeconds: 30,
+		yieldSeconds: 0,
+	})) as { id: string };
+	const peek = (await call("continue_command", {
+		id: started.id,
+		seconds: 1,
+	})) as { status: string; stdout: string; nextStart: number };
+	expect(peek).toMatchObject({
+		status: "running",
+		stdout: "early\n",
+		nextStart: 6,
+		waitedSeconds: expect.any(Number),
+	});
+	expect(
+		await call("continue_command", { id: started.id, start: peek.nextStart }),
+	).toMatchObject({ status: 0, stdout: "finished\n", nextStart: null });
+});
+
+it("ends a wait at the step deadline and says so", async () => {
+	const { call } = await fixture(Date.now() - 1);
+	const started = (await call("execute_command", {
+		command: "printf 'early\\n'; sleep 5",
+		maxSeconds: 30,
+		yieldSeconds: 0,
+	})) as { id: string };
+	const before = Date.now();
+	expect(
+		await call("continue_command", { id: started.id, seconds: 300 }),
+	).toMatchObject({
+		status: "running",
+		note: expect.stringContaining("time left in this step"),
+	});
+	expect(Date.now() - before).toBeLessThan(5_000);
+	await call("stop_command", { id: started.id });
 });
 
 it("sends EOF to an owned interactive command and retains failed exits", async () => {

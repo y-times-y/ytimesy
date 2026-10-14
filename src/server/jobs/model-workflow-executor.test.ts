@@ -2,7 +2,10 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { signDeliveryRequest } from "#/domain/delivery-auth";
 import { coordinateConversationTurn } from "../adapters/conversation-turn-control";
 import type { WorkspaceMachines } from "../services/workspace-machines";
-import { executeWorkflowRequest } from "./model-workflow-executor";
+import {
+	commandWaitDeadline,
+	executeWorkflowRequest,
+} from "./model-workflow-executor";
 
 const mocks = vi.hoisted(() => ({
 	claim: vi.fn(),
@@ -197,4 +200,14 @@ it("stops a cancelled resumed turn's commands and releases the room's rotated le
 		"release",
 		expect.objectContaining({ leaseId: rotated }),
 	);
+});
+
+it("ends command waits before the step budget and leaves the turn time for a model call", () => {
+	const minute = 60_000;
+	// Plenty of turn left: the 14-minute step budget binds, minus a save margin.
+	expect(commandWaitDeadline(0, 30 * minute, 14 * minute)).toBe(13 * minute);
+	// Near the turn deadline: three minutes stay for the model to read the result.
+	expect(commandWaitDeadline(0, 5 * minute, 14 * minute)).toBe(2 * minute);
+	// No step budget (HTTP orchestrator): only the turn deadline applies.
+	expect(commandWaitDeadline(0, 30 * minute)).toBe(27 * minute);
 });

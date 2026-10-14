@@ -177,6 +177,8 @@ type ApiTurnStep = {
 	index: number;
 	signal: AbortSignal;
 	limitReached?: boolean;
+	/** Latest epoch ms a tool may keep waiting on a command inside this step. */
+	waitDeadlineAt?: number;
 	/** The same step is being re-run after its executor restarted mid-step. */
 	resumed?: boolean;
 };
@@ -493,6 +495,7 @@ async function runApiTurnAttempt(
 			toolCallPrefix: step ? `step-${step.index}:` : undefined,
 			signal: abort.signal,
 			writable: Boolean(fusion) || direct,
+			waitDeadlineAt: step?.waitDeadlineAt,
 		});
 		const repositoryContext = automaticRepositoryContext({
 			tools: originalTools,
