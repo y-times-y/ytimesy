@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { workspacePublicationBranch } from "./publication";
 import {
+	pullRequestPanelRepository,
+	pullRequestsAcrossRepositories,
 	sidebarChatPrMarkForWorkspace,
 	sidebarChatPrNeedFromPullRequest,
 } from "./sidebar-pr";
@@ -174,5 +176,51 @@ describe("sidebarChatPrMarkForWorkspace", () => {
 				],
 			}),
 		).toMatchObject({ need: "ready", label: "Ready to merge" });
+	});
+});
+
+describe("pull requests across a project's repositories", () => {
+	const primary = { installationId: 1, repositoryId: 10, fullName: "o/app" };
+	const secondary = { installationId: 1, repositoryId: 20, fullName: "o/api" };
+	const pr = (number: number, head: string) => ({
+		number,
+		url: `https://github.com/o/x/pull/${number}`,
+		head,
+		draft: true,
+		state: "open",
+		merged: false,
+		mergeable: null,
+		mergeableState: null,
+	});
+
+	it("marks a chat whose PR the agent opened in a secondary repository", () => {
+		const head = workspacePublicationBranch("ws-1");
+		const listed = pullRequestsAcrossRepositories([
+			{ repository: primary, pullRequests: [pr(1, "other")] },
+			{ repository: secondary, pullRequests: [pr(7, head)] },
+		]);
+		expect(
+			sidebarChatPrMarkForWorkspace({
+				workspaceId: "ws-1",
+				pullRequests: listed,
+			}),
+		).toMatchObject({ url: "https://github.com/o/x/pull/7" });
+		const chatPr = listed.find((row) => row.head === head);
+		expect(
+			pullRequestPanelRepository({
+				repositories: [primary, secondary],
+				chatPullRequest: chatPr,
+			}),
+		).toEqual({ installationId: 1, repositoryId: 20, number: 7 });
+	});
+
+	it("opens the primary repository when the chat has no PR", () => {
+		expect(pullRequestsAcrossRepositories([{ repository: primary }])).toEqual(
+			[],
+		);
+		expect(
+			pullRequestPanelRepository({ repositories: [primary, secondary] }),
+		).toEqual({ installationId: 1, repositoryId: 10 });
+		expect(pullRequestPanelRepository({ repositories: [] })).toBeUndefined();
 	});
 });

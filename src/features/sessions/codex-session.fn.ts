@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getRequest } from "@tanstack/react-start/server";
 import { Effect } from "effect";
+import { z } from "zod";
 import {
 	type AgentProviderId,
 	DEFAULT_COMPOSER_HARNESS_ID,
@@ -174,6 +175,8 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 			speed?: string;
 			approvesPlan?: boolean;
 			attachments?: unknown;
+			/** The client's id for the message; a replayed send with it is not queued twice. */
+			userMessageId?: string;
 		}) => {
 			const attachments =
 				data.attachments === undefined
@@ -205,6 +208,9 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 							: ("standard" as const),
 				...(data.approvesPlan === true ? { approvesPlan: true } : {}),
 				...(attachments.length ? { attachments } : {}),
+				...(data.userMessageId
+					? { idempotencyKey: z.string().uuid().parse(data.userMessageId) }
+					: {}),
 			};
 		},
 	)

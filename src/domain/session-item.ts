@@ -219,6 +219,23 @@ function normalizeRuntimeUserMessages(
 	);
 }
 
+/** The transcript already holds the message this send (by its id) adds. */
+export function sendWasQueued(
+	items: readonly SessionItem[],
+	messageId: string | undefined,
+): boolean {
+	return Boolean(
+		messageId &&
+			items.some(
+				(item) => item.kind === "userMessage" && item.id === messageId,
+			),
+	);
+}
+
+/**
+ * Adds the user's message once. The message id is the send's identity, so a
+ * replayed request adds nothing while a deliberate repeat ("continue") is new.
+ */
 export function sessionItemsQueuedWithUser(
 	items: readonly SessionItem[],
 	text: string,
@@ -228,13 +245,9 @@ export function sessionItemsQueuedWithUser(
 ): SessionItem[] {
 	const queued = text.trim();
 	if (!queued) return [...items];
+	if (sendWasQueued(items, messageId)) return [...items];
 	// An approval repeats the same words each time; it is a duplicate only once nothing waits.
-	if (
-		approvesPlan
-			? !pendingPlanId(items)
-			: !attachments?.length && lastUserMessageText(items) === queued
-	)
-		return [...items];
+	if (approvesPlan && !pendingPlanId(items)) return [...items];
 	return [
 		...items,
 		{
@@ -250,41 +263,80 @@ export function sessionItemsQueuedWithUser(
 	];
 }
 
+function lastUserMessage(
+	items: readonly SessionItem[],
+): UserMessageItem | null {
+	for (let index = items.length - 1; index >= 0; index -= 1) {
+		const item = items[index];
+		if (
+			item?.kind === "userMessage" &&
+			item.text.trim() &&
+			!isWorkspacePreamble(item.text)
+		) {
+			return item;
+		}
+	}
+	return null;
+}
+
+/**
+ * Whether a server view may replace the open chat while it shows a running turn.
+ * A view from before the send landed must not erase the message just sent, so a
+ * settled view counts only when it carries that same message (by id). An idle
+ * view means the turn was stopped: it counts after the user pressed Stop, or when
+ * the server already holds the message and says nothing is running.
+ */
 export function sessionViewShouldReplaceOpenTurn(input: {
 	readonly currentStatus: SessionTurnStatus;
 	readonly nextStatus: SessionTurnStatus;
 	readonly currentItems: readonly SessionItem[];
 	readonly nextItems: readonly SessionItem[];
+	readonly stopRequested?: boolean;
 }): boolean {
 	if (input.currentStatus !== "running") return true;
 	if (input.nextStatus === "running") return true;
-	const currentUser = lastUserMessageText(input.currentItems);
-	const nextUser = lastUserMessageText(input.nextItems);
-	if (currentUser && currentUser !== nextUser) return false;
-	if (input.nextStatus === "idle") return false;
-	if (
-		(input.nextStatus === "completed" || input.nextStatus === "failed") &&
-		currentUser &&
-		!turnSettledAfterUser(input.nextItems, currentUser)
-	) {
-		return false;
-	}
-	return input.nextStatus === "completed" || input.nextStatus === "failed";
+	if (input.nextStatus === "idle" && input.stopRequested) return true;
+	const currentUser = lastUserMessage(input.currentItems);
+	// Nothing was sent from here; the server's state is the only truth.
+	if (!currentUser) return true;
+	const nextUser = lastUserMessage(input.nextItems);
+	if (!nextUser || nextUser.id !== currentUser.id) return false;
+	if (input.nextStatus === "idle") return true;
+	return turnSettledAfterUser(input.nextItems, currentUser.id);
 }
 
 function turnSettledAfterUser(
 	items: readonly SessionItem[],
-	user: string,
+	userId: SessionItemId,
 ): boolean {
 	let lastUser = -1;
 	for (let index = 0; index < items.length; index += 1) {
 		const item = items[index];
-		if (item?.kind === "userMessage" && item.text === user) lastUser = index;
+		if (item?.kind === "userMessage" && item.id === userId) lastUser = index;
 	}
 	if (lastUser < 0) return false;
 	return items
 		.slice(lastUser + 1)
 		.some((item) => item.kind === "agentMessage" || item.kind === "error");
+}
+
+/**
+ * Takes back a send the server never accepted: its message leaves the
+ * transcript and the turn returns to where it was before the send.
+ */
+export function sessionWithoutFailedSend<
+	T extends {
+		readonly items: readonly SessionItem[];
+		readonly turnStatus: SessionTurnStatus;
+	},
+>(session: T, messageId: string, previousStatus: SessionTurnStatus): T {
+	if (!sendWasQueued(session.items, messageId)) return session;
+	return {
+		...session,
+		items: session.items.filter((item) => item.id !== messageId),
+		turnStatus:
+			session.turnStatus === "running" ? previousStatus : session.turnStatus,
+	};
 }
 
 export function sessionUsesFollowUpLayout(input: {
@@ -319,7 +371,7 @@ export function visibleSessionItems(
 				item.kind !== "userMessage" ||
 				!serverItems.some(
 					(existing) =>
-						existing.kind === "userMessage" && existing.text === item.text,
+						existing.kind === "userMessage" && existing.id === item.id,
 				),
 		),
 	];

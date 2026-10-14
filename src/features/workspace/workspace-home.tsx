@@ -12,6 +12,7 @@ import { shouldPollAgentTasks } from "#/domain/agent-task";
 import {
 	harnessLoginIsPending,
 	RUNNING_TURN_POLL_MS,
+	sendAfterConnect,
 } from "#/domain/harness-access";
 import {
 	inspectorPaneIsWide,
@@ -24,16 +25,22 @@ import {
 	safeAttachmentName,
 } from "#/domain/message-attachment";
 import { publicFailureMessage } from "#/domain/project-workspace";
-import { type Project, selectedProjectIdAfterDelete } from "#/domain/projects";
+import {
+	type Project,
+	repositoriesForProject,
+	selectedProjectIdAfterDelete,
+} from "#/domain/projects";
 import { workspacePublicationBranch } from "#/domain/publication";
 import {
 	fileChangesFromSessionItems,
 	isTurnRunning,
 	lastUserMessageText,
+	type SessionTurnStatus,
 	sessionItemsQueuedWithUser,
 	sessionTitleFromItems,
 	sessionUsesFollowUpLayout,
 	sessionViewShouldReplaceOpenTurn,
+	sessionWithoutFailedSend,
 } from "#/domain/session-item";
 import {
 	type LiveProgressMark,
@@ -52,6 +59,7 @@ import {
 	type SidebarChat,
 	selectedChatIdAfterDelete,
 	sessionViewAppliesToOpenChat,
+	sessionWithoutOpenChat,
 	sidebarIsPinnedInStorage,
 	sidebarPinnedStorageValue,
 	withBusyChat,
@@ -60,6 +68,8 @@ import {
 } from "#/domain/sidebar-chats";
 import {
 	type ListedPullRequest,
+	pullRequestPanelRepository,
+	pullRequestsAcrossRepositories,
 	sidebarChatPrMarkForWorkspace,
 } from "#/domain/sidebar-pr";
 import {
@@ -115,6 +125,28 @@ import {
 import { WorkspaceOverview } from "./workspace-overview";
 import { WorkspacePanes } from "./workspace-panes";
 
+/** One composer send, from the click until the server accepts or refuses it. */
+type PendingSend = {
+	readonly epoch: number;
+	readonly scope: {
+		readonly projectId?: string;
+		readonly harnessId: AgentProviderId;
+		readonly sessionId?: string;
+	};
+	readonly chatId: string | undefined;
+	readonly startsNewChat: boolean;
+	readonly previousTurnStatus: SessionTurnStatus;
+	readonly messageId: string;
+	readonly text: string;
+	readonly modelId: string;
+	readonly variant?: string;
+	readonly speed?: ComposerSpeed;
+	readonly approvesPlan?: boolean;
+	readonly attachments?: readonly IncomingAttachment[];
+	/** Tells the composer whether the message went out; if not it restores the draft. */
+	readonly settle: (sent: boolean) => void;
+};
+
 export function WorkspaceHome({
 	initialSession,
 	initialProjects,
@@ -157,21 +189,32 @@ export function WorkspaceHome({
 	} | null>(null);
 	const currentSessionRef = useRef(session);
 	currentSessionRef.current = session;
-	const pullRequests = useQuery({
-		queryKey: [
-			"github",
-			"pull-requests",
-			selectedProject?.installationId,
-			selectedProject?.repositoryId,
-		],
-		queryFn: () =>
-			requestJson<{ pullRequests: ListedPullRequest[] }>(
-				`/api/github/pull-requests?installationId=${selectedProject?.installationId}&repositoryId=${selectedProject?.repositoryId}`,
-			),
-		enabled: Boolean(
-			selectedProject?.installationId && selectedProject?.repositoryId,
-		),
+	// Every repository of the project: the agent may open a PR in any of them.
+	const projectRepositories = selectedProject
+		? repositoriesForProject(selectedProject)
+		: [];
+	const repositoryPullRequests = useQueries({
+		queries: projectRepositories.map((repository) => ({
+			queryKey: [
+				"github",
+				"pull-requests",
+				repository.installationId,
+				repository.repositoryId,
+			],
+			queryFn: () =>
+				requestJson<{ pullRequests: ListedPullRequest[] }>(
+					`/api/github/pull-requests?installationId=${repository.installationId}&repositoryId=${repository.repositoryId}`,
+				),
+			enabled: Boolean(repository.installationId && repository.repositoryId),
+		})),
 	});
+	const refetchPullRequests = useCallback(
+		() =>
+			queryClient.invalidateQueries({
+				queryKey: ["github", "pull-requests"],
+			}),
+		[queryClient],
+	);
 	const chats = useQuery({
 		queryKey: ["agent-sessions", selectedProject?.id],
 		queryFn: () =>
@@ -197,7 +240,8 @@ export function WorkspaceHome({
 		status: "stopped",
 	});
 	const [desktopBusy, setDesktopBusy] = useState(false);
-	const desktopStartInFlight = useRef(false);
+	/** The chat whose desktop is starting; another chat may still start its own. */
+	const desktopStartFor = useRef<string | null>(null);
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [settingsSection, setSettingsSection] = useState<SettingsSection>();
 	// Back from an MCP provider's sign-in page: reopen the panel that started it.
@@ -227,15 +271,19 @@ export function WorkspaceHome({
 	/** Set from a draft send until its new chat's first view arrives. */
 	const pendingNewChatRef = useRef(false);
 	const sessionEpoch = useRef(0);
+	/** The epoch in which New chat is creating a chat; nothing else gets selected meanwhile. */
+	const creatingChatEpoch = useRef<number | null>(null);
 	const selectedSessionIdRef = useRef<string | undefined>(undefined);
-	const pendingSendRef = useRef<{
-		text: string;
-		modelId: string;
-		variant?: string;
-		speed?: ComposerSpeed;
-		approvesPlan?: boolean;
-		attachments?: readonly IncomingAttachment[];
-	} | null>(null);
+	/** A send waiting for the ChatGPT device code to be entered. */
+	const pendingSendRef = useRef<PendingSend | null>(null);
+	/** The chat the user pressed Stop in; its idle view then unlocks the composer. */
+	const stopRequestedFor = useRef<string | null>(null);
+	const abandonSendRef = useRef<
+		(pending: PendingSend, message: string | null) => void
+	>(() => undefined);
+	const deliverSendRef = useRef<
+		(pending: PendingSend, view: PublicCodexSession) => Promise<void>
+	>(async () => undefined);
 	const sessionViews = useRef(new Map<string, PublicCodexSession>());
 	const bumpSessionEpoch = useCallback(() => {
 		sessionEpoch.current += 1;
@@ -288,6 +336,10 @@ export function WorkspaceHome({
 						nextStatus: next.turnStatus,
 						currentItems: current.items,
 						nextItems: next.items,
+						stopRequested: Boolean(
+							next.agentSessionId &&
+								stopRequestedFor.current === next.agentSessionId,
+						),
 					})
 				) {
 					return current;
@@ -343,7 +395,12 @@ export function WorkspaceHome({
 	});
 	const sessionTitle = sessionTitleFromItems(session.items);
 	const hasUserMessage = Boolean(lastUserMessageText(session.items));
-	const listedPullRequests = pullRequests.data?.pullRequests ?? [];
+	const listedPullRequests = pullRequestsAcrossRepositories(
+		projectRepositories.map((repository, index) => ({
+			repository,
+			pullRequests: repositoryPullRequests[index]?.data?.pullRequests,
+		})),
+	);
 	const sidebarChats = (chats.data ?? []).map((chat) => {
 		const mark = sidebarChatPrMarkForWorkspace({
 			workspaceId: chat.workspaceId,
@@ -395,14 +452,14 @@ export function WorkspaceHome({
 			(session.turnStatus === "completed" || session.turnStatus === "failed")
 		) {
 			void agentTasks.refetch();
-			void pullRequests.refetch();
+			void refetchPullRequests();
 			void chats.refetch();
 		}
 	}, [
 		activeSessionId,
 		session.turnStatus,
 		agentTasks.refetch,
-		pullRequests.refetch,
+		refetchPullRequests,
 		chats.refetch,
 	]);
 	const taskHandoffs = (agentTasks.data ?? [])
@@ -410,11 +467,12 @@ export function WorkspaceHome({
 		.map((task) => `${task.id}:${task.pullRequestUrl}:${task.status}`)
 		.join("|");
 	useEffect(() => {
-		if (taskHandoffs) void pullRequests.refetch();
-	}, [taskHandoffs, pullRequests.refetch]);
+		if (taskHandoffs) void refetchPullRequests();
+	}, [taskHandoffs, refetchPullRequests]);
 	selectedSessionIdRef.current = activeSessionId;
 	const requestDesktop = useCallback(() => {
-		if (desktopStartInFlight.current) return;
+		const chatId = activeSessionId;
+		if (!chatId || desktopStartFor.current === chatId) return;
 		if (
 			!desktopInspectorShouldStart({
 				tabActive: true,
@@ -427,19 +485,27 @@ export function WorkspaceHome({
 		) {
 			return;
 		}
-		desktopStartInFlight.current = true;
+		desktopStartFor.current = chatId;
 		setDesktopBusy(true);
 		setDesktop({ status: "starting" });
+		// A result belongs to the chat that asked; a chat opened since keeps its own.
+		const stillOpen = () => selectedSessionIdRef.current === chatId;
 		void startDesktop({
 			data: {
 				projectId: selectedProject?.id,
-				sessionId: activeSessionId,
+				sessionId: chatId,
 			},
 		})
-			.then(setDesktop)
+			.then((next) => {
+				if (stillOpen()) setDesktop(next);
+			})
+			.catch((cause) => {
+				if (stillOpen())
+					setDesktop({ status: "failed", reason: publicFailureMessage(cause) });
+			})
 			.finally(() => {
-				desktopStartInFlight.current = false;
-				setDesktopBusy(false);
+				if (desktopStartFor.current === chatId) desktopStartFor.current = null;
+				if (stillOpen()) setDesktopBusy(false);
 			});
 	}, [
 		activeSessionId,
@@ -448,6 +514,11 @@ export function WorkspaceHome({
 		selectedProject?.id,
 		startDesktop,
 	]);
+	useEffect(() => {
+		// Another chat's desktop start never blocks this chat's.
+		void activeSessionId;
+		setDesktopBusy(false);
+	}, [activeSessionId]);
 	const composerBusy = composerBusyForOpenChat({
 		openChatId: activeSessionId,
 		busyChatIds,
@@ -523,6 +594,7 @@ export function WorkspaceHome({
 			composerDraft ||
 			selectedSessionId ||
 			pendingNewChatRef.current ||
+			creatingChatEpoch.current === sessionEpoch.current ||
 			!chats.data?.[0]
 		)
 			return;
@@ -619,6 +691,7 @@ export function WorkspaceHome({
 	// A ChatGPT sign-in is per user, not per chat: poll it even from a new-chat
 	// draft, then load the now-connected models and send state.
 	const pollLogin = useServerFn(pollCodexLogin);
+	const handledLogin = useRef<object | null>(null);
 	const codexLogin = useQuery({
 		queryKey: ["codex-device-login"],
 		queryFn: () => pollLogin(),
@@ -655,7 +728,15 @@ export function WorkspaceHome({
 									: { status: "disconnected" },
 					},
 		);
-		if (login.status !== "connected") return;
+		// A cached result is seen again when the open chat changes; act on it once.
+		const pending =
+			handledLogin.current === login ? null : pendingSendRef.current;
+		handledLogin.current = login;
+		if (login.status !== "connected") {
+			// No sign-in, so nothing is sent; the composer gets the message back.
+			if (pending) abandonSendRef.current(pending, null);
+			return;
+		}
 		void queryClient.invalidateQueries({ queryKey: ["agent-model-catalog"] });
 		void getCodexSession({
 			data: {
@@ -664,15 +745,21 @@ export function WorkspaceHome({
 				harnessId: "codex",
 			},
 		})
-			.then((next) =>
+			.then((next) => {
 				setSession((current) => ({
 					...current,
 					connection: next.connection,
 					models: next.models,
 					canSend: next.canSend,
-				})),
-			)
-			.catch(() => undefined);
+				}));
+				return next;
+			})
+			.catch(() => currentSessionRef.current)
+			.then((next) => {
+				// Signed in: now send the message that asked for the sign-in.
+				if (pending && pendingSendRef.current === pending)
+					void deliverSendRef.current(pending, next);
+			});
 	}, [codexLogin.data, activeProjectId, activeSessionId, queryClient]);
 
 	useEffect(() => {
@@ -800,6 +887,20 @@ export function WorkspaceHome({
 		openInspector("files");
 	}
 
+	/** Opening another project leaves nothing of the previous project's chat on screen. */
+	function selectProject(projectId: string) {
+		if (projectId === selectedProject?.id) return;
+		setSelectedProjectId(projectId);
+		bumpSessionEpoch();
+		pendingNewChatRef.current = false;
+		selectedSessionIdRef.current = undefined;
+		setSelectedSessionId(undefined);
+		setInspectorView("overview");
+		setSelectedFilePath(undefined);
+		setDesktop({ status: "stopped" });
+		setSession((current) => sessionWithoutOpenChat(current));
+	}
+
 	function openAddProject() {
 		setSettingsOpen(false);
 		bumpSessionEpoch();
@@ -831,6 +932,10 @@ export function WorkspaceHome({
 		setComposerDraft(false);
 		setProjectPickerOpen(false);
 		const epoch = bumpSessionEpoch();
+		// Until the new chat exists, polls and sends must not reach the old one.
+		creatingChatEpoch.current = epoch;
+		selectedSessionIdRef.current = undefined;
+		setSelectedSessionId(undefined);
 		setSession((current) => ({
 			...current,
 			agentSessionId: null,
@@ -847,6 +952,8 @@ export function WorkspaceHome({
 		})
 			.then((created) => {
 				if (epoch !== sessionEpoch.current) return;
+				creatingChatEpoch.current = null;
+				selectedSessionIdRef.current = created.id;
 				setSelectedSessionId(created.id);
 				setInspectorView("overview");
 				setSelectedFilePath(undefined);
@@ -865,6 +972,7 @@ export function WorkspaceHome({
 			})
 			.catch((cause) => {
 				if (epoch !== sessionEpoch.current) return;
+				creatingChatEpoch.current = null;
 				setSession((current) => ({
 					...current,
 					connection: {
@@ -1012,6 +1120,148 @@ export function WorkspaceHome({
 		}));
 	}
 
+	/** The send did not go out: take its message back, unlock the turn, say why. */
+	function abandonSend(pending: PendingSend, message: string | null) {
+		if (pendingSendRef.current === pending) pendingSendRef.current = null;
+		if (message) toast.error(message);
+		if (pending.epoch === sessionEpoch.current) {
+			setSession((current) =>
+				sessionWithoutFailedSend(
+					current,
+					pending.messageId,
+					pending.previousTurnStatus,
+				),
+			);
+			// A first message that made no chat returns to the new-chat draft.
+			if (pending.startsNewChat && !selectedSessionIdRef.current) {
+				pendingNewChatRef.current = false;
+				composerDraftRef.current = true;
+				setComposerDraft(true);
+			}
+		}
+		pending.settle(false);
+	}
+	abandonSendRef.current = abandonSend;
+
+	async function deliverSend(pending: PendingSend, view: PublicCodexSession) {
+		if (pendingSendRef.current === pending) pendingSendRef.current = null;
+		const { epoch, scope, chatId } = pending;
+		setBusyChatIds((ids) => withBusyChat(ids, chatId));
+		try {
+			const resolvedModel =
+				pending.modelId ||
+				preferredSessionModelId(sessionModelsFromListed(view.models), {
+					lastUsedId: view.listedModelId,
+					excludedIds: view.blockedListedModelIds,
+				});
+			if (!resolvedModel) throw new Error("Select a model before sending.");
+			if (epoch === sessionEpoch.current) {
+				stopRequestedFor.current = null;
+				setSession((current) => ({
+					...current,
+					turnStatus: "running",
+					items: sessionItemsQueuedWithUser(
+						current.items,
+						pending.text,
+						pending.messageId,
+						undefined,
+						pending.attachments?.map((file) => ({
+							id: crypto.randomUUID(),
+							name: safeAttachmentName(file.name),
+							mediaType: file.mediaType,
+							size: base64ByteLength(file.base64),
+						})),
+					),
+				}));
+			}
+			if (scope.projectId && chatId) {
+				queryClient.setQueryData(
+					["agent-sessions", scope.projectId],
+					(current: readonly SidebarChat[] | undefined) =>
+						withChatTurnStatus(current ?? [], chatId, "running"),
+				);
+			}
+			const next = await sendTask({
+				data: {
+					...scope,
+					sessionId: scope.sessionId ?? view.agentSessionId ?? undefined,
+					text: pending.text,
+					modelId: resolvedModel,
+					userMessageId: pending.messageId,
+					...(pending.variant ? { variant: pending.variant } : {}),
+					...(pending.speed
+						? { speed: pending.speed, fast: pending.speed === "fast" }
+						: {}),
+					...(pending.approvesPlan ? { approvesPlan: true } : {}),
+					...(pending.attachments?.length
+						? { attachments: [...pending.attachments] }
+						: {}),
+				},
+			});
+			// The server refused the send; it reports why in place of the chat.
+			if (next.connection.status === "failed")
+				throw new Error(next.connection.message);
+			if (sendAfterConnect(next.connection) === "await_sign_in") {
+				// The saved sign-in was gone: show the code, send once it is entered.
+				if (epoch === sessionEpoch.current)
+					setSession((current) => ({
+						...sessionWithoutFailedSend(
+							current,
+							pending.messageId,
+							pending.previousTurnStatus,
+						),
+						connection: next.connection,
+					}));
+				pendingSendRef.current = pending;
+				return;
+			}
+			applySessionView(epoch, next);
+			pending.settle(true);
+		} catch (cause) {
+			abandonSend(pending, publicFailureMessage(cause));
+		} finally {
+			setBusyChatIds((ids) => withoutBusyChat(ids, chatId));
+			void chats.refetch();
+		}
+	}
+	deliverSendRef.current = deliverSend;
+
+	/** Sign in or connect first; a ChatGPT device code holds the message until it is entered. */
+	async function connectThenSend(pending: PendingSend) {
+		const { epoch, chatId } = pending;
+		setBusyChatIds((ids) => withBusyChat(ids, chatId));
+		let next: PublicCodexSession;
+		try {
+			next = await connect({ data: pending.scope });
+		} catch (cause) {
+			if (epoch === sessionEpoch.current)
+				setSession((current) => ({
+					...current,
+					connection: {
+						status: "failed",
+						provider: pending.scope.harnessId,
+						message: publicFailureMessage(cause),
+					},
+				}));
+			abandonSend(pending, null);
+			return;
+		} finally {
+			setBusyChatIds((ids) => withoutBusyChat(ids, chatId));
+		}
+		// Nothing is marked running yet, so the connect view (and its code) shows.
+		applySessionView(epoch, next);
+		const step = sendAfterConnect(next.connection);
+		if (step === "await_sign_in") {
+			pendingSendRef.current = pending;
+			return;
+		}
+		if (step === "abandon") {
+			abandonSend(pending, null);
+			return;
+		}
+		await deliverSend(pending, next);
+	}
+
 	const activeChat = sidebarChats.find((chat) => chat.id === activeSessionId);
 	const activeHead =
 		activeChat?.workingBranch ||
@@ -1028,7 +1278,7 @@ export function WorkspaceHome({
 				projects={projects.data ?? []}
 				projectsLoading={projects.isPending}
 				selectedProjectId={selectedProject?.id}
-				onSelectProject={setSelectedProjectId}
+				onSelectProject={selectProject}
 				expanded={projectsOpen}
 				onToggle={() => setProjectsOpen((open) => !open)}
 				onAddProject={openAddProject}
@@ -1053,7 +1303,7 @@ export function WorkspaceHome({
 				projects={projects.data ?? []}
 				selectedProject={selectedProject}
 				onProjectAdded={(project) => {
-					setSelectedProjectId(project.id);
+					selectProject(project.id);
 					void projects.refetch();
 				}}
 				onSignOut={() => {
@@ -1194,6 +1444,7 @@ export function WorkspaceHome({
 								}}
 								onSend={(text, modelId, options) => {
 									const epoch = sessionEpoch.current;
+									const previousTurnStatus = session.turnStatus;
 									// The new-chat draft starts a new chat. Forget the previously open
 									// one first: applySessionView drops updates while the draft flag is
 									// set or when they belong to a different open chat.
@@ -1215,18 +1466,22 @@ export function WorkspaceHome({
 										? { ...sessionScope(), sessionId: undefined }
 										: sessionScope();
 									const chatId = startsNewChat ? undefined : activeSessionId;
+									const messageId =
+										options?.userMessageId ?? crypto.randomUUID();
 									if (options?.leaderCount) {
+										const leaderCount = options.leaderCount;
 										setBusyChatIds((ids) => withBusyChat(ids, chatId));
+										stopRequestedFor.current = null;
 										setSession((current) => ({
 											...current,
 											turnStatus: "running",
 											items: sessionItemsQueuedWithUser(
 												current.items,
 												text,
-												options.userMessageId,
+												messageId,
 											),
 										}));
-										void (async () => {
+										return (async () => {
 											try {
 												if (!scope.projectId || !scope.sessionId)
 													throw new Error(
@@ -1239,151 +1494,68 @@ export function WorkspaceHome({
 														text,
 														harnessId,
 														modelId,
-														leaderCount: options.leaderCount as number,
+														leaderCount,
 														attemptModelIds: [
 															...(options.attemptModelIds ?? []),
 														],
-														userMessageId: options.userMessageId ?? "",
+														userMessageId: messageId,
 													},
 												});
 												void competition.refetch();
 												void agentTasks.refetch();
+												return true;
 											} catch (cause) {
+												toast.error(publicFailureMessage(cause));
 												if (epoch === sessionEpoch.current)
-													setSession((current) => ({
-														...current,
-														turnStatus: "failed",
-														connection: {
-															status: "failed",
-															provider: harnessId,
-															message: publicFailureMessage(cause),
-														},
-													}));
+													setSession((current) =>
+														sessionWithoutFailedSend(
+															current,
+															messageId,
+															previousTurnStatus,
+														),
+													);
+												return false;
 											} finally {
 												setBusyChatIds((ids) => withoutBusyChat(ids, chatId));
 												void chats.refetch();
 											}
 										})();
-										return;
 									}
-									pendingSendRef.current = {
-										text,
-										modelId,
-										...(options?.reasoningId
-											? { variant: options.reasoningId }
-											: {}),
-										...(options?.speed ? { speed: options.speed } : {}),
-										...(options?.approvesPlan ? { approvesPlan: true } : {}),
-										...(options?.attachments?.length
-											? { attachments: options.attachments }
-											: {}),
-									};
-									setBusyChatIds((ids) => withBusyChat(ids, chatId));
-									setSession((current) => ({
-										...current,
-										turnStatus: "running",
-										items: sessionItemsQueuedWithUser(
-											current.items,
+									return new Promise<boolean>((settle) => {
+										const pending: PendingSend = {
+											epoch,
+											scope,
+											chatId,
+											startsNewChat,
+											previousTurnStatus,
+											messageId,
 											text,
-											undefined,
-											undefined,
-											options?.attachments?.map((file) => ({
-												id: crypto.randomUUID(),
-												name: safeAttachmentName(file.name),
-												mediaType: file.mediaType,
-												size: base64ByteLength(file.base64),
-											})),
-										),
-									}));
-									if (activeProjectId) {
-										queryClient.setQueryData(
-											["agent-sessions", activeProjectId],
-											withChatTurnStatus(sidebarChats, chatId, "running"),
-										);
-									}
-									void (async () => {
-										try {
-											let current = session;
-											if (current.connection.status !== "authenticated") {
-												current = await connect({ data: scope });
-												applySessionView(epoch, current);
-												if (
-													current.connection.status ===
-														"awaiting_device_code" &&
-													current.connection.verificationUrl
-												) {
-													return;
-												}
-												if (current.connection.status !== "authenticated") {
-													pendingSendRef.current = null;
-													return;
-												}
-											}
-											const resolvedModel =
-												modelId ||
-												preferredSessionModelId(
-													sessionModelsFromListed(current.models),
-													{
-														lastUsedId: current.listedModelId,
-														excludedIds: current.blockedListedModelIds,
-													},
-												);
-											if (!resolvedModel) {
-												pendingSendRef.current = null;
-												return;
-											}
-											const pending = pendingSendRef.current;
-											const next = await sendTask({
-												data: {
-													...scope,
-													sessionId:
-														scope.sessionId ??
-														current.agentSessionId ??
-														undefined,
-													text,
-													modelId: resolvedModel,
-													...(pending?.variant
-														? { variant: pending.variant }
-														: {}),
-													...(pending?.speed
-														? {
-																speed: pending.speed,
-																fast: pending.speed === "fast",
-															}
-														: {}),
-													...(pending?.approvesPlan
-														? { approvesPlan: true }
-														: {}),
-													...(pending?.attachments?.length
-														? { attachments: [...pending.attachments] }
-														: {}),
-												},
-											});
-											applySessionView(epoch, next);
-											if (
-												next.connection.status === "awaiting_device_code" &&
-												next.connection.verificationUrl
-											) {
-												return;
-											}
-											pendingSendRef.current = null;
-										} catch (cause) {
-											pendingSendRef.current = null;
-											pendingNewChatRef.current = false;
-											if (epoch !== sessionEpoch.current) return;
-											setSession((current) => ({
-												...current,
-												connection: {
-													status: "failed",
-													provider: harnessId,
-													message: publicFailureMessage(cause),
-												},
-											}));
-										} finally {
-											setBusyChatIds((ids) => withoutBusyChat(ids, chatId));
-											void chats.refetch();
+											modelId,
+											...(options?.reasoningId
+												? { variant: options.reasoningId }
+												: {}),
+											...(options?.speed ? { speed: options.speed } : {}),
+											...(options?.approvesPlan ? { approvesPlan: true } : {}),
+											...(options?.attachments?.length
+												? { attachments: options.attachments }
+												: {}),
+											settle,
+										};
+										// A newer send replaces one still waiting for sign-in.
+										if (pendingSendRef.current)
+											abandonSend(pendingSendRef.current, null);
+										if (session.connection.status === "authenticated") {
+											// A new chat's first message never falls back to the old chat.
+											void deliverSend(
+												pending,
+												startsNewChat
+													? { ...session, agentSessionId: null }
+													: session,
+											);
+											return;
 										}
-									})();
+										void connectThenSend(pending);
+									});
 								}}
 								onStop={() => {
 									const chatId = activeSessionId;
@@ -1400,16 +1572,23 @@ export function WorkspaceHome({
 													}));
 												void agentTasks.refetch();
 											})
+											.catch((cause) =>
+												toast.error(publicFailureMessage(cause)),
+											)
 											.finally(() =>
 												setBusyChatIds((ids) => withoutBusyChat(ids, chatId)),
 											);
 										return;
 									}
+									// The stopped turn ends idle; accept that view even if the
+									// live progress stream never reports the stop.
+									stopRequestedFor.current = chatId ?? null;
 									setBusyChatIds((ids) => withBusyChat(ids, chatId));
 									void stopTurn({
 										data: sessionScope(),
 									})
 										.then((next) => applySessionView(epoch, next))
+										.catch((cause) => toast.error(publicFailureMessage(cause)))
 										.finally(() => {
 											setBusyChatIds((ids) => withoutBusyChat(ids, chatId));
 											void chats.refetch();
@@ -1424,7 +1603,7 @@ export function WorkspaceHome({
 								projects={projects.data ?? []}
 								selectedProject={selectedProject}
 								onSelectProject={(id) => {
-									setSelectedProjectId(id);
+									selectProject(id);
 									setProjectPickerOpen(false);
 								}}
 								projectPickerOpen={projectPickerOpen}
@@ -1467,15 +1646,10 @@ export function WorkspaceHome({
 							projectId={selectedProject?.id}
 							sessionId={activeSessionId}
 							onStartDesktop={requestDesktop}
-							pullRequest={
-								selectedProject?.installationId && selectedProject?.repositoryId
-									? {
-											installationId: selectedProject.installationId,
-											repositoryId: selectedProject.repositoryId,
-											number: sessionPullRequest?.number,
-										}
-									: undefined
-							}
+							pullRequest={pullRequestPanelRepository({
+								repositories: projectRepositories,
+								chatPullRequest: sessionPullRequest,
+							})}
 							overview={
 								<WorkspaceOverview
 									tasks={agentTasks.data ?? []}

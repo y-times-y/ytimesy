@@ -13,6 +13,7 @@ import {
 	withAttachmentNote,
 } from "#/domain/message-attachment";
 import {
+	sendWasQueued,
 	sessionItemsFromUnknown,
 	sessionItemsQueuedWithUser,
 } from "#/domain/session-item";
@@ -191,6 +192,9 @@ export async function sendSubscriptionTask(
 		input.variant ?? inherited?.reasoning,
 		input.fast ?? inherited?.fast,
 	);
+	// The send's key is its message id: a replayed request was already queued.
+	if (sendWasQueued(view.items, input.idempotencyKey))
+		return readSubscriptionSession(scope);
 	if (input.approvesPlan && !pendingPlanId(view.items))
 		throw new Error("That plan was already answered.");
 	const attachments = await storeMessageAttachments(
@@ -201,7 +205,7 @@ export async function sendSubscriptionTask(
 	const items = sessionItemsQueuedWithUser(
 		view.items,
 		input.text,
-		undefined,
+		input.idempotencyKey,
 		input.approvesPlan,
 		attachments,
 	);
