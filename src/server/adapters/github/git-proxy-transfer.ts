@@ -46,6 +46,9 @@ export function gitProxyConfiguration() {
 const TRANSFER_FAILED =
 	"Workspace Git proxy transfer failed; check repository access.";
 
+/** Fetches, pushes and the checkout of what was fetched. */
+const NETWORK_GIT_TIMEOUT_MS = 120_000;
+
 async function checked(
 	host: GitTransferHost,
 	command: string,
@@ -160,7 +163,7 @@ export async function receiveProxiedRepository(
 			host,
 			`${git} -C ${dest} fetch --no-tags ${quote(url)} ${quote(`refs/heads/${input.branch}`)}`,
 			TRANSFER_FAILED,
-			120_000,
+			NETWORK_GIT_TIMEOUT_MS,
 		);
 		await checked(
 			host,
@@ -174,7 +177,9 @@ export async function receiveProxiedRepository(
 			input.mode === "update"
 				? "Workspace Git could not fast-forward the checkout to its branch."
 				: "Workspace Git could not check out the fetched branch.",
-			30_000,
+			// Writing a large repository's working tree on a slow VM can take as
+			// long as fetching it, which once shared this step's budget.
+			NETWORK_GIT_TIMEOUT_MS,
 		);
 		return "updated";
 	});
@@ -203,7 +208,7 @@ export async function pushProxiedRepository(
 			host,
 			`${git} -C ${quote(input.directory)} push ${quote(url)} ${quote(`${input.revision || "HEAD"}:refs/heads/${input.branch}`)}`,
 			TRANSFER_FAILED,
-			120_000,
+			NETWORK_GIT_TIMEOUT_MS,
 		);
 	});
 }
