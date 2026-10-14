@@ -28,6 +28,7 @@ import { withConversationProgressWake } from "../adapters/conversation-progress-
 import { withConversationTurnCoordinator } from "../adapters/conversation-turn-control";
 import { database } from "../adapters/database";
 import { withDatabaseScope } from "../adapters/database-scope";
+import { useAuthEmailBinding } from "../adapters/email";
 import { readFreestyleApiKey } from "../adapters/freestyle/api-key";
 import { createFreestyleWorkspaceMachines } from "../adapters/freestyle/workspace-machines";
 import { withConversationPublisher } from "../adapters/realtime-delivery";
@@ -496,6 +497,7 @@ export default {
 		controller: ScheduledController,
 		env: EdgeExecutorEnvironment,
 	) {
+		useAuthEmailBinding(env.EMAIL);
 		if (
 			process.env.BACKGROUND_EXECUTION_ENABLED !== "1" ||
 			process.env.YTIMESY_BACKGROUND_CRON_ENABLED !== "1"
@@ -558,6 +560,7 @@ export default {
 				});
 	},
 	async fetch(request: Request, env: EdgeExecutorEnvironment) {
+		useAuthEmailBinding(env.EMAIL);
 		let stage = "ingress";
 		try {
 			const path = new URL(request.url).pathname;

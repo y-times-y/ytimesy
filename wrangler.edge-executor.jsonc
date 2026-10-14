@@ -23,6 +23,8 @@
   "secrets": { "required": [] },
   "observability": { "enabled": true, "traces": { "enabled": true } },
   "triggers": { "crons": ["* * * * *"] },
+  // Auth email (verification, password reset) without an API token.
+  "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["noreply@ytimesy.com"] }],
   "workers_dev": true,
   "env": {
     // Production (not deployed yet). Bindings do not inherit, so each is restated.
@@ -45,6 +47,7 @@
       "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "00000000000000000000000000000001" }],
       "secrets": { "required": [] },
       "triggers": { "crons": ["* * * * *"] },
+      "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["noreply@ytimesy.com"] }],
       "workers_dev": false
     }
   }

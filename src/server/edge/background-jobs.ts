@@ -6,6 +6,7 @@ import { modelConcurrencyLimits } from "../adapters/agent-capacity";
 import { claimApiTurn } from "../adapters/api-turns";
 import { withBackgroundJobDispatcher } from "../adapters/background-job-dispatch";
 import { withDatabaseScope } from "../adapters/database-scope";
+import { useAuthEmailBinding } from "../adapters/email";
 import { readFreestyleApiKey } from "../adapters/freestyle/api-key";
 import { createFreestyleWorkspaceMachines } from "../adapters/freestyle/workspace-machines";
 import { deliverBackgroundJob } from "../services/background-job-delivery";
@@ -106,6 +107,12 @@ type JobRecord = {
  * uncertain side effect is never replayed.
  */
 export class BackgroundJobRunner extends DurableObject<EdgeExecutorEnvironment> {
+	constructor(ctx: DurableObjectState, env: EdgeExecutorEnvironment) {
+		super(ctx, env);
+		// The delivery job retries queued auth email through this binding.
+		useAuthEmailBinding(env.EMAIL);
+	}
+
 	async start(job: BackgroundJob): Promise<JobRecord["state"]> {
 		const existing = await this.ctx.storage.get<JobRecord>("job");
 		if (existing) return existing.state;
