@@ -1,9 +1,12 @@
+import { apiModelSections } from "./api-model-list";
 import {
 	AUTHOR_LABELS,
 	DIRECT_MODEL_ENDPOINTS,
 	directModelProvider,
 } from "./browse-models";
 import {
+	CUSTOM_SECTION,
+	isCustomConnection,
 	type PublicModelConnection,
 	parseModelRouteId,
 } from "./model-connection";
@@ -30,10 +33,20 @@ export function providerKeyConnection(author: string, apiKey: string) {
 	};
 }
 
+/** Picker sections: the curated makers, then Custom once a custom endpoint is connected. */
+export function apiPickerSections(
+	connections: readonly PublicModelConnection[],
+): readonly string[] {
+	return connections.some(isCustomConnection)
+		? [...apiModelSections(), CUSTOM_SECTION]
+		: apiModelSections();
+}
+
 export function providerConnections(
 	author: string,
 	connections: readonly PublicModelConnection[],
 ) {
+	if (author === CUSTOM_SECTION) return connections.filter(isCustomConnection);
 	return connections.filter(
 		(connection) =>
 			connection.provider === "openrouter" ||

@@ -19,6 +19,7 @@ export const AUTHOR_LABELS: Record<string, string> = {
 	mistralai: "Mistral",
 	"z-ai": "Z.ai",
 	tencent: "Tencent",
+	custom: "Custom",
 };
 const RETAINED_MODEL_GENERATIONS = 3;
 

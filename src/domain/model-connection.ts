@@ -151,6 +151,34 @@ export function availableConnectionModels(
 	);
 }
 
+/** The picker section for models from a user's own OpenAI-compatible endpoint. */
+export const CUSTOM_SECTION = "custom";
+
+/**
+ * A user's own OpenAI-compatible endpoint (a company gateway, a self-hosted
+ * model), as opposed to a maker or gateway we know. Its models are offered as
+ * the endpoint lists them: the user chose that host, so the curated list does
+ * not apply. A known maker's or gateway's host is never custom, so it cannot
+ * bypass the list.
+ */
+export function isCustomConnection(connection: {
+	provider: ModelProvider;
+	baseUrl: string;
+}): boolean {
+	if (connection.provider !== "compatible") return false;
+	const known = [
+		...Object.values(MODEL_PROVIDERS).flatMap((row) =>
+			row.baseUrl ? [row.baseUrl] : [],
+		),
+		...Object.values(DIRECT_MODEL_ENDPOINTS),
+	].map((url) => new URL(url).hostname);
+	try {
+		return !known.includes(new URL(connection.baseUrl).hostname);
+	} catch {
+		return false;
+	}
+}
+
 /** The maker whose own key this connection is, or null for a gateway or unknown host. */
 function directAuthor(connection: PublicModelConnection): string | null {
 	if (connection.provider === "compatible")
@@ -171,6 +199,7 @@ export function connectionModels(
 	connection: PublicModelConnection,
 	browseModels: readonly BrowseModel[],
 ): readonly ConnectedModel[] {
+	if (isCustomConnection(connection)) return connection.models;
 	const saved = new Map(connection.models.map((model) => [model.id, model]));
 	const browsed = new Map(browseModels.map((model) => [model.id, model]));
 	const author = directAuthor(connection);
