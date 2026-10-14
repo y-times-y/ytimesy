@@ -43,6 +43,21 @@ export async function ensureConversationCodePoint(
 	);
 }
 
+/**
+ * Code points exist only where the turn wrote to the session's own checkout: a
+ * root chat (builder-direct or fusion lead) or an isolated writable child task.
+ * Shared-placement children run inside their parent's VM, so they never rewind it.
+ */
+export function ownsWritableCheckout(row: {
+	provider_ref?: string | null;
+	parent_session_id?: string | null;
+	task_placement?: string | null;
+	task_access?: string | null;
+}) {
+	if (!row.provider_ref || row.task_placement === "shared") return false;
+	return !row.parent_session_id || row.task_access === "read_write";
+}
+
 /** Session locks exclude new turns and active descendants. A pre-restore Git point makes code replacement recoverable. */
 export async function recoverConversation(
 	machines: WorkspaceMachines,
@@ -121,13 +136,7 @@ export async function recoverConversation(
 				],
 			);
 		} else if (input.mode === "code" || input.mode === "both") {
-			if (
-				!point.code ||
-				!row.provider_ref ||
-				row.task_placement === "shared" ||
-				!row.parent_session_id ||
-				row.task_access !== "read_write"
-			)
+			if (!point.code || !ownsWritableCheckout(row))
 				throw new Error(
 					"This message has no isolated writable code checkpoint.",
 				);
@@ -150,7 +159,7 @@ export async function recoverConversation(
 		}
 		if (input.mode !== "code")
 			await saveRecoveredConversation(client, userId, id, point);
-		else
+		else if (row.parent_session_id)
 			await client.query(
 				"update agent_session set task_review_state='pending',updated_at=now() where id=$1 and user_id=$2",
 				[id, userId],
