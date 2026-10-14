@@ -1,5 +1,20 @@
+import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 import { GitFork, RotateCcw } from "lucide-react";
 import { useState } from "react";
+
+/**
+ * Restoring code changes the checkout under the Files and Changes views, which
+ * otherwise keep showing files the restore removed until their next refresh.
+ */
+export function refreshRecoveredWorkspace(client: QueryClient) {
+	return Promise.all(
+		[
+			"workspace-explorer",
+			"workspace-changes",
+			"workspace-preview-versions",
+		].map((key) => client.invalidateQueries({ queryKey: [key] })),
+	);
+}
 
 export function ConversationRecovery({
 	codeAvailable,
@@ -13,12 +28,15 @@ export function ConversationRecovery({
 	const [open, setOpen] = useState(false);
 	const [pending, setPending] = useState(false);
 	const [error, setError] = useState("");
+	const queryClient = useQueryClient();
 	async function recover(mode: "conversation" | "code" | "both" | "fork") {
 		setPending(true);
 		setError("");
 		try {
 			await onRecover(mode);
 			setOpen(false);
+			if (mode === "code" || mode === "both")
+				await refreshRecoveredWorkspace(queryClient);
 		} catch (cause) {
 			setError(
 				cause instanceof Error ? cause.message : "Recovery failed. Try again.",

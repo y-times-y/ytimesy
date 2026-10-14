@@ -79,4 +79,33 @@ it("restores binary, staged, unstaged, deleted and untracked files while preserv
 	} finally {
 		await fixture.cleanup();
 	}
-});
+}, 30_000);
+
+it("removes files created after a chat's first message, committed or not, from the Files listing", async () => {
+	const fixture = await localHarnessWorkspace();
+	try {
+		const { root, workspace, run } = fixture;
+		const listed = async () =>
+			(
+				await run("git", ["-C", root, "ls-files", "-co", "--exclude-standard"])
+			).stdout
+				.trim()
+				.split("\n");
+		// Captured before the first turn's tools ran.
+		const firstMessage = await captureConversationCode(workspace);
+		await writeFile(join(root, "qa-hello.txt"), "hello\n");
+		for (const committed of [false, true]) {
+			if (committed) {
+				await writeFile(join(root, "qa-hello.txt"), "hello\n");
+				await run("git", ["-C", root, "add", "-A"]);
+				await run("git", ["-C", root, "commit", "-qm", "turn 1"]);
+			}
+			const backup = await captureConversationCode(workspace);
+			await restoreConversationCode(workspace, firstMessage, backup);
+			await expect(readFile(join(root, "qa-hello.txt"))).rejects.toThrow();
+			expect(await listed()).not.toContain("qa-hello.txt");
+		}
+	} finally {
+		await fixture.cleanup();
+	}
+}, 30_000);

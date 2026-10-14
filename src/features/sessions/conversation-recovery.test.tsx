@@ -1,0 +1,18 @@
+import { QueryClient } from "@tanstack/react-query";
+import { expect, it } from "vitest";
+import { refreshRecoveredWorkspace } from "./conversation-recovery";
+
+it("refreshes the Files and Changes views after code is restored", async () => {
+	const client = new QueryClient();
+	const files = ["workspace-explorer", "project", "session"];
+	const changes = ["workspace-changes", "project", "session"];
+	const other = ["chats", "project"];
+	// A file created after the restored point, still cached by both views.
+	client.setQueryData(files, { paths: ["qa-hello.txt"] });
+	client.setQueryData(changes, [{ path: "qa-hello.txt" }]);
+	client.setQueryData(other, []);
+	await refreshRecoveredWorkspace(client);
+	expect(client.getQueryState(files)?.isInvalidated).toBe(true);
+	expect(client.getQueryState(changes)?.isInvalidated).toBe(true);
+	expect(client.getQueryState(other)?.isInvalidated).toBe(false);
+});
