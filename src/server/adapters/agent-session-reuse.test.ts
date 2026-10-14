@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { PGlite } from "@electric-sql/pglite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
+	chatHoldingSend,
 	claimChatForSend,
 	releasingChatClaimOnFailure,
 	reusableEmptyChat,
@@ -16,7 +17,7 @@ const project = randomUUID();
 beforeEach(async () => {
 	db = new PGlite();
 	await db.exec(`create table agent_session(id uuid primary key,user_id text,project_id uuid,workspace_id uuid,harness text,provider_ref text,parent_session_id uuid,candidate_index int,title text,briefing text,items jsonb not null default '[]',listed_model_id text,turn_status text default 'idle',status text default 'ready',task_prompt text,task_state text,task_placement text,task_access text,task_execution text,depends_on_session_id uuid,task_summary text,task_review_state text,task_branch text,task_pull_request_url text,selected_branch text,base_branch text,working_branch text,created_at timestamptz default now(),updated_at timestamptz default now());
-	 create table api_turn(id uuid primary key,session_id uuid);`);
+	 create table api_turn(id uuid primary key,session_id uuid,idempotency_key text);`);
 	holder.query.mockImplementation(async (sql: string, values: unknown[]) => {
 		const result = await db.query(sql, values);
 		return { ...result, rowCount: result.affectedRows || result.rows.length };
@@ -139,4 +140,18 @@ it("hands a chat back to New chat when its first send is rejected", async () => 
 	);
 	expect(byId[stored]).toBe("Add dark mode");
 	expect(byId[named]).toBe("Billing rework");
+});
+
+it("finds the chat a new chat's first send landed in by its message id", async () => {
+	const landed = await chat({ title: "Fix the login redirect" });
+	const message = randomUUID();
+	await db.query("insert into api_turn values($1,$2,$3)", [
+		randomUUID(),
+		landed,
+		message,
+	]);
+	expect(await chatHoldingSend("alice", project, message)).toBe(landed);
+	expect(await chatHoldingSend("bob", project, message)).toBeNull();
+	expect(await chatHoldingSend("alice", randomUUID(), message)).toBeNull();
+	expect(await chatHoldingSend("alice", project, randomUUID())).toBeNull();
 });

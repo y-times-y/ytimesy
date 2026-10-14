@@ -65,6 +65,26 @@ export async function reusableEmptyChat(
 }
 
 /**
+ * The user's chat in a project that already queued the send with this
+ * message id. A new chat's first send has no chat id on the client yet, so a
+ * resend after a lost reply finds its chat here instead of opening another.
+ */
+export async function chatHoldingSend(
+	userId: string,
+	projectId: string,
+	messageId: string,
+): Promise<string | null> {
+	const result = await database().query(
+		`select s.id from agent_session s
+		 where s.user_id=$1 and s.project_id=$2 and s.parent_session_id is null
+			and exists (select 1 from api_turn t where t.session_id=s.id and t.idempotency_key=$3)
+		 order by s.updated_at desc limit 1`,
+		[userId, projectId, messageId],
+	);
+	return result.rows[0]?.id ?? null;
+}
+
+/**
  * Marks a chat as taken by a send before the send stores files or commits:
  * an untitled chat takes its first message's title, which also keeps
  * "New chat" from reusing it while that message is still on its way.
