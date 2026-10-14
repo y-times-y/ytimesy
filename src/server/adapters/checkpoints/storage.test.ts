@@ -3,6 +3,7 @@ import {
 	checkpointObjectPrefix,
 	downloadCheckpoint,
 	listContextArchives,
+	removeChatObjects,
 	removeContextArchives,
 	uploadCheckpoint,
 } from "./storage";
@@ -109,4 +110,41 @@ it("keeps isolated evaluation checkpoints on local disk without contacting stora
 	expect(await listContextArchives("alice", "chat", 0, 3)).toEqual([]);
 	expect(fetch).not.toHaveBeenCalled();
 	vi.unstubAllEnvs();
+});
+
+it("deletes a chat's checkpoints, archives and attachments, and nothing else", async () => {
+	const chat = checkpointObjectPrefix("alice", "chat");
+	const listings: Record<string, string[][]> = {
+		[chat]: [["rev-1.enc", "context-a.enc"], []],
+		[`attachments/${chat}`]: [["0f.enc"], []],
+	};
+	const deleted: string[] = [];
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async (url: string, options?: RequestInit) => {
+			const body = JSON.parse(String(options?.body ?? "{}"));
+			if (url.endsWith("/object/list/ytimesy-checkpoints"))
+				return Response.json(
+					(listings[body.prefix].shift() ?? []).map((name) => ({ name })),
+				);
+			deleted.push(...body.prefixes);
+			return Response.json({});
+		}),
+	);
+	await removeChatObjects("alice", "chat");
+	expect(deleted).toEqual([
+		`${chat}rev-1.enc`,
+		`${chat}context-a.enc`,
+		`attachments/${chat}0f.enc`,
+	]);
+});
+
+it("stops deleting when a listing returns a nested or traversal name", async () => {
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async () => Response.json([{ name: "../other.enc" }])),
+	);
+	await expect(removeChatObjects("alice", "chat")).rejects.toThrow(
+		"deletion stopped",
+	);
 });
