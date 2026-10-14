@@ -286,6 +286,13 @@ export function SessionLauncher({
 		competitionModeAvailable({
 			harnessId,
 		}) && allowComparison;
+	const comparing = competitionMode && leaderCount > 1;
+	// A comparison sends no files; say so instead of leaving them behind.
+	const attachmentProblem =
+		attachmentError ??
+		(comparing && attachments.length
+			? "Comparing models can't take attached files yet. Remove them or send to one model."
+			: null);
 	const canSendCompetition = (text: string) =>
 		competitionSendIsEnabled({
 			modeAvailable: competitionMode,
@@ -411,9 +418,9 @@ export function SessionLauncher({
 
 	function sendText(typed: string, plan?: { readonly approves: true }) {
 		const text = sendableDraft(typed);
-		if (!composerCanSend(text, false) || (!plan && attachmentError)) return;
+		if (!composerCanSend(text, false) || (!plan && attachmentProblem)) return;
 		// An approval carries no files; the composer keeps any it holds.
-		const files = leaderCount === 1 && !plan ? attachments : [];
+		const files = plan ? [] : attachments;
 		captureAnalytics("prompt_submitted", {
 			runtime: harnessId,
 			attempts: leaderCount,
@@ -456,9 +463,7 @@ export function SessionLauncher({
 					: {}),
 				...(leaderCount === 1 && speed ? { speed } : {}),
 				...(plan ? { approvesPlan: true } : {}),
-				...(competitionMode && leaderCount > 1 && !plan
-					? { leaderCount, attemptModelIds }
-					: {}),
+				...(comparing && !plan ? { leaderCount, attemptModelIds } : {}),
 				userMessageId,
 				...(encoded.length ? { attachments: encoded } : {}),
 			})?.then((sent) => {
@@ -688,9 +693,9 @@ export function SessionLauncher({
 								))}
 							</ul>
 						)}
-						{attachmentError && (
+						{attachmentProblem && (
 							<p className="session-attachment-error" role="alert">
-								{attachmentError}
+								{attachmentProblem}
 							</p>
 						)}
 						<div className="session-toolbar">
@@ -813,7 +818,7 @@ export function SessionLauncher({
 									className="session-send"
 									aria-label="Send"
 									disabled={
-										Boolean(attachmentError) ||
+										Boolean(attachmentProblem) ||
 										(draftCommand
 											? draftCommand.availability !== "ready"
 											: !composerCanSend(sendableDraft(draft.trim()), false))
