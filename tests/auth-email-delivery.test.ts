@@ -8,7 +8,7 @@ import {
 	persistAuthEmail,
 	sendWithBinding,
 	sendWithCloudflare,
-	useAuthEmailBinding,
+	registerAuthEmailBinding,
 } from "../src/server/adapters/email";
 
 let db: PGlite;
@@ -173,7 +173,7 @@ it("calls Cloudflare Email Service and classifies its errors", async () => {
 
 it("sends through the Workers binding without an API token", async () => {
 	const sent: unknown[] = [];
-	useAuthEmailBinding({
+	registerAuthEmailBinding({
 		send: async (message) => {
 			sent.push(message);
 			return { messageId: "m1" };

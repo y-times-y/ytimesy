@@ -1,5 +1,5 @@
 import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
-import { useAuthEmailBinding } from "./server/adapters/email";
+import { registerAuthEmailBinding } from "./server/adapters/email";
 import { handleWorkerSocket } from "./server/sockets/worker-sockets";
 import type { WebWorkerEnvironment } from "./server/web/environment";
 import { withWebRequestScope } from "./server/web/request-scope";
@@ -19,7 +19,7 @@ export default createServerEntry({
 		];
 		if (!env?.HYPERDRIVE || !context)
 			return withSecurityHeaders(await handler.fetch(request));
-		useAuthEmailBinding(env.EMAIL);
+		registerAuthEmailBinding(env.EMAIL);
 		return withWebRequestScope(
 			env,
 			(work) => context.waitUntil(work),
