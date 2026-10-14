@@ -1198,6 +1198,9 @@ export function WorkspaceHome({
 						: {}),
 				},
 			});
+			// A refused request (an origin check, an expired session) has no view.
+			if (!next?.connection)
+				throw new Error("The message could not be sent. Retry.");
 			// The server refused the send; it reports why in place of the chat.
 			if (next.connection.status === "failed")
 				throw new Error(next.connection.message);
@@ -1233,6 +1236,7 @@ export function WorkspaceHome({
 		let next: PublicCodexSession;
 		try {
 			next = await connect({ data: pending.scope });
+			if (!next?.connection) throw new Error("Could not connect. Retry.");
 		} catch (cause) {
 			if (epoch === sessionEpoch.current)
 				setSession((current) => ({
