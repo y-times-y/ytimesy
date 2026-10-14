@@ -39,6 +39,8 @@ import {
 	agentSessionForOwner,
 	claimChatForSend,
 	descendantAgentSessions,
+	releaseChatClaim,
+	releasingChatClaimOnFailure,
 	saveAgentTaskPublication,
 	saveAgentTaskReview,
 	saveAgentTaskState,
@@ -227,6 +229,7 @@ export function sendHarnessWorkspaceTask(
 		input.runtimeText === undefined &&
 		scope.sessionId
 	) {
+		let claimed = false;
 		return Effect.gen(function* () {
 			const previous = yield* Effect.tryPromise(() =>
 				agentSessionForOwner(scope.userId, scope.sessionId as string),
@@ -244,7 +247,7 @@ export function sendHarnessWorkspaceTask(
 			if (switching && previous.turnStatus === "running")
 				throw new Error("Stop the active turn before switching runtimes.");
 			// Claimed before the commit and file uploads, so New chat can't reuse it.
-			yield* Effect.tryPromise(() =>
+			claimed = yield* Effect.tryPromise(() =>
 				claimChatForSend(scope.userId, scope.sessionId as string, input.text),
 			);
 			if (scope.projectId)
@@ -276,6 +279,18 @@ export function sendHarnessWorkspaceTask(
 				runtimeText,
 			});
 		}).pipe(
+			// A rejected first send hands its chat back for New chat to reuse.
+			Effect.tapErrorCause(() =>
+				claimed
+					? Effect.promise(() =>
+							releaseChatClaim(
+								scope.userId,
+								scope.sessionId as string,
+								input.text,
+							).catch(() => undefined),
+						)
+					: Effect.void,
+			),
 			Effect.catchAll((cause) =>
 				Effect.succeed({
 					...emptyHarnessSession(),
@@ -290,16 +305,21 @@ export function sendHarnessWorkspaceTask(
 	}
 	if (scope.harnessId === "api")
 		return Effect.promise(async () => {
-			if (scope.sessionId)
-				await claimChatForSend(scope.userId, scope.sessionId, input.text);
-			if (scope.sessionId && scope.projectId)
-				await commitChatBranchForSubmission({
-					userId: scope.userId,
-					projectId: scope.projectId,
-					sessionId: scope.sessionId,
-					text: input.text,
-				});
-			return sendApiWorkspaceTask(scope, input);
+			const sessionId = scope.sessionId;
+			if (!sessionId) return sendApiWorkspaceTask(scope, input);
+			const send = async () => {
+				if (scope.projectId)
+					await commitChatBranchForSubmission({
+						userId: scope.userId,
+						projectId: scope.projectId,
+						sessionId,
+						text: input.text,
+					});
+				return sendApiWorkspaceTask(scope, input);
+			};
+			return (await claimChatForSend(scope.userId, sessionId, input.text))
+				? releasingChatClaimOnFailure(scope.userId, sessionId, input.text, send)
+				: send();
 		});
 	return Effect.promise(() => sendSubscriptionTask(scope, input));
 }

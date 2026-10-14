@@ -17,7 +17,10 @@ import {
 	sessionItemsQueuedWithUser,
 	sessionTitleFromItems,
 } from "#/domain/session-item";
-import { titleUntitledAgentSession } from "#/server/adapters/agent-sessions";
+import {
+	releasingChatClaimOnFailure,
+	titleUntitledAgentSession,
+} from "#/server/adapters/agent-sessions";
 import { agentSessionForOwner } from "../adapters/agent-sessions";
 import { isServerControlledIntegration } from "../adapters/agent-task-command-receipts";
 import {
@@ -90,7 +93,7 @@ export async function sendApiWorkspaceTask(
 		attachments?: readonly IncomingAttachment[];
 	},
 	preparedTask = false,
-) {
+): ReturnType<typeof readApiWorkspaceSession> {
 	if (!scope.projectId)
 		throw new Error("Select a project chat before sending.");
 	if (!scope.sessionId) {
@@ -100,7 +103,18 @@ export async function sendApiWorkspaceTask(
 			harness: "api",
 			firstMessage: input.text,
 		});
-		scope = { ...scope, sessionId: opened.id };
+		// Opening claimed the chat; a rejected send hands it back.
+		return releasingChatClaimOnFailure(
+			scope.userId,
+			opened.id,
+			input.text,
+			() =>
+				sendApiWorkspaceTask(
+					{ ...scope, sessionId: opened.id },
+					input,
+					preparedTask,
+				),
+		);
 	}
 	const session = await agentSessionForOwner(
 		scope.userId,

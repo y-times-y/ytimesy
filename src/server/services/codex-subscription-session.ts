@@ -19,7 +19,10 @@ import {
 	sessionTitleFromItems,
 } from "#/domain/session-item";
 import { subscriptionTurnRevision } from "#/domain/subscription-turn";
-import { titleUntitledAgentSession } from "#/server/adapters/agent-sessions";
+import {
+	releasingChatClaimOnFailure,
+	titleUntitledAgentSession,
+} from "#/server/adapters/agent-sessions";
 import { agentSessionForOwner } from "../adapters/agent-sessions";
 import { isServerControlledIntegration } from "../adapters/agent-task-command-receipts";
 import {
@@ -158,7 +161,7 @@ export async function sendSubscriptionTask(
 		attachments?: readonly IncomingAttachment[];
 	},
 	preparedTask = false,
-) {
+): ReturnType<typeof readSubscriptionSession> {
 	if (!scope.projectId)
 		throw new Error("Select a project chat before sending.");
 	if (!scope.sessionId) {
@@ -168,7 +171,18 @@ export async function sendSubscriptionTask(
 			harness: "codex",
 			firstMessage: input.text,
 		});
-		scope = { ...scope, sessionId: opened.id };
+		// Opening claimed the chat; a rejected send hands it back.
+		return releasingChatClaimOnFailure(
+			scope.userId,
+			opened.id,
+			input.text,
+			() =>
+				sendSubscriptionTask(
+					{ ...scope, sessionId: opened.id },
+					input,
+					preparedTask,
+				),
+		);
 	}
 	const task = await agentSessionForOwner(
 		scope.userId,
