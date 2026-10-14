@@ -99,7 +99,10 @@ export async function executeModelStep(
 	receipts: WorkflowStepReceipts,
 	signal: AbortSignal,
 	resume = false,
+	/** The executor's per-step budget, measured from about now; command waits end before it. */
+	stepBudgetMs?: number,
 ): Promise<WorkflowStepOutcome | "unavailable"> {
+	const startedAt = Date.now();
 	const claim = await receipts.claim(step, resume);
 	if (claim.kind === "unavailable") return "unavailable";
 	if (claim.kind === "done") return claim.outcome;
@@ -140,10 +143,34 @@ export async function executeModelStep(
 			]),
 			limitReached: step.index > MAX_WORKFLOW_MODEL_STEPS,
 			resumed: claim.resumed,
+			waitDeadlineAt: commandWaitDeadline(
+				startedAt,
+				claim.remainingMs,
+				stepBudgetMs,
+			),
 		},
 	);
 	await receipts.complete(step, outcome);
 	return outcome;
+}
+
+/** Saving the step's result after its tools finish. */
+const STEP_WAIT_MARGIN_MS = 60_000;
+/** The model call that reads the command's result still needs time inside the turn. */
+const TURN_WAIT_MARGIN_MS = 180_000;
+
+/** A command wait may not outlive the step's alarm budget or eat the turn's last model call. */
+export function commandWaitDeadline(
+	startedAt: number,
+	turnRemainingMs: number,
+	stepBudgetMs?: number,
+) {
+	return Math.min(
+		startedAt + turnRemainingMs - TURN_WAIT_MARGIN_MS,
+		stepBudgetMs === undefined
+			? Number.POSITIVE_INFINITY
+			: startedAt + stepBudgetMs - STEP_WAIT_MARGIN_MS,
+	);
 }
 
 /** Fences a turn's owned commands on the chat's machine without preparing a workspace. */

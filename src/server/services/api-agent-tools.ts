@@ -55,6 +55,8 @@ export function apiAgentTools(
 		signal: AbortSignal;
 		/** A Fusion lead edits its own workspace even though it is a root session. */
 		writable?: boolean;
+		/** Latest epoch ms a command wait may end (step budget or turn deadline minus a margin). */
+		waitDeadlineAt?: number;
 	} & ({ cwd: string } | { workspace: () => Promise<AgentToolWorkspace> }),
 ): ToolSet {
 	const { machines, session, signal } = input;
@@ -343,6 +345,7 @@ export function apiAgentTools(
 			readOnly,
 			signal,
 			once,
+			waitDeadlineAt: input.waitDeadlineAt,
 		}),
 	);
 	Object.assign(

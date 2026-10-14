@@ -88,7 +88,7 @@ export function harnessModelToolInstructions(
 	if (availableTools && isShellSurface(availableTools))
 		return [
 			`Harness tool profile v13-shell (${family}): Edit with apply_patch, or from execute_command when you can make the edit and run its check in the same command. ${context}`,
-			"Inspect with execute_command (rg, sed -n, git, project CLIs), reading related files together in one command rather than slice by slice, and reproduce the problem with the smallest executable check early. Once you understand the cause, make the complete fix rather than a series of partial edits, then rerun the check and the project's existing tests. Resume long commands with continue_command; stop_command cancels.",
+			"Inspect with execute_command (rg, sed -n, git, project CLIs), reading related files together in one command rather than slice by slice, and reproduce the problem with the smallest executable check early. Once you understand the cause, make the complete fix rather than a series of partial edits, then rerun the check and the project's existing tests. Resume long commands with continue_command, which waits until they finish, so one call replaces repeated checks; stop_command cancels.",
 			planning,
 			"Fix first: verify with quick reproduction commands and the existing tests; add new test files only when the task or repository conventions ask for them. Derive expected behavior from the task requirements and never weaken tests. Review your change with git diff instead of rereading whole files.",
 			"Before finishing, map each stated symptom or requirement to a check you actually ran; cover any remaining ones in one combined verification command or script alongside the existing tests, not one step per check, and rerun checks only after an edit.",
@@ -102,7 +102,7 @@ export function harnessModelToolInstructions(
 			.join(" ");
 	return [
 		`Harness tool profile v8 (${family}): ${editing} ${context}`,
-		"Only offered tools are callable; do not search for absent capabilities. Use execute_command with rg, Git and project CLIs; resume yielded ids with continue_command, never restart them. stop_command cancels; view_image supplies pixels. Parallelize independent calls; compose_tools sequences steps and writes.",
+		"Only offered tools are callable; do not search for absent capabilities. Use execute_command with rg, Git and project CLIs; resume yielded ids with continue_command (waits for exit), never restart them. stop_command cancels; view_image supplies pixels. Parallelize independent calls; compose_tools sequences steps and writes.",
 		planning,
 		"Read current source before edits; reread stale rejections. Never invent truncated source. Choose the least expensive safe workflow; use LSP when semantic uncertainty warrants it. search_tools finds only unlisted tools. Outlines locate, not replace source.",
 		"Use scoped read_repository_guidance; read required bodies completely with truncation cursors. Do not reread entire files just written; inventory with inspect_changes view:stat, review scoped full diffs. Reread uncertain regions.",
