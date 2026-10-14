@@ -348,6 +348,10 @@ function GithubSection({
 			requestJson<{ connected: boolean }>("/api/github/disconnect", {}),
 		onSuccess: () => window.location.assign("/"),
 	});
+	const connect = useMutation({
+		mutationFn: () => requestJson<{ url: string }>("/api/github/connect", {}),
+		onSuccess: ({ url }) => window.location.assign(url),
+	});
 	if (loading) return <p className="settings-copy">Loading GitHub…</p>;
 	return (
 		<>
@@ -387,12 +391,23 @@ function GithubSection({
 								>
 									{disconnect.isPending ? "Disconnecting…" : "Disconnect"}
 								</button>
-							) : null}
+							) : (
+								<button
+									type="button"
+									className="settings-primary"
+									disabled={connect.isPending}
+									onClick={() => connect.mutate()}
+								>
+									{connect.isPending ? "Opening GitHub…" : "Connect GitHub"}
+								</button>
+							)}
 						</div>
 					</div>
 				</div>
-				{disconnect.error ? (
-					<p role="alert">{disconnect.error.message}</p>
+				{disconnect.error || connect.error ? (
+					<p role="alert">
+						{disconnect.error?.message ?? connect.error?.message}
+					</p>
 				) : null}
 			</section>
 			<section className="settings-section">
@@ -434,7 +449,11 @@ function GithubSection({
 							</li>
 						))
 					) : (
-						<li className="settings-empty">No repositories yet.</li>
+						<li className="settings-empty">
+							{connected
+								? "No repositories yet. Use Add repository to choose one."
+								: "Connect GitHub above, then add a repository."}
+						</li>
 					)}
 				</ul>
 				{adding ? (
