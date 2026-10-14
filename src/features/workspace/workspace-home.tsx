@@ -197,7 +197,8 @@ export function WorkspaceHome({
 		status: "stopped",
 	});
 	const [desktopBusy, setDesktopBusy] = useState(false);
-	const desktopStartInFlight = useRef(false);
+	/** The chat whose desktop is starting; another chat may still start its own. */
+	const desktopStartFor = useRef<string | null>(null);
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [settingsSection, setSettingsSection] = useState<SettingsSection>();
 	// Back from an MCP provider's sign-in page: reopen the panel that started it.
@@ -414,7 +415,8 @@ export function WorkspaceHome({
 	}, [taskHandoffs, pullRequests.refetch]);
 	selectedSessionIdRef.current = activeSessionId;
 	const requestDesktop = useCallback(() => {
-		if (desktopStartInFlight.current) return;
+		const chatId = activeSessionId;
+		if (!chatId || desktopStartFor.current === chatId) return;
 		if (
 			!desktopInspectorShouldStart({
 				tabActive: true,
@@ -427,19 +429,27 @@ export function WorkspaceHome({
 		) {
 			return;
 		}
-		desktopStartInFlight.current = true;
+		desktopStartFor.current = chatId;
 		setDesktopBusy(true);
 		setDesktop({ status: "starting" });
+		// A result belongs to the chat that asked; a chat opened since keeps its own.
+		const stillOpen = () => selectedSessionIdRef.current === chatId;
 		void startDesktop({
 			data: {
 				projectId: selectedProject?.id,
-				sessionId: activeSessionId,
+				sessionId: chatId,
 			},
 		})
-			.then(setDesktop)
+			.then((next) => {
+				if (stillOpen()) setDesktop(next);
+			})
+			.catch((cause) => {
+				if (stillOpen())
+					setDesktop({ status: "failed", reason: publicFailureMessage(cause) });
+			})
 			.finally(() => {
-				desktopStartInFlight.current = false;
-				setDesktopBusy(false);
+				if (desktopStartFor.current === chatId) desktopStartFor.current = null;
+				if (stillOpen()) setDesktopBusy(false);
 			});
 	}, [
 		activeSessionId,
@@ -448,6 +458,11 @@ export function WorkspaceHome({
 		selectedProject?.id,
 		startDesktop,
 	]);
+	useEffect(() => {
+		// Another chat's desktop start never blocks this chat's.
+		void activeSessionId;
+		setDesktopBusy(false);
+	}, [activeSessionId]);
 	const composerBusy = composerBusyForOpenChat({
 		openChatId: activeSessionId,
 		busyChatIds,
