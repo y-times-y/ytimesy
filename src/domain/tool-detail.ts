@@ -301,10 +301,17 @@ export function toolActivity(item: DynamicToolCallItem): ToolActivity {
 				text("query") ??
 				(typeof action?.query === "string" ? action.query : queries[0]);
 			const url = typeof action?.url === "string" ? action.url : undefined;
+			// Searches known only from their cited sources (OpenRouter).
+			const cited = Array.isArray(output?.sources) ? output.sources.length : 0;
 			return {
 				verb: url ? "Opened" : "Searched the web",
 				target: url ?? (query ? clip(query, 80) : undefined),
-				note: queries.length > 1 ? `${queries.length} queries` : undefined,
+				note:
+					queries.length > 1
+						? `${queries.length} queries`
+						: cited
+							? `${cited} ${cited === 1 ? "source" : "sources"}`
+							: undefined,
 				glyph: "search",
 			};
 		}

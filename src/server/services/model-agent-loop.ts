@@ -747,8 +747,46 @@ async function executeModelSteps(
 			},
 		});
 		const reasoningStarted = new Map<string, number>();
+		// OpenRouter's search tool runs on its server and reports only cited
+		// sources; show them as one search per step unless a search call did.
+		let searchCalled = false;
+		let citedSources: { url: string; title?: string }[] = [];
+		let searchStep = 0;
 		for await (const part of result.fullStream) {
 			switch (part.type) {
+				case "start-step":
+					searchCalled = false;
+					citedSources = [];
+					break;
+				case "source":
+					if (
+						part.sourceType === "url" &&
+						!searchCalled &&
+						!citedSources.some((source) => source.url === part.url)
+					)
+						citedSources.push({
+							url: part.url,
+							...(part.title ? { title: part.title } : {}),
+						});
+					break;
+				case "finish-step":
+					if (citedSources.length && !searchCalled) {
+						const id = `cited-search-${searchStep++}`;
+						await input.onEvent({
+							type: "tool-call",
+							id,
+							name: "web_search",
+							input: { sources: citedSources.length },
+						});
+						await input.onEvent({
+							type: "tool-result",
+							id,
+							name: "web_search",
+							output: { sources: citedSources },
+						});
+					}
+					citedSources = [];
+					break;
 				case "reasoning-start":
 					reasoningStarted.set(part.id, Date.now());
 					break;
@@ -772,6 +810,11 @@ async function executeModelSteps(
 					});
 					break;
 				case "tool-call":
+					if (
+						part.toolName === "web_search" ||
+						part.toolName === "google_search"
+					)
+						searchCalled = true;
 					await input.onEvent({
 						type: "tool-call",
 						id: part.toolCallId,
