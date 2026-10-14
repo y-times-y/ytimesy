@@ -91,6 +91,7 @@ import {
 	takeMcpSignInReturn,
 } from "../sessions/mcp-sign-in-return";
 import {
+	type ComposerSpeed,
 	preferredSessionModelId,
 	sessionModelsFromListed,
 } from "../sessions/model-capabilities";
@@ -226,7 +227,7 @@ export function WorkspaceHome({
 		text: string;
 		modelId: string;
 		variant?: string;
-		fast?: boolean;
+		speed?: ComposerSpeed;
 		mode?: "plan";
 	} | null>(null);
 	const sessionViews = useRef(new Map<string, PublicCodexSession>());
@@ -1265,7 +1266,7 @@ export function WorkspaceHome({
 										...(options?.reasoningId
 											? { variant: options.reasoningId }
 											: {}),
-										...(options?.fast ? { fast: true } : {}),
+										...(options?.speed ? { speed: options.speed } : {}),
 										...(options?.mode ? { mode: options.mode } : {}),
 									};
 									setBusyChatIds((ids) => withBusyChat(ids, chatId));
@@ -1324,7 +1325,12 @@ export function WorkspaceHome({
 													...(pending?.variant
 														? { variant: pending.variant }
 														: {}),
-													...(pending?.fast ? { fast: true } : {}),
+													...(pending?.speed
+														? {
+																speed: pending.speed,
+																fast: pending.speed === "fast",
+															}
+														: {}),
 													...(pending?.mode ? { mode: pending.mode } : {}),
 												},
 											});

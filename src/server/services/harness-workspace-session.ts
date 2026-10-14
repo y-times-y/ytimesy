@@ -212,6 +212,8 @@ export function sendHarnessWorkspaceTask(
 		readonly modelId: string;
 		readonly variant?: string;
 		readonly fast?: boolean;
+		/** API-key models only; Codex uses `fast`. */
+		readonly speed?: "standard" | "fast" | "ultrafast";
 		readonly runtimeText?: string;
 		readonly idempotencyKey?: string;
 		readonly mode?: "plan";

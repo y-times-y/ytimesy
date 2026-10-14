@@ -5,6 +5,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import type { LanguageModel } from "ai";
+import type { ApiModelSpeedId } from "#/domain/api-model-list";
 import type { ModelProvider } from "#/domain/model-connection";
 import { openRouterCacheFetch } from "./api-prompt-cache";
 import { openRouterOfficialFetch } from "./openrouter-official";
@@ -20,6 +21,8 @@ export function connectedLanguageModel(
 		baseUrl: string;
 		apiKey: string;
 		modelId: string;
+		/** Faster maker endpoints; only OpenRouter keys reach them. */
+		speed?: ApiModelSpeedId;
 	},
 	fetch: typeof globalThis.fetch,
 ): LanguageModel {
@@ -40,6 +43,7 @@ export function connectedLanguageModel(
 							new URL(input.baseUrl).hostname === "openrouter.ai"
 								? openRouterCacheFetch(fetch)
 								: fetch,
+							input.speed,
 						),
 					),
 				})(input.modelId),

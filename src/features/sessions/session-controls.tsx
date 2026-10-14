@@ -3,7 +3,7 @@ import { type ReactNode, useRef } from "react";
 import type { AgentProviderId } from "#/domain/agent-provider";
 import type { ModelRun } from "#/domain/parallel-models";
 import { HarnessPicker } from "./harness-picker";
-import type { SessionModel } from "./model-capabilities";
+import type { ComposerSpeed, SessionModel } from "./model-capabilities";
 
 interface SessionControlsProps {
 	contextIndicator?: ReactNode;
@@ -17,8 +17,8 @@ interface SessionControlsProps {
 	listedModelId?: string;
 	reasoningId: string;
 	onReasoningIdChange: (id: string) => void;
-	fast: boolean;
-	onFastChange: (fast: boolean) => void;
+	speed: ComposerSpeed;
+	onSpeedChange: (speed: ComposerSpeed) => void;
 	onConnect: () => void;
 	catalogStatus: "loading" | "error" | "ready";
 	providerConnected: boolean;
@@ -41,8 +41,8 @@ export function SessionControls({
 	listedModelId = "",
 	reasoningId,
 	onReasoningIdChange,
-	fast,
-	onFastChange,
+	speed,
+	onSpeedChange,
 	onConnect,
 	catalogStatus,
 	providerConnected,
@@ -96,19 +96,19 @@ export function SessionControls({
 					onModelRunsChange={onModelRunsChange}
 					reasoningId={reasoningId}
 					onReasoningIdChange={onReasoningIdChange}
-					fast={fast}
-					onFastChange={onFastChange}
+					speed={speed}
+					onSpeedChange={onSpeedChange}
 					onModelIdChange={(id) => {
 						onModelIdChange(id);
 						onReasoningIdChange("");
-						onFastChange(false);
+						onSpeedChange("");
 					}}
 					onHarnessIdChange={(id) => {
 						onMultipleModelsChange(false);
 						onHarnessIdChange(id);
 						onModelIdChange("");
 						onReasoningIdChange("");
-						onFastChange(false);
+						onSpeedChange("");
 					}}
 				/>
 				{contextIndicator}

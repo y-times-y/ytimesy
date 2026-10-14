@@ -55,6 +55,7 @@ import { ContextUsage } from "./context-usage";
 import { ConversationRecovery } from "./conversation-recovery";
 import { HarnessLogin } from "./harness-login";
 import {
+	type ComposerSpeed,
 	composerListedModels,
 	resolveReasoningLevel,
 	sessionModelsFromListed,
@@ -100,7 +101,7 @@ export function SessionLauncher({
 		modelId: string,
 		options?: {
 			readonly reasoningId?: string;
-			readonly fast?: boolean;
+			readonly speed?: ComposerSpeed;
 			readonly mode?: "plan";
 			readonly leaderCount?: number;
 			readonly attemptModelIds?: readonly string[];
@@ -238,7 +239,7 @@ export function SessionLauncher({
 	});
 	const [modelId, setModelId] = useState(session.listedModelId);
 	const [reasoningId, setReasoningId] = useState("");
-	const [fast, setFast] = useState(false);
+	const [speed, setSpeed] = useState<ComposerSpeed>("");
 	const [multipleModels, setMultipleModels] = useState(false);
 	const [modelRuns, setModelRuns] = useState<ModelRun[]>([]);
 	const attemptModelIds = expandModelRuns(modelRuns);
@@ -369,7 +370,7 @@ export function SessionLauncher({
 	// biome-ignore lint/correctness/useExhaustiveDependencies: Model changes must reset overrides even when their default reasoning levels match.
 	useEffect(() => {
 		setReasoningId(selectedModel?.reasoning?.defaultLevelId ?? "");
-		setFast(false);
+		setSpeed("");
 	}, [selectedModel?.id, selectedModel?.reasoning?.defaultLevelId]);
 
 	useEffect(() => {
@@ -405,7 +406,7 @@ export function SessionLauncher({
 			...(leaderCount === 1 && reasoning?.id
 				? { reasoningId: reasoning.id }
 				: {}),
-			...(leaderCount === 1 && fast ? { fast: true } : {}),
+			...(leaderCount === 1 && speed ? { speed } : {}),
 			...(competitionMode && leaderCount > 1
 				? { leaderCount, attemptModelIds, userMessageId }
 				: {}),
@@ -670,14 +671,14 @@ export function SessionLauncher({
 									if (runs[0] && runs[0].modelId !== modelId) {
 										setModelId(runs[0].modelId);
 										setReasoningId("");
-										setFast(false);
+										setSpeed("");
 									}
 								}}
 								parallelAvailable={competitionMode}
 								reasoningId={reasoningId}
 								onReasoningIdChange={setReasoningId}
-								fast={fast}
-								onFastChange={setFast}
+								speed={speed}
+								onSpeedChange={setSpeed}
 								onAttachFiles={(selected) =>
 									setAttachments((files) => {
 										const additions = selected.filter(

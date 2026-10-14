@@ -7,13 +7,46 @@
  * `author` is the selector section (keys of AUTHOR_LABELS). `openRouterId` is
  * the id through an OpenRouter key; `directId` is the id through that maker's
  * own key (OpenAI, Anthropic and Google directly, the rest through their
- * fixed OpenAI-compatible endpoint).
+ * fixed OpenAI-compatible endpoint). `speeds` are the maker's own faster
+ * endpoints, offered through an OpenRouter key only.
  */
+export type ApiModelSpeedId = "fast" | "ultrafast";
+
+export type ApiModelSpeed = {
+	readonly id: ApiModelSpeedId;
+	/** The maker's own tiered OpenRouter endpoints serving this speed. */
+	readonly providers: readonly string[];
+	/** Price relative to the standard endpoint. */
+	readonly priceMultiple: number;
+};
+
 export type ListedApiModel = {
 	readonly author: string;
 	readonly label: string;
 	readonly openRouterId: string;
 	readonly directId?: string;
+	readonly speeds?: readonly ApiModelSpeed[];
+};
+
+const OPENAI_FAST: ApiModelSpeed = {
+	id: "fast",
+	providers: ["openai/fast"],
+	priceMultiple: 2,
+};
+const OPENAI_ULTRAFAST: ApiModelSpeed = {
+	id: "ultrafast",
+	providers: ["openai/ultrafast"],
+	priceMultiple: 6,
+};
+const GOOGLE_PRIORITY: ApiModelSpeed = {
+	id: "fast",
+	providers: ["google-ai-studio/priority", "google-vertex/global/priority"],
+	priceMultiple: 1.8,
+};
+const XAI_PRIORITY: ApiModelSpeed = {
+	id: "fast",
+	providers: ["xai/priority"],
+	priceMultiple: 2,
 };
 
 export const API_MODEL_LIST: readonly ListedApiModel[] = [
@@ -22,24 +55,28 @@ export const API_MODEL_LIST: readonly ListedApiModel[] = [
 		label: "GPT-6.1 Sol",
 		openRouterId: "openai/gpt-6.1-sol",
 		directId: "gpt-6.1-sol",
+		speeds: [OPENAI_FAST, OPENAI_ULTRAFAST],
 	},
 	{
 		author: "openai",
 		label: "GPT-6 Luna",
 		openRouterId: "openai/gpt-6-luna",
 		directId: "gpt-6-luna",
+		speeds: [OPENAI_FAST],
 	},
 	{
 		author: "openai",
 		label: "GPT-6 Astra",
 		openRouterId: "openai/gpt-6-astra",
 		directId: "gpt-6-astra",
+		speeds: [OPENAI_FAST, OPENAI_ULTRAFAST],
 	},
 	{
 		author: "anthropic",
 		label: "Claude Opus 5.5",
 		openRouterId: "anthropic/claude-opus-5.5",
 		directId: "claude-opus-5-5",
+		speeds: [{ id: "fast", providers: ["anthropic/fast"], priceMultiple: 2 }],
 	},
 	{
 		author: "anthropic",
@@ -64,30 +101,35 @@ export const API_MODEL_LIST: readonly ListedApiModel[] = [
 		label: "Gemini 4 Argon",
 		openRouterId: "google/gemini-4-argon",
 		directId: "gemini-4-argon",
+		speeds: [GOOGLE_PRIORITY],
 	},
 	{
 		author: "google",
 		label: "Gemini 3.8 Flash",
 		openRouterId: "google/gemini-3.8-flash",
 		directId: "gemini-3.8-flash",
+		speeds: [GOOGLE_PRIORITY],
 	},
 	{
 		author: "google",
 		label: "Gemini 3.7 Flash",
 		openRouterId: "google/gemini-3.7-flash",
 		directId: "gemini-3.7-flash",
+		speeds: [GOOGLE_PRIORITY],
 	},
 	{
 		author: "x-ai",
 		label: "Grok 4.7",
 		openRouterId: "x-ai/grok-4.7",
 		directId: "grok-4.7",
+		speeds: [XAI_PRIORITY],
 	},
 	{
 		author: "x-ai",
 		label: "Grok 4.6",
 		openRouterId: "x-ai/grok-4.6",
 		directId: "grok-4.6",
+		speeds: [XAI_PRIORITY],
 	},
 	// The makers below are offered through OpenRouter; their direct-key ids are
 	// not listed yet, so a direct key for them unlocks nothing until they are.
@@ -144,12 +186,28 @@ const OFFICIAL_OPENROUTER_PROVIDERS: Readonly<
 	qwen: ["alibaba"],
 };
 
-/** The official providers for a listed OpenRouter model, or null when it is not listed. */
+/** The faster speeds a listed OpenRouter model offers, empty when none. */
+export function apiModelSpeeds(openRouterId: string): readonly ApiModelSpeed[] {
+	return (
+		API_MODEL_LIST.find((model) => model.openRouterId === openRouterId)
+			?.speeds ?? []
+	);
+}
+
+/**
+ * The official providers for a listed OpenRouter model at a speed, or null
+ * when the model is not listed or does not offer that speed. Standard speed
+ * uses the maker's base providers, which never match a tiered endpoint.
+ */
 export function officialOpenRouterProviders(
 	openRouterId: string,
+	speed?: ApiModelSpeedId,
 ): readonly string[] | null {
 	const entry = API_MODEL_LIST.find(
 		(model) => model.openRouterId === openRouterId,
 	);
-	return entry ? (OFFICIAL_OPENROUTER_PROVIDERS[entry.author] ?? null) : null;
+	if (!entry) return null;
+	if (speed)
+		return entry.speeds?.find((tier) => tier.id === speed)?.providers ?? null;
+	return OFFICIAL_OPENROUTER_PROVIDERS[entry.author] ?? null;
 }

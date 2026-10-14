@@ -14,6 +14,10 @@ import {
 	IncompleteAgentTurn,
 	LifecycleHookRefusal,
 } from "#/domain/api-turn-failure";
+import {
+	type ApiTurnSettings,
+	apiTurnSettings,
+} from "#/domain/api-turn-settings";
 import { CoordinationFailure } from "#/domain/conversation-turn-control";
 import { PREPARED_ENVIRONMENT_INSTRUCTIONS } from "#/domain/environment-context";
 import { SessionItemId, WorkspaceId } from "#/domain/ids";
@@ -254,6 +258,9 @@ export async function runApiTurn(
 		if (process.env.YTIMESY_HARNESS_EVALUATION_ENABLED === "1")
 			evaluation = await evaluationRunForTask(owner.userId, owner.id);
 		const subscription = subscriptionTurnSettings(turn.connection_revision);
+		const apiSettings: ApiTurnSettings = subscription
+			? {}
+			: apiTurnSettings(turn.settings);
 		// The subscription endpoint rejects the public Responses apply_patch tool.
 		// Writers retain the same V4A editor through its function-tool schema.
 		let nativePatch = false;
@@ -469,7 +476,8 @@ export async function runApiTurn(
 			userId: turn.user_id,
 			connectionId: turn.connection_id ?? undefined,
 			connectionRevision: turn.connection_revision,
-			reasoning: subscription?.reasoning,
+			reasoning: subscription?.reasoning ?? apiSettings.reasoning,
+			speed: apiSettings.speed,
 			knownTools: discoveredToolsFromSession(items),
 			toolSurface,
 			onToolMetric: (metric) => {

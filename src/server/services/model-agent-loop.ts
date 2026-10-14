@@ -10,6 +10,7 @@ import {
 	type ToolSet,
 } from "ai";
 import type { ApiAgentEvent } from "#/domain/api-agent-event";
+import type { ApiModelSpeedId } from "#/domain/api-model-list";
 import { type ApiTokenUsage, addApiTokenUsage } from "#/domain/api-token-usage";
 import {
 	apiModelFailureClassification,
@@ -70,6 +71,8 @@ export type ModelAgentInput = {
 	modelId: string;
 	reasoning?: string;
 	fast?: boolean;
+	/** A listed API model's faster maker endpoint (OpenRouter keys only). */
+	speed?: ApiModelSpeedId;
 	messages: ModelMessage[];
 	instructions: string;
 	tools: ToolSet;

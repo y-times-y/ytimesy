@@ -65,6 +65,12 @@ beforeAll(async () => {
 	);
 	await db.exec(
 		await readFile(
+			"supabase/migrations/20261014020000_api_turn_settings.sql",
+			"utf8",
+		),
+	);
+	await db.exec(
+		await readFile(
 			"supabase/migrations/20261005160000_agent_pr_repair.sql",
 			"utf8",
 		),

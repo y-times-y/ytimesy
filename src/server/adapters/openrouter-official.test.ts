@@ -32,3 +32,32 @@ it("refuses a model that is not on the list before contacting OpenRouter", async
 	).rejects.toThrow("not an offered model");
 	expect(fetch).not.toHaveBeenCalled();
 });
+
+it("pins a faster speed to the maker's own tiered endpoint", async () => {
+	const fetch = vi.fn(async () => new Response("{}"));
+	await openRouterOfficialFetch(fetch, "ultrafast")(
+		"https://openrouter.ai/api/v1/chat",
+		{
+			method: "POST",
+			body: JSON.stringify({ model: "openai/gpt-6.1-sol", messages: [] }),
+		},
+	);
+	expect(sent(fetch).provider).toEqual({
+		only: ["openai/ultrafast"],
+		allow_fallbacks: false,
+	});
+});
+
+it("refuses a speed the model's maker does not offer", async () => {
+	const fetch = vi.fn(async () => new Response("{}"));
+	await expect(
+		openRouterOfficialFetch(fetch, "ultrafast")(
+			"https://openrouter.ai/api/v1/chat",
+			{
+				method: "POST",
+				body: JSON.stringify({ model: "openai/gpt-6-luna", messages: [] }),
+			},
+		),
+	).rejects.toThrow("no ultrafast endpoint");
+	expect(fetch).not.toHaveBeenCalled();
+});

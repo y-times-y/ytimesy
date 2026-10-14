@@ -25,6 +25,7 @@ import { authClient } from "#/features/auth/client";
 import { AgentProviderMark } from "./agent-provider-mark";
 import { ApiModelBrowser } from "./api-model-browser";
 import {
+	type ComposerSpeed,
 	type SessionModel,
 	sessionModelsFromListed,
 } from "./model-capabilities";
@@ -51,8 +52,8 @@ export function HarnessPicker({
 	providerConnected = false,
 	reasoningId = "",
 	onReasoningIdChange,
-	fast = false,
-	onFastChange,
+	speed = "",
+	onSpeedChange,
 	parallelAvailable = false,
 	multipleModels = false,
 	modelRuns = [],
@@ -71,8 +72,8 @@ export function HarnessPicker({
 	providerConnected?: boolean;
 	reasoningId?: string;
 	onReasoningIdChange?: (id: string) => void;
-	fast?: boolean;
-	onFastChange?: (value: boolean) => void;
+	speed?: ComposerSpeed;
+	onSpeedChange?: (speed: ComposerSpeed) => void;
 	parallelAvailable?: boolean;
 	multipleModels?: boolean;
 	modelRuns?: readonly ModelRun[];
@@ -192,8 +193,8 @@ export function HarnessPicker({
 						model={model}
 						reasoningId={reasoningId}
 						onReasoningIdChange={onReasoningIdChange}
-						fast={fast}
-						onFastChange={onFastChange}
+						speed={speed}
+						onSpeedChange={onSpeedChange}
 					/>
 				) : null}
 				<div className="model-picker-body">
