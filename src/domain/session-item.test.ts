@@ -471,46 +471,4 @@ describe("message identity", () => {
 			}),
 		).toBe(true);
 	});
-
-	it("keeps a comparison running through the idle gap before its judge", () => {
-		const open = [user("m1")];
-		expect(
-			sessionViewShouldReplaceOpenTurn({
-				currentStatus: "running",
-				nextStatus: "idle",
-				currentItems: open,
-				nextItems: open,
-				followUpPending: true,
-			}),
-		).toBe(false);
-		expect(
-			sessionViewShouldReplaceOpenTurn({
-				currentStatus: "running",
-				nextStatus: "idle",
-				currentItems: [],
-				nextItems: open,
-				followUpPending: true,
-			}),
-		).toBe(false);
-		// Stop still ends it, and the judge's own turn still shows.
-		expect(
-			sessionViewShouldReplaceOpenTurn({
-				currentStatus: "running",
-				nextStatus: "idle",
-				currentItems: open,
-				nextItems: open,
-				followUpPending: true,
-				stopRequested: true,
-			}),
-		).toBe(true);
-		expect(
-			sessionViewShouldReplaceOpenTurn({
-				currentStatus: "running",
-				nextStatus: "running",
-				currentItems: open,
-				nextItems: open,
-				followUpPending: true,
-			}),
-		).toBe(true);
-	});
 });

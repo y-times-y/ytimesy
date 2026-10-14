@@ -609,29 +609,6 @@ a.sidebar-chat-pr,
 	padding: 0;
 	margin-bottom: 20px;
 }
-.competition-overview {
-	display: flex;
-	align-items: center;
-	gap: 10px;
-	flex-wrap: wrap;
-	color: #b7b7b7;
-	font-size: 13px;
-}
-.competition-overview h2 {
-	flex-basis: 100%;
-}
-.competition-overview p {
-	margin: 0;
-}
-.competition-overview small {
-	flex-basis: 100%;
-	color: #d78e8e;
-}
-.task-winner {
-	color: #65c98b;
-	font-size: 11px;
-	font-weight: 500;
-}
 .overview-section {
 	margin-bottom: 22px;
 }

@@ -71,7 +71,7 @@ export async function superviseAgentChildren(
 		`select c.id,c.user_id,c.parent_session_id,c.title,c.items,t.id as turn_id,t.created_at as started_at,c.updated_at
 		 from agent_session c left join api_turn t on c.id=t.session_id and c.user_id=t.user_id and t.state='running' and not t.cancel_requested
 		 join agent_session p on p.id=c.parent_session_id and p.user_id=c.user_id and p.project_id=c.project_id
-		 where c.turn_status='running' and c.candidate_index is null
+		 where c.turn_status='running'
 		 and (t.id is not null or c.harness not in ('api','codex'))
 		 order by coalesce(t.created_at,c.updated_at) limit 32`,
 	);

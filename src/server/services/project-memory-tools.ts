@@ -61,7 +61,7 @@ export function projectMemoryTools(input: {
 				readCloudProjectMemoryHistory(session, key, offset, revisionId),
 		}),
 	};
-	if (session.parentSessionId || session.candidateIndex != null) return tools;
+	if (session.parentSessionId) return tools;
 	tools.remember_project = tool({
 		description:
 			"Maintain one named project-memory entry with source pointers and honest status, not transcripts or secrets. Read/search first for expectedRevision. Reuse a key to correct stale facts; history is retained. This does not publish repository files.",

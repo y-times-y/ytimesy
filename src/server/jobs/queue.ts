@@ -14,7 +14,6 @@ export const PREPARE_WORKSPACE_QUEUE = "prepare-workspace";
 export const REFRESH_WORKSPACE_QUEUE = "refresh-workspace-snapshot";
 export const AGENT_TASK_EVENT_QUEUE = "agent-task-event";
 export const AGENT_PEER_MESSAGE_QUEUE = "agent-peer-message";
-export const START_COMPETITION_QUEUE = "start-agent-competition";
 export const SESSION_CHECKPOINT_QUEUE = "session-checkpoint";
 export const PR_REPAIR_QUEUE = "pr-repair";
 export const WORK_PLAN_QUEUE = "durable-work-plan";
@@ -104,12 +103,6 @@ async function startJobQueue(role: QueueRole): Promise<PgBoss> {
 			retryBackoff: false,
 			expireInSeconds: 30 * 60,
 		});
-		await boss.createQueue(START_COMPETITION_QUEUE, {
-			policy: "singleton",
-			retryLimit: 2,
-			retryBackoff: true,
-			expireInSeconds: 30 * 60,
-		});
 		await boss.createQueue(SESSION_CHECKPOINT_QUEUE, {
 			policy: "singleton",
 			retryLimit: 3,
@@ -191,18 +184,6 @@ export async function enqueuePeerMessage(
 	return queue.send(AGENT_PEER_MESSAGE_QUEUE, message, {
 		singletonKey: requestKey,
 	});
-}
-
-export async function enqueueCompetition(rootSessionId: string) {
-	const id = randomUUID();
-	if (await dispatchBackgroundJob({ id, kind: "competition", rootSessionId }))
-		return id;
-	const queue = await jobQueue();
-	return queue.send(
-		START_COMPETITION_QUEUE,
-		{ rootSessionId },
-		{ singletonKey: rootSessionId },
-	);
 }
 
 export async function enqueueSessionCheckpoint(

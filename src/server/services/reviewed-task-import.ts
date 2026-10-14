@@ -78,8 +78,6 @@ function assertReviewedSibling(
 		source.userId !== destination.userId ||
 		source.projectId !== destination.projectId ||
 		source.parentSessionId !== destination.parentSessionId ||
-		source.candidateIndex != null ||
-		destination.candidateIndex != null ||
 		source.taskAccess !== "read_write" ||
 		source.taskPlacement !== "fresh" ||
 		source.taskState !== "done" ||

@@ -22,7 +22,6 @@ const session = {
 	projectId,
 	userId: "alice",
 	parentSessionId: null,
-	candidateIndex: null,
 	title: "Fix branches",
 } as AgentSessionRecord;
 const entry = {
@@ -98,13 +97,12 @@ it("enforces ownership and prevents children and competing leads from publishing
 	await expect(rememberCloudProjectKnowledge(other, entry)).rejects.toThrow(
 		"not available",
 	);
-	for (const forbidden of [
-		{ ...session, parentSessionId: "parent" },
-		{ ...session, candidateIndex: 1 },
-	])
-		await expect(
-			rememberCloudProjectKnowledge(forbidden, entry),
-		).rejects.toThrow("only non-competing leads");
+	await expect(
+		rememberCloudProjectKnowledge(
+			{ ...session, parentSessionId: "parent" },
+			entry,
+		),
+	).rejects.toThrow("only root chats");
 	expect(await loadCloudProjectKnowledge(session, "branches")).toContain(
 		"Branch selection",
 	);
@@ -292,10 +290,7 @@ it("paginates all topics and revisions without booting a VM; children cannot mut
 		),
 	).toMatchObject({ total: 15 });
 	expect(workspace).not.toHaveBeenCalled();
-	for (const restricted of [
-		{ ...session, parentSessionId: "parent" },
-		{ ...session, candidateIndex: 1 },
-	]) {
+	for (const restricted of [{ ...session, parentSessionId: "parent" }]) {
 		const childTools = projectMemoryTools({
 			session: restricted,
 			workspace,

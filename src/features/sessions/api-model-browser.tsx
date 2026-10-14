@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { Check, ChevronRight, LockKeyhole } from "lucide-react";
+import { ChevronRight, LockKeyhole } from "lucide-react";
 import { useState } from "react";
 import {
 	Select,
@@ -18,7 +18,6 @@ import {
 	modelRouteId,
 	type PublicModelConnection,
 } from "#/domain/model-connection";
-import type { ModelRun } from "#/domain/parallel-models";
 import {
 	apiPickerSections,
 	directKeyProvider,
@@ -33,7 +32,6 @@ import {
 	saveModelConnectionFn,
 } from "./model-connections.fn";
 import { ModelProviderLogo } from "./model-provider-logo";
-import { ModelRunCount } from "./model-run-count";
 import { ProviderConfirmation } from "./provider-confirmation";
 
 export function ApiModelBrowser({
@@ -42,18 +40,12 @@ export function ApiModelBrowser({
 	onSelect,
 	onBrowseProvider,
 	selectedRoute,
-	multipleModels = false,
-	modelRuns = [],
-	onModelRunsChange,
 }: {
 	author: string | null;
 	search: string;
 	onSelect: (route: string) => void;
 	onBrowseProvider?: (author: string) => void;
 	selectedRoute?: string;
-	multipleModels?: boolean;
-	modelRuns?: readonly ModelRun[];
-	onModelRunsChange?: (runs: ModelRun[]) => void;
 }) {
 	const client = useQueryClient();
 	const identity = authClient.useSession();
@@ -251,7 +243,6 @@ export function ApiModelBrowser({
 			/>
 			{visibleConnected.map((model) => {
 				const route = modelRouteId(model.connectionId, model.id);
-				const selectedRun = modelRuns.find((run) => run.modelId === route);
 				return (
 					<div
 						className="model-picker-row"
@@ -260,34 +251,19 @@ export function ApiModelBrowser({
 						<button
 							type="button"
 							className="model-browser-option model-browser-choice"
-							aria-pressed={multipleModels ? Boolean(selectedRun) : undefined}
 							onClick={() => {
 								update(connections.data ?? []);
 								onSelect(route);
 							}}
 						>
-							{multipleModels ? (
-								<span className="model-run-check" aria-hidden="true">
-									{selectedRun ? <Check size={12} strokeWidth={2.4} /> : null}
-								</span>
-							) : (
-								<ModelProviderLogo provider={model.author} />
-							)}
+							<ModelProviderLogo provider={model.author} />
 							<span>
 								{author
 									? model.label
 									: `${AUTHOR_LABELS[model.author] ?? model.author} · ${model.label}`}
 							</span>
-							{!multipleModels ? <ChevronRight size={14} /> : null}
+							<ChevronRight size={14} />
 						</button>
-						{multipleModels && selectedRun ? (
-							<ModelRunCount
-								modelId={route}
-								modelLabel={model.label}
-								runs={modelRuns}
-								onChange={(runs) => onModelRunsChange?.(runs)}
-							/>
-						) : null}
 					</div>
 				);
 			})}

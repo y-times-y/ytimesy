@@ -149,7 +149,6 @@ export function toolMetricCategory(
 	if (
 		name.includes("task") ||
 		name.includes("peer") ||
-		name === "select_competition_winner" ||
 		name === "plan_parallel_work"
 	)
 		return "coordination";

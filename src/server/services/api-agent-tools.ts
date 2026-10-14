@@ -190,28 +190,27 @@ export function apiAgentTools(
 					request,
 					available: () => availableChildSlots(session.userId, session.id),
 					signal: options.abortSignal ?? signal,
-					prepareIntegration:
-						!session.parentSessionId && session.candidateIndex == null
-							? async () => {
-									if (!createTask)
-										throw new Error("Task creation is unavailable.");
-									return createTask(
-										{
-											title: "Integrate reviewed changes",
-											prompt:
-												"Integrate only the exact reviewed siblings from this ready batch. Preserve every original requirement. Run the combined required checks after all batch sources are reviewed; the lead must accept the combined diff.",
-											startImmediately: false,
-											placement: "fresh",
-											access: "read_write",
-											execution: "parallel",
-										},
-										{
-											...options,
-											toolCallId: `${options.toolCallId}:integration`,
-										},
-									);
-								}
-							: undefined,
+					prepareIntegration: !session.parentSessionId
+						? async () => {
+								if (!createTask)
+									throw new Error("Task creation is unavailable.");
+								return createTask(
+									{
+										title: "Integrate reviewed changes",
+										prompt:
+											"Integrate only the exact reviewed siblings from this ready batch. Preserve every original requirement. Run the combined required checks after all batch sources are reviewed; the lead must accept the combined diff.",
+										startImmediately: false,
+										placement: "fresh",
+										access: "read_write",
+										execution: "parallel",
+									},
+									{
+										...options,
+										toolCallId: `${options.toolCallId}:integration`,
+									},
+								);
+							}
+						: undefined,
 					launch: async (task, index) => {
 						if (!createTask) throw new Error("Task creation is unavailable.");
 						return createTask(

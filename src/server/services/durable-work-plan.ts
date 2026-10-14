@@ -53,10 +53,8 @@ function draftContract(task: AgentSessionRecord) {
 }
 
 function assertLead(parent: AgentSessionRecord) {
-	if (parent.parentSessionId || parent.candidateIndex !== null)
-		throw new Error(
-			"Only a non-competing root lead may schedule durable work.",
-		);
+	if (parent.parentSessionId)
+		throw new Error("Only a root lead may schedule durable work.");
 }
 
 export async function scheduleDurableWork(
@@ -75,7 +73,6 @@ export async function scheduleDurableWork(
 			task.parentSessionId !== parent.id ||
 			task.taskState !== "draft" ||
 			task.providerRef ||
-			task.candidateIndex !== null ||
 			task.taskPlacement !== "fresh" ||
 			task.taskAccess !== "read_write" ||
 			!task.taskPrompt ||

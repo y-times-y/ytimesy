@@ -67,7 +67,6 @@ function session(
 		parentSessionId,
 		userId: "owner",
 		projectId: "project",
-		candidateIndex: null,
 		title: id,
 		taskState: "working",
 		providerRef: "executor",
@@ -132,18 +131,6 @@ describe("peer coordination boundaries", () => {
 		expect(
 			(await discoverAgentPeers(requiredSession("a"))).map((row) => row.id),
 		).toEqual(["root", "b", "nested"]);
-	});
-	it("isolates competing implementations and their children", async () => {
-		session("a", "root", { candidateIndex: 1 });
-		session("b", "root", { candidateIndex: 2 });
-		session("a-build", "a");
-		session("b-build", "b");
-		expect(
-			(await discoverAgentPeers(requiredSession("a-build"))).map(
-				(row) => row.id,
-			),
-		).toEqual(["a"]);
-		expect(await discoverAgentPeers(requiredSession("root"))).toEqual([]);
 	});
 	it("rejects self, other tree, other owner, and drafts", async () => {
 		session("other", null);

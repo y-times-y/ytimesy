@@ -74,7 +74,6 @@ const parent = {
 	userId: "alice",
 	projectId: randomUUID(),
 	parentSessionId: null,
-	candidateIndex: null,
 	harness: "api",
 	turnStatus: "completed",
 } as AgentSessionRecord;

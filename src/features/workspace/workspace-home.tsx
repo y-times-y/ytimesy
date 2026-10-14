@@ -86,11 +86,6 @@ import { authClient } from "../auth/client";
 import { requestJson, retryTransientRead } from "../projects/api";
 import { deleteOwnedProject } from "../projects/project.fn";
 import {
-	getAgentCompetitions,
-	startAgentCompetition,
-	stopAgentCompetition,
-} from "../sessions/agent-competition.fn";
-import {
 	deleteProjectAgentSession,
 	listProjectAgentSessions,
 	listProjectAgentTasks,
@@ -285,8 +280,6 @@ export function WorkspaceHome({
 	const pendingSendRef = useRef<PendingSend | null>(null);
 	/** The chat the user pressed Stop in; its idle view then unlocks the composer. */
 	const stopRequestedFor = useRef<string | null>(null);
-	/** The chat whose comparison is still underway; its judge turn is still to come. */
-	const followUpPendingFor = useRef<string | null>(null);
 	const abandonSendRef = useRef<
 		(pending: PendingSend, message: string | null) => void
 	>(() => undefined);
@@ -349,10 +342,6 @@ export function WorkspaceHome({
 							next.agentSessionId &&
 								stopRequestedFor.current === next.agentSessionId,
 						),
-						followUpPending: Boolean(
-							next.agentSessionId &&
-								followUpPendingFor.current === next.agentSessionId,
-						),
 					})
 				) {
 					return current;
@@ -376,9 +365,6 @@ export function WorkspaceHome({
 	const applySessionViewRef = useRef(applySessionView);
 	applySessionViewRef.current = applySessionView;
 	const sendTask = useServerFn(sendCodexSessionTask);
-	const startCompetition = useServerFn(startAgentCompetition);
-	const stopCompetition = useServerFn(stopAgentCompetition);
-	const loadCompetition = useServerFn(getAgentCompetitions);
 	const stopTurn = useServerFn(stopCodexSessionTurn);
 	const loadDesktop = useServerFn(getWorkspaceDesktop);
 	const startDesktop = useServerFn(startWorkspaceDesktopFn);
@@ -444,24 +430,6 @@ export function WorkspaceHome({
 				? 2_500
 				: false,
 	});
-	const competition = useQuery({
-		queryKey: ["agent-competition", activeSessionId],
-		queryFn: () =>
-			loadCompetition({ data: { rootSessionId: activeSessionId } }),
-		enabled: Boolean(activeSessionId),
-		refetchInterval: (query) =>
-			query.state.data?.some((group) =>
-				["queued", "working", "judging"].includes(group.status),
-			)
-				? 2_500
-				: false,
-	});
-	const activeCompetition = competition.data?.find((group) =>
-		["queued", "working", "judging"].includes(group.status),
-	);
-	followUpPendingFor.current = activeCompetition
-		? (activeSessionId ?? null)
-		: null;
 	useEffect(() => {
 		if (
 			activeSessionId &&
@@ -1479,11 +1447,6 @@ export function WorkspaceHome({
 								childTasks={agentTasks.data ?? []}
 								key={session.agentSessionId ?? "new"}
 								session={session}
-								competitions={competition.data ?? []}
-								allowComparison={Boolean(
-									activeSessionId &&
-										sidebarChats.some((chat) => chat.id === activeSessionId),
-								)}
 								busy={composerBusy}
 								listedTitle={composerDraft ? undefined : listedTitle}
 								harnessId={harnessId}
@@ -1539,59 +1502,6 @@ export function WorkspaceHome({
 									const chatId = startsNewChat ? undefined : activeSessionId;
 									const messageId =
 										options?.userMessageId ?? crypto.randomUUID();
-									if (options?.leaderCount) {
-										const leaderCount = options.leaderCount;
-										setBusyChatIds((ids) => withBusyChat(ids, chatId));
-										stopRequestedFor.current = null;
-										setSession((current) => ({
-											...current,
-											turnStatus: "running",
-											items: sessionItemsQueuedWithUser(
-												current.items,
-												text,
-												messageId,
-											),
-										}));
-										return (async () => {
-											try {
-												if (!scope.projectId || !scope.sessionId)
-													throw new Error(
-														"Wait for this chat to open before sending.",
-													);
-												await startCompetition({
-													data: {
-														projectId: scope.projectId,
-														rootSessionId: scope.sessionId,
-														text,
-														harnessId,
-														modelId,
-														leaderCount,
-														attemptModelIds: [
-															...(options.attemptModelIds ?? []),
-														],
-														userMessageId: messageId,
-													},
-												});
-												void competition.refetch();
-												void agentTasks.refetch();
-												return "sent" as const;
-											} catch (cause) {
-												toast.error(publicFailureMessage(cause));
-												if (epoch === sessionEpoch.current)
-													setSession((current) =>
-														sessionWithoutFailedSend(
-															current,
-															messageId,
-															previousTurnStatus,
-														),
-													);
-												return unsentResult(epoch, chatId);
-											} finally {
-												setBusyChatIds((ids) => withoutBusyChat(ids, chatId));
-												void chats.refetch();
-											}
-										})();
-									}
 									return new Promise<ComposerSendResult>((settle) => {
 										const pending: PendingSend = {
 											epoch,
@@ -1634,26 +1544,6 @@ export function WorkspaceHome({
 								onStop={() => {
 									const chatId = activeSessionId;
 									const epoch = sessionEpoch.current;
-									if (activeCompetition && chatId) {
-										setBusyChatIds((ids) => withBusyChat(ids, chatId));
-										void stopCompetition({ data: { rootSessionId: chatId } })
-											.then(() => {
-												void competition.refetch();
-												if (epoch === sessionEpoch.current)
-													setSession((current) => ({
-														...current,
-														turnStatus: "failed",
-													}));
-												void agentTasks.refetch();
-											})
-											.catch((cause) =>
-												toast.error(publicFailureMessage(cause)),
-											)
-											.finally(() =>
-												setBusyChatIds((ids) => withoutBusyChat(ids, chatId)),
-											);
-										return;
-									}
 									// The stopped turn ends idle; accept that view even if the
 									// live progress stream never reports the stop.
 									stopRequestedFor.current = chatId ?? null;
@@ -1670,10 +1560,6 @@ export function WorkspaceHome({
 								}}
 								onOpenInspector={openInspector}
 								onOpenFile={openMentionedFile}
-								onOpenCandidate={(id) => {
-									openChat(id);
-									openInspector("diff");
-								}}
 								projects={projects.data ?? []}
 								selectedProject={selectedProject}
 								onSelectProject={(id) => {
@@ -1727,7 +1613,6 @@ export function WorkspaceHome({
 							overview={
 								<WorkspaceOverview
 									tasks={agentTasks.data ?? []}
-									competitions={competition.data ?? []}
 									items={session.items}
 									changes={fileChanges}
 									repository={selectedProject?.fullName}

@@ -132,7 +132,7 @@ export async function loadCloudProjectKnowledge(
 	}>(
 		`select t.area,t.summary from project_trace t join project p on p.id=t.project_id
 		 join agent_session s on s.id=t.session_id
-		 where p.id=$1 and p.user_id=$2 and s.user_id=$2 and s.parent_session_id is null and s.candidate_index is null
+		 where p.id=$1 and p.user_id=$2 and s.user_id=$2 and s.parent_session_id is null
 		 order by t.created_at desc limit 24`,
 		[session.projectId, session.userId],
 	);
@@ -151,17 +151,13 @@ export async function loadCloudProjectKnowledge(
 	);
 }
 
-/** Completion reports are separate from curated entries; failed and competing/child turns never publish shared facts. */
+/** Completion reports are separate from curated entries; failed and child turns never publish shared facts. */
 export async function recordCloudProjectReport(
 	session: AgentSessionRecord,
 	turnId: string,
 	items: readonly SessionItem[],
 ): Promise<void> {
-	if (
-		session.parentSessionId ||
-		(session.candidateIndex !== null && session.candidateIndex !== undefined)
-	)
-		return;
+	if (session.parentSessionId) return;
 	const task = lastUserMessageText(items) ?? session.title;
 	const reply = lastAgentMessageText(items) ?? "";
 	const area = traceAreaFromTurn({ task, items });
@@ -228,12 +224,9 @@ async function changeCloudProjectMemory(
 		operation: "remember" | "consolidate";
 	},
 ) {
-	if (
-		session.parentSessionId ||
-		(session.candidateIndex !== null && session.candidateIndex !== undefined)
-	)
+	if (session.parentSessionId)
 		throw new Error(
-			"Report discoveries to the lead; only non-competing leads maintain shared project knowledge.",
+			"Report discoveries to the lead; only root chats maintain shared project knowledge.",
 		);
 	const client = await database().connect();
 	try {

@@ -91,7 +91,6 @@ try {
 		projectId,
 		title: "Memory proof",
 		parentSessionId: null,
-		candidateIndex: null,
 	} as AgentSessionRecord;
 	const entry = {
 		key: "branches",
