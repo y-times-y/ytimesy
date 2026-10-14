@@ -18,9 +18,7 @@ export async function prefetchInitialAgentReads(input: {
 }): Promise<ModelMessage[]> {
 	if (input.messages.length !== 1 || input.messages[0].role !== "user")
 		return input.messages;
-	if (typeof input.tools.read_repository_guidance?.execute !== "function")
-		return input.messages;
-	const requests: {
+	const candidates: {
 		name: ConstructorParameters<typeof InitialAgentReadFailure>[0];
 		arguments: Record<string, string>;
 	}[] = [
@@ -35,6 +33,12 @@ export async function prefetchInitialAgentReads(input: {
 			? ([{ name: "read_task_capacity", arguments: {} }] as const)
 			: []),
 	];
+	// Builders get repository instructions as messages, not this tool; their
+	// environment report is still prefetched.
+	const requests = candidates.filter(
+		(request) => typeof input.tools[request.name]?.execute === "function",
+	);
+	if (!requests.length) return input.messages;
 	const settled = await Promise.allSettled(
 		requests.map(async (request) => {
 			const execute = input.tools[request.name]?.execute;

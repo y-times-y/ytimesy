@@ -4,6 +4,10 @@ import { z } from "zod";
 import type { ApiAgentEvent } from "#/domain/api-agent-event";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 import { inspectProjectSourceEvidence } from "./project-source-evidence";
+import {
+	readRepositoryInstructions,
+	withRepositoryInstructions,
+} from "./repository-instructions";
 
 const source = z.object({
 	path: z.string(),
@@ -68,7 +72,14 @@ export function automaticRepositoryContext(input: {
 	workspace: () => Promise<AgentToolWorkspace>;
 	signal: AbortSignal;
 	onEvent: (event: ApiAgentEvent) => Promise<void>;
+	/**
+	 * The runtime supplies repository instructions as conversation messages (no
+	 * guidance tool): at turn start when absent or changed, and after compaction.
+	 * Without it, guidance arrives as read_repository_guidance receipts.
+	 */
+	instructionMessages?: { turnStart: boolean };
 }) {
+	let instructionsChecked = !input.instructionMessages?.turnStart;
 	let history: ModelMessage[] = [];
 	let pending: ModelMessage[] = [];
 	let guidanceWork = Promise.resolve();
@@ -141,7 +152,12 @@ export function automaticRepositoryContext(input: {
 
 	async function load(scope: string, force = false) {
 		const execute = input.tools.read_repository_guidance?.execute;
-		if (!execute || (!force && loadedScopes.has(scope))) return;
+		if (
+			input.instructionMessages ||
+			!execute ||
+			(!force && loadedScopes.has(scope))
+		)
+			return;
 		const id = `call_context_${randomUUID().replaceAll("-", "")}`;
 		const args = { scope };
 		const messages = [...history, ...pending];
@@ -267,6 +283,14 @@ export function automaticRepositoryContext(input: {
 					]
 				: [];
 			await load(".", true);
+			if (input.instructionMessages) {
+				input.signal.throwIfAborted();
+				messages = withRepositoryInstructions(
+					messages,
+					await readRepositoryInstructions(await input.workspace()),
+					"compaction",
+				);
+			}
 			return drain([...messages, ...ledger]);
 		},
 		prepare: async (messages: ModelMessage[]) => {
@@ -411,6 +435,15 @@ export function automaticRepositoryContext(input: {
 						},
 					);
 				}
+			}
+			if (!instructionsChecked) {
+				input.signal.throwIfAborted();
+				messages = withRepositoryInstructions(
+					messages,
+					await readRepositoryInstructions(await input.workspace()),
+					"turn-start",
+				);
+				instructionsChecked = true;
 			}
 			return drain(messages);
 		},

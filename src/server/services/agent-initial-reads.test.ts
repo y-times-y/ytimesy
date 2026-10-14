@@ -312,3 +312,24 @@ it("settles every initial read receipt when workspace preparation fails", async 
 	);
 	expect(results.some((event) => event.failed)).toBe(true);
 });
+
+it("prefetches a builder's environment report without a repository guidance tool", async () => {
+	const { read_repository_guidance: _, ...tools } = readTools().tools;
+	const environment = vi.fn().mockResolvedValue({ available: true });
+	const messages = await prefetchInitialAgentReads({
+		messages: fresh,
+		tools: {
+			...tools,
+			read_environment_report: tool({
+				inputSchema: z.object({}),
+				execute: environment,
+			}),
+		},
+		coordination: false,
+		signal: new AbortController().signal,
+		onEvent: async () => {},
+	});
+	expect(environment).toHaveBeenCalledOnce();
+	expect(JSON.stringify(messages)).not.toContain("read_repository_guidance");
+	expect(JSON.stringify(messages)).toContain("read_environment_report");
+});

@@ -646,6 +646,44 @@ it("immediately queues a completed child's parent event", async () => {
 	expect(mocks.enqueue).toHaveBeenCalledWith("event");
 });
 
+it("tells builders their repository instructions are supplied, with the same system prompt every turn", async () => {
+	mocks.owner.mockResolvedValue({
+		id: "session",
+		userId: "owner",
+		projectId: "project",
+		harness: "api",
+		parentSessionId: "parent",
+		taskAccess: "read_write",
+	});
+	const seen: string[] = [];
+	const capture = async (input: { instructions: string }) => {
+		seen.push(input.instructions);
+		return [];
+	};
+	// Writable builders' prompt hook needs a database this test does not have.
+	mocks.promptSubmit.mockResolvedValue({ block: false });
+	mocks.runtime.mockImplementation(capture);
+	mocks.subscriptionRuntime.mockImplementation(capture);
+	await runApiTurn({} as WorkspaceMachines, childTurn);
+	await runApiTurn({} as WorkspaceMachines, childTurn);
+	await runApiTurn(
+		{} as WorkspaceMachines,
+		{
+			...childTurn,
+			connection_id: null,
+			connection_revision: subscriptionTurnRevision("medium"),
+		} as ApiTurn,
+	);
+	expect(seen).toHaveLength(3);
+	expect(seen[1]).toBe(seen[0]);
+	for (const instructions of seen) {
+		expect(instructions).not.toContain("read_repository_guidance");
+		expect(instructions).toContain(
+			"Before working in a folder listed with its own AGENTS.md or CLAUDE.md, read that file with cat",
+		);
+	}
+});
+
 it("consumes streaming deltas without waiting for storage but drains before checkpoint and completion", async () => {
 	let release: () => void = () => {};
 	const pending = new Promise<void>((resolve) => {
