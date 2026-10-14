@@ -274,10 +274,6 @@ export async function codexSubscriptionModel(
 	return {
 		model,
 		contextWindow: selected.context_window,
-		// Keep the reusable prompt prefix until the catalog's compaction limit (or
-		// the existing safety budget) is reached. Editing earlier tool receipts
-		// saves visible tokens but invalidates cached input after that position.
-		archiveConsumedGuidance: false,
 		// Initial reads use a stable preflight prefix; complete current bodies and
 		// hashed read receipts prevent a second mandatory-guidance fetch.
 		prefetchInitialReads: true,

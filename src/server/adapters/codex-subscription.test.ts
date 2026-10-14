@@ -229,7 +229,6 @@ it("uses the account catalog and requested reasoning without advertising unsuppo
 	expect(runtime.contextWindow).toBe(272000);
 	expect(runtime).not.toHaveProperty("workingContextTokens");
 	expect(runtime).not.toHaveProperty("coordinationWorkingContextTokens");
-	expect(runtime.archiveConsumedGuidance).toBe(false);
 	expect(runtime.autoCompactTokenLimit).toBeUndefined();
 	expect(runtime.compact).toBeTypeOf("function");
 	expect(
