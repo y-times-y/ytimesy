@@ -455,15 +455,22 @@ export async function refreshWaitingApiTurns(
 	);
 }
 
-/** Stop on a turn still waiting in its chat's queue: it never ran, so it settles here. */
+/**
+ * Stop on a turn still waiting in its chat's queue: it never ran, so it settles
+ * here. The chat reads idle only once no other turn of it is still running:
+ * the active turn Stop also cancelled reports its own end when it finishes.
+ */
 export async function cancelWaitingApiTurn(turnId: string, leaseId: string) {
 	const result = await database().query<SettledTurnRow>(
 		`with saved as (update api_turn set state='cancelled',updated_at=now()
 		 where id=$1 and lease_id=$2 and state='running' and cancel_requested and executor='durable-object'
-		 returning id,session_id,state,created_at)
-		 update agent_session s set turn_status='idle',
-		 task_state=case when parent_session_id is null then task_state else 'idle' end,
-		 updated_at=now() from saved where s.id=saved.session_id returning ${SETTLED_TURN_COLUMNS}`,
+		 returning id,session_id,state,created_at),
+		 busy as (select exists (select 1 from api_turn o join saved on o.session_id=saved.session_id
+		  where o.id<>saved.id and o.state in ('queued','running')) as running)
+		 update agent_session s set
+		 turn_status=case when busy.running then s.turn_status else 'idle' end,
+		 task_state=case when parent_session_id is null or busy.running then task_state else 'idle' end,
+		 updated_at=now() from saved, busy where s.id=saved.session_id returning ${SETTLED_TURN_COLUMNS}`,
 		[turnId, leaseId],
 	);
 	captureSettledTurns(result.rows);
