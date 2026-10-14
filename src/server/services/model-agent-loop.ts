@@ -92,6 +92,16 @@ export type ModelAgentInput = {
 	archiveHistory?: (messages: ModelMessage[]) => Promise<string>;
 	restoreInstructions?: (messages: ModelMessage[]) => Promise<ModelMessage[]>;
 	afterTools?: (messages: ModelMessage[]) => Promise<ModelMessage[]>;
+	/**
+	 * Called once when the run gives up, before it throws: the last cleanly
+	 * finished history, whether a failed step's partial output was saved after
+	 * it, and the ids of that partial output (never retracted by a retry).
+	 */
+	onAttemptFailed?: (state: {
+		readonly committed: ModelMessage[];
+		readonly droppedStepSaved: boolean;
+		readonly uncommittedIds: readonly string[];
+	}) => void;
 };
 
 /** Shared streaming/tool loop; credential transports stay in their provider adapters. */
@@ -142,6 +152,7 @@ async function executeWithStreamRetries(
 	// resampling the same step must not reserve it again.
 	let reservedFor: ModelMessage[] | undefined;
 	let droppedStep = false;
+	let droppedStepSaved = false;
 	const tracked: ModelAgentInput = {
 		...input,
 		onEvent: async (event) => {
@@ -162,10 +173,12 @@ async function executeWithStreamRetries(
 			// history before it rather than continuing after its partial output.
 			if (droppedStep) {
 				droppedStep = false;
+				droppedStepSaved = true;
 				await input.onStep(messages);
 				return;
 			}
 			committed = messages;
+			droppedStepSaved = false;
 			toolCallStarted = false;
 			for (const id of uncommittedIds) committedIds.add(id);
 			uncommittedIds = new Set();
@@ -201,8 +214,16 @@ async function executeWithStreamRetries(
 				(singleStep && stepFinished) ||
 				input.signal.aborted ||
 				!interruptedStream(error)
-			)
+			) {
+				input.onAttemptFailed?.({
+					committed,
+					droppedStepSaved,
+					uncommittedIds: [...uncommittedIds].filter(
+						(id) => !committedIds.has(id),
+					),
+				});
 				throw error;
+			}
 			toolCallStarted = false;
 			// An id an earlier, saved step also used is not the dropped response's own.
 			const retracted = [...uncommittedIds].filter(
