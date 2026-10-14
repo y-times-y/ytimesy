@@ -31,6 +31,7 @@ import {
 	descendantAgentSessions,
 	insertAgentSession,
 	listAgentSessions,
+	reusableEmptyChat,
 	saveAgentSessionProviderRef,
 	saveAgentTaskDraft,
 	selectAgentSessionHarness,
@@ -154,6 +155,14 @@ export async function openAgentSession(input: {
 	readonly parentSessionId?: string;
 	readonly title?: string;
 }) {
+	if (!input.parentSessionId && !input.title) {
+		const empty = await reusableEmptyChat(
+			input.userId,
+			input.projectId,
+			input.harness,
+		);
+		if (empty) return empty;
+	}
 	const { session } = await resolveAgentSessionRecord({
 		...input,
 		createNew: true,

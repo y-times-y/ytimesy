@@ -15,7 +15,9 @@ import {
 	sendWasQueued,
 	sessionItemsFromUnknown,
 	sessionItemsQueuedWithUser,
+	sessionTitleFromItems,
 } from "#/domain/session-item";
+import { titleUntitledAgentSession } from "#/server/adapters/agent-sessions";
 import { agentSessionForOwner } from "../adapters/agent-sessions";
 import { isServerControlledIntegration } from "../adapters/agent-task-command-receipts";
 import {
@@ -205,6 +207,12 @@ export async function sendApiWorkspaceTask(
 		idempotencyKey: input.idempotencyKey,
 		settings,
 	});
+	// The sidebar shows the stored title; name the chat after its first message.
+	await titleUntitledAgentSession(
+		scope.userId,
+		session.id,
+		sessionTitleFromItems(items),
+	).catch(() => undefined);
 	return readApiWorkspaceSession(scope);
 }
 

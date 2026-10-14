@@ -32,6 +32,44 @@ export async function selectAgentSessionHarness(
 	return toSession(result.rows[0]);
 }
 
+/**
+ * The newest root chat in a project that was opened but never used, so
+ * "New chat" reopens it instead of leaving empty chats in the sidebar.
+ */
+export async function reusableEmptyChat(
+	userId: string,
+	projectId: string,
+	harness: AgentProviderId,
+): Promise<AgentSessionRecord | null> {
+	const result = await database().query(
+		`update agent_session set harness=$3,updated_at=now()
+		 where id=(
+			select s.id from agent_session s
+			where s.user_id=$1 and s.project_id=$2 and s.parent_session_id is null
+				and s.title='New session' and s.turn_status <> 'running'
+				and coalesce(jsonb_array_length(s.items),0)=0
+				and not exists (select 1 from api_turn t where t.session_id=s.id)
+			order by s.updated_at desc limit 1
+		 )
+		 returning ${SESSION_COLUMNS}`,
+		[userId, projectId, harness],
+	);
+	return result.rows[0] ? toSession(result.rows[0]) : null;
+}
+
+/** Names an untitled chat after its first message; a chosen title is kept. */
+export async function titleUntitledAgentSession(
+	userId: string,
+	sessionId: string,
+	title: string,
+) {
+	if (!title || title === "New session") return;
+	await database().query(
+		"update agent_session set title=$3 where user_id=$1 and id=$2 and title='New session'",
+		[userId, sessionId, title],
+	);
+}
+
 export type AgentSessionRecord = {
 	id: string;
 	userId: string;
