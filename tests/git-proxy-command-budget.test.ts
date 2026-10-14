@@ -34,6 +34,10 @@ it("keeps structured local inspections short while giving network Git work its f
 			command.includes("fetch --no-tags"),
 		)?.[1],
 	).toBe(120_000);
+	// Checking out a large fetched tree gets the same budget as the fetch.
+	expect(
+		host.exec.mock.calls.find(([command]) => command.includes("checkout"))?.[1],
+	).toBe(120_000);
 	expect(host.exec.mock.calls.at(-1)?.[1]).toBe(10_000);
 });
 
