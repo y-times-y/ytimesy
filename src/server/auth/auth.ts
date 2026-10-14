@@ -1,7 +1,10 @@
 import { betterAuth } from "better-auth";
 import { captureServerAnalytics } from "../adapters/analytics";
 import { database } from "../adapters/database";
-import { persistAuthEmail } from "../adapters/email";
+import {
+	authEmailDeliveryConfigured,
+	persistAuthEmail,
+} from "../adapters/email";
 import { serverConfig } from "../config";
 import {
 	loadLocalQaUser,
@@ -18,6 +21,9 @@ function authOptions() {
 		trustedOrigins: authTrustedOrigins(config.APP_URL),
 		emailAndPassword: {
 			enabled: true,
+			// Accounts that must verify an email cannot be created while no
+			// email can be sent; existing accounts keep signing in.
+			disableSignUp: !authEmailDeliveryConfigured(),
 			requireEmailVerification: true,
 			minPasswordLength: 8,
 			autoSignIn: false,
