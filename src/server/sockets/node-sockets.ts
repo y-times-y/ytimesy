@@ -1,5 +1,6 @@
 import { WebSocket } from "ws";
 import type { ClientSocket } from "./client-socket";
+import { webSocketCloseReason } from "./close-reason";
 
 /** Adapts a `ws` socket (local Node dev server) to the shared session code. */
 export function nodeClientSocket(socket: WebSocket): ClientSocket {
@@ -8,7 +9,7 @@ export function nodeClientSocket(socket: WebSocket): ClientSocket {
 			return socket.readyState === WebSocket.OPEN;
 		},
 		send: (data) => socket.send(data),
-		close: (code, reason) => socket.close(code, reason),
+		close: (code, reason) => socket.close(code, webSocketCloseReason(reason)),
 		onMessage: (listener) =>
 			socket.on("message", (raw, binary) =>
 				listener(binary ? toBytes(raw) : raw.toString(), binary),

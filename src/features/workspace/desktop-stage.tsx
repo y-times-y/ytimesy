@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { desktopClientViewerUrl } from "#/domain/workspace-desktop";
 
 export function DesktopStage({
@@ -9,28 +9,52 @@ export function DesktopStage({
 	sessionId: string;
 }) {
 	const host = useRef<HTMLDivElement>(null);
+	const [disconnected, setDisconnected] = useState<string | null>(null);
+	const [generation, setGeneration] = useState(0);
 
 	useEffect(() => {
 		const target = host.current;
-		if (!target) return;
+		// The generation dependency reconnects with a fresh RFB client.
+		if (!target || generation < 0) return;
 		let disposed = false;
 		let rfb: { disconnect(): void } | null = null;
+		setDisconnected(null);
 
-		void import("@novnc/novnc").then(({ default: RFB }) => {
-			if (disposed) return;
-			const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-			const path = desktopClientViewerUrl({ projectId, sessionId });
-			const client = new RFB(
-				target,
-				`${protocol}://${window.location.host}${path}`,
-			);
-			client.scaleViewport = true;
-			client.clipViewport = true;
-			client.resizeSession = false;
-			client.showDotCursor = true;
-			client.background = "#111111";
-			rfb = client;
-		});
+		void import("@novnc/novnc")
+			.then(({ default: RFB }) => {
+				if (disposed) return;
+				const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+				const path = desktopClientViewerUrl({ projectId, sessionId });
+				const client = new RFB(
+					target,
+					`${protocol}://${window.location.host}${path}`,
+				);
+				client.scaleViewport = true;
+				client.clipViewport = true;
+				client.resizeSession = false;
+				client.showDotCursor = true;
+				client.background = "#111111";
+				// noVNC removes its canvas on disconnect; without this the panel goes black.
+				client.addEventListener("disconnect", (event) => {
+					if (disposed) return;
+					rfb = null;
+					setDisconnected(
+						(event as CustomEvent<{ clean?: boolean }>).detail?.clean
+							? "The desktop connection closed."
+							: "The desktop connection was lost.",
+					);
+				});
+				client.addEventListener("securityfailure", (event) => {
+					if (disposed) return;
+					const reason = (event as CustomEvent<{ reason?: string }>).detail
+						?.reason;
+					setDisconnected(reason || "The desktop refused the connection.");
+				});
+				rfb = client;
+			})
+			.catch(() => {
+				if (!disposed) setDisconnected("The desktop viewer failed to load.");
+			});
 
 		return () => {
 			disposed = true;
@@ -40,7 +64,32 @@ export function DesktopStage({
 				target.replaceChildren();
 			}
 		};
-	}, [projectId, sessionId]);
+	}, [projectId, sessionId, generation]);
 
-	return <div className="desktop-stage-rfb" ref={host} />;
+	return (
+		<>
+			{disconnected ? (
+				<div
+					className="inspector-empty desktop-inspector-empty"
+					data-kind="desktop"
+					role="alert"
+				>
+					<h2>Desktop disconnected</h2>
+					<p>{disconnected}</p>
+					<button
+						type="button"
+						className="desktop-start"
+						onClick={() => setGeneration((value) => value + 1)}
+					>
+						Reconnect
+					</button>
+				</div>
+			) : null}
+			<div
+				className="desktop-stage-rfb"
+				hidden={Boolean(disconnected)}
+				ref={host}
+			/>
+		</>
+	);
 }
