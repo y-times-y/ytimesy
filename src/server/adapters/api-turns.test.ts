@@ -9,11 +9,17 @@ import {
 	renewApiTurn,
 } from "./api-turns";
 
-const mocks = vi.hoisted(() => ({ query: vi.fn(), release: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+	query: vi.fn(),
+	release: vi.fn(),
+	capture: vi.fn(),
+}));
+vi.mock("./analytics", () => ({ captureServerAnalytics: mocks.capture }));
 vi.mock("./database", () => ({
 	database: () => ({ connect: async () => mocks, query: mocks.query }),
 }));
 beforeEach(() => {
+	mocks.capture.mockReset();
 	mocks.query.mockReset();
 	mocks.release.mockReset();
 });
@@ -147,6 +153,14 @@ it("checks owner subscription and queues Codex without an API connection", async
 		["chat", "owner", "model", "[]", "codex"],
 	);
 	expect(mocks.release).toHaveBeenCalled();
+	expect(mocks.capture).toHaveBeenCalledWith(
+		"owner",
+		"turn_started",
+		{ runtime: "codex", role: "lead" },
+		expect.objectContaining({
+			key: expect.stringMatching(/^turn:.+:started$/),
+		}),
+	);
 });
 
 it("never turns a removed API connection into subscription billing", async () => {
