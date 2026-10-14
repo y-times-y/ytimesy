@@ -52,9 +52,6 @@ import {
 } from "./api-agent-context";
 import { BackgroundHistoryCompaction } from "./background-history-compaction";
 import { composedAgentTools } from "./composed-agent-tools";
-import { archiveConsumedGuidance } from "./consumed-guidance";
-import { archiveEarlierToolOutput } from "./retired-tool-output";
-import { archiveSupersededReads } from "./superseded-reads";
 
 export type { ApiAgentEvent } from "#/domain/api-agent-event";
 
@@ -316,8 +313,8 @@ export type ModelAgentRuntime = {
 	workingContextTokens?: number;
 	/** Coordination may need enough room to dispatch before compacting large guidance. */
 	coordinationWorkingContextTokens?: number;
-	/** Recoverable retirement after a completed implementation/delegation decision; independent of hard-window pressure. */
-	archiveConsumedGuidance?: boolean;
+	/** Retired and ignored; frozen benchmark runtimes still pass false. */
+	archiveConsumedGuidance?: false;
 	prefetchInitialReads?: boolean;
 	backgroundCompaction?: boolean;
 	fallbackContextPolicy?: FallbackContextPolicy;
@@ -551,28 +548,6 @@ async function executeModelSteps(
 					}
 				}
 				history = (await input.prepareMessages?.(history)) ?? history;
-				if (
-					runtime.archiveConsumedGuidance &&
-					runtime.fallbackContextPolicy !== "bound-prefix"
-				) {
-					const guidance = await archiveConsumedGuidance(
-						history,
-						input.archiveHistory,
-					);
-					const reads = await archiveSupersededReads(
-						guidance,
-						input.archiveHistory,
-					);
-					const projected = await archiveEarlierToolOutput(
-						reads,
-						input.archiveHistory,
-					);
-					if (projected !== history) {
-						history = projected;
-						measured = undefined;
-						await input.onStep(history);
-					}
-				}
 				const estimatedHistory = estimateContextTokens(history);
 				const budget = contextBudget(history);
 				const contextTokens = contextTokenPressure(history, measured);
