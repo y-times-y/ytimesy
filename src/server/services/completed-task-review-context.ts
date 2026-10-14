@@ -28,7 +28,6 @@ const handoffSchema = z.object({
 		})
 		.nullable(),
 	verificationReferences: z.array(z.string()),
-	verificationAssignment: z.unknown(),
 	remainingReferences: z.array(z.string()),
 	failedAttemptReferences: z.array(z.string()),
 	failedAttemptsOmitted: z.number(),

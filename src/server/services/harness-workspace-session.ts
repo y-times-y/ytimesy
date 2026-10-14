@@ -28,7 +28,6 @@ import {
 	taskCheckJournalIds,
 	taskHandoffReferences,
 } from "#/domain/task-handoff";
-import { requireAssignedTaskChecks } from "#/domain/task-verification-assignment";
 import {
 	type AgentSessionRecord,
 	agentSessionForOwner,
@@ -41,11 +40,7 @@ import {
 	saveAgentTaskState,
 	selectAgentSessionHarness,
 } from "#/server/adapters/agent-sessions";
-import {
-	assignedTaskVerification,
-	isServerControlledIntegration,
-	retainedTaskCheckResults,
-} from "#/server/adapters/agent-task-command-receipts";
+import { retainedTaskCheckResults } from "#/server/adapters/agent-task-command-receipts";
 import { saveAgentTaskBlockedEvent } from "#/server/adapters/agent-task-events";
 import { hasActiveApiTurn } from "#/server/adapters/api-turns";
 import { PROJECT_CWD_PATH } from "#/server/adapters/freestyle/clone-project";
@@ -231,15 +226,6 @@ export function sendHarnessWorkspaceTask(
 			const previous = yield* Effect.tryPromise(() =>
 				agentSessionForOwner(scope.userId, scope.sessionId as string),
 			);
-			if (
-				previous &&
-				(yield* Effect.tryPromise(() =>
-					isServerControlledIntegration(previous),
-				))
-			)
-				throw new Error(
-					"Batch integration is server-controlled until a visible integration failure requires repair.",
-				);
 			const switching = previous && previous.harness !== scope.harnessId;
 			if (switching && previous.turnStatus === "running")
 				throw new Error("Stop the active turn before switching runtimes.");
@@ -348,116 +334,6 @@ export function runAgentTaskTool(
 		}
 		if (parent.userId !== scope.userId || parent.projectId !== scope.projectId)
 			throw new Error("The agent is not available in this project.");
-		if (request.tool === "schedule_task_plan") {
-			const { scheduleDurableWork } = yield* Effect.tryPromise(
-				() => import("./durable-work-plan"),
-			);
-			return yield* Effect.tryPromise(() =>
-				scheduleDurableWork(parent, request.id, request.arguments),
-			);
-		}
-		if (
-			request.tool === "read_task_plan" ||
-			request.tool === "control_task_plan"
-		) {
-			const { readWorkPlan, setWorkPlanStatus } = yield* Effect.tryPromise(
-				() => import("../adapters/work-plans"),
-			);
-			const id = z
-				.string()
-				.regex(/^[a-f0-9]{64}$/)
-				.parse(request.arguments.planId);
-			if (request.tool === "read_task_plan")
-				return yield* Effect.tryPromise(() =>
-					readWorkPlan(parent.userId, parent.id, id),
-				);
-			const action = z
-				.enum(["pause", "resume", "cancel"])
-				.parse(request.arguments.action);
-			return yield* Effect.tryPromise(() =>
-				setWorkPlanStatus(parent.userId, parent.id, id, action),
-			);
-		}
-		if (request.tool === "integrate_reviewed_tasks") {
-			if (!control)
-				throw new Error(
-					"Automated integration requires the cancellable cloud harness; use an integration builder with this runtime.",
-				);
-			const { integrateTaskDraft } = yield* Effect.tryPromise(
-				() => import("./automated-task-integration"),
-			);
-			const { assertPatchIdentity } = yield* Effect.tryPromise(
-				() => import("#/domain/task-patch-evidence"),
-			);
-			const raw = request.arguments.sources;
-			if (!Array.isArray(raw))
-				throw new Error("Reviewed sources are required.");
-			const sources = raw.map((source) => {
-				if (
-					!source ||
-					typeof source !== "object" ||
-					typeof source.taskId !== "string" ||
-					typeof source.sha256 !== "string" ||
-					typeof source.base !== "string"
-				)
-					throw new Error("Invalid reviewed patch identity.");
-				const identity = {
-					taskId: source.taskId,
-					sha256: source.sha256,
-					base: source.base,
-				};
-				assertPatchIdentity(identity);
-				return identity;
-			});
-			const assignments = yield* Effect.tryPromise(() =>
-				Promise.all(
-					sources.map((source) =>
-						assignedTaskVerification(
-							scope.userId,
-							scope.projectId as string,
-							source.taskId,
-						),
-					),
-				),
-			);
-			const declaredAdditional = z
-				.array(z.string().min(1).max(16000))
-				.max(8)
-				.parse(request.arguments.additionalChecks ?? []);
-			const additionalChecks = [
-				...new Set([
-					...declaredAdditional,
-					...assignments.flatMap((assignment) => assignment?.finalChecks ?? []),
-				]),
-			];
-			const assignedPaths = assignments.flatMap(
-				(assignment) => assignment?.sourcePaths ?? [],
-			);
-			const sourcePaths = assignedPaths.length
-				? [
-						...new Set([
-							...assignedPaths,
-							...z
-								.array(z.string().min(1))
-								.max(8)
-								.parse(request.arguments.sourcePaths ?? []),
-						]),
-					]
-				: (request.arguments.sourcePaths as string[] | undefined);
-			return yield* Effect.tryPromise(() =>
-				integrateTaskDraft(
-					machines,
-					parent,
-					taskToolString(request.arguments, "taskId"),
-					sources,
-					control,
-					{
-						sourcePaths,
-						additionalChecks,
-					},
-				),
-			);
-		}
 		if (request.tool === "read_task_capacity")
 			return yield* Effect.tryPromise(() => agentCapacity(scope.userId));
 		if (request.tool === "list_peers") {
@@ -602,20 +478,6 @@ export function runAgentTaskTool(
 		const taskId = taskToolString(request.arguments, "taskId");
 		const target = taskRows.find((row) => row.id === taskId);
 		if (!target) throw new Error("That descendant task is not available.");
-		if (
-			[
-				"start_task",
-				"send_task_message",
-				"request_task_wrap_up",
-				"edit_task",
-			].includes(request.tool) &&
-			target.taskState !== "failed"
-		) {
-			if (yield* Effect.tryPromise(() => isServerControlledIntegration(target)))
-				throw new Error(
-					"This batch integration task is server-controlled. Do not start, steer or message a model there. mark_task_reviewed stages accepted siblings; integrate_reviewed_tasks runs final checks after every source is reviewed. Agent repair is allowed only after a visible integration failure.",
-				);
-		}
 		if (request.tool === "read_task_handoff") {
 			if (
 				target.userId !== scope.userId ||
@@ -648,13 +510,6 @@ export function runAgentTaskTool(
 					? discovered.references.slice(0, 8)
 					: z.array(z.uuid()).min(1).max(8).parse(request.arguments.references);
 			const taskMachines = machinesForAgentSession(machines, target);
-			const assignment = yield* Effect.tryPromise(() =>
-				assignedTaskVerification(
-					scope.userId,
-					scope.projectId as string,
-					target.id,
-				),
-			);
 			const signal = control?.signal ?? AbortSignal.timeout(20000);
 			yield* Effect.tryPromise(() =>
 				taskMachines.ensureRunning(WorkspaceId(target.providerRef as string)),
@@ -704,7 +559,6 @@ export function runAgentTaskTool(
 				),
 				checks,
 				verificationReferences: references,
-				verificationAssignment: assignment,
 				remainingReferences: discovered.references.filter(
 					(reference) => !references.includes(reference),
 				),
@@ -867,17 +721,6 @@ export function runAgentTaskTool(
 			}
 			if (!target.providerRef || !target.parentSessionId)
 				throw new Error("Writable review workspace is unavailable.");
-			const assignment = yield* Effect.tryPromise(() =>
-				assignedTaskVerification(
-					scope.userId,
-					scope.projectId as string,
-					target.id,
-				),
-			);
-			if (assignment && request.arguments.verificationReferences === undefined)
-				throw new Error(
-					"Assigned verification requires current complete check receipts before acceptance.",
-				);
 			if (request.arguments.verificationReferences !== undefined) {
 				const references = z
 					.array(z.uuid())
@@ -907,19 +750,6 @@ export function runAgentTaskTool(
 						sourcesCurrent: proof?.sourcesCurrent,
 					});
 				}
-				if (assignment)
-					requireAssignedTaskChecks(
-						assignment,
-						bundle.checks.map((check) => ({
-							command: check.command,
-							sourcePaths:
-								check.sourceProof === null
-									? []
-									: bundle.sourceProofs[check.sourceProof].after.sources.map(
-											(source) => source.path,
-										),
-						})),
-					);
 			}
 			const expectedSha256 = taskToolString(
 				request.arguments,
@@ -946,33 +776,11 @@ export function runAgentTaskTool(
 					base: patch.base,
 				}),
 			);
-			const staging =
-				control && !parent.parentSessionId
-					? yield* Effect.tryPromise(async () => {
-							const { stageReviewedBatchTask } = await import(
-								"./automated-task-integration"
-							);
-							return stageReviewedBatchTask(
-								machines,
-								parent,
-								{ taskId: target.id, sha256: patch.sha256, base: patch.base },
-								control,
-							).catch(() => {
-								control.signal.throwIfAborted();
-								return {
-									status: "unavailable",
-									instruction:
-										"Acceptance is saved. Inspect the batch integration task before continuing; automatic staging was unavailable and no acceptance was replayed.",
-								};
-							});
-						})
-					: null;
 			return {
 				taskId: target.id,
 				reviewState: "reviewed",
 				sha256: patch.sha256,
 				base: patch.base,
-				...(staging ? { integration: staging } : {}),
 			};
 		}
 		if (request.tool === "publish_task") {

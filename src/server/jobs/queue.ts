@@ -16,7 +16,6 @@ export const AGENT_TASK_EVENT_QUEUE = "agent-task-event";
 export const AGENT_PEER_MESSAGE_QUEUE = "agent-peer-message";
 export const SESSION_CHECKPOINT_QUEUE = "session-checkpoint";
 export const PR_REPAIR_QUEUE = "pr-repair";
-export const WORK_PLAN_QUEUE = "durable-work-plan";
 
 export interface WorkspaceJobQueue {
 	enqueuePrepare(
@@ -116,12 +115,6 @@ async function startJobQueue(role: QueueRole): Promise<PgBoss> {
 			retryDelay: 15,
 			expireInSeconds: 180,
 		});
-		await boss.createQueue(WORK_PLAN_QUEUE, {
-			policy: "singleton",
-			retryLimit: 2,
-			retryDelay: 15,
-			expireInSeconds: 30 * 60,
-		});
 		return boss;
 	} catch (error) {
 		await boss.stop({ graceful: false, timeout: 1000 }).catch(() => undefined);
@@ -154,16 +147,6 @@ export async function enqueuePrRepair() {
 		PR_REPAIR_QUEUE,
 		{},
 		{ singletonKey: "repair-sweep" },
-	);
-}
-
-export async function enqueueWorkPlan() {
-	const id = randomUUID();
-	if (await dispatchBackgroundJob({ id, kind: "work-plan" })) return id;
-	return (await jobQueue()).send(
-		WORK_PLAN_QUEUE,
-		{},
-		{ singletonKey: "plan-sweep" },
 	);
 }
 

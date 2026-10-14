@@ -23,7 +23,6 @@ import {
 	titleUntitledAgentSession,
 } from "#/server/adapters/agent-sessions";
 import { agentSessionForOwner } from "../adapters/agent-sessions";
-import { isServerControlledIntegration } from "../adapters/agent-task-command-receipts";
 import {
 	enqueueApiTurn,
 	inheritedApiTurnSettings,
@@ -140,10 +139,6 @@ export async function sendApiWorkspaceTask(
 	);
 	if (!session || session.projectId !== scope.projectId)
 		throw new Error("Session is not available.");
-	if (await isServerControlledIntegration(session))
-		throw new Error(
-			"Batch integration is server-controlled until a visible integration failure requires repair.",
-		);
 	const selected = parseModelRouteId(input.modelId);
 	if (!selected) throw new Error("Select an API connection and model.");
 	const connection = await loadModelConnection(

@@ -15,14 +15,10 @@ const fake = vi.hoisted(() => ({
 	stage: vi.fn(),
 	accepted: vi.fn(async () => false),
 	removePending: vi.fn(),
-	reserved: vi.fn(async () => false),
 	activeTurn: vi.fn(async () => false),
 }));
 vi.mock("../adapters/api-turns", () => ({
 	hasActiveApiTurn: fake.activeTurn,
-}));
-vi.mock("../adapters/agent-task-command-receipts", () => ({
-	isServerControlledIntegration: fake.reserved,
 }));
 vi.mock("../adapters/server-peer-inbox", () => ({
 	stageServerPeerMessage: fake.stage,
@@ -99,7 +95,6 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	fake.sessions.clear();
 	fake.accepted.mockResolvedValue(false);
-	fake.reserved.mockResolvedValue(false);
 	fake.activeTurn.mockResolvedValue(false);
 	session("root", null);
 	session("a", "root");
@@ -114,16 +109,6 @@ beforeEach(() => {
 });
 
 describe("peer coordination boundaries", () => {
-	it("rejects messages to a server integration draft before enqueue and drops previously queued messages before delivery", async () => {
-		fake.reserved.mockResolvedValue(true);
-		await expect(
-			queueAgentPeerMessage(requiredSession("a"), "b", "Guidance", "call"),
-		).rejects.toThrow("server-controlled");
-		expect(fake.enqueue).not.toHaveBeenCalled();
-		await deliverAgentPeerMessage(machines, message, "message");
-		expect(fake.stage).not.toHaveBeenCalled();
-		expect(fake.send).not.toHaveBeenCalled();
-	});
 	it("discovers siblings, parent, and nested peers but not unrelated roots", async () => {
 		session("nested", "b");
 		session("other", null);

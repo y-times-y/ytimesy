@@ -8,7 +8,7 @@ import {
 
 const job = {
 	id: "00000000-0000-4000-8000-000000000001",
-	kind: "work-plan" as const,
+	kind: "pr-repair" as const,
 };
 afterEach(() => {
 	vi.unstubAllEnvs();

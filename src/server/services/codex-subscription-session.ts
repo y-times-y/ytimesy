@@ -25,7 +25,6 @@ import {
 	titleUntitledAgentSession,
 } from "#/server/adapters/agent-sessions";
 import { agentSessionForOwner } from "../adapters/agent-sessions";
-import { isServerControlledIntegration } from "../adapters/agent-task-command-receipts";
 import {
 	enqueueApiTurn,
 	inheritedSubscriptionSettings,
@@ -210,10 +209,6 @@ export async function sendSubscriptionTask(
 	);
 	if (!task || task.projectId !== scope.projectId)
 		throw new Error("Session is not available.");
-	if (await isServerControlledIntegration(task))
-		throw new Error(
-			"Batch integration is server-controlled until a visible integration failure requires repair.",
-		);
 	const continuing = Boolean(input.continueOn);
 	const view = await readSubscriptionSession(scope, continuing);
 	// Continuing on a fallback during an outage: the fallback route is checked below.

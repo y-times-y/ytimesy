@@ -54,6 +54,5 @@ export const backgroundJob = z.discriminatedUnion("kind", [
 		})
 		.strict(),
 	z.object({ ...identity, kind: z.literal("pr-repair") }).strict(),
-	z.object({ ...identity, kind: z.literal("work-plan") }).strict(),
 ]);
 export type BackgroundJob = z.infer<typeof backgroundJob>;

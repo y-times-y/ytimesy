@@ -8,9 +8,6 @@ import { coordinateConversationTurn } from "../adapters/conversation-turn-contro
 import type { WorkspaceMachines } from "../services/workspace-machines";
 import { runApiTurn } from "./api-turn";
 
-// These cases cover the lead path; builder-direct (the default) has its own tests.
-process.env.YTIMESY_ROOT_AGENT_MODE = "lead";
-
 const mocks = vi.hoisted(() => ({
 	renew: vi.fn(),
 	finalize: vi.fn(),
@@ -204,6 +201,13 @@ vi.mock("../adapters/server-peer-inbox", () => ({
 	injectServerPeerMessages: vi.fn(),
 }));
 vi.mock("../adapters/api-usage-budget", () => ({ reserveApiTokens: vi.fn() }));
+// Root chats are builders: each turn records a code point before it edits.
+vi.mock("../services/conversation-recovery", () => ({
+	ensureConversationCodePoint: vi.fn(async () => {}),
+}));
+vi.mock("../adapters/turn-verification", () => ({
+	readVerificationBaseline: vi.fn(async () => null),
+}));
 vi.mock("../auth/codex-managed-auth", () => ({
 	hasManagedCodexAuth: mocks.auth,
 }));
@@ -222,6 +226,10 @@ vi.mock("../services/api-agent-tools", () => ({
 				([, value]) => value !== undefined,
 			),
 		),
+}));
+// The mocked tool set carries probe fields; the shell filter has its own tests.
+vi.mock("../services/builder-shell-surface", () => ({
+	builderShellTools: (tools: unknown) => tools,
 }));
 vi.mock("../services/api-command-scope", () => ({
 	stopApiTurnCommands: mocks.stop,
@@ -859,7 +867,8 @@ it.each([false, true])(
 			fails ? "failed" : "completed",
 		);
 		expect(order).toEqual(["model", "commit", fails ? "failed" : "completed"]);
-		expect(mocks.commit.mock.calls[0][0].providerRef).toBe("executor");
+		// The builder commits from the workspace its turn prepared.
+		expect(mocks.commit.mock.calls[0][0].providerRef).toBe("vm");
 		if (fails)
 			expect(mocks.finalize.mock.calls[0][2]).toEqual(
 				expect.arrayContaining([
@@ -901,14 +910,14 @@ it("finishes a bounded step limit without starting inference or publishing a fak
 });
 
 it.each([false, true])(
-	"keeps the 30-step leader bound and admits builder step 31 (builder: %s)",
-	async (builder) => {
+	"admits builder step 31 for root chats and writable children (child: %s)",
+	async (child) => {
 		mocks.owner.mockResolvedValue({
 			id: "session",
 			userId: "owner",
 			projectId: "project",
 			harness: "api",
-			...(builder
+			...(child
 				? {
 						parentSessionId: "parent",
 						taskAccess: "read_write",
@@ -922,9 +931,8 @@ it.each([false, true])(
 				index: 31,
 				signal: new AbortController().signal,
 			}),
-		).toBe(builder ? "continue" : "failed");
-		if (builder) expect(mocks.stepRuntime).toHaveBeenCalledOnce();
-		else expect(mocks.stepRuntime).not.toHaveBeenCalled();
+		).toBe("continue");
+		expect(mocks.stepRuntime).toHaveBeenCalledOnce();
 		expect(mocks.commit).not.toHaveBeenCalled();
 	},
 );

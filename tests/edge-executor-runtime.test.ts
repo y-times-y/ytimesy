@@ -40,7 +40,7 @@ it("rejects unsigned background jobs before admitting any job", async () => {
 it("rejects malformed signed jobs and disabled environment launches", async () => {
 	const url = "http://localhost/jobs/start";
 	for (const [body, status] of [
-		[JSON.stringify({ id: "bad", kind: "work-plan" }), 400],
+		[JSON.stringify({ id: "bad", kind: "pr-repair" }), 400],
 		[
 			JSON.stringify({
 				id: "00000000-0000-4000-8000-000000000001",

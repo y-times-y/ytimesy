@@ -13,8 +13,6 @@ import type { ApiTurn } from "../adapters/api-turns";
 import type { WorkspaceMachines } from "../services/workspace-machines";
 import { runApiTurn } from "./api-turn";
 
-process.env.YTIMESY_ROOT_AGENT_MODE = "lead";
-
 const OPENROUTER = "11111111-1111-4111-8111-111111111111";
 
 const mocks = vi.hoisted(() => ({
@@ -69,6 +67,13 @@ vi.mock("../adapters/server-peer-inbox", () => ({
 	injectServerPeerMessages: vi.fn(),
 }));
 vi.mock("../adapters/api-usage-budget", () => ({ reserveApiTokens: vi.fn() }));
+// Root chats are builders: each turn records a code point before it edits.
+vi.mock("../services/conversation-recovery", () => ({
+	ensureConversationCodePoint: vi.fn(async () => {}),
+}));
+vi.mock("../adapters/turn-verification", () => ({
+	readVerificationBaseline: vi.fn(async () => null),
+}));
 vi.mock("../auth/codex-managed-auth", () => ({
 	hasManagedCodexAuth: vi.fn(async () => true),
 }));

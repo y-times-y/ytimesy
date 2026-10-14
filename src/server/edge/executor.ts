@@ -578,7 +578,7 @@ export default {
 						action,
 					}),
 			),
-			...(["task-event", "pr-repair", "work-plan"] as const).map((kind) =>
+			...(["task-event", "pr-repair"] as const).map((kind) =>
 				backgroundJob.parse({
 					id: backgroundJobId(`cron:${minute}:${kind}`),
 					kind,

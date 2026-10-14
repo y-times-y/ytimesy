@@ -102,11 +102,7 @@ describe("job queue connection lifecycle", () => {
 		const [a, b] = await Promise.all([first, second]);
 		expect(premature).toBe(false);
 		expect(a).toBe(b);
-		expect(fake.instances[0].createQueue).toHaveBeenCalledTimes(7);
-		expect(fake.instances[0].createQueue).toHaveBeenCalledWith(
-			"durable-work-plan",
-			expect.objectContaining({ policy: "singleton", expireInSeconds: 1800 }),
-		);
+		expect(fake.instances[0].createQueue).toHaveBeenCalledTimes(6);
 		expect(fake.instances[0].createQueue).toHaveBeenCalledWith(
 			"pr-repair",
 			expect.any(Object),

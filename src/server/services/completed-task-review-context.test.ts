@@ -35,7 +35,6 @@ const handoff = {
 		],
 	},
 	verificationReferences: ["receipt"],
-	verificationAssignment: { commands: ["test"] },
 	remainingReferences: ["more"],
 	failedAttemptReferences: ["failed"],
 	failedAttemptsOmitted: 1,
