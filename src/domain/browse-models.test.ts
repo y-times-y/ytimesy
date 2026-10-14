@@ -165,8 +165,8 @@ it("never offers a model the list does not name, even one a gateway just added",
 			],
 			[
 				{
-					id: "z-ai/glm-5.3",
-					label: "GLM 5.3",
+					id: "z-ai/glm-5.3-flashx",
+					label: "GLM 5.3 FlashX",
 					author: "z-ai",
 					created: now,
 				},
