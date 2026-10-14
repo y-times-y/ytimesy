@@ -24,6 +24,20 @@ export const serverAnalyticsEvents = {
 		outcome: z.enum(["completed", "failed", "cancelled"]),
 		duration_ms: z.number().finite().nonnegative().optional(),
 	}),
+	model_failover: z.object({
+		runtime,
+		role,
+		reason: z.enum([
+			"outage",
+			"overloaded",
+			"rate-limited",
+			"usage-limit",
+			"timeout",
+		]),
+		outcome: z.enum(["switched", "asked", "exhausted"]),
+		same_model: z.boolean(),
+		to_paid: z.boolean(),
+	}),
 	environment_started: z.object({ repositories: z.number().int().positive() }),
 	environment_finished: z.object({
 		outcome: z.enum(["ready", "failed"]),

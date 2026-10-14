@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { ToolSet } from "ai";
+import type { ModelMessage, ToolSet } from "ai";
 import { Effect } from "effect";
 import { visualQaInstructions } from "#/domain/agent-desktop";
 import { cloudAgentRoleInstructions } from "#/domain/agent-orchestration";
@@ -14,6 +14,7 @@ import {
 	apiTurnFailureMessage,
 	IncompleteAgentTurn,
 	LifecycleHookRefusal,
+	SafeApiModelFailure,
 } from "#/domain/api-turn-failure";
 import {
 	type ApiTurnSettings,
@@ -28,11 +29,29 @@ import { PREPARED_ENVIRONMENT_INSTRUCTIONS } from "#/domain/environment-context"
 import { SessionItemId, WorkspaceId } from "#/domain/ids";
 import { prepareInterruptedStep } from "#/domain/interrupted-step";
 import { officialProviderEndpoint } from "#/domain/model-connection";
+import {
+	type FailoverReason,
+	failoverExhaustedDetail,
+	failoverNotice,
+	failoverQuestion,
+	failoverRuntimeNote,
+	forcedDevelopmentOutage,
+	nextTurnFailover,
+	routeConnectionKey,
+	routeKey,
+	servingRoute,
+} from "#/domain/model-failover";
+import {
+	developmentOutageError,
+	failoverReason,
+} from "#/domain/model-failover-reason";
 import { modelStepLimit } from "#/domain/model-workflow";
 import { posixShellCommand } from "#/domain/posix-command";
 import { PROJECT_KNOWLEDGE_INSTRUCTIONS } from "#/domain/project-knowledge";
 import { agentSecretsEnvFile } from "#/domain/project-secret";
 import { rootAgentMode } from "#/domain/root-agent-mode";
+import { modelSwitchHistory } from "#/domain/runtime-handoff";
+import type { ModelSwitchItem, SessionItem } from "#/domain/session-item";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
 import {
 	completedChildrenForReview,
@@ -98,6 +117,7 @@ import {
 	sessionAttachments,
 } from "../services/message-attachments";
 import type { ModelAgentInput } from "../services/model-agent-loop";
+import { planModelFailover } from "../services/model-failover";
 import {
 	PLAN_CONTINUE_NOTICE,
 	PLAN_END_TURN_TOOLS,
@@ -156,18 +176,40 @@ async function acquireConversationTurn(
 
 type ApiTurnStepOutcome = "continue" | "completed" | "failed" | "cancelled";
 
-/** Step mode is for the external durable orchestrator; the default preserves the local worker. */
+type ApiTurnStep = {
+	index: number;
+	signal: AbortSignal;
+	limitReached?: boolean;
+	/** The same step is being re-run after its executor restarted mid-step. */
+	resumed?: boolean;
+};
+
+/**
+ * Step mode is for the external durable orchestrator; the default preserves
+ * the local worker. A turn that failed over keeps its lease: in step mode its
+ * next step runs on the fallback; the local worker continues it here.
+ */
 export async function runApiTurn(
 	machines: WorkspaceMachines,
 	turn: ApiTurn,
-	step?: {
-		index: number;
-		signal: AbortSignal;
-		limitReached?: boolean;
-		/** The same step is being re-run after its executor restarted mid-step. */
-		resumed?: boolean;
-	},
+	step?: ApiTurnStep,
 ): Promise<ApiTurnStepOutcome> {
+	// Bounded: every failover adds a route to the turn's tried set (MAX_TURN_FAILOVERS).
+	for (let continued = false; ; continued = true) {
+		const outcome = await runApiTurnAttempt(machines, turn, step, continued);
+		if (typeof outcome === "string") return outcome;
+		if (step) return "continue";
+		turn = outcome.failedOver;
+	}
+}
+
+async function runApiTurnAttempt(
+	machines: WorkspaceMachines,
+	turn: ApiTurn,
+	step: ApiTurnStep | undefined,
+	/** The local worker is continuing this turn on a fallback route. */
+	continued: boolean,
+): Promise<ApiTurnStepOutcome | { failedOver: ApiTurn }> {
 	const abort = new AbortController();
 	// The executor's step budget and turn deadline abort with a TimeoutError.
 	const stopForDeadline = () =>
@@ -180,9 +222,29 @@ export async function runApiTurn(
 	step?.signal.addEventListener("abort", stopForDeadline, { once: true });
 	if (step?.signal.aborted) stopForDeadline();
 	let items = turn.items;
-	const previousUsage = step
-		? [...items].reverse().find((item) => item.kind === "userMessage")
-		: undefined;
+	const previousUsage =
+		step || continued
+			? [...items].reverse().find((item) => item.kind === "userMessage")
+			: undefined;
+	// After a failover the rest of the turn runs on the fallback; the turn row
+	// keeps the user's choice, so their next message tries it again.
+	const route = servingRoute(turn);
+	let failoverScope:
+		| {
+				evaluation: boolean;
+				child: boolean;
+				fusion: boolean;
+				runtime: "codex" | "api";
+				role: ReturnType<typeof analyticsAgentRole>;
+		  }
+		| undefined;
+	let failedAttempt:
+		| {
+				committed: ModelMessage[];
+				droppedStepSaved: boolean;
+				uncommittedIds: readonly string[];
+		  }
+		| undefined;
 	let messages = turn.messages;
 	if (step?.resumed)
 		({ messages, items } = prepareInterruptedStep(
@@ -314,10 +376,10 @@ export async function runApiTurn(
 		if (!owner) throw new Error("Task no longer exists.");
 		if (process.env.YTIMESY_HARNESS_EVALUATION_ENABLED === "1")
 			evaluation = await evaluationRunForTask(owner.userId, owner.id);
-		const subscription = subscriptionTurnSettings(turn.connection_revision);
+		const subscription = subscriptionTurnSettings(route.connectionRevision);
 		const apiSettings: ApiTurnSettings = subscription
 			? {}
-			: apiTurnSettings(turn.settings);
+			: (route.settings ?? {});
 		// The subscription endpoint rejects the public Responses apply_patch tool.
 		// Writers retain the same V4A editor through its function-tool schema.
 		let nativePatch = false;
@@ -325,17 +387,17 @@ export async function runApiTurn(
 		// connection to an official endpoint.
 		let webSearch: ToolSet = {};
 		if (subscription) {
-			if (turn.connection_id || !(await hasManagedCodexAuth(turn.user_id)))
+			if (route.connectionId || !(await hasManagedCodexAuth(turn.user_id)))
 				throw new Error("Reconnect Codex before continuing.");
 			// ChatGPT's Codex endpoint accepts the same hosted search as the OpenAI API.
 			webSearch = nativeWebSearchTools("openai");
 		} else {
-			if (!turn.connection_id) throw new Error("Model connection was removed.");
+			if (!route.connectionId) throw new Error("Model connection was removed.");
 			const connection = await loadModelConnection(
 				turn.user_id,
-				turn.connection_id,
+				route.connectionId,
 			);
-			if (connection?.revision !== turn.connection_revision)
+			if (connection?.revision !== route.connectionRevision)
 				throw new Error(
 					"The API connection changed after this turn was submitted.",
 				);
@@ -350,8 +412,15 @@ export async function runApiTurn(
 			session: owner,
 			subscription: Boolean(subscription),
 			stepMode: Boolean(step),
-			leadModelId: turn.model_id,
+			leadModelId: route.modelId,
 		});
+		failoverScope = {
+			evaluation: Boolean(evaluation),
+			child: Boolean(owner.parentSessionId),
+			fusion: Boolean(fusion),
+			runtime: owner.harness === "codex" ? "codex" : "api",
+			role: analyticsAgentRole(owner),
+		};
 		// Builder-direct (launch default): the root chat is the builder itself.
 		const direct =
 			!owner.parentSessionId && !fusion && rootAgentMode() === "builder";
@@ -520,7 +589,7 @@ export async function runApiTurn(
 				)
 			: hooks.wrap(withRedactedResults(withMcp, redact));
 		// Durable steps start at 1; a resumed first step reuses the deduped notice.
-		const firstStep = !step || step.index === 1;
+		const firstStep = step ? step.index === 1 : !continued;
 		if (planLock?.planning && firstStep)
 			messages = withPlanModeNotice(
 				messages,
@@ -580,7 +649,7 @@ export async function runApiTurn(
 			: (input: Parameters<typeof runCodexSubscriptionAgent>[0]) =>
 					(step ? runApiAgentStep : runApiAgent)({
 						...input,
-						connectionId: turn.connection_id as string,
+						connectionId: route.connectionId as string,
 					});
 		const previousContext = recordedContextUsage(items)?.context;
 		// Fusion: the evaluation guard counts lead and sidekick tokens together.
@@ -596,8 +665,8 @@ export async function runApiTurn(
 					: undefined,
 			cacheScopeId: owner.id,
 			userId: turn.user_id,
-			connectionId: turn.connection_id ?? undefined,
-			connectionRevision: turn.connection_revision,
+			connectionId: route.connectionId ?? undefined,
+			connectionRevision: route.connectionRevision,
 			reasoning: subscription?.reasoning ?? apiSettings.reasoning,
 			speed: apiSettings.speed,
 			knownTools: discoveredToolsFromSession(items),
@@ -611,7 +680,7 @@ export async function runApiTurn(
 						...metric,
 						runtime: owner.harness,
 						role: analyticsAgentRole(owner),
-						model_key: createHash("sha256").update(turn.model_id).digest("hex"),
+						model_key: createHash("sha256").update(route.modelId).digest("hex"),
 					},
 					{
 						key: `${turn.id}:${step?.index ?? 0}:tool-${metricIndex++}`,
@@ -627,7 +696,7 @@ export async function runApiTurn(
 						...metric,
 						runtime: owner.harness,
 						role: analyticsAgentRole(owner),
-						model_key: createHash("sha256").update(turn.model_id).digest("hex"),
+						model_key: createHash("sha256").update(route.modelId).digest("hex"),
 					},
 					{
 						key: `${turn.id}:${step?.index ?? 0}:model-${metricIndex++}`,
@@ -636,7 +705,10 @@ export async function runApiTurn(
 				);
 			},
 			fast: subscription?.fast,
-			modelId: turn.model_id,
+			modelId: route.modelId,
+			onAttemptFailed: (state) => {
+				failedAttempt = state;
+			},
 			messages,
 			archiveHistory: (history) =>
 				archiveModelContext(owner.userId, owner.id, history),
@@ -839,6 +911,14 @@ export async function runApiTurn(
 						},
 					})
 			: runAgent;
+		if (
+			forcedDevelopmentOutage(
+				process.env,
+				routeConnectionKey(route),
+				step?.index ?? 1,
+			)
+		)
+			throw new SafeApiModelFailure(developmentOutageError());
 		let result = await run(agentInput);
 		while (!step && (await hooks.stop(messages))) {
 			messages = hooks.drain(messages);
@@ -989,6 +1069,117 @@ export async function runApiTurn(
 						}
 					: {}),
 			});
+		// A provider-side failure moves the turn to its next best route; the
+		// switch happens here, between model steps, never inside a stream.
+		const reason =
+			failureStage === "model" &&
+			failoverScope &&
+			!abort.signal.aborted &&
+			!progressFailed &&
+			!coordinationFailure
+				? failoverReason(error)
+				: null;
+		let paused: ModelSwitchItem | undefined;
+		let exhausted = "";
+		if (reason && failoverScope) {
+			const scope = failoverScope;
+			try {
+				const plan = await planModelFailover({
+					turn,
+					evaluation: scope.evaluation,
+					child: scope.child,
+					fusion: scope.fusion,
+					allowCustom: !step,
+				});
+				const { decision } = plan;
+				const analytics = (
+					outcome: "switched" | "asked" | "exhausted",
+					sameModel: boolean,
+					toPaid: boolean,
+				) =>
+					void captureServerAnalytics(
+						turn.user_id,
+						"model_failover",
+						{
+							runtime: scope.runtime,
+							role: scope.role,
+							reason,
+							outcome,
+							same_model: sameModel,
+							to_paid: toPaid,
+						},
+						{
+							key: `${turn.id}:failover-${plan.previous?.switches ?? 0}`,
+							timestamp: new Date(),
+						},
+					);
+				if (decision.kind === "switch") {
+					const next = nextTurnFailover(
+						plan.previous,
+						plan.failing,
+						decision.candidate,
+					);
+					// The failed step's cut-off text is not part of the answer.
+					const partial = failedAttempt?.uncommittedIds ?? [];
+					if (partial.length)
+						items = applyApiProgress(items, turn.id, {
+							type: "retract",
+							ids: step
+								? partial.map((id) => `step-${step.index}:${id}`)
+								: [...partial],
+						});
+					items = [
+						...items,
+						modelSwitchItem(items, {
+							id: `${turn.id}:switch-${next.switches}`,
+							state: "switched",
+							message: failoverNotice(plan.failing.label, next.label, reason),
+							reason,
+							from: plan.failing.label,
+							to: { ...next.label, key: routeKey(next.route) },
+						}),
+					];
+					messages = modelSwitchHistory(
+						failedAttempt?.droppedStepSaved
+							? failedAttempt.committed
+							: messages,
+						failoverRuntimeNote(plan.failing.label, next.label, reason),
+					);
+					await checkpointApiTurn(turn, messages, items, next);
+					analytics(
+						"switched",
+						decision.candidate.sameModel,
+						decision.candidate.paid,
+					);
+					// The turn's lease carries over to the step on the fallback.
+					coordinated = false;
+					return { failedOver: { ...turn, failover: next, messages, items } };
+				}
+				if (decision.kind === "ask") {
+					const to = {
+						model: decision.candidate.modelLabel,
+						connection: decision.candidate.connectionLabel,
+					};
+					paused = modelSwitchItem(items, {
+						id: `${turn.id}:error`,
+						state: "awaitingApproval",
+						message: failoverQuestion(plan.failing.label, to, reason),
+						reason,
+						from: plan.failing.label,
+						to: { ...to, key: routeKey(decision.candidate.route) },
+					});
+					analytics("asked", decision.candidate.sameModel, true);
+				} else if (plan.previous) {
+					// The failing route is the last one the turn moved to, already tried.
+					exhausted = failoverExhaustedDetail(plan.previous);
+					analytics("exhausted", false, false);
+				}
+			} catch (cause) {
+				console.warn("Model failover failed", {
+					...apiTurnFailureClassification(cause),
+				});
+			}
+		}
 		const failureMessage = progressFailed
 			? "Turn progress could not be saved. Inspect the task before retrying."
 			: coordinationFailure
@@ -997,8 +1188,16 @@ export async function runApiTurn(
 					? TURN_TIME_LIMIT_MESSAGE
 					: abort.signal.aborted
 						? `Run stopped. ${abort.signal.reason instanceof Error && ["Turn ownership or cancellation state changed.", "Conversation coordination lease was lost.", "Turn heartbeat or coordination service became unavailable."].includes(abort.signal.reason.message) ? `${abort.signal.reason.message} ` : ""}Inspect any in-flight command before continuing.`
-						: apiTurnFailureMessage(failureStage, error) +
-							developmentFailureDetail(error);
+						: exhausted
+							? apiTurnFailureMessage(failureStage, error).replace(
+									" No fallback was used.",
+									"",
+								) +
+								exhausted +
+								developmentFailureDetail(error)
+							: (paused?.message ??
+									apiTurnFailureMessage(failureStage, error)) +
+								developmentFailureDetail(error);
 		// The heartbeat or the room usually notices the user's Stop before progress does.
 		const userCancelled =
 			abort.signal.reason instanceof ApiTurnCancelled ||
@@ -1007,7 +1206,7 @@ export async function runApiTurn(
 		if (!userCancelled)
 			items = [
 				...items,
-				{
+				paused ?? {
 					kind: "error",
 					id: SessionItemId(`${turn.id}:error`),
 					message: failureMessage,
@@ -1059,6 +1258,29 @@ export async function runApiTurn(
 		if (coordinated)
 			await coordinateConversationTurn("release", control).catch(() => {});
 	}
+}
+
+/** A transcript notice of a switch (or a paused one); usage so far stays with the first route. */
+function modelSwitchItem(
+	items: readonly SessionItem[],
+	input: {
+		id: string;
+		state: ModelSwitchItem["state"];
+		message: string;
+		reason: FailoverReason;
+		from: ModelSwitchItem["from"];
+		to: ModelSwitchItem["to"];
+	},
+): ModelSwitchItem {
+	const usageBefore = [...items]
+		.reverse()
+		.find((item) => item.kind === "userMessage")?.apiUsage;
+	return {
+		kind: "modelSwitch",
+		...input,
+		id: SessionItemId(input.id),
+		...(usageBefore ? { usageBefore } : {}),
+	};
 }
 
 const TURN_TIME_LIMIT_MESSAGE =
