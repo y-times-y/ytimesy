@@ -5,9 +5,10 @@ export class ChildAdmissionDenied extends Error {}
 
 export function modelConcurrencyLimits() {
 	const worker = Number(process.env.YTIMESY_MODEL_CONCURRENCY ?? "4");
-	const perUser = Number(process.env.YTIMESY_USER_TURN_CONCURRENCY ?? "8");
-	const fleet = Number(process.env.YTIMESY_FLEET_TURN_CONCURRENCY ?? worker);
-	const perTask = Number(process.env.YTIMESY_TASK_CHILD_CONCURRENCY ?? "3");
+	const perUser = Number(process.env.YTIMESY_USER_TURN_CONCURRENCY ?? "32");
+	// Each edge chat runs in its own Durable Object, so the fleet is not one worker's slots.
+	const fleet = Number(process.env.YTIMESY_FLEET_TURN_CONCURRENCY ?? "256");
+	const perTask = Number(process.env.YTIMESY_TASK_CHILD_CONCURRENCY ?? "8");
 	if (!Number.isInteger(worker) || worker < 2 || worker > 32)
 		throw new Error(
 			"Model concurrency must be between 2 and 32 to reserve leader capacity.",
