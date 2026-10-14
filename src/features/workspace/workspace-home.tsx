@@ -36,6 +36,7 @@ import {
 	isTurnRunning,
 	lastUserMessageText,
 	type SessionTurnStatus,
+	sendWasQueued,
 	sessionItemsQueuedWithUser,
 	sessionTitleFromItems,
 	sessionUsesFollowUpLayout,
@@ -62,6 +63,7 @@ import {
 	sessionWithoutOpenChat,
 	sidebarIsPinnedInStorage,
 	sidebarPinnedStorageValue,
+	unsentSendReturnsHere,
 	withBusyChat,
 	withChatTurnStatus,
 	withoutBusyChat,
@@ -110,7 +112,10 @@ import {
 	preferredSessionModelId,
 	sessionModelsFromListed,
 } from "../sessions/model-capabilities";
-import { SessionLauncher } from "../sessions/session-launcher";
+import {
+	type ComposerSendResult,
+	SessionLauncher,
+} from "../sessions/session-launcher";
 import { sessionReconciliationQuery } from "../sessions/session-reconciliation";
 import { getWorkspaceDesktop, startWorkspaceDesktopFn } from "./desktop.fn";
 import { readWorkspaceChangesFn } from "./explorer.fn";
@@ -144,7 +149,7 @@ type PendingSend = {
 	readonly approvesPlan?: boolean;
 	readonly attachments?: readonly IncomingAttachment[];
 	/** Tells the composer whether the message went out; if not it restores the draft. */
-	readonly settle: (sent: boolean) => void;
+	readonly settle: (result: ComposerSendResult) => void;
 };
 
 export function WorkspaceHome({
@@ -1148,14 +1153,57 @@ export function WorkspaceHome({
 				setComposerDraft(true);
 			}
 		}
-		pending.settle(false);
+		pending.settle(unsentResult(pending.epoch, pending.chatId));
 	}
 	abandonSendRef.current = abandonSend;
+
+	function unsentResult(
+		sentEpoch: number,
+		sentChatId: string | undefined,
+	): ComposerSendResult {
+		return unsentSendReturnsHere({
+			sentEpoch,
+			currentEpoch: sessionEpoch.current,
+			sentChatId,
+			openChatId: selectedSessionIdRef.current,
+		})
+			? "unsent"
+			: "unsentElsewhere";
+	}
+
+	/**
+	 * A send that errored may still have landed (the reply was lost, or reading
+	 * the chat back failed after the message was stored). Ask the server before
+	 * taking the message back; if it holds the message, keep following the turn.
+	 */
+	async function sendLanded(pending: PendingSend, view: PublicCodexSession) {
+		const sessionId = pending.scope.sessionId ?? view.agentSessionId;
+		if (!pending.scope.projectId || !sessionId) return false;
+		try {
+			const landed = await getCodexSession({
+				data: {
+					projectId: pending.scope.projectId,
+					sessionId,
+					harnessId: pending.scope.harnessId,
+				},
+			});
+			if (
+				!landed?.connection ||
+				!sendWasQueued(landed.items, pending.messageId)
+			)
+				return false;
+			applySessionView(pending.epoch, landed);
+			return true;
+		} catch {
+			return false;
+		}
+	}
 
 	async function deliverSend(pending: PendingSend, view: PublicCodexSession) {
 		if (pendingSendRef.current === pending) pendingSendRef.current = null;
 		const { epoch, scope, chatId } = pending;
 		setBusyChatIds((ids) => withBusyChat(ids, chatId));
+		let requested = false;
 		try {
 			const resolvedModel =
 				pending.modelId ||
@@ -1190,6 +1238,7 @@ export function WorkspaceHome({
 						withChatTurnStatus(current ?? [], chatId, "running"),
 				);
 			}
+			requested = true;
 			const next = await sendTask({
 				data: {
 					...scope,
@@ -1228,8 +1277,12 @@ export function WorkspaceHome({
 				return;
 			}
 			applySessionView(epoch, next);
-			pending.settle(true);
+			pending.settle("sent");
 		} catch (cause) {
+			if (requested && (await sendLanded(pending, view))) {
+				pending.settle("sent");
+				return;
+			}
 			abandonSend(pending, publicFailureMessage(cause));
 		} finally {
 			setBusyChatIds((ids) => withoutBusyChat(ids, chatId));
@@ -1516,7 +1569,7 @@ export function WorkspaceHome({
 												});
 												void competition.refetch();
 												void agentTasks.refetch();
-												return true;
+												return "sent" as const;
 											} catch (cause) {
 												toast.error(publicFailureMessage(cause));
 												if (epoch === sessionEpoch.current)
@@ -1527,14 +1580,14 @@ export function WorkspaceHome({
 															previousTurnStatus,
 														),
 													);
-												return false;
+												return unsentResult(epoch, chatId);
 											} finally {
 												setBusyChatIds((ids) => withoutBusyChat(ids, chatId));
 												void chats.refetch();
 											}
 										})();
 									}
-									return new Promise<boolean>((settle) => {
+									return new Promise<ComposerSendResult>((settle) => {
 										const pending: PendingSend = {
 											epoch,
 											scope,

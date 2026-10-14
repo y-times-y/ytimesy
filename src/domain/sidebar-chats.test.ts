@@ -20,6 +20,7 @@ import {
 	sidebarPinnedStorageValue,
 	toggleCollapsedProjectIds,
 	togglePinnedChatIds,
+	unsentSendReturnsHere,
 	withBusyChat,
 	withChatTurnStatus,
 	withoutBusyChat,
@@ -355,5 +356,26 @@ describe("switching projects", () => {
 			turnStatus: "idle",
 			canSend: true,
 		});
+	});
+});
+
+describe("unsent sends", () => {
+	it("return only to the chat that sent them", () => {
+		const sent = { sentEpoch: 1, sentChatId: "a" };
+		expect(
+			unsentSendReturnsHere({ ...sent, currentEpoch: 1, openChatId: "a" }),
+		).toBe(true);
+		// Moved to chat b: b's composer keeps its own draft.
+		expect(
+			unsentSendReturnsHere({ ...sent, currentEpoch: 2, openChatId: "b" }),
+		).toBe(false);
+		// Reopened chat a: the message comes back to it.
+		expect(
+			unsentSendReturnsHere({ ...sent, currentEpoch: 3, openChatId: "a" }),
+		).toBe(true);
+		// A new-chat draft's send never lands in a newer new-chat draft.
+		expect(unsentSendReturnsHere({ sentEpoch: 1, currentEpoch: 2 })).toBe(
+			false,
+		);
 	});
 });

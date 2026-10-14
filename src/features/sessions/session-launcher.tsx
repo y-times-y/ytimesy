@@ -1,7 +1,13 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { ArrowUp, Square, X } from "lucide-react";
-import { type KeyboardEvent, useEffect, useMemo, useState } from "react";
+import {
+	type KeyboardEvent,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { MatrixDotLoader } from "#/components/ui/matrix-dot-loader";
 import {
 	type AgentCompetition,
@@ -78,6 +84,13 @@ type InspectorView = "files" | "diff" | "terminal" | "desktop";
 
 const ATTACHMENTS_ONLY_TEXT = "See the attached files.";
 
+/**
+ * How a composer send ended. `unsent` returns the message to this composer;
+ * `unsentElsewhere` means the user had moved to another chat, whose composer
+ * must not receive it.
+ */
+export type ComposerSendResult = "sent" | "unsent" | "unsentElsewhere";
+
 export function SessionLauncher({
 	session,
 	busy,
@@ -117,7 +130,7 @@ export function SessionLauncher({
 			readonly userMessageId?: string;
 			readonly attachments?: readonly IncomingAttachment[];
 		},
-	) => Promise<boolean> | undefined;
+	) => Promise<ComposerSendResult> | undefined;
 	onConnect: () => void;
 	onStop: () => void;
 	onOpenInspector: (view: InspectorView) => void;
@@ -206,6 +219,15 @@ export function SessionLauncher({
 		],
 	);
 	const [attachments, setAttachments] = useState<File[]>([]);
+	/**
+	 * The last send that came back unsent. Sending the same message again reuses
+	 * its id, so a send the server did accept is not queued twice.
+	 */
+	const unsentSend = useRef<{
+		readonly id: string;
+		readonly text: string;
+		readonly files: readonly File[];
+	} | null>(null);
 	const [attachmentError, setAttachmentError] = useState<string | null>(null);
 	// A message with only attachments still needs words for the transcript and model.
 	const sendableDraft = (text: string) =>
@@ -425,7 +447,12 @@ export function SessionLauncher({
 			runtime: harnessId,
 			attempts: leaderCount,
 		});
-		const userMessageId = crypto.randomUUID();
+		const retry = unsentSend.current;
+		const userMessageId =
+			!plan && retry && sameSend(retry, text, files)
+				? retry.id
+				: crypto.randomUUID();
+		unsentSend.current = null;
 		setOptimisticItems((current) => [
 			...current,
 			{
@@ -446,11 +473,12 @@ export function SessionLauncher({
 			},
 		]);
 		// Nothing was sent: take the message back and return what the user typed.
-		const unsend = () => {
+		const unsend = (restore: boolean) => {
 			setOptimisticItems((current) =>
 				current.filter((item) => item.id !== SessionItemId(userMessageId)),
 			);
-			if (plan) return;
+			if (plan || !restore) return;
+			unsentSend.current = { id: userMessageId, text, files };
 			setDraft((current) => (current.trim() ? current : typed));
 			if (files.length)
 				setAttachments((current) => (current.length ? current : files));
@@ -466,8 +494,8 @@ export function SessionLauncher({
 				...(comparing && !plan ? { leaderCount, attemptModelIds } : {}),
 				userMessageId,
 				...(encoded.length ? { attachments: encoded } : {}),
-			})?.then((sent) => {
-				if (!sent) unsend();
+			})?.then((result) => {
+				if (result !== "sent") unsend(result === "unsent");
 			});
 		// Approving from the plan card leaves a draft in progress alone.
 		if (!plan) setDraft("");
@@ -858,5 +886,17 @@ export function SessionLauncher({
 				</div>
 			</div>
 		</section>
+	);
+}
+
+function sameSend(
+	send: { readonly text: string; readonly files: readonly File[] },
+	text: string,
+	files: readonly File[],
+) {
+	return (
+		send.text === text &&
+		send.files.length === files.length &&
+		send.files.every((file, index) => file === files[index])
 	);
 }
