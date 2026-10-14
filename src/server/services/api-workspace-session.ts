@@ -2,6 +2,7 @@ import {
 	apiConversation,
 	assertApiContextFits,
 } from "#/domain/api-conversation";
+import { type ApiModelSpeedId, apiModelSpeeds } from "#/domain/api-model-list";
 import { childTaskPublicItems } from "#/domain/child-task-activity";
 import { reconstructedContextTransition } from "#/domain/harness-model-profile";
 import { parseModelRouteId } from "#/domain/model-connection";
@@ -11,7 +12,11 @@ import {
 } from "#/domain/session-item";
 import { agentSessionForOwner } from "../adapters/agent-sessions";
 import { isServerControlledIntegration } from "../adapters/agent-task-command-receipts";
-import { enqueueApiTurn, previousTurnMessages } from "../adapters/api-turns";
+import {
+	enqueueApiTurn,
+	inheritedApiTurnSettings,
+	previousTurnMessages,
+} from "../adapters/api-turns";
 import {
 	listModelConnections,
 	loadModelConnection,
@@ -67,6 +72,9 @@ export async function sendApiWorkspaceTask(
 	input: {
 		text: string;
 		modelId: string;
+		variant?: string;
+		/** Absent on internal follow-ups, which keep the previous turn's settings. */
+		speed?: "standard" | ApiModelSpeedId;
 		runtimeText?: string;
 		idempotencyKey?: string;
 		mode?: "plan";
@@ -108,6 +116,30 @@ export async function sendApiWorkspaceTask(
 		throw new Error(
 			"The selected model is no longer available on this connection.",
 		);
+	const settings =
+		input.speed === undefined && input.variant === undefined
+			? await inheritedApiTurnSettings(
+					scope.userId,
+					session.id,
+					selected.modelId,
+					connection.id,
+				)
+			: {
+					...(input.variant ? { reasoning: input.variant } : {}),
+					...(input.speed && input.speed !== "standard"
+						? { speed: input.speed }
+						: {}),
+				};
+	if (
+		settings.speed &&
+		(connection.provider !== "openrouter" ||
+			!apiModelSpeeds(selected.modelId).some(
+				(speed) => speed.id === settings.speed,
+			))
+	)
+		throw new Error(
+			`${settings.speed === "ultrafast" ? "Ultrafast" : "Fast"} mode is not available for this model on this connection.`,
+		);
 	const items = sessionItemsQueuedWithUser(
 		sessionItemsFromUnknown(session.items),
 		input.text,
@@ -145,6 +177,7 @@ export async function sendApiWorkspaceTask(
 		items,
 		preparedTask,
 		idempotencyKey: input.idempotencyKey,
+		settings,
 	});
 	return readApiWorkspaceSession(scope);
 }

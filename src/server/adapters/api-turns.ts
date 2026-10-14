@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import type { ModelMessage } from "ai";
 import { Effect, Schedule } from "effect";
 import { ApiTurnCancelled } from "#/domain/api-turn-failure";
+import {
+	type ApiTurnSettings,
+	apiTurnSettings,
+} from "#/domain/api-turn-settings";
 import type { SessionItem } from "#/domain/session-item";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
 import {
@@ -29,6 +33,7 @@ export type ApiTurn = {
 	messages: ModelMessage[];
 	items: SessionItem[];
 	lease_id: string | null;
+	settings?: unknown;
 };
 
 /** Internal child starts and wakeups retain the nearest same-model subscription selection. */
@@ -53,6 +58,26 @@ export async function inheritedSubscriptionSettings(
 		: null;
 }
 
+/** Internal child starts and wakeups retain the nearest same-model API-key turn's settings. */
+export async function inheritedApiTurnSettings(
+	userId: string,
+	sessionId: string,
+	modelId: string,
+	connectionId: string,
+) {
+	const result = await database().query<{ settings: unknown }>(
+		`with recursive ancestors as (
+		 select id,parent_session_id,0 as depth from agent_session where id=$1 and user_id=$2
+		 union all select p.id,p.parent_session_id,a.depth+1 from agent_session p
+		 join ancestors a on p.id=a.parent_session_id where p.user_id=$2 and a.depth<8
+		) select t.settings from ancestors a join api_turn t on t.session_id=a.id
+		 where t.user_id=$2 and t.model_id=$3 and t.connection_id=$4
+		 order by a.depth,t.created_at desc limit 1`,
+		[sessionId, userId, modelId, connectionId],
+	);
+	return apiTurnSettings(result.rows[0]?.settings);
+}
+
 /** A child may report waiting before its model loop exits; UI status is not a turn lease. */
 export async function hasActiveApiTurn(userId: string, sessionId: string) {
 	const result = await database().query<{ active: boolean }>(
@@ -73,6 +98,7 @@ export async function enqueueApiTurn(input: {
 	items: readonly SessionItem[];
 	preparedTask?: boolean;
 	idempotencyKey?: string;
+	settings?: ApiTurnSettings;
 }) {
 	const client = await database().connect();
 	try {
@@ -121,8 +147,8 @@ export async function enqueueApiTurn(input: {
 			);
 		await recordConversationPoint(client, input);
 		await client.query(
-			`insert into api_turn(id,session_id,user_id,connection_id,connection_revision,model_id,state,messages,items,idempotency_key,executor)
-			 values($1,$2,$3,$4,$5,$6,'queued',$7,$8,$9,$10)`,
+			`insert into api_turn(id,session_id,user_id,connection_id,connection_revision,model_id,state,messages,items,idempotency_key,executor,settings)
+			 values($1,$2,$3,$4,$5,$6,'queued',$7,$8,$9,$10,$11)`,
 			[
 				randomUUID(),
 				input.sessionId,
@@ -134,6 +160,7 @@ export async function enqueueApiTurn(input: {
 				JSON.stringify(input.items),
 				input.idempotencyKey ?? null,
 				configuredTurnExecutor(process.env.YTIMESY_MODEL_EXECUTION_TARGET),
+				JSON.stringify(input.settings ?? {}),
 			],
 		);
 		await client.query(
@@ -206,7 +233,7 @@ export async function previousTurnMessages(
  * it returns identities only rather than the whole conversation.
  */
 const CLAIM_IDENTITY_COLUMNS =
-	"id,session_id,user_id,connection_id,connection_revision,model_id,state,lease_id,'[]'::jsonb as messages,'[]'::jsonb as items";
+	"id,session_id,user_id,connection_id,connection_revision,model_id,state,lease_id,settings,'[]'::jsonb as messages,'[]'::jsonb as items";
 
 export async function claimApiTurn(
 	perUserLimit = 2,

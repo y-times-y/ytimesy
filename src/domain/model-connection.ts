@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { API_MODEL_LIST } from "./api-model-list";
+import { API_MODEL_LIST, apiModelSpeeds } from "./api-model-list";
 import { type BrowseModel, DIRECT_MODEL_ENDPOINTS } from "./browse-models";
 
 export const modelProvider = z.enum([
@@ -133,10 +133,19 @@ export function availableConnectionModels(
 	return connections.flatMap((connection) =>
 		connectionModels(connection, browseModels).map((model) => {
 			const reasoning = apiModelReasoning(connection.provider, model.id);
+			// Faster maker endpoints are reachable through OpenRouter only.
+			const speeds =
+				connection.provider === "openrouter"
+					? apiModelSpeeds(model.id).map(({ id, priceMultiple }) => ({
+							id,
+							priceMultiple,
+						}))
+					: [];
 			return {
 				id: modelRouteId(connection.id, model.id),
 				label: `${model.label} · ${connection.label}`,
 				...(reasoning ? { reasoning } : {}),
+				...(speeds.length ? { speeds } : {}),
 			};
 		}),
 	);

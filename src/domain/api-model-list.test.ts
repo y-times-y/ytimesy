@@ -34,3 +34,47 @@ it("offers every listed model through an OpenRouter key, in list order", () => {
 		API_MODEL_LIST.map((model) => `${model.label} · OpenRouter`),
 	);
 });
+
+it("offers faster speeds only through an OpenRouter key", () => {
+	const connection = {
+		id: "12345678-1234-4123-8123-123456789012",
+		label: "Key",
+		revision: "r",
+		models: [
+			{ id: "gpt-6.1-sol", label: "GPT-6.1 Sol", toolStreamingVerified: true },
+		],
+	};
+	const catalog = [
+		{
+			id: "openai/gpt-6.1-sol",
+			label: "GPT-6.1 Sol",
+			author: "openai",
+			created: 0,
+		},
+	];
+	const [viaOpenRouter] = availableConnectionModels(
+		[
+			{
+				...connection,
+				provider: "openrouter",
+				baseUrl: "https://openrouter.ai/api/v1",
+			},
+		],
+		catalog,
+	);
+	expect(viaOpenRouter?.speeds).toEqual([
+		{ id: "fast", priceMultiple: 2 },
+		{ id: "ultrafast", priceMultiple: 6 },
+	]);
+	const [direct] = availableConnectionModels(
+		[
+			{
+				...connection,
+				provider: "openai",
+				baseUrl: "https://api.openai.com/v1",
+			},
+		],
+		catalog,
+	);
+	expect(direct?.speeds).toBeUndefined();
+});

@@ -90,6 +90,7 @@ async function prepareApiModel<T>(
 				...connection,
 				modelId: input.modelId,
 				apiKey,
+				speed: input.speed,
 			},
 			transport.fetch,
 		);

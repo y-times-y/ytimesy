@@ -170,6 +170,7 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 			createNew?: boolean;
 			variant?: string;
 			fast?: boolean;
+			speed?: string;
 			mode?: string;
 		}) => {
 			const text = data.text.trim();
@@ -187,6 +188,13 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 				createNew: data.createNew === true,
 				...(variant ? { variant } : {}),
 				...(data.fast === true ? { fast: true } : {}),
+				// A user send always states its speed, so it never inherits one.
+				speed:
+					data.speed === "fast"
+						? ("fast" as const)
+						: data.speed === "ultrafast"
+							? ("ultrafast" as const)
+							: ("standard" as const),
 				...(data.mode === "plan" ? { mode: "plan" as const } : {}),
 			};
 		},

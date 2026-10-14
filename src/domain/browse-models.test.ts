@@ -112,6 +112,7 @@ it("offers only listed models, with our labels, through the connection", () => {
 		{
 			id: `api/${id}/google%2Fgemini-3.8-flash`,
 			label: "Gemini 3.8 Flash · Personal",
+			speeds: [{ id: "fast", priceMultiple: 1.8 }],
 		},
 	]);
 });

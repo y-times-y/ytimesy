@@ -6,11 +6,18 @@ export type ListedReasoning = {
 	readonly defaultLevelId: string;
 };
 
+/** A faster speed than standard, with its price relative to standard when known. */
+export type ListedSpeed = {
+	readonly id: "fast" | "ultrafast";
+	readonly priceMultiple?: number;
+};
+
 export type ListedModel = {
 	readonly id: string;
 	readonly label: string;
 	readonly notice?: string;
 	readonly supportsFastMode?: boolean;
+	readonly speeds?: readonly ListedSpeed[];
 	readonly fastModeId?: string;
 	readonly reasoning?: ListedReasoning;
 };

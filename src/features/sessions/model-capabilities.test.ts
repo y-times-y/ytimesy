@@ -76,7 +76,7 @@ describe("sessionModelsFromListed", () => {
 				label: "GPT-5.3-Codex-Spark",
 				notice: null,
 				reasoning: null,
-				supportsFastMode: false,
+				speeds: [],
 			},
 		]);
 	});
@@ -89,8 +89,8 @@ describe("sessionModelsFromListed", () => {
 					label: "GPT-5.3-Codex",
 					supportsFastMode: true,
 				},
-			])[0]?.supportsFastMode,
-		).toBe(true);
+			])[0]?.speeds,
+		).toEqual([{ id: "fast" }]);
 	});
 
 	it("surfaces a provider notice from the listed model", () => {

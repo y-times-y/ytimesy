@@ -1,6 +1,7 @@
 import {
 	type ListedModel,
 	type ListedModelPreference,
+	type ListedSpeed,
 	listedModelSupportsFastMode,
 	preferredListedModelId,
 } from "#/domain/listed-model";
@@ -41,8 +42,12 @@ export interface SessionModel {
 		levels: readonly [ReasoningLevel, ...ReasoningLevel[]];
 		defaultLevelId: string;
 	} | null;
-	supportsFastMode: boolean;
+	/** Faster speeds than standard; empty when the model has none. */
+	speeds: readonly ListedSpeed[];
 }
+
+/** The composer's speed choice; "" is standard speed. */
+export type ComposerSpeed = "" | ListedSpeed["id"];
 
 export function resolveReasoningLevel(
 	model: SessionModel | undefined,
@@ -64,6 +69,7 @@ export function sessionModelsFromListed(
 		readonly notice?: string;
 		readonly supportsFastMode?: boolean;
 		readonly fast?: boolean;
+		readonly speeds?: readonly ListedSpeed[];
 		readonly reasoning?: SessionModel["reasoning"];
 	}[],
 ): SessionModel[] {
@@ -72,7 +78,9 @@ export function sessionModelsFromListed(
 		label: model.label,
 		notice: model.notice ?? null,
 		reasoning: model.reasoning ?? null,
-		supportsFastMode: listedModelSupportsFastMode(model),
+		speeds:
+			model.speeds ??
+			(listedModelSupportsFastMode(model) ? [{ id: "fast" as const }] : []),
 	}));
 }
 
