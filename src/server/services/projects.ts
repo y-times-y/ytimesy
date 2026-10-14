@@ -1,5 +1,8 @@
 import { Effect } from "effect";
-import { addedProjectBranch } from "../../domain/add-project";
+import {
+	addedProjectBranch,
+	singleRepositoryProject,
+} from "../../domain/add-project";
 import { WorkspaceId } from "../../domain/ids";
 import { branchSwitchBlockedReason } from "../../domain/project-workspace";
 import {
@@ -22,6 +25,7 @@ import {
 } from "../adapters/github";
 import {
 	deleteProjectForOwner,
+	listProjects,
 	projectForOwner,
 	projectForRepository,
 	saveProject,
@@ -82,6 +86,18 @@ export function connectProjectGroup(
 				"Repositories in one project must have different folder names.",
 				400,
 			);
+		// Adding a repository that already has its own project opens that project.
+		const existing =
+			repositories.length === 1
+				? singleRepositoryProject(
+						yield* Effect.tryPromise(() => listProjects(userId)),
+						repositories[0].repositoryId,
+					)
+				: undefined;
+		if (existing) {
+			yield* enqueueProjectWorkspace(userId, existing.id);
+			return existing;
+		}
 		const project = yield* Effect.tryPromise(() =>
 			saveProjectGroup(userId, selection.name, repositories),
 		);

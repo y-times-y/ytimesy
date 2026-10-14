@@ -13,6 +13,9 @@ const adapter = vi.hoisted(() => ({
 	existing: vi.fn(),
 	workspace: vi.fn(),
 	failReady: vi.fn(),
+	list: vi.fn(),
+	saveGroup: vi.fn(),
+	enqueue: vi.fn(),
 }));
 vi.mock("../src/server/adapters/github", () => ({
 	authorizedRepository: adapter.authorize,
@@ -20,11 +23,16 @@ vi.mock("../src/server/adapters/github", () => ({
 }));
 vi.mock("../src/server/adapters/projects", () => ({
 	saveProject: adapter.save,
+	saveProjectGroup: adapter.saveGroup,
+	listProjects: adapter.list,
 	projectForRepository: adapter.existing,
 }));
 vi.mock("../src/server/adapters/workspaces", () => ({
 	workspaceForProject: adapter.workspace,
 	saveWorkspaceStatus: adapter.failReady,
+}));
+vi.mock("../src/server/services/workspaces", () => ({
+	enqueueProjectWorkspace: adapter.enqueue,
 }));
 vi.mock("../src/server/auth/github-connection", () => ({
 	githubAccessToken: adapter.token,
@@ -331,4 +339,43 @@ it("reports clashing folder names as a request the user can fix", async () => {
 	const failure = result._tag === "Left" ? result.left.error : null;
 	expect((failure as Response).status).toBe(400);
 	expect(await (failure as Response).text()).toMatch(/different folder names/);
+});
+
+it("reuses the project that already holds a repository instead of duplicating it", async () => {
+	adapter.branch.mockResolvedValue("sha");
+	adapter.enqueue.mockReturnValue(Effect.succeed({}));
+	const repository = {
+		fullName: "test/repo",
+		installationId: 1,
+		repositoryId: 2,
+		defaultBranch: "main",
+	};
+	adapter.authorize.mockResolvedValue(repository);
+	const existing = { ...repository, id: "proj", name: "repo", branch: "main" };
+	adapter.list.mockResolvedValue([
+		{
+			...existing,
+			id: "group",
+			name: "Group",
+			repositories: [
+				{ ...repository, branch: "main" },
+				{
+					...repository,
+					repositoryId: 3,
+					fullName: "test/api",
+					branch: "main",
+				},
+			],
+		},
+		existing,
+	]);
+	const project = await Effect.runPromise(
+		connectProjectGroup("alice", {
+			name: "repo",
+			repositories: [{ installationId: 1, repositoryId: 2, branch: "main" }],
+		}),
+	);
+	expect(project.id).toBe("proj");
+	expect(adapter.saveGroup).not.toHaveBeenCalled();
+	expect(adapter.enqueue).toHaveBeenCalledWith("alice", "proj");
 });
