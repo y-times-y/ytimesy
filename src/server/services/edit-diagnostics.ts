@@ -1,13 +1,22 @@
-import ts from "typescript";
+// The compiler is large; loading it on the first edit keeps it out of Worker startup.
+let compiler: Promise<typeof import("typescript")> | undefined;
+const typescript = () =>
+	(compiler ??= import("typescript").then(
+		(module) => (module.default ?? module) as typeof import("typescript"),
+	));
 
 /** Syntax feedback only: type safety and behavioral correctness still require project checks. */
-export function editDiagnostics(path: string, content: string | undefined) {
+export async function editDiagnostics(
+	path: string,
+	content: string | undefined,
+) {
 	if (
 		!/\.(?:[cm]?[jt]sx?)$/.test(path) ||
 		/\.d\.[cm]?ts$/.test(path) ||
 		content === undefined
 	)
 		return { syntaxChecked: false, diagnostics: [] as string[] };
+	const ts = await typescript();
 	const result = ts.transpileModule(content, {
 		fileName: path,
 		reportDiagnostics: true,
