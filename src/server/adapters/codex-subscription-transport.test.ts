@@ -270,3 +270,41 @@ it("relay force-refreshes once on 401 before reporting upstream rejection", asyn
 	expect(auth).toHaveBeenLastCalledWith("owner", true);
 	expect(fetch).toHaveBeenCalledTimes(2);
 });
+
+it("passes only a spent allowance's reset time across the relay, nothing else from the body", async () => {
+	const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+		new Response(
+			JSON.stringify({
+				error: {
+					type: "usage_limit_reached",
+					resets_at: 1_800_000_000,
+					plan_type: "plus",
+					message: "private-provider-detail",
+				},
+			}),
+			{ status: 429 },
+		),
+	);
+	const inference = {
+		userId: "owner",
+		operation: { kind: "inference", path: "codex/responses", body: "{}" },
+	};
+	const limited = await handleCodexSubscriptionRelay(await signed(inference));
+	expect(limited.status).toBe(429);
+	expect(await limited.json()).toEqual({
+		error: { type: "usage_limit_reached", resets_at: 1_800_000_000 },
+	});
+	fetch.mockResolvedValue(
+		new Response(
+			'{"error":{"type":"rate_limit_exceeded","message":"private"}}',
+			{
+				status: 429,
+			},
+		),
+	);
+	const throttled = await handleCodexSubscriptionRelay(await signed(inference));
+	expect(throttled.status).toBe(429);
+	const text = await throttled.text();
+	expect(text).toContain("subscription_upstream_error");
+	expect(text).not.toContain("private");
+});

@@ -3,6 +3,8 @@ import { z } from "zod";
 import {
 	CodexReconnectRequired,
 	SubscriptionMetadataFailure,
+	SubscriptionUsageLimitReached,
+	usageLimitReset,
 } from "#/domain/api-turn-failure";
 import { readBoundedRequestBody } from "#/domain/bounded-request-body";
 import type { CodexUsage } from "#/domain/codex-usage";
@@ -230,12 +232,21 @@ export async function codexSubscriptionModel(
 		// Long reasoning steps leave unrelated pooled HTTP/1 sockets idle. Do not
 		// retain them across steps; this does not retry or replay a returned stream.
 		headers.set("Connection", "close");
-		return subscriptionFetch(
+		const response = await subscriptionFetch(
 			userId,
 			"codex/responses",
 			{ ...init, method: "POST", headers },
 			tokens.chatgptAccountId,
 		);
+		// A spent plan allowance answers 429 like a rate limit, but retrying cannot help.
+		if (response.status === 429) {
+			const limit = usageLimitReset(await response.clone().text());
+			if (limit !== undefined) {
+				await response.body?.cancel();
+				throw new SubscriptionUsageLimitReached(limit);
+			}
+		}
+		return response;
 	};
 	const model = connectedLanguageModel(
 		{

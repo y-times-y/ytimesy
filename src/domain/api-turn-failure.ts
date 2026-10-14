@@ -85,6 +85,44 @@ export function apiTurnFailureClassification(error: unknown) {
 	};
 }
 
+/** A ChatGPT plan's Codex allowance is spent; retrying before it resets cannot succeed. */
+export class SubscriptionUsageLimitReached extends Error {
+	constructor(readonly resetsAt: Date | null) {
+		super(subscriptionUsageLimitMessage(resetsAt));
+		this.name = "SubscriptionUsageLimitReached";
+	}
+}
+
+export function subscriptionUsageLimitMessage(
+	resetsAt: Date | null,
+	now = new Date(),
+) {
+	const minutes = resetsAt
+		? Math.max(1, Math.ceil((resetsAt.getTime() - now.getTime()) / 60_000))
+		: null;
+	const wait =
+		minutes === null
+			? "It resets when your plan's usage window renews."
+			: `It resets in ${minutes >= 60 ? `${Math.floor(minutes / 60)} h ${minutes % 60} min` : `${minutes} min`} (${resetsAt?.toISOString().slice(11, 16)} UTC).`;
+	return `Your ChatGPT plan's Codex usage limit is used up. ${wait} To keep going now, choose a model on an API key. Work is preserved.`;
+}
+
+/** The plan's reset time when a 429 body reports a spent allowance; undefined otherwise. */
+export function usageLimitReset(body: string): Date | null | undefined {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(body.slice(0, 65_536));
+	} catch {
+		return undefined;
+	}
+	const error = (parsed as { error?: { type?: unknown; resets_at?: unknown } })
+		?.error;
+	if (error?.type !== "usage_limit_reached") return undefined;
+	return typeof error.resets_at === "number" && Number.isFinite(error.resets_at)
+		? new Date(error.resets_at * 1000)
+		: null;
+}
+
 export class SafeApiModelFailure extends Error {
 	readonly classification: ApiModelFailureClassification;
 
@@ -280,6 +318,7 @@ export function apiModelFailureMessage(error: unknown): string {
 	}
 	if (
 		error instanceof SafeApiModelFailure ||
+		error instanceof SubscriptionUsageLimitReached ||
 		error instanceof UnsupportedEdgeModelEndpoint ||
 		error instanceof ApiModelPreparationFailure
 	)
