@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { switchBrokeredBranchCommand } from "#/domain/git-branch-switch";
+import { fetchedBranchCommand } from "#/domain/git-branch-switch";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
 
 export { switchBrokeredBranchCommand } from "#/domain/git-branch-switch";
@@ -180,7 +180,6 @@ export async function receiveBrokeredRepository(
 				(await readFile(bundle)).toString("base64"),
 			);
 			const dest = quote(input.destination);
-			const branch = quote(input.workingBranch || input.branch);
 			await checked(
 				host,
 				`set -eu
@@ -188,8 +187,13 @@ umask 077
 base64 -d < ${quote(`${transfer}.b64`)} > ${quote(transfer)}
 ${input.mode === "clone" ? `test ! -e ${dest}\nmkdir -p ${dest}\ngit -C ${dest} init` : `test -z "$(git -C ${dest} status --porcelain)"`}
 git -C ${dest} -c core.hooksPath=/dev/null fetch --no-tags ${quote(transfer)} refs/heads/source
-${input.mode === "clone" ? `git -C ${dest} -c core.hooksPath=/dev/null checkout -b ${branch} FETCH_HEAD\ngit -C ${dest} remote add origin ${quote(url)}` : input.mode === "switch" ? switchBrokeredBranchCommand(input.destination, input.workingBranch || input.branch) : `git -C ${dest} -c core.hooksPath=/dev/null merge --ff-only FETCH_HEAD\ngit -C ${dest} -c core.hooksPath=/dev/null checkout -B ${branch}\ngit -C ${dest} remote set-url origin ${quote(url)}`}
-${input.mode === "clone" || input.mode === "switch" ? `git -C ${dest} update-ref refs/ytimesy/base FETCH_HEAD` : ""}
+${fetchedBranchCommand({
+	directory: input.destination,
+	branch: input.branch,
+	workingBranch: input.workingBranch || input.branch,
+	mode: input.mode,
+	originUrl: url,
+})}
 echo updated`,
 			);
 			return "updated";

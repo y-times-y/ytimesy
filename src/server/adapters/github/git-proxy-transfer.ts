@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import { switchBrokeredBranchCommand } from "#/domain/git-branch-switch";
+import { fetchedBranchCommand } from "#/domain/git-branch-switch";
 import { issueGitProxyGrant } from "#/domain/github-git-proxy";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
 import type { GitTransferHost } from "./git-broker";
@@ -140,8 +140,13 @@ export async function receiveProxiedRepository(
 			host,
 			`set -eu\n${input.mode === "clone" ? `test ! -e ${dest}\nmkdir -p ${dest}\ngit -C ${dest} init` : `test -z "$(git -C ${dest} status --porcelain)"`}
 ${git} -C ${dest} fetch --no-tags ${quote(url)} ${quote(`refs/heads/${input.branch}`)}
-${input.mode === "clone" ? `git -C ${dest} -c core.hooksPath=/dev/null checkout -b ${quote(branch)} FETCH_HEAD\ngit -C ${dest} remote add origin ${quote(`https://github.com/${input.owner}/${input.name}.git`)}` : input.mode === "switch" ? switchBrokeredBranchCommand(input.destination, branch) : `git -C ${dest} -c core.hooksPath=/dev/null merge --ff-only FETCH_HEAD\ngit -C ${dest} -c core.hooksPath=/dev/null checkout -B ${quote(branch)}`}
-${input.mode !== "update" ? `git -C ${dest} update-ref refs/ytimesy/base FETCH_HEAD` : ""}`,
+${fetchedBranchCommand({
+	directory: input.destination,
+	branch: input.branch,
+	workingBranch: branch,
+	mode: input.mode,
+	originUrl: `https://github.com/${input.owner}/${input.name}.git`,
+})}`,
 			120_000,
 		);
 		return "updated";

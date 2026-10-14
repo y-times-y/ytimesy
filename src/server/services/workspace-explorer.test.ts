@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect } from "effect";
 import { expect, it, vi } from "vitest";
+import { fetchedBranchCommand } from "#/domain/git-branch-switch";
 import {
 	parseWorkspaceDiffOutput,
 	WORKSPACE_DIFF_TRUNCATED_NOTE,
@@ -132,4 +133,72 @@ it("leaves an ordinary diff unmarked", () => {
 	expect(truncated).toBe(false);
 	expect(changes).toHaveLength(1);
 	expect(changes[0]?.preview).not.toContain("truncated");
+});
+
+it("shows only the chat's own changes after its checkout fast-forwarded past an older snapshot", async () => {
+	const root = await mkdtemp(join(tmpdir(), "ytimesy-fetched-"));
+	try {
+		const upstream = join(root, "upstream");
+		const guest = join(root, "guest");
+		const git = (directory: string, ...args: string[]) => {
+			const result = spawnSync("git", [
+				"-C",
+				directory,
+				"-c",
+				"user.name=t",
+				"-c",
+				"user.email=t@t",
+				...args,
+			]);
+			if (result.status !== 0) throw new Error(result.stderr.toString());
+			return result.stdout.toString().trim();
+		};
+		const receive = (mode: "clone" | "update") => {
+			git(guest, "fetch", "-q", "--no-tags", upstream, "refs/heads/main");
+			const result = spawnSync("bash", [
+				"-c",
+				`set -eu\n${fetchedBranchCommand({
+					directory: guest,
+					branch: "main",
+					workingBranch: "main",
+					mode,
+					originUrl: "https://github.com/acme/app.git",
+				})}`,
+			]);
+			if (result.status !== 0) throw new Error(result.stderr.toString());
+		};
+		await mkdir(upstream);
+		git(upstream, "init", "-q", "-b", "main");
+		await writeFile(join(upstream, "app.txt"), "v1\n");
+		git(upstream, "add", ".");
+		git(upstream, "commit", "-qm", "v1");
+		await mkdir(guest);
+		git(guest, "init", "-q");
+		receive("clone");
+		// The template snapshot is taken here; upstream then moves on.
+		for (const name of ["one.txt", "two.txt", "three.txt"]) {
+			await writeFile(join(upstream, name), `${name}\n`);
+			git(upstream, "add", ".");
+			git(upstream, "commit", "-qm", name);
+		}
+		const latest = git(upstream, "rev-parse", "HEAD");
+		receive("update");
+		expect(git(guest, "rev-parse", "refs/remotes/origin/main")).toBe(latest);
+		expect(git(guest, "rev-parse", "HEAD")).toBe(latest);
+		expect(git(guest, "rev-parse", "refs/ytimesy/base")).toBe(latest);
+		await writeFile(join(guest, "app.txt"), "chat edit\n");
+		const changes = spawnSync("bash", ["-c", gitChangesScript(guest, "main")]);
+		expect(changes.status).toBe(0);
+		expect(
+			parseWorkspaceDiffOutput(changes.stdout.toString()).changes.map(
+				(change) => change.path,
+			),
+		).toEqual(["app.txt"]);
+		// A checkout with commits of its own keeps its base.
+		git(guest, "commit", "-qam", "chat");
+		receive("update");
+		expect(git(guest, "rev-parse", "refs/ytimesy/base")).toBe(latest);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
 });
