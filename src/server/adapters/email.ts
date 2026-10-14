@@ -37,7 +37,7 @@ export type AuthEmailBinding = {
 let emailBinding: AuthEmailBinding | null = null;
 
 /** Workers hand over their binding at startup; the Node server has none. */
-export function useAuthEmailBinding(binding: AuthEmailBinding | undefined) {
+export function registerAuthEmailBinding(binding: AuthEmailBinding | undefined) {
 	if (binding) emailBinding = binding;
 }
 
