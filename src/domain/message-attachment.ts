@@ -28,7 +28,7 @@ export const messageAttachment = z.object({
 	id: z.string().uuid(),
 	name: z.string().min(1).max(120),
 	mediaType: z.string().min(1).max(120),
-	size: z.number().int().positive().max(MESSAGE_ATTACHMENT_LIMITS.fileBytes),
+	size: z.number().int().nonnegative().max(MESSAGE_ATTACHMENT_LIMITS.fileBytes),
 });
 
 /** One path segment: no separators, control characters or leading dots. */
@@ -54,6 +54,7 @@ export function isViewableImage(mediaType: string) {
 }
 
 function sizeLabel(bytes: number) {
+	if (bytes === 0) return "empty";
 	return bytes < 1024 * 1024
 		? `${Math.max(1, Math.round(bytes / 1024))} KB`
 		: `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -81,11 +82,11 @@ export const incomingAttachments = z
 		z.object({
 			name: z.string().min(1).max(255),
 			mediaType: z.string().max(120),
+			// An empty file is a valid attachment and encodes to "".
 			base64: z
 				.string()
-				.min(1)
 				.max(Math.ceil(MESSAGE_ATTACHMENT_LIMITS.fileBytes / 3) * 4)
-				.regex(/^[A-Za-z0-9+/]+={0,2}$/),
+				.regex(/^(?:[A-Za-z0-9+/]+={0,2})?$/),
 		}),
 	)
 	.max(MESSAGE_ATTACHMENT_LIMITS.files)
