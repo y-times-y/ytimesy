@@ -25,7 +25,9 @@ function base64(file: File) {
 		reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
 		reader.onload = () => {
 			const url = String(reader.result);
-			resolve(url.slice(url.indexOf(",") + 1));
+			const comma = url.indexOf(",");
+			// Some browsers read an empty file as a bare "data:" URL.
+			resolve(comma < 0 ? "" : url.slice(comma + 1));
 		};
 		reader.readAsDataURL(file);
 	});
