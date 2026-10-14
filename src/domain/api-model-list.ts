@@ -49,9 +49,15 @@ export const API_MODEL_LIST: readonly ListedApiModel[] = [
 	},
 	{
 		author: "anthropic",
-		label: "Claude Sonnet 5",
-		openRouterId: "anthropic/claude-sonnet-5",
-		directId: "claude-sonnet-5",
+		label: "Claude Sonnet 5.5",
+		openRouterId: "anthropic/claude-sonnet-5.5",
+		directId: "claude-sonnet-5-5",
+	},
+	{
+		author: "anthropic",
+		label: "Claude Haiku 5.5",
+		openRouterId: "anthropic/claude-haiku-5.5",
+		directId: "claude-haiku-5-5",
 	},
 	{
 		author: "anthropic",
@@ -70,6 +76,39 @@ export const API_MODEL_LIST: readonly ListedApiModel[] = [
 		label: "Grok 4.7",
 		openRouterId: "x-ai/grok-4.7",
 		directId: "grok-4.7",
+	},
+	// The makers below are offered through OpenRouter; their direct-key ids are
+	// not listed yet, so a direct key for them unlocks nothing until they are.
+	{
+		author: "meta",
+		label: "Llama 4 Maverick",
+		openRouterId: "meta-llama/llama-4-maverick",
+	},
+	{
+		author: "meta",
+		label: "Llama 4 Scout",
+		openRouterId: "meta-llama/llama-4-scout",
+	},
+	{
+		author: "deepseek",
+		label: "DeepSeek V4 Pro",
+		openRouterId: "deepseek/deepseek-v4-pro",
+	},
+	{
+		author: "deepseek",
+		label: "DeepSeek V4.1 Flash",
+		openRouterId: "deepseek/deepseek-v4.1-flash",
+	},
+	{ author: "z-ai", label: "GLM 5.3", openRouterId: "z-ai/glm-5.3" },
+	{
+		author: "moonshotai",
+		label: "Kimi K3",
+		openRouterId: "moonshotai/kimi-k3",
+	},
+	{
+		author: "qwen",
+		label: "Qwen 3.8 Max",
+		openRouterId: "qwen/qwen3.8-max-prime",
 	},
 ];
 

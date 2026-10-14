@@ -95,7 +95,10 @@ export function ApiModelBrowser({
 				.filter(
 					(model) =>
 						connection.provider !== "openrouter" ||
-						model.id.startsWith(`${modelAuthor}/`),
+						API_MODEL_LIST.some(
+							(entry) =>
+								entry.openRouterId === model.id && entry.author === modelAuthor,
+						),
 				)
 				.map((model) => ({
 					...model,
