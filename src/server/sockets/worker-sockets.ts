@@ -1,5 +1,6 @@
 import { trackInvocationTask } from "../adapters/invocation-tasks";
 import type { ClientSocket } from "./client-socket";
+import { webSocketCloseReason } from "./close-reason";
 import { DESKTOP_PATH, runDesktopSession } from "./desktop-session";
 import { runTerminalSession, TERMINAL_PATH } from "./terminal-session";
 
@@ -12,9 +13,12 @@ function workerSocket(socket: WebSocket): ClientSocket {
 		send: (data) => socket.send(data),
 		close: (code, reason) => {
 			try {
-				socket.close(code, reason);
+				socket.close(code, webSocketCloseReason(reason));
 			} catch {
-				// Already closed.
+				// Already closed, or the runtime rejected the frame: still close it.
+				try {
+					socket.close(code);
+				} catch {}
 			}
 		},
 		onMessage: (listener) =>
