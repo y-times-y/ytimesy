@@ -366,6 +366,15 @@ export async function publishApiTurnProgress(
 	await wakeConversationProgress();
 }
 
+/** Whichever watcher noticed first, a stop the user asked for is a clean stop. */
+export async function apiTurnCancelRequested(turn: ApiTurn) {
+	const result = await database().query(
+		"select 1 from api_turn where id=$1 and lease_id=$2 and user_id=$3 and cancel_requested",
+		[turn.id, turn.lease_id, turn.user_id],
+	);
+	return result.rows.length > 0;
+}
+
 export async function finishApiTurn(
 	turn: ApiTurn,
 	state: "completed" | "failed" | "cancelled",
