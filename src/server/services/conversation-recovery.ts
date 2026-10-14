@@ -12,6 +12,7 @@ import {
 	captureConversationCode,
 	restoreConversationCode,
 } from "./conversation-code-checkpoint";
+import { holdSettledConversationTurn } from "./conversation-turn-settled";
 import { machinesForAgentSession } from "./session-workspace-machines";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -68,6 +69,7 @@ export async function recoverConversation(
 	const client = await database().connect();
 	let workspace: AgentToolWorkspace | undefined;
 	let backup: Awaited<ReturnType<typeof captureConversationCode>> | undefined;
+	let releaseTurn: (() => Promise<void>) | undefined;
 	try {
 		await client.query("begin");
 		await client.query("set local idle_in_transaction_session_timeout='120s'");
@@ -87,6 +89,9 @@ export async function recoverConversation(
 		);
 		if (active.rows.some((child) => child.turn_status === "running"))
 			throw new Error("Stop active child tasks before using recovery.");
+		// turn_status turns idle before a stopped turn's runner has fully settled.
+		if (input.mode !== "fork")
+			releaseTurn = await holdSettledConversationTurn(userId, input.sessionId);
 		const point = await conversationPoint(
 			userId,
 			input.sessionId,
@@ -173,6 +178,7 @@ export async function recoverConversation(
 		throw error;
 	} finally {
 		client.release();
+		await releaseTurn?.();
 	}
 }
 

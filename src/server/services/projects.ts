@@ -11,6 +11,7 @@ import {
 	type ProjectSelection,
 	projectFolderName,
 	projectMachineRefsToDestroy,
+	type RepositoryChoice,
 } from "../../domain/projects";
 import {
 	isGeneratedSessionBranch,
@@ -28,6 +29,7 @@ import {
 	listProjects,
 	projectForOwner,
 	projectForRepository,
+	refreshProjectRepository,
 	saveProject,
 	saveProjectGroup,
 } from "../adapters/projects";
@@ -56,6 +58,32 @@ function requireBranch(token: string, fullName: string, branch: string) {
 
 const branchChangedMessage = "Branch changed. Retry to prepare this branch.";
 
+/**
+ * Before an existing project's branch is overwritten: refuses while its
+ * workspace is busy, and returns the ready workspace that must be marked
+ * failed afterwards so Retry clones the new branch (null when none).
+ */
+async function workspaceToRestartForBranch(
+	userId: string,
+	existing: { id: string; branch: string },
+	repository: { fullName: string; repositoryId: number; defaultBranch: string },
+	branch: string,
+) {
+	const workspace = await workspaceForProject(userId, existing.id);
+	const blocked = branchSwitchBlockedReason(workspace?.status);
+	if (blocked) throw new Response(blocked, { status: 409 });
+	return workspace?.status === "ready" &&
+		sessionBranchChangeRestartsWorkspace({
+			from: existing.branch,
+			to: branch,
+			defaultBranch: repository.defaultBranch,
+			title: projectFolderName(repository.fullName),
+			id: String(repository.repositoryId),
+		})
+		? workspace.id
+		: null;
+}
+
 export function connectProjectGroup(
 	userId: string,
 	selection: ProjectGroupSelection,
@@ -63,6 +91,7 @@ export function connectProjectGroup(
 	return Effect.gen(function* () {
 		const token = yield* Effect.tryPromise(() => githubAccessToken(userId));
 		const repositories: ProjectRepository[] = [];
+		const authorized: RepositoryChoice[] = [];
 		for (const selected of selection.repositories) {
 			const repository = yield* Effect.tryPromise(() =>
 				authorizedRepository(
@@ -76,6 +105,7 @@ export function connectProjectGroup(
 				: selected.branch;
 			yield* requireBranch(token, repository.fullName, branch);
 			repositories.push({ ...repository, branch });
+			authorized.push(repository);
 		}
 		// Existing tools address checkouts by basename; reject ambiguous directory names.
 		if (
@@ -86,7 +116,9 @@ export function connectProjectGroup(
 				"Repositories in one project must have different folder names.",
 				400,
 			);
-		// Adding a repository that already has its own project opens that project.
+		// Adding a repository that already has its own project opens that
+		// project, refreshing its Git access (a reinstalled GitHub App has a new
+		// installation id; a renamed or transferred repository a new full name).
 		const existing =
 			repositories.length === 1
 				? singleRepositoryProject(
@@ -95,8 +127,37 @@ export function connectProjectGroup(
 					)
 				: undefined;
 		if (existing) {
-			yield* enqueueProjectWorkspace(userId, existing.id);
-			return existing;
+			const repository = repositories[0];
+			const restartWorkspaceId =
+				existing.branch === repository.branch
+					? null
+					: yield* Effect.tryPromise(() =>
+							workspaceToRestartForBranch(
+								userId,
+								existing,
+								authorized[0],
+								repository.branch,
+							),
+						);
+			// The form defaults the name to the repository's folder name; only a
+			// name the user typed renames the project.
+			const typedName =
+				selection.name !== projectFolderName(repository.fullName)
+					? selection.name
+					: null;
+			const project = yield* Effect.tryPromise(() =>
+				refreshProjectRepository(userId, existing.id, repository, typedName),
+			);
+			if (restartWorkspaceId)
+				yield* Effect.tryPromise(() =>
+					saveWorkspaceStatus(
+						restartWorkspaceId,
+						"failed",
+						branchChangedMessage,
+					),
+				);
+			yield* enqueueProjectWorkspace(userId, project.id);
+			return project;
 		}
 		const project = yield* Effect.tryPromise(() =>
 			saveProjectGroup(userId, selection.name, repositories),
@@ -136,28 +197,19 @@ export function connectProject(
 			: selection.branch;
 		if (!isGeneratedSessionBranch(storedBranch))
 			yield* requireBranch(token, repository.fullName, storedBranch);
-		let restartWorkspaceId: string | null = null;
-		yield* Effect.tryPromise(async () => {
-			const existing = await projectForRepository(
-				userId,
-				selection.repositoryId,
-			);
-			if (!existing) return;
-			const workspace = await workspaceForProject(userId, existing.id);
-			const blocked = branchSwitchBlockedReason(workspace?.status);
-			if (blocked) throw new Response(blocked, { status: 409 });
-			if (
-				workspace?.status === "ready" &&
-				sessionBranchChangeRestartsWorkspace({
-					from: existing.branch,
-					to: storedBranch,
-					defaultBranch: repository.defaultBranch,
-					title: projectFolderName(repository.fullName),
-					id: String(repository.repositoryId),
-				})
-			)
-				restartWorkspaceId = workspace.id;
-		});
+		const existing = yield* Effect.tryPromise(() =>
+			projectForRepository(userId, selection.repositoryId),
+		);
+		const restartWorkspaceId = existing
+			? yield* Effect.tryPromise(() =>
+					workspaceToRestartForBranch(
+						userId,
+						existing,
+						repository,
+						storedBranch,
+					),
+				)
+			: null;
 		const project = yield* Effect.tryPromise(() =>
 			saveProject(userId, repository, storedBranch),
 		);
@@ -167,10 +219,9 @@ export function connectProject(
 			{ repositories: 1 },
 			{ key: project.id, timestamp: new Date() },
 		);
-		const workspaceToRestart = restartWorkspaceId;
-		if (workspaceToRestart)
+		if (restartWorkspaceId)
 			yield* Effect.tryPromise(() =>
-				saveWorkspaceStatus(workspaceToRestart, "failed", branchChangedMessage),
+				saveWorkspaceStatus(restartWorkspaceId, "failed", branchChangedMessage),
 			);
 		yield* enqueue(userId, project.id);
 		return project;

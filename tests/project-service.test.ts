@@ -15,6 +15,7 @@ const adapter = vi.hoisted(() => ({
 	failReady: vi.fn(),
 	list: vi.fn(),
 	saveGroup: vi.fn(),
+	refresh: vi.fn(),
 	enqueue: vi.fn(),
 }));
 vi.mock("../src/server/adapters/github", () => ({
@@ -26,6 +27,7 @@ vi.mock("../src/server/adapters/projects", () => ({
 	saveProjectGroup: adapter.saveGroup,
 	listProjects: adapter.list,
 	projectForRepository: adapter.existing,
+	refreshProjectRepository: adapter.refresh,
 }));
 vi.mock("../src/server/adapters/workspaces", () => ({
 	workspaceForProject: adapter.workspace,
@@ -369,6 +371,10 @@ it("reuses the project that already holds a repository instead of duplicating it
 		},
 		existing,
 	]);
+	adapter.refresh.mockImplementation(async (_user, id) => ({
+		...existing,
+		id,
+	}));
 	const project = await Effect.runPromise(
 		connectProjectGroup("alice", {
 			name: "repo",
@@ -378,4 +384,84 @@ it("reuses the project that already holds a repository instead of duplicating it
 	expect(project.id).toBe("proj");
 	expect(adapter.saveGroup).not.toHaveBeenCalled();
 	expect(adapter.enqueue).toHaveBeenCalledWith("alice", "proj");
+});
+
+it("refreshes Git access and a typed name when a repository is added again", async () => {
+	adapter.branch.mockResolvedValue("sha");
+	adapter.enqueue.mockReturnValue(Effect.succeed({}));
+	// The GitHub App was reinstalled and the repository renamed.
+	adapter.authorize.mockResolvedValue({
+		fullName: "new-owner/renamed",
+		installationId: 9,
+		repositoryId: 2,
+		defaultBranch: "main",
+	});
+	adapter.list.mockResolvedValue([
+		{
+			id: "proj",
+			repositoryId: 2,
+			installationId: 1,
+			fullName: "old-owner/repo",
+			branch: "main",
+		},
+	]);
+	adapter.refresh.mockImplementation(async (_user, id) => ({ id }));
+	const add = (name: string) =>
+		Effect.runPromise(
+			connectProjectGroup("alice", {
+				name,
+				repositories: [{ installationId: 9, repositoryId: 2, branch: "main" }],
+			}),
+		);
+	await add("renamed");
+	expect(adapter.refresh).toHaveBeenLastCalledWith(
+		"alice",
+		"proj",
+		{
+			fullName: "new-owner/renamed",
+			installationId: 9,
+			repositoryId: 2,
+			defaultBranch: "main",
+			branch: "main",
+		},
+		null,
+	);
+	await add("My app");
+	expect(adapter.refresh.mock.lastCall?.[3]).toBe("My app");
+	expect(adapter.saveGroup).not.toHaveBeenCalled();
+	expect(adapter.workspace).not.toHaveBeenCalled();
+});
+
+it("restarts a ready workspace when re-adding changes the project's branch", async () => {
+	adapter.branch.mockResolvedValue("sha");
+	adapter.enqueue.mockReturnValue(Effect.succeed({}));
+	adapter.authorize.mockResolvedValue({
+		fullName: "test/repo",
+		installationId: 1,
+		repositoryId: 2,
+		defaultBranch: "main",
+	});
+	adapter.list.mockResolvedValue([
+		{
+			id: "proj",
+			repositoryId: 2,
+			installationId: 1,
+			fullName: "test/repo",
+			branch: "develop",
+		},
+	]);
+	adapter.workspace.mockResolvedValue({ id: "ws", status: "ready" });
+	adapter.failReady.mockResolvedValue({});
+	adapter.refresh.mockImplementation(async (_user, id) => ({ id }));
+	await Effect.runPromise(
+		connectProjectGroup("alice", {
+			name: "repo",
+			repositories: [{ installationId: 1, repositoryId: 2, branch: "main" }],
+		}),
+	);
+	expect(adapter.failReady).toHaveBeenCalledWith(
+		"ws",
+		"failed",
+		"Branch changed. Retry to prepare this branch.",
+	);
 });
