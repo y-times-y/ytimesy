@@ -90,6 +90,22 @@ export function harnessLoginIsPending(connection: AgentConnection): boolean {
 	return connection.status === "awaiting_device_code";
 }
 
+/**
+ * What a send does once connecting returned: send now, hold the message while
+ * the user enters the device code (it is sent when sign-in completes), or drop it.
+ */
+export function sendAfterConnect(
+	connection: AgentConnection,
+): "send" | "await_sign_in" | "abandon" {
+	if (connection.status === "authenticated") return "send";
+	if (
+		connection.status === "awaiting_device_code" &&
+		connection.verificationUrl
+	)
+		return "await_sign_in";
+	return "abandon";
+}
+
 export function selectedHarnessIsConnected(
 	connection: AgentConnection,
 	harnessId: AgentProviderId,

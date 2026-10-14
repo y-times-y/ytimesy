@@ -12,6 +12,7 @@ import {
 } from "#/domain/message-attachment";
 import { parseModelRouteId } from "#/domain/model-connection";
 import {
+	sendWasQueued,
 	sessionItemsFromUnknown,
 	sessionItemsQueuedWithUser,
 } from "#/domain/session-item";
@@ -148,6 +149,9 @@ export async function sendApiWorkspaceTask(
 			`${settings.speed === "ultrafast" ? "Ultrafast" : "Fast"} mode is not available for this model on this connection.`,
 		);
 	const current = sessionItemsFromUnknown(session.items);
+	// The send's key is its message id: a replayed request was already queued.
+	if (sendWasQueued(current, input.idempotencyKey))
+		return readApiWorkspaceSession(scope);
 	if (input.approvesPlan && !pendingPlanId(current))
 		throw new Error("That plan was already answered.");
 	const attachments = await storeMessageAttachments(
@@ -158,7 +162,7 @@ export async function sendApiWorkspaceTask(
 	const items = sessionItemsQueuedWithUser(
 		current,
 		input.text,
-		undefined,
+		input.idempotencyKey,
 		input.approvesPlan,
 		attachments,
 	);

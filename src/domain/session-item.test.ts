@@ -7,9 +7,12 @@ import {
 	lastAgentMessageText,
 	lastUserMessageText,
 	type SessionItem,
+	sendWasQueued,
 	sessionItemsQueuedWithUser,
 	sessionTitleFromItems,
 	sessionUsesFollowUpLayout,
+	sessionViewShouldReplaceOpenTurn,
+	sessionWithoutFailedSend,
 	visibleSessionItems,
 } from "./session-item";
 
@@ -130,9 +133,15 @@ describe("session items", () => {
 		expect(visibleSessionItems(server, optimistic)).toHaveLength(2);
 		expect(
 			visibleSessionItems(server, [
-				{ kind: "userMessage", id: SessionItemId("local-1"), text: "first" },
+				{ kind: "userMessage", id: SessionItemId("user-1"), text: "first" },
 			]),
 		).toEqual(server);
+		// The same words sent again are a new message, not the earlier one.
+		expect(
+			visibleSessionItems(server, [
+				{ kind: "userMessage", id: SessionItemId("local-1"), text: "first" },
+			]),
+		).toHaveLength(2);
 	});
 
 	it("returns the most recent user message for retry", () => {
@@ -362,4 +371,104 @@ it("records a plan approval only while a plan waits, even with repeated words", 
 	).toHaveLength(2);
 	const [plain] = sessionItemsQueuedWithUser([], "Refactor auth", "m4");
 	expect(plain).not.toHaveProperty("approvesPlan");
+});
+
+describe("message identity", () => {
+	const user = (id: string, text = "continue"): SessionItem => ({
+		kind: "userMessage",
+		id: SessionItemId(id),
+		text,
+	});
+	const reply = (id: string): SessionItem => ({
+		kind: "agentMessage",
+		id: SessionItemId(id),
+		text: "done",
+	});
+
+	it("queues a deliberate repeat but not a replayed send", () => {
+		const first = sessionItemsQueuedWithUser([], "continue", "m1");
+		const repeat = sessionItemsQueuedWithUser(first, "continue", "m2");
+		expect(repeat).toHaveLength(2);
+		expect(sessionItemsQueuedWithUser(repeat, "continue", "m2")).toEqual(
+			repeat,
+		);
+		expect(sendWasQueued(repeat, "m2")).toBe(true);
+		expect(sendWasQueued(repeat, "m3")).toBe(false);
+		expect(sendWasQueued(repeat, undefined)).toBe(false);
+	});
+
+	it("takes back a send the server refused and unlocks the turn", () => {
+		const session = {
+			items: [user("m1"), reply("a1"), user("m2")],
+			turnStatus: "running" as const,
+		};
+		expect(sessionWithoutFailedSend(session, "m2", "completed")).toEqual({
+			items: [user("m1"), reply("a1")],
+			turnStatus: "completed",
+		});
+		// A send that never reached the transcript leaves it alone.
+		expect(sessionWithoutFailedSend(session, "m9", "idle")).toBe(session);
+	});
+
+	it("keeps the open turn against a view from before the send", () => {
+		const open = [user("m1"), reply("a1"), user("m2")];
+		const stale = [user("m1"), reply("a1")];
+		expect(
+			sessionViewShouldReplaceOpenTurn({
+				currentStatus: "running",
+				nextStatus: "completed",
+				currentItems: open,
+				nextItems: stale,
+			}),
+		).toBe(false);
+		// A repeated "continue": the earlier, settled one is not this turn.
+		expect(
+			sessionViewShouldReplaceOpenTurn({
+				currentStatus: "running",
+				nextStatus: "idle",
+				currentItems: [...stale, user("m2")],
+				nextItems: [user("m1")],
+			}),
+		).toBe(false);
+		expect(
+			sessionViewShouldReplaceOpenTurn({
+				currentStatus: "running",
+				nextStatus: "completed",
+				currentItems: open,
+				nextItems: [...open, reply("a2")],
+			}),
+		).toBe(true);
+	});
+
+	it("unlocks the composer when a stopped turn ends idle", () => {
+		const open = [user("m1")];
+		// Stop pressed: the idle view counts even without the live stream.
+		expect(
+			sessionViewShouldReplaceOpenTurn({
+				currentStatus: "running",
+				nextStatus: "idle",
+				currentItems: open,
+				nextItems: [],
+				stopRequested: true,
+			}),
+		).toBe(true);
+		// The server holds this very message and says nothing runs.
+		expect(
+			sessionViewShouldReplaceOpenTurn({
+				currentStatus: "running",
+				nextStatus: "idle",
+				currentItems: open,
+				nextItems: open,
+			}),
+		).toBe(true);
+		// Opened as running with nothing sent from here: the server decides.
+		expect(
+			sessionViewShouldReplaceOpenTurn({
+				currentStatus: "running",
+				nextStatus: "idle",
+				currentItems: [],
+				nextItems: open,
+			}),
+		).toBe(true);
+	});
 });
