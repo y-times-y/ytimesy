@@ -131,19 +131,55 @@ async function executeWithStreamRetries(
 	// A durable step owns exactly one inference: once its output is saved, a
 	// retry would sample a second step inside it.
 	let stepFinished = false;
+	let attempt = 0;
+	// Providers number a response's parts from zero (Anthropic uses the block
+	// index), so a resampled response reuses the dropped one's ids and its text
+	// would be appended to the partial text. Each retry gets its own ids, and
+	// the dropped response's partial items are retracted first.
+	const committedIds = new Set<string>();
+	let uncommittedIds = new Set<string>();
+	// The token and evaluation reservation covers one inference per history;
+	// resampling the same step must not reserve it again.
+	let reservedFor: ModelMessage[] | undefined;
+	let droppedStep = false;
 	const tracked: ModelAgentInput = {
 		...input,
 		onEvent: async (event) => {
 			if (event.type === "tool-call") toolCallStarted = true;
+			if (
+				event.type === "text-delta" ||
+				event.type === "reasoning-delta" ||
+				event.type === "reasoning-end"
+			) {
+				if (attempt > 0)
+					event = { ...event, id: `${event.id}:retry-${attempt}` };
+				uncommittedIds.add(event.id);
+			}
 			await input.onEvent(event);
 		},
 		onStep: async (messages) => {
+			// A dropped step is still saved, but a retry resamples it from the
+			// history before it rather than continuing after its partial output.
+			if (droppedStep) {
+				droppedStep = false;
+				await input.onStep(messages);
+				return;
+			}
 			committed = messages;
 			toolCallStarted = false;
+			for (const id of uncommittedIds) committedIds.add(id);
+			uncommittedIds = new Set();
 			await input.onStep(messages);
 		},
+		beforeStep:
+			input.beforeStep &&
+			(async (messages) => {
+				if (reservedFor === committed) return;
+				await input.beforeStep?.(messages);
+				reservedFor = committed;
+			}),
 	};
-	for (let attempt = 0; ; attempt++) {
+	for (; ; attempt++) {
 		try {
 			return await executeModelSteps(
 				{
@@ -153,8 +189,9 @@ async function executeWithStreamRetries(
 				},
 				runtime,
 				singleStep,
-				() => {
-					stepFinished = true;
+				(clean) => {
+					if (clean) stepFinished = true;
+					droppedStep = !clean;
 				},
 			);
 		} catch (error) {
@@ -167,6 +204,13 @@ async function executeWithStreamRetries(
 			)
 				throw error;
 			toolCallStarted = false;
+			// An id an earlier, saved step also used is not the dropped response's own.
+			const retracted = [...uncommittedIds].filter(
+				(id) => !committedIds.has(id),
+			);
+			uncommittedIds = new Set();
+			if (retracted.length)
+				await input.onEvent({ type: "retract", ids: retracted });
 			await new Promise((done) => setTimeout(done, 2_000 * (attempt + 1)));
 		}
 	}
@@ -282,7 +326,7 @@ async function executeModelSteps(
 	input: ModelAgentInput,
 	runtime: ModelAgentRuntime,
 	singleStep: boolean,
-	onStepFinished?: () => void,
+	onStepFinished?: (clean: boolean) => void,
 ): Promise<ModelAgentStepResult> {
 	const modelFamily = harnessModelFamily(
 		typeof runtime.model === "string" ? "registry" : runtime.model.provider,
@@ -727,7 +771,7 @@ async function executeModelSteps(
 			},
 			onStepFinish: async (step) => {
 				// The SDK also finishes a step whose stream failed; only a clean one counts.
-				if (step.finishReason !== "error") onStepFinished?.();
+				onStepFinished?.(step.finishReason !== "error");
 				await recordUsage(step.usage);
 				if (
 					runtime.contextWindow &&

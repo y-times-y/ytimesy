@@ -44,6 +44,10 @@ export function applyApiProgress(
 					? { ...item, durationSeconds: 0 }
 					: item,
 		);
+	if (event.type === "retract") {
+		const retracted = new Set(event.ids.map((id) => `${turnId}:${id}`));
+		return items.filter((item) => !retracted.has(item.id));
+	}
 	const id = SessionItemId(`${turnId}:${event.id}`);
 	const existing = items.find((item) => item.id === id);
 	let next: SessionItem;
