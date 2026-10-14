@@ -30,7 +30,7 @@ it("retains the latest three generations and all their variants", () => {
 		"openai/gpt-6.1-sol",
 		"openai/gpt-6-luna-pro",
 		"openai/gpt-6-luna",
-		"openai/gpt-6-sol",
+		"openai/gpt-6.1-sol",
 		"openai/gpt-6-astra",
 		"openai/gpt-5.6-sol",
 		"openai/gpt-5.5",
@@ -180,7 +180,7 @@ it("reads the gateway catalog's ids and context sizes without filtering it", () 
 		parseBrowseModels({
 			data: [
 				{
-					id: "openai/gpt-6-sol",
+					id: "openai/gpt-6.1-sol",
 					name: "OpenAI: GPT-6 Sol",
 					context_length: 400_000,
 				},
@@ -189,7 +189,7 @@ it("reads the gateway catalog's ids and context sizes without filtering it", () 
 			],
 		}).map((model) => [model.id, model.contextWindow]),
 	).toEqual([
-		["openai/gpt-6-sol", 400_000],
+		["openai/gpt-6.1-sol", 400_000],
 		["vendor/audio", undefined],
 	]);
 	expect(() => parseBrowseModels({})).toThrow("unavailable");
