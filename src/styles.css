@@ -3365,6 +3365,11 @@ a.sidebar-chat-pr,
 .settings-danger-zone {
 	margin-top: 16px;
 }
+/* A destructive action's consequences are read in full, not truncated. */
+.settings-danger-zone .settings-row-meta {
+	white-space: normal;
+	line-height: 17px;
+}
 .settings-danger-zone .settings-row-title {
 	color: #ffb4ab;
 }
