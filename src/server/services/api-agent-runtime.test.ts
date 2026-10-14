@@ -1591,3 +1591,73 @@ it("does not resample a step whose tool call already started", async () => {
 	).rejects.toThrow();
 	expect(call).toBe(1);
 });
+
+it("retries a durable step whose connection dropped before any tool call", async () => {
+	let call = 0;
+	const model = new MockLanguageModelV4({
+		doStream: async () =>
+			call++ === 0
+				? stream([
+						{ type: "reasoning-start", id: "r" },
+						{ type: "reasoning-delta", id: "r", delta: "Thinking" },
+						{ type: "error", error: droppedConnection() },
+					])
+				: stream([
+						{ type: "text-start", id: "a" },
+						{ type: "text-delta", id: "a", delta: "Done." },
+						{ type: "text-end", id: "a" },
+						finish,
+					]),
+	});
+	const result = await runModelAgentStep(
+		{
+			userId: "alice",
+			modelId: "gpt-6.1-sol",
+			instructions: "Implement",
+			messages: [{ role: "user", content: "Fixture" }],
+			tools: {},
+			signal: new AbortController().signal,
+			onEvent: async () => {},
+			onStep: async () => {},
+		},
+		{ model },
+	);
+	expect(call).toBe(2);
+	expect(result.outcome).toBe("completed");
+	expect(JSON.stringify(result.messages)).toContain("Done.");
+});
+
+it("does not resample a durable step whose tool call already started", async () => {
+	let call = 0;
+	const execute = vi.fn(async () => "ran");
+	const model = new MockLanguageModelV4({
+		doStream: async () => {
+			call++;
+			return stream([
+				{
+					type: "tool-call",
+					toolCallId: "c1",
+					toolName: "write",
+					input: "{}",
+				},
+				{ type: "error", error: droppedConnection() },
+			]);
+		},
+	});
+	await expect(
+		runModelAgentStep(
+			{
+				userId: "alice",
+				modelId: "gpt-6.1-sol",
+				instructions: "Implement",
+				messages: [{ role: "user", content: "Fixture" }],
+				tools: { write: tool({ inputSchema: z.object({}), execute }) },
+				signal: new AbortController().signal,
+				onEvent: async () => {},
+				onStep: async () => {},
+			},
+			{ model },
+		),
+	).rejects.toThrow();
+	expect(call).toBe(1);
+});

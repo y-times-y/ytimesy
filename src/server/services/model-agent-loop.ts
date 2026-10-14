@@ -124,9 +124,13 @@ const STREAM_RETRIES = 4;
 async function executeWithStreamRetries(
 	input: ModelAgentInput,
 	runtime: ModelAgentRuntime,
+	singleStep = false,
 ) {
 	let committed = input.messages;
 	let toolCallStarted = false;
+	// A durable step owns exactly one inference: once its output is saved, a
+	// retry would sample a second step inside it.
+	let stepFinished = false;
 	const tracked: ModelAgentInput = {
 		...input,
 		onEvent: async (event) => {
@@ -142,14 +146,22 @@ async function executeWithStreamRetries(
 	for (let attempt = 0; ; attempt++) {
 		try {
 			return await executeModelSteps(
-				{ ...tracked, messages: committed },
+				{
+					...tracked,
+					...(singleStep ? { maxSteps: 1 } : {}),
+					messages: committed,
+				},
 				runtime,
-				false,
+				singleStep,
+				() => {
+					stepFinished = true;
+				},
 			);
 		} catch (error) {
 			if (
 				attempt >= STREAM_RETRIES ||
 				toolCallStarted ||
+				(singleStep && stepFinished) ||
 				input.signal.aborted ||
 				!interruptedStream(error)
 			)
@@ -263,13 +275,14 @@ export function runModelAgentStep(
 	input: ModelAgentInput,
 	runtime: ModelAgentRuntime,
 ) {
-	return executeModelSteps({ ...input, maxSteps: 1 }, runtime, true);
+	return executeWithStreamRetries(input, runtime, true);
 }
 
 async function executeModelSteps(
 	input: ModelAgentInput,
 	runtime: ModelAgentRuntime,
 	singleStep: boolean,
+	onStepFinished?: () => void,
 ): Promise<ModelAgentStepResult> {
 	const modelFamily = harnessModelFamily(
 		typeof runtime.model === "string" ? "registry" : runtime.model.provider,
@@ -713,6 +726,8 @@ async function executeModelSteps(
 				}
 			},
 			onStepFinish: async (step) => {
+				// The SDK also finishes a step whose stream failed; only a clean one counts.
+				if (step.finishReason !== "error") onStepFinished?.();
 				await recordUsage(step.usage);
 				if (
 					runtime.contextWindow &&
