@@ -16,8 +16,10 @@ import {
 	sendWasQueued,
 	sessionItemsFromUnknown,
 	sessionItemsQueuedWithUser,
+	sessionTitleFromItems,
 } from "#/domain/session-item";
 import { subscriptionTurnRevision } from "#/domain/subscription-turn";
+import { titleUntitledAgentSession } from "#/server/adapters/agent-sessions";
 import { agentSessionForOwner } from "../adapters/agent-sessions";
 import { isServerControlledIntegration } from "../adapters/agent-task-command-receipts";
 import {
@@ -247,6 +249,12 @@ export async function sendSubscriptionTask(
 		preparedTask,
 		idempotencyKey: input.idempotencyKey,
 	});
+	// The sidebar shows the stored title; name the chat after its first message.
+	await titleUntitledAgentSession(
+		scope.userId,
+		scope.sessionId as string,
+		sessionTitleFromItems(items),
+	).catch(() => undefined);
 	return readSubscriptionSession(scope);
 }
 
