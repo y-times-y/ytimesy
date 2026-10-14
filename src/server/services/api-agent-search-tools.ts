@@ -6,10 +6,6 @@ import {
 	type AgentToolWorkspaceInput,
 	resolveToolWorkspace,
 } from "./agent-tool-workspace";
-import {
-	indexedRepositorySearchEnabled,
-	repositorySearchCommand,
-} from "./indexed-repository-search";
 import { repositoryToolPath as repositorySearchPath } from "./repository-tool-path";
 
 export function apiAgentSearchTools(
@@ -37,7 +33,7 @@ export function apiAgentSearchTools(
 		}),
 		search_files: tool({
 			description:
-				"Search tracked and non-ignored untracked repository text. Prefer literal:true for exact text. Default query is a Git regular expression; wordBoundary:true requires Git whole-word matching. When experimental indexing is enabled, eligible literal queries and plain ASCII identifiers in larger repositories use a refreshed local text index with Git-confirmed matches; other queries use Git search. Scope path to known task code; the path is literal, not a Git pattern. Exit 1 means no matches, not an execution error. No per-file match cutoff. Follow stdoutNextStart using read_tool_output and the returned reference for complete results; output_limit explicitly marks incomplete evidence.",
+				"Search tracked and non-ignored untracked repository text. Prefer literal:true for exact text. Default query is a Git regular expression; wordBoundary:true requires Git whole-word matching. Scope path to known task code; the path is literal, not a Git pattern. Exit 1 means no matches, not an execution error. No per-file match cutoff. Follow stdoutNextStart using read_tool_output and the returned reference for complete results; output_limit explicitly marks incomplete evidence.",
 			inputSchema: z.object({
 				query: z.string().min(1).max(200),
 				literal: z.boolean().default(false),
@@ -60,13 +56,21 @@ export function apiAgentSearchTools(
 						query,
 						literal,
 						wordBoundary,
-						useIndex: indexedRepositorySearchEnabled(
-							process.env.YTIMESY_INDEXED_SEARCH_ENABLED,
-						),
 						path: scope,
 					}),
 				);
 			},
 		}),
 	};
+}
+
+/** Git owns matching, exclusions and output; the path is literal, never a pathspec pattern. */
+export function repositorySearchCommand(input: {
+	cwd: string;
+	query: string;
+	literal: boolean;
+	path: string;
+	wordBoundary?: boolean;
+}) {
+	return `git --literal-pathspecs -C ${quote(input.cwd)} grep --untracked --exclude-standard -n -I ${input.literal ? "-F " : ""}${input.wordBoundary ? "-w " : ""}-e ${quote(input.query)} -- ${quote(input.path)}`;
 }
