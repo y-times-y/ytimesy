@@ -7,8 +7,9 @@ import type { ModelProvider } from "#/domain/model-connection";
 /**
  * The model provider's own hosted web search, so agents can look up docs, errors
  * and releases. It runs and is billed on the provider, with no ytimesy search
- * backend. Providers without a native search (OpenRouter, compatible endpoints)
- * get none; their users can add a search MCP server instead.
+ * backend. A Codex subscription uses OpenAI's. Providers without a native search
+ * (OpenRouter, compatible endpoints) get none; their users can add a search MCP
+ * server instead.
  */
 export function nativeWebSearchTools(provider: ModelProvider): ToolSet {
 	switch (provider) {
