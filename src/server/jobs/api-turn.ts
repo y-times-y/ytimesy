@@ -720,11 +720,7 @@ async function runApiTurnAttempt(
 					owner.id,
 					history,
 				);
-				if (
-					!owner.parentSessionId &&
-					owner.projectId &&
-					owner.candidateIndex == null
-				) {
+				if (!owner.parentSessionId && owner.projectId) {
 					current = await withCompletedTaskReviewContext({
 						messages: current,
 						children: await completedChildrenForReview(

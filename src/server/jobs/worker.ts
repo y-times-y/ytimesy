@@ -5,10 +5,6 @@ import { Freestyle } from "freestyle";
 import type { EnvironmentModel } from "#/domain/environment-model";
 import { configuredTurnExecutor } from "#/domain/turn-executor";
 import { modelConcurrencyLimits } from "../adapters/agent-capacity";
-import {
-	markCompetitionStatus,
-	reconcileFinishedCompetitionJudges,
-} from "../adapters/agent-competitions";
 import { recoverInterruptedTaskIntegrations } from "../adapters/agent-task-events";
 import { claimApiTurn, expireApiTurnLeases } from "../adapters/api-turns";
 import { sessionsAwaitingCheckpoint } from "../adapters/checkpoints/records";
@@ -26,7 +22,6 @@ import {
 	recoverChildTurnEvents,
 	superviseAgentChildren,
 } from "../services/agent-child-supervision";
-import { startAgentCompetition } from "../services/agent-competition-run";
 import {
 	deliverAgentPeerMessage,
 	type PeerMessage,
@@ -49,7 +44,6 @@ import {
 	PREPARE_WORKSPACE_QUEUE,
 	REFRESH_WORKSPACE_QUEUE,
 	SESSION_CHECKPOINT_QUEUE,
-	START_COMPETITION_QUEUE,
 	WORK_PLAN_QUEUE,
 } from "./queue";
 import { TurnDispatcher } from "./turn-dispatcher";
@@ -178,21 +172,6 @@ export async function startWorkspaceWorker(machines?: WorkspaceMachines) {
 			await deliverAgentTaskEvents(taskMachines, job.data.eventId ?? undefined);
 		},
 	);
-	await queue.work<{ rootSessionId: string }>(
-		START_COMPETITION_QUEUE,
-		{ localConcurrency: 1 },
-		async ([job]) => {
-			try {
-				await startAgentCompetition(job.data.rootSessionId);
-			} catch {
-				await markCompetitionStatus(
-					job.data.rootSessionId,
-					"failed",
-					"Could not launch all independent agents. Review the Tasks panel for any partial work.",
-				);
-			}
-		},
-	);
 	try {
 		if (process.env.YTIMESY_ENVIRONMENT_AUTO_REFRESH === "false")
 			await queue.unschedule(REFRESH_WORKSPACE_QUEUE);
@@ -211,7 +190,6 @@ export async function startWorkspaceWorker(machines?: WorkspaceMachines) {
 		if (reconciling) return;
 		reconciling = true;
 		try {
-			await reconcileFinishedCompetitionJudges();
 			await deliverAgentTaskEvents(taskMachines);
 			if (Date.now() - supervisingAt >= 30_000) {
 				supervisingAt = Date.now();

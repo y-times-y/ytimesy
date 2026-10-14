@@ -113,7 +113,6 @@ function requireIntegrationChild(
 ) {
 	if (
 		parent.parentSessionId ||
-		parent.candidateIndex != null ||
 		!parent.projectId ||
 		!destination ||
 		destination.userId !== parent.userId ||
@@ -121,11 +120,10 @@ function requireIntegrationChild(
 		destination.projectId !== parent.projectId ||
 		destination.taskAccess !== "read_write" ||
 		destination.taskPlacement !== "fresh" ||
-		destination.taskExecution !== "parallel" ||
-		destination.candidateIndex != null
+		destination.taskExecution !== "parallel"
 	)
 		throw new Error(
-			"Automated integration requires an isolated writable direct child of a non-competing root.",
+			"Automated integration requires an isolated writable direct child of the root.",
 		);
 	return destination;
 }
@@ -155,7 +153,7 @@ export async function stageReviewedBatchTask(
 	source: TaskPatchIdentity,
 	control: { signal: AbortSignal; turnId: string },
 ) {
-	if (parent.parentSessionId || parent.candidateIndex != null) return null;
+	if (parent.parentSessionId) return null;
 	const batch = await readyBatchIntegration(
 		parent.userId,
 		parent.projectId,
@@ -314,14 +312,8 @@ export async function integrateTaskDraft(
 	control.signal.throwIfAborted();
 	const { sourcePaths, additionalChecks } =
 		integrationVerificationRequest.parse(verification);
-	if (
-		parent.parentSessionId ||
-		parent.candidateIndex != null ||
-		!parent.projectId
-	)
-		throw new Error(
-			"Only a non-competing root lead may request automated integration.",
-		);
+	if (parent.parentSessionId || !parent.projectId)
+		throw new Error("Only the root lead may request automated integration.");
 	if (
 		sources.length < 2 ||
 		sources.length > 8 ||
@@ -366,8 +358,7 @@ export async function integrateTaskDraft(
 			(destination.taskState !== "draft" || destination.providerRef)) ||
 		destination.taskAccess !== "read_write" ||
 		destination.taskPlacement !== "fresh" ||
-		destination.taskExecution !== "parallel" ||
-		destination.candidateIndex != null
+		destination.taskExecution !== "parallel"
 	)
 		throw new Error(
 			"Automated integration requires a fresh writable direct-child draft.",
@@ -385,8 +376,7 @@ export async function integrateTaskDraft(
 			sibling.projectId !== parent.projectId ||
 			sibling.taskState !== "done" ||
 			sibling.taskReviewState !== "reviewed" ||
-			sibling.taskAccess !== "read_write" ||
-			sibling.candidateIndex != null
+			sibling.taskAccess !== "read_write"
 		)
 			throw new Error(
 				"Every source must be an exact reviewed, completed sibling.",

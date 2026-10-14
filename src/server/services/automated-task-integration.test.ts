@@ -140,7 +140,6 @@ const parent = {
 	userId: "owner",
 	projectId: "project",
 	parentSessionId: null,
-	candidateIndex: null,
 } as AgentSessionRecord;
 const draft = {
 	...parent,
@@ -257,18 +256,10 @@ it("rejects unrelated checkout changes before importing another patch", async ()
 	expect(mocks.state).toHaveBeenLastCalledWith(draft.id, "failed");
 });
 
-it("does not stage legacy, competing, busy, or revised already-imported work", async () => {
+it("does not stage legacy, busy, or revised already-imported work", async () => {
 	mocks.batch.mockResolvedValueOnce(null);
 	expect(
 		await stageReviewedBatchTask(machines, parent, sources[0], control()),
-	).toBeNull();
-	expect(
-		await stageReviewedBatchTask(
-			machines,
-			{ ...parent, candidateIndex: 0 },
-			sources[0],
-			control(),
-		),
 	).toBeNull();
 	mocks.session.mockResolvedValueOnce({ ...draft, taskState: "working" });
 	expect(
@@ -672,7 +663,6 @@ it.each([
 	"stale hash",
 	"stale base",
 	"missing review",
-	"competing source",
 	"other parent",
 	"other project",
 ])("rejects %s before starting compute", async (reason) => {
@@ -699,11 +689,9 @@ it.each([
 						id,
 						taskState: "done",
 						taskReviewState: "reviewed",
-						...(reason === "competing source"
-							? { candidateIndex: 1 }
-							: reason === "other parent"
-								? { parentSessionId: "other" }
-								: { projectId: "other" }),
+						...(reason === "other parent"
+							? { parentSessionId: "other" }
+							: { projectId: "other" }),
 					},
 		);
 	await expect(

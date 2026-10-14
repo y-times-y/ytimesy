@@ -1,7 +1,6 @@
 import { Effect } from "effect";
 import { Freestyle } from "freestyle";
 import type { BackgroundJob } from "#/domain/background-job";
-import { reconcileFinishedCompetitionJudges } from "../adapters/agent-competitions";
 import { recoverInterruptedTaskIntegrations } from "../adapters/agent-task-events";
 import { expireApiTurnLeases } from "../adapters/api-turns";
 import {
@@ -25,7 +24,6 @@ import {
 	recoverChildTurnEvents,
 	superviseAgentChildren,
 } from "./agent-child-supervision";
-import { startAgentCompetition } from "./agent-competition-run";
 import {
 	deliverAgentPeerMessage,
 	PeerMessagePendingError,
@@ -49,7 +47,6 @@ export async function deliverBackgroundJob(
 					await recoverExpiredEnvironmentBuilds();
 					await recoverStaleQueuedWorkspaces();
 					await expireApiTurnLeases();
-					await reconcileFinishedCompetitionJudges();
 					break;
 				case "supervise":
 					await recoverChildTurnEvents();
@@ -98,9 +95,6 @@ export async function deliverBackgroundJob(
 				if (error instanceof PeerMessagePendingError) return "pending";
 				throw error;
 			}
-			break;
-		case "competition":
-			await startAgentCompetition(job.rootSessionId);
 			break;
 		case "checkpoint":
 			await captureSessionCheckpoint(machines, job.userId, job.sessionId);

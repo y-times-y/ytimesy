@@ -8,12 +8,6 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { MatrixDotLoader } from "#/components/ui/matrix-dot-loader";
-import {
-	type AgentCompetition,
-	competitionModeAvailable,
-	competitionSendIsEnabled,
-} from "#/domain/agent-competition";
 import { connectedProviderId } from "#/domain/agent-connection";
 import { PLAN_APPROVAL_TEXT } from "#/domain/agent-plan";
 import {
@@ -40,7 +34,6 @@ import {
 	safeAttachmentName,
 } from "#/domain/message-attachment";
 import { FAILOVER_CONTINUE_TEXT } from "#/domain/model-failover";
-import { expandModelRuns, type ModelRun } from "#/domain/parallel-models";
 import type { Project } from "#/domain/projects";
 import {
 	lastUserMessageText,
@@ -102,12 +95,9 @@ export function SessionLauncher({
 	onStop,
 	onOpenInspector,
 	onOpenFile,
-	onOpenCandidate,
 	onRecovered,
 	initialDraft = "",
-	competitions = [],
 	childTasks = [],
-	allowComparison = true,
 	projects,
 	selectedProject,
 	onSelectProject,
@@ -128,8 +118,6 @@ export function SessionLauncher({
 			readonly approvesPlan?: boolean;
 			/** Continue on the fallback route the user approved after an outage. */
 			readonly continueOn?: string;
-			readonly leaderCount?: number;
-			readonly attemptModelIds?: readonly string[];
 			readonly userMessageId?: string;
 			readonly attachments?: readonly IncomingAttachment[];
 		},
@@ -138,12 +126,9 @@ export function SessionLauncher({
 	onStop: () => void;
 	onOpenInspector: (view: InspectorView) => void;
 	onOpenFile?: (path: string) => void;
-	onOpenCandidate?: (sessionId: string) => void;
 	onRecovered?: (sessionId: string, prompt: string | null) => Promise<void>;
 	initialDraft?: string;
-	competitions?: readonly AgentCompetition[];
 	childTasks?: readonly AgentTaskActivity[];
-	allowComparison?: boolean;
 	projects: Project[];
 	selectedProject?: Project;
 	onSelectProject: (id: string) => void;
@@ -279,10 +264,6 @@ export function SessionLauncher({
 	const [modelId, setModelId] = useState(session.listedModelId);
 	const [reasoningId, setReasoningId] = useState("");
 	const [speed, setSpeed] = useState<ComposerSpeed>("");
-	const [multipleModels, setMultipleModels] = useState(false);
-	const [modelRuns, setModelRuns] = useState<ModelRun[]>([]);
-	const attemptModelIds = expandModelRuns(modelRuns);
-	const leaderCount = multipleModels ? attemptModelIds.length : 1;
 	const [lastModelByHarness, setLastModelByHarness] = useState<
 		Partial<Record<AgentProviderId, string>>
 	>(() =>
@@ -298,41 +279,13 @@ export function SessionLauncher({
 	);
 	const items = visibleSessionItems(session.items, optimisticItems);
 	const turnStatus = session.turnStatus;
-	const activeCompetition = competitions.find((group) =>
-		["queued", "working", "judging"].includes(group.status),
-	);
 	const lastUserText = lastUserMessageText(items);
 	const followUpLayout = sessionUsesFollowUpLayout({
 		items,
 		turnStatus,
 		listedTitle,
 	});
-	const competitionMode =
-		competitionModeAvailable({
-			harnessId,
-		}) && allowComparison;
-	const comparing = competitionMode && leaderCount > 1;
-	// A comparison sends no files; say so instead of leaving them behind.
-	const attachmentProblem =
-		attachmentError ??
-		(comparing && attachments.length
-			? "Comparing models can't take attached files yet. Remove them or send to one model."
-			: null);
-	const canSendCompetition = (text: string) =>
-		competitionSendIsEnabled({
-			modeAvailable: competitionMode,
-			selected: leaderCount > 1,
-			busy,
-			turnRunning: turnStatus === "running",
-			hasSession: Boolean(session.agentSessionId),
-			hasCodexAuth: session.snapshotAvailable,
-			harnessId,
-			text,
-			modelId,
-		});
 	function composerCanSend(text: string, slashCommand: boolean) {
-		if (activeCompetition) return false;
-		if (competitionMode && leaderCount > 1) return canSendCompetition(text);
 		return composerSendIsEnabled({
 			harnessId,
 			connection: session.connection,
@@ -447,12 +400,12 @@ export function SessionLauncher({
 		continueOn?: string,
 	) {
 		const text = sendableDraft(typed);
-		if (!composerCanSend(text, false) || (!plan && attachmentProblem)) return;
+		if (!composerCanSend(text, false) || (!plan && attachmentError)) return;
 		// An approval carries no files; the composer keeps any it holds.
 		const files = plan ? [] : attachments;
 		captureAnalytics("prompt_submitted", {
 			runtime: harnessId,
-			attempts: leaderCount,
+			attempts: 1,
 		});
 		const retry = unsentSend.current;
 		const userMessageId =
@@ -493,15 +446,10 @@ export function SessionLauncher({
 		const reasoning = resolveReasoningLevel(selectedModel, reasoningId);
 		const send = (encoded: readonly IncomingAttachment[]) =>
 			onSend(text, modelId, {
-				...(leaderCount === 1 && reasoning?.id
-					? { reasoningId: reasoning.id }
-					: {}),
-				...(leaderCount === 1 && speed ? { speed } : {}),
+				...(reasoning?.id ? { reasoningId: reasoning.id } : {}),
+				...(speed ? { speed } : {}),
 				...(plan ? { approvesPlan: true } : {}),
 				...(continueOn ? { continueOn } : {}),
-				...(comparing && !plan && !continueOn
-					? { leaderCount, attemptModelIds }
-					: {}),
 				userMessageId,
 				...(encoded.length ? { attachments: encoded } : {}),
 			})?.then((result) => {
@@ -654,8 +602,6 @@ export function SessionLauncher({
 				turnStatus={turnStatus}
 				fill={followUpLayout}
 				onOpenFile={onOpenFile}
-				competitions={competitions}
-				onOpenCandidate={onOpenCandidate}
 				planActions={{
 					disabled: busy || turnStatus === "running",
 					onApprove: () => sendText(PLAN_APPROVAL_TEXT, { approves: true }),
@@ -735,9 +681,9 @@ export function SessionLauncher({
 								))}
 							</ul>
 						)}
-						{attachmentProblem && (
+						{attachmentError && (
 							<p className="session-attachment-error" role="alert">
-								{attachmentProblem}
+								{attachmentError}
 							</p>
 						)}
 						<div className="session-toolbar">
@@ -795,24 +741,6 @@ export function SessionLauncher({
 								modelId={modelId}
 								listedModelId={modelId || session.listedModelId}
 								onModelIdChange={setModelId}
-								multipleModels={competitionMode && multipleModels}
-								modelRuns={modelRuns}
-								onMultipleModelsChange={(enabled) => {
-									setMultipleModels(enabled);
-									if (enabled)
-										setModelRuns([
-											{ modelId: modelId || models[0]?.id || "", count: 2 },
-										]);
-								}}
-								onModelRunsChange={(runs) => {
-									setModelRuns(runs);
-									if (runs[0] && runs[0].modelId !== modelId) {
-										setModelId(runs[0].modelId);
-										setReasoningId("");
-										setSpeed("");
-									}
-								}}
-								parallelAvailable={competitionMode}
 								reasoningId={reasoningId}
 								onReasoningIdChange={setReasoningId}
 								speed={speed}
@@ -832,17 +760,7 @@ export function SessionLauncher({
 									setAttachmentError(attachmentLimitError(next));
 								}}
 							/>
-							{turnStatus === "running" && activeCompetition ? (
-								<button
-									type="button"
-									className="session-send"
-									aria-label="Stop independent agents"
-									onClick={onStop}
-									title="Stop independent agents"
-								>
-									<MatrixDotLoader />
-								</button>
-							) : turnStatus === "running" ? (
+							{turnStatus === "running" ? (
 								<button
 									type="button"
 									className="session-send"
@@ -860,7 +778,7 @@ export function SessionLauncher({
 									className="session-send"
 									aria-label="Send"
 									disabled={
-										Boolean(attachmentProblem) ||
+										Boolean(attachmentError) ||
 										(draftCommand
 											? draftCommand.availability !== "ready"
 											: !composerCanSend(sendableDraft(draft.trim()), false))

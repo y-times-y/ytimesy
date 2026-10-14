@@ -110,7 +110,6 @@ async function fixture() {
 		userId: "owner",
 		projectId: "project",
 		parentSessionId: "lead",
-		candidateIndex: null,
 		taskAccess: "read_write",
 		taskPlacement: "fresh",
 		taskState: "done",
@@ -434,7 +433,6 @@ it.each([
 	["group", { parentSessionId: "other" }],
 	["active", { taskState: "working" }],
 	["unreviewed", { taskReviewState: "pending" }],
-	["candidate", { candidateIndex: 0 }],
 	["shared", { taskPlacement: "shared" }],
 	["self", { id: "destination" }],
 ])(

@@ -76,12 +76,6 @@
 	gap: 8px;
 	padding: 0 8px 8px;
 }
-.competition-turn {
-	margin: 4px 0 16px;
-	border-left: 1px solid #ffffff25;
-	padding-left: 14px;
-	color: #d8d8d8;
-}
 .child-task-card {
 	margin: 8px 0;
 	border: 1px solid #ffffff16;
@@ -135,7 +129,7 @@
 .child-task-card[data-status="failed"] .child-task-card-status {
 	color: #e08c8c;
 }
-:where(.child-task-card[open] > summary) .competition-candidate-chevron {
+:where(.child-task-card[open] > summary) .child-task-card-chevron {
 	transform: rotate(90deg);
 }
 .child-task-card-content {
@@ -151,86 +145,9 @@
 	color: #888;
 	font-size: 12px;
 }
-.competition-turn-heading,
-.competition-candidate > summary {
-	display: flex;
-	align-items: center;
-	gap: 9px;
-	min-height: 36px;
-}
-.competition-turn-heading {
-	font-size: 12px;
-	color: #aaa;
-}
-.competition-turn-heading small,
-.competition-candidate-meta {
-	margin-left: auto;
-	color: #888;
-}
-.competition-candidate > summary {
-	list-style: none;
-	cursor: pointer;
-	font-size: 13px;
-}
-.competition-candidate-model {
-	min-width: 0;
-	overflow: hidden;
-	color: #888;
-	font-size: 11px;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-.competition-candidate > summary::-webkit-details-marker {
-	display: none;
-}
-.competition-candidate-chevron {
+.child-task-card-chevron {
 	color: #777;
 	transition: transform 160ms ease;
-}
-.competition-candidate[open] .competition-candidate-chevron {
-	transform: rotate(90deg);
-}
-.competition-candidate-content {
-	padding: 0 0 12px 24px;
-	font-size: 12px;
-	color: #aaa;
-	max-height: 360px;
-	overflow: auto;
-}
-.competition-candidate-content > button {
-	border: 0;
-	background: transparent;
-	color: #ddd;
-	padding: 6px 0;
-	font: inherit;
-	cursor: pointer;
-}
-.competition-judge {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	margin: 10px 0 0;
-	font-size: 12px;
-	color: #aaa;
-}
-.competition-error {
-	color: #d78e8e;
-	font-size: 12px;
-}
-.competition-agent-dot {
-	width: 8px;
-	height: 8px;
-	border: 1px solid #888;
-	border-radius: 50%;
-	margin: 0 4px;
-}
-.competition-agent-dot[data-status="done"] {
-	border-color: #65c98b;
-	background: #65c98b;
-}
-.competition-agent-dot[data-status="failed"] {
-	border-color: #d78e8e;
-	background: #d78e8e;
 }
 .t-matrix {
 	--t-matrix-cycle: 1200ms;

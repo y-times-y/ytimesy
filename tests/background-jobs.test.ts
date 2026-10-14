@@ -110,7 +110,7 @@ it("does not replay uncertain side effects", async () => {
 	vi.stubEnv("FREESTYLE_API_KEY", "fixture");
 	handlers.deliver.mockRejectedValue(new Error("uncertain edit"));
 	const { object, store } = runner();
-	await object.start({ id, kind: "competition", rootSessionId: "s" });
+	await object.start({ id, kind: "checkpoint", userId: "u", sessionId: "s" });
 	await object.alarm();
 	expect(store.get("job")).toMatchObject({ state: "failed" });
 	expect(handlers.deliver).toHaveBeenCalledTimes(1);

@@ -24,11 +24,10 @@ export type PeerMessage = {
 	readonly message: string;
 };
 
-/** A competition candidate is a coordination boundary, never another candidate's peer. */
 async function coordinationRoot(session: AgentSessionRecord) {
 	let root = session;
 	const visited = new Set<string>();
-	while (root.parentSessionId && !root.candidateIndex) {
+	while (root.parentSessionId) {
 		if (visited.has(root.id)) throw new Error("Invalid task hierarchy.");
 		visited.add(root.id);
 		const parent = await agentSessionForOwner(
@@ -52,7 +51,6 @@ export async function discoverAgentPeers(sender: AgentSessionRecord) {
 		for (const task of descendants) {
 			if (
 				!allowed.has(task.id) &&
-				!task.candidateIndex &&
 				task.userId === sender.userId &&
 				task.projectId === sender.projectId &&
 				task.parentSessionId &&

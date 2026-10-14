@@ -9,7 +9,6 @@ import {
 import type { ReactNode } from "react";
 import { Fragment, type UIEvent, useEffect, useRef } from "react";
 import { MatrixDotLoader } from "#/components/ui/matrix-dot-loader";
-import type { AgentCompetition } from "#/domain/agent-competition";
 import { pendingPlanId, planOutcome } from "#/domain/agent-plan";
 import {
 	type AgentTaskActivity,
@@ -68,10 +67,8 @@ export function SessionTimeline({
 	turnStatus,
 	fill = false,
 	onOpenFile,
-	competitions = [],
 	tasks = [],
 	taskParentId,
-	onOpenCandidate,
 	autoScroll = true,
 	collapseInstructions = false,
 	recoveryControls,
@@ -87,26 +84,16 @@ export function SessionTimeline({
 	turnStatus: SessionTurnStatus;
 	fill?: boolean;
 	onOpenFile?: (path: string) => void;
-	competitions?: readonly AgentCompetition[];
 	tasks?: readonly AgentTaskActivity[];
 	taskParentId?: string;
-	onOpenCandidate?: (sessionId: string) => void;
 	autoScroll?: boolean;
 	collapseInstructions?: boolean;
 }) {
 	const listRef = useRef<HTMLOListElement>(null);
 	const stickToEnd = useRef(true);
 	const visible = compactTimelineItems(childTaskPublicItems(items));
-	const candidateIds = new Set(
-		competitions.flatMap((group) =>
-			group.candidates.map((candidate) => candidate.id),
-		),
-	);
-	const childTasks = tasks.filter(
-		(task) =>
-			(taskParentId
-				? task.parentSessionId === taskParentId
-				: task.depth === 1) && !candidateIds.has(task.id),
+	const childTasks = tasks.filter((task) =>
+		taskParentId ? task.parentSessionId === taskParentId : task.depth === 1,
 	);
 	const rows = groupTimelineRows(visible, turnStatus);
 	const fileChanges = fileChangesFromSessionItems(items);
@@ -145,12 +132,6 @@ export function SessionTimeline({
 		>
 			{rows.map((row) => {
 				const rowId = row.kind === "item" ? row.item.id : row.id;
-				const attached =
-					row.kind === "item" && row.item.kind === "userMessage"
-						? competitions.filter(
-								(group) => group.userMessageId === row.item.id,
-							)
-						: [];
 				return (
 					<Fragment
 						key={row.kind === "item" ? row.item.id : `${row.kind}:${row.id}`}
@@ -195,15 +176,6 @@ export function SessionTimeline({
 								? recoveryControls?.(row.item.id)
 								: null}
 						</li>
-						{attached.map((group) => (
-							<li key={group.id} data-kind="competition">
-								<CompetitionTurn
-									group={group}
-									tasks={tasks}
-									onOpenCandidate={onOpenCandidate}
-								/>
-							</li>
-						))}
 						{childTasks
 							.filter((task) => {
 								const anchor = childTaskAnchorId(task, visible);
@@ -230,9 +202,7 @@ export function SessionTimeline({
 						<ChildTaskCard task={task} tasks={tasks} onOpenFile={onOpenFile} />
 					</li>
 				))}
-			{!competitions.some((group) =>
-				["queued", "working"].includes(group.status),
-			) && showTurnWorking(items, turnStatus) ? (
+			{showTurnWorking(items, turnStatus) ? (
 				<li data-kind="working">
 					<p className="session-working session-shimmer">Thinking</p>
 				</li>
@@ -300,7 +270,7 @@ function ChildTaskCard({
 				</span>
 				<span className="child-task-card-status">{status}</span>
 				<ChevronRight
-					className="competition-candidate-chevron"
+					className="child-task-card-chevron"
 					size={14}
 					aria-hidden="true"
 				/>
@@ -331,134 +301,6 @@ function ChildTaskCard({
 				))}
 			</div>
 		</details>
-	);
-}
-
-function CompetitionTurn({
-	group,
-	tasks,
-	onOpenCandidate,
-}: {
-	group: AgentCompetition;
-	tasks: readonly AgentTaskActivity[];
-	onOpenCandidate?: (sessionId: string) => void;
-}) {
-	const candidatesFinished =
-		group.candidates.length === group.leaderCount &&
-		group.candidates.every((candidate) =>
-			["done", "failed"].includes(candidate.status),
-		);
-	return (
-		<section
-			className="competition-turn"
-			aria-label={`${group.leaderCount} independent agents`}
-		>
-			<div className="competition-turn-heading">
-				<span>{group.leaderCount} agents on this task</span>
-				<small>
-					{group.status === "judging"
-						? "Reviewing results"
-						: group.status === "complete"
-							? "Review complete"
-							: group.status === "failed"
-								? "Stopped"
-								: "Working independently"}
-				</small>
-			</div>
-			{[1, 2, 3, 4, 5].slice(0, group.leaderCount).map((agentNumber) => {
-				const candidate = group.candidates.find(
-					(item) => item.index === agentNumber,
-				);
-				const status = candidate?.status ?? "draft";
-				const assignedModel = group.attemptModelIds?.[agentNumber - 1];
-				const modelLabel = assignedModel
-					? listedModelDisplayName(
-							parseModelRouteId(assignedModel)?.modelId ?? assignedModel,
-						)
-					: "";
-				return (
-					<details
-						className="competition-candidate"
-						key={`${group.id}-agent-${agentNumber}`}
-					>
-						<summary>
-							{["working", "waiting"].includes(status) ? (
-								<MatrixDotLoader />
-							) : (
-								<span className="competition-agent-dot" data-status={status} />
-							)}
-							<span>{`Agent ${agentNumber}`}</span>
-							{modelLabel ? (
-								<span className="competition-candidate-model">
-									{modelLabel}
-								</span>
-							) : null}
-							<small className="competition-candidate-meta">
-								{group.winnerSessionId === candidate?.id
-									? "Selected"
-									: status === "done"
-										? "Done"
-										: status === "failed"
-											? "Failed"
-											: ["working", "waiting"].includes(status)
-												? "Working"
-												: "Starting"}
-							</small>
-							<ChevronRight
-								className="competition-candidate-chevron"
-								size={14}
-							/>
-						</summary>
-						{candidate ? (
-							<div className="competition-candidate-content">
-								<SessionTimeline
-									tasks={tasks}
-									taskParentId={candidate.id}
-									items={candidate.items.filter(
-										(item) => item.kind !== "userMessage",
-									)}
-									turnStatus={
-										["working", "waiting"].includes(status)
-											? "running"
-											: status === "done"
-												? "completed"
-												: status === "failed"
-													? "failed"
-													: "idle"
-									}
-									fill
-									autoScroll={false}
-								/>
-								{candidate.summary ? <p>{candidate.summary}</p> : null}
-								{onOpenCandidate ? (
-									<button
-										type="button"
-										onClick={() => onOpenCandidate(candidate.id)}
-									>
-										Inspect workspace
-									</button>
-								) : null}
-							</div>
-						) : null}
-					</details>
-				);
-			})}
-			{candidatesFinished && ["judging", "complete"].includes(group.status) ? (
-				<p className="competition-judge">
-					{group.status === "judging" ? <MatrixDotLoader /> : null}
-					<span>
-						{group.status === "judging"
-							? "Judge reviewing results"
-							: group.winnerSessionId
-								? `Judge selected Agent ${group.candidates.find((candidate) => candidate.id === group.winnerSessionId)?.index ?? ""}`
-								: "Judge finished without a selection"}
-					</span>
-				</p>
-			) : null}
-			{group.errorMessage ? (
-				<p className="competition-error">{group.errorMessage}</p>
-			) : null}
-		</section>
 	);
 }
 

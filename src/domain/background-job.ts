@@ -48,13 +48,6 @@ export const backgroundJob = z.discriminatedUnion("kind", [
 	z
 		.object({
 			...identity,
-			kind: z.literal("competition"),
-			rootSessionId: reference,
-		})
-		.strict(),
-	z
-		.object({
-			...identity,
 			kind: z.literal("checkpoint"),
 			userId: reference,
 			sessionId: reference,

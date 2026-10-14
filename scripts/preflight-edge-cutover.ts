@@ -8,7 +8,6 @@ import {
 	PREPARE_WORKSPACE_QUEUE,
 	REFRESH_WORKSPACE_QUEUE,
 	SESSION_CHECKPOINT_QUEUE,
-	START_COMPETITION_QUEUE,
 	WORK_PLAN_QUEUE,
 } from "../src/server/jobs/queue";
 
@@ -46,7 +45,8 @@ try {
 		REFRESH_WORKSPACE_QUEUE,
 		AGENT_TASK_EVENT_QUEUE,
 		AGENT_PEER_MESSAGE_QUEUE,
-		START_COMPETITION_QUEUE,
+		// Retired with competitions; inventoried in case old jobs remain.
+		"start-agent-competition",
 		SESSION_CHECKPOINT_QUEUE,
 		PR_REPAIR_QUEUE,
 		WORK_PLAN_QUEUE,

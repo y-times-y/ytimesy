@@ -18,15 +18,7 @@ const statusLabels: Record<AgentTaskStatus, string> = {
 	failed: "Failed",
 };
 
-export function TaskPanel({
-	tasks,
-	winnerId,
-	comparison = false,
-}: {
-	tasks: readonly AgentTask[];
-	winnerId?: string | null;
-	comparison?: boolean;
-}) {
+export function TaskPanel({ tasks }: { tasks: readonly AgentTask[] }) {
 	const completed = tasks.filter((task) => task.status === "done").length;
 	return (
 		<section className="task-panel" aria-label="Tasks">
@@ -81,26 +73,9 @@ export function TaskPanel({
 							</span>
 							<div className="task-row-copy">
 								<div>
-									<span className="task-label">
-										{comparison && task.depth === 1
-											? task.label.replace(/^Task /, "Agent ")
-											: task.label}
-									</span>
+									<span className="task-label">{task.label}</span>
 									<strong>
-										{task.status === "done" ? (
-											<s>
-												{comparison && task.depth === 1
-													? "Independent implementation"
-													: task.title}
-											</s>
-										) : comparison && task.depth === 1 ? (
-											"Independent implementation"
-										) : (
-											task.title
-										)}
-										{winnerId === task.id ? (
-											<span className="task-winner"> Selected</span>
-										) : null}
+										{task.status === "done" ? <s>{task.title}</s> : task.title}
 									</strong>
 								</div>
 								<small>

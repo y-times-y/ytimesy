@@ -1,6 +1,5 @@
 import { Effect } from "effect";
 import { z } from "zod";
-import { competitionJudgeToolAllowed } from "#/domain/agent-competition";
 import type { AgentProviderId } from "#/domain/agent-provider";
 import {
 	agentTaskStatusReceipt,
@@ -30,10 +29,6 @@ import {
 	taskHandoffReferences,
 } from "#/domain/task-handoff";
 import { requireAssignedTaskChecks } from "#/domain/task-verification-assignment";
-import {
-	competitionForOwner,
-	selectCompetitionWinner,
-} from "#/server/adapters/agent-competitions";
 import {
 	type AgentSessionRecord,
 	agentSessionForOwner,
@@ -351,18 +346,6 @@ export function runAgentTaskTool(
 					"Evaluation runs cannot publish branches or pull requests.",
 				);
 		}
-		const competition =
-			!parent.parentSessionId && parent.taskAccess === "read_only"
-				? yield* Effect.tryPromise(() =>
-						competitionForOwner(scope.userId, parent.id),
-					)
-				: null;
-		if (competition && !competitionJudgeToolAllowed(request.tool))
-			return yield* Effect.fail(
-				new Error(
-					"The comparison agent can inspect and select work, but cannot start or publish tasks.",
-				),
-			);
 		if (parent.userId !== scope.userId || parent.projectId !== scope.projectId)
 			throw new Error("The agent is not available in this project.");
 		if (request.tool === "schedule_task_plan") {
@@ -964,7 +947,7 @@ export function runAgentTaskTool(
 				}),
 			);
 			const staging =
-				control && !parent.parentSessionId && parent.candidateIndex == null
+				control && !parent.parentSessionId
 					? yield* Effect.tryPromise(async () => {
 							const { stageReviewedBatchTask } = await import(
 								"./automated-task-integration"
@@ -991,12 +974,6 @@ export function runAgentTaskTool(
 				base: patch.base,
 				...(staging ? { integration: staging } : {}),
 			};
-		}
-		if (request.tool === "select_competition_winner") {
-			yield* Effect.tryPromise(() =>
-				selectCompetitionWinner(scope.userId, parent.id, target.id),
-			);
-			return { taskId: target.id, status: "selected" };
 		}
 		if (request.tool === "publish_task") {
 			if (
