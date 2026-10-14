@@ -3,6 +3,7 @@ import type { ToolSet } from "ai";
 import { Effect } from "effect";
 import { visualQaInstructions } from "#/domain/agent-desktop";
 import { cloudAgentRoleInstructions } from "#/domain/agent-orchestration";
+import { agentPlanState } from "#/domain/agent-plan";
 import { assertApiContextFits } from "#/domain/api-conversation";
 import { applyApiProgress, recordedContextUsage } from "#/domain/api-progress";
 import { type ApiTokenUsage, addApiTokenUsage } from "#/domain/api-token-usage";
@@ -92,7 +93,15 @@ import {
 	sessionAttachments,
 } from "../services/message-attachments";
 import type { ModelAgentInput } from "../services/model-agent-loop";
-import { withPlanMode, withPlanModeNotice } from "../services/plan-mode";
+import {
+	PLAN_CONTINUE_NOTICE,
+	PLAN_END_TURN_TOOLS,
+	PLAN_REVISION_NOTICE,
+	PlanLock,
+	planTools,
+	withPlanMode,
+	withPlanModeNotice,
+} from "../services/plan-mode";
 import {
 	pluginSkillsInstructions,
 	pluginSkillTools,
@@ -416,8 +425,11 @@ export async function runApiTurn(
 		const currentTask = [...items]
 			.reverse()
 			.find((item) => item.kind === "userMessage");
-		const planMode =
-			currentTask?.kind === "userMessage" && currentTask.mode === "plan";
+		// Root chats with a person to approve: the agent decides when to plan.
+		// Benchmarks and child agents have no one to approve, so they never plan.
+		const planState = agentPlanState(items);
+		const planLock =
+			!owner.parentSessionId && !evaluation ? new PlanLock(planState) : null;
 		// Writable builders get the validated shell surface; leads keep coordination tools.
 		const shellBuilder =
 			Boolean(fusion) ||
@@ -461,10 +473,21 @@ export async function runApiTurn(
 			...webSearch,
 		};
 		const redact = projectSecrets?.redact ?? [];
-		const tools = planMode
-			? withPlanMode(hooks.wrap(withRedactedResults(withMcp, redact)))
+		const tools = planLock
+			? withPlanMode(
+					hooks.wrap(
+						withRedactedResults({ ...withMcp, ...planTools(planLock) }, redact),
+					),
+					() => planLock.planning,
+				)
 			: hooks.wrap(withRedactedResults(withMcp, redact));
-		if (planMode) messages = withPlanModeNotice(messages);
+		if (planLock?.planning && (!step || step.index === 0))
+			messages = withPlanModeNotice(
+				messages,
+				planState.kind === "proposed"
+					? PLAN_REVISION_NOTICE
+					: PLAN_CONTINUE_NOTICE,
+			);
 		if (mcp.unavailable.length) {
 			const notice = `MCP servers unavailable this turn (connection or credentials failed): ${mcp.unavailable.join(", ")}. Their tools are not offered; continue without them.`;
 			if (!messages.some((message) => message.content === notice))
@@ -521,6 +544,7 @@ export async function runApiTurn(
 			speed: apiSettings.speed,
 			knownTools: discoveredToolsFromSession(items),
 			toolSurface,
+			...(planLock ? { endTurnTools: PLAN_END_TURN_TOOLS } : {}),
 			onToolMetric: (metric) => {
 				void captureServerAnalytics(
 					owner.userId,
@@ -716,9 +740,10 @@ export async function runApiTurn(
 						lead: input,
 						config: fusion,
 						// The shared workspace: shell tools behind the same hooks and plan mode.
-						workspaceTools: planMode
+						workspaceTools: planLock
 							? withPlanMode(
 									hooks.wrap(withRedactedResults(surfaceTools, redact)),
+									() => planLock.planning,
 								)
 							: hooks.wrap(withRedactedResults(surfaceTools, redact)),
 						beforeSidekickRequest: async () => {

@@ -3,6 +3,7 @@ import type { LanguageModelUsage } from "ai";
 import {
 	asSchema,
 	generateText,
+	hasToolCall,
 	isStepCount,
 	type LanguageModel,
 	type ModelMessage,
@@ -78,6 +79,8 @@ export type ModelAgentInput = {
 	tools: ToolSet;
 	knownTools?: readonly string[];
 	toolSurface?: "coordination" | "implementation";
+	/** A successful call to one of these ends the turn, e.g. a plan waiting for approval. */
+	endTurnTools?: readonly string[];
 	signal: AbortSignal;
 	onEvent: (event: ApiAgentEvent) => Promise<void>;
 	onStep: (messages: ModelMessage[]) => Promise<void>;
@@ -190,6 +193,30 @@ function interruptedStream(error: unknown) {
  * real answer "final_answer". A step that stops on commentary without a tool
  * call has not finished the user's request.
  */
+/** The last step ran an end-of-turn tool successfully. */
+export function endedByTool(
+	messages: readonly ModelMessage[],
+	names: readonly string[] | undefined,
+) {
+	if (!names?.length) return false;
+	// Tool results follow the last assistant message; notices may follow them.
+	for (let index = messages.length - 1; index >= 0; index--) {
+		const message = messages[index];
+		if (message.role === "assistant") return false;
+		if (
+			message.role === "tool" &&
+			message.content.some(
+				(part) =>
+					part.type === "tool-result" &&
+					names.includes(part.toolName) &&
+					!part.output.type.startsWith("error"),
+			)
+		)
+			return true;
+	}
+	return false;
+}
+
 export function endsWithCommentary(messages: readonly ModelMessage[]) {
 	const last = messages.at(-1);
 	if (last?.role !== "assistant" || typeof last.content === "string")
@@ -590,9 +617,14 @@ async function executeModelSteps(
 			maxRetries: 4,
 			streamRetries: 0,
 			maxOutputTokens: runtime.maxOutputTokens,
-			stopWhen: isStepCount(
-				input.maxSteps ?? modelStepLimit(input.toolSurface ?? "coordination"),
-			),
+			stopWhen: [
+				isStepCount(
+					input.maxSteps ?? modelStepLimit(input.toolSurface ?? "coordination"),
+				),
+				...(input.endTurnTools?.length
+					? [hasToolCall(...input.endTurnTools)]
+					: []),
+			],
 			// Provider errors can echo request credentials; publish only the sanitized error below.
 			onError: ({ error }) => {
 				console.warn(
@@ -776,8 +808,10 @@ async function executeModelSteps(
 		}
 		await consumeBackground(true);
 		const usage = accumulated.usage ?? apiTokenUsage(await result.totalUsage);
-		const reason = await result.finishReason;
+		const ended = endedByTool(history, input.endTurnTools);
+		const reason = ended ? "stop" : await result.finishReason;
 		if (
+			!ended &&
 			singleStep &&
 			(reason === "tool-calls" ||
 				(reason === "stop" && endsWithCommentary(history)))

@@ -1900,3 +1900,92 @@ code.session-tool-target {
 .session-activity[data-status="failed"] > summary svg:first-child {
 	color: #f87171;
 }
+.plan-proposal {
+	margin: 8px 0;
+	max-width: 42em;
+	border: 1px solid #ffffff1c;
+	border-radius: 12px;
+	background: #ffffff04;
+	overflow: hidden;
+}
+.plan-proposal[data-outcome="pending"] {
+	border-color: #ffffff30;
+}
+.plan-proposal-header {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 11px 14px;
+	border-bottom: 1px solid #ffffff10;
+	color: #ececec;
+	font-size: 13px;
+}
+.plan-proposal-header strong {
+	font-weight: 500;
+}
+.plan-proposal-status {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	margin-left: auto;
+	color: #999;
+	font-size: 11px;
+	white-space: nowrap;
+}
+.plan-proposal[data-outcome="approved"] .plan-proposal-status {
+	color: #8fd19e;
+}
+.plan-proposal-body {
+	padding: 4px 14px 8px;
+	max-height: 520px;
+	overflow-y: auto;
+	overscroll-behavior-y: contain;
+	scrollbar-width: thin;
+	scrollbar-color: #333 transparent;
+}
+.plan-proposal-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	padding: 10px 14px;
+	border-top: 1px solid #ffffff10;
+}
+.plan-proposal-actions p {
+	flex: 1 1 12em;
+	margin: 0;
+	color: #888;
+	font-size: 12px;
+}
+.plan-proposal-actions button {
+	height: 28px;
+	padding: 0 12px;
+	border-radius: 8px;
+	font-size: 12px;
+	font-weight: 500;
+	cursor: pointer;
+}
+.plan-proposal-actions button:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+.plan-proposal-revise {
+	border: 1px solid #ffffff24;
+	background: transparent;
+	color: #e6e6e6;
+}
+.plan-proposal-revise:hover:not(:disabled) {
+	background: #ffffff0d;
+}
+.plan-proposal-approve {
+	border: 0;
+	background: #ececec;
+	color: #111;
+}
+.plan-proposal-approve:hover:not(:disabled) {
+	background: #ffffff;
+}
+.plan-proposal-actions button:focus-visible {
+	outline: 1px solid #ffffff70;
+	outline-offset: 2px;
+}

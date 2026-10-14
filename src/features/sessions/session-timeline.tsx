@@ -10,6 +10,7 @@ import type { ReactNode } from "react";
 import { Fragment, type UIEvent, useEffect, useRef } from "react";
 import { MatrixDotLoader } from "#/components/ui/matrix-dot-loader";
 import type { AgentCompetition } from "#/domain/agent-competition";
+import { pendingPlanId, planOutcome } from "#/domain/agent-plan";
 import {
 	type AgentTaskActivity,
 	childTaskAnchorId,
@@ -53,6 +54,7 @@ import { AgentMarkdown } from "./agent-markdown";
 import { FileChangeCounts } from "./file-change-counts";
 import { FileMentionButton } from "./file-mention";
 import { LiveCollapsible } from "./live-collapsible";
+import { type PlanActions, PlanProposalCard } from "./plan-proposal-card";
 import { ShellCommandCode } from "./shell-command-code";
 import { TodoList } from "./todo-list";
 
@@ -68,7 +70,10 @@ export function SessionTimeline({
 	autoScroll = true,
 	collapseInstructions = false,
 	recoveryControls,
+	planActions,
 }: {
+	/** Approve or revise the plan that waits for the user; omitted where nobody can answer. */
+	planActions?: PlanActions;
 	recoveryControls?: (messageId: string) => ReactNode;
 	items: readonly SessionItem[];
 	turnStatus: SessionTurnStatus;
@@ -143,19 +148,33 @@ export function SessionTimeline({
 						key={row.kind === "item" ? row.item.id : `${row.kind}:${row.id}`}
 					>
 						<li data-kind={row.kind === "item" ? row.item.kind : row.kind}>
-							<TimelineRowView
-								row={row}
-								collapseInstructions={collapseInstructions}
-								turnRunning={
-									turnStatus === "running" && currentTurnIds.has(rowId)
-								}
-								isLastItem={
-									(row.kind === "item" ? row.item.id : row.items.at(-1)?.id) ===
-									visible.at(-1)?.id
-								}
-								fileChanges={fileChanges}
-								onOpenFile={onOpenFile}
-							/>
+							{row.kind === "item" && row.item.kind === "planProposal" ? (
+								<PlanProposalCard
+									item={row.item}
+									outcome={planOutcome(items, row.item.id)}
+									actions={
+										row.item.id === pendingPlanId(items)
+											? planActions
+											: undefined
+									}
+									onOpenFile={onOpenFile}
+								/>
+							) : (
+								<TimelineRowView
+									row={row}
+									collapseInstructions={collapseInstructions}
+									turnRunning={
+										turnStatus === "running" && currentTurnIds.has(rowId)
+									}
+									isLastItem={
+										(row.kind === "item"
+											? row.item.id
+											: row.items.at(-1)?.id) === visible.at(-1)?.id
+									}
+									fileChanges={fileChanges}
+									onOpenFile={onOpenFile}
+								/>
+							)}
 							{row.kind === "item" && row.item.kind === "userMessage"
 								? recoveryControls?.(row.item.id)
 								: null}
@@ -635,6 +654,14 @@ function SessionItemView({
 					</summary>
 					<p>{item.text || "Planning…"}</p>
 				</details>
+			);
+		case "planProposal":
+			return (
+				<PlanProposalCard
+					item={item}
+					outcome="pending"
+					onOpenFile={onOpenFile}
+				/>
 			);
 		case "commandExecution": {
 			const status = activityStatusLabel(item.status);

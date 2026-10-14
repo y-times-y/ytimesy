@@ -1,3 +1,4 @@
+import { pendingPlanId } from "./agent-plan";
 import type { AgentTodo } from "./agent-todos";
 import type { ApiTokenUsage } from "./api-token-usage";
 import type { CodexUsage } from "./codex-usage";
@@ -25,8 +26,8 @@ export type UserMessageItem = {
 	readonly text: string;
 	/** Files sent with the message; bytes stay in private storage. */
 	readonly attachments?: readonly MessageAttachment[];
-	/** "plan": investigate and propose only; implementation waits for approval. */
-	readonly mode?: "plan";
+	/** The user approved the agent's proposed plan; edits are unlocked. */
+	readonly approvesPlan?: true;
 	readonly timing?: {
 		readonly startedAt: number;
 		readonly completedAt?: number;
@@ -53,6 +54,13 @@ export type PlanItem = {
 	readonly id: SessionItemId;
 	readonly text: string;
 	readonly todos?: readonly AgentTodo[];
+};
+
+/** A plan the agent proposed with propose_plan; the turn ended to wait for the user. */
+export type PlanProposalItem = {
+	readonly kind: "planProposal";
+	readonly id: SessionItemId;
+	readonly text: string;
 };
 
 export type CommandExecutionItem = {
@@ -120,6 +128,7 @@ export type SessionItem =
 	| AgentMessageItem
 	| ReasoningItem
 	| PlanItem
+	| PlanProposalItem
 	| CommandExecutionItem
 	| FileChangeItem
 	| McpToolCallItem
@@ -214,12 +223,17 @@ export function sessionItemsQueuedWithUser(
 	items: readonly SessionItem[],
 	text: string,
 	messageId?: string,
-	mode?: "plan",
+	approvesPlan?: boolean,
 	attachments?: readonly MessageAttachment[],
 ): SessionItem[] {
 	const queued = text.trim();
 	if (!queued) return [...items];
-	if (!attachments?.length && lastUserMessageText(items) === queued)
+	// An approval repeats the same words each time; it is a duplicate only once nothing waits.
+	if (
+		approvesPlan
+			? !pendingPlanId(items)
+			: !attachments?.length && lastUserMessageText(items) === queued
+	)
 		return [...items];
 	return [
 		...items,
@@ -230,7 +244,7 @@ export function sessionItemsQueuedWithUser(
 			),
 			text: queued,
 			...(attachments?.length ? { attachments } : {}),
-			...(mode ? { mode } : {}),
+			...(approvesPlan ? { approvesPlan: true as const } : {}),
 			timing: { startedAt: Date.now() },
 		},
 	];

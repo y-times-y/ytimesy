@@ -1,8 +1,12 @@
-import { tool } from "ai";
+import { type ModelMessage, tool } from "ai";
 import { expect, it, vi } from "vitest";
 import { z } from "zod";
+import { endedByTool } from "./model-agent-loop";
 import {
-	PLAN_MODE_NOTICE,
+	PLAN_END_TURN_TOOLS,
+	PLAN_REVISION_NOTICE,
+	PlanLock,
+	planTools,
 	withPlanMode,
 	withPlanModeNotice,
 } from "./plan-mode";
@@ -14,15 +18,16 @@ const options = {
 	context: {},
 };
 
+const make = (ran: () => Promise<unknown>) =>
+	tool({ inputSchema: z.object({}).passthrough(), execute: ran });
+
 it("refuses tools that would start writing work and leaves the rest working", async () => {
 	const ran = vi.fn(async () => ({ ok: true }));
-	const make = () =>
-		tool({ inputSchema: z.object({}).passthrough(), execute: ran });
 	const tools = withPlanMode({
-		create_task: make(),
-		launch_ready_tasks: make(),
-		start_task: make(),
-		batch_read: make(),
+		create_task: make(ran),
+		launch_ready_tasks: make(ran),
+		start_task: make(ran),
+		batch_read: make(ran),
 	});
 	const refused = {
 		blocked: true,
@@ -49,24 +54,16 @@ it("refuses tools that would start writing work and leaves the rest working", as
 	expect(ran).toHaveBeenCalledTimes(3);
 });
 
-it("adds the plan notice once after the conversation", () => {
-	const once = withPlanModeNotice([{ role: "user", content: "Fix login" }]);
-	expect(once.at(-1)).toEqual({ role: "user", content: PLAN_MODE_NOTICE });
-	expect(withPlanModeNotice(once)).toHaveLength(2);
-});
-
-it("refuses the builder's own file edits and publishing, but still runs commands", async () => {
+it("refuses the builder's edits and shell writes, but still runs reading commands", async () => {
 	const ran = vi.fn(async () => ({ ok: true }));
-	const make = () =>
-		tool({ inputSchema: z.object({}).passthrough(), execute: ran });
 	const tools = withPlanMode({
-		apply_patch: make(),
-		apply_patches: make(),
-		replace_text: make(),
-		rename_symbol: make(),
-		publish_task: make(),
-		execute_command: make(),
-		view_image: make(),
+		apply_patch: make(ran),
+		apply_patches: make(ran),
+		replace_text: make(ran),
+		rename_symbol: make(ran),
+		publish_task: make(ran),
+		execute_command: make(ran),
+		view_image: make(ran),
 	});
 	for (const name of [
 		"apply_patch",
@@ -78,9 +75,108 @@ it("refuses the builder's own file edits and publishing, but still runs commands
 		expect(await tools[name].execute?.({}, options)).toMatchObject({
 			blocked: true,
 		});
+	expect(
+		await tools.execute_command.execute?.(
+			{ command: "cat > src/app.ts <<'EOF'\nexport {}\nEOF" },
+			options,
+		),
+	).toMatchObject({ blocked: true });
 	expect(ran).not.toHaveBeenCalled();
-	await tools.execute_command.execute?.({}, options);
+	await tools.execute_command.execute?.(
+		{ command: "rg -n login src" },
+		options,
+	);
 	await tools.view_image.execute?.({}, options);
 	expect(ran).toHaveBeenCalledTimes(2);
-	expect(PLAN_MODE_NOTICE).toContain("Do not edit files");
+});
+
+it("locks edits only once the agent enters plan mode, mid-turn", async () => {
+	const ran = vi.fn(async () => ({ ok: true }));
+	const lock = new PlanLock({ kind: "none" });
+	const tools = withPlanMode(
+		{ apply_patch: make(ran), ...planTools(lock) },
+		() => lock.planning,
+	);
+	await tools.apply_patch.execute?.({}, options);
+	expect(ran).toHaveBeenCalledTimes(1);
+	await tools.enter_plan_mode.execute?.(
+		{ reason: "Schema migration" },
+		options,
+	);
+	expect(await tools.apply_patch.execute?.({}, options)).toMatchObject({
+		blocked: true,
+	});
+	expect(ran).toHaveBeenCalledTimes(1);
+	expect(
+		await tools.propose_plan.execute?.({ plan: "1. Migrate" }, options),
+	).toMatchObject({ proposed: true });
+});
+
+it("starts locked when the transcript says a plan is in progress", () => {
+	expect(new PlanLock({ kind: "planning" }).planning).toBe(true);
+	expect(
+		new PlanLock({ kind: "proposed", planId: "t:p" as never }).planning,
+	).toBe(true);
+	expect(new PlanLock({ kind: "none" }).planning).toBe(false);
+});
+
+it("adds a notice once per turn, and again on a later turn", () => {
+	const once = withPlanModeNotice(
+		[{ role: "user", content: "Fix login" }],
+		PLAN_REVISION_NOTICE,
+	);
+	expect(once.at(-1)).toEqual({ role: "user", content: PLAN_REVISION_NOTICE });
+	expect(withPlanModeNotice(once, PLAN_REVISION_NOTICE)).toHaveLength(2);
+	const later: ModelMessage[] = [
+		...once,
+		{ role: "assistant", content: "Revised." },
+		{ role: "user", content: "Smaller please" },
+	];
+	expect(withPlanModeNotice(later, PLAN_REVISION_NOTICE)).toHaveLength(5);
+});
+
+it("ends the turn only after a successful propose_plan", () => {
+	const call: ModelMessage = {
+		role: "assistant",
+		content: [
+			{
+				type: "tool-call",
+				toolCallId: "1",
+				toolName: "propose_plan",
+				input: { plan: "1." },
+			},
+		],
+	};
+	const result = (type: "json" | "error-text"): ModelMessage => ({
+		role: "tool",
+		content: [
+			{
+				type: "tool-result",
+				toolCallId: "1",
+				toolName: "propose_plan",
+				output:
+					type === "json"
+						? { type, value: { proposed: true } }
+						: { type, value: "bad input" },
+			},
+		],
+	});
+	expect(endedByTool([call, result("json")], PLAN_END_TURN_TOOLS)).toBe(true);
+	// Notices injected after the tool results do not hide it.
+	expect(
+		endedByTool(
+			[call, result("json"), { role: "user", content: "notice" }],
+			PLAN_END_TURN_TOOLS,
+		),
+	).toBe(true);
+	expect(endedByTool([call, result("error-text")], PLAN_END_TURN_TOOLS)).toBe(
+		false,
+	);
+	expect(endedByTool([call, result("json")], undefined)).toBe(false);
+	expect(
+		endedByTool(
+			[call, result("json"), { role: "assistant", content: "Done" }],
+			PLAN_END_TURN_TOOLS,
+		),
+	).toBe(false);
 });

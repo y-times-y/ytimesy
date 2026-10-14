@@ -327,18 +327,39 @@ describe("session items", () => {
 	});
 });
 
-it("records plan mode on the queued user message only when requested", () => {
-	const [planned] = sessionItemsQueuedWithUser(
-		[],
-		"Refactor auth",
+it("records a plan approval only while a plan waits, even with repeated words", () => {
+	const plan = {
+		kind: "planProposal" as const,
+		id: SessionItemId("t1:plan"),
+		text: "1. Do it",
+	};
+	const [, approval] = sessionItemsQueuedWithUser(
+		[plan],
+		"Approved. Implement the plan.",
 		"m1",
-		"plan",
+		true,
 	);
-	expect(planned).toMatchObject({
+	expect(approval).toMatchObject({
 		kind: "userMessage",
-		text: "Refactor auth",
-		mode: "plan",
+		approvesPlan: true,
 	});
-	const [plain] = sessionItemsQueuedWithUser([], "Refactor auth", "m2");
-	expect(plain).not.toHaveProperty("mode");
+	// A second plan approved with the same words is a new message.
+	const again = sessionItemsQueuedWithUser(
+		[plan, approval, { ...plan, id: SessionItemId("t2:plan") }],
+		"Approved. Implement the plan.",
+		"m2",
+		true,
+	);
+	expect(again).toHaveLength(4);
+	// Nothing waits: a replayed approval is a duplicate.
+	expect(
+		sessionItemsQueuedWithUser(
+			[plan, approval],
+			"Approved. Implement the plan.",
+			"m3",
+			true,
+		),
+	).toHaveLength(2);
+	const [plain] = sessionItemsQueuedWithUser([], "Refactor auth", "m4");
+	expect(plain).not.toHaveProperty("approvesPlan");
 });

@@ -102,7 +102,10 @@ export function groupTimelineRows(
 			.at(-1);
 		const activity = visible.filter(
 			(item) =>
-				item !== final && item.kind !== "fileChange" && item.kind !== "error",
+				item !== final &&
+				item.kind !== "fileChange" &&
+				item.kind !== "error" &&
+				item.kind !== "planProposal",
 		);
 		if (activity[0])
 			rows.push({
@@ -112,6 +115,12 @@ export function groupTimelineRows(
 				label: workedLabel(timing),
 			});
 		if (final) rows.push({ kind: "item", item: final });
+		// A proposed plan stays in view with its approval controls.
+		rows.push(
+			...visible
+				.filter((item) => item.kind === "planProposal")
+				.map((item) => ({ kind: "item" as const, item })),
+		);
 		rows.push(
 			...visible
 				.filter((item) => item.kind === "fileChange" || item.kind === "error")

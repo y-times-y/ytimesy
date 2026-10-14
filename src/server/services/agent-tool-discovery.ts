@@ -46,6 +46,8 @@ const CORE_TOOLS = new Set([
 	"integrate_reviewed_tasks",
 	"send_task_message",
 	"report_task_blocked",
+	"enter_plan_mode",
+	"propose_plan",
 ]);
 
 const OPTIONAL_WORKFLOW_TOOLS = new Set([
