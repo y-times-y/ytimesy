@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { PublicModelConnection } from "./model-connection";
 import {
+	connectionModels,
+	isCustomConnection,
+	type PublicModelConnection,
+} from "./model-connection";
+import {
+	apiPickerSections,
 	providerConnections,
 	providerKeyConnection,
 	selectedProviderConnection,
@@ -79,5 +84,48 @@ describe("provider-level access", () => {
 				directId,
 			)?.id,
 		).toBe(gatewayId);
+	});
+});
+
+describe("custom OpenAI-compatible endpoints", () => {
+	const custom = {
+		id: "33333333-3333-4333-8333-333333333333",
+		provider: "compatible",
+		label: "Company gateway",
+		baseUrl: "https://llm.example.com/v1",
+		revision: "r",
+		models: [
+			{ id: "llama-4-70b", label: "llama-4-70b", toolStreamingVerified: true },
+		],
+	} as PublicModelConnection;
+	const xai = {
+		...custom,
+		id: "44444444-4444-4444-8444-444444444444",
+		baseUrl: "https://api.x.ai/v1",
+		models: [
+			{ id: "grok-legacy", label: "grok-legacy", toolStreamingVerified: true },
+		],
+	} as PublicModelConnection;
+
+	it("offers every model the endpoint lists under Custom", () => {
+		expect(apiPickerSections([custom]).at(-1)).toBe("custom");
+		expect(apiPickerSections([xai])).not.toContain("custom");
+		expect(
+			providerConnections("custom", [custom, xai]).map((row) => row.id),
+		).toEqual([custom.id]);
+		expect(connectionModels(custom, []).map((model) => model.id)).toEqual([
+			"llama-4-70b",
+		]);
+	});
+
+	it("keeps a known maker's host on the curated list", () => {
+		expect(isCustomConnection(xai)).toBe(false);
+		expect(connectionModels(xai, [])).toEqual([]);
+		expect(
+			isCustomConnection({
+				...custom,
+				baseUrl: "https://openrouter.ai/api/v1",
+			}),
+		).toBe(false);
 	});
 });

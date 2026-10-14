@@ -1,5 +1,5 @@
 import { Icon } from "@iconify/react";
-import { Box } from "lucide-react";
+import { Box, Server } from "lucide-react";
 import { ClaudeMark } from "./claude-mark";
 import icons from "./model-provider-icons.json";
 import { XaiMark } from "./xai-mark";
@@ -13,6 +13,7 @@ export function ModelProviderLogo({
 	size?: number;
 }) {
 	if (provider === "anthropic") return <ClaudeMark size={size} />;
+	if (provider === "custom") return <Server size={size} aria-hidden="true" />;
 	if (provider === "x-ai") return <XaiMark size={size} />;
 	if (provider === "z-ai")
 		return (

@@ -9,7 +9,7 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "#/components/ui/select";
-import { API_MODEL_LIST, apiModelSections } from "#/domain/api-model-list";
+import { API_MODEL_LIST } from "#/domain/api-model-list";
 import {
 	AUTHOR_LABELS,
 	directModelProvider,
@@ -17,12 +17,14 @@ import {
 } from "#/domain/browse-models";
 import {
 	availableConnectionModels,
+	CUSTOM_SECTION,
 	connectionModels,
 	modelRouteId,
 	type PublicModelConnection,
 } from "#/domain/model-connection";
 import type { ModelRun } from "#/domain/parallel-models";
 import {
+	apiPickerSections,
 	providerConnections,
 	providerKeyConnection,
 	selectedProviderConnection,
@@ -82,7 +84,7 @@ export function ApiModelBrowser({
 		selectedRoute ?? "",
 		author ? chosenConnections[author] : undefined,
 	);
-	const authors = author ? [author] : apiModelSections();
+	const authors = author ? [author] : apiPickerSections(connections.data ?? []);
 	const connected = authors.flatMap((modelAuthor) => {
 		const source = author
 			? activeConnection
@@ -189,7 +191,18 @@ export function ApiModelBrowser({
 					)}
 				</div>
 			) : null}
-			{author && !activeConnection && !connections.isPending ? (
+			{author === CUSTOM_SECTION &&
+			!activeConnection &&
+			!connections.isPending ? (
+				<p className="model-picker-status">
+					Add an OpenAI-compatible endpoint in Project settings to use its
+					models here.
+				</p>
+			) : null}
+			{author &&
+			author !== CUSTOM_SECTION &&
+			!activeConnection &&
+			!connections.isPending ? (
 				<div className="inline-model-connect provider-key-connect">
 					<form
 						onSubmit={(event) => {

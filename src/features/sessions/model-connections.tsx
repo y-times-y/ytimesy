@@ -272,6 +272,10 @@ export function ModelConnections() {
 								placeholder="https://gateway.example.com/v1"
 								onChange={(event) => setBaseUrl(event.target.value)}
 							/>
+							<small className="settings-field-hint">
+								Your gateway or self-hosted models. Every model it lists appears
+								under Custom in the model picker.
+							</small>
 						</label>
 					) : null}
 					<label className="settings-field settings-field-wide">

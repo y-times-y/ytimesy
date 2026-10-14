@@ -3727,3 +3727,7 @@ a.sidebar-chat-pr,
 	border-radius: 6px;
 	font-size: 11px;
 }
+.settings-field-hint {
+	color: #6f6f6f;
+	font-size: 12px;
+}

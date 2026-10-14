@@ -13,7 +13,6 @@ import {
 	type AgentProviderId,
 	offeredAgentProviders,
 } from "#/domain/agent-provider";
-import { apiModelSections } from "#/domain/api-model-list";
 import { AUTHOR_LABELS, recentModelGenerations } from "#/domain/browse-models";
 import { parseModelRouteId } from "#/domain/model-connection";
 import {
@@ -21,6 +20,7 @@ import {
 	type ModelRun,
 	selectModelRun,
 } from "#/domain/parallel-models";
+import { apiPickerSections } from "#/domain/provider-access";
 import { authClient } from "#/features/auth/client";
 import { AgentProviderMark } from "./agent-provider-mark";
 import { ApiModelBrowser } from "./api-model-browser";
@@ -30,6 +30,7 @@ import {
 	sessionModelsFromListed,
 } from "./model-capabilities";
 import { getAgentModelCatalog } from "./model-catalog.fn";
+import { getModelConnections } from "./model-connections.fn";
 import {
 	favoriteModelKey,
 	readModelFavorites,
@@ -38,6 +39,35 @@ import {
 import { ModelPickerSettings } from "./model-picker-settings";
 import { ModelProviderLogo } from "./model-provider-logo";
 import { ModelRunCount } from "./model-run-count";
+
+/** API maker sections; mounted only while the picker is open. */
+function ApiProviderRail({
+	selected,
+	onSelect,
+}: {
+	selected: string | null;
+	onSelect: (id: string) => void;
+}) {
+	const loadConnections = useServerFn(getModelConnections);
+	const connections = useQuery({
+		queryKey: ["model-connections"],
+		queryFn: () => loadConnections(),
+	});
+	return apiPickerSections(connections.data ?? [])
+		.map((id) => [id, AUTHOR_LABELS[id] ?? id] as const)
+		.map(([id, label]) => (
+			<button
+				type="button"
+				key={id}
+				title={label}
+				aria-label={label}
+				aria-pressed={selected === id}
+				onClick={() => onSelect(id)}
+			>
+				<ModelProviderLogo provider={id} size={21} />
+			</button>
+		));
+}
 
 export function HarnessPicker({
 	connectionContent,
@@ -239,27 +269,17 @@ export function HarnessPicker({
 									<AgentProviderMark provider={option.id} size={21} />
 								</button>
 							))}
-						{apiModelSections()
-							.map((id) => [id, AUTHOR_LABELS[id] ?? id] as const)
-							.map(([id, label]) => (
-								<button
-									type="button"
-									key={id}
-									title={label}
-									aria-label={label}
-									aria-pressed={browse && apiProvider === id}
-									onClick={() => {
-										if (harnessId !== "api" && multipleModels)
-											onMultipleModelsChange?.(false);
-										setBrowse(true);
-										setApiProvider(id);
-										setFavoritesOnly(false);
-										setSearch("");
-									}}
-								>
-									<ModelProviderLogo provider={id} size={21} />
-								</button>
-							))}
+						<ApiProviderRail
+							selected={browse ? apiProvider : null}
+							onSelect={(id) => {
+								if (harnessId !== "api" && multipleModels)
+									onMultipleModelsChange?.(false);
+								setBrowse(true);
+								setApiProvider(id);
+								setFavoritesOnly(false);
+								setSearch("");
+							}}
+						/>
 					</nav>
 					<section
 						className="model-picker-catalog"
