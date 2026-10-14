@@ -68,17 +68,50 @@ export async function reusableEmptyChat(
  * Marks a chat as taken by a send before the send stores files or commits:
  * an untitled chat takes its first message's title, which also keeps
  * "New chat" from reusing it while that message is still on its way.
+ * Resolves whether this send claimed it, so a rejected send can let it go.
  */
 export async function claimChatForSend(
 	userId: string,
 	sessionId: string,
 	text: string,
 ) {
-	await titleUntitledAgentSession(
+	return titleUntitledAgentSession(
 		userId,
 		sessionId,
 		sessionTitleFromText(text),
 	);
+}
+
+/**
+ * Hands a chat claimed for a rejected send back as untitled when no message
+ * was stored, so "New chat" reuses it instead of leaving an empty titled chat.
+ */
+export async function releaseChatClaim(
+	userId: string,
+	sessionId: string,
+	text: string,
+) {
+	await database().query(
+		`update agent_session s set title='New session' where s.user_id=$1 and s.id=$2 and s.title=$3
+		 and s.turn_status <> 'running' and coalesce(jsonb_array_length(s.items),0)=0
+		 and not exists (select 1 from api_turn t where t.session_id=s.id)`,
+		[userId, sessionId, sessionTitleFromText(text)],
+	);
+}
+
+/** Runs a send on a chat it claimed (by `claimChatForSend` or opening it with a first message). */
+export async function releasingChatClaimOnFailure<T>(
+	userId: string,
+	sessionId: string,
+	text: string,
+	send: () => Promise<T>,
+) {
+	try {
+		return await send();
+	} catch (error) {
+		await releaseChatClaim(userId, sessionId, text).catch(() => undefined);
+		throw error;
+	}
 }
 
 /** Names an untitled chat after its first message; a chosen title is kept. */
@@ -87,11 +120,12 @@ export async function titleUntitledAgentSession(
 	sessionId: string,
 	title: string,
 ) {
-	if (!title || title === "New session") return;
-	await database().query(
+	if (!title || title === "New session") return false;
+	const result = await database().query(
 		"update agent_session set title=$3 where user_id=$1 and id=$2 and title='New session'",
 		[userId, sessionId, title],
 	);
+	return (result.rowCount ?? 0) > 0;
 }
 
 export type AgentSessionRecord = {

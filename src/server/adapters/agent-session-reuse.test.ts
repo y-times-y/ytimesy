@@ -3,6 +3,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
 	claimChatForSend,
+	releasingChatClaimOnFailure,
 	reusableEmptyChat,
 	titleUntitledAgentSession,
 } from "./agent-sessions";
@@ -100,4 +101,42 @@ it("never reuses a chat whose first send is still on its way", async () => {
 		[sending],
 	);
 	expect(titles.rows[0]?.title).toBe("Fix the login redirect");
+});
+
+it("hands a chat back to New chat when its first send is rejected", async () => {
+	const rejected = await chat({});
+	expect(await claimChatForSend("alice", rejected, "Use the gone model")).toBe(
+		true,
+	);
+	await expect(
+		releasingChatClaimOnFailure("alice", rejected, "Use the gone model", () =>
+			Promise.reject(new Error("The selected model is no longer available.")),
+		),
+	).rejects.toThrow(/no longer available/);
+	expect((await reusableEmptyChat("alice", project, "api"))?.id).toBe(rejected);
+
+	// A send that stored its message, or a chat already named, keeps its title.
+	const stored = await chat({});
+	await claimChatForSend("alice", stored, "Add dark mode");
+	await expect(
+		releasingChatClaimOnFailure("alice", stored, "Add dark mode", async () => {
+			await db.query("update agent_session set items=$2 where id=$1", [
+				stored,
+				JSON.stringify([
+					{ kind: "userMessage", id: "m", text: "Add dark mode" },
+				]),
+			]);
+			throw new Error("Later failure");
+		}),
+	).rejects.toThrow();
+	const named = await chat({ title: "Billing rework" });
+	expect(await claimChatForSend("alice", named, "Billing rework")).toBe(false);
+	const titles = await db.query<{ id: string; title: string }>(
+		"select id,title from agent_session",
+	);
+	const byId = Object.fromEntries(
+		titles.rows.map((row) => [row.id, row.title]),
+	);
+	expect(byId[stored]).toBe("Add dark mode");
+	expect(byId[named]).toBe("Billing rework");
 });
