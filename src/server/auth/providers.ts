@@ -10,8 +10,14 @@ export function googleOAuthConfigured(config: {
 	return Boolean(config.GOOGLE_CLIENT_ID && config.GOOGLE_CLIENT_SECRET);
 }
 
-export function configuredSocialProviders(): SocialProviderId[] {
-	return [...offeredSocialProviders];
+/** Providers the server can actually complete a sign-in with. */
+export function configuredSocialProviders(config: {
+	GOOGLE_CLIENT_ID?: string;
+	GOOGLE_CLIENT_SECRET?: string;
+}): SocialProviderId[] {
+	return offeredSocialProviders.filter(
+		(provider) => provider !== "google" || googleOAuthConfigured(config),
+	);
 }
 
 export function authTrustedOrigins(appUrl: string) {
