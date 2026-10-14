@@ -1,5 +1,9 @@
 import { APICallError, RetryError } from "ai";
 import { CoordinationFailure } from "./conversation-turn-control";
+import {
+	isWorkspaceAtCapacity,
+	isWorkspaceComputeAllowanceExhausted,
+} from "./failure-message";
 import { VerificationPolicyFailure } from "./task-integration-checks";
 
 export class ApiTurnCancelled extends Error {
@@ -30,6 +34,9 @@ const FAILURE_NAMES = new Set([
 	"APICallError",
 	"AI_APICallError",
 	"RetryableCoordinationFailure",
+	"WorkspaceProvisionError",
+	"WorkspaceCommandError",
+	"MachineUsageLimitReached",
 ]);
 const FAILURE_CODES = new Set([
 	"ECONNRESET",
@@ -83,6 +90,91 @@ export function apiTurnFailureClassification(error: unknown) {
 		name: FAILURE_NAMES.has(name) ? name : "unknown",
 		code: FAILURE_CODES.has(code) ? code : "unknown",
 	};
+}
+
+const MACHINE_USAGE_LIMIT_MESSAGE =
+	"This chat's machine reached its usage limit, so it cannot start. Your work is preserved; retry once the cloud usage allowance resets or is raised.";
+
+/** The user's (or fleet's) cloud budget cannot fund more machine runtime. */
+export class MachineUsageLimitReached extends Error {
+	constructor() {
+		super(MACHINE_USAGE_LIMIT_MESSAGE);
+		this.name = "MachineUsageLimitReached";
+	}
+}
+
+const MACHINE_ERROR_TAGS = new Set([
+	"WorkspaceProvisionError",
+	"WorkspaceCommandError",
+	"MachineUsageLimitReached",
+]);
+
+function machineError(error: unknown, depth = 0): Error | null {
+	if (depth > 4 || !(error instanceof Error)) return null;
+	const tag = (error as { _tag?: unknown })._tag;
+	if (
+		MACHINE_ERROR_TAGS.has(error.name) ||
+		(typeof tag === "string" && MACHINE_ERROR_TAGS.has(tag))
+	)
+		return error;
+	const inner =
+		(error as { providerError?: unknown }).providerError ??
+		(RetryError.isInstance(error) ? error.lastError : error.cause);
+	return machineError(inner, depth + 1);
+}
+
+/**
+ * Only fixed wording leaves this function: provider text can name VMs, hosts
+ * and internal state, so it selects a reason but is never echoed.
+ */
+function machineFailureReason(message: string) {
+	if (
+		/reached its usage limit|allowance is exhausted|allowance cannot fund|execution budget is exhausted/i.test(
+			message,
+		) ||
+		isWorkspaceComputeAllowanceExhausted(message)
+	)
+		return null;
+	if (/total runtime budget|maxRunTotalSeconds|runtime budget/i.test(message))
+		return "its runtime budget was used up and could not be extended";
+	if (/rejected the .{1,40} machine size/i.test(message))
+		return "the provider rejected its machine size; choose a smaller machine size in project settings";
+	if (isWorkspaceAtCapacity(message))
+		return "the machine plan is at its limit of running machines";
+	if (
+		/recovery is in progress|being verified|recovery binding changed/i.test(
+			message,
+		)
+	)
+		return "its saved state is still being restored";
+	if (/another operation is updating this machine/i.test(message))
+		return "another operation was updating it";
+	if (/did not become running|stopped before it became running/i.test(message))
+		return "it did not finish starting";
+	if (
+		/internal server error|bad gateway|service unavailable|gateway time-?out|\b5\d\d\b|temporar/i.test(
+			message,
+		)
+	)
+		return "the machine provider returned a temporary error";
+	return "the machine provider reported an error";
+}
+
+/**
+ * A machine (VM) failure worded as one: it must never read as a model or
+ * provider-inference failure. Null when the error is not a machine failure.
+ */
+export function machineFailureMessage(error: unknown): string | null {
+	const found = machineError(error);
+	if (!found) return null;
+	const reason = machineFailureReason(found.message);
+	if (reason === null) return MACHINE_USAGE_LIMIT_MESSAGE;
+	const action =
+		(found as { _tag?: unknown })._tag === "WorkspaceCommandError" ||
+		found.name === "WorkspaceCommandError"
+			? "could not be reached"
+			: "could not start";
+	return `The chat's machine ${action}: ${reason}. Retry; your work is preserved.`;
 }
 
 /** A ChatGPT plan's Codex allowance is spent; retrying before it resets cannot succeed. */
@@ -309,6 +401,8 @@ export function apiModelFailureMessage(error: unknown): string {
 	// Retry wrappers carry raw request data; classify only their final error, with a bounded unwrap.
 	for (let depth = 0; depth < 3 && RetryError.isInstance(error); depth++)
 		error = error.lastError;
+	const machine = machineFailureMessage(error);
+	if (machine) return machine;
 	if (error instanceof Error) {
 		const known = WORKSPACE_STEP_FAILURES.find((message) =>
 			error.message.includes(message),
@@ -430,6 +524,8 @@ export function apiTurnFailureMessage(
 	if (error instanceof LifecycleHookRefusal) return error.message;
 	const reconnect = reconnectCause(error);
 	if (reconnect) return reconnect.message;
+	const machine = machineFailureMessage(error);
+	if (machine) return machine;
 	switch (stage) {
 		case "connection":
 			return "The selected API connection changed or was removed. Select a model again; no fallback was used.";

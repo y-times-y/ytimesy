@@ -35,6 +35,7 @@ import {
 	proofWorkspaceSlug,
 	requestedAuthSnapshotId,
 } from "./proof-vm";
+import { retryTransientProviderFailure } from "./provider-retry";
 import {
 	admitVmCreate,
 	admitVmResume,
@@ -194,7 +195,9 @@ export function createFreestyleWorkspaceMachines(
 		async ensureRunning(workspaceId: WorkspaceId): Promise<WorkspaceId> {
 			try {
 				const vm = freestyle.vms.ref(workspaceId);
-				await resumeProductVm(vm, "Workspace VM");
+				await retryTransientProviderFailure(() =>
+					resumeProductVm(vm, "Workspace VM"),
+				);
 				return workspaceId;
 			} catch (cause) {
 				throw new WorkspaceProvisionError({
@@ -316,7 +319,7 @@ export function createFreestyleWorkspaceMachines(
 				memory: requested.memory,
 				storage: requested.storage,
 			};
-			try {
+			const provision = async () => {
 				const existing = await findVmBySlug(freestyle, slug);
 				if (existing) {
 					await verifyCopiedMachineSize(freestyle.vms.ref(existing));
@@ -408,6 +411,10 @@ export function createFreestyleWorkspaceMachines(
 						requestedResources,
 					),
 				);
+			};
+			try {
+				// Slug-keyed: a repeat finds and resumes a VM an earlier attempt created.
+				return await retryTransientProviderFailure(provision);
 			} catch (cause) {
 				if (cause instanceof FreestyleApiError && cause.status === 409) {
 					const recovered = await findVmBySlug(freestyle, slug);

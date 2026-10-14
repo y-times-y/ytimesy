@@ -6,6 +6,7 @@ import {
 	apiTurnFailureClassification,
 	apiTurnFailureMessage,
 	CodexReconnectRequired,
+	MachineUsageLimitReached,
 	SafeApiModelFailure,
 	SubscriptionMetadataFailure,
 } from "./api-turn-failure";
@@ -229,6 +230,84 @@ it("says the provider is overloaded when a streamed error reports it", () => {
 		"The provider is overloaded right now. Work is preserved; retry this turn in a minute. No fallback was used.",
 	);
 	expect(apiModelFailureMessage(new Error("something else"))).toContain(
+		"without a usable provider reason",
+	);
+});
+
+/** Shaped like Effect's Data.TaggedError, which the domain layer cannot import. */
+function taggedMachineError(
+	tag: "WorkspaceProvisionError" | "WorkspaceCommandError",
+	message: string,
+) {
+	return Object.assign(new Error(message), { name: tag, _tag: tag });
+}
+
+it("reports a machine that failed to start as a machine failure, not a model failure", () => {
+	const error = taggedMachineError(
+		"WorkspaceProvisionError",
+		"conflict: vm vm-b216dc11cca64b34bb598aebc1b6fd79 has used its total runtime budget of 900s (903s used); raise maxRunTotalSeconds to start it again",
+	);
+	// The model loop wraps stream errors, including step preparation's.
+	const wrapped = new SafeApiModelFailure(error);
+	for (const message of [
+		wrapped.message,
+		apiTurnFailureMessage("model", wrapped),
+		apiTurnFailureMessage("workspace", error),
+	]) {
+		expect(message).toContain("The chat's machine could not start");
+		expect(message).toContain("Retry; your work is preserved");
+		expect(message).not.toMatch(/model request failed|provider reason/i);
+		expect(message).not.toContain("vm-b216");
+		expect(message).not.toContain("maxRunTotalSeconds");
+	}
+	expect(apiTurnFailureClassification(error).name).toBe(
+		"WorkspaceProvisionError",
+	);
+});
+
+it("names a provider internal error on a machine as temporary without echoing it", () => {
+	const message = apiModelFailureMessage(
+		new SafeApiModelFailure(
+			taggedMachineError("WorkspaceProvisionError", "Internal server error"),
+		),
+	);
+	expect(message).toBe(
+		"The chat's machine could not start: the machine provider returned a temporary error. Retry; your work is preserved.",
+	);
+});
+
+it("says the chat's machine reached its usage limit when the budget cannot fund it", () => {
+	for (const error of [
+		new MachineUsageLimitReached(),
+		taggedMachineError(
+			"WorkspaceProvisionError",
+			"Your cloud execution allowance is exhausted.",
+		),
+		taggedMachineError(
+			"WorkspaceProvisionError",
+			"The fleet cloud execution budget is exhausted.",
+		),
+	])
+		expect(apiTurnFailureMessage("model", error)).toMatch(
+			/^This chat's machine reached its usage limit/,
+		);
+});
+
+it("keeps unknown machine error text out of the user message", () => {
+	const message = apiTurnFailureMessage(
+		"model",
+		taggedMachineError(
+			"WorkspaceCommandError",
+			"token sk-secret at https://vm-x.style.dev failed",
+		),
+	);
+	expect(message).toBe(
+		"The chat's machine could not be reached: the machine provider reported an error. Retry; your work is preserved.",
+	);
+});
+
+it("leaves non-machine failures to the existing provider wording", () => {
+	expect(apiModelFailureMessage(new Error("something odd"))).toContain(
 		"without a usable provider reason",
 	);
 });

@@ -15,6 +15,7 @@ import {
 	productCreateVmFields,
 	productIdleTimeoutNeedsUpdate,
 } from "./product-vm";
+import { retryTransientProviderFailure } from "./provider-retry";
 import {
 	admitVmCreate,
 	admitVmResume,
@@ -82,6 +83,12 @@ export class FreestyleWorkspaceRuntime implements WorkspaceRuntime {
 	}
 
 	async recover(providerRef: string, requiredSeconds = 60) {
+		return retryTransientProviderFailure(() =>
+			this.resume(providerRef, requiredSeconds),
+		);
+	}
+
+	private async resume(providerRef: string, requiredSeconds: number) {
 		const vm = this.client().vms.ref(providerRef);
 		const data = await vm.data();
 		await admitVmResume(vm, data, requiredSeconds);
