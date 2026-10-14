@@ -7,11 +7,12 @@ import {
 } from "./agent-tool-workspace";
 
 const quote = (text: string) => `'${text.replaceAll("'", "'\\''")}'`;
-const GUIDANCE_SCRIPT = `import hashlib, json, pathlib, re, subprocess, sys
+const GUIDANCE_SCRIPT = `import hashlib, json, os, pathlib, re, subprocess, sys
 root = pathlib.Path(sys.argv[1]).resolve(strict=True)
 relative = pathlib.Path(sys.argv[2])
 known_documents = json.loads(sys.argv[3])
 archived_documents = json.loads(sys.argv[4])
+include_git_ancestors = len(sys.argv) > 5 and sys.argv[5] == '1'
 if relative.is_absolute() or '..' in relative.parts or '.git' in relative.parts:
     raise ValueError('Scope must be inside the repository')
 scope = (root / relative).resolve()
@@ -21,6 +22,12 @@ if scope.is_file() or (not scope.exists() and scope.suffix):
     scope = scope.parent
 folders = [root]
 folders.extend(reversed([parent for parent in [scope, *scope.parents] if parent != root and parent.is_relative_to(root)]))
+# A checkout of a repository subdirectory also inherits the instructions between the Git root and it.
+if include_git_ancestors:
+    top = subprocess.run(['git', '-C', str(root), 'rev-parse', '--show-toplevel'], capture_output=True, text=True, timeout=10)
+    toplevel = pathlib.Path(top.stdout.strip()).resolve() if top.returncode == 0 and top.stdout.strip() else None
+    if toplevel is not None and toplevel != root and root.is_relative_to(toplevel):
+        folders[:0] = reversed([parent for parent in root.parents if parent.is_relative_to(toplevel)])
 instructions = []
 remaining = 64000
 def fingerprint_and_prefix(path, prefix_limit):
@@ -39,7 +46,7 @@ for folder in folders:
             limit = min(16000, remaining)
             digest, raw = fingerprint_and_prefix(path, (limit + 1) * 4)
             text = raw.decode('utf-8', errors='replace')
-            instructions.append({'path': path.relative_to(root).as_posix(), 'sha256': digest, 'content': text[:limit], 'nextStart': limit if len(text) > limit else None})
+            instructions.append({'path': pathlib.Path(os.path.relpath(path, root)).as_posix(), 'sha256': digest, 'content': text[:limit], 'nextStart': limit if len(text) > limit else None})
             remaining -= limit
 documents = []
 seen_documents = set()
@@ -257,7 +264,7 @@ export function knownGuidanceDocuments(messages: readonly ModelMessage[]) {
 /** Reuse only an identical inventory body retained in the active transcript, after a fresh disk scan. */
 function inventoryAlreadyInContext(
 	messages: readonly ModelMessage[],
-	packet: GuidancePacket,
+	packet: Pick<GuidancePacket, "scope" | "scopeFiles" | "scopeFilesTruncated">,
 ) {
 	const inventory = z.object({
 		scope: z.string(),
@@ -288,6 +295,58 @@ function inventoryAlreadyInContext(
 	return false;
 }
 
+/** Parsed name and description from each skill's frontmatter, never its body. */
+function skillMetadata(packet: GuidancePacket) {
+	return packet.skills.map(({ header, ...source }) => {
+		const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(
+			header,
+		)?.[1];
+		try {
+			const metadata: unknown = frontmatter
+				? parse(frontmatter, { maxAliasCount: 0 })
+				: null;
+			const parsed = z
+				.object({
+					name: z.string().min(1).max(100),
+					description: z.string().min(1).max(2000),
+				})
+				.safeParse(metadata);
+			return parsed.success
+				? { ...source, ...parsed.data }
+				: { ...source, metadataUnavailable: true as const };
+		} catch {
+			return { ...source, metadataUnavailable: true as const };
+		}
+	});
+}
+
+/** Scan the checkout's instructions, referenced docs, skills and root configuration for a scope. */
+export async function inspectRepositoryGuidance(
+	input: AgentToolWorkspaceInput,
+	options: {
+		scope: string;
+		messages?: readonly ModelMessage[];
+		/** Also read AGENTS.md/CLAUDE.md between the Git root and a subdirectory checkout. */
+		gitAncestors?: boolean;
+	},
+) {
+	const { machines, vm, cwd } = await resolveToolWorkspace(input);
+	const messages = options.messages ?? [];
+	const result = await machines.exec(
+		vm,
+		`python3 -c ${quote(GUIDANCE_SCRIPT)} ${quote(cwd)} ${quote(options.scope)} ${quote(JSON.stringify(knownGuidanceDocuments(messages)))} ${quote(JSON.stringify(archivedGuidanceDocuments(messages)))}${options.gitAncestors ? " 1" : ""}`,
+		20_000,
+	);
+	if (result.exitCode)
+		throw new Error("Could not safely inspect repository guidance.");
+	const packet = JSON.parse(result.stdout) as GuidancePacket;
+	return { ...packet, skills: skillMetadata(packet) };
+}
+
+export type RepositoryGuidance = Awaited<
+	ReturnType<typeof inspectRepositoryGuidance>
+>;
+
 /** Fresh revision and source hashes make guidance verifiable after branch switches or compaction. */
 export function repositoryGuidanceTool(
 	input: AgentToolWorkspaceInput & { signal: AbortSignal },
@@ -298,15 +357,10 @@ export function repositoryGuidanceTool(
 		inputSchema: z.object({ scope: z.string().min(1).max(2048).default(".") }),
 		execute: async ({ scope = "." }, options) => {
 			input.signal.throwIfAborted();
-			const { machines, vm, cwd } = await resolveToolWorkspace(input);
-			const result = await machines.exec(
-				vm,
-				`python3 -c ${quote(GUIDANCE_SCRIPT)} ${quote(cwd)} ${quote(scope)} ${quote(JSON.stringify(knownGuidanceDocuments(options.messages)))} ${quote(JSON.stringify(archivedGuidanceDocuments(options.messages)))}`,
-				20_000,
-			);
-			if (result.exitCode)
-				throw new Error("Could not safely inspect repository guidance.");
-			const packet = JSON.parse(result.stdout) as GuidancePacket;
+			const packet = await inspectRepositoryGuidance(input, {
+				scope,
+				messages: options.messages,
+			});
 			return {
 				...packet,
 				...(inventoryAlreadyInContext(options.messages, packet)
@@ -316,27 +370,6 @@ export function repositoryGuidanceTool(
 							scopeFileCount: packet.scopeFiles.length,
 						}
 					: {}),
-				skills: packet.skills.map(({ header, ...source }) => {
-					const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(
-						header,
-					)?.[1];
-					try {
-						const metadata: unknown = frontmatter
-							? parse(frontmatter, { maxAliasCount: 0 })
-							: null;
-						const parsed = z
-							.object({
-								name: z.string().min(1).max(100),
-								description: z.string().min(1).max(2000),
-							})
-							.safeParse(metadata);
-						return parsed.success
-							? { ...source, ...parsed.data }
-							: { ...source, metadataUnavailable: true };
-					} catch {
-						return { ...source, metadataUnavailable: true };
-					}
-				}),
 			};
 		},
 	});
