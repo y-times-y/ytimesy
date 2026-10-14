@@ -3731,3 +3731,12 @@ a.sidebar-chat-pr,
 	color: #6f6f6f;
 	font-size: 12px;
 }
+.settings-option {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+.settings-option small {
+	color: #8f8f8f;
+	font-size: 11px;
+}

@@ -1,4 +1,3 @@
-import { Effect } from "effect";
 import {
 	decryptSecret,
 	encryptSecret,
@@ -7,9 +6,11 @@ import {
 import type { WorkspaceId } from "#/domain/ids";
 import { posixShellQuoted } from "#/domain/posix-command";
 import {
+	AGENT_SECRETS_DIRECTORY,
+	AGENT_SECRETS_ENV_PATH,
 	agentSecretsEnvFile,
-	agentSecretsEnvPath,
 	type PublicProjectSecret,
+	parseProjectSecretKind,
 	parseProjectSecretName,
 	parseProjectSecretValue,
 } from "#/domain/project-secret";
@@ -38,17 +39,20 @@ export async function saveVisibleProjectSecret(input: {
 	readonly projectId: string;
 	readonly name: string;
 	readonly value: string;
+	readonly kind: unknown;
 }): Promise<PublicProjectSecret> {
 	if (!(await projectForOwner(input.userId, input.projectId))) {
 		throw new Error("Project is not available.");
 	}
 	const name = parseProjectSecretName(input.name);
-	const value = parseProjectSecretValue(input.value);
+	const kind = parseProjectSecretKind(input.kind);
+	const value = parseProjectSecretValue(input.value, kind);
 	const masterKey = await loadSecretMasterKey();
 	return saveProjectSecretForOwner({
 		userId: input.userId,
 		projectId: input.projectId,
 		name,
+		kind,
 		hint: secretHint(value),
 		encrypted: encryptSecret(masterKey, value),
 	});
@@ -65,35 +69,57 @@ export async function removeVisibleProjectSecret(input: {
 	await deleteProjectSecretForOwner(input);
 }
 
-export function injectProjectSecrets(
+/** The VM env file contents and the runtime values to redact, for one turn. */
+export type AgentProjectSecrets = {
+	readonly envFile: string;
+	readonly redact: readonly string[];
+};
+
+export async function loadAgentProjectSecrets(
+	userId: string,
+	projectId: string,
+): Promise<AgentProjectSecrets> {
+	const stored = (await loadProjectSecretsForOwner(userId, projectId)).filter(
+		(secret) => secret.kind !== "build",
+	);
+	if (!stored.length) return { envFile: agentSecretsEnvFile([]), redact: [] };
+	const masterKey = await loadSecretMasterKey();
+	const secrets = stored.map((secret) => ({
+		name: secret.name,
+		kind: secret.kind,
+		value: decryptSecret(masterKey, secret.encrypted),
+	}));
+	return {
+		envFile: agentSecretsEnvFile(secrets),
+		redact: secrets
+			.filter((secret) => secret.kind === "runtime")
+			.map((secret) => secret.value),
+	};
+}
+
+/**
+ * Rewrites the VM's env file every turn (empty when the project has none), so
+ * a removed or changed secret never outlives the next turn.
+ */
+export async function writeAgentProjectSecrets(
 	machines: WorkspaceMachines,
-	workspaceId: WorkspaceId,
-	scope: { readonly userId: string; readonly projectId?: string },
-): Effect.Effect<readonly string[]> {
-	return Effect.tryPromise(async () => {
-		if (!scope.projectId) return [];
-		const environment = await loadProjectSecretEnvironment(
-			scope.userId,
-			scope.projectId,
-		);
-		const secrets = Object.entries(environment).map(([name, value]) => ({
-			name,
-			value,
-		}));
-		const home = await guestHome(machines, workspaceId);
-		const path = agentSecretsEnvPath(home);
-		await machines.writeTextFile(
-			workspaceId,
-			path,
-			agentSecretsEnvFile(secrets),
-		);
-		await machines.exec(
-			workspaceId,
-			`chmod 600 ${posixShellQuoted(path)}`,
-			10_000,
-		);
-		return secrets.map((secret) => secret.name);
-	}).pipe(Effect.catchAll(() => Effect.succeed([])));
+	vm: WorkspaceId,
+	secrets: AgentProjectSecrets,
+) {
+	const directory = posixShellQuoted(AGENT_SECRETS_DIRECTORY);
+	const prepared = await machines.exec(
+		vm,
+		`mkdir -p ${directory} && chmod 700 ${directory}`,
+		10_000,
+	);
+	if (prepared.exitCode)
+		throw new Error("Could not prepare project secrets in the workspace.");
+	await machines.writeTextFile(vm, AGENT_SECRETS_ENV_PATH, secrets.envFile);
+	await machines.exec(
+		vm,
+		`chmod 600 ${posixShellQuoted(AGENT_SECRETS_ENV_PATH)}`,
+		10_000,
+	);
 }
 
 export async function loadProjectSecretEnvironment(
@@ -108,8 +134,11 @@ export async function loadProjectSecretEnvironment(
 		throw new Error(
 			"A required build secret is missing. Add it in project settings.",
 		);
+	// Setup receives every build secret, plus any secret the recipe names.
 	const selected = names
-		? stored.filter((secret) => names.includes(secret.name))
+		? stored.filter(
+				(secret) => secret.kind === "build" || names.includes(secret.name),
+			)
 		: stored;
 	if (!selected.length) return {};
 	const masterKey = await loadSecretMasterKey();
@@ -119,20 +148,4 @@ export async function loadProjectSecretEnvironment(
 			decryptSecret(masterKey, secret.encrypted),
 		]),
 	);
-}
-
-async function guestHome(
-	machines: WorkspaceMachines,
-	workspaceId: WorkspaceId,
-) {
-	try {
-		const result = await machines.exec(
-			workspaceId,
-			`printf '%s' "\${HOME:-/home/ubuntu}"`,
-			15_000,
-		);
-		return result.stdout.trim() || "/home/ubuntu";
-	} catch {
-		return "/home/ubuntu";
-	}
 }

@@ -201,6 +201,10 @@ vi.mock("../services/api-agent-tools", () => ({
 vi.mock("../services/api-command-scope", () => ({
 	stopApiTurnCommands: mocks.stop,
 }));
+vi.mock("../services/project-secrets", () => ({
+	loadAgentProjectSecrets: vi.fn(async () => ({ envFile: "", redact: [] })),
+	writeAgentProjectSecrets: vi.fn(async () => undefined),
+}));
 vi.mock("../services/api-turn-workspace", () => ({
 	deferredApiTurnWorkspace: () => async () => ({
 		machines: {},

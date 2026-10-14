@@ -26,6 +26,7 @@ import { officialProviderEndpoint } from "#/domain/model-connection";
 import { modelStepLimit } from "#/domain/model-workflow";
 import { posixShellCommand } from "#/domain/posix-command";
 import { PROJECT_KNOWLEDGE_INSTRUCTIONS } from "#/domain/project-knowledge";
+import { agentSecretsEnvFile } from "#/domain/project-secret";
 import { rootAgentMode } from "#/domain/root-agent-mode";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
 import {
@@ -96,6 +97,11 @@ import {
 	loadCloudProjectKnowledge,
 	recordCloudProjectReport,
 } from "../services/project-knowledge";
+import {
+	loadAgentProjectSecrets,
+	writeAgentProjectSecrets,
+} from "../services/project-secrets";
+import { withRedactedResults } from "../services/redacted-tools";
 import { machinesForAgentSession } from "../services/session-workspace-machines";
 import { analyticsAgentRole } from "../services/turn-analytics";
 import { commitCompletedSessionTurn } from "../services/turn-commit";
@@ -295,6 +301,12 @@ export async function runApiTurn(
 		// Builder-direct (launch default): the root chat is the builder itself.
 		const direct =
 			!owner.parentSessionId && !fusion && rootAgentMode() === "builder";
+		const projectSecrets = owner.projectId
+			? await loadAgentProjectSecrets(owner.userId, owner.projectId).catch(
+					() => ({ envFile: agentSecretsEnvFile([]), redact: [] }),
+				)
+			: null;
+		let secretsWritten: Promise<void> | undefined;
 		const prepareWorkspace = deferredApiTurnWorkspace(
 			machines,
 			owner,
@@ -303,6 +315,15 @@ export async function runApiTurn(
 		let codePoint: Promise<void> | undefined;
 		const workspace = async () => {
 			execution = await prepareWorkspace();
+			if (projectSecrets) {
+				const { machines: vmMachines, vm } = execution;
+				secretsWritten ??= writeAgentProjectSecrets(
+					vmMachines,
+					vm,
+					projectSecrets,
+				);
+				await secretsWritten;
+			}
 			if (
 				fusion ||
 				direct ||
@@ -420,9 +441,10 @@ export async function runApiTurn(
 			...pluginSkillTools(plugins),
 			...webSearch,
 		};
+		const redact = projectSecrets?.redact ?? [];
 		const tools = planMode
-			? withPlanMode(hooks.wrap(withMcp))
-			: hooks.wrap(withMcp);
+			? withPlanMode(hooks.wrap(withRedactedResults(withMcp, redact)))
+			: hooks.wrap(withRedactedResults(withMcp, redact));
 		if (planMode) messages = withPlanModeNotice(messages);
 		if (mcp.unavailable.length) {
 			const notice = `MCP servers unavailable this turn (connection or credentials failed): ${mcp.unavailable.join(", ")}. Their tools are not offered; continue without them.`;
@@ -676,8 +698,10 @@ export async function runApiTurn(
 						config: fusion,
 						// The shared workspace: shell tools behind the same hooks and plan mode.
 						workspaceTools: planMode
-							? withPlanMode(hooks.wrap(surfaceTools))
-							: hooks.wrap(surfaceTools),
+							? withPlanMode(
+									hooks.wrap(withRedactedResults(surfaceTools, redact)),
+								)
+							: hooks.wrap(withRedactedResults(surfaceTools, redact)),
 						beforeSidekickRequest: async () => {
 							abort.signal.throwIfAborted();
 							if (evaluation)

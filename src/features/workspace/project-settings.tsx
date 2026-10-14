@@ -12,7 +12,10 @@ import {
 	SelectValue,
 } from "#/components/ui/select";
 import { offeredAgentProviders } from "#/domain/agent-provider";
-import type { PublicProjectSecret } from "#/domain/project-secret";
+import type {
+	ProjectSecretKind,
+	PublicProjectSecret,
+} from "#/domain/project-secret";
 import { type Project, projectDisplayName } from "#/domain/projects";
 import type { UserAgentAccount } from "#/domain/user-agent-account";
 import {
@@ -448,6 +451,18 @@ function GithubSection({
 	);
 }
 
+const SECRET_KIND_LABELS: Record<ProjectSecretKind, string> = {
+	runtime: "Runtime secret",
+	environment: "Environment variable",
+	build: "Build secret",
+};
+
+const SECRET_KIND_HINTS: Record<ProjectSecretKind, string> = {
+	runtime: "API keys the code needs; hidden from the agent",
+	environment: "Non-sensitive settings the agent can read",
+	build: "Only during environment setup, e.g. registry tokens",
+};
+
 function ProjectSecretsSection({ project }: { project?: Project }) {
 	const listSecrets = useServerFn(listProjectSecretsFn);
 	const saveSecret = useServerFn(saveProjectSecretFn);
@@ -455,6 +470,7 @@ function ProjectSecretsSection({ project }: { project?: Project }) {
 	const [secrets, setSecrets] = useState<readonly PublicProjectSecret[]>([]);
 	const [name, setName] = useState("");
 	const [value, setValue] = useState("");
+	const [kind, setKind] = useState<ProjectSecretKind>("runtime");
 	const [error, setError] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
 
@@ -480,7 +496,7 @@ function ProjectSecretsSection({ project }: { project?: Project }) {
 		try {
 			setSecrets(
 				await saveSecret({
-					data: { projectId: project.id, name, value },
+					data: { projectId: project.id, name, value, kind },
 				}),
 			);
 			setName("");
@@ -525,8 +541,8 @@ function ProjectSecretsSection({ project }: { project?: Project }) {
 	return (
 		<section className="settings-section settings-section-gap">
 			<SettingsHeader
-				title="Environment secrets"
-				description="Available to the agent as environment variables in this project. Values are encrypted and never shown again; the browser only sees names and hints."
+				title="Secrets"
+				description="Values are encrypted and never shown again. Environment variables and runtime secrets are loaded as environment variables for the agent and services; runtime secret values are replaced with [REDACTED] in everything the agent and this chat see, and commits containing them are refused. Build secrets are only passed to environment setup."
 			/>
 			<ul className="settings-group">
 				{secrets.length === 0 ? (
@@ -536,7 +552,9 @@ function ProjectSecretsSection({ project }: { project?: Project }) {
 						<li key={secret.id} className="settings-row">
 							<div className="settings-row-text">
 								<code className="settings-row-title">{secret.name}</code>
-								<span className="settings-row-meta">{secret.hint}</span>
+								<span className="settings-row-meta">
+									{SECRET_KIND_LABELS[secret.kind]} · {secret.hint}
+								</span>
 							</div>
 							<button
 								type="button"
@@ -564,6 +582,33 @@ function ProjectSecretsSection({ project }: { project?: Project }) {
 						onChange={(event) => setName(event.target.value.toUpperCase())}
 					/>
 				</label>
+				<div className="settings-field">
+					<span>Type</span>
+					<Select
+						value={kind}
+						disabled={busy}
+						onValueChange={(next) => setKind(next as ProjectSecretKind)}
+					>
+						<SelectTrigger aria-label="Secret type">
+							<SelectValue>{SECRET_KIND_LABELS[kind]}</SelectValue>
+						</SelectTrigger>
+						<SelectContent>
+							{(
+								Object.entries(SECRET_KIND_LABELS) as [
+									ProjectSecretKind,
+									string,
+								][]
+							).map(([id, label]) => (
+								<SelectItem key={id} value={id} textValue={label}>
+									<span className="settings-option">
+										<span>{label}</span>
+										<small>{SECRET_KIND_HINTS[id]}</small>
+									</span>
+								</SelectItem>
+							))}
+						</SelectContent>
+					</Select>
+				</div>
 				<label className="settings-field">
 					<span>Value</span>
 					<input
