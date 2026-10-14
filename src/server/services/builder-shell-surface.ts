@@ -15,6 +15,9 @@ const BUILDER_SHELL_TOOLS = new Set([
 	"read_repository_guidance",
 	"read_environment_report",
 	"report_task_blocked",
+	// Recover exact detail after compaction; the benchmarked builder has these too.
+	"read_context_archive",
+	"search_context_history",
 	// Product-only: visual QA on the shared desktop. The Terminal-Bench bridge
 	// builds its own tool set, so these do not change the measured surface.
 	"browser_open",
