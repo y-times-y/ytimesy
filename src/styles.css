@@ -2076,6 +2076,11 @@ a.sidebar-chat-pr,
 	gap: 16px;
 	width: min(100%, 24rem);
 }
+.auth-page-status {
+	margin: 0;
+	color: #8f8f8f;
+	font-size: 14px;
+}
 .auth-page [role="alert"] {
 	width: 100%;
 	margin: 0;

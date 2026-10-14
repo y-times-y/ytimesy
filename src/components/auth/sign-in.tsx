@@ -38,6 +38,7 @@ import {
 	InputGroupButton,
 	InputGroupInput,
 } from "#/components/ui/input-group.tsx";
+import { useIdentityOptions } from "#/features/auth/identity-options";
 import { YtimesyBrand } from "#/features/auth/onboarding-shell";
 import { useSignInContinuation } from "#/lib/auth/use-sign-in-continuation.ts";
 import { cn } from "#/lib/utils.ts";
@@ -78,6 +79,8 @@ export function SignIn({
 	} = useAuth();
 
 	const { fetchOptions, resetFetchOptions } = useFetchOptions();
+	// New email accounts need a verification email the server can send.
+	const emailSignUp = useIdentityOptions().data?.emailDelivery === true;
 	const continueSignIn = useSignInContinuation();
 
 	const { mutateAsync: signInEmail, isPending: signInEmailPending } =
@@ -365,7 +368,7 @@ export function SignIn({
 						</Link>
 					)}
 
-					{emailAndPassword?.enabled && (
+					{emailAndPassword?.enabled && emailSignUp && (
 						<FieldDescription className="text-center">
 							{localization.auth.needToCreateAnAccount}{" "}
 							<Link
