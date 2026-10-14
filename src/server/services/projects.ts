@@ -18,7 +18,7 @@ import { captureServerAnalytics } from "../adapters/analytics";
 import {
 	authorizedRepository,
 	createAuthorizedRepository,
-	githubClient,
+	repositoryBranchSha,
 } from "../adapters/github";
 import {
 	deleteProjectForOwner,
@@ -32,8 +32,23 @@ import {
 	workspaceForProject,
 } from "../adapters/workspaces";
 import { githubAccessToken } from "../auth/github-connection";
+import { rejectRequest } from "./errors";
 import type { WorkspaceMachines } from "./workspace-machines";
 import { enqueueProjectWorkspace } from "./workspaces";
+
+/** A missing branch is the user's to fix, not a GitHub outage. */
+function requireBranch(token: string, fullName: string, branch: string) {
+	return Effect.gen(function* () {
+		const sha = yield* Effect.tryPromise(() =>
+			repositoryBranchSha(token, fullName, branch),
+		);
+		if (!sha)
+			return yield* rejectRequest(
+				`Branch ${branch} does not exist in ${fullName}.`,
+				400,
+			);
+	});
+}
 
 const branchChangedMessage = "Branch changed. Retry to prepare this branch.";
 
@@ -55,10 +70,7 @@ export function connectProjectGroup(
 			const branch = isGeneratedSessionBranch(selected.branch)
 				? repository.defaultBranch
 				: selected.branch;
-			const [owner, repo] = repository.fullName.split("/");
-			yield* Effect.tryPromise(() =>
-				githubClient(token).repos.getBranch({ owner, repo, branch }),
-			);
+			yield* requireBranch(token, repository.fullName, branch);
 			repositories.push({ ...repository, branch });
 		}
 		// Existing tools address checkouts by basename; reject ambiguous directory names.
@@ -66,8 +78,9 @@ export function connectProjectGroup(
 			new Set(repositories.map((repo) => projectFolderName(repo.fullName)))
 				.size !== repositories.length
 		)
-			throw new Error(
+			return yield* rejectRequest(
 				"Repositories in one project must have different folder names.",
+				400,
 			);
 		const project = yield* Effect.tryPromise(() =>
 			saveProjectGroup(userId, selection.name, repositories),
@@ -105,16 +118,8 @@ export function connectProject(
 		const storedBranch = isGeneratedSessionBranch(selection.branch)
 			? repository.defaultBranch
 			: selection.branch;
-		if (!isGeneratedSessionBranch(storedBranch)) {
-			const [owner, repo] = repository.fullName.split("/");
-			yield* Effect.tryPromise(() =>
-				githubClient(token).repos.getBranch({
-					owner,
-					repo,
-					branch: storedBranch,
-				}),
-			);
-		}
+		if (!isGeneratedSessionBranch(storedBranch))
+			yield* requireBranch(token, repository.fullName, storedBranch);
 		let restartWorkspaceId: string | null = null;
 		yield* Effect.tryPromise(async () => {
 			const existing = await projectForRepository(

@@ -1,6 +1,9 @@
 import { Effect } from "effect";
 import { beforeEach, expect, it, vi } from "vitest";
-import { connectProject } from "../src/server/services/projects";
+import {
+	connectProject,
+	connectProjectGroup,
+} from "../src/server/services/projects";
 
 const adapter = vi.hoisted(() => ({
 	authorize: vi.fn(),
@@ -13,7 +16,7 @@ const adapter = vi.hoisted(() => ({
 }));
 vi.mock("../src/server/adapters/github", () => ({
 	authorizedRepository: adapter.authorize,
-	githubClient: () => ({ repos: { getBranch: adapter.branch } }),
+	repositoryBranchSha: adapter.branch,
 }));
 vi.mock("../src/server/adapters/projects", () => ({
 	saveProject: adapter.save,
@@ -82,11 +85,11 @@ it("normalizes the legacy generated project branch to the repository default", a
 			enqueue,
 		),
 	);
-	expect(adapter.branch).toHaveBeenCalledWith({
-		owner: "test",
-		repo: "repo",
-		branch: "main",
-	});
+	expect(adapter.branch).toHaveBeenCalledWith(
+		"user-token",
+		"test/repo",
+		"main",
+	);
 	expect(adapter.save).toHaveBeenCalledWith("alice", expect.anything(), "main");
 });
 
@@ -96,7 +99,7 @@ it("does not save a nonexistent branch", async () => {
 		installationId: 1,
 		repositoryId: 2,
 	});
-	adapter.branch.mockRejectedValue(new Error("Not found"));
+	adapter.branch.mockResolvedValue(null);
 	const result = await Effect.runPromise(
 		Effect.either(
 			connectProject("alice", {
@@ -107,6 +110,11 @@ it("does not save a nonexistent branch", async () => {
 		),
 	);
 	expect(result._tag).toBe("Left");
+	const failure = result._tag === "Left" ? result.left.error : null;
+	expect(failure).toBeInstanceOf(Response);
+	expect(await (failure as Response).text()).toBe(
+		"Branch missing does not exist in test/repo.",
+	);
 	expect(adapter.save).not.toHaveBeenCalled();
 });
 it("queues workspace preparation only after the project is saved", async () => {
@@ -296,4 +304,31 @@ it("does not restart a ready workspace when the branch is unchanged", async () =
 	);
 	expect(adapter.failReady).not.toHaveBeenCalled();
 	expect(adapter.save).toHaveBeenCalledOnce();
+});
+
+it("reports clashing folder names as a request the user can fix", async () => {
+	adapter.branch.mockResolvedValue("sha");
+	adapter.authorize.mockImplementation(
+		async (_token, installationId, repositoryId) => ({
+			fullName: repositoryId === 2 ? "one/app" : "two/app",
+			installationId,
+			repositoryId,
+			defaultBranch: "main",
+		}),
+	);
+	const result = await Effect.runPromise(
+		Effect.either(
+			connectProjectGroup("alice", {
+				name: "Both",
+				repositories: [
+					{ installationId: 1, repositoryId: 2, branch: "main" },
+					{ installationId: 1, repositoryId: 3, branch: "main" },
+				],
+			}),
+		),
+	);
+	expect(result._tag).toBe("Left");
+	const failure = result._tag === "Left" ? result.left.error : null;
+	expect((failure as Response).status).toBe(400);
+	expect(await (failure as Response).text()).toMatch(/different folder names/);
 });
