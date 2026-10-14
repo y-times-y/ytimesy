@@ -81,6 +81,8 @@ for (const name of [
 	"AUTH_EMAIL_FROM",
 	"CLOUDFLARE_EMAIL_ACCOUNT_ID",
 	"CLOUDFLARE_EMAIL_API_TOKEN",
+	// Development only: force a provider outage to exercise model failover.
+	"YTIMESY_DEV_FORCE_MODEL_OUTAGE",
 ] as const) {
 	if (process.env[name]) secrets[name] = process.env[name];
 }
