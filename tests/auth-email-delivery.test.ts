@@ -6,7 +6,9 @@ import {
 	deliverAuthEmails,
 	type OutgoingAuthEmail,
 	persistAuthEmail,
+	sendWithBinding,
 	sendWithCloudflare,
+	useAuthEmailBinding,
 } from "../src/server/adapters/email";
 
 let db: PGlite;
@@ -167,4 +169,53 @@ it("calls Cloudflare Email Service and classifies its errors", async () => {
 		retryable: false,
 	});
 	fetch.mockRestore();
+});
+
+it("sends through the Workers binding without an API token", async () => {
+	const sent: unknown[] = [];
+	useAuthEmailBinding({
+		send: async (message) => {
+			sent.push(message);
+			return { messageId: "m1" };
+		},
+	});
+	vi.stubEnv("AUTH_EMAIL_FROM", "noreply@ytimesy.com");
+	vi.stubEnv("CLOUDFLARE_EMAIL_API_TOKEN", "");
+	try {
+		await persistAuthEmail({
+			to: "alice@example.test",
+			subject: "Verify your email",
+			purpose: "verify-email",
+			actionUrl: "http://127.0.0.1:3001/verify?token=t",
+		});
+		expect(sent).toHaveLength(1);
+		expect(sent[0]).toMatchObject({
+			from: { email: "noreply@ytimesy.com", name: "ytimesy" },
+			to: "alice@example.test",
+			subject: "Verify your email",
+		});
+		const row = await db.query<{ sent_at: Date | null }>(
+			"select sent_at from auth_email_outbox",
+		);
+		expect(row.rows[0]?.sent_at).not.toBeNull();
+	} finally {
+		vi.unstubAllEnvs();
+	}
+});
+
+it("retries binding errors except ones a retry cannot fix", async () => {
+	const failing = (code: string) => ({
+		send: async () => {
+			throw Object.assign(new Error("refused"), { code });
+		},
+	});
+	const message = { to: "a@example.test", subject: "s", text: "t", html: "h" };
+	for (const [code, retryable] of [
+		["E_RATE_LIMIT_EXCEEDED", true],
+		["E_DAILY_LIMIT_EXCEEDED", true],
+		["E_CONTENT_TOO_LARGE", false],
+	] as const)
+		await expect(
+			sendWithBinding(failing(code), "noreply@ytimesy.com", message),
+		).rejects.toMatchObject({ retryable });
 });

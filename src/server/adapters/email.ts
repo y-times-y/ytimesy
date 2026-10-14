@@ -10,9 +10,10 @@ import { seal, unseal } from "../auth/token-vault";
 import { database } from "./database";
 
 /**
- * Auth email goes out through Cloudflare Email Service's REST API. All three
- * values are required; without them nothing is sent and the sign-in page hides
- * email sign-up and password reset.
+ * Auth email goes out through Cloudflare Email Service: the Workers send_email
+ * binding where the code runs on Cloudflare (no token), otherwise the REST API
+ * with an account id and token. AUTH_EMAIL_FROM is always required; without a
+ * way to send, the sign-in page hides email sign-up and password reset.
  */
 const senderConfiguration = z.object({
 	AUTH_EMAIL_FROM: z.email(),
@@ -21,13 +22,70 @@ const senderConfiguration = z.object({
 });
 type AuthEmailSender = z.infer<typeof senderConfiguration>;
 
-function authEmailSender(): AuthEmailSender | null {
+/** The part of the Workers send_email binding this module uses. */
+export type AuthEmailBinding = {
+	send(message: {
+		from: { email: string; name: string };
+		to: string;
+		subject: string;
+		text: string;
+		html: string;
+	}): Promise<{ messageId: string }>;
+};
+
+let emailBinding: AuthEmailBinding | null = null;
+
+/** Workers hand over their binding at startup; the Node server has none. */
+export function useAuthEmailBinding(binding: AuthEmailBinding | undefined) {
+	if (binding) emailBinding = binding;
+}
+
+type SendAuthEmail = (message: OutgoingAuthEmail) => Promise<void>;
+
+function authEmailSender(): SendAuthEmail | null {
+	const from = z.email().safeParse(process.env.AUTH_EMAIL_FROM);
+	if (emailBinding && from.success) {
+		const binding = emailBinding;
+		return (message) => sendWithBinding(binding, from.data, message);
+	}
 	const parsed = senderConfiguration.safeParse(process.env);
-	return parsed.success ? parsed.data : null;
+	return parsed.success
+		? (message) => sendWithCloudflare(parsed.data, message)
+		: null;
 }
 
 export function authEmailDeliveryConfigured() {
 	return authEmailSender() !== null;
+}
+
+/** Codes a later attempt cannot fix; anything else is retried with backoff. */
+const PERMANENT_BINDING_ERRORS = new Set([
+	"E_CONTENT_TOO_LARGE",
+	"E_RECIPIENT_NOT_ALLOWED",
+	"E_RECIPIENT_SUPPRESSED",
+	"E_VALIDATION_ERROR",
+]);
+
+export async function sendWithBinding(
+	binding: AuthEmailBinding,
+	from: string,
+	message: OutgoingAuthEmail,
+) {
+	try {
+		await binding.send({
+			from: { email: from, name: "ytimesy" },
+			to: message.to,
+			subject: message.subject,
+			text: message.text,
+			html: message.html,
+		});
+	} catch (error) {
+		const code = String((error as { code?: unknown }).code ?? "");
+		throw new AuthEmailSendError(
+			`Email service refused the message${code ? ` (${code})` : ""}.`,
+			!PERMANENT_BINDING_ERRORS.has(code),
+		);
+	}
 }
 
 export type OutgoingAuthEmail = {
@@ -141,12 +199,7 @@ export async function deliverAuthEmails(
 	} = {},
 ) {
 	const outcome = { sent: 0, retrying: 0, failed: 0 };
-	const sender = authEmailSender();
-	const send =
-		options.send ??
-		(sender
-			? (message: OutgoingAuthEmail) => sendWithCloudflare(sender, message)
-			: null);
+	const send = options.send ?? authEmailSender();
 	if (!send) return outcome;
 	const now = options.now ?? (() => new Date());
 	const claimed = await database().query<ClaimedAuthEmail>(
