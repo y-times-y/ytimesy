@@ -29,6 +29,7 @@ import type { WorkspaceRuntime } from "../adapters/workspace-runtime";
 import { readyWorkspaceForOwner } from "../adapters/workspaces";
 import { githubAccessToken } from "../auth/github-connection";
 import { peekAgentSessionMachine } from "./agent-session-machine";
+import { rejectRequest } from "./errors";
 
 /**
  * Commits and pushes the live workspace checkout, then opens a draft PR.
@@ -56,8 +57,9 @@ export function publishProject(
 				throw new Response("Project is not available.", { status: 404 });
 			const repositories = repositoriesForProject(owned);
 			if (repositories.length > 1 && !input.repositoryFullName) {
-				throw new Error(
+				throw new Response(
 					"Select the repository to publish for this multi-repository project.",
+					{ status: 400 },
 				);
 			}
 			const selected = input.repositoryFullName
@@ -241,11 +243,7 @@ function runGit(
 	);
 }
 
-function reject(message: string) {
-	return Effect.tryPromise(async () => {
-		throw new Response(message, { status: 409 });
-	});
-}
+const reject = (message: string) => rejectRequest(message);
 
 function hostFailure(error: unknown, fallback: string) {
 	if (error instanceof Response) return error;

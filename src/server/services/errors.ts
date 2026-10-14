@@ -1,4 +1,4 @@
-import { Data } from "effect";
+import { Data, Effect } from "effect";
 
 export class MissingFreestyleApiKey extends Data.TaggedError(
 	"MissingFreestyleApiKey",
@@ -27,3 +27,14 @@ export class WorkspaceCommandError extends Data.TaggedError(
 	readonly message: string;
 	readonly providerWorkspaceId: string;
 }> {}
+
+/**
+ * A failure the user can correct, with the message they should see. Routes
+ * unwrap `UnknownException.error`, so the Response reaches the client as-is;
+ * a bare `throw` inside `Effect.gen` would instead become a defect and a 502.
+ */
+export function rejectRequest(message: string, status = 409) {
+	return Effect.tryPromise(async (): Promise<never> => {
+		throw new Response(message, { status });
+	});
+}
