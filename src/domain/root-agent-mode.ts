@@ -1,8 +1,7 @@
 /**
  * How a root chat works. "builder" (launch default): the chat edits its own
  * workspace with the builder profile, the configuration we benchmark.
- * "lead": a read-only lead that delegates to builder tasks. Fusion is chosen
- * separately when a sidekick model is configured.
+ * "lead": a read-only lead that delegates to builder tasks.
  */
 type RootAgentMode = "builder" | "lead";
 

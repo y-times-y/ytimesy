@@ -92,10 +92,8 @@ type ToolActivity = {
 	removed?: number;
 	note?: string;
 	glyph?:
-		| "delegate"
 		| "wait"
 		| "message"
-		| "takeover"
 		| "image"
 		| "guide"
 		| "stop"
@@ -263,28 +261,6 @@ export function toolActivity(item: DynamicToolCallItem): ToolActivity {
 				code: true,
 				glyph: "image",
 			};
-		case "delegate_to_sidekick":
-			return {
-				verb: "Delegated to sidekick",
-				note: text("task") ? clip(text("task") as string, 80) : undefined,
-				glyph: "delegate",
-			};
-		case "wait_for_sidekick":
-			return {
-				verb: "Checked on sidekick",
-				note: typeof output?.status === "string" ? output.status : undefined,
-				glyph: "wait",
-			};
-		case "message_sidekick":
-			return {
-				verb: "Messaged sidekick",
-				note: text("feedback")
-					? clip(text("feedback") as string, 80)
-					: undefined,
-				glyph: "message",
-			};
-		case "take_control":
-			return { verb: "Took control from sidekick", glyph: "takeover" };
 		case "web_search":
 		case "google_search": {
 			// Provider-hosted search: the query is in the input (Anthropic) or the result's action (OpenAI).

@@ -7,7 +7,6 @@ import {
 	FileText,
 	FlaskConical,
 	Globe,
-	Hand,
 	Hourglass,
 	Image,
 	ListChecks,
@@ -17,7 +16,6 @@ import {
 	Square,
 	SquareTerminal,
 	TriangleAlert,
-	Users,
 	Wrench,
 } from "lucide-react";
 import type { SessionActivityGlyph } from "#/domain/session-activity";
@@ -34,10 +32,8 @@ const icons = {
 	mcp: Plug,
 	error: TriangleAlert,
 	tool: Wrench,
-	delegate: Users,
 	wait: Hourglass,
 	message: MessageSquare,
-	takeover: Hand,
 	image: Image,
 	guide: BookOpen,
 	stop: Square,
