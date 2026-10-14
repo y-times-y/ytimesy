@@ -840,7 +840,12 @@ export async function runApiTurn(
 		if (
 			!items
 				.slice(lastUser + 1)
-				.some((item) => item.kind === "agentMessage" && item.text.trim())
+				.some(
+					(item) =>
+						(item.kind === "agentMessage" && item.text.trim()) ||
+						// A proposed plan is the turn's result; it waits for approval.
+						item.kind === "planProposal",
+				)
 		)
 			throw new IncompleteAgentTurn("missing-final-result");
 		failureStage = "commit";
