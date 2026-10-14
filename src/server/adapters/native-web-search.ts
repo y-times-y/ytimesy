@@ -1,15 +1,17 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import { google } from "@ai-sdk/google";
 import { openai } from "@ai-sdk/openai";
+import { openrouter } from "@openrouter/ai-sdk-provider";
 import type { ToolSet } from "ai";
 import type { ModelProvider } from "#/domain/model-connection";
 
 /**
  * The model provider's own hosted web search, so agents can look up docs, errors
  * and releases. It runs and is billed on the provider, with no ytimesy search
- * backend. A Codex subscription uses OpenAI's. Providers without a native search
- * (OpenRouter, compatible endpoints) get none; their users can add a search MCP
- * server instead.
+ * backend. A Codex subscription uses OpenAI's. On OpenRouter the model calls its
+ * web search server tool, which uses the maker's native search or Exa and bills
+ * the user's OpenRouter credits. Compatible endpoints get none; their users can
+ * add a search MCP server instead.
  */
 export function nativeWebSearchTools(provider: ModelProvider): ToolSet {
 	switch (provider) {
@@ -24,6 +26,9 @@ export function nativeWebSearchTools(provider: ModelProvider): ToolSet {
 			};
 		case "google":
 			return { google_search: google.tools.googleSearch({}) };
+		case "openrouter":
+			// A server tool the model calls when needed, not the per-request web plugin.
+			return { web_search: openrouter.tools.webSearch({ maxResults: 5 }) };
 		default:
 			return {};
 	}
