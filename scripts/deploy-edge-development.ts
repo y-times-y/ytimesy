@@ -77,6 +77,10 @@ for (const name of [
 	"YTIMESY_CODEX_RELAY_URL",
 	"YTIMESY_CODEX_RELAY_SECRET",
 	"YTIMESY_PR_REPAIR_ENABLED",
+	// Cloudflare Email Service sender for verification and password-reset mail.
+	"AUTH_EMAIL_FROM",
+	"CLOUDFLARE_EMAIL_ACCOUNT_ID",
+	"CLOUDFLARE_EMAIL_API_TOKEN",
 ] as const) {
 	if (process.env[name]) secrets[name] = process.env[name];
 }
