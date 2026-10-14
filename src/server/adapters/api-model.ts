@@ -7,6 +7,7 @@ import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import type { LanguageModel } from "ai";
 import type { ModelProvider } from "#/domain/model-connection";
 import { openRouterCacheFetch } from "./api-prompt-cache";
+import { openRouterOfficialFetch } from "./openrouter-official";
 import {
 	openRouterReasoningFetch,
 	withOpenRouterReasoning,
@@ -35,9 +36,11 @@ export function connectedLanguageModel(
 				createOpenRouter({
 					...options,
 					fetch: openRouterReasoningFetch(
-						new URL(input.baseUrl).hostname === "openrouter.ai"
-							? openRouterCacheFetch(fetch)
-							: fetch,
+						openRouterOfficialFetch(
+							new URL(input.baseUrl).hostname === "openrouter.ai"
+								? openRouterCacheFetch(fetch)
+								: fetch,
+						),
 					),
 				})(input.modelId),
 			);
