@@ -82,9 +82,9 @@ it("rejects a different GitHub account even after a valid callback", async () =>
 	const state =
 		new URL(await startGithubConnection("alice")).searchParams.get("state") ??
 		"";
-	await expect(finishGithubConnection("alice", state, "code")).rejects.toThrow(
-		"same GitHub account",
-	);
+	await expect(
+		finishGithubConnection("alice", state, "code"),
+	).rejects.toMatchObject({ reason: "wrong-account" });
 });
 it("rejects expired authorization state", async () => {
 	const state =
@@ -95,7 +95,7 @@ it("rejects expired authorization state", async () => {
 	);
 	await expect(
 		finishGithubConnection("alice", state, "code"),
-	).rejects.toThrow();
+	).rejects.toMatchObject({ reason: "expired" });
 });
 it("lets email or Google users connect a GitHub account for repositories", async () => {
 	github.profile.mockResolvedValueOnce({ data: { id: 789 } });
