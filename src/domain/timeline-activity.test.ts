@@ -242,3 +242,36 @@ it("keeps a proposed plan out of the collapsed work of a finished turn", () => {
 		rows.map((row) => (row.kind === "item" ? row.item.kind : row.kind)),
 	).toEqual(["userMessage", "work", "planProposal"]);
 });
+
+it("keeps a model switch in view above the answer of a finished turn", () => {
+	const rows = groupTimelineRows(
+		[
+			{ kind: "userMessage", id: SessionItemId("u1"), text: "Fix the test" },
+			{
+				kind: "dynamicToolCall",
+				id: SessionItemId("t1:read"),
+				tool: "read_file",
+				status: "completed",
+			},
+			{
+				kind: "modelSwitch",
+				id: SessionItemId("t1:switch-1"),
+				message:
+					"Codex is unavailable (outage); continued on GPT-6.1 Sol via OpenRouter.",
+				reason: "outage",
+				from: { model: "GPT-6.1-Sol", connection: "Codex" },
+				to: {
+					model: "GPT-6.1 Sol",
+					connection: "OpenRouter",
+					key: "11111111-1111-4111-8111-111111111111|openai/gpt-6.1-sol",
+				},
+				state: "switched",
+			},
+			{ kind: "agentMessage", id: SessionItemId("t1:answer"), text: "Fixed." },
+		],
+		"completed",
+	);
+	expect(
+		rows.map((row) => (row.kind === "item" ? row.item.kind : row.kind)),
+	).toEqual(["userMessage", "work", "modelSwitch", "agentMessage"]);
+});

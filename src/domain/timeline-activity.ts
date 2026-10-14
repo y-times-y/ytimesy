@@ -105,7 +105,8 @@ export function groupTimelineRows(
 				item !== final &&
 				item.kind !== "fileChange" &&
 				item.kind !== "error" &&
-				item.kind !== "planProposal",
+				item.kind !== "planProposal" &&
+				item.kind !== "modelSwitch",
 		);
 		if (activity[0])
 			rows.push({
@@ -114,6 +115,12 @@ export function groupTimelineRows(
 				items: activity,
 				label: workedLabel(timing),
 			});
+		// A model switch says who wrote the answer, so it stays in view above it.
+		rows.push(
+			...visible
+				.filter((item) => item.kind === "modelSwitch")
+				.map((item) => ({ kind: "item" as const, item })),
+		);
 		if (final) rows.push({ kind: "item", item: final });
 		// A proposed plan stays in view with its approval controls.
 		rows.push(
