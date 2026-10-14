@@ -21,7 +21,7 @@ vi.mock("../adapters/checkpoints/storage", () => ({
 		id: string,
 	) => {
 		const base64 = stored.get(id);
-		if (!base64) throw new Error("missing");
+		if (base64 === undefined) throw new Error("missing");
 		return base64;
 	},
 }));
@@ -124,5 +124,22 @@ describe("message attachments on the machine", () => {
 			attachment,
 		]);
 		expect(await readFile(path)).toEqual(bytes);
+	});
+
+	it("stores and writes an empty file", async () => {
+		const [attachment] = await storeMessageAttachments("user", "session", [
+			{ name: "empty.txt", mediaType: "text/plain", base64: "" },
+		]);
+		expect(attachment).toMatchObject({ size: 0, mediaType: "text/plain" });
+		const path = attachmentPath(attachment);
+		written.push(path.slice(0, path.lastIndexOf("/")));
+		await materializeMessageAttachments(
+			host,
+			WorkspaceId("vm"),
+			"user",
+			"session",
+			[attachment],
+		);
+		expect(await readFile(path)).toEqual(Buffer.alloc(0));
 	});
 });

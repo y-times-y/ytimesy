@@ -318,6 +318,21 @@ export function sessionViewAppliesToOpenChat(input: {
 	);
 }
 
+/**
+ * Whether an unsent message returns to the composer on screen. It returns
+ * only to the chat that sent it: a chat opened since (or a newer new-chat
+ * draft, which shares the empty composer) must not receive it.
+ */
+export function unsentSendReturnsHere(input: {
+	readonly sentEpoch: number;
+	readonly currentEpoch: number;
+	readonly sentChatId?: string;
+	readonly openChatId?: string;
+}): boolean {
+	if (input.sentEpoch === input.currentEpoch) return true;
+	return Boolean(input.sentChatId && input.sentChatId === input.openChatId);
+}
+
 /** A different project is open: none of the previous project's chat stays on screen. */
 export function sessionWithoutOpenChat<
 	T extends {

@@ -284,7 +284,9 @@ function lastUserMessage(
  * A view from before the send landed must not erase the message just sent, so a
  * settled view counts only when it carries that same message (by id). An idle
  * view means the turn was stopped: it counts after the user pressed Stop, or when
- * the server already holds the message and says nothing is running.
+ * the server already holds the message and says nothing is running. While the
+ * server still owes a follow-up turn (a comparison's judge), idle is only the gap
+ * before that turn starts, so it never ends the open turn.
  */
 export function sessionViewShouldReplaceOpenTurn(input: {
 	readonly currentStatus: SessionTurnStatus;
@@ -292,10 +294,12 @@ export function sessionViewShouldReplaceOpenTurn(input: {
 	readonly currentItems: readonly SessionItem[];
 	readonly nextItems: readonly SessionItem[];
 	readonly stopRequested?: boolean;
+	readonly followUpPending?: boolean;
 }): boolean {
 	if (input.currentStatus !== "running") return true;
 	if (input.nextStatus === "running") return true;
 	if (input.nextStatus === "idle" && input.stopRequested) return true;
+	if (input.nextStatus === "idle" && input.followUpPending) return false;
 	const currentUser = lastUserMessage(input.currentItems);
 	// Nothing was sent from here; the server's state is the only truth.
 	if (!currentUser) return true;
@@ -352,7 +356,11 @@ export function sessionUsesFollowUpLayout(input: {
 }
 
 export function sessionTitleFromItems(items: readonly SessionItem[]): string {
-	const text = lastUserMessageText(items);
+	return sessionTitleFromText(lastUserMessageText(items) ?? "");
+}
+
+/** A chat's title from its first message: the first line, shortened. */
+export function sessionTitleFromText(text: string): string {
 	if (!text) return "New session";
 	const line = text.trim().split("\n")[0]?.trim() ?? "";
 	if (!line) return "New session";
