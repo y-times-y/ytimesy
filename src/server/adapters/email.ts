@@ -27,6 +27,7 @@ export type AuthEmailBinding = {
 	send(message: {
 		from: { email: string; name: string };
 		to: string;
+		replyTo?: string;
 		subject: string;
 		text: string;
 		html: string;
@@ -58,6 +59,8 @@ export function authEmailDeliveryConfigured() {
 	return authEmailSender() !== null;
 }
 
+const AUTH_EMAIL_REPLY_TO = "support@ytimesy.com";
+
 /** Codes a later attempt cannot fix; anything else is retried with backoff. */
 const PERMANENT_BINDING_ERRORS = new Set([
 	"E_CONTENT_TOO_LARGE",
@@ -75,6 +78,8 @@ export async function sendWithBinding(
 		await binding.send({
 			from: { email: from, name: "ytimesy" },
 			to: message.to,
+			// Replies to the no-reply sender reach a person.
+			replyTo: AUTH_EMAIL_REPLY_TO,
 			subject: message.subject,
 			text: message.text,
 			html: message.html,
