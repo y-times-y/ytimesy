@@ -1,4 +1,4 @@
-import { type ModelMessage, type ToolSet, tool } from "ai";
+import { type JSONValue, type ModelMessage, type ToolSet, tool } from "ai";
 import { z } from "zod";
 import {
 	type AgentPlanState,
@@ -132,12 +132,20 @@ export function planTools(lock: PlanLock): ToolSet {
 			inputSchema: z.object({
 				plan: z.string().min(1).max(PLAN_TEXT_LIMIT),
 			}),
-			execute: async () => {
+			execute: async ({ plan }) => {
 				lock.enter();
 				return {
 					proposed: true,
+					// The transcript records the plan from this result, so a call
+					// that failed validation or was refused never shows as proposed.
+					plan,
 					next: "Stop here. The user will approve or reply with feedback.",
 				};
+			},
+			// The model already wrote the plan; it does not need it echoed back.
+			toModelOutput: ({ output }) => {
+				const { plan: _plan, ...rest } = output as Record<string, unknown>;
+				return { type: "json", value: rest as JSONValue };
 			},
 		}),
 	};

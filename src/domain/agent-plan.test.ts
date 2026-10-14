@@ -44,32 +44,51 @@ it("keeps a proposed plan waiting through feedback until it is approved", () => 
 	expect(planOutcome(approved, SessionItemId("t2:p"))).toBe("approved");
 });
 
-it("records propose_plan as a plan item, not a tool row", () => {
+it("lifts a plan mode entered by a turn that ended without proposing", () => {
+	// Stopped or failed after enter_plan_mode: the user has nothing to approve.
+	expect(agentPlanState([user("u1"), entered, user("u2")])).toEqual({
+		kind: "none",
+	});
+	// A plan proposed earlier still waits for approval.
+	expect(
+		agentPlanState([user("u1"), plan("t1:p"), user("u2"), entered, user("u3")]),
+	).toEqual({ kind: "proposed", planId: "t1:p" });
+});
+
+it("records propose_plan as a plan item, not a tool row, once it succeeded", () => {
 	const called = applyApiProgress([user("u1")], "t1", {
 		type: "tool-call",
 		id: "c1",
 		name: "propose_plan",
 		input: { plan: "  ## Plan\n1. Split invoices  " },
 	});
-	expect(called.at(-1)).toEqual({
+	// The call alone proposes nothing: validation or a hook may still reject it.
+	expect(called).toEqual([user("u1")]);
+	const proposed = applyApiProgress(called, "t1", {
+		type: "tool-result",
+		id: "c1",
+		name: "propose_plan",
+		output: { proposed: true, plan: "  ## Plan\n1. Split invoices  " },
+	});
+	expect(proposed.at(-1)).toEqual({
 		kind: "planProposal",
 		id: "t1:c1",
 		text: "## Plan\n1. Split invoices",
 	});
-	expect(
-		applyApiProgress(called, "t1", {
-			type: "tool-result",
-			id: "c1",
-			name: "propose_plan",
-			output: { proposed: true },
-		}),
-	).toEqual(called);
-	expect(
-		applyApiProgress([user("u1")], "t1", {
-			type: "tool-call",
-			id: "c2",
-			name: "propose_plan",
-			input: { plan: " " },
-		}),
-	).toHaveLength(1);
+	expect(pendingPlanId(proposed)).toBe("t1:c1");
+	for (const rejected of [
+		{ output: "Invalid input for tool propose_plan", failed: true },
+		{ output: { blocked: true, error: "Blocked by a hook" } },
+		{ output: { proposed: true, plan: " " } },
+	])
+		expect(
+			pendingPlanId(
+				applyApiProgress(called, "t1", {
+					type: "tool-result",
+					id: "c1",
+					name: "propose_plan",
+					...rejected,
+				}),
+			),
+		).toBeNull();
 });

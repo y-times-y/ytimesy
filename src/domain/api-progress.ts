@@ -74,15 +74,18 @@ export function applyApiProgress(
 					event.text,
 			],
 		};
-	else if (event.type === "tool-call" && event.name === PROPOSE_PLAN_TOOL) {
-		const plan = (event.input as { plan?: unknown } | null)?.plan;
+	else if (event.type === "tool-result" && event.name === PROPOSE_PLAN_TOOL) {
+		// Only a successful call proposes: the tool returns the plan it accepted.
+		// A call rejected by validation or a hook leaves no plan waiting.
+		const output = event.output as { proposed?: unknown; plan?: unknown };
+		const plan = event.failed || output?.proposed !== true ? null : output.plan;
 		if (typeof plan !== "string" || !plan.trim()) return [...items];
 		next = {
 			kind: "planProposal",
 			id,
 			text: plan.trim().slice(0, PLAN_TEXT_LIMIT),
 		};
-	} else if (event.type === "tool-result" && event.name === PROPOSE_PLAN_TOOL)
+	} else if (event.type === "tool-call" && event.name === PROPOSE_PLAN_TOOL)
 		return [...items];
 	else if (event.type === "tool-call" || event.type === "tool-result")
 		next = {
