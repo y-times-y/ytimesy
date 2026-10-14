@@ -8,6 +8,7 @@ import {
 	parseRuntimeId as parseHarnessId,
 } from "#/domain/agent-provider";
 import { incomingAttachments } from "#/domain/message-attachment";
+import { chatHoldingSend } from "#/server/adapters/agent-sessions";
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
 import { listProjects } from "#/server/adapters/projects";
 import { requireUser } from "#/server/auth/auth";
@@ -88,7 +89,21 @@ function optionalSessionInput(
 }
 
 export const getCodexSession = createServerFn({ method: "GET" })
-	.validator(optionalSessionInput)
+	.validator(
+		(
+			data:
+				| (Parameters<typeof optionalSessionInput>[0] & {
+						/** Without a chat id: the chat that queued this message, if any. */
+						userMessageId?: string;
+				  })
+				| undefined,
+		) => ({
+			...optionalSessionInput(data),
+			...(data?.userMessageId
+				? { userMessageId: z.string().uuid().parse(data.userMessageId) }
+				: {}),
+		}),
+	)
 	.handler(async ({ data }): Promise<PublicCodexSession> => {
 		const scope = await optionalScope(
 			data.projectId,
@@ -97,6 +112,20 @@ export const getCodexSession = createServerFn({ method: "GET" })
 			data.createNew,
 		);
 		if (!scope) return emptyHarnessSession();
+		// A new chat's first send: find the chat it landed in, if it did.
+		if (!scope.sessionId && data.userMessageId) {
+			const landed = scope.projectId
+				? await chatHoldingSend(
+						scope.userId,
+						scope.projectId,
+						data.userMessageId,
+					)
+				: null;
+			if (!landed) return emptyHarnessSession();
+			return Effect.runPromise(
+				readHarnessWorkspaceSession({ ...scope, sessionId: landed }),
+			);
+		}
 		return Effect.runPromise(readHarnessWorkspaceSession(scope));
 	});
 

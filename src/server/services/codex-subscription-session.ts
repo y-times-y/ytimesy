@@ -20,6 +20,7 @@ import {
 } from "#/domain/session-item";
 import { subscriptionTurnRevision } from "#/domain/subscription-turn";
 import {
+	chatHoldingSend,
 	releasingChatClaimOnFailure,
 	titleUntitledAgentSession,
 } from "#/server/adapters/agent-sessions";
@@ -165,6 +166,20 @@ export async function sendSubscriptionTask(
 	if (!scope.projectId)
 		throw new Error("Select a project chat before sending.");
 	if (!scope.sessionId) {
+		// A resent first message whose reply was lost lands in its own chat.
+		const landed =
+			input.idempotencyKey &&
+			(await chatHoldingSend(
+				scope.userId,
+				scope.projectId,
+				input.idempotencyKey,
+			));
+		if (landed)
+			return sendSubscriptionTask(
+				{ ...scope, sessionId: landed },
+				input,
+				preparedTask,
+			);
 		const opened = await openAgentSession({
 			userId: scope.userId,
 			projectId: scope.projectId,

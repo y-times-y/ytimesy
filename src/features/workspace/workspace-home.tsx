@@ -1178,13 +1178,15 @@ export function WorkspaceHome({
 	 */
 	async function sendLanded(pending: PendingSend, view: PublicCodexSession) {
 		const sessionId = pending.scope.sessionId ?? view.agentSessionId;
-		if (!pending.scope.projectId || !sessionId) return false;
+		if (!pending.scope.projectId) return false;
 		try {
+			// A new chat's first send has no chat id yet: the server finds the
+			// chat that queued this message id, if any.
 			const landed = await getCodexSession({
 				data: {
 					projectId: pending.scope.projectId,
-					sessionId,
 					harnessId: pending.scope.harnessId,
+					...(sessionId ? { sessionId } : { userMessageId: pending.messageId }),
 				},
 			});
 			if (
