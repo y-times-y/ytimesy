@@ -51,10 +51,10 @@ describe("message attachments", () => {
 	});
 
 	it("queues a repeated text when it brings new files", () => {
-		const first = sessionItemsQueuedWithUser([], "Look");
-		expect(sessionItemsQueuedWithUser(first, "Look")).toHaveLength(1);
+		const first = sessionItemsQueuedWithUser([], "Look", "m1");
+		expect(sessionItemsQueuedWithUser(first, "Look", "m1")).toHaveLength(1);
 		expect(
-			sessionItemsQueuedWithUser(first, "Look", undefined, undefined, [image]),
+			sessionItemsQueuedWithUser(first, "Look", "m2", undefined, [image]),
 		).toHaveLength(2);
 	});
 

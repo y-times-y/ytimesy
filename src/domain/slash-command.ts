@@ -191,3 +191,29 @@ export function matchingSlashCommands(
 		return left.availability === "ready" ? -1 : 1;
 	});
 }
+
+/**
+ * The command a draft names exactly, if any. Only project commands take an
+ * argument; "/files are missing" or "/api/x returns 500" are messages.
+ */
+export function exactSlashCommand(
+	draft: SlashDraft,
+	commands: readonly SlashCommand[],
+): SlashCommand | null {
+	const command = commands.find(
+		(candidate) => candidate.trigger.slice(1).toLowerCase() === draft.query,
+	);
+	if (!command) return null;
+	if (draft.argument && command.id !== "custom") return null;
+	return command;
+}
+
+/** Menu entries while the user is still typing a command; none once it reads as a message. */
+export function slashMenuCommands(
+	draft: SlashDraft,
+	commands: readonly SlashCommand[],
+): SlashCommand[] {
+	if (!draft.argument) return matchingSlashCommands(draft, commands);
+	const exact = exactSlashCommand(draft, commands);
+	return exact ? [exact] : [];
+}

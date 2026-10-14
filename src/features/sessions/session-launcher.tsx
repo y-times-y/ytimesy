@@ -43,10 +43,11 @@ import {
 } from "#/domain/session-item";
 import {
 	composerSlashCommands,
+	exactSlashCommand,
 	expandProjectCommand,
-	matchingSlashCommands,
 	parseSlashDraft,
 	type SlashCommand,
+	slashMenuCommands,
 } from "#/domain/slash-command";
 import { captureAnalytics } from "#/features/analytics/client";
 import { authClient } from "#/features/auth/client";
@@ -116,7 +117,7 @@ export function SessionLauncher({
 			readonly userMessageId?: string;
 			readonly attachments?: readonly IncomingAttachment[];
 		},
-	) => void;
+	) => Promise<boolean> | undefined;
 	onConnect: () => void;
 	onStop: () => void;
 	onOpenInspector: (view: InspectorView) => void;
@@ -265,6 +266,11 @@ export function SessionLauncher({
 	const selectedModel = models.find((model) => model.id === modelId);
 	const [optimisticItems, setOptimisticItems] = useState<SessionItem[]>([]);
 	const [slashIndex, setSlashIndex] = useState(0);
+	/** The user moved through the menu, so Enter takes the highlighted entry. */
+	const [slashPicked, setSlashPicked] = useState(false);
+	const [slashMenuDismissed, setSlashMenuDismissed] = useState<string | null>(
+		null,
+	);
 	const items = visibleSessionItems(session.items, optimisticItems);
 	const turnStatus = session.turnStatus;
 	const activeCompetition = competitions.find((group) =>
@@ -327,25 +333,29 @@ export function SessionLauncher({
 			turnStatus,
 		],
 	);
-	const visibleSlashCommands = slashDraft
-		? matchingSlashCommands(slashDraft, [
-				...slashCommands,
-				...(projectCommands.data ?? []).map((command) => ({
-					...command,
-					availability: composerReady
-						? command.availability
-						: ("unavailable" as const),
-					unavailableReason: "Wait for the current run to finish",
-				})),
-			])
-		: [];
+	const allSlashCommands = [
+		...slashCommands,
+		...(projectCommands.data ?? []).map((command) => ({
+			...command,
+			availability: composerReady
+				? command.availability
+				: ("unavailable" as const),
+			unavailableReason: "Wait for the current run to finish",
+		})),
+	];
+	// Only an exact command runs; any other slash text is an ordinary message.
+	const draftCommand = slashDraft
+		? exactSlashCommand(slashDraft, allSlashCommands)
+		: null;
+	const visibleSlashCommands =
+		slashDraft && slashMenuDismissed !== draft
+			? slashMenuCommands(slashDraft, allSlashCommands)
+			: [];
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: Every edit of the draft resets the menu highlight.
 	useEffect(() => {
-		if (!draft.startsWith("/")) {
-			setSlashIndex(0);
-			return;
-		}
 		setSlashIndex(0);
+		setSlashPicked(false);
 	}, [draft]);
 
 	useEffect(() => {
@@ -393,7 +403,7 @@ export function SessionLauncher({
 					item.kind !== "userMessage" ||
 					!session.items.some(
 						(existing) =>
-							existing.kind === "userMessage" && existing.text === item.text,
+							existing.kind === "userMessage" && existing.id === item.id,
 					),
 			),
 		);
@@ -428,6 +438,16 @@ export function SessionLauncher({
 				...(plan ? { approvesPlan: true as const } : {}),
 			},
 		]);
+		// Nothing was sent: take the message back and return what the user typed.
+		const unsend = () => {
+			setOptimisticItems((current) =>
+				current.filter((item) => item.id !== SessionItemId(userMessageId)),
+			);
+			if (plan) return;
+			setDraft((current) => (current.trim() ? current : typed));
+			if (files.length)
+				setAttachments((current) => (current.length ? current : files));
+		};
 		const reasoning = resolveReasoningLevel(selectedModel, reasoningId);
 		const send = (encoded: readonly IncomingAttachment[]) =>
 			onSend(text, modelId, {
@@ -437,9 +457,12 @@ export function SessionLauncher({
 				...(leaderCount === 1 && speed ? { speed } : {}),
 				...(plan ? { approvesPlan: true } : {}),
 				...(competitionMode && leaderCount > 1 && !plan
-					? { leaderCount, attemptModelIds, userMessageId }
+					? { leaderCount, attemptModelIds }
 					: {}),
+				userMessageId,
 				...(encoded.length ? { attachments: encoded } : {}),
+			})?.then((sent) => {
+				if (!sent) unsend();
 			});
 		// Approving from the plan card leaves a draft in progress alone.
 		if (!plan) setDraft("");
@@ -461,9 +484,11 @@ export function SessionLauncher({
 	}
 
 	function sendDraft() {
-		if (slashDraft) {
-			const command = visibleSlashCommands[slashIndex];
-			if (command) runSlashCommand(command);
+		const command = slashPicked
+			? (visibleSlashCommands[slashIndex] ?? draftCommand)
+			: draftCommand;
+		if (command) {
+			runSlashCommand(command);
 			return;
 		}
 		sendText(draft.trim());
@@ -508,11 +533,13 @@ export function SessionLauncher({
 		if (!slashDraft || visibleSlashCommands.length === 0) return false;
 		if (event.key === "ArrowDown") {
 			event.preventDefault();
+			setSlashPicked(true);
 			setSlashIndex((index) => (index + 1) % visibleSlashCommands.length);
 			return true;
 		}
 		if (event.key === "ArrowUp") {
 			event.preventDefault();
+			setSlashPicked(true);
 			setSlashIndex(
 				(index) =>
 					(index - 1 + visibleSlashCommands.length) %
@@ -521,11 +548,14 @@ export function SessionLauncher({
 			return true;
 		}
 		if (event.key === "Escape") {
+			// Close the menu; never erase what the user typed.
 			event.preventDefault();
-			setDraft("");
+			setSlashMenuDismissed(draft);
 			return true;
 		}
-		if (event.key === "Tab" || event.key === "Enter") {
+		// Tab completes from the menu; Enter takes it only once the user moved
+		// through it, otherwise the draft runs as an exact command or is sent.
+		if (event.key === "Tab" || (event.key === "Enter" && slashPicked)) {
 			const command = visibleSlashCommands[slashIndex];
 			if (!command) return false;
 			event.preventDefault();
@@ -784,10 +814,9 @@ export function SessionLauncher({
 									aria-label="Send"
 									disabled={
 										Boolean(attachmentError) ||
-										!composerCanSend(
-											slashDraft ? draft : sendableDraft(draft.trim()),
-											Boolean(slashDraft),
-										)
+										(draftCommand
+											? draftCommand.availability !== "ready"
+											: !composerCanSend(sendableDraft(draft.trim()), false))
 									}
 									title={
 										canResumeFollowUp
@@ -802,7 +831,7 @@ export function SessionLauncher({
 															snapshotAvailable: session.snapshotAvailable,
 															busy,
 															draft,
-															slashDraft: Boolean(slashDraft),
+															slashDraft: Boolean(draftCommand),
 														})
 													? "Send"
 													: harnessRequiresAccountLogin(harnessId)
