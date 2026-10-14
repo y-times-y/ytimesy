@@ -123,6 +123,78 @@ it("keeps going when a VM is already gone, but keeps everything if chat files ca
 	).toHaveLength(0);
 });
 
+it("destroys no machine or snapshot until the account rows are gone", async () => {
+	const accountAlive = async () =>
+		(await db.query("select 1 from auth_user where id='alice'")).rows.length;
+	const seenAlive: number[] = [];
+	const machines = {
+		destroy: vi.fn(async (_id: string) => {
+			seenAlive.push(await accountAlive());
+		}),
+		destroySnapshot: vi.fn(async (_id: string) => {
+			seenAlive.push(await accountAlive());
+		}),
+	};
+	storage.remove.mockRejectedValueOnce(new Error("storage down"));
+	await expect(deleteAccount(machines, "alice")).rejects.toBeInstanceOf(
+		Response,
+	);
+	expect(machines.destroy).not.toHaveBeenCalled();
+	expect(machines.destroySnapshot).not.toHaveBeenCalled();
+	const template = await db.query<{ template_snapshot_id: string }>(
+		`select template_snapshot_id from workspace where id='${workspace}'`,
+	);
+	expect(template.rows[0].template_snapshot_id).toBe("snap-template");
+
+	await deleteAccount(machines, "alice");
+	expect(seenAlive).toHaveLength(5);
+	expect(seenAlive.every((alive) => alive === 0)).toBe(true);
+});
+
+it("reports success and logs leftovers when provider cleanup fails after the rows are deleted", async () => {
+	const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+	const machines = {
+		destroy: vi.fn(async (_id: string) => {}),
+		destroySnapshot: vi.fn(async (id: string) => {
+			if (id === "snap-retained") throw new Error("provider down");
+		}),
+	};
+	await deleteAccount(machines, "alice");
+	expect(machines.destroySnapshot).toHaveBeenCalledTimes(2);
+	expect(warn).toHaveBeenCalledWith(
+		"Account deletion left provider resources to expire.",
+		{ userId: "alice", leftovers: ["snapshot:snap-retained"] },
+	);
+	warn.mockRestore();
+});
+
+it("removes many chats' files with bounded concurrency", async () => {
+	const values = Array.from(
+		{ length: 20 },
+		(_, index) =>
+			`('00000000-0000-4000-8000-1000000000${String(index).padStart(2, "0")}','alice','${project}','${workspace}','codex','ready')`,
+	).join(",");
+	await db.exec(
+		`insert into agent_session(id,user_id,project_id,workspace_id,harness,status) values ${values}`,
+	);
+	let inFlight = 0;
+	let peak = 0;
+	storage.remove.mockImplementation(async () => {
+		inFlight++;
+		peak = Math.max(peak, inFlight);
+		await new Promise((resolve) => setTimeout(resolve, 5));
+		inFlight--;
+	});
+	await deleteAccount(
+		{ destroy: vi.fn(async () => {}), destroySnapshot: vi.fn(async () => {}) },
+		"alice",
+	);
+	expect(storage.remove).toHaveBeenCalledTimes(21);
+	expect(peak).toBeGreaterThan(1);
+	expect(peak).toBeLessThanOrEqual(6);
+	storage.remove.mockImplementation(async () => {});
+});
+
 it("does not delete a snapshot another account still uses", async () => {
 	await db.exec(`
 		insert into project(id,user_id,repository_id,installation_id,full_name,branch) values('00000000-0000-4000-8000-0000000000b1','bob',1,1,'bob/app','main');
