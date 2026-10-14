@@ -6,9 +6,9 @@ import {
 	completeAgentTaskCommand,
 } from "../adapters/agent-task-command-receipts";
 import { readModelContextArchive } from "../adapters/context-archives";
+import { repositorySearchCommand } from "./api-agent-search-tools";
 import { apiAgentTools } from "./api-agent-tools";
 import { runAgentTaskTool } from "./harness-workspace-session";
-import { repositorySearchCommand } from "./indexed-repository-search";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 vi.mock("../adapters/context-archives", async (original) => ({
@@ -470,19 +470,6 @@ describe("read-only API lead tools", () => {
 			path: ".",
 		});
 		expect(commands[0]).toContain(`'${command.replaceAll("'", "'\\''")}'`);
-	});
-
-	it("uses the experimental index only when explicitly enabled", async () => {
-		vi.stubEnv("YTIMESY_INDEXED_SEARCH_ENABLED", "1");
-		try {
-			const { commands, tools } = leadTools();
-			await executeInspectionTool(tools.search_files, { query: "identifier" });
-			expect(commands[0]).toContain(
-				"CREATE VIRTUAL TABLE IF NOT EXISTS contents USING fts5",
-			);
-		} finally {
-			vi.unstubAllEnvs();
-		}
 	});
 
 	it("scopes listings and searches to literal task paths without Git pathspec expansion", async () => {
