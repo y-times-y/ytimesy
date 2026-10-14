@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { z } from "zod";
+import { usageLimitReset } from "#/domain/api-turn-failure";
 import { readBoundedRequestBody } from "#/domain/bounded-request-body";
 import {
 	signDeliveryRequest,
@@ -236,7 +237,24 @@ export async function handleCodexSubscriptionRelay(
 			});
 		});
 		if (!response.ok) {
-			await response.body?.cancel();
+			// Only a spent allowance's reset time crosses the relay; never the upstream body.
+			const resetsAt =
+				response.status === 429
+					? usageLimitReset(await response.text().catch(() => ""))
+					: undefined;
+			await response.body?.cancel().catch(() => {});
+			if (resetsAt !== undefined)
+				return Response.json(
+					{
+						error: {
+							type: "usage_limit_reached",
+							...(resetsAt
+								? { resets_at: Math.floor(resetsAt.getTime() / 1000) }
+								: {}),
+						},
+					},
+					{ status: 429, headers: { "Cache-Control": "no-store" } },
+				);
 			return Response.json(
 				{
 					error: {

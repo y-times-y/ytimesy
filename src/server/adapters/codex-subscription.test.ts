@@ -1,7 +1,13 @@
 import { createServer } from "node:http";
-import { generateText, simulateReadableStream } from "ai";
+import { generateText, simulateReadableStream, streamText } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { beforeEach, expect, it, vi } from "vitest";
+import {
+	apiModelFailureMessage,
+	SubscriptionUsageLimitReached,
+	subscriptionUsageLimitMessage,
+	usageLimitReset,
+} from "#/domain/api-turn-failure";
 import { modelContextBudget } from "../services/api-agent-context";
 import { runModelAgentStep } from "../services/model-agent-loop";
 import {
@@ -419,5 +425,71 @@ it("does not silently use another model when the catalog has no match", async ()
 	);
 	await expect(codexSubscriptionModel("alice", "selected")).rejects.toThrow(
 		"no longer available on your current Codex plan",
+	);
+});
+
+it("stops at a spent plan allowance instead of retrying a rate limit", async () => {
+	const resetsAt = Math.floor(Date.now() / 1000) + 2 * 3600 + 15 * 60;
+	const fetch = vi
+		.spyOn(globalThis, "fetch")
+		.mockImplementation(async (url) => {
+			if (String(url).includes("/models"))
+				return new Response(
+					JSON.stringify({
+						models: [{ slug: "limited-model", context_window: 272000 }],
+					}),
+				);
+			return new Response(
+				JSON.stringify({
+					error: {
+						type: "usage_limit_reached",
+						plan_type: "plus",
+						resets_at: resetsAt,
+					},
+				}),
+				{ status: 429 },
+			);
+		});
+	const runtime = await codexSubscriptionModel(
+		"limited-owner",
+		"limited-model",
+		"low",
+	);
+	const failure = streamText({
+		model: runtime.model,
+		prompt: "continue",
+		maxRetries: 4,
+		...runtime.requestSettings("instructions"),
+	});
+	let caught: unknown;
+	try {
+		for await (const part of failure.fullStream)
+			if (part.type === "error") throw part.error;
+	} catch (error) {
+		caught = error;
+	}
+	expect(caught).toBeInstanceOf(SubscriptionUsageLimitReached);
+	expect((caught as Error).message).toMatch(
+		/usage limit is used up\. It resets in 2 h 1[45] min/,
+	);
+	expect(apiModelFailureMessage(caught)).toBe((caught as Error).message);
+	expect(
+		fetch.mock.calls.filter(([url]) => String(url).includes("/responses")),
+	).toHaveLength(1);
+});
+
+it("reads the reset time only from a usage-limit body", () => {
+	expect(
+		usageLimitReset('{"error":{"type":"usage_limit_reached","resets_at":10}}'),
+	).toEqual(new Date(10_000));
+	expect(
+		usageLimitReset('{"error":{"type":"usage_limit_reached"}}'),
+	).toBeNull();
+	expect(
+		usageLimitReset('{"error":{"type":"rate_limit_exceeded"}}'),
+	).toBeUndefined();
+	expect(usageLimitReset("not json")).toBeUndefined();
+	expect(subscriptionUsageLimitMessage(null)).toContain(
+		"resets when your plan's usage window renews",
 	);
 });
