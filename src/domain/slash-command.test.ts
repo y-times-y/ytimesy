@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
 	composerSlashCommands,
+	exactSlashCommand,
 	expandProjectCommand,
 	matchingSlashCommands,
 	parseSlashDraft,
 	projectCommandFromFile,
+	slashMenuCommands,
 } from "./slash-command";
 
 const connected = composerSlashCommands({
@@ -107,5 +109,46 @@ describe("repository commands", () => {
 		expect(expandProjectCommand("Summarize the repo", "")).toBe(
 			"Summarize the repo",
 		);
+	});
+});
+
+describe("slash text that is a message", () => {
+	const review = projectCommandFromFile(
+		".claude/commands/review.md",
+		"Review $ARGUMENTS",
+	);
+	const commands = [...connected, ...(review ? [review] : [])];
+	const parse = (text: string) => {
+		const draft = parseSlashDraft(text);
+		if (!draft) throw new Error("not a slash draft");
+		return draft;
+	};
+
+	it("runs only an exact command", () => {
+		expect(exactSlashCommand(parse("/files"), commands)?.id).toBe("files");
+		expect(exactSlashCommand(parse("/Files"), commands)?.id).toBe("files");
+		expect(exactSlashCommand(parse("/fi"), commands)).toBeNull();
+		// Project commands take an argument; built-ins do not.
+		expect(exactSlashCommand(parse("/review src/a.ts"), commands)?.id).toBe(
+			"custom",
+		);
+	});
+
+	it("sends slash text that names no command as a message", () => {
+		for (const text of [
+			"/api/workspaces returns 500, fix it",
+			"/files are missing",
+			"/stop please",
+		]) {
+			expect(exactSlashCommand(parse(text), commands)).toBeNull();
+			expect(slashMenuCommands(parse(text), commands)).toEqual([]);
+		}
+	});
+
+	it("offers the menu while a command name is being typed", () => {
+		expect(slashMenuCommands(parse("/fi"), commands)[0]?.id).toBe("files");
+		expect(
+			slashMenuCommands(parse("/review the auth flow"), commands),
+		).toHaveLength(1);
 	});
 });
