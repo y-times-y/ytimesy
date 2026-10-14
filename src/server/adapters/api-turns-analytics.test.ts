@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
 	type ApiTurn,
 	cancelApiTurn,
+	cancelWaitingApiTurn,
 	expireApiTurnLeases,
 	finalizeApiTurn,
 } from "./api-turns";
@@ -81,4 +82,38 @@ it("captures a stopped queued turn as cancelled and a lost worker as failed", as
 	await expireApiTurnLeases();
 	expect(holder.capture.mock.calls[0][2]).toMatchObject({ outcome: "failed" });
 	expect(holder.capture.mock.calls[0][3].key).toBe(`turn:${lost}:finished`);
+});
+
+it("keeps a chat running when Stop cancels a waiting turn while another still runs", async () => {
+	const waiting = randomUUID();
+	const lease = randomUUID();
+	const insertWaiting = () =>
+		db.query(
+			`insert into api_turn(id,session_id,user_id,state,cancel_requested,lease_id,executor) values($1,$2,'alice','running',true,$3,'durable-object')`,
+			[waiting, child, lease],
+		);
+	await insertWaiting();
+	const active = randomUUID();
+	await db.query(
+		`insert into api_turn(id,session_id,user_id,state,cancel_requested,executor) values($1,$2,'alice','running',true,'durable-object')`,
+		[active, child],
+	);
+	expect(await cancelWaitingApiTurn(waiting, lease)).toBe(true);
+	const status = async () =>
+		(
+			await db.query<{ turn_status: string; task_state: string | null }>(
+				"select turn_status,task_state from agent_session where id=$1",
+				[child],
+			)
+		).rows[0];
+	expect(await status()).toMatchObject({ turn_status: "running" });
+	expect(holder.capture.mock.calls[0][2]).toMatchObject({
+		outcome: "cancelled",
+	});
+	// Once nothing else runs, cancelling the waiting turn settles the chat idle.
+	await db.query("update api_turn set state='cancelled' where id=$1", [active]);
+	await db.query("delete from api_turn where id=$1", [waiting]);
+	await insertWaiting();
+	expect(await cancelWaitingApiTurn(waiting, lease)).toBe(true);
+	expect(await status()).toEqual({ turn_status: "idle", task_state: "idle" });
 });
