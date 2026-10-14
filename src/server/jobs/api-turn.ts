@@ -481,7 +481,9 @@ export async function runApiTurn(
 					() => planLock.planning,
 				)
 			: hooks.wrap(withRedactedResults(withMcp, redact));
-		if (planLock?.planning && (!step || step.index === 0))
+		// Durable steps start at 1; a resumed first step reuses the deduped notice.
+		const firstStep = !step || step.index === 1;
+		if (planLock?.planning && firstStep)
 			messages = withPlanModeNotice(
 				messages,
 				planState.kind === "proposed"
@@ -508,12 +510,30 @@ export async function runApiTurn(
 				: "coordination";
 		if (step && (step.limitReached || step.index > modelStepLimit(toolSurface)))
 			throw new IncompleteAgentTurn("tool-calls");
-		// Once per turn, before its first model request; replayed steps reuse the journal.
-		if (!step || step.index === 0) {
+		// Once per turn, before its first model request; a resumed first step reuses the journal.
+		if (firstStep) {
 			const submitted = await hooks.userPromptSubmit(
 				currentTask?.kind === "userMessage" ? currentTask.text : "",
 			);
 			if (submitted.block) throw new LifecycleHookRefusal(submitted.reason);
+			// The journaled hook replays its feedback; an interrupted attempt may have saved it already.
+			if (step?.resumed) {
+				const saved = messages;
+				messages = [
+					...saved,
+					...hooks
+						.drain(saved)
+						.slice(saved.length)
+						.filter(
+							(notice) =>
+								!saved.some(
+									(message) =>
+										message.role === "user" &&
+										message.content === notice.content,
+								),
+						),
+				];
+			}
 		}
 		const runAgent = subscription
 			? step
@@ -838,14 +858,12 @@ export async function runApiTurn(
 		let lastUser = items.length - 1;
 		while (lastUser >= 0 && items[lastUser].kind !== "userMessage") lastUser--;
 		if (
-			!items
-				.slice(lastUser + 1)
-				.some(
-					(item) =>
-						(item.kind === "agentMessage" && item.text.trim()) ||
-						// A proposed plan is the turn's result; it waits for approval.
-						item.kind === "planProposal",
-				)
+			!items.slice(lastUser + 1).some(
+				(item) =>
+					(item.kind === "agentMessage" && item.text.trim()) ||
+					// A proposed plan is the turn's result; it waits for approval.
+					item.kind === "planProposal",
+			)
 		)
 			throw new IncompleteAgentTurn("missing-final-result");
 		failureStage = "commit";
