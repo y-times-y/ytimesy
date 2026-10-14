@@ -40,6 +40,7 @@ import { saveAgentTaskResultAndEvent } from "../adapters/agent-task-events";
 import { captureServerAnalytics } from "../adapters/analytics";
 import {
 	type ApiTurn,
+	apiTurnCancelRequested,
 	checkpointApiTurn,
 	finalizeApiTurn,
 	publishApiTurnProgress,
@@ -954,7 +955,11 @@ export async function runApiTurn(
 					? `Run stopped. ${abort.signal.reason instanceof Error && ["Turn ownership or cancellation state changed.", "Conversation coordination lease was lost.", "Turn heartbeat or coordination service became unavailable."].includes(abort.signal.reason.message) ? `${abort.signal.reason.message} ` : ""}Inspect any in-flight command before continuing.`
 					: apiTurnFailureMessage(failureStage, error) +
 						developmentFailureDetail(error);
-		const userCancelled = abort.signal.reason instanceof ApiTurnCancelled;
+		// The heartbeat or the room usually notices the user's Stop before progress does.
+		const userCancelled =
+			abort.signal.reason instanceof ApiTurnCancelled ||
+			(abort.signal.aborted &&
+				(await apiTurnCancelRequested(turn).catch(() => false)));
 		if (!userCancelled)
 			items = [
 				...items,
@@ -972,7 +977,8 @@ export async function runApiTurn(
 		});
 		const saved = await finalizeApiTurn(
 			turn,
-			abort.signal.aborted && !heartbeatFailed && !progressFailed
+			userCancelled ||
+				(abort.signal.aborted && !heartbeatFailed && !progressFailed)
 				? "cancelled"
 				: "failed",
 			items,

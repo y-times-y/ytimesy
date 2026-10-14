@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => ({
 	progress: vi.fn(),
 	checkpoint: vi.fn(),
 	promptSubmit: vi.fn(),
+	cancelRequested: vi.fn(),
 }));
 // Observes the real lifecycle hooks' UserPromptSubmit without a repository config.
 vi.mock("../services/harness-lifecycle-hooks", async (importOriginal) => {
@@ -71,6 +72,7 @@ vi.mock("../adapters/api-turns", () => ({
 	finalizeApiTurn: mocks.finalize,
 	checkpointApiTurn: mocks.checkpoint,
 	publishApiTurnProgress: mocks.progress,
+	apiTurnCancelRequested: mocks.cancelRequested,
 }));
 vi.mock("../adapters/conversation-turn-control", () => ({
 	coordinateConversationTurn: vi.fn(async () => true),
@@ -101,6 +103,7 @@ beforeEach(() => {
 	});
 	mocks.renew.mockReset().mockResolvedValue(true);
 	mocks.promptSubmit.mockReset().mockResolvedValue(undefined);
+	mocks.cancelRequested.mockReset().mockResolvedValue(false);
 	mocks.finalize.mockImplementation(async (_turn, state) => state);
 	mocks.result.mockResolvedValue("event");
 	mocks.enqueue.mockResolvedValue("job");
@@ -1015,3 +1018,57 @@ it.each([
 		expect(second).not.toContain(notice);
 	},
 );
+
+function hangUntilAborted(input: { signal: AbortSignal }) {
+	return new Promise((_resolve, reject) =>
+		input.signal.addEventListener("abort", () => reject(input.signal.reason)),
+	);
+}
+
+it("treats a Stop noticed by the heartbeat as the user's clean stop", async () => {
+	vi.useFakeTimers();
+	try {
+		mocks.renew.mockResolvedValueOnce(true).mockResolvedValue(false);
+		mocks.cancelRequested.mockResolvedValue(true);
+		mocks.stepRuntime.mockImplementation(hangUntilAborted);
+		const outcome = runApiTurn({} as WorkspaceMachines, childTurn, {
+			index: 1,
+			signal: new AbortController().signal,
+		});
+		await vi.advanceTimersByTimeAsync(1_500);
+		expect(await outcome).toBe("cancelled");
+		expect(mocks.finalize).toHaveBeenCalledWith(
+			expect.anything(),
+			"cancelled",
+			expect.not.arrayContaining([expect.objectContaining({ kind: "error" })]),
+		);
+	} finally {
+		vi.useRealTimers();
+	}
+});
+
+it("still reports a lost turn lease that the user did not ask to stop", async () => {
+	vi.useFakeTimers();
+	try {
+		mocks.renew.mockResolvedValueOnce(true).mockResolvedValue(false);
+		mocks.stepRuntime.mockImplementation(hangUntilAborted);
+		const outcome = runApiTurn({} as WorkspaceMachines, childTurn, {
+			index: 1,
+			signal: new AbortController().signal,
+		});
+		await vi.advanceTimersByTimeAsync(1_500);
+		await outcome;
+		expect(mocks.finalize).toHaveBeenCalledWith(
+			expect.anything(),
+			"cancelled",
+			expect.arrayContaining([
+				expect.objectContaining({
+					kind: "error",
+					message: expect.stringContaining("Turn ownership"),
+				}),
+			]),
+		);
+	} finally {
+		vi.useRealTimers();
+	}
+});
