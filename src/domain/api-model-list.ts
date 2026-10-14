@@ -26,6 +26,13 @@ export type ListedApiModel = {
 	readonly openRouterId: string;
 	readonly directId?: string;
 	readonly speeds?: readonly ApiModelSpeed[];
+	/**
+	 * OpenRouter providers to use instead of the maker's own, for an open-weight
+	 * model whose maker's API is not acceptable (DeepSeek's stores data in China).
+	 */
+	readonly hosts?: readonly string[];
+	/** Require OpenRouter's zero-data-retention endpoints. */
+	readonly zeroRetention?: boolean;
 };
 
 const OPENAI_FAST: ApiModelSpeed = {
@@ -139,6 +146,20 @@ export const API_MODEL_LIST: readonly ListedApiModel[] = [
 		label: "Muse Spark 1.3",
 		openRouterId: "meta/muse-spark-1.3",
 	},
+	// Open weights served by US hosts only, never DeepSeek's own API.
+	{
+		author: "deepseek",
+		label: "DeepSeek V4.1 Flash (US-hosted)",
+		openRouterId: "deepseek/deepseek-v4.1-flash",
+		hosts: ["fireworks/us", "together"],
+		zeroRetention: true,
+	},
+	{
+		author: "deepseek",
+		label: "DeepSeek V4 Pro (US-hosted)",
+		openRouterId: "deepseek/deepseek-v4-pro-0813",
+		hosts: ["together"],
+	},
 	{ author: "z-ai", label: "GLM 5.3", openRouterId: "z-ai/glm-5.3" },
 	{
 		author: "moonshotai",
@@ -184,19 +205,21 @@ export function apiModelSpeeds(openRouterId: string): readonly ApiModelSpeed[] {
 }
 
 /**
- * The official providers for a listed OpenRouter model at a speed, or null
- * when the model is not listed or does not offer that speed. Standard speed
- * uses the maker's base providers, which never match a tiered endpoint.
+ * Where a listed OpenRouter model may run at a speed, or null when the model
+ * is not listed or does not offer that speed. Standard speed uses the maker's
+ * base providers (or the entry's approved hosts), which never match a tiered
+ * endpoint.
  */
-export function officialOpenRouterProviders(
+export function openRouterRouting(
 	openRouterId: string,
 	speed?: ApiModelSpeedId,
-): readonly string[] | null {
+): { only: readonly string[]; zdr: boolean } | null {
 	const entry = API_MODEL_LIST.find(
 		(model) => model.openRouterId === openRouterId,
 	);
 	if (!entry) return null;
-	if (speed)
-		return entry.speeds?.find((tier) => tier.id === speed)?.providers ?? null;
-	return OFFICIAL_OPENROUTER_PROVIDERS[entry.author] ?? null;
+	const only = speed
+		? entry.speeds?.find((tier) => tier.id === speed)?.providers
+		: (entry.hosts ?? OFFICIAL_OPENROUTER_PROVIDERS[entry.author]);
+	return only ? { only, zdr: entry.zeroRetention === true } : null;
 }

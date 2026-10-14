@@ -1,4 +1,4 @@
-import { apiModelSections } from "./api-model-list";
+import { API_MODEL_LIST, apiModelSections } from "./api-model-list";
 import {
 	AUTHOR_LABELS,
 	DIRECT_MODEL_ENDPOINTS,
@@ -11,6 +11,19 @@ import {
 	parseModelRouteId,
 } from "./model-connection";
 
+/**
+ * The provider a maker's own key connects as, or null when no listed model is
+ * offered through that maker's key (DeepSeek runs only on US hosts, so a
+ * DeepSeek key would send code to DeepSeek's API).
+ */
+export function directKeyProvider(author: string) {
+	return API_MODEL_LIST.some(
+		(model) => model.author === author && model.directId,
+	)
+		? directModelProvider(author)
+		: null;
+}
+
 export function providerKeyConnection(author: string, apiKey: string) {
 	if (apiKey.trim().startsWith("sk-or-"))
 		return {
@@ -18,10 +31,10 @@ export function providerKeyConnection(author: string, apiKey: string) {
 			label: "OpenRouter",
 			apiKey: apiKey.trim(),
 		};
-	const provider = directModelProvider(author);
+	const provider = directKeyProvider(author);
 	if (!provider)
 		throw new Error(
-			"Direct keys for this provider are not supported yet. Use an OpenRouter key.",
+			"Direct keys for this provider are not supported. Use an OpenRouter key.",
 		);
 	return {
 		provider,
