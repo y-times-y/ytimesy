@@ -1,5 +1,9 @@
 import type { AgentProviderId } from "./agent-provider";
-import { isTurnRunning, type SessionTurnStatus } from "./session-item";
+import {
+	isTurnRunning,
+	type SessionItem,
+	type SessionTurnStatus,
+} from "./session-item";
 import type { SidebarChatPrNeed } from "./sidebar-pr";
 
 export type SidebarChat = {
@@ -312,4 +316,24 @@ export function sessionViewAppliesToOpenChat(input: {
 	return Boolean(
 		input.agentSessionId && input.agentSessionId === input.openChatId,
 	);
+}
+
+/** A different project is open: none of the previous project's chat stays on screen. */
+export function sessionWithoutOpenChat<
+	T extends {
+		readonly workspaceId: string | null;
+		readonly agentSessionId: string | null;
+		readonly selectedBranch?: string | null;
+		readonly items: readonly SessionItem[];
+		readonly turnStatus: SessionTurnStatus;
+	},
+>(session: T): T {
+	return {
+		...session,
+		workspaceId: null,
+		agentSessionId: null,
+		selectedBranch: undefined,
+		items: [],
+		turnStatus: "idle",
+	};
 }

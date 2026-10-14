@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { SessionItemId } from "./ids";
 import {
 	backgroundTurnPollChatIds,
 	chatsWithPinnedFirst,
@@ -11,6 +12,7 @@ import {
 	projectFolderIsExpanded,
 	selectedChatIdAfterDelete,
 	sessionViewAppliesToOpenChat,
+	sessionWithoutOpenChat,
 	sidebarChatAttention,
 	sidebarChatIsRunning,
 	sidebarChatsEmptyCopy,
@@ -326,5 +328,32 @@ describe("sidebarChatAttention", () => {
 				seen: true,
 			}),
 		).toBe("idle");
+	});
+});
+
+describe("switching projects", () => {
+	it("leaves none of the previous project's chat open", () => {
+		const open = {
+			workspaceId: "ws-1",
+			agentSessionId: "chat-1",
+			selectedBranch: "feature",
+			items: [
+				{
+					kind: "userMessage" as const,
+					id: SessionItemId("m1"),
+					text: "hi",
+				},
+			],
+			turnStatus: "running" as const,
+			canSend: true,
+		};
+		expect(sessionWithoutOpenChat(open)).toEqual({
+			workspaceId: null,
+			agentSessionId: null,
+			selectedBranch: undefined,
+			items: [],
+			turnStatus: "idle",
+			canSend: true,
+		});
 	});
 });

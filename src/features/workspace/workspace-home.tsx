@@ -56,6 +56,7 @@ import {
 	type SidebarChat,
 	selectedChatIdAfterDelete,
 	sessionViewAppliesToOpenChat,
+	sessionWithoutOpenChat,
 	sidebarIsPinnedInStorage,
 	sidebarPinnedStorageValue,
 	withBusyChat,
@@ -245,6 +246,8 @@ export function WorkspaceHome({
 	/** Set from a draft send until its new chat's first view arrives. */
 	const pendingNewChatRef = useRef(false);
 	const sessionEpoch = useRef(0);
+	/** The epoch in which New chat is creating a chat; nothing else gets selected meanwhile. */
+	const creatingChatEpoch = useRef<number | null>(null);
 	const selectedSessionIdRef = useRef<string | undefined>(undefined);
 	const pendingSendRef = useRef<{
 		text: string;
@@ -560,6 +563,7 @@ export function WorkspaceHome({
 			composerDraft ||
 			selectedSessionId ||
 			pendingNewChatRef.current ||
+			creatingChatEpoch.current === sessionEpoch.current ||
 			!chats.data?.[0]
 		)
 			return;
@@ -837,6 +841,20 @@ export function WorkspaceHome({
 		openInspector("files");
 	}
 
+	/** Opening another project leaves nothing of the previous project's chat on screen. */
+	function selectProject(projectId: string) {
+		if (projectId === selectedProject?.id) return;
+		setSelectedProjectId(projectId);
+		bumpSessionEpoch();
+		pendingNewChatRef.current = false;
+		selectedSessionIdRef.current = undefined;
+		setSelectedSessionId(undefined);
+		setInspectorView("overview");
+		setSelectedFilePath(undefined);
+		setDesktop({ status: "stopped" });
+		setSession((current) => sessionWithoutOpenChat(current));
+	}
+
 	function openAddProject() {
 		setSettingsOpen(false);
 		bumpSessionEpoch();
@@ -868,6 +886,10 @@ export function WorkspaceHome({
 		setComposerDraft(false);
 		setProjectPickerOpen(false);
 		const epoch = bumpSessionEpoch();
+		// Until the new chat exists, polls and sends must not reach the old one.
+		creatingChatEpoch.current = epoch;
+		selectedSessionIdRef.current = undefined;
+		setSelectedSessionId(undefined);
 		setSession((current) => ({
 			...current,
 			agentSessionId: null,
@@ -884,6 +906,8 @@ export function WorkspaceHome({
 		})
 			.then((created) => {
 				if (epoch !== sessionEpoch.current) return;
+				creatingChatEpoch.current = null;
+				selectedSessionIdRef.current = created.id;
 				setSelectedSessionId(created.id);
 				setInspectorView("overview");
 				setSelectedFilePath(undefined);
@@ -902,6 +926,7 @@ export function WorkspaceHome({
 			})
 			.catch((cause) => {
 				if (epoch !== sessionEpoch.current) return;
+				creatingChatEpoch.current = null;
 				setSession((current) => ({
 					...current,
 					connection: {
@@ -1065,7 +1090,7 @@ export function WorkspaceHome({
 				projects={projects.data ?? []}
 				projectsLoading={projects.isPending}
 				selectedProjectId={selectedProject?.id}
-				onSelectProject={setSelectedProjectId}
+				onSelectProject={selectProject}
 				expanded={projectsOpen}
 				onToggle={() => setProjectsOpen((open) => !open)}
 				onAddProject={openAddProject}
@@ -1090,7 +1115,7 @@ export function WorkspaceHome({
 				projects={projects.data ?? []}
 				selectedProject={selectedProject}
 				onProjectAdded={(project) => {
-					setSelectedProjectId(project.id);
+					selectProject(project.id);
 					void projects.refetch();
 				}}
 				onSignOut={() => {
@@ -1461,7 +1486,7 @@ export function WorkspaceHome({
 								projects={projects.data ?? []}
 								selectedProject={selectedProject}
 								onSelectProject={(id) => {
-									setSelectedProjectId(id);
+									selectProject(id);
 									setProjectPickerOpen(false);
 								}}
 								projectPickerOpen={projectPickerOpen}
