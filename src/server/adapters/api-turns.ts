@@ -439,6 +439,38 @@ export async function cancelApiTurn(userId: string, sessionId: string) {
 	return result.rows.map(({ id, lease_id }) => ({ id, lease_id }));
 }
 
+/**
+ * A chat Durable Object holds a claimed turn while its previous turn's loop
+ * ends. Nothing else renews that turn meanwhile, so the chat keeps it fresh
+ * until it starts; otherwise its first step finds the lease stale and drops it.
+ */
+export async function refreshWaitingApiTurns(
+	turns: readonly { turnId: string; leaseId: string }[],
+) {
+	if (!turns.length) return;
+	await database().query(
+		`update api_turn t set heartbeat_at=now() from unnest($1::uuid[],$2::uuid[]) w(id,lease_id)
+		 where t.id=w.id and t.lease_id=w.lease_id and t.state='running' and t.executor='durable-object'`,
+		[turns.map((turn) => turn.turnId), turns.map((turn) => turn.leaseId)],
+	);
+}
+
+/** Stop on a turn still waiting in its chat's queue: it never ran, so it settles here. */
+export async function cancelWaitingApiTurn(turnId: string, leaseId: string) {
+	const result = await database().query<SettledTurnRow>(
+		`with saved as (update api_turn set state='cancelled',updated_at=now()
+		 where id=$1 and lease_id=$2 and state='running' and cancel_requested and executor='durable-object'
+		 returning id,session_id,state,created_at)
+		 update agent_session s set turn_status='idle',
+		 task_state=case when parent_session_id is null then task_state else 'idle' end,
+		 updated_at=now() from saved where s.id=saved.session_id returning ${SETTLED_TURN_COLUMNS}`,
+		[turnId, leaseId],
+	);
+	captureSettledTurns(result.rows);
+	if (result.rows[0]) await wakeConversationProgress();
+	return result.rows.length > 0;
+}
+
 /** The settled turn plus the session fields its analytics event is categorized by. */
 type SettledTurnRow = {
 	turn_id: string;
