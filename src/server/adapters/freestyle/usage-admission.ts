@@ -6,6 +6,7 @@ import {
 	type VmResources,
 } from "freestyle";
 import type { PoolClient } from "pg";
+import { MachineUsageLimitReached } from "#/domain/api-turn-failure";
 import { effectiveMachineResources } from "#/domain/machine-size";
 import { database } from "../database";
 import {
@@ -54,6 +55,31 @@ async function ownerForSlug(slug: string, client: PoolClient) {
 	if (result.rows.length !== 1)
 		throw new Error("VM usage owner could not be uniquely verified.");
 	return result.rows[0].user_id;
+}
+
+/**
+ * What a start or resume must do about a VM's lifetime runtime cap before the
+ * provider is asked to run it. Freestyle answers any start of a VM whose
+ * totalRunSeconds reached maxRunTotalSeconds with a 409, so a cap without
+ * enough headroom must be extended (metered) or refused clearly (unmetered:
+ * this deployment cannot charge for more runtime, so it must not raise it).
+ * A settled (paused/stopped) VM needs room for the whole operation; a
+ * running one is topped up separately as it runs.
+ */
+export function resumeCapDecision(input: {
+	metered: boolean;
+	settled: boolean;
+	totalRunSeconds: number;
+	capSeconds: number | null | undefined;
+	requiredSeconds: number;
+}): "keep" | "extend" | "spent" {
+	const { capSeconds, totalRunSeconds } = input;
+	if (capSeconds == null || capSeconds < 0)
+		return input.metered ? "extend" : "keep";
+	const headroom = input.settled ? input.requiredSeconds + 15 : 0;
+	if (capSeconds - totalRunSeconds > headroom) return "keep";
+	if (input.metered) return "extend";
+	return totalRunSeconds >= capSeconds ? "spent" : "keep";
 }
 
 const LEASE_SECONDS = 90;
@@ -118,6 +144,7 @@ async function admittedCap(
 	client: PoolClient,
 	vmId?: string,
 	requestedSeconds = 300,
+	settled = false,
 ) {
 	if (!Number.isFinite(totalSeconds) || totalSeconds < 0)
 		throw new Error("VM runtime counter is unavailable.");
@@ -138,7 +165,16 @@ async function admittedCap(
 			throw new Error(
 				"VM resources changed; its budget must be reconciled before resuming.",
 			);
-		if (totalSeconds < Number(previous.max_run_total_seconds))
+		if (
+			resumeCapDecision({
+				metered: true,
+				settled,
+				totalRunSeconds: totalSeconds,
+				capSeconds: Number(previous.max_run_total_seconds),
+				// requestedSeconds is the operation's need plus its margin.
+				requiredSeconds: Math.max(0, requestedSeconds - 15),
+			}) === "keep"
+		)
 			return Number(previous.max_run_total_seconds);
 		const consumed = Math.ceil(
 			((totalSeconds - Number(previous.baseline_seconds)) *
@@ -161,8 +197,7 @@ async function admittedCap(
 		Math.floor((balance.remainingMicroUsd * 3600) / hourlyMicroUsd) -
 			PROVIDER_STOP_BUFFER_SECONDS,
 	);
-	if (seconds < 1)
-		throw new Error("Your cloud execution allowance is exhausted.");
+	if (seconds < 1) throw new MachineUsageLimitReached();
 	const id = randomUUID();
 	const baseline = Math.floor(totalSeconds);
 	await reserveInfrastructureUsage(
@@ -195,9 +230,31 @@ export async function admitVmResume(
 	data: VmData,
 	requiredSeconds = 60,
 ) {
-	if (!infrastructureAdmissionEnabled()) return;
+	if (!infrastructureAdmissionEnabled()) {
+		// Starting a spent VM only earns the provider's 409; say why instead.
+		if (
+			data.totalRunSeconds != null &&
+			resumeCapDecision({
+				metered: false,
+				settled: settledState(data.state),
+				totalRunSeconds: data.totalRunSeconds,
+				capSeconds: data.maxRunTotalSeconds,
+				requiredSeconds,
+			}) === "spent"
+		) {
+			console.warn(
+				"VM runtime budget is spent and usage admission is disabled here; set YTIMESY_INFRASTRUCTURE_ADMISSION to extend it.",
+			);
+			throw new Error(
+				"The machine's runtime budget is used up and this deployment cannot extend it.",
+			);
+		}
+		return;
+	}
 	if (!data.slug) throw new Error("VM usage identity is missing.");
-	if (data.state === "paused") await reconcilePausedVm(vm);
+	// Settle a stopped VM like a paused one, so its next cap is bought from
+	// its real runtime instead of starting against a spent cap.
+	if (settledState(data.state)) await reconcilePausedVm(vm);
 	await lockedVm(data.slug, async (client) => {
 		const latest = await vm.data();
 		await touchWorkspaceRetention(client, latest);
@@ -210,14 +267,13 @@ export async function admitVmResume(
 			client,
 			latest.id,
 			Math.max(300, requiredSeconds + 15),
+			settledState(latest.state),
 		);
 		if (
-			latest.state === "paused" &&
+			settledState(latest.state) &&
 			cap - latest.totalRunSeconds < requiredSeconds + 15
 		)
-			throw new Error(
-				"Your remaining cloud allowance cannot fund this operation.",
-			);
+			throw new MachineUsageLimitReached();
 		if (latest.state === "running") {
 			const result = await client.query<Admission>(
 				"select * from infrastructure_vm_admission where slug=$1",
