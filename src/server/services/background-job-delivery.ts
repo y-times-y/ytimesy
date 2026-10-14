@@ -31,6 +31,7 @@ import { dispatchDurableWork } from "./durable-work-plan";
 import { recoverExpiredEnvironmentBuilds } from "./environment-build";
 import { deliverPrRepairEvents } from "./pr-repair";
 import { captureSessionCheckpoint } from "./session-checkpoint";
+import { recoverStaleQueuedWorkspaces } from "./stale-workspace-queue";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 export async function deliverBackgroundJob(
@@ -42,6 +43,7 @@ export async function deliverBackgroundJob(
 			switch (job.action) {
 				case "reconcile":
 					await recoverExpiredEnvironmentBuilds();
+					await recoverStaleQueuedWorkspaces();
 					await expireApiTurnLeases();
 					await reconcileFinishedCompetitionJudges();
 					break;

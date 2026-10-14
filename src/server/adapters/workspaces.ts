@@ -91,10 +91,11 @@ export async function insertQueuedWorkspace(
 	return toWorkspace(result.rows[0]);
 }
 
+/** Re-queues a failed workspace, or restarts the stall clock of a queued one being retried. */
 export async function markWorkspaceQueued(userId: string, workspaceId: string) {
 	const result = await database().query(
 		`update workspace set status='queued', error_message=null, updated_at=now()
-		 where id=$1 and user_id=$2 and status='failed'
+		 where id=$1 and user_id=$2 and status in ('failed','queued')
 		 returning ${WORKSPACE_COLUMNS}`,
 		[workspaceId, userId],
 	);
