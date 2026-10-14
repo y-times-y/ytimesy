@@ -278,6 +278,8 @@ export function WorkspaceHome({
 	const pendingSendRef = useRef<PendingSend | null>(null);
 	/** The chat the user pressed Stop in; its idle view then unlocks the composer. */
 	const stopRequestedFor = useRef<string | null>(null);
+	/** The chat whose comparison is still underway; its judge turn is still to come. */
+	const followUpPendingFor = useRef<string | null>(null);
 	const abandonSendRef = useRef<
 		(pending: PendingSend, message: string | null) => void
 	>(() => undefined);
@@ -339,6 +341,10 @@ export function WorkspaceHome({
 						stopRequested: Boolean(
 							next.agentSessionId &&
 								stopRequestedFor.current === next.agentSessionId,
+						),
+						followUpPending: Boolean(
+							next.agentSessionId &&
+								followUpPendingFor.current === next.agentSessionId,
 						),
 					})
 				) {
@@ -446,6 +452,9 @@ export function WorkspaceHome({
 	const activeCompetition = competition.data?.find((group) =>
 		["queued", "working", "judging"].includes(group.status),
 	);
+	followUpPendingFor.current = activeCompetition
+		? (activeSessionId ?? null)
+		: null;
 	useEffect(() => {
 		if (
 			activeSessionId &&
