@@ -726,6 +726,11 @@ export async function runApiTurn(
 			onEvent: async (event) => {
 				if (step && "id" in event)
 					event = { ...event, id: `step-${step.index}:${event.id}` };
+				if (step && event.type === "retract")
+					event = {
+						...event,
+						ids: event.ids.map((id) => `step-${step.index}:${id}`),
+					};
 				if (
 					step &&
 					event.type === "usage" &&

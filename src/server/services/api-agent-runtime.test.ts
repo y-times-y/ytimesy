@@ -3,7 +3,9 @@ import { MockLanguageModelV4 } from "ai/test";
 import { Effect } from "effect";
 import { beforeEach, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { applyApiProgress } from "#/domain/api-progress";
 import { SafeApiModelFailure } from "#/domain/api-turn-failure";
+import type { SessionItem } from "#/domain/session-item";
 import { nativeModelCompactor } from "../adapters/model-compaction";
 import {
 	type ApiAgentEvent,
@@ -1590,6 +1592,61 @@ it("does not resample a step whose tool call already started", async () => {
 		),
 	).rejects.toThrow();
 	expect(call).toBe(1);
+});
+
+it("replaces a dropped response's partial text instead of appending the retry to it", async () => {
+	let call = 0;
+	// Anthropic numbers parts by block index, so the retry reuses id "0".
+	const model = new MockLanguageModelV4({
+		doStream: async () =>
+			call++ === 0
+				? stream([
+						{ type: "text-start", id: "0" },
+						{ type: "text-delta", id: "0", delta: "Let me check" },
+						{ type: "error", error: droppedConnection() },
+					])
+				: stream([
+						{ type: "text-start", id: "0" },
+						{ type: "text-delta", id: "0", delta: "Let me check the file." },
+						{ type: "text-end", id: "0" },
+						finish,
+					]),
+	});
+	let items: SessionItem[] = [];
+	let saved: unknown;
+	const beforeStep = vi.fn(async () => {});
+	await runModelAgentStep(
+		{
+			userId: "alice",
+			modelId: "gpt-6.1-sol",
+			instructions: "Implement",
+			messages: [{ role: "user", content: "Fixture" }],
+			tools: {},
+			signal: new AbortController().signal,
+			beforeStep,
+			onEvent: async (event) => {
+				items = applyApiProgress(items, "turn", event);
+			},
+			onStep: async (messages) => {
+				saved = messages;
+			},
+		},
+		{ model },
+	);
+	expect(call).toBe(2);
+	expect(
+		items.flatMap((item) => (item.kind === "agentMessage" ? [item.text] : [])),
+	).toEqual(["Let me check the file."]);
+	// The model history does not keep the dropped partial response either.
+	expect(saved).toEqual([
+		{ role: "user", content: "Fixture" },
+		{
+			role: "assistant",
+			content: [{ type: "text", text: "Let me check the file." }],
+		},
+	]);
+	// The step's token reservation is not made a second time for the retry.
+	expect(beforeStep).toHaveBeenCalledTimes(1);
 });
 
 it("retries a durable step whose connection dropped before any tool call", async () => {

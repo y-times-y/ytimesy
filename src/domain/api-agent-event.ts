@@ -7,6 +7,8 @@ export type ApiAgentEvent =
 	| { type: "text-delta"; id: string; text: string }
 	| { type: "reasoning-delta"; id: string; text: string }
 	| { type: "reasoning-end"; id: string; durationSeconds: number }
+	/** Partial output of a model response that dropped and is being sampled again. */
+	| { type: "retract"; ids: string[] }
 	| { type: "tool-call"; id: string; name: string; input: unknown }
 	| {
 			type: "tool-result";
