@@ -78,6 +78,22 @@ it("includes other conversations in available worker capacity", async () => {
 	expect((await agentCapacity("alice")).available).toBe(2);
 });
 
+it("defaults to edge fleet capacity rather than one worker's slots", () => {
+	for (const name of [
+		"YTIMESY_MODEL_CONCURRENCY",
+		"YTIMESY_USER_TURN_CONCURRENCY",
+		"YTIMESY_FLEET_TURN_CONCURRENCY",
+		"YTIMESY_TASK_CHILD_CONCURRENCY",
+	])
+		vi.stubEnv(name, undefined);
+	expect(modelConcurrencyLimits()).toEqual({
+		worker: 4,
+		fleet: 256,
+		perUser: 32,
+		maxChildren: 8,
+	});
+});
+
 it("rejects invalid capacity instead of silently disabling the limit", () => {
 	vi.stubEnv("YTIMESY_MODEL_CONCURRENCY", "NaN");
 	expect(modelConcurrencyLimits).toThrow();

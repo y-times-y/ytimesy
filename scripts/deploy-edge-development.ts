@@ -119,6 +119,7 @@ if (key.length !== 32)
 const certPath = new URL(secrets.DATABASE_URL).searchParams.get("sslrootcert");
 if (certPath) secrets.DATABASE_SSL_CA = await readFile(certPath, "utf8");
 
+/** Only calls without secret input may show wrangler's own error. */
 function wrangler(args: string[], input?: string) {
 	try {
 		const output = execFileSync(
@@ -132,7 +133,11 @@ function wrangler(args: string[], input?: string) {
 			},
 		);
 		console.log(output);
-	} catch {
+	} catch (error) {
+		if (!input) {
+			const { stdout, stderr } = error as { stdout?: string; stderr?: string };
+			console.error(`${stdout ?? ""}${stderr ?? ""}`);
+		}
 		throw new Error(
 			"Development edge deployment failed. Secret material was not logged.",
 		);
