@@ -111,4 +111,19 @@ it("describes provider-hosted web searches and page opens", () => {
 		verb: "Searched the web",
 		target: "vite 8 migration guide",
 	});
+	// OpenRouter: known only from cited sources.
+	expect(
+		toolActivity(
+			call(
+				"web_search",
+				{ sources: 2 },
+				{
+					sources: [
+						{ url: "https://www.npmjs.com/package/zod" },
+						{ url: "https://github.com/colinhacks/zod/releases" },
+					],
+				},
+			),
+		),
+	).toMatchObject({ verb: "Searched the web", note: "2 sources" });
 });
