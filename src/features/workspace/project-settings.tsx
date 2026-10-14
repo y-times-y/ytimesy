@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { Blocks, Bot, Folder, Plug, User, X } from "lucide-react";
 import { ScrollArea } from "radix-ui";
@@ -667,6 +667,22 @@ function AgentsSection({
 		queryFn: () => readConnections(),
 	});
 	const apiKeyCount = connections.data?.length ?? 0;
+	const queryClient = useQueryClient();
+	const [confirmingSignOut, setConfirmingSignOut] = useState(false);
+	const signOut = useMutation({
+		mutationFn: () =>
+			requestJson<{ status: "disconnected" }>("/api/agent/account", {}),
+		onSuccess: async () => {
+			setConfirmingSignOut(false);
+			await Promise.all(
+				[
+					["account"],
+					["codex-subscription-usage"],
+					["agent-model-catalog"],
+				].map((queryKey) => queryClient.invalidateQueries({ queryKey })),
+			);
+		},
+	});
 	return (
 		<>
 			<section className="settings-section">
@@ -699,16 +715,56 @@ function AgentsSection({
 										</span>
 									</div>
 								</div>
-								<span
-									className="settings-badge"
-									data-tone={connected ? "ok" : undefined}
-								>
-									{connected ? "Connected" : "Not connected"}
-								</span>
+								<div className="settings-row-actions">
+									<span
+										className="settings-badge"
+										data-tone={connected ? "ok" : undefined}
+									>
+										{connected ? "Connected" : "Not connected"}
+									</span>
+									{provider.id === "codex" &&
+									account.status !== "disconnected" &&
+									!confirmingSignOut ? (
+										<button
+											type="button"
+											className="settings-secondary"
+											onClick={() => setConfirmingSignOut(true)}
+										>
+											Sign out of ChatGPT
+										</button>
+									) : null}
+								</div>
+								{provider.id === "codex" && confirmingSignOut ? (
+									<div className="settings-confirm">
+										<span className="settings-row-meta">
+											Sign out of ChatGPT? Chats using your ChatGPT plan stop
+											until you sign in again from the agent picker.
+										</span>
+										<div className="settings-row-actions">
+											<button
+												type="button"
+												className="settings-secondary"
+												disabled={signOut.isPending}
+												onClick={() => setConfirmingSignOut(false)}
+											>
+												Cancel
+											</button>
+											<button
+												type="button"
+												className="settings-danger"
+												disabled={signOut.isPending}
+												onClick={() => signOut.mutate()}
+											>
+												{signOut.isPending ? "Signing out…" : "Sign out"}
+											</button>
+										</div>
+									</div>
+								) : null}
 							</li>
 						);
 					})}
 				</ul>
+				{signOut.error ? <p role="alert">{signOut.error.message}</p> : null}
 				<CodexSubscriptionUsage usage={usage} />
 			</section>
 			<ModelConnections />
