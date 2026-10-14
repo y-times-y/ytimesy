@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { WorkspaceId } from "#/domain/ids";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
 import { environmentRecipe } from "#/domain/project-environment";
+import { SOURCE_AGENT_SECRETS } from "#/domain/project-secret";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 const preparedEnvironment = z.object({
@@ -34,7 +35,7 @@ export async function startEnvironmentServices(
 	for (const repo of environment.repositories) {
 		for (const service of repo.recipe.services) {
 			const session = `ytimesy-${repo.repositoryId}-${service.name}`;
-			const command = `set -e; cd ${quote(repo.directory)}; if [ -f "$HOME/.ytimesy-agent-secrets.env" ]; then . "$HOME/.ytimesy-agent-secrets.env"; fi; ${service.command}`;
+			const command = `set -e; cd ${quote(repo.directory)}; ${SOURCE_AGENT_SECRETS}; ${service.command}`;
 			const script = `set -eu
 ready() { (echo > /dev/tcp/127.0.0.1/${service.port}) >/dev/null 2>&1; }
 if ready; then exit 0; fi

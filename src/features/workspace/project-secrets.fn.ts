@@ -25,11 +25,19 @@ export const listProjectSecretsFn = createServerFn({ method: "GET" })
 	});
 
 export const saveProjectSecretFn = createServerFn({ method: "POST" })
-	.validator((data: { projectId?: string; name?: string; value?: string }) => ({
-		projectId: projectIdFrom(data),
-		name: typeof data.name === "string" ? data.name : "",
-		value: typeof data.value === "string" ? data.value : "",
-	}))
+	.validator(
+		(data: {
+			projectId?: string;
+			name?: string;
+			value?: string;
+			kind?: string;
+		}) => ({
+			projectId: projectIdFrom(data),
+			name: typeof data.name === "string" ? data.name : "",
+			value: typeof data.value === "string" ? data.value : "",
+			kind: data.kind,
+		}),
+	)
 	.handler(async ({ data }): Promise<readonly PublicProjectSecret[]> => {
 		const user = await requireUser(getRequest().headers);
 		await saveVisibleProjectSecret({
@@ -37,6 +45,7 @@ export const saveProjectSecretFn = createServerFn({ method: "POST" })
 			projectId: data.projectId,
 			name: data.name,
 			value: data.value,
+			kind: data.kind,
 		});
 		return listVisibleProjectSecrets(user.id, data.projectId);
 	});

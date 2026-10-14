@@ -1,3 +1,4 @@
+import { SECRET_COMMIT_GUARD } from "#/domain/project-secret";
 import {
 	commitCoAuthorTrailer,
 	type PublicationAuthor,
@@ -57,6 +58,7 @@ export function commitAllArgv(
 		[
 			`cd ${shellSingleQuote(directory)}`,
 			"git add -A",
+			SECRET_COMMIT_GUARD,
 			`if git diff --cached --quiet; then echo YTIMESY_NO_COMMIT; else git -c user.name=${shellSingleQuote(author.name)} -c user.email=${shellSingleQuote(author.email)} commit -m ${shellSingleQuote(message)}${trailer}; fi`,
 		].join(" && "),
 	];

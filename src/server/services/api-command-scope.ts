@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { posixShellCommand } from "#/domain/posix-command";
+import { SOURCE_AGENT_SECRETS } from "#/domain/project-secret";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 
 const RUN = `import base64, json, os, pathlib, signal, subprocess, sys
@@ -82,7 +83,11 @@ export function scopedShellCommand(input: {
 		// docker exec) then adds a constant instead of multiplying every quote
 		// in the agent's script. Quote-heavy 3 KB heredocs used to exceed the
 		// VM exec limit (64 KiB) and were rejected.
-		Buffer.from(input.command, "utf8").toString("base64"),
+		// Every agent command sees the project's environment variables and
+		// runtime secrets; the turn redacts runtime values from its output.
+		Buffer.from(`${SOURCE_AGENT_SECRETS}\n${input.command}`, "utf8").toString(
+			"base64",
+		),
 		String(input.seconds),
 	]);
 }

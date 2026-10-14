@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { EncryptedSecret } from "#/domain/encrypted-secret";
-import type { PublicProjectSecret } from "#/domain/project-secret";
+import type {
+	ProjectSecretKind,
+	PublicProjectSecret,
+} from "#/domain/project-secret";
 import { database } from "./database";
 
 type StoredProjectSecret = PublicProjectSecret & {
@@ -12,7 +15,7 @@ export async function listProjectSecretsForOwner(
 	projectId: string,
 ): Promise<readonly PublicProjectSecret[]> {
 	const result = await database().query(
-		`select s.id, s.name, s.hint, s.updated_at as "updatedAt"
+		`select s.id, s.name, s.kind, s.hint, s.updated_at as "updatedAt"
 		 from project_secret s
 		 join project p on p.id = s.project_id
 		 where s.project_id = $1 and p.user_id = $2
@@ -29,7 +32,7 @@ export async function loadProjectSecretsForOwner(
 	projectId: string,
 ): Promise<readonly StoredProjectSecret[]> {
 	const result = await database().query(
-		`select s.id, s.name, s.hint, s.updated_at as "updatedAt",
+		`select s.id, s.name, s.kind, s.hint, s.updated_at as "updatedAt",
 		        s.encrypted_iv as iv, s.encrypted_tag as tag,
 		        s.encrypted_ciphertext as ciphertext, s.encrypted_version as version
 		 from project_secret s
@@ -45,25 +48,27 @@ export async function saveProjectSecretForOwner(input: {
 	readonly userId: string;
 	readonly projectId: string;
 	readonly name: string;
+	readonly kind: ProjectSecretKind;
 	readonly hint: string;
 	readonly encrypted: EncryptedSecret;
 }): Promise<PublicProjectSecret> {
 	const result = await database().query(
 		`insert into project_secret(
 		   id, project_id, name, hint, encrypted_iv, encrypted_tag,
-		   encrypted_ciphertext, encrypted_version, updated_at
+		   encrypted_ciphertext, encrypted_version, kind, updated_at
 		 )
-		 select $1, p.id, $2, $3, $4, $5, $6, $7, now()
+		 select $1, p.id, $2, $3, $4, $5, $6, $7, $10, now()
 		 from project p
 		 where p.id = $8 and p.user_id = $9
 		 on conflict (project_id, name) do update
 		   set hint = excluded.hint,
+		       kind = excluded.kind,
 		       encrypted_iv = excluded.encrypted_iv,
 		       encrypted_tag = excluded.encrypted_tag,
 		       encrypted_ciphertext = excluded.encrypted_ciphertext,
 		       encrypted_version = excluded.encrypted_version,
 		       updated_at = now()
-		 returning id, name, hint, updated_at as "updatedAt"`,
+		 returning id, name, kind, hint, updated_at as "updatedAt"`,
 		[
 			randomUUID(),
 			input.name,
@@ -74,6 +79,7 @@ export async function saveProjectSecretForOwner(input: {
 			input.encrypted.version,
 			input.projectId,
 			input.userId,
+			input.kind,
 		],
 	);
 	const row = result.rows[0];
@@ -97,12 +103,14 @@ export async function deleteProjectSecretForOwner(input: {
 function publicSecret(row: {
 	id: string;
 	name: string;
+	kind: ProjectSecretKind;
 	hint: string;
 	updatedAt: Date | string;
 }): PublicProjectSecret {
 	return {
 		id: row.id,
 		name: row.name,
+		kind: row.kind,
 		hint: row.hint,
 		updatedAt:
 			row.updatedAt instanceof Date
@@ -114,6 +122,7 @@ function publicSecret(row: {
 function storedSecret(row: {
 	id: string;
 	name: string;
+	kind: ProjectSecretKind;
 	hint: string;
 	updatedAt: Date | string;
 	iv: string;
