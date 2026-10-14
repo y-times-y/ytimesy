@@ -270,11 +270,14 @@ export async function runApiTurn(
 		// The subscription endpoint rejects the public Responses apply_patch tool.
 		// Writers retain the same V4A editor through its function-tool schema.
 		let nativePatch = false;
-		// The provider's hosted web search, on direct connections to official endpoints only.
+		// The provider's hosted web search, on a Codex subscription or a direct
+		// connection to an official endpoint.
 		let webSearch: ToolSet = {};
 		if (subscription) {
 			if (turn.connection_id || !(await hasManagedCodexAuth(turn.user_id)))
 				throw new Error("Reconnect Codex before continuing.");
+			// ChatGPT's Codex endpoint accepts the same hosted search as the OpenAI API.
+			webSearch = nativeWebSearchTools("openai");
 		} else {
 			if (!turn.connection_id) throw new Error("Model connection was removed.");
 			const connection = await loadModelConnection(
