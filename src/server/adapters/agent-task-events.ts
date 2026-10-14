@@ -3,27 +3,6 @@ import { database } from "./database";
 
 export type AgentTaskEventType = "completed" | "failed" | "blocked";
 
-/** A synchronous integration belongs to its lead turn; a lost turn must not leave the child occupying capacity forever. */
-export async function recoverInterruptedTaskIntegrations() {
-	const message =
-		"The lead turn ended before server integration finalized. Inspect the preserved checkout and command evidence before agent repair; uncertain operations were not replayed.";
-	await database().query(
-		`with interrupted as (
-		 update agent_session c set task_state='failed',turn_status='failed',task_summary=$1::text,updated_at=now(),
-		 items=c.items || jsonb_build_array(jsonb_build_object('kind','error','id',c.id::text || ':interrupted-integration','message',$1::text))
-		 from api_turn t
-		 where c.parent_session_id=t.session_id and c.user_id=t.user_id and c.task_state='working'
-		 and c.turn_status='running' and t.state in ('completed','failed','cancelled')
-		 and c.items->0->>'kind'='userMessage' and c.items->0->>'id'=t.id::text || ':integration'
-		 and not exists(select 1 from api_turn active where active.session_id=c.id and active.state in ('queued','running'))
-		 returning c.id,c.user_id,c.parent_session_id,c.items->0->>'id' as origin
-		 ) insert into agent_task_event(id,user_id,parent_session_id,child_session_id,event_type,dedupe_key,payload)
-		 select gen_random_uuid(),user_id,parent_session_id,id,'failed',id::text || ':failed:' || origin,jsonb_build_object('message',$1::text) from interrupted
-		 on conflict(dedupe_key) do nothing`,
-		[message],
-	);
-}
-
 export type AgentTaskEvent = {
 	readonly id: string;
 	readonly userId: string;

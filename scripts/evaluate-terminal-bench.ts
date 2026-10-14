@@ -7,7 +7,6 @@ import { startEvaluationCoordinator } from "../benchmarks/evaluation/coordinatio
 import { createOperatorEvaluationDatabase } from "../benchmarks/evaluation/operator-database";
 import {
 	closeProductionEvaluation,
-	exportReviewedEvaluationPatches,
 	openProductionEvaluation,
 	productionEvaluationEvidence,
 	productionEvaluationSnapshot,
@@ -24,7 +23,6 @@ import type {
 import { SessionItemId, WorkspaceId } from "../src/domain/ids";
 import { posixShellCommand } from "../src/domain/posix-command";
 import { environmentRecipe } from "../src/domain/project-environment";
-import { rootAgentMode } from "../src/domain/root-agent-mode";
 import { agentSessionForOwner } from "../src/server/adapters/agent-sessions";
 import {
 	downloadCheckpoint,
@@ -327,19 +325,8 @@ try {
 			attempt.rootId,
 		);
 		await save("evidence", evidence);
-		let source: string | null | undefined = evidence.root.providerRef;
-		// Lead mode hands off reviewed child work; builder-direct edits the root VM.
-		if (rootAgentMode() === "lead") {
-			const patches = await exportReviewedEvaluationPatches(
-				bridge.machines,
-				local.userId,
-				attempt.rootId,
-				template.commit,
-			);
-			source = evidence.children.find(
-				(child) => child.id === patches[0].taskId,
-			)?.providerRef;
-		}
+		// The root chat is the builder: its own VM holds the work.
+		const source = evidence.root.providerRef;
 		if (!source) throw new Error("Artifact source is missing.");
 		const bytes = await bridge.exportArtifacts(
 			source,

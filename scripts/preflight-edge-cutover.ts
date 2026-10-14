@@ -8,7 +8,6 @@ import {
 	PREPARE_WORKSPACE_QUEUE,
 	REFRESH_WORKSPACE_QUEUE,
 	SESSION_CHECKPOINT_QUEUE,
-	WORK_PLAN_QUEUE,
 } from "../src/server/jobs/queue";
 
 // Inventory only: do not claim, delete, retry or execute existing user work.
@@ -49,7 +48,8 @@ try {
 		"start-agent-competition",
 		SESSION_CHECKPOINT_QUEUE,
 		PR_REPAIR_QUEUE,
-		WORK_PLAN_QUEUE,
+		// Retired with durable task plans; inventoried in case old jobs remain.
+		"durable-work-plan",
 	]) {
 		phase = `queue-inventory:${name}`;
 		if (!(await boss.getQueue(name))) {

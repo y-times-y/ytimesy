@@ -1,7 +1,6 @@
 import { Effect } from "effect";
 import { Freestyle } from "freestyle";
 import type { BackgroundJob } from "#/domain/background-job";
-import { recoverInterruptedTaskIntegrations } from "../adapters/agent-task-events";
 import { expireApiTurnLeases } from "../adapters/api-turns";
 import {
 	backgroundJobId,
@@ -29,7 +28,6 @@ import {
 	PeerMessagePendingError,
 } from "./agent-peer-messaging";
 import { deliverAgentTaskEvents } from "./agent-task-event-delivery";
-import { dispatchDurableWork } from "./durable-work-plan";
 import { recoverExpiredEnvironmentBuilds } from "./environment-build";
 import { deliverPrRepairEvents } from "./pr-repair";
 import { captureSessionCheckpoint } from "./session-checkpoint";
@@ -50,7 +48,6 @@ export async function deliverBackgroundJob(
 					break;
 				case "supervise":
 					await recoverChildTurnEvents();
-					await recoverInterruptedTaskIntegrations();
 					await superviseAgentChildren(machines);
 					break;
 				case "delivery":
@@ -101,9 +98,6 @@ export async function deliverBackgroundJob(
 			break;
 		case "pr-repair":
 			await deliverPrRepairEvents(machines);
-			break;
-		case "work-plan":
-			await dispatchDurableWork(machines);
 			break;
 	}
 	return "delivered";

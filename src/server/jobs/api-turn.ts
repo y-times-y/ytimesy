@@ -46,7 +46,6 @@ import { modelStepLimit } from "#/domain/model-workflow";
 import { posixShellCommand } from "#/domain/posix-command";
 import { PROJECT_KNOWLEDGE_INSTRUCTIONS } from "#/domain/project-knowledge";
 import { agentSecretsEnvFile } from "#/domain/project-secret";
-import { rootAgentMode } from "#/domain/root-agent-mode";
 import { modelSwitchHistory } from "#/domain/runtime-handoff";
 import type { ModelSwitchItem, SessionItem } from "#/domain/session-item";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
@@ -408,8 +407,9 @@ async function runApiTurnAttempt(
 			runtime: owner.harness === "codex" ? "codex" : "api",
 			role: analyticsAgentRole(owner),
 		};
-		// Builder-direct (launch default): the root chat is the builder itself.
-		const direct = !owner.parentSessionId && rootAgentMode() === "builder";
+		// The root chat is the builder itself; writable children build too.
+		const writable =
+			!owner.parentSessionId || owner.taskAccess === "read_write";
 		const projectSecrets = owner.projectId
 			? await loadAgentProjectSecrets(owner.userId, owner.projectId).catch(
 					() => ({ envFile: agentSecretsEnvFile([]), redact: [] }),
@@ -445,10 +445,7 @@ async function runApiTurnAttempt(
 				console.warn("Attached files could not be restored.", error);
 			});
 			await attachmentsWritten;
-			if (
-				direct ||
-				(owner.parentSessionId && owner.taskAccess === "read_write")
-			) {
+			if (writable) {
 				const prompt = [...items]
 					.reverse()
 					.find((item) => item.kind === "userMessage");
@@ -480,7 +477,7 @@ async function runApiTurnAttempt(
 			nativePatch,
 			toolCallPrefix: step ? `step-${step.index}:` : undefined,
 			signal: abort.signal,
-			writable: direct,
+			writable,
 			waitDeadlineAt: step?.waitDeadlineAt,
 		});
 		const repositoryContext = automaticRepositoryContext({
@@ -495,9 +492,7 @@ async function runApiTurnAttempt(
 		const hooks = harnessLifecycleHooks({
 			workspace,
 			turnId: turn.id,
-			readOnly:
-				!direct &&
-				(!owner.parentSessionId || owner.taskAccess !== "read_write"),
+			readOnly: !writable,
 			continuationCount: () =>
 				completedLifecycleContinuations(owner.id, turn.id),
 			signal: abort.signal,
@@ -522,10 +517,8 @@ async function runApiTurnAttempt(
 		const planState = agentPlanState(items);
 		const planLock =
 			!owner.parentSessionId && !evaluation ? new PlanLock(planState) : null;
-		// Writable builders get the validated shell surface; leads keep coordination tools.
-		const shellBuilder =
-			direct ||
-			(Boolean(owner.parentSessionId) && owner.taskAccess === "read_write");
+		// Writable builders get the validated shell surface.
+		const shellBuilder = writable;
 		const surfaceTools = shellBuilder
 			? builderShellTools(repositoryContext.tools)
 			: repositoryContext.tools;
@@ -595,8 +588,8 @@ async function runApiTurnAttempt(
 		let flushedAt = 0;
 		let metricIndex = 0;
 		failureStage = "model";
-		const toolSurface =
-			owner.parentSessionId || direct ? "implementation" : "coordination";
+		// Every root chat and child task works on the implementation surface.
+		const toolSurface = "implementation";
 		if (step && (step.limitReached || step.index > modelStepLimit(toolSurface)))
 			throw new IncompleteAgentTurn("tool-calls");
 		// Once per turn, before its first model request; a resumed first step reuses the journal.
@@ -691,7 +684,7 @@ async function runApiTurnAttempt(
 			messages,
 			archiveHistory: (history) =>
 				archiveModelContext(owner.userId, owner.id, history),
-			instructions: `You are the ytimesy coding agent. Repository tools operate in this task's prepared checkout; paths are relative to that repository. Call read_repository_guidance before implementation and for nested paths; read applicable instructions and skill bodies completely.${shellBuilder ? "" : " Search optional tools with search_tools."} ${PREPARED_ENVIRONMENT_INSTRUCTIONS} Use read_environment_report for that setup report; do not pass its /tmp path to repository file readers. ${cloudAgentRoleInstructions(owner, { shellBuilder, direct })}${shellBuilder && "browser_screenshot" in tools ? ` ${visualQaInstructions()}` : ""}\n${pluginSkillsInstructions(plugins)}\n${PROJECT_KNOWLEDGE_INSTRUCTIONS}\nShared project knowledge (historical data, verify against this checkout):\n${JSON.stringify(projectKnowledge)}`,
+			instructions: `You are the ytimesy coding agent. Repository tools operate in this task's prepared checkout; paths are relative to that repository. Call read_repository_guidance before implementation and for nested paths; read applicable instructions and skill bodies completely.${shellBuilder ? "" : " Search optional tools with search_tools."} ${PREPARED_ENVIRONMENT_INSTRUCTIONS} Use read_environment_report for that setup report; do not pass its /tmp path to repository file readers. ${cloudAgentRoleInstructions(owner, { shellBuilder })}${shellBuilder && "browser_screenshot" in tools ? ` ${visualQaInstructions()}` : ""}\n${pluginSkillsInstructions(plugins)}\n${PROJECT_KNOWLEDGE_INSTRUCTIONS}\nShared project knowledge (historical data, verify against this checkout):\n${JSON.stringify(projectKnowledge)}`,
 			tools,
 			signal: abort.signal,
 			restoreInstructions: async (history) => {

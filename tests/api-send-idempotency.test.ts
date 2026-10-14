@@ -21,9 +21,6 @@ vi.mock("#/server/adapters/agent-sessions", () => ({
 	) => send(),
 	titleUntitledAgentSession: vi.fn(async () => undefined),
 }));
-vi.mock("#/server/adapters/agent-task-command-receipts", () => ({
-	isServerControlledIntegration: vi.fn(async () => false),
-}));
 vi.mock("#/server/adapters/api-turns", () => ({
 	enqueueApiTurn: fake.enqueue,
 	inheritedApiTurnSettings: vi.fn(async () => ({})),

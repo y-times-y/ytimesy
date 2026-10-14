@@ -5,7 +5,6 @@ import { Freestyle } from "freestyle";
 import type { EnvironmentModel } from "#/domain/environment-model";
 import { configuredTurnExecutor } from "#/domain/turn-executor";
 import { modelConcurrencyLimits } from "../adapters/agent-capacity";
-import { recoverInterruptedTaskIntegrations } from "../adapters/agent-task-events";
 import { claimApiTurn, expireApiTurnLeases } from "../adapters/api-turns";
 import { sessionsAwaitingCheckpoint } from "../adapters/checkpoints/records";
 import { checkpointStorageConfigured } from "../adapters/checkpoints/storage";
@@ -27,7 +26,6 @@ import {
 	type PeerMessage,
 } from "../services/agent-peer-messaging";
 import { deliverAgentTaskEvents } from "../services/agent-task-event-delivery";
-import { dispatchDurableWork } from "../services/durable-work-plan";
 import { deliverPrRepairEvents } from "../services/pr-repair";
 import { captureSessionCheckpoint } from "../services/session-checkpoint";
 import type { WorkspaceMachines } from "../services/workspace-machines";
@@ -44,7 +42,6 @@ import {
 	PREPARE_WORKSPACE_QUEUE,
 	REFRESH_WORKSPACE_QUEUE,
 	SESSION_CHECKPOINT_QUEUE,
-	WORK_PLAN_QUEUE,
 } from "./queue";
 import { TurnDispatcher } from "./turn-dispatcher";
 
@@ -76,19 +73,6 @@ export async function startWorkspaceWorker(machines?: WorkspaceMachines) {
 		createFreestyleWorkspaceMachines(
 			await Effect.runPromise(readFreestyleApiKey()),
 		);
-	await queue.work(
-		WORK_PLAN_QUEUE,
-		{ localConcurrency: 1, pollingIntervalSeconds: 1 },
-		async () => {
-			await dispatchDurableWork(taskMachines);
-		},
-	);
-	await queue.schedule(
-		WORK_PLAN_QUEUE,
-		"* * * * *",
-		{},
-		{ singletonKey: "plan-sweep" },
-	);
 	await queue.work<PeerMessage>(
 		AGENT_PEER_MESSAGE_QUEUE,
 		{ localConcurrency: 1 },
@@ -194,7 +178,6 @@ export async function startWorkspaceWorker(machines?: WorkspaceMachines) {
 			if (Date.now() - supervisingAt >= 30_000) {
 				supervisingAt = Date.now();
 				await recoverChildTurnEvents();
-				await recoverInterruptedTaskIntegrations();
 				await superviseAgentChildren(taskMachines);
 				await deliverPrRepairEvents(taskMachines);
 			}
