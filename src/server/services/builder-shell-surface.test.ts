@@ -14,6 +14,8 @@ it("keeps only the validated shell surface, which selects the shell prompt profi
 		"apply_patch",
 		"read_repository_guidance",
 		"report_task_blocked",
+		"read_context_archive",
+		"search_context_history",
 		"run_checks",
 		"apply_patches",
 		"inspect_changes",
@@ -31,6 +33,8 @@ it("keeps only the validated shell surface, which selects the shell prompt profi
 		"apply_patch",
 		"read_repository_guidance",
 		"report_task_blocked",
+		"read_context_archive",
+		"search_context_history",
 	]);
 	expect(harnessModelToolInstructions("openai", true, kept)).toContain(
 		"v13-shell",
