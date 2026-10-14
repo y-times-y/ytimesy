@@ -27,6 +27,14 @@ import {
 } from "#/server/services/harness-workspace-session";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
 
+/** A fallback route's key: the connection ("codex" or a connection id), then the model. */
+const failoverRouteKey = z
+	.string()
+	.max(600)
+	.regex(
+		/^(codex|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\|.+$/i,
+	);
+
 function runWithMachines<A>(
 	run: (machines: WorkspaceMachines) => Effect.Effect<A>,
 ): Promise<A> {
@@ -203,6 +211,8 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 			fast?: boolean;
 			speed?: string;
 			approvesPlan?: boolean;
+			/** Continue on the fallback route the user approved (`<connection>|<model>`). */
+			continueOn?: string;
 			attachments?: unknown;
 			/** The client's id for the message; a replayed send with it is not queued twice. */
 			userMessageId?: string;
@@ -236,6 +246,9 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 							? ("ultrafast" as const)
 							: ("standard" as const),
 				...(data.approvesPlan === true ? { approvesPlan: true } : {}),
+				...(data.continueOn
+					? { continueOn: failoverRouteKey.parse(data.continueOn) }
+					: {}),
 				...(attachments.length ? { attachments } : {}),
 				...(data.userMessageId
 					? { idempotencyKey: z.string().uuid().parse(data.userMessageId) }

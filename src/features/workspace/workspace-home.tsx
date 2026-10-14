@@ -147,6 +147,8 @@ type PendingSend = {
 	readonly variant?: string;
 	readonly speed?: ComposerSpeed;
 	readonly approvesPlan?: boolean;
+	/** Continue on the fallback route the user approved after an outage. */
+	readonly continueOn?: string;
 	readonly attachments?: readonly IncomingAttachment[];
 	/** Tells the composer whether the message went out; if not it restores the draft. */
 	readonly settle: (result: ComposerSendResult) => void;
@@ -1253,6 +1255,7 @@ export function WorkspaceHome({
 						? { speed: pending.speed, fast: pending.speed === "fast" }
 						: {}),
 					...(pending.approvesPlan ? { approvesPlan: true } : {}),
+					...(pending.continueOn ? { continueOn: pending.continueOn } : {}),
 					...(pending.attachments?.length
 						? { attachments: [...pending.attachments] }
 						: {}),
@@ -1604,6 +1607,9 @@ export function WorkspaceHome({
 												: {}),
 											...(options?.speed ? { speed: options.speed } : {}),
 											...(options?.approvesPlan ? { approvesPlan: true } : {}),
+											...(options?.continueOn
+												? { continueOn: options.continueOn }
+												: {}),
 											...(options?.attachments?.length
 												? { attachments: options.attachments }
 												: {}),

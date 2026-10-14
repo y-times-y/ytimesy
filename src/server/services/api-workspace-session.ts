@@ -42,6 +42,7 @@ import {
 } from "./codex-workspace-session";
 import { storeMessageAttachments } from "./message-attachments";
 import { availableApiModelRoutes } from "./model-connections";
+import { pinnedTurnFailover } from "./model-failover";
 
 export async function apiModelCatalog(userId: string) {
 	return availableApiModelRoutes(await listModelConnections(userId));
@@ -92,6 +93,8 @@ export async function sendApiWorkspaceTask(
 		idempotencyKey?: string;
 		approvesPlan?: boolean;
 		attachments?: readonly IncomingAttachment[];
+		/** A fallback route the user approved for this turn (`<connection>|<model>`). */
+		continueOn?: string;
 	},
 	preparedTask = false,
 ): ReturnType<typeof readApiWorkspaceSession> {
@@ -184,6 +187,18 @@ export async function sendApiWorkspaceTask(
 	// The send's key is its message id: a replayed request was already queued.
 	if (sendWasQueued(current, input.idempotencyKey))
 		return readApiWorkspaceSession(scope);
+	const failover = input.continueOn
+		? await pinnedTurnFailover(
+				scope.userId,
+				{
+					connectionId: connection.id,
+					connectionRevision: connection.revision,
+					modelId: selected.modelId,
+					settings,
+				},
+				input.continueOn,
+			)
+		: undefined;
 	if (input.approvesPlan && !pendingPlanId(current))
 		throw new Error("That plan was already answered.");
 	const attachments = await storeMessageAttachments(
@@ -222,7 +237,10 @@ export async function sendApiWorkspaceTask(
 			content: withAttachmentNote(input.runtimeText, attachments),
 		};
 	if (!previous)
-		messages = reconstructedContextTransition(messages, selected.modelId);
+		messages = reconstructedContextTransition(
+			messages,
+			failover?.route.modelId ?? selected.modelId,
+		);
 	assertApiContextFits(messages);
 	await enqueueApiTurn({
 		userId: scope.userId,
@@ -236,6 +254,7 @@ export async function sendApiWorkspaceTask(
 		preparedTask,
 		idempotencyKey: input.idempotencyKey,
 		settings,
+		failover,
 	});
 	// The sidebar shows the stored title; name the chat after its first message.
 	await titleUntitledAgentSession(

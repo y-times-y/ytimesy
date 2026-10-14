@@ -39,6 +39,7 @@ import {
 	type IncomingAttachment,
 	safeAttachmentName,
 } from "#/domain/message-attachment";
+import { FAILOVER_CONTINUE_TEXT } from "#/domain/model-failover";
 import { expandModelRuns, type ModelRun } from "#/domain/parallel-models";
 import type { Project } from "#/domain/projects";
 import {
@@ -125,6 +126,8 @@ export function SessionLauncher({
 			readonly reasoningId?: string;
 			readonly speed?: ComposerSpeed;
 			readonly approvesPlan?: boolean;
+			/** Continue on the fallback route the user approved after an outage. */
+			readonly continueOn?: string;
 			readonly leaderCount?: number;
 			readonly attemptModelIds?: readonly string[];
 			readonly userMessageId?: string;
@@ -438,7 +441,11 @@ export function SessionLauncher({
 		);
 	}, [session.items]);
 
-	function sendText(typed: string, plan?: { readonly approves: true }) {
+	function sendText(
+		typed: string,
+		plan?: { readonly approves: true },
+		continueOn?: string,
+	) {
 		const text = sendableDraft(typed);
 		if (!composerCanSend(text, false) || (!plan && attachmentProblem)) return;
 		// An approval carries no files; the composer keeps any it holds.
@@ -491,7 +498,10 @@ export function SessionLauncher({
 					: {}),
 				...(leaderCount === 1 && speed ? { speed } : {}),
 				...(plan ? { approvesPlan: true } : {}),
-				...(comparing && !plan ? { leaderCount, attemptModelIds } : {}),
+				...(continueOn ? { continueOn } : {}),
+				...(comparing && !plan && !continueOn
+					? { leaderCount, attemptModelIds }
+					: {}),
 				userMessageId,
 				...(encoded.length ? { attachments: encoded } : {}),
 			})?.then((result) => {
@@ -653,6 +663,10 @@ export function SessionLauncher({
 						document
 							.querySelector<HTMLTextAreaElement>(".session-dock textarea")
 							?.focus(),
+				}}
+				failoverActions={{
+					disabled: busy || turnStatus === "running",
+					onContinue: (key) => sendText(FAILOVER_CONTINUE_TEXT, undefined, key),
 				}}
 			/>
 			<div className="session-dock">

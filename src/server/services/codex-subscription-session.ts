@@ -47,10 +47,13 @@ import {
 	type PublicCodexSession,
 } from "./codex-workspace-session";
 import { storeMessageAttachments } from "./message-attachments";
+import { pinnedTurnFailover } from "./model-failover";
 
 /** Database transcript and account catalog only. Reading a chat never starts native Codex or a VM. */
 async function readSubscriptionSession(
 	scope: CodexSessionScope,
+	/** A follow-up that continues on a fallback works while the plan's catalog is down. */
+	tolerateCatalogOutage = false,
 ): Promise<PublicCodexSession> {
 	const session = scope.sessionId
 		? await agentSessionForOwner(scope.userId, scope.sessionId)
@@ -63,8 +66,8 @@ async function readSubscriptionSession(
 		if (connected) models = await codexSubscriptionCatalog(scope.userId);
 	} catch (error) {
 		// A rejected refresh has just marked the account expired; show sign-in instead.
-		if (!(error instanceof CodexReconnectRequired)) throw error;
-		connected = false;
+		if (error instanceof CodexReconnectRequired) connected = false;
+		else if (!tolerateCatalogOutage) throw error;
 	}
 	const account = await loadAgentAccount(scope.userId);
 	const connection: AgentConnection =
@@ -160,6 +163,8 @@ export async function sendSubscriptionTask(
 		idempotencyKey?: string;
 		approvesPlan?: boolean;
 		attachments?: readonly IncomingAttachment[];
+		/** A fallback route the user approved for this turn (`<connection>|<model>`). */
+		continueOn?: string;
 	},
 	preparedTask = false,
 ): ReturnType<typeof readSubscriptionSession> {
@@ -209,8 +214,10 @@ export async function sendSubscriptionTask(
 		throw new Error(
 			"Batch integration is server-controlled until a visible integration failure requires repair.",
 		);
-	const view = await readSubscriptionSession(scope);
-	if (!view.models.some((model) => model.id === input.modelId))
+	const continuing = Boolean(input.continueOn);
+	const view = await readSubscriptionSession(scope, continuing);
+	// Continuing on a fallback during an outage: the fallback route is checked below.
+	if (!continuing && !view.models.some((model) => model.id === input.modelId))
 		throw new Error("Selected subscription model is unavailable.");
 	const inherited =
 		input.variant === undefined && input.fast === undefined
@@ -226,7 +233,18 @@ export async function sendSubscriptionTask(
 	);
 	// The send's key is its message id: a replayed request was already queued.
 	if (sendWasQueued(view.items, input.idempotencyKey))
-		return readSubscriptionSession(scope);
+		return readSubscriptionSession(scope, continuing);
+	const failover = input.continueOn
+		? await pinnedTurnFailover(
+				scope.userId,
+				{
+					connectionId: null,
+					connectionRevision: revision,
+					modelId: input.modelId,
+				},
+				input.continueOn,
+			)
+		: undefined;
 	if (input.approvesPlan && !pendingPlanId(view.items))
 		throw new Error("That plan was already answered.");
 	const attachments = await storeMessageAttachments(
@@ -265,7 +283,10 @@ export async function sendSubscriptionTask(
 			content: withAttachmentNote(input.runtimeText, attachments),
 		};
 	if (!previous)
-		messages = reconstructedContextTransition(messages, input.modelId);
+		messages = reconstructedContextTransition(
+			messages,
+			failover?.route.modelId ?? input.modelId,
+		);
 	assertApiContextFits(messages);
 	await enqueueApiTurn({
 		userId: scope.userId,
@@ -278,6 +299,7 @@ export async function sendSubscriptionTask(
 		items,
 		preparedTask,
 		idempotencyKey: input.idempotencyKey,
+		failover,
 	});
 	// The sidebar shows the stored title; name the chat after its first message.
 	await titleUntitledAgentSession(
@@ -285,7 +307,7 @@ export async function sendSubscriptionTask(
 		scope.sessionId as string,
 		sessionTitleFromItems(items),
 	).catch(() => undefined);
-	return readSubscriptionSession(scope);
+	return readSubscriptionSession(scope, continuing);
 }
 
 export async function stopSubscriptionTask(scope: CodexSessionScope) {

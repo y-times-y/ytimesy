@@ -54,6 +54,11 @@ import { AgentMarkdown } from "./agent-markdown";
 import { FileChangeCounts } from "./file-change-counts";
 import { FileMentionButton } from "./file-mention";
 import { LiveCollapsible } from "./live-collapsible";
+import {
+	answeredAfter,
+	type FailoverActions,
+	ModelSwitchCard,
+} from "./model-switch-card";
 import { type PlanActions, PlanProposalCard } from "./plan-proposal-card";
 import { ShellCommandCode } from "./shell-command-code";
 import { TodoList } from "./todo-list";
@@ -71,9 +76,12 @@ export function SessionTimeline({
 	collapseInstructions = false,
 	recoveryControls,
 	planActions,
+	failoverActions,
 }: {
 	/** Approve or revise the plan that waits for the user; omitted where nobody can answer. */
 	planActions?: PlanActions;
+	/** Continue on the fallback a paused turn offers; omitted where nobody can answer. */
+	failoverActions?: FailoverActions;
 	recoveryControls?: (messageId: string) => ReactNode;
 	items: readonly SessionItem[];
 	turnStatus: SessionTurnStatus;
@@ -158,6 +166,14 @@ export function SessionTimeline({
 											: undefined
 									}
 									onOpenFile={onOpenFile}
+								/>
+							) : row.kind === "item" &&
+								row.item.kind === "modelSwitch" &&
+								row.item.state === "awaitingApproval" ? (
+								<ModelSwitchCard
+									item={row.item}
+									answered={answeredAfter(items, row.item.id)}
+									actions={failoverActions}
 								/>
 							) : (
 								<TimelineRowView
@@ -874,6 +890,15 @@ function SessionItemView({
 				<div className="session-activity" data-kind="error" role="alert">
 					<p>
 						<ActivityIcon glyph="error" />
+						<span className="session-activity-title">{item.message}</span>
+					</p>
+				</div>
+			);
+		case "modelSwitch":
+			return (
+				<div className="session-activity" data-kind="modelSwitch" role="status">
+					<p>
+						<ActivityIcon glyph="switch" />
 						<span className="session-activity-title">{item.message}</span>
 					</p>
 				</div>

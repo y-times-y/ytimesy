@@ -17,7 +17,8 @@ export type SessionActivityGlyph =
 	| "image"
 	| "guide"
 	| "stop"
-	| "test";
+	| "test"
+	| "switch";
 
 const SEARCH_TOOLS = new Set([
 	"grep",
