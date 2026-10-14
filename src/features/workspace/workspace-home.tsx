@@ -1173,7 +1173,7 @@ export function WorkspaceHome({
 						current.items,
 						pending.text,
 						pending.messageId,
-						undefined,
+						pending.approvesPlan,
 						pending.attachments?.map((file) => ({
 							id: crypto.randomUUID(),
 							name: safeAttachmentName(file.name),
