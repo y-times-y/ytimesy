@@ -485,16 +485,14 @@ describe("decisions and bounds", () => {
 		).toBe("stop");
 	});
 
-	it("keeps benchmarks, fusion and opted-out users pinned; children same-model only", () => {
+	it("keeps benchmarks and opted-out users pinned; children same-model only", () => {
 		const base = {
 			enabled: true,
 			evaluation: false,
 			child: false,
-			fusion: false,
 		};
 		expect(turnFailoverPolicy(base)).toBe("any-model");
 		expect(turnFailoverPolicy({ ...base, evaluation: true })).toBe("off");
-		expect(turnFailoverPolicy({ ...base, fusion: true })).toBe("off");
 		expect(turnFailoverPolicy({ ...base, enabled: false })).toBe("off");
 		expect(turnFailoverPolicy({ ...base, child: true })).toBe("same-model");
 		expect(

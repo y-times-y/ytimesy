@@ -317,16 +317,14 @@ export type FailoverPolicy = "any-model" | "same-model" | "off";
 /**
  * Benchmarks stay pinned to their model and connection, so their scores mean
  * something. Child agents may move only to the same model on another
- * connection: their parent chose that model for the task. Fusion pairs a lead
- * with a sidekick by model, so a fusion turn never moves either.
+ * connection: their parent chose that model for the task.
  */
 export function turnFailoverPolicy(input: {
 	readonly enabled: boolean;
 	readonly evaluation: boolean;
 	readonly child: boolean;
-	readonly fusion: boolean;
 }): FailoverPolicy {
-	if (!input.enabled || input.evaluation || input.fusion) return "off";
+	if (!input.enabled || input.evaluation) return "off";
 	return input.child ? "same-model" : "any-model";
 }
 

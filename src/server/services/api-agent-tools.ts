@@ -53,7 +53,7 @@ export function apiAgentTools(
 		toolCallPrefix?: string;
 		nativePatch?: boolean;
 		signal: AbortSignal;
-		/** A Fusion lead edits its own workspace even though it is a root session. */
+		/** A builder-direct root chat edits its own workspace. */
 		writable?: boolean;
 		/** Latest epoch ms a command wait may end (step budget or turn deadline minus a margin). */
 		waitDeadlineAt?: number;

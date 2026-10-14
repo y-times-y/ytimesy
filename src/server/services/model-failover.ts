@@ -128,7 +128,6 @@ export async function planModelFailover(input: {
 	readonly turn: ApiTurn;
 	readonly evaluation: boolean;
 	readonly child: boolean;
-	readonly fusion: boolean;
 	/** Custom endpoints are unreachable from the Cloudflare executor. */
 	readonly allowCustom: boolean;
 }): Promise<FailoverPlan> {
@@ -141,7 +140,6 @@ export async function planModelFailover(input: {
 		enabled: preferences.enabled,
 		evaluation: input.evaluation,
 		child: input.child,
-		fusion: input.fusion,
 	});
 	const connections =
 		policy === "off" ? [] : await failoverConnections(turn.user_id);

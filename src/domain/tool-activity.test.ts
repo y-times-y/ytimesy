@@ -55,12 +55,6 @@ it("describes tool calls as short sentences with the right icon", () => {
 			}),
 		),
 	).toMatchObject({ verb: "Created", target: "x.cc" });
-	expect(
-		toolActivity(call("wait_for_sidekick", { seconds: 5 }, { status: "done" })),
-	).toMatchObject({ verb: "Checked on sidekick", note: "done", glyph: "wait" });
-	expect(toolActivity(call("take_control", { reason: "x" })).glyph).toBe(
-		"takeover",
-	);
 	expect(toolActivity(call("mcp__linear__list_issues", {}))).toMatchObject({
 		verb: "linear",
 		target: "list issues",

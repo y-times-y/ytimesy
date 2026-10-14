@@ -70,12 +70,7 @@ const trackedDiff = execFileSync("git", ["diff", "--binary", "HEAD"], {
 	encoding: "utf8",
 });
 const runId = randomUUID();
-// Fusion arm: the lead model runs the root session and edits its workspace
-// with a sidekick (YTIMESY_FUSION_SIDEKICK_MODEL); no child tasks.
-const fusionSidekick = process.env.YTIMESY_FUSION_SIDEKICK_MODEL?.trim();
-const leadModel = fusionSidekick
-	? process.env.YTIMESY_FUSION_LEAD_MODEL?.trim() || "gpt-6-astra"
-	: "gpt-6.1-sol";
+const modelId = "gpt-6.1-sol";
 const key = process.env.FREESTYLE_API_KEY;
 if (!key) throw new Error("Missing evaluation provider connection.");
 const local = await createOperatorEvaluationDatabase(output);
@@ -125,9 +120,8 @@ try {
 	coordinator = await startEvaluationCoordinator();
 	await save("coordinator-preflight", coordinator.preflight);
 	const models = await codexSubscriptionCatalog(local.userId);
-	for (const pinned of [leadModel, fusionSidekick].filter(Boolean))
-		if (!models.some((model) => model.id === pinned))
-			throw new Error(`Pinned subscription model ${pinned} is unavailable.`);
+	if (!models.some((model) => model.id === modelId))
+		throw new Error(`Pinned subscription model ${modelId} is unavailable.`);
 	archivePath = await uploadCheckpoint(
 		local.userId,
 		archiveSession,
@@ -180,7 +174,7 @@ try {
 		version: 1,
 		phase: "development",
 		baseline,
-		modelId: leadModel,
+		modelId,
 		reasoning: "max",
 		seed: 0,
 		repetitions: 1,
@@ -333,10 +327,9 @@ try {
 			attempt.rootId,
 		);
 		await save("evidence", evidence);
-		// Fusion edits the root workspace; lead/builder hands off reviewed child work.
 		let source: string | null | undefined = evidence.root.providerRef;
-		// Lead mode hands off reviewed child work; Fusion and builder-direct edit the root VM.
-		if (!fusionSidekick && rootAgentMode() === "lead") {
+		// Lead mode hands off reviewed child work; builder-direct edits the root VM.
+		if (rootAgentMode() === "lead") {
 			const patches = await exportReviewedEvaluationPatches(
 				bridge.machines,
 				local.userId,
@@ -370,9 +363,8 @@ try {
 			rootId: attempt.rootId,
 			task: task.id,
 			model: protocol.modelId,
-			sidekickModel: fusionSidekick ?? null,
 			reasoning: protocol.reasoning,
-			// Lead and sidekick together, from the evaluation guard's counter.
+			// From the evaluation guard's counter.
 			observedTokens: Number(evidence.limits?.observed_tokens ?? 0),
 			reward,
 			agentSeconds,
