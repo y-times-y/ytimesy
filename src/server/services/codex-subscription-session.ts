@@ -1,4 +1,5 @@
 import type { AgentConnection } from "#/domain/agent-connection";
+import { pendingPlanId } from "#/domain/agent-plan";
 import {
 	apiConversation,
 	assertApiContextFits,
@@ -150,7 +151,7 @@ export async function sendSubscriptionTask(
 		variant?: string;
 		fast?: boolean;
 		idempotencyKey?: string;
-		mode?: "plan";
+		approvesPlan?: boolean;
 		attachments?: readonly IncomingAttachment[];
 	},
 	preparedTask = false,
@@ -190,6 +191,8 @@ export async function sendSubscriptionTask(
 		input.variant ?? inherited?.reasoning,
 		input.fast ?? inherited?.fast,
 	);
+	if (input.approvesPlan && !pendingPlanId(view.items))
+		throw new Error("That plan was already answered.");
 	const attachments = await storeMessageAttachments(
 		scope.userId,
 		scope.sessionId as string,
@@ -199,7 +202,7 @@ export async function sendSubscriptionTask(
 		view.items,
 		input.text,
 		undefined,
-		input.mode,
+		input.approvesPlan,
 		attachments,
 	);
 	const previous = await previousTurnMessages(

@@ -1,7 +1,21 @@
-import type { ModelMessage, ToolSet } from "ai";
+import { type ModelMessage, type ToolSet, tool } from "ai";
+import { z } from "zod";
+import {
+	type AgentPlanState,
+	ENTER_PLAN_MODE_TOOL,
+	PLAN_TEXT_LIMIT,
+	PROPOSE_PLAN_TOOL,
+} from "#/domain/agent-plan";
+import { fileChangesFromShellCommand } from "#/domain/shell-file-change";
 
-export const PLAN_MODE_NOTICE =
-	"Plan mode (set by the user for this message): investigate read-only and reply with a concrete plan — the approach, files to change, risks and the checks that will prove it works. Do not edit files, start writing tasks or publish; file-editing tools are refused, and shell commands must only read. The user approves the plan before implementation.";
+/** Tools whose successful call ends the turn. */
+export const PLAN_END_TURN_TOOLS = [PROPOSE_PLAN_TOOL] as const;
+
+export const PLAN_REVISION_NOTICE =
+	"Plan mode: the user replied to your proposed plan without approving it. Treat the reply as feedback, investigate read-only if needed, and call propose_plan with the revised plan. If they asked for something else, propose a plan for that. File edits stay refused until the user approves.";
+
+export const PLAN_CONTINUE_NOTICE =
+	"Plan mode is still on: investigate read-only and finish with propose_plan. File edits stay refused until the user approves.";
 
 /** The builder edits its own checkout, so plan mode refuses its editing tools too. */
 const EDITING_TOOLS = new Set([
@@ -15,7 +29,7 @@ const EDITING_TOOLS = new Set([
 const REFUSAL = {
 	blocked: true,
 	error:
-		"Plan mode: implementation is paused until the user approves the plan. Reply with the plan instead.",
+		"Plan mode: implementation is paused until the user approves the plan. Investigate read-only and call propose_plan.",
 };
 
 /** Tools that would edit or begin writing work; read-only helpers and unstarted drafts stay available. */
@@ -32,6 +46,14 @@ function startsWritingWork(name: string, args: unknown) {
 		].includes(name)
 	)
 		return true;
+	if (name === "execute_command") {
+		// Best effort: shell writes the transcript would show as file changes.
+		const command = (args as { command?: unknown } | null)?.command;
+		return (
+			typeof command === "string" &&
+			fileChangesFromShellCommand(command).length > 0
+		);
+	}
 	if (name !== "create_task") return false;
 	const input = (args ?? {}) as {
 		access?: unknown;
@@ -40,8 +62,15 @@ function startsWritingWork(name: string, args: unknown) {
 	return input.startImmediately === true && input.access !== "read_only";
 }
 
-/** Enforces plan mode server-side; prompts alone cannot be trusted to stop a writer. */
-export function withPlanMode(tools: ToolSet): ToolSet {
+/**
+ * Enforces plan mode server-side while `planning()` is true; prompts alone
+ * cannot be trusted to stop a writer. Checked per call, so entering plan mode
+ * mid-turn locks the rest of the turn.
+ */
+export function withPlanMode(
+	tools: ToolSet,
+	planning: () => boolean = () => true,
+): ToolSet {
 	return Object.fromEntries(
 		Object.entries(tools).map(([name, definition]) => {
 			const execute = definition.execute;
@@ -54,7 +83,7 @@ export function withPlanMode(tools: ToolSet): ToolSet {
 						args: unknown,
 						options: Parameters<NonNullable<typeof execute>>[1],
 					) =>
-						startsWritingWork(name, args)
+						planning() && startsWritingWork(name, args)
 							? Promise.resolve(REFUSAL)
 							: execute(args as never, options),
 				},
@@ -63,14 +92,69 @@ export function withPlanMode(tools: ToolSet): ToolSet {
 	) as ToolSet;
 }
 
-/** Adds the notice once, after the user's message, so the cached prefix is kept. */
-export function withPlanModeNotice(messages: ModelMessage[]): ModelMessage[] {
-	return messages.some(
-		(message) =>
-			message.role === "user" &&
-			typeof message.content === "string" &&
-			message.content === PLAN_MODE_NOTICE,
-	)
-		? messages
-		: [...messages, { role: "user", content: PLAN_MODE_NOTICE }];
+/** The turn's plan lock: starts from the transcript; the plan tools turn it on. */
+export class PlanLock {
+	#planning: boolean;
+	constructor(state: AgentPlanState) {
+		this.#planning = state.kind !== "none";
+	}
+	get planning() {
+		return this.#planning;
+	}
+	enter() {
+		this.#planning = true;
+	}
+}
+
+/** The agent decides when a request needs a plan approved before any edits. */
+export function planTools(lock: PlanLock): ToolSet {
+	return {
+		[ENTER_PLAN_MODE_TOOL]: tool({
+			description:
+				"Enter plan mode before changing anything when the request is large, ambiguous or risky: many files or subsystems, unclear requirements, schema or data migrations, deletions, public API changes, or several reasonable approaches the user should choose between. Do not use it for small, clear tasks; just do those. After entering, file edits are refused: investigate read-only, then call propose_plan.",
+			inputSchema: z.object({
+				reason: z
+					.string()
+					.max(300)
+					.describe("One sentence: why this needs the user's approval first."),
+			}),
+			execute: async () => {
+				lock.enter();
+				return {
+					planMode: true,
+					next: "Investigate read-only, then call propose_plan. Edits are refused until the user approves.",
+				};
+			},
+		}),
+		[PROPOSE_PLAN_TOOL]: tool({
+			description:
+				"Submit your plan for the user's approval and end this turn. The user sees it with an Approve button; their reply is either approval (edits unlock and you implement it) or feedback (revise and propose again). Write Markdown: the goal, the approach, the files to change, risks and open questions, and the checks that will prove it works. Do not repeat the plan in a message.",
+			inputSchema: z.object({
+				plan: z.string().min(1).max(PLAN_TEXT_LIMIT),
+			}),
+			execute: async () => {
+				lock.enter();
+				return {
+					proposed: true,
+					next: "Stop here. The user will approve or reply with feedback.",
+				};
+			},
+		}),
+	};
+}
+
+/**
+ * Adds a notice after the user's message, so the cached prefix is kept. Once
+ * per turn: a notice already among the trailing user messages is not repeated.
+ */
+export function withPlanModeNotice(
+	messages: ModelMessage[],
+	notice: string,
+): ModelMessage[] {
+	for (let index = messages.length - 1; index >= 0; index--) {
+		const message = messages[index];
+		if (message.role !== "user") break;
+		if (message.content === notice) return messages;
+	}
+	return [...messages, { role: "user", content: notice }];
 }

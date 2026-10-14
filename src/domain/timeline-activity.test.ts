@@ -219,3 +219,26 @@ describe("timeline activity grouping", () => {
 		});
 	});
 });
+
+it("keeps a proposed plan out of the collapsed work of a finished turn", () => {
+	const rows = groupTimelineRows(
+		[
+			{ kind: "userMessage", id: SessionItemId("u1"), text: "Rework billing" },
+			{
+				kind: "dynamicToolCall",
+				id: SessionItemId("t1:enter"),
+				tool: "enter_plan_mode",
+				status: "completed",
+			},
+			{
+				kind: "planProposal",
+				id: SessionItemId("t1:plan"),
+				text: "1. Split invoices",
+			},
+		],
+		"completed",
+	);
+	expect(
+		rows.map((row) => (row.kind === "item" ? row.item.kind : row.kind)),
+	).toEqual(["userMessage", "work", "planProposal"]);
+});

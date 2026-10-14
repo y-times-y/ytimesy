@@ -1,3 +1,4 @@
+import { pendingPlanId } from "#/domain/agent-plan";
 import {
 	apiConversation,
 	assertApiContextFits,
@@ -82,7 +83,7 @@ export async function sendApiWorkspaceTask(
 		speed?: "standard" | ApiModelSpeedId;
 		runtimeText?: string;
 		idempotencyKey?: string;
-		mode?: "plan";
+		approvesPlan?: boolean;
 		attachments?: readonly IncomingAttachment[];
 	},
 	preparedTask = false,
@@ -146,16 +147,19 @@ export async function sendApiWorkspaceTask(
 		throw new Error(
 			`${settings.speed === "ultrafast" ? "Ultrafast" : "Fast"} mode is not available for this model on this connection.`,
 		);
+	const current = sessionItemsFromUnknown(session.items);
+	if (input.approvesPlan && !pendingPlanId(current))
+		throw new Error("That plan was already answered.");
 	const attachments = await storeMessageAttachments(
 		scope.userId,
 		session.id,
 		input.attachments,
 	);
 	const items = sessionItemsQueuedWithUser(
-		sessionItemsFromUnknown(session.items),
+		current,
 		input.text,
 		undefined,
-		input.mode,
+		input.approvesPlan,
 		attachments,
 	);
 	const previous = await previousTurnMessages(

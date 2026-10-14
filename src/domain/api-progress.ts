@@ -1,3 +1,4 @@
+import { PLAN_TEXT_LIMIT, PROPOSE_PLAN_TOOL } from "./agent-plan";
 import type { ApiAgentEvent } from "./api-agent-event";
 import { SessionItemId } from "./ids";
 import type { SessionItem } from "./session-item";
@@ -69,6 +70,16 @@ export function applyApiProgress(
 					event.text,
 			],
 		};
+	else if (event.type === "tool-call" && event.name === PROPOSE_PLAN_TOOL) {
+		const plan = (event.input as { plan?: unknown } | null)?.plan;
+		if (typeof plan !== "string" || !plan.trim()) return [...items];
+		next = {
+			kind: "planProposal",
+			id,
+			text: plan.trim().slice(0, PLAN_TEXT_LIMIT),
+		};
+	} else if (event.type === "tool-result" && event.name === PROPOSE_PLAN_TOOL)
+		return [...items];
 	else if (event.type === "tool-call" || event.type === "tool-result")
 		next = {
 			kind: "dynamicToolCall",

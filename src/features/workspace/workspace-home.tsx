@@ -233,7 +233,7 @@ export function WorkspaceHome({
 		modelId: string;
 		variant?: string;
 		speed?: ComposerSpeed;
-		mode?: "plan";
+		approvesPlan?: boolean;
 		attachments?: readonly IncomingAttachment[];
 	} | null>(null);
 	const sessionViews = useRef(new Map<string, PublicCodexSession>());
@@ -1273,7 +1273,7 @@ export function WorkspaceHome({
 											? { variant: options.reasoningId }
 											: {}),
 										...(options?.speed ? { speed: options.speed } : {}),
-										...(options?.mode ? { mode: options.mode } : {}),
+										...(options?.approvesPlan ? { approvesPlan: true } : {}),
 										...(options?.attachments?.length
 											? { attachments: options.attachments }
 											: {}),
@@ -1351,7 +1351,9 @@ export function WorkspaceHome({
 																fast: pending.speed === "fast",
 															}
 														: {}),
-													...(pending?.mode ? { mode: pending.mode } : {}),
+													...(pending?.approvesPlan
+														? { approvesPlan: true }
+														: {}),
 													...(pending?.attachments?.length
 														? { attachments: [...pending.attachments] }
 														: {}),

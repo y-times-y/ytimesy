@@ -217,7 +217,7 @@ export function sendHarnessWorkspaceTask(
 		readonly speed?: "standard" | "fast" | "ultrafast";
 		readonly runtimeText?: string;
 		readonly idempotencyKey?: string;
-		readonly mode?: "plan";
+		readonly approvesPlan?: boolean;
 		readonly attachments?: readonly IncomingAttachment[];
 	},
 ): Effect.Effect<PublicHarnessSession> {

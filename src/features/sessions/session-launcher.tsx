@@ -9,6 +9,7 @@ import {
 	competitionSendIsEnabled,
 } from "#/domain/agent-competition";
 import { connectedProviderId } from "#/domain/agent-connection";
+import { PLAN_APPROVAL_TEXT } from "#/domain/agent-plan";
 import {
 	type AgentProviderId,
 	agentProviderById,
@@ -109,7 +110,7 @@ export function SessionLauncher({
 		options?: {
 			readonly reasoningId?: string;
 			readonly speed?: ComposerSpeed;
-			readonly mode?: "plan";
+			readonly approvesPlan?: boolean;
 			readonly leaderCount?: number;
 			readonly attemptModelIds?: readonly string[];
 			readonly userMessageId?: string;
@@ -398,10 +399,11 @@ export function SessionLauncher({
 		);
 	}, [session.items]);
 
-	function sendText(typed: string) {
+	function sendText(typed: string, plan?: { readonly approves: true }) {
 		const text = sendableDraft(typed);
-		if (!composerCanSend(text, false) || attachmentError) return;
-		const files = leaderCount === 1 ? attachments : [];
+		if (!composerCanSend(text, false) || (!plan && attachmentError)) return;
+		// An approval carries no files; the composer keeps any it holds.
+		const files = leaderCount === 1 && !plan ? attachments : [];
 		captureAnalytics("prompt_submitted", {
 			runtime: harnessId,
 			attempts: leaderCount,
@@ -423,6 +425,7 @@ export function SessionLauncher({
 							})),
 						}
 					: {}),
+				...(plan ? { approvesPlan: true as const } : {}),
 			},
 		]);
 		const reasoning = resolveReasoningLevel(selectedModel, reasoningId);
@@ -432,12 +435,14 @@ export function SessionLauncher({
 					? { reasoningId: reasoning.id }
 					: {}),
 				...(leaderCount === 1 && speed ? { speed } : {}),
-				...(competitionMode && leaderCount > 1
+				...(plan ? { approvesPlan: true } : {}),
+				...(competitionMode && leaderCount > 1 && !plan
 					? { leaderCount, attemptModelIds, userMessageId }
 					: {}),
 				...(encoded.length ? { attachments: encoded } : {}),
 			});
-		setDraft("");
+		// Approving from the plan card leaves a draft in progress alone.
+		if (!plan) setDraft("");
 		if (!files.length) {
 			send([]);
 			return;
@@ -578,6 +583,14 @@ export function SessionLauncher({
 				onOpenFile={onOpenFile}
 				competitions={competitions}
 				onOpenCandidate={onOpenCandidate}
+				planActions={{
+					disabled: busy || turnStatus === "running",
+					onApprove: () => sendText(PLAN_APPROVAL_TEXT, { approves: true }),
+					onRevise: () =>
+						document
+							.querySelector<HTMLTextAreaElement>(".session-dock textarea")
+							?.focus(),
+				}}
 			/>
 			<div className="session-dock">
 				{visibleSlashCommands.length === 0 ? (

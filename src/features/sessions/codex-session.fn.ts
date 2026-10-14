@@ -172,7 +172,7 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 			variant?: string;
 			fast?: boolean;
 			speed?: string;
-			mode?: string;
+			approvesPlan?: boolean;
 			attachments?: unknown;
 		}) => {
 			const attachments =
@@ -203,7 +203,7 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 						: data.speed === "ultrafast"
 							? ("ultrafast" as const)
 							: ("standard" as const),
-				...(data.mode === "plan" ? { mode: "plan" as const } : {}),
+				...(data.approvesPlan === true ? { approvesPlan: true } : {}),
 				...(attachments.length ? { attachments } : {}),
 			};
 		},
