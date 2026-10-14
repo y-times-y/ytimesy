@@ -1,6 +1,7 @@
 import { applyApiProgress } from "#/domain/api-progress";
 import { readBoundedRequestBody } from "#/domain/bounded-request-body";
 import { verifyDeliveryRequest } from "#/domain/delivery-auth";
+import { WorkspaceId } from "#/domain/ids";
 import {
 	MAX_WORKFLOW_MODEL_STEPS,
 	type WorkflowStep,
@@ -8,9 +9,12 @@ import {
 	workflowStepSchema,
 } from "#/domain/model-workflow";
 import { prRepairDelivery } from "#/domain/pr-repair-signal";
+import { agentSessionMetadataForOwner } from "../adapters/agent-sessions";
 import { type ApiTurn, finalizeApiTurn } from "../adapters/api-turns";
 import { coordinateConversationTurn } from "../adapters/conversation-turn-control";
+import { stopApiTurnCommands } from "../services/api-command-scope";
 import { stageVerifiedPrRepairSignal } from "../services/pr-repair-webhook";
+import { machinesForAgentSession } from "../services/session-workspace-machines";
 import type { WorkspaceMachines } from "../services/workspace-machines";
 import { runApiTurn } from "./api-turn";
 
@@ -108,11 +112,16 @@ export async function executeModelStep(
 		});
 		const saved = await finalizeApiTurn(claim.turn, "cancelled", items);
 		if (saved !== "cancelled") return "unavailable";
+		// Earlier steps may have left owned background commands running.
+		await stopCancelledTurnCommands(machines, claim.turn).catch(() => {
+			console.warn("Cancelled turn's commands need recovery.");
+		});
+		// A resumed turn's room holds the rotated lease, not the admitted one.
 		await coordinateConversationTurn("release", {
 			userId: claim.turn.user_id,
 			sessionId: claim.turn.session_id,
 			turnId: claim.turn.id,
-			leaseId: step.leaseId,
+			leaseId: claim.turn.lease_id ?? step.leaseId,
 		}).catch(() => {});
 		return "cancelled";
 	}
@@ -135,4 +144,27 @@ export async function executeModelStep(
 	);
 	await receipts.complete(step, outcome);
 	return outcome;
+}
+
+/** Fences a turn's owned commands on the chat's machine without preparing a workspace. */
+async function stopCancelledTurnCommands(
+	machines: WorkspaceMachines | (() => WorkspaceMachines),
+	turn: ApiTurn,
+) {
+	const session = await agentSessionMetadataForOwner(
+		turn.user_id,
+		turn.session_id,
+	);
+	if (!session?.providerRef) return;
+	await stopApiTurnCommands(
+		{
+			machines: machinesForAgentSession(
+				typeof machines === "function" ? machines() : machines,
+				session,
+			),
+			vm: WorkspaceId(session.providerRef),
+			cwd: "/",
+		},
+		turn.id,
+	);
 }
