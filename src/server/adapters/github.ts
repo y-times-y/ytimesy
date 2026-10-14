@@ -7,6 +7,8 @@ import {
 	type PullRequestComment,
 	type PullRequestDetail,
 	pullRequestFileChange,
+	pullRequestMergeFailure,
+	pullRequestMergeMethod,
 	pullRequestParticipants,
 	pullRequestPerson,
 } from "../../domain/pull-request-review";
@@ -513,7 +515,10 @@ export async function markPullRequestReady(
 	);
 }
 
-/** Squash-merges only the head commit the user reviewed. */
+/**
+ * Merges only the head commit the user reviewed, with a method the repository
+ * allows (squash when it can). GitHub's refusals become messages the user can act on.
+ */
 export async function mergePullRequest(
 	token: string,
 	fullName: string,
@@ -521,11 +526,25 @@ export async function mergePullRequest(
 	expectedHeadSha: string,
 ) {
 	const { owner, repo } = repositoryOwnerName(fullName);
-	await githubClient(token).pulls.merge({
-		owner,
-		repo,
-		pull_number: number,
-		merge_method: "squash",
-		sha: expectedHeadSha,
-	});
+	const github = githubClient(token);
+	const settings = await github.repos.get({ owner, repo });
+	const method = pullRequestMergeMethod(settings.data);
+	if (!method)
+		throw new Response(
+			"This repository does not allow merging pull requests from the API. Merge it on GitHub.",
+			{ status: 409 },
+		);
+	try {
+		await github.pulls.merge({
+			owner,
+			repo,
+			pull_number: number,
+			merge_method: method,
+			sha: expectedHeadSha,
+		});
+	} catch (error) {
+		const message = pullRequestMergeFailure(error);
+		if (message) throw new Response(message, { status: 409 });
+		throw error;
+	}
 }
