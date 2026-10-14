@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { Check, ChevronDown, Search, Star } from "lucide-react";
+import { Check, ChevronDown, Search, Star, Zap } from "lucide-react";
 import "./model-picker.css";
 import { type ReactNode, useState } from "react";
 import {
@@ -135,7 +135,7 @@ export function HarnessPicker({
 				title={
 					multipleModels
 						? `${modelRuns.length} models · ${runCount} runs`
-						: `${selected.name}${model ? ` · ${model.label}` : ""}`
+						: `${selected.name}${model ? ` · ${model.label}` : ""}${speed === "ultrafast" ? " · Ultrafast" : speed ? " · Fast" : ""}`
 				}
 			>
 				{harnessId === "api" ? (
@@ -153,6 +153,12 @@ export function HarnessPicker({
 						? `${modelRuns.length} models · ${runCount} runs`
 						: `${model?.label ?? "Select model"}${multipleModels && runCount > 1 ? ` · ${runCount} runs` : ""}`}
 				</span>
+				{speed && !multipleModels ? (
+					<Zap
+						className="size-3 harness-select-speed"
+						aria-label={speed === "ultrafast" ? "Ultrafast" : "Fast"}
+					/>
+				) : null}
 				<ChevronDown className="size-3" />
 			</PopoverTrigger>
 			<PopoverContent
