@@ -8,6 +8,10 @@ import { CodexReconnectRequired } from "#/domain/api-turn-failure";
 import { childTaskPublicItems } from "#/domain/child-task-activity";
 import { reconstructedContextTransition } from "#/domain/harness-model-profile";
 import {
+	type IncomingAttachment,
+	withAttachmentNote,
+} from "#/domain/message-attachment";
+import {
 	sessionItemsFromUnknown,
 	sessionItemsQueuedWithUser,
 } from "#/domain/session-item";
@@ -34,6 +38,7 @@ import {
 	emptyCodexSession,
 	type PublicCodexSession,
 } from "./codex-workspace-session";
+import { storeMessageAttachments } from "./message-attachments";
 
 /** Database transcript and account catalog only. Reading a chat never starts native Codex or a VM. */
 async function readSubscriptionSession(
@@ -146,6 +151,7 @@ export async function sendSubscriptionTask(
 		fast?: boolean;
 		idempotencyKey?: string;
 		mode?: "plan";
+		attachments?: readonly IncomingAttachment[];
 	},
 	preparedTask = false,
 ) {
@@ -184,11 +190,17 @@ export async function sendSubscriptionTask(
 		input.variant ?? inherited?.reasoning,
 		input.fast ?? inherited?.fast,
 	);
+	const attachments = await storeMessageAttachments(
+		scope.userId,
+		scope.sessionId as string,
+		input.attachments,
+	);
 	const items = sessionItemsQueuedWithUser(
 		view.items,
 		input.text,
 		undefined,
 		input.mode,
+		attachments,
 	);
 	const previous = await previousTurnMessages(
 		scope.userId,
@@ -199,13 +211,19 @@ export async function sendSubscriptionTask(
 	let messages = previous
 		? [
 				...previous,
-				{ role: "user" as const, content: input.runtimeText ?? input.text },
+				{
+					role: "user" as const,
+					content: withAttachmentNote(
+						input.runtimeText ?? input.text,
+						attachments,
+					),
+				},
 			]
 		: apiConversation(items);
 	if (!previous && input.runtimeText)
 		messages[messages.length - 1] = {
 			role: "user",
-			content: input.runtimeText,
+			content: withAttachmentNote(input.runtimeText, attachments),
 		};
 	if (!previous)
 		messages = reconstructedContextTransition(messages, input.modelId);

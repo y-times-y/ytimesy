@@ -2,6 +2,7 @@ import type { AgentTodo } from "./agent-todos";
 import type { ApiTokenUsage } from "./api-token-usage";
 import type { CodexUsage } from "./codex-usage";
 import { SessionItemId } from "./ids";
+import type { MessageAttachment } from "./message-attachment";
 import { visibleRuntimeUserText } from "./runtime-handoff";
 import {
 	fileChangesFromShellCommand,
@@ -22,6 +23,8 @@ export type UserMessageItem = {
 	readonly kind: "userMessage";
 	readonly id: SessionItemId;
 	readonly text: string;
+	/** Files sent with the message; bytes stay in private storage. */
+	readonly attachments?: readonly MessageAttachment[];
 	/** "plan": investigate and propose only; implementation waits for approval. */
 	readonly mode?: "plan";
 	readonly timing?: {
@@ -212,10 +215,12 @@ export function sessionItemsQueuedWithUser(
 	text: string,
 	messageId?: string,
 	mode?: "plan",
+	attachments?: readonly MessageAttachment[],
 ): SessionItem[] {
 	const queued = text.trim();
 	if (!queued) return [...items];
-	if (lastUserMessageText(items) === queued) return [...items];
+	if (!attachments?.length && lastUserMessageText(items) === queued)
+		return [...items];
 	return [
 		...items,
 		{
@@ -224,6 +229,7 @@ export function sessionItemsQueuedWithUser(
 				messageId ?? `queued-user-${items.length}-${queued.length}`,
 			),
 			text: queued,
+			...(attachments?.length ? { attachments } : {}),
 			...(mode ? { mode } : {}),
 			timing: { startedAt: Date.now() },
 		},

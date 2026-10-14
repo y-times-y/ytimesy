@@ -5,6 +5,10 @@ import {
 import { type ApiModelSpeedId, apiModelSpeeds } from "#/domain/api-model-list";
 import { childTaskPublicItems } from "#/domain/child-task-activity";
 import { reconstructedContextTransition } from "#/domain/harness-model-profile";
+import {
+	type IncomingAttachment,
+	withAttachmentNote,
+} from "#/domain/message-attachment";
 import { parseModelRouteId } from "#/domain/model-connection";
 import {
 	sessionItemsFromUnknown,
@@ -28,6 +32,7 @@ import {
 	emptyCodexSession,
 	type PublicCodexSession,
 } from "./codex-workspace-session";
+import { storeMessageAttachments } from "./message-attachments";
 import { availableApiModelRoutes } from "./model-connections";
 
 export async function apiModelCatalog(userId: string) {
@@ -78,6 +83,7 @@ export async function sendApiWorkspaceTask(
 		runtimeText?: string;
 		idempotencyKey?: string;
 		mode?: "plan";
+		attachments?: readonly IncomingAttachment[];
 	},
 	preparedTask = false,
 ) {
@@ -140,11 +146,17 @@ export async function sendApiWorkspaceTask(
 		throw new Error(
 			`${settings.speed === "ultrafast" ? "Ultrafast" : "Fast"} mode is not available for this model on this connection.`,
 		);
+	const attachments = await storeMessageAttachments(
+		scope.userId,
+		session.id,
+		input.attachments,
+	);
 	const items = sessionItemsQueuedWithUser(
 		sessionItemsFromUnknown(session.items),
 		input.text,
 		undefined,
 		input.mode,
+		attachments,
 	);
 	const previous = await previousTurnMessages(
 		scope.userId,
@@ -155,13 +167,19 @@ export async function sendApiWorkspaceTask(
 	let messages = previous
 		? [
 				...previous,
-				{ role: "user" as const, content: input.runtimeText ?? input.text },
+				{
+					role: "user" as const,
+					content: withAttachmentNote(
+						input.runtimeText ?? input.text,
+						attachments,
+					),
+				},
 			]
 		: apiConversation(items);
 	if (input.runtimeText)
 		messages[messages.length - 1] = {
 			role: "user",
-			content: input.runtimeText,
+			content: withAttachmentNote(input.runtimeText, attachments),
 		};
 	if (!previous)
 		messages = reconstructedContextTransition(messages, selected.modelId);

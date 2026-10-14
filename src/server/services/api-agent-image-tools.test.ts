@@ -1,8 +1,9 @@
-import { mkdir, symlink, writeFile } from "node:fs/promises";
+import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { generateText, isStepCount } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { afterEach, expect, it } from "vitest";
+import { AGENT_ATTACHMENT_DIRECTORY } from "#/domain/message-attachment";
 import { localHarnessWorkspace } from "../../../tests/helpers/local-harness-workspace";
 import { apiAgentImageTools } from "./api-agent-image-tools";
 
@@ -132,4 +133,28 @@ it("delivers pixels into the next SDK model request", async () => {
 		'"type":"file"',
 	);
 	expect(JSON.stringify(model.doGenerateCalls[1].prompt)).toContain(png);
+});
+
+it("reads an attached image by its absolute path and nothing else outside the repository", async () => {
+	const { call } = await fixture();
+	const id = crypto.randomUUID();
+	const directory = join(AGENT_ATTACHMENT_DIRECTORY, id);
+	await mkdir(directory, { recursive: true });
+	cleanups.push(() => rm(directory, { recursive: true, force: true }));
+	await writeFile(join(directory, "shot.png"), Buffer.from(png, "base64"));
+	await symlink("shot.png", join(directory, "link.png"));
+	await expect(call(`${directory}/shot.png`)).resolves.toMatchObject({
+		path: `${id}/shot.png`,
+		mediaType: "image/png",
+	});
+	for (const path of [
+		`${directory}/link.png`,
+		`${directory}/../${id}/shot.png`,
+		`${directory}/missing.png`,
+		`${AGENT_ATTACHMENT_DIRECTORY}/not-an-id/shot.png`,
+		`${AGENT_ATTACHMENT_DIRECTORY}/${id}`,
+		`${directory}/nested/shot.png`,
+		"/tmp/other/shot.png",
+	])
+		await expect(call(path)).rejects.toThrow();
 });

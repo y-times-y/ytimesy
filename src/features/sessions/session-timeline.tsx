@@ -1,4 +1,11 @@
-import { Check, ChevronRight, CircleAlert, Clock3 } from "lucide-react";
+import {
+	Check,
+	ChevronRight,
+	CircleAlert,
+	Clock3,
+	ImageIcon,
+	Paperclip,
+} from "lucide-react";
 import type { ReactNode } from "react";
 import { Fragment, type UIEvent, useEffect, useRef } from "react";
 import { MatrixDotLoader } from "#/components/ui/matrix-dot-loader";
@@ -543,6 +550,23 @@ function SessionItemView({
 			return (
 				<div className="session-message" data-role="user">
 					<p>{item.text}</p>
+					{item.attachments?.length ? (
+						<ul
+							className="session-message-attachments"
+							aria-label="Attached files"
+						>
+							{item.attachments.map((attachment) => (
+								<li key={attachment.id} title={attachment.name}>
+									{attachment.mediaType.startsWith("image/") ? (
+										<ImageIcon size={13} aria-hidden="true" />
+									) : (
+										<Paperclip size={13} aria-hidden="true" />
+									)}
+									<span>{attachment.name}</span>
+								</li>
+							))}
+						</ul>
+					) : null}
 				</div>
 			);
 		case "agentMessage":

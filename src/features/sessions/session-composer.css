@@ -545,6 +545,12 @@
 	background: #ffffff12;
 	color: white;
 }
+.session-attachment-error {
+	margin: 0;
+	padding: 0 18px 8px;
+	color: var(--destructive);
+	font-size: 12px;
+}
 .project-picker {
 	display: flex;
 	flex-direction: column;
@@ -867,6 +873,31 @@
 	font-size: 13px;
 	line-height: 18px;
 	white-space: pre-wrap;
+}
+.session-message-attachments {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin: 6px 0 0;
+	padding: 0;
+	list-style: none;
+}
+.session-message-attachments li {
+	display: flex;
+	align-items: center;
+	gap: 5px;
+	max-width: 100%;
+	padding: 3px 8px;
+	border-radius: 6px;
+	background: #1a1a1a;
+	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+	color: #ccc;
+	font-size: 12px;
+}
+.session-message-attachments span {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 .session-message[data-role="assistant"] {
 	max-width: 42em;

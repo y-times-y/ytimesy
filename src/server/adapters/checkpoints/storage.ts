@@ -237,3 +237,50 @@ export async function removeContextArchives(userId: string, sessionId: string) {
 		"Context archive deletion exceeded its bounded batch limit; retry chat deletion.",
 	);
 }
+
+function attachmentObjectPath(userId: string, sessionId: string, id: string) {
+	if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error("Invalid attachment id.");
+	return `attachments/${checkpointObjectPrefix(userId, sessionId)}${id}.enc`;
+}
+
+/** Sealed like checkpoints: the envelope binds the bytes to their owner and chat. */
+export async function uploadMessageAttachment(
+	userId: string,
+	sessionId: string,
+	id: string,
+	base64: string,
+) {
+	const path = attachmentObjectPath(userId, sessionId, id);
+	const ciphertext = await seal(
+		JSON.stringify({ userId, sessionId, id, base64 }),
+	);
+	const result = await request(`object/${BUCKET}/${path}`, {
+		method: "POST",
+		headers: { "Content-Type": "application/octet-stream" },
+		body: ciphertext,
+	});
+	if (!result.ok) throw new Error("Could not save the attached file.");
+}
+
+export async function downloadMessageAttachment(
+	userId: string,
+	sessionId: string,
+	id: string,
+) {
+	const result = await request(
+		`object/${BUCKET}/${attachmentObjectPath(userId, sessionId, id)}`,
+	);
+	if (!result.ok) throw new Error("An attached file is unavailable.");
+	const encrypted = await result.text();
+	if (Buffer.byteLength(encrypted) > MAX_BYTES)
+		throw new Error("Attached file is too large.");
+	const envelope = JSON.parse(await unseal(encrypted));
+	if (
+		envelope.userId !== userId ||
+		envelope.sessionId !== sessionId ||
+		envelope.id !== id ||
+		typeof envelope.base64 !== "string"
+	)
+		throw new Error("Attachment ownership mismatch.");
+	return envelope.base64 as string;
+}

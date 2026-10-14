@@ -28,6 +28,10 @@ import {
 	composerModelIdForCatalog,
 	listedModelDisplayName,
 } from "#/domain/listed-model";
+import {
+	type IncomingAttachment,
+	safeAttachmentName,
+} from "#/domain/message-attachment";
 import { expandModelRuns, type ModelRun } from "#/domain/parallel-models";
 import type { Project } from "#/domain/projects";
 import {
@@ -51,6 +55,7 @@ import {
 	getConversationRecoveryPoints,
 	restoreConversationPoint,
 } from "./agent-session.fn";
+import { attachmentLimitError, encodeAttachments } from "./attachment-encoding";
 import { ContextUsage } from "./context-usage";
 import { ConversationRecovery } from "./conversation-recovery";
 import { HarnessLogin } from "./harness-login";
@@ -68,6 +73,8 @@ import { SlashCommandPalette } from "./slash-command-palette";
 import { TaskInput } from "./task-input";
 
 type InspectorView = "files" | "diff" | "terminal" | "desktop";
+
+const ATTACHMENTS_ONLY_TEXT = "See the attached files.";
 
 export function SessionLauncher({
 	session,
@@ -106,6 +113,7 @@ export function SessionLauncher({
 			readonly leaderCount?: number;
 			readonly attemptModelIds?: readonly string[];
 			readonly userMessageId?: string;
+			readonly attachments?: readonly IncomingAttachment[];
 		},
 	) => void;
 	onConnect: () => void;
@@ -196,6 +204,10 @@ export function SessionLauncher({
 		],
 	);
 	const [attachments, setAttachments] = useState<File[]>([]);
+	const [attachmentError, setAttachmentError] = useState<string | null>(null);
+	// A message with only attachments still needs words for the transcript and model.
+	const sendableDraft = (text: string) =>
+		text || (attachments.length ? ATTACHMENTS_ONLY_TEXT : "");
 	const loadRecovery = useServerFn(getConversationRecoveryPoints);
 	const recoverPoint = useServerFn(restoreConversationPoint);
 	const recoveryPoints = useQuery({
@@ -386,8 +398,10 @@ export function SessionLauncher({
 		);
 	}, [session.items]);
 
-	function sendText(text: string) {
-		if (!composerCanSend(text, false)) return;
+	function sendText(typed: string) {
+		const text = sendableDraft(typed);
+		if (!composerCanSend(text, false) || attachmentError) return;
+		const files = leaderCount === 1 ? attachments : [];
 		captureAnalytics("prompt_submitted", {
 			runtime: harnessId,
 			attempts: leaderCount,
@@ -399,19 +413,46 @@ export function SessionLauncher({
 				kind: "userMessage",
 				id: SessionItemId(userMessageId),
 				text,
+				...(files.length
+					? {
+							attachments: files.map((file) => ({
+								id: crypto.randomUUID(),
+								name: safeAttachmentName(file.name),
+								mediaType: file.type || "application/octet-stream",
+								size: file.size,
+							})),
+						}
+					: {}),
 			},
 		]);
 		const reasoning = resolveReasoningLevel(selectedModel, reasoningId);
-		onSend(text, modelId, {
-			...(leaderCount === 1 && reasoning?.id
-				? { reasoningId: reasoning.id }
-				: {}),
-			...(leaderCount === 1 && speed ? { speed } : {}),
-			...(competitionMode && leaderCount > 1
-				? { leaderCount, attemptModelIds, userMessageId }
-				: {}),
-		});
+		const send = (encoded: readonly IncomingAttachment[]) =>
+			onSend(text, modelId, {
+				...(leaderCount === 1 && reasoning?.id
+					? { reasoningId: reasoning.id }
+					: {}),
+				...(leaderCount === 1 && speed ? { speed } : {}),
+				...(competitionMode && leaderCount > 1
+					? { leaderCount, attemptModelIds, userMessageId }
+					: {}),
+				...(encoded.length ? { attachments: encoded } : {}),
+			});
 		setDraft("");
+		if (!files.length) {
+			send([]);
+			return;
+		}
+		setAttachments([]);
+		encodeAttachments(files).then(send, (cause: unknown) => {
+			setOptimisticItems((current) =>
+				current.filter((item) => item.id !== SessionItemId(userMessageId)),
+			);
+			setDraft(typed);
+			setAttachments(files);
+			setAttachmentError(
+				cause instanceof Error ? cause.message : "Could not attach files.",
+			);
+		});
 	}
 
 	function sendDraft() {
@@ -590,17 +631,24 @@ export function SessionLauncher({
 										<button
 											type="button"
 											aria-label={`Remove ${file.name}`}
-											onClick={() =>
-												setAttachments((files) =>
-													files.filter((_, fileIndex) => fileIndex !== index),
-												)
-											}
+											onClick={() => {
+												const next = attachments.filter(
+													(_, fileIndex) => fileIndex !== index,
+												);
+												setAttachments(next);
+												setAttachmentError(attachmentLimitError(next));
+											}}
 										>
 											<X size={14} />
 										</button>
 									</li>
 								))}
 							</ul>
+						)}
+						{attachmentError && (
+							<p className="session-attachment-error" role="alert">
+								{attachmentError}
+							</p>
 						)}
 						<div className="session-toolbar">
 							<SessionControls
@@ -679,20 +727,20 @@ export function SessionLauncher({
 								onReasoningIdChange={setReasoningId}
 								speed={speed}
 								onSpeedChange={setSpeed}
-								onAttachFiles={(selected) =>
-									setAttachments((files) => {
-										const additions = selected.filter(
-											(file) =>
-												!files.some(
-													(existing) =>
-														existing.name === file.name &&
-														existing.size === file.size &&
-														existing.lastModified === file.lastModified,
-												),
-										);
-										return [...files, ...additions];
-									})
-								}
+								onAttachFiles={(selected) => {
+									const additions = selected.filter(
+										(file) =>
+											!attachments.some(
+												(existing) =>
+													existing.name === file.name &&
+													existing.size === file.size &&
+													existing.lastModified === file.lastModified,
+											),
+									);
+									const next = [...attachments, ...additions];
+									setAttachments(next);
+									setAttachmentError(attachmentLimitError(next));
+								}}
 							/>
 							{turnStatus === "running" && activeCompetition ? (
 								<button
@@ -721,7 +769,13 @@ export function SessionLauncher({
 									type="button"
 									className="session-send"
 									aria-label="Send"
-									disabled={!composerCanSend(draft, Boolean(slashDraft))}
+									disabled={
+										Boolean(attachmentError) ||
+										!composerCanSend(
+											slashDraft ? draft : sendableDraft(draft.trim()),
+											Boolean(slashDraft),
+										)
+									}
 									title={
 										canResumeFollowUp
 											? "Resume and send"

@@ -1,4 +1,5 @@
 import type { ModelMessage } from "ai";
+import { withAttachmentNote } from "./message-attachment";
 import {
 	runtimeHandoffEnvelope,
 	visibleRuntimeUserText,
@@ -9,7 +10,15 @@ import type { SessionItem } from "./session-item";
 export function apiConversation(items: readonly SessionItem[]): ModelMessage[] {
 	return items.flatMap((item): ModelMessage[] => {
 		if (item.kind === "userMessage")
-			return [{ role: "user", content: visibleRuntimeUserText(item.text) }];
+			return [
+				{
+					role: "user",
+					content: withAttachmentNote(
+						visibleRuntimeUserText(item.text),
+						item.attachments,
+					),
+				},
+			];
 		if (item.kind === "agentMessage")
 			return [{ role: "assistant", content: item.text }];
 		if (item.kind === "commandExecution")

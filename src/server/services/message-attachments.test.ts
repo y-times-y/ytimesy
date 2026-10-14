@@ -1,0 +1,128 @@
+import { execFile } from "node:child_process";
+import { readFile, rm, writeFile } from "node:fs/promises";
+import { promisify } from "node:util";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { WorkspaceId } from "#/domain/ids";
+import { attachmentPath } from "#/domain/message-attachment";
+
+const stored = new Map<string, string>();
+vi.mock("../adapters/checkpoints/storage", () => ({
+	uploadMessageAttachment: async (
+		_user: string,
+		_session: string,
+		id: string,
+		base64: string,
+	) => {
+		stored.set(id, base64);
+	},
+	downloadMessageAttachment: async (
+		_user: string,
+		_session: string,
+		id: string,
+	) => {
+		const base64 = stored.get(id);
+		if (!base64) throw new Error("missing");
+		return base64;
+	},
+}));
+
+const {
+	materializeMessageAttachments,
+	sessionAttachments,
+	storeMessageAttachments,
+} = await import("./message-attachments");
+
+const run = promisify(execFile);
+const host = {
+	exec: async (_vm: unknown, command: string) => {
+		try {
+			const { stdout, stderr } = await run("bash", ["-c", command]);
+			return { stdout, stderr, exitCode: 0 };
+		} catch (error) {
+			const failed = error as {
+				stdout?: string;
+				stderr?: string;
+				code?: number;
+			};
+			return {
+				stdout: failed.stdout ?? "",
+				stderr: failed.stderr ?? "",
+				exitCode: failed.code ?? 1,
+			};
+		}
+	},
+	writeTextFile: async (_vm: unknown, path: string, contents: string) =>
+		writeFile(path, contents),
+} as unknown as Parameters<typeof materializeMessageAttachments>[0];
+const written: string[] = [];
+
+afterAll(async () => {
+	for (const path of written) await rm(path, { recursive: true, force: true });
+});
+
+describe("message attachments on the machine", () => {
+	it("stores files under fresh ids, detects images and keeps names distinct", async () => {
+		const png = Buffer.from(
+			"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+			"base64",
+		);
+		const attachments = await storeMessageAttachments("user", "session", [
+			{
+				name: "shot.png",
+				mediaType: "text/plain",
+				base64: png.toString("base64"),
+			},
+			{
+				name: "shot.png",
+				mediaType: "",
+				base64: Buffer.from("hi").toString("base64"),
+			},
+		]);
+		expect(attachments[0]).toMatchObject({
+			name: "shot.png",
+			mediaType: "image/png",
+		});
+		expect(attachments[1]).toMatchObject({
+			name: "2-shot.png",
+			mediaType: "application/octet-stream",
+			size: 2,
+		});
+		expect(new Set(attachments.map((attachment) => attachment.id)).size).toBe(
+			2,
+		);
+	});
+
+	it("writes exact bytes once and restores files a rebuilt machine lost", async () => {
+		const bytes = Buffer.from([0, 1, 2, 250, 255, 10, 13]);
+		const [attachment] = await storeMessageAttachments("user", "session", [
+			{ name: "data.bin", mediaType: "", base64: bytes.toString("base64") },
+		]);
+		const items = [
+			{
+				kind: "userMessage" as const,
+				id: "m" as never,
+				text: "see",
+				attachments: [attachment],
+			},
+		];
+		expect(sessionAttachments(items)).toEqual([attachment]);
+		const vm = WorkspaceId("vm");
+		const path = attachmentPath(attachment);
+		written.push(path.slice(0, path.lastIndexOf("/")));
+		await materializeMessageAttachments(host, vm, "user", "session", [
+			attachment,
+		]);
+		expect(await readFile(path)).toEqual(bytes);
+		stored.delete(attachment.id);
+		// Present files are not downloaded again.
+		await materializeMessageAttachments(host, vm, "user", "session", [
+			attachment,
+		]);
+		await rm(path);
+		stored.set(attachment.id, bytes.toString("base64"));
+		await materializeMessageAttachments(host, vm, "user", "session", [
+			attachment,
+		]);
+		expect(await readFile(path)).toEqual(bytes);
+	});
+});
