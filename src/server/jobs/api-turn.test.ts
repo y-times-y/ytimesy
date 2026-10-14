@@ -28,7 +28,28 @@ const mocks = vi.hoisted(() => ({
 	commandCompletions: vi.fn(),
 	progress: vi.fn(),
 	checkpoint: vi.fn(),
+	promptSubmit: vi.fn(),
 }));
+// Observes the real lifecycle hooks' UserPromptSubmit without a repository config.
+vi.mock("../services/harness-lifecycle-hooks", async (importOriginal) => {
+	const actual =
+		await importOriginal<
+			typeof import("../services/harness-lifecycle-hooks")
+		>();
+	return {
+		...actual,
+		harnessLifecycleHooks: (
+			input: Parameters<typeof actual.harnessLifecycleHooks>[0],
+		) => {
+			const hooks = actual.harnessLifecycleHooks(input);
+			return {
+				...hooks,
+				userPromptSubmit: async (prompt: string) =>
+					(await mocks.promptSubmit(prompt)) ?? hooks.userPromptSubmit(prompt),
+			};
+		},
+	};
+});
 vi.mock("../adapters/mcp-servers", () => ({
 	connectableMcpServers: async () => [],
 }));
@@ -79,6 +100,7 @@ beforeEach(() => {
 		taskAccess: "read_write",
 	});
 	mocks.renew.mockReset().mockResolvedValue(true);
+	mocks.promptSubmit.mockReset().mockResolvedValue(undefined);
 	mocks.finalize.mockImplementation(async (_turn, state) => state);
 	mocks.result.mockResolvedValue("event");
 	mocks.enqueue.mockResolvedValue("job");
@@ -923,3 +945,73 @@ it("settles builder overflow without inference even if the caller omits its limi
 	expect(mocks.stepRuntime).not.toHaveBeenCalled();
 	expect(mocks.commit).not.toHaveBeenCalled();
 });
+
+it("runs the UserPromptSubmit hook on a durable turn's first step only", async () => {
+	mocks.promptSubmit.mockResolvedValue({ block: true, reason: "No." });
+	expect(
+		await runApiTurn({} as WorkspaceMachines, childTurn, {
+			index: 1,
+			signal: new AbortController().signal,
+		}),
+	).toBe("failed");
+	expect(mocks.promptSubmit).toHaveBeenCalledOnce();
+	expect(mocks.stepRuntime).not.toHaveBeenCalled();
+	expect(mocks.finalize).toHaveBeenCalledWith(
+		expect.anything(),
+		"failed",
+		expect.arrayContaining([
+			expect.objectContaining({
+				kind: "error",
+				message: expect.stringContaining("UserPromptSubmit hook: No."),
+			}),
+		]),
+	);
+	mocks.promptSubmit.mockClear();
+	mocks.stepRuntime.mockResolvedValue({ messages: [], outcome: "continue" });
+	expect(
+		await runApiTurn({} as WorkspaceMachines, childTurn, {
+			index: 2,
+			signal: new AbortController().signal,
+		}),
+	).toBe("continue");
+	expect(mocks.promptSubmit).not.toHaveBeenCalled();
+});
+
+it.each([
+	["planning", "enter_plan_mode", "Plan mode is still on"],
+	["proposed", "planProposal", "replied to your proposed plan"],
+])(
+	"tells a %s agent it is still in plan mode on the durable turn's first step",
+	async (_state, marker, notice) => {
+		mocks.stepRuntime.mockImplementation(async (input) => ({
+			messages: input.messages,
+			outcome: "continue",
+		}));
+		const items =
+			marker === "planProposal"
+				? [{ kind: "planProposal", id: SessionItemId("plan"), plan: "Plan" }]
+				: [
+						{
+							kind: "dynamicToolCall",
+							id: SessionItemId("enter"),
+							tool: marker,
+							status: "completed",
+						},
+					];
+		const turn = {
+			...childTurn,
+			items,
+			messages: [{ role: "user", content: "Go" }],
+		} as ApiTurn;
+		for (const index of [1, 2])
+			await runApiTurn({} as WorkspaceMachines, turn, {
+				index,
+				signal: new AbortController().signal,
+			});
+		const [first, second] = mocks.stepRuntime.mock.calls.map(([input]) =>
+			JSON.stringify(input.messages),
+		);
+		expect(first).toContain(notice);
+		expect(second).not.toContain(notice);
+	},
+);
