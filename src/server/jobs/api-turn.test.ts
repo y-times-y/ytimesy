@@ -1125,3 +1125,42 @@ it("keeps an interrupted durable step that was not out of time a plain stop", as
 	request.abort();
 	expect(await outcome).toBe("cancelled");
 });
+
+it("waits for a code restore's brief hold on the chat instead of failing the turn", async () => {
+	vi.useFakeTimers();
+	try {
+		let held = 3;
+		vi.mocked(coordinateConversationTurn).mockImplementation(
+			async (action) => action !== "acquire" || --held < 0,
+		);
+		mocks.runtime.mockImplementation(async (input) =>
+			input.onEvent({ type: "text-delta", id: "answer", text: "Done" }),
+		);
+		const run = runApiTurn({} as WorkspaceMachines, childTurn);
+		await vi.advanceTimersByTimeAsync(3_500);
+		expect(await run).toBe("completed");
+		expect(
+			vi
+				.mocked(coordinateConversationTurn)
+				.mock.calls.filter(([action]) => action === "acquire"),
+		).toHaveLength(4);
+		expect(mocks.runtime).toHaveBeenCalledOnce();
+	} finally {
+		vi.useRealTimers();
+	}
+});
+
+it("gives up acquiring a chat that stays held past one lease period", async () => {
+	vi.useFakeTimers();
+	try {
+		vi.mocked(coordinateConversationTurn).mockImplementation(
+			async (action) => action !== "acquire",
+		);
+		const run = runApiTurn({} as WorkspaceMachines, childTurn);
+		await vi.advanceTimersByTimeAsync(40_000);
+		expect(await run).toBe("failed");
+		expect(mocks.runtime).not.toHaveBeenCalled();
+	} finally {
+		vi.useRealTimers();
+	}
+});

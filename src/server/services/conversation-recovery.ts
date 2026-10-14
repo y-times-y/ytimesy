@@ -12,7 +12,10 @@ import {
 	captureConversationCode,
 	restoreConversationCode,
 } from "./conversation-code-checkpoint";
-import { holdSettledConversationTurn } from "./conversation-turn-settled";
+import {
+	holdSettledConversationTurn,
+	type SettledConversationTurnHold,
+} from "./conversation-turn-settled";
 import { machinesForAgentSession } from "./session-workspace-machines";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -69,7 +72,7 @@ export async function recoverConversation(
 	const client = await database().connect();
 	let workspace: AgentToolWorkspace | undefined;
 	let backup: Awaited<ReturnType<typeof captureConversationCode>> | undefined;
-	let releaseTurn: (() => Promise<void>) | undefined;
+	let hold: SettledConversationTurnHold | undefined;
 	try {
 		await client.query("begin");
 		await client.query("set local idle_in_transaction_session_timeout='120s'");
@@ -91,7 +94,7 @@ export async function recoverConversation(
 			throw new Error("Stop active child tasks before using recovery.");
 		// turn_status turns idle before a stopped turn's runner has fully settled.
 		if (input.mode !== "fork")
-			releaseTurn = await holdSettledConversationTurn(userId, input.sessionId);
+			hold = await holdSettledConversationTurn(userId, input.sessionId);
 		const point = await conversationPoint(
 			userId,
 			input.sessionId,
@@ -169,6 +172,11 @@ export async function recoverConversation(
 				"update agent_session set task_review_state='pending',updated_at=now() where id=$1 and user_id=$2",
 				[id, userId],
 			);
+		// The code is in place: confirm no stopped runner could have reclaimed the
+		// chat meanwhile, then free it before committing. A new turn's runner
+		// waits on the committed session row, so it never sees the hold.
+		hold?.assertHeld();
+		await hold?.release();
 		await client.query("commit");
 		return { id, prompt: input.mode === "code" ? null : point.prompt };
 	} catch (error) {
@@ -177,8 +185,9 @@ export async function recoverConversation(
 		await client.query("rollback");
 		throw error;
 	} finally {
+		const released = hold?.release();
 		client.release();
-		await releaseTurn?.();
+		await released;
 	}
 }
 

@@ -24,6 +24,10 @@ vi.mock("../services/conversation-code-checkpoint", () => ({
 	captureConversationCode: code.capture,
 	restoreConversationCode: code.restore,
 }));
+const coordinate = vi.hoisted(() => vi.fn(async (_action: string) => true));
+vi.mock("./conversation-turn-control", () => ({
+	coordinateConversationTurn: coordinate,
+}));
 vi.mock("./agent-sessions", () => ({
 	agentSessionForOwner: async (_userId: string, id: string) => ({
 		id,
@@ -34,6 +38,7 @@ let db: PGlite;
 const session = randomUUID(),
 	project = randomUUID();
 beforeEach(async () => {
+	coordinate.mockReset().mockResolvedValue(true);
 	db = new PGlite();
 	await db.exec(`create table agent_session(id uuid primary key,user_id text,project_id uuid,workspace_id uuid,harness text,title text,listed_model_id text,status text,turn_status text,task_access text,selected_branch text,working_branch text,task_branch text,parent_session_id uuid,provider_ref text,task_placement text,items jsonb default '[]',task_summary text,task_review_state text,updated_at timestamptz default now());
  create table agent_task_command_receipt(parent_session_id uuid references agent_session(id),request_id text,status text,response jsonb,created_at timestamptz default now(),completed_at timestamptz,updated_at timestamptz default now(),primary key(parent_session_id,request_id));
@@ -214,6 +219,100 @@ it("restores a builder-direct root chat's own checkout to its code point", async
 			)
 		).rows[0].task_review_state,
 	).toBeNull();
+});
+
+it("holds the chat through a long code restore and frees it before committing", async () => {
+	const snapshot = (tree: string) => ({
+		cwd: "/workspace/repo",
+		tree: tree.repeat(40),
+		indexTree: tree.repeat(40),
+		head: "c".repeat(40),
+		ref: `refs/ytimesy/recovery/${tree}`,
+	});
+	await db.query(
+		"update agent_task_command_receipt set response=jsonb_set(response,'{result,code}',$2::jsonb) where parent_session_id=$1",
+		[session, JSON.stringify(snapshot("a"))],
+	);
+	await db.query("update agent_session set provider_ref='vm-1' where id=$1", [
+		session,
+	]);
+	const steps: string[] = [];
+	coordinate.mockImplementation(async (action) => {
+		steps.push(action);
+		return true;
+	});
+	const query = holder.query.getMockImplementation();
+	holder.query.mockImplementation(async (sql: string, values: unknown[]) => {
+		if (sql === "commit") steps.push("commit");
+		return query?.(sql, values);
+	});
+	code.capture.mockResolvedValue(snapshot("b"));
+	vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+	try {
+		code.restore.mockImplementation(async () => {
+			// The restore outlives several coordination lease periods.
+			vi.advanceTimersByTime(45_000);
+		});
+		await recoverConversation(
+			{ ensureRunning: async () => {} } as unknown as WorkspaceMachines,
+			"alice",
+			{
+				projectId: project,
+				sessionId: session,
+				messageId: "first",
+				mode: "code",
+			},
+		);
+	} finally {
+		vi.useRealTimers();
+	}
+	expect(steps).toEqual([
+		"acquire",
+		"renew",
+		"renew",
+		"renew",
+		"renew",
+		"release",
+		"commit",
+	]);
+});
+
+it("rolls back a restore whose hold on the chat lapsed", async () => {
+	vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+	coordinate.mockImplementation(async (action) => action !== "renew");
+	try {
+		const sessionRow = await db.query<{ items: unknown }>(
+			"select items from agent_session where id=$1",
+			[session],
+		);
+		holder.connect.mockResolvedValue({
+			query: async (sql: string, values: unknown[]) => {
+				if (sql.startsWith("select messages,model_id"))
+					vi.advanceTimersByTime(10_000);
+				return holder.query(sql, values);
+			},
+			release() {},
+		});
+		await expect(
+			recoverConversation({} as WorkspaceMachines, "alice", {
+				projectId: project,
+				sessionId: session,
+				messageId: "first",
+				mode: "conversation",
+			}),
+		).rejects.toThrow(/Lost hold of this chat/);
+		expect(
+			(
+				await db.query<{ items: unknown }>(
+					"select items from agent_session where id=$1",
+					[session],
+				)
+			).rows[0].items,
+		).toEqual(sessionRow.rows[0].items);
+		expect(coordinate).toHaveBeenLastCalledWith("release", expect.anything());
+	} finally {
+		vi.useRealTimers();
+	}
 });
 
 it("only rewinds checkouts a session owns", () => {

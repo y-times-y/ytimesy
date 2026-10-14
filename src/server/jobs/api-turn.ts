@@ -19,7 +19,11 @@ import {
 	type ApiTurnSettings,
 	apiTurnSettings,
 } from "#/domain/api-turn-settings";
-import { CoordinationFailure } from "#/domain/conversation-turn-control";
+import {
+	CoordinationFailure,
+	TURN_COORDINATION_LEASE_MS,
+	type TurnControl,
+} from "#/domain/conversation-turn-control";
 import { PREPARED_ENVIRONMENT_INSTRUCTIONS } from "#/domain/environment-context";
 import { SessionItemId, WorkspaceId } from "#/domain/ids";
 import { prepareInterruptedStep } from "#/domain/interrupted-step";
@@ -122,6 +126,33 @@ import { commitCompletedSessionTurn } from "../services/turn-commit";
 import { turnProgressWriter } from "../services/turn-progress-writer";
 import type { WorkspaceMachines } from "../services/workspace-machines";
 import { enqueueAgentTaskEvent } from "./queue";
+
+/**
+ * Acquires the chat's coordination lease, waiting out a brief holder instead
+ * of failing: a code restore holds the lease until just before it commits, and
+ * a hold whose release failed lapses within one lease period. A turn that was
+ * stopped meanwhile ends the wait through its heartbeat's abort.
+ */
+async function acquireConversationTurn(
+	control: TurnControl,
+	signal: AbortSignal,
+) {
+	const deadline = Date.now() + TURN_COORDINATION_LEASE_MS + 5_000;
+	for (;;) {
+		if (await coordinateConversationTurn("acquire", control)) return true;
+		if (signal.aborted || Date.now() >= deadline) return false;
+		await new Promise<void>((resolve) => {
+			const timer = setTimeout(done, 1000);
+			function done() {
+				clearTimeout(timer);
+				signal.removeEventListener("abort", done);
+				resolve();
+			}
+			signal.addEventListener("abort", done, { once: true });
+		});
+		if (signal.aborted) return false;
+	}
+}
 
 type ApiTurnStepOutcome = "continue" | "completed" | "failed" | "cancelled";
 
@@ -264,7 +295,7 @@ export async function runApiTurn(
 		failureStage = "coordination";
 		if (
 			!turn.lease_id ||
-			!(await coordinateConversationTurn("acquire", control))
+			!(await acquireConversationTurn(control, abort.signal))
 		)
 			throw new Error("The conversation is already running or was stopped.");
 		coordinated = true;
