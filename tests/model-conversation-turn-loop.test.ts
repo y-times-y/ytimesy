@@ -209,3 +209,65 @@ it("starts a turn sent while the previous one was still ending once that one end
 	expect(sql.exec("select * from turn_queue").toArray()).toEqual([]);
 	expect(state.alarm.at).toBeNull();
 });
+
+it("keeps a waiting turn's lease fresh until it starts", async () => {
+	const next = {
+		turnId: "00000000-0000-4000-8000-000000000004",
+		leaseId: "00000000-0000-4000-8000-000000000005",
+	};
+	vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+	try {
+		const { object } = conversation();
+		await object.startTurn(scope, turn);
+		await object.startTurn(scope, next);
+		mocks.query.mockResolvedValue({ rowCount: 1, rows: [] });
+		// The stopped turn's step outlasts the 45-second freshness window.
+		mocks.step.mockImplementationOnce(async () => {
+			await vi.advanceTimersByTimeAsync(60_000);
+			return "cancelled";
+		});
+		mocks.step.mockResolvedValueOnce("completed");
+		await object.alarm();
+		const refreshes = mocks.query.mock.calls.filter(([query]) =>
+			String(query).includes("set heartbeat_at=now()"),
+		);
+		// Once when the step began, every 15 seconds during it, and once when dequeued.
+		expect(refreshes.length).toBeGreaterThanOrEqual(5);
+		for (const [, bindings] of refreshes)
+			expect(bindings).toEqual([[next.turnId], [next.leaseId]]);
+	} finally {
+		vi.useRealTimers();
+	}
+});
+
+it("settles Stop on a waiting turn at once instead of leaving it queued", async () => {
+	vi.stubEnv("YTIMESY_REALTIME_SECRET", "r".repeat(32));
+	const { signDeliveryRequest } = await import("../src/domain/delivery-auth");
+	const next = {
+		turnId: "00000000-0000-4000-8000-000000000004",
+		leaseId: "00000000-0000-4000-8000-000000000005",
+	};
+	const { object, sql } = conversation();
+	await object.startTurn(scope, turn);
+	await object.startTurn(scope, next);
+	mocks.query.mockResolvedValue({ rowCount: 1, rows: [] });
+	const url = "https://chat.internal/turn/cancel";
+	const body = JSON.stringify({ ...scope, ...next });
+	const response = await object.fetch(
+		new Request(url, {
+			method: "POST",
+			headers: await signDeliveryRequest("r".repeat(32), "POST", url, body),
+			body,
+		}),
+	);
+	expect(response.status).toBe(204);
+	const settle = mocks.query.mock.calls.find(([query]) =>
+		String(query).includes("set state='cancelled'"),
+	);
+	expect(settle?.[1]).toEqual([next.turnId, next.leaseId]);
+	expect(sql.exec("select * from turn_queue").toArray()).toEqual([]);
+	// The active turn keeps running and still ends on its own.
+	expect(sql.exec("select turn_id as t from turn_loop").toArray()).toEqual([
+		{ t: turn.turnId },
+	]);
+});

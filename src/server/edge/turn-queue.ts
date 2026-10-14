@@ -49,6 +49,28 @@ export class SqliteTurnQueue {
 		);
 		return true;
 	}
+	/** Every waiting turn, oldest first. */
+	waiting(): QueuedTurn[] {
+		return this.sql
+			.exec<QueuedTurn>(
+				`select turn_id as turnId,lease_id as leaseId,user_id as userId,
+				 session_id as sessionId from turn_queue order by seq`,
+			)
+			.toArray();
+	}
+	/** Drops a waiting turn; false when it is not waiting under that lease. */
+	remove(turnId: string, leaseId: string) {
+		const queued = this.sql
+			.exec<{ turnId: string }>(
+				"select turn_id as turnId from turn_queue where turn_id=? and lease_id=?",
+				turnId,
+				leaseId,
+			)
+			.toArray()[0];
+		if (!queued) return false;
+		this.sql.exec("delete from turn_queue where turn_id=?", turnId);
+		return true;
+	}
 	/** Removes and returns the oldest waiting turn. */
 	take(): QueuedTurn | undefined {
 		const next = this.sql

@@ -5,6 +5,7 @@ import { z } from "zod";
 import { backgroundJob } from "../../domain/background-job";
 import { readBoundedRequestBody } from "../../domain/bounded-request-body";
 import { claimConversationStep } from "../../domain/conversation-step-receipts";
+import { turnControlSchema } from "../../domain/conversation-turn-control";
 import { verifyDeliveryRequest } from "../../domain/delivery-auth";
 import { environmentWorkflowRequest } from "../../domain/environment-workflow";
 import { proxyGithubGit } from "../../domain/github-git-proxy";
@@ -18,7 +19,11 @@ import {
 	workflowTurnSchema,
 } from "../../domain/model-workflow";
 import { ConversationRoom, routeRealtimeRequest } from "../../realtime/worker";
-import type { ApiTurn } from "../adapters/api-turns";
+import {
+	type ApiTurn,
+	cancelWaitingApiTurn,
+	refreshWaitingApiTurns,
+} from "../adapters/api-turns";
 import {
 	backgroundJobId,
 	withBackgroundJobDispatcher,
@@ -73,6 +78,8 @@ const environmentSecrets = z.object({
 const STEP_BUDGET_MS = 14 * 60 * 1000;
 /** Consecutive unfinished attempts (restarts or infrastructure errors) of one step before the turn is abandoned. */
 const MAX_STEP_RESUMES = 3;
+/** Well inside the 45 seconds after which a turn's lease counts as stale. */
+const WAITING_TURN_REFRESH_MS = 15_000;
 
 type ActiveTurn = {
 	userId: string;
@@ -239,8 +246,50 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		this.history.clear();
 		this.ctx.storage.sql.exec("delete from turn_loop");
 		const next = this.queue.take();
-		if (next) await this.beginTurn(next);
-		else await this.wake("turn", null);
+		if (next) {
+			await this.refreshWaiting([next]);
+			await this.beginTurn(next);
+		} else await this.wake("turn", null);
+	}
+	/** Keeps turns waiting behind the active one claimable; see refreshWaitingApiTurns. */
+	private async refreshWaiting(turns = this.queue.waiting()) {
+		if (!turns.length) return;
+		await withDatabaseScope(
+			this.env.HYPERDRIVE.connectionString,
+			() => refreshWaitingApiTurns(turns),
+			null,
+		).catch(() => console.warn("Waiting turn refresh failed."));
+	}
+	/** Refreshes waiting turns now and while the active turn's step runs. */
+	private keepWaitingTurnsFresh() {
+		void this.refreshWaiting();
+		const timer = setInterval(
+			() => void this.refreshWaiting(),
+			WAITING_TURN_REFRESH_MS,
+		);
+		return () => clearInterval(timer);
+	}
+	/**
+	 * Stop on a turn still waiting here settles it now; the room never knew it,
+	 * and leaving it queued kept the chat running until the old turn's loop ended.
+	 */
+	private async cancelWaiting(control: { turnId: string; leaseId: string }) {
+		if (
+			!this.queue
+				.waiting()
+				.some(
+					(turn) =>
+						turn.turnId === control.turnId && turn.leaseId === control.leaseId,
+				)
+		)
+			return false;
+		await withDatabaseScope(
+			this.env.HYPERDRIVE.connectionString,
+			() => cancelWaitingApiTurn(control.turnId, control.leaseId),
+			null,
+		);
+		this.queue.remove(control.turnId, control.leaseId);
+		return true;
 	}
 	private async advanceTurn() {
 		const active = this.activeTurn();
@@ -263,6 +312,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		if (executorSecrets.parse(this.env).MODEL_EXECUTION_ENABLED !== "1")
 			return this.endTurn();
 		let outcome: Awaited<ReturnType<typeof executeModelStep>>;
+		const stopRefreshing = this.keepWaitingTurnsFresh();
 		try {
 			outcome = await withDatabaseScope(
 				this.env.HYPERDRIVE.connectionString,
@@ -309,6 +359,8 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			// Unknown outcome: a started step keeps its receipt and is resumed next time.
 			console.warn("Chat step failed; retrying.", { index: step.index });
 			return this.wake("turn", Date.now() + 5_000 * (active.resumes + 1));
+		} finally {
+			stopRefreshing();
 		}
 		if (outcome === "continue") {
 			this.ctx.storage.sql.exec(
@@ -415,10 +467,18 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 			return routeRealtimeRequest(
 				request,
 				secret,
-				async (scope, authenticated) =>
-					this.bindIdentity(scope)
-						? this.room.fetch(authenticated)
-						: new Response(null, { status: 403 }),
+				async (scope, authenticated) => {
+					if (!this.bindIdentity(scope))
+						return new Response(null, { status: 403 });
+					if (path === "/turn/cancel") {
+						const control = turnControlSchema.safeParse(
+							await authenticated.clone().json(),
+						);
+						if (control.success && (await this.cancelWaiting(control.data)))
+							return new Response(null, { status: 204 });
+					}
+					return this.room.fetch(authenticated);
+				},
 			);
 		}
 		const secrets = executorSecrets.parse(this.env);
