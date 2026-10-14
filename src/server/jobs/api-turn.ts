@@ -138,8 +138,14 @@ export async function runApiTurn(
 	},
 ): Promise<ApiTurnStepOutcome> {
 	const abort = new AbortController();
+	// The executor's step budget and turn deadline abort with a TimeoutError.
 	const stopForDeadline = () =>
-		abort.abort(new Error("Durable turn deadline reached."));
+		abort.abort(
+			(step?.signal.reason as { name?: unknown } | undefined)?.name ===
+				"TimeoutError"
+				? new TurnTimeLimitReached()
+				: new Error("Durable step was interrupted."),
+		);
 	step?.signal.addEventListener("abort", stopForDeadline, { once: true });
 	if (step?.signal.aborted) stopForDeadline();
 	let items = turn.items;
@@ -951,10 +957,12 @@ export async function runApiTurn(
 			? "Turn progress could not be saved. Inspect the task before retrying."
 			: coordinationFailure
 				? apiTurnFailureMessage("coordination", coordinationFailure)
-				: abort.signal.aborted
-					? `Run stopped. ${abort.signal.reason instanceof Error && ["Turn ownership or cancellation state changed.", "Conversation coordination lease was lost.", "Turn heartbeat or coordination service became unavailable."].includes(abort.signal.reason.message) ? `${abort.signal.reason.message} ` : ""}Inspect any in-flight command before continuing.`
-					: apiTurnFailureMessage(failureStage, error) +
-						developmentFailureDetail(error);
+				: abort.signal.reason instanceof TurnTimeLimitReached
+					? TURN_TIME_LIMIT_MESSAGE
+					: abort.signal.aborted
+						? `Run stopped. ${abort.signal.reason instanceof Error && ["Turn ownership or cancellation state changed.", "Conversation coordination lease was lost.", "Turn heartbeat or coordination service became unavailable."].includes(abort.signal.reason.message) ? `${abort.signal.reason.message} ` : ""}Inspect any in-flight command before continuing.`
+						: apiTurnFailureMessage(failureStage, error) +
+							developmentFailureDetail(error);
 		// The heartbeat or the room usually notices the user's Stop before progress does.
 		const userCancelled =
 			abort.signal.reason instanceof ApiTurnCancelled ||
@@ -975,10 +983,15 @@ export async function runApiTurn(
 			outputTokens: null,
 			reason: "error",
 		});
+		// A turn out of time failed, not stopped: the user and a parent agent both hear why.
+		const timedOut = abort.signal.reason instanceof TurnTimeLimitReached;
 		const saved = await finalizeApiTurn(
 			turn,
 			userCancelled ||
-				(abort.signal.aborted && !heartbeatFailed && !progressFailed)
+				(abort.signal.aborted &&
+					!timedOut &&
+					!heartbeatFailed &&
+					!progressFailed)
 				? "cancelled"
 				: "failed",
 			items,
@@ -1009,6 +1022,16 @@ export async function runApiTurn(
 		step?.signal.removeEventListener("abort", stopForDeadline);
 		if (coordinated)
 			await coordinateConversationTurn("release", control).catch(() => {});
+	}
+}
+
+const TURN_TIME_LIMIT_MESSAGE =
+	"This turn reached its time limit and was stopped. Work so far is preserved; inspect any in-flight command, then send a message to continue.";
+
+class TurnTimeLimitReached extends Error {
+	constructor() {
+		super("Turn time limit reached.");
+		this.name = "TurnTimeLimitReached";
 	}
 }
 

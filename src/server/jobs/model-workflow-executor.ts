@@ -117,7 +117,8 @@ export async function executeModelStep(
 		return "cancelled";
 	}
 	const expired = new AbortController();
-	if (claim.remainingMs === 0) expired.abort();
+	if (claim.remainingMs === 0)
+		expired.abort(new DOMException("Turn deadline reached.", "TimeoutError"));
 	const outcome = await runApiTurn(
 		typeof machines === "function" ? machines() : machines,
 		claim.turn,
