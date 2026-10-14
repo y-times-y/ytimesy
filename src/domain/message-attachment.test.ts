@@ -6,6 +6,7 @@ import {
 	declaredMediaType,
 	incomingAttachments,
 	MESSAGE_ATTACHMENT_LIMITS,
+	messageAttachment,
 	safeAttachmentName,
 	withAttachmentNote,
 } from "./message-attachment";
@@ -89,6 +90,15 @@ describe("message attachments", () => {
 				.success,
 		).toBe(false);
 		expect(base64ByteLength(Buffer.from("abcd").toString("base64"))).toBe(4);
+		// An empty file encodes to "" and is still a file.
+		expect(incomingAttachments.safeParse([file(0)]).success).toBe(true);
+		expect(base64ByteLength("")).toBe(0);
+		expect(messageAttachment.safeParse({ ...image, size: 0 }).success).toBe(
+			true,
+		);
+		expect(withAttachmentNote("See", [{ ...image, size: 0 }])).toContain(
+			"empty",
+		);
 	});
 
 	it("accepts only well-formed declared types", () => {
