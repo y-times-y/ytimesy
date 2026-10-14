@@ -193,6 +193,7 @@ it("sends through the Workers binding without an API token", async () => {
 			from: { email: "noreply@ytimesy.com", name: "ytimesy" },
 			to: "alice@example.test",
 			subject: "Verify your email",
+			replyTo: "support@ytimesy.com",
 		});
 		const row = await db.query<{ sent_at: Date | null }>(
 			"select sent_at from auth_email_outbox",
