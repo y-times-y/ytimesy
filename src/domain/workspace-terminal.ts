@@ -83,6 +83,16 @@ export function terminalInspectorPrompt(input: {
 	};
 }
 
+/** What the terminal panel shows once its socket closes without an error message. */
+export function terminalClosedMessage(input: {
+	readonly reason?: string;
+	readonly wasClean: boolean;
+}) {
+	const reason = input.reason?.trim();
+	if (reason) return reason;
+	return input.wasClean ? "Terminal closed." : "Terminal disconnected.";
+}
+
 const WORKSPACE_GUEST_HOSTNAME = "ytimesy";
 
 function workspaceGuestPrompt() {
