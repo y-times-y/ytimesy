@@ -3,6 +3,13 @@ import { z } from "zod";
 import { readBoundedRequestBody } from "./bounded-request-body";
 import { parsePrRepairSignal, type prRepairDelivery } from "./pr-repair-signal";
 
+/** The development edge executor Worker (wrangler.edge-executor.jsonc) on the team's workers.dev subdomain. */
+const EDGE_EXECUTOR_HOST =
+	"ytimesy-edge-executor-development.example-account.workers.dev";
+/** Retired Freestyle model-executor VMs, kept so an older ingress deploy stays valid. */
+const FREESTYLE_EXECUTOR_HOST =
+	/^ytimesy-model-executor-(?:vm)?[a-f0-9]{32}\.style\.dev$/;
+
 export function prRepairExecutorUrl(origin: string) {
 	const target = new URL(origin);
 	if (
@@ -13,9 +20,8 @@ export function prRepairExecutorUrl(origin: string) {
 		target.pathname !== "/" ||
 		target.search ||
 		target.hash ||
-		!/^ytimesy-model-executor-(?:vm)?[a-f0-9]{32}\.style\.dev$/.test(
-			target.hostname,
-		)
+		(target.hostname !== EDGE_EXECUTOR_HOST &&
+			!FREESTYLE_EXECUTOR_HOST.test(target.hostname))
 	)
 		throw new Error("Not an approved development executor.");
 	return new URL("/pr-repair-event", target).href;

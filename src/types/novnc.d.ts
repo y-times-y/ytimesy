@@ -1,5 +1,5 @@
 declare module "@novnc/novnc" {
-	export default class RFB {
+	export default class RFB extends EventTarget {
 		constructor(
 			target: HTMLElement,
 			url: string,

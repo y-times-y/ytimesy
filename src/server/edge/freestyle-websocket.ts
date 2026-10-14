@@ -3,6 +3,7 @@ import type {
 	Response as WorkerResponse,
 	WebSocket as WorkerWebSocket,
 } from "@cloudflare/workers-types";
+import { webSocketCloseReason } from "../sockets/close-reason";
 
 /** Freestyle's Node-shaped PTY client needs authenticated upgrades, not browser WebSocket(). */
 export default class FreestyleWorkerWebSocket extends EventEmitter {
@@ -133,6 +134,6 @@ export default class FreestyleWorkerWebSocket extends EventEmitter {
 			return;
 		}
 		this.readyState = 2;
-		this.socket.close(code, reason);
+		this.socket.close(code, webSocketCloseReason(reason));
 	}
 }
