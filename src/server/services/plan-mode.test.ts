@@ -54,3 +54,33 @@ it("adds the plan notice once after the conversation", () => {
 	expect(once.at(-1)).toEqual({ role: "user", content: PLAN_MODE_NOTICE });
 	expect(withPlanModeNotice(once)).toHaveLength(2);
 });
+
+it("refuses the builder's own file edits and publishing, but still runs commands", async () => {
+	const ran = vi.fn(async () => ({ ok: true }));
+	const make = () =>
+		tool({ inputSchema: z.object({}).passthrough(), execute: ran });
+	const tools = withPlanMode({
+		apply_patch: make(),
+		apply_patches: make(),
+		replace_text: make(),
+		rename_symbol: make(),
+		publish_task: make(),
+		execute_command: make(),
+		view_image: make(),
+	});
+	for (const name of [
+		"apply_patch",
+		"apply_patches",
+		"replace_text",
+		"rename_symbol",
+		"publish_task",
+	])
+		expect(await tools[name].execute?.({}, options)).toMatchObject({
+			blocked: true,
+		});
+	expect(ran).not.toHaveBeenCalled();
+	await tools.execute_command.execute?.({}, options);
+	await tools.view_image.execute?.({}, options);
+	expect(ran).toHaveBeenCalledTimes(2);
+	expect(PLAN_MODE_NOTICE).toContain("Do not edit files");
+});
