@@ -166,6 +166,7 @@ export async function sendSubscriptionTask(
 			userId: scope.userId,
 			projectId: scope.projectId,
 			harness: "codex",
+			firstMessage: input.text,
 		});
 		scope = { ...scope, sessionId: opened.id };
 	}

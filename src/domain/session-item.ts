@@ -356,7 +356,11 @@ export function sessionUsesFollowUpLayout(input: {
 }
 
 export function sessionTitleFromItems(items: readonly SessionItem[]): string {
-	const text = lastUserMessageText(items);
+	return sessionTitleFromText(lastUserMessageText(items) ?? "");
+}
+
+/** A chat's title from its first message: the first line, shortened. */
+export function sessionTitleFromText(text: string): string {
 	if (!text) return "New session";
 	const line = text.trim().split("\n")[0]?.trim() ?? "";
 	if (!line) return "New session";

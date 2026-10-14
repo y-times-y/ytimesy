@@ -23,6 +23,7 @@ import { listedModelPreferenceFromSessions } from "#/domain/listed-model";
 import type { MachineSizeId } from "#/domain/machine-size";
 import { projectCheckoutFromFullName } from "#/domain/project-checkout";
 import { workspaceEnvironmentIsReady } from "#/domain/project-workspace";
+import { sessionTitleFromText } from "#/domain/session-item";
 import {
 	type AgentSessionRecord,
 	agentSessionForOwner,
@@ -154,17 +155,25 @@ export async function openAgentSession(input: {
 	readonly harness: AgentProviderId;
 	readonly parentSessionId?: string;
 	readonly title?: string;
+	/** Opened to send this message: the chat is claimed for it in the same step. */
+	readonly firstMessage?: string;
 }) {
+	const claimTitle =
+		input.firstMessage === undefined
+			? undefined
+			: sessionTitleFromText(input.firstMessage);
 	if (!input.parentSessionId && !input.title) {
 		const empty = await reusableEmptyChat(
 			input.userId,
 			input.projectId,
 			input.harness,
+			claimTitle,
 		);
 		if (empty) return empty;
 	}
 	const { session } = await resolveAgentSessionRecord({
 		...input,
+		title: input.title ?? claimTitle,
 		createNew: true,
 	});
 	return session;
