@@ -29,11 +29,14 @@ it("keeps only the validated shell surface, which selects the shell prompt profi
 		"continue_command",
 		"stop_command",
 		"apply_patch",
-		"read_repository_guidance",
 		"report_task_blocked",
 	]);
 	expect(harnessModelToolInstructions("openai", true, kept)).toContain(
 		"v13-shell",
+	);
+	// Repository instructions are supplied as messages; the tool is never named.
+	expect(harnessModelToolInstructions("openai", true, kept)).not.toContain(
+		"read_repository_guidance",
 	);
 });
 

@@ -497,15 +497,6 @@ async function runApiTurnAttempt(
 			writable: Boolean(fusion) || direct,
 			waitDeadlineAt: step?.waitDeadlineAt,
 		});
-		const repositoryContext = automaticRepositoryContext({
-			tools: originalTools,
-			workspace,
-			signal: abort.signal,
-			onEvent: async (event) => {
-				items = applyApiProgress(items, turn.id, event);
-				progress.offer(items);
-			},
-		});
 		const hooks = harnessLifecycleHooks({
 			workspace,
 			turnId: turn.id,
@@ -542,6 +533,19 @@ async function runApiTurnAttempt(
 			Boolean(fusion) ||
 			direct ||
 			(Boolean(owner.parentSessionId) && owner.taskAccess === "read_write");
+		const repositoryContext = automaticRepositoryContext({
+			tools: originalTools,
+			workspace,
+			signal: abort.signal,
+			// Builders get repository instructions as messages, like AGENTS.md in Codex.
+			instructionMessages: shellBuilder
+				? { turnStart: step ? step.index === 1 : !continued }
+				: undefined,
+			onEvent: async (event) => {
+				items = applyApiProgress(items, turn.id, event);
+				progress.offer(items);
+			},
+		});
 		const surfaceTools = shellBuilder
 			? builderShellTools(repositoryContext.tools)
 			: repositoryContext.tools;
@@ -712,7 +716,7 @@ async function runApiTurnAttempt(
 			messages,
 			archiveHistory: (history) =>
 				archiveModelContext(owner.userId, owner.id, history),
-			instructions: `You are the ytimesy coding agent. Repository tools operate in this task's prepared checkout; paths are relative to that repository. Call read_repository_guidance before implementation and for nested paths; read applicable instructions and skill bodies completely.${shellBuilder ? "" : " Search optional tools with search_tools."} ${PREPARED_ENVIRONMENT_INSTRUCTIONS} Use read_environment_report for that setup report; do not pass its /tmp path to repository file readers. ${fusion ? "" : cloudAgentRoleInstructions(owner, { shellBuilder, direct })}${shellBuilder && "browser_screenshot" in tools ? ` ${visualQaInstructions()}` : ""}\n${pluginSkillsInstructions(plugins)}\n${PROJECT_KNOWLEDGE_INSTRUCTIONS}\nShared project knowledge (historical data, verify against this checkout):\n${JSON.stringify(projectKnowledge)}`,
+			instructions: `You are the ytimesy coding agent. Repository tools operate in this task's prepared checkout; paths are relative to that repository.${shellBuilder ? " Repository instructions (AGENTS.md/CLAUDE.md), nested instruction file locations and skills are provided in the conversation. Before working in a folder listed with its own AGENTS.md or CLAUDE.md, read that file with cat; read a matching skill's SKILL.md completely." : " Call read_repository_guidance before implementation and for nested paths; read applicable instructions and skill bodies completely. Search optional tools with search_tools."} ${PREPARED_ENVIRONMENT_INSTRUCTIONS} Use read_environment_report for that setup report; do not pass its /tmp path to repository file readers. ${fusion ? "" : cloudAgentRoleInstructions(owner, { shellBuilder, direct })}${shellBuilder && "browser_screenshot" in tools ? ` ${visualQaInstructions()}` : ""}\n${pluginSkillsInstructions(plugins)}\n${PROJECT_KNOWLEDGE_INSTRUCTIONS}\nShared project knowledge (historical data, verify against this checkout):\n${JSON.stringify(projectKnowledge)}`,
 			tools,
 			signal: abort.signal,
 			restoreInstructions: async (history) => {
