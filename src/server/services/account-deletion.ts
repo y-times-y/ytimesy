@@ -9,43 +9,78 @@ import {
 } from "../adapters/checkpoints/storage";
 import type { WorkspaceMachines } from "./workspace-machines";
 
+/** Calls in flight at once: keeps a heavy account's deletion fast without a burst. */
+const CLEANUP_CONCURRENCY = 6;
+
 /**
- * Deletes an account and what it owns: its VMs and private snapshots, its
- * chats' stored checkpoints and attachments, then every database row (they
- * cascade from auth_user, sessions included, which signs it out everywhere).
+ * Runs `work` over `items` with at most `limit` calls in flight. The first
+ * failure stops new calls from starting and is rethrown once in-flight ones end.
+ */
+async function eachLimited<T>(
+	items: readonly T[],
+	limit: number,
+	work: (item: T) => Promise<void>,
+) {
+	let next = 0;
+	let failure: { error: unknown } | null = null;
+	const worker = async () => {
+		while (!failure && next < items.length) {
+			const item = items[next++];
+			await work(item).catch((error) => {
+				failure ??= { error };
+			});
+		}
+	};
+	await Promise.all(
+		Array.from({ length: Math.min(limit, items.length) }, worker),
+	);
+	if (failure) throw (failure as { error: unknown }).error;
+}
+
+/**
+ * Deletes an account and what it owns: its chats' stored checkpoints and
+ * attachments, then every database row (they cascade from auth_user, sessions
+ * included, which signs it out everywhere), then its VMs and private snapshots.
  *
- * VM and snapshot failures do not stop deletion: VMs are reclaimed by their
- * idle timeout. A storage failure does stop it, before any row is deleted, so
- * retrying can still find and delete the files.
+ * The steps that can fail and be retried come first: a storage or database
+ * failure leaves the account intact with its VMs and snapshots, so retrying
+ * finds them again. Provider resources are destroyed only once the rows are
+ * gone, so a live account never points at a destroyed snapshot; a failure
+ * there is logged and left to expire (VMs by their idle timeout).
  */
 export async function deleteAccount(
 	machines: Pick<WorkspaceMachines, "destroy" | "destroySnapshot">,
 	userId: string,
 ) {
 	const targets = await accountCleanupTargets(userId);
+	if (checkpointStorageConfigured())
+		await eachLimited(targets.sessionIds, CLEANUP_CONCURRENCY, (sessionId) =>
+			removeChatObjects(userId, sessionId),
+		).catch(() => {
+			throw new Response(
+				"Your account was not deleted because its saved chat files could not be removed. Try again.",
+				{ status: 503 },
+			);
+		});
+	await deleteAccountRecords(userId);
 	const sharedToolsSnapshot = process.env.YTIMESY_TOOLS_SNAPSHOT_ID?.trim();
-	let leftovers = 0;
-	for (const vmId of targets.vmIds)
-		await machines.destroy(WorkspaceId(vmId)).catch(() => {
-			leftovers++;
-		});
-	for (const snapshotId of targets.snapshotIds) {
-		if (snapshotId === sharedToolsSnapshot) continue;
-		await machines.destroySnapshot(AuthSnapshotId(snapshotId)).catch(() => {
-			leftovers++;
-		});
-	}
-	if (leftovers)
+	const leftovers: string[] = [];
+	await eachLimited(targets.vmIds, CLEANUP_CONCURRENCY, (vmId) =>
+		machines.destroy(WorkspaceId(vmId)).catch(() => {
+			leftovers.push(`vm:${vmId}`);
+		}),
+	);
+	await eachLimited(
+		targets.snapshotIds.filter((id) => id !== sharedToolsSnapshot),
+		CLEANUP_CONCURRENCY,
+		(snapshotId) =>
+			machines.destroySnapshot(AuthSnapshotId(snapshotId)).catch(() => {
+				leftovers.push(`snapshot:${snapshotId}`);
+			}),
+	);
+	if (leftovers.length)
 		console.warn("Account deletion left provider resources to expire.", {
+			userId,
 			leftovers,
 		});
-	if (checkpointStorageConfigured())
-		for (const sessionId of targets.sessionIds)
-			await removeChatObjects(userId, sessionId).catch(() => {
-				throw new Response(
-					"Your account was not deleted because its saved chat files could not be removed. Try again.",
-					{ status: 503 },
-				);
-			});
-	await deleteAccountRecords(userId);
 }
