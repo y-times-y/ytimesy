@@ -98,6 +98,7 @@ export async function sendApiWorkspaceTask(
 			userId: scope.userId,
 			projectId: scope.projectId,
 			harness: "api",
+			firstMessage: input.text,
 		});
 		scope = { ...scope, sessionId: opened.id };
 	}

@@ -37,6 +37,7 @@ import {
 import {
 	type AgentSessionRecord,
 	agentSessionForOwner,
+	claimChatForSend,
 	descendantAgentSessions,
 	saveAgentTaskPublication,
 	saveAgentTaskReview,
@@ -242,6 +243,10 @@ export function sendHarnessWorkspaceTask(
 			const switching = previous && previous.harness !== scope.harnessId;
 			if (switching && previous.turnStatus === "running")
 				throw new Error("Stop the active turn before switching runtimes.");
+			// Claimed before the commit and file uploads, so New chat can't reuse it.
+			yield* Effect.tryPromise(() =>
+				claimChatForSend(scope.userId, scope.sessionId as string, input.text),
+			);
 			if (scope.projectId)
 				yield* Effect.tryPromise(() =>
 					commitChatBranchForSubmission({
@@ -285,6 +290,8 @@ export function sendHarnessWorkspaceTask(
 	}
 	if (scope.harnessId === "api")
 		return Effect.promise(async () => {
+			if (scope.sessionId)
+				await claimChatForSend(scope.userId, scope.sessionId, input.text);
 			if (scope.sessionId && scope.projectId)
 				await commitChatBranchForSubmission({
 					userId: scope.userId,
