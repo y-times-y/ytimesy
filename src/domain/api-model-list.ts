@@ -139,16 +139,6 @@ export const API_MODEL_LIST: readonly ListedApiModel[] = [
 		label: "Muse Spark 1.3",
 		openRouterId: "meta/muse-spark-1.3",
 	},
-	{
-		author: "deepseek",
-		label: "DeepSeek V4 Pro",
-		openRouterId: "deepseek/deepseek-v4-pro-0813",
-	},
-	{
-		author: "deepseek",
-		label: "DeepSeek V4.1 Flash",
-		openRouterId: "deepseek/deepseek-v4.1-flash",
-	},
 	{ author: "z-ai", label: "GLM 5.3", openRouterId: "z-ai/glm-5.3" },
 	{
 		author: "moonshotai",
@@ -180,7 +170,6 @@ const OFFICIAL_OPENROUTER_PROVIDERS: Readonly<
 	google: ["google-ai-studio", "google-vertex"],
 	"x-ai": ["xai"],
 	meta: ["meta"],
-	deepseek: ["deepseek"],
 	"z-ai": ["z-ai"],
 	moonshotai: ["moonshotai"],
 	qwen: ["alibaba"],
