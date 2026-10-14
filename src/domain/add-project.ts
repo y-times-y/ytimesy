@@ -1,4 +1,8 @@
-import type { Project, RepositoryChoice } from "./projects";
+import {
+	type Project,
+	type RepositoryChoice,
+	repositoriesForProject,
+} from "./projects";
 
 type AddProjectPhase = "loading" | "connect" | "choose";
 
@@ -69,6 +73,21 @@ export function scratchRepositoryName(value: string) {
 	return /^[A-Za-z0-9_.-]{1,100}$/.test(name) ? name : null;
 }
 
+/** The project that already holds exactly this one repository, named or not.
+ * Adding the same repository again reuses it instead of creating a duplicate. */
+export function singleRepositoryProject(
+	projects: readonly Project[],
+	repositoryId: number,
+): Project | undefined {
+	return projects.find((project) => {
+		const repositories = repositoriesForProject(project);
+		return (
+			repositories.length === 1 &&
+			repositories[0]?.repositoryId === repositoryId
+		);
+	});
+}
+
 type ProjectPickerRow = {
 	readonly key: string;
 	readonly fullName: string;
@@ -83,31 +102,27 @@ export function projectPickerRows(input: {
 	readonly query: string;
 	readonly selectedProjectId?: string;
 }): ProjectPickerRow[] {
-	const seen = new Set<string>();
+	const claimed = new Set<string>();
 	const rows: ProjectPickerRow[] = [];
 	for (const repository of filterRepositories(
 		input.repositories,
 		input.query,
 	)) {
-		const project = input.projects.find(
-			(candidate) =>
-				!candidate.name &&
-				candidate.installationId === repository.installationId &&
-				candidate.repositoryId === repository.repositoryId,
+		const project = singleRepositoryProject(
+			input.projects,
+			repository.repositoryId,
 		);
-		const key = repositoryChoiceValue(repository);
-		seen.add(key);
+		if (project) claimed.add(project.id);
 		rows.push({
-			key,
-			fullName: repository.fullName,
-			selected: project?.id === input.selectedProjectId,
+			key: repositoryChoiceValue(repository),
+			fullName: project?.name || repository.fullName,
+			selected: Boolean(project) && project?.id === input.selectedProjectId,
 			project,
 			repository,
 		});
 	}
 	for (const project of filterProjects(input.projects, input.query)) {
-		const key = `${project.installationId}:${project.repositoryId}`;
-		if (!project.name && seen.has(key)) continue;
+		if (claimed.has(project.id)) continue;
 		rows.push({
 			key: project.id,
 			fullName: project.name || project.fullName,

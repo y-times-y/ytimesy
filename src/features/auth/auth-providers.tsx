@@ -4,11 +4,15 @@ import type { ReactNode } from "react";
 import { AuthProvider } from "#/components/auth/auth-provider";
 import { Toaster } from "#/components/ui/sonner";
 import { TooltipProvider } from "#/components/ui/tooltip";
-import { offeredSocialProviders } from "#/domain/identity-providers";
 import { authClient } from "./client";
+import {
+	fallbackIdentityOptions,
+	useIdentityOptions,
+} from "./identity-options";
 
 export function AuthProviders({ children }: { children: ReactNode }) {
 	const navigate = useNavigate();
+	const identity = useIdentityOptions().data ?? fallbackIdentityOptions;
 	return (
 		<ThemeProvider
 			attribute="class"
@@ -21,11 +25,11 @@ export function AuthProviders({ children }: { children: ReactNode }) {
 				<AuthProvider
 					authClient={authClient}
 					redirectTo="/"
-					socialProviders={[...offeredSocialProviders]}
+					socialProviders={[...identity.socialProviders]}
 					emailAndPassword={{
 						enabled: true,
 						requireEmailVerification: true,
-						forgotPassword: true,
+						forgotPassword: identity.emailDelivery,
 					}}
 					localization={{
 						auth: {

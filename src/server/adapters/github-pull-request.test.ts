@@ -1,15 +1,27 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import { ensureDraftPullRequest, listSessionPullRequests } from "./github";
+import {
+	ensureDraftPullRequest,
+	listSessionPullRequests,
+	mergePullRequest,
+} from "./github";
 
 const api = vi.hoisted(() => ({
 	list: vi.fn(),
 	create: vi.fn(),
 	get: vi.fn(),
 	paginate: vi.fn(),
+	merge: vi.fn(),
+	repository: vi.fn(),
 }));
 vi.mock("@octokit/rest", () => ({
 	Octokit: class {
-		pulls = { list: api.list, create: api.create, get: api.get };
+		pulls = {
+			list: api.list,
+			create: api.create,
+			get: api.get,
+			merge: api.merge,
+		};
+		repos = { get: api.repository };
 		paginate = api.paginate;
 	},
 }));
@@ -75,4 +87,57 @@ it("lists both current and legacy task prefixes", async () => {
 	}));
 	expect(await listSessionPullRequests("token", "owner/repo")).toHaveLength(2);
 	expect(api.get).toHaveBeenCalledTimes(2);
+});
+it("merges with a method the repository allows, preferring squash", async () => {
+	api.repository.mockResolvedValue({
+		data: { allow_squash_merge: false, allow_merge_commit: true },
+	});
+	await mergePullRequest("token", "owner/repo", 1, "abc");
+	expect(api.merge).toHaveBeenCalledWith(
+		expect.objectContaining({ merge_method: "merge", sha: "abc" }),
+	);
+	api.repository.mockResolvedValue({ data: {} });
+	await mergePullRequest("token", "owner/repo", 1, "abc");
+	expect(api.merge).toHaveBeenLastCalledWith(
+		expect.objectContaining({ merge_method: "squash" }),
+	);
+});
+it("explains GitHub's merge refusals instead of failing generically", async () => {
+	api.repository.mockResolvedValue({ data: {} });
+	api.merge.mockRejectedValueOnce({
+		status: 409,
+		message: "Head branch was modified.",
+	});
+	const moved = await mergePullRequest("token", "owner/repo", 1, "abc").catch(
+		(error: Response) => error,
+	);
+	expect(moved).toBeInstanceOf(Response);
+	expect(await (moved as Response).text()).toMatch(
+		/changed since you reviewed/,
+	);
+	api.merge.mockRejectedValueOnce({
+		status: 405,
+		message:
+			'Required status check "ci" is expected. - https://docs.github.com/rest',
+	});
+	const blocked = (await mergePullRequest(
+		"token",
+		"owner/repo",
+		1,
+		"abc",
+	).catch((error: Response) => error)) as Response;
+	expect(blocked.status).toBe(409);
+	expect(await blocked.text()).toBe(
+		'GitHub\'s branch protection blocked the merge: Required status check "ci" is expected.',
+	);
+	api.repository.mockResolvedValue({
+		data: {
+			allow_squash_merge: false,
+			allow_merge_commit: false,
+			allow_rebase_merge: false,
+		},
+	});
+	await expect(
+		mergePullRequest("token", "owner/repo", 1, "abc"),
+	).rejects.toMatchObject({ status: 409 });
 });

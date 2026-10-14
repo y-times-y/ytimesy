@@ -7,6 +7,7 @@ import {
 	projectPickerRows,
 	projectPickerSections,
 	repositoryChoiceValue,
+	singleRepositoryProject,
 } from "./add-project";
 
 describe("add project", () => {
@@ -103,6 +104,53 @@ describe("add project", () => {
 		expect(filterRepositories(repositories, "yti")).toEqual([repositories[0]]);
 		expect(repositoryChoiceValue(repositories[0])).toBe("1:11");
 		expect(addProjectCopy("connect").title).toBe("Connect GitHub");
+	});
+});
+
+describe("singleRepositoryProject", () => {
+	it("recognizes a repository already added as a named project, but not a group", () => {
+		const repository = {
+			installationId: 1,
+			repositoryId: 11,
+			fullName: "org/web",
+			defaultBranch: "main",
+		};
+		const group = {
+			...repository,
+			id: "group",
+			name: "Group",
+			branch: "main",
+			repositories: [
+				{ ...repository, branch: "main" },
+				{
+					...repository,
+					repositoryId: 12,
+					fullName: "org/api",
+					branch: "main",
+				},
+			],
+		};
+		const named = {
+			...repository,
+			id: "web",
+			name: "Web",
+			branch: "main",
+			repositories: [{ ...repository, branch: "main" }],
+		};
+		expect(singleRepositoryProject([group], 11)).toBeUndefined();
+		expect(singleRepositoryProject([group, named], 11)?.id).toBe("web");
+		const sections = projectPickerSections({
+			projects: [group, named],
+			repositories: [repository],
+			query: "",
+		});
+		expect(sections.repositories).toEqual([]);
+		expect(
+			sections.projects.map((row) => [row.project?.id, row.fullName]),
+		).toEqual([
+			["group", "Group"],
+			["web", "Web"],
+		]);
 	});
 });
 

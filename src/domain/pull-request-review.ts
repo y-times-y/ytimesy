@@ -148,3 +148,38 @@ export function checkState(input: {
 	if (["skipped", "neutral", "stale"].includes(value)) return "skipped";
 	return "pending";
 }
+
+export type PullRequestMergeMethod = "squash" | "merge" | "rebase";
+
+/** The repository's allowed merge method, preferring squash. GitHub omits the
+ * flags for tokens without admin access; missing means allowed (its defaults). */
+export function pullRequestMergeMethod(repository: {
+	allow_squash_merge?: boolean;
+	allow_merge_commit?: boolean;
+	allow_rebase_merge?: boolean;
+}): PullRequestMergeMethod | null {
+	if (repository.allow_squash_merge !== false) return "squash";
+	if (repository.allow_merge_commit !== false) return "merge";
+	if (repository.allow_rebase_merge !== false) return "rebase";
+	return null;
+}
+
+/** A message for GitHub's merge refusals, or null for failures that are not the user's to fix. */
+export function pullRequestMergeFailure(error: unknown): string | null {
+	if (typeof error !== "object" || error === null || !("status" in error))
+		return null;
+	const status = Number(error.status);
+	const detail =
+		"message" in error && typeof error.message === "string"
+			? error.message.split(" - http")[0].trim()
+			: "";
+	if (status === 409)
+		return "The pull request changed since you reviewed it. Review the latest commits, then merge again.";
+	if (status === 405)
+		return /protect|required|review|status check/i.test(detail)
+			? `GitHub's branch protection blocked the merge: ${detail}`
+			: "GitHub can't merge this pull request yet. Resolve conflicts or wait for required checks, then try again.";
+	if (status === 422)
+		return "GitHub refused the merge. Refresh the pull request and try again.";
+	return null;
+}
