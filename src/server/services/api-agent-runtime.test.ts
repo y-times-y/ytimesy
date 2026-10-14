@@ -165,7 +165,7 @@ it.each([true, false])(
 		await runModelAgent(
 			{
 				userId: "alice",
-				modelId: "model",
+				modelId: "gpt-6-sol",
 				instructions: "Implement",
 				messages: [{ role: "user", content: "Fixture" }],
 				tools: {},
@@ -203,7 +203,7 @@ it("rehydrates exact instructions after foreground compaction before the next mo
 	await runModelAgent(
 		{
 			userId: "alice",
-			modelId: "model",
+			modelId: "gpt-6-sol",
 			instructions: "Implement",
 			messages: [
 				{ role: "user", content: "Earlier task" },
@@ -291,7 +291,7 @@ it("projects earlier command output into recoverable receipts only on unbound ro
 		await runModelAgent(
 			{
 				userId: "alice",
-				modelId: "model",
+				modelId: "gpt-6-sol",
 				instructions: "Repair",
 				messages,
 				tools: {
@@ -368,7 +368,7 @@ it("adopts a background native checkpoint after the tool step without losing the
 	const result = await runModelAgentStep(
 		{
 			userId: "alice",
-			modelId: "model",
+			modelId: "gpt-6-sol",
 			instructions: "Inspect",
 			knownTools: ["inspect"],
 			messages: [
@@ -432,7 +432,7 @@ it("budgets deferred schemas only after discovery, while preserving the hard inp
 		const pending = runModelAgent(
 			{
 				userId: "alice",
-				modelId: "model",
+				modelId: "gpt-6-sol",
 				instructions: "Keep every required check",
 				messages: [{ role: "user", content: "Inspect the task" }],
 				tools: { browser_screenshot: optional },
@@ -493,7 +493,7 @@ it("still rejects a native checkpoint exceeding the hard input limit without rep
 		runModelAgent(
 			{
 				userId: "alice",
-				modelId: "model",
+				modelId: "gpt-6-sol",
 				instructions: "Keep the task",
 				messages: [{ role: "user", content: "Continue the task" }],
 				previousContext: { tokens: 12_000, modelContextWindow: 48_000 },
@@ -577,7 +577,7 @@ it.each([
 		});
 		const input = {
 			userId: "alice",
-			modelId: "model",
+			modelId: "gpt-6-sol",
 			instructions: "Project knowledge stays here",
 			previousContext,
 			tools: {},
@@ -649,7 +649,7 @@ it("durable one-step execution checkpoints a tool result without starting a seco
 	const result = await runModelAgentStep(
 		{
 			userId: "alice",
-			modelId: "model",
+			modelId: "gpt-6-sol",
 			messages: [{ role: "user", content: "Inspect" }],
 			instructions: "Inspect",
 			knownTools: ["inspect"],
@@ -687,7 +687,7 @@ it("retains full tool events while checkpointing the SDK's compact model view", 
 	const result = await runModelAgentStep(
 		{
 			userId: "alice",
-			modelId: "model",
+			modelId: "gpt-6-sol",
 			instructions: "Inspect",
 			messages: [{ role: "user", content: "Inspect" }],
 			knownTools: ["inspect"],
@@ -756,7 +756,7 @@ it("does not compact provider-measured small context merely because opaque state
 	await runModelAgent(
 		{
 			userId: "alice",
-			modelId: "model",
+			modelId: "gpt-6-sol",
 			instructions: "Test",
 			messages,
 			previousContext: { tokens: 2000, modelContextWindow: 16000 },
@@ -777,11 +777,11 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.load.mockResolvedValue({
 		id: "connection",
-		provider: "compatible",
+		provider: "openai",
 		revision: "revision",
 		baseUrl: "https://api.openai.com/v1",
 		sealedCredential: "sealed",
-		models: [{ id: "model", toolStreamingVerified: true }],
+		models: [{ id: "gpt-6-sol", toolStreamingVerified: true }],
 	});
 	mocks.claim.mockResolvedValue(true);
 	mocks.verified.mockResolvedValue(true);
@@ -791,7 +791,7 @@ function run(events: ApiAgentEvent[], tools = {}) {
 	return runApiAgent({
 		userId: "alice",
 		connectionId: "connection",
-		modelId: "model",
+		modelId: "gpt-6-sol",
 		messages: [{ role: "user", content: "Test" }],
 		instructions: "Test instructions",
 		tools,
@@ -913,7 +913,7 @@ it("does not report a tool-step-limit stop as successful completion", async () =
 		runApiAgent({
 			userId: "alice",
 			connectionId: "connection",
-			modelId: "model",
+			modelId: "gpt-6-sol",
 			messages: [{ role: "user", content: "Inspect" }],
 			instructions: "Inspect",
 			tools: {
@@ -1022,7 +1022,7 @@ it("retains safe-point peer input across later model steps without restarting th
 	const history = await runApiAgent({
 		userId: "alice",
 		connectionId: "connection",
-		modelId: "model",
+		modelId: "gpt-6-sol",
 		messages: [{ role: "user", content: "Original task" }],
 		instructions: "Test",
 		tools: {
@@ -1057,6 +1057,15 @@ it("retains safe-point peer input across later model steps without restarting th
 });
 
 it("summarizes older history before a model step and checkpoints the compacted messages", async () => {
+	// Models without native compaction (here Gemini through OpenRouter) take the summarizing path.
+	mocks.load.mockResolvedValue({
+		id: "connection",
+		provider: "openrouter",
+		revision: "revision",
+		baseUrl: "https://openrouter.ai/api/v1",
+		sealedCredential: "sealed",
+		models: [{ id: "google/gemini-3.8-flash", toolStreamingVerified: true }],
+	});
 	const events: ApiAgentEvent[] = [];
 	const model = new MockLanguageModelV4({
 		doGenerate: async () => ({
@@ -1082,7 +1091,7 @@ it("summarizes older history before a model step and checkpoints the compacted m
 	await runApiAgent({
 		userId: "alice",
 		connectionId: "connection",
-		modelId: "model",
+		modelId: "google/gemini-3.8-flash",
 		messages: [
 			{ role: "user", content: `old request ${"x".repeat(95_000)}` },
 			{ role: "assistant", content: "Earlier work" },
@@ -1131,7 +1140,7 @@ it("does not begin compaction inference after the run deadline", async () => {
 			runModelAgent(
 				{
 					userId: "alice",
-					modelId: "model",
+					modelId: "gpt-6-sol",
 					instructions: "Test",
 					tools: {},
 					messages: [
@@ -1158,11 +1167,11 @@ it("does not begin compaction inference after the run deadline", async () => {
 it("runs a listed model without a separate verification request", async () => {
 	mocks.load.mockResolvedValue({
 		id: "connection",
-		provider: "compatible",
+		provider: "openai",
 		revision: "revision",
 		baseUrl: "https://api.openai.com/v1",
 		sealedCredential: "sealed",
-		models: [{ id: "model", toolStreamingVerified: false }],
+		models: [{ id: "gpt-6-sol", toolStreamingVerified: false }],
 	});
 	mocks.model.mockReturnValue(
 		new MockLanguageModelV4({
@@ -1192,7 +1201,7 @@ it("rejects a changed queued connection before contacting the provider", async (
 			userId: "alice",
 			connectionId: "connection",
 			connectionRevision: "old-revision",
-			modelId: "model",
+			modelId: "gpt-6-sol",
 			messages: [],
 			instructions: "Diagnose",
 			tools: {},
@@ -1255,7 +1264,7 @@ it("retries one retryable request-start failure without replaying completed tool
 	await runModelAgent(
 		{
 			userId: "alice",
-			modelId: "model",
+			modelId: "gpt-6-sol",
 			instructions: "Test",
 			messages: [{ role: "user", content: "Inspect" }],
 			tools: { inspect: tool({ inputSchema: z.object({}), execute }) },
@@ -1290,7 +1299,7 @@ it("does not retry after streaming has exposed output", async () => {
 		runModelAgent(
 			{
 				userId: "alice",
-				modelId: "model",
+				modelId: "gpt-6-sol",
 				instructions: "Test",
 				messages: [{ role: "user", content: "Inspect" }],
 				tools: {},
@@ -1352,12 +1361,12 @@ it("requires the exact streamed verification tool and never executes it", async 
 			]),
 		}),
 	);
-	await Effect.runPromise(verifyApiModel("alice", "connection", "model"));
+	await Effect.runPromise(verifyApiModel("alice", "connection", "gpt-6-sol"));
 	expect(mocks.verified).toHaveBeenCalledWith(
 		"alice",
 		"connection",
 		"revision",
-		"model",
+		"gpt-6-sol",
 	);
 });
 
@@ -1373,7 +1382,7 @@ it("does not verify a text-only completion", async () => {
 		}),
 	);
 	await expect(
-		Effect.runPromise(verifyApiModel("alice", "connection", "model")),
+		Effect.runPromise(verifyApiModel("alice", "connection", "gpt-6-sol")),
 	).rejects.toThrow();
 	expect(mocks.verified).not.toHaveBeenCalled();
 });

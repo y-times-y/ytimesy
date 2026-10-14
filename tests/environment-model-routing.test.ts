@@ -53,19 +53,21 @@ it.each(["openai", "anthropic", "google", "openrouter", "compatible"])(
 	async (provider) => {
 		const modelId =
 			provider === "openai"
-				? "gpt-selected"
+				? "gpt-6-sol"
 				: provider === "anthropic"
-					? "claude-selected"
+					? "claude-opus-5-5"
 					: provider === "google"
 						? "gemini-3.8-flash"
 						: provider === "openrouter"
-							? "vendor/selected"
-							: "selected-model";
+							? "openai/gpt-6-sol"
+							: "grok-4.7";
 		mocks.browse.mockResolvedValue([{ id: modelId }]);
 		mocks.load.mockResolvedValue({
 			id,
 			provider,
 			revision: "revision",
+			// A compatible connection is a maker's own fixed endpoint (here xAI).
+			...(provider === "compatible" ? { baseUrl: "https://api.x.ai/v1" } : {}),
 			models: [{ id: modelId, label: modelId, toolStreamingVerified: true }],
 		});
 		const model = await resolveEnvironmentModel("alice", {
