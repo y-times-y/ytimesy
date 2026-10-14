@@ -11,6 +11,10 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "#/components/ui/select";
+import {
+	accountDeletionConfirmed,
+	accountDeletionPhrase,
+} from "#/domain/account-deletion";
 import { offeredAgentProviders } from "#/domain/agent-provider";
 import type {
 	ProjectSecretKind,
@@ -26,6 +30,7 @@ import {
 	type SettingsSection,
 	settingsNavItems,
 } from "#/domain/workspace-settings";
+import { authClient } from "../auth/client";
 import { AddProjectForm } from "../projects/add-project-form";
 import { requestJson } from "../projects/api";
 import { AgentProviderMark } from "../sessions/agent-provider-mark";
@@ -327,7 +332,106 @@ function AccountSection({
 					</div>
 				</div>
 			</div>
+			<DeleteAccount email={user?.email} />
 		</section>
+	);
+}
+
+/** Permanent deletion behind a typed confirmation; signs out when done. */
+function DeleteAccount({ email }: { email?: string | null }) {
+	const [confirming, setConfirming] = useState(false);
+	const [typed, setTyped] = useState("");
+	const phrase = accountDeletionPhrase({ email });
+	const confirmed = accountDeletionConfirmed({ email }, typed);
+	const remove = useMutation({
+		mutationFn: async () => {
+			const response = await fetch("/api/account", {
+				method: "DELETE",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ confirmation: typed }),
+			});
+			if (!response.ok) {
+				const text = await response.text();
+				let message = text;
+				try {
+					message = JSON.parse(text).error ?? text;
+				} catch {}
+				throw new Error(message || "Your account could not be deleted.");
+			}
+		},
+		onSuccess: async () => {
+			await authClient.signOut().catch(() => undefined);
+			window.location.assign("/auth/sign-in");
+		},
+	});
+	return (
+		<div className="settings-group settings-danger-zone">
+			<div className="settings-row">
+				<div className="settings-row-text">
+					<span className="settings-row-title">Delete account</span>
+					<span className="settings-row-meta">
+						Permanently deletes your projects, chats, cloud machines, saved
+						files and connections. Your GitHub repositories are not touched.
+					</span>
+				</div>
+				{confirming ? null : (
+					<div className="settings-row-actions">
+						<button
+							type="button"
+							className="settings-danger"
+							onClick={() => setConfirming(true)}
+						>
+							Delete account
+						</button>
+					</div>
+				)}
+				{confirming ? (
+					<form
+						className="settings-confirm"
+						onSubmit={(event) => {
+							event.preventDefault();
+							if (confirmed && !remove.isPending) remove.mutate();
+						}}
+					>
+						<label className="settings-field settings-confirm-field">
+							<span>
+								Type <strong>{phrase}</strong> to confirm. This cannot be
+								undone.
+							</span>
+							<input
+								autoComplete="off"
+								spellCheck={false}
+								value={typed}
+								disabled={remove.isPending}
+								onChange={(event) => setTyped(event.target.value)}
+							/>
+						</label>
+						<div className="settings-row-actions">
+							<button
+								type="button"
+								className="settings-secondary"
+								disabled={remove.isPending}
+								onClick={() => {
+									setConfirming(false);
+									setTyped("");
+									remove.reset();
+								}}
+							>
+								Cancel
+							</button>
+							<button
+								type="submit"
+								className="settings-danger"
+								disabled={!confirmed || remove.isPending}
+							>
+								{remove.isPending ? "Deleting…" : "Delete permanently"}
+							</button>
+						</div>
+					</form>
+				) : null}
+			</div>
+			{remove.error ? <p role="alert">{remove.error.message}</p> : null}
+		</div>
 	);
 }
 

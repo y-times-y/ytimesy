@@ -3362,6 +3362,19 @@ a.sidebar-chat-pr,
 	cursor: not-allowed;
 	opacity: 0.5;
 }
+.settings-danger-zone {
+	margin-top: 16px;
+}
+.settings-danger-zone .settings-row-title {
+	color: #ffb4ab;
+}
+.settings-confirm-field {
+	flex: 1 1 260px;
+}
+.settings-confirm-field strong {
+	color: #ececec;
+	font-weight: 500;
+}
 /* An inline confirmation that opens under the row it belongs to. */
 .settings-row:has(> .settings-confirm) {
 	flex-wrap: wrap;
