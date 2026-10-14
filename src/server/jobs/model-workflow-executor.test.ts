@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { signDeliveryRequest } from "#/domain/delivery-auth";
+import { coordinateConversationTurn } from "../adapters/conversation-turn-control";
 import type { WorkspaceMachines } from "../services/workspace-machines";
 import { executeWorkflowRequest } from "./model-workflow-executor";
 
@@ -9,6 +10,14 @@ const mocks = vi.hoisted(() => ({
 	complete: vi.fn(),
 	run: vi.fn(),
 	stage: vi.fn(),
+	session: vi.fn(),
+	stopCommands: vi.fn(),
+}));
+vi.mock("../adapters/agent-sessions", () => ({
+	agentSessionMetadataForOwner: mocks.session,
+}));
+vi.mock("../services/api-command-scope", () => ({
+	stopApiTurnCommands: mocks.stopCommands,
 }));
 vi.mock("../services/pr-repair-webhook", () => ({
 	stageVerifiedPrRepairSignal: mocks.stage,
@@ -161,5 +170,31 @@ it("fences expired turns immediately and makes the overflow step a no-inference 
 		secret,
 		machines,
 		receipts,
+	);
+});
+
+it("stops a cancelled resumed turn's commands and releases the room's rotated lease", async () => {
+	const rotated = "00000000-0000-4000-8000-000000000009";
+	mocks.claim.mockResolvedValue({
+		kind: "cancelled",
+		turn: {
+			id: step.turnId,
+			user_id: "owner",
+			session_id: "session",
+			lease_id: rotated,
+			items: [],
+		},
+	});
+	mocks.finalize.mockResolvedValue("cancelled");
+	mocks.session.mockResolvedValue({ id: "session", providerRef: "vm" });
+	mocks.stopCommands.mockResolvedValue(undefined);
+	await executeWorkflowRequest(await request(), secret, machines, receipts);
+	expect(mocks.stopCommands).toHaveBeenCalledWith(
+		expect.objectContaining({ vm: "vm" }),
+		step.turnId,
+	);
+	expect(coordinateConversationTurn).toHaveBeenCalledWith(
+		"release",
+		expect.objectContaining({ leaseId: rotated }),
 	);
 });
