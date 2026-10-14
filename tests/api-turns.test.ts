@@ -47,7 +47,7 @@ beforeAll(async () => {
 	create table agent_account(user_id text,provider text,status text,encrypted_codex_auth text); insert into agent_account values('alice','codex','connected','sealed-fixture');
 	create table workspace(id text primary key,user_id text); insert into workspace values('environment','alice');
 	create table auth_user(id text primary key); insert into auth_user values('alice'),('bob');
-	create table agent_session(id uuid primary key,user_id text references auth_user(id),parent_session_id uuid references agent_session(id),harness text constraint agent_session_harness_check check(harness in ('codex','claude','opencode')),turn_status text,listed_model_id text,items jsonb default '[]',task_state text,updated_at timestamptz default now());`);
+	create table agent_session(id uuid primary key,user_id text references auth_user(id),parent_session_id uuid references agent_session(id),harness text constraint agent_session_harness_check check(harness in ('codex','claude','opencode')),turn_status text,listed_model_id text,items jsonb default '[]',task_state text,task_access text,updated_at timestamptz default now());`);
 	await db.exec(
 		await readFile(
 			"supabase/migrations/20260927183000_model_connections.sql",
