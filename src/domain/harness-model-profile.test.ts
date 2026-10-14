@@ -35,19 +35,14 @@ it("does not send a builder searching for absent planning or delegation tools", 
 		"inspect_changes",
 		"read_file",
 	]);
-	expect(instructions).not.toContain("update_plan");
-	expect(instructions).not.toContain("read_work_plan");
 	expect(instructions).not.toContain("delegation");
 	expect(instructions).toContain("Only offered tools");
 });
 
-it("preserves offered planning and recommends bounded evidence instead of duplicate full reads", () => {
+it("recommends bounded evidence instead of duplicate full reads", () => {
 	const instructions = harnessModelToolInstructions("openai", false, [
-		"update_plan",
-		"read_work_plan",
+		"read_file",
 	]);
-	expect(instructions).toContain("update_plan");
-	expect(instructions).toContain("read_work_plan");
 	expect(instructions).toContain("outputView:summary");
 	expect(instructions).toContain("configured formatter");
 	expect(instructions).toContain("never invent line limits");

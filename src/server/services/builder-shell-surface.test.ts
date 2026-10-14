@@ -17,7 +17,6 @@ it("keeps only the validated shell surface, which selects the shell prompt profi
 		"run_checks",
 		"apply_patches",
 		"inspect_changes",
-		"update_plan",
 		"batch_read",
 		"search_tools",
 	];
