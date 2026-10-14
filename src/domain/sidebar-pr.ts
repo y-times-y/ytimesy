@@ -84,3 +84,60 @@ export function sidebarChatPrMarkForWorkspace(input: {
 		label: sidebarChatPrNeedLabel(need),
 	};
 }
+
+type PullRequestRepositoryRef = {
+	readonly installationId: number;
+	readonly repositoryId: number;
+	readonly fullName: string;
+};
+
+export type RepositoryPullRequest = ListedPullRequest & {
+	readonly installationId: number;
+	readonly repositoryId: number;
+	readonly repositoryFullName: string;
+};
+
+/**
+ * One list across all of a project's repositories, primary first, so a chat's
+ * pull request shows even when the agent opened it in a secondary repository.
+ */
+export function pullRequestsAcrossRepositories(
+	lists: readonly {
+		readonly repository: PullRequestRepositoryRef;
+		readonly pullRequests?: readonly ListedPullRequest[];
+	}[],
+): RepositoryPullRequest[] {
+	return lists.flatMap(({ repository, pullRequests }) =>
+		(pullRequests ?? []).map((pr) => ({
+			...pr,
+			installationId: repository.installationId,
+			repositoryId: repository.repositoryId,
+			repositoryFullName: repository.fullName,
+		})),
+	);
+}
+
+/** The repository the pull request panel opens: the chat's own PR's, else the primary one. */
+export function pullRequestPanelRepository(input: {
+	readonly repositories: readonly PullRequestRepositoryRef[];
+	readonly chatPullRequest?: RepositoryPullRequest;
+}):
+	| {
+			readonly installationId: number;
+			readonly repositoryId: number;
+			readonly number?: number;
+	  }
+	| undefined {
+	if (input.chatPullRequest)
+		return {
+			installationId: input.chatPullRequest.installationId,
+			repositoryId: input.chatPullRequest.repositoryId,
+			number: input.chatPullRequest.number,
+		};
+	const primary = input.repositories[0];
+	if (!primary?.installationId || !primary.repositoryId) return undefined;
+	return {
+		installationId: primary.installationId,
+		repositoryId: primary.repositoryId,
+	};
+}

@@ -24,7 +24,11 @@ import {
 	safeAttachmentName,
 } from "#/domain/message-attachment";
 import { publicFailureMessage } from "#/domain/project-workspace";
-import { type Project, selectedProjectIdAfterDelete } from "#/domain/projects";
+import {
+	type Project,
+	repositoriesForProject,
+	selectedProjectIdAfterDelete,
+} from "#/domain/projects";
 import { workspacePublicationBranch } from "#/domain/publication";
 import {
 	fileChangesFromSessionItems,
@@ -60,6 +64,8 @@ import {
 } from "#/domain/sidebar-chats";
 import {
 	type ListedPullRequest,
+	pullRequestPanelRepository,
+	pullRequestsAcrossRepositories,
 	sidebarChatPrMarkForWorkspace,
 } from "#/domain/sidebar-pr";
 import {
@@ -157,21 +163,32 @@ export function WorkspaceHome({
 	} | null>(null);
 	const currentSessionRef = useRef(session);
 	currentSessionRef.current = session;
-	const pullRequests = useQuery({
-		queryKey: [
-			"github",
-			"pull-requests",
-			selectedProject?.installationId,
-			selectedProject?.repositoryId,
-		],
-		queryFn: () =>
-			requestJson<{ pullRequests: ListedPullRequest[] }>(
-				`/api/github/pull-requests?installationId=${selectedProject?.installationId}&repositoryId=${selectedProject?.repositoryId}`,
-			),
-		enabled: Boolean(
-			selectedProject?.installationId && selectedProject?.repositoryId,
-		),
+	// Every repository of the project: the agent may open a PR in any of them.
+	const projectRepositories = selectedProject
+		? repositoriesForProject(selectedProject)
+		: [];
+	const repositoryPullRequests = useQueries({
+		queries: projectRepositories.map((repository) => ({
+			queryKey: [
+				"github",
+				"pull-requests",
+				repository.installationId,
+				repository.repositoryId,
+			],
+			queryFn: () =>
+				requestJson<{ pullRequests: ListedPullRequest[] }>(
+					`/api/github/pull-requests?installationId=${repository.installationId}&repositoryId=${repository.repositoryId}`,
+				),
+			enabled: Boolean(repository.installationId && repository.repositoryId),
+		})),
 	});
+	const refetchPullRequests = useCallback(
+		() =>
+			queryClient.invalidateQueries({
+				queryKey: ["github", "pull-requests"],
+			}),
+		[queryClient],
+	);
 	const chats = useQuery({
 		queryKey: ["agent-sessions", selectedProject?.id],
 		queryFn: () =>
@@ -344,7 +361,12 @@ export function WorkspaceHome({
 	});
 	const sessionTitle = sessionTitleFromItems(session.items);
 	const hasUserMessage = Boolean(lastUserMessageText(session.items));
-	const listedPullRequests = pullRequests.data?.pullRequests ?? [];
+	const listedPullRequests = pullRequestsAcrossRepositories(
+		projectRepositories.map((repository, index) => ({
+			repository,
+			pullRequests: repositoryPullRequests[index]?.data?.pullRequests,
+		})),
+	);
 	const sidebarChats = (chats.data ?? []).map((chat) => {
 		const mark = sidebarChatPrMarkForWorkspace({
 			workspaceId: chat.workspaceId,
@@ -396,14 +418,14 @@ export function WorkspaceHome({
 			(session.turnStatus === "completed" || session.turnStatus === "failed")
 		) {
 			void agentTasks.refetch();
-			void pullRequests.refetch();
+			void refetchPullRequests();
 			void chats.refetch();
 		}
 	}, [
 		activeSessionId,
 		session.turnStatus,
 		agentTasks.refetch,
-		pullRequests.refetch,
+		refetchPullRequests,
 		chats.refetch,
 	]);
 	const taskHandoffs = (agentTasks.data ?? [])
@@ -411,8 +433,8 @@ export function WorkspaceHome({
 		.map((task) => `${task.id}:${task.pullRequestUrl}:${task.status}`)
 		.join("|");
 	useEffect(() => {
-		if (taskHandoffs) void pullRequests.refetch();
-	}, [taskHandoffs, pullRequests.refetch]);
+		if (taskHandoffs) void refetchPullRequests();
+	}, [taskHandoffs, refetchPullRequests]);
 	selectedSessionIdRef.current = activeSessionId;
 	const requestDesktop = useCallback(() => {
 		const chatId = activeSessionId;
@@ -1482,15 +1504,10 @@ export function WorkspaceHome({
 							projectId={selectedProject?.id}
 							sessionId={activeSessionId}
 							onStartDesktop={requestDesktop}
-							pullRequest={
-								selectedProject?.installationId && selectedProject?.repositoryId
-									? {
-											installationId: selectedProject.installationId,
-											repositoryId: selectedProject.repositoryId,
-											number: sessionPullRequest?.number,
-										}
-									: undefined
-							}
+							pullRequest={pullRequestPanelRepository({
+								repositories: projectRepositories,
+								chatPullRequest: sessionPullRequest,
+							})}
 							overview={
 								<WorkspaceOverview
 									tasks={agentTasks.data ?? []}
