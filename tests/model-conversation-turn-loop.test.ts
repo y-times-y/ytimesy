@@ -71,7 +71,7 @@ it("runs steps one alarm at a time and admits the next turn when done", async ()
 	expect(await object.startTurn(scope, turn)).toBe(true);
 	expect(await object.startTurn(scope, turn)).toBe(true);
 	expect(
-		await object.startTurn(scope, { ...turn, turnId: scope.sessionId }),
+		await object.startTurn(scope, { ...turn, leaseId: scope.sessionId }),
 	).toBe(false);
 	expect(state.alarm.at).not.toBeNull();
 	await object.alarm();
@@ -179,4 +179,33 @@ it("shares the alarm between the turn loop and the room lease", async () => {
 	sql.exec("delete from turn_loop");
 	await object.alarm();
 	expect(state.alarm.at).toBeGreaterThan(Date.now() + 20_000);
+});
+
+it("starts a turn sent while the previous one was still ending once that one ends", async () => {
+	const next = {
+		turnId: "00000000-0000-4000-8000-000000000004",
+		leaseId: "00000000-0000-4000-8000-000000000005",
+	};
+	mocks.step
+		.mockResolvedValueOnce("cancelled")
+		.mockResolvedValueOnce("completed");
+	const { object, state, sql } = conversation();
+	expect(await object.startTurn(scope, turn)).toBe(true);
+	// Admitted after the stopped turn showed idle, before its loop ended.
+	expect(await object.startTurn(scope, next)).toBe(true);
+	expect(await object.startTurn(scope, next)).toBe(true);
+	expect(
+		await object.startTurn(scope, { ...next, leaseId: turn.leaseId }),
+	).toBe(false);
+	await object.alarm();
+	expect(mocks.step.mock.calls[0][0]).toEqual({ ...turn, index: 1 });
+	expect(
+		sql.exec("select turn_id as t, step_index as i from turn_loop").toArray(),
+	).toEqual([{ t: next.turnId, i: 1 }]);
+	expect(state.alarm.at).not.toBeNull();
+	await object.alarm();
+	expect(mocks.step.mock.calls[1][0]).toEqual({ ...next, index: 1 });
+	expect(sql.exec("select * from turn_loop").toArray()).toEqual([]);
+	expect(sql.exec("select * from turn_queue").toArray()).toEqual([]);
+	expect(state.alarm.at).toBeNull();
 });

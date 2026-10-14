@@ -56,7 +56,7 @@ export function runBackgroundJob(
 								).startTurn(scope, { turnId: turn.id, leaseId: turn.lease_id }))
 							)
 								console.warn(
-									"Chat already runs another turn; lease expiry will fail this one.",
+									"Chat could not queue this turn; lease expiry will fail it.",
 								);
 						}
 						return "delivered";

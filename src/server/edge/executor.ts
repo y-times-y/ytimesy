@@ -44,6 +44,7 @@ import type { EdgeExecutorEnvironment } from "./environment";
 import { authorizeGitProxy } from "./github-git-authorization";
 import { withEdgeModelEndpoints } from "./model-endpoint";
 import { TurnHistoryCache } from "./turn-history-cache";
+import { type QueuedTurn, SqliteTurnQueue } from "./turn-queue";
 
 export { BackgroundJobRunner } from "./background-jobs";
 export { ProjectEnvironment } from "./project-environment";
@@ -98,6 +99,7 @@ async function resolveModelConversation(step: WorkflowStep) {
 export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	private readonly steps: SqliteConversationSteps;
 	private readonly history: TurnHistoryCache;
+	private readonly queue: SqliteTurnQueue;
 	private readonly room: ConversationRoom;
 	private bindIdentity(scope: { userId: string; sessionId: string }) {
 		const name = modelConversationName(scope);
@@ -156,7 +158,8 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	}
 	/**
 	 * Admits a claimed turn; this chat's alarms then run its steps one at a time.
-	 * Idempotent for the same turn; false while a different turn is active here.
+	 * Idempotent for the same turn. A turn admitted while another is active here
+	 * waits and starts when that one ends.
 	 */
 	async startTurn(
 		scope: { userId: string; sessionId: string },
@@ -164,18 +167,21 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	) {
 		if (!this.bindIdentity(scope)) return false;
 		const active = this.activeTurn();
-		if (active)
-			return active.turnId === turn.turnId && active.leaseId === turn.leaseId;
+		if (active?.turnId === turn.turnId) return active.leaseId === turn.leaseId;
+		if (active) return this.queue.add({ ...scope, ...turn });
+		await this.beginTurn({ ...scope, ...turn });
+		return true;
+	}
+	private async beginTurn(turn: QueuedTurn) {
 		this.ctx.storage.sql.exec(
 			"insert into turn_loop values(1,?,?,?,?,?,1,0)",
-			scope.userId,
-			scope.sessionId,
+			turn.userId,
+			turn.sessionId,
 			turn.turnId,
 			turn.leaseId,
 			turn.leaseId,
 		);
 		await this.wake("turn", Date.now());
-		return true;
 	}
 	private activeTurn() {
 		return this.ctx.storage.sql
@@ -227,10 +233,13 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		}
 		if (due.has("turn")) await this.advanceTurn();
 	}
+	/** Runs after the turn released its room lease, so a waiting turn can start. */
 	private async endTurn() {
 		this.history.clear();
 		this.ctx.storage.sql.exec("delete from turn_loop");
-		await this.wake("turn", null);
+		const next = this.queue.take();
+		if (next) await this.beginTurn(next);
+		else await this.wake("turn", null);
 	}
 	private async advanceTurn() {
 		const active = this.activeTurn();
@@ -468,6 +477,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		);
 		this.steps = new SqliteConversationSteps(ctx.storage.sql);
 		this.history = new TurnHistoryCache(ctx.storage.sql);
+		this.queue = new SqliteTurnQueue(ctx.storage.sql);
 		ctx.storage.sql.exec(
 			"create table if not exists conversation_identity(id integer primary key check(id=1),name text not null)",
 		);
