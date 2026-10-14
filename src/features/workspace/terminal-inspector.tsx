@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+	terminalClosedMessage,
 	terminalInspectorPrompt,
 	terminalInspectorShouldAttach,
 } from "#/domain/workspace-terminal";
@@ -94,13 +95,22 @@ export function TerminalInspector({
 				}
 				term.write(new Uint8Array(event.data as ArrayBuffer));
 			});
-			socket.addEventListener("close", () => {
+			socket.addEventListener("close", (event) => {
 				if (closed) return;
+				// A clean close carries no error message; without one the panel waited forever.
+				setError(
+					(current) =>
+						current ??
+						terminalClosedMessage({
+							reason: event.reason,
+							wasClean: event.wasClean,
+						}),
+				);
 				setConnected(false);
 			});
 			socket.addEventListener("error", () => {
 				if (closed) return;
-				setError("Terminal disconnected. Retry from Tools.");
+				setError((current) => current ?? "Terminal disconnected.");
 				setConnected(false);
 			});
 			const dataSub = term.onData((data) => {
@@ -160,7 +170,7 @@ export function TerminalInspector({
 						className="desktop-start"
 						onClick={() => setRetryGeneration((generation) => generation + 1)}
 					>
-						Retry terminal
+						Restart terminal
 					</button>
 				</>
 			) : connected ? null : (

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	clampPtySize,
 	parseTerminalClientMessage,
+	terminalClosedMessage,
 	terminalConnectBlockedReason,
 	terminalInspectorPrompt,
 	terminalInspectorShouldAttach,
@@ -98,4 +99,14 @@ describe("workspace terminal", () => {
 			"freestyle",
 		);
 	});
+});
+
+it("explains a terminal socket that closed without an error message", () => {
+	expect(terminalClosedMessage({ wasClean: true })).toBe("Terminal closed.");
+	expect(terminalClosedMessage({ reason: " ", wasClean: false })).toBe(
+		"Terminal disconnected.",
+	);
+	expect(
+		terminalClosedMessage({ reason: "Workspace stopped.", wasClean: true }),
+	).toBe("Workspace stopped.");
 });
