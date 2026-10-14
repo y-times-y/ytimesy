@@ -10,6 +10,7 @@ const fake = vi.hoisted(() => ({
 }));
 vi.mock("#/server/adapters/agent-sessions", () => ({
 	agentSessionForOwner: fake.owner,
+	titleUntitledAgentSession: vi.fn(async () => undefined),
 }));
 vi.mock("#/server/adapters/agent-task-command-receipts", () => ({
 	isServerControlledIntegration: vi.fn(async () => false),
