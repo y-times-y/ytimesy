@@ -67,6 +67,38 @@ export async function saveProjectGroup(
 	if (!project) throw new Error("Project could not be saved.");
 	return project;
 }
+/**
+ * Refreshes the GitHub access of a project's repository (installation, name,
+ * branch) on the project and its repository row, and renames the project
+ * when `name` is given. Used when a repository is added again.
+ */
+export async function refreshProjectRepository(
+	userId: string,
+	projectId: string,
+	repository: ProjectRepository,
+	name: string | null,
+): Promise<Project> {
+	await database().query(
+		`with refreshed as (
+    update project set installation_id=$3,full_name=$4,branch=$5,name=coalesce($6,name)
+    where id=$1 and user_id=$7 and repository_id=$2 returning id
+  ) update project_repository r set installation_id=$3,full_name=$4,branch=$5
+    from refreshed where r.project_id=refreshed.id and r.repository_id=$2`,
+		[
+			projectId,
+			repository.repositoryId,
+			repository.installationId,
+			repository.fullName,
+			repository.branch,
+			name,
+			userId,
+		],
+	);
+	const project = await projectForOwner(userId, projectId);
+	if (!project)
+		throw new Response("Project is not available.", { status: 404 });
+	return project;
+}
 export async function projectForRepository(
 	userId: string,
 	repositoryId: number,
