@@ -6,6 +6,7 @@ import {
 	DEFAULT_COMPOSER_HARNESS_ID,
 	parseRuntimeId as parseHarnessId,
 } from "#/domain/agent-provider";
+import { incomingAttachments } from "#/domain/message-attachment";
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
 import { listProjects } from "#/server/adapters/projects";
 import { requireUser } from "#/server/auth/auth";
@@ -172,8 +173,15 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 			fast?: boolean;
 			speed?: string;
 			mode?: string;
+			attachments?: unknown;
 		}) => {
-			const text = data.text.trim();
+			const attachments =
+				data.attachments === undefined
+					? []
+					: incomingAttachments.parse(data.attachments);
+			const text =
+				data.text.trim() ||
+				(attachments.length ? "See the attached files." : "");
 			const modelId = data.modelId.trim();
 			if (!text) throw new Error("Task text is required");
 			const variant = data.variant?.trim();
@@ -196,6 +204,7 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 							? ("ultrafast" as const)
 							: ("standard" as const),
 				...(data.mode === "plan" ? { mode: "plan" as const } : {}),
+				...(attachments.length ? { attachments } : {}),
 			};
 		},
 	)

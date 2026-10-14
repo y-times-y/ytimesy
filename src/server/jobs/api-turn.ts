@@ -87,6 +87,10 @@ import { runAgentTaskTool } from "../services/harness-workspace-session";
 import { journaledToolOperation } from "../services/journaled-tool-operation";
 import { turnOAuthProvider } from "../services/mcp-oauth";
 import { connectMcpTools } from "../services/mcp-tools";
+import {
+	materializeMessageAttachments,
+	sessionAttachments,
+} from "../services/message-attachments";
 import type { ModelAgentInput } from "../services/model-agent-loop";
 import { withPlanMode, withPlanModeNotice } from "../services/plan-mode";
 import {
@@ -310,6 +314,7 @@ export async function runApiTurn(
 				)
 			: null;
 		let secretsWritten: Promise<void> | undefined;
+		let attachmentsWritten: Promise<void> | undefined;
 		const prepareWorkspace = deferredApiTurnWorkspace(
 			machines,
 			owner,
@@ -327,6 +332,17 @@ export async function runApiTurn(
 				);
 				await secretsWritten;
 			}
+			attachmentsWritten ??= materializeMessageAttachments(
+				execution.machines,
+				execution.vm,
+				owner.userId,
+				owner.id,
+				sessionAttachments(items),
+			).catch((error) => {
+				// A missing file surfaces when the agent opens it; other tools keep working.
+				console.warn("Attached files could not be restored.", error);
+			});
+			await attachmentsWritten;
 			if (
 				fusion ||
 				direct ||

@@ -19,6 +19,7 @@ import {
 } from "#/domain/agent-task-tool";
 import { runtimeHandoffPrompt } from "#/domain/api-conversation";
 import { WorkspaceId } from "#/domain/ids";
+import type { IncomingAttachment } from "#/domain/message-attachment";
 import { publicFailureMessage } from "#/domain/project-workspace";
 import {
 	lastAgentMessageText,
@@ -217,6 +218,7 @@ export function sendHarnessWorkspaceTask(
 		readonly runtimeText?: string;
 		readonly idempotencyKey?: string;
 		readonly mode?: "plan";
+		readonly attachments?: readonly IncomingAttachment[];
 	},
 ): Effect.Effect<PublicHarnessSession> {
 	if (

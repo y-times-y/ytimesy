@@ -1,6 +1,7 @@
 import { detectMediaType } from "@ai-sdk/provider-utils";
 import { type ToolSet, tool } from "ai";
 import { z } from "zod";
+import { AGENT_ATTACHMENT_DIRECTORY } from "#/domain/message-attachment";
 import { posixShellCommand } from "#/domain/posix-command";
 import {
 	type AgentToolWorkspaceInput,
@@ -30,6 +31,23 @@ with os.fdopen(descriptor, 'rb') as handle:
 if not data or len(data) > 3000000: raise ValueError('Invalid image size')
 print(json.dumps({'path': str(relative), 'sha256': hashlib.sha256(data).hexdigest(), 'base64': base64.b64encode(data).decode()}))`;
 
+const ATTACHED = `${AGENT_ATTACHMENT_DIRECTORY}/`;
+
+/** Repository images, or one attached file: `<attachment id>/<name>` under the attachment directory. */
+const viewableImagePath = z
+	.string()
+	.min(1)
+	.max(2048)
+	.refine(
+		(path) =>
+			path.startsWith(ATTACHED)
+				? /^[a-f0-9-]{36}\/[^/\\\0]+$/.test(path.slice(ATTACHED.length)) &&
+					!path.endsWith("/..") &&
+					!path.endsWith("/.")
+				: repositoryToolPath.safeParse(path).success,
+		"Use a repository-relative path, or the absolute path of an attached file.",
+	);
+
 /** Pixels use the same model-content contract as browser screenshots, not JSON-only text. */
 export function apiAgentImageTools(
 	input: AgentToolWorkspaceInput & { signal: AbortSignal },
@@ -37,15 +55,22 @@ export function apiAgentImageTools(
 	return {
 		view_image: tool({
 			description:
-				"Visually inspect a repository-relative PNG, JPEG, GIF or WebP (up to 3 MB), such as a Playwright screenshot, generated test image or design asset. Returns actual pixels to vision-capable models. No SVG, URLs, symlinks or out-of-repository files. Do not expose credentials or private screenshots unnecessarily.",
-			inputSchema: z.object({ path: repositoryToolPath }),
+				"Visually inspect a PNG, JPEG, GIF or WebP (up to 3 MB): a repository-relative path, such as a Playwright screenshot, generated test image or design asset, or the absolute path of a file the user attached. Returns actual pixels to vision-capable models. No SVG, URLs, symlinks or other out-of-repository files. Do not expose credentials or private screenshots unnecessarily.",
+			inputSchema: z.object({ path: viewableImagePath }),
 			execute: async ({ path }) => {
 				input.signal.throwIfAborted();
-				repositoryToolPath.parse(path);
+				viewableImagePath.parse(path);
 				const { machines, vm, cwd } = await resolveToolWorkspace(input);
+				const attached = path.startsWith(ATTACHED);
 				const result = await machines.exec(
 					vm,
-					posixShellCommand(["python3", "-c", READ_IMAGE, cwd, path]),
+					posixShellCommand([
+						"python3",
+						"-c",
+						READ_IMAGE,
+						attached ? AGENT_ATTACHMENT_DIRECTORY : cwd,
+						attached ? path.slice(ATTACHED.length) : path,
+					]),
 					15000,
 				);
 				input.signal.throwIfAborted();
@@ -78,7 +103,7 @@ export function apiAgentImageTools(
 				value: [
 					{
 						type: "text",
-						text: `Repository image ${output.path} (sha256 ${output.sha256})`,
+						text: `Image ${output.path} (sha256 ${output.sha256})`,
 					},
 					{
 						type: "file",

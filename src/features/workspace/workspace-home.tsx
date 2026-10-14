@@ -18,6 +18,11 @@ import {
 	inspectorSplitRatio,
 	workspaceNeedsSinglePane,
 } from "#/domain/inspector-split";
+import {
+	base64ByteLength,
+	type IncomingAttachment,
+	safeAttachmentName,
+} from "#/domain/message-attachment";
 import { publicFailureMessage } from "#/domain/project-workspace";
 import { type Project, selectedProjectIdAfterDelete } from "#/domain/projects";
 import { workspacePublicationBranch } from "#/domain/publication";
@@ -229,6 +234,7 @@ export function WorkspaceHome({
 		variant?: string;
 		speed?: ComposerSpeed;
 		mode?: "plan";
+		attachments?: readonly IncomingAttachment[];
 	} | null>(null);
 	const sessionViews = useRef(new Map<string, PublicCodexSession>());
 	const bumpSessionEpoch = useCallback(() => {
@@ -1268,12 +1274,26 @@ export function WorkspaceHome({
 											: {}),
 										...(options?.speed ? { speed: options.speed } : {}),
 										...(options?.mode ? { mode: options.mode } : {}),
+										...(options?.attachments?.length
+											? { attachments: options.attachments }
+											: {}),
 									};
 									setBusyChatIds((ids) => withBusyChat(ids, chatId));
 									setSession((current) => ({
 										...current,
 										turnStatus: "running",
-										items: sessionItemsQueuedWithUser(current.items, text),
+										items: sessionItemsQueuedWithUser(
+											current.items,
+											text,
+											undefined,
+											undefined,
+											options?.attachments?.map((file) => ({
+												id: crypto.randomUUID(),
+												name: safeAttachmentName(file.name),
+												mediaType: file.mediaType,
+												size: base64ByteLength(file.base64),
+											})),
+										),
 									}));
 									if (activeProjectId) {
 										queryClient.setQueryData(
@@ -1332,6 +1352,9 @@ export function WorkspaceHome({
 															}
 														: {}),
 													...(pending?.mode ? { mode: pending.mode } : {}),
+													...(pending?.attachments?.length
+														? { attachments: [...pending.attachments] }
+														: {}),
 												},
 											});
 											applySessionView(epoch, next);
