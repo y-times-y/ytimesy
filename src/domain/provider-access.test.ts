@@ -22,17 +22,21 @@ describe("provider-level access", () => {
 		}
 	});
 	it("keeps direct keys scoped to the selected provider", () => {
-		expect(providerKeyConnection("meta", "test-only")).toEqual({
+		expect(providerKeyConnection("x-ai", "test-only")).toEqual({
 			provider: "compatible",
-			label: "Meta",
+			label: "xAI",
 			apiKey: "test-only",
-			baseUrl: "https://api.meta.ai/v1",
+			baseUrl: "https://api.x.ai/v1",
 		});
 		expect(providerKeyConnection("google", "test-only").provider).toBe(
 			"google",
 		);
-		expect(providerKeyConnection("deepseek", "test-only").baseUrl).toBe(
-			"https://api.deepseek.com",
+		// No listed model runs on these makers' own APIs, so their keys unlock nothing.
+		expect(() => providerKeyConnection("deepseek", "test-only")).toThrow(
+			"not supported",
+		);
+		expect(() => providerKeyConnection("meta", "test-only")).toThrow(
+			"not supported",
 		);
 		expect(() => providerKeyConnection("qwen", "test-only")).toThrow(
 			"not supported",

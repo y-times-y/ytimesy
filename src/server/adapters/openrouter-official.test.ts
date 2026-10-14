@@ -61,3 +61,19 @@ it("refuses a speed the model's maker does not offer", async () => {
 	).rejects.toThrow("no ultrafast endpoint");
 	expect(fetch).not.toHaveBeenCalled();
 });
+
+it("runs DeepSeek only on its approved US hosts with zero retention", async () => {
+	const fetch = vi.fn(async () => new Response("{}"));
+	await openRouterOfficialFetch(fetch)("https://openrouter.ai/api/v1/chat", {
+		method: "POST",
+		body: JSON.stringify({
+			model: "deepseek/deepseek-v4.1-flash",
+			messages: [],
+		}),
+	});
+	expect(sent(fetch).provider).toEqual({
+		only: ["fireworks/us", "together"],
+		allow_fallbacks: false,
+		zdr: true,
+	});
+});

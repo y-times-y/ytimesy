@@ -10,11 +10,7 @@ import {
 	SelectValue,
 } from "#/components/ui/select";
 import { API_MODEL_LIST } from "#/domain/api-model-list";
-import {
-	AUTHOR_LABELS,
-	directModelProvider,
-	visibleModelChoices,
-} from "#/domain/browse-models";
+import { AUTHOR_LABELS, visibleModelChoices } from "#/domain/browse-models";
 import {
 	availableConnectionModels,
 	CUSTOM_SECTION,
@@ -25,6 +21,7 @@ import {
 import type { ModelRun } from "#/domain/parallel-models";
 import {
 	apiPickerSections,
+	directKeyProvider,
 	providerConnections,
 	providerKeyConnection,
 	selectedProviderConnection,
@@ -211,7 +208,7 @@ export function ApiModelBrowser({
 						}}
 					>
 						<label className="inline-model-label">
-							{directModelProvider(author)
+							{directKeyProvider(author)
 								? `${AUTHOR_LABELS[author]} API key or OpenRouter key`
 								: "OpenRouter key"}
 							<div className="provider-key-row">
@@ -239,7 +236,7 @@ export function ApiModelBrowser({
 						</label>
 					</form>
 					<p>
-						{directModelProvider(author)
+						{directKeyProvider(author)
 							? "Provider key unlocks this provider. "
 							: "Direct provider keys are not supported here yet. "}
 						OpenRouter unlocks supported models across providers. Keys are

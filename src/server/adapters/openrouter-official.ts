@@ -1,13 +1,14 @@
 import {
 	type ApiModelSpeedId,
-	officialOpenRouterProviders,
+	openRouterRouting,
 } from "#/domain/api-model-list";
 
 /**
- * Pins every OpenRouter request to the model maker's own providers with
- * fallbacks off: if the maker's endpoint is unavailable the request fails
- * instead of moving to a third-party host. A faster `speed` pins the maker's
- * own tiered endpoints instead, and is refused when the model has none.
+ * Pins every OpenRouter request to the model maker's own providers (or, for a
+ * listed open-weight model, its approved hosts) with fallbacks off: if those
+ * are unavailable the request fails instead of moving to another host. A
+ * faster `speed` pins the maker's own tiered endpoints instead, and is refused
+ * when the model has none.
  */
 export function openRouterOfficialFetch(
 	fetch: typeof globalThis.fetch,
@@ -17,8 +18,8 @@ export function openRouterOfficialFetch(
 		if (typeof init?.body !== "string") return fetch(url, init);
 		const body = JSON.parse(init.body) as Record<string, unknown>;
 		if (typeof body.model !== "string") return fetch(url, init);
-		const only = officialOpenRouterProviders(body.model, speed);
-		if (!only)
+		const routing = openRouterRouting(body.model, speed);
+		if (!routing)
 			throw new Error(
 				speed
 					? `${body.model} has no ${speed} endpoint from its maker.`
@@ -30,7 +31,12 @@ export function openRouterOfficialFetch(
 			...init,
 			body: JSON.stringify({
 				...body,
-				provider: { ...provider, only, allow_fallbacks: false },
+				provider: {
+					...provider,
+					only: routing.only,
+					allow_fallbacks: false,
+					...(routing.zdr ? { zdr: true } : {}),
+				},
 			}),
 		});
 	};
