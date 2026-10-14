@@ -311,7 +311,7 @@ type BatchEditReceipt = {
 	error?: string;
 };
 
-function publicEditReceipt(edited: FileEditReceipt) {
+async function publicEditReceipt(edited: FileEditReceipt) {
 	return {
 		path: edited.path,
 		...(edited.languageFeedback
@@ -321,7 +321,10 @@ function publicEditReceipt(edited: FileEditReceipt) {
 			? { deleted: true }
 			: {
 					sha256: edited.sha256,
-					...editDiagnostics(edited.path, edited.diagnosticSource ?? undefined),
+					...(await editDiagnostics(
+						edited.path,
+						edited.diagnosticSource ?? undefined,
+					)),
 				}),
 	};
 }
@@ -570,7 +573,9 @@ export function apiAgentFileTools(
 					true,
 				)) as BatchEditReceipt;
 				return {
-					completed: receipt.completed.map(publicEditReceipt),
+					completed: await Promise.all(
+						receipt.completed.map(publicEditReceipt),
+					),
 					failedPath: receipt.failedPath,
 					unattemptedPaths: receipt.unattemptedPaths,
 					...(receipt.error ? { error: publicToolDetail(receipt.error) } : {}),
@@ -606,7 +611,9 @@ export function apiAgentFileTools(
 				)) as BatchEditReceipt;
 				return {
 					...receipt,
-					completed: receipt.completed.map(publicEditReceipt),
+					completed: await Promise.all(
+						receipt.completed.map(publicEditReceipt),
+					),
 				};
 			}),
 	});
@@ -647,7 +654,9 @@ export function apiAgentFileTools(
 				)) as BatchEditReceipt;
 				return {
 					...receipt,
-					completed: receipt.completed.map(publicEditReceipt),
+					completed: await Promise.all(
+						receipt.completed.map(publicEditReceipt),
+					),
 				};
 			}),
 	});
@@ -797,7 +806,9 @@ export function apiAgentFileTools(
 				const requests = await Promise.all(validated.map(preparePatch));
 				const receipt = (await writeGuestEdits(requests)) as BatchEditReceipt;
 				return {
-					completed: receipt.completed.map(publicEditReceipt),
+					completed: await Promise.all(
+						receipt.completed.map(publicEditReceipt),
+					),
 					failedPath: receipt.failedPath,
 					unattemptedPaths: receipt.unattemptedPaths,
 					...(receipt.error ? { error: publicToolDetail(receipt.error) } : {}),
