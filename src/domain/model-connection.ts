@@ -180,7 +180,10 @@ export function isCustomConnection(connection: {
 }
 
 /** The maker whose own key this connection is, or null for a gateway or unknown host. */
-function directAuthor(connection: PublicModelConnection): string | null {
+export function directAuthor(connection: {
+	provider: ModelProvider;
+	baseUrl: string;
+}): string | null {
 	if (connection.provider === "compatible")
 		return (
 			Object.entries(DIRECT_MODEL_ENDPOINTS).find(

@@ -4,6 +4,7 @@ import type { ApiTokenUsage } from "./api-token-usage";
 import type { CodexUsage } from "./codex-usage";
 import { SessionItemId } from "./ids";
 import type { MessageAttachment } from "./message-attachment";
+import type { FailoverReason } from "./model-failover";
 import { visibleRuntimeUserText } from "./runtime-handoff";
 import {
 	fileChangesFromShellCommand,
@@ -117,6 +118,27 @@ export type ErrorSessionItem = {
 	readonly message: string;
 };
 
+/**
+ * The turn moved to another model route because its own was unavailable, or
+ * (awaiting approval) stopped before moving onto a paid API key.
+ */
+export type ModelSwitchItem = {
+	readonly kind: "modelSwitch";
+	readonly id: SessionItemId;
+	readonly message: string;
+	readonly reason: FailoverReason;
+	readonly from: { readonly model: string; readonly connection: string };
+	readonly to: {
+		readonly model: string;
+		readonly connection: string;
+		/** The route's key (`<connection>|<model>`), sent back to continue on it. */
+		readonly key: string;
+	};
+	readonly state: "switched" | "awaitingApproval";
+	/** The turn's usage before the switch; usage after it was served by `to`. */
+	readonly usageBefore?: ApiTokenUsage;
+};
+
 export type UnknownSessionItem = {
 	readonly kind: "unknown";
 	readonly id: SessionItemId;
@@ -135,6 +157,7 @@ export type SessionItem =
 	| DynamicToolCallItem
 	| WebSearchItem
 	| ErrorSessionItem
+	| ModelSwitchItem
 	| UnknownSessionItem;
 
 export function isTurnRunning(status: SessionTurnStatus): boolean {
@@ -321,7 +344,12 @@ function turnSettledAfterUser(
 	if (lastUser < 0) return false;
 	return items
 		.slice(lastUser + 1)
-		.some((item) => item.kind === "agentMessage" || item.kind === "error");
+		.some(
+			(item) =>
+				item.kind === "agentMessage" ||
+				item.kind === "error" ||
+				(item.kind === "modelSwitch" && item.state === "awaitingApproval"),
+		);
 }
 
 /**

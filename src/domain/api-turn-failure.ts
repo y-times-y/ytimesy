@@ -385,7 +385,7 @@ function modelFailureCauses(error: unknown) {
 }
 
 export class IncompleteAgentTurn extends Error {
-	constructor(reason: string) {
+	constructor(readonly reason: string) {
 		super(
 			reason === "tool-calls"
 				? "The agent reached its tool-step limit without a final result. Work is preserved; continue this task instead of starting a duplicate."
