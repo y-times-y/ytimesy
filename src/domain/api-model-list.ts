@@ -25,12 +25,6 @@ export const API_MODEL_LIST: readonly ListedApiModel[] = [
 	},
 	{
 		author: "openai",
-		label: "GPT-6 Sol",
-		openRouterId: "openai/gpt-6-sol",
-		directId: "gpt-6-sol",
-	},
-	{
-		author: "openai",
 		label: "GPT-6 Luna",
 		openRouterId: "openai/gpt-6-luna",
 		directId: "gpt-6-luna",
@@ -67,9 +61,21 @@ export const API_MODEL_LIST: readonly ListedApiModel[] = [
 	},
 	{
 		author: "google",
+		label: "Gemini 4 Argon",
+		openRouterId: "google/gemini-4-argon",
+		directId: "gemini-4-argon",
+	},
+	{
+		author: "google",
 		label: "Gemini 3.8 Flash",
 		openRouterId: "google/gemini-3.8-flash",
 		directId: "gemini-3.8-flash",
+	},
+	{
+		author: "google",
+		label: "Gemini 3.7 Flash",
+		openRouterId: "google/gemini-3.7-flash",
+		directId: "gemini-3.7-flash",
 	},
 	{
 		author: "x-ai",
@@ -77,27 +83,34 @@ export const API_MODEL_LIST: readonly ListedApiModel[] = [
 		openRouterId: "x-ai/grok-4.7",
 		directId: "grok-4.7",
 	},
+	{
+		author: "x-ai",
+		label: "Grok 4.6",
+		openRouterId: "x-ai/grok-4.6",
+		directId: "grok-4.6",
+	},
 	// The makers below are offered through OpenRouter; their direct-key ids are
 	// not listed yet, so a direct key for them unlocks nothing until they are.
+	{ author: "meta", label: "Muse Wonder", openRouterId: "meta/muse-wonder" },
 	{
 		author: "meta",
-		label: "Llama 4 Maverick",
-		openRouterId: "meta-llama/llama-4-maverick",
-	},
-	{
-		author: "meta",
-		label: "Llama 4 Scout",
-		openRouterId: "meta-llama/llama-4-scout",
+		label: "Muse Spark 1.3",
+		openRouterId: "meta/muse-spark-1.3",
 	},
 	{
 		author: "deepseek",
 		label: "DeepSeek V4 Pro",
-		openRouterId: "deepseek/deepseek-v4-pro",
+		openRouterId: "deepseek/deepseek-v4-pro-0813",
 	},
 	{
 		author: "deepseek",
 		label: "DeepSeek V4.1 Flash",
 		openRouterId: "deepseek/deepseek-v4.1-flash",
+	},
+	{
+		author: "z-ai",
+		label: "GLM 5.3 Prime",
+		openRouterId: "z-ai/glm-5.3-prime",
 	},
 	{ author: "z-ai", label: "GLM 5.3", openRouterId: "z-ai/glm-5.3" },
 	{

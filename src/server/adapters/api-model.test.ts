@@ -16,7 +16,7 @@ it("roundtrips encrypted OpenRouter details through a serialized checkpoint and 
 		async (_url: Parameters<typeof globalThis.fetch>[0], _init?: RequestInit) =>
 			Response.json({
 				id: "fixture",
-				model: "openai/gpt-6-sol",
+				model: "openai/gpt-6.1-sol",
 				choices: [
 					{
 						index: 0,
@@ -36,7 +36,7 @@ it("roundtrips encrypted OpenRouter details through a serialized checkpoint and 
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			apiKey: "fixture",
-			modelId: "openai/gpt-6-sol",
+			modelId: "openai/gpt-6.1-sol",
 		},
 		fetch,
 	);

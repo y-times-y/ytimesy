@@ -53,13 +53,13 @@ it.each(["openai", "anthropic", "google", "openrouter", "compatible"])(
 	async (provider) => {
 		const modelId =
 			provider === "openai"
-				? "gpt-6-sol"
+				? "gpt-6.1-sol"
 				: provider === "anthropic"
 					? "claude-opus-5-5"
 					: provider === "google"
 						? "gemini-3.8-flash"
 						: provider === "openrouter"
-							? "openai/gpt-6-sol"
+							? "openai/gpt-6.1-sol"
 							: "grok-4.7";
 		mocks.browse.mockResolvedValue([{ id: modelId }]);
 		mocks.load.mockResolvedValue({
