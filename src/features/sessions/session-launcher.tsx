@@ -116,7 +116,7 @@ export function SessionLauncher({
 			readonly userMessageId?: string;
 			readonly attachments?: readonly IncomingAttachment[];
 		},
-	) => void;
+	) => Promise<boolean> | undefined;
 	onConnect: () => void;
 	onStop: () => void;
 	onOpenInspector: (view: InspectorView) => void;
@@ -393,7 +393,7 @@ export function SessionLauncher({
 					item.kind !== "userMessage" ||
 					!session.items.some(
 						(existing) =>
-							existing.kind === "userMessage" && existing.text === item.text,
+							existing.kind === "userMessage" && existing.id === item.id,
 					),
 			),
 		);
@@ -428,6 +428,16 @@ export function SessionLauncher({
 				...(plan ? { approvesPlan: true as const } : {}),
 			},
 		]);
+		// Nothing was sent: take the message back and return what the user typed.
+		const unsend = () => {
+			setOptimisticItems((current) =>
+				current.filter((item) => item.id !== SessionItemId(userMessageId)),
+			);
+			if (plan) return;
+			setDraft((current) => (current.trim() ? current : typed));
+			if (files.length)
+				setAttachments((current) => (current.length ? current : files));
+		};
 		const reasoning = resolveReasoningLevel(selectedModel, reasoningId);
 		const send = (encoded: readonly IncomingAttachment[]) =>
 			onSend(text, modelId, {
@@ -437,9 +447,12 @@ export function SessionLauncher({
 				...(leaderCount === 1 && speed ? { speed } : {}),
 				...(plan ? { approvesPlan: true } : {}),
 				...(competitionMode && leaderCount > 1 && !plan
-					? { leaderCount, attemptModelIds, userMessageId }
+					? { leaderCount, attemptModelIds }
 					: {}),
+				userMessageId,
 				...(encoded.length ? { attachments: encoded } : {}),
+			})?.then((sent) => {
+				if (!sent) unsend();
 			});
 		// Approving from the plan card leaves a draft in progress alone.
 		if (!plan) setDraft("");

@@ -9,6 +9,7 @@ import {
 	harnessLoginShouldShow,
 	harnessRequiresAccountLogin,
 	selectedHarnessIsConnected,
+	sendAfterConnect,
 } from "./harness-access";
 
 const codexSignedIn = {
@@ -193,5 +194,28 @@ describe("harness access", () => {
 				modelId: "api/00000000-0000-4000-8000-000000000000/gpt-6.1-sol",
 			}),
 		).toBe(true);
+	});
+});
+
+describe("sending before sign-in", () => {
+	it("holds the message while the device code waits, then sends", () => {
+		expect(
+			sendAfterConnect({
+				status: "awaiting_device_code",
+				provider: "codex",
+				loginId: "l1",
+				verificationUrl: "https://auth.openai.com/codex/device",
+				userCode: "ABCD-EFGH",
+			}),
+		).toBe("await_sign_in");
+		expect(sendAfterConnect(codexSignedIn)).toBe("send");
+		expect(
+			sendAfterConnect({
+				status: "failed",
+				provider: "codex",
+				message: "Sign-in failed.",
+			}),
+		).toBe("abandon");
+		expect(sendAfterConnect({ status: "disconnected" })).toBe("abandon");
 	});
 });
