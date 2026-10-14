@@ -48,6 +48,10 @@ it("reopens the owner's unused chat instead of creating another", async () => {
 	await db.query("insert into api_turn values($1,$2)", [randomUUID(), ran]);
 	await chat({ user: "bob" });
 	await chat({ parent: used, title: "New session" });
+	const machine = await chat({});
+	await db.query("update agent_session set provider_ref='vm-1' where id=$1", [
+		machine,
+	]);
 	expect(await reusableEmptyChat("alice", project, "api")).toBeNull();
 	const empty = await chat({});
 	const reused = await reusableEmptyChat("alice", project, "api");

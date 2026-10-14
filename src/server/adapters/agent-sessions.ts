@@ -47,6 +47,7 @@ export async function reusableEmptyChat(
 			select s.id from agent_session s
 			where s.user_id=$1 and s.project_id=$2 and s.parent_session_id is null
 				and s.title='New session' and s.turn_status <> 'running'
+				and s.provider_ref is null
 				and coalesce(jsonb_array_length(s.items),0)=0
 				and not exists (select 1 from api_turn t where t.session_id=s.id)
 			order by s.updated_at desc limit 1
