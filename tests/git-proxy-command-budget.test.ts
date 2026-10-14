@@ -36,3 +36,46 @@ it("keeps structured local inspections short while giving network Git work its f
 	).toBe(120_000);
 	expect(host.exec.mock.calls.at(-1)?.[1]).toBe(10_000);
 });
+
+it("says the repository could not be fetched only when the fetch itself failed", async () => {
+	vi.stubEnv("YTIMESY_GIT_PROXY_URL", "https://proxy.invalid");
+	vi.stubEnv("YTIMESY_GIT_PROXY_SECRET", "f".repeat(64));
+	const { apiModelFailureMessage } = await import(
+		"../src/domain/api-turn-failure"
+	);
+	const failing = (step: string) => ({
+		exec: vi.fn(async (command: string) => ({
+			exitCode: command.includes(step) ? 1 : 0,
+			stdout: command.includes("mktemp")
+				? "/tmp/ytimesy-git-proxy-abcdefgh\n"
+				: "",
+			stderr: "",
+		})),
+		writeTextFile: vi.fn(async () => undefined),
+	});
+	const receive = (step: string) =>
+		receiveProxiedRepository(failing(step), {
+			userId: "00000000-0000-4000-8000-000000000001",
+			projectId: "00000000-0000-4000-8000-000000000002",
+			owner: "fixture",
+			name: "repository",
+			branch: "main",
+			installationId: 1,
+			mode: "update",
+			destination: "/workspace/repository",
+		}).then(
+			() => "",
+			(error: unknown) => apiModelFailureMessage(error),
+		);
+	expect(await receive("fetch --no-tags")).toContain(
+		"could not fetch its repository",
+	);
+	for (const local of [
+		"check-ref-format",
+		"status --porcelain",
+		"merge --ff-only",
+	])
+		expect(await receive(local)).not.toContain(
+			"could not fetch its repository",
+		);
+});

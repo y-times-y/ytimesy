@@ -39,15 +39,24 @@ export function gitProxyConfiguration() {
 	return { origin: url.origin, secret };
 }
 
+/**
+ * Only a failed fetch or push says this; chat failure wording reads it as
+ * "could not fetch its repository", so local Git steps must not use it.
+ */
+const TRANSFER_FAILED =
+	"Workspace Git proxy transfer failed; check repository access.";
+
 async function checked(
 	host: GitTransferHost,
 	command: string,
+	failure: string,
 	timeoutMs = 15_000,
 ) {
 	const result = await host.exec(command, timeoutMs);
 	if (result.exitCode !== 0) {
 		// Operators need the cause; capability URLs never reach the log.
-		console.warn("Workspace Git proxy transfer failed", {
+		console.warn("Workspace Git command failed", {
+			failure,
 			exitCode: result.exitCode,
 			stderr: String((result as { stderr?: unknown }).stderr ?? "")
 				.replace(/https?:\/\/\S+/g, "<url>")
@@ -57,9 +66,7 @@ async function checked(
 				.join(" | ")
 				.slice(0, 400),
 		});
-		throw new Error(
-			"Workspace Git proxy transfer failed; check repository access.",
-		);
+		throw new Error(failure);
 	}
 	return result.stdout.trim();
 }
@@ -85,6 +92,7 @@ async function withProxyGit<T>(
 	const temporary = await checked(
 		host,
 		"umask 077; mktemp -d /tmp/ytimesy-git-proxy-XXXXXXXX",
+		"Workspace Git could not prepare its private configuration.",
 	);
 	if (!/^\/tmp\/ytimesy-git-proxy-[a-zA-Z0-9]+$/.test(temporary))
 		throw new Error("Invalid private Git configuration directory.");
@@ -125,10 +133,15 @@ export async function receiveProxiedRepository(
 	const branch = input.workingBranch || input.branch;
 	await checked(
 		host,
-		`git check-ref-format --branch ${quote(input.branch)}; git check-ref-format --branch ${quote(branch)}`,
+		`git check-ref-format --branch ${quote(input.branch)} && git check-ref-format --branch ${quote(branch)}`,
+		"Workspace Git rejected the branch name.",
 	);
 	if (input.mode !== "clone") {
-		const dirty = await checked(host, `git -C ${dest} status --porcelain`);
+		const dirty = await checked(
+			host,
+			`git -C ${dest} status --porcelain`,
+			"Workspace Git could not read the checkout's status.",
+		);
 		if (dirty && input.mode === "switch")
 			throw new Error(
 				"Commit or stash this chat's uncommitted changes before switching branches.",
@@ -138,16 +151,30 @@ export async function receiveProxiedRepository(
 	return withProxyGit(host, input, "read", async (git, url) => {
 		await checked(
 			host,
-			`set -eu\n${input.mode === "clone" ? `test ! -e ${dest}\nmkdir -p ${dest}\ngit -C ${dest} init` : `test -z "$(git -C ${dest} status --porcelain)"`}
-${git} -C ${dest} fetch --no-tags ${quote(url)} ${quote(`refs/heads/${input.branch}`)}
-${fetchedBranchCommand({
-	directory: input.destination,
-	branch: input.branch,
-	workingBranch: branch,
-	mode: input.mode,
-	originUrl: `https://github.com/${input.owner}/${input.name}.git`,
-})}`,
+			`set -eu\n${input.mode === "clone" ? `test ! -e ${dest}\nmkdir -p ${dest}\ngit -C ${dest} init` : `test -z "$(git -C ${dest} status --porcelain)"`}`,
+			input.mode === "clone"
+				? "Workspace Git could not create the checkout."
+				: "Workspace Git found uncommitted changes in the checkout.",
+		);
+		await checked(
+			host,
+			`${git} -C ${dest} fetch --no-tags ${quote(url)} ${quote(`refs/heads/${input.branch}`)}`,
+			TRANSFER_FAILED,
 			120_000,
+		);
+		await checked(
+			host,
+			`set -eu\n${fetchedBranchCommand({
+				directory: input.destination,
+				branch: input.branch,
+				workingBranch: branch,
+				mode: input.mode,
+				originUrl: `https://github.com/${input.owner}/${input.name}.git`,
+			})}`,
+			input.mode === "update"
+				? "Workspace Git could not fast-forward the checkout to its branch."
+				: "Workspace Git could not check out the fetched branch.",
+			30_000,
 		);
 		return "updated";
 	});
@@ -166,11 +193,16 @@ export async function pushProxiedRepository(
 		!/^refs\/ytimesy\/turn-commits\/[a-f0-9]{64}$/.test(input.revision)
 	)
 		throw new Error("Invalid completed-turn revision.");
-	await checked(host, `git check-ref-format --branch ${quote(input.branch)}`);
+	await checked(
+		host,
+		`git check-ref-format --branch ${quote(input.branch)}`,
+		"Workspace Git rejected the branch name.",
+	);
 	await withProxyGit(host, input, "write", async (git, url) => {
 		await checked(
 			host,
 			`${git} -C ${quote(input.directory)} push ${quote(url)} ${quote(`${input.revision || "HEAD"}:refs/heads/${input.branch}`)}`,
+			TRANSFER_FAILED,
 			120_000,
 		);
 	});
