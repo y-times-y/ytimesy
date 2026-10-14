@@ -432,7 +432,41 @@ it("refreshes Git access and a typed name when a repository is added again", asy
 	expect(adapter.workspace).not.toHaveBeenCalled();
 });
 
-it("restarts a ready workspace when re-adding changes the project's branch", async () => {
+it("keeps the project's branch when a repository is re-added with its default branch", async () => {
+	adapter.branch.mockResolvedValue("sha");
+	adapter.enqueue.mockReturnValue(Effect.succeed({}));
+	adapter.authorize.mockResolvedValue({
+		fullName: "test/repo",
+		installationId: 9,
+		repositoryId: 2,
+		defaultBranch: "main",
+	});
+	adapter.list.mockResolvedValue([
+		{
+			id: "proj",
+			repositoryId: 2,
+			installationId: 1,
+			fullName: "test/repo",
+			branch: "develop",
+		},
+	]);
+	adapter.workspace.mockResolvedValue({ id: "ws", status: "ready" });
+	adapter.refresh.mockImplementation(async (_user, id) => ({ id }));
+	await Effect.runPromise(
+		connectProjectGroup("alice", {
+			name: "repo",
+			repositories: [{ installationId: 9, repositoryId: 2, branch: "main" }],
+		}),
+	);
+	expect(adapter.refresh.mock.lastCall?.[2]).toMatchObject({
+		installationId: 9,
+		branch: "develop",
+	});
+	expect(adapter.workspace).not.toHaveBeenCalled();
+	expect(adapter.failReady).not.toHaveBeenCalled();
+});
+
+it("restarts a ready workspace when re-adding chooses another branch", async () => {
 	adapter.branch.mockResolvedValue("sha");
 	adapter.enqueue.mockReturnValue(Effect.succeed({}));
 	adapter.authorize.mockResolvedValue({
@@ -456,9 +490,12 @@ it("restarts a ready workspace when re-adding changes the project's branch", asy
 	await Effect.runPromise(
 		connectProjectGroup("alice", {
 			name: "repo",
-			repositories: [{ installationId: 1, repositoryId: 2, branch: "main" }],
+			repositories: [{ installationId: 1, repositoryId: 2, branch: "release" }],
 		}),
 	);
+	expect(adapter.refresh.mock.lastCall?.[2]).toMatchObject({
+		branch: "release",
+	});
 	expect(adapter.failReady).toHaveBeenCalledWith(
 		"ws",
 		"failed",

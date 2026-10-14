@@ -127,7 +127,15 @@ export function connectProjectGroup(
 					)
 				: undefined;
 		if (existing) {
-			const repository = repositories[0];
+			// The add form always sends the repository's default branch, so only
+			// another branch is the user's choice; re-adding to repair Git access
+			// keeps the project's branch (it may be on a feature branch).
+			const chosen = repositories[0].branch;
+			const repository = {
+				...repositories[0],
+				branch:
+					chosen === authorized[0].defaultBranch ? existing.branch : chosen,
+			};
 			const restartWorkspaceId =
 				existing.branch === repository.branch
 					? null
