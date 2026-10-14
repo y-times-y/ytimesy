@@ -120,24 +120,35 @@ export async function createAuthorizedRepository(
 		github.apps.listInstallationsForAuthenticatedUser,
 		{ per_page: 100 },
 	);
+	// The repository belongs to the user's account, so only that account's
+	// installation can grant access; an organization's installation never can.
+	const owner = created.data.owner.login.toLowerCase();
 	const installation = installations.find(
 		(row) =>
 			!row.suspended_at &&
 			row.app_slug === serverConfig().GITHUB_APP_SLUG &&
-			row.permissions.contents === "write",
+			row.permissions.contents === "write" &&
+			row.account !== null &&
+			"login" in row.account &&
+			row.account.login.toLowerCase() === owner,
 	);
 	if (!installation)
-		throw new Response("Connect GitHub to create a repository.", {
-			status: 409,
-		});
-	try {
-		await github.apps.addRepoToInstallationForAuthenticatedUser({
-			installation_id: installation.id,
-			repository_id: created.data.id,
-		});
-	} catch {
-		// All-repo installs already include the new repository.
-	}
+		throw new Response(
+			`Created ${created.data.full_name}, but the ytimesy GitHub App is not installed on ${created.data.owner.login}. Install it there, then add the repository.`,
+			{ status: 409 },
+		);
+	if (installation.repository_selection !== "all")
+		try {
+			await github.apps.addRepoToInstallationForAuthenticatedUser({
+				installation_id: installation.id,
+				repository_id: created.data.id,
+			});
+		} catch {
+			throw new Response(
+				`Created ${created.data.full_name}, but GitHub did not grant ytimesy access to it. Add it under Manage GitHub access, then add the repository.`,
+				{ status: 409 },
+			);
+		}
 	return {
 		installationId: installation.id,
 		repositoryId: created.data.id,
