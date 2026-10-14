@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { PGlite } from "@electric-sql/pglite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { reusableEmptyChat, titleUntitledAgentSession } from "./agent-sessions";
+import {
+	claimChatForSend,
+	reusableEmptyChat,
+	titleUntitledAgentSession,
+} from "./agent-sessions";
 
 const holder = vi.hoisted(() => ({ query: vi.fn() }));
 vi.mock("./database", () => ({ database: () => holder }));
@@ -73,4 +77,27 @@ it("names an untitled chat after its first message and keeps chosen titles", asy
 	);
 	expect(byId[untitled]).toBe("Fix the login redirect");
 	expect(byId[named]).toBe("Billing rework");
+});
+
+it("never reuses a chat whose first send is still on its way", async () => {
+	// The send claims its chat before storing files or committing.
+	const sending = await chat({});
+	await claimChatForSend("alice", sending, "Fix the login redirect\nmore");
+	expect(await reusableEmptyChat("alice", project, "api")).toBeNull();
+	// A draft send reuses and claims a chat in one step.
+	const empty = await chat({});
+	const claimed = await reusableEmptyChat(
+		"alice",
+		project,
+		"codex",
+		"Add dark mode",
+	);
+	expect(claimed?.id).toBe(empty);
+	expect(claimed?.title).toBe("Add dark mode");
+	expect(await reusableEmptyChat("alice", project, "api")).toBeNull();
+	const titles = await db.query<{ title: string }>(
+		"select title from agent_session where id=$1",
+		[sending],
+	);
+	expect(titles.rows[0]?.title).toBe("Fix the login redirect");
 });

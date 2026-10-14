@@ -33,6 +33,7 @@ vi.mock("#/server/adapters/agent-task-command-receipts", async (original) => ({
 vi.mock("#/server/adapters/agent-sessions", () => ({
 	descendantAgentSessions: fake.descendants,
 	agentSessionForOwner: fake.owner,
+	claimChatForSend: vi.fn(async () => undefined),
 }));
 vi.mock("#/server/services/agent-peer-messaging", () => ({
 	queueAgentPeerMessage: fake.queue,

@@ -7,6 +7,7 @@ import type {
 	AgentTaskReviewState,
 	AgentTaskStatus,
 } from "#/domain/agent-task";
+import { sessionTitleFromText } from "#/domain/session-item";
 import { captureServerAnalytics } from "./analytics";
 import { database } from "./database";
 
@@ -35,15 +36,20 @@ export async function selectAgentSessionHarness(
 /**
  * The newest root chat in a project that was opened but never used, so
  * "New chat" reopens it instead of leaving empty chats in the sidebar.
+ * A send claims its chat by titling it before any slow work (see
+ * `claimChatForSend`), so a chat whose first message is still being stored
+ * is never handed out again. `claimTitle` claims the reused chat atomically.
  */
 export async function reusableEmptyChat(
 	userId: string,
 	projectId: string,
 	harness: AgentProviderId,
+	claimTitle?: string,
 ): Promise<AgentSessionRecord | null> {
 	const result = await database().query(
-		`update agent_session set harness=$3,updated_at=now()
-		 where id=(
+		`update agent_session set harness=$3,title=coalesce($4,title),updated_at=now()
+		 where title='New session' and turn_status <> 'running'
+			and coalesce(jsonb_array_length(items),0)=0 and id=(
 			select s.id from agent_session s
 			where s.user_id=$1 and s.project_id=$2 and s.parent_session_id is null
 				and s.title='New session' and s.turn_status <> 'running'
@@ -53,9 +59,26 @@ export async function reusableEmptyChat(
 			order by s.updated_at desc limit 1
 		 )
 		 returning ${SESSION_COLUMNS}`,
-		[userId, projectId, harness],
+		[userId, projectId, harness, claimTitle ?? null],
 	);
 	return result.rows[0] ? toSession(result.rows[0]) : null;
+}
+
+/**
+ * Marks a chat as taken by a send before the send stores files or commits:
+ * an untitled chat takes its first message's title, which also keeps
+ * "New chat" from reusing it while that message is still on its way.
+ */
+export async function claimChatForSend(
+	userId: string,
+	sessionId: string,
+	text: string,
+) {
+	await titleUntitledAgentSession(
+		userId,
+		sessionId,
+		sessionTitleFromText(text),
+	);
 }
 
 /** Names an untitled chat after its first message; a chosen title is kept. */
