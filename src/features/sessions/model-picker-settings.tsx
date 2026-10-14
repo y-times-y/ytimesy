@@ -6,7 +6,6 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "#/components/ui/select";
-import { Toggle } from "#/components/ui/toggle";
 import {
 	type ComposerSpeed,
 	reasoningLevelLabel,
@@ -16,10 +15,9 @@ import {
 
 const SPEED_LABELS = { fast: "Fast", ultrafast: "Ultrafast" } as const;
 
-function speedLabel(speed: SessionModel["speeds"][number]) {
-	return speed.priceMultiple
-		? `${SPEED_LABELS[speed.id]} · ${speed.priceMultiple}× price`
-		: SPEED_LABELS[speed.id];
+function speedLabel(speed: SessionModel["speeds"][number], long = true) {
+	if (!speed.priceMultiple) return SPEED_LABELS[speed.id];
+	return `${SPEED_LABELS[speed.id]} · ${speed.priceMultiple}×${long ? " price" : ""}`;
 }
 
 export function ModelPickerSettings({
@@ -36,7 +34,6 @@ export function ModelPickerSettings({
 	onSpeedChange?: (speed: ComposerSpeed) => void;
 }) {
 	const reasoning = resolveReasoningLevel(model, reasoningId);
-	const [onlySpeed] = model.speeds;
 	const selectedSpeed = model.speeds.find((option) => option.id === speed);
 	return (
 		<div className="model-picker-settings">
@@ -71,25 +68,7 @@ export function ModelPickerSettings({
 					</Select>
 				</div>
 			) : null}
-			{onlySpeed && onSpeedChange && model.speeds.length === 1 ? (
-				<div className="model-picker-setting">
-					<Zap size={17} aria-hidden="true" />
-					<span>
-						Fast mode
-						{onlySpeed.priceMultiple
-							? ` · ${onlySpeed.priceMultiple}× price`
-							: null}
-					</span>
-					<Toggle
-						aria-label="Fast mode"
-						pressed={speed === onlySpeed.id}
-						onPressedChange={(on) => onSpeedChange(on ? onlySpeed.id : "")}
-					>
-						{speed === onlySpeed.id ? "On" : "Off"}
-					</Toggle>
-				</div>
-			) : null}
-			{onSpeedChange && model.speeds.length > 1 ? (
+			{onSpeedChange && model.speeds.length ? (
 				<div className="model-picker-setting">
 					<Zap size={17} aria-hidden="true" />
 					<span>Speed</span>
@@ -104,7 +83,7 @@ export function ModelPickerSettings({
 							aria-label="Speed"
 						>
 							<SelectValue>
-								{selectedSpeed ? SPEED_LABELS[selectedSpeed.id] : "Standard"}
+								{selectedSpeed ? speedLabel(selectedSpeed, false) : "Standard"}
 							</SelectValue>
 						</SelectTrigger>
 						<SelectContent position="popper" side="right">

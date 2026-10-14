@@ -638,3 +638,7 @@
 		flex-basis: 38px;
 	}
 }
+.harness-select-speed {
+	color: #f5c542;
+	flex-shrink: 0;
+}
