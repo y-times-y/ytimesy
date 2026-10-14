@@ -12,6 +12,7 @@ import {
 	expireApiTurnLeases,
 	finalizeApiTurn,
 	finishApiTurn,
+	previousTurnMessages,
 	publishApiTurnProgress,
 	renewApiTurn,
 } from "../src/server/adapters/api-turns";
@@ -24,6 +25,10 @@ import {
 	conversationSnapshot,
 	settleConversationDelivery,
 } from "../src/server/adapters/conversation-delivery";
+import {
+	loadModelFailoverPreferences,
+	saveModelFailoverPreferences,
+} from "../src/server/adapters/model-failover-preferences";
 import {
 	injectServerPeerMessages,
 	serverPeerMessageAccepted,
@@ -72,6 +77,12 @@ beforeAll(async () => {
 	await db.exec(
 		await readFile(
 			"supabase/migrations/20261005160000_agent_pr_repair.sql",
+			"utf8",
+		),
+	);
+	await db.exec(
+		await readFile(
+			"supabase/migrations/20261014060000_model_failover.sql",
 			"utf8",
 		),
 	);
@@ -509,4 +520,101 @@ it("shares a root task budget with children and rolls back a rejected account re
 		"hierarchy",
 	);
 	vi.unstubAllEnvs();
+});
+
+it("moves a running turn to its fallback in one fenced checkpoint and keeps the chosen route", async () => {
+	const revisionText = subscriptionTurnRevision("high");
+	await enqueueApiTurn({
+		sessionId,
+		userId: "alice",
+		connectionId: null,
+		revision: revisionText,
+		modelId: "gpt-6.1-sol",
+		routeId: "gpt-6.1-sol",
+		messages: [{ role: "user", content: "test" }],
+		items: [],
+	});
+	const turn = await claimApiTurn();
+	if (!turn) throw new Error("Missing turn");
+	expect(turn.failover).toBeNull();
+	const failover = {
+		route: {
+			connectionId,
+			connectionRevision: revision,
+			modelId: "openai/gpt-6.1-sol",
+			settings: {},
+		},
+		label: { model: "GPT-6.1 Sol", connection: "Test" },
+		tried: ["codex|gpt-6.1-sol", `${connectionId}|openai/gpt-6.1-sol`],
+		triedLabels: ["GPT-6.1-Sol via Codex", "GPT-6.1 Sol via Test"],
+		switches: 1,
+	};
+	const history = [
+		{ role: "user" as const, content: "test" },
+		{
+			role: "assistant" as const,
+			content: [
+				{
+					type: "reasoning" as const,
+					text: "",
+					providerOptions: { anthropic: { signature: "sig" } },
+				},
+				{ type: "text" as const, text: "done" },
+			],
+		},
+	];
+	await checkpointApiTurn(turn, history, [], failover);
+	// A later checkpoint without a failover keeps the turn on its fallback.
+	await checkpointApiTurn(turn, history, []);
+	const row = (
+		await db.query<{
+			failover: unknown;
+			connection_id: string | null;
+			model_id: string;
+		}>("select failover,connection_id,model_id from api_turn where id=$1", [
+			turn.id,
+		])
+	).rows[0];
+	expect(row).toEqual({
+		failover,
+		connection_id: null,
+		model_id: "gpt-6.1-sol",
+	});
+	expect(await finishApiTurn(turn, "completed", [])).toBe(true);
+	// No recovery point exists; the previous turn's history is the source.
+	await db.exec(
+		"create table if not exists agent_task_command_receipt(parent_session_id uuid,request_id text,status text,response jsonb)",
+	);
+	// The next message returns to the chosen model with a history it can read.
+	expect(
+		await previousTurnMessages("alice", sessionId, "gpt-6.1-sol", revisionText),
+	).toEqual([
+		{ role: "user", content: "test" },
+		{ role: "assistant", content: [{ type: "text", text: "done" }] },
+	]);
+});
+
+it("stores failover preferences per user with safe defaults", async () => {
+	expect(await loadModelFailoverPreferences("bob")).toEqual({
+		enabled: true,
+		askBeforePaid: false,
+		connectionOrder: [],
+	});
+	await saveModelFailoverPreferences("bob", {
+		enabled: true,
+		askBeforePaid: true,
+		connectionOrder: [connectionId, "codex", connectionId],
+	});
+	expect(await loadModelFailoverPreferences("bob")).toEqual({
+		enabled: true,
+		askBeforePaid: true,
+		connectionOrder: [connectionId, "codex"],
+	});
+	await expect(
+		saveModelFailoverPreferences("bob", {
+			enabled: true,
+			askBeforePaid: false,
+			connectionOrder: ["not-a-connection"],
+		}),
+	).rejects.toThrow();
 });

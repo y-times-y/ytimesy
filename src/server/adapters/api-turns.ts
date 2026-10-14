@@ -6,6 +6,8 @@ import {
 	type ApiTurnSettings,
 	apiTurnSettings,
 } from "#/domain/api-turn-settings";
+import type { TurnFailover } from "#/domain/model-failover";
+import { providerNeutralHistory } from "#/domain/runtime-handoff";
 import type { SessionItem } from "#/domain/session-item";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
 import {
@@ -39,6 +41,8 @@ export type ApiTurn = {
 	items: SessionItem[];
 	lease_id: string | null;
 	settings?: unknown;
+	/** The fallback route serving the rest of this turn after a failover (TurnFailover). */
+	failover?: unknown;
 };
 
 /** Internal child starts and wakeups retain the nearest same-model subscription selection. */
@@ -104,6 +108,8 @@ export async function enqueueApiTurn(input: {
 	preparedTask?: boolean;
 	idempotencyKey?: string;
 	settings?: ApiTurnSettings;
+	/** The user chose to continue this turn on a fallback route from the start. */
+	failover?: TurnFailover;
 }) {
 	const client = await database().connect();
 	let turnId: string | undefined;
@@ -161,8 +167,8 @@ export async function enqueueApiTurn(input: {
 			taskAccess: session.rows[0].task_access ?? null,
 		};
 		await client.query(
-			`insert into api_turn(id,session_id,user_id,connection_id,connection_revision,model_id,state,messages,items,idempotency_key,executor,settings)
-			 values($1,$2,$3,$4,$5,$6,'queued',$7,$8,$9,$10,$11)`,
+			`insert into api_turn(id,session_id,user_id,connection_id,connection_revision,model_id,state,messages,items,idempotency_key,executor,settings,failover)
+			 values($1,$2,$3,$4,$5,$6,'queued',$7,$8,$9,$10,$11,$12)`,
 			[
 				turnId,
 				input.sessionId,
@@ -175,6 +181,7 @@ export async function enqueueApiTurn(input: {
 				input.idempotencyKey ?? null,
 				configuredTurnExecutor(process.env.YTIMESY_MODEL_EXECUTION_TARGET),
 				JSON.stringify(input.settings ?? {}),
+				input.failover ? JSON.stringify(input.failover) : null,
 			],
 		);
 		await client.query(
@@ -236,11 +243,17 @@ export async function previousTurnMessages(
 		[userId, sessionId],
 	);
 	const previous = result.rows[0];
-	return previous?.state === "completed" &&
-		previous.model_id === modelId &&
-		previous.connection_revision === revision
-		? previous.messages
-		: null;
+	if (
+		previous?.state !== "completed" ||
+		previous.model_id !== modelId ||
+		previous.connection_revision !== revision
+	)
+		return null;
+	// A turn that failed over ended on another provider; its native items
+	// (encrypted reasoning, signatures) must not reach the chosen one.
+	return previous.failover
+		? providerNeutralHistory(previous.messages)
+		: previous.messages;
 }
 
 /**
@@ -248,7 +261,7 @@ export async function previousTurnMessages(
  * it returns identities only rather than the whole conversation.
  */
 const CLAIM_IDENTITY_COLUMNS =
-	"id,session_id,user_id,connection_id,connection_revision,model_id,state,lease_id,settings,'[]'::jsonb as messages,'[]'::jsonb as items";
+	"id,session_id,user_id,connection_id,connection_revision,model_id,state,lease_id,settings,failover,'[]'::jsonb as messages,'[]'::jsonb as items";
 
 export async function claimApiTurn(
 	perUserLimit = 2,
@@ -337,18 +350,26 @@ export async function renewApiTurn(turn: ApiTurn): Promise<boolean> {
 	return Boolean(result.right.rowCount);
 }
 
+/** `failover`, when given, moves the rest of the turn to its route in the same write. */
 export async function checkpointApiTurn(
 	turn: ApiTurn,
 	messages: ModelMessage[],
 	items: readonly SessionItem[],
+	failover?: TurnFailover,
 ) {
 	const result = await database().query<{ version: string }>(
-		`with saved as (update api_turn set messages=$3,items=$4,updated_at=now()
+		`with saved as (update api_turn set messages=$3,items=$4,failover=coalesce($5::jsonb,failover),updated_at=now()
 		 where id=$1 and lease_id=$2 and state='running' and not cancel_requested
 		 and heartbeat_at>=now()-interval '45 seconds' returning session_id,updated_at)
 		 update agent_session set items=$4,updated_at=now() where id in(select session_id from saved)
 		 returning (select updated_at::text from saved) as version`,
-		[turn.id, turn.lease_id, JSON.stringify(messages), JSON.stringify(items)],
+		[
+			turn.id,
+			turn.lease_id,
+			JSON.stringify(messages),
+			JSON.stringify(items),
+			failover ? JSON.stringify(failover) : null,
+		],
 	);
 	if (!result.rows[0]) throw new Error("API turn lease was lost.");
 	mirrorTurnHistory(turn.id, result.rows[0].version, { messages, items });
