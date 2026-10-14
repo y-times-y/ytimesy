@@ -222,6 +222,8 @@ export function sendHarnessWorkspaceTask(
 		readonly idempotencyKey?: string;
 		readonly approvesPlan?: boolean;
 		readonly attachments?: readonly IncomingAttachment[];
+		/** Continue this turn on a fallback route the user approved (`<connection>|<model>`). */
+		readonly continueOn?: string;
 	},
 ): Effect.Effect<PublicHarnessSession> {
 	if (

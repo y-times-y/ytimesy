@@ -1,4 +1,5 @@
 import {
+	ArrowLeftRight,
 	BookOpen,
 	Brain,
 	FilePenLine,
@@ -41,6 +42,7 @@ const icons = {
 	guide: BookOpen,
 	stop: Square,
 	test: FlaskConical,
+	switch: ArrowLeftRight,
 } as const;
 
 export function ActivityIcon({ glyph }: { glyph: SessionActivityGlyph }) {
