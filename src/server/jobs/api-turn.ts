@@ -16,10 +16,7 @@ import {
 	LifecycleHookRefusal,
 	SafeApiModelFailure,
 } from "#/domain/api-turn-failure";
-import {
-	type ApiTurnSettings,
-	apiTurnSettings,
-} from "#/domain/api-turn-settings";
+import type { ApiTurnSettings } from "#/domain/api-turn-settings";
 import {
 	CoordinationFailure,
 	TURN_COORDINATION_LEASE_MS,
