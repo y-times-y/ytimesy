@@ -28,6 +28,7 @@ import {
 import type { Project, RepositoryChoice } from "#/domain/projects";
 import { AddProjectForm } from "../projects/add-project-form";
 import { requestJson } from "../projects/api";
+import { useGithubConnectionNotice } from "../projects/github-connection-notice";
 
 export function ProjectPicker({
 	projects,
@@ -53,6 +54,8 @@ export function ProjectPicker({
 	const [creating, setCreating] = useState(false);
 	const [addingProject, setAddingProject] = useState(false);
 	const [scratchName, setScratchName] = useState("");
+	const [connectionNotice, dismissConnectionNotice] =
+		useGithubConnectionNotice();
 	const repositories = useQuery({
 		queryKey: ["github", "repositories"],
 		queryFn: () =>
@@ -128,6 +131,7 @@ export function ProjectPicker({
 			onOpenChange={(next) => {
 				setPickerOpen(next);
 				if (!next) {
+					dismissConnectionNotice();
 					setQuery("");
 					setCreating(false);
 					setAddingProject(false);
@@ -299,11 +303,13 @@ export function ProjectPicker({
 						{save.error ||
 						create.error ||
 						connection.error ||
+						connectionNotice ||
 						repositories.error ? (
 							<p className="project-picker-error" role="alert">
 								{save.error?.message ||
 									create.error?.message ||
 									connection.error?.message ||
+									connectionNotice ||
 									repositories.error?.message}
 							</p>
 						) : null}

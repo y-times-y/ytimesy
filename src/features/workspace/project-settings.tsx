@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { Blocks, Bot, Folder, Plug, User, X } from "lucide-react";
 import { ScrollArea } from "radix-ui";
@@ -11,6 +11,10 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "#/components/ui/select";
+import {
+	accountDeletionConfirmed,
+	accountDeletionPhrase,
+} from "#/domain/account-deletion";
 import { offeredAgentProviders } from "#/domain/agent-provider";
 import type {
 	ProjectSecretKind,
@@ -26,6 +30,7 @@ import {
 	type SettingsSection,
 	settingsNavItems,
 } from "#/domain/workspace-settings";
+import { authClient } from "../auth/client";
 import { AddProjectForm } from "../projects/add-project-form";
 import { requestJson } from "../projects/api";
 import { AgentProviderMark } from "../sessions/agent-provider-mark";
@@ -327,7 +332,106 @@ function AccountSection({
 					</div>
 				</div>
 			</div>
+			<DeleteAccount email={user?.email} />
 		</section>
+	);
+}
+
+/** Permanent deletion behind a typed confirmation; signs out when done. */
+function DeleteAccount({ email }: { email?: string | null }) {
+	const [confirming, setConfirming] = useState(false);
+	const [typed, setTyped] = useState("");
+	const phrase = accountDeletionPhrase({ email });
+	const confirmed = accountDeletionConfirmed({ email }, typed);
+	const remove = useMutation({
+		mutationFn: async () => {
+			const response = await fetch("/api/account", {
+				method: "DELETE",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ confirmation: typed }),
+			});
+			if (!response.ok) {
+				const text = await response.text();
+				let message = text;
+				try {
+					message = JSON.parse(text).error ?? text;
+				} catch {}
+				throw new Error(message || "Your account could not be deleted.");
+			}
+		},
+		onSuccess: async () => {
+			await authClient.signOut().catch(() => undefined);
+			window.location.assign("/auth/sign-in");
+		},
+	});
+	return (
+		<div className="settings-group settings-danger-zone">
+			<div className="settings-row">
+				<div className="settings-row-text">
+					<span className="settings-row-title">Delete account</span>
+					<span className="settings-row-meta">
+						Permanently deletes your projects, chats, cloud machines, saved
+						files and connections. Your GitHub repositories are not touched.
+					</span>
+				</div>
+				{confirming ? null : (
+					<div className="settings-row-actions">
+						<button
+							type="button"
+							className="settings-danger"
+							onClick={() => setConfirming(true)}
+						>
+							Delete account
+						</button>
+					</div>
+				)}
+				{confirming ? (
+					<form
+						className="settings-confirm"
+						onSubmit={(event) => {
+							event.preventDefault();
+							if (confirmed && !remove.isPending) remove.mutate();
+						}}
+					>
+						<label className="settings-field settings-confirm-field">
+							<span>
+								Type <strong>{phrase}</strong> to confirm. This cannot be
+								undone.
+							</span>
+							<input
+								autoComplete="off"
+								spellCheck={false}
+								value={typed}
+								disabled={remove.isPending}
+								onChange={(event) => setTyped(event.target.value)}
+							/>
+						</label>
+						<div className="settings-row-actions">
+							<button
+								type="button"
+								className="settings-secondary"
+								disabled={remove.isPending}
+								onClick={() => {
+									setConfirming(false);
+									setTyped("");
+									remove.reset();
+								}}
+							>
+								Cancel
+							</button>
+							<button
+								type="submit"
+								className="settings-danger"
+								disabled={!confirmed || remove.isPending}
+							>
+								{remove.isPending ? "Deleting…" : "Delete permanently"}
+							</button>
+						</div>
+					</form>
+				) : null}
+			</div>
+			{remove.error ? <p role="alert">{remove.error.message}</p> : null}
+		</div>
 	);
 }
 
@@ -347,6 +451,10 @@ function GithubSection({
 		mutationFn: () =>
 			requestJson<{ connected: boolean }>("/api/github/disconnect", {}),
 		onSuccess: () => window.location.assign("/"),
+	});
+	const connect = useMutation({
+		mutationFn: () => requestJson<{ url: string }>("/api/github/connect", {}),
+		onSuccess: ({ url }) => window.location.assign(url),
 	});
 	if (loading) return <p className="settings-copy">Loading GitHub…</p>;
 	return (
@@ -387,12 +495,23 @@ function GithubSection({
 								>
 									{disconnect.isPending ? "Disconnecting…" : "Disconnect"}
 								</button>
-							) : null}
+							) : (
+								<button
+									type="button"
+									className="settings-primary"
+									disabled={connect.isPending}
+									onClick={() => connect.mutate()}
+								>
+									{connect.isPending ? "Opening GitHub…" : "Connect GitHub"}
+								</button>
+							)}
 						</div>
 					</div>
 				</div>
-				{disconnect.error ? (
-					<p role="alert">{disconnect.error.message}</p>
+				{disconnect.error || connect.error ? (
+					<p role="alert">
+						{disconnect.error?.message ?? connect.error?.message}
+					</p>
 				) : null}
 			</section>
 			<section className="settings-section">
@@ -434,7 +553,11 @@ function GithubSection({
 							</li>
 						))
 					) : (
-						<li className="settings-empty">No repositories yet.</li>
+						<li className="settings-empty">
+							{connected
+								? "No repositories yet. Use Add repository to choose one."
+								: "Connect GitHub above, then add a repository."}
+						</li>
 					)}
 				</ul>
 				{adding ? (
@@ -648,6 +771,22 @@ function AgentsSection({
 		queryFn: () => readConnections(),
 	});
 	const apiKeyCount = connections.data?.length ?? 0;
+	const queryClient = useQueryClient();
+	const [confirmingSignOut, setConfirmingSignOut] = useState(false);
+	const signOut = useMutation({
+		mutationFn: () =>
+			requestJson<{ status: "disconnected" }>("/api/agent/account", {}),
+		onSuccess: async () => {
+			setConfirmingSignOut(false);
+			await Promise.all(
+				[
+					["account"],
+					["codex-subscription-usage"],
+					["agent-model-catalog"],
+				].map((queryKey) => queryClient.invalidateQueries({ queryKey })),
+			);
+		},
+	});
 	return (
 		<>
 			<section className="settings-section">
@@ -680,16 +819,56 @@ function AgentsSection({
 										</span>
 									</div>
 								</div>
-								<span
-									className="settings-badge"
-									data-tone={connected ? "ok" : undefined}
-								>
-									{connected ? "Connected" : "Not connected"}
-								</span>
+								<div className="settings-row-actions">
+									<span
+										className="settings-badge"
+										data-tone={connected ? "ok" : undefined}
+									>
+										{connected ? "Connected" : "Not connected"}
+									</span>
+									{provider.id === "codex" &&
+									account.status !== "disconnected" &&
+									!confirmingSignOut ? (
+										<button
+											type="button"
+											className="settings-secondary"
+											onClick={() => setConfirmingSignOut(true)}
+										>
+											Sign out of ChatGPT
+										</button>
+									) : null}
+								</div>
+								{provider.id === "codex" && confirmingSignOut ? (
+									<div className="settings-confirm">
+										<span className="settings-row-meta">
+											Sign out of ChatGPT? Chats using your ChatGPT plan stop
+											until you sign in again from the agent picker.
+										</span>
+										<div className="settings-row-actions">
+											<button
+												type="button"
+												className="settings-secondary"
+												disabled={signOut.isPending}
+												onClick={() => setConfirmingSignOut(false)}
+											>
+												Cancel
+											</button>
+											<button
+												type="button"
+												className="settings-danger"
+												disabled={signOut.isPending}
+												onClick={() => signOut.mutate()}
+											>
+												{signOut.isPending ? "Signing out…" : "Sign out"}
+											</button>
+										</div>
+									</div>
+								) : null}
 							</li>
 						);
 					})}
 				</ul>
+				{signOut.error ? <p role="alert">{signOut.error.message}</p> : null}
 				<CodexSubscriptionUsage usage={usage} />
 			</section>
 			<ModelConnections />

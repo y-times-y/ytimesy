@@ -10,6 +10,10 @@ import {
 } from "../adapters/background-job-dispatch";
 import { sessionsAwaitingCheckpoint } from "../adapters/checkpoints/records";
 import { checkpointStorageConfigured } from "../adapters/checkpoints/storage";
+import {
+	authEmailDeliveryConfigured,
+	deliverAuthEmails,
+} from "../adapters/email";
 import { readFreestyleApiKey } from "../adapters/freestyle/api-key";
 import { observeFleetCosts } from "../adapters/freestyle/fleet-costs";
 import { reconcileInfrastructureVms } from "../adapters/freestyle/usage-admission";
@@ -54,6 +58,8 @@ export async function deliverBackgroundJob(
 					break;
 				case "delivery":
 					await relayConversationDeliveriesOnce();
+					// Verification and password-reset mail queued by the web app.
+					if (authEmailDeliveryConfigured()) await deliverAuthEmails();
 					break;
 				case "checkpoints":
 					if (checkpointStorageConfigured())

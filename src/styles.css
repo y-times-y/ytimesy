@@ -2076,6 +2076,11 @@ a.sidebar-chat-pr,
 	gap: 16px;
 	width: min(100%, 24rem);
 }
+.auth-page-status {
+	margin: 0;
+	color: #8f8f8f;
+	font-size: 14px;
+}
 .auth-page [role="alert"] {
 	width: 100%;
 	margin: 0;
@@ -3334,8 +3339,55 @@ a.sidebar-chat-pr,
 }
 
 .settings-primary,
-.settings-secondary {
+.settings-secondary,
+.settings-danger {
 	white-space: nowrap;
+}
+.settings-danger {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-height: 32px;
+	padding: 0 12px;
+	border: 1px solid color-mix(in oklch, var(--destructive) 55%, transparent);
+	border-radius: 8px;
+	background: color-mix(in oklch, var(--destructive) 18%, transparent);
+	color: #ffb4ab;
+	font-size: 12px;
+}
+.settings-danger:hover {
+	background: color-mix(in oklch, var(--destructive) 28%, transparent);
+}
+.settings-danger:disabled {
+	cursor: not-allowed;
+	opacity: 0.5;
+}
+.settings-danger-zone {
+	margin-top: 16px;
+}
+.settings-danger-zone .settings-row-title {
+	color: #ffb4ab;
+}
+.settings-confirm-field {
+	flex: 1 1 260px;
+}
+.settings-confirm-field strong {
+	color: #ececec;
+	font-weight: 500;
+}
+/* An inline confirmation that opens under the row it belongs to. */
+.settings-row:has(> .settings-confirm) {
+	flex-wrap: wrap;
+}
+.settings-confirm {
+	display: flex;
+	flex: 1 0 100%;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px 12px;
+	padding-top: 10px;
+	border-top: 1px solid #ffffff10;
 }
 .codex-usage-window {
 	margin-top: 12px;

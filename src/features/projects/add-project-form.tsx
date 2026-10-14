@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Check, FolderGit2, RefreshCw, Search } from "lucide-react";
-import { useEffect, useId, useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { Button } from "#/components/ui/button";
 import {
 	addProjectCopy,
@@ -9,6 +9,7 @@ import {
 } from "#/domain/add-project";
 import type { Project, RepositoryChoice } from "../../domain/projects";
 import { requestJson } from "./api";
+import { useGithubConnectionNotice } from "./github-connection-notice";
 import "./add-project-form.css";
 
 export function AddProjectForm({
@@ -28,13 +29,7 @@ export function AddProjectForm({
 		.map((repo) => repo.fullName.split("/").at(-1))
 		.join(" + ")
 		.slice(0, 100);
-	const [callbackFailed, setCallbackFailed] = useState(false);
-	useEffect(() => {
-		setCallbackFailed(
-			new URLSearchParams(window.location.search).get("connection") ===
-				"failed",
-		);
-	}, []);
+	const [connectionNotice] = useGithubConnectionNotice();
 	const repositories = useQuery({
 		queryKey: ["github", "repositories"],
 		queryFn: () =>
@@ -107,9 +102,7 @@ export function AddProjectForm({
 					</Button>
 				) : null}
 			</div>
-			{callbackFailed ? (
-				<p role="alert">GitHub was canceled or expired. Connect it again.</p>
-			) : null}
+			{connectionNotice ? <p role="alert">{connectionNotice}</p> : null}
 			{phase === "loading" ? <p role="status">Loading repositories…</p> : null}
 			{phase === "connect" ? (
 				<>

@@ -69,7 +69,8 @@ export async function recentInfrastructureStatements() {
 	const result = await database().query<{
 		statement: InfrastructureStatement;
 		imported_at: Date;
-		imported_by: string;
+		/** Null once the importing admin deleted their account. */
+		imported_by: string | null;
 	}>(
 		"select statement,imported_at,imported_by from infrastructure_provider_statement order by period_end desc,imported_at desc limit 24",
 	);

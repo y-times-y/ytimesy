@@ -37,7 +37,13 @@ it("trusts localhost and 127.0.0.1 for local Better Auth origins", () => {
 			GOOGLE_CLIENT_SECRET: "secret",
 		}),
 	).toBe(true);
-	expect(configuredSocialProviders()).toEqual(["github", "google"]);
+	expect(configuredSocialProviders({})).toEqual(["github"]);
+	expect(
+		configuredSocialProviders({
+			GOOGLE_CLIENT_ID: "id",
+			GOOGLE_CLIENT_SECRET: "secret",
+		}),
+	).toEqual(["github", "google"]);
 });
 
 it("turns OAuth callback failures into a retryable sign-in message", () => {

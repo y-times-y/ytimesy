@@ -1,9 +1,18 @@
 import { createHash, randomBytes } from "node:crypto";
+import type { GithubConnectionFailureReason } from "../../domain/github-connection-callback";
 import { githubAppIdentityMatchesSignIn } from "../../domain/github-sign-in";
 import { database } from "../adapters/database";
 import { exchangeGithubToken, githubClient } from "../adapters/github";
 import { serverConfig } from "../config";
 import { githubCredentials, seal, unseal } from "./token-vault";
+
+/** A connection attempt that failed for a reason the callback can explain. */
+export class GithubConnectionFailure extends Error {
+	constructor(readonly reason: GithubConnectionFailureReason) {
+		super(`GitHub connection failed: ${reason}`);
+		this.name = "GithubConnectionFailure";
+	}
+}
 
 const hash = (value: string) =>
 	createHash("sha256").update(value).digest("hex");
@@ -37,12 +46,15 @@ export async function finishGithubConnection(
 		"delete from github_oauth_state where state_hash=$1 and user_id=$2 and expires_at>now() returning encrypted_verifier",
 		[hash(state), userId],
 	);
-	if (!consumed.rowCount)
-		throw new Error("GitHub connection expired. Start again.");
+	if (!consumed.rowCount) throw new GithubConnectionFailure("expired");
+	const verifier = await unseal(consumed.rows[0].encrypted_verifier);
+	// GitHub rejects a code that expired or was already used.
 	const credentials = await exchangeGithubToken({
 		code,
 		redirect_uri: callbackUrl(),
-		code_verifier: await unseal(consumed.rows[0].encrypted_verifier),
+		code_verifier: verifier,
+	}).catch(() => {
+		throw new GithubConnectionFailure("expired");
 	});
 	const profile = await githubClient(
 		credentials.accessToken,
@@ -57,7 +69,7 @@ export async function finishGithubConnection(
 			String(profile.data.id),
 		)
 	)
-		throw new Error("Connect the same GitHub account you used to sign in.");
+		throw new GithubConnectionFailure("wrong-account");
 	await database().query(
 		"insert into github_connection(user_id,github_user_id,encrypted_credentials) values($1,$2,$3) on conflict(user_id) do update set github_user_id=excluded.github_user_id,encrypted_credentials=excluded.encrypted_credentials,updated_at=now()",
 		[userId, String(profile.data.id), await seal(JSON.stringify(credentials))],

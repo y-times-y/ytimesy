@@ -238,6 +238,50 @@ export async function removeContextArchives(userId: string, sessionId: string) {
 	);
 }
 
+/**
+ * Deletes every stored object of one chat: its checkpoints, context archives
+ * and message attachments. Both prefixes hold files only, never folders.
+ */
+export async function removeChatObjects(userId: string, sessionId: string) {
+	const chat = checkpointObjectPrefix(userId, sessionId);
+	for (const prefix of [chat, `attachments/${chat}`]) {
+		let finished = false;
+		for (let batch = 0; batch < 100 && !finished; batch++) {
+			const result = await request(`object/list/${BUCKET}`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ prefix, limit: 100, offset: 0 }),
+			});
+			if (!result.ok) throw new Error("Could not list a chat's saved files.");
+			const rows: unknown = await result.json();
+			if (!Array.isArray(rows)) throw new Error("Invalid saved file listing.");
+			if (!rows.length) {
+				finished = true;
+				continue;
+			}
+			const paths = rows.map((row) => {
+				if (
+					typeof row?.name !== "string" ||
+					!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(row.name)
+				)
+					throw new Error("Unexpected saved file name; deletion stopped.");
+				return `${prefix}${row.name}`;
+			});
+			const removed = await request(`object/${BUCKET}`, {
+				method: "DELETE",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ prefixes: paths }),
+			});
+			if (!removed.ok)
+				throw new Error("Could not delete a chat's saved files.");
+		}
+		if (!finished)
+			throw new Error(
+				"Saved file deletion exceeded its bounded batch limit; retry.",
+			);
+	}
+}
+
 function attachmentObjectPath(userId: string, sessionId: string, id: string) {
 	if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error("Invalid attachment id.");
 	return `attachments/${checkpointObjectPrefix(userId, sessionId)}${id}.enc`;
