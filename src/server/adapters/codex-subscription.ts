@@ -14,6 +14,11 @@ import {
 	listedReasoningFromRow,
 } from "#/domain/listed-model";
 import { hasManagedCodexAuth } from "../auth/codex-managed-auth";
+import {
+	recordStepTiming,
+	stepTimingEnabled,
+	timed,
+} from "../services/step-timing";
 import { connectedLanguageModel } from "./api-model";
 import { promptCacheScopeKey } from "./api-prompt-cache";
 import {
@@ -21,6 +26,28 @@ import {
 	subscriptionFetch,
 } from "./codex-subscription-transport";
 import { nativeModelCompactor } from "./model-compaction";
+
+/** Diagnostics only: records request start to the first streamed body byte. */
+function timedFirstByte(response: Response, startedAt: number) {
+	if (!response.body || !stepTimingEnabled()) return response;
+	let seen = false;
+	const body = response.body.pipeThrough(
+		new TransformStream<Uint8Array, Uint8Array>({
+			transform(chunk, controller) {
+				if (!seen) {
+					seen = true;
+					recordStepTiming(
+						"model:firstByte",
+						Date.now() - startedAt,
+						startedAt,
+					);
+				}
+				controller.enqueue(chunk);
+			},
+		}),
+	);
+	return new Response(body, response);
+}
 
 const backend = "https://chatgpt.com/backend-api";
 const windowSchema = z.object({
@@ -232,11 +259,14 @@ export async function codexSubscriptionModel(
 		// Long reasoning steps leave unrelated pooled HTTP/1 sockets idle. Do not
 		// retain them across steps; this does not retry or replay a returned stream.
 		headers.set("Connection", "close");
-		const response = await subscriptionFetch(
-			userId,
-			"codex/responses",
-			{ ...init, method: "POST", headers },
-			tokens.chatgptAccountId,
+		const startedAt = Date.now();
+		const response = await timed("model:headers", () =>
+			subscriptionFetch(
+				userId,
+				"codex/responses",
+				{ ...init, method: "POST", headers },
+				tokens.chatgptAccountId,
+			),
 		);
 		// A spent plan allowance answers 429 like a rate limit, but retrying cannot help.
 		if (response.status === 429) {
@@ -246,7 +276,7 @@ export async function codexSubscriptionModel(
 				throw new SubscriptionUsageLimitReached(limit);
 			}
 		}
-		return response;
+		return timedFirstByte(response, startedAt);
 	};
 	const model = connectedLanguageModel(
 		{

@@ -57,6 +57,7 @@ import {
 } from "./api-agent-context";
 import { BackgroundHistoryCompaction } from "./background-history-compaction";
 import { composedAgentTools } from "./composed-agent-tools";
+import { timed } from "./step-timing";
 
 export type { ApiAgentEvent } from "#/domain/api-agent-event";
 
@@ -583,16 +584,18 @@ async function executeModelSteps(
 							contextBudget(history).compactAtTokens,
 				);
 				if (runtime.prefetchInitialReads) {
-					const prefetched = await prefetchInitialAgentReads({
-						messages: history,
-						tools: input.tools,
-						coordination: input.toolSurface === "coordination",
-						cacheStablePrefix:
-							modelFamily === "openai" &&
-							runtime.fallbackContextPolicy !== "bound-prefix",
-						signal: runSignal,
-						onEvent: input.onEvent,
-					});
+					const prefetched = await timed("model:prefetch", () =>
+						prefetchInitialAgentReads({
+							messages: history,
+							tools: input.tools,
+							coordination: input.toolSurface === "coordination",
+							cacheStablePrefix:
+								modelFamily === "openai" &&
+								runtime.fallbackContextPolicy !== "bound-prefix",
+							signal: runSignal,
+							onEvent: input.onEvent,
+						}),
+					);
 					if (prefetched !== history) {
 						history = prefetched;
 						await input.onStep(history);
