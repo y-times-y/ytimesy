@@ -103,11 +103,7 @@ it("adds xAI affinity without changing generation settings", () => {
 	});
 });
 
-it.each([
-	"anthropic/claude-sonnet-5-5",
-	"google/gemini-3.8-flash",
-	"qwen/qwen3-coder-plus",
-])(
+it.each(["anthropic/claude-sonnet-5-5", "qwen/qwen3-coder-plus"])(
 	"marks the final tool result for %s without changing other content or tools",
 	async (model) => {
 		const fetch = vi.fn<typeof globalThis.fetch>(
@@ -193,6 +189,16 @@ it("preserves existing breakpoints, unsupported models, empty text and non-JSON 
 			messages: [{ role: "user", content: "Test" }],
 		},
 		{ model: "qwen/unknown", messages: [{ role: "user", content: "Test" }] },
+		// A moving Gemini breakpoint rewrites its explicit cache every step;
+		// implicit prefix caching covers the growing tool loop instead.
+		{
+			model: "google/gemini-3.8-flash",
+			messages: [
+				{ role: "system", content: "Stable system" },
+				{ role: "user", content: "Test" },
+				{ role: "tool", tool_call_id: "call", content: "File content" },
+			],
+		},
 		{
 			model: "anthropic/claude-sonnet-5-5",
 			messages: [{ role: "user", content: "" }],
