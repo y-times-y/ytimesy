@@ -234,7 +234,14 @@ export async function codexSubscriptionModel(
 	fast = false,
 	cacheScopeId: string = randomUUID(),
 ) {
-	const catalog = await subscriptionCatalog(userId);
+	// The catalog and the account's token are independent reads; a catalog
+	// failure is still reported first.
+	const [listed, connected] = await Promise.allSettled([
+		subscriptionCatalog(userId),
+		subscriptionConnection(userId),
+	]);
+	if (listed.status === "rejected") throw listed.reason;
+	const catalog = listed.value;
 	const selected = catalog.models.find((row) => row.slug === modelId);
 	// Plans change which models a ChatGPT account may use; the catalog is per account.
 	if (!selected)
@@ -253,7 +260,14 @@ export async function codexSubscriptionModel(
 		)
 	)
 		throw new Error("Selected reasoning level is unavailable for this model.");
-	const tokens = await subscriptionConnection(userId);
+	if (connected.status === "rejected") throw connected.reason;
+	const tokens = connected.value;
+	// The step's first request reuses the token just read (fresh for at least
+	// five more minutes); later requests and a 401 retry read it again.
+	let loaded: { tokens: typeof tokens; at: number } | undefined = {
+		tokens,
+		at: Date.now(),
+	};
 	const cacheKey = promptCacheScopeKey({
 		userId,
 		connectionId: `codex-subscription:${tokens.chatgptAccountId}`,
@@ -269,12 +283,16 @@ export async function codexSubscriptionModel(
 		// retain them across steps; this does not retry or replay a returned stream.
 		headers.set("Connection", "close");
 		const startedAt = Date.now();
+		const reused =
+			loaded && startedAt - loaded.at < 60_000 ? loaded.tokens : undefined;
+		loaded = undefined;
 		const response = await timed("model:headers", () =>
 			subscriptionFetch(
 				userId,
 				"codex/responses",
 				{ ...init, method: "POST", headers },
 				tokens.chatgptAccountId,
+				reused,
 			),
 		);
 		// A spent plan allowance answers 429 like a rate limit, but retrying cannot help.
