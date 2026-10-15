@@ -45,6 +45,7 @@ it("does not resolve a workspace or checkpoint without valid pending commands", 
 			items: [receipt({ id: "../other", status: "running" })],
 			messages,
 			signal: new AbortController().signal,
+			commandReader: "continue_command" as const,
 			checkpoint,
 		}),
 	).toBe(messages);
@@ -75,6 +76,7 @@ it.each([0, 2, "interrupted"] as const)(
 			items,
 			messages: [] as ModelMessage[],
 			signal: new AbortController().signal,
+			commandReader: "continue_command" as const,
 			checkpoint,
 		};
 		const messages = await withBackgroundCommandContext(input);
@@ -82,6 +84,9 @@ it.each([0, 2, "interrupted"] as const)(
 		expect(messages).toHaveLength(1);
 		expect(JSON.stringify(messages)).toContain("not successful checks");
 		expect(JSON.stringify(messages)).toContain(commandId);
+		// The builder is offered continue_command, not read_command.
+		expect(JSON.stringify(messages)).toContain("with continue_command");
+		expect(JSON.stringify([messages, items])).not.toContain("read_command");
 		await withBackgroundCommandContext({ ...input, messages });
 		expect(completedAgentCommands).toHaveBeenCalledTimes(1);
 		expect(checkpoint).toHaveBeenCalledTimes(1);
@@ -102,6 +107,7 @@ it.each(["execute_command", "continue_command"])(
 			items,
 			messages: [],
 			signal: new AbortController().signal,
+			commandReader: "continue_command" as const,
 			checkpoint,
 		});
 		expect(items[0]).toMatchObject({ status: "completed" });
@@ -121,6 +127,7 @@ it("leaves still-running commands unchanged without inventing completion", async
 			items,
 			messages,
 			signal: new AbortController().signal,
+			commandReader: "continue_command" as const,
 			checkpoint,
 		}),
 	).toBe(messages);
