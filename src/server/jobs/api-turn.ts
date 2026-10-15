@@ -382,19 +382,28 @@ async function runApiTurnAttempt(
 		coordinated = true;
 		failureStage = "connection";
 		lastCoordinationRenewal = Date.now();
+		const subscription = subscriptionTurnSettings(route.connectionRevision);
+		// Read-only setup reads overlap the lease renewal; nothing uses them
+		// unless the renewal confirms this turn still owns its lease.
+		// The turn already carries the session's items (every write mirrors both).
+		const loadingMetadata = timed("turn:metadata", () =>
+			agentSessionMetadataForOwner(turn.user_id, turn.session_id),
+		);
+		const checkingCodexAuth =
+			subscription && !route.connectionId
+				? timed("turn:codexAuth", () => hasManagedCodexAuth(turn.user_id))
+				: Promise.resolve(false);
+		loadingMetadata.catch(() => {});
+		checkingCodexAuth.catch(() => {});
 		if (!(await timed("turn:renew", () => renewApiTurn(turn)))) {
 			abort.abort();
 			abort.signal.throwIfAborted();
 		}
-		// The turn already carries the session's items (every write mirrors both).
-		const metadata = await timed("turn:metadata", () =>
-			agentSessionMetadataForOwner(turn.user_id, turn.session_id),
-		);
+		const metadata = await loadingMetadata;
 		const owner = metadata && { ...metadata, items: turn.items };
 		if (!owner) throw new Error("Task no longer exists.");
 		if (process.env.YTIMESY_HARNESS_EVALUATION_ENABLED === "1")
 			evaluation = await evaluationRunForTask(owner.userId, owner.id);
-		const subscription = subscriptionTurnSettings(route.connectionRevision);
 		const apiSettings: ApiTurnSettings = subscription
 			? {}
 			: (route.settings ?? {});
@@ -405,12 +414,7 @@ async function runApiTurnAttempt(
 		// connection to an official endpoint.
 		let webSearch: ToolSet = {};
 		if (subscription) {
-			if (
-				route.connectionId ||
-				!(await timed("turn:codexAuth", () =>
-					hasManagedCodexAuth(turn.user_id),
-				))
-			)
+			if (route.connectionId || !(await checkingCodexAuth))
 				throw new Error("Reconnect Codex before continuing.");
 			warmCodexSubscriptionCatalog(turn.user_id);
 			// ChatGPT's Codex endpoint accepts the same hosted search as the OpenAI API.
