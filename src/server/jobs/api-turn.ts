@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 import type { ModelMessage, ToolSet } from "ai";
 import { Effect } from "effect";
 import { agentPlanState } from "#/domain/agent-plan";
-import { assertApiContextFits } from "#/domain/api-conversation";
+import {
+	assertApiContextFits,
+	isUserRequestMessage,
+} from "#/domain/api-conversation";
 import { applyApiProgress, recordedContextUsage } from "#/domain/api-progress";
 import { addApiTokenUsage } from "#/domain/api-token-usage";
 import {
@@ -64,6 +67,7 @@ import {
 } from "../adapters/api-turns";
 import { reserveApiTokens } from "../adapters/api-usage-budget";
 import { archiveModelContext } from "../adapters/context-archives";
+import { conversationPointCodeRef } from "../adapters/conversation-recovery";
 import { coordinateConversationTurn } from "../adapters/conversation-turn-control";
 import {
 	assertEvaluationActive,
@@ -96,6 +100,7 @@ import {
 	runCodexSubscriptionAgent,
 	runCodexSubscriptionAgentStep,
 } from "../services/codex-subscription-agent";
+import { compactionStateSnapshot } from "../services/compaction-state-snapshot";
 import { withCompletedTaskReviewContext } from "../services/completed-task-review-context";
 import { ensureConversationCodePoint } from "../services/conversation-recovery";
 import { harnessLifecycleHooks } from "../services/harness-lifecycle-hooks";
@@ -787,6 +792,17 @@ async function runApiTurnAttempt(
 			}),
 			tools,
 			signal: abort.signal,
+			isUserRequest: (message) => isUserRequestMessage(items, message),
+			compactionSnapshot: compactionStateSnapshot({
+				workspace,
+				baseRef: async () => {
+					const first = items.find((item) => item.kind === "userMessage");
+					return first && writable
+						? conversationPointCodeRef(owner.userId, owner.id, first.id)
+						: undefined;
+				},
+				runningIds: () => pendingAgentCommandIds(items),
+			}),
 			restoreInstructions: async (history) => {
 				history = await repositoryContext.restoreInstructions(history);
 				await hooks.postCompact(history);

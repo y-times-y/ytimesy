@@ -47,7 +47,15 @@ const ALIBABA_CACHE_MODELS = new Set([
 	"qwen/qwen3-coder-flash",
 ]);
 
-/** The generic SDK drops content-block provider metadata; amend only documented gateway routes. */
+/**
+ * The generic SDK drops content-block provider metadata; amend only documented
+ * gateway routes. Gemini is deliberately not marked: OpenRouter uses only the
+ * last Gemini breakpoint and writes a fixed-TTL cache for exactly that prefix,
+ * so a breakpoint that follows each step's final message pays a fresh cache
+ * write every step and never reads it back. Unmarked requests use Gemini's
+ * implicit prefix caching (no write charge), kept on one endpoint by the
+ * session id sticky routing.
+ */
 export function openRouterCacheFetch(
 	fetch: typeof globalThis.fetch,
 ): typeof globalThis.fetch {
@@ -56,13 +64,7 @@ export function openRouterCacheFetch(
 		const body = JSON.parse(init.body);
 		const model =
 			typeof body.model === "string" ? body.model.replace(/:.*$/, "") : "";
-		if (
-			!(
-				model.startsWith("anthropic/") ||
-				model.startsWith("google/gemini-") ||
-				ALIBABA_CACHE_MODELS.has(model)
-			)
-		)
+		if (!(model.startsWith("anthropic/") || ALIBABA_CACHE_MODELS.has(model)))
 			return fetch(url, init);
 		if (!Array.isArray(body.messages)) return fetch(url, init);
 		// Do not add another breakpoint when the caller has already configured caching.
