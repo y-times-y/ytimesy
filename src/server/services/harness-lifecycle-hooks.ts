@@ -51,6 +51,14 @@ export function harnessLifecycleHooks(input: {
 	baseline: (workspace: AgentToolWorkspace) => Promise<string | null>;
 	once: (id: string, run: () => Promise<unknown>) => Promise<unknown>;
 	continuationCount?: () => Promise<number>;
+	/**
+	 * Reuses a configuration across durable steps. The configuration is read
+	 * from a baseline commit, so the commit names its content.
+	 */
+	configCache?: (
+		key: string,
+		load: () => Promise<z.infer<typeof lifecycleHookConfig>>,
+	) => Promise<z.infer<typeof lifecycleHookConfig>>;
 }) {
 	let configured: Promise<z.infer<typeof lifecycleHookConfig>> | undefined;
 	let pending: string[] = [];
@@ -62,26 +70,33 @@ export function harnessLifecycleHooks(input: {
 			if (!base) return { version: 1 as const, hooks: [] };
 			if (!/^[a-f0-9]{40,64}$/.test(base))
 				throw new Error("Invalid lifecycle baseline.");
-			const result = await workspace.machines.exec(
-				workspace.vm,
-				`git -C ${posixShellQuoted(workspace.cwd)} show ${posixShellQuoted(`${base}:.ytimesy/hooks.json`)}`,
-				10_000,
-			);
-			if (result.exitCode) {
-				const exists = await workspace.machines.exec(
-					workspace.vm,
-					`git -C ${posixShellQuoted(workspace.cwd)} ls-tree ${posixShellQuoted(base)} -- .ytimesy/hooks.json`,
-					10_000,
-				);
-				if (exists.exitCode || exists.stdout.trim())
-					throw new Error("Could not load baseline lifecycle hooks.");
-				return { version: 1 as const, hooks: [] };
-			}
-			if (result.stdout.length > 32000)
-				throw new Error("Lifecycle configuration exceeds its limit.");
-			return lifecycleHookConfig.parse(JSON.parse(result.stdout));
+			const load = () => baselineConfig(workspace, base);
+			return input.configCache
+				? input.configCache(`lifecycle-hooks:${workspace.cwd}:${base}`, load)
+				: load();
 		})();
 		return configured;
+	}
+
+	async function baselineConfig(workspace: AgentToolWorkspace, base: string) {
+		const result = await workspace.machines.exec(
+			workspace.vm,
+			`git -C ${posixShellQuoted(workspace.cwd)} show ${posixShellQuoted(`${base}:.ytimesy/hooks.json`)}`,
+			10_000,
+		);
+		if (result.exitCode) {
+			const exists = await workspace.machines.exec(
+				workspace.vm,
+				`git -C ${posixShellQuoted(workspace.cwd)} ls-tree ${posixShellQuoted(base)} -- .ytimesy/hooks.json`,
+				10_000,
+			);
+			if (exists.exitCode || exists.stdout.trim())
+				throw new Error("Could not load baseline lifecycle hooks.");
+			return { version: 1 as const, hooks: [] };
+		}
+		if (result.stdout.length > 32000)
+			throw new Error("Lifecycle configuration exceeds its limit.");
+		return lifecycleHookConfig.parse(JSON.parse(result.stdout));
 	}
 
 	async function run(

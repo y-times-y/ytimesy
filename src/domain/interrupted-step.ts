@@ -9,7 +9,7 @@ const LISTED_CALLS = 20;
  * tools it had started may already have changed the workspace, so they are never
  * replayed automatically: unfinished calls are marked interrupted and the model is
  * told which calls ran so it can inspect the state before repeating any of them.
- * Commands started with start_command keep running on the VM across the restart.
+ * Background commands keep running on the VM across the restart.
  */
 export function prepareInterruptedStep(
 	messages: ModelMessage[],
@@ -43,7 +43,7 @@ export function prepareInterruptedStep(
 	const notice = [
 		"Your previous step was interrupted by a server restart before its results were saved, so it is being run again.",
 		listed.length
-			? `These tool calls had already started and may have changed the workspace:\n${listed.join("\n")}\nInspect the current state before repeating any of them. Commands started with start_command keep running; check them with read_command or wait_command.`
+			? `These tool calls had already started and may have changed the workspace:\n${listed.join("\n")}\nInspect the current state before repeating any of them. Background commands keep running on the VM; resume them by id instead of starting them again.`
 			: "No tool calls had started.",
 	].join("\n");
 	return {

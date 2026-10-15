@@ -3,7 +3,8 @@ import {
 	type MCPClient,
 	type OAuthClientProvider,
 } from "@ai-sdk/mcp";
-import type { ToolSet } from "ai";
+import { asSchema, type JSONSchema7, type ToolSet } from "ai";
+import { mcpToolName } from "#/domain/mcp-tool-call";
 import { redirectRefusingFetch } from "../adapters/workers-fetch";
 
 type ConnectableMcpServer = {
@@ -17,9 +18,16 @@ type ConnectableMcpServer = {
 const CALL_TIMEOUT_MS = 60_000;
 const CONNECT_TIMEOUT_MS = 15_000;
 const MAX_OUTPUT_CHARACTERS = 32_000;
-// Provider tool names allow [A-Za-z0-9_-] up to 64 characters.
-const toolName = (server: string, tool: string) =>
-	`mcp__${server}__${tool.replace(/[^A-Za-z0-9_-]/g, "_")}`.slice(0, 64);
+
+/** One connected MCP tool: its offered name and what the server declared. */
+export type McpCatalogEntry = {
+	/** The prefixed tool name in the turn's tool set. */
+	name: string;
+	server: string;
+	tool: string;
+	description: string;
+	inputSchema: JSONSchema7;
+};
 
 function bounded(result: unknown) {
 	const text = JSON.stringify(result);
@@ -43,6 +51,9 @@ export async function connectMcpTools(
 ) {
 	const clients: MCPClient[] = [];
 	const tools: ToolSet = {};
+	const catalog: McpCatalogEntry[] = [];
+	/** Each server's own initialize instructions, when it gave any. */
+	const purposes: Record<string, string> = {};
 	const unavailable: string[] = [];
 	for (const server of servers) {
 		try {
@@ -62,9 +73,21 @@ export async function connectMcpTools(
 				},
 			});
 			clients.push(client);
+			if (client.instructions?.trim())
+				purposes[server.name] = client.instructions.trim();
 			for (const [name, definition] of Object.entries(await client.tools())) {
 				const execute = definition.execute;
-				tools[toolName(server.name, name)] = {
+				catalog.push({
+					name: mcpToolName(server.name, name),
+					server: server.name,
+					tool: name,
+					description:
+						typeof definition.description === "string"
+							? definition.description
+							: "",
+					inputSchema: await asSchema(definition.inputSchema).jsonSchema,
+				});
+				tools[mcpToolName(server.name, name)] = {
 					...definition,
 					description: `[MCP ${server.name}] ${definition.description ?? name}`,
 					...(execute
@@ -94,6 +117,8 @@ export async function connectMcpTools(
 	}
 	return {
 		tools,
+		catalog,
+		purposes,
 		unavailable,
 		close: async () => {
 			await Promise.allSettled(clients.map((client) => client.close()));
