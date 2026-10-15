@@ -11,7 +11,6 @@ import {
 	type MemoryChange,
 	type MemoryFiles,
 	type MemoryMode,
-	mayStateDurableFact,
 	memoryLines,
 	memoryPath,
 	parseSaveHookAnswer,
@@ -178,8 +177,9 @@ async function runOnUserModel(
 // ---- save hook -------------------------------------------------------------
 
 /**
- * End of turn: a single cheap pass over the user's latest message saves a
- * durable preference, decision or correction the agent did not save itself.
+ * After every completed turn (as Supermemory's hook does): a single cheap
+ * pass over the user's latest message saves a durable preference, decision
+ * or correction the agent did not save itself.
  */
 export async function runMemorySave(
 	userId: string,
@@ -194,8 +194,7 @@ export async function runMemorySave(
 	const message = [...chat.items]
 		.reverse()
 		.find((item) => item.kind === "userMessage");
-	if (message?.kind !== "userMessage" || !mayStateDurableFact(message.text))
-		return "skipped";
+	if (message?.kind !== "userMessage") return "skipped";
 	const route = await deps.route(userId);
 	if (!route) return "no-route";
 	let snapshot = await repo.snapshot();
