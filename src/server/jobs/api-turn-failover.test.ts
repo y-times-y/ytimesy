@@ -108,6 +108,7 @@ vi.mock("../adapters/model-failover-preferences", () => ({
 	loadModelFailoverPreferences: mocks.preferences,
 }));
 vi.mock("../adapters/codex-subscription", () => ({
+	warmCodexSubscriptionCatalog: vi.fn(),
 	codexSubscriptionCatalog: vi.fn(async () => [
 		{ id: "gpt-6.1-sol", label: "GPT-6.1-Sol" },
 	]),
