@@ -221,10 +221,13 @@ export function toolActivity(item: DynamicToolCallItem): ToolActivity {
 			const path =
 				typeof operation.path === "string"
 					? operation.path
-					: /\*\*\* (?:Update|Add|Delete) File: (.+)/.exec(patch)?.[1];
+					: (text("path") ??
+						/\*\*\* (?:Update|Add|Delete) File: (.+)/.exec(patch)?.[1] ??
+						/^\+\+\+ (?:b\/)?(?!\/dev\/null)(\S+)/m.exec(patch)?.[1]);
 			const kind = String(operation.type ?? "");
 			const verb =
-				/create|add/.test(kind) || /\*\*\* Add File/.test(patch)
+				/create|add/.test(kind) ||
+				/\*\*\* Add File|^(?:---|\*\*\*) \/dev\/null/m.test(patch)
 					? "Created"
 					: /delete/.test(kind) || /\*\*\* Delete File/.test(patch)
 						? "Deleted"

@@ -19,6 +19,15 @@ import {
 } from "./language-intelligence";
 import { prepareRenameWrites, renameSources } from "./language-refactor";
 import {
+	applyPatchEdits,
+	createsFromEmpty,
+	PATCH_INPUT_HELP,
+	type PatchFileChange,
+	PatchInputError,
+	parsePatchText,
+	repositoryPatchPath,
+} from "./patch-input";
+import {
 	archivedGuidanceDocuments,
 	knownGuidanceDocuments,
 } from "./repository-guidance";
@@ -851,10 +860,214 @@ export function apiAgentFileTools(
 			})
 		: tool({
 				description:
-					"Apply one create, update or delete operation using a headerless V4A diff. Update sections use @@ context anchors and space/minus/plus line prefixes. Reads latest content; rejects stale edits, escapes and symlinks. Supply enough context to identify the intended location.",
-				inputSchema: z.object({ operation: patchOperation }),
-				execute: ({ operation }, options) =>
-					once(options.toolCallId, () => applyPatch(operation)),
+					"Edit files. Pass one of: patch (a unified/git diff, a '*** Begin Patch' envelope with Add/Update/Delete File sections, or SEARCH/REPLACE blocks with path); path plus content to write a whole file; or operation (one V4A create_file/update_file/delete_file). Multi-file patches apply in order. Reads latest content; context may drift in line numbers or whitespace but must match exactly one place. Rejects stale edits, escapes and symlinks.",
+				inputSchema: z.object({
+					operation: z
+						.union([patchOperation, z.string().max(200_000)])
+						.optional()
+						.describe("One V4A operation object."),
+					patch: z
+						.string()
+						.max(200_000)
+						.optional()
+						.describe(
+							"Patch text: unified diff, *** Begin Patch envelope, or SEARCH/REPLACE blocks.",
+						),
+					path: z
+						.string()
+						.min(1)
+						.max(2048)
+						.optional()
+						.describe(
+							"Target file for content, or for SEARCH/REPLACE blocks and hunks without file headers.",
+						),
+					content: z
+						.string()
+						.max(1_000_000)
+						.optional()
+						.describe("Complete new file content, written to path."),
+				}),
+				execute: (args, options) =>
+					once(options.toolCallId, () => applyFlexiblePatch(args)),
 			});
+	async function applyFlexiblePatch(args: {
+		operation?: z.infer<typeof patchOperation> | string;
+		patch?: string;
+		path?: string;
+		content?: string;
+	}): Promise<unknown> {
+		const patchText =
+			typeof args.operation === "string" ? args.operation : args.patch;
+		const operation =
+			typeof args.operation === "object" ? args.operation : undefined;
+		const forms = [operation, patchText, args.content].filter(
+			(value) => value !== undefined,
+		).length;
+		try {
+			if (forms !== 1)
+				throw new PatchInputError(
+					forms
+						? "Pass exactly one of operation, patch, or path with content."
+						: "No edit was supplied.",
+				);
+			if (operation) {
+				let request: Record<string, string>;
+				try {
+					request = await preparePatch(operation);
+				} catch (error) {
+					// Keep the maintained V4A applier first; fall back only when it rejects
+					// a diff written in another accepted format.
+					if (operation.type === "delete_file" || !operation.diff) throw error;
+					let changes: PatchFileChange[];
+					try {
+						changes = parsePatchText(operation.diff, operation.path);
+					} catch {
+						throw error;
+					}
+					return await applyFileChanges(changes);
+				}
+				return await writeEdit(request);
+			}
+			if (patchText !== undefined)
+				return await applyFileChanges(parsePatchText(patchText, args.path));
+			if (!args.path)
+				throw new PatchInputError("content needs a path to write.");
+			return await applyFileChanges([
+				{
+					type: "write",
+					path: repositoryPatchPath(args.path),
+					content: args.content as string,
+				},
+			]);
+		} catch (error) {
+			const message =
+				error instanceof Error
+					? error.message
+					: "The patch could not be applied.";
+			throw new Error(
+				`${message}${error instanceof PatchInputError ? " No files were changed." : ""}\n\n${PATCH_INPUT_HELP}`,
+			);
+		}
+	}
+	async function readOptionalRepositoryFile(
+		path: string,
+	): Promise<string | null> {
+		const [entry] = await readRepositoryFiles([path], undefined, 128_000);
+		if (!entry || "error" in entry) return null;
+		if (!("content" in entry))
+			throw new Error(`Could not read ${path} for patching.`);
+		let content = entry.content;
+		let start: number | null = entry.truncated ? content.length : null;
+		while (start !== null) {
+			const page: RepositoryFilePage = await readRepositoryFiles(
+				[path],
+				start,
+				128_000,
+			);
+			content += page.content;
+			if (content.length > 1_000_000)
+				throw new PatchInputError(
+					"Patch source exceeds the supported file size.",
+				);
+			start = page.nextStart;
+		}
+		return content;
+	}
+	async function applyFileChanges(changes: PatchFileChange[]) {
+		const states = new Map<
+			string,
+			{ original: string | null; current: string | null }
+		>();
+		const load = async (path: string) => {
+			let state = states.get(path);
+			if (!state) {
+				if (states.size >= 16)
+					throw new PatchInputError(
+						"A patch may change at most 16 files; split it into several calls.",
+					);
+				const original = await readOptionalRepositoryFile(path);
+				state = { original, current: original };
+				states.set(path, state);
+			}
+			return state;
+		};
+		// Apply every change in memory first so a bad hunk changes nothing.
+		for (const change of changes) {
+			const state = await load(change.path);
+			if (change.type === "create") {
+				if (state.current !== null)
+					throw new PatchInputError(
+						`${change.path} already exists; update it with hunks or replace it with {path, content}.`,
+					);
+				state.current = change.content;
+			} else if (change.type === "write") state.current = change.content;
+			else if (change.type === "delete") {
+				if (state.current === null)
+					throw new PatchInputError(`${change.path} does not exist.`);
+				state.current = null;
+			} else {
+				if (state.current === null && !createsFromEmpty(change.edits))
+					throw new PatchInputError(
+						`${change.path} does not exist; create it with '--- /dev/null', '*** Add File:' or {path, content}.`,
+					);
+				const updated = applyPatchEdits(
+					state.current ?? "",
+					change.edits,
+					change.path,
+				);
+				if (change.moveTo && change.moveTo !== change.path) {
+					const destination = await load(change.moveTo);
+					if (destination.current !== null)
+						throw new PatchInputError(`${change.moveTo} already exists.`);
+					destination.current = updated;
+					state.current = null;
+				} else state.current = updated;
+			}
+			if ((state.current?.length ?? 0) > 1_000_000)
+				throw new PatchInputError(
+					"Patch result exceeds the supported file size.",
+				);
+		}
+		const requests: Record<string, string>[] = [];
+		const unchanged: string[] = [];
+		for (const [path, { original, current }] of states) {
+			if (original === current) {
+				if (original !== null) unchanged.push(path);
+				continue;
+			}
+			const expectedSha256 =
+				original === null
+					? undefined
+					: createHash("sha256").update(original).digest("hex");
+			if (current === null)
+				requests.push({
+					operation: "delete",
+					path,
+					expectedSha256: expectedSha256 as string,
+				});
+			else if (expectedSha256)
+				requests.push({
+					operation: "write",
+					path,
+					expectedSha256,
+					content: current,
+				});
+			else requests.push({ operation: "create", path, content: current });
+		}
+		const receipt = requests.length
+			? ((await writeGuestEdits(requests)) as BatchEditReceipt)
+			: { completed: [], failedPath: null, unattemptedPaths: [] };
+		return {
+			completed: await Promise.all(receipt.completed.map(publicEditReceipt)),
+			failedPath: receipt.failedPath,
+			unattemptedPaths: receipt.unattemptedPaths,
+			...(unchanged.length ? { unchanged } : {}),
+			...(receipt.error
+				? {
+						error: `${publicToolDetail(receipt.error)}. Applied: ${receipt.completed.map((file) => file.path).join(", ") || "none"}. Not applied: ${[receipt.failedPath, ...receipt.unattemptedPaths].filter(Boolean).join(", ")}. Inspect those files before retrying.`,
+					}
+				: {}),
+		};
+	}
 	return tools;
 }
