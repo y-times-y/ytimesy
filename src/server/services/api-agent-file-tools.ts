@@ -851,7 +851,7 @@ export function apiAgentFileTools(
 			})
 		: tool({
 				description:
-					"Apply one create, update or delete operation using a headerless V4A diff. Update sections use @@ context anchors and space/minus/plus line prefixes. Reads latest content; rejects stale edits, escapes and symlinks. Supply enough context to identify the intended location. Prefer replace_text for small exact replacements.",
+					"Apply one create, update or delete operation using a headerless V4A diff. Update sections use @@ context anchors and space/minus/plus line prefixes. Reads latest content; rejects stale edits, escapes and symlinks. Supply enough context to identify the intended location.",
 				inputSchema: z.object({ operation: patchOperation }),
 				execute: ({ operation }, options) =>
 					once(options.toolCallId, () => applyPatch(operation)),
