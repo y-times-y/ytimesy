@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Effect, Either } from "effect";
 import { WorkspaceId } from "#/domain/ids";
 import {
 	type AgentSessionRecord,
@@ -53,6 +53,20 @@ export function deferredApiTurnWorkspace(
 		let additionalRepositoryNames: string[] = [];
 		if (ancestors.includes(owner.id) || ancestors.length > 8)
 			throw new Error("Invalid shared task ancestry.");
+		const checkoutScope = {
+			userId: owner.userId,
+			projectId: owner.projectId,
+			sessionId: owner.id,
+		};
+		// A root chat's checkout plan (project, branch and GitHub reads) does not
+		// depend on its VM, so it loads while the VM is bound and started. Its
+		// outcome, failure included, is used exactly where it was loaded before.
+		const earlyCheckout = owner.taskPlacement
+			? undefined
+			: Effect.runPromise(
+					Effect.either(loadTenantProjectCheckout(checkoutScope)),
+				);
+		earlyCheckout?.catch(() => {});
 		if (owner.taskPlacement === "shared") {
 			const parent = owner.parentSessionId
 				? await agentSessionForOwner(owner.userId, owner.parentSessionId)
@@ -94,11 +108,12 @@ export function deferredApiTurnWorkspace(
 		if (bound.session.taskPlacement !== "shared")
 			await Effect.runPromise(
 				Effect.gen(function* () {
-					const checkout = yield* loadTenantProjectCheckout({
-						userId: owner.userId,
-						projectId: owner.projectId,
-						sessionId: owner.id,
-					});
+					const checkout = earlyCheckout
+						? yield* Either.match(yield* Effect.promise(() => earlyCheckout), {
+								onLeft: Effect.fail,
+								onRight: Effect.succeed,
+							})
+						: yield* loadTenantProjectCheckout(checkoutScope);
 					additionalRepositoryNames = (
 						checkout?.additionalRepositories ?? []
 					).map((repo) => repo.name);
