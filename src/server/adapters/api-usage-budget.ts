@@ -48,6 +48,14 @@ export async function reserveEnvironmentDiagnosisTokens(
 	});
 }
 
+/** Memory's save hook and dreaming, on the user's own API connection. */
+export async function reserveMemoryTokens(userId: string, amount: number) {
+	return reserveScopedTokens(userId, amount, async () => ({
+		scope: "memory",
+		limit: dailyLimit("YTIMESY_API_MEMORY_DAILY_TOKENS", 2_000_000),
+	}));
+}
+
 async function reserveScopedTokens(
 	userId: string,
 	amount: number,
