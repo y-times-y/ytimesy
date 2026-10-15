@@ -75,7 +75,9 @@ export async function connectMcpTools(
 			clients.push(client);
 			if (client.instructions?.trim())
 				purposes[server.name] = client.instructions.trim();
-			for (const [name, definition] of Object.entries(await client.tools())) {
+			for (const [name, definition] of Object.entries(
+				await withinConnectTimeout(client.tools(), options.signal),
+			)) {
 				const execute = definition.execute;
 				catalog.push({
 					name: mcpToolName(server.name, name),
@@ -124,4 +126,20 @@ export async function connectMcpTools(
 			await Promise.allSettled(clients.map((client) => client.close()));
 		},
 	};
+}
+
+/** Listing tools has no signal of its own; a stalled server must not hold the step. */
+function withinConnectTimeout<T>(work: Promise<T>, signal?: AbortSignal) {
+	const deadline = AbortSignal.any([
+		AbortSignal.timeout(CONNECT_TIMEOUT_MS),
+		...(signal ? [signal] : []),
+	]);
+	return new Promise<T>((resolve, reject) => {
+		const stop = () => reject(new Error("MCP tool listing timed out."));
+		if (deadline.aborted) return stop();
+		deadline.addEventListener("abort", stop, { once: true });
+		work.then(resolve, reject).finally(() =>
+			deadline.removeEventListener("abort", stop),
+		);
+	});
 }
