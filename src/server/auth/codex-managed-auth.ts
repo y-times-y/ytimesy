@@ -92,10 +92,33 @@ function externalTokens(auth: ManagedCodexAuth): CodexExternalTokens {
 	};
 }
 
-/** Row lock makes refresh-token rotation single-writer across web/worker processes. */
+/**
+ * Row lock makes refresh-token rotation single-writer across web/worker processes.
+ * A current, unexpired token needs no rotation, so it is read without the lock.
+ */
 export async function codexExternalTokens(
 	userId: string,
 	forceRefresh = false,
+): Promise<CodexExternalTokens> {
+	if (!forceRefresh) {
+		const { rows } = await database().query<{
+			encrypted_codex_auth: string | null;
+		}>(
+			"select encrypted_codex_auth from agent_account where user_id=$1 and provider='codex' and status='connected'",
+			[userId],
+		);
+		const sealed = rows[0]?.encrypted_codex_auth;
+		if (!sealed) throw new Error("Connect Codex before starting this agent.");
+		const auth = managedAuth(JSON.parse(await unseal(sealed)));
+		if (codexAccessTokenExpiresAt(auth) >= Date.now() + 300_000)
+			return externalTokens(auth);
+	}
+	return lockedExternalTokens(userId, forceRefresh);
+}
+
+async function lockedExternalTokens(
+	userId: string,
+	forceRefresh: boolean,
 ): Promise<CodexExternalTokens> {
 	const client = await database().connect();
 	try {
