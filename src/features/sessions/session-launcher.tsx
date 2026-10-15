@@ -36,6 +36,10 @@ import {
 import { FAILOVER_CONTINUE_TEXT } from "#/domain/model-failover";
 import type { Project } from "#/domain/projects";
 import {
+	secretDeclinedText,
+	secretProvidedText,
+} from "#/domain/secret-request";
+import {
 	lastUserMessageText,
 	type SessionItem,
 	sessionUsesFollowUpLayout,
@@ -53,6 +57,7 @@ import { captureAnalytics } from "#/features/analytics/client";
 import { authClient } from "#/features/auth/client";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
 import { listProjectCommandsFn } from "../workspace/explorer.fn";
+import { saveProjectSecretFn } from "../workspace/project-secrets.fn";
 import {
 	getConversationRecoveryPoints,
 	restoreConversationPoint,
@@ -246,6 +251,7 @@ export function SessionLauncher({
 	});
 	const [draft, setDraft] = useState(initialDraft);
 	const loadProjectCommands = useServerFn(listProjectCommandsFn);
+	const saveProjectSecret = useServerFn(saveProjectSecretFn);
 	const projectCommands = useQuery({
 		queryKey: ["project-commands", selectedProject?.id, session.agentSessionId],
 		// Only when the user starts a slash command; never wakes a paused VM.
@@ -610,6 +616,20 @@ export function SessionLauncher({
 							.querySelector<HTMLTextAreaElement>(".session-dock textarea")
 							?.focus(),
 				}}
+				secretActions={
+					selectedProject
+						? {
+								disabled: busy || turnStatus === "running",
+								onSave: async ({ name, value, kind }) => {
+									await saveProjectSecret({
+										data: { projectId: selectedProject.id, name, value, kind },
+									});
+									sendText(secretProvidedText(name));
+								},
+								onDecline: (name) => sendText(secretDeclinedText(name)),
+							}
+						: undefined
+				}
 				failoverActions={{
 					disabled: busy || turnStatus === "running",
 					onContinue: (key) => sendText(FAILOVER_CONTINUE_TEXT, undefined, key),

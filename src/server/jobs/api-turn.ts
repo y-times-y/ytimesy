@@ -139,6 +139,10 @@ import {
 	writeAgentProjectSecrets,
 } from "../services/project-secrets";
 import { withRedactedResults } from "../services/redacted-tools";
+import {
+	SECRET_REQUEST_END_TURN_TOOLS,
+	secretRequestTools,
+} from "../services/secret-request-tool";
 import { machinesForAgentSession } from "../services/session-workspace-machines";
 import { analyticsAgentRole } from "../services/turn-analytics";
 import { commitCompletedSessionTurn } from "../services/turn-commit";
@@ -567,10 +571,18 @@ async function runApiTurnAttempt(
 			...webSearch,
 		};
 		const redact = projectSecrets?.redact ?? [];
+		// Only a person in a root chat can paste a secret into the card.
+		const secretTools =
+			planLock && projectSecrets
+				? secretRequestTools(projectSecrets.names.map(({ name }) => name))
+				: {};
 		const tools = planLock
 			? withPlanMode(
 					hooks.wrap(
-						withRedactedResults({ ...withMcp, ...planTools(planLock) }, redact),
+						withRedactedResults(
+							{ ...withMcp, ...planTools(planLock), ...secretTools },
+							redact,
+						),
 					),
 					() => planLock.planning,
 				)
@@ -657,7 +669,14 @@ async function runApiTurnAttempt(
 			speed: apiSettings.speed,
 			knownTools: discoveredToolsFromSession(items),
 			toolSurface,
-			...(planLock ? { endTurnTools: PLAN_END_TURN_TOOLS } : {}),
+			...(planLock
+				? {
+						endTurnTools: [
+							...PLAN_END_TURN_TOOLS,
+							...SECRET_REQUEST_END_TURN_TOOLS,
+						],
+					}
+				: {}),
 			onToolMetric: (metric) => {
 				void captureServerAnalytics(
 					owner.userId,
@@ -909,8 +928,9 @@ async function runApiTurnAttempt(
 			!items.slice(lastUser + 1).some(
 				(item) =>
 					(item.kind === "agentMessage" && item.text.trim()) ||
-					// A proposed plan is the turn's result; it waits for approval.
-					item.kind === "planProposal",
+					// A proposed plan or a secret request is the turn's result; it waits for the user.
+					item.kind === "planProposal" ||
+					item.kind === "secretRequest",
 			)
 		)
 			throw new IncompleteAgentTurn("missing-final-result");

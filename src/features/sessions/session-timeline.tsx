@@ -24,6 +24,7 @@ import {
 import { fileBasename } from "#/domain/file-kind";
 import { listedModelDisplayName } from "#/domain/listed-model";
 import { parseModelRouteId } from "#/domain/model-connection";
+import { secretRequestOutcome } from "#/domain/secret-request";
 import { activityGlyphForToolName } from "#/domain/session-activity";
 import {
 	compactTimelineItems,
@@ -59,6 +60,10 @@ import {
 	ModelSwitchCard,
 } from "./model-switch-card";
 import { type PlanActions, PlanProposalCard } from "./plan-proposal-card";
+import {
+	type SecretRequestActions,
+	SecretRequestCard,
+} from "./secret-request-card";
 import { ShellCommandCode } from "./shell-command-code";
 import { TodoList } from "./todo-list";
 
@@ -73,8 +78,11 @@ export function SessionTimeline({
 	collapseInstructions = false,
 	recoveryControls,
 	planActions,
+	secretActions,
 	failoverActions,
 }: {
+	/** Save or skip a secret the agent asked for; omitted where nobody can answer. */
+	secretActions?: SecretRequestActions;
 	/** Approve or revise the plan that waits for the user; omitted where nobody can answer. */
 	planActions?: PlanActions;
 	/** Continue on the fallback a paused turn offers; omitted where nobody can answer. */
@@ -147,6 +155,12 @@ export function SessionTimeline({
 											: undefined
 									}
 									onOpenFile={onOpenFile}
+								/>
+							) : row.kind === "item" && row.item.kind === "secretRequest" ? (
+								<SecretRequestCard
+									item={row.item}
+									outcome={secretRequestOutcome(items, row.item.id)}
+									actions={secretActions}
 								/>
 							) : row.kind === "item" &&
 								row.item.kind === "modelSwitch" &&
@@ -513,6 +527,8 @@ function SessionItemView({
 					<p>{item.text || "Planning…"}</p>
 				</details>
 			);
+		case "secretRequest":
+			return <SecretRequestCard item={item} outcome="answered" />;
 		case "planProposal":
 			return (
 				<PlanProposalCard

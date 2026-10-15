@@ -6,6 +6,7 @@ import { SessionItemId } from "./ids";
 import type { MessageAttachment } from "./message-attachment";
 import type { FailoverReason } from "./model-failover";
 import { visibleRuntimeUserText } from "./runtime-handoff";
+import type { RequestableSecretKind } from "./secret-request";
 import {
 	fileChangesFromShellCommand,
 	remainingShellCommandAfterWrites,
@@ -62,6 +63,15 @@ export type PlanProposalItem = {
 	readonly kind: "planProposal";
 	readonly id: SessionItemId;
 	readonly text: string;
+};
+
+/** A project secret the agent asked for with request_project_secret; the turn ended to wait for the user. */
+export type SecretRequestItem = {
+	readonly kind: "secretRequest";
+	readonly id: SessionItemId;
+	readonly name: string;
+	readonly secretKind: RequestableSecretKind;
+	readonly reason: string;
 };
 
 export type CommandExecutionItem = {
@@ -151,6 +161,7 @@ export type SessionItem =
 	| ReasoningItem
 	| PlanItem
 	| PlanProposalItem
+	| SecretRequestItem
 	| CommandExecutionItem
 	| FileChangeItem
 	| McpToolCallItem
