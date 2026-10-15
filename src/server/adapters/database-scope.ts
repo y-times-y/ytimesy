@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Pool } from "pg";
+import { stepTimingEnabled, timed } from "../services/step-timing";
 import { withInvocationTasks } from "./invocation-tasks";
 
 type DatabaseScope = {
@@ -57,6 +58,7 @@ export async function withDatabaseScope<T>(
 		idle_in_transaction_session_timeout: 30000,
 	});
 	pool.on("error", () => console.warn("Request database connection failed."));
+	if (stepTimingEnabled()) timePool(pool);
 	const current: DatabaseScope = { pool, resources: new Map(), cleanup: [] };
 	try {
 		return await scope.run(current, () => withInvocationTasks(run));
@@ -67,4 +69,20 @@ export async function withDatabaseScope<T>(
 				.catch(() => console.warn("Request resource cleanup failed."));
 		await pool.end();
 	}
+}
+
+/** Development diagnostics: attributes pooled queries and client checkouts to the current step. */
+function timePool(pool: Pool) {
+	const query = pool.query.bind(pool) as (...args: unknown[]) => unknown;
+	const connect = pool.connect.bind(pool) as (...args: unknown[]) => unknown;
+	Object.assign(pool, {
+		query: (...args: unknown[]) =>
+			typeof args.at(-1) === "function"
+				? query(...args)
+				: timed("db:query", () => query(...args) as Promise<unknown>),
+		connect: (...args: unknown[]) =>
+			args.length
+				? connect(...args)
+				: timed("db:connect", () => connect() as Promise<unknown>),
+	});
 }

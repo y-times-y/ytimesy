@@ -44,6 +44,7 @@ import {
 	executeWorkflowRequest,
 	type WorkflowStepClaim,
 } from "../jobs/model-workflow-executor";
+import { timed, withStepTrace } from "../services/step-timing";
 import { runBackgroundJob, startBackgroundJob } from "./background-jobs";
 import { SqliteConversationSteps } from "./conversation-step-storage";
 import type { EdgeExecutorEnvironment } from "./environment";
@@ -226,20 +227,20 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 	 * the alarm; the step's receipt is still "processing", so it is resumed.
 	 */
 	async alarm() {
-		const due = new Set(
-			this.ctx.storage.sql
-				.exec<{ purpose: string }>(
-					"select purpose from conversation_wake where at<=?",
-					Date.now(),
-				)
-				.toArray()
-				.map((row) => row.purpose),
-		);
+		const now = Date.now();
+		const rows = this.ctx.storage.sql
+			.exec<{ purpose: string; at: number }>(
+				"select purpose,at from conversation_wake where at<=?",
+				now,
+			)
+			.toArray();
+		const due = new Set(rows.map((row) => row.purpose));
 		if (due.has("room")) {
 			await this.wake("room", null);
 			await this.room.alarm();
 		}
-		if (due.has("turn")) await this.advanceTurn();
+		const turnAt = rows.find((row) => row.purpose === "turn")?.at;
+		if (turnAt !== undefined) await this.advanceTurn(now - turnAt);
 	}
 	/** Runs after the turn released its room lease, so a waiting turn can start. */
 	private async endTurn() {
@@ -291,7 +292,20 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		this.queue.remove(control.turnId, control.leaseId);
 		return true;
 	}
-	private async advanceTurn() {
+	private async advanceTurn(alarmDelayMs = 0) {
+		const active = this.activeTurn();
+		if (!active) return this.wake("turn", null);
+		return withStepTrace(
+			{
+				turn: active.turnId.slice(0, 8),
+				index: active.stepIndex,
+				resumes: active.resumes,
+				alarmDelayMs,
+			},
+			() => this.advanceActiveTurn(),
+		);
+	}
+	private async advanceActiveTurn() {
 		const active = this.activeTurn();
 		if (!active) return this.wake("turn", null);
 		const step = {
@@ -338,7 +352,9 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 														),
 													{
 														claim: (claimed, resumed) =>
-															this.claim(claimed, resumed),
+															timed("step:claim", () =>
+																this.claim(claimed, resumed),
+															),
 														complete: async (finished, result) => {
 															if (!this.steps.finish(finished, result))
 																throw new Error(
