@@ -853,6 +853,8 @@ it("keeps a durable tool boundary running, preserving cumulative usage and disti
 	expect(mocks.commit).not.toHaveBeenCalled();
 	expect(mocks.result).not.toHaveBeenCalled();
 	const { checkpointApiTurn } = await import("../adapters/api-turns");
+	// The step's history is saved once; the unchanged end-of-step saves are skipped.
+	expect(checkpointApiTurn).toHaveBeenCalledTimes(1);
 	expect(checkpointApiTurn).toHaveBeenLastCalledWith(
 		expect.anything(),
 		expect.anything(),

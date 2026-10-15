@@ -137,9 +137,11 @@ import {
 } from "../services/project-secrets";
 import { withRedactedResults } from "../services/redacted-tools";
 import { machinesForAgentSession } from "../services/session-workspace-machines";
+import { recordStepTiming, timed } from "../services/step-timing";
 import { analyticsAgentRole } from "../services/turn-analytics";
 import { commitCompletedSessionTurn } from "../services/turn-commit";
 import { turnProgressWriter } from "../services/turn-progress-writer";
+import { turnWorkspaceReuse } from "../services/turn-workspace-reuse";
 import type { WorkspaceMachines } from "../services/workspace-machines";
 import { enqueueAgentTaskEvent } from "./queue";
 
@@ -243,6 +245,12 @@ async function runApiTurnAttempt(
 		  }
 		| undefined;
 	let messages = turn.messages;
+	// Steps of one turn share their workspace preparation; a re-run step starts clean.
+	const workspaceReuse =
+		step && turn.lease_id
+			? turnWorkspaceReuse(`${turn.id}:${turn.lease_id}`)
+			: undefined;
+	if (step?.resumed) workspaceReuse?.forget();
 	if (step?.resumed)
 		({ messages, items } = prepareInterruptedStep(
 			messages,
@@ -282,10 +290,19 @@ async function runApiTurnAttempt(
 			abort.abort(new Error("Turn progress could not be saved."));
 		},
 	);
-	const saveCheckpoint = async () => {
-		await progress.drain();
-		await checkpointApiTurn(turn, messages, items);
-	};
+	// History is replaced, never mutated, so an unchanged pair is already saved.
+	let checkpointed:
+		| { messages: ModelMessage[]; items: typeof items }
+		| undefined;
+	const saveCheckpoint = () =>
+		timed("turn:checkpoint", async () => {
+			await progress.drain();
+			if (checkpointed?.messages === messages && checkpointed.items === items)
+				return;
+			const saving = { messages, items };
+			await checkpointApiTurn(turn, saving.messages, saving.items);
+			checkpointed = saving;
+		});
 	let failureStage: ApiTurnFailureStage = "connection";
 	const control = {
 		userId: turn.user_id,
@@ -354,20 +371,21 @@ async function runApiTurnAttempt(
 		failureStage = "coordination";
 		if (
 			!turn.lease_id ||
-			!(await acquireConversationTurn(control, abort.signal))
+			!(await timed("turn:acquire", () =>
+				acquireConversationTurn(control, abort.signal),
+			))
 		)
 			throw new Error("The conversation is already running or was stopped.");
 		coordinated = true;
 		failureStage = "connection";
 		lastCoordinationRenewal = Date.now();
-		if (!(await renewApiTurn(turn))) {
+		if (!(await timed("turn:renew", () => renewApiTurn(turn)))) {
 			abort.abort();
 			abort.signal.throwIfAborted();
 		}
 		// The turn already carries the session's items (every write mirrors both).
-		const metadata = await agentSessionMetadataForOwner(
-			turn.user_id,
-			turn.session_id,
+		const metadata = await timed("turn:metadata", () =>
+			agentSessionMetadataForOwner(turn.user_id, turn.session_id),
 		);
 		const owner = metadata && { ...metadata, items: turn.items };
 		if (!owner) throw new Error("Task no longer exists.");
@@ -384,7 +402,12 @@ async function runApiTurnAttempt(
 		// connection to an official endpoint.
 		let webSearch: ToolSet = {};
 		if (subscription) {
-			if (route.connectionId || !(await hasManagedCodexAuth(turn.user_id)))
+			if (
+				route.connectionId ||
+				!(await timed("turn:codexAuth", () =>
+					hasManagedCodexAuth(turn.user_id),
+				))
+			)
 				throw new Error("Reconnect Codex before continuing.");
 			// ChatGPT's Codex endpoint accepts the same hosted search as the OpenAI API.
 			webSearch = nativeWebSearchTools("openai");
@@ -414,9 +437,9 @@ async function runApiTurnAttempt(
 		const writable =
 			!owner.parentSessionId || owner.taskAccess === "read_write";
 		const projectSecrets = owner.projectId
-			? await loadAgentProjectSecrets(owner.userId, owner.projectId).catch(
-					() => ({ envFile: agentSecretsEnvFile([]), redact: [] }),
-				)
+			? await timed("turn:secrets", () =>
+					loadAgentProjectSecrets(owner.userId, owner.projectId as string),
+				).catch(() => ({ envFile: agentSecretsEnvFile([]), redact: [] }))
 			: null;
 		let secretsWritten: Promise<void> | undefined;
 		let attachmentsWritten: Promise<void> | undefined;
@@ -424,10 +447,12 @@ async function runApiTurnAttempt(
 			machines,
 			owner,
 			abort.signal,
+			[],
+			workspaceReuse,
 		);
 		let codePoint: Promise<void> | undefined;
 		const workspace = async () => {
-			execution = await prepareWorkspace();
+			execution = await timed("turn:workspace", prepareWorkspace);
 			if (projectSecrets) {
 				const { machines: vmMachines, vm } = execution;
 				secretsWritten ??= writeAgentProjectSecrets(
@@ -471,7 +496,10 @@ async function runApiTurnAttempt(
 				await progress.drain();
 			}
 		};
-		await publishProgress("running");
+		await timed(
+			"turn:publishRunning",
+			() => publishProgress?.("running") ?? Promise.resolve(),
+		);
 		const originalTools = apiAgentTools({
 			machines,
 			session: owner,
@@ -530,32 +558,33 @@ async function runApiTurnAttempt(
 			? builderShellTools(repositoryContext.tools)
 			: repositoryContext.tools;
 		// The user's remote MCP servers are called from here; credentials never reach the VM.
-		const mcp = await connectMcpTools(
-			await Promise.all(
-				(await connectableMcpServers(owner.userId, owner.projectId ?? null))
-					// OAuth servers join once the user has signed in.
-					.filter((server) => server.auth !== "oauth" || server.sealedOAuth)
-					.map(async (server) => ({
-						name: server.name,
-						url: server.url,
-						headers: server.headers,
-						authProvider:
-							server.auth === "oauth"
-								? await turnOAuthProvider({
-										userId: owner.userId,
-										serverId: server.id,
-										sealedOAuth: server.sealedOAuth,
-										appUrl: process.env.APP_URL ?? "http://localhost:3000",
-									})
-								: undefined,
-					})),
+		const mcp = await timed("turn:mcp", async () =>
+			connectMcpTools(
+				await Promise.all(
+					(await connectableMcpServers(owner.userId, owner.projectId ?? null))
+						// OAuth servers join once the user has signed in.
+						.filter((server) => server.auth !== "oauth" || server.sealedOAuth)
+						.map(async (server) => ({
+							name: server.name,
+							url: server.url,
+							headers: server.headers,
+							authProvider:
+								server.auth === "oauth"
+									? await turnOAuthProvider({
+											userId: owner.userId,
+											serverId: server.id,
+											sealedOAuth: server.sealedOAuth,
+											appUrl: process.env.APP_URL ?? "http://localhost:3000",
+										})
+									: undefined,
+						})),
+				),
+				{ signal: abort.signal },
 			),
-			{ signal: abort.signal },
 		);
 		closeMcp = mcp.close;
-		const plugins = await enabledPluginComponents(
-			owner.userId,
-			owner.projectId ?? null,
+		const plugins = await timed("turn:plugins", () =>
+			enabledPluginComponents(owner.userId, owner.projectId ?? null),
 		);
 		const withMcp = {
 			...surfaceTools,
@@ -605,8 +634,10 @@ async function runApiTurnAttempt(
 			throw new IncompleteAgentTurn("tool-calls");
 		// Once per turn, before its first model request; a resumed first step reuses the journal.
 		if (firstStep) {
-			const submitted = await hooks.userPromptSubmit(
-				currentTask?.kind === "userMessage" ? currentTask.text : "",
+			const submitted = await timed("turn:promptHook", () =>
+				hooks.userPromptSubmit(
+					currentTask?.kind === "userMessage" ? currentTask.text : "",
+				),
 			);
 			if (submitted.block) throw new LifecycleHookRefusal(submitted.reason);
 			// The journaled hook replays its feedback; an interrupted attempt may have saved it already.
@@ -656,6 +687,7 @@ async function runApiTurnAttempt(
 			toolSurface,
 			...(planLock ? { endTurnTools: PLAN_END_TURN_TOOLS } : {}),
 			onToolMetric: (metric) => {
+				recordStepTiming(`tool:${metric.tool_name}`, metric.duration_ms);
 				void captureServerAnalytics(
 					owner.userId,
 					"harness_tool_completed",
@@ -672,6 +704,9 @@ async function runApiTurnAttempt(
 				);
 			},
 			onModelMetric: (metric) => {
+				recordStepTiming("model:total", metric.duration_ms);
+				if (metric.first_output_ms !== null)
+					recordStepTiming("model:firstOutput", metric.first_output_ms);
 				void captureServerAnalytics(
 					owner.userId,
 					"harness_model_completed",
@@ -841,7 +876,10 @@ async function runApiTurnAttempt(
 			)
 		)
 			throw new SafeApiModelFailure(developmentOutageError());
-		let result = await runAgent(agentInput);
+		let result: Awaited<ReturnType<typeof runAgent>> = await timed(
+			"turn:runAgent",
+			async () => runAgent(agentInput),
+		);
 		while (!step && (await hooks.stop(messages))) {
 			messages = hooks.drain(messages);
 			await saveCheckpoint();
@@ -914,30 +952,35 @@ async function runApiTurnAttempt(
 		failureStage = "commit";
 		// Fence even commands whose acknowledgement was lost before it reached the durable cards.
 		// Unlike best-effort cancellation on failure, publication requires a confirmed stop.
-		if (execution) await stopApiTurnCommands(execution, turn.id);
-		await commitCompletedSessionTurn(
-			{ ...owner, providerRef: execution?.vm ?? owner.providerRef },
-			items,
-			{
-				exec: (providerRef, argv, _env, timeout) =>
-					(execution?.machines ?? machines).exec(
-						WorkspaceId(providerRef),
-						posixShellCommand(argv),
-						timeout,
-					),
-				writeTextFile: (providerRef, path, contents) =>
-					(execution?.machines ?? machines).writeTextFile(
-						WorkspaceId(providerRef),
-						path,
-						contents,
-					),
-				readTextFile: (providerRef, path) =>
-					(execution?.machines ?? machines).readTextFile(
-						WorkspaceId(providerRef),
-						path,
-					),
-			},
-			abort.signal,
+		if (execution)
+			await timed("turn:stopCommands", () =>
+				stopApiTurnCommands(execution as AgentToolWorkspace, turn.id),
+			);
+		await timed("turn:commit", () =>
+			commitCompletedSessionTurn(
+				{ ...owner, providerRef: execution?.vm ?? owner.providerRef },
+				items,
+				{
+					exec: (providerRef, argv, _env, timeout) =>
+						(execution?.machines ?? machines).exec(
+							WorkspaceId(providerRef),
+							posixShellCommand(argv),
+							timeout,
+						),
+					writeTextFile: (providerRef, path, contents) =>
+						(execution?.machines ?? machines).writeTextFile(
+							WorkspaceId(providerRef),
+							path,
+							contents,
+						),
+					readTextFile: (providerRef, path) =>
+						(execution?.machines ?? machines).readTextFile(
+							WorkspaceId(providerRef),
+							path,
+						),
+				},
+				abort.signal,
+			),
 		);
 		abort.signal.throwIfAborted();
 		failureStage = "coordination";
@@ -947,8 +990,11 @@ async function runApiTurnAttempt(
 			);
 		coordinated = false;
 		failureStage = "saving";
+		workspaceReuse?.forget();
 		await progress.drain();
-		const saved = await finalizeApiTurn(turn, "completed", items);
+		const saved = await timed("turn:finalize", () =>
+			finalizeApiTurn(turn, "completed", items),
+		);
 		if (saved !== "completed") {
 			abort.abort();
 			return saved === "cancelled" ? "cancelled" : "failed";
@@ -977,6 +1023,7 @@ async function runApiTurnAttempt(
 		}
 		return "completed";
 	} catch (error) {
+		workspaceReuse?.forget();
 		await progress.drain().catch(() => {});
 		if (!abort.signal.aborted || heartbeatFailed || progressFailed)
 			console.warn("API turn failed", {
