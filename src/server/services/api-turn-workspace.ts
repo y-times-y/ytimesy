@@ -15,6 +15,7 @@ import {
 	loadTenantProjectCheckout,
 } from "./project-workspace";
 import { machinesForAgentSession } from "./session-workspace-machines";
+import type { TurnWorkspaceReuse } from "./turn-workspace-reuse";
 import { establishVerificationBaselines } from "./verification-baseline";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -24,14 +25,31 @@ export function deferredApiTurnWorkspace(
 	owner: AgentSessionRecord,
 	signal: AbortSignal,
 	ancestors: readonly string[] = [],
+	/** A durable step reuses its turn's earlier preparation; see turnWorkspaceReuse. */
+	reuse?: TurnWorkspaceReuse,
 ) {
 	let prepared: Promise<AgentToolWorkspace> | undefined;
 	return () => {
 		signal.throwIfAborted();
-		prepared ??= prepare();
+		prepared ??= reusedOrPrepared();
 		return prepared;
 	};
-	async function prepare(): Promise<AgentToolWorkspace> {
+	async function reusedOrPrepared(): Promise<AgentToolWorkspace> {
+		const earlier = reuse?.read();
+		if (earlier)
+			return {
+				machines: machinesForAgentSession(machines, earlier.session),
+				vm: earlier.vm,
+				cwd: earlier.cwd,
+			};
+		const { workspace, session } = await prepare();
+		reuse?.save({ session, vm: workspace.vm, cwd: workspace.cwd });
+		return workspace;
+	}
+	async function prepare(): Promise<{
+		workspace: AgentToolWorkspace;
+		session: AgentSessionRecord;
+	}> {
 		let additionalRepositoryNames: string[] = [];
 		if (ancestors.includes(owner.id) || ancestors.length > 8)
 			throw new Error("Invalid shared task ancestry.");
@@ -103,6 +121,6 @@ export function deferredApiTurnWorkspace(
 				sessionId: owner.id,
 				additionalRepositoryNames,
 			});
-		return { machines: scoped, vm, cwd };
+		return { workspace: { machines: scoped, vm, cwd }, session: bound.session };
 	}
 }

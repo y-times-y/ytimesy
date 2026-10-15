@@ -2,6 +2,7 @@ import { Effect } from "effect";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import { deferredApiTurnWorkspace } from "./api-turn-workspace";
+import { turnWorkspaceReuse } from "./turn-workspace-reuse";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 const mocks = vi.hoisted(() => ({
@@ -136,4 +137,44 @@ it("rejects cancelled preparation and cross-project shared parents", async () =>
 		)(),
 	).rejects.toThrow("shared parent");
 	expect(mocks.child).not.toHaveBeenCalled();
+});
+
+it("reuses a turn's preparation in its next step until the turn forgets it", async () => {
+	const reuse = turnWorkspaceReuse(`turn-${Math.random()}:lease`);
+	const step = () =>
+		deferredApiTurnWorkspace(
+			machines,
+			root,
+			new AbortController().signal,
+			[],
+			reuse,
+		)();
+	const first = await step();
+	const second = await step();
+	expect(second).toEqual(first);
+	expect(mocks.root).toHaveBeenCalledTimes(1);
+	expect(mocks.checkout).toHaveBeenCalledTimes(1);
+	expect(mocks.baseline).toHaveBeenCalledTimes(1);
+	expect(machines.readTextFile).toHaveBeenCalledTimes(1);
+	reuse.forget();
+	expect(reuse.read()).toBeUndefined();
+	await step();
+	expect(mocks.root).toHaveBeenCalledTimes(2);
+});
+
+it("does not keep a failed preparation for the next step", async () => {
+	const reuse = turnWorkspaceReuse(`turn-${Math.random()}:lease`);
+	mocks.root.mockRejectedValueOnce(new Error("bind failed"));
+	const step = () =>
+		deferredApiTurnWorkspace(
+			machines,
+			root,
+			new AbortController().signal,
+			[],
+			reuse,
+		)();
+	await expect(step()).rejects.toThrow("bind failed");
+	expect(reuse.read()).toBeUndefined();
+	await step();
+	expect(mocks.root).toHaveBeenCalledTimes(2);
 });
