@@ -8,6 +8,7 @@ import {
 } from "#/domain/delivery-auth";
 import { PINNED_CODEX_CLI_VERSION } from "#/domain/guest-cli-pin";
 import { codexExternalTokens } from "../auth/codex-managed-auth";
+import { timed } from "../services/step-timing";
 
 const backend = "https://chatgpt.com/backend-api";
 const maximumBytes = 8 * 1024 * 1024;
@@ -100,7 +101,8 @@ async function relayRequest(
 
 /** The backend alone refreshes OAuth tokens when relay mode is explicitly selected. */
 export async function subscriptionConnection(userId: string) {
-	if (!codexRelayConfigured()) return codexExternalTokens(userId);
+	if (!codexRelayConfigured())
+		return timed("auth:tokens", () => codexExternalTokens(userId));
 	const response = await relayRequest(userId, { kind: "identity" });
 	if (!response.ok) {
 		await response.body?.cancel();
@@ -137,9 +139,11 @@ export async function subscriptionFetch(
 	}
 	const request = subscriptionEgress.getStore() ?? fetch;
 	return withRevokedTokenRetry(init?.body, async (forceRefresh) => {
-		const tokens = forceRefresh
-			? await codexExternalTokens(userId, true)
-			: await codexExternalTokens(userId);
+		const tokens = await timed("auth:tokens", () =>
+			forceRefresh
+				? codexExternalTokens(userId, true)
+				: codexExternalTokens(userId),
+		);
 		if (accountId && accountId !== tokens.chatgptAccountId)
 			throw new Error("Subscription account changed; restart this turn.");
 		headers.set("Authorization", `Bearer ${tokens.accessToken}`);
