@@ -374,3 +374,31 @@ it("reuses a baseline's configuration across durable steps through the config ca
 		`lifecycle-hooks:/repo:${"a".repeat(40)}`,
 	]);
 });
+
+it("loads a baseline without configuration as no hooks in one guest call, and fails closed on an unknown baseline", async () => {
+	const fixture = await localHarnessWorkspace();
+	try {
+		const baseline = (
+			await fixture.run("git", ["-C", fixture.root, "rev-parse", "HEAD"])
+		).stdout.trim();
+		const exec = vi.spyOn(fixture.workspace.machines, "exec");
+		const hooks = (base: string) =>
+			harnessLifecycleHooks({
+				workspace: async () => fixture.workspace,
+				turnId: randomUUID(),
+				readOnly: false,
+				signal: new AbortController().signal,
+				baseline: async () => base,
+				once: async (_id, run) => run(),
+			});
+		expect(await hooks(baseline).userPromptSubmit("hi")).toEqual({
+			block: false,
+		});
+		expect(exec).toHaveBeenCalledOnce();
+		await expect(hooks("b".repeat(40)).userPromptSubmit("hi")).rejects.toThrow(
+			"Could not load baseline lifecycle hooks.",
+		);
+	} finally {
+		await fixture.cleanup();
+	}
+});
