@@ -1,6 +1,9 @@
 import { expect, it, vi } from "vitest";
 import { readModelContext } from "./model-context";
 
+const browse = vi.hoisted(() => vi.fn());
+vi.mock("./browse-models", () => ({ browseModels: browse }));
+
 it("only enables Claude native compaction from owner-authenticated advertised capability", async () => {
 	const fetch = vi.fn(async () =>
 		Response.json({
@@ -87,3 +90,96 @@ it.each([
 		expect(context.nativeCompaction).toBe(nativeCompaction);
 	},
 );
+
+it("reads an OpenRouter model missing from the public list from its endpoints, without credentials", async () => {
+	browse.mockResolvedValue([
+		{ id: "listed/model", label: "Listed", author: "listed", created: 0 },
+	]);
+	const fetch = vi.fn(
+		async (_url: string | URL | Request, _init?: RequestInit) =>
+			Response.json({
+				data: {
+					id: "vendor/unlisted:free",
+					endpoints: [{ context_length: 131_072 }, { context_length: 262_144 }],
+				},
+			}),
+	);
+	const context = await readModelContext(
+		{
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+			apiKey: "fixture-secret",
+			modelId: "vendor/unlisted:free",
+			cacheKey: "openrouter-unlisted",
+		},
+		fetch,
+	);
+	expect(context.contextWindow).toBe(262_144);
+	expect(String(fetch.mock.calls[0][0])).toBe(
+		"https://openrouter.ai/api/v1/models/vendor/unlisted:free/endpoints",
+	);
+	expect(JSON.stringify(fetch.mock.calls[0][1])).not.toContain(
+		"fixture-secret",
+	);
+});
+
+it("prefers the public OpenRouter catalog and leaves a truly unknown window undefined", async () => {
+	browse.mockResolvedValue([
+		{
+			id: "vendor/listed",
+			label: "Listed",
+			author: "vendor",
+			created: 0,
+			contextWindow: 200_000,
+		},
+	]);
+	const fetch = vi.fn(async () => new Response("{}", { status: 404 }));
+	const base = {
+		provider: "openrouter" as const,
+		baseUrl: "https://openrouter.ai/api/v1",
+		apiKey: "fixture",
+	};
+	expect(
+		(
+			await readModelContext(
+				{ ...base, modelId: "vendor/listed", cacheKey: "listed" },
+				fetch,
+			)
+		).contextWindow,
+	).toBe(200_000);
+	expect(fetch).not.toHaveBeenCalled();
+	expect(
+		(
+			await readModelContext(
+				{ ...base, modelId: "vendor/gone", cacheKey: "gone" },
+				fetch,
+			)
+		).contextWindow,
+	).toBeUndefined();
+});
+
+it("reads an unrecorded custom endpoint window from the same model listing discovery uses", async () => {
+	const fetch = vi.fn(
+		async (_url: string | URL | Request, _init?: RequestInit) =>
+			Response.json({
+				data: [
+					{ id: "other", context_length: 8_000 },
+					{ id: "local-coder", max_model_len: 65_536 },
+				],
+			}),
+	);
+	const context = await readModelContext(
+		{
+			provider: "compatible",
+			baseUrl: "https://custom.example/v1",
+			apiKey: "fixture",
+			modelId: "local-coder",
+			cacheKey: "custom-unrecorded",
+		},
+		fetch,
+	);
+	expect(context.contextWindow).toBe(65_536);
+	expect(String(fetch.mock.calls[0][0])).toBe(
+		"https://custom.example/v1/models",
+	);
+});

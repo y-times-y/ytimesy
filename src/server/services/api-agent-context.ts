@@ -83,6 +83,9 @@ export function contextMeasurement(
 	};
 }
 
+/** Used only when neither the connection nor any catalog reports the model's window. */
+export const UNKNOWN_CONTEXT_WINDOW = 128_000;
+
 export function modelContextBudget(input: {
 	contextWindow?: number;
 	maxOutputTokens?: number;
@@ -90,13 +93,20 @@ export function modelContextBudget(input: {
 	workingContextTokens?: number;
 	fixedTokens?: number;
 }): ContextBudget {
-	const window = input.contextWindow ?? 48_000;
+	const fixed = input.fixedTokens ?? 0;
+	// An unlisted model is not a small model: assume a common modern window,
+	// and never refuse it only because no catalog recorded its size.
+	const window =
+		input.contextWindow ??
+		Math.max(
+			UNKNOWN_CONTEXT_WINDOW,
+			Math.ceil((fixed + (input.maxOutputTokens ?? 8192) + 32_000) / 0.95),
+		);
 	const output = Math.min(
 		input.maxOutputTokens ?? 8192,
 		Math.floor(window / 4),
 	);
-	const inputLimitTokens =
-		window - output - (input.fixedTokens ?? 0) - Math.ceil(window * 0.05);
+	const inputLimitTokens = window - output - fixed - Math.ceil(window * 0.05);
 	if (inputLimitTokens < 1024)
 		throw new Error(
 			"Instructions and tool definitions leave insufficient model context.",
