@@ -52,6 +52,9 @@ it("marks unfinished calls interrupted and tells the model what already ran", ()
 	expect(notice).toContain("apply_patch b.ts (finished)");
 	expect(notice).toContain("start_command npm test (outcome unknown)");
 	expect(notice).not.toContain("read_file");
+	// The notice names no command tool the session may not have been offered.
+	expect(notice).not.toMatch(/read_command|wait_command/);
+	expect(notice).toContain("resume them by id");
 	expect(notice).not.toContain("old");
 	expect(prepared.items[0]).toEqual(items[0]);
 	expect(prepared.items[3]).toMatchObject({ status: "failed" });

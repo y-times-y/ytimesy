@@ -1,14 +1,29 @@
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import {
 	completedChildrenForReview,
+	hasDelegatedTasks,
 	withDelegationContext,
 } from "./agent-delegation-context";
 
 const query = vi.hoisted(() => vi.fn());
+const capacity = vi.hoisted(() => vi.fn());
 vi.mock("./database", () => ({ database: () => ({ query }) }));
-vi.mock("./agent-capacity", () => ({
-	agentCapacity: async () => ({ maxChildren: 3, available: 2 }),
-}));
+vi.mock("./agent-capacity", () => ({ agentCapacity: capacity }));
+beforeEach(() => {
+	query.mockReset();
+	capacity.mockReset().mockResolvedValue({ maxChildren: 3, available: 2 });
+});
+
+it("checks for direct children of the owner's session", async () => {
+	query.mockResolvedValue({ rows: [{ present: false }] });
+	expect(await hasDelegatedTasks("owner", "parent")).toBe(false);
+	expect(query).toHaveBeenLastCalledWith(
+		expect.stringContaining("user_id=$1 and parent_session_id=$2"),
+		["owner", "parent"],
+	);
+	query.mockResolvedValue({ rows: [{ present: true }] });
+	expect(await hasDelegatedTasks("owner", "parent")).toBe(true);
+});
 
 it("collects only completed unreviewed direct children in the owner's project", async () => {
 	query.mockResolvedValue({ rows: [{ id: "child", revision: "one" }] });
@@ -57,12 +72,40 @@ it("appends owner-scoped changes with explicit historical snapshot semantics", a
 	expect(JSON.stringify(second)).toContain("at most 3 active children");
 });
 
-it("advertises capacity before the first child exists", async () => {
+it("injects nothing and skips the capacity query for a session without children", async () => {
 	query.mockResolvedValue({ rows: [] });
+	const original = [{ role: "user" as const, content: "Fix UI" }];
+	expect(await withDelegationContext("owner", "parent", original)).toBe(
+		original,
+	);
+	expect(capacity).not.toHaveBeenCalled();
+	expect(query).toHaveBeenCalledOnce();
+});
+
+it("advertises capacity with the first child snapshot", async () => {
+	query.mockResolvedValue({ rows: [{ id: "child", task_state: "working" }] });
 	const messages = await withDelegationContext("owner", "parent", []);
 	expect(JSON.stringify(messages)).toContain("2 additional slots available");
 	expect(JSON.stringify(messages)).toContain("worker fleet and your account");
 	expect(JSON.stringify(messages)).toContain("3 active children per parent");
+});
+
+it("does not re-inject when only fleet-wide capacity changed", async () => {
+	query.mockResolvedValue({ rows: [{ id: "child", task_state: "working" }] });
+	const first = await withDelegationContext("owner", "parent", []);
+	capacity.mockResolvedValue({ maxChildren: 3, available: 7 });
+	expect(await withDelegationContext("owner", "parent", first)).toBe(first);
+	// Unchanged task status needs no capacity lookup at all.
+	expect(capacity).toHaveBeenCalledOnce();
+});
+
+it("supersedes an earlier snapshot once every child is gone", async () => {
+	query.mockResolvedValue({ rows: [{ id: "child", task_state: "working" }] });
+	const first = await withDelegationContext("owner", "parent", []);
+	query.mockResolvedValue({ rows: [] });
+	const second = await withDelegationContext("owner", "parent", first);
+	expect(second).toHaveLength(2);
+	expect(second.at(-1)?.content).toContain("[]");
 });
 
 it("preserves the exact prior context prefix across model steps and skips unchanged status", async () => {

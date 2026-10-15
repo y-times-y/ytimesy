@@ -342,3 +342,35 @@ it("lets UserPromptSubmit refuse a turn or add context to it", async () => {
 		await fixture.cleanup();
 	}
 });
+
+it("reuses a baseline's configuration across durable steps through the config cache", async () => {
+	const exec = vi.fn(async () => ({
+		exitCode: 0,
+		stdout: JSON.stringify({
+			version: 1,
+			hooks: [{ event: "PostCompact", command: "true" }],
+		}),
+		stderr: "",
+	}));
+	const cache = new Map<string, unknown>();
+	const step = () =>
+		harnessLifecycleHooks({
+			workspace: async () =>
+				({ machines: { exec }, vm: "vm", cwd: "/repo" }) as never,
+			turnId: "turn",
+			readOnly: false,
+			signal: new AbortController().signal,
+			baseline: async () => "a".repeat(40),
+			once: async (_id, run) => run(),
+			configCache: async (key, load) => {
+				if (!cache.has(key)) cache.set(key, await load());
+				return cache.get(key) as Awaited<ReturnType<typeof load>>;
+			},
+		});
+	expect(await step().userPromptSubmit("first")).toEqual({ block: false });
+	expect(await step().userPromptSubmit("second")).toEqual({ block: false });
+	expect(exec).toHaveBeenCalledOnce();
+	expect([...cache.keys()]).toEqual([
+		`lifecycle-hooks:/repo:${"a".repeat(40)}`,
+	]);
+});
