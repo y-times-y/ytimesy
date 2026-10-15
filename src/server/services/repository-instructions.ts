@@ -10,6 +10,16 @@ const INITIAL = `${HEADING}\n\nLoaded automatically from this checkout, like AGE
 const CHANGED = `${HEADING} changed\n\nThese sections changed in the checkout since they were provided earlier in this conversation and replace the earlier copies.`;
 const RESTORED = `${HEADING} (restored after context compaction)\n\nReloaded from the current checkout; they still apply.`;
 
+/** A linked document is inlined only when it is short; longer ones are listed. */
+const INLINE_DOCUMENT_CHARACTERS = 8_000;
+const INLINE_DOCUMENTS_TOTAL = 16_000;
+const MANIFEST_PREVIEW_CHARACTERS = 8_000;
+
+function documentSize(characters: number, nextStart: number | null) {
+	const thousands = Math.max(1, Math.round(characters / 1000));
+	return `${nextStart === null ? "about" : "over"} ${thousands}k characters`;
+}
+
 type Section = {
 	text: string;
 	/** Configuration previews change with the builder's own edits; they are restored, not re-announced. */
@@ -61,9 +71,34 @@ export function repositoryInstructionSections(
 				)}${guidance.skillLimitReached ? "\n[Only the first 100 skills are listed.]" : ""}`,
 			announceChanges: true,
 		});
-	for (const document of guidance.referencedDocuments)
+	// Linked documents are often long plans or references the instructions ask
+	// for only in some situations ("before architectural changes, read
+	// PLAN.md"). Inline the short ones; list the rest for the builder to cat.
+	// Every request carries this message, so a 100k-character plan costs
+	// tens of thousands of tokens per step whether or not it applies.
+	let inlineBudget = INLINE_DOCUMENTS_TOTAL;
+	const listed: string[] = [];
+	for (const document of guidance.referencedDocuments) {
+		const content = document.content ?? "";
+		if (
+			document.content !== undefined &&
+			document.nextStart === null &&
+			content.length <= Math.min(INLINE_DOCUMENT_CHARACTERS, inlineBudget)
+		) {
+			inlineBudget -= content.length;
+			sections.push({
+				text: `## ${document.path} (linked from ${document.referencedBy})\n\n<DOCUMENT>\n${content}\n</DOCUMENT>`,
+				announceChanges: true,
+			});
+			continue;
+		}
+		listed.push(
+			`- ${document.path} (linked from ${document.referencedBy}${document.content === undefined ? "" : `; ${documentSize(content.length, document.nextStart)}`})`,
+		);
+	}
+	if (listed.length)
 		sections.push({
-			text: `## ${document.path} (linked from ${document.referencedBy})\n\n<DOCUMENT>\n${document.content ?? ""}\n</DOCUMENT>${truncated(document.path, document.nextStart)}`,
+			text: `## Linked documents not included\n\nThe instructions above link these documents. Read one completely with cat when the instructions say it applies to your task:\n${listed.join("\n")}`,
 			announceChanges: true,
 		});
 	if (guidance.documentLimitReached)
@@ -71,9 +106,24 @@ export function repositoryInstructionSections(
 			text: "## Further linked documents\n\nThe instructions link more Markdown documents than were included; read any that apply with cat.",
 			announceChanges: true,
 		});
-	for (const file of guidance.configuration)
+	// The manifest names the scripts and dependencies; other build/lint
+	// configuration is named only, for the builder to read when relevant.
+	const otherConfiguration: string[] = [];
+	for (const file of guidance.configuration) {
+		if (file.path !== "package.json") {
+			otherConfiguration.push(file.path);
+			continue;
+		}
+		const content = file.content ?? "";
+		const shown = content.slice(0, MANIFEST_PREVIEW_CHARACTERS);
 		sections.push({
-			text: `## Project configuration: ${file.path} (preview)\n\n\`\`\`\n${file.content ?? ""}\n\`\`\`${truncated(file.path, file.nextStart)}`,
+			text: `## Project configuration: ${file.path} (preview)\n\n\`\`\`\n${shown}\n\`\`\`${truncated(file.path, shown.length < content.length ? shown.length : file.nextStart)}`,
+			announceChanges: false,
+		});
+	}
+	if (otherConfiguration.length)
+		sections.push({
+			text: `## Other project configuration\n\nAlso at the repository root: ${otherConfiguration.join(", ")}. Read them with cat when relevant.`,
 			announceChanges: false,
 		});
 	return sections;
