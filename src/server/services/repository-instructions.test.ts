@@ -84,6 +84,40 @@ it("puts the repository instructions ahead of a fresh task, once per turn", asyn
 	}
 });
 
+it("lists long linked documents and secondary configuration instead of inlining them", async () => {
+	const fixture = await fixtureRepository();
+	try {
+		await fixture.write(
+			"AGENTS.md",
+			"Root rule. Before architectural changes read [the plan](PLAN.md); see [guide](docs/guide.md).",
+		);
+		await fixture.write(
+			"PLAN.md",
+			`# Plan\n${"Long plan detail. ".repeat(3000)}`,
+		);
+		await fixture.write(
+			"tsconfig.json",
+			'{ "compilerOptions": { "strict": true } }',
+		);
+		const [message] = await builderContext(fixture.workspace).prepare([
+			{ role: "user", content: "Fix the API" },
+		]);
+		const injected = text(message);
+		expect(injected).toContain("Guide body: prefer small modules.");
+		expect(injected).not.toContain("Long plan detail.");
+		expect(injected).toContain(
+			"- PLAN.md (linked from AGENTS.md; about 54k characters)",
+		);
+		expect(injected).toContain('{ "name": "fixture" }');
+		expect(injected).not.toContain('"strict": true');
+		expect(injected).toContain(
+			"Also at the repository root: tsconfig.json. Read them with cat when relevant.",
+		);
+	} finally {
+		await fixture.cleanup();
+	}
+});
+
 it("re-sends only changed instructions on a later turn and never rewrites history", async () => {
 	const fixture = await fixtureRepository();
 	try {
