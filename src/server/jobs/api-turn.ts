@@ -472,6 +472,7 @@ async function runApiTurnAttempt(
 		let codePoint: Promise<void> | undefined;
 		const workspace = async () => {
 			execution = await timed("turn:workspace", prepareWorkspace);
+			let secretsReady: Promise<void> | undefined;
 			if (projectSecrets) {
 				const { machines: vmMachines, vm } = execution;
 				// The env file stays on the VM's disk across steps; a new VM gets it written.
@@ -479,7 +480,10 @@ async function runApiTurnAttempt(
 					`${turn.id}:project-secrets-written:${vm}`,
 					() => writeAgentProjectSecrets(vmMachines, vm, projectSecrets),
 				);
-				await secretsWritten;
+				// Written outside the repository, so it overlaps the attachments and
+				// code point below; the workspace is returned only after all three.
+				secretsReady = secretsWritten;
+				secretsReady.catch(() => {});
 			}
 			attachmentsWritten ??= materializeMessageAttachments(
 				execution.machines,
@@ -506,6 +510,7 @@ async function runApiTurnAttempt(
 					await codePoint;
 				}
 			}
+			await secretsReady;
 			return execution;
 		};
 		machines = machinesForAgentSession(machines, owner);
