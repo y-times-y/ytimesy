@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { Freestyle, FreestyleApiError } from "freestyle";
+import { Freestyle, FreestyleApiError, type VmData } from "freestyle";
 import { type AuthSnapshotId, WorkspaceId } from "#/domain/ids";
 import {
 	effectiveMachineResources,
@@ -16,6 +16,7 @@ import {
 	guestServiceHostname,
 	persistentGuestCapabilityRunner,
 } from "#/server/services/persistent-guest-capability";
+import { stepTimingEnabled, timedFetch } from "#/server/services/step-timing";
 import type {
 	CommandOutput,
 	CreateProofWorkspaceOptions,
@@ -40,6 +41,7 @@ import {
 	admitVmCreate,
 	admitVmResume,
 	infrastructureAdmissionEnabled,
+	recentAdmissionCovers,
 } from "./usage-admission";
 import { waitUntilVmRunning } from "./wait-until-running";
 import { restoreRetainedWorkspace } from "./workspace-retention";
@@ -67,11 +69,14 @@ export function createFreestyleWorkspaceMachines(
 	apiKey: string,
 	options: { signal?: AbortSignal } = {},
 ): WorkspaceMachines {
+	const transport = globalThis.fetch.bind(globalThis);
 	const freestyle = new Freestyle({
 		apiKey,
 		...(options.signal
-			? { fetch: abortableFreestyleFetch(options.signal) }
-			: {}),
+			? { fetch: abortableFreestyleFetch(options.signal, transport) }
+			: stepTimingEnabled()
+				? { fetch: timedFetch("freestyle", transport) }
+				: {}),
 	});
 
 	const machines: WorkspaceMachines = {
@@ -125,13 +130,11 @@ export function createFreestyleWorkspaceMachines(
 			timeoutMs = 120_000,
 		): Promise<CommandOutput> {
 			try {
-				if (infrastructureAdmissionEnabled())
-					await resumeProductVm(
-						freestyle.vms.ref(workspaceId),
-						"Workspace VM",
-						Math.ceil(timeoutMs / 1000),
-					);
-				await rejectPausedGuestMutation(freestyle, workspaceId, "exec");
+				await readyForGuestOperation(
+					freestyle.vms.ref(workspaceId),
+					"exec",
+					Math.ceil(timeoutMs / 1000),
+				);
 				const result = await freestyle.vms.ref(workspaceId).exec({
 					command,
 					timeoutMs,
@@ -157,9 +160,10 @@ export function createFreestyleWorkspaceMachines(
 			contents: string,
 		): Promise<void> {
 			try {
-				if (infrastructureAdmissionEnabled())
-					await resumeProductVm(freestyle.vms.ref(workspaceId), "Workspace VM");
-				await rejectPausedGuestMutation(freestyle, workspaceId, "writeFile");
+				await readyForGuestOperation(
+					freestyle.vms.ref(workspaceId),
+					"writeFile",
+				);
 				await freestyle.vms.ref(workspaceId).fs.writeTextFile(path, contents);
 			} catch (cause) {
 				if (cause instanceof WorkspaceCommandError) throw cause;
@@ -195,9 +199,11 @@ export function createFreestyleWorkspaceMachines(
 		async ensureRunning(workspaceId: WorkspaceId): Promise<WorkspaceId> {
 			try {
 				const vm = freestyle.vms.ref(workspaceId);
-				await retryTransientProviderFailure(() =>
-					resumeProductVm(vm, "Workspace VM"),
-				);
+				await retryTransientProviderFailure(async () => {
+					const data = await vm.data();
+					if (!admittedAndRunning(data, 60))
+						await resumeProductVm(vm, "Workspace VM", 60, data);
+				});
 				return workspaceId;
 			} catch (cause) {
 				throw new WorkspaceProvisionError({
@@ -442,9 +448,7 @@ export function createFreestyleWorkspaceMachines(
 		...machines,
 		runCapability: async (vm, request, signal) => {
 			signal.throwIfAborted();
-			if (infrastructureAdmissionEnabled())
-				await resumeProductVm(freestyle.vms.ref(vm), "Workspace VM", 180);
-			await rejectPausedGuestMutation(freestyle, vm, "exec");
+			await readyForGuestOperation(freestyle.vms.ref(vm), "exec", 180);
 			return invokeCapability(vm, request, signal);
 		},
 	};
@@ -492,8 +496,10 @@ async function resumeProductVm(
 	vm: ReturnType<Freestyle["vms"]["ref"]>,
 	label: string,
 	requiredSeconds = 60,
+	/** A read made just before; the admission re-reads under its lease anyway. */
+	read?: VmData,
 ) {
-	const data = await vm.data();
+	const data = read ?? (await vm.data());
 	await admitVmResume(vm, data, requiredSeconds);
 	if (productIdleTimeoutNeedsUpdate(data.idleTimeoutSeconds)) {
 		await vm
@@ -503,21 +509,40 @@ async function resumeProductVm(
 	if (data.state === "paused" || data.state === "stopped") {
 		await vm.start();
 	}
-	await waitUntilVmRunning(vm, label);
+	return waitUntilVmRunning(vm, label);
 }
 
-async function rejectPausedGuestMutation(
-	freestyle: Freestyle,
-	workspaceId: WorkspaceId,
+/** A running VM whose recent admission still covers the operation needs no new admission. */
+function admittedAndRunning(data: VmData, requiredSeconds: number) {
+	return (
+		!productIdleTimeoutNeedsUpdate(data.idleTimeoutSeconds) &&
+		recentAdmissionCovers(data, requiredSeconds)
+	);
+}
+
+/**
+ * Admits (and resumes) the VM when admission is on, then refuses guest
+ * mutations on a machine that is not running. One provider read suffices when
+ * a recent admission still covers the operation; otherwise the full resume
+ * path runs and its final running-state read stands in for the refusal check.
+ */
+async function readyForGuestOperation(
+	vm: ReturnType<Freestyle["vms"]["ref"]>,
 	operation: "exec" | "writeFile",
+	requiredSeconds = 60,
 ) {
-	const data = await freestyle.vms.ref(workspaceId).data();
+	let data = await vm.data();
+	if (
+		infrastructureAdmissionEnabled() &&
+		!admittedAndRunning(data, requiredSeconds)
+	)
+		data = await resumeProductVm(vm, "Workspace VM", requiredSeconds, data);
 	const blocked = guestMutationBlockedReason(data.state);
 	if (blocked) {
 		throw new WorkspaceCommandError({
 			operation,
 			message: blocked,
-			providerWorkspaceId: workspaceId,
+			providerWorkspaceId: WorkspaceId(vm.id),
 		});
 	}
 }

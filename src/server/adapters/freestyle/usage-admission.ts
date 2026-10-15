@@ -274,6 +274,7 @@ export async function admitVmResume(
 			cap - latest.totalRunSeconds < requiredSeconds + 15
 		)
 			throw new MachineUsageLimitReached();
+		let runningUsage: number | undefined;
 		if (latest.state === "running") {
 			const result = await client.query<Admission>(
 				"select * from infrastructure_vm_admission where slug=$1",
@@ -284,8 +285,8 @@ export async function admitVmResume(
 				0,
 				Math.ceil((Date.now() - new Date(row.updated_at).getTime()) / 1000),
 			);
-			const needed =
-				Number(row.baseline_seconds) + elapsed + requiredSeconds + 15;
+			runningUsage = Number(row.baseline_seconds) + elapsed;
+			const needed = runningUsage + requiredSeconds + 15;
 			if (needed > cap) {
 				const target = Math.max(cap + 300, needed);
 				await reserveInfrastructureUsage(
@@ -324,7 +325,66 @@ export async function admitVmResume(
 			"update infrastructure_vm_admission set vm_id=$2 where slug=$1 and (vm_id is null or vm_id=$2)",
 			[data.slug, latest.id],
 		);
+		if (runningUsage !== undefined)
+			recentAdmissions.set(latest.id, {
+				cap,
+				usedSeconds: runningUsage,
+				at: Date.now(),
+			});
 	});
+}
+
+/** A full admission of a running VM is reused for this long by later guest operations. */
+const ADMISSION_REUSE_MS = 60_000;
+const recentAdmissions = new Map<
+	string,
+	{ cap: number; usedSeconds: number; at: number }
+>();
+
+/**
+ * True when a full admission of this running VM in the last minute already
+ * covers an operation needing requiredSeconds: re-running it would find the
+ * same cap, extend nothing and only repeat its reads. The runtime estimate
+ * grows by wall time since that admission (as admission's own estimate does),
+ * and the provider must still report the same cap, no automatic restart and a
+ * running machine; anything else takes the full path.
+ */
+export function recentAdmissionCovers(
+	data: Pick<
+		VmData,
+		| "id"
+		| "state"
+		| "maxRunTotalSeconds"
+		| "automaticRestart"
+		| "totalRunSeconds"
+	>,
+	requiredSeconds: number,
+	now = Date.now(),
+) {
+	if (!infrastructureAdmissionEnabled()) return false;
+	const admitted = recentAdmissions.get(data.id);
+	if (!admitted) return false;
+	if (now - admitted.at > ADMISSION_REUSE_MS || now < admitted.at) {
+		recentAdmissions.delete(data.id);
+		return false;
+	}
+	if (
+		data.state !== "running" ||
+		data.maxRunTotalSeconds !== admitted.cap ||
+		data.automaticRestart !== false
+	)
+		return false;
+	const used = Math.max(
+		admitted.usedSeconds + Math.ceil((now - admitted.at) / 1000),
+		data.totalRunSeconds ?? Number.POSITIVE_INFINITY,
+	);
+	return used + requiredSeconds + 15 <= admitted.cap;
+}
+
+/** Test seam and recovery hook: the next operation on this VM runs full admission. */
+export function forgetRecentAdmission(vmId?: string) {
+	if (vmId === undefined) recentAdmissions.clear();
+	else recentAdmissions.delete(vmId);
 }
 
 export async function admitVmCreate(
