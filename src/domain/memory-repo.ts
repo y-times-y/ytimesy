@@ -478,13 +478,6 @@ Tools: search (regex over all lines), read_file (a line range), write_file, dele
 
 // ---- save hook -------------------------------------------------------------
 
-/** Cheap gate before the end-of-turn model pass: wording that can state a durable rule. */
-export function mayStateDurableFact(text: string) {
-	return /\b(always|never|prefer|preferred|don'?t|do not|instead|from now on|going forward|remember|make sure|should|must|we use|i use|use [\w.-]+|avoid|stop|no longer|switch(ed)? to|rather than|my name|i am|i'm|our|we're|decid|default)\b/i.test(
-		text,
-	);
-}
-
 export const SAVE_HOOK_INSTRUCTIONS = `You check whether a coding chat's latest user message stated something a future chat should remember that is not yet in the user's memory.
 Save only durable preferences, decisions, corrections and facts about the user, their projects or their way of working. Skip requests that only concern the current task, and anything already covered by the memory lines shown.
 Answer with JSON only: {"entries":[{"file":"<topic>.md","text":"<one-line entry>","project":"<project name or empty>"}]}. Use {"entries":[]} when nothing qualifies. At most 3 entries, each under 200 characters, written as a fact (e.g. "Uses pnpm, never npm").`;

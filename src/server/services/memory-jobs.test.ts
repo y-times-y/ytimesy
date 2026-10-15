@@ -349,15 +349,20 @@ describe("save hook", () => {
 		]);
 	});
 
-	it("costs nothing for messages that state no durable rule, or outside full mode", async () => {
+	it("runs after every turn in full mode, and never outside it", async () => {
 		const plain = harness({
 			chats: [
 				chat("c9", [
 					item({ kind: "userMessage", id: "1", text: "Fix the failing test" }),
 				]),
 			],
+			answer: '{"entries":[]}',
 		});
-		expect(await runMemorySave("u1", "c9", plain.deps)).toBe("skipped");
+		expect(await runMemorySave("u1", "c9", plain.deps)).toBe("nothing-new");
+		expect(plain.calls.agent).toHaveLength(1);
+		expect(plain.calls.usage).toEqual([
+			expect.objectContaining({ kind: "save" }),
+		]);
 		const spec = harness({ chats, mode: "spec" });
 		expect(
 			await runMemorySave(
@@ -366,7 +371,7 @@ describe("save hook", () => {
 				spec.deps,
 			),
 		).toBe("off");
-		expect([...plain.calls.agent, ...spec.calls.agent]).toEqual([]);
+		expect(spec.calls.agent).toEqual([]);
 	});
 
 	it("never duplicates an entry already in memory", () => {
