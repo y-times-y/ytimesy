@@ -509,10 +509,19 @@ async function runApiTurnAttempt(
 				await progress.drain();
 			}
 		};
-		await timed(
+		// Durable steps start at 1; a resumed first step reuses the deduped notice.
+		const firstStep = step ? step.index === 1 : !continued;
+		// The first step's UserPromptSubmit check always prepares a writable
+		// workspace before the model is called; start it now so the VM work
+		// overlaps the remaining setup. It is the same memoized preparation, so a
+		// failure still surfaces where the workspace is awaited.
+		if (firstStep && writable) void workspace().catch(() => {});
+		const running = timed(
 			"turn:publishRunning",
 			() => publishProgress?.("running") ?? Promise.resolve(),
 		);
+		// Awaited below; this only keeps an early failure from being unhandled.
+		running.catch(() => {});
 		const originalTools = apiAgentTools({
 			machines,
 			session: owner,
@@ -581,42 +590,55 @@ async function runApiTurnAttempt(
 		// Connections are live HTTP clients bound to this step's request, so every
 		// step connects again; only the server list is reused. A list with OAuth
 		// servers is re-read each step because a token refresh rotates their record.
-		const mcp = await timed("turn:mcp", async () =>
+		const connecting = timed("turn:mcp", async () =>
 			connectMcpTools(
-			await Promise.all(
-				(
-					await turnMemo(
-						`${turn.id}:mcp-servers`,
-						() => connectableMcpServers(owner.userId, owner.projectId ?? null),
-						(servers) => servers.every((server) => server.auth !== "oauth"),
+				await Promise.all(
+					(
+						await turnMemo(
+							`${turn.id}:mcp-servers`,
+							() =>
+								connectableMcpServers(owner.userId, owner.projectId ?? null),
+							(servers) => servers.every((server) => server.auth !== "oauth"),
+						)
 					)
-				)
-					// OAuth servers join once the user has signed in.
-					.filter((server) => server.auth !== "oauth" || server.sealedOAuth)
-					.map(async (server) => ({
-						name: server.name,
-						url: server.url,
-						headers: server.headers,
-						authProvider:
-							server.auth === "oauth"
-								? await turnOAuthProvider({
-										userId: owner.userId,
-										serverId: server.id,
-										sealedOAuth: server.sealedOAuth,
-										appUrl: process.env.APP_URL ?? "http://localhost:3000",
-									})
-								: undefined,
-					})),
-			),
+						// OAuth servers join once the user has signed in.
+						.filter((server) => server.auth !== "oauth" || server.sealedOAuth)
+						.map(async (server) => ({
+							name: server.name,
+							url: server.url,
+							headers: server.headers,
+							authProvider:
+								server.auth === "oauth"
+									? await turnOAuthProvider({
+											userId: owner.userId,
+											serverId: server.id,
+											sealedOAuth: server.sealedOAuth,
+											appUrl: process.env.APP_URL ?? "http://localhost:3000",
+										})
+									: undefined,
+						})),
+				),
 				{ signal: abort.signal },
 			),
 		);
-		closeMcp = mcp.close;
-		const plugins = await timed("turn:plugins", () =>
+		const loadingPlugins = timed("turn:plugins", () =>
 			turnMemo(`${turn.id}:plugins`, () =>
 				enabledPluginComponents(owner.userId, owner.projectId ?? null),
 			),
 		);
+		// Independent loads run together; connected MCP clients are always
+		// registered for closing, and failures surface in their original order.
+		const [published, connected, loaded] = await Promise.allSettled([
+			running,
+			connecting,
+			loadingPlugins,
+		]);
+		if (connected.status === "fulfilled") closeMcp = connected.value.close;
+		if (published.status === "rejected") throw published.reason;
+		if (connected.status === "rejected") throw connected.reason;
+		if (loaded.status === "rejected") throw loaded.reason;
+		const mcp = connected.value;
+		const plugins = loaded.value;
 		const withMcp = {
 			...surfaceTools,
 			...mcp.tools,
@@ -654,8 +676,6 @@ async function runApiTurnAttempt(
 			catalog: mcp.catalog,
 			purposes: mcp.purposes,
 		});
-		// Durable steps start at 1; a resumed first step reuses the deduped notice.
-		const firstStep = step ? step.index === 1 : !continued;
 		if (planLock?.planning && firstStep)
 			messages = withPlanModeNotice(
 				messages,
