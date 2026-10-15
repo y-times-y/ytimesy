@@ -180,6 +180,15 @@ export class FreestyleWorkspaceRuntime implements WorkspaceRuntime {
 		if (data.state === "running") await vm.pause();
 	}
 
+	async delete(providerRef: string) {
+		try {
+			await this.client().vms.ref(providerRef).delete();
+		} catch (error) {
+			if (error instanceof FreestyleApiError && error.status === 404) return;
+			throw error;
+		}
+	}
+
 	async snapshotExists(snapshotId: string) {
 		try {
 			const snapshot = await this.client().vms.snapshots.get(snapshotId);
