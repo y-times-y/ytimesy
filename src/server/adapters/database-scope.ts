@@ -87,6 +87,27 @@ function timePool(pool: Pool) {
 		connect: (...args: unknown[]) =>
 			args.length
 				? connect(...args)
-				: timed("db:connect", () => connect() as Promise<unknown>),
+				: timed("db:connect", () => connect() as Promise<unknown>).then(
+						(client) => timeClient(client as { query: unknown }),
+					),
 	});
+}
+
+const timedClient = Symbol("timedClient");
+/** Checked-out clients (transactions) are listed like pooled queries. */
+function timeClient(client: { query: unknown; [timedClient]?: true }) {
+	if (client[timedClient]) return client;
+	const query = (client.query as (...args: unknown[]) => unknown).bind(client);
+	Object.assign(client, {
+		[timedClient]: true,
+		query: (...args: unknown[]) =>
+			typeof args.at(-1) === "function"
+				? query(...args)
+				: timedCall(
+						"db:query",
+						`tx ${typeof args[0] === "string" ? args[0] : "?"}`,
+						() => query(...args) as Promise<unknown>,
+					),
+	});
+	return client;
 }
