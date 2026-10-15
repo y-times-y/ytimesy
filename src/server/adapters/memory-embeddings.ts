@@ -1,17 +1,36 @@
 import { createHash } from "node:crypto";
+import { memoryEmbeddingQuery } from "#/domain/memory-repo";
 import { memoryEmbeddings, saveMemoryEmbeddings } from "./memory-settings";
 
-/** Workers AI text embeddings for the read hook; vectors are cached per line text. */
-export const MEMORY_EMBEDDING_MODEL = "@cf/baai/bge-base-en-v1.5";
-const BATCH = 100;
+/**
+ * Workers AI text embeddings for the read hook; vectors are cached per line
+ * text. Cost is ours (cents per million tokens), not billed per user.
+ * Queries and documents embed differently (Qwen3 is asymmetric).
+ */
+export const MEMORY_EMBEDDING_MODEL = "@cf/qwen/qwen3-embedding-0.6b";
+const BATCH = 32;
+/**
+ * The query side carries Qwen3's "Instruct: …\nQuery: …" prefix; sent as a
+ * document so the service adds no instruction of its own.
+ */
+const QUERY_INPUT = (text: string) => ({
+	documents: [memoryEmbeddingQuery(text)],
+});
 
 type AiBinding = {
 	run(
 		model: string,
-		input: { text: string[] },
+		input: { queries?: string[]; documents?: string[] },
 	): Promise<{ data?: number[][] } | unknown>;
 };
-export type Embed = (texts: readonly string[]) => Promise<number[][]>;
+export type Embed = {
+	query(text: string): Promise<number[]>;
+	documents(texts: readonly string[]): Promise<number[][]>;
+};
+type Run = (input: {
+	queries?: string[];
+	documents?: string[];
+}) => Promise<number[][]>;
 
 let binding: AiBinding | undefined;
 
@@ -19,47 +38,56 @@ export function registerMemoryEmbeddings(ai: AiBinding | undefined) {
 	if (ai) binding = ai;
 }
 
+function embedder(run: Run): Embed {
+	return {
+		query: async (text) => {
+			const [vector] = await run(QUERY_INPUT(text));
+			if (!vector) throw new Error("Embedding model returned no data.");
+			return vector;
+		},
+		documents: async (texts) => {
+			const out: number[][] = [];
+			for (let start = 0; start < texts.length; start += BATCH)
+				out.push(
+					...(await run({ documents: texts.slice(start, start + BATCH) })),
+				);
+			if (out.length !== texts.length)
+				throw new Error("Embedding model returned no data.");
+			return out;
+		},
+	};
+}
+
 /** The Workers AI binding, or its REST API when an account token is configured (scripts). */
 export function memoryEmbedder(): Embed | null {
 	const ai = binding;
 	if (ai)
-		return async (texts) => {
-			const out: number[][] = [];
-			for (let start = 0; start < texts.length; start += BATCH) {
-				const result = (await ai.run(MEMORY_EMBEDDING_MODEL, {
-					text: texts.slice(start, start + BATCH),
-				})) as { data?: number[][] };
-				if (!result.data) throw new Error("Embedding model returned no data.");
-				out.push(...result.data);
-			}
-			return out;
-		};
+		return embedder(async (input) => {
+			const result = (await ai.run(MEMORY_EMBEDDING_MODEL, input)) as {
+				data?: number[][];
+			};
+			return result.data ?? [];
+		});
 	const account = process.env.CLOUDFLARE_ACCOUNT_ID;
 	const token = process.env.CLOUDFLARE_API_TOKEN;
 	if (!account || !token) return null;
-	return async (texts) => {
-		const out: number[][] = [];
-		for (let start = 0; start < texts.length; start += BATCH) {
-			const response = await fetch(
-				`https://api.cloudflare.com/client/v4/accounts/${account}/ai/run/${MEMORY_EMBEDDING_MODEL}`,
-				{
-					method: "POST",
-					headers: {
-						Authorization: `Bearer ${token}`,
-						"Content-Type": "application/json",
-					},
-					body: JSON.stringify({ text: texts.slice(start, start + BATCH) }),
+	return embedder(async (input) => {
+		const response = await fetch(
+			`https://api.cloudflare.com/client/v4/accounts/${account}/ai/run/${MEMORY_EMBEDDING_MODEL}`,
+			{
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${token}`,
+					"Content-Type": "application/json",
 				},
-			);
-			const body = (await response.json()) as {
-				result?: { data?: number[][] };
-			};
-			if (!response.ok || !body.result?.data)
-				throw new Error(`Embedding request failed (${response.status}).`);
-			out.push(...body.result.data);
-		}
-		return out;
-	};
+				body: JSON.stringify(input),
+			},
+		);
+		const body = (await response.json()) as { result?: { data?: number[][] } };
+		if (!response.ok)
+			throw new Error(`Embedding request failed (${response.status}).`);
+		return body.result?.data ?? [];
+	});
 }
 
 export function lineHash(text: string) {
@@ -83,7 +111,9 @@ export async function cachedLineEmbeddings(
 	const missing = [...new Set(hashes.filter((hash) => !known.has(hash)))];
 	if (missing.length) {
 		const byHash = new Map(hashes.map((hash, index) => [hash, texts[index]]));
-		const vectors = await embed(missing.map((hash) => byHash.get(hash) ?? ""));
+		const vectors = await embed.documents(
+			missing.map((hash) => byHash.get(hash) ?? ""),
+		);
 		const rows = missing.map((hash, index) => ({
 			hash,
 			embedding: vectors[index],

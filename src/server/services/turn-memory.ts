@@ -263,7 +263,7 @@ export async function readHook(input: {
 		.slice(0, MAX_EMBEDDED_LINES);
 	if (!lines.length) return [];
 	const work = (async () => {
-		const [queryVector] = await input.embed([query]);
+		const queryVector = await input.embed.query(query);
 		const vectors = await cachedLineEmbeddings(
 			input.userId,
 			lines.map(memoryLineEmbeddingText),

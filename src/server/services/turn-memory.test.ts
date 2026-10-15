@@ -43,11 +43,10 @@ function fakeRepo(files: Record<string, string>): MemoryRepo {
 
 /** Word-overlap vectors: deterministic stand-ins for an embedding model. */
 const VOCAB = ["pnpm", "install", "library", "timestamps", "utc", "tabs"];
-const embed = vi.fn(async (texts: readonly string[]) =>
-	texts.map((text) =>
-		VOCAB.map((word) => (text.toLowerCase().includes(word) ? 1 : 0.01)),
-	),
-);
+const vector = (text: string) =>
+	VOCAB.map((word) => (text.toLowerCase().includes(word) ? 1 : 0.01));
+const documents = vi.fn(async (texts: readonly string[]) => texts.map(vector));
+const embed = { query: async (text: string) => vector(text), documents };
 const cache = {
 	load: async () => new Map<string, number[]>(),
 	save: async () => {},
@@ -80,7 +79,7 @@ async function memoryFor(files: Record<string, string>) {
 
 beforeEach(() => {
 	dispatched.length = 0;
-	embed.mockClear();
+	documents.mockClear();
 });
 
 describe("MEMORY.md at chat start", () => {
@@ -221,8 +220,9 @@ describe("read hook", () => {
 			cache,
 		};
 		expect(await readHook({ ...base, embed, query: "ok" })).toEqual([]);
-		expect(embed).not.toHaveBeenCalled();
-		const slow = async () => new Promise<number[][]>(() => {});
+		expect(documents).not.toHaveBeenCalled();
+		const never = () => new Promise<never>(() => {});
+		const slow = { query: never, documents: never };
 		expect(
 			await readHook({
 				...base,
