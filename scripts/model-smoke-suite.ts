@@ -58,7 +58,7 @@ const DEFAULT_PRICES: Record<string, [number, number]> = {
 const UNKNOWN_PRICE: [number, number] = [5, 25];
 // Each run reserves this much worst-case spend before it starts and is
 // cancelled if its recorded usage exceeds the reservation.
-const RESERVED_TOKENS = { input: 250_000, output: 15_000 };
+const RESERVED_TOKENS = { input: 1_000_000, output: 20_000 };
 
 type Task = {
 	id: string;

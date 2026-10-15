@@ -83,6 +83,8 @@ for (const name of [
 	"CLOUDFLARE_EMAIL_API_TOKEN",
 	// Development only: force a provider outage to exercise model failover.
 	"YTIMESY_DEV_FORCE_MODEL_OUTAGE",
+	// Development only: offer every connected model (e.g. free test models).
+	"YTIMESY_DEV_ALLOW_ANY_MODEL",
 ] as const) {
 	if (process.env[name]) secrets[name] = process.env[name];
 }

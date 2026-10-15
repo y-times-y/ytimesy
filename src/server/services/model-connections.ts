@@ -5,6 +5,7 @@ import { z } from "zod";
 import {
 	availableConnectionModels,
 	modelConnectionInput,
+	modelRouteId,
 	type PublicModelConnection,
 } from "#/domain/model-connection";
 import { connectedLanguageModel } from "#/server/adapters/api-model";
@@ -24,10 +25,37 @@ export async function availableApiModelRoutes(
 	connections: readonly PublicModelConnection[],
 ) {
 	const hasGateway = connections.some((row) => row.provider === "openrouter");
-	return availableConnectionModels(
+	const routes = availableConnectionModels(
 		connections,
 		hasGateway ? await browseModels() : [],
 	);
+	return devAllowsAnyModel()
+		? withEveryConnectedModel(routes, connections)
+		: routes;
+}
+
+/** Development only: offer every model a connection lists (e.g. free test models). */
+function devAllowsAnyModel() {
+	return (
+		process.env.YTIMESY_DEV_ALLOW_ANY_MODEL === "1" &&
+		process.env.YTIMESY_ENVIRONMENT !== "production"
+	);
+}
+
+function withEveryConnectedModel(
+	routes: ReturnType<typeof availableConnectionModels>,
+	connections: readonly PublicModelConnection[],
+) {
+	const known = new Set(routes.map((route) => route.id));
+	const extra = connections.flatMap((connection) =>
+		connection.models
+			.map((model) => ({
+				id: modelRouteId(connection.id, model.id),
+				label: `${model.label} · ${connection.label}`,
+			}))
+			.filter((route) => !known.has(route.id)),
+	);
+	return [...routes, ...extra];
 }
 
 export function connectApiModels(userId: string, raw: unknown) {
