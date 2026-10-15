@@ -7,7 +7,12 @@ import { AsyncLocalStorage } from "node:async_hooks";
  * attribution, not a partition of the step. Disabled, every helper is a pass-through.
  */
 type Span = { count: number; ms: number; maxMs: number; firstAt: number };
-type Trace = { startedAt: number; spans: Map<string, Span> };
+type Trace = {
+	startedAt: number;
+	spans: Map<string, Span>;
+	/** The first individual provider calls, in start order: [at, ms, label]. */
+	calls: [number, number, string][];
+};
 
 const traces = new AsyncLocalStorage<Trace>();
 
@@ -32,7 +37,7 @@ export async function withStepTrace<T>(
 	run: () => Promise<T>,
 ): Promise<T> {
 	if (!stepTimingEnabled()) return run();
-	const trace: Trace = { startedAt: Date.now(), spans: new Map() };
+	const trace: Trace = { startedAt: Date.now(), spans: new Map(), calls: [] };
 	try {
 		return await traces.run(trace, run);
 	} finally {
@@ -48,6 +53,7 @@ export async function withStepTrace<T>(
 						[span.count, span.ms, span.maxMs, span.firstAt],
 					]),
 				),
+				calls: trace.calls,
 			}),
 		);
 	}
@@ -92,8 +98,25 @@ export function timedFetch(prefix: string, transport: typeof fetch) {
 				/^[0-9a-z]{16,}$/i.test(part) || /\d/.test(part) ? ":id" : part,
 			)
 			.join("/");
-		return timed(`${prefix}:${method} ${shape}`, () =>
-			transport(request, init),
-		);
+		const trace = traces.getStore();
+		const startedAt = Date.now();
+		try {
+			return await timed(`${prefix}:${method} ${shape}`, () =>
+				transport(request, init),
+			);
+		} finally {
+			if (trace && trace.calls.length < 60) {
+				let detail = "";
+				try {
+					const body = JSON.parse(String(init?.body ?? "{}"));
+					detail = String(body.command ?? body.path ?? body.state ?? "");
+				} catch {}
+				trace.calls.push([
+					startedAt - trace.startedAt,
+					Date.now() - startedAt,
+					`${method} ${shape.split("/").pop()} ${detail.slice(0, 70)}`,
+				]);
+			}
+		}
 	}) as typeof fetch;
 }
