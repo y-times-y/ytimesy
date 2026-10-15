@@ -15,6 +15,18 @@ export function stepTimingEnabled() {
 	return process.env.YTIMESY_DEBUG_STEP_TIMING === "1";
 }
 
+let colo: Promise<string> | undefined;
+/** Where this isolate runs: database and provider round trips depend on it. */
+function isolateColo() {
+	colo ??= fetch("https://www.cloudflare.com/cdn-cgi/trace", {
+		signal: AbortSignal.timeout(2_000),
+	})
+		.then((response) => response.text())
+		.then((text) => /^colo=(\w+)$/m.exec(text)?.[1] ?? "unknown")
+		.catch(() => "unknown");
+	return colo;
+}
+
 export async function withStepTrace<T>(
 	meta: Record<string, string | number | boolean | null | undefined>,
 	run: () => Promise<T>,
@@ -28,6 +40,7 @@ export async function withStepTrace<T>(
 			"step-timing",
 			JSON.stringify({
 				...meta,
+				colo: await isolateColo(),
 				totalMs: Date.now() - trace.startedAt,
 				spans: Object.fromEntries(
 					[...trace.spans].map(([name, span]) => [
