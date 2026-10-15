@@ -9,6 +9,7 @@ import {
 	parseProjectSecretKind,
 	parseProjectSecretName,
 	parseProjectSecretValue,
+	projectSecretsInstructions,
 	REDACTED,
 	redactSecretValues,
 	SECRET_COMMIT_GUARD,
@@ -39,6 +40,19 @@ describe("project secrets", () => {
 		expect(() => parseProjectSecretValue("abc", "runtime")).toThrow(/at least/);
 		expect(parseProjectSecretValue("abc", "environment")).toBe("abc");
 		expect(() => parseProjectSecretKind("secret")).toThrow(/type/);
+	});
+
+	it("tells the agent secret names by kind, never values", () => {
+		expect(projectSecretsInstructions([])).toBe("");
+		const text = projectSecretsInstructions([
+			{ name: "STRIPE_KEY", kind: "runtime" },
+			{ name: "API_BASE", kind: "environment" },
+			{ name: "NPM_TOKEN", kind: "build" },
+		]);
+		expect(text).toContain(": STRIPE_KEY.");
+		expect(text).toContain("Environment variables: API_BASE.");
+		expect(text).toContain("not set for you): NPM_TOKEN.");
+		expect(text).toContain("screenshots are not redacted");
 	});
 
 	it("redacts runtime values anywhere in tool output", () => {
