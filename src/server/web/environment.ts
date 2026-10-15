@@ -1,4 +1,5 @@
 import type { AuthEmailBinding } from "../adapters/email";
+import type { ArtifactsNamespace } from "../adapters/memory-repos";
 /** Bindings of the web app's Worker; absent when it runs on the local Node dev server. */
 export interface WebWorkerEnvironment {
 	HYPERDRIVE: Hyperdrive;
@@ -6,6 +7,8 @@ export interface WebWorkerEnvironment {
 	EMAIL?: AuthEmailBinding;
 	/** VPC egress that ChatGPT subscription endpoints accept (plain Worker fetches get 403). */
 	CODEX_EGRESS: Fetcher;
+	/** Per-user memory repos (Cloudflare Artifacts), for the Memory tab. */
+	ARTIFACTS?: ArtifactsNamespace;
 	/** The edge executor Worker, reached directly instead of over its public URL. */
 	EXECUTOR: Fetcher;
 }
