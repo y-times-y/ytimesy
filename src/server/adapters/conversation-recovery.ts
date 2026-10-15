@@ -94,6 +94,24 @@ export async function conversationPoint(
 	return point?.type === "conversation-point" ? point : null;
 }
 
+/** Only the recorded code ref, without loading the point's transcript. */
+export async function conversationPointCodeRef(
+	userId: string,
+	sessionId: string,
+	messageId: string,
+): Promise<string | undefined> {
+	const { rows } = await database().query(
+		`select r.response->'result'->'code'->>'ref' as ref from agent_task_command_receipt r
+    join agent_session s on s.id=r.parent_session_id where s.user_id=$1 and s.id=$2 and r.request_id=$3 and r.status='done' and r.response->>'ok'='true'`,
+		[userId, sessionId, `conversation-point:${messageId}`],
+	);
+	const ref = rows[0]?.ref;
+	return typeof ref === "string" &&
+		/^refs\/ytimesy\/recovery\/[a-zA-Z0-9-]+$/.test(ref)
+		? ref
+		: undefined;
+}
+
 export async function recoveredConversation(
 	userId: string,
 	sessionId: string,

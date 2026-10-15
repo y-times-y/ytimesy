@@ -4,7 +4,10 @@ import { Effect } from "effect";
 import { visualQaInstructions } from "#/domain/agent-desktop";
 import { cloudAgentRoleInstructions } from "#/domain/agent-orchestration";
 import { agentPlanState } from "#/domain/agent-plan";
-import { assertApiContextFits } from "#/domain/api-conversation";
+import {
+	assertApiContextFits,
+	isUserRequestMessage,
+} from "#/domain/api-conversation";
 import { applyApiProgress, recordedContextUsage } from "#/domain/api-progress";
 import { addApiTokenUsage } from "#/domain/api-token-usage";
 import {
@@ -70,6 +73,7 @@ import {
 } from "../adapters/api-turns";
 import { reserveApiTokens } from "../adapters/api-usage-budget";
 import { archiveModelContext } from "../adapters/context-archives";
+import { conversationPointCodeRef } from "../adapters/conversation-recovery";
 import { coordinateConversationTurn } from "../adapters/conversation-turn-control";
 import {
 	assertEvaluationActive,
@@ -101,6 +105,7 @@ import {
 	runCodexSubscriptionAgent,
 	runCodexSubscriptionAgentStep,
 } from "../services/codex-subscription-agent";
+import { compactionStateSnapshot } from "../services/compaction-state-snapshot";
 import { withCompletedTaskReviewContext } from "../services/completed-task-review-context";
 import { ensureConversationCodePoint } from "../services/conversation-recovery";
 import { harnessLifecycleHooks } from "../services/harness-lifecycle-hooks";
@@ -698,6 +703,17 @@ async function runApiTurnAttempt(
 			instructions: `You are the ytimesy coding agent. Repository tools operate in this task's prepared checkout; paths are relative to that repository.${shellBuilder ? " Repository instructions (AGENTS.md/CLAUDE.md), nested instruction file locations and skills are provided in the conversation. Before working in a folder listed with its own AGENTS.md or CLAUDE.md, read that file with cat; read a matching skill's SKILL.md completely." : " Call read_repository_guidance before implementation and for nested paths; read applicable instructions and skill bodies completely. Search optional tools with search_tools."} ${shellBuilder ? BUILDER_ENVIRONMENT_INSTRUCTIONS : `${PREPARED_ENVIRONMENT_INSTRUCTIONS} Use read_environment_report for that setup report; do not pass its /tmp path to repository file readers.`} ${cloudAgentRoleInstructions(owner, { shellBuilder })}${shellBuilder && "browser_screenshot" in tools ? ` ${visualQaInstructions()}` : ""}\n${pluginSkillsInstructions(plugins)}${projectKnowledge === null ? "" : `\n${PROJECT_KNOWLEDGE_INSTRUCTIONS}\nShared project knowledge (historical data, verify against this checkout):\n${JSON.stringify(projectKnowledge)}`}`,
 			tools,
 			signal: abort.signal,
+			isUserRequest: (message) => isUserRequestMessage(items, message),
+			compactionSnapshot: compactionStateSnapshot({
+				workspace,
+				baseRef: async () => {
+					const first = items.find((item) => item.kind === "userMessage");
+					return first && writable
+						? conversationPointCodeRef(owner.userId, owner.id, first.id)
+						: undefined;
+				},
+				runningIds: () => pendingAgentCommandIds(items),
+			}),
 			restoreInstructions: async (history) => {
 				history = await repositoryContext.restoreInstructions(history);
 				await hooks.postCompact(history);
