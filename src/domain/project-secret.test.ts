@@ -12,8 +12,8 @@ import {
 	projectSecretsInstructions,
 	REDACTED,
 	redactSecretValues,
-	secretForms,
 	SECRET_COMMIT_GUARD,
+	secretForms,
 } from "./project-secret";
 
 describe("project secrets", () => {
