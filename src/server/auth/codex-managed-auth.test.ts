@@ -158,7 +158,8 @@ function storedAccount(stored: object) {
 		release: vi.fn(),
 	};
 	vi.mocked(database).mockReturnValue({
-		connect: async () => client,
+		connect: vi.fn(async () => client),
+		query: client.query,
 	} as never);
 	vi.mocked(unseal).mockResolvedValue(JSON.stringify(stored));
 	vi.mocked(seal).mockResolvedValue("resealed");
@@ -212,4 +213,44 @@ it("records the plan carried by a refreshed token", async () => {
 	await codexExternalTokens("owner", true);
 	const update = queries.find((query) => query.sql.includes("plan_type="));
 	expect(update?.values).toEqual(["owner", "resealed", "free"]);
+});
+
+it("reads a fresh token without locking the account row", async () => {
+	const fresh = {
+		...auth,
+		tokens: { ...auth.tokens, access_token: accessToken() },
+	};
+	const queries = storedAccount(fresh);
+	const fetch = vi.fn();
+	vi.stubGlobal("fetch", fetch);
+	expect(await codexExternalTokens("owner")).toEqual({
+		accessToken: fresh.tokens.access_token,
+		chatgptAccountId: "account",
+	});
+	expect(queries.map((query) => query.sql)).toEqual([
+		expect.stringMatching(/^select encrypted_codex_auth .*status='connected'$/),
+	]);
+	expect(vi.mocked(database)().connect).not.toHaveBeenCalled();
+	expect(fetch).not.toHaveBeenCalled();
+});
+
+it("refreshes a token near expiry under the row lock", async () => {
+	const expiring = {
+		...auth,
+		tokens: {
+			...auth.tokens,
+			access_token: accessToken("account", Date.now() + 60_000),
+		},
+	};
+	const queries = storedAccount(expiring);
+	const refreshed = accessToken("account", Date.now() + 3_600_000);
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async () => Response.json({ access_token: refreshed })),
+	);
+	expect((await codexExternalTokens("owner")).accessToken).toBe(refreshed);
+	const statements = queries.map((query) => query.sql);
+	expect(statements).toContain("begin");
+	expect(statements.some((sql) => sql.endsWith("for update"))).toBe(true);
+	expect(statements.at(-1)).toBe("commit");
 });
