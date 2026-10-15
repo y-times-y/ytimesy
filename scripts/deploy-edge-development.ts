@@ -85,6 +85,8 @@ for (const name of [
 	"YTIMESY_DEV_FORCE_MODEL_OUTAGE",
 	// Development only: offer every connected model (e.g. free test models).
 	"YTIMESY_DEV_ALLOW_ANY_MODEL",
+	// Development only: log per-step phase timings (src/server/services/step-timing.ts).
+	"YTIMESY_DEBUG_STEP_TIMING",
 ] as const) {
 	if (process.env[name]) secrets[name] = process.env[name];
 }
