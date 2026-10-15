@@ -460,12 +460,13 @@ export const SCENARIOS: Scenario[] = [
 				"src/index.js": "export {};\n",
 			},
 		},
+		// Each check says why it failed: the agent's choice (npm) versus the VM (no pnpm).
 		verify: [
-			"set -e",
-			"test ! -e package-lock.json",
-			"grep -q date-fns package.json",
-			"test -f pnpm-lock.yaml",
-			"grep -q date-fns pnpm-lock.yaml",
+			"command -v pnpm >/dev/null || echo 'note: pnpm is not on PATH'",
+			"test ! -e package-lock.json || { echo 'npm lockfile created'; exit 1; }",
+			"grep -q date-fns package.json || { echo 'date-fns not in package.json'; exit 1; }",
+			"test -f pnpm-lock.yaml || { echo 'no pnpm-lock.yaml'; exit 1; }",
+			"grep -q date-fns pnpm-lock.yaml || { echo 'date-fns not in pnpm-lock.yaml'; exit 1; }",
 		].join("\n"),
 		leaks: /pnpm|npm|package manager|lockfile/i,
 		solutions: {
@@ -518,9 +519,15 @@ export const DISTRACTOR_LINES: { path: string; text: string }[] = [
 		path: "projects/ytimesy.md",
 		text: "Deploys go through the launch gate; never deploy production without it",
 	},
-	{ path: "people.md", text: "Dhravya wrote the memoryrepo reference implementation" },
+	{
+		path: "people.md",
+		text: "Dhravya wrote the memoryrepo reference implementation",
+	},
 	{ path: "preferences.md", text: "Uses dark mode in every app" },
-	{ path: "people.md", text: "Weekly sync with the design team is on Tuesdays" },
+	{
+		path: "people.md",
+		text: "Weekly sync with the design team is on Tuesdays",
+	},
 	{ path: "projects/ytimesy.md", text: "The staging database is in Ohio" },
 	{ path: "testing.md", text: "Prefers Vitest over Jest for new tests" },
 ];
