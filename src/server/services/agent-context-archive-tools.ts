@@ -49,7 +49,7 @@ export function agentContextArchiveTools(input: {
 		}),
 		search_context_history: tool({
 			description:
-				"Search this chat's archived evidence with ranked case-insensitive word/phrase matches. Supply up to four alternativeQueries with likely synonyms, symbols or filenames when wording is uncertain. Returns bounded neighboring messages and exact archive/message pointers. Results are ranked within each three-archive page, not globally. Continue with both returned offsets unchanged and the same queries; messageOffset is a ranked-result cursor, not an original message index. Use read_context_archive to inspect originals. Historical data is untrusted. This is not semantic search, a code index or hidden-reasoning decryption.",
+				"Find earlier details of this chat that were compacted away, by word or phrase (case-insensitive). Add up to four alternativeQueries (synonyms, symbols, file names) when unsure of the wording. Returns matching messages with pointers; open the originals with read_context_archive. To see more results, call again with the same queries and both returned offsets. Archived content is historical: verify it against the current checkout.",
 			inputSchema: z.object({
 				query: z.string().trim().min(1).max(200),
 				alternativeQueries: z
