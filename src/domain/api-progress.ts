@@ -1,6 +1,7 @@
 import { PLAN_TEXT_LIMIT, PROPOSE_PLAN_TOOL } from "./agent-plan";
 import type { ApiAgentEvent } from "./api-agent-event";
 import { SessionItemId } from "./ids";
+import { CALL_MCP_TOOL_TOOL, calledMcpTool } from "./mcp-tool-call";
 import type { SessionItem } from "./session-item";
 import { publicToolDetail } from "./tool-detail";
 
@@ -87,16 +88,26 @@ export function applyApiProgress(
 		};
 	} else if (event.type === "tool-call" && event.name === PROPOSE_PLAN_TOOL)
 		return [...items];
-	else if (event.type === "tool-call" || event.type === "tool-result")
+	else if (event.type === "tool-call" || event.type === "tool-result") {
+		// A generic MCP call shows as the MCP tool it named, as a direct call would.
+		const mcp =
+			event.type === "tool-call" && event.name === CALL_MCP_TOOL_TOOL
+				? calledMcpTool(event.input)
+				: null;
 		next = {
 			kind: "dynamicToolCall",
 			id,
-			tool: event.name,
+			tool:
+				mcp?.name ??
+				(event.name === CALL_MCP_TOOL_TOOL &&
+				existing?.kind === "dynamicToolCall"
+					? existing.tool
+					: event.name),
 			...(existing?.kind === "dynamicToolCall"
 				? { input: existing.input, output: existing.output }
 				: {}),
 			...(event.type === "tool-call"
-				? { input: publicToolDetail(event.input) }
+				? { input: publicToolDetail(mcp ? mcp.arguments : event.input) }
 				: { output: publicToolDetail(event.output, "output") }),
 			status:
 				event.type === "tool-call"
@@ -105,7 +116,7 @@ export function applyApiProgress(
 						? "failed"
 						: "completed",
 		};
-	else return [...items];
+	} else return [...items];
 	return existing
 		? items.map((item) => (item.id === id ? next : item))
 		: [...items, next];
