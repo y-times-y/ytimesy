@@ -82,6 +82,26 @@ export async function timed<T>(name: string, run: () => Promise<T>) {
 	}
 }
 
+/** Like timed, and also lists the call itself (first 80 per step) with a short label. */
+export async function timedCall<T>(
+	name: string,
+	label: string,
+	run: () => Promise<T>,
+) {
+	const trace = traces.getStore();
+	const startedAt = Date.now();
+	try {
+		return await timed(name, run);
+	} finally {
+		if (trace && trace.calls.length < 80)
+			trace.calls.push([
+				startedAt - trace.startedAt,
+				Date.now() - startedAt,
+				label.replace(/\s+/g, " ").slice(0, 70),
+			]);
+	}
+}
+
 /** Times every request through a fetch, named by method and a coarse path shape. */
 export function timedFetch(prefix: string, transport: typeof fetch) {
 	return (async (request: RequestInfo | URL, init?: RequestInit) => {
@@ -98,25 +118,15 @@ export function timedFetch(prefix: string, transport: typeof fetch) {
 				/^[0-9a-z]{16,}$/i.test(part) || /\d/.test(part) ? ":id" : part,
 			)
 			.join("/");
-		const trace = traces.getStore();
-		const startedAt = Date.now();
+		let detail = "";
 		try {
-			return await timed(`${prefix}:${method} ${shape}`, () =>
-				transport(request, init),
-			);
-		} finally {
-			if (trace && trace.calls.length < 60) {
-				let detail = "";
-				try {
-					const body = JSON.parse(String(init?.body ?? "{}"));
-					detail = String(body.command ?? body.path ?? body.state ?? "");
-				} catch {}
-				trace.calls.push([
-					startedAt - trace.startedAt,
-					Date.now() - startedAt,
-					`${method} ${shape.split("/").pop()} ${detail.slice(0, 70)}`,
-				]);
-			}
-		}
+			const body = JSON.parse(String(init?.body ?? "{}"));
+			detail = String(body.command ?? body.path ?? body.state ?? "");
+		} catch {}
+		return timedCall(
+			`${prefix}:${method} ${shape}`,
+			`${method} ${shape.split("/").pop()} ${detail}`,
+			() => transport(request, init),
+		);
 	}) as typeof fetch;
 }
