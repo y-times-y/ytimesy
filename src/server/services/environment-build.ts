@@ -8,6 +8,7 @@ import {
 	environmentModel,
 } from "#/domain/environment-model";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
+import { projectCheckoutPath } from "#/domain/project-checkout";
 import type { EnvironmentRecipe } from "#/domain/project-environment";
 import {
 	ENVIRONMENT_RECIPE_PATH,
@@ -25,6 +26,7 @@ import { database } from "../adapters/database";
 import { DETACHED_COMMAND_ROOT } from "../adapters/freestyle/detached-command";
 import { workspaceRuntimeFromEnv } from "../adapters/freestyle/workspace-runtime";
 import { authorizedRepository, repositoryBranchSha } from "../adapters/github";
+import { receiveBrokeredRepository } from "../adapters/github/git-broker";
 import { loadProjectSecretsForOwner } from "../adapters/project-secrets";
 import { projectForOwner } from "../adapters/projects";
 import { guestNodePath, installArgv } from "../adapters/repository-setup";
@@ -58,6 +60,15 @@ export type EnvironmentBuildInput = {
 	inputHash: string;
 	baseSnapshotId: string | null;
 	repositories: (ProjectRepository & { commit: string })[];
+	/**
+	 * Rebuild on top of the active template instead of from the base image: only
+	 * the repositories' commits changed since it was built. Maps repositoryId to
+	 * the commit the template holds.
+	 */
+	incremental?: {
+		readonly snapshotId: string;
+		readonly commits: Readonly<Record<string, string>>;
+	} | null;
 };
 
 export async function resolveEnvironmentBuildInput(
@@ -105,28 +116,40 @@ export async function resolveEnvironmentBuildInput(
 		workspace.userId,
 		project.id,
 	);
-	const inputHash = createHash("sha256")
-		.update(
-			JSON.stringify({
-				version: 3,
-				repositories,
-				baseSnapshotId,
-				secretRevision,
-			}),
-		)
-		.digest("hex");
-	const previous = await database().query(
-		"select input_hash from environment_build where workspace_id=$1 and status='ready' order by completed_at desc limit 1",
+	const inputHash = environmentInputHash(
+		repositories,
+		baseSnapshotId,
+		secretRevision,
+	);
+	const previous = await database().query<{
+		input_hash: string;
+		sources: (ProjectRepository & { commit: string })[];
+	}>(
+		"select input_hash, sources from environment_build where workspace_id=$1 and status='ready' order by completed_at desc limit 1",
 		[workspaceId],
 	);
-	if (
+	const prior = previous.rows[0];
+	const templateUsable =
 		!force &&
-		workspace.templateSnapshotId &&
-		previous.rows[0]?.input_hash === inputHash &&
-		(await runtime.snapshotExists?.(workspace.templateSnapshotId))
-	)
-		return null;
+		Boolean(workspace.templateSnapshotId) &&
+		Boolean(prior) &&
+		Boolean(
+			workspace.templateSnapshotId &&
+				(await runtime.snapshotExists?.(workspace.templateSnapshotId)),
+		);
+	if (templateUsable && prior?.input_hash === inputHash) return null;
+	const incremental =
+		templateUsable && prior && workspace.templateSnapshotId
+			? incrementalBase(
+					prior,
+					repositories,
+					baseSnapshotId,
+					secretRevision,
+					workspace.templateSnapshotId,
+				)
+			: null;
 	return {
+		incremental,
 		repairModel: repairModel ? environmentModel.parse(repairModel) : null,
 		workspaceId,
 		userId: workspace.userId,
@@ -135,6 +158,78 @@ export async function resolveEnvironmentBuildInput(
 		inputHash,
 		baseSnapshotId,
 		repositories,
+	};
+}
+
+export function environmentInputHash(
+	repositories: readonly (ProjectRepository & { commit: string })[],
+	baseSnapshotId: string | null,
+	secretRevision: string,
+) {
+	return createHash("sha256")
+		.update(
+			canonicalJson({
+				version: 4,
+				repositories,
+				baseSnapshotId,
+				secretRevision,
+			}),
+		)
+		.digest("hex");
+}
+
+/** Key order independent: sources come back from jsonb with reordered keys. */
+function canonicalJson(value: unknown): string {
+	if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+	if (value && typeof value === "object")
+		return `{${Object.keys(value)
+			.filter((key) => (value as Record<string, unknown>)[key] !== undefined)
+			.sort()
+			.map(
+				(key) =>
+					`${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key])}`,
+			)
+			.join(",")}}`;
+	return JSON.stringify(value) ?? "null";
+}
+
+/**
+ * The active template can be fast-forwarded when it was built from the same base
+ * image, secrets and repositories/branches; only commits moved. Its recorded hash
+ * proves the base image and secrets: recomputed from its own sources with today's
+ * values, it must match.
+ */
+export function incrementalBase(
+	prior: {
+		readonly input_hash: string;
+		readonly sources: readonly (ProjectRepository & { commit: string })[];
+	},
+	repositories: readonly (ProjectRepository & { commit: string })[],
+	baseSnapshotId: string | null,
+	secretRevision: string,
+	snapshotId: string,
+): EnvironmentBuildInput["incremental"] {
+	if (
+		environmentInputHash(prior.sources, baseSnapshotId, secretRevision) !==
+		prior.input_hash
+	)
+		return null;
+	const key = (repo: ProjectRepository) =>
+		`${repo.repositoryId}:${repo.branch}`;
+	const before = new Map(prior.sources.map((repo) => [key(repo), repo]));
+	if (
+		before.size !== repositories.length ||
+		repositories.some((repo) => !before.has(key(repo)))
+	)
+		return null;
+	return {
+		snapshotId,
+		commits: Object.fromEntries(
+			repositories.map((repo) => [
+				String(repo.repositoryId),
+				before.get(key(repo))?.commit ?? "",
+			]),
+		),
 	};
 }
 
@@ -204,8 +299,9 @@ export async function provisionEnvironmentBuild(
 		recordWorkspaceEvent(input.userId, input.workspaceId, message);
 	if (!hasActive) await saveWorkspaceStatus(input.workspaceId, "provisioning");
 	await event("Preparing project environment.");
+	const from = input.incremental?.snapshotId ?? input.baseSnapshotId;
 	const providerRef = await runtime.provision(`ytimesy-build-${id}`, {
-		...(input.baseSnapshotId ? { snapshotId: input.baseSnapshotId } : {}),
+		...(from ? { snapshotId: from } : {}),
 		maxRunSeconds: ENVIRONMENT_BUILD_TIMEOUT_SECONDS,
 	});
 	await database().query(
@@ -238,6 +334,25 @@ export async function prepareEnvironmentRepositories(
 		await updateInitialBuildStatus(input.workspaceId, "cloning");
 		await event(`Preparing ${repo.fullName}.`);
 		const [owner, name] = repo.fullName.split("/");
+		const previousCommit =
+			input.incremental?.commits[String(repo.repositoryId)] ?? null;
+		const reused = previousCommit
+			? await fastForwardTemplateCheckout(host, {
+					userId: input.userId,
+					projectId: input.projectId,
+					owner,
+					name,
+					branch: repo.branch,
+					installationId: repo.installationId,
+					directory: projectCheckoutPath(home, name),
+					from: previousCommit,
+					to: repo.commit,
+				})
+			: null;
+		if (previousCommit && !reused)
+			await event(
+				`${repo.fullName} could not be fast-forwarded; preparing it from a fresh clone.`,
+			);
 		const directory = await prepareProjectCheckout({
 			userId: input.userId,
 			projectId: input.projectId,
@@ -282,6 +397,16 @@ export async function prepareEnvironmentRepositories(
 			throw new Error(
 				`Add ${ENVIRONMENT_RECIPE_PATH} with install and verification commands for ${repo.fullName}.`,
 			);
+		if (
+			reused &&
+			!dependencyInputsChanged(reused.changedFiles, recipe.install ?? "")
+		) {
+			await event(
+				`${repo.fullName}: dependencies unchanged since the last environment; reusing them.`,
+			);
+			prepared.push({ ...repo, directory, recipe });
+			continue;
+		}
 		await event(`Installing ${repo.fullName}.`);
 		await updateInitialBuildStatus(input.workspaceId, "installing");
 		const install = recipe.install
@@ -604,4 +729,118 @@ export async function failEnvironmentPreflight(workspaceId: string) {
 	);
 	if (failed.rows[0])
 		await recordWorkspaceEvent(failed.rows[0].user_id, workspaceId, message);
+}
+
+/** Files whose change means installed dependencies may be stale. */
+const DEPENDENCY_FILES = new Set([
+	"package.json",
+	"package-lock.json",
+	"npm-shrinkwrap.json",
+	"pnpm-lock.yaml",
+	"pnpm-workspace.yaml",
+	"yarn.lock",
+	"bun.lock",
+	"bun.lockb",
+	".npmrc",
+	".nvmrc",
+	".node-version",
+	".tool-versions",
+	"pyproject.toml",
+	"poetry.lock",
+	"uv.lock",
+	"Pipfile",
+	"Pipfile.lock",
+	"setup.py",
+	"setup.cfg",
+	"Cargo.toml",
+	"Cargo.lock",
+	"rust-toolchain",
+	"rust-toolchain.toml",
+	"go.mod",
+	"go.sum",
+	"Gemfile",
+	"Gemfile.lock",
+	"composer.json",
+	"composer.lock",
+]);
+
+/**
+ * Whether a commit range touched anything install depends on: a manifest or
+ * lockfile anywhere, the environment recipe, or a path the custom install
+ * command names (e.g. scripts/setup.sh).
+ */
+export function dependencyInputsChanged(
+	changedFiles: readonly string[] | null,
+	installCommand: string,
+) {
+	if (!changedFiles) return true;
+	return changedFiles.some((file) => {
+		const base = file.split("/").at(-1) ?? file;
+		return (
+			DEPENDENCY_FILES.has(base) ||
+			/^requirements.*\.txt$/.test(base) ||
+			file === ENVIRONMENT_RECIPE_PATH ||
+			file.startsWith(".ytimesy/") ||
+			(installCommand.length > 0 && installCommand.includes(file))
+		);
+	});
+}
+
+/**
+ * Moves the template's checkout to the build's commit without recloning.
+ * Returns the files changed since the template, or null when the checkout is
+ * missing, dirty, rewritten or lands elsewhere; the caller then reclones.
+ */
+async function fastForwardTemplateCheckout(
+	host: {
+		exec: (
+			command: string,
+			timeoutMs: number,
+		) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
+		writeTextFile: (path: string, contents: string) => Promise<void>;
+	},
+	input: {
+		userId: string;
+		projectId: string;
+		owner: string;
+		name: string;
+		branch: string;
+		installationId: number | string;
+		directory: string;
+		from: string;
+		to: string;
+	},
+): Promise<{ changedFiles: string[] | null } | null> {
+	const git = `git -C ${quote(input.directory)}`;
+	try {
+		const head = await host.exec(`${git} rev-parse HEAD`, 15_000);
+		if (head.exitCode !== 0 || head.stdout.trim() !== input.from)
+			throw new Error("Template checkout is not at its recorded commit.");
+		const updated = await receiveBrokeredRepository(host, {
+			userId: input.userId,
+			projectId: input.projectId,
+			owner: input.owner,
+			name: input.name,
+			branch: input.branch,
+			workingBranch: input.branch,
+			installationId: input.installationId,
+			destination: input.directory,
+			mode: "update",
+		});
+		if (updated !== "updated") throw new Error("Template checkout is dirty.");
+		const moved = await host.exec(`${git} rev-parse HEAD`, 15_000);
+		if (moved.stdout.trim() !== input.to)
+			throw new Error("Template checkout did not reach the build commit.");
+		const diff = await host.exec(
+			`${git} diff --name-only ${quote(input.from)} ${quote(input.to)}`,
+			30_000,
+		);
+		return {
+			changedFiles:
+				diff.exitCode === 0 ? diff.stdout.split("\n").filter(Boolean) : null,
+		};
+	} catch {
+		await host.exec(`rm -rf ${quote(input.directory)}`, 120_000);
+		return null;
+	}
 }
