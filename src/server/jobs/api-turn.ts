@@ -108,6 +108,7 @@ import { harnessLifecycleHooks } from "../services/harness-lifecycle-hooks";
 import { runAgentTaskTool } from "../services/harness-workspace-session";
 import { journaledToolOperation } from "../services/journaled-tool-operation";
 import { turnOAuthProvider } from "../services/mcp-oauth";
+import { mcpToolSurface } from "../services/mcp-tool-surface";
 import { connectMcpTools } from "../services/mcp-tools";
 import {
 	materializeMessageAttachments,
@@ -606,14 +607,23 @@ async function runApiTurnAttempt(
 				() => hasDelegatedTasks(owner.userId, owner.id),
 				(present) => present || !canDelegate,
 			);
-		const tools = planLock
-			? withPlanMode(
-					hooks.wrap(
-						withRedactedResults({ ...withMcp, ...planTools(planLock) }, redact),
-					),
-					() => planLock.planning,
-				)
-			: hooks.wrap(withRedactedResults(withMcp, redact));
+		// Large MCP setups are searched and called through two fixed tools; the
+		// real tools they run keep their hooks, plan mode and redaction.
+		const tools = mcpToolSurface({
+			tools: planLock
+				? withPlanMode(
+						hooks.wrap(
+							withRedactedResults(
+								{ ...withMcp, ...planTools(planLock) },
+								redact,
+							),
+						),
+						() => planLock.planning,
+					)
+				: hooks.wrap(withRedactedResults(withMcp, redact)),
+			catalog: mcp.catalog,
+			purposes: mcp.purposes,
+		});
 		// Durable steps start at 1; a resumed first step reuses the deduped notice.
 		const firstStep = step ? step.index === 1 : !continued;
 		if (planLock?.planning && firstStep)
