@@ -123,6 +123,8 @@ export async function subscriptionFetch(
 	path: string,
 	init?: RequestInit,
 	accountId?: string,
+	/** A token this caller read moments ago; used for the first attempt only. */
+	loaded?: { accessToken: string; chatgptAccountId: string },
 ) {
 	const headers = new Headers(init?.headers);
 	if (codexRelayConfigured()) {
@@ -139,11 +141,14 @@ export async function subscriptionFetch(
 	}
 	const request = subscriptionEgress.getStore() ?? fetch;
 	return withRevokedTokenRetry(init?.body, async (forceRefresh) => {
-		const tokens = await timed("auth:tokens", () =>
-			forceRefresh
-				? codexExternalTokens(userId, true)
-				: codexExternalTokens(userId),
-		);
+		const tokens =
+			!forceRefresh && loaded
+				? loaded
+				: await timed("auth:tokens", () =>
+						forceRefresh
+							? codexExternalTokens(userId, true)
+							: codexExternalTokens(userId),
+					);
 		if (accountId && accountId !== tokens.chatgptAccountId)
 			throw new Error("Subscription account changed; restart this turn.");
 		headers.set("Authorization", `Bearer ${tokens.accessToken}`);

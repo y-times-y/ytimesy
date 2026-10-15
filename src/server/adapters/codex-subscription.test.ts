@@ -492,3 +492,30 @@ it("reads the reset time only from a usage-limit body", () => {
 		"resets when your plan's usage window renews",
 	);
 });
+
+it("sends a step's first request with the token read while building it, and reads again after", async () => {
+	vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+		if (String(url).includes("/models"))
+			return new Response(
+				JSON.stringify({ models: [{ slug: "reuse-model" }] }),
+			);
+		throw new Error("fixture-stop");
+	});
+	const runtime = await codexSubscriptionModel(
+		"reuse-owner",
+		"reuse-model",
+		"low",
+	);
+	const reads = mocks.auth.mock.calls.length;
+	const send = () =>
+		generateText({
+			model: runtime.model,
+			prompt: "hello",
+			maxRetries: 0,
+			...runtime.requestSettings("instructions"),
+		});
+	await expect(send()).rejects.toThrow("fixture-stop");
+	expect(mocks.auth.mock.calls.length).toBe(reads);
+	await expect(send()).rejects.toThrow("fixture-stop");
+	expect(mocks.auth.mock.calls.length).toBe(reads + 1);
+});
