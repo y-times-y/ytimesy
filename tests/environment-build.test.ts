@@ -7,8 +7,11 @@ import { MemoryWorkspaceRuntime } from "../src/server/adapters/workspace-runtime
 import {
 	activateEnvironmentBuild,
 	claimEnvironmentBuild,
+	dependencyInputsChanged,
 	type EnvironmentBuildInput,
+	environmentInputHash,
 	finishEnvironmentBuild,
+	incrementalBase,
 	provisionEnvironmentBuild,
 	recoverExpiredEnvironmentBuilds,
 	releaseFinishedBuildMachines,
@@ -332,4 +335,82 @@ it("retries a release whose deletion failed", async () => {
 		await releaseFinishedBuildMachines(input.workspaceId, runtime),
 	).toEqual({ released: 1, failed: 0 });
 	expect(remove).toHaveBeenLastCalledWith(superseded);
+});
+
+it("fast-forwards the template only when nothing but commits moved", () => {
+	const repo = input.repositories[0];
+	const priorSources = [{ ...repo, commit: "b".repeat(40) }];
+	// The prior hash is recomputed from its jsonb sources (keys reordered).
+	const reordered = priorSources.map((source) =>
+		Object.fromEntries(Object.entries(source).reverse()),
+	) as typeof priorSources;
+	const exact = (sources: typeof priorSources) => ({
+		input_hash: environmentInputHash(
+			sources,
+			input.baseSnapshotId,
+			input.secretRevision,
+		),
+		sources: reordered,
+	});
+	expect(
+		incrementalBase(
+			exact(priorSources),
+			input.repositories,
+			input.baseSnapshotId,
+			input.secretRevision,
+			"template",
+		),
+	).toEqual({ snapshotId: "template", commits: { "1": "b".repeat(40) } });
+	// A new base image, new secrets or another branch need a full build.
+	for (const [base, secrets, repos] of [
+		["new-tools", input.secretRevision, input.repositories],
+		[input.baseSnapshotId, "rotated", input.repositories],
+		[input.baseSnapshotId, input.secretRevision, [{ ...repo, branch: "next" }]],
+	] as const)
+		expect(
+			incrementalBase(
+				exact(priorSources),
+				[...repos],
+				base,
+				secrets,
+				"template",
+			),
+		).toBeNull();
+});
+
+it("reinstalls only when a manifest, lockfile, recipe or install input changed", () => {
+	expect(dependencyInputsChanged(["src/app.ts", "README.md"], "")).toBe(false);
+	for (const file of [
+		"pnpm-lock.yaml",
+		"packages/api/package.json",
+		"services/ml/requirements-dev.txt",
+		"go.sum",
+		".ytimesy/environment.json",
+	])
+		expect(dependencyInputsChanged(["src/app.ts", file], ""), file).toBe(true);
+	expect(
+		dependencyInputsChanged(["scripts/setup.sh"], "bash scripts/setup.sh"),
+	).toBe(true);
+	// An unreadable diff is treated as changed.
+	expect(dependencyInputsChanged(null, "")).toBe(true);
+});
+
+it("builds on the active template when the build is incremental", async () => {
+	const runtime = new MemoryWorkspaceRuntime();
+	const provision = vi.spyOn(runtime, "provision");
+	await db.exec("delete from environment_build");
+	const id = await claimEnvironmentBuild(input, runtime);
+	await provisionEnvironmentBuild(
+		{
+			...input,
+			incremental: { snapshotId: "previous-snapshot", commits: {} },
+		},
+		id,
+		runtime,
+	);
+	expect(provision).toHaveBeenCalledWith(
+		`ytimesy-build-${id}`,
+		expect.objectContaining({ snapshotId: "previous-snapshot" }),
+	);
+	await db.exec("delete from environment_build");
 });
