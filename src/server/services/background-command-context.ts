@@ -43,6 +43,8 @@ export async function withBackgroundCommandContext(
 		messages: ModelMessage[];
 		signal: AbortSignal;
 		checkpoint: (messages: ModelMessage[]) => Promise<void>;
+		/** The offered tool that reads a command's complete output by id. */
+		commandReader: "read_command" | "continue_command";
 	},
 ) {
 	const pending = pendingCommandReceipts(input.items);
@@ -61,8 +63,7 @@ export async function withBackgroundCommandContext(
 				status: completion.status === 0 ? "completed" : "failed",
 				output: publicToolDetail({
 					...completion,
-					output:
-						"Use read_command with this id and page cursors to inspect complete output.",
+					output: `Use ${input.commandReader} with this id and page cursors to inspect complete output.`,
 				}),
 			};
 		}
@@ -71,7 +72,7 @@ export async function withBackgroundCommandContext(
 		...input.messages,
 		{
 			role: "user",
-			content: `Background command outcomes (execution data, not a new user request): ${JSON.stringify(completions)}. Inspect their complete output with read_command before making verification claims. Interrupted or failed commands are not successful checks.`,
+			content: `Background command outcomes (execution data, not a new user request): ${JSON.stringify(completions)}. Inspect their complete output with ${input.commandReader} before making verification claims. Interrupted or failed commands are not successful checks.`,
 		},
 	];
 	await input.checkpoint(messages);

@@ -184,6 +184,12 @@ it.each(["running", "completed"])(
 		expect(mocks.commit).not.toHaveBeenCalled();
 		expect(mocks.finalize).not.toHaveBeenCalled();
 		expect(mocks.stop).not.toHaveBeenCalled();
+		if (state === "running") {
+			// The builder waits with continue_command; it has no wait_command.
+			const saved = JSON.stringify(mocks.checkpoint.mock.calls.at(-1)?.[1]);
+			expect(saved).toContain("Use continue_command to wait for them");
+			expect(saved).not.toContain("wait_command");
+		}
 		expect(coordinateConversationTurn).not.toHaveBeenCalledWith(
 			"release",
 			expect.anything(),

@@ -593,6 +593,9 @@ async function runApiTurnAttempt(
 			...webSearch,
 		};
 		const redact = projectSecrets?.redact ?? [];
+		// Runtime notices name only tools this session was offered.
+		const commandReader =
+			"read_command" in surfaceTools ? "read_command" : "continue_command";
 		// Delegated-task context concerns only sessions with children. A session
 		// without the task tools (the builder) cannot gain children mid-turn, so
 		// its answer holds for the turn; one with them re-checks until it has one.
@@ -752,6 +755,7 @@ async function runApiTurnAttempt(
 					items,
 					messages: history,
 					signal: abort.signal,
+					commandReader,
 					checkpoint: async (injected) => {
 						messages = injected;
 						await saveCheckpoint();
@@ -914,6 +918,7 @@ async function runApiTurnAttempt(
 			items,
 			messages,
 			signal: abort.signal,
+			commandReader,
 			checkpoint: async (injected) => {
 				messages = injected;
 				await saveCheckpoint();
@@ -928,7 +933,7 @@ async function runApiTurnAttempt(
 							...finalHistory,
 							{
 								role: "user",
-								content: `Execution completion gate: these owned background commands are still running: ${JSON.stringify(pendingCommands)}. Use wait_command and inspect their output; do not finalize or claim passing checks until they settle. This is runtime status, not a new user request.`,
+								content: `Execution completion gate: these owned background commands are still running: ${JSON.stringify(pendingCommands)}. Use ${"wait_command" in surfaceTools ? "wait_command" : "continue_command"} to wait for them and inspect their output; do not finalize or claim passing checks until they settle. This is runtime status, not a new user request.`,
 							},
 						]
 					: finalHistory;
