@@ -66,6 +66,7 @@ import {
 	renewApiTurn,
 } from "../adapters/api-turns";
 import { reserveApiTokens } from "../adapters/api-usage-budget";
+import { warmCodexSubscriptionCatalog } from "../adapters/codex-subscription";
 import { archiveModelContext } from "../adapters/context-archives";
 import { conversationPointCodeRef } from "../adapters/conversation-recovery";
 import { coordinateConversationTurn } from "../adapters/conversation-turn-control";
@@ -411,6 +412,7 @@ async function runApiTurnAttempt(
 				))
 			)
 				throw new Error("Reconnect Codex before continuing.");
+			warmCodexSubscriptionCatalog(turn.user_id);
 			// ChatGPT's Codex endpoint accepts the same hosted search as the OpenAI API.
 			webSearch = nativeWebSearchTools("openai");
 		} else {

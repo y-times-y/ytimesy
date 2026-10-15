@@ -199,6 +199,15 @@ async function subscriptionCatalog(userId: string) {
 	}
 }
 
+/**
+ * Starts loading the account's model catalog so a step's remaining setup
+ * overlaps it; the model runtime awaits the same cached load, and a failure
+ * is reported there.
+ */
+export function warmCodexSubscriptionCatalog(userId: string) {
+	subscriptionCatalog(userId).catch(() => {});
+}
+
 export async function codexSubscriptionCatalog(
 	userId: string,
 ): Promise<ListedModel[]> {
