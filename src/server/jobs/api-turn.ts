@@ -54,6 +54,7 @@ import type { ModelSwitchItem, SessionItem } from "#/domain/session-item";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
 import {
 	completedChildrenForReview,
+	hasDelegatedTasks,
 	withDelegationContext,
 } from "../adapters/agent-delegation-context";
 import { agentSessionMetadataForOwner } from "../adapters/agent-sessions";
@@ -139,6 +140,7 @@ import { withRedactedResults } from "../services/redacted-tools";
 import { machinesForAgentSession } from "../services/session-workspace-machines";
 import { analyticsAgentRole } from "../services/turn-analytics";
 import { commitCompletedSessionTurn } from "../services/turn-commit";
+import { forgetTurnMemo, turnMemo } from "../services/turn-memo";
 import { turnProgressWriter } from "../services/turn-progress-writer";
 import type { WorkspaceMachines } from "../services/workspace-machines";
 import { enqueueAgentTaskEvent } from "./queue";
@@ -195,7 +197,10 @@ export async function runApiTurn(
 	// Bounded: every failover adds a route to the turn's tried set (MAX_TURN_FAILOVERS).
 	for (let continued = false; ; continued = true) {
 		const outcome = await runApiTurnAttempt(machines, turn, step, continued);
-		if (typeof outcome === "string") return outcome;
+		if (typeof outcome === "string") {
+			if (outcome !== "continue") forgetTurnMemo(turn.id);
+			return outcome;
+		}
 		if (step) return "continue";
 		turn = outcome.failedOver;
 	}
@@ -413,9 +418,18 @@ async function runApiTurnAttempt(
 		// The root chat is the builder itself; writable children build too.
 		const writable =
 			!owner.parentSessionId || owner.taskAccess === "read_write";
-		const projectSecrets = owner.projectId
-			? await loadAgentProjectSecrets(owner.userId, owner.projectId).catch(
-					() => ({ envFile: agentSecretsEnvFile([]), redact: [] }),
+		// Turn-fixed configuration is loaded by the turn's first durable step and
+		// reused by later steps in the same isolate (see turn-memo). It may change
+		// between turns; within one, keeping it fixed also keeps the tools and the
+		// system prompt byte-stable for provider prompt caching. A restarted or
+		// evicted isolate (including a resumed step) simply loads it again.
+		const { projectId } = owner;
+		const projectSecrets = projectId
+			? await turnMemo(`${turn.id}:project-secrets`, () =>
+					loadAgentProjectSecrets(owner.userId, projectId).catch(() => ({
+						envFile: agentSecretsEnvFile([]),
+						redact: [],
+					})),
 				)
 			: null;
 		let secretsWritten: Promise<void> | undefined;
@@ -430,10 +444,10 @@ async function runApiTurnAttempt(
 			execution = await prepareWorkspace();
 			if (projectSecrets) {
 				const { machines: vmMachines, vm } = execution;
-				secretsWritten ??= writeAgentProjectSecrets(
-					vmMachines,
-					vm,
-					projectSecrets,
+				// The env file stays on the VM's disk across steps; a new VM gets it written.
+				secretsWritten ??= turnMemo(
+					`${turn.id}:project-secrets-written:${vm}`,
+					() => writeAgentProjectSecrets(vmMachines, vm, projectSecrets),
 				);
 				await secretsWritten;
 			}
@@ -490,8 +504,15 @@ async function runApiTurnAttempt(
 			continuationCount: () =>
 				completedLifecycleContinuations(owner.id, turn.id),
 			signal: abort.signal,
+			// A pinned baseline never changes; an unpinned one is read again because
+			// preparing the workspace may pin it.
 			baseline: ({ cwd }) =>
-				readVerificationBaseline(owner.userId, owner.id, cwd),
+				turnMemo(
+					`${turn.id}:verification-baseline:${cwd}`,
+					() => readVerificationBaseline(owner.userId, owner.id, cwd),
+					(base) => base !== null,
+				),
+			configCache: (key, load) => turnMemo(`${turn.id}:${key}`, load),
 			once: (id, run) =>
 				journaledToolOperation(
 					{
@@ -530,9 +551,18 @@ async function runApiTurnAttempt(
 			? builderShellTools(repositoryContext.tools)
 			: repositoryContext.tools;
 		// The user's remote MCP servers are called from here; credentials never reach the VM.
+		// Connections are live HTTP clients bound to this step's request, so every
+		// step connects again; only the server list is reused. A list with OAuth
+		// servers is re-read each step because a token refresh rotates their record.
 		const mcp = await connectMcpTools(
 			await Promise.all(
-				(await connectableMcpServers(owner.userId, owner.projectId ?? null))
+				(
+					await turnMemo(
+						`${turn.id}:mcp-servers`,
+						() => connectableMcpServers(owner.userId, owner.projectId ?? null),
+						(servers) => servers.every((server) => server.auth !== "oauth"),
+					)
+				)
 					// OAuth servers join once the user has signed in.
 					.filter((server) => server.auth !== "oauth" || server.sealedOAuth)
 					.map(async (server) => ({
@@ -553,9 +583,8 @@ async function runApiTurnAttempt(
 			{ signal: abort.signal },
 		);
 		closeMcp = mcp.close;
-		const plugins = await enabledPluginComponents(
-			owner.userId,
-			owner.projectId ?? null,
+		const plugins = await turnMemo(`${turn.id}:plugins`, () =>
+			enabledPluginComponents(owner.userId, owner.projectId ?? null),
 		);
 		const withMcp = {
 			...surfaceTools,
@@ -564,6 +593,16 @@ async function runApiTurnAttempt(
 			...webSearch,
 		};
 		const redact = projectSecrets?.redact ?? [];
+		// Delegated-task context concerns only sessions with children. A session
+		// without the task tools (the builder) cannot gain children mid-turn, so
+		// its answer holds for the turn; one with them re-checks until it has one.
+		const canDelegate = "create_task" in surfaceTools;
+		const hasChildren = () =>
+			turnMemo(
+				`${turn.id}:has-children`,
+				() => hasDelegatedTasks(owner.userId, owner.id),
+				(present) => present || !canDelegate,
+			);
 		const tools = planLock
 			? withPlanMode(
 					hooks.wrap(
@@ -719,12 +758,11 @@ async function runApiTurnAttempt(
 						await publishProgress?.("running");
 					},
 				});
-				let current = await withDelegationContext(
-					owner.userId,
-					owner.id,
-					history,
-				);
-				if (!owner.parentSessionId && owner.projectId) {
+				const delegated = await hasChildren();
+				let current = delegated
+					? await withDelegationContext(owner.userId, owner.id, history)
+					: history;
+				if (delegated && !owner.parentSessionId && owner.projectId) {
 					current = await withCompletedTaskReviewContext({
 						messages: current,
 						children: await completedChildrenForReview(
