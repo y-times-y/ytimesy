@@ -6,6 +6,7 @@ import { connectMcpTools } from "./mcp-tools";
 let server: Server;
 let url: string;
 const seenAuth: (string | undefined)[] = [];
+const seenMethods: string[] = [];
 
 // A minimal Streamable-HTTP MCP server: JSON-RPC over POST, bearer-protected.
 beforeAll(async () => {
@@ -33,6 +34,7 @@ beforeAll(async () => {
 					protocolVersion?: string;
 				};
 			};
+			seenMethods.push(message.method);
 			if (message.id === undefined) {
 				response.writeHead(202).end();
 				return;
@@ -142,4 +144,54 @@ it("skips a server that rejects its credentials instead of failing the turn", as
 	expect(connected.tools).toEqual({});
 	expect(connected.unavailable).toEqual(["locked"]);
 	await connected.close();
+});
+
+it("reuses a turn's tool list in later steps and connects only to call a tool", async () => {
+	const listings = new Map<string, unknown>();
+	const step = () =>
+		connectMcpTools(
+			[
+				{
+					key: "fixture-id",
+					name: "fixture",
+					url,
+					headers: { Authorization: "Bearer secret-token" },
+				},
+			],
+			{
+				listing: async (key, load) => {
+					if (!listings.has(key)) listings.set(key, await load());
+					return listings.get(key) as Awaited<ReturnType<typeof load>>;
+				},
+			},
+		);
+	const first = await step();
+	await first.close();
+	seenMethods.length = 0;
+	const later = await step();
+	try {
+		expect(Object.keys(later.tools).sort()).toEqual([
+			"mcp__fixture__echo",
+			"mcp__fixture__huge_report",
+		]);
+		expect(later.catalog.map((entry) => entry.name).sort()).toEqual([
+			"mcp__fixture__echo",
+			"mcp__fixture__huge_report",
+		]);
+		expect(seenMethods).toEqual([]);
+		const echoed = await later.tools.mcp__fixture__echo.execute?.(
+			{ text: "again" },
+			options,
+		);
+		expect(JSON.stringify(echoed)).toContain("echo: again");
+		await later.tools.mcp__fixture__echo.execute?.({ text: "twice" }, options);
+		expect(seenMethods.filter((method) => method === "initialize")).toEqual([
+			"initialize",
+		]);
+		expect(
+			seenMethods.filter((method) => method === "tools/call"),
+		).toHaveLength(2);
+	} finally {
+		await later.close();
+	}
 });

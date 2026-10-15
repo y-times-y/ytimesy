@@ -589,9 +589,10 @@ async function runApiTurnAttempt(
 			? builderShellTools(repositoryContext.tools)
 			: repositoryContext.tools;
 		// The user's remote MCP servers are called from here; credentials never reach the VM.
-		// Connections are live HTTP clients bound to this step's request, so every
-		// step connects again; only the server list is reused. A list with OAuth
-		// servers is re-read each step because a token refresh rotates their record.
+		// Connections are live HTTP clients bound to this step's request, so a
+		// step that calls a tool connects again; the tool lists are reused. A
+		// list with OAuth servers is re-read each step because a token refresh
+		// rotates their record.
 		const connecting = timed("turn:mcp", async () =>
 			connectMcpTools(
 				await Promise.all(
@@ -606,6 +607,7 @@ async function runApiTurnAttempt(
 						// OAuth servers join once the user has signed in.
 						.filter((server) => server.auth !== "oauth" || server.sealedOAuth)
 						.map(async (server) => ({
+							key: `${server.id}:${server.url}`,
 							name: server.name,
 							url: server.url,
 							headers: server.headers,
@@ -620,7 +622,13 @@ async function runApiTurnAttempt(
 									: undefined,
 						})),
 				),
-				{ signal: abort.signal },
+				{
+					signal: abort.signal,
+					// The tool list is fixed for the turn, like plugins; a step
+					// connects only to call a tool.
+					listing: (key, load) =>
+						turnMemo(`${turn.id}:mcp-listing:${key}`, load),
+				},
 			),
 		);
 		const loadingPlugins = timed("turn:plugins", () =>
