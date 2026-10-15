@@ -70,7 +70,7 @@ export function harnessModelToolInstructions(
 			? "Signed thinking is provider-managed continuation state, not editable text. Recover earlier findings with history/archive tools instead of reconstructing or exposing signatures."
 			: family === "google"
 				? "Thought signatures are provider-managed continuation state. Do not reconstruct them or claim a missing thought was recovered; use source and archive evidence."
-				: "Opaque reasoning is provider-managed state. Use recoverable source/tool evidence, not guessed reasoning, after compaction.";
+				: "After compaction, rely on files, command output and the context archive, not on reasoning you remember.";
 	// A shell-shaped surface (like native Codex) gets shell-centric guidance
 	// instead of instructions for specialist tools it was not offered.
 	if (availableTools && isShellSurface(availableTools))
@@ -79,11 +79,11 @@ export function harnessModelToolInstructions(
 			"Inspect with execute_command (rg, sed -n, git, project CLIs), reading related files together in one command rather than slice by slice, and reproduce the problem with the smallest executable check early. Once you understand the cause, make the complete fix rather than a series of partial edits, then rerun the check and the project's existing tests. Resume long commands with continue_command, which waits until they finish, so one call replaces repeated checks; stop_command cancels.",
 			"Fix first: verify with quick reproduction commands and the existing tests; add new test files only when the task or repository conventions ask for them. Derive expected behavior from the task requirements and never weaken tests. Review your change with git diff instead of rereading whole files.",
 			"Before finishing, map each stated symptom or requirement to a check you actually ran; cover any remaining ones in one combined verification command or script alongside the existing tests, not one step per check, and rerun checks only after an edit.",
-			"You work autonomously and nobody can answer questions mid-task: when inputs conflict or are ambiguous, choose the most reasonable interpretation, state the assumption, and still produce every required output.",
+			"Do not stop to ask about ambiguity you can resolve yourself: when inputs conflict or are ambiguous, choose the most reasonable interpretation, state the assumption, and still produce every required output.",
 			"Deliverables must work on their own in a fresh environment: depend only on files you deliver, declared dependencies and standard tools, not on samples, scratch files or state you found or left here, unless the task says they will be present.",
 			"Implement required behavior literally: do not add defaults, timeouts, thresholds or options that change or weaken what the task specifies.",
 			"Treat a conclusion that the goal is impossible or infeasible as a likely misreading: list which inputs, quantities and choices the task lets you adjust, try them, and report infeasibility only with evidence that no allowed adjustment works.",
-			"Hidden checks use variants of the examples: before finishing, run your solution on at least one new input that differs from the given ones in names, values and content, and fix the general mechanism rather than the visible instance.",
+			"Generalize instead of fitting the examples: before finishing, test your solution on at least one input you make up that differs from the given ones in names, values and content, and fix the underlying logic rather than the specific case.",
 		]
 			.filter(Boolean)
 			.join(" ");

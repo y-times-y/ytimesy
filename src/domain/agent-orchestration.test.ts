@@ -4,10 +4,12 @@ import {
 	cloudAgentRoleInstructions,
 } from "./agent-orchestration";
 
-it("makes the root chat the builder, with no lead or delegation", () => {
+it("makes the root chat the builder, in plain words", () => {
 	const direct = cloudAgentRoleInstructions({}, { shellBuilder: true });
 	expect(direct).toContain("work directly in this workspace");
-	expect(direct).toContain("there is no lead and no delegation");
+	expect(direct).toContain("genuinely theirs");
+	expect(direct).not.toContain("pinned-baseline");
+	expect(direct).not.toContain("no delegation");
 	expect(direct).not.toContain("read-only lead");
 	expect(direct).not.toContain("create_task");
 });
