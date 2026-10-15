@@ -7,6 +7,8 @@ import { utcUsageMonth } from "../src/domain/infrastructure-usage";
 import {
 	admitVmCreate,
 	admitVmResume,
+	forgetRecentAdmission,
+	recentAdmissionCovers,
 	reconcileInfrastructureVms,
 	reconcilePausedVm,
 } from "../src/server/adapters/freestyle/usage-admission";
@@ -206,6 +208,51 @@ it.each([
 		);
 	},
 );
+
+it("reuses a running VM's admission for a minute only while it still covers the operation", async () => {
+	enableVmAllowance();
+	forgetRecentAdmission();
+	await admitVmCreate(
+		{} as Freestyle,
+		"ytimesy-ws-one",
+		"freestyle/ubuntu-sm",
+		async () => "vm",
+	);
+	const data = {
+		id: "vm",
+		slug: "ytimesy-ws-one",
+		state: "running",
+		resources: { cpu: 2, memory: 4096, storage: 16384 },
+		totalRunSeconds: 0,
+		maxRunTotalSeconds: 300,
+		automaticRestart: false,
+	} as VmData;
+	const vm = { data: vi.fn(async () => data), update: vi.fn() };
+	// Nothing admitted yet: the first operation always takes the full path.
+	expect(recentAdmissionCovers(data, 60)).toBe(false);
+	await admitVmResume(
+		vm as unknown as ReturnType<Freestyle["vms"]["ref"]>,
+		data,
+	);
+	const now = Date.now();
+	expect(recentAdmissionCovers(data, 60, now)).toBe(true);
+	// The full path would extend the cap here, so it must run.
+	expect(recentAdmissionCovers(data, 290, now)).toBe(false);
+	expect(recentAdmissionCovers(data, 60, now + 61_000)).toBe(false);
+	await admitVmResume(
+		vm as unknown as ReturnType<Freestyle["vms"]["ref"]>,
+		data,
+	);
+	for (const changed of [
+		{ state: "paused" },
+		{ maxRunTotalSeconds: 600 },
+		{ automaticRestart: true },
+		{ totalRunSeconds: 260 },
+	] as Partial<VmData>[])
+		expect(recentAdmissionCovers({ ...data, ...changed }, 60, now)).toBe(false);
+	vi.stubEnv("YTIMESY_INFRASTRUCTURE_ADMISSION", "false");
+	expect(recentAdmissionCovers(data, 60, now)).toBe(false);
+});
 
 it("does not call the VM creator when spending would exceed the fleet ceiling", async () => {
 	enableVmAllowance();
