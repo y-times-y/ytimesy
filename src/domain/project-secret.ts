@@ -112,6 +112,34 @@ export function agentSecretsEnvFile(
 	].join("\n")}\n`;
 }
 
+export type AgentSecretName = {
+	readonly name: string;
+	readonly kind: ProjectSecretKind;
+};
+
+/**
+ * Tells the agent which project secrets exist and how each reaches it, by name
+ * only, so it uses the variable instead of guessing or printing the environment.
+ */
+export function projectSecretsInstructions(
+	secrets: readonly AgentSecretName[],
+) {
+	if (!secrets.length) return "";
+	const listed = (kind: ProjectSecretKind) =>
+		secrets
+			.filter((secret) => secret.kind === kind)
+			.map((secret) => secret.name)
+			.join(", ");
+	const lines = [
+		listed("runtime") &&
+			`Runtime secrets (their values are replaced with ${REDACTED} in tool output, and commits containing them are refused): ${listed("runtime")}.`,
+		listed("environment") && `Environment variables: ${listed("environment")}.`,
+		listed("build") &&
+			`Build secrets (environment setup only, not set for you): ${listed("build")}.`,
+	].filter(Boolean);
+	return `Project secrets are set in every command's environment. ${lines.join(" ")} Reference them by name (for example "$NAME"); never print, echo or write their values to files, and never display them on screen: screenshots are not redacted.`;
+}
+
 /**
  * Shell run after `git add -A` in a repository: refuses when the staged
  * changes, or any commit not yet on a remote (content or message), contain a
