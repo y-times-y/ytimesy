@@ -2,14 +2,15 @@ import { database } from "./database";
 
 /**
  * Provider resources an account owns, collected before its rows are deleted:
- * chat, template, build and retained-recovery VMs, and the private snapshots
- * of its projects. Snapshots another account still references are left alone.
+ * chat, template, build and retained-recovery VMs, the private snapshots
+ * of its projects, and its memory repo. Snapshots another account still references are left alone.
  */
 export async function accountCleanupTargets(userId: string) {
 	const result = await database().query<{
 		vm_ids: string[] | null;
 		snapshot_ids: string[] | null;
 		session_ids: string[] | null;
+		memory_repo: string | null;
 	}>(
 		`with owned_workspace as (select id, provider_ref, template_snapshot_id from workspace where user_id=$1),
 		vms as (
@@ -32,7 +33,8 @@ export async function accountCleanupTargets(userId: string) {
 				and not exists (select 1 from workspace_retention o where o.user_id<>$1 and o.snapshot_id=s.id)
 				and not exists (select 1 from product_setting p where trim(p.value)=s.id)
 			) as snapshot_ids,
-			(select array_agg(id::text order by id) from agent_session where user_id=$1) as session_ids`,
+			(select array_agg(id::text order by id) from agent_session where user_id=$1) as session_ids,
+			(select repo from user_memory where user_id=$1) as memory_repo`,
 		[userId],
 	);
 	const row = result.rows[0];
@@ -40,6 +42,8 @@ export async function accountCleanupTargets(userId: string) {
 		vmIds: row?.vm_ids ?? [],
 		snapshotIds: row?.snapshot_ids ?? [],
 		sessionIds: row?.session_ids ?? [],
+		/** A memory repo name other than the default memory-<user> (evaluations). */
+		memoryRepo: row?.memory_repo ?? null,
 	};
 }
 

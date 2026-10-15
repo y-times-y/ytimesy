@@ -6,13 +6,20 @@ import type { WorkspaceDesktop } from "#/domain/workspace-desktop";
 import { DesktopInspector } from "./desktop-inspector";
 import { DiffInspector } from "./diff-inspector";
 import { FilesInspector } from "./files-inspector";
+import { MemoryInspector } from "./memory-inspector";
 import {
 	PullRequestInspector,
 	type PullRequestRepository,
 } from "./pull-request-inspector";
 import { TerminalInspector } from "./terminal-inspector";
 
-export type ToolsView = "files" | "diff" | "pr" | "terminal" | "desktop";
+export type ToolsView =
+	| "files"
+	| "diff"
+	| "pr"
+	| "terminal"
+	| "desktop"
+	| "memory";
 export type InspectorView = ToolsView | "overview";
 
 const views = {
@@ -43,6 +50,11 @@ const views = {
 		description:
 			"This is the desktop the agent uses for QA. You watch and control the same screen.",
 	},
+	memory: {
+		label: "Memory",
+		title: "Memory",
+		description: "What the agent remembers about you across chats.",
+	},
 } as const;
 
 export function WorkspaceInspector({
@@ -59,6 +71,7 @@ export function WorkspaceInspector({
 	sessionId,
 	overview,
 	pullRequest,
+	onOpenChat,
 }: {
 	collapsed: boolean;
 	activeView: InspectorView;
@@ -73,6 +86,8 @@ export function WorkspaceInspector({
 	sessionId?: string;
 	overview: ReactNode;
 	pullRequest?: PullRequestRepository;
+	/** Opens a chat linked from memory; false when it is not in this project's list. */
+	onOpenChat?: (chatId: string) => boolean;
 }) {
 	const [openedViews, setOpenedViews] = useState<ToolsView[]>([]);
 	useEffect(() => {
@@ -180,6 +195,11 @@ export function WorkspaceInspector({
 				<PullRequestInspector
 					key={`${pullRequest.repositoryId}:${pullRequest.number ?? ""}`}
 					repository={pullRequest}
+				/>
+			) : activeView === "memory" ? (
+				<MemoryInspector
+					active={!collapsed && activeView === "memory"}
+					onOpenChat={onOpenChat ?? (() => false)}
 				/>
 			) : activeView === "desktop" ? null : activeView === "terminal" ? (
 				<TerminalInspector

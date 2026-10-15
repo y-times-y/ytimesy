@@ -1,4 +1,5 @@
 import type { ModelMessage } from "ai";
+import { isMemoryPart } from "./memory-repo";
 import { withAttachmentNote } from "./message-attachment";
 import {
 	runtimeHandoffEnvelope,
@@ -90,7 +91,10 @@ export function isUserRequestMessage(
 		typeof message.content === "string"
 			? message.content
 			: message.content
-					.flatMap((part) => (part.type === "text" ? [part.text] : []))
+					// Memory attached to a request is context, not the request.
+					.flatMap((part) =>
+						part.type === "text" && !isMemoryPart(part.text) ? [part.text] : [],
+					)
 					.join("\n");
 	return texts.has(text);
 }

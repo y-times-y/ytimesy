@@ -7,6 +7,7 @@ import {
 	checkpointStorageConfigured,
 	removeChatObjects,
 } from "../adapters/checkpoints/storage";
+import { memoryRepo, memoryRepoName } from "../adapters/memory-repos";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 /** Calls in flight at once: keeps a heavy account's deletion fast without a burst. */
@@ -40,7 +41,8 @@ async function eachLimited<T>(
 /**
  * Deletes an account and what it owns: its chats' stored checkpoints and
  * attachments, then every database row (they cascade from auth_user, sessions
- * included, which signs it out everywhere), then its VMs and private snapshots.
+ * included, which signs it out everywhere), then its VMs, private snapshots
+ * and memory repo.
  *
  * The steps that can fail and be retried come first: a storage or database
  * failure leaves the account intact with its VMs and snapshots, so retrying
@@ -78,6 +80,17 @@ export async function deleteAccount(
 				leftovers.push(`snapshot:${snapshotId}`);
 			}),
 	);
+	// The user's memory (Agent Memory Repo) lives in Cloudflare Artifacts.
+	for (const name of new Set(
+		[memoryRepoName(userId), targets.memoryRepo].filter(
+			(value): value is string => Boolean(value),
+		),
+	))
+		await memoryRepo(name)
+			?.destroy()
+			.catch(() => {
+				leftovers.push(`memory:${name}`);
+			});
 	if (leftovers.length)
 		console.warn("Account deletion left provider resources to expire.", {
 			userId,

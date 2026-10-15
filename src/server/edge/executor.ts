@@ -36,6 +36,8 @@ import { withDatabaseScope } from "../adapters/database-scope";
 import { registerAuthEmailBinding } from "../adapters/email";
 import { readFreestyleApiKey } from "../adapters/freestyle/api-key";
 import { createFreestyleWorkspaceMachines } from "../adapters/freestyle/workspace-machines";
+import { registerMemoryEmbeddings } from "../adapters/memory-embeddings";
+import { registerMemoryRepos } from "../adapters/memory-repos";
 import { withConversationPublisher } from "../adapters/realtime-delivery";
 import { withTurnHistoryMirror } from "../adapters/turn-history-mirror";
 import { relayConversationDeliveriesOnce } from "../jobs/conversation-delivery";
@@ -550,6 +552,8 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 
 	constructor(ctx: DurableObjectState, env: EdgeExecutorEnvironment) {
 		super(ctx, env);
+		registerMemoryRepos(env.ARTIFACTS);
+		registerMemoryEmbeddings(env.AI);
 		this.room = new ConversationRoom(ctx, (at: number | null) =>
 			this.wake("room", at),
 		);
@@ -575,6 +579,8 @@ export default {
 		env: EdgeExecutorEnvironment,
 	) {
 		registerAuthEmailBinding(env.EMAIL);
+		registerMemoryRepos(env.ARTIFACTS);
+		registerMemoryEmbeddings(env.AI);
 		if (
 			process.env.BACKGROUND_EXECUTION_ENABLED !== "1" ||
 			process.env.YTIMESY_BACKGROUND_CRON_ENABLED !== "1"
@@ -610,6 +616,14 @@ export default {
 					action: "infrastructure",
 				}),
 			);
+		if (minute % 5 === 0)
+			jobs.push(
+				backgroundJob.parse({
+					id: backgroundJobId(`cron:${minute}:memory-dreams`),
+					kind: "maintenance",
+					action: "memory-dreams",
+				}),
+			);
 		if (minute % 60 === 0)
 			jobs.push(
 				backgroundJob.parse({
@@ -638,6 +652,8 @@ export default {
 	},
 	async fetch(request: Request, env: EdgeExecutorEnvironment) {
 		registerAuthEmailBinding(env.EMAIL);
+		registerMemoryRepos(env.ARTIFACTS);
+		registerMemoryEmbeddings(env.AI);
 		let stage = "ingress";
 		try {
 			const path = new URL(request.url).pathname;

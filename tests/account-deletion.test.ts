@@ -24,6 +24,20 @@ vi.mock("../src/server/adapters/database", () => ({
 		}),
 	}),
 }));
+const memory = vi.hoisted(() => ({
+	destroyed: [] as string[],
+	fail: false,
+}));
+vi.mock("../src/server/adapters/memory-repos", () => ({
+	memoryRepoName: (userId: string, override?: string | null) =>
+		override || `memory-${userId}`,
+	memoryRepo: (name: string) => ({
+		destroy: async () => {
+			if (memory.fail) throw new Error("Artifacts unavailable");
+			memory.destroyed.push(name);
+		},
+	}),
+}));
 vi.mock("../src/server/adapters/checkpoints/storage", () => ({
 	checkpointStorageConfigured: storage.configured,
 	removeChatObjects: storage.remove,
@@ -43,8 +57,10 @@ beforeAll(async () => {
 afterAll(() => db.close());
 beforeEach(async () => {
 	vi.clearAllMocks();
+	memory.destroyed.length = 0;
+	memory.fail = false;
 	await db.exec(`
-		delete from infrastructure_provider_statement; delete from infrastructure_usage_reservation;
+		delete from infrastructure_provider_statement; delete from infrastructure_vm_admission; delete from infrastructure_usage_reservation;
 		delete from auth_user;
 		insert into auth_user(id,name,email,"emailVerified") values('alice','Alice','alice@example.test',true),('bob','Bob','bob@example.test',true);
 		insert into auth_session(id,"expiresAt",token,"userId","updatedAt") values('s1',now()+interval '1 day','token','alice',now());
@@ -223,4 +239,31 @@ it("requires the typed confirmation to match the account email", () => {
 	expect(accountDeletionConfirmed({ email: null }, "delete my account")).toBe(
 		true,
 	);
+});
+
+it("deletes the user's memory repos, and only logs when Artifacts fails", async () => {
+	const machines = {
+		destroy: vi.fn(async (_id: string) => {}),
+		destroySnapshot: vi.fn(async (_id: string) => {}),
+	};
+	await db.exec(
+		"insert into user_memory(user_id,mode,repo) values('alice','full','memory-eval-alice')",
+	);
+	await deleteAccount(machines, "alice");
+	expect(memory.destroyed.sort()).toEqual([
+		"memory-alice",
+		"memory-eval-alice",
+	]);
+
+	await db.exec(
+		`insert into auth_user(id,name,email,"emailVerified") values('carol','Carol','carol@example.test',true)`,
+	);
+	memory.fail = true;
+	const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+	await deleteAccount(machines, "carol");
+	expect(warn).toHaveBeenCalledWith(
+		"Account deletion left provider resources to expire.",
+		expect.objectContaining({ leftovers: ["memory:memory-carol"] }),
+	);
+	warn.mockRestore();
 });
