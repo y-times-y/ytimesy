@@ -11,6 +11,13 @@ export const AGENT_SECRETS_ENV_PATH = `${AGENT_SECRETS_DIRECTORY}/agent.env`;
 /** Shell that loads the project's variables when present. */
 export const SOURCE_AGENT_SECRETS = `if [ -r ${AGENT_SECRETS_ENV_PATH} ]; then . ${AGENT_SECRETS_ENV_PATH}; fi`;
 
+/**
+ * Shell run before any VM snapshot: deletes the env file and proves it is gone,
+ * so plaintext values never land in a reusable or retained image. The next turn
+ * writes the file again.
+ */
+export const SCRUB_AGENT_SECRETS = `rm -rf ${AGENT_SECRETS_DIRECTORY} && test ! -e ${AGENT_SECRETS_DIRECTORY}`;
+
 /** Holds the names of the runtime secrets in the env file, for the commit guard. */
 const REDACTED_NAMES_VARIABLE = "YTIMESY_REDACTED_SECRETS";
 
