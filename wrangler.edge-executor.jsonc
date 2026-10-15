@@ -25,6 +25,9 @@
   "triggers": { "crons": ["* * * * *"] },
   // Auth email (verification, password reset) without an API token.
   "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["noreply@ytimesy.com"] }],
+  // Cross-chat memory: one private Git repo per user, and line embeddings for recall.
+  "artifacts": [{ "binding": "ARTIFACTS", "namespace": "ytimesy-memory-development" }],
+  "ai": { "binding": "AI" },
   "workers_dev": true,
   "env": {
     // Production (not deployed yet). Bindings do not inherit, so each is restated.
@@ -48,6 +51,8 @@
       "secrets": { "required": [] },
       "triggers": { "crons": ["* * * * *"] },
       "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["noreply@ytimesy.com"] }],
+      "artifacts": [{ "binding": "ARTIFACTS", "namespace": "ytimesy-memory-production" }],
+      "ai": { "binding": "AI" },
       "workers_dev": false
     }
   }

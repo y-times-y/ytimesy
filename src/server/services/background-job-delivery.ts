@@ -16,6 +16,8 @@ import { readFreestyleApiKey } from "../adapters/freestyle/api-key";
 import { observeFleetCosts } from "../adapters/freestyle/fleet-costs";
 import { reconcileInfrastructureVms } from "../adapters/freestyle/usage-admission";
 import { recycleIdleWorkspaces } from "../adapters/freestyle/workspace-retention";
+import { memoryReposAvailable } from "../adapters/memory-repos";
+import { memoryDreamCandidates } from "../adapters/memory-settings";
 import { listReadyWorkspaceIds } from "../adapters/workspaces";
 import { relayConversationDeliveriesOnce } from "../jobs/conversation-delivery";
 import { enqueueSessionCheckpoint } from "../jobs/queue";
@@ -29,6 +31,11 @@ import {
 } from "./agent-peer-messaging";
 import { deliverAgentTaskEvents } from "./agent-task-event-delivery";
 import { recoverExpiredEnvironmentBuilds } from "./environment-build";
+import {
+	DREAM_IDLE_SECONDS,
+	runMemoryDream,
+	runMemorySave,
+} from "./memory-jobs";
 import { deliverPrRepairEvents } from "./pr-repair";
 import { captureSessionCheckpoint } from "./session-checkpoint";
 import { recoverStaleQueuedWorkspaces } from "./stale-workspace-queue";
@@ -80,8 +87,47 @@ export async function deliverBackgroundJob(
 					await recycleIdleWorkspaces(client);
 					break;
 				}
+				case "memory-dreams":
+					// One dream per idle user and per point of new activity.
+					if (memoryReposAvailable())
+						for (const candidate of await memoryDreamCandidates(
+							DREAM_IDLE_SECONDS,
+						))
+							await dispatchBackgroundJob({
+								id: backgroundJobId(
+									`memory-dream:${candidate.user_id}:${candidate.last_at.toISOString()}`,
+								),
+								kind: "memory",
+								action: "dream",
+								userId: candidate.user_id,
+							});
+					break;
 			}
 			break;
+		case "memory": {
+			const outcome =
+				job.action === "dream"
+					? await runMemoryDream(job.userId)
+					: job.sessionId
+						? await runMemorySave(job.userId, job.sessionId)
+						: "missing-session";
+			if (
+				![
+					"committed",
+					"unchanged",
+					"idle",
+					"saved",
+					"skipped",
+					"nothing-new",
+					"off",
+				].includes(outcome)
+			)
+				console.warn("Memory job ended without saving.", {
+					action: job.action,
+					outcome,
+				});
+			break;
+		}
 		case "task-event":
 			await deliverAgentTaskEvents(machines, job.eventId ?? undefined);
 			break;
