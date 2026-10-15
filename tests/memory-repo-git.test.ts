@@ -143,6 +143,32 @@ describe("builder VM clone", () => {
 		expect(await readFile(join(alice, "memory/MEMORY.md"), "utf8")).toContain(
 			"switched from npm",
 		);
+
+		// The user clears memory (the repo is deleted and recreated empty): an
+		// old clone starts over instead of pushing the cleared memory back.
+		await rm(join(root, "memory-a.git"), { recursive: true, force: true });
+		await bareRepo("memory-a.git");
+		await cloneScript(alice, remote);
+		expect(await readFile(join(alice, "memory/MEMORY.md"), "utf8")).toBe(
+			EMPTY_MEMORY,
+		);
+		const check = await mkdtemp(join(root, "check-"));
+		await run("git", ["clone", "-q", join(root, "memory-a.git"), check]);
+		expect(await git(check, "log", "--format=%s")).toBe("Create memory repo");
+		expect(await readFile(join(check, "MEMORY.md"), "utf8")).toBe(EMPTY_MEMORY);
+	}, 60_000);
+
+	it("leaves local memory alone when the remote is unreachable", async () => {
+		const remote = await bareRepo("memory-c.git");
+		const home = await mkdtemp(join(root, "home-"));
+		await cloneScript(home, remote);
+		await writeFile(join(home, "memory/notes.md"), "- unpushed\n");
+		await expect(
+			cloneScript(home, `${origin}/missing-repo.git`),
+		).rejects.toThrow();
+		expect(await readFile(join(home, "memory/notes.md"), "utf8")).toBe(
+			"- unpushed\n",
+		);
 	}, 60_000);
 });
 

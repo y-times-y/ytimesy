@@ -365,7 +365,9 @@ export function memoryMatchesPart(
 /**
  * Clones (or refreshes) the user's memory repo at ~/memory and stores a
  * short-lived, repo-scoped token in that clone's own Git config. A clean
- * clone fast-forwards; local edits are left for the agent to push.
+ * clone fast-forwards; local edits are left for the agent to push. An empty
+ * remote (new, or cleared by the user) starts over from an empty memory, so
+ * an old clone never pushes cleared memory back.
  */
 export function memoryCloneScript(input: { remote: string; token: string }) {
 	const remote = quote(input.remote);
@@ -373,18 +375,22 @@ export function memoryCloneScript(input: { remote: string; token: string }) {
 	return `set -eu
 m="$HOME/memory"
 git_m() { git -C "$m" -c core.hooksPath=/dev/null "$@"; }
+configure() {
+	git_m remote set-url origin ${remote} 2>/dev/null || git_m remote add origin ${remote}
+	git_m config ${quote(`http.${input.remote}.extraHeader`)} ${header}
+	git_m config user.name "ytimesy memory"
+	git_m config user.email memory@ytimesy.invalid
+	git_m config pull.rebase true
+	git_m config rebase.autoStash true
+}
 if [ ! -d "$m/.git" ]; then
 	[ -e "$m" ] && [ -n "$(ls -A "$m")" ] && { echo "~/memory exists and is not a git repo" >&2; exit 3; }
 	git init -q -b main "$m"
-	git_m remote add origin ${remote}
 fi
-git_m remote set-url origin ${remote}
-git_m config ${quote(`http.${input.remote}.extraHeader`)} ${header}
-git_m config user.name "ytimesy memory"
-git_m config user.email memory@ytimesy.invalid
-git_m config pull.rebase true
-git_m config rebase.autoStash true
-if git_m fetch -q origin main 2>/dev/null; then
+configure
+heads=$(git_m ls-remote --heads origin main) || { echo "memory remote unreachable" >&2; exit 4; }
+if [ -n "$heads" ]; then
+	git_m fetch -q origin main
 	if ! git_m rev-parse -q --verify HEAD >/dev/null; then
 		git_m checkout -q -B main origin/main
 	elif [ -z "$(git_m status --porcelain)" ]; then
@@ -392,12 +398,13 @@ if git_m fetch -q origin main 2>/dev/null; then
 	fi
 	git_m branch -q -u origin/main main >/dev/null 2>&1 || true
 else
-	if ! git_m rev-parse -q --verify HEAD >/dev/null; then
-		[ -f "$m/MEMORY.md" ] || printf '%s' ${quote(EMPTY_MEMORY)} > "$m/MEMORY.md"
-		git_m add MEMORY.md
-		git_m commit -q -m "Create memory repo"
-	fi
-	git_m push -q -u origin main >/dev/null 2>&1 || true
+	rm -rf "$m"
+	git init -q -b main "$m"
+	configure
+	printf '%s' ${quote(EMPTY_MEMORY)} > "$m/MEMORY.md"
+	git_m add MEMORY.md
+	git_m commit -q -m "Create memory repo"
+	git_m push -q -u origin main
 fi
 echo ready`;
 }
