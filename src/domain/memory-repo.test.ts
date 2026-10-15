@@ -137,7 +137,7 @@ describe("memory on the request", () => {
 		};
 		const lines = memoryLines(files);
 		const scores = new Map(
-			lines.map((entry, index) => [entry, 0.9 - index * 0.04]),
+			lines.map((entry, index) => [entry, 0.9 - index * 0.06]),
 		);
 		const picked = selectMemoryMatches({
 			lines,
@@ -156,7 +156,7 @@ describe("memory on the request", () => {
 		expect(memoryMatchesPart(picked.slice(0, 1))).toContain(
 			"tooling.md:2: - Rule 1",
 		);
-		const below = new Map(lines.map((entry) => [entry, 0.5]));
+		const below = new Map(lines.map((entry) => [entry, 0.3]));
 		expect(
 			selectMemoryMatches({
 				lines,
@@ -193,5 +193,25 @@ describe("dream inbox and save hook", () => {
 			{ file: "tooling.md", text: "Uses pnpm, never npm", project: "" },
 		]);
 		expect(parseSaveHookAnswer("no json")).toEqual([]);
+	});
+});
+
+describe("embedding text", () => {
+	it("embeds one line as its file and text, and queries with Qwen3's instruction", async () => {
+		const { memoryLineEmbeddingText, memoryEmbeddingQuery } = await import(
+			"./memory-repo"
+		);
+		const [entry] = memoryLines({
+			"projects/web.md": "- Uses pnpm [source: x; added: 2026-10-15]",
+		});
+		expect(memoryLineEmbeddingText(entry)).toBe("projects/web: Uses pnpm");
+		expect(memoryEmbeddingQuery("install a date library")).toBe(
+			"Instruct: Given a user's request to a coding agent, retrieve relevant memories\nQuery: install a date library",
+		);
+		const long = `${"a".repeat(3000)}${"z".repeat(900)}`;
+		const query = memoryQueryText(long) ?? "";
+		expect(query.length).toBeLessThan(2100);
+		expect(query.startsWith("aaa")).toBe(true);
+		expect(query.endsWith("zzz")).toBe(true);
 	});
 });

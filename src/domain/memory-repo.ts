@@ -266,20 +266,40 @@ export function withMemoryParts<T extends { content: UserContent }>(
 	};
 }
 
-/** Supermemory's hook skips short messages and slash/shell/comment commands. */
+/**
+ * Supermemory's hook skips short messages and slash/shell/comment commands.
+ * Long pastes keep their head and tail (about 500 tokens in all).
+ */
 export function memoryQueryText(message: string): string | null {
 	const text = message.trim();
 	if (text.length < 12 || /^[/!#]/.test(text)) return null;
-	return text.slice(0, 2000);
+	return text.length > 2000
+		? `${text.slice(0, 1200)}\n…\n${text.slice(-800)}`
+		: text;
+}
+
+/** Qwen3-Embedding's query format; documents are embedded without an instruction. */
+export const MEMORY_QUERY_INSTRUCTION =
+	"Given a user's request to a coding agent, retrieve relevant memories";
+export function memoryEmbeddingQuery(text: string) {
+	return `Instruct: ${MEMORY_QUERY_INSTRUCTION}\nQuery: ${text}`;
 }
 
 export const MEMORY_MATCH_LIMIT = 5;
-export const MEMORY_MATCH_MIN_SIMILARITY = 0.55;
+/**
+ * Set from `memory-two-chat-eval.ts --recall` on @cf/qwen/qwen3-embedding-0.6b
+ * (2026-10-15, 8 probes x 14 lines): 0.33 keeps 7/8 right lines and 32/104
+ * others (3 extra lines per message, within the top-5 cap); 0.40 keeps 4/8
+ * and 8/104. A missed rule costs more than a labelled extra line.
+ */
+export const MEMORY_MATCH_MIN_SIMILARITY = 0.33;
 const MATCH_CHARS = 300;
 
-/** The embedded form of a line: its text, without bullet or metadata. */
-export function memoryLineEmbeddingText(entry: MemoryLine) {
-	return entry.text.slice(0, 1000);
+/** One line is one unit: "<file without .md>: <text without metadata>". */
+export function memoryLineEmbeddingText(
+	entry: Pick<MemoryLine, "path" | "text">,
+) {
+	return `${entry.path.replace(/\.md$/, "")}: ${entry.text.slice(0, 1000)}`;
 }
 
 export function cosineSimilarity(a: readonly number[], b: readonly number[]) {
