@@ -1050,3 +1050,233 @@ it("also checks staged changes and inspects a repository without a commit", asyn
 	const result = (await call(tools.verify_changes, {})) as { passed: boolean };
 	expect(result.passed).toBe(false);
 });
+
+it("creates a file from a unified diff with mixed context-diff headers", async () => {
+	const { root, tools } = await fixture();
+	const result = await call(tools.apply_patch, {
+		patch:
+			"*** /dev/null\n--- count.py\n@@ -0,0 +1,2 @@\n+import sys\n+print(len(open(sys.argv[1]).read().split()))\n",
+	});
+	expect(result).toMatchObject({
+		completed: [{ path: "count.py" }],
+		failedPath: null,
+	});
+	expect(await readFile(join(root, "count.py"), "utf8")).toBe(
+		"import sys\nprint(len(open(sys.argv[1]).read().split()))\n",
+	);
+});
+
+it("applies a multi-file git diff with create, update and delete in order", async () => {
+	const { root, tools } = await fixture();
+	await writeFile(
+		join(root, "app.py"),
+		"def main():\n    print('old')  \n\nmain()\n",
+	);
+	await writeFile(join(root, "old.txt"), "gone\n");
+	const result = (await call(tools.apply_patch, {
+		patch: [
+			"diff --git a/app.py b/app.py",
+			"index 1111111..2222222 100644",
+			"--- a/app.py",
+			"+++ b/app.py",
+			"@@ -7,3 +7,3 @@ def main():",
+			" def main():",
+			"-    print('old')",
+			"+    print('new')",
+			" ",
+			"diff --git a/lib/util.py b/lib/util.py",
+			"new file mode 100644",
+			"--- /dev/null",
+			"+++ b/lib/util.py",
+			"@@ -0,0 +1 @@",
+			"+VALUE = 1",
+			"diff --git a/old.txt b/old.txt",
+			"deleted file mode 100644",
+			"--- a/old.txt",
+			"+++ /dev/null",
+			"@@ -1 +0,0 @@",
+			"-gone",
+			"",
+		].join("\n"),
+	})) as { completed: { path: string }[] };
+	expect(result.completed.map((file) => file.path)).toEqual([
+		"app.py",
+		"lib/util.py",
+		"old.txt",
+	]);
+	expect(await readFile(join(root, "app.py"), "utf8")).toBe(
+		"def main():\n    print('new')\n\nmain()\n",
+	);
+	expect(await readFile(join(root, "lib/util.py"), "utf8")).toBe("VALUE = 1\n");
+	await expect(readFile(join(root, "old.txt"))).rejects.toThrow();
+});
+
+it("applies a Codex patch envelope with add, update, move and delete sections", async () => {
+	const { root, tools } = await fixture();
+	await writeFile(join(root, "a.py"), "def f():\n    return 1\n");
+	await writeFile(join(root, "b.txt"), "remove me\n");
+	await call(tools.apply_patch, {
+		patch: [
+			"*** Begin Patch",
+			"*** Add File: c.py",
+			"+print('c')",
+			"*** Update File: a.py",
+			"*** Move to: pkg/a.py",
+			"@@ def f():",
+			"-    return 1",
+			"+    return 2",
+			"*** Delete File: b.txt",
+			"*** End Patch",
+		].join("\n"),
+	});
+	expect(await readFile(join(root, "c.py"), "utf8")).toBe("print('c')\n");
+	expect(await readFile(join(root, "pkg/a.py"), "utf8")).toBe(
+		"def f():\n    return 2\n",
+	);
+	await expect(readFile(join(root, "a.py"))).rejects.toThrow();
+	await expect(readFile(join(root, "b.txt"))).rejects.toThrow();
+});
+
+it("applies SEARCH/REPLACE blocks from a path line or the path field and preserves CRLF", async () => {
+	const { root, tools } = await fixture();
+	await writeFile(join(root, "one.py"), "x = 1\r\ny = 2\r\n");
+	await writeFile(join(root, "two.py"), "def g():\n    return 'a'\n");
+	await call(tools.apply_patch, {
+		patch:
+			"one.py\n```python\n<<<<<<< SEARCH\ny = 2\n=======\ny = 3\n>>>>>>> REPLACE\n```\n\ntwo.py\n<<<<<<< SEARCH\n  return 'a'\n=======\n    return 'b'\n>>>>>>> REPLACE\n",
+	});
+	expect(await readFile(join(root, "one.py"), "utf8")).toBe(
+		"x = 1\r\ny = 3\r\n",
+	);
+	expect(await readFile(join(root, "two.py"), "utf8")).toBe(
+		"def g():\n    return 'b'\n",
+	);
+	await call(tools.apply_patch, {
+		path: "new.py",
+		patch: "<<<<<<< SEARCH\n=======\nprint('new')\n>>>>>>> REPLACE",
+	});
+	expect(await readFile(join(root, "new.py"), "utf8")).toBe("print('new')\n");
+});
+
+it("writes whole files from path and content, creating or replacing", async () => {
+	const { root, tools } = await fixture();
+	await call(tools.apply_patch, { path: "notes/a.txt", content: "first\n" });
+	expect(await readFile(join(root, "notes/a.txt"), "utf8")).toBe("first\n");
+	const result = await call(tools.apply_patch, {
+		path: "notes/a.txt",
+		content: "second\n",
+	});
+	expect(result).toMatchObject({ completed: [{ path: "notes/a.txt" }] });
+	expect(await readFile(join(root, "notes/a.txt"), "utf8")).toBe("second\n");
+});
+
+it("refuses ambiguous hunks unless an anchor identifies one place", async () => {
+	const { root, tools } = await fixture();
+	const source = "def a():\n    return None\n\ndef b():\n    return None\n";
+	await writeFile(join(root, "amb.py"), source);
+	await expect(
+		call(tools.apply_patch, {
+			path: "amb.py",
+			patch: "@@\n-    return None\n+    return 1\n",
+		}),
+	).rejects.toThrow(/ambiguous[\s\S]*Accepted apply_patch inputs/);
+	expect(await readFile(join(root, "amb.py"), "utf8")).toBe(source);
+	await call(tools.apply_patch, {
+		path: "amb.py",
+		patch: "@@ def b():\n-    return None\n+    return 1\n",
+	});
+	expect(await readFile(join(root, "amb.py"), "utf8")).toBe(
+		"def a():\n    return None\n\ndef b():\n    return 1\n",
+	);
+});
+
+it("changes nothing when any file in a multi-file patch does not apply", async () => {
+	const { root, tools } = await fixture();
+	await writeFile(join(root, "ok.txt"), "a\n");
+	await writeFile(join(root, "bad.txt"), "b\n");
+	await expect(
+		call(tools.apply_patch, {
+			patch:
+				"--- a/ok.txt\n+++ b/ok.txt\n@@ -1 +1 @@\n-a\n+A\n--- a/bad.txt\n+++ b/bad.txt\n@@ -1 +1 @@\n-missing\n+B\n",
+		}),
+	).rejects.toThrow(/bad\.txt did not match[\s\S]*No files were changed/);
+	expect(await readFile(join(root, "ok.txt"), "utf8")).toBe("a\n");
+});
+
+it("reports exactly which files were written when a later file goes stale", async () => {
+	const { root, tools } = await fixture(false, false, async (command, cwd) => {
+		if (command.includes("fcntl"))
+			await writeFile(join(cwd, "second.txt"), "changed elsewhere\n");
+	});
+	await writeFile(join(root, "first.txt"), "1\n");
+	await writeFile(join(root, "second.txt"), "2\n");
+	const result = await call(tools.apply_patch, {
+		patch:
+			"--- a/first.txt\n+++ b/first.txt\n@@\n-1\n+one\n--- a/second.txt\n+++ b/second.txt\n@@\n-2\n+two\n",
+	});
+	expect(result).toMatchObject({
+		completed: [{ path: "first.txt" }],
+		failedPath: "second.txt",
+		error: expect.stringMatching(
+			/Applied: first\.txt\. Not applied: second\.txt/,
+		),
+	});
+	expect(await readFile(join(root, "first.txt"), "utf8")).toBe("one\n");
+	expect(await readFile(join(root, "second.txt"), "utf8")).toBe(
+		"changed elsewhere\n",
+	);
+});
+
+it("rejects escapes, git metadata and symlinks in every patch format", async () => {
+	const { root, tools } = await fixture();
+	await writeFile(join(root, "source.txt"), "untouched\n");
+	await symlink("source.txt", join(root, "link.txt"));
+	for (const input of [
+		{ patch: "--- /dev/null\n+++ b/../outside.txt\n@@ -0,0 +1 @@\n+x\n" },
+		{ patch: "*** Begin Patch\n*** Add File: .git/hooks/x\n+x\n*** End Patch" },
+		{ path: "/etc/passwd", content: "x" },
+		{ path: "link.txt", content: "through link\n" },
+		{
+			path: "link.txt",
+			patch: "<<<<<<< SEARCH\nuntouched\n=======\nchanged\n>>>>>>> REPLACE",
+		},
+	]) {
+		// Safety refusals either reject outright or report the refused file.
+		const result = await call(tools.apply_patch, input).catch(
+			(error: Error) => error,
+		);
+		if (!(result instanceof Error))
+			expect(result).toMatchObject({ completed: [], failedPath: "link.txt" });
+	}
+	expect(await readFile(join(root, "source.txt"), "utf8")).toBe("untouched\n");
+	await expect(readFile(join(root, "..", "outside.txt"))).rejects.toThrow();
+});
+
+it("falls back to tolerant parsing when an operation carries another diff format", async () => {
+	const { root, tools } = await fixture();
+	await call(tools.apply_patch, {
+		operation: {
+			type: "create_file",
+			path: "count.py",
+			diff: "*** /dev/null\n--- count.py\n@@ -0,0 +1 @@\n+print(1)\n",
+		},
+	});
+	expect(await readFile(join(root, "count.py"), "utf8")).toBe("print(1)\n");
+	await call(tools.apply_patch, {
+		operation:
+			"--- a/count.py\n+++ b/count.py\n@@ -1 +1 @@\n-print(1)\n+print(2)\n",
+	});
+	expect(await readFile(join(root, "count.py"), "utf8")).toBe("print(2)\n");
+});
+
+it("explains accepted formats when the input is empty or unrecognized", async () => {
+	const { tools } = await fixture();
+	await expect(call(tools.apply_patch, {})).rejects.toThrow(
+		/No edit was supplied[\s\S]*\*\*\* Begin Patch[\s\S]*SEARCH/,
+	);
+	await expect(
+		call(tools.apply_patch, { patch: "please change the file" }),
+	).rejects.toThrow(
+		/not a recognized format[\s\S]*Accepted apply_patch inputs/,
+	);
+});
