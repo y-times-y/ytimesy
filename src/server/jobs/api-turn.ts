@@ -1,8 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ModelMessage, ToolSet } from "ai";
 import { Effect } from "effect";
-import { visualQaInstructions } from "#/domain/agent-desktop";
-import { cloudAgentRoleInstructions } from "#/domain/agent-orchestration";
 import { agentPlanState } from "#/domain/agent-plan";
 import { assertApiContextFits } from "#/domain/api-conversation";
 import { applyApiProgress, recordedContextUsage } from "#/domain/api-progress";
@@ -22,10 +20,6 @@ import {
 	TURN_COORDINATION_LEASE_MS,
 	type TurnControl,
 } from "#/domain/conversation-turn-control";
-import {
-	BUILDER_ENVIRONMENT_INSTRUCTIONS,
-	PREPARED_ENVIRONMENT_INSTRUCTIONS,
-} from "#/domain/environment-context";
 import { SessionItemId, WorkspaceId } from "#/domain/ids";
 import { prepareInterruptedStep } from "#/domain/interrupted-step";
 import { officialProviderEndpoint } from "#/domain/model-connection";
@@ -47,7 +41,6 @@ import {
 } from "#/domain/model-failover-reason";
 import { modelStepLimit } from "#/domain/model-workflow";
 import { posixShellCommand } from "#/domain/posix-command";
-import { PROJECT_KNOWLEDGE_INSTRUCTIONS } from "#/domain/project-knowledge";
 import { agentSecretsEnvFile } from "#/domain/project-secret";
 import { modelSwitchHistory } from "#/domain/runtime-handoff";
 import type { ModelSwitchItem, SessionItem } from "#/domain/session-item";
@@ -88,6 +81,7 @@ import { readVerificationBaseline } from "../adapters/turn-verification";
 import { hasManagedCodexAuth } from "../auth/codex-managed-auth";
 import { discoveredToolsFromSession } from "../services/agent-tool-discovery";
 import type { AgentToolWorkspace } from "../services/agent-tool-workspace";
+import { agentTurnInstructions } from "../services/agent-turn-instructions";
 import { runApiAgent, runApiAgentStep } from "../services/api-agent-runtime";
 import { apiAgentTools } from "../services/api-agent-tools";
 import { stopApiTurnCommands } from "../services/api-command-scope";
@@ -125,10 +119,7 @@ import {
 	withPlanMode,
 	withPlanModeNotice,
 } from "../services/plan-mode";
-import {
-	pluginSkillsInstructions,
-	pluginSkillTools,
-} from "../services/plugin-skill-tools";
+import { pluginSkillTools } from "../services/plugin-skill-tools";
 import {
 	loadCloudProjectKnowledge,
 	recordCloudProjectReport,
@@ -787,7 +778,13 @@ async function runApiTurnAttempt(
 			messages,
 			archiveHistory: (history) =>
 				archiveModelContext(owner.userId, owner.id, history),
-			instructions: `You are the ytimesy coding agent. Repository tools operate in this task's prepared checkout; paths are relative to that repository.${shellBuilder ? " Repository instructions (AGENTS.md/CLAUDE.md), nested instruction file locations and skills are provided in the conversation. Before working in a folder listed with its own AGENTS.md or CLAUDE.md, read that file with cat; read a matching skill's SKILL.md completely." : " Call read_repository_guidance before implementation and for nested paths; read applicable instructions and skill bodies completely. Search optional tools with search_tools."} ${shellBuilder ? BUILDER_ENVIRONMENT_INSTRUCTIONS : `${PREPARED_ENVIRONMENT_INSTRUCTIONS} Use read_environment_report for that setup report; do not pass its /tmp path to repository file readers.`} ${cloudAgentRoleInstructions(owner, { shellBuilder })}${shellBuilder && "browser_screenshot" in tools ? ` ${visualQaInstructions()}` : ""}\n${pluginSkillsInstructions(plugins)}${projectKnowledge === null ? "" : `\n${PROJECT_KNOWLEDGE_INSTRUCTIONS}\nShared project knowledge (historical data, verify against this checkout):\n${JSON.stringify(projectKnowledge)}`}`,
+			instructions: agentTurnInstructions({
+				shellBuilder,
+				session: owner,
+				tools,
+				plugins,
+				projectKnowledge,
+			}),
 			tools,
 			signal: abort.signal,
 			restoreInstructions: async (history) => {
