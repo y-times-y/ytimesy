@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => ({
 	save: vi.fn(),
 	remove: vi.fn(),
 	confirm: vi.fn(),
+	recordFailure: vi.fn(),
+	clearFailure: vi.fn(),
 }));
 vi.mock("../adapters/agent-sessions", () => ({
 	agentSessionForOwner: mocks.session,
@@ -27,6 +29,8 @@ vi.mock("../adapters/checkpoints/records", () => ({
 	checkpointForSession: mocks.previous,
 	saveSessionCheckpoint: mocks.save,
 	confirmUnchangedCheckpoint: mocks.confirm,
+	recordCheckpointFailure: mocks.recordFailure,
+	clearCheckpointFailure: mocks.clearFailure,
 }));
 vi.mock("../adapters/checkpoints/storage", () => ({
 	downloadCheckpoint: mocks.download,
@@ -81,6 +85,8 @@ beforeEach(() => {
 	);
 	mocks.capture.mockResolvedValue("after");
 	mocks.upload.mockResolvedValue("new");
+	mocks.recordFailure.mockResolvedValue(undefined);
+	mocks.clearFailure.mockResolvedValue(undefined);
 });
 
 it("captures terminal edits even when the transcript fingerprint is unchanged", async () => {
@@ -150,4 +156,34 @@ it("refuses to save if the workspace identity changed during capture", async () 
 		captureSessionCheckpoint(machines, "owner", "chat"),
 	).rejects.toThrow("advanced");
 	expect(mocks.upload).not.toHaveBeenCalled();
+	expect(mocks.recordFailure).toHaveBeenCalledWith("chat", "advanced");
+});
+
+it("records the failing stage so the backstop backs off instead of waking the VM every minute", async () => {
+	mocks.capture.mockRejectedValue(new Error("Checkpoint exceeds safety limit"));
+	await expect(
+		captureSessionCheckpoint(machines, "owner", "chat"),
+	).rejects.toThrow("safety limit");
+	expect(mocks.recordFailure).toHaveBeenCalledWith("chat", "export");
+	expect(mocks.clearFailure).not.toHaveBeenCalled();
+});
+
+it("records an upload failure at its stage", async () => {
+	mocks.upload.mockRejectedValue(new Error("storage unavailable"));
+	await expect(
+		captureSessionCheckpoint(machines, "owner", "chat"),
+	).rejects.toThrow("storage unavailable");
+	expect(mocks.recordFailure).toHaveBeenCalledWith("chat", "upload");
+});
+
+it("clears a recorded failure once a capture succeeds", async () => {
+	await captureSessionCheckpoint(machines, "owner", "chat");
+	expect(mocks.clearFailure).toHaveBeenCalledWith("chat");
+	expect(mocks.recordFailure).not.toHaveBeenCalled();
+});
+
+it("does not wake the machine when the project is gone", async () => {
+	mocks.project.mockResolvedValue(null);
+	await captureSessionCheckpoint(machines, "owner", "chat");
+	expect(machines.ensureRunning).not.toHaveBeenCalled();
 });

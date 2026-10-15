@@ -8,8 +8,11 @@ import {
 	restoreGuestCheckpoint,
 } from "../adapters/checkpoints/guest";
 import {
+	type CheckpointStage,
 	checkpointForSession,
+	clearCheckpointFailure,
 	confirmUnchangedCheckpoint,
+	recordCheckpointFailure,
 	saveSessionCheckpoint,
 } from "../adapters/checkpoints/records";
 import {
@@ -33,11 +36,32 @@ function host(machines: WorkspaceMachines, id: string) {
 	};
 }
 
-/** Queue-owned capture only after a turn settles. Never wake machines on ordinary UI reads. */
+/**
+ * Queue-owned capture only after a turn settles. Never wake machines on ordinary UI reads.
+ * A failure is recorded with its stage and backs off the per-minute backstop.
+ */
 export async function captureSessionCheckpoint(
 	machines: WorkspaceMachines,
 	userId: string,
 	sessionId: string,
+) {
+	const progress: { stage: CheckpointStage } = { stage: "wake" };
+	try {
+		await captureSessionCheckpointStages(machines, userId, sessionId, progress);
+	} catch (error) {
+		await recordCheckpointFailure(sessionId, progress.stage).catch(
+			() => undefined,
+		);
+		throw error;
+	}
+	await clearCheckpointFailure(sessionId);
+}
+
+async function captureSessionCheckpointStages(
+	machines: WorkspaceMachines,
+	userId: string,
+	sessionId: string,
+	progress: { stage: CheckpointStage },
 ) {
 	const session = await agentSessionForOwner(userId, sessionId);
 	if (!session?.providerRef || session.turnStatus === "running") return;
@@ -46,10 +70,10 @@ export async function captureSessionCheckpoint(
 		.update(JSON.stringify(session.items))
 		.digest("hex");
 	const previous = await checkpointForSession(userId, sessionId);
-	const selected = machinesForAgentSession(machines, session);
-	await selected.ensureRunning(WorkspaceId(session.providerRef));
 	const project = await projectForOwner(userId, session.projectId);
 	if (!project) return;
+	const selected = machinesForAgentSession(machines, session);
+	await selected.ensureRunning(WorkspaceId(session.providerRef));
 	const paths =
 		session.taskPlacement === "shared"
 			? []
@@ -57,6 +81,7 @@ export async function captureSessionCheckpoint(
 					repositoryDirectory(repo.fullName),
 				);
 	const transfer = `/tmp/ytimesy-checkpoint-${randomUUID()}`;
+	progress.stage = "export";
 	const workspace = await exportGuestCheckpoint(
 		host(selected, session.providerRef),
 		paths,
@@ -82,10 +107,12 @@ export async function captureSessionCheckpoint(
 			.update("checkpoint-v2:")
 			.update(JSON.stringify(latest.items))
 			.digest("hex") !== fingerprint
-	)
+	) {
+		progress.stage = "advanced";
 		throw new Error(
 			"Conversation advanced while capturing its checkpoint; retrying.",
 		);
+	}
 	// Transcript equality says nothing about terminal edits. Deduplicate only a fresh file capture.
 	if (
 		previous?.executor_id === session.providerRef &&
@@ -95,12 +122,14 @@ export async function captureSessionCheckpoint(
 		await confirmUnchangedCheckpoint(userId, sessionId, fingerprint);
 		return;
 	}
+	progress.stage = "upload";
 	const path = await uploadCheckpoint(
 		userId,
 		sessionId,
 		randomUUID(),
 		JSON.stringify({ workspace, native }),
 	);
+	progress.stage = "save";
 	try {
 		await saveSessionCheckpoint({
 			userId,
