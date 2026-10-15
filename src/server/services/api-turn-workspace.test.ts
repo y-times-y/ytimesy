@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
 	child: vi.fn(),
 	checkout: vi.fn(),
 	baseline: vi.fn(async () => {}),
+	load: vi.fn(() => Effect.succeed({}) as Effect.Effect<object, Error>),
 }));
 vi.mock("./verification-baseline", () => ({
 	establishVerificationBaselines: mocks.baseline,
@@ -26,7 +27,7 @@ vi.mock("./session-workspace-machines", () => ({
 	machinesForAgentSession: (machines: unknown) => machines,
 }));
 vi.mock("./project-workspace", () => ({
-	loadTenantProjectCheckout: () => Effect.succeed({}),
+	loadTenantProjectCheckout: () => mocks.load(),
 	ensureProjectCheckout: () => {
 		mocks.checkout();
 		return Effect.void;
@@ -47,6 +48,7 @@ const machines = {
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	mocks.load.mockImplementation(() => Effect.succeed({}));
 	mocks.root.mockImplementation(async () => ({
 		session: root,
 		providerRef: "vm-root",
@@ -177,4 +179,48 @@ it("does not keep a failed preparation for the next step", async () => {
 	expect(reuse.read()).toBeUndefined();
 	await step();
 	expect(mocks.root).toHaveBeenCalledTimes(2);
+});
+
+it("loads a root chat's checkout plan while its VM is bound, and fails where it used to", async () => {
+	const order: string[] = [];
+	mocks.load.mockImplementation(() =>
+		Effect.sync(() => {
+			order.push("checkout");
+			return {};
+		}),
+	);
+	let release = () => {};
+	mocks.root.mockImplementation(async () => {
+		order.push("bind");
+		await new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		return { session: root, providerRef: "vm-root" };
+	});
+	const preparing = deferredApiTurnWorkspace(
+		machines,
+		root,
+		new AbortController().signal,
+	)();
+	await vi.waitFor(() => expect(order).toEqual(["checkout", "bind"]));
+	release();
+	await preparing;
+	expect(mocks.checkout).toHaveBeenCalledOnce();
+
+	mocks.load.mockImplementation(() =>
+		Effect.fail(new Error("Repository access is unavailable.")),
+	);
+	mocks.root.mockImplementation(async () => {
+		throw new Error("bind failed");
+	});
+	await expect(
+		deferredApiTurnWorkspace(machines, root, new AbortController().signal)(),
+	).rejects.toThrow("bind failed");
+	mocks.root.mockImplementation(async () => ({
+		session: root,
+		providerRef: "vm-root",
+	}));
+	await expect(
+		deferredApiTurnWorkspace(machines, root, new AbortController().signal)(),
+	).rejects.toThrow("Repository access is unavailable.");
 });
