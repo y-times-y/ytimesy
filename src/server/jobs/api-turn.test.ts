@@ -249,12 +249,12 @@ vi.mock("../services/session-workspace-machines", () => ({
 	machinesForAgentSession: (machines: unknown) => machines,
 }));
 
-it("loads project knowledge into the cloud model instructions without preparing a VM", async () => {
+it("gives the builder no cross-chat project memory and needs no VM to answer", async () => {
 	mocks.runtime.mockImplementation(async (input) => {
-		expect(input.instructions).toContain(
+		expect(input.instructions).not.toContain(
 			"Branch selection is implemented in branch.ts",
 		);
-		expect(input.instructions).toContain("historical data");
+		expect(input.instructions).not.toContain("Shared project knowledge");
 		await input.onEvent({
 			type: "text-delta",
 			id: "reply",
@@ -278,15 +278,12 @@ it("loads project knowledge into the cloud model instructions without preparing 
 	} as ApiTurn;
 	expect(await runApiTurn({} as WorkspaceMachines, turn)).toBe("completed");
 	expect(mocks.report).toHaveBeenCalledOnce();
-	expect(mocks.knowledge).toHaveBeenCalledWith(
-		expect.objectContaining({ userId: "owner", projectId: "project" }),
-		"Fix branches",
-	);
+	expect(mocks.knowledge).not.toHaveBeenCalled();
 });
 
-it("uses the same project knowledge and completion capture for Codex subscription turns", async () => {
+it("keeps completion capture and no cross-chat memory for Codex subscription turns", async () => {
 	mocks.subscriptionRuntime.mockImplementation(async (input) => {
-		expect(input.instructions).toContain(
+		expect(input.instructions).not.toContain(
 			"Branch selection is implemented in branch.ts",
 		);
 		await input.onEvent({

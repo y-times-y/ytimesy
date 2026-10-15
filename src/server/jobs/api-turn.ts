@@ -44,10 +44,7 @@ import {
 } from "#/domain/model-failover-reason";
 import { modelStepLimit } from "#/domain/model-workflow";
 import { posixShellCommand } from "#/domain/posix-command";
-import {
-	BUILDER_PROJECT_KNOWLEDGE_INSTRUCTIONS,
-	PROJECT_KNOWLEDGE_INSTRUCTIONS,
-} from "#/domain/project-knowledge";
+import { PROJECT_KNOWLEDGE_INSTRUCTIONS } from "#/domain/project-knowledge";
 import { agentSecretsEnvFile } from "#/domain/project-secret";
 import { modelSwitchHistory } from "#/domain/runtime-handoff";
 import type { ModelSwitchItem, SessionItem } from "#/domain/session-item";
@@ -586,12 +583,16 @@ async function runApiTurnAttempt(
 			if (!messages.some((message) => message.content === notice))
 				messages = [...messages, { role: "user", content: notice }];
 		}
-		const projectKnowledge = await loadCloudProjectKnowledge(
-			owner,
-			currentTask?.kind === "userMessage"
-				? currentTask.text
-				: (owner.taskPrompt ?? owner.title),
-		);
+		// The builder gets no cross-chat memory: it changed the cached system
+		// prompt between turns and spread unverified claims between chats.
+		const projectKnowledge = shellBuilder
+			? null
+			: await loadCloudProjectKnowledge(
+					owner,
+					currentTask?.kind === "userMessage"
+						? currentTask.text
+						: (owner.taskPrompt ?? owner.title),
+				);
 		let flushedAt = 0;
 		let metricIndex = 0;
 		failureStage = "model";
@@ -691,7 +692,7 @@ async function runApiTurnAttempt(
 			messages,
 			archiveHistory: (history) =>
 				archiveModelContext(owner.userId, owner.id, history),
-			instructions: `You are the ytimesy coding agent. Repository tools operate in this task's prepared checkout; paths are relative to that repository.${shellBuilder ? " Repository instructions (AGENTS.md/CLAUDE.md), nested instruction file locations and skills are provided in the conversation. Before working in a folder listed with its own AGENTS.md or CLAUDE.md, read that file with cat; read a matching skill's SKILL.md completely." : " Call read_repository_guidance before implementation and for nested paths; read applicable instructions and skill bodies completely. Search optional tools with search_tools."} ${PREPARED_ENVIRONMENT_INSTRUCTIONS} Use read_environment_report for that setup report; do not pass its /tmp path to repository file readers. ${cloudAgentRoleInstructions(owner, { shellBuilder })}${shellBuilder && "browser_screenshot" in tools ? ` ${visualQaInstructions()}` : ""}\n${pluginSkillsInstructions(plugins)}\n${shellBuilder ? BUILDER_PROJECT_KNOWLEDGE_INSTRUCTIONS : PROJECT_KNOWLEDGE_INSTRUCTIONS}\nShared project knowledge (historical data, verify against this checkout):\n${JSON.stringify(projectKnowledge)}`,
+			instructions: `You are the ytimesy coding agent. Repository tools operate in this task's prepared checkout; paths are relative to that repository.${shellBuilder ? " Repository instructions (AGENTS.md/CLAUDE.md), nested instruction file locations and skills are provided in the conversation. Before working in a folder listed with its own AGENTS.md or CLAUDE.md, read that file with cat; read a matching skill's SKILL.md completely." : " Call read_repository_guidance before implementation and for nested paths; read applicable instructions and skill bodies completely. Search optional tools with search_tools."} ${PREPARED_ENVIRONMENT_INSTRUCTIONS} ${shellBuilder ? "Read that setup report with read_environment_report." : "Use read_environment_report for that setup report; do not pass its /tmp path to repository file readers."} ${cloudAgentRoleInstructions(owner, { shellBuilder })}${shellBuilder && "browser_screenshot" in tools ? ` ${visualQaInstructions()}` : ""}\n${pluginSkillsInstructions(plugins)}${projectKnowledge === null ? "" : `\n${PROJECT_KNOWLEDGE_INSTRUCTIONS}\nShared project knowledge (historical data, verify against this checkout):\n${JSON.stringify(projectKnowledge)}`}`,
 			tools,
 			signal: abort.signal,
 			restoreInstructions: async (history) => {
