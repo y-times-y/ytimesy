@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Pool } from "pg";
-import { stepTimingEnabled, timed } from "../services/step-timing";
+import { stepTimingEnabled, timed, timedCall } from "../services/step-timing";
 import { withInvocationTasks } from "./invocation-tasks";
 
 type DatabaseScope = {
@@ -79,7 +79,11 @@ function timePool(pool: Pool) {
 		query: (...args: unknown[]) =>
 			typeof args.at(-1) === "function"
 				? query(...args)
-				: timed("db:query", () => query(...args) as Promise<unknown>),
+				: timedCall(
+						"db:query",
+						`sql ${typeof args[0] === "string" ? args[0] : "?"}`,
+						() => query(...args) as Promise<unknown>,
+					),
 		connect: (...args: unknown[]) =>
 			args.length
 				? connect(...args)
