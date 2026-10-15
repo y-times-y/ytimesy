@@ -79,21 +79,17 @@ export function harnessLifecycleHooks(input: {
 	}
 
 	async function baselineConfig(workspace: AgentToolWorkspace, base: string) {
+		// One guest round trip: 91 means the baseline has no configuration,
+		// 90 that the baseline itself could not be listed.
+		const repository = `git -C ${posixShellQuoted(workspace.cwd)}`;
 		const result = await workspace.machines.exec(
 			workspace.vm,
-			`git -C ${posixShellQuoted(workspace.cwd)} show ${posixShellQuoted(`${base}:.ytimesy/hooks.json`)}`,
+			`listed=$(${repository} ls-tree ${posixShellQuoted(base)} -- .ytimesy/hooks.json) || exit 90; [ -n "$listed" ] || exit 91; exec ${repository} show ${posixShellQuoted(`${base}:.ytimesy/hooks.json`)}`,
 			10_000,
 		);
-		if (result.exitCode) {
-			const exists = await workspace.machines.exec(
-				workspace.vm,
-				`git -C ${posixShellQuoted(workspace.cwd)} ls-tree ${posixShellQuoted(base)} -- .ytimesy/hooks.json`,
-				10_000,
-			);
-			if (exists.exitCode || exists.stdout.trim())
-				throw new Error("Could not load baseline lifecycle hooks.");
-			return { version: 1 as const, hooks: [] };
-		}
+		if (result.exitCode === 91) return { version: 1 as const, hooks: [] };
+		if (result.exitCode)
+			throw new Error("Could not load baseline lifecycle hooks.");
 		if (result.stdout.length > 32000)
 			throw new Error("Lifecycle configuration exceeds its limit.");
 		return lifecycleHookConfig.parse(JSON.parse(result.stdout));

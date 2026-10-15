@@ -107,7 +107,8 @@ vi.mock("../services/api-agent-tools", () => ({
 const machines = {
 	exec: async (_vm: string, command: string) => {
 		state.execs.push(command);
-		return { exitCode: command.includes(" show ") ? 1 : 0, stdout: "" };
+		// A baseline without lifecycle hook configuration.
+		return { exitCode: command.includes("hooks.json") ? 91 : 0, stdout: "" };
 	},
 	writeTextFile: async (_vm: string, path: string) => {
 		state.writes.push(path);
