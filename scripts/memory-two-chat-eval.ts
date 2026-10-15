@@ -62,7 +62,7 @@ const { values: flags } = parseArgs({
 });
 
 const PROMPT_SUFFIX =
-	"\n\nWork directly in this repository: no plan proposal, child tasks, commits, pull requests or publishing. Stop when the change is done and checked.";
+	"\n\nWork directly in this repository: no plan proposal, child tasks, pull requests or publishing, and no commits to this repository. Stop when the change is done and checked.";
 
 const fixtureRepoScript = (dir: string) =>
 	`cd '${dir}' && git init -q && git add -A && git -c user.name=Eval -c user.email=eval@example.invalid commit -qm fixture && git update-ref refs/ytimesy/base HEAD`;
