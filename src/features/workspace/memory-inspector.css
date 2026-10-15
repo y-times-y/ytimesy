@@ -1,0 +1,240 @@
+.memory-inspector {
+	display: flex;
+	flex-direction: column;
+	flex: 1;
+	min-height: 0;
+	color: #d4d4d4;
+	font-size: 13px;
+}
+.memory-muted {
+	color: #8a8a8a;
+}
+.memory-inspector.memory-muted {
+	padding: 20px 18px;
+}
+.memory-toolbar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 8px 10px;
+	border-bottom: 1px solid #ffffff12;
+}
+.memory-views,
+.memory-actions {
+	display: flex;
+	gap: 4px;
+}
+.memory-inspector button {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	height: 26px;
+	padding: 0 9px;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	color: #a3a3a3;
+	font-size: 12px;
+}
+.memory-inspector button:hover:enabled {
+	background: #ffffff0f;
+	color: #f2f2f2;
+}
+.memory-inspector button[aria-pressed="true"] {
+	background: #ffffff14;
+	color: #f2f2f2;
+}
+.memory-inspector button:disabled {
+	opacity: 0.45;
+	cursor: default;
+}
+.memory-inspector button.memory-danger {
+	color: #f08a8a;
+	background: #f0505014;
+}
+.memory-body {
+	display: flex;
+	flex: 1;
+	min-height: 0;
+	flex-direction: column;
+	overflow: auto;
+}
+.memory-graph {
+	flex: 0 0 auto;
+	width: 100%;
+	max-height: 46%;
+	min-height: 220px;
+	border-bottom: 1px solid #ffffff0d;
+}
+.memory-graph line {
+	stroke: #ffffff26;
+	stroke-width: 1;
+}
+.memory-graph line[data-active="true"] {
+	stroke: #ffffff73;
+}
+.memory-graph g {
+	cursor: pointer;
+	outline: none;
+}
+.memory-graph circle {
+	fill: #6b6b6b;
+	stroke: #0a0a0a;
+	stroke-width: 2;
+}
+.memory-graph g[data-root="true"] circle {
+	fill: #d9b45a;
+}
+.memory-graph g[data-active="true"] circle,
+.memory-graph g:focus-visible circle {
+	fill: #e5e5e5;
+	stroke: #d9b45a;
+}
+.memory-graph text {
+	fill: #a3a3a3;
+	font-size: 11px;
+	text-anchor: middle;
+	pointer-events: none;
+}
+.memory-files {
+	list-style: none;
+	margin: 0;
+	padding: 6px;
+	border-bottom: 1px solid #ffffff0d;
+}
+.memory-files button {
+	width: 100%;
+	justify-content: space-between;
+}
+.memory-panel {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 12px 14px 20px;
+	min-width: 0;
+}
+.memory-panel header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+}
+.memory-panel h3 {
+	margin: 0;
+	font-size: 13px;
+	font-weight: 500;
+	color: #f2f2f2;
+	overflow-wrap: anywhere;
+}
+.memory-content p {
+	margin: 0 0 6px;
+	line-height: 1.55;
+	overflow-wrap: anywhere;
+}
+.memory-content .memory-heading {
+	margin-top: 10px;
+	color: #f2f2f2;
+	font-weight: 500;
+}
+.memory-entry {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 6px;
+	padding-left: 12px;
+	position: relative;
+}
+.memory-entry::before {
+	content: "•";
+	position: absolute;
+	left: 0;
+	color: #6b6b6b;
+}
+.memory-entry > span:first-child {
+	flex: 1 1 220px;
+}
+.memory-badge {
+	padding: 0 6px;
+	border-radius: 4px;
+	background: #ffffff0f;
+	color: #a3a3a3;
+	font-size: 11px;
+}
+.memory-badge[title] {
+	color: #d9b45a;
+	background: #d9b45a1a;
+}
+.memory-source {
+	color: #8fb3ff;
+	font-size: 12px;
+}
+.memory-source:hover {
+	text-decoration: underline;
+}
+.memory-inspector .memory-link {
+	display: inline;
+	height: auto;
+	padding: 0;
+	color: #8fb3ff;
+	font-size: inherit;
+}
+.memory-inspector .memory-link:hover:enabled {
+	background: transparent;
+	text-decoration: underline;
+}
+.memory-panel footer {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	padding-top: 8px;
+	border-top: 1px solid #ffffff0d;
+	font-size: 12px;
+}
+.memory-history {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+.memory-history strong {
+	font-weight: 500;
+	color: #e5e5e5;
+}
+.memory-history pre {
+	margin: 6px 0 0;
+	padding: 8px;
+	border-radius: 6px;
+	background: #141414;
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: 11.5px;
+	line-height: 1.5;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.memory-history [data-change="add"] {
+	color: #8ddb9d;
+}
+.memory-history [data-change="delete"] {
+	color: #ffa5a2;
+}
+@container (min-width: 760px) {
+	.memory-body {
+		flex-direction: row;
+	}
+	.memory-graph,
+	.memory-files {
+		flex: 1 1 55%;
+		max-height: none;
+		border-bottom: 0;
+		border-right: 1px solid #ffffff0d;
+		overflow: auto;
+	}
+	.memory-panel {
+		flex: 1 1 45%;
+		overflow: auto;
+	}
+}

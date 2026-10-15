@@ -140,6 +140,7 @@ import { recordStepTiming, timed } from "../services/step-timing";
 import { analyticsAgentRole } from "../services/turn-analytics";
 import { commitCompletedSessionTurn } from "../services/turn-commit";
 import { forgetTurnMemo, turnMemo } from "../services/turn-memo";
+import { turnMemory } from "../services/turn-memory";
 import { turnProgressWriter } from "../services/turn-progress-writer";
 import { turnWorkspaceReuse } from "../services/turn-workspace-reuse";
 import type { WorkspaceMachines } from "../services/workspace-machines";
@@ -444,6 +445,21 @@ async function runApiTurnAttempt(
 		// The root chat is the builder itself; writable children build too.
 		const writable =
 			!owner.parentSessionId || owner.taskAccess === "read_write";
+		// Cross-chat memory (Agent Memory Repo) for the root builder, never
+		// benchmarks. Loaded alongside the rest of the setup; never fails a turn.
+		const memoryLoading =
+			writable && !owner.parentSessionId && !evaluation
+				? timed("turn:memory", () =>
+						turnMemo(`${turn.id}:memory`, () =>
+							turnMemory({
+								id: owner.id,
+								userId: owner.userId,
+								projectId: owner.projectId ?? null,
+							}),
+						),
+					).catch(() => null)
+				: Promise.resolve(null);
+		let memoryCloned: Promise<void> | undefined;
 		// Turn-fixed configuration is loaded by the turn's first durable step and
 		// reused by later steps in the same isolate (see turn-memo). It may change
 		// between turns; within one, keeping it fixed also keeps the tools and the
@@ -495,6 +511,13 @@ async function runApiTurnAttempt(
 				// A missing file surfaces when the agent opens it; other tools keep working.
 				console.warn("Attached files could not be restored.", error);
 			});
+			// ~/memory is outside the repository, so it overlaps the code point.
+			const ready = execution;
+			const cloning = memoryLoading.then((memory) => {
+				if (!memory) return;
+				memoryCloned ??= memory.prepareVm(ready);
+				return memoryCloned;
+			});
 			await attachmentsWritten;
 			if (writable) {
 				const prompt = [...items]
@@ -511,6 +534,7 @@ async function runApiTurnAttempt(
 				}
 			}
 			await secretsReady;
+			await cloning;
 			return execution;
 		};
 		machines = machinesForAgentSession(machines, owner);
@@ -707,8 +731,13 @@ async function runApiTurnAttempt(
 			if (!messages.some((message) => message.content === notice))
 				messages = [...messages, { role: "user", content: notice }];
 		}
-		// The builder gets no cross-chat memory: it changed the cached system
-		// prompt between turns and spread unverified claims between chats.
+		// Memory rides on the current request as extra parts, so earlier
+		// messages and the system prompt stay byte-stable for prompt caching.
+		const memory = await memoryLoading;
+		if (memory && firstStep)
+			messages = await timed("turn:memoryAttach", () =>
+				memory.attach(messages, items, workspace),
+			);
 		const projectKnowledge = shellBuilder
 			? null
 			: await loadCloudProjectKnowledge(
@@ -822,13 +851,13 @@ async function runApiTurnAttempt(
 			messages,
 			archiveHistory: (history) =>
 				archiveModelContext(owner.userId, owner.id, history),
-			instructions: agentTurnInstructions({
+			instructions: `${agentTurnInstructions({
 				shellBuilder,
 				session: owner,
 				tools,
 				plugins,
 				projectKnowledge,
-			}),
+			})}${memory ? `\n${memory.instructions}` : ""}`,
 			tools,
 			signal: abort.signal,
 			isUserRequest: (message) => isUserRequestMessage(items, message),
@@ -1110,6 +1139,7 @@ async function runApiTurnAttempt(
 			return saved === "cancelled" ? "cancelled" : "failed";
 		}
 		await publishProgress("completed").catch(() => {});
+		await memory?.afterTurn(turn.id);
 		await recordCloudProjectReport(owner, turn.id, items).catch(() => {
 			console.warn(
 				"Completed turn saved, but its project report needs recovery.",

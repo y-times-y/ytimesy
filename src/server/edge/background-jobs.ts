@@ -5,10 +5,13 @@ import { modelConversationName } from "../../domain/model-conversation-routing";
 import { modelConcurrencyLimits } from "../adapters/agent-capacity";
 import { claimApiTurn } from "../adapters/api-turns";
 import { withBackgroundJobDispatcher } from "../adapters/background-job-dispatch";
+import { withCodexSubscriptionEgress } from "../adapters/codex-subscription-transport";
 import { withDatabaseScope } from "../adapters/database-scope";
 import { registerAuthEmailBinding } from "../adapters/email";
 import { readFreestyleApiKey } from "../adapters/freestyle/api-key";
 import { createFreestyleWorkspaceMachines } from "../adapters/freestyle/workspace-machines";
+import { registerMemoryEmbeddings } from "../adapters/memory-embeddings";
+import { registerMemoryRepos } from "../adapters/memory-repos";
 import { deliverBackgroundJob } from "../services/background-job-delivery";
 import type { EdgeExecutorEnvironment } from "./environment";
 import { withEdgeModelEndpoints } from "./model-endpoint";
@@ -73,6 +76,20 @@ export function runBackgroundJob(
 						});
 						return "delivered";
 					}
+					// Memory jobs run on the user's model route, which may be their ChatGPT plan.
+					if (job.kind === "memory")
+						return withCodexSubscriptionEgress(
+							(input, options) => env.CODEX_EGRESS.fetch(input, options),
+							() =>
+								withEdgeModelEndpoints(() =>
+									deliverBackgroundJob(
+										createFreestyleWorkspaceMachines(
+											Effect.runSync(readFreestyleApiKey()),
+										),
+										job,
+									),
+								),
+						);
 					return withEdgeModelEndpoints(() =>
 						deliverBackgroundJob(
 							createFreestyleWorkspaceMachines(
@@ -111,6 +128,8 @@ export class BackgroundJobRunner extends DurableObject<EdgeExecutorEnvironment> 
 		super(ctx, env);
 		// The delivery job retries queued auth email through this binding.
 		registerAuthEmailBinding(env.EMAIL);
+		registerMemoryRepos(env.ARTIFACTS);
+		registerMemoryEmbeddings(env.AI);
 	}
 
 	async start(job: BackgroundJob): Promise<JobRecord["state"]> {

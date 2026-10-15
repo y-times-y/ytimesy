@@ -14,6 +14,8 @@
   // Not public: no routes, no workers.dev URL and no preview URLs until launch.
   // Auth email (verification, password reset) without an API token.
   "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["noreply@ytimesy.com"] }],
+  // The Memory tab reads, and Clear memory deletes, the user's memory repo.
+  "artifacts": [{ "binding": "ARTIFACTS", "namespace": "ytimesy-memory-development" }],
   "workers_dev": false,
   "preview_urls": false,
   "env": {
@@ -26,6 +28,7 @@
       "services": [{ "binding": "EXECUTOR", "service": "ytimesy-edge-executor-production", "remote": true }],
       "vars": { "YTIMESY_DATABASE_VIA_HYPERDRIVE": "1", "YTIMESY_ENVIRONMENT": "production" },
       "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["noreply@ytimesy.com"] }],
+      "artifacts": [{ "binding": "ARTIFACTS", "namespace": "ytimesy-memory-production" }],
       "workers_dev": false,
       "preview_urls": false
     }

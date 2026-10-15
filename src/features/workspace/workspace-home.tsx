@@ -566,6 +566,25 @@ export function WorkspaceHome({
 		);
 	}, []);
 
+	const linkedChat = useRef(
+		typeof window === "undefined"
+			? null
+			: new URLSearchParams(window.location.search).get("chat"),
+	);
+	useEffect(() => {
+		const id = linkedChat.current;
+		if (!id || !chats.data?.some((chat) => chat.id === id)) return;
+		linkedChat.current = null;
+		const here = new URL(window.location.href);
+		here.searchParams.delete("chat");
+		window.history.replaceState(
+			window.history.state,
+			"",
+			`${here.pathname}${here.search}${here.hash}`,
+		);
+		openChat(id);
+	});
+
 	useEffect(() => {
 		void activeProjectId;
 		setSelectedSessionId(undefined);
@@ -1606,6 +1625,12 @@ export function WorkspaceHome({
 							projectId={selectedProject?.id}
 							sessionId={activeSessionId}
 							onStartDesktop={requestDesktop}
+							onOpenChat={(chatId) => {
+								if (!sidebarChats.some((chat) => chat.id === chatId))
+									return false;
+								openChat(chatId);
+								return true;
+							}}
 							pullRequest={pullRequestPanelRepository({
 								repositories: projectRepositories,
 								chatPullRequest: sessionPullRequest,
