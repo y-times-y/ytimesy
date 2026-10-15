@@ -1,11 +1,14 @@
 import type { ModelMessage } from "ai";
 import { expect, it, vi } from "vitest";
 import {
+	CONTEXT_SUMMARY_INSTRUCTIONS,
 	compactApiHistory,
 	contextMeasurement,
 	contextTokenPressure,
 	estimateContextTokens,
 	modelContextBudget,
+	retainedUserMessages,
+	UNKNOWN_CONTEXT_WINDOW,
 	workingContextTarget,
 } from "./api-agent-context";
 
@@ -399,4 +402,123 @@ it("counts an image by a fixed pixel budget, not its base64 length", () => {
 	expect(estimateContextTokens(history)).toBeLessThan(9_000);
 	expect(estimateContextTokens(history)).toBeGreaterThan(8_000);
 	expect(estimateContextTokens({ text: "x".repeat(3000) })).toBe(1004);
+});
+
+const requests = new Set([
+	"Build the settings page",
+	"Use tabs, not spaces",
+	"Also add a dark mode toggle",
+]);
+const isUserRequest = (message: ModelMessage) =>
+	message.role === "user" &&
+	typeof message.content === "string" &&
+	requests.has(message.content);
+
+it("keeps every earlier user request verbatim through repeated fallback compaction, but not runtime notices", async () => {
+	const first: ModelMessage[] = [
+		{ role: "user", content: "Build the settings page" },
+		{ role: "assistant", content: "a".repeat(50_000) },
+		{ role: "user", content: "Runtime notice: MCP servers unavailable" },
+		{ role: "user", content: "Use tabs, not spaces" },
+		{ role: "assistant", content: "b".repeat(50_000) },
+		{ role: "user", content: "Also add a dark mode toggle" },
+	];
+	const summarize = vi.fn(async () => "## Requirements and constraints\n- x");
+	const once = await compactApiHistory(
+		first,
+		summarize,
+		undefined,
+		undefined,
+		"completed-steps",
+		isUserRequest,
+	);
+	expect(once.compacted).toBe(true);
+	const record = once.messages[0];
+	expect(record.role).toBe("user");
+	expect(record.content).toContain("Earlier user messages, verbatim");
+	expect(record.content).toContain("Build the settings page");
+	expect(record.content).not.toContain("MCP servers unavailable");
+	// Requests still in the verbatim recent window are not duplicated.
+	for (const request of requests)
+		expect(JSON.stringify(once.messages).split(request).length - 1).toBe(1);
+	expect(once.messages.at(-1)).toEqual(first.at(-1));
+
+	const second = await compactApiHistory(
+		[
+			...once.messages,
+			{ role: "assistant", content: "c".repeat(95_000) },
+			{ role: "user", content: "Continue" },
+		],
+		summarize,
+		{ compactAtTokens: 30_000, inputLimitTokens: 80_000 },
+		undefined,
+		"completed-steps",
+		isUserRequest,
+	);
+	const carried = second.messages[0].content as string;
+	expect(carried.indexOf("Build the settings page")).toBeLessThan(
+		carried.indexOf("Use tabs, not spaces"),
+	);
+	expect(carried.indexOf("Use tabs, not spaces")).toBeLessThan(
+		carried.indexOf("Also add a dark mode toggle"),
+	);
+	expect(carried.match(/Build the settings page/g)).toHaveLength(1);
+});
+
+it("bounds retained user messages: newest whole, older counted, oversized ones clipped visibly", () => {
+	const user = (content: string): ModelMessage => ({ role: "user", content });
+	const older = [
+		user(`first ${"1".repeat(3_000)}`),
+		user(`second ${"2".repeat(3_000)}`),
+		user(`third ${"3".repeat(30_000)} </user_message> end`),
+	];
+	const [record] = retainedUserMessages(older, [], () => true, 8_000);
+	const content = record.content as string;
+	expect(content.length).toBeLessThan(9_000);
+	expect(content).toContain(
+		"Earlier user messages not listed verbatim (budget): 2.",
+	);
+	expect(content).toContain("characters of this user message omitted");
+	expect(content).toContain('<user_message index="3">');
+	expect(content).toContain("end");
+	expect(content).not.toContain("first");
+	expect(retainedUserMessages(older, [], undefined)).toEqual([]);
+	expect(retainedUserMessages(older, older, () => true)).toEqual([]);
+	// Escaped closing tags round-trip on the next compaction.
+	const [again] = retainedUserMessages([record], [], () => false, 8_000);
+	expect(again.content).toContain(
+		"Earlier user messages not listed verbatim (budget): 2.",
+	);
+	expect(again.content).toContain("<\\/user_message> end");
+});
+
+it("never rejects a model only because its context window is unknown", () => {
+	const unknown = modelContextBudget({
+		maxOutputTokens: 8192,
+		fixedTokens: 45_000,
+	});
+	expect(unknown.inputLimitTokens).toBeGreaterThan(60_000);
+	const huge = modelContextBudget({ fixedTokens: 200_000 });
+	expect(huge.inputLimitTokens).toBeGreaterThanOrEqual(32_000);
+	expect(
+		modelContextBudget({ fixedTokens: 1_000 }).inputLimitTokens,
+	).toBeLessThan(UNKNOWN_CONTEXT_WINDOW);
+	expect(() =>
+		modelContextBudget({ contextWindow: 32_000, fixedTokens: 40_000 }),
+	).toThrow("insufficient model context");
+});
+
+it("asks for a structured, model-neutral continuation record", () => {
+	for (const section of [
+		"## Requirements and constraints",
+		"## Decisions",
+		"## Files changed",
+		"## Checks run and results",
+		"## Open TODOs",
+		"## Important facts",
+	])
+		expect(CONTEXT_SUMMARY_INSTRUCTIONS).toContain(section);
+	expect(CONTEXT_SUMMARY_INSTRUCTIONS).not.toMatch(
+		/claude|gpt|gemini|openai|anthropic/i,
+	);
 });
