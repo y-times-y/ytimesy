@@ -989,7 +989,13 @@ it("summarizes older history before a model step and checkpoints the compacted m
 		revision: "revision",
 		baseUrl: "https://openrouter.ai/api/v1",
 		sealedCredential: "sealed",
-		models: [{ id: "google/gemini-3.8-flash", toolStreamingVerified: true }],
+		models: [
+			{
+				id: "google/gemini-3.8-flash",
+				toolStreamingVerified: true,
+				contextWindow: 48_000,
+			},
+		],
 	});
 	const events: ApiAgentEvent[] = [];
 	const model = new MockLanguageModelV4({
@@ -1080,7 +1086,7 @@ it("does not begin compaction inference after the run deadline", async () => {
 						deadline.abort(new Error("Evaluation deadline"));
 					},
 				},
-				{ model },
+				{ model, contextWindow: 48_000 },
 			),
 		).rejects.toThrow();
 		expect(model.doGenerateCalls).toHaveLength(0);

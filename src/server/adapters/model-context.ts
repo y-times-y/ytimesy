@@ -78,15 +78,23 @@ export async function readModelContext(
 				)
 					nativeCompaction = "anthropic";
 			}
-		} else if (input.provider === "openrouter" || input.provider === "openai") {
+		} else if (
+			input.provider === "openrouter" ||
+			input.provider === "openai" ||
+			origin === "https://openrouter.ai"
+		) {
 			const catalogId =
-				input.provider === "openai" ? `openai/${input.modelId}` : input.modelId;
-			contextWindow ??= (await browseModels()).find(
-				(row) => row.id === catalogId,
-			)?.contextWindow;
-		}
+				input.provider === "openai" && origin !== "https://openrouter.ai"
+					? `openai/${input.modelId}`
+					: input.modelId;
+			contextWindow ??= await openRouterContextWindow(
+				catalogId,
+				origin === "https://openrouter.ai" ? fetch : undefined,
+			);
+		} else if (contextWindow === undefined && input.provider === "compatible")
+			contextWindow = await listedContextWindow(input, fetch);
 	} catch {
-		// Missing metadata uses the conservative shared budget, not an invented model limit.
+		// Missing metadata uses the shared unknown-window budget, not an invented model limit.
 	}
 	const value = { contextWindow, nativeCompaction };
 	if (cached.size >= 1000) cached.delete(cached.keys().next().value as string);
@@ -95,4 +103,76 @@ export async function readModelContext(
 		expires: Date.now() + (contextWindow ? 15 * 60_000 : 30_000),
 	});
 	return value;
+}
+
+const CONTEXT_FIELDS = [
+	"context_length",
+	"context_window",
+	"max_context_length",
+	"max_model_len",
+	"inputTokenLimit",
+	"max_input_tokens",
+] as const;
+
+function rowContextWindow(row: unknown): number | undefined {
+	if (!row || typeof row !== "object") return undefined;
+	for (const field of CONTEXT_FIELDS) {
+		const value = positiveInteger((row as Record<string, unknown>)[field]);
+		if (value) return value;
+	}
+	return undefined;
+}
+
+/**
+ * The public catalog lists most routes; unlisted variants (free tiers, newly
+ * added or key-scoped models) still report per-endpoint limits publicly.
+ */
+async function openRouterContextWindow(
+	modelId: string,
+	fetch: typeof globalThis.fetch | undefined,
+): Promise<number | undefined> {
+	const listed = await browseModels().catch(() => []);
+	const row = listed.find((model) => model.id === modelId);
+	if (row?.contextWindow) return row.contextWindow;
+	if (!fetch || !/^[\w.-]+\/[\w.:-]+$/.test(modelId)) return undefined;
+	const response = await fetch(
+		`https://openrouter.ai/api/v1/models/${modelId}/endpoints`,
+		{ signal: AbortSignal.timeout(3000), redirect: "manual" },
+	);
+	if (!response.ok) return undefined;
+	const body = await readModelCatalogBody(response);
+	const limits = (
+		Array.isArray(body?.data?.endpoints) ? body.data.endpoints : []
+	).flatMap((endpoint: unknown) => rowContextWindow(endpoint) ?? []);
+	return limits.length
+		? Math.max(...limits)
+		: (rowContextWindow(body?.data) ?? undefined);
+}
+
+/** The same owner-authenticated listing connection discovery already reads. */
+async function listedContextWindow(
+	input: { baseUrl: string; apiKey: string; modelId: string },
+	fetch: typeof globalThis.fetch,
+): Promise<number | undefined> {
+	const response = await fetch(`${input.baseUrl}/models`, {
+		headers: { Authorization: `Bearer ${input.apiKey}` },
+		signal: AbortSignal.timeout(3000),
+		redirect: "manual",
+	});
+	if (!response.ok) return undefined;
+	const body = await readModelCatalogBody(response);
+	const rows: unknown[] = Array.isArray(body?.data)
+		? body.data
+		: Array.isArray(body?.models)
+			? body.models
+			: [];
+	return rowContextWindow(
+		rows.find(
+			(row) =>
+				!!row &&
+				typeof row === "object" &&
+				((row as { id?: unknown }).id === input.modelId ||
+					(row as { name?: unknown }).name === input.modelId),
+		),
+	);
 }
