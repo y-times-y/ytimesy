@@ -8,6 +8,7 @@ import { posixShellQuoted } from "#/domain/posix-command";
 import {
 	AGENT_SECRETS_DIRECTORY,
 	AGENT_SECRETS_ENV_PATH,
+	type AgentSecretName,
 	agentSecretsEnvFile,
 	type PublicProjectSecret,
 	parseProjectSecretKind,
@@ -73,16 +74,19 @@ export async function removeVisibleProjectSecret(input: {
 export type AgentProjectSecrets = {
 	readonly envFile: string;
 	readonly redact: readonly string[];
+	/** Every configured secret's name and kind, for the agent; never a value. */
+	readonly names: readonly AgentSecretName[];
 };
 
 export async function loadAgentProjectSecrets(
 	userId: string,
 	projectId: string,
 ): Promise<AgentProjectSecrets> {
-	const stored = (await loadProjectSecretsForOwner(userId, projectId)).filter(
-		(secret) => secret.kind !== "build",
-	);
-	if (!stored.length) return { envFile: agentSecretsEnvFile([]), redact: [] };
+	const all = await loadProjectSecretsForOwner(userId, projectId);
+	const names = all.map(({ name, kind }) => ({ name, kind }));
+	const stored = all.filter((secret) => secret.kind !== "build");
+	if (!stored.length)
+		return { envFile: agentSecretsEnvFile([]), redact: [], names };
 	const masterKey = await loadSecretMasterKey();
 	const secrets = stored.map((secret) => ({
 		name: secret.name,
@@ -94,6 +98,7 @@ export async function loadAgentProjectSecrets(
 		redact: secrets
 			.filter((secret) => secret.kind === "runtime")
 			.map((secret) => secret.value),
+		names,
 	};
 }
 

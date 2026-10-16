@@ -57,3 +57,32 @@ it("records an optional workspace hash so unchanged captures need no download", 
 		await db.close();
 	}
 });
+
+it("backs the checkpoint backstop off per session and cascades with the chat", async () => {
+	const db = new PGlite();
+	try {
+		await db.exec(
+			"create role anon; create role authenticated; create table agent_session(id uuid primary key); insert into agent_session values ('00000000-0000-4000-8000-000000000001')",
+		);
+		await db.exec(
+			await readFile(
+				"supabase/migrations/20261013100000_session_checkpoint_failure.sql",
+				"utf8",
+			),
+		);
+		await expect(
+			db.exec(
+				"insert into session_checkpoint_failure(session_id,failures,stage,retry_after) values ('00000000-0000-4000-8000-000000000001',1,'unknown',now())",
+			),
+		).rejects.toThrow();
+		await db.exec(
+			"insert into session_checkpoint_failure(session_id,failures,stage,retry_after) values ('00000000-0000-4000-8000-000000000001',1,'export',now())",
+		);
+		await db.exec("delete from agent_session");
+		expect(
+			(await db.query("select * from session_checkpoint_failure")).rows,
+		).toHaveLength(0);
+	} finally {
+		await db.close();
+	}
+});

@@ -2,6 +2,12 @@ import { PLAN_TEXT_LIMIT, PROPOSE_PLAN_TOOL } from "./agent-plan";
 import type { ApiAgentEvent } from "./api-agent-event";
 import { SessionItemId } from "./ids";
 import { CALL_MCP_TOOL_TOOL, calledMcpTool } from "./mcp-tool-call";
+import {
+	REQUEST_PROJECT_SECRET_TOOL,
+	REQUESTABLE_SECRET_KINDS,
+	type RequestableSecretKind,
+	SECRET_REASON_LIMIT,
+} from "./secret-request";
 import type { SessionItem } from "./session-item";
 import { publicToolDetail } from "./tool-detail";
 
@@ -88,7 +94,16 @@ export function applyApiProgress(
 		};
 	} else if (event.type === "tool-call" && event.name === PROPOSE_PLAN_TOOL)
 		return [...items];
-	else if (event.type === "tool-call" || event.type === "tool-result") {
+	else if (
+		event.type === "tool-result" &&
+		event.name === REQUEST_PROJECT_SECRET_TOOL &&
+		requestedSecret(event.output, event.failed)
+	) {
+		// Only an accepted request waits for the user; a refused one stays a tool call.
+		const output = requestedSecret(event.output, event.failed);
+		if (!output) return [...items];
+		next = { kind: "secretRequest", id, ...output };
+	} else if (event.type === "tool-call" || event.type === "tool-result") {
 		// A generic MCP call shows as the MCP tool it named, as a direct call would.
 		const mcp =
 			event.type === "tool-call" && event.name === CALL_MCP_TOOL_TOOL
@@ -120,4 +135,29 @@ export function applyApiProgress(
 	return existing
 		? items.map((item) => (item.id === id ? next : item))
 		: [...items, next];
+}
+
+/** The request an accepted request_project_secret call returned, if any. */
+function requestedSecret(value: unknown, failed: boolean | undefined) {
+	const output = value as {
+		requested?: unknown;
+		name?: unknown;
+		kind?: unknown;
+		reason?: unknown;
+	} | null;
+	if (
+		failed ||
+		output?.requested !== true ||
+		typeof output.name !== "string" ||
+		!REQUESTABLE_SECRET_KINDS.includes(output.kind as RequestableSecretKind)
+	)
+		return null;
+	return {
+		name: output.name,
+		secretKind: output.kind as RequestableSecretKind,
+		reason:
+			typeof output.reason === "string"
+				? output.reason.slice(0, SECRET_REASON_LIMIT)
+				: "",
+	};
 }

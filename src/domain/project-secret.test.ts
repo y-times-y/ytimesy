@@ -9,9 +9,11 @@ import {
 	parseProjectSecretKind,
 	parseProjectSecretName,
 	parseProjectSecretValue,
+	projectSecretsInstructions,
 	REDACTED,
 	redactSecretValues,
 	SECRET_COMMIT_GUARD,
+	secretForms,
 } from "./project-secret";
 
 describe("project secrets", () => {
@@ -39,6 +41,53 @@ describe("project secrets", () => {
 		expect(() => parseProjectSecretValue("abc", "runtime")).toThrow(/at least/);
 		expect(parseProjectSecretValue("abc", "environment")).toBe("abc");
 		expect(() => parseProjectSecretKind("secret")).toThrow(/type/);
+	});
+
+	it("tells the agent secret names by kind, never values", () => {
+		expect(projectSecretsInstructions([])).toBe("");
+		const text = projectSecretsInstructions([
+			{ name: "STRIPE_KEY", kind: "runtime" },
+			{ name: "API_BASE", kind: "environment" },
+			{ name: "NPM_TOKEN", kind: "build" },
+		]);
+		expect(text).toContain(": STRIPE_KEY.");
+		expect(text).toContain("Environment variables: API_BASE.");
+		expect(text).toContain("not set for you): NPM_TOKEN.");
+		expect(text).toContain("screenshots are not redacted");
+	});
+
+	it("redacts common encodings of a runtime value", () => {
+		const secret = "sk_live_51HxQz9Ab/Cd+Ef";
+		const bytes = Buffer.from(secret);
+		const outputs = [
+			JSON.stringify({ token: secret }),
+			`https://api.test/?key=${encodeURIComponent(secret)}`,
+			bytes.toString("hex"),
+			bytes.toString("hex").toUpperCase(),
+			bytes.toString("base64"),
+			bytes.toString("base64url"),
+		];
+		// Inside a larger base64 blob at every byte alignment.
+		for (const prefix of [0, 1, 2, 3, 4, 5])
+			outputs.push(
+				Buffer.concat([
+					Buffer.alloc(prefix, 7),
+					bytes,
+					Buffer.from("trailing data"),
+				]).toString("base64"),
+			);
+		for (const output of outputs) {
+			const redacted = redactSecretValues(output, [secret]);
+			expect(redacted, output).toContain(REDACTED);
+		}
+	});
+
+	it("matches encodings only for longer values", () => {
+		expect(secretForms("abcdef1")).toEqual(["abcdef1"]);
+		expect(secretForms("abcdefgh").length).toBeGreaterThan(1);
+		expect(redactSecretValues("a normal sentence", ["abcdefgh"])).toBe(
+			"a normal sentence",
+		);
 	});
 
 	it("redacts runtime values anywhere in tool output", () => {
