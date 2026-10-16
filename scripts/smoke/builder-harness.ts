@@ -22,7 +22,6 @@ import {
 import { claimApiTurn } from "../../src/server/adapters/api-turns";
 import { withBackgroundJobDispatcher } from "../../src/server/adapters/background-job-dispatch";
 import { closeDatabase, database } from "../../src/server/adapters/database";
-import { CHEAP_BASE_SNAPSHOT } from "../../src/server/adapters/freestyle/product-vm";
 import { GUEST_INTERNET_FIREWALL } from "../../src/server/adapters/freestyle/proof-vm";
 import { waitUntilVmRunning } from "../../src/server/adapters/freestyle/wait-until-running";
 import { createFreestyleWorkspaceMachines } from "../../src/server/adapters/freestyle/workspace-machines";
@@ -30,6 +29,7 @@ import {
 	dispatchModelWorkflow,
 	modelWorkflowSigningSecret,
 } from "../../src/server/adapters/model-workflow-dispatch";
+import { workspaceBootSnapshotId } from "../../src/server/records/tools-snapshot-store";
 import {
 	apiModelCatalog,
 	sendApiWorkspaceTask,
@@ -431,7 +431,7 @@ export async function createHarnessRunner(options: {
 			const created = await client.vms.create({
 				// Usage admission resolves the VM owner from this session-derived slug.
 				slug: `ytimesy-ag-${session.id.replaceAll("-", "").slice(0, 16)}`,
-				snapshotId: CHEAP_BASE_SNAPSHOT,
+				snapshotId: await workspaceBootSnapshotId(),
 				firewall: GUEST_INTERNET_FIREWALL,
 				ttlSeconds: Math.ceil(turnTimeoutMs / 1000) + 600,
 				maxRunTotalSeconds: Math.ceil(turnTimeoutMs / 1000) + 300,

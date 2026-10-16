@@ -8,12 +8,15 @@ import {
 import type { PoolClient } from "pg";
 import { MachineUsageLimitReached } from "#/domain/api-turn-failure";
 import { effectiveMachineResources } from "#/domain/machine-size";
+import { toolsSnapshotIdFromEnv } from "#/domain/workspace-boot-snapshot";
 import { database } from "../database";
 import {
 	reserveInfrastructureUsage,
 	settleInfrastructureUsage,
 	userInfrastructureUsage,
 } from "../infrastructure-usage";
+import { loadToolsSnapshotSetting } from "../product-settings";
+import { CHEAP_BASE_RESOURCES, CHEAP_BASE_SNAPSHOT } from "./product-vm";
 import {
 	touchWorkspaceRetention,
 	workspaceRetentionEnabled,
@@ -387,6 +390,19 @@ export function forgetRecentAdmission(vmId?: string) {
 	else recentAdmissions.delete(vmId);
 }
 
+/**
+ * The base image, and the shared tools image built on it by
+ * scripts/build-tools-snapshot.ts (which deletes its builder VM, so there is
+ * no source VM to read resources from), boot at the base size.
+ */
+async function isBaseSizedImage(snapshotId: string) {
+	if (snapshotId === CHEAP_BASE_SNAPSHOT) return true;
+	const tools =
+		toolsSnapshotIdFromEnv(process.env) ??
+		(await loadToolsSnapshotSetting().catch(() => undefined));
+	return snapshotId === tools;
+}
+
 export async function admitVmCreate(
 	client: Freestyle,
 	slug: string,
@@ -396,6 +412,7 @@ export async function admitVmCreate(
 	requestedResources?: VmResources,
 ) {
 	if (!infrastructureAdmissionEnabled()) return create();
+	const bootsBaseResources = await isBaseSizedImage(snapshotId);
 	const cap = await lockedVm(slug, async (connection) => {
 		const prior = await connection.query<Admission>(
 			"select * from infrastructure_vm_admission where slug=$1",
@@ -418,8 +435,7 @@ export async function admitVmCreate(
 			}
 		}
 		let resources: VmResources;
-		if (snapshotId === "freestyle/ubuntu-sm")
-			resources = { cpu: 2, memory: 4096, storage: 16384 };
+		if (bootsBaseResources) resources = { ...CHEAP_BASE_RESOURCES };
 		else {
 			const snapshot = await client.vms.snapshots.get(snapshotId);
 			if (!snapshot.sourceVmId)

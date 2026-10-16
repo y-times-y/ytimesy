@@ -110,6 +110,27 @@ it("reserves before create, reuses uncertain admission and rejects ownerless VMs
 	expect(create).toHaveBeenCalledTimes(1);
 });
 
+it("sizes the shared tools image as the base image, with no source VM to read", async () => {
+	enableVmAllowance();
+	vi.stubEnv("YTIMESY_TOOLS_SNAPSHOT_ID", "sh-tools");
+	const client = {
+		vms: {
+			snapshots: {
+				get: async () => {
+					throw new Error("source VM lookup");
+				},
+			},
+		},
+	} as unknown as Freestyle;
+	const create = vi.fn(async (_cap?: number) => "vm");
+	await admitVmCreate(client, "ytimesy-ws-one", "sh-tools", create);
+	expect(create).toHaveBeenCalledWith(300);
+	expect((await userInfrastructureUsage("alice")).reservedMicroUsd).toBe(13224);
+	await expect(
+		admitVmCreate(client, "ytimesy-ws-two", "sh-other", create),
+	).rejects.toThrow("source VM lookup");
+});
+
 it("reserves the larger requested copy shape before provisioning", async () => {
 	enableVmAllowance();
 	await admitVmCreate(
