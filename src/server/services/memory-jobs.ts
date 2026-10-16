@@ -1,6 +1,7 @@
 import { type ModelMessage, type ToolSet, tool } from "ai";
 import { z } from "zod";
 import type { ApiTokenUsage } from "#/domain/api-token-usage";
+import { type SavedMemoryLine, savedMemoryLines } from "#/domain/memory-marker";
 import {
 	appendMemoryEntry,
 	chatIdFromSource,
@@ -38,6 +39,7 @@ import {
 	memoryChatsSince,
 	memorySettings,
 	recordMemoryModelUsage,
+	recordMemorySaved,
 } from "../adapters/memory-settings";
 import { runApiAgent } from "./api-agent-runtime";
 import { runCodexSubscriptionAgent } from "./codex-subscription-agent";
@@ -65,6 +67,13 @@ export type MemoryJobDeps = {
 	reserve(userId: string, tokens: number): Promise<void>;
 	recordUsage(row: Parameters<typeof recordMemoryModelUsage>[0]): Promise<void>;
 	markDreamed(userId: string, through: Date): Promise<void>;
+	/** Shows the save hook's lines under the turn they came from. */
+	recordSaved(
+		userId: string,
+		sessionId: string,
+		userMessageId: string,
+		lines: readonly SavedMemoryLine[],
+	): Promise<boolean>;
 	appUrl: string;
 	today(): string;
 };
@@ -86,6 +95,7 @@ export function memoryJobDeps(): MemoryJobDeps {
 		},
 		recordUsage: recordMemoryModelUsage,
 		markDreamed: markMemoryDreamed,
+		recordSaved: recordMemorySaved,
 		appUrl: process.env.APP_URL ?? "http://localhost:3000",
 		today: () => new Date().toISOString().slice(0, 10),
 	};
@@ -231,7 +241,23 @@ export async function runMemorySave(
 			changes,
 			`Remember from chat ${sessionId.slice(0, 8)} (save hook)`,
 		);
-		if (outcome.ok) return "saved";
+		if (outcome.ok) {
+			const after = { ...snapshot.files };
+			for (const change of changes)
+				if (change.content === null) delete after[change.path];
+				else after[change.path] = change.content;
+			await deps
+				.recordSaved(
+					userId,
+					sessionId,
+					message.id,
+					savedMemoryLines(snapshot.files, after, sessionId),
+				)
+				.catch(() =>
+					console.warn("Saved memory marker could not be recorded."),
+				);
+			return "saved";
+		}
 		snapshot = await repo.snapshot();
 	}
 	return "conflict";

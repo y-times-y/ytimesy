@@ -107,6 +107,7 @@ export function groupTimelineRows(
 				item.kind !== "error" &&
 				item.kind !== "planProposal" &&
 				item.kind !== "secretRequest" &&
+				item.kind !== "memorySave" &&
 				item.kind !== "modelSwitch",
 		);
 		if (activity[0])
@@ -135,6 +136,12 @@ export function groupTimelineRows(
 		rows.push(
 			...visible
 				.filter((item) => item.kind === "fileChange" || item.kind === "error")
+				.map((item) => ({ kind: "item" as const, item })),
+		);
+		// What the turn saved to memory closes it, under its answer.
+		rows.push(
+			...visible
+				.filter((item) => item.kind === "memorySave")
 				.map((item) => ({ kind: "item" as const, item })),
 		);
 	}

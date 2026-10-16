@@ -16,6 +16,7 @@ import {
 } from "#/server/adapters/memory-settings";
 import { requireUser } from "#/server/auth/auth";
 import { requireSameOrigin } from "#/server/http";
+import { removeMemoryLine } from "#/server/services/memory-undo";
 
 export type MemoryOverview = {
 	available: boolean;
@@ -101,3 +102,23 @@ export const clearMemoryFn = createServerFn({ method: "POST" }).handler(
 		await markMemoryDreamed(user.id, new Date());
 	},
 );
+
+/**
+ * Undo for "Saved to memory": removes that entry in one commit. A concurrent
+ * edit to the same file is re-read once; an entry already gone is not an error.
+ */
+export const undoMemoryLineFn = createServerFn({ method: "POST" })
+	.validator((data: unknown) =>
+		z
+			.object({ path: z.string(), text: z.string().min(1).max(2000) })
+			.parse(data),
+	)
+	.handler(async ({ data }) => {
+		requireSameOrigin(getRequest());
+		const user = await requireUser(getRequest().headers);
+		const path = memoryPath(data.path);
+		if (!path) throw new Error("Invalid memory path.");
+		const { repo } = await userRepo(user.id);
+		if (!repo) throw new Error("Memory is unavailable.");
+		return removeMemoryLine(repo, { path, text: data.text });
+	});

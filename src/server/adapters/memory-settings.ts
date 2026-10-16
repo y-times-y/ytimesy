@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ApiTokenUsage } from "#/domain/api-token-usage";
+import { type SavedMemoryLine, withSavedMemory } from "#/domain/memory-marker";
 import { MEMORY_MODES, type MemoryMode } from "#/domain/memory-repo";
 import { chosenRoute, type ModelRoute } from "#/domain/model-failover";
 import {
@@ -255,4 +256,62 @@ export async function memoryProjectName(userId: string, projectId: string) {
 			)
 		).rows[0]?.full_name ?? null
 	);
+}
+
+/** Titles of the user's own chats, for "from chat <title>" under recalled memory. */
+export async function memoryChatTitles(
+	userId: string,
+	chatIds: readonly string[],
+): Promise<Map<string, string>> {
+	if (!chatIds.length) return new Map();
+	const rows = (
+		await database().query<{ id: string; title: string }>(
+			"select id::text,title from agent_session where user_id=$1 and id::text=any($2::text[])",
+			[userId, [...new Set(chatIds)]],
+		)
+	).rows;
+	return new Map(rows.map((row) => [row.id, row.title]));
+}
+
+/**
+ * Adds the save hook's lines to the chat's transcript after its turn. A turn
+ * that started meanwhile owns the transcript, so the marker is skipped then
+ * (the memory itself is saved either way). Compare-and-set on the items.
+ */
+export async function recordMemorySaved(
+	userId: string,
+	sessionId: string,
+	userMessageId: string,
+	lines: readonly SavedMemoryLine[],
+): Promise<boolean> {
+	for (let attempt = 0; attempt < 3; attempt++) {
+		const row = (
+			await database().query<{ items: unknown; turn_status: string | null }>(
+				"select items,turn_status from agent_session where id=$1 and user_id=$2",
+				[sessionId, userId],
+			)
+		).rows[0];
+		if (!row || row.turn_status === "running" || !Array.isArray(row.items))
+			return false;
+		// The stored items as they are: rewriting them normalized would change the transcript.
+		const items = row.items as SessionItem[];
+		const next = withSavedMemory(
+			items,
+			userMessageId,
+			`${userMessageId}:memory-saved`,
+			lines,
+		);
+		if (
+			next.length === items.length &&
+			next.every((item, i) => item === items[i])
+		)
+			return true;
+		const result = await database().query(
+			`update agent_session set items=$3::jsonb,updated_at=now()
+			 where id=$1 and user_id=$2 and turn_status is distinct from 'running' and items=$4::jsonb`,
+			[sessionId, userId, JSON.stringify(next), JSON.stringify(row.items)],
+		);
+		if (result.rowCount) return true;
+	}
+	return false;
 }

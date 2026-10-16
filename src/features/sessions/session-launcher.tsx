@@ -66,6 +66,7 @@ import { attachmentLimitError, encodeAttachments } from "./attachment-encoding";
 import { ContextUsage } from "./context-usage";
 import { ConversationRecovery } from "./conversation-recovery";
 import { HarnessLogin } from "./harness-login";
+import type { MemoryMarkerActions } from "./memory-markers";
 import {
 	type ComposerSpeed,
 	composerListedModels,
@@ -109,7 +110,10 @@ export function SessionLauncher({
 	listedTitle,
 	projectPickerOpen,
 	onProjectPickerOpenChange,
+	memoryActions,
 }: {
+	/** Memory lines recalled or saved by this chat's turns: open, undo, check. */
+	memoryActions?: MemoryMarkerActions;
 	session: PublicCodexSession;
 	busy: boolean;
 	harnessId: AgentProviderId;
@@ -604,6 +608,7 @@ export function SessionLauncher({
 						: undefined
 				}
 				tasks={childTasks}
+				memoryActions={memoryActions}
 				items={items}
 				turnStatus={turnStatus}
 				fill={followUpLayout}

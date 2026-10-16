@@ -1928,3 +1928,92 @@ code.session-tool-target {
 .secret-request-note {
 	flex-basis: 100%;
 }
+/* Cross-chat memory markers: muted, plain text, collapsed by default. */
+.memory-marker {
+	margin: 4px 0 0;
+	min-width: 0;
+	color: rgba(255, 255, 255, 0.45);
+	font-size: 12px;
+	line-height: 18px;
+}
+.session-message[data-role="user"] .memory-marker {
+	margin-top: 6px;
+}
+.session-timeline li[data-kind="memorySave"] {
+	margin: 2px 0 14px;
+}
+.memory-marker-title {
+	min-width: 0;
+	overflow-wrap: anywhere;
+	color: rgba(255, 255, 255, 0.45);
+}
+.memory-marker-summary {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	min-height: 22px;
+	max-width: 100%;
+	cursor: pointer;
+	list-style: none;
+}
+.memory-marker-summary::-webkit-details-marker {
+	display: none;
+}
+.memory-marker-summary:focus-visible {
+	outline: 1px solid rgba(255, 255, 255, 0.4);
+	outline-offset: 2px;
+	border-radius: 3px;
+}
+.memory-marker-summary:hover .memory-marker-title {
+	color: rgba(255, 255, 255, 0.7);
+}
+.memory-marker-single {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	column-gap: 10px;
+	margin: 0;
+	min-height: 22px;
+}
+.memory-marker-lines {
+	display: grid;
+	gap: 8px;
+	margin: 4px 0 6px 2px;
+	padding: 0 0 0 12px;
+	border-left: 1px solid rgba(255, 255, 255, 0.07);
+	list-style: none;
+}
+.memory-marker-entry {
+	display: grid;
+	gap: 1px;
+	min-width: 0;
+}
+.memory-marker-text {
+	color: rgba(255, 255, 255, 0.72);
+	overflow-wrap: anywhere;
+}
+.memory-marker-meta {
+	color: rgba(255, 255, 255, 0.4);
+	overflow-wrap: anywhere;
+}
+.memory-marker-link {
+	display: inline;
+	margin: 0;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	color: rgba(255, 255, 255, 0.6);
+	font: inherit;
+	text-decoration: none;
+	cursor: pointer;
+}
+.memory-marker-link:hover,
+.memory-marker-link:focus-visible {
+	color: rgba(255, 255, 255, 0.85);
+	text-decoration: underline;
+}
+.memory-marker-link:disabled {
+	cursor: default;
+	color: rgba(255, 255, 255, 0.4);
+	text-decoration: none;
+}

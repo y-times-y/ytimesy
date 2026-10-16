@@ -55,6 +55,7 @@ function harness(options: {
 	const repo: MemoryRepo = {
 		name: "memory-u1",
 		snapshot: async () => ({ head: "h1", files: { ...(options.files ?? {}) } }),
+		snapshotAt: async () => ({ head: "h1", files: {} }),
 		commit: async (_base, changes, message) => {
 			commits.push({ changes, message });
 			return { ok: true, hash: "h2" };
@@ -69,6 +70,7 @@ function harness(options: {
 		dreamed: [] as Date[],
 		agent: [] as ModelAgentInput[],
 		routes: [] as unknown[],
+		saved: [] as unknown[][],
 	};
 	const deps: Deps = {
 		settings: async () => ({
@@ -124,6 +126,10 @@ function harness(options: {
 		},
 		markDreamed: async (_user, through) => {
 			calls.dreamed.push(through);
+		},
+		recordSaved: async (...args) => {
+			calls.saved.push(args);
+			return true;
 		},
 		appUrl: "https://ytimesy.test",
 		today: () => "2026-10-15",
@@ -347,6 +353,15 @@ describe("save hook", () => {
 			},
 			{ path: "MEMORY.md", content: "# Memory\n\n## Index\n- [[tooling]]\n" },
 		]);
+		// The chat shows the saved line under the turn whose message it came from.
+		expect(calls.saved).toEqual([
+			[
+				"u1",
+				"11111111-1111-4111-8111-111111111111",
+				"1",
+				[{ path: "tooling.md", text: "Uses pnpm, never npm" }],
+			],
+		]);
 	});
 
 	it("runs after every turn in full mode, and never outside it", async () => {
@@ -359,6 +374,7 @@ describe("save hook", () => {
 			answer: '{"entries":[]}',
 		});
 		expect(await runMemorySave("u1", "c9", plain.deps)).toBe("nothing-new");
+		expect(plain.calls.saved).toEqual([]);
 		expect(plain.calls.agent).toHaveLength(1);
 		expect(plain.calls.usage).toEqual([
 			expect.objectContaining({ kind: "save" }),

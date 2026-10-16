@@ -56,6 +56,8 @@ export type MemoryCommitOutcome =
 export type MemoryRepo = {
 	readonly name: string;
 	snapshot(): Promise<MemorySnapshot>;
+	/** The files at an earlier commit of this repo (empty for a commit it no longer has). */
+	snapshotAt(head: string): Promise<MemorySnapshot>;
 	/** One commit turning `base` into base + `changes`, pushed; a conflicting concurrent edit is reported, not merged. */
 	commit(
 		base: MemorySnapshot,
@@ -173,36 +175,51 @@ export function artifactsMemoryRepo(
 		return { ...created, token: bareToken(created.token) };
 	}
 
+	async function filesAt(repo: ArtifactsRepoHandle, commit: ArtifactsCommit) {
+		const key = `${name}:${commit.hash}`;
+		const cached = snapshots.get(key);
+		if (cached) return cached;
+		const files: MemoryFiles = {};
+		const entries = Object.entries(await blobs(repo, commit.treeHash));
+		for (let start = 0; start < entries.length; start += READ_CONCURRENCY)
+			await Promise.all(
+				entries
+					.slice(start, start + READ_CONCURRENCY)
+					.map(async ([path, hash]) => {
+						const text = await read(repo, hash);
+						if (text !== null) files[path] = text;
+					}),
+			);
+		if (snapshots.size > 64)
+			snapshots.delete(snapshots.keys().next().value as string);
+		snapshots.set(key, files);
+		return files;
+	}
+
 	async function snapshot(): Promise<MemorySnapshot> {
 		return (
 			(await withRepo(async (repo) => {
 				const head = await headCommit(repo);
 				if (!head) return { head: null, files: {} };
-				const key = `${name}:${head.hash}`;
-				const cached = snapshots.get(key);
-				if (cached) return { head: head.hash, files: cached };
-				const files: MemoryFiles = {};
-				const entries = Object.entries(await blobs(repo, head.treeHash));
-				for (let start = 0; start < entries.length; start += READ_CONCURRENCY)
-					await Promise.all(
-						entries
-							.slice(start, start + READ_CONCURRENCY)
-							.map(async ([path, hash]) => {
-								const text = await read(repo, hash);
-								if (text !== null) files[path] = text;
-							}),
-					);
-				if (snapshots.size > 64)
-					snapshots.delete(snapshots.keys().next().value as string);
-				snapshots.set(key, files);
-				return { head: head.hash, files };
+				return { head: head.hash, files: await filesAt(repo, head) };
 			})) ?? { head: null, files: {} }
+		);
+	}
+
+	async function snapshotAt(hash: string): Promise<MemorySnapshot> {
+		return (
+			(await withRepo(async (repo) => {
+				const commit = await repo.readCommit(hash).catch(() => null);
+				if (!commit) return { head: hash, files: {} };
+				return { head: hash, files: await filesAt(repo, commit) };
+			})) ?? { head: hash, files: {} }
 		);
 	}
 
 	return {
 		name,
 		snapshot,
+		snapshotAt,
 		credentials,
 		async commit(base, changes, message) {
 			const effective = changes.filter(

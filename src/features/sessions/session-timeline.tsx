@@ -55,6 +55,12 @@ import { FileChangeCounts } from "./file-change-counts";
 import { FileMentionButton } from "./file-mention";
 import { LiveCollapsible } from "./live-collapsible";
 import {
+	type MemoryMarkerActions,
+	MemoryMarkerProvider,
+	MemoryRecallNote,
+	MemorySaveNote,
+} from "./memory-markers";
+import {
 	answeredAfter,
 	type FailoverActions,
 	ModelSwitchCard,
@@ -80,7 +86,10 @@ export function SessionTimeline({
 	planActions,
 	secretActions,
 	failoverActions,
+	memoryActions,
 }: {
+	/** Opens, undoes and checks the memory lines a turn recalled or saved. */
+	memoryActions?: MemoryMarkerActions;
 	/** Save or skip a secret the agent asked for; omitted where nobody can answer. */
 	secretActions?: SecretRequestActions;
 	/** Approve or revise the plan that waits for the user; omitted where nobody can answer. */
@@ -132,104 +141,110 @@ export function SessionTimeline({
 		return null;
 
 	return (
-		<ol
-			ref={listRef}
-			className="session-timeline"
-			aria-label="Session"
-			onScroll={rememberScrollPin}
-		>
-			{rows.map((row) => {
-				const rowId = row.kind === "item" ? row.item.id : row.id;
-				return (
-					<Fragment
-						key={row.kind === "item" ? row.item.id : `${row.kind}:${row.id}`}
-					>
-						<li data-kind={row.kind === "item" ? row.item.kind : row.kind}>
-							{row.kind === "item" && row.item.kind === "planProposal" ? (
-								<PlanProposalCard
-									item={row.item}
-									outcome={planOutcome(items, row.item.id)}
-									actions={
-										row.item.id === pendingPlanId(items)
-											? planActions
-											: undefined
-									}
-									onOpenFile={onOpenFile}
-								/>
-							) : row.kind === "item" && row.item.kind === "secretRequest" ? (
-								<SecretRequestCard
-									item={row.item}
-									outcome={secretRequestOutcome(items, row.item.id)}
-									actions={secretActions}
-								/>
-							) : row.kind === "item" &&
-								row.item.kind === "modelSwitch" &&
-								row.item.state === "awaitingApproval" ? (
-								<ModelSwitchCard
-									item={row.item}
-									answered={answeredAfter(items, row.item.id)}
-									actions={failoverActions}
-								/>
-							) : (
-								<TimelineRowView
-									row={row}
-									collapseInstructions={collapseInstructions}
-									turnRunning={
-										turnStatus === "running" && currentTurnIds.has(rowId)
-									}
-									isLastItem={
-										(row.kind === "item"
-											? row.item.id
-											: row.items.at(-1)?.id) === visible.at(-1)?.id
-									}
-									fileChanges={fileChanges}
-									onOpenFile={onOpenFile}
-								/>
-							)}
-							{row.kind === "item" && row.item.kind === "userMessage"
-								? recoveryControls?.(row.item.id)
-								: null}
-						</li>
-						{childTasks
-							.filter((task) => {
-								const anchor = childTaskAnchorId(task, visible);
-								return row.kind === "item"
-									? anchor === row.item.id
-									: row.items.some((item) => item.id === anchor);
-							})
-							.map((task) => (
-								<li key={`child:${task.id}`} data-kind="child-task">
-									<ChildTaskCard
-										task={task}
-										tasks={tasks}
+		<MemoryMarkerProvider actions={memoryActions}>
+			<ol
+				ref={listRef}
+				className="session-timeline"
+				aria-label="Session"
+				onScroll={rememberScrollPin}
+			>
+				{rows.map((row) => {
+					const rowId = row.kind === "item" ? row.item.id : row.id;
+					return (
+						<Fragment
+							key={row.kind === "item" ? row.item.id : `${row.kind}:${row.id}`}
+						>
+							<li data-kind={row.kind === "item" ? row.item.kind : row.kind}>
+								{row.kind === "item" && row.item.kind === "planProposal" ? (
+									<PlanProposalCard
+										item={row.item}
+										outcome={planOutcome(items, row.item.id)}
+										actions={
+											row.item.id === pendingPlanId(items)
+												? planActions
+												: undefined
+										}
 										onOpenFile={onOpenFile}
 									/>
-								</li>
-							))}
-					</Fragment>
-				);
-			})}
-			{childTasks
-				.filter((task) => !childTaskAnchorId(task, visible))
-				.map((task) => (
-					<li key={`child:${task.id}`} data-kind="child-task">
-						<ChildTaskCard task={task} tasks={tasks} onOpenFile={onOpenFile} />
+								) : row.kind === "item" && row.item.kind === "secretRequest" ? (
+									<SecretRequestCard
+										item={row.item}
+										outcome={secretRequestOutcome(items, row.item.id)}
+										actions={secretActions}
+									/>
+								) : row.kind === "item" &&
+									row.item.kind === "modelSwitch" &&
+									row.item.state === "awaitingApproval" ? (
+									<ModelSwitchCard
+										item={row.item}
+										answered={answeredAfter(items, row.item.id)}
+										actions={failoverActions}
+									/>
+								) : (
+									<TimelineRowView
+										row={row}
+										collapseInstructions={collapseInstructions}
+										turnRunning={
+											turnStatus === "running" && currentTurnIds.has(rowId)
+										}
+										isLastItem={
+											(row.kind === "item"
+												? row.item.id
+												: row.items.at(-1)?.id) === visible.at(-1)?.id
+										}
+										fileChanges={fileChanges}
+										onOpenFile={onOpenFile}
+									/>
+								)}
+								{row.kind === "item" && row.item.kind === "userMessage"
+									? recoveryControls?.(row.item.id)
+									: null}
+							</li>
+							{childTasks
+								.filter((task) => {
+									const anchor = childTaskAnchorId(task, visible);
+									return row.kind === "item"
+										? anchor === row.item.id
+										: row.items.some((item) => item.id === anchor);
+								})
+								.map((task) => (
+									<li key={`child:${task.id}`} data-kind="child-task">
+										<ChildTaskCard
+											task={task}
+											tasks={tasks}
+											onOpenFile={onOpenFile}
+										/>
+									</li>
+								))}
+						</Fragment>
+					);
+				})}
+				{childTasks
+					.filter((task) => !childTaskAnchorId(task, visible))
+					.map((task) => (
+						<li key={`child:${task.id}`} data-kind="child-task">
+							<ChildTaskCard
+								task={task}
+								tasks={tasks}
+								onOpenFile={onOpenFile}
+							/>
+						</li>
+					))}
+				{showTurnWorking(items, turnStatus) ? (
+					<li data-kind="working">
+						<p className="session-working session-shimmer">Thinking</p>
 					</li>
-				))}
-			{showTurnWorking(items, turnStatus) ? (
-				<li data-kind="working">
-					<p className="session-working session-shimmer">Thinking</p>
-				</li>
-			) : null}
-			{turnStatus !== "running" &&
-			childTasks.some((task) => task.turnStatus === "running") ? (
-				<li data-kind="waiting-for-children">
-					<p className="session-working" role="status">
-						Waiting for child agents
-					</p>
-				</li>
-			) : null}
-		</ol>
+				) : null}
+				{turnStatus !== "running" &&
+				childTasks.some((task) => task.turnStatus === "running") ? (
+					<li data-kind="waiting-for-children">
+						<p className="session-working" role="status">
+							Waiting for child agents
+						</p>
+					</li>
+				) : null}
+			</ol>
+		</MemoryMarkerProvider>
 	);
 }
 
@@ -458,8 +473,11 @@ function SessionItemView({
 							))}
 						</ul>
 					) : null}
+					{item.memory ? <MemoryRecallNote recall={item.memory} /> : null}
 				</div>
 			);
+		case "memorySave":
+			return <MemorySaveNote item={item} />;
 		case "agentMessage":
 			return (
 				<div

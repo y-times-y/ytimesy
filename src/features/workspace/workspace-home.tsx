@@ -19,6 +19,7 @@ import {
 	inspectorSplitRatio,
 	workspaceNeedsSinglePane,
 } from "#/domain/inspector-split";
+import { memoryHoldsLine } from "#/domain/memory-marker";
 import {
 	base64ByteLength,
 	type IncomingAttachment,
@@ -102,6 +103,7 @@ import {
 	mcpSignInResult,
 	takeMcpSignInReturn,
 } from "../sessions/mcp-sign-in-return";
+import type { MemoryMarkerActions } from "../sessions/memory-markers";
 import {
 	type ComposerSpeed,
 	preferredSessionModelId,
@@ -114,6 +116,7 @@ import {
 import { sessionReconciliationQuery } from "../sessions/session-reconciliation";
 import { getWorkspaceDesktop, startWorkspaceDesktopFn } from "./desktop.fn";
 import { readWorkspaceChangesFn } from "./explorer.fn";
+import { readMemoryFn, undoMemoryLineFn } from "./memory.fn";
 import { ProjectSettings } from "./project-settings";
 import { ProjectSidebar } from "./project-sidebar";
 import { useCompactLayout } from "./use-compact-layout";
@@ -148,6 +151,9 @@ type PendingSend = {
 	/** Tells the composer whether the message went out; if not it restores the draft. */
 	readonly settle: (result: ComposerSendResult) => void;
 };
+
+/** When to read a completed chat again for the save hook's marker. */
+const MEMORY_SAVE_RECHECK_MS = [20_000, 45_000];
 
 export function WorkspaceHome({
 	initialSession,
@@ -233,6 +239,8 @@ export function WorkspaceHome({
 	const [inspectorOpen, setInspectorOpen] = useState(false);
 	const [inspectorView, setInspectorView] = useState<InspectorView>("overview");
 	const [selectedFilePath, setSelectedFilePath] = useState<string>();
+	/** The memory file a chat's memory marker asked the Memory tab to show. */
+	const [memoryFocus, setMemoryFocus] = useState<{ path: string }>();
 	const [customSplit, setCustomSplit] = useState<number | null>(null);
 	const [busyChatIds, setBusyChatIds] = useState<string[]>([]);
 	const [harnessId, setHarnessId] = useState<AgentProviderId>(
@@ -683,6 +691,62 @@ export function WorkspaceHome({
 		refetchInterval: pollSession ? RUNNING_TURN_POLL_MS : false,
 		refetchIntervalInBackground: true,
 	});
+	// The save hook commits shortly after a turn completes and records its
+	// marker on the chat; read the chat again so it shows without a reload.
+	const memoryInChat = session.items.some(
+		(item) => item.kind === "userMessage" && item.memory,
+	);
+	const lastTurnStatus = useRef(session.turnStatus);
+	useEffect(() => {
+		const was = lastTurnStatus.current;
+		lastTurnStatus.current = session.turnStatus;
+		if (
+			!memoryInChat ||
+			!isTurnRunning(was) ||
+			session.turnStatus !== "completed"
+		)
+			return;
+		const timers = MEMORY_SAVE_RECHECK_MS.map((delay) =>
+			window.setTimeout(() => void sessionRead.refetch(), delay),
+		);
+		return () => {
+			for (const timer of timers) window.clearTimeout(timer);
+		};
+	}, [session.turnStatus, memoryInChat, sessionRead.refetch]);
+	const readMemory = useServerFn(readMemoryFn);
+	const undoMemoryLine = useServerFn(undoMemoryLineFn);
+	const savedMemoryShown = session.items.some(
+		(item) => item.kind === "memorySave",
+	);
+	const memoryFiles = useQuery({
+		queryKey: ["memory"],
+		queryFn: () => readMemory(),
+		enabled: savedMemoryShown,
+	});
+	const memoryActions: MemoryMarkerActions = {
+		onOpenMemory: (path) => {
+			setMemoryFocus({ path });
+			openInspector("memory");
+		},
+		onOpenChat: (chatId) => {
+			if (!sidebarChats.some((chat) => chat.id === chatId)) return false;
+			openChat(chatId);
+			return true;
+		},
+		holds: (line) => {
+			const files = memoryFiles.data?.files;
+			if (!files) return undefined;
+			return memoryHoldsLine(
+				Object.fromEntries(files.map((file) => [file.path, file.content])),
+				line,
+			);
+		},
+		onUndo: async (line) => {
+			const result = await undoMemoryLine({ data: line });
+			await queryClient.invalidateQueries({ queryKey: ["memory"] });
+			return result;
+		},
+	};
 	useEffect(() => {
 		if (sessionRead.data)
 			applySessionViewRef.current(
@@ -1464,6 +1528,7 @@ export function WorkspaceHome({
 									await agentTasks.refetch();
 								}}
 								childTasks={agentTasks.data ?? []}
+								memoryActions={memoryActions}
 								key={session.agentSessionId ?? "new"}
 								session={session}
 								busy={composerBusy}
@@ -1624,6 +1689,7 @@ export function WorkspaceHome({
 							desktopBusy={desktopBusy}
 							projectId={selectedProject?.id}
 							sessionId={activeSessionId}
+							memoryFocus={memoryFocus}
 							onStartDesktop={requestDesktop}
 							onOpenChat={(chatId) => {
 								if (!sidebarChats.some((chat) => chat.id === chatId))

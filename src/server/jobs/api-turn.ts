@@ -25,6 +25,7 @@ import {
 } from "#/domain/conversation-turn-control";
 import { SessionItemId, WorkspaceId } from "#/domain/ids";
 import { prepareInterruptedStep } from "#/domain/interrupted-step";
+import { withMemoryRecall } from "#/domain/memory-marker";
 import { officialProviderEndpoint } from "#/domain/model-connection";
 import {
 	type FailoverReason,
@@ -744,10 +745,17 @@ async function runApiTurnAttempt(
 		// Memory rides on the current request as extra parts, so earlier
 		// messages and the system prompt stay byte-stable for prompt caching.
 		const memory = await memoryLoading;
-		if (memory && firstStep)
-			messages = await timed("turn:memoryAttach", () =>
+		if (memory && firstStep) {
+			const attached = await timed("turn:memoryAttach", () =>
 				memory.attach(messages, items, workspace),
 			);
+			messages = attached.messages;
+			// The chat shows what was recalled; the model sees only the parts above.
+			if (attached.recall) {
+				items = withMemoryRecall(items, attached.recall);
+				progress.offer(items);
+			}
+		}
 		const projectKnowledge = shellBuilder
 			? null
 			: await loadCloudProjectKnowledge(
@@ -1107,6 +1115,11 @@ async function runApiTurnAttempt(
 			)
 		)
 			throw new IncompleteAgentTurn("missing-final-result");
+		// What the agent committed to ~/memory this turn, shown after its answer.
+		if (memory)
+			items = await timed("turn:memorySaved", () =>
+				memory.recordSaved(items, turn.id),
+			);
 		failureStage = "commit";
 		// Fence even commands whose acknowledgement was lost before it reached the durable cards.
 		// Unlike best-effort cancellation on failure, publication requires a confirmed stop.
