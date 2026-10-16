@@ -72,7 +72,10 @@ export function WorkspaceInspector({
 	overview,
 	pullRequest,
 	onOpenChat,
+	memoryFocus,
 }: {
+	/** A memory file to show when the Memory tab opens from a chat marker. */
+	memoryFocus?: { path: string };
 	collapsed: boolean;
 	activeView: InspectorView;
 	onActiveViewChange: (view: InspectorView) => void;
@@ -199,6 +202,7 @@ export function WorkspaceInspector({
 			) : activeView === "memory" ? (
 				<MemoryInspector
 					active={!collapsed && activeView === "memory"}
+					focus={memoryFocus}
 					onOpenChat={onOpenChat ?? (() => false)}
 				/>
 			) : activeView === "desktop" ? null : activeView === "terminal" ? (

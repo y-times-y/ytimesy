@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { History, Network, Rows3, Trash2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { memoryGraph } from "#/domain/memory-graph";
 import {
 	chatIdFromSource,
@@ -23,9 +23,12 @@ const HEIGHT = 420;
 /** The user's memory repo: a read-only graph of files and links, each file's entries and history. */
 export function MemoryInspector({
 	active,
+	focus,
 	onOpenChat,
 }: {
 	active: boolean;
+	/** A file a chat's memory marker opened; each new request selects it again. */
+	focus?: { path: string };
 	onOpenChat: (chatId: string) => boolean;
 }) {
 	const readMemory = useServerFn(readMemoryFn);
@@ -38,7 +41,10 @@ export function MemoryInspector({
 		enabled: active,
 	});
 	const [view, setView] = useState<"graph" | "files">("graph");
-	const [selected, setSelected] = useState<string>(MEMORY_ENTRY);
+	const [selected, setSelected] = useState<string>(focus?.path ?? MEMORY_ENTRY);
+	useEffect(() => {
+		if (focus) setSelected(focus.path);
+	}, [focus]);
 	const [confirmClear, setConfirmClear] = useState(false);
 	const toggle = useMutation({
 		mutationFn: (mode: "off" | "full") => saveMode({ data: { mode } }),

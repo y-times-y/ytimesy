@@ -34,6 +34,7 @@ function fakeRepo(files: Record<string, string>): MemoryRepo {
 	return {
 		name: "memory-u1",
 		snapshot: async () => snapshot,
+		snapshotAt: async () => snapshot,
 		commit: async () => ({ ok: true, hash: "def" }),
 		credentials: async () => ({ remote: "https://git/memory.git", token: "t" }),
 		history: async () => [],
@@ -89,7 +90,12 @@ describe("MEMORY.md at chat start", () => {
 		});
 		const first: ModelMessage[] = [{ role: "user", content: "Fix the build" }];
 		const items = [user("a", "Fix the build")];
-		const attached = await memory.attach(first, items, workspace);
+		const { messages: attached, recall } = await memory.attach(
+			first,
+			items,
+			workspace,
+		);
+		expect(recall).toEqual({ head: "abc", index: true, lines: [] });
 		expect(attached).toHaveLength(1);
 		expect(attached[0].content).toEqual([
 			{ type: "text", text: "Fix the build" },
@@ -101,7 +107,10 @@ describe("MEMORY.md at chat start", () => {
 			},
 		]);
 		// A resumed step must not attach it again.
-		expect(await memory.attach(attached, items, workspace)).toBe(attached);
+		expect(await memory.attach(attached, items, workspace)).toEqual({
+			messages: attached,
+			recall: null,
+		});
 
 		// The next turn of the same chat: earlier messages stay byte-identical, no re-insert.
 		const history: ModelMessage[] = [
@@ -109,7 +118,7 @@ describe("MEMORY.md at chat start", () => {
 			{ role: "assistant", content: "Done." },
 			{ role: "user", content: "Now add tests" },
 		];
-		const next = await memory.attach(
+		const { messages: next } = await memory.attach(
 			history,
 			[...items, user("b", "Now add tests")],
 			workspace,
@@ -127,9 +136,14 @@ describe("MEMORY.md at chat start", () => {
 			const messages: ModelMessage[] = [
 				{ role: "user", content: "Fix the build" },
 			];
-			expect(
-				await memory.attach(messages, [user("a", "Fix the build")], workspace),
-			).toBe(messages);
+			const attached = await memory.attach(
+				messages,
+				[user("a", "Fix the build")],
+				workspace,
+			);
+			expect(attached.messages).toBe(messages);
+			expect(attached.recall?.lines).toEqual([]);
+			expect(attached.recall?.index).toBeUndefined();
 		}
 	});
 
@@ -189,7 +203,11 @@ describe("read hook", () => {
 			user("a", "earlier"),
 			user("b", "install a date library please"),
 		];
-		const attached = await memory.attach(messages, items, workspace);
+		const { messages: attached } = await memory.attach(
+			messages,
+			items,
+			workspace,
+		);
 		expect(attached.slice(0, 2)).toEqual(messages.slice(0, 2));
 		const part = (attached[2].content as { text: string }[])[1].text;
 		expect(part).toContain(MEMORY_MATCHES_HEADER);
@@ -197,7 +215,7 @@ describe("read hook", () => {
 		expect(part).not.toContain("UTC");
 
 		// The same line is not injected again later in the chat.
-		const later = await memory.attach(
+		const { messages: later } = await memory.attach(
 			[
 				...attached,
 				{ role: "assistant", content: "added" },
@@ -239,5 +257,112 @@ describe("read hook", () => {
 		expect(found.map((entry) => entry.text)).toEqual([
 			"Store timestamps in UTC",
 		]);
+	});
+});
+
+describe("memory markers", () => {
+	const chatId = "11111111-1111-4111-8111-111111111111";
+	const otherChat = "22222222-2222-4222-8222-222222222222";
+
+	it("records which lines a request recalled, with their source chats, and the index", async () => {
+		const memory = await turnMemory(
+			{ id: chatId, userId: "u1", projectId: null },
+			{
+				repo: fakeRepo({
+					"MEMORY.md": "# Memory\n\n- Prefers tabs\n",
+					"tooling.md": `# tooling\n- Uses pnpm to install any library, never npm [source: https://ytimesy.test/?chat=${otherChat}; added: 2026-10-12]\n`,
+				}),
+				embed,
+				today: () => "2026-10-15",
+				projectName: null,
+				chatTitles: async (ids) =>
+					new Map(ids.map((id) => [id, "Set up the monorepo"])),
+			},
+		);
+		if (!memory) throw new Error("memory should be on");
+		const { messages, recall } = await memory.attach(
+			[{ role: "user", content: "install a date library please" }],
+			[user("a", "install a date library please")],
+			workspace,
+		);
+		expect(recall).toEqual({
+			head: "abc",
+			index: true,
+			lines: [
+				{
+					path: "tooling.md",
+					text: "Uses pnpm to install any library, never npm",
+					source: {
+						chatId: otherChat,
+						title: "Set up the monorepo",
+						date: "2026-10-12",
+					},
+				},
+			],
+		});
+		// The record is for the chat only: the model's message is unchanged by it.
+		const parts = messages[0].content as { text: string }[];
+		expect(parts[0]).toEqual({
+			type: "text",
+			text: "install a date library please",
+		});
+		expect(JSON.stringify(parts)).not.toContain("Set up the monorepo");
+	});
+
+	it("shows the lines this chat committed during the turn, not another chat's", async () => {
+		const before = {
+			"MEMORY.md": "# Memory\n\n## Index\n- [[tooling]]\n",
+			"tooling.md": "# tooling\n- Uses pnpm [source: x]\n",
+		};
+		const after = {
+			...before,
+			"tooling.md": `# tooling\n- Uses pnpm [source: x]\n- Runs tests with vitest [source: https://ytimesy.test/?chat=${chatId}; added: 2026-10-15]\n- Prefers Postgres [source: https://ytimesy.test/?chat=${otherChat}; added: 2026-10-15]\n`,
+		};
+		const repo = {
+			...fakeRepo(after),
+			snapshot: async () => ({ head: "h2", files: after }),
+			snapshotAt: vi.fn(async () => ({ head: "h1", files: before })),
+		};
+		const memory = await turnMemory(
+			{ id: chatId, userId: "u1", projectId: null },
+			{ repo, embed: null, today: () => "2026-10-15", projectName: null },
+		);
+		if (!memory) throw new Error("memory should be on");
+		const items = [
+			{
+				kind: "userMessage",
+				id: "m1",
+				text: "We test with vitest",
+				memory: { head: "h1", lines: [] },
+			},
+			{ kind: "agentMessage", id: "t:a", text: "Noted." },
+		] as unknown as SessionItem[];
+		const saved = await memory.recordSaved(items, "turn-1");
+		expect(repo.snapshotAt).toHaveBeenCalledWith("h1");
+		expect(saved.at(-1)).toEqual({
+			kind: "memorySave",
+			id: "turn-1:memory-saved",
+			lines: [{ path: "tooling.md", text: "Runs tests with vitest" }],
+		});
+
+		// Nothing committed since the request: no marker, and no old commit read.
+		const unchanged = await turnMemory(
+			{ id: chatId, userId: "u1", projectId: null },
+			{
+				repo: {
+					...repo,
+					snapshot: async () => ({ head: "h1", files: before }),
+				},
+				embed: null,
+				projectName: null,
+			},
+		);
+		repo.snapshotAt.mockClear();
+		expect(await unchanged?.recordSaved(items, "turn-1")).toEqual(items);
+		expect(repo.snapshotAt).not.toHaveBeenCalled();
+
+		// A request memory was never read for gets no marker.
+		const plain = [user("m1", "hi"), items[1]];
+		expect(await memory.recordSaved(plain, "turn-1")).toEqual(plain);
 	});
 });

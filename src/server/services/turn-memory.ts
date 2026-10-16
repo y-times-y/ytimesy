@@ -1,8 +1,16 @@
 import type { ModelMessage } from "ai";
 import { isUserRequestMessage } from "#/domain/api-conversation";
 import {
+	currentMemoryRecall,
+	type MemoryRecall,
+	recalledMemoryLine,
+	savedMemoryLines,
+	withSavedMemory,
+} from "#/domain/memory-marker";
+import {
 	annotateMemoryText,
 	attachedMemory,
+	chatIdFromSource,
 	chatSourceUrl,
 	cosineSimilarity,
 	EMPTY_MEMORY,
@@ -38,7 +46,11 @@ import {
 	memoryRepo,
 	memoryRepoName,
 } from "../adapters/memory-repos";
-import { memoryProjectName, memorySettings } from "../adapters/memory-settings";
+import {
+	memoryChatTitles,
+	memoryProjectName,
+	memorySettings,
+} from "../adapters/memory-settings";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 
 /** The VM's Git token outlives any single durable step; each step mints a new one. */
@@ -46,6 +58,8 @@ const VM_TOKEN_TTL_SECONDS = 3600;
 const READ_HOOK_TIMEOUT_MS = 4000;
 /** Bounds embedding work on a turn; larger memories embed over several turns. */
 const MAX_EMBEDDED_LINES = 400;
+/** Reading what a turn saved never holds up its completion for long. */
+const SAVED_LINES_TIMEOUT_MS = 5000;
 
 export type TurnMemoryOwner = {
 	id: string;
@@ -59,12 +73,21 @@ export type TurnMemory = {
 	instructions: string;
 	/** Clone or refresh ~/memory on the VM with a fresh short-lived token. */
 	prepareVm(workspace: AgentToolWorkspace): Promise<void>;
-	/** MEMORY.md at chat start and the read hook, attached to the current request. */
+	/**
+	 * MEMORY.md at chat start and the read hook, attached to the current
+	 * request; `recall` is what the chat shows of it (null when memory was
+	 * not read, or a resumed step already attached it).
+	 */
 	attach(
 		messages: ModelMessage[],
 		items: readonly SessionItem[],
 		workspace: () => Promise<AgentToolWorkspace>,
-	): Promise<ModelMessage[]>;
+	): Promise<{ messages: ModelMessage[]; recall: MemoryRecall | null }>;
+	/** Adds a marker for the lines this chat saved since the request's recall. */
+	recordSaved(
+		items: readonly SessionItem[],
+		turnId: string,
+	): Promise<SessionItem[]>;
 	/** The save hook: queued after a completed turn (full mode). */
 	afterTurn(turnId: string): Promise<void>;
 };
@@ -83,6 +106,7 @@ export async function turnMemory(
 		embed?: Embed | null;
 		today?: () => string;
 		projectName?: string | null;
+		chatTitles?: (ids: readonly string[]) => Promise<Map<string, string>>;
 	} = {},
 ): Promise<TurnMemory | null> {
 	const settings = await memorySettings(owner.userId).catch((error) => {
@@ -112,6 +136,21 @@ export async function turnMemory(
 		options.appUrl ?? process.env.APP_URL ?? "http://localhost:3000",
 		owner.id,
 	);
+	const chatTitles =
+		options.chatTitles ??
+		((ids: readonly string[]) => memoryChatTitles(owner.userId, ids));
+	/** The recalled lines as the chat shows them, with their source chats' titles. */
+	async function recalledLines(matches: readonly MemoryLine[]) {
+		if (!matches.length) return [];
+		const ids = matches.flatMap((entry) => {
+			const id = entry.meta.source ? chatIdFromSource(entry.meta.source) : null;
+			return id ? [id] : [];
+		});
+		const titles = ids.length
+			? await chatTitles(ids).catch(() => new Map<string, string>())
+			: new Map<string, string>();
+		return matches.map((entry) => recalledMemoryLine(entry, titles));
+	}
 	return {
 		mode,
 		instructions: memoryInstructions(mode, {
@@ -137,18 +176,19 @@ export async function turnMemory(
 			}
 		},
 		async attach(messages, items, workspace) {
+			const unchanged = { messages, recall: null };
 			const index = currentRequestIndex(messages, items);
-			if (index < 0) return messages;
+			if (index < 0) return unchanged;
 			const current = messages[index];
 			// A resumed step replays the parts it already attached.
-			if (attachedMemory([current]).length) return messages;
+			if (attachedMemory([current]).length) return unchanged;
 			const snapshot = await repo.snapshot().catch((error) => {
 				console.warn("Memory could not be read.", {
 					error: error instanceof Error ? error.name : "unknown",
 				});
 				return null;
 			});
-			if (!snapshot) return messages;
+			if (!snapshot) return unchanged;
 			const shown = attachedMemory(messages).join("\n");
 			const firstRequest =
 				items.filter((item) => item.kind === "userMessage").length === 1 &&
@@ -172,7 +212,12 @@ export async function turnMemory(
 							project: projectName,
 						})
 					: [];
-			if (!showEntry && !matches.length) return messages;
+			const recall: MemoryRecall = {
+				head: snapshot.head,
+				...(showEntry ? { index: true as const } : {}),
+				lines: await recalledLines(matches),
+			};
+			if (!showEntry && !matches.length) return { messages, recall };
 			const missing =
 				mode === "full"
 					? await missingPaths(
@@ -205,7 +250,46 @@ export async function turnMemory(
 				current as { role: "user"; content: string },
 				parts,
 			) as ModelMessage;
-			return next;
+			return { messages: next, recall };
+		},
+		async recordSaved(items, turnId) {
+			const recall = currentMemoryRecall(items);
+			let user = items.length - 1;
+			while (user >= 0 && items[user].kind !== "userMessage") user--;
+			if (!recall || user < 0) return [...items];
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			const work = (async () => {
+				const after = await repo.snapshot();
+				if (after.head === recall.head) return [...items];
+				const before = recall.head
+					? await repo.snapshotAt(recall.head)
+					: { head: null, files: {} };
+				return withSavedMemory(
+					items,
+					items[user].id,
+					`${turnId}:memory-saved`,
+					savedMemoryLines(before.files, after.files, owner.id),
+				);
+			})();
+			try {
+				return await Promise.race([
+					work,
+					new Promise<SessionItem[]>((resolve) => {
+						timer = setTimeout(
+							() => resolve([...items]),
+							SAVED_LINES_TIMEOUT_MS,
+						);
+					}),
+				]);
+			} catch (error) {
+				console.warn("Saved memory could not be read.", {
+					error: error instanceof Error ? error.name : "unknown",
+				});
+				return [...items];
+			} finally {
+				clearTimeout(timer);
+				work.catch(() => {});
+			}
 		},
 		async afterTurn(turnId) {
 			if (mode !== "full") return;

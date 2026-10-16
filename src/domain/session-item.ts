@@ -3,6 +3,7 @@ import type { AgentTodo } from "./agent-todos";
 import type { ApiTokenUsage } from "./api-token-usage";
 import type { CodexUsage } from "./codex-usage";
 import { SessionItemId } from "./ids";
+import type { MemoryRecall, SavedMemoryLine } from "./memory-marker";
 import type { MessageAttachment } from "./message-attachment";
 import type { FailoverReason } from "./model-failover";
 import { visibleRuntimeUserText } from "./runtime-handoff";
@@ -30,6 +31,8 @@ export type UserMessageItem = {
 	readonly attachments?: readonly MessageAttachment[];
 	/** The user approved the agent's proposed plan; edits are unlocked. */
 	readonly approvesPlan?: true;
+	/** Cross-chat memory read for this request; the model saw it as a separate part. */
+	readonly memory?: MemoryRecall;
 	readonly timing?: {
 		readonly startedAt: number;
 		readonly completedAt?: number;
@@ -72,6 +75,13 @@ export type SecretRequestItem = {
 	readonly name: string;
 	readonly secretKind: RequestableSecretKind;
 	readonly reason: string;
+};
+
+/** Memory lines this turn added: by the agent's own commits or the save hook after it. */
+export type MemorySaveItem = {
+	readonly kind: "memorySave";
+	readonly id: SessionItemId;
+	readonly lines: readonly SavedMemoryLine[];
 };
 
 export type CommandExecutionItem = {
@@ -162,6 +172,7 @@ export type SessionItem =
 	| PlanItem
 	| PlanProposalItem
 	| SecretRequestItem
+	| MemorySaveItem
 	| CommandExecutionItem
 	| FileChangeItem
 	| McpToolCallItem
@@ -448,7 +459,12 @@ export function showTurnWorking(
 	if (turnStatus !== "running") return false;
 	const last = compactTimelineItems(items).at(-1);
 	if (last == null || last.kind === "userMessage") return true;
-	if (last.kind === "agentMessage" || last.kind === "error") return false;
+	if (
+		last.kind === "agentMessage" ||
+		last.kind === "error" ||
+		last.kind === "memorySave"
+	)
+		return false;
 	if (last.kind === "reasoning") return false;
 	if (last.kind === "commandExecution" && last.status === "inProgress") {
 		return false;
