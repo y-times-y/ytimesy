@@ -352,9 +352,10 @@ async function live() {
 	const { closeDatabase, database } = await import(
 		"../src/server/adapters/database"
 	);
-	const { CHEAP_BASE_SNAPSHOT } = await import(
-		"../src/server/adapters/freestyle/product-vm"
+	const { workspaceBootSnapshotId } = await import(
+		"../src/server/records/tools-snapshot-store"
 	);
+	const bootSnapshotId = await workspaceBootSnapshotId();
 	const { GUEST_INTERNET_FIREWALL } = await import(
 		"../src/server/adapters/freestyle/proof-vm"
 	);
@@ -532,7 +533,7 @@ async function live() {
 			record.sessionId = session.id;
 			const created = await client.vms.create({
 				slug: `ytimesy-ag-${session.id.replaceAll("-", "").slice(0, 16)}`,
-				snapshotId: CHEAP_BASE_SNAPSHOT,
+				snapshotId: bootSnapshotId,
 				firewall: GUEST_INTERNET_FIREWALL,
 				ttlSeconds: Math.ceil(turnTimeoutMs / 1000) + 600,
 				maxRunTotalSeconds: Math.ceil(turnTimeoutMs / 1000) + 300,

@@ -212,7 +212,12 @@ try {
 				!build.provider_ref
 			)
 				throw new Error("Environment completion omitted activation.");
-			const vm = await client.vms.ref(build.provider_ref).data();
+			let vm = await client.vms.ref(build.provider_ref).data();
+			// Freestyle can take over a minute to finish pausing.
+			for (let wait = 0; vm.state === "pausing" && wait < 60; wait++) {
+				await delay(2000);
+				vm = await client.vms.ref(build.provider_ref).data();
+			}
 			const snapshot = await client.vms.snapshots.get(build.snapshot_id);
 			if (!["paused", "stopped"].includes(vm.state) || snapshot.public)
 				throw new Error("Template cleanup/privacy verification failed.");

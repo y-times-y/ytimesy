@@ -8,6 +8,12 @@ export const PRODUCT_IDLE_TIMEOUT_SECONDS = 180;
 
 /** Smallest real Ubuntu image. Copies from a 4 vCPU snapshot stay 4 vCPU; resize cannot shrink. */
 export const CHEAP_BASE_SNAPSHOT = "freestyle/ubuntu-sm";
+/** What CHEAP_BASE_SNAPSHOT boots with (vCPU, MiB, MiB). */
+export const CHEAP_BASE_RESOURCES = {
+	cpu: 2,
+	memory: 4096,
+	storage: 16384,
+} as const;
 
 export function productIdleTimeoutNeedsUpdate(
 	current: number | null | undefined,

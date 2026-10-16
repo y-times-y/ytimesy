@@ -1,5 +1,9 @@
 import { readFile } from "node:fs/promises";
-import { toolsSnapshotIdFromRecord } from "#/domain/workspace-boot-snapshot";
+import {
+	toolsSnapshotIdFromEnv,
+	toolsSnapshotIdFromRecord,
+} from "#/domain/workspace-boot-snapshot";
+import { CHEAP_BASE_SNAPSHOT } from "#/server/adapters/freestyle/product-vm";
 import { loadToolsSnapshotSetting } from "#/server/adapters/product-settings";
 
 const TOOLS_SNAPSHOT_STATE_PATH = ".ytimesy/tools-snapshot.json";
@@ -23,4 +27,13 @@ async function readToolsSnapshotFile(
 	} catch {
 		return undefined;
 	}
+}
+
+/** The image a fresh workspace VM boots from: the shared tools image when one is configured. */
+export async function workspaceBootSnapshotId(): Promise<string> {
+	return (
+		toolsSnapshotIdFromEnv(process.env) ??
+		(await readToolsSnapshotId()) ??
+		CHEAP_BASE_SNAPSHOT
+	);
 }
