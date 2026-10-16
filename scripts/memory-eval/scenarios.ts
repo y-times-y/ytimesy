@@ -1,25 +1,41 @@
-// Two-chat memory scenarios. Chat 1: the user states a project rule in
-// passing while asking for a task. Chat 2: a NEW chat with a related task that
-// never restates the rule, on a fixture where the rule cannot be read from the
-// code. A deterministic verifier decides from chat 2's final repo state.
-// `solutions` let --dry-run prove each verifier passes a rule-following
-// answer and fails a rule-breaking one.
+// Memory scenarios. Setup chats (usually one): the user states a project rule
+// in passing, or a task runs into a gotcha. The final chat (chat2) is a NEW
+// chat with a related task that never restates the rule, on a fixture where
+// the rule cannot be read from the code. A deterministic verifier decides
+// from the final chat's repository state. `solutions` let --dry-run prove each
+// verifier passes a rule-following answer and fails a rule-breaking one.
+
+export type Chat = { prompt: string; files: Record<string, string> };
 
 export type Scenario = {
 	id: string;
-	/** The rule chat 2 must follow, as the user would phrase it. */
+	/** The rule the final chat must follow, as the user would phrase it. */
 	rule: string;
-	chat1: { prompt: string; files: Record<string, string> };
-	chat2: { prompt: string; files: Record<string, string> };
-	/** Bash, run at chat 2's repository root; exit 0 = the rule was followed. */
+	/** The one setup chat; `setup` replaces it when there are several. */
+	chat1?: Chat;
+	/** Setup chats in order, each followed by the memory pipeline (save hook, dream). */
+	setup?: Chat[];
+	/** Memory files written to the repo before any chat (memory arms only). */
+	seed?: Record<string, string>;
+	/** The final chat, verified afterwards. */
+	chat2: Chat;
+	/** Bash, run at the final chat's repository root; exit 0 = the rule was followed. */
 	verify: string;
-	/** Words that would leak the rule into chat 2's prompt or files. */
+	/** Words that would leak the rule into the final chat. */
 	leaks: RegExp;
+	/** Check leaks in the final prompt only: the fixture's code must mention the rule (a gotcha). */
+	leakCheck?: "prompt";
+	/** False when similarity is not the point (an expired rule must be hidden, not ranked). */
+	recallProbe?: false;
 	solutions: {
 		follows: Record<string, string | null>;
 		breaks: Record<string, string | null>;
 	};
 };
+
+export function setupChats(scenario: Scenario): Chat[] {
+	return scenario.setup ?? (scenario.chat1 ? [scenario.chat1] : []);
+}
 
 const py = (lines: string[]) => `${lines.join("\n")}\n`;
 
@@ -49,6 +65,32 @@ const generated = (name: string, fields: Record<string, string>) =>
 	]);
 const schema = (name: string, fields: Record<string, string>) =>
 	`${JSON.stringify({ name, fields }, null, 2)}\n`;
+
+const PACKAGE_JSON = (dependencies: Record<string, string> = {}) =>
+	`${JSON.stringify({ name: "fixture", version: "1.0.0", type: "module", dependencies }, null, 2)}\n`;
+
+/** Report scripts that only run with REPORT_ENV=ci; every run is logged. */
+const REPORT_FIXTURE: Record<string, string> = {
+	"README.md": "Sales reports.\n",
+	"data/orders.csv": "customer,price,qty\nann,2.5,2\nbob,1,3\nann,4,1\n",
+	"out/.gitkeep": "",
+	"lib/__init__.py": "",
+	"lib/runtime.py": py([
+		"import csv",
+		"import os",
+		"import sys",
+		"",
+		"",
+		"def load_orders():",
+		"    mode = os.environ.get('REPORT_ENV', 'local')",
+		"    with open('.runs.log', 'a') as log:",
+		"        log.write(f'env={mode}\\n')",
+		"    if mode != 'ci':",
+		"        sys.exit('error: cannot reach the reporting database from this machine')",
+		"    with open('data/orders.csv', newline='') as handle:",
+		"        return list(csv.DictReader(handle))",
+	]),
+};
 
 const ISO_CHECK = String.raw`^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$`;
 
@@ -486,6 +528,276 @@ export const SCENARIOS: Scenario[] = [
 			},
 		},
 	},
+	{
+		id: "inferred-gotcha",
+		rule: "Report scripts must run with REPORT_ENV=ci; without it they fail trying to reach the reporting database.",
+		// No rule wording anywhere: chat 1's task fails until the agent finds
+		// REPORT_ENV=ci in lib/runtime.py. Every run is logged to .runs.log, so
+		// the final chat passes only if it never ran a script without it.
+		chat1: {
+			prompt:
+				"Add a total column (price * qty) to out/report.csv: update scripts/build_report.py and regenerate out/report.csv by running it.",
+			files: {
+				...REPORT_FIXTURE,
+				"scripts/build_report.py": py([
+					"import csv",
+					"import sys",
+					"",
+					"sys.path.insert(0, '.')",
+					"from lib.runtime import load_orders",
+					"",
+					"rows = load_orders()",
+					"with open('out/report.csv', 'w', newline='') as handle:",
+					"    writer = csv.writer(handle)",
+					"    writer.writerow(['customer', 'price', 'qty'])",
+					"    for row in rows:",
+					"        writer.writerow([row['customer'], row['price'], row['qty']])",
+				]),
+			},
+		},
+		chat2: {
+			prompt:
+				"Add an orders column (number of orders per customer) to out/summary.csv: update scripts/build_summary.py and regenerate out/summary.csv by running it.",
+			files: {
+				...REPORT_FIXTURE,
+				"scripts/build_summary.py": py([
+					"import csv",
+					"import sys",
+					"from collections import defaultdict",
+					"",
+					"sys.path.insert(0, '.')",
+					"from lib.runtime import load_orders",
+					"",
+					"spent = defaultdict(float)",
+					"for row in load_orders():",
+					"    spent[row['customer']] += float(row['price']) * int(row['qty'])",
+					"with open('out/summary.csv', 'w', newline='') as handle:",
+					"    writer = csv.writer(handle)",
+					"    writer.writerow(['customer', 'spent'])",
+					"    for customer in sorted(spent):",
+					"        writer.writerow([customer, spent[customer]])",
+				]),
+			},
+		},
+		verify: [
+			"test -f .runs.log || { echo 'the script was never run'; exit 1; }",
+			"! grep -q 'env=local' .runs.log || { echo 'ran without REPORT_ENV=ci first: rediscovered the gotcha'; exit 1; }",
+			"python3 - <<'PY'",
+			"import csv",
+			"rows = {row['customer']: row for row in csv.DictReader(open('out/summary.csv'))}",
+			"assert rows['ann']['orders'] == '2' and rows['bob']['orders'] == '1', rows",
+			"PY",
+		].join("\n"),
+		leaks: /REPORT_ENV|database|\bci\b/i,
+		leakCheck: "prompt",
+		solutions: {
+			follows: {
+				".runs.log": "env=ci\n",
+				"out/summary.csv": "customer,spent,orders\nann,9.0,2\nbob,3.0,1\n",
+			},
+			breaks: {
+				".runs.log": "env=local\nenv=ci\n",
+				"out/summary.csv": "customer,spent,orders\nann,9.0,2\nbob,3.0,1\n",
+			},
+		},
+	},
+	{
+		id: "expired-rule",
+		rule: 'New Python modules start with "# owner: platform-team"; the FREEZE banner rule expired on 2026-10-01.',
+		// Memory holds a live rule and an expired one. Applying the live rule
+		// proves memory was read; the expired banner must not appear.
+		recallProbe: false,
+		seed: {
+			"MEMORY.md": [
+				"# Memory",
+				"",
+				'- Every new Python module starts with the comment line "# owner: platform-team" [source: https://ytimesy.test/?chat=seed; added: 2026-09-02]',
+				'- Put a "# FREEZE: release 4.2" banner line at the top of every new file until the release ships [expires: 2026-10-01; source: https://ytimesy.test/?chat=seed; added: 2026-09-20]',
+				"",
+				"## Index",
+				"",
+			].join("\n"),
+		},
+		chat2: {
+			prompt:
+				"Add a new module util/slug.py with slugify(text) that lowercases the text and joins its words with '-'.",
+			files: {
+				"README.md": "Utilities.\n",
+				"util/__init__.py": "",
+			},
+		},
+		verify: [
+			"test -f util/slug.py || { echo 'util/slug.py missing'; exit 1; }",
+			"head -n 3 util/slug.py | grep -qx '# owner: platform-team' || { echo 'live rule not applied: no owner line'; exit 1; }",
+			"! grep -qi 'FREEZE' util/slug.py || { echo 'expired FREEZE banner applied'; exit 1; }",
+			"python3 -c \"import sys; sys.path.insert(0, '.'); from util.slug import slugify; assert slugify('Hello Big World') == 'hello-big-world'\"",
+		].join("\n"),
+		leaks: /owner|platform-team|FREEZE|banner/i,
+		solutions: {
+			follows: {
+				"util/slug.py": py([
+					"# owner: platform-team",
+					"",
+					"",
+					"def slugify(text):",
+					"    return '-'.join(text.lower().split())",
+				]),
+			},
+			breaks: {
+				"util/slug.py": py([
+					"# FREEZE: release 4.2",
+					"# owner: platform-team",
+					"",
+					"",
+					"def slugify(text):",
+					"    return '-'.join(text.lower().split())",
+				]),
+			},
+		},
+	},
+	{
+		id: "changed-decision",
+		rule: "Use pnpm: the project switched from npm.",
+		// Three chats: the decision is stated, then changed; the final chat must
+		// follow the newer one.
+		setup: [
+			{
+				prompt:
+					"Add src/sum.js exporting sum(numbers) that adds up an array of numbers. For this repo we use npm for everything.",
+				files: {
+					"package.json": PACKAGE_JSON(),
+					"src/index.js": "export {};\n",
+				},
+			},
+			{
+				prompt:
+					"Add src/avg.js exporting avg(numbers) built on sum from ./sum.js. Heads-up: as of today we switched this project from npm to pnpm, so use pnpm from now on.",
+				files: {
+					"package.json": PACKAGE_JSON(),
+					"src/index.js": "export {};\n",
+					"src/sum.js":
+						"export const sum = (numbers) => numbers.reduce((total, n) => total + n, 0);\n",
+				},
+			},
+		],
+		chat2: {
+			prompt:
+				"Install lodash and add src/pick.js exporting pickName(obj) that returns lodash's pick(obj, ['name']).",
+			files: { "package.json": PACKAGE_JSON(), "src/index.js": "export {};\n" },
+		},
+		verify: [
+			"command -v pnpm >/dev/null || echo 'note: pnpm is not on PATH'",
+			"test ! -e package-lock.json || { echo 'npm lockfile created: followed the old decision'; exit 1; }",
+			"grep -q lodash package.json || { echo 'lodash not in package.json'; exit 1; }",
+			"test -f pnpm-lock.yaml || { echo 'no pnpm-lock.yaml'; exit 1; }",
+			"grep -q lodash pnpm-lock.yaml || { echo 'lodash not in pnpm-lock.yaml'; exit 1; }",
+		].join("\n"),
+		leaks: /pnpm|npm|package manager|lockfile/i,
+		solutions: {
+			follows: {
+				"package.json": PACKAGE_JSON({ lodash: "^4.17.21" }),
+				"pnpm-lock.yaml":
+					"lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      lodash:\n        specifier: ^4.17.21\n        version: 4.17.21\n",
+				"src/pick.js":
+					"import pick from 'lodash/pick.js';\nexport const pickName = (obj) => pick(obj, ['name']);\n",
+			},
+			breaks: {
+				"package.json": PACKAGE_JSON({ lodash: "^4.17.21" }),
+				"package-lock.json":
+					'{"lockfileVersion":3,"packages":{"node_modules/lodash":{"version":"4.17.21"}}}\n',
+				"src/pick.js":
+					"import pick from 'lodash/pick.js';\nexport const pickName = (obj) => pick(obj, ['name']);\n",
+			},
+		},
+	},
+	{
+		id: "indirect-wording",
+		rule: 'API errors return {"error": {"code", "message"}} with the HTTP status.',
+		// The final chat only hints ("the way the rest of our API handles
+		// not-found"); its fixture has no error handling to copy.
+		chat1: {
+			prompt:
+				'Make GET /orders/<id> in routes.py return 404 when the order does not exist. Every error our API returns uses {"error": {"code": "<snake_case_code>", "message": "<human text>"}} with the HTTP status; clients switch on error.code.',
+			files: {
+				"routes.py": py([
+					"ORDERS = {'1': {'id': '1', 'total': 12.5}}",
+					"",
+					"",
+					"def handle(method, path):",
+					"    if method == 'GET' and path.startswith('/orders/'):",
+					"        return 200, ORDERS[path.split('/')[2]]",
+					"    if method == 'GET' and path == '/health':",
+					"        return 200, {'ok': True}",
+					"    return 404, None",
+				]),
+			},
+		},
+		chat2: {
+			prompt:
+				"Add GET /users/<id> to routes.py that returns the user, and handle a missing user the way the rest of our API handles not-found.",
+			files: {
+				"routes.py": py([
+					"USERS = {'1': {'id': '1', 'name': 'Ann'}}",
+					"",
+					"",
+					"def handle(method, path):",
+					"    if method == 'GET' and path == '/health':",
+					"        return 200, {'ok': True}",
+					"    return 404, None",
+				]),
+			},
+		},
+		verify: [
+			"python3 - <<'PY'",
+			"import sys",
+			"sys.path.insert(0, '.')",
+			"from routes import handle",
+			"status, body = handle('GET', '/users/1')",
+			"assert status == 200 and body['name'] == 'Ann', (status, body)",
+			"status, body = handle('GET', '/users/404')",
+			"assert status == 404, status",
+			"assert isinstance(body, dict) and set(body) == {'error'}, body",
+			"error = body['error']",
+			"assert isinstance(error.get('code'), str) and error['code'], body",
+			"assert isinstance(error.get('message'), str) and error['message'], body",
+			"PY",
+		].join("\n"),
+		leaks: /error|code.*message|shape/i,
+		solutions: {
+			follows: {
+				"routes.py": py([
+					"USERS = {'1': {'id': '1', 'name': 'Ann'}}",
+					"",
+					"",
+					"def handle(method, path):",
+					"    if method == 'GET' and path.startswith('/users/'):",
+					"        user = USERS.get(path.split('/')[2])",
+					"        if user is None:",
+					"            return 404, {'error': {'code': 'user_not_found', 'message': 'No such user'}}",
+					"        return 200, user",
+					"    if method == 'GET' and path == '/health':",
+					"        return 200, {'ok': True}",
+					"    return 404, None",
+				]),
+			},
+			breaks: {
+				"routes.py": py([
+					"USERS = {'1': {'id': '1', 'name': 'Ann'}}",
+					"",
+					"",
+					"def handle(method, path):",
+					"    if method == 'GET' and path.startswith('/users/'):",
+					"        user = USERS.get(path.split('/')[2])",
+					"        if user is None:",
+					"            return 404, {'detail': 'Not found'}",
+					"        return 200, user",
+					"    if method == 'GET' and path == '/health':",
+					"        return 200, {'ok': True}",
+					"    return 404, None",
+				]),
+			},
+		},
+	},
 ];
 
 /**
@@ -495,10 +807,9 @@ export const SCENARIOS: Scenario[] = [
 export const RECALL_PROBES: { query: string; scenario: string }[] = [
 	{ query: "install a date library", scenario: "pnpm-not-npm" },
 	{ query: "fix the timestamps", scenario: "utc-iso-timestamps" },
-	...SCENARIOS.map((scenario) => ({
-		query: scenario.chat2.prompt,
-		scenario: scenario.id,
-	})),
+	...SCENARIOS.filter((scenario) => scenario.recallProbe !== false).map(
+		(scenario) => ({ query: scenario.chat2.prompt, scenario: scenario.id }),
+	),
 ];
 
 /** The topic file each scenario's rule would be saved in. */
@@ -509,6 +820,10 @@ export const RULE_FILES: Record<string, string> = {
 	"api-error-shape": "api.md",
 	"logging-not-print": "logging.md",
 	"pnpm-not-npm": "tooling.md",
+	"inferred-gotcha": "reports.md",
+	"expired-rule": "MEMORY.md",
+	"changed-decision": "tooling.md",
+	"indirect-wording": "api.md",
 };
 
 /** Unrelated memory lines, so retrieval must pick the right one. */
