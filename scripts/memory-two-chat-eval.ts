@@ -11,9 +11,9 @@
 //       Live two-chat runs on the development edge with the Codex subscription.
 //
 // Arms (live):
-//   off   chat 2 only, memory off: the baseline.
-//   spec  the spec's loop: MEMORY.md at chat start, the builder saves and
-//         pushes, then one dream between the chats.
+//   off   the final chat only, memory off: the baseline.
+//   spec  the spec's loop: seeded memory if any, then each setup chat (the
+//         builder saves and pushes) followed by one dream, then the final chat.
 //   full  spec plus the read hook, the save hook and the extra metadata keys.
 // Each (arm, scenario) gets a throwaway project and its own memory repo
 // (user_memory.repo override), so runs never see each other's memory or the
@@ -38,6 +38,7 @@ import {
 	RULE_FILES,
 	SCENARIOS,
 	type Scenario,
+	setupChats,
 } from "./memory-eval/scenarios";
 
 const run = promisify(execFile);
@@ -140,9 +141,18 @@ async function dryRun() {
 		const breaks = await verifyLocally(scenario, scenario.solutions.breaks);
 		const leaked = [
 			scenario.chat2.prompt,
-			...Object.values(scenario.chat2.files),
+			...(scenario.leakCheck === "prompt"
+				? []
+				: Object.values(scenario.chat2.files)),
 		].some((text) => scenario.leaks.test(text));
-		const rulePresent = scenario.leaks.test(scenario.chat1.prompt);
+		// The rule must reach memory somehow: said or hit in a setup chat, or seeded.
+		const rulePresent = [
+			...setupChats(scenario).flatMap((chat) => [
+				chat.prompt,
+				...Object.values(chat.files),
+			]),
+			...Object.values(scenario.seed ?? {}),
+		].some((text) => scenario.leaks.test(text));
 		const good = !untouched && follows && !breaks && !leaked && rulePresent;
 		ok &&= good;
 		rows.push([
@@ -150,7 +160,7 @@ async function dryRun() {
 			untouched ? "PASSES (bad)" : "fails",
 			follows ? "passes" : "FAILS (bad)",
 			breaks ? "PASSES (bad)" : "fails",
-			leaked ? "LEAKS" : rulePresent ? "ok" : "RULE MISSING IN CHAT 1",
+			leaked ? "LEAKS" : rulePresent ? "ok" : "RULE NEVER REACHES MEMORY",
 		]);
 	}
 	console.log(table(rows));
@@ -298,7 +308,8 @@ type ScenarioRecord = {
 	passed: boolean | null;
 	verifierOutput: string;
 	dream: string;
-	chat1: ChatRecord | null;
+	/** Setup chats, in order. */
+	setup: ChatRecord[];
 	chat2: ChatRecord | null;
 	memoryCosts: MemoryCost[];
 	errors: string[];
@@ -655,6 +666,44 @@ async function live() {
 		return { record, verified };
 	}
 
+	/**
+	 * Writes memory files before any chat, through the same Worker-side Git
+	 * writer dreaming uses, with a short-lived token from wrangler.
+	 */
+	async function seedRepo(name: string, files: Record<string, string>) {
+		const created = await run("npx", [
+			"wrangler",
+			"artifacts",
+			"repos",
+			"create",
+			name,
+			"--namespace",
+			NAMESPACE,
+			"--default-branch",
+			"main",
+			"--json",
+		]);
+		const { remote, token } = JSON.parse(created.stdout) as {
+			remote: string;
+			token: string;
+		};
+		const { pushChanges } = await import("../src/server/adapters/memory-repos");
+		const http = (await import("isomorphic-git/http/web")).default;
+		const outcome = await pushChanges({
+			http,
+			remote,
+			token: token.split("?expires=")[0],
+			base: { head: null, files: {} },
+			changes: Object.entries(files).map(([path, content]) => ({
+				path,
+				content,
+			})),
+			message: "Seed memory for the eval",
+		});
+		if (outcome === "raced" || !outcome.ok)
+			throw new Error(`Seeding ${name} failed.`);
+	}
+
 	/** Dreams now instead of after the idle delay, and waits for it to finish. */
 	async function dreamNow(after: Date) {
 		await dispatchBackgroundJob({
@@ -715,7 +764,7 @@ async function live() {
 			passed: null,
 			verifierOutput: "",
 			dream: "none",
-			chat1: null,
+			setup: [],
 			chat2: null,
 			memoryCosts: [],
 			errors: [],
@@ -725,16 +774,21 @@ async function live() {
 			await setEvalMemory(arm, repo);
 			if (repo) liveRepos.add(repo);
 			if (arm !== "off") {
-				const first = await chat(
-					project,
-					`Memory eval ${scenario.id} chat 1`,
-					scenario.chat1.files,
-					scenario.chat1.prompt,
-				);
-				result.chat1 = first.record;
-				// The save hook (full) is queued when chat 1's turn completes.
-				if (arm === "full") await delay(30_000);
-				result.dream = await dreamNow(started);
+				if (repo && scenario.seed) await seedRepo(repo, scenario.seed);
+				const dreams: string[] = [];
+				for (const [index, setup] of setupChats(scenario).entries()) {
+					const done = await chat(
+						project,
+						`Memory eval ${scenario.id} chat ${index + 1}`,
+						setup.files,
+						setup.prompt,
+					);
+					result.setup.push(done.record);
+					// The save hook (full) is queued when the chat's turn completes.
+					if (arm === "full") await delay(30_000);
+					dreams.push(await dreamNow(new Date()));
+				}
+				result.dream = dreams.join(",") || "none";
 			}
 			const second = await chat(
 				project,
