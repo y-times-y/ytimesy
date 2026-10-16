@@ -12,7 +12,7 @@ model tokens or results when it was missed. The incidents are listed after the c
    record its SHA-256 and the commit in the run notes and in every trial's trace. A label
    is not proof.
 3. **Secure capacity before starting.** Confirm concurrent GPU quota (AWS `p5.4xlarge`:
-   64 vCPU = 4 H100 in us-east-1), provider spend limits and balances (Modal, Daytona,
+   80 vCPU = 5 H100 in us-east-1 since 2026-10-16; us-west-2 is 8), provider spend limits and balances (Modal, Daytona,
    OpenAI) cover the whole run with margin. One GPU at a time turns a day into four.
 4. **Preflight every task end to end** on the exact environment, outside the scored jobs:
    reference solution scores 1, no-op agent scores 0, and a real agent (time-capped) reaches

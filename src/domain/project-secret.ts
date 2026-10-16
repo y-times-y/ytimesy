@@ -11,6 +11,13 @@ export const AGENT_SECRETS_ENV_PATH = `${AGENT_SECRETS_DIRECTORY}/agent.env`;
 /** Shell that loads the project's variables when present. */
 export const SOURCE_AGENT_SECRETS = `if [ -r ${AGENT_SECRETS_ENV_PATH} ]; then . ${AGENT_SECRETS_ENV_PATH}; fi`;
 
+/**
+ * Shell run before any VM snapshot: deletes the env file and proves it is gone,
+ * so plaintext values never land in a reusable or retained image. The next turn
+ * writes the file again.
+ */
+export const SCRUB_AGENT_SECRETS = `rm -rf ${AGENT_SECRETS_DIRECTORY} && test ! -e ${AGENT_SECRETS_DIRECTORY}`;
+
 /** Holds the names of the runtime secrets in the env file, for the commit guard. */
 const REDACTED_NAMES_VARIABLE = "YTIMESY_REDACTED_SECRETS";
 
@@ -105,6 +112,34 @@ export function agentSecretsEnvFile(
 	].join("\n")}\n`;
 }
 
+export type AgentSecretName = {
+	readonly name: string;
+	readonly kind: ProjectSecretKind;
+};
+
+/**
+ * Tells the agent which project secrets exist and how each reaches it, by name
+ * only, so it uses the variable instead of guessing or printing the environment.
+ */
+export function projectSecretsInstructions(
+	secrets: readonly AgentSecretName[],
+) {
+	if (!secrets.length) return "";
+	const listed = (kind: ProjectSecretKind) =>
+		secrets
+			.filter((secret) => secret.kind === kind)
+			.map((secret) => secret.name)
+			.join(", ");
+	const lines = [
+		listed("runtime") &&
+			`Runtime secrets (their values are replaced with ${REDACTED} in tool output, and commits containing them are refused): ${listed("runtime")}.`,
+		listed("environment") && `Environment variables: ${listed("environment")}.`,
+		listed("build") &&
+			`Build secrets (environment setup only, not set for you): ${listed("build")}.`,
+	].filter(Boolean);
+	return `Project secrets are set in every command's environment. ${lines.join(" ")} Reference them by name (for example "$NAME"); never print, echo or write their values to files, and never display them on screen: screenshots are not redacted.`;
+}
+
 /**
  * Shell run after `git add -A` in a repository: refuses when the staged
  * changes, or any commit not yet on a remote (content or message), contain a
@@ -112,10 +147,58 @@ export function agentSecretsEnvFile(
  */
 export const SECRET_COMMIT_GUARD = `if [ -r ${AGENT_SECRETS_ENV_PATH} ]; then ( . ${AGENT_SECRETS_ENV_PATH}; for name in $${REDACTED_NAMES_VARIABLE}; do value="\${!name}"; if [ -n "$value" ] && { git diff --cached; git log -p --format=%B --all --not --remotes; } | grep -qF -- "$value"; then git reset -q; echo "Refusing to commit: the changes or an unpushed commit contain the value of runtime secret $name. Remove it and use the environment variable instead." >&2; exit 3; fi; done ); fi`;
 
-/** Replaces every runtime secret value in strings anywhere inside `value`. */
+/** Encoded variants are matched only for values at least this long, to avoid false positives. */
+const MIN_ENCODED_SECRET_LENGTH = 8;
+
+const base64 = (bytes: Uint8Array) => {
+	let binary = "";
+	for (const byte of bytes) binary += String.fromCharCode(byte);
+	return btoa(binary);
+};
+
+/**
+ * The forms a value commonly takes in command output: as written, JSON-escaped,
+ * URL-encoded, hex, and base64 or base64url. Base64 inside a larger encoded blob
+ * depends on the value's byte offset, so the stable middle of each of the three
+ * alignments is matched as well.
+ */
+export function secretForms(secret: string): string[] {
+	const forms = new Set([secret]);
+	if (secret.length >= MIN_ENCODED_SECRET_LENGTH) {
+		const bytes = new TextEncoder().encode(secret);
+		forms.add(JSON.stringify(secret).slice(1, -1));
+		forms.add(encodeURIComponent(secret));
+		const hex = Array.from(bytes, (byte) =>
+			byte.toString(16).padStart(2, "0"),
+		).join("");
+		forms.add(hex);
+		forms.add(hex.toUpperCase());
+		const padded = base64(bytes);
+		const encoded = [padded, padded.replace(/=+$/, "")];
+		for (const offset of [0, 1, 2]) {
+			const shifted = base64(
+				new Uint8Array([...new Uint8Array(offset), ...bytes]),
+			);
+			// Drop the first group (mixed with preceding bytes) and the last partial one.
+			const start = offset ? 4 : 0;
+			const end =
+				start + Math.floor((bytes.length - (offset ? 3 - offset : 0)) / 3) * 4;
+			const middle = shifted.slice(start, end);
+			if (middle.length >= MIN_ENCODED_SECRET_LENGTH) encoded.push(middle);
+		}
+		for (const form of encoded) {
+			forms.add(form);
+			forms.add(form.replaceAll("+", "-").replaceAll("/", "_"));
+		}
+	}
+	return [...forms].filter((form) => form.length >= MIN_RUNTIME_SECRET_LENGTH);
+}
+
+/** Replaces every runtime secret value, and its common encodings, in strings anywhere inside `value`. */
 export function redactSecretValues<T>(value: T, secrets: readonly string[]): T {
 	const usable = secrets
 		.filter((secret) => secret.length >= MIN_RUNTIME_SECRET_LENGTH)
+		.flatMap(secretForms)
 		.sort((a, b) => b.length - a.length);
 	if (!usable.length) return value;
 	const visit = (item: unknown): unknown => {

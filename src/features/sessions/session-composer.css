@@ -1906,3 +1906,25 @@ code.session-tool-target {
 	outline: 1px solid #ffffff70;
 	outline-offset: 2px;
 }
+.secret-request-input {
+	flex: 1 1 16em;
+	min-width: 0;
+	height: 28px;
+	padding: 0 10px;
+	border: 1px solid #ffffff24;
+	border-radius: 8px;
+	background: #0000004d;
+	color: #ececec;
+	font:
+		12px ui-monospace,
+		SFMono-Regular,
+		Menlo,
+		monospace;
+}
+.secret-request-input:focus-visible {
+	outline: 1px solid #ffffff70;
+	outline-offset: 1px;
+}
+.secret-request-note {
+	flex-basis: 100%;
+}

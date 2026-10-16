@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { PGlite } from "@electric-sql/pglite";
 import { type Freestyle, FreestyleApiError } from "freestyle";
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { SCRUB_AGENT_SECRETS } from "../src/domain/project-secret";
 import { snapshotSupportsRetention } from "../src/domain/workspace-retention";
 import {
 	expireRetainedWorkspace,
@@ -108,6 +109,7 @@ function provider(
 		update: vi.fn(async (input: { maxRunTotalSeconds: number }) => {
 			sourceCap = input.maxRunTotalSeconds;
 		}),
+		exec: vi.fn(async (_input: { command: string }) => ({ statusCode: 0 })),
 		snapshot: vi.fn(async () => ({ snapshotId: "snapshot" })),
 		delete: vi.fn(async () => {}),
 	};
@@ -167,6 +169,13 @@ it("persists verified recovery BEFORE source deletion and includes ignored files
 	await recycleWorkspace(client, session);
 	expect(source.delete).toHaveBeenCalledOnce();
 	expect(verification.delete).toHaveBeenCalledOnce();
+	// Project secrets are removed before the image is taken.
+	expect(source.exec).toHaveBeenCalledWith(
+		expect.objectContaining({ command: SCRUB_AGENT_SECRETS }),
+	);
+	expect(source.exec.mock.invocationCallOrder[0]).toBeLessThan(
+		source.snapshot.mock.invocationCallOrder[0] ?? 0,
+	);
 	expect(client.vms.create).toHaveBeenCalledWith(
 		expect.objectContaining({
 			firewall: { rules: [] },

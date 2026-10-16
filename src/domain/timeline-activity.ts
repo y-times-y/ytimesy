@@ -106,6 +106,7 @@ export function groupTimelineRows(
 				item.kind !== "fileChange" &&
 				item.kind !== "error" &&
 				item.kind !== "planProposal" &&
+				item.kind !== "secretRequest" &&
 				item.kind !== "modelSwitch",
 		);
 		if (activity[0])
@@ -122,10 +123,13 @@ export function groupTimelineRows(
 				.map((item) => ({ kind: "item" as const, item })),
 		);
 		if (final) rows.push({ kind: "item", item: final });
-		// A proposed plan stays in view with its approval controls.
+		// A proposed plan or secret request stays in view with its controls.
 		rows.push(
 			...visible
-				.filter((item) => item.kind === "planProposal")
+				.filter(
+					(item) =>
+						item.kind === "planProposal" || item.kind === "secretRequest",
+				)
 				.map((item) => ({ kind: "item" as const, item })),
 		);
 		rows.push(

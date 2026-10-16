@@ -37,6 +37,7 @@ import {
 	requestedAuthSnapshotId,
 } from "./proof-vm";
 import { retryTransientProviderFailure } from "./provider-retry";
+import { scrubAgentSecrets } from "./scrub-agent-secrets";
 import {
 	admitVmCreate,
 	admitVmResume,
@@ -291,6 +292,7 @@ export function createFreestyleWorkspaceMachines(
 
 		async snapshotEnvironment(workspaceId, slug) {
 			try {
+				await scrubAgentSecrets(freestyle.vms.ref(workspaceId));
 				const created = await freestyle.vms.ref(workspaceId).snapshot({
 					slug,
 					displayName: "ytimesy project environment",

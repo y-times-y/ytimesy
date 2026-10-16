@@ -135,6 +135,10 @@ import {
 	writeAgentProjectSecrets,
 } from "../services/project-secrets";
 import { withRedactedResults } from "../services/redacted-tools";
+import {
+	SECRET_REQUEST_END_TURN_TOOLS,
+	secretRequestTools,
+} from "../services/secret-request-tool";
 import { machinesForAgentSession } from "../services/session-workspace-machines";
 import { recordStepTiming, timed } from "../services/step-timing";
 import { analyticsAgentRole } from "../services/turn-analytics";
@@ -472,6 +476,7 @@ async function runApiTurnAttempt(
 						loadAgentProjectSecrets(owner.userId, projectId).catch(() => ({
 							envFile: agentSecretsEnvFile([]),
 							redact: [],
+							names: [],
 						})),
 					),
 				)
@@ -689,6 +694,11 @@ async function runApiTurnAttempt(
 			...webSearch,
 		};
 		const redact = projectSecrets?.redact ?? [];
+		// Only a person in a root chat can paste a secret into the card.
+		const secretTools =
+			planLock && projectSecrets
+				? secretRequestTools(projectSecrets.names.map(({ name }) => name))
+				: {};
 		// Runtime notices name only tools this session was offered.
 		const commandReader =
 			"read_command" in surfaceTools ? "read_command" : "continue_command";
@@ -709,7 +719,7 @@ async function runApiTurnAttempt(
 				? withPlanMode(
 						hooks.wrap(
 							withRedactedResults(
-								{ ...withMcp, ...planTools(planLock) },
+								{ ...withMcp, ...planTools(planLock), ...secretTools },
 								redact,
 							),
 						),
@@ -806,7 +816,14 @@ async function runApiTurnAttempt(
 			speed: apiSettings.speed,
 			knownTools: discoveredToolsFromSession(items),
 			toolSurface,
-			...(planLock ? { endTurnTools: PLAN_END_TURN_TOOLS } : {}),
+			...(planLock
+				? {
+						endTurnTools: [
+							...PLAN_END_TURN_TOOLS,
+							...SECRET_REQUEST_END_TURN_TOOLS,
+						],
+					}
+				: {}),
 			onToolMetric: (metric) => {
 				recordStepTiming(`tool:${metric.tool_name}`, metric.duration_ms);
 				void captureServerAnalytics(
@@ -857,6 +874,7 @@ async function runApiTurnAttempt(
 				tools,
 				plugins,
 				projectKnowledge,
+				secretNames: projectSecrets?.names,
 			})}${memory ? `\n${memory.instructions}` : ""}`,
 			tools,
 			signal: abort.signal,
@@ -1083,8 +1101,9 @@ async function runApiTurnAttempt(
 			!items.slice(lastUser + 1).some(
 				(item) =>
 					(item.kind === "agentMessage" && item.text.trim()) ||
-					// A proposed plan is the turn's result; it waits for approval.
-					item.kind === "planProposal",
+					// A proposed plan or a secret request is the turn's result; it waits for the user.
+					item.kind === "planProposal" ||
+					item.kind === "secretRequest",
 			)
 		)
 			throw new IncompleteAgentTurn("missing-final-result");

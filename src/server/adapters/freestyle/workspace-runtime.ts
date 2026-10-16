@@ -16,6 +16,7 @@ import {
 	productIdleTimeoutNeedsUpdate,
 } from "./product-vm";
 import { retryTransientProviderFailure } from "./provider-retry";
+import { scrubAgentSecrets } from "./scrub-agent-secrets";
 import {
 	admitVmCreate,
 	admitVmResume,
@@ -158,6 +159,7 @@ export class FreestyleWorkspaceRuntime implements WorkspaceRuntime {
 	}
 
 	async snapshot(providerRef: string, slug: string) {
+		await scrubAgentSecrets(this.client().vms.ref(providerRef));
 		const created = await this.client().vms.ref(providerRef).snapshot({
 			slug,
 			displayName: "ytimesy project environment",
@@ -178,6 +180,15 @@ export class FreestyleWorkspaceRuntime implements WorkspaceRuntime {
 		const vm = this.client().vms.ref(providerRef);
 		const data = await vm.data();
 		if (data.state === "running") await vm.pause();
+	}
+
+	async delete(providerRef: string) {
+		try {
+			await this.client().vms.ref(providerRef).delete();
+		} catch (error) {
+			if (error instanceof FreestyleApiError && error.status === 404) return;
+			throw error;
+		}
 	}
 
 	async snapshotExists(snapshotId: string) {

@@ -21,6 +21,7 @@ import {
 import { projectForOwner } from "../projects";
 import { repositoryDirectory } from "../repository-setup";
 import { productCreateVmFields } from "./product-vm";
+import { scrubAgentSecrets } from "./scrub-agent-secrets";
 import {
 	admitVmCreate,
 	computeHourlyMicroUsd,
@@ -216,6 +217,7 @@ export async function recycleWorkspace(client: Freestyle, sessionId: string) {
 				repositoryDirectory(repo.fullName),
 			);
 			const digest = await retainedTreeDigest(vm, roots);
+			await scrubAgentSecrets(vm);
 			const created = await vm.snapshot({
 				slug: `ytimesy-recovery-${randomUUID()}`,
 				autoDeleteSeconds: -1,
