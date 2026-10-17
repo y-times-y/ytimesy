@@ -66,6 +66,7 @@ import {
 } from "./api-agent-context";
 import { BackgroundHistoryCompaction } from "./background-history-compaction";
 import { composedAgentTools } from "./composed-agent-tools";
+import { stableHistoryKeyOrder } from "./stable-history-key-order";
 import { timed } from "./step-timing";
 
 export type { ApiAgentEvent } from "#/domain/api-agent-event";
@@ -849,11 +850,13 @@ async function executeModelSteps(
 					];
 				await input.beforeStep?.(history);
 				runSignal.throwIfAborted();
+				// Same bytes whether the history is in memory or reloaded from jsonb.
 				return {
-					messages:
+					messages: stableHistoryKeyOrder(
 						runtime.imageInput === false
 							? withImagePlaceholders(history)
 							: history,
+					),
 				};
 			},
 			// SDK retries only retryable request-start failures (with backoff, like
