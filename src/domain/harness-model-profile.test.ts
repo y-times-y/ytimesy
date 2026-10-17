@@ -86,6 +86,9 @@ it("does not recommend a native tool unless it is actually offered", () => {
 	expect(harnessModelToolInstructions("anthropic", false)).toContain(
 		"Signed thinking",
 	);
+	const freeform = harnessModelToolInstructions("openai", "freeform");
+	expect(freeform).toContain("freeform, not JSON");
+	expect(freeform).not.toContain("V4A operation schema");
 });
 
 it.each(["openai", "anthropic", "google", "other"] as const)(

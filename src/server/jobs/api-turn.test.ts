@@ -322,6 +322,9 @@ it("keeps completion capture and no cross-chat memory for Codex subscription tur
 	expect(mocks.subscriptionRuntime.mock.calls[0][0].tools.nativePatch).toBe(
 		false,
 	);
+	expect(mocks.subscriptionRuntime.mock.calls[0][0].tools.freeformPatch).toBe(
+		true,
+	);
 	expect(mocks.runtime).not.toHaveBeenCalled();
 	expect(mocks.report).toHaveBeenCalledOnce();
 });
