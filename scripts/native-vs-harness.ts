@@ -19,6 +19,10 @@ import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { parseArgs } from "node:util";
 import {
+	harnessVariantFromFlags,
+	harnessVariantLabel,
+} from "../src/domain/harness-variant";
+import {
 	assertDevelopmentDatabase,
 	createHarnessRunner,
 	emptyRecord,
@@ -32,6 +36,7 @@ import {
 	table,
 	verifierCommand,
 } from "./smoke/builder-harness";
+import { createEvalUser, onEvalStop } from "./smoke/eval-user";
 
 const NOTES = [
 	"Same model, reasoning effort, prompt (task + smoke suffix), fixture repo and verifier in both arms. Differences in what is measured:",
@@ -55,8 +60,17 @@ const { values: flags } = parseArgs({
 		"turn-timeout": { type: "string", default: "300" },
 		"codex-bin": { type: "string" },
 		out: { type: "string" },
+		/** Harness variant for the harness arm, e.g. memoryWording=rules (repeatable). */
+		variant: { type: "string", multiple: true },
+		/** Run the harness arm as the dev owner instead of a throwaway eval user. */
+		"as-owner": { type: "boolean", default: false },
+		/** The eval user's memory mode (default off). */
+		memory: { type: "string", default: "off" },
 	},
 });
+const variant = harnessVariantFromFlags(flags.variant);
+if (!["off", "spec", "full"].includes(flags.memory as string))
+	throw new Error("--memory accepts off, spec or full.");
 if (!flags.live)
 	throw new Error(
 		"Refusing to run: pass --live (uses the Codex subscription and dev VMs).",
@@ -84,7 +98,7 @@ const turnTimeoutMs =
 	Math.min(900, Math.max(30, Number(flags["turn-timeout"]) || 300)) * 1000;
 const outPath =
 	flags.out ??
-	`/tmp/native-vs-harness-${new Date().toISOString().replaceAll(/[:.]/g, "-")}.json`;
+	`/tmp/native-vs-harness-${new Date().toISOString().replaceAll(/[:.]/g, "-")}-${process.pid}.json`;
 const harnessModel = `codex:${model}`;
 
 // The PATH `codex` may be a terminal wrapper that injects hooks and MCP
@@ -358,14 +372,10 @@ async function pool<T>(
 
 let stopping = false;
 let runner: Awaited<ReturnType<typeof createHarnessRunner>> | undefined;
-process.on("SIGINT", () => {
-	if (stopping) process.exit(130);
+onEvalStop(() => {
 	stopping = true;
 	runner?.stop();
 	for (const kill of liveChildren) kill("SIGTERM");
-	console.error(
-		"Stopping: cancelling runs and cleaning up (Ctrl-C again to force).",
-	);
 });
 
 const startedAt = new Date().toISOString();
@@ -385,13 +395,26 @@ try {
 	const work: Promise<void>[] = [];
 	if (arms.has("harness")) {
 		await assertDevelopmentDatabase();
+		const user = await createEvalUser({
+			label: `native-vs-harness ${harnessVariantLabel(variant)}`,
+			variant,
+			asOwner: flags["as-owner"],
+			memory: flags.memory as "off" | "spec" | "full",
+		});
+		console.info(
+			`Harness arm runs as ${user.asOwner ? "the owner" : `eval user ${user.userId}`} (variant ${harnessVariantLabel(variant)}).`,
+		);
 		runner = await createHarnessRunner({
+			user,
 			models: [harnessModel],
 			concurrency: harnessConcurrency,
 			turnTimeoutMs,
 			// The Codex subscription has no per-token charge.
 			costOf: () => 0,
 			reasoning: effort,
+		}).catch(async (error) => {
+			await user.release();
+			throw error;
 		});
 		await runner.preflightExecutor();
 		const harness = runner;
@@ -544,6 +567,7 @@ await writeFile(
 				tasks: tasks.map((task) => task.id),
 				repeat,
 				arms: [...arms],
+				variant: harnessVariantLabel(variant),
 				nativeConcurrency,
 				harnessConcurrency,
 				turnTimeoutSeconds: turnTimeoutMs / 1000,

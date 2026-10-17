@@ -1,5 +1,6 @@
 import { CodexReconnectRequired } from "#/domain/api-turn-failure";
 import { database } from "../adapters/database";
+import { codexCredentialUserId } from "../adapters/dev-eval-users";
 import { CODEX_OAUTH_CLIENT_ID, CODEX_OAUTH_ISSUER } from "./codex-oauth";
 import { seal, unseal } from "./token-vault";
 
@@ -97,9 +98,12 @@ function externalTokens(auth: ManagedCodexAuth): CodexExternalTokens {
  * A current, unexpired token needs no rotation, so it is read without the lock.
  */
 export async function codexExternalTokens(
-	userId: string,
+	requestingUserId: string,
 	forceRefresh = false,
 ): Promise<CodexExternalTokens> {
+	// A development eval user borrows its owner's login: the owner's row is
+	// read and refreshed, so a rotated refresh token never forks into a copy.
+	const userId = await codexCredentialUserId(requestingUserId);
 	if (!forceRefresh) {
 		const { rows } = await database().query<{
 			encrypted_codex_auth: string | null;
