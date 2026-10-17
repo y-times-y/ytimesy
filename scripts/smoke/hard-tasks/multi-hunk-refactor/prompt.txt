@@ -1,0 +1,8 @@
+Replace the module globals in billing/legacy_audit.py with an explicit request context, in one change:
+1. Create billing/context.py with a frozen dataclass `RequestContext(request_id: str, actor: str)`.
+2. `audit.record(context, kind, **fields)`: context becomes the first, required parameter, and each event's request_id and actor come from it.
+3. Every function that records an audit event, directly or through the functions it calls (ledger.post/reverse, invoices.create_invoice/add_line/void_invoice, payments.charge/apply_payment, refunds.refund, subscriptions.start/renew/cancel, notifications.send), takes `context` as its first, required parameter and passes it down. Read-only helpers (ledger.balance, invoices.total/outstanding, audit.events) keep their signatures.
+4. `api.handle(request)` keeps its signature and builds the context from the request's id and user; each sub-request of a batch gets its own context (its own id, the batch's user), and the batch's own `batch.done` event carries the batch's id and user.
+5. Delete billing/legacy_audit.py; nothing may reference it.
+6. Create tests/test_context.py covering context threading (including a batch), and update the existing tests to the new signatures.
+`python3 -m unittest discover -s tests -t .` must pass with all existing tests kept.
