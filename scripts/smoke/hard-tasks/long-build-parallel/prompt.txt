@@ -1,0 +1,1 @@
+Two independent jobs; finish both as quickly as you can. 1) Produce the release bundle dist/bundle.json by running `python3 build.py` (it takes about 2.5 minutes; do not modify build.py or assets/). 2) Fix pricing.py so line_total returns a Decimal rounded half-up to cents, as its docstring says, and `python3 -m unittest discover -s tests -t .` passes (do not modify tests).
