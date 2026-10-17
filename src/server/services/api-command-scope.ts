@@ -34,7 +34,11 @@ finally:
     record.unlink(missing_ok=True)
 sys.exit(result if result>=0 else 128-result)`;
 
-const STOP = `import json, os, pathlib, signal, sys, time
+/**
+ * Stops the recorded process group of one command (argv: scope root, command
+ * id) or of every command in the scope (argv: scope root).
+ */
+export const COMMAND_STOP_SCRIPT = `import json, os, pathlib, signal, sys, time
 root=pathlib.Path(sys.argv[1])
 root.mkdir(parents=True,exist_ok=True)
 command = sys.argv[2] if len(sys.argv)>2 else None
@@ -59,10 +63,13 @@ for pid in targets:
     try: os.killpg(pid,signal.SIGKILL)
     except ProcessLookupError: pass`;
 
+/** One scope directory per turn under here, holding `<command id>.json` process records. */
+export const COMMAND_SCOPES_DIRECTORY = "/tmp/ytimesy-api-command-scopes";
+
 export function commandScopeRoot(turnId: string) {
 	if (!/^[a-zA-Z0-9-]{1,80}$/.test(turnId))
 		throw new Error("Invalid command scope.");
-	return `/tmp/ytimesy-api-command-scopes/${turnId}`;
+	return `${COMMAND_SCOPES_DIRECTORY}/${turnId}`;
 }
 export function scopedShellCommand(input: {
 	turnId: string;
@@ -104,7 +111,7 @@ export async function stopApiCommand(
 		posixShellCommand([
 			"python3",
 			"-c",
-			STOP,
+			COMMAND_STOP_SCRIPT,
 			commandScopeRoot(turnId),
 			commandId,
 		]),
@@ -119,7 +126,12 @@ export async function stopApiTurnCommands(
 ) {
 	const result = await workspace.machines.exec(
 		workspace.vm,
-		posixShellCommand(["python3", "-c", STOP, commandScopeRoot(turnId)]),
+		posixShellCommand([
+			"python3",
+			"-c",
+			COMMAND_STOP_SCRIPT,
+			commandScopeRoot(turnId),
+		]),
 		10_000,
 	);
 	if (result.exitCode !== 0)
