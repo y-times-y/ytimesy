@@ -34,7 +34,7 @@ node --env-file=.env --import tsx scripts/smoke/eval-user.ts --cleanup [--older-
 - **Codex subscription**: the owner's ChatGPT plan. Every eval user's turns, memory saves and dreams count against the owner's plan rate limits, the same as before.
 - **OpenRouter**: the owner's key, through the copied connection. Spend lands on the same key, including `:free` daily requests, which are counted per account.
 - **ytimesy daily token budgets** (`api_usage_budget`: 20M per account, 5M per task, 2M for memory): per user. Each eval user starts with a fresh budget, so eval runs never use up the owner's budget and are not blocked by it.
-- **VM runtime**: Freestyle bills the fleet account. With admission on (the dev edge), a run's VMs count against the eval user's own monthly allowance, which starts at the default `YTIMESY_USER_MONTHLY_MICRO_USD`, and against the fleet caps. `deleteAccountRecords` settles any open hold at its full reservation, so the fleet totals stay correct.
+- **VM runtime**: Freestyle bills the fleet account. With admission on (the dev edge), a run's VMs count against the eval user's own monthly allowance and against the fleet caps. Each eval user gets an `infrastructure_usage_policy` row of USD 2, because the product default (`YTIMESY_USER_MONTHLY_MICRO_USD`) covers only a few concurrent VM holds and a batch of 15 runs was refused with "machine reached its usage limit". `deleteAccountRecords` settles any open hold at its full reservation, so the fleet totals stay correct.
 
 ## Harness variants
 

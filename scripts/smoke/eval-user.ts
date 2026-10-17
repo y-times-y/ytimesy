@@ -49,6 +49,8 @@ const run = promisify(execFile);
 const DEV_REF = "zqkptvyvoyqqtpihlshw";
 const MEMORY_NAMESPACE = "ytimesy-memory-development";
 const MANIFESTS = ".ytimesy/eval-users";
+/** Each eval user's monthly VM allowance (USD 2): room for a batch of runs. */
+const EVAL_USER_VM_ALLOWANCE_MICRO_USD = 2_000_000;
 const EMAIL_DOMAIN = "ytimesy-eval.invalid";
 
 export type EvalProject = {
@@ -522,6 +524,12 @@ export async function createEvalUser(options: {
 		await db.query(
 			"insert into dev_eval_user(user_id,owner_user_id,label,harness_variant) values($1,$2,$3,$4::jsonb)",
 			[userId, ownerId, label, JSON.stringify(harnessVariantChanges(variant))],
+		);
+		// A run starts one VM per task and repeat; the product default monthly
+		// allowance covers only a few concurrent holds. The fleet caps still apply.
+		await db.query(
+			"insert into infrastructure_usage_policy(user_id,monthly_micro_usd) values($1,$2)",
+			[userId, EVAL_USER_VM_ALLOWANCE_MICRO_USD],
 		);
 		await db.query(
 			`insert into agent_account(user_id,provider,status,plan_type,updated_at,encrypted_codex_auth)
