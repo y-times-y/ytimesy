@@ -1,6 +1,14 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+	mkdir,
+	mkdtemp,
+	readdir,
+	readFile,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { asSchema, type ToolSet, tool } from "ai";
@@ -16,11 +24,7 @@ import {
 import { WorkspaceId } from "#/domain/ids";
 import { agentOutputDirectory } from "./agent-output-artifacts";
 import { builderToolSurface } from "./builder-shell-surface";
-import {
-	type LeanCommandResult,
-	leanShapeTools,
-	relativePatchPaths,
-} from "./lean-tools";
+import { type LeanCommandResult, leanShapeTools } from "./lean-tools";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 let root: string;
@@ -314,19 +318,20 @@ describe("the wiring point", () => {
 		const { tools } = commandRunner({});
 		tools.apply_patch = tools.execute_command;
 		tools.check_deliverable = tools.execute_command;
-		const current = builderToolSurface({
-			variant: "current",
-			modelId: "anthropic/claude-opus-5.5",
-			tools,
-		});
-		expect(current.lean).toBeUndefined();
-		expect(Object.keys(current.tools)).toContain("check_deliverable");
 		const context = {
 			workspace: async () => ({ machines, vm: WorkspaceId("vm"), cwd: repo }),
 			sessionId,
 			turnId: "turn",
 			signal: new AbortController().signal,
 		};
+		const current = builderToolSurface({
+			variant: "current",
+			modelId: "anthropic/claude-opus-5.5",
+			tools,
+			lean: context,
+		});
+		expect(current.lean).toBeUndefined();
+		expect(Object.keys(current.tools)).toContain("check_deliverable");
 		const native = builderToolSurface({
 			variant: "lean-native",
 			modelId: "anthropic/claude-opus-5.5",
@@ -658,37 +663,83 @@ describe("files go through one reader, writer and edit engine", () => {
 	});
 });
 
-describe("Codex patch paths", () => {
-	const root = async () => "/home/ubuntu/repo";
-	it("makes absolute paths inside the repository relative", async () => {
+describe("lean writes go through the runtime's checked edit", () => {
+	it("refuses .git, symlinks and paths outside the repository and ~/memory, and leaves no temp file", async () => {
+		const tools = lean("claude");
+		await mkdir(join(repo, ".git"), { recursive: true });
+		await expect(
+			run(tools, "Write", {
+				file_path: join(repo, ".git/config"),
+				content: "x",
+			}),
+		).rejects.toThrow(/\.git/);
+		const outside = join(root, "outside.txt");
+		await expect(
+			run(tools, "Write", { file_path: outside, content: "x" }),
+		).rejects.toThrow(/outside the repository/);
+		await writeFile(outside, "secret\n");
+		await symlink(outside, join(repo, "link.txt"));
+		await expect(
+			run(tools, "Write", { file_path: join(repo, "link.txt"), content: "x" }),
+		).rejects.toThrow(/[Ss]ymlink/);
+		expect(await readFile(outside, "utf8")).toBe("secret\n");
+		await expect(
+			run(tools, "Edit", {
+				file_path: "link.txt",
+				old_string: "secret",
+				new_string: "x",
+			}),
+		).rejects.toThrow(/[Ss]ymlink/);
+		expect(await readFile(outside, "utf8")).toBe("secret\n");
 		expect(
-			await relativePatchPaths(
-				"*** Begin Patch\n*** Update File: /home/ubuntu/repo/src/a.py\n*** Move to: /home/ubuntu/repo/src/b.py\n@@\n-x\n+y\n*** Add File: c.py\n+z\n*** End Patch",
-				root,
-			),
-		).toBe(
-			"*** Begin Patch\n*** Update File: src/a.py\n*** Move to: src/b.py\n@@\n-x\n+y\n*** Add File: c.py\n+z\n*** End Patch",
+			(await readdir(repo)).filter((name) => name.startsWith(".ytimesy-")),
+		).toEqual([]);
+	});
+
+	it("writes inside ~/memory", async () => {
+		await mkdir(join(root, "home/memory"), { recursive: true });
+		expect(
+			await run(lean("pi"), "write", {
+				path: "~/memory/notes.md",
+				content: "- Uses pnpm\n",
+			}),
+		).toMatch(/^Created /);
+		expect(await readFile(join(root, "home/memory/notes.md"), "utf8")).toBe(
+			"- Uses pnpm\n",
 		);
 	});
-	it("leaves paths outside the repository for the parser to refuse", async () => {
-		for (const path of [
-			"/etc/passwd",
-			"/home/ubuntu/repo",
-			"/home/ubuntu/repository/a.py",
-		])
-			expect(await relativePatchPaths(`*** Add File: ${path}\n+x`, root)).toBe(
-				`*** Add File: ${path}\n+x`,
-			);
-	});
-	it("reads the root only when a header is absolute", async () => {
-		let reads = 0;
-		const patch = "*** Begin Patch\n*** Add File: a.py\n+/abs\n*** End Patch";
-		expect(
-			await relativePatchPaths(patch, async () => {
-				reads++;
-				return "/r";
-			}),
-		).toBe(patch);
-		expect(reads).toBe(0);
+
+	it("keeps write_stdin's cursor in the turn memo", async () => {
+		const memo = new Map<string, unknown>();
+		const id = randomUUID();
+		const { tools: base, calls } = commandRunner({
+			execute_command: [
+				{ id, status: "running", stdout: "one\n", start: 0, nextStart: 4 },
+			],
+			continue_command: [
+				{ id, status: "running", stdout: "two\n", start: 4, nextStart: 8 },
+			],
+		});
+		const context = {
+			workspace: async () => ({ machines, vm: WorkspaceId("vm"), cwd: repo }),
+			sessionId,
+			turnId: "turn",
+			signal: new AbortController().signal,
+			once: (_id: string, _fingerprint: string, run: () => Promise<unknown>) =>
+				run(),
+			installHelpers: async () => {},
+			memo: async <T>(key: string, load: () => Promise<T>) => {
+				if (!memo.has(key)) memo.set(key, await load());
+				return memo.get(key) as T;
+			},
+		};
+		await run(leanShapeTools("codex", base, context).tools, "exec_command", {
+			cmd: "slow",
+		});
+		// Another step of the same turn builds its tools again.
+		await run(leanShapeTools("codex", base, context).tools, "write_stdin", {
+			session_id: id,
+		});
+		expect(calls.at(-1)?.args).toMatchObject({ id, start: 4 });
 	});
 });

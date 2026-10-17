@@ -283,15 +283,25 @@ finally:
         os.unlink(temporary)
 return {'path': request['path'], 'sha256': hashlib.sha256(content.encode()).hexdigest(), 'diagnosticSource': content if len(content) <= ${FILE_TOOL_CHARACTERS} else None}`;
 
-const EDIT_SCRIPT = `import fcntl, hashlib, json, os, pathlib, stat, sys, tempfile
-root = pathlib.Path(sys.argv[1]).resolve(strict=True)
-lock = open('/tmp/ytimesy-edit-lock-' + hashlib.sha256(str(root).encode()).hexdigest(), 'a')
+/**
+ * Python (needs fcntl, hashlib, os, pathlib, stat, tempfile and a resolved
+ * `root`): takes the repository's edit lock and defines
+ * `apply_edit(request, validate_only=False)`, one checked edit relative to
+ * `root`: no absolute paths or .git, no symlinks, no escape from `root`,
+ * stale-content refusal, atomic replace with the temp file always removed.
+ * The lean surfaces' file writer uses the same function.
+ */
+export const LOCKED_APPLY_EDIT = `lock = open('/tmp/ytimesy-edit-lock-' + hashlib.sha256(str(root).encode()).hexdigest(), 'a')
 fcntl.flock(lock, fcntl.LOCK_EX)
 def apply_edit(request, validate_only=False):
 ${EDIT_OPERATION_SCRIPT.trim()
 	.split("\n")
 	.map((line) => `    ${line}`)
-	.join("\n")}
+	.join("\n")}`;
+
+const EDIT_SCRIPT = `import fcntl, hashlib, json, os, pathlib, stat, sys, tempfile
+root = pathlib.Path(sys.argv[1]).resolve(strict=True)
+${LOCKED_APPLY_EDIT}
 with open(sys.argv[2], encoding='utf-8') as handle:
     request = json.load(handle)
 if isinstance(request, dict) and 'preflight' in request:
@@ -363,6 +373,8 @@ export function apiAgentFileTools(
 	},
 ): ToolSet {
 	const { signal, once } = input;
+	/** Patch headers may name repository files by absolute path (as Codex's own apply_patch allows). */
+	const repositoryRoot = async () => (await resolveToolWorkspace(input)).cwd;
 	function readRepositoryFiles(
 		paths: string[],
 		start: number,
@@ -882,7 +894,9 @@ export function apiAgentFileTools(
 				execute: (patch: string, options) =>
 					once(options.toolCallId, async () => {
 						try {
-							return await applyFileChanges(parsePatchText(patch));
+							return await applyFileChanges(
+								parsePatchText(patch, undefined, await repositoryRoot()),
+							);
 						} catch (error) {
 							const message =
 								error instanceof Error
@@ -978,7 +992,11 @@ export function apiAgentFileTools(
 					if (operation.type === "delete_file" || !operation.diff) throw error;
 					let changes: PatchFileChange[];
 					try {
-						changes = parsePatchText(operation.diff, operation.path);
+						changes = parsePatchText(
+							operation.diff,
+							operation.path,
+							await repositoryRoot(),
+						);
 					} catch {
 						throw error;
 					}
@@ -987,13 +1005,15 @@ export function apiAgentFileTools(
 				return await writeEdit(request);
 			}
 			if (patchText !== undefined)
-				return await applyFileChanges(parsePatchText(patchText, args.path));
+				return await applyFileChanges(
+					parsePatchText(patchText, args.path, await repositoryRoot()),
+				);
 			if (!args.path)
 				throw new PatchInputError("content needs a path to write.");
 			return await applyFileChanges([
 				{
 					type: "write",
-					path: repositoryPatchPath(args.path),
+					path: repositoryPatchPath(args.path, await repositoryRoot()),
 					content: args.content as string,
 				},
 			]);

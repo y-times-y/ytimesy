@@ -641,28 +641,21 @@ async function runApiTurnAttempt(
 		// The builder's tool surface (docs/builder-tool-surface.md): "current"
 		// for everyone; a development eval user's harness variant may pick a
 		// lean one (docs/parallel-evals.md).
-		const toolSurfaceVariant = variant.toolSurface;
 		const surface = !shellBuilder
 			? { tools: repositoryContext.tools, lean: undefined }
-			: toolSurfaceVariant === "current"
-				? builderToolSurface({
-						variant: toolSurfaceVariant,
-						modelId: route.modelId,
-						tools: repositoryContext.tools,
-					})
-				: builderToolSurface({
-						variant: toolSurfaceVariant,
-						modelId: route.modelId,
-						tools: repositoryContext.tools,
-						lean: {
-							workspace,
-							sessionId: owner.id,
-							turnId: turn.id,
-							toolCallPrefix: step ? `step-${step.index}:` : undefined,
-							signal: abort.signal,
-							memo: (key, load) => turnMemo(`${turn.id}:${key}`, load),
-						},
-					});
+			: builderToolSurface({
+					variant: variant.toolSurface,
+					modelId: route.modelId,
+					tools: repositoryContext.tools,
+					lean: {
+						workspace,
+						sessionId: owner.id,
+						turnId: turn.id,
+						toolCallPrefix: step ? `step-${step.index}:` : undefined,
+						signal: abort.signal,
+						memo: (key, load) => turnMemo(`${turn.id}:${key}`, load),
+					},
+				});
 		const surfaceTools = surface.tools;
 		// A lean surface names the repository's absolute path in its system
 		// prompt (Claude Code's tools take absolute paths). The first step
@@ -908,9 +901,9 @@ async function runApiTurnAttempt(
 					owner.id,
 					history,
 				);
-				return surface.lean
-					? surface.lean.saveHistory(reference, history)
-					: reference;
+				// A lean surface has no archive tools: it searches a file instead.
+				const file = await surface.lean?.saveHistory(reference, history);
+				return file ? { file } : reference;
 			},
 			instructions: turnInstructions(
 				{
