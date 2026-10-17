@@ -305,7 +305,17 @@ describe("lean instructions", () => {
 		expect(lean).not.toContain("read_environment_report");
 		expect(lean).toContain("run_shell_command runs shell commands");
 		expect(lean).toContain("You are the coding agent for this chat");
-		expect(lean.length).toBeLessThan(current.length + 800);
+		expect(lean).toContain("`ytimesy-browser screenshot`");
+		expect(lean).toContain("look at the PNG it prints with read_file");
+		expect(lean.length).toBeLessThan(current.length + 1800);
+		const knowing = agentTurnInstructions({
+			...input,
+			projectKnowledge: "Billing lives in billing/.",
+			leanShape: "pi",
+		});
+		expect(knowing).toContain("Shared project knowledge");
+		expect(knowing).toContain("Billing lives in billing/.");
+		expect(knowing).not.toContain("search_project_memory");
 		const located = agentTurnInstructions({
 			...input,
 			leanShape: "claude",

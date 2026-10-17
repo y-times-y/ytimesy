@@ -1,13 +1,22 @@
 import type { ToolSet } from "ai";
-import { visualQaInstructions } from "#/domain/agent-desktop";
+import {
+	leanVisualQaInstructions,
+	visualQaInstructions,
+} from "#/domain/agent-desktop";
 import { cloudAgentRoleInstructions } from "#/domain/agent-orchestration";
 import {
 	BUILDER_ENVIRONMENT_INSTRUCTIONS,
 	PREPARED_ENVIRONMENT_INSTRUCTIONS,
 } from "#/domain/environment-context";
-import type { LeanToolShape } from "#/domain/harness-model-profile";
+import {
+	LEAN_SHAPE_TOOLS,
+	type LeanToolShape,
+} from "#/domain/harness-model-profile";
 import { leanToolInstructions } from "#/domain/lean-tool-instructions";
-import { PROJECT_KNOWLEDGE_INSTRUCTIONS } from "#/domain/project-knowledge";
+import {
+	BUILDER_PROJECT_KNOWLEDGE_INSTRUCTIONS,
+	PROJECT_KNOWLEDGE_INSTRUCTIONS,
+} from "#/domain/project-knowledge";
 import { projectSecretsInstructions } from "#/domain/project-secret";
 import { pluginSkillsInstructions } from "./plugin-skill-tools";
 
@@ -46,10 +55,15 @@ function leanTurnInstructions(
 	return [
 		`You are the ytimesy coding agent, working in this task's prepared repository checkout${input.leanWorkingDirectory ? ` at ${input.leanWorkingDirectory}` : ""}; commands start in the repository root and relative paths resolve there.${input.leanWorkingDirectory ? ` Tools that take absolute paths need paths under ${input.leanWorkingDirectory}.` : ""} Repository instructions (AGENTS.md/CLAUDE.md), nested instruction file locations and skills are provided in the conversation. Before working in a folder listed with its own AGENTS.md or CLAUDE.md, read that file; read a matching skill's SKILL.md completely. ${cloudAgentRoleInstructions(input.session, { shellBuilder: true })}`,
 		leanToolInstructions(input.leanShape),
+		leanVisualQaInstructions(LEAN_SHAPE_TOOLS[input.leanShape]),
 		pluginSkillsInstructions(input.plugins),
 		input.secretNames?.length
 			? projectSecretsInstructions(input.secretNames)
 			: "",
+		// The lean surfaces have no project-memory tools: the tool-free wording.
+		input.projectKnowledge === null
+			? ""
+			: `${BUILDER_PROJECT_KNOWLEDGE_INSTRUCTIONS}\nShared project knowledge (historical data, verify against this checkout):\n${JSON.stringify(input.projectKnowledge)}`,
 	]
 		.filter(Boolean)
 		.join("\n");
