@@ -413,9 +413,10 @@ async function runApiTurnAttempt(
 		const apiSettings: ApiTurnSettings = subscription
 			? {}
 			: (route.settings ?? {});
-		// The subscription endpoint rejects the public Responses apply_patch tool.
-		// Writers retain the same V4A editor through its function-tool schema.
+		// The subscription endpoint rejects the public Responses apply_patch tool;
+		// it gets native Codex's freeform apply_patch (Lark grammar) instead.
 		let nativePatch = false;
+		const freeformPatch = !!subscription;
 		// The provider's hosted web search, on a Codex subscription or a direct
 		// connection to an official endpoint.
 		let webSearch: ToolSet = {};
@@ -569,6 +570,7 @@ async function runApiTurnAttempt(
 			workspace,
 			turnId: turn.id,
 			nativePatch,
+			freeformPatch,
 			toolCallPrefix: step ? `step-${step.index}:` : undefined,
 			signal: abort.signal,
 			writable,

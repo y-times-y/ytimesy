@@ -214,10 +214,13 @@ export function toolActivity(item: DynamicToolCallItem): ToolActivity {
 			return { verb: "Stopped command", glyph: "stop" };
 		case "apply_patch": {
 			const operation = (input.operation ?? {}) as Record<string, unknown>;
+			// The freeform (Codex) apply_patch input is the raw patch text, not JSON.
 			const patch =
 				typeof operation.diff === "string"
 					? operation.diff
-					: (text("patch") ?? text("input") ?? "");
+					: (text("patch") ??
+						text("input") ??
+						(item.input?.startsWith("*** Begin Patch") ? item.input : ""));
 			const path =
 				typeof operation.path === "string"
 					? operation.path
