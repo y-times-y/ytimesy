@@ -121,7 +121,7 @@ const { values: flags } = parseArgs({
 		"price-out": { type: "string" },
 		"keep-repos": { type: "boolean", default: false },
 		out: { type: "string" },
-		/** Harness variant, e.g. toolSurface=current or memoryWording=notes (repeatable; the default is lean-pi, rules, observer). */
+		/** Harness variant, e.g. toolSurface=current or memoryWording=notes (repeatable; the default is lean, rules, observer). */
 		variant: { type: "string", multiple: true },
 		/** Variants compared in one run, separated by ";" (each on top of --variant). */
 		variants: { type: "string" },

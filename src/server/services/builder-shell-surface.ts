@@ -60,7 +60,7 @@ export type LeanBuilderSurface = {
  * The builder's tool surface, chosen per run (docs/builder-tool-surface.md).
  * "current" is the measured shell surface above. "lean-native" shows each
  * model family its own vendor harness's tools (Codex, Claude Code, Gemini
- * CLI, Qwen Code) and "lean-pi" shows every model Pi's four; both run on the
+ * CLI, Qwen Code) and "lean" shows every model our core four; both run on the
  * same command runner and limits, keep only report_task_blocked from `tools`
  * (MCP, web search, plugin skills, plan and secret tools are added by the
  * caller as before), and move the helpers to workspace commands.

@@ -1,6 +1,6 @@
 /**
- * One output limit for every lean tool, as Pi's truncate.ts: at most 2000
- * lines and 50 KB reach the model. File reads keep the head (the model
+ * One output limit for every lean tool: at most 2000 lines and 50 KB reach
+ * the model. File reads keep the head (the model
  * continues with an offset); command output keeps the tail (errors and
  * summaries come last), and the full output stays in a file whose path the
  * tool returns.
@@ -27,7 +27,7 @@ function lineList(text: string) {
 }
 
 /** Keeps whole lines from the start. A first line over the byte limit is cut. */
-export function truncateHead(
+export function keepHead(
 	text: string,
 	limits: { maxLines?: number; maxBytes?: number } = {},
 ): Truncation {
@@ -65,7 +65,7 @@ export function truncateHead(
 }
 
 /** Keeps whole lines from the end. A last line over the byte limit keeps its end. */
-export function truncateTail(
+export function keepTail(
 	text: string,
 	limits: { maxLines?: number; maxBytes?: number } = {},
 ): Truncation {
@@ -107,10 +107,10 @@ export function truncateTail(
 	};
 }
 
-/** Pi's note after truncated command output. */
+/** The note after truncated command output: which lines are shown and where the rest is. */
 export function commandTruncationNote(
 	truncation: Pick<Truncation, "firstLine" | "lastLine" | "totalLines">,
 	outputPath: string,
 ) {
-	return `[Showing lines ${truncation.firstLine}-${truncation.lastLine} of ${truncation.totalLines}. Full output: ${outputPath}]`;
+	return `[Output cut to lines ${truncation.firstLine}-${truncation.lastLine} of ${truncation.totalLines}; all of it is in ${outputPath}]`;
 }

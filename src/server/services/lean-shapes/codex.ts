@@ -180,7 +180,7 @@ export function codexTools(engine: LeanEngine, base: ToolSet): ToolSet {
 				path: pathArgument("Local filesystem path to an image file"),
 			}),
 			execute: async ({ path }) => {
-				const read = await readForModel(engine, "pi", path, 1, 1);
+				const read = await readForModel(engine, "core", path, 1, 1);
 				if (typeof read === "string" || !("image" in read))
 					throw new Error(`${path} is not a PNG, JPEG, GIF or WebP image.`);
 				return read;

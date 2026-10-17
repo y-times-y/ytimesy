@@ -4,7 +4,7 @@
  * for apply_patch hunks): curly quotes, Unicode dashes and special spaces to
  * ASCII, then NFKC. Models type the ASCII form of what a file spells with
  * typographic characters, and the other way round. Codex's own apply_patch
- * and Pi's edit fall back to the same folding.
+ * falls back to a similar folding.
  */
 
 const SINGLE_QUOTES = /[‘’‚‛]/;

@@ -47,8 +47,8 @@ const SPECIALIST_TOOLS = [
 	"batch_read",
 ];
 
-/** A lean surface's tool names and argument shapes: a vendor harness's, or Pi's neutral one. */
-export type LeanToolShape = "codex" | "claude" | "gemini" | "qwen" | "pi";
+/** A lean surface's tool names and argument shapes: a vendor harness's, or our own core set. */
+export type LeanToolShape = "codex" | "claude" | "gemini" | "qwen" | "core";
 
 /**
  * The vendor harness a model was post-trained in, from its id (an
@@ -62,7 +62,7 @@ export function leanToolShape(
 	variant: Exclude<HarnessToolSurfaceId, "current">,
 	modelId: string,
 ): LeanToolShape {
-	if (variant === "lean-pi") return "pi";
+	if (variant === "lean") return "core";
 	const id = modelId.toLowerCase();
 	const name = id.split("/").at(-1) ?? id;
 	if (
@@ -127,7 +127,7 @@ export const LEAN_SHAPE_TOOLS = {
 		grep: "grep_search",
 		image: "read_file",
 	},
-	pi: {
+	core: {
 		command: "bash",
 		read: "read",
 		write: "write",

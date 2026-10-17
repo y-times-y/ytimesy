@@ -15,8 +15,8 @@ function toolsSentence(shape: LeanToolShape) {
 	].join("; ")}.`;
 }
 
-/** Pi's bash waits for every command; long-lived processes are detached, as Pi itself advises. */
-const PI_LONG_RUNNING = `${LEAN_SHAPE_TOOLS.pi.command} waits for each command to finish: start servers and other long-running processes detached, with \`tmux new -d -s <name> '<command> > /tmp/<name>.log 2>&1'\` (or \`setsid nohup <command> > /tmp/<name>.log 2>&1 &\`), then read the log.`;
+/** The core bash tool waits for every command, so long-lived processes must be started detached. */
+const DETACHED_LONG_RUNNING = `${LEAN_SHAPE_TOOLS.core.command} waits for each command to finish: start servers and other long-running processes detached, with \`tmux new -d -s <name> '<command> > /tmp/<name>.log 2>&1'\` (or \`setsid nohup <command> > /tmp/<name>.log 2>&1 &\`), then read the log.`;
 
 export function leanToolInstructions(shape: LeanToolShape) {
 	return [
@@ -25,6 +25,6 @@ export function leanToolInstructions(shape: LeanToolShape) {
 		"- Parts of this conversation removed to save space are saved in `~/.ytimesy/history/`. Search there when you need exact earlier details.",
 		"- `~/.ytimesy/environment.md` (if present) describes how this workspace was prepared.",
 		"- `ytimesy-browser open|screenshot|inspect|exec` drives the desktop browser for visual checks.",
-		...(shape === "pi" ? [PI_LONG_RUNNING] : []),
+		...(shape === "core" ? [DETACHED_LONG_RUNNING] : []),
 	].join("\n");
 }

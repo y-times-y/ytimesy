@@ -8,11 +8,11 @@ import {
 } from "./harness-variant";
 
 describe("harness variants", () => {
-	it("defaults to lean-pi tools, the rules wording and observer-written memory", () => {
+	it("defaults to the lean tools, the rules wording and observer-written memory", () => {
 		expect(DEFAULT_HARNESS_VARIANT).toEqual({
 			memoryWording: "rules",
 			memoryWriter: "observer",
-			toolSurface: "lean-pi",
+			toolSurface: "lean",
 		});
 	});
 
@@ -59,7 +59,7 @@ describe("harness variants", () => {
 		).toEqual({
 			memoryWording: "notes",
 			memoryWriter: "observer",
-			toolSurface: "lean-pi",
+			toolSurface: "lean",
 		});
 		expect(harnessVariantFromUnknown({ memoryWriter: "agent" })).toEqual({
 			...DEFAULT_HARNESS_VARIANT,

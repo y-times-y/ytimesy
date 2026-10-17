@@ -11,7 +11,7 @@
 //
 // --surfaces compares the builder tool surfaces (docs/builder-tool-surface.md):
 // system instructions and tool definitions for current, lean-native (per
-// model family) and lean-pi, on each family's transport.
+// model family) and lean, on each family's transport.
 //
 // Token counts are estimates: characters / 4 of the JSON actually sent (no
 // tokenizer is installed). Claude's tokenizer yields more tokens per
@@ -360,7 +360,7 @@ await writeFile(report, environmentReport(repo));
 if (process.argv.includes("--surfaces")) {
 	try {
 		const rows: Record<string, string | number>[] = [];
-		for (const surface of ["current", "lean-native", "lean-pi"] as const)
+		for (const surface of ["current", "lean-native", "lean"] as const)
 			for (const transport of [
 				"codex",
 				"openrouter-claude",

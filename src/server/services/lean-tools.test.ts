@@ -157,7 +157,7 @@ describe("model family to shape", () => {
 		["qwen/qwen3.8-max-prime", "qwen"],
 	] as const)("%s uses the %s tools", (modelId, shape) => {
 		expect(leanToolShape("lean-native", modelId)).toBe(shape);
-		expect(leanToolShape("lean-pi", modelId)).toBe("pi");
+		expect(leanToolShape("lean", modelId)).toBe("core");
 	});
 });
 
@@ -295,8 +295,8 @@ describe("each family's tool names and argument shapes", () => {
 		});
 	});
 
-	it("Pi: read, write, edit{edits[]}, bash", async () => {
-		const tools = lean("pi");
+	it("core: read, write, edit{edits[]}, bash", async () => {
+		const tools = lean("core");
 		expect(Object.keys(tools)).toEqual(["read", "write", "edit", "bash"]);
 		expect(await schemaOf(tools, "read")).toEqual({
 			properties: ["path", "offset", "limit"],
@@ -348,14 +348,14 @@ describe("the wiring point", () => {
 			"Grep",
 			"report_task_blocked",
 		]);
-		const pi = builderToolSurface({
-			variant: "lean-pi",
+		const core = builderToolSurface({
+			variant: "lean",
 			modelId: "gpt-6.1-sol",
 			tools,
 			lean: context,
 		});
-		expect(pi.lean?.shape).toBe("pi");
-		for (const surface of [native, pi]) {
+		expect(core.lean?.shape).toBe("core");
+		for (const surface of [native, core]) {
 			const names = Object.keys(surface.tools);
 			// Offered as given (no search_tools/compose_tools) with no v13 tool profile.
 			expect(isShellSurface(names)).toBe(true);
@@ -489,14 +489,14 @@ describe("commands run on the shared runner", () => {
 				},
 			],
 		});
-		const tools = lean("pi", runner.tools);
+		const tools = lean("core", runner.tools);
 		const result = (await run(tools, "bash", {
 			command: "seq",
 		})) as LeanCommandResult;
 		expect(result.output.startsWith("row 501\n")).toBe(true);
 		expect(result.output.endsWith("row 2500")).toBe(true);
 		expect(result.truncationNote).toBe(
-			`[Showing lines 501-2500 of 2500. Full output: ${outputs}/${long}.stdout]`,
+			`[Output cut to lines 501-2500 of 2500; all of it is in ${outputs}/${long}.stdout]`,
 		);
 		expect(await modelText(tools, "bash", {}, result)).toContain("row 2500");
 	});
@@ -530,17 +530,17 @@ describe("files go through one reader, writer and edit engine", () => {
 			limit: 3,
 		})) as string;
 		expect(page).toBe(
-			"     2\tx2\n     3\tx3\n     4\tx4\n\n[Showing lines 2-4 of 2100. Use offset=5 to continue.]",
+			"     2\tx2\n     3\tx3\n     4\tx4\n\n[Lines 2-4 of 2100; read on from offset 5.]",
 		);
 		const whole = (await run(tools, "Read", {
 			file_path: "src/a.py",
 		})) as string;
 		expect(whole).toContain(
-			"[Showing lines 1-2000 of 2100. Use offset=2001 to continue.]",
+			"[Lines 1-2000 of 2100; read on from offset 2001.]",
 		);
 	});
 
-	it("Gemini read_file takes start_line/end_line; Pi read takes offset; missing files are errors", async () => {
+	it("Gemini read_file takes start_line/end_line; core read takes offset; missing files are errors", async () => {
 		await writeFile(join(repo, "b.txt"), "one\ntwo\nthree\n");
 		expect(
 			await run(lean("gemini"), "read_file", {
@@ -549,12 +549,12 @@ describe("files go through one reader, writer and edit engine", () => {
 				end_line: 3,
 			}),
 		).toContain("two\nthree");
-		expect(await run(lean("pi"), "read", { path: "b.txt" })).toBe(
+		expect(await run(lean("core"), "read", { path: "b.txt" })).toBe(
 			"one\ntwo\nthree",
 		);
-		await expect(run(lean("pi"), "read", { path: "nope.txt" })).rejects.toThrow(
-			/does not exist/,
-		);
+		await expect(
+			run(lean("core"), "read", { path: "nope.txt" }),
+		).rejects.toThrow(/does not exist/);
 	});
 
 	it("returns images as images", async () => {
@@ -608,21 +608,21 @@ describe("files go through one reader, writer and edit engine", () => {
 		).rejects.toThrow(/old_string was not found/);
 	});
 
-	it("Pi edit applies several edits in one call; Qwen edit honours replace_all", async () => {
+	it("core edit applies several edits in one call; Qwen edit honours replace_all", async () => {
 		await writeFile(join(repo, "c.txt"), "one\ntwo\nthree\n");
 		expect(
-			await run(lean("pi"), "edit", {
+			await run(lean("core"), "edit", {
 				path: "c.txt",
 				edits: [
 					{ oldText: "one", newText: "1" },
 					{ oldText: "three", newText: "3" },
 				],
 			}),
-		).toContain("Successfully replaced 2 block(s)");
+		).toContain("2 edits applied");
 		expect(await readFile(join(repo, "c.txt"), "utf8")).toBe("1\ntwo\n3\n");
 		await writeFile(join(repo, "c.txt"), "a\nb\na\n");
 		await expect(
-			run(lean("pi"), "edit", {
+			run(lean("core"), "edit", {
 				path: "c.txt",
 				edits: [
 					{ oldText: "a\nb", newText: "A\nB" },
@@ -699,7 +699,7 @@ describe("lean writes go through the runtime's checked edit", () => {
 	it("writes inside ~/memory", async () => {
 		await mkdir(join(root, "home/memory"), { recursive: true });
 		expect(
-			await run(lean("pi"), "write", {
+			await run(lean("core"), "write", {
 				path: "~/memory/notes.md",
 				content: "- Uses pnpm\n",
 			}),

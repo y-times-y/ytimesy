@@ -66,7 +66,7 @@ const { values: flags } = parseArgs({
 		"turn-timeout": { type: "string", default: "300" },
 		out: { type: "string" },
 		price: { type: "string", multiple: true },
-		/** Harness variant, e.g. toolSurface=current or memoryWording=notes (repeatable; the default is lean-pi, rules, observer). */
+		/** Harness variant, e.g. toolSurface=current or memoryWording=notes (repeatable; the default is lean, rules, observer). */
 		variant: { type: "string", multiple: true },
 		/** Run as the dev owner instead of a throwaway eval user. */
 		"as-owner": { type: "boolean", default: false },
