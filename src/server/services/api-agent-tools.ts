@@ -18,6 +18,7 @@ import { apiAgentFileTools } from "./api-agent-file-tools";
 import { apiAgentLanguageTools } from "./api-agent-language-tools";
 import { apiAgentSearchTools } from "./api-agent-search-tools";
 import { batchedAgentReads } from "./batched-agent-reads";
+import { deliverableCheckTools } from "./deliverable-check";
 import { runAgentTaskTool } from "./harness-workspace-session";
 import { journaledToolOperation } from "./journaled-tool-operation";
 import { loadCloudProjectMemoryDocument } from "./project-knowledge";
@@ -176,6 +177,8 @@ export function apiAgentTools(
 			once,
 		}),
 	);
+	if (!readOnly)
+		Object.assign(tools, deliverableCheckTools(tools.execute_command?.execute));
 	tools.batch_read = batchedAgentReads(executionIdentity.wrap(tools), signal);
 	return executionIdentity.wrap(tools);
 }
