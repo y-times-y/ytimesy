@@ -3,9 +3,11 @@ import { SessionItemId } from "./ids";
 import {
 	compactTimelineItems,
 	fileChangesFromSessionItems,
+	isQueuedUserMessage,
 	isTurnRunning,
 	lastAgentMessageText,
 	lastUserMessageText,
+	markedQueuedSend,
 	type SessionItem,
 	sendWasQueued,
 	sessionItemsQueuedWithUser,
@@ -14,6 +16,7 @@ import {
 	sessionViewShouldReplaceOpenTurn,
 	sessionWithoutFailedSend,
 	visibleSessionItems,
+	withQueuedUserMessages,
 } from "./session-item";
 
 describe("session items", () => {
@@ -470,5 +473,33 @@ describe("message identity", () => {
 				nextItems: open,
 			}),
 		).toBe(true);
+	});
+});
+
+describe("queued user messages", () => {
+	const delivered: SessionItem = {
+		kind: "userMessage",
+		id: SessionItemId("a"),
+		text: "Fix it",
+	};
+	it("lists waiting messages after the transcript until the transcript holds them", () => {
+		const waiting = [
+			{ kind: "userMessage" as const, id: SessionItemId("a"), text: "Fix it" },
+			{
+				kind: "userMessage" as const,
+				id: SessionItemId("b"),
+				text: "Also docs",
+			},
+		];
+		const items = withQueuedUserMessages([delivered], waiting);
+		expect(items.map((item) => item.id)).toEqual(["a", "b"]);
+		expect(items.filter(isQueuedUserMessage).map((item) => item.id)).toEqual([
+			"b",
+		]);
+	});
+	it("marks the browser's own copy of a send made during a run", () => {
+		expect(
+			markedQueuedSend([delivered], "a").filter(isQueuedUserMessage),
+		).toHaveLength(1);
 	});
 });

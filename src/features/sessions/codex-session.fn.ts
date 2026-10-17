@@ -22,9 +22,13 @@ import {
 	emptyHarnessSession,
 	type HarnessSessionScope,
 	readHarnessWorkspaceSession,
-	sendHarnessWorkspaceTask,
-	stopHarnessWorkspaceTurn,
 } from "#/server/services/harness-workspace-session";
+import {
+	removeQueuedComposerMessage,
+	sendComposerMessage,
+	stopTurnKeepingQueue,
+	withQueuedMessages,
+} from "#/server/services/queued-user-messages";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
 
 /** A fallback route's key: the connection ("codex" or a connection id), then the model. */
@@ -130,11 +134,15 @@ export const getCodexSession = createServerFn({ method: "GET" })
 					)
 				: null;
 			if (!landed) return emptyHarnessSession();
-			return Effect.runPromise(
-				readHarnessWorkspaceSession({ ...scope, sessionId: landed }),
+			return withQueuedMessages(
+				await Effect.runPromise(
+					readHarnessWorkspaceSession({ ...scope, sessionId: landed }),
+				),
 			);
 		}
-		return Effect.runPromise(readHarnessWorkspaceSession(scope));
+		return withQueuedMessages(
+			await Effect.runPromise(readHarnessWorkspaceSession(scope)),
+		);
 	});
 
 export const getWorkspaceBootstrap = createServerFn({ method: "GET" }).handler(
@@ -195,7 +203,9 @@ export const connectCodexSession = createServerFn({ method: "POST" })
 			data.sessionId,
 			data.createNew,
 		);
-		return Effect.runPromise(connectHarnessWorkspaceSession(scope));
+		return withQueuedMessages(
+			await Effect.runPromise(connectHarnessWorkspaceSession(scope)),
+		);
 	});
 
 export const sendCodexSessionTask = createServerFn({ method: "POST" })
@@ -263,8 +273,10 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 			data.sessionId,
 			data.createNew,
 		);
-		return runWithMachines((machines) =>
-			sendHarnessWorkspaceTask(machines, scope, data),
+		return withQueuedMessages(
+			await runWithMachines((machines) =>
+				sendComposerMessage(machines, scope, data),
+			),
 		);
 	});
 
@@ -277,5 +289,27 @@ export const stopCodexSessionTurn = createServerFn({ method: "POST" })
 			data.sessionId,
 			data.createNew,
 		);
-		return Effect.runPromise(stopHarnessWorkspaceTurn(scope));
+		return runWithMachines((machines) => stopTurnKeepingQueue(machines, scope));
+	});
+
+/** Takes back a message still waiting behind the running turn. */
+export const removeQueuedSessionMessage = createServerFn({ method: "POST" })
+	.validator(
+		(
+			data: Parameters<typeof optionalSessionInput>[0] & { messageId: string },
+		) => ({
+			...optionalSessionInput(data),
+			messageId: z.string().uuid().parse(data.messageId),
+		}),
+	)
+	.handler(async ({ data }): Promise<PublicCodexSession> => {
+		const scope = await requireScope(
+			data.projectId,
+			data.harnessId,
+			data.sessionId,
+			data.createNew,
+		);
+		return Effect.runPromise(
+			removeQueuedComposerMessage(scope, data.messageId),
+		);
 	});

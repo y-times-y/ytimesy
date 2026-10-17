@@ -194,6 +194,14 @@ describe("harness access", () => {
 				modelId: "api/00000000-0000-4000-8000-000000000000/gpt-6.1-sol",
 			}),
 		).toBe(true);
+		// A send during a run is queued for that run, not refused.
+		expect(
+			composerSendIsEnabled({
+				...input,
+				turnStatus: "running",
+				modelId: "api/00000000-0000-4000-8000-000000000000/gpt-6.1-sol",
+			}),
+		).toBe(true);
 	});
 });
 

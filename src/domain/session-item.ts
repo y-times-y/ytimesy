@@ -33,6 +33,8 @@ export type UserMessageItem = {
 	readonly approvesPlan?: true;
 	/** Cross-chat memory read for this request; the model saw it as a separate part. */
 	readonly memory?: MemoryRecall;
+	/** Sent while a turn ran; it waits for that turn's next model step (or the next turn). */
+	readonly queued?: true;
 	readonly timing?: {
 		readonly startedAt: number;
 		readonly completedAt?: number;
@@ -411,6 +413,41 @@ export function sessionTitleFromText(text: string): string {
 	const line = text.trim().split("\n")[0]?.trim() ?? "";
 	if (!line) return "New session";
 	return line.length > 48 ? `${line.slice(0, 47)}…` : line;
+}
+
+/**
+ * Public items with the messages still waiting for delivery after them, in
+ * send order. A message the transcript already holds is no longer waiting.
+ */
+export function withQueuedUserMessages(
+	items: readonly SessionItem[],
+	queued: readonly UserMessageItem[],
+): SessionItem[] {
+	const present = new Set(items.map((item) => item.id));
+	return [
+		...items,
+		...queued
+			.filter((item) => !present.has(item.id))
+			.map((item) => ({ ...item, queued: true as const })),
+	];
+}
+
+/** The browser's copy of a send made during a run, shown waiting until delivered. */
+export function markedQueuedSend(
+	items: readonly SessionItem[],
+	messageId: string,
+): SessionItem[] {
+	return items.map((item) =>
+		item.kind === "userMessage" && item.id === messageId
+			? { ...item, queued: true as const }
+			: item,
+	);
+}
+
+export function isQueuedUserMessage(
+	item: SessionItem,
+): item is UserMessageItem & { readonly queued: true } {
+	return item.kind === "userMessage" && item.queued === true;
 }
 
 export function visibleSessionItems(
