@@ -264,7 +264,7 @@ os.remove(payload)
 print('linked' if linked else 'profile')`;
 
 /** The prepared-environment report that environment.md is written from. */
-export const ENVIRONMENT_REPORT_PATH = "/tmp/ytimesy-environment.json";
+const ENVIRONMENT_REPORT_PATH = "/tmp/ytimesy-environment.json";
 
 /** Refreshes ~/.ytimesy/environment.md from a prepared-environment report. */
 export function environmentMarkdownCommand(source = ENVIRONMENT_REPORT_PATH) {

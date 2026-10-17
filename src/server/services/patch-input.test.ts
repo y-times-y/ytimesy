@@ -197,3 +197,14 @@ describe("absolute paths inside the repository", () => {
 		).toThrow(PatchInputError);
 	});
 });
+
+describe("typography folding", () => {
+	it("matches a hunk typed with ASCII quotes and dashes against curly ones", () => {
+		expect(
+			apply(
+				"title = \u201cWhat\u2019s new \u2013 2026\u201d\nother = 1\n",
+				'@@\n-title = "What\'s new - 2026"\n+title = "Changes"\n other = 1\n',
+			),
+		).toBe('title = "Changes"\nother = 1\n');
+	});
+});
