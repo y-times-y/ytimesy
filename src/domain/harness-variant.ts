@@ -11,8 +11,10 @@ export const HARNESS_VARIANT_VALUES = {
 	 */
 	memoryWording: ["notes", "rules"],
 	/**
-	 * The builder's tool surface. Only "current" is implemented; the lean
-	 * surfaces are reserved (src/server/services/harness-tool-surfaces.ts).
+	 * The builder's tool surface (builderToolSurface in
+	 * src/server/services/builder-shell-surface.ts): current = the measured
+	 * shell surface; lean-native = each model family's own vendor harness
+	 * tools; lean-pi = Pi's four tools for every model.
 	 */
 	toolSurface: ["current", "lean-native", "lean-pi"],
 } as const;

@@ -50,6 +50,23 @@ const toolNames = [
 	"debug_node",
 	"prepare_code_tools",
 	"plan_parallel_work",
+	// Lean surfaces (docs/builder-tool-surface.md).
+	"exec_command",
+	"write_stdin",
+	"Bash",
+	"Read",
+	"Write",
+	"Edit",
+	"Glob",
+	"Grep",
+	"run_shell_command",
+	"write_file",
+	"replace",
+	"edit",
+	"glob",
+	"grep_search",
+	"read",
+	"write",
 	"other",
 ] as const;
 export const harnessToolName = z.enum(toolNames);
@@ -106,6 +123,12 @@ export function toolMetricCategory(
 			"rename_symbol",
 			"rename_file",
 			"apply_code_action",
+			"Write",
+			"Edit",
+			"write_file",
+			"replace",
+			"edit",
+			"write",
 		].includes(name)
 	)
 		return "edit";
@@ -122,6 +145,10 @@ export function toolMetricCategory(
 			"debug_program",
 			"debug_node",
 			"prepare_code_tools",
+			"exec_command",
+			"write_stdin",
+			"Bash",
+			"run_shell_command",
 		].includes(name)
 	)
 		return "command";
@@ -131,6 +158,12 @@ export function toolMetricCategory(
 		[
 			"read_file",
 			"view_image",
+			"Read",
+			"Glob",
+			"Grep",
+			"glob",
+			"grep_search",
+			"read",
 			"read_files",
 			"search_files",
 			"list_files",

@@ -44,7 +44,6 @@ import { closeDatabase, database } from "../../src/server/adapters/database";
 import { memoryRepoName } from "../../src/server/adapters/memory-repos";
 import { seal, unseal } from "../../src/server/auth/token-vault";
 import { cancelServerTurn } from "../../src/server/services/cancel-server-turn";
-import { implementedToolSurfaces } from "../../src/server/services/harness-tool-surfaces";
 
 const run = promisify(execFile);
 const DEV_REF = "zqkptvyvoyqqtpihlshw";
@@ -433,10 +432,6 @@ export async function createEvalUser(options: {
 	// Local services (catalog checks, sends) resolve the owner's login too.
 	process.env.YTIMESY_DEV_EVAL_USERS = "1";
 	const variant = options.variant ?? DEFAULT_HARNESS_VARIANT;
-	if (!implementedToolSurfaces().includes(variant.toolSurface))
-		throw new Error(
-			`toolSurface=${variant.toolSurface} is reserved but not implemented (see docs/parallel-evals.md).`,
-		);
 	const ownerId = await subscriptionOwner();
 	const db = database();
 	if (options.asOwner) {

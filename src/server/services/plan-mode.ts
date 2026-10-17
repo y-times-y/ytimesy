@@ -24,7 +24,23 @@ const EDITING_TOOLS = new Set([
 	"replace_text",
 	"rename_symbol",
 	"publish_task",
+	// Lean surfaces' editing tools.
+	"Write",
+	"Edit",
+	"write_file",
+	"replace",
+	"edit",
+	"write",
 ]);
+
+/** Command tools whose shell text may write files, and the argument holding it. */
+const COMMAND_TOOLS: Readonly<Record<string, string>> = {
+	execute_command: "command",
+	exec_command: "cmd",
+	Bash: "command",
+	run_shell_command: "command",
+	bash: "command",
+};
 
 const REFUSAL = {
 	blocked: true,
@@ -46,9 +62,11 @@ function startsWritingWork(name: string, args: unknown) {
 		].includes(name)
 	)
 		return true;
-	if (name === "execute_command") {
+	if (name in COMMAND_TOOLS) {
 		// Best effort: shell writes the transcript would show as file changes.
-		const command = (args as { command?: unknown } | null)?.command;
+		const command = (args as Record<string, unknown> | null)?.[
+			COMMAND_TOOLS[name]
+		];
 		return (
 			typeof command === "string" &&
 			fileChangesFromShellCommand(command).length > 0
