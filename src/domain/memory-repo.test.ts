@@ -197,6 +197,55 @@ describe("dream inbox and save hook", () => {
 		]);
 		expect(parseSaveHookAnswer("no json")).toEqual([]);
 	});
+
+	it("reads which shown line an entry replaces, and keeps brackets that are not metadata", () => {
+		expect(
+			parseSaveHookAnswer(
+				'{"entries":[{"file":"tooling.md","text":"Use pnpm","project":"","replaces":"tooling.md:3"},{"file":"log.md","text":"Prefix logs with [orders]","replaces":"nonsense"},{"file":"x.md","text":"Ends in [key: value]"}]}',
+			),
+		).toEqual([
+			{
+				file: "tooling.md",
+				text: "Use pnpm",
+				project: "",
+				replaces: { path: "tooling.md", line: 3 },
+			},
+			{ file: "log.md", text: "Prefix logs with [orders]", project: "" },
+			{ file: "x.md", text: "Ends in key: value", project: "" },
+		]);
+		expect(
+			parseSaveHookAnswer(
+				'{"entries":[{"file":"y.md","text":"See [[other]]"}]}',
+			),
+		).toEqual([{ file: "y.md", text: "See other", project: "" }]);
+	});
+});
+
+describe("superseded entries", () => {
+	const text = [
+		"- Use npm [source: a] [superseded-by: https://app/?chat=2]",
+		"- Use pnpm [source: https://app/?chat=2]",
+	].join("\n");
+
+	it("are hidden like expired ones and removed by a dream's cleanup", () => {
+		expect(annotateMemoryText(text, { today: "2026-10-15" })).toBe(
+			"- Use pnpm [source: https://app/?chat=2]",
+		);
+		expect(withoutExpired({ "t.md": text }, "2026-10-15")).toEqual([
+			{ path: "t.md", content: "- Use pnpm [source: https://app/?chat=2]" },
+		]);
+		const lines = memoryLines({ "t.md": text });
+		expect(lines[0].meta["superseded-by"]).toBe("https://app/?chat=2");
+		expect(
+			selectMemoryMatches({
+				lines,
+				scores: new Map(lines.map((entry) => [entry, 0.9])),
+				alreadyShown: () => false,
+				today: "2026-10-15",
+				project: null,
+			}).map((entry) => entry.text),
+		).toEqual(["Use pnpm"]);
+	});
 });
 
 describe("embedding text", () => {

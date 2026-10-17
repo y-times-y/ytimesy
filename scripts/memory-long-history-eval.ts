@@ -990,9 +990,11 @@ async function repoSnapshot(
 /** Size and content of one snapshot: what is left of the seed's roles. */
 function snapshotStats(snapshot: RepoSnapshot | null) {
 	if (!snapshot) return null;
-	const lines = memoryLines(snapshot.files).filter(
+	const all = memoryLines(snapshot.files).filter(
 		(entry) => !/^\[\[.*\]\]$/.test(entry.text),
 	);
+	// Lines the save hook marked superseded-by are retired: never shown.
+	const lines = all.filter((entry) => !entry.meta["superseded-by"]);
 	const texts = lines.map((entry) => entry.text);
 	const present = (role: string) =>
 		HISTORY.filter(
@@ -1005,6 +1007,7 @@ function snapshotStats(snapshot: RepoSnapshot | null) {
 		files: Object.keys(snapshot.files).filter((path) => path.endsWith(".md"))
 			.length,
 		lines: lines.length,
+		supersededMarked: all.length - lines.length,
 		chars: Object.values(snapshot.files).reduce(
 			(total, content) => total + content.length,
 			0,
