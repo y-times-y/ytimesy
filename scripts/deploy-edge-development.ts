@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createHmac, createPrivateKey } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { DEVELOPMENT_EDGE_ORIGIN } from "./development-config";
 
 // Deliberately fixed to development. Secrets travel over stdin, never shell arguments or logs.
 const configuration = "wrangler.edge-executor.jsonc";
@@ -120,8 +121,7 @@ if (!secrets.YTIMESY_REALTIME_URL || !secrets.YTIMESY_REALTIME_SECRET) {
 	secrets.YTIMESY_REALTIME_SECRET = realtime.secret;
 }
 secrets.YTIMESY_GIT_PROXY_SECRET = secrets.GIT_PROXY_SECRET;
-secrets.YTIMESY_GIT_PROXY_URL =
-	"https://ytimesy-edge-executor-development.hetkp8044.workers.dev";
+secrets.YTIMESY_GIT_PROXY_URL = DEVELOPMENT_EDGE_ORIGIN;
 // Background delivery and recovery must address the same chat objects as inference.
 secrets.YTIMESY_REALTIME_URL = secrets.YTIMESY_GIT_PROXY_URL;
 // Load the original key; never call a helper that could generate a replacement.

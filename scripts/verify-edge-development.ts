@@ -1,9 +1,9 @@
 import { createHmac } from "node:crypto";
 import { issueGitProxyGrant } from "../src/domain/github-git-proxy";
 import { closeDatabase, database } from "../src/server/adapters/database";
+import { DEVELOPMENT_EDGE_ORIGIN } from "./development-config";
 
-const endpoint =
-	"https://ytimesy-edge-executor-development.hetkp8044.workers.dev";
+const endpoint = DEVELOPMENT_EDGE_ORIGIN;
 const root = process.env.BETTER_AUTH_SECRET;
 if (!root || root.length < 32) throw new Error("Signing secret is missing.");
 const secret =

@@ -1,9 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { createServer } from "vite";
 import { z } from "zod";
+import { DEVELOPMENT_EDGE_ORIGIN } from "./development-config";
 
-const EDGE_ORIGIN =
-	"https://ytimesy-edge-executor-development.hetkp8044.workers.dev";
+const EDGE_ORIGIN = DEVELOPMENT_EDGE_ORIGIN;
 
 /** Development executes on Cloudflare DOs and Workflows; there is no Node job host. */
 async function configureEdgeExecution() {
