@@ -379,9 +379,9 @@ export async function createHarnessRunner(options: {
 	})();
 
 	/**
-	 * The saved OpenRouter key's status (GET /key): remaining credit and
-	 * today's `:free` request allowance (UTC day), or null when unavailable.
-	 * Read only; never inference.
+	 * The saved OpenRouter key's status: its limit and today's `:free` request
+	 * allowance (GET /key, UTC day) and the account's unspent credit (GET
+	 * /credits), or null when unavailable. Read only; never inference.
 	 */
 	async function openRouterKeyStatus(): Promise<{
 		free: { used: number; limit: number; remaining: number } | null;
@@ -389,6 +389,8 @@ export async function createHarnessRunner(options: {
 		limitRemaining: number | null;
 		/** USD spent on the key (all time). */
 		usage: number | null;
+		/** USD of purchased account credit not yet spent. */
+		accountCredit: number | null;
 	} | null> {
 		if (!context.gatewayId) return null;
 		const connection = await loadModelConnection(
@@ -397,13 +399,22 @@ export async function createHarnessRunner(options: {
 		);
 		if (!connection || new URL(connection.baseUrl).hostname !== "openrouter.ai")
 			return null;
+		const headers = {
+			Authorization: `Bearer ${await connectionApiKey(context.userId, connection)}`,
+		};
 		const response = await fetch(`${connection.baseUrl}/key`, {
-			headers: {
-				Authorization: `Bearer ${await connectionApiKey(context.userId, connection)}`,
-			},
+			headers,
 			signal: AbortSignal.timeout(15_000),
 		});
 		if (!response.ok) return null;
+		const credits = (await fetch(`${connection.baseUrl}/credits`, {
+			headers,
+			signal: AbortSignal.timeout(15_000),
+		})
+			.then((reply) => (reply.ok ? reply.json() : null))
+			.catch(() => null)) as {
+			data?: { total_credits?: unknown; total_usage?: unknown };
+		} | null;
 		const body = (await response.json()) as {
 			data?: {
 				free_model_daily_requests?: Record<string, unknown>;
@@ -424,6 +435,11 @@ export async function createHarnessRunner(options: {
 					: null,
 			limitRemaining: number(body.data?.limit_remaining),
 			usage: number(body.data?.usage),
+			accountCredit: (() => {
+				const total = number(credits?.data?.total_credits);
+				const used = number(credits?.data?.total_usage);
+				return total === null || used === null ? null : total - used;
+			})(),
 		};
 	}
 

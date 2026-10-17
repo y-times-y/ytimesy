@@ -186,15 +186,20 @@ try {
 	if (paidOpenRouter.length) {
 		const key = await runner.openRouterKeyStatus();
 		const planned = paidOpenRouter.length * tasks.length;
-		console.info(
-			`OpenRouter key: ${key?.limitRemaining === null || key?.limitRemaining === undefined ? "no credit limit reported" : `$${key.limitRemaining.toFixed(2)} left under its limit`}${key?.usage != null ? `, $${key.usage.toFixed(2)} used` : ""}; ${planned} paid runs, cap $${maxCost}.`,
+		const left = [key?.limitRemaining, key?.accountCredit].filter(
+			(value): value is number => typeof value === "number",
 		);
-		if (
-			key?.limitRemaining != null &&
-			key.limitRemaining < Math.min(maxCost, 0.05 * planned)
-		)
+		const available = left.length ? Math.min(...left) : null;
+		console.info(
+			`OpenRouter: ${key?.accountCredit != null ? `$${key.accountCredit.toFixed(2)} account credit left` : "account credit not reported"}${key?.limitRemaining != null ? `, $${key.limitRemaining.toFixed(2)} under the key's limit` : ""}; ${planned} paid runs, cap $${maxCost}.`,
+		);
+		if (available !== null && available < Math.min(maxCost, 0.05 * planned))
 			throw new Error(
-				`Refusing to run: the OpenRouter key has $${key.limitRemaining.toFixed(2)} left for ${planned} paid runs. Use free models (--models free) or add credit.`,
+				`Refusing to run: $${available.toFixed(2)} of OpenRouter credit left for ${planned} paid runs. Use free models (--models free) or add credit.`,
+			);
+		if (available !== null && maxCost > available)
+			console.warn(
+				`--max-cost $${maxCost} is above the $${available.toFixed(2)} left; OpenRouter will refuse requests once it runs out.`,
 			);
 	}
 	if (freeRuns) {
