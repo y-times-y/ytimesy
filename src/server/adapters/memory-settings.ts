@@ -325,9 +325,9 @@ export type RecentChatMessage = {
 
 /**
  * The latest user message of each of the user's other root chats whose turn
- * completed in the last `windowSeconds` and whose save hook has not shown a
- * saved line yet (no memorySave after that message): what memory may not
- * hold yet. Newest first.
+ * completed in the last `windowSeconds` and whose save hook has neither
+ * shown a saved line (a memorySave after that message) nor found nothing to
+ * save: what memory may not hold yet. Newest first.
  */
 export async function recentUnsavedMessages(
 	userId: string,
@@ -353,6 +353,9 @@ export async function recentUnsavedMessages(
 			   and t.at > now()-make_interval(secs=>$3)
 			   and not exists(select 1 from jsonb_array_elements(s.items) with ordinality as y(e,j)
 			     where y.j > m.i and y.e->>'kind'='memorySave')
+			   and not exists(select 1 from memory_model_usage u
+			     where u.user_id=s.user_id and u.session_id=s.id and u.kind='save'
+			       and u.created_at >= t.at and u.outcome like '%:nothing-new')
 			 order by t.at desc limit $4`,
 			[userId, exceptSessionId, windowSeconds, limit],
 		)
