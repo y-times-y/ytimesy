@@ -8,14 +8,16 @@ import { App } from "octokit";
 import { closeDatabase, database } from "#/server/adapters/database";
 import { readGitHubAppCredentials } from "#/server/adapters/github/credentials";
 import { modelWorkflowSigningSecret } from "#/server/adapters/model-workflow-dispatch";
+import {
+	DEVELOPMENT_EDGE_ORIGIN,
+	WORKERS_DEV_SUBDOMAIN,
+} from "./development-config";
 
 const developmentRef = "exampledevprojectref";
 const config = "wrangler.pr-repair.jsonc";
-const endpoint =
-	"https://ytimesy-pr-repair-development.example-account.workers.dev/github-repair";
+const endpoint = `https://ytimesy-pr-repair-development.${WORKERS_DEV_SUBDOMAIN}/github-repair`;
 const repository = "repos/y-times-y/ytimesy";
-const edgeOrigin =
-	"https://ytimesy-edge-executor-development.example-account.workers.dev";
+const edgeOrigin = DEVELOPMENT_EDGE_ORIGIN;
 
 function command(args: string[], input?: string, env = process.env) {
 	const result = spawnSync("pnpm", args, {

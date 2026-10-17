@@ -38,12 +38,12 @@ import {
 import { cancelServerTurn } from "../../src/server/services/cancel-server-turn";
 import { sendSubscriptionTask } from "../../src/server/services/codex-subscription-session";
 import { connectionApiKey } from "../../src/server/services/model-connections";
+import { DEVELOPMENT_EDGE_ORIGIN } from "../development-config";
 import { type EvalUser, SLOT_LIMITS, withSlot } from "./eval-user";
 
 export { assertDevelopmentDatabase } from "./eval-user";
 
-const ORIGIN =
-	"https://ytimesy-edge-executor-development.example-account.workers.dev";
+const ORIGIN = DEVELOPMENT_EDGE_ORIGIN;
 
 export type Task = {
 	id: string;

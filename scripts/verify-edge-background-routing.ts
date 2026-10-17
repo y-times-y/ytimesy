@@ -1,10 +1,10 @@
 import { createHmac, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { signDeliveryRequest } from "../src/domain/delivery-auth";
+import { DEVELOPMENT_EDGE_ORIGIN } from "./development-config";
 
 // Fixed development surface (deployed with execution enabled). An absent sender makes this proof read-only: no inference or VM calls.
-const url =
-	"https://ytimesy-edge-executor-development.example-account.workers.dev/jobs/start";
+const url = `${DEVELOPMENT_EDGE_ORIGIN}/jobs/start`;
 const id = randomUUID();
 const root = process.env.BETTER_AUTH_SECRET;
 if (!root || root.length < 32)

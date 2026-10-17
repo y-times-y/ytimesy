@@ -5,6 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { signDeliveryRequest } from "../src/domain/delivery-auth";
 import { closeDatabase, database } from "../src/server/adapters/database";
 import { codexExternalTokens } from "../src/server/auth/codex-managed-auth";
+import { WORKERS_DEV_SUBDOMAIN } from "./development-config";
 import { probeSubscription } from "./subscription-egress-probe";
 
 if (process.env.EDGE_SUBSCRIPTION_PROOF !== "1")
@@ -20,7 +21,7 @@ const vpc = process.env.EDGE_SUBSCRIPTION_VPC_PROOF === "1";
 const configuration = vpc
 	? "wrangler.subscription-vpc-probe.jsonc"
 	: "wrangler.subscription-probe.jsonc";
-const origin = `https://${name}.example-account.workers.dev`;
+const origin = `https://${name}.${WORKERS_DEV_SUBDOMAIN}`;
 const secret = randomUUID() + randomUUID();
 let deployed = false;
 function wrangler(args: string[], input?: string) {
