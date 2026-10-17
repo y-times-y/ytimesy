@@ -13,6 +13,7 @@ import {
 	savedMemoryLines,
 	withSavedMemory,
 } from "#/domain/memory-marker";
+import { memoryMatchScores } from "#/domain/memory-ranking";
 import {
 	annotateMemoryText,
 	attachedMemory,
@@ -407,7 +408,8 @@ export type ReadHookResult = {
 
 /**
  * Supermemory-style recall: embed the message, rank every memory line by
- * cosine similarity, keep the best few above the cutoff. Never throws: a
+ * cosine similarity merged with word overlap and its topic file's best hit
+ * (memory-ranking.ts), keep the best few above the cutoff. Never throws: a
  * timeout or an error yields no lines and says which it was.
  */
 export async function readHook(input: {
@@ -450,12 +452,13 @@ export async function readHook(input: {
 					input.cache,
 				),
 		]);
-		const scores = new Map(
+		const similarity = new Map(
 			lines.map((entry, index) => [
 				entry,
 				cosineSimilarity(queryVector, vectors[index] ?? []),
 			]),
 		);
+		const scores = memoryMatchScores(lines, similarity, query);
 		return selectMemoryMatches({
 			lines,
 			scores,

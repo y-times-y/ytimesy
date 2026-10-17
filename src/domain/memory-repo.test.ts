@@ -126,18 +126,18 @@ describe("memory on the request", () => {
 		);
 	});
 
-	it("selects at most five similar lines above the cutoff, never twice", () => {
+	it("selects at most eight lines above the cutoff, never twice", () => {
 		const files = {
 			"MEMORY.md": "- Prefers short answers",
 			"tooling.md": Array.from(
-				{ length: 8 },
+				{ length: 12 },
 				(_, index) => `- Rule ${index}`,
 			).join("\n"),
 			"other.md": "- Uses Go modules [project: acme/api]",
 		};
 		const lines = memoryLines(files);
 		const scores = new Map(
-			lines.map((entry, index) => [entry, 0.9 - index * 0.06]),
+			lines.map((entry, index) => [entry, 0.9 - index * 0.04]),
 		);
 		const picked = selectMemoryMatches({
 			lines,
@@ -152,6 +152,9 @@ describe("memory on the request", () => {
 			"Rule 3",
 			"Rule 4",
 			"Rule 5",
+			"Rule 6",
+			"Rule 7",
+			"Rule 8",
 		]);
 		expect(memoryMatchesPart(picked.slice(0, 1))).toContain(
 			"tooling.md:2: - Rule 1",

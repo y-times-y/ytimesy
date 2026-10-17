@@ -48,10 +48,11 @@ import {
 	harnessVariantFromFlags,
 	harnessVariantLabel,
 } from "../src/domain/harness-variant";
+import { memoryMatchScores } from "../src/domain/memory-ranking";
 import {
 	cosineSimilarity,
 	MEMORY_MATCH_LIMIT,
-	MEMORY_MATCH_MIN_SIMILARITY,
+	MEMORY_MATCH_MIN_SCORE,
 	MEMORY_PART_OPEN,
 	type MemoryLine,
 	memoryLineEmbeddingText,
@@ -330,12 +331,14 @@ async function recall() {
 	}[] = [];
 	for (const probe of RECALL_PROBES) {
 		const query = await embed.query(probe.query);
-		const scores = new Map(
+		const similarity = new Map(
 			lines.map((line, index) => [
 				line,
 				cosineSimilarity(query, vectors[index]),
 			]),
 		);
+		// The read hook's own score: cosine merged with word overlap and topic file.
+		const scores = memoryMatchScores(lines, similarity, probe.query);
 		similarities.push(
 			...lines.map((line) => ({
 				probe: probe.query,
@@ -373,7 +376,7 @@ async function recall() {
 	}
 	console.log(table(rows));
 	console.log(
-		`\nRecalled ${recalled}/${RECALL_PROBES.length}; ${wrong} wrong lines injected in total (top ${MEMORY_MATCH_LIMIT}, similarity >= ${MEMORY_MATCH_MIN_SIMILARITY}).`,
+		`\nRecalled ${recalled}/${RECALL_PROBES.length}; ${wrong} wrong lines injected in total (top ${MEMORY_MATCH_LIMIT}, score >= ${MEMORY_MATCH_MIN_SCORE}).`,
 	);
 	// Threshold data: how right and wrong lines score, and what each cutoff would do.
 	const right = similarities.filter((row) => row.right).map((row) => row.score);
