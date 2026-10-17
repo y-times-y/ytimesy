@@ -19,6 +19,7 @@ import {
 	MEMORY_ENTRY,
 	type MemoryLine,
 	type MemoryMode,
+	memoryAppUrl,
 	memoryCloneScript,
 	memoryEntryPart,
 	memoryIndexShown,
@@ -27,6 +28,7 @@ import {
 	memoryLines,
 	memoryMatchesPart,
 	memoryQueryText,
+	memoryToday,
 	selectMemoryMatches,
 	withMemoryParts,
 } from "#/domain/memory-repo";
@@ -101,8 +103,6 @@ export async function turnMemory(
 	owner: TurnMemoryOwner,
 	options: {
 		appUrl?: string;
-		/** Evaluations switch hooks per arm; production uses the user's mode. */
-		mode?: MemoryMode;
 		repo?: MemoryRepo | null;
 		embed?: Embed | null;
 		today?: () => string;
@@ -118,7 +118,7 @@ export async function turnMemory(
 		});
 		return null;
 	});
-	const mode = options.mode ?? settings?.mode ?? "off";
+	const mode = settings?.mode ?? "off";
 	if (mode === "off") return null;
 	const repo =
 		options.repo === undefined
@@ -134,12 +134,9 @@ export async function turnMemory(
 						() => null,
 					)
 				: null;
-	const today = options.today ?? (() => new Date().toISOString().slice(0, 10));
+	const today = options.today ?? memoryToday;
 	const wording = options.wording ?? "notes";
-	const url = chatSourceUrl(
-		options.appUrl ?? process.env.APP_URL ?? "http://localhost:3000",
-		owner.id,
-	);
+	const url = chatSourceUrl(options.appUrl ?? memoryAppUrl(), owner.id);
 	const chatTitles =
 		options.chatTitles ??
 		((ids: readonly string[]) => memoryChatTitles(owner.userId, ids));
