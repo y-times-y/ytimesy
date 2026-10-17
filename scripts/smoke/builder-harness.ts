@@ -3,8 +3,11 @@
 // single ROOT builder turn on a disposable VM against the development edge.
 // Used by scripts/model-smoke-suite.ts and scripts/native-vs-harness.ts.
 import { randomUUID } from "node:crypto";
+import { readdirSync, readFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import { Freestyle } from "freestyle";
 import { signDeliveryRequest } from "../../src/domain/delivery-auth";
 import { WorkspaceId } from "../../src/domain/ids";
@@ -184,6 +187,41 @@ export const TASKS: Task[] = [
 ];
 
 const safeName = (value: string) => value.replaceAll(/[^a-zA-Z0-9._-]/g, "_");
+
+/**
+ * Harder tasks (a few minutes each), only run when named. Each lives in
+ * scripts/smoke/hard-tasks/<id>/: prompt.txt, files/ (the fixture repo) and
+ * verify.sh (run from the repo after the turn; it may test the deliverable
+ * from a clean copy and with inputs the agent never saw).
+ */
+function hardTasks(): Task[] {
+	const root = join(dirname(fileURLToPath(import.meta.url)), "hard-tasks");
+	const filesUnder = (dir: string, prefix = ""): Record<string, string> =>
+		Object.fromEntries(
+			readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
+				entry.isDirectory()
+					? Object.entries(
+							filesUnder(join(dir, entry.name), `${prefix}${entry.name}/`),
+						)
+					: [
+							[
+								`${prefix}${entry.name}`,
+								readFileSync(join(dir, entry.name), "utf8"),
+							],
+						],
+			),
+		);
+	return readdirSync(root, { withFileTypes: true })
+		.filter((entry) => entry.isDirectory())
+		.map((entry) => ({
+			id: entry.name,
+			prompt: readFileSync(join(root, entry.name, "prompt.txt"), "utf8").trim(),
+			files: filesUnder(join(root, entry.name, "files")),
+			verify: readFileSync(join(root, entry.name, "verify.sh"), "utf8"),
+			onlyWhenNamed: true,
+		}));
+}
+TASKS.push(...hardTasks());
 
 export const PROMPT_SUFFIX =
 	"\n\nWork directly in this repository: no plan proposal, child tasks, commits, pull requests or publishing. Stop when the change is done and checked.";

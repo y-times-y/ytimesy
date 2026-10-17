@@ -1,0 +1,1 @@
+`python3 -m unittest discover -s tests -t .` fails, and users report wrong per-window summaries for logs with negative UTC offsets and for windows after 09:55. Find and fix the root causes in the logpipe package so reports follow README.md for any log, not just the sample (do not modify tests).

@@ -1,0 +1,1 @@
+Implement discount codes in the shop package as specified in the "Discount codes" section of README.md, and add unit tests for them under tests/. Keep the existing tests passing and do not modify them.
