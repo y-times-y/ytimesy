@@ -5,6 +5,7 @@ import {
 	harnessVariantFromFlags,
 	harnessVariantFromUnknown,
 	harnessVariantLabel,
+	promptCacheScopeId,
 } from "./harness-variant";
 
 describe("harness variants", () => {
@@ -13,6 +14,7 @@ describe("harness variants", () => {
 			memoryWording: "rules",
 			memoryWriter: "observer",
 			toolSurface: "lean",
+			promptCacheScope: "chat",
 		});
 	});
 
@@ -26,6 +28,7 @@ describe("harness variants", () => {
 			memoryWording: "notes",
 			memoryWriter: "observer",
 			toolSurface: "current",
+			promptCacheScope: "chat",
 		});
 		expect(
 			harnessVariantFromFlags(["memoryWording=notes,toolSurface=lean-native"]),
@@ -33,6 +36,7 @@ describe("harness variants", () => {
 			memoryWording: "notes",
 			memoryWriter: "observer",
 			toolSurface: "lean-native",
+			promptCacheScope: "chat",
 		});
 		expect(
 			harnessVariantFromFlags(["memoryWording=notes,memoryWriter=both"]),
@@ -60,6 +64,7 @@ describe("harness variants", () => {
 			memoryWording: "notes",
 			memoryWriter: "observer",
 			toolSurface: "lean",
+			promptCacheScope: "chat",
 		});
 		expect(harnessVariantFromUnknown({ memoryWriter: "agent" })).toEqual({
 			...DEFAULT_HARNESS_VARIANT,
@@ -78,5 +83,15 @@ describe("harness variants", () => {
 				harnessVariantFromFlags(["memoryWriter=agent,memoryWording=notes"]),
 			),
 		).toBe("memoryWording=notes,memoryWriter=agent");
+	});
+
+	it("keys the prompt cache per chat unless the variant shares it per account", () => {
+		expect(promptCacheScopeId("chat", "chat-1")).toBe("chat-1");
+		expect(promptCacheScopeId("chat", "chat-2")).not.toBe(
+			promptCacheScopeId("chat", "chat-1"),
+		);
+		expect(promptCacheScopeId("account", "chat-1")).toBe(
+			promptCacheScopeId("account", "chat-2"),
+		);
 	});
 });
