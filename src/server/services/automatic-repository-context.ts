@@ -40,6 +40,19 @@ const writes = new Set([
 ]);
 
 function pathsFrom(value: unknown): string[] {
+	// Freeform apply_patch input is raw patch text that names its files in headers.
+	if (typeof value === "string")
+		return [
+			...value.matchAll(
+				/^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+)$/gm,
+			),
+		]
+			.map((match) => match[1].trim())
+			.filter(
+				(path) =>
+					!path.startsWith("/") &&
+					!path.split("/").some((part) => part === ".." || part === ".git"),
+			);
 	if (!value || typeof value !== "object") return [];
 	if (Array.isArray(value)) return value.flatMap(pathsFrom);
 	const record = value as Record<string, unknown>;

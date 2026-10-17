@@ -35,6 +35,7 @@ export function apiAgentTools(
 		turnId: string;
 		toolCallPrefix?: string;
 		nativePatch?: boolean;
+		freeformPatch?: boolean;
 		signal: AbortSignal;
 		/** A builder-direct root chat edits its own workspace. */
 		writable?: boolean;
@@ -146,6 +147,7 @@ export function apiAgentTools(
 			workspace,
 			readOnly,
 			nativePatch: input.nativePatch,
+			freeformPatch: input.freeformPatch,
 			output,
 			signal,
 			once,
