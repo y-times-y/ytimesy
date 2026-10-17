@@ -19,6 +19,7 @@ import {
 	saveModelConnection,
 } from "#/server/adapters/model-connections";
 import { modelEndpointTransport } from "#/server/adapters/model-endpoint";
+import { devAllowsAnyModel } from "#/server/adapters/openrouter-official";
 import { seal, unseal } from "#/server/auth/token-vault";
 
 export async function availableApiModelRoutes(
@@ -29,17 +30,10 @@ export async function availableApiModelRoutes(
 		connections,
 		hasGateway ? await browseModels() : [],
 	);
+	// Development only: offer every model a connection lists (e.g. free test models).
 	return devAllowsAnyModel()
 		? withEveryConnectedModel(routes, connections)
 		: routes;
-}
-
-/** Development only: offer every model a connection lists (e.g. free test models). */
-function devAllowsAnyModel() {
-	return (
-		process.env.YTIMESY_DEV_ALLOW_ANY_MODEL === "1" &&
-		process.env.YTIMESY_ENVIRONMENT !== "production"
-	);
 }
 
 function withEveryConnectedModel(
