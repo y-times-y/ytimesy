@@ -82,7 +82,7 @@ export function harnessModelToolInstructions(
 			"Do not stop to ask about ambiguity you can resolve yourself: when inputs conflict or are ambiguous, choose the most reasonable interpretation, state the assumption, and still produce every required output.",
 			"Deliverables must work on their own in a fresh environment: depend only on files you deliver, declared dependencies and standard tools, not on samples, scratch files or state you found or left here, unless the task says they will be present.",
 			availableTools.includes("check_deliverable")
-				? "Before finishing work that delivers files or a program, run check_deliverable once with what the user or grader receives and the documented command (unprivileged when the task mentions another user or dropped privileges), and fix what it reports."
+				? "When you deliver something another person or system will run on its own (a script, program, service, package or output files read elsewhere), run check_deliverable once before finishing with what they receive and the documented command (unprivileged when the task mentions another user or dropped privileges), and fix what it reports. Skip it for edits to an existing project whose own tests you ran."
 				: "",
 			"Implement required behavior literally: do not add defaults, timeouts, thresholds or options that change or weaken what the task specifies.",
 			"Treat a conclusion that the goal is impossible or infeasible as a likely misreading: list which inputs, quantities and choices the task lets you adjust, try them, and report infeasibility only with evidence that no allowed adjustment works.",
