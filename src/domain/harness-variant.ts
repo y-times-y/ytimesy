@@ -1,28 +1,32 @@
 /**
- * Development-only harness variants, selected per eval user (dev_eval_user)
- * so concurrent eval runs can compare harness behaviour on one deployment.
- * Production never reads them. See docs/parallel-evals.md.
+ * Harness variants. DEFAULT_HARNESS_VARIANT is the product's behaviour for
+ * everyone; in development, eval users (dev_eval_user) may pick other values
+ * per run so concurrent evals can compare harness behaviour on one
+ * deployment. Production only ever uses the default. See
+ * docs/parallel-evals.md.
  */
 export const HARNESS_VARIANT_VALUES = {
 	/**
 	 * How recalled memory (MEMORY.md and read-hook lines) is presented:
-	 * notes = neutral data that may be outdated (the product default);
-	 * rules = binding project rules from earlier chats.
+	 * rules = binding project rules from earlier chats (the default);
+	 * notes = neutral data that may be outdated.
 	 */
 	memoryWording: ["notes", "rules"],
 	/**
 	 * Who writes cross-chat memory during a chat (dreaming always runs):
-	 * both = the builder saves proactively and the save hook runs after every
-	 * turn (the product default); agent = only the builder, no save hook;
-	 * observer = only the save hook, and the builder writes ~/memory only when
-	 * the user explicitly asks it to remember something.
+	 * observer = only the save hook (full mode) and dreaming, and the builder
+	 * writes ~/memory only when the user explicitly asks it to remember
+	 * something (the default); both = the builder saves proactively and the
+	 * save hook runs after every turn; agent = only the builder, no save hook.
 	 */
 	memoryWriter: ["both", "agent", "observer"],
 	/**
 	 * The builder's tool surface (builderToolSurface in
-	 * src/server/services/builder-shell-surface.ts): current = the measured
-	 * shell surface; lean-native = each model family's own vendor harness
-	 * tools; lean-pi = Pi's four tools for every model.
+	 * src/server/services/builder-shell-surface.ts): lean-pi = Pi's four
+	 * tools for every model (the default,
+	 * docs/decisions/2026-10-17-lean-pi-tool-surface.md); current = the
+	 * earlier measured shell surface; lean-native = each model family's own
+	 * vendor harness tools.
 	 */
 	toolSurface: ["current", "lean-native", "lean-pi"],
 } as const;
@@ -36,9 +40,9 @@ export type MemoryWriter = HarnessVariant["memoryWriter"];
 export type HarnessToolSurfaceId = HarnessVariant["toolSurface"];
 
 export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
-	memoryWording: "notes",
-	memoryWriter: "both",
-	toolSurface: "current",
+	memoryWording: "rules",
+	memoryWriter: "observer",
+	toolSurface: "lean-pi",
 };
 
 function isKey(key: string): key is keyof Values {

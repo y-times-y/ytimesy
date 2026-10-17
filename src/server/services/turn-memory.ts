@@ -1,6 +1,10 @@
 import type { ModelMessage } from "ai";
 import { isUserRequestMessage } from "#/domain/api-conversation";
-import type { MemoryWording, MemoryWriter } from "#/domain/harness-variant";
+import {
+	DEFAULT_HARNESS_VARIANT,
+	type MemoryWording,
+	type MemoryWriter,
+} from "#/domain/harness-variant";
 import {
 	currentMemoryRecall,
 	type MemoryRecall,
@@ -137,8 +141,8 @@ export async function turnMemory(
 					)
 				: null;
 	const today = options.today ?? memoryToday;
-	const wording = options.wording ?? "notes";
-	const writer = options.writer ?? "both";
+	const wording = options.wording ?? DEFAULT_HARNESS_VARIANT.memoryWording;
+	const writer = options.writer ?? DEFAULT_HARNESS_VARIANT.memoryWriter;
 	const url = chatSourceUrl(options.appUrl ?? memoryAppUrl(), owner.id);
 	const chatTitles =
 		options.chatTitles ??
