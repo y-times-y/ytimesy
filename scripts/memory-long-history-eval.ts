@@ -97,6 +97,8 @@ const { values: flags } = parseArgs({
 		"dry-run": { type: "boolean", default: false },
 		live: { type: "boolean", default: false },
 		report: { type: "string" },
+		/** Offline: the read hook's ranking for each probe on an ours run's snapshot. */
+		"recall-check": { type: "string" },
 		arm: { type: "string" },
 		model: { type: "string", default: "gpt-6.1-sol" },
 		effort: { type: "string", default: "medium" },
@@ -577,7 +579,11 @@ async function sendPrepared(
 		result.toolCalls = activity.toolCalls;
 		result.memoryToolCalls = activity.memoryToolCalls;
 		result.commands = items.flatMap((item) =>
-			item.kind === "commandExecution" ? [item.command.slice(0, 300)] : [],
+			item.kind === "commandExecution"
+				? [item.command.slice(0, 300)]
+				: item.kind === "dynamicToolCall"
+					? [`${item.tool}: ${(item.input ?? "").slice(0, 300)}`]
+					: [],
 		);
 		result.finalAnswer =
 			[...items]
@@ -1719,7 +1725,95 @@ async function report() {
 	printReport(outputs);
 }
 
+// ---------------------------------------------------------------------------
+// --recall-check: was a miss the ranking or the hook's timeout?
+
+async function recallCheck() {
+	const { CLOUDFLARE_ACCOUNT_ID } = await import("./development-config");
+	process.env.CLOUDFLARE_ACCOUNT_ID ||= CLOUDFLARE_ACCOUNT_ID;
+	const { memoryEmbedder } = await import(
+		"../src/server/adapters/memory-embeddings"
+	);
+	const {
+		cosineSimilarity,
+		memoryLineEmbeddingText,
+		MEMORY_MATCH_MIN_SIMILARITY,
+		selectMemoryMatches,
+		memoryQueryText,
+	} = await import("../src/domain/memory-repo");
+	const embed = memoryEmbedder();
+	if (!embed)
+		throw new Error("Set CLOUDFLARE_API_TOKEN (npx wrangler auth token).");
+	const output = JSON.parse(
+		await readFile(flags["recall-check"] as string, "utf8"),
+	) as ArmOutput;
+	const rows = [
+		[
+			"probe",
+			"snapshot",
+			"right rank",
+			"right score",
+			"selected",
+			"top score",
+			"live injected lines",
+		],
+	];
+	for (const label of ["after-updates", "end"]) {
+		const files = output.repoFiles[label];
+		if (!files) continue;
+		const lines = memoryLines(files).filter(
+			(entry) => entry.path !== "MEMORY.md",
+		);
+		const vectors = await embed.documents(lines.map(memoryLineEmbeddingText));
+		for (const probe of [...PROBES, ...FRESHNESS.map((pair) => pair.probe)]) {
+			const live =
+				output.probes.find((row) => row.id === probe.id) ??
+				output.freshness.find((row) => row.id === probe.id)?.probe;
+			const query = memoryQueryText(`${probe.prompt}${PROMPT_SUFFIX}`);
+			if (!query) continue;
+			const vector = await embed.query(query);
+			const scores = new Map(
+				lines.map((entry, index) => [
+					entry,
+					cosineSimilarity(vector, vectors[index]),
+				]),
+			);
+			const ranked = [...lines].sort(
+				(a, b) => (scores.get(b) ?? 0) - (scores.get(a) ?? 0),
+			);
+			const rank =
+				ranked.findIndex((entry) => probe.right.test(entry.text)) + 1;
+			const selected = selectMemoryMatches({
+				lines,
+				scores,
+				alreadyShown: () => false,
+				today: memoryToday(),
+				project: null,
+			});
+			const liveLines = live
+				? (live.injected.split("apply to this message")[1] ?? "")
+						.split("\n")
+						.filter((row) => /^[\w/.-]+\.md:\d+:/.test(row)).length
+				: 0;
+			rows.push([
+				probe.id,
+				label,
+				rank ? String(rank) : "-",
+				rank ? (scores.get(ranked[rank - 1]) ?? 0).toFixed(3) : "-",
+				selected.some((entry) => probe.right.test(entry.text)) ? "yes" : "no",
+				(scores.get(ranked[0]) ?? 0).toFixed(3),
+				String(liveLines),
+			]);
+		}
+	}
+	console.log(table(rows));
+	console.log(
+		`(${MEMORY_MATCH_MIN_SIMILARITY} cutoff, top 5; "live injected lines" = read-hook lines the probe actually got; 0 with a top score above the cutoff means the hook returned nothing, e.g. its 4 s timeout)`,
+	);
+}
+
 if (flags["dry-run"]) await dryRun();
+else if (flags["recall-check"]) await recallCheck();
 else if (flags.report) await report();
 else if (flags.live) await live();
 else
