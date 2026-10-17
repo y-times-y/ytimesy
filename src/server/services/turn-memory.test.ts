@@ -451,6 +451,35 @@ describe("the rules wording (harness variant memoryWording, the default)", () =>
 		expect(text).not.toContain(MEMORY_MESSAGE_HEADER);
 		// A resumed step recognises the rules header and attaches nothing again.
 		expect((await memory.attach(messages, items, workspace)).recall).toBeNull();
+		// A remembered rule wins over a conflicting pattern in the existing code.
+		for (const header of [
+			MEMORY_RULES_MESSAGE_HEADER,
+			MEMORY_RULES_MATCHES_HEADER,
+		])
+			expect(header).toContain(
+				"wins over a conflicting pattern in the existing code unless the user says otherwise",
+			);
+		expect(memory.instructions).toContain(
+			"also over a conflicting pattern in the existing code",
+		);
+		// A chat begun under the earlier wording does not get MEMORY.md twice.
+		const earlier = `<memory>\nProject rules from the user's earlier chats (MEMORY.md from their memory repo at ~/memory, as of the start of this chat). Follow these unless the user says otherwise.\n\n# Memory\n</memory>`;
+		const next = await memory.attach(
+			[
+				{
+					role: "user",
+					content: [
+						{ type: "text", text: "Add a dependency" },
+						{ type: "text", text: earlier },
+					],
+				},
+				{ role: "assistant", content: "Added." },
+				{ role: "user", content: "Now another one" },
+			],
+			[...items, user("b", "Now another one")],
+			workspace,
+		);
+		expect(next.recall?.index).toBeUndefined();
 		const line = parseMemoryLine("- Uses pnpm, never npm", "tools.md", 3);
 		if (!line) throw new Error("line should parse");
 		expect(memoryMatchesPart([line], new Set(), "rules")).toContain(
