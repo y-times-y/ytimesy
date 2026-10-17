@@ -376,14 +376,16 @@ export function memoryEmbeddingQuery(text: string) {
 	return `Instruct: ${MEMORY_QUERY_INSTRUCTION}\nQuery: ${text}`;
 }
 
-export const MEMORY_MATCH_LIMIT = 5;
+/** Lines per request: about 1-2k characters, a wider net than one fact. */
+export const MEMORY_MATCH_LIMIT = 8;
 /**
- * Set from `memory-two-chat-eval.ts --recall` on @cf/qwen/qwen3-embedding-0.6b
- * (2026-10-15, 8 probes x 14 lines): 0.33 keeps 7/8 right lines and 32/104
- * others (3 extra lines per message, within the top-5 cap); 0.40 keeps 4/8
- * and 8/104. A missed rule costs more than a labelled extra line.
+ * Cutoff on the hybrid score (memory-ranking.ts). Set from
+ * `memory-two-chat-eval.ts --recall` on cosine alone (2026-10-15: 0.33 kept
+ * 7/8 right lines, 0.40 kept 4/8); the lexical and file parts only add, so
+ * it is no stricter for the hybrid. A missed rule costs more than a
+ * labelled extra line.
  */
-export const MEMORY_MATCH_MIN_SIMILARITY = 0.33;
+export const MEMORY_MATCH_MIN_SCORE = 0.33;
 const MATCH_CHARS = 300;
 
 /** One line is one unit: "<file without .md>: <text without metadata>". */
@@ -406,7 +408,7 @@ export function cosineSimilarity(a: readonly number[], b: readonly number[]) {
 }
 
 /**
- * The read hook's selection: the most similar lines above the cutoff, never
+ * The read hook's selection: the best-scoring lines above the cutoff, never
  * a line already in context (MEMORY.md or an earlier injection).
  */
 export function selectMemoryMatches(input: {
@@ -426,7 +428,7 @@ export function selectMemoryMatches(input: {
 					entry.meta.project &&
 					entry.meta.project.toLowerCase() !== input.project.toLowerCase()
 				) &&
-				(input.scores.get(entry) ?? 0) >= MEMORY_MATCH_MIN_SIMILARITY &&
+				(input.scores.get(entry) ?? 0) >= MEMORY_MATCH_MIN_SCORE &&
 				!input.alreadyShown(entry.raw.trim()),
 		)
 		.sort((a, b) => (input.scores.get(b) ?? 0) - (input.scores.get(a) ?? 0))

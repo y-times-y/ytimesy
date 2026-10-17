@@ -1756,10 +1756,12 @@ async function recallCheck() {
 	const {
 		cosineSimilarity,
 		memoryLineEmbeddingText,
-		MEMORY_MATCH_MIN_SIMILARITY,
+		MEMORY_MATCH_LIMIT,
+		MEMORY_MATCH_MIN_SCORE,
 		selectMemoryMatches,
 		memoryQueryText,
 	} = await import("../src/domain/memory-repo");
+	const { memoryMatchScores } = await import("../src/domain/memory-ranking");
 	const embed = memoryEmbedder();
 	if (!embed)
 		throw new Error("Set CLOUDFLARE_API_TOKEN (npx wrangler auth token).");
@@ -1770,13 +1772,15 @@ async function recallCheck() {
 		[
 			"probe",
 			"snapshot",
-			"right rank",
-			"right score",
+			"cosine rank",
+			"hybrid rank",
+			"hybrid score",
 			"selected",
 			"top score",
 			"live injected lines",
 		],
 	];
+	const totals = { probes: 0, cosine5: 0, hybrid5: 0, selected: 0 };
 	for (const label of ["after-updates", "end"]) {
 		const files = output.repoFiles[label];
 		if (!files) continue;
@@ -1791,24 +1795,35 @@ async function recallCheck() {
 			const query = memoryQueryText(`${probe.prompt}${PROMPT_SUFFIX}`);
 			if (!query) continue;
 			const vector = await embed.query(query);
-			const scores = new Map(
+			const similarity = new Map(
 				lines.map((entry, index) => [
 					entry,
 					cosineSimilarity(vector, vectors[index]),
 				]),
 			);
+			const scores = memoryMatchScores(lines, similarity, query);
+			const rankBy = (by: Map<(typeof lines)[number], number>) =>
+				[...lines]
+					.sort((a, b) => (by.get(b) ?? 0) - (by.get(a) ?? 0))
+					.findIndex((entry) => probe.right.test(entry.text)) + 1;
+			const cosineRank = rankBy(similarity);
+			const rank = rankBy(scores);
 			const ranked = [...lines].sort(
 				(a, b) => (scores.get(b) ?? 0) - (scores.get(a) ?? 0),
 			);
-			const rank =
-				ranked.findIndex((entry) => probe.right.test(entry.text)) + 1;
 			const selected = selectMemoryMatches({
 				lines,
 				scores,
 				alreadyShown: () => false,
 				today: memoryToday(),
 				project: null,
-			});
+			}).some((entry) => probe.right.test(entry.text));
+			if (rank) {
+				totals.probes++;
+				if (cosineRank <= 5) totals.cosine5++;
+				if (rank <= 5) totals.hybrid5++;
+				if (selected) totals.selected++;
+			}
 			const liveLines = live
 				? (live.injected.split("apply to this message")[1] ?? "")
 						.split("\n")
@@ -1817,9 +1832,10 @@ async function recallCheck() {
 			rows.push([
 				probe.id,
 				label,
+				cosineRank ? String(cosineRank) : "-",
 				rank ? String(rank) : "-",
 				rank ? (scores.get(ranked[rank - 1]) ?? 0).toFixed(3) : "-",
-				selected.some((entry) => probe.right.test(entry.text)) ? "yes" : "no",
+				selected ? "yes" : "no",
 				(scores.get(ranked[0]) ?? 0).toFixed(3),
 				String(liveLines),
 			]);
@@ -1827,7 +1843,7 @@ async function recallCheck() {
 	}
 	console.log(table(rows));
 	console.log(
-		`(${MEMORY_MATCH_MIN_SIMILARITY} cutoff, top 5; "live injected lines" = read-hook lines the probe actually got; 0 with a top score above the cutoff means the hook returned nothing, e.g. its 4 s timeout)`,
+		`Probes whose fact is in the snapshot: ${totals.probes}; recall@5 cosine ${totals.cosine5}, hybrid ${totals.hybrid5}; selected by the read hook (top ${MEMORY_MATCH_LIMIT}, score >= ${MEMORY_MATCH_MIN_SCORE}) ${totals.selected}. "live injected lines" = read-hook lines the probe actually got in that run.`,
 	);
 }
 
