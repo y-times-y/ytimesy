@@ -48,6 +48,9 @@ secrets.ENVIRONMENT_EXECUTION_ENABLED = "1";
 secrets.BACKGROUND_EXECUTION_ENABLED = "1";
 secrets.YTIMESY_BACKGROUND_CRON_ENABLED = "1";
 secrets.YTIMESY_MODEL_EXECUTION_TARGET = "durable-object";
+// Development-only switches (eval users, forced outages, any-model, step
+// timing) pass only where this says development (isDevelopmentEnvironment).
+secrets.YTIMESY_ENVIRONMENT = "development";
 // Turns, builds and jobs start VMs here; without admission their runtime caps
 // are never extended and usage isn't held against the allowance.
 secrets.YTIMESY_INFRASTRUCTURE_ADMISSION = "true";

@@ -277,6 +277,7 @@ function delegatedAccount(stored: object) {
 
 it("serves a development eval user from its owner's login row", async () => {
 	vi.stubEnv("YTIMESY_DEV_EVAL_USERS", "1");
+	vi.stubEnv("YTIMESY_ENVIRONMENT", "development");
 	try {
 		const queries = delegatedAccount({
 			...auth,
@@ -294,8 +295,13 @@ it("serves a development eval user from its owner's login row", async () => {
 	}
 });
 
-it("never reads eval users in production or without the switch", async () => {
-	for (const env of [{}, { YTIMESY_ENVIRONMENT: "production" }]) {
+it("never reads eval users outside development or without the switch", async () => {
+	for (const env of [
+		{},
+		{ YTIMESY_ENVIRONMENT: "production" },
+		// Unset (or any other value) is not development.
+		{ YTIMESY_ENVIRONMENT: "" },
+	]) {
 		vi.stubEnv("YTIMESY_DEV_EVAL_USERS", "1");
 		for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
 		if (!Object.keys(env).length) vi.stubEnv("YTIMESY_DEV_EVAL_USERS", "");

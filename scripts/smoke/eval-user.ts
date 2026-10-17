@@ -430,7 +430,9 @@ export async function createEvalUser(options: {
 }): Promise<EvalUser> {
 	await assertDevelopmentDatabase();
 	installHandlers();
-	// Local services (catalog checks, sends) resolve the owner's login too.
+	// Local services (catalog checks, sends) resolve the owner's login too;
+	// the database was just checked to be development's.
+	process.env.YTIMESY_ENVIRONMENT = "development";
 	process.env.YTIMESY_DEV_EVAL_USERS = "1";
 	const variant = options.variant ?? DEFAULT_HARNESS_VARIANT;
 	if (!implementedToolSurfaces().includes(variant.toolSurface))

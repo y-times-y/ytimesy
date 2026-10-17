@@ -21,6 +21,8 @@ async function configureEdgeExecution() {
 			JSON.parse(await readFile(".ytimesy/realtime-development.json", "utf8")),
 		);
 	Object.assign(process.env, {
+		// Development-only switches pass only here (isDevelopmentEnvironment).
+		YTIMESY_ENVIRONMENT: "development",
 		YTIMESY_MODEL_EXECUTION_TARGET: "durable-object",
 		YTIMESY_ENVIRONMENT_WORKFLOW_URL: EDGE_ORIGIN,
 		YTIMESY_BACKGROUND_WORKFLOW_URL: EDGE_ORIGIN,
