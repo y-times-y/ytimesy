@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { getRequest } from "@tanstack/react-start/server";
 import { createTwoFilesPatch } from "diff";
 import { z } from "zod";
-import { MEMORY_MODES, memoryPath } from "#/domain/memory-repo";
+import { type MEMORY_MODES, memoryPath } from "#/domain/memory-repo";
 import {
 	memoryRepo,
 	memoryRepoName,
@@ -78,9 +78,10 @@ export const readMemoryHistoryFn = createServerFn({ method: "GET" })
 		}));
 	});
 
+/** The settings switch: memory off or full. "spec" is set only by evals. */
 export const saveMemoryModeFn = createServerFn({ method: "POST" })
 	.validator((data: unknown) =>
-		z.object({ mode: z.enum(MEMORY_MODES) }).parse(data),
+		z.object({ mode: z.enum(["off", "full"]) }).parse(data),
 	)
 	.handler(async ({ data }) => {
 		requireSameOrigin(getRequest());

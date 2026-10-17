@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { API_MODEL_LIST } from "./api-model-list";
 import { type ApiTurnSettings, apiTurnSettings } from "./api-turn-settings";
+import { isDevelopmentEnvironment } from "./development-environment";
 import {
 	directAuthor,
 	isCustomConnection,
@@ -490,8 +491,8 @@ export function failoverRuntimeNote(
 /**
  * Development only: `YTIMESY_DEV_FORCE_MODEL_OUTAGE=<connection>[@<step>]`
  * makes that connection ("codex" or an API connection id) answer HTTP 503
- * from that durable step on (from the first step without one). Never in
- * production, whatever the variable says.
+ * from that durable step on (from the first step without one). Only in
+ * development (see isDevelopmentEnvironment), whatever the variable says.
  */
 export function forcedDevelopmentOutage(
 	env: {
@@ -502,7 +503,7 @@ export function forcedDevelopmentOutage(
 	step: number,
 ): boolean {
 	const value = env.YTIMESY_DEV_FORCE_MODEL_OUTAGE?.trim();
-	if (!value || env.YTIMESY_ENVIRONMENT === "production") return false;
+	if (!value || !isDevelopmentEnvironment(env)) return false;
 	const [key, from] = value.split("@");
 	const first = from ? Number.parseInt(from, 10) : 1;
 	return key === connectionKey && Number.isFinite(first) && step >= first;

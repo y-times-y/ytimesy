@@ -5,6 +5,7 @@ import {
 	type ToolSet,
 	tool,
 } from "ai";
+import { clip } from "#/domain/clip";
 import {
 	CALL_MCP_TOOL_TOOL,
 	SEARCH_MCP_TOOLS_TOOL,
@@ -13,7 +14,7 @@ import { estimateContextTokens } from "./api-agent-context";
 import type { McpCatalogEntry } from "./mcp-tools";
 
 /** MCP setups this small keep their real tools inline; larger ones are searched. */
-export const INLINE_MCP_TOKEN_LIMIT = 2_000;
+const INLINE_MCP_TOKEN_LIMIT = 2_000;
 type JSONSchema7Definition = JSONSchema7 | boolean;
 
 const SERVER_LINE_CHARACTERS = 400;
@@ -22,9 +23,6 @@ const SEARCH_RESULTS = 8;
 /** Full descriptions and schemas returned by one search, best matches first. */
 const SEARCH_DETAIL_CHARACTERS = 24_000;
 const SHORT_DESCRIPTION_CHARACTERS = 200;
-
-const clip = (text: string, limit: number) =>
-	text.length <= limit ? text : `${text.slice(0, limit - 1).trimEnd()}…`;
 
 /** Estimated tokens of the MCP tool definitions if they were offered inline. */
 export function inlineMcpTokens(catalog: readonly McpCatalogEntry[]) {
@@ -38,7 +36,7 @@ export function inlineMcpTokens(catalog: readonly McpCatalogEntry[]) {
 }
 
 /** One bounded line per server: name, purpose and tool names. */
-export function mcpServerCatalog(
+function mcpServerCatalog(
 	catalog: readonly McpCatalogEntry[],
 	purposes: Readonly<Record<string, string>> = {},
 ) {

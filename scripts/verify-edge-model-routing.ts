@@ -4,6 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { signDeliveryRequest } from "../src/domain/delivery-auth";
 import { closeDatabase, database } from "../src/server/adapters/database";
 import { modelWorkflowSigningSecret } from "../src/server/adapters/model-workflow-dispatch";
+import { DEVELOPMENT_EDGE_ORIGIN } from "./development-config";
 
 const projectRef = "exampledevprojectref";
 if (
@@ -12,8 +13,7 @@ if (
 	!new URL(process.env.DATABASE_URL ?? "").username.includes(projectRef)
 )
 	throw new Error("Not the approved development database.");
-const endpoint =
-	"https://ytimesy-edge-executor-development.example-account.workers.dev/model-step";
+const endpoint = `${DEVELOPMENT_EDGE_ORIGIN}/model-step`;
 const turnIds = [randomUUID(), randomUUID()];
 const leaseId = randomUUID();
 /** Terminal synthetic turns exercise the deployed DO routing without inference or repository tools. */

@@ -190,7 +190,7 @@ function parseCodexEnvelope(text: string): PatchFileChange[] {
 const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@ ?(.*)$/;
 
 /** Parses '@@'-separated hunks (unified or V4A style); lines before any '@@' form an implicit hunk. */
-export function parseLooseHunks(lines: string[], path: string): Hunk[] {
+function parseLooseHunks(lines: string[], path: string): Hunk[] {
 	const hunks: Hunk[] = [];
 	let current: Hunk | null = null;
 	let pendingAnchors: string[] = [];

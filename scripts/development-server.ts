@@ -1,9 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { createServer } from "vite";
 import { z } from "zod";
+import { DEVELOPMENT_EDGE_ORIGIN } from "./development-config";
 
-const EDGE_ORIGIN =
-	"https://ytimesy-edge-executor-development.example-account.workers.dev";
+const EDGE_ORIGIN = DEVELOPMENT_EDGE_ORIGIN;
 
 /** Development executes on Cloudflare DOs and Workflows; there is no Node job host. */
 async function configureEdgeExecution() {
@@ -21,6 +21,8 @@ async function configureEdgeExecution() {
 			JSON.parse(await readFile(".ytimesy/realtime-development.json", "utf8")),
 		);
 	Object.assign(process.env, {
+		// Development-only switches pass only here (isDevelopmentEnvironment).
+		YTIMESY_ENVIRONMENT: "development",
 		YTIMESY_MODEL_EXECUTION_TARGET: "durable-object",
 		YTIMESY_ENVIRONMENT_WORKFLOW_URL: EDGE_ORIGIN,
 		YTIMESY_BACKGROUND_WORKFLOW_URL: EDGE_ORIGIN,

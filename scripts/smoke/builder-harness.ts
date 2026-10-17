@@ -41,12 +41,12 @@ import {
 import { cancelServerTurn } from "../../src/server/services/cancel-server-turn";
 import { sendSubscriptionTask } from "../../src/server/services/codex-subscription-session";
 import { connectionApiKey } from "../../src/server/services/model-connections";
+import { DEVELOPMENT_EDGE_ORIGIN } from "../development-config";
 import { type EvalUser, SLOT_LIMITS, withSlot } from "./eval-user";
 
 export { assertDevelopmentDatabase } from "./eval-user";
 
-const ORIGIN =
-	"https://ytimesy-edge-executor-development.example-account.workers.dev";
+const ORIGIN = DEVELOPMENT_EDGE_ORIGIN;
 
 export type Task = {
 	id: string;
@@ -324,6 +324,20 @@ function toolName(item: SessionItem) {
 	}
 }
 
+/** A session's latest turn: its state and messages, with the session's items. */
+export async function turnState(sessionId: string) {
+	return (
+		await database().query<{
+			state: string;
+			items: unknown;
+			messages: unknown;
+		}>(
+			"select t.state,s.items,t.messages from api_turn t join agent_session s on s.id=t.session_id where t.session_id=$1 order by t.created_at desc limit 1",
+			[sessionId],
+		)
+	).rows[0];
+}
+
 export async function createHarnessRunner(options: {
 	/** Who runs the sessions: a throwaway eval user (or the owner). */
 	user: EvalUser;
@@ -350,15 +364,6 @@ export async function createHarnessRunner(options: {
 	const liveVms = new Set<string>();
 	const liveSessions = new Map<string, string>();
 	let stopping = false;
-
-	async function turnState(sessionId: string) {
-		return (
-			await db.query<{ state: string; items: unknown; messages: unknown }>(
-				"select t.state,s.items,t.messages from api_turn t join agent_session s on s.id=t.session_id where t.session_id=$1 order by t.created_at desc limit 1",
-				[sessionId],
-			)
-		).rows[0];
-	}
 
 	function measure(record: RunRecord, items: SessionItem[], messages: unknown) {
 		record.toolCalls = 0;
