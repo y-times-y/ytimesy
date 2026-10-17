@@ -68,6 +68,8 @@ const DREAM_MAX_STEPS = 24;
 const REVIEW_MAX_STEPS = 36;
 /** How often a dream also reviews the whole repo. */
 export const DREAM_REVIEW_DAYS = 7;
+/** Recorded as a save's outcome suffix when it found nothing to save; recentUnsavedMessages looks for it. */
+export const SAVE_NOTHING_OUTCOME = ":nothing-new";
 /** Recorded as the dream's outcome suffix; lastMemoryReview looks for it. */
 export const DREAM_REVIEW_OUTCOME = ":review";
 const DREAM_TIMEOUT_MS = 12 * 60 * 1000;
@@ -176,8 +178,8 @@ async function runOnUserModel(
 		maxSteps: number;
 		endTurnTools?: string[];
 		timeoutMs: number;
-		/** Appended to the recorded outcome. */
-		outcomeSuffix?: string;
+		/** Appended to the recorded outcome; a function sees the model's answer. */
+		outcomeSuffix?: string | ((text: string) => string);
 	},
 ) {
 	const subscription = subscriptionTurnSettings(input.route.connectionRevision);
@@ -236,7 +238,13 @@ async function runOnUserModel(
 			modelId: input.route.modelId,
 			usage,
 			steps,
-			outcome: `${outcome}${input.outcomeSuffix ?? ""}`,
+			outcome: `${outcome}${
+				typeof input.outcomeSuffix === "function"
+					? outcome === "completed"
+						? input.outcomeSuffix(text)
+						: ""
+					: (input.outcomeSuffix ?? "")
+			}`,
 		})
 		.catch(() => console.warn("Memory model usage could not be recorded."));
 	return { outcome, text, steps } as const;
@@ -290,6 +298,9 @@ export async function runMemorySave(
 		tools: {},
 		maxSteps: 1,
 		timeoutMs: SAVE_TIMEOUT_MS,
+		// Lets a new chat's read side stop showing this message at once.
+		outcomeSuffix: (text) =>
+			parseSaveHookAnswer(text).length ? "" : SAVE_NOTHING_OUTCOME,
 	});
 	if (run.outcome !== "completed") return run.outcome;
 	// "replaces" names a line the model was shown; it is applied by its text.

@@ -11,7 +11,7 @@ beforeEach(async () => {
 	db = new PGlite();
 	await db.exec(`create table agent_session(id uuid primary key,user_id text,parent_session_id uuid,title text,items jsonb not null default '[]',updated_at timestamptz default now());
 	 create table api_turn(id uuid primary key,session_id uuid,user_id text,state text,updated_at timestamptz default now());
-	 create table memory_model_usage(id uuid primary key,user_id text,kind text,outcome text,created_at timestamptz default now());`);
+	 create table memory_model_usage(id uuid primary key,user_id text,kind text,session_id uuid,outcome text,created_at timestamptz default now());`);
 	holder.query.mockImplementation(async (sql: string, values: unknown[]) =>
 		db.query(sql, values),
 	);
@@ -58,6 +58,11 @@ it("returns other chats' latest messages that memory has not saved yet", async (
 			},
 		],
 	});
+	const nothing = await chat({ items: [said("Fix the flaky test")] });
+	await db.query(
+		"insert into memory_model_usage(id,user_id,kind,session_id,outcome) values($1,'u1','save',$2,'completed:nothing-new')",
+		[randomUUID(), nothing],
+	);
 	await chat({ items: [said("an hour ago")], minutesAgo: 60 });
 	await chat({ items: [said("still running")], state: "running" });
 	await chat({ items: [said("someone else")], user: "u2" });

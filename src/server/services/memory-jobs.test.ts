@@ -405,7 +405,9 @@ describe("save hook", () => {
 		).toBe("saved");
 		expect(calls.agent[0].maxSteps).toBe(1);
 		expect(calls.reserve).toHaveLength(1);
-		expect(calls.usage).toEqual([expect.objectContaining({ kind: "save" })]);
+		expect(calls.usage).toEqual([
+			expect.objectContaining({ kind: "save", outcome: "completed" }),
+		]);
 		expect(commits[0].changes).toEqual([
 			{
 				path: "tooling.md",
@@ -440,7 +442,10 @@ describe("save hook", () => {
 		expect(plain.calls.saved).toEqual([]);
 		expect(plain.calls.agent).toHaveLength(1);
 		expect(plain.calls.usage).toEqual([
-			expect.objectContaining({ kind: "save" }),
+			expect.objectContaining({
+				kind: "save",
+				outcome: "completed:nothing-new",
+			}),
 		]);
 		const spec = harness({ chats, mode: "spec" });
 		expect(
