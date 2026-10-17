@@ -16,7 +16,7 @@ export type MemorySettings = {
 };
 
 /** Memory is on unless the deployment or the user turns it off. */
-export function defaultMemoryMode(): MemoryMode {
+function defaultMemoryMode(): MemoryMode {
 	const value = process.env.YTIMESY_MEMORY_MODE;
 	return MEMORY_MODES.includes(value as MemoryMode)
 		? (value as MemoryMode)

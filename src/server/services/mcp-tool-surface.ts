@@ -14,7 +14,7 @@ import { estimateContextTokens } from "./api-agent-context";
 import type { McpCatalogEntry } from "./mcp-tools";
 
 /** MCP setups this small keep their real tools inline; larger ones are searched. */
-export const INLINE_MCP_TOKEN_LIMIT = 2_000;
+const INLINE_MCP_TOKEN_LIMIT = 2_000;
 type JSONSchema7Definition = JSONSchema7 | boolean;
 
 const SERVER_LINE_CHARACTERS = 400;
@@ -36,7 +36,7 @@ export function inlineMcpTokens(catalog: readonly McpCatalogEntry[]) {
 }
 
 /** One bounded line per server: name, purpose and tool names. */
-export function mcpServerCatalog(
+function mcpServerCatalog(
 	catalog: readonly McpCatalogEntry[],
 	purposes: Readonly<Record<string, string>> = {},
 ) {
