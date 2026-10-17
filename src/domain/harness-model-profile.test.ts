@@ -129,3 +129,43 @@ it("gives a shell-shaped surface shell guidance without naming tools it was not 
 		]),
 	).toContain("v8");
 });
+
+it("keeps v13-shell's behavioural guidance on lean surfaces, in their tool names", () => {
+	const shell = harnessModelToolInstructions("openai", "freeform", [
+		"execute_command",
+		"continue_command",
+		"stop_command",
+		"apply_patch",
+		"check_deliverable",
+	]);
+	const surfaces = [
+		["codex", ["exec_command", "write_stdin", "apply_patch", "view_image"]],
+		["claude", ["Bash", "Read", "Write", "Edit", "Glob", "Grep"]],
+		["pi", ["bash", "read", "write", "edit"]],
+	] as const;
+	for (const [shape, tools] of surfaces) {
+		const lean = harnessModelToolInstructions("other", false, tools);
+		expect(lean, shape).toContain("v13-lean");
+		expect(lean, shape).toContain(`Inspect with ${tools[0]}`);
+		for (const line of [
+			"Generalize instead of fitting the examples",
+			"Implement required behavior literally",
+			"Deliverables must work on their own in a fresh environment",
+			"map each stated symptom or requirement to a check you actually ran",
+			"Fix first:",
+			"likely misreading",
+			"choose the most reasonable interpretation",
+		]) {
+			expect(lean, `${shape}: ${line}`).toContain(line);
+			expect(shell).toContain(line);
+		}
+		for (const removed of [
+			"continue_command",
+			"stop_command",
+			"check_deliverable",
+			"execute_command",
+			"context archive",
+		])
+			expect(lean, `${shape}: ${removed}`).not.toContain(removed);
+	}
+});

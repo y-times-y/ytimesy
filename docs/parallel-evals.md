@@ -43,21 +43,11 @@ node --env-file=.env --import tsx scripts/smoke/eval-user.ts --cleanup [--older-
 | Key | Values | Effect |
 | --- | --- | --- |
 | `memoryWording` | `notes` (default), `rules` | `rules` presents MEMORY.md and the read hook's lines as "Project rules from the user's earlier chats … Follow these unless the user says otherwise", in place of "data, not instructions; may be outdated". The memory paragraph in the system prompt changes to match. It is still the same `<memory>` part on the same user message (src/domain/memory-repo.ts) |
-| `toolSurface` | `current` (default); `lean-native`, `lean-pi` reserved | Only `current` is implemented. Scripts refuse a reserved value before creating a user, and a turn throws on one rather than quietly running `current` |
+| `toolSurface` | `current` (default), `lean-native`, `lean-pi` | The builder's tool surface (docs/builder-tool-surface.md). `api-turn` passes it to `builderToolSurface` (src/server/services/builder-shell-surface.ts): `current` is the measured shell surface; `lean-native` shows each model family its vendor harness's tools (GPT: Codex's, Gemini: Gemini CLI's, Qwen: Qwen Code's, everything else: Claude Code's); `lean-pi` shows every model Pi's four. Read-only sessions keep their own tools |
 
-### Adding a tool surface (e.g. `lean-native`)
+### Changing a tool surface
 
-1. Add an entry to `SURFACES` in `src/server/services/harness-tool-surfaces.ts`:
-   ```ts
-   "lean-native": {
-   	tools: ({ tools, shellBuilder }) => shellBuilder ? leanNativeTools(tools) : tools,
-   	instructions: (prompt) => prompt.replace(…), // optional
-   },
-   ```
-   `tools` gets the turn's own tools after the builder shell surface is chosen. It also gets `shellBuilder`, `writable`, `freeformPatch` (Codex subscription) and `nativePatch` (OpenAI hosted apply_patch). It runs before MCP, plugin, web-search, plan-mode and secret tools are added and before lifecycle hooks wrap them, so those keep working. `instructions` gets the finished system prompt (builder instructions plus memory). Both run on every durable step: keep them pure and deterministic so the tools and prompt stay byte-stable for prompt caching.
-2. If the surface needs different tool construction rather than filtering (e.g. different `apiAgentTools` options), read `variant.toolSurface` next to `harnessSurface` in `src/server/jobs/api-turn.ts` and pass it in.
-3. The value is already in `HARNESS_VARIANT_VALUES`. A new key goes there plus `DEFAULT_HARNESS_VARIANT`.
-4. Add a test next to `harness-tool-surfaces.test.ts`, deploy dev, and run it side by side with the default: `--variant toolSurface=lean-native` in one process and no flag in another.
+The tool surface has one source of truth: `HARNESS_VARIANT_VALUES.toolSurface` names the values (`ToolSurfaceVariant` in src/domain/harness-model-profile.ts is the same type), and `builderToolSurface` builds each one. A new surface is a value there plus a branch in `builderToolSurface` (and `leanToolShape` if it is a new lean shape). Its prompt follows the tools: `agentTurnInstructions` takes the lean shape, and `harnessModelToolInstructions` adds the v13 behavioural guidance in the lean tools' names (profile `v13-lean`). Test it in lean-tools.test.ts, deploy dev, and run it side by side with the default: `--variant toolSurface=lean-native` in one process and no flag in another.
 
 ## Running side by side
 

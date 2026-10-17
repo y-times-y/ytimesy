@@ -102,7 +102,7 @@ import {
 	pendingAgentCommandIds,
 	withBackgroundCommandContext,
 } from "../services/background-command-context";
-import { builderShellTools } from "../services/builder-shell-surface";
+import { builderToolSurface } from "../services/builder-shell-surface";
 import {
 	runCodexSubscriptionAgent,
 	runCodexSubscriptionAgentStep,
@@ -111,10 +111,6 @@ import { compactionStateSnapshot } from "../services/compaction-state-snapshot";
 import { withCompletedTaskReviewContext } from "../services/completed-task-review-context";
 import { ensureConversationCodePoint } from "../services/conversation-recovery";
 import { harnessLifecycleHooks } from "../services/harness-lifecycle-hooks";
-import {
-	harnessToolSurface,
-	surfaceInstructions,
-} from "../services/harness-tool-surfaces";
 import { runAgentTaskTool } from "../services/harness-workspace-session";
 import { journaledToolOperation } from "../services/journaled-tool-operation";
 import { turnOAuthProvider } from "../services/mcp-oauth";
@@ -426,7 +422,6 @@ async function runApiTurnAttempt(
 					harnessVariantForUser(owner.userId),
 				)
 			: DEFAULT_HARNESS_VARIANT;
-		const harnessSurface = harnessToolSurface(variant.toolSurface);
 		const apiSettings: ApiTurnSettings = subscription
 			? {}
 			: (route.settings ?? {});
@@ -646,15 +641,32 @@ async function runApiTurnAttempt(
 				progress.offer(items);
 			},
 		});
-		const surfaceTools = harnessSurface.tools({
-			tools: shellBuilder
-				? builderShellTools(repositoryContext.tools)
-				: repositoryContext.tools,
-			shellBuilder,
-			writable,
-			freeformPatch,
-			nativePatch,
-		});
+		// The builder's tool surface (docs/builder-tool-surface.md): "current"
+		// for everyone; a development eval user's harness variant may pick a
+		// lean one (docs/parallel-evals.md).
+		const toolSurfaceVariant = variant.toolSurface;
+		const surface = !shellBuilder
+			? { tools: repositoryContext.tools, lean: undefined }
+			: toolSurfaceVariant === "current"
+				? builderToolSurface({
+						variant: toolSurfaceVariant,
+						modelId: route.modelId,
+						tools: repositoryContext.tools,
+					})
+				: builderToolSurface({
+						variant: toolSurfaceVariant,
+						modelId: route.modelId,
+						tools: repositoryContext.tools,
+						lean: {
+							workspace,
+							sessionId: owner.id,
+							turnId: turn.id,
+							toolCallPrefix: step ? `step-${step.index}:` : undefined,
+							signal: abort.signal,
+							memo: (key, load) => turnMemo(`${turn.id}:${key}`, load),
+						},
+					});
+		const surfaceTools = surface.tools;
 		// The user's remote MCP servers are called from here; credentials never reach the VM.
 		// Connections are live HTTP clients bound to this step's request, so a
 		// step that calls a tool connects again; the tool lists are reused. A
@@ -730,7 +742,8 @@ async function runApiTurnAttempt(
 				: {};
 		// Runtime notices name only tools this session was offered.
 		const commandReader =
-			"read_command" in surfaceTools ? "read_command" : "continue_command";
+			surface.lean?.commandReader ??
+			("read_command" in surfaceTools ? "read_command" : "continue_command");
 		// Delegated-task context concerns only sessions with children. A session
 		// without the task tools (the builder) cannot gain children mid-turn, so
 		// its answer holds for the turn; one with them re-checks until it has one.
@@ -902,20 +915,25 @@ async function runApiTurnAttempt(
 				failedAttempt = state;
 			},
 			messages,
-			archiveHistory: (history) =>
-				archiveModelContext(owner.userId, owner.id, history),
-			instructions: surfaceInstructions(
-				harnessSurface,
+			archiveHistory: async (history) => {
+				const reference = await archiveModelContext(
+					owner.userId,
+					owner.id,
+					history,
+				);
+				return surface.lean
+					? surface.lean.saveHistory(reference, history)
+					: reference;
+			},
+			instructions: `${agentTurnInstructions({
+				shellBuilder,
+				session: owner,
 				tools,
-				`${agentTurnInstructions({
-					shellBuilder,
-					session: owner,
-					tools,
-					plugins,
-					projectKnowledge,
-					secretNames: projectSecrets?.names,
-				})}${memory ? `\n${memory.instructions}` : ""}`,
-			),
+				plugins,
+				projectKnowledge,
+				secretNames: projectSecrets?.names,
+				leanShape: surface.lean?.shape,
+			})}${memory ? `\n${memory.instructions}` : ""}`,
 			tools,
 			signal: abort.signal,
 			isUserRequest: (message) => isUserRequestMessage(items, message),
@@ -1125,7 +1143,7 @@ async function runApiTurnAttempt(
 							...finalHistory,
 							{
 								role: "user",
-								content: `Execution completion gate: these owned background commands are still running: ${JSON.stringify(pendingCommands)}. Use ${"wait_command" in surfaceTools ? "wait_command" : "continue_command"} to wait for them and inspect their output; do not finalize or claim passing checks until they settle. This is runtime status, not a new user request.`,
+								content: `Execution completion gate: these owned background commands are still running: ${JSON.stringify(pendingCommands)}. ${surface.lean ? surface.lean.waitHint(pendingCommands) : `Use ${"wait_command" in surfaceTools ? "wait_command" : "continue_command"} to wait for them`} and inspect their output; do not finalize or claim passing checks until they settle. This is runtime status, not a new user request.`,
 							},
 						]
 					: finalHistory;

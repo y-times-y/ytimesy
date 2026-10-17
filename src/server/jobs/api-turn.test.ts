@@ -235,7 +235,7 @@ vi.mock("../services/api-agent-tools", () => ({
 }));
 // The mocked tool set carries probe fields; the shell filter has its own tests.
 vi.mock("../services/builder-shell-surface", () => ({
-	builderShellTools: (tools: unknown) => tools,
+	builderToolSurface: ({ tools }: { tools: unknown }) => ({ tools }),
 }));
 vi.mock("../services/api-command-scope", () => ({
 	stopApiTurnCommands: mocks.stop,

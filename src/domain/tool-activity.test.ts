@@ -134,3 +134,77 @@ it("describes a freeform apply_patch whose input is raw patch text", () => {
 		} as DynamicToolCallItem),
 	).toMatchObject({ verb: "Created", target: "new.ts", added: 2, removed: 0 });
 });
+
+it("describes the lean surfaces' tools with the existing card kinds", () => {
+	for (const [tool, input] of [
+		["exec_command", { cmd: "npm test" }],
+		["Bash", { command: "npm test" }],
+		["run_shell_command", { command: "npm test" }],
+		["bash", { command: "npm test" }],
+	] as const)
+		expect(toolActivity(call(tool, input))).toMatchObject({
+			verb: "Ran",
+			target: "npm test",
+			glyph: "test",
+		});
+	expect(
+		toolActivity(call("write_stdin", { session_id: "x", chars: "" })),
+	).toMatchObject({
+		glyph: "wait",
+	});
+	expect(
+		toolActivity(call("write_stdin", { session_id: "x", chars: "\u0003" })),
+	).toMatchObject({ verb: "Stopped command", glyph: "stop" });
+	expect(
+		toolActivity(call("Read", { file_path: "/w/src/app.ts" })),
+	).toMatchObject({
+		verb: "Read",
+		target: "app.ts",
+	});
+	expect(toolActivity(call("read", { path: "shot.png" }))).toMatchObject({
+		verb: "Viewed",
+		glyph: "image",
+	});
+	expect(
+		toolActivity(
+			call("Edit", {
+				file_path: "/w/src/app.ts",
+				old_string: "a\nb",
+				new_string: "c",
+			}),
+		),
+	).toMatchObject({ verb: "Edited", target: "app.ts", added: 1, removed: 2 });
+	expect(
+		toolActivity(
+			call("edit", {
+				path: "src/app.ts",
+				edits: [
+					{ oldText: "a", newText: "b\nc" },
+					{ oldText: "d", newText: "e" },
+				],
+			}),
+		),
+	).toMatchObject({ verb: "Edited", added: 3, removed: 2 });
+	expect(
+		toolActivity(
+			call("replace", { file_path: "a.py", old_string: "x", new_string: "y" }),
+		),
+	).toMatchObject({ verb: "Edited", target: "a.py" });
+	expect(
+		toolActivity(call("Write", { file_path: "/w/new.md", content: "a\nb\n" })),
+	).toMatchObject({ verb: "Wrote", target: "new.md", added: 2 });
+	expect(
+		toolActivity(call("write_file", { file_path: "/w/x.ts" })),
+	).toMatchObject({
+		verb: "Edited",
+		target: "x.ts",
+	});
+	expect(toolActivity(call("Grep", { pattern: "TODO" }))).toMatchObject({
+		verb: "Searched",
+		glyph: "search",
+	});
+	expect(toolActivity(call("glob", { pattern: "**/*.ts" }))).toMatchObject({
+		verb: "Found files",
+		glyph: "search",
+	});
+});
