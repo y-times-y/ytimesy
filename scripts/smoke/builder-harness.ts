@@ -88,7 +88,7 @@ export const TASKS: Task[] = [
 				"import unittest\n\nfrom textkit import slugify\n\n\nclass SlugifyTest(unittest.TestCase):\n    def test_spaces_and_punctuation(self):\n        self.assertEqual(slugify('Hello, World!'), 'hello-world')\n\n    def test_collapses_separators(self):\n        self.assertEqual(slugify('  Many   spaces -- here '), 'many-spaces-here')\n\n\nif __name__ == '__main__':\n    unittest.main()\n",
 		},
 		verify:
-			"set -e\ngit diff --quiet HEAD -- tests\npython3 -m unittest discover -s tests -t . 2>&1 | tail -3",
+			"set -eo pipefail\ngit diff --quiet HEAD -- tests\npython3 -m unittest discover -s tests -t . 2>&1 | tail -3",
 	},
 	{
 		id: "fix-failing-test",
@@ -102,7 +102,7 @@ export const TASKS: Task[] = [
 				"import unittest\n\nfrom stats import mean, spread\n\n\nclass StatsTest(unittest.TestCase):\n    def test_mean(self):\n        self.assertEqual(mean([2, 4, 6]), 4)\n\n    def test_spread(self):\n        self.assertEqual(spread([3, 9, 1]), 8)\n\n\nif __name__ == '__main__':\n    unittest.main()\n",
 		},
 		verify:
-			"set -e\ngit diff --quiet HEAD -- tests\npython3 -m unittest discover -s tests -t . 2>&1 | tail -3",
+			"set -eo pipefail\ngit diff --quiet HEAD -- tests\npython3 -m unittest discover -s tests -t . 2>&1 | tail -3",
 	},
 	{
 		id: "rename-function",
@@ -118,7 +118,7 @@ export const TASKS: Task[] = [
 				"import unittest\n\nfrom report import summary\n\n\nclass ReportTest(unittest.TestCase):\n    def test_summary(self):\n        self.assertEqual(summary([(2, 3), (5, 1)]), 'Total: 11')\n\n\nif __name__ == '__main__':\n    unittest.main()\n",
 		},
 		verify: [
-			"set -e",
+			"set -eo pipefail",
 			"! grep -rn compute_total --include='*.py' .",
 			"grep -q '^def calculate_total' orders.py",
 			"grep -q calculate_total report.py",
