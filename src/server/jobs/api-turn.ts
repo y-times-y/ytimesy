@@ -419,14 +419,10 @@ async function runApiTurnAttempt(
 		if (!owner) throw new Error("Task no longer exists.");
 		if (process.env.YTIMESY_HARNESS_EVALUATION_ENABLED === "1")
 			evaluation = await evaluationRunForTask(owner.userId, owner.id);
-		// Development eval users pick harness variants per run; everyone else
-		// (and production) gets the default. Fixed for the turn.
-		const variant = devEvalUsersEnabled()
-			? await turnMemo(`${turn.id}:harness-variant`, () =>
-					harnessVariantForUser(owner.userId),
-				)
-			: DEFAULT_HARNESS_VARIANT;
-		const harnessSurface = harnessToolSurface(variant.toolSurface);
+		const { variant, harnessSurface } = await turnHarness(
+			turn.id,
+			owner.userId,
+		);
 		const apiSettings: ApiTurnSettings = subscription
 			? {}
 			: (route.settings ?? {});
@@ -716,18 +712,6 @@ async function runApiTurnAttempt(
 		if (loaded.status === "rejected") throw loaded.reason;
 		const mcp = connected.value;
 		const plugins = loaded.value;
-		const withMcp = {
-			...surfaceTools,
-			...mcp.tools,
-			...pluginSkillTools(plugins),
-			...webSearch,
-		};
-		const redact = projectSecrets?.redact ?? [];
-		// Only a person in a root chat can paste a secret into the card.
-		const secretTools =
-			planLock && projectSecrets
-				? secretRequestTools(projectSecrets.names.map(({ name }) => name))
-				: {};
 		// Runtime notices name only tools this session was offered.
 		const commandReader =
 			"read_command" in surfaceTools ? "read_command" : "continue_command";
@@ -741,22 +725,14 @@ async function runApiTurnAttempt(
 				() => hasDelegatedTasks(owner.userId, owner.id),
 				(present) => present || !canDelegate,
 			);
-		// Large MCP setups are searched and called through two fixed tools; the
-		// real tools they run keep their hooks, plan mode and redaction.
-		const tools = mcpToolSurface({
-			tools: planLock
-				? withPlanMode(
-						hooks.wrap(
-							withRedactedResults(
-								{ ...withMcp, ...planTools(planLock), ...secretTools },
-								redact,
-							),
-						),
-						() => planLock.planning,
-					)
-				: hooks.wrap(withRedactedResults(withMcp, redact)),
-			catalog: mcp.catalog,
-			purposes: mcp.purposes,
+		const tools = turnTools({
+			surfaceTools,
+			mcp,
+			plugins,
+			webSearch,
+			hooks,
+			planLock,
+			projectSecrets,
 		});
 		if (planLock?.planning && firstStep)
 			messages = withPlanModeNotice(
@@ -904,17 +880,17 @@ async function runApiTurnAttempt(
 			messages,
 			archiveHistory: (history) =>
 				archiveModelContext(owner.userId, owner.id, history),
-			instructions: surfaceInstructions(
+			instructions: turnInstructions(
 				harnessSurface,
-				tools,
-				`${agentTurnInstructions({
+				{
 					shellBuilder,
 					session: owner,
 					tools,
 					plugins,
 					projectKnowledge,
 					secretNames: projectSecrets?.names,
-				})}${memory ? `\n${memory.instructions}` : ""}`,
+				},
+				memory,
 			),
 			tools,
 			signal: abort.signal,
@@ -1433,6 +1409,78 @@ async function runApiTurnAttempt(
 }
 
 /** A transcript notice of a switch (or a paused one); usage so far stays with the first route. */
+/**
+ * Development eval users pick harness variants per run; everyone else (and
+ * production) gets the default. Fixed for the turn.
+ */
+async function turnHarness(turnId: string, userId: string) {
+	const variant = devEvalUsersEnabled()
+		? await turnMemo(`${turnId}:harness-variant`, () =>
+				harnessVariantForUser(userId),
+			)
+		: DEFAULT_HARNESS_VARIANT;
+	return { variant, harnessSurface: harnessToolSurface(variant.toolSurface) };
+}
+
+/**
+ * The tools a turn offers: its surface's tools, the user's MCP servers,
+ * plugin skills and hosted web search, wrapped in lifecycle hooks, secret
+ * redaction and (in root chats) plan mode.
+ */
+function turnTools(input: {
+	surfaceTools: ToolSet;
+	mcp: Awaited<ReturnType<typeof connectMcpTools>>;
+	plugins: Awaited<ReturnType<typeof enabledPluginComponents>>;
+	webSearch: ToolSet;
+	hooks: ReturnType<typeof harnessLifecycleHooks>;
+	planLock: PlanLock | null;
+	projectSecrets: Awaited<ReturnType<typeof loadAgentProjectSecrets>> | null;
+}) {
+	const { mcp, hooks, planLock, projectSecrets } = input;
+	const withMcp = {
+		...input.surfaceTools,
+		...mcp.tools,
+		...pluginSkillTools(input.plugins),
+		...input.webSearch,
+	};
+	const redact = projectSecrets?.redact ?? [];
+	// Only a person in a root chat can paste a secret into the card.
+	const secretTools =
+		planLock && projectSecrets
+			? secretRequestTools(projectSecrets.names.map(({ name }) => name))
+			: {};
+	// Large MCP setups are searched and called through two fixed tools; the
+	// real tools they run keep their hooks, plan mode and redaction.
+	return mcpToolSurface({
+		tools: planLock
+			? withPlanMode(
+					hooks.wrap(
+						withRedactedResults(
+							{ ...withMcp, ...planTools(planLock), ...secretTools },
+							redact,
+						),
+					),
+					() => planLock.planning,
+				)
+			: hooks.wrap(withRedactedResults(withMcp, redact)),
+		catalog: mcp.catalog,
+		purposes: mcp.purposes,
+	});
+}
+
+/** The system prompt: the builder's instructions, the surface's, then memory's. */
+function turnInstructions(
+	surface: ReturnType<typeof harnessToolSurface>,
+	agent: Parameters<typeof agentTurnInstructions>[0],
+	memory: { instructions: string } | null,
+) {
+	return surfaceInstructions(
+		surface,
+		agent.tools,
+		`${agentTurnInstructions(agent)}${memory ? `\n${memory.instructions}` : ""}`,
+	);
+}
+
 function modelSwitchItem(
 	items: readonly SessionItem[],
 	input: {
