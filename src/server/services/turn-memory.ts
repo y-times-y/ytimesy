@@ -34,6 +34,8 @@ import {
 	memoryLines,
 	memoryMatchesPart,
 	memoryQueryText,
+	memoryRecentLine,
+	memoryRecentPart,
 	memoryToday,
 	selectMemoryMatches,
 	withMemoryParts,
@@ -59,6 +61,8 @@ import {
 	memoryChatTitles,
 	memoryProjectName,
 	memorySettings,
+	type RecentChatMessage,
+	recentUnsavedMessages,
 } from "../adapters/memory-settings";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 
@@ -72,6 +76,12 @@ const READ_HOOK_TIMEOUT_MS = 6000;
 const FIRST_READ_HOOK_TIMEOUT_MS = 12_000;
 /** Bounds embedding work on a turn; larger memories embed over several turns. */
 const MAX_EMBEDDED_LINES = 400;
+/**
+ * Another chat's latest message stays attached until the save hook shows a
+ * saved line for it, for at most this long (the hook runs within seconds).
+ */
+const RECENT_WINDOW_SECONDS = 600;
+const RECENT_TIMEOUT_MS = 3000;
 /** Reading what a turn saved never holds up its completion for long. */
 const SAVED_LINES_TIMEOUT_MS = 5000;
 
@@ -123,6 +133,8 @@ export async function turnMemory(
 		wording?: MemoryWording;
 		/** Development harness variant: agent = no save hook after turns. */
 		writer?: MemoryWriter;
+		/** The user's latest messages in other chats that memory may not hold yet. */
+		recentMessages?: () => Promise<readonly RecentChatMessage[]>;
 	} = {},
 ): Promise<TurnMemory | null> {
 	const settings = await memorySettings(owner.userId).catch((error) => {
@@ -151,6 +163,10 @@ export async function turnMemory(
 	const wording = options.wording ?? DEFAULT_HARNESS_VARIANT.memoryWording;
 	const writer = options.writer ?? DEFAULT_HARNESS_VARIANT.memoryWriter;
 	const url = chatSourceUrl(options.appUrl ?? memoryAppUrl(), owner.id);
+	const recentMessages =
+		options.recentMessages ??
+		(() =>
+			recentUnsavedMessages(owner.userId, owner.id, RECENT_WINDOW_SECONDS));
 	const chatTitles =
 		options.chatTitles ??
 		((ids: readonly string[]) => memoryChatTitles(owner.userId, ids));
@@ -247,6 +263,12 @@ export async function turnMemory(
 				entry.trim() !== EMPTY_MEMORY.trim();
 			const firstMessage =
 				items.filter((item) => item.kind === "userMessage").length === 1;
+			// Freshness without a model call: what the user just said in another
+			// chat, while its save hook may still be running.
+			const recent =
+				mode === "full" && writer !== "agent"
+					? recentLines(recentMessages, shown)
+					: Promise.resolve([]);
 			const hook =
 				mode === "full" && embed
 					? await readHook({
@@ -280,7 +302,9 @@ export async function turnMemory(
 						}
 					: {}),
 			};
-			if (!showEntry && !matches.length) return { messages, recall };
+			const fresh = await recent;
+			if (!showEntry && !matches.length && !fresh.length)
+				return { messages, recall };
 			const missing =
 				mode === "full"
 					? await missingPaths(
@@ -310,6 +334,7 @@ export async function turnMemory(
 				...(matches.length
 					? [memoryMatchesPart(matches, missing, wording)]
 					: []),
+				...(fresh.length ? [memoryRecentPart(fresh, wording)] : []),
 			];
 			const next = [...messages];
 			next[index] = withMemoryParts(
@@ -372,6 +397,34 @@ export async function turnMemory(
 			});
 		},
 	};
+}
+
+/** Recent messages as attached lines, minus any already attached in this chat; never fails. */
+async function recentLines(
+	load: () => Promise<readonly RecentChatMessage[]>,
+	shown: string,
+) {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const work = Promise.resolve().then(load);
+	try {
+		const messages = await Promise.race([
+			work,
+			new Promise<readonly RecentChatMessage[]>((resolve) => {
+				timer = setTimeout(() => resolve([]), RECENT_TIMEOUT_MS);
+			}),
+		]);
+		return messages
+			.map(memoryRecentLine)
+			.filter((line) => !shown.includes(line));
+	} catch (error) {
+		console.warn("Recent chat messages could not be read for memory.", {
+			error: error instanceof Error ? error.name : "unknown",
+		});
+		return [];
+	} finally {
+		clearTimeout(timer);
+		work.catch(() => {});
+	}
 }
 
 function currentRequestIndex(

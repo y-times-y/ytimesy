@@ -315,3 +315,58 @@ export async function recordMemorySaved(
 	}
 	return false;
 }
+
+export type RecentChatMessage = {
+	sessionId: string;
+	title: string;
+	text: string;
+	at: Date;
+};
+
+/**
+ * The latest user message of each of the user's other root chats whose turn
+ * completed in the last `windowSeconds` and whose save hook has not shown a
+ * saved line yet (no memorySave after that message): what memory may not
+ * hold yet. Newest first.
+ */
+export async function recentUnsavedMessages(
+	userId: string,
+	exceptSessionId: string,
+	windowSeconds: number,
+	limit = 3,
+): Promise<RecentChatMessage[]> {
+	const rows = (
+		await database().query<{
+			id: string;
+			title: string | null;
+			text: string | null;
+			at: Date;
+		}>(
+			`select s.id::text as id,s.title,m.e->>'text' as text,t.at
+			 from agent_session s
+			 join lateral (select max(updated_at) as at from api_turn
+			   where session_id=s.id and user_id=s.user_id and state='completed') t on true
+			 join lateral (select x.e,x.i from jsonb_array_elements(s.items) with ordinality as x(e,i)
+			   where x.e->>'kind'='userMessage' order by x.i desc limit 1) m on true
+			 where s.user_id=$1 and s.id::text<>$2 and s.parent_session_id is null
+			   and s.updated_at > now()-make_interval(secs=>$3)
+			   and t.at > now()-make_interval(secs=>$3)
+			   and not exists(select 1 from jsonb_array_elements(s.items) with ordinality as y(e,j)
+			     where y.j > m.i and y.e->>'kind'='memorySave')
+			 order by t.at desc limit $4`,
+			[userId, exceptSessionId, windowSeconds, limit],
+		)
+	).rows;
+	return rows.flatMap((row) =>
+		row.text?.trim()
+			? [
+					{
+						sessionId: row.id,
+						title: row.title ?? "",
+						text: row.text,
+						at: new Date(row.at),
+					},
+				]
+			: [],
+	);
+}

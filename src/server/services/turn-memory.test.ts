@@ -6,6 +6,7 @@ import {
 	MEMORY_MESSAGE_HEADER,
 	MEMORY_RULES_MATCHES_HEADER,
 	MEMORY_RULES_MESSAGE_HEADER,
+	MEMORY_RULES_RECENT_HEADER,
 	memoryMatchesPart,
 	parseMemoryLine,
 } from "#/domain/memory-repo";
@@ -21,6 +22,7 @@ vi.mock("../adapters/memory-settings", () => ({
 	memoryProjectName: vi.fn(async () => "acme/web"),
 	memoryEmbeddings: vi.fn(async () => new Map()),
 	saveMemoryEmbeddings: vi.fn(async () => {}),
+	recentUnsavedMessages: vi.fn(async () => []),
 }));
 const dispatched: unknown[] = [];
 vi.mock("../adapters/background-job-dispatch", () => ({
@@ -319,6 +321,79 @@ describe("read hook", () => {
 			ms: expect.any(Number),
 		});
 		expect(recall?.lines.map((line) => line.path)).toEqual(["tooling.md"]);
+	});
+});
+
+describe("freshness", () => {
+	it("attaches what the user just said in another chat until its save shows, once per chat", async () => {
+		const recentMessages = vi.fn(async () => [
+			{
+				sessionId: "22222222-2222-4222-8222-222222222222",
+				title: "Add config",
+				text: "Add config/app.json. Heads-up: JSON files we add use 4-space indentation from now on.",
+				at: new Date(),
+			},
+		]);
+		const memory = await turnMemory(
+			{
+				id: "11111111-1111-4111-8111-111111111111",
+				userId: "u1",
+				projectId: null,
+			},
+			{
+				repo: fakeRepo({ "MEMORY.md": EMPTY_MEMORY }),
+				embed: null,
+				today: () => "2026-10-15",
+				projectName: null,
+				recentMessages,
+			},
+		);
+		if (!memory) throw new Error("memory should be on");
+		const items = [user("a", "Add config/limits.json with two limits")];
+		const { messages } = await memory.attach(
+			[{ role: "user", content: "Add config/limits.json with two limits" }],
+			items,
+			workspace,
+		);
+		const parts = messages[0].content as { text: string }[];
+		expect(parts[1].text).toContain(MEMORY_RULES_RECENT_HEADER);
+		expect(parts[1].text).toContain(
+			'- In chat "Add config": Add config/app.json. Heads-up: JSON files we add use 4-space indentation from now on.',
+		);
+		// The next request of this chat does not repeat it.
+		const later = await memory.attach(
+			[
+				...messages,
+				{ role: "assistant", content: "Done." },
+				{ role: "user", content: "Also add a README section about it" },
+			],
+			[...items, user("b", "Also add a README section about it")],
+			workspace,
+		);
+		expect(later.messages.at(-1)?.content).toBe(
+			"Also add a README section about it",
+		);
+	});
+
+	it("never fails or holds up the request when the lookup does", async () => {
+		const memory = await turnMemory(
+			{ id: "c1", userId: "u1", projectId: null },
+			{
+				repo: fakeRepo({}),
+				embed: null,
+				projectName: null,
+				recentMessages: async () => {
+					throw new Error("database down");
+				},
+			},
+		);
+		const messages: ModelMessage[] = [
+			{ role: "user", content: "Fix the build" },
+		];
+		expect(
+			(await memory?.attach(messages, [user("a", "Fix the build")], workspace))
+				?.messages,
+		).toBe(messages);
 	});
 });
 
