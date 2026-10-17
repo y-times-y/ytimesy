@@ -1,8 +1,13 @@
-import { expect, it, vi } from "vitest";
-import { openRouterOfficialFetch } from "./openrouter-official";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+	devAllowsAnyModel,
+	isFreeOpenRouterModel,
+	openRouterOfficialFetch,
+} from "./openrouter-official";
 
 function sent(fetch: ReturnType<typeof vi.fn>) {
-	return JSON.parse(String((fetch.mock.calls[0]?.[1] as RequestInit).body));
+	const init = fetch.mock.calls[0]?.[1] as RequestInit | undefined;
+	return JSON.parse(String(init?.body));
 }
 
 it("pins a listed model to its maker's own providers with fallbacks off", async () => {
@@ -75,5 +80,75 @@ it("runs DeepSeek only on its approved US hosts with zero retention", async () =
 		only: ["fireworks/us", "together"],
 		allow_fallbacks: false,
 		zdr: true,
+	});
+});
+
+describe("free models in development", () => {
+	afterEach(() => vi.unstubAllEnvs());
+	const send = (model: string, speed?: "ultrafast") => {
+		const fetch = vi.fn(
+			async (_url: RequestInfo | URL, _init?: RequestInit) =>
+				new Response("{}"),
+		);
+		const body = JSON.stringify({ model, messages: [] });
+		return {
+			fetch,
+			body,
+			result: openRouterOfficialFetch(fetch, speed)(
+				"https://openrouter.ai/api/v1/chat",
+				{ method: "POST", body },
+			),
+		};
+	};
+
+	it("passes an unlisted :free model through unpinned when the dev flag is on", async () => {
+		vi.stubEnv("YTIMESY_DEV_ALLOW_ANY_MODEL", "1");
+		vi.stubEnv("YTIMESY_ENVIRONMENT", "development");
+		const { fetch, body, result } = send("google/gemma-4-31b-it:free");
+		await result;
+		expect(fetch.mock.calls[0]?.[1]?.body).toBe(body);
+	});
+
+	it("still refuses an unlisted paid model with the dev flag on", async () => {
+		vi.stubEnv("YTIMESY_DEV_ALLOW_ANY_MODEL", "1");
+		const { fetch, result } = send("z-ai/glm-5.3-prime");
+		await expect(result).rejects.toThrow("not an offered model");
+		expect(fetch).not.toHaveBeenCalled();
+	});
+
+	it("refuses a :free model without the flag, in production, or at a faster speed", async () => {
+		vi.stubEnv("YTIMESY_DEV_ALLOW_ANY_MODEL", "");
+		await expect(send("google/gemma-4-31b-it:free").result).rejects.toThrow(
+			"not an offered model",
+		);
+		vi.stubEnv("YTIMESY_DEV_ALLOW_ANY_MODEL", "1");
+		vi.stubEnv("YTIMESY_ENVIRONMENT", "production");
+		await expect(send("google/gemma-4-31b-it:free").result).rejects.toThrow(
+			"not an offered model",
+		);
+		vi.stubEnv("YTIMESY_ENVIRONMENT", "development");
+		await expect(
+			send("google/gemma-4-31b-it:free", "ultrafast").result,
+		).rejects.toThrow("no ultrafast endpoint");
+	});
+
+	it("never allows any model in production", () => {
+		expect(
+			devAllowsAnyModel({
+				YTIMESY_DEV_ALLOW_ANY_MODEL: "1",
+				YTIMESY_ENVIRONMENT: "production",
+			}),
+		).toBe(false);
+		expect(devAllowsAnyModel({ YTIMESY_DEV_ALLOW_ANY_MODEL: "1" })).toBe(true);
+		expect(devAllowsAnyModel({})).toBe(false);
+	});
+
+	it("recognizes only maker/model:free ids", () => {
+		expect(isFreeOpenRouterModel("nvidia/nemotron-3.5-super-vl:free")).toBe(
+			true,
+		);
+		expect(isFreeOpenRouterModel("openai/gpt-6.1-sol")).toBe(false);
+		expect(isFreeOpenRouterModel("openai/gpt-6.1-sol:nitro")).toBe(false);
+		expect(isFreeOpenRouterModel("free:free")).toBe(false);
 	});
 });

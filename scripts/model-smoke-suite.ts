@@ -30,6 +30,23 @@ const DEFAULT_PRICES: Record<string, [number, number]> = {
 	"deepseek/deepseek-v4.1-flash": [0.4, 1.6],
 };
 const UNKNOWN_PRICE: [number, number] = [5, 25];
+// `--models free` (development only): OpenRouter's $0 `:free` variants with
+// tool calling (tools + tool_choice auto), one per family. Checked against
+// openrouter.ai/api/v1/models on 2026-10-16; free variants come and go.
+const FREE_MODELS = [
+	"google/gemma-4-31b-it:free",
+	"nvidia/nemotron-3.5-super-vl:free",
+	"cohere/north-mini-code:free",
+	"dots-studio/dots-3-note-preview:free",
+	"poolside/laguna-s-2.1:free",
+];
+const isFree = (model: string) => model.endsWith(":free");
+// OpenRouter caps `:free` requests at 20/min per account and 50/day (1,000/day
+// once 10+ credits were ever bought). Builder steps run back to back, so free
+// runs go one at a time (at most 2) and the daily allowance is checked first
+// against this per-run planning estimate (model steps plus memory hooks).
+const FREE_CONCURRENCY_LIMIT = 2;
+const FREE_REQUESTS_PER_RUN = 40;
 // Each run reserves this much worst-case spend before it starts and is
 // cancelled if its recorded usage exceeds the reservation.
 const RESERVED_TOKENS = { input: 1_000_000, output: 20_000 };
@@ -40,23 +57,37 @@ const { values: flags } = parseArgs({
 		"max-cost": { type: "string" },
 		models: { type: "string" },
 		tasks: { type: "string" },
-		concurrency: { type: "string", default: "5" },
+		concurrency: { type: "string" },
 		"turn-timeout": { type: "string", default: "300" },
 		out: { type: "string" },
 		price: { type: "string", multiple: true },
 	},
 });
 const maxCost = Number(flags["max-cost"]);
-if (!flags.live || !Number.isFinite(maxCost) || maxCost <= 0)
+if (!flags.live || !Number.isFinite(maxCost) || maxCost < 0)
 	throw new Error(
-		"Refusing to run: pass --live and --max-cost <USD> (a positive spend cap).",
+		"Refusing to run: pass --live and --max-cost <USD> (a spend cap; 0 only when every model is free).",
 	);
 await assertDevelopmentDatabase();
-const models = (flags.models?.split(",") ?? DEFAULT_MODELS)
-	.map((model) => model.trim())
-	.filter(Boolean);
+const models = [
+	...new Set(
+		(flags.models?.split(",") ?? DEFAULT_MODELS)
+			.map((model) => model.trim())
+			.flatMap((model) => (model === "free" ? FREE_MODELS : [model]))
+			.filter(Boolean),
+	),
+];
 const tasks = selectTasks(flags.tasks);
-const concurrency = Math.min(10, Math.max(1, Number(flags.concurrency) || 5));
+const freeRuns = models.filter(isFree).length * tasks.length;
+const concurrency = freeRuns
+	? Math.min(
+			FREE_CONCURRENCY_LIMIT,
+			Math.max(1, Number(flags.concurrency) || 1),
+		)
+	: Math.min(10, Math.max(1, Number(flags.concurrency) || 5));
+// The local catalog check offers `:free` routes only behind the dev flag; the
+// development edge executor must be deployed with it too.
+if (freeRuns) process.env.YTIMESY_DEV_ALLOW_ANY_MODEL ||= "1";
 const turnTimeoutMs =
 	Math.min(900, Math.max(30, Number(flags["turn-timeout"]) || 300)) * 1000;
 const outPath =
@@ -68,7 +99,12 @@ for (const entry of flags.price ?? []) {
 	if (!match) throw new Error("--price expects model=input:output (USD/Mtok).");
 	prices[match[1]] = [Number(match[2]), Number(match[3])];
 }
-const priceOf = (model: string) => prices[model] ?? UNKNOWN_PRICE;
+const priceOf = (model: string): [number, number] =>
+	prices[model] ?? (isFree(model) ? [0, 0] : UNKNOWN_PRICE);
+if (maxCost === 0 && models.some((model) => priceOf(model).some(Boolean)))
+	throw new Error(
+		"Refusing to run: --max-cost 0 needs every model to be free.",
+	);
 const costOf = (model: string, input: number, output: number) => {
 	const [inputPrice, outputPrice] = priceOf(model);
 	return (input * inputPrice + output * outputPrice) / 1_000_000;
@@ -120,6 +156,23 @@ async function runOne(model: string, task: Task): Promise<RunRecord> {
 const startedAt = new Date().toISOString();
 const runs: RunRecord[] = [];
 try {
+	if (freeRuns) {
+		const quota = await runner.openRouterFreeQuota();
+		const needed = freeRuns * FREE_REQUESTS_PER_RUN;
+		if (!quota)
+			console.warn(
+				`OpenRouter did not report a free-request allowance; ${freeRuns} free runs may need ~${needed} requests.`,
+			);
+		else {
+			console.info(
+				`OpenRouter free requests today: ${quota.used}/${quota.limit} used; ${freeRuns} free runs plan for ~${needed}.`,
+			);
+			if (quota.remaining < needed)
+				throw new Error(
+					`Refusing to run: ${quota.remaining} free requests remain today (UTC) but ${freeRuns} free runs plan for ~${needed}. Narrow --models/--tasks.`,
+				);
+		}
+	}
 	await runner.preflightExecutor();
 	const queue = models.flatMap((model) =>
 		tasks.map((task) => ({ model, task })),
