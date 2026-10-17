@@ -1,5 +1,6 @@
 import type { ModelMessage } from "ai";
 import { isUserRequestMessage } from "#/domain/api-conversation";
+import type { MemoryWording } from "#/domain/harness-variant";
 import {
 	currentMemoryRecall,
 	type MemoryRecall,
@@ -16,11 +17,11 @@ import {
 	EMPTY_MEMORY,
 	entryPaths,
 	MEMORY_ENTRY,
-	MEMORY_MESSAGE_HEADER,
 	type MemoryLine,
 	type MemoryMode,
 	memoryCloneScript,
 	memoryEntryPart,
+	memoryIndexShown,
 	memoryInstructions,
 	memoryLineEmbeddingText,
 	memoryLines,
@@ -107,6 +108,8 @@ export async function turnMemory(
 		today?: () => string;
 		projectName?: string | null;
 		chatTitles?: (ids: readonly string[]) => Promise<Map<string, string>>;
+		/** Development harness variant: how recalled memory is presented. */
+		wording?: MemoryWording;
 	} = {},
 ): Promise<TurnMemory | null> {
 	const settings = await memorySettings(owner.userId).catch((error) => {
@@ -132,6 +135,7 @@ export async function turnMemory(
 					)
 				: null;
 	const today = options.today ?? (() => new Date().toISOString().slice(0, 10));
+	const wording = options.wording ?? "notes";
 	const url = chatSourceUrl(
 		options.appUrl ?? process.env.APP_URL ?? "http://localhost:3000",
 		owner.id,
@@ -153,10 +157,14 @@ export async function turnMemory(
 	}
 	return {
 		mode,
-		instructions: memoryInstructions(mode, {
-			url,
-			project: projectName,
-		}),
+		instructions: memoryInstructions(
+			mode,
+			{
+				url,
+				project: projectName,
+			},
+			wording,
+		),
 		async prepareVm(workspace) {
 			try {
 				const credentials = await repo.credentials(VM_TOKEN_TTL_SECONDS);
@@ -192,7 +200,7 @@ export async function turnMemory(
 			const shown = attachedMemory(messages).join("\n");
 			const firstRequest =
 				items.filter((item) => item.kind === "userMessage").length === 1 &&
-				!shown.includes(MEMORY_MESSAGE_HEADER);
+				!memoryIndexShown(shown);
 			const entry = snapshot.files[MEMORY_ENTRY];
 			const showEntry =
 				firstRequest &&
@@ -240,10 +248,13 @@ export async function turnMemory(
 											missingPaths: missing,
 										})
 									: (entry ?? ""),
+								wording,
 							),
 						]
 					: []),
-				...(matches.length ? [memoryMatchesPart(matches, missing)] : []),
+				...(matches.length
+					? [memoryMatchesPart(matches, missing, wording)]
+					: []),
 			];
 			const next = [...messages];
 			next[index] = withMemoryParts(

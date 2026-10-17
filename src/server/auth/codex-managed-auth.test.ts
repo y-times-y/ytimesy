@@ -254,3 +254,63 @@ it("refreshes a token near expiry under the row lock", async () => {
 	expect(statements.some((sql) => sql.endsWith("for update"))).toBe(true);
 	expect(statements.at(-1)).toBe("commit");
 });
+
+function delegatedAccount(stored: object) {
+	const queries: Array<{ sql: string; values?: unknown[] }> = [];
+	const query = vi.fn(async (sql: string, values?: unknown[]) => {
+		queries.push({ sql, values });
+		if (sql.includes("from dev_eval_user"))
+			return {
+				rows: values?.[0] === "eval-user" ? [{ owner_user_id: "owner" }] : [],
+			};
+		return sql.startsWith("select")
+			? { rows: [{ encrypted_codex_auth: "sealed" }] }
+			: { rows: [] };
+	});
+	vi.mocked(database).mockReturnValue({
+		connect: vi.fn(async () => ({ query, release: vi.fn() })),
+		query,
+	} as never);
+	vi.mocked(unseal).mockResolvedValue(JSON.stringify(stored));
+	return queries;
+}
+
+it("serves a development eval user from its owner's login row", async () => {
+	vi.stubEnv("YTIMESY_DEV_EVAL_USERS", "1");
+	try {
+		const queries = delegatedAccount({
+			...auth,
+			tokens: { ...auth.tokens, access_token: accessToken() },
+		});
+		await expect(codexExternalTokens("eval-user")).resolves.toMatchObject({
+			chatgptAccountId: "account",
+		});
+		const account = queries.find((query) =>
+			query.sql.includes("from agent_account"),
+		);
+		expect(account?.values).toEqual(["owner"]);
+	} finally {
+		vi.unstubAllEnvs();
+	}
+});
+
+it("never reads eval users in production or without the switch", async () => {
+	for (const env of [{}, { YTIMESY_ENVIRONMENT: "production" }]) {
+		vi.stubEnv("YTIMESY_DEV_EVAL_USERS", "1");
+		for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
+		if (!Object.keys(env).length) vi.stubEnv("YTIMESY_DEV_EVAL_USERS", "");
+		try {
+			const queries = delegatedAccount({
+				...auth,
+				tokens: { ...auth.tokens, access_token: accessToken() },
+			});
+			await codexExternalTokens("eval-user");
+			expect(queries.some((query) => query.sql.includes("dev_eval_user"))).toBe(
+				false,
+			);
+			expect(queries[0]?.values).toEqual(["eval-user"]);
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	}
+});

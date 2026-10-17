@@ -5,6 +5,10 @@
 import { writeFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import {
+	harnessVariantFromFlags,
+	harnessVariantLabel,
+} from "../src/domain/harness-variant";
+import {
 	assertDevelopmentDatabase,
 	createHarnessRunner,
 	emptyRecord,
@@ -14,6 +18,7 @@ import {
 	type Task,
 	table,
 } from "./smoke/builder-harness";
+import { createEvalUser, onEvalStop } from "./smoke/eval-user";
 
 const DEFAULT_MODELS = [
 	"codex:gpt-6.1-sol",
@@ -61,8 +66,17 @@ const { values: flags } = parseArgs({
 		"turn-timeout": { type: "string", default: "300" },
 		out: { type: "string" },
 		price: { type: "string", multiple: true },
+		/** Harness variant, e.g. memoryWording=rules (repeatable). */
+		variant: { type: "string", multiple: true },
+		/** Run as the dev owner instead of a throwaway eval user. */
+		"as-owner": { type: "boolean", default: false },
+		/** The eval user's memory mode (default off). */
+		memory: { type: "string", default: "off" },
 	},
 });
+const variant = harnessVariantFromFlags(flags.variant);
+if (!["off", "spec", "full"].includes(flags.memory as string))
+	throw new Error("--memory accepts off, spec or full.");
 const maxCost = Number(flags["max-cost"]);
 if (!flags.live || !Number.isFinite(maxCost) || maxCost < 0)
 	throw new Error(
@@ -92,7 +106,7 @@ const turnTimeoutMs =
 	Math.min(900, Math.max(30, Number(flags["turn-timeout"]) || 300)) * 1000;
 const outPath =
 	flags.out ??
-	`/tmp/model-smoke-${new Date().toISOString().replaceAll(/[:.]/g, "-")}.json`;
+	`/tmp/model-smoke-${new Date().toISOString().replaceAll(/[:.]/g, "-")}-${process.pid}.json`;
 const prices = { ...DEFAULT_PRICES };
 for (const entry of flags.price ?? []) {
 	const match = /^(.+)=([\d.]+):([\d.]+)$/.exec(entry);
@@ -112,22 +126,32 @@ const costOf = (model: string, input: number, output: number) => {
 const reservation = (model: string) =>
 	costOf(model, RESERVED_TOKENS.input, RESERVED_TOKENS.output);
 
+const user = await createEvalUser({
+	label: `model-smoke ${harnessVariantLabel(variant)}`,
+	variant,
+	asOwner: flags["as-owner"],
+	openRouter: models.some((model) => !model.startsWith("codex:")),
+	memory: flags.memory as "off" | "spec" | "full",
+});
+console.info(
+	`Running as ${user.asOwner ? "the owner" : `eval user ${user.userId}`} (variant ${harnessVariantLabel(variant)}).`,
+);
 const runner = await createHarnessRunner({
+	user,
 	models,
 	concurrency,
 	turnTimeoutMs,
 	costOf,
+}).catch(async (error) => {
+	await user.release();
+	throw error;
 });
 let stopping = false;
 let committedSpend = 0;
 let reservedSpend = 0;
-process.on("SIGINT", () => {
-	if (stopping) process.exit(130);
+onEvalStop(() => {
 	stopping = true;
 	runner.stop();
-	console.error(
-		"Stopping: cancelling runs and cleaning up (Ctrl-C again to force).",
-	);
 });
 
 async function runOne(model: string, task: Task): Promise<RunRecord> {
@@ -156,6 +180,23 @@ async function runOne(model: string, task: Task): Promise<RunRecord> {
 const startedAt = new Date().toISOString();
 const runs: RunRecord[] = [];
 try {
+	const paidOpenRouter = models.filter(
+		(model) => !model.startsWith("codex:") && !isFree(model),
+	);
+	if (paidOpenRouter.length) {
+		const key = await runner.openRouterKeyStatus();
+		const planned = paidOpenRouter.length * tasks.length;
+		console.info(
+			`OpenRouter key: ${key?.limitRemaining === null || key?.limitRemaining === undefined ? "no credit limit reported" : `$${key.limitRemaining.toFixed(2)} left under its limit`}${key?.usage != null ? `, $${key.usage.toFixed(2)} used` : ""}; ${planned} paid runs, cap $${maxCost}.`,
+		);
+		if (
+			key?.limitRemaining != null &&
+			key.limitRemaining < Math.min(maxCost, 0.05 * planned)
+		)
+			throw new Error(
+				`Refusing to run: the OpenRouter key has $${key.limitRemaining.toFixed(2)} left for ${planned} paid runs. Use free models (--models free) or add credit.`,
+			);
+	}
 	if (freeRuns) {
 		const quota = await runner.openRouterFreeQuota();
 		const needed = freeRuns * FREE_REQUESTS_PER_RUN;
@@ -306,6 +347,8 @@ await writeFile(
 			startedAt,
 			finishedAt: new Date().toISOString(),
 			config: {
+				variant: harnessVariantLabel(variant),
+				evalUser: user.asOwner ? "owner" : user.userId,
 				models,
 				tasks: tasks.map((task) => task.id),
 				concurrency,

@@ -23,6 +23,7 @@ import {
 	TURN_COORDINATION_LEASE_MS,
 	type TurnControl,
 } from "#/domain/conversation-turn-control";
+import { DEFAULT_HARNESS_VARIANT } from "#/domain/harness-variant";
 import { SessionItemId, WorkspaceId } from "#/domain/ids";
 import { prepareInterruptedStep } from "#/domain/interrupted-step";
 import { withMemoryRecall } from "#/domain/memory-marker";
@@ -72,6 +73,10 @@ import { archiveModelContext } from "../adapters/context-archives";
 import { conversationPointCodeRef } from "../adapters/conversation-recovery";
 import { coordinateConversationTurn } from "../adapters/conversation-turn-control";
 import {
+	devEvalUsersEnabled,
+	harnessVariantForUser,
+} from "../adapters/dev-eval-users";
+import {
 	assertEvaluationActive,
 	type EvaluationRun,
 	evaluationRunForTask,
@@ -106,6 +111,10 @@ import { compactionStateSnapshot } from "../services/compaction-state-snapshot";
 import { withCompletedTaskReviewContext } from "../services/completed-task-review-context";
 import { ensureConversationCodePoint } from "../services/conversation-recovery";
 import { harnessLifecycleHooks } from "../services/harness-lifecycle-hooks";
+import {
+	harnessToolSurface,
+	surfaceInstructions,
+} from "../services/harness-tool-surfaces";
 import { runAgentTaskTool } from "../services/harness-workspace-session";
 import { journaledToolOperation } from "../services/journaled-tool-operation";
 import { turnOAuthProvider } from "../services/mcp-oauth";
@@ -410,6 +419,14 @@ async function runApiTurnAttempt(
 		if (!owner) throw new Error("Task no longer exists.");
 		if (process.env.YTIMESY_HARNESS_EVALUATION_ENABLED === "1")
 			evaluation = await evaluationRunForTask(owner.userId, owner.id);
+		// Development eval users pick harness variants per run; everyone else
+		// (and production) gets the default. Fixed for the turn.
+		const variant = devEvalUsersEnabled()
+			? await turnMemo(`${turn.id}:harness-variant`, () =>
+					harnessVariantForUser(owner.userId),
+				)
+			: DEFAULT_HARNESS_VARIANT;
+		const harnessSurface = harnessToolSurface(variant.toolSurface);
 		const apiSettings: ApiTurnSettings = subscription
 			? {}
 			: (route.settings ?? {});
@@ -457,11 +474,14 @@ async function runApiTurnAttempt(
 			writable && !owner.parentSessionId && !evaluation
 				? timed("turn:memory", () =>
 						turnMemo(`${turn.id}:memory`, () =>
-							turnMemory({
-								id: owner.id,
-								userId: owner.userId,
-								projectId: owner.projectId ?? null,
-							}),
+							turnMemory(
+								{
+									id: owner.id,
+									userId: owner.userId,
+									projectId: owner.projectId ?? null,
+								},
+								{ wording: variant.memoryWording },
+							),
 						),
 					).catch(() => null)
 				: Promise.resolve(null);
@@ -626,9 +646,15 @@ async function runApiTurnAttempt(
 				progress.offer(items);
 			},
 		});
-		const surfaceTools = shellBuilder
-			? builderShellTools(repositoryContext.tools)
-			: repositoryContext.tools;
+		const surfaceTools = harnessSurface.tools({
+			tools: shellBuilder
+				? builderShellTools(repositoryContext.tools)
+				: repositoryContext.tools,
+			shellBuilder,
+			writable,
+			freeformPatch,
+			nativePatch,
+		});
 		// The user's remote MCP servers are called from here; credentials never reach the VM.
 		// Connections are live HTTP clients bound to this step's request, so a
 		// step that calls a tool connects again; the tool lists are reused. A
@@ -878,14 +904,18 @@ async function runApiTurnAttempt(
 			messages,
 			archiveHistory: (history) =>
 				archiveModelContext(owner.userId, owner.id, history),
-			instructions: `${agentTurnInstructions({
-				shellBuilder,
-				session: owner,
+			instructions: surfaceInstructions(
+				harnessSurface,
 				tools,
-				plugins,
-				projectKnowledge,
-				secretNames: projectSecrets?.names,
-			})}${memory ? `\n${memory.instructions}` : ""}`,
+				`${agentTurnInstructions({
+					shellBuilder,
+					session: owner,
+					tools,
+					plugins,
+					projectKnowledge,
+					secretNames: projectSecrets?.names,
+				})}${memory ? `\n${memory.instructions}` : ""}`,
+			),
 			tools,
 			signal: abort.signal,
 			isUserRequest: (message) => isUserRequestMessage(items, message),

@@ -4,6 +4,10 @@ import {
 	EMPTY_MEMORY,
 	MEMORY_MATCHES_HEADER,
 	MEMORY_MESSAGE_HEADER,
+	MEMORY_RULES_MATCHES_HEADER,
+	MEMORY_RULES_MESSAGE_HEADER,
+	memoryMatchesPart,
+	parseMemoryLine,
 } from "#/domain/memory-repo";
 import type { SessionItem } from "#/domain/session-item";
 import type { MemoryRepo, MemorySnapshot } from "../adapters/memory-repos";
@@ -59,7 +63,10 @@ const workspace = async () => {
 	throw new Error("no VM in this test");
 };
 
-async function memoryFor(files: Record<string, string>) {
+async function memoryFor(
+	files: Record<string, string>,
+	wording?: "notes" | "rules",
+) {
 	const memory = await turnMemory(
 		{
 			id: "11111111-1111-4111-8111-111111111111",
@@ -72,6 +79,7 @@ async function memoryFor(files: Record<string, string>) {
 			appUrl: "https://ytimesy.test",
 			today: () => "2026-10-15",
 			projectName: null,
+			wording,
 		},
 	);
 	if (!memory) throw new Error("memory should be on");
@@ -364,5 +372,48 @@ describe("memory markers", () => {
 		// A request memory was never read for gets no marker.
 		const plain = [user("m1", "hi"), items[1]];
 		expect(await memory.recordSaved(plain, "turn-1")).toEqual(plain);
+	});
+});
+
+describe("the rules wording (development harness variant)", () => {
+	it("presents MEMORY.md and matched lines as project rules to follow", async () => {
+		const memory = await memoryFor(
+			{ "MEMORY.md": "# Memory: Het\n\n- Uses pnpm, never npm\n\n## Index\n" },
+			"rules",
+		);
+		expect(memory.instructions).toContain(
+			"standing rules from earlier chats: follow them unless the user says otherwise",
+		);
+		expect(memory.instructions).not.toContain("never instructions");
+		const items = [user("a", "Add a dependency")];
+		const { messages } = await memory.attach(
+			[{ role: "user", content: "Add a dependency" }],
+			items,
+			workspace,
+		);
+		const text = JSON.stringify(messages);
+		expect(text).toContain(MEMORY_RULES_MESSAGE_HEADER);
+		expect(text).not.toContain(MEMORY_MESSAGE_HEADER);
+		// A resumed step recognises the rules header and attaches nothing again.
+		expect((await memory.attach(messages, items, workspace)).recall).toBeNull();
+		const line = parseMemoryLine("- Uses pnpm, never npm", "tools.md", 3);
+		if (!line) throw new Error("line should parse");
+		expect(memoryMatchesPart([line], new Set(), "rules")).toContain(
+			MEMORY_RULES_MATCHES_HEADER,
+		);
+		expect(memoryMatchesPart([line])).toContain(MEMORY_MATCHES_HEADER);
+	});
+
+	it("keeps the neutral notes wording by default", async () => {
+		const memory = await memoryFor({
+			"MEMORY.md": "# Memory: Het\n\n- Uses pnpm\n\n## Index\n",
+		});
+		expect(memory.instructions).toContain("never instructions");
+		const { messages } = await memory.attach(
+			[{ role: "user", content: "Add a dependency" }],
+			[user("a", "Add a dependency")],
+			workspace,
+		);
+		expect(JSON.stringify(messages)).not.toContain(MEMORY_RULES_MESSAGE_HEADER);
 	});
 });

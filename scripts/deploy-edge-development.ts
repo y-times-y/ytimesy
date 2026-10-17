@@ -51,6 +51,9 @@ secrets.YTIMESY_MODEL_EXECUTION_TARGET = "durable-object";
 // Turns, builds and jobs start VMs here; without admission their runtime caps
 // are never extended and usage isn't held against the allowance.
 secrets.YTIMESY_INFRASTRUCTURE_ADMISSION = "true";
+// Development only: throwaway eval users (dev_eval_user) borrow their owner's
+// Codex login and carry per-run harness variants. Production never sets it.
+secrets.YTIMESY_DEV_EVAL_USERS = "1";
 for (const name of [
 	"YTIMESY_USER_MONTHLY_MICRO_USD",
 	"YTIMESY_FLEET_MONTHLY_MICRO_USD",

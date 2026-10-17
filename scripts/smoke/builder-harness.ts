@@ -38,8 +38,10 @@ import {
 import { cancelServerTurn } from "../../src/server/services/cancel-server-turn";
 import { sendSubscriptionTask } from "../../src/server/services/codex-subscription-session";
 import { connectionApiKey } from "../../src/server/services/model-connections";
+import { type EvalUser, SLOT_LIMITS, withSlot } from "./eval-user";
 
-const DEV_REF = "zqkptvyvoyqqtpihlshw";
+export { assertDevelopmentDatabase } from "./eval-user";
+
 const ORIGIN =
 	"https://ytimesy-edge-executor-development.hetkp8044.workers.dev";
 
@@ -48,6 +50,10 @@ export type Task = {
 	prompt: string;
 	files: Record<string, string>;
 	verify: string;
+	/** The run fails unless the turn made at least this many tool calls. */
+	minToolCalls?: number;
+	/** Left out of the default task list (keeps earlier results comparable). */
+	onlyWhenNamed?: boolean;
 };
 
 const HEADER_RULE = "# owner: smoke-team";
@@ -120,6 +126,23 @@ export const TASKS: Task[] = [
 		].join("\n"),
 	},
 	{
+		// Two dependent tool calls: the second needs the first one's result,
+		// so the model must carry a tool result (and its reasoning) across steps.
+		id: "two-tool-calls",
+		prompt:
+			"START.md names the file that holds a value. Read it, follow the pointer, and write only that value to answer.txt.",
+		files: {
+			"START.md":
+				"The value you need is in the file named on the next line.\nvault/b7/delta.txt\n",
+			"vault/a3/alpha.txt": "slate-heron-41\n",
+			"vault/b7/delta.txt": "ochre-falcon-29\n",
+			"vault/c9/gamma.txt": "amber-lynx-73\n",
+		},
+		verify: 'set -e\n[ "$(tr -d "[:space:]" < answer.txt)" = ochre-falcon-29 ]',
+		minToolCalls: 2,
+		onlyWhenNamed: true,
+	},
+	{
 		id: "agents-rule",
 		prompt:
 			"Add greet.py with a function greet(name) that returns 'Hello, <name>!' (for example greet('Ada') returns 'Hello, Ada!').",
@@ -148,7 +171,7 @@ export function selectTasks(ids: string | undefined) {
 					);
 				return task;
 			})
-		: TASKS;
+		: TASKS.filter((task) => !task.onlyWhenNamed);
 }
 
 /** Shell command that turns the fixture files in `dir` into a one-commit repo. */
@@ -157,16 +180,6 @@ export const fixtureRepoScript = (dir: string) =>
 
 export const verifierCommand = (task: Task) =>
 	`bash -c ${`'${task.verify.replaceAll("'", "'\\''")}'`}`;
-
-export async function assertDevelopmentDatabase() {
-	if (
-		(await readFile("supabase/.temp/project-ref", "utf8")).trim() !== DEV_REF ||
-		!new URL(process.env.DATABASE_URL ?? "").username.includes(DEV_REF)
-	)
-		throw new Error(
-			"Refusing to run: DATABASE_URL is not the development project.",
-		);
-}
 
 export type RunRecord = {
 	model: string;
@@ -247,6 +260,8 @@ function toolName(item: SessionItem) {
 }
 
 export async function createHarnessRunner(options: {
+	/** Who runs the sessions: a throwaway eval user (or the owner). */
+	user: EvalUser;
 	models: string[];
 	concurrency: number;
 	turnTimeoutMs: number;
@@ -327,35 +342,15 @@ export async function createHarnessRunner(options: {
 		];
 	}
 
+	const { user } = options;
 	const context = await (async () => {
-		const owners = (
-			await db.query<{ user_id: string }>(
-				"select user_id from agent_account where provider='codex' and status='connected' and encrypted_codex_auth is not null",
-			)
-		).rows;
-		if (owners.length !== 1)
-			throw new Error("Requires one connected subscription owner.");
-		const userId = owners[0].user_id;
-		const source = (
-			await db.query<{
-				project_id: string;
-				workspace_id: string;
-				full_name: string;
-			}>(
-				"select s.project_id,s.workspace_id,p.full_name from agent_session s join project p on p.id=s.project_id where s.user_id=$1 and s.listed_model_id is not null order by s.updated_at desc limit 1",
-				[userId],
-			)
-		).rows[0];
-		if (!source) throw new Error("No project is configured for the owner.");
-		const name = source.full_name.split("/")[1];
-		if (!name || !/^[a-zA-Z0-9_.-]+$/.test(name))
-			throw new Error("Invalid fixture directory name.");
-		const gateways = (
-			await db.query<{ id: string }>(
-				"select id from model_connection where user_id=$1 and provider='openrouter'",
-				[userId],
-			)
-		).rows;
+		const userId = user.userId;
+		const source = {
+			project_id: user.project.projectId,
+			workspace_id: user.project.workspaceId,
+		};
+		const name = user.project.dirName;
+		const gatewayId = user.openRouterConnectionId;
 		const catalog = options.models.some((model) => !model.startsWith("codex:"))
 			? await apiModelCatalog(userId)
 			: [];
@@ -365,9 +360,11 @@ export async function createHarnessRunner(options: {
 				routes.set(model, model.slice("codex:".length));
 				continue;
 			}
-			if (gateways.length !== 1)
-				throw new Error("Requires exactly one saved OpenRouter connection.");
-			const route = modelRouteId(gateways[0].id, model);
+			if (!gatewayId)
+				throw new Error(
+					"Requires exactly one saved OpenRouter connection on the owner.",
+				);
+			const route = modelRouteId(gatewayId, model);
 			if (!catalog.some((entry) => entry.id === route))
 				throw new Error(
 					`${model} is not in the connection's model catalog.${
@@ -378,17 +375,20 @@ export async function createHarnessRunner(options: {
 				);
 			routes.set(model, route);
 		}
-		return { userId, source, name, routes, gatewayId: gateways[0]?.id };
+		return { userId, source, name, routes, gatewayId };
 	})();
 
 	/**
-	 * Today's `:free` request allowance on the saved OpenRouter key (UTC day),
-	 * or null when OpenRouter does not report it. Read only; never inference.
+	 * The saved OpenRouter key's status (GET /key): remaining credit and
+	 * today's `:free` request allowance (UTC day), or null when unavailable.
+	 * Read only; never inference.
 	 */
-	async function openRouterFreeQuota(): Promise<{
-		used: number;
-		limit: number;
-		remaining: number;
+	async function openRouterKeyStatus(): Promise<{
+		free: { used: number; limit: number; remaining: number } | null;
+		/** USD left under the key's limit (null: no limit set). */
+		limitRemaining: number | null;
+		/** USD spent on the key (all time). */
+		usage: number | null;
 	} | null> {
 		if (!context.gatewayId) return null;
 		const connection = await loadModelConnection(
@@ -405,15 +405,31 @@ export async function createHarnessRunner(options: {
 		});
 		if (!response.ok) return null;
 		const body = (await response.json()) as {
-			data?: { free_model_daily_requests?: Record<string, unknown> };
+			data?: {
+				free_model_daily_requests?: Record<string, unknown>;
+				limit_remaining?: unknown;
+				usage?: unknown;
+			};
 		};
 		const quota = body.data?.free_model_daily_requests;
 		const { used, limit, remaining } = quota ?? {};
-		return typeof used === "number" &&
-			typeof limit === "number" &&
-			typeof remaining === "number"
-			? { used, limit, remaining }
-			: null;
+		const number = (value: unknown) =>
+			typeof value === "number" && Number.isFinite(value) ? value : null;
+		return {
+			free:
+				typeof used === "number" &&
+				typeof limit === "number" &&
+				typeof remaining === "number"
+					? { used, limit, remaining }
+					: null,
+			limitRemaining: number(body.data?.limit_remaining),
+			usage: number(body.data?.usage),
+		};
+	}
+
+	/** Today's `:free` request allowance, or null when OpenRouter does not report it. */
+	async function openRouterFreeQuota() {
+		return (await openRouterKeyStatus())?.free ?? null;
 	}
 
 	async function preflightExecutor() {
@@ -442,8 +458,33 @@ export async function createHarnessRunner(options: {
 		throw new Error("Executor gate is not open.");
 	}
 
-	/** Runs one task; a run whose recorded spend passes `reserveUsd` is cancelled. */
-	async function runOne(
+	/**
+	 * Runs one task; a run whose recorded spend passes `reserveUsd` is
+	 * cancelled. Rate-limited routes wait for a slot shared by every eval
+	 * process on this machine.
+	 */
+	function runOne(model: string, task: Task, reserveUsd: number) {
+		const slot = model.startsWith("codex:")
+			? (["codex", SLOT_LIMITS.codex] as const)
+			: model.endsWith(":free")
+				? (["openrouter-free", SLOT_LIMITS.openRouterFree] as const)
+				: null;
+		return slot
+			? withSlot(
+					slot[0],
+					slot[1],
+					() => runOneNow(model, task, reserveUsd),
+					() => stopping,
+				).catch((error) => {
+					const record = emptyRecord(model, task.id);
+					record.state = "skipped";
+					record.errors.push(safe(error));
+					return record;
+				})
+			: runOneNow(model, task, reserveUsd);
+	}
+
+	async function runOneNow(
 		model: string,
 		task: Task,
 		reserveUsd: number,
@@ -484,6 +525,7 @@ export async function createHarnessRunner(options: {
 			});
 			vmId = created.vmId;
 			liveVms.add(vmId);
+			await user.trackVm(vmId);
 			await saveAgentSessionProviderRef(session.id, vmId);
 			const vm = await waitUntilVmRunning(created.vm, "Model smoke");
 			if (vm.resources.cpu > 2 || vm.resources.memory > 4096)
@@ -596,6 +638,10 @@ export async function createHarnessRunner(options: {
 			record.verifierOutput = safe(
 				`${verified.stdout}${verified.stderr}`.trim().slice(-400),
 			);
+			if (task.minToolCalls && record.toolCalls < task.minToolCalls) {
+				record.verifierPassed = false;
+				record.verifierOutput = `${record.verifierOutput} (needs ${task.minToolCalls}+ tool calls; made ${record.toolCalls})`;
+			}
 		} catch (error) {
 			record.errors.push(safe(error));
 			if (!record.elapsedMs) record.elapsedMs = Date.now() - started;
@@ -629,6 +675,8 @@ export async function createHarnessRunner(options: {
 			await deleteAgentSessionForOwner(userId, sessionId).catch(() =>
 				leaked.push(`session ${sessionId}`),
 			);
+		// The eval user and everything it still owns (no-op for the owner).
+		leaked.push(...(await user.release()));
 		await closeDatabase();
 		return leaked;
 	}
@@ -637,6 +685,7 @@ export async function createHarnessRunner(options: {
 		runOne,
 		preflightExecutor,
 		openRouterFreeQuota,
+		openRouterKeyStatus,
 		cleanup,
 		stop: () => {
 			stopping = true;

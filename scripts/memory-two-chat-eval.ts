@@ -25,9 +25,12 @@
 //         in a fresh container, the final chat gets the session-start profile and
 //         the prompt recall as extra text parts. Their MCP search tools are not
 //         offered mid-chat.
-// Each (arm, scenario) gets a throwaway project and its own memory repo
-// (user_memory.repo override), so runs never see each other's memory or the
-// owner's real memory. Scenarios run one at a time: memory settings are per user.
+// Each (arm, scenario, repeat) runs as its own throwaway eval user
+// (scripts/smoke/eval-user.ts) with its own project, memory settings and
+// memory repo, so runs never see each other's memory or the owner's, and they
+// can run side by side (--concurrency) and alongside other eval processes.
+// --variant memoryWording=rules presents recalled memory as binding rules
+// (docs/parallel-evals.md). --as-owner runs as the dev owner, one at a time.
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -35,6 +38,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs, promisify } from "node:util";
+import {
+	harnessVariantFromFlags,
+	harnessVariantLabel,
+} from "../src/domain/harness-variant";
 import {
 	cosineSimilarity,
 	MEMORY_MATCH_LIMIT,
@@ -61,6 +68,13 @@ import {
 	supermemoryClient,
 	waitProcessed,
 } from "./memory-eval/supermemory";
+import {
+	createEvalUser,
+	type EvalUser,
+	onEvalStop,
+	SLOT_LIMITS,
+	withSlot,
+} from "./smoke/eval-user";
 
 const run = promisify(execFile);
 
@@ -85,6 +99,14 @@ const { values: flags } = parseArgs({
 		"price-out": { type: "string" },
 		"keep-repos": { type: "boolean", default: false },
 		out: { type: "string" },
+		/** Harness variant, e.g. memoryWording=rules (repeatable). */
+		variant: { type: "string", multiple: true },
+		/** Runs of each (arm, scenario), each as its own eval user. */
+		repeat: { type: "string", default: "1" },
+		/** Scenario runs at once in this process (eval users make it safe). */
+		concurrency: { type: "string", default: "2" },
+		/** Run as the dev owner (old behaviour; forces concurrency 1). */
+		"as-owner": { type: "boolean", default: false },
 	},
 });
 
@@ -499,6 +521,12 @@ type MemoryCost = {
 type ScenarioRecord = {
 	arm: string;
 	scenario: string;
+	/** 1-based repeat index. */
+	attempt: number;
+	/** The eval user the run used ("owner" with --as-owner). */
+	evalUser: string;
+	variant: string;
+	elapsedMs: number;
 	repo: string | null;
 	passed: boolean | null;
 	verifierOutput: string;
@@ -599,38 +627,30 @@ async function live() {
 	const liveRepos = new Set<string>();
 	const liveContainers = new Set<string>();
 
-	const owners = (
-		await db.query<{ user_id: string }>(
-			"select user_id from agent_account where provider='codex' and status='connected' and encrypted_codex_auth is not null",
-		)
-	).rows;
-	if (owners.length !== 1)
-		throw new Error("Requires one connected subscription owner.");
-	const userId = owners[0].user_id;
-	const source = (
-		await db.query<{
-			project_id: string;
-			workspace_id: string;
-			full_name: string;
-		}>(
-			"select s.project_id,s.workspace_id,p.full_name from agent_session s join project p on p.id=s.project_id where s.user_id=$1 and s.listed_model_id is not null order by s.updated_at desc limit 1",
-			[userId],
-		)
-	).rows[0];
-	if (!source) throw new Error("No project is configured for the owner.");
-	const repoName = source.full_name.split("/")[1];
-	if (!repoName || !/^[a-zA-Z0-9_.-]+$/.test(repoName))
-		throw new Error("Invalid fixture directory name.");
-	// The owner's own memory settings, restored at the end.
-	const savedSettings = (
-		await db.query<{
-			mode: string;
-			repo: string | null;
-			dreamed_through: Date | null;
-		}>("select mode,repo,dreamed_through from user_memory where user_id=$1", [
-			userId,
-		])
-	).rows[0];
+	const variant = harnessVariantFromFlags(flags.variant);
+	const variantLabel = harnessVariantLabel(variant);
+	const asOwner = flags["as-owner"];
+	const repeat = Math.min(20, Math.max(1, Number(flags.repeat) || 1));
+	// Memory settings are per user: the owner can only run one scenario at a time.
+	const concurrency = asOwner
+		? 1
+		: Math.min(8, Math.max(1, Number(flags.concurrency) || 2));
+	const owner = asOwner
+		? await createEvalUser({ label: "memory-eval", asOwner: true, variant })
+		: null;
+	// The owner's own memory settings, restored at the end (--as-owner only).
+	const savedSettings = owner
+		? (
+				await db.query<{
+					mode: string;
+					repo: string | null;
+					dreamed_through: Date | null;
+				}>(
+					"select mode,repo,dreamed_through from user_memory where user_id=$1",
+					[owner.userId],
+				)
+			).rows[0]
+		: undefined;
 
 	// Executor gate: a signed probe must reach the dev edge before any VM is made.
 	{
@@ -660,21 +680,36 @@ async function live() {
 		if (!open) throw new Error("Executor gate is not open.");
 	}
 
-	async function setEvalMemory(mode: string, repo: string | null) {
+	async function setEvalMemory(
+		user: EvalUser,
+		mode: "off" | "spec" | "full",
+		repo: string | null,
+	) {
+		if (!user.asOwner) return user.setMemory(mode, repo);
 		await db.query(
 			`insert into user_memory(user_id,mode,repo,dreamed_through) values($1,$2,$3,now())
 			 on conflict(user_id) do update set mode=excluded.mode,repo=excluded.repo,dreamed_through=excluded.dreamed_through,updated_at=now()`,
-			[userId, mode, repo],
+			[user.userId, mode, repo],
 		);
 	}
 
-	async function throwawayProject() {
+	/** An eval user's own project; a copied one for the owner. */
+	async function throwawayProject(user: EvalUser) {
+		if (!user.asOwner)
+			return {
+				projectId: user.project.projectId,
+				workspaceId: user.project.workspaceId,
+			};
 		const id = randomUUID();
 		await db.query(
 			`insert into project select (jsonb_populate_record(null::project,
 				to_jsonb(p) || jsonb_build_object('id', $2::uuid, 'repository_id', $3::bigint, 'created_at', now()))).*
 			 from project p where p.id=$1`,
-			[source.project_id, id, 9_000_000_000 + Math.floor(Math.random() * 1e9)],
+			[
+				user.project.projectId,
+				id,
+				9_000_000_000 + Math.floor(Math.random() * 1e9),
+			],
 		);
 		liveProjects.add(id);
 		const workspaceId = randomUUID();
@@ -682,15 +717,17 @@ async function live() {
 			`insert into workspace select (jsonb_populate_record(null::workspace,
 				to_jsonb(w) || jsonb_build_object('id', $2::uuid, 'project_id', $3::uuid))).*
 			 from workspace w where w.id=$1`,
-			[source.workspace_id, workspaceId, id],
+			[user.project.workspaceId, workspaceId, id],
 		);
 		return { projectId: id, workspaceId };
 	}
 
-	async function dropProject(id: string) {
+	async function dropProject(user: EvalUser, id: string) {
+		// An eval user's project goes with the user.
+		if (!user.asOwner) return;
 		await db.query("delete from project where id=$1 and user_id=$2", [
 			id,
-			userId,
+			user.userId,
 		]);
 		liveProjects.delete(id);
 	}
@@ -719,7 +756,18 @@ async function live() {
 	}
 
 	/** One chat: a new session on a fresh VM with `files`, one prompt, until settled. */
-	async function chat(
+	/** One chat, in a Codex slot shared with every other eval process. */
+	function chat(...args: Parameters<typeof chatNow>) {
+		return withSlot(
+			"codex",
+			SLOT_LIMITS.codex,
+			() => chatNow(...args),
+			() => stopping,
+		);
+	}
+
+	async function chatNow(
+		user: EvalUser,
 		{ projectId, workspaceId }: { projectId: string; workspaceId: string },
 		title: string,
 		files: Record<string, string>,
@@ -727,6 +775,8 @@ async function live() {
 		verify?: string,
 		extraParts: readonly string[] = [],
 	) {
+		const { userId } = user;
+		const repoName = user.project.dirName;
 		const record: ChatRecord = {
 			sessionId: null,
 			state: "not-started",
@@ -762,6 +812,7 @@ async function live() {
 			});
 			vmId = created.vmId;
 			liveVms.add(vmId);
+			await user.trackVm(vmId);
 			await sessions.saveAgentSessionProviderRef(session.id, vmId);
 			await waitUntilVmRunning(created.vm, "Memory eval");
 			const workspace = WorkspaceId(vmId);
@@ -956,7 +1007,7 @@ async function live() {
 	}
 
 	/** Dreams now instead of after the idle delay, and waits for it to finish. */
-	async function dreamNow(after: Date) {
+	async function dreamNow(userId: string, after: Date) {
 		await dispatchBackgroundJob({
 			id: randomUUID(),
 			kind: "memory",
@@ -977,7 +1028,10 @@ async function live() {
 		return "timeout";
 	}
 
-	async function memoryCosts(since: Date): Promise<MemoryCost[]> {
+	async function memoryCosts(
+		userId: string,
+		since: Date,
+	): Promise<MemoryCost[]> {
 		return (
 			await db.query<{
 				kind: string;
@@ -1000,10 +1054,13 @@ async function live() {
 	}
 
 	async function runScenario(
+		user: EvalUser,
 		arm: string,
 		scenario: Scenario,
+		attempt: number,
 	): Promise<ScenarioRecord> {
-		if (arm === "supermemory") return runSupermemoryScenario(scenario);
+		if (arm === "supermemory")
+			return runSupermemoryScenario(user, scenario, attempt);
 		const started = new Date();
 		const repo =
 			arm === "off"
@@ -1012,6 +1069,10 @@ async function live() {
 		const result: ScenarioRecord = {
 			arm,
 			scenario: scenario.id,
+			attempt,
+			evalUser: user.asOwner ? "owner" : user.userId,
+			variant: variantLabel,
+			elapsedMs: 0,
 			repo,
 			passed: null,
 			verifierOutput: "",
@@ -1021,15 +1082,17 @@ async function live() {
 			memoryCosts: [],
 			errors: [],
 		};
-		const project = await throwawayProject();
+		const project = await throwawayProject(user);
 		try {
-			await setEvalMemory(arm, repo);
-			if (repo) liveRepos.add(repo);
+			await setEvalMemory(user, arm as "off" | "spec" | "full", repo);
+			// An eval user's repos are deleted when the user is released.
+			if (repo && user.asOwner) liveRepos.add(repo);
 			if (arm !== "off") {
 				if (repo && scenario.seed) await seedRepo(repo, scenario.seed);
 				const dreams: string[] = [];
 				for (const [index, setup] of setupChats(scenario).entries()) {
 					const done = await chat(
+						user,
 						project,
 						`Memory eval ${scenario.id} chat ${index + 1}`,
 						setup.files,
@@ -1038,11 +1101,12 @@ async function live() {
 					result.setup.push(done.record);
 					// The save hook (full) is queued when the chat's turn completes.
 					if (arm === "full") await delay(30_000);
-					dreams.push(await dreamNow(new Date()));
+					dreams.push(await dreamNow(user.userId, new Date()));
 				}
 				result.dream = dreams.join(",") || "none";
 			}
 			const second = await chat(
+				user,
 				project,
 				`Memory eval ${scenario.id} chat 2`,
 				scenario.chat2.files,
@@ -1054,17 +1118,18 @@ async function live() {
 			result.verifierOutput = second.verified?.output ?? "";
 			// Chat 2's own save hook may still be running; let it land in the costs.
 			if (arm === "full") await delay(20_000);
-			result.memoryCosts = await memoryCosts(started);
+			result.memoryCosts = await memoryCosts(user.userId, started);
 		} catch (error) {
 			result.errors.push(
 				error instanceof Error ? error.message : String(error),
 			);
 		} finally {
-			await dropProject(project.projectId).catch(() => {});
-			if (repo && !flags["keep-repos"]) await deleteRepo(repo);
+			await dropProject(user, project.projectId).catch(() => {});
+			if (repo && user.asOwner && !flags["keep-repos"]) await deleteRepo(repo);
 		}
+		result.elapsedMs = Date.now() - started.getTime();
 		console.log(
-			`[${arm}] ${scenario.id}: ${result.passed === null ? "no verdict" : result.passed ? "PASS" : "fail"} (dream ${result.dream}${result.chat2?.memoryAttached ? ", memory attached to chat 2" : ""})${result.errors.length ? ` errors: ${result.errors.join("; ")}` : ""}`,
+			`[${arm}${repeat > 1 ? ` #${attempt}` : ""}${variantLabel === "default" ? "" : ` ${variantLabel}`}] ${scenario.id}: ${result.passed === null ? "no verdict" : result.passed ? "PASS" : "fail"} (dream ${result.dream}${result.chat2?.memoryAttached ? ", memory attached to chat 2" : ""})${result.errors.length ? ` errors: ${result.errors.join("; ")}` : ""}`,
 		);
 		return result;
 	}
@@ -1076,8 +1141,11 @@ async function live() {
 	 * extra text parts. Their MCP search tools are not offered (see notes).
 	 */
 	async function runSupermemoryScenario(
+		user: EvalUser,
 		scenario: Scenario,
+		attempt: number,
 	): Promise<ScenarioRecord> {
+		const repoName = user.project.dirName;
 		if (!sm) throw new Error("Supermemory is not configured.");
 		const started = new Date();
 		const containerTag = `ytimesy-eval-${scenario.id}-${randomUUID().slice(0, 8)}`;
@@ -1095,6 +1163,10 @@ async function live() {
 		const result: ScenarioRecord = {
 			arm: "supermemory",
 			scenario: scenario.id,
+			attempt,
+			evalUser: user.asOwner ? "owner" : user.userId,
+			variant: variantLabel,
+			elapsedMs: 0,
 			repo: null,
 			passed: null,
 			verifierOutput: "",
@@ -1105,7 +1177,7 @@ async function live() {
 			supermemory: record,
 			errors: [],
 		};
-		const project = await throwawayProject();
+		const project = await throwawayProject(user);
 		liveContainers.add(containerTag);
 		const ingest = async (
 			source: string,
@@ -1136,7 +1208,7 @@ async function live() {
 			});
 		};
 		try {
-			await setEvalMemory("off", null);
+			await setEvalMemory(user, "off", null);
 			// Seeded memory (expired-rule): the same lines as one document.
 			const seeded = scenario.seed?.["MEMORY.md"];
 			if (seeded)
@@ -1144,6 +1216,7 @@ async function live() {
 			for (const [index, setup] of setupChats(scenario).entries()) {
 				const turnStarted = new Date().toISOString();
 				const done = await chat(
+					user,
 					project,
 					`Memory eval ${scenario.id} chat ${index + 1}`,
 					setup.files,
@@ -1203,6 +1276,7 @@ async function live() {
 				.split("\n")
 				.filter((line) => line.startsWith("- ◪")).length;
 			const second = await chat(
+				user,
 				project,
 				`Memory eval ${scenario.id} chat 2`,
 				scenario.chat2.files,
@@ -1213,13 +1287,13 @@ async function live() {
 			result.chat2 = second.record;
 			result.passed = second.verified?.passed ?? null;
 			result.verifierOutput = second.verified?.output ?? "";
-			result.memoryCosts = await memoryCosts(started);
+			result.memoryCosts = await memoryCosts(user.userId, started);
 		} catch (error) {
 			result.errors.push(
 				error instanceof Error ? error.message : String(error),
 			);
 		} finally {
-			await dropProject(project.projectId).catch(() => {});
+			await dropProject(user, project.projectId).catch(() => {});
 			record.cleanup = await sm.deleteContainer(containerTag).then(
 				(done) =>
 					`deleted ${done.deletedDocumentsCount} documents, ${done.deletedMemoriesCount} memories`,
@@ -1227,6 +1301,7 @@ async function live() {
 			);
 			liveContainers.delete(containerTag);
 		}
+		result.elapsedMs = Date.now() - started.getTime();
 		console.log(
 			`[supermemory] ${scenario.id}: ${result.passed === null ? "no verdict" : result.passed ? "PASS" : "fail"} (ingest ${result.dream || "none"}; injected ${record.injectedLines} lines/${record.injectedChars} chars, recalled ${record.recalled}, profile ${record.profileItems}; top hit ${record.searchHits[0]?.similarity?.toFixed(3) ?? "-"})${result.errors.length ? ` errors: ${result.errors.join("; ")}` : ""}`,
 		);
@@ -1234,38 +1309,78 @@ async function live() {
 	}
 
 	let stopping = false;
-	const stop = () => {
+	onEvalStop(() => {
 		stopping = true;
-	};
-	process.once("SIGINT", stop);
-	process.once("SIGTERM", stop);
+	});
 	const results: ScenarioRecord[] = [];
 	const started = Date.now();
+	const jobs = arms.flatMap((arm) =>
+		scenarios.flatMap((scenario) =>
+			Array.from({ length: repeat }, (_, index) => ({
+				arm,
+				scenario,
+				attempt: index + 1,
+			})),
+		),
+	);
+	console.log(
+		`Running ${jobs.length} scenario runs (${arms.join(",")} x ${scenarios.length} scenarios x ${repeat}), concurrency ${concurrency}, variant ${variantLabel}, ${owner ? "as the owner" : "one eval user per run"}.`,
+	);
+	const leftovers: string[] = [];
 	try {
-		for (const arm of arms)
-			for (const scenario of scenarios) {
-				if (stopping) break;
-				results.push(await runScenario(arm, scenario));
-			}
+		let next = 0;
+		await Promise.all(
+			Array.from({ length: Math.min(concurrency, jobs.length) }, async () => {
+				while (next < jobs.length && !stopping) {
+					const { arm, scenario, attempt } = jobs[next++];
+					let user: EvalUser | null = owner;
+					try {
+						user ??= await createEvalUser({
+							label: `memory-eval ${arm} ${scenario.id} #${attempt} ${variantLabel}`,
+							variant,
+							keepRepos: flags["keep-repos"],
+						});
+						results.push(await runScenario(user, arm, scenario, attempt));
+					} catch (error) {
+						console.error(
+							`[${arm} #${attempt}] ${scenario.id}: ${error instanceof Error ? error.message : String(error)}`,
+						);
+					} finally {
+						if (user && !user.asOwner)
+							leftovers.push(...(await user.release()));
+					}
+				}
+			}),
+		);
 	} finally {
 		for (const id of liveVms) await client.vms.delete(id).catch(() => {});
-		for (const id of liveProjects) await dropProject(id).catch(() => {});
+		for (const id of liveProjects)
+			if (owner) await dropProject(owner, id).catch(() => {});
 		for (const tag of liveContainers)
 			await sm?.deleteContainer(tag).catch(() => {});
 		if (!flags["keep-repos"])
 			for (const name of liveRepos) await deleteRepo(name);
-		if (savedSettings)
-			await db.query(
-				"update user_memory set mode=$2,repo=$3,dreamed_through=$4,updated_at=now() where user_id=$1",
-				[
-					userId,
-					savedSettings.mode,
-					savedSettings.repo,
-					savedSettings.dreamed_through,
-				],
-			);
-		else await db.query("delete from user_memory where user_id=$1", [userId]);
+		if (owner) {
+			if (savedSettings)
+				await db.query(
+					"update user_memory set mode=$2,repo=$3,dreamed_through=$4,updated_at=now() where user_id=$1",
+					[
+						owner.userId,
+						savedSettings.mode,
+						savedSettings.repo,
+						savedSettings.dreamed_through,
+					],
+				);
+			else
+				await db.query("delete from user_memory where user_id=$1", [
+					owner.userId,
+				]);
+		}
 		await closeDatabase();
+	}
+	if (leftovers.length) {
+		console.error(`Cleanup incomplete: ${leftovers.join(", ")}.`);
+		process.exitCode = 1;
 	}
 
 	const priceIn = Number(flags["price-in"]);
@@ -1320,7 +1435,9 @@ async function live() {
 		[
 			"arm",
 			"scenario",
+			"#",
 			"pass",
+			"secs",
 			"chat2 in tok",
 			"attached",
 			"injected",
@@ -1331,7 +1448,9 @@ async function live() {
 		perScenario.push([
 			row.arm,
 			row.scenario,
+			String(row.attempt),
 			row.passed === null ? "-" : row.passed ? "PASS" : "fail",
+			String(Math.round(row.elapsedMs / 1000)),
 			String(row.chat2?.inputTokens ?? "-"),
 			row.chat2?.memoryAttached || row.chat2?.supermemoryAttached
 				? "yes"
@@ -1347,11 +1466,11 @@ async function live() {
 		]);
 	console.log(`\n${table(perScenario)}`);
 	console.log(
-		`\nModel ${model} (${effort}); total ${Math.round((Date.now() - started) / 1000)}s. Chat token columns are chat 2's agent turns; save and dream columns are memory jobs on the user's route.`,
+		`\nModel ${model} (${effort}); variant ${variantLabel}; total ${Math.round((Date.now() - started) / 1000)}s. Chat token columns are chat 2's agent turns; save and dream columns are memory jobs on the user's route.`,
 	);
 	const out =
 		flags.out ??
-		`/tmp/memory-two-chat-eval-${new Date().toISOString().replaceAll(/[:.]/g, "-")}.json`;
+		`/tmp/memory-two-chat-eval-${new Date().toISOString().replaceAll(/[:.]/g, "-")}-${process.pid}.json`;
 	await writeFile(out, JSON.stringify({ flags, results }, null, 2));
 	console.log(`Wrote ${out}`);
 }
