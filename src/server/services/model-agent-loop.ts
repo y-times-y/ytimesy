@@ -35,6 +35,11 @@ import {
 	toolFailureClass,
 	toolMetricCategory,
 } from "#/domain/harness-performance";
+import {
+	IMAGE_VIEWING_TOOLS,
+	NO_IMAGE_INPUT_INSTRUCTIONS,
+	withImagePlaceholders,
+} from "#/domain/image-placeholders";
 import { modelStepLimit } from "#/domain/model-workflow";
 import type { apiPromptCacheSettings } from "#/server/adapters/api-prompt-cache";
 import {
@@ -354,6 +359,18 @@ export function endsWithCommentary(messages: readonly ModelMessage[]) {
 	);
 }
 
+/** A text-only model is told so and is not offered tools that only return pixels. */
+function withoutImageViewing(input: ModelAgentInput): ModelAgentInput {
+	const hidden = new Set<string>(IMAGE_VIEWING_TOOLS);
+	return {
+		...input,
+		tools: Object.fromEntries(
+			Object.entries(input.tools).filter(([name]) => !hidden.has(name)),
+		),
+		instructions: `${input.instructions}\n${NO_IMAGE_INPUT_INSTRUCTIONS}`,
+	};
+}
+
 export const OUTPUT_LIMIT_CONTINUE_NOTE =
 	"Your previous response was cut off at the output length limit. Continue exactly where it stopped, without repeating what you already wrote. This is a runtime notice, not a new user request.";
 
@@ -415,6 +432,8 @@ export type ModelAgentRuntime = {
 	cacheSettings?: ReturnType<typeof apiPromptCacheSettings>;
 	maxOutputTokens?: number;
 	contextWindow?: number;
+	/** False when the model cannot read images: they become placeholders and image tools are hidden. */
+	imageInput?: boolean;
 	autoCompactTokenLimit?: number;
 	/** Optional operating budget; distinct from the provider's hard context window. */
 	workingContextTokens?: number;
@@ -459,6 +478,7 @@ async function executeModelSteps(
 		typeof runtime.model === "string" ? "registry" : runtime.model.provider,
 		input.modelId,
 	);
+	if (runtime.imageInput === false) input = withoutImageViewing(input);
 	input = {
 		...input,
 		tools: isShellSurface(Object.keys(input.tools))
@@ -829,7 +849,12 @@ async function executeModelSteps(
 					];
 				await input.beforeStep?.(history);
 				runSignal.throwIfAborted();
-				return { messages: history };
+				return {
+					messages:
+						runtime.imageInput === false
+							? withImagePlaceholders(history)
+							: history,
+				};
 			},
 			// SDK retries only retryable request-start failures (with backoff, like
 			// native Codex's request retries). Never replay a stream after output/tool execution.

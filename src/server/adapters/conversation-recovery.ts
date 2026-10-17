@@ -112,12 +112,8 @@ export async function conversationPointCodeRef(
 		: undefined;
 }
 
-export async function recoveredConversation(
-	userId: string,
-	sessionId: string,
-	modelId: string,
-	revision: string,
-) {
+/** The model history a restored conversation continues from, while its transcript is unchanged since. */
+export async function recoveredConversation(userId: string, sessionId: string) {
 	const { rows } = await database().query(
 		`select r.response->'result' as head,s.items from agent_task_command_receipt r
     join agent_session s on s.id=r.parent_session_id where s.user_id=$1 and s.id=$2 and r.request_id='conversation-head' and r.status='done'`,
@@ -135,10 +131,9 @@ export async function recoveredConversation(
 	if (!head || head.fingerprint !== transcriptFingerprint(row.items))
 		return null;
 	return {
-		messages:
-			head.modelId === modelId && head.revision === revision
-				? head.messages
-				: null,
+		messages: head.messages,
+		modelId: head.modelId,
+		revision: head.revision,
 	};
 }
 

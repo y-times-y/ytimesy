@@ -183,3 +183,42 @@ it("compacts below what the provider reported, or below 60% of the input limit",
 		compactAtTokens: 60_000,
 	});
 });
+
+it("gives a text-only model placeholders for images and no image tool", async () => {
+	const { tool } = await import("ai");
+	const { z } = await import("zod");
+	const model = new MockLanguageModelV4({
+		doStream: async () => textStream("Done", "stop"),
+	});
+	const view = tool({
+		description: "View an image",
+		inputSchema: z.object({ path: z.string() }),
+		execute: async () => "pixels",
+	});
+	const run = {
+		...input([
+			{
+				role: "user",
+				content: [
+					{ type: "text", text: "Match this" },
+					{ type: "image", image: "aGVsbG8=", mediaType: "image/png" },
+				],
+			},
+		]),
+		tools: { view_image: view },
+	};
+	await runModelAgentStep(run, { model, imageInput: false });
+	const call = model.doStreamCalls[0];
+	expect(JSON.stringify(call.prompt)).not.toContain("image/png");
+	expect(JSON.stringify(call.prompt)).toContain("cannot read images");
+	expect(call.tools?.map((definition) => definition.name) ?? []).not.toContain(
+		"view_image",
+	);
+	const sighted = new MockLanguageModelV4({
+		doStream: async () => textStream("Done", "stop"),
+	});
+	await runModelAgentStep(run, { model: sighted });
+	expect(JSON.stringify(sighted.doStreamCalls[0].prompt)).toContain(
+		"image/png",
+	);
+});
