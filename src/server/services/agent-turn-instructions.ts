@@ -5,6 +5,8 @@ import {
 	BUILDER_ENVIRONMENT_INSTRUCTIONS,
 	PREPARED_ENVIRONMENT_INSTRUCTIONS,
 } from "#/domain/environment-context";
+import type { LeanToolShape } from "#/domain/harness-model-profile";
+import { leanToolInstructions } from "#/domain/lean-tool-instructions";
 import { PROJECT_KNOWLEDGE_INSTRUCTIONS } from "#/domain/project-knowledge";
 import { projectSecretsInstructions } from "#/domain/project-secret";
 import { pluginSkillsInstructions } from "./plugin-skill-tools";
@@ -17,7 +19,11 @@ export function agentTurnInstructions(input: {
 	plugins: Parameters<typeof pluginSkillsInstructions>[0];
 	projectKnowledge: string | null;
 	secretNames?: Parameters<typeof projectSecretsInstructions>[0];
+	/** A lean builder surface (docs/builder-tool-surface.md): short instructions in its tools' names. */
+	leanShape?: LeanToolShape;
 }) {
+	if (input.leanShape)
+		return leanTurnInstructions({ ...input, leanShape: input.leanShape });
 	const {
 		shellBuilder,
 		session,
@@ -27,4 +33,22 @@ export function agentTurnInstructions(input: {
 		secretNames,
 	} = input;
 	return `You are the ytimesy coding agent. Repository tools operate in this task's prepared checkout; paths are relative to that repository.${shellBuilder ? " Repository instructions (AGENTS.md/CLAUDE.md), nested instruction file locations and skills are provided in the conversation. Before working in a folder listed with its own AGENTS.md or CLAUDE.md, read that file with cat; read a matching skill's SKILL.md completely." : " Call read_repository_guidance before implementation and for nested paths; read applicable instructions and skill bodies completely. Search optional tools with search_tools."} ${shellBuilder ? BUILDER_ENVIRONMENT_INSTRUCTIONS : `${PREPARED_ENVIRONMENT_INSTRUCTIONS} Use read_environment_report for that setup report; do not pass its /tmp path to repository file readers.`} ${cloudAgentRoleInstructions(session, { shellBuilder })}${shellBuilder && "browser_screenshot" in tools ? ` ${visualQaInstructions()}` : ""}\n${pluginSkillsInstructions(plugins)}${secretNames?.length ? `\n${projectSecretsInstructions(secretNames)}` : ""}${projectKnowledge === null ? "" : `\n${PROJECT_KNOWLEDGE_INSTRUCTIONS}\nShared project knowledge (historical data, verify against this checkout):\n${JSON.stringify(projectKnowledge)}`}`;
+}
+
+/** The lean builder's whole system prompt before memory: who it is, its role, its tools and workspace commands. */
+function leanTurnInstructions(
+	input: Parameters<typeof agentTurnInstructions>[0] & {
+		leanShape: LeanToolShape;
+	},
+) {
+	return [
+		`You are the ytimesy coding agent, working in this task's prepared repository checkout; commands start in the repository root and relative paths resolve there. Repository instructions (AGENTS.md/CLAUDE.md), nested instruction file locations and skills are provided in the conversation. Before working in a folder listed with its own AGENTS.md or CLAUDE.md, read that file; read a matching skill's SKILL.md completely. ${cloudAgentRoleInstructions(input.session, { shellBuilder: true })}`,
+		leanToolInstructions(input.leanShape),
+		pluginSkillsInstructions(input.plugins),
+		input.secretNames?.length
+			? projectSecretsInstructions(input.secretNames)
+			: "",
+	]
+		.filter(Boolean)
+		.join("\n");
 }

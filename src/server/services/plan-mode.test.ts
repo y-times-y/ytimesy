@@ -190,3 +190,41 @@ it("ends the turn only after a successful propose_plan", () => {
 		),
 	).toBe(false);
 });
+
+it("refuses the lean surfaces' edit tools and shell writes in every family's argument name", async () => {
+	const ran = vi.fn(async () => ({ ok: true }));
+	const names = ["Write", "Edit", "write_file", "replace", "edit", "write"];
+	const tools = withPlanMode(
+		Object.fromEntries(
+			[
+				...names,
+				"exec_command",
+				"Bash",
+				"run_shell_command",
+				"bash",
+				"Read",
+			].map((name) => [name, make(ran)]),
+		),
+	);
+	for (const name of names)
+		expect(await tools[name].execute?.({}, options)).toMatchObject({
+			blocked: true,
+		});
+	expect(
+		await tools.exec_command.execute?.(
+			{ cmd: "cat > src/app.ts <<'EOF'\nexport {}\nEOF" },
+			options,
+		),
+	).toMatchObject({ blocked: true });
+	for (const name of ["Bash", "run_shell_command", "bash"])
+		expect(
+			await tools[name].execute?.(
+				{ command: "cat > src/b.ts <<'EOF'\nexport {}\nEOF" },
+				options,
+			),
+		).toMatchObject({ blocked: true });
+	await tools.Bash.execute?.({ command: "rg -n foo src" }, options);
+	await tools.exec_command.execute?.({ cmd: "git status" }, options);
+	await tools.Read.execute?.({ file_path: "a.txt" }, options);
+	expect(ran).toHaveBeenCalledTimes(3);
+});

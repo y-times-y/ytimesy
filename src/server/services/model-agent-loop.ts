@@ -379,7 +379,19 @@ async function executeModelSteps(
 					onEvent: input.onEvent,
 					onToolMetric: input.onToolMetric,
 				}),
-		instructions: `${input.instructions}\n${harnessModelToolInstructions(modelFamily, (input.tools.apply_patch as { id?: string } | undefined)?.id === "openai.custom" ? "freeform" : input.tools.apply_patch?.type === "provider", Object.keys(input.tools))}`,
+		instructions: [
+			input.instructions,
+			harnessModelToolInstructions(
+				modelFamily,
+				(input.tools.apply_patch as { id?: string } | undefined)?.id ===
+					"openai.custom"
+					? "freeform"
+					: input.tools.apply_patch?.type === "provider",
+				Object.keys(input.tools),
+			),
+		]
+			.filter(Boolean)
+			.join("\n"),
 	};
 	input.signal.throwIfAborted();
 	const cancelled = new AbortController();

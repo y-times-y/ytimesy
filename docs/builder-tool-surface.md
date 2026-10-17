@@ -72,3 +72,11 @@ No model in the selector names the SWE-agent shape as its native harness.
 - **Checked separately:**
   - the history files, once with a compaction-forcing task,
   - `ytimesy-browser`, once with a visual task.
+
+## Implementation (branch `lean-tools`)
+
+- **Wiring point:** `builderToolSurface({ variant, modelId, tools, lean })` in `src/server/services/builder-shell-surface.ts`, called once in `api-turn.ts` where `builderShellTools` was. `api-turn.ts` holds `const toolSurfaceVariant: ToolSurfaceVariant = "current"`; the per-run variant (`toolSurface` = `current` | `lean-native` | `lean-pi`) replaces that one line. The returned `lean` object also supplies the history writer, the background-command reader text and the instruction shape.
+- **Family detection:** `leanToolShape(variant, modelId)` in `src/domain/harness-model-profile.ts` (GPT → Codex; Gemini → Gemini CLI; Qwen → Qwen Code; everything else → Claude Code; `lean-pi` → Pi for all).
+- **Engine:** `src/server/services/lean-tools.ts` (commands through `execute_command`/`continue_command`/`stop_command`; one file reader/writer; output limit in `lean-output.ts`), `lean-edit.ts` (exact, then Pi-style fuzzy match that rewrites only the matched region).
+- **Workspace commands:** `lean-helpers.ts` installs `ytimesy-check`, `ytimesy-browser`, `ytimesy-job` (status/wait/stop for background commands) and `~/.ytimesy/environment.md` the first time a lean tool touches the VM; compaction writes `~/.ytimesy/history/<time>-<archive>.md`.
+- **Measure:** `node --import tsx scripts/builder-context-breakdown.ts --surfaces`.

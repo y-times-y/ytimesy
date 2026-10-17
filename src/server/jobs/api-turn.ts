@@ -23,6 +23,7 @@ import {
 	TURN_COORDINATION_LEASE_MS,
 	type TurnControl,
 } from "#/domain/conversation-turn-control";
+import type { ToolSurfaceVariant } from "#/domain/harness-model-profile";
 import { SessionItemId, WorkspaceId } from "#/domain/ids";
 import { prepareInterruptedStep } from "#/domain/interrupted-step";
 import { withMemoryRecall } from "#/domain/memory-marker";
@@ -97,7 +98,7 @@ import {
 	pendingAgentCommandIds,
 	withBackgroundCommandContext,
 } from "../services/background-command-context";
-import { builderShellTools } from "../services/builder-shell-surface";
+import { builderToolSurface } from "../services/builder-shell-surface";
 import {
 	runCodexSubscriptionAgent,
 	runCodexSubscriptionAgentStep,
@@ -626,9 +627,31 @@ async function runApiTurnAttempt(
 				progress.offer(items);
 			},
 		});
-		const surfaceTools = shellBuilder
-			? builderShellTools(repositoryContext.tools)
-			: repositoryContext.tools;
+		// The builder's tool surface (docs/builder-tool-surface.md). Only
+		// "current" ships; a per-run variant selects a lean surface.
+		const toolSurfaceVariant: ToolSurfaceVariant = "current";
+		const surface = !shellBuilder
+			? { tools: repositoryContext.tools, lean: undefined }
+			: toolSurfaceVariant === "current"
+				? builderToolSurface({
+						variant: toolSurfaceVariant,
+						modelId: route.modelId,
+						tools: repositoryContext.tools,
+					})
+				: builderToolSurface({
+						variant: toolSurfaceVariant,
+						modelId: route.modelId,
+						tools: repositoryContext.tools,
+						lean: {
+							workspace,
+							sessionId: owner.id,
+							turnId: turn.id,
+							toolCallPrefix: step ? `step-${step.index}:` : undefined,
+							signal: abort.signal,
+							memo: (key, load) => turnMemo(`${turn.id}:${key}`, load),
+						},
+					});
+		const surfaceTools = surface.tools;
 		// The user's remote MCP servers are called from here; credentials never reach the VM.
 		// Connections are live HTTP clients bound to this step's request, so a
 		// step that calls a tool connects again; the tool lists are reused. A
@@ -704,7 +727,8 @@ async function runApiTurnAttempt(
 				: {};
 		// Runtime notices name only tools this session was offered.
 		const commandReader =
-			"read_command" in surfaceTools ? "read_command" : "continue_command";
+			surface.lean?.commandReader ??
+			("read_command" in surfaceTools ? "read_command" : "continue_command");
 		// Delegated-task context concerns only sessions with children. A session
 		// without the task tools (the builder) cannot gain children mid-turn, so
 		// its answer holds for the turn; one with them re-checks until it has one.
@@ -876,8 +900,16 @@ async function runApiTurnAttempt(
 				failedAttempt = state;
 			},
 			messages,
-			archiveHistory: (history) =>
-				archiveModelContext(owner.userId, owner.id, history),
+			archiveHistory: async (history) => {
+				const reference = await archiveModelContext(
+					owner.userId,
+					owner.id,
+					history,
+				);
+				return surface.lean
+					? surface.lean.saveHistory(reference, history)
+					: reference;
+			},
 			instructions: `${agentTurnInstructions({
 				shellBuilder,
 				session: owner,
@@ -885,6 +917,7 @@ async function runApiTurnAttempt(
 				plugins,
 				projectKnowledge,
 				secretNames: projectSecrets?.names,
+				leanShape: surface.lean?.shape,
 			})}${memory ? `\n${memory.instructions}` : ""}`,
 			tools,
 			signal: abort.signal,
@@ -1095,7 +1128,7 @@ async function runApiTurnAttempt(
 							...finalHistory,
 							{
 								role: "user",
-								content: `Execution completion gate: these owned background commands are still running: ${JSON.stringify(pendingCommands)}. Use ${"wait_command" in surfaceTools ? "wait_command" : "continue_command"} to wait for them and inspect their output; do not finalize or claim passing checks until they settle. This is runtime status, not a new user request.`,
+								content: `Execution completion gate: these owned background commands are still running: ${JSON.stringify(pendingCommands)}. ${surface.lean ? surface.lean.waitHint(pendingCommands) : `Use ${"wait_command" in surfaceTools ? "wait_command" : "continue_command"} to wait for them`} and inspect their output; do not finalize or claim passing checks until they settle. This is runtime status, not a new user request.`,
 							},
 						]
 					: finalHistory;

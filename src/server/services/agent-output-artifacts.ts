@@ -167,11 +167,16 @@ export type AgentOutput = {
 	stderrNextStart: number | null;
 };
 
+/** The guest directory holding a session's complete command output (`<reference>.stdout`). */
+export function agentOutputDirectory(sessionId: string) {
+	return `/tmp/ytimesy-output-${createHash("sha256").update(sessionId).digest("hex")}`;
+}
+
 /** Guest-local, session-scoped evidence; never accepts an arbitrary host path. */
 export function agentOutputArtifacts(
 	input: AgentToolWorkspaceInput & { sessionId: string; signal: AbortSignal },
 ) {
-	const directory = `/tmp/ytimesy-output-${createHash("sha256").update(input.sessionId).digest("hex")}`;
+	const directory = agentOutputDirectory(input.sessionId);
 	const captureCommand = (
 		command: string,
 		timeoutSeconds: number,

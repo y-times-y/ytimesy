@@ -46,10 +46,69 @@ const SPECIALIST_TOOLS = [
 	"batch_read",
 ];
 
+/** The builder's tool surface: the measured one, or a lean one (docs/builder-tool-surface.md). */
+export type ToolSurfaceVariant = "current" | "lean-native" | "lean-pi";
+export const TOOL_SURFACE_VARIANTS: readonly ToolSurfaceVariant[] = [
+	"current",
+	"lean-native",
+	"lean-pi",
+];
+
+/** A lean surface's tool names and argument shapes: a vendor harness's, or Pi's neutral one. */
+export type LeanToolShape = "codex" | "claude" | "gemini" | "qwen" | "pi";
+
+/**
+ * The vendor harness a model was post-trained in, from its id (an
+ * OpenRouter-style "maker/model" or a direct id). GPT models use Codex's
+ * tools; Gemini uses Gemini CLI's; Qwen uses Qwen Code's (a Gemini CLI fork
+ * that names its edit tool differently). Everything else, unknown models
+ * included, gets Claude Code's: Kimi, Grok, DeepSeek and GLM route coding
+ * through it or copy it.
+ */
+export function leanToolShape(
+	variant: Exclude<ToolSurfaceVariant, "current">,
+	modelId: string,
+): LeanToolShape {
+	if (variant === "lean-pi") return "pi";
+	const id = modelId.toLowerCase();
+	const name = id.split("/").at(-1) ?? id;
+	if (
+		id.startsWith("openai/") ||
+		/(^|[^a-z])(gpt|codex)/.test(name) ||
+		/^o\d/.test(name)
+	)
+		return "codex";
+	if (id.startsWith("google/") || name.includes("gemini")) return "gemini";
+	if (id.startsWith("qwen/") || name.includes("qwen")) return "qwen";
+	return "claude";
+}
+
+/** Each lean shape's command tool; its presence marks a lean surface. */
+export const LEAN_COMMAND_TOOL: Readonly<Record<LeanToolShape, string>> = {
+	codex: "exec_command",
+	claude: "Bash",
+	gemini: "run_shell_command",
+	qwen: "run_shell_command",
+	pi: "bash",
+};
+
+/** The lean shape a tool list was built with, if any. */
+export function leanSurfaceShape(
+	toolNames: readonly string[],
+): LeanToolShape | null {
+	if (toolNames.includes("exec_command")) return "codex";
+	if (toolNames.includes("Bash")) return "claude";
+	if (toolNames.includes("run_shell_command"))
+		return toolNames.includes("replace") ? "gemini" : "qwen";
+	if (toolNames.includes("bash") && toolNames.includes("edit")) return "pi";
+	return null;
+}
+
 /** A shell-shaped surface (like native Codex): a command tool and no specialist tools. */
 export function isShellSurface(toolNames: readonly string[]) {
 	return (
-		toolNames.includes("execute_command") &&
+		(toolNames.includes("execute_command") ||
+			leanSurfaceShape(toolNames) !== null) &&
 		!SPECIALIST_TOOLS.some((name) => toolNames.includes(name))
 	);
 }
@@ -74,6 +133,8 @@ export function harnessModelToolInstructions(
 			: family === "google"
 				? "Thought signatures are provider-managed continuation state. Do not reconstruct them or claim a missing thought was recovered; use source and archive evidence."
 				: "After compaction, rely on files, command output and the context archive, not on reasoning you remember.";
+	// A lean surface carries its own short instructions (agentTurnInstructions).
+	if (availableTools && leanSurfaceShape(availableTools)) return "";
 	// A shell-shaped surface (like native Codex) gets shell-centric guidance
 	// instead of instructions for specialist tools it was not offered.
 	if (availableTools && isShellSurface(availableTools))

@@ -44,6 +44,11 @@ export async function safeBrowserUrl(value: string): Promise<string> {
 	return url.href;
 }
 
+/** Opens a URL (already shell-quoted, or a shell expansion) in the shared desktop's Chrome; exit 127 when Chrome never appears. */
+export function chromeOpenCommand(quotedUrl: string) {
+	return `export DISPLAY=:0; browser=''; for attempt in $(seq 1 120); do browser=$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser || true); test -n "$browser" && break; sleep 1; done; test -n "$browser" || exit 127; nohup "$browser" --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=/tmp/ytimesy-chrome-profile --new-window ${quotedUrl} >/tmp/ytimesy-api-browser.log 2>&1 </dev/null &`;
+}
+
 export function apiAgentBrowserTools(
 	input: AgentToolWorkspaceInput & {
 		readOnly: boolean;
@@ -101,8 +106,11 @@ export function apiAgentBrowserTools(
 				once(options.toolCallId, async () => {
 					const target = await safeBrowserUrl(url);
 					const { machines, vm } = await desktop();
-					const command = `export DISPLAY=:0; browser=''; for attempt in $(seq 1 120); do browser=$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser || true); test -n "$browser" && break; sleep 1; done; test -n "$browser" || exit 127; nohup "$browser" --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=/tmp/ytimesy-chrome-profile --new-window ${quote(target)} >/tmp/ytimesy-api-browser.log 2>&1 </dev/null &`;
-					const result = await machines.exec(vm, command, 135_000);
+					const result = await machines.exec(
+						vm,
+						chromeOpenCommand(quote(target)),
+						135_000,
+					);
 					if (result.exitCode)
 						throw new Error(
 							result.exitCode === 127
