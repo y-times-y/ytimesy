@@ -16,7 +16,11 @@ import {
 import { WorkspaceId } from "#/domain/ids";
 import { agentOutputDirectory } from "./agent-output-artifacts";
 import { builderToolSurface } from "./builder-shell-surface";
-import { type LeanCommandResult, leanShapeTools } from "./lean-tools";
+import {
+	type LeanCommandResult,
+	leanShapeTools,
+	relativePatchPaths,
+} from "./lean-tools";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 let root: string;
@@ -191,14 +195,19 @@ describe("each family's tool names and argument shapes", () => {
 		});
 	});
 
-	it("Codex on a Responses route keeps the freeform apply_patch as given", () => {
+	it("Codex on a Responses route keeps the freeform apply_patch's definition", async () => {
 		const base = commandRunner({}).tools;
 		const freeform = {
 			...tool({ inputSchema: z.object({}) }),
 			id: "openai.custom",
+			execute: async (patch: string) => patch,
 		};
 		base.apply_patch = freeform as never;
-		expect(lean("codex", base).apply_patch).toBe(freeform);
+		const offered = lean("codex", base).apply_patch as typeof freeform;
+		expect(offered.id).toBe("openai.custom");
+		expect(offered.inputSchema).toBe(freeform.inputSchema);
+		const patch = "*** Begin Patch\n*** Add File: a.py\n+x\n*** End Patch";
+		expect(await offered.execute(patch)).toBe(patch);
 	});
 
 	it("Claude Code: Bash, Read, Write, Edit, Glob, Grep", async () => {
@@ -646,5 +655,40 @@ describe("files go through one reader, writer and edit engine", () => {
 				include: "*.ts",
 			}),
 		).toContain("needle.ts:1:");
+	});
+});
+
+describe("Codex patch paths", () => {
+	const root = async () => "/home/ubuntu/repo";
+	it("makes absolute paths inside the repository relative", async () => {
+		expect(
+			await relativePatchPaths(
+				"*** Begin Patch\n*** Update File: /home/ubuntu/repo/src/a.py\n*** Move to: /home/ubuntu/repo/src/b.py\n@@\n-x\n+y\n*** Add File: c.py\n+z\n*** End Patch",
+				root,
+			),
+		).toBe(
+			"*** Begin Patch\n*** Update File: src/a.py\n*** Move to: src/b.py\n@@\n-x\n+y\n*** Add File: c.py\n+z\n*** End Patch",
+		);
+	});
+	it("leaves paths outside the repository for the parser to refuse", async () => {
+		for (const path of [
+			"/etc/passwd",
+			"/home/ubuntu/repo",
+			"/home/ubuntu/repository/a.py",
+		])
+			expect(await relativePatchPaths(`*** Add File: ${path}\n+x`, root)).toBe(
+				`*** Add File: ${path}\n+x`,
+			);
+	});
+	it("reads the root only when a header is absolute", async () => {
+		let reads = 0;
+		const patch = "*** Begin Patch\n*** Add File: a.py\n+/abs\n*** End Patch";
+		expect(
+			await relativePatchPaths(patch, async () => {
+				reads++;
+				return "/r";
+			}),
+		).toBe(patch);
+		expect(reads).toBe(0);
 	});
 });
