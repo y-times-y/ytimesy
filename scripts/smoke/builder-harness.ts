@@ -3,7 +3,7 @@
 // single ROOT builder turn on a disposable VM against the development edge.
 // Used by scripts/model-smoke-suite.ts and scripts/native-vs-harness.ts.
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { Freestyle } from "freestyle";
 import { signDeliveryRequest } from "../../src/domain/delivery-auth";
@@ -143,6 +143,31 @@ export const TASKS: Task[] = [
 		onlyWhenNamed: true,
 	},
 	{
+		// Exercises a builder surface end to end: a background server it must
+		// start and stop, an edit, a new file and a clean-copy deliverable check.
+		id: "lean-smoke",
+		prompt:
+			"Two things. 1) Fix the bug in pager.py so `python3 -m unittest discover -s tests -t .` passes (do not modify tests). 2) Create serve.py: `python3 serve.py <port>` runs an HTTP server whose GET /health answers 200 with the body `ok`. Start it as a background process on port 8765 and keep it running while you run the unit tests as a separate step; then, in another step, confirm /health responds, and finally stop that server so nothing is left listening on 8765. Another team will run serve.py on its own, so check it from a clean copy before finishing.",
+		files: {
+			"pager.py":
+				'def page(items, number, size):\n    """Items on 1-based page `number` of `size` items each."""\n    start = (number - 1) * size\n    return items[start : start + size + 1]\n',
+			"tests/__init__.py": "",
+			"tests/test_pager.py":
+				"import unittest\n\nfrom pager import page\n\n\nclass PagerTest(unittest.TestCase):\n    def test_middle_page(self):\n        self.assertEqual(page(list(range(1, 11)), 2, 3), [4, 5, 6])\n\n    def test_last_page(self):\n        self.assertEqual(page(list(range(1, 11)), 4, 3), [10])\n\n\nif __name__ == '__main__':\n    unittest.main()\n",
+		},
+		verify: [
+			"set -eo pipefail",
+			"git diff --quiet HEAD -- tests",
+			"python3 -m unittest discover -s tests -t . 2>&1 | tail -3",
+			`! python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/health', timeout=2)" 2>/dev/null || { echo 'server still listening on 8765'; exit 1; }`,
+			"python3 serve.py 8799 >/tmp/smoke-serve.log 2>&1 & pid=$!",
+			`for _ in $(seq 1 25); do body=$(python3 -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8799/health', timeout=1).read().decode().strip())" 2>/dev/null) && break; sleep 0.2; done`,
+			"kill $pid 2>/dev/null || true",
+			'[ "$body" = ok ] || { echo "serve.py /health gave: $body"; exit 1; }',
+		].join("\n"),
+		onlyWhenNamed: true,
+	},
+	{
 		id: "agents-rule",
 		prompt:
 			"Add greet.py with a function greet(name) that returns 'Hello, <name>!' (for example greet('Ada') returns 'Hello, Ada!').",
@@ -157,6 +182,8 @@ export const TASKS: Task[] = [
 		].join("\n"),
 	},
 ];
+
+const safeName = (value: string) => value.replaceAll(/[^a-zA-Z0-9._-]/g, "_");
 
 export const PROMPT_SUFFIX =
 	"\n\nWork directly in this repository: no plan proposal, child tasks, commits, pull requests or publishing. Stop when the change is done and checked.";
@@ -340,6 +367,46 @@ export async function createHarnessRunner(options: {
 					.map((item) => safe(item.message)),
 			]),
 		];
+	}
+
+	// Development diagnostics: YTIMESY_SMOKE_TRANSCRIPTS=<dir> keeps each run's
+	// stored items, model messages and a probe of the VM's workspace commands
+	// (lean surfaces) before the session and VM are deleted.
+	const transcriptDir = process.env.YTIMESY_SMOKE_TRANSCRIPTS;
+	let transcriptCount = 0;
+	async function writeTranscript(
+		record: RunRecord,
+		sessionId: string,
+		workspace: WorkspaceId,
+		taskId: string,
+	) {
+		if (!transcriptDir) return;
+		try {
+			const state = await turnState(sessionId);
+			const probe = await machines
+				.exec(
+					workspace,
+					"export PATH=\"$HOME/.ytimesy/bin:$PATH\"; echo '# ~/.ytimesy'; ls -A ~/.ytimesy 2>&1; echo '# commands'; for c in ytimesy-check ytimesy-job ytimesy-browser; do command -v $c || echo \"missing $c\"; done; echo '# history'; ls ~/.ytimesy/history 2>&1 | head; echo '# processes'; ps -eo pid,etimes,args | grep -E 'serve|http|python|node' | grep -v grep | head",
+					20_000,
+				)
+				.catch((error) => ({ stdout: "", stderr: safe(error), exitCode: -1 }));
+			await mkdir(transcriptDir, { recursive: true });
+			await writeFile(
+				`${transcriptDir}/${safeName(record.model)}-${taskId}-${process.pid}-${++transcriptCount}.json`,
+				JSON.stringify(
+					{
+						record,
+						items: state?.items,
+						messages: state?.messages,
+						probe: `${probe.stdout}${probe.stderr}`,
+					},
+					null,
+					1,
+				),
+			);
+		} catch (error) {
+			console.warn("Transcript was not written:", safe(error));
+		}
 	}
 
 	const { user } = options;
@@ -645,6 +712,8 @@ export async function createHarnessRunner(options: {
 			}
 			record.elapsedMs = Date.now() - turnStarted;
 			record.completed = record.state === "completed";
+			if (transcriptDir)
+				await writeTranscript(record, session.id, workspace, task.id);
 			const verified = await machines.exec(
 				workspace,
 				`cd '${dir}' && ${verifierCommand(task)}`,
