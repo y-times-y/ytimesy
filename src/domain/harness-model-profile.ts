@@ -56,15 +56,18 @@ export function isShellSurface(toolNames: readonly string[]) {
 
 export function harnessModelToolInstructions(
 	family: HarnessModelFamily,
-	nativePatch: boolean,
+	/** "freeform": Codex's grammar-constrained apply_patch that takes raw patch text. */
+	nativePatch: boolean | "freeform",
 	availableTools?: readonly string[],
 ) {
 	const editing =
-		family === "openai" && nativePatch
-			? "Prefer native apply_patch with its documented V4A operation schema, never shell patches."
-			: family === "anthropic"
-				? "Use replace_text for small exact uniquely matching old/new edits; apply_patch or apply_patches for V4A patches."
-				: "Use apply_patch for V4A patches or replace_text for small exact old/new edits; apply_patches can batch coherent changes.";
+		nativePatch === "freeform"
+			? "Edit with apply_patch: send the raw *** Begin Patch envelope (freeform, not JSON), never shell patches. Use replace_text for small exact edits."
+			: family === "openai" && nativePatch
+				? "Prefer native apply_patch with its documented V4A operation schema, never shell patches."
+				: family === "anthropic"
+					? "Use replace_text for small exact uniquely matching old/new edits; apply_patch or apply_patches for V4A patches."
+					: "Use apply_patch for V4A patches or replace_text for small exact old/new edits; apply_patches can batch coherent changes.";
 	const context =
 		family === "anthropic"
 			? "Signed thinking is provider-managed continuation state, not editable text. Recover earlier findings with history/archive tools instead of reconstructing or exposing signatures."

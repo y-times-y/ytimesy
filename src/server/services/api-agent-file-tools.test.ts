@@ -11,12 +11,14 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import type { ModelMessage } from "ai";
+import { isStepCount, type ModelMessage, streamText } from "ai";
 import { afterEach, expect, it, vi } from "vitest";
 import { WorkspaceId } from "#/domain/ids";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
+import { connectedLanguageModel } from "../adapters/api-model";
 import { apiAgentFileTools } from "./api-agent-file-tools";
 import { apiAgentTools } from "./api-agent-tools";
+import { APPLY_PATCH_LARK_GRAMMAR } from "./patch-input";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 const run = promisify(execFile);
@@ -33,6 +35,7 @@ async function fixture(
 	beforeExec?: (command: string, root: string) => Promise<void>,
 	replay = false,
 	verifyBatch?: Parameters<typeof apiAgentFileTools>[0]["verifyBatch"],
+	freeformPatch = false,
 ) {
 	const root = await mkdtemp(join(tmpdir(), "ytimesy-file-tools-"));
 	roots.push(root);
@@ -77,6 +80,7 @@ async function fixture(
 		cwd: root,
 		readOnly,
 		nativePatch,
+		freeformPatch,
 		signal,
 		verifyBatch,
 		once: async (id, execute) => {
@@ -794,6 +798,185 @@ it("uses the maintained OpenAI native tool contract for Responses transports", a
 			},
 		}),
 	).toMatchObject({ status: "failed", output: expect.any(String) });
+});
+
+it("offers Codex's freeform apply_patch (Lark grammar) and applies raw patch text", async () => {
+	const { root, tools } = await fixture(
+		false,
+		false,
+		undefined,
+		false,
+		undefined,
+		true,
+	);
+	expect(tools.apply_patch).toMatchObject({
+		type: "provider",
+		id: "openai.custom",
+		args: {
+			format: {
+				type: "grammar",
+				syntax: "lark",
+				definition: APPLY_PATCH_LARK_GRAMMAR,
+			},
+		},
+	});
+	const execute = (
+		tools.apply_patch as unknown as {
+			execute: (input: string, options: object) => Promise<unknown>;
+		}
+	).execute;
+	await execute(
+		"*** Begin Patch\n*** Add File: free.ts\n+export const value = 1;\n*** End Patch\n",
+		{ toolCallId: "add", messages: [] },
+	);
+	await execute(
+		"*** Begin Patch\n*** Update File: free.ts\n@@\n-export const value = 1;\n+export const value = 2;\n*** End Patch",
+		{ toolCallId: "update", messages: [] },
+	);
+	expect(await readFile(join(root, "free.ts"), "utf8")).toBe(
+		"export const value = 2;\n",
+	);
+	await expect(
+		execute(
+			"*** Begin Patch\n*** Update File: free.ts\n@@\n-missing\n+bad\n*** End Patch",
+			{ toolCallId: "bad", messages: [] },
+		),
+	).rejects.toThrow("not JSON");
+});
+
+it("sends freeform apply_patch as a Responses custom tool and replays the call as custom_tool_call", async () => {
+	const { root, tools } = await fixture(
+		false,
+		false,
+		undefined,
+		false,
+		undefined,
+		true,
+	);
+	const patch =
+		"*** Begin Patch\n*** Add File: wire.ts\n+export const wire = 1;\n*** End Patch\n";
+	const sse = (events: unknown[]) =>
+		new Response(
+			events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""),
+			{ headers: { "content-type": "text/event-stream" } },
+		);
+	const response = {
+		id: "resp_1",
+		object: "response",
+		created_at: 1,
+		status: "in_progress",
+		model: "gpt-6.1-sol",
+		output: [],
+		usage: null,
+	};
+	const usage = {
+		input_tokens: 10,
+		input_tokens_details: { cached_tokens: 0 },
+		output_tokens: 5,
+		output_tokens_details: { reasoning_tokens: 0 },
+		total_tokens: 15,
+	};
+	const call = {
+		type: "custom_tool_call",
+		id: "ctc_1",
+		call_id: "call_1",
+		name: "apply_patch",
+		input: patch,
+		status: "completed",
+	};
+	const fetch = vi.fn(async (_url: unknown, _init?: RequestInit) =>
+		sse([
+			{ type: "response.created", response, sequence_number: 0 },
+			{
+				type: "response.output_item.added",
+				output_index: 0,
+				item: { ...call, input: "", status: "in_progress" },
+				sequence_number: 1,
+			},
+			{
+				type: "response.custom_tool_call_input.delta",
+				item_id: "ctc_1",
+				output_index: 0,
+				delta: patch,
+				sequence_number: 2,
+			},
+			{
+				type: "response.output_item.done",
+				output_index: 0,
+				item: call,
+				sequence_number: 3,
+			},
+			{
+				type: "response.completed",
+				response: { ...response, status: "completed", output: [call], usage },
+				sequence_number: 4,
+			},
+		]),
+	);
+	const model = connectedLanguageModel(
+		{
+			provider: "openai",
+			baseUrl: "https://chatgpt.com/backend-api/codex",
+			apiKey: "fixture",
+			modelId: "gpt-6.1-sol",
+		},
+		fetch as unknown as typeof globalThis.fetch,
+	);
+	const providerOptions = { openai: { store: false } };
+	const first = streamText({
+		model,
+		prompt: "Edit",
+		tools: { apply_patch: tools.apply_patch },
+		stopWhen: isStepCount(1),
+		providerOptions,
+		maxRetries: 0,
+	});
+	await first.consumeStream();
+	const request = JSON.parse(String(fetch.mock.calls[0][1]?.body));
+	expect(request.tools).toEqual([
+		{
+			type: "custom",
+			name: "apply_patch",
+			description: expect.stringContaining("FREEFORM"),
+			format: {
+				type: "grammar",
+				syntax: "lark",
+				definition: APPLY_PATCH_LARK_GRAMMAR,
+			},
+		},
+	]);
+	expect(await readFile(join(root, "wire.ts"), "utf8")).toBe(
+		"export const wire = 1;\n",
+	);
+	const checkpoint: ModelMessage[] = JSON.parse(
+		JSON.stringify([
+			{ role: "user", content: "Edit" },
+			...(await first.response).messages,
+		]),
+	);
+	const second = streamText({
+		model,
+		messages: checkpoint,
+		tools: { apply_patch: tools.apply_patch },
+		providerOptions,
+		maxRetries: 0,
+	});
+	await second.consumeStream();
+	const replay = JSON.parse(String(fetch.mock.calls[1][1]?.body)).input;
+	expect(replay).toContainEqual({
+		type: "custom_tool_call",
+		call_id: "call_1",
+		name: "apply_patch",
+		input: patch,
+		id: "ctc_1",
+	});
+	expect(replay).toContainEqual(
+		expect.objectContaining({
+			type: "custom_tool_call_output",
+			call_id: "call_1",
+			output: expect.any(String),
+		}),
+	);
 });
 
 it("preserves CRLF content when a maintained patch updates an existing file", async () => {
