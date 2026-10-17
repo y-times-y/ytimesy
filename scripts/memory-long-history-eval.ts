@@ -813,8 +813,25 @@ async function addSmDocument(
 	);
 }
 
-/** One chat end to end, in a Codex slot shared with other eval processes. */
+/**
+ * One chat end to end, retried once on a failed turn (a provider hiccup
+ * would otherwise drop an update or a probe); never on the usage limit.
+ */
 async function chat(run: Run, input: LongChat, verify?: string) {
+	const first = await chatOnce(run, input, verify);
+	if (first.result.state === "completed" || run.usageLimit || run.stopped())
+		return first;
+	console.log(
+		`${tagFor(run)} ${input.id}: ${first.result.state} (${first.result.errors.join("; ").slice(0, 200)}); retrying once`,
+	);
+	const second = await chatOnce(run, input, verify);
+	second.result.errors.unshift(
+		`retried after: ${first.result.state} ${first.result.errors.join("; ").slice(0, 300)}`,
+	);
+	return second;
+}
+
+async function chatOnce(run: Run, input: LongChat, verify?: string) {
 	return withSlot(
 		"codex",
 		SLOT_LIMITS.codex,
