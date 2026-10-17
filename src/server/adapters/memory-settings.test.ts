@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { PGlite } from "@electric-sql/pglite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { recentUnsavedMessages } from "./memory-settings";
+import { lastMemoryReview, recentUnsavedMessages } from "./memory-settings";
 
 const holder = vi.hoisted(() => ({ query: vi.fn() }));
 vi.mock("./database", () => ({ database: () => holder }));
@@ -10,7 +10,8 @@ let db: PGlite;
 beforeEach(async () => {
 	db = new PGlite();
 	await db.exec(`create table agent_session(id uuid primary key,user_id text,parent_session_id uuid,title text,items jsonb not null default '[]',updated_at timestamptz default now());
-	 create table api_turn(id uuid primary key,session_id uuid,user_id text,state text,updated_at timestamptz default now());`);
+	 create table api_turn(id uuid primary key,session_id uuid,user_id text,state text,updated_at timestamptz default now());
+	 create table memory_model_usage(id uuid primary key,user_id text,kind text,outcome text,created_at timestamptz default now());`);
 	holder.query.mockImplementation(async (sql: string, values: unknown[]) =>
 		db.query(sql, values),
 	);
@@ -69,4 +70,20 @@ it("returns other chats' latest messages that memory has not saved yet", async (
 			at: expect.any(Date),
 		},
 	]);
+});
+
+it("finds the last dream that reviewed the whole repo", async () => {
+	expect(await lastMemoryReview("u1")).toBeNull();
+	const add = (user: string, kind: string, outcome: string, at: string) =>
+		db.query(
+			"insert into memory_model_usage(id,user_id,kind,outcome,created_at) values($1,$2,$3,$4,$5)",
+			[randomUUID(), user, kind, outcome, at],
+		);
+	await add("u1", "dream", "completed:review", "2026-10-01T00:00:00Z");
+	await add("u1", "dream", "completed", "2026-10-09T00:00:00Z");
+	await add("u1", "save", "completed", "2026-10-10T00:00:00Z");
+	await add("u2", "dream", "completed:review", "2026-10-11T00:00:00Z");
+	expect(await lastMemoryReview("u1")).toEqual(
+		new Date("2026-10-01T00:00:00Z"),
+	);
 });

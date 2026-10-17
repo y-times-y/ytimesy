@@ -50,6 +50,8 @@ function harness(options: {
 	script?: (tools: ModelAgentInput["tools"], step: number) => Promise<void>;
 	steps?: number;
 	answer?: string;
+	/** The last whole-repo review; a day ago unless given. */
+	lastReview?: Date | null;
 }) {
 	const commits: { changes: unknown; message: string }[] = [];
 	const repo: MemoryRepo = {
@@ -136,6 +138,10 @@ function harness(options: {
 			calls.warmed.push([...texts]);
 		},
 		similarity: async () => null,
+		lastReview: async () =>
+			options.lastReview === undefined
+				? new Date("2026-10-14T00:00:00Z")
+				: options.lastReview,
 		appUrl: "https://ytimesy.test",
 		today: () => "2026-10-15",
 	};
@@ -293,6 +299,56 @@ describe("dreaming", () => {
 			]),
 		);
 		expect(calls.dreamed).toEqual([new Date("2026-10-15T11:00:00Z")]);
+	});
+
+	it("also reviews the whole repo once a week, with more steps, and records it", async () => {
+		const files = {
+			"MEMORY.md": "# Memory\n\n## Index\n- [[tooling]]\n",
+			"tooling.md":
+				"# tooling\n- Use npm for installs [added: 2026-02-03]\n- Install packages with pnpm [added: 2026-06-01]\n",
+		};
+		const script = async (tools: ModelAgentInput["tools"]) => {
+			await call(tools, "commit", { message: "Nothing new" });
+		};
+		const { deps, calls, call } = harness({
+			files,
+			chats,
+			lastReview: null,
+			script,
+		});
+		expect(await runMemoryDream("u1", deps, 5)).toBe("unchanged");
+		const prompt = String(calls.agent[0].messages[0].content);
+		expect(prompt).toContain("Whole-repo review");
+		expect(prompt).toContain(
+			"### tooling.md\n1: # tooling\n2: - Use npm for installs",
+		);
+		expect(calls.agent[0].maxSteps).toBe(36);
+		expect(calls.usage).toEqual([
+			expect.objectContaining({ kind: "dream", outcome: "completed:review" }),
+		]);
+
+		for (const lastReview of [new Date("2026-10-12T00:00:00Z"), undefined]) {
+			const recent = harness({
+				files,
+				chats,
+				lastReview,
+				script: async () => {},
+			});
+			await runMemoryDream("u1", recent.deps, 5);
+			expect(String(recent.calls.agent[0].messages[0].content)).not.toContain(
+				"Whole-repo review",
+			);
+			expect(recent.calls.agent[0].maxSteps).toBe(5);
+		}
+		const huge = harness({
+			files: { ...files, "big.md": "- x\n".repeat(20_000) },
+			chats,
+			lastReview: null,
+		});
+		await runMemoryDream("u1", huge.deps, 5);
+		expect(String(huge.calls.agent[0].messages[0].content)).not.toContain(
+			"Whole-repo review",
+		);
 	});
 
 	it("uses the ChatGPT plan without an API reservation", async () => {

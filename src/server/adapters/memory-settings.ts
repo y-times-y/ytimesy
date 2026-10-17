@@ -370,3 +370,14 @@ export async function recentUnsavedMessages(
 			: [],
 	);
 }
+
+/** When a dream last also reviewed the whole repo (outcome suffix ":review"). */
+export async function lastMemoryReview(userId: string): Promise<Date | null> {
+	const row = (
+		await database().query<{ at: Date | null }>(
+			"select max(created_at) as at from memory_model_usage where user_id=$1 and kind='dream' and outcome like '%:review'",
+			[userId],
+		)
+	).rows[0];
+	return row?.at ? new Date(row.at) : null;
+}
