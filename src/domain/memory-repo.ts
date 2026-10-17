@@ -16,7 +16,9 @@ import { posixShellQuoted as quote } from "./posix-command";
  * Extra metadata keys (the spec leaves keys open): `kind: inferred` for
  * lessons derived by an agent rather than stated by the user, `project:`
  * for entries that apply to one project, `expires: YYYY-MM-DD` to retire an
- * entry, and `paths:` for files an entry depends on.
+ * entry, `superseded-by: <chat link>` for an entry a later statement
+ * replaced (hidden like an expired one until a dream removes it), and
+ * `paths:` for files an entry depends on.
  */
 
 /** off: no memory. spec: the spec's loop and dreaming. full: plus the read and save hooks and the extra keys. */
@@ -159,6 +161,18 @@ function isExpired(meta: Record<string, string>, today: string) {
 	return /^\d{4}-\d{2}-\d{2}$/.test(meta.expires ?? "") && meta.expires < today;
 }
 
+export const SUPERSEDED_KEY = "superseded-by";
+
+/** Expired, or replaced by a later statement: kept in the file, never shown. */
+function isRetired(meta: Record<string, string>, today: string) {
+	return isExpired(meta, today) || Boolean(meta[SUPERSEDED_KEY]);
+}
+
+/** The line with `superseded-by: <by>` added to its metadata. */
+export function supersededLine(raw: string, by: string) {
+	return `${raw.trimEnd()} [${SUPERSEDED_KEY}: ${by.replaceAll(/[;[\]]/g, "")}]`;
+}
+
 export function entryPaths(meta: Record<string, string>) {
 	return (meta.paths ?? "")
 		.split(",")
@@ -172,7 +186,7 @@ export function entryPaths(meta: Record<string, string>) {
 		);
 }
 
-/** Drops expired entries; returns only the files that changed. */
+/** Drops expired and superseded entries; returns only the files that changed. */
 export function withoutExpired(
 	files: MemoryFiles,
 	today: string,
@@ -183,14 +197,14 @@ export function withoutExpired(
 			.split("\n")
 			.filter((raw) => {
 				const entry = parseMemoryLine(raw);
-				return !entry || !isExpired(entry.meta, today);
+				return !entry || !isRetired(entry.meta, today);
 			})
 			.join("\n");
 		return kept === content ? [] : [{ path, content: kept }];
 	});
 }
 
-/** Marks entries whose `paths:` are missing from the checkout, and hides expired ones. */
+/** Marks entries whose `paths:` are missing from the checkout, and hides expired and superseded ones. */
 export function annotateMemoryText(
 	content: string,
 	options: { today: string; missingPaths?: ReadonlySet<string> },
@@ -200,7 +214,7 @@ export function annotateMemoryText(
 		.flatMap((raw) => {
 			const entry = parseMemoryLine(raw);
 			if (!entry) return [raw];
-			if (isExpired(entry.meta, options.today)) return [];
+			if (isRetired(entry.meta, options.today)) return [];
 			const missing = entryPaths(entry.meta).filter((path) =>
 				options.missingPaths?.has(path),
 			);
@@ -422,7 +436,7 @@ export function selectMemoryMatches(input: {
 		.filter(
 			(entry) =>
 				entry.path !== MEMORY_ENTRY &&
-				!isExpired(entry.meta, input.today) &&
+				!isRetired(entry.meta, input.today) &&
 				!(
 					input.project &&
 					entry.meta.project &&
@@ -572,7 +586,8 @@ Tools: search (regex over all lines), read_file (a line range), write_file, dele
 
 export const SAVE_HOOK_INSTRUCTIONS = `You check whether a coding chat's latest user message stated something a future chat should remember that is not yet in the user's memory.
 Save only ${WORTH_SAVING} about the user, their projects or their way of working. Skip ${NOT_WORTH_SAVING}, and anything already covered by the memory lines shown.
-Answer with JSON only: {"entries":[{"file":"<topic>.md","text":"<one-line entry>","project":"<project name or empty>"}]}. Use {"entries":[]} when nothing qualifies. At most 3 entries, each at most ${MEMORY_ENTRY_MAX_CHARS} characters, written as a fact (e.g. "${EXAMPLE_ENTRY}").`;
+When an entry changes or contradicts a memory line shown (a new decision replacing an old one), set "replaces" to that line's id (the "<file>:<line>" before it) so the old line is retired; write the entry so it stands alone, including any exception the old line kept that still holds.
+Answer with JSON only: {"entries":[{"file":"<topic>.md","text":"<one-line entry>","project":"<project name or empty>","replaces":"<file>:<line> or empty"}]}. Use {"entries":[]} when nothing qualifies. At most 3 entries, each at most ${MEMORY_ENTRY_MAX_CHARS} characters, written as a fact (e.g. "${EXAMPLE_ENTRY}"). Keep the user's exact identifiers and punctuation (paths, prefixes like [orders], names).`;
 
 export function saveHookPrompt(input: {
 	message: string;
@@ -583,11 +598,22 @@ export function saveHookPrompt(input: {
 	return `Project: ${input.project ?? "(none)"}
 Existing memory files: ${input.files.join(", ") || "(none)"}
 
-Memory lines related to this message:
+Memory lines related to this message (id: line):
 ${input.memory || "(none)"}
 
 The user's message:
 ${input.message}`;
+}
+
+const LINE_ID = /^([\w./-]+\.md):(\d+)$/;
+
+/** Entry text as written, unless it would end in what reads as metadata or a link. */
+function entryText(value: string) {
+	const text = value.replaceAll(/\s+/g, " ").trim();
+	const parsed = parseMemoryLine(`- ${text}`);
+	return parsed?.text === text && !/\[\[|\]\]/.test(text)
+		? text
+		: text.replaceAll(/[[\]]/g, "").trim();
 }
 
 export function parseSaveHookAnswer(text: string) {
@@ -595,7 +621,12 @@ export function parseSaveHookAnswer(text: string) {
 	if (!json) return [];
 	try {
 		const value = JSON.parse(json) as {
-			entries?: { file?: unknown; text?: unknown; project?: unknown }[];
+			entries?: {
+				file?: unknown;
+				text?: unknown;
+				project?: unknown;
+				replaces?: unknown;
+			}[];
 		};
 		return (value.entries ?? []).slice(0, 3).flatMap((entry) => {
 			const file =
@@ -604,16 +635,26 @@ export function parseSaveHookAnswer(text: string) {
 							entry.file.endsWith(".md") ? entry.file : `${entry.file}.md`,
 						)
 					: null;
-			const text =
-				typeof entry.text === "string"
-					? entry.text.replaceAll(/\s+/g, " ").replaceAll(/[[\]]/g, "").trim()
-					: "";
+			const text = typeof entry.text === "string" ? entryText(entry.text) : "";
 			if (!file || !text || text.length > MEMORY_ENTRY_MAX_CHARS) return [];
 			const project =
 				typeof entry.project === "string"
 					? entry.project.replaceAll(/[;[\]]/g, "").trim()
 					: "";
-			return [{ file, text, project }];
+			const replaces =
+				typeof entry.replaces === "string"
+					? LINE_ID.exec(entry.replaces.trim())
+					: null;
+			return [
+				{
+					file,
+					text,
+					project,
+					...(replaces
+						? { replaces: { path: replaces[1], line: Number(replaces[2]) } }
+						: {}),
+				},
+			];
 		});
 	} catch {
 		return [];

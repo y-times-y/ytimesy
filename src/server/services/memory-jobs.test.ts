@@ -135,6 +135,7 @@ function harness(options: {
 		warmLines: async (_user, texts) => {
 			calls.warmed.push([...texts]);
 		},
+		similarity: async () => null,
 		appUrl: "https://ytimesy.test",
 		today: () => "2026-10-15",
 	};
@@ -394,6 +395,67 @@ describe("save hook", () => {
 			),
 		).toBe("off");
 		expect(spec.calls.agent).toEqual([]);
+	});
+
+	it("retires the line a new decision replaces, by the id it was shown", async () => {
+		const tooling =
+			"# tooling\n- Use npm for installs [source: a]\n- Node is pinned to 22 [source: b]\n";
+		const { deps, calls, commits } = harness({
+			files: {
+				"MEMORY.md": "# Memory\n\n## Index\n- [[tooling]]\n",
+				"tooling.md": tooling,
+			},
+			chats: [
+				chat("11111111-1111-4111-8111-111111111111", [
+					item({
+						kind: "userMessage",
+						id: "1",
+						text: "We switched installs to pnpm; use it from now on",
+					}),
+				]),
+			],
+			answer:
+				'{"entries":[{"file":"tooling.md","text":"Install packages with pnpm, not npm","project":"","replaces":"tooling.md:2"}]}',
+		});
+		expect(
+			await runMemorySave("u1", "11111111-1111-4111-8111-111111111111", deps),
+		).toBe("saved");
+		// The prompt showed the related lines with their ids, not the index link.
+		const prompt = String(calls.agent[0].messages[0].content);
+		expect(prompt).toContain(
+			"tooling.md:2: - Use npm for installs [source: a]",
+		);
+		expect(prompt).not.toContain("[[tooling]]");
+		expect(calls.agent[0].instructions).toContain('"replaces"');
+		const source =
+			"https://ytimesy.test/?chat=11111111-1111-4111-8111-111111111111";
+		expect(commits[0].changes).toEqual([
+			{
+				path: "tooling.md",
+				content: `# tooling\n- Use npm for installs [source: a] [superseded-by: ${source}]\n- Node is pinned to 22 [source: b]\n- Install packages with pnpm, not npm [source: ${source}; added: 2026-10-15]\n`,
+			},
+		]);
+	});
+
+	it("ignores a replaced id it never showed, and keeps the user's brackets", () => {
+		const files = { "tooling.md": "# tooling\n- Use npm [source: a]\n" };
+		expect(
+			saveHookChanges(
+				files,
+				[
+					{
+						file: "logging.md",
+						text: "Log lines in orders.py start with [orders]",
+						project: "",
+					},
+				],
+				{ source: "s", today: "2026-10-15" },
+			)[0],
+		).toEqual({
+			path: "logging.md",
+			content:
+				"# logging\n- Log lines in orders.py start with [orders] [source: s; added: 2026-10-15]\n",
+		});
 	});
 
 	it("never duplicates an entry already in memory", () => {

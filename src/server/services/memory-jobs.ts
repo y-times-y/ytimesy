@@ -3,15 +3,18 @@ import { z } from "zod";
 import type { ApiTokenUsage } from "#/domain/api-token-usage";
 import { clip } from "#/domain/clip";
 import { type SavedMemoryLine, savedMemoryLines } from "#/domain/memory-marker";
+import { lexicalScores, memoryMatchScores } from "#/domain/memory-ranking";
 import {
 	appendMemoryEntry,
 	chatIdFromSource,
 	chatSourceUrl,
+	cosineSimilarity,
 	type DreamChat,
 	dreamInstructions,
 	MEMORY_ENTRY,
 	type MemoryChange,
 	type MemoryFiles,
+	type MemoryLine,
 	type MemoryMode,
 	memoryAppUrl,
 	memoryBullet,
@@ -23,6 +26,7 @@ import {
 	renderDreamInbox,
 	SAVE_HOOK_INSTRUCTIONS,
 	saveHookPrompt,
+	supersededLine,
 	withMemoryChanges,
 	withoutExpired,
 } from "#/domain/memory-repo";
@@ -86,6 +90,12 @@ export type MemoryJobDeps = {
 	): Promise<boolean>;
 	/** Embeds new memory lines ahead of the next chat's read hook. */
 	warmLines(userId: string, texts: readonly string[]): Promise<void>;
+	/** Cosine similarity of each line to the message, or null without embeddings. */
+	similarity(
+		userId: string,
+		lines: readonly MemoryLine[],
+		message: string,
+	): Promise<Map<MemoryLine, number> | null>;
 	appUrl: string;
 	today(): string;
 };
@@ -112,6 +122,24 @@ export function memoryJobDeps(): MemoryJobDeps {
 			const embed = memoryEmbedder();
 			if (embed && texts.length)
 				await cachedLineEmbeddings(userId, texts, embed);
+		},
+		similarity: async (userId, lines, message) => {
+			const embed = memoryEmbedder();
+			if (!embed || !lines.length) return null;
+			const [query, vectors] = await Promise.all([
+				embed.query(message.slice(0, 2000)),
+				cachedLineEmbeddings(
+					userId,
+					lines.map((entry) => memoryLineEmbeddingText(entry)),
+					embed,
+				),
+			]);
+			return new Map(
+				lines.map((entry, index) => [
+					entry,
+					cosineSimilarity(query, vectors[index] ?? []),
+				]),
+			);
 		},
 		appUrl: memoryAppUrl(),
 		today: memoryToday,
@@ -225,7 +253,12 @@ export async function runMemorySave(
 	const route = await deps.route(userId);
 	if (!route) return "no-route";
 	let snapshot = await repo.snapshot();
-	const related = relatedLines(snapshot.files, message.text);
+	const related = await relatedLines(
+		snapshot.files,
+		message.text,
+		deps.today(),
+		(lines) => deps.similarity(userId, lines, message.text).catch(() => null),
+	);
 	const project = chat.project;
 	const run = await runOnUserModel(deps, {
 		userId,
@@ -235,7 +268,9 @@ export async function runMemorySave(
 		instructions: SAVE_HOOK_INSTRUCTIONS,
 		prompt: saveHookPrompt({
 			message: message.text.slice(0, 6000),
-			memory: related.join("\n"),
+			memory: related
+				.map((entry) => `${entry.path}:${entry.line}: ${entry.raw.trim()}`)
+				.join("\n"),
 			files: Object.keys(snapshot.files).filter((path) => path.endsWith(".md")),
 			project,
 		}),
@@ -244,7 +279,16 @@ export async function runMemorySave(
 		timeoutMs: SAVE_TIMEOUT_MS,
 	});
 	if (run.outcome !== "completed") return run.outcome;
-	const entries = parseSaveHookAnswer(run.text);
+	// "replaces" names a line the model was shown; it is applied by its text.
+	const shown = new Map(
+		related.map((entry) => [`${entry.path}:${entry.line}`, entry.raw]),
+	);
+	const entries = parseSaveHookAnswer(run.text).map(
+		({ replaces, ...entry }) => {
+			const raw = replaces && shown.get(`${replaces.path}:${replaces.line}`);
+			return raw ? { ...entry, replaces: { path: replaces.path, raw } } : entry;
+		},
+	);
 	if (!entries.length) return "nothing-new";
 	const source = chatSourceUrl(deps.appUrl, sessionId);
 	for (let attempt = 0; attempt < 2; attempt++) {
@@ -281,15 +325,40 @@ export async function runMemorySave(
 	return "conflict";
 }
 
+export type SaveHookEntry = {
+	file: string;
+	text: string;
+	project: string;
+	/** An existing line (by its file and text) this entry replaces. */
+	replaces?: { path: string; raw: string };
+};
+
+/**
+ * Appends each new entry, citing its chat, and marks the line it replaces
+ * `superseded-by` that chat (the read side hides it; a dream removes it).
+ */
 export function saveHookChanges(
 	files: MemoryFiles,
-	entries: ReturnType<typeof parseSaveHookAnswer>,
+	entries: readonly SaveHookEntry[],
 	context: { source: string; today: string },
 ) {
 	let working = files;
 	const changed = new Set<string>();
 	const known = memoryLines(files).map((entry) => entry.text.toLowerCase());
 	for (const entry of entries) {
+		if (entry.replaces) {
+			const { path, raw } = entry.replaces;
+			const content = working[path];
+			const lines = content?.split("\n") ?? [];
+			const index = lines.findIndex((line) => line === raw);
+			if (content !== undefined && index >= 0) {
+				lines[index] = supersededLine(raw, context.source);
+				working = withMemoryChanges(working, [
+					{ path, content: lines.join("\n") },
+				]);
+				changed.add(path);
+			}
+		}
 		if (known.some((text) => text.includes(entry.text.toLowerCase()))) continue;
 		const appended = appendMemoryEntry(
 			working,
@@ -321,23 +390,33 @@ export function newLineTexts(before: MemoryFiles, after: MemoryFiles) {
 		.filter((text) => !known.has(text));
 }
 
-/** Lines sharing a distinctive word with the message: enough context to avoid duplicates. */
-function relatedLines(files: MemoryFiles, message: string) {
-	const words = new Set(
-		message
-			.toLowerCase()
-			.split(/[^a-z0-9@._/-]+/)
-			.filter((word) => word.length >= 4),
-	);
-	return memoryLines(files)
-		.filter((entry) =>
-			entry.text
-				.toLowerCase()
-				.split(/[^a-z0-9@._/-]+/)
-				.some((word) => words.has(word)),
-		)
-		.slice(0, 40)
-		.map((entry) => `${entry.path}:${entry.line}: ${entry.raw.trim()}`);
+const RELATED_LINES = 24;
+
+/**
+ * The memory lines the save hook sees: the best matches for the message by
+ * the read hook's ranking (cosine when embeddings are available, plus words
+ * and topic file), so it can skip what is known and replace what changed.
+ * Index links and retired lines are left out.
+ */
+async function relatedLines(
+	files: MemoryFiles,
+	message: string,
+	today: string,
+	similarity: (
+		lines: readonly MemoryLine[],
+	) => Promise<Map<MemoryLine, number> | null>,
+) {
+	const lines = memoryLines(
+		withMemoryChanges(files, withoutExpired(files, today)),
+	).filter((entry) => !/^\[\[[^\]]+\]\]$/.test(entry.text));
+	if (!lines.length) return [];
+	const cosine = await similarity(lines);
+	const lexical = lexicalScores(lines, message);
+	const scores = cosine ? memoryMatchScores(lines, cosine, message) : lexical;
+	return lines
+		.filter((entry) => cosine || (lexical.get(entry) ?? 0) > 0)
+		.sort((a, b) => (scores.get(b) ?? 0) - (scores.get(a) ?? 0))
+		.slice(0, RELATED_LINES);
 }
 
 // ---- dreaming -----------------------------------------------------------------
