@@ -1,9 +1,6 @@
-set -eo pipefail
 git diff --quiet HEAD -- tests/test_cart.py
 python3 -m unittest discover -s tests -t . 2>&1 | tail -3
 [ "$(git ls-files --others --exclude-standard tests | grep -c '\.py$')" -ge 1 ] || git diff --name-only HEAD -- tests | grep -q . || { echo "no new tests added"; exit 1; }
-repo=$(pwd)
-hidden=$(mktemp -d)
 cat > "$hidden/hidden_discounts.py" <<'PY'
 import unittest
 from decimal import Decimal as D

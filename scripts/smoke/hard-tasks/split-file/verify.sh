@@ -1,12 +1,9 @@
-set -eo pipefail
 for m in models parsing valuation reports; do test -f "inventory/$m.py"; done
 out=$(python3 -m unittest discover -s tests -t . 2>&1) || { echo "$out" | tail -15; exit 1; }
 echo "$out" | tail -3
 ran=$(echo "$out" | sed -n 's/^Ran \([0-9]*\) test.*/\1/p')
 [ "${ran:-0}" -ge 28 ] || { echo "only $ran tests ran (expected the original 28+)"; exit 1; }
 for m in models parsing valuation reports core; do python3 -c "import inventory.$m" || { echo "inventory.$m does not import on its own"; exit 1; }; done
-repo=$(pwd)
-hidden=$(mktemp -d)
 cat > "$hidden/hidden_split.py" <<'PY'
 import ast
 import importlib

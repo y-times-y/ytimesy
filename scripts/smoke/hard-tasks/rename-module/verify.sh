@@ -1,4 +1,3 @@
-set -eo pipefail
 test ! -e utils/textfmt.py
 test -f formatting/text.py && test -f tests/test_text.py && test ! -e tests/test_textfmt.py
 if grep -rIn textfmt --exclude-dir=.git --exclude-dir=__pycache__ .; then echo "old name still present"; exit 1; fi
@@ -6,8 +5,6 @@ out=$(python3 -m unittest discover -s tests -t . 2>&1) || { echo "$out" | tail -
 echo "$out" | tail -3
 ran=$(echo "$out" | sed -n 's/^Ran \([0-9]*\) test.*/\1/p')
 [ "${ran:-0}" -ge 20 ] || { echo "only $ran tests ran (expected the original 20+)"; exit 1; }
-repo=$(pwd)
-hidden=$(mktemp -d)
 cat > "$hidden/hidden_rename.py" <<'PY'
 import importlib
 import json

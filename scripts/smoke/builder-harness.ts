@@ -189,10 +189,19 @@ export const TASKS: Task[] = [
 const safeName = (value: string) => value.replaceAll(/[^a-zA-Z0-9._-]/g, "_");
 
 /**
+ * What every hard task's verify.sh starts with: strict mode, `$repo` (the
+ * fixture repository, the working directory) and `$hidden` (an empty
+ * directory for tests and inputs the agent never saw).
+ */
+const HARD_TASK_VERIFY_PRELUDE =
+	"set -eo pipefail\nrepo=$(pwd)\nhidden=$(mktemp -d)\n";
+
+/**
  * Harder tasks (a few minutes each), only run when named. Each lives in
  * scripts/smoke/hard-tasks/<id>/: prompt.txt, files/ (the fixture repo) and
- * verify.sh (run from the repo after the turn; it may test the deliverable
- * from a clean copy and with inputs the agent never saw).
+ * verify.sh (run from the repo after the turn, after
+ * HARD_TASK_VERIFY_PRELUDE; it may test the deliverable from a clean copy
+ * and with inputs the agent never saw).
  */
 function hardTasks(): Task[] {
 	const root = join(dirname(fileURLToPath(import.meta.url)), "hard-tasks");
@@ -217,7 +226,7 @@ function hardTasks(): Task[] {
 			id: entry.name,
 			prompt: readFileSync(join(root, entry.name, "prompt.txt"), "utf8").trim(),
 			files: filesUnder(join(root, entry.name, "files")),
-			verify: readFileSync(join(root, entry.name, "verify.sh"), "utf8"),
+			verify: `${HARD_TASK_VERIFY_PRELUDE}${readFileSync(join(root, entry.name, "verify.sh"), "utf8")}`,
 			onlyWhenNamed: true,
 		}));
 }

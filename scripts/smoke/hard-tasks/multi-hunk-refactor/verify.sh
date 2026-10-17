@@ -1,4 +1,3 @@
-set -eo pipefail
 test ! -e billing/legacy_audit.py || { echo "legacy_audit.py still exists"; exit 1; }
 test -f billing/context.py && test -f tests/test_context.py
 if grep -rIn legacy_audit --include='*.py' --exclude-dir=.git .; then echo "legacy_audit still referenced"; exit 1; fi
@@ -8,8 +7,6 @@ ran=$(echo "$out" | sed -n 's/^Ran \([0-9]*\) test.*/\1/p')
 [ "${ran:-0}" -ge 14 ] || { echo "only $ran tests ran (expected the original 12 plus new context tests)"; exit 1; }
 ctx=$(python3 -m unittest tests.test_context 2>&1 | sed -n 's/^Ran \([0-9]*\) test.*/\1/p')
 [ "${ctx:-0}" -ge 1 ] || { echo "tests/test_context.py has no tests"; exit 1; }
-repo=$(pwd)
-hidden=$(mktemp -d)
 cat > "$hidden/hidden_context.py" <<'PY'
 import dataclasses
 import importlib
