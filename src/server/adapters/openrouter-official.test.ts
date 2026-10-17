@@ -132,14 +132,20 @@ describe("free models in development", () => {
 		).rejects.toThrow("no ultrafast endpoint");
 	});
 
-	it("never allows any model in production", () => {
+	it("allows any model only in development", () => {
 		expect(
 			devAllowsAnyModel({
 				YTIMESY_DEV_ALLOW_ANY_MODEL: "1",
 				YTIMESY_ENVIRONMENT: "production",
 			}),
 		).toBe(false);
-		expect(devAllowsAnyModel({ YTIMESY_DEV_ALLOW_ANY_MODEL: "1" })).toBe(true);
+		expect(devAllowsAnyModel({ YTIMESY_DEV_ALLOW_ANY_MODEL: "1" })).toBe(false);
+		expect(
+			devAllowsAnyModel({
+				YTIMESY_DEV_ALLOW_ANY_MODEL: "1",
+				YTIMESY_ENVIRONMENT: "development",
+			}),
+		).toBe(true);
 		expect(devAllowsAnyModel({})).toBe(false);
 	});
 

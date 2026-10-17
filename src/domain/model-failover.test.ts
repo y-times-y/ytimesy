@@ -562,8 +562,11 @@ describe("stickiness", () => {
 });
 
 describe("forced development outage", () => {
-	it("applies only outside production, to the named connection, from its step", () => {
-		const env = { YTIMESY_DEV_FORCE_MODEL_OUTAGE: "codex@2" };
+	it("applies only in development, to the named connection, from its step", () => {
+		const env = {
+			YTIMESY_DEV_FORCE_MODEL_OUTAGE: "codex@2",
+			YTIMESY_ENVIRONMENT: "development",
+		};
 		expect(forcedDevelopmentOutage(env, "codex", 1)).toBe(false);
 		expect(forcedDevelopmentOutage(env, "codex", 2)).toBe(true);
 		expect(forcedDevelopmentOutage(env, OPENROUTER, 2)).toBe(false);
@@ -575,9 +578,20 @@ describe("forced development outage", () => {
 			),
 		).toBe(false);
 		expect(forcedDevelopmentOutage({}, "codex", 3)).toBe(false);
+		// Unset is not development.
 		expect(
 			forcedDevelopmentOutage(
-				{ YTIMESY_DEV_FORCE_MODEL_OUTAGE: OPENROUTER },
+				{ YTIMESY_DEV_FORCE_MODEL_OUTAGE: "codex@2" },
+				"codex",
+				3,
+			),
+		).toBe(false);
+		expect(
+			forcedDevelopmentOutage(
+				{
+					YTIMESY_DEV_FORCE_MODEL_OUTAGE: OPENROUTER,
+					YTIMESY_ENVIRONMENT: "development",
+				},
 				OPENROUTER,
 				1,
 			),
