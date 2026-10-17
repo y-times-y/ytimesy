@@ -15,6 +15,9 @@ import type { ApiModelSpeedId } from "#/domain/api-model-list";
 import { type ApiTokenUsage, addApiTokenUsage } from "#/domain/api-token-usage";
 import {
 	apiModelFailureClassification,
+	type ContextOverflow,
+	ContextWindowExhausted,
+	contextOverflow,
 	IncompleteAgentTurn,
 	InitialAgentReadFailure,
 	SafeApiModelFailure,
@@ -32,6 +35,11 @@ import {
 	toolFailureClass,
 	toolMetricCategory,
 } from "#/domain/harness-performance";
+import {
+	IMAGE_VIEWING_TOOLS,
+	NO_IMAGE_INPUT_INSTRUCTIONS,
+	withImagePlaceholders,
+} from "#/domain/image-placeholders";
 import { modelStepLimit } from "#/domain/model-workflow";
 import type { apiPromptCacheSettings } from "#/server/adapters/api-prompt-cache";
 import {
@@ -127,10 +135,12 @@ export async function runModelAgent(
 	runtime: ModelAgentRuntime,
 ): Promise<ModelMessage[]> {
 	let result = await executeWithStreamRetries(input, runtime);
-	// A progress note is not a final answer; keep sampling as native Codex does.
+	// A progress note is not a final answer, nor is an answer cut off at the
+	// output limit; keep sampling as native Codex does.
 	for (
 		let resumes = 0;
-		resumes < 3 && endsWithCommentary(result.messages);
+		resumes < 3 &&
+		(result.outcome === "continue" || endsWithCommentary(result.messages));
 		resumes++
 	)
 		result = await executeWithStreamRetries(
@@ -170,6 +180,9 @@ async function executeWithStreamRetries(
 	let reservedFor: ModelMessage[] | undefined;
 	let droppedStep = false;
 	let droppedStepSaved = false;
+	// A provider's context rejection is retried once per step, after compacting.
+	let overflowRetried = false;
+	let forceCompaction: ContextOverflow | undefined;
 	const tracked: ModelAgentInput = {
 		...input,
 		onEvent: async (event) => {
@@ -220,11 +233,34 @@ async function executeWithStreamRetries(
 				runtime,
 				singleStep,
 				(clean) => {
-					if (clean) stepFinished = true;
+					if (clean) {
+						stepFinished = true;
+						overflowRetried = false;
+					}
 					droppedStep = !clean;
 				},
+				forceCompaction,
 			);
 		} catch (error) {
+			forceCompaction = undefined;
+			const overflow = contextOverflow(error);
+			if (
+				overflow &&
+				!overflowRetried &&
+				!toolCallStarted &&
+				!input.signal.aborted
+			) {
+				// Compact below what the provider accepts, then sample the step again.
+				overflowRetried = true;
+				forceCompaction = overflow;
+				const retracted = [...uncommittedIds].filter(
+					(id) => !committedIds.has(id),
+				);
+				uncommittedIds = new Set();
+				if (retracted.length)
+					await input.onEvent({ type: "retract", ids: retracted });
+				continue;
+			}
 			if (
 				attempt >= STREAM_RETRIES ||
 				toolCallStarted ||
@@ -323,11 +359,81 @@ export function endsWithCommentary(messages: readonly ModelMessage[]) {
 	);
 }
 
+/** A text-only model is told so and is not offered tools that only return pixels. */
+function withoutImageViewing(input: ModelAgentInput): ModelAgentInput {
+	const hidden = new Set<string>(IMAGE_VIEWING_TOOLS);
+	return {
+		...input,
+		tools: Object.fromEntries(
+			Object.entries(input.tools).filter(([name]) => !hidden.has(name)),
+		),
+		instructions: `${input.instructions}\n${NO_IMAGE_INPUT_INSTRUCTIONS}`,
+	};
+}
+
+export const OUTPUT_LIMIT_CONTINUE_NOTE =
+	"Your previous response was cut off at the output length limit. Continue exactly where it stopped, without repeating what you already wrote. This is a runtime notice, not a new user request.";
+
+/** The last assistant message is text without tool calls: an answer the length limit cut off. */
+function truncatedAnswer(messages: readonly ModelMessage[]) {
+	const last = messages.at(-1);
+	if (last?.role !== "assistant") return false;
+	if (typeof last.content === "string") return Boolean(last.content.trim());
+	return (
+		!last.content.some((part) => part.type === "tool-call") &&
+		last.content.some((part) => part.type === "text" && part.text.trim())
+	);
+}
+
+/** The cut-off answer was itself the continuation of an earlier cut-off one. */
+function continuedAfterTruncation(messages: readonly ModelMessage[]) {
+	const previous = messages.at(-2);
+	return (
+		previous?.role === "user" && previous.content === OUTPUT_LIMIT_CONTINUE_NOTE
+	);
+}
+
+function exhaustedContext(step: {
+	finishReason: string;
+	text: string;
+	toolCalls: readonly unknown[];
+}) {
+	return (
+		step.finishReason === "length" &&
+		!step.toolCalls.length &&
+		!step.text.trim()
+	);
+}
+
+/**
+ * After a provider rejected the context, compact well below what it accepts:
+ * 60% of its reported limit, or of this budget's input limit when it reported
+ * none (the byte estimate undercounts some tokenizers).
+ */
+export function overflowCompactionBudget(
+	budget: ReturnType<typeof modelContextBudget>,
+	overflow: ContextOverflow,
+): ReturnType<typeof modelContextBudget> {
+	const inputLimitTokens = Math.min(
+		budget.inputLimitTokens,
+		overflow.limitTokens ?? Number.POSITIVE_INFINITY,
+	);
+	return {
+		inputLimitTokens,
+		compactAtTokens: Math.max(
+			512,
+			Math.min(budget.compactAtTokens, Math.floor(inputLimitTokens * 0.6)),
+		),
+	};
+}
+
 export type ModelAgentRuntime = {
 	model: LanguageModel;
 	cacheSettings?: ReturnType<typeof apiPromptCacheSettings>;
 	maxOutputTokens?: number;
 	contextWindow?: number;
+	/** False when the model cannot read images: they become placeholders and image tools are hidden. */
+	imageInput?: boolean;
 	autoCompactTokenLimit?: number;
 	/** Optional operating budget; distinct from the provider's hard context window. */
 	workingContextTokens?: number;
@@ -365,11 +471,14 @@ async function executeModelSteps(
 	runtime: ModelAgentRuntime,
 	singleStep: boolean,
 	onStepFinished?: (clean: boolean) => void,
+	/** The previous attempt overflowed the context: compact before the first step. */
+	forceCompaction?: ContextOverflow,
 ): Promise<ModelAgentStepResult> {
 	const modelFamily = harnessModelFamily(
 		typeof runtime.model === "string" ? "registry" : runtime.model.provider,
 		input.modelId,
 	);
+	if (runtime.imageInput === false) input = withoutImageViewing(input);
 	input = {
 		...input,
 		tools: isShellSurface(Object.keys(input.tools))
@@ -430,7 +539,10 @@ async function executeModelSteps(
 		runtime.requestSettings ??
 		((instructions: string) => ({ system: instructions }));
 	let history = input.messages;
+	let pendingCompaction = forceCompaction;
+	// A rejected request proved the last measurement wrong; estimate afresh.
 	let measured =
+		!forceCompaction &&
 		input.previousContext &&
 		input.previousContext.modelContextWindow === runtime.contextWindow
 			? {
@@ -616,7 +728,11 @@ async function executeModelSteps(
 				}
 				history = (await input.prepareMessages?.(history)) ?? history;
 				const estimatedHistory = estimateContextTokens(history);
-				const budget = contextBudget(history);
+				const forced = pendingCompaction;
+				pendingCompaction = undefined;
+				const budget = forced
+					? overflowCompactionBudget(contextBudget(history), forced)
+					: contextBudget(history);
 				const contextTokens = contextTokenPressure(history, measured);
 				const compact = async (older: ModelMessage[]) => {
 					await input.onEvent({ type: "context", compacting: true });
@@ -650,7 +766,7 @@ async function executeModelSteps(
 					}
 				};
 				let prepared: { messages: ModelMessage[]; compacted: boolean };
-				if (contextTokens < budget.compactAtTokens) {
+				if (!forced && contextTokens < budget.compactAtTokens) {
 					prepared = { messages: history, compacted: false };
 				} else if (runtime.compact) {
 					if (contextTokens > budget.inputLimitTokens)
@@ -733,7 +849,12 @@ async function executeModelSteps(
 					];
 				await input.beforeStep?.(history);
 				runSignal.throwIfAborted();
-				return { messages: history };
+				return {
+					messages:
+						runtime.imageInput === false
+							? withImagePlaceholders(history)
+							: history,
+				};
 			},
 			// SDK retries only retryable request-start failures (with backoff, like
 			// native Codex's request retries). Never replay a stream after output/tool execution.
@@ -836,8 +957,12 @@ async function executeModelSteps(
 				}
 			},
 			onStepFinish: async (step) => {
-				// The SDK also finishes a step whose stream failed; only a clean one counts.
-				onStepFinished?.(step.finishReason !== "error");
+				// The SDK also finishes a step whose stream failed; only a clean one
+				// counts. A step cut off at the length limit before any output is
+				// resampled after compaction, so it does not count either.
+				onStepFinished?.(
+					step.finishReason !== "error" && !exhaustedContext(step),
+				);
 				await recordUsage(step.usage);
 				if (
 					runtime.contextWindow &&
@@ -985,6 +1110,18 @@ async function executeModelSteps(
 				(reason === "stop" && endsWithCommentary(history)))
 		)
 			return { messages: history, outcome: "continue" };
+		if (reason === "length" && !ended) {
+			if (!truncatedAnswer(history)) throw new ContextWindowExhausted();
+			// An answer cut off at the output limit continues once from where it stopped.
+			if (continuedAfterTruncation(history))
+				throw new IncompleteAgentTurn(reason);
+			history = [
+				...history,
+				{ role: "user", content: OUTPUT_LIMIT_CONTINUE_NOTE },
+			];
+			await input.onStep(history);
+			return { messages: history, outcome: "continue" };
+		}
 		if (reason !== "stop") throw new IncompleteAgentTurn(reason);
 		await input.onEvent({
 			type: "finish",

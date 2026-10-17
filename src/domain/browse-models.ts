@@ -6,6 +6,8 @@ export type BrowseModel = {
 	author: string;
 	created: number;
 	contextWindow?: number;
+	/** The catalog lists its input modalities; false when images are not among them. */
+	imageInput?: boolean;
 };
 export const AUTHOR_LABELS: Record<string, string> = {
 	anthropic: "Anthropic",
@@ -112,7 +114,16 @@ export function parseBrowseModels(value: unknown): BrowseModel[] {
 			model.context_length > 0
 				? { contextWindow: model.context_length }
 				: {}),
+			...imageInputField(model.architecture),
 		});
 	}
 	return [...models.values()];
+}
+
+function imageInputField(architecture: unknown): { imageInput?: boolean } {
+	const modalities = (architecture as { input_modalities?: unknown } | null)
+		?.input_modalities;
+	return Array.isArray(modalities)
+		? { imageInput: modalities.includes("image") }
+		: {};
 }

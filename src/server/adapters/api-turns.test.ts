@@ -184,7 +184,23 @@ it("does not queue when subscription credentials were revoked", async () => {
 	);
 });
 
-it("only continues completed compatible tool history", async () => {
+it("continues saved tool history however the last turn ended", async () => {
+	const call = {
+		role: "assistant" as const,
+		content: [
+			{
+				type: "reasoning" as const,
+				text: "",
+				providerOptions: { openai: { encryptedContent: "sealed" } },
+			},
+			{
+				type: "tool-call" as const,
+				toolCallId: "call-1",
+				toolName: "execute_command",
+				input: { command: "pnpm test" },
+			},
+		],
+	};
 	const previous = {
 		state: "completed",
 		model_id: "model",
@@ -195,10 +211,62 @@ it("only continues completed compatible tool history", async () => {
 	expect(
 		await previousTurnMessages("owner", "chat", "model", input.revision),
 	).toEqual(previous.messages);
+	// A stopped turn keeps its native history; its unanswered call gets a stand-in.
+	mocks.query.mockResolvedValue({
+		rows: [
+			{
+				...previous,
+				state: "cancelled",
+				messages: [...previous.messages, call],
+			},
+		],
+	});
+	const stopped = await previousTurnMessages(
+		"owner",
+		"chat",
+		"model",
+		input.revision,
+	);
+	expect(stopped?.slice(0, 2)).toEqual([...previous.messages, call]);
+	expect(stopped?.[2]).toMatchObject({
+		role: "tool",
+		content: [
+			{
+				toolCallId: "call-1",
+				output: {
+					type: "error-text",
+					value: expect.stringContaining("stopped"),
+				},
+			},
+		],
+	});
+	// Another model reads it provider-neutral: no reasoning, the call kept.
+	mocks.query.mockResolvedValue({
+		rows: [
+			{ ...previous, state: "failed", messages: [...previous.messages, call] },
+		],
+	});
+	const switched = await previousTurnMessages(
+		"owner",
+		"chat",
+		"other",
+		input.revision,
+	);
+	expect(JSON.stringify(switched)).not.toContain("sealed");
+	expect(switched?.[1]).toMatchObject({
+		role: "assistant",
+		content: [{ type: "tool-call", toolCallId: "call-1" }],
+	});
+	expect(switched?.[2]).toMatchObject({
+		role: "tool",
+		content: [{ output: { value: expect.stringContaining("interrupted") } }],
+	});
+	// Nothing saved, or a turn still in flight: rebuild from the transcript.
+	mocks.query.mockResolvedValue({ rows: [] });
 	expect(
-		await previousTurnMessages("owner", "chat", "other", input.revision),
+		await previousTurnMessages("owner", "chat", "model", input.revision),
 	).toBeNull();
-	mocks.query.mockResolvedValue({ rows: [{ ...previous, state: "failed" }] });
+	mocks.query.mockResolvedValue({ rows: [{ ...previous, state: "running" }] });
 	expect(
 		await previousTurnMessages("owner", "chat", "model", input.revision),
 	).toBeNull();

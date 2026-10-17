@@ -7,7 +7,7 @@ import {
 	apiTurnSettings,
 } from "#/domain/api-turn-settings";
 import type { TurnFailover } from "#/domain/model-failover";
-import { providerNeutralHistory } from "#/domain/runtime-handoff";
+import { continuedTurnHistory } from "#/domain/runtime-handoff";
 import type { SessionItem } from "#/domain/session-item";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
 import {
@@ -224,36 +224,54 @@ export async function enqueueApiTurn(input: {
 	}
 }
 
-/** Resume the actual tool conversation only when transport and model remain compatible. */
+/**
+ * The structured history the next turn continues from: the restored point,
+ * else the latest settled turn's saved messages however it ended. Null only
+ * when nothing was saved (the caller rebuilds visible text instead).
+ */
 export async function previousTurnMessages(
 	userId: string,
 	sessionId: string,
 	modelId: string,
 	revision: string,
 ) {
-	const recovered = await recoveredConversation(
-		userId,
-		sessionId,
-		modelId,
-		revision,
-	);
-	if (recovered !== null) return recovered.messages;
+	const next = { modelId, connectionRevision: revision };
+	const recovered = await recoveredConversation(userId, sessionId);
+	if (recovered !== null)
+		return continuedTurnHistory(
+			{
+				messages: recovered.messages,
+				modelId: recovered.modelId,
+				connectionRevision: recovered.revision,
+				state: "completed",
+				failedOver: false,
+			},
+			next,
+		);
 	const result = await database().query<ApiTurn>(
 		"select * from api_turn where user_id=$1 and session_id=$2 order by created_at desc limit 1",
 		[userId, sessionId],
 	);
 	const previous = result.rows[0];
 	if (
-		previous?.state !== "completed" ||
-		previous.model_id !== modelId ||
-		previous.connection_revision !== revision
+		!previous ||
+		previous.state === "queued" ||
+		previous.state === "running" ||
+		!Array.isArray(previous.messages) ||
+		!previous.messages.length
 	)
 		return null;
-	// A turn that failed over ended on another provider; its native items
-	// (encrypted reasoning, signatures) must not reach the chosen one.
-	return previous.failover
-		? providerNeutralHistory(previous.messages)
-		: previous.messages;
+	return continuedTurnHistory(
+		{
+			messages: previous.messages,
+			modelId: previous.model_id,
+			connectionRevision: previous.connection_revision,
+			state: previous.state,
+			// Its native items (encrypted reasoning, signatures) came from the fallback.
+			failedOver: Boolean(previous.failover),
+		},
+		next,
+	);
 }
 
 /**

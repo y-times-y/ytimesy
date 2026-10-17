@@ -6,6 +6,8 @@ import {
 	apiTurnFailureClassification,
 	apiTurnFailureMessage,
 	CodexReconnectRequired,
+	ContextWindowExhausted,
+	contextOverflow,
 	MachineUsageLimitReached,
 	SafeApiModelFailure,
 	SubscriptionMetadataFailure,
@@ -324,4 +326,97 @@ it("says the repository could not be fetched when a Git proxy transfer fails", (
 		expect(message).toContain("could not fetch its repository from GitHub");
 		expect(message).not.toContain("model request failed");
 	}
+});
+
+function rejected(message: string, data?: unknown, statusCode = 400) {
+	return new APICallError({
+		message,
+		url: "https://provider.invalid/v1",
+		requestBodyValues: {},
+		statusCode,
+		responseBody: data ? JSON.stringify(data) : undefined,
+		data,
+		isRetryable: false,
+	});
+}
+
+it("recognizes each provider's context overflow and the sizes it reports", () => {
+	expect(
+		contextOverflow(
+			rejected(
+				"This model's maximum context length is 128000 tokens. However, your messages resulted in 130532 tokens.",
+				{ error: { code: "context_length_exceeded" } },
+			),
+		),
+	).toEqual({ limitTokens: 128000, requestedTokens: 130532 });
+	// OpenAI Responses and the Codex backend name only the code.
+	expect(
+		contextOverflow(
+			rejected("Your input exceeds the context window of this model.", {
+				error: { code: "context_length_exceeded" },
+			}),
+		),
+	).toEqual({});
+	expect(
+		contextOverflow(
+			rejected("prompt is too long: 215000 tokens > 200000 maximum"),
+		),
+	).toEqual({ limitTokens: 200000, requestedTokens: 215000 });
+	expect(
+		contextOverflow(
+			rejected(
+				"input length and `max_tokens` exceed context limit: 198000 + 8192 > 200000, decrease input length or `max_tokens` and try again",
+			),
+		),
+	).toEqual({ limitTokens: 191808, requestedTokens: 198000 });
+	expect(
+		contextOverflow(
+			rejected(
+				"The input token count (1200000) exceeds the maximum number of tokens allowed (1048576).",
+			),
+		),
+	).toEqual({ limitTokens: 1048576, requestedTokens: 1200000 });
+	expect(
+		contextOverflow(
+			rejected(
+				"This endpoint's maximum context length is 131072 tokens. However, you requested about 140000 tokens (132000 of text input, 8000 in the output).",
+			),
+		),
+	).toEqual({ limitTokens: 131072, requestedTokens: 140000 });
+	expect(
+		contextOverflow(
+			rejected(
+				"This model's maximum prompt length is 131072 but the request contains 140000 tokens.",
+			),
+		),
+	).toEqual({ limitTokens: 131072, requestedTokens: 140000 });
+	// A streamed error part, wrapped the way the model loop wraps it.
+	expect(
+		contextOverflow(
+			new SafeApiModelFailure({
+				type: "error",
+				error: {
+					type: "invalid_request_error",
+					message: "prompt is too long: 300000 tokens > 200000 maximum",
+				},
+			}),
+		),
+	).toEqual({ limitTokens: 200000, requestedTokens: 300000 });
+	expect(contextOverflow(new ContextWindowExhausted())).toEqual({});
+});
+
+it("does not mistake other rejections for a context overflow", () => {
+	for (const error of [
+		rejected(
+			"Rate limit reached",
+			{ error: { code: "rate_limit_exceeded" } },
+			429,
+		),
+		rejected(
+			"max_tokens: 64000 > 32000, which is the maximum allowed number of output tokens for this model",
+		),
+		rejected("Invalid API key", { error: { code: "invalid_api_key" } }, 401),
+		new Error("fetch failed"),
+	])
+		expect(contextOverflow(error)).toBeNull();
 });

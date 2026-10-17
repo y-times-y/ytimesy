@@ -18,7 +18,10 @@ import {
 } from "#/domain/agent-task-tool";
 import { runtimeHandoffPrompt } from "#/domain/api-conversation";
 import { WorkspaceId } from "#/domain/ids";
-import type { IncomingAttachment } from "#/domain/message-attachment";
+import type {
+	IncomingAttachment,
+	MessageAttachment,
+} from "#/domain/message-attachment";
 import { publicFailureMessage } from "#/domain/project-workspace";
 import {
 	lastAgentMessageText,
@@ -212,6 +215,8 @@ export function sendHarnessWorkspaceTask(
 		readonly idempotencyKey?: string;
 		readonly approvesPlan?: boolean;
 		readonly attachments?: readonly IncomingAttachment[];
+		/** Files a queued message already put in private storage. */
+		readonly storedAttachments?: readonly MessageAttachment[];
 		/** Continue this turn on a fallback route the user approved (`<connection>|<model>`). */
 		readonly continueOn?: string;
 	},
