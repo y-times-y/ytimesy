@@ -1,0 +1,6 @@
+{
+  "slug": "utils.textfmt:slugify",
+  "wrap": "utils.textfmt:wrap",
+  "quote": "utils.textfmt:indent_block",
+  "date": "utils.dates:human_date"
+}
