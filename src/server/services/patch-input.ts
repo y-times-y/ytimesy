@@ -11,6 +11,34 @@ export const PATCH_INPUT_HELP = `Accepted apply_patch inputs (use one):
 4. {"path": "notes.txt", "content": "complete new file text\\n"}
 Paths are repository-relative. Context lines must match the current file; include enough to identify one location.`;
 
+/**
+ * Codex's apply_patch grammar (openai/codex codex-rs/core/assets/tools/apply_patch.lark),
+ * sent verbatim with the freeform tool so GPT models emit the envelope they are trained on.
+ */
+export const APPLY_PATCH_LARK_GRAMMAR = `start: begin_patch hunk+ end_patch
+begin_patch: "*** Begin Patch" LF
+end_patch: "*** End Patch" LF?
+
+hunk: add_hunk | delete_hunk | update_hunk
+add_hunk: "*** Add File: " filename LF add_line+
+delete_hunk: "*** Delete File: " filename LF
+update_hunk: "*** Update File: " filename LF change_move? change?
+
+filename: /(.+)/
+add_line: "+" /(.*)/ LF -> line
+
+change_move: "*** Move to: " filename LF
+change: (change_context | change_line)+ eof_line?
+change_context: ("@@" | "@@ " /(.+)/) LF
+change_line: ("+" | "-" | " ") /(.*)/ LF
+eof_line: "*** End of File" LF
+
+%import common.LF
+`;
+
+export const FREEFORM_PATCH_HELP =
+	"apply_patch takes the raw patch text (not JSON): *** Begin Patch, then *** Add File: / *** Update File: / *** Delete File: sections with repository-relative paths, then *** End Patch. Context lines must match the current file.";
+
 type HunkLine = { op: " " | "-" | "+"; text: string };
 export type Hunk = {
 	oldStart?: number;

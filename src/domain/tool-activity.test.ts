@@ -121,3 +121,16 @@ it("describes provider-hosted web searches and page opens", () => {
 		),
 	).toMatchObject({ verb: "Searched the web", note: "2 sources" });
 });
+
+it("describes a freeform apply_patch whose input is raw patch text", () => {
+	expect(
+		toolActivity({
+			id: "1",
+			kind: "dynamicToolCall",
+			tool: "apply_patch",
+			status: "completed",
+			input:
+				"*** Begin Patch\n*** Add File: src/new.ts\n+export const a = 1;\n+export const b = 2;\n*** End Patch",
+		} as DynamicToolCallItem),
+	).toMatchObject({ verb: "Created", target: "new.ts", added: 2, removed: 0 });
+});

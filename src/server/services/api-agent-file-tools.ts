@@ -19,8 +19,10 @@ import {
 } from "./language-intelligence";
 import { prepareRenameWrites, renameSources } from "./language-refactor";
 import {
+	APPLY_PATCH_LARK_GRAMMAR,
 	applyPatchEdits,
 	createsFromEmpty,
+	FREEFORM_PATCH_HELP,
 	PATCH_INPUT_HELP,
 	type PatchFileChange,
 	PatchInputError,
@@ -342,6 +344,11 @@ export function apiAgentFileTools(
 	input: AgentToolWorkspaceInput & {
 		readOnly: boolean;
 		nativePatch?: boolean;
+		/**
+		 * Codex's own apply_patch shape for GPT models on a Responses route: a
+		 * freeform (custom) tool constrained by its Lark grammar, not JSON.
+		 */
+		freeformPatch?: boolean;
 		output?: ReturnType<typeof agentOutputArtifacts>;
 		signal: AbortSignal;
 		once: (id: string, run: () => Promise<unknown>) => Promise<unknown>;
@@ -836,60 +843,84 @@ export function apiAgentFileTools(
 				};
 			}),
 	});
-	tools.apply_patch = input.nativePatch
-		? openai.tools.applyPatch({
-				execute: async ({ operation }, options) => {
-					try {
-						return {
-							status: "completed" as const,
-							output: JSON.stringify(
-								await once(options.toolCallId, () => applyPatch(operation)),
-							),
-						};
-					} catch (error) {
-						return {
-							status: "failed" as const,
-							output: publicToolDetail(
+	tools.apply_patch = input.freeformPatch
+		? openai.tools.customTool({
+				description:
+					"The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the patch in JSON.",
+				format: {
+					type: "grammar",
+					syntax: "lark",
+					definition: APPLY_PATCH_LARK_GRAMMAR,
+				},
+				execute: (patch: string, options) =>
+					once(options.toolCallId, async () => {
+						try {
+							return await applyFileChanges(parsePatchText(patch));
+						} catch (error) {
+							const message =
 								error instanceof Error
 									? error.message
-									: "Patch failed; inspect the file before retrying.",
-							),
-						};
-					}
-				},
+									: "The patch could not be applied.";
+							throw new Error(
+								`${message}${error instanceof PatchInputError ? " No files were changed." : ""}\n\n${FREEFORM_PATCH_HELP}`,
+							);
+						}
+					}),
 			})
-		: tool({
-				description:
-					"Edit files. Pass one of: patch (a unified/git diff, a '*** Begin Patch' envelope with Add/Update/Delete File sections, or SEARCH/REPLACE blocks with path); path plus content to write a whole file; or operation (one V4A create_file/update_file/delete_file). Multi-file patches apply in order. Reads latest content; context may drift in line numbers or whitespace but must match exactly one place. Rejects stale edits, escapes and symlinks.",
-				inputSchema: z.object({
-					operation: z
-						.union([patchOperation, z.string().max(200_000)])
-						.optional()
-						.describe("One V4A operation object."),
-					patch: z
-						.string()
-						.max(200_000)
-						.optional()
-						.describe(
-							"Patch text: unified diff, *** Begin Patch envelope, or SEARCH/REPLACE blocks.",
-						),
-					path: z
-						.string()
-						.min(1)
-						.max(2048)
-						.optional()
-						.describe(
-							"Target file for content, or for SEARCH/REPLACE blocks and hunks without file headers.",
-						),
-					content: z
-						.string()
-						.max(1_000_000)
-						.optional()
-						.describe("Complete new file content, written to path."),
-				}),
-				execute: (args, options) =>
-					once(options.toolCallId, () => applyFlexiblePatch(args)),
-			});
+		: input.nativePatch
+			? openai.tools.applyPatch({
+					execute: async ({ operation }, options) => {
+						try {
+							return {
+								status: "completed" as const,
+								output: JSON.stringify(
+									await once(options.toolCallId, () => applyPatch(operation)),
+								),
+							};
+						} catch (error) {
+							return {
+								status: "failed" as const,
+								output: publicToolDetail(
+									error instanceof Error
+										? error.message
+										: "Patch failed; inspect the file before retrying.",
+								),
+							};
+						}
+					},
+				})
+			: tool({
+					description:
+						"Edit files. Pass one of: patch (a unified/git diff, a '*** Begin Patch' envelope with Add/Update/Delete File sections, or SEARCH/REPLACE blocks with path); path plus content to write a whole file; or operation (one V4A create_file/update_file/delete_file). Multi-file patches apply in order. Reads latest content; context may drift in line numbers or whitespace but must match exactly one place. Rejects stale edits, escapes and symlinks.",
+					inputSchema: z.object({
+						operation: z
+							.union([patchOperation, z.string().max(200_000)])
+							.optional()
+							.describe("One V4A operation object."),
+						patch: z
+							.string()
+							.max(200_000)
+							.optional()
+							.describe(
+								"Patch text: unified diff, *** Begin Patch envelope, or SEARCH/REPLACE blocks.",
+							),
+						path: z
+							.string()
+							.min(1)
+							.max(2048)
+							.optional()
+							.describe(
+								"Target file for content, or for SEARCH/REPLACE blocks and hunks without file headers.",
+							),
+						content: z
+							.string()
+							.max(1_000_000)
+							.optional()
+							.describe("Complete new file content, written to path."),
+					}),
+					execute: (args, options) =>
+						once(options.toolCallId, () => applyFlexiblePatch(args)),
+				});
 	async function applyFlexiblePatch(args: {
 		operation?: z.infer<typeof patchOperation> | string;
 		patch?: string;
