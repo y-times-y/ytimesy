@@ -69,29 +69,6 @@ const schema = (name: string, fields: Record<string, string>) =>
 const PACKAGE_JSON = (dependencies: Record<string, string> = {}) =>
 	`${JSON.stringify({ name: "fixture", version: "1.0.0", type: "module", dependencies }, null, 2)}\n`;
 
-/** Report scripts that only run with REPORT_ENV=ci; every run is logged. */
-const REPORT_FIXTURE: Record<string, string> = {
-	"README.md": "Sales reports.\n",
-	"data/orders.csv": "customer,price,qty\nann,2.5,2\nbob,1,3\nann,4,1\n",
-	"out/.gitkeep": "",
-	"lib/__init__.py": "",
-	"lib/runtime.py": py([
-		"import csv",
-		"import os",
-		"import sys",
-		"",
-		"",
-		"def load_orders():",
-		"    mode = os.environ.get('REPORT_ENV', 'local')",
-		"    with open('.runs.log', 'a') as log:",
-		"        log.write(f'env={mode}\\n')",
-		"    if mode != 'ci':",
-		"        sys.exit('error: cannot reach the reporting database from this machine')",
-		"    with open('data/orders.csv', newline='') as handle:",
-		"        return list(csv.DictReader(handle))",
-	]),
-};
-
 const ISO_CHECK = String.raw`^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$`;
 
 export const SCENARIOS: Scenario[] = [
@@ -529,79 +506,6 @@ export const SCENARIOS: Scenario[] = [
 		},
 	},
 	{
-		id: "inferred-gotcha",
-		rule: "Report scripts must run with REPORT_ENV=ci; without it they fail trying to reach the reporting database.",
-		// No rule wording anywhere: chat 1's task fails until the agent finds
-		// REPORT_ENV=ci in lib/runtime.py. Every run is logged to .runs.log, so
-		// the final chat passes only if it never ran a script without it.
-		chat1: {
-			prompt:
-				"Add a total column (price * qty) to out/report.csv: update scripts/build_report.py and regenerate out/report.csv by running it.",
-			files: {
-				...REPORT_FIXTURE,
-				"scripts/build_report.py": py([
-					"import csv",
-					"import sys",
-					"",
-					"sys.path.insert(0, '.')",
-					"from lib.runtime import load_orders",
-					"",
-					"rows = load_orders()",
-					"with open('out/report.csv', 'w', newline='') as handle:",
-					"    writer = csv.writer(handle)",
-					"    writer.writerow(['customer', 'price', 'qty'])",
-					"    for row in rows:",
-					"        writer.writerow([row['customer'], row['price'], row['qty']])",
-				]),
-			},
-		},
-		chat2: {
-			prompt:
-				"Add an orders column (number of orders per customer) to out/summary.csv: update scripts/build_summary.py and regenerate out/summary.csv by running it.",
-			files: {
-				...REPORT_FIXTURE,
-				"scripts/build_summary.py": py([
-					"import csv",
-					"import sys",
-					"from collections import defaultdict",
-					"",
-					"sys.path.insert(0, '.')",
-					"from lib.runtime import load_orders",
-					"",
-					"spent = defaultdict(float)",
-					"for row in load_orders():",
-					"    spent[row['customer']] += float(row['price']) * int(row['qty'])",
-					"with open('out/summary.csv', 'w', newline='') as handle:",
-					"    writer = csv.writer(handle)",
-					"    writer.writerow(['customer', 'spent'])",
-					"    for customer in sorted(spent):",
-					"        writer.writerow([customer, spent[customer]])",
-				]),
-			},
-		},
-		verify: [
-			"test -f .runs.log || { echo 'the script was never run'; exit 1; }",
-			"! grep -q 'env=local' .runs.log || { echo 'ran without REPORT_ENV=ci first: rediscovered the gotcha'; exit 1; }",
-			"python3 - <<'PY'",
-			"import csv",
-			"rows = {row['customer']: row for row in csv.DictReader(open('out/summary.csv'))}",
-			"assert rows['ann']['orders'] == '2' and rows['bob']['orders'] == '1', rows",
-			"PY",
-		].join("\n"),
-		leaks: /REPORT_ENV|database|\bci\b/i,
-		leakCheck: "prompt",
-		solutions: {
-			follows: {
-				".runs.log": "env=ci\n",
-				"out/summary.csv": "customer,spent,orders\nann,9.0,2\nbob,3.0,1\n",
-			},
-			breaks: {
-				".runs.log": "env=local\nenv=ci\n",
-				"out/summary.csv": "customer,spent,orders\nann,9.0,2\nbob,3.0,1\n",
-			},
-		},
-	},
-	{
 		id: "expired-rule",
 		rule: 'New Python modules start with "# owner: platform-team"; the FREEZE banner rule expired on 2026-10-01.',
 		// Memory holds a live rule and an expired one. Applying the live rule
@@ -820,7 +724,6 @@ export const RULE_FILES: Record<string, string> = {
 	"api-error-shape": "api.md",
 	"logging-not-print": "logging.md",
 	"pnpm-not-npm": "tooling.md",
-	"inferred-gotcha": "reports.md",
 	"expired-rule": "MEMORY.md",
 	"changed-decision": "tooling.md",
 	"indirect-wording": "api.md",
