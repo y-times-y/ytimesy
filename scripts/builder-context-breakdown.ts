@@ -25,7 +25,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { ModelMessage, ToolSet } from "ai";
-import type { ToolSurfaceVariant } from "#/domain/harness-model-profile";
+import type { HarnessToolSurfaceId } from "#/domain/harness-variant";
 import { WorkspaceId } from "#/domain/ids";
 import type { AgentSessionRecord } from "#/server/adapters/agent-sessions";
 import { connectedLanguageModel } from "#/server/adapters/api-model";
@@ -72,7 +72,7 @@ const modelFor = (transport: Transport) =>
 /** The root builder's tools, instructions and message preparation, assembled as api-turn.ts does. */
 async function builderTurnRequest(input: {
 	transport: Transport;
-	surface: ToolSurfaceVariant;
+	surface: HarnessToolSurfaceId;
 	repo: string;
 	prompt: string;
 	exec: (
@@ -115,26 +115,19 @@ async function builderTurnRequest(input: {
 		onEvent: async () => {},
 	});
 	const modelId = modelFor(input.transport);
-	const surface =
-		input.surface === "current"
-			? builderToolSurface({
-					variant: "current",
-					modelId,
-					tools: repositoryContext.tools,
-				})
-			: builderToolSurface({
-					variant: input.surface,
-					modelId,
-					tools: repositoryContext.tools,
-					lean: {
-						workspace,
-						sessionId: session.id,
-						turnId: "fixture-turn",
-						signal,
-						// Never install helper commands on this machine.
-						installHelpers: async () => {},
-					},
-				});
+	const surface = builderToolSurface({
+		variant: input.surface,
+		modelId,
+		tools: repositoryContext.tools,
+		lean: {
+			workspace,
+			sessionId: session.id,
+			turnId: "fixture-turn",
+			signal,
+			// Never install helper commands on this machine.
+			installHelpers: async () => {},
+		},
+	});
 	const tools: ToolSet = {
 		...surface.tools,
 		...planTools(new PlanLock({ kind: "none" })),
@@ -226,7 +219,7 @@ async function firstRequest(
 	transport: Transport,
 	repo: string,
 	report: string,
-	surface: ToolSurfaceVariant = "current",
+	surface: HarnessToolSurfaceId = "current",
 ) {
 	let body: Body | undefined;
 	const capture: typeof fetch = async (_url, init) => {

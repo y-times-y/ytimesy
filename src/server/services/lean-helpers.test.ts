@@ -264,7 +264,7 @@ describe("conversation history files", () => {
 			long,
 			async () => "Earlier work summarized.",
 			undefined,
-			async () => path,
+			async () => ({ file: path }),
 		);
 		const summary = JSON.stringify(result.messages);
 		expect(summary).toContain(`saved in ${path}`);

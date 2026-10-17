@@ -159,3 +159,41 @@ describe("SEARCH/REPLACE application", () => {
 		).toBe("a\nc");
 	});
 });
+
+describe("absolute paths inside the repository", () => {
+	const root = "/home/ubuntu/repo";
+	it("are made relative in envelopes and unified diffs", () => {
+		const envelope = parsePatchText(
+			"*** Begin Patch\n*** Update File: /home/ubuntu/repo/src/a.py\n*** Move to: /home/ubuntu/repo/src/b.py\n@@\n-x\n+y\n*** Add File: c.py\n+z\n*** End Patch",
+			undefined,
+			root,
+		);
+		expect(envelope.map((change) => change.path)).toEqual(["src/a.py", "c.py"]);
+		expect(envelope[0]).toMatchObject({ moveTo: "src/b.py" });
+		const unified = parsePatchText(
+			"--- /home/ubuntu/repo/src/a.py\n+++ /home/ubuntu/repo/src/a.py\n@@ -1 +1 @@\n-x\n+y\n",
+			undefined,
+			root,
+		);
+		expect(unified.map((change) => change.path)).toEqual(["src/a.py"]);
+		const git = parsePatchText(
+			"--- a//home/ubuntu/repo/src/a.py\n+++ b//home/ubuntu/repo/src/a.py\n@@ -1 +1 @@\n-x\n+y\n",
+			undefined,
+			root,
+		);
+		expect(git.map((change) => change.path)).toEqual(["src/a.py"]);
+	});
+	it("are refused outside the repository, or without a root", () => {
+		for (const path of [
+			"/etc/passwd",
+			"/home/ubuntu/repo",
+			"/home/ubuntu/repository/a.py",
+		])
+			expect(() =>
+				parsePatchText(`*** Add File: ${path}\n+x`, undefined, root),
+			).toThrow(PatchInputError);
+		expect(() =>
+			parsePatchText("*** Add File: /home/ubuntu/repo/a.py\n+x"),
+		).toThrow(PatchInputError);
+	});
+});

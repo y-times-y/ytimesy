@@ -1,9 +1,10 @@
 import type { ModelMessage, ToolSet } from "ai";
 import {
+	LEAN_SHAPE_TOOLS,
 	type LeanToolShape,
 	leanToolShape,
-	type ToolSurfaceVariant,
 } from "#/domain/harness-model-profile";
+import type { HarnessToolSurfaceId } from "#/domain/harness-variant";
 import { writeLeanHistory } from "./lean-helpers";
 import { type LeanSurfaceContext, leanShapeTools } from "./lean-tools";
 
@@ -48,8 +49,11 @@ export type LeanBuilderSurface = {
 	commandReader: string;
 	/** The completion gate's hint for commands still running. */
 	waitHint: (ids: readonly string[]) => string;
-	/** After compaction: writes the archived messages to ~/.ytimesy/history/ and returns the path to cite. */
-	saveHistory: (reference: string, messages: ModelMessage[]) => Promise<string>;
+	/** After compaction: writes the archived messages to ~/.ytimesy/history/ and returns the path to cite, or null if it could not. */
+	saveHistory: (
+		reference: string,
+		messages: ModelMessage[],
+	) => Promise<string | null>;
 };
 
 /**
@@ -61,27 +65,18 @@ export type LeanBuilderSurface = {
  * (MCP, web search, plugin skills, plan and secret tools are added by the
  * caller as before), and move the helpers to workspace commands.
  */
-export function builderToolSurface(
-	input:
-		| { variant: "current"; modelId: string; tools: ToolSet }
-		| {
-				variant: Exclude<ToolSurfaceVariant, "current">;
-				modelId: string;
-				tools: ToolSet;
-				lean: LeanSurfaceContext;
-		  },
-): { tools: ToolSet; lean?: LeanBuilderSurface } {
+export function builderToolSurface(input: {
+	variant: HarnessToolSurfaceId;
+	modelId: string;
+	tools: ToolSet;
+	/** Used by the lean variants only. */
+	lean: LeanSurfaceContext;
+}): { tools: ToolSet; lean?: LeanBuilderSurface } {
 	if (input.variant === "current")
 		return { tools: builderShellTools(input.tools) };
 	const shape = leanToolShape(input.variant, input.modelId);
 	const { tools, engine } = leanShapeTools(shape, input.tools, input.lean);
-	const reader = {
-		codex: "write_stdin (its session_id)",
-		claude: "Read",
-		gemini: "read_file",
-		qwen: "read_file",
-		pi: "read",
-	}[shape];
+	const names: { stdin?: string; read?: string } = LEAN_SHAPE_TOOLS[shape];
 	return {
 		tools: {
 			...tools,
@@ -91,13 +86,12 @@ export function builderToolSurface(
 		},
 		lean: {
 			shape,
-			commandReader:
-				shape === "codex"
-					? reader
-					: `${reader} on ${engine.outputPath("<id>")}`,
+			commandReader: names.stdin
+				? `${names.stdin} (its session_id)`
+				: `${names.read} on ${engine.outputPath("<id>")}`,
 			waitHint: (ids) =>
-				shape === "codex"
-					? "Use write_stdin with each session_id to wait for them (\\u0003 stops one)"
+				names.stdin
+					? `Use ${names.stdin} with each session_id to wait for them (\\u0003 stops one)`
 					: `Wait with \`ytimesy-job wait <id>\` or stop with \`ytimesy-job stop <id>\` (ids: ${ids.join(", ")})`,
 			saveHistory: async (reference, messages) => {
 				try {
@@ -108,7 +102,7 @@ export function builderToolSurface(
 					);
 				} catch (error) {
 					console.warn("Conversation history file was not written.", error);
-					return reference;
+					return null;
 				}
 			},
 		},

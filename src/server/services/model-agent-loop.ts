@@ -42,6 +42,7 @@ import type { NativeCompactionInput } from "../adapters/model-compaction";
 import { prefetchInitialAgentReads } from "./agent-initial-reads";
 import { discoverableAgentTools } from "./agent-tool-discovery";
 import {
+	type ArchivedHistory,
 	CONTEXT_SUMMARY_INSTRUCTIONS,
 	compactApiHistory,
 	contextMeasurement,
@@ -92,7 +93,7 @@ export type ModelAgentInput = {
 	beforeStep?: (messages: ModelMessage[]) => Promise<void>;
 	prepareMessages?: (messages: ModelMessage[]) => Promise<ModelMessage[]>;
 	beforeCompaction?: (messages: ModelMessage[]) => Promise<void>;
-	archiveHistory?: (messages: ModelMessage[]) => Promise<string>;
+	archiveHistory?: (messages: ModelMessage[]) => Promise<ArchivedHistory>;
 	restoreInstructions?: (messages: ModelMessage[]) => Promise<ModelMessage[]>;
 	/**
 	 * Which user-role messages are the person's own requests. When set, every
