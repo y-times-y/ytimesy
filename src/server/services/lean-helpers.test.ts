@@ -280,5 +280,17 @@ describe("lean instructions", () => {
 		expect(lean).toContain("run_shell_command runs shell commands");
 		expect(lean).toContain("You are the coding agent for this chat");
 		expect(lean.length).toBeLessThan(current.length + 800);
+		const located = agentTurnInstructions({
+			...input,
+			leanShape: "claude",
+			leanWorkingDirectory: "/home/ubuntu/repo",
+		});
+		expect(located).toContain(
+			"prepared repository checkout at /home/ubuntu/repo;",
+		);
+		expect(located).toContain(
+			"Tools that take absolute paths need paths under /home/ubuntu/repo.",
+		);
+		expect(lean).not.toContain(" at /");
 	});
 });

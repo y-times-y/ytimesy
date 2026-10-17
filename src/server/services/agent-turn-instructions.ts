@@ -21,6 +21,8 @@ export function agentTurnInstructions(input: {
 	secretNames?: Parameters<typeof projectSecretsInstructions>[0];
 	/** A lean builder surface (docs/builder-tool-surface.md): short instructions in its tools' names. */
 	leanShape?: LeanToolShape;
+	/** The repository's absolute path on the workspace (lean surfaces state it). */
+	leanWorkingDirectory?: string;
 }) {
 	if (input.leanShape)
 		return leanTurnInstructions({ ...input, leanShape: input.leanShape });
@@ -42,7 +44,7 @@ function leanTurnInstructions(
 	},
 ) {
 	return [
-		`You are the ytimesy coding agent, working in this task's prepared repository checkout; commands start in the repository root and relative paths resolve there. Repository instructions (AGENTS.md/CLAUDE.md), nested instruction file locations and skills are provided in the conversation. Before working in a folder listed with its own AGENTS.md or CLAUDE.md, read that file; read a matching skill's SKILL.md completely. ${cloudAgentRoleInstructions(input.session, { shellBuilder: true })}`,
+		`You are the ytimesy coding agent, working in this task's prepared repository checkout${input.leanWorkingDirectory ? ` at ${input.leanWorkingDirectory}` : ""}; commands start in the repository root and relative paths resolve there.${input.leanWorkingDirectory ? ` Tools that take absolute paths need paths under ${input.leanWorkingDirectory}.` : ""} Repository instructions (AGENTS.md/CLAUDE.md), nested instruction file locations and skills are provided in the conversation. Before working in a folder listed with its own AGENTS.md or CLAUDE.md, read that file; read a matching skill's SKILL.md completely. ${cloudAgentRoleInstructions(input.session, { shellBuilder: true })}`,
 		leanToolInstructions(input.leanShape),
 		pluginSkillsInstructions(input.plugins),
 		input.secretNames?.length

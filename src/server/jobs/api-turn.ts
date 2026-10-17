@@ -667,6 +667,16 @@ async function runApiTurnAttempt(
 						},
 					});
 		const surfaceTools = surface.tools;
+		// A lean surface names the repository's absolute path in its system
+		// prompt (Claude Code's tools take absolute paths). The first step
+		// prepares the workspace before the model is called anyway; later steps
+		// reuse the memo, so the prompt stays byte-stable for caching.
+		const leanWorkingDirectory = surface.lean
+			? await turnMemo(
+					`${turn.id}:lean-working-directory`,
+					async () => (await workspace()).cwd,
+				)
+			: undefined;
 		// The user's remote MCP servers are called from here; credentials never reach the VM.
 		// Connections are live HTTP clients bound to this step's request, so a
 		// step that calls a tool connects again; the tool lists are reused. A
@@ -933,6 +943,7 @@ async function runApiTurnAttempt(
 				projectKnowledge,
 				secretNames: projectSecrets?.names,
 				leanShape: surface.lean?.shape,
+				leanWorkingDirectory,
 			})}${memory ? `\n${memory.instructions}` : ""}`,
 			tools,
 			signal: abort.signal,

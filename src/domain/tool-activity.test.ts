@@ -208,3 +208,22 @@ it("describes the lean surfaces' tools with the existing card kinds", () => {
 		glyph: "search",
 	});
 });
+
+it("gives each file of a multi-file patch its own verb", () => {
+	expect(
+		toolActivity({
+			id: "1",
+			kind: "dynamicToolCall",
+			tool: "apply_patch",
+			status: "completed",
+			input:
+				"*** Begin Patch\n*** Update File: pager.py\n@@\n-    return a\n+    return b\n*** Add File: serve.py\n+print('ok')\n*** Delete File: old.py\n*** End Patch",
+		} as DynamicToolCallItem),
+	).toMatchObject({
+		verb: "Edited",
+		target: "pager.py",
+		added: 2,
+		removed: 1,
+		note: "Created serve.py, Deleted old.py",
+	});
+});

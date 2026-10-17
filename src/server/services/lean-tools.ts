@@ -684,6 +684,39 @@ const withNote = (text: string, result: LeanCommandResult) =>
 const globCommand = (pattern: string, base: string | undefined) =>
 	`rg --files --hidden --no-messages -g '!.git' -g ${quote(pattern)} --sortr modified -- ${quote(base || ".")} | head -n 101 | python3 -c ${quote("import os,sys; lines=[os.path.abspath(l.rstrip('\\n')) for l in sys.stdin]; print('\\n'.join(lines[:100])); print('(Results are truncated: more than 100 files. Use a more specific path or pattern.)' if len(lines) > 100 else '', end='')")}`;
 
+const PATCH_PATH_HEADER =
+	/^(\*\*\* (?:Add File|Update File|Delete File|Move to): )(.*)$/;
+
+/**
+ * A Codex patch with absolute file headers inside the repository rewritten to
+ * repository-relative ones. Paths outside the repository are left for the
+ * patch parser to refuse. The root is read only when a header is absolute.
+ */
+export async function relativePatchPaths(
+	patch: string,
+	root: () => Promise<string>,
+): Promise<string> {
+	const lines = patch.split("\n");
+	if (
+		!lines.some((line) =>
+			PATCH_PATH_HEADER.exec(line)?.[2].trim().startsWith("/"),
+		)
+	)
+		return patch;
+	const base = (await root()).replace(/\/+$/, "");
+	return lines
+		.map((line) => {
+			const match = PATCH_PATH_HEADER.exec(line);
+			const path = match?.[2].trim();
+			return match &&
+				path?.startsWith(`${base}/`) &&
+				path.length > base.length + 1
+				? `${match[1]}${path.slice(base.length + 1)}`
+				: line;
+		})
+		.join("\n");
+}
+
 /** Codex's tools: a PTY-style session shell, freeform apply_patch, view_image. */
 function codexTools(engine: LeanEngine, base: ToolSet): ToolSet {
 	const view = (result: LeanCommandResult) =>
@@ -818,7 +851,16 @@ function codexTools(engine: LeanEngine, base: ToolSet): ToolSet {
 		...(patch
 			? {
 					apply_patch: freeform
-						? patch
+						? ({
+								...patch,
+								// Codex's own apply_patch accepts absolute paths inside the
+								// workspace; the shared parser takes repository-relative ones.
+								execute: async (input: string, options: never) =>
+									(patch.execute as (input: string, options: never) => unknown)(
+										await relativePatchPaths(input, engine.cwd),
+										options,
+									),
+							} as typeof patch)
 						: tool({
 								description:
 									"Use the `apply_patch` tool to edit files. The patch is a stripped-down, file-oriented diff:\n*** Begin Patch\n[ one or more file sections ]\n*** End Patch\nEach section starts with *** Add File: <path> (every following line starts with +), *** Delete File: <path>, or *** Update File: <path> (optionally followed by *** Move to: <path>), then hunks introduced by @@ (optionally @@ <enclosing class or function>), with 3 lines of context before and after each change, ' ' for context, '-' for removed and '+' for added lines. File paths are relative, never absolute.",
@@ -834,7 +876,12 @@ function codexTools(engine: LeanEngine, base: ToolSet): ToolSet {
 								execute: async ({ input }, options) => {
 									const execute = patch.execute;
 									if (!execute) throw new Error("apply_patch is unavailable.");
-									return execute({ patch: input } as never, options);
+									return execute(
+										{
+											patch: await relativePatchPaths(input, engine.cwd),
+										} as never,
+										options,
+									);
 								},
 							}),
 				}

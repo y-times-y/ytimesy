@@ -329,6 +329,33 @@ export function toolActivity(item: DynamicToolCallItem): ToolActivity {
 						/\*\*\* (?:Update|Add|Delete) File: (.+)/.exec(patch)?.[1] ??
 						/^\+\+\+ (?:b\/)?(?!\/dev\/null)(\S+)/m.exec(patch)?.[1]);
 			const kind = String(operation.type ?? "");
+			// A '*** Begin Patch' envelope: each file with its own verb.
+			const files = [
+				...patch.matchAll(/^\*\*\* (Update|Add|Delete) File: (.+)$/gm),
+			].map(([, operation, file]) => ({
+				verb:
+					operation === "Add"
+						? "Created"
+						: operation === "Delete"
+							? "Deleted"
+							: "Edited",
+				file: basename(file.trim()),
+			}));
+			if (!text("path") && typeof operation.path !== "string" && files.length)
+				return {
+					verb: files[0].verb,
+					target: files[0].file,
+					code: true,
+					...patchStats(patch),
+					...(files.length > 1
+						? {
+								note: files
+									.slice(1)
+									.map(({ verb, file }) => `${verb} ${file}`)
+									.join(", "),
+							}
+						: {}),
+				};
 			const verb =
 				/create|add/.test(kind) ||
 				/\*\*\* Add File|^(?:---|\*\*\*) \/dev\/null/m.test(patch)
