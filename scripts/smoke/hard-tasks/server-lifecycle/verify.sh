@@ -1,10 +1,11 @@
 git diff --quiet HEAD -- server.py API.md || { echo "server.py or API.md was modified"; exit 1; }
 test -s token.txt || { echo "token.txt is missing or empty"; exit 1; }
-test -f .lifecycle/events || { echo "the server never started"; exit 1; }
-python3 - <<'PY'
-import hashlib, socket, subprocess, sys
+events="$HOME/.licensing-service/events"
+test -f "$events" || { echo "the server never started"; exit 1; }
+EVENTS="$events" python3 - <<'PY'
+import hashlib, os, socket, subprocess, sys
 token = open("token.txt").read().strip()
-events = [line.split() for line in open(".lifecycle/events").read().splitlines() if line.strip()]
+events = [line.split() for line in open(os.environ["EVENTS"]).read().splitlines() if line.strip()]
 starts = {e[1]: e[3] for e in events if e[0] == "start"}
 stopped = {e[1] for e in events if e[0] == "clean-stop"}
 digest = hashlib.sha256(token.encode()).hexdigest()

@@ -17,7 +17,8 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-STATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".lifecycle")
+# License bookkeeping lives outside the checkout (like a system service's state).
+STATE = os.path.join(os.path.expanduser("~"), ".licensing-service")
 
 
 def log_event(*parts):
