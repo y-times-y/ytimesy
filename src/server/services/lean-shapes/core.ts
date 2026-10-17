@@ -68,7 +68,7 @@ export function coreTools(engine: LeanEngine): ToolSet {
 		}),
 		[names.edit]: tool({
 			description:
-				"Change one file by replacing text. Each edits[].oldText is looked up in the file as it was before this call (not after the other edits) and must occur exactly once; two edits may not touch the same text. Put several changes to one file in a single call.",
+				"Change one file by swapping text. Every old_string is matched against the file as it stood before this call, never against the result of another edit in the same call, and must appear exactly once; no two edits may cover the same text. Group all changes to one file into a single call.",
 			inputSchema: z.object({
 				path: pathArgument(
 					"File to change, relative to the repository root or absolute",
@@ -76,15 +76,15 @@ export function coreTools(engine: LeanEngine): ToolSet {
 				edits: z
 					.array(
 						z.object({
-							oldText: z
+							old_string: z
 								.string()
 								.min(1)
 								.max(EDIT_TEXT_MAX_CHARACTERS)
-								.describe("Text that is in the file now, copied exactly"),
-							newText: z
+								.describe("Text currently in the file, copied exactly"),
+							new_string: z
 								.string()
 								.max(EDIT_TEXT_MAX_CHARACTERS)
-								.describe("What that text becomes"),
+								.describe("Text that replaces old_string"),
 						}),
 					)
 					.min(1)

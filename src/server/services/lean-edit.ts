@@ -175,7 +175,7 @@ export function applyLeanEdit(
  */
 export function applyLeanEdits(
 	content: string | null,
-	edits: readonly { oldText: string; newText: string }[],
+	edits: readonly { old_string: string; new_string: string }[],
 	path: string,
 ): { content: string; replacements: number; fuzzy: boolean } {
 	if (content === null)
@@ -185,9 +185,10 @@ export function applyLeanEdits(
 	if (!edits.length) throw new LeanEditError("edits is empty.");
 	let fuzzy = false;
 	const located = edits.map((edit, index) => {
-		const label = edits.length > 1 ? `edits[${index}].oldText` : "oldText";
-		if (!edit.oldText) throw new LeanEditError(`${label} is empty.`);
-		const found = findOldText(content, edit.oldText);
+		const label =
+			edits.length > 1 ? `edits[${index}].old_string` : "old_string";
+		if (!edit.old_string) throw new LeanEditError(`${label} is empty.`);
+		const found = findOldText(content, edit.old_string);
 		if (!found.ranges.length)
 			throw new LeanEditError(
 				`${label} is not in ${path}. Copy it from the file as it is now, indentation and line breaks included. Nothing was changed.`,
@@ -197,7 +198,7 @@ export function applyLeanEdits(
 				`${label} occurs ${found.ranges.length} times in ${path}; add nearby lines until it occurs once. Nothing was changed.`,
 			);
 		fuzzy ||= found.fuzzy;
-		return { range: found.ranges[0], replacement: edit.newText, label };
+		return { range: found.ranges[0], replacement: edit.new_string, label };
 	});
 	const ordered = [...located].sort(
 		(left, right) => left.range.start - right.range.start,

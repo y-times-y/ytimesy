@@ -274,18 +274,22 @@ export function toolActivity(item: DynamicToolCallItem): ToolActivity {
 		case "lean:edit": {
 			const edits = Array.isArray(input.edits)
 				? (input.edits as Record<string, unknown>[])
-				: [{ oldText: input.old_string, newText: input.new_string }];
-			const strings = (key: string) =>
-				edits.map((edit) => (typeof edit[key] === "string" ? edit[key] : ""));
+				: [input];
+			// Chats stored before 2026-10-17 used oldText/newText; read both for display.
+			const strings = (key: string, legacy: string) =>
+				edits.map((edit) => {
+					const value = edit[key] ?? edit[legacy];
+					return typeof value === "string" ? value : "";
+				});
 			return {
 				verb: "Edited",
 				target: basename(text("file_path") ?? text("path") ?? "file"),
 				code: true,
-				added: strings("newText").reduce(
+				added: strings("new_string", "newText").reduce(
 					(sum, value) => sum + lineCount(value),
 					0,
 				),
-				removed: strings("oldText").reduce(
+				removed: strings("old_string", "oldText").reduce(
 					(sum, value) => sum + lineCount(value),
 					0,
 				),
