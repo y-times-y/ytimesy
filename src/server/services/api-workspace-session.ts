@@ -8,6 +8,7 @@ import { childTaskPublicItems } from "#/domain/child-task-activity";
 import { reconstructedContextTransition } from "#/domain/harness-model-profile";
 import {
 	type IncomingAttachment,
+	type MessageAttachment,
 	withAttachmentNote,
 } from "#/domain/message-attachment";
 import { parseModelRouteId } from "#/domain/model-connection";
@@ -92,6 +93,8 @@ export async function sendApiWorkspaceTask(
 		idempotencyKey?: string;
 		approvesPlan?: boolean;
 		attachments?: readonly IncomingAttachment[];
+		/** Files a queued message already put in private storage. */
+		storedAttachments?: readonly MessageAttachment[];
 		/** A fallback route the user approved for this turn (`<connection>|<model>`). */
 		continueOn?: string;
 	},
@@ -196,11 +199,13 @@ export async function sendApiWorkspaceTask(
 		: undefined;
 	if (input.approvesPlan && !pendingPlanId(current))
 		throw new Error("That plan was already answered.");
-	const attachments = await storeMessageAttachments(
-		scope.userId,
-		session.id,
-		input.attachments,
-	);
+	const attachments = input.storedAttachments
+		? [...input.storedAttachments]
+		: await storeMessageAttachments(
+				scope.userId,
+				session.id,
+				input.attachments,
+			);
 	const items = sessionItemsQueuedWithUser(
 		current,
 		input.text,

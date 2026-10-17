@@ -5,6 +5,7 @@ import {
 	Clock3,
 	ImageIcon,
 	Paperclip,
+	X,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { Fragment, type UIEvent, useEffect, useRef } from "react";
@@ -30,10 +31,12 @@ import {
 	compactTimelineItems,
 	type FileChangeEntry,
 	fileChangesFromSessionItems,
+	isQueuedUserMessage,
 	liveActivityStatus,
 	type SessionItem,
 	type SessionTurnStatus,
 	showTurnWorking,
+	type UserMessageItem,
 } from "#/domain/session-item";
 import { thoughtLabel } from "#/domain/thought-label";
 import {
@@ -74,7 +77,7 @@ import { ShellCommandCode } from "./shell-command-code";
 import { TodoList } from "./todo-list";
 
 export function SessionTimeline({
-	items,
+	items: allItems,
 	turnStatus,
 	fill = false,
 	onOpenFile,
@@ -87,7 +90,10 @@ export function SessionTimeline({
 	secretActions,
 	failoverActions,
 	memoryActions,
+	onRemoveQueued,
 }: {
+	/** Takes back a message still waiting behind the running turn. */
+	onRemoveQueued?: (messageId: string) => void;
 	/** Opens, undoes and checks the memory lines a turn recalled or saved. */
 	memoryActions?: MemoryMarkerActions;
 	/** Save or skip a secret the agent asked for; omitted where nobody can answer. */
@@ -108,6 +114,11 @@ export function SessionTimeline({
 }) {
 	const listRef = useRef<HTMLOListElement>(null);
 	const stickToEnd = useRef(true);
+	// Waiting messages are not part of the turn yet; they sit below its activity.
+	const queued = allItems.filter(isQueuedUserMessage);
+	const items = queued.length
+		? allItems.filter((item) => !isQueuedUserMessage(item))
+		: allItems;
 	const visible = compactTimelineItems(childTaskPublicItems(items));
 	const childTasks = tasks.filter((task) =>
 		taskParentId ? task.parentSessionId === taskParentId : task.depth === 1,
@@ -122,9 +133,9 @@ export function SessionTimeline({
 
 	useEffect(() => {
 		if (!autoScroll || !stickToEnd.current) return;
-		if (items.length === 0 && turnStatus !== "running") return;
+		if (allItems.length === 0 && turnStatus !== "running") return;
 		listRef.current?.lastElementChild?.scrollIntoView({ block: "end" });
-	}, [autoScroll, items, turnStatus]);
+	}, [autoScroll, allItems, turnStatus]);
 
 	function rememberScrollPin(event: UIEvent<HTMLOListElement>) {
 		const list = event.currentTarget;
@@ -134,6 +145,7 @@ export function SessionTimeline({
 
 	if (
 		visible.length === 0 &&
+		queued.length === 0 &&
 		childTasks.length === 0 &&
 		turnStatus !== "running" &&
 		!fill
@@ -235,6 +247,11 @@ export function SessionTimeline({
 						<p className="session-working session-shimmer">Thinking</p>
 					</li>
 				) : null}
+				{queued.map((item) => (
+					<li key={item.id} data-kind="userMessage" data-queued="true">
+						<QueuedMessage item={item} onRemove={onRemoveQueued} />
+					</li>
+				))}
 				{turnStatus !== "running" &&
 				childTasks.some((task) => task.turnStatus === "running") ? (
 					<li data-kind="waiting-for-children">
@@ -245,6 +262,48 @@ export function SessionTimeline({
 				) : null}
 			</ol>
 		</MemoryMarkerProvider>
+	);
+}
+
+function QueuedMessage({
+	item,
+	onRemove,
+}: {
+	item: UserMessageItem;
+	onRemove?: (messageId: string) => void;
+}) {
+	return (
+		<div className="session-message" data-role="user" data-queued="true">
+			<p>{item.text}</p>
+			{item.attachments?.length ? (
+				<ul className="session-message-attachments" aria-label="Attached files">
+					{item.attachments.map((attachment) => (
+						<li key={attachment.id} title={attachment.name}>
+							{attachment.mediaType.startsWith("image/") ? (
+								<ImageIcon size={13} aria-hidden="true" />
+							) : (
+								<Paperclip size={13} aria-hidden="true" />
+							)}
+							<span>{attachment.name}</span>
+						</li>
+					))}
+				</ul>
+			) : null}
+			<p className="session-queued-note" role="status">
+				<Clock3 size={12} aria-hidden="true" />
+				<span>Queued for the agent's next step</span>
+				{onRemove ? (
+					<button
+						type="button"
+						aria-label="Remove queued message"
+						title="Remove this message before it is delivered"
+						onClick={() => onRemove(item.id)}
+					>
+						<X size={12} aria-hidden="true" />
+					</button>
+				) : null}
+			</p>
+		</div>
 	);
 }
 

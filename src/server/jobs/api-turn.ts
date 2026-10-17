@@ -48,7 +48,11 @@ import { modelStepLimit } from "#/domain/model-workflow";
 import { posixShellCommand } from "#/domain/posix-command";
 import { agentSecretsEnvFile } from "#/domain/project-secret";
 import { modelSwitchHistory } from "#/domain/runtime-handoff";
-import type { ModelSwitchItem, SessionItem } from "#/domain/session-item";
+import type {
+	ModelSwitchItem,
+	SessionItem,
+	UserMessageItem,
+} from "#/domain/session-item";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
 import {
 	completedChildrenForReview,
@@ -140,6 +144,7 @@ import {
 	loadAgentProjectSecrets,
 	writeAgentProjectSecrets,
 } from "../services/project-secrets";
+import { startQueuedUserTurn } from "../services/queued-user-messages";
 import { withRedactedResults } from "../services/redacted-tools";
 import {
 	SECRET_REQUEST_END_TURN_TOOLS,
@@ -555,6 +560,23 @@ async function runApiTurnAttempt(
 			await secretsReady;
 			await cloning;
 			return execution;
+		};
+		// A message delivered mid-turn brings its files to a machine already prepared;
+		// a machine prepared later restores them from the transcript.
+		const materializeDeliveredAttachments = async (
+			delivered: readonly UserMessageItem[],
+		) => {
+			const attachments = delivered.flatMap((item) => item.attachments ?? []);
+			if (!attachments.length || !execution) return;
+			await materializeMessageAttachments(
+				execution.machines,
+				execution.vm,
+				owner.userId,
+				owner.id,
+				attachments,
+			).catch((error) => {
+				console.warn("Attached files could not be restored.", error);
+			});
 		};
 		machines = machinesForAgentSession(machines, owner);
 		publishProgress = async (turnStatus) => {
@@ -991,10 +1013,25 @@ async function runApiTurnAttempt(
 					messages = current;
 					await saveCheckpoint();
 				}
-				return injectServerPeerMessages(owner.id, current, async (injected) => {
-					messages = injected;
-					await saveCheckpoint();
-				});
+				return injectServerPeerMessages(
+					owner.id,
+					current,
+					async (injected, delivered) => {
+						messages = injected;
+						if (delivered.length) {
+							items = [
+								...items,
+								...delivered.map((item) => ({
+									...item,
+									timing: { startedAt: Date.now() },
+								})),
+							];
+							await materializeDeliveredAttachments(delivered);
+						}
+						await saveCheckpoint();
+					},
+					(messageId) => items.some((item) => item.id === messageId),
+				);
 			},
 			beforeStep: async (history) => {
 				failureStage = "budget";
@@ -1227,6 +1264,9 @@ async function runApiTurnAttempt(
 			});
 			if (eventId) await enqueueAgentTaskEvent(eventId).catch(() => {});
 		}
+		await startQueuedUserTurn(machines, turn.user_id, turn.session_id).catch(
+			() => {},
+		);
 		return "completed";
 	} catch (error) {
 		workspaceReuse?.forget();
@@ -1418,6 +1458,11 @@ async function runApiTurnAttempt(
 			});
 			if (eventId) await enqueueAgentTaskEvent(eventId).catch(() => {});
 		}
+		// Messages sent during the turn outlive its stop or failure: the first starts the next turn.
+		if (saved)
+			await startQueuedUserTurn(machines, turn.user_id, turn.session_id).catch(
+				() => {},
+			);
 		abort.abort();
 		return saved === "cancelled" ? "cancelled" : "failed";
 	} finally {
