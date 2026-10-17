@@ -1,3 +1,4 @@
+import { clip } from "./clip";
 import type { MemoryWording } from "./harness-variant";
 import { posixShellQuoted as quote } from "./posix-command";
 
@@ -383,7 +384,7 @@ export function memoryMatchesPart(
 				const missing = entryPaths(entry.meta).filter((path) =>
 					missingPaths.has(path),
 				);
-				return `${entry.path}:${entry.line}: ${raw.length > MATCH_CHARS ? `${raw.slice(0, MATCH_CHARS - 1)}…` : raw}${missing.length ? ` (possibly stale: ${missing.join(", ")} not found in this project)` : ""}`;
+				return `${entry.path}:${entry.line}: ${clip(raw, MATCH_CHARS)}${missing.length ? ` (possibly stale: ${missing.join(", ")} not found in this project)` : ""}`;
 			}),
 		].join("\n"),
 	);
@@ -452,10 +453,6 @@ export type DreamChat = {
 
 export const DREAM_INBOX_CHARS = 40_000;
 const CHAT_CHARS = 8_000;
-
-function clip(text: string, limit: number) {
-	return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
-}
 
 /**
  * New material since the last dream within a fixed budget. `chats` come

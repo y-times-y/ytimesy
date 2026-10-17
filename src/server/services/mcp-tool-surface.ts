@@ -5,6 +5,7 @@ import {
 	type ToolSet,
 	tool,
 } from "ai";
+import { clip } from "#/domain/clip";
 import {
 	CALL_MCP_TOOL_TOOL,
 	SEARCH_MCP_TOOLS_TOOL,
@@ -22,9 +23,6 @@ const SEARCH_RESULTS = 8;
 /** Full descriptions and schemas returned by one search, best matches first. */
 const SEARCH_DETAIL_CHARACTERS = 24_000;
 const SHORT_DESCRIPTION_CHARACTERS = 200;
-
-const clip = (text: string, limit: number) =>
-	text.length <= limit ? text : `${text.slice(0, limit - 1).trimEnd()}…`;
 
 /** Estimated tokens of the MCP tool definitions if they were offered inline. */
 export function inlineMcpTokens(catalog: readonly McpCatalogEntry[]) {
