@@ -14,6 +14,12 @@ function pendingCommandReceipts(items: readonly SessionItem[]) {
 				"execute_command",
 				"continue_command",
 				"browser_execute",
+				// Lean surfaces (docs/builder-tool-surface.md) report the same id/status.
+				"exec_command",
+				"write_stdin",
+				"Bash",
+				"run_shell_command",
+				"bash",
 			].includes(item.tool) ||
 			!item.output
 		)
@@ -44,7 +50,7 @@ export async function withBackgroundCommandContext(
 		signal: AbortSignal;
 		checkpoint: (messages: ModelMessage[]) => Promise<void>;
 		/** The offered tool that reads a command's complete output by id. */
-		commandReader: "read_command" | "continue_command";
+		commandReader: string;
 	},
 ) {
 	const pending = pendingCommandReceipts(input.items);
