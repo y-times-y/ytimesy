@@ -23,12 +23,19 @@ Decision recorded 2026-10-17. Status: decided; implementation and measurement in
 
 ## Per-family surface
 
-| Family | Commands | Edit | Other |
-|---|---|---|---|
-| GPT (OpenAI) | `exec_command` + `write_stdin` (session id for long or interactive commands) | `apply_patch` | `view_image` |
-| Claude | `Bash` (waits, with a timeout; long jobs in the background) | `Edit` (old/new string), `Write`, `Read` | images through `Read` |
-| Gemini | Gemini CLI shape (`run_shell_command`, `replace`, `write_file`, `read_file`); names to verify | | |
-| Open models (Qwen, GLM, DeepSeek, Kimi…) | Claude shape by default; verify per model | | |
+Researched 2026-10-17 from vendor source and docs (primary sources unless noted).
+
+| Shape | Models | Tools (names and argument shapes) |
+|---|---|---|
+| **Codex** | GPT-6.1 Sol, GPT-6 Luna, GPT-6 Astra | `exec_command{cmd, workdir, tty, yield_time_ms, max_output_tokens}` + `write_stdin{session_id, chars, yield_time_ms}` (session shell); `apply_patch` as a **freeform tool** with a grammar on the Responses API (JSON `{input}` fallback elsewhere); `update_plan`; `view_image` |
+| **Claude Code** | Claude Opus/Sonnet/Haiku 5.5, Fable 5.1; Kimi K3 (Kimi Code copies these tools); Grok 4.7/4.6 (Grok Build uses these names; arguments unpublished); DeepSeek V4 / V4.1 and GLM 5.3 (vendors route coding through Claude Code; secondary sources); Muse (low-confidence guess) | `Bash{command, timeout, run_in_background}`, `Read`, `Write`, `Edit{file_path, old_string, new_string, replace_all}`, `Glob`, `Grep` |
+| **Gemini CLI** | Gemini 4 Argon, 3.8 Flash, 3.7 Flash; Qwen3.8 Max (Qwen Code is a Gemini CLI fork) | `run_shell_command{command, dir_path, is_background}`, `read_file{file_path, start_line, end_line}`, `write_file`, `replace{file_path, old_string, new_string, allow_multiple}` (Qwen: `edit` with `replace_all`), `glob`, `grep_search` |
+
+No model in the selector names the SWE-agent/OpenHands shape as its native harness.
+
+**Engine requirements, whatever the shape:**
+- **Pass reasoning back unchanged in tool loops.** Anthropic, Gemini, DeepSeek, GLM and Kimi all require it; DeepSeek returns a hard 400 without `reasoning_content`.
+- **Accept Codex `apply_patch` as freeform input.**
 
 ## What moves out of the tool list
 
