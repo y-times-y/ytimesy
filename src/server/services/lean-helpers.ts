@@ -4,9 +4,20 @@ import { posixShellQuoted as quote } from "#/domain/posix-command";
 import { browserUseSetup } from "../adapters/browser-use-cli";
 import { desktopWallpaperBase64 } from "../adapters/freestyle/desktop-wallpaper";
 import { START_WORKSPACE_DESKTOP } from "../adapters/freestyle/start-desktop";
+import { agentOutputDirectory } from "./agent-output-artifacts";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 import { chromeOpenCommand } from "./api-agent-browser-tools";
+import {
+	COMMAND_TMUX_SOCKET,
+	commandRoot,
+	commandSessionName,
+	STOPPED_COMMAND_STATUS,
+} from "./api-agent-command-tools";
 import { readableHistory } from "./api-agent-context";
+import {
+	COMMAND_SCOPES_DIRECTORY,
+	COMMAND_STOP_SCRIPT,
+} from "./api-command-scope";
 import { BROWSER_INSPECTION_SOURCE } from "./browser-inspection";
 import { DELIVERABLE_CHECK_SOURCE } from "./deliverable-check";
 import { guestCapabilityCommand } from "./guest-node-capability";
@@ -80,36 +91,52 @@ print(json.dumps(report, indent=2))
 sys.exit(0 if report.get('ok') else 1)
 `;
 
-/** Status, wait and stop for a command the runtime started in the background. */
-const JOB_SCRIPT = `#!/usr/bin/env bash
+/**
+ * Status, wait and stop for a command the runtime started in the background,
+ * on the runner's own files (api-agent-command-tools.ts): this session's
+ * command root and output directory, the runner's tmux socket and session
+ * names. `stop` does what stop_command does: stops the command's process
+ * group, ends its tmux session and records status 130 if none was written.
+ */
+function jobScript(sessionId: string) {
+	const root = commandRoot(sessionId);
+	const outputs = agentOutputDirectory(sessionId);
+	return `#!/usr/bin/env bash
 # ytimesy-job status|wait|stop <id>: a background command started by your command tool.
 set -u
 action=\${1:-}; id=\${2:-}
 if ! [[ "$id" =~ ^[0-9a-f-]{36}$ ]] || [[ ! "$action" =~ ^(status|wait|stop)$ ]]; then
   echo "usage: ytimesy-job status|wait|stop <id> [seconds]" >&2; exit 2
 fi
-session="ytimesy-\${id//-/}"
-status_file=$(ls /tmp/ytimesy-api-commands/*/"$id".status 2>/dev/null | head -n 1)
-output_file=$(ls /tmp/ytimesy-output-*/"$id".stdout /tmp/ytimesy-api-commands/*/"$id".output 2>/dev/null | head -n 1)
-running() { tmux -L ytimesy-api has-session -t "$session" 2>/dev/null; }
+session=${quote(commandSessionName(""))}"\${id//-/}"
+status_file=${quote(root)}/"$id".status
+output_file=${quote(outputs)}/"$id".stdout
+[ -f "$output_file" ] || output_file=${quote(root)}/"$id".output
+if [ ! -f ${quote(root)}/"$id".output ]; then echo "$id is not a command of this session" >&2; exit 2; fi
+running() { tmux -L ${COMMAND_TMUX_SOCKET} has-session -t "$session" 2>/dev/null; }
 report() {
-  status_file=$(ls /tmp/ytimesy-api-commands/*/"$id".status 2>/dev/null | head -n 1)
-  if [ -n "$status_file" ]; then echo "exited: $(cat "$status_file")"
+  if [ -f "$status_file" ]; then echo "exited: $(cat "$status_file")"
   elif running; then echo "running"
   else echo "interrupted (no exit status recorded)"; fi
-  if [ -n "$output_file" ]; then echo "output ($output_file), last 100 lines:"; tail -n 100 "$output_file"; fi
+  if [ -f "$output_file" ]; then echo "output ($output_file), last 100 lines:"; tail -n 100 "$output_file"; fi
 }
 case "$action" in
   status) report ;;
   wait)
     limit=\${3:-600}; waited=0
-    while [ -z "$(ls /tmp/ytimesy-api-commands/*/"$id".status 2>/dev/null)" ] && running && [ "$waited" -lt "$limit" ]; do sleep 1; waited=$((waited + 1)); done
+    while [ ! -f "$status_file" ] && running && [ "$waited" -lt "$limit" ]; do sleep 1; waited=$((waited + 1)); done
     report ;;
   stop)
-    tmux -L ytimesy-api kill-session -t "$session" 2>/dev/null && echo "stopped $id" || echo "$id was not running"
-    ;;
+    if [ -f "$status_file" ]; then echo "$id already exited: $(cat "$status_file")"; exit 0; fi
+    for scope in ${COMMAND_SCOPES_DIRECTORY}/*/; do
+      [ -f "$scope$id.json" ] && python3 "$HOME/.ytimesy/lib/ytimesy-command-stop.py" "\${scope%/}" "$id"
+    done
+    tmux -L ${COMMAND_TMUX_SOCKET} kill-session -t "$session" 2>/dev/null
+    [ -f "$status_file" ] || printf '${STOPPED_COMMAND_STATUS}\\n' >"$status_file"
+    echo "stopped $id (exit $(cat "$status_file"))" ;;
 esac
 `;
+}
 
 const INSPECT_ARGUMENTS = "__YTIMESY_INSPECT_ARGUMENTS__";
 
@@ -256,7 +283,11 @@ export function leanHelperBundle(
 			content: DELIVERABLE_CHECK_SOURCE,
 			mode: 0o644,
 		},
-		"bin/ytimesy-job": { content: JOB_SCRIPT, mode: 0o755 },
+		"bin/ytimesy-job": { content: jobScript(sessionId), mode: 0o755 },
+		"lib/ytimesy-command-stop.py": {
+			content: COMMAND_STOP_SCRIPT,
+			mode: 0o644,
+		},
 		"bin/ytimesy-browser": { content: browserScript(sessionId), mode: 0o755 },
 		"lib/start-desktop.sh": { content: START_WORKSPACE_DESKTOP, mode: 0o755 },
 		"lib/desktop-wallpaper.b64": {

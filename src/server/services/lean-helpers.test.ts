@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
 	mkdir,
 	mkdtemp,
@@ -14,6 +15,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { WorkspaceId } from "#/domain/ids";
 import { leanToolInstructions } from "#/domain/lean-tool-instructions";
 import { agentTurnInstructions } from "./agent-turn-instructions";
+import { commandRoot } from "./api-agent-command-tools";
 import { compactApiHistory } from "./api-agent-context";
 import {
 	ensureLeanHelpers,
@@ -165,10 +167,34 @@ describe("workspace commands", () => {
 		expect((await sh("ytimesy-browser 2>&1")).stdout).toContain(
 			"ytimesy-browser screenshot",
 		);
-		const status = await sh(
+		const unknown = await sh(
 			"ytimesy-job status 00000000-0000-4000-8000-000000000000",
 		);
-		expect(status.stdout).toContain("interrupted");
+		expect(unknown.exitCode).toBe(2);
+		expect(unknown.stderr).toContain("not a command of this session");
+	});
+
+	it("ytimesy-job reads this session's command files and stop records 130 like stop_command", async () => {
+		const id = randomUUID();
+		const commands = commandRoot("session-1");
+		await mkdir(commands, { recursive: true });
+		try {
+			await writeFile(join(commands, `${id}.output`), "hello\n");
+			const status = await sh(`ytimesy-job status ${id}`);
+			expect(status.stdout).toContain("interrupted");
+			expect(status.stdout).toContain("hello");
+			const stop = await sh(`ytimesy-job stop ${id}`);
+			expect(stop.stdout).toContain(`stopped ${id} (exit 130)`);
+			expect(await readFile(join(commands, `${id}.status`), "utf8")).toBe(
+				"130\n",
+			);
+			expect((await sh(`ytimesy-job status ${id}`)).stdout).toContain(
+				"exited: 130",
+			);
+		} finally {
+			await rm(join(commands, `${id}.output`), { force: true });
+			await rm(join(commands, `${id}.status`), { force: true });
+		}
 	});
 
 	it("does not touch environment.md without a report", async () => {
