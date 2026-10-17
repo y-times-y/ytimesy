@@ -1,5 +1,6 @@
 import type { ModelMessage } from "ai";
 import { z } from "zod";
+import { leanToolNames } from "#/domain/harness-model-profile";
 import type { SessionItem } from "#/domain/session-item";
 import { publicToolDetail } from "#/domain/tool-detail";
 import type { AgentToolWorkspaceInput } from "./agent-tool-workspace";
@@ -15,11 +16,7 @@ function pendingCommandReceipts(items: readonly SessionItem[]) {
 				"continue_command",
 				"browser_execute",
 				// Lean surfaces (docs/builder-tool-surface.md) report the same id/status.
-				"exec_command",
-				"write_stdin",
-				"Bash",
-				"run_shell_command",
-				"bash",
+				...leanToolNames(["command", "stdin"]),
 			].includes(item.tool) ||
 			!item.output
 		)

@@ -47,13 +47,6 @@ const SPECIALIST_TOOLS = [
 	"batch_read",
 ];
 
-/**
- * The builder's tool surface: the measured one, or a lean one
- * (docs/builder-tool-surface.md). Defined with the development harness
- * variants (src/domain/harness-variant.ts), which select it per eval user.
- */
-export type ToolSurfaceVariant = HarnessToolSurfaceId;
-
 /** A lean surface's tool names and argument shapes: a vendor harness's, or Pi's neutral one. */
 export type LeanToolShape = "codex" | "claude" | "gemini" | "qwen" | "pi";
 
@@ -66,7 +59,7 @@ export type LeanToolShape = "codex" | "claude" | "gemini" | "qwen" | "pi";
  * through it or copy it.
  */
 export function leanToolShape(
-	variant: Exclude<ToolSurfaceVariant, "current">,
+	variant: Exclude<HarnessToolSurfaceId, "current">,
 	modelId: string,
 ): LeanToolShape {
 	if (variant === "lean-pi") return "pi";
@@ -83,24 +76,154 @@ export function leanToolShape(
 	return "claude";
 }
 
-/** Each lean shape's command tool; its presence marks a lean surface. */
-export const LEAN_COMMAND_TOOL: Readonly<Record<LeanToolShape, string>> = {
-	codex: "exec_command",
-	claude: "Bash",
-	gemini: "run_shell_command",
-	qwen: "run_shell_command",
-	pi: "bash",
-};
+/** What a lean tool does, whatever its shape calls it. */
+export type LeanToolRole =
+	| "command"
+	| "stdin"
+	| "read"
+	| "write"
+	| "edit"
+	| "glob"
+	| "grep"
+	| "image";
 
-/** The lean shape a tool list was built with, if any. */
+/**
+ * Every lean shape's tool names by role (docs/builder-tool-surface.md). The
+ * one table the lean tools, prompts, plan mode, metrics, background tracking
+ * and activity cards derive their names from. Codex's apply_patch and
+ * view_image are the runtime's own tools, passed through.
+ */
+export const LEAN_SHAPE_TOOLS = {
+	codex: {
+		command: "exec_command",
+		stdin: "write_stdin",
+		edit: "apply_patch",
+		image: "view_image",
+	},
+	claude: {
+		command: "Bash",
+		read: "Read",
+		write: "Write",
+		edit: "Edit",
+		glob: "Glob",
+		grep: "Grep",
+		image: "Read",
+	},
+	gemini: {
+		command: "run_shell_command",
+		read: "read_file",
+		write: "write_file",
+		edit: "replace",
+		glob: "glob",
+		grep: "grep_search",
+		image: "read_file",
+	},
+	qwen: {
+		command: "run_shell_command",
+		read: "read_file",
+		write: "write_file",
+		edit: "edit",
+		glob: "glob",
+		grep: "grep_search",
+		image: "read_file",
+	},
+	pi: {
+		command: "bash",
+		read: "read",
+		write: "write",
+		edit: "edit",
+		image: "read",
+	},
+} as const satisfies Record<
+	LeanToolShape,
+	Partial<Record<LeanToolRole, string>> & {
+		command: string;
+		edit: string;
+		image: string;
+	}
+>;
+
+type LeanShapeTable = typeof LEAN_SHAPE_TOOLS;
+/** Every tool name a lean shape offers. */
+export type LeanToolName = {
+	[Shape in LeanToolShape]: LeanShapeTable[Shape][keyof LeanShapeTable[Shape]];
+}[LeanToolShape];
+
+/** The command tool's argument holding the shell text (Codex's exec_command names it cmd). */
+export function leanCommandArgument(shape: LeanToolShape) {
+	return shape === "codex" ? "cmd" : "command";
+}
+
+const LEAN_ROLE_ORDER: readonly LeanToolRole[] = [
+	"command",
+	"stdin",
+	"read",
+	"write",
+	"edit",
+	"glob",
+	"grep",
+	"image",
+];
+
+/** The lean tool names with the given roles (all roles by default), each once. */
+export function leanToolNames(
+	roles: readonly LeanToolRole[] = LEAN_ROLE_ORDER,
+): LeanToolName[] {
+	const names = new Set<LeanToolName>();
+	for (const tools of Object.values(LEAN_SHAPE_TOOLS))
+		for (const role of roles) {
+			const name = (tools as Partial<Record<LeanToolRole, LeanToolName>>)[role];
+			if (name) names.add(name);
+		}
+	return [...names];
+}
+
+/** Each lean-only tool's first role. Codex's apply_patch and view_image keep their runtime role. */
+const LEAN_ROLES = new Map<string, LeanToolRole>(
+	[...LEAN_ROLE_ORDER]
+		.reverse()
+		.flatMap((role) =>
+			leanToolNames([role]).map((name) => [name, role] as const),
+		)
+		.filter(
+			([name]) =>
+				name !== LEAN_SHAPE_TOOLS.codex.edit &&
+				name !== LEAN_SHAPE_TOOLS.codex.image,
+		),
+);
+
+/** What a lean-only tool does, or undefined for any other tool. */
+export function leanToolRole(name: string): LeanToolRole | undefined {
+	return LEAN_ROLES.get(name);
+}
+
+/** Each lean shape's command tool → the argument holding its shell text. */
+export const LEAN_COMMAND_ARGUMENTS: Readonly<Record<string, string>> =
+	Object.fromEntries(
+		(Object.keys(LEAN_SHAPE_TOOLS) as LeanToolShape[]).map((shape) => [
+			LEAN_SHAPE_TOOLS[shape].command,
+			leanCommandArgument(shape),
+		]),
+	);
+
+/**
+ * The lean shape a tool list was built with, if any: the shape whose every
+ * tool is offered (Codex's apply_patch only when the route had one).
+ */
 export function leanSurfaceShape(
 	toolNames: readonly string[],
 ): LeanToolShape | null {
-	if (toolNames.includes("exec_command")) return "codex";
-	if (toolNames.includes("Bash")) return "claude";
-	if (toolNames.includes("run_shell_command"))
-		return toolNames.includes("replace") ? "gemini" : "qwen";
-	if (toolNames.includes("bash") && toolNames.includes("edit")) return "pi";
+	const offered = new Set(toolNames);
+	for (const shape of Object.keys(LEAN_SHAPE_TOOLS) as LeanToolShape[]) {
+		const tools = Object.values(LEAN_SHAPE_TOOLS[shape]) as string[];
+		if (
+			tools.every(
+				(name) =>
+					offered.has(name) || (shape === "codex" && name === "apply_patch"),
+			)
+		)
+			return shape;
+	}
 	return null;
 }
 
@@ -124,15 +247,6 @@ const SHELL_BEHAVIOUR = [
 	"Generalize instead of fitting the examples: before finishing, test your solution on at least one input you make up that differs from the given ones in names, values and content, and fix the underlying logic rather than the specific case.",
 ] as const;
 
-/** Each lean shape's file-edit tool. */
-const LEAN_EDIT_TOOL: Readonly<Record<LeanToolShape, string>> = {
-	codex: "apply_patch",
-	claude: "Edit",
-	gemini: "replace",
-	qwen: "edit",
-	pi: "edit",
-};
-
 /**
  * v13-shell's guidance for a lean surface, in its tools' names. Lines about
  * tools the lean surfaces dropped (continue_command, stop_command,
@@ -143,7 +257,7 @@ function leanHarnessInstructions(
 	shape: LeanToolShape,
 	family: HarnessModelFamily,
 ) {
-	const run = LEAN_COMMAND_TOOL[shape];
+	const { command: run, edit } = LEAN_SHAPE_TOOLS[shape];
 	const context =
 		family === "anthropic"
 			? "Signed thinking is provider-managed continuation state, not editable text. Recover earlier findings from ~/.ytimesy/history/ instead of reconstructing or exposing signatures."
@@ -151,7 +265,7 @@ function leanHarnessInstructions(
 				? "Thought signatures are provider-managed continuation state. Do not reconstruct them or claim a missing thought was recovered; use source and ~/.ytimesy/history/ evidence."
 				: "After compaction, rely on files, command output and ~/.ytimesy/history/, not on reasoning you remember.";
 	return [
-		`Harness tool profile v13-lean (${family}): Edit files with ${LEAN_EDIT_TOOL[shape]}, or from ${run} when you can make the edit and run its check in the same command. ${context}`,
+		`Harness tool profile v13-lean (${family}): Edit files with ${edit}, or from ${run} when you can make the edit and run its check in the same command. ${context}`,
 		`Inspect with ${run} (rg, sed -n, git, project CLIs), reading related files together in one command rather than slice by slice, and reproduce the problem with the smallest executable check early. Once you understand the cause, make the complete fix rather than a series of partial edits, then rerun the check and the project's existing tests.`,
 		...SHELL_BEHAVIOUR,
 	].join(" ");
