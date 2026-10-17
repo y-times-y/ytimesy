@@ -25,6 +25,7 @@ import { closeDatabase, database } from "../../src/server/adapters/database";
 import { GUEST_INTERNET_FIREWALL } from "../../src/server/adapters/freestyle/proof-vm";
 import { waitUntilVmRunning } from "../../src/server/adapters/freestyle/wait-until-running";
 import { createFreestyleWorkspaceMachines } from "../../src/server/adapters/freestyle/workspace-machines";
+import { loadModelConnection } from "../../src/server/adapters/model-connections";
 import {
 	dispatchModelWorkflow,
 	modelWorkflowSigningSecret,
@@ -36,6 +37,7 @@ import {
 } from "../../src/server/services/api-workspace-session";
 import { cancelServerTurn } from "../../src/server/services/cancel-server-turn";
 import { sendSubscriptionTask } from "../../src/server/services/codex-subscription-session";
+import { connectionApiKey } from "../../src/server/services/model-connections";
 
 const DEV_REF = "zqkptvyvoyqqtpihlshw";
 const ORIGIN =
@@ -367,11 +369,52 @@ export async function createHarnessRunner(options: {
 				throw new Error("Requires exactly one saved OpenRouter connection.");
 			const route = modelRouteId(gateways[0].id, model);
 			if (!catalog.some((entry) => entry.id === route))
-				throw new Error(`${model} is not in the connection's model catalog.`);
+				throw new Error(
+					`${model} is not in the connection's model catalog.${
+						model.endsWith(":free")
+							? " Free models need YTIMESY_DEV_ALLOW_ANY_MODEL=1, and the saved OpenRouter connection's catalog must list the model (re-save the connection to refresh it)."
+							: ""
+					}`,
+				);
 			routes.set(model, route);
 		}
-		return { userId, source, name, routes };
+		return { userId, source, name, routes, gatewayId: gateways[0]?.id };
 	})();
+
+	/**
+	 * Today's `:free` request allowance on the saved OpenRouter key (UTC day),
+	 * or null when OpenRouter does not report it. Read only; never inference.
+	 */
+	async function openRouterFreeQuota(): Promise<{
+		used: number;
+		limit: number;
+		remaining: number;
+	} | null> {
+		if (!context.gatewayId) return null;
+		const connection = await loadModelConnection(
+			context.userId,
+			context.gatewayId,
+		);
+		if (!connection || new URL(connection.baseUrl).hostname !== "openrouter.ai")
+			return null;
+		const response = await fetch(`${connection.baseUrl}/key`, {
+			headers: {
+				Authorization: `Bearer ${await connectionApiKey(context.userId, connection)}`,
+			},
+			signal: AbortSignal.timeout(15_000),
+		});
+		if (!response.ok) return null;
+		const body = (await response.json()) as {
+			data?: { free_model_daily_requests?: Record<string, unknown> };
+		};
+		const quota = body.data?.free_model_daily_requests;
+		const { used, limit, remaining } = quota ?? {};
+		return typeof used === "number" &&
+			typeof limit === "number" &&
+			typeof remaining === "number"
+			? { used, limit, remaining }
+			: null;
+	}
 
 	async function preflightExecutor() {
 		const url = `${ORIGIN}/start`;
@@ -593,6 +636,7 @@ export async function createHarnessRunner(options: {
 	return {
 		runOne,
 		preflightExecutor,
+		openRouterFreeQuota,
 		cleanup,
 		stop: () => {
 			stopping = true;
