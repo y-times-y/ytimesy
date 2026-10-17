@@ -9,12 +9,22 @@
 //       different words than the saved rule must surface it.
 //   node --env-file=.env --import tsx scripts/memory-two-chat-eval.ts --live --arms off,spec,full
 //       Live two-chat runs on the development edge with the Codex subscription.
+//   node --env-file=.env --import tsx scripts/memory-two-chat-eval.ts --live --arms full,supermemory
+//       Adds Supermemory's Claude Code plugin as a competitor arm (eval only).
+//   node --import tsx scripts/memory-two-chat-eval.ts --sm-recall
+//       Offline: Supermemory's own retrieval of each scenario's rule for the
+//       final prompt (rank and score), from the setup prompts as conversations.
 //
 // Arms (live):
 //   off   the final chat only, memory off: the baseline.
 //   spec  the spec's loop: seeded memory if any, then each setup chat (the
 //         builder saves and pushes) followed by one dream, then the final chat.
 //   full  spec plus the read hook, the save hook and the extra metadata keys.
+//   supermemory  our memory off; Supermemory's plugin replayed instead (see
+//         memory-eval/supermemory.ts): each setup chat is captured as a document
+//         in a fresh container, the final chat gets the session-start profile and
+//         the prompt recall as extra text parts. Their MCP search tools are not
+//         offered mid-chat.
 // Each (arm, scenario) gets a throwaway project and its own memory repo
 // (user_memory.repo override), so runs never see each other's memory or the
 // owner's real memory. Scenarios run one at a time: memory settings are per user.
@@ -40,6 +50,17 @@ import {
 	type Scenario,
 	setupChats,
 } from "./memory-eval/scenarios";
+import {
+	captureText,
+	type ProfileResponse,
+	recallContext,
+	recalledResults,
+	recallQuery,
+	sessionStartContext,
+	supermemoryApiKey,
+	supermemoryClient,
+	waitProcessed,
+} from "./memory-eval/supermemory";
 
 const run = promisify(execFile);
 
@@ -47,6 +68,11 @@ const { values: flags } = parseArgs({
 	options: {
 		"dry-run": { type: "boolean", default: false },
 		recall: { type: "boolean", default: false },
+		"sm-recall": { type: "boolean", default: false },
+		/** Seconds to wait for Supermemory to process each captured chat. */
+		"sm-wait": { type: "string", default: "900" },
+		/** Supermemory processing mode; unset keeps the plugin's (API default, dynamic). */
+		"sm-dreaming": { type: "string" },
 		live: { type: "boolean", default: false },
 		arms: { type: "string", default: "off,spec,full" },
 		scenarios: { type: "string" },
@@ -165,6 +191,49 @@ async function dryRun() {
 	}
 	console.log(table(rows));
 	if (!ok) throw new Error("A scenario or verifier is invalid.");
+	// The supermemory arm's replay of the plugin's formatting and filters.
+	const turn = captureText(
+		[
+			{ kind: "userMessage", id: "u", text: "Use pnpm here, never npm." },
+			{ kind: "reasoning", id: "r", text: "hidden" },
+			{
+				kind: "agentMessage",
+				id: "a",
+				text: "Noted; I will use pnpm from now on.",
+			},
+			{ kind: "commandExecution", id: "c", command: "pnpm i" },
+		] as unknown as Parameters<typeof captureText>[0],
+		"2026-01-01T00:00:00Z",
+	);
+	const kept = recalledResults({
+		searchResults: {
+			results: [
+				{ memory: "a", similarity: 0.9 },
+				{ memory: "b", similarity: 0.54 },
+				{ chunk: "c" },
+				{ memory: " ", similarity: 0.9 },
+				...["d", "e", "f", "g"].map((memory) => ({ memory, similarity: 0.6 })),
+			],
+		},
+	});
+	const checks = [
+		turn?.startsWith("<|turn_start|>2026-01-01T00:00:00Z") &&
+			turn.includes("<|start|>assistant<|message|>Noted") &&
+			!turn.includes("hidden") &&
+			!turn.includes("pnpm i<"),
+		captureText([], "2026-01-01T00:00:00Z") === null,
+		kept.map((row) => row.memory ?? row.chunk).join("") === "acdef",
+		recallQuery("fix it") === null &&
+			recallQuery("/compact the conversation") === null,
+		recallContext([], "tag") === null,
+		sessionStartContext(
+			{ profile: { static: ["s1"], dynamic: [] } },
+			"tag",
+			"fixture",
+		).items === 1,
+	];
+	if (checks.some((check) => !check))
+		throw new Error(`Supermemory replay check failed: ${checks.join(",")}`);
 	console.log("\nDry run passed.");
 }
 
@@ -280,6 +349,108 @@ async function recall() {
 }
 
 // ---------------------------------------------------------------------------
+// --sm-recall
+
+/**
+ * Supermemory's retrieval on the same probes as --recall: every scenario's
+ * setup prompts captured as conversations (assistant reply stubbed) plus the
+ * distractor lines, in one container; each probe must surface its rule with
+ * the plugin's filter (similarity >= 0.55, top 5).
+ */
+async function supermemoryRecall() {
+	const sm = supermemoryClient(await supermemoryApiKey());
+	const dreaming = flags["sm-dreaming"] as "instant" | "dynamic" | undefined;
+	const containerTag = `ytimesy-eval-recall-${randomUUID().slice(0, 8)}`;
+	const ids: string[] = [];
+	const begun = Date.now();
+	try {
+		for (const scenario of SCENARIOS) {
+			const contents = [
+				...Object.values(scenario.seed ?? {}),
+				...setupChats(scenario).flatMap(
+					(chat) =>
+						captureText(
+							[
+								{ kind: "userMessage", id: "u", text: chat.prompt },
+								{ kind: "agentMessage", id: "a", text: "Done." },
+							] as unknown as Parameters<typeof captureText>[0],
+							new Date().toISOString(),
+						) ?? [],
+				),
+			];
+			for (const [index, content] of contents.entries())
+				ids.push(
+					(
+						await sm.addDocument(
+							content,
+							containerTag,
+							`${scenario.id}-${index}`,
+							{ type: "session_turn", project: "fixture" },
+							dreaming,
+						)
+					).id,
+				);
+		}
+		ids.push(
+			(
+				await sm.addDocument(
+					DISTRACTOR_LINES.map((line) => `- ${line.text}`).join("\n"),
+					containerTag,
+					"distractors",
+					{ type: "seed", project: "fixture" },
+					dreaming,
+				)
+			).id,
+		);
+		const waited = await waitProcessed(
+			sm,
+			ids,
+			Math.max(30, Number(flags["sm-wait"]) || 900) * 1000,
+			10_000,
+		);
+		console.log(
+			`Ingested ${ids.length} documents in ${Math.round((Date.now() - begun) / 1000)}s (${waited.settled ? "settled" : `not settled: ${[...new Set(waited.statuses)].join(", ")}`}).`,
+		);
+		const rows = [
+			["probe", "rule", "similarity", "rank", "recalled", "other hits >= 0.55"],
+		];
+		let recalled = 0;
+		for (const probe of RECALL_PROBES) {
+			const scenario = SCENARIOS.find((row) => row.id === probe.scenario);
+			if (!scenario) continue;
+			const response = await sm.profile(containerTag, probe.query);
+			const hits = response.searchResults?.results ?? [];
+			const text = (hit: (typeof hits)[number]) =>
+				hit.memory ?? hit.chunk ?? hit.content ?? hit.text ?? "";
+			const rank = hits.findIndex((hit) => scenario.leaks.test(text(hit))) + 1;
+			const hit = rank ? hits[rank - 1] : undefined;
+			const kept = recalledResults(response);
+			const ok = Boolean(hit && kept.includes(hit));
+			if (ok) recalled++;
+			rows.push([
+				probe.query.slice(0, 60),
+				probe.scenario,
+				hit?.similarity?.toFixed(3) ?? "-",
+				rank ? String(rank) : "-",
+				ok ? "yes" : "MISS",
+				String(kept.filter((row) => row !== hit).length),
+			]);
+		}
+		console.log(table(rows));
+		console.log(
+			`\nRecalled ${recalled}/${RECALL_PROBES.length} (plugin filter: top 5, similarity >= 0.55). A hit counts when its text matches the scenario's rule words.`,
+		);
+	} finally {
+		const done = await sm.deleteContainer(containerTag).catch(() => null);
+		console.log(
+			done
+				? `Deleted ${done.deletedDocumentsCount} documents and ${done.deletedMemoriesCount} memories.`
+				: `Cleanup failed for ${containerTag}.`,
+		);
+	}
+}
+
+// ---------------------------------------------------------------------------
 // --live
 
 type ChatRecord = {
@@ -290,7 +461,31 @@ type ChatRecord = {
 	outputTokens: number | null;
 	cachedTokens: number | null;
 	memoryAttached: boolean;
+	/** Supermemory arm: the plugin's context parts reached the model. */
+	supermemoryAttached?: boolean;
+	/** Supermemory MCP tools the agent called, in order. */
+	supermemoryCalls?: string[];
 	errors: string[];
+};
+
+type SupermemoryRecord = {
+	containerTag: string;
+	/** Per captured document (seed first, then each setup chat). */
+	documents: {
+		source: string;
+		chars: number;
+		settled: boolean;
+		statuses: string[];
+		ingestMs: number;
+	}[];
+	profileItems: number;
+	recallQuery: string | null;
+	/** Every search hit for the final prompt, before the 0.55 filter. */
+	searchHits: { similarity: number | null; text: string }[];
+	recalled: number;
+	injectedLines: number;
+	injectedChars: number;
+	cleanup: string;
 };
 
 type MemoryCost = {
@@ -312,13 +507,23 @@ type ScenarioRecord = {
 	setup: ChatRecord[];
 	chat2: ChatRecord | null;
 	memoryCosts: MemoryCost[];
+	supermemory?: SupermemoryRecord;
 	errors: string[];
 };
 
 async function live() {
 	const arms = flags.arms.split(",").map((arm) => arm.trim());
-	if (!arms.every((arm) => ["off", "spec", "full"].includes(arm)))
-		throw new Error("--arms accepts off, spec and full.");
+	if (
+		!arms.every((arm) => ["off", "spec", "full", "supermemory"].includes(arm))
+	)
+		throw new Error("--arms accepts off, spec, full and supermemory.");
+	const smKey = arms.includes("supermemory") ? await supermemoryApiKey() : null;
+	const sm = smKey ? supermemoryClient(smKey) : null;
+	const smDreaming = flags["sm-dreaming"] as "instant" | "dynamic" | undefined;
+	if (smDreaming && !["instant", "dynamic"].includes(smDreaming))
+		throw new Error("--sm-dreaming accepts instant or dynamic.");
+	const smWaitMs =
+		Math.min(3600, Math.max(30, Number(flags["sm-wait"]) || 900)) * 1000;
 	const model = flags.model;
 	const effort = flags.effort;
 	if (!/^[a-z0-9._-]+$/.test(model) || !/^[a-z]+$/.test(effort))
@@ -392,6 +597,7 @@ async function live() {
 	const liveVms = new Set<string>();
 	const liveProjects = new Set<string>();
 	const liveRepos = new Set<string>();
+	const liveContainers = new Set<string>();
 
 	const owners = (
 		await db.query<{ user_id: string }>(
@@ -519,6 +725,7 @@ async function live() {
 		files: Record<string, string>,
 		prompt: string,
 		verify?: string,
+		extraParts: readonly string[] = [],
 	) {
 		const record: ChatRecord = {
 			sessionId: null,
@@ -532,6 +739,7 @@ async function live() {
 		};
 		let vmId: string | undefined;
 		let verified: { passed: boolean; output: string } | null = null;
+		let finalItems: ReturnType<typeof sessionItemsFromUnknown> = [];
 		try {
 			const session = await sessions.insertAgentSession({
 				userId,
@@ -595,6 +803,41 @@ async function live() {
 						},
 					),
 			);
+			// Context a competitor's hooks would add, as extra text parts on the
+			// queued user message (where our read hook puts memory), before admission.
+			if (extraParts.length) {
+				const queued = (
+					await db.query<{
+						id: string;
+						messages: { role: string; content: unknown }[];
+					}>(
+						"select id,messages from api_turn where session_id=$1 and state='queued' order by created_at desc limit 1",
+						[session.id],
+					)
+				).rows[0];
+				const messages = [...(queued?.messages ?? [])];
+				const index = messages.map((m) => m.role).lastIndexOf("user");
+				if (!queued || index < 0)
+					throw new Error("No queued user message to attach context to.");
+				const own = messages[index].content;
+				messages[index] = {
+					...messages[index],
+					content: [
+						...(typeof own === "string"
+							? [{ type: "text", text: own }]
+							: (own as unknown[])),
+						...extraParts.map((text) => ({ type: "text", text })),
+					],
+				};
+				const updated = await db.query(
+					"update api_turn set messages=$2::jsonb,updated_at=now() where id=$1 and state='queued'",
+					[queued.id, JSON.stringify(messages)],
+				);
+				if (updated.rowCount !== 1)
+					throw new Error(
+						"The turn left the queue before context was attached.",
+					);
+			}
 			const started = Date.now();
 			let admitted = false;
 			while (!admitted && Date.now() - started < 120_000) {
@@ -621,9 +864,11 @@ async function live() {
 					record.outputTokens = usage.outputTokens;
 					record.cachedTokens = usage.cacheReadTokens;
 				}
-				record.memoryAttached = JSON.stringify(state?.messages ?? []).includes(
-					MEMORY_PART_OPEN,
-				);
+				const sent = JSON.stringify(state?.messages ?? []);
+				record.memoryAttached = sent.includes(MEMORY_PART_OPEN);
+				if (extraParts.length)
+					record.supermemoryAttached = sent.includes("<supermemory-");
+				finalItems = items;
 				if (state && !["queued", "running"].includes(state.state)) break;
 				if (Date.now() > started + turnTimeoutMs && !cancelled) {
 					cancelled = true;
@@ -637,6 +882,12 @@ async function live() {
 				await delay(2000);
 			}
 			record.elapsedMs = Date.now() - started;
+			record.supermemoryCalls = finalItems.flatMap((item) =>
+				(item.kind === "mcpToolCall" && item.server === "supermemory") ||
+				(item.kind === "dynamicToolCall" && /supermemory/i.test(item.tool))
+					? [item.kind === "mcpToolCall" ? item.tool : item.tool]
+					: [],
+			);
 			if (verify) {
 				const result = await machines.exec(
 					workspace,
@@ -663,7 +914,7 @@ async function live() {
 					.catch(() => {});
 			}
 		}
-		return { record, verified };
+		return { record, verified, items: finalItems };
 	}
 
 	/**
@@ -752,6 +1003,7 @@ async function live() {
 		arm: string,
 		scenario: Scenario,
 	): Promise<ScenarioRecord> {
+		if (arm === "supermemory") return runSupermemoryScenario(scenario);
 		const started = new Date();
 		const repo =
 			arm === "off"
@@ -817,6 +1069,170 @@ async function live() {
 		return result;
 	}
 
+	/**
+	 * Supermemory's Claude Code plugin with its defaults: our memory off; each
+	 * setup chat captured (capture.js) into a fresh container and processed;
+	 * the final chat gets session-start's profile and the prompt recall as
+	 * extra text parts. Their MCP search tools are not offered (see notes).
+	 */
+	async function runSupermemoryScenario(
+		scenario: Scenario,
+	): Promise<ScenarioRecord> {
+		if (!sm) throw new Error("Supermemory is not configured.");
+		const started = new Date();
+		const containerTag = `ytimesy-eval-${scenario.id}-${randomUUID().slice(0, 8)}`;
+		const record: SupermemoryRecord = {
+			containerTag,
+			documents: [],
+			profileItems: 0,
+			recallQuery: null,
+			searchHits: [],
+			recalled: 0,
+			injectedLines: 0,
+			injectedChars: 0,
+			cleanup: "pending",
+		};
+		const result: ScenarioRecord = {
+			arm: "supermemory",
+			scenario: scenario.id,
+			repo: null,
+			passed: null,
+			verifierOutput: "",
+			dream: "none",
+			setup: [],
+			chat2: null,
+			memoryCosts: [],
+			supermemory: record,
+			errors: [],
+		};
+		const project = await throwawayProject();
+		liveContainers.add(containerTag);
+		const ingest = async (
+			source: string,
+			content: string,
+			customId: string,
+			metadata: Record<string, string>,
+		) => {
+			const begun = Date.now();
+			const doc = await sm.addDocument(
+				content,
+				containerTag,
+				customId,
+				{
+					project: repoName,
+					sm_scope: "personal",
+					sm_capture_mode: "automatic",
+					timestamp: new Date().toISOString(),
+					...metadata,
+				},
+				smDreaming,
+			);
+			const waited = await waitProcessed(sm, [doc.id], smWaitMs);
+			record.documents.push({
+				source,
+				chars: content.length,
+				...waited,
+				ingestMs: Date.now() - begun,
+			});
+		};
+		try {
+			await setEvalMemory("off", null);
+			// Seeded memory (expired-rule): the same lines as one document.
+			const seeded = scenario.seed?.["MEMORY.md"];
+			if (seeded)
+				await ingest("seed", seeded, `seed-${randomUUID()}`, { type: "seed" });
+			for (const [index, setup] of setupChats(scenario).entries()) {
+				const turnStarted = new Date().toISOString();
+				const done = await chat(
+					project,
+					`Memory eval ${scenario.id} chat ${index + 1}`,
+					setup.files,
+					setup.prompt,
+				);
+				result.setup.push(done.record);
+				const content = captureText(done.items, turnStarted);
+				if (!content || !done.record.sessionId) {
+					result.errors.push(`Setup chat ${index + 1} had nothing to capture.`);
+					continue;
+				}
+				await ingest(`chat${index + 1}`, content, done.record.sessionId, {
+					type: "session_turn",
+				});
+			}
+			result.dream = record.documents
+				.map(
+					(doc) =>
+						`${doc.source} ${Math.round(doc.ingestMs / 1000)}s ${doc.statuses.join("/")}`,
+				)
+				.join(", ");
+			// session-start.js (profile, q = project name), then recall-directive.js.
+			const prompt = `${scenario.chat2.prompt}${PROMPT_SUFFIX}`;
+			const startProfile = await sm
+				.profile(containerTag, repoName)
+				.catch(() => null);
+			const start = sessionStartContext(startProfile, containerTag, repoName);
+			record.profileItems = start.items;
+			record.recallQuery = recallQuery(prompt);
+			let recall: string | null = null;
+			if (record.recallQuery) {
+				const searched: ProfileResponse | null = await sm
+					.profile(containerTag, record.recallQuery)
+					.catch(() => null);
+				record.searchHits = (searched?.searchResults?.results ?? []).map(
+					(hit) => ({
+						similarity: Number.isFinite(hit.similarity)
+							? (hit.similarity as number)
+							: null,
+						text: (
+							hit.memory ??
+							hit.chunk ??
+							hit.content ??
+							hit.text ??
+							""
+						).slice(0, 200),
+					}),
+				);
+				const hits = recalledResults(searched);
+				record.recalled = hits.length;
+				recall = recallContext(hits, containerTag);
+			}
+			const parts = [start.text, ...(recall ? [recall] : [])];
+			record.injectedChars = parts.join("\n").length;
+			record.injectedLines = parts
+				.join("\n")
+				.split("\n")
+				.filter((line) => line.startsWith("- ◪")).length;
+			const second = await chat(
+				project,
+				`Memory eval ${scenario.id} chat 2`,
+				scenario.chat2.files,
+				scenario.chat2.prompt,
+				scenario.verify,
+				parts,
+			);
+			result.chat2 = second.record;
+			result.passed = second.verified?.passed ?? null;
+			result.verifierOutput = second.verified?.output ?? "";
+			result.memoryCosts = await memoryCosts(started);
+		} catch (error) {
+			result.errors.push(
+				error instanceof Error ? error.message : String(error),
+			);
+		} finally {
+			await dropProject(project.projectId).catch(() => {});
+			record.cleanup = await sm.deleteContainer(containerTag).then(
+				(done) =>
+					`deleted ${done.deletedDocumentsCount} documents, ${done.deletedMemoriesCount} memories`,
+				(error: Error) => `cleanup failed: ${error.message}`,
+			);
+			liveContainers.delete(containerTag);
+		}
+		console.log(
+			`[supermemory] ${scenario.id}: ${result.passed === null ? "no verdict" : result.passed ? "PASS" : "fail"} (ingest ${result.dream || "none"}; injected ${record.injectedLines} lines/${record.injectedChars} chars, recalled ${record.recalled}, profile ${record.profileItems}; top hit ${record.searchHits[0]?.similarity?.toFixed(3) ?? "-"})${result.errors.length ? ` errors: ${result.errors.join("; ")}` : ""}`,
+		);
+		return result;
+	}
+
 	let stopping = false;
 	const stop = () => {
 		stopping = true;
@@ -834,6 +1250,8 @@ async function live() {
 	} finally {
 		for (const id of liveVms) await client.vms.delete(id).catch(() => {});
 		for (const id of liveProjects) await dropProject(id).catch(() => {});
+		for (const tag of liveContainers)
+			await sm?.deleteContainer(tag).catch(() => {});
 		if (!flags["keep-repos"])
 			for (const name of liveRepos) await deleteRepo(name);
 		if (savedSettings)
@@ -892,12 +1310,42 @@ async function live() {
 			input
 				? `${Math.round((sum(chat2.map((c) => c?.cachedTokens)) / input) * 100)}%`
 				: "-",
-			`${chat2.filter((c) => c?.memoryAttached).length}/${runs.length}`,
+			`${chat2.filter((c) => c?.memoryAttached || c?.supermemoryAttached).length}/${runs.length}`,
 			...cost("save"),
 			...cost("dream"),
 		]);
 	}
 	console.log(`\n${table(rows)}`);
+	const perScenario = [
+		[
+			"arm",
+			"scenario",
+			"pass",
+			"chat2 in tok",
+			"attached",
+			"injected",
+			"ingest",
+		],
+	];
+	for (const row of results)
+		perScenario.push([
+			row.arm,
+			row.scenario,
+			row.passed === null ? "-" : row.passed ? "PASS" : "fail",
+			String(row.chat2?.inputTokens ?? "-"),
+			row.chat2?.memoryAttached || row.chat2?.supermemoryAttached
+				? "yes"
+				: "no",
+			row.supermemory
+				? `${row.supermemory.injectedLines} lines/${row.supermemory.injectedChars} chars`
+				: "-",
+			row.supermemory
+				? row.supermemory.documents
+						.map((doc) => `${Math.round(doc.ingestMs / 1000)}s`)
+						.join("+") || "-"
+				: "-",
+		]);
+	console.log(`\n${table(perScenario)}`);
 	console.log(
 		`\nModel ${model} (${effort}); total ${Math.round((Date.now() - started) / 1000)}s. Chat token columns are chat 2's agent turns; save and dream columns are memory jobs on the user's route.`,
 	);
@@ -910,8 +1358,9 @@ async function live() {
 
 if (flags["dry-run"]) await dryRun();
 else if (flags.recall) await recall();
+else if (flags["sm-recall"]) await supermemoryRecall();
 else if (flags.live) await live();
 else
 	throw new Error(
-		"Pass --dry-run (verifiers), --recall (offline line retrieval) or --live (dev two-chat runs).",
+		"Pass --dry-run (verifiers), --recall (offline line retrieval), --sm-recall (Supermemory retrieval) or --live (dev two-chat runs).",
 	);
