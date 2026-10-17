@@ -1,7 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { isDevelopmentEnvironment } from "#/domain/development-environment";
 
 /**
- * Development diagnostics (YTIMESY_DEBUG_STEP_TIMING=1): one log line per
+ * Development diagnostics (YTIMESY_DEBUG_STEP_TIMING=1, development only): one log line per
  * durable model step with the wall time spent in each named phase. Spans may
  * overlap (parallel queries, provider calls inside a tool), so their sums are
  * attribution, not a partition of the step. Disabled, every helper is a pass-through.
@@ -17,7 +18,9 @@ type Trace = {
 const traces = new AsyncLocalStorage<Trace>();
 
 export function stepTimingEnabled() {
-	return process.env.YTIMESY_DEBUG_STEP_TIMING === "1";
+	return (
+		process.env.YTIMESY_DEBUG_STEP_TIMING === "1" && isDevelopmentEnvironment()
+	);
 }
 
 let colo: Promise<string> | undefined;

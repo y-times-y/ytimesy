@@ -23,6 +23,7 @@ import { createFreestyleWorkspaceMachines } from "../src/server/adapters/freesty
 import { dispatchModelWorkflow } from "../src/server/adapters/model-workflow-dispatch";
 import { cancelServerTurn } from "../src/server/services/cancel-server-turn";
 import { sendSubscriptionTask } from "../src/server/services/codex-subscription-session";
+import { DEVELOPMENT_EDGE_ORIGIN } from "./development-config";
 
 // Operator-only proof on development: does the chat agent start the shared
 // desktop on its own and use it to check a UI change? One disposable,
@@ -35,8 +36,7 @@ if (
 	!new URL(process.env.DATABASE_URL ?? "").username.includes(ref)
 )
 	throw new Error("Not the approved development database.");
-const origin =
-	"https://ytimesy-edge-executor-development.hetkp8044.workers.dev";
+const origin = DEVELOPMENT_EDGE_ORIGIN;
 process.env.YTIMESY_MODEL_EXECUTION_TARGET = "durable-object";
 process.env.YTIMESY_MODEL_WORKFLOW_URL = origin;
 process.env.YTIMESY_REALTIME_URL = origin;

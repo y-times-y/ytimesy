@@ -2,11 +2,12 @@ import {
 	type ApiModelSpeedId,
 	openRouterRouting,
 } from "#/domain/api-model-list";
+import { isDevelopmentEnvironment } from "#/domain/development-environment";
 
 /**
  * Development only: `YTIMESY_DEV_ALLOW_ANY_MODEL=1` offers every model a
- * connection lists, so the harness can be smoke-tested on free models. Never
- * in production, whatever the variable says.
+ * connection lists, so the harness can be smoke-tested on free models. Only
+ * in development (see isDevelopmentEnvironment), whatever the variable says.
  */
 export function devAllowsAnyModel(
 	env: {
@@ -15,8 +16,7 @@ export function devAllowsAnyModel(
 	} = process.env,
 ): boolean {
 	return (
-		env.YTIMESY_DEV_ALLOW_ANY_MODEL === "1" &&
-		env.YTIMESY_ENVIRONMENT !== "production"
+		env.YTIMESY_DEV_ALLOW_ANY_MODEL === "1" && isDevelopmentEnvironment(env)
 	);
 }
 

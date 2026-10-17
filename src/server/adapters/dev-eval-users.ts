@@ -1,3 +1,4 @@
+import { isDevelopmentEnvironment } from "#/domain/development-environment";
 import {
 	DEFAULT_HARNESS_VARIANT,
 	type HarnessVariant,
@@ -7,8 +8,8 @@ import { database } from "./database";
 
 /**
  * Development evaluations run as throwaway users (dev_eval_user). Only a
- * deployment with YTIMESY_DEV_EVAL_USERS=1 reads that table, and never
- * production, whatever the variable says.
+ * development deployment with YTIMESY_DEV_EVAL_USERS=1 reads that table,
+ * never production or an unlabelled one, whatever the variable says.
  */
 export function devEvalUsersEnabled(
 	env: {
@@ -16,10 +17,7 @@ export function devEvalUsersEnabled(
 		readonly YTIMESY_ENVIRONMENT?: string;
 	} = process.env,
 ): boolean {
-	return (
-		env.YTIMESY_DEV_EVAL_USERS === "1" &&
-		env.YTIMESY_ENVIRONMENT !== "production"
-	);
+	return env.YTIMESY_DEV_EVAL_USERS === "1" && isDevelopmentEnvironment(env);
 }
 
 type EvalUserRow = {
@@ -29,7 +27,10 @@ type EvalUserRow = {
 
 // A user's eval row never changes after creation (or is deleted with the
 // user), so one read per isolate is enough. Regular users cache as null.
+// Read only in development (devEvalUsersEnabled); bounded so a long-lived
+// isolate keeps at most the most recent users, oldest dropped first.
 const rows = new Map<string, Promise<EvalUserRow | null>>();
+const MAX_CACHED_USERS = 1000;
 
 function evalUserRow(userId: string) {
 	let row = rows.get(userId);
@@ -40,6 +41,8 @@ function evalUserRow(userId: string) {
 				[userId],
 			)
 			.then((result) => result.rows[0] ?? null);
+		if (rows.size >= MAX_CACHED_USERS)
+			rows.delete(rows.keys().next().value as string);
 		rows.set(userId, row);
 		row.catch(() => rows.delete(userId));
 	}

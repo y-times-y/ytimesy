@@ -47,7 +47,8 @@ import { cancelServerTurn } from "../../src/server/services/cancel-server-turn";
 
 const run = promisify(execFile);
 const DEV_REF = "zqkptvyvoyqqtpihlshw";
-const MEMORY_NAMESPACE = "ytimesy-memory-development";
+/** The development memory repos' Artifacts namespace. */
+export const MEMORY_NAMESPACE = "ytimesy-memory-development";
 const MANIFESTS = ".ytimesy/eval-users";
 /** Each eval user's monthly VM allowance (USD 2): room for a batch of runs. */
 const EVAL_USER_VM_ALLOWANCE_MICRO_USD = 2_000_000;
@@ -431,7 +432,9 @@ export async function createEvalUser(options: {
 }): Promise<EvalUser> {
 	await assertDevelopmentDatabase();
 	installHandlers();
-	// Local services (catalog checks, sends) resolve the owner's login too.
+	// Local services (catalog checks, sends) resolve the owner's login too;
+	// the database was just checked to be development's.
+	process.env.YTIMESY_ENVIRONMENT = "development";
 	process.env.YTIMESY_DEV_EVAL_USERS = "1";
 	const variant = options.variant ?? DEFAULT_HARNESS_VARIANT;
 	const ownerId = await subscriptionOwner();

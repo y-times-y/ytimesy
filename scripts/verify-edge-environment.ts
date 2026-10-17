@@ -16,6 +16,7 @@ import {
 import { githubInstallationAccessToken } from "../src/server/adapters/github/installation-token";
 import { saveProjectGroup } from "../src/server/adapters/projects";
 import { insertQueuedWorkspace } from "../src/server/adapters/workspaces";
+import { DEVELOPMENT_EDGE_ORIGIN } from "./development-config";
 
 // One named development repository, one temporary branch/project, no production/default-branch writes.
 if (process.env.EDGE_ENVIRONMENT_PROOF !== "1")
@@ -28,8 +29,7 @@ if (
 	)
 )
 	throw new Error("Not development.");
-const origin =
-	"https://ytimesy-edge-executor-development.hetkp8044.workers.dev";
+const origin = DEVELOPMENT_EDGE_ORIGIN;
 const root = process.env.BETTER_AUTH_SECRET;
 const key = process.env.FREESTYLE_API_KEY;
 if (!root || root.length < 32 || !key)
