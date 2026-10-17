@@ -15,6 +15,8 @@ const BUILDER_SHELL_TOOLS = new Set([
 	"view_image",
 	"read_environment_report",
 	"report_task_blocked",
+	// Runs the deliverable from a clean copy before the builder says it is done.
+	"check_deliverable",
 	// Recover exact detail after compaction; the benchmarked builder has these too.
 	"read_context_archive",
 	"search_context_history",
