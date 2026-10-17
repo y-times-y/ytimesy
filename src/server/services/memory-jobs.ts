@@ -15,6 +15,7 @@ import {
 	type MemoryMode,
 	memoryAppUrl,
 	memoryBullet,
+	memoryLineEmbeddingText,
 	memoryLines,
 	memoryPath,
 	memoryToday,
@@ -29,6 +30,10 @@ import type { ModelRoute } from "#/domain/model-failover";
 import type { SessionItem } from "#/domain/session-item";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
 import { reserveMemoryTokens } from "../adapters/api-usage-budget";
+import {
+	cachedLineEmbeddings,
+	memoryEmbedder,
+} from "../adapters/memory-embeddings";
 import {
 	type MemoryRepo,
 	type MemorySnapshot,
@@ -79,6 +84,8 @@ export type MemoryJobDeps = {
 		userMessageId: string,
 		lines: readonly SavedMemoryLine[],
 	): Promise<boolean>;
+	/** Embeds new memory lines ahead of the next chat's read hook. */
+	warmLines(userId: string, texts: readonly string[]): Promise<void>;
 	appUrl: string;
 	today(): string;
 };
@@ -101,6 +108,11 @@ export function memoryJobDeps(): MemoryJobDeps {
 		recordUsage: recordMemoryModelUsage,
 		markDreamed: markMemoryDreamed,
 		recordSaved: recordMemorySaved,
+		warmLines: async (userId, texts) => {
+			const embed = memoryEmbedder();
+			if (embed && texts.length)
+				await cachedLineEmbeddings(userId, texts, embed);
+		},
 		appUrl: memoryAppUrl(),
 		today: memoryToday,
 	};
@@ -248,6 +260,10 @@ export async function runMemorySave(
 		);
 		if (outcome.ok) {
 			const after = withMemoryChanges(snapshot.files, changes);
+			// The next chat's read hook finds these lines embedded already.
+			await deps
+				.warmLines(userId, newLineTexts(snapshot.files, after))
+				.catch(() => console.warn("New memory lines could not be embedded."));
 			await deps
 				.recordSaved(
 					userId,
@@ -292,6 +308,17 @@ export function saveHookChanges(
 		path,
 		content: working[path] ?? null,
 	}));
+}
+
+/** Embedding texts of the lines in `after` that `before` did not have. */
+export function newLineTexts(before: MemoryFiles, after: MemoryFiles) {
+	const known = new Set(
+		memoryLines(before).map((entry) => memoryLineEmbeddingText(entry)),
+	);
+	return memoryLines(after)
+		.filter((entry) => entry.path !== MEMORY_ENTRY)
+		.map((entry) => memoryLineEmbeddingText(entry))
+		.filter((text) => !known.has(text));
 }
 
 /** Lines sharing a distinctive word with the message: enough context to avoid duplicates. */
@@ -573,6 +600,9 @@ export async function runMemoryDream(
 			`Dream: ${String(message).slice(0, 200)}`,
 		);
 		if (!outcome.ok) return "conflict";
+		await deps
+			.warmLines(userId, newLineTexts(snapshot.files, working))
+			.catch(() => console.warn("New memory lines could not be embedded."));
 	}
 	await deps.markDreamed(userId, through);
 	return changes.length ? "committed" : "unchanged";

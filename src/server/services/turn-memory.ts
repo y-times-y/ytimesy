@@ -7,6 +7,7 @@ import {
 } from "#/domain/harness-variant";
 import {
 	currentMemoryRecall,
+	type MemoryReadHookOutcome,
 	type MemoryRecall,
 	recalledMemoryLine,
 	savedMemoryLines,
@@ -62,7 +63,12 @@ import type { AgentToolWorkspace } from "./agent-tool-workspace";
 
 /** The VM's Git token outlives any single durable step; each step mints a new one. */
 const VM_TOKEN_TTL_SECONDS = 3600;
-const READ_HOOK_TIMEOUT_MS = 4000;
+/**
+ * The read hook's budget before the first model call. A chat's first request
+ * waits longer: its VM is still starting, and a late recall beats none.
+ */
+const READ_HOOK_TIMEOUT_MS = 6000;
+const FIRST_READ_HOOK_TIMEOUT_MS = 12_000;
 /** Bounds embedding work on a turn; larger memories embed over several turns. */
 const MAX_EMBEDDED_LINES = 400;
 /** Reading what a turn saved never holds up its completion for long. */
@@ -147,6 +153,37 @@ export async function turnMemory(
 	const chatTitles =
 		options.chatTitles ??
 		((ids: readonly string[]) => memoryChatTitles(owner.userId, ids));
+	/**
+	 * Started with the turn's setup: the memory snapshot and its line vectors
+	 * (warm in this isolate, else the database, else embedded once), so the
+	 * read hook before the first model call usually only embeds the message.
+	 */
+	let prefetched:
+		| { snapshot: MemorySnapshot; vectors: Promise<number[][]> | null }
+		| null
+		| undefined;
+	const prefetching = repo
+		.snapshot()
+		.then((snapshot) => {
+			const vectors =
+				mode === "full" && embed
+					? cachedLineEmbeddings(
+							owner.userId,
+							recallableLines(snapshot).map(memoryLineEmbeddingText),
+							embed,
+						)
+					: null;
+			vectors?.catch(() => {});
+			prefetched = { snapshot, vectors };
+			return prefetched;
+		})
+		.catch((error) => {
+			console.warn("Memory could not be read.", {
+				error: error instanceof Error ? error.name : "unknown",
+			});
+			prefetched = null;
+			return null;
+		});
 	/** The recalled lines as the chat shows them, with their source chats' titles. */
 	async function recalledLines(matches: readonly MemoryLine[]) {
 		if (!matches.length) return [];
@@ -195,13 +232,9 @@ export async function turnMemory(
 			const current = messages[index];
 			// A resumed step replays the parts it already attached.
 			if (attachedMemory([current]).length) return unchanged;
-			const snapshot = await repo.snapshot().catch((error) => {
-				console.warn("Memory could not be read.", {
-					error: error instanceof Error ? error.name : "unknown",
-				});
-				return null;
-			});
-			if (!snapshot) return unchanged;
+			const loaded = prefetched === undefined ? await prefetching : prefetched;
+			if (!loaded) return unchanged;
+			const { snapshot } = loaded;
 			const shown = attachedMemory(messages).join("\n");
 			const firstRequest =
 				items.filter((item) => item.kind === "userMessage").length === 1 &&
@@ -211,11 +244,14 @@ export async function turnMemory(
 				firstRequest &&
 				entry !== undefined &&
 				entry.trim() !== EMPTY_MEMORY.trim();
-			const matches =
+			const firstMessage =
+				items.filter((item) => item.kind === "userMessage").length === 1;
+			const hook =
 				mode === "full" && embed
 					? await readHook({
 							snapshot,
 							embed,
+							vectors: loaded.vectors ?? undefined,
 							userId: owner.userId,
 							query: latestUserText(items),
 							alreadyShown: (raw) =>
@@ -223,12 +259,25 @@ export async function turnMemory(
 								(showEntry && (entry ?? "").includes(raw)),
 							today: today(),
 							project: projectName,
+							timeoutMs: firstMessage
+								? FIRST_READ_HOOK_TIMEOUT_MS
+								: READ_HOOK_TIMEOUT_MS,
 						})
-					: [];
+					: null;
+			const matches = hook?.lines ?? [];
 			const recall: MemoryRecall = {
 				head: snapshot.head,
 				...(showEntry ? { index: true as const } : {}),
 				lines: await recalledLines(matches),
+				...(hook
+					? {
+							hook: {
+								outcome: hook.outcome,
+								ms: hook.ms,
+								...(hook.error ? { error: hook.error } : {}),
+							},
+						}
+					: {}),
 			};
 			if (!showEntry && !matches.length) return { messages, recall };
 			const missing =
@@ -341,9 +390,25 @@ function latestUserText(items: readonly SessionItem[]) {
 	return "";
 }
 
+/** The lines the read hook ranks: every topic-file entry (MEMORY.md is attached whole). */
+export function recallableLines(snapshot: MemorySnapshot) {
+	return memoryLines(snapshot.files)
+		.filter((entry) => entry.path !== MEMORY_ENTRY)
+		.slice(0, MAX_EMBEDDED_LINES);
+}
+
+export type ReadHookResult = {
+	lines: MemoryLine[];
+	outcome: MemoryReadHookOutcome;
+	ms: number;
+	/** The error's name, for outcome "error". */
+	error?: string;
+};
+
 /**
  * Supermemory-style recall: embed the message, rank every memory line by
- * cosine similarity, keep the best few above the cutoff. Skipped on timeout.
+ * cosine similarity, keep the best few above the cutoff. Never throws: a
+ * timeout or an error yields no lines and says which it was.
  */
 export async function readHook(input: {
 	snapshot: MemorySnapshot;
@@ -353,27 +418,42 @@ export async function readHook(input: {
 	alreadyShown: (raw: string) => boolean;
 	today: string;
 	project: string | null;
+	/** The snapshot's line vectors when already loading (recallableLines order). */
+	vectors?: Promise<number[][]>;
 	cache?: Parameters<typeof cachedLineEmbeddings>[3];
 	timeoutMs?: number;
-}): Promise<MemoryLine[]> {
+}): Promise<ReadHookResult> {
+	const started = Date.now();
+	const result = (
+		outcome: MemoryReadHookOutcome,
+		lines: MemoryLine[] = [],
+		error?: string,
+	): ReadHookResult => ({
+		lines,
+		outcome,
+		ms: Date.now() - started,
+		...(error ? { error } : {}),
+	});
 	const query = memoryQueryText(input.query);
-	if (!query) return [];
-	const lines = memoryLines(input.snapshot.files)
-		.filter((entry) => entry.path !== MEMORY_ENTRY)
-		.slice(0, MAX_EMBEDDED_LINES);
-	if (!lines.length) return [];
+	if (!query) return result("skipped");
+	const lines = recallableLines(input.snapshot);
+	if (!lines.length) return result("none");
 	const work = (async () => {
-		const queryVector = await input.embed.query(query);
-		const vectors = await cachedLineEmbeddings(
-			input.userId,
-			lines.map(memoryLineEmbeddingText),
-			input.embed,
-			input.cache,
-		);
+		const [queryVector, vectors] = await Promise.all([
+			// One retry: a single slow or failed embedding call should not cost the recall.
+			input.embed.query(query).catch(() => input.embed.query(query)),
+			input.vectors ??
+				cachedLineEmbeddings(
+					input.userId,
+					lines.map(memoryLineEmbeddingText),
+					input.embed,
+					input.cache,
+				),
+		]);
 		const scores = new Map(
 			lines.map((entry, index) => [
 				entry,
-				cosineSimilarity(queryVector, vectors[index]),
+				cosineSimilarity(queryVector, vectors[index] ?? []),
 			]),
 		);
 		return selectMemoryMatches({
@@ -386,20 +466,30 @@ export async function readHook(input: {
 	})();
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	try {
-		return await Promise.race([
+		const matches = await Promise.race([
 			work,
-			new Promise<MemoryLine[]>((resolve) => {
+			new Promise<"timeout">((resolve) => {
 				timer = setTimeout(
-					() => resolve([]),
+					() => resolve("timeout"),
 					input.timeoutMs ?? READ_HOOK_TIMEOUT_MS,
 				);
 			}),
 		]);
+		if (matches === "timeout") {
+			console.warn("Memory read hook timed out.", {
+				ms: Date.now() - started,
+				lines: lines.length,
+			});
+			return result("timeout");
+		}
+		return result(matches.length ? "matched" : "none", matches);
 	} catch (error) {
-		console.warn("Memory read hook skipped.", {
-			error: error instanceof Error ? error.name : "unknown",
+		const name = error instanceof Error ? error.name : "unknown";
+		console.warn("Memory read hook failed.", {
+			error: name,
+			message: error instanceof Error ? error.message.slice(0, 200) : "",
 		});
-		return [];
+		return result("error", [], name);
 	} finally {
 		clearTimeout(timer);
 		work.catch(() => {});
