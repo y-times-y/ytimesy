@@ -11,6 +11,14 @@ export const HARNESS_VARIANT_VALUES = {
 	 */
 	memoryWording: ["notes", "rules"],
 	/**
+	 * Who writes cross-chat memory during a chat (dreaming always runs):
+	 * both = the builder saves proactively and the save hook runs after every
+	 * turn (the product default); agent = only the builder, no save hook;
+	 * observer = only the save hook, and the builder writes ~/memory only when
+	 * the user explicitly asks it to remember something.
+	 */
+	memoryWriter: ["both", "agent", "observer"],
+	/**
 	 * The builder's tool surface (builderToolSurface in
 	 * src/server/services/builder-shell-surface.ts): current = the measured
 	 * shell surface; lean-native = each model family's own vendor harness
@@ -24,10 +32,12 @@ export type HarnessVariant = {
 	readonly [Key in keyof Values]: Values[Key][number];
 };
 export type MemoryWording = HarnessVariant["memoryWording"];
+export type MemoryWriter = HarnessVariant["memoryWriter"];
 export type HarnessToolSurfaceId = HarnessVariant["toolSurface"];
 
 export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	memoryWording: "notes",
+	memoryWriter: "both",
 	toolSurface: "current",
 };
 

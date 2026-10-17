@@ -1,6 +1,6 @@
 import type { ModelMessage } from "ai";
 import { isUserRequestMessage } from "#/domain/api-conversation";
-import type { MemoryWording } from "#/domain/harness-variant";
+import type { MemoryWording, MemoryWriter } from "#/domain/harness-variant";
 import {
 	currentMemoryRecall,
 	type MemoryRecall,
@@ -89,7 +89,7 @@ export type TurnMemory = {
 		items: readonly SessionItem[],
 		turnId: string,
 	): Promise<SessionItem[]>;
-	/** The save hook: queued after a completed turn (full mode). */
+	/** The save hook: queued after a completed turn (full mode, unless the agent alone writes). */
 	afterTurn(turnId: string): Promise<void>;
 };
 
@@ -110,6 +110,8 @@ export async function turnMemory(
 		chatTitles?: (ids: readonly string[]) => Promise<Map<string, string>>;
 		/** Development harness variant: how recalled memory is presented. */
 		wording?: MemoryWording;
+		/** Development harness variant: agent = no save hook after turns. */
+		writer?: MemoryWriter;
 	} = {},
 ): Promise<TurnMemory | null> {
 	const settings = await memorySettings(owner.userId).catch((error) => {
@@ -136,6 +138,7 @@ export async function turnMemory(
 				: null;
 	const today = options.today ?? (() => new Date().toISOString().slice(0, 10));
 	const wording = options.wording ?? "notes";
+	const writer = options.writer ?? "both";
 	const url = chatSourceUrl(
 		options.appUrl ?? process.env.APP_URL ?? "http://localhost:3000",
 		owner.id,
@@ -164,6 +167,7 @@ export async function turnMemory(
 				project: projectName,
 			},
 			wording,
+			writer,
 		),
 		async prepareVm(workspace) {
 			try {
@@ -303,7 +307,7 @@ export async function turnMemory(
 			}
 		},
 		async afterTurn(turnId) {
-			if (mode !== "full") return;
+			if (mode !== "full" || writer === "agent") return;
 			await dispatchBackgroundJob({
 				id: backgroundJobId(`memory-save:${turnId}`),
 				kind: "memory",
