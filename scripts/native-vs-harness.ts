@@ -60,7 +60,7 @@ const { values: flags } = parseArgs({
 		"turn-timeout": { type: "string", default: "300" },
 		"codex-bin": { type: "string" },
 		out: { type: "string" },
-		/** Harness variant for the harness arm, e.g. memoryWording=rules (repeatable). */
+		/** Harness variant for the harness arm, e.g. toolSurface=current (repeatable; the default is lean-pi, rules, observer). */
 		variant: { type: "string", multiple: true },
 		/** Run the harness arm as the dev owner instead of a throwaway eval user. */
 		"as-owner": { type: "boolean", default: false },

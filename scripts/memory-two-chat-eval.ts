@@ -29,10 +29,11 @@
 // (scripts/smoke/eval-user.ts) with its own project, memory settings and
 // memory repo, so runs never see each other's memory or the owner's, and they
 // can run side by side (--concurrency) and alongside other eval processes.
-// --variant memoryWording=rules presents recalled memory as binding rules
-// (docs/parallel-evals.md). --variants runs several variants side by side in
+// Recalled memory is presented as binding rules and written by the save hook
+// by default; --variant memoryWording=notes or memoryWriter=both selects the
+// earlier behaviour (docs/parallel-evals.md). --variants runs several variants side by side in
 // one process, each on top of --variant, e.g.
-//   --variant memoryWording=rules --variants "memoryWriter=agent;memoryWriter=observer;memoryWriter=both"
+//   --variant memoryWording=notes --variants "memoryWriter=agent;memoryWriter=observer;memoryWriter=both"
 // and prints one row per (variant, arm): who wrote memory (the builder's own
 // ~/memory tool calls and commits in the setup chats, save-hook and dream
 // commits in the repo), what the memory jobs cost, and chat 2's result.
@@ -120,7 +121,7 @@ const { values: flags } = parseArgs({
 		"price-out": { type: "string" },
 		"keep-repos": { type: "boolean", default: false },
 		out: { type: "string" },
-		/** Harness variant, e.g. memoryWording=rules (repeatable). */
+		/** Harness variant, e.g. toolSurface=current or memoryWording=notes (repeatable; the default is lean-pi, rules, observer). */
 		variant: { type: "string", multiple: true },
 		/** Variants compared in one run, separated by ";" (each on top of --variant). */
 		variants: { type: "string" },

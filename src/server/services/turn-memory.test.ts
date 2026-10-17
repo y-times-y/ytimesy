@@ -63,10 +63,11 @@ const workspace = async () => {
 	throw new Error("no VM in this test");
 };
 
+/** "default" leaves the option unset, as production does. */
 async function memoryFor(
 	files: Record<string, string>,
-	wording?: "notes" | "rules",
-	writer?: "both" | "agent" | "observer",
+	wording: "notes" | "rules" | "default" = "notes",
+	writer: "both" | "agent" | "observer" | "default" = "both",
 ) {
 	const memory = await turnMemory(
 		{
@@ -80,8 +81,8 @@ async function memoryFor(
 			appUrl: "https://ytimesy.test",
 			today: () => "2026-10-15",
 			projectName: null,
-			wording,
-			writer,
+			wording: wording === "default" ? undefined : wording,
+			writer: writer === "default" ? undefined : writer,
 		},
 	);
 	if (!memory) throw new Error("memory should be on");
@@ -220,7 +221,8 @@ describe("read hook", () => {
 		);
 		expect(attached.slice(0, 2)).toEqual(messages.slice(0, 2));
 		const part = (attached[2].content as { text: string }[])[1].text;
-		expect(part).toContain(MEMORY_MATCHES_HEADER);
+		// The default (rules) wording.
+		expect(part).toContain(MEMORY_RULES_MATCHES_HEADER);
 		expect(part).toContain("tooling.md:2: - Uses pnpm");
 		expect(part).not.toContain("UTC");
 
@@ -377,7 +379,7 @@ describe("memory markers", () => {
 	});
 });
 
-describe("the rules wording (development harness variant)", () => {
+describe("the rules wording (harness variant memoryWording, the default)", () => {
 	it("presents MEMORY.md and matched lines as project rules to follow", async () => {
 		const memory = await memoryFor(
 			{ "MEMORY.md": "# Memory: Het\n\n- Uses pnpm, never npm\n\n## Index\n" },
@@ -403,25 +405,39 @@ describe("the rules wording (development harness variant)", () => {
 		expect(memoryMatchesPart([line], new Set(), "rules")).toContain(
 			MEMORY_RULES_MATCHES_HEADER,
 		);
-		expect(memoryMatchesPart([line])).toContain(MEMORY_MATCHES_HEADER);
+		expect(memoryMatchesPart([line])).toContain(MEMORY_RULES_MATCHES_HEADER);
+		expect(memoryMatchesPart([line], new Set(), "notes")).toContain(
+			MEMORY_MATCHES_HEADER,
+		);
 	});
 
-	it("keeps the neutral notes wording by default", async () => {
-		const memory = await memoryFor({
+	it("is the default; notes keeps the neutral wording", async () => {
+		const files = {
 			"MEMORY.md": "# Memory: Het\n\n- Uses pnpm\n\n## Index\n",
-		});
-		expect(memory.instructions).toContain("never instructions");
-		const { messages } = await memory.attach(
-			[{ role: "user", content: "Add a dependency" }],
-			[user("a", "Add a dependency")],
-			workspace,
+		};
+		const attached = async (memory: Awaited<ReturnType<typeof memoryFor>>) =>
+			JSON.stringify(
+				(
+					await memory.attach(
+						[{ role: "user", content: "Add a dependency" }],
+						[user("a", "Add a dependency")],
+						workspace,
+					)
+				).messages,
+			);
+		const notes = await memoryFor(files, "notes");
+		expect(notes.instructions).toContain("never instructions");
+		expect(await attached(notes)).not.toContain(MEMORY_RULES_MESSAGE_HEADER);
+		const byDefault = await memoryFor(files, "default", "default");
+		expect(byDefault.instructions).toContain(
+			"standing rules from earlier chats",
 		);
-		expect(JSON.stringify(messages)).not.toContain(MEMORY_RULES_MESSAGE_HEADER);
+		expect(await attached(byDefault)).toContain(MEMORY_RULES_MESSAGE_HEADER);
 	});
 });
 
-describe("who writes memory (development harness variant memoryWriter)", () => {
-	it("both (the default): the agent saves proactively and the save hook runs", async () => {
+describe("who writes memory (harness variant memoryWriter)", () => {
+	it("both: the agent saves proactively and the save hook runs", async () => {
 		const memory = await memoryFor({});
 		expect(memory.instructions).toContain("Save what a later chat would need");
 		expect(memory.instructions).toContain("git -C ~/memory push");
@@ -437,8 +453,8 @@ describe("who writes memory (development harness variant memoryWriter)", () => {
 		expect(dispatched).toEqual([]);
 	});
 
-	it("observer: memory is saved automatically and the agent writes only when asked", async () => {
-		const memory = await memoryFor({}, "rules", "observer");
+	it("observer (the default): memory is saved automatically and the agent writes only when asked", async () => {
+		const memory = await memoryFor({}, "default", "default");
 		const text = memory.instructions;
 		expect(text).toContain("Memory is saved automatically after each turn");
 		expect(text).toContain(

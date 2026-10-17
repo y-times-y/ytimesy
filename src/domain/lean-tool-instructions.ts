@@ -5,16 +5,14 @@ function toolsSentence(shape: LeanToolShape) {
 	const tools = LEAN_SHAPE_TOOLS[shape];
 	if ("stdin" in tools)
 		return `${tools.command} runs shell commands (${tools.stdin} continues one that is still running); ${tools.edit} changes files; ${tools.image} shows you an image.`;
-	return (
-		[
-			`${tools.command} runs shell commands`,
-			`${tools.edit} and ${tools.write} change files`,
-			`${tools.read} shows you a file or an image`,
-			...("glob" in tools
-				? [`${tools.glob} and ${tools.grep} find files and text`]
-				: []),
-		].join("; ") + "."
-	);
+	return `${[
+		`${tools.command} runs shell commands`,
+		`${tools.edit} and ${tools.write} change files`,
+		`${tools.read} shows you a file or an image`,
+		...("glob" in tools
+			? [`${tools.glob} and ${tools.grep} find files and text`]
+			: []),
+	].join("; ")}.`;
 }
 
 /** Pi's bash waits for every command; long-lived processes are detached, as Pi itself advises. */

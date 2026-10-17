@@ -2,6 +2,8 @@
 
 Decision recorded 2026-10-17. Status: decided; implementation and measurement in progress (branch `lean-tools`).
 
+Update 2026-10-17: `lean-pi` (Pi's four tools for every model) is now the default surface for everyone; `current` and `lean-native` stay selectable as development harness variants. See docs/decisions/2026-10-17-lean-pi-tool-surface.md.
+
 ## Decision
 
 1. **Keep the builder's always-on tool set as small as possible.** About 4 tools: run commands, edit files, read/write where the family expects them, and view images. Everything else becomes either a command on the workspace VM plus one line of instruction, or a tool that appears only when it applies.
@@ -77,8 +79,9 @@ No model in the selector names the SWE-agent/OpenHands shape as its native harne
 
 ## Implementation (branch `lean-tools`)
 
-- **Wiring point:** `builderToolSurface({ variant, modelId, tools, lean })` in `src/server/services/builder-shell-surface.ts`, called once in `api-turn.ts` where `builderShellTools` was. The variant is the turn's development harness variant `toolSurface` (`current` | `lean-native` | `lean-pi`, `src/domain/harness-variant.ts`; docs/parallel-evals.md): a development eval user picks it per run, everyone else and production get `current`. The returned `lean` object also supplies the history writer, the background-command reader text and the instruction shape.
+- **Wiring point:** `builderToolSurface({ variant, modelId, tools, lean })` in `src/server/services/builder-shell-surface.ts`, called once in `api-turn.ts` where `builderShellTools` was. The variant is the turn's harness variant `toolSurface` (`current` | `lean-native` | `lean-pi`, `src/domain/harness-variant.ts`; docs/parallel-evals.md): everyone, production included, gets `lean-pi` since 2026-10-17 (docs/decisions/2026-10-17-lean-pi-tool-surface.md); a development eval user can pick `current` or `lean-native` per run. The returned `lean` object also supplies the history writer, the background-command reader text and the instruction shape.
 - **Family detection:** `leanToolShape(variant, modelId)` in `src/domain/harness-model-profile.ts` (GPT → Codex; Gemini → Gemini CLI; Qwen → Qwen Code; everything else → Claude Code; `lean-pi` → Pi for all).
-- **Engine:** `src/server/services/lean-tools.ts` (commands through `execute_command`/`continue_command`/`stop_command`; one file reader/writer; output limit in `lean-output.ts`), `lean-edit.ts` (exact, then Pi-style fuzzy match that rewrites only the matched region).
+- **Tool names:** `LEAN_SHAPE_TOOLS` in `src/domain/harness-model-profile.ts`, one table per shape by role; plan mode, metrics, background tracking, activity cards and prompts derive their lists from it.
+- **Engine:** `src/server/services/lean-engine.ts` (commands through `execute_command`/`continue_command`/`stop_command`; one file reader/writer; output limit in `lean-output.ts`), its Python in `lean-scripts.ts`, each shape in `lean-shapes/`, and `lean-edit.ts` (exact, then Pi-style fuzzy match that rewrites only the matched region). Writes go through the runtime's own checked edit function (`LOCKED_APPLY_EDIT` in `api-agent-file-tools.ts`: edit lock, no `.git`, no symlinks, no escape, temp file removed) and must land in the repository or `~/memory`.
 - **Workspace commands:** `lean-helpers.ts` installs `ytimesy-check`, `ytimesy-browser`, `ytimesy-job` (status/wait/stop for background commands) and `~/.ytimesy/environment.md` the first time a lean tool touches the VM; compaction writes `~/.ytimesy/history/<time>-<archive>.md`.
 - **Measure:** `node --import tsx scripts/builder-context-breakdown.ts --surfaces`.

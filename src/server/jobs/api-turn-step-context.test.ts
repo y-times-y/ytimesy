@@ -98,7 +98,14 @@ vi.mock("../services/api-agent-tools", () => ({
 			inputSchema: { jsonSchema: {} },
 			execute: async () => {
 				await input.workspace();
-				return { ok: true };
+				// A finished command page, as the runtime's runner returns.
+				return {
+					id: "00000000-0000-4000-8000-000000000000",
+					status: 0,
+					stdout: "",
+					start: 0,
+					nextStart: null,
+				};
 			},
 		},
 	}),
@@ -148,8 +155,9 @@ beforeEach(() => {
 	stepRuntime.mockReset().mockImplementation(async (input) => {
 		const prepared = await input.prepareMessages(input.messages);
 		state.seen.push(prepared);
-		await input.tools.execute_command.execute(
-			{},
+		// The default (lean-pi) surface runs commands through bash.
+		await (input.tools.execute_command ?? input.tools.bash).execute(
+			{ command: "true" },
 			{ toolCallId: `call-${state.seen.length}`, messages: [] },
 		);
 		return { messages: prepared, outcome: "continue" };
@@ -239,5 +247,7 @@ it("reloads turn-fixed context when a restarted isolate resumes the turn", async
 	const [resumed] = await steps(1);
 	expect(resumed.queries.length).toBeGreaterThan(1);
 	expect(resumed.execs).toBeGreaterThan(0);
-	expect(resumed.writes).toBe(1);
+	// The turn's own write, plus the lean surface's helper bundle (this fake
+	// VM never reports it installed).
+	expect(resumed.writes).toBe(2);
 });
