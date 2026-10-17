@@ -66,6 +66,7 @@ const workspace = async () => {
 async function memoryFor(
 	files: Record<string, string>,
 	wording?: "notes" | "rules",
+	writer?: "both" | "agent" | "observer",
 ) {
 	const memory = await turnMemory(
 		{
@@ -80,6 +81,7 @@ async function memoryFor(
 			today: () => "2026-10-15",
 			projectName: null,
 			wording,
+			writer,
 		},
 	);
 	if (!memory) throw new Error("memory should be on");
@@ -415,5 +417,44 @@ describe("the rules wording (development harness variant)", () => {
 			workspace,
 		);
 		expect(JSON.stringify(messages)).not.toContain(MEMORY_RULES_MESSAGE_HEADER);
+	});
+});
+
+describe("who writes memory (development harness variant memoryWriter)", () => {
+	it("both (the default): the agent saves proactively and the save hook runs", async () => {
+		const memory = await memoryFor({});
+		expect(memory.instructions).toContain("Save what a later chat would need");
+		expect(memory.instructions).toContain("git -C ~/memory push");
+		await memory.afterTurn("turn-1");
+		expect(dispatched).toHaveLength(1);
+	});
+
+	it("agent: the agent saves proactively and no save hook is queued", async () => {
+		const memory = await memoryFor({}, undefined, "agent");
+		expect(memory.instructions).toContain("Save what a later chat would need");
+		expect(memory.instructions).not.toContain("saved automatically");
+		await memory.afterTurn("turn-1");
+		expect(dispatched).toEqual([]);
+	});
+
+	it("observer: memory is saved automatically and the agent writes only when asked", async () => {
+		const memory = await memoryFor({}, "rules", "observer");
+		const text = memory.instructions;
+		expect(text).toContain("Memory is saved automatically after each turn");
+		expect(text).toContain(
+			"write to ~/memory only when the user explicitly asks you to remember something",
+		);
+		// Read-side guidance stays: MEMORY.md, the wording, grep.
+		expect(text).toContain("MEMORY.md indexes it");
+		expect(text).toContain("standing rules from earlier chats");
+		expect(text).toContain("grep -rn <term> ~/memory");
+		expect(text).toContain(
+			"This chat is https://ytimesy.test/?chat=11111111-1111-4111-8111-111111111111.",
+		);
+		expect(text).not.toContain("Save what a later chat would need");
+		await memory.afterTurn("turn-1");
+		expect(dispatched).toEqual([
+			expect.objectContaining({ kind: "memory", action: "save" }),
+		]);
 	});
 });

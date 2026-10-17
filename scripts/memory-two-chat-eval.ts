@@ -30,7 +30,13 @@
 // memory repo, so runs never see each other's memory or the owner's, and they
 // can run side by side (--concurrency) and alongside other eval processes.
 // --variant memoryWording=rules presents recalled memory as binding rules
-// (docs/parallel-evals.md). --as-owner runs as the dev owner, one at a time.
+// (docs/parallel-evals.md). --variants runs several variants side by side in
+// one process, each on top of --variant, e.g.
+//   --variant memoryWording=rules --variants "memoryWriter=agent;memoryWriter=observer;memoryWriter=both"
+// and prints one row per (variant, arm): who wrote memory (the builder's own
+// ~/memory tool calls and commits in the setup chats, save-hook and dream
+// commits in the repo), what the memory jobs cost, and chat 2's result.
+// --as-owner runs as the dev owner, one at a time.
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -69,6 +75,13 @@ import {
 	waitProcessed,
 } from "./memory-eval/supermemory";
 import {
+	type ChatMemoryActivity,
+	chatMemoryActivity,
+	type RepoCommits,
+	repoCommitsByWriter,
+	writesSelfCheck,
+} from "./memory-eval/writes";
+import {
 	createEvalUser,
 	type EvalUser,
 	onEvalStop,
@@ -101,6 +114,8 @@ const { values: flags } = parseArgs({
 		out: { type: "string" },
 		/** Harness variant, e.g. memoryWording=rules (repeatable). */
 		variant: { type: "string", multiple: true },
+		/** Variants compared in one run, separated by ";" (each on top of --variant). */
+		variants: { type: "string" },
 		/** Runs of each (arm, scenario), each as its own eval user. */
 		repeat: { type: "string", default: "1" },
 		/** Scenario runs at once in this process (eval users make it safe). */
@@ -256,6 +271,9 @@ async function dryRun() {
 	];
 	if (checks.some((check) => !check))
 		throw new Error(`Supermemory replay check failed: ${checks.join(",")}`);
+	const writes = writesSelfCheck();
+	if (writes.length)
+		throw new Error(`Memory-writer checks failed: ${writes.join(", ")}`);
 	console.log("\nDry run passed.");
 }
 
@@ -487,6 +505,8 @@ type ChatRecord = {
 	supermemoryAttached?: boolean;
 	/** Supermemory MCP tools the agent called, in order. */
 	supermemoryCalls?: string[];
+	/** Tool calls, and those on ~/memory, from the chat's stored items. */
+	activity: ChatMemoryActivity | null;
 	errors: string[];
 };
 
@@ -526,6 +546,8 @@ type ScenarioRecord = {
 	/** The eval user the run used ("owner" with --as-owner). */
 	evalUser: string;
 	variant: string;
+	/** The --variants entry this run used ("base" without --variants). */
+	variantName: string;
 	elapsedMs: number;
 	repo: string | null;
 	passed: boolean | null;
@@ -535,6 +557,8 @@ type ScenarioRecord = {
 	setup: ChatRecord[];
 	chat2: ChatRecord | null;
 	memoryCosts: MemoryCost[];
+	/** The memory repo's commits by writer at the end of the run. */
+	repoCommits: RepoCommits | null;
 	supermemory?: SupermemoryRecord;
 	errors: string[];
 };
@@ -561,6 +585,35 @@ async function live() {
 	const dreamTimeoutMs =
 		Math.min(900, Math.max(60, Number(flags["dream-timeout"]) || 600)) * 1000;
 	const scenarios = selectScenarios();
+	const variant = harnessVariantFromFlags(flags.variant);
+	const variantLabel = harnessVariantLabel(variant);
+	const asOwner = flags["as-owner"];
+	type VariantRun = {
+		name: string;
+		variant: typeof variant;
+		label: string;
+	};
+	const variantRuns: VariantRun[] = flags.variants
+		? flags.variants
+				.split(";")
+				.map((spec) => spec.trim())
+				.filter(Boolean)
+				.map((spec) => {
+					const combined = harnessVariantFromFlags([
+						...(flags.variant ?? []),
+						spec,
+					]);
+					return {
+						name: spec,
+						variant: combined,
+						label: harnessVariantLabel(combined),
+					};
+				})
+		: [{ name: "base", variant, label: variantLabel }];
+	if (asOwner && flags.variants)
+		throw new Error("--variants needs eval users; drop --as-owner.");
+	if (new Set(variantRuns.map((row) => row.label)).size !== variantRuns.length)
+		throw new Error("--variants lists the same variant twice.");
 
 	const DEV_REF = "exampledevprojectref";
 	const ORIGIN =
@@ -627,9 +680,6 @@ async function live() {
 	const liveRepos = new Set<string>();
 	const liveContainers = new Set<string>();
 
-	const variant = harnessVariantFromFlags(flags.variant);
-	const variantLabel = harnessVariantLabel(variant);
-	const asOwner = flags["as-owner"];
 	const repeat = Math.min(20, Math.max(1, Number(flags.repeat) || 1));
 	// Memory settings are per user: the owner can only run one scenario at a time.
 	const concurrency = asOwner
@@ -785,6 +835,7 @@ async function live() {
 			outputTokens: null,
 			cachedTokens: null,
 			memoryAttached: false,
+			activity: null,
 			errors: [],
 		};
 		let vmId: string | undefined;
@@ -933,6 +984,7 @@ async function live() {
 				await delay(2000);
 			}
 			record.elapsedMs = Date.now() - started;
+			record.activity = chatMemoryActivity(finalItems);
 			record.supermemoryCalls = finalItems.flatMap((item) =>
 				(item.kind === "mcpToolCall" && item.server === "supermemory") ||
 				(item.kind === "dynamicToolCall" && /supermemory/i.test(item.tool))
@@ -1053,14 +1105,73 @@ async function live() {
 		}));
 	}
 
+	/**
+	 * The repo's commit subjects by writer, read through a short-lived
+	 * read-only token before the run's user (and repo) is released.
+	 */
+	async function repoCommits(name: string): Promise<RepoCommits | null> {
+		const dir = await mkdtemp(join(tmpdir(), "memory-eval-repo-"));
+		try {
+			const [info, token] = await Promise.all(
+				[
+					["get", name, "--namespace", NAMESPACE, "--json"],
+					[
+						"issue-token",
+						name,
+						"--namespace",
+						NAMESPACE,
+						"--scope",
+						"read",
+						"--ttl",
+						"300",
+						"--json",
+					],
+				].map(async (args) =>
+					JSON.parse(
+						(
+							await run("npx", ["wrangler", "artifacts", "repos", ...args], {
+								timeout: 60_000,
+							})
+						).stdout,
+					),
+				),
+			);
+			const remote = String(info.remote ?? "");
+			const secret = String(token.plaintext ?? token.token ?? "").split(
+				"?expires=",
+			)[0];
+			if (!remote.startsWith("https://") || !secret) return null;
+			await run(
+				"git",
+				[
+					"-c",
+					`http.extraHeader=Authorization: Bearer ${secret}`,
+					"clone",
+					"-q",
+					remote,
+					dir,
+				],
+				{ timeout: 60_000 },
+			);
+			const log = await run("git", ["-C", dir, "log", "--format=%s"]);
+			return repoCommitsByWriter(log.stdout.split("\n").filter(Boolean));
+		} catch {
+			return null;
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	}
+
 	async function runScenario(
 		user: EvalUser,
 		arm: string,
 		scenario: Scenario,
 		attempt: number,
+		variantRun: VariantRun,
 	): Promise<ScenarioRecord> {
 		if (arm === "supermemory")
-			return runSupermemoryScenario(user, scenario, attempt);
+			return runSupermemoryScenario(user, scenario, attempt, variantRun);
+		const tag = `[${arm}${repeat > 1 ? ` #${attempt}` : ""}${variantRun.label === "default" ? "" : ` ${variantRun.label}`}]`;
 		const started = new Date();
 		const repo =
 			arm === "off"
@@ -1071,7 +1182,8 @@ async function live() {
 			scenario: scenario.id,
 			attempt,
 			evalUser: user.asOwner ? "owner" : user.userId,
-			variant: variantLabel,
+			variant: variantRun.label,
+			variantName: variantRun.name,
 			elapsedMs: 0,
 			repo,
 			passed: null,
@@ -1080,6 +1192,7 @@ async function live() {
 			setup: [],
 			chat2: null,
 			memoryCosts: [],
+			repoCommits: null,
 			errors: [],
 		};
 		const project = await throwawayProject(user);
@@ -1119,6 +1232,7 @@ async function live() {
 			// Chat 2's own save hook may still be running; let it land in the costs.
 			if (arm === "full") await delay(20_000);
 			result.memoryCosts = await memoryCosts(user.userId, started);
+			if (repo) result.repoCommits = await repoCommits(repo);
 		} catch (error) {
 			result.errors.push(
 				error instanceof Error ? error.message : String(error),
@@ -1128,8 +1242,12 @@ async function live() {
 			if (repo && user.asOwner && !flags["keep-repos"]) await deleteRepo(repo);
 		}
 		result.elapsedMs = Date.now() - started.getTime();
+		const agentCommits = result.setup.reduce(
+			(total, chat) => total + (chat.activity?.memoryCommits ?? 0),
+			0,
+		);
 		console.log(
-			`[${arm}${repeat > 1 ? ` #${attempt}` : ""}${variantLabel === "default" ? "" : ` ${variantLabel}`}] ${scenario.id}: ${result.passed === null ? "no verdict" : result.passed ? "PASS" : "fail"} (dream ${result.dream}${result.chat2?.memoryAttached ? ", memory attached to chat 2" : ""})${result.errors.length ? ` errors: ${result.errors.join("; ")}` : ""}`,
+			`${tag} ${scenario.id}: ${result.passed === null ? "no verdict" : result.passed ? "PASS" : "fail"} (dream ${result.dream}${result.chat2?.memoryAttached ? ", memory attached to chat 2" : ""}; setup agent commits ${agentCommits}; repo commits ${result.repoCommits ? `agent ${result.repoCommits.agent}/hook ${result.repoCommits.saveHook}/dream ${result.repoCommits.dream}` : "unread"})${result.errors.length ? ` errors: ${result.errors.join("; ")}` : ""}`,
 		);
 		return result;
 	}
@@ -1144,6 +1262,7 @@ async function live() {
 		user: EvalUser,
 		scenario: Scenario,
 		attempt: number,
+		variantRun: VariantRun,
 	): Promise<ScenarioRecord> {
 		const repoName = user.project.dirName;
 		if (!sm) throw new Error("Supermemory is not configured.");
@@ -1165,7 +1284,8 @@ async function live() {
 			scenario: scenario.id,
 			attempt,
 			evalUser: user.asOwner ? "owner" : user.userId,
-			variant: variantLabel,
+			variant: variantRun.label,
+			variantName: variantRun.name,
 			elapsedMs: 0,
 			repo: null,
 			passed: null,
@@ -1174,6 +1294,7 @@ async function live() {
 			setup: [],
 			chat2: null,
 			memoryCosts: [],
+			repoCommits: null,
 			supermemory: record,
 			errors: [],
 		};
@@ -1314,17 +1435,22 @@ async function live() {
 	});
 	const results: ScenarioRecord[] = [];
 	const started = Date.now();
+	// Variants interleave per (arm, scenario, repeat), so a rate-limit spell or
+	// a slow stretch hits every variant alike.
 	const jobs = arms.flatMap((arm) =>
 		scenarios.flatMap((scenario) =>
-			Array.from({ length: repeat }, (_, index) => ({
-				arm,
-				scenario,
-				attempt: index + 1,
-			})),
+			Array.from({ length: repeat }, (_, index) =>
+				variantRuns.map((variantRun) => ({
+					arm,
+					scenario,
+					attempt: index + 1,
+					variantRun,
+				})),
+			).flat(),
 		),
 	);
 	console.log(
-		`Running ${jobs.length} scenario runs (${arms.join(",")} x ${scenarios.length} scenarios x ${repeat}), concurrency ${concurrency}, variant ${variantLabel}, ${owner ? "as the owner" : "one eval user per run"}.`,
+		`Running ${jobs.length} scenario runs (${arms.join(",")} x ${scenarios.length} scenarios x ${repeat}${variantRuns.length > 1 ? ` x ${variantRuns.length} variants` : ""}), concurrency ${concurrency}, variant ${variantRuns.map((row) => row.label).join(" | ")}, ${owner ? "as the owner" : "one eval user per run"}.`,
 	);
 	const leftovers: string[] = [];
 	try {
@@ -1332,18 +1458,20 @@ async function live() {
 		await Promise.all(
 			Array.from({ length: Math.min(concurrency, jobs.length) }, async () => {
 				while (next < jobs.length && !stopping) {
-					const { arm, scenario, attempt } = jobs[next++];
+					const { arm, scenario, attempt, variantRun } = jobs[next++];
 					let user: EvalUser | null = owner;
 					try {
 						user ??= await createEvalUser({
-							label: `memory-eval ${arm} ${scenario.id} #${attempt} ${variantLabel}`,
-							variant,
+							label: `memory-eval ${arm} ${scenario.id} #${attempt} ${variantRun.label}`,
+							variant: variantRun.variant,
 							keepRepos: flags["keep-repos"],
 						});
-						results.push(await runScenario(user, arm, scenario, attempt));
+						results.push(
+							await runScenario(user, arm, scenario, attempt, variantRun),
+						);
 					} catch (error) {
 						console.error(
-							`[${arm} #${attempt}] ${scenario.id}: ${error instanceof Error ? error.message : String(error)}`,
+							`[${arm} #${attempt} ${variantRun.label}] ${scenario.id}: ${error instanceof Error ? error.message : String(error)}`,
 						);
 					} finally {
 						if (user && !user.asOwner)
@@ -1391,22 +1519,36 @@ async function live() {
 			: "n/a";
 	const sum = (values: (number | null | undefined)[]) =>
 		values.reduce<number>((total, value) => total + (value ?? 0), 0);
+	const variantCell = (row: { variantName: string }) =>
+		variantRuns.length > 1 ? row.variantName : variantLabel;
+	const groups = variantRuns.flatMap((variantRun) =>
+		arms.map((arm) => ({
+			variant: variantRuns.length > 1 ? variantRun.name : variantLabel,
+			arm,
+			runs: results.filter(
+				(row) => row.arm === arm && row.variantName === variantRun.name,
+			),
+		})),
+	);
 	const rows = [
 		[
+			"variant",
 			"arm",
 			"pass",
 			"chat2 in tok",
 			"chat2 out tok",
 			"chat2 cache%",
+			"chat2 tools",
 			"chat2 attached",
+			"save calls",
 			"save in/out tok",
 			"save $",
+			"dream calls",
 			"dream in/out tok",
 			"dream $",
 		],
 	];
-	for (const arm of arms) {
-		const runs = results.filter((row) => row.arm === arm);
+	for (const { variant: name, arm, runs } of groups) {
 		const chat2 = runs.map((row) => row.chat2);
 		const input = sum(chat2.map((c) => c?.inputTokens));
 		const cost = (kind: string) => {
@@ -1415,9 +1557,14 @@ async function live() {
 			);
 			const tokensIn = sum(rowsOfKind.map((entry) => entry.inputTokens));
 			const tokensOut = sum(rowsOfKind.map((entry) => entry.outputTokens));
-			return [`${tokensIn}/${tokensOut}`, dollars(tokensIn, tokensOut)];
+			return [
+				String(sum(rowsOfKind.map((entry) => entry.calls))),
+				`${tokensIn}/${tokensOut}`,
+				dollars(tokensIn, tokensOut),
+			];
 		};
 		rows.push([
+			name,
 			arm,
 			`${runs.filter((row) => row.passed).length}/${runs.length}`,
 			String(input),
@@ -1425,36 +1572,81 @@ async function live() {
 			input
 				? `${Math.round((sum(chat2.map((c) => c?.cachedTokens)) / input) * 100)}%`
 				: "-",
+			String(sum(chat2.map((c) => c?.activity?.toolCalls))),
 			`${chat2.filter((c) => c?.memoryAttached || c?.supermemoryAttached).length}/${runs.length}`,
 			...cost("save"),
 			...cost("dream"),
 		]);
 	}
 	console.log(`\n${table(rows)}`);
+	// Who wrote memory: the builder in the setup chats (its own tool calls),
+	// and every commit in the repo by writer (all chats, hooks and dreams).
+	const setupActivity = (row: ScenarioRecord) =>
+		row.setup.map((chat) => chat.activity);
+	const writers = [
+		[
+			"variant",
+			"arm",
+			"runs",
+			"setup agent commits",
+			"setup memory tools/all tools",
+			"setup lines shown",
+			"repo agent/hook/dream commits",
+			"repo unread",
+		],
+	];
+	for (const { variant: name, arm, runs } of groups) {
+		if (arm === "off" || arm === "supermemory") continue;
+		const setup = runs.flatMap(setupActivity);
+		const commits = runs.flatMap((row) =>
+			row.repoCommits ? [row.repoCommits] : [],
+		);
+		writers.push([
+			name,
+			arm,
+			String(runs.length),
+			String(sum(setup.map((entry) => entry?.memoryCommits))),
+			`${sum(setup.map((entry) => entry?.memoryToolCalls))}/${sum(setup.map((entry) => entry?.toolCalls))}`,
+			String(sum(setup.map((entry) => entry?.savedLines))),
+			`${sum(commits.map((entry) => entry.agent))}/${sum(commits.map((entry) => entry.saveHook))}/${sum(commits.map((entry) => entry.dream))}`,
+			String(runs.length - commits.length),
+		]);
+	}
+	if (writers.length > 1) console.log(`\n${table(writers)}`);
 	const perScenario = [
 		[
+			"variant",
 			"arm",
 			"scenario",
 			"#",
 			"pass",
 			"secs",
 			"chat2 in tok",
+			"chat2 tools",
 			"attached",
+			"setup agent commits",
+			"repo a/h/d",
 			"injected",
 			"ingest",
 		],
 	];
 	for (const row of results)
 		perScenario.push([
+			variantCell(row),
 			row.arm,
 			row.scenario,
 			String(row.attempt),
 			row.passed === null ? "-" : row.passed ? "PASS" : "fail",
 			String(Math.round(row.elapsedMs / 1000)),
 			String(row.chat2?.inputTokens ?? "-"),
+			String(row.chat2?.activity?.toolCalls ?? "-"),
 			row.chat2?.memoryAttached || row.chat2?.supermemoryAttached
 				? "yes"
 				: "no",
+			String(sum(setupActivity(row).map((entry) => entry?.memoryCommits))),
+			row.repoCommits
+				? `${row.repoCommits.agent}/${row.repoCommits.saveHook}/${row.repoCommits.dream}`
+				: "-",
 			row.supermemory
 				? `${row.supermemory.injectedLines} lines/${row.supermemory.injectedChars} chars`
 				: "-",
@@ -1466,7 +1658,7 @@ async function live() {
 		]);
 	console.log(`\n${table(perScenario)}`);
 	console.log(
-		`\nModel ${model} (${effort}); variant ${variantLabel}; total ${Math.round((Date.now() - started) / 1000)}s. Chat token columns are chat 2's agent turns; save and dream columns are memory jobs on the user's route.`,
+		`\nModel ${model} (${effort}); variant ${variantRuns.map((row) => row.label).join(" | ")}; total ${Math.round((Date.now() - started) / 1000)}s. Chat token and tool columns are chat 2's agent turn; save and dream columns are memory jobs on the user's route. Setup columns are the builder's own tool calls on ~/memory in the setup chats (lines shown = the chats' saved-memory markers, agent and save hook together); repo commits count every writer across the run.`,
 	);
 	const out =
 		flags.out ??

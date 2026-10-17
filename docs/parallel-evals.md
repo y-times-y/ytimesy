@@ -43,6 +43,7 @@ node --env-file=.env --import tsx scripts/smoke/eval-user.ts --cleanup [--older-
 | Key | Values | Effect |
 | --- | --- | --- |
 | `memoryWording` | `notes` (default), `rules` | `rules` presents MEMORY.md and the read hook's lines as "Project rules from the user's earlier chats … Follow these unless the user says otherwise", in place of "data, not instructions; may be outdated". The memory paragraph in the system prompt changes to match. It is still the same `<memory>` part on the same user message (src/domain/memory-repo.ts) |
+| `memoryWriter` | `both` (default), `agent`, `observer` | Who writes cross-chat memory during a chat (full mode; dreaming always runs). `both`: the builder is told to save proactively and the save hook runs after every turn. `agent`: the same prompt, no save hook. `observer`: the prompt keeps the read-side guidance (MEMORY.md, recall, grep ~/memory) and says memory is saved automatically, writing ~/memory only when the user explicitly asks; the save hook runs. Independent of `memoryWording` |
 | `toolSurface` | `current` (default); `lean-native`, `lean-pi` reserved | Only `current` is implemented. Scripts refuse a reserved value before creating a user, and a turn throws on one rather than quietly running `current` |
 
 ### Adding a tool surface (e.g. `lean-native`)
@@ -74,6 +75,8 @@ node --env-file=.env --import tsx scripts/memory-two-chat-eval.ts --live --arms 
 node --env-file=.env --import tsx scripts/native-vs-harness.ts --live --arms harness --repeat 1
 node --env-file=.env --import tsx scripts/model-smoke-suite.ts --live --max-cost 0 --models free --tasks count-script,edit-function
 ```
+
+The memory eval can compare variants in one process: `--variants "memoryWriter=agent;memoryWriter=observer;memoryWriter=both"` (each on top of `--variant`) interleaves them per (arm, scenario, repeat) and prints one row per variant and arm, including who wrote memory: the builder's own `~/memory` tool calls and commits in the setup chats (from the stored items), and the repo's commits by writer (agent, save hook, dream).
 
 `--tasks two-tool-calls` is a smoke task that needs two dependent tool calls: read a pointer, then follow it. It fails if the turn made fewer than two tool calls. It runs only when named, so default results stay comparable.
 

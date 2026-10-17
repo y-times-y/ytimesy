@@ -14,13 +14,24 @@ describe("harness variants", () => {
 			"memoryWording=rules",
 			"toolSurface=lean-pi",
 		]);
-		expect(variant).toEqual({ memoryWording: "rules", toolSurface: "lean-pi" });
+		expect(variant).toEqual({
+			memoryWording: "rules",
+			memoryWriter: "both",
+			toolSurface: "lean-pi",
+		});
 		expect(
 			harnessVariantFromFlags(["memoryWording=rules,toolSurface=current"]),
 		).toEqual({
 			memoryWording: "rules",
+			memoryWriter: "both",
 			toolSurface: "current",
 		});
+		expect(
+			harnessVariantFromFlags(["memoryWording=rules,memoryWriter=observer"]),
+		).toMatchObject({ memoryWording: "rules", memoryWriter: "observer" });
+		expect(() => harnessVariantFromFlags(["memoryWriter=nobody"])).toThrow(
+			"accepts both, agent, observer",
+		);
 		expect(() => harnessVariantFromFlags(["memoryWording=loud"])).toThrow(
 			"accepts notes, rules",
 		);
@@ -37,7 +48,15 @@ describe("harness variants", () => {
 				toolSurface: "unknown",
 				extra: true,
 			}),
-		).toEqual({ memoryWording: "rules", toolSurface: "current" });
+		).toEqual({
+			memoryWording: "rules",
+			memoryWriter: "both",
+			toolSurface: "current",
+		});
+		expect(harnessVariantFromUnknown({ memoryWriter: "agent" })).toEqual({
+			...DEFAULT_HARNESS_VARIANT,
+			memoryWriter: "agent",
+		});
 		expect(harnessVariantFromUnknown(null)).toEqual(DEFAULT_HARNESS_VARIANT);
 		expect(harnessVariantFromUnknown(["rules"])).toEqual(
 			DEFAULT_HARNESS_VARIANT,
@@ -46,5 +65,10 @@ describe("harness variants", () => {
 		expect(harnessVariantChanges(rules)).toEqual({ memoryWording: "rules" });
 		expect(harnessVariantLabel(rules)).toBe("memoryWording=rules");
 		expect(harnessVariantLabel(DEFAULT_HARNESS_VARIANT)).toBe("default");
+		expect(
+			harnessVariantLabel(
+				harnessVariantFromFlags(["memoryWriter=agent,memoryWording=rules"]),
+			),
+		).toBe("memoryWording=rules,memoryWriter=agent");
 	});
 });
