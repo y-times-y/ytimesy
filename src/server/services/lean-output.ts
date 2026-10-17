@@ -111,8 +111,6 @@ export function truncateTail(
 export function commandTruncationNote(
 	truncation: Pick<Truncation, "firstLine" | "lastLine" | "totalLines">,
 	outputPath: string,
-	/** Lines that came before the text that was truncated (already-read output). */
-	lineOffset = 0,
 ) {
-	return `[Showing lines ${truncation.firstLine + lineOffset}-${truncation.lastLine + lineOffset} of ${truncation.totalLines + lineOffset}. Full output: ${outputPath}]`;
+	return `[Showing lines ${truncation.firstLine}-${truncation.lastLine} of ${truncation.totalLines}. Full output: ${outputPath}]`;
 }

@@ -8,28 +8,22 @@
  * spaces folded to ASCII, then NFKC. Unlike Pi, a fuzzy match replaces only
  * the matched region of the original file: everything outside it keeps its
  * bytes, so a fuzzy edit never rewrites the rest of the file normalized.
+ *
+ * patch-input.ts matches apply_patch hunks differently on purpose: line by
+ * line, and its last fallback also collapses leading and inner whitespace,
+ * since a hunk's context lines are whole lines. Both fold characters the
+ * same way (typography-fold.ts).
  */
 
+import { foldCharacter } from "./typography-fold";
+
 export class LeanEditError extends Error {}
-
-const SINGLE_QUOTES = /[‘’‚‛]/;
-const DOUBLE_QUOTES = /[“”„‟]/;
-const DASHES = /[‐‑‒–—―−]/;
-const SPACES = /[  -   　]/;
-
-function foldCharacter(character: string) {
-	if (SINGLE_QUOTES.test(character)) return "'";
-	if (DOUBLE_QUOTES.test(character)) return '"';
-	if (DASHES.test(character)) return "-";
-	if (SPACES.test(character)) return " ";
-	return character.normalize("NFKC");
-}
 
 /**
  * The normalized text and, for each of its code units, the index in `text`
  * of the character it came from (plus a final entry for the end).
  */
-export function normalizedWithMap(text: string): {
+function normalizedWithMap(text: string): {
 	text: string;
 	map: number[];
 } {
@@ -75,7 +69,7 @@ function occurrences(haystack: string, needle: string) {
 type Range = { start: number; end: number };
 
 /** Where `old` occurs in `content`: exactly, with the file's CRLF endings, or after normalization. */
-export function findOldText(
+function findOldText(
 	content: string,
 	old: string,
 ): { ranges: Range[]; fuzzy: boolean } {

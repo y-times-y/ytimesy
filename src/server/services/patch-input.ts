@@ -2,6 +2,8 @@
 // patch envelopes, SEARCH/REPLACE blocks, whole-file writes) into file changes,
 // and applies hunks with whitespace/line-drift tolerance but never ambiguously.
 
+import { foldTypography } from "./typography-fold";
+
 export class PatchInputError extends Error {}
 
 export const PATCH_INPUT_HELP = `Accepted apply_patch inputs (use one):
@@ -488,10 +490,17 @@ function joinContent({ lines, eol, finalNewline }: SplitContent) {
 	return lines.length ? `${lines.join(eol)}${finalNewline ? eol : ""}` : "";
 }
 
+/**
+ * Line matchers, strictest first: exact, trailing whitespace ignored, all
+ * whitespace runs collapsed, then also typography folded (as lean-edit.ts
+ * and Codex's apply_patch do). Hunks match whole lines, so unlike lean-edit
+ * the looser levels also ignore indentation.
+ */
 const MATCHERS: ((line: string) => string)[] = [
 	(line) => line,
 	(line) => line.trimEnd(),
 	(line) => line.trim().replace(/\s+/g, " "),
+	(line) => foldTypography(line).trim().replace(/\s+/g, " "),
 ];
 
 function findBlock(

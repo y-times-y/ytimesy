@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
 	applyLeanEdit,
 	applyLeanEdits,
-	findOldText,
 	LeanEditError,
 	normalizeForFuzzyMatch,
 } from "./lean-edit";
@@ -106,9 +105,14 @@ describe("fuzzy fallback (Pi's normalization)", () => {
 	});
 
 	it("matches the other way round, and NFKC-equivalent characters", () => {
-		const found = findOldText("x = ＡＢ\n", "x = AB");
-		expect(found.fuzzy).toBe(true);
-		expect(found.ranges).toEqual([{ start: 0, end: 6 }]);
+		const result = applyLeanEdit(
+			"x = ＡＢ\ny\n",
+			{ old: "x = AB", new: "x = C" },
+			"f",
+			names,
+		);
+		expect(result.fuzzy).toBe(true);
+		expect(result.content).toBe("x = C\ny\n");
 	});
 
 	it("still refuses an ambiguous fuzzy match", () => {
@@ -118,7 +122,9 @@ describe("fuzzy fallback (Pi's normalization)", () => {
 	});
 
 	it("never matches an old string that normalizes to whitespace only", () => {
-		expect(findOldText("a\n\n  \n", "  ").ranges).toEqual([]);
+		expect(() =>
+			applyLeanEdit("a\n\n  \n", { old: "  ", new: "x" }, "f", names),
+		).toThrow(/not found/);
 	});
 });
 
