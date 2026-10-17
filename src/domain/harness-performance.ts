@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { agentTaskToolDefinitions } from "./agent-task-definitions";
+import { leanToolNames } from "./harness-model-profile";
 
 const toolNames = [
 	...agentTaskToolDefinitions.map((tool) => tool.name),
@@ -51,22 +52,7 @@ const toolNames = [
 	"prepare_code_tools",
 	"plan_parallel_work",
 	// Lean surfaces (docs/builder-tool-surface.md).
-	"exec_command",
-	"write_stdin",
-	"Bash",
-	"Read",
-	"Write",
-	"Edit",
-	"Glob",
-	"Grep",
-	"run_shell_command",
-	"write_file",
-	"replace",
-	"edit",
-	"glob",
-	"grep_search",
-	"read",
-	"write",
+	...leanToolNames(),
 	"other",
 ] as const;
 export const harnessToolName = z.enum(toolNames);
@@ -123,12 +109,7 @@ export function toolMetricCategory(
 			"rename_symbol",
 			"rename_file",
 			"apply_code_action",
-			"Write",
-			"Edit",
-			"write_file",
-			"replace",
-			"edit",
-			"write",
+			...leanToolNames(["write", "edit"]),
 		].includes(name)
 	)
 		return "edit";
@@ -145,10 +126,7 @@ export function toolMetricCategory(
 			"debug_program",
 			"debug_node",
 			"prepare_code_tools",
-			"exec_command",
-			"write_stdin",
-			"Bash",
-			"run_shell_command",
+			...leanToolNames(["command", "stdin"]),
 		].includes(name)
 	)
 		return "command";
@@ -158,12 +136,7 @@ export function toolMetricCategory(
 		[
 			"read_file",
 			"view_image",
-			"Read",
-			"Glob",
-			"Grep",
-			"glob",
-			"grep_search",
-			"read",
+			...leanToolNames(["read", "glob", "grep", "image"]),
 			"read_files",
 			"search_files",
 			"list_files",

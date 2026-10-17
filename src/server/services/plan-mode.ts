@@ -6,6 +6,10 @@ import {
 	PLAN_TEXT_LIMIT,
 	PROPOSE_PLAN_TOOL,
 } from "#/domain/agent-plan";
+import {
+	LEAN_COMMAND_ARGUMENTS,
+	leanToolNames,
+} from "#/domain/harness-model-profile";
 import { fileChangesFromShellCommand } from "#/domain/shell-file-change";
 
 /** Tools whose successful call ends the turn. */
@@ -25,21 +29,14 @@ const EDITING_TOOLS = new Set([
 	"rename_symbol",
 	"publish_task",
 	// Lean surfaces' editing tools.
-	"Write",
-	"Edit",
-	"write_file",
-	"replace",
-	"edit",
-	"write",
+	...leanToolNames(["write", "edit"]),
 ]);
 
 /** Command tools whose shell text may write files, and the argument holding it. */
 const COMMAND_TOOLS: Readonly<Record<string, string>> = {
 	execute_command: "command",
-	exec_command: "cmd",
-	Bash: "command",
-	run_shell_command: "command",
 	bash: "command",
+	...LEAN_COMMAND_ARGUMENTS,
 };
 
 const REFUSAL = {

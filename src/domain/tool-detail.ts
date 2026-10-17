@@ -1,4 +1,5 @@
 import { commandActivityTitle } from "./command-activity-title";
+import { leanToolRole } from "./harness-model-profile";
 import { redactSecrets } from "./project-workspace";
 import type { DynamicToolCallItem } from "./session-item";
 
@@ -217,14 +218,13 @@ export function toolActivity(item: DynamicToolCallItem): ToolActivity {
 	const tool = item.tool;
 	const mcp = /^mcp__([^_]+(?:_[^_]+)*?)__(.+)$/.exec(tool);
 	if (mcp) return { verb: mcp[1], target: mcp[2].replaceAll("_", " ") };
-	switch (tool) {
+	// A lean surface's tool shows as its role (LEAN_SHAPE_TOOLS).
+	const leanRole = leanToolRole(tool);
+	switch (leanRole ? `lean:${leanRole}` : tool) {
 		case "execute_command":
-		case "bash":
 		case "start_command":
 		case "shell":
-		case "exec_command":
-		case "Bash":
-		case "run_shell_command": {
+		case "lean:command": {
 			const command = text("command") ?? text("cmd");
 			if (!command) return { verb: "Ran command" };
 			const display = displayCommand(command);
@@ -241,15 +241,14 @@ export function toolActivity(item: DynamicToolCallItem): ToolActivity {
 			return { verb: "Waited for command output", glyph: "wait" };
 		case "stop_command":
 			return { verb: "Stopped command", glyph: "stop" };
-		case "write_stdin":
+		case "lean:stdin":
 			return text("chars")?.includes("\u0003")
 				? { verb: "Stopped command", glyph: "stop" }
 				: text("chars")
 					? { verb: "Sent input to command", glyph: "wait" }
 					: { verb: "Waited for command output", glyph: "wait" };
-		case "Read":
-		case "read":
-		case "read_file": {
+		case "lean:read":
+		case "lean:image": {
 			const path = text("file_path") ?? text("path");
 			if (path && /\.(png|jpe?g|gif|webp)$/i.test(path))
 				return {
@@ -265,17 +264,14 @@ export function toolActivity(item: DynamicToolCallItem): ToolActivity {
 				glyph: "read",
 			};
 		}
-		case "Write":
-		case "write":
+		case "lean:write":
 			return {
 				verb: "Wrote",
 				target: basename(text("file_path") ?? text("path") ?? "file"),
 				code: true,
 				added: lineCount(text("content")),
 			};
-		case "Edit":
-		case "edit":
-		case "replace": {
+		case "lean:edit": {
 			const edits = Array.isArray(input.edits)
 				? (input.edits as Record<string, unknown>[])
 				: [{ oldText: input.old_string, newText: input.new_string }];
@@ -295,16 +291,14 @@ export function toolActivity(item: DynamicToolCallItem): ToolActivity {
 				),
 			};
 		}
-		case "Glob":
-		case "glob":
+		case "lean:glob":
 			return {
 				verb: "Found files",
 				target: text("pattern"),
 				code: true,
 				glyph: "search",
 			};
-		case "Grep":
-		case "grep_search":
+		case "lean:grep":
 			return {
 				verb: "Searched",
 				target: text("pattern")
@@ -370,8 +364,7 @@ export function toolActivity(item: DynamicToolCallItem): ToolActivity {
 				...patchStats(patch),
 			};
 		}
-		case "replace_text":
-		case "write_file": {
+		case "replace_text": {
 			const path = text("path") ?? text("file_path");
 			return {
 				verb: "Edited",

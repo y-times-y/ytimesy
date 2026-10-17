@@ -194,11 +194,8 @@ it("describes the lean surfaces' tools with the existing card kinds", () => {
 		toolActivity(call("Write", { file_path: "/w/new.md", content: "a\nb\n" })),
 	).toMatchObject({ verb: "Wrote", target: "new.md", added: 2 });
 	expect(
-		toolActivity(call("write_file", { file_path: "/w/x.ts" })),
-	).toMatchObject({
-		verb: "Edited",
-		target: "x.ts",
-	});
+		toolActivity(call("write_file", { file_path: "/w/x.ts", content: "x\n" })),
+	).toMatchObject({ verb: "Wrote", target: "x.ts", added: 1 });
 	expect(toolActivity(call("Grep", { pattern: "TODO" }))).toMatchObject({
 		verb: "Searched",
 		glyph: "search",
