@@ -1,6 +1,7 @@
 import { type ModelMessage, type ToolSet, tool } from "ai";
 import { z } from "zod";
 import type { ApiTokenUsage } from "#/domain/api-token-usage";
+import { clip } from "#/domain/clip";
 import { type SavedMemoryLine, savedMemoryLines } from "#/domain/memory-marker";
 import {
 	appendMemoryEntry,
@@ -12,12 +13,16 @@ import {
 	type MemoryChange,
 	type MemoryFiles,
 	type MemoryMode,
+	memoryAppUrl,
+	memoryBullet,
 	memoryLines,
 	memoryPath,
+	memoryToday,
 	parseSaveHookAnswer,
 	renderDreamInbox,
 	SAVE_HOOK_INSTRUCTIONS,
 	saveHookPrompt,
+	withMemoryChanges,
 	withoutExpired,
 } from "#/domain/memory-repo";
 import type { ModelRoute } from "#/domain/model-failover";
@@ -96,8 +101,8 @@ export function memoryJobDeps(): MemoryJobDeps {
 		recordUsage: recordMemoryModelUsage,
 		markDreamed: markMemoryDreamed,
 		recordSaved: recordMemorySaved,
-		appUrl: process.env.APP_URL ?? "http://localhost:3000",
-		today: () => new Date().toISOString().slice(0, 10),
+		appUrl: memoryAppUrl(),
+		today: memoryToday,
 	};
 }
 
@@ -242,10 +247,7 @@ export async function runMemorySave(
 			`Remember from chat ${sessionId.slice(0, 8)} (save hook)`,
 		);
 		if (outcome.ok) {
-			const after = { ...snapshot.files };
-			for (const change of changes)
-				if (change.content === null) delete after[change.path];
-				else after[change.path] = change.content;
+			const after = withMemoryChanges(snapshot.files, changes);
 			await deps
 				.recordSaved(
 					userId,
@@ -268,25 +270,22 @@ export function saveHookChanges(
 	entries: ReturnType<typeof parseSaveHookAnswer>,
 	context: { source: string; today: string },
 ) {
-	const working = { ...files };
+	let working = files;
 	const changed = new Set<string>();
 	const known = memoryLines(files).map((entry) => entry.text.toLowerCase());
 	for (const entry of entries) {
 		if (known.some((text) => text.includes(entry.text.toLowerCase()))) continue;
-		const meta = [
-			...(entry.project ? [`project: ${entry.project}`] : []),
-			`source: ${context.source}`,
-			`added: ${context.today}`,
-		].join("; ");
-		for (const change of appendMemoryEntry(
+		const appended = appendMemoryEntry(
 			working,
 			entry.file,
-			`- ${entry.text} [${meta}]`,
-		)) {
-			if (change.content === null) delete working[change.path];
-			else working[change.path] = change.content;
-			changed.add(change.path);
-		}
+			memoryBullet(entry.text, {
+				project: entry.project,
+				source: context.source,
+				added: context.today,
+			}),
+		);
+		working = withMemoryChanges(working, appended);
+		for (const change of appended) changed.add(change.path);
 		known.push(entry.text.toLowerCase());
 	}
 	return [...changed].map((path) => ({
@@ -373,7 +372,7 @@ function transcript(chat: MemoryChat) {
 				: [],
 	);
 	const text = `# ${chat.title}\n${lines.join("\n")}`;
-	return text.length > SOURCE_CHARS ? `${text.slice(0, SOURCE_CHARS)}…` : text;
+	return clip(text, SOURCE_CHARS);
 }
 
 /** The dreamer's tools over a writable copy of the repo; nothing is pushed until commit. */
@@ -529,10 +528,13 @@ export async function runMemoryDream(
 	const route = await deps.route(userId);
 	if (!route) return "no-route";
 	const snapshot: MemorySnapshot = await repo.snapshot();
-	const working: MemoryFiles = { ...snapshot.files };
-	if (mode === "full")
-		for (const change of withoutExpired(working, deps.today()))
-			if (change.content !== null) working[change.path] = change.content;
+	const working: MemoryFiles =
+		mode === "full"
+			? withMemoryChanges(
+					snapshot.files,
+					withoutExpired(snapshot.files, deps.today()),
+				)
+			: { ...snapshot.files };
 	let message: string | null = null;
 	const tools = dreamTools({
 		files: working,
