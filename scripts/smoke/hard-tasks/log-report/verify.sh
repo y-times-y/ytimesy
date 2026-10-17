@@ -1,8 +1,5 @@
-set -eo pipefail
 git diff --quiet HEAD -- tests
 python3 -m unittest discover -s tests -t . 2>&1 | tail -3
-repo=$(pwd)
-hidden=$(mktemp -d)
 cat > "$hidden/hidden_report.py" <<'PY'
 import unittest
 

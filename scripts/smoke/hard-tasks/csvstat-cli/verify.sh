@@ -1,4 +1,3 @@
-set -eo pipefail
 test -f csvstat.py
 clean=$(mktemp -d)
 cp csvstat.py "$clean/"
