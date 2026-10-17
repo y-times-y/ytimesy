@@ -1,4 +1,5 @@
 import type { ModelMessage } from "ai";
+import type { UserMessageItem } from "#/domain/session-item";
 import { database } from "./database";
 
 export async function stageServerPeerMessage(
@@ -40,26 +41,47 @@ export async function acknowledgeServerPeerMessage(
 		[recipientId, id],
 	);
 }
-/** Persist the real model history before acknowledging input; retries cannot silently discard it. */
+/**
+ * Persist the real model history before acknowledging input; retries cannot
+ * silently discard it. A runtime notice already in the history is not added
+ * again; a user's queued message is matched by its timeline id instead
+ * (`delivered`), since a person may well send the same words twice. The
+ * checkpoint receives the timeline messages this delivery adds.
+ */
 export async function injectServerPeerMessages(
 	recipientId: string,
 	history: ModelMessage[],
-	checkpoint: (messages: ModelMessage[]) => Promise<void>,
+	checkpoint: (
+		messages: ModelMessage[],
+		delivered: readonly UserMessageItem[],
+	) => Promise<void>,
+	delivered: (messageId: string) => boolean = () => false,
 ) {
-	const result = await database().query<{ id: string; message: string }>(
-		"select id,message from agent_peer_inbox where recipient_id=$1 and not accepted order by created_at,id limit 16",
+	const result = await database().query<{
+		id: string;
+		message: string;
+		queued_send: { item: UserMessageItem } | null;
+	}>(
+		"select id,message,queued_send from agent_peer_inbox where recipient_id=$1 and not accepted order by created_at,id limit 16",
 		[recipientId],
 	);
 	if (!result.rows.length) return history;
 	const injected = [...history];
-	for (const row of result.rows)
-		if (
+	const users: UserMessageItem[] = [];
+	for (const row of result.rows) {
+		const item = row.queued_send?.item;
+		if (item) {
+			if (delivered(item.id)) continue;
+			users.push(item);
+			injected.push({ role: "user", content: row.message });
+		} else if (
 			!injected.some(
-				(item) => item.role === "user" && item.content === row.message,
+				(message) => message.role === "user" && message.content === row.message,
 			)
 		)
 			injected.push({ role: "user", content: row.message });
-	await checkpoint(injected);
+	}
+	await checkpoint(injected, users);
 	await database().query(
 		"update agent_peer_inbox set accepted=true where recipient_id=$1 and id=any($2::text[])",
 		[recipientId, result.rows.map((row) => row.id)],

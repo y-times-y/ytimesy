@@ -172,6 +172,7 @@ async function prepareApiModel<T>(
 			cacheSettings,
 			maxOutputTokens: input.maxOutputTokens ?? 8192,
 			contextWindow: context.contextWindow,
+			imageInput: context.imageInput,
 			fallbackContextPolicy: boundPrefix ? "bound-prefix" : "whole-turns",
 			backgroundCompaction: connection.provider === "openai",
 			requestSettings,

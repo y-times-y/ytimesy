@@ -394,6 +394,117 @@ export class IncompleteAgentTurn extends Error {
 	}
 }
 
+/** A step stopped at its length limit without any output: the context left no room to answer. */
+export class ContextWindowExhausted extends Error {
+	constructor() {
+		super(
+			"The model stopped at its length limit without output; the conversation leaves it no room to answer.",
+		);
+		this.name = "ContextWindowExhausted";
+	}
+}
+
+/** What a provider said about an over-long request, when it said it. */
+export type ContextOverflow = {
+	/** The model's limit the provider reported. */
+	readonly limitTokens?: number;
+	/** The size the provider measured for the rejected request. */
+	readonly requestedTokens?: number;
+};
+
+const CONTEXT_OVERFLOW =
+	/context[_ ]length[_ ]exceeded|maximum context length|exceeds? (?:the |its |this model'?s? )?context (?:window|limit|length)|input exceeds the context window|prompt is too long|input is too long|prompt (?:is )?too large|too many (?:input |prompt )?tokens|input token count.{0,40}exceeds|maximum prompt length|exceed context limit|reduce the length of the (?:messages|prompt|input)/i;
+
+/** Provider wordings that carry the sizes, as [pattern, requested group, limit group, output group]. */
+const OVERFLOW_SIZES: readonly [RegExp, number, number, number?][] = [
+	[
+		/maximum context length is (\d+) tokens[\s\S]{0,200}?(?:resulted in|requested(?: about)?|contains?) (\d+) tokens/i,
+		2,
+		1,
+	],
+	[/prompt is too long: (\d+) tokens > (\d+)/i, 1, 2],
+	[
+		/input token count \((\d+)\) exceeds the maximum number of tokens allowed \((\d+)\)/i,
+		1,
+		2,
+	],
+	[
+		/maximum prompt length is (\d+) but the request contains (\d+) tokens/i,
+		2,
+		1,
+	],
+	[
+		/prompt contains (\d+) tokens[\s\S]{0,120}?(\d+) maximum context length/i,
+		1,
+		2,
+	],
+	[/(\d+) \+ (\d+) > (\d+)/, 1, 3, 2],
+];
+
+function overflowSizes(text: string): ContextOverflow {
+	for (const [pattern, requested, limit, output] of OVERFLOW_SIZES) {
+		const match = pattern.exec(text);
+		if (!match) continue;
+		const number = (group: number | undefined) =>
+			group === undefined ? 0 : Number(match[group]);
+		const limitTokens = number(limit) - number(output);
+		const requestedTokens = number(requested);
+		return {
+			...(limitTokens > 0 ? { limitTokens } : {}),
+			...(requestedTokens > 0 ? { requestedTokens } : {}),
+		};
+	}
+	return {};
+}
+
+/**
+ * Whether a provider rejected the request for exceeding the model's context
+ * (OpenAI and Codex, Anthropic, Gemini, OpenRouter and OpenAI-compatible
+ * wordings), with the sizes it reported. Only classifies; never echoes text.
+ */
+export function contextOverflow(error: unknown): ContextOverflow | null {
+	if (error instanceof ContextWindowExhausted) return {};
+	const seen = new Set<unknown>();
+	for (let current = error, depth = 0; current && depth < 8; depth++) {
+		if (typeof current !== "object" || seen.has(current)) break;
+		seen.add(current);
+		const record = current as {
+			message?: unknown;
+			code?: unknown;
+			type?: unknown;
+			data?: unknown;
+			error?: unknown;
+			responseBody?: unknown;
+			providerError?: unknown;
+			cause?: unknown;
+		};
+		const code = APICallError.isInstance(current)
+			? providerErrorCode(current.data)
+			: typeof record.code === "string"
+				? record.code.toLowerCase()
+				: undefined;
+		const text = [
+			record.message,
+			record.responseBody,
+			record.data && typeof record.data === "object"
+				? JSON.stringify(record.data)
+				: undefined,
+			record.error && typeof record.error === "object"
+				? JSON.stringify(record.error)
+				: record.error,
+		]
+			.filter((part): part is string => typeof part === "string")
+			.join(" ")
+			.slice(0, 8192);
+		if (code === "context_length_exceeded" || CONTEXT_OVERFLOW.test(text))
+			return overflowSizes(text);
+		current = RetryError.isInstance(current)
+			? current.lastError
+			: (record.providerError ?? record.cause);
+	}
+	return null;
+}
+
 function providerErrorCode(data: unknown): string | undefined {
 	if (!data || typeof data !== "object") return undefined;
 	const record = data as Record<string, unknown>;
@@ -424,6 +535,8 @@ export function apiModelFailureMessage(error: unknown): string {
 		if (known)
 			return `The workspace could not be prepared: ${known} No model request was started.`;
 	}
+	if (error instanceof ContextWindowExhausted)
+		return "The model ran out of context room for its answer, even after compacting this conversation. Start a new chat with a handoff summary. No fallback was used.";
 	if (
 		error instanceof SafeApiModelFailure ||
 		error instanceof SubscriptionUsageLimitReached ||
@@ -466,7 +579,7 @@ export function apiModelFailureMessage(error: unknown): string {
 					detail,
 				))
 		)
-			return "The model rejected this conversation because it exceeds its context window. Start a new chat with a handoff summary. No fallback was used.";
+			return "The model rejected this conversation because it exceeds its context window, even after compacting it. Start a new chat with a handoff summary. No fallback was used.";
 		if (
 			code === "unsupported_tool" ||
 			(inspectDetails &&

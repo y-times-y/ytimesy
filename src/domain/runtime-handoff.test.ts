@@ -3,8 +3,11 @@ import { expect, it } from "vitest";
 import { apiConversation, runtimeHandoffPrompt } from "./api-conversation";
 import { SessionItemId } from "./ids";
 import {
+	closeUnansweredToolCalls,
+	continuedTurnHistory,
 	modelSwitchHistory,
 	providerNeutralHistory,
+	UNANSWERED_TOOL_CALL,
 	visibleRuntimeUserText,
 } from "./runtime-handoff";
 import { compactTimelineItems, sessionItemsFromUnknown } from "./session-item";
@@ -56,7 +59,7 @@ it("preserves delimiter-like text inside history and the actual request", () => 
 	expect(visibleRuntimeUserText(envelope)).toBe(prompt);
 });
 
-it("drops provider-bound history when a turn switches provider mid-turn", () => {
+it("drops provider-bound history, not unanswered calls, when a turn switches provider mid-turn", () => {
 	const history: ModelMessage[] = [
 		{ role: "user", content: "Fix the test." },
 		{
@@ -161,6 +164,12 @@ it("drops provider-bound history when a turn switches provider mid-turn", () => 
 					toolName: "read_file",
 					input: { path: "a.test.ts" },
 				},
+				{
+					type: "tool-call",
+					toolCallId: "call_2",
+					toolName: "run_checks",
+					input: {},
+				},
 			],
 		},
 		{
@@ -171,6 +180,16 @@ it("drops provider-bound history when a turn switches provider mid-turn", () => 
 					toolCallId: "call_1",
 					toolName: "read_file",
 					output: { type: "text", value: "test body" },
+				},
+				// The cut-off call stays visible with a stand-in result.
+				{
+					type: "tool-result",
+					toolCallId: "call_2",
+					toolName: "run_checks",
+					output: {
+						type: "error-text",
+						value: UNANSWERED_TOOL_CALL.interrupted,
+					},
 				},
 			],
 		},
@@ -204,4 +223,103 @@ it("drops provider-bound history when a turn switches provider mid-turn", () => 
 	expect(providerNeutralHistory(neutral.slice(0, -1))).toEqual(
 		neutral.slice(0, -1),
 	);
+});
+
+it("answers every unanswered call of a stopped turn right after it", () => {
+	const history: ModelMessage[] = [
+		{ role: "user", content: "Run it" },
+		{
+			role: "assistant",
+			content: [
+				{ type: "tool-call", toolCallId: "a", toolName: "run", input: {} },
+				{ type: "tool-call", toolCallId: "b", toolName: "run", input: {} },
+			],
+		},
+		{
+			role: "tool",
+			content: [
+				{
+					type: "tool-result",
+					toolCallId: "a",
+					toolName: "run",
+					output: { type: "text", value: "ok" },
+				},
+			],
+		},
+		{
+			role: "assistant",
+			content: [
+				{ type: "tool-call", toolCallId: "c", toolName: "run", input: {} },
+			],
+		},
+	];
+	const closed = closeUnansweredToolCalls(history, "stopped");
+	expect(closed.map((message) => message.role)).toEqual([
+		"user",
+		"assistant",
+		"tool",
+		"assistant",
+		"tool",
+	]);
+	expect(closed[2].content).toHaveLength(2);
+	expect(closed[4]).toEqual({
+		role: "tool",
+		content: [
+			{
+				type: "tool-result",
+				toolCallId: "c",
+				toolName: "run",
+				output: { type: "error-text", value: "stopped" },
+			},
+		],
+	});
+	expect(closeUnansweredToolCalls(closed, "again")).toEqual(closed);
+});
+
+it("continues natively on the same transport and provider-neutral elsewhere", () => {
+	const messages: ModelMessage[] = [
+		{ role: "user", content: "Fix it" },
+		{
+			role: "assistant",
+			content: [
+				{
+					type: "reasoning",
+					text: "",
+					providerOptions: { openai: { reasoningEncryptedContent: "sealed" } },
+				},
+				{ type: "text", text: "Done" },
+			],
+		},
+	];
+	const saved = {
+		messages,
+		modelId: "gpt",
+		connectionRevision:
+			'codex-subscription:v1:{"reasoning":"low","fast":false}',
+		state: "completed" as const,
+		failedOver: false,
+	};
+	// A subscription's reasoning setting is not a different transport.
+	expect(
+		continuedTurnHistory(saved, {
+			modelId: "gpt",
+			connectionRevision:
+				'codex-subscription:v1:{"reasoning":"high","fast":false}',
+		}),
+	).toEqual(messages);
+	for (const next of [
+		{ modelId: "claude", connectionRevision: saved.connectionRevision },
+		{ modelId: "gpt", connectionRevision: "api-revision" },
+	])
+		expect(JSON.stringify(continuedTurnHistory(saved, next))).not.toContain(
+			"sealed",
+		);
+	expect(
+		JSON.stringify(
+			continuedTurnHistory(
+				{ ...saved, failedOver: true },
+				{ modelId: "gpt", connectionRevision: saved.connectionRevision },
+			),
+		),
+	).not.toContain("sealed");
 });

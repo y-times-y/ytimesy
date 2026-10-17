@@ -3,6 +3,7 @@ import {
 	ApiModelPreparationFailure,
 	ApiTurnCancelled,
 	CodexReconnectRequired,
+	ContextWindowExhausted,
 	IncompleteAgentTurn,
 	InitialAgentReadFailure,
 	LifecycleHookRefusal,
@@ -15,6 +16,7 @@ import type { FailoverReason } from "./model-failover";
 /** Failures a different route cannot fix: the user (or the request) must change. */
 const NEVER_FAIL_OVER = [
 	ApiTurnCancelled,
+	ContextWindowExhausted,
 	CodexReconnectRequired,
 	ApiModelPreparationFailure,
 	UnsupportedEdgeModelEndpoint,

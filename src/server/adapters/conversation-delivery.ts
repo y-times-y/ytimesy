@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import { recordedContextUsage } from "#/domain/api-progress";
 import { childTaskPublicItems } from "#/domain/child-task-activity";
 import type { ConversationSnapshot } from "#/domain/conversation-delivery";
-import { sessionItemsFromUnknown } from "#/domain/session-item";
+import {
+	sessionItemsFromUnknown,
+	type UserMessageItem,
+	withQueuedUserMessages,
+} from "#/domain/session-item";
 import { database } from "./database";
 
 type DeliveryRow = {
@@ -10,10 +14,15 @@ type DeliveryRow = {
 	session_id: string;
 	revision: string;
 	items: unknown[];
+	/** Messages still waiting behind the running turn, oldest first. */
+	queued: UserMessageItem[] | null;
 	turn_status: ConversationSnapshot["progress"]["turnStatus"];
 };
 function snapshot(row: DeliveryRow): ConversationSnapshot {
-	const items = childTaskPublicItems(sessionItemsFromUnknown(row.items));
+	const items = withQueuedUserMessages(
+		childTaskPublicItems(sessionItemsFromUnknown(row.items)),
+		row.queued ?? [],
+	);
 	return {
 		userId: row.user_id,
 		sessionId: row.session_id,
@@ -28,7 +37,9 @@ function snapshot(row: DeliveryRow): ConversationSnapshot {
 }
 export async function conversationSnapshot(userId: string, sessionId: string) {
 	const result = await database().query<DeliveryRow>(
-		`select s.user_id,s.id session_id,d.revision::text,s.items,s.turn_status
+		`select s.user_id,s.id session_id,d.revision::text,s.items,s.turn_status,
+	 (select jsonb_agg(q.queued_send->'item' order by q.created_at,q.id) from agent_peer_inbox q
+	  where q.recipient_id=s.id and not q.accepted and q.queued_send is not null) as queued
 	 from agent_session s join conversation_delivery d on d.session_id=s.id
 	 where s.id=$1 and s.user_id=$2`,
 		[sessionId, userId],
@@ -49,7 +60,9 @@ export async function claimConversationDeliveries(
 	 where revision>delivered_revision and retry_at<=now() and (lease_until is null or lease_until<now())
 	 and ($3::uuid is null or session_id=$3::uuid)
 	 order by retry_at for update skip locked limit $2) returning session_id,revision)
-	 select s.user_id,s.id session_id,c.revision::text,s.items,s.turn_status
+	 select s.user_id,s.id session_id,c.revision::text,s.items,s.turn_status,
+	 (select jsonb_agg(q.queued_send->'item' order by q.created_at,q.id) from agent_peer_inbox q
+	  where q.recipient_id=s.id and not q.accepted and q.queued_send is not null) as queued
 	 from claimed c join agent_session s on s.id=c.session_id`,
 		[leaseId, limit, sessionId ?? null],
 	);
