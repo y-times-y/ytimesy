@@ -29,6 +29,15 @@ export const HARNESS_VARIANT_VALUES = {
 	 * vendor harness tools.
 	 */
 	toolSurface: ["current", "lean-native", "lean"],
+	/**
+	 * Which requests share a provider prompt-cache routing key (the Codex
+	 * subscription's session-id and prompt_cache_key, an API route's cache
+	 * key): chat = one key per chat, like native Codex's per-thread key (the
+	 * default); account = one key for all of the user's chats on that
+	 * connection, so a new chat's first request can reuse the instructions and
+	 * tools an earlier chat already cached.
+	 */
+	promptCacheScope: ["chat", "account"],
 } as const;
 
 type Values = typeof HARNESS_VARIANT_VALUES;
@@ -38,12 +47,23 @@ export type HarnessVariant = {
 export type MemoryWording = HarnessVariant["memoryWording"];
 export type MemoryWriter = HarnessVariant["memoryWriter"];
 export type HarnessToolSurfaceId = HarnessVariant["toolSurface"];
+export type PromptCacheScope = HarnessVariant["promptCacheScope"];
 
 export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	memoryWording: "rules",
 	memoryWriter: "observer",
 	toolSurface: "lean",
+	promptCacheScope: "chat",
 };
+
+/**
+ * The scope a turn's prompt-cache key is derived from (hashed with the user
+ * and connection, never sent as is): the chat, or one fixed scope per
+ * account.
+ */
+export function promptCacheScopeId(scope: PromptCacheScope, chatId: string) {
+	return scope === "account" ? "account" : chatId;
+}
 
 function isKey(key: string): key is keyof Values {
 	return Object.hasOwn(HARNESS_VARIANT_VALUES, key);

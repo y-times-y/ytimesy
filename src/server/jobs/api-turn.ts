@@ -23,7 +23,10 @@ import {
 	TURN_COORDINATION_LEASE_MS,
 	type TurnControl,
 } from "#/domain/conversation-turn-control";
-import { DEFAULT_HARNESS_VARIANT } from "#/domain/harness-variant";
+import {
+	DEFAULT_HARNESS_VARIANT,
+	promptCacheScopeId,
+} from "#/domain/harness-variant";
 import { SessionItemId, WorkspaceId } from "#/domain/ids";
 import { prepareInterruptedStep } from "#/domain/interrupted-step";
 import { withMemoryRecall } from "#/domain/memory-marker";
@@ -837,7 +840,7 @@ async function runApiTurnAttempt(
 							modelContextWindow: previousContext.modelContextWindow,
 						}
 					: undefined,
-			cacheScopeId: owner.id,
+			cacheScopeId: promptCacheScopeId(variant.promptCacheScope, owner.id),
 			userId: turn.user_id,
 			connectionId: route.connectionId ?? undefined,
 			connectionRevision: route.connectionRevision,
