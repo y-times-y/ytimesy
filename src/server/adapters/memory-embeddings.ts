@@ -7,7 +7,7 @@ import { memoryEmbeddings, saveMemoryEmbeddings } from "./memory-settings";
  * text. Cost is ours (cents per million tokens), not billed per user.
  * Queries and documents embed differently (Qwen3 is asymmetric).
  */
-export const MEMORY_EMBEDDING_MODEL = "@cf/qwen/qwen3-embedding-0.6b";
+const MEMORY_EMBEDDING_MODEL = "@cf/qwen/qwen3-embedding-0.6b";
 const BATCH = 32;
 /**
  * The query side carries Qwen3's "Instruct: …\nQuery: …" prefix; sent as a
@@ -90,7 +90,7 @@ export function memoryEmbedder(): Embed | null {
 	});
 }
 
-export function lineHash(text: string) {
+function lineHash(text: string) {
 	return createHash("sha256").update(text).digest("hex");
 }
 

@@ -44,7 +44,7 @@ const WORTH_SAVING = "durable preferences, decisions, corrections and facts";
 /** What every memory writer leaves out. */
 const NOT_WORTH_SAVING = "what only mattered for the current task";
 /** Longest entry text the save hook accepts; its prompt asks for no more. */
-export const MEMORY_ENTRY_MAX_CHARS = 300;
+const MEMORY_ENTRY_MAX_CHARS = 300;
 const EXAMPLE_ENTRY = "Uses pnpm, never npm";
 
 /** One entry as written: `- <text> [key: value; …]`, empty values left out. */
@@ -140,7 +140,7 @@ export function memoryLines(files: MemoryFiles): MemoryLine[] {
 		);
 }
 
-export function isExpired(meta: Record<string, string>, today: string) {
+function isExpired(meta: Record<string, string>, today: string) {
 	return /^\d{4}-\d{2}-\d{2}$/.test(meta.expires ?? "") && meta.expires < today;
 }
 
@@ -292,7 +292,7 @@ export function chatIdFromSource(source: string): string | null {
 
 /** Memory rides on a user message as one extra text part, so earlier messages stay byte-identical. */
 export const MEMORY_PART_OPEN = "<memory>";
-export function memoryPart(body: string) {
+function memoryPart(body: string) {
 	return `${MEMORY_PART_OPEN}\n${body.trim()}\n</memory>`;
 }
 export function isMemoryPart(text: string) {
@@ -355,7 +355,7 @@ export function memoryQueryText(message: string): string | null {
 }
 
 /** Qwen3-Embedding's query format; documents are embedded without an instruction. */
-export const MEMORY_QUERY_INSTRUCTION =
+const MEMORY_QUERY_INSTRUCTION =
 	"Given a user's request to a coding agent, retrieve relevant memories";
 export function memoryEmbeddingQuery(text: string) {
 	return `Instruct: ${MEMORY_QUERY_INSTRUCTION}\nQuery: ${text}`;
@@ -498,7 +498,7 @@ export type DreamChat = {
 	failedCommands: readonly { command: string; output: string }[];
 };
 
-export const DREAM_INBOX_CHARS = 40_000;
+const DREAM_INBOX_CHARS = 40_000;
 const CHAT_CHARS = 8_000;
 
 /**

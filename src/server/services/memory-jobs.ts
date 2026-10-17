@@ -52,7 +52,7 @@ import type { ModelAgentInput } from "./model-agent-loop";
 
 /** Seconds a user's chats must be idle before their memory is dreamed. */
 export const DREAM_IDLE_SECONDS = 15 * 60;
-export const DREAM_MAX_STEPS = 24;
+const DREAM_MAX_STEPS = 24;
 const DREAM_TIMEOUT_MS = 12 * 60 * 1000;
 const SAVE_TIMEOUT_MS = 90_000;
 const SOURCE_CHARS = 12_000;
@@ -376,7 +376,7 @@ function transcript(chat: MemoryChat) {
 }
 
 /** The dreamer's tools over a writable copy of the repo; nothing is pushed until commit. */
-export function dreamTools(input: {
+function dreamTools(input: {
 	files: MemoryFiles;
 	readSource: (link: string) => Promise<string>;
 	onCommit: (message: string) => void;
@@ -471,10 +471,7 @@ export function dreamTools(input: {
 	};
 }
 
-export function dreamChanges(
-	before: MemoryFiles,
-	after: MemoryFiles,
-): MemoryChange[] {
+function dreamChanges(before: MemoryFiles, after: MemoryFiles): MemoryChange[] {
 	return [
 		...Object.entries(after)
 			.filter(([path, content]) => before[path] !== content)
