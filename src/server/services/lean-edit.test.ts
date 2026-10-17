@@ -133,10 +133,10 @@ describe("multi-edit", () => {
 		const result = applyLeanEdits(
 			"alpha\nbeta\ngamma\n",
 			[
-				{ oldText: "gamma", newText: "GAMMA" },
-				{ oldText: "alpha", newText: "beta" },
+				{ old_string: "gamma", new_string: "GAMMA" },
+				{ old_string: "alpha", new_string: "beta" },
 				// Matched in the original, so the new "beta" above does not make this ambiguous.
-				{ oldText: "beta\n", newText: "BETA\n" },
+				{ old_string: "beta\n", new_string: "BETA\n" },
 			],
 			"f",
 		);
@@ -149,21 +149,21 @@ describe("multi-edit", () => {
 			applyLeanEdits(
 				"a b c",
 				[
-					{ oldText: "a", newText: "x" },
-					{ oldText: "zzz", newText: "y" },
+					{ old_string: "a", new_string: "x" },
+					{ old_string: "zzz", new_string: "y" },
 				],
 				"f",
 			),
-		).toThrow(/edits\[1\]\.oldText.*Nothing was changed/);
+		).toThrow(/edits\[1\]\.old_string.*Nothing was changed/);
 		expect(() =>
-			applyLeanEdits("a a", [{ oldText: "a", newText: "x" }], "f"),
+			applyLeanEdits("a a", [{ old_string: "a", new_string: "x" }], "f"),
 		).toThrow(/occurs 2 times/);
 		expect(() =>
 			applyLeanEdits(
 				"abcdef",
 				[
-					{ oldText: "abc", newText: "x" },
-					{ oldText: "cde", newText: "y" },
+					{ old_string: "abc", new_string: "x" },
+					{ old_string: "cde", new_string: "y" },
 				],
 				"f",
 			),
@@ -174,7 +174,7 @@ describe("multi-edit", () => {
 		expect(
 			applyLeanEdits(
 				"if (x) {  \n  go();\n}\n",
-				[{ oldText: "if (x) {\n  go();", newText: "if (y) {\n  go();" }],
+				[{ old_string: "if (x) {\n  go();", new_string: "if (y) {\n  go();" }],
 				"f",
 			),
 		).toMatchObject({ content: "if (y) {\n  go();\n}\n", fuzzy: true });

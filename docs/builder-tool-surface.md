@@ -2,7 +2,7 @@
 
 Decision recorded 2026-10-17. Status: decided; implementation and measurement in progress (branch `lean-tools`).
 
-Update 2026-10-17: `lean` (our own core four tools, `read`, `write`, `edit`, `bash`, for every model) is now the default surface for everyone; `current` and `lean-native` stay selectable as development harness variants. See docs/decisions/2026-10-17-lean-tool-surface.md.
+Update 2026-10-17: `lean` (our own core four tools, `read`, `write`, `edit{path, edits[{old_string, new_string}]}`, `bash`, for every model) is now the default surface for everyone; `current` and `lean-native` stay selectable as development harness variants. See docs/decisions/2026-10-17-lean-tool-surface.md.
 
 ## Decision
 

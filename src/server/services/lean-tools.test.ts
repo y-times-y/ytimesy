@@ -295,7 +295,7 @@ describe("each family's tool names and argument shapes", () => {
 		});
 	});
 
-	it("core: read, write, edit{edits[]}, bash", async () => {
+	it("core: read, write, edit{edits[{old_string, new_string}]}, bash", async () => {
 		const tools = lean("core");
 		expect(Object.keys(tools)).toEqual(["read", "write", "edit", "bash"]);
 		expect(await schemaOf(tools, "read")).toEqual({
@@ -306,6 +306,20 @@ describe("each family's tool names and argument shapes", () => {
 			properties: ["path", "edits"],
 			required: ["path", "edits"],
 		});
+		const editItem = (
+			(await asSchema(tools.edit.inputSchema).jsonSchema) as {
+				properties: {
+					edits: {
+						items: { properties: Record<string, unknown>; required: string[] };
+					};
+				};
+			}
+		).properties.edits.items;
+		expect(Object.keys(editItem.properties)).toEqual([
+			"old_string",
+			"new_string",
+		]);
+		expect(editItem.required).toEqual(["old_string", "new_string"]);
 		expect(await schemaOf(tools, "bash")).toEqual({
 			properties: ["command", "timeout"],
 			required: ["command"],
@@ -614,8 +628,8 @@ describe("files go through one reader, writer and edit engine", () => {
 			await run(lean("core"), "edit", {
 				path: "c.txt",
 				edits: [
-					{ oldText: "one", newText: "1" },
-					{ oldText: "three", newText: "3" },
+					{ old_string: "one", new_string: "1" },
+					{ old_string: "three", new_string: "3" },
 				],
 			}),
 		).toContain("2 edits applied");
@@ -625,8 +639,8 @@ describe("files go through one reader, writer and edit engine", () => {
 			run(lean("core"), "edit", {
 				path: "c.txt",
 				edits: [
-					{ oldText: "a\nb", newText: "A\nB" },
-					{ oldText: "b\na\n", newText: "x" },
+					{ old_string: "a\nb", new_string: "A\nB" },
+					{ old_string: "b\na\n", new_string: "x" },
 				],
 			}),
 		).rejects.toThrow(/overlap/);

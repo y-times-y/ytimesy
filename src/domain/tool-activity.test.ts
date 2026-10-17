@@ -179,12 +179,20 @@ it("describes the lean surfaces' tools with the existing card kinds", () => {
 			call("edit", {
 				path: "src/app.ts",
 				edits: [
-					{ oldText: "a", newText: "b\nc" },
-					{ oldText: "d", newText: "e" },
+					{ old_string: "a", new_string: "b\nc" },
+					{ old_string: "d", new_string: "e" },
 				],
 			}),
 		),
 	).toMatchObject({ verb: "Edited", added: 3, removed: 2 });
+	expect(
+		toolActivity(
+			call("edit", {
+				path: "src/app.ts",
+				edits: [{ oldText: "a\nb", newText: "c" }],
+			}),
+		),
+	).toMatchObject({ verb: "Edited", added: 1, removed: 2 });
 	expect(
 		toolActivity(
 			call("replace", { file_path: "a.py", old_string: "x", new_string: "y" }),
