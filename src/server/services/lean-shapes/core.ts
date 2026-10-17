@@ -23,50 +23,56 @@ import {
 	writeFile,
 } from "./common";
 
-/** Pi's four tools: one neutral shape for every model. */
-export function piTools(engine: LeanEngine): ToolSet {
-	const names = LEAN_SHAPE_TOOLS.pi;
+/** Our core four tools (read, write, edit, bash): one neutral shape for every model. */
+export function coreTools(engine: LeanEngine): ToolSet {
+	const names = LEAN_SHAPE_TOOLS.core;
 	return {
 		[names.read]: tool({
 			description:
-				"Read the contents of a file. Supports text files and images (jpg, png, gif, webp); images are sent as attachments. For text files, output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files.",
+				"Show a file. Text comes back as lines (at most 2000 lines or 50 KB per call; page through a long file with offset and limit). A jpg, png, gif or webp image comes back as the image itself.",
 			inputSchema: z.object({
-				path: pathArgument("Path to the file to read (relative or absolute)"),
+				path: pathArgument(
+					"File to show, relative to the repository root or absolute",
+				),
 				offset: z
 					.number()
 					.int()
 					.min(1)
 					.optional()
-					.describe("Line number to start reading from (1-indexed)"),
+					.describe("First line to show, counting from 1"),
 				limit: z
 					.number()
 					.int()
 					.min(1)
 					.optional()
-					.describe("Maximum number of lines to read"),
+					.describe("How many lines to show at most"),
 			}),
 			execute: ({ path, offset, limit }) =>
-				readForModel(engine, "pi", path, offset, limit),
+				readForModel(engine, "core", path, offset, limit),
 			toModelOutput: ({ output }) => imageOutput(output) ?? textOutput(output),
 		}),
 		[names.write]: tool({
 			description:
-				"Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
+				"Replace a file's whole content, creating the file and any missing directories when needed.",
 			inputSchema: z.object({
-				path: pathArgument("Path to the file to write (relative or absolute)"),
+				path: pathArgument(
+					"File to write, relative to the repository root or absolute",
+				),
 				content: z
 					.string()
 					.max(WRITE_CONTENT_MAX_CHARACTERS)
-					.describe("Content to write to the file"),
+					.describe("The complete new content of the file"),
 			}),
 			execute: (args, options) =>
 				writeFile(engine, names.write, args, options, args.path, args.content),
 		}),
 		[names.edit]: tool({
 			description:
-				"Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file (each is matched against the original, not after earlier edits). Use one call with several edits for several changes to the same file.",
+				"Change one file by replacing text. Each edits[].oldText is looked up in the file as it was before this call (not after the other edits) and must occur exactly once; two edits may not touch the same text. Put several changes to one file in a single call.",
 			inputSchema: z.object({
-				path: pathArgument("Path to the file to edit (relative or absolute)"),
+				path: pathArgument(
+					"File to change, relative to the repository root or absolute",
+				),
 				edits: z
 					.array(
 						z.object({
@@ -74,11 +80,11 @@ export function piTools(engine: LeanEngine): ToolSet {
 								.string()
 								.min(1)
 								.max(EDIT_TEXT_MAX_CHARACTERS)
-								.describe("Exact text to find and replace"),
+								.describe("Text that is in the file now, copied exactly"),
 							newText: z
 								.string()
 								.max(EDIT_TEXT_MAX_CHARACTERS)
-								.describe("Replacement text"),
+								.describe("What that text becomes"),
 						}),
 					)
 					.min(1)
@@ -89,24 +95,24 @@ export function piTools(engine: LeanEngine): ToolSet {
 					const edited = await engine.editFile(args.path, (content) =>
 						applyLeanEdits(content, args.edits, args.path),
 					);
-					return `Successfully replaced ${edited.replacements} block(s) in ${edited.path}.${edited.fuzzy ? " (Matched after normalizing whitespace, quotes or dashes; only the matched regions changed.)" : ""}`;
+					return `Updated ${edited.path}: ${edited.replacements} ${edited.replacements === 1 ? "edit" : "edits"} applied.${edited.fuzzy ? " The text matched after normalizing whitespace, quotes or dashes; only the matched regions changed." : ""}`;
 				}),
 		}),
 		[names.command]: tool({
-			description: `Execute a bash command in the repository root. Returns stdout and stderr. Output is truncated to the last 2000 lines or 50KB (whichever is hit first); the full output is saved to a file. Optionally provide a timeout in seconds (at most ${LEAN_COMMAND_MAX_SECONDS}).`,
+			description: `Run a bash command from the repository root and wait for it to finish. You get stdout and stderr together; past 2000 lines or 50 KB only the end is shown and the rest is kept in a file. timeout stops the command after that many seconds (at most ${LEAN_COMMAND_MAX_SECONDS}).`,
 			inputSchema: z.object({
 				command: z
 					.string()
 					.min(1)
 					.max(COMMAND_MAX_CHARACTERS)
-					.describe("Bash command to execute"),
+					.describe("The command to run"),
 				timeout: z
 					.number()
 					.min(1)
 					.max(LEAN_COMMAND_MAX_SECONDS)
 					.optional()
 					.describe(
-						`Timeout in seconds (optional, at most ${LEAN_COMMAND_MAX_SECONDS})`,
+						`Seconds before the command is stopped (at most ${LEAN_COMMAND_MAX_SECONDS})`,
 					),
 			}),
 			execute: ({ command, timeout }, options) =>

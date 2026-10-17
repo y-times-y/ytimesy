@@ -1,13 +1,13 @@
 /**
  * The exact-string edit engine behind every lean surface's edit tool (Claude
- * Code's Edit, Gemini CLI's replace, Qwen Code's edit and Pi's edit).
+ * Code's Edit, Gemini CLI's replace, Qwen Code's edit and our core edit).
  *
  * An edit first matches its old text exactly. Only when that finds nothing does
- * it retry, as Pi's edit-diff does, on a normalized view of both texts:
- * trailing whitespace per line, curly quotes, Unicode dashes and special
- * spaces folded to ASCII, then NFKC. Unlike Pi, a fuzzy match replaces only
- * the matched region of the original file: everything outside it keeps its
- * bytes, so a fuzzy edit never rewrites the rest of the file normalized.
+ * it retry on a normalized view of both texts: trailing whitespace per line
+ * dropped, curly quotes, Unicode dashes and special spaces folded to ASCII,
+ * then NFKC. Every normalized code unit remembers the file offset it came
+ * from, so a fuzzy match replaces only the matched region of the original
+ * file: everything outside it keeps its bytes.
  *
  * patch-input.ts matches apply_patch hunks differently on purpose: line by
  * line, and its last fallback also collapses leading and inner whitespace,
@@ -50,7 +50,7 @@ function normalizedWithMap(text: string): {
 	return { text: normalized, map };
 }
 
-export function normalizeForFuzzyMatch(text: string) {
+export function normalizeForMatching(text: string) {
 	return normalizedWithMap(text).text;
 }
 
@@ -88,7 +88,7 @@ function findOldText(
 				fuzzy: false,
 			};
 	}
-	const wanted = normalizeForFuzzyMatch(old);
+	const wanted = normalizeForMatching(old);
 	if (!wanted.trim()) return { ranges: [], fuzzy: true };
 	const { text, map } = normalizedWithMap(content);
 	return {
@@ -170,7 +170,7 @@ export function applyLeanEdit(
 }
 
 /**
- * Pi's edit: several replacements, each matched once against the ORIGINAL
+ * The core edit: several replacements, each matched once against the ORIGINAL
  * file (not after earlier ones), with no overlaps; all or nothing.
  */
 export function applyLeanEdits(
@@ -190,11 +190,11 @@ export function applyLeanEdits(
 		const found = findOldText(content, edit.oldText);
 		if (!found.ranges.length)
 			throw new LeanEditError(
-				`Could not find ${label} in ${path}. It must match exactly, including all whitespace and newlines. No edits were applied.`,
+				`${label} is not in ${path}. Copy it from the file as it is now, indentation and line breaks included. Nothing was changed.`,
 			);
 		if (found.ranges.length > 1)
 			throw new LeanEditError(
-				`${label} matches ${found.ranges.length} places in ${path}; include more surrounding context so it is unique. No edits were applied.`,
+				`${label} occurs ${found.ranges.length} times in ${path}; add nearby lines until it occurs once. Nothing was changed.`,
 			);
 		fuzzy ||= found.fuzzy;
 		return { range: found.ranges[0], replacement: edit.newText, label };
@@ -205,7 +205,7 @@ export function applyLeanEdits(
 	for (let index = 1; index < ordered.length; index++)
 		if (ordered[index].range.start < ordered[index - 1].range.end)
 			throw new LeanEditError(
-				`${ordered[index - 1].label} and ${ordered[index].label} overlap; merge them into one edit. No edits were applied.`,
+				`${ordered[index - 1].label} and ${ordered[index].label} overlap; combine them into one edit. Nothing was changed.`,
 			);
 	return {
 		content: applyRanges(content, located),

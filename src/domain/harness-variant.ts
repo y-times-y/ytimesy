@@ -22,13 +22,13 @@ export const HARNESS_VARIANT_VALUES = {
 	memoryWriter: ["both", "agent", "observer"],
 	/**
 	 * The builder's tool surface (builderToolSurface in
-	 * src/server/services/builder-shell-surface.ts): lean-pi = Pi's four
-	 * tools for every model (the default,
-	 * docs/decisions/2026-10-17-lean-pi-tool-surface.md); current = the
+	 * src/server/services/builder-shell-surface.ts): lean = our core four
+	 * tools (read, write, edit, bash) for every model (the default,
+	 * docs/decisions/2026-10-17-lean-tool-surface.md); current = the
 	 * earlier measured shell surface; lean-native = each model family's own
 	 * vendor harness tools.
 	 */
-	toolSurface: ["current", "lean-native", "lean-pi"],
+	toolSurface: ["current", "lean-native", "lean"],
 } as const;
 
 type Values = typeof HARNESS_VARIANT_VALUES;
@@ -42,7 +42,7 @@ export type HarnessToolSurfaceId = HarnessVariant["toolSurface"];
 export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	memoryWording: "rules",
 	memoryWriter: "observer",
-	toolSurface: "lean-pi",
+	toolSurface: "lean",
 };
 
 function isKey(key: string): key is keyof Values {

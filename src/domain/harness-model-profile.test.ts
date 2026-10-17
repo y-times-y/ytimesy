@@ -141,7 +141,7 @@ it("keeps v13-shell's behavioural guidance on lean surfaces, in their tool names
 	const surfaces = [
 		["codex", ["exec_command", "write_stdin", "apply_patch", "view_image"]],
 		["claude", ["Bash", "Read", "Write", "Edit", "Glob", "Grep"]],
-		["pi", ["bash", "read", "write", "edit"]],
+		["core", ["bash", "read", "write", "edit"]],
 	] as const;
 	for (const [shape, tools] of surfaces) {
 		const lean = harnessModelToolInstructions("other", false, tools);

@@ -288,7 +288,7 @@ describe("lean instructions", () => {
 			"apply_patch changes files",
 		);
 		expect(leanToolInstructions("qwen")).toContain("edit and write_file");
-		expect(leanToolInstructions("pi")).toContain("tmux new -d");
+		expect(leanToolInstructions("core")).toContain("tmux new -d");
 	});
 
 	it("replace the builder's tool-specific system prompt", () => {
@@ -311,7 +311,7 @@ describe("lean instructions", () => {
 		const knowing = agentTurnInstructions({
 			...input,
 			projectKnowledge: "Billing lives in billing/.",
-			leanShape: "pi",
+			leanShape: "core",
 		});
 		expect(knowing).toContain("Shared project knowledge");
 		expect(knowing).toContain("Billing lives in billing/.");

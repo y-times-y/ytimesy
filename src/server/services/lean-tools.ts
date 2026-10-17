@@ -7,13 +7,13 @@ import {
 } from "./lean-engine";
 import { claudeTools } from "./lean-shapes/claude";
 import { codexTools } from "./lean-shapes/codex";
+import { coreTools } from "./lean-shapes/core";
 import { geminiTools } from "./lean-shapes/gemini";
-import { piTools } from "./lean-shapes/pi";
 
 /**
  * The lean builder surfaces (docs/builder-tool-surface.md): each model family
- * sees the tool names and argument shapes of its own vendor harness (or Pi's
- * neutral four), over one shared engine (lean-engine.ts). Commands go through
+ * sees the tool names and argument shapes of its own vendor harness (or our own
+ * core four), over one shared engine (lean-engine.ts). Commands go through
  * the runtime's execute/continue/stop tools (same runner, limits, journal and
  * background tracking); edits through one exact-then-fuzzy matcher; every
  * output through one limit (2000 lines / 50 KB, head for reads, tail for
@@ -37,6 +37,6 @@ export function leanShapeTools(
 				? claudeTools(engine)
 				: shape === "gemini" || shape === "qwen"
 					? geminiTools(engine, shape === "qwen")
-					: piTools(engine);
+					: coreTools(engine);
 	return { tools, engine };
 }

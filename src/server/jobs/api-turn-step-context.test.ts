@@ -155,7 +155,7 @@ beforeEach(() => {
 	stepRuntime.mockReset().mockImplementation(async (input) => {
 		const prepared = await input.prepareMessages(input.messages);
 		state.seen.push(prepared);
-		// The default (lean-pi) surface runs commands through bash.
+		// The default (lean) surface runs commands through bash.
 		await (input.tools.execute_command ?? input.tools.bash).execute(
 			{ command: "true" },
 			{ toolCallId: `call-${state.seen.length}`, messages: [] },

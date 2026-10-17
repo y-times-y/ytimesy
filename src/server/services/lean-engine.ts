@@ -11,17 +11,17 @@ import { LeanEditError } from "./lean-edit";
 import { ensureLeanHelpers } from "./lean-helpers";
 import {
 	commandTruncationNote,
+	keepHead,
+	keepTail,
 	LEAN_MAX_BYTES,
-	truncateHead,
-	truncateTail,
 } from "./lean-output";
 import { READ_SCRIPT, TAIL_SCRIPT, WRITE_SCRIPT } from "./lean-scripts";
 import { toolRequestFingerprint } from "./tool-execution-identity";
 
 /**
  * The lean builder surfaces (docs/builder-tool-surface.md): each model family
- * sees the tool names and argument shapes of its own vendor harness (or Pi's
- * neutral four), over one shared engine. Commands go through the runtime's
+ * sees the tool names and argument shapes of its own vendor harness (or our own
+ * core four), over one shared engine. Commands go through the runtime's
  * execute/continue/stop tools (same runner, limits, journal and background
  * tracking); edits through one exact-then-fuzzy matcher; every output through
  * one limit (2000 lines / 50 KB, head for reads, tail for commands, with the
@@ -171,7 +171,7 @@ export function leanEngine(base: ToolSet, context: LeanSurfaceContext) {
 				? text.length < 32_000
 				: page.nextStart === null || page.nextStart === undefined);
 		if (complete) {
-			const truncation = truncateTail(text, { maxBytes });
+			const truncation = keepTail(text, { maxBytes });
 			return {
 				output: truncation.content,
 				end:
@@ -198,7 +198,7 @@ export function leanEngine(base: ToolSet, context: LeanSurfaceContext) {
 			lines: number;
 			end: number;
 		};
-		const truncation = truncateTail(tail.text, { maxBytes });
+		const truncation = keepTail(tail.text, { maxBytes });
 		const shownLines = truncation.lastLine - truncation.firstLine + 1;
 		return {
 			output: truncation.content,
@@ -483,7 +483,7 @@ export function leanEngine(base: ToolSet, context: LeanSurfaceContext) {
 						`Search failed (exit ${result.exitCode}).`,
 				);
 			if (!result.stdout.trim()) return emptyMessage;
-			const truncation = truncateHead(result.stdout);
+			const truncation = keepHead(result.stdout);
 			return truncation.truncated
 				? `${truncation.content}[Showing the first ${truncation.lastLine} of ${truncation.totalLines} lines; narrow the search to see the rest.]`
 				: truncation.content;

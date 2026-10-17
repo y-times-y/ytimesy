@@ -8,7 +8,7 @@ import type { LeanCommandResult, LeanEngine } from "../lean-engine";
 import { LEAN_MAX_LINES } from "../lean-output";
 import { GLOB_RESULTS_SCRIPT } from "../lean-scripts";
 
-/** What every lean shape (codex.ts, claude.ts, gemini.ts, pi.ts) shares. */
+/** What every lean shape (codex.ts, claude.ts, gemini.ts, core.ts) shares. */
 
 export type ExecuteOptions = Parameters<NonNullable<Tool["execute"]>>[1];
 
@@ -50,7 +50,7 @@ export const textOutput = (value: unknown) => ({
 	value: typeof value === "string" ? value : JSON.stringify(value),
 });
 
-export type ReadView = "claude" | "gemini" | "pi";
+export type ReadView = "claude" | "gemini" | "core";
 
 /** A file read in each harness's own format; images as images. */
 export async function readForModel(
@@ -108,7 +108,7 @@ export async function readForModel(
 	const next = last + 1;
 	return view === "gemini"
 		? `IMPORTANT: The file content has been truncated.\nStatus: Showing lines ${read.startLine}-${last} of ${read.totalLines} total lines.\nAction: To read more of the file, use start_line: ${next}.\n\n--- FILE CONTENT (truncated) ---\n${body}`
-		: `${body}\n\n[Showing lines ${read.startLine}-${last} of ${read.totalLines}. Use offset=${next} to continue.]`;
+		: `${body}\n\n[Lines ${read.startLine}-${last} of ${read.totalLines}; read on from offset ${next}.]`;
 }
 
 export const editNote = (

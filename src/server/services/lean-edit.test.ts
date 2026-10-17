@@ -3,9 +3,9 @@ import {
 	applyLeanEdit,
 	applyLeanEdits,
 	LeanEditError,
-	normalizeForFuzzyMatch,
+	normalizeForMatching,
 } from "./lean-edit";
-import { truncateHead, truncateTail } from "./lean-output";
+import { keepHead, keepTail } from "./lean-output";
 
 const names = { old: "old_string", all: "replace_all" };
 
@@ -68,9 +68,9 @@ describe("exact edits", () => {
 	});
 });
 
-describe("fuzzy fallback (Pi's normalization)", () => {
+describe("fuzzy fallback (normalized matching)", () => {
 	it("normalizes trailing whitespace, quotes, dashes, spaces and NFKC", () => {
-		expect(normalizeForFuzzyMatch("say “hi”   \nit’s — a b Ａ")).toBe(
+		expect(normalizeForMatching("say “hi”   \nit’s — a b Ａ")).toBe(
 			'say "hi"\nit\'s - a b A',
 		);
 	});
@@ -128,7 +128,7 @@ describe("fuzzy fallback (Pi's normalization)", () => {
 	});
 });
 
-describe("Pi's multi-edit", () => {
+describe("multi-edit", () => {
 	it("matches every edit against the original file and applies them together", () => {
 		const result = applyLeanEdits(
 			"alpha\nbeta\ngamma\n",
@@ -154,10 +154,10 @@ describe("Pi's multi-edit", () => {
 				],
 				"f",
 			),
-		).toThrow(/edits\[1\]\.oldText.*No edits were applied/);
+		).toThrow(/edits\[1\]\.oldText.*Nothing was changed/);
 		expect(() =>
 			applyLeanEdits("a a", [{ oldText: "a", newText: "x" }], "f"),
-		).toThrow(/matches 2 places/);
+		).toThrow(/occurs 2 times/);
 		expect(() =>
 			applyLeanEdits(
 				"abcdef",
@@ -186,7 +186,7 @@ describe("output limits", () => {
 		Array.from({ length: count }, (_, index) => `line ${index + 1}`).join("\n");
 
 	it("keeps the head for reads and the tail for commands, by lines", () => {
-		const head = truncateHead(lines(3000));
+		const head = keepHead(lines(3000));
 		expect(head).toMatchObject({
 			truncated: true,
 			totalLines: 3000,
@@ -194,18 +194,18 @@ describe("output limits", () => {
 			lastLine: 2000,
 		});
 		expect(head.content.startsWith("line 1\n")).toBe(true);
-		const tail = truncateTail(lines(3000));
+		const tail = keepTail(lines(3000));
 		expect(tail).toMatchObject({ firstLine: 1001, lastLine: 3000 });
 		expect(tail.content.endsWith("line 3000")).toBe(true);
 	});
 
 	it("stops at 50 KB, whole lines first, cutting a single huge line", () => {
 		const text = `${"x".repeat(30_000)}\n${"y".repeat(30_000)}\n`;
-		expect(truncateHead(text)).toMatchObject({ truncated: true, lastLine: 1 });
-		expect(truncateTail(text)).toMatchObject({ truncated: true, firstLine: 2 });
+		expect(keepHead(text)).toMatchObject({ truncated: true, lastLine: 1 });
+		expect(keepTail(text)).toMatchObject({ truncated: true, firstLine: 2 });
 		const huge = "z".repeat(80_000);
-		expect(Buffer.byteLength(truncateTail(huge).content)).toBe(50 * 1024);
-		expect(truncateTail("short\n")).toMatchObject({
+		expect(Buffer.byteLength(keepTail(huge).content)).toBe(50 * 1024);
+		expect(keepTail("short\n")).toMatchObject({
 			truncated: false,
 			content: "short\n",
 		});
