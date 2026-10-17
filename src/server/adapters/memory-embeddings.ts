@@ -9,6 +9,8 @@ import { memoryEmbeddings, saveMemoryEmbeddings } from "./memory-settings";
  */
 const MEMORY_EMBEDDING_MODEL = "@cf/qwen/qwen3-embedding-0.6b";
 const BATCH = 32;
+/** A new memory of a few hundred lines embeds in about one round trip. */
+const PARALLEL_BATCHES = 4;
 /**
  * The query side carries Qwen3's "Instruct: …\nQuery: …" prefix; sent as a
  * document so the service adds no instruction of its own.
@@ -46,11 +48,24 @@ function embedder(run: Run): Embed {
 			return vector;
 		},
 		documents: async (texts) => {
-			const out: number[][] = [];
+			const batches: string[][] = [];
 			for (let start = 0; start < texts.length; start += BATCH)
-				out.push(
-					...(await run({ documents: texts.slice(start, start + BATCH) })),
-				);
+				batches.push(texts.slice(start, start + BATCH));
+			const results: number[][][] = new Array(batches.length);
+			let next = 0;
+			const worker = async () => {
+				while (next < batches.length) {
+					const index = next++;
+					results[index] = await run({ documents: batches[index] });
+				}
+			};
+			await Promise.all(
+				Array.from(
+					{ length: Math.min(PARALLEL_BATCHES, batches.length) },
+					worker,
+				),
+			);
+			const out = results.flat();
 			if (out.length !== texts.length)
 				throw new Error("Embedding model returned no data.");
 			return out;
@@ -95,8 +110,32 @@ function lineHash(text: string) {
 }
 
 /**
- * Embeddings for `texts`: cached ones from the database, the rest computed
- * once and saved. Unchanged lines are never embedded again.
+ * Line vectors this isolate already loaded or computed, by user, model and
+ * line hash: a chat's later turns (and the user's next chat in the same
+ * isolate) skip the database read. Bounded; the oldest entries go first.
+ */
+const warm = new Map<string, number[]>();
+const WARM_LIMIT = 4000;
+const warmKey = (userId: string, hash: string) =>
+	`${userId}\n${MEMORY_EMBEDDING_MODEL}\n${hash}`;
+
+function remember(userId: string, hash: string, vector: number[]) {
+	const key = warmKey(userId, hash);
+	warm.delete(key);
+	warm.set(key, vector);
+	while (warm.size > WARM_LIMIT)
+		warm.delete(warm.keys().next().value as string);
+}
+
+/** Test seam: forget the isolate's warm vectors. */
+export function resetWarmLineEmbeddings() {
+	warm.clear();
+}
+
+/**
+ * Embeddings for `texts`: vectors this isolate holds, then cached ones from
+ * the database, the rest computed once and saved. Unchanged lines are never
+ * embedded again, and a warm isolate reads nothing.
  */
 export async function cachedLineEmbeddings(
 	userId: string,
@@ -105,10 +144,22 @@ export async function cachedLineEmbeddings(
 	cache = { load: memoryEmbeddings, save: saveMemoryEmbeddings },
 ) {
 	const hashes = texts.map(lineHash);
-	const known = await cache.load(userId, MEMORY_EMBEDDING_MODEL, [
-		...new Set(hashes),
-	]);
-	const missing = [...new Set(hashes.filter((hash) => !known.has(hash)))];
+	const known = new Map<string, number[]>();
+	for (const hash of hashes) {
+		const vector = warm.get(warmKey(userId, hash));
+		if (vector) known.set(hash, vector);
+	}
+	const cold = [...new Set(hashes.filter((hash) => !known.has(hash)))];
+	if (cold.length)
+		for (const [hash, vector] of await cache.load(
+			userId,
+			MEMORY_EMBEDDING_MODEL,
+			cold,
+		)) {
+			known.set(hash, vector);
+			remember(userId, hash, vector);
+		}
+	const missing = cold.filter((hash) => !known.has(hash));
 	if (missing.length) {
 		const byHash = new Map(hashes.map((hash, index) => [hash, texts[index]]));
 		const vectors = await embed.documents(
@@ -118,7 +169,10 @@ export async function cachedLineEmbeddings(
 			hash,
 			embedding: vectors[index],
 		}));
-		for (const row of rows) known.set(row.hash, row.embedding);
+		for (const row of rows) {
+			known.set(row.hash, row.embedding);
+			remember(userId, row.hash, row.embedding);
+		}
 		await cache.save(userId, MEMORY_EMBEDDING_MODEL, rows);
 	}
 	return hashes.map((hash) => known.get(hash) ?? []);

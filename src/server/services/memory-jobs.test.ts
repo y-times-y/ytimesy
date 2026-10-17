@@ -71,6 +71,7 @@ function harness(options: {
 		agent: [] as ModelAgentInput[],
 		routes: [] as unknown[],
 		saved: [] as unknown[][],
+		warmed: [] as string[][],
 	};
 	const deps: Deps = {
 		settings: async () => ({
@@ -130,6 +131,9 @@ function harness(options: {
 		recordSaved: async (...args) => {
 			calls.saved.push(args);
 			return true;
+		},
+		warmLines: async (_user, texts) => {
+			calls.warmed.push([...texts]);
 		},
 		appUrl: "https://ytimesy.test",
 		today: () => "2026-10-15",
@@ -362,6 +366,8 @@ describe("save hook", () => {
 				[{ path: "tooling.md", text: "Uses pnpm, never npm" }],
 			],
 		]);
+		// The new line is embedded before the next chat's read hook needs it.
+		expect(calls.warmed).toEqual([["tooling: Uses pnpm, never npm"]]);
 	});
 
 	it("runs after every turn in full mode, and never outside it", async () => {

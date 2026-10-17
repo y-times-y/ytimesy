@@ -239,7 +239,7 @@ describe("read hook", () => {
 		expect(later.at(-1)?.content).toBe("install another library with pnpm");
 	});
 
-	it("skips short messages and gives up after the timeout", async () => {
+	it("skips short messages, and says whether it timed out or failed", async () => {
 		const snapshot = { head: "a", files };
 		const base = {
 			snapshot,
@@ -249,7 +249,10 @@ describe("read hook", () => {
 			project: null,
 			cache,
 		};
-		expect(await readHook({ ...base, embed, query: "ok" })).toEqual([]);
+		expect(await readHook({ ...base, embed, query: "ok" })).toMatchObject({
+			lines: [],
+			outcome: "skipped",
+		});
 		expect(documents).not.toHaveBeenCalled();
 		const never = () => new Promise<never>(() => {});
 		const slow = { query: never, documents: never };
@@ -260,15 +263,62 @@ describe("read hook", () => {
 				query: "fix the timestamps in the export",
 				timeoutMs: 20,
 			}),
-		).toEqual([]);
+		).toMatchObject({ lines: [], outcome: "timeout" });
+		const broken = {
+			query: async () => {
+				throw new TypeError("embedding service down");
+			},
+			documents,
+		};
+		expect(
+			await readHook({
+				...base,
+				embed: broken,
+				query: "fix the timestamps in the export",
+			}),
+		).toMatchObject({ lines: [], outcome: "error", error: "TypeError" });
 		const found = await readHook({
 			...base,
 			embed,
 			query: "fix the timestamps in the export",
 		});
-		expect(found.map((entry) => entry.text)).toEqual([
+		expect(found.outcome).toBe("matched");
+		expect(found.ms).toBeGreaterThanOrEqual(0);
+		expect(found.lines.map((entry) => entry.text)).toEqual([
 			"Store timestamps in UTC",
 		]);
+	});
+
+	it("uses the line vectors prefetched with the turn and records the hook on the recall", async () => {
+		const snapshot = vi.fn(async () => ({ head: "abc", files }));
+		const memory = await turnMemory(
+			{
+				id: "11111111-1111-4111-8111-111111111111",
+				userId: "u-prefetch",
+				projectId: null,
+			},
+			{
+				repo: { ...fakeRepo(files), snapshot },
+				embed,
+				today: () => "2026-10-15",
+				projectName: null,
+			},
+		);
+		if (!memory) throw new Error("memory should be on");
+		// Prefetched before the request is attached: the lines are embedded already.
+		await vi.waitFor(() => expect(documents).toHaveBeenCalledTimes(1));
+		const { recall } = await memory.attach(
+			[{ role: "user", content: "install a date library please" }],
+			[user("a", "install a date library please")],
+			workspace,
+		);
+		expect(snapshot).toHaveBeenCalledTimes(1);
+		expect(documents).toHaveBeenCalledTimes(1);
+		expect(recall?.hook).toEqual({
+			outcome: "matched",
+			ms: expect.any(Number),
+		});
+		expect(recall?.lines.map((line) => line.path)).toEqual(["tooling.md"]);
 	});
 });
 
@@ -300,6 +350,7 @@ describe("memory markers", () => {
 		expect(recall).toEqual({
 			head: "abc",
 			index: true,
+			hook: { outcome: "matched", ms: expect.any(Number) },
 			lines: [
 				{
 					path: "tooling.md",

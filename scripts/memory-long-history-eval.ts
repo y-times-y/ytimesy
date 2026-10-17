@@ -99,6 +99,8 @@ const { values: flags } = parseArgs({
 		report: { type: "string" },
 		/** Offline: the read hook's ranking for each probe on an ours run's snapshot. */
 		"recall-check": { type: "string" },
+		/** Offline: the read hook's wall time on the seeded ~150 lines, cold and warm. */
+		"hook-latency": { type: "boolean", default: false },
 		arm: { type: "string" },
 		model: { type: "string", default: "gpt-6.1-sol" },
 		effort: { type: "string", default: "medium" },
@@ -442,6 +444,8 @@ export type ChatResult = {
 	passed: boolean | null;
 	verifierOutput: string;
 	expiredLeak: string | null;
+	/** Ours: the read hook's outcome and wall time, as recorded on the request. */
+	hook?: { outcome: string; ms: number; error?: string };
 	/** Supermemory: the plugin's recall for this prompt. */
 	smRecall?: {
 		profileItems: number;
@@ -677,7 +681,9 @@ async function followTurn(run: Run, sessionId: string, result: ChatResult) {
 		const state = await env.turnState(sessionId);
 		items = env.sessionItemsFromUnknown(state?.items);
 		result.state = state?.state ?? "missing";
-		const usage = items.find((item) => item.kind === "userMessage")?.apiUsage;
+		const request = items.find((item) => item.kind === "userMessage");
+		const usage = request?.apiUsage;
+		if (request?.memory?.hook) result.hook = { ...request.memory.hook };
 		if (usage) {
 			result.inputTokens = usage.inputTokens;
 			result.outputTokens = usage.outputTokens;
@@ -1681,6 +1687,19 @@ function printReport(outputs: ArmOutput[]) {
 				]);
 	if (sizes.length > 1) console.log(`\n${table(sizes)}`);
 	for (const output of outputs) {
+		const hooks = [
+			...output.probes,
+			...output.freshness.map((row) => row.probe),
+		].flatMap((row) => (row.hook ? [row.hook] : []));
+		if (hooks.length) {
+			const outcomes = new Map<string, number>();
+			for (const hook of hooks)
+				outcomes.set(hook.outcome, (outcomes.get(hook.outcome) ?? 0) + 1);
+			const ms = hooks.map((hook) => hook.ms).sort((a, b) => a - b);
+			console.log(
+				`\n${output.arm} read hook: ${[...outcomes].map(([outcome, count]) => `${outcome} ${count}`).join(", ")}; median ${ms[Math.floor(ms.length / 2)]}ms, max ${ms[ms.length - 1]}ms`,
+			);
+		}
 		if (output.costs.length)
 			console.log(
 				`\n${output.arm} memory jobs: ${output.costs.map((c) => `${c.kind} ${c.calls} calls, ${c.inputTokens} in (${c.cachedTokens} cached) / ${c.outputTokens} out`).join("; ")}`,
@@ -1812,7 +1831,69 @@ async function recallCheck() {
 	);
 }
 
+// ---------------------------------------------------------------------------
+// --hook-latency: the read hook on the seeded history, from this machine.
+
+async function hookLatency() {
+	const { CLOUDFLARE_ACCOUNT_ID } = await import("./development-config");
+	process.env.CLOUDFLARE_ACCOUNT_ID ||= CLOUDFLARE_ACCOUNT_ID;
+	const { memoryEmbedder, resetWarmLineEmbeddings } = await import(
+		"../src/server/adapters/memory-embeddings"
+	);
+	const { readHook, recallableLines } = await import(
+		"../src/server/services/turn-memory"
+	);
+	const embed = memoryEmbedder();
+	if (!embed)
+		throw new Error("Set CLOUDFLARE_API_TOKEN (npx wrangler auth token).");
+	const snapshot = { head: "seed", files: seedFiles() };
+	// A database stand-in: vectors stored as JSON text, parsed on every load.
+	const stored = new Map<string, string>();
+	const cache = {
+		load: async (_user: string, _model: string, hashes: readonly string[]) =>
+			new Map(
+				hashes.flatMap((hash) => {
+					const row = stored.get(hash);
+					return row ? [[hash, JSON.parse(row) as number[]] as const] : [];
+				}),
+			),
+		save: async (
+			_user: string,
+			_model: string,
+			rows: readonly { hash: string; embedding: readonly number[] }[],
+		) => {
+			for (const row of rows)
+				stored.set(row.hash, JSON.stringify(row.embedding));
+		},
+	};
+	const rows = [["case", "probe", "outcome", "ms"]];
+	const run = async (label: string, prompt: string) => {
+		const result = await readHook({
+			snapshot,
+			embed,
+			userId: "latency",
+			query: `${prompt}${PROMPT_SUFFIX}`,
+			alreadyShown: () => false,
+			today: memoryToday(),
+			project: null,
+			cache,
+			timeoutMs: 60_000,
+		});
+		rows.push([label, prompt.slice(0, 40), result.outcome, String(result.ms)]);
+	};
+	const lines = recallableLines(snapshot).length;
+	await run(`cold (embed ${lines} lines)`, PROBES[0].prompt);
+	for (const probe of PROBES.slice(1, 4)) {
+		resetWarmLineEmbeddings();
+		await run("database-warm", probe.prompt);
+	}
+	for (const probe of PROBES.slice(4, 7))
+		await run("isolate-warm", probe.prompt);
+	console.log(table(rows));
+}
+
 if (flags["dry-run"]) await dryRun();
+else if (flags["hook-latency"]) await hookLatency();
 else if (flags["recall-check"]) await recallCheck();
 else if (flags.report) await report();
 else if (flags.live) await live();
