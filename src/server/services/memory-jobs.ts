@@ -11,6 +11,7 @@ import {
 	cosineSimilarity,
 	type DreamChat,
 	dreamInstructions,
+	dreamReviewSection,
 	MEMORY_ENTRY,
 	type MemoryChange,
 	type MemoryFiles,
@@ -45,6 +46,7 @@ import {
 	memoryRepoName,
 } from "../adapters/memory-repos";
 import {
+	lastMemoryReview,
 	latestUserModelRoute,
 	type MemoryChat,
 	type MemorySettings,
@@ -62,6 +64,12 @@ import type { ModelAgentInput } from "./model-agent-loop";
 /** Seconds a user's chats must be idle before their memory is dreamed. */
 export const DREAM_IDLE_SECONDS = 15 * 60;
 const DREAM_MAX_STEPS = 24;
+/** A dream that also reviews the whole repo gets more steps for its rewrites. */
+const REVIEW_MAX_STEPS = 36;
+/** How often a dream also reviews the whole repo. */
+export const DREAM_REVIEW_DAYS = 7;
+/** Recorded as the dream's outcome suffix; lastMemoryReview looks for it. */
+export const DREAM_REVIEW_OUTCOME = ":review";
 const DREAM_TIMEOUT_MS = 12 * 60 * 1000;
 const SAVE_TIMEOUT_MS = 90_000;
 const SOURCE_CHARS = 12_000;
@@ -88,6 +96,8 @@ export type MemoryJobDeps = {
 		userMessageId: string,
 		lines: readonly SavedMemoryLine[],
 	): Promise<boolean>;
+	/** When the user's last whole-repo dream review ran, or null. */
+	lastReview(userId: string): Promise<Date | null>;
 	/** Embeds new memory lines ahead of the next chat's read hook. */
 	warmLines(userId: string, texts: readonly string[]): Promise<void>;
 	/** Cosine similarity of each line to the message, or null without embeddings. */
@@ -118,6 +128,7 @@ export function memoryJobDeps(): MemoryJobDeps {
 		recordUsage: recordMemoryModelUsage,
 		markDreamed: markMemoryDreamed,
 		recordSaved: recordMemorySaved,
+		lastReview: lastMemoryReview,
 		warmLines: async (userId, texts) => {
 			const embed = memoryEmbedder();
 			if (embed && texts.length)
@@ -165,6 +176,8 @@ async function runOnUserModel(
 		maxSteps: number;
 		endTurnTools?: string[];
 		timeoutMs: number;
+		/** Appended to the recorded outcome. */
+		outcomeSuffix?: string;
 	},
 ) {
 	const subscription = subscriptionTurnSettings(input.route.connectionRevision);
@@ -223,7 +236,7 @@ async function runOnUserModel(
 			modelId: input.route.modelId,
 			usage,
 			steps,
-			outcome,
+			outcome: `${outcome}${input.outcomeSuffix ?? ""}`,
 		})
 		.catch(() => console.warn("Memory model usage could not be recorded."));
 	return { outcome, text, steps } as const;
@@ -350,7 +363,7 @@ export function saveHookChanges(
 			const { path, raw } = entry.replaces;
 			const content = working[path];
 			const lines = content?.split("\n") ?? [];
-			const index = lines.findIndex((line) => line === raw);
+			const index = lines.indexOf(raw);
 			if (content !== undefined && index >= 0) {
 				lines[index] = supersededLine(raw, context.source);
 				working = withMemoryChanges(working, [
@@ -650,6 +663,15 @@ export async function runMemoryDream(
 			return chat ? transcript(chat) : `no chat found for ${link}`;
 		},
 	});
+	const last =
+		mode === "full" ? await deps.lastReview(userId).catch(() => null) : null;
+	const review =
+		mode === "full" &&
+		(!last ||
+			Date.parse(`${deps.today()}T00:00:00Z`) - last.getTime() >=
+				DREAM_REVIEW_DAYS * 86_400_000)
+			? dreamReviewSection(working)
+			: null;
 	const listing = Object.entries(working)
 		.map(([path, content]) => `${path} (${content.split("\n").length} lines)`)
 		.join("\n");
@@ -659,9 +681,10 @@ export async function runMemoryDream(
 		sessionId: null,
 		route,
 		instructions: dreamInstructions(mode, deps.today()),
-		prompt: `New chats since the last dream:\n\n${renderDreamInbox(inboxChats)}\n\nMemory files:\n${listing || "(empty repo)"}\n\nMEMORY.md:\n${working[MEMORY_ENTRY] ?? "(missing)"}`,
+		prompt: `New chats since the last dream:\n\n${renderDreamInbox(inboxChats)}\n\nMemory files:\n${listing || "(empty repo)"}\n\nMEMORY.md:\n${working[MEMORY_ENTRY] ?? "(missing)"}${review ? `\n\n${review}` : ""}`,
 		tools,
-		maxSteps,
+		maxSteps: review ? Math.max(maxSteps, REVIEW_MAX_STEPS) : maxSteps,
+		outcomeSuffix: review ? DREAM_REVIEW_OUTCOME : undefined,
 		endTurnTools: ["commit"],
 		timeoutMs: DREAM_TIMEOUT_MS,
 	});

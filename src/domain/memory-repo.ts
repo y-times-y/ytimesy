@@ -589,6 +589,34 @@ export function renderDreamInbox(
 	return sections.join("\n\n");
 }
 
+/**
+ * The periodic whole-repo pass (weekly, when the repo fits): every line at
+ * once, so duplicates and contradictions in files the new chats never touch
+ * are found too.
+ */
+export const DREAM_REVIEW_CHARS = 40_000;
+
+export function dreamReviewSection(files: MemoryFiles) {
+	const body = Object.entries(files)
+		.filter(([path]) => path.endsWith(".md") && path !== MEMORY_ENTRY)
+		.sort(([a], [b]) => a.localeCompare(b))
+		.map(
+			([path, content]) =>
+				`### ${path}\n${content
+					.split("\n")
+					.map((line, index) => (line.trim() ? `${index + 1}: ${line}` : ""))
+					.filter(Boolean)
+					.join("\n")}`,
+		)
+		.join("\n\n");
+	return body.length > DREAM_REVIEW_CHARS
+		? null
+		: `Whole-repo review: this dream also does the periodic pass over every file, so here (and only here) work beyond what the new chats touch; the files are below, numbered, so you need not read them.
+3. Across all files below, merge duplicates into one line and, where two lines contradict, keep the newer decision (by \`added:\` date, or read_source when unclear) as one standalone line that keeps any exception still in force, and delete the older one. Rewrite each file you change with write_file.
+
+${body}`;
+}
+
 export function dreamInstructions(mode: MemoryMode, today: string) {
 	const inferred =
 		mode === "full"
