@@ -4,7 +4,7 @@ Development only. Eval scripts used to run one at a time for two reasons: they a
 
 ## Throwaway eval users
 
-`scripts/smoke/eval-user.ts` creates one dev user per run (`createEvalUser`). The memory eval creates one per (arm, scenario, repeat). `scripts/model-smoke-suite.ts`, `scripts/native-vs-harness.ts` (harness arm) and `scripts/memory-two-chat-eval.ts` use one by default. Pass `--as-owner` to run as the owner the old way; that takes no variants, and the memory eval then runs one scenario at a time.
+`scripts/smoke/eval-user.ts` creates one dev user per run (`createEvalUser`). The memory eval creates one per (arm, scenario, repeat). `scripts/model-smoke-suite.ts`, `scripts/native-vs-harness.ts` (harness arm) and `scripts/memory-two-chat-eval.ts` use one by default. The smoke suite and native-vs-harness accept `--as-owner` to run as the owner the old way (no variants); the memory eval always uses eval users.
 
 What a user gets:
 

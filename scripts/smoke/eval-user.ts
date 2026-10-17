@@ -48,7 +48,8 @@ import { implementedToolSurfaces } from "../../src/server/services/harness-tool-
 
 const run = promisify(execFile);
 const DEV_REF = "zqkptvyvoyqqtpihlshw";
-const MEMORY_NAMESPACE = "ytimesy-memory-development";
+/** The development memory repos' Artifacts namespace. */
+export const MEMORY_NAMESPACE = "ytimesy-memory-development";
 const MANIFESTS = ".ytimesy/eval-users";
 const EMAIL_DOMAIN = "ytimesy-eval.invalid";
 
