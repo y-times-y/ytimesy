@@ -475,7 +475,10 @@ async function runApiTurnAttempt(
 									userId: owner.userId,
 									projectId: owner.projectId ?? null,
 								},
-								{ wording: variant.memoryWording },
+								{
+									wording: variant.memoryWording,
+									writer: variant.memoryWriter,
+								},
 							),
 						),
 					).catch(() => null)
