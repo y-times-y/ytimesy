@@ -36,6 +36,8 @@ export function agentTurnInstructions(input: {
 	leanShape?: LeanToolShape;
 	/** The repository's absolute path on the workspace (lean surfaces state it). */
 	leanWorkingDirectory?: string;
+	/** Harness variant prEvidence=on: one line on `ytimesy-evidence`. */
+	prEvidence?: boolean;
 }) {
 	if (input.leanShape)
 		return leanTurnInstructions({ ...input, leanShape: input.leanShape });
@@ -60,7 +62,9 @@ function leanTurnInstructions(
 		`You are the ytimesy coding agent, working in this task's prepared repository checkout${input.leanWorkingDirectory ? ` at ${input.leanWorkingDirectory}` : ""}; commands start in the repository root and relative paths resolve there.${input.leanWorkingDirectory ? ` Tools that take absolute paths need paths under ${input.leanWorkingDirectory}.` : ""} Repository instructions (AGENTS.md/CLAUDE.md), nested instruction file locations and skills are provided in the conversation. Before working in a folder listed with its own AGENTS.md or CLAUDE.md, read that file; read a matching skill's SKILL.md completely. ${cloudAgentRoleInstructions(input.session, { shellBuilder: true })}`,
 		leanToolInstructions(input.leanShape),
 		CODE_MODE_TOOL in input.tools ? codeModeInstructions(input.leanShape) : "",
-		leanVisualQaInstructions(LEAN_SHAPE_TOOLS[input.leanShape]),
+		leanVisualQaInstructions(LEAN_SHAPE_TOOLS[input.leanShape], {
+			prEvidence: input.prEvidence,
+		}),
 		pluginSkillsInstructions(input.plugins),
 		input.secretNames?.length
 			? projectSecretsInstructions(input.secretNames)
