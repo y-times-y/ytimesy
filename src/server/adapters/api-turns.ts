@@ -6,6 +6,7 @@ import {
 	type ApiTurnSettings,
 	apiTurnSettings,
 } from "#/domain/api-turn-settings";
+import { jsonbText } from "#/domain/jsonb";
 import type { TurnFailover } from "#/domain/model-failover";
 import { continuedTurnHistory } from "#/domain/runtime-handoff";
 import type { SessionItem } from "#/domain/session-item";
@@ -176,8 +177,8 @@ export async function enqueueApiTurn(input: {
 				input.connectionId,
 				input.revision,
 				input.modelId,
-				JSON.stringify(input.messages),
-				JSON.stringify(input.items),
+				jsonbText(input.messages),
+				jsonbText(input.items),
 				input.idempotencyKey ?? null,
 				configuredTurnExecutor(process.env.YTIMESY_MODEL_EXECUTION_TARGET),
 				JSON.stringify(input.settings ?? {}),
@@ -190,7 +191,7 @@ export async function enqueueApiTurn(input: {
 				input.sessionId,
 				input.userId,
 				input.routeId,
-				JSON.stringify(input.items),
+				jsonbText(input.items),
 				subscription ? "codex" : "api",
 			],
 		);
@@ -384,8 +385,8 @@ export async function checkpointApiTurn(
 		[
 			turn.id,
 			turn.lease_id,
-			JSON.stringify(messages),
-			JSON.stringify(items),
+			jsonbText(messages),
+			jsonbText(items),
 			failover ? JSON.stringify(failover) : null,
 		],
 	);
@@ -405,7 +406,7 @@ export async function publishApiTurnProgress(
 	 and heartbeat_at>=now()-interval '45 seconds' returning session_id,updated_at)
 	 update agent_session set items=$3,updated_at=now() where id in(select session_id from saved)
 	 returning (select updated_at::text from saved) as version`,
-		[turn.id, turn.lease_id, JSON.stringify(items)],
+		[turn.id, turn.lease_id, jsonbText(items)],
 	);
 	if (result.rows[0])
 		mirrorTurnHistory(turn.id, result.rows[0].version, { items });
@@ -451,7 +452,7 @@ export async function finalizeApiTurn(
 		 update agent_session s set items=$4,turn_status=case when saved.state='cancelled' then 'idle' else saved.state end,
 		 task_state=case when parent_session_id is null then task_state when saved.state='completed' then 'done' when saved.state='failed' then 'failed' else 'idle' end,
 		 updated_at=now() from saved where s.id=saved.session_id returning ${SETTLED_TURN_COLUMNS}`,
-		[turn.id, turn.lease_id, state, JSON.stringify(items)],
+		[turn.id, turn.lease_id, state, jsonbText(items)],
 	);
 	captureSettledTurns(result.rows);
 	if (result.rows[0]) await wakeConversationProgress();

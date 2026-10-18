@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ApiTokenUsage } from "#/domain/api-token-usage";
+import { jsonbText } from "#/domain/jsonb";
 import { type SavedMemoryLine, withSavedMemory } from "#/domain/memory-marker";
 import { MEMORY_MODES, type MemoryMode } from "#/domain/memory-repo";
 import { chosenRoute, type ModelRoute } from "#/domain/model-failover";
@@ -309,7 +310,7 @@ export async function recordMemorySaved(
 		const result = await database().query(
 			`update agent_session set items=$3::jsonb,updated_at=now()
 			 where id=$1 and user_id=$2 and turn_status is distinct from 'running' and items=$4::jsonb`,
-			[sessionId, userId, JSON.stringify(next), JSON.stringify(row.items)],
+			[sessionId, userId, jsonbText(next), jsonbText(row.items)],
 		);
 		if (result.rowCount) return true;
 	}

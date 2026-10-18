@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { ModelMessage } from "ai";
 import type { PoolClient } from "pg";
+import { jsonbText } from "#/domain/jsonb";
 import type { SessionItem } from "#/domain/session-item";
 import { database } from "./database";
 
@@ -74,7 +75,7 @@ export async function recordConversationPoint(
 			input.sessionId,
 			input.userId,
 			key,
-			JSON.stringify({ id: key, ok: true, result: point }),
+			jsonbText({ id: key, ok: true, result: point }),
 		],
 	);
 }
@@ -145,7 +146,7 @@ export async function saveRecoveredConversation(
 ) {
 	await client.query(
 		`update agent_session set items=$3::jsonb,turn_status='idle',task_summary=null,task_review_state=case when parent_session_id is null then null else 'pending' end,updated_at=now() where user_id=$1 and id=$2`,
-		[userId, sessionId, JSON.stringify(point.items)],
+		[userId, sessionId, jsonbText(point.items)],
 	);
 	const result = {
 		fingerprint: transcriptFingerprint(point.items),
@@ -160,7 +161,7 @@ export async function saveRecoveredConversation(
 		[
 			userId,
 			sessionId,
-			JSON.stringify({ id: "conversation-head", ok: true, result }),
+			jsonbText({ id: "conversation-head", ok: true, result }),
 		],
 	);
 }

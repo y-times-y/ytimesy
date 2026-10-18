@@ -2,6 +2,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { subscriptionTurnRevision } from "#/domain/subscription-turn";
 import {
 	type ApiTurn,
+	checkpointApiTurn,
 	claimApiTurn,
 	enqueueApiTurn,
 	inheritedSubscriptionSettings,
@@ -15,6 +16,10 @@ const mocks = vi.hoisted(() => ({
 	capture: vi.fn(),
 }));
 vi.mock("./analytics", () => ({ captureServerAnalytics: mocks.capture }));
+vi.mock("./turn-history-mirror", () => ({ mirrorTurnHistory: vi.fn() }));
+vi.mock("./conversation-progress-wake", () => ({
+	wakeConversationProgress: vi.fn(async () => undefined),
+}));
 vi.mock("./database", () => ({
 	database: () => ({ connect: async () => mocks, query: mocks.query }),
 }));
@@ -270,4 +275,40 @@ it("continues saved tool history however the last turn ended", async () => {
 	expect(
 		await previousTurnMessages("owner", "chat", "model", input.revision),
 	).toBeNull();
+});
+
+it("stores a tool output carrying NUL bytes without the jsonb escape Postgres rejects", async () => {
+	mocks.query.mockResolvedValue({ rows: [{ version: "v1" }] });
+	const output = "#!/bin/sh\u0000\u0000ELF binary launcher";
+	await checkpointApiTurn(
+		{ id: "turn", lease_id: "lease" } as ApiTurn,
+		[
+			{
+				role: "tool",
+				content: [
+					{
+						type: "tool-result",
+						toolCallId: "call-1",
+						toolName: "bash",
+						output: { type: "text", value: output },
+					},
+				],
+			},
+		],
+		[
+			{
+				kind: "dynamicToolCall",
+				id: "call-1",
+				tool: "bash",
+				input: "{}",
+				output,
+				status: "completed",
+			},
+		],
+	);
+	const [, params] = mocks.query.mock.calls[0] as [string, unknown[]];
+	for (const param of params.slice(2, 4)) {
+		expect(param).not.toContain("\\u0000");
+		expect(param).toContain("ELF binary launcher");
+	}
 });

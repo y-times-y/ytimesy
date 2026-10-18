@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { jsonbText } from "#/domain/jsonb";
 import { database } from "./database";
 
 export type AgentTaskEventType = "completed" | "failed" | "blocked";
@@ -46,7 +47,7 @@ export async function saveAgentTaskResultAndEvent(input: {
 			eventId,
 			input.eventType,
 			dedupeKey,
-			JSON.stringify({ message: summary }),
+			jsonbText({ message: summary }),
 		],
 	);
 	return result.rows[0]?.id ?? null;
@@ -78,12 +79,7 @@ export async function saveAgentTaskBlockedEvent(input: {
 		 returning id
 		)
 		select id from inserted`,
-		[
-			input.sessionId,
-			eventId,
-			dedupeKey,
-			JSON.stringify({ message: question }),
-		],
+		[input.sessionId, eventId, dedupeKey, jsonbText({ message: question })],
 	);
 	if (!result.rows[0]) return null;
 	return result.rows[0].id;

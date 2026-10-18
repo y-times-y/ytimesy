@@ -1,4 +1,5 @@
 import type { AgentProviderId } from "#/domain/agent-provider";
+import { jsonbText } from "#/domain/jsonb";
 import type { UserMessageItem } from "#/domain/session-item";
 import { wakeConversationProgress } from "./conversation-progress-wake";
 import { database } from "./database";
@@ -36,7 +37,7 @@ export async function queueUserMessageWhileRunning(
 		 queued as (insert into agent_peer_inbox(id,recipient_id,message,queued_send)
 		  select $3,s.id,$4,$5::jsonb from s on conflict(id) do nothing returning id)
 		 select (select count(*) from s)::int as running`,
-		[sessionId, userId, inboxId(send.item.id), message, JSON.stringify(stored)],
+		[sessionId, userId, inboxId(send.item.id), message, jsonbText(stored)],
 	);
 	if (!result.rows[0]?.running) return "not-running";
 	await wakeConversationProgress();
@@ -107,7 +108,7 @@ export async function restoreQueuedUserMessage(
 		`with restored as (insert into agent_peer_inbox(id,recipient_id,message,queued_send,created_at)
 		  values($1,$2,$3,$4::jsonb,'-infinity') on conflict(id) do nothing returning recipient_id)
 		 update agent_session set items=items where id in (select recipient_id from restored)`,
-		[inboxId(send.item.id), sessionId, message, JSON.stringify(stored)],
+		[inboxId(send.item.id), sessionId, message, jsonbText(stored)],
 	);
 	await wakeConversationProgress();
 }

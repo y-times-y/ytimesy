@@ -7,6 +7,7 @@ import type {
 	AgentTaskReviewState,
 	AgentTaskStatus,
 } from "#/domain/agent-task";
+import { jsonbText } from "#/domain/jsonb";
 import { sessionTitleFromText } from "#/domain/session-item";
 import type {
 	SubagentBudget,
@@ -562,13 +563,13 @@ export async function saveAgentSessionItems(
 		 returning ${SESSION_COLUMNS}`,
 		[
 			sessionId,
-			JSON.stringify(items),
+			jsonbText(items),
 			title ?? null,
 			listedModelId?.trim() || null,
 			turnStatus ?? null,
 			expectedRunningItems === undefined
 				? null
-				: JSON.stringify(expectedRunningItems),
+				: jsonbText(expectedRunningItems),
 		],
 	);
 	return result.rows[0] ? toSession(result.rows[0]) : null;
