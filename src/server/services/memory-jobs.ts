@@ -12,6 +12,7 @@ import {
 	type DreamChat,
 	dreamInstructions,
 	dreamReviewSection,
+	droppedDetails,
 	MEMORY_ENTRY,
 	type MemoryChange,
 	type MemoryFiles,
@@ -23,6 +24,7 @@ import {
 	memoryLines,
 	memoryPath,
 	memoryToday,
+	parseMemoryLine,
 	parseSaveHookAnswer,
 	renderDreamInbox,
 	SAVE_HOOK_INSTRUCTIONS,
@@ -74,6 +76,8 @@ export const SAVE_NOTHING_OUTCOME = ":nothing-new";
 export const DREAM_REVIEW_OUTCOME = ":review";
 const DREAM_TIMEOUT_MS = 12 * 60 * 1000;
 const SAVE_TIMEOUT_MS = 90_000;
+/** The save hook's one retry after a failed model call (a 5xx, a dropped connection). */
+const SAVE_RETRY_DELAY_MS = 2000;
 const SOURCE_CHARS = 12_000;
 const READ_LINES = 200;
 
@@ -110,6 +114,8 @@ export type MemoryJobDeps = {
 	): Promise<Map<MemoryLine, number> | null>;
 	appUrl: string;
 	today(): string;
+	/** Waits before a retry; tests skip the wait. */
+	sleep?(ms: number): Promise<void>;
 };
 
 export function memoryJobDeps(): MemoryJobDeps {
@@ -281,27 +287,36 @@ export async function runMemorySave(
 		(lines) => deps.similarity(userId, lines, message.text).catch(() => null),
 	);
 	const project = chat.project;
-	const run = await runOnUserModel(deps, {
-		userId,
-		kind: "save",
-		sessionId,
-		route,
-		instructions: SAVE_HOOK_INSTRUCTIONS,
-		prompt: saveHookPrompt({
-			message: message.text.slice(0, 6000),
-			memory: related
-				.map((entry) => `${entry.path}:${entry.line}: ${entry.raw.trim()}`)
-				.join("\n"),
-			files: Object.keys(snapshot.files).filter((path) => path.endsWith(".md")),
-			project,
-		}),
-		tools: {},
-		maxSteps: 1,
-		timeoutMs: SAVE_TIMEOUT_MS,
-		// Lets a new chat's read side stop showing this message at once.
-		outcomeSuffix: (text) =>
-			parseSaveHookAnswer(text).length ? "" : SAVE_NOTHING_OUTCOME,
-	});
+	const saveRun = () =>
+		runOnUserModel(deps, {
+			userId,
+			kind: "save",
+			sessionId,
+			route,
+			instructions: SAVE_HOOK_INSTRUCTIONS,
+			prompt: saveHookPrompt({
+				message: message.text.slice(0, 6000),
+				memory: related
+					.map((entry) => `${entry.path}:${entry.line}: ${entry.raw.trim()}`)
+					.join("\n"),
+				files: Object.keys(snapshot.files).filter((path) =>
+					path.endsWith(".md"),
+				),
+				project,
+			}),
+			tools: {},
+			maxSteps: 1,
+			timeoutMs: SAVE_TIMEOUT_MS,
+			// Lets a new chat's read side stop showing this message at once.
+			outcomeSuffix: (text) =>
+				parseSaveHookAnswer(text).length ? "" : SAVE_NOTHING_OUTCOME,
+		});
+	let run = await saveRun();
+	// One retry for a failed call; a timeout or a step limit would only repeat.
+	if (retryableSaveFailure(run.outcome)) {
+		await (deps.sleep ?? delay)(SAVE_RETRY_DELAY_MS);
+		run = await saveRun();
+	}
 	if (run.outcome !== "completed") return run.outcome;
 	// "replaces" names a line the model was shown; it is applied by its text.
 	const shown = new Map(
@@ -319,6 +334,7 @@ export async function runMemorySave(
 		const changes = saveHookChanges(snapshot.files, entries, {
 			source,
 			today: deps.today(),
+			message: message.text,
 		});
 		if (!changes.length) return "nothing-new";
 		const outcome = await repo.commit(
@@ -349,22 +365,36 @@ export async function runMemorySave(
 	return "conflict";
 }
 
+const delay = (ms: number) =>
+	new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** A failed model call worth one more try: not a timeout or abort (those would repeat). */
+export function retryableSaveFailure(outcome: string) {
+	return (
+		outcome.startsWith("failed:") && !/TimeoutError|AbortError/.test(outcome)
+	);
+}
+
 export type SaveHookEntry = {
 	file: string;
 	text: string;
 	project: string;
 	/** An existing line (by its file and text) this entry replaces. */
 	replaces?: { path: string; raw: string };
+	/** "always": a rule every change follows (memory-repo.ts `scope: always`). */
+	scope?: string;
 };
 
 /**
  * Appends each new entry, citing its chat, and marks the line it replaces
  * `superseded-by` that chat (the read side hides it; a dream removes it).
+ * A replacement that would lose structured details of the old line the
+ * user did not change (`droppedDetails`) leaves the old line in place.
  */
 export function saveHookChanges(
 	files: MemoryFiles,
 	entries: readonly SaveHookEntry[],
-	context: { source: string; today: string },
+	context: { source: string; today: string; message?: string },
 ) {
 	let working = files;
 	const changed = new Set<string>();
@@ -375,7 +405,11 @@ export function saveHookChanges(
 			const content = working[path];
 			const lines = content?.split("\n") ?? [];
 			const index = lines.indexOf(raw);
-			if (content !== undefined && index >= 0) {
+			const old = parseMemoryLine(raw);
+			const keeps =
+				!old ||
+				!droppedDetails(old.text, entry.text, context.message ?? "").length;
+			if (content !== undefined && index >= 0 && keeps) {
 				lines[index] = supersededLine(raw, context.source);
 				working = withMemoryChanges(working, [
 					{ path, content: lines.join("\n") },
@@ -389,6 +423,7 @@ export function saveHookChanges(
 			entry.file,
 			memoryBullet(entry.text, {
 				project: entry.project,
+				scope: entry.scope,
 				source: context.source,
 				added: context.today,
 			}),

@@ -772,6 +772,20 @@ export type Probe = LongChat & {
 	};
 };
 
+/**
+ * Whether a stale version of the probe's fact is in this memory text: a line
+ * matching `stale` that does not also state the current fact (a new line
+ * that names the decision it replaced, "Vitest is being dropped", is not stale).
+ */
+export function staleLineIn(probe: Probe, text: string) {
+	const { stale } = probe;
+	return stale
+		? text
+				.split("\n")
+				.some((line) => stale.test(line) && !probe.right.test(line))
+		: false;
+}
+
 const py = (lines: string[]) => `${lines.join("\n")}\n`;
 const json = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
 const GITIGNORE = "node_modules/\n__pycache__/\n";
