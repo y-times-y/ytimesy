@@ -66,6 +66,7 @@ import {
 	type TaskEnvironment,
 	verifyScript,
 } from "./hard-set/environment";
+import { infraFailure, isScored } from "./hard-set/scoring";
 import { HARD_SET, HARD_SET_CHUNKS, type HardSetTask } from "./hard-set/tasks";
 import {
 	assertDevelopmentDatabase,
@@ -269,9 +270,11 @@ function printTable(records: HardSetRecord[]) {
 				record.reward === null ? "-" : String(record.reward),
 				record.usageLimit
 					? "usage-limit"
-					: record.status === "grading"
-						? "grading"
-						: record.state,
+					: infraFailure(record)
+						? "infra"
+						: record.status === "grading"
+							? "grading"
+							: record.state,
 				String(record.agentSec),
 				String(record.agentBudgetSec),
 				String(record.setupSec),
@@ -286,14 +289,6 @@ function printTable(records: HardSetRecord[]) {
 		]),
 	);
 }
-
-/** Scored = graded, not skipped, not stopped by the usage limit, full agent budget. */
-const isScored = (record: HardSetRecord) =>
-	record.status === "final" &&
-	record.state !== "skipped" &&
-	!record.usageLimit &&
-	record.reward !== null &&
-	record.agentBudgetSec >= record.agentRequestedSec - 30;
 
 if (flags.list) {
 	const rows = [["chunk", "task", "category", "tb4 ours", "codex", "bucket"]];
@@ -327,8 +322,21 @@ if (flags.report) {
 		return `${category} ${list.filter((record) => record.passed).length}/${list.length}`;
 	};
 	console.log(
-		`\nRun ${flags.run}: ${scored.filter((record) => record.passed).length}/${scored.length} scored runs passed (${byCategory("hard")}, ${byCategory("time-pressure")}, ${byCategory("control")}); ${records.length - scored.length} not scored (grading, skipped, usage limit, short budget or no reward).`,
+		`\nRun ${flags.run}: ${scored.filter((record) => record.passed).length}/${scored.length} scored runs passed (${byCategory("hard")}, ${byCategory("time-pressure")}, ${byCategory("control")}); ${records.length - scored.length} not scored (grading, skipped, infra or usage limit, short budget or no reward).`,
 	);
+	const retry = [
+		...new Set(records.filter(infraFailure).map((record) => record.task)),
+	].filter(
+		(task) =>
+			!scored.some((record) => record.task === task) &&
+			!records.some(
+				(record) => record.task === task && record.status === "grading",
+			),
+	);
+	if (retry.length)
+		console.log(
+			`Infra failures (not the model's): retry with --tasks ${retry.join(",")} --run ${flags.run}`,
+		);
 	const cost = costSummary(scored.filter((record) => record.mode === "agent"));
 	if (cost) console.log(cost);
 	for (const record of records.filter((record) => !isScored(record)))
