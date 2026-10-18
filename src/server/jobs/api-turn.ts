@@ -1033,6 +1033,7 @@ async function runApiTurnAttempt(
 					leanShape: surface.lean?.shape,
 					leanWorkingDirectory,
 					deferredTools: deferral?.deferred,
+					prEvidence: variant.prEvidence === "on" && writable,
 				},
 				memory,
 			),

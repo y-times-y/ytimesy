@@ -17,6 +17,7 @@ describe("harness variants", () => {
 			promptCacheScope: "chat",
 			codeMode: "off",
 			subagents: "off",
+			prEvidence: "off",
 		});
 	});
 
@@ -33,6 +34,7 @@ describe("harness variants", () => {
 			promptCacheScope: "chat",
 			codeMode: "off",
 			subagents: "off",
+			prEvidence: "off",
 		});
 		expect(
 			harnessVariantFromFlags(["memoryWording=notes,toolSurface=lean-native"]),
@@ -43,6 +45,7 @@ describe("harness variants", () => {
 			promptCacheScope: "chat",
 			codeMode: "off",
 			subagents: "off",
+			prEvidence: "off",
 		});
 		expect(
 			harnessVariantFromFlags(["memoryWording=notes,memoryWriter=both"]),
@@ -73,6 +76,7 @@ describe("harness variants", () => {
 			promptCacheScope: "chat",
 			codeMode: "off",
 			subagents: "off",
+			prEvidence: "off",
 		});
 		expect(harnessVariantFromUnknown({ memoryWriter: "agent" })).toEqual({
 			...DEFAULT_HARNESS_VARIANT,

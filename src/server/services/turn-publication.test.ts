@@ -12,6 +12,10 @@ const deps = vi.hoisted(() => ({
 	pull: vi.fn(),
 	save: vi.fn(),
 	predecessor: vi.fn(),
+	evidence: vi.fn(),
+}));
+vi.mock("./pr-evidence-job", () => ({
+	queuePullRequestEvidence: deps.evidence,
 }));
 vi.mock("../adapters/projects", () => ({ projectForOwner: deps.project }));
 vi.mock("../auth/github-connection", () => ({ githubAccessToken: deps.token }));
@@ -93,6 +97,38 @@ it("pushes the completed revision for each repository and records the primary dr
 		branch: "ytimesy/fix-parser-abcd",
 		pullRequestUrl: "https://github.com/owner/primary/pull/1",
 	});
+});
+it("queues evidence for the primary pull request only, and a failure never fails the handoff", async () => {
+	deps.pull.mockResolvedValue({
+		number: 9,
+		url: "https://github.com/owner/primary/pull/9",
+		draft: true,
+	});
+	deps.evidence.mockRejectedValue(new Error("capture broke"));
+	const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+	await publishCompletedSessionTurn(
+		session,
+		new MemoryWorkspaceRuntime({ exitCode: 0, stdout: "1\n", stderr: "" }),
+		turn,
+	);
+	expect(deps.evidence).toHaveBeenCalledTimes(1);
+	// Only a background job is queued: no capture runs inside the turn.
+	expect(deps.evidence.mock.calls[0][0]).toEqual({
+		userId: "alice",
+		sessionId: session.id,
+		revision: `refs/ytimesy/turn-commits/${turn}`,
+		installationId: 2,
+		fullName: "owner/primary",
+		pullNumber: 9,
+	});
+	expect(deps.save).toHaveBeenCalled();
+	expect(warn).toHaveBeenCalledWith(
+		"Pull request evidence could not be queued.",
+		{
+			message: "capture broke",
+		},
+	);
+	warn.mockRestore();
 });
 it("does not push or request credentials for a chat without commits since its base", async () => {
 	await publishCompletedSessionTurn(
