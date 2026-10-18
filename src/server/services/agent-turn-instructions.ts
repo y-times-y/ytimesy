@@ -55,6 +55,8 @@ export function agentTurnInstructions(input: {
 	leanWorkingDirectory?: string;
 	/** Tools loaded on demand (deferred-tools.ts), listed so the model knows they exist. */
 	deferredTools?: readonly DeferredToolEntry[];
+	/** Harness variant prEvidence=on: one line on `ytimesy-evidence`. */
+	prEvidence?: boolean;
 }) {
 	if (input.leanShape)
 		return leanTurnInstructions({ ...input, leanShape: input.leanShape });
@@ -85,7 +87,9 @@ function leanTurnInstructions(
 		AGENT_TOOL in input.tools
 			? orchestratorInstructions({ codeMode: CODE_MODE_TOOL in input.tools })
 			: "",
-		leanVisualQaInstructions(LEAN_SHAPE_TOOLS[input.leanShape]),
+		leanVisualQaInstructions(LEAN_SHAPE_TOOLS[input.leanShape], {
+			prEvidence: input.prEvidence,
+		}),
 		pluginSkillsInstructions(input.plugins),
 		input.secretNames?.length
 			? projectSecretsInstructions(input.secretNames)

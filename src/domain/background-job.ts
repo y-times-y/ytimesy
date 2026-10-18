@@ -16,6 +16,7 @@ export const backgroundJob = z.discriminatedUnion("kind", [
 				"refresh",
 				"infrastructure",
 				"memory-dreams",
+				"evidence-expiry",
 			]),
 		})
 		.strict(),
@@ -55,6 +56,21 @@ export const backgroundJob = z.discriminatedUnion("kind", [
 		})
 		.strict(),
 	z.object({ ...identity, kind: z.literal("pr-repair") }).strict(),
+	// Pull request evidence (harness variant prEvidence), after a turn's draft handoff.
+	z
+		.object({
+			...identity,
+			kind: z.literal("pr-evidence"),
+			userId: reference,
+			sessionId: reference,
+			revision: z.string().regex(/^refs\/ytimesy\/turn-commits\/[a-f0-9]{64}$/),
+			installationId: z.number().int().positive().safe(),
+			fullName: z
+				.string()
+				.regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*\/[a-zA-Z0-9][a-zA-Z0-9._-]*$/),
+			pullNumber: z.number().int().positive().safe(),
+		})
+		.strict(),
 	z
 		.object({
 			...identity,

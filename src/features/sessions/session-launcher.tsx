@@ -55,6 +55,7 @@ import {
 } from "#/domain/slash-command";
 import { captureAnalytics } from "#/features/analytics/client";
 import { authClient } from "#/features/auth/client";
+import { listChatEvidence } from "#/features/evidence/evidence.fn";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
 import { listProjectCommandsFn } from "../workspace/explorer.fn";
 import { saveProjectSecretFn } from "../workspace/project-secrets.fn";
@@ -254,6 +255,34 @@ export function SessionLauncher({
 					sessionId: session.agentSessionId,
 				},
 			});
+		},
+	});
+	const loadEvidence = useServerFn(listChatEvidence);
+	// Pull request evidence (prEvidence) arrives after the turn, from a background job.
+	const chatEvidence = useQuery({
+		queryKey: [
+			"chat-evidence",
+			selectedProject?.id,
+			session.agentSessionId,
+			session.turnStatus,
+		],
+		enabled: !!selectedProject?.id && !!session.agentSessionId,
+		queryFn: () => {
+			if (!selectedProject || !session.agentSessionId)
+				return { enabled: false, evidence: [] };
+			return loadEvidence({
+				data: {
+					projectId: selectedProject.id,
+					sessionId: session.agentSessionId,
+				},
+			});
+		},
+		refetchInterval: (query) => {
+			const data = query.state.data;
+			if (!data?.enabled) return false;
+			return data.evidence.some((record) => record.status === "capturing")
+				? 10_000
+				: 30_000;
 		},
 	});
 	const [draft, setDraft] = useState(initialDraft);
@@ -613,6 +642,7 @@ export function SessionLauncher({
 						: undefined
 				}
 				tasks={childTasks}
+				evidence={chatEvidence.data?.evidence}
 				memoryActions={memoryActions}
 				items={items}
 				turnStatus={turnStatus}

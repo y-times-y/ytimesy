@@ -39,6 +39,7 @@ import {
 } from "../adapters/workspaces";
 import { githubAccessToken } from "../auth/github-connection";
 import { rejectRequest } from "./errors";
+import { removeProjectPullRequestEvidence } from "./pr-evidence-cleanup";
 import type { WorkspaceMachines } from "./workspace-machines";
 import { enqueueProjectWorkspace } from "./workspaces";
 
@@ -290,5 +291,7 @@ export async function removeProjectMachine(
 			// Idle timeout reclaims machines that Freestyle did not delete.
 		}
 	}
+	// Pull request evidence media in private storage; its rows cascade with the project.
+	await removeProjectPullRequestEvidence(input.userId, input.projectId);
 	await deleteProjectForOwner(input.userId, input.projectId);
 }

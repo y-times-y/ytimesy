@@ -631,6 +631,14 @@ export default {
 					action: "memory-dreams",
 				}),
 			);
+		if (minute % 360 === 30)
+			jobs.push(
+				backgroundJob.parse({
+					id: backgroundJobId(`cron:${minute}:evidence-expiry`),
+					kind: "maintenance",
+					action: "evidence-expiry",
+				}),
+			);
 		if (minute % 60 === 0)
 			jobs.push(
 				backgroundJob.parse({

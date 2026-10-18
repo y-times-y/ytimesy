@@ -30,6 +30,7 @@ import {
 import { fileBasename } from "#/domain/file-kind";
 import { listedModelDisplayName } from "#/domain/listed-model";
 import { parseModelRouteId } from "#/domain/model-connection";
+import type { EvidenceRecord } from "#/domain/pr-evidence";
 import { secretRequestOutcome } from "#/domain/secret-request";
 import { activityGlyphForToolName } from "#/domain/session-activity";
 import {
@@ -57,6 +58,8 @@ import {
 	toolDetailTitle,
 	toolOutputText,
 } from "#/domain/tool-detail";
+import { evidenceAnchors } from "../evidence/evidence-anchors";
+import { EvidenceCard } from "../evidence/evidence-view";
 import { ActivityIcon } from "./activity-icon";
 import { AgentMarkdown } from "./agent-markdown";
 import { FileChangeCounts } from "./file-change-counts";
@@ -96,7 +99,10 @@ export function SessionTimeline({
 	failoverActions,
 	memoryActions,
 	onRemoveQueued,
+	evidence = [],
 }: {
+	/** Pull request evidence captured for this chat's turns (prEvidence). */
+	evidence?: readonly EvidenceRecord[];
 	/** Takes back a message still waiting behind the running turn. */
 	onRemoveQueued?: (messageId: string) => void;
 	/** Opens, undoes and checks the memory lines a turn recalled or saved. */
@@ -129,6 +135,7 @@ export function SessionTimeline({
 		taskParentId ? task.parentSessionId === taskParentId : task.depth === 1,
 	);
 	const rows = groupTimelineRows(visible, turnStatus);
+	const evidenceAt = evidenceAnchors(visible, evidence);
 	const fileChanges = fileChangesFromSessionItems(items);
 	const currentTurnIds = new Set<SessionItem["id"]>();
 	for (const item of visible) {
@@ -152,6 +159,7 @@ export function SessionTimeline({
 		visible.length === 0 &&
 		queued.length === 0 &&
 		childTasks.length === 0 &&
+		evidence.length === 0 &&
 		turnStatus !== "running" &&
 		!fill
 	)
@@ -233,6 +241,16 @@ export function SessionTimeline({
 										/>
 									</li>
 								))}
+							{(row.kind === "item"
+								? (evidenceAt.anchored.get(row.item.id) ?? [])
+								: row.items.flatMap(
+										(item) => evidenceAt.anchored.get(item.id) ?? [],
+									)
+							).map((record) => (
+								<li key={`evidence:${record.id}`} data-kind="evidence">
+									<EvidenceCard evidence={record} />
+								</li>
+							))}
 						</Fragment>
 					);
 				})}
@@ -247,6 +265,11 @@ export function SessionTimeline({
 							/>
 						</li>
 					))}
+				{evidenceAt.trailing.map((record) => (
+					<li key={`evidence:${record.id}`} data-kind="evidence">
+						<EvidenceCard evidence={record} />
+					</li>
+				))}
 				{showTurnWorking(items, turnStatus) ? (
 					<li data-kind="working">
 						<p className="session-working session-shimmer">Thinking</p>
