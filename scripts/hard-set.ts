@@ -23,6 +23,15 @@ import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { Freestyle } from "freestyle";
+import {
+	type AttemptSnapshot,
+	type AttemptVerdictKind,
+	attemptLimit,
+	attemptRef,
+	checkerAccuracy,
+	formatCheckerAccuracy,
+	selectCandidate,
+} from "../src/domain/attempt-loop";
 import { signDeliveryRequest } from "../src/domain/delivery-auth";
 import {
 	attemptCostFromRun,
@@ -35,6 +44,7 @@ import {
 	harnessVariantLabel,
 } from "../src/domain/harness-variant";
 import { WorkspaceId } from "../src/domain/ids";
+import { modelBilling } from "../src/domain/model-pricing";
 import { sessionItemsFromUnknown } from "../src/domain/session-item";
 import {
 	deleteAgentSessionForOwner,
@@ -42,6 +52,10 @@ import {
 	saveAgentSessionProviderRef,
 } from "../src/server/adapters/agent-sessions";
 import { claimApiTurn } from "../src/server/adapters/api-turns";
+import {
+	attemptLoopStates,
+	saveAttemptLoopDeadline,
+} from "../src/server/adapters/attempt-loop-store";
 import { withBackgroundJobDispatcher } from "../src/server/adapters/background-job-dispatch";
 import { subscriptionFetch } from "../src/server/adapters/codex-subscription-transport";
 import { closeDatabase, database } from "../src/server/adapters/database";
@@ -53,10 +67,17 @@ import {
 	modelWorkflowSigningSecret,
 } from "../src/server/adapters/model-workflow-dispatch";
 import { workspaceBootSnapshotId } from "../src/server/records/tools-snapshot-store";
+import {
+	attemptLoopSpend,
+	restoreSnapshotCommand,
+} from "../src/server/services/attempt-loop";
 import { cancelServerTurn } from "../src/server/services/cancel-server-turn";
 import { sendSubscriptionTask } from "../src/server/services/codex-subscription-session";
+import { captureConversationCode } from "../src/server/services/conversation-code-checkpoint";
 import { DEVELOPMENT_EDGE_ORIGIN } from "./development-config";
 import {
+	attemptSections,
+	attemptsVerifyScript,
 	graderPullScript,
 	loadTaskEnvironment,
 	oracleScript,
@@ -144,15 +165,32 @@ function estimatedCost(record: HardSetRecord) {
 const usd = (value: number | null) =>
 	value === null ? "-" : `$${value.toFixed(value < 1 ? 3 : 2)}`;
 
-/** Cost per attempt and per solved task over scored agent records. */
+/**
+ * Cost per attempt and per solved task over scored agent records. With the
+ * attempt loop a run also pays for its checkers and judge (their own
+ * sessions), so those tokens and dollars are added to the builder's.
+ */
 function costSummary(records: HardSetRecord[]) {
 	const attempts = records
 		.filter((record) => estimatedCost(record) !== null)
-		.map((record) => ({
-			...attemptCostFromRun({ ...record, verifierPassed: record.passed }),
-			costUsd: estimatedCost(record),
-			estimated: true,
-		}));
+		.map((record) => {
+			const base = attemptCostFromRun({
+				...record,
+				verifierPassed: record.passed,
+			});
+			const builder = estimatedCost(record);
+			const loop = record.attemptLoop;
+			return {
+				...base,
+				tokens: base.tokens + (loop?.extraTokens ?? 0),
+				costUsd:
+					builder === null || (loop && loop.extraCostUsd === null)
+						? null
+						: builder + (loop?.extraCostUsd ?? 0),
+				agents: base.agents + (loop?.checkers ?? 0),
+				estimated: true,
+			};
+		});
 	if (!attempts.length) return null;
 	return `Cost: ${formatCostSummary(sharedCostSummary(attempts))}.`;
 }
@@ -186,6 +224,45 @@ type HardSetRecord = RunRecord & {
 	graderVmId: string | null;
 	gradeStartedAt: string | null;
 	gradeTimeoutSec: number | null;
+	/** attempts=3: the loop's attempts, checker verdicts and per-attempt grades. */
+	attemptLoop?: HardSetLoopRecord | null;
+};
+
+type HardSetLoopAttempt = {
+	n: number;
+	verdict: AttemptVerdictKind | null;
+	findings: string[];
+	cutOff: boolean;
+	tree: string;
+	ref: string;
+	snapshot: AttemptSnapshot;
+	tokens: number;
+	costUsd: number | null;
+	minutes: number;
+	/** The grader's result for this attempt's candidate (the final grade when it is the kept tree). */
+	graderReward: number | null;
+	graderPassed: boolean | null;
+	/** Its tree is the one graded as the run's result (it shares that grade). */
+	sameAsFinal: boolean;
+	/** The artifacts staged for this attempt (/tb/<name>.tgz), when it was not the final tree. */
+	gradeName: string | null;
+};
+
+type HardSetLoopRecord = {
+	phase: string;
+	kept: number | null;
+	selection: string | null;
+	attempts: HardSetLoopAttempt[];
+	/** Checker and judge spend on top of the builder's turn. */
+	extraTokens: number;
+	extraCostUsd: number | null;
+	checkers: number;
+	finalTree: string | null;
+	branch: string;
+	/** The runner restored this attempt because the loop did not finish in time. */
+	runnerRestored: number | null;
+	attemptGrading: "none" | "grading" | "final";
+	notes: string[];
 };
 
 function selectedTasks(): HardSetTask[] {
@@ -295,6 +372,171 @@ const isScored = (record: HardSetRecord) =>
 	record.reward !== null &&
 	record.agentBudgetSec >= record.agentRequestedSec - 30;
 
+/** The attempt loop's per-attempt lines and the checker's accuracy against the grader. */
+function printAttemptLoops(records: HardSetRecord[]) {
+	const loops = records.filter((record) => record.attemptLoop);
+	if (!loops.length) return;
+	console.log("\nAttempt loop (checker verdict -> grader):");
+	for (const record of loops) {
+		const loop = record.attemptLoop as HardSetLoopRecord;
+		console.log(
+			`- ${record.task}.${record.attempt}: ${loop.attempts
+				.map(
+					(attempt) =>
+						`#${attempt.n} ${attempt.verdict ?? (attempt.cutOff ? "cut-off" : "unchecked")}->${attempt.graderPassed === null ? "?" : attempt.graderPassed ? "PASS" : "fail"} ${attempt.minutes.toFixed(1)}m`,
+				)
+				.join(
+					", ",
+				)}; kept ${loop.kept ?? "-"}${loop.runnerRestored ? ` (runner restored ${loop.runnerRestored})` : ""}${loop.selection ? `; ${loop.selection}` : ""}${loop.attemptGrading === "grading" ? "; attempt grades pending (--collect)" : ""}`,
+		);
+	}
+	const rows = loops.flatMap((record) =>
+		(record.attemptLoop as HardSetLoopRecord).attempts.flatMap((attempt) =>
+			attempt.verdict && attempt.graderPassed !== null
+				? [{ verdict: attempt.verdict, graderPassed: attempt.graderPassed }]
+				: [],
+		),
+	);
+	if (rows.length) console.log(formatCheckerAccuracy(checkerAccuracy(rows)));
+}
+
+/**
+ * The loop's record after the turn: per attempt the checker's verdict, spend
+ * and candidate. When the loop did not finish before the runner's cancel,
+ * the best checked candidate is restored (the loop's own rule without
+ * suites), so the grader sees what the loop would have kept.
+ */
+async function readAttemptLoop(
+	sessionId: string,
+	vm: string,
+): Promise<HardSetLoopRecord | null> {
+	const state = (await attemptLoopStates(sessionId)).at(-1);
+	if (!state) return null;
+	const cwd = state.checkpoint.cwd;
+	const workspace = { machines, vm: WorkspaceId(vm), cwd };
+	const branch = (
+		await machines.exec(
+			WorkspaceId(vm),
+			`git -C ${sh(cwd)} symbolic-ref -q HEAD || true`,
+			15_000,
+		)
+	).stdout.trim();
+	const notes: string[] = [];
+	let final = await captureConversationCode(
+		workspace,
+		attemptRef(state.turnId, "final"),
+	).catch((error: unknown) => {
+		notes.push(`Final tree not captured: ${safe(error).slice(0, 200)}`);
+		return null;
+	});
+	let runnerRestored: number | null = null;
+	if (state.phase !== "done" && state.candidates.length) {
+		const inProgress =
+			final && !state.candidates.some((c) => c.snapshot.tree === final?.tree)
+				? [
+						{
+							n: state.attempt,
+							verdict: null,
+							ownPassRate: null,
+							cutOff: true,
+							tree: final.tree,
+						},
+					]
+				: [];
+		const best = selectCandidate(
+			[
+				...state.candidates.map((candidate) => ({
+					n: candidate.n,
+					verdict: candidate.verdict?.verdict ?? null,
+					ownPassRate: candidate.verdict?.tests.length
+						? candidate.verdict.tests.filter((test) => test.passed).length /
+							candidate.verdict.tests.length
+						: null,
+					cutOff: candidate.cutOff,
+					tree: candidate.snapshot.tree,
+				})),
+				...inProgress,
+			],
+			[],
+		).best;
+		const chosen = state.candidates.find((candidate) => candidate.n === best);
+		if (
+			chosen &&
+			chosen.snapshot.tree !== final?.tree &&
+			!inProgress.some((c) => c.n === best)
+		) {
+			const restored = await machines.exec(
+				WorkspaceId(vm),
+				restoreSnapshotCommand(chosen.snapshot, branch),
+				60_000,
+			);
+			if (restored.exitCode === 0) {
+				runnerRestored = chosen.n;
+				final = chosen.snapshot;
+			} else notes.push(`Restore of attempt ${chosen.n} failed.`);
+		}
+		notes.push(
+			`The loop stopped in phase ${state.phase} at the runner's cancel.`,
+		);
+	}
+	const spend = attemptLoopSpend(
+		state,
+		modelBilling({ harness: "codex", modelId: model }),
+	);
+	const extra = spend.attempts.reduce(
+		(sum, attempt) => ({
+			tokens: sum.tokens + attempt.checker.tokens,
+			costUsd:
+				sum.costUsd === null || attempt.checker.costUsd === null
+					? null
+					: sum.costUsd + attempt.checker.costUsd,
+		}),
+		{ tokens: spend.judge.tokens, costUsd: spend.judge.costUsd },
+	);
+	return {
+		phase: state.phase,
+		kept: runnerRestored ?? state.kept ?? null,
+		selection: state.selection?.explanation ?? null,
+		attempts: state.candidates.map((candidate) => {
+			const attemptSpend = spend.attempts.find((a) => a.n === candidate.n);
+			return {
+				n: candidate.n,
+				verdict: candidate.verdict?.verdict ?? null,
+				findings: (candidate.verdict?.failures ?? []).slice(0, 5),
+				cutOff: candidate.cutOff,
+				tree: candidate.snapshot.tree,
+				ref: candidate.snapshot.ref,
+				snapshot: candidate.snapshot,
+				tokens: attemptSpend?.total.tokens ?? 0,
+				costUsd: attemptSpend?.total.costUsd ?? null,
+				minutes: (attemptSpend?.ms ?? 0) / 60_000,
+				graderReward: null,
+				graderPassed: null,
+				sameAsFinal: !!final && candidate.snapshot.tree === final.tree,
+				// Identical trees share one grade.
+				gradeName:
+					final && candidate.snapshot.tree === final.tree
+						? null
+						: `artifacts-a${
+								state.candidates.find(
+									(other) => other.snapshot.tree === candidate.snapshot.tree,
+								)?.n ?? candidate.n
+							}`,
+			};
+		}),
+		extraTokens: extra.tokens,
+		extraCostUsd: extra.costUsd,
+		checkers:
+			state.candidates.filter((c) => c.checker).length +
+			(state.selection?.judge ? 1 : 0),
+		finalTree: final?.tree ?? null,
+		branch,
+		runnerRestored,
+		attemptGrading: "none",
+		notes: [...notes, ...(state.selection?.notes ?? [])],
+	};
+}
+
 if (flags.list) {
 	const rows = [["chunk", "task", "category", "tb4 ours", "codex", "bucket"]];
 	HARD_SET_CHUNKS.forEach((chunk, index) => {
@@ -331,6 +573,7 @@ if (flags.report) {
 	);
 	const cost = costSummary(scored.filter((record) => record.mode === "agent"));
 	if (cost) console.log(cost);
+	printAttemptLoops(records);
 	for (const record of records.filter((record) => !isScored(record)))
 		console.log(
 			`- ${record.task}.${record.attempt}: ${record.status} ${record.state} budget ${record.agentBudgetSec}/${record.agentRequestedSec}s ${[...record.errors, record.gradeError].filter(Boolean).join(" | ").slice(0, 300)}`,
@@ -432,42 +675,68 @@ async function uploadDirectory(vm: string, local: string, remote: string) {
 /** Reads a grader VM's result into its record; deletes the VM once read. */
 async function finishGrading(record: HardSetRecord, until: number) {
 	const vm = record.graderVmId as string;
-	const done = await waitDetached(vm, "verify", until).catch(
-		(error: unknown) => ({ exit: -1, log: `GRADE_ERROR ${safe(error)}` }),
-	);
-	const started = Date.parse(record.gradeStartedAt ?? "") || Date.now();
-	if (!done) {
-		// Give up only when the grader answers and still has no result long
-		// after its timeout; an unreachable VM (our network, a sleeping
-		// laptop) stays pending for the next --collect.
-		const reachable = await machines
-			.exec(WorkspaceId(vm), "test -f /tb/verify.sh", 15_000)
-			.then((result) => result.exitCode === 0)
-			.catch(() => false);
-		if (
-			reachable &&
-			Date.now() - started > ((record.gradeTimeoutSec ?? 900) + 300) * 1000
-		) {
-			record.status = "error";
-			record.gradeError = "Grader never finished.";
-			await client.vms.delete(vm).catch(() => {});
-			record.graderVmId = null;
+	if (!vm) return record;
+	if (record.status === "grading") {
+		const done = await waitDetached(vm, "verify", until).catch(
+			(error: unknown) => ({ exit: -1, log: `GRADE_ERROR ${safe(error)}` }),
+		);
+		const started = Date.parse(record.gradeStartedAt ?? "") || Date.now();
+		if (!done) {
+			// Give up only when the grader answers and still has no result long
+			// after its timeout; an unreachable VM (our network, a sleeping
+			// laptop) stays pending for the next --collect.
+			const reachable = await machines
+				.exec(WorkspaceId(vm), "test -f /tb/verify.sh", 15_000)
+				.then((result) => result.exitCode === 0)
+				.catch(() => false);
+			if (
+				reachable &&
+				Date.now() - started > ((record.gradeTimeoutSec ?? 900) + 300) * 1000
+			) {
+				record.status = "error";
+				record.gradeError = "Grader never finished.";
+				if (record.attemptLoop) record.attemptLoop.attemptGrading = "none";
+				await client.vms.delete(vm).catch(() => {});
+				record.graderVmId = null;
+			}
+			return record;
 		}
-		return record;
+		const parsed = parseReward(done.log);
+		record.gradeSec = Math.round((Date.now() - started) / 1000);
+		record.reward = parsed.reward;
+		record.testsExit = parsed.testsExit;
+		record.testsTail = parsed.tail.slice(-800);
+		record.gradeError =
+			parsed.error ??
+			(parsed.reward === null
+				? `no reward (grader exit ${done.exit}): ${safe(done.log.slice(-400))}`
+				: null);
+		record.passed = parsed.reward === 1;
+		record.verifierPassed = record.passed;
+		record.status = "final";
+		// Attempts whose tree is the graded one share its result.
+		for (const attempt of record.attemptLoop?.attempts ?? [])
+			if (attempt.sameAsFinal && parsed.reward !== null) {
+				attempt.graderReward = parsed.reward;
+				attempt.graderPassed = parsed.reward === 1;
+			}
 	}
-	const parsed = parseReward(done.log);
-	record.gradeSec = Math.round((Date.now() - started) / 1000);
-	record.reward = parsed.reward;
-	record.testsExit = parsed.testsExit;
-	record.testsTail = parsed.tail.slice(-800);
-	record.gradeError =
-		parsed.error ??
-		(parsed.reward === null
-			? `no reward (grader exit ${done.exit}): ${safe(done.log.slice(-400))}`
-			: null);
-	record.passed = parsed.reward === 1;
-	record.verifierPassed = record.passed;
-	record.status = "final";
+	const loop = record.attemptLoop;
+	if (loop?.attemptGrading === "grading") {
+		const done = await waitDetached(vm, "verify-attempts", until).catch(
+			() => null,
+		);
+		if (!done) return record;
+		const sections = attemptSections(done.log);
+		for (const attempt of loop.attempts) {
+			if (!attempt.gradeName) continue;
+			const section = sections.get(attempt.gradeName);
+			const reward = section ? parseReward(section).reward : null;
+			attempt.graderReward = reward;
+			attempt.graderPassed = reward === null ? null : reward === 1;
+		}
+		loop.attemptGrading = "final";
+	}
 	await client.vms.delete(vm).catch(() => {});
 	record.graderVmId = null;
 	return record;
@@ -476,7 +745,9 @@ async function finishGrading(record: HardSetRecord, until: number) {
 if (flags.collect) {
 	// Reads the result of every grader still running for this run.
 	const pending = (await readRecords(runDir)).filter(
-		(record) => record.status === "grading",
+		(record) =>
+			record.status === "grading" ||
+			record.attemptLoop?.attemptGrading === "grading",
 	);
 	console.info(`Collecting ${pending.length} grading run(s) in ${runDir}.`);
 	await Promise.all(
@@ -503,6 +774,10 @@ if (!flags.live)
 		"Refusing to run: pass --live (dev VMs, and the Codex subscription in agent mode).",
 	);
 const variant = harnessVariantFromFlags(flags.variant);
+const loopAttempts = attemptLimit(variant.attempts);
+// Every arm gets the same agent budget: earlier attempts are staged only
+// within the time left before the invocation's ceiling (else not graded).
+const afterAgentReserveSec = AFTER_AGENT_RESERVE_SEC;
 const tasks = selectedTasks();
 const requestedAgentSeconds = Math.round(Number(flags["agent-minutes"]) * 60);
 if (!(requestedAgentSeconds >= 60))
@@ -758,7 +1033,7 @@ async function runTask(
 			Math.min(
 				300,
 				Math.floor(
-					(invocationDeadline - Date.now()) / 1000 - AFTER_AGENT_RESERVE_SEC,
+					(invocationDeadline - Date.now()) / 1000 - afterAgentReserveSec,
 				),
 			),
 		);
@@ -772,7 +1047,7 @@ async function runTask(
 		const agentStarted = Date.now();
 		const agentDeadline = Math.min(
 			agentStarted + agentSeconds * 1000,
-			invocationDeadline - AFTER_AGENT_RESERVE_SEC * 1000,
+			invocationDeadline - afterAgentReserveSec * 1000,
 		);
 		record.agentBudgetSec = Math.max(
 			0,
@@ -800,6 +1075,9 @@ async function runTask(
 				"update agent_session set status='ready' where id=$1",
 				[session.id],
 			);
+			// The loop finishes (selection and restore included) before the cancel.
+			if (loopAttempts > 1)
+				await saveAttemptLoopDeadline(session.id, agentDeadline - 20_000);
 			const text = `${environment.instruction}${ENVIRONMENT_NOTE(workdir)}${PROMPT_SUFFIX}`;
 			await withSlot(
 				"codex",
@@ -909,6 +1187,59 @@ async function runTask(
 		if (staged.exit !== 0)
 			throw new Error(`Staging failed: ${staged.log.slice(-600)}`);
 		const artifacts = await client.vms.ref(vm).fs.readFile("/tb/artifacts.tgz");
+		// The attempt loop: every earlier candidate is staged too, so the
+		// grader judges each attempt and the checker's verdicts can be scored.
+		const attemptArtifacts = new Map<string, Uint8Array>();
+		if (mode === "agent" && loopAttempts > 1) {
+			record.attemptLoop = await readAttemptLoop(session.id, vm);
+			for (const loopAttempt of record.attemptLoop?.attempts ?? []) {
+				if (
+					!loopAttempt.gradeName ||
+					attemptArtifacts.has(loopAttempt.gradeName)
+				)
+					continue;
+				if (Date.now() > invocationDeadline - 45_000) {
+					record.attemptLoop?.notes.push(
+						`Attempt ${loopAttempt.n} was not staged: no time left in the invocation.`,
+					);
+					loopAttempt.gradeName = null;
+					continue;
+				}
+				try {
+					const restored = await machines.exec(
+						WorkspaceId(vm),
+						restoreSnapshotCommand(
+							loopAttempt.snapshot,
+							record.attemptLoop?.branch ?? "",
+						),
+						60_000,
+					);
+					if (restored.exitCode !== 0)
+						throw new Error(restored.stderr.slice(-300));
+					const stagedAttempt = await runDetached(
+						vm,
+						stageScript(environment, loopAttempt.gradeName),
+						`stage-${loopAttempt.gradeName}`,
+						90,
+					);
+					if (stagedAttempt.exit !== 0)
+						throw new Error(stagedAttempt.log.slice(-300));
+					attemptArtifacts.set(
+						loopAttempt.gradeName,
+						await client.vms
+							.ref(vm)
+							.fs.readFile(`/tb/${loopAttempt.gradeName}.tgz`),
+					);
+				} catch (error) {
+					record.attemptLoop?.notes.push(
+						`Attempt ${loopAttempt.n} was not staged: ${safe(error).slice(0, 200)}`,
+					);
+					loopAttempt.gradeName = null;
+					loopAttempt.graderReward = null;
+					loopAttempt.graderPassed = null;
+				}
+			}
+		}
 		record.stageSec = seconds(stageStarted);
 		// Grade on the grader VM: the tests never reach the agent's VM.
 		const graderId = await grader;
@@ -932,6 +1263,18 @@ async function runTask(
 			verifyScript(environment, environment.verifierTimeoutSec),
 			"verify",
 		);
+		if (attemptArtifacts.size && record.attemptLoop) {
+			for (const [name, archive] of attemptArtifacts)
+				await client.vms.ref(graderId).fs.writeFile(`/tb/${name}.tgz`, archive);
+			await startDetached(
+				graderId,
+				attemptsVerifyScript(environment, environment.verifierTimeoutSec, [
+					...attemptArtifacts.keys(),
+				]),
+				"verify-attempts",
+			);
+			record.attemptLoop.attemptGrading = "grading";
+		}
 		record.status = "grading";
 		keepGrader = true;
 		await saveRecord(runDir, record);
