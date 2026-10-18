@@ -38,6 +38,13 @@ export const HARNESS_VARIANT_VALUES = {
 	 * tools an earlier chat already cached.
 	 */
 	promptCacheScope: ["chat", "account"],
+	/**
+	 * Code mode on a lean surface: on adds run_code, a JavaScript program
+	 * that calls the other tools (several reads, searches and commands in one
+	 * model call; src/server/services/code-mode-tool.ts); off offers the
+	 * surface unchanged (the default).
+	 */
+	codeMode: ["off", "on"],
 } as const;
 
 type Values = typeof HARNESS_VARIANT_VALUES;
@@ -48,12 +55,14 @@ export type MemoryWording = HarnessVariant["memoryWording"];
 export type MemoryWriter = HarnessVariant["memoryWriter"];
 export type HarnessToolSurfaceId = HarnessVariant["toolSurface"];
 export type PromptCacheScope = HarnessVariant["promptCacheScope"];
+export type CodeMode = HarnessVariant["codeMode"];
 
 export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	memoryWording: "rules",
 	memoryWriter: "observer",
 	toolSurface: "lean",
 	promptCacheScope: "chat",
+	codeMode: "off",
 };
 
 /**

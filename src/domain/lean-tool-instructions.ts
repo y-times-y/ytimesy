@@ -28,3 +28,10 @@ export function leanToolInstructions(shape: LeanToolShape) {
 		...(shape === "core" ? [DETACHED_LONG_RUNNING] : []),
 	].join("\n");
 }
+
+/** When to use run_code (harness variant codeMode=on), in the shape's tool names. */
+export function codeModeInstructions(shape: LeanToolShape) {
+	const tools = LEAN_SHAPE_TOOLS[shape];
+	const read = "read" in tools ? tools.read : tools.command;
+	return `run_code runs one JavaScript program that calls your tools as async functions (tools.${read}, tools.${tools.command}, …) and gives you back only what it returns, in a single step. Use it when you already know several calls to make: reading or searching several files, looping over files or test cases, running independent checks together with Promise.all, or gathering output and filtering it down before you decide. Call tools directly for a single call, when each step depends on judging the previous result, and for interactive or long-running processes.`;
+}

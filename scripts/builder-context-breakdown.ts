@@ -11,7 +11,9 @@
 //
 // --surfaces compares the builder tool surfaces (docs/builder-tool-surface.md):
 // system instructions and tool definitions for current, lean-native (per
-// model family) and lean, on each family's transport.
+// model family) and lean, on each family's transport, and lean with the
+// codeMode=on harness variant (run_code and its prompt paragraph) as
+// "lean+code".
 //
 // Token counts are estimates: characters / 4 of the JSON actually sent (no
 // tokenizer is installed). Claude's tokenizer yields more tokens per
@@ -34,6 +36,7 @@ import { agentTurnInstructions } from "#/server/services/agent-turn-instructions
 import { apiAgentTools } from "#/server/services/api-agent-tools";
 import { automaticRepositoryContext } from "#/server/services/automatic-repository-context";
 import { builderToolSurface } from "#/server/services/builder-shell-surface";
+import { CODE_MODE_TOOL, codeModeTool } from "#/server/services/code-mode-tool";
 import {
 	type ModelAgentRuntime,
 	runModelAgentStep,
@@ -73,6 +76,8 @@ const modelFor = (transport: Transport) =>
 async function builderTurnRequest(input: {
 	transport: Transport;
 	surface: HarnessToolSurfaceId;
+	/** The codeMode=on harness variant: run_code beside a lean surface. */
+	codeMode?: boolean;
 	repo: string;
 	prompt: string;
 	exec: (
@@ -128,13 +133,26 @@ async function builderTurnRequest(input: {
 			installHelpers: async () => {},
 		},
 	});
-	const tools: ToolSet = {
+	const turnTools: ToolSet = {
 		...surface.tools,
 		...planTools(new PlanLock({ kind: "none" })),
 		...nativeWebSearchTools(
 			input.transport === "codex" ? "openai" : "openrouter",
 		),
 	};
+	// As api-turn.ts: run_code is built from the turn's final tools and added last.
+	const runCode =
+		input.codeMode && surface.lean
+			? codeModeTool({
+					tools: turnTools,
+					signal,
+					sessionId: session.id,
+					turnId: "fixture-turn",
+				})
+			: undefined;
+	const tools: ToolSet = runCode
+		? { ...turnTools, [CODE_MODE_TOOL]: runCode }
+		: turnTools;
 	return {
 		tools,
 		instructions: agentTurnInstructions({
@@ -220,6 +238,7 @@ async function firstRequest(
 	repo: string,
 	report: string,
 	surface: HarnessToolSurfaceId = "current",
+	codeMode = false,
 ) {
 	let body: Body | undefined;
 	const capture: typeof fetch = async (_url, init) => {
@@ -229,6 +248,7 @@ async function firstRequest(
 	const request = await builderTurnRequest({
 		transport,
 		surface,
+		codeMode,
 		repo,
 		prompt: PROMPT,
 		exec: (command) =>
@@ -360,14 +380,25 @@ await writeFile(report, environmentReport(repo));
 if (process.argv.includes("--surfaces")) {
 	try {
 		const rows: Record<string, string | number>[] = [];
-		for (const surface of ["current", "lean-native", "lean"] as const)
+		for (const [label, surface, codeMode] of [
+			["current", "current", false],
+			["lean-native", "lean-native", false],
+			["lean", "lean", false],
+			["lean+code", "lean", true],
+		] as const)
 			for (const transport of [
 				"codex",
 				"openrouter-claude",
 				"openrouter-gemini",
 				"openrouter-qwen",
 			] as const) {
-				const body = await firstRequest(transport, repo, report, surface);
+				const body = await firstRequest(
+					transport,
+					repo,
+					report,
+					surface,
+					codeMode,
+				);
 				const parts = components(body);
 				const toolCharacters = [...parts]
 					.filter(
@@ -383,7 +414,7 @@ if (process.argv.includes("--surfaces")) {
 					),
 				);
 				rows.push({
-					surface,
+					surface: label,
 					model: modelFor(transport),
 					tools: names.length,
 					systemTokens: tokens(system),

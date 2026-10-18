@@ -16,6 +16,11 @@ import {
 	childTaskAnchorId,
 	childTaskPublicItems,
 } from "#/domain/child-task-activity";
+import {
+	codeModeCallItems,
+	codeModeProgram,
+	codeModeResult,
+} from "#/domain/code-mode";
 import { commandActivityTitle } from "#/domain/command-activity-title";
 import { fileChangeTotals } from "#/domain/diff-preview";
 import {
@@ -743,6 +748,10 @@ function SessionItemView({
 		case "dynamicToolCall": {
 			const command = toolCommand(item);
 			const activity = toolActivity(item);
+			// A run_code program: one card listing its inner calls as ordinary tool cards.
+			const program = codeModeProgram(item);
+			const codeResult = codeModeResult(item);
+			const innerCalls = codeModeCallItems(item);
 			return (
 				<details
 					className="session-activity"
@@ -783,21 +792,53 @@ function SessionItemView({
 					</summary>
 					{item.input && (
 						<div className="session-command-detail">
-							<p className="session-activity-meta">Input</p>
+							<p className="session-activity-meta">
+								{program === null ? "Input" : "Program"}
+							</p>
 							{command ? (
 								<ShellCommandCode command={command} />
 							) : (
-								<pre className="session-output">{item.input}</pre>
+								<pre className="session-output">{program ?? item.input}</pre>
 							)}
 						</div>
 					)}
-					{item.output && (
+					{innerCalls.length > 0 && (
+						<div className="session-command-detail">
+							<p className="session-activity-meta">Tool calls</p>
+							{innerCalls.map((call) => (
+								<SessionItemView
+									key={call.id}
+									item={call}
+									nested
+									fileChanges={fileChanges}
+									onOpenFile={onOpenFile}
+								/>
+							))}
+						</div>
+					)}
+					{codeResult ? (
 						<div className="session-command-detail">
 							<p className="session-activity-meta">Result</p>
 							<pre className="session-output">
-								{toolOutputText(item.output)}
+								{[
+									codeResult.error
+										? `Program failed: ${codeResult.error}`
+										: (codeResult.result ?? "(no return value)"),
+									codeResult.console ? `Console:\n${codeResult.console}` : "",
+								]
+									.filter(Boolean)
+									.join("\n\n")}
 							</pre>
 						</div>
+					) : (
+						item.output && (
+							<div className="session-command-detail">
+								<p className="session-activity-meta">Result</p>
+								<pre className="session-output">
+									{toolOutputText(item.output)}
+								</pre>
+							</div>
+						)
 					)}
 					{!item.input && !item.output && (
 						<p>Details were not recorded for this older call.</p>

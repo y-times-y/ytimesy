@@ -110,6 +110,7 @@ import {
 	withBackgroundCommandContext,
 } from "../services/background-command-context";
 import { builderToolSurface } from "../services/builder-shell-surface";
+import { CODE_MODE_TOOL, codeModeTool } from "../services/code-mode-tool";
 import {
 	runCodexSubscriptionAgent,
 	runCodexSubscriptionAgentStep,
@@ -767,15 +768,27 @@ async function runApiTurnAttempt(
 				() => hasDelegatedTasks(owner.userId, owner.id),
 				(present) => present || !canDelegate,
 			);
-		const tools = turnTools({
-			surfaceTools,
-			mcp,
-			plugins,
-			webSearch,
-			hooks,
-			planLock,
-			projectSecrets,
-		});
+		const tools = withCodeMode(
+			turnTools({
+				surfaceTools,
+				mcp,
+				plugins,
+				webSearch,
+				hooks,
+				planLock,
+				projectSecrets,
+			}),
+			// A development harness variant on a lean surface only (docs/parallel-evals.md).
+			variant.codeMode === "on" && surface.lean
+				? {
+						signal: abort.signal,
+						sessionId: owner.id,
+						turnId: turn.id,
+						toolCallPrefix: step ? `step-${step.index}:` : undefined,
+						redact: projectSecrets?.redact ?? [],
+					}
+				: null,
+		);
 		if (planLock?.planning && firstStep)
 			messages = withPlanModeNotice(
 				messages,
@@ -1537,6 +1550,32 @@ function turnTools(input: {
 		catalog: mcp.catalog,
 		purposes: mcp.purposes,
 	});
+}
+
+/**
+ * Adds run_code (code mode) to a lean builder's final tool set. Its programs
+ * call the tools above as they are, already wrapped in hooks, redaction and
+ * plan mode, so every inner call is checked like a direct one; run_code's
+ * own result is redacted again on the way out.
+ */
+function withCodeMode(
+	tools: ToolSet,
+	codeMode: {
+		signal: AbortSignal;
+		sessionId: string;
+		turnId: string;
+		toolCallPrefix?: string;
+		redact: readonly string[];
+	} | null,
+): ToolSet {
+	if (!codeMode) return tools;
+	const runCode = codeModeTool({ tools, ...codeMode });
+	return runCode
+		? {
+				...tools,
+				...withRedactedResults({ [CODE_MODE_TOOL]: runCode }, codeMode.redact),
+			}
+		: tools;
 }
 
 /** The system prompt: the builder's instructions, then memory's. */

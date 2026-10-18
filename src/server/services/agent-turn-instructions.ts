@@ -4,6 +4,7 @@ import {
 	visualQaInstructions,
 } from "#/domain/agent-desktop";
 import { cloudAgentRoleInstructions } from "#/domain/agent-orchestration";
+import { CODE_MODE_TOOL } from "#/domain/code-mode";
 import {
 	BUILDER_ENVIRONMENT_INSTRUCTIONS,
 	PREPARED_ENVIRONMENT_INSTRUCTIONS,
@@ -12,7 +13,10 @@ import {
 	LEAN_SHAPE_TOOLS,
 	type LeanToolShape,
 } from "#/domain/harness-model-profile";
-import { leanToolInstructions } from "#/domain/lean-tool-instructions";
+import {
+	codeModeInstructions,
+	leanToolInstructions,
+} from "#/domain/lean-tool-instructions";
 import {
 	BUILDER_PROJECT_KNOWLEDGE_INSTRUCTIONS,
 	PROJECT_KNOWLEDGE_INSTRUCTIONS,
@@ -55,6 +59,7 @@ function leanTurnInstructions(
 	return [
 		`You are the ytimesy coding agent, working in this task's prepared repository checkout${input.leanWorkingDirectory ? ` at ${input.leanWorkingDirectory}` : ""}; commands start in the repository root and relative paths resolve there.${input.leanWorkingDirectory ? ` Tools that take absolute paths need paths under ${input.leanWorkingDirectory}.` : ""} Repository instructions (AGENTS.md/CLAUDE.md), nested instruction file locations and skills are provided in the conversation. Before working in a folder listed with its own AGENTS.md or CLAUDE.md, read that file; read a matching skill's SKILL.md completely. ${cloudAgentRoleInstructions(input.session, { shellBuilder: true })}`,
 		leanToolInstructions(input.leanShape),
+		CODE_MODE_TOOL in input.tools ? codeModeInstructions(input.leanShape) : "",
 		leanVisualQaInstructions(LEAN_SHAPE_TOOLS[input.leanShape]),
 		pluginSkillsInstructions(input.plugins),
 		input.secretNames?.length
