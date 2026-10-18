@@ -30,6 +30,7 @@ import {
 	FieldSeparator,
 } from "#/components/ui/field.tsx";
 import { Input } from "#/components/ui/input.tsx";
+import { safeReturnTo } from "#/domain/return-to";
 import { YtimesyBrand } from "#/features/auth/onboarding-shell";
 import { cn } from "#/lib/utils.ts";
 import {
@@ -113,7 +114,7 @@ export function SignUp({
 			} else if (onSignUpSuccess) {
 				onSignUpSuccess();
 			} else {
-				navigate({ to: redirectTo });
+				navigate({ to: safeReturnTo(redirectTo) });
 			}
 		},
 	});
@@ -149,6 +150,8 @@ export function SignUp({
 					name: emailAndPassword?.name === false ? "" : value.name,
 					email: value.email.trim(),
 					password: value.password,
+					// The verification link signs in and returns to the page that asked.
+					callbackURL: safeReturnTo(redirectTo),
 					...getAdditionalFieldSubmitValues(
 						signUpFields,
 						value.additionalFields,
