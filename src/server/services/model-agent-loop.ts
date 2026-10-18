@@ -91,6 +91,12 @@ export type ModelAgentInput = {
 	instructions: string;
 	tools: ToolSet;
 	knownTools?: readonly string[];
+	/**
+	 * Deferred tools (deferred-tools.ts): the tools each request offers, in
+	 * order. Tools outside it stay in `tools` but are neither sent nor
+	 * callable until they appear here. Read before every step.
+	 */
+	toolOrder?: () => readonly string[];
 	toolSurface?: "coordination" | "implementation";
 	/** A successful call to one of these ends the turn, e.g. a plan waiting for approval. */
 	endTurnTools?: readonly string[];
@@ -581,7 +587,9 @@ async function executeModelSteps(
 			fixedTokens: estimateContextTokens({
 				instructions: input.instructions,
 				tools: toolSchemas.filter(
-					({ name }) => visibleTools[name]?.deferLoading !== true,
+					({ name }) =>
+						visibleTools[name]?.deferLoading !== true &&
+						(!input.toolOrder || input.toolOrder().includes(name)),
 				),
 			}),
 		});
@@ -851,12 +859,14 @@ async function executeModelSteps(
 				await input.beforeStep?.(history);
 				runSignal.throwIfAborted();
 				// Same bytes whether the history is in memory or reloaded from jsonb.
+				const order = input.toolOrder?.().filter((name) => name in tools);
 				return {
 					messages: stableHistoryKeyOrder(
 						runtime.imageInput === false
 							? withImagePlaceholders(history)
 							: history,
 					),
+					...(order ? { activeTools: order, toolOrder: order } : {}),
 				};
 			},
 			// SDK retries only retryable request-start failures (with backoff, like

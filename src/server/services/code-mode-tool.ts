@@ -11,6 +11,7 @@ import {
 	CALL_MCP_TOOL_TOOL,
 	SEARCH_MCP_TOOLS_TOOL,
 } from "#/domain/mcp-tool-call";
+import { AGENT_SEND_TOOL, AGENT_TOOL } from "#/domain/subagent";
 import { publicToolDetail } from "#/domain/tool-detail";
 import {
 	claimAgentTaskCommand,
@@ -33,9 +34,10 @@ const MAX_TOOL_CALLS = 40;
 
 /**
  * The tools a program may call: the lean surface's own tools (every shape's
- * names) and the user's MCP tools, never provider-hosted tools (web search
- * runs inside the model call, so a program cannot call it), plan, secret or
- * turn-ending tools.
+ * names), the user's MCP tools and the subagent tools (subagents=on; a
+ * program calls them without loading them through find_tools), never
+ * provider-hosted tools (web search runs inside the model call, so a program
+ * cannot call it), plan, secret or turn-ending tools.
  */
 function callableTools(tools: ToolSet) {
 	const lean = new Set<string>(leanToolNames());
@@ -46,6 +48,8 @@ function callableTools(tools: ToolSet) {
 				definition.execute &&
 				definition.type !== "provider" &&
 				(lean.has(name) ||
+					name === AGENT_TOOL ||
+					name === AGENT_SEND_TOOL ||
 					name === SEARCH_MCP_TOOLS_TOOL ||
 					name === CALL_MCP_TOOL_TOOL ||
 					name.startsWith("mcp__")),

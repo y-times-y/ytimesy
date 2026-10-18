@@ -306,3 +306,7 @@ export function checkerBrief(input: {
 		'{ "verdict": "pass" | "fail" | "unsure", "tests": [{ "name": "...", "passed": true, "evidence": "..." }], "notes": "..." }',
 	].join("\n");
 }
+
+/** The builder's delegation tools (loaded on demand through find_tools). */
+export const AGENT_TOOL = "agent";
+export const AGENT_SEND_TOOL = "agent_send";
