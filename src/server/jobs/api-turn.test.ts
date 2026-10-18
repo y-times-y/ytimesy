@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiTurnCancelled } from "#/domain/api-turn-failure";
 import { CoordinationFailure } from "#/domain/conversation-turn-control";
 import { SessionItemId } from "#/domain/ids";
@@ -27,6 +27,20 @@ const mocks = vi.hoisted(() => ({
 	checkpoint: vi.fn(),
 	promptSubmit: vi.fn(),
 	cancelRequested: vi.fn(),
+	variant: vi.fn(),
+	loop: vi.fn(),
+	beforeModel: vi.fn(),
+	afterAttempt: vi.fn(),
+}));
+// Development eval users pick harness variants; everyone else gets the default.
+vi.mock("../adapters/dev-eval-users", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../adapters/dev-eval-users")>()),
+	devEvalUsersEnabled: () => mocks.variant() !== undefined,
+	harnessVariantForUser: async () => mocks.variant(),
+}));
+vi.mock("../services/attempt-loop", () => ({ createAttemptLoop: mocks.loop }));
+vi.mock("../services/attempt-loop-deps", () => ({
+	attemptLoopDeps: () => ({}),
 }));
 // Observes the real lifecycle hooks' UserPromptSubmit without a repository config.
 vi.mock("../services/harness-lifecycle-hooks", async (importOriginal) => {
@@ -80,6 +94,13 @@ vi.mock("../adapters/agent-sessions", () => ({
 }));
 beforeEach(() => {
 	vi.clearAllMocks();
+	mocks.variant.mockReset().mockReturnValue(undefined);
+	mocks.loop.mockReset().mockImplementation(() => ({
+		beforeModel: mocks.beforeModel,
+		afterAttempt: mocks.afterAttempt,
+	}));
+	mocks.beforeModel.mockReset().mockResolvedValue({ kind: "run" });
+	mocks.afterAttempt.mockReset();
 	mocks.progress.mockReset().mockResolvedValue(undefined);
 	mocks.checkpoint.mockReset().mockResolvedValue(undefined);
 	vi.mocked(coordinateConversationTurn).mockReset().mockResolvedValue(true);
@@ -1274,4 +1295,119 @@ it("gives up acquiring a chat that stays held past one lease period", async () =
 	} finally {
 		vi.useRealTimers();
 	}
+});
+
+describe("the attempt loop (harness variant attempts=3)", () => {
+	const rootTurn = {
+		id: "turn",
+		session_id: "session",
+		user_id: "owner",
+		connection_id: "connection",
+		connection_revision: "revision",
+		model_id: "model",
+		state: "running",
+		messages: [{ role: "user", content: "Fix compaction" }],
+		items: [
+			{
+				kind: "userMessage",
+				id: SessionItemId("user"),
+				text: "Fix compaction",
+			},
+		],
+		lease_id: "lease",
+	} as ApiTurn;
+	const durable = () => ({ index: 2, signal: new AbortController().signal });
+	const finishing = () =>
+		mocks.stepRuntime.mockImplementation(async (input) => {
+			await input.onEvent({ type: "text-delta", id: "reply", text: "Fixed." });
+			return { messages: input.messages, outcome: "completed" };
+		});
+
+	it("is off by default: no loop, the turn completes as before", async () => {
+		finishing();
+		expect(await runApiTurn({} as WorkspaceMachines, rootTurn, durable())).toBe(
+			"completed",
+		);
+		expect(mocks.loop).not.toHaveBeenCalled();
+		expect(mocks.commit).toHaveBeenCalledOnce();
+	});
+
+	it("starts the next attempt instead of publishing when the check fails", async () => {
+		mocks.variant.mockReturnValue({
+			...(await import("#/domain/harness-variant")).DEFAULT_HARNESS_VARIANT,
+			attempts: "3",
+		});
+		finishing();
+		mocks.afterAttempt.mockResolvedValue({
+			kind: "run",
+			messages: [
+				{ role: "user", content: "Fix compaction" },
+				{ role: "user", content: "Runtime notice: attempt 1 failed" },
+			],
+		});
+		expect(await runApiTurn({} as WorkspaceMachines, rootTurn, durable())).toBe(
+			"continue",
+		);
+		expect(mocks.loop).toHaveBeenCalledWith(
+			expect.objectContaining({ sessionId: "session", turnId: "turn", max: 3 }),
+		);
+		expect(mocks.beforeModel).toHaveBeenCalledOnce();
+		expect(mocks.afterAttempt).toHaveBeenCalledOnce();
+		expect(mocks.commit).not.toHaveBeenCalled();
+		expect(mocks.finalize).not.toHaveBeenCalled();
+		expect(JSON.stringify(mocks.checkpoint.mock.calls.at(-1)?.[1])).toContain(
+			"Runtime notice: attempt 1 failed",
+		);
+	});
+
+	it("ends a step that is still waiting for the checker without a model call", async () => {
+		mocks.variant.mockReturnValue({
+			...(await import("#/domain/harness-variant")).DEFAULT_HARNESS_VARIANT,
+			attempts: "3",
+		});
+		mocks.beforeModel.mockResolvedValue({ kind: "wait" });
+		expect(await runApiTurn({} as WorkspaceMachines, rootTurn, durable())).toBe(
+			"continue",
+		);
+		expect(mocks.stepRuntime).not.toHaveBeenCalled();
+		expect(mocks.commit).not.toHaveBeenCalled();
+	});
+
+	it("completes with the kept attempt once the loop is done", async () => {
+		mocks.variant.mockReturnValue({
+			...(await import("#/domain/harness-variant")).DEFAULT_HARNESS_VARIANT,
+			attempts: "3",
+		});
+		const items = [
+			...rootTurn.items,
+			{ kind: "agentMessage", id: SessionItemId("a3"), text: "Attempt 3." },
+			{
+				kind: "agentMessage",
+				id: SessionItemId("attempt-loop:turn:kept"),
+				text: "Kept attempt 2 of 3.",
+			},
+		];
+		mocks.beforeModel.mockResolvedValue({
+			kind: "finished",
+			messages: rootTurn.messages,
+			items,
+		});
+		mocks.afterAttempt.mockImplementation(async (step) => ({
+			kind: "finished",
+			messages: step.messages,
+			items: step.items,
+		}));
+		expect(await runApiTurn({} as WorkspaceMachines, rootTurn, durable())).toBe(
+			"completed",
+		);
+		expect(mocks.stepRuntime).not.toHaveBeenCalled();
+		expect(mocks.commit).toHaveBeenCalledOnce();
+		expect(mocks.finalize).toHaveBeenCalledWith(
+			expect.anything(),
+			"completed",
+			expect.arrayContaining([
+				expect.objectContaining({ text: "Kept attempt 2 of 3." }),
+			]),
+		);
+	});
 });
