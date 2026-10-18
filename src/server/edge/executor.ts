@@ -53,6 +53,7 @@ import { SqliteConversationSteps } from "./conversation-step-storage";
 import type { EdgeExecutorEnvironment } from "./environment";
 import { authorizeGitProxy } from "./github-git-authorization";
 import { withEdgeModelEndpoints } from "./model-endpoint";
+import { PR_EVIDENCE_ROUTE_PREFIX, servePrEvidence } from "./pr-evidence-route";
 import { TurnHistoryCache } from "./turn-history-cache";
 import { type QueuedTurn, SqliteTurnQueue } from "./turn-queue";
 
@@ -821,6 +822,9 @@ export default {
 				);
 				return new Response(null, { status: 202 });
 			}
+			// Pull request evidence media (src/server/edge/pr-evidence-route.ts).
+			if (path.startsWith(PR_EVIDENCE_ROUTE_PREFIX))
+				return await servePrEvidence(request);
 			if (new URL(request.url).pathname.startsWith("/git/")) {
 				const config = gitProxySecrets.safeParse(env);
 				if (!config.success) return new Response(null, { status: 503 });

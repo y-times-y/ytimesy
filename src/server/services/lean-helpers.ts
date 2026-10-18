@@ -21,6 +21,10 @@ import {
 import { BROWSER_INSPECTION_SOURCE } from "./browser-inspection";
 import { DELIVERABLE_CHECK_SOURCE } from "./deliverable-check";
 import { guestCapabilityCommand } from "./guest-node-capability";
+import {
+	EVIDENCE_HELPER_SCRIPT,
+	evidenceCaptureFiles,
+} from "./pr-evidence-capture";
 
 /**
  * What the lean surfaces move out of the tool list and onto the workspace VM
@@ -36,6 +40,7 @@ export const LEAN_HELPER_COMMANDS = [
 	"ytimesy-check",
 	"ytimesy-browser",
 	"ytimesy-job",
+	"ytimesy-evidence",
 ] as const;
 
 const CHECK_USAGE =
@@ -294,6 +299,14 @@ export function leanHelperBundle(
 			content: desktopWallpaperBase64(),
 			mode: 0o644,
 		},
+		// Pull request evidence plans and previews (src/server/services/pr-evidence.ts).
+		"bin/ytimesy-evidence": { content: EVIDENCE_HELPER_SCRIPT, mode: 0o755 },
+		...Object.fromEntries(
+			Object.entries(evidenceCaptureFiles()).map(([name, content]) => [
+				`lib/${name}`,
+				{ content, mode: 0o644 },
+			]),
+		),
 	};
 	const version = createHash("sha256")
 		.update(JSON.stringify(files))

@@ -953,6 +953,7 @@ async function runApiTurnAttempt(
 					secretNames: projectSecrets?.names,
 					leanShape: surface.lean?.shape,
 					leanWorkingDirectory,
+					prEvidence: variant.prEvidence === "on" && writable,
 				},
 				memory,
 			),

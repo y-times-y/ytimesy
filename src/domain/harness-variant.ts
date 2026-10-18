@@ -45,6 +45,14 @@ export const HARNESS_VARIANT_VALUES = {
 	 * surface unchanged (the default).
 	 */
 	codeMode: ["off", "on"],
+	/**
+	 * Pull request evidence: on makes the harness capture screenshots, a
+	 * short recording or CLI output from the pushed commit when a turn's
+	 * draft handoff has visible changes (or a `ytimesy-evidence` plan), store
+	 * them and keep an Evidence section in the PR description current
+	 * (src/server/services/pr-evidence.ts); off changes nothing (the default).
+	 */
+	prEvidence: ["off", "on"],
 } as const;
 
 type Values = typeof HARNESS_VARIANT_VALUES;
@@ -56,6 +64,7 @@ export type MemoryWriter = HarnessVariant["memoryWriter"];
 export type HarnessToolSurfaceId = HarnessVariant["toolSurface"];
 export type PromptCacheScope = HarnessVariant["promptCacheScope"];
 export type CodeMode = HarnessVariant["codeMode"];
+export type PrEvidence = HarnessVariant["prEvidence"];
 
 export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	memoryWording: "rules",
@@ -63,6 +72,7 @@ export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	toolSurface: "lean",
 	promptCacheScope: "chat",
 	codeMode: "off",
+	prEvidence: "off",
 };
 
 /**

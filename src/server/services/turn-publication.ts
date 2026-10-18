@@ -13,6 +13,7 @@ import { projectForOwner } from "../adapters/projects";
 import { repositoryDirectory } from "../adapters/repository-setup";
 import type { WorkspaceRuntime } from "../adapters/workspace-runtime";
 import { githubAccessToken } from "../auth/github-connection";
+import { attachPullRequestEvidence } from "./pr-evidence";
 
 export type TurnGitRuntime = Pick<WorkspaceRuntime, "exec"> &
 	Partial<Pick<WorkspaceRuntime, "readTextFile" | "writeTextFile">>;
@@ -120,6 +121,24 @@ export async function publishCompletedSessionTurn(
 				base,
 			},
 		);
+		// Harness-captured screenshots/recording for visible changes (prEvidence=on);
+		// evidence never blocks or fails the handoff itself.
+		if (primary && "number" in pull && typeof pull.number === "number")
+			await attachPullRequestEvidence({
+				userId: session.userId,
+				runtime,
+				providerRef,
+				directory,
+				revision,
+				installationId: repo.installationId,
+				fullName: repo.fullName,
+				pullNumber: pull.number,
+			}).catch((error) =>
+				console.warn("Pull request evidence failed.", {
+					message:
+						error instanceof Error ? error.message.slice(0, 300) : "unknown",
+				}),
+			);
 		if (primary && session.parentSessionId)
 			await saveAgentTaskPublication(session.id, {
 				branch: head,
