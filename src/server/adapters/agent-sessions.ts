@@ -8,11 +8,16 @@ import type {
 	AgentTaskStatus,
 } from "#/domain/agent-task";
 import { sessionTitleFromText } from "#/domain/session-item";
+import type {
+	SubagentBudget,
+	SubagentFork,
+	SubagentRole,
+} from "#/domain/subagent";
 import { captureServerAnalytics } from "./analytics";
 import { database } from "./database";
 
 const SESSION_COLUMNS =
-	"id,user_id,project_id,workspace_id,harness,provider_ref,parent_session_id,title,briefing,items,listed_model_id,turn_status,status,task_prompt,task_state,task_placement,task_access,task_execution,depends_on_session_id,task_summary,task_review_state,task_branch,task_pull_request_url,selected_branch,base_branch,working_branch,created_at,updated_at";
+	"id,user_id,project_id,workspace_id,harness,provider_ref,parent_session_id,title,briefing,items,listed_model_id,turn_status,status,task_prompt,task_state,task_placement,task_access,task_execution,depends_on_session_id,task_summary,task_review_state,task_branch,task_pull_request_url,selected_branch,base_branch,working_branch,agent_role,agent_budget,agent_fork,agent_steps,created_at,updated_at";
 
 export async function selectAgentSessionHarness(
 	userId: string,
@@ -175,6 +180,11 @@ export type AgentSessionRecord = {
 	baseBranch?: string | null;
 	workingBranch?: string | null;
 	taskPullRequestUrl: string | null;
+	/** Set for children started through the builder's agent tool (docs/subagents.md). */
+	agentRole?: SubagentRole | null;
+	agentBudget?: SubagentBudget | null;
+	agentFork?: SubagentFork | null;
+	agentSteps?: number;
 	createdAt: string;
 	updatedAt: string;
 };
@@ -206,6 +216,10 @@ interface AgentSessionRow {
 	base_branch: string | null;
 	working_branch: string | null;
 	task_pull_request_url: string | null;
+	agent_role?: SubagentRole | null;
+	agent_budget?: SubagentBudget | null;
+	agent_fork?: SubagentFork | null;
+	agent_steps?: number | null;
 	created_at: Date | string;
 	updated_at: Date | string;
 }
@@ -588,6 +602,10 @@ function toSession(row: AgentSessionRow): AgentSessionRecord {
 		baseBranch: row.base_branch ?? null,
 		workingBranch: row.working_branch ?? null,
 		taskPullRequestUrl: row.task_pull_request_url,
+		agentRole: row.agent_role ?? null,
+		agentBudget: row.agent_budget ?? null,
+		agentFork: row.agent_fork ?? null,
+		agentSteps: row.agent_steps ?? 0,
 		createdAt:
 			row.created_at instanceof Date
 				? row.created_at.toISOString()

@@ -94,7 +94,7 @@ function findToolsOutputNames(output: unknown): string[] {
 		"type" in value &&
 		(value as { type: unknown }).type === "json"
 	)
-		value = (value as { value: unknown }).value;
+		value = (value as unknown as { value: unknown }).value;
 	const loaded = (value as { loaded?: unknown } | null)?.loaded;
 	return Array.isArray(loaded)
 		? loaded.flatMap((entry) =>

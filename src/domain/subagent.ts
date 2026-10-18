@@ -135,18 +135,18 @@ export function subagentBudgetState(
 	budget: SubagentBudget,
 	used: SubagentUsed,
 ): SubagentBudgetState {
-	const dimensions = [
+	const dimensions: [string, number, number][] = [
 		["steps", used.steps, budget.steps],
 		["minutes", used.minutes, budget.minutes],
 		["tokens", used.tokens, budget.tokens],
-	] as const;
-	const describe = (name: string, value: number, limit: number) =>
+	];
+	const describe = ([name, value, limit]: [string, number, number]) =>
 		`${name} ${Math.round(value).toLocaleString("en-US")}/${limit.toLocaleString("en-US")}`;
 	const exhausted = dimensions.find(([, value, limit]) => value >= limit);
-	if (exhausted) return { state: "exhausted", reason: describe(...exhausted) };
+	if (exhausted) return { state: "exhausted", reason: describe(exhausted) };
 	const near = dimensions.find(([, value, limit]) => value >= limit * 0.9);
 	return near
-		? { state: "wrap-up", reason: describe(...near) }
+		? { state: "wrap-up", reason: describe(near) }
 		: { state: "ok" };
 }
 
@@ -310,3 +310,19 @@ export function checkerBrief(input: {
 /** The builder's delegation tools (loaded on demand through find_tools). */
 export const AGENT_TOOL = "agent";
 export const AGENT_SEND_TOOL = "agent_send";
+
+/** A writer's forked VM, as recorded on its session (agent_fork). */
+export type SubagentFork = {
+	readonly vmId: string;
+	readonly sourceVmId: string;
+	/** Milliseconds from snapshot start to the fork VM running. */
+	readonly forkMs?: number;
+	readonly bootedAt: string;
+	/** The fork's first commit: the parent's working tree at fork time. */
+	readonly base?: string;
+	/** The parent's HEAD when the fork was taken (the bundle's boundary). */
+	readonly parentHead?: string;
+	readonly patch?: WriterPatch | null;
+	readonly reportedAt?: string;
+	readonly deletedAt?: string;
+};
