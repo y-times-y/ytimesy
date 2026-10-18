@@ -10,10 +10,14 @@ import { z } from "zod";
 import { SessionItemId } from "#/domain/ids";
 import type { SessionItem } from "#/domain/session-item";
 import {
+	BUILDER_DEFERRED_TOOL_GROUPS,
 	deferredToolSurface,
+	deferredToolsInstructions,
 	FIND_TOOLS_TOOL,
+	loadedDeferredTools,
 	loadedDeferredToolsFromItems,
 	loadedDeferredToolsFromMessages,
+	oneLineDescription,
 } from "./deferred-tools";
 import { runModelAgentStep } from "./model-agent-loop";
 
@@ -270,5 +274,142 @@ describe("deferred tools in the model loop", () => {
 			{ model },
 		).catch(() => {});
 		expect(agent).not.toHaveBeenCalled();
+	});
+});
+
+describe("the builder's deferred tools across turns", () => {
+	const findCall = (id: string, names: string[]): SessionItem =>
+		({
+			kind: "dynamicToolCall",
+			id: SessionItemId(id),
+			tool: FIND_TOOLS_TOOL,
+			status: "completed",
+			arguments: {},
+			output: JSON.stringify({ loaded: names.map((name) => ({ name })) }),
+		}) as unknown as SessionItem;
+
+	it("defers the subagent, plan and secret-request tools and keeps earlier loads first", async () => {
+		const tools: ToolSet = {
+			read: simple("Read"),
+			bash: simple("Bash"),
+			agent: simple("Start"),
+			agent_send: simple("Steer"),
+			enter_plan_mode: simple("Plan"),
+			propose_plan: simple("Propose"),
+			request_project_secret: simple("Secret"),
+		};
+		// Turn 1 loaded the subagent tools; this turn's messages load plan mode.
+		const items = [findCall("f1", ["agent", "agent_send"])];
+		const messages: ModelMessage[] = [
+			{
+				role: "tool",
+				content: [
+					{
+						type: "tool-result",
+						toolCallId: "f2",
+						toolName: FIND_TOOLS_TOOL,
+						output: {
+							type: "json",
+							value: {
+								loaded: [{ name: "propose_plan" }, { name: "enter_plan_mode" }],
+							},
+						},
+					},
+				],
+			},
+		];
+		const loaded = loadedDeferredTools(
+			items,
+			messages,
+			BUILDER_DEFERRED_TOOL_GROUPS,
+		);
+		expect(loaded).toEqual([
+			"agent",
+			"agent_send",
+			"propose_plan",
+			"enter_plan_mode",
+		]);
+		const previous = deferredToolSurface({
+			tools,
+			groups: BUILDER_DEFERRED_TOOL_GROUPS,
+			loaded: loadedDeferredTools(items, [], BUILDER_DEFERRED_TOOL_GROUPS),
+		}).order();
+		const now = deferredToolSurface({
+			tools,
+			groups: BUILDER_DEFERRED_TOOL_GROUPS,
+			loaded,
+		}).order();
+		expect(previous).toEqual([
+			"read",
+			"bash",
+			FIND_TOOLS_TOOL,
+			"agent",
+			"agent_send",
+		]);
+		// The previous request's list is an unchanged prefix of this one.
+		expect(now.slice(0, previous.length)).toEqual(previous);
+		expect(now).not.toContain("request_project_secret");
+	});
+});
+
+describe("the system prompt's list of deferred tools", () => {
+	const tools = (): ToolSet => ({
+		read: simple("Read a file"),
+		propose_plan: simple("Propose a plan. It ends the turn."),
+		agent: simple(
+			"Start a subagent in the background. It sees only your brief.",
+		),
+		agent_send: simple("Steer or stop a subagent."),
+		enter_plan_mode: simple("Enter plan mode"),
+	});
+
+	it("names every deferred tool with one line, sorted, whatever is loaded", async () => {
+		const surface = deferredToolSurface({
+			tools: tools(),
+			groups: GROUPS,
+			loaded: [],
+		});
+		expect(surface.deferred).toEqual([
+			{ name: "agent", description: "Start a subagent in the background." },
+			{ name: "agent_send", description: "Steer or stop a subagent." },
+			{ name: "enter_plan_mode", description: "Enter plan mode" },
+			{ name: "propose_plan", description: "Propose a plan." },
+		]);
+		const prompt = deferredToolsInstructions(surface.deferred);
+		expect(prompt).toContain("load one with find_tools");
+		expect(prompt).toContain("- agent: Start a subagent in the background.");
+		expect(prompt).not.toContain("run_code");
+		expect(
+			deferredToolsInstructions(surface.deferred, { codeMode: true }),
+		).toContain("or call one directly from run_code");
+
+		// Loading changes the tool list (appended) but never the prompt's list.
+		const before = surface.order();
+		await surface.tools[FIND_TOOLS_TOOL]?.execute?.(
+			{ query: "plan" },
+			{ toolCallId: "f", messages: [], context: undefined },
+		);
+		expect(surface.order().slice(0, before.length)).toEqual(before);
+		expect(surface.order().slice(before.length)).toEqual([
+			"enter_plan_mode",
+			"propose_plan",
+		]);
+		const later = deferredToolSurface({
+			tools: tools(),
+			groups: GROUPS,
+			loaded: ["enter_plan_mode", "propose_plan", "agent", "agent_send"],
+		});
+		expect(deferredToolsInstructions(later.deferred)).toBe(prompt);
+	});
+
+	it("adds nothing when no tool is deferred", () => {
+		const surface = deferredToolSurface({
+			tools: { read: simple("Read") },
+			groups: GROUPS,
+			loaded: [],
+		});
+		expect(surface.deferred).toEqual([]);
+		expect(deferredToolsInstructions(surface.deferred)).toBe("");
+		expect(oneLineDescription("x".repeat(300))).toHaveLength(160);
 	});
 });
