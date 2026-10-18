@@ -259,6 +259,33 @@ describe("run_code on the lean surface", () => {
 		).toBeUndefined();
 	});
 
+	it("lets a program call the deferred subagent tools without loading them", () => {
+		const runCode = codeModeTool({
+			tools: {
+				...coreSurface(),
+				agent: tool({
+					inputSchema: z.object({}),
+					execute: async () => null,
+				}),
+				agent_send: tool({
+					inputSchema: z.object({}),
+					execute: async () => null,
+				}),
+				find_tools: tool({
+					inputSchema: z.object({}),
+					execute: async () => null,
+				}),
+			},
+			signal: new AbortController().signal,
+			sessionId,
+			turnId: "turn",
+		});
+		const description = runCode?.description ?? "";
+		expect(description).toContain("tools.agent(args)");
+		expect(description).toContain("tools.agent_send(args)");
+		expect(description).not.toContain("tools.find_tools(");
+	});
+
 	it("tells the model when to use run_code only when it is offered", () => {
 		const instructions = (tools: ToolSet) =>
 			agentTurnInstructions({
