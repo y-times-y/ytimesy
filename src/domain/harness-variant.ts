@@ -61,6 +61,16 @@ export const HARNESS_VARIANT_VALUES = {
 	 * (src/server/services/pr-evidence.ts); off changes nothing (the default).
 	 */
 	prEvidence: ["off", "on"],
+	/**
+	 * The attempt loop (src/server/services/attempt-loop.ts, decision
+	 * 2026-10-17 Phase 2): 3 = when the root builder finishes, an independent
+	 * checker subagent tests the delivered result against the user's request;
+	 * a failed or unsure attempt is kept as a candidate, the working tree is
+	 * reset and the builder tries a different approach, up to three attempts
+	 * within a time and token budget, and the best candidate is kept. 1 = one
+	 * attempt, unchanged behaviour (the default).
+	 */
+	attempts: ["1", "3"],
 } as const;
 
 type Values = typeof HARNESS_VARIANT_VALUES;
@@ -74,6 +84,7 @@ export type PromptCacheScope = HarnessVariant["promptCacheScope"];
 export type CodeMode = HarnessVariant["codeMode"];
 export type SubagentsMode = HarnessVariant["subagents"];
 export type PrEvidence = HarnessVariant["prEvidence"];
+export type AttemptsMode = HarnessVariant["attempts"];
 
 export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	memoryWording: "rules",
@@ -83,6 +94,7 @@ export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	codeMode: "off",
 	subagents: "off",
 	prEvidence: "off",
+	attempts: "1",
 };
 
 /**
