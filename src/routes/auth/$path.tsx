@@ -2,6 +2,7 @@ import { viewPaths } from "@better-auth-ui/core";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { Auth } from "#/components/auth/auth";
 import { authCallbackErrorMessage } from "#/domain/auth-callback";
+import { safeReturnTo } from "#/domain/return-to";
 import { useIdentityOptions } from "#/features/auth/identity-options";
 import { OnboardingShell } from "#/features/auth/onboarding-shell";
 
@@ -16,6 +17,11 @@ const emailOnlyPaths = new Set([
 export const Route = createFileRoute("/auth/$path")({
 	validateSearch: (search: Record<string, unknown>) => ({
 		error: typeof search.error === "string" ? search.error : undefined,
+		// Where sign-in returns to; never anything but a local path.
+		redirectTo:
+			search.redirectTo === undefined
+				? undefined
+				: safeReturnTo(search.redirectTo),
 	}),
 	beforeLoad({ params: { path } }) {
 		if (!authPaths.has(path)) throw redirect({ to: "/" });
