@@ -77,7 +77,7 @@ export function selectionReserveMs(loopMs: number) {
 // The checker's verdict.
 
 /** Every balanced top-level {...} in a text, last first (strings respected). */
-function jsonObjects(text: string): string[] {
+export function jsonObjects(text: string): string[] {
 	const found: string[] = [];
 	for (let end = text.lastIndexOf("}"); end >= 0; ) {
 		let depth = 0;
