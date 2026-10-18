@@ -14,9 +14,13 @@ export type AgentSpend = {
 	readonly inputTokens: number;
 	readonly outputTokens: number;
 	readonly cacheReadTokens: number;
-	/** Null when some usage has no known price (shown as tokens only). */
+	/**
+	 * Dollars: billed (the provider's reported cost or list price × tokens)
+	 * or, when planBilled, a list-price estimate of what the same tokens
+	 * would cost on the API. Null when some usage has no known price.
+	 */
 	readonly costUsd: number | null;
-	/** Plan-billed routes (a Codex subscription) report tokens, never dollars. */
+	/** Some of it ran on a plan (a Codex subscription): costUsd is then an estimate, not a charge. */
 	readonly planBilled: boolean;
 	readonly vmMinutes: number;
 };
@@ -145,8 +149,8 @@ export function formatSpend(spend: AgentSpend) {
 			? spend.planBilled
 				? "plan"
 				: "$?"
-			: spend.planBilled && spend.costUsd === 0
-				? "plan"
+			: spend.planBilled
+				? `~$${spend.costUsd.toFixed(2)} list-price est. (plan)`
 				: `$${spend.costUsd.toFixed(2)}`;
 	return {
 		tokens,

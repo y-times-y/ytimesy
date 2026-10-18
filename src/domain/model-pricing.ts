@@ -15,16 +15,17 @@ export type ModelPrice = {
  * served through OpenRouter report their own cost, which wins over this.
  */
 export const KNOWN_MODEL_PRICES: Readonly<Record<string, ModelPrice>> = {
+	// Anthropic list prices (claude-api reference, cached 2026-10-06).
 	"anthropic/claude-sonnet-5.5": {
-		input: 3,
-		output: 15,
-		cacheRead: 0.3,
-		cacheWrite: 3.75,
+		input: 2,
+		output: 10,
+		cacheRead: 0.2,
+		cacheWrite: 2.5,
 	},
 	"anthropic/claude-opus-5.5": {
 		input: 4,
 		output: 20,
-		cacheRead: 0.4,
+		cacheRead: 0.2,
 		cacheWrite: 5,
 	},
 	"google/gemini-3.8-flash": { input: 0.6, output: 3.5, cacheRead: 0.15 },
@@ -32,10 +33,25 @@ export const KNOWN_MODEL_PRICES: Readonly<Record<string, ModelPrice>> = {
 	"openai/gpt-6.1-sol": { input: 2.5, output: 10, cacheRead: 0.25 },
 };
 
-/** How a route is billed: per token (with a known or unknown price) or by the user's plan. */
+/**
+ * How a route is billed: per token (with a known or unknown price) or by the
+ * user's plan. A plan-billed route still carries the model's list price, so
+ * its spend can be shown as a labelled list-price estimate (what the same
+ * tokens would cost on the API), never as a charge.
+ */
 export type ModelBilling =
-	| { readonly kind: "plan" }
+	| { readonly kind: "plan"; readonly price: ModelPrice | null }
 	| { readonly kind: "tokens"; readonly price: ModelPrice | null };
+
+function knownPrice(modelId: string) {
+	const id = pricedModelId(modelId);
+	return (
+		KNOWN_MODEL_PRICES[id] ??
+		KNOWN_MODEL_PRICES[`openai/${id}`] ??
+		KNOWN_MODEL_PRICES[`anthropic/${id}`] ??
+		null
+	);
+}
 
 /** The bare model id for a route id (`api/<connection>/<model>`), a `codex:` id or a plain id. */
 export function pricedModelId(routeOrModelId: string) {
@@ -48,33 +64,30 @@ export function modelBilling(input: {
 	readonly harness: "codex" | "api";
 	readonly modelId: string | null;
 }): ModelBilling {
-	if (input.harness === "codex") return { kind: "plan" };
+	if (input.harness === "codex")
+		return {
+			kind: "plan",
+			price: input.modelId ? knownPrice(input.modelId) : null,
+		};
 	if (!input.modelId) return { kind: "tokens", price: null };
 	if (/:free$/.test(input.modelId))
 		return { kind: "tokens", price: { input: 0, output: 0 } };
-	const id = pricedModelId(input.modelId);
-	return {
-		kind: "tokens",
-		price:
-			KNOWN_MODEL_PRICES[id] ??
-			KNOWN_MODEL_PRICES[`openai/${id}`] ??
-			KNOWN_MODEL_PRICES[`anthropic/${id}`] ??
-			null,
-	};
+	return { kind: "tokens", price: knownPrice(input.modelId) };
 }
 
 /**
  * Dollars for one usage record: the provider's reported cost when it gave
- * one, else list price × tokens, $0 for plan-billed routes, null when
- * neither is known.
+ * one, else list price × tokens, null when neither is known. For a
+ * plan-billed route this is the list-price estimate (callers label it: the
+ * user is not charged per token).
  */
 export function usageCostUsd(
 	usage: ApiTokenUsage | null | undefined,
 	billing: ModelBilling,
 ): number | null {
-	if (!usage) return billing.kind === "plan" ? 0 : null;
-	if (billing.kind === "plan") return 0;
-	if (typeof usage.costUsd === "number") return usage.costUsd;
+	if (!usage) return 0;
+	if (billing.kind === "tokens" && typeof usage.costUsd === "number")
+		return usage.costUsd;
 	const { price } = billing;
 	if (!price || usage.inputTokens === null || usage.outputTokens === null)
 		return null;

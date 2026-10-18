@@ -30,6 +30,7 @@ describe("model pricing", () => {
 	it("bills a subscription by plan and unknown models as tokens only", () => {
 		expect(modelBilling({ harness: "codex", modelId: "gpt-6.1-sol" })).toEqual({
 			kind: "plan",
+			price: { input: 2.5, output: 10, cacheRead: 0.25 },
 		});
 		expect(
 			modelBilling({ harness: "api", modelId: "acme/unknown-model" }),
@@ -38,7 +39,7 @@ describe("model pricing", () => {
 			harness: "api",
 			modelId: `api/${"0".repeat(8)}-0000-4000-8000-${"0".repeat(12)}/${encodeURIComponent("anthropic/claude-sonnet-5.5")}`,
 		});
-		expect(sonnet).toMatchObject({ kind: "tokens", price: { input: 3 } });
+		expect(sonnet).toMatchObject({ kind: "tokens", price: { input: 2 } });
 	});
 
 	it("prefers the provider's reported dollars over list price", () => {
@@ -53,10 +54,17 @@ describe("model pricing", () => {
 			cacheReadTokens: 800_000,
 			cacheWriteTokens: 0,
 		};
-		// 0.2M × $3 + 0.8M × $0.3 + 0.1M × $15
-		expect(usageCostUsd(usage, billing)).toBeCloseTo(0.6 + 0.24 + 1.5);
+		// 0.2M × $2 + 0.8M × $0.2 + 0.1M × $10
+		expect(usageCostUsd(usage, billing)).toBeCloseTo(0.4 + 0.16 + 1);
 		expect(usageCostUsd({ ...usage, costUsd: 0.5 }, billing)).toBe(0.5);
-		expect(usageCostUsd(usage, { kind: "plan" })).toBe(0);
+		// A plan route: the list-price estimate, never a reported charge.
+		expect(
+			usageCostUsd(
+				{ ...usage, costUsd: 0.5 },
+				{ kind: "plan", price: billing.price },
+			),
+		).toBeCloseTo(1.56);
+		expect(usageCostUsd(usage, { kind: "plan", price: null })).toBeNull();
 		expect(usageCostUsd(usage, { kind: "tokens", price: null })).toBeNull();
 	});
 });
@@ -116,11 +124,20 @@ describe("subagent spend", () => {
 		expect(forkVmMinutes(null, Date.now())).toBe(0);
 	});
 
-	it("shows a plan-billed tree as plan, never as dollars", () => {
+	it("labels a plan-billed spend as a list-price estimate, or plan when unpriced", () => {
 		const spend = agentSpend({
-			items: [turn("p", 2000, 100)],
-			billing: { kind: "plan" },
+			items: [turn("p", 1_000_000, 100_000)],
+			billing: { kind: "plan", price: { input: 1, output: 10 } },
 		});
-		expect(formatSpend(spend).dollars).toBe("plan");
+		expect(spend.costUsd).toBeCloseTo(2);
+		expect(formatSpend(spend).dollars).toBe("~$2.00 list-price est. (plan)");
+		expect(
+			formatSpend(
+				agentSpend({
+					items: [turn("q", 2000, 100)],
+					billing: { kind: "plan", price: null },
+				}),
+			).dollars,
+		).toBe("plan");
 	});
 });
