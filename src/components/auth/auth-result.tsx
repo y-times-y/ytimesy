@@ -17,6 +17,7 @@ import {
 	CardHeader,
 	CardTitle,
 } from "#/components/ui/card.tsx";
+import { safeReturnTo } from "#/domain/return-to";
 import { cn } from "#/lib/utils.ts";
 
 type AuthResultProps = {
@@ -45,7 +46,7 @@ function AuthResultView({ className, fallbackIntent }: AuthResultProps) {
 			case "continue":
 				return {
 					label: localization.auth.callbackContinue,
-					to: result.redirectTo ?? "/",
+					to: safeReturnTo(result.redirectTo),
 				};
 			case "forgotPassword":
 				return {

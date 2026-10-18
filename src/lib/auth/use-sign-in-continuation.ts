@@ -2,6 +2,7 @@
 
 import { useAuth } from "@better-auth-ui/react";
 import { useCallback } from "react";
+import { safeReturnTo } from "#/domain/return-to";
 import {
 	isTwoFactorRedirect,
 	storeTwoFactorMethods,
@@ -36,16 +37,17 @@ export function useSignInContinuation() {
 
 	return useCallback(
 		(data: unknown) => {
+			const returnTo = safeReturnTo(redirectTo);
 			if (twoFactorPath && isTwoFactorRedirect(data)) {
 				storeTwoFactorMethods(data.twoFactorMethods);
 
 				navigate({
-					to: `${basePaths.auth}/${twoFactorPath}?redirectTo=${encodeURIComponent(redirectTo)}`,
+					to: `${basePaths.auth}/${twoFactorPath}?redirectTo=${encodeURIComponent(returnTo)}`,
 				});
 				return;
 			}
 
-			navigate({ to: redirectTo });
+			navigate({ to: returnTo });
 		},
 		[basePaths.auth, navigate, redirectTo, twoFactorPath],
 	);
