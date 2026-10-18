@@ -492,6 +492,61 @@ it("stops after cancellation and fences late checkpoints after completion", asyn
 		(await db.query("select turn_status from agent_session")).rows[0],
 	).toEqual({ turn_status: "idle" });
 });
+it("keeps a stopped step's started tool call in the history the next turn continues", async () => {
+	await submit();
+	const turn = await claimApiTurn();
+	if (!turn) throw Error("missing turn");
+	const call = {
+		type: "tool-call" as const,
+		toolCallId: "call-1",
+		toolName: "run",
+		input: { command: "sleep 60; echo marker-one" },
+	};
+	const inFlight = [
+		{ role: "user" as const, content: "test" },
+		{ role: "assistant" as const, content: [call] },
+	];
+	await cancelApiTurn("alice", sessionId);
+	// Checkpoints are fenced once a stop is requested; settling is not.
+	await expect(checkpointApiTurn(turn, inFlight, [])).rejects.toThrow("lease");
+	expect(await finalizeApiTurn(turn, "cancelled", [], inFlight)).toBe(
+		"cancelled",
+	);
+	await db.exec(
+		"create table if not exists agent_task_command_receipt(parent_session_id uuid,request_id text,status text,response jsonb)",
+	);
+	expect(
+		await previousTurnMessages("alice", sessionId, "test-model", revision),
+	).toEqual([
+		...inFlight,
+		{
+			role: "tool",
+			content: [
+				{
+					type: "tool-result",
+					toolCallId: "call-1",
+					toolName: "run",
+					output: {
+						type: "error-text",
+						value: expect.stringContaining("the turn was stopped"),
+					},
+				},
+			],
+		},
+	]);
+});
+it("keeps the last checkpoint when a turn settles without in-flight calls", async () => {
+	await submit();
+	const turn = await claimApiTurn();
+	if (!turn) throw Error("missing turn");
+	await finalizeApiTurn(turn, "failed", []);
+	await db.exec(
+		"create table if not exists agent_task_command_receipt(parent_session_id uuid,request_id text,status text,response jsonb)",
+	);
+	expect(
+		await previousTurnMessages("alice", sessionId, "test-model", revision),
+	).toEqual([{ role: "user", content: "test" }]);
+});
 it("fails expired leases instead of replaying uncertain side effects", async () => {
 	await submit();
 	const turn = await claimApiTurn();

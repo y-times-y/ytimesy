@@ -438,21 +438,33 @@ export async function finishApiTurn(
 	return (await finalizeApiTurn(turn, state, items)) !== null;
 }
 
-/** Return the effective state so a stop racing with completion still stops owned commands. */
+/**
+ * Return the effective state so a stop racing with completion still stops owned commands.
+ * `messages`, when given, replaces the saved model history in the same fenced
+ * write: a stop or failure mid-step keeps the step's started tool calls, which
+ * checkpoints (refused once a stop is requested) could not save.
+ */
 export async function finalizeApiTurn(
 	turn: ApiTurn,
 	state: "completed" | "failed" | "cancelled",
 	items: readonly SessionItem[],
+	messages?: readonly ModelMessage[],
 ) {
 	const result = await database().query<
 		{ state: "completed" | "failed" | "cancelled" } & SettledTurnRow
 	>(
-		`with saved as (update api_turn set state=case when cancel_requested then 'cancelled' else $3 end,items=$4,updated_at=now()
+		`with saved as (update api_turn set state=case when cancel_requested then 'cancelled' else $3 end,items=$4,messages=coalesce($5::jsonb,messages),updated_at=now()
 		 where id=$1 and lease_id=$2 and state='running' and heartbeat_at>=now()-interval '45 seconds' returning id,session_id,state,created_at)
 		 update agent_session s set items=$4,turn_status=case when saved.state='cancelled' then 'idle' else saved.state end,
 		 task_state=case when parent_session_id is null then task_state when saved.state='completed' then 'done' when saved.state='failed' then 'failed' else 'idle' end,
 		 updated_at=now() from saved where s.id=saved.session_id returning ${SETTLED_TURN_COLUMNS}`,
-		[turn.id, turn.lease_id, state, jsonbText(items)],
+		[
+			turn.id,
+			turn.lease_id,
+			state,
+			jsonbText(items),
+			messages ? jsonbText(messages) : null,
+		],
 	);
 	captureSettledTurns(result.rows);
 	if (result.rows[0]) await wakeConversationProgress();

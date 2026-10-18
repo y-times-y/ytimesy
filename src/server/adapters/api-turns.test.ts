@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import { SessionItemId } from "#/domain/ids";
 import { subscriptionTurnRevision } from "#/domain/subscription-turn";
 import {
 	type ApiTurn,
@@ -298,7 +299,7 @@ it("stores a tool output carrying NUL bytes without the jsonb escape Postgres re
 		[
 			{
 				kind: "dynamicToolCall",
-				id: "call-1",
+				id: SessionItemId("call-1"),
 				tool: "bash",
 				input: "{}",
 				output,

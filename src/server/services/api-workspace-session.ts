@@ -1,15 +1,14 @@
 import { pendingPlanId } from "#/domain/agent-plan";
 import {
-	apiConversation,
 	assertApiContextFits,
+	nextTurnMessages,
 } from "#/domain/api-conversation";
 import { type ApiModelSpeedId, apiModelSpeeds } from "#/domain/api-model-list";
 import { childTaskPublicItems } from "#/domain/child-task-activity";
 import { reconstructedContextTransition } from "#/domain/harness-model-profile";
-import {
-	type IncomingAttachment,
-	type MessageAttachment,
-	withAttachmentNote,
+import type {
+	IncomingAttachment,
+	MessageAttachment,
 } from "#/domain/message-attachment";
 import { parseModelRouteId } from "#/domain/model-connection";
 import {
@@ -222,23 +221,13 @@ export async function sendApiWorkspaceTask(
 		selected.modelId,
 		connection.revision,
 	);
-	let messages = previous
-		? [
-				...previous,
-				{
-					role: "user" as const,
-					content: withAttachmentNote(
-						input.runtimeText ?? input.text,
-						attachments,
-					),
-				},
-			]
-		: apiConversation(items);
-	if (input.runtimeText)
-		messages[messages.length - 1] = {
-			role: "user",
-			content: withAttachmentNote(input.runtimeText, attachments),
-		};
+	let messages = nextTurnMessages({
+		previous,
+		items,
+		text: input.text,
+		runtimeText: input.runtimeText,
+		attachments,
+	});
 	if (!previous)
 		messages = reconstructedContextTransition(
 			messages,
