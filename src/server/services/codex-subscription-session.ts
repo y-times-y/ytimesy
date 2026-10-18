@@ -1,17 +1,16 @@
 import type { AgentConnection } from "#/domain/agent-connection";
 import { pendingPlanId } from "#/domain/agent-plan";
 import {
-	apiConversation,
 	assertApiContextFits,
+	nextTurnMessages,
 } from "#/domain/api-conversation";
 import { recordedContextUsage } from "#/domain/api-progress";
 import { CodexReconnectRequired } from "#/domain/api-turn-failure";
 import { childTaskPublicItems } from "#/domain/child-task-activity";
 import { reconstructedContextTransition } from "#/domain/harness-model-profile";
-import {
-	type IncomingAttachment,
-	type MessageAttachment,
-	withAttachmentNote,
+import type {
+	IncomingAttachment,
+	MessageAttachment,
 } from "#/domain/message-attachment";
 import {
 	sendWasQueued,
@@ -158,6 +157,8 @@ export async function sendSubscriptionTask(
 		text: string;
 		modelId: string;
 		runtimeText?: string;
+		/** A runtime-switch envelope, sent only when no structured history carries over. */
+		runtimeHandoff?: string;
 		variant?: string;
 		fast?: boolean;
 		idempotencyKey?: string;
@@ -265,23 +266,14 @@ export async function sendSubscriptionTask(
 		input.modelId,
 		revision,
 	);
-	let messages = previous
-		? [
-				...previous,
-				{
-					role: "user" as const,
-					content: withAttachmentNote(
-						input.runtimeText ?? input.text,
-						attachments,
-					),
-				},
-			]
-		: apiConversation(items);
-	if (!previous && input.runtimeText)
-		messages[messages.length - 1] = {
-			role: "user",
-			content: withAttachmentNote(input.runtimeText, attachments),
-		};
+	let messages = nextTurnMessages({
+		previous,
+		items,
+		text: input.text,
+		runtimeText: input.runtimeText,
+		handoff: input.runtimeHandoff,
+		attachments,
+	});
 	if (!previous)
 		messages = reconstructedContextTransition(
 			messages,
