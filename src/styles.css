@@ -655,6 +655,18 @@ a.sidebar-chat-pr,
 	color: #858585;
 	text-decoration-thickness: 1px;
 }
+
+.task-usage {
+	display: block;
+	color: var(--muted-foreground, inherit);
+	font-variant-numeric: tabular-nums;
+	opacity: 0.8;
+}
+
+.task-usage-total {
+	margin: 6px 0 0;
+	font-size: 12px;
+}
 .overview-cards {
 	display: grid;
 	gap: 10px;
