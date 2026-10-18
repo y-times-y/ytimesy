@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`admits a running VM that has no admission yet and enrolls its retention > round trips 1`] = `22`;
+exports[`admits a running VM that has no admission yet and enrolls its retention > round trips 1`] = `10`;
 
 exports[`admits a running VM that has no admission yet and enrolls its retention 1`] = `
 [
@@ -44,7 +44,7 @@ exports[`admits a running VM that has no admission yet and enrolls its retention
 }
 `;
 
-exports[`buys a new VM's cap before creating it and binds the VM after > round trips 1`] = `19`;
+exports[`buys a new VM's cap before creating it and binds the VM after > round trips 1`] = `12`;
 
 exports[`buys a new VM's cap before creating it and binds the VM after 1`] = `"vm-new"`;
 
@@ -81,7 +81,7 @@ exports[`buys a new VM's cap before creating it and binds the VM after 3`] = `
 }
 `;
 
-exports[`keeps a running VM's covering cap without buying runtime > round trips 1`] = `8`;
+exports[`keeps a running VM's covering cap without buying runtime > round trips 1`] = `3`;
 
 exports[`keeps a running VM's covering cap without buying runtime 1`] = `
 {
@@ -445,7 +445,7 @@ exports[`replays a reservation idempotently and refuses a changed identity 1`] =
 }
 `;
 
-exports[`settles a paused VM and buys a fresh cap before resuming it > round trips 1`] = `34`;
+exports[`settles a paused VM and buys a fresh cap before resuming it > round trips 1`] = `22`;
 
 exports[`settles a paused VM and buys a fresh cap before resuming it 1`] = `
 [
@@ -500,7 +500,7 @@ exports[`settles a paused VM and buys a fresh cap before resuming it 2`] = `
 }
 `;
 
-exports[`tops up a running VM whose cap no longer covers the operation > round trips 1`] = `19`;
+exports[`tops up a running VM whose cap no longer covers the operation > round trips 1`] = `9`;
 
 exports[`tops up a running VM whose cap no longer covers the operation 1`] = `
 {
