@@ -24,6 +24,7 @@ import type {
 	WorkspaceMachines,
 } from "#/server/services/workspace-machines";
 import { abortableFreestyleFetch } from "./abortable-fetch";
+import { forkRunningVm } from "./fork-vm";
 import {
 	PRODUCT_IDLE_TIMEOUT_SECONDS,
 	productCreateVmFields,
@@ -316,6 +317,27 @@ export function createFreestyleWorkspaceMachines(
 					operation: "snapshot",
 					message: providerMessage(cause),
 					providerWorkspaceId: workspaceId,
+				});
+			}
+		},
+
+		async forkWorkspace(source, slug, sizeId) {
+			try {
+				const fork = await forkRunningVm({
+					source: freestyle.vms.ref(source),
+					sourceVmId: source,
+					boot: (snapshotId) =>
+						machines.provisionSession(slug, snapshotId, sizeId),
+					deleteSnapshot: (snapshotId) =>
+						freestyle.vms.snapshots.delete(snapshotId),
+				});
+				return { vm: WorkspaceId(fork.vmId), forkMs: fork.forkMs };
+			} catch (cause) {
+				if (cause instanceof WorkspaceProvisionError) throw cause;
+				throw new WorkspaceProvisionError({
+					operation: "snapshot",
+					message: providerMessage(cause),
+					providerWorkspaceId: source,
 				});
 			}
 		},

@@ -14,17 +14,22 @@ export async function completedChildrenForReview(
 		`select id, updated_at::text as revision from agent_session
 		 where user_id=$1 and project_id=$2 and parent_session_id=$3
 		 and task_state='done' and turn_status<>'running' and task_review_state<>'reviewed'
+		 and agent_role is null
 		 order by updated_at,id limit 5`,
 		[userId, projectId, parentId],
 	);
 	return result.rows;
 }
 
-/** Children exist only once a session delegated; most chats never do. */
+/**
+ * Children exist only once a session delegated; most chats never do.
+ * Subagents (agent_role set) report through their own messages and the
+ * tree, not this task snapshot.
+ */
 export async function hasDelegatedTasks(userId: string, sessionId: string) {
 	const result = await database().query<{ present: boolean }>(
 		`select exists(select 1 from agent_session
-		 where user_id=$1 and parent_session_id=$2) as present`,
+		 where user_id=$1 and parent_session_id=$2 and agent_role is null) as present`,
 		[userId, sessionId],
 	);
 	return result.rows[0]?.present === true;
@@ -43,7 +48,8 @@ export async function withDelegationContext(
 ): Promise<ModelMessage[]> {
 	const tasks = await database().query(
 		`select id,title,task_state,turn_status,task_review_state from agent_session
-		 where user_id=$1 and parent_session_id=$2 order by created_at desc limit 30`,
+		 where user_id=$1 and parent_session_id=$2 and agent_role is null
+		 order by created_at desc limit 30`,
 		[userId, sessionId],
 	);
 	const latest = [...messages]

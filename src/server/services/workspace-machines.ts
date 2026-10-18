@@ -75,4 +75,14 @@ export interface WorkspaceMachines {
 		snapshotId: string,
 		machineSize?: MachineSizeId,
 	) => Promise<WorkspaceId>;
+	/**
+	 * Forks a running VM (memory and disk) into a new VM with this slug, for
+	 * a writer subagent; secrets are kept (fork-vm.ts). Providers without
+	 * live snapshots leave it out and writers are refused.
+	 */
+	readonly forkWorkspace?: (
+		source: WorkspaceId,
+		slug: string,
+		machineSize?: MachineSizeId,
+	) => Promise<{ vm: WorkspaceId; forkMs: number }>;
 }
