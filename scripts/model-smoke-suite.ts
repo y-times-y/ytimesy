@@ -2,8 +2,14 @@
 // a disposable VM with a tiny fixture repository, one ROOT builder session and
 // one turn; a deterministic verifier then runs on the VM. See
 // docs/model-smoke-suite.md.
+
 import { writeFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
+import {
+	attemptCostFromRun,
+	costSummary,
+	costSummaryCells,
+} from "../src/domain/eval-cost";
 import {
 	harnessVariantFromFlags,
 	harnessVariantLabel,
@@ -281,6 +287,8 @@ const summary = models.map((model) => {
 		),
 		estimatedCostUsd:
 			Math.round(sum((run) => run.estimatedCostUsd) * 1e4) / 1e4,
+		// Per attempt and per solved task over the whole agent tree (eval-cost.ts).
+		cost: costSummary(mine.map(attemptCostFromRun)),
 	};
 });
 console.info(
@@ -328,6 +336,8 @@ console.info(
 			"steps",
 			"cache%",
 			"usd",
+			"$/try",
+			"$/solved",
 		],
 		...summary.map((row) => [
 			row.model,
@@ -339,8 +349,10 @@ console.info(
 			String(row.modelSteps),
 			String(row.cacheHitPercent ?? "-"),
 			row.estimatedCostUsd.toFixed(3),
+			costSummaryCells(row.cost).perAttempt,
+			costSummaryCells(row.cost).perSolved,
 		]),
-	])}`,
+	])}${summary.some((row) => costSummaryCells(row.cost).note) ? `\n${[...new Set(summary.map((row) => costSummaryCells(row.cost).note).filter(Boolean))].join("; ")}` : ""}`,
 );
 for (const run of runs)
 	if (run.errors.length)

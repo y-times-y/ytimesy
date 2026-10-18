@@ -37,6 +37,7 @@
 // and prints one row per (variant, arm): who wrote memory (the builder's own
 // ~/memory tool calls and commits in the setup chats, save-hook and dream
 // commits in the repo), what the memory jobs cost, and chat 2's result.
+
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -44,6 +45,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs, promisify } from "node:util";
+import {
+	costSummary,
+	costSummaryCells,
+	runListPrice,
+} from "../src/domain/eval-cost";
 import {
 	harnessVariantFromFlags,
 	harnessVariantLabel,
@@ -1533,8 +1539,54 @@ function printLiveReport(
 			"dream calls",
 			"dream in/out tok",
 			"dream $",
+			"$/try",
+			"$/solved",
 		],
 	];
+	// Cost per attempt and per solved scenario (eval-cost.ts): chat 2 plus the
+	// memory jobs; list price, or the --price-in/--price-out given.
+	const attemptCost = (row: ScenarioRecord) => {
+		const parts = [
+			{
+				input: row.chat2?.inputTokens ?? 0,
+				cached: row.chat2?.cachedTokens ?? 0,
+				output: row.chat2?.outputTokens ?? 0,
+			},
+			...row.memoryCosts.map((entry) => ({
+				input: entry.inputTokens,
+				cached: entry.cachedTokens,
+				output: entry.outputTokens,
+			})),
+		];
+		const priced = parts.map((part) =>
+			Number.isFinite(priceIn) && Number.isFinite(priceOut)
+				? {
+						costUsd: (part.input * priceIn + part.output * priceOut) / 1e6,
+						estimated: false,
+					}
+				: runListPrice({
+						harness: "codex",
+						modelId: String(flags.model),
+						inputTokens: part.input,
+						cachedTokens: part.cached,
+						outputTokens: part.output,
+					}),
+		);
+		return {
+			solved: !!row.passed,
+			tokens: parts.reduce(
+				(total, part) => total + part.input + part.output,
+				0,
+			),
+			costUsd: priced.some((entry) => entry.costUsd === null)
+				? null
+				: priced.reduce((total, entry) => total + (entry.costUsd ?? 0), 0),
+			estimated: priced.some((entry) => entry.estimated),
+			vmMinutes: 0,
+			agents: 1,
+		};
+	};
+	const costNotes = new Set<string>();
 	for (const { variant: name, arm, runs } of groups) {
 		const chat2 = runs.map((row) => row.chat2);
 		const input = sum(chat2.map((c) => c?.inputTokens));
@@ -1563,9 +1615,16 @@ function printLiveReport(
 			`${chat2.filter((c) => c?.memoryAttached || c?.supermemoryAttached).length}/${runs.length}`,
 			...cost("save"),
 			...cost("dream"),
+			...(() => {
+				const cells = costSummaryCells(costSummary(runs.map(attemptCost)));
+				if (cells.note) costNotes.add(cells.note);
+				return [cells.perAttempt, cells.perSolved];
+			})(),
 		]);
 	}
-	console.log(`\n${table(rows)}`);
+	console.log(
+		`\n${table(rows)}${costNotes.size ? `\n${[...costNotes].join("; ")}` : ""}`,
+	);
 	// Who wrote memory: the builder in the setup chats (its own tool calls),
 	// and every commit in the repo by writer (all chats, hooks and dreams).
 	const setupActivity = (row: ScenarioRecord) =>

@@ -10,6 +10,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { Freestyle } from "freestyle";
 import { signDeliveryRequest } from "../../src/domain/delivery-auth";
+import { attemptCostFromSessions } from "../../src/domain/eval-cost";
 import { WorkspaceId } from "../../src/domain/ids";
 import { modelRouteId } from "../../src/domain/model-connection";
 import {
@@ -19,6 +20,7 @@ import {
 import { publicToolDetail } from "../../src/domain/tool-detail";
 import {
 	deleteAgentSessionForOwner,
+	descendantAgentSessions,
 	insertAgentSession,
 	saveAgentSessionProviderRef,
 } from "../../src/server/adapters/agent-sessions";
@@ -34,6 +36,7 @@ import {
 	modelWorkflowSigningSecret,
 } from "../../src/server/adapters/model-workflow-dispatch";
 import { workspaceBootSnapshotId } from "../../src/server/records/tools-snapshot-store";
+import { deliverAgentTaskEvents } from "../../src/server/services/agent-task-event-delivery";
 import {
 	apiModelCatalog,
 	sendApiWorkspaceTask,
@@ -273,6 +276,16 @@ export type RunRecord = {
 	cachedTokens: number | null;
 	cacheHitPercent: number | null;
 	estimatedCostUsd: number;
+	/**
+	 * The attempt's whole agent tree (builder plus subagents), from the
+	 * shared eval-cost helper: tokens, dollars (a labelled list-price
+	 * estimate on plan routes; null when a price is unknown), fork VM minutes.
+	 */
+	costUsd: number | null;
+	costEstimated: boolean;
+	treeTokens: number;
+	agents: number;
+	vmMinutes: number;
 	errors: string[];
 };
 
@@ -294,6 +307,11 @@ export const emptyRecord = (model: string, task: string): RunRecord => ({
 	cachedTokens: null,
 	cacheHitPercent: null,
 	estimatedCostUsd: 0,
+	costUsd: null,
+	costEstimated: false,
+	treeTokens: 0,
+	agents: 1,
+	vmMinutes: 0,
 	errors: [],
 });
 
@@ -598,6 +616,102 @@ export async function createHarnessRunner(options: {
 	 * cancelled. Rate-limited routes wait for a slot shared by every eval
 	 * process on this machine.
 	 */
+	/** Forked writer VMs in an attempt's subagent tree. */
+	async function forkVms(userId: string, rootId: string) {
+		return (await descendantAgentSessions(userId, rootId)).flatMap((child) =>
+			child.agentFork?.vmId && !child.agentFork.deletedAt
+				? [child.agentFork.vmId]
+				: [],
+		);
+	}
+
+	async function cancelSubagents(userId: string, rootId: string) {
+		for (const child of await descendantAgentSessions(userId, rootId))
+			if (child.agentRole && child.turnStatus === "running")
+				await cancelServerTurn(userId, child.id).catch(() => {});
+	}
+
+	/**
+	 * Moves an attempt's subagent tree along the way the deployed sweeps do:
+	 * dispatches queued turns of the builder and its subagents, delivers
+	 * reports to their parents, and tracks forks for cleanup. True while any
+	 * of it is still working.
+	 */
+	async function driveSubagentTree(userId: string, rootId: string) {
+		const children = (await descendantAgentSessions(userId, rootId)).filter(
+			(child) => child.agentRole,
+		);
+		if (!children.length) return false;
+		for (const vm of await forkVms(userId, rootId)) {
+			liveVms.add(vm);
+			await user.trackVm(vm);
+		}
+		await deliverAgentTaskEvents(machines).catch(() => 0);
+		for (const id of [rootId, ...children.map((child) => child.id)]) {
+			const turn = await claimApiTurn(concurrency, 64, "durable-object", id);
+			if (turn?.lease_id) await dispatchModelWorkflow(turn);
+		}
+		const pending = await db.query(
+			`select 1 from agent_task_event where parent_session_id = any($1::uuid[]) and status='pending' limit 1`,
+			[[rootId, ...children.map((child) => child.id)]],
+		);
+		const queued = await db.query(
+			`select 1 from api_turn where session_id = any($1::uuid[]) and state in ('queued','running') limit 1`,
+			[[rootId, ...children.map((child) => child.id)]],
+		);
+		return (
+			children.some((child) => child.turnStatus === "running") ||
+			!!pending.rowCount ||
+			!!queued.rowCount
+		);
+	}
+
+	/** The attempt's tree cost through the shared eval-cost helper. */
+	async function measureTreeCost(
+		record: RunRecord,
+		userId: string,
+		rootId: string,
+	) {
+		const root = await db.query<{
+			id: string;
+			title: string;
+			turn_status: string;
+			harness: string;
+			listed_model_id: string | null;
+			created_at: Date;
+			updated_at: Date;
+			items: unknown;
+		}>(
+			"select id,title,turn_status,harness,listed_model_id,created_at,updated_at,items from agent_session where id=$1",
+			[rootId],
+		);
+		const row = root.rows[0];
+		if (!row) return;
+		const cost = attemptCostFromSessions({
+			rootId,
+			solved: record.verifierPassed === true,
+			sessions: [
+				{
+					id: row.id,
+					parentSessionId: null,
+					title: row.title,
+					turnStatus: row.turn_status as never,
+					harness: row.harness as never,
+					listedModelId: row.listed_model_id,
+					createdAt: new Date(row.created_at).toISOString(),
+					updatedAt: new Date(row.updated_at).toISOString(),
+					items: row.items,
+				},
+				...(await descendantAgentSessions(userId, rootId)),
+			],
+		});
+		record.costUsd = cost.costUsd;
+		record.costEstimated = cost.estimated;
+		record.treeTokens = cost.tokens;
+		record.agents = cost.agents;
+		record.vmMinutes = cost.vmMinutes;
+	}
+
 	function runOne(model: string, task: Task, reserveUsd: number) {
 		const slot = model.startsWith("codex:")
 			? (["codex", SLOT_LIMITS.codex] as const)
@@ -742,7 +856,11 @@ export async function createHarnessRunner(options: {
 				const items = sessionItemsFromUnknown(state?.items);
 				measure(record, items, state?.messages);
 				record.state = state?.state ?? "missing";
-				if (state && !["queued", "running"].includes(state.state)) break;
+				// Subagents (subagents=on) run on after the builder's turn ends;
+				// their reports wake it again, so the attempt ends when the tree is idle.
+				const treeBusy = await driveSubagentTree(userId, session.id);
+				if (state && !["queued", "running"].includes(state.state) && !treeBusy)
+					break;
 				const reason =
 					record.estimatedCostUsd > reserveUsd
 						? "run exceeded its cost reservation"
@@ -755,6 +873,7 @@ export async function createHarnessRunner(options: {
 					cancelled = true;
 					record.errors.push(`Cancelled: ${reason}.`);
 					await cancelServerTurn(userId, session.id);
+					await cancelSubagents(userId, session.id);
 				}
 				if (Date.now() > deadline + 60_000) {
 					record.state = "unsettled";
@@ -779,11 +898,18 @@ export async function createHarnessRunner(options: {
 				record.verifierPassed = false;
 				record.verifierOutput = `${record.verifierOutput} (needs ${task.minToolCalls}+ tool calls; made ${record.toolCalls})`;
 			}
+			await measureTreeCost(record, userId, session.id);
 		} catch (error) {
 			record.errors.push(safe(error));
 			if (!record.elapsedMs) record.elapsedMs = Date.now() - started;
 		} finally {
-			if (sessionId) await cancelServerTurn(userId, sessionId).catch(() => {});
+			if (sessionId) {
+				await cancelServerTurn(userId, sessionId).catch(() => {});
+				await cancelSubagents(userId, sessionId).catch(() => {});
+				// Writer subagents' forked VMs go with the attempt.
+				for (const fork of await forkVms(userId, sessionId).catch(() => []))
+					await client.vms.delete(fork).catch(() => {});
+			}
 			if (vmId) {
 				const id = vmId;
 				await client.vms
