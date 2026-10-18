@@ -35,11 +35,13 @@ import {
 	toolFailureClass,
 	toolMetricCategory,
 } from "#/domain/harness-performance";
+import type { InstructionVariant } from "#/domain/harness-variant";
 import {
 	IMAGE_VIEWING_TOOLS,
 	NO_IMAGE_INPUT_INSTRUCTIONS,
 	withImagePlaceholders,
 } from "#/domain/image-placeholders";
+import { instructionProfile } from "#/domain/instruction-profiles";
 import { modelStepLimit } from "#/domain/model-workflow";
 import type { apiPromptCacheSettings } from "#/server/adapters/api-prompt-cache";
 import {
@@ -98,6 +100,8 @@ export type ModelAgentInput = {
 	 */
 	toolOrder?: () => readonly string[];
 	toolSurface?: "coordination" | "implementation";
+	/** Harness variant `instructions`; unset or default = the family's profile. */
+	instructionVariant?: InstructionVariant;
 	/** A successful call to one of these ends the turn, e.g. a plan waiting for approval. */
 	endTurnTools?: readonly string[];
 	signal: AbortSignal;
@@ -517,6 +521,7 @@ async function executeModelSteps(
 					? "freeform"
 					: input.tools.apply_patch?.type === "provider",
 				Object.keys(input.tools),
+				instructionProfile(input.instructionVariant, modelFamily),
 			),
 		]
 			.filter(Boolean)
