@@ -8,6 +8,8 @@ import {
 import type { CSSProperties } from "react";
 import { MatrixDotLoader } from "#/components/ui/matrix-dot-loader";
 import type { AgentTask, AgentTaskStatus } from "#/domain/agent-task";
+import type { SubagentTaskView } from "#/domain/subagent-tree";
+import { formatSpend, totalSpend } from "#/domain/subagent-usage";
 
 const statusLabels: Record<AgentTaskStatus, string> = {
 	draft: "Planned",
@@ -18,8 +20,35 @@ const statusLabels: Record<AgentTaskStatus, string> = {
 	failed: "Failed",
 };
 
-export function TaskPanel({ tasks }: { tasks: readonly AgentTask[] }) {
+type PanelTask = AgentTask & { readonly subagent?: SubagentTaskView };
+
+/** `writer · fork · 41/150 steps · 6/30 min · 380k tok · $0.76 · 9.0 VM min` */
+export function subagentUsageLine(view: SubagentTaskView) {
+	const spend = formatSpend(view.subtree);
+	const minutes = Math.round(view.minutes);
+	return [
+		view.role,
+		view.vm,
+		view.budget
+			? `${view.steps}/${view.budget.steps} steps`
+			: `${view.steps} steps`,
+		view.budget ? `${minutes}/${view.budget.minutes} min` : `${minutes} min`,
+		`${spend.tokens} tok`,
+		spend.dollars,
+		spend.vm,
+	]
+		.filter(Boolean)
+		.join(" · ");
+}
+
+export function TaskPanel({ tasks }: { tasks: readonly PanelTask[] }) {
 	const completed = tasks.filter((task) => task.status === "done").length;
+	const subagents = tasks.flatMap((task) =>
+		task.subagent ? [task.subagent.spend] : [],
+	);
+	const treeSpend = subagents.length
+		? formatSpend(totalSpend(subagents))
+		: null;
 	return (
 		<section className="task-panel" aria-label="Tasks">
 			<header className="task-panel-header">
@@ -83,11 +112,24 @@ export function TaskPanel({ tasks }: { tasks: readonly AgentTask[] }) {
 									<span aria-hidden="true"> · </span>
 									{statusLabels[task.status]}
 								</small>
+								{task.subagent ? (
+									<small className="task-usage">
+										{subagentUsageLine(task.subagent)}
+									</small>
+								) : null}
 							</div>
 						</li>
 					))}
 				</ol>
 			)}
+			{treeSpend ? (
+				<p className="task-usage task-usage-total">
+					Subagents {subagents.length} ·{" "}
+					{[`${treeSpend.tokens} tok`, treeSpend.dollars, treeSpend.vm]
+						.filter(Boolean)
+						.join(" · ")}
+				</p>
+			) : null}
 		</section>
 	);
 }

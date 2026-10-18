@@ -17,6 +17,7 @@ import {
 	type SessionTurnStatus,
 	sessionItemsFromUnknown,
 } from "#/domain/session-item";
+import { subagentTaskViews } from "#/domain/subagent-tree";
 import {
 	agentSessionForOwner,
 	descendantAgentSessions,
@@ -120,13 +121,22 @@ export const listProjectAgentTasks = createServerFn({ method: "GET" })
 		}
 		const descendants = await descendantAgentSessions(user.id, root.id);
 		const byId = new Map(descendants.map((session) => [session.id, session]));
-		return agentTaskTree(root.id, descendants).map((task) => ({
-			...task,
-			items: childTaskPublicItems(
-				sessionItemsFromUnknown(byId.get(task.id)?.items),
-			),
-			turnStatus: byId.get(task.id)?.turnStatus ?? "idle",
-		}));
+		const subagents = subagentTaskViews(
+			root.id,
+			[root, ...descendants],
+			Date.now(),
+		);
+		return agentTaskTree(root.id, descendants).map((task) => {
+			const subagent = subagents.get(task.id);
+			return {
+				...task,
+				items: childTaskPublicItems(
+					sessionItemsFromUnknown(byId.get(task.id)?.items),
+				),
+				turnStatus: byId.get(task.id)?.turnStatus ?? "idle",
+				...(subagent ? { subagent } : {}),
+			};
+		});
 	});
 
 export const deleteProjectAgentSession = createServerFn({ method: "POST" })
