@@ -67,7 +67,7 @@ describe("deferred tool surface", () => {
 		const before = surface.order();
 		const found = (await surface.tools[FIND_TOOLS_TOOL]?.execute?.(
 			{ query: "plan" },
-			{ toolCallId: "f1", messages: [] },
+			{ toolCallId: "f1", messages: [], context: undefined },
 		)) as { loaded: { name: string; input_schema: unknown }[] };
 		expect(found.loaded.map((entry) => entry.name)).toEqual([
 			"enter_plan_mode",
@@ -76,7 +76,7 @@ describe("deferred tool surface", () => {
 		expect(found.loaded[0]?.input_schema).toMatchObject({ type: "object" });
 		await surface.tools[FIND_TOOLS_TOOL]?.execute?.(
 			{ query: "agent" },
-			{ toolCallId: "f2", messages: [] },
+			{ toolCallId: "f2", messages: [], context: undefined },
 		);
 		const after = surface.order();
 		// Cache-stable: the earlier list is an unchanged prefix of the new one.
@@ -90,7 +90,7 @@ describe("deferred tool surface", () => {
 		// Loading again changes nothing.
 		await surface.tools[FIND_TOOLS_TOOL]?.execute?.(
 			{ query: "plan mode" },
-			{ toolCallId: "f3", messages: [] },
+			{ toolCallId: "f3", messages: [], context: undefined },
 		);
 		expect(surface.order()).toEqual(after);
 	});
@@ -165,7 +165,7 @@ function scriptedModel(
 				stream: simulateReadableStream({
 					initialDelayInMs: null,
 					chunkDelayInMs: null,
-					chunks: call
+					chunks: (call
 						? [
 								{
 									type: "tool-call" as const,
@@ -191,7 +191,7 @@ function scriptedModel(
 									finishReason: { unified: "stop" as const, raw: "stop" },
 									usage,
 								},
-							],
+							]) as never,
 				}),
 			};
 		},
