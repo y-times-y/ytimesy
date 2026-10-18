@@ -49,7 +49,7 @@ beforeEach(() => {
 	deps.attach.mockResolvedValue({
 		kind: "updated",
 		status: "captured",
-		commit: null,
+		evidenceId: "e1",
 	});
 });
 
@@ -103,6 +103,8 @@ describe("the background capture", () => {
 		expect(machines.ensureRunning).toHaveBeenCalledWith("vm");
 		expect(deps.attach.mock.calls[0][0]).toMatchObject({
 			userId: "alice",
+			projectId: "p1",
+			sessionId: "chat-1",
 			providerRef: "vm",
 			directory: "/home/ubuntu/app",
 			revision: job.revision,

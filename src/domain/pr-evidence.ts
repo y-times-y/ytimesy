@@ -3,10 +3,10 @@ import { z } from "zod";
 /**
  * Pull request evidence (harness variant prEvidence=on): screenshots, a short
  * screen recording or CLI output that the harness itself captures from the
- * pushed commit, stored durably and shown in an "Evidence" section of the
- * pull request description. The builder only proposes how to show its change
- * (a capture plan); everything shown in the pull request is produced by the
- * harness-run capture, never by files the model made.
+ * pushed commit, stored privately in ytimesy and shown on an in-app evidence
+ * page that the pull request's "Evidence" section links to. The builder only
+ * proposes how to show its change (a capture plan); everything shown is
+ * produced by the harness-run capture, never by files the model made.
  */
 
 export const EVIDENCE_LIMITS = {
@@ -229,70 +229,60 @@ export const evidenceManifest = z.object({
 export type EvidenceManifest = z.infer<typeof evidenceManifest>;
 
 /**
- * Where evidence lives: in the pull request's own repository, as one commit
- * per pull request under a hidden ref (not a branch, so no CI, deploy
- * previews or branch-list noise), readable only by people who can read the
- * repository. Each user has their own namespace so deleting one user's
- * evidence never touches another's.
+ * Where evidence lives: in ytimesy, never in the user's repository. Media is
+ * kept in the private object store and served only to the signed-in owner of
+ * the project; the pull request description carries a short summary and a
+ * link to the evidence page.
  */
-export const EVIDENCE_REF_NAMESPACE = "ytimesy/evidence";
-
-/** Captures older than this are removed when the next capture in the repository runs. */
 export const EVIDENCE_RETENTION_DAYS = 30;
 
-/** A stable, non-reversible label for a user inside ref names. */
-export function evidenceUserLabel(userIdSha256Hex: string) {
-	if (!/^[a-f0-9]{64}$/.test(userIdSha256Hex))
-		throw new Error("Invalid user digest.");
-	return `u-${userIdSha256Hex.slice(0, 16)}`;
-}
+/** Captures kept per pull request; older ones are removed when a new one is stored. */
+export const EVIDENCE_KEPT_PER_PULL = 5;
 
-/** `ytimesy/evidence/<user>/` (without `refs/`), for listing a user's refs. */
-export function evidenceUserRefPrefix(userLabel: string) {
-	if (!/^u-[a-f0-9]{16}$/.test(userLabel))
-		throw new Error("Invalid user label.");
-	return `${EVIDENCE_REF_NAMESPACE}/${userLabel}/`;
-}
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
-/** The ref (without `refs/`) holding one pull request's current evidence. */
-export function evidenceRefName(userLabel: string, pullNumber: number) {
-	if (!Number.isSafeInteger(pullNumber) || pullNumber < 1)
-		throw new Error("Invalid pull request number.");
-	return `${evidenceUserRefPrefix(userLabel)}pr-${pullNumber}`;
-}
-
-/** The pull request number of a ref this module named, or null for anything else. */
-export function evidenceRefPullNumber(ref: string, userLabel: string) {
-	const prefix = `refs/${evidenceUserRefPrefix(userLabel)}pr-`;
-	if (!ref.startsWith(prefix)) return null;
-	const number = ref.slice(prefix.length);
-	return /^[1-9]\d{0,9}$/.test(number) ? Number(number) : null;
-}
-
-/** A file name the capture may produce; anything else is never stored. */
+/** A file name the capture may produce; anything else is never stored or served. */
 export function evidenceFileName(name: string) {
 	return fileName.safeParse(name).success;
 }
 
-/**
- * The GitHub URL of a stored file. GitHub serves it only to viewers who can
- * read the repository, so images render in the pull request for exactly the
- * people who can see the pull request.
- */
-export function evidenceFileUrl(
-	fullName: string,
-	commitSha: string,
+/** The in-app evidence page of one capture (signed-in project owner only). */
+export function evidencePagePath(projectId: string, evidenceId: string) {
+	if (!UUID.test(projectId) || !UUID.test(evidenceId))
+		throw new Error("Invalid evidence page.");
+	return `/projects/${projectId}/evidence/${evidenceId}`;
+}
+
+/** The authenticated media route of one stored file. */
+export function evidenceMediaPath(
+	projectId: string,
+	evidenceId: string,
 	name: string,
 ) {
-	if (
-		!/^[a-zA-Z0-9][a-zA-Z0-9._-]*\/[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(
-			fullName,
-		) ||
-		!/^[a-f0-9]{40}([a-f0-9]{24})?$/.test(commitSha) ||
-		!evidenceFileName(name)
-	)
-		throw new Error("Invalid evidence file.");
-	return `https://github.com/${fullName}/blob/${commitSha}/${name}?raw=true`;
+	if (!evidenceFileName(name)) throw new Error("Invalid evidence file.");
+	return `/api${evidencePagePath(projectId, evidenceId)}/${name}`;
+}
+
+/** The absolute page URL for the pull request, or null without a usable app origin. */
+export function evidencePageUrl(
+	appUrl: string | undefined,
+	projectId: string,
+	evidenceId: string,
+) {
+	if (!appUrl) return null;
+	try {
+		const url = new URL(appUrl);
+		const local = ["localhost", "127.0.0.1"].includes(url.hostname);
+		if (
+			url.username ||
+			url.password ||
+			!(url.protocol === "https:" || (local && url.protocol === "http:"))
+		)
+			return null;
+		return `${url.origin}${evidencePagePath(projectId, evidenceId)}`;
+	} catch {
+		return null;
+	}
 }
 
 type EvidenceExtension = "png" | "webm" | "txt" | "json";
@@ -313,6 +303,30 @@ export function evidenceFileLimit(name: string) {
 	if (name.endsWith(".webm")) return EVIDENCE_LIMITS.videoBytes;
 	if (name.endsWith(".png")) return EVIDENCE_LIMITS.screenshotBytes;
 	return 256 * 1024;
+}
+
+/** Status of a stored capture: the manifest's, or capturing while the job runs. */
+export type EvidenceStatus = EvidenceManifest["status"] | "capturing";
+
+/** "3 screenshots, 6 s recording" (or the CLI equivalent) for a manifest's stored files. */
+export function evidenceMediaSummary(input: {
+	files: readonly { name: string }[];
+	videoSeconds: number | null;
+	kind: EvidenceManifest["kind"];
+}) {
+	const shots = input.files.filter((file) => file.name.endsWith(".png")).length;
+	const parts = [
+		shots ? `${shots} screenshot${shots === 1 ? "" : "s"}` : "",
+		input.videoSeconds !== null &&
+		input.files.some((file) => file.name.endsWith(".webm"))
+			? `${Math.max(1, Math.round(input.videoSeconds))} s screen recording`
+			: "",
+		input.kind === "cli" &&
+		input.files.some((file) => file.name === "output.txt")
+			? "CLI output"
+			: "",
+	].filter(Boolean);
+	return parts.join(", ");
 }
 
 export const EVIDENCE_START = "<!-- ytimesy-evidence:start";
@@ -340,18 +354,6 @@ export function withEvidenceSection(
 	return current.trim() ? `${current.trimEnd()}\n\n${section}` : section;
 }
 
-/** Inline code that stays one span whatever the text holds. */
-function code(text: string, max = 300) {
-	const clean = text.replace(/[\r\n]+/g, " ").slice(0, max);
-	const longest = Math.max(
-		0,
-		...[...clean.matchAll(/`+/g)].map((run) => run[0].length),
-	);
-	const fence = "`".repeat(longest + 1);
-	const pad = clean.startsWith("`") || clean.endsWith("`") ? " " : "";
-	return `${fence}${pad}${clean}${pad}${fence}`;
-}
-
 function plain(text: string, max = 300) {
 	return text
 		.replace(/[\r\n]+/g, " ")
@@ -359,19 +361,23 @@ function plain(text: string, max = 300) {
 		.slice(0, max);
 }
 
-function megabytes(bytes: number) {
-	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+/** Whether the capture is of a clean checkout of exactly the pull request head. */
+export function evidenceVerifiedAtHead(
+	manifest: Pick<EvidenceManifest, "status" | "clean" | "sha">,
+	headSha: string | null,
+) {
+	return (
+		manifest.status === "captured" && manifest.clean && manifest.sha === headSha
+	);
 }
 
 export type RenderedEvidence = {
 	manifest: EvidenceManifest;
-	/** Public URL of each stored file, by file name. */
-	links: Record<string, string>;
-	manifestUrl: string | null;
 	planKey: string;
 	/** The pull request head the commit was checked against. */
 	headSha: string;
-	cliOutput?: string;
+	/** The in-app evidence page, or null when no page could be stored. */
+	pageUrl: string | null;
 };
 
 const FAILURE_LEAD: Record<
@@ -383,9 +389,13 @@ const FAILURE_LEAD: Record<
 	"tooling-failed": "The capture tooling could not run",
 };
 
-/** The pull request's Evidence section: what was captured, from which commit, and how. */
+/**
+ * The pull request's Evidence section: a short summary of what was verified
+ * and a link to the evidence page in ytimesy. No media is embedded and
+ * nothing is stored in the repository.
+ */
 export function renderEvidenceSection(input: RenderedEvidence) {
-	const { manifest, links } = input;
+	const { manifest } = input;
 	const short = manifest.sha.slice(0, 7) || "unknown";
 	const lines = [
 		`${EVIDENCE_START} sha=${manifest.sha} plan=${input.planKey} -->`,
@@ -394,97 +404,56 @@ export function renderEvidenceSection(input: RenderedEvidence) {
 	];
 	if (manifest.status !== "captured") {
 		lines.push(
-			`${FAILURE_LEAD[manifest.status]} at commit \`${short}\`, so this pull request shows no screenshots or recording${manifest.reason ? `: ${plain(manifest.reason, 400)}` : "."}`,
+			`${FAILURE_LEAD[manifest.status]} at commit \`${short}\`, so there are no screenshots or recording for it${manifest.reason ? `: ${plain(manifest.reason, 400)}` : "."}`,
 		);
-		if (manifest.startCommand)
-			lines.push("", `Start command: ${code(manifest.startCommand)}`);
-		lines.push(
-			"",
-			`<sub>Checked by the ytimesy harness at ${plain(manifest.finishedAt, 40)}. Earlier evidence, if any, was removed because it would not show this commit.</sub>`,
-			EVIDENCE_END,
-		);
-		return lines.join("\n");
-	}
-	const verified =
-		manifest.clean && manifest.sha === input.headSha
-			? `a clean checkout of commit \`${short}\`, the pull request head`
+	} else {
+		const where = evidenceVerifiedAtHead(manifest, input.headSha)
+			? `a clean checkout of \`${short}\`, the pull request head`
 			: `commit \`${short}\``;
-	lines.push(`Captured by the ytimesy harness from ${verified}.`, "");
-	if (manifest.kind === "cli" && manifest.cli) {
+		const media = evidenceMediaSummary({
+			files: manifest.files,
+			videoSeconds: manifest.video?.seconds ?? null,
+			kind: manifest.kind,
+		});
+		const failed = manifest.flow.filter((step) => !step.ok).length;
 		lines.push(
-			`${code(manifest.cli.command)} exited ${manifest.cli.exitCode ?? "without a status (timed out)"}:`,
-			"",
-			"```text",
-			(input.cliOutput ?? "").replaceAll("```", "``​`"),
-			"```",
+			`Verified by the ytimesy harness from ${where}: ${media || "no media captured"}${failed ? ` (${failed} flow step${failed === 1 ? "" : "s"} failed)` : ""}.`,
 		);
 	}
-	for (const page of manifest.pages) {
-		const link = page.screenshot ? links[page.screenshot] : undefined;
-		lines.push(
-			`**${code(page.url, 200)}**${page.status === null ? "" : ` (HTTP ${page.status})`}${page.error ? `: ${plain(page.error, 200)}` : ""}`,
-		);
-		if (link)
-			lines.push("", `![${plain(page.title || page.url, 80)}](${link})`);
-		lines.push("");
-	}
-	const flowShots = manifest.flow.filter(
-		(step) => step.screenshot && links[step.screenshot],
-	);
-	for (const step of flowShots)
-		lines.push(
-			`After ${code(step.step, 120)}:`,
-			"",
-			`![flow](${links[step.screenshot as string]})`,
-			"",
-		);
-	const video = manifest.video;
-	const videoFile = video
-		? manifest.files.find((file) => file.name === video.file)
-		: undefined;
-	if (video && links[video.file])
-		lines.push(
-			`[Screen recording](${links[video.file]}) (WebM, ${Math.round(video.seconds)} s${videoFile ? `, ${megabytes(videoFile.bytes)}` : ""})`,
-			"",
-		);
-	const failedSteps = manifest.flow.filter((step) => !step.ok);
-	const details = [
-		`- Commit: \`${manifest.sha}\`${manifest.clean ? " (tracked files checked out exactly at this commit)" : ""}`,
-		manifest.startCommand
-			? `- Start command: ${code(manifest.startCommand)} (${manifest.startSource === "auto" ? "detected from package.json" : "from the builder's capture plan"})`
-			: "",
-		manifest.linked.length
-			? `- Not from the commit: ${manifest.linked
-					.slice(0, 12)
-					.map((path) => code(path, 80))
-					.join(
-						", ",
-					)}${manifest.linked.length > 12 ? ", ..." : ""} (installed dependencies linked and env files copied from the chat's checkout)`
-			: "",
-		manifest.urls.length
-			? `- Pages visited: ${manifest.urls.map((url) => code(url, 200)).join(", ")}`
-			: "",
-		manifest.flow.length
-			? `- Flow: ${manifest.flow.length} step${manifest.flow.length === 1 ? "" : "s"}${failedSteps.length ? `, ${failedSteps.length} failed (${failedSteps.map((step) => `${code(step.step, 80)}: ${plain(step.error, 120)}`).join("; ")})` : ", all passed"}`
-			: "",
-		`- Captured ${plain(manifest.startedAt, 40)} to ${plain(manifest.finishedAt, 40)} (workspace clock)${manifest.appReadyAt ? `, app answered at ${plain(manifest.appReadyAt, 40)}` : ""}`,
-		manifest.browser
-			? `- Browser: ${plain(manifest.browser, 120)}${manifest.viewport ? `, viewport ${plain(manifest.viewport, 20)}` : ""}`
-			: "",
-		manifest.dropped.length
-			? `- Left out (over size or time limits): ${manifest.dropped.map((item) => plain(item, 120)).join("; ")}`
-			: "",
-		input.manifestUrl
-			? `- [Manifest](${input.manifestUrl}) with the SHA-256 of every file (stored in this repository under \`refs/${EVIDENCE_REF_NAMESPACE}/\`, removed when the pull request closes or after ${EVIDENCE_RETENTION_DAYS} days)`
-			: "",
-	].filter(Boolean);
 	lines.push(
-		"<details><summary>How this was produced</summary>",
 		"",
-		...details,
-		"",
-		"</details>",
+		input.pageUrl
+			? `[View the evidence](${input.pageUrl}) in ytimesy (sign-in required). It is kept for ${EVIDENCE_RETENTION_DAYS} days or until this pull request closes.`
+			: "The evidence page is unavailable.",
 		EVIDENCE_END,
 	);
 	return lines.join("\n");
 }
+
+/** One stored capture as the app shows it (evidence page and chat card). */
+export type EvidenceRecord = {
+	readonly id: string;
+	readonly projectId: string;
+	readonly sessionId: string | null;
+	readonly fullName: string;
+	readonly pullNumber: number;
+	readonly commitSha: string;
+	readonly headSha: string | null;
+	readonly kind: EvidenceManifest["kind"];
+	readonly status: EvidenceStatus;
+	readonly reason: string;
+	readonly startCommand: string;
+	readonly urls: readonly string[];
+	readonly files: readonly {
+		readonly name: string;
+		readonly bytes: number;
+		readonly sha256: string;
+	}[];
+	readonly manifest: EvidenceManifest | null;
+	readonly browser: string;
+	readonly videoSeconds: number | null;
+	readonly captureStartedAt: string | null;
+	readonly captureFinishedAt: string | null;
+	readonly createdAt: string;
+	readonly expiresAt: string;
+};

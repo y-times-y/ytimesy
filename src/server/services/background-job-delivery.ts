@@ -105,7 +105,7 @@ export async function deliverBackgroundJob(
 							});
 					break;
 				case "evidence-expiry":
-					// Pull request evidence refs past retention or on closed pull requests.
+					// Pull request evidence past retention or of closed pull requests.
 					await expirePullRequestEvidence();
 					break;
 			}

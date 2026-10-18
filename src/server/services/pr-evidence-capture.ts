@@ -425,6 +425,6 @@ for step in manifest['flow']:
 if manifest.get('video'): print('  recording: ' + os.path.join(out, manifest['video']['file']))
 if manifest.get('cli'): print('  output (exit %s): %s' % (manifest['cli']['exitCode'], os.path.join(out, manifest['cli']['file'])))
 if os.path.exists(os.path.join(out, 'app.log')): print('  app log: ' + os.path.join(out, 'app.log'))
-print('Plan saved to ' + PLAN + '. At pull request handoff the harness captures again from the pushed commit and adds the result to the description; these preview files are not used.')
+print('Plan saved to ' + PLAN + '. At pull request handoff the harness captures again from the pushed commit and links the result from the description; these preview files are not used.')
 sys.exit(0 if manifest['status'] == 'captured' else 1)
 `;

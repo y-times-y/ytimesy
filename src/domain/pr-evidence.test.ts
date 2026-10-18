@@ -2,14 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
 	EVIDENCE_END,
 	type EvidenceManifest,
-	evidenceFileUrl,
 	evidenceManifest,
+	evidenceMediaPath,
+	evidencePagePath,
+	evidencePageUrl,
 	evidencePlanFor,
-	evidenceRefName,
-	evidenceRefPullNumber,
 	evidenceRequestFromText,
 	evidenceSectionState,
-	evidenceUserLabel,
 	renderEvidenceSection,
 	visiblePath,
 	withEvidenceSection,
@@ -66,12 +65,9 @@ function manifest(overrides: Partial<EvidenceManifest> = {}) {
 	});
 }
 
-const links = Object.fromEntries(
-	["01-home.png", "02-saved.png", "recording.webm"].map((name) => [
-		name,
-		`https://github.com/owner/app/blob/${"e".repeat(40)}/${name}?raw=true`,
-	]),
-);
+const projectId = "0f8b6c1e-2d3a-4b5c-8d9e-0a1b2c3d4e5f";
+const evidenceId = "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d";
+const pageUrl = `https://app.ytimesy.test/projects/${projectId}/evidence/${evidenceId}`;
 
 describe("capture plans", () => {
 	it("accepts the plan ytimesy-evidence saves and refuses pages outside the workspace", () => {
@@ -141,89 +137,79 @@ describe("capture plans", () => {
 	});
 });
 
-describe("storage in the repository", () => {
-	const label = "u-0123456789abcdef";
-	it("names one hidden ref per user and pull request, never a branch", () => {
-		expect(evidenceUserLabel("a".repeat(64))).toBe("u-aaaaaaaaaaaaaaaa");
-		expect(() => evidenceUserLabel("not-a-digest")).toThrow();
-		expect(evidenceRefName(label, 7)).toBe(
-			"ytimesy/evidence/u-0123456789abcdef/pr-7",
+describe("evidence page links", () => {
+	it("builds page and media paths only from ids and allowed file names", () => {
+		expect(evidencePagePath(projectId, evidenceId)).toBe(
+			`/projects/${projectId}/evidence/${evidenceId}`,
 		);
-		expect(evidenceRefName(label, 7).startsWith("heads/")).toBe(false);
-		expect(() => evidenceRefName(label, 0)).toThrow();
-		expect(() => evidenceRefName("u-../../heads", 1)).toThrow();
-		expect(
-			evidenceRefPullNumber(
-				"refs/ytimesy/evidence/u-0123456789abcdef/pr-12",
-				label,
-			),
-		).toBe(12);
-		for (const ref of [
-			"refs/ytimesy/evidence/u-ffffffffffffffff/pr-12",
-			"refs/heads/main",
-			"refs/ytimesy/evidence/u-0123456789abcdef/pr-12x",
-			"refs/ytimesy/evidence/u-0123456789abcdef/pr-012",
-		])
-			expect(evidenceRefPullNumber(ref, label)).toBeNull();
+		expect(evidenceMediaPath(projectId, evidenceId, "01-home.png")).toBe(
+			`/api/projects/${projectId}/evidence/${evidenceId}/01-home.png`,
+		);
+		for (const name of ["../x.png", "a.html", "x/y.png", ".png"])
+			expect(() => evidenceMediaPath(projectId, evidenceId, name)).toThrow();
+		expect(() => evidencePagePath("../admin", evidenceId)).toThrow();
 	});
 
-	it("links files through GitHub, which applies the repository's own access rules", () => {
-		expect(evidenceFileUrl("owner/app", sha, "01-home.png")).toBe(
-			`https://github.com/owner/app/blob/${sha}/01-home.png?raw=true`,
+	it("links the page only on an HTTPS (or local) app origin", () => {
+		expect(
+			evidencePageUrl("https://app.ytimesy.test/", projectId, evidenceId),
+		).toBe(pageUrl);
+		expect(
+			evidencePageUrl("http://localhost:3000", projectId, evidenceId),
+		).toBe(
+			`http://localhost:3000/projects/${projectId}/evidence/${evidenceId}`,
 		);
-		for (const [repo, commit, name] of [
-			["owner/app", sha, "../x.png"],
-			["owner/app", sha, "a.html"],
-			["owner/app/extra", sha, "a.png"],
-			["owner/app", "main", "a.png"],
-			["https://evil/x", sha, "a.png"],
+		for (const origin of [
+			undefined,
+			"",
+			"http://app.ytimesy.test",
+			"https://user:pw@app.ytimesy.test",
+			"not a url",
 		])
-			expect(() => evidenceFileUrl(repo, commit, name)).toThrow();
+			expect(evidencePageUrl(origin, projectId, evidenceId)).toBeNull();
 	});
 });
 
 describe("Evidence section", () => {
-	it("shows screenshots, the recording and how they were produced", () => {
+	it("is a short summary with a link to the evidence page, no media", () => {
 		const section = renderEvidenceSection({
 			manifest: manifest(),
-			links,
-			manifestUrl: `https://github.com/owner/app/blob/${"e".repeat(40)}/manifest.json?raw=true`,
 			planKey: "web-abc",
 			headSha: sha,
+			pageUrl,
 		});
-		expect(section).toContain(`sha=${sha} plan=web-abc -->`);
-		expect(section).toContain(
-			"a clean checkout of commit `c3c0528`, the pull request head",
+		expect(section).toBe(
+			[
+				`<!-- ytimesy-evidence:start sha=${sha} plan=web-abc -->`,
+				"## Evidence",
+				"",
+				"Verified by the ytimesy harness from a clean checkout of `c3c0528`, the pull request head: 2 screenshots, 10 s screen recording.",
+				"",
+				`[View the evidence](${pageUrl}) in ytimesy (sign-in required). It is kept for 30 days or until this pull request closes.`,
+				EVIDENCE_END,
+			].join("\n"),
 		);
-		expect(section).toContain(`![Home](${links["01-home.png"]})`);
-		expect(section).toContain(`![flow](${links["02-saved.png"]})`);
-		expect(section).toContain(
-			`[Screen recording](${links["recording.webm"]}) (WebM, 10 s, 2.0 MB)`,
-		);
-		expect(section).toContain("(HTTP 500): net::ERR");
-		expect(section).toContain(
-			"- Start command: `pnpm dev` (from the builder's capture plan)",
-		);
-		expect(section).toContain("- Flow: 2 steps, all passed");
-		expect(section).toContain("2026-10-18T16:45:11Z to 2026-10-18T16:45:17Z");
-		expect(section).toContain("SHA-256 of every file");
-		expect(section.endsWith(EVIDENCE_END)).toBe(true);
+		expect(section).not.toContain("![");
+		expect(section).not.toContain("github.com");
 	});
 
-	it("does not call evidence from another commit the pull request head", () => {
+	it("does not call evidence from another commit the pull request head, and counts failed steps", () => {
 		const section = renderEvidenceSection({
-			manifest: manifest(),
-			links,
-			manifestUrl: null,
+			manifest: manifest({
+				flow: [
+					{ step: "click x", ok: false, error: "timeout", screenshot: null },
+				],
+			}),
 			planKey: "web-abc",
 			headSha: "f".repeat(40),
+			pageUrl,
 		});
 		expect(section).toContain(
-			"Captured by the ytimesy harness from commit `c3c0528`.",
+			"Verified by the ytimesy harness from commit `c3c0528`: 2 screenshots, 10 s screen recording (1 flow step failed).",
 		);
 	});
 
-	it("says the app did not start and shows no images", () => {
+	it("says the app did not start and still links the details", () => {
 		const section = renderEvidenceSection({
 			manifest: manifest({
 				status: "app-failed",
@@ -234,19 +220,17 @@ describe("Evidence section", () => {
 				video: null,
 				files: [],
 			}),
-			links: {},
-			manifestUrl: null,
 			planKey: "auto-1",
 			headSha: sha,
+			pageUrl,
 		});
 		expect(section).toContain(
-			"The app did not start at commit `c3c0528`, so this pull request shows no screenshots or recording: The start command exited with status 1 before the app answered.",
+			"The app did not start at commit `c3c0528`, so there are no screenshots or recording for it: The start command exited with status 1 before the app answered.",
 		);
-		expect(section).not.toContain("![");
-		expect(section).not.toContain("Screen recording");
+		expect(section).toContain(`[View the evidence](${pageUrl})`);
 	});
 
-	it("renders CLI output in a fence that cannot be closed early", () => {
+	it("summarizes CLI output without pasting it", () => {
 		const section = renderEvidenceSection({
 			manifest: manifest({
 				kind: "cli",
@@ -256,24 +240,23 @@ describe("Evidence section", () => {
 				startSource: "cli",
 				startCommand: "node cli --help",
 				cli: { command: "node cli --help", exitCode: 0, file: "output.txt" },
+				files: [{ name: "output.txt", bytes: 12, sha256: "d".repeat(64) }],
 			}),
-			links: {},
-			manifestUrl: null,
 			planKey: "cli-1",
 			headSha: sha,
-			cliOutput: "usage: cli\n```\n# injected",
+			pageUrl: null,
 		});
-		expect(section).toContain("`node cli --help` exited 0:");
-		expect(section.match(/^```/gm)).toHaveLength(2);
+		expect(section).toContain(": CLI output.");
+		expect(section).toContain("The evidence page is unavailable.");
+		expect(section).not.toContain("```");
 	});
 
 	it("replaces its own section on a new push and keeps the rest of the description", () => {
 		const first = renderEvidenceSection({
 			manifest: manifest(),
-			links,
-			manifestUrl: null,
 			planKey: "web-1",
 			headSha: sha,
+			pageUrl,
 		});
 		const body = withEvidenceSection("Fixes the button.\n", first);
 		expect(
@@ -282,10 +265,9 @@ describe("Evidence section", () => {
 		expect(evidenceSectionState(body)).toEqual({ sha, plan: "web-1" });
 		const next = renderEvidenceSection({
 			manifest: manifest({ sha: "d".repeat(40) }),
-			links,
-			manifestUrl: null,
 			planKey: "web-2",
 			headSha: "d".repeat(40),
+			pageUrl,
 		});
 		const updated = withEvidenceSection(`${body}\n\nReviewer notes`, next);
 		expect(updated.match(/ytimesy-evidence:start/g)).toHaveLength(1);
@@ -298,26 +280,16 @@ describe("Evidence section", () => {
 		expect(withEvidenceSection(null, next)).toBe(next);
 	});
 
-	it("escapes page titles and commands", () => {
+	it("escapes the failure reason", () => {
 		const section = renderEvidenceSection({
 			manifest: manifest({
-				startCommand: "echo `x` && pnpm dev",
-				pages: [
-					{
-						url: "http://localhost:5173/",
-						status: 200,
-						title: "](javascript:alert(1))",
-						screenshot: "01-home.png",
-						error: "",
-					},
-				],
+				status: "tooling-failed",
+				reason: "](javascript:alert(1)) <img>",
 			}),
-			links,
-			manifestUrl: null,
 			planKey: "web-1",
 			headSha: sha,
+			pageUrl,
 		});
-		expect(section).toContain("``echo `x` && pnpm dev``");
-		expect(section).toContain("![\\]\\(javascript:alert\\(1\\)\\)]");
+		expect(section).toContain("\\]\\(javascript:alert\\(1\\)\\) \\<img\\>");
 	});
 });

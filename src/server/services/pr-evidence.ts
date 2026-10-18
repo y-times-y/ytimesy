@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
 import {
 	EVIDENCE_LIMITS,
@@ -6,13 +6,12 @@ import {
 	type EvidencePlan,
 	evidenceContentType,
 	evidenceFileLimit,
-	evidenceFileUrl,
 	evidenceManifest,
+	evidencePageUrl,
 	evidencePlanFor,
 	evidencePlanKey,
 	evidenceRequestFromText,
 	evidenceSectionState,
-	evidenceUserLabel,
 	renderEvidenceSection,
 	withEvidenceSection,
 } from "#/domain/pr-evidence";
@@ -20,10 +19,18 @@ import { publicToolDetail } from "#/domain/tool-detail";
 import { harnessVariantForUser } from "#/server/adapters/dev-eval-users";
 import { appPullRequestBody } from "../adapters/github/pr-evidence-body";
 import {
-	appEvidenceGitApi,
-	type EvidenceGitApi,
-	publishEvidenceCommit,
-} from "../adapters/github/pr-evidence-refs";
+	deleteEvidenceRows,
+	finishEvidence,
+	insertCapturingEvidence,
+	supersededEvidence,
+} from "../adapters/pr-evidence-records";
+import {
+	type EvidenceStore,
+	evidenceCapturePrefix,
+	evidenceObjectKey,
+	evidenceStoreConfigured,
+	r2EvidenceStore,
+} from "../adapters/pr-evidence-store";
 import {
 	evidenceCaptureCommand,
 	evidenceCaptureFiles,
@@ -33,27 +40,34 @@ import type { TurnGitRuntime } from "./turn-publication";
 /** Where `ytimesy-evidence capture` saves the builder's plan in the workspace. */
 export const EVIDENCE_REQUEST_PATH = "$HOME/.ytimesy/evidence/request.json";
 
-/** The user's label in evidence ref names: a digest, never the id itself. */
-export function evidenceUserLabelFor(userId: string) {
-	return evidenceUserLabel(
-		createHash("sha256").update(`ytimesy:pr-evidence:${userId}`).digest("hex"),
-	);
-}
-
 export type EvidenceDependencies = {
 	enabled(userId: string): Promise<boolean>;
 	pullRequest: typeof appPullRequestBody;
-	git(
-		installationId: number | string,
-		fullName: string,
-	): Promise<EvidenceGitApi>;
+	/** Private media storage, or null when none is configured. */
+	store(): EvidenceStore | null;
+	records: {
+		insert: typeof insertCapturingEvidence;
+		finish: typeof finishEvidence;
+		superseded: typeof supersededEvidence;
+		remove: typeof deleteEvidenceRows;
+	};
+	appUrl(): string | undefined;
+	newId(): string;
 };
 
 const defaults: EvidenceDependencies = {
 	enabled: async (userId) =>
 		(await harnessVariantForUser(userId)).prEvidence === "on",
 	pullRequest: appPullRequestBody,
-	git: appEvidenceGitApi,
+	store: () => (evidenceStoreConfigured() ? r2EvidenceStore : null),
+	records: {
+		insert: insertCapturingEvidence,
+		finish: finishEvidence,
+		superseded: supersededEvidence,
+		remove: deleteEvidenceRows,
+	},
+	appUrl: () => process.env.APP_URL,
+	newId: randomUUID,
 };
 
 /** Whether this user's handoffs queue evidence at all (harness variant prEvidence). */
@@ -65,11 +79,11 @@ export function pullRequestEvidenceEnabled(
 }
 
 export type EvidenceOutcome =
-	| { kind: "off" | "not-visible" | "unchanged" | "closed" }
+	| { kind: "off" | "not-visible" | "unchanged" | "closed" | "no-storage" }
 	| {
 			kind: "updated";
 			status: EvidenceManifest["status"];
-			commit: string | null;
+			evidenceId: string;
 	  };
 
 async function sh(
@@ -115,13 +129,16 @@ export async function readEvidenceBytes(
  * The background capture behind a turn's draft handoff (job kind
  * pr-evidence): when the change is visible (or the builder saved a capture
  * plan), check out the pushed commit in a separate worktree in the
- * workspace, capture it, store the media in the repository under a hidden
- * per-pull-request ref, and replace the pull request's Evidence section. A
- * failed start is reported in the section, never hidden behind older images.
+ * workspace, capture it, store the media privately in ytimesy and replace
+ * the pull request's Evidence section with a summary and a link to the
+ * evidence page. Nothing is written into the repository. A failed start is
+ * reported, never hidden behind older media.
  */
 export async function attachPullRequestEvidence(
 	input: {
 		userId: string;
+		projectId: string;
+		sessionId: string | null;
 		runtime: TurnGitRuntime;
 		providerRef: string;
 		directory: string;
@@ -133,6 +150,8 @@ export async function attachPullRequestEvidence(
 	deps: EvidenceDependencies = defaults,
 ): Promise<EvidenceOutcome> {
 	if (!(await deps.enabled(input.userId))) return { kind: "off" };
+	const store = deps.store();
+	if (!store) return { kind: "no-storage" };
 	const { runtime, providerRef, directory, revision } = input;
 	const changed = await sh(
 		runtime,
@@ -159,6 +178,8 @@ export async function attachPullRequestEvidence(
 		15_000,
 	);
 	const commit = sha.stdout.trim();
+	if (!/^[a-f0-9]{40}([a-f0-9]{24})?$/.test(commit))
+		throw new Error("The pushed commit could not be resolved.");
 	const planKey = evidencePlanKey(
 		plan,
 		createHash("sha256").update(JSON.stringify(plan)).digest("hex"),
@@ -174,7 +195,37 @@ export async function attachPullRequestEvidence(
 	if (state && state.sha === commit && state.plan === planKey)
 		return { kind: "unchanged" };
 
+	const evidenceId = deps.newId();
+	const scope = { userId: input.userId, projectId: input.projectId };
+	await deps.records.insert({
+		id: evidenceId,
+		userId: input.userId,
+		projectId: input.projectId,
+		sessionId: input.sessionId,
+		installationId: input.installationId,
+		fullName: input.fullName,
+		pullNumber: input.pullNumber,
+		commitSha: commit,
+		planKey,
+		kind: plan.mode === "cli" ? "cli" : "web",
+	});
 	const work = `/tmp/ytimesy-evidence-${randomBytes(8).toString("hex")}`;
+	let finished = false;
+	const now = () => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+	const failure = (reason: string, startedAt = now()) =>
+		evidenceManifest.parse({
+			version: 1,
+			mode: "verify",
+			kind: plan.mode === "cli" ? "cli" : "web",
+			status: "tooling-failed",
+			reason,
+			sha: commit,
+			clean: false,
+			startSource:
+				plan.mode === "cli" ? "cli" : plan.mode === "auto" ? "auto" : "plan",
+			startedAt,
+			finishedAt: now(),
+		});
 	try {
 		const made = await sh(
 			runtime,
@@ -216,27 +267,11 @@ export async function attachPullRequestEvidence(
 				return null;
 			}
 		})();
-		const now = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 		const manifest: EvidenceManifest = parsed?.success
 			? parsed.data
-			: evidenceManifest.parse({
-					version: 1,
-					mode: "verify",
-					kind: plan.mode === "cli" ? "cli" : "web",
-					status: "tooling-failed",
-					reason:
-						"The capture ended without a readable manifest (time limit or crash).",
-					sha: commit,
-					clean: false,
-					startSource:
-						plan.mode === "cli"
-							? "cli"
-							: plan.mode === "auto"
-								? "auto"
-								: "plan",
-					startedAt: now,
-					finishedAt: now,
-				});
+			: failure(
+					"The capture ended without a readable manifest (time limit or crash).",
+				);
 		manifest.reason = publicToolDetail(manifest.reason, "output").slice(0, 600);
 		// The manifest is only trusted for what the harness can check.
 		if (manifest.mode !== "verify" || manifest.sha !== commit) {
@@ -245,72 +280,76 @@ export async function attachPullRequestEvidence(
 		}
 		// The pull request may have moved on while the capture ran.
 		const current = await pull.read();
-		if (current.state !== "open") return { kind: "closed" };
+		if (current.state !== "open") {
+			await deps.records.remove([evidenceId]);
+			finished = true;
+			return { kind: "closed" };
+		}
 		if (manifest.status === "captured" && current.headSha !== commit) {
 			manifest.status = "dirty";
 			manifest.reason = `The pull request head is now ${current.headSha.slice(0, 7)}, not the captured commit; a later handoff captures it.`;
 		}
-		const links: Record<string, string> = {};
-		let manifestUrl: string | null = null;
-		let cliOutput: string | undefined;
-		let stored: string | null = null;
+		const stored: { name: string; bytes: number; sha256: string }[] = [];
 		if (manifest.status === "captured") {
-			const files: { name: string; data: Uint8Array }[] = [];
 			for (const file of manifest.files) {
-				if (!evidenceContentType(file.name)) continue;
+				const contentType = evidenceContentType(file.name);
+				if (!contentType || file.name === "manifest.json") continue;
 				let data = await readEvidenceBytes(
 					runtime,
 					providerRef,
 					`${work}/out/${file.name}`,
 					file,
 				);
-				if (file.name === manifest.cli?.file) {
-					cliOutput = publicToolDetail(data.toString("utf8"), "output").slice(
-						0,
-						EVIDENCE_LIMITS.cliOutputChars + 40,
+				if (file.name === manifest.cli?.file)
+					data = Buffer.from(
+						publicToolDetail(data.toString("utf8"), "output").slice(
+							0,
+							EVIDENCE_LIMITS.cliOutputChars + 40,
+						),
+						"utf8",
 					);
-					data = Buffer.from(cliOutput, "utf8");
-				}
-				files.push({ name: file.name, data });
+				await store.put(
+					evidenceObjectKey(scope, evidenceId, file.name),
+					data,
+					contentType,
+				);
+				stored.push({
+					name: file.name,
+					bytes: data.length,
+					sha256: createHash("sha256").update(data).digest("hex"),
+				});
 			}
-			files.push({
-				name: "manifest.json",
-				data: Buffer.from(
-					JSON.stringify(
-						{
-							...manifest,
-							pullRequest: `${input.fullName}#${input.pullNumber}`,
-							headSha: current.headSha,
-							storedAt: new Date().toISOString(),
-							capturedBy: "ytimesy harness (prEvidence)",
-							note: "SHA-256 values are of the files as captured; output.txt is stored after secret redaction.",
-						},
-						null,
-						2,
-					),
-				),
-			});
-			const git = await deps.git(input.installationId, input.fullName);
-			stored = await publishEvidenceCommit(git, {
-				userLabel: evidenceUserLabelFor(input.userId),
-				pullNumber: input.pullNumber,
-				files,
-				message: `ytimesy evidence for #${input.pullNumber} at ${commit.slice(0, 7)}`,
-			});
-			for (const file of files)
-				links[file.name] = evidenceFileUrl(input.fullName, stored, file.name);
-			manifestUrl = links["manifest.json"] ?? null;
 		}
+		await deps.records.finish(input.userId, evidenceId, {
+			manifest,
+			headSha: current.headSha,
+			files: stored,
+		});
+		finished = true;
 		const section = renderEvidenceSection({
 			manifest,
-			links,
-			manifestUrl,
 			planKey,
 			headSha: current.headSha,
-			cliOutput,
+			pageUrl: evidencePageUrl(deps.appUrl(), input.projectId, evidenceId),
 		});
 		await pull.write(withEvidenceSection(current.body, section));
-		return { kind: "updated", status: manifest.status, commit: stored };
+		await removeSupersededEvidence(input, store, deps).catch(() => undefined);
+		return { kind: "updated", status: manifest.status, evidenceId };
+	} catch (error) {
+		if (!finished) {
+			// Nothing half-stored stays behind a row that says it failed.
+			await store
+				.removePrefix(evidenceCapturePrefix(scope, evidenceId))
+				.catch(() => undefined);
+			await deps.records
+				.finish(input.userId, evidenceId, {
+					manifest: failure("Storing the capture failed."),
+					headSha: null,
+					files: [],
+				})
+				.catch(() => undefined);
+		}
+		throw error;
 	} finally {
 		await sh(
 			runtime,
@@ -319,4 +358,21 @@ export async function attachPullRequestEvidence(
 			15_000,
 		).catch(() => undefined);
 	}
+}
+
+/** Keeps the newest few captures of this pull request; older media and rows go. */
+async function removeSupersededEvidence(
+	input: {
+		userId: string;
+		projectId: string;
+		fullName: string;
+		pullNumber: number;
+	},
+	store: EvidenceStore,
+	deps: EvidenceDependencies,
+) {
+	const old = await deps.records.superseded(input);
+	for (const row of old)
+		await store.removePrefix(evidenceCapturePrefix(row, row.id));
+	await deps.records.remove(old.map((row) => row.id));
 }

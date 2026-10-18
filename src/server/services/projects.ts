@@ -1,5 +1,4 @@
 import { Effect } from "effect";
-import { repositoriesForProject } from "#/domain/projects";
 import {
 	addedProjectBranch,
 	singleRepositoryProject,
@@ -40,7 +39,7 @@ import {
 } from "../adapters/workspaces";
 import { githubAccessToken } from "../auth/github-connection";
 import { rejectRequest } from "./errors";
-import { removeUserPullRequestEvidence } from "./pr-evidence-cleanup";
+import { removeProjectPullRequestEvidence } from "./pr-evidence-cleanup";
 import type { WorkspaceMachines } from "./workspace-machines";
 import { enqueueProjectWorkspace } from "./workspaces";
 
@@ -292,17 +291,7 @@ export async function removeProjectMachine(
 			// Idle timeout reclaims machines that Freestyle did not delete.
 		}
 	}
-	// Evidence refs this user left in repositories no other project of theirs uses.
-	const others = (await listProjects(input.userId))
-		.filter((other) => other.id !== input.projectId)
-		.flatMap((other) =>
-			repositoriesForProject(other).map((repo) => repo.fullName.toLowerCase()),
-		);
-	await removeUserPullRequestEvidence(
-		input.userId,
-		repositoriesForProject(project).filter(
-			(repo) => !others.includes(repo.fullName.toLowerCase()),
-		),
-	);
+	// Pull request evidence media in private storage; its rows cascade with the project.
+	await removeProjectPullRequestEvidence(input.userId, input.projectId);
 	await deleteProjectForOwner(input.userId, input.projectId);
 }

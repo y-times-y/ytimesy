@@ -1,5 +1,13 @@
+import { createHash } from "node:crypto";
 import { afterEach, expect, it, vi } from "vitest";
-import { r2Configuration, r2Request, signedR2Headers } from "./r2";
+import {
+	r2Configuration,
+	r2DeletePrefix,
+	r2GetObject,
+	r2PutObject,
+	r2Request,
+	signedR2Headers,
+} from "./r2";
 
 const account = "0123456789abcdef0123456789abcdef";
 const credentials = {
@@ -100,4 +108,82 @@ it("serves the storage adapter's calls from R2 with unchanged object paths", asy
 		body: JSON.stringify({ prefixes: ["p/x.enc"] }),
 	});
 	expect(fetch.mock.calls.at(-1)?.[1]?.method).toBe("DELETE");
+});
+
+it("stores and reads binary evidence objects, with ranges for seeking", async () => {
+	const calls: { method: string; url: URL; headers: Headers; body: unknown }[] =
+		[];
+	vi.stubGlobal(
+		"fetch",
+		vi.fn<typeof globalThis.fetch>(async (input, init) => {
+			calls.push({
+				method: String(init?.method),
+				url: new URL(String(input)),
+				headers: new Headers(init?.headers),
+				body: init?.body,
+			});
+			return new Response("part", {
+				status: init?.method === "GET" ? 206 : 200,
+			});
+		}),
+	);
+	const config = { accountId: account, bucket: "ytimesy-dev", ...credentials };
+	const bytes = new Uint8Array([0, 255, 1, 2]);
+	await r2PutObject(
+		config,
+		"pr-evidence/u/p/e/recording.webm",
+		bytes,
+		"video/webm",
+	);
+	expect(calls[0].method).toBe("PUT");
+	expect(calls[0].url.pathname).toBe(
+		"/ytimesy-dev/pr-evidence/u/p/e/recording.webm",
+	);
+	expect(calls[0].headers.get("content-type")).toBe("video/webm");
+	// The signature covers the exact binary payload.
+	expect(calls[0].headers.get("x-amz-content-sha256")).toBe(
+		createHash("sha256").update(bytes).digest("hex"),
+	);
+	expect(new Uint8Array(await (calls[0].body as Blob).arrayBuffer())).toEqual(
+		bytes,
+	);
+	const read = await r2GetObject(
+		config,
+		"pr-evidence/u/p/e/recording.webm",
+		"bytes=0-1",
+	);
+	expect(read.status).toBe(206);
+	expect(calls[1].headers.get("range")).toBe("bytes=0-1");
+});
+
+it("deletes every object under a scoped prefix and refuses an unscoped one", async () => {
+	const deleted: string[] = [];
+	let listed = false;
+	vi.stubGlobal(
+		"fetch",
+		vi.fn<typeof globalThis.fetch>(async (input, init) => {
+			const url = new URL(String(input));
+			if (init?.method === "GET") {
+				const keys = listed
+					? []
+					: ["pr-evidence/u/a.png", "pr-evidence/u/b.webm"];
+				listed = true;
+				return new Response(
+					`<ListBucketResult>${keys.map((key) => `<Key>${key}</Key>`).join("")}<IsTruncated>false</IsTruncated></ListBucketResult>`,
+				);
+			}
+			deleted.push(url.pathname);
+			return new Response(null, { status: 204 });
+		}),
+	);
+	const config = { accountId: account, bucket: "ytimesy-dev", ...credentials };
+	expect(await r2DeletePrefix(config, "pr-evidence/u/")).toBe(2);
+	expect(deleted).toEqual([
+		"/ytimesy-dev/pr-evidence/u/a.png",
+		"/ytimesy-dev/pr-evidence/u/b.webm",
+	]);
+	await expect(r2DeletePrefix(config, "")).rejects.toThrow("unscoped");
+	await expect(r2DeletePrefix(config, "pr-evidence")).rejects.toThrow(
+		"unscoped",
+	);
 });
