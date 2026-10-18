@@ -16,6 +16,7 @@ import {
 	productIdleTimeoutNeedsUpdate,
 } from "./product-vm";
 import { retryTransientProviderFailure } from "./provider-retry";
+import { forgetRunningGuest } from "./recent-guest-state";
 import { scrubAgentSecrets } from "./scrub-agent-secrets";
 import {
 	admitVmCreate,
@@ -178,6 +179,7 @@ export class FreestyleWorkspaceRuntime implements WorkspaceRuntime {
 
 	async pause(providerRef: string) {
 		const vm = this.client().vms.ref(providerRef);
+		forgetRunningGuest(providerRef);
 		const data = await vm.data();
 		if (data.state === "running") await vm.pause();
 	}
