@@ -519,6 +519,109 @@ describe("save hook", () => {
 		});
 	});
 
+	it("keeps an old line whose structured details the replacement would lose", () => {
+		const api =
+			'# api\n- API errors return {"error": {"code": "<snake_case_code>", "message": "<text>"}} [source: a]\n';
+		const [change] = saveHookChanges(
+			{ "api.md": api },
+			[
+				{
+					file: "api.md",
+					text: "API error codes are UPPER_SNAKE_CASE, e.g. ITEMS_REQUIRED",
+					project: "",
+					replaces: {
+						path: "api.md",
+						raw: '- API errors return {"error": {"code": "<snake_case_code>", "message": "<text>"}} [source: a]',
+					},
+				},
+			],
+			{
+				source: "s",
+				today: "2026-10-15",
+				message:
+					"Error codes must be UPPER_SNAKE_CASE from now on, like ITEMS_REQUIRED.",
+			},
+		);
+		expect(change.content).not.toContain("superseded-by");
+		expect(change.content).toContain("UPPER_SNAKE_CASE");
+		// Restating the whole shape retires the old line as before.
+		const [whole] = saveHookChanges(
+			{ "api.md": api },
+			[
+				{
+					file: "api.md",
+					text: 'API errors return {"error": {"code": "<UPPER_SNAKE_CASE>", "message": "<text>"}}',
+					project: "",
+					scope: "always",
+					replaces: {
+						path: "api.md",
+						raw: '- API errors return {"error": {"code": "<snake_case_code>", "message": "<text>"}} [source: a]',
+					},
+				},
+			],
+			{ source: "s", today: "2026-10-15", message: "codes in upper case" },
+		);
+		expect(whole.content).toContain("[superseded-by: s]");
+		expect(whole.content).toContain(
+			"[scope: always; source: s; added: 2026-10-15]",
+		);
+	});
+
+	it("retries a failed model call once, but not a timeout", async () => {
+		const failing = (name: string, failures: number) => {
+			const setup = harness({
+				files: { "MEMORY.md": "# Memory\n\n## Index\n" },
+				chats,
+				answer:
+					'{"entries":[{"file":"tooling.md","text":"Uses pnpm, never npm","project":""}]}',
+			});
+			const run = setup.deps.runAgent;
+			let calls = 0;
+			const slept: number[] = [];
+			setup.deps.runAgent = async (input, route) => {
+				if (calls++ < failures)
+					throw Object.assign(new Error("boom"), { name });
+				return run(input, route);
+			};
+			setup.deps.sleep = async (ms) => {
+				slept.push(ms);
+			};
+			return { ...setup, slept, attempts: () => calls };
+		};
+		const once = failing("AI_APICallError", 1);
+		expect(
+			await runMemorySave(
+				"u1",
+				"11111111-1111-4111-8111-111111111111",
+				once.deps,
+			),
+		).toBe("saved");
+		expect(once.attempts()).toBe(2);
+		expect(once.slept).toEqual([2000]);
+		expect(once.calls.usage).toEqual([
+			expect.objectContaining({ outcome: "failed:AI_APICallError" }),
+			expect.objectContaining({ outcome: "completed" }),
+		]);
+		const twice = failing("AI_APICallError", 2);
+		expect(
+			await runMemorySave(
+				"u1",
+				"11111111-1111-4111-8111-111111111111",
+				twice.deps,
+			),
+		).toBe("failed:AI_APICallError");
+		expect(twice.attempts()).toBe(2);
+		const timeout = failing("TimeoutError", 1);
+		expect(
+			await runMemorySave(
+				"u1",
+				"11111111-1111-4111-8111-111111111111",
+				timeout.deps,
+			),
+		).toBe("failed:TimeoutError");
+		expect(timeout.attempts()).toBe(1);
+	});
+
 	it("never duplicates an entry already in memory", () => {
 		expect(
 			saveHookChanges(

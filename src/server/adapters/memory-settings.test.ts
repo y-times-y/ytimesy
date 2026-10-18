@@ -64,9 +64,9 @@ it("returns other chats' latest messages that memory has not saved yet", async (
 		[randomUUID(), nothing],
 	);
 	await chat({ items: [said("an hour ago")], minutesAgo: 60 });
-	await chat({ items: [said("still running")], state: "running" });
 	await chat({ items: [said("someone else")], user: "u2" });
 	await chat({ items: [said("a child task")], parent: fresh });
+	await chat({ items: [said("failed")], state: "failed" });
 	expect(await recentUnsavedMessages("u1", current, 600)).toEqual([
 		{
 			sessionId: fresh,
@@ -75,6 +75,25 @@ it("returns other chats' latest messages that memory has not saved yet", async (
 			at: expect.any(Date),
 		},
 	]);
+});
+
+it("counts a chat from when its message was sent: queued and running turns too", async () => {
+	const current = await chat({ items: [said("this chat")] });
+	// Its turn row may not read completed yet when the next chat starts.
+	const running = await chat({
+		items: [said("Every log line in orders.py starts with [orders]")],
+		state: "running",
+	});
+	const queued = await chat({
+		items: [said("JSON files use 4-space indentation")],
+		state: "queued",
+		minutesAgo: 30,
+	});
+	await chat({ items: [said("long done")], minutesAgo: 30 });
+	const rows = await recentUnsavedMessages("u1", current, 600);
+	expect(rows.map((row) => row.sessionId).sort()).toEqual(
+		[running, queued].sort(),
+	);
 });
 
 it("finds the last dream that reviewed the whole repo", async () => {

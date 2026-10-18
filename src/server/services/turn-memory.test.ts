@@ -291,6 +291,36 @@ describe("read hook", () => {
 		]);
 	});
 
+	it("adds a rule for every new file to a request that adds one, without a match", async () => {
+		const snapshot = {
+			head: "a",
+			files: {
+				"style.md":
+					'- New source files start with "# SPDX-License-Identifier: Apache-2.0" and indent with tabs [added: 2026-05-30]\n',
+			},
+		};
+		const base = {
+			snapshot,
+			embed,
+			userId: "u1",
+			alreadyShown: () => false,
+			today: "2026-10-15",
+			project: null,
+			cache,
+		};
+		const adds = await readHook({
+			...base,
+			// No word in common: only the new-file rule brings it.
+			query: "Add util/timestamps.py with to_utc(value)",
+		});
+		expect(adds.lines.map((entry) => entry.path)).toEqual(["style.md"]);
+		const edits = await readHook({
+			...base,
+			query: "Fix the timestamps bug in util/timestamps.py",
+		});
+		expect(edits.lines).toEqual([]);
+	});
+
 	it("uses the line vectors prefetched with the turn and records the hook on the recall", async () => {
 		const snapshot = vi.fn(async () => ({ head: "abc", files }));
 		const memory = await turnMemory(

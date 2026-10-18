@@ -359,6 +359,7 @@ async function recall() {
 			alreadyShown: () => false,
 			today,
 			project: null,
+			query: probe.query,
 		});
 		const rule = lines.find((line) => line.id === probe.scenario);
 		const ok = Boolean(rule && selected.includes(rule));

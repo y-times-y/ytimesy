@@ -409,10 +409,16 @@ async function recentLines(
 	try {
 		const messages = await Promise.race([
 			work,
-			new Promise<readonly RecentChatMessage[]>((resolve) => {
-				timer = setTimeout(() => resolve([]), RECENT_TIMEOUT_MS);
+			new Promise<null>((resolve) => {
+				timer = setTimeout(() => resolve(null), RECENT_TIMEOUT_MS);
 			}),
 		]);
+		if (!messages) {
+			console.warn("Recent chat messages for memory timed out.", {
+				ms: RECENT_TIMEOUT_MS,
+			});
+			return [];
+		}
 		return messages
 			.map(memoryRecentLine)
 			.filter((line) => !shown.includes(line));
@@ -518,6 +524,7 @@ export async function readHook(input: {
 			alreadyShown: input.alreadyShown,
 			today: input.today,
 			project: input.project,
+			query,
 		});
 	})();
 	let timer: ReturnType<typeof setTimeout> | undefined;
