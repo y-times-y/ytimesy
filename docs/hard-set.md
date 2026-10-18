@@ -78,11 +78,9 @@ Cleanup: each task's eval user, session and agent VM are deleted in `finally`. A
 
 The record keeps the reward, the tail of the test output, the turn state, agent/setup/stage/grade seconds, agent budget, input/output/cached tokens and model steps (assistant messages) from the stored turn, tool calls and failures per tool, and errors.
 
-The table's `est $` column and the summary line give the cost per attempt and per solved task **estimated at list price**: the turn's tokens priced at the public API rates in `LIST_PRICES` in `scripts/hard-set.ts`, dated where they were read. Uncached input, cached input and output are priced separately. The runs themselves go through the Codex subscription, so this is what the same tokens would cost on the API, not what a run cost. It leaves out VM time.
+The table's `est $` column and the summary line give the cost per attempt and per solved task **estimated at list price**, through the shared eval-cost helper (`src/domain/eval-cost.ts`, the same summary the other eval scripts print): the turn's tokens priced at the model's rates in `KNOWN_MODEL_PRICES` in `src/domain/model-pricing.ts`. Uncached input, cached input and output are priced separately. The runs themselves go through the Codex subscription, so this is what the same tokens would cost on the API, not what a run cost (the summary marks it `~$`). It leaves out VM time.
 
-| Model | Input $/M | Cached input $/M | Output $/M | Source, date |
-|---|---|---|---|---|
-| gpt-6.1-sol | 2.00 | 0.10 | 10.00 | developers.openai.com/api/docs/pricing (standard tier, ≤272K context), read 2026-10-18 |
+When this runner was written, developers.openai.com/api/docs/pricing (standard tier, ≤272K context, read 2026-10-18) listed gpt-6.1-sol at $2.00 input / $0.10 cached / $10.00 output per million; the shared table holds $2.50 / $0.25 / $10.00. Check and correct the shared table if the public rate is the right one; the validation-run dollar figures below were computed at the former rates.
 
 ## Limitations (why these are not Terminal-Bench scores)
 
@@ -118,4 +116,4 @@ validate-3 (2026-10-18) was interrupted before its turns started and is not scor
 What the validation showed beyond pass/fail:
 
 - Commands ran in the task container (`pwd` gave `/app`, the image's Python packages were importable) and `ytimesy-check` ran there as root, copying the delivered files into a clean directory.
-- A harness bug: when a command's output contains a NUL byte (here `cat` of a binary launcher), the bash tool call fails with "unsupported Unicode escape sequence" (Postgres `jsonb` rejects `\u0000`), and the model loses that output. Fix in the harness, not in this runner.
+- A harness bug: when a command's output contains a NUL byte (here `cat` of a binary launcher), the bash tool call fails with "unsupported Unicode escape sequence" (Postgres `jsonb` rejects `\u0000`), and the model loses that output. Fixed in the harness: turn history and other jsonb writes go through `jsonbText` (`src/domain/jsonb.ts`), which turns each NUL into U+FFFD and keeps the rest of the output.

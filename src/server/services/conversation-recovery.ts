@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { WorkspaceId } from "#/domain/ids";
+import { jsonbText } from "#/domain/jsonb";
 import { agentSessionForOwner } from "../adapters/agent-sessions";
 import {
 	conversationPoint,
@@ -113,7 +114,7 @@ export async function recoverConversation(
 			[
 				input.sessionId,
 				backupId,
-				JSON.stringify({
+				jsonbText({
 					id: backupId,
 					ok: true,
 					result: {
@@ -161,7 +162,7 @@ export async function recoverConversation(
 			// Store before mutation so an uncertain restore keeps its backup pointer in the same journal.
 			await client.query(
 				`update agent_task_command_receipt set response=jsonb_set(response,'{result,code}',$3::jsonb) where parent_session_id=$1 and request_id=$2`,
-				[input.sessionId, backupId, JSON.stringify(backup)],
+				[input.sessionId, backupId, jsonbText(backup)],
 			);
 			await restoreConversationCode(workspace, point.code, backup);
 		}

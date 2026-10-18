@@ -25,6 +25,12 @@ import { parseArgs } from "node:util";
 import { Freestyle } from "freestyle";
 import { signDeliveryRequest } from "../src/domain/delivery-auth";
 import {
+	attemptCostFromRun,
+	formatCostSummary,
+	runListPrice,
+	costSummary as sharedCostSummary,
+} from "../src/domain/eval-cost";
+import {
 	harnessVariantFromFlags,
 	harnessVariantLabel,
 } from "../src/domain/harness-variant";
@@ -117,31 +123,22 @@ const { values: flags } = parseArgs({
 	},
 });
 
-// Estimated at list price: public API rates in USD per million tokens
-// (input, cached input, output), standard tier, checked on the date given.
-// Our runs use the Codex subscription, so this is what the same tokens would
-// cost on the API, not what the run cost. Source:
-// https://developers.openai.com/api/docs/pricing (read 2026-10-18).
-const LIST_PRICES_DATE = "2026-10-18";
-const LIST_PRICES: Record<
-	string,
-	{ input: number; cached: number; output: number }
-> = {
-	"gpt-6.1-sol": { input: 2.0, cached: 0.1, output: 10.0 },
-};
+// Cost comes from the shared eval-cost helper (src/domain/eval-cost.ts) at
+// the model's list price in src/domain/model-pricing.ts. Our runs use the
+// Codex subscription, so it is what the same tokens would cost on the API,
+// labelled as an estimate, not what the run cost.
 
 /** API cost of a record's tokens at list price; null without tokens or a price. */
 function estimatedCost(record: HardSetRecord) {
-	const price = LIST_PRICES[record.model.replace(/^codex:/, "")];
-	if (!price || record.inputTokens === null || record.inputTokens === undefined)
+	if (record.inputTokens === null || record.inputTokens === undefined)
 		return null;
-	const cached = Math.min(record.cachedTokens ?? 0, record.inputTokens);
-	return (
-		((record.inputTokens - cached) * price.input +
-			cached * price.cached +
-			(record.outputTokens ?? 0) * price.output) /
-		1e6
-	);
+	return runListPrice({
+		harness: "codex",
+		modelId: record.model,
+		inputTokens: record.inputTokens,
+		cachedTokens: record.cachedTokens ?? null,
+		outputTokens: record.outputTokens ?? null,
+	}).costUsd;
 }
 
 const usd = (value: number | null) =>
@@ -149,13 +146,15 @@ const usd = (value: number | null) =>
 
 /** Cost per attempt and per solved task over scored agent records. */
 function costSummary(records: HardSetRecord[]) {
-	const costs = records
-		.map(estimatedCost)
-		.filter((cost): cost is number => cost !== null);
-	if (!costs.length) return null;
-	const total = costs.reduce((sum, cost) => sum + cost, 0);
-	const solved = records.filter((record) => record.passed).length;
-	return `Estimated at list price (${LIST_PRICES_DATE} API rates; runs use the Codex subscription): ${usd(total)} over ${costs.length} attempt(s), ${usd(total / costs.length)} per attempt, ${solved ? `${usd(total / solved)} per solved task (${solved} solved)` : "no task solved"}.`;
+	const attempts = records
+		.filter((record) => estimatedCost(record) !== null)
+		.map((record) => ({
+			...attemptCostFromRun({ ...record, verifierPassed: record.passed }),
+			costUsd: estimatedCost(record),
+			estimated: true,
+		}));
+	if (!attempts.length) return null;
+	return `Cost: ${formatCostSummary(sharedCostSummary(attempts))}.`;
 }
 
 const sh = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
