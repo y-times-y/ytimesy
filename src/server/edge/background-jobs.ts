@@ -13,6 +13,7 @@ import { createFreestyleWorkspaceMachines } from "../adapters/freestyle/workspac
 import { registerMemoryEmbeddings } from "../adapters/memory-embeddings";
 import { registerMemoryRepos } from "../adapters/memory-repos";
 import { deliverBackgroundJob } from "../services/background-job-delivery";
+import { durableObjectLocation } from "./durable-object-location";
 import type { EdgeExecutorEnvironment } from "./environment";
 import { withEdgeModelEndpoints } from "./model-endpoint";
 
@@ -57,6 +58,7 @@ export function runBackgroundJob(
 							if (
 								!(await env.MODEL_CONVERSATIONS.getByName(
 									modelConversationName(scope),
+									durableObjectLocation(),
 								).startTurn(scope, { turnId: turn.id, leaseId: turn.lease_id }))
 							)
 								console.warn(
@@ -68,7 +70,10 @@ export function runBackgroundJob(
 					if (job.kind === "prepare") {
 						if (env.ENVIRONMENT_EXECUTION_ENABLED !== "1")
 							throw new Error("Environment execution is disabled.");
-						await env.PROJECT_ENVIRONMENTS.getByName(job.workspaceId).start({
+						await env.PROJECT_ENVIRONMENTS.getByName(
+							job.workspaceId,
+							durableObjectLocation(),
+						).start({
 							requestId: job.id,
 							workspaceId: job.workspaceId,
 							force: job.force,
@@ -109,7 +114,9 @@ export function startBackgroundJob(
 	env: EdgeExecutorEnvironment,
 	job: BackgroundJob,
 ): Promise<JobRecord["state"]> {
-	return env.BACKGROUND_JOBS.getByName(job.id).start(backgroundJob.parse(job));
+	return env.BACKGROUND_JOBS.getByName(job.id, durableObjectLocation()).start(
+		backgroundJob.parse(job),
+	);
 }
 
 type JobRecord = {
