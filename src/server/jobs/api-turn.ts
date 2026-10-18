@@ -22,6 +22,8 @@ import {
 	SafeApiModelFailure,
 } from "#/domain/api-turn-failure";
 import type { ApiTurnSettings } from "#/domain/api-turn-settings";
+import { attemptLimit } from "#/domain/attempt-loop";
+import { latestUserRequestText } from "#/domain/child-task-activity";
 import {
 	CoordinationFailure,
 	TURN_COORDINATION_LEASE_MS,
@@ -51,6 +53,7 @@ import {
 	developmentOutageError,
 	failoverReason,
 } from "#/domain/model-failover-reason";
+import { modelBilling } from "#/domain/model-pricing";
 import { modelStepLimit } from "#/domain/model-workflow";
 import { posixShellCommand } from "#/domain/posix-command";
 import { agentSecretsEnvFile } from "#/domain/project-secret";
@@ -113,6 +116,8 @@ import { runApiAgent, runApiAgentStep } from "../services/api-agent-runtime";
 import { apiAgentTools } from "../services/api-agent-tools";
 import { stopApiTurnCommands } from "../services/api-command-scope";
 import { deferredApiTurnWorkspace } from "../services/api-turn-workspace";
+import { createAttemptLoop } from "../services/attempt-loop";
+import { attemptLoopDeps } from "../services/attempt-loop-deps";
 import { automaticRepositoryContext } from "../services/automatic-repository-context";
 import {
 	pendingAgentCommandIds,
@@ -1219,10 +1224,76 @@ async function runApiTurnAttempt(
 			)
 		)
 			throw new SafeApiModelFailure(developmentOutageError());
-		let result: Awaited<ReturnType<typeof runAgent>> = await timed(
-			"turn:runAgent",
-			async () => runAgent(agentInput),
-		);
+		// The attempt loop (harness variant attempts=3, durable steps only):
+		// it checkpoints before the first model step, and a step may instead
+		// wait for its checker, start the next attempt with a reset history,
+		// or end the loop without a model call.
+		const attemptsMax = attemptLimit(variant.attempts);
+		const attemptLoop =
+			step &&
+			attemptsMax > 1 &&
+			writable &&
+			!owner.parentSessionId &&
+			!owner.agentRole &&
+			!planLock?.planning
+				? createAttemptLoop({
+						sessionId: owner.id,
+						turnId: turn.id,
+						max: attemptsMax,
+						workspace,
+						signal: abort.signal,
+						billing: modelBilling({
+							harness: subscription ? "codex" : "api",
+							modelId: route.modelId,
+						}),
+						taskText: () => latestUserRequestText(items),
+						isRequest: (message) => isUserRequestMessage(items, message),
+						deps: attemptLoopDeps({
+							machines: unscopedMachines,
+							parent: owner as AgentSessionRecord,
+							turnId: turn.id,
+							workspace,
+							signal: abort.signal,
+							waitDeadlineAt: step.waitDeadlineAt,
+							items: () => items,
+						}),
+					})
+				: null;
+		const attemptWaitUntil = () =>
+			Math.min(
+				step?.waitDeadlineAt ?? Number.POSITIVE_INFINITY,
+				Date.now() + 10 * 60_000,
+			);
+		let result: Awaited<ReturnType<typeof runAgent>>;
+		const loopStep = attemptLoop
+			? await timed("turn:attemptLoop", () =>
+					attemptLoop.beforeModel({
+						messages,
+						items,
+						waitUntil: attemptWaitUntil(),
+					}),
+				)
+			: null;
+		if (loopStep?.kind === "wait") {
+			if (loopStep.items) items = loopStep.items;
+			await saveCheckpoint();
+			coordinated = false;
+			return "continue";
+		}
+		if (loopStep?.kind === "finished") {
+			items = loopStep.items;
+			messages = loopStep.messages;
+			result = { messages, outcome: "completed" };
+		} else {
+			if (loopStep?.kind === "run") {
+				if (loopStep.items) items = loopStep.items;
+				if (loopStep.messages) messages = loopStep.messages;
+				if (loopStep.items || loopStep.messages) await saveCheckpoint();
+			}
+			result = await timed("turn:runAgent", async () =>
+				runAgent({ ...agentInput, messages }),
+			);
+		}
 		while (!step && (await hooks.stop(messages))) {
 			messages = hooks.drain(messages);
 			await saveCheckpoint();
@@ -1294,6 +1365,25 @@ async function runApiTurnAttempt(
 			)
 		)
 			throw new IncompleteAgentTurn("missing-final-result");
+		if (attemptLoop) {
+			const next = await timed("turn:attemptLoop", () =>
+				attemptLoop.afterAttempt({
+					messages,
+					items,
+					waitUntil: attemptWaitUntil(),
+				}),
+			);
+			if (next.items) items = next.items;
+			if (next.kind !== "finished") {
+				// The next step waits on the checker or runs the next attempt.
+				if (next.kind === "run" && next.messages) messages = next.messages;
+				await saveCheckpoint();
+				coordinated = false;
+				return "continue";
+			}
+			messages = next.messages;
+			await saveCheckpoint();
+		}
 		// What the agent committed to ~/memory this turn, shown after its answer.
 		if (memory)
 			items = await timed("turn:memorySaved", () =>
