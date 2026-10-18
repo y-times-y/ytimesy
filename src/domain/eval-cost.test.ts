@@ -170,6 +170,16 @@ describe("eval run records", () => {
 		// 0.5M × $4 + 0.5M × $0.2 + 0.1M × $20
 		expect(price.costUsd).toBeCloseTo(2 + 0.1 + 2);
 		expect(price.estimated).toBe(true);
+		// OpenAI list price (read 2026-10-18): $2 input, $0.10 cached, $10 output.
+		expect(
+			runListPrice({
+				harness: "codex",
+				modelId: "codex:gpt-6.1-sol",
+				inputTokens: 1_000_000,
+				cachedTokens: 500_000,
+				outputTokens: 100_000,
+			}).costUsd,
+		).toBeCloseTo(0.5 * 2 + 0.5 * 0.1 + 0.1 * 10);
 		expect(
 			attemptCostFromRun({
 				verifierPassed: true,
