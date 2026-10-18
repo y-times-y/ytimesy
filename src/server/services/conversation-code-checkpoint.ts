@@ -10,7 +10,7 @@ const snapshot = z.object({
 	tree: hash,
 	indexTree: hash,
 	head: hash,
-	ref: z.string().regex(/^refs\/ytimesy\/recovery\/[a-zA-Z0-9-]+$/),
+	ref: z.string().regex(/^refs\/ytimesy\/(recovery|attempts)\/[a-zA-Z0-9-]+$/),
 });
 const CODE_CHECKPOINT_SCRIPT = `import fcntl,hashlib,json,os,pathlib,subprocess,sys,tempfile
 root,ref=sys.argv[1:3]
@@ -34,10 +34,11 @@ with tempfile.TemporaryDirectory(prefix='ytimesy-recovery-') as tmp:
  git('update-ref',ref+'-index',staged)
 print(json.dumps({'cwd':requestedRoot,'tree':tree,'indexTree':index,'head':head,'ref':ref}))`;
 
+/** `ref` defaults to a new recovery ref; the attempt loop names its own (refs/ytimesy/attempts/...). */
 export async function captureConversationCode(
 	workspace: AgentToolWorkspace,
+	ref = `refs/ytimesy/recovery/${randomUUID()}`,
 ): Promise<NonNullable<ConversationPoint["code"]>> {
-	const ref = `refs/ytimesy/recovery/${randomUUID()}`;
 	const result = await workspace.machines.exec(
 		workspace.vm,
 		`python3 -c ${posixShellQuoted(CODE_CHECKPOINT_SCRIPT)} ${posixShellQuoted(workspace.cwd)} ${posixShellQuoted(ref)}`,

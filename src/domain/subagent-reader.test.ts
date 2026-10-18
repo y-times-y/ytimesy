@@ -66,7 +66,18 @@ describe("reader Linux user", () => {
 				root,
 			),
 		).toBe(true);
+		// The attempt loop's per-attempt directory (created for the checker).
+		expect(
+			readerMayWrite(
+				"/tmp/ytimesy-attempts/turn-1/2/tests/run.sh",
+				"child-1",
+				root,
+			),
+		).toBe(true);
 		for (const path of [
+			"/tmp/ytimesy-attempts/turn-1/2",
+			"/tmp/ytimesy-attempts/turn-1/x/run.sh",
+			"/tmp/ytimesy-attempts/turn-1/2/../../../etc/x",
 			"/home/ubuntu/repo/src/a.ts",
 			"/tmp/ytimesy-secrets/agent.env",
 			"/tmp/ytimesy-project-cwd",
