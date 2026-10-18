@@ -2,6 +2,7 @@ import type { AgentProviderId } from "#/domain/agent-provider";
 import type { UserMessageItem } from "#/domain/session-item";
 import { wakeConversationProgress } from "./conversation-progress-wake";
 import { database } from "./database";
+import { forgetPeerInboxObservation } from "./peer-inbox-observation";
 
 /** A composer send waiting in the chat's inbox while a turn runs. */
 export type QueuedUserSend = {
@@ -39,6 +40,7 @@ export async function queueUserMessageWhileRunning(
 		[sessionId, userId, inboxId(send.item.id), message, JSON.stringify(stored)],
 	);
 	if (!result.rows[0]?.running) return "not-running";
+	forgetPeerInboxObservation(sessionId);
 	await wakeConversationProgress();
 	return "queued";
 }
@@ -109,5 +111,6 @@ export async function restoreQueuedUserMessage(
 		 update agent_session set items=items where id in (select recipient_id from restored)`,
 		[inboxId(send.item.id), sessionId, message, JSON.stringify(stored)],
 	);
+	forgetPeerInboxObservation(sessionId);
 	await wakeConversationProgress();
 }
