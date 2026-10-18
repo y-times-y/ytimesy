@@ -14,7 +14,9 @@ const deps = vi.hoisted(() => ({
 	predecessor: vi.fn(),
 	evidence: vi.fn(),
 }));
-vi.mock("./pr-evidence", () => ({ attachPullRequestEvidence: deps.evidence }));
+vi.mock("./pr-evidence-job", () => ({
+	queuePullRequestEvidence: deps.evidence,
+}));
 vi.mock("../adapters/projects", () => ({ projectForOwner: deps.project }));
 vi.mock("../auth/github-connection", () => ({ githubAccessToken: deps.token }));
 vi.mock("../adapters/github", () => ({
@@ -96,7 +98,7 @@ it("pushes the completed revision for each repository and records the primary dr
 		pullRequestUrl: "https://github.com/owner/primary/pull/1",
 	});
 });
-it("attaches evidence to the primary pull request only, and a failure never fails the handoff", async () => {
+it("queues evidence for the primary pull request only, and a failure never fails the handoff", async () => {
 	deps.pull.mockResolvedValue({
 		number: 9,
 		url: "https://github.com/owner/primary/pull/9",
@@ -110,18 +112,22 @@ it("attaches evidence to the primary pull request only, and a failure never fail
 		turn,
 	);
 	expect(deps.evidence).toHaveBeenCalledTimes(1);
-	expect(deps.evidence.mock.calls[0][0]).toMatchObject({
+	// Only a background job is queued: no capture runs inside the turn.
+	expect(deps.evidence.mock.calls[0][0]).toEqual({
 		userId: "alice",
-		providerRef: "writer",
+		sessionId: session.id,
 		revision: `refs/ytimesy/turn-commits/${turn}`,
 		installationId: 2,
 		fullName: "owner/primary",
 		pullNumber: 9,
 	});
 	expect(deps.save).toHaveBeenCalled();
-	expect(warn).toHaveBeenCalledWith("Pull request evidence failed.", {
-		message: "capture broke",
-	});
+	expect(warn).toHaveBeenCalledWith(
+		"Pull request evidence could not be queued.",
+		{
+			message: "capture broke",
+		},
+	);
 	warn.mockRestore();
 });
 it("does not push or request credentials for a chat without commits since its base", async () => {

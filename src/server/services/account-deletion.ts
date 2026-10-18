@@ -1,4 +1,5 @@
 import { AuthSnapshotId, WorkspaceId } from "../../domain/ids";
+import { repositoriesForProject } from "../../domain/projects";
 import {
 	accountCleanupTargets,
 	deleteAccountRecords,
@@ -8,6 +9,8 @@ import {
 	removeChatObjects,
 } from "../adapters/checkpoints/storage";
 import { memoryRepo, memoryRepoName } from "../adapters/memory-repos";
+import { listProjects } from "../adapters/projects";
+import { removeUserPullRequestEvidence } from "./pr-evidence-cleanup";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 /** Calls in flight at once: keeps a heavy account's deletion fast without a burst. */
@@ -55,6 +58,7 @@ export async function deleteAccount(
 	userId: string,
 ) {
 	const targets = await accountCleanupTargets(userId);
+	const leftoversFromEvidence: string[] = [];
 	if (checkpointStorageConfigured())
 		await eachLimited(targets.sessionIds, CLEANUP_CONCURRENCY, (sessionId) =>
 			removeChatObjects(userId, sessionId),
@@ -64,9 +68,17 @@ export async function deleteAccount(
 				{ status: 503 },
 			);
 		});
+	// Evidence refs live in the user's repositories; read which before the rows go.
+	const repositories = (await listProjects(userId)).flatMap((project) =>
+		repositoriesForProject(project),
+	);
 	await deleteAccountRecords(userId);
+	const evidence = await removeUserPullRequestEvidence(userId, repositories);
+	leftoversFromEvidence.push(
+		...evidence.failed.map((name) => `pr-evidence:${name}`),
+	);
 	const sharedToolsSnapshot = process.env.YTIMESY_TOOLS_SNAPSHOT_ID?.trim();
-	const leftovers: string[] = [];
+	const leftovers: string[] = [...leftoversFromEvidence];
 	await eachLimited(targets.vmIds, CLEANUP_CONCURRENCY, (vmId) =>
 		machines.destroy(WorkspaceId(vmId)).catch(() => {
 			leftovers.push(`vm:${vmId}`);

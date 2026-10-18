@@ -30,7 +30,7 @@ export function r2Configuration(): R2Configuration | null {
 	return { accountId, accessKeyId, secretAccessKey, bucket };
 }
 
-const sha256 = (data: string | Uint8Array) =>
+const sha256 = (data: string) =>
 	createHash("sha256").update(data).digest("hex");
 const hmac = (key: string | Buffer, data: string) =>
 	createHmac("sha256", key).update(data).digest();
@@ -44,7 +44,7 @@ const encode = (text: string) =>
 export function signedR2Headers(input: {
 	method: string;
 	url: URL;
-	body: string | Uint8Array;
+	body: string;
 	accessKeyId: string;
 	secretAccessKey: string;
 	region?: string;
@@ -89,12 +89,7 @@ async function r2Fetch(
 	config: R2Configuration,
 	method: string,
 	key: string,
-	options: {
-		query?: Record<string, string>;
-		body?: string | Uint8Array;
-		/** Unsigned request headers (content type, range). */
-		headers?: Record<string, string>;
-	} = {},
+	options: { query?: Record<string, string>; body?: string } = {},
 ) {
 	const url = new URL(
 		`https://${config.accountId}.r2.cloudflarestorage.com/${config.bucket}${key ? `/${key}` : ""}`,
@@ -106,40 +101,9 @@ async function r2Fetch(
 		method,
 		redirect: "manual",
 		signal: AbortSignal.timeout(60_000),
-		headers: {
-			...options.headers,
-			...signedR2Headers({ method, url, body, ...config }),
-		},
-		...(options.body === undefined
-			? {}
-			: {
-					body:
-						typeof body === "string" ? body : new Blob([new Uint8Array(body)]),
-				}),
+		headers: signedR2Headers({ method, url, body, ...config }),
+		...(options.body === undefined ? {} : { body }),
 	});
-}
-
-/** Stores one binary object under `key` (no Supabase-shaped wrapper). */
-export async function r2PutObject(
-	config: R2Configuration,
-	key: string,
-	body: Uint8Array,
-	contentType: string,
-) {
-	const stored = await r2Fetch(config, "PUT", key, {
-		body,
-		headers: { "content-type": contentType },
-	});
-	if (!stored.ok) throw new Error(`R2 upload failed (${stored.status}).`);
-}
-
-/** Reads one object; a range header passes through for media seeking. */
-export function r2GetObject(
-	config: R2Configuration,
-	key: string,
-	range?: string | null,
-) {
-	return r2Fetch(config, "GET", key, range ? { headers: { range } } : {});
 }
 
 const xmlText = (text: string) =>

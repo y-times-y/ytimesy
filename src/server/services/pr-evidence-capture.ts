@@ -139,8 +139,10 @@ kind = 'cli' if request.get('mode') == 'cli' else 'web'
 manifest = {'version': 1, 'mode': mode, 'kind': kind, 'status': 'captured', 'reason': '', 'sha': '', 'clean': False,
             'startCommand': '', 'startSource': 'cli' if kind == 'cli' else ('auto' if request.get('mode') == 'auto' else 'plan'),
             'urls': [], 'pages': [], 'flow': [], 'video': None, 'cli': None, 'files': [], 'dropped': [],
-            'browser': '', 'viewport': '', 'startedAt': now(), 'appReadyAt': '', 'finishedAt': ''}
+            'browser': '', 'viewport': '', 'linked': [], 'startedAt': now(), 'appReadyAt': '', 'finishedAt': ''}
 app = None
+checkout = repo
+worktree = None
 log_path = os.path.join(out, 'app.log')
 child_env = {**os.environ, 'BROWSER': 'none', 'NO_COLOR': '1', 'FORCE_COLOR': '0'}
 def stop_app():
@@ -151,8 +153,13 @@ def stop_app():
         try:
             app.wait(wait); return
         except subprocess.TimeoutExpired: pass
+def remove_worktree():
+    if worktree:
+        subprocess.run(['git', '-C', repo, 'worktree', 'remove', '--force', worktree], capture_output=True)
+        subprocess.run(['git', '-C', repo, 'worktree', 'prune'], capture_output=True)
 def finish(status=None, reason=''):
     stop_app()
+    remove_worktree()
     if status:
         manifest['status'] = status
         manifest['reason'] = reason[:600]
@@ -185,17 +192,46 @@ def git(*args, env=None):
 found = git('rev-parse', '--verify', (revision or 'HEAD') + '^{commit}')
 if found.returncode: finish('dirty', 'The commit to capture is not in the workspace checkout.')
 manifest['sha'] = found.stdout.strip()
-tree = git('rev-parse', manifest['sha'] + '^{tree}').stdout.strip()
-with tempfile.TemporaryDirectory(prefix='ytimesy-evidence-tree-') as temporary:
-    env = {**os.environ, 'GIT_INDEX_FILE': temporary + '/index'}
-    git('read-tree', manifest['sha'], env=env)
-    git('-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', 'add', '-A', '--', '.', env=env)
-    working = git('write-tree', env=env).stdout.strip()
-manifest['clean'] = bool(tree) and working == tree
-if mode == 'verify' and not manifest['clean']:
-    finish('dirty', 'The working tree has changes that are not in the pushed commit.')
+def link_workspace_files(source, target):
+    # Untracked inputs the app needs that are not in the commit: installed
+    # dependencies (linked) and local env files (copied). Recorded in the manifest.
+    for root, directories, names in os.walk(source):
+        relative = os.path.relpath(root, source)
+        depth = 0 if relative == '.' else relative.count(os.sep) + 1
+        for name in list(directories):
+            if name in ('node_modules', '.venv', 'venv') and len(manifest['linked']) < 40:
+                destination = os.path.join(target, relative, name)
+                if os.path.isdir(os.path.dirname(destination)) and not os.path.lexists(destination):
+                    os.symlink(os.path.join(root, name), destination)
+                    manifest['linked'].append(os.path.normpath(os.path.join(relative, name)))
+        directories[:] = [name for name in directories if depth < 4 and name not in ('.git', 'node_modules', '.venv', 'venv') and not name.startswith('.')]
+        for name in names:
+            if re.fullmatch(r'.env(..+)?', name) and len(manifest['linked']) < 40:
+                destination = os.path.join(target, relative, name)
+                if os.path.isdir(os.path.dirname(destination)) and not os.path.lexists(destination) and os.path.getsize(os.path.join(root, name)) <= 65536:
+                    shutil.copyfile(os.path.join(root, name), destination)
+                    manifest['linked'].append(os.path.normpath(os.path.join(relative, name)))
+if mode == 'verify':
+    # A separate worktree of exactly the pushed commit, so later edits in the
+    # chat's checkout (or a running next turn) cannot leak into the capture.
+    worktree = os.path.join(os.path.dirname(os.path.abspath(out)), 'src')
+    added = git('worktree', 'add', '--detach', '--force', worktree, manifest['sha'])
+    if added.returncode:
+        worktree = None
+        finish('dirty', 'The pushed commit could not be checked out for capture.')
+    checkout = worktree
+    manifest['clean'] = True
+    link_workspace_files(repo, checkout)
+else:
+    tree = git('rev-parse', manifest['sha'] + '^{tree}').stdout.strip()
+    with tempfile.TemporaryDirectory(prefix='ytimesy-evidence-tree-') as temporary:
+        env = {**os.environ, 'GIT_INDEX_FILE': temporary + '/index'}
+        git('read-tree', manifest['sha'], env=env)
+        git('-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', 'add', '-A', '--', '.', env=env)
+        working = git('write-tree', env=env).stdout.strip()
+    manifest['clean'] = bool(tree) and working == tree
 def run_group(argv, seconds, **options):
-    process = subprocess.Popen(argv, cwd=repo, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True, env=child_env, **options)
+    process = subprocess.Popen(argv, cwd=checkout, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True, env=child_env, **options)
     try:
         output, _ = process.communicate(timeout=seconds)
         return process.returncode, output
@@ -217,12 +253,12 @@ if kind == 'cli':
 start, urls, flow, start_seconds = None, [], [], LIMITS['startSeconds']['default']
 if request.get('mode') == 'auto':
     try:
-        scripts = json.load(open(os.path.join(repo, 'package.json'), encoding='utf-8')).get('scripts') or {}
+        scripts = json.load(open(os.path.join(checkout, 'package.json'), encoding='utf-8')).get('scripts') or {}
     except (OSError, ValueError):
         scripts = {}
     if not isinstance(scripts.get('dev'), str):
         finish('app-failed', 'No capture plan was recorded and package.json has no dev script, so the harness could not tell how to start the app.')
-    manager = 'pnpm' if os.path.exists(os.path.join(repo, 'pnpm-lock.yaml')) else 'yarn' if os.path.exists(os.path.join(repo, 'yarn.lock')) else 'bun' if any(os.path.exists(os.path.join(repo, name)) for name in ('bun.lockb', 'bun.lock')) else 'npm'
+    manager = 'pnpm' if os.path.exists(os.path.join(checkout, 'pnpm-lock.yaml')) else 'yarn' if os.path.exists(os.path.join(checkout, 'yarn.lock')) else 'bun' if any(os.path.exists(os.path.join(checkout, name)) for name in ('bun.lockb', 'bun.lock')) else 'npm'
     start = manager + ' run dev'
 else:
     start, urls, flow = request['start'], list(request['urls']), list(request.get('flow') or [])
@@ -259,8 +295,10 @@ def answers(url):
     except Exception:
         return False
 base = next((url for url in urls if not url.startswith('/')), None)
+if base and answers(base):
+    finish('app-failed', 'Something was already answering at %s before the app started (another dev server in the workspace?), so screenshots could show other code. Stop it or use a free port in the plan.' % base)
 log = open(log_path, 'wb')
-app = subprocess.Popen(['bash', '-lc', start], cwd=repo, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True, env=child_env)
+app = subprocess.Popen(['bash', '-lc', start], cwd=checkout, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True, env=child_env)
 deadline = time.time() + start_seconds
 while True:
     if app.poll() is not None:

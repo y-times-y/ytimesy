@@ -2,19 +2,20 @@ import { describe, expect, it } from "vitest";
 import {
 	EVIDENCE_END,
 	type EvidenceManifest,
+	evidenceFileUrl,
 	evidenceManifest,
-	evidenceObjectKey,
-	evidencePathFromRequest,
 	evidencePlanFor,
+	evidenceRefName,
+	evidenceRefPullNumber,
 	evidenceRequestFromText,
 	evidenceSectionState,
+	evidenceUserLabel,
 	renderEvidenceSection,
 	visiblePath,
 	withEvidenceSection,
 } from "./pr-evidence";
 
 const sha = "c3c0528b5e6e62912fb34a066cf13a9fb81eb770";
-const id = "0123456789abcdef0123456789abcdef";
 
 function manifest(overrides: Partial<EvidenceManifest> = {}) {
 	return evidenceManifest.parse({
@@ -68,7 +69,7 @@ function manifest(overrides: Partial<EvidenceManifest> = {}) {
 const links = Object.fromEntries(
 	["01-home.png", "02-saved.png", "recording.webm"].map((name) => [
 		name,
-		`https://edge.example/pr-evidence/${id}/${name}`,
+		`https://github.com/owner/app/blob/${"e".repeat(40)}/${name}?raw=true`,
 	]),
 );
 
@@ -140,35 +141,44 @@ describe("capture plans", () => {
 	});
 });
 
-describe("storage paths", () => {
-	it("keeps every object under pr-evidence/<random id>/ with known file names", () => {
-		expect(evidenceObjectKey(id, "01-home.png")).toBe(
-			`pr-evidence/${id}/01-home.png`,
+describe("storage in the repository", () => {
+	const label = "u-0123456789abcdef";
+	it("names one hidden ref per user and pull request, never a branch", () => {
+		expect(evidenceUserLabel("a".repeat(64))).toBe("u-aaaaaaaaaaaaaaaa");
+		expect(() => evidenceUserLabel("not-a-digest")).toThrow();
+		expect(evidenceRefName(label, 7)).toBe(
+			"ytimesy/evidence/u-0123456789abcdef/pr-7",
 		);
-		for (const [badId, name] of [
-			["../checkpoints", "a.png"],
-			[id, "../x.png"],
-			[id, "a.html"],
-			[id, "A.png"],
-			["abc", "a.png"],
+		expect(evidenceRefName(label, 7).startsWith("heads/")).toBe(false);
+		expect(() => evidenceRefName(label, 0)).toThrow();
+		expect(() => evidenceRefName("u-../../heads", 1)).toThrow();
+		expect(
+			evidenceRefPullNumber(
+				"refs/ytimesy/evidence/u-0123456789abcdef/pr-12",
+				label,
+			),
+		).toBe(12);
+		for (const ref of [
+			"refs/ytimesy/evidence/u-ffffffffffffffff/pr-12",
+			"refs/heads/main",
+			"refs/ytimesy/evidence/u-0123456789abcdef/pr-12x",
+			"refs/ytimesy/evidence/u-0123456789abcdef/pr-012",
 		])
-			expect(() => evidenceObjectKey(badId, name)).toThrow();
-		expect(evidencePathFromRequest(`${id}/recording.webm`)).toEqual({
-			key: `pr-evidence/${id}/recording.webm`,
-			contentType: "video/webm",
-		});
-		expect(evidencePathFromRequest(`${id}/manifest.json`)?.contentType).toBe(
-			"text/plain; charset=utf-8",
+			expect(evidenceRefPullNumber(ref, label)).toBeNull();
+	});
+
+	it("links files through GitHub, which applies the repository's own access rules", () => {
+		expect(evidenceFileUrl("owner/app", sha, "01-home.png")).toBe(
+			`https://github.com/owner/app/blob/${sha}/01-home.png?raw=true`,
 		);
-		for (const path of [
-			`${id}/../../x.png`,
-			`${id}/a.svg`,
-			`${id}/a.png/b`,
-			`checkpoints/${id}/a.png`,
-			`${id}`,
-			"",
+		for (const [repo, commit, name] of [
+			["owner/app", sha, "../x.png"],
+			["owner/app", sha, "a.html"],
+			["owner/app/extra", sha, "a.png"],
+			["owner/app", "main", "a.png"],
+			["https://evil/x", sha, "a.png"],
 		])
-			expect(evidencePathFromRequest(path)).toBeNull();
+			expect(() => evidenceFileUrl(repo, commit, name)).toThrow();
 	});
 });
 
@@ -177,7 +187,7 @@ describe("Evidence section", () => {
 		const section = renderEvidenceSection({
 			manifest: manifest(),
 			links,
-			manifestUrl: `https://edge.example/pr-evidence/${id}/manifest.json`,
+			manifestUrl: `https://github.com/owner/app/blob/${"e".repeat(40)}/manifest.json?raw=true`,
 			planKey: "web-abc",
 			headSha: sha,
 		});

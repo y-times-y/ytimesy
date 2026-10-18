@@ -5,9 +5,11 @@ import {
 	evidenceSectionState,
 	renderEvidenceSection,
 } from "#/domain/pr-evidence";
+import type { EvidenceGitApi } from "../adapters/github/pr-evidence-refs";
 import {
 	attachPullRequestEvidence,
 	type EvidenceDependencies,
+	evidenceUserLabelFor,
 	readEvidenceBytes,
 } from "./pr-evidence";
 
@@ -91,10 +93,57 @@ function capturedManifest(overrides: Record<string, unknown> = {}) {
 	};
 }
 
+/** An in-memory repository for the Git Data API calls evidence makes. */
+function fakeGit() {
+	const blobs: Buffer[] = [];
+	const trees: { path: string; sha: string }[][] = [];
+	const commits: { tree: string; message: string }[] = [];
+	const refs = new Map<string, string>();
+	const api: EvidenceGitApi = {
+		createBlob: vi.fn(async (base64: string) => {
+			blobs.push(Buffer.from(base64, "base64"));
+			return `blob-${blobs.length - 1}`;
+		}),
+		createTree: vi.fn(async (entries) => {
+			trees.push(entries);
+			return `tree-${trees.length - 1}`;
+		}),
+		createCommit: vi.fn(async (tree, message) => {
+			commits.push({ tree, message });
+			return String(commits.length).repeat(40).slice(0, 40);
+		}),
+		setRef: vi.fn(async (ref, commit) => {
+			refs.set(`refs/${ref}`, commit);
+		}),
+		deleteRef: vi.fn(async (ref) => {
+			refs.delete(`refs/${ref}`);
+		}),
+		listRefs: vi.fn(async (prefix) =>
+			[...refs]
+				.filter(([ref]) => ref.startsWith(`refs/${prefix}`))
+				.map(([ref, commit]) => ({ ref, sha: commit })),
+		),
+		commitDate: vi.fn(async () => new Date().toISOString()),
+		openPullNumbers: vi.fn(async () => new Set([7])),
+	};
+	/** Stored files of the latest commit, by name. */
+	const stored = () => {
+		const tree = trees.at(-1) ?? [];
+		return Object.fromEntries(
+			tree.map((entry) => [
+				entry.path,
+				blobs[Number(entry.sha.slice("blob-".length))],
+			]),
+		);
+	};
+	return { api, refs, commits, stored };
+}
+
 let body: string;
 let headSha: string;
+let git: ReturnType<typeof fakeGit>;
 let deps: EvidenceDependencies & {
-	put: ReturnType<typeof vi.fn>;
+	git: ReturnType<typeof vi.fn>;
 	write: ReturnType<typeof vi.fn>;
 };
 const input = (rt: ReturnType<typeof runtime>) => ({
@@ -114,16 +163,14 @@ beforeEach(() => {
 	const write = vi.fn(async (next: string) => {
 		body = next;
 	});
+	git = fakeGit();
 	deps = {
 		enabled: vi.fn(async () => true),
-		origin: () => "https://edge.example",
-		storeConfigured: () => true,
 		pullRequest: vi.fn(async () => ({
 			read: async () => ({ body, headSha, state: "open" }),
 			write,
 		})),
-		put: vi.fn(async () => undefined),
-		id: () => "0123456789abcdef0123456789abcdef",
+		git: vi.fn(async () => git.api),
 		write,
 	};
 });
@@ -156,10 +203,11 @@ describe("pull request evidence", () => {
 	it("captures from the pushed commit, stores hash-checked media and writes the section", async () => {
 		const rt = runtime(visible);
 		const outcome = await attachPullRequestEvidence(input(rt), deps);
+		const stored = "1".repeat(40);
 		expect(outcome).toEqual({
 			kind: "updated",
 			status: "captured",
-			id: "0123456789abcdef0123456789abcdef",
+			commit: stored,
 		});
 		const capture = rt.commands.find((command) =>
 			command.includes("evidence-capture.py"),
@@ -182,26 +230,38 @@ describe("pull request evidence", () => {
 			version: 1,
 			mode: "auto",
 		});
-		expect(deps.put.mock.calls.map((call) => [call[1], call[3]])).toEqual([
-			["01-home.png", "image/png"],
-			["recording.webm", "video/webm"],
-			["manifest.json", "text/plain; charset=utf-8"],
+		// Stored in the pull request's own repository under a hidden per-PR ref.
+		expect(deps.git).toHaveBeenCalledWith(2, "owner/app");
+		const files = git.stored();
+		expect(Object.keys(files)).toEqual([
+			"01-home.png",
+			"recording.webm",
+			"manifest.json",
 		]);
-		expect(deps.put.mock.calls[1][2]).toEqual(webm);
+		expect(files["recording.webm"]).toEqual(webm);
+		expect(JSON.parse(files["manifest.json"].toString()).headSha).toBe(sha);
+		expect([...git.refs]).toEqual([
+			[
+				`refs/ytimesy/evidence/${evidenceUserLabelFor("eval-user")}/pr-7`,
+				stored,
+			],
+		]);
+		expect(git.commits[0].message).toContain("[skip ci]");
 		expect(body.startsWith("Automatic draft handoff from ytimesy.\n\n")).toBe(
 			true,
 		);
 		expect(body).toContain(
-			"![Home](https://edge.example/pr-evidence/0123456789abcdef0123456789abcdef/01-home.png)",
+			`![Home](https://github.com/owner/app/blob/${stored}/01-home.png?raw=true)`,
 		);
 		expect(body).toContain("detected from package.json");
 		expect(evidenceSectionState(body)?.sha).toBe(sha);
 		expect(rt.commands.at(-1)).toMatch(/^rm -rf '\/tmp\/ytimesy-evidence-/);
+		expect(rt.commands.at(-1)).toContain("worktree prune");
 	});
 
 	it("does not recapture the same commit and plan", async () => {
 		await attachPullRequestEvidence(input(runtime(visible)), deps);
-		deps.put.mockClear();
+		deps.git.mockClear();
 		const rt = runtime(visible);
 		expect(await attachPullRequestEvidence(input(rt), deps)).toEqual({
 			kind: "unchanged",
@@ -222,6 +282,7 @@ describe("pull request evidence", () => {
 				cli: null,
 				files: [],
 				dropped: [],
+				linked: [],
 				browser: "",
 				viewport: "",
 				appReadyAt: "",
@@ -248,9 +309,9 @@ describe("pull request evidence", () => {
 		expect(outcome).toMatchObject({
 			kind: "updated",
 			status: "app-failed",
-			id: null,
+			commit: null,
 		});
-		expect(deps.put).not.toHaveBeenCalled();
+		expect(deps.git).not.toHaveBeenCalled();
 		expect(body).toContain("The app did not start at commit `c3c0528`");
 		expect(body).not.toContain("![");
 		expect(body.match(/ytimesy-evidence:start/g)).toHaveLength(1);
@@ -263,14 +324,14 @@ describe("pull request evidence", () => {
 			manifest: capturedManifest({ sha: "f".repeat(40) }),
 		});
 		await attachPullRequestEvidence(input(rt), deps);
-		expect(deps.put).not.toHaveBeenCalled();
+		expect(deps.git).not.toHaveBeenCalled();
 		expect(body).toContain("did not come from the pushed commit");
 
 		headSha = "9".repeat(40);
 		body = "";
 		await attachPullRequestEvidence(input(runtime(visible)), deps);
-		expect(deps.put).not.toHaveBeenCalled();
-		expect(body).toContain("The pull request head is 9999999");
+		expect(deps.git).not.toHaveBeenCalled();
+		expect(body).toContain("The pull request head is now 9999999");
 	});
 
 	it("refuses a preview manifest and a missing manifest", async () => {
@@ -283,7 +344,7 @@ describe("pull request evidence", () => {
 			),
 			deps,
 		);
-		expect(deps.put).not.toHaveBeenCalled();
+		expect(deps.git).not.toHaveBeenCalled();
 		expect(body).toContain("did not come from the pushed commit");
 		body = "";
 		await attachPullRequestEvidence(
@@ -326,14 +387,26 @@ describe("pull request evidence", () => {
 		await attachPullRequestEvidence(input(rt), deps);
 		expect(body).toContain("`node bin/cli.js --help` exited 0:");
 		expect(body).toContain("usage: cli");
-		expect(deps.put.mock.calls[0][1]).toBe("output.txt");
+		expect(Object.keys(git.stored())).toEqual(["output.txt", "manifest.json"]);
 	});
 
-	it("skips when the edge origin or storage is not configured", async () => {
-		deps.origin = () => null;
+	it("re-reads the pull request after capture and stops if it closed meanwhile", async () => {
+		let reads = 0;
+		deps.pullRequest = vi.fn(async () => ({
+			read: async () => ({
+				body,
+				headSha,
+				state: reads++ === 0 ? "open" : "closed",
+			}),
+			write: async (next: string) => {
+				body = next;
+			},
+		}));
 		expect(
 			await attachPullRequestEvidence(input(runtime(visible)), deps),
-		).toEqual({ kind: "unconfigured" });
+		).toEqual({ kind: "closed" });
+		expect(deps.git).not.toHaveBeenCalled();
+		expect(body).toBe("Automatic draft handoff from ytimesy.");
 	});
 });
 

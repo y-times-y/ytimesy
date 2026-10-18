@@ -218,6 +218,8 @@ export const evidenceManifest = z.object({
 		.max(EVIDENCE_LIMITS.screenshots + 3)
 		.default([]),
 	dropped: z.array(z.string().max(200)).max(20).default([]),
+	/** Untracked inputs taken from the chat's checkout: dependency folders (linked) and .env files (copied). */
+	linked: z.array(z.string().max(200)).max(40).default([]),
 	browser: z.string().max(120).default(""),
 	viewport: z.string().max(20).default(""),
 	startedAt: isoTime,
@@ -226,36 +228,79 @@ export const evidenceManifest = z.object({
 });
 export type EvidenceManifest = z.infer<typeof evidenceManifest>;
 
-export const EVIDENCE_KEY_PREFIX = "pr-evidence/";
+/**
+ * Where evidence lives: in the pull request's own repository, as one commit
+ * per pull request under a hidden ref (not a branch, so no CI, deploy
+ * previews or branch-list noise), readable only by people who can read the
+ * repository. Each user has their own namespace so deleting one user's
+ * evidence never touches another's.
+ */
+export const EVIDENCE_REF_NAMESPACE = "ytimesy/evidence";
 
-const evidenceId = /^[a-f0-9]{32}$/;
+/** Captures older than this are removed when the next capture in the repository runs. */
+export const EVIDENCE_RETENTION_DAYS = 30;
 
-/** The storage key of one evidence file; only ids and file names this module accepts reach storage. */
-export function evidenceObjectKey(id: string, name: string) {
-	if (!evidenceId.test(id) || !fileName.safeParse(name).success)
-		throw new Error("Invalid evidence object.");
-	return `${EVIDENCE_KEY_PREFIX}${id}/${name}`;
+/** A stable, non-reversible label for a user inside ref names. */
+export function evidenceUserLabel(userIdSha256Hex: string) {
+	if (!/^[a-f0-9]{64}$/.test(userIdSha256Hex))
+		throw new Error("Invalid user digest.");
+	return `u-${userIdSha256Hex.slice(0, 16)}`;
 }
 
-/** A served path `<id>/<name>`, or null for anything else (including other storage). */
-export function evidencePathFromRequest(path: string) {
-	const match =
-		/^([a-f0-9]{32})\/([a-z0-9][a-z0-9-]{0,40}\.(png|webm|txt|json))$/.exec(
-			path,
-		);
-	if (!match) return null;
-	return {
-		key: evidenceObjectKey(match[1], match[2]),
-		contentType: EVIDENCE_CONTENT_TYPES[match[3] as EvidenceExtension],
-	};
+/** `ytimesy/evidence/<user>/` (without `refs/`), for listing a user's refs. */
+export function evidenceUserRefPrefix(userLabel: string) {
+	if (!/^u-[a-f0-9]{16}$/.test(userLabel))
+		throw new Error("Invalid user label.");
+	return `${EVIDENCE_REF_NAMESPACE}/${userLabel}/`;
+}
+
+/** The ref (without `refs/`) holding one pull request's current evidence. */
+export function evidenceRefName(userLabel: string, pullNumber: number) {
+	if (!Number.isSafeInteger(pullNumber) || pullNumber < 1)
+		throw new Error("Invalid pull request number.");
+	return `${evidenceUserRefPrefix(userLabel)}pr-${pullNumber}`;
+}
+
+/** The pull request number of a ref this module named, or null for anything else. */
+export function evidenceRefPullNumber(ref: string, userLabel: string) {
+	const prefix = `refs/${evidenceUserRefPrefix(userLabel)}pr-`;
+	if (!ref.startsWith(prefix)) return null;
+	const number = ref.slice(prefix.length);
+	return /^[1-9]\d{0,9}$/.test(number) ? Number(number) : null;
+}
+
+/** A file name the capture may produce; anything else is never stored. */
+export function evidenceFileName(name: string) {
+	return fileName.safeParse(name).success;
+}
+
+/**
+ * The GitHub URL of a stored file. GitHub serves it only to viewers who can
+ * read the repository, so images render in the pull request for exactly the
+ * people who can see the pull request.
+ */
+export function evidenceFileUrl(
+	fullName: string,
+	commitSha: string,
+	name: string,
+) {
+	if (
+		!/^[a-zA-Z0-9][a-zA-Z0-9._-]*\/[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(
+			fullName,
+		) ||
+		!/^[a-f0-9]{40}([a-f0-9]{24})?$/.test(commitSha) ||
+		!evidenceFileName(name)
+	)
+		throw new Error("Invalid evidence file.");
+	return `https://github.com/${fullName}/blob/${commitSha}/${name}?raw=true`;
 }
 
 type EvidenceExtension = "png" | "webm" | "txt" | "json";
-export const EVIDENCE_CONTENT_TYPES: Record<EvidenceExtension, string> = {
+const EVIDENCE_CONTENT_TYPES: Record<EvidenceExtension, string> = {
 	png: "image/png",
 	webm: "video/webm",
 	txt: "text/plain; charset=utf-8",
-	json: "text/plain; charset=utf-8",
+	json: "application/json",
 };
 
 export function evidenceContentType(name: string) {
@@ -404,9 +449,17 @@ export function renderEvidenceSection(input: RenderedEvidence) {
 		);
 	const failedSteps = manifest.flow.filter((step) => !step.ok);
 	const details = [
-		`- Commit: \`${manifest.sha}\`${manifest.clean ? " (working tree identical to the commit)" : ""}`,
+		`- Commit: \`${manifest.sha}\`${manifest.clean ? " (tracked files checked out exactly at this commit)" : ""}`,
 		manifest.startCommand
 			? `- Start command: ${code(manifest.startCommand)} (${manifest.startSource === "auto" ? "detected from package.json" : "from the builder's capture plan"})`
+			: "",
+		manifest.linked.length
+			? `- Not from the commit: ${manifest.linked
+					.slice(0, 12)
+					.map((path) => code(path, 80))
+					.join(
+						", ",
+					)}${manifest.linked.length > 12 ? ", ..." : ""} (installed dependencies linked and env files copied from the chat's checkout)`
 			: "",
 		manifest.urls.length
 			? `- Pages visited: ${manifest.urls.map((url) => code(url, 200)).join(", ")}`
@@ -422,7 +475,7 @@ export function renderEvidenceSection(input: RenderedEvidence) {
 			? `- Left out (over size or time limits): ${manifest.dropped.map((item) => plain(item, 120)).join("; ")}`
 			: "",
 		input.manifestUrl
-			? `- [Manifest](${input.manifestUrl}) with the SHA-256 of every file`
+			? `- [Manifest](${input.manifestUrl}) with the SHA-256 of every file (stored in this repository under \`refs/${EVIDENCE_REF_NAMESPACE}/\`, removed when the pull request closes or after ${EVIDENCE_RETENTION_DAYS} days)`
 			: "",
 	].filter(Boolean);
 	lines.push(
