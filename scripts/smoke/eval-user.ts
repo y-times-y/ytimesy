@@ -8,6 +8,8 @@
 //   node --env-file=.env --import tsx scripts/smoke/eval-user.ts --cleanup [--older-than 6]
 //       Removes users left by crashed or killed runs: every local manifest
 //       whose process is gone, and eval users older than --older-than hours.
+//   node --env-file=.env --import tsx scripts/smoke/eval-user.ts --user <eval-id>
+//       Removes only that user (from its local manifest), when its run is gone.
 //   node --env-file=.env --import tsx scripts/smoke/eval-user.ts --list
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -105,7 +107,7 @@ export async function assertDevelopmentDatabase() {
 }
 
 /** The one dev user with a connected Codex subscription. */
-async function subscriptionOwner() {
+export async function subscriptionOwner() {
 	const owners = (
 		await database().query<{ user_id: string }>(
 			"select a.user_id from agent_account a where a.provider='codex' and a.status='connected' and a.encrypted_codex_auth is not null and not exists (select 1 from dev_eval_user e where e.user_id=a.user_id)",
@@ -633,6 +635,8 @@ async function cli() {
 			cleanup: { type: "boolean", default: false },
 			list: { type: "boolean", default: false },
 			"older-than": { type: "string", default: "6" },
+			/** Release only this eval user (its local manifest), nothing else. */
+			user: { type: "string" },
 		},
 	});
 	await assertDevelopmentDatabase();
@@ -651,7 +655,7 @@ async function cli() {
 			"select user_id,owner_user_id,label,created_at from dev_eval_user order by created_at",
 		)
 	).rows;
-	if (values.list || !values.cleanup) {
+	if (values.list || (!values.cleanup && !values.user)) {
 		console.log(
 			JSON.stringify(
 				{
@@ -669,7 +673,19 @@ async function cli() {
 				2,
 			),
 		);
-		if (!values.cleanup) return;
+		if (!values.cleanup && !values.user) return;
+	}
+	if (values.user) {
+		const manifest = manifests.find((m) => m.userId === values.user);
+		if (!manifest) throw new Error(`No local manifest for ${values.user}.`);
+		if (manifest.host === hostname() && alive(manifest.pid))
+			throw new Error(`${values.user}: its run (pid ${manifest.pid}) is live.`);
+		const leftovers = await releaseUser(manifest);
+		console.log(
+			`${manifest.userId} (${manifest.label}): ${leftovers.length ? `left ${leftovers.join(", ")}` : "removed"}`,
+		);
+		if (leftovers.length) process.exitCode = 1;
+		return;
 	}
 	const olderThanMs = Math.max(0, Number(values["older-than"]) || 0) * 3600_000;
 	const handled = new Set<string>();

@@ -347,6 +347,57 @@ export async function turnState(sessionId: string) {
 	).rows[0];
 }
 
+/** Fills a run record's tool, token, step and error counts from a turn's stored items and model messages. */
+export function measureRun(
+	record: RunRecord,
+	items: SessionItem[],
+	messages: unknown,
+	costOf: (model: string, input: number, output: number) => number,
+) {
+	record.toolCalls = 0;
+	record.failedToolCalls = 0;
+	record.failedByTool = {};
+	record.toolsUsed = {};
+	for (const item of items) {
+		const name = toolName(item);
+		if (!name) continue;
+		record.toolCalls++;
+		record.toolsUsed[name] = (record.toolsUsed[name] ?? 0) + 1;
+		if ("status" in item && item.status === "failed") {
+			record.failedToolCalls++;
+			record.failedByTool[name] = (record.failedByTool[name] ?? 0) + 1;
+		}
+	}
+	const usage = items.find((item) => item.kind === "userMessage")?.apiUsage;
+	if (usage) {
+		record.inputTokens = usage.inputTokens;
+		record.outputTokens = usage.outputTokens;
+		record.cachedTokens = usage.cacheReadTokens;
+		record.cacheHitPercent =
+			usage.inputTokens && usage.cacheReadTokens !== null
+				? percent(usage.cacheReadTokens, usage.inputTokens)
+				: null;
+		record.estimatedCostUsd = costOf(
+			record.model,
+			usage.inputTokens ?? 0,
+			usage.outputTokens ?? 0,
+		);
+	}
+	if (Array.isArray(messages))
+		record.modelSteps = messages.filter(
+			(message) =>
+				message && typeof message === "object" && message.role === "assistant",
+		).length;
+	record.errors = [
+		...new Set([
+			...record.errors,
+			...items
+				.filter((item) => item.kind === "error")
+				.map((item) => safe(item.message)),
+		]),
+	];
+}
+
 export async function createHarnessRunner(options: {
 	/** Who runs the sessions: a throwaway eval user (or the owner). */
 	user: EvalUser;
@@ -374,52 +425,11 @@ export async function createHarnessRunner(options: {
 	const liveSessions = new Map<string, string>();
 	let stopping = false;
 
-	function measure(record: RunRecord, items: SessionItem[], messages: unknown) {
-		record.toolCalls = 0;
-		record.failedToolCalls = 0;
-		record.failedByTool = {};
-		record.toolsUsed = {};
-		for (const item of items) {
-			const name = toolName(item);
-			if (!name) continue;
-			record.toolCalls++;
-			record.toolsUsed[name] = (record.toolsUsed[name] ?? 0) + 1;
-			if ("status" in item && item.status === "failed") {
-				record.failedToolCalls++;
-				record.failedByTool[name] = (record.failedByTool[name] ?? 0) + 1;
-			}
-		}
-		const usage = items.find((item) => item.kind === "userMessage")?.apiUsage;
-		if (usage) {
-			record.inputTokens = usage.inputTokens;
-			record.outputTokens = usage.outputTokens;
-			record.cachedTokens = usage.cacheReadTokens;
-			record.cacheHitPercent =
-				usage.inputTokens && usage.cacheReadTokens !== null
-					? percent(usage.cacheReadTokens, usage.inputTokens)
-					: null;
-			record.estimatedCostUsd = costOf(
-				record.model,
-				usage.inputTokens ?? 0,
-				usage.outputTokens ?? 0,
-			);
-		}
-		if (Array.isArray(messages))
-			record.modelSteps = messages.filter(
-				(message) =>
-					message &&
-					typeof message === "object" &&
-					message.role === "assistant",
-			).length;
-		record.errors = [
-			...new Set([
-				...record.errors,
-				...items
-					.filter((item) => item.kind === "error")
-					.map((item) => safe(item.message)),
-			]),
-		];
-	}
+	const measure = (
+		record: RunRecord,
+		items: SessionItem[],
+		messages: unknown,
+	) => measureRun(record, items, messages, costOf);
 
 	// Development diagnostics: YTIMESY_SMOKE_TRANSCRIPTS=<dir> keeps each run's
 	// stored items, model messages and a probe of the VM's workspace commands
