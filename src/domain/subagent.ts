@@ -43,6 +43,8 @@ export type SubagentBudget = {
 	readonly steps: number;
 	readonly minutes: number;
 	readonly tokens: number;
+	/** Set by agent_send stop: the step count at which the turn stops. */
+	readonly stopAtStep?: number;
 };
 
 type Level = 1 | 2 | 3;
@@ -142,12 +144,15 @@ export function subagentBudgetState(
 	];
 	const describe = ([name, value, limit]: [string, number, number]) =>
 		`${name} ${Math.round(value).toLocaleString("en-US")}/${limit.toLocaleString("en-US")}`;
+	if (budget.stopAtStep !== undefined) {
+		if (used.steps >= budget.stopAtStep)
+			return { state: "exhausted", reason: "stopped by the parent" };
+		return { state: "wrap-up", reason: "the parent asked you to stop" };
+	}
 	const exhausted = dimensions.find(([, value, limit]) => value >= limit);
 	if (exhausted) return { state: "exhausted", reason: describe(exhausted) };
 	const near = dimensions.find(([, value, limit]) => value >= limit * 0.9);
-	return near
-		? { state: "wrap-up", reason: describe(near) }
-		: { state: "ok" };
+	return near ? { state: "wrap-up", reason: describe(near) } : { state: "ok" };
 }
 
 export type SubagentAdmissionInput = {
@@ -213,6 +218,8 @@ export function subagentReportHeader(input: {
 	readonly minutes: number;
 	readonly tokens: number;
 	readonly costUsd?: number | null;
+	/** costUsd is a list-price estimate for a plan-billed route. */
+	readonly costEstimated?: boolean;
 }) {
 	const tokens =
 		input.tokens >= 1_000_000
@@ -221,7 +228,9 @@ export function subagentReportHeader(input: {
 	const cost =
 		input.costUsd === null || input.costUsd === undefined
 			? ""
-			: ` · $${input.costUsd.toFixed(2)}`;
+			: input.costEstimated
+				? ` · ~$${input.costUsd.toFixed(2)} list-price est.`
+				: ` · $${input.costUsd.toFixed(2)}`;
 	return `[agent ${input.label} ${input.role} ${input.outcome} · ${input.steps} steps · ${Math.max(0, Math.round(input.minutes))}m · ${tokens} tokens${cost}]`;
 }
 

@@ -24,14 +24,23 @@ export async function saveSubagentSpec(
 	if (!result.rowCount) throw new Error("The new agent's session is missing.");
 }
 
-/** Counts one model step against a subagent's budget; returns the new total. */
+/**
+ * Counts one model step against a subagent's budget; returns the new total
+ * and the budget as stored now (agent_send stop changes it mid-turn).
+ */
 export async function recordSubagentStep(sessionId: string) {
 	const result = await database().query(
 		`update agent_session set agent_steps=agent_steps+1
-		 where id=$1 and agent_role is not null returning agent_steps`,
+		 where id=$1 and agent_role is not null returning agent_steps, agent_budget`,
 		[sessionId],
 	);
-	return Number(result.rows[0]?.agent_steps ?? 0);
+	const row = result.rows[0] as
+		| { agent_steps: number; agent_budget: SubagentBudget | null }
+		| undefined;
+	return {
+		steps: Number(row?.agent_steps ?? 0),
+		budget: row?.agent_budget ?? null,
+	};
 }
 
 /** Merges fields into a writer's fork record. */
@@ -95,5 +104,38 @@ export async function forkedWritersDueForTeardown(graceMinutes: number) {
 			userId: row.user_id,
 			vmId: row.vm_id,
 		}),
+	);
+}
+
+/**
+ * Takes a child's undelivered terminal report for a parent that waited on
+ * it (agent with wait: true), so the same report is not delivered again as
+ * a message. Null when there is none yet or delivery already claimed it.
+ */
+export async function takeSubagentReport(childSessionId: string) {
+	const result = await database().query(
+		`update agent_task_event set status='delivered', delivered_at=now()
+		 where child_session_id=$1 and status='pending' and event_type in ('completed','failed')
+		 returning event_type, payload`,
+		[childSessionId],
+	);
+	const row = result.rows[0] as
+		| { event_type: "completed" | "failed"; payload: { message?: unknown } }
+		| undefined;
+	return row
+		? {
+				outcome: row.event_type,
+				report:
+					typeof row.payload?.message === "string" ? row.payload.message : "",
+			}
+		: null;
+}
+
+/** Asks a running subagent to wrap up: its budget treats the next few steps as its last. */
+export async function requestSubagentStop(sessionId: string) {
+	await database().query(
+		`update agent_session set agent_budget=coalesce(agent_budget,'{}'::jsonb) || jsonb_build_object('stopAtStep', agent_steps + 3), updated_at=now()
+		 where id=$1 and agent_role is not null`,
+		[sessionId],
 	);
 }

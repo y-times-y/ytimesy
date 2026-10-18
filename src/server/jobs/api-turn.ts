@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 import type { ModelMessage, ToolSet } from "ai";
 import { Effect } from "effect";
-import { agentPlanState } from "#/domain/agent-plan";
+import {
+	agentPlanState,
+	ENTER_PLAN_MODE_TOOL,
+	PROPOSE_PLAN_TOOL,
+} from "#/domain/agent-plan";
 import {
 	assertApiContextFits,
 	isUserRequestMessage,
@@ -56,13 +60,17 @@ import type {
 	SessionItem,
 	UserMessageItem,
 } from "#/domain/session-item";
+import { isReaderRole, MAX_SUBAGENT_LEVEL } from "#/domain/subagent";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
 import {
 	completedChildrenForReview,
 	hasDelegatedTasks,
 	withDelegationContext,
 } from "../adapters/agent-delegation-context";
-import { agentSessionMetadataForOwner } from "../adapters/agent-sessions";
+import {
+	type AgentSessionRecord,
+	agentSessionMetadataForOwner,
+} from "../adapters/agent-sessions";
 import { completedLifecycleContinuations } from "../adapters/agent-task-command-receipts";
 import { saveAgentTaskResultAndEvent } from "../adapters/agent-task-events";
 import { captureServerAnalytics } from "../adapters/analytics";
@@ -95,6 +103,7 @@ import { loadModelConnection } from "../adapters/model-connections";
 import { nativeWebSearchTools } from "../adapters/native-web-search";
 import { enabledPluginComponents } from "../adapters/plugin-installs";
 import { injectServerPeerMessages } from "../adapters/server-peer-inbox";
+import { subagentAncestors } from "../adapters/subagents";
 import { readVerificationBaseline } from "../adapters/turn-verification";
 import { hasManagedCodexAuth } from "../auth/codex-managed-auth";
 import { discoveredToolsFromSession } from "../services/agent-tool-discovery";
@@ -118,6 +127,11 @@ import {
 import { compactionStateSnapshot } from "../services/compaction-state-snapshot";
 import { withCompletedTaskReviewContext } from "../services/completed-task-review-context";
 import { ensureConversationCodePoint } from "../services/conversation-recovery";
+import {
+	BUILDER_DEFERRED_TOOL_GROUPS,
+	deferredToolSurface,
+	loadedDeferredTools,
+} from "../services/deferred-tools";
 import { harnessLifecycleHooks } from "../services/harness-lifecycle-hooks";
 import { runAgentTaskTool } from "../services/harness-workspace-session";
 import { journaledToolOperation } from "../services/journaled-tool-operation";
@@ -156,6 +170,12 @@ import {
 } from "../services/secret-request-tool";
 import { machinesForAgentSession } from "../services/session-workspace-machines";
 import { recordStepTiming, timed } from "../services/step-timing";
+import {
+	guardSubagentStep,
+	SubagentBudgetExhausted,
+	subagentReport,
+} from "../services/subagent-runtime";
+import { subagentTools } from "../services/subagent-tools";
 import { analyticsAgentRole } from "../services/turn-analytics";
 import { commitCompletedSessionTurn } from "../services/turn-commit";
 import { forgetTurnMemo, turnMemo } from "../services/turn-memo";
@@ -282,6 +302,10 @@ async function runApiTurnAttempt(
 			step.index,
 		));
 	let execution: AgentToolWorkspace | undefined;
+	// Subagents address the parent's and forks' VMs directly, so they get the
+	// machines before this session's scoping; the report needs the session.
+	const unscopedMachines = machines;
+	let subagentSession: AgentSessionRecord | undefined;
 	let commandStop: Promise<void> | undefined;
 	const stopCommands = () => {
 		if (execution)
@@ -425,6 +449,17 @@ async function runApiTurnAttempt(
 		if (process.env.YTIMESY_HARNESS_EVALUATION_ENABLED === "1")
 			evaluation = await evaluationRunForTask(owner.userId, owner.id);
 		const variant = await turnHarnessVariant(turn.id, owner.userId);
+		if (owner.agentRole) subagentSession = owner;
+		// Builder subagents (harness variant subagents=on): the agent tools,
+		// deferred tool loading and per-level budgets. Children carry the role.
+		const subagentsOn = variant.subagents === "on" || !!owner.agentRole;
+		const subagentLevel = owner.agentRole
+			? (
+					await turnMemo(`${turn.id}:subagent-ancestors`, () =>
+						subagentAncestors(owner.userId, owner.id),
+					)
+				).length
+			: 0;
 		const apiSettings: ApiTurnSettings = subscription
 			? {}
 			: (route.settings ?? {});
@@ -649,8 +684,10 @@ async function runApiTurnAttempt(
 		const planState = agentPlanState(items);
 		const planLock =
 			!owner.parentSessionId && !evaluation ? new PlanLock(planState) : null;
-		// Writable builders get the validated shell surface.
-		const shellBuilder = writable;
+		// Writable builders get the validated shell surface; so do read-only
+		// subagents, whose commands run as the reader Linux user that cannot
+		// write the checkout (reader-workspace-machines.ts).
+		const shellBuilder = writable || isReaderRole(owner.agentRole);
 		const repositoryContext = automaticRepositoryContext({
 			tools: originalTools,
 			workspace,
@@ -768,16 +805,37 @@ async function runApiTurnAttempt(
 				() => hasDelegatedTasks(owner.userId, owner.id),
 				(present) => present || !canDelegate,
 			);
-		const tools = withCodeMode(
-			turnTools({
-				surfaceTools,
-				mcp,
-				plugins,
-				webSearch,
-				hooks,
-				planLock,
-				projectSecrets,
-			}),
+		// The builder and subagents above the deepest level may delegate.
+		const delegation: ToolSet =
+			subagentsOn &&
+			surface.lean &&
+			(owner.agentRole
+				? subagentLevel < MAX_SUBAGENT_LEVEL
+				: !owner.parentSessionId)
+				? withRedactedResults(
+						subagentTools({
+							machines: unscopedMachines,
+							parent: owner as AgentSessionRecord,
+							workspace,
+							signal: abort.signal,
+							waitDeadlineAt: step?.waitDeadlineAt,
+						}),
+						projectSecrets?.redact ?? [],
+					)
+				: {};
+		const allTools = withCodeMode(
+			{
+				...turnTools({
+					surfaceTools,
+					mcp,
+					plugins,
+					webSearch,
+					hooks,
+					planLock,
+					projectSecrets,
+				}),
+				...delegation,
+			},
 			// A development harness variant on a lean surface only (docs/parallel-evals.md).
 			variant.codeMode === "on" && surface.lean
 				? {
@@ -789,6 +847,25 @@ async function runApiTurnAttempt(
 					}
 				: null,
 		);
+		// Rarely used tools load on demand through find_tools (subagents=on on a
+		// lean surface); loads append, so earlier requests' tool lists stay a
+		// cached prefix.
+		const deferral =
+			subagentsOn && surface.lean
+				? deferredToolSurface({
+						tools: allTools,
+						groups: BUILDER_DEFERRED_TOOL_GROUPS,
+						loaded: loadedDeferredTools(
+							items,
+							messages,
+							BUILDER_DEFERRED_TOOL_GROUPS,
+						),
+						forceLoaded: planLock?.planning
+							? [ENTER_PLAN_MODE_TOOL, PROPOSE_PLAN_TOOL]
+							: [],
+					})
+				: null;
+		const tools = deferral?.tools ?? allTools;
 		if (planLock?.planning && firstStep)
 			messages = withPlanModeNotice(
 				messages,
@@ -882,6 +959,7 @@ async function runApiTurnAttempt(
 			reasoning: subscription?.reasoning ?? apiSettings.reasoning,
 			speed: apiSettings.speed,
 			knownTools: discoveredToolsFromSession(items),
+			...(deferral ? { toolOrder: deferral.order } : {}),
 			toolSurface,
 			...(planLock
 				? {
@@ -953,6 +1031,7 @@ async function runApiTurnAttempt(
 					secretNames: projectSecrets?.names,
 					leanShape: surface.lean?.shape,
 					leanWorkingDirectory,
+					deferredTools: deferral?.deferred,
 				},
 				memory,
 			),
@@ -977,6 +1056,17 @@ async function runApiTurnAttempt(
 			afterTools: async (history) =>
 				hooks.drain(await repositoryContext.afterTools(history)),
 			prepareMessages: async (history) => {
+				if (owner.agentRole) {
+					// Counted and checked before every model step: a wrap-up
+					// notice at 90%, the turn stops at 100% (reported as such).
+					failureStage = "budget";
+					history = await guardSubagentStep({
+						session: owner,
+						items,
+						messages: history,
+					});
+					failureStage = "model";
+				}
 				history = hooks.drain(await repositoryContext.prepare(history));
 				history = await withBackgroundCommandContext({
 					workspace,
@@ -1214,32 +1304,35 @@ async function runApiTurnAttempt(
 			await timed("turn:stopCommands", () =>
 				stopApiTurnCommands(execution as AgentToolWorkspace, turn.id),
 			);
-		await timed("turn:commit", () =>
-			commitCompletedSessionTurn(
-				{ ...owner, providerRef: execution?.vm ?? owner.providerRef },
-				items,
-				{
-					exec: (providerRef, argv, _env, timeout) =>
-						(execution?.machines ?? machines).exec(
-							WorkspaceId(providerRef),
-							posixShellCommand(argv),
-							timeout,
-						),
-					writeTextFile: (providerRef, path, contents) =>
-						(execution?.machines ?? machines).writeTextFile(
-							WorkspaceId(providerRef),
-							path,
-							contents,
-						),
-					readTextFile: (providerRef, path) =>
-						(execution?.machines ?? machines).readTextFile(
-							WorkspaceId(providerRef),
-							path,
-						),
-				},
-				abort.signal,
-			),
-		);
+		// A subagent's work reaches its parent as a report (a writer's as a
+		// patch and ref), never as a commit or a published branch.
+		if (!owner.agentRole)
+			await timed("turn:commit", () =>
+				commitCompletedSessionTurn(
+					{ ...owner, providerRef: execution?.vm ?? owner.providerRef },
+					items,
+					{
+						exec: (providerRef, argv, _env, timeout) =>
+							(execution?.machines ?? machines).exec(
+								WorkspaceId(providerRef),
+								posixShellCommand(argv),
+								timeout,
+							),
+						writeTextFile: (providerRef, path, contents) =>
+							(execution?.machines ?? machines).writeTextFile(
+								WorkspaceId(providerRef),
+								path,
+								contents,
+							),
+						readTextFile: (providerRef, path) =>
+							(execution?.machines ?? machines).readTextFile(
+								WorkspaceId(providerRef),
+								path,
+							),
+					},
+					abort.signal,
+				),
+			);
 		abort.signal.throwIfAborted();
 		failureStage = "coordination";
 		if (!(await coordinateConversationTurn("release", control)))
@@ -1265,18 +1358,25 @@ async function runApiTurnAttempt(
 			);
 		});
 		if (owner.parentSessionId) {
+			const finalText = items
+				.slice(lastUser + 1)
+				.filter((item) => item.kind === "agentMessage")
+				.map((item) => item.text)
+				.join("\n");
 			const eventId = await saveAgentTaskResultAndEvent({
 				sessionId: owner.id,
 				turnId: turn.id,
 				eventType: "completed",
-				summary:
-					items
-						.slice(lastUser + 1)
-						.filter((item) => item.kind === "agentMessage")
-						.map((item) => item.text)
-						.join("\n")
-						.slice(-16000) ||
-					"Turn ended without a recorded final summary; inspect the task before accepting it.",
+				summary: owner.agentRole
+					? await subagentReport({
+							machines: unscopedMachines,
+							session: owner as AgentSessionRecord,
+							items,
+							outcome: "finished",
+							text: finalText.slice(-9000) || "(no final report)",
+						})
+					: finalText.slice(-16000) ||
+						"Turn ended without a recorded final summary; inspect the task before accepting it.",
 			});
 			if (eventId) await enqueueAgentTaskEvent(eventId).catch(() => {});
 		}
@@ -1412,22 +1512,24 @@ async function runApiTurnAttempt(
 		}
 		const failureMessage = progressFailed
 			? "Turn progress could not be saved. Inspect the task before retrying."
-			: coordinationFailure
-				? apiTurnFailureMessage("coordination", coordinationFailure)
-				: abort.signal.reason instanceof TurnTimeLimitReached
-					? TURN_TIME_LIMIT_MESSAGE
-					: abort.signal.aborted
-						? `Run stopped. ${abort.signal.reason instanceof Error && ["Turn ownership or cancellation state changed.", "Conversation coordination lease was lost.", "Turn heartbeat or coordination service became unavailable."].includes(abort.signal.reason.message) ? `${abort.signal.reason.message} ` : ""}Inspect any in-flight command before continuing.`
-						: exhausted
-							? apiTurnFailureMessage(failureStage, error).replace(
-									" No fallback was used.",
-									"",
-								) +
-								exhausted +
-								developmentFailureDetail(error)
-							: (paused?.message ??
-									apiTurnFailureMessage(failureStage, error)) +
-								developmentFailureDetail(error);
+			: error instanceof SubagentBudgetExhausted
+				? `${error.message} The work so far was reported to the parent agent.`
+				: coordinationFailure
+					? apiTurnFailureMessage("coordination", coordinationFailure)
+					: abort.signal.reason instanceof TurnTimeLimitReached
+						? TURN_TIME_LIMIT_MESSAGE
+						: abort.signal.aborted
+							? `Run stopped. ${abort.signal.reason instanceof Error && ["Turn ownership or cancellation state changed.", "Conversation coordination lease was lost.", "Turn heartbeat or coordination service became unavailable."].includes(abort.signal.reason.message) ? `${abort.signal.reason.message} ` : ""}Inspect any in-flight command before continuing.`
+							: exhausted
+								? apiTurnFailureMessage(failureStage, error).replace(
+										" No fallback was used.",
+										"",
+									) +
+									exhausted +
+									developmentFailureDetail(error)
+								: (paused?.message ??
+										apiTurnFailureMessage(failureStage, error)) +
+									developmentFailureDetail(error);
 		// The heartbeat or the room usually notices the user's Stop before progress does.
 		const userCancelled =
 			abort.signal.reason instanceof ApiTurnCancelled ||
@@ -1466,11 +1568,34 @@ async function runApiTurnAttempt(
 				() => {},
 			);
 		if (saved === "failed") {
+			// A subagent still reports: what it said so far and, for a writer,
+			// the partial patch (its work in progress is committed for it).
+			const summary = subagentSession
+				? await subagentReport({
+						machines: unscopedMachines,
+						session: subagentSession,
+						items,
+						outcome:
+							error instanceof SubagentBudgetExhausted
+								? "budget exhausted"
+								: "failed",
+						text: [
+							failureMessage,
+							items
+								.filter((item) => item.kind === "agentMessage")
+								.map((item) => item.text)
+								.join("\n")
+								.slice(-6000),
+						]
+							.filter(Boolean)
+							.join("\n\n"),
+					}).catch(() => failureMessage)
+				: failureMessage;
 			const eventId = await saveAgentTaskResultAndEvent({
 				sessionId: turn.session_id,
 				turnId: turn.id,
 				eventType: "failed",
-				summary: failureMessage,
+				summary,
 			});
 			if (eventId) await enqueueAgentTaskEvent(eventId).catch(() => {});
 		}

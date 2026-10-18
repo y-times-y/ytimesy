@@ -39,6 +39,7 @@ import {
 import { deliverPrRepairEvents } from "./pr-repair";
 import { captureSessionCheckpoint } from "./session-checkpoint";
 import { recoverStaleQueuedWorkspaces } from "./stale-workspace-queue";
+import { teardownSubagentForks } from "./subagent-runtime";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 export async function deliverBackgroundJob(
@@ -56,6 +57,8 @@ export async function deliverBackgroundJob(
 				case "supervise":
 					await recoverChildTurnEvents();
 					await superviseAgentChildren(machines);
+					// Writer subagents' forks, 30 minutes after their report.
+					await teardownSubagentForks(machines);
 					break;
 				case "delivery":
 					await relayConversationDeliveriesOnce();
