@@ -20,6 +20,7 @@ import type { ComponentProps } from "react";
 
 import { Button } from "#/components/ui/button.tsx";
 import { Spinner } from "#/components/ui/spinner.tsx";
+import { safeReturnTo, withReturnTo } from "#/domain/return-to";
 import { cn } from "#/lib/utils.ts";
 import { LastUsedBadge } from "./last-login-method/last-used-badge";
 
@@ -52,7 +53,10 @@ export function ProviderButton({
 		socialSignInMode,
 	} = useAuth();
 
-	const callbackURL = `${baseURL}${redirectTo}`;
+	const returnTo = safeReturnTo(redirectTo);
+	const callbackURL = `${baseURL}${returnTo}`;
+	// A failed or cancelled provider sign-in comes back to sign-in still holding the return path.
+	const errorCallbackURL = `${baseURL}${withReturnTo("/auth/sign-in", returnTo)}`;
 	const { fetchOptions, resetFetchOptions } = useFetchOptions();
 
 	const { mutate: signInSocial, isPending: signInSocialPending } =
@@ -81,12 +85,17 @@ export function ProviderButton({
 					callbackURL,
 					requestSignUp: view === "signUp",
 				},
-				{ onSuccess: () => navigate({ to: redirectTo }) },
+				{ onSuccess: () => navigate({ to: returnTo }) },
 			);
 			return;
 		}
 
-		signInSocial({ provider: providerId, callbackURL, fetchOptions });
+		signInSocial({
+			provider: providerId,
+			callbackURL,
+			errorCallbackURL,
+			fetchOptions,
+		});
 	};
 
 	return (
