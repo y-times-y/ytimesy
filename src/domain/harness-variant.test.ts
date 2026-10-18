@@ -16,6 +16,7 @@ describe("harness variants", () => {
 			toolSurface: "lean",
 			promptCacheScope: "chat",
 			codeMode: "off",
+			subagents: "off",
 		});
 	});
 
@@ -31,6 +32,7 @@ describe("harness variants", () => {
 			toolSurface: "current",
 			promptCacheScope: "chat",
 			codeMode: "off",
+			subagents: "off",
 		});
 		expect(
 			harnessVariantFromFlags(["memoryWording=notes,toolSurface=lean-native"]),
@@ -40,6 +42,7 @@ describe("harness variants", () => {
 			toolSurface: "lean-native",
 			promptCacheScope: "chat",
 			codeMode: "off",
+			subagents: "off",
 		});
 		expect(
 			harnessVariantFromFlags(["memoryWording=notes,memoryWriter=both"]),
@@ -69,6 +72,7 @@ describe("harness variants", () => {
 			toolSurface: "lean",
 			promptCacheScope: "chat",
 			codeMode: "off",
+			subagents: "off",
 		});
 		expect(harnessVariantFromUnknown({ memoryWriter: "agent" })).toEqual({
 			...DEFAULT_HARNESS_VARIANT,
@@ -97,6 +101,23 @@ describe("harness variants", () => {
 		expect(harnessVariantLabel(harnessVariantFromFlags(["codeMode=on"]))).toBe(
 			"codeMode=on",
 		);
+	});
+
+	it("offers subagents only when asked", () => {
+		expect(DEFAULT_HARNESS_VARIANT.subagents).toBe("off");
+		expect(harnessVariantFromFlags(["subagents=on"]).subagents).toBe("on");
+		expect(harnessVariantFromUnknown({ subagents: "on" }).subagents).toBe("on");
+		expect(harnessVariantFromUnknown({ subagents: "full" }).subagents).toBe(
+			"off",
+		);
+		expect(() => harnessVariantFromFlags(["subagents=full"])).toThrow(
+			"accepts off, on",
+		);
+		expect(
+			harnessVariantLabel(
+				harnessVariantFromFlags(["subagents=on,codeMode=on"]),
+			),
+		).toBe("codeMode=on,subagents=on");
 	});
 
 	it("keys the prompt cache per chat unless the variant shares it per account", () => {

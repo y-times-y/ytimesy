@@ -45,6 +45,14 @@ export const HARNESS_VARIANT_VALUES = {
 	 * surface unchanged (the default).
 	 */
 	codeMode: ["off", "on"],
+	/**
+	 * Builder subagents (docs/subagents.md): on gives the builder the agent
+	 * and agent_send tools (loaded on demand through find_tools, with the
+	 * other rarely used tools), the orchestration prompt block, per-level
+	 * budgets and the subagent tree; off offers the surface unchanged (the
+	 * default) until the evals show it pays off.
+	 */
+	subagents: ["off", "on"],
 } as const;
 
 type Values = typeof HARNESS_VARIANT_VALUES;
@@ -56,6 +64,7 @@ export type MemoryWriter = HarnessVariant["memoryWriter"];
 export type HarnessToolSurfaceId = HarnessVariant["toolSurface"];
 export type PromptCacheScope = HarnessVariant["promptCacheScope"];
 export type CodeMode = HarnessVariant["codeMode"];
+export type SubagentsMode = HarnessVariant["subagents"];
 
 export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	memoryWording: "rules",
@@ -63,6 +72,7 @@ export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	toolSurface: "lean",
 	promptCacheScope: "chat",
 	codeMode: "off",
+	subagents: "off",
 };
 
 /**

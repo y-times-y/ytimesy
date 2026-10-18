@@ -40,11 +40,16 @@ export function apiTokenUsage(usage: LanguageModelUsage): ApiTokenUsage {
 			: raw?.prompt_tokens !== undefined && cacheWriteTokens === null
 				? null
 				: tokenCount(usage.inputTokenDetails.noCacheTokens));
+	// OpenRouter reports the request's dollars in its usage object.
+	const cost = raw?.cost;
 	return {
 		inputTokens,
 		outputTokens: tokenCount(usage.outputTokens),
 		uncachedInputTokens,
 		cacheReadTokens,
 		cacheWriteTokens,
+		...(typeof cost === "number" && Number.isFinite(cost) && cost >= 0
+			? { costUsd: cost }
+			: {}),
 	};
 }
