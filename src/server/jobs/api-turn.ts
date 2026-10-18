@@ -343,9 +343,13 @@ async function runApiTurnAttempt(
 		| undefined;
 	const saveCheckpoint = () =>
 		timed("turn:checkpoint", async () => {
+			const saved = () =>
+				checkpointed?.messages === messages && checkpointed.items === items;
+			// The checkpoint writes the newest items, so a snapshot still waiting
+			// to be written would only cost a write (and a relay) before it.
+			if (!saved()) progress.supersede();
 			await progress.drain();
-			if (checkpointed?.messages === messages && checkpointed.items === items)
-				return;
+			if (saved()) return;
 			const saving = { messages, items };
 			await checkpointApiTurn(turn, saving.messages, saving.items);
 			checkpointed = saving;
@@ -631,10 +635,16 @@ async function runApiTurnAttempt(
 		// overlaps the remaining setup. It is the same memoized preparation, so a
 		// failure still surfaces where the workspace is awaited.
 		if (firstStep && writable) void workspace().catch(() => {});
-		const running = timed(
-			"turn:publishRunning",
-			() => publishProgress?.("running") ?? Promise.resolve(),
-		);
+		// A later durable step starts from items its predecessor just
+		// checkpointed (and delivered); republishing them is a wasted write and
+		// relay on every step.
+		const running =
+			step && step.index > 1
+				? Promise.resolve()
+				: timed(
+						"turn:publishRunning",
+						() => publishProgress?.("running") ?? Promise.resolve(),
+					);
 		// Awaited below; this only keeps an early failure from being unhandled.
 		running.catch(() => {});
 		const originalTools = apiAgentTools({
