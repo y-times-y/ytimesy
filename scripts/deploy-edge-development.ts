@@ -55,6 +55,10 @@ secrets.YTIMESY_ENVIRONMENT = "development";
 // Turns, builds and jobs start VMs here; without admission their runtime caps
 // are never extended and usage isn't held against the allowance.
 secrets.YTIMESY_INFRASTRUCTURE_ADMISSION = "true";
+// New chat, environment and job objects start near the development database
+// (Supabase us-west-2); see src/server/edge/durable-object-location.ts.
+secrets.YTIMESY_DURABLE_OBJECT_LOCATION_HINT =
+	process.env.YTIMESY_DURABLE_OBJECT_LOCATION_HINT || "wnam";
 // Development only: throwaway eval users (dev_eval_user) borrow their owner's
 // Codex login and carry per-run harness variants. Production never sets it.
 secrets.YTIMESY_DEV_EVAL_USERS = "1";

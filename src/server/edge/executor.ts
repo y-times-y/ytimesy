@@ -50,6 +50,7 @@ import { provideCodeModeWasmModule } from "../services/code-mode-sandbox";
 import { timed, withStepTrace } from "../services/step-timing";
 import { runBackgroundJob, startBackgroundJob } from "./background-jobs";
 import { SqliteConversationSteps } from "./conversation-step-storage";
+import { durableObjectLocation } from "./durable-object-location";
 import type { EdgeExecutorEnvironment } from "./environment";
 import { authorizeGitProxy } from "./github-git-authorization";
 import { withEdgeModelEndpoints } from "./model-endpoint";
@@ -673,9 +674,10 @@ export default {
 				if (!secret || secret.length < 32)
 					return new Response(null, { status: 503 });
 				return routeRealtimeRequest(request, secret, (scope, authenticated) =>
-					env.MODEL_CONVERSATIONS.getByName(modelConversationName(scope)).fetch(
-						authenticated,
-					),
+					env.MODEL_CONVERSATIONS.getByName(
+						modelConversationName(scope),
+						durableObjectLocation(),
+					).fetch(authenticated),
 				);
 			}
 			if (new URL(request.url).pathname === "/jobs/start") {
@@ -784,6 +786,7 @@ export default {
 					!scope ||
 					!(await env.MODEL_CONVERSATIONS.getByName(
 						modelConversationName(scope),
+						durableObjectLocation(),
 					).startTurn(scope, turn.data))
 				)
 					return new Response(null, { status: 409 });
@@ -816,9 +819,10 @@ export default {
 				}
 				const parsed = environmentWorkflowRequest.safeParse(value);
 				if (!parsed.success) return new Response(null, { status: 400 });
-				await env.PROJECT_ENVIRONMENTS.getByName(parsed.data.workspaceId).start(
-					parsed.data,
-				);
+				await env.PROJECT_ENVIRONMENTS.getByName(
+					parsed.data.workspaceId,
+					durableObjectLocation(),
+				).start(parsed.data);
 				return new Response(null, { status: 202 });
 			}
 			if (new URL(request.url).pathname.startsWith("/git/")) {
@@ -851,6 +855,7 @@ export default {
 					stage = "model-chat";
 					return await env.MODEL_CONVERSATIONS.getByName(
 						modelConversationName(scope),
+						durableObjectLocation(),
 					).fetch(authenticated);
 				},
 			);

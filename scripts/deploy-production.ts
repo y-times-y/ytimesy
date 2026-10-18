@@ -127,6 +127,10 @@ secrets.BACKGROUND_EXECUTION_ENABLED = "1";
 secrets.YTIMESY_BACKGROUND_CRON_ENABLED = "1";
 secrets.YTIMESY_MODEL_EXECUTION_TARGET = "durable-object";
 secrets.YTIMESY_INFRASTRUCTURE_ADMISSION = "true";
+// New chat, environment and job objects start near the production database
+// (Supabase us-east-2, Ohio); see src/server/edge/durable-object-location.ts.
+secrets.YTIMESY_DURABLE_OBJECT_LOCATION_HINT =
+	process.env.YTIMESY_PRODUCTION_DURABLE_OBJECT_LOCATION_HINT || "enam";
 // Auth email goes out through the EMAIL send_email binding (wrangler config).
 secrets.AUTH_EMAIL_FROM = process.env.AUTH_EMAIL_FROM || "noreply@ytimesy.com";
 for (const name of [
