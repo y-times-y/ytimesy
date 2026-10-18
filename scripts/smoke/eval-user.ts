@@ -25,8 +25,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { parseArgs, promisify } from "node:util";
 import { Freestyle } from "freestyle";
-import { repositoriesForProject } from "#/domain/projects";
-import { listProjects } from "#/server/adapters/projects";
 import { removeUserPullRequestEvidence } from "#/server/services/pr-evidence-cleanup";
 import {
 	DEFAULT_HARNESS_VARIANT,
@@ -316,15 +314,10 @@ async function releaseUser(manifest: Manifest): Promise<string[]> {
 				await removeChatObjects(userId, sessionId).catch(() => {
 					leftovers.push(`chat-files:${sessionId}`);
 				});
-		// Pull request evidence refs (prEvidence) this user left in project repos.
-		const evidence = await removeUserPullRequestEvidence(
-			userId,
-			(await listProjects(userId)).flatMap((project) =>
-				repositoriesForProject(project),
-			),
-			{ enabled: async () => true },
-		).catch(() => ({ removed: 0, failed: ["unknown"] }));
-		leftovers.push(...evidence.failed.map((name) => `pr-evidence:${name}`));
+		// Pull request evidence (prEvidence) media in private storage.
+		await removeUserPullRequestEvidence(userId).catch(() => {
+			leftovers.push(`pr-evidence:${userId}`);
+		});
 		await deleteAccountRecords(userId).catch((error) => {
 			leftovers.push(`user:${userId} (${String(error).slice(0, 120)})`);
 		});

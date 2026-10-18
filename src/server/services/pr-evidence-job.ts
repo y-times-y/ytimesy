@@ -96,6 +96,8 @@ export async function runPullRequestEvidenceJob(
 	};
 	return attachPullRequestEvidence({
 		userId: job.userId,
+		projectId: session.projectId,
+		sessionId: job.sessionId,
 		runtime,
 		providerRef,
 		directory: repositoryDirectory(repository.fullName),

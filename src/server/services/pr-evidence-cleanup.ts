@@ -1,109 +1,131 @@
-import { repositoriesForProject } from "#/domain/projects";
-import { prEvidenceEvalUserIds } from "../adapters/dev-eval-users";
+import { appOpenPullNumbers } from "../adapters/github/pr-evidence-body";
 import {
-	appEvidenceGitApi,
-	deleteUserEvidenceRefs,
-	type EvidenceGitApi,
-	pruneEvidenceRefs,
-} from "../adapters/github/pr-evidence-refs";
-import { listProjects } from "../adapters/projects";
+	deleteEvidenceRows,
+	type EvidenceScope,
+	evidenceOfClosedPulls,
+	evidenceOfOwner,
+	evidenceRepositories,
+	expiredEvidence,
+	failStaleCaptures,
+} from "../adapters/pr-evidence-records";
 import {
-	evidenceUserLabelFor,
-	pullRequestEvidenceEnabled,
-} from "./pr-evidence";
-
-type Repository = {
-	readonly fullName: string;
-	readonly installationId: number | string;
-};
-
-type GitFor = (
-	installationId: number | string,
-	fullName: string,
-) => Promise<EvidenceGitApi>;
-
-const uniqueRepositories = (repositories: readonly Repository[]) => [
-	...new Map(
-		repositories.map((repo) => [repo.fullName.toLowerCase(), repo]),
-	).values(),
-];
+	type EvidenceStore,
+	evidenceCapturePrefix,
+	evidenceProjectPrefix,
+	evidenceUserPrefix,
+	r2EvidenceStore,
+} from "../adapters/pr-evidence-store";
 
 /**
- * Removes a user's pull request evidence refs from the given repositories
- * (project or account deletion). Best effort: a repository the app can no
- * longer reach is reported, never thrown, so deletion itself proceeds.
+ * Removing pull request evidence: media first (private R2), then rows, so a
+ * failure leaves a row the next sweep retries rather than orphaned media.
+ * Nothing in the user's repositories is touched; evidence never lives there.
  */
-export async function removeUserPullRequestEvidence(
-	userId: string,
-	repositories: readonly Repository[],
-	deps: {
-		git?: GitFor;
-		/** Skip users who never had evidence on (no GitHub calls for them). */
-		enabled?: (userId: string) => Promise<boolean>;
-	} = {},
+type CleanupDependencies = {
+	store?: EvidenceStore;
+	rows?: {
+		ofOwner: typeof evidenceOfOwner;
+		expired: typeof expiredEvidence;
+		repositories: typeof evidenceRepositories;
+		ofClosedPulls: typeof evidenceOfClosedPulls;
+		failStale: typeof failStaleCaptures;
+		remove: typeof deleteEvidenceRows;
+	};
+	openPulls?: typeof appOpenPullNumbers;
+	now?: Date;
+};
+
+const defaultRows = {
+	ofOwner: evidenceOfOwner,
+	expired: expiredEvidence,
+	repositories: evidenceRepositories,
+	ofClosedPulls: evidenceOfClosedPulls,
+	failStale: failStaleCaptures,
+	remove: deleteEvidenceRows,
+};
+
+async function removeCaptures(
+	rows: readonly EvidenceScope[],
+	store: EvidenceStore,
+	remove: typeof deleteEvidenceRows,
 ) {
-	const enabled = deps.enabled ?? ((id) => pullRequestEvidenceEnabled(id));
-	if (!(await enabled(userId).catch(() => true)))
-		return { removed: 0, failed: [] as string[] };
-	const label = evidenceUserLabelFor(userId);
-	let removed = 0;
-	const failed: string[] = [];
-	for (const repo of uniqueRepositories(repositories)) {
+	const removed: string[] = [];
+	for (const row of rows) {
 		try {
-			const api = await (deps.git ?? appEvidenceGitApi)(
-				repo.installationId,
-				repo.fullName,
-			);
-			removed += await deleteUserEvidenceRefs(api, label);
+			await store.removePrefix(evidenceCapturePrefix(row, row.id));
+			removed.push(row.id);
 		} catch {
-			failed.push(repo.fullName);
+			console.warn("Pull request evidence media was left for the next sweep.");
 		}
 	}
-	if (failed.length)
-		console.warn("Pull request evidence refs were left in place.", {
-			repositories: failed,
-		});
-	return { removed, failed };
+	await remove(removed);
+	return removed.length;
+}
+
+/** Project deletion: every capture of the project, before its rows cascade. */
+export async function removeProjectPullRequestEvidence(
+	userId: string,
+	projectId: string,
+	deps: CleanupDependencies = {},
+) {
+	const store = deps.store ?? r2EvidenceStore;
+	const rows = deps.rows ?? defaultRows;
+	await store.removePrefix(evidenceProjectPrefix(userId, projectId));
+	const owned = await rows.ofOwner(userId, projectId);
+	await rows.remove(owned.map((row) => row.id));
+	return owned.length;
+}
+
+/** Account deletion and eval-user release: everything the user has stored. */
+export async function removeUserPullRequestEvidence(
+	userId: string,
+	deps: CleanupDependencies = {},
+) {
+	const store = deps.store ?? r2EvidenceStore;
+	const rows = deps.rows ?? defaultRows;
+	await store.removePrefix(evidenceUserPrefix(userId));
+	const owned = await rows.ofOwner(userId);
+	await rows.remove(owned.map((row) => row.id));
+	return owned.length;
 }
 
 /**
- * The periodic expiry sweep (maintenance action evidence-expiry): for every
- * user with evidence on, removes refs of pull requests that are no longer
- * open and captures past the retention period, even when no new capture runs
- * in that repository. Returns how many refs were removed.
+ * The periodic expiry sweep (maintenance action evidence-expiry): removes
+ * captures past their 30-day expiry and captures of pull requests that are
+ * no longer open, and reports captures whose job died as failed. Returns how
+ * many captures were removed.
  */
 export async function expirePullRequestEvidence(
-	deps: {
-		users?: () => Promise<string[]>;
-		repositories?: (userId: string) => Promise<readonly Repository[]>;
-		git?: GitFor;
-		now?: Date;
-	} = {},
+	deps: CleanupDependencies = {},
 ) {
-	const users = await (deps.users ?? prEvidenceEvalUserIds)();
-	const repositoriesOf =
-		deps.repositories ??
-		(async (userId: string) =>
-			(await listProjects(userId)).flatMap((project) =>
-				repositoriesForProject(project),
-			));
-	let removed = 0;
-	for (const userId of users) {
-		const label = evidenceUserLabelFor(userId);
-		for (const repo of uniqueRepositories(await repositoriesOf(userId))) {
-			try {
-				const api = await (deps.git ?? appEvidenceGitApi)(
-					repo.installationId,
-					repo.fullName,
-				);
-				removed += (await pruneEvidenceRefs(api, label, { now: deps.now }))
-					.length;
-			} catch {
-				console.warn("Pull request evidence expiry skipped a repository.", {
-					repository: repo.fullName,
-				});
-			}
+	const store = deps.store ?? r2EvidenceStore;
+	const rows = deps.rows ?? defaultRows;
+	const now = deps.now ?? new Date();
+	await rows.failStale(now);
+	let removed = await removeCaptures(
+		await rows.expired(now),
+		store,
+		rows.remove,
+	);
+	for (const repository of await rows.repositories()) {
+		let open: Set<number>;
+		try {
+			open = await (deps.openPulls ?? appOpenPullNumbers)(
+				repository.installationId,
+				repository.fullName,
+			);
+		} catch {
+			// Unreachable repositories keep their evidence until it expires.
+			console.warn("Pull request evidence expiry skipped a repository.", {
+				repository: repository.fullName,
+			});
+			continue;
 		}
+		removed += await removeCaptures(
+			await rows.ofClosedPulls(repository, open),
+			store,
+			rows.remove,
+		);
 	}
 	return removed;
 }

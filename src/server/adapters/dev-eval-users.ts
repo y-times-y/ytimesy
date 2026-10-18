@@ -68,15 +68,3 @@ export async function harnessVariantForUser(
 		? harnessVariantFromUnknown(row.harness_variant)
 		: DEFAULT_HARNESS_VARIANT;
 }
-
-/**
- * Eval users whose harness variant turns on pull request evidence (for the
- * periodic evidence expiry sweep). Empty outside development.
- */
-export async function prEvidenceEvalUserIds(): Promise<string[]> {
-	if (!devEvalUsersEnabled()) return [];
-	const result = await database().query<{ user_id: string }>(
-		"select user_id from dev_eval_user where harness_variant->>'prEvidence'='on' order by created_at limit 500",
-	);
-	return result.rows.map((row) => row.user_id);
-}

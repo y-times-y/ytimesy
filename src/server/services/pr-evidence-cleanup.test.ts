@@ -1,92 +1,180 @@
-import { describe, expect, it, vi } from "vitest";
-import type { EvidenceGitApi } from "../adapters/github/pr-evidence-refs";
-import { evidenceUserLabelFor } from "./pr-evidence";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	type EvidenceStore,
+	evidenceCapturePrefix,
+	evidenceObjectKey,
+} from "../adapters/pr-evidence-store";
 import {
 	expirePullRequestEvidence,
+	removeProjectPullRequestEvidence,
 	removeUserPullRequestEvidence,
 } from "./pr-evidence-cleanup";
 
-vi.mock("../adapters/dev-eval-users", () => ({
-	harnessVariantForUser: vi.fn(),
-	prEvidenceEvalUserIds: vi.fn(async () => []),
-}));
-vi.mock("../adapters/projects", () => ({ listProjects: vi.fn() }));
+const projectA = "0f8b6c1e-2d3a-4b5c-8d9e-0a1b2c3d4e5f";
+const projectB = "1f8b6c1e-2d3a-4b5c-8d9e-0a1b2c3d4e5f";
+const capture = (n: number) => `a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5${n}`;
 
-function repository(refs: Map<string, string>, open: number[] = []) {
-	return {
-		createBlob: vi.fn(),
-		createTree: vi.fn(),
-		createCommit: vi.fn(),
-		setRef: vi.fn(),
-		deleteRef: vi.fn(async (ref: string) => {
-			refs.delete(`refs/${ref}`);
-		}),
-		listRefs: vi.fn(async (prefix: string) =>
-			[...refs]
-				.filter(([ref]) => ref.startsWith(`refs/${prefix}`))
-				.map(([ref, sha]) => ({ ref, sha })),
-		),
-		commitDate: vi.fn(async () => new Date().toISOString()),
-		openPullNumbers: vi.fn(async () => new Set(open)),
-	} satisfies EvidenceGitApi;
+type Row = {
+	id: string;
+	userId: string;
+	projectId: string;
+	fullName: string;
+	pullNumber: number;
+	expired: boolean;
+};
+
+let objects: Set<string>;
+let rows: Row[];
+let store: EvidenceStore;
+
+function seed(row: Row) {
+	rows.push(row);
+	for (const name of ["01-home.png", "recording.webm"])
+		objects.add(evidenceObjectKey(row, row.id, name));
 }
 
-const label = evidenceUserLabelFor("alice");
+const fakeRows = () => ({
+	ofOwner: vi.fn(async (userId: string, projectId?: string) =>
+		rows.filter(
+			(row) =>
+				row.userId === userId && (!projectId || row.projectId === projectId),
+		),
+	),
+	expired: vi.fn(async () => rows.filter((row) => row.expired)),
+	repositories: vi.fn(async () => [
+		...new Map(
+			rows.map((row) => [
+				row.fullName,
+				{ installationId: 2, fullName: row.fullName },
+			]),
+		).values(),
+	]),
+	ofClosedPulls: vi.fn(
+		async (repo: { fullName: string }, open: ReadonlySet<number>) =>
+			rows.filter(
+				(row) => row.fullName === repo.fullName && !open.has(row.pullNumber),
+			),
+	),
+	failStale: vi.fn(async () => 0),
+	remove: vi.fn(async (ids: readonly string[]) => {
+		rows = rows.filter((row) => !ids.includes(row.id));
+		return ids.length;
+	}),
+});
 
-describe("removing a user's evidence", () => {
-	it("deletes the user's refs from each repository once, and reports unreachable ones", async () => {
-		const refs = new Map([
-			[`refs/ytimesy/evidence/${label}/pr-1`, "a".repeat(40)],
-			[
-				`refs/ytimesy/evidence/${evidenceUserLabelFor("bob")}/pr-1`,
-				"a".repeat(40),
-			],
-		]);
-		const git = vi.fn(async (_id: number | string, fullName: string) => {
-			if (fullName === "owner/gone") throw new Error("404");
-			return repository(refs);
-		});
-		const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-		const result = await removeUserPullRequestEvidence(
-			"alice",
-			[
-				{ fullName: "owner/app", installationId: 2 },
-				{ fullName: "Owner/App", installationId: 2 },
-				{ fullName: "owner/gone", installationId: 2 },
-			],
-			{ git, enabled: async () => true },
-		);
-		warn.mockRestore();
-		expect(result).toEqual({ removed: 1, failed: ["owner/gone"] });
-		expect(git).toHaveBeenCalledTimes(2);
-		expect(refs.size).toBe(1);
+beforeEach(() => {
+	objects = new Set();
+	rows = [];
+	store = {
+		put: vi.fn(),
+		get: vi.fn(),
+		removePrefix: vi.fn(async (prefix: string) => {
+			let removed = 0;
+			for (const key of [...objects])
+				if (key.startsWith(prefix)) {
+					objects.delete(key);
+					removed++;
+				}
+			return removed;
+		}),
+	};
+	const base = { fullName: "owner/app", pullNumber: 7, expired: false };
+	seed({ ...base, id: capture(1), userId: "alice", projectId: projectA });
+	seed({ ...base, id: capture(2), userId: "alice", projectId: projectB });
+	seed({ ...base, id: capture(3), userId: "bob", projectId: projectA });
+});
+
+describe("deleting evidence with its project or account", () => {
+	it("removes one project's media and rows and nothing of other projects or users", async () => {
+		const deps = { store, rows: fakeRows() };
+		expect(
+			await removeProjectPullRequestEvidence("alice", projectA, deps),
+		).toBe(1);
+		expect(rows.map((row) => row.id)).toEqual([capture(2), capture(3)]);
+		expect(
+			[...objects].some((key) =>
+				key.startsWith(
+					evidenceCapturePrefix(
+						{ userId: "alice", projectId: projectA },
+						capture(1),
+					),
+				),
+			),
+		).toBe(false);
+		expect(objects.size).toBe(4);
 	});
 
-	it("makes no GitHub calls for users who never had evidence on", async () => {
-		const git = vi.fn();
-		expect(
-			await removeUserPullRequestEvidence(
-				"alice",
-				[{ fullName: "owner/app", installationId: 2 }],
-				{ git, enabled: async () => false },
-			),
-		).toEqual({ removed: 0, failed: [] });
-		expect(git).not.toHaveBeenCalled();
+	it("removes everything a user stored on account deletion", async () => {
+		const deps = { store, rows: fakeRows() };
+		expect(await removeUserPullRequestEvidence("alice", deps)).toBe(2);
+		expect(rows.map((row) => row.userId)).toEqual(["bob"]);
+		expect(objects.size).toBe(2);
+	});
+
+	it("stops before deleting rows when media cannot be removed", async () => {
+		const failing = {
+			...store,
+			removePrefix: vi.fn(async () => {
+				throw new Error("R2 listing failed.");
+			}),
+		};
+		const deps = { store: failing, rows: fakeRows() };
+		await expect(removeUserPullRequestEvidence("alice", deps)).rejects.toThrow(
+			"R2 listing failed",
+		);
+		expect(rows).toHaveLength(3);
 	});
 });
 
-describe("the expiry sweep", () => {
-	it("removes refs of closed pull requests for every user with evidence on", async () => {
-		const refs = new Map([
-			[`refs/ytimesy/evidence/${label}/pr-1`, "a".repeat(40)],
-			[`refs/ytimesy/evidence/${label}/pr-2`, "a".repeat(40)],
-		]);
-		const removed = await expirePullRequestEvidence({
-			users: async () => ["alice"],
-			repositories: async () => [{ fullName: "owner/app", installationId: 2 }],
-			git: async () => repository(refs, [2]),
+describe("the evidence-expiry sweep", () => {
+	it("removes expired captures and captures of pull requests that are no longer open", async () => {
+		rows[0].expired = true;
+		seed({
+			id: capture(4),
+			userId: "bob",
+			projectId: projectB,
+			fullName: "owner/other",
+			pullNumber: 3,
+			expired: false,
 		});
-		expect(removed).toBe(1);
-		expect([...refs.keys()]).toEqual([`refs/ytimesy/evidence/${label}/pr-2`]);
+		const deps = {
+			store,
+			rows: fakeRows(),
+			openPulls: vi.fn(async (_installation: number | string, name: string) =>
+				name === "owner/app" ? new Set([7]) : new Set<number>(),
+			),
+		};
+		expect(await expirePullRequestEvidence(deps)).toBe(2);
+		expect(rows.map((row) => row.id)).toEqual([capture(2), capture(3)]);
+		expect(objects.size).toBe(4);
+		expect(deps.rows.failStale).toHaveBeenCalled();
+	});
+
+	it("keeps a repository's evidence when its pull requests cannot be read", async () => {
+		const deps = {
+			store,
+			rows: fakeRows(),
+			openPulls: vi.fn(async () => {
+				throw new Error("installation removed");
+			}),
+		};
+		expect(await expirePullRequestEvidence(deps)).toBe(0);
+		expect(rows).toHaveLength(3);
+	});
+
+	it("keeps a row whose media could not be removed, for the next sweep", async () => {
+		rows[0].expired = true;
+		const deps = {
+			store: {
+				...store,
+				removePrefix: vi.fn(async () => {
+					throw new Error("R2 delete failed (500).");
+				}),
+			},
+			rows: fakeRows(),
+			openPulls: vi.fn(async () => new Set([7])),
+		};
+		expect(await expirePullRequestEvidence(deps)).toBe(0);
+		expect(rows).toHaveLength(3);
 	});
 });
