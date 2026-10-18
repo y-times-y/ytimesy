@@ -157,6 +157,20 @@ describe("workspace commands", () => {
 		const usage = await sh("ytimesy-check --files run.py", project);
 		expect(usage.exitCode).toBe(2);
 		expect(usage.stderr).toContain("usage: ytimesy-check");
+		// Outside Git only the listed files are delivered, so data the run reads
+		// must be one the task names.
+		await rm(join(project, ".git"), { recursive: true });
+		const unnamed = await sh(
+			"ytimesy-check --files run.py data.txt -- python3 run.py",
+			project,
+		);
+		expect(unnamed.exitCode).toBe(1);
+		expect(unnamed.stdout).toContain('"kind": "undeclared-by-task"');
+		const named = await sh(
+			"ytimesy-check --files run.py data.txt --named-data data.txt -- python3 run.py",
+			project,
+		);
+		expect(named.exitCode).toBe(0);
 	});
 
 	it("ytimesy-browser and ytimesy-job are valid scripts with usage errors", async () => {
@@ -279,7 +293,7 @@ describe("lean instructions", () => {
 			"Your tools: Bash runs shell commands; Edit and Write change files",
 		);
 		expect(claude).toContain(
-			"`ytimesy-check --files <delivered paths> [--input <paths they supply>] [--unprivileged] -- <run command>`: when you deliver something another person or system will run on its own (a script, program, service, package or output files read elsewhere), run it once before finishing with what they receive and the documented command (--unprivileged when the task mentions another user or dropped privileges); it runs your deliverable from a clean copy. Fix what it reports. Skip it for edits to an existing project whose own tests you ran.",
+			"`ytimesy-check --files <delivered paths> [--input <paths they supply>] [--unprivileged] -- <run command>`: when you deliver something another person or system will run on its own (a script, program, service, package or output files read elsewhere), run it once before finishing with what they receive (when the task names its delivered files, exactly those: not data files or helpers your code loads that it does not name) and the documented command (--unprivileged when the task mentions another user or dropped privileges); it runs your deliverable from a clean copy. Fix what it reports. Skip it for edits to an existing project whose own tests you ran.",
 		);
 		expect(claude).toContain("`~/.ytimesy/history/`");
 		expect(claude).toContain("`~/.ytimesy/environment.md` (if present)");

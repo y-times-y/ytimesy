@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	deliverableCheckCommand,
@@ -61,15 +62,75 @@ describe("check_deliverable", () => {
 		expect(report.notDelivered.sample).toContain("model.json");
 	});
 
-	it("passes when the data is delivered too", () => {
+	it("passes when the task names the data file the deliverable reads", () => {
 		const root = workspace({ "tool.py": READS_DATA, "model.json": "{}" });
 		const report = check(root, {
 			files: ["tool.py", "model.json"],
+			namedData: ["model.json"],
 			tracked: false,
 			command: `python3 ${root}/tool.py`,
 		});
 		expect(report).toMatchObject({ ok: true, exitCode: 0, problems: [] });
 		expect(report.stdoutTail.trim()).toBe("{}");
+	});
+
+	// Hard-set round 1, interleaved-vigenere: the task delivers cracker.py and
+	// requirements.txt; the agent also listed the language model cracker.py
+	// loads, the clean run passed, and the grader never received the model.
+	it("flags a declared data file the task does not name that the deliverable reads at run time", () => {
+		const root = workspace({
+			"cracker.py": `import gzip, json, sys\nfrom pathlib import Path\nmodel = json.loads(gzip.decompress(Path(__file__).with_name("language_model.json.gz").read_bytes()))\nprint(open(sys.argv[1]).read(), end="")\n`,
+			"language_model.json.gz": "",
+			"requirements.txt": "",
+			"data/sample_ciphertext.txt": "Khoor",
+		});
+		writeFileSync(
+			join(root, "language_model.json.gz"),
+			gzipSync(Buffer.from("{}")),
+		);
+		const report = check(root, {
+			files: ["cracker.py", "requirements.txt", "language_model.json.gz"],
+			inputs: ["data/sample_ciphertext.txt"],
+			tracked: false,
+			command: "python3 cracker.py data/sample_ciphertext.txt",
+		});
+		expect(report.exitCode).toBe(0);
+		expect(report.ok).toBe(false);
+		expect(report.problems).toEqual([
+			expect.objectContaining({
+				kind: "undeclared-by-task",
+				path: "language_model.json.gz",
+				detail: expect.stringContaining("cracker.py reads"),
+			}),
+		]);
+		// Delivering only what the task names shows the real failure.
+		const named = check(root, {
+			files: ["cracker.py", "requirements.txt"],
+			inputs: ["data/sample_ciphertext.txt"],
+			tracked: false,
+			command: "python3 cracker.py data/sample_ciphertext.txt",
+		});
+		expect(named.ok).toBe(false);
+		expect(named.problems).toContainEqual(
+			expect.objectContaining({
+				kind: "missing-file",
+				path: "language_model.json.gz",
+			}),
+		);
+	});
+
+	it("does not flag a declared file the run never reads or the command names", () => {
+		const root = workspace({
+			"tool.py": `print("ok")  # writes notes.txt on --save\n`,
+			"notes.txt": "x",
+			"out.json": "{}",
+		});
+		const report = check(root, {
+			files: ["tool.py", "notes.txt", "out.json"],
+			tracked: false,
+			command: "python3 tool.py && cat out.json",
+		});
+		expect(report).toMatchObject({ ok: true, problems: [] });
 	});
 
 	it("copies tracked files, leaves untracked helpers out and clears PYTHONPATH", () => {
