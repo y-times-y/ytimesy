@@ -1,6 +1,9 @@
 import type { ModelMessage } from "ai";
 import { isMemoryPart } from "./memory-repo";
-import { withAttachmentNote } from "./message-attachment";
+import {
+	type MessageAttachment,
+	withAttachmentNote,
+} from "./message-attachment";
 import {
 	runtimeHandoffEnvelope,
 	visibleRuntimeUserText,
@@ -38,6 +41,44 @@ export function apiConversation(items: readonly SessionItem[]): ModelMessage[] {
 			];
 		return [];
 	});
+}
+
+/**
+ * A new turn's model input. Structured history from the last turn carries the
+ * conversation, so only the request follows it; without one, the visible
+ * transcript stands in. `handoff`, a runtime-switch envelope that repeats the
+ * transcript, is only that fallback's last message: after structured history
+ * it would send the conversation twice.
+ */
+export function nextTurnMessages(input: {
+	readonly previous: readonly ModelMessage[] | null;
+	/** The transcript, ending with the new request. */
+	readonly items: readonly SessionItem[];
+	readonly text: string;
+	/** What the model receives instead of the visible text (peer notices, repair prompts). */
+	readonly runtimeText?: string;
+	readonly handoff?: string;
+	readonly attachments?: readonly MessageAttachment[];
+}): ModelMessage[] {
+	if (input.previous)
+		return [
+			...input.previous,
+			{
+				role: "user",
+				content: withAttachmentNote(
+					input.runtimeText ?? input.text,
+					input.attachments,
+				),
+			},
+		];
+	const messages = apiConversation(input.items);
+	const replaced = input.handoff ?? input.runtimeText;
+	if (replaced)
+		messages[messages.length - 1] = {
+			role: "user",
+			content: withAttachmentNote(replaced, input.attachments),
+		};
+	return messages;
 }
 
 export function runtimeHandoffPrompt(

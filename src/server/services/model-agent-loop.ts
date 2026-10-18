@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { LanguageModelUsage } from "ai";
+import type { AssistantModelMessage, LanguageModelUsage } from "ai";
 import {
 	asSchema,
 	generateText,
@@ -128,11 +128,15 @@ export type ModelAgentInput = {
 	 * Called once when the run gives up, before it throws: the last cleanly
 	 * finished history, whether a failed step's partial output was saved after
 	 * it, and the ids of that partial output (never retracted by a retry).
+	 * `inFlight`, when tools of the failed step had started, is the history that
+	 * step would have saved up to its own tool calls, without their results:
+	 * a stopped turn keeps the calls it made (closed later with stand-ins).
 	 */
 	onAttemptFailed?: (state: {
 		readonly committed: ModelMessage[];
 		readonly droppedStepSaved: boolean;
 		readonly uncommittedIds: readonly string[];
+		readonly inFlight?: ModelMessage[];
 	}) => void;
 };
 
@@ -190,6 +194,8 @@ async function executeWithStreamRetries(
 	// A provider's context rejection is retried once per step, after compacting.
 	let overflowRetried = false;
 	let forceCompaction: ContextOverflow | undefined;
+	// The unfinished step's own tool calls, once one of them started executing.
+	let inFlight: ModelMessage[] | undefined;
 	const tracked: ModelAgentInput = {
 		...input,
 		onEvent: async (event) => {
@@ -247,6 +253,9 @@ async function executeWithStreamRetries(
 					droppedStep = !clean;
 				},
 				forceCompaction,
+				(history) => {
+					inFlight = history;
+				},
 			);
 		} catch (error) {
 			forceCompaction = undefined;
@@ -281,6 +290,7 @@ async function executeWithStreamRetries(
 					uncommittedIds: [...uncommittedIds].filter(
 						(id) => !committedIds.has(id),
 					),
+					...(inFlight ? { inFlight } : {}),
 				});
 				throw error;
 			}
@@ -480,6 +490,8 @@ async function executeModelSteps(
 	onStepFinished?: (clean: boolean) => void,
 	/** The previous attempt overflowed the context: compact before the first step. */
 	forceCompaction?: ContextOverflow,
+	/** The running step's history through its started tool calls; undefined once it finishes. */
+	onInFlight?: (history: ModelMessage[] | undefined) => void,
 ): Promise<ModelAgentStepResult> {
 	const modelFamily = harnessModelFamily(
 		typeof runtime.model === "string" ? "registry" : runtime.model.provider,
@@ -628,6 +640,12 @@ async function executeModelSteps(
 			: restored;
 	};
 	const backgroundCompaction = new BackgroundHistoryCompaction();
+	// Calls of the running step whose execution started. Its assistant message
+	// is saved only after every tool returns, so a stop meanwhile would lose them.
+	let startedCalls: Extract<
+		Exclude<AssistantModelMessage["content"], string>[number],
+		{ type: "tool-call" }
+	>[] = [];
 	const recordUsage = async (usage: Parameters<typeof apiTokenUsage>[0]) => {
 		accumulated.usage = addApiTokenUsage(
 			accumulated.usage,
@@ -711,6 +729,8 @@ async function executeModelSteps(
 			...requestSettings(input.instructions),
 			tools,
 			prepareStep: async () => {
+				startedCalls = [];
+				onInFlight?.(undefined);
 				runSignal.throwIfAborted();
 				await consumeBackground(
 					backgroundCompaction.running &&
@@ -933,7 +953,24 @@ async function executeModelSteps(
 					/* Metrics cannot interrupt inference. */
 				}
 			},
-			onToolExecutionStart: () => {
+			onToolExecutionStart: ({ toolCall }) => {
+				// Provider-neutral: no reasoning or provider item ids that a native
+				// replay would require to arrive together with their reasoning.
+				if (!toolCall.providerExecuted) {
+					startedCalls = [
+						...startedCalls,
+						{
+							type: "tool-call",
+							toolCallId: toolCall.toolCallId,
+							toolName: toolCall.toolName,
+							input: toolCall.input,
+						},
+					];
+					onInFlight?.([
+						...history,
+						{ role: "assistant", content: startedCalls },
+					]);
+				}
 				startBackground();
 			},
 			onToolExecutionEnd: ({ toolCall, toolOutput, toolExecutionMs }) => {
@@ -993,6 +1030,8 @@ async function executeModelSteps(
 						},
 					});
 				}
+				startedCalls = [];
+				onInFlight?.(undefined);
 				const historyBeforeStep = history;
 				history = [...historyBeforeStep, ...step.response.messages];
 				history = (await input.afterTools?.(history)) ?? history;

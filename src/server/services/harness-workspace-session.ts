@@ -212,6 +212,8 @@ export function sendHarnessWorkspaceTask(
 		/** API-key models only; Codex uses `fast`. */
 		readonly speed?: "standard" | "fast" | "ultrafast";
 		readonly runtimeText?: string;
+		/** A runtime-switch envelope, used only when no structured history carries over. */
+		readonly runtimeHandoff?: string;
 		readonly idempotencyKey?: string;
 		readonly approvesPlan?: boolean;
 		readonly attachments?: readonly IncomingAttachment[];
@@ -247,12 +249,14 @@ export function sendHarnessWorkspaceTask(
 						text: input.text,
 					}),
 				);
-			const runtimeText = switching
+			// The envelope repeats the transcript; the send uses it only when the
+			// last turn left no structured history to continue from.
+			const runtimeHandoff = switching
 				? runtimeHandoffPrompt(
 						sessionItemsFromUnknown(previous.items),
 						input.text,
 					)
-				: input.text;
+				: undefined;
 			if (switching)
 				yield* Effect.tryPromise(() =>
 					selectAgentSessionHarness(
@@ -264,7 +268,8 @@ export function sendHarnessWorkspaceTask(
 				);
 			return yield* sendHarnessWorkspaceTask(_machines, scope, {
 				...input,
-				runtimeText,
+				runtimeText: input.text,
+				...(runtimeHandoff ? { runtimeHandoff } : {}),
 			});
 		}).pipe(
 			// A rejected first send hands its chat back for New chat to reuse.
