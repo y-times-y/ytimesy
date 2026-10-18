@@ -23,6 +23,19 @@ it("adds per-request usage without turning unknown accounting into zero", () => 
 			.cacheWriteTokens,
 	).toBeNull();
 });
+it("sums reported dollars only while every request reported them", () => {
+	expect(addApiTokenUsage(usage, usage)).not.toHaveProperty("costUsd");
+	expect(
+		addApiTokenUsage({ ...usage, costUsd: 0.25 }, { ...usage, costUsd: 0.5 })
+			.costUsd,
+	).toBe(0.75);
+	expect(
+		addApiTokenUsage({ ...usage, costUsd: 0.25 }, usage).costUsd,
+	).toBeNull();
+	expect(
+		addApiTokenUsage(usage, { ...usage, costUsd: 0.25 }).costUsd,
+	).toBeNull();
+});
 it("persists cumulative usage on only the current prompt without adding transcript noise", () => {
 	const items = [
 		{

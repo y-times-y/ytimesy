@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { Freestyle, type Vm } from "freestyle";
+import { READER_USER_SETUP_SCRIPT } from "#/domain/subagent-reader";
 import {
 	CHEAP_BASE_RESOURCES,
 	CHEAP_BASE_SNAPSHOT,
@@ -88,6 +89,11 @@ EOF`,
 		name: "pnpm and yarn",
 		script: `corepack enable --install-directory /usr/local/bin pnpm yarn`,
 	},
+	{
+		// Read-only subagents run their commands as this user (src/domain/subagent-reader.ts).
+		name: "reader user",
+		script: READER_USER_SETUP_SCRIPT,
+	},
 ];
 
 // Run per user so pnpm and yarn need no download on the first command.
@@ -100,7 +106,7 @@ const VERSIONS = `
 for c in "node --version" "npm --version" "corepack --version" "pnpm --version" "yarn --version" "bun --version" \\
   "python3 --version" "pip --version" "uv --version" "go version" "rustc --version" "cargo --version" \\
   "cargo clippy --version" "rustfmt --version" "java -version" "javac -version" "gh --version" "rg --version" \\
-  "git --version" "docker --version" "gcc --version" "make --version" "jq --version" "curl --version"; do
+  "git --version" "docker --version" "gcc --version" "make --version" "jq --version" "curl --version" "id ytimesy-reader"; do
   out="$($c 2>&1 | head -1)" || out="MISSING: $out"
   printf '%-24s %s\\n' "$c" "$out"
 done`;
