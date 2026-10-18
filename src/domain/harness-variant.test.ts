@@ -15,6 +15,7 @@ describe("harness variants", () => {
 			memoryWriter: "observer",
 			toolSurface: "lean",
 			promptCacheScope: "chat",
+			codeMode: "off",
 		});
 	});
 
@@ -29,6 +30,7 @@ describe("harness variants", () => {
 			memoryWriter: "observer",
 			toolSurface: "current",
 			promptCacheScope: "chat",
+			codeMode: "off",
 		});
 		expect(
 			harnessVariantFromFlags(["memoryWording=notes,toolSurface=lean-native"]),
@@ -37,6 +39,7 @@ describe("harness variants", () => {
 			memoryWriter: "observer",
 			toolSurface: "lean-native",
 			promptCacheScope: "chat",
+			codeMode: "off",
 		});
 		expect(
 			harnessVariantFromFlags(["memoryWording=notes,memoryWriter=both"]),
@@ -65,6 +68,7 @@ describe("harness variants", () => {
 			memoryWriter: "observer",
 			toolSurface: "lean",
 			promptCacheScope: "chat",
+			codeMode: "off",
 		});
 		expect(harnessVariantFromUnknown({ memoryWriter: "agent" })).toEqual({
 			...DEFAULT_HARNESS_VARIANT,
@@ -83,6 +87,16 @@ describe("harness variants", () => {
 				harnessVariantFromFlags(["memoryWriter=agent,memoryWording=notes"]),
 			),
 		).toBe("memoryWording=notes,memoryWriter=agent");
+	});
+
+	it("offers code mode only when asked", () => {
+		expect(harnessVariantFromFlags(["codeMode=on"]).codeMode).toBe("on");
+		expect(() => harnessVariantFromFlags(["codeMode=yes"])).toThrow(
+			"accepts off, on",
+		);
+		expect(harnessVariantLabel(harnessVariantFromFlags(["codeMode=on"]))).toBe(
+			"codeMode=on",
+		);
 	});
 
 	it("keys the prompt cache per chat unless the variant shares it per account", () => {

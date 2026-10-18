@@ -1,5 +1,10 @@
 import { PLAN_TEXT_LIMIT, PROPOSE_PLAN_TOOL } from "./agent-plan";
 import type { ApiAgentEvent } from "./api-agent-event";
+import {
+	CODE_MODE_TOOL,
+	type CodeModeResult,
+	storedCodeModeResult,
+} from "./code-mode";
 import { SessionItemId } from "./ids";
 import { CALL_MCP_TOOL_TOOL, calledMcpTool } from "./mcp-tool-call";
 import {
@@ -123,7 +128,18 @@ export function applyApiProgress(
 				: {}),
 			...(event.type === "tool-call"
 				? { input: publicToolDetail(mcp ? mcp.arguments : event.input) }
-				: { output: publicToolDetail(event.output, "output") }),
+				: {
+						output:
+							// A run's record is bounded so it still parses for its card.
+							event.name === CODE_MODE_TOOL &&
+							!event.failed &&
+							event.output &&
+							typeof event.output === "object"
+								? publicToolDetail(
+										storedCodeModeResult(event.output as CodeModeResult),
+									)
+								: publicToolDetail(event.output, "output"),
+					}),
 			status:
 				event.type === "tool-call"
 					? "inProgress"

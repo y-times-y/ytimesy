@@ -1,3 +1,4 @@
+import { CODE_MODE_TOOL, codeModeResult } from "./code-mode";
 import { commandActivityTitle } from "./command-activity-title";
 import { leanToolRole } from "./harness-model-profile";
 import { redactSecrets } from "./project-workspace";
@@ -422,6 +423,33 @@ export function toolActivity(item: DynamicToolCallItem): ToolActivity {
 							? `${cited} ${cited === 1 ? "source" : "sources"}`
 							: undefined,
 				glyph: "search",
+			};
+		}
+		case CODE_MODE_TOOL: {
+			// One card for the whole program; its inner calls are listed inside it.
+			const calls = codeModeResult(item)?.calls ?? [];
+			const counts = new Map<string, number>();
+			for (const call of calls)
+				counts.set(call.tool, (counts.get(call.tool) ?? 0) + 1);
+			const notCompleted = calls.filter(
+				(call) => call.status !== "completed",
+			).length;
+			return {
+				verb: "Ran code",
+				target: counts.size
+					? clip(
+							[...counts]
+								.map(([name, count]) =>
+									count > 1 ? `${name} ×${count}` : name,
+								)
+								.join(" · "),
+							80,
+						)
+					: undefined,
+				code: true,
+				note: calls.length
+					? `${calls.length} ${calls.length === 1 ? "call" : "calls"}${notCompleted ? `, ${notCompleted} not completed` : ""}`
+					: undefined,
 			};
 		}
 		case "read_plugin_skill":
