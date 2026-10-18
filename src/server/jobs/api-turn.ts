@@ -265,6 +265,7 @@ async function runApiTurnAttempt(
 				committed: ModelMessage[];
 				droppedStepSaved: boolean;
 				uncommittedIds: readonly string[];
+				inFlight?: ModelMessage[];
 		  }
 		| undefined;
 	let messages = turn.messages;
@@ -1450,17 +1451,16 @@ async function runApiTurnAttempt(
 		});
 		// A turn out of time failed, not stopped: the user and a parent agent both hear why.
 		const timedOut = abort.signal.reason instanceof TurnTimeLimitReached;
-		const saved = await finalizeApiTurn(
-			turn,
+		const settledState =
 			userCancelled ||
-				(abort.signal.aborted &&
-					!timedOut &&
-					!heartbeatFailed &&
-					!progressFailed)
+			(abort.signal.aborted && !timedOut && !heartbeatFailed && !progressFailed)
 				? "cancelled"
-				: "failed",
-			items,
-		);
+				: "failed";
+		// Tool calls of the cut-off step are not in the last checkpoint; the next
+		// turn closes them with stand-in results instead of forgetting them.
+		const saved = await (failedAttempt?.inFlight
+			? finalizeApiTurn(turn, settledState, items, failedAttempt.inFlight)
+			: finalizeApiTurn(turn, settledState, items));
 		if (saved)
 			await publishProgress?.(saved === "cancelled" ? "idle" : "failed").catch(
 				() => {},

@@ -1105,6 +1105,59 @@ it("treats a Stop noticed by the heartbeat as the user's clean stop", async () =
 	}
 });
 
+it("settles a Stop during a tool call with that call in the saved history", async () => {
+	vi.useFakeTimers();
+	try {
+		mocks.renew.mockResolvedValueOnce(true).mockResolvedValue(false);
+		mocks.cancelRequested.mockResolvedValue(true);
+		const inFlight = [
+			{ role: "user" as const, content: "what is running?" },
+			{
+				role: "assistant" as const,
+				content: [
+					{
+						type: "tool-call" as const,
+						toolCallId: "call-1",
+						toolName: "exec_command",
+						input: { cmd: "sleep 60; echo marker-one" },
+					},
+				],
+			},
+		];
+		mocks.stepRuntime.mockImplementation(
+			(
+				input: Parameters<typeof hangUntilAborted>[0] & {
+					messages: unknown[];
+					onAttemptFailed: (state: unknown) => void;
+				},
+			) =>
+				hangUntilAborted(input).catch((error: unknown) => {
+					input.onAttemptFailed({
+						committed: input.messages,
+						droppedStepSaved: false,
+						uncommittedIds: [],
+						inFlight,
+					});
+					throw error;
+				}),
+		);
+		const outcome = runApiTurn({} as WorkspaceMachines, childTurn, {
+			index: 1,
+			signal: new AbortController().signal,
+		});
+		await vi.advanceTimersByTimeAsync(1_500);
+		expect(await outcome).toBe("cancelled");
+		expect(mocks.finalize).toHaveBeenCalledWith(
+			expect.anything(),
+			"cancelled",
+			expect.anything(),
+			inFlight,
+		);
+	} finally {
+		vi.useRealTimers();
+	}
+});
+
 it("still reports a lost turn lease that the user did not ask to stop", async () => {
 	vi.useFakeTimers();
 	try {
