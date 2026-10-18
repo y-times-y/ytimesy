@@ -1,6 +1,10 @@
 import type { ModelMessage } from "ai";
 import type { UserMessageItem } from "#/domain/session-item";
 import { database } from "./database";
+import {
+	forgetPeerInboxObservation,
+	peerInboxMayHaveMessages,
+} from "./peer-inbox-observation";
 
 export async function stageServerPeerMessage(
 	recipientId: string,
@@ -11,6 +15,7 @@ export async function stageServerPeerMessage(
 		"insert into agent_peer_inbox(id,recipient_id,message) values($1,$2,$3) on conflict(id) do nothing",
 		[id, recipientId, message],
 	);
+	forgetPeerInboxObservation(recipientId);
 }
 export async function serverPeerMessageAccepted(
 	recipientId: string,
@@ -57,6 +62,7 @@ export async function injectServerPeerMessages(
 	) => Promise<void>,
 	delivered: (messageId: string) => boolean = () => false,
 ) {
+	if (!peerInboxMayHaveMessages(recipientId)) return history;
 	const result = await database().query<{
 		id: string;
 		message: string;
