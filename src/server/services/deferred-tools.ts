@@ -1,6 +1,9 @@
 import { asSchema, type ModelMessage, type ToolSet, tool } from "ai";
 import { z } from "zod";
+import { ENTER_PLAN_MODE_TOOL, PROPOSE_PLAN_TOOL } from "#/domain/agent-plan";
+import { REQUEST_PROJECT_SECRET_TOOL } from "#/domain/secret-request";
 import type { SessionItem } from "#/domain/session-item";
+import { AGENT_SEND_TOOL, AGENT_TOOL } from "#/domain/subagent";
 
 /**
  * Deferred tools (docs/subagents.md, "Deferred tools"): rarely used tools are
@@ -119,7 +122,38 @@ export type DeferredToolSurface = {
 	readonly tools: ToolSet;
 	/** The tools the next request offers, in order: always-on, find_tools, then loaded tools in load order. */
 	readonly order: () => readonly string[];
+	/**
+	 * Every deferred tool's name and one-line description, sorted by name:
+	 * the system prompt lists them so the model knows they exist. It depends
+	 * only on the turn's tools, never on what is loaded, so it stays
+	 * byte-stable across steps and turns.
+	 */
+	readonly deferred: readonly DeferredToolEntry[];
 };
+
+export type DeferredToolEntry = {
+	readonly name: string;
+	readonly description: string;
+};
+
+/** A tool description's first sentence, for the system prompt's list. */
+export function oneLineDescription(description: string | undefined) {
+	const text = (description ?? "").replace(/\s+/g, " ").trim();
+	const sentence = /^.*?[.!?](?=\s|$)/.exec(text)?.[0] ?? text;
+	return sentence.length > 160 ? `${sentence.slice(0, 157)}...` : sentence;
+}
+
+/** The system prompt's list of deferred tools and how to load them. */
+export function deferredToolsInstructions(
+	entries: readonly DeferredToolEntry[],
+	options: { readonly codeMode?: boolean } = {},
+) {
+	if (!entries.length) return "";
+	return [
+		`More tools are available on demand; they are not in your tool list until you load one with ${FIND_TOOLS_TOOL} (its full schema is then added and stays for this chat)${options.codeMode ? ", or call one directly from run_code" : ""}:`,
+		...entries.map((entry) => `- ${entry.name}: ${entry.description}`),
+	].join("\n");
+}
 
 /**
  * Splits a turn's final tool set into always-on and deferred tools and adds
@@ -141,7 +175,18 @@ export function deferredToolSurface(input: {
 		.filter((group) => group.tools.length);
 	const deferred = new Set(groups.flatMap((group) => group.tools));
 	const allNames = Object.keys(input.tools);
-	if (!deferred.size) return { tools: input.tools, order: () => allNames };
+	if (!deferred.size)
+		return { tools: input.tools, order: () => allNames, deferred: [] };
+	const entries = [...deferred]
+		.sort((left, right) => (left < right ? -1 : left > right ? 1 : 0))
+		.map((name) => ({
+			name,
+			description: oneLineDescription(
+				typeof input.tools[name]?.description === "string"
+					? input.tools[name]?.description
+					: undefined,
+			),
+		}));
 	const alwaysOn = allNames.filter((name) => !deferred.has(name));
 	const loaded: string[] = [];
 	const load = (name: string) => {
@@ -207,6 +252,7 @@ export function deferredToolSurface(input: {
 	return {
 		tools: { ...input.tools, [FIND_TOOLS_TOOL]: findTools },
 		order: () => [...alwaysOn, FIND_TOOLS_TOOL, ...loaded],
+		deferred: entries,
 	};
 }
 
@@ -218,4 +264,40 @@ function sameGroup(
 	return groups.some(
 		(group) => group.tools.includes(left) && group.tools.includes(right),
 	);
+}
+
+/** The builder's deferred tools (subagents=on): rarely used, loaded on demand. */
+export const BUILDER_DEFERRED_TOOL_GROUPS: readonly DeferredToolGroup[] = [
+	{
+		summary:
+			"delegate to subagents: a writer on a fork of your VM, or a read-only researcher, reviewer or checker; steer or stop them",
+		tools: [AGENT_TOOL, AGENT_SEND_TOOL],
+	},
+	{
+		summary:
+			"plan mode: get the user's approval of a plan before large, ambiguous or risky changes",
+		tools: [ENTER_PLAN_MODE_TOOL, PROPOSE_PLAN_TOOL],
+	},
+	{
+		summary:
+			"ask the user for a missing credential or configuration value (API key, database URL)",
+		tools: [REQUEST_PROJECT_SECRET_TOOL],
+	},
+];
+
+/**
+ * The deferred tools a chat has loaded, in load order: its recorded calls
+ * (every earlier turn, compaction included), then this turn's model
+ * messages not yet in the items.
+ */
+export function loadedDeferredTools(
+	items: readonly SessionItem[],
+	messages: readonly ModelMessage[],
+	groups: readonly DeferredToolGroup[],
+) {
+	const deferred = new Set(groups.flatMap((group) => group.tools));
+	const loaded = loadedDeferredToolsFromItems(items, deferred);
+	for (const name of loadedDeferredToolsFromMessages(messages, deferred))
+		if (!loaded.includes(name)) loaded.push(name);
+	return loaded;
 }
