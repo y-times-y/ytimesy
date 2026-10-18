@@ -1,0 +1,436 @@
+import { readFileSync } from "node:fs";
+import { PGlite } from "@electric-sql/pglite";
+import type { Freestyle, VmData } from "freestyle";
+import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { CHEAP_BASE_SNAPSHOT } from "../src/server/adapters/freestyle/product-vm";
+import {
+	admitVmCreate,
+	admitVmResume,
+	forgetRecentAdmission,
+} from "../src/server/adapters/freestyle/usage-admission";
+import {
+	reserveInfrastructureUsage,
+	settleInfrastructureUsage,
+} from "../src/server/adapters/infrastructure-usage";
+
+/**
+ * Pins every billing decision of VM admission (caps, holds, settlements,
+ * refusals and retention touches) against a real Postgres, and counts the
+ * database round trips each path takes. The expected states were recorded
+ * from the one-query-per-read implementation; a faster one must reach the
+ * same decisions.
+ */
+let db: PGlite;
+const statements: string[] = [];
+const query = async (sql: string, params: unknown[] = []) => {
+	statements.push(sql);
+	const result = await db.query(sql, params);
+	return {
+		...result,
+		rowCount: result.rows.length || result.affectedRows || 0,
+	};
+};
+vi.mock("../src/server/adapters/database", () => ({
+	database: () => ({ query, connect: async () => ({ query, release() {} }) }),
+}));
+
+const session = "00000000-0000-4000-8000-000000000001";
+const slug = "ytimesy-ag-0000000000004000";
+const resources = { cpu: 2, memory: 4096, storage: 16384 };
+// 2 vCPU and 4 GiB: 132,240 micro-USD an hour.
+const hourly = 132_240;
+
+beforeAll(async () => {
+	db = new PGlite();
+	await db.exec(`create role anon; create role authenticated; create table auth_user(id text primary key); insert into auth_user values('alice'),('bob');
+	create table agent_session(id uuid primary key,user_id text,project_id text,provider_ref text,turn_status text,task_placement text);
+	create table workspace(id text,user_id text); create table environment_build(id text,workspace_id text);`);
+	for (const file of [
+		"20261003020000_infrastructure_usage",
+		"20261003021000_infrastructure_vm_identity",
+		"20261003022000_workspace_retention",
+		"20261003024000_infrastructure_zero_runtime",
+		"20261013060000_infrastructure_vm_lease",
+	])
+		await db.exec(readFileSync(`supabase/migrations/${file}.sql`, "utf8"));
+});
+beforeEach(async () => {
+	vi.stubEnv("YTIMESY_WORKSPACE_RETENTION", "true");
+	vi.stubEnv("YTIMESY_INFRASTRUCTURE_ADMISSION", "true");
+	vi.stubEnv("YTIMESY_RETENTION_ENROLL_AFTER", "2026-01-01T00:00:00Z");
+	vi.stubEnv("YTIMESY_USER_MONTHLY_MICRO_USD", "1000000");
+	vi.stubEnv("YTIMESY_FLEET_MONTHLY_MICRO_USD", "500000000");
+	vi.stubEnv("YTIMESY_FLEET_LIFETIME_MICRO_USD", "7000000000");
+	forgetRecentAdmission();
+	await db.exec(
+		"truncate workspace_retention,infrastructure_vm_lease,infrastructure_vm_admission,infrastructure_usage_reservation,infrastructure_usage_policy,infrastructure_usage_adjustment,agent_session;",
+	);
+	await query(
+		"insert into agent_session values($1,'alice','project','vm-1','running',null)",
+		[session],
+	);
+	statements.length = 0;
+});
+afterAll(async () => {
+	vi.unstubAllEnvs();
+	await db.close();
+});
+
+type Provider = {
+	id: string;
+	state: "running" | "paused" | "stopped";
+	totalRunSeconds: number;
+	maxRunTotalSeconds: number;
+	automaticRestart: boolean;
+	createdAt: string;
+};
+function machine(initial: Partial<Provider> = {}) {
+	const state: Provider = {
+		id: "vm-1",
+		state: "running",
+		totalRunSeconds: 150,
+		maxRunTotalSeconds: 1000,
+		automaticRestart: false,
+		createdAt: "2026-06-01T00:00:00Z",
+		...initial,
+	};
+	const updates: Partial<Provider>[] = [];
+	const vm = {
+		id: state.id,
+		data: async () =>
+			({
+				...state,
+				slug,
+				resources,
+				idleTimeoutSeconds: 180,
+			}) as unknown as VmData,
+		update: async (patch: Partial<Provider>) => {
+			updates.push(patch);
+			Object.assign(state, patch);
+		},
+		start: async () => {},
+	};
+	return { vm, state, updates };
+}
+
+async function seedAdmission(input: {
+	cap: number;
+	baseline: number;
+	ageSeconds?: number;
+	vmId?: string | null;
+	userId?: string;
+	hourlyMicroUsd?: number;
+}) {
+	const reservation = "10000000-0000-4000-8000-000000000001";
+	await query(
+		"insert into infrastructure_usage_reservation(id,user_id,resource_key,period,reserved_micro_usd,created_at) values($1,$2,$3,date_trunc('month',now() at time zone 'utc')::date,$4,now()-interval '1 hour')",
+		[
+			reservation,
+			input.userId ?? "alice",
+			`vm:${slug}`,
+			Math.ceil(((input.cap - input.baseline + 60) * hourly) / 3600),
+		],
+	);
+	await query(
+		"insert into infrastructure_vm_admission(slug,user_id,reservation_id,max_run_total_seconds,baseline_seconds,hourly_micro_usd,vm_id,updated_at) values($1,$2,$3,$4,$5,$6,$7,now()-make_interval(secs=>$8))",
+		[
+			slug,
+			input.userId ?? "alice",
+			reservation,
+			input.cap,
+			input.baseline,
+			input.hourlyMicroUsd ?? hourly,
+			input.vmId === undefined ? "vm-1" : input.vmId,
+			input.ageSeconds ?? 0,
+		],
+	);
+}
+async function seedRetention(phase = "active", vmId = "vm-1") {
+	await query(
+		"insert into workspace_retention(session_id,user_id,vm_id,slug,resources,phase,last_activity_at) values($1,'alice',$2,$3,$4,$5,now()-interval '2 hours')",
+		[session, vmId, slug, JSON.stringify(resources), phase],
+	);
+}
+
+/** Everything admission decided, with generated ids replaced by their order. */
+async function decisions() {
+	const reservations = (
+		await db.query<{
+			id: string;
+			user_id: string;
+			resource_key: string;
+			reserved_micro_usd: string;
+			consumed_micro_usd: string | null;
+		}>(
+			"select id,user_id,resource_key,reserved_micro_usd::text,consumed_micro_usd::text from infrastructure_usage_reservation order by created_at,id",
+		)
+	).rows;
+	const ids = new Map(reservations.map((row, index) => [row.id, `r${index}`]));
+	const admission = (
+		await db.query<Record<string, unknown>>(
+			"select slug,user_id,reservation_id,max_run_total_seconds::text,baseline_seconds::text,hourly_micro_usd::text,vm_id from infrastructure_vm_admission",
+		)
+	).rows.map((row) => ({
+		...row,
+		reservation_id: ids.get(String(row.reservation_id)),
+	}));
+	const retention = (
+		await db.query<Record<string, unknown>>(
+			"select vm_id,phase,last_activity_at > now()-interval '1 minute' as touched from workspace_retention",
+		)
+	).rows;
+	const leases = (await db.query("select slug from infrastructure_vm_lease"))
+		.rows;
+	return {
+		reservations: reservations.map(({ id, ...row }) => ({
+			id: ids.get(id),
+			...row,
+		})),
+		admission,
+		retention,
+		leases,
+	};
+}
+async function resume(vm: ReturnType<typeof machine>["vm"], seconds?: number) {
+	const data = await vm.data();
+	statements.length = 0;
+	return admitVmResume(vm as never, data, seconds);
+}
+async function outcome(run: () => Promise<unknown>) {
+	try {
+		await run();
+		return null;
+	} catch (error) {
+		return error instanceof Error ? error.message : String(error);
+	}
+}
+
+it("keeps a running VM's covering cap without buying runtime", async () => {
+	await seedAdmission({ cap: 1000, baseline: 100 });
+	await seedRetention();
+	const { vm, updates } = machine();
+	expect(await outcome(() => resume(vm))).toBe(null);
+	expect(updates).toEqual([]);
+	expect(await decisions()).toMatchSnapshot();
+	expect(statements.length).toMatchSnapshot("round trips");
+});
+
+it("tops up a running VM whose cap no longer covers the operation", async () => {
+	await seedAdmission({ cap: 400, baseline: 100, ageSeconds: 250 });
+	await seedRetention();
+	const { vm, updates } = machine({ maxRunTotalSeconds: 400 });
+	expect(await outcome(() => resume(vm, 60))).toBe(null);
+	expect(updates).toEqual([
+		{ maxRunTotalSeconds: 700, automaticRestart: false },
+	]);
+	expect(await decisions()).toMatchSnapshot();
+	expect(statements.length).toMatchSnapshot("round trips");
+});
+
+it("settles a paused VM and buys a fresh cap before resuming it", async () => {
+	await seedAdmission({ cap: 900, baseline: 600 });
+	await seedRetention();
+	const { vm, updates } = machine({
+		state: "paused",
+		totalRunSeconds: 903,
+		maxRunTotalSeconds: 900,
+	});
+	expect(await outcome(() => resume(vm, 60))).toBe(null);
+	expect(updates).toMatchSnapshot();
+	expect(await decisions()).toMatchSnapshot();
+	expect(statements.length).toMatchSnapshot("round trips");
+});
+
+it("admits a running VM that has no admission yet and enrolls its retention", async () => {
+	const { vm, updates } = machine({ maxRunTotalSeconds: 0 });
+	expect(await outcome(() => resume(vm, 60))).toBe(null);
+	expect(updates).toMatchSnapshot();
+	expect(await decisions()).toMatchSnapshot();
+	expect(statements.length).toMatchSnapshot("round trips");
+});
+
+it("does not enroll a VM created before the retention cutover", async () => {
+	await seedAdmission({ cap: 1000, baseline: 100 });
+	const { vm } = machine({ createdAt: "2025-06-01T00:00:00Z" });
+	expect(await outcome(() => resume(vm))).toBe(null);
+	expect((await decisions()).retention).toEqual([]);
+});
+
+it("refuses a paused VM whose allowance cannot buy the operation", async () => {
+	vi.stubEnv("YTIMESY_USER_MONTHLY_MICRO_USD", "15000");
+	await seedAdmission({ cap: 900, baseline: 600 });
+	await seedRetention();
+	const { vm } = machine({
+		state: "paused",
+		totalRunSeconds: 903,
+		maxRunTotalSeconds: 900,
+	});
+	expect(await outcome(() => resume(vm, 60))).toMatchSnapshot();
+	expect(await decisions()).toMatchSnapshot();
+});
+
+it("refuses a top-up past the fleet's monthly budget", async () => {
+	vi.stubEnv("YTIMESY_FLEET_MONTHLY_MICRO_USD", "20000");
+	await seedAdmission({ cap: 400, baseline: 100, ageSeconds: 250 });
+	await seedRetention();
+	const { vm, updates } = machine({ maxRunTotalSeconds: 400 });
+	expect(await outcome(() => resume(vm, 60))).toBe(
+		"The fleet cloud execution budget is exhausted.",
+	);
+	expect(updates).toEqual([]);
+	expect(await decisions()).toMatchSnapshot();
+});
+
+it("refuses a top-up past the fleet's lifetime budget", async () => {
+	vi.stubEnv("YTIMESY_FLEET_LIFETIME_MICRO_USD", "20000");
+	await seedAdmission({ cap: 400, baseline: 100, ageSeconds: 250 });
+	await seedRetention();
+	const { vm } = machine({ maxRunTotalSeconds: 400 });
+	expect(await outcome(() => resume(vm, 60))).toBe(
+		"The lifetime fleet cloud execution budget is exhausted.",
+	);
+});
+
+it("refuses a top-up past the user's allowance including grants", async () => {
+	vi.stubEnv("YTIMESY_USER_MONTHLY_MICRO_USD", "20000");
+	await seedAdmission({ cap: 400, baseline: 100, ageSeconds: 250 });
+	await seedRetention();
+	const { vm } = machine({ maxRunTotalSeconds: 400 });
+	expect(await outcome(() => resume(vm, 60))).toBe(
+		"Your cloud execution allowance is exhausted.",
+	);
+	await query(
+		"insert into infrastructure_usage_adjustment(id,actor_id,user_id,kind,period,amount_micro_usd,reason) values('20000000-0000-4000-8000-000000000001','admin','alice','grant',date_trunc('month',now() at time zone 'utc')::date,100000,'test')",
+	);
+	expect(await outcome(() => resume(vm, 60))).toBe(null);
+	expect(await decisions()).toMatchSnapshot();
+});
+
+it.each([
+	["recovering retention", { phase: "capturing" }],
+	["rebound retention", { retentionVm: "vm-0" }],
+	["another owner", { userId: "bob" }],
+	["another generation", { vmId: "vm-0" }],
+	["changed resources", { hourlyMicroUsd: 1 }],
+	["no owner", { noOwner: true }],
+])(
+	"refuses %s before touching the provider",
+	async (_name, input: {
+		phase?: string;
+		retentionVm?: string;
+		userId?: string;
+		vmId?: string;
+		hourlyMicroUsd?: number;
+		noOwner?: boolean;
+	}) => {
+		await seedAdmission({
+			cap: 1000,
+			baseline: 100,
+			userId: input.userId,
+			vmId: input.vmId,
+			hourlyMicroUsd: input.hourlyMicroUsd,
+		});
+		await seedRetention(input.phase, input.retentionVm);
+		if (input.noOwner) await query("delete from agent_session");
+		const { vm, updates } = machine();
+		expect(await outcome(() => resume(vm))).toMatchSnapshot();
+		expect(updates).toEqual([]);
+		expect(await decisions()).toMatchSnapshot();
+	},
+);
+
+it("buys a new VM's cap before creating it and binds the VM after", async () => {
+	const created: (number | undefined)[] = [];
+	statements.length = 0;
+	const freestyle = { vms: { ref: () => ({}) } } as unknown as Freestyle;
+	expect(
+		await admitVmCreate(
+			freestyle,
+			slug,
+			CHEAP_BASE_SNAPSHOT,
+			async (cap) => {
+				created.push(cap);
+				return "vm-new";
+			},
+			300,
+		).catch((error: Error) => error.message),
+	).toMatchSnapshot();
+	expect(created).toMatchSnapshot();
+	expect(await decisions()).toMatchSnapshot();
+	expect(statements.length).toMatchSnapshot("round trips");
+});
+
+it("replays a reservation idempotently and refuses a changed identity", async () => {
+	const id = "30000000-0000-4000-8000-000000000001";
+	const input = {
+		id,
+		userId: "alice",
+		resourceKey: "vm:x",
+		amountMicroUsd: 1000,
+	};
+	await reserveInfrastructureUsage(input);
+	await reserveInfrastructureUsage(input);
+	expect(
+		await outcome(() =>
+			reserveInfrastructureUsage({ ...input, amountMicroUsd: 999 }),
+		),
+	).toBe("Infrastructure reservation identity changed.");
+	expect(
+		await outcome(() =>
+			reserveInfrastructureUsage({
+				...input,
+				userId: "nobody",
+				id: "30000000-0000-4000-8000-000000000002",
+			}),
+		),
+	).toBe("Usage account is unavailable.");
+	await reserveInfrastructureUsage(
+		{ ...input, amountMicroUsd: 1500 },
+		undefined,
+		"increase",
+	);
+	await reserveInfrastructureUsage(
+		{ ...input, amountMicroUsd: 1200 },
+		undefined,
+		"increase",
+	);
+	expect(
+		await outcome(() =>
+			settleInfrastructureUsage({
+				id,
+				userId: "alice",
+				consumedMicroUsd: 1501,
+			}),
+		),
+	).toBe("Infrastructure settlement exceeds its reservation.");
+	await settleInfrastructureUsage({
+		id,
+		userId: "alice",
+		consumedMicroUsd: 700,
+	});
+	await settleInfrastructureUsage({
+		id,
+		userId: "alice",
+		consumedMicroUsd: 700,
+	});
+	expect(
+		await outcome(() =>
+			settleInfrastructureUsage({ id, userId: "alice", consumedMicroUsd: 600 }),
+		),
+	).toBe("Infrastructure settlement changed after confirmation.");
+	expect(
+		await outcome(() =>
+			reserveInfrastructureUsage(input, undefined, "increase"),
+		),
+	).toBe("Infrastructure reservation is already settled.");
+	expect(
+		await outcome(() =>
+			reserveInfrastructureUsage(
+				{ ...input, id: "30000000-0000-4000-8000-000000000003" },
+				undefined,
+				"increase",
+			),
+		),
+	).toBe("Infrastructure reservation is unavailable.");
+	expect(await decisions()).toMatchSnapshot();
+});
