@@ -220,3 +220,23 @@ describe("checker brief", () => {
 		);
 	});
 });
+
+describe("stopping a subagent", () => {
+	it("wraps up until the stop step, then counts as exhausted", () => {
+		const budget = {
+			steps: 100,
+			minutes: 30,
+			tokens: 1_000_000,
+			stopAtStep: 13,
+		};
+		const used = { steps: 10, minutes: 1, tokens: 10 };
+		expect(subagentBudgetState(budget, used)).toEqual({
+			state: "wrap-up",
+			reason: "the parent asked you to stop",
+		});
+		expect(subagentBudgetState(budget, { ...used, steps: 13 })).toEqual({
+			state: "exhausted",
+			reason: "stopped by the parent",
+		});
+	});
+});

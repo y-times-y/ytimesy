@@ -23,7 +23,10 @@ import {
 	releasingChatClaimOnFailure,
 	titleUntitledAgentSession,
 } from "#/server/adapters/agent-sessions";
-import { agentSessionForOwner } from "../adapters/agent-sessions";
+import {
+	agentSessionForOwner,
+	descendantAgentSessions,
+} from "../adapters/agent-sessions";
 import {
 	enqueueApiTurn,
 	inheritedApiTurnSettings,
@@ -269,5 +272,12 @@ export async function stopApiWorkspaceTask(scope: CodexSessionScope) {
 	if (!scope.sessionId) throw new Error("Select a chat first.");
 	await readApiWorkspaceSession(scope);
 	await cancelServerTurn(scope.userId, scope.sessionId);
+	// Stop on a parent stops its whole subagent tree; cancelled children send no reports.
+	const { userId } = scope;
+	await Promise.all(
+		(await descendantAgentSessions(userId, scope.sessionId))
+			.filter((child) => child.agentRole && child.turnStatus === "running")
+			.map((child) => cancelServerTurn(userId, child.id).catch(() => {})),
+	);
 	return readApiWorkspaceSession(scope);
 }

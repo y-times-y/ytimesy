@@ -1,0 +1,407 @@
+import { randomUUID } from "node:crypto";
+import { type ToolSet, tool } from "ai";
+import { Effect } from "effect";
+import { z } from "zod";
+import { agentSessionMachineSlug } from "#/domain/agent-session";
+import { latestUserRequestText } from "#/domain/child-task-activity";
+import { WorkspaceId } from "#/domain/ids";
+import { posixShellQuoted } from "#/domain/posix-command";
+import { sessionItemsFromUnknown } from "#/domain/session-item";
+import {
+	AGENT_SEND_TOOL,
+	AGENT_TOOL,
+	builderRemaining,
+	checkerBrief,
+	isReaderRole,
+	SUBAGENT_BRIEF_MAX,
+	SUBAGENT_ROLES,
+	SUBAGENT_TITLE_MAX,
+	type SubagentBudget,
+	type SubagentRole,
+	subagentAdmission,
+	subagentPlacement,
+} from "#/domain/subagent";
+import {
+	type SubagentNode,
+	type SubagentTreeSession,
+	subagentNodeRemaining,
+	subagentTree,
+} from "#/domain/subagent-tree";
+import {
+	type AgentSessionRecord,
+	agentSessionForOwner,
+	saveAgentSessionProviderRef,
+	saveAgentTaskState,
+} from "../adapters/agent-sessions";
+import {
+	subagentTree as loadSubagentTree,
+	mergeSubagentFork,
+	requestSubagentStop,
+	saveSubagentSpec,
+	subagentAncestors,
+	takeSubagentReport,
+} from "../adapters/subagents";
+import { queueAgentPeerMessage } from "./agent-peer-messaging";
+import { openAgentTask } from "./agent-session-machine";
+import type { AgentToolWorkspace } from "./agent-tool-workspace";
+import { startPreparedAgentTask } from "./harness-workspace-session";
+import { forkWriterWorkspace } from "./subagent-writer";
+import type { WorkspaceMachines } from "./workspace-machines";
+
+/** The longest a reader's caller blocks on wait: true before the report arrives as a message instead. */
+const MAX_WAIT_MS = 10 * 60_000;
+const WAIT_POLL_MS = 3_000;
+
+/** Everything the tools touch outside themselves; tests pass fakes. */
+export type SubagentToolDeps = {
+	readonly now: () => number;
+	readonly sleep: (ms: number, signal: AbortSignal) => Promise<void>;
+	readonly ancestors: (
+		userId: string,
+		sessionId: string,
+	) => Promise<readonly AgentSessionRecord[]>;
+	readonly tree: (
+		userId: string,
+		rootId: string,
+	) => Promise<readonly (SubagentTreeSession & AgentSessionRecord)[]>;
+	readonly session: (
+		userId: string,
+		sessionId: string,
+	) => Promise<AgentSessionRecord | null>;
+	readonly openTask: typeof openAgentTask;
+	readonly saveSpec: typeof saveSubagentSpec;
+	readonly fork: typeof forkWriterWorkspace;
+	readonly saveProviderRef: typeof saveAgentSessionProviderRef;
+	readonly mergeFork: typeof mergeSubagentFork;
+	readonly start: (
+		scope: Parameters<typeof startPreparedAgentTask>[0],
+		taskId: string,
+	) => Promise<unknown>;
+	readonly markFailed: (sessionId: string) => Promise<unknown>;
+	readonly takeReport: typeof takeSubagentReport;
+	readonly message: typeof queueAgentPeerMessage;
+	readonly stop: typeof requestSubagentStop;
+};
+
+// Resolved at call time, so a test that mocks one of these modules does not
+// need every export the tools use.
+const defaultDeps: SubagentToolDeps = {
+	now: () => Date.now(),
+	sleep: (ms, signal) =>
+		new Promise((resolve) => {
+			const timer = setTimeout(done, ms);
+			function done() {
+				clearTimeout(timer);
+				signal.removeEventListener("abort", done);
+				resolve();
+			}
+			signal.addEventListener("abort", done, { once: true });
+		}),
+	ancestors: (...args) => subagentAncestors(...args),
+	tree: (...args) => loadSubagentTree(...args),
+	session: (...args) => agentSessionForOwner(...args),
+	openTask: (...args) => openAgentTask(...args),
+	saveSpec: (...args) => saveSubagentSpec(...args),
+	fork: (...args) => forkWriterWorkspace(...args),
+	saveProviderRef: (...args) => saveAgentSessionProviderRef(...args),
+	mergeFork: (...args) => mergeSubagentFork(...args),
+	start: (scope, taskId) =>
+		Effect.runPromise(startPreparedAgentTask(scope, taskId)),
+	markFailed: (sessionId) => saveAgentTaskState(sessionId, "failed"),
+	takeReport: (...args) => takeSubagentReport(...args),
+	message: (...args) => queueAgentPeerMessage(...args),
+	stop: (...args) => requestSubagentStop(...args),
+};
+
+export type SubagentToolContext = {
+	/** The unwrapped machines (a fork and the parent's VM are both addressed). */
+	readonly machines: WorkspaceMachines;
+	/** The calling agent: the builder or a subagent below level 3. */
+	readonly parent: AgentSessionRecord;
+	readonly workspace: () => Promise<AgentToolWorkspace>;
+	readonly signal: AbortSignal;
+	/** A durable step's own deadline for blocking calls. */
+	readonly waitDeadlineAt?: number;
+	readonly deps?: Partial<SubagentToolDeps>;
+};
+
+const agentInput = z.object({
+	role: z
+		.enum(SUBAGENT_ROLES)
+		.describe(
+			"writer: edits code on a fork of your VM and returns a patch; researcher, reviewer: read-only on your VM; checker: independent pass/fail of your current work against the user's task",
+		),
+	title: z.string().min(1).max(SUBAGENT_TITLE_MAX),
+	brief: z
+		.string()
+		.max(SUBAGENT_BRIEF_MAX)
+		.optional()
+		.describe(
+			"Self-contained: goal, context (paths, findings, working commands), constraints, what not to touch, report format. Required except for checker, which takes none.",
+		),
+	wait: z
+		.boolean()
+		.optional()
+		.describe(
+			"Readers only: block until the report (default false: keep working, the report arrives as a message)",
+		),
+});
+
+const sendInput = z.object({
+	id: z.string().min(1).max(20).describe('The agent id, e.g. "1.2"'),
+	message: z
+		.string()
+		.min(1)
+		.max(8_000)
+		.optional()
+		.describe("Steering, delivered at the agent's next step"),
+	stop: z.boolean().optional().describe("Wrap up now and report what is done"),
+});
+
+type Tree = {
+	root: AgentSessionRecord;
+	sessions: readonly (SubagentTreeSession & AgentSessionRecord)[];
+	nodes: readonly SubagentNode[];
+};
+
+/**
+ * The builder's delegation tools (docs/subagents.md): `agent` starts a
+ * child in the background with a self-contained brief, `agent_send` steers
+ * or stops one. Children's reports arrive as messages. Admission (depth,
+ * live children, tree size, budget) is checked first; a refusal is a tool
+ * error telling the agent to do the work itself.
+ */
+export function subagentTools(context: SubagentToolContext): ToolSet {
+	const deps = { ...defaultDeps, ...context.deps };
+	const { parent } = context;
+	const loadTree = async (): Promise<Tree & { level: number }> => {
+		const ancestors = await deps.ancestors(parent.userId, parent.id);
+		const root = ancestors.at(-1) ?? parent;
+		const sessions = await deps.tree(parent.userId, root.id);
+		return {
+			root,
+			sessions,
+			level: ancestors.length,
+			nodes: subagentTree(root.id, sessions, deps.now()).nodes,
+		};
+	};
+
+	const agent = tool({
+		description:
+			"Start a subagent in the background. It sees only your brief (never this conversation), works within its own budget and reports back as a message; keep working meanwhile. Writers get a fork of your VM (your uncommitted work included) and return a patch and git ref for you to review and apply; readers share your VM read-only. Returns its id and budget.",
+		inputSchema: agentInput,
+		execute: async (input) => {
+			const role: SubagentRole = input.role;
+			if (role === "checker" && input.brief?.trim())
+				throw new Error(
+					"A checker takes no brief: the runtime gives it the user's task and your deliverable, so its verdict stays independent.",
+				);
+			if (role !== "checker" && !input.brief?.trim())
+				throw new Error("A brief is required for this role.");
+			if (input.wait && !isReaderRole(role))
+				throw new Error(
+					"Only readers can be awaited; a writer's report arrives as a message.",
+				);
+			if (role === "writer" && isReaderRole(parent.agentRole))
+				throw new Error(
+					"A read-only agent cannot start a writer; report what should change instead.",
+				);
+			if (!parent.listedModelId)
+				throw new Error("Your session has no model for a subagent to inherit.");
+			const tree = await loadTree();
+			const own = tree.nodes.find((node) => node.id === parent.id);
+			const parentRemaining = own
+				? subagentNodeRemaining(own)
+				: builderRemaining(
+						subagentTree(tree.root.id, tree.sessions, deps.now()).total.tokens,
+					);
+			const admission = subagentAdmission({
+				parentLevel: tree.level,
+				liveChildrenOfParent: tree.nodes.filter(
+					(node) => node.parentId === parent.id && node.live,
+				).length,
+				liveInTree: tree.nodes.filter((node) => node.live).length,
+				parentRemaining: parentRemaining ?? builderRemaining(0),
+			});
+			if (!admission.admitted) throw new Error(admission.reason);
+			const workspace = await context.workspace();
+			const brief =
+				role === "checker"
+					? await checkerBriefFor(context, tree.root, workspace)
+					: (input.brief as string).trim();
+			const placement = subagentPlacement(role);
+			const child = await deps.openTask({
+				userId: parent.userId,
+				projectId: parent.projectId,
+				parentSessionId: parent.id,
+				title: input.title,
+				harness: parent.harness,
+				modelId: parent.listedModelId,
+				prompt: brief,
+				placement: placement === "fork" ? "fresh" : "shared",
+				access: placement === "fork" ? "read_write" : "read_only",
+				execution: "parallel",
+				dependsOnSessionId: null,
+			});
+			const childId = child.id;
+			try {
+				await deps.saveSpec(parent.userId, childId, {
+					role,
+					budget: admission.budget,
+				});
+				if (placement === "fork") {
+					const fork = await deps.fork({
+						machines: context.machines,
+						parentVm: workspace.vm,
+						slug: agentSessionMachineSlug(childId),
+					});
+					await deps.saveProviderRef(childId, fork.vm);
+					await deps.mergeFork(childId, {
+						vmId: fork.vm,
+						sourceVmId: workspace.vm,
+						forkMs: fork.forkMs,
+						bootedAt: new Date(deps.now()).toISOString(),
+						base: fork.base,
+						parentHead: fork.parentHead,
+					});
+				}
+				await deps.start(
+					{
+						userId: parent.userId,
+						projectId: parent.projectId,
+						sessionId: parent.id,
+						harnessId: parent.harness,
+						createNew: false,
+					},
+					childId,
+				);
+			} catch (cause) {
+				await deps.markFailed(childId).catch(() => {});
+				throw cause;
+			}
+			const label =
+				(await loadTree()).nodes.find((node) => node.id === childId)?.label ??
+				"?";
+			const started = {
+				id: label,
+				taskId: childId,
+				role,
+				vm: placement,
+				budget: publicBudget(admission.budget),
+			};
+			if (!input.wait) return started;
+			const report = await waitForReport(
+				context,
+				deps,
+				childId,
+				admission.budget,
+			);
+			return report
+				? { ...started, ...report }
+				: {
+						...started,
+						note: "Still running; its report will arrive as a message.",
+					};
+		},
+	});
+
+	const agentSend = tool({
+		description:
+			"Steer one of your running subagents (message, delivered at its next step) or stop it (it wraps up and reports what is done). A finished agent resumes with the message.",
+		inputSchema: sendInput,
+		execute: async (input) => {
+			if (!input.message && !input.stop)
+				throw new Error("Pass a message, stop: true, or both.");
+			const tree = await loadTree();
+			const target = tree.nodes.find(
+				(node) => node.label === input.id && node.parentId === parent.id,
+			);
+			if (!target)
+				throw new Error(
+					`No agent ${input.id} of yours. Your agents: ${
+						tree.nodes
+							.filter((node) => node.parentId === parent.id)
+							.map((node) => `${node.label} (${node.role}, ${node.state})`)
+							.join(", ") || "none"
+					}.`,
+				);
+			if (input.stop) await deps.stop(target.id);
+			const text = [
+				input.message,
+				input.stop
+					? "Your parent asked you to stop: start nothing new, finish the step you are on, and write your report now (what is done, how it was verified, what is not)."
+					: undefined,
+			]
+				.filter(Boolean)
+				.join("\n\n");
+			await deps.message(parent, target.id, text, randomUUID());
+			return {
+				id: target.label,
+				status: input.stop ? "stopping" : "message queued",
+				delivery: "next step",
+			};
+		},
+	});
+
+	return { [AGENT_TOOL]: agent, [AGENT_SEND_TOOL]: agentSend };
+}
+
+function publicBudget(budget: SubagentBudget) {
+	return {
+		steps: budget.steps,
+		minutes: budget.minutes,
+		tokens: budget.tokens,
+	};
+}
+
+async function checkerBriefFor(
+	context: SubagentToolContext,
+	root: AgentSessionRecord,
+	workspace: AgentToolWorkspace,
+) {
+	const rootSession =
+		root.items === null || root.items === undefined
+			? await (context.deps?.session ?? agentSessionForOwner)(
+					root.userId,
+					root.id,
+				)
+			: root;
+	const taskText = latestUserRequestText(
+		sessionItemsFromUnknown(rootSession?.items),
+	);
+	if (!taskText.trim())
+		throw new Error("There is no user task for a checker to check.");
+	const status = await context.machines.exec(
+		WorkspaceId(workspace.vm),
+		`git -C ${posixShellQuoted(workspace.cwd)} status --porcelain=v1 --untracked-files=all`,
+		30_000,
+	);
+	const changedFiles = status.stdout
+		.split("\n")
+		.map((line) => line.slice(3).trim())
+		.filter(Boolean);
+	return checkerBrief({
+		taskText,
+		checkout: workspace.cwd,
+		changedFiles,
+		scratch: "$HOME",
+	});
+}
+
+async function waitForReport(
+	context: SubagentToolContext,
+	deps: SubagentToolDeps,
+	childId: string,
+	budget: SubagentBudget,
+) {
+	const deadline = Math.min(
+		deps.now() + Math.min(MAX_WAIT_MS, budget.minutes * 60_000),
+		context.waitDeadlineAt ?? Number.POSITIVE_INFINITY,
+	);
+	while (deps.now() < deadline && !context.signal.aborted) {
+		const taken = await deps.takeReport(childId);
+		if (taken) return { outcome: taken.outcome, report: taken.report };
+		await deps.sleep(WAIT_POLL_MS, context.signal);
+	}
+	return null;
+}
