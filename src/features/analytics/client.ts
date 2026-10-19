@@ -4,6 +4,11 @@ import {
 	type AnalyticsProperties,
 	filteredAnalyticsProperties,
 } from "#/domain/analytics";
+import {
+	onReplayConsentChange,
+	type ReplayConsent,
+	readReplayConsent,
+} from "./replay-consent";
 import { replayPrivacy } from "./replay-privacy";
 
 let client: Promise<PostHog | null> | undefined;
@@ -25,7 +30,8 @@ function analyticsClient(): Promise<PostHog | null> {
 					capture_unhandled_rejections: true,
 					capture_console_errors: false,
 				},
-				disable_session_recording: false,
+				// Replay starts only after the visitor accepts it (replay-consent.ts).
+				disable_session_recording: true,
 				session_recording: replayPrivacy,
 				enable_recording_console_log: false,
 				capture_performance: false,
@@ -61,10 +67,22 @@ function analyticsClient(): Promise<PostHog | null> {
 					return event;
 				},
 			});
+			applyReplayConsent(posthog, readReplayConsent());
+			onReplayConsentChange((choice) => applyReplayConsent(posthog, choice));
 			return posthog;
 		})
 		.catch(() => null);
 	return client;
+}
+
+function applyReplayConsent(posthog: PostHog, choice: ReplayConsent | null) {
+	if (choice === "accepted") posthog.startSessionRecording();
+	else if (posthog.sessionRecordingStarted()) posthog.stopSessionRecording();
+}
+
+/** Starts the client so a consent choice made before any event applies now. */
+export function loadAnalytics() {
+	void analyticsClient().catch(() => undefined);
 }
 
 /** Error tracking keeps the exception itself and the page path, nothing else. */
