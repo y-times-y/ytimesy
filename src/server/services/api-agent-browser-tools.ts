@@ -3,7 +3,6 @@ import { lookup } from "node:dns/promises";
 import { type ToolSet, tool } from "ai";
 import { z } from "zod";
 import { publicToolDetail } from "#/domain/tool-detail";
-import { desktopHostname } from "#/domain/workspace-desktop";
 import { browserUseCommand } from "#/server/adapters/browser-use-cli";
 import { isPublicModelAddress } from "#/server/adapters/model-endpoint";
 import {
@@ -16,7 +15,10 @@ import {
 	browserInspection,
 } from "./browser-inspection";
 import { runGuestCapability } from "./guest-node-capability";
-import { ensureDesktopProcesses } from "./workspace-desktop";
+import {
+	ensureDesktopProcesses,
+	publishDesktopViewer,
+} from "./workspace-desktop";
 
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
@@ -71,9 +73,7 @@ export function apiAgentBrowserTools(
 			);
 		// Route the Desktop tab's viewer to a desktop the agent started, as the
 		// tab's own start does. Viewing is optional; the agent's QA is not.
-		viewerExposed ??= machines
-			.exposeHttp(vm, 6080, desktopHostname(vm))
-			.catch(() => undefined);
+		viewerExposed ??= publishDesktopViewer(machines, vm).catch(() => undefined);
 		await viewerExposed;
 		return workspace;
 	}
