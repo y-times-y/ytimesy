@@ -1431,34 +1431,46 @@ async function runApiTurnAttempt(
 				stopApiTurnCommands(execution as AgentToolWorkspace, turn.id),
 			);
 		// A subagent's work reaches its parent as a report (a writer's as a
-		// patch and ref), never as a commit or a published branch.
-		if (!owner.agentRole)
-			await timed("turn:commit", () =>
-				commitCompletedSessionTurn(
-					{ ...owner, providerRef: execution?.vm ?? owner.providerRef },
-					items,
-					{
-						exec: (providerRef, argv, _env, timeout) =>
-							(execution?.machines ?? machines).exec(
-								WorkspaceId(providerRef),
-								posixShellCommand(argv),
-								timeout,
-							),
-						writeTextFile: (providerRef, path, contents) =>
-							(execution?.machines ?? machines).writeTextFile(
-								WorkspaceId(providerRef),
-								path,
-								contents,
-							),
-						readTextFile: (providerRef, path) =>
-							(execution?.machines ?? machines).readTextFile(
-								WorkspaceId(providerRef),
-								path,
-							),
-					},
-					abort.signal,
-				),
-			);
+		// patch and ref), never as a commit or a published branch. A turn that
+		// ends in plan mode commits and pushes nothing.
+		const committed =
+			!owner.agentRole && !planLock?.planning
+				? await timed("turn:commit", () =>
+						commitCompletedSessionTurn(
+							{ ...owner, providerRef: execution?.vm ?? owner.providerRef },
+							items,
+							{
+								exec: (providerRef, argv, _env, timeout) =>
+									(execution?.machines ?? machines).exec(
+										WorkspaceId(providerRef),
+										posixShellCommand(argv),
+										timeout,
+									),
+								writeTextFile: (providerRef, path, contents) =>
+									(execution?.machines ?? machines).writeTextFile(
+										WorkspaceId(providerRef),
+										path,
+										contents,
+									),
+								readTextFile: (providerRef, path) =>
+									(execution?.machines ?? machines).readTextFile(
+										WorkspaceId(providerRef),
+										path,
+									),
+							},
+							abort.signal,
+						),
+					)
+				: undefined;
+		if (committed?.notice)
+			items = [
+				...items.filter((item) => item.id !== `${turn.id}:publication`),
+				{
+					kind: "notice",
+					id: SessionItemId(`${turn.id}:publication`),
+					message: committed.notice,
+				},
+			];
 		abort.signal.throwIfAborted();
 		failureStage = "coordination";
 		if (!(await coordinateConversationTurn("release", control)))

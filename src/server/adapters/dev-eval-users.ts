@@ -58,6 +58,15 @@ export async function codexCredentialUserId(userId: string) {
 	return (await evalUserRow(userId))?.owner_user_id ?? userId;
 }
 
+/**
+ * Whether this is a throwaway eval user, whatever the deployment's switches
+ * say: eval users own copies of their owner's project rows (same repository
+ * name and installation), so nothing may push to GitHub for them anywhere.
+ */
+export async function isDevEvalUser(userId: string): Promise<boolean> {
+	return Boolean(await evalUserRow(userId));
+}
+
 /** The eval user's harness variant; the default for everyone else. */
 export async function harnessVariantForUser(
 	userId: string,

@@ -224,3 +224,36 @@ it("loads a root chat's checkout plan while its VM is bound, and fails where it 
 		deferredApiTurnWorkspace(machines, root, new AbortController().signal)(),
 	).rejects.toThrow("Repository access is unavailable.");
 });
+
+it("keeps a root chat working when its already-edited checkout cannot pin a baseline", async () => {
+	mocks.baseline.mockRejectedValueOnce(
+		new Error("A pristine server-owned verification baseline is required"),
+	);
+	const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+	const binding = await deferredApiTurnWorkspace(
+		machines,
+		root,
+		new AbortController().signal,
+	)();
+	expect(binding.vm).toBe("vm-root");
+	expect(mocks.baseline).toHaveBeenCalledTimes(1);
+	warn.mockRestore();
+});
+
+it("still requires the baseline for a writable child task", async () => {
+	mocks.baseline.mockRejectedValueOnce(new Error("not pristine"));
+	mocks.read.mockResolvedValue(root);
+	await expect(
+		deferredApiTurnWorkspace(
+			machines,
+			{
+				...root,
+				id: "writer",
+				parentSessionId: root.id,
+				taskPlacement: "fresh",
+				taskAccess: "read_write",
+			} as AgentSessionRecord,
+			new AbortController().signal,
+		)(),
+	).rejects.toThrow("not pristine");
+});

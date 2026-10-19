@@ -2,7 +2,9 @@ import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import {
+	adoptChatPublicationBranch,
 	insertAgentSession,
+	projectBranchHeldByOtherSession,
 	saveAgentTaskPublication,
 	saveAgentTaskReview,
 	saveAgentTaskState,
@@ -177,7 +179,7 @@ async function readyWorkspace() {
 	return { project, workspaceId };
 }
 
-it("starts a new lead without write access to its own workspace", async () => {
+it("starts a new root chat with no task access: it publishes as a chat", async () => {
 	const { project, workspaceId } = await readyWorkspace();
 	const session = await insertAgentSession({
 		userId: "alice",
@@ -185,7 +187,7 @@ it("starts a new lead without write access to its own workspace", async () => {
 		workspaceId,
 		harness: "codex",
 	});
-	expect(session.taskAccess).toBe("read_only");
+	expect(session.taskAccess).toBeNull();
 	expect(session.parentSessionId).toBeNull();
 });
 
@@ -570,4 +572,58 @@ it("stores drafts without compute and gates stacked work on reviewed predecessor
 		taskSessionId: second.id,
 	});
 	expect(started.task.taskState).toBe("working");
+});
+
+it("gives a branchless root chat its publication branch once, during a running turn, and never renames it", async () => {
+	const { project, workspaceId } = await readyWorkspace();
+	const chat = await insertAgentSession({
+		userId: "alice",
+		projectId: project.id,
+		workspaceId,
+		harness: "api",
+	});
+	await db.query("update agent_session set turn_status='running' where id=$1", [
+		chat.id,
+	]);
+	const adopted = await adoptChatPublicationBranch(
+		"alice",
+		chat.id,
+		"ytimesy/fix-parser-0c4a1e",
+		"main",
+	);
+	expect(adopted).toMatchObject({
+		workingBranch: "ytimesy/fix-parser-0c4a1e",
+		selectedBranch: "ytimesy/fix-parser-0c4a1e",
+		baseBranch: "main",
+	});
+	const again = await adoptChatPublicationBranch(
+		"alice",
+		chat.id,
+		"ytimesy/renamed-0c4a1e",
+		"develop",
+	);
+	expect(again.workingBranch).toBe("ytimesy/fix-parser-0c4a1e");
+	expect(again.baseBranch).toBe("main");
+	const other = await insertAgentSession({
+		userId: "alice",
+		projectId: project.id,
+		workspaceId,
+		harness: "api",
+	});
+	await expect(
+		projectBranchHeldByOtherSession(
+			"alice",
+			project.id,
+			other.id,
+			"ytimesy/fix-parser-0c4a1e",
+		),
+	).resolves.toBe(true);
+	await expect(
+		projectBranchHeldByOtherSession(
+			"alice",
+			project.id,
+			chat.id,
+			"ytimesy/fix-parser-0c4a1e",
+		),
+	).resolves.toBe(false);
 });
