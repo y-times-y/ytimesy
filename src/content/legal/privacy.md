@@ -143,10 +143,7 @@ memory notes. Workers AI does not use that data to train models.
 
 The ytimesy GitHub App works only on the accounts and repositories you choose
 when you install it. It asks for: repository contents (read and write), pull
-requests (read and write) and metadata (read); and checks (read) where the
-agent repairs failing pull requests. [OWNER: the App manifest in
-`scripts/setup-github-app.mjs` lacks `checks: read` while `pr-repair-evidence`
-requests it; align the production App and this list.] We use this to clone
+requests (read and write), checks (read) and metadata (read). We use this to clone
 your code into your workspace, push branches, open and update pull requests,
 and read check results. The agent does not merge pull requests. You can change
 the App's repositories or uninstall it at any time in GitHub settings.
