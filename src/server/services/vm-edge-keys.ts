@@ -45,3 +45,13 @@ export function desktopViewerCredentialDigest(vmId: string) {
 export function guestServiceHostname(vmId: string, port: number) {
 	return vmEdgeHostname("tools", vmEdgeKey("tools-host", vmId), port);
 }
+
+/** Private preview of one port: forward auth admits only browsers signed in through the app. */
+export function previewHostname(vmId: string, port: number) {
+	return vmEdgeHostname("pv", vmEdgeKey("preview-host", vmId), port);
+}
+
+/** The owner's public link for one port, on its own name so turning sharing off removes only it. Re-sharing restores the same link. */
+export function sharedPreviewHostname(vmId: string, port: number) {
+	return vmEdgeHostname("share", vmEdgeKey("share-host", vmId), port);
+}

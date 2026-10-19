@@ -267,6 +267,14 @@ export async function resolveDesktopRemote(
 ): Promise<DesktopRemote | null> {
 	const cached = remotes.get(scopeKey(scope));
 	if (cached) return desktopRemoteFor(cached);
+	const providerRef = await peekSessionMachineRef(scope);
+	if (!providerRef) return null;
+	remotes.set(scopeKey(scope), providerRef);
+	return desktopRemoteFor(providerRef);
+}
+
+/** The owner's chat machine for this scope, without creating or starting it. */
+export async function peekSessionMachineRef(scope: DesktopScope) {
 	if (!scope.projectId) return null;
 	const workspace = await readyWorkspaceForOwner(scope.userId, scope.projectId);
 	const peeked = await peekAgentSessionMachine({
@@ -274,13 +282,10 @@ export async function resolveDesktopRemote(
 		projectId: scope.projectId,
 		sessionId: scope.sessionId,
 	});
-	const providerRef = copiedAgentMachineRef({
+	return copiedAgentMachineRef({
 		sessionProviderRef: peeked.providerRef,
 		templateProviderRef: workspace?.providerRef ?? null,
 	});
-	if (!providerRef) return null;
-	remotes.set(scopeKey(scope), providerRef);
-	return desktopRemoteFor(providerRef);
 }
 
 function recoverRunningDesktop(

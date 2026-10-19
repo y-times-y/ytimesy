@@ -25,6 +25,7 @@ import type {
 } from "#/server/services/workspace-machines";
 import { abortableFreestyleFetch } from "./abortable-fetch";
 import {
+	ensureVmEdgeAuthorizer,
 	listVmEdgeRoutes,
 	publishVmEdgeRoute,
 	withdrawVmEdgeRoutes,
@@ -284,6 +285,8 @@ export function createFreestyleWorkspaceMachines(
 
 		withdrawHttpRoutes: (workspaceId, kinds, port) =>
 			withdrawVmEdgeRoutes(freestyle, workspaceId, kinds, port),
+
+		ensureEdgeAuthorizer: (config) => ensureVmEdgeAuthorizer(freestyle, config),
 
 		async destroyOrphans(slugPrefix: string): Promise<readonly string[]> {
 			try {

@@ -7,6 +7,7 @@ import { DesktopInspector } from "./desktop-inspector";
 import { DiffInspector } from "./diff-inspector";
 import { FilesInspector } from "./files-inspector";
 import { MemoryInspector } from "./memory-inspector";
+import { PreviewInspector } from "./preview-inspector";
 import {
 	PullRequestInspector,
 	type PullRequestRepository,
@@ -19,6 +20,7 @@ export type ToolsView =
 	| "pr"
 	| "terminal"
 	| "desktop"
+	| "preview"
 	| "memory";
 export type InspectorView = ToolsView | "overview";
 
@@ -49,6 +51,11 @@ const views = {
 		title: "Shared desktop",
 		description:
 			"This is the desktop the agent uses for QA. You watch and control the same screen.",
+	},
+	preview: {
+		label: "Preview",
+		title: "Preview",
+		description: "Open the apps running in this chat's workspace.",
 	},
 	memory: {
 		label: "Memory",
@@ -204,6 +211,13 @@ export function WorkspaceInspector({
 					active={!collapsed && activeView === "memory"}
 					focus={memoryFocus}
 					onOpenChat={onOpenChat ?? (() => false)}
+				/>
+			) : activeView === "preview" ? (
+				<PreviewInspector
+					key={`${projectId ?? ""}:${sessionId ?? ""}`}
+					projectId={projectId}
+					sessionId={sessionId}
+					active={!collapsed && activeView === "preview"}
 				/>
 			) : activeView === "desktop" ? null : activeView === "terminal" ? (
 				<TerminalInspector
