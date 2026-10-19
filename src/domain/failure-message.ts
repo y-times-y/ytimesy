@@ -3,7 +3,33 @@ const GENERIC_EFFECT_PROMISE_FAILURE =
 
 export function failureMessage(cause: unknown): string {
 	const message = unwrapFailureMessage(cause, new Set());
-	return message || "Something went wrong.";
+	return (
+		(message && usageCapFailureMessage(message)) ||
+		message ||
+		"Something went wrong."
+	);
+}
+
+export const USER_USAGE_CAP_MESSAGE =
+	"You have used this month's cloud minutes, so new machine time cannot start. Your work is preserved; the allowance resets on the 1st (UTC).";
+export const FLEET_MONTHLY_CAP_MESSAGE =
+	"The ytimesy free beta has used its shared cloud budget for this month, so new machine time cannot start. Your work is preserved; the budget resets on the 1st (UTC). Questions: support@ytimesy.com.";
+export const FLEET_LIFETIME_CAP_MESSAGE =
+	"The ytimesy free beta has used its total cloud budget, so new machine time cannot start. Your work is preserved; we will reopen capacity as soon as we can. Questions: support@ytimesy.com.";
+
+/**
+ * The user-facing wording for a usage cap refusal (src/server/adapters/
+ * infrastructure-usage.ts), or null when the text is not one. Fleet caps are
+ * the beta's shared budget, not something the user did or can fix.
+ */
+export function usageCapFailureMessage(message: string): string | null {
+	if (/lifetime fleet cloud execution budget is exhausted/i.test(message))
+		return FLEET_LIFETIME_CAP_MESSAGE;
+	if (/fleet cloud execution budget is exhausted/i.test(message))
+		return FLEET_MONTHLY_CAP_MESSAGE;
+	if (/your cloud execution allowance is exhausted/i.test(message))
+		return USER_USAGE_CAP_MESSAGE;
+	return null;
 }
 
 export function workspaceLooksGone(message: string): boolean {

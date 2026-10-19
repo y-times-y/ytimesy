@@ -3,6 +3,7 @@ import { CoordinationFailure } from "./conversation-turn-control";
 import {
 	isWorkspaceAtCapacity,
 	isWorkspaceComputeAllowanceExhausted,
+	usageCapFailureMessage,
 } from "./failure-message";
 import { VerificationPolicyFailure } from "./task-integration-checks";
 
@@ -177,8 +178,24 @@ function repositoryFetchFailed(error: unknown, depth = 0): boolean {
 	return repositoryFetchFailed(inner, depth + 1);
 }
 
+/**
+ * A usage cap refusal anywhere in the error chain, worded for the user. The
+ * cap texts are our own fixed wording, so they are matched even untagged.
+ */
+function usageCapFailure(error: unknown, depth = 0): string | null {
+	if (depth > 4 || !(error instanceof Error)) return null;
+	const capped = usageCapFailureMessage(error.message);
+	if (capped) return capped;
+	const inner =
+		(error as { providerError?: unknown }).providerError ??
+		(RetryError.isInstance(error) ? error.lastError : error.cause);
+	return usageCapFailure(inner, depth + 1);
+}
+
 export function machineFailureMessage(error: unknown): string | null {
 	if (repositoryFetchFailed(error)) return REPOSITORY_FETCH_FAILURE;
+	const capped = usageCapFailure(error);
+	if (capped) return capped;
 	const found = machineError(error);
 	if (!found) return null;
 	const reason = machineFailureReason(found.message);
