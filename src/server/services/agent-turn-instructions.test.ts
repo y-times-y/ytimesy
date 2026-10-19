@@ -10,7 +10,6 @@ const stub = tool({
 });
 
 const base = {
-	shellBuilder: true,
 	plugins: [],
 	projectKnowledge: null,
 	leanShape: "core" as const,
@@ -21,13 +20,13 @@ describe("subagent instructions", () => {
 	it("teaches the builder cost-aware orchestration only when it has the agent tool", () => {
 		const without = agentTurnInstructions({
 			...base,
-			session: { parentSessionId: null },
+			session: {},
 			tools: { bash: stub },
 		});
 		expect(without).not.toContain("Subagents:");
 		const withAgent = agentTurnInstructions({
 			...base,
-			session: { parentSessionId: null },
+			session: {},
 			tools: { bash: stub, agent: stub, run_code: stub },
 			deferredTools: [
 				{ name: "agent", description: "Start a subagent." },
@@ -57,8 +56,6 @@ describe("subagent instructions", () => {
 		const reviewer = agentTurnInstructions({
 			...base,
 			session: {
-				parentSessionId: "root",
-				taskAccess: "read_only",
 				agentRole: "reviewer",
 				agentBudget: { steps: 75, minutes: 15, tokens: 1_000_000 },
 			},
@@ -72,8 +69,6 @@ describe("subagent instructions", () => {
 		const writer = agentTurnInstructions({
 			...base,
 			session: {
-				parentSessionId: "root",
-				taskAccess: "read_write",
 				agentRole: "writer",
 				agentBudget: null,
 			},

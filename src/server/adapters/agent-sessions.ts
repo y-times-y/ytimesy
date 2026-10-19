@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import type { AgentProviderId } from "#/domain/agent-provider";
 import type {
 	AgentTaskAccess,
-	AgentTaskExecution,
 	AgentTaskPlacement,
 	AgentTaskReviewState,
 	AgentTaskStatus,
@@ -18,7 +17,7 @@ import { captureServerAnalytics } from "./analytics";
 import { database } from "./database";
 
 const SESSION_COLUMNS =
-	"id,user_id,project_id,workspace_id,harness,provider_ref,parent_session_id,title,briefing,items,listed_model_id,turn_status,status,task_prompt,task_state,task_placement,task_access,task_execution,depends_on_session_id,task_summary,task_review_state,task_branch,task_pull_request_url,selected_branch,base_branch,working_branch,agent_role,agent_budget,agent_fork,agent_steps,created_at,updated_at";
+	"id,user_id,project_id,workspace_id,harness,provider_ref,parent_session_id,title,briefing,items,listed_model_id,turn_status,status,task_prompt,task_state,task_placement,task_access,task_summary,task_review_state,task_branch,task_pull_request_url,selected_branch,base_branch,working_branch,agent_role,agent_budget,agent_fork,agent_steps,created_at,updated_at";
 
 export async function selectAgentSessionHarness(
 	userId: string,
@@ -172,9 +171,8 @@ export type AgentSessionRecord = {
 	taskState: AgentTaskStatus | null;
 	taskPlacement: AgentTaskPlacement | null;
 	taskAccess: AgentTaskAccess | null;
-	taskExecution: AgentTaskExecution | null;
-	dependsOnSessionId: string | null;
 	taskSummary: string | null;
+	/** Retired lead/child review state; read only by benchmarks/evaluation/production.ts. */
 	taskReviewState: AgentTaskReviewState | null;
 	taskBranch: string | null;
 	selectedBranch?: string | null;
@@ -208,8 +206,6 @@ interface AgentSessionRow {
 	task_state: AgentTaskStatus | null;
 	task_placement: AgentTaskPlacement | null;
 	task_access: AgentTaskAccess | null;
-	task_execution: AgentTaskExecution | null;
-	depends_on_session_id: string | null;
 	task_summary: string | null;
 	task_review_state: AgentTaskReviewState | null;
 	task_branch: string | null;
@@ -427,8 +423,6 @@ export async function insertAgentSession(input: {
 		readonly prompt: string;
 		readonly placement: AgentTaskPlacement;
 		readonly access: AgentTaskAccess;
-		readonly execution: AgentTaskExecution;
-		readonly dependsOnSessionId: string | null;
 	};
 }) {
 	const id = randomUUID();
@@ -436,10 +430,9 @@ export async function insertAgentSession(input: {
 		`insert into agent_session(
 			id,user_id,project_id,workspace_id,harness,provider_ref,
 			parent_session_id,title,listed_model_id,status,
-			task_prompt,task_state,task_placement,task_access,task_execution,
-			depends_on_session_id,task_review_state
+			task_prompt,task_state,task_placement,task_access
 		)
-			 values($1,$2,$3,$4,$5,$6,$7,$8,$9,'starting',$10,$11,$12,$13,$14,$15,$16)
+			 values($1,$2,$3,$4,$5,$6,$7,$8,$9,'starting',$10,$11,$12,$13)
 		 returning ${SESSION_COLUMNS}`,
 		[
 			id,
@@ -456,9 +449,6 @@ export async function insertAgentSession(input: {
 			input.task?.placement ?? null,
 			// Root chats carry no task access: they publish as chats (turnPublicationRole).
 			input.task?.access ?? null,
-			input.task?.execution ?? null,
-			input.task?.dependsOnSessionId ?? null,
-			input.task ? "pending" : null,
 		],
 	);
 	const session = toSession(result.rows[0]);
@@ -476,42 +466,6 @@ export async function insertAgentSession(input: {
 		{ key: session.id, timestamp: new Date(session.createdAt) },
 	);
 	return session;
-}
-
-export async function saveAgentTaskDraft(input: {
-	readonly userId: string;
-	readonly sessionId: string;
-	readonly title: string;
-	readonly prompt: string;
-	readonly harness: AgentProviderId;
-	readonly modelId: string;
-	readonly placement: AgentTaskPlacement;
-	readonly access: AgentTaskAccess;
-	readonly execution: AgentTaskExecution;
-	readonly dependsOnSessionId: string | null;
-}) {
-	const result = await database().query(
-		`update agent_session set
-		 title=$3,task_prompt=$4,harness=$5,listed_model_id=$6,
-		 task_placement=$7,task_access=$8,task_execution=$9,
-		 depends_on_session_id=$10,updated_at=now()
-		 where id=$1 and user_id=$2 and task_state='draft'
-		 and parent_session_id is not null and provider_ref is null
-		 returning ${SESSION_COLUMNS}`,
-		[
-			input.sessionId,
-			input.userId,
-			input.title,
-			input.prompt,
-			input.harness,
-			input.modelId,
-			input.placement,
-			input.access,
-			input.execution,
-			input.dependsOnSessionId,
-		],
-	);
-	return result.rows[0] ? toSession(result.rows[0]) : null;
 }
 
 export async function saveAgentTaskState(
@@ -532,34 +486,6 @@ export async function saveAgentTaskState(
 		 where id=$1 and parent_session_id is not null
 		 returning ${SESSION_COLUMNS}`,
 		[sessionId, taskState, turnStatus],
-	);
-	return result.rows[0] ? toSession(result.rows[0]) : null;
-}
-
-export async function saveAgentTaskReview(
-	sessionId: string,
-	reviewState: AgentTaskReviewState,
-) {
-	const result = await database().query(
-		`update agent_session
-		 set task_review_state=$2, updated_at=now()
-		 where id=$1 and parent_session_id is not null
-		 returning ${SESSION_COLUMNS}`,
-		[sessionId, reviewState],
-	);
-	return result.rows[0] ? toSession(result.rows[0]) : null;
-}
-
-export async function saveAgentTaskPublication(
-	sessionId: string,
-	input: { readonly branch: string; readonly pullRequestUrl: string },
-) {
-	const result = await database().query(
-		`update agent_session
-		 set task_branch=$2, task_pull_request_url=$3, updated_at=now()
-		 where id=$1 and parent_session_id is not null
-		 returning ${SESSION_COLUMNS}`,
-		[sessionId, input.branch, input.pullRequestUrl],
 	);
 	return result.rows[0] ? toSession(result.rows[0]) : null;
 }
@@ -634,8 +560,6 @@ function toSession(row: AgentSessionRow): AgentSessionRecord {
 		taskState: row.task_state,
 		taskPlacement: row.task_placement,
 		taskAccess: row.task_access,
-		taskExecution: row.task_execution,
-		dependsOnSessionId: row.depends_on_session_id,
 		taskSummary: row.task_summary,
 		taskReviewState: row.task_review_state,
 		taskBranch: row.task_branch,

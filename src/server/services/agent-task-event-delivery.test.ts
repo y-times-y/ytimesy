@@ -4,7 +4,7 @@ import type { AgentTaskEvent } from "#/server/adapters/agent-task-events";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import {
 	deliverParentTaskNotification,
-	taskEventMessage,
+	subagentReportMessage,
 } from "./agent-task-event-delivery";
 
 const mocks = vi.hoisted(() => ({
@@ -46,7 +46,7 @@ const parent = {
 	turnStatus: "running",
 } as AgentSessionRecord;
 
-it("injects notifications into an active server leader without launching a second turn", async () => {
+it("injects notifications into an active parent without launching a second turn", async () => {
 	await expect(
 		deliverParentTaskNotification(
 			{} as never,
@@ -94,7 +94,7 @@ it("bounds long child summaries before staging them in the mailbox", async () =>
 	).rejects.toThrow("safe point");
 	expect(mocks.stage.mock.calls[0][2].length).toBeLessThan(12000);
 	expect(mocks.stage.mock.calls[0][2]).toContain(
-		"Read the child's full result",
+		"full report is in the subagent's card",
 	);
 });
 
@@ -110,32 +110,11 @@ function event(eventType: AgentTaskEvent["eventType"]): AgentTaskEvent {
 	};
 }
 
-describe("task event messages", () => {
-	it("uses a compact completion signal with retained summary access only for automatic-review roots", () => {
-		const message = taskEventMessage(event("completed"), "Audit API", true);
-		expect(message).toContain("child-1");
-		expect(message).toContain("next model step");
-		expect(message).toContain("Completion is not acceptance");
-		expect(message).not.toContain("Evidence here");
-		expect(taskEventMessage(event("failed"), "Audit API", true)).toContain(
-			"Evidence here",
-		);
-		expect(taskEventMessage(event("blocked"), "Audit API", true)).toContain(
-			"Evidence here",
-		);
-	});
-	it("asks the parent to review a completed child", () => {
-		expect(taskEventMessage(event("completed"), "Audit API")).toContain(
-			"Audit API finished",
-		);
-		expect(taskEventMessage(event("completed"), "Audit API")).toContain(
-			"Inspect its evidence and diff",
-		);
-	});
-
-	it("surfaces a blocked child's actual question", () => {
-		expect(taskEventMessage(event("blocked"), "Migrate schema")).toContain(
-			"is blocked and needs your decision",
-		);
+describe("subagent report messages", () => {
+	it("passes the report through as a claim for the parent to verify", () => {
+		const message = subagentReportMessage(event("completed"));
+		expect(message).toContain("Evidence here");
+		expect(message).toContain("Treat it as a claim");
+		expect(subagentReportMessage(event("blocked"))).toContain("Evidence here");
 	});
 });

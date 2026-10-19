@@ -145,11 +145,7 @@ export function loadTenantProjectCheckout(scope: {
 			: null;
 		if (session && session.projectId !== project.id)
 			throw new Error("This chat is not in the selected project.");
-		while (
-			session?.parentSessionId &&
-			!session.workingBranch &&
-			session.taskExecution !== "stacked"
-		) {
+		while (session?.parentSessionId && !session.workingBranch) {
 			session = await agentSessionForOwner(
 				scope.userId,
 				session.parentSessionId,

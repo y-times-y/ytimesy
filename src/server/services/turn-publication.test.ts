@@ -13,8 +13,6 @@ const deps = vi.hoisted(() => ({
 	push: vi.fn(),
 	ahead: vi.fn(),
 	pull: vi.fn(),
-	save: vi.fn(),
-	predecessor: vi.fn(),
 	evidence: vi.fn(),
 	adopt: vi.fn(),
 	evalUser: vi.fn(),
@@ -45,8 +43,6 @@ vi.mock("../adapters/github/git-broker", () => ({
 	pushBrokeredRepository: deps.push,
 }));
 vi.mock("../adapters/agent-sessions", () => ({
-	agentSessionForOwner: deps.predecessor,
-	saveAgentTaskPublication: deps.save,
 	adoptChatPublicationBranch: deps.adopt,
 }));
 const turn = "a".repeat(64);
@@ -54,11 +50,10 @@ const session = {
 	id: "chat-abcd",
 	userId: "alice",
 	projectId: "project",
-	providerRef: "writer",
-	parentSessionId: "lead",
-	taskAccess: "read_write",
-	taskPlacement: "fresh",
+	providerRef: "chat-vm",
+	parentSessionId: null,
 	title: "Fix parser",
+	workingBranch: "ytimesy/fix-parser-caabcd",
 	baseBranch: "main",
 } as AgentSessionRecord;
 beforeEach(() => {
@@ -94,13 +89,17 @@ beforeEach(() => {
 		draft: true,
 	});
 });
-it("pushes the completed revision for each repository and records the primary draft handoff", async () => {
+it("pushes the completed revision for each repository and returns the primary draft handoff", async () => {
 	const runtime = new MemoryWorkspaceRuntime({
 		exitCode: 0,
 		stdout: "1\n",
 		stderr: "",
 	});
-	await publishCompletedSessionTurn(session, runtime, turn);
+	const result = await publishCompletedSessionTurn(session, runtime, turn);
+	expect(result).toEqual({
+		branch: "ytimesy/fix-parser-caabcd",
+		pullRequestUrl: "https://github.com/owner/primary/pull/1",
+	});
 	expect(deps.project).toHaveBeenCalledWith("alice", "project");
 	expect(deps.token).toHaveBeenCalledTimes(1);
 	expect(deps.push.mock.calls.map((call) => call[1].baseBranch)).toEqual([
@@ -127,10 +126,6 @@ it("pushes the completed revision for each repository and records the primary dr
 			sessionId: "chat-abcd",
 		},
 	]);
-	expect(deps.save).toHaveBeenCalledWith("chat-abcd", {
-		branch: "ytimesy/fix-parser-caabcd",
-		pullRequestUrl: "https://github.com/owner/primary/pull/1",
-	});
 });
 it("queues evidence for the primary pull request only, and a failure never fails the handoff", async () => {
 	deps.pull.mockResolvedValue({
@@ -155,7 +150,7 @@ it("queues evidence for the primary pull request only, and a failure never fails
 		fullName: "owner/primary",
 		pullNumber: 9,
 	});
-	expect(deps.save).toHaveBeenCalled();
+	expect(deps.pull).toHaveBeenCalled();
 	expect(warn).toHaveBeenCalledWith(
 		"Pull request evidence could not be queued.",
 		{
@@ -174,26 +169,6 @@ it("does not push or request credentials for a chat without commits since its ba
 	expect(deps.push).not.toHaveBeenCalled();
 	expect(deps.pull).not.toHaveBeenCalled();
 });
-it("keeps the published branch and uses the stacked predecessor as the primary base", async () => {
-	deps.predecessor.mockResolvedValue({
-		taskBranch: "ytimesy/predecessor-ab12",
-		projectId: "project",
-	});
-	await publishCompletedSessionTurn(
-		{
-			...session,
-			taskBranch: "ytimesy/existing-abcd",
-			taskExecution: "stacked",
-			dependsOnSessionId: "previous",
-		},
-		new MemoryWorkspaceRuntime({ exitCode: 0, stdout: "1", stderr: "" }),
-		turn,
-	);
-	expect(deps.push.mock.calls[0][1]).toMatchObject({
-		branch: "ytimesy/existing-abcd",
-		baseBranch: "ytimesy/predecessor-ab12",
-	});
-});
 it("fails a rejected push without creating a PR or recording publication", async () => {
 	deps.push.mockRejectedValue(new Error("Non-fast-forward push rejected"));
 	await expect(
@@ -204,7 +179,6 @@ it("fails a rejected push without creating a PR or recording publication", async
 		),
 	).rejects.toThrow("Non-fast-forward");
 	expect(deps.pull).not.toHaveBeenCalled();
-	expect(deps.save).not.toHaveBeenCalled();
 });
 it("never automatically pushes to the repository default branch", async () => {
 	await expect(
@@ -213,7 +187,7 @@ it("never automatically pushes to the repository default branch", async () => {
 			new MemoryWorkspaceRuntime({ exitCode: 0, stdout: "1", stderr: "" }),
 			turn,
 		),
-	).rejects.toThrow("separate task branch");
+	).rejects.toBeInstanceOf(ChatPublicationSkipped);
 	expect(deps.push).not.toHaveBeenCalled();
 });
 
@@ -255,8 +229,6 @@ it("pushes a root chat's own branch, opens its draft PR with the Fix link origin
 		repositoryId: 1,
 		sessionId: "chat-abcd",
 	});
-	// A chat is not a task: no task publication row.
-	expect(deps.save).not.toHaveBeenCalled();
 	expect(deps.adopt).not.toHaveBeenCalled();
 	expect(result).toEqual({
 		branch: "ytimesy/fix-parser-00abcd",
@@ -335,7 +307,7 @@ it.each([
 		"an evaluation run",
 		() => deps.evaluation.mockResolvedValue({ id: "evaluation" }),
 	],
-])("never pushes for %s, chat or task", async (_label, arrange) => {
+])("never pushes for %s", async (_label, arrange) => {
 	arrange();
 	for (const each of [chat, session]) {
 		const runtime = changed();
@@ -349,13 +321,17 @@ it.each([
 	expect(deps.push).not.toHaveBeenCalled();
 });
 
-it("never publishes a read-only child or a shared-placement task", async () => {
-	for (const each of [
-		{ ...session, taskAccess: "read_only" },
-		{ ...session, taskPlacement: "shared" },
-	] as AgentSessionRecord[]) {
-		await publishCompletedSessionTurn(each, changed(), turn);
-	}
+it("never publishes a subagent, writer or reader", async () => {
+	for (const agentRole of ["writer", "researcher"])
+		await publishCompletedSessionTurn(
+			{
+				...chat,
+				parentSessionId: "chat-abcd",
+				agentRole,
+			} as AgentSessionRecord,
+			changed(),
+			turn,
+		);
 	expect(deps.evalUser).not.toHaveBeenCalled();
 	expect(deps.push).not.toHaveBeenCalled();
 });

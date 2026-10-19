@@ -1,7 +1,6 @@
 import { jsonSchema, type ToolSet, tool } from "ai";
-import { Effect } from "effect";
 import { z } from "zod";
-import { agentTaskToolDefinitions } from "#/domain/agent-task-definitions";
+import { reportTaskBlockedDefinition } from "#/domain/agent-task-definitions";
 import { WorkspaceId } from "#/domain/ids";
 import { knowledgeForTask } from "#/domain/project-knowledge";
 import {
@@ -9,6 +8,8 @@ import {
 	sourceEvidenceMatches,
 } from "#/domain/project-source-evidence";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
+import { saveAgentTaskBlockedEvent } from "../adapters/agent-task-events";
+import { enqueueAgentTaskEvent } from "../jobs/queue";
 import { agentContextArchiveTools } from "./agent-context-archive-tools";
 import { agentOutputArtifacts } from "./agent-output-artifacts";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
@@ -19,7 +20,6 @@ import { apiAgentLanguageTools } from "./api-agent-language-tools";
 import { apiAgentSearchTools } from "./api-agent-search-tools";
 import { batchedAgentReads } from "./batched-agent-reads";
 import { deliverableCheckTools } from "./deliverable-check";
-import { runAgentTaskTool } from "./harness-workspace-session";
 import { journaledToolOperation } from "./journaled-tool-operation";
 import { loadCloudProjectMemoryDocument } from "./project-knowledge";
 import { projectMemoryTools } from "./project-memory-tools";
@@ -110,37 +110,25 @@ export function apiAgentTools(
 			signal,
 		}),
 	};
-	for (const definition of agentTaskToolDefinitions) {
-		if (definition.name === "report_task_blocked" && !session.parentSessionId)
-			continue;
-		tools[definition.name] = tool({
-			description: definition.description,
-			inputSchema: jsonSchema<Record<string, unknown>>(
-				JSON.parse(JSON.stringify(definition.inputSchema)),
+	// A subagent asks its parent for a missing decision; the parent is woken.
+	if (session.parentSessionId)
+		tools[reportTaskBlockedDefinition.name] = tool({
+			description: reportTaskBlockedDefinition.description,
+			inputSchema: jsonSchema<{ question?: unknown }>(
+				JSON.parse(JSON.stringify(reportTaskBlockedDefinition.inputSchema)),
 			),
 			execute: (args, options) =>
-				once(options.toolCallId, () =>
-					Effect.runPromise(
-						runAgentTaskTool(
-							machines,
-							{
-								userId: session.userId,
-								projectId: session.projectId,
-								sessionId: session.id,
-								harnessId: session.harness,
-							},
-							session,
-							{
-								id: `${input.toolCallPrefix ?? ""}${options.toolCallId}`,
-								tool: definition.name,
-								arguments: args,
-							},
-							{ signal: options.abortSignal ?? signal, turnId: input.turnId },
-						),
-					),
-				),
+				once(options.toolCallId, async () => {
+					const question =
+						typeof args.question === "string" ? args.question.trim() : "";
+					const eventId = await saveAgentTaskBlockedEvent({
+						sessionId: session.id,
+						question,
+					});
+					if (eventId) await enqueueAgentTaskEvent(eventId).catch(() => null);
+					return { taskId: session.id, status: "waiting" };
+				}),
 		});
-	}
 	Object.assign(
 		tools,
 		apiAgentFileTools({

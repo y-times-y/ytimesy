@@ -289,7 +289,6 @@ describe("run_code on the lean surface", () => {
 	it("tells the model when to use run_code only when it is offered", () => {
 		const instructions = (tools: ToolSet) =>
 			agentTurnInstructions({
-				shellBuilder: true,
 				session: { parentSessionId: null } as never,
 				tools,
 				plugins: [] as never,

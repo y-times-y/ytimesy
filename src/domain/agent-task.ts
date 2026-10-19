@@ -37,24 +37,15 @@ export function taskExecutionCapabilities(task: {
 /**
  * How a completed turn reaches GitHub. Every root chat ("chat") commits,
  * pushes its own branch and keeps a draft PR open; its task_access is not
- * consulted (root chats carry the legacy 'read_only' label, which now only
- * means "no server-owned completion-verification gate"). A child task
- * ("task") publishes only when it is a read_write writer. Subagents (any
- * agentRole, readers included: their work reaches the parent as a report or
- * patch), shared-placement and machine-less sessions never publish. Plan-mode
- * turns are excluded by the caller.
+ * consulted (root chats carry the legacy 'read_only' label). Subagents never
+ * publish: their work reaches the parent as a report or patch. Machine-less
+ * sessions publish nothing. Plan-mode turns are excluded by the caller.
  */
 export function turnPublicationRole(session: {
 	readonly providerRef: string | null;
 	readonly parentSessionId: string | null;
-	readonly taskPlacement: string | null;
-	readonly taskAccess: string | null;
-	readonly agentRole?: string | null;
-}): "chat" | "task" | null {
-	if (!session.providerRef || session.agentRole) return null;
-	if (session.taskPlacement === "shared") return null;
-	if (!session.parentSessionId) return "chat";
-	return session.taskAccess === "read_write" ? "task" : null;
+}): "chat" | null {
+	return session.providerRef && !session.parentSessionId ? "chat" : null;
 }
 
 type AgentTaskPlan = {

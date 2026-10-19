@@ -307,16 +307,13 @@ describe("lean instructions", () => {
 
 	it("replace the builder's tool-specific system prompt", () => {
 		const input = {
-			shellBuilder: true,
-			session: { parentSessionId: null, taskAccess: null },
+			session: {},
 			tools: {},
 			plugins: [],
 			projectKnowledge: null,
 		};
 		const current = agentTurnInstructions(input);
 		const lean = agentTurnInstructions({ ...input, leanShape: "gemini" });
-		expect(current).toContain("read_environment_report");
-		expect(lean).not.toContain("read_environment_report");
 		expect(lean).toContain("run_shell_command runs shell commands");
 		expect(lean).toContain("You are the coding agent for this chat");
 		expect(lean).toContain("`ytimesy-browser screenshot`");

@@ -1,9 +1,31 @@
 import { z } from "zod";
-import { agentTaskToolDefinitions } from "./agent-task-definitions";
 import { leanToolNames } from "./harness-model-profile";
 
+// Task tools of the retired lead/child architecture stay listed so their
+// recorded metric rows still validate; only report_task_blocked is offered now.
+const retiredTaskToolNames = [
+	"read_task_checks",
+	"read_task_summary",
+	"read_task_output",
+	"read_task_capacity",
+	"list_peers",
+	"send_peer_message",
+	"create_task",
+	"edit_task",
+	"start_task",
+	"list_tasks",
+	"send_task_message",
+	"request_task_wrap_up",
+	"inspect_task_diff",
+	"read_task_handoff",
+	"import_reviewed_task",
+	"mark_task_reviewed",
+	"publish_task",
+] as const;
+
 const toolNames = [
-	...agentTaskToolDefinitions.map((tool) => tool.name),
+	...retiredTaskToolNames,
+	"report_task_blocked",
 	"read_file",
 	"read_files",
 	"list_files",

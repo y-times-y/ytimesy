@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import type { ModelMessage, ToolSet } from "ai";
-import { Effect } from "effect";
 import {
 	agentPlanState,
 	ENTER_PLAN_MODE_TOOL,
@@ -63,13 +62,8 @@ import type {
 	SessionItem,
 	UserMessageItem,
 } from "#/domain/session-item";
-import { isReaderRole, MAX_SUBAGENT_LEVEL } from "#/domain/subagent";
+import { MAX_SUBAGENT_LEVEL } from "#/domain/subagent";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
-import {
-	completedChildrenForReview,
-	hasDelegatedTasks,
-	withDelegationContext,
-} from "../adapters/agent-delegation-context";
 import {
 	type AgentSessionRecord,
 	agentSessionMetadataForOwner,
@@ -130,7 +124,6 @@ import {
 	runCodexSubscriptionAgentStep,
 } from "../services/codex-subscription-agent";
 import { compactionStateSnapshot } from "../services/compaction-state-snapshot";
-import { withCompletedTaskReviewContext } from "../services/completed-task-review-context";
 import { ensureConversationCodePoint } from "../services/conversation-recovery";
 import {
 	BUILDER_DEFERRED_TOOL_GROUPS,
@@ -138,7 +131,6 @@ import {
 	loadedDeferredTools,
 } from "../services/deferred-tools";
 import { harnessLifecycleHooks } from "../services/harness-lifecycle-hooks";
-import { runAgentTaskTool } from "../services/harness-workspace-session";
 import { journaledToolOperation } from "../services/journaled-tool-operation";
 import { turnOAuthProvider } from "../services/mcp-oauth";
 import { mcpToolSurface } from "../services/mcp-tool-surface";
@@ -159,10 +151,7 @@ import {
 	withPlanModeNotice,
 } from "../services/plan-mode";
 import { pluginSkillTools } from "../services/plugin-skill-tools";
-import {
-	loadCloudProjectKnowledge,
-	recordCloudProjectReport,
-} from "../services/project-knowledge";
+import { recordCloudProjectReport } from "../services/project-knowledge";
 import {
 	loadAgentProjectSecrets,
 	writeAgentProjectSecrets,
@@ -457,6 +446,10 @@ async function runApiTurnAttempt(
 		const metadata = await loadingMetadata;
 		const owner = metadata && { ...metadata, items: turn.items };
 		if (!owner) throw new Error("Task no longer exists.");
+		// A child without a subagent role belongs to the retired lead/child
+		// architecture; only the root builder and its subagents run.
+		if (owner.parentSessionId && !owner.agentRole)
+			throw new Error("This retired child task can no longer run.");
 		if (process.env.YTIMESY_HARNESS_EVALUATION_ENABLED === "1")
 			evaluation = await evaluationRunForTask(owner.userId, owner.id);
 		const variant = await turnHarnessVariant(turn.id, owner.userId);
@@ -701,18 +694,12 @@ async function runApiTurnAttempt(
 		const planState = agentPlanState(items);
 		const planLock =
 			!owner.parentSessionId && !evaluation ? new PlanLock(planState) : null;
-		// Writable builders get the validated shell surface; so do read-only
-		// subagents, whose commands run as the reader Linux user that cannot
-		// write the checkout (reader-workspace-machines.ts).
-		const shellBuilder = writable || isReaderRole(owner.agentRole);
 		const repositoryContext = automaticRepositoryContext({
 			tools: originalTools,
 			workspace,
 			signal: abort.signal,
 			// Builders get repository instructions as messages, like AGENTS.md in Codex.
-			instructionMessages: shellBuilder
-				? { turnStart: step ? step.index === 1 : !continued }
-				: undefined,
+			instructionMessages: { turnStart: step ? step.index === 1 : !continued },
 			onEvent: async (event) => {
 				items = applyApiProgress(items, turn.id, event);
 				progress.offer(items);
@@ -720,22 +707,22 @@ async function runApiTurnAttempt(
 		});
 		// The builder's tool surface (docs/builder-tool-surface.md): "current"
 		// for everyone; a development eval user's harness variant may pick a
-		// lean one (docs/parallel-evals.md).
-		const surface = !shellBuilder
-			? { tools: repositoryContext.tools, lean: undefined }
-			: builderToolSurface({
-					variant: variant.toolSurface,
-					modelId: route.modelId,
-					tools: repositoryContext.tools,
-					lean: {
-						workspace,
-						sessionId: owner.id,
-						turnId: turn.id,
-						toolCallPrefix: step ? `step-${step.index}:` : undefined,
-						signal: abort.signal,
-						memo: (key, load) => turnMemo(`${turn.id}:${key}`, load),
-					},
-				});
+		// lean one (docs/parallel-evals.md). Read-only subagents get it too:
+		// their commands run as the reader Linux user that cannot write the
+		// checkout (reader-workspace-machines.ts).
+		const surface = builderToolSurface({
+			variant: variant.toolSurface,
+			modelId: route.modelId,
+			tools: repositoryContext.tools,
+			lean: {
+				workspace,
+				sessionId: owner.id,
+				turnId: turn.id,
+				toolCallPrefix: step ? `step-${step.index}:` : undefined,
+				signal: abort.signal,
+				memo: (key, load) => turnMemo(`${turn.id}:${key}`, load),
+			},
+		});
 		const surfaceTools = surface.tools;
 		// A lean surface names the repository's absolute path in its system
 		// prompt (Claude Code's tools take absolute paths). The first step
@@ -812,16 +799,6 @@ async function runApiTurnAttempt(
 		const commandReader =
 			surface.lean?.commandReader ??
 			("read_command" in surfaceTools ? "read_command" : "continue_command");
-		// Delegated-task context concerns only sessions with children. A session
-		// without the task tools (the builder) cannot gain children mid-turn, so
-		// its answer holds for the turn; one with them re-checks until it has one.
-		const canDelegate = "create_task" in surfaceTools;
-		const hasChildren = () =>
-			turnMemo(
-				`${turn.id}:has-children`,
-				() => hasDelegatedTasks(owner.userId, owner.id),
-				(present) => present || !canDelegate,
-			);
 		// The builder and subagents above the deepest level may delegate.
 		const delegation: ToolSet =
 			subagentsOn &&
@@ -909,14 +886,6 @@ async function runApiTurnAttempt(
 				progress.offer(items);
 			}
 		}
-		const projectKnowledge = shellBuilder
-			? null
-			: await loadCloudProjectKnowledge(
-					owner,
-					currentTask?.kind === "userMessage"
-						? currentTask.text
-						: (owner.taskPrompt ?? owner.title),
-				);
 		let flushedAt = 0;
 		let metricIndex = 0;
 		failureStage = "model";
@@ -1041,11 +1010,10 @@ async function runApiTurnAttempt(
 			},
 			instructions: turnInstructions(
 				{
-					shellBuilder,
 					session: owner,
 					tools,
 					plugins,
-					projectKnowledge,
+					projectKnowledge: null,
 					secretNames: projectSecrets?.names,
 					leanShape: surface.lean?.shape,
 					leanWorkingDirectory,
@@ -1100,47 +1068,9 @@ async function runApiTurnAttempt(
 						await publishProgress?.("running");
 					},
 				});
-				const delegated = await hasChildren();
-				let current = delegated
-					? await withDelegationContext(owner.userId, owner.id, history)
-					: history;
-				if (delegated && !owner.parentSessionId && owner.projectId) {
-					current = await withCompletedTaskReviewContext({
-						messages: current,
-						children: await completedChildrenForReview(
-							owner.userId,
-							owner.projectId,
-							owner.id,
-						),
-						signal: abort.signal,
-						readHandoff: (taskId) =>
-							Effect.runPromise(
-								runAgentTaskTool(
-									machines,
-									{
-										userId: owner.userId,
-										projectId: owner.projectId,
-										sessionId: owner.id,
-										harnessId: owner.harness,
-									},
-									owner,
-									{
-										id: `${turn.id}:handoff:${taskId}`,
-										tool: "read_task_handoff",
-										arguments: { taskId },
-									},
-									{ signal: abort.signal, turnId: turn.id },
-								),
-							),
-					});
-				}
-				if (current !== history) {
-					messages = current;
-					await saveCheckpoint();
-				}
 				return injectServerPeerMessages(
 					owner.id,
-					current,
+					history,
 					async (injected, delivered) => {
 						messages = injected;
 						if (delivered.length) {

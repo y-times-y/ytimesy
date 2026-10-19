@@ -79,11 +79,6 @@ export function deferredApiTurnWorkspace(
 			])();
 		}
 		signal.throwIfAborted();
-		const predecessor = owner.dependsOnSessionId
-			? await agentSessionForOwner(owner.userId, owner.dependsOnSessionId)
-			: null;
-		if (predecessor && predecessor.projectId !== owner.projectId)
-			throw new Error("The stacked predecessor is unavailable.");
 		const bound = owner.taskPlacement
 			? await bindPreparedAgentTaskMachine(
 					machinesForAgentSession(machines, owner),
@@ -91,7 +86,6 @@ export function deferredApiTurnWorkspace(
 						userId: owner.userId,
 						projectId: owner.projectId,
 						task: owner,
-						predecessor,
 					},
 				)
 			: await bindAgentSessionMachine(machines, {
