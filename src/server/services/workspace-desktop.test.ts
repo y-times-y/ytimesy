@@ -1,9 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import { WorkspaceId } from "#/domain/ids";
+import { DESKTOP_VIEWER_CREDENTIAL_PATH } from "#/server/adapters/freestyle/start-desktop";
+import {
+	desktopViewerCredential,
+	desktopViewerCredentialDigest,
+} from "./vm-edge-keys";
 import {
 	desktopFromRunningGuest,
 	ensureDesktopProcesses,
 } from "./workspace-desktop.ts";
+
+vi.stubEnv("BETTER_AUTH_SECRET", "test-root-secret-that-is-long-enough-000");
 
 describe("ensureDesktopProcesses", () => {
 	it("reuses the resumed desktop without reinstalling or restarting its dock", async () => {
@@ -33,7 +40,15 @@ describe("ensureDesktopProcesses", () => {
 		};
 		await ensureDesktopProcesses(machines, "vm-cold");
 		expect(machines.exec).toHaveBeenCalledTimes(2);
-		expect(machines.writeTextFile).toHaveBeenCalledTimes(1);
+		expect(machines.exec.mock.calls[0]?.[1]).toContain(
+			desktopViewerCredentialDigest("vm-cold"),
+		);
+		expect(machines.writeTextFile).toHaveBeenCalledTimes(2);
+		expect(machines.writeTextFile).toHaveBeenCalledWith(
+			"vm-cold",
+			DESKTOP_VIEWER_CREDENTIAL_PATH,
+			desktopViewerCredential("vm-cold"),
+		);
 	});
 });
 

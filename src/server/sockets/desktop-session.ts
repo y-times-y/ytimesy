@@ -1,7 +1,10 @@
 import { publicFailureMessage } from "#/domain/project-workspace";
 import { projectForOwner } from "../adapters/projects";
 import { requireUser } from "../auth/auth";
-import { resolveDesktopRemote } from "../services/workspace-desktop";
+import {
+	type DesktopRemote,
+	resolveDesktopRemote,
+} from "../services/workspace-desktop";
 import type { ClientSocket, RemoteSocket } from "./client-socket";
 
 export const DESKTOP_PATH = "/api/desktop";
@@ -11,7 +14,7 @@ export async function runDesktopSession(
 	client: ClientSocket,
 	headers: Headers,
 	url: URL,
-	openRemote: (url: string) => Promise<RemoteSocket>,
+	openRemote: OpenDesktopRemote,
 ) {
 	try {
 		const user = await requireUser(headers);
@@ -24,16 +27,16 @@ export async function runDesktopSession(
 			client.close(4000, "Project is not available.");
 			return;
 		}
-		const origin = await resolveDesktopRemote({
+		const remote = await resolveDesktopRemote({
 			userId: user.id,
 			projectId,
 			sessionId: url.searchParams.get("sessionId")?.trim() || undefined,
 		});
-		if (!origin) {
+		if (!remote) {
 			client.close(4000, "Desktop is not ready.");
 			return;
 		}
-		pipe(client, await connectRemote(origin, openRemote));
+		pipe(client, await connectRemote(remote, openRemote));
 	} catch (cause) {
 		const message =
 			cause instanceof Response && cause.status === 401
@@ -43,15 +46,21 @@ export async function runDesktopSession(
 	}
 }
 
+/** Opens the VM's viewer socket, presenting the server-held credential. */
+export type OpenDesktopRemote = (
+	url: string,
+	headers: { authorization: string },
+) => Promise<RemoteSocket>;
+
 async function connectRemote(
-	origin: string,
-	openRemote: (url: string) => Promise<RemoteSocket>,
+	remote: DesktopRemote,
+	openRemote: OpenDesktopRemote,
 ) {
-	const base = origin.replace(/^http/i, "ws");
+	const base = remote.origin.replace(/^http/i, "ws");
 	let lastError: unknown;
 	for (const url of [base, `${base}/websockify`]) {
 		try {
-			return await openRemote(url);
+			return await openRemote(url, { authorization: remote.authorization });
 		} catch (cause) {
 			lastError = cause;
 		}
