@@ -209,23 +209,43 @@ export const LEAN_COMMAND_ARGUMENTS: Readonly<Record<string, string>> =
 
 /**
  * The lean shape a tool list was built with, if any: the shape whose every
- * tool is offered (Codex's apply_patch only when the route had one).
+ * tool is offered (Codex's apply_patch only when the route had one), else
+ * the read-only form of one (a reader subagent's: its write and edit tools
+ * left out).
  */
 export function leanSurfaceShape(
 	toolNames: readonly string[],
 ): LeanToolShape | null {
 	const offered = new Set(toolNames);
-	for (const shape of Object.keys(LEAN_SHAPE_TOOLS) as LeanToolShape[]) {
-		const tools = Object.values(LEAN_SHAPE_TOOLS[shape]) as string[];
-		if (
-			tools.every(
-				(name) =>
-					offered.has(name) || (shape === "codex" && name === "apply_patch"),
-			)
-		)
-			return shape;
-	}
-	return null;
+	const shapes = Object.keys(LEAN_SHAPE_TOOLS) as LeanToolShape[];
+	const matches = (shape: LeanToolShape, readOnly: boolean) => {
+		const tools: Partial<Record<LeanToolRole, string>> =
+			LEAN_SHAPE_TOOLS[shape];
+		const optional = new Set(
+			readOnly
+				? [tools.write, tools.edit].filter((name) => name !== tools.read)
+				: [],
+		);
+		return (Object.values(tools) as string[]).every(
+			(name) =>
+				offered.has(name) ||
+				optional.has(name) ||
+				(shape === "codex" && name === "apply_patch"),
+		);
+	};
+	return (
+		shapes.find((shape) => matches(shape, false)) ??
+		shapes.find((shape) => matches(shape, true)) ??
+		null
+	);
+}
+
+/** A lean surface without its edit tool: a read-only subagent's. */
+function readOnlyLeanSurface(
+	shape: LeanToolShape,
+	toolNames: readonly string[],
+) {
+	return !toolNames.includes(LEAN_SHAPE_TOOLS[shape].edit);
 }
 
 /** A shell-shaped surface (like native Codex): a command tool and no specialist tools. */
@@ -259,6 +279,8 @@ function leanHarnessInstructions(
 	family: HarnessModelFamily,
 	/** run_code is offered (harness variant codeMode): batching goes through it. */
 	codeMode = false,
+	/** A read-only subagent: it checks and reports, it does not edit. */
+	readOnly = false,
 ) {
 	const tools: { command: string; edit: string; read?: string } =
 		LEAN_SHAPE_TOOLS[shape];
@@ -271,6 +293,14 @@ function leanHarnessInstructions(
 				: "After compaction, rely on files, command output and ~/.ytimesy/history/, not on reasoning you remember.";
 	const fix =
 		"Once you understand the cause, make the complete fix rather than a series of partial edits, then rerun the check and the project's existing tests.";
+	if (readOnly)
+		return [
+			`Harness tool profile v13-lean-reader (${family}): You review and report; you do not change the checkout. ${context}`,
+			codeMode
+				? `Inspect by reading related files together rather than slice by slice: one run_code program reads several files at once (tools.${tools.read ?? run}) or runs ${run} commands (rg, sed -n, git, project CLIs, the project's tests) and returns only the relevant lines.`
+				: `Inspect with ${run} (rg, sed -n, git, project CLIs, the project's tests), reading related files together in one command rather than slice by slice.`,
+			"Back each conclusion with a command you ran and its output, or a file and line; run the project's existing tests and the documented invocation rather than reasoning about what they would do. Do not stop to ask about ambiguity you can resolve yourself: state the reading you chose and check the alternative when a result hinges on it.",
+		].join(" ");
 	// With run_code offered, the shell-only wording would contradict the
 	// run_code paragraph (measured: GPT then used only the command tool).
 	if (codeMode)
@@ -315,6 +345,7 @@ export function harnessModelToolInstructions(
 			lean,
 			family,
 			availableTools.includes(CODE_MODE_TOOL),
+			readOnlyLeanSurface(lean, availableTools),
 		);
 	// A shell-shaped surface (like native Codex) gets shell-centric guidance
 	// instead of instructions for specialist tools it was not offered.

@@ -39,6 +39,12 @@ export function apiAgentTools(
 		signal: AbortSignal;
 		/** A builder-direct root chat edits its own workspace. */
 		writable?: boolean;
+		/**
+		 * Commands run as the reader Linux user (reader-workspace-machines.ts),
+		 * which the operating system keeps from writing the checkout, so a
+		 * read-only session still gets the command runner.
+		 */
+		readerCommands?: boolean;
 		/** Latest epoch ms a command wait may end (step budget or turn deadline minus a margin). */
 		waitDeadlineAt?: number;
 	} & ({ cwd: string } | { workspace: () => Promise<AgentToolWorkspace> }),
@@ -162,7 +168,7 @@ export function apiAgentTools(
 			output,
 			turnId: input.turnId,
 			sessionId: session.id,
-			readOnly,
+			readOnly: readOnly && !input.readerCommands,
 			signal,
 			once,
 			waitDeadlineAt: input.waitDeadlineAt,

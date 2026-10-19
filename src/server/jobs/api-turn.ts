@@ -66,7 +66,7 @@ import type {
 	SessionItem,
 	UserMessageItem,
 } from "#/domain/session-item";
-import { isReaderRole, MAX_SUBAGENT_LEVEL } from "#/domain/subagent";
+import { MAX_SUBAGENT_LEVEL, runsAsReader } from "#/domain/subagent";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
 import {
 	completedChildrenForReview,
@@ -653,6 +653,10 @@ async function runApiTurnAttempt(
 		);
 		// Awaited below; this only keeps an early failure from being unhandled.
 		running.catch(() => {});
+		// A read-only subagent's commands run as the reader Linux user, which
+		// cannot write the checkout (reader-workspace-machines.ts), so it gets
+		// the command runner its shell surface is built on.
+		const reader = runsAsReader(owner);
 		const originalTools = apiAgentTools({
 			machines,
 			session: owner,
@@ -663,6 +667,7 @@ async function runApiTurnAttempt(
 			toolCallPrefix: step ? `step-${step.index}:` : undefined,
 			signal: abort.signal,
 			writable,
+			readerCommands: reader,
 			waitDeadlineAt: step?.waitDeadlineAt,
 		});
 		const hooks = harnessLifecycleHooks({
@@ -703,7 +708,7 @@ async function runApiTurnAttempt(
 		// Writable builders get the validated shell surface; so do read-only
 		// subagents, whose commands run as the reader Linux user that cannot
 		// write the checkout (reader-workspace-machines.ts).
-		const shellBuilder = writable || isReaderRole(owner.agentRole);
+		const shellBuilder = writable || reader;
 		const repositoryContext = automaticRepositoryContext({
 			tools: originalTools,
 			workspace,
@@ -726,6 +731,7 @@ async function runApiTurnAttempt(
 					variant: variant.toolSurface,
 					modelId: route.modelId,
 					tools: repositoryContext.tools,
+					readOnly: reader,
 					lean: {
 						workspace,
 						sessionId: owner.id,
@@ -824,12 +830,13 @@ async function runApiTurnAttempt(
 				() => hasDelegatedTasks(owner.userId, owner.id),
 				(present) => present || !canDelegate,
 			);
-		// The builder and subagents above the deepest level may delegate.
+		// The builder and subagents above the deepest level may delegate; a
+		// checker reviews the deliverable itself, on the smallest surface.
 		const delegation: ToolSet =
 			subagentsOn &&
 			surface.lean &&
 			(owner.agentRole
-				? subagentLevel < MAX_SUBAGENT_LEVEL
+				? owner.agentRole !== "checker" && subagentLevel < MAX_SUBAGENT_LEVEL
 				: !owner.parentSessionId)
 				? withRedactedResults(
 						subagentTools({
@@ -1088,6 +1095,7 @@ async function runApiTurnAttempt(
 					projectKnowledge,
 					secretNames: receivesSecrets ? projectSecrets?.names : undefined,
 					leanShape: surface.lean?.shape,
+					leanReadOnly: surface.lean?.readOnly,
 					leanWorkingDirectory,
 					deferredTools: deferral?.deferred,
 					codeMode: codeMode ?? undefined,

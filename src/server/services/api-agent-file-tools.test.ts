@@ -145,6 +145,17 @@ it("wires the shared shell and command lifecycle into production writers, not re
 	])
 		expect(lead[name]).toBeUndefined();
 	expect(lead.read_command.execute).toBeTypeOf("function");
+	// A reader subagent's commands run as the reader Linux user, so it keeps
+	// the command runner its lean bash is built on; it still cannot edit.
+	const reader = apiAgentTools({
+		...input,
+		session: { ...input.session, taskAccess: "read_only" },
+		readerCommands: true,
+	});
+	for (const name of ["execute_command", "continue_command", "stop_command"])
+		expect(reader[name]?.execute).toBeTypeOf("function");
+	for (const name of ["apply_patch", "replace_text", "check_deliverable"])
+		expect(reader[name]).toBeUndefined();
 	expect(
 		apiAgentTools({
 			...input,
