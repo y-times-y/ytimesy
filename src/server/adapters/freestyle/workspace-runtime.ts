@@ -7,6 +7,7 @@ import {
 	type WorkspaceRuntime,
 } from "../workspace-runtime";
 import { runDetachedCommand } from "./detached-command";
+import { withdrawVmEdgeRoutes } from "./edge-routes";
 import { runLongCommand } from "./long-command";
 import {
 	FREESTYLE_EXEC_TIMEOUT_MS_MAX,
@@ -177,9 +178,14 @@ export class FreestyleWorkspaceRuntime implements WorkspaceRuntime {
 		return created.snapshotId;
 	}
 
+	/** Also takes down the VM's desktop and tool-service routes; a later start republishes them. */
 	async pause(providerRef: string) {
 		const vm = this.client().vms.ref(providerRef);
 		forgetRunningGuest(providerRef);
+		await withdrawVmEdgeRoutes(this.client(), providerRef, [
+			"desk",
+			"tools",
+		]).catch(() => 0);
 		const data = await vm.data();
 		if (data.state === "running") await vm.pause();
 	}

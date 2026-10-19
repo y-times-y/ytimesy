@@ -215,6 +215,16 @@ export function publishDesktopViewer(
 	);
 }
 
+export async function withdrawDesktopViewer(
+	machines: Pick<WorkspaceMachines, "withdrawHttpRoutes">,
+	providerRef: string,
+) {
+	return (
+		(await machines.withdrawHttpRoutes?.(WorkspaceId(providerRef), ["desk"])) ??
+		0
+	);
+}
+
 export type DesktopRemote = {
 	readonly origin: string;
 	/** websockify's BasicHTTPAuth header; only the server relay holds it. */
@@ -297,7 +307,14 @@ function recoverRunningDesktop(
 		const recovered = yield* Effect.tryPromise(() =>
 			desktopFromRunningGuest(machines, providerRef),
 		);
-		if (!recovered) return null;
+		if (!recovered) {
+			// Asleep or not serving: take the viewer route down until a start republishes it.
+			remotes.delete(scopeKey(scope));
+			yield* Effect.tryPromise(() =>
+				withdrawDesktopViewer(machines, providerRef),
+			).pipe(Effect.catchAll(() => Effect.void));
+			return null;
+		}
 		remotes.set(scopeKey(scope), providerRef);
 		void machines
 			.exec(WorkspaceId(providerRef), ENSURE_WORKSPACE_DESKTOP, 120_000)
