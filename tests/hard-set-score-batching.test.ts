@@ -172,3 +172,44 @@ it("scores a Reason trajectory the same way, counting inner calls from the progr
 		"| mvcc-lsm-compaction | - | 4 steps, 1 missed (1 run, 1 passed) |",
 	);
 });
+
+it("reads hard-set and builder smoke transcripts from a run directory", async () => {
+	const { mkdtempSync, writeFileSync } = await import("node:fs");
+	const { tmpdir } = await import("node:os");
+	const { join } = await import("node:path");
+	const { loadTranscriptScores } = await import(
+		"../scripts/hard-set/score-batching"
+	);
+	const directory = mkdtempSync(join(tmpdir(), "score-batching-"));
+	const items = [
+		program(1, [{ tool: "edit", at: 0, ms: 1 }]),
+		direct(2, "bash"),
+	];
+	writeFileSync(
+		join(directory, "mvcc-lsm-compaction.1.transcript.json"),
+		JSON.stringify({ items, requests: { requests: [] } }),
+	);
+	writeFileSync(
+		join(directory, "mvcc-lsm-compaction.1.json"),
+		JSON.stringify({ passed: true, modelSteps: 3 }),
+	);
+	writeFileSync(
+		join(directory, "codex_gpt-6.1-sol-long-build-parallel-1-1.json"),
+		JSON.stringify({
+			record: { task: "long-build-parallel", verifierPassed: false },
+			items,
+		}),
+	);
+	const scores = loadTranscriptScores([directory]);
+	expect(
+		scores.map((score) => [
+			score.task,
+			score.passed,
+			score.modelSteps,
+			score.missedAfter,
+		]),
+	).toEqual([
+		["long-build-parallel", false, 2, [1]],
+		["mvcc-lsm-compaction", true, 3, [1]],
+	]);
+});
