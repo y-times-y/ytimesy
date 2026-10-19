@@ -6,9 +6,9 @@ import {
 	deliverAuthEmails,
 	type OutgoingAuthEmail,
 	persistAuthEmail,
+	registerAuthEmailBinding,
 	sendWithBinding,
 	sendWithCloudflare,
-	registerAuthEmailBinding,
 } from "../src/server/adapters/email";
 
 let db: PGlite;

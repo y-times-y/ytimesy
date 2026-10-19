@@ -10,7 +10,7 @@
 		"generate-routes": "tsr generate",
 		"build": "vite build",
 		"preview": "vite preview",
-		"typecheck": "pnpm generate-routes && tsc --noEmit && pnpm typecheck:workflows && pnpm typecheck:edge-executor",
+		"typecheck": "pnpm generate-routes && pnpm build:edge-executor && tsc --noEmit && pnpm typecheck:workflows && tsc --noEmit --project tsconfig.edge-executor.json",
 		"typecheck:workflows": "wrangler types --config wrangler.pr-repair.jsonc --env-interface PrRepairEnvironment --strict-vars false .ytimesy/pr-repair-runtime.d.ts && tsc --noEmit --project tsconfig.workflows.json",
 		"lint": "biome check .",
 		"format": "biome check --write .",

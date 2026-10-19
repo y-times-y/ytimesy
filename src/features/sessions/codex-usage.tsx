@@ -46,6 +46,7 @@ export function CodexSubscriptionUsage({ usage }: { usage?: CodexUsage }) {
 										<span>{windowLabel(window.windowDurationMins)}</span>
 										<span>{window.usedPercent}% used</span>
 									</div>
+									{/* biome-ignore lint/a11y/useSemanticElements: a styled bar; a native <meter> cannot hold the fill span */}
 									<div
 										className="settings-meter"
 										data-tone={window.usedPercent >= 85 ? "low" : undefined}

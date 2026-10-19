@@ -52,6 +52,7 @@ function UsageSummary({
 				{wholeMinutes(usage.remainingMicroUsd)}
 				<small>of {wholeMinutes(usage.allowanceMicroUsd)} minutes left</small>
 			</div>
+			{/* biome-ignore lint/a11y/useSemanticElements: a styled bar; a native <meter> cannot hold the fill span */}
 			<div
 				className="settings-meter"
 				data-tone={share < 0.15 ? "low" : undefined}

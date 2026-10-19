@@ -15,6 +15,7 @@
 			"vitest.config.ts",
 			"!src/routeTree.gen.ts",
 			"!src/**/*.py",
+			"!scripts/smoke/hard-tasks/*/files/**",
 			"tests/**",
 			"benchmarks/evaluation/**"
 		]
