@@ -49,6 +49,7 @@ function knownPrice(modelId: string) {
 		KNOWN_MODEL_PRICES[id] ??
 		KNOWN_MODEL_PRICES[`openai/${id}`] ??
 		KNOWN_MODEL_PRICES[`anthropic/${id}`] ??
+		KNOWN_MODEL_PRICES[`google/${id}`] ??
 		null
 	);
 }

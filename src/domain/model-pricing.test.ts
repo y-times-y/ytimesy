@@ -60,6 +60,12 @@ describe("modelBilling", () => {
 		expect(cost).toBeCloseTo(0.8 + 0.14 + 0.5 + 2, 6);
 	});
 
+	it("prices Gemini's direct API id", () => {
+		expect(
+			modelBilling({ harness: "api", modelId: "gemini-3.8-flash" }).price,
+		).toEqual(KNOWN_MODEL_PRICES["google/gemini-3.8-flash"]);
+	});
+
 	it("still has no price for an unknown model", () => {
 		expect(
 			modelBilling({ harness: "api", modelId: "claude-opus-9-9" }).price,
