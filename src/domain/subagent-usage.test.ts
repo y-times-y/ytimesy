@@ -30,7 +30,7 @@ describe("model pricing", () => {
 	it("bills a subscription by plan and unknown models as tokens only", () => {
 		expect(modelBilling({ harness: "codex", modelId: "gpt-6.1-sol" })).toEqual({
 			kind: "plan",
-			price: { input: 2.5, output: 10, cacheRead: 0.25 },
+			price: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
 		});
 		expect(
 			modelBilling({ harness: "api", modelId: "acme/unknown-model" }),

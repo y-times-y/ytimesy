@@ -304,7 +304,7 @@ export function harnessModelToolInstructions(
 			"Inspect with execute_command (rg, sed -n, git, project CLIs), reading related files together in one command rather than slice by slice, and reproduce the problem with the smallest executable check early. Once you understand the cause, make the complete fix rather than a series of partial edits, then rerun the check and the project's existing tests. Resume long commands with continue_command, which waits until they finish, so one call replaces repeated checks; stop_command cancels.",
 			...SHELL_BEHAVIOUR.slice(0, 4),
 			availableTools.includes("check_deliverable")
-				? "When you deliver something another person or system will run on its own (a script, program, service, package or output files read elsewhere), run check_deliverable once before finishing with what they receive and the documented command (unprivileged when the task mentions another user or dropped privileges), and fix what it reports. Skip it for edits to an existing project whose own tests you ran."
+				? "When you deliver something another person or system will run on its own (a script, program, service, package or output files read elsewhere), run check_deliverable once before finishing with what they receive (when the task names its delivered files, exactly those: not data files or helpers your code loads that it does not name) and the documented command (unprivileged when the task mentions another user or dropped privileges), and fix what it reports. Skip it for edits to an existing project whose own tests you ran."
 				: "",
 			...SHELL_BEHAVIOUR.slice(4),
 		]
