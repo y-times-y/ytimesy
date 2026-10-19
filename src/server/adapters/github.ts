@@ -249,13 +249,45 @@ export async function compareBranchAhead(
 	}
 }
 
+/** GitHub's own validation text for a failed request, bounded; never a token. */
+export function githubErrorText(error: unknown) {
+	if (typeof error !== "object" || error === null) return "";
+	const record = error as {
+		message?: unknown;
+		response?: { data?: { message?: unknown; errors?: unknown } };
+	};
+	const data = record.response?.data;
+	const parts = [
+		typeof data?.message === "string" ? data.message : undefined,
+		...(Array.isArray(data?.errors)
+			? data.errors.map((item: unknown) =>
+					typeof item === "string"
+						? item
+						: typeof (item as { message?: unknown })?.message === "string"
+							? (item as { message: string }).message
+							: undefined,
+				)
+			: []),
+		typeof record.message === "string" ? record.message : undefined,
+	].filter((part): part is string => Boolean(part?.trim()));
+	return [...new Set(parts)].join(" ").replace(/\s+/g, " ").slice(0, 300);
+}
+
+const DRAFTS_UNSUPPORTED = /draft pull requests? (?:are|is) not supported/i;
+
+/**
+ * Opens the pull request as a draft. Draft PRs need a paid plan on private
+ * repositories, and GitHub answers those with a 422; that one case is retried
+ * as a normal (ready) PR. Any other 422 says what GitHub said, so a refusal is
+ * never reported as "already exists" unless GitHub said exactly that.
+ */
 async function createDraftPullRequest(
 	token: string,
 	fullName: string,
 	draft: { title: string; body: string; head: string; base: string },
 ) {
 	const { owner, repo } = repositoryOwnerName(fullName);
-	try {
+	const create = async (asDraft: boolean) => {
 		const created = await githubClient(token).pulls.create({
 			owner,
 			repo,
@@ -263,24 +295,48 @@ async function createDraftPullRequest(
 			body: draft.body,
 			head: draft.head,
 			base: draft.base,
-			draft: true,
+			draft: asDraft,
 		});
 		return {
 			number: created.data.number,
 			url: created.data.html_url,
 			draft: Boolean(created.data.draft),
 		};
+	};
+	try {
+		try {
+			return await create(true);
+		} catch (error) {
+			if (
+				githubStatus(error) === 422 &&
+				DRAFTS_UNSUPPORTED.test(githubErrorText(error))
+			)
+				return await create(false);
+			throw error;
+		}
 	} catch (error) {
-		const status =
-			typeof error === "object" && error !== null && "status" in error
-				? Number(error.status)
-				: 0;
-		if (status === 422)
+		if (githubStatus(error) !== 422) throw error;
+		const text = githubErrorText(error);
+		if (/pull request already exists/i.test(text))
 			throw new Response("A pull request for this branch already exists.", {
 				status: 409,
 			});
-		throw error;
+		if (/no commits between/i.test(text))
+			throw new Response(
+				"This branch has no commits ahead of the base branch, so there is nothing to open a pull request for.",
+				{ status: 422 },
+			);
+		throw new Response(
+			`GitHub refused to open the pull request${text ? `: ${text}` : "."}`,
+			{ status: 422 },
+		);
 	}
+}
+
+function githubStatus(error: unknown) {
+	return typeof error === "object" && error !== null && "status" in error
+		? Number(error.status)
+		: 0;
 }
 
 export async function ensureDraftPullRequest(
