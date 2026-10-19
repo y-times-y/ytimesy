@@ -6,6 +6,7 @@ import {
 	authEmailDeliveryConfigured,
 	persistAuthEmail,
 } from "../adapters/email";
+import { recordLegalAcceptance } from "../adapters/legal-acceptance";
 import { serverConfig } from "../config";
 import {
 	loadLocalQaUser,
@@ -27,6 +28,29 @@ export const oauthAccountPolicy = {
 	accountLinking: { enabled: false },
 	storeStateStrategy: "database" as const,
 };
+
+/**
+ * Runs once an account exists (after Better Auth commits it). Every path that
+ * creates an account shows the Terms and Privacy consent first: the sign-up
+ * checkbox gates the email form and the GitHub/Google buttons, and sign-in
+ * (which can create an account through a provider) states that continuing
+ * accepts them. A failed write is logged, not thrown: the user then gets the
+ * acceptance prompt on their next visit instead of a broken sign-up.
+ */
+export async function accountCreated(user: { id: string; createdAt: Date }) {
+	await recordLegalAcceptance(user.id, "signup").catch((error: unknown) => {
+		console.error("Could not record Terms acceptance at sign-up.", {
+			userId: user.id,
+			error: error instanceof Error ? error.message : String(error),
+		});
+	});
+	void captureServerAnalytics(
+		user.id,
+		"account_created",
+		{},
+		{ key: user.id, timestamp: user.createdAt },
+	);
+}
 
 /** Server-side Turnstile verification, when this environment requires it. */
 export function authCaptchaPlugins(appUrl: string) {
@@ -111,16 +135,7 @@ function authOptions() {
 		user: { modelName: "auth_user" },
 		databaseHooks: {
 			user: {
-				create: {
-					after: async (user: { id: string; createdAt: Date }) => {
-						void captureServerAnalytics(
-							user.id,
-							"account_created",
-							{},
-							{ key: user.id, timestamp: user.createdAt },
-						);
-					},
-				},
+				create: { after: accountCreated },
 			},
 		},
 		session: { modelName: "auth_session", expiresIn: 60 * 60 * 24 * 7 },

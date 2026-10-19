@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Analytics } from "../features/analytics/analytics";
 import { AppError, AppNotFound } from "../features/app/app-status";
 import { AuthProviders } from "../features/auth/auth-providers";
+import { LegalAcceptancePrompt } from "../features/auth/legal-acceptance-prompt";
 
 import appCss from "../styles.css?url";
 
@@ -50,6 +51,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 				<QueryClientProvider client={queryClient}>
 					<AuthProviders>
 						<Analytics />
+						<LegalAcceptancePrompt />
 						{children}
 					</AuthProviders>
 				</QueryClientProvider>
