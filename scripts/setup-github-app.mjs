@@ -21,7 +21,9 @@ const manifest = {
   redirect_url: `${origin}/callback`,
   hook_attributes: { url: 'https://ytimesy.com/api/github/webhook', active: false },
   public: true,
-  default_permissions: { contents: 'write', pull_requests: 'write', metadata: 'read' },
+  // checks: read lets PR repair re-read the failing check run/suite it was woken for
+  // (src/server/adapters/github/pr-repair-evidence.ts).
+  default_permissions: { contents: 'write', pull_requests: 'write', checks: 'read', metadata: 'read' },
   default_events: [],
   request_oauth_on_install: false,
 };

@@ -93,7 +93,18 @@ Option A with `edge.ytimesy.com`, plus Access on the web app until launch.
    - Callback URL: `https://ytimesy.com/api/github/callback`
    - Webhook URL: `https://ytimesy.com/api/github/repair-events`, with a new
      webhook secret (`GITHUB_PR_REPAIR_WEBHOOK_SECRET`)
-   - Permissions and events: copy the development app.
+   - Repository permissions: Contents read and write, Pull requests read
+     and write, Checks read-only, Metadata read-only (the same set as
+     `scripts/setup-github-app.mjs`). Checks read lets PR repair re-read the
+     failing check run or suite it was woken for.
+   - Subscribe to events: Check run, Check suite, Pull request review (the
+     events `/api/github/repair-events` handles).
+   - The existing development App was created before Checks was in the
+     manifest: in GitHub > Settings > Developer settings > GitHub Apps >
+     (app) > Permissions & events, set Checks to Read-only and save; each
+     installation owner then accepts the new permission from the
+     installation page (until then, check-failure repair cannot read the
+     check and stops).
    - Record app id, private key, client id/secret and slug as `GITHUB_APP_*`
      / `GITHUB_PRIVATE_KEY` in `.secrets/production.env`.
 4. **Production GitHub OAuth app** (sign-in): authorization callback URL
