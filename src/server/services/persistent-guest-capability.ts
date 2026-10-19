@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { WorkspaceId } from "#/domain/ids";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
@@ -7,6 +6,9 @@ import {
 	guestCapabilityDirectory,
 } from "./guest-node-capability";
 import type { WorkspaceMachines } from "./workspace-machines";
+
+/** Keyed per VM (vm-edge-keys.ts); publishing a new port replaces the old route. */
+export { guestServiceHostname } from "./vm-edge-keys";
 
 const endpoint = z.object({
 	port: z.number().int().min(1024).max(65535),
@@ -218,8 +220,4 @@ function guestServiceFailure(error: unknown) {
 		"Bearer [redacted]",
 	);
 	return `${error.name}: ${message}`.slice(0, 200);
-}
-
-export function guestServiceHostname(vm: string, port: number) {
-	return `ytimesy-tools-${createHash("sha256").update(vm).digest("hex").slice(0, 12)}-${port}.style.dev`;
 }
