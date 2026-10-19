@@ -1,5 +1,6 @@
 import type { AttemptLoopState } from "#/domain/attempt-loop";
 import { jsonbText } from "#/domain/jsonb";
+import type { ReviewLoopState } from "#/domain/review-loop";
 import { database } from "./database";
 
 /**
@@ -10,7 +11,7 @@ import { database } from "./database";
  */
 
 const stateRequestId = (turnId: string) => `attempt-loop:${turnId}`;
-/** An eval runner's deadline for the whole loop (it can only shorten the product default). */
+/** An eval runner's deadline for the whole loop, attempt or review (it can only shorten the product default). */
 const DEADLINE_REQUEST_ID = "attempt-loop-deadline";
 
 export async function loadAttemptLoopState(
@@ -52,6 +53,50 @@ export async function attemptLoopStates(
 	return rows
 		.map((row) => row.response as AttemptLoopState)
 		.filter((state) => state?.version === 1);
+}
+
+const reviewRequestId = (turnId: string) => `review-loop:${turnId}`;
+
+/** The review loop's state for one root turn (review=on), in the same journal. */
+export async function loadReviewLoopState(
+	sessionId: string,
+	turnId: string,
+): Promise<ReviewLoopState | null> {
+	const { rows } = await database().query(
+		`select response from agent_task_command_receipt
+		 where parent_session_id=$1 and request_id=$2 and status='done'`,
+		[sessionId, reviewRequestId(turnId)],
+	);
+	const state = rows[0]?.response as ReviewLoopState | undefined;
+	return state?.version === 1 && state.kind === "review" ? state : null;
+}
+
+export async function saveReviewLoopState(
+	sessionId: string,
+	state: ReviewLoopState,
+) {
+	await database().query(
+		`insert into agent_task_command_receipt(parent_session_id,request_id,status,response,completed_at)
+		 values($1,$2,'done',$3::jsonb,now())
+		 on conflict (parent_session_id,request_id)
+		 do update set response=excluded.response, updated_at=now()`,
+		[sessionId, reviewRequestId(state.turnId), jsonbText(state)],
+	);
+}
+
+/** Every review loop of a session, oldest first (the hard-set runner's record). */
+export async function reviewLoopStates(
+	sessionId: string,
+): Promise<ReviewLoopState[]> {
+	const { rows } = await database().query(
+		`select response from agent_task_command_receipt
+		 where parent_session_id=$1 and request_id like 'review-loop:%' and status='done'
+		 order by created_at`,
+		[sessionId],
+	);
+	return rows
+		.map((row) => row.response as ReviewLoopState)
+		.filter((state) => state?.version === 1 && state.kind === "review");
 }
 
 export async function saveAttemptLoopDeadline(

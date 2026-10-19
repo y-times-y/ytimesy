@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => ({
 	cancelRequested: vi.fn(),
 	variant: vi.fn(),
 	loop: vi.fn(),
+	reviewLoop: vi.fn(),
 	beforeModel: vi.fn(),
 	afterAttempt: vi.fn(),
 }));
@@ -39,8 +40,12 @@ vi.mock("../adapters/dev-eval-users", async (importOriginal) => ({
 	harnessVariantForUser: async () => mocks.variant(),
 }));
 vi.mock("../services/attempt-loop", () => ({ createAttemptLoop: mocks.loop }));
+vi.mock("../services/review-loop", () => ({
+	createReviewLoop: mocks.reviewLoop,
+}));
 vi.mock("../services/attempt-loop-deps", () => ({
 	attemptLoopDeps: () => ({}),
+	reviewLoopDeps: () => ({}),
 }));
 // Observes the real lifecycle hooks' UserPromptSubmit without a repository config.
 vi.mock("../services/harness-lifecycle-hooks", async (importOriginal) => {
@@ -95,6 +100,10 @@ vi.mock("../adapters/agent-sessions", () => ({
 beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.variant.mockReset().mockReturnValue(undefined);
+	mocks.reviewLoop.mockReset().mockImplementation(() => ({
+		beforeModel: mocks.beforeModel,
+		afterAttempt: mocks.afterAttempt,
+	}));
 	mocks.loop.mockReset().mockImplementation(() => ({
 		beforeModel: mocks.beforeModel,
 		afterAttempt: mocks.afterAttempt,
@@ -1329,7 +1338,61 @@ describe("the attempt loop (harness variant attempts=3)", () => {
 			"completed",
 		);
 		expect(mocks.loop).not.toHaveBeenCalled();
+		expect(mocks.reviewLoop).not.toHaveBeenCalled();
 		expect(mocks.commit).toHaveBeenCalledOnce();
+	});
+
+	it("review=on hands the checker's findings back to the same run instead of publishing", async () => {
+		mocks.variant.mockReturnValue({
+			...(await import("#/domain/harness-variant")).DEFAULT_HARNESS_VARIANT,
+			review: "on",
+		});
+		finishing();
+		mocks.afterAttempt.mockResolvedValue({
+			kind: "run",
+			messages: [
+				...rootTurn.messages,
+				{ role: "assistant", content: "Fixed." },
+				{ role: "user", content: "Runtime notice: review 1 found F1" },
+			],
+		});
+		expect(
+			await runApiTurn(
+				{} as WorkspaceMachines,
+				{ ...rootTurn, id: "turn-review" },
+				durable(),
+			),
+		).toBe("continue");
+		expect(mocks.reviewLoop).toHaveBeenCalledWith(
+			expect.objectContaining({ sessionId: "session", turnId: "turn-review" }),
+		);
+		expect(mocks.loop).not.toHaveBeenCalled();
+		expect(mocks.commit).not.toHaveBeenCalled();
+		expect(JSON.stringify(mocks.checkpoint.mock.calls.at(-1)?.[1])).toContain(
+			"Runtime notice: review 1 found F1",
+		);
+	});
+
+	it("attempts=3 wins over review=on", async () => {
+		mocks.variant.mockReturnValue({
+			...(await import("#/domain/harness-variant")).DEFAULT_HARNESS_VARIANT,
+			attempts: "3",
+			review: "on",
+		});
+		finishing();
+		mocks.afterAttempt.mockImplementation(async (step) => ({
+			kind: "finished",
+			messages: step.messages,
+			items: step.items,
+		}));
+		// Another turn: a turn's variant is read once.
+		await runApiTurn(
+			{} as WorkspaceMachines,
+			{ ...rootTurn, id: "turn-both" },
+			durable(),
+		);
+		expect(mocks.loop).toHaveBeenCalledOnce();
+		expect(mocks.reviewLoop).not.toHaveBeenCalled();
 	});
 
 	it("starts the next attempt instead of publishing when the check fails", async () => {
