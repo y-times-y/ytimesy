@@ -1,4 +1,5 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import type { ToolSet } from "ai";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	DEFAULT_HARNESS_VARIANT,
 	type HarnessVariant,
@@ -34,6 +35,55 @@ const mocks = vi.hoisted(() => ({
 	variant: vi.fn(),
 	saved: vi.fn(),
 	finalize: vi.fn(),
+	/** What runApiTurn handed the model loop (tools with their executors). */
+	agentInputs: [] as unknown[],
+	/** How many ancestors a subagent owner has (its level). */
+	level: 0,
+	/** Runs inside the turn, before the model call (its tools are live then). */
+	probe: null as
+		| null
+		| ((input: { tools: Record<string, unknown> }) => Promise<void>),
+}));
+// The real subscription agent, with its input recorded on the way through.
+vi.mock("../services/codex-subscription-agent", async (importOriginal) => {
+	const real =
+		await importOriginal<
+			typeof import("../services/codex-subscription-agent")
+		>();
+	return {
+		runCodexSubscriptionAgent: async (
+			input: Parameters<typeof real.runCodexSubscriptionAgent>[0],
+		) => {
+			mocks.agentInputs.push(input);
+			await mocks.probe?.(input);
+			return real.runCodexSubscriptionAgent(input);
+		},
+		runCodexSubscriptionAgentStep: async (
+			input: Parameters<typeof real.runCodexSubscriptionAgentStep>[0],
+		) => {
+			mocks.agentInputs.push(input);
+			await mocks.probe?.(input);
+			return real.runCodexSubscriptionAgentStep(input);
+		},
+	};
+});
+vi.mock("../adapters/subagents", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../adapters/subagents")>()),
+	subagentAncestors: async () =>
+		Array.from({ length: mocks.level }, (_, index) => ({ id: `a${index}` })),
+}));
+// A subagent's per-step budget check reads the tree's usage from the database.
+vi.mock("../services/subagent-runtime", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../services/subagent-runtime")>()),
+	guardSubagentStep: async (input: { messages: unknown }) => input.messages,
+}));
+// run_code's run journal: every run is new (no database).
+vi.mock("../adapters/agent-task-command-receipts", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../adapters/agent-task-command-receipts")
+	>()),
+	claimAgentTaskCommand: async () => ({ kind: "claimed" }),
+	completeAgentTaskCommand: async () => undefined,
 }));
 vi.mock("../adapters/dev-eval-users", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../adapters/dev-eval-users")>()),
@@ -151,13 +201,14 @@ vi.mock("../services/session-workspace-machines", () => ({
 	machinesForAgentSession: (machines: unknown) => machines,
 }));
 
-const owner = {
+const ROOT_OWNER = {
 	id: "session",
 	userId: "eval-user",
 	projectId: "project",
 	harness: "api",
 	taskAccess: "read_write",
 };
+let owner: Record<string, unknown> = ROOT_OWNER;
 
 const MODEL = "gpt-6.1-sol";
 
@@ -186,8 +237,13 @@ function codexBackend(bodies: Record<string, unknown>[]): typeof fetch {
 	};
 }
 
-async function sentRequest(variant: Partial<HarnessVariant>) {
+async function sentRequest(
+	variant: Partial<HarnessVariant>,
+	options: { step?: number; text?: string } = {},
+) {
 	mocks.variant.mockReturnValue({ ...DEFAULT_HARNESS_VARIANT, ...variant });
+	mocks.agentInputs.length = 0;
+	const text = options.text ?? "Fix the compaction bug in /app.";
 	const bodies: Record<string, unknown>[] = [];
 	const turn = {
 		id: "turn",
@@ -197,33 +253,40 @@ async function sentRequest(variant: Partial<HarnessVariant>) {
 		connection_revision: subscriptionTurnRevision("medium"),
 		model_id: MODEL,
 		state: "running",
-		messages: [{ role: "user", content: "Fix the compaction bug in /app." }],
-		items: [
-			{
-				kind: "userMessage",
-				id: SessionItemId("user"),
-				text: "Fix the compaction bug in /app.",
-			},
-		],
+		messages: [{ role: "user", content: text }],
+		items: [{ kind: "userMessage", id: SessionItemId("user"), text }],
 		lease_id: "lease",
 	} as ApiTurn;
 	await withCodexSubscriptionEgress(codexBackend(bodies), () =>
 		runApiTurn({} as WorkspaceMachines, turn, {
-			index: 1,
+			index: options.step ?? 1,
 			signal: new AbortController().signal,
 		}),
 	);
 	const body = bodies[0] as {
 		instructions: string;
+		input: unknown;
 		tools: { type: string; name?: string; description?: string }[];
 	};
+	if (!body)
+		throw new Error(
+			`No model request was sent: ${JSON.stringify(mocks.finalize.mock.calls.at(-1)?.slice(1))?.slice(0, 1500)}`,
+		);
 	return {
 		body,
 		names: body.tools.map((tool) => tool.name ?? tool.type),
+		agent: mocks.agentInputs[0] as {
+			tools: ToolSet;
+			instructions: string;
+			toolOrder?: () => readonly string[];
+		},
 	};
 }
 
 beforeEach(() => {
+	owner = ROOT_OWNER;
+	mocks.level = 0;
+	mocks.probe = null;
 	mocks.saved.mockReset().mockResolvedValue(undefined);
 	mocks.finalize.mockReset().mockImplementation(async (_turn, state) => state);
 });
@@ -269,4 +332,186 @@ it("keeps run_code after the lean tools and bash's own description with code mod
 	expect(
 		body.tools.find((tool) => tool.name === "bash")?.description,
 	).not.toContain("run_code");
+});
+
+/**
+ * Tool names that exist on some surface. A prompt that names one its
+ * surface does not offer sends the model after a tool that is not there.
+ * Plain words that are also tool names (read, write, edit, bash, agent)
+ * count only as `tools.<name>` or `<name>` in backticks.
+ */
+const KNOWN_TOOLS = [
+	"run_code",
+	"agent",
+	"agent_send",
+	"find_tools",
+	"web_search",
+	"request_project_secret",
+	"enter_plan_mode",
+	"propose_plan",
+	"report_task_blocked",
+	"execute_command",
+	"continue_command",
+	"stop_command",
+	"apply_patch",
+	"apply_patches",
+	"view_image",
+	"check_deliverable",
+	"read_context_archive",
+	"search_context_history",
+	"search_tools",
+	"read_task_capacity",
+	"batch_read",
+	"run_checks",
+	"inspect_changes",
+	"create_task",
+	"read_repository_guidance",
+	"read_environment_report",
+	"replace_text",
+	"compose_tools",
+	"exec_command",
+	"write_stdin",
+	"run_shell_command",
+	"read_file",
+	"write_file",
+	"grep_search",
+	"search_mcp_tools",
+	"call_mcp_tool",
+	"browser_open",
+	"browser_screenshot",
+	"browser_inspect",
+	"browser_execute",
+	"read",
+	"write",
+	"edit",
+	"bash",
+];
+
+function namedTools(text: string) {
+	return KNOWN_TOOLS.filter((name) => {
+		const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+		const forms = name.includes("_")
+			? [`(?<![\\w-])${escaped}(?![\\w-])`]
+			: [`tools\\.${escaped}(?![\\w-])`, `\`${escaped}\``];
+		return forms.some((form) => new RegExp(form).test(text));
+	});
+}
+
+type Role = "builder" | "writer" | "researcher" | "reviewer" | "checker";
+
+function ownerFor(role: Role) {
+	if (role === "builder") return ROOT_OWNER;
+	return {
+		...ROOT_OWNER,
+		id: `child-${role}`,
+		parentSessionId: "session",
+		agentRole: role,
+		agentBudget: { steps: 75, minutes: 15, tokens: 1_000_000 },
+		taskAccess: role === "writer" ? "read_write" : "read_only",
+		taskPlacement: role === "writer" ? "fork" : "shared",
+	};
+}
+
+describe("role surfaces: every advertised tool works, no prompt names an absent one", () => {
+	const cases = (
+		["builder", "writer", "researcher", "reviewer", "checker"] as const
+	).flatMap((role) =>
+		(role === "builder" ? [0] : [1, 3]).flatMap((level) =>
+			(["off", "on", "primary"] as const).flatMap((codeMode) =>
+				(["off", "on"] as const).map((subagents) => ({
+					role,
+					level,
+					codeMode,
+					subagents,
+				})),
+			),
+		),
+	);
+	it.each(cases)(
+		"$role at level $level, codeMode=$codeMode, subagents=$subagents",
+		async ({ role, level, codeMode, subagents }) => {
+			owner = ownerFor(role);
+			mocks.level = level;
+			// Inside run_code, the tools a program can call (probed while the turn runs).
+			let callable: Set<string> | null = null;
+			mocks.probe = async (input) => {
+				const runCode = (input.tools as ToolSet).run_code;
+				if (!runCode) return;
+				const run = (await runCode.execute?.(
+					{ code: "return Object.keys(tools);" } as never,
+					{
+						toolCallId: "probe",
+						messages: [],
+						abortSignal: new AbortController().signal,
+						context: {},
+					} as never,
+				)) as { ok: boolean; result?: string; error?: string };
+				expect(run.error).toBeUndefined();
+				callable = new Set(JSON.parse(run.result as string) as string[]);
+			};
+			const { body, names, agent } = await sentRequest({ codeMode, subagents });
+			const tools = agent.tools;
+			const available = new Set(Object.keys(tools));
+			// Every tool in the request has an executor (or runs at the provider).
+			for (const name of names) {
+				const definition = tools[name === "web_search" ? "web_search" : name];
+				expect(
+					definition,
+					`${name} is offered without a definition`,
+				).toBeDefined();
+				if (definition?.type === "provider") continue;
+				expect(typeof definition?.execute, `${name} has no executor`).toBe(
+					"function",
+				);
+			}
+			// Deferred tools the prompt lists are callable once loaded.
+			const listed = [...body.instructions.matchAll(/^- ([a-z_]+): /gm)].map(
+				(match) => match[1] as string,
+			);
+			for (const name of listed.filter((name) => KNOWN_TOOLS.includes(name)))
+				expect(
+					typeof tools[name]?.execute,
+					`${name} is listed but not executable`,
+				).toBe("function");
+			// No instruction or tool description names a tool this surface lacks.
+			const text = [
+				body.instructions,
+				...body.tools.map((tool) => tool.description ?? ""),
+			].join("\n");
+			for (const name of namedTools(text))
+				expect(available, `the prompt names ${name}`).toContain(name);
+			// find_tools is named only when the request offers it.
+			if (namedTools(body.instructions).includes("find_tools"))
+				expect(names).toContain("find_tools");
+			// Inside run_code, every tool the prompt says to call from a program exists.
+			if (available.has("run_code")) {
+				if (!callable) throw new Error("run_code was not probed.");
+				for (const match of text.matchAll(/tools\.([A-Za-z_]+)\(/g))
+					if (match[1] !== "name")
+						expect(callable, `run_code cannot call ${match[1]}`).toContain(
+							match[1],
+						);
+				if (codeMode === "primary")
+					for (const name of listed.filter((name) =>
+						KNOWN_TOOLS.includes(name),
+					))
+						expect(callable, `run_code cannot call ${name}`).toContain(name);
+			}
+			// Delegation: the checker never, the deepest level never, others when on.
+			const delegates =
+				role !== "checker" &&
+				level < 3 &&
+				(role !== "builder" || subagents === "on");
+			expect(available.has("agent")).toBe(delegates);
+			expect(body.instructions.includes("Subagents:")).toBe(delegates);
+			// Readers share the parent's VM read-only: nothing that changes files.
+			if (role !== "builder" && role !== "writer")
+				for (const name of ["write", "edit"])
+					expect(available.has(name), `a ${role} has ${name}`).toBe(false);
+			if (role === "checker") {
+				expect(available.has("agent_send")).toBe(false);
+				expect(body.instructions).not.toContain("delegat");
+			}
+		},
+	);
 });
