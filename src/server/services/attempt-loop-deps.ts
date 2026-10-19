@@ -1,3 +1,4 @@
+import type { RoleModels } from "#/domain/role-models";
 import type { SessionItem } from "#/domain/session-item";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import {
@@ -30,6 +31,8 @@ export function attemptLoopDeps(input: {
 	readonly signal: AbortSignal;
 	readonly waitDeadlineAt?: number;
 	readonly items: () => readonly SessionItem[];
+	/** The checker's and judge's models (harness variant roleModels). */
+	readonly roleModels?: RoleModels;
 }): AttemptLoopDeps {
 	const { turnId, signal } = input;
 	return {
@@ -56,6 +59,7 @@ export function attemptLoopDeps(input: {
 					workspace: input.workspace,
 					signal,
 					waitDeadlineAt: input.waitDeadlineAt,
+					roleModels: input.roleModels,
 				},
 				spec,
 			),

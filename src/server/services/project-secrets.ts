@@ -10,6 +10,7 @@ import {
 	AGENT_SECRETS_ENV_PATH,
 	type AgentSecretName,
 	agentSecretsEnvFile,
+	PROJECT_SECRETS_PREPARATION_FAILED,
 	type PublicProjectSecret,
 	parseProjectSecretKind,
 	parseProjectSecretName,
@@ -117,8 +118,7 @@ export async function writeAgentProjectSecrets(
 		`mkdir -p ${directory} && chmod 700 ${directory}`,
 		10_000,
 	);
-	if (prepared.exitCode)
-		throw new Error("Could not prepare project secrets in the workspace.");
+	if (prepared.exitCode) throw new Error(PROJECT_SECRETS_PREPARATION_FAILED);
 	await machines.writeTextFile(vm, AGENT_SECRETS_ENV_PATH, secrets.envFile);
 	await machines.exec(
 		vm,

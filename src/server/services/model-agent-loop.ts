@@ -12,7 +12,11 @@ import {
 } from "ai";
 import type { ApiAgentEvent } from "#/domain/api-agent-event";
 import type { ApiModelSpeedId } from "#/domain/api-model-list";
-import { type ApiTokenUsage, addApiTokenUsage } from "#/domain/api-token-usage";
+import {
+	type ApiTokenUsage,
+	addApiTokenUsage,
+	requestTokenUsage,
+} from "#/domain/api-token-usage";
 import {
 	apiModelFailureClassification,
 	type ContextOverflow,
@@ -40,6 +44,7 @@ import {
 	NO_IMAGE_INPUT_INSTRUCTIONS,
 	withImagePlaceholders,
 } from "#/domain/image-placeholders";
+import { longContextThreshold } from "#/domain/model-pricing";
 import { modelStepLimit } from "#/domain/model-workflow";
 import type { apiPromptCacheSettings } from "#/server/adapters/api-prompt-cache";
 import {
@@ -105,6 +110,14 @@ export type ModelAgentInput = {
 	onStep: (messages: ModelMessage[]) => Promise<void>;
 	onToolMetric?: (metric: HarnessToolMetric) => void;
 	onModelMetric?: (metric: HarnessModelMetric) => void;
+	/**
+	 * Development evals: the system prompt and the prepared tool definitions
+	 * of each provider call, exactly as sent (model-request-recorder.ts).
+	 */
+	onModelRequest?: (request: {
+		instructions: string;
+		tools: ReadonlyArray<Record<string, unknown>> | undefined;
+	}) => void;
 	beforeStep?: (messages: ModelMessage[]) => Promise<void>;
 	prepareMessages?: (messages: ModelMessage[]) => Promise<ModelMessage[]>;
 	beforeCompaction?: (messages: ModelMessage[]) => Promise<void>;
@@ -646,10 +659,14 @@ async function executeModelSteps(
 		Exclude<AssistantModelMessage["content"], string>[number],
 		{ type: "tool-call" }
 	>[] = [];
+	// Each recorded usage is one model request: counted, and tagged with the
+	// model's long-context tier when its input was that large (per-request
+	// tiered pricing, src/domain/model-pricing.ts).
+	const longContextAbove = longContextThreshold(input.modelId);
 	const recordUsage = async (usage: Parameters<typeof apiTokenUsage>[0]) => {
 		accumulated.usage = addApiTokenUsage(
 			accumulated.usage,
-			apiTokenUsage(usage),
+			requestTokenUsage(apiTokenUsage(usage), longContextAbove),
 		);
 		await input.onEvent({ type: "usage", usage: accumulated.usage });
 	};
@@ -918,6 +935,10 @@ async function executeModelSteps(
 				messages,
 			}) => {
 				activeToolCount = preparedTools?.length ?? 0;
+				input.onModelRequest?.({
+					instructions: input.instructions,
+					tools: preparedTools,
+				});
 				preparedPromptCharacters = JSON.stringify({
 					instructions,
 					messages,

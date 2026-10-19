@@ -39,6 +39,8 @@ import {
 	type AttemptLoopOutcome,
 	attemptReport,
 	checkerDirectoryCommand,
+	childBilling,
+	loopChildModel,
 	turnUsage,
 } from "./attempt-loop";
 
@@ -132,7 +134,10 @@ const plus = (left: AttemptSpend, right: AttemptSpend): AttemptSpend => ({
 export function reviewLoopSpend(state: ReviewLoopState, billing: ModelBilling) {
 	const rounds = state.rounds.map((round) => ({
 		n: round.n,
-		checker: spendOf(round.checker.usage, billing),
+		checker: spendOf(
+			round.checker.usage,
+			childBilling(round.checker.model, billing),
+		),
 		fix: spendOf(round.fix?.usage, billing),
 		checkMs:
 			(round.checker.endedAt ?? round.checker.startedAt) -
@@ -290,6 +295,7 @@ export function createReviewLoop(input: ReviewLoopInput) {
 				"the checker's directory could not be created",
 			);
 		let sessionIdOfChecker: string;
+		let modelOfChecker: ReturnType<typeof loopChildModel>;
 		try {
 			const checker = await deps.startSubagent({
 				role: "checker",
@@ -307,6 +313,7 @@ export function createReviewLoop(input: ReviewLoopInput) {
 				},
 			});
 			sessionIdOfChecker = checker.sessionId;
+			modelOfChecker = loopChildModel(checker);
 		} catch (error) {
 			return finish(
 				state,
@@ -326,6 +333,7 @@ export function createReviewLoop(input: ReviewLoopInput) {
 					changedFiles: changedFiles.length,
 					checker: {
 						sessionId: sessionIdOfChecker,
+						...(modelOfChecker ? { model: modelOfChecker } : {}),
 						startedAt: deps.now(),
 						budgetMs: decision.checkMs,
 					},

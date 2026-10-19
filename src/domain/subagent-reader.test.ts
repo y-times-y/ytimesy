@@ -52,6 +52,14 @@ describe("reader Linux user", () => {
 		expect(
 			execFileSync("bash", ["-c", local], { encoding: "utf8" }).trim(),
 		).toBe("it's 2");
+		// Git accepts the builder's checkout although another user owns it.
+		const git = readerCommand(
+			"child-1",
+			"git config --get-all safe.directory",
+		).replace(/^sudo -n -u ytimesy-reader -- /, "");
+		expect(execFileSync("bash", ["-c", git], { encoding: "utf8" }).trim()).toBe(
+			"*",
+		);
 	});
 
 	it("lets the runtime write only to the reader's scratch, runtime root and payload files", () => {

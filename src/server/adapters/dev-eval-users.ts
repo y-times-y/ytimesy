@@ -68,3 +68,9 @@ export async function harnessVariantForUser(
 		? harnessVariantFromUnknown(row.harness_variant)
 		: DEFAULT_HARNESS_VARIANT;
 }
+
+/** Whether this user is a development eval user (their requests are recorded for the runner). */
+export async function isDevEvalUser(userId: string): Promise<boolean> {
+	if (!devEvalUsersEnabled()) return false;
+	return (await evalUserRow(userId)) !== null;
+}

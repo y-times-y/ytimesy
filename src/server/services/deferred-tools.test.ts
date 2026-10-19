@@ -153,6 +153,44 @@ describe("deferred tool surface", () => {
 	});
 });
 
+describe("deferred tools in code mode primary", () => {
+	it("offers no find_tools and no deferred tool, lists them for run_code, and adds plan tools only while planning", () => {
+		let planning = false;
+		const surface = deferredToolSurface({
+			tools: turnTools(),
+			groups: GROUPS,
+			loaded: [],
+			forceLoaded: () => (planning ? ["enter_plan_mode", "propose_plan"] : []),
+			discovery: "run_code",
+			unlisted: ["propose_plan"],
+		});
+		expect(Object.keys(surface.tools)).not.toContain(FIND_TOOLS_TOOL);
+		expect(surface.order()).toEqual(["read", "bash", "web_search"]);
+		// Byte-stable across requests until plan mode starts.
+		expect(surface.order()).toEqual(surface.order());
+		expect(surface.deferred.map((entry) => entry.name)).toEqual([
+			"agent",
+			"agent_send",
+			"enter_plan_mode",
+		]);
+		planning = true;
+		expect(surface.order()).toEqual([
+			"read",
+			"bash",
+			"web_search",
+			"enter_plan_mode",
+			"propose_plan",
+		]);
+		const text = deferredToolsInstructions(surface.deferred, {
+			codeMode: "primary",
+		});
+		expect(text).toContain("call them from inside run_code");
+		expect(text).toContain("searchTools(query)");
+		expect(text).not.toContain(FIND_TOOLS_TOOL);
+		expect(text).toContain("- agent: Start a subagent");
+	});
+});
+
 const usage = {
 	inputTokens: { total: 3, noCache: 3, cacheRead: 0, cacheWrite: 0 },
 	outputTokens: { total: 2, text: 2, reasoning: 0 },

@@ -149,31 +149,49 @@ describe("code mode sandbox", () => {
 		expect(peak).toBe(2);
 	});
 
-	it("surfaces host tool errors to the program and uncaught ones as the outcome", async () => {
+	it("resolves a failed tool call to a failure value, so Promise.all keeps the other results", async () => {
 		const call = async (name: string) => {
 			if (name === "fail") throw new Error("disk on fire");
-			return { ok: true };
+			return "fine";
 		};
-		const caught = await run(
-			"try { await tools.fail({}); } catch (error) { return error.name + ': ' + error.message; }",
+		const both = await run(
+			`const [a, b] = await Promise.all([tools.fail({}), tools.read({})]);
+			return { a, b, failed: a.ok === false, okIsUndefined: b.ok === undefined, text: \`\${a}\` };`,
 			call,
 		);
-		expect(caught.result).toBe('"ToolError: disk on fire"');
-		const uncaught = await run("await tools.fail({}); return 1;", call);
-		expect(uncaught.ok).toBe(false);
-		expect(uncaught.error).toMatch(/^ToolError: disk on fire/);
+		expect(JSON.parse(both.result as string)).toEqual({
+			a: { ok: false, tool: "fail", error: "disk on fire" },
+			b: "fine",
+			failed: true,
+			okIsUndefined: true,
+			text: "[fail failed] disk on fire",
+		});
+		const thrown = await run("throw new Error('mine');");
+		expect(thrown.ok).toBe(false);
+		expect(thrown.error).toMatch(/^Error: mine/);
 		const syntax = await run("return (;");
 		expect(syntax.ok).toBe(false);
 		expect(syntax.error).toMatch(/SyntaxError/);
 	});
 
+	it("keeps text() output as the program goes, even when it later throws", async () => {
+		const outcome = await run(
+			"text('first', { n: 1 }); print('second'); throw new Error('late');",
+		);
+		expect(outcome.ok).toBe(false);
+		expect(outcome.console).toBe('first {"n":1}\nsecond\n');
+	});
+
 	it("limits the number of tool calls", async () => {
 		const outcome = await run(
-			"let n = 0; for (let i = 0; i < 5; i++) { try { await tools.read({}); n++; } catch (e) { return { n, message: e.message }; } }",
+			"let n = 0; for (let i = 0; i < 5; i++) { const r = await tools.read({}); if (r && r.ok === false) return { n, message: r.error }; n++; }",
 			async () => null,
 			{ maxToolCalls: 3 },
 		);
-		expect(JSON.parse(outcome.result as string)).toMatchObject({ n: 3 });
+		expect(JSON.parse(outcome.result as string)).toMatchObject({
+			n: 3,
+			message: expect.stringMatching(/Tool call limit reached/),
+		});
 	});
 
 	it("reports a program that awaits something that never settles", async () => {
@@ -199,7 +217,7 @@ describe("code mode sandbox", () => {
 
 	it("rejects oversized tool results", async () => {
 		const outcome = await run(
-			"try { await tools.read({}); } catch (e) { return e.message; }",
+			"return (await tools.read({})).error;",
 			async () => "z".repeat(5000),
 			{ toolResultBytes: 1000 },
 		);

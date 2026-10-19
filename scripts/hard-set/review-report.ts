@@ -56,8 +56,14 @@ type RunWithReview = {
 	readonly attempt: string;
 	readonly status: string;
 	readonly passed: boolean;
+	readonly variant?: string;
 	readonly reviewLoop?: HardSetReviewRecord | null;
+	/** The copied state rows: absent on records written before they were kept. */
+	readonly loopStates?: { readonly review: readonly unknown[] } | null;
 };
+
+const reviewOn = (variant: string | undefined) =>
+	!!variant && /(^|[\s,;])review=on\b/.test(variant);
 
 const grade = (passed: boolean | null) =>
 	passed === null ? "?" : passed ? "PASS" : "fail";
@@ -65,11 +71,20 @@ const grade = (passed: boolean | null) =>
 /** Report lines for the runs that had a review loop (empty when none). */
 export function reviewLoopReport(records: readonly RunWithReview[]) {
 	const runs = records.filter((record) => record.reviewLoop);
-	if (!runs.length) return [];
+	// review=on runs without a loop record: say whether the loop never ran or was not kept.
+	const missing = records.filter(
+		(record) => !record.reviewLoop && reviewOn(record.variant),
+	);
+	if (!runs.length && !missing.length) return [];
 	const lines = [
 		"",
 		"Review loop (checker verdict on the checked tree -> that tree's grade; final grade):",
 	];
+	for (const record of missing)
+		lines.push(
+			`- ${record.task}.${record.attempt}: ${record.loopStates ? "review=on but no review loop ran (no state row)" : "review=on; no review-loop state was kept (record predates it)"}; final ${record.status === "final" ? grade(record.passed) : record.status}`,
+		);
+	if (!runs.length) return lines;
 	const moves = {
 		failToPass: 0,
 		passToFail: 0,

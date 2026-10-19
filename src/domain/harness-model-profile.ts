@@ -1,4 +1,5 @@
 import type { ModelMessage } from "ai";
+import { CODE_MODE_TOOL } from "./code-mode";
 import type { HarnessToolSurfaceId } from "./harness-variant";
 
 export type HarnessModelFamily = "openai" | "anthropic" | "google" | "other";
@@ -208,23 +209,43 @@ export const LEAN_COMMAND_ARGUMENTS: Readonly<Record<string, string>> =
 
 /**
  * The lean shape a tool list was built with, if any: the shape whose every
- * tool is offered (Codex's apply_patch only when the route had one).
+ * tool is offered (Codex's apply_patch only when the route had one), else
+ * the read-only form of one (a reader subagent's: its write and edit tools
+ * left out).
  */
 export function leanSurfaceShape(
 	toolNames: readonly string[],
 ): LeanToolShape | null {
 	const offered = new Set(toolNames);
-	for (const shape of Object.keys(LEAN_SHAPE_TOOLS) as LeanToolShape[]) {
-		const tools = Object.values(LEAN_SHAPE_TOOLS[shape]) as string[];
-		if (
-			tools.every(
-				(name) =>
-					offered.has(name) || (shape === "codex" && name === "apply_patch"),
-			)
-		)
-			return shape;
-	}
-	return null;
+	const shapes = Object.keys(LEAN_SHAPE_TOOLS) as LeanToolShape[];
+	const matches = (shape: LeanToolShape, readOnly: boolean) => {
+		const tools: Partial<Record<LeanToolRole, string>> =
+			LEAN_SHAPE_TOOLS[shape];
+		const optional = new Set(
+			readOnly
+				? [tools.write, tools.edit].filter((name) => name !== tools.read)
+				: [],
+		);
+		return (Object.values(tools) as string[]).every(
+			(name) =>
+				offered.has(name) ||
+				optional.has(name) ||
+				(shape === "codex" && name === "apply_patch"),
+		);
+	};
+	return (
+		shapes.find((shape) => matches(shape, false)) ??
+		shapes.find((shape) => matches(shape, true)) ??
+		null
+	);
+}
+
+/** A lean surface without its edit tool: a read-only subagent's. */
+function readOnlyLeanSurface(
+	shape: LeanToolShape,
+	toolNames: readonly string[],
+) {
+	return !toolNames.includes(LEAN_SHAPE_TOOLS[shape].edit);
 }
 
 /** A shell-shaped surface (like native Codex): a command tool and no specialist tools. */
@@ -236,10 +257,19 @@ export function isShellSurface(toolNames: readonly string[]) {
 	);
 }
 
+/** The pre-finish coverage rule, with where the remaining checks run. */
+const VERIFY_BEFORE_FINISHING = (combined: string) =>
+	`Before finishing, map each stated symptom or requirement to a check you actually ran; cover any remaining ones in ${combined} alongside the existing tests, not one step per check, and rerun checks only after an edit.`;
+
+/** With run_code offered, the remaining checks go in one program, not one shell command. */
+const RUN_CODE_VERIFICATION = VERIFY_BEFORE_FINISHING(
+	"one run_code program running the checks (Promise.all where independent)",
+);
+
 /** v13-shell's behavioural guidance, shared by the lean surfaces; tool-neutral. */
 const SHELL_BEHAVIOUR = [
 	"Fix first: verify with quick reproduction commands and the existing tests; add new test files only when the task or repository conventions ask for them. Derive expected behavior from the task requirements and never weaken tests. Review your change with git diff instead of rereading whole files.",
-	"Before finishing, map each stated symptom or requirement to a check you actually ran; cover any remaining ones in one combined verification command or script alongside the existing tests, not one step per check, and rerun checks only after an edit.",
+	VERIFY_BEFORE_FINISHING("one combined verification command or script"),
 	"Do not stop to ask about ambiguity you can resolve yourself: when inputs conflict or are ambiguous, choose the most reasonable interpretation, state the assumption, and still produce every required output.",
 	"Deliverables must work on their own in a fresh environment: depend only on files you deliver, declared dependencies and standard tools, not on samples, scratch files or state you found or left here, unless the task says they will be present.",
 	"Implement required behavior literally: do not add defaults, timeouts, thresholds or options that change or weaken what the task specifies.",
@@ -256,17 +286,43 @@ const SHELL_BEHAVIOUR = [
 function leanHarnessInstructions(
 	shape: LeanToolShape,
 	family: HarnessModelFamily,
+	/** run_code is offered (harness variant codeMode): batching goes through it. */
+	codeMode = false,
+	/** A read-only subagent: it checks and reports, it does not edit. */
+	readOnly = false,
 ) {
-	const { command: run, edit } = LEAN_SHAPE_TOOLS[shape];
+	const tools: { command: string; edit: string; read?: string } =
+		LEAN_SHAPE_TOOLS[shape];
+	const { command: run, edit } = tools;
 	const context =
 		family === "anthropic"
 			? "Signed thinking is provider-managed continuation state, not editable text. Recover earlier findings from ~/.ytimesy/history/ instead of reconstructing or exposing signatures."
 			: family === "google"
 				? "Thought signatures are provider-managed continuation state. Do not reconstruct them or claim a missing thought was recovered; use source and ~/.ytimesy/history/ evidence."
 				: "After compaction, rely on files, command output and ~/.ytimesy/history/, not on reasoning you remember.";
+	const fix =
+		"Once you understand the cause, make the complete fix rather than a series of partial edits, then rerun the check and the project's existing tests.";
+	if (readOnly)
+		return [
+			`Harness tool profile v13-lean-reader (${family}): You review and report; you do not change the checkout. ${context}`,
+			codeMode
+				? `Inspect by reading related files together rather than slice by slice: one run_code program reads several files at once (tools.${tools.read ?? run}) or runs ${run} commands (rg, sed -n, git, project CLIs, the project's tests) and returns only the relevant lines.`
+				: `Inspect with ${run} (rg, sed -n, git, project CLIs, the project's tests), reading related files together in one command rather than slice by slice.`,
+			"Back each conclusion with a command you ran and its output, or a file and line; run the project's existing tests and the documented invocation rather than reasoning about what they would do. Do not stop to ask about ambiguity you can resolve yourself: state the reading you chose and check the alternative when a result hinges on it.",
+		].join(" ");
+	// With run_code offered, the shell-only wording would contradict the
+	// run_code paragraph (measured: GPT then used only the command tool).
+	if (codeMode)
+		return [
+			`Harness tool profile v13-lean (${family}): Edit files with ${edit}; when you also run its check, make the edit and run the check in one run_code program. ${context}`,
+			`Inspect by reading related files together rather than slice by slice: one run_code program reads several files at once (tools.${tools.read ?? run}) or runs ${run} commands (rg, sed -n, git, project CLIs) and returns only the relevant lines. Reproduce the problem with the smallest executable check early. ${fix}`,
+			...SHELL_BEHAVIOUR.map((line) =>
+				line === SHELL_BEHAVIOUR[1] ? RUN_CODE_VERIFICATION : line,
+			),
+		].join(" ");
 	return [
 		`Harness tool profile v13-lean (${family}): Edit files with ${edit}, or from ${run} when you can make the edit and run its check in the same command. ${context}`,
-		`Inspect with ${run} (rg, sed -n, git, project CLIs), reading related files together in one command rather than slice by slice, and reproduce the problem with the smallest executable check early. Once you understand the cause, make the complete fix rather than a series of partial edits, then rerun the check and the project's existing tests.`,
+		`Inspect with ${run} (rg, sed -n, git, project CLIs), reading related files together in one command rather than slice by slice, and reproduce the problem with the smallest executable check early. ${fix}`,
 		...SHELL_BEHAVIOUR,
 	].join(" ");
 }
@@ -295,7 +351,13 @@ export function harnessModelToolInstructions(
 	// agentTurnInstructions; this adds the same behavioural guidance as
 	// v13-shell in the lean tools' names, so a comparison measures the tools.
 	const lean = availableTools && leanSurfaceShape(availableTools);
-	if (lean) return leanHarnessInstructions(lean, family);
+	if (lean)
+		return leanHarnessInstructions(
+			lean,
+			family,
+			availableTools.includes(CODE_MODE_TOOL),
+			readOnlyLeanSurface(lean, availableTools),
+		);
 	// A shell-shaped surface (like native Codex) gets shell-centric guidance
 	// instead of instructions for specialist tools it was not offered.
 	if (availableTools && isShellSurface(availableTools))
