@@ -29,6 +29,7 @@ import {
 	TURN_COORDINATION_LEASE_MS,
 	type TurnControl,
 } from "#/domain/conversation-turn-control";
+import { leanToolRole } from "#/domain/harness-model-profile";
 import {
 	DEFAULT_HARNESS_VARIANT,
 	promptCacheScopeId,
@@ -1880,13 +1881,35 @@ function withCodeMode(
 ): ToolSet {
 	if (!codeMode) return tools;
 	const runCode = codeModeTool({ tools, ...codeMode });
-	return runCode
-		? {
-				...tools,
-				...withRedactedResults({ [CODE_MODE_TOOL]: runCode }, codeMode.redact),
-			}
-		: tools;
+	if (!runCode) return tools;
+	const offered = withRedactedResults(
+		{ [CODE_MODE_TOOL]: runCode },
+		codeMode.redact,
+	);
+	if (codeMode.mode !== "primary") return { ...tools, ...offered };
+	// primary: run_code is listed first, as the system prompt names it first,
+	// and the command tool says it is for one command. Both depend only on the
+	// surface, so the tool list stays byte-stable across steps.
+	return {
+		...offered,
+		...Object.fromEntries(
+			Object.entries(tools).map(([name, definition]) => [
+				name,
+				leanToolRole(name) === "command"
+					? ({
+							...definition,
+							description:
+								`${definition.description ?? ""} ${PRIMARY_COMMAND_NOTE}`.trim(),
+						} as typeof definition)
+					: definition,
+			]),
+		),
+	};
 }
+
+/** The command tool's line in code mode primary: what it is still for. */
+const PRIMARY_COMMAND_NOTE =
+	"Use it for one command, or a long-running or interactive process; for several known steps use run_code.";
 
 /** The system prompt: the builder's instructions, then memory's. */
 function turnInstructions(

@@ -63,7 +63,13 @@ describe("subagent instructions", () => {
 		});
 		expect(primary).toContain("run_code is your main tool");
 		expect(primary).toContain(
-			"make an edit and run the test in the same program",
+			"Your tools: run_code runs programs that call bash, read, edit and write; bash runs shell commands;",
+		);
+		expect(primary).toContain(
+			"Explore with one run_code program: list the tree and read the task's files with Promise.all.",
+		);
+		expect(primary).toContain(
+			"Once you know the fix, make all planned edits and run the tests in ONE run_code program.",
 		);
 		expect(primary).not.toContain("run_code runs one JavaScript program");
 		expect(primary).toContain(

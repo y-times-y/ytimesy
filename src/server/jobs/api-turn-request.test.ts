@@ -236,6 +236,14 @@ it("sends run_code and the lean tools to the Codex subscription when codeMode=pr
 	expect(names).not.toContain("exec_command");
 	const runCode = body.tools.find((tool) => tool.name === "run_code");
 	expect(runCode?.type).toBe("function");
+	// Listed first, and named first in "Your tools:".
+	expect(names[0]).toBe("run_code");
+	expect(body.instructions).toContain(
+		"Your tools: run_code runs programs that call bash, read, edit and write; bash runs shell commands;",
+	);
+	expect(body.tools.find((tool) => tool.name === "bash")?.description).toMatch(
+		/Use it for one command, or a long-running or interactive process; for several known steps use run_code\.$/,
+	);
 	expect(body.instructions).toContain("run_code is your main tool");
 	// The model loop's lean profile must not send batching back to bash.
 	expect(body.instructions).not.toContain("Inspect with bash");
@@ -252,4 +260,13 @@ it("offers no run_code with code mode off", async () => {
 		expect.arrayContaining(["bash", "read", "write", "edit"]),
 	);
 	expect(names).not.toContain("run_code");
+});
+
+it("keeps run_code after the lean tools and bash's own description with code mode on", async () => {
+	const { body, names } = await sentRequest({ codeMode: "on" });
+	expect(names.indexOf("run_code")).toBeGreaterThan(names.indexOf("bash"));
+	expect(body.instructions).toContain("Your tools: bash runs shell commands;");
+	expect(
+		body.tools.find((tool) => tool.name === "bash")?.description,
+	).not.toContain("run_code");
 });
