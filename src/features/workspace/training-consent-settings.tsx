@@ -5,6 +5,10 @@ import { Switch } from "#/components/ui/switch";
 import { TRAINING_POLICY_VERSION } from "#/content/legal/versions";
 import type { TrainingConsent } from "#/domain/training-consent";
 import {
+	chooseReplay,
+	useReplayConsent,
+} from "../analytics/replay-consent-banner";
+import {
 	readProjectTrainingFn,
 	readTrainingConsentFn,
 	saveProjectTrainingFn,
@@ -124,9 +128,38 @@ export function TrainingConsentView(props: {
 						</div>
 					</div>
 				) : null}
+				<ReplayConsentRow />
 			</div>
 			{props.error ? <p role="alert">{props.error}</p> : null}
 		</section>
+	);
+}
+
+/** Withdrawing replay consent is as easy as giving it (this browser only). */
+function ReplayConsentRow() {
+	const choice = useReplayConsent();
+	return (
+		<div className="settings-row">
+			<div className="settings-row-text">
+				<label htmlFor="replay-consent" className="settings-row-title">
+					Session recording
+				</label>
+				<span className="settings-row-meta">
+					Record how you use ytimesy in this browser, with all text, code, chats
+					and inputs hidden, to help us improve it.
+				</span>
+			</div>
+			<div className="settings-row-actions">
+				<Switch
+					id="replay-consent"
+					checked={choice === "accepted"}
+					disabled={choice === undefined}
+					onCheckedChange={(checked) =>
+						chooseReplay(checked ? "accepted" : "declined")
+					}
+				/>
+			</div>
+		</div>
 	);
 }
 

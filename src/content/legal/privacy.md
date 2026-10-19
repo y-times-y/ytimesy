@@ -72,12 +72,14 @@ model prices you pay your provider.
 product events (for example "account created", "turn started/finished",
 "pull request created", which inspector panel was opened), with no prompt,
 code, file names or repository names in them. IP-based location lookup is
-disabled. We also record **session replays** of how the web app is used, with
-all text masked and code, terminals, chat content, inputs, images and the
-desktop view blocked before anything leaves your browser; network bodies and
-headers and console logs are not recorded. We honour the browser
-"Do Not Track" setting for analytics. [OWNER/COUNSEL: whether EU/UK visitors
-need a consent prompt before replay; see required product changes.]
+disabled. **Only if you accept** the recording prompt, we also record
+**session replays** of how the web app is used, with all text masked and code,
+terminals, chat content, inputs, images and the desktop view blocked before
+anything leaves your browser; network bodies and headers and console logs are
+not recorded. Replay is off until you accept, and you can turn it off at any
+time in Settings, Privacy (the choice is kept in your browser). We honour the
+browser "Do Not Track" setting for analytics. [COUNSEL: confirm product events
+without replay can rely on legitimate interest for EU/UK visitors.]
 
 **Logs.** Our hosting providers keep operational logs (requests, errors,
 timings) that can include IP addresses and identifiers, for security and
