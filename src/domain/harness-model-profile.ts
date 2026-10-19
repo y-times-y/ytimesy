@@ -257,10 +257,19 @@ export function isShellSurface(toolNames: readonly string[]) {
 	);
 }
 
+/** The pre-finish coverage rule, with where the remaining checks run. */
+const VERIFY_BEFORE_FINISHING = (combined: string) =>
+	`Before finishing, map each stated symptom or requirement to a check you actually ran; cover any remaining ones in ${combined} alongside the existing tests, not one step per check, and rerun checks only after an edit.`;
+
+/** With run_code offered, the remaining checks go in one program, not one shell command. */
+const RUN_CODE_VERIFICATION = VERIFY_BEFORE_FINISHING(
+	"one run_code program running the checks (Promise.all where independent)",
+);
+
 /** v13-shell's behavioural guidance, shared by the lean surfaces; tool-neutral. */
 const SHELL_BEHAVIOUR = [
 	"Fix first: verify with quick reproduction commands and the existing tests; add new test files only when the task or repository conventions ask for them. Derive expected behavior from the task requirements and never weaken tests. Review your change with git diff instead of rereading whole files.",
-	"Before finishing, map each stated symptom or requirement to a check you actually ran; cover any remaining ones in one combined verification command or script alongside the existing tests, not one step per check, and rerun checks only after an edit.",
+	VERIFY_BEFORE_FINISHING("one combined verification command or script"),
 	"Do not stop to ask about ambiguity you can resolve yourself: when inputs conflict or are ambiguous, choose the most reasonable interpretation, state the assumption, and still produce every required output.",
 	"Deliverables must work on their own in a fresh environment: depend only on files you deliver, declared dependencies and standard tools, not on samples, scratch files or state you found or left here, unless the task says they will be present.",
 	"Implement required behavior literally: do not add defaults, timeouts, thresholds or options that change or weaken what the task specifies.",
@@ -307,7 +316,9 @@ function leanHarnessInstructions(
 		return [
 			`Harness tool profile v13-lean (${family}): Edit files with ${edit}; when you also run its check, make the edit and run the check in one run_code program. ${context}`,
 			`Inspect by reading related files together rather than slice by slice: one run_code program reads several files at once (tools.${tools.read ?? run}) or runs ${run} commands (rg, sed -n, git, project CLIs) and returns only the relevant lines. Reproduce the problem with the smallest executable check early. ${fix}`,
-			...SHELL_BEHAVIOUR,
+			...SHELL_BEHAVIOUR.map((line) =>
+				line === SHELL_BEHAVIOUR[1] ? RUN_CODE_VERIFICATION : line,
+			),
 		].join(" ");
 	return [
 		`Harness tool profile v13-lean (${family}): Edit files with ${edit}, or from ${run} when you can make the edit and run its check in the same command. ${context}`,

@@ -191,4 +191,10 @@ it("points the lean profile's batching at run_code when it is offered, never at 
 	expect(coded).not.toContain("or from bash when");
 	expect(coded).toContain("one run_code program reads several files at once");
 	expect(coded).toContain("Generalize instead of fitting the examples");
+	// The pre-finish checks go in one program, not one shell command.
+	expect(plain).toContain("one combined verification command or script");
+	expect(coded).not.toContain("one combined verification command or script");
+	expect(coded).toContain(
+		"cover any remaining ones in one run_code program running the checks (Promise.all where independent)",
+	);
 });
