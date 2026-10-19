@@ -8,7 +8,7 @@ import {
 	type AgentProviderId,
 	DEFAULT_COMPOSER_HARNESS_ID,
 } from "#/domain/agent-provider";
-import { shouldPollAgentTasks } from "#/domain/agent-task";
+import { shouldPollSubagents } from "#/domain/agent-task";
 import {
 	harnessLoginIsPending,
 	RUNNING_TURN_POLL_MS,
@@ -438,7 +438,7 @@ export function WorkspaceHome({
 			}),
 		enabled: Boolean(activeProjectId && activeSessionId),
 		refetchInterval: (query) =>
-			shouldPollAgentTasks(session.turnStatus, query.state.data ?? [])
+			shouldPollSubagents(session.turnStatus, query.state.data ?? [])
 				? 2_500
 				: false,
 	});
@@ -458,13 +458,6 @@ export function WorkspaceHome({
 		refetchPullRequests,
 		chats.refetch,
 	]);
-	const taskHandoffs = (agentTasks.data ?? [])
-		.filter((task) => task.pullRequestUrl)
-		.map((task) => `${task.id}:${task.pullRequestUrl}:${task.status}`)
-		.join("|");
-	useEffect(() => {
-		if (taskHandoffs) void refetchPullRequests();
-	}, [taskHandoffs, refetchPullRequests]);
 	selectedSessionIdRef.current = activeSessionId;
 	const requestDesktop = useCallback(() => {
 		const chatId = activeSessionId;

@@ -119,7 +119,11 @@ export const listProjectAgentTasks = createServerFn({ method: "GET" })
 		if (!root || root.projectId !== data.projectId || root.parentSessionId) {
 			return [];
 		}
-		const descendants = await descendantAgentSessions(user.id, root.id);
+		// Subagents only: rows of the retired lead/child architecture (no
+		// agent role) and anything under them are not shown.
+		const descendants = (
+			await descendantAgentSessions(user.id, root.id)
+		).filter((session) => session.agentRole);
 		const byId = new Map(descendants.map((session) => [session.id, session]));
 		const subagents = subagentTaskViews(
 			root.id,
