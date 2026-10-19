@@ -37,8 +37,33 @@ type Admission = {
 };
 const PROVIDER_STOP_BUFFER_SECONDS = 60;
 
-export function infrastructureAdmissionEnabled() {
-	return process.env.YTIMESY_INFRASTRUCTURE_ADMISSION === "true";
+export const INFRASTRUCTURE_CAP_SETTINGS = [
+	"YTIMESY_USER_MONTHLY_MICRO_USD",
+	"YTIMESY_FLEET_MONTHLY_MICRO_USD",
+	"YTIMESY_FLEET_LIFETIME_MICRO_USD",
+] as const;
+
+/**
+ * Whether VM runtime is metered against the per-user and fleet caps.
+ * Production always meters (fails closed): the opt-in flag is ignored there,
+ * and a production process without every cap refuses VM work instead of
+ * running unmetered. Other environments opt in with
+ * YTIMESY_INFRASTRUCTURE_ADMISSION=true.
+ */
+export function infrastructureAdmissionEnabled(
+	env: Readonly<Record<string, string | undefined>> = process.env,
+) {
+	if (env.YTIMESY_ENVIRONMENT === "production") {
+		const missing = INFRASTRUCTURE_CAP_SETTINGS.filter(
+			(name) => !env[name]?.trim(),
+		);
+		if (missing.length)
+			throw new Error(
+				`Production refuses VM work without usage caps: set ${missing.join(", ")}.`,
+			);
+		return true;
+	}
+	return env.YTIMESY_INFRASTRUCTURE_ADMISSION === "true";
 }
 
 export function computeHourlyMicroUsd(resources: VmResources) {

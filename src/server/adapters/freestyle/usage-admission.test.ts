@@ -1,6 +1,10 @@
 import type { VmData } from "freestyle";
 import { afterEach, expect, it, vi } from "vitest";
-import { admitVmResume, resumeCapDecision } from "./usage-admission";
+import {
+	admitVmResume,
+	infrastructureAdmissionEnabled,
+	resumeCapDecision,
+} from "./usage-admission";
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -71,4 +75,53 @@ it("fails an unmetered resume of a spent VM with a machine reason before calling
 	await expect(
 		admitVmResume(vm as never, { ...data, totalRunSeconds: 100 }, 60),
 	).resolves.toBeUndefined();
+});
+
+const caps = {
+	YTIMESY_USER_MONTHLY_MICRO_USD: "5000000",
+	YTIMESY_FLEET_MONTHLY_MICRO_USD: "100000000",
+	YTIMESY_FLEET_LIFETIME_MICRO_USD: "500000000",
+};
+
+it("always meters production, even when the opt-in flag is off or unset", () => {
+	for (const flag of [undefined, "false", ""])
+		expect(
+			infrastructureAdmissionEnabled({
+				YTIMESY_ENVIRONMENT: "production",
+				YTIMESY_INFRASTRUCTURE_ADMISSION: flag,
+				...caps,
+			}),
+		).toBe(true);
+});
+
+it("refuses production VM work when any usage cap is unset", () => {
+	for (const name of Object.keys(caps))
+		expect(() =>
+			infrastructureAdmissionEnabled({
+				YTIMESY_ENVIRONMENT: "production",
+				...caps,
+				[name]: " ",
+			}),
+		).toThrow(new RegExp(`without usage caps: set ${name}`));
+});
+
+it("keeps admission opt-in outside production", () => {
+	expect(infrastructureAdmissionEnabled({})).toBe(false);
+	expect(
+		infrastructureAdmissionEnabled({
+			YTIMESY_ENVIRONMENT: "development",
+			YTIMESY_INFRASTRUCTURE_ADMISSION: "true",
+		}),
+	).toBe(true);
+});
+
+it("meters a production resume even though the opt-in flag says false", async () => {
+	vi.stubEnv("YTIMESY_ENVIRONMENT", "production");
+	vi.stubEnv("YTIMESY_INFRASTRUCTURE_ADMISSION", "false");
+	for (const [name, value] of Object.entries(caps)) vi.stubEnv(name, value);
+	const vm = { start: vi.fn(), update: vi.fn() };
+	// Metered admission needs the VM's usage identity; unmetered would return.
+	await expect(
+		admitVmResume(vm as never, { id: "vm-1", state: "paused" } as VmData, 60),
+	).rejects.toThrow(/usage identity is missing/);
 });
