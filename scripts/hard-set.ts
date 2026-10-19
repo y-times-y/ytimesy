@@ -8,6 +8,7 @@
 // node --env-file=.env --import tsx scripts/hard-set.ts --live --run <name> --chunk 1
 // node --env-file=.env --import tsx scripts/hard-set.ts --collect --run <name>
 // node --env-file=.env --import tsx scripts/hard-set.ts --report --run <name>
+// node --env-file=.env --import tsx scripts/hard-set.ts --compare <run>,<run>   # efficiency side by side
 //
 // Detached (agent budgets longer than one invocation, docs/hard-set.md):
 // node --env-file=.env --import tsx scripts/hard-set.ts --live --detach --run <name> --tasks a,b --agent-minutes 30
@@ -97,6 +98,8 @@ import {
 } from "./hard-set/review-report";
 import { HARD_SET, HARD_SET_CHUNKS, type HardSetTask } from "./hard-set/tasks";
 import {
+	efficiencyRow,
+	efficiencyTable,
 	type ToolCallSummary,
 	toolCallLine,
 	toolCallSummary,
@@ -138,6 +141,8 @@ const { values: flags } = parseArgs({
 		list: { type: "boolean", default: false },
 		collect: { type: "boolean", default: false },
 		report: { type: "boolean", default: false },
+		/** Efficiency of several runs side by side (comma-separated run names): model calls, run_code, inner calls, tokens, cost, time. */
+		compare: { type: "string" },
 		/** Start the turns and return; --collect finishes them (docs/hard-set.md). */
 		detach: { type: "boolean", default: false },
 		/** Detached runs: phase, agent time used vs budget, what is next. */
@@ -709,6 +714,43 @@ if (flags.list) {
 	process.exit(0);
 }
 
+/** Agent records whose turn ran, as efficiency rows (per run, then means per run and variant). */
+function printEfficiency(records: HardSetRecord[]) {
+	const rows = records
+		.filter((record) => record.mode === "agent" && record.modelSteps)
+		.map((record) =>
+			efficiencyRow(record, estimatedCost(record), isScored(record)),
+		);
+	if (!rows.length) return;
+	console.log(
+		"\nEfficiency (agent runs whose turn ran; pass - = not scored, pass mean = passed/scored): steps = model calls; tools = direct calls; inner = run_code's tool calls; parallel = programs with 2+ calls at once; in/step = input tokens per model call (context size); est $ at list price; agent s = agent wall time.",
+	);
+	console.log(table(efficiencyTable(rows)));
+}
+
+if (flags.compare) {
+	const runs = flags.compare.split(",").map((run) => run.trim());
+	const records: HardSetRecord[] = [];
+	for (const run of runs) {
+		if (!/^[A-Za-z0-9._=-]{1,80}$/.test(run))
+			throw new Error(`--compare takes run names; got "${run}".`);
+		records.push(
+			...(await readRecords(join(RUNS, run))).map((record) => ({
+				...record,
+				run,
+			})),
+		);
+	}
+	records.sort((a, b) =>
+		`${a.run}/${a.task}.${a.attempt}`.localeCompare(
+			`${b.run}/${b.task}.${b.attempt}`,
+		),
+	);
+	if (!records.length) throw new Error(`No records in ${runs.join(", ")}.`);
+	printEfficiency(records);
+	process.exit(0);
+}
+
 if (flags.report) {
 	const dir = runDirectory();
 	const records = (await readRecords(dir)).sort((a, b) =>
@@ -727,6 +769,7 @@ if (flags.report) {
 	if (cost) console.log(cost);
 	printAttemptLoops(records);
 	for (const line of reviewLoopReport(records)) console.log(line);
+	printEfficiency(records);
 	const agentRuns = records.filter((record) => record.mode === "agent");
 	if (agentRuns.length) {
 		console.log(

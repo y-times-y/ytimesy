@@ -16,6 +16,7 @@ import {
 import {
 	codeModeInstructions,
 	leanToolInstructions,
+	primaryCodeModeInstructions,
 } from "#/domain/lean-tool-instructions";
 import {
 	BUILDER_PROJECT_KNOWLEDGE_INSTRUCTIONS,
@@ -55,6 +56,8 @@ export function agentTurnInstructions(input: {
 	leanWorkingDirectory?: string;
 	/** Tools loaded on demand (deferred-tools.ts), listed so the model knows they exist. */
 	deferredTools?: readonly DeferredToolEntry[];
+	/** Harness variant codeMode (with run_code in the tools): primary teaches run_code as the main tool. */
+	codeMode?: "on" | "primary";
 	/** Harness variant prEvidence=on: one line on `ytimesy-evidence`. */
 	prEvidence?: boolean;
 }) {
@@ -77,16 +80,22 @@ function leanTurnInstructions(
 		leanShape: LeanToolShape;
 	},
 ) {
+	const codeMode =
+		CODE_MODE_TOOL in input.tools
+			? input.codeMode === "primary"
+				? "primary"
+				: true
+			: false;
 	return [
 		`You are the ytimesy coding agent, working in this task's prepared repository checkout${input.leanWorkingDirectory ? ` at ${input.leanWorkingDirectory}` : ""}; commands start in the repository root and relative paths resolve there.${input.leanWorkingDirectory ? ` Tools that take absolute paths need paths under ${input.leanWorkingDirectory}.` : ""} Repository instructions (AGENTS.md/CLAUDE.md), nested instruction file locations and skills are provided in the conversation. Before working in a folder listed with its own AGENTS.md or CLAUDE.md, read that file; read a matching skill's SKILL.md completely. ${roleInstructions(input.session, true)}`,
 		leanToolInstructions(input.leanShape),
-		CODE_MODE_TOOL in input.tools ? codeModeInstructions(input.leanShape) : "",
-		deferredToolsInstructions(input.deferredTools ?? [], {
-			codeMode: CODE_MODE_TOOL in input.tools,
-		}),
-		AGENT_TOOL in input.tools
-			? orchestratorInstructions({ codeMode: CODE_MODE_TOOL in input.tools })
-			: "",
+		codeMode === "primary"
+			? primaryCodeModeInstructions(input.leanShape)
+			: codeMode
+				? codeModeInstructions(input.leanShape)
+				: "",
+		deferredToolsInstructions(input.deferredTools ?? [], { codeMode }),
+		AGENT_TOOL in input.tools ? orchestratorInstructions({ codeMode }) : "",
 		leanVisualQaInstructions(LEAN_SHAPE_TOOLS[input.leanShape], {
 			prEvidence: input.prEvidence,
 		}),

@@ -1,6 +1,10 @@
 import { asSchema, type ModelMessage, type ToolSet, tool } from "ai";
 import { z } from "zod";
 import { ENTER_PLAN_MODE_TOOL, PROPOSE_PLAN_TOOL } from "#/domain/agent-plan";
+import {
+	CALL_MCP_TOOL_TOOL,
+	SEARCH_MCP_TOOLS_TOOL,
+} from "#/domain/mcp-tool-call";
 import { REQUEST_PROJECT_SECRET_TOOL } from "#/domain/secret-request";
 import type { SessionItem } from "#/domain/session-item";
 import { AGENT_SEND_TOOL, AGENT_TOOL } from "#/domain/subagent";
@@ -146,9 +150,14 @@ export function oneLineDescription(description: string | undefined) {
 /** The system prompt's list of deferred tools and how to load them. */
 export function deferredToolsInstructions(
 	entries: readonly DeferredToolEntry[],
-	options: { readonly codeMode?: boolean } = {},
+	options: { readonly codeMode?: boolean | "primary" } = {},
 ) {
 	if (!entries.length) return "";
+	if (options.codeMode === "primary")
+		return [
+			"More tools are not in your tool list; call them from inside run_code as tools.<name>(args). In a program, searchTools(query) returns their TypeScript declarations (arguments and what they do):",
+			...entries.map((entry) => `- ${entry.name}: ${entry.description}`),
+		].join("\n");
 	return [
 		`More tools are available on demand; they are not in your tool list until you load one with ${FIND_TOOLS_TOOL} (its full schema is then added and stays for this chat)${options.codeMode ? ", or call one directly from run_code" : ""}:`,
 		...entries.map((entry) => `- ${entry.name}: ${entry.description}`),
@@ -164,8 +173,21 @@ export function deferredToolSurface(input: {
 	readonly groups: readonly DeferredToolGroup[];
 	/** Loaded earlier in this chat, in load order. */
 	readonly loaded: readonly string[];
-	/** Offered regardless (e.g. plan tools while plan mode is active), appended like a load. */
-	readonly forceLoaded?: readonly string[];
+	/**
+	 * Offered regardless (e.g. plan tools while plan mode is active), appended
+	 * like a load: a list at setup, or a function read on every request (the
+	 * plan lock can turn on mid-turn from inside run_code).
+	 */
+	readonly forceLoaded?: readonly string[] | (() => readonly string[]);
+	/**
+	 * How the model reaches a deferred tool: find_tools loads it into the
+	 * tool list (the default); run_code (code mode primary) calls it from a
+	 * program, so no find_tools is offered and only direct calls (or forced
+	 * tools) add a tool to the list.
+	 */
+	readonly discovery?: "find_tools" | "run_code";
+	/** Deferred tools left out of the prompt's list (offered only when forced, e.g. propose_plan). */
+	readonly unlisted?: readonly string[];
 }): DeferredToolSurface {
 	const groups = input.groups
 		.map((group) => ({
@@ -177,7 +199,9 @@ export function deferredToolSurface(input: {
 	const allNames = Object.keys(input.tools);
 	if (!deferred.size)
 		return { tools: input.tools, order: () => allNames, deferred: [] };
+	const unlisted = new Set(input.unlisted ?? []);
 	const entries = [...deferred]
+		.filter((name) => !unlisted.has(name))
 		.sort((left, right) => (left < right ? -1 : left > right ? 1 : 0))
 		.map((name) => ({
 			name,
@@ -192,8 +216,22 @@ export function deferredToolSurface(input: {
 	const load = (name: string) => {
 		if (deferred.has(name) && !loaded.includes(name)) loaded.push(name);
 	};
-	for (const name of [...input.loaded, ...(input.forceLoaded ?? [])])
+	const forced = input.forceLoaded;
+	for (const name of [
+		...input.loaded,
+		...(typeof forced === "function" ? [] : (forced ?? [])),
+	])
 		load(name);
+	if (input.discovery === "run_code")
+		return {
+			tools: input.tools,
+			order: () => {
+				if (typeof forced === "function")
+					for (const name of forced()) load(name);
+				return [...alwaysOn, ...loaded];
+			},
+			deferred: entries,
+		};
 	const loadGroup = (name: string) => {
 		for (const group of groups)
 			if (group.tools.includes(name))
@@ -251,7 +289,10 @@ export function deferredToolSurface(input: {
 	});
 	return {
 		tools: { ...input.tools, [FIND_TOOLS_TOOL]: findTools },
-		order: () => [...alwaysOn, FIND_TOOLS_TOOL, ...loaded],
+		order: () => {
+			if (typeof forced === "function") for (const name of forced()) load(name);
+			return [...alwaysOn, FIND_TOOLS_TOOL, ...loaded];
+		},
 		deferred: entries,
 	};
 }
@@ -283,6 +324,28 @@ export const BUILDER_DEFERRED_TOOL_GROUPS: readonly DeferredToolGroup[] = [
 			"ask the user for a missing credential or configuration value (API key, database URL)",
 		tools: [REQUEST_PROJECT_SECRET_TOOL],
 	},
+];
+
+/**
+ * The deferred tools in code mode primary: callable only from run_code
+ * (searchTools there returns their declarations), never through find_tools.
+ * The turn-ending tools stay direct, since an inner call cannot end the
+ * turn: request_project_secret is not deferred, and propose_plan is offered
+ * directly once plan mode is on (forced, unlisted). MCP's search and call
+ * tools exist only when a large MCP setup is deferred (mcp-tool-surface.ts).
+ */
+export const CODE_MODE_DEFERRED_TOOL_GROUPS: readonly DeferredToolGroup[] = [
+	BUILDER_DEFERRED_TOOL_GROUPS[0] as DeferredToolGroup,
+	BUILDER_DEFERRED_TOOL_GROUPS[1] as DeferredToolGroup,
+	{
+		summary: "the user's connected MCP servers' tools",
+		tools: [SEARCH_MCP_TOOLS_TOOL, CALL_MCP_TOOL_TOOL],
+	},
+];
+
+/** Deferred in code mode primary but never callable from a program (they end the turn). */
+export const CODE_MODE_DIRECT_ONLY_TOOLS: readonly string[] = [
+	PROPOSE_PLAN_TOOL,
 ];
 
 /**

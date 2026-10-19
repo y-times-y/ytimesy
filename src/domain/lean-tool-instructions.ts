@@ -35,3 +35,14 @@ export function codeModeInstructions(shape: LeanToolShape) {
 	const read = "read" in tools ? tools.read : tools.command;
 	return `run_code runs one JavaScript program that calls your tools as async functions (tools.${read}, tools.${tools.command}, …) and gives you back only what it returns, in a single step. Use it when you already know several calls to make: reading or searching several files, looping over files or test cases, running independent checks together with Promise.all, or gathering output and filtering it down before you decide. Call tools directly for a single call, when each step depends on judging the previous result, and for interactive or long-running processes.`;
 }
+
+/**
+ * run_code as the main tool (harness variant codeMode=primary): the
+ * batching patterns, in the shape's tool names. Static per shape, so the
+ * system prompt stays byte-stable.
+ */
+export function primaryCodeModeInstructions(shape: LeanToolShape) {
+	const tools = LEAN_SHAPE_TOOLS[shape];
+	const read = "read" in tools ? tools.read : tools.command;
+	return `run_code is your main tool: one JavaScript program calls your tools (tools.${read}, tools.${tools.command}, tools.${tools.edit}, …) and returns only what you need, in one step. Batch whenever you know the next calls: read or search several files at once with Promise.all; make an edit and run the test in the same program; filter long output in code and return the relevant lines. Call a tool directly only for a single call, when the next call depends on judging this result, or for interactive or long-running processes.`;
+}

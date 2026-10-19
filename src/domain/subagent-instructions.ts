@@ -5,9 +5,11 @@ import type { SubagentBudget, SubagentRole } from "./subagent";
  * how to coordinate and verify. Shown to every agent that has the agent
  * tool; the tool itself loads through find_tools.
  */
-export function orchestratorInstructions(options: { codeMode?: boolean } = {}) {
+export function orchestratorInstructions(
+	options: { codeMode?: boolean | "primary" } = {},
+) {
 	return [
-		`Subagents: \`agent\` (load it with find_tools${options.codeMode ? ", or call it from run_code" : ""}) starts a background agent with only your brief; \`agent_send\` steers or stops one. Their reports arrive as messages.`,
+		`Subagents: \`agent\` (${options.codeMode === "primary" ? "call it from run_code: tools.agent(args)" : `load it with find_tools${options.codeMode ? ", or call it from run_code" : ""}`}) starts a background agent with only your brief; \`agent_send\` steers or stops one. Their reports arrive as messages.`,
 		"Cost first: every agent re-reads the code it needs and spends its own tokens, so delegation multiplies cost. Do the work yourself unless one of these clearly pays off:",
 		"- parallelism: independent pieces (separate modules, disjoint files) that would otherwise run one after another;",
 		"- isolation: a risky or exploratory change on a writer's fork, away from your working tree;",

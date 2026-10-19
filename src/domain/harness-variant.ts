@@ -41,10 +41,13 @@ export const HARNESS_VARIANT_VALUES = {
 	/**
 	 * Code mode on a lean surface: on adds run_code, a JavaScript program
 	 * that calls the other tools (several reads, searches and commands in one
-	 * model call; src/server/services/code-mode-tool.ts); off offers the
-	 * surface unchanged (the default).
+	 * model call; src/server/services/code-mode-tool.ts); primary makes
+	 * run_code the main way to work (its description and instructions teach
+	 * batching) and the deferred tools (agent, plan, MCP search) callable
+	 * only from inside run_code (searchTools(query) for their declarations,
+	 * no find_tools); off offers the surface unchanged (the default).
 	 */
-	codeMode: ["off", "on"],
+	codeMode: ["off", "on", "primary"],
 	/**
 	 * Builder subagents (docs/subagents.md): on gives the builder the agent
 	 * and agent_send tools (loaded on demand through find_tools, with the
