@@ -42,6 +42,13 @@ const RECORD_CHARACTERS = 2_000;
 const MAX_TOOL_CALLS = 40;
 
 /**
+ * How a failed inner call reaches the program (code-mode-sandbox.ts): a
+ * value, not a rejection, so one failure never sinks a Promise.all.
+ */
+const FAILURE_VALUE =
+	"A failed call does not throw: it resolves to { ok: false, error }, so one failure never sinks a Promise.all; check r.ok === false before using a result.";
+
+/**
  * The tools a program may call: the lean surface's own tools (every shape's
  * names), the user's MCP tools and the subagent tools (subagents=on; a
  * program calls them without loading them through find_tools), never
@@ -308,7 +315,7 @@ export function codeModeTool(input: {
 	return tool({
 		description:
 			description ??
-			`Run a JavaScript program (the body of an async function) that calls your tools, to do several steps in one call. Available: ${names.map((name) => `tools.${name}(args)`).join(", ")}; each takes the same arguments as the tool and resolves to the text it would show you (${command ? `tools.${command} resolves to { output, exitCode }` : "MCP tools to their result"}), or rejects with an Error. Use Promise.all for independent calls. Only the return value (JSON-serializable, same size limit as a file read) and console.log output come back, with one line per tool call, so filter large outputs in code. No network, imports, timers or environment; at most ${MAX_TOOL_CALLS} tool calls per program.${example}`,
+			`Run a JavaScript program (the body of an async function) that calls your tools, to do several steps in one call. Available: ${names.map((name) => `tools.${name}(args)`).join(", ")}; each takes the same arguments as the tool and resolves to the text it would show you (${command ? `tools.${command} resolves to { output, exitCode }` : "MCP tools to their result"}). ${FAILURE_VALUE} Use Promise.all for independent calls. Only the return value (JSON-serializable, same size limit as a file read) and text(...) output come back, with one line per tool call, so filter large outputs in code. No network, imports, timers or environment; at most ${MAX_TOOL_CALLS} tool calls per program.${example}`,
 		inputSchema: codeInput,
 		execute: async (raw, options) => {
 			const args = codeInput.parse(raw);
@@ -487,14 +494,15 @@ function primaryDescription(direct: readonly string[], hasDeferred: boolean) {
 	const examples = command
 		? [
 				`- Parallel reads and searches: const [a, b, hits] = await Promise.all([${readCall("src/a.ts")}, ${readCall("src/b.ts")}, ${run("rg -n parseHeader src")}]); return { a, b, hits };`,
-				`- Edit then test: await ${edit === "edit" && readKey === "path" ? `tools.edit({ path: "src/a.ts", edits: [{ old_string: "i < n", new_string: "i <= n" }] })` : `tools.${edit ?? command}(…)`}; const t = await ${run("npm test 2>&1 | tail -40")}; return t.exitCode === 0 ? "pass" : t.output;`,
+				`- Edit then test: const e = await ${edit === "edit" && readKey === "path" ? `tools.edit({ path: "src/a.ts", edits: [{ old_string: "i < n", new_string: "i <= n" }] })` : `tools.${edit ?? command}(…)`}; if (e.ok === false) return e.error; const t = await ${run("npm test 2>&1 | tail -40")}; return t.exitCode === 0 ? "pass" : t.output;`,
+				`- Report as you go: text("build:", b.exitCode) adds a line to what comes back, even if a later step throws.`,
 				`- Return only what you need: filter, slice or count long output in code (e.g. the failing test names), not the whole log.`,
 			]
 		: [];
 	return [
 		`Run a JavaScript program (the body of an async function) that calls your tools and returns only what you need, in one step. Prefer it whenever you would make two or more calls whose inputs you already know.`,
-		`tools.<name>(args) takes the tool's own arguments and resolves to the text it would show you${command ? ` (tools.${command} to { output, exitCode })` : ""}; a failure rejects. Direct tools: ${direct.map((name) => `tools.${name}`).join(", ")}.${hasDeferred ? " Other tools (not in your tool list) are callable here too: searchTools(query) returns their TypeScript declarations and ALL_TOOLS lists them all; call them as tools.<name>(args)." : ""}`,
+		`tools.<name>(args) takes the tool's own arguments and resolves to the text it would show you${command ? ` (tools.${command} to { output, exitCode })` : ""}. ${FAILURE_VALUE} Direct tools: ${direct.map((name) => `tools.${name}`).join(", ")}.${hasDeferred ? " Other tools (not in your tool list) are callable here too: searchTools(query) returns their TypeScript declarations and ALL_TOOLS lists them all; call them as tools.<name>(args)." : ""}`,
 		...examples,
-		`The return value (JSON-serializable, same size limit as a file read) and console.log come back with one line per tool call. No network, imports, timers or environment; at most ${MAX_TOOL_CALLS} tool calls per program.`,
+		`The return value (JSON-serializable, same size limit as a file read) and text(...) output (printed as the program goes, kept if it later throws) come back with one line per tool call. No network, imports, timers or environment; at most ${MAX_TOOL_CALLS} tool calls per program.`,
 	].join("\n");
 }
