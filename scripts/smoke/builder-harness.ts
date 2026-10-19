@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { Freestyle } from "freestyle";
 import { signDeliveryRequest } from "../../src/domain/delivery-auth";
 import { attemptCostFromSessions } from "../../src/domain/eval-cost";
+import { evalWorkSuffix } from "../../src/domain/eval-prompt";
 import { WorkspaceId } from "../../src/domain/ids";
 import { modelRouteId } from "../../src/domain/model-connection";
 import {
@@ -235,8 +236,12 @@ function hardTasks(): Task[] {
 }
 TASKS.push(...hardTasks());
 
-export const PROMPT_SUFFIX =
-	"\n\nWork directly in this repository: no plan proposal, child tasks, commits, pull requests or publishing. Stop when the change is done and checked.";
+/** The eval work rules for a builder without subagents (native CLI comparisons use this too). */
+export const PROMPT_SUFFIX = evalWorkSuffix({
+	where: "repository",
+	done: "change",
+	subagents: false,
+});
 
 export function selectTasks(ids: string | undefined) {
 	return ids
@@ -817,7 +822,7 @@ export async function createHarnessRunner(options: {
 			await db.query("update agent_session set status='ready' where id=$1", [
 				session.id,
 			]);
-			const text = `${task.prompt}${PROMPT_SUFFIX}`;
+			const text = `${task.prompt}${evalWorkSuffix({ where: "repository", done: "change", subagents: user.variant.subagents === "on" })}`;
 			await withBackgroundJobDispatcher(
 				async () => {},
 				() =>
