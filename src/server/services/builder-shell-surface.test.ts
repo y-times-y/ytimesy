@@ -51,14 +51,15 @@ it("offers a shell surface exactly as given, without compose_tools or search_too
 		tool({ inputSchema: z.object({}), execute: async () => ({}) });
 	const shell = { execute_command: make(), apply_patch: make() };
 	expect(isShellSurface(Object.keys(shell))).toBe(true);
-	expect(
-		Object.keys(discoverableAgentTools(shell)),
-	).toEqual(["execute_command", "apply_patch"]);
+	expect(Object.keys(discoverableAgentTools(shell))).toEqual([
+		"execute_command",
+		"apply_patch",
+	]);
 	const specialist = { execute_command: make(), run_checks: make() };
 	expect(isShellSurface(Object.keys(specialist))).toBe(false);
-	expect(
-		Object.keys(discoverableAgentTools(specialist)),
-	).toContain("search_tools");
+	expect(Object.keys(discoverableAgentTools(specialist))).toContain(
+		"search_tools",
+	);
 	// The loop skips composition for shell surfaces; specialist surfaces still compose.
 	expect(
 		Object.keys(

@@ -876,9 +876,7 @@ async function executeModelSteps(
 			streamRetries: 0,
 			maxOutputTokens: runtime.maxOutputTokens,
 			stopWhen: [
-				isStepCount(
-					input.maxSteps ?? modelStepLimit(),
-				),
+				isStepCount(input.maxSteps ?? modelStepLimit()),
 				...(input.endTurnTools?.length
 					? [hasToolCall(...input.endTurnTools)]
 					: []),

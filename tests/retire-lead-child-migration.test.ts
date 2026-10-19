@@ -36,8 +36,11 @@ it("deletes role-less child rows and their subtrees, keeps chats and subagents, 
 		await insert(ids.underLegacy, ids.legacy, "writer");
 		await db.exec(await readFile(`supabase/migrations/${RETIRE}`, "utf8"));
 		expect(
-			(await db.query<{ id: string }>("select id from agent_session order by id"))
-				.rows.map((row) => row.id),
+			(
+				await db.query<{ id: string }>(
+					"select id from agent_session order by id",
+				)
+			).rows.map((row) => row.id),
 		).toEqual([ids.chat, ids.reader]);
 		const columns = (
 			await db.query<{ column_name: string }>(
