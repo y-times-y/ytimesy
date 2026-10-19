@@ -2,6 +2,7 @@ import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
 import { registerAuthEmailBinding } from "./server/adapters/email";
 import { registerMemoryRepos } from "./server/adapters/memory-repos";
 import { handleWorkerSocket } from "./server/sockets/worker-sockets";
+import { canonicalOriginRedirect } from "./server/web/canonical-origin";
 import type { WebWorkerEnvironment } from "./server/web/environment";
 import { withWebRequestScope } from "./server/web/request-scope";
 import { withSecurityHeaders } from "./server/web/security-headers";
@@ -18,6 +19,8 @@ export default createServerEntry({
 			WebWorkerEnvironment | undefined,
 			WorkerContext | undefined,
 		];
+		const redirect = canonicalOriginRedirect(request, process.env.APP_URL);
+		if (redirect) return redirect;
 		if (!env?.HYPERDRIVE || !context)
 			return withSecurityHeaders(await handler.fetch(request));
 		registerAuthEmailBinding(env.EMAIL);

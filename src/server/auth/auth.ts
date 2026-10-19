@@ -12,6 +12,20 @@ import {
 } from "./local-qa-identity";
 import { authTrustedOrigins, googleOAuthConfigured } from "./providers";
 
+/**
+ * OAuth state lives in the database and is bound to the browser that started
+ * the sign-in by a signed `state` cookie. The callback must present both, so a
+ * callback URL captured from someone else's sign-in cannot be completed in a
+ * victim's browser (login CSRF). Never set `skipStateCookieCheck`: the local
+ * loopback-alias mismatch it once papered over is fixed by
+ * `canonicalOriginRedirect` sending every page to the APP_URL host.
+ */
+export const oauthAccountPolicy = {
+	encryptOAuthTokens: true,
+	accountLinking: { enabled: false },
+	storeStateStrategy: "database" as const,
+};
+
 function authOptions() {
 	const config = serverConfig();
 	return {
@@ -93,13 +107,7 @@ function authOptions() {
 			},
 		},
 		session: { modelName: "auth_session", expiresIn: 60 * 60 * 24 * 7 },
-		account: {
-			modelName: "auth_account",
-			encryptOAuthTokens: true,
-			accountLinking: { enabled: false },
-			storeStateStrategy: "database" as const,
-			skipStateCookieCheck: true,
-		},
+		account: { modelName: "auth_account", ...oauthAccountPolicy },
 		onAPIError: {
 			errorURL: `${config.APP_URL}/auth/sign-in`,
 		},
