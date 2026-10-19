@@ -52,6 +52,8 @@ export function agentTurnInstructions(input: {
 	secretNames?: Parameters<typeof projectSecretsInstructions>[0];
 	/** A lean builder surface (docs/builder-tool-surface.md): short instructions in its tools' names. */
 	leanShape?: LeanToolShape;
+	/** A read-only subagent's lean surface: commands and reads, no file-changing tools. */
+	leanReadOnly?: boolean;
 	/** The repository's absolute path on the workspace (lean surfaces state it). */
 	leanWorkingDirectory?: string;
 	/** Tools loaded on demand (deferred-tools.ts), listed so the model knows they exist. */
@@ -86,19 +88,23 @@ function leanTurnInstructions(
 				? "primary"
 				: true
 			: false;
+	const readOnly = !!input.leanReadOnly;
 	return [
 		`You are the ytimesy coding agent, working in this task's prepared repository checkout${input.leanWorkingDirectory ? ` at ${input.leanWorkingDirectory}` : ""}; commands start in the repository root and relative paths resolve there.${input.leanWorkingDirectory ? ` Tools that take absolute paths need paths under ${input.leanWorkingDirectory}.` : ""} Repository instructions (AGENTS.md/CLAUDE.md), nested instruction file locations and skills are provided in the conversation. Before working in a folder listed with its own AGENTS.md or CLAUDE.md, read that file; read a matching skill's SKILL.md completely. ${roleInstructions(input.session, true)}`,
-		leanToolInstructions(input.leanShape),
+		leanToolInstructions(input.leanShape, { readOnly }),
 		codeMode === "primary"
-			? primaryCodeModeInstructions(input.leanShape)
+			? primaryCodeModeInstructions(input.leanShape, { readOnly })
 			: codeMode
 				? codeModeInstructions(input.leanShape)
 				: "",
 		deferredToolsInstructions(input.deferredTools ?? [], { codeMode }),
 		AGENT_TOOL in input.tools ? orchestratorInstructions({ codeMode }) : "",
-		leanVisualQaInstructions(LEAN_SHAPE_TOOLS[input.leanShape], {
-			prEvidence: input.prEvidence,
-		}),
+		// The desktop browser runs as the builder's user; readers do not drive it.
+		readOnly
+			? ""
+			: leanVisualQaInstructions(LEAN_SHAPE_TOOLS[input.leanShape], {
+					prEvidence: input.prEvidence,
+				}),
 		pluginSkillsInstructions(input.plugins),
 		input.secretNames?.length
 			? projectSecretsInstructions(input.secretNames)

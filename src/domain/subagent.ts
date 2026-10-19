@@ -23,6 +23,17 @@ export function isReaderRole(role: SubagentRole | null | undefined) {
 	return !!role && role !== "writer";
 }
 
+/**
+ * A read-only subagent on its parent's VM: every guest command runs as the
+ * reader Linux user (src/server/services/reader-workspace-machines.ts).
+ */
+export function runsAsReader(session: {
+	readonly taskPlacement?: string | null;
+	readonly agentRole?: SubagentRole | null;
+}) {
+	return session.taskPlacement === "shared" && isReaderRole(session.agentRole);
+}
+
 /** Where a child runs; not an argument, because it follows from the role. */
 export type SubagentPlacement = "fork" | "shared-read-only";
 

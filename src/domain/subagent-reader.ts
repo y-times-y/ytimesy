@@ -76,13 +76,21 @@ function shellQuote(value: string) {
 }
 
 /**
+ * Git refuses a repository another user owns ("dubious ownership"), which is
+ * every checkout a reader looks at; command-scope config marks them safe
+ * (safe.directory is honored there, unlike in a repository's own config).
+ */
+const READER_GIT_ENVIRONMENT =
+	"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0='*'";
+
+/**
  * One guest command run as the reader: its own HOME (the scratch
  * directory), the command passed base64-encoded so quoting never multiplies.
  */
 export function readerCommand(sessionId: string, command: string) {
 	const scratch = readerScratchDirectory(sessionId);
 	const encoded = Buffer.from(command, "utf8").toString("base64");
-	return `sudo -n -u ${READER_LINUX_USER} -- env HOME=${scratch} USER=${READER_LINUX_USER} LOGNAME=${READER_LINUX_USER} TMPDIR=${scratch} bash -c "$(printf %s ${encoded} | base64 -d)"`;
+	return `sudo -n -u ${READER_LINUX_USER} -- env HOME=${scratch} USER=${READER_LINUX_USER} LOGNAME=${READER_LINUX_USER} TMPDIR=${scratch} ${READER_GIT_ENVIRONMENT} bash -c "$(printf %s ${encoded} | base64 -d)"`;
 }
 
 /**

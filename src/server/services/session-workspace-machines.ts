@@ -1,4 +1,4 @@
-import { isReaderRole } from "#/domain/subagent";
+import { runsAsReader } from "#/domain/subagent";
 import type { AgentSessionRecord } from "#/server/adapters/agent-sessions";
 import { readerWorkspaceMachines } from "./reader-workspace-machines";
 import type { WorkspaceMachines } from "./workspace-machines";
@@ -98,7 +98,7 @@ export function machinesForAgentSession(
 ) {
 	const base = baseWorkspaceMachines(machines);
 	if (session.taskPlacement !== "shared") return base;
-	if (!isReaderRole(session.agentRole))
+	if (!runsAsReader(session))
 		return sessionScopedWorkspaceMachines(machines, session.id);
 	const reader = readerWorkspaceMachines(base, {
 		sessionId: session.id,
