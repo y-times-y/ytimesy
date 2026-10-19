@@ -16,7 +16,9 @@
 			"!src/routeTree.gen.ts",
 			"!src/**/*.py",
 			"tests/**",
-			"benchmarks/evaluation/**"
+			"benchmarks/evaluation/**",
+			"evals/**",
+			"!evals/**/*.py"
 		]
 	},
 	"formatter": {
