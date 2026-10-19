@@ -77,9 +77,9 @@ async function captureSessionCheckpointStages(
 	await selected.ensureRunning(WorkspaceId(session.providerRef));
 	const paths = sharesParentMachine(session)
 		? []
-			: repositoriesForProject(project).map((repo) =>
-					repositoryDirectory(repo.fullName),
-				);
+		: repositoriesForProject(project).map((repo) =>
+				repositoryDirectory(repo.fullName),
+			);
 	const transfer = `/tmp/ytimesy-checkpoint-${randomUUID()}`;
 	progress.stage = "export";
 	const workspace = await exportGuestCheckpoint(

@@ -103,9 +103,7 @@ export function TaskPanel({ tasks }: { tasks: readonly PanelTask[] }) {
 							<div className="task-row-copy">
 								<div>
 									<span className="task-label">{task.label}</span>
-									<strong>
-										{task.title}
-									</strong>
+									<strong>{task.title}</strong>
 								</div>
 								<small>
 									{task.listedModelId ?? task.harnessId}

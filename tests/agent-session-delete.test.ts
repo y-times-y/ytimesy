@@ -496,9 +496,10 @@ it("never destroys a parent VM its reader shares, deleting the reader alone or a
 		parentSessionId: parent.id,
 		task: { prompt: "Old child", placement: "shared", access: "read_only" },
 	});
-	await db.query("update agent_session set agent_role='researcher' where id=$1", [
-		reader.id,
-	]);
+	await db.query(
+		"update agent_session set agent_role='researcher' where id=$1",
+		[reader.id],
+	);
 	const destroyed: string[] = [];
 	const machines = {
 		destroy: async (vm: string) => {

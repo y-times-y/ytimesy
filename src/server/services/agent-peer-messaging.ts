@@ -26,8 +26,7 @@ export type PeerMessage = {
 /** Only a started direct subagent of the sender, same owner and project. */
 async function steerableChild(sender: AgentSessionRecord, recipientId: string) {
 	const recipient = await agentSessionForOwner(sender.userId, recipientId);
-	return recipient &&
-		recipient.agentRole &&
+	return recipient?.agentRole &&
 		recipient.parentSessionId === sender.id &&
 		recipient.projectId === sender.projectId &&
 		recipient.taskState !== "draft"

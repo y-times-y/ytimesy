@@ -138,10 +138,7 @@ it("validates nested arguments before invoking a read", async () => {
 	const result = await executeBatch(
 		batch,
 		{
-			reads: [
-				{ tool: "read_code", arguments: { taskId: 3 } },
-				reads[0],
-			],
+			reads: [{ tool: "read_code", arguments: { taskId: 3 } }, reads[0]],
 		},
 		options,
 	);
