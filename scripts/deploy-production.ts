@@ -49,6 +49,9 @@ const required = [
 	"R2_ACCESS_KEY_ID",
 	"R2_SECRET_ACCESS_KEY",
 	"R2_CHECKPOINT_BUCKET",
+	// Cloudflare Turnstile on email sign-up, sign-in and password reset.
+	"TURNSTILE_SITE_KEY",
+	"TURNSTILE_SECRET_KEY",
 ] as const;
 const secrets: Record<string, string> = {};
 for (const name of required) {
