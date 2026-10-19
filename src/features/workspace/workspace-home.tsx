@@ -1525,6 +1525,25 @@ export function WorkspaceHome({
 							<div className="session-title-row">
 								<div className="session-title-copy">
 									<span className="session-title">{sessionTitle}</span>
+									{activeChat?.workingBranch && (
+										<span
+											className="session-title-meta"
+											title="This chat's branch: each turn that changes code is committed and pushed here"
+										>
+											{activeChat.workingBranch}
+										</span>
+									)}
+									{sessionPullRequest && (
+										<a
+											className="session-title-meta"
+											href={sessionPullRequest.url}
+											target="_blank"
+											rel="noreferrer"
+										>
+											{sessionPullRequest.draft ? "Draft PR" : "PR"} #
+											{sessionPullRequest.number}
+										</a>
+									)}
 								</div>
 							</div>
 						) : inspectorOpen ? null : (
