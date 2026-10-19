@@ -209,12 +209,22 @@ export function publishProject(
 		});
 		if (blocked) return yield* reject(blocked);
 		const pullRequest = yield* Effect.tryPromise(() =>
-			ensureAppDraftPullRequest(project.installationId, repository.fullName, {
-				title: input.title,
-				body: input.body ?? "",
-				head,
-				base,
-			}),
+			ensureAppDraftPullRequest(
+				project.installationId,
+				repository.fullName,
+				{
+					title: input.title,
+					body: input.body ?? "",
+					head,
+					base,
+				},
+				{
+					userId,
+					projectId: input.projectId,
+					repositoryId: project.repositoryId,
+					sessionId: input.sessionId ?? null,
+				},
+			),
 		);
 		void captureServerAnalytics(
 			userId,
