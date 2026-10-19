@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as OnboardingRouteImport } from './routes/onboarding'
 import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as TermsRouteImport } from './routes/terms'
+import { Route as TrainingRouteImport } from './routes/training'
 import { Route as ApiAccountRouteImport } from './routes/api/account'
 import { Route as ApiProjectsRouteImport } from './routes/api/projects'
 import { Route as ApiWorkspacesRouteImport } from './routes/api/workspaces'
@@ -54,6 +55,11 @@ const PrivacyRoute = PrivacyRouteImport.update({
 const TermsRoute = TermsRouteImport.update({
   id: '/terms',
   path: '/terms',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TrainingRoute = TrainingRouteImport.update({
+  id: '/training',
+  path: '/training',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiAccountRoute = ApiAccountRouteImport.update({
@@ -175,6 +181,7 @@ export interface FileRoutesByFullPath {
   '/onboarding': typeof OnboardingRoute
   '/privacy': typeof PrivacyRoute
   '/terms': typeof TermsRoute
+  '/training': typeof TrainingRoute
   '/api/account': typeof ApiAccountRoute
   '/api/projects': typeof ApiProjectsRouteWithChildren
   '/api/workspaces': typeof ApiWorkspacesRouteWithChildren
@@ -203,6 +210,7 @@ export interface FileRoutesByTo {
   '/onboarding': typeof OnboardingRoute
   '/privacy': typeof PrivacyRoute
   '/terms': typeof TermsRoute
+  '/training': typeof TrainingRoute
   '/api/account': typeof ApiAccountRoute
   '/api/projects': typeof ApiProjectsRouteWithChildren
   '/api/workspaces': typeof ApiWorkspacesRouteWithChildren
@@ -232,6 +240,7 @@ export interface FileRoutesById {
   '/onboarding': typeof OnboardingRoute
   '/privacy': typeof PrivacyRoute
   '/terms': typeof TermsRoute
+  '/training': typeof TrainingRoute
   '/api/account': typeof ApiAccountRoute
   '/api/projects': typeof ApiProjectsRouteWithChildren
   '/api/workspaces': typeof ApiWorkspacesRouteWithChildren
@@ -262,6 +271,7 @@ export interface FileRouteTypes {
     | '/onboarding'
     | '/privacy'
     | '/terms'
+    | '/training'
     | '/api/account'
     | '/api/projects'
     | '/api/workspaces'
@@ -290,6 +300,7 @@ export interface FileRouteTypes {
     | '/onboarding'
     | '/privacy'
     | '/terms'
+    | '/training'
     | '/api/account'
     | '/api/projects'
     | '/api/workspaces'
@@ -318,6 +329,7 @@ export interface FileRouteTypes {
     | '/onboarding'
     | '/privacy'
     | '/terms'
+    | '/training'
     | '/api/account'
     | '/api/projects'
     | '/api/workspaces'
@@ -347,6 +359,7 @@ export interface RootRouteChildren {
   OnboardingRoute: typeof OnboardingRoute
   PrivacyRoute: typeof PrivacyRoute
   TermsRoute: typeof TermsRoute
+  TrainingRoute: typeof TrainingRoute
   ApiAccountRoute: typeof ApiAccountRoute
   ApiProjectsRoute: typeof ApiProjectsRouteWithChildren
   ApiWorkspacesRoute: typeof ApiWorkspacesRouteWithChildren
@@ -396,6 +409,13 @@ declare module '@tanstack/react-router' {
       path: '/terms'
       fullPath: '/terms'
       preLoaderRoute: typeof TermsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/training': {
+      id: '/training'
+      path: '/training'
+      fullPath: '/training'
+      preLoaderRoute: typeof TrainingRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/account': {
@@ -587,6 +607,7 @@ const rootRouteChildren: RootRouteChildren = {
   OnboardingRoute: OnboardingRoute,
   PrivacyRoute: PrivacyRoute,
   TermsRoute: TermsRoute,
+  TrainingRoute: TrainingRoute,
   ApiAccountRoute: ApiAccountRoute,
   ApiProjectsRoute: ApiProjectsRouteWithChildren,
   ApiWorkspacesRoute: ApiWorkspacesRouteWithChildren,
