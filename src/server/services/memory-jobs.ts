@@ -1,23 +1,34 @@
 import { type ModelMessage, type ToolSet, tool } from "ai";
 import { z } from "zod";
 import type { ApiTokenUsage } from "#/domain/api-token-usage";
+import { clip } from "#/domain/clip";
 import { type SavedMemoryLine, savedMemoryLines } from "#/domain/memory-marker";
+import { lexicalScores, memoryMatchScores } from "#/domain/memory-ranking";
 import {
 	appendMemoryEntry,
 	chatIdFromSource,
 	chatSourceUrl,
+	cosineSimilarity,
 	type DreamChat,
 	dreamInstructions,
+	dreamReviewSection,
 	MEMORY_ENTRY,
 	type MemoryChange,
 	type MemoryFiles,
+	type MemoryLine,
 	type MemoryMode,
+	memoryAppUrl,
+	memoryBullet,
+	memoryLineEmbeddingText,
 	memoryLines,
 	memoryPath,
+	memoryToday,
 	parseSaveHookAnswer,
 	renderDreamInbox,
 	SAVE_HOOK_INSTRUCTIONS,
 	saveHookPrompt,
+	supersededLine,
+	withMemoryChanges,
 	withoutExpired,
 } from "#/domain/memory-repo";
 import type { ModelRoute } from "#/domain/model-failover";
@@ -25,12 +36,17 @@ import type { SessionItem } from "#/domain/session-item";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
 import { reserveMemoryTokens } from "../adapters/api-usage-budget";
 import {
+	cachedLineEmbeddings,
+	memoryEmbedder,
+} from "../adapters/memory-embeddings";
+import {
 	type MemoryRepo,
 	type MemorySnapshot,
 	memoryRepo,
 	memoryRepoName,
 } from "../adapters/memory-repos";
 import {
+	lastMemoryReview,
 	latestUserModelRoute,
 	type MemoryChat,
 	type MemorySettings,
@@ -47,7 +63,15 @@ import type { ModelAgentInput } from "./model-agent-loop";
 
 /** Seconds a user's chats must be idle before their memory is dreamed. */
 export const DREAM_IDLE_SECONDS = 15 * 60;
-export const DREAM_MAX_STEPS = 24;
+const DREAM_MAX_STEPS = 24;
+/** A dream that also reviews the whole repo gets more steps for its rewrites. */
+const REVIEW_MAX_STEPS = 36;
+/** How often a dream also reviews the whole repo. */
+export const DREAM_REVIEW_DAYS = 7;
+/** Recorded as a save's outcome suffix when it found nothing to save; recentUnsavedMessages looks for it. */
+export const SAVE_NOTHING_OUTCOME = ":nothing-new";
+/** Recorded as the dream's outcome suffix; lastMemoryReview looks for it. */
+export const DREAM_REVIEW_OUTCOME = ":review";
 const DREAM_TIMEOUT_MS = 12 * 60 * 1000;
 const SAVE_TIMEOUT_MS = 90_000;
 const SOURCE_CHARS = 12_000;
@@ -74,6 +98,16 @@ export type MemoryJobDeps = {
 		userMessageId: string,
 		lines: readonly SavedMemoryLine[],
 	): Promise<boolean>;
+	/** When the user's last whole-repo dream review ran, or null. */
+	lastReview(userId: string): Promise<Date | null>;
+	/** Embeds new memory lines ahead of the next chat's read hook. */
+	warmLines(userId: string, texts: readonly string[]): Promise<void>;
+	/** Cosine similarity of each line to the message, or null without embeddings. */
+	similarity(
+		userId: string,
+		lines: readonly MemoryLine[],
+		message: string,
+	): Promise<Map<MemoryLine, number> | null>;
 	appUrl: string;
 	today(): string;
 };
@@ -96,8 +130,32 @@ export function memoryJobDeps(): MemoryJobDeps {
 		recordUsage: recordMemoryModelUsage,
 		markDreamed: markMemoryDreamed,
 		recordSaved: recordMemorySaved,
-		appUrl: process.env.APP_URL ?? "http://localhost:3000",
-		today: () => new Date().toISOString().slice(0, 10),
+		lastReview: lastMemoryReview,
+		warmLines: async (userId, texts) => {
+			const embed = memoryEmbedder();
+			if (embed && texts.length)
+				await cachedLineEmbeddings(userId, texts, embed);
+		},
+		similarity: async (userId, lines, message) => {
+			const embed = memoryEmbedder();
+			if (!embed || !lines.length) return null;
+			const [query, vectors] = await Promise.all([
+				embed.query(message.slice(0, 2000)),
+				cachedLineEmbeddings(
+					userId,
+					lines.map((entry) => memoryLineEmbeddingText(entry)),
+					embed,
+				),
+			]);
+			return new Map(
+				lines.map((entry, index) => [
+					entry,
+					cosineSimilarity(query, vectors[index] ?? []),
+				]),
+			);
+		},
+		appUrl: memoryAppUrl(),
+		today: memoryToday,
 	};
 }
 
@@ -120,6 +178,8 @@ async function runOnUserModel(
 		maxSteps: number;
 		endTurnTools?: string[];
 		timeoutMs: number;
+		/** Appended to the recorded outcome; a function sees the model's answer. */
+		outcomeSuffix?: string | ((text: string) => string);
 	},
 ) {
 	const subscription = subscriptionTurnSettings(input.route.connectionRevision);
@@ -178,7 +238,13 @@ async function runOnUserModel(
 			modelId: input.route.modelId,
 			usage,
 			steps,
-			outcome,
+			outcome: `${outcome}${
+				typeof input.outcomeSuffix === "function"
+					? outcome === "completed"
+						? input.outcomeSuffix(text)
+						: ""
+					: (input.outcomeSuffix ?? "")
+			}`,
 		})
 		.catch(() => console.warn("Memory model usage could not be recorded."));
 	return { outcome, text, steps } as const;
@@ -208,7 +274,12 @@ export async function runMemorySave(
 	const route = await deps.route(userId);
 	if (!route) return "no-route";
 	let snapshot = await repo.snapshot();
-	const related = relatedLines(snapshot.files, message.text);
+	const related = await relatedLines(
+		snapshot.files,
+		message.text,
+		deps.today(),
+		(lines) => deps.similarity(userId, lines, message.text).catch(() => null),
+	);
 	const project = chat.project;
 	const run = await runOnUserModel(deps, {
 		userId,
@@ -218,16 +289,30 @@ export async function runMemorySave(
 		instructions: SAVE_HOOK_INSTRUCTIONS,
 		prompt: saveHookPrompt({
 			message: message.text.slice(0, 6000),
-			memory: related.join("\n"),
+			memory: related
+				.map((entry) => `${entry.path}:${entry.line}: ${entry.raw.trim()}`)
+				.join("\n"),
 			files: Object.keys(snapshot.files).filter((path) => path.endsWith(".md")),
 			project,
 		}),
 		tools: {},
 		maxSteps: 1,
 		timeoutMs: SAVE_TIMEOUT_MS,
+		// Lets a new chat's read side stop showing this message at once.
+		outcomeSuffix: (text) =>
+			parseSaveHookAnswer(text).length ? "" : SAVE_NOTHING_OUTCOME,
 	});
 	if (run.outcome !== "completed") return run.outcome;
-	const entries = parseSaveHookAnswer(run.text);
+	// "replaces" names a line the model was shown; it is applied by its text.
+	const shown = new Map(
+		related.map((entry) => [`${entry.path}:${entry.line}`, entry.raw]),
+	);
+	const entries = parseSaveHookAnswer(run.text).map(
+		({ replaces, ...entry }) => {
+			const raw = replaces && shown.get(`${replaces.path}:${replaces.line}`);
+			return raw ? { ...entry, replaces: { path: replaces.path, raw } } : entry;
+		},
+	);
 	if (!entries.length) return "nothing-new";
 	const source = chatSourceUrl(deps.appUrl, sessionId);
 	for (let attempt = 0; attempt < 2; attempt++) {
@@ -242,10 +327,11 @@ export async function runMemorySave(
 			`Remember from chat ${sessionId.slice(0, 8)} (save hook)`,
 		);
 		if (outcome.ok) {
-			const after = { ...snapshot.files };
-			for (const change of changes)
-				if (change.content === null) delete after[change.path];
-				else after[change.path] = change.content;
+			const after = withMemoryChanges(snapshot.files, changes);
+			// The next chat's read hook finds these lines embedded already.
+			await deps
+				.warmLines(userId, newLineTexts(snapshot.files, after))
+				.catch(() => console.warn("New memory lines could not be embedded."));
 			await deps
 				.recordSaved(
 					userId,
@@ -263,30 +349,52 @@ export async function runMemorySave(
 	return "conflict";
 }
 
+export type SaveHookEntry = {
+	file: string;
+	text: string;
+	project: string;
+	/** An existing line (by its file and text) this entry replaces. */
+	replaces?: { path: string; raw: string };
+};
+
+/**
+ * Appends each new entry, citing its chat, and marks the line it replaces
+ * `superseded-by` that chat (the read side hides it; a dream removes it).
+ */
 export function saveHookChanges(
 	files: MemoryFiles,
-	entries: ReturnType<typeof parseSaveHookAnswer>,
+	entries: readonly SaveHookEntry[],
 	context: { source: string; today: string },
 ) {
-	const working = { ...files };
+	let working = files;
 	const changed = new Set<string>();
 	const known = memoryLines(files).map((entry) => entry.text.toLowerCase());
 	for (const entry of entries) {
+		if (entry.replaces) {
+			const { path, raw } = entry.replaces;
+			const content = working[path];
+			const lines = content?.split("\n") ?? [];
+			const index = lines.indexOf(raw);
+			if (content !== undefined && index >= 0) {
+				lines[index] = supersededLine(raw, context.source);
+				working = withMemoryChanges(working, [
+					{ path, content: lines.join("\n") },
+				]);
+				changed.add(path);
+			}
+		}
 		if (known.some((text) => text.includes(entry.text.toLowerCase()))) continue;
-		const meta = [
-			...(entry.project ? [`project: ${entry.project}`] : []),
-			`source: ${context.source}`,
-			`added: ${context.today}`,
-		].join("; ");
-		for (const change of appendMemoryEntry(
+		const appended = appendMemoryEntry(
 			working,
 			entry.file,
-			`- ${entry.text} [${meta}]`,
-		)) {
-			if (change.content === null) delete working[change.path];
-			else working[change.path] = change.content;
-			changed.add(change.path);
-		}
+			memoryBullet(entry.text, {
+				project: entry.project,
+				source: context.source,
+				added: context.today,
+			}),
+		);
+		working = withMemoryChanges(working, appended);
+		for (const change of appended) changed.add(change.path);
 		known.push(entry.text.toLowerCase());
 	}
 	return [...changed].map((path) => ({
@@ -295,23 +403,44 @@ export function saveHookChanges(
 	}));
 }
 
-/** Lines sharing a distinctive word with the message: enough context to avoid duplicates. */
-function relatedLines(files: MemoryFiles, message: string) {
-	const words = new Set(
-		message
-			.toLowerCase()
-			.split(/[^a-z0-9@._/-]+/)
-			.filter((word) => word.length >= 4),
+/** Embedding texts of the lines in `after` that `before` did not have. */
+export function newLineTexts(before: MemoryFiles, after: MemoryFiles) {
+	const known = new Set(
+		memoryLines(before).map((entry) => memoryLineEmbeddingText(entry)),
 	);
-	return memoryLines(files)
-		.filter((entry) =>
-			entry.text
-				.toLowerCase()
-				.split(/[^a-z0-9@._/-]+/)
-				.some((word) => words.has(word)),
-		)
-		.slice(0, 40)
-		.map((entry) => `${entry.path}:${entry.line}: ${entry.raw.trim()}`);
+	return memoryLines(after)
+		.filter((entry) => entry.path !== MEMORY_ENTRY)
+		.map((entry) => memoryLineEmbeddingText(entry))
+		.filter((text) => !known.has(text));
+}
+
+const RELATED_LINES = 24;
+
+/**
+ * The memory lines the save hook sees: the best matches for the message by
+ * the read hook's ranking (cosine when embeddings are available, plus words
+ * and topic file), so it can skip what is known and replace what changed.
+ * Index links and retired lines are left out.
+ */
+async function relatedLines(
+	files: MemoryFiles,
+	message: string,
+	today: string,
+	similarity: (
+		lines: readonly MemoryLine[],
+	) => Promise<Map<MemoryLine, number> | null>,
+) {
+	const lines = memoryLines(
+		withMemoryChanges(files, withoutExpired(files, today)),
+	).filter((entry) => !/^\[\[[^\]]+\]\]$/.test(entry.text));
+	if (!lines.length) return [];
+	const cosine = await similarity(lines);
+	const lexical = lexicalScores(lines, message);
+	const scores = cosine ? memoryMatchScores(lines, cosine, message) : lexical;
+	return lines
+		.filter((entry) => cosine || (lexical.get(entry) ?? 0) > 0)
+		.sort((a, b) => (scores.get(b) ?? 0) - (scores.get(a) ?? 0))
+		.slice(0, RELATED_LINES);
 }
 
 // ---- dreaming -----------------------------------------------------------------
@@ -373,11 +502,11 @@ function transcript(chat: MemoryChat) {
 				: [],
 	);
 	const text = `# ${chat.title}\n${lines.join("\n")}`;
-	return text.length > SOURCE_CHARS ? `${text.slice(0, SOURCE_CHARS)}…` : text;
+	return clip(text, SOURCE_CHARS);
 }
 
 /** The dreamer's tools over a writable copy of the repo; nothing is pushed until commit. */
-export function dreamTools(input: {
+function dreamTools(input: {
 	files: MemoryFiles;
 	readSource: (link: string) => Promise<string>;
 	onCommit: (message: string) => void;
@@ -472,10 +601,7 @@ export function dreamTools(input: {
 	};
 }
 
-export function dreamChanges(
-	before: MemoryFiles,
-	after: MemoryFiles,
-): MemoryChange[] {
+function dreamChanges(before: MemoryFiles, after: MemoryFiles): MemoryChange[] {
 	return [
 		...Object.entries(after)
 			.filter(([path, content]) => before[path] !== content)
@@ -529,10 +655,13 @@ export async function runMemoryDream(
 	const route = await deps.route(userId);
 	if (!route) return "no-route";
 	const snapshot: MemorySnapshot = await repo.snapshot();
-	const working: MemoryFiles = { ...snapshot.files };
-	if (mode === "full")
-		for (const change of withoutExpired(working, deps.today()))
-			if (change.content !== null) working[change.path] = change.content;
+	const working: MemoryFiles =
+		mode === "full"
+			? withMemoryChanges(
+					snapshot.files,
+					withoutExpired(snapshot.files, deps.today()),
+				)
+			: { ...snapshot.files };
 	let message: string | null = null;
 	const tools = dreamTools({
 		files: working,
@@ -545,6 +674,15 @@ export async function runMemoryDream(
 			return chat ? transcript(chat) : `no chat found for ${link}`;
 		},
 	});
+	const last =
+		mode === "full" ? await deps.lastReview(userId).catch(() => null) : null;
+	const review =
+		mode === "full" &&
+		(!last ||
+			Date.parse(`${deps.today()}T00:00:00Z`) - last.getTime() >=
+				DREAM_REVIEW_DAYS * 86_400_000)
+			? dreamReviewSection(working)
+			: null;
 	const listing = Object.entries(working)
 		.map(([path, content]) => `${path} (${content.split("\n").length} lines)`)
 		.join("\n");
@@ -554,9 +692,10 @@ export async function runMemoryDream(
 		sessionId: null,
 		route,
 		instructions: dreamInstructions(mode, deps.today()),
-		prompt: `New chats since the last dream:\n\n${renderDreamInbox(inboxChats)}\n\nMemory files:\n${listing || "(empty repo)"}\n\nMEMORY.md:\n${working[MEMORY_ENTRY] ?? "(missing)"}`,
+		prompt: `New chats since the last dream:\n\n${renderDreamInbox(inboxChats)}\n\nMemory files:\n${listing || "(empty repo)"}\n\nMEMORY.md:\n${working[MEMORY_ENTRY] ?? "(missing)"}${review ? `\n\n${review}` : ""}`,
 		tools,
-		maxSteps,
+		maxSteps: review ? Math.max(maxSteps, REVIEW_MAX_STEPS) : maxSteps,
+		outcomeSuffix: review ? DREAM_REVIEW_OUTCOME : undefined,
 		endTurnTools: ["commit"],
 		timeoutMs: DREAM_TIMEOUT_MS,
 	});
@@ -574,6 +713,9 @@ export async function runMemoryDream(
 			`Dream: ${String(message).slice(0, 200)}`,
 		);
 		if (!outcome.ok) return "conflict";
+		await deps
+			.warmLines(userId, newLineTexts(snapshot.files, working))
+			.catch(() => console.warn("New memory lines could not be embedded."));
 	}
 	await deps.markDreamed(userId, through);
 	return changes.length ? "committed" : "unchanged";

@@ -8,6 +8,8 @@
 //   node --env-file=.env --import tsx scripts/smoke/eval-user.ts --cleanup [--older-than 6]
 //       Removes users left by crashed or killed runs: every local manifest
 //       whose process is gone, and eval users older than --older-than hours.
+//   node --env-file=.env --import tsx scripts/smoke/eval-user.ts --user <eval-id>
+//       Removes only that user (from its local manifest), when its run is gone.
 //   node --env-file=.env --import tsx scripts/smoke/eval-user.ts --list
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -25,6 +27,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { parseArgs, promisify } from "node:util";
 import { Freestyle } from "freestyle";
+import { removeUserPullRequestEvidence } from "#/server/services/pr-evidence-cleanup";
 import {
 	DEFAULT_HARNESS_VARIANT,
 	type HarnessVariant,
@@ -44,12 +47,14 @@ import { closeDatabase, database } from "../../src/server/adapters/database";
 import { memoryRepoName } from "../../src/server/adapters/memory-repos";
 import { seal, unseal } from "../../src/server/auth/token-vault";
 import { cancelServerTurn } from "../../src/server/services/cancel-server-turn";
-import { implementedToolSurfaces } from "../../src/server/services/harness-tool-surfaces";
 
 const run = promisify(execFile);
 const DEV_REF = "zqkptvyvoyqqtpihlshw";
-const MEMORY_NAMESPACE = "ytimesy-memory-development";
+/** The development memory repos' Artifacts namespace. */
+export const MEMORY_NAMESPACE = "ytimesy-memory-development";
 const MANIFESTS = ".ytimesy/eval-users";
+/** Each eval user's monthly VM allowance (USD 2): room for a batch of runs. */
+const EVAL_USER_VM_ALLOWANCE_MICRO_USD = 2_000_000;
 const EMAIL_DOMAIN = "ytimesy-eval.invalid";
 
 export type EvalProject = {
@@ -103,7 +108,7 @@ export async function assertDevelopmentDatabase() {
 }
 
 /** The one dev user with a connected Codex subscription. */
-async function subscriptionOwner() {
+export async function subscriptionOwner() {
 	const owners = (
 		await database().query<{ user_id: string }>(
 			"select a.user_id from agent_account a where a.provider='codex' and a.status='connected' and a.encrypted_codex_auth is not null and not exists (select 1 from dev_eval_user e where e.user_id=a.user_id)",
@@ -311,6 +316,10 @@ async function releaseUser(manifest: Manifest): Promise<string[]> {
 				await removeChatObjects(userId, sessionId).catch(() => {
 					leftovers.push(`chat-files:${sessionId}`);
 				});
+		// Pull request evidence (prEvidence) media in private storage.
+		await removeUserPullRequestEvidence(userId).catch(() => {
+			leftovers.push(`pr-evidence:${userId}`);
+		});
 		await deleteAccountRecords(userId).catch((error) => {
 			leftovers.push(`user:${userId} (${String(error).slice(0, 120)})`);
 		});
@@ -430,13 +439,11 @@ export async function createEvalUser(options: {
 }): Promise<EvalUser> {
 	await assertDevelopmentDatabase();
 	installHandlers();
-	// Local services (catalog checks, sends) resolve the owner's login too.
+	// Local services (catalog checks, sends) resolve the owner's login too;
+	// the database was just checked to be development's.
+	process.env.YTIMESY_ENVIRONMENT = "development";
 	process.env.YTIMESY_DEV_EVAL_USERS = "1";
 	const variant = options.variant ?? DEFAULT_HARNESS_VARIANT;
-	if (!implementedToolSurfaces().includes(variant.toolSurface))
-		throw new Error(
-			`toolSurface=${variant.toolSurface} is reserved but not implemented (see docs/parallel-evals.md).`,
-		);
 	const ownerId = await subscriptionOwner();
 	const db = database();
 	if (options.asOwner) {
@@ -527,6 +534,12 @@ export async function createEvalUser(options: {
 		await db.query(
 			"insert into dev_eval_user(user_id,owner_user_id,label,harness_variant) values($1,$2,$3,$4::jsonb)",
 			[userId, ownerId, label, JSON.stringify(harnessVariantChanges(variant))],
+		);
+		// A run starts one VM per task and repeat; the product default monthly
+		// allowance covers only a few concurrent holds. The fleet caps still apply.
+		await db.query(
+			"insert into infrastructure_usage_policy(user_id,monthly_micro_usd) values($1,$2)",
+			[userId, EVAL_USER_VM_ALLOWANCE_MICRO_USD],
 		);
 		await db.query(
 			`insert into agent_account(user_id,provider,status,plan_type,updated_at,encrypted_codex_auth)
@@ -627,6 +640,8 @@ async function cli() {
 			cleanup: { type: "boolean", default: false },
 			list: { type: "boolean", default: false },
 			"older-than": { type: "string", default: "6" },
+			/** Release only this eval user (its local manifest), nothing else. */
+			user: { type: "string" },
 		},
 	});
 	await assertDevelopmentDatabase();
@@ -645,7 +660,7 @@ async function cli() {
 			"select user_id,owner_user_id,label,created_at from dev_eval_user order by created_at",
 		)
 	).rows;
-	if (values.list || !values.cleanup) {
+	if (values.list || (!values.cleanup && !values.user)) {
 		console.log(
 			JSON.stringify(
 				{
@@ -663,7 +678,19 @@ async function cli() {
 				2,
 			),
 		);
-		if (!values.cleanup) return;
+		if (!values.cleanup && !values.user) return;
+	}
+	if (values.user) {
+		const manifest = manifests.find((m) => m.userId === values.user);
+		if (!manifest) throw new Error(`No local manifest for ${values.user}.`);
+		if (manifest.host === hostname() && alive(manifest.pid))
+			throw new Error(`${values.user}: its run (pid ${manifest.pid}) is live.`);
+		const leftovers = await releaseUser(manifest);
+		console.log(
+			`${manifest.userId} (${manifest.label}): ${leftovers.length ? `left ${leftovers.join(", ")}` : "removed"}`,
+		);
+		if (leftovers.length) process.exitCode = 1;
+		return;
 	}
 	const olderThanMs = Math.max(0, Number(values["older-than"]) || 0) * 3600_000;
 	const handled = new Set<string>();

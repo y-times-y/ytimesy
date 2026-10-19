@@ -6,6 +6,12 @@ const uvVersion = "0.12.24";
 
 /** Browser Use executes only in the untrusted execution VM, never the credential-bearing model worker. */
 export function browserUseCommand(sessionId: string, code: string) {
+	return `${browserUseSetup(sessionId)}
+printf '%s' ${posixShellQuoted(code)} | ${posixShellCommand(["browser-use"])}`;
+}
+
+/** Installs the pinned CLI once and exports its environment; the caller pipes code into `browser-use`. */
+export function browserUseSetup(sessionId: string) {
 	const identity = createHash("sha256")
 		.update(sessionId)
 		.digest("hex")
@@ -26,6 +32,5 @@ export PATH="$UV_TOOL_BIN_DIR:$HOME/.ytimesy-cli/uv:$HOME/.local/bin:$PATH"
   if ! "$UV_TOOL_DIR/browser-use/bin/python" -c "import importlib.metadata; assert importlib.metadata.version('browser-use') == '${PINNED_BROWSER_USE_VERSION}'" 2>/dev/null; then
     uv tool install --python 3.12 --upgrade --force browser-use==${PINNED_BROWSER_USE_VERSION}
   fi
-) 9>"$HOME/.ytimesy-cli/browser-use.install.lock"
-printf '%s' ${posixShellQuoted(code)} | ${posixShellCommand(["browser-use"])}`;
+) 9>"$HOME/.ytimesy-cli/browser-use.install.lock"`;
 }

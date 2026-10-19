@@ -5,6 +5,7 @@ import {
 	Clock3,
 	ImageIcon,
 	Paperclip,
+	X,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { Fragment, type UIEvent, useEffect, useRef } from "react";
@@ -15,6 +16,11 @@ import {
 	childTaskAnchorId,
 	childTaskPublicItems,
 } from "#/domain/child-task-activity";
+import {
+	codeModeCallItems,
+	codeModeProgram,
+	codeModeResult,
+} from "#/domain/code-mode";
 import { commandActivityTitle } from "#/domain/command-activity-title";
 import { fileChangeTotals } from "#/domain/diff-preview";
 import {
@@ -24,16 +30,19 @@ import {
 import { fileBasename } from "#/domain/file-kind";
 import { listedModelDisplayName } from "#/domain/listed-model";
 import { parseModelRouteId } from "#/domain/model-connection";
+import type { EvidenceRecord } from "#/domain/pr-evidence";
 import { secretRequestOutcome } from "#/domain/secret-request";
 import { activityGlyphForToolName } from "#/domain/session-activity";
 import {
 	compactTimelineItems,
 	type FileChangeEntry,
 	fileChangesFromSessionItems,
+	isQueuedUserMessage,
 	liveActivityStatus,
 	type SessionItem,
 	type SessionTurnStatus,
 	showTurnWorking,
+	type UserMessageItem,
 } from "#/domain/session-item";
 import { thoughtLabel } from "#/domain/thought-label";
 import {
@@ -49,6 +58,8 @@ import {
 	toolDetailTitle,
 	toolOutputText,
 } from "#/domain/tool-detail";
+import { evidenceAnchors } from "../evidence/evidence-anchors";
+import { EvidenceCard } from "../evidence/evidence-view";
 import { ActivityIcon } from "./activity-icon";
 import { AgentMarkdown } from "./agent-markdown";
 import { FileChangeCounts } from "./file-change-counts";
@@ -74,7 +85,7 @@ import { ShellCommandCode } from "./shell-command-code";
 import { TodoList } from "./todo-list";
 
 export function SessionTimeline({
-	items,
+	items: allItems,
 	turnStatus,
 	fill = false,
 	onOpenFile,
@@ -87,7 +98,13 @@ export function SessionTimeline({
 	secretActions,
 	failoverActions,
 	memoryActions,
+	onRemoveQueued,
+	evidence = [],
 }: {
+	/** Pull request evidence captured for this chat's turns (prEvidence). */
+	evidence?: readonly EvidenceRecord[];
+	/** Takes back a message still waiting behind the running turn. */
+	onRemoveQueued?: (messageId: string) => void;
 	/** Opens, undoes and checks the memory lines a turn recalled or saved. */
 	memoryActions?: MemoryMarkerActions;
 	/** Save or skip a secret the agent asked for; omitted where nobody can answer. */
@@ -108,11 +125,17 @@ export function SessionTimeline({
 }) {
 	const listRef = useRef<HTMLOListElement>(null);
 	const stickToEnd = useRef(true);
+	// Waiting messages are not part of the turn yet; they sit below its activity.
+	const queued = allItems.filter(isQueuedUserMessage);
+	const items = queued.length
+		? allItems.filter((item) => !isQueuedUserMessage(item))
+		: allItems;
 	const visible = compactTimelineItems(childTaskPublicItems(items));
 	const childTasks = tasks.filter((task) =>
 		taskParentId ? task.parentSessionId === taskParentId : task.depth === 1,
 	);
 	const rows = groupTimelineRows(visible, turnStatus);
+	const evidenceAt = evidenceAnchors(visible, evidence);
 	const fileChanges = fileChangesFromSessionItems(items);
 	const currentTurnIds = new Set<SessionItem["id"]>();
 	for (const item of visible) {
@@ -122,9 +145,9 @@ export function SessionTimeline({
 
 	useEffect(() => {
 		if (!autoScroll || !stickToEnd.current) return;
-		if (items.length === 0 && turnStatus !== "running") return;
+		if (allItems.length === 0 && turnStatus !== "running") return;
 		listRef.current?.lastElementChild?.scrollIntoView({ block: "end" });
-	}, [autoScroll, items, turnStatus]);
+	}, [autoScroll, allItems, turnStatus]);
 
 	function rememberScrollPin(event: UIEvent<HTMLOListElement>) {
 		const list = event.currentTarget;
@@ -134,7 +157,9 @@ export function SessionTimeline({
 
 	if (
 		visible.length === 0 &&
+		queued.length === 0 &&
 		childTasks.length === 0 &&
+		evidence.length === 0 &&
 		turnStatus !== "running" &&
 		!fill
 	)
@@ -216,6 +241,16 @@ export function SessionTimeline({
 										/>
 									</li>
 								))}
+							{(row.kind === "item"
+								? (evidenceAt.anchored.get(row.item.id) ?? [])
+								: row.items.flatMap(
+										(item) => evidenceAt.anchored.get(item.id) ?? [],
+									)
+							).map((record) => (
+								<li key={`evidence:${record.id}`} data-kind="evidence">
+									<EvidenceCard evidence={record} />
+								</li>
+							))}
 						</Fragment>
 					);
 				})}
@@ -230,11 +265,21 @@ export function SessionTimeline({
 							/>
 						</li>
 					))}
+				{evidenceAt.trailing.map((record) => (
+					<li key={`evidence:${record.id}`} data-kind="evidence">
+						<EvidenceCard evidence={record} />
+					</li>
+				))}
 				{showTurnWorking(items, turnStatus) ? (
 					<li data-kind="working">
 						<p className="session-working session-shimmer">Thinking</p>
 					</li>
 				) : null}
+				{queued.map((item) => (
+					<li key={item.id} data-kind="userMessage" data-queued="true">
+						<QueuedMessage item={item} onRemove={onRemoveQueued} />
+					</li>
+				))}
 				{turnStatus !== "running" &&
 				childTasks.some((task) => task.turnStatus === "running") ? (
 					<li data-kind="waiting-for-children">
@@ -245,6 +290,48 @@ export function SessionTimeline({
 				) : null}
 			</ol>
 		</MemoryMarkerProvider>
+	);
+}
+
+function QueuedMessage({
+	item,
+	onRemove,
+}: {
+	item: UserMessageItem;
+	onRemove?: (messageId: string) => void;
+}) {
+	return (
+		<div className="session-message" data-role="user" data-queued="true">
+			<p>{item.text}</p>
+			{item.attachments?.length ? (
+				<ul className="session-message-attachments" aria-label="Attached files">
+					{item.attachments.map((attachment) => (
+						<li key={attachment.id} title={attachment.name}>
+							{attachment.mediaType.startsWith("image/") ? (
+								<ImageIcon size={13} aria-hidden="true" />
+							) : (
+								<Paperclip size={13} aria-hidden="true" />
+							)}
+							<span>{attachment.name}</span>
+						</li>
+					))}
+				</ul>
+			) : null}
+			<p className="session-queued-note" role="status">
+				<Clock3 size={12} aria-hidden="true" />
+				<span>Queued for the agent's next step</span>
+				{onRemove ? (
+					<button
+						type="button"
+						aria-label="Remove queued message"
+						title="Remove this message before it is delivered"
+						onClick={() => onRemove(item.id)}
+					>
+						<X size={12} aria-hidden="true" />
+					</button>
+				) : null}
+			</p>
+		</div>
 	);
 }
 
@@ -684,6 +771,10 @@ function SessionItemView({
 		case "dynamicToolCall": {
 			const command = toolCommand(item);
 			const activity = toolActivity(item);
+			// A run_code program: one card listing its inner calls as ordinary tool cards.
+			const program = codeModeProgram(item);
+			const codeResult = codeModeResult(item);
+			const innerCalls = codeModeCallItems(item);
 			return (
 				<details
 					className="session-activity"
@@ -724,21 +815,53 @@ function SessionItemView({
 					</summary>
 					{item.input && (
 						<div className="session-command-detail">
-							<p className="session-activity-meta">Input</p>
+							<p className="session-activity-meta">
+								{program === null ? "Input" : "Program"}
+							</p>
 							{command ? (
 								<ShellCommandCode command={command} />
 							) : (
-								<pre className="session-output">{item.input}</pre>
+								<pre className="session-output">{program ?? item.input}</pre>
 							)}
 						</div>
 					)}
-					{item.output && (
+					{innerCalls.length > 0 && (
+						<div className="session-command-detail">
+							<p className="session-activity-meta">Tool calls</p>
+							{innerCalls.map((call) => (
+								<SessionItemView
+									key={call.id}
+									item={call}
+									nested
+									fileChanges={fileChanges}
+									onOpenFile={onOpenFile}
+								/>
+							))}
+						</div>
+					)}
+					{codeResult ? (
 						<div className="session-command-detail">
 							<p className="session-activity-meta">Result</p>
 							<pre className="session-output">
-								{toolOutputText(item.output)}
+								{[
+									codeResult.error
+										? `Program failed: ${codeResult.error}`
+										: (codeResult.result ?? "(no return value)"),
+									codeResult.console ? `Console:\n${codeResult.console}` : "",
+								]
+									.filter(Boolean)
+									.join("\n\n")}
 							</pre>
 						</div>
+					) : (
+						item.output && (
+							<div className="session-command-detail">
+								<p className="session-activity-meta">Result</p>
+								<pre className="session-output">
+									{toolOutputText(item.output)}
+								</pre>
+							</div>
+						)
 					)}
 					{!item.input && !item.output && (
 						<p>Details were not recorded for this older call.</p>

@@ -86,12 +86,13 @@ it("restores both public and actual history without resurrecting an incompatible
 			)
 		).rows[0].items,
 	).toEqual([]);
-	expect(
-		await recoveredConversation("alice", session, "model", "revision"),
-	).toEqual({ messages: [] });
-	expect(
-		await recoveredConversation("alice", session, "other", "revision"),
-	).toEqual({ messages: null });
+	// The caller decides how a different model reads it (provider-neutral).
+	expect(await recoveredConversation("alice", session)).toEqual({
+		messages: [],
+		modelId: "model",
+		revision: "revision",
+	});
+	expect(await recoveredConversation("bob", session)).toBeNull();
 	await expect(
 		recordConversationPoint(holder, {
 			userId: "alice",

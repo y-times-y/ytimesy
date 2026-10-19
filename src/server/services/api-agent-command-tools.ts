@@ -70,7 +70,18 @@ export async function verifyPatchedCheckout(input: {
 		checks: await input.check(),
 	};
 }
-const commandRoot = (sessionId: string) =>
+/** The tmux socket every runtime command runs on, one session per command. */
+export const COMMAND_TMUX_SOCKET = "ytimesy-api";
+
+/** The tmux session running command `id`. */
+export const commandSessionName = (id: string) =>
+	`ytimesy-${id.replaceAll("-", "")}`;
+
+/** The exit status recorded for a command that was stopped (as for Ctrl-C). */
+export const STOPPED_COMMAND_STATUS = 130;
+
+/** Where a session's commands keep `<id>.output`, `<id>.status` and `<id>.sh`. */
+export const commandRoot = (sessionId: string) =>
 	`/tmp/ytimesy-api-commands/${sessionId.replaceAll(/[^a-zA-Z0-9-]/g, "").slice(0, 64)}`;
 
 const COMPLETIONS_SCRIPT = `import json, os, pathlib, stat, subprocess, sys
@@ -81,7 +92,7 @@ results = []
 for identifier in json.loads(sys.argv[2]):
     path = root / (identifier + '.status')
     if not path.exists():
-        active = subprocess.run(['tmux', '-L', 'ytimesy-api', 'has-session', '-t', 'ytimesy-' + identifier.replace('-', '')], capture_output=True).returncode == 0
+        active = subprocess.run(['tmux', '-L', '${COMMAND_TMUX_SOCKET}', 'has-session', '-t', 'ytimesy-' + identifier.replace('-', '')], capture_output=True).returncode == 0
         if not active:
             results.append({'id': identifier, 'status': 'interrupted', 'stopped': None})
         continue
@@ -132,7 +143,7 @@ if not 0 <= start <= 100000000 or not 0 <= seconds <= 55:
     raise ValueError('Command page or wait is outside the supported range')
 deadline = time.monotonic() + seconds
 while not pathlib.Path(status).exists() and time.monotonic() < deadline:
-    if subprocess.run(['tmux', '-L', 'ytimesy-api', 'has-session', '-t', session], capture_output=True).returncode:
+    if subprocess.run(['tmux', '-L', '${COMMAND_TMUX_SOCKET}', 'has-session', '-t', session], capture_output=True).returncode:
         break
     time.sleep(0.25)
 state = 'interrupted'
@@ -148,7 +159,7 @@ if pathlib.Path(status).exists():
             state, stopped = result['exitCode'], result['stopped']
         else:
             state = int(raw)
-elif subprocess.run(['tmux', '-L', 'ytimesy-api', 'has-session', '-t', session], capture_output=True).returncode == 0:
+elif subprocess.run(['tmux', '-L', '${COMMAND_TMUX_SOCKET}', 'has-session', '-t', session], capture_output=True).returncode == 0:
     state = 'running'
 if len(sys.argv) > 6 and pathlib.Path(sys.argv[6]).exists():
     output = sys.argv[6]
@@ -181,7 +192,7 @@ export function apiAgentCommandTools(
 	const paths = (id: string) => ({
 		output: `${root}/${id}.output`,
 		status: `${root}/${id}.status`,
-		session: `ytimesy-${id.replaceAll("-", "")}`,
+		session: commandSessionName(id),
 	});
 	const readCommand = async (id: string, start = 0, seconds = 0) => {
 		signal.throwIfAborted();
@@ -232,7 +243,7 @@ export function apiAgentCommandTools(
 		const script = `${root}/${id}.sh`;
 		const result = await machines.exec(
 			vm,
-			`mkdir -p ${quote(root)} && python3 -c ${quote(WRITE_JOB_SCRIPT)} ${quote(script)} ${Buffer.from(job, "utf8").toString("base64")} && : >${quote(path.output)} && tmux -L ytimesy-api new-session -d -s ${quote(path.session)} bash ${quote(script)}${observation}`,
+			`mkdir -p ${quote(root)} && python3 -c ${quote(WRITE_JOB_SCRIPT)} ${quote(script)} ${Buffer.from(job, "utf8").toString("base64")} && : >${quote(path.output)} && tmux -L ${COMMAND_TMUX_SOCKET} new-session -d -s ${quote(path.session)} bash ${quote(script)}${observation}`,
 			15000 + (observeSeconds ?? 0) * 1000,
 		);
 		if (result.exitCode)
@@ -489,7 +500,7 @@ export function apiAgentCommandTools(
 				await stopApiCommand(workspace, input.turnId, id);
 				const result = await machines.exec(
 					vm,
-					`test -f ${quote(path.output)} || exit 2; tmux -L ytimesy-api kill-session -t ${quote(path.session)} 2>/dev/null || true; test -f ${quote(path.status)} || printf '130\\n' >${quote(path.status)}`,
+					`test -f ${quote(path.output)} || exit 2; tmux -L ${COMMAND_TMUX_SOCKET} kill-session -t ${quote(path.session)} 2>/dev/null || true; test -f ${quote(path.status)} || printf '${STOPPED_COMMAND_STATUS}\\n' >${quote(path.status)}`,
 					15_000,
 				);
 				if (result.exitCode)
@@ -548,7 +559,7 @@ export function apiAgentCommandTools(
 					const path = paths(id);
 					const result = await machines.exec(
 						vm,
-						`test -f ${quote(path.output)} && ! test -f ${quote(path.status)} && tmux -L ytimesy-api has-session -t ${quote(path.session)} && ${chars ? `tmux -L ytimesy-api send-keys -t ${quote(path.session)} -l -- ${quote(chars)}` : "true"}${eof ? ` && tmux -L ytimesy-api send-keys -t ${quote(path.session)} C-d` : ""}`,
+						`test -f ${quote(path.output)} && ! test -f ${quote(path.status)} && tmux -L ${COMMAND_TMUX_SOCKET} has-session -t ${quote(path.session)} && ${chars ? `tmux -L ${COMMAND_TMUX_SOCKET} send-keys -t ${quote(path.session)} -l -- ${quote(chars)}` : "true"}${eof ? ` && tmux -L ${COMMAND_TMUX_SOCKET} send-keys -t ${quote(path.session)} C-d` : ""}`,
 						15000,
 					);
 					if (result.exitCode)

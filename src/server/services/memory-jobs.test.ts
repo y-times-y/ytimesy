@@ -50,6 +50,8 @@ function harness(options: {
 	script?: (tools: ModelAgentInput["tools"], step: number) => Promise<void>;
 	steps?: number;
 	answer?: string;
+	/** The last whole-repo review; a day ago unless given. */
+	lastReview?: Date | null;
 }) {
 	const commits: { changes: unknown; message: string }[] = [];
 	const repo: MemoryRepo = {
@@ -71,6 +73,7 @@ function harness(options: {
 		agent: [] as ModelAgentInput[],
 		routes: [] as unknown[],
 		saved: [] as unknown[][],
+		warmed: [] as string[][],
 	};
 	const deps: Deps = {
 		settings: async () => ({
@@ -131,6 +134,14 @@ function harness(options: {
 			calls.saved.push(args);
 			return true;
 		},
+		warmLines: async (_user, texts) => {
+			calls.warmed.push([...texts]);
+		},
+		similarity: async () => null,
+		lastReview: async () =>
+			options.lastReview === undefined
+				? new Date("2026-10-14T00:00:00Z")
+				: options.lastReview,
 		appUrl: "https://ytimesy.test",
 		today: () => "2026-10-15",
 	};
@@ -290,6 +301,56 @@ describe("dreaming", () => {
 		expect(calls.dreamed).toEqual([new Date("2026-10-15T11:00:00Z")]);
 	});
 
+	it("also reviews the whole repo once a week, with more steps, and records it", async () => {
+		const files = {
+			"MEMORY.md": "# Memory\n\n## Index\n- [[tooling]]\n",
+			"tooling.md":
+				"# tooling\n- Use npm for installs [added: 2026-02-03]\n- Install packages with pnpm [added: 2026-06-01]\n",
+		};
+		const script = async (tools: ModelAgentInput["tools"]) => {
+			await call(tools, "commit", { message: "Nothing new" });
+		};
+		const { deps, calls, call } = harness({
+			files,
+			chats,
+			lastReview: null,
+			script,
+		});
+		expect(await runMemoryDream("u1", deps, 5)).toBe("unchanged");
+		const prompt = String(calls.agent[0].messages[0].content);
+		expect(prompt).toContain("Whole-repo review");
+		expect(prompt).toContain(
+			"### tooling.md\n1: # tooling\n2: - Use npm for installs",
+		);
+		expect(calls.agent[0].maxSteps).toBe(36);
+		expect(calls.usage).toEqual([
+			expect.objectContaining({ kind: "dream", outcome: "completed:review" }),
+		]);
+
+		for (const lastReview of [new Date("2026-10-12T00:00:00Z"), undefined]) {
+			const recent = harness({
+				files,
+				chats,
+				lastReview,
+				script: async () => {},
+			});
+			await runMemoryDream("u1", recent.deps, 5);
+			expect(String(recent.calls.agent[0].messages[0].content)).not.toContain(
+				"Whole-repo review",
+			);
+			expect(recent.calls.agent[0].maxSteps).toBe(5);
+		}
+		const huge = harness({
+			files: { ...files, "big.md": "- x\n".repeat(20_000) },
+			chats,
+			lastReview: null,
+		});
+		await runMemoryDream("u1", huge.deps, 5);
+		expect(String(huge.calls.agent[0].messages[0].content)).not.toContain(
+			"Whole-repo review",
+		);
+	});
+
 	it("uses the ChatGPT plan without an API reservation", async () => {
 		const { deps, calls, call } = harness({
 			chats,
@@ -344,7 +405,9 @@ describe("save hook", () => {
 		).toBe("saved");
 		expect(calls.agent[0].maxSteps).toBe(1);
 		expect(calls.reserve).toHaveLength(1);
-		expect(calls.usage).toEqual([expect.objectContaining({ kind: "save" })]);
+		expect(calls.usage).toEqual([
+			expect.objectContaining({ kind: "save", outcome: "completed" }),
+		]);
 		expect(commits[0].changes).toEqual([
 			{
 				path: "tooling.md",
@@ -362,6 +425,8 @@ describe("save hook", () => {
 				[{ path: "tooling.md", text: "Uses pnpm, never npm" }],
 			],
 		]);
+		// The new line is embedded before the next chat's read hook needs it.
+		expect(calls.warmed).toEqual([["tooling: Uses pnpm, never npm"]]);
 	});
 
 	it("runs after every turn in full mode, and never outside it", async () => {
@@ -377,7 +442,10 @@ describe("save hook", () => {
 		expect(plain.calls.saved).toEqual([]);
 		expect(plain.calls.agent).toHaveLength(1);
 		expect(plain.calls.usage).toEqual([
-			expect.objectContaining({ kind: "save" }),
+			expect.objectContaining({
+				kind: "save",
+				outcome: "completed:nothing-new",
+			}),
 		]);
 		const spec = harness({ chats, mode: "spec" });
 		expect(
@@ -388,6 +456,67 @@ describe("save hook", () => {
 			),
 		).toBe("off");
 		expect(spec.calls.agent).toEqual([]);
+	});
+
+	it("retires the line a new decision replaces, by the id it was shown", async () => {
+		const tooling =
+			"# tooling\n- Use npm for installs [source: a]\n- Node is pinned to 22 [source: b]\n";
+		const { deps, calls, commits } = harness({
+			files: {
+				"MEMORY.md": "# Memory\n\n## Index\n- [[tooling]]\n",
+				"tooling.md": tooling,
+			},
+			chats: [
+				chat("11111111-1111-4111-8111-111111111111", [
+					item({
+						kind: "userMessage",
+						id: "1",
+						text: "We switched installs to pnpm; use it from now on",
+					}),
+				]),
+			],
+			answer:
+				'{"entries":[{"file":"tooling.md","text":"Install packages with pnpm, not npm","project":"","replaces":"tooling.md:2"}]}',
+		});
+		expect(
+			await runMemorySave("u1", "11111111-1111-4111-8111-111111111111", deps),
+		).toBe("saved");
+		// The prompt showed the related lines with their ids, not the index link.
+		const prompt = String(calls.agent[0].messages[0].content);
+		expect(prompt).toContain(
+			"tooling.md:2: - Use npm for installs [source: a]",
+		);
+		expect(prompt).not.toContain("[[tooling]]");
+		expect(calls.agent[0].instructions).toContain('"replaces"');
+		const source =
+			"https://ytimesy.test/?chat=11111111-1111-4111-8111-111111111111";
+		expect(commits[0].changes).toEqual([
+			{
+				path: "tooling.md",
+				content: `# tooling\n- Use npm for installs [source: a] [superseded-by: ${source}]\n- Node is pinned to 22 [source: b]\n- Install packages with pnpm, not npm [source: ${source}; added: 2026-10-15]\n`,
+			},
+		]);
+	});
+
+	it("ignores a replaced id it never showed, and keeps the user's brackets", () => {
+		const files = { "tooling.md": "# tooling\n- Use npm [source: a]\n" };
+		expect(
+			saveHookChanges(
+				files,
+				[
+					{
+						file: "logging.md",
+						text: "Log lines in orders.py start with [orders]",
+						project: "",
+					},
+				],
+				{ source: "s", today: "2026-10-15" },
+			)[0],
+		).toEqual({
+			path: "logging.md",
+			content:
+				"# logging\n- Log lines in orders.py start with [orders] [source: s; added: 2026-10-15]\n",
+		});
 	});
 
 	it("never duplicates an entry already in memory", () => {

@@ -183,3 +183,21 @@ it("reads an unrecorded custom endpoint window from the same model listing disco
 		"https://custom.example/v1/models",
 	);
 });
+
+it("reads image input from the public catalog for a listed model's direct id", async () => {
+	browse.mockResolvedValue([
+		{ id: "deepseek/deepseek-v4.1-flash", imageInput: false },
+	]);
+	const context = await readModelContext(
+		{
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+			apiKey: "fixture",
+			modelId: "deepseek/deepseek-v4.1-flash",
+			cacheKey: "image-input",
+		},
+		vi.fn(),
+	);
+	expect(context.imageInput).toBe(false);
+	browse.mockReset();
+});

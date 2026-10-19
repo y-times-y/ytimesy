@@ -13,6 +13,7 @@ import { projectForOwner } from "../adapters/projects";
 import { repositoryDirectory } from "../adapters/repository-setup";
 import type { WorkspaceRuntime } from "../adapters/workspace-runtime";
 import { githubAccessToken } from "../auth/github-connection";
+import { queuePullRequestEvidence } from "./pr-evidence-job";
 
 export type TurnGitRuntime = Pick<WorkspaceRuntime, "exec"> &
 	Partial<Pick<WorkspaceRuntime, "readTextFile" | "writeTextFile">>;
@@ -120,6 +121,22 @@ export async function publishCompletedSessionTurn(
 				base,
 			},
 		);
+		// Harness-captured evidence (prEvidence=on) runs as a background job after
+		// the handoff; queueing never blocks or fails the turn.
+		if (primary && "number" in pull && typeof pull.number === "number")
+			await queuePullRequestEvidence({
+				userId: session.userId,
+				sessionId: session.id,
+				revision,
+				installationId: Number(repo.installationId),
+				fullName: repo.fullName,
+				pullNumber: pull.number,
+			}).catch((error) =>
+				console.warn("Pull request evidence could not be queued.", {
+					message:
+						error instanceof Error ? error.message.slice(0, 300) : "unknown",
+				}),
+			);
 		if (primary && session.parentSessionId)
 			await saveAgentTaskPublication(session.id, {
 				branch: head,

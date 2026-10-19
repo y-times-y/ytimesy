@@ -30,6 +30,7 @@ import {
 } from "../src/server/services/api-workspace-session";
 import { cancelServerTurn } from "../src/server/services/cancel-server-turn";
 import { sendSubscriptionTask } from "../src/server/services/codex-subscription-session";
+import { DEVELOPMENT_EDGE_ORIGIN } from "./development-config";
 import { verifiedEdgeProofProgress } from "./edge-proof-progress";
 
 // Operator-only proof: one existing subscription, one TTL-bounded VM, no publication.
@@ -41,8 +42,7 @@ if (
 	!new URL(process.env.DATABASE_URL ?? "").username.includes(ref)
 )
 	throw new Error("Not the approved development database.");
-const origin =
-	"https://ytimesy-edge-executor-development.hetkp8044.workers.dev";
+const origin = DEVELOPMENT_EDGE_ORIGIN;
 process.env.YTIMESY_MODEL_EXECUTION_TARGET = "durable-object";
 // This approved operator proof uses its own provider-enforced seven-minute cap,
 // not the account's already-spent product allowance. No shared setting changes.

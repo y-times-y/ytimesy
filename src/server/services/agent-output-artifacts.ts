@@ -90,6 +90,9 @@ descriptor = os.open(root / (sys.argv[2] + '.verification.json'), os.O_WRONLY | 
 with os.fdopen(descriptor, 'w', encoding='utf-8') as handle:
     json.dump(json.loads(sys.argv[3]), handle)`;
 
+/** A captured command is stopped once its stdout or stderr passes this ("output_limit"). */
+export const AGENT_OUTPUT_LIMIT_BYTES = 16 * 1024 * 1024;
+
 const CAPTURE_SCRIPT = `import json, os, pathlib, signal, subprocess, sys, time
 root = pathlib.Path(sys.argv[1])
 root.mkdir(mode=0o700, exist_ok=True)
@@ -110,7 +113,7 @@ try:
             if time.monotonic() >= deadline:
                 stopped = 'timeout'
                 break
-            if any(os.fstat(handle.fileno()).st_size > 16777216 for handle in handles):
+            if any(os.fstat(handle.fileno()).st_size > ${AGENT_OUTPUT_LIMIT_BYTES} for handle in handles):
                 stopped = 'output_limit'
                 break
             time.sleep(0.05)
@@ -138,10 +141,10 @@ try:
     output = {'reference': reference, 'exitCode': process.returncode, 'stopped': stopped}
     for stream in ('stdout', 'stderr'):
         path = root / (reference + '.' + stream)
-        if path.stat().st_size > 16777216:
+        if path.stat().st_size > ${AGENT_OUTPUT_LIMIT_BYTES}:
             stopped = 'output_limit'
             with path.open('r+b') as handle:
-                handle.truncate(16777216)
+                handle.truncate(${AGENT_OUTPUT_LIMIT_BYTES})
         with path.open(encoding='utf-8', errors='replace') as handle:
             content = handle.read(32001)
         output[stream] = content[:32000]
@@ -167,11 +170,16 @@ export type AgentOutput = {
 	stderrNextStart: number | null;
 };
 
+/** The guest directory holding a session's complete command output (`<reference>.stdout`). */
+export function agentOutputDirectory(sessionId: string) {
+	return `/tmp/ytimesy-output-${createHash("sha256").update(sessionId).digest("hex")}`;
+}
+
 /** Guest-local, session-scoped evidence; never accepts an arbitrary host path. */
 export function agentOutputArtifacts(
 	input: AgentToolWorkspaceInput & { sessionId: string; signal: AbortSignal },
 ) {
-	const directory = `/tmp/ytimesy-output-${createHash("sha256").update(input.sessionId).digest("hex")}`;
+	const directory = agentOutputDirectory(input.sessionId);
 	const captureCommand = (
 		command: string,
 		timeoutSeconds: number,

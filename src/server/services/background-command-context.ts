@@ -1,5 +1,6 @@
 import type { ModelMessage } from "ai";
 import { z } from "zod";
+import { leanToolNames } from "#/domain/harness-model-profile";
 import type { SessionItem } from "#/domain/session-item";
 import { publicToolDetail } from "#/domain/tool-detail";
 import type { AgentToolWorkspaceInput } from "./agent-tool-workspace";
@@ -14,6 +15,8 @@ function pendingCommandReceipts(items: readonly SessionItem[]) {
 				"execute_command",
 				"continue_command",
 				"browser_execute",
+				// Lean surfaces (docs/builder-tool-surface.md) report the same id/status.
+				...leanToolNames(["command", "stdin"]),
 			].includes(item.tool) ||
 			!item.output
 		)
@@ -44,7 +47,7 @@ export async function withBackgroundCommandContext(
 		signal: AbortSignal;
 		checkpoint: (messages: ModelMessage[]) => Promise<void>;
 		/** The offered tool that reads a command's complete output by id. */
-		commandReader: "read_command" | "continue_command";
+		commandReader: string;
 	},
 ) {
 	const pending = pendingCommandReceipts(input.items);

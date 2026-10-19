@@ -3,10 +3,10 @@
 //   node --import tsx scripts/memory-two-chat-eval.ts --dry-run
 //       Offline: every scenario verifier passes a rule-following answer and
 //       fails a rule-breaking one, and chat 2 never leaks the rule.
-//   CLOUDFLARE_ACCOUNT_ID=f45021db74a97feaafae2e3e131d4d82 CLOUDFLARE_API_TOKEN=$(npx wrangler auth token) \
-//     node --import tsx scripts/memory-two-chat-eval.ts --recall
-//       Offline line retrieval with the read hook's embeddings: requests in
-//       different words than the saved rule must surface it.
+//   CLOUDFLARE_API_TOKEN=$(npx wrangler auth token) node --import tsx scripts/memory-two-chat-eval.ts --recall
+//       Offline line retrieval with the read hook's embeddings and selection:
+//       requests in different words than the saved rule must surface it.
+//       CLOUDFLARE_ACCOUNT_ID defaults to scripts/development-config.ts.
 //   node --env-file=.env --import tsx scripts/memory-two-chat-eval.ts --live --arms off,spec,full
 //       Live two-chat runs on the development edge with the Codex subscription.
 //   node --env-file=.env --import tsx scripts/memory-two-chat-eval.ts --live --arms full,supermemory
@@ -29,8 +29,15 @@
 // (scripts/smoke/eval-user.ts) with its own project, memory settings and
 // memory repo, so runs never see each other's memory or the owner's, and they
 // can run side by side (--concurrency) and alongside other eval processes.
-// --variant memoryWording=rules presents recalled memory as binding rules
-// (docs/parallel-evals.md). --as-owner runs as the dev owner, one at a time.
+// Recalled memory is presented as binding rules and written by the save hook
+// by default; --variant memoryWording=notes or memoryWriter=both selects the
+// earlier behaviour (docs/parallel-evals.md). --variants runs several variants side by side in
+// one process, each on top of --variant, e.g.
+//   --variant memoryWording=notes --variants "memoryWriter=agent;memoryWriter=observer;memoryWriter=both"
+// and prints one row per (variant, arm): who wrote memory (the builder's own
+// ~/memory tool calls and commits in the setup chats, save-hook and dream
+// commits in the repo), what the memory jobs cost, and chat 2's result.
+
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -39,16 +46,29 @@ import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs, promisify } from "node:util";
 import {
+	costSummary,
+	costSummaryCells,
+	runListPrice,
+} from "../src/domain/eval-cost";
+import {
 	harnessVariantFromFlags,
 	harnessVariantLabel,
 } from "../src/domain/harness-variant";
+import { memoryMatchScores } from "../src/domain/memory-ranking";
 import {
 	cosineSimilarity,
 	MEMORY_MATCH_LIMIT,
-	MEMORY_MATCH_MIN_SIMILARITY,
+	MEMORY_MATCH_MIN_SCORE,
 	MEMORY_PART_OPEN,
+	type MemoryLine,
 	memoryLineEmbeddingText,
+	memoryToday,
+	selectMemoryMatches,
 } from "../src/domain/memory-repo";
+import {
+	CLOUDFLARE_ACCOUNT_ID,
+	DEVELOPMENT_EDGE_ORIGIN,
+} from "./development-config";
 import {
 	DISTRACTOR_LINES,
 	RECALL_PROBES,
@@ -69,14 +89,23 @@ import {
 	waitProcessed,
 } from "./memory-eval/supermemory";
 import {
+	type ChatMemoryActivity,
+	chatMemoryActivity,
+	type RepoCommits,
+	repoCommitsByWriter,
+	writesSelfCheck,
+} from "./memory-eval/writes";
+import {
+	assertDevelopmentDatabase,
 	createEvalUser,
 	type EvalUser,
+	MEMORY_NAMESPACE,
 	onEvalStop,
 	SLOT_LIMITS,
 	withSlot,
 } from "./smoke/eval-user";
 
-const run = promisify(execFile);
+const runCommand = promisify(execFile);
 
 const { values: flags } = parseArgs({
 	options: {
@@ -99,14 +128,14 @@ const { values: flags } = parseArgs({
 		"price-out": { type: "string" },
 		"keep-repos": { type: "boolean", default: false },
 		out: { type: "string" },
-		/** Harness variant, e.g. memoryWording=rules (repeatable). */
+		/** Harness variant, e.g. toolSurface=current or memoryWording=notes (repeatable; the default is lean, rules, observer). */
 		variant: { type: "string", multiple: true },
+		/** Variants compared in one run, separated by ";" (each on top of --variant). */
+		variants: { type: "string" },
 		/** Runs of each (arm, scenario), each as its own eval user. */
 		repeat: { type: "string", default: "1" },
 		/** Scenario runs at once in this process (eval users make it safe). */
 		concurrency: { type: "string", default: "2" },
-		/** Run as the dev owner (old behaviour; forces concurrency 1). */
-		"as-owner": { type: "boolean", default: false },
 	},
 });
 
@@ -164,10 +193,10 @@ async function verifyLocally(
 	const dir = await mkdtemp(join(tmpdir(), `memory-eval-${scenario.id}-`));
 	try {
 		await writeFiles(dir, scenario.chat2.files);
-		await run("bash", ["-c", fixtureRepoScript(dir)]);
+		await runCommand("bash", ["-c", fixtureRepoScript(dir)]);
 		await writeFiles(dir, solution);
 		try {
-			await run("bash", ["-c", shellCommand(scenario.verify)], {
+			await runCommand("bash", ["-c", shellCommand(scenario.verify)], {
 				cwd: dir,
 				timeout: 30_000,
 			});
@@ -256,6 +285,9 @@ async function dryRun() {
 	];
 	if (checks.some((check) => !check))
 		throw new Error(`Supermemory replay check failed: ${checks.join(",")}`);
+	const writes = writesSelfCheck();
+	if (writes.length)
+		throw new Error(`Memory-writer checks failed: ${writes.join(", ")}`);
 	console.log("\nDry run passed.");
 }
 
@@ -263,11 +295,12 @@ async function dryRun() {
 // --recall
 
 /**
- * The read hook's ranking on real embeddings: every scenario rule plus
- * distractors as memory lines; each probe must put its rule in the top
- * lines above the cutoff.
+ * The read hook's selection (selectMemoryMatches) on real embeddings: every
+ * scenario rule plus distractors as memory lines; each probe must select
+ * its rule.
  */
 async function recall() {
+	process.env.CLOUDFLARE_ACCOUNT_ID ||= CLOUDFLARE_ACCOUNT_ID;
 	const { memoryEmbedder } = await import(
 		"../src/server/adapters/memory-embeddings"
 	);
@@ -283,7 +316,13 @@ async function recall() {
 			text: scenario.rule,
 		})),
 		...DISTRACTOR_LINES.map((line) => ({ id: "distractor", ...line })),
-	];
+	].map((line, index): MemoryLine & { id: string } => ({
+		...line,
+		line: index + 1,
+		raw: `- ${line.text}`,
+		meta: {},
+	}));
+	const today = memoryToday();
 	const vectors = await embed.documents(lines.map(memoryLineEmbeddingText));
 	const rows = [
 		["probe", "rule", "similarity", "rank", "recalled", "wrong lines injected"],
@@ -298,35 +337,39 @@ async function recall() {
 	}[] = [];
 	for (const probe of RECALL_PROBES) {
 		const query = await embed.query(probe.query);
+		const similarity = new Map(
+			lines.map((line, index) => [
+				line,
+				cosineSimilarity(query, vectors[index]),
+			]),
+		);
+		// The read hook's own score: cosine merged with word overlap and topic file.
+		const scores = memoryMatchScores(lines, similarity, probe.query);
 		similarities.push(
-			...lines.map((line, index) => ({
+			...lines.map((line) => ({
 				probe: probe.query,
 				line: line.text,
 				right: line.id === probe.scenario,
-				score: cosineSimilarity(query, vectors[index]),
+				score: scores.get(line) ?? 0,
 			})),
 		);
 		const ranked = lines
-			.map((line, index) => ({
-				...line,
-				score: cosineSimilarity(query, vectors[index]),
-			}))
+			.map((line) => ({ ...line, score: scores.get(line) ?? 0 }))
 			.sort((a, b) => b.score - a.score);
 		const rank = ranked.findIndex((line) => line.id === probe.scenario) + 1;
 		const hit = ranked[rank - 1];
-		const ok =
-			rank > 0 &&
-			rank <= MEMORY_MATCH_LIMIT &&
-			hit.score >= MEMORY_MATCH_MIN_SIMILARITY;
+		// What the read hook would inject for this message, by its own selection.
+		const selected = selectMemoryMatches({
+			lines,
+			scores,
+			alreadyShown: () => false,
+			today,
+			project: null,
+		});
+		const rule = lines.find((line) => line.id === probe.scenario);
+		const ok = Boolean(rule && selected.includes(rule));
 		if (ok) recalled++;
-		// What the hook would also inject: other lines in the top five above the cutoff.
-		const noise = ranked
-			.slice(0, MEMORY_MATCH_LIMIT)
-			.filter(
-				(line) =>
-					line.id !== probe.scenario &&
-					line.score >= MEMORY_MATCH_MIN_SIMILARITY,
-			).length;
+		const noise = selected.filter((line) => line !== rule).length;
 		wrong += noise;
 		rows.push([
 			probe.query.slice(0, 60),
@@ -339,7 +382,7 @@ async function recall() {
 	}
 	console.log(table(rows));
 	console.log(
-		`\nRecalled ${recalled}/${RECALL_PROBES.length}; ${wrong} wrong lines injected in total (top ${MEMORY_MATCH_LIMIT}, similarity >= ${MEMORY_MATCH_MIN_SIMILARITY}).`,
+		`\nRecalled ${recalled}/${RECALL_PROBES.length}; ${wrong} wrong lines injected in total (top ${MEMORY_MATCH_LIMIT}, score >= ${MEMORY_MATCH_MIN_SCORE}).`,
 	);
 	// Threshold data: how right and wrong lines score, and what each cutoff would do.
 	const right = similarities.filter((row) => row.right).map((row) => row.score);
@@ -487,6 +530,8 @@ type ChatRecord = {
 	supermemoryAttached?: boolean;
 	/** Supermemory MCP tools the agent called, in order. */
 	supermemoryCalls?: string[];
+	/** Tool calls, and those on ~/memory, from the chat's stored items. */
+	activity: ChatMemoryActivity | null;
 	errors: string[];
 };
 
@@ -523,9 +568,11 @@ type ScenarioRecord = {
 	scenario: string;
 	/** 1-based repeat index. */
 	attempt: number;
-	/** The eval user the run used ("owner" with --as-owner). */
+	/** The eval user the run used. */
 	evalUser: string;
 	variant: string;
+	/** The --variants entry this run used ("base" without --variants). */
+	variantName: string;
 	elapsedMs: number;
 	repo: string | null;
 	passed: boolean | null;
@@ -535,53 +582,93 @@ type ScenarioRecord = {
 	setup: ChatRecord[];
 	chat2: ChatRecord | null;
 	memoryCosts: MemoryCost[];
+	/** The memory repo's commits by writer at the end of the run. */
+	repoCommits: RepoCommits | null;
 	supermemory?: SupermemoryRecord;
 	errors: string[];
 };
 
-async function live() {
+const LIVE_ARMS = ["off", "spec", "full", "supermemory"];
+
+/** One --variants entry (or the base variant), on top of --variant. */
+type VariantRun = {
+	name: string;
+	variant: ReturnType<typeof harnessVariantFromFlags>;
+	label: string;
+};
+
+/** The --live flags, validated and bounded. */
+function liveOptions() {
 	const arms = flags.arms.split(",").map((arm) => arm.trim());
-	if (
-		!arms.every((arm) => ["off", "spec", "full", "supermemory"].includes(arm))
-	)
+	if (!arms.every((arm) => LIVE_ARMS.includes(arm)))
 		throw new Error("--arms accepts off, spec, full and supermemory.");
-	const smKey = arms.includes("supermemory") ? await supermemoryApiKey() : null;
-	const sm = smKey ? supermemoryClient(smKey) : null;
 	const smDreaming = flags["sm-dreaming"] as "instant" | "dynamic" | undefined;
 	if (smDreaming && !["instant", "dynamic"].includes(smDreaming))
 		throw new Error("--sm-dreaming accepts instant or dynamic.");
-	const smWaitMs =
-		Math.min(3600, Math.max(30, Number(flags["sm-wait"]) || 900)) * 1000;
 	const model = flags.model;
 	const effort = flags.effort;
 	if (!/^[a-z0-9._-]+$/.test(model) || !/^[a-z]+$/.test(effort))
 		throw new Error("Invalid --model or --effort.");
-	const turnTimeoutMs =
-		Math.min(900, Math.max(60, Number(flags["turn-timeout"]) || 300)) * 1000;
-	const dreamTimeoutMs =
-		Math.min(900, Math.max(60, Number(flags["dream-timeout"]) || 600)) * 1000;
-	const scenarios = selectScenarios();
+	const variant = harnessVariantFromFlags(flags.variant);
+	const variantLabel = harnessVariantLabel(variant);
+	const variantRuns: VariantRun[] = flags.variants
+		? flags.variants
+				.split(";")
+				.map((spec) => spec.trim())
+				.filter(Boolean)
+				.map((spec) => {
+					const combined = harnessVariantFromFlags([
+						...(flags.variant ?? []),
+						spec,
+					]);
+					return {
+						name: spec,
+						variant: combined,
+						label: harnessVariantLabel(combined),
+					};
+				})
+		: [{ name: "base", variant, label: variantLabel }];
+	if (new Set(variantRuns.map((row) => row.label)).size !== variantRuns.length)
+		throw new Error("--variants lists the same variant twice.");
+	return {
+		arms,
+		scenarios: selectScenarios(),
+		model,
+		effort,
+		turnTimeoutMs:
+			Math.min(900, Math.max(60, Number(flags["turn-timeout"]) || 300)) * 1000,
+		dreamTimeoutMs:
+			Math.min(900, Math.max(60, Number(flags["dream-timeout"]) || 600)) * 1000,
+		smDreaming,
+		smWaitMs:
+			Math.min(3600, Math.max(30, Number(flags["sm-wait"]) || 900)) * 1000,
+		variantLabel,
+		variantRuns,
+		repeat: Math.min(20, Math.max(1, Number(flags.repeat) || 1)),
+		concurrency: Math.min(8, Math.max(1, Number(flags.concurrency) || 2)),
+	};
+}
 
-	const DEV_REF = "zqkptvyvoyqqtpihlshw";
-	const ORIGIN =
-		"https://ytimesy-edge-executor-development.hetkp8044.workers.dev";
-	const NAMESPACE = "ytimesy-memory-development";
-	if (!new URL(process.env.DATABASE_URL ?? "").username.includes(DEV_REF))
-		throw new Error(
-			"Refusing to run: DATABASE_URL is not the development project.",
-		);
+type LiveOptions = ReturnType<typeof liveOptions>;
+
+/**
+ * Points this process at the development edge (after checking the database
+ * is development's) and loads what only live runs need, so the offline
+ * modes need no database, VM or model settings.
+ */
+async function liveEnvironment() {
+	await assertDevelopmentDatabase();
 	process.env.YTIMESY_MODEL_EXECUTION_TARGET = "durable-object";
 	process.env.YTIMESY_INFRASTRUCTURE_ADMISSION = "false";
-	process.env.YTIMESY_MODEL_WORKFLOW_URL = ORIGIN;
-	process.env.YTIMESY_BACKGROUND_WORKFLOW_URL = ORIGIN;
-	process.env.YTIMESY_REALTIME_URL = ORIGIN;
+	process.env.YTIMESY_MODEL_WORKFLOW_URL = DEVELOPMENT_EDGE_ORIGIN;
+	process.env.YTIMESY_BACKGROUND_WORKFLOW_URL = DEVELOPMENT_EDGE_ORIGIN;
+	process.env.YTIMESY_REALTIME_URL = DEVELOPMENT_EDGE_ORIGIN;
 	process.env.YTIMESY_REALTIME_SECRET ||= JSON.parse(
 		await readFile(".ytimesy/realtime-development.json", "utf8"),
 	).secret;
 	const apiKey = process.env.FREESTYLE_API_KEY;
 	if (!apiKey) throw new Error("Missing Freestyle API key.");
 
-	// Loaded only here so the offline modes need no database, VM or model settings.
 	const { Freestyle } = await import("freestyle");
 	const { WorkspaceId } = await import("../src/domain/ids");
 	const { sessionItemsFromUnknown } = await import(
@@ -618,771 +705,804 @@ async function live() {
 	const { sendSubscriptionTask } = await import(
 		"../src/server/services/codex-subscription-session"
 	);
+	const { turnState } = await import("./smoke/builder-harness");
+	return {
+		client: new Freestyle({ apiKey }),
+		machines: createFreestyleWorkspaceMachines(apiKey),
+		db: database(),
+		closeDatabase,
+		bootSnapshotId,
+		WorkspaceId,
+		sessionItemsFromUnknown,
+		signDeliveryRequest,
+		sessions,
+		claimApiTurn,
+		dispatchBackgroundJob,
+		withBackgroundJobDispatcher,
+		GUEST_INTERNET_FIREWALL,
+		waitUntilVmRunning,
+		dispatchModelWorkflow,
+		modelWorkflowSigningSecret,
+		cancelServerTurn,
+		sendSubscriptionTask,
+		turnState,
+	};
+}
 
-	const client = new Freestyle({ apiKey });
-	const machines = createFreestyleWorkspaceMachines(apiKey);
-	const db = database();
-	const liveVms = new Set<string>();
-	const liveProjects = new Set<string>();
-	const liveRepos = new Set<string>();
-	const liveContainers = new Set<string>();
+type LiveEnvironment = Awaited<ReturnType<typeof liveEnvironment>>;
 
-	const variant = harnessVariantFromFlags(flags.variant);
-	const variantLabel = harnessVariantLabel(variant);
-	const asOwner = flags["as-owner"];
-	const repeat = Math.min(20, Math.max(1, Number(flags.repeat) || 1));
-	// Memory settings are per user: the owner can only run one scenario at a time.
-	const concurrency = asOwner
-		? 1
-		: Math.min(8, Math.max(1, Number(flags.concurrency) || 2));
-	const owner = asOwner
-		? await createEvalUser({ label: "memory-eval", asOwner: true, variant })
-		: null;
-	// The owner's own memory settings, restored at the end (--as-owner only).
-	const savedSettings = owner
-		? (
-				await db.query<{
-					mode: string;
-					repo: string | null;
-					dreamed_through: Date | null;
-				}>(
-					"select mode,repo,dreamed_through from user_memory where user_id=$1",
-					[owner.userId],
-				)
-			).rows[0]
-		: undefined;
+/** One live run's settings, services and the resources still to clean up. */
+type LiveRun = {
+	options: LiveOptions;
+	env: LiveEnvironment;
+	sm: ReturnType<typeof supermemoryClient> | null;
+	liveVms: Set<string>;
+	liveContainers: Set<string>;
+	stopping: () => boolean;
+};
 
-	// Executor gate: a signed probe must reach the dev edge before any VM is made.
-	{
-		const url = `${ORIGIN}/start`;
-		const body = JSON.stringify({
-			turnId: randomUUID(),
-			leaseId: randomUUID(),
-		});
-		let open = false;
-		for (let attempt = 0; attempt < 30 && !open; attempt++) {
-			const response = await fetch(url, {
-				method: "POST",
+/** A signed probe must reach the dev edge before any VM is made. */
+async function openExecutorGate(env: LiveEnvironment) {
+	const url = `${DEVELOPMENT_EDGE_ORIGIN}/start`;
+	const body = JSON.stringify({
+		turnId: randomUUID(),
+		leaseId: randomUUID(),
+	});
+	for (let attempt = 0; attempt < 30; attempt++) {
+		const response = await fetch(url, {
+			method: "POST",
+			body,
+			headers: await env.signDeliveryRequest(
+				env.modelWorkflowSigningSecret(),
+				"POST",
+				url,
 				body,
-				headers: await signDeliveryRequest(
-					modelWorkflowSigningSecret(),
-					"POST",
-					url,
-					body,
-				),
-				signal: AbortSignal.timeout(15_000),
-			});
-			if (response.status === 409) open = true;
-			else if (response.status !== 503)
-				throw new Error(`Executor preflight failed (${response.status}).`);
-			else await delay(2000);
-		}
-		if (!open) throw new Error("Executor gate is not open.");
+			),
+			signal: AbortSignal.timeout(15_000),
+		});
+		if (response.status === 409) return;
+		if (response.status !== 503)
+			throw new Error(`Executor preflight failed (${response.status}).`);
+		await delay(2000);
 	}
+	throw new Error("Executor gate is not open.");
+}
 
-	async function setEvalMemory(
-		user: EvalUser,
-		mode: "off" | "spec" | "full",
-		repo: string | null,
-	) {
-		if (!user.asOwner) return user.setMemory(mode, repo);
-		await db.query(
-			`insert into user_memory(user_id,mode,repo,dreamed_through) values($1,$2,$3,now())
-			 on conflict(user_id) do update set mode=excluded.mode,repo=excluded.repo,dreamed_through=excluded.dreamed_through,updated_at=now()`,
-			[user.userId, mode, repo],
-		);
-	}
+type ChatInput = {
+	title: string;
+	files: Record<string, string>;
+	prompt: string;
+	verify?: string;
+	/** Context a competitor's hooks would add, as extra text parts. */
+	extraParts?: readonly string[];
+};
 
-	/** An eval user's own project; a copied one for the owner. */
-	async function throwawayProject(user: EvalUser) {
-		if (!user.asOwner)
-			return {
-				projectId: user.project.projectId,
-				workspaceId: user.project.workspaceId,
-			};
-		const id = randomUUID();
-		await db.query(
-			`insert into project select (jsonb_populate_record(null::project,
-				to_jsonb(p) || jsonb_build_object('id', $2::uuid, 'repository_id', $3::bigint, 'created_at', now()))).*
-			 from project p where p.id=$1`,
-			[
-				user.project.projectId,
-				id,
-				9_000_000_000 + Math.floor(Math.random() * 1e9),
-			],
-		);
-		liveProjects.add(id);
-		const workspaceId = randomUUID();
-		await db.query(
-			`insert into workspace select (jsonb_populate_record(null::workspace,
-				to_jsonb(w) || jsonb_build_object('id', $2::uuid, 'project_id', $3::uuid))).*
-			 from workspace w where w.id=$1`,
-			[user.project.workspaceId, workspaceId, id],
-		);
-		return { projectId: id, workspaceId };
-	}
+/** One chat, in a Codex slot shared with every other eval process. */
+function chat(run: LiveRun, user: EvalUser, input: ChatInput) {
+	return withSlot(
+		"codex",
+		SLOT_LIMITS.codex,
+		() => chatNow(run, user, input),
+		run.stopping,
+	);
+}
 
-	async function dropProject(user: EvalUser, id: string) {
-		// An eval user's project goes with the user.
-		if (!user.asOwner) return;
-		await db.query("delete from project where id=$1 and user_id=$2", [
-			id,
-			user.userId,
+/** One chat: a new session on a fresh VM with the fixture files, one prompt, until settled. */
+async function chatNow(run: LiveRun, user: EvalUser, input: ChatInput) {
+	const { env, options } = run;
+	const { userId } = user;
+	const { projectId, workspaceId } = user.project;
+	const extraParts = input.extraParts ?? [];
+	const record: ChatRecord = {
+		sessionId: null,
+		state: "not-started",
+		elapsedMs: 0,
+		inputTokens: null,
+		outputTokens: null,
+		cachedTokens: null,
+		memoryAttached: false,
+		activity: null,
+		errors: [],
+	};
+	let vmId: string | undefined;
+	let verified: { passed: boolean; output: string } | null = null;
+	let finalItems: ReturnType<LiveEnvironment["sessionItemsFromUnknown"]> = [];
+	try {
+		const session = await env.sessions.insertAgentSession({
+			userId,
+			projectId,
+			workspaceId,
+			harness: "codex",
+			title: input.title,
+			listedModelId: options.model,
+		});
+		record.sessionId = session.id;
+		const turnSeconds = Math.ceil(options.turnTimeoutMs / 1000);
+		const created = await env.client.vms.create({
+			slug: `ytimesy-ag-${session.id.replaceAll("-", "").slice(0, 16)}`,
+			snapshotId: env.bootSnapshotId,
+			firewall: env.GUEST_INTERNET_FIREWALL,
+			ttlSeconds: turnSeconds + 600,
+			maxRunTotalSeconds: turnSeconds + 300,
+			idleTimeoutSeconds: 300,
+			automaticRestart: false,
+			metadata: { purpose: "ytimesy-memory-eval" },
+		});
+		vmId = created.vmId;
+		run.liveVms.add(vmId);
+		await user.trackVm(vmId);
+		await env.sessions.saveAgentSessionProviderRef(session.id, vmId);
+		await env.waitUntilVmRunning(created.vm, "Memory eval");
+		const workspace = env.WorkspaceId(vmId);
+		const dir = await writeFixtureRepo(
+			env,
+			workspace,
+			user.project.dirName,
+			input.files,
+		);
+		await env.db.query("update agent_session set status='ready' where id=$1", [
+			session.id,
 		]);
-		liveProjects.delete(id);
+		await env.withBackgroundJobDispatcher(
+			async () => {},
+			() =>
+				env.sendSubscriptionTask(
+					{ userId, projectId, sessionId: session.id },
+					{
+						modelId: options.model,
+						text: `${input.prompt}${PROMPT_SUFFIX}`,
+						variant: options.effort,
+					},
+				),
+		);
+		if (extraParts.length) await attachExtraParts(env, session.id, extraParts);
+		const started = Date.now();
+		await admitTurn(env, session.id, started);
+		finalItems = await followTurn(run, userId, session.id, record, {
+			started,
+			watchSupermemory: extraParts.length > 0,
+		});
+		record.elapsedMs = Date.now() - started;
+		record.activity = chatMemoryActivity(finalItems);
+		record.supermemoryCalls = finalItems.flatMap((item) =>
+			(item.kind === "mcpToolCall" && item.server === "supermemory") ||
+			(item.kind === "dynamicToolCall" && /supermemory/i.test(item.tool))
+				? [item.tool]
+				: [],
+		);
+		if (input.verify) {
+			const result = await env.machines.exec(
+				workspace,
+				`cd '${dir}' && ${shellCommand(input.verify)}`,
+				60_000,
+			);
+			verified = {
+				passed: result.exitCode === 0,
+				output: `${result.stdout}${result.stderr}`.trim().slice(-400),
+			};
+		}
+	} catch (error) {
+		record.errors.push(error instanceof Error ? error.message : String(error));
+	} finally {
+		if (record.sessionId)
+			await env.cancelServerTurn(userId, record.sessionId).catch(() => {});
+		if (vmId) {
+			const id = vmId;
+			await env.client.vms
+				.delete(id)
+				.then(() => run.liveVms.delete(id))
+				.catch(() => {});
+		}
 	}
+	return { record, verified, items: finalItems };
+}
 
-	async function deleteRepo(name: string) {
-		await run("npx", [
-			"wrangler",
-			"artifacts",
-			"repos",
-			"delete",
-			name,
-			"--namespace",
-			NAMESPACE,
-			"-y",
-		]).catch(() => {});
-		liveRepos.delete(name);
+/** Writes `files` under ~/`dirName` on the VM as a one-commit repo; returns its path. */
+async function writeFixtureRepo(
+	env: LiveEnvironment,
+	workspace: ReturnType<LiveEnvironment["WorkspaceId"]>,
+	dirName: string,
+	files: Record<string, string>,
+) {
+	const home = (
+		await env.machines.exec(workspace, 'printf %s "$HOME"', 15_000)
+	).stdout.trim();
+	if (!home.startsWith("/")) throw new Error("VM home is unavailable.");
+	const dir = `${home}/${dirName}`;
+	const directories = new Set(
+		Object.keys(files)
+			.filter((path) => path.includes("/"))
+			.map((path) => `${dir}/${path.slice(0, path.lastIndexOf("/"))}`),
+	);
+	await env.machines.exec(
+		workspace,
+		`mkdir -p ${[dir, ...directories].map((path) => `'${path}'`).join(" ")}`,
+		15_000,
+	);
+	for (const [path, content] of Object.entries(files))
+		await env.machines.writeTextFile(workspace, `${dir}/${path}`, content);
+	const setup = await env.machines.exec(
+		workspace,
+		`${fixtureRepoScript(dir)} && printf '%s\\n' '${dir}' > /tmp/ytimesy-project-cwd`,
+		20_000,
+	);
+	if (setup.exitCode) throw new Error("Fixture repository setup failed.");
+	return dir;
+}
+
+/**
+ * Adds context a competitor's hooks would add, as extra text parts on the
+ * queued user message (where our read hook puts memory), before admission.
+ */
+async function attachExtraParts(
+	env: LiveEnvironment,
+	sessionId: string,
+	extraParts: readonly string[],
+) {
+	const queued = (
+		await env.db.query<{
+			id: string;
+			messages: { role: string; content: unknown }[];
+		}>(
+			"select id,messages from api_turn where session_id=$1 and state='queued' order by created_at desc limit 1",
+			[sessionId],
+		)
+	).rows[0];
+	const messages = [...(queued?.messages ?? [])];
+	const index = messages.map((m) => m.role).lastIndexOf("user");
+	if (!queued || index < 0)
+		throw new Error("No queued user message to attach context to.");
+	const own = messages[index].content;
+	messages[index] = {
+		...messages[index],
+		content: [
+			...(typeof own === "string"
+				? [{ type: "text", text: own }]
+				: (own as unknown[])),
+			...extraParts.map((text) => ({ type: "text", text })),
+		],
+	};
+	const updated = await env.db.query(
+		"update api_turn set messages=$2::jsonb,updated_at=now() where id=$1 and state='queued'",
+		[queued.id, JSON.stringify(messages)],
+	);
+	if (updated.rowCount !== 1)
+		throw new Error("The turn left the queue before context was attached.");
+}
+
+/** Claims and dispatches the queued turn, as the dev edge's admission would. */
+async function admitTurn(
+	env: LiveEnvironment,
+	sessionId: string,
+	started: number,
+) {
+	while (Date.now() - started < 120_000) {
+		const turn = await env.claimApiTurn(1, 64, "durable-object", sessionId);
+		if (turn?.lease_id) {
+			await env.dispatchModelWorkflow(turn);
+			return;
+		}
+		if ((await env.turnState(sessionId))?.state !== "queued") return;
+		await delay(2000);
 	}
+	throw new Error("Turn was not admitted within two minutes.");
+}
 
-	async function turnState(sessionId: string) {
-		return (
-			await db.query<{ state: string; items: unknown; messages: unknown }>(
-				"select t.state,s.items,t.messages from api_turn t join agent_session s on s.id=t.session_id where t.session_id=$1 order by t.created_at desc limit 1",
-				[sessionId],
+/**
+ * Polls the turn until it settles, recording its usage and whether memory
+ * (or Supermemory's parts) reached the model; cancels it past the timeout.
+ */
+async function followTurn(
+	run: LiveRun,
+	userId: string,
+	sessionId: string,
+	record: ChatRecord,
+	{ started, watchSupermemory }: { started: number; watchSupermemory: boolean },
+) {
+	const { env } = run;
+	const { turnTimeoutMs } = run.options;
+	let items: ReturnType<LiveEnvironment["sessionItemsFromUnknown"]> = [];
+	let cancelled = false;
+	for (;;) {
+		const state = await env.turnState(sessionId);
+		items = env.sessionItemsFromUnknown(state?.items);
+		record.state = state?.state ?? "missing";
+		const usage = items.find((item) => item.kind === "userMessage")?.apiUsage;
+		if (usage) {
+			record.inputTokens = usage.inputTokens;
+			record.outputTokens = usage.outputTokens;
+			record.cachedTokens = usage.cacheReadTokens;
+		}
+		const sent = JSON.stringify(state?.messages ?? []);
+		record.memoryAttached = sent.includes(MEMORY_PART_OPEN);
+		if (watchSupermemory)
+			record.supermemoryAttached = sent.includes("<supermemory-");
+		if (state && !["queued", "running"].includes(state.state)) return items;
+		if (Date.now() > started + turnTimeoutMs && !cancelled) {
+			cancelled = true;
+			record.errors.push(`Cancelled: exceeded ${turnTimeoutMs / 1000}s.`);
+			await env.cancelServerTurn(userId, sessionId);
+		}
+		if (Date.now() > started + turnTimeoutMs + 60_000) {
+			record.state = "unsettled";
+			return items;
+		}
+		await delay(2000);
+	}
+}
+
+/**
+ * Writes memory files before any chat, through the same Worker-side Git
+ * writer dreaming uses, with a short-lived token from wrangler.
+ */
+async function seedRepo(name: string, files: Record<string, string>) {
+	const created = await runCommand("npx", [
+		"wrangler",
+		"artifacts",
+		"repos",
+		"create",
+		name,
+		"--namespace",
+		MEMORY_NAMESPACE,
+		"--default-branch",
+		"main",
+		"--json",
+	]);
+	const { remote, token } = JSON.parse(created.stdout) as {
+		remote: string;
+		token: string;
+	};
+	const { pushChanges } = await import("../src/server/adapters/memory-repos");
+	const http = (await import("isomorphic-git/http/web")).default;
+	const outcome = await pushChanges({
+		http,
+		remote,
+		token: token.split("?expires=")[0],
+		base: { head: null, files: {} },
+		changes: Object.entries(files).map(([path, content]) => ({
+			path,
+			content,
+		})),
+		message: "Seed memory for the eval",
+	});
+	if (outcome === "raced" || !outcome.ok)
+		throw new Error(`Seeding ${name} failed.`);
+}
+
+/** Dreams now instead of after the idle delay, and waits for it to finish. */
+async function dreamNow(run: LiveRun, userId: string, after: Date) {
+	const { env } = run;
+	await env.dispatchBackgroundJob({
+		id: randomUUID(),
+		kind: "memory",
+		action: "dream",
+		userId,
+	});
+	const deadline = Date.now() + run.options.dreamTimeoutMs;
+	while (Date.now() < deadline) {
+		const row = (
+			await env.db.query<{ outcome: string }>(
+				"select outcome from memory_model_usage where user_id=$1 and kind='dream' and created_at>$2 order by created_at desc limit 1",
+				[userId, after],
 			)
 		).rows[0];
+		if (row) return row.outcome;
+		await delay(5000);
 	}
+	return "timeout";
+}
 
-	/** One chat: a new session on a fresh VM with `files`, one prompt, until settled. */
-	/** One chat, in a Codex slot shared with every other eval process. */
-	function chat(...args: Parameters<typeof chatNow>) {
-		return withSlot(
-			"codex",
-			SLOT_LIMITS.codex,
-			() => chatNow(...args),
-			() => stopping,
+async function memoryCosts(
+	env: LiveEnvironment,
+	userId: string,
+	since: Date,
+): Promise<MemoryCost[]> {
+	return (
+		await env.db.query<{
+			kind: string;
+			calls: string;
+			input: string | null;
+			output: string | null;
+			cached: string | null;
+		}>(
+			`select kind,count(*) as calls,sum(input_tokens) as input,sum(output_tokens) as output,sum(cache_read_tokens) as cached
+			 from memory_model_usage where user_id=$1 and created_at>$2 group by kind order by kind`,
+			[userId, since],
+		)
+	).rows.map((row) => ({
+		kind: row.kind,
+		calls: Number(row.calls),
+		inputTokens: Number(row.input ?? 0),
+		outputTokens: Number(row.output ?? 0),
+		cachedTokens: Number(row.cached ?? 0),
+	}));
+}
+
+function scenarioRecord(
+	user: EvalUser,
+	arm: string,
+	scenario: Scenario,
+	attempt: number,
+	variantRun: VariantRun,
+	repo: string | null,
+): ScenarioRecord {
+	return {
+		arm,
+		scenario: scenario.id,
+		attempt,
+		evalUser: user.userId,
+		variant: variantRun.label,
+		variantName: variantRun.name,
+		elapsedMs: 0,
+		repo,
+		passed: null,
+		verifierOutput: "",
+		dream: "none",
+		setup: [],
+		chat2: null,
+		memoryCosts: [],
+		repoCommits: null,
+		errors: [],
+	};
+}
+
+/**
+ * The repo's commit subjects by writer, read through a short-lived read-only
+ * token before the run's user (and repo) is released.
+ */
+async function repoCommits(name: string): Promise<RepoCommits | null> {
+	const dir = await mkdtemp(join(tmpdir(), "memory-eval-repo-"));
+	try {
+		const [info, token] = await Promise.all(
+			[
+				["get", name, "--namespace", MEMORY_NAMESPACE, "--json"],
+				[
+					"issue-token",
+					name,
+					"--namespace",
+					MEMORY_NAMESPACE,
+					"--scope",
+					"read",
+					"--ttl",
+					"300",
+					"--json",
+				],
+			].map(async (args) =>
+				JSON.parse(
+					(
+						await runCommand(
+							"npx",
+							["wrangler", "artifacts", "repos", ...args],
+							{ timeout: 60_000 },
+						)
+					).stdout,
+				),
+			),
 		);
-	}
-
-	async function chatNow(
-		user: EvalUser,
-		{ projectId, workspaceId }: { projectId: string; workspaceId: string },
-		title: string,
-		files: Record<string, string>,
-		prompt: string,
-		verify?: string,
-		extraParts: readonly string[] = [],
-	) {
-		const { userId } = user;
-		const repoName = user.project.dirName;
-		const record: ChatRecord = {
-			sessionId: null,
-			state: "not-started",
-			elapsedMs: 0,
-			inputTokens: null,
-			outputTokens: null,
-			cachedTokens: null,
-			memoryAttached: false,
-			errors: [],
-		};
-		let vmId: string | undefined;
-		let verified: { passed: boolean; output: string } | null = null;
-		let finalItems: ReturnType<typeof sessionItemsFromUnknown> = [];
-		try {
-			const session = await sessions.insertAgentSession({
-				userId,
-				projectId,
-				workspaceId,
-				harness: "codex",
-				title,
-				listedModelId: model,
-			});
-			record.sessionId = session.id;
-			const created = await client.vms.create({
-				slug: `ytimesy-ag-${session.id.replaceAll("-", "").slice(0, 16)}`,
-				snapshotId: bootSnapshotId,
-				firewall: GUEST_INTERNET_FIREWALL,
-				ttlSeconds: Math.ceil(turnTimeoutMs / 1000) + 600,
-				maxRunTotalSeconds: Math.ceil(turnTimeoutMs / 1000) + 300,
-				idleTimeoutSeconds: 300,
-				automaticRestart: false,
-				metadata: { purpose: "ytimesy-memory-eval" },
-			});
-			vmId = created.vmId;
-			liveVms.add(vmId);
-			await user.trackVm(vmId);
-			await sessions.saveAgentSessionProviderRef(session.id, vmId);
-			await waitUntilVmRunning(created.vm, "Memory eval");
-			const workspace = WorkspaceId(vmId);
-			const home = (
-				await machines.exec(workspace, 'printf %s "$HOME"', 15_000)
-			).stdout.trim();
-			if (!home.startsWith("/")) throw new Error("VM home is unavailable.");
-			const dir = `${home}/${repoName}`;
-			const directories = new Set(
-				Object.keys(files)
-					.filter((path) => path.includes("/"))
-					.map((path) => `${dir}/${path.slice(0, path.lastIndexOf("/"))}`),
-			);
-			await machines.exec(
-				workspace,
-				`mkdir -p ${[dir, ...directories].map((path) => `'${path}'`).join(" ")}`,
-				15_000,
-			);
-			for (const [path, content] of Object.entries(files))
-				await machines.writeTextFile(workspace, `${dir}/${path}`, content);
-			const setup = await machines.exec(
-				workspace,
-				`${fixtureRepoScript(dir)} && printf '%s\\n' '${dir}' > /tmp/ytimesy-project-cwd`,
-				20_000,
-			);
-			if (setup.exitCode) throw new Error("Fixture repository setup failed.");
-			await db.query("update agent_session set status='ready' where id=$1", [
-				session.id,
-			]);
-			await withBackgroundJobDispatcher(
-				async () => {},
-				() =>
-					sendSubscriptionTask(
-						{ userId, projectId, sessionId: session.id },
-						{
-							modelId: model,
-							text: `${prompt}${PROMPT_SUFFIX}`,
-							variant: effort,
-						},
-					),
-			);
-			// Context a competitor's hooks would add, as extra text parts on the
-			// queued user message (where our read hook puts memory), before admission.
-			if (extraParts.length) {
-				const queued = (
-					await db.query<{
-						id: string;
-						messages: { role: string; content: unknown }[];
-					}>(
-						"select id,messages from api_turn where session_id=$1 and state='queued' order by created_at desc limit 1",
-						[session.id],
-					)
-				).rows[0];
-				const messages = [...(queued?.messages ?? [])];
-				const index = messages.map((m) => m.role).lastIndexOf("user");
-				if (!queued || index < 0)
-					throw new Error("No queued user message to attach context to.");
-				const own = messages[index].content;
-				messages[index] = {
-					...messages[index],
-					content: [
-						...(typeof own === "string"
-							? [{ type: "text", text: own }]
-							: (own as unknown[])),
-						...extraParts.map((text) => ({ type: "text", text })),
-					],
-				};
-				const updated = await db.query(
-					"update api_turn set messages=$2::jsonb,updated_at=now() where id=$1 and state='queued'",
-					[queued.id, JSON.stringify(messages)],
-				);
-				if (updated.rowCount !== 1)
-					throw new Error(
-						"The turn left the queue before context was attached.",
-					);
-			}
-			const started = Date.now();
-			let admitted = false;
-			while (!admitted && Date.now() - started < 120_000) {
-				const turn = await claimApiTurn(1, 64, "durable-object", session.id);
-				if (turn?.lease_id) {
-					await dispatchModelWorkflow(turn);
-					admitted = true;
-				} else if ((await turnState(session.id))?.state !== "queued")
-					admitted = true;
-				else await delay(2000);
-			}
-			if (!admitted)
-				throw new Error("Turn was not admitted within two minutes.");
-			let cancelled = false;
-			for (;;) {
-				const state = await turnState(session.id);
-				const items = sessionItemsFromUnknown(state?.items);
-				record.state = state?.state ?? "missing";
-				const usage = items.find(
-					(item) => item.kind === "userMessage",
-				)?.apiUsage;
-				if (usage) {
-					record.inputTokens = usage.inputTokens;
-					record.outputTokens = usage.outputTokens;
-					record.cachedTokens = usage.cacheReadTokens;
-				}
-				const sent = JSON.stringify(state?.messages ?? []);
-				record.memoryAttached = sent.includes(MEMORY_PART_OPEN);
-				if (extraParts.length)
-					record.supermemoryAttached = sent.includes("<supermemory-");
-				finalItems = items;
-				if (state && !["queued", "running"].includes(state.state)) break;
-				if (Date.now() > started + turnTimeoutMs && !cancelled) {
-					cancelled = true;
-					record.errors.push(`Cancelled: exceeded ${turnTimeoutMs / 1000}s.`);
-					await cancelServerTurn(userId, session.id);
-				}
-				if (Date.now() > started + turnTimeoutMs + 60_000) {
-					record.state = "unsettled";
-					break;
-				}
-				await delay(2000);
-			}
-			record.elapsedMs = Date.now() - started;
-			record.supermemoryCalls = finalItems.flatMap((item) =>
-				(item.kind === "mcpToolCall" && item.server === "supermemory") ||
-				(item.kind === "dynamicToolCall" && /supermemory/i.test(item.tool))
-					? [item.kind === "mcpToolCall" ? item.tool : item.tool]
-					: [],
-			);
-			if (verify) {
-				const result = await machines.exec(
-					workspace,
-					`cd '${dir}' && ${shellCommand(verify)}`,
-					60_000,
-				);
-				verified = {
-					passed: result.exitCode === 0,
-					output: `${result.stdout}${result.stderr}`.trim().slice(-400),
-				};
-			}
-		} catch (error) {
-			record.errors.push(
-				error instanceof Error ? error.message : String(error),
-			);
-		} finally {
-			if (record.sessionId)
-				await cancelServerTurn(userId, record.sessionId).catch(() => {});
-			if (vmId) {
-				const id = vmId;
-				await client.vms
-					.delete(id)
-					.then(() => liveVms.delete(id))
-					.catch(() => {});
-			}
-		}
-		return { record, verified, items: finalItems };
-	}
-
-	/**
-	 * Writes memory files before any chat, through the same Worker-side Git
-	 * writer dreaming uses, with a short-lived token from wrangler.
-	 */
-	async function seedRepo(name: string, files: Record<string, string>) {
-		const created = await run("npx", [
-			"wrangler",
-			"artifacts",
-			"repos",
-			"create",
-			name,
-			"--namespace",
-			NAMESPACE,
-			"--default-branch",
-			"main",
-			"--json",
-		]);
-		const { remote, token } = JSON.parse(created.stdout) as {
-			remote: string;
-			token: string;
-		};
-		const { pushChanges } = await import("../src/server/adapters/memory-repos");
-		const http = (await import("isomorphic-git/http/web")).default;
-		const outcome = await pushChanges({
-			http,
-			remote,
-			token: token.split("?expires=")[0],
-			base: { head: null, files: {} },
-			changes: Object.entries(files).map(([path, content]) => ({
-				path,
-				content,
-			})),
-			message: "Seed memory for the eval",
-		});
-		if (outcome === "raced" || !outcome.ok)
-			throw new Error(`Seeding ${name} failed.`);
-	}
-
-	/** Dreams now instead of after the idle delay, and waits for it to finish. */
-	async function dreamNow(userId: string, after: Date) {
-		await dispatchBackgroundJob({
-			id: randomUUID(),
-			kind: "memory",
-			action: "dream",
-			userId,
-		});
-		const deadline = Date.now() + dreamTimeoutMs;
-		while (Date.now() < deadline) {
-			const row = (
-				await db.query<{ outcome: string }>(
-					"select outcome from memory_model_usage where user_id=$1 and kind='dream' and created_at>$2 order by created_at desc limit 1",
-					[userId, after],
-				)
-			).rows[0];
-			if (row) return row.outcome;
-			await delay(5000);
-		}
-		return "timeout";
-	}
-
-	async function memoryCosts(
-		userId: string,
-		since: Date,
-	): Promise<MemoryCost[]> {
-		return (
-			await db.query<{
-				kind: string;
-				calls: string;
-				input: string | null;
-				output: string | null;
-				cached: string | null;
-			}>(
-				`select kind,count(*) as calls,sum(input_tokens) as input,sum(output_tokens) as output,sum(cache_read_tokens) as cached
-				 from memory_model_usage where user_id=$1 and created_at>$2 group by kind order by kind`,
-				[userId, since],
-			)
-		).rows.map((row) => ({
-			kind: row.kind,
-			calls: Number(row.calls),
-			inputTokens: Number(row.input ?? 0),
-			outputTokens: Number(row.output ?? 0),
-			cachedTokens: Number(row.cached ?? 0),
-		}));
-	}
-
-	async function runScenario(
-		user: EvalUser,
-		arm: string,
-		scenario: Scenario,
-		attempt: number,
-	): Promise<ScenarioRecord> {
-		if (arm === "supermemory")
-			return runSupermemoryScenario(user, scenario, attempt);
-		const started = new Date();
-		const repo =
-			arm === "off"
-				? null
-				: `memory-eval-${arm}-${scenario.id}-${randomUUID().slice(0, 8)}`;
-		const result: ScenarioRecord = {
-			arm,
-			scenario: scenario.id,
-			attempt,
-			evalUser: user.asOwner ? "owner" : user.userId,
-			variant: variantLabel,
-			elapsedMs: 0,
-			repo,
-			passed: null,
-			verifierOutput: "",
-			dream: "none",
-			setup: [],
-			chat2: null,
-			memoryCosts: [],
-			errors: [],
-		};
-		const project = await throwawayProject(user);
-		try {
-			await setEvalMemory(user, arm as "off" | "spec" | "full", repo);
-			// An eval user's repos are deleted when the user is released.
-			if (repo && user.asOwner) liveRepos.add(repo);
-			if (arm !== "off") {
-				if (repo && scenario.seed) await seedRepo(repo, scenario.seed);
-				const dreams: string[] = [];
-				for (const [index, setup] of setupChats(scenario).entries()) {
-					const done = await chat(
-						user,
-						project,
-						`Memory eval ${scenario.id} chat ${index + 1}`,
-						setup.files,
-						setup.prompt,
-					);
-					result.setup.push(done.record);
-					// The save hook (full) is queued when the chat's turn completes.
-					if (arm === "full") await delay(30_000);
-					dreams.push(await dreamNow(user.userId, new Date()));
-				}
-				result.dream = dreams.join(",") || "none";
-			}
-			const second = await chat(
-				user,
-				project,
-				`Memory eval ${scenario.id} chat 2`,
-				scenario.chat2.files,
-				scenario.chat2.prompt,
-				scenario.verify,
-			);
-			result.chat2 = second.record;
-			result.passed = second.verified?.passed ?? null;
-			result.verifierOutput = second.verified?.output ?? "";
-			// Chat 2's own save hook may still be running; let it land in the costs.
-			if (arm === "full") await delay(20_000);
-			result.memoryCosts = await memoryCosts(user.userId, started);
-		} catch (error) {
-			result.errors.push(
-				error instanceof Error ? error.message : String(error),
-			);
-		} finally {
-			await dropProject(user, project.projectId).catch(() => {});
-			if (repo && user.asOwner && !flags["keep-repos"]) await deleteRepo(repo);
-		}
-		result.elapsedMs = Date.now() - started.getTime();
-		console.log(
-			`[${arm}${repeat > 1 ? ` #${attempt}` : ""}${variantLabel === "default" ? "" : ` ${variantLabel}`}] ${scenario.id}: ${result.passed === null ? "no verdict" : result.passed ? "PASS" : "fail"} (dream ${result.dream}${result.chat2?.memoryAttached ? ", memory attached to chat 2" : ""})${result.errors.length ? ` errors: ${result.errors.join("; ")}` : ""}`,
+		const remote = String(info.remote ?? "");
+		const secret = String(token.plaintext ?? token.token ?? "").split(
+			"?expires=",
+		)[0];
+		if (!remote.startsWith("https://") || !secret) return null;
+		await runCommand(
+			"git",
+			[
+				"-c",
+				`http.extraHeader=Authorization: Bearer ${secret}`,
+				"clone",
+				"-q",
+				remote,
+				dir,
+			],
+			{ timeout: 60_000 },
 		);
-		return result;
+		const log = await runCommand("git", ["-C", dir, "log", "--format=%s"]);
+		return repoCommitsByWriter(log.stdout.split("\n").filter(Boolean));
+	} catch {
+		return null;
+	} finally {
+		await rm(dir, { recursive: true, force: true });
 	}
+}
 
-	/**
-	 * Supermemory's Claude Code plugin with its defaults: our memory off; each
-	 * setup chat captured (capture.js) into a fresh container and processed;
-	 * the final chat gets session-start's profile and the prompt recall as
-	 * extra text parts. Their MCP search tools are not offered (see notes).
-	 */
-	async function runSupermemoryScenario(
-		user: EvalUser,
-		scenario: Scenario,
-		attempt: number,
-	): Promise<ScenarioRecord> {
-		const repoName = user.project.dirName;
-		if (!sm) throw new Error("Supermemory is not configured.");
-		const started = new Date();
-		const containerTag = `ytimesy-eval-${scenario.id}-${randomUUID().slice(0, 8)}`;
-		const record: SupermemoryRecord = {
-			containerTag,
-			documents: [],
-			profileItems: 0,
-			recallQuery: null,
-			searchHits: [],
-			recalled: 0,
-			injectedLines: 0,
-			injectedChars: 0,
-			cleanup: "pending",
-		};
-		const result: ScenarioRecord = {
-			arm: "supermemory",
-			scenario: scenario.id,
-			attempt,
-			evalUser: user.asOwner ? "owner" : user.userId,
-			variant: variantLabel,
-			elapsedMs: 0,
-			repo: null,
-			passed: null,
-			verifierOutput: "",
-			dream: "none",
-			setup: [],
-			chat2: null,
-			memoryCosts: [],
-			supermemory: record,
-			errors: [],
-		};
-		const project = await throwawayProject(user);
-		liveContainers.add(containerTag);
-		const ingest = async (
-			source: string,
-			content: string,
-			customId: string,
-			metadata: Record<string, string>,
-		) => {
-			const begun = Date.now();
-			const doc = await sm.addDocument(
-				content,
-				containerTag,
-				customId,
-				{
-					project: repoName,
-					sm_scope: "personal",
-					sm_capture_mode: "automatic",
-					timestamp: new Date().toISOString(),
-					...metadata,
-				},
-				smDreaming,
-			);
-			const waited = await waitProcessed(sm, [doc.id], smWaitMs);
-			record.documents.push({
-				source,
-				chars: content.length,
-				...waited,
-				ingestMs: Date.now() - begun,
-			});
-		};
-		try {
-			await setEvalMemory(user, "off", null);
-			// Seeded memory (expired-rule): the same lines as one document.
-			const seeded = scenario.seed?.["MEMORY.md"];
-			if (seeded)
-				await ingest("seed", seeded, `seed-${randomUUID()}`, { type: "seed" });
+const errorText = (error: unknown) =>
+	error instanceof Error ? error.message : String(error);
+
+/** One (arm, scenario, repeat) on our memory: off, spec or full. */
+async function runScenario(
+	run: LiveRun,
+	user: EvalUser,
+	arm: string,
+	scenario: Scenario,
+	attempt: number,
+	variantRun: VariantRun,
+): Promise<ScenarioRecord> {
+	if (arm === "supermemory")
+		return runSupermemoryScenario(run, user, scenario, attempt, variantRun);
+	const { repeat } = run.options;
+	const tag = `[${arm}${repeat > 1 ? ` #${attempt}` : ""}${variantRun.label === "default" ? "" : ` ${variantRun.label}`}]`;
+	const started = new Date();
+	const repo =
+		arm === "off"
+			? null
+			: `memory-eval-${arm}-${scenario.id}-${randomUUID().slice(0, 8)}`;
+	const result = scenarioRecord(user, arm, scenario, attempt, variantRun, repo);
+	try {
+		// The repo is deleted when the eval user is released.
+		await user.setMemory(arm as "off" | "spec" | "full", repo);
+		if (arm !== "off") {
+			if (repo && scenario.seed) await seedRepo(repo, scenario.seed);
+			const dreams: string[] = [];
 			for (const [index, setup] of setupChats(scenario).entries()) {
-				const turnStarted = new Date().toISOString();
-				const done = await chat(
-					user,
-					project,
-					`Memory eval ${scenario.id} chat ${index + 1}`,
-					setup.files,
-					setup.prompt,
-				);
-				result.setup.push(done.record);
-				const content = captureText(done.items, turnStarted);
-				if (!content || !done.record.sessionId) {
-					result.errors.push(`Setup chat ${index + 1} had nothing to capture.`);
-					continue;
-				}
-				await ingest(`chat${index + 1}`, content, done.record.sessionId, {
-					type: "session_turn",
+				const done = await chat(run, user, {
+					title: `Memory eval ${scenario.id} chat ${index + 1}`,
+					files: setup.files,
+					prompt: setup.prompt,
 				});
+				result.setup.push(done.record);
+				// The save hook (full) is queued when the chat's turn completes.
+				if (arm === "full") await delay(30_000);
+				dreams.push(await dreamNow(run, user.userId, new Date()));
 			}
-			result.dream = record.documents
-				.map(
-					(doc) =>
-						`${doc.source} ${Math.round(doc.ingestMs / 1000)}s ${doc.statuses.join("/")}`,
-				)
-				.join(", ");
-			// session-start.js (profile, q = project name), then recall-directive.js.
-			const prompt = `${scenario.chat2.prompt}${PROMPT_SUFFIX}`;
-			const startProfile = await sm
-				.profile(containerTag, repoName)
-				.catch(() => null);
-			const start = sessionStartContext(startProfile, containerTag, repoName);
-			record.profileItems = start.items;
-			record.recallQuery = recallQuery(prompt);
-			let recall: string | null = null;
-			if (record.recallQuery) {
-				const searched: ProfileResponse | null = await sm
-					.profile(containerTag, record.recallQuery)
-					.catch(() => null);
-				record.searchHits = (searched?.searchResults?.results ?? []).map(
-					(hit) => ({
-						similarity: Number.isFinite(hit.similarity)
-							? (hit.similarity as number)
-							: null,
-						text: (
-							hit.memory ??
-							hit.chunk ??
-							hit.content ??
-							hit.text ??
-							""
-						).slice(0, 200),
-					}),
-				);
-				const hits = recalledResults(searched);
-				record.recalled = hits.length;
-				recall = recallContext(hits, containerTag);
-			}
-			const parts = [start.text, ...(recall ? [recall] : [])];
-			record.injectedChars = parts.join("\n").length;
-			record.injectedLines = parts
-				.join("\n")
-				.split("\n")
-				.filter((line) => line.startsWith("- ◪")).length;
-			const second = await chat(
-				user,
-				project,
-				`Memory eval ${scenario.id} chat 2`,
-				scenario.chat2.files,
-				scenario.chat2.prompt,
-				scenario.verify,
-				parts,
-			);
-			result.chat2 = second.record;
-			result.passed = second.verified?.passed ?? null;
-			result.verifierOutput = second.verified?.output ?? "";
-			result.memoryCosts = await memoryCosts(user.userId, started);
-		} catch (error) {
-			result.errors.push(
-				error instanceof Error ? error.message : String(error),
-			);
-		} finally {
-			await dropProject(user, project.projectId).catch(() => {});
-			record.cleanup = await sm.deleteContainer(containerTag).then(
-				(done) =>
-					`deleted ${done.deletedDocumentsCount} documents, ${done.deletedMemoriesCount} memories`,
-				(error: Error) => `cleanup failed: ${error.message}`,
-			);
-			liveContainers.delete(containerTag);
+			result.dream = dreams.join(",") || "none";
 		}
-		result.elapsedMs = Date.now() - started.getTime();
-		console.log(
-			`[supermemory] ${scenario.id}: ${result.passed === null ? "no verdict" : result.passed ? "PASS" : "fail"} (ingest ${result.dream || "none"}; injected ${record.injectedLines} lines/${record.injectedChars} chars, recalled ${record.recalled}, profile ${record.profileItems}; top hit ${record.searchHits[0]?.similarity?.toFixed(3) ?? "-"})${result.errors.length ? ` errors: ${result.errors.join("; ")}` : ""}`,
-		);
-		return result;
+		const second = await chat(run, user, {
+			title: `Memory eval ${scenario.id} chat 2`,
+			files: scenario.chat2.files,
+			prompt: scenario.chat2.prompt,
+			verify: scenario.verify,
+		});
+		result.chat2 = second.record;
+		result.passed = second.verified?.passed ?? null;
+		result.verifierOutput = second.verified?.output ?? "";
+		// Chat 2's own save hook may still be running; let it land in the costs.
+		if (arm === "full") await delay(20_000);
+		result.memoryCosts = await memoryCosts(run.env, user.userId, started);
+		if (repo) result.repoCommits = await repoCommits(repo);
+	} catch (error) {
+		result.errors.push(errorText(error));
 	}
+	result.elapsedMs = Date.now() - started.getTime();
+	const agentCommits = result.setup.reduce(
+		(total, chat) => total + (chat.activity?.memoryCommits ?? 0),
+		0,
+	);
+	console.log(
+		`${tag} ${scenario.id}: ${result.passed === null ? "no verdict" : result.passed ? "PASS" : "fail"} (dream ${result.dream}${result.chat2?.memoryAttached ? ", memory attached to chat 2" : ""}; setup agent commits ${agentCommits}; repo commits ${result.repoCommits ? `agent ${result.repoCommits.agent}/hook ${result.repoCommits.saveHook}/dream ${result.repoCommits.dream}` : "unread"})${result.errors.length ? ` errors: ${result.errors.join("; ")}` : ""}`,
+	);
+	return result;
+}
 
-	let stopping = false;
-	onEvalStop(() => {
-		stopping = true;
-	});
-	const results: ScenarioRecord[] = [];
-	const started = Date.now();
+/**
+ * Supermemory's Claude Code plugin with its defaults: our memory off; each
+ * setup chat captured (capture.js) into a fresh container and processed;
+ * the final chat gets session-start's profile and the prompt recall as
+ * extra text parts. Their MCP search tools are not offered (see notes).
+ */
+async function runSupermemoryScenario(
+	run: LiveRun,
+	user: EvalUser,
+	scenario: Scenario,
+	attempt: number,
+	variantRun: VariantRun,
+): Promise<ScenarioRecord> {
+	const { sm } = run;
+	const { smDreaming, smWaitMs } = run.options;
+	const repoName = user.project.dirName;
+	if (!sm) throw new Error("Supermemory is not configured.");
+	const started = new Date();
+	const containerTag = `ytimesy-eval-${scenario.id}-${randomUUID().slice(0, 8)}`;
+	const record: SupermemoryRecord = {
+		containerTag,
+		documents: [],
+		profileItems: 0,
+		recallQuery: null,
+		searchHits: [],
+		recalled: 0,
+		injectedLines: 0,
+		injectedChars: 0,
+		cleanup: "pending",
+	};
+	const result = scenarioRecord(
+		user,
+		"supermemory",
+		scenario,
+		attempt,
+		variantRun,
+		null,
+	);
+	result.supermemory = record;
+	run.liveContainers.add(containerTag);
+	const ingest = async (
+		source: string,
+		content: string,
+		customId: string,
+		metadata: Record<string, string>,
+	) => {
+		const begun = Date.now();
+		const doc = await sm.addDocument(
+			content,
+			containerTag,
+			customId,
+			{
+				project: repoName,
+				sm_scope: "personal",
+				sm_capture_mode: "automatic",
+				timestamp: new Date().toISOString(),
+				...metadata,
+			},
+			smDreaming,
+		);
+		const waited = await waitProcessed(sm, [doc.id], smWaitMs);
+		record.documents.push({
+			source,
+			chars: content.length,
+			...waited,
+			ingestMs: Date.now() - begun,
+		});
+	};
+	try {
+		await user.setMemory("off", null);
+		// Seeded memory (expired-rule): the same lines as one document.
+		const seeded = scenario.seed?.["MEMORY.md"];
+		if (seeded)
+			await ingest("seed", seeded, `seed-${randomUUID()}`, { type: "seed" });
+		for (const [index, setup] of setupChats(scenario).entries()) {
+			const turnStarted = new Date().toISOString();
+			const done = await chat(run, user, {
+				title: `Memory eval ${scenario.id} chat ${index + 1}`,
+				files: setup.files,
+				prompt: setup.prompt,
+			});
+			result.setup.push(done.record);
+			const content = captureText(done.items, turnStarted);
+			if (!content || !done.record.sessionId) {
+				result.errors.push(`Setup chat ${index + 1} had nothing to capture.`);
+				continue;
+			}
+			await ingest(`chat${index + 1}`, content, done.record.sessionId, {
+				type: "session_turn",
+			});
+		}
+		result.dream = record.documents
+			.map(
+				(doc) =>
+					`${doc.source} ${Math.round(doc.ingestMs / 1000)}s ${doc.statuses.join("/")}`,
+			)
+			.join(", ");
+		// session-start.js (profile, q = project name), then recall-directive.js.
+		const prompt = `${scenario.chat2.prompt}${PROMPT_SUFFIX}`;
+		const startProfile = await sm
+			.profile(containerTag, repoName)
+			.catch(() => null);
+		const start = sessionStartContext(startProfile, containerTag, repoName);
+		record.profileItems = start.items;
+		record.recallQuery = recallQuery(prompt);
+		let recall: string | null = null;
+		if (record.recallQuery) {
+			const searched: ProfileResponse | null = await sm
+				.profile(containerTag, record.recallQuery)
+				.catch(() => null);
+			record.searchHits = (searched?.searchResults?.results ?? []).map(
+				(hit) => ({
+					similarity: Number.isFinite(hit.similarity)
+						? (hit.similarity as number)
+						: null,
+					text: (
+						hit.memory ??
+						hit.chunk ??
+						hit.content ??
+						hit.text ??
+						""
+					).slice(0, 200),
+				}),
+			);
+			const hits = recalledResults(searched);
+			record.recalled = hits.length;
+			recall = recallContext(hits, containerTag);
+		}
+		const parts = [start.text, ...(recall ? [recall] : [])];
+		record.injectedChars = parts.join("\n").length;
+		record.injectedLines = parts
+			.join("\n")
+			.split("\n")
+			.filter((line) => line.startsWith("- ◪")).length;
+		const second = await chat(run, user, {
+			title: `Memory eval ${scenario.id} chat 2`,
+			files: scenario.chat2.files,
+			prompt: scenario.chat2.prompt,
+			verify: scenario.verify,
+			extraParts: parts,
+		});
+		result.chat2 = second.record;
+		result.passed = second.verified?.passed ?? null;
+		result.verifierOutput = second.verified?.output ?? "";
+		result.memoryCosts = await memoryCosts(run.env, user.userId, started);
+	} catch (error) {
+		result.errors.push(errorText(error));
+	} finally {
+		record.cleanup = await sm.deleteContainer(containerTag).then(
+			(done) =>
+				`deleted ${done.deletedDocumentsCount} documents, ${done.deletedMemoriesCount} memories`,
+			(error: Error) => `cleanup failed: ${error.message}`,
+		);
+		run.liveContainers.delete(containerTag);
+	}
+	result.elapsedMs = Date.now() - started.getTime();
+	console.log(
+		`[supermemory] ${scenario.id}: ${result.passed === null ? "no verdict" : result.passed ? "PASS" : "fail"} (ingest ${result.dream || "none"}; injected ${record.injectedLines} lines/${record.injectedChars} chars, recalled ${record.recalled}, profile ${record.profileItems}; top hit ${record.searchHits[0]?.similarity?.toFixed(3) ?? "-"})${result.errors.length ? ` errors: ${result.errors.join("; ")}` : ""}`,
+	);
+	return result;
+}
+
+/**
+ * Every (arm, scenario, repeat), each as its own eval user, `concurrency` at
+ * a time. Returns the results and whatever a user's release left behind.
+ */
+async function runAllScenarios(run: LiveRun) {
+	const { arms, scenarios, repeat, concurrency, variantRuns } = run.options;
+	// Variants interleave per (arm, scenario, repeat), so a rate-limit spell or
+	// a slow stretch hits every variant alike.
 	const jobs = arms.flatMap((arm) =>
 		scenarios.flatMap((scenario) =>
-			Array.from({ length: repeat }, (_, index) => ({
-				arm,
-				scenario,
-				attempt: index + 1,
-			})),
+			Array.from({ length: repeat }, (_, index) =>
+				variantRuns.map((variantRun) => ({
+					arm,
+					scenario,
+					attempt: index + 1,
+					variantRun,
+				})),
+			).flat(),
 		),
 	);
 	console.log(
-		`Running ${jobs.length} scenario runs (${arms.join(",")} x ${scenarios.length} scenarios x ${repeat}), concurrency ${concurrency}, variant ${variantLabel}, ${owner ? "as the owner" : "one eval user per run"}.`,
+		`Running ${jobs.length} scenario runs (${arms.join(",")} x ${scenarios.length} scenarios x ${repeat}${variantRuns.length > 1 ? ` x ${variantRuns.length} variants` : ""}), concurrency ${concurrency}, variant ${variantRuns.map((row) => row.label).join(" | ")}, one eval user per run.`,
 	);
+	const results: ScenarioRecord[] = [];
 	const leftovers: string[] = [];
-	try {
-		let next = 0;
-		await Promise.all(
-			Array.from({ length: Math.min(concurrency, jobs.length) }, async () => {
-				while (next < jobs.length && !stopping) {
-					const { arm, scenario, attempt } = jobs[next++];
-					let user: EvalUser | null = owner;
-					try {
-						user ??= await createEvalUser({
-							label: `memory-eval ${arm} ${scenario.id} #${attempt} ${variantLabel}`,
-							variant,
-							keepRepos: flags["keep-repos"],
-						});
-						results.push(await runScenario(user, arm, scenario, attempt));
-					} catch (error) {
-						console.error(
-							`[${arm} #${attempt}] ${scenario.id}: ${error instanceof Error ? error.message : String(error)}`,
-						);
-					} finally {
-						if (user && !user.asOwner)
-							leftovers.push(...(await user.release()));
-					}
+	let next = 0;
+	await Promise.all(
+		Array.from({ length: Math.min(concurrency, jobs.length) }, async () => {
+			while (next < jobs.length && !run.stopping()) {
+				const { arm, scenario, attempt, variantRun } = jobs[next++];
+				let user: EvalUser | null = null;
+				try {
+					user = await createEvalUser({
+						label: `memory-eval ${arm} ${scenario.id} #${attempt} ${variantRun.label}`,
+						variant: variantRun.variant,
+						keepRepos: flags["keep-repos"],
+					});
+					results.push(
+						await runScenario(run, user, arm, scenario, attempt, variantRun),
+					);
+				} catch (error) {
+					console.error(
+						`[${arm} #${attempt} ${variantRun.label}] ${scenario.id}: ${errorText(error)}`,
+					);
+				} finally {
+					if (user) leftovers.push(...(await user.release()));
 				}
-			}),
-		);
-	} finally {
-		for (const id of liveVms) await client.vms.delete(id).catch(() => {});
-		for (const id of liveProjects)
-			if (owner) await dropProject(owner, id).catch(() => {});
-		for (const tag of liveContainers)
-			await sm?.deleteContainer(tag).catch(() => {});
-		if (!flags["keep-repos"])
-			for (const name of liveRepos) await deleteRepo(name);
-		if (owner) {
-			if (savedSettings)
-				await db.query(
-					"update user_memory set mode=$2,repo=$3,dreamed_through=$4,updated_at=now() where user_id=$1",
-					[
-						owner.userId,
-						savedSettings.mode,
-						savedSettings.repo,
-						savedSettings.dreamed_through,
-					],
-				);
-			else
-				await db.query("delete from user_memory where user_id=$1", [
-					owner.userId,
-				]);
-		}
-		await closeDatabase();
-	}
-	if (leftovers.length) {
-		console.error(`Cleanup incomplete: ${leftovers.join(", ")}.`);
-		process.exitCode = 1;
-	}
+			}
+		}),
+	);
+	return { results, leftovers };
+}
 
+/** Deletes VMs and containers a stopped or failed run left, then closes the database. */
+async function cleanUpLiveRun(run: LiveRun) {
+	for (const id of run.liveVms)
+		await run.env.client.vms.delete(id).catch(() => {});
+	for (const tag of run.liveContainers)
+		await run.sm?.deleteContainer(tag).catch(() => {});
+	await run.env.closeDatabase();
+}
+
+/** Per-arm totals, then one row per scenario run. */
+function printLiveReport(
+	options: LiveOptions,
+	results: ScenarioRecord[],
+	startedAt: number,
+) {
 	const priceIn = Number(flags["price-in"]);
 	const priceOut = Number(flags["price-out"]);
 	const dollars = (input: number, output: number) =>
@@ -1391,22 +1511,83 @@ async function live() {
 			: "n/a";
 	const sum = (values: (number | null | undefined)[]) =>
 		values.reduce<number>((total, value) => total + (value ?? 0), 0);
+	const { variantRuns, variantLabel } = options;
+	const variantCell = (row: { variantName: string }) =>
+		variantRuns.length > 1 ? row.variantName : variantLabel;
+	const groups = variantRuns.flatMap((variantRun) =>
+		options.arms.map((arm) => ({
+			variant: variantRuns.length > 1 ? variantRun.name : variantLabel,
+			arm,
+			runs: results.filter(
+				(row) => row.arm === arm && row.variantName === variantRun.name,
+			),
+		})),
+	);
 	const rows = [
 		[
+			"variant",
 			"arm",
 			"pass",
 			"chat2 in tok",
 			"chat2 out tok",
 			"chat2 cache%",
+			"chat2 tools",
 			"chat2 attached",
+			"save calls",
 			"save in/out tok",
 			"save $",
+			"dream calls",
 			"dream in/out tok",
 			"dream $",
+			"$/try",
+			"$/solved",
 		],
 	];
-	for (const arm of arms) {
-		const runs = results.filter((row) => row.arm === arm);
+	// Cost per attempt and per solved scenario (eval-cost.ts): chat 2 plus the
+	// memory jobs; list price, or the --price-in/--price-out given.
+	const attemptCost = (row: ScenarioRecord) => {
+		const parts = [
+			{
+				input: row.chat2?.inputTokens ?? 0,
+				cached: row.chat2?.cachedTokens ?? 0,
+				output: row.chat2?.outputTokens ?? 0,
+			},
+			...row.memoryCosts.map((entry) => ({
+				input: entry.inputTokens,
+				cached: entry.cachedTokens,
+				output: entry.outputTokens,
+			})),
+		];
+		const priced = parts.map((part) =>
+			Number.isFinite(priceIn) && Number.isFinite(priceOut)
+				? {
+						costUsd: (part.input * priceIn + part.output * priceOut) / 1e6,
+						estimated: false,
+					}
+				: runListPrice({
+						harness: "codex",
+						modelId: String(flags.model),
+						inputTokens: part.input,
+						cachedTokens: part.cached,
+						outputTokens: part.output,
+					}),
+		);
+		return {
+			solved: !!row.passed,
+			tokens: parts.reduce(
+				(total, part) => total + part.input + part.output,
+				0,
+			),
+			costUsd: priced.some((entry) => entry.costUsd === null)
+				? null
+				: priced.reduce((total, entry) => total + (entry.costUsd ?? 0), 0),
+			estimated: priced.some((entry) => entry.estimated),
+			vmMinutes: 0,
+			agents: 1,
+		};
+	};
+	const costNotes = new Set<string>();
+	for (const { variant: name, arm, runs } of groups) {
 		const chat2 = runs.map((row) => row.chat2);
 		const input = sum(chat2.map((c) => c?.inputTokens));
 		const cost = (kind: string) => {
@@ -1415,9 +1596,14 @@ async function live() {
 			);
 			const tokensIn = sum(rowsOfKind.map((entry) => entry.inputTokens));
 			const tokensOut = sum(rowsOfKind.map((entry) => entry.outputTokens));
-			return [`${tokensIn}/${tokensOut}`, dollars(tokensIn, tokensOut)];
+			return [
+				String(sum(rowsOfKind.map((entry) => entry.calls))),
+				`${tokensIn}/${tokensOut}`,
+				dollars(tokensIn, tokensOut),
+			];
 		};
 		rows.push([
+			name,
 			arm,
 			`${runs.filter((row) => row.passed).length}/${runs.length}`,
 			String(input),
@@ -1425,36 +1611,88 @@ async function live() {
 			input
 				? `${Math.round((sum(chat2.map((c) => c?.cachedTokens)) / input) * 100)}%`
 				: "-",
+			String(sum(chat2.map((c) => c?.activity?.toolCalls))),
 			`${chat2.filter((c) => c?.memoryAttached || c?.supermemoryAttached).length}/${runs.length}`,
 			...cost("save"),
 			...cost("dream"),
+			...(() => {
+				const cells = costSummaryCells(costSummary(runs.map(attemptCost)));
+				if (cells.note) costNotes.add(cells.note);
+				return [cells.perAttempt, cells.perSolved];
+			})(),
 		]);
 	}
-	console.log(`\n${table(rows)}`);
+	console.log(
+		`\n${table(rows)}${costNotes.size ? `\n${[...costNotes].join("; ")}` : ""}`,
+	);
+	// Who wrote memory: the builder in the setup chats (its own tool calls),
+	// and every commit in the repo by writer (all chats, hooks and dreams).
+	const setupActivity = (row: ScenarioRecord) =>
+		row.setup.map((chat) => chat.activity);
+	const writers = [
+		[
+			"variant",
+			"arm",
+			"runs",
+			"setup agent commits",
+			"setup memory tools/all tools",
+			"setup lines shown",
+			"repo agent/hook/dream commits",
+			"repo unread",
+		],
+	];
+	for (const { variant: name, arm, runs } of groups) {
+		if (arm === "off" || arm === "supermemory") continue;
+		const setup = runs.flatMap(setupActivity);
+		const commits = runs.flatMap((row) =>
+			row.repoCommits ? [row.repoCommits] : [],
+		);
+		writers.push([
+			name,
+			arm,
+			String(runs.length),
+			String(sum(setup.map((entry) => entry?.memoryCommits))),
+			`${sum(setup.map((entry) => entry?.memoryToolCalls))}/${sum(setup.map((entry) => entry?.toolCalls))}`,
+			String(sum(setup.map((entry) => entry?.savedLines))),
+			`${sum(commits.map((entry) => entry.agent))}/${sum(commits.map((entry) => entry.saveHook))}/${sum(commits.map((entry) => entry.dream))}`,
+			String(runs.length - commits.length),
+		]);
+	}
+	if (writers.length > 1) console.log(`\n${table(writers)}`);
 	const perScenario = [
 		[
+			"variant",
 			"arm",
 			"scenario",
 			"#",
 			"pass",
 			"secs",
 			"chat2 in tok",
+			"chat2 tools",
 			"attached",
+			"setup agent commits",
+			"repo a/h/d",
 			"injected",
 			"ingest",
 		],
 	];
 	for (const row of results)
 		perScenario.push([
+			variantCell(row),
 			row.arm,
 			row.scenario,
 			String(row.attempt),
 			row.passed === null ? "-" : row.passed ? "PASS" : "fail",
 			String(Math.round(row.elapsedMs / 1000)),
 			String(row.chat2?.inputTokens ?? "-"),
+			String(row.chat2?.activity?.toolCalls ?? "-"),
 			row.chat2?.memoryAttached || row.chat2?.supermemoryAttached
 				? "yes"
 				: "no",
+			String(sum(setupActivity(row).map((entry) => entry?.memoryCommits))),
+			row.repoCommits
+				? `${row.repoCommits.agent}/${row.repoCommits.saveHook}/${row.repoCommits.dream}`
+				: "-",
 			row.supermemory
 				? `${row.supermemory.injectedLines} lines/${row.supermemory.injectedChars} chars`
 				: "-",
@@ -1466,8 +1704,42 @@ async function live() {
 		]);
 	console.log(`\n${table(perScenario)}`);
 	console.log(
-		`\nModel ${model} (${effort}); variant ${variantLabel}; total ${Math.round((Date.now() - started) / 1000)}s. Chat token columns are chat 2's agent turns; save and dream columns are memory jobs on the user's route.`,
+		`\nModel ${options.model} (${options.effort}); variant ${variantRuns.map((row) => row.label).join(" | ")}; total ${Math.round((Date.now() - startedAt) / 1000)}s. Chat token and tool columns are chat 2's agent turn; save and dream columns are memory jobs on the user's route. Setup columns are the builder's own tool calls on ~/memory in the setup chats (lines shown = the chats' saved-memory markers, agent and save hook together); repo commits count every writer across the run.`,
 	);
+}
+
+async function live() {
+	const options = liveOptions();
+	const sm = options.arms.includes("supermemory")
+		? supermemoryClient(await supermemoryApiKey())
+		: null;
+	const env = await liveEnvironment();
+	await openExecutorGate(env);
+	let stopping = false;
+	onEvalStop(() => {
+		stopping = true;
+	});
+	const liveRun: LiveRun = {
+		options,
+		env,
+		sm,
+		liveVms: new Set(),
+		liveContainers: new Set(),
+		stopping: () => stopping,
+	};
+	const startedAt = Date.now();
+	let outcome: Awaited<ReturnType<typeof runAllScenarios>>;
+	try {
+		outcome = await runAllScenarios(liveRun);
+	} finally {
+		await cleanUpLiveRun(liveRun);
+	}
+	const { results, leftovers } = outcome;
+	if (leftovers.length) {
+		console.error(`Cleanup incomplete: ${leftovers.join(", ")}.`);
+		process.exitCode = 1;
+	}
+	printLiveReport(options, results, startedAt);
 	const out =
 		flags.out ??
 		`/tmp/memory-two-chat-eval-${new Date().toISOString().replaceAll(/[:.]/g, "-")}-${process.pid}.json`;

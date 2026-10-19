@@ -1,13 +1,19 @@
 import type { ModelMessage } from "ai";
 import { isUserRequestMessage } from "#/domain/api-conversation";
-import type { MemoryWording } from "#/domain/harness-variant";
+import {
+	DEFAULT_HARNESS_VARIANT,
+	type MemoryWording,
+	type MemoryWriter,
+} from "#/domain/harness-variant";
 import {
 	currentMemoryRecall,
+	type MemoryReadHookOutcome,
 	type MemoryRecall,
 	recalledMemoryLine,
 	savedMemoryLines,
 	withSavedMemory,
 } from "#/domain/memory-marker";
+import { memoryMatchScores } from "#/domain/memory-ranking";
 import {
 	annotateMemoryText,
 	attachedMemory,
@@ -19,6 +25,7 @@ import {
 	MEMORY_ENTRY,
 	type MemoryLine,
 	type MemoryMode,
+	memoryAppUrl,
 	memoryCloneScript,
 	memoryEntryPart,
 	memoryIndexShown,
@@ -27,6 +34,9 @@ import {
 	memoryLines,
 	memoryMatchesPart,
 	memoryQueryText,
+	memoryRecentLine,
+	memoryRecentPart,
+	memoryToday,
 	selectMemoryMatches,
 	withMemoryParts,
 } from "#/domain/memory-repo";
@@ -51,14 +61,27 @@ import {
 	memoryChatTitles,
 	memoryProjectName,
 	memorySettings,
+	type RecentChatMessage,
+	recentUnsavedMessages,
 } from "../adapters/memory-settings";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 
 /** The VM's Git token outlives any single durable step; each step mints a new one. */
 const VM_TOKEN_TTL_SECONDS = 3600;
-const READ_HOOK_TIMEOUT_MS = 4000;
+/**
+ * The read hook's budget before the first model call. A chat's first request
+ * waits longer: its VM is still starting, and a late recall beats none.
+ */
+const READ_HOOK_TIMEOUT_MS = 6000;
+const FIRST_READ_HOOK_TIMEOUT_MS = 12_000;
 /** Bounds embedding work on a turn; larger memories embed over several turns. */
 const MAX_EMBEDDED_LINES = 400;
+/**
+ * Another chat's latest message stays attached until the save hook shows a
+ * saved line for it, for at most this long (the hook runs within seconds).
+ */
+const RECENT_WINDOW_SECONDS = 600;
+const RECENT_TIMEOUT_MS = 3000;
 /** Reading what a turn saved never holds up its completion for long. */
 const SAVED_LINES_TIMEOUT_MS = 5000;
 
@@ -89,7 +112,7 @@ export type TurnMemory = {
 		items: readonly SessionItem[],
 		turnId: string,
 	): Promise<SessionItem[]>;
-	/** The save hook: queued after a completed turn (full mode). */
+	/** The save hook: queued after a completed turn (full mode, unless the agent alone writes). */
 	afterTurn(turnId: string): Promise<void>;
 };
 
@@ -101,8 +124,6 @@ export async function turnMemory(
 	owner: TurnMemoryOwner,
 	options: {
 		appUrl?: string;
-		/** Evaluations switch hooks per arm; production uses the user's mode. */
-		mode?: MemoryMode;
 		repo?: MemoryRepo | null;
 		embed?: Embed | null;
 		today?: () => string;
@@ -110,6 +131,10 @@ export async function turnMemory(
 		chatTitles?: (ids: readonly string[]) => Promise<Map<string, string>>;
 		/** Development harness variant: how recalled memory is presented. */
 		wording?: MemoryWording;
+		/** Development harness variant: agent = no save hook after turns. */
+		writer?: MemoryWriter;
+		/** The user's latest messages in other chats that memory may not hold yet. */
+		recentMessages?: () => Promise<readonly RecentChatMessage[]>;
 	} = {},
 ): Promise<TurnMemory | null> {
 	const settings = await memorySettings(owner.userId).catch((error) => {
@@ -118,7 +143,7 @@ export async function turnMemory(
 		});
 		return null;
 	});
-	const mode = options.mode ?? settings?.mode ?? "off";
+	const mode = settings?.mode ?? "off";
 	if (mode === "off") return null;
 	const repo =
 		options.repo === undefined
@@ -134,15 +159,48 @@ export async function turnMemory(
 						() => null,
 					)
 				: null;
-	const today = options.today ?? (() => new Date().toISOString().slice(0, 10));
-	const wording = options.wording ?? "notes";
-	const url = chatSourceUrl(
-		options.appUrl ?? process.env.APP_URL ?? "http://localhost:3000",
-		owner.id,
-	);
+	const today = options.today ?? memoryToday;
+	const wording = options.wording ?? DEFAULT_HARNESS_VARIANT.memoryWording;
+	const writer = options.writer ?? DEFAULT_HARNESS_VARIANT.memoryWriter;
+	const url = chatSourceUrl(options.appUrl ?? memoryAppUrl(), owner.id);
+	const recentMessages =
+		options.recentMessages ??
+		(() =>
+			recentUnsavedMessages(owner.userId, owner.id, RECENT_WINDOW_SECONDS));
 	const chatTitles =
 		options.chatTitles ??
 		((ids: readonly string[]) => memoryChatTitles(owner.userId, ids));
+	/**
+	 * Started with the turn's setup: the memory snapshot and its line vectors
+	 * (warm in this isolate, else the database, else embedded once), so the
+	 * read hook before the first model call usually only embeds the message.
+	 */
+	let prefetched:
+		| { snapshot: MemorySnapshot; vectors: Promise<number[][]> | null }
+		| null
+		| undefined;
+	const prefetching = repo
+		.snapshot()
+		.then((snapshot) => {
+			const vectors =
+				mode === "full" && embed
+					? cachedLineEmbeddings(
+							owner.userId,
+							recallableLines(snapshot).map(memoryLineEmbeddingText),
+							embed,
+						)
+					: null;
+			vectors?.catch(() => {});
+			prefetched = { snapshot, vectors };
+			return prefetched;
+		})
+		.catch((error) => {
+			console.warn("Memory could not be read.", {
+				error: error instanceof Error ? error.name : "unknown",
+			});
+			prefetched = null;
+			return null;
+		});
 	/** The recalled lines as the chat shows them, with their source chats' titles. */
 	async function recalledLines(matches: readonly MemoryLine[]) {
 		if (!matches.length) return [];
@@ -164,6 +222,7 @@ export async function turnMemory(
 				project: projectName,
 			},
 			wording,
+			writer,
 		),
 		async prepareVm(workspace) {
 			try {
@@ -190,13 +249,9 @@ export async function turnMemory(
 			const current = messages[index];
 			// A resumed step replays the parts it already attached.
 			if (attachedMemory([current]).length) return unchanged;
-			const snapshot = await repo.snapshot().catch((error) => {
-				console.warn("Memory could not be read.", {
-					error: error instanceof Error ? error.name : "unknown",
-				});
-				return null;
-			});
-			if (!snapshot) return unchanged;
+			const loaded = prefetched === undefined ? await prefetching : prefetched;
+			if (!loaded) return unchanged;
+			const { snapshot } = loaded;
 			const shown = attachedMemory(messages).join("\n");
 			const firstRequest =
 				items.filter((item) => item.kind === "userMessage").length === 1 &&
@@ -206,11 +261,20 @@ export async function turnMemory(
 				firstRequest &&
 				entry !== undefined &&
 				entry.trim() !== EMPTY_MEMORY.trim();
-			const matches =
+			const firstMessage =
+				items.filter((item) => item.kind === "userMessage").length === 1;
+			// Freshness without a model call: what the user just said in another
+			// chat, while its save hook may still be running.
+			const recent =
+				mode === "full" && writer !== "agent"
+					? recentLines(recentMessages, shown)
+					: Promise.resolve([]);
+			const hook =
 				mode === "full" && embed
 					? await readHook({
 							snapshot,
 							embed,
+							vectors: loaded.vectors ?? undefined,
 							userId: owner.userId,
 							query: latestUserText(items),
 							alreadyShown: (raw) =>
@@ -218,14 +282,29 @@ export async function turnMemory(
 								(showEntry && (entry ?? "").includes(raw)),
 							today: today(),
 							project: projectName,
+							timeoutMs: firstMessage
+								? FIRST_READ_HOOK_TIMEOUT_MS
+								: READ_HOOK_TIMEOUT_MS,
 						})
-					: [];
+					: null;
+			const matches = hook?.lines ?? [];
 			const recall: MemoryRecall = {
 				head: snapshot.head,
 				...(showEntry ? { index: true as const } : {}),
 				lines: await recalledLines(matches),
+				...(hook
+					? {
+							hook: {
+								outcome: hook.outcome,
+								ms: hook.ms,
+								...(hook.error ? { error: hook.error } : {}),
+							},
+						}
+					: {}),
 			};
-			if (!showEntry && !matches.length) return { messages, recall };
+			const fresh = await recent;
+			if (!showEntry && !matches.length && !fresh.length)
+				return { messages, recall };
 			const missing =
 				mode === "full"
 					? await missingPaths(
@@ -255,6 +334,7 @@ export async function turnMemory(
 				...(matches.length
 					? [memoryMatchesPart(matches, missing, wording)]
 					: []),
+				...(fresh.length ? [memoryRecentPart(fresh, wording)] : []),
 			];
 			const next = [...messages];
 			next[index] = withMemoryParts(
@@ -303,7 +383,7 @@ export async function turnMemory(
 			}
 		},
 		async afterTurn(turnId) {
-			if (mode !== "full") return;
+			if (mode !== "full" || writer === "agent") return;
 			await dispatchBackgroundJob({
 				id: backgroundJobId(`memory-save:${turnId}`),
 				kind: "memory",
@@ -317,6 +397,34 @@ export async function turnMemory(
 			});
 		},
 	};
+}
+
+/** Recent messages as attached lines, minus any already attached in this chat; never fails. */
+async function recentLines(
+	load: () => Promise<readonly RecentChatMessage[]>,
+	shown: string,
+) {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const work = Promise.resolve().then(load);
+	try {
+		const messages = await Promise.race([
+			work,
+			new Promise<readonly RecentChatMessage[]>((resolve) => {
+				timer = setTimeout(() => resolve([]), RECENT_TIMEOUT_MS);
+			}),
+		]);
+		return messages
+			.map(memoryRecentLine)
+			.filter((line) => !shown.includes(line));
+	} catch (error) {
+		console.warn("Recent chat messages could not be read for memory.", {
+			error: error instanceof Error ? error.name : "unknown",
+		});
+		return [];
+	} finally {
+		clearTimeout(timer);
+		work.catch(() => {});
+	}
 }
 
 function currentRequestIndex(
@@ -336,9 +444,26 @@ function latestUserText(items: readonly SessionItem[]) {
 	return "";
 }
 
+/** The lines the read hook ranks: every topic-file entry (MEMORY.md is attached whole). */
+export function recallableLines(snapshot: MemorySnapshot) {
+	return memoryLines(snapshot.files)
+		.filter((entry) => entry.path !== MEMORY_ENTRY)
+		.slice(0, MAX_EMBEDDED_LINES);
+}
+
+export type ReadHookResult = {
+	lines: MemoryLine[];
+	outcome: MemoryReadHookOutcome;
+	ms: number;
+	/** The error's name, for outcome "error". */
+	error?: string;
+};
+
 /**
  * Supermemory-style recall: embed the message, rank every memory line by
- * cosine similarity, keep the best few above the cutoff. Skipped on timeout.
+ * cosine similarity merged with word overlap and its topic file's best hit
+ * (memory-ranking.ts), keep the best few above the cutoff. Never throws: a
+ * timeout or an error yields no lines and says which it was.
  */
 export async function readHook(input: {
 	snapshot: MemorySnapshot;
@@ -348,29 +473,45 @@ export async function readHook(input: {
 	alreadyShown: (raw: string) => boolean;
 	today: string;
 	project: string | null;
+	/** The snapshot's line vectors when already loading (recallableLines order). */
+	vectors?: Promise<number[][]>;
 	cache?: Parameters<typeof cachedLineEmbeddings>[3];
 	timeoutMs?: number;
-}): Promise<MemoryLine[]> {
+}): Promise<ReadHookResult> {
+	const started = Date.now();
+	const result = (
+		outcome: MemoryReadHookOutcome,
+		lines: MemoryLine[] = [],
+		error?: string,
+	): ReadHookResult => ({
+		lines,
+		outcome,
+		ms: Date.now() - started,
+		...(error ? { error } : {}),
+	});
 	const query = memoryQueryText(input.query);
-	if (!query) return [];
-	const lines = memoryLines(input.snapshot.files)
-		.filter((entry) => entry.path !== MEMORY_ENTRY)
-		.slice(0, MAX_EMBEDDED_LINES);
-	if (!lines.length) return [];
+	if (!query) return result("skipped");
+	const lines = recallableLines(input.snapshot);
+	if (!lines.length) return result("none");
 	const work = (async () => {
-		const queryVector = await input.embed.query(query);
-		const vectors = await cachedLineEmbeddings(
-			input.userId,
-			lines.map(memoryLineEmbeddingText),
-			input.embed,
-			input.cache,
-		);
-		const scores = new Map(
+		const [queryVector, vectors] = await Promise.all([
+			// One retry: a single slow or failed embedding call should not cost the recall.
+			input.embed.query(query).catch(() => input.embed.query(query)),
+			input.vectors ??
+				cachedLineEmbeddings(
+					input.userId,
+					lines.map(memoryLineEmbeddingText),
+					input.embed,
+					input.cache,
+				),
+		]);
+		const similarity = new Map(
 			lines.map((entry, index) => [
 				entry,
-				cosineSimilarity(queryVector, vectors[index]),
+				cosineSimilarity(queryVector, vectors[index] ?? []),
 			]),
 		);
+		const scores = memoryMatchScores(lines, similarity, query);
 		return selectMemoryMatches({
 			lines,
 			scores,
@@ -381,20 +522,30 @@ export async function readHook(input: {
 	})();
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	try {
-		return await Promise.race([
+		const matches = await Promise.race([
 			work,
-			new Promise<MemoryLine[]>((resolve) => {
+			new Promise<"timeout">((resolve) => {
 				timer = setTimeout(
-					() => resolve([]),
+					() => resolve("timeout"),
 					input.timeoutMs ?? READ_HOOK_TIMEOUT_MS,
 				);
 			}),
 		]);
+		if (matches === "timeout") {
+			console.warn("Memory read hook timed out.", {
+				ms: Date.now() - started,
+				lines: lines.length,
+			});
+			return result("timeout");
+		}
+		return result(matches.length ? "matched" : "none", matches);
 	} catch (error) {
-		console.warn("Memory read hook skipped.", {
-			error: error instanceof Error ? error.name : "unknown",
+		const name = error instanceof Error ? error.name : "unknown";
+		console.warn("Memory read hook failed.", {
+			error: name,
+			message: error instanceof Error ? error.message.slice(0, 200) : "",
 		});
-		return [];
+		return result("error", [], name);
 	} finally {
 		clearTimeout(timer);
 		work.catch(() => {});

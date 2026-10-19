@@ -16,6 +16,7 @@ const state = vi.hoisted(() => ({
 	children: [] as Record<string, unknown>[],
 	available: 4,
 	seen: [] as ModelMessage[][],
+	inbox: [] as Record<string, unknown>[],
 }));
 const stepRuntime = vi.hoisted(() => vi.fn());
 
@@ -41,6 +42,8 @@ vi.mock("../adapters/database", () => ({
 				return { rows: [{ present: state.children.length > 0 }] };
 			if (sql.includes("select id,title,task_state"))
 				return { rows: state.children };
+			if (sql.startsWith("select id,message,queued_send from agent_peer_inbox"))
+				return { rows: state.inbox.splice(0) };
 			if (sql.includes("with occupied"))
 				return { rows: [{ available: state.available }] };
 			return { rows: [] };
@@ -98,7 +101,14 @@ vi.mock("../services/api-agent-tools", () => ({
 			inputSchema: { jsonSchema: {} },
 			execute: async () => {
 				await input.workspace();
-				return { ok: true };
+				// A finished command page, as the runtime's runner returns.
+				return {
+					id: "00000000-0000-4000-8000-000000000000",
+					status: 0,
+					stdout: "",
+					start: 0,
+					nextStart: null,
+				};
 			},
 		},
 	}),
@@ -145,11 +155,13 @@ beforeEach(() => {
 	state.children = [];
 	state.available = 4;
 	state.seen = [];
+	state.inbox = [];
 	stepRuntime.mockReset().mockImplementation(async (input) => {
 		const prepared = await input.prepareMessages(input.messages);
 		state.seen.push(prepared);
-		await input.tools.execute_command.execute(
-			{},
+		// The default (lean) surface runs commands through bash.
+		await (input.tools.execute_command ?? input.tools.bash).execute(
+			{ command: "true" },
 			{ toolCallId: `call-${state.seen.length}`, messages: [] },
 		);
 		return { messages: prepared, outcome: "continue" };
@@ -239,5 +251,40 @@ it("reloads turn-fixed context when a restarted isolate resumes the turn", async
 	const [resumed] = await steps(1);
 	expect(resumed.queries.length).toBeGreaterThan(1);
 	expect(resumed.execs).toBeGreaterThan(0);
-	expect(resumed.writes).toBe(1);
+	// The turn's own write, plus the lean surface's helper bundle (this fake
+	// VM never reports it installed).
+	expect(resumed.writes).toBe(2);
+});
+
+it("delivers a message queued during the run at the next step, before the model call", async () => {
+	const { checkpointApiTurn } = await import("../adapters/api-turns");
+	vi.mocked(checkpointApiTurn).mockClear();
+	await steps(1);
+	state.inbox = [
+		{
+			id: "queued-user:11111111-1111-4111-8111-111111111111",
+			message: "Also update the README",
+			queued_send: {
+				item: {
+					kind: "userMessage",
+					id: "11111111-1111-4111-8111-111111111111",
+					text: "Also update the README",
+				},
+			},
+		},
+	];
+	await steps(1);
+	expect(state.seen.at(-1)?.at(-1)).toEqual({
+		role: "user",
+		content: "Also update the README",
+	});
+	const saved = vi.mocked(checkpointApiTurn).mock.calls.at(-1)?.[2] ?? [];
+	expect(
+		saved.filter((item) => item.kind === "userMessage").map((item) => item.id),
+	).toEqual(["user", "11111111-1111-4111-8111-111111111111"]);
+	expect(
+		state.queries.some((sql) =>
+			sql.startsWith("update agent_peer_inbox set accepted=true"),
+		),
+	).toBe(true);
 });

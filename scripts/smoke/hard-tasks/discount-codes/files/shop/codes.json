@@ -1,0 +1,6 @@
+{
+  "SAVE10": { "type": "percent", "value": 10, "max_off": "5.00" },
+  "BIGSPEND": { "type": "percent", "value": 20, "min_subtotal": "50.00" },
+  "BREADBOGO": { "type": "bogo", "sku": "bread" },
+  "FIVEOFF": { "type": "fixed", "value": "5.00", "min_subtotal": "20.00" }
+}

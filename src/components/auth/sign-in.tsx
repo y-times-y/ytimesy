@@ -38,6 +38,7 @@ import {
 	InputGroupButton,
 	InputGroupInput,
 } from "#/components/ui/input-group.tsx";
+import { safeReturnTo } from "#/domain/return-to";
 import { useIdentityOptions } from "#/features/auth/identity-options";
 import { YtimesyBrand } from "#/features/auth/onboarding-shell";
 import { useSignInContinuation } from "#/lib/auth/use-sign-in-continuation.ts";
@@ -72,6 +73,7 @@ export function SignIn({
 		emailAndPassword,
 		localization,
 		plugins,
+		redirectTo,
 		socialProviders,
 		viewPaths,
 		navigate,
@@ -121,6 +123,8 @@ export function SignIn({
 			await signInEmail({
 				email: value.email,
 				password: value.password,
+				// An unverified account gets a verification link back to the same page.
+				callbackURL: safeReturnTo(redirectTo),
 				...(emailAndPassword?.rememberMe
 					? { rememberMe: value.rememberMe }
 					: {}),

@@ -19,6 +19,12 @@ import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { parseArgs } from "node:util";
 import {
+	attemptCostFromRun,
+	costSummary,
+	costSummaryCells,
+	runListPrice,
+} from "../src/domain/eval-cost";
+import {
 	harnessVariantFromFlags,
 	harnessVariantLabel,
 } from "../src/domain/harness-variant";
@@ -60,7 +66,7 @@ const { values: flags } = parseArgs({
 		"turn-timeout": { type: "string", default: "300" },
 		"codex-bin": { type: "string" },
 		out: { type: "string" },
-		/** Harness variant for the harness arm, e.g. memoryWording=rules (repeatable). */
+		/** Harness variant for the harness arm, e.g. toolSurface=current (repeatable; the default is lean, rules, observer). */
 		variant: { type: "string", multiple: true },
 		/** Run the harness arm as the dev owner instead of a throwaway eval user. */
 		"as-owner": { type: "boolean", default: false },
@@ -330,6 +336,17 @@ async function runNative(
 		record.elapsedMs = Date.now() - started;
 		record.state = "incomplete";
 		measureNative(record, result.stdout);
+		// The native CLI runs on the ChatGPT plan: a labelled list-price estimate.
+		const price = runListPrice({
+			harness: "codex",
+			modelId: model,
+			inputTokens: record.inputTokens,
+			cachedTokens: record.cachedTokens,
+			outputTokens: record.outputTokens,
+		});
+		record.costUsd = price.costUsd;
+		record.costEstimated = price.estimated;
+		record.treeTokens = (record.inputTokens ?? 0) + (record.outputTokens ?? 0);
 		if (result.timedOut) {
 			record.state = "timeout";
 			record.errors.push(`Cancelled: exceeded ${turnTimeoutMs / 1000}s.`);
@@ -502,6 +519,8 @@ function aggregate(runs: RunRecord[]) {
 		meanInputTokens: mean(runs.map((run) => run.inputTokens)),
 		meanOutputTokens: mean(runs.map((run) => run.outputTokens)),
 		cacheHitPercent: percent(cached, input),
+		// Cost per attempt and per solved task (eval-cost.ts), the whole agent tree.
+		cost: costSummary(runs.map(attemptCostFromRun)),
 	};
 }
 const cells = (stats: ReturnType<typeof aggregate>) =>
@@ -514,9 +533,21 @@ const cells = (stats: ReturnType<typeof aggregate>) =>
 				String(stats.meanInputTokens ?? "-"),
 				String(stats.cacheHitPercent ?? "-"),
 				String(stats.meanOutputTokens ?? "-"),
+				costSummaryCells(stats.cost).perAttempt,
+				costSummaryCells(stats.cost).perSolved,
 			]
-		: Array(7).fill("-");
-const columns = ["pass", "secs", "steps", "tools", "in", "cache%", "out"];
+		: Array(9).fill("-");
+const columns = [
+	"pass",
+	"secs",
+	"steps",
+	"tools",
+	"in",
+	"cache%",
+	"out",
+	"$/try",
+	"$/solved",
+];
 const perTask = tasks.map((task) => ({
 	task: task.id,
 	native: aggregate(nativeRuns.filter((run) => run.task === task.id)),
@@ -543,7 +574,7 @@ console.info(
 			]),
 			["ALL", ...cells(summary.native), "|", ...cells(summary.harness)],
 		],
-	)}\n(N = native Codex CLI ${codexVersion ?? ""}, H = ytimesy builder; tools shows mean calls and total failed as (nf); ALL row = median secs and per-run means over all runs.)`,
+	)}\n(N = native Codex CLI ${codexVersion ?? ""}, H = ytimesy builder; tools shows mean calls and total failed as (nf); ALL row = median secs and per-run means over all runs; $/solved = all spend over solved runs, ~$ = list-price estimate on the plan, not a charge.)`,
 );
 for (const [arm, runs] of [
 	["native", nativeRuns],

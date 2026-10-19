@@ -92,6 +92,12 @@ beforeAll(async () => {
 			"utf8",
 		),
 	);
+	await db.exec(
+		await readFile(
+			"supabase/migrations/20261017130000_queued_user_messages.sql",
+			"utf8",
+		),
+	);
 	await db.query(
 		`insert into model_connection(id,user_id,provider,label,base_url,sealed_credential,revision) values($1,'alice','openrouter','Test','https://openrouter.ai/api/v1','fixture',$2)`,
 		[connectionId, revision],
@@ -486,6 +492,61 @@ it("stops after cancellation and fences late checkpoints after completion", asyn
 		(await db.query("select turn_status from agent_session")).rows[0],
 	).toEqual({ turn_status: "idle" });
 });
+it("keeps a stopped step's started tool call in the history the next turn continues", async () => {
+	await submit();
+	const turn = await claimApiTurn();
+	if (!turn) throw Error("missing turn");
+	const call = {
+		type: "tool-call" as const,
+		toolCallId: "call-1",
+		toolName: "run",
+		input: { command: "sleep 60; echo marker-one" },
+	};
+	const inFlight = [
+		{ role: "user" as const, content: "test" },
+		{ role: "assistant" as const, content: [call] },
+	];
+	await cancelApiTurn("alice", sessionId);
+	// Checkpoints are fenced once a stop is requested; settling is not.
+	await expect(checkpointApiTurn(turn, inFlight, [])).rejects.toThrow("lease");
+	expect(await finalizeApiTurn(turn, "cancelled", [], inFlight)).toBe(
+		"cancelled",
+	);
+	await db.exec(
+		"create table if not exists agent_task_command_receipt(parent_session_id uuid,request_id text,status text,response jsonb)",
+	);
+	expect(
+		await previousTurnMessages("alice", sessionId, "test-model", revision),
+	).toEqual([
+		...inFlight,
+		{
+			role: "tool",
+			content: [
+				{
+					type: "tool-result",
+					toolCallId: "call-1",
+					toolName: "run",
+					output: {
+						type: "error-text",
+						value: expect.stringContaining("the turn was stopped"),
+					},
+				},
+			],
+		},
+	]);
+});
+it("keeps the last checkpoint when a turn settles without in-flight calls", async () => {
+	await submit();
+	const turn = await claimApiTurn();
+	if (!turn) throw Error("missing turn");
+	await finalizeApiTurn(turn, "failed", []);
+	await db.exec(
+		"create table if not exists agent_task_command_receipt(parent_session_id uuid,request_id text,status text,response jsonb)",
+	);
+	expect(
+		await previousTurnMessages("alice", sessionId, "test-model", revision),
+	).toEqual([{ role: "user", content: "test" }]);
+});
 it("fails expired leases instead of replaying uncertain side effects", async () => {
 	await submit();
 	const turn = await claimApiTurn();
@@ -617,4 +678,87 @@ it("stores failover preferences per user with safe defaults", async () => {
 			connectionOrder: ["not-a-connection"],
 		}),
 	).rejects.toThrow();
+});
+
+it("queues a send only behind a running turn and shows it until a step takes it", async () => {
+	const {
+		queueUserMessageWhileRunning,
+		takeNextQueuedUserMessage,
+		removeQueuedUserMessage,
+		restoreQueuedUserMessage,
+	} = await import("../src/server/adapters/queued-user-messages");
+	const send = (id: string, text: string) => ({
+		item: { kind: "userMessage" as const, id: SessionItemId(id), text },
+		message: text,
+		harnessId: "codex" as const,
+		modelId: "test-model",
+	});
+	const first = randomUUID();
+	const second = randomUUID();
+	// An idle chat starts a turn instead.
+	expect(
+		await queueUserMessageWhileRunning("alice", sessionId, send(first, "one")),
+	).toBe("not-running");
+	await db.query("update agent_session set turn_status='running' where id=$1", [
+		sessionId,
+	]);
+	// Another owner cannot queue into this chat.
+	expect(
+		await queueUserMessageWhileRunning("bob", sessionId, send(first, "one")),
+	).toBe("not-running");
+	expect(
+		await queueUserMessageWhileRunning("alice", sessionId, send(first, "one")),
+	).toBe("queued");
+	// A replayed send is queued once.
+	expect(
+		await queueUserMessageWhileRunning("alice", sessionId, send(first, "one")),
+	).toBe("queued");
+	expect(
+		await queueUserMessageWhileRunning("alice", sessionId, send(second, "two")),
+	).toBe("queued");
+	const snapshot = await conversationSnapshot("alice", sessionId);
+	expect(snapshot?.progress.items).toEqual([
+		expect.objectContaining({ id: first, queued: true }),
+		expect.objectContaining({ id: second, queued: true }),
+	]);
+	// Nothing starts a new turn while the current one runs.
+	expect(await takeNextQueuedUserMessage("alice", sessionId)).toBeNull();
+	// A step delivers the first; the second stays queued.
+	const delivered: unknown[] = [];
+	await injectServerPeerMessages(
+		sessionId,
+		[],
+		async (_messages, items) => {
+			delivered.push(...items);
+			await db.query("update agent_session set items=$2 where id=$1", [
+				sessionId,
+				JSON.stringify(items.slice(0, 1)),
+			]);
+		},
+		() => false,
+	);
+	expect(delivered).toHaveLength(2);
+	expect(await removeQueuedUserMessage("alice", sessionId, first)).toBe(false);
+	expect(
+		await queueUserMessageWhileRunning(
+			"alice",
+			sessionId,
+			send(randomUUID(), "three"),
+		),
+	).toBe("queued");
+	await db.query(
+		"update agent_session set turn_status='completed' where id=$1",
+		[sessionId],
+	);
+	const next = await takeNextQueuedUserMessage("alice", sessionId);
+	expect(next?.item.text).toBe("three");
+	expect(next?.message).toBe("three");
+	expect(await takeNextQueuedUserMessage("alice", sessionId)).toBeNull();
+	if (!next) throw new Error("expected a queued message");
+	await restoreQueuedUserMessage(sessionId, next);
+	expect(await takeNextQueuedUserMessage("bob", sessionId)).toBeNull();
+	expect(await removeQueuedUserMessage("alice", sessionId, next.item.id)).toBe(
+		true,
+	);
+	expect(await takeNextQueuedUserMessage("alice", sessionId)).toBeNull();
 });

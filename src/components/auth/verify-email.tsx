@@ -13,6 +13,7 @@ import {
 } from "#/components/ui/card.tsx";
 import { FieldDescription } from "#/components/ui/field.tsx";
 import { Spinner } from "#/components/ui/spinner.tsx";
+import { safeReturnTo } from "#/domain/return-to";
 import { cn } from "#/lib/utils.ts";
 import { OpenEmailButton } from "./open-email-button";
 import { useIsHydrated } from "./use-is-hydrated";
@@ -104,7 +105,7 @@ export function VerifyEmail({ className }: VerifyEmailProps) {
 								onClick={() =>
 									sendVerificationEmail({
 										email,
-										callbackURL: `${baseURL}${redirectTo}`,
+										callbackURL: `${baseURL}${safeReturnTo(redirectTo)}`,
 									})
 								}
 							>

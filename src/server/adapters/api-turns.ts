@@ -6,8 +6,9 @@ import {
 	type ApiTurnSettings,
 	apiTurnSettings,
 } from "#/domain/api-turn-settings";
+import { jsonbText } from "#/domain/jsonb";
 import type { TurnFailover } from "#/domain/model-failover";
-import { providerNeutralHistory } from "#/domain/runtime-handoff";
+import { continuedTurnHistory } from "#/domain/runtime-handoff";
 import type { SessionItem } from "#/domain/session-item";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
 import {
@@ -176,8 +177,8 @@ export async function enqueueApiTurn(input: {
 				input.connectionId,
 				input.revision,
 				input.modelId,
-				JSON.stringify(input.messages),
-				JSON.stringify(input.items),
+				jsonbText(input.messages),
+				jsonbText(input.items),
 				input.idempotencyKey ?? null,
 				configuredTurnExecutor(process.env.YTIMESY_MODEL_EXECUTION_TARGET),
 				JSON.stringify(input.settings ?? {}),
@@ -190,7 +191,7 @@ export async function enqueueApiTurn(input: {
 				input.sessionId,
 				input.userId,
 				input.routeId,
-				JSON.stringify(input.items),
+				jsonbText(input.items),
 				subscription ? "codex" : "api",
 			],
 		);
@@ -224,36 +225,54 @@ export async function enqueueApiTurn(input: {
 	}
 }
 
-/** Resume the actual tool conversation only when transport and model remain compatible. */
+/**
+ * The structured history the next turn continues from: the restored point,
+ * else the latest settled turn's saved messages however it ended. Null only
+ * when nothing was saved (the caller rebuilds visible text instead).
+ */
 export async function previousTurnMessages(
 	userId: string,
 	sessionId: string,
 	modelId: string,
 	revision: string,
 ) {
-	const recovered = await recoveredConversation(
-		userId,
-		sessionId,
-		modelId,
-		revision,
-	);
-	if (recovered !== null) return recovered.messages;
+	const next = { modelId, connectionRevision: revision };
+	const recovered = await recoveredConversation(userId, sessionId);
+	if (recovered !== null)
+		return continuedTurnHistory(
+			{
+				messages: recovered.messages,
+				modelId: recovered.modelId,
+				connectionRevision: recovered.revision,
+				state: "completed",
+				failedOver: false,
+			},
+			next,
+		);
 	const result = await database().query<ApiTurn>(
 		"select * from api_turn where user_id=$1 and session_id=$2 order by created_at desc limit 1",
 		[userId, sessionId],
 	);
 	const previous = result.rows[0];
 	if (
-		previous?.state !== "completed" ||
-		previous.model_id !== modelId ||
-		previous.connection_revision !== revision
+		!previous ||
+		previous.state === "queued" ||
+		previous.state === "running" ||
+		!Array.isArray(previous.messages) ||
+		!previous.messages.length
 	)
 		return null;
-	// A turn that failed over ended on another provider; its native items
-	// (encrypted reasoning, signatures) must not reach the chosen one.
-	return previous.failover
-		? providerNeutralHistory(previous.messages)
-		: previous.messages;
+	return continuedTurnHistory(
+		{
+			messages: previous.messages,
+			modelId: previous.model_id,
+			connectionRevision: previous.connection_revision,
+			state: previous.state,
+			// Its native items (encrypted reasoning, signatures) came from the fallback.
+			failedOver: Boolean(previous.failover),
+		},
+		next,
+	);
 }
 
 /**
@@ -366,8 +385,8 @@ export async function checkpointApiTurn(
 		[
 			turn.id,
 			turn.lease_id,
-			JSON.stringify(messages),
-			JSON.stringify(items),
+			jsonbText(messages),
+			jsonbText(items),
 			failover ? JSON.stringify(failover) : null,
 		],
 	);
@@ -387,7 +406,7 @@ export async function publishApiTurnProgress(
 	 and heartbeat_at>=now()-interval '45 seconds' returning session_id,updated_at)
 	 update agent_session set items=$3,updated_at=now() where id in(select session_id from saved)
 	 returning (select updated_at::text from saved) as version`,
-		[turn.id, turn.lease_id, JSON.stringify(items)],
+		[turn.id, turn.lease_id, jsonbText(items)],
 	);
 	if (result.rows[0])
 		mirrorTurnHistory(turn.id, result.rows[0].version, { items });
@@ -419,21 +438,33 @@ export async function finishApiTurn(
 	return (await finalizeApiTurn(turn, state, items)) !== null;
 }
 
-/** Return the effective state so a stop racing with completion still stops owned commands. */
+/**
+ * Return the effective state so a stop racing with completion still stops owned commands.
+ * `messages`, when given, replaces the saved model history in the same fenced
+ * write: a stop or failure mid-step keeps the step's started tool calls, which
+ * checkpoints (refused once a stop is requested) could not save.
+ */
 export async function finalizeApiTurn(
 	turn: ApiTurn,
 	state: "completed" | "failed" | "cancelled",
 	items: readonly SessionItem[],
+	messages?: readonly ModelMessage[],
 ) {
 	const result = await database().query<
 		{ state: "completed" | "failed" | "cancelled" } & SettledTurnRow
 	>(
-		`with saved as (update api_turn set state=case when cancel_requested then 'cancelled' else $3 end,items=$4,updated_at=now()
+		`with saved as (update api_turn set state=case when cancel_requested then 'cancelled' else $3 end,items=$4,messages=coalesce($5::jsonb,messages),updated_at=now()
 		 where id=$1 and lease_id=$2 and state='running' and heartbeat_at>=now()-interval '45 seconds' returning id,session_id,state,created_at)
 		 update agent_session s set items=$4,turn_status=case when saved.state='cancelled' then 'idle' else saved.state end,
 		 task_state=case when parent_session_id is null then task_state when saved.state='completed' then 'done' when saved.state='failed' then 'failed' else 'idle' end,
 		 updated_at=now() from saved where s.id=saved.session_id returning ${SETTLED_TURN_COLUMNS}`,
-		[turn.id, turn.lease_id, state, JSON.stringify(items)],
+		[
+			turn.id,
+			turn.lease_id,
+			state,
+			jsonbText(items),
+			messages ? jsonbText(messages) : null,
+		],
 	);
 	captureSettledTurns(result.rows);
 	if (result.rows[0]) await wakeConversationProgress();

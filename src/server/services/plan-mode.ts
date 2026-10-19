@@ -6,6 +6,10 @@ import {
 	PLAN_TEXT_LIMIT,
 	PROPOSE_PLAN_TOOL,
 } from "#/domain/agent-plan";
+import {
+	LEAN_COMMAND_ARGUMENTS,
+	leanToolNames,
+} from "#/domain/harness-model-profile";
 import { fileChangesFromShellCommand } from "#/domain/shell-file-change";
 
 /** Tools whose successful call ends the turn. */
@@ -24,7 +28,16 @@ const EDITING_TOOLS = new Set([
 	"replace_text",
 	"rename_symbol",
 	"publish_task",
+	// Lean surfaces' editing tools.
+	...leanToolNames(["write", "edit"]),
 ]);
+
+/** Command tools whose shell text may write files, and the argument holding it. */
+const COMMAND_TOOLS: Readonly<Record<string, string>> = {
+	execute_command: "command",
+	bash: "command",
+	...LEAN_COMMAND_ARGUMENTS,
+};
 
 const REFUSAL = {
 	blocked: true,
@@ -46,9 +59,11 @@ function startsWritingWork(name: string, args: unknown) {
 		].includes(name)
 	)
 		return true;
-	if (name === "execute_command") {
+	if (name in COMMAND_TOOLS) {
 		// Best effort: shell writes the transcript would show as file changes.
-		const command = (args as { command?: unknown } | null)?.command;
+		const command = (args as Record<string, unknown> | null)?.[
+			COMMAND_TOOLS[name]
+		];
 		return (
 			typeof command === "string" &&
 			fileChangesFromShellCommand(command).length > 0

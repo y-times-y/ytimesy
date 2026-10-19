@@ -1,7 +1,9 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import { SessionItemId } from "#/domain/ids";
 import { subscriptionTurnRevision } from "#/domain/subscription-turn";
 import {
 	type ApiTurn,
+	checkpointApiTurn,
 	claimApiTurn,
 	enqueueApiTurn,
 	inheritedSubscriptionSettings,
@@ -15,6 +17,10 @@ const mocks = vi.hoisted(() => ({
 	capture: vi.fn(),
 }));
 vi.mock("./analytics", () => ({ captureServerAnalytics: mocks.capture }));
+vi.mock("./turn-history-mirror", () => ({ mirrorTurnHistory: vi.fn() }));
+vi.mock("./conversation-progress-wake", () => ({
+	wakeConversationProgress: vi.fn(async () => undefined),
+}));
 vi.mock("./database", () => ({
 	database: () => ({ connect: async () => mocks, query: mocks.query }),
 }));
@@ -184,7 +190,23 @@ it("does not queue when subscription credentials were revoked", async () => {
 	);
 });
 
-it("only continues completed compatible tool history", async () => {
+it("continues saved tool history however the last turn ended", async () => {
+	const call = {
+		role: "assistant" as const,
+		content: [
+			{
+				type: "reasoning" as const,
+				text: "",
+				providerOptions: { openai: { encryptedContent: "sealed" } },
+			},
+			{
+				type: "tool-call" as const,
+				toolCallId: "call-1",
+				toolName: "execute_command",
+				input: { command: "pnpm test" },
+			},
+		],
+	};
 	const previous = {
 		state: "completed",
 		model_id: "model",
@@ -195,11 +217,99 @@ it("only continues completed compatible tool history", async () => {
 	expect(
 		await previousTurnMessages("owner", "chat", "model", input.revision),
 	).toEqual(previous.messages);
-	expect(
-		await previousTurnMessages("owner", "chat", "other", input.revision),
-	).toBeNull();
-	mocks.query.mockResolvedValue({ rows: [{ ...previous, state: "failed" }] });
+	// A stopped turn keeps its native history; its unanswered call gets a stand-in.
+	mocks.query.mockResolvedValue({
+		rows: [
+			{
+				...previous,
+				state: "cancelled",
+				messages: [...previous.messages, call],
+			},
+		],
+	});
+	const stopped = await previousTurnMessages(
+		"owner",
+		"chat",
+		"model",
+		input.revision,
+	);
+	expect(stopped?.slice(0, 2)).toEqual([...previous.messages, call]);
+	expect(stopped?.[2]).toMatchObject({
+		role: "tool",
+		content: [
+			{
+				toolCallId: "call-1",
+				output: {
+					type: "error-text",
+					value: expect.stringContaining("stopped"),
+				},
+			},
+		],
+	});
+	// Another model reads it provider-neutral: no reasoning, the call kept.
+	mocks.query.mockResolvedValue({
+		rows: [
+			{ ...previous, state: "failed", messages: [...previous.messages, call] },
+		],
+	});
+	const switched = await previousTurnMessages(
+		"owner",
+		"chat",
+		"other",
+		input.revision,
+	);
+	expect(JSON.stringify(switched)).not.toContain("sealed");
+	expect(switched?.[1]).toMatchObject({
+		role: "assistant",
+		content: [{ type: "tool-call", toolCallId: "call-1" }],
+	});
+	expect(switched?.[2]).toMatchObject({
+		role: "tool",
+		content: [{ output: { value: expect.stringContaining("interrupted") } }],
+	});
+	// Nothing saved, or a turn still in flight: rebuild from the transcript.
+	mocks.query.mockResolvedValue({ rows: [] });
 	expect(
 		await previousTurnMessages("owner", "chat", "model", input.revision),
 	).toBeNull();
+	mocks.query.mockResolvedValue({ rows: [{ ...previous, state: "running" }] });
+	expect(
+		await previousTurnMessages("owner", "chat", "model", input.revision),
+	).toBeNull();
+});
+
+it("stores a tool output carrying NUL bytes without the jsonb escape Postgres rejects", async () => {
+	mocks.query.mockResolvedValue({ rows: [{ version: "v1" }] });
+	const output = "#!/bin/sh\u0000\u0000ELF binary launcher";
+	await checkpointApiTurn(
+		{ id: "turn", lease_id: "lease" } as ApiTurn,
+		[
+			{
+				role: "tool",
+				content: [
+					{
+						type: "tool-result",
+						toolCallId: "call-1",
+						toolName: "bash",
+						output: { type: "text", value: output },
+					},
+				],
+			},
+		],
+		[
+			{
+				kind: "dynamicToolCall",
+				id: SessionItemId("call-1"),
+				tool: "bash",
+				input: "{}",
+				output,
+				status: "completed",
+			},
+		],
+	);
+	const [, params] = mocks.query.mock.calls[0] as [string, unknown[]];
+	for (const param of params.slice(2, 4)) {
+		expect(param).not.toContain("\\u0000");
+		expect(param).toContain("ELF binary launcher");
+	}
 });

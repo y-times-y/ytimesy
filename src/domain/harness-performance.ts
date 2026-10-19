@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { agentTaskToolDefinitions } from "./agent-task-definitions";
+import { leanToolNames } from "./harness-model-profile";
 
 const toolNames = [
 	...agentTaskToolDefinitions.map((tool) => tool.name),
@@ -50,6 +51,8 @@ const toolNames = [
 	"debug_node",
 	"prepare_code_tools",
 	"plan_parallel_work",
+	// Lean surfaces (docs/builder-tool-surface.md).
+	...leanToolNames(),
 	"other",
 ] as const;
 export const harnessToolName = z.enum(toolNames);
@@ -106,6 +109,7 @@ export function toolMetricCategory(
 			"rename_symbol",
 			"rename_file",
 			"apply_code_action",
+			...leanToolNames(["write", "edit"]),
 		].includes(name)
 	)
 		return "edit";
@@ -122,6 +126,7 @@ export function toolMetricCategory(
 			"debug_program",
 			"debug_node",
 			"prepare_code_tools",
+			...leanToolNames(["command", "stdin"]),
 		].includes(name)
 	)
 		return "command";
@@ -131,6 +136,7 @@ export function toolMetricCategory(
 		[
 			"read_file",
 			"view_image",
+			...leanToolNames(["read", "glob", "grep", "image"]),
 			"read_files",
 			"search_files",
 			"list_files",

@@ -36,12 +36,14 @@ beforeAll(async () => {
 		"20260915103000_agent_session_listed_model.sql",
 		"20260915110000_agent_session_turn_status.sql",
 		"20260930220000_chat_branches.sql",
+		"20261018010000_builder_subagents.sql",
 		"20260920010000_agent_account_per_provider.sql",
 		"20260921230000_agent_task_lifecycle.sql",
 		"20260921231000_agent_task_events.sql",
 		"20260919161500_workspace_snapshot_source.sql",
 		"20260927210000_project_environments.sql",
 		"20260927220000_agent_competitions.sql",
+		"20261018120000_pr_evidence.sql",
 	])
 		await db.exec(await readFile(`supabase/migrations/${file}`, "utf8"));
 	await db.exec(

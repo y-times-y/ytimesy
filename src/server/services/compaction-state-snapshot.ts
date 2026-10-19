@@ -1,4 +1,5 @@
 import type { ModelMessage } from "ai";
+import { clip } from "#/domain/clip";
 import { posixShellQuoted } from "#/domain/posix-command";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 
@@ -46,10 +47,7 @@ function resultValue(output: unknown): unknown {
 }
 
 function clipped(command: string) {
-	const line = command.replace(/\s+/g, " ").trim();
-	return line.length > MAX_COMMAND_CHARACTERS
-		? `${line.slice(0, MAX_COMMAND_CHARACTERS - 1)}…`
-		: line;
+	return clip(command.replace(/\s+/g, " ").trim(), MAX_COMMAND_CHARACTERS);
 }
 
 /** Read command outcomes from the transcript's own tool calls and results, never from model prose. */
@@ -174,9 +172,7 @@ export function formatStateSnapshot(input: {
 	outcomes: CommandOutcomes;
 }) {
 	const git = input.git?.trim()
-		? input.git.trim().length > MAX_GIT_CHARACTERS
-			? `${input.git.trim().slice(0, MAX_GIT_CHARACTERS)}\n[git output truncated]`
-			: input.git.trim()
+		? clip(input.git.trim(), MAX_GIT_CHARACTERS, "\n[git output truncated]")
 		: "Unavailable (the workspace could not be inspected now; inspect it with git directly).";
 	const checks = input.outcomes.checks.length
 		? input.outcomes.checks.map(
@@ -199,9 +195,7 @@ export function formatStateSnapshot(input: {
 		"## Background commands still running (use continue_command with the id)",
 		...running,
 	].join("\n");
-	return text.length > MAX_SNAPSHOT_CHARACTERS
-		? `${text.slice(0, MAX_SNAPSHOT_CHARACTERS)}\n[snapshot truncated]`
-		: text;
+	return clip(text, MAX_SNAPSHOT_CHARACTERS, "\n[snapshot truncated]");
 }
 
 /** Status plus a diff stat against the chat's starting point (HEAD when none was recorded). */
