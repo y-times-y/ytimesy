@@ -189,6 +189,9 @@ describe("hard set tool-call record", () => {
 		expect(summary.runCode).toEqual({
 			programs: 1,
 			innerByTool: { bash: 2, read: 1 },
+			innerPerProgram: [3],
+			// The fixture's inner calls carry no start offsets.
+			concurrencyPerProgram: [null],
 		});
 		expect(summary.modelByTool).toEqual({ bash: 1, agent: 1, find_tools: 1 });
 		const line = toolCallLine(summary);
