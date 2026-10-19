@@ -3,8 +3,9 @@ import { cloudflare } from "@cloudflare/vite-plugin";
 import tailwindcss from "@tailwindcss/vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
-import { defineConfig, type Plugin } from "vite";
+import { defineConfig, loadEnv, type Plugin } from "vite";
 import { inlineGuestPrograms } from "./scripts/guest-program-assets.ts";
+import { assertProductionBuildAnalytics } from "./scripts/production-settings.ts";
 import { terminalWebsocketPlugin } from "./src/server/terminal-vite-plugin.ts";
 
 /** Production bundles cannot read guest programs from the checkout at runtime. */
@@ -38,6 +39,20 @@ function workerWebSockets(): Plugin {
 	};
 }
 
+/** Fails a production web build that would ship without browser analytics. */
+function productionAnalyticsGuard(): Plugin {
+	return {
+		name: "ytimesy-production-analytics-guard",
+		apply: "build",
+		config(_, { mode }) {
+			assertProductionBuildAnalytics({
+				...loadEnv(mode, process.cwd(), "VITE_"),
+				...process.env,
+			});
+		},
+	};
+}
+
 // The local dev server runs on Node; YTIMESY_TARGET=cloudflare builds the web Worker.
 const cloudflareTarget = process.env.YTIMESY_TARGET === "cloudflare";
 
@@ -59,6 +74,7 @@ const config = defineConfig({
 		tailwindcss(),
 		terminalWebsocketPlugin(),
 		guestProgramAssets(),
+		productionAnalyticsGuard(),
 	],
 });
 

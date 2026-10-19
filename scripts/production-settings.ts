@@ -38,3 +38,41 @@ export function productionRuntimeSettings(
 		AUTH_EMAIL_FROM: env.AUTH_EMAIL_FROM || "noreply@ytimesy.com",
 	};
 }
+
+/**
+ * Server analytics and exception capture read POSTHOG_PROJECT_TOKEN
+ * (src/server/adapters/analytics.ts); the browser bundle reads
+ * VITE_POSTHOG_PROJECT_TOKEN at build time. An older name, POSTHOG_KEY, was
+ * deployed but never read, so production silently had no analytics.
+ */
+export function productionAnalyticsSettings(
+	env: Readonly<Record<string, string | undefined>>,
+): Record<string, string> {
+	if (env.POSTHOG_KEY && !env.POSTHOG_PROJECT_TOKEN)
+		throw new Error(
+			"POSTHOG_KEY is not read by the app; rename it to POSTHOG_PROJECT_TOKEN.",
+		);
+	const missing = [
+		"POSTHOG_PROJECT_TOKEN",
+		"VITE_POSTHOG_PROJECT_TOKEN",
+	].filter((name) => !env[name]?.trim());
+	if (missing.length)
+		throw new Error(
+			`Production deployment is missing ${missing.join(", ")} (PostHog project token; analytics and error capture).`,
+		);
+	return {
+		POSTHOG_PROJECT_TOKEN: env.POSTHOG_PROJECT_TOKEN as string,
+		POSTHOG_HOST: env.POSTHOG_HOST || "https://us.i.posthog.com",
+	};
+}
+
+/** A production web build without the browser PostHog token ships blind. */
+export function assertProductionBuildAnalytics(
+	env: Readonly<Record<string, string | undefined>>,
+) {
+	if (env.CLOUDFLARE_ENV !== "production") return;
+	if (!env.VITE_POSTHOG_PROJECT_TOKEN?.trim())
+		throw new Error(
+			"Production web build requires VITE_POSTHOG_PROJECT_TOKEN (browser analytics and error capture).",
+		);
+}

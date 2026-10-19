@@ -1,7 +1,9 @@
 import { expect, it } from "vitest";
 import { retentionTouchParams } from "#/server/adapters/freestyle/workspace-retention";
 import {
+	assertProductionBuildAnalytics,
 	PRODUCTION_RETENTION_ENROLL_AFTER,
+	productionAnalyticsSettings,
 	productionRuntimeSettings,
 } from "../scripts/production-settings";
 
@@ -54,4 +56,41 @@ it("enrolls production agent VMs created after the cutover, never earlier ones",
 	} finally {
 		process.env = saved;
 	}
+});
+
+it("deploys the PostHog token under the name the server reads", () => {
+	expect(
+		productionAnalyticsSettings({
+			POSTHOG_PROJECT_TOKEN: "phc_server",
+			VITE_POSTHOG_PROJECT_TOKEN: "phc_browser",
+		}),
+	).toEqual({
+		POSTHOG_PROJECT_TOKEN: "phc_server",
+		POSTHOG_HOST: "https://us.i.posthog.com",
+	});
+	expect(() =>
+		productionAnalyticsSettings({
+			POSTHOG_KEY: "phc_old",
+			VITE_POSTHOG_PROJECT_TOKEN: "phc_browser",
+		}),
+	).toThrow(/rename it to POSTHOG_PROJECT_TOKEN/);
+	expect(() =>
+		productionAnalyticsSettings({ POSTHOG_PROJECT_TOKEN: "phc_server" }),
+	).toThrow(/missing VITE_POSTHOG_PROJECT_TOKEN/);
+});
+
+it("fails only a production web build that lacks the browser token", () => {
+	expect(() =>
+		assertProductionBuildAnalytics({ CLOUDFLARE_ENV: "production" }),
+	).toThrow(/VITE_POSTHOG_PROJECT_TOKEN/);
+	expect(() =>
+		assertProductionBuildAnalytics({
+			CLOUDFLARE_ENV: "production",
+			VITE_POSTHOG_PROJECT_TOKEN: "phc_browser",
+		}),
+	).not.toThrow();
+	expect(() => assertProductionBuildAnalytics({})).not.toThrow();
+	expect(() =>
+		assertProductionBuildAnalytics({ CLOUDFLARE_ENV: "development" }),
+	).not.toThrow();
 });
