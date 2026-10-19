@@ -98,3 +98,33 @@ async function deleteRule(freestyle: Freestyle, ruleId: string) {
 		throw error;
 	});
 }
+
+const authorizers = new Map<string, Promise<string>>();
+
+/**
+ * The account's forward-auth config for `url`, created on first use. Static
+ * header values are write-only at Freestyle, so the config is found by URL
+ * (which carries a key version) rather than compared.
+ */
+export function ensureVmEdgeAuthorizer(
+	freestyle: Freestyle,
+	config: {
+		url: string;
+		headers: Record<string, string>;
+		protectedCookies: string[];
+	},
+) {
+	const known = authorizers.get(config.url);
+	if (known) return known;
+	const pending = (async () => {
+		const { configs } = await freestyle.tls.forwardAuth.list();
+		const existing = configs.find((current) => current.url === config.url);
+		if (existing) return existing.id;
+		return (
+			await freestyle.tls.forwardAuth.create({ ...config, timeoutMs: 3000 })
+		).id;
+	})();
+	authorizers.set(config.url, pending);
+	pending.catch(() => authorizers.delete(config.url));
+	return pending;
+}

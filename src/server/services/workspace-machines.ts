@@ -80,6 +80,12 @@ export interface WorkspaceMachines {
 		kinds: readonly VmEdgeRouteKind[],
 		port?: number,
 	) => Promise<number>;
+	/** Id of the account's forward-auth config at this URL, created on first use. */
+	readonly ensureEdgeAuthorizer?: (config: {
+		url: string;
+		headers: Record<string, string>;
+		protectedCookies: string[];
+	}) => Promise<string>;
 	readonly destroyOrphans: (slugPrefix: string) => Promise<readonly string[]>;
 	readonly snapshotEnvironment: (
 		workspaceId: WorkspaceId,

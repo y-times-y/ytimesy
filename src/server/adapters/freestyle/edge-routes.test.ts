@@ -1,6 +1,7 @@
 import type { Freestyle } from "freestyle";
 import { expect, it, vi } from "vitest";
 import {
+	ensureVmEdgeAuthorizer,
 	listVmEdgeRoutes,
 	publishVmEdgeRoute,
 	withdrawVmEdgeRoutes,
@@ -113,4 +114,39 @@ it("withdraws our routes by kind and port, tolerating ones already gone", async 
 		await withdrawVmEdgeRoutes(freestyle, "vm-1", ["desk", "tools", "pv"]),
 	).toBe(3);
 	expect(rules.map((rule) => rule.id)).toEqual(["theirs"]);
+});
+
+it("finds the forward-auth config by URL, creating it once", async () => {
+	const configs: { id: string; url: string }[] = [];
+	const forwardAuth = {
+		list: vi.fn(async () => ({
+			configs: [...configs],
+			totalCount: configs.length,
+		})),
+		create: vi.fn(async (config: { url: string }) => {
+			const created = { id: `fa-${configs.length}`, url: config.url };
+			configs.push(created);
+			return created;
+		}),
+	};
+	const freestyle = { tls: { forwardAuth } } as unknown as Freestyle;
+	const config = {
+		url: "https://app.example/api/vm-edge/authorize?v=abc",
+		headers: { "x-ytimesy-edge-key": "k" },
+		protectedCookies: ["__Host-ytimesy-preview"],
+	};
+	expect(await ensureVmEdgeAuthorizer(freestyle, config)).toBe("fa-0");
+	expect(await ensureVmEdgeAuthorizer(freestyle, config)).toBe("fa-0");
+	expect(forwardAuth.create).toHaveBeenCalledOnce();
+	expect(forwardAuth.create).toHaveBeenCalledWith({
+		...config,
+		timeoutMs: 3000,
+	});
+	configs.push({ id: "fa-existing", url: "https://other.example/x" });
+	expect(
+		await ensureVmEdgeAuthorizer(freestyle, {
+			...config,
+			url: "https://other.example/x",
+		}),
+	).toBe("fa-existing");
 });
