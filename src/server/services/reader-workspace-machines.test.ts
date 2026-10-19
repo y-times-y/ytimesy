@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceId } from "#/domain/ids";
 import { PROJECT_CWD_PATH } from "../adapters/freestyle/clone-project";
+import { writeAgentProjectSecrets } from "./project-secrets";
 import { forgetPreparedReaders } from "./reader-workspace-machines";
 import { machinesForAgentSession } from "./session-workspace-machines";
 import type { WorkspaceMachines } from "./workspace-machines";
@@ -117,6 +118,45 @@ describe("read-only subagent machines", () => {
 		expect(read).toContain("sudo -n -u ytimesy-reader");
 		expect(decoded(read).join("\n")).toContain(
 			"cat -- '/tmp/ytimesy-secrets/agent.env'",
+		);
+	});
+
+	// Reproduces the checker's 0-step failure (rvcm-check1): the turn wrote the
+	// project env file through the reader's machines. The secrets directory is
+	// the default user's (0700), so the reader's chmod fails; were it allowed,
+	// the env file is still outside what a reader may write. api-turn skips the
+	// write for readers (sessionReceivesProjectSecrets).
+	it("cannot write project secrets as the reader, so reader turns must not try", async () => {
+		const { machines } = fakeMachines();
+		// The OS's answer: the directory is the default user's, so the reader's chmod fails.
+		let ownedByDefaultUser = true;
+		vi.mocked(machines.exec).mockImplementation(async (_target, command) =>
+			ownedByDefaultUser &&
+			command.includes("ytimesy-reader") &&
+			decoded(command).some((line) =>
+				line.includes("chmod 700 '/tmp/ytimesy-secrets'"),
+			)
+				? {
+						exitCode: 1,
+						stdout: "",
+						stderr:
+							"chmod: changing permissions of '/tmp/ytimesy-secrets': Operation not permitted",
+					}
+				: { exitCode: 0, stdout: "contents", stderr: "" },
+		);
+		const reader = machinesForAgentSession(machines, {
+			id: "checker-1",
+			taskPlacement: "shared",
+			agentRole: "checker",
+		});
+		const secrets = { envFile: "", redact: [], names: [] };
+		await expect(writeAgentProjectSecrets(reader, vm, secrets)).rejects.toThrow(
+			"Could not prepare project secrets in the workspace.",
+		);
+		// Were the reader allowed to prepare it, the env file is still not its to write.
+		ownedByDefaultUser = false;
+		await expect(writeAgentProjectSecrets(reader, vm, secrets)).rejects.toThrow(
+			"cannot write /tmp/ytimesy-secrets/agent.env",
 		);
 	});
 });

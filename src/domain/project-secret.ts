@@ -1,4 +1,5 @@
 import { posixShellQuoted } from "./posix-command";
+import { isReaderRole, type SubagentRole } from "./subagent";
 
 /**
  * Where a task VM keeps the project's environment variables and runtime
@@ -7,6 +8,23 @@ import { posixShellQuoted } from "./posix-command";
  */
 export const AGENT_SECRETS_DIRECTORY = "/tmp/ytimesy-secrets";
 export const AGENT_SECRETS_ENV_PATH = `${AGENT_SECRETS_DIRECTORY}/agent.env`;
+
+/**
+ * Whether a session's workspace gets the project's env file and is told the
+ * secret names. Read-only subagents (researcher, reviewer, checker) only
+ * read and review, so they never receive secrets: their commands run as the
+ * reader Linux user, which cannot read the 0700 secrets directory nor write
+ * the env file. They still redact the values from their output.
+ */
+export function sessionReceivesProjectSecrets(session: {
+	readonly agentRole?: SubagentRole | null;
+}) {
+	return !isReaderRole(session.agentRole);
+}
+
+/** Thrown when the env file's private directory cannot be prepared on the VM. */
+export const PROJECT_SECRETS_PREPARATION_FAILED =
+	"Could not prepare project secrets in the workspace.";
 
 /** Shell that loads the project's variables when present. */
 export const SOURCE_AGENT_SECRETS = `if [ -r ${AGENT_SECRETS_ENV_PATH} ]; then . ${AGENT_SECRETS_ENV_PATH}; fi`;
