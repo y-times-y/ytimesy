@@ -169,3 +169,26 @@ it("keeps v13-shell's behavioural guidance on lean surfaces, in their tool names
 			expect(lean, `${shape}: ${removed}`).not.toContain(removed);
 	}
 });
+
+it("points the lean profile's batching at run_code when it is offered, never at the shell alone", () => {
+	const plain = harnessModelToolInstructions("openai", "freeform", [
+		"bash",
+		"read",
+		"write",
+		"edit",
+	]);
+	const coded = harnessModelToolInstructions("openai", "freeform", [
+		"bash",
+		"read",
+		"write",
+		"edit",
+		"run_code",
+	]);
+	expect(plain).toContain("Inspect with bash");
+	expect(plain).not.toContain("run_code");
+	expect(coded).toContain("v13-lean");
+	expect(coded).not.toContain("Inspect with bash");
+	expect(coded).not.toContain("or from bash when");
+	expect(coded).toContain("one run_code program reads several files at once");
+	expect(coded).toContain("Generalize instead of fitting the examples");
+});

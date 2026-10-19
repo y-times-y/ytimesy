@@ -1,4 +1,5 @@
 import type { ModelMessage } from "ai";
+import { CODE_MODE_TOOL } from "./code-mode";
 import type { HarnessToolSurfaceId } from "./harness-variant";
 
 export type HarnessModelFamily = "openai" | "anthropic" | "google" | "other";
@@ -256,17 +257,31 @@ const SHELL_BEHAVIOUR = [
 function leanHarnessInstructions(
 	shape: LeanToolShape,
 	family: HarnessModelFamily,
+	/** run_code is offered (harness variant codeMode): batching goes through it. */
+	codeMode = false,
 ) {
-	const { command: run, edit } = LEAN_SHAPE_TOOLS[shape];
+	const tools: { command: string; edit: string; read?: string } =
+		LEAN_SHAPE_TOOLS[shape];
+	const { command: run, edit } = tools;
 	const context =
 		family === "anthropic"
 			? "Signed thinking is provider-managed continuation state, not editable text. Recover earlier findings from ~/.ytimesy/history/ instead of reconstructing or exposing signatures."
 			: family === "google"
 				? "Thought signatures are provider-managed continuation state. Do not reconstruct them or claim a missing thought was recovered; use source and ~/.ytimesy/history/ evidence."
 				: "After compaction, rely on files, command output and ~/.ytimesy/history/, not on reasoning you remember.";
+	const fix =
+		"Once you understand the cause, make the complete fix rather than a series of partial edits, then rerun the check and the project's existing tests.";
+	// With run_code offered, the shell-only wording would contradict the
+	// run_code paragraph (measured: GPT then used only the command tool).
+	if (codeMode)
+		return [
+			`Harness tool profile v13-lean (${family}): Edit files with ${edit}; when you also run its check, make the edit and run the check in one run_code program. ${context}`,
+			`Inspect by reading related files together rather than slice by slice: one run_code program reads several files at once (tools.${tools.read ?? run}) or runs ${run} commands (rg, sed -n, git, project CLIs) and returns only the relevant lines. Reproduce the problem with the smallest executable check early. ${fix}`,
+			...SHELL_BEHAVIOUR,
+		].join(" ");
 	return [
 		`Harness tool profile v13-lean (${family}): Edit files with ${edit}, or from ${run} when you can make the edit and run its check in the same command. ${context}`,
-		`Inspect with ${run} (rg, sed -n, git, project CLIs), reading related files together in one command rather than slice by slice, and reproduce the problem with the smallest executable check early. Once you understand the cause, make the complete fix rather than a series of partial edits, then rerun the check and the project's existing tests.`,
+		`Inspect with ${run} (rg, sed -n, git, project CLIs), reading related files together in one command rather than slice by slice, and reproduce the problem with the smallest executable check early. ${fix}`,
 		...SHELL_BEHAVIOUR,
 	].join(" ");
 }
@@ -295,7 +310,12 @@ export function harnessModelToolInstructions(
 	// agentTurnInstructions; this adds the same behavioural guidance as
 	// v13-shell in the lean tools' names, so a comparison measures the tools.
 	const lean = availableTools && leanSurfaceShape(availableTools);
-	if (lean) return leanHarnessInstructions(lean, family);
+	if (lean)
+		return leanHarnessInstructions(
+			lean,
+			family,
+			availableTools.includes(CODE_MODE_TOOL),
+		);
 	// A shell-shaped surface (like native Codex) gets shell-centric guidance
 	// instead of instructions for specialist tools it was not offered.
 	if (availableTools && isShellSurface(availableTools))
