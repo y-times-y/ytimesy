@@ -11,12 +11,14 @@
 // node --env-file=.env --import tsx scripts/checker-detect.ts --grade --run <name> --data <dir> [--live]
 // node --env-file=.env --import tsx scripts/checker-detect.ts --report --run <name> --data <dir>
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import {
+	chmod,
 	cp,
 	mkdir,
 	mkdtemp,
+	open,
 	readdir,
 	readFile,
 	rm,
@@ -28,6 +30,8 @@ import { join, relative, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import {
+	checkerDeadlineNotice,
+	checkerWrapUpLeadMs,
 	independentReviewBrief,
 	parseReviewVerdict,
 	type ReviewVerdict,
@@ -36,7 +40,9 @@ import { harnessVariantFromFlags } from "../src/domain/harness-variant";
 import { WorkspaceId } from "../src/domain/ids";
 import {
 	lastAgentMessageText,
+	type SessionItem,
 	sessionItemsFromUnknown,
+	sessionItemsQueuedWithUser,
 } from "../src/domain/session-item";
 import {
 	deleteAgentSessionForOwner,
@@ -47,6 +53,7 @@ import { claimApiTurn } from "../src/server/adapters/api-turns";
 import { withBackgroundJobDispatcher } from "../src/server/adapters/background-job-dispatch";
 import { closeDatabase, database } from "../src/server/adapters/database";
 import { dispatchModelWorkflow } from "../src/server/adapters/model-workflow-dispatch";
+import { queueUserMessageWhileRunning } from "../src/server/adapters/queued-user-messages";
 import { cancelServerTurn } from "../src/server/services/cancel-server-turn";
 import { sendSubscriptionTask } from "../src/server/services/codex-subscription-session";
 import {
@@ -58,16 +65,20 @@ import {
 	GRADE_SCHEMA,
 	type Grade,
 	type GraderFiles,
+	gradeFromUnknown,
 	gradingPrompt,
 	outcomeOf,
 	parseGrade,
 } from "./checker-detect/grading";
 import {
+	execHeader,
+	isAppleDouble,
 	outsideFiles,
 	parseRestoreLog,
 	type RestoreResult,
 	restoreProblems,
 	restoreScript,
+	sidecarStateProblem,
 } from "./checker-detect/restore";
 import {
 	type Sample,
@@ -138,6 +149,10 @@ const { values: flags } = parseArgs({
 		transcripts: { type: "boolean", default: false },
 		/** With --dry-run: on the local Docker host instead of development VMs. */
 		local: { type: "boolean", default: false },
+		/** Re-bundles the chosen samples (--samples or --chunk) from the backup. */
+		rebundle: { type: "boolean", default: false },
+		/** With --grade --live: grade again samples that already have a grade. */
+		regrade: { type: "boolean", default: false },
 	},
 });
 
@@ -312,11 +327,15 @@ async function bundleSample(sample: Sample, environment: TaskEnvironment) {
 			{
 				recursive: true,
 				verbatimSymlinks: true,
-				filter: (source) => !source.split("/").includes(".git"),
+				filter: (source) =>
+					!source.split("/").includes(".git") && !isAppleDouble(source),
 			},
 		);
 	}
-	execFileSync("tar", ["-czf", join(out, "workspace.tgz"), "-C", staging, "."]);
+	const modesGuessed = MODES_LOST.test(sample.path)
+		? await restoreLostExecBits(staging)
+		: [];
+	await packWorkspace(staging, join(out, "workspace.tgz"));
 	await rm(staging, { recursive: true, force: true });
 	const grader = join(out, "grader");
 	await mkdir(grader, { recursive: true });
@@ -327,8 +346,84 @@ async function bundleSample(sample: Sample, environment: TaskEnvironment) {
 			await cp(join(sample.path, "verifier", name), join(grader, name));
 	await writeFile(
 		join(out, "meta.json"),
-		`${JSON.stringify({ ...sample, artifacts: environment.artifacts }, null, 2)}\n`,
+		`${JSON.stringify({ ...sample, artifacts: environment.artifacts, modesGuessed }, null, 2)}\n`,
 	);
+	return modesGuessed;
+}
+
+/** Every regular file under a directory, as paths. */
+async function filesUnder(root: string): Promise<string[]> {
+	const info = await stat(root).catch(() => null);
+	if (!info) return [];
+	if (!info.isDirectory()) return info.isFile() ? [root] : [];
+	const found: string[] = [];
+	for (const entry of await readdir(root, { withFileTypes: true })) {
+		const path = join(root, entry.name);
+		if (entry.isDirectory()) found.push(...(await filesUnder(path)));
+		else if (entry.isFile()) found.push(path);
+	}
+	return found;
+}
+
+/** Trials from a backend that saved every artifact file as 0644 (Daytona jobs). */
+const MODES_LOST = /daytona/i;
+
+/**
+ * For a trial whose backend lost file modes: when no staged file has an
+ * execute bit, a script (`#!`) or an ELF binary gets one where it is
+ * readable, as the run almost certainly left it; listed in meta.json.
+ */
+async function restoreLostExecBits(staging: string) {
+	const files = await filesUnder(staging);
+	const modes = await Promise.all(
+		files.map(async (file) => (await stat(file)).mode),
+	);
+	if (modes.some((mode) => mode & 0o111)) return [];
+	const guessed: string[] = [];
+	for (const [index, file] of files.entries()) {
+		const handle = await open(file, "r");
+		const head = Buffer.alloc(4);
+		await handle.read(head, 0, 4, 0).finally(() => handle.close());
+		if (!execHeader(head)) continue;
+		await chmod(file, modes[index] | ((modes[index] & 0o444) >> 2));
+		guessed.push(relative(staging, file));
+	}
+	return guessed;
+}
+
+/** The workspace bundle: no AppleDouble entries or extended attributes, checked after packing. */
+async function packWorkspace(staging: string, archive: string) {
+	execFileSync(
+		"tar",
+		[
+			...(process.platform === "darwin"
+				? ["--no-mac-metadata", "--no-xattrs"]
+				: []),
+			"-czf",
+			archive,
+			"-C",
+			staging,
+			".",
+		],
+		{ env: { ...process.env, COPYFILE_DISABLE: "1" } },
+	);
+	const names = execFileSync(
+		"python3",
+		[
+			"-I",
+			"-c",
+			"import sys,tarfile\nfor name in tarfile.open(sys.argv[1]).getnames(): print(name)",
+			archive,
+		],
+		{ encoding: "utf8", maxBuffer: 256 * 1024 * 1024 },
+	)
+		.split("\n")
+		.filter(Boolean);
+	const stray = names.filter(isAppleDouble);
+	if (stray.length)
+		throw new Error(
+			`${archive}: AppleDouble entries in the bundle: ${stray.slice(0, 3).join(", ")}`,
+		);
 }
 
 if (flags.prepare) {
@@ -360,6 +455,20 @@ if (flags.prepare) {
 		`${trials.length} trials, ${selection.samples.length} samples -> ${selectionPath}`,
 	);
 	flags.list = true;
+}
+
+if (flags.rebundle) {
+	const selection = await readSelection();
+	for (const sample of chosenSamples(selection)) {
+		const guessed = await bundleSample(
+			sample,
+			await loadTaskEnvironment(flags.dataset as string, sample.task),
+		);
+		console.log(
+			`${sample.id}: bundled${guessed.length ? `; execute bit restored on ${guessed.join(", ")}` : ""}`,
+		);
+	}
+	process.exit(0);
 }
 
 if (flags.list) {
@@ -408,6 +517,12 @@ type CheckRecord = RunRecord & {
 	verdict: ReviewVerdict | null;
 	usageLimit: string | null;
 	vmResources: string | null;
+	/** Why the sample cannot be restored faithfully (no checker runs on it). */
+	unfit?: string | null;
+	/** When the deadline notice was queued (live). */
+	deadlineNoticeAt?: string | null;
+	/** The verdict came from a report cut off mid-answer. */
+	reportTruncated?: boolean;
 };
 
 function runDirectory() {
@@ -429,11 +544,17 @@ async function readRecords(dir: string) {
 	);
 }
 
-/** The latest live record per sample (dry runs never count). */
+/**
+ * The latest live record per sample (dry runs never count), its verdict read
+ * again from the saved report so parser fixes apply to earlier runs.
+ */
 function latestLive(records: readonly CheckRecord[]) {
 	const latest = new Map<string, CheckRecord>();
-	for (const record of records)
-		if (record.mode === "live") {
+	for (const stored of records)
+		if (stored.mode === "live") {
+			const record = stored.report
+				? { ...stored, verdict: parseReviewVerdict(stored.report) }
+				: stored;
 			const seen = latest.get(record.sample);
 			if (!seen || seen.startedAt < record.startedAt)
 				latest.set(record.sample, record);
@@ -452,7 +573,16 @@ async function graderFiles(sample: Sample): Promise<GraderFiles> {
 const gradesPath = (dir: string) => join(dir, "grades.json");
 
 async function readGrades(dir: string) {
-	return ((await readJson(gradesPath(dir))) ?? {}) as Record<string, Grade>;
+	const stored = ((await readJson(gradesPath(dir))) ?? {}) as Record<
+		string,
+		unknown
+	>;
+	const grades: Record<string, Grade> = {};
+	for (const [id, value] of Object.entries(stored)) {
+		const grade = gradeFromUnknown(value);
+		if (grade) grades[id] = grade;
+	}
+	return grades;
 }
 
 const findingsOf = (verdict: ReviewVerdict | null) => ({
@@ -466,6 +596,8 @@ const findingsOf = (verdict: ReviewVerdict | null) => ({
 				: entry.requirement,
 		),
 	notes: verdict?.notes ?? "",
+	requirements: verdict?.requirements ?? [],
+	assumptions: verdict?.assumptions ?? [],
 });
 
 if (flags.grade) {
@@ -478,7 +610,7 @@ if (flags.grade) {
 	const sheet = [
 		"# Checker detection: blind grading sheet",
 		"",
-		'For each sample: read the hidden test failure and the reviewer\'s findings, then fill grades.json as { "<id>": { "label": "named_cause" | "other", "otherReal": true | false | null, "cause": "...", "reason": "..." } }. named_cause: a finding identifies the defect that made at least one hidden check fail, specifically.',
+		'For each sample: read the hidden test failure and the reviewer\'s report, then fill grades.json as { "<id>": { "label": "named_cause" | "partial" | "other_real" | "wrong" | "none", "finding": <number or null>, "cause": "...", "reason": "..." } } (the labels are defined at the end of each prompt).',
 		"",
 	];
 	const pending: { id: string; prompt: string }[] = [];
@@ -494,6 +626,8 @@ if (flags.grade) {
 			flags.dataset as string,
 			sample.task,
 		);
+		// Unfit samples are reported apart and never graded.
+		if (sidecarStateProblem(environment)) continue;
 		const prompt = gradingPrompt({
 			instruction: environment.instruction,
 			evidence: failureEvidence(await graderFiles(sample)),
@@ -501,7 +635,8 @@ if (flags.grade) {
 		});
 		await writeFile(join(prompts, `${id}.txt`), `${prompt}\n`);
 		sheet.push(`## ${id}`, "", "```", prompt, "```", "");
-		if (!grades[id]) pending.push({ id, prompt });
+		if (!grades[id] || flags.regrade || grades[id].legacy)
+			pending.push({ id, prompt });
 	}
 	await writeFile(join(dir, "grading-sheet.md"), `${sheet.join("\n")}\n`);
 	console.log(
@@ -566,6 +701,13 @@ if (flags.report) {
 	const all = await readRecords(dir);
 	const records = latestLive(all);
 	const grades = await readGrades(dir);
+	const unfitReasons = new Map<string, string>();
+	for (const sample of selection.samples) {
+		const reason = sidecarStateProblem(
+			await loadTaskEnvironment(flags.dataset as string, sample.task),
+		);
+		if (reason) unfitReasons.set(sample.id, reason);
+	}
 	const rows = selection.samples.map((sample) => {
 		const record = records.get(sample.id);
 		const verdict = record?.verdict?.verdict ?? null;
@@ -575,7 +717,12 @@ if (flags.report) {
 			record,
 			verdict,
 			grade,
-			outcome: outcomeOf({ kind: sample.kind, verdict, grade }),
+			outcome: outcomeOf({
+				kind: sample.kind,
+				verdict,
+				grade,
+				unfit: unfitReasons.has(sample.id),
+			}),
 		};
 	});
 	console.log(
@@ -619,8 +766,22 @@ if (flags.report) {
 	);
 	const controls = controlRates(outcomes("control"));
 	console.log(
-		`Passing controls: ${controls.n} sample(s), ${controls.ran} checked; false alarms (verdict fail) ${controls.falseAlarms}${controls.falseAlarmRate === null ? "" : ` (${Math.round(controls.falseAlarmRate * 100)}%)`}, unsure ${controls.unsure}.`,
+		`Passing controls: ${controls.n} sample(s), ${controls.ran} checked; false alarms (verdict fail) ${controls.falseAlarms}${controls.falseAlarmRate === null ? "" : ` (${Math.round(controls.falseAlarmRate * 100)}%)`}, unsure ${controls.unsure}; unfit (left out) ${controls.unfit}.`,
 	);
+	if (unfitReasons.size) {
+		console.log(
+			"\nUnfit samples (left out of every rate; their verdicts are shown for reference):",
+		);
+		for (const row of rows.filter((entry) => entry.outcome === "unfit"))
+			console.log(
+				`- ${row.sample.id} (${row.sample.kind}): ${unfitReasons.get(row.sample.id)}; checker verdict ${row.verdict ?? "-"}`,
+			);
+	}
+	const legacy = Object.values(grades).filter((grade) => grade.legacy).length;
+	if (legacy)
+		console.log(
+			`${legacy} grade(s) are in the earlier two-label format (mapped: other+real -> other_real, other+not real -> wrong, other+unclear -> none; no partial); re-grade with --grade --live.`,
+		);
 	const tokens = [...records.values()].reduce(
 		(sum, record) =>
 			sum + (record.inputTokens ?? 0) + (record.outputTokens ?? 0),
@@ -639,6 +800,32 @@ if (flags.report) {
 }
 
 const seconds = (from: number) => Math.round((Date.now() - from) / 1000);
+
+/** All of the checker turn's agent messages, in order and in full. */
+function checkerReportText(items: readonly SessionItem[]) {
+	const texts = items.flatMap((item) =>
+		item.kind === "agentMessage" && item.text.trim() ? [item.text] : [],
+	);
+	return texts.length ? texts.join("\n\n") : lastAgentMessageText(items);
+}
+
+/** Queues the deadline notice into the running checker turn (taken at its next model step). */
+async function queueDeadlineNotice(
+	userId: string,
+	sessionId: string,
+	secondsLeft: number,
+) {
+	const text = checkerDeadlineNotice(secondsLeft);
+	const [item] = sessionItemsQueuedWithUser([], text, randomUUID());
+	if (item?.kind !== "userMessage") return "not queued";
+	return queueUserMessageWhileRunning(userId, sessionId, {
+		item,
+		message: text,
+		harnessId: "codex",
+		modelId: flags.model as string,
+		...(flags.reasoning ? { variant: flags.reasoning } : {}),
+	});
+}
 
 const ENVIRONMENT_NOTE = (workdir: string) =>
 	`\n\n(Environment: your shell commands run inside the task's container, starting in ${workdir}. File tools reach the task's working directory directly; use the shell for files elsewhere.)`;
@@ -723,13 +910,15 @@ function newRecord(sample: Sample, mode: CheckRecord["mode"]): CheckRecord {
 		verdict: null,
 		usageLimit: null,
 		vmResources: null,
+		unfit: null,
+		deadlineNoticeAt: null,
 	};
 }
 
 function describeRestore(record: CheckRecord) {
 	const restore = record.restore;
 	if (!restore) return "not restored";
-	return `restore ${record.restoreProblems.length ? `PROBLEMS: ${record.restoreProblems.join("; ")}` : "ok"} in ${record.restoreSec}s (${restore.artifacts.map((entry) => `#${entry.index} ${entry.state} ${entry.files} file(s)`).join(", ")}; ${restore.patches.map((patch) => `diff #${patch.index} ${patch.applied ? "applied" : "FAILED"}`).join(", ") || "no diff"}; ${restore.sidecars.map((sidecar) => `sidecar ${sidecar.service} ${sidecar.state}`).join(", ") || "no sidecar restarted"}; /tests ${restore.testsAbsent ? "absent" : "PRESENT"}, /solution ${restore.solutionAbsent ? "absent" : "PRESENT"}; ${restore.changedFiles.length} changed file(s)${restore.forbidden.length ? `; identical to a test/solution file: ${restore.forbidden.join(", ")}` : ""}; brief ${record.brief?.length ?? 0} chars)`;
+	return `restore ${record.restoreProblems.length ? `PROBLEMS: ${record.restoreProblems.join("; ")}` : "ok"} in ${record.restoreSec}s (${restore.artifacts.map((entry) => `#${entry.index} ${entry.state} ${entry.files} file(s)`).join(", ")}; ${restore.patches.map((patch) => `diff #${patch.index} ${patch.applied ? "applied" : "FAILED"}`).join(", ") || "no diff"}; ${restore.sidecars.map((sidecar) => `sidecar ${sidecar.service} ${sidecar.state}`).join(", ") || "no sidecar restarted"}${restore.rechecks?.length ? `; after restart ${restore.rechecks.map((entry) => `#${entry.index} ${entry.state}`).join(", ")}` : ""}; modes widened ${(restore.modes ?? []).reduce((sum, entry) => sum + (entry.changed ?? 0), 0)}${restore.modes?.some((entry) => entry.changed === null) ? " (some skipped)" : ""}; AppleDouble ${restore.appleDouble ?? "?"}; /tests ${restore.testsAbsent ? "absent" : "PRESENT"}, /solution ${restore.solutionAbsent ? "absent" : "PRESENT"}; ${restore.changedFiles.length} changed file(s)${restore.forbidden.length ? `; identical to a test/solution file: ${restore.forbidden.join(", ")}` : ""}; brief ${record.brief?.length ?? 0} chars)${record.unfit ? `; UNFIT: ${record.unfit}` : ""}`;
 }
 
 /** Prepares the task container like the VM setup: git, python3, rg when missing, and a git baseline. */
@@ -868,9 +1057,12 @@ async function localDryRun(
 			record.restore,
 			record.agentBudgetSec,
 		);
+		record.unfit = sidecarStateProblem(environment);
 		record.state = record.restoreProblems.length
 			? "restore-problem"
-			: "dry-run";
+			: record.unfit
+				? "unfit"
+				: "dry-run";
 	} catch (error) {
 		record.errors.push(safe(error));
 		record.state = "error";
@@ -989,6 +1181,14 @@ async function runSample(
 		record.state = "skipped";
 		record.errors.push(usageLimitHit ?? "Run stopped before this sample.");
 		await save();
+		return record;
+	}
+	// A service whose state cannot be restored would be graded empty.
+	record.unfit = sidecarStateProblem(environment);
+	if (record.unfit) {
+		record.state = "unfit";
+		await save();
+		console.info(`${sample.id}: unfit, not checked (${record.unfit})`);
 		return record;
 	}
 	let user: EvalUser | undefined;
@@ -1152,11 +1352,26 @@ async function runSample(
 					if (!admitted)
 						throw new Error("Turn was not admitted within two minutes.");
 					let cancelSent = false;
+					const noticeAt =
+						agentDeadline - checkerWrapUpLeadMs(record.agentBudgetSec * 1000);
 					while (true) {
 						const state = await turnState(session.id);
 						const items = sessionItemsFromUnknown(state?.items);
 						measureRun(record, items, state?.messages, () => 0);
 						record.state = state?.state ?? "missing";
+						// Near the limit the checker is told to answer with its JSON now.
+						if (
+							!record.deadlineNoticeAt &&
+							state?.state === "running" &&
+							Date.now() >= noticeAt
+						) {
+							const queued = await queueDeadlineNotice(
+								owner.userId,
+								session.id,
+								(agentDeadline - Date.now()) / 1000,
+							).catch((error: unknown) => `failed: ${safe(error)}`);
+							record.deadlineNoticeAt = `${new Date().toISOString()} (${queued})`;
+						}
 						const failure = JSON.stringify(
 							items.filter((item) => item.kind === "error"),
 						);
@@ -1188,7 +1403,8 @@ async function runSample(
 					}
 					const state = await turnState(session.id);
 					const items = sessionItemsFromUnknown(state?.items);
-					record.report = lastAgentMessageText(items);
+					// Every answer of the turn, in full: the verdict is the last JSON in it.
+					record.report = checkerReportText(items);
 					if (flags.transcripts)
 						await writeFile(
 							join(runDir, `${sample.id}.${attempt}.transcript.txt`),
@@ -1203,6 +1419,7 @@ async function runSample(
 			);
 			record.completed = record.state === "completed";
 			record.verdict = parseReviewVerdict(record.report ?? "");
+			record.reportTruncated = !!record.verdict.truncated;
 			if (record.usageLimit) throw new Error(record.usageLimit);
 		}
 		record.agentSec = live ? seconds(agentStarted) : 0;
