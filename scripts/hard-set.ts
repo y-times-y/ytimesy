@@ -43,6 +43,7 @@ import {
 import { claimApiTurn } from "../src/server/adapters/api-turns";
 import {
 	attemptLoopStates,
+	reviewLoopStates,
 	saveAttemptLoopDeadline,
 } from "../src/server/adapters/attempt-loop-store";
 import { withBackgroundJobDispatcher } from "../src/server/adapters/background-job-dispatch";
@@ -55,6 +56,7 @@ import {
 import { cancelServerTurn } from "../src/server/services/cancel-server-turn";
 import { sendSubscriptionTask } from "../src/server/services/codex-subscription-session";
 import { captureConversationCode } from "../src/server/services/conversation-code-checkpoint";
+import { reviewLoopSpend, reviewRef } from "../src/server/services/review-loop";
 import { DEVELOPMENT_EDGE_ORIGIN } from "./development-config";
 import {
 	attemptSections,
@@ -68,6 +70,10 @@ import {
 	type TaskEnvironment,
 	verifyScript,
 } from "./hard-set/environment";
+import {
+	type HardSetReviewRecord,
+	reviewLoopReport,
+} from "./hard-set/review-report";
 import { HARD_SET, HARD_SET_CHUNKS, type HardSetTask } from "./hard-set/tasks";
 import { codexUsage, preflightExecutor, sh, taskVms } from "./hard-set/vm";
 import {
@@ -161,7 +167,7 @@ function costSummary(records: HardSetRecord[]) {
 				verifierPassed: record.passed,
 			});
 			const builder = estimatedCost(record);
-			const loop = record.attemptLoop;
+			const loop = record.attemptLoop ?? record.reviewLoop;
 			return {
 				...base,
 				tokens: base.tokens + (loop?.extraTokens ?? 0),
@@ -207,6 +213,8 @@ type HardSetRecord = RunRecord & {
 	gradeTimeoutSec: number | null;
 	/** attempts=3: the loop's attempts, checker verdicts and per-attempt grades. */
 	attemptLoop?: HardSetLoopRecord | null;
+	/** review=on: the review rounds, checker verdicts and the grade of each checked tree. */
+	reviewLoop?: HardSetReviewRecord | null;
 };
 
 type HardSetLoopAttempt = {
@@ -518,6 +526,91 @@ async function readAttemptLoop(
 	};
 }
 
+/**
+ * The review loop's record after the turn: per round the checker's verdict,
+ * findings, the builder's answers and spend, and the tree it checked (graded
+ * on its own when it is not the final tree, so a fail -> fix -> pass shows).
+ */
+async function readReviewLoop(
+	sessionId: string,
+	vm: string,
+): Promise<HardSetReviewRecord | null> {
+	const state = (await reviewLoopStates(sessionId)).at(-1);
+	if (!state) return null;
+	const cwd = state.checkpoint.cwd;
+	const workspace = { machines, vm: WorkspaceId(vm), cwd };
+	const branch = (
+		await machines.exec(
+			WorkspaceId(vm),
+			`git -C ${sh(cwd)} symbolic-ref -q HEAD || true`,
+			15_000,
+		)
+	).stdout.trim();
+	const notes: string[] = [];
+	const final = await captureConversationCode(
+		workspace,
+		reviewRef(state.turnId, "final"),
+	).catch((error: unknown) => {
+		notes.push(`Final tree not captured: ${safe(error).slice(0, 200)}`);
+		return null;
+	});
+	if (state.phase !== "done")
+		notes.push(
+			`The loop stopped in phase ${state.phase} at the runner's cancel.`,
+		);
+	const spend = reviewLoopSpend(
+		state,
+		modelBilling({ harness: "codex", modelId: model }),
+	);
+	return {
+		phase: state.phase,
+		outcome: state.outcome ?? null,
+		note: state.note ?? null,
+		rounds: state.rounds.map((round) => {
+			const roundSpend = spend.rounds.find((entry) => entry.n === round.n);
+			const sameAsFinal = !!final && round.snapshot.tree === final.tree;
+			const firstSame =
+				state.rounds.find(
+					(other) => other.snapshot.tree === round.snapshot.tree,
+				)?.n ?? round.n;
+			const responses = round.fix?.responses;
+			return {
+				n: round.n,
+				verdict: round.verdict?.verdict ?? null,
+				timedOut: !!round.timedOut,
+				truncated: !!round.verdict?.truncated,
+				findings: round.findings.length,
+				findingTexts: round.findings
+					.slice(0, 5)
+					.map((finding) => `${finding.id} ${finding.text.slice(0, 200)}`),
+				decision: round.decision ?? null,
+				checkerTokens: roundSpend?.checker.tokens ?? 0,
+				checkerCostUsd: roundSpend?.checker.costUsd ?? null,
+				checkMinutes: (roundSpend?.checkMs ?? 0) / 60_000,
+				fixTokens: roundSpend?.fix.tokens ?? 0,
+				fixCostUsd: roundSpend?.fix.costUsd ?? null,
+				fixMinutes: (roundSpend?.fixMs ?? 0) / 60_000,
+				fixed: responses?.fixed.length ?? 0,
+				rejected: responses?.rejected.length ?? 0,
+				unanswered: responses?.unanswered.length ?? 0,
+				tree: round.snapshot.tree,
+				snapshot: round.snapshot,
+				sameAsFinal,
+				gradeName: sameAsFinal ? null : `artifacts-r${firstSame}`,
+				graderReward: null,
+				graderPassed: null,
+			};
+		}),
+		extraTokens: spend.checker.tokens,
+		extraCostUsd: spend.checker.costUsd,
+		checkers: state.rounds.length,
+		finalTree: final?.tree ?? null,
+		branch,
+		attemptGrading: "none",
+		notes,
+	};
+}
+
 if (flags.list) {
 	const rows = [["chunk", "task", "category", "tb4 ours", "codex", "bucket"]];
 	HARD_SET_CHUNKS.forEach((chunk, index) => {
@@ -555,6 +648,7 @@ if (flags.report) {
 	const cost = costSummary(scored.filter((record) => record.mode === "agent"));
 	if (cost) console.log(cost);
 	printAttemptLoops(records);
+	for (const line of reviewLoopReport(records)) console.log(line);
 	for (const record of records.filter((record) => !isScored(record)))
 		console.log(
 			`- ${record.task}.${record.attempt}: ${record.status} ${record.state} budget ${record.agentBudgetSec}/${record.agentRequestedSec}s ${[...record.errors, record.gradeError].filter(Boolean).join(" | ").slice(0, 300)}`,
@@ -609,6 +703,7 @@ async function finishGrading(record: HardSetRecord, until: number) {
 				record.status = "error";
 				record.gradeError = "Grader never finished.";
 				if (record.attemptLoop) record.attemptLoop.attemptGrading = "none";
+				if (record.reviewLoop) record.reviewLoop.attemptGrading = "none";
 				await client.vms.delete(vm).catch(() => {});
 				record.graderVmId = null;
 			}
@@ -627,21 +722,24 @@ async function finishGrading(record: HardSetRecord, until: number) {
 		record.passed = parsed.reward === 1;
 		record.verifierPassed = record.passed;
 		record.status = "final";
-		// Attempts whose tree is the graded one share its result.
-		for (const attempt of record.attemptLoop?.attempts ?? [])
+		// Attempts and checked trees that are the graded one share its result.
+		for (const attempt of [
+			...(record.attemptLoop?.attempts ?? []),
+			...(record.reviewLoop?.rounds ?? []),
+		])
 			if (attempt.sameAsFinal && parsed.reward !== null) {
 				attempt.graderReward = parsed.reward;
 				attempt.graderPassed = parsed.reward === 1;
 			}
 	}
-	const loop = record.attemptLoop;
+	const loop = record.attemptLoop ?? record.reviewLoop;
 	if (loop?.attemptGrading === "grading") {
 		const done = await waitDetached(vm, "verify-attempts", until).catch(
 			() => null,
 		);
 		if (!done) return record;
 		const sections = attemptSections(done.log);
-		for (const attempt of loop.attempts) {
+		for (const attempt of "attempts" in loop ? loop.attempts : loop.rounds) {
 			if (!attempt.gradeName) continue;
 			const section = sections.get(attempt.gradeName);
 			const reward = section ? parseReward(section).reward : null;
@@ -660,7 +758,8 @@ if (flags.collect) {
 	const pending = (await readRecords(runDir)).filter(
 		(record) =>
 			record.status === "grading" ||
-			record.attemptLoop?.attemptGrading === "grading",
+			record.attemptLoop?.attemptGrading === "grading" ||
+			record.reviewLoop?.attemptGrading === "grading",
 	);
 	console.info(`Collecting ${pending.length} grading run(s) in ${runDir}.`);
 	await Promise.all(
@@ -899,8 +998,8 @@ async function runTask(
 				"update agent_session set status='ready' where id=$1",
 				[session.id],
 			);
-			// The loop finishes (selection and restore included) before the cancel.
-			if (loopAttempts > 1)
+			// The loop (attempts, or a review's check and fix) finishes before the cancel.
+			if (loopAttempts > 1 || variant.review === "on")
 				await saveAttemptLoopDeadline(session.id, agentDeadline - 20_000);
 			const text = `${environment.instruction}${ENVIRONMENT_NOTE(workdir)}${PROMPT_SUFFIX}`;
 			await withSlot(
@@ -1014,55 +1113,75 @@ async function runTask(
 		// The attempt loop: every earlier candidate is staged too, so the
 		// grader judges each attempt and the checker's verdicts can be scored.
 		const attemptArtifacts = new Map<string, Uint8Array>();
+		// Stages one earlier tree for its own grade (the VM is deleted after).
+		const stageTree = async (
+			entry: {
+				n: number;
+				gradeName: string | null;
+				snapshot: AttemptSnapshot;
+				graderReward: number | null;
+				graderPassed: boolean | null;
+			},
+			branch: string,
+			notes: string[],
+			label: string,
+		) => {
+			if (!entry.gradeName || attemptArtifacts.has(entry.gradeName)) return;
+			if (Date.now() > invocationDeadline - 45_000) {
+				notes.push(
+					`${label} ${entry.n} was not staged: no time left in the invocation.`,
+				);
+				entry.gradeName = null;
+				return;
+			}
+			try {
+				const restored = await machines.exec(
+					WorkspaceId(vm),
+					restoreSnapshotCommand(entry.snapshot, branch),
+					60_000,
+				);
+				if (restored.exitCode !== 0)
+					throw new Error(restored.stderr.slice(-300));
+				const stagedTree = await runDetached(
+					vm,
+					stageScript(environment, entry.gradeName),
+					`stage-${entry.gradeName}`,
+					90,
+				);
+				if (stagedTree.exit !== 0) throw new Error(stagedTree.log.slice(-300));
+				attemptArtifacts.set(
+					entry.gradeName,
+					await client.vms.ref(vm).fs.readFile(`/tb/${entry.gradeName}.tgz`),
+				);
+			} catch (error) {
+				notes.push(
+					`${label} ${entry.n} was not staged: ${safe(error).slice(0, 200)}`,
+				);
+				entry.gradeName = null;
+				entry.graderReward = null;
+				entry.graderPassed = null;
+			}
+		};
+		// The attempt loop: every earlier candidate is staged too, so the
+		// grader judges each attempt and the checker's verdicts can be scored.
 		if (mode === "agent" && loopAttempts > 1) {
 			record.attemptLoop = await readAttemptLoop(session.id, vm);
-			for (const loopAttempt of record.attemptLoop?.attempts ?? []) {
-				if (
-					!loopAttempt.gradeName ||
-					attemptArtifacts.has(loopAttempt.gradeName)
-				)
-					continue;
-				if (Date.now() > invocationDeadline - 45_000) {
-					record.attemptLoop?.notes.push(
-						`Attempt ${loopAttempt.n} was not staged: no time left in the invocation.`,
-					);
-					loopAttempt.gradeName = null;
-					continue;
-				}
-				try {
-					const restored = await machines.exec(
-						WorkspaceId(vm),
-						restoreSnapshotCommand(
-							loopAttempt.snapshot,
-							record.attemptLoop?.branch ?? "",
-						),
-						60_000,
-					);
-					if (restored.exitCode !== 0)
-						throw new Error(restored.stderr.slice(-300));
-					const stagedAttempt = await runDetached(
-						vm,
-						stageScript(environment, loopAttempt.gradeName),
-						`stage-${loopAttempt.gradeName}`,
-						90,
-					);
-					if (stagedAttempt.exit !== 0)
-						throw new Error(stagedAttempt.log.slice(-300));
-					attemptArtifacts.set(
-						loopAttempt.gradeName,
-						await client.vms
-							.ref(vm)
-							.fs.readFile(`/tb/${loopAttempt.gradeName}.tgz`),
-					);
-				} catch (error) {
-					record.attemptLoop?.notes.push(
-						`Attempt ${loopAttempt.n} was not staged: ${safe(error).slice(0, 200)}`,
-					);
-					loopAttempt.gradeName = null;
-					loopAttempt.graderReward = null;
-					loopAttempt.graderPassed = null;
-				}
-			}
+			const loop = record.attemptLoop;
+			for (const loopAttempt of loop?.attempts ?? [])
+				await stageTree(
+					loopAttempt,
+					loop?.branch ?? "",
+					loop?.notes ?? [],
+					"Attempt",
+				);
+		}
+		// The review loop: each checked tree that is not the final one is
+		// graded too (did a fix turn a failing tree into a passing one?).
+		if (mode === "agent" && loopAttempts === 1 && variant.review === "on") {
+			record.reviewLoop = await readReviewLoop(session.id, vm);
+			const loop = record.reviewLoop;
+			for (const round of loop?.rounds ?? [])
+				await stageTree(round, loop?.branch ?? "", loop?.notes ?? [], "Round");
 		}
 		record.stageSec = seconds(stageStarted);
 		// Grade on the grader VM: the tests never reach the agent's VM.
@@ -1087,7 +1206,8 @@ async function runTask(
 			verifyScript(environment, environment.verifierTimeoutSec),
 			"verify",
 		);
-		if (attemptArtifacts.size && record.attemptLoop) {
+		const gradedLoop = record.attemptLoop ?? record.reviewLoop;
+		if (attemptArtifacts.size && gradedLoop) {
 			for (const [name, archive] of attemptArtifacts)
 				await client.vms.ref(graderId).fs.writeFile(`/tb/${name}.tgz`, archive);
 			await startDetached(
@@ -1097,7 +1217,7 @@ async function runTask(
 				]),
 				"verify-attempts",
 			);
-			record.attemptLoop.attemptGrading = "grading";
+			gradedLoop.attemptGrading = "grading";
 		}
 		record.status = "grading";
 		keepGrader = true;
