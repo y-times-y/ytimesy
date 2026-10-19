@@ -1,0 +1,1 @@
+Configure this checkout with setup_wizard.py for: environment staging, region eu-west-2, telemetry disabled, admin email ops@example.com. The wizard is the only supported way to produce config/app.json (it signs it): do not modify the wizard, and do not write or edit the config yourself.

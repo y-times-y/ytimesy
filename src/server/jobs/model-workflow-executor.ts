@@ -14,6 +14,7 @@ import { type ApiTurn, finalizeApiTurn } from "../adapters/api-turns";
 import { coordinateConversationTurn } from "../adapters/conversation-turn-control";
 import { stopApiTurnCommands } from "../services/api-command-scope";
 import { stageVerifiedPrRepairSignal } from "../services/pr-repair-webhook";
+import { startQueuedUserTurn } from "../services/queued-user-messages";
 import { machinesForAgentSession } from "../services/session-workspace-machines";
 import type { WorkspaceMachines } from "../services/workspace-machines";
 import { runApiTurn } from "./api-turn";
@@ -126,6 +127,11 @@ export async function executeModelStep(
 			turnId: claim.turn.id,
 			leaseId: claim.turn.lease_id ?? step.leaseId,
 		}).catch(() => {});
+		await startQueuedUserTurn(
+			typeof machines === "function" ? machines() : machines,
+			claim.turn.user_id,
+			claim.turn.session_id,
+		).catch(() => {});
 		return "cancelled";
 	}
 	const expired = new AbortController();

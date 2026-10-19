@@ -164,11 +164,9 @@ export function composerSendIsEnabled(input: {
 }): boolean {
 	if (input.busy || input.slashDraft || !input.draft.trim()) return false;
 	if (composerCanStartSignIn(input)) return true;
+	// A send during a run is queued for that run's next step.
 	if (input.harnessId === "api")
-		return (
-			input.turnStatus !== "running" &&
-			parseModelRouteId(input.modelId) !== null
-		);
+		return parseModelRouteId(input.modelId) !== null;
 	const harnessReady = selectedHarnessIsConnected(
 		input.connection,
 		input.harnessId,

@@ -90,3 +90,16 @@ it("does not classify unreported gateway cache writes as ordinary input", () => 
 		uncachedInputTokens: null,
 	});
 });
+
+it("keeps the dollars OpenRouter reports and ignores invalid ones", () => {
+	expect(apiTokenUsage({ ...usage, raw: { cost: 0.0123 } }).costUsd).toBe(
+		0.0123,
+	);
+	expect(apiTokenUsage({ ...usage, raw: { cost: -1 } })).not.toHaveProperty(
+		"costUsd",
+	);
+	expect(apiTokenUsage({ ...usage, raw: { cost: "1" } })).not.toHaveProperty(
+		"costUsd",
+	);
+	expect(apiTokenUsage(usage)).not.toHaveProperty("costUsd");
+});

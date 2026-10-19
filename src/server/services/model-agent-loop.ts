@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { LanguageModelUsage } from "ai";
+import type { AssistantModelMessage, LanguageModelUsage } from "ai";
 import {
 	asSchema,
 	generateText,
@@ -15,6 +15,9 @@ import type { ApiModelSpeedId } from "#/domain/api-model-list";
 import { type ApiTokenUsage, addApiTokenUsage } from "#/domain/api-token-usage";
 import {
 	apiModelFailureClassification,
+	type ContextOverflow,
+	ContextWindowExhausted,
+	contextOverflow,
 	IncompleteAgentTurn,
 	InitialAgentReadFailure,
 	SafeApiModelFailure,
@@ -32,6 +35,11 @@ import {
 	toolFailureClass,
 	toolMetricCategory,
 } from "#/domain/harness-performance";
+import {
+	IMAGE_VIEWING_TOOLS,
+	NO_IMAGE_INPUT_INSTRUCTIONS,
+	withImagePlaceholders,
+} from "#/domain/image-placeholders";
 import { modelStepLimit } from "#/domain/model-workflow";
 import type { apiPromptCacheSettings } from "#/server/adapters/api-prompt-cache";
 import {
@@ -42,6 +50,7 @@ import type { NativeCompactionInput } from "../adapters/model-compaction";
 import { prefetchInitialAgentReads } from "./agent-initial-reads";
 import { discoverableAgentTools } from "./agent-tool-discovery";
 import {
+	type ArchivedHistory,
 	CONTEXT_SUMMARY_INSTRUCTIONS,
 	compactApiHistory,
 	contextMeasurement,
@@ -57,6 +66,7 @@ import {
 } from "./api-agent-context";
 import { BackgroundHistoryCompaction } from "./background-history-compaction";
 import { composedAgentTools } from "./composed-agent-tools";
+import { stableHistoryKeyOrder } from "./stable-history-key-order";
 import { timed } from "./step-timing";
 
 export type { ApiAgentEvent } from "#/domain/api-agent-event";
@@ -81,6 +91,12 @@ export type ModelAgentInput = {
 	instructions: string;
 	tools: ToolSet;
 	knownTools?: readonly string[];
+	/**
+	 * Deferred tools (deferred-tools.ts): the tools each request offers, in
+	 * order. Tools outside it stay in `tools` but are neither sent nor
+	 * callable until they appear here. Read before every step.
+	 */
+	toolOrder?: () => readonly string[];
 	toolSurface?: "coordination" | "implementation";
 	/** A successful call to one of these ends the turn, e.g. a plan waiting for approval. */
 	endTurnTools?: readonly string[];
@@ -92,7 +108,7 @@ export type ModelAgentInput = {
 	beforeStep?: (messages: ModelMessage[]) => Promise<void>;
 	prepareMessages?: (messages: ModelMessage[]) => Promise<ModelMessage[]>;
 	beforeCompaction?: (messages: ModelMessage[]) => Promise<void>;
-	archiveHistory?: (messages: ModelMessage[]) => Promise<string>;
+	archiveHistory?: (messages: ModelMessage[]) => Promise<ArchivedHistory>;
 	restoreInstructions?: (messages: ModelMessage[]) => Promise<ModelMessage[]>;
 	/**
 	 * Which user-role messages are the person's own requests. When set, every
@@ -112,11 +128,15 @@ export type ModelAgentInput = {
 	 * Called once when the run gives up, before it throws: the last cleanly
 	 * finished history, whether a failed step's partial output was saved after
 	 * it, and the ids of that partial output (never retracted by a retry).
+	 * `inFlight`, when tools of the failed step had started, is the history that
+	 * step would have saved up to its own tool calls, without their results:
+	 * a stopped turn keeps the calls it made (closed later with stand-ins).
 	 */
 	onAttemptFailed?: (state: {
 		readonly committed: ModelMessage[];
 		readonly droppedStepSaved: boolean;
 		readonly uncommittedIds: readonly string[];
+		readonly inFlight?: ModelMessage[];
 	}) => void;
 };
 
@@ -126,10 +146,12 @@ export async function runModelAgent(
 	runtime: ModelAgentRuntime,
 ): Promise<ModelMessage[]> {
 	let result = await executeWithStreamRetries(input, runtime);
-	// A progress note is not a final answer; keep sampling as native Codex does.
+	// A progress note is not a final answer, nor is an answer cut off at the
+	// output limit; keep sampling as native Codex does.
 	for (
 		let resumes = 0;
-		resumes < 3 && endsWithCommentary(result.messages);
+		resumes < 3 &&
+		(result.outcome === "continue" || endsWithCommentary(result.messages));
 		resumes++
 	)
 		result = await executeWithStreamRetries(
@@ -169,6 +191,11 @@ async function executeWithStreamRetries(
 	let reservedFor: ModelMessage[] | undefined;
 	let droppedStep = false;
 	let droppedStepSaved = false;
+	// A provider's context rejection is retried once per step, after compacting.
+	let overflowRetried = false;
+	let forceCompaction: ContextOverflow | undefined;
+	// The unfinished step's own tool calls, once one of them started executing.
+	let inFlight: ModelMessage[] | undefined;
 	const tracked: ModelAgentInput = {
 		...input,
 		onEvent: async (event) => {
@@ -219,11 +246,37 @@ async function executeWithStreamRetries(
 				runtime,
 				singleStep,
 				(clean) => {
-					if (clean) stepFinished = true;
+					if (clean) {
+						stepFinished = true;
+						overflowRetried = false;
+					}
 					droppedStep = !clean;
+				},
+				forceCompaction,
+				(history) => {
+					inFlight = history;
 				},
 			);
 		} catch (error) {
+			forceCompaction = undefined;
+			const overflow = contextOverflow(error);
+			if (
+				overflow &&
+				!overflowRetried &&
+				!toolCallStarted &&
+				!input.signal.aborted
+			) {
+				// Compact below what the provider accepts, then sample the step again.
+				overflowRetried = true;
+				forceCompaction = overflow;
+				const retracted = [...uncommittedIds].filter(
+					(id) => !committedIds.has(id),
+				);
+				uncommittedIds = new Set();
+				if (retracted.length)
+					await input.onEvent({ type: "retract", ids: retracted });
+				continue;
+			}
 			if (
 				attempt >= STREAM_RETRIES ||
 				toolCallStarted ||
@@ -237,6 +290,7 @@ async function executeWithStreamRetries(
 					uncommittedIds: [...uncommittedIds].filter(
 						(id) => !committedIds.has(id),
 					),
+					...(inFlight ? { inFlight } : {}),
 				});
 				throw error;
 			}
@@ -322,11 +376,81 @@ export function endsWithCommentary(messages: readonly ModelMessage[]) {
 	);
 }
 
+/** A text-only model is told so and is not offered tools that only return pixels. */
+function withoutImageViewing(input: ModelAgentInput): ModelAgentInput {
+	const hidden = new Set<string>(IMAGE_VIEWING_TOOLS);
+	return {
+		...input,
+		tools: Object.fromEntries(
+			Object.entries(input.tools).filter(([name]) => !hidden.has(name)),
+		),
+		instructions: `${input.instructions}\n${NO_IMAGE_INPUT_INSTRUCTIONS}`,
+	};
+}
+
+export const OUTPUT_LIMIT_CONTINUE_NOTE =
+	"Your previous response was cut off at the output length limit. Continue exactly where it stopped, without repeating what you already wrote. This is a runtime notice, not a new user request.";
+
+/** The last assistant message is text without tool calls: an answer the length limit cut off. */
+function truncatedAnswer(messages: readonly ModelMessage[]) {
+	const last = messages.at(-1);
+	if (last?.role !== "assistant") return false;
+	if (typeof last.content === "string") return Boolean(last.content.trim());
+	return (
+		!last.content.some((part) => part.type === "tool-call") &&
+		last.content.some((part) => part.type === "text" && part.text.trim())
+	);
+}
+
+/** The cut-off answer was itself the continuation of an earlier cut-off one. */
+function continuedAfterTruncation(messages: readonly ModelMessage[]) {
+	const previous = messages.at(-2);
+	return (
+		previous?.role === "user" && previous.content === OUTPUT_LIMIT_CONTINUE_NOTE
+	);
+}
+
+function exhaustedContext(step: {
+	finishReason: string;
+	text: string;
+	toolCalls: readonly unknown[];
+}) {
+	return (
+		step.finishReason === "length" &&
+		!step.toolCalls.length &&
+		!step.text.trim()
+	);
+}
+
+/**
+ * After a provider rejected the context, compact well below what it accepts:
+ * 60% of its reported limit, or of this budget's input limit when it reported
+ * none (the byte estimate undercounts some tokenizers).
+ */
+export function overflowCompactionBudget(
+	budget: ReturnType<typeof modelContextBudget>,
+	overflow: ContextOverflow,
+): ReturnType<typeof modelContextBudget> {
+	const inputLimitTokens = Math.min(
+		budget.inputLimitTokens,
+		overflow.limitTokens ?? Number.POSITIVE_INFINITY,
+	);
+	return {
+		inputLimitTokens,
+		compactAtTokens: Math.max(
+			512,
+			Math.min(budget.compactAtTokens, Math.floor(inputLimitTokens * 0.6)),
+		),
+	};
+}
+
 export type ModelAgentRuntime = {
 	model: LanguageModel;
 	cacheSettings?: ReturnType<typeof apiPromptCacheSettings>;
 	maxOutputTokens?: number;
 	contextWindow?: number;
+	/** False when the model cannot read images: they become placeholders and image tools are hidden. */
+	imageInput?: boolean;
 	autoCompactTokenLimit?: number;
 	/** Optional operating budget; distinct from the provider's hard context window. */
 	workingContextTokens?: number;
@@ -364,11 +488,16 @@ async function executeModelSteps(
 	runtime: ModelAgentRuntime,
 	singleStep: boolean,
 	onStepFinished?: (clean: boolean) => void,
+	/** The previous attempt overflowed the context: compact before the first step. */
+	forceCompaction?: ContextOverflow,
+	/** The running step's history through its started tool calls; undefined once it finishes. */
+	onInFlight?: (history: ModelMessage[] | undefined) => void,
 ): Promise<ModelAgentStepResult> {
 	const modelFamily = harnessModelFamily(
 		typeof runtime.model === "string" ? "registry" : runtime.model.provider,
 		input.modelId,
 	);
+	if (runtime.imageInput === false) input = withoutImageViewing(input);
 	input = {
 		...input,
 		tools: isShellSurface(Object.keys(input.tools))
@@ -379,7 +508,19 @@ async function executeModelSteps(
 					onEvent: input.onEvent,
 					onToolMetric: input.onToolMetric,
 				}),
-		instructions: `${input.instructions}\n${harnessModelToolInstructions(modelFamily, (input.tools.apply_patch as { id?: string } | undefined)?.id === "openai.custom" ? "freeform" : input.tools.apply_patch?.type === "provider", Object.keys(input.tools))}`,
+		instructions: [
+			input.instructions,
+			harnessModelToolInstructions(
+				modelFamily,
+				(input.tools.apply_patch as { id?: string } | undefined)?.id ===
+					"openai.custom"
+					? "freeform"
+					: input.tools.apply_patch?.type === "provider",
+				Object.keys(input.tools),
+			),
+		]
+			.filter(Boolean)
+			.join("\n"),
 	};
 	input.signal.throwIfAborted();
 	const cancelled = new AbortController();
@@ -417,7 +558,10 @@ async function executeModelSteps(
 		runtime.requestSettings ??
 		((instructions: string) => ({ system: instructions }));
 	let history = input.messages;
+	let pendingCompaction = forceCompaction;
+	// A rejected request proved the last measurement wrong; estimate afresh.
 	let measured =
+		!forceCompaction &&
 		input.previousContext &&
 		input.previousContext.modelContextWindow === runtime.contextWindow
 			? {
@@ -455,7 +599,9 @@ async function executeModelSteps(
 			fixedTokens: estimateContextTokens({
 				instructions: input.instructions,
 				tools: toolSchemas.filter(
-					({ name }) => visibleTools[name]?.deferLoading !== true,
+					({ name }) =>
+						visibleTools[name]?.deferLoading !== true &&
+						(!input.toolOrder || input.toolOrder().includes(name)),
 				),
 			}),
 		});
@@ -494,6 +640,12 @@ async function executeModelSteps(
 			: restored;
 	};
 	const backgroundCompaction = new BackgroundHistoryCompaction();
+	// Calls of the running step whose execution started. Its assistant message
+	// is saved only after every tool returns, so a stop meanwhile would lose them.
+	let startedCalls: Extract<
+		Exclude<AssistantModelMessage["content"], string>[number],
+		{ type: "tool-call" }
+	>[] = [];
 	const recordUsage = async (usage: Parameters<typeof apiTokenUsage>[0]) => {
 		accumulated.usage = addApiTokenUsage(
 			accumulated.usage,
@@ -577,6 +729,8 @@ async function executeModelSteps(
 			...requestSettings(input.instructions),
 			tools,
 			prepareStep: async () => {
+				startedCalls = [];
+				onInFlight?.(undefined);
 				runSignal.throwIfAborted();
 				await consumeBackground(
 					backgroundCompaction.running &&
@@ -603,7 +757,11 @@ async function executeModelSteps(
 				}
 				history = (await input.prepareMessages?.(history)) ?? history;
 				const estimatedHistory = estimateContextTokens(history);
-				const budget = contextBudget(history);
+				const forced = pendingCompaction;
+				pendingCompaction = undefined;
+				const budget = forced
+					? overflowCompactionBudget(contextBudget(history), forced)
+					: contextBudget(history);
 				const contextTokens = contextTokenPressure(history, measured);
 				const compact = async (older: ModelMessage[]) => {
 					await input.onEvent({ type: "context", compacting: true });
@@ -637,7 +795,7 @@ async function executeModelSteps(
 					}
 				};
 				let prepared: { messages: ModelMessage[]; compacted: boolean };
-				if (contextTokens < budget.compactAtTokens) {
+				if (!forced && contextTokens < budget.compactAtTokens) {
 					prepared = { messages: history, compacted: false };
 				} else if (runtime.compact) {
 					if (contextTokens > budget.inputLimitTokens)
@@ -720,7 +878,16 @@ async function executeModelSteps(
 					];
 				await input.beforeStep?.(history);
 				runSignal.throwIfAborted();
-				return { messages: history };
+				// Same bytes whether the history is in memory or reloaded from jsonb.
+				const order = input.toolOrder?.().filter((name) => name in tools);
+				return {
+					messages: stableHistoryKeyOrder(
+						runtime.imageInput === false
+							? withImagePlaceholders(history)
+							: history,
+					),
+					...(order ? { activeTools: order, toolOrder: order } : {}),
+				};
 			},
 			// SDK retries only retryable request-start failures (with backoff, like
 			// native Codex's request retries). Never replay a stream after output/tool execution.
@@ -786,7 +953,24 @@ async function executeModelSteps(
 					/* Metrics cannot interrupt inference. */
 				}
 			},
-			onToolExecutionStart: () => {
+			onToolExecutionStart: ({ toolCall }) => {
+				// Provider-neutral: no reasoning or provider item ids that a native
+				// replay would require to arrive together with their reasoning.
+				if (!toolCall.providerExecuted) {
+					startedCalls = [
+						...startedCalls,
+						{
+							type: "tool-call",
+							toolCallId: toolCall.toolCallId,
+							toolName: toolCall.toolName,
+							input: toolCall.input,
+						},
+					];
+					onInFlight?.([
+						...history,
+						{ role: "assistant", content: startedCalls },
+					]);
+				}
 				startBackground();
 			},
 			onToolExecutionEnd: ({ toolCall, toolOutput, toolExecutionMs }) => {
@@ -823,8 +1007,12 @@ async function executeModelSteps(
 				}
 			},
 			onStepFinish: async (step) => {
-				// The SDK also finishes a step whose stream failed; only a clean one counts.
-				onStepFinished?.(step.finishReason !== "error");
+				// The SDK also finishes a step whose stream failed; only a clean one
+				// counts. A step cut off at the length limit before any output is
+				// resampled after compaction, so it does not count either.
+				onStepFinished?.(
+					step.finishReason !== "error" && !exhaustedContext(step),
+				);
 				await recordUsage(step.usage);
 				if (
 					runtime.contextWindow &&
@@ -842,6 +1030,8 @@ async function executeModelSteps(
 						},
 					});
 				}
+				startedCalls = [];
+				onInFlight?.(undefined);
 				const historyBeforeStep = history;
 				history = [...historyBeforeStep, ...step.response.messages];
 				history = (await input.afterTools?.(history)) ?? history;
@@ -972,6 +1162,18 @@ async function executeModelSteps(
 				(reason === "stop" && endsWithCommentary(history)))
 		)
 			return { messages: history, outcome: "continue" };
+		if (reason === "length" && !ended) {
+			if (!truncatedAnswer(history)) throw new ContextWindowExhausted();
+			// An answer cut off at the output limit continues once from where it stopped.
+			if (continuedAfterTruncation(history))
+				throw new IncompleteAgentTurn(reason);
+			history = [
+				...history,
+				{ role: "user", content: OUTPUT_LIMIT_CONTINUE_NOTE },
+			];
+			await input.onStep(history);
+			return { messages: history, outcome: "continue" };
+		}
 		if (reason !== "stop") throw new IncompleteAgentTurn(reason);
 		await input.onEvent({
 			type: "finish",

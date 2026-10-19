@@ -1,5 +1,5 @@
-import { readFile } from "node:fs/promises";
-import { builtinModules } from "node:module";
+import { copyFile, readFile } from "node:fs/promises";
+import { builtinModules, createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { build } from "esbuild";
 import { inlineGuestPrograms } from "./guest-program-assets";
@@ -22,6 +22,16 @@ await build({
 	mainFields: ["module", "main"],
 	external: ["node:*", "cloudflare:*", ...builtinModules],
 	plugins: [
+		{
+			// Wrangler bundles the module next to the output as precompiled WebAssembly.
+			name: "code-mode-wasm",
+			setup(builder) {
+				builder.onResolve({ filter: /^\.\/quickjs\.wasm$/ }, () => ({
+					path: "./quickjs.wasm",
+					external: true,
+				}));
+			},
+		},
 		{
 			name: "freestyle-worker-pty-transport",
 			setup(builder) {
@@ -47,3 +57,10 @@ await build({
 		},
 	],
 });
+// Code mode's QuickJS module (code-mode-sandbox.ts), beside the bundle.
+await copyFile(
+	createRequire(import.meta.url).resolve(
+		"@jitl/quickjs-wasmfile-release-sync/wasm",
+	),
+	".ytimesy/quickjs.wasm",
+);

@@ -7,11 +7,11 @@ import { closeDatabase, database } from "../src/server/adapters/database";
 import { authorizedRepository } from "../src/server/adapters/github";
 import { receiveProxiedRepository } from "../src/server/adapters/github/git-proxy-transfer";
 import { githubAccessToken } from "../src/server/auth/github-connection";
+import { DEVELOPMENT_EDGE_ORIGIN } from "./development-config";
 
 const execute = promisify(execFile);
 const directory = await mkdtemp(join(tmpdir(), "ytimesy-git-transfer-proof-"));
-process.env.YTIMESY_GIT_PROXY_URL =
-	"https://ytimesy-edge-executor-development.example-account.workers.dev";
+process.env.YTIMESY_GIT_PROXY_URL = DEVELOPMENT_EDGE_ORIGIN;
 try {
 	const project = (
 		await database().query<{

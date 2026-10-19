@@ -3,7 +3,7 @@ import type { z } from "zod";
 import { publicToolDetail } from "#/domain/tool-detail";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 
-const guestCapabilityPackages = {
+export const guestCapabilityPackages = {
 	debugger: ["vscode-jsonrpc@9.0.3", "@vscode/debugadapter-testsupport@1.68.0"],
 	browser: ["playwright-core@1.63.0"],
 	language: [

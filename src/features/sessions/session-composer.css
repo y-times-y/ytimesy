@@ -816,6 +816,34 @@
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+.session-message[data-queued="true"] > p:first-child {
+	opacity: 0.6;
+}
+.session-message[data-role="user"] p.session-queued-note {
+	display: flex;
+	align-items: center;
+	gap: 5px;
+	margin-top: 4px;
+	padding: 0;
+	background: none;
+	box-shadow: none;
+	color: rgba(255, 255, 255, 0.45);
+	font-size: 12px;
+}
+.session-queued-note button {
+	display: inline-flex;
+	align-items: center;
+	padding: 2px;
+	border: 0;
+	border-radius: 4px;
+	background: none;
+	color: inherit;
+	cursor: pointer;
+}
+.session-queued-note button:hover {
+	color: #fff;
+	background: rgba(255, 255, 255, 0.08);
+}
 .session-message[data-role="assistant"] {
 	max-width: 42em;
 }

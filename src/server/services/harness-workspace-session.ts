@@ -18,7 +18,10 @@ import {
 } from "#/domain/agent-task-tool";
 import { runtimeHandoffPrompt } from "#/domain/api-conversation";
 import { WorkspaceId } from "#/domain/ids";
-import type { IncomingAttachment } from "#/domain/message-attachment";
+import type {
+	IncomingAttachment,
+	MessageAttachment,
+} from "#/domain/message-attachment";
 import { publicFailureMessage } from "#/domain/project-workspace";
 import {
 	lastAgentMessageText,
@@ -209,9 +212,13 @@ export function sendHarnessWorkspaceTask(
 		/** API-key models only; Codex uses `fast`. */
 		readonly speed?: "standard" | "fast" | "ultrafast";
 		readonly runtimeText?: string;
+		/** A runtime-switch envelope, used only when no structured history carries over. */
+		readonly runtimeHandoff?: string;
 		readonly idempotencyKey?: string;
 		readonly approvesPlan?: boolean;
 		readonly attachments?: readonly IncomingAttachment[];
+		/** Files a queued message already put in private storage. */
+		readonly storedAttachments?: readonly MessageAttachment[];
 		/** Continue this turn on a fallback route the user approved (`<connection>|<model>`). */
 		readonly continueOn?: string;
 	},
@@ -242,12 +249,14 @@ export function sendHarnessWorkspaceTask(
 						text: input.text,
 					}),
 				);
-			const runtimeText = switching
+			// The envelope repeats the transcript; the send uses it only when the
+			// last turn left no structured history to continue from.
+			const runtimeHandoff = switching
 				? runtimeHandoffPrompt(
 						sessionItemsFromUnknown(previous.items),
 						input.text,
 					)
-				: input.text;
+				: undefined;
 			if (switching)
 				yield* Effect.tryPromise(() =>
 					selectAgentSessionHarness(
@@ -259,7 +268,8 @@ export function sendHarnessWorkspaceTask(
 				);
 			return yield* sendHarnessWorkspaceTask(_machines, scope, {
 				...input,
-				runtimeText,
+				runtimeText: input.text,
+				...(runtimeHandoff ? { runtimeHandoff } : {}),
 			});
 		}).pipe(
 			// A rejected first send hands its chat back for New chat to reuse.

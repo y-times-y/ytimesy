@@ -36,9 +36,12 @@ import {
 	runMemoryDream,
 	runMemorySave,
 } from "./memory-jobs";
+import { expirePullRequestEvidence } from "./pr-evidence-cleanup";
+import { runPullRequestEvidenceJob } from "./pr-evidence-job";
 import { deliverPrRepairEvents } from "./pr-repair";
 import { captureSessionCheckpoint } from "./session-checkpoint";
 import { recoverStaleQueuedWorkspaces } from "./stale-workspace-queue";
+import { teardownSubagentForks } from "./subagent-runtime";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 export async function deliverBackgroundJob(
@@ -56,6 +59,8 @@ export async function deliverBackgroundJob(
 				case "supervise":
 					await recoverChildTurnEvents();
 					await superviseAgentChildren(machines);
+					// Writer subagents' forks, 30 minutes after their report.
+					await teardownSubagentForks(machines);
 					break;
 				case "delivery":
 					await relayConversationDeliveriesOnce();
@@ -102,6 +107,10 @@ export async function deliverBackgroundJob(
 								userId: candidate.user_id,
 							});
 					break;
+				case "evidence-expiry":
+					// Pull request evidence past retention or of closed pull requests.
+					await expirePullRequestEvidence();
+					break;
 			}
 			break;
 		case "memory": {
@@ -145,6 +154,14 @@ export async function deliverBackgroundJob(
 		case "pr-repair":
 			await deliverPrRepairEvents(machines);
 			break;
+		case "pr-evidence": {
+			const outcome = await runPullRequestEvidenceJob(machines, job);
+			if (outcome.kind === "updated" && outcome.status !== "captured")
+				console.warn("Pull request evidence was not captured.", {
+					status: outcome.status,
+				});
+			break;
+		}
 	}
 	return "delivered";
 }

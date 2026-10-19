@@ -36,6 +36,7 @@ import {
 	fileChangesFromSessionItems,
 	isTurnRunning,
 	lastUserMessageText,
+	markedQueuedSend,
 	type SessionTurnStatus,
 	sendWasQueued,
 	sessionItemsQueuedWithUser,
@@ -96,6 +97,7 @@ import {
 	connectCodexSession,
 	getCodexSession,
 	pollCodexLogin,
+	removeQueuedSessionMessage,
 	sendCodexSessionTask,
 	stopCodexSessionTurn,
 } from "../sessions/codex-session.fn";
@@ -374,6 +376,7 @@ export function WorkspaceHome({
 	applySessionViewRef.current = applySessionView;
 	const sendTask = useServerFn(sendCodexSessionTask);
 	const stopTurn = useServerFn(stopCodexSessionTurn);
+	const removeQueued = useServerFn(removeQueuedSessionMessage);
 	const loadDesktop = useServerFn(getWorkspaceDesktop);
 	const startDesktop = useServerFn(startWorkspaceDesktopFn);
 	const readChanges = useServerFn(readWorkspaceChangesFn);
@@ -1269,10 +1272,8 @@ export function WorkspaceHome({
 			if (!resolvedModel) throw new Error("Select a model before sending.");
 			if (epoch === sessionEpoch.current) {
 				stopRequestedFor.current = null;
-				setSession((current) => ({
-					...current,
-					turnStatus: "running",
-					items: sessionItemsQueuedWithUser(
+				setSession((current) => {
+					const items = sessionItemsQueuedWithUser(
 						current.items,
 						pending.text,
 						pending.messageId,
@@ -1283,8 +1284,17 @@ export function WorkspaceHome({
 							mediaType: file.mediaType,
 							size: base64ByteLength(file.base64),
 						})),
-					),
-				}));
+					);
+					return {
+						...current,
+						turnStatus: "running",
+						// Sent during a run, it waits for the run's next step.
+						items:
+							current.turnStatus === "running"
+								? markedQueuedSend(items, pending.messageId)
+								: items,
+					};
+				});
 			}
 			if (scope.projectId && chatId) {
 				queryClient.setQueryData(
@@ -1641,6 +1651,18 @@ export function WorkspaceHome({
 											setBusyChatIds((ids) => withoutBusyChat(ids, chatId));
 											void chats.refetch();
 										});
+								}}
+								onRemoveQueued={(messageId) => {
+									const epoch = sessionEpoch.current;
+									setSession((current) => ({
+										...current,
+										items: current.items.filter(
+											(item) => item.id !== messageId,
+										),
+									}));
+									void removeQueued({ data: { ...sessionScope(), messageId } })
+										.then((next) => applySessionView(epoch, next))
+										.catch((cause) => toast.error(publicFailureMessage(cause)));
 								}}
 								onOpenInspector={openInspector}
 								onOpenFile={openMentionedFile}

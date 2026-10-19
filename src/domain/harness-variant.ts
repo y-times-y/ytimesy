@@ -1,20 +1,66 @@
 /**
- * Development-only harness variants, selected per eval user (dev_eval_user)
- * so concurrent eval runs can compare harness behaviour on one deployment.
- * Production never reads them. See docs/parallel-evals.md.
+ * Harness variants. DEFAULT_HARNESS_VARIANT is the product's behaviour for
+ * everyone; in development, eval users (dev_eval_user) may pick other values
+ * per run so concurrent evals can compare harness behaviour on one
+ * deployment. Production only ever uses the default. See
+ * docs/parallel-evals.md.
  */
 export const HARNESS_VARIANT_VALUES = {
 	/**
 	 * How recalled memory (MEMORY.md and read-hook lines) is presented:
-	 * notes = neutral data that may be outdated (the product default);
-	 * rules = binding project rules from earlier chats.
+	 * rules = binding project rules from earlier chats (the default);
+	 * notes = neutral data that may be outdated.
 	 */
 	memoryWording: ["notes", "rules"],
 	/**
-	 * The builder's tool surface. Only "current" is implemented; the lean
-	 * surfaces are reserved (src/server/services/harness-tool-surfaces.ts).
+	 * Who writes cross-chat memory during a chat (dreaming always runs):
+	 * observer = only the save hook (full mode) and dreaming, and the builder
+	 * writes ~/memory only when the user explicitly asks it to remember
+	 * something (the default); both = the builder saves proactively and the
+	 * save hook runs after every turn; agent = only the builder, no save hook.
 	 */
-	toolSurface: ["current", "lean-native", "lean-pi"],
+	memoryWriter: ["both", "agent", "observer"],
+	/**
+	 * The builder's tool surface (builderToolSurface in
+	 * src/server/services/builder-shell-surface.ts): lean = our core four
+	 * tools (read, write, edit, bash) for every model (the default,
+	 * docs/decisions/2026-10-17-lean-tool-surface.md); current = the
+	 * earlier measured shell surface; lean-native = each model family's own
+	 * vendor harness tools.
+	 */
+	toolSurface: ["current", "lean-native", "lean"],
+	/**
+	 * Which requests share a provider prompt-cache routing key (the Codex
+	 * subscription's session-id and prompt_cache_key, an API route's cache
+	 * key): chat = one key per chat, like native Codex's per-thread key (the
+	 * default); account = one key for all of the user's chats on that
+	 * connection, so a new chat's first request can reuse the instructions and
+	 * tools an earlier chat already cached.
+	 */
+	promptCacheScope: ["chat", "account"],
+	/**
+	 * Code mode on a lean surface: on adds run_code, a JavaScript program
+	 * that calls the other tools (several reads, searches and commands in one
+	 * model call; src/server/services/code-mode-tool.ts); off offers the
+	 * surface unchanged (the default).
+	 */
+	codeMode: ["off", "on"],
+	/**
+	 * Builder subagents (docs/subagents.md): on gives the builder the agent
+	 * and agent_send tools (loaded on demand through find_tools, with the
+	 * other rarely used tools), the orchestration prompt block, per-level
+	 * budgets and the subagent tree; off offers the surface unchanged (the
+	 * default) until the evals show it pays off.
+	 */
+	subagents: ["off", "on"],
+	/**
+	 * Pull request evidence: on makes the harness capture screenshots, a
+	 * short recording or CLI output from the pushed commit when a turn's
+	 * draft handoff has visible changes (or a `ytimesy-evidence` plan), store
+	 * them and keep an Evidence section in the PR description current
+	 * (src/server/services/pr-evidence.ts); off changes nothing (the default).
+	 */
+	prEvidence: ["off", "on"],
 } as const;
 
 type Values = typeof HARNESS_VARIANT_VALUES;
@@ -22,12 +68,31 @@ export type HarnessVariant = {
 	readonly [Key in keyof Values]: Values[Key][number];
 };
 export type MemoryWording = HarnessVariant["memoryWording"];
+export type MemoryWriter = HarnessVariant["memoryWriter"];
 export type HarnessToolSurfaceId = HarnessVariant["toolSurface"];
+export type PromptCacheScope = HarnessVariant["promptCacheScope"];
+export type CodeMode = HarnessVariant["codeMode"];
+export type SubagentsMode = HarnessVariant["subagents"];
+export type PrEvidence = HarnessVariant["prEvidence"];
 
 export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
-	memoryWording: "notes",
-	toolSurface: "current",
+	memoryWording: "rules",
+	memoryWriter: "observer",
+	toolSurface: "lean",
+	promptCacheScope: "chat",
+	codeMode: "off",
+	subagents: "off",
+	prEvidence: "off",
 };
+
+/**
+ * The scope a turn's prompt-cache key is derived from (hashed with the user
+ * and connection, never sent as is): the chat, or one fixed scope per
+ * account.
+ */
+export function promptCacheScopeId(scope: PromptCacheScope, chatId: string) {
+	return scope === "account" ? "account" : chatId;
+}
 
 function isKey(key: string): key is keyof Values {
 	return Object.hasOwn(HARNESS_VARIANT_VALUES, key);

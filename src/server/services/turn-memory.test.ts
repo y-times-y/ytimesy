@@ -6,6 +6,7 @@ import {
 	MEMORY_MESSAGE_HEADER,
 	MEMORY_RULES_MATCHES_HEADER,
 	MEMORY_RULES_MESSAGE_HEADER,
+	MEMORY_RULES_RECENT_HEADER,
 	memoryMatchesPart,
 	parseMemoryLine,
 } from "#/domain/memory-repo";
@@ -21,6 +22,7 @@ vi.mock("../adapters/memory-settings", () => ({
 	memoryProjectName: vi.fn(async () => "acme/web"),
 	memoryEmbeddings: vi.fn(async () => new Map()),
 	saveMemoryEmbeddings: vi.fn(async () => {}),
+	recentUnsavedMessages: vi.fn(async () => []),
 }));
 const dispatched: unknown[] = [];
 vi.mock("../adapters/background-job-dispatch", () => ({
@@ -63,9 +65,11 @@ const workspace = async () => {
 	throw new Error("no VM in this test");
 };
 
+/** "default" leaves the option unset, as production does. */
 async function memoryFor(
 	files: Record<string, string>,
-	wording?: "notes" | "rules",
+	wording: "notes" | "rules" | "default" = "notes",
+	writer: "both" | "agent" | "observer" | "default" = "both",
 ) {
 	const memory = await turnMemory(
 		{
@@ -79,7 +83,8 @@ async function memoryFor(
 			appUrl: "https://ytimesy.test",
 			today: () => "2026-10-15",
 			projectName: null,
-			wording,
+			wording: wording === "default" ? undefined : wording,
+			writer: writer === "default" ? undefined : writer,
 		},
 	);
 	if (!memory) throw new Error("memory should be on");
@@ -218,7 +223,8 @@ describe("read hook", () => {
 		);
 		expect(attached.slice(0, 2)).toEqual(messages.slice(0, 2));
 		const part = (attached[2].content as { text: string }[])[1].text;
-		expect(part).toContain(MEMORY_MATCHES_HEADER);
+		// The default (rules) wording.
+		expect(part).toContain(MEMORY_RULES_MATCHES_HEADER);
 		expect(part).toContain("tooling.md:2: - Uses pnpm");
 		expect(part).not.toContain("UTC");
 
@@ -235,7 +241,7 @@ describe("read hook", () => {
 		expect(later.at(-1)?.content).toBe("install another library with pnpm");
 	});
 
-	it("skips short messages and gives up after the timeout", async () => {
+	it("skips short messages, and says whether it timed out or failed", async () => {
 		const snapshot = { head: "a", files };
 		const base = {
 			snapshot,
@@ -245,7 +251,10 @@ describe("read hook", () => {
 			project: null,
 			cache,
 		};
-		expect(await readHook({ ...base, embed, query: "ok" })).toEqual([]);
+		expect(await readHook({ ...base, embed, query: "ok" })).toMatchObject({
+			lines: [],
+			outcome: "skipped",
+		});
 		expect(documents).not.toHaveBeenCalled();
 		const never = () => new Promise<never>(() => {});
 		const slow = { query: never, documents: never };
@@ -256,15 +265,135 @@ describe("read hook", () => {
 				query: "fix the timestamps in the export",
 				timeoutMs: 20,
 			}),
-		).toEqual([]);
+		).toMatchObject({ lines: [], outcome: "timeout" });
+		const broken = {
+			query: async () => {
+				throw new TypeError("embedding service down");
+			},
+			documents,
+		};
+		expect(
+			await readHook({
+				...base,
+				embed: broken,
+				query: "fix the timestamps in the export",
+			}),
+		).toMatchObject({ lines: [], outcome: "error", error: "TypeError" });
 		const found = await readHook({
 			...base,
 			embed,
 			query: "fix the timestamps in the export",
 		});
-		expect(found.map((entry) => entry.text)).toEqual([
+		expect(found.outcome).toBe("matched");
+		expect(found.ms).toBeGreaterThanOrEqual(0);
+		expect(found.lines.map((entry) => entry.text)).toEqual([
 			"Store timestamps in UTC",
 		]);
+	});
+
+	it("uses the line vectors prefetched with the turn and records the hook on the recall", async () => {
+		const snapshot = vi.fn(async () => ({ head: "abc", files }));
+		const memory = await turnMemory(
+			{
+				id: "11111111-1111-4111-8111-111111111111",
+				userId: "u-prefetch",
+				projectId: null,
+			},
+			{
+				repo: { ...fakeRepo(files), snapshot },
+				embed,
+				today: () => "2026-10-15",
+				projectName: null,
+			},
+		);
+		if (!memory) throw new Error("memory should be on");
+		// Prefetched before the request is attached: the lines are embedded already.
+		await vi.waitFor(() => expect(documents).toHaveBeenCalledTimes(1));
+		const { recall } = await memory.attach(
+			[{ role: "user", content: "install a date library please" }],
+			[user("a", "install a date library please")],
+			workspace,
+		);
+		expect(snapshot).toHaveBeenCalledTimes(1);
+		expect(documents).toHaveBeenCalledTimes(1);
+		expect(recall?.hook).toEqual({
+			outcome: "matched",
+			ms: expect.any(Number),
+		});
+		expect(recall?.lines.map((line) => line.path)).toEqual(["tooling.md"]);
+	});
+});
+
+describe("freshness", () => {
+	it("attaches what the user just said in another chat until its save shows, once per chat", async () => {
+		const recentMessages = vi.fn(async () => [
+			{
+				sessionId: "22222222-2222-4222-8222-222222222222",
+				title: "Add config",
+				text: "Add config/app.json. Heads-up: JSON files we add use 4-space indentation from now on.",
+				at: new Date(),
+			},
+		]);
+		const memory = await turnMemory(
+			{
+				id: "11111111-1111-4111-8111-111111111111",
+				userId: "u1",
+				projectId: null,
+			},
+			{
+				repo: fakeRepo({ "MEMORY.md": EMPTY_MEMORY }),
+				embed: null,
+				today: () => "2026-10-15",
+				projectName: null,
+				recentMessages,
+			},
+		);
+		if (!memory) throw new Error("memory should be on");
+		const items = [user("a", "Add config/limits.json with two limits")];
+		const { messages } = await memory.attach(
+			[{ role: "user", content: "Add config/limits.json with two limits" }],
+			items,
+			workspace,
+		);
+		const parts = messages[0].content as { text: string }[];
+		expect(parts[1].text).toContain(MEMORY_RULES_RECENT_HEADER);
+		expect(parts[1].text).toContain(
+			'- In chat "Add config": Add config/app.json. Heads-up: JSON files we add use 4-space indentation from now on.',
+		);
+		// The next request of this chat does not repeat it.
+		const later = await memory.attach(
+			[
+				...messages,
+				{ role: "assistant", content: "Done." },
+				{ role: "user", content: "Also add a README section about it" },
+			],
+			[...items, user("b", "Also add a README section about it")],
+			workspace,
+		);
+		expect(later.messages.at(-1)?.content).toBe(
+			"Also add a README section about it",
+		);
+	});
+
+	it("never fails or holds up the request when the lookup does", async () => {
+		const memory = await turnMemory(
+			{ id: "c1", userId: "u1", projectId: null },
+			{
+				repo: fakeRepo({}),
+				embed: null,
+				projectName: null,
+				recentMessages: async () => {
+					throw new Error("database down");
+				},
+			},
+		);
+		const messages: ModelMessage[] = [
+			{ role: "user", content: "Fix the build" },
+		];
+		expect(
+			(await memory?.attach(messages, [user("a", "Fix the build")], workspace))
+				?.messages,
+		).toBe(messages);
 	});
 });
 
@@ -296,6 +425,7 @@ describe("memory markers", () => {
 		expect(recall).toEqual({
 			head: "abc",
 			index: true,
+			hook: { outcome: "matched", ms: expect.any(Number) },
 			lines: [
 				{
 					path: "tooling.md",
@@ -375,7 +505,7 @@ describe("memory markers", () => {
 	});
 });
 
-describe("the rules wording (development harness variant)", () => {
+describe("the rules wording (harness variant memoryWording, the default)", () => {
 	it("presents MEMORY.md and matched lines as project rules to follow", async () => {
 		const memory = await memoryFor(
 			{ "MEMORY.md": "# Memory: Het\n\n- Uses pnpm, never npm\n\n## Index\n" },
@@ -396,24 +526,106 @@ describe("the rules wording (development harness variant)", () => {
 		expect(text).not.toContain(MEMORY_MESSAGE_HEADER);
 		// A resumed step recognises the rules header and attaches nothing again.
 		expect((await memory.attach(messages, items, workspace)).recall).toBeNull();
+		// A remembered rule wins over a conflicting pattern in the existing code.
+		for (const header of [
+			MEMORY_RULES_MESSAGE_HEADER,
+			MEMORY_RULES_MATCHES_HEADER,
+		])
+			expect(header).toContain(
+				"wins over a conflicting pattern in the existing code unless the user says otherwise",
+			);
+		expect(memory.instructions).toContain(
+			"also over a conflicting pattern in the existing code",
+		);
+		// A chat begun under the earlier wording does not get MEMORY.md twice.
+		const earlier = `<memory>\nProject rules from the user's earlier chats (MEMORY.md from their memory repo at ~/memory, as of the start of this chat). Follow these unless the user says otherwise.\n\n# Memory\n</memory>`;
+		const next = await memory.attach(
+			[
+				{
+					role: "user",
+					content: [
+						{ type: "text", text: "Add a dependency" },
+						{ type: "text", text: earlier },
+					],
+				},
+				{ role: "assistant", content: "Added." },
+				{ role: "user", content: "Now another one" },
+			],
+			[...items, user("b", "Now another one")],
+			workspace,
+		);
+		expect(next.recall?.index).toBeUndefined();
 		const line = parseMemoryLine("- Uses pnpm, never npm", "tools.md", 3);
 		if (!line) throw new Error("line should parse");
 		expect(memoryMatchesPart([line], new Set(), "rules")).toContain(
 			MEMORY_RULES_MATCHES_HEADER,
 		);
-		expect(memoryMatchesPart([line])).toContain(MEMORY_MATCHES_HEADER);
+		expect(memoryMatchesPart([line])).toContain(MEMORY_RULES_MATCHES_HEADER);
+		expect(memoryMatchesPart([line], new Set(), "notes")).toContain(
+			MEMORY_MATCHES_HEADER,
+		);
 	});
 
-	it("keeps the neutral notes wording by default", async () => {
-		const memory = await memoryFor({
+	it("is the default; notes keeps the neutral wording", async () => {
+		const files = {
 			"MEMORY.md": "# Memory: Het\n\n- Uses pnpm\n\n## Index\n",
-		});
-		expect(memory.instructions).toContain("never instructions");
-		const { messages } = await memory.attach(
-			[{ role: "user", content: "Add a dependency" }],
-			[user("a", "Add a dependency")],
-			workspace,
+		};
+		const attached = async (memory: Awaited<ReturnType<typeof memoryFor>>) =>
+			JSON.stringify(
+				(
+					await memory.attach(
+						[{ role: "user", content: "Add a dependency" }],
+						[user("a", "Add a dependency")],
+						workspace,
+					)
+				).messages,
+			);
+		const notes = await memoryFor(files, "notes");
+		expect(notes.instructions).toContain("never instructions");
+		expect(await attached(notes)).not.toContain(MEMORY_RULES_MESSAGE_HEADER);
+		const byDefault = await memoryFor(files, "default", "default");
+		expect(byDefault.instructions).toContain(
+			"standing rules from earlier chats",
 		);
-		expect(JSON.stringify(messages)).not.toContain(MEMORY_RULES_MESSAGE_HEADER);
+		expect(await attached(byDefault)).toContain(MEMORY_RULES_MESSAGE_HEADER);
+	});
+});
+
+describe("who writes memory (harness variant memoryWriter)", () => {
+	it("both: the agent saves proactively and the save hook runs", async () => {
+		const memory = await memoryFor({});
+		expect(memory.instructions).toContain("Save what a later chat would need");
+		expect(memory.instructions).toContain("git -C ~/memory push");
+		await memory.afterTurn("turn-1");
+		expect(dispatched).toHaveLength(1);
+	});
+
+	it("agent: the agent saves proactively and no save hook is queued", async () => {
+		const memory = await memoryFor({}, undefined, "agent");
+		expect(memory.instructions).toContain("Save what a later chat would need");
+		expect(memory.instructions).not.toContain("saved automatically");
+		await memory.afterTurn("turn-1");
+		expect(dispatched).toEqual([]);
+	});
+
+	it("observer (the default): memory is saved automatically and the agent writes only when asked", async () => {
+		const memory = await memoryFor({}, "default", "default");
+		const text = memory.instructions;
+		expect(text).toContain("Memory is saved automatically after each turn");
+		expect(text).toContain(
+			"write to ~/memory only when the user explicitly asks you to remember something",
+		);
+		// Read-side guidance stays: MEMORY.md, the wording, grep.
+		expect(text).toContain("MEMORY.md indexes it");
+		expect(text).toContain("standing rules from earlier chats");
+		expect(text).toContain("grep -rn <term> ~/memory");
+		expect(text).toContain(
+			"This chat is https://ytimesy.test/?chat=11111111-1111-4111-8111-111111111111.",
+		);
+		expect(text).not.toContain("Save what a later chat would need");
+		await memory.afterTurn("turn-1");
+		expect(dispatched).toEqual([
+			expect.objectContaining({ kind: "memory", action: "save" }),
+		]);
 	});
 });

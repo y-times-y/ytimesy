@@ -3,10 +3,14 @@
 // single ROOT builder turn on a disposable VM against the development edge.
 // Used by scripts/model-smoke-suite.ts and scripts/native-vs-harness.ts.
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readdirSync, readFileSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import { Freestyle } from "freestyle";
 import { signDeliveryRequest } from "../../src/domain/delivery-auth";
+import { attemptCostFromSessions } from "../../src/domain/eval-cost";
 import { WorkspaceId } from "../../src/domain/ids";
 import { modelRouteId } from "../../src/domain/model-connection";
 import {
@@ -16,6 +20,7 @@ import {
 import { publicToolDetail } from "../../src/domain/tool-detail";
 import {
 	deleteAgentSessionForOwner,
+	descendantAgentSessions,
 	insertAgentSession,
 	saveAgentSessionProviderRef,
 } from "../../src/server/adapters/agent-sessions";
@@ -31,6 +36,7 @@ import {
 	modelWorkflowSigningSecret,
 } from "../../src/server/adapters/model-workflow-dispatch";
 import { workspaceBootSnapshotId } from "../../src/server/records/tools-snapshot-store";
+import { deliverAgentTaskEvents } from "../../src/server/services/agent-task-event-delivery";
 import {
 	apiModelCatalog,
 	sendApiWorkspaceTask,
@@ -38,12 +44,12 @@ import {
 import { cancelServerTurn } from "../../src/server/services/cancel-server-turn";
 import { sendSubscriptionTask } from "../../src/server/services/codex-subscription-session";
 import { connectionApiKey } from "../../src/server/services/model-connections";
+import { DEVELOPMENT_EDGE_ORIGIN } from "../development-config";
 import { type EvalUser, SLOT_LIMITS, withSlot } from "./eval-user";
 
 export { assertDevelopmentDatabase } from "./eval-user";
 
-const ORIGIN =
-	"https://ytimesy-edge-executor-development.example-account.workers.dev";
+const ORIGIN = DEVELOPMENT_EDGE_ORIGIN;
 
 export type Task = {
 	id: string;
@@ -143,6 +149,31 @@ export const TASKS: Task[] = [
 		onlyWhenNamed: true,
 	},
 	{
+		// Exercises a builder surface end to end: a background server it must
+		// start and stop, an edit, a new file and a clean-copy deliverable check.
+		id: "lean-smoke",
+		prompt:
+			"Two things. 1) Fix the bug in pager.py so `python3 -m unittest discover -s tests -t .` passes (do not modify tests). 2) Create serve.py: `python3 serve.py <port>` runs an HTTP server whose GET /health answers 200 with the body `ok`. Start it as a background process on port 8765 and keep it running while you run the unit tests as a separate step; then, in another step, confirm /health responds, and finally stop that server so nothing is left listening on 8765. Another team will run serve.py on its own, so check it from a clean copy before finishing.",
+		files: {
+			"pager.py":
+				'def page(items, number, size):\n    """Items on 1-based page `number` of `size` items each."""\n    start = (number - 1) * size\n    return items[start : start + size + 1]\n',
+			"tests/__init__.py": "",
+			"tests/test_pager.py":
+				"import unittest\n\nfrom pager import page\n\n\nclass PagerTest(unittest.TestCase):\n    def test_middle_page(self):\n        self.assertEqual(page(list(range(1, 11)), 2, 3), [4, 5, 6])\n\n    def test_last_page(self):\n        self.assertEqual(page(list(range(1, 11)), 4, 3), [10])\n\n\nif __name__ == '__main__':\n    unittest.main()\n",
+		},
+		verify: [
+			"set -eo pipefail",
+			"git diff --quiet HEAD -- tests",
+			"python3 -m unittest discover -s tests -t . 2>&1 | tail -3",
+			`! python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/health', timeout=2)" 2>/dev/null || { echo 'server still listening on 8765'; exit 1; }`,
+			"python3 serve.py 8799 >/tmp/smoke-serve.log 2>&1 & pid=$!",
+			`for _ in $(seq 1 25); do body=$(python3 -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8799/health', timeout=1).read().decode().strip())" 2>/dev/null) && break; sleep 0.2; done`,
+			"kill $pid 2>/dev/null || true",
+			'[ "$body" = ok ] || { echo "serve.py /health gave: $body"; exit 1; }',
+		].join("\n"),
+		onlyWhenNamed: true,
+	},
+	{
 		id: "agents-rule",
 		prompt:
 			"Add greet.py with a function greet(name) that returns 'Hello, <name>!' (for example greet('Ada') returns 'Hello, Ada!').",
@@ -157,6 +188,52 @@ export const TASKS: Task[] = [
 		].join("\n"),
 	},
 ];
+
+const safeName = (value: string) => value.replaceAll(/[^a-zA-Z0-9._-]/g, "_");
+
+/**
+ * What every hard task's verify.sh starts with: strict mode, `$repo` (the
+ * fixture repository, the working directory) and `$hidden` (an empty
+ * directory for tests and inputs the agent never saw).
+ */
+const HARD_TASK_VERIFY_PRELUDE =
+	"set -eo pipefail\nrepo=$(pwd)\nhidden=$(mktemp -d)\n";
+
+/**
+ * Harder tasks (a few minutes each), only run when named. Each lives in
+ * scripts/smoke/hard-tasks/<id>/: prompt.txt, files/ (the fixture repo) and
+ * verify.sh (run from the repo after the turn, after
+ * HARD_TASK_VERIFY_PRELUDE; it may test the deliverable from a clean copy
+ * and with inputs the agent never saw).
+ */
+function hardTasks(): Task[] {
+	const root = join(dirname(fileURLToPath(import.meta.url)), "hard-tasks");
+	const filesUnder = (dir: string, prefix = ""): Record<string, string> =>
+		Object.fromEntries(
+			readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
+				entry.isDirectory()
+					? Object.entries(
+							filesUnder(join(dir, entry.name), `${prefix}${entry.name}/`),
+						)
+					: [
+							[
+								`${prefix}${entry.name}`,
+								readFileSync(join(dir, entry.name), "utf8"),
+							],
+						],
+			),
+		);
+	return readdirSync(root, { withFileTypes: true })
+		.filter((entry) => entry.isDirectory())
+		.map((entry) => ({
+			id: entry.name,
+			prompt: readFileSync(join(root, entry.name, "prompt.txt"), "utf8").trim(),
+			files: filesUnder(join(root, entry.name, "files")),
+			verify: `${HARD_TASK_VERIFY_PRELUDE}${readFileSync(join(root, entry.name, "verify.sh"), "utf8")}`,
+			onlyWhenNamed: true,
+		}));
+}
+TASKS.push(...hardTasks());
 
 export const PROMPT_SUFFIX =
 	"\n\nWork directly in this repository: no plan proposal, child tasks, commits, pull requests or publishing. Stop when the change is done and checked.";
@@ -199,6 +276,16 @@ export type RunRecord = {
 	cachedTokens: number | null;
 	cacheHitPercent: number | null;
 	estimatedCostUsd: number;
+	/**
+	 * The attempt's whole agent tree (builder plus subagents), from the
+	 * shared eval-cost helper: tokens, dollars (a labelled list-price
+	 * estimate on plan routes; null when a price is unknown), fork VM minutes.
+	 */
+	costUsd: number | null;
+	costEstimated: boolean;
+	treeTokens: number;
+	agents: number;
+	vmMinutes: number;
 	errors: string[];
 };
 
@@ -220,6 +307,11 @@ export const emptyRecord = (model: string, task: string): RunRecord => ({
 	cachedTokens: null,
 	cacheHitPercent: null,
 	estimatedCostUsd: 0,
+	costUsd: null,
+	costEstimated: false,
+	treeTokens: 0,
+	agents: 1,
+	vmMinutes: 0,
 	errors: [],
 });
 
@@ -259,6 +351,71 @@ function toolName(item: SessionItem) {
 	}
 }
 
+/** A session's latest turn: its state and messages, with the session's items. */
+export async function turnState(sessionId: string) {
+	return (
+		await database().query<{
+			state: string;
+			items: unknown;
+			messages: unknown;
+		}>(
+			"select t.state,s.items,t.messages from api_turn t join agent_session s on s.id=t.session_id where t.session_id=$1 order by t.created_at desc limit 1",
+			[sessionId],
+		)
+	).rows[0];
+}
+
+/** Fills a run record's tool, token, step and error counts from a turn's stored items and model messages. */
+export function measureRun(
+	record: RunRecord,
+	items: SessionItem[],
+	messages: unknown,
+	costOf: (model: string, input: number, output: number) => number,
+) {
+	record.toolCalls = 0;
+	record.failedToolCalls = 0;
+	record.failedByTool = {};
+	record.toolsUsed = {};
+	for (const item of items) {
+		const name = toolName(item);
+		if (!name) continue;
+		record.toolCalls++;
+		record.toolsUsed[name] = (record.toolsUsed[name] ?? 0) + 1;
+		if ("status" in item && item.status === "failed") {
+			record.failedToolCalls++;
+			record.failedByTool[name] = (record.failedByTool[name] ?? 0) + 1;
+		}
+	}
+	const usage = items.find((item) => item.kind === "userMessage")?.apiUsage;
+	if (usage) {
+		record.inputTokens = usage.inputTokens;
+		record.outputTokens = usage.outputTokens;
+		record.cachedTokens = usage.cacheReadTokens;
+		record.cacheHitPercent =
+			usage.inputTokens && usage.cacheReadTokens !== null
+				? percent(usage.cacheReadTokens, usage.inputTokens)
+				: null;
+		record.estimatedCostUsd = costOf(
+			record.model,
+			usage.inputTokens ?? 0,
+			usage.outputTokens ?? 0,
+		);
+	}
+	if (Array.isArray(messages))
+		record.modelSteps = messages.filter(
+			(message) =>
+				message && typeof message === "object" && message.role === "assistant",
+		).length;
+	record.errors = [
+		...new Set([
+			...record.errors,
+			...items
+				.filter((item) => item.kind === "error")
+				.map((item) => safe(item.message)),
+		]),
+	];
+}
+
 export async function createHarnessRunner(options: {
 	/** Who runs the sessions: a throwaway eval user (or the owner). */
 	user: EvalUser;
@@ -286,60 +443,50 @@ export async function createHarnessRunner(options: {
 	const liveSessions = new Map<string, string>();
 	let stopping = false;
 
-	async function turnState(sessionId: string) {
-		return (
-			await db.query<{ state: string; items: unknown; messages: unknown }>(
-				"select t.state,s.items,t.messages from api_turn t join agent_session s on s.id=t.session_id where t.session_id=$1 order by t.created_at desc limit 1",
-				[sessionId],
-			)
-		).rows[0];
-	}
+	const measure = (
+		record: RunRecord,
+		items: SessionItem[],
+		messages: unknown,
+	) => measureRun(record, items, messages, costOf);
 
-	function measure(record: RunRecord, items: SessionItem[], messages: unknown) {
-		record.toolCalls = 0;
-		record.failedToolCalls = 0;
-		record.failedByTool = {};
-		record.toolsUsed = {};
-		for (const item of items) {
-			const name = toolName(item);
-			if (!name) continue;
-			record.toolCalls++;
-			record.toolsUsed[name] = (record.toolsUsed[name] ?? 0) + 1;
-			if ("status" in item && item.status === "failed") {
-				record.failedToolCalls++;
-				record.failedByTool[name] = (record.failedByTool[name] ?? 0) + 1;
-			}
-		}
-		const usage = items.find((item) => item.kind === "userMessage")?.apiUsage;
-		if (usage) {
-			record.inputTokens = usage.inputTokens;
-			record.outputTokens = usage.outputTokens;
-			record.cachedTokens = usage.cacheReadTokens;
-			record.cacheHitPercent =
-				usage.inputTokens && usage.cacheReadTokens !== null
-					? percent(usage.cacheReadTokens, usage.inputTokens)
-					: null;
-			record.estimatedCostUsd = costOf(
-				record.model,
-				usage.inputTokens ?? 0,
-				usage.outputTokens ?? 0,
+	// Development diagnostics: YTIMESY_SMOKE_TRANSCRIPTS=<dir> keeps each run's
+	// stored items, model messages and a probe of the VM's workspace commands
+	// (lean surfaces) before the session and VM are deleted.
+	const transcriptDir = process.env.YTIMESY_SMOKE_TRANSCRIPTS;
+	let transcriptCount = 0;
+	async function writeTranscript(
+		record: RunRecord,
+		sessionId: string,
+		workspace: WorkspaceId,
+		taskId: string,
+	) {
+		if (!transcriptDir) return;
+		try {
+			const state = await turnState(sessionId);
+			const probe = await machines
+				.exec(
+					workspace,
+					"export PATH=\"$HOME/.ytimesy/bin:$PATH\"; echo '# ~/.ytimesy'; ls -A ~/.ytimesy 2>&1; echo '# commands'; for c in ytimesy-check ytimesy-job ytimesy-browser; do command -v $c || echo \"missing $c\"; done; echo '# history'; ls ~/.ytimesy/history 2>&1 | head; echo '# processes'; ps -eo pid,etimes,args | grep -E 'serve|http|python|node' | grep -v grep | head",
+					20_000,
+				)
+				.catch((error) => ({ stdout: "", stderr: safe(error), exitCode: -1 }));
+			await mkdir(transcriptDir, { recursive: true });
+			await writeFile(
+				`${transcriptDir}/${safeName(record.model)}-${taskId}-${process.pid}-${++transcriptCount}.json`,
+				JSON.stringify(
+					{
+						record,
+						items: state?.items,
+						messages: state?.messages,
+						probe: `${probe.stdout}${probe.stderr}`,
+					},
+					null,
+					1,
+				),
 			);
+		} catch (error) {
+			console.warn("Transcript was not written:", safe(error));
 		}
-		if (Array.isArray(messages))
-			record.modelSteps = messages.filter(
-				(message) =>
-					message &&
-					typeof message === "object" &&
-					message.role === "assistant",
-			).length;
-		record.errors = [
-			...new Set([
-				...record.errors,
-				...items
-					.filter((item) => item.kind === "error")
-					.map((item) => safe(item.message)),
-			]),
-		];
 	}
 
 	const { user } = options;
@@ -479,6 +626,102 @@ export async function createHarnessRunner(options: {
 	 * cancelled. Rate-limited routes wait for a slot shared by every eval
 	 * process on this machine.
 	 */
+	/** Forked writer VMs in an attempt's subagent tree. */
+	async function forkVms(userId: string, rootId: string) {
+		return (await descendantAgentSessions(userId, rootId)).flatMap((child) =>
+			child.agentFork?.vmId && !child.agentFork.deletedAt
+				? [child.agentFork.vmId]
+				: [],
+		);
+	}
+
+	async function cancelSubagents(userId: string, rootId: string) {
+		for (const child of await descendantAgentSessions(userId, rootId))
+			if (child.agentRole && child.turnStatus === "running")
+				await cancelServerTurn(userId, child.id).catch(() => {});
+	}
+
+	/**
+	 * Moves an attempt's subagent tree along the way the deployed sweeps do:
+	 * dispatches queued turns of the builder and its subagents, delivers
+	 * reports to their parents, and tracks forks for cleanup. True while any
+	 * of it is still working.
+	 */
+	async function driveSubagentTree(userId: string, rootId: string) {
+		const children = (await descendantAgentSessions(userId, rootId)).filter(
+			(child) => child.agentRole,
+		);
+		if (!children.length) return false;
+		for (const vm of await forkVms(userId, rootId)) {
+			liveVms.add(vm);
+			await user.trackVm(vm);
+		}
+		await deliverAgentTaskEvents(machines).catch(() => 0);
+		for (const id of [rootId, ...children.map((child) => child.id)]) {
+			const turn = await claimApiTurn(concurrency, 64, "durable-object", id);
+			if (turn?.lease_id) await dispatchModelWorkflow(turn);
+		}
+		const pending = await db.query(
+			`select 1 from agent_task_event where parent_session_id = any($1::uuid[]) and status='pending' limit 1`,
+			[[rootId, ...children.map((child) => child.id)]],
+		);
+		const queued = await db.query(
+			`select 1 from api_turn where session_id = any($1::uuid[]) and state in ('queued','running') limit 1`,
+			[[rootId, ...children.map((child) => child.id)]],
+		);
+		return (
+			children.some((child) => child.turnStatus === "running") ||
+			!!pending.rowCount ||
+			!!queued.rowCount
+		);
+	}
+
+	/** The attempt's tree cost through the shared eval-cost helper. */
+	async function measureTreeCost(
+		record: RunRecord,
+		userId: string,
+		rootId: string,
+	) {
+		const root = await db.query<{
+			id: string;
+			title: string;
+			turn_status: string;
+			harness: string;
+			listed_model_id: string | null;
+			created_at: Date;
+			updated_at: Date;
+			items: unknown;
+		}>(
+			"select id,title,turn_status,harness,listed_model_id,created_at,updated_at,items from agent_session where id=$1",
+			[rootId],
+		);
+		const row = root.rows[0];
+		if (!row) return;
+		const cost = attemptCostFromSessions({
+			rootId,
+			solved: record.verifierPassed === true,
+			sessions: [
+				{
+					id: row.id,
+					parentSessionId: null,
+					title: row.title,
+					turnStatus: row.turn_status as never,
+					harness: row.harness as never,
+					listedModelId: row.listed_model_id,
+					createdAt: new Date(row.created_at).toISOString(),
+					updatedAt: new Date(row.updated_at).toISOString(),
+					items: row.items,
+				},
+				...(await descendantAgentSessions(userId, rootId)),
+			],
+		});
+		record.costUsd = cost.costUsd;
+		record.costEstimated = cost.estimated;
+		record.treeTokens = cost.tokens;
+		record.agents = cost.agents;
+		record.vmMinutes = cost.vmMinutes;
+	}
+
 	function runOne(model: string, task: Task, reserveUsd: number) {
 		const slot = model.startsWith("codex:")
 			? (["codex", SLOT_LIMITS.codex] as const)
@@ -623,7 +866,11 @@ export async function createHarnessRunner(options: {
 				const items = sessionItemsFromUnknown(state?.items);
 				measure(record, items, state?.messages);
 				record.state = state?.state ?? "missing";
-				if (state && !["queued", "running"].includes(state.state)) break;
+				// Subagents (subagents=on) run on after the builder's turn ends;
+				// their reports wake it again, so the attempt ends when the tree is idle.
+				const treeBusy = await driveSubagentTree(userId, session.id);
+				if (state && !["queued", "running"].includes(state.state) && !treeBusy)
+					break;
 				const reason =
 					record.estimatedCostUsd > reserveUsd
 						? "run exceeded its cost reservation"
@@ -636,6 +883,7 @@ export async function createHarnessRunner(options: {
 					cancelled = true;
 					record.errors.push(`Cancelled: ${reason}.`);
 					await cancelServerTurn(userId, session.id);
+					await cancelSubagents(userId, session.id);
 				}
 				if (Date.now() > deadline + 60_000) {
 					record.state = "unsettled";
@@ -645,6 +893,8 @@ export async function createHarnessRunner(options: {
 			}
 			record.elapsedMs = Date.now() - turnStarted;
 			record.completed = record.state === "completed";
+			if (transcriptDir)
+				await writeTranscript(record, session.id, workspace, task.id);
 			const verified = await machines.exec(
 				workspace,
 				`cd '${dir}' && ${verifierCommand(task)}`,
@@ -658,11 +908,18 @@ export async function createHarnessRunner(options: {
 				record.verifierPassed = false;
 				record.verifierOutput = `${record.verifierOutput} (needs ${task.minToolCalls}+ tool calls; made ${record.toolCalls})`;
 			}
+			await measureTreeCost(record, userId, session.id);
 		} catch (error) {
 			record.errors.push(safe(error));
 			if (!record.elapsedMs) record.elapsedMs = Date.now() - started;
 		} finally {
-			if (sessionId) await cancelServerTurn(userId, sessionId).catch(() => {});
+			if (sessionId) {
+				await cancelServerTurn(userId, sessionId).catch(() => {});
+				await cancelSubagents(userId, sessionId).catch(() => {});
+				// Writer subagents' forked VMs go with the attempt.
+				for (const fork of await forkVms(userId, sessionId).catch(() => []))
+					await client.vms.delete(fork).catch(() => {});
+			}
 			if (vmId) {
 				const id = vmId;
 				await client.vms

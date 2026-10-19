@@ -103,7 +103,7 @@ const READ_CONCURRENCY = 8;
 /** Per-isolate file snapshots by commit; history never changes. */
 const snapshots = new Map<string, MemoryFiles>();
 
-export function artifactsMemoryRepo(
+function artifactsMemoryRepo(
 	artifacts: ArtifactsNamespace,
 	name: string,
 	gitHttp: typeof http = http,

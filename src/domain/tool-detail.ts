@@ -1,4 +1,6 @@
+import { CODE_MODE_TOOL, codeModeResult } from "./code-mode";
 import { commandActivityTitle } from "./command-activity-title";
+import { leanToolRole } from "./harness-model-profile";
 import { redactSecrets } from "./project-workspace";
 import type { DynamicToolCallItem } from "./session-item";
 
@@ -6,7 +8,9 @@ export function toolCommand(item: DynamicToolCallItem): string | null {
 	if (!item.input) return null;
 	try {
 		const input = JSON.parse(item.input);
-		return typeof input.command === "string" ? input.command : null;
+		// Codex's exec_command names it cmd.
+		const command = input.command ?? input.cmd;
+		return typeof command === "string" ? command : null;
 	} catch {
 		return null;
 	}
@@ -26,6 +30,19 @@ export function toolOutputText(output: string): string {
 			]
 				.filter(Boolean)
 				.join("\n");
+		// A lean command result (lean-tools.ts): the shown output and its status.
+		if (typeof value?.output === "string" && "outputPath" in value)
+			return [
+				value.output,
+				value.truncationNote,
+				typeof value.status === "number"
+					? `exit ${value.status}`
+					: value.status === "running"
+						? `running (${value.id})`
+						: value.status,
+			]
+				.filter(Boolean)
+				.join("\n");
 		return JSON.stringify(value, null, 2) ?? output;
 	} catch {
 		return output;
@@ -37,9 +54,14 @@ export function toolDetailTitle(item: DynamicToolCallItem): string {
 	if (!item.input) return name;
 	try {
 		const input = JSON.parse(item.input);
-		if (typeof input.command === "string")
-			return commandActivityTitle(input.command);
-		const detail = input.path ?? input.query ?? input.title;
+		const command = input.command ?? input.cmd;
+		if (typeof command === "string") return commandActivityTitle(command);
+		const detail =
+			input.path ??
+			input.file_path ??
+			input.query ??
+			input.pattern ??
+			input.title;
 		return typeof detail === "string"
 			? `${name} · ${detail.replace(/\s+/g, " ").slice(0, 100)}`
 			: name;
@@ -158,6 +180,12 @@ export function displayCommand(command: string): string {
 	);
 }
 
+/** Lines in an edit's text, for a card's +/− counts. */
+function lineCount(value: unknown) {
+	if (typeof value !== "string" || !value) return 0;
+	return value.split("\n").length - (value.endsWith("\n") ? 1 : 0);
+}
+
 function patchStats(diff: string) {
 	let added = 0;
 	let removed = 0;
@@ -191,12 +219,14 @@ export function toolActivity(item: DynamicToolCallItem): ToolActivity {
 	const tool = item.tool;
 	const mcp = /^mcp__([^_]+(?:_[^_]+)*?)__(.+)$/.exec(tool);
 	if (mcp) return { verb: mcp[1], target: mcp[2].replaceAll("_", " ") };
-	switch (tool) {
+	// A lean surface's tool shows as its role (LEAN_SHAPE_TOOLS).
+	const leanRole = leanToolRole(tool);
+	switch (leanRole ? `lean:${leanRole}` : tool) {
 		case "execute_command":
-		case "bash":
 		case "start_command":
-		case "shell": {
-			const command = text("command");
+		case "shell":
+		case "lean:command": {
+			const command = text("command") ?? text("cmd");
 			if (!command) return { verb: "Ran command" };
 			const display = displayCommand(command);
 			return {
@@ -212,6 +242,76 @@ export function toolActivity(item: DynamicToolCallItem): ToolActivity {
 			return { verb: "Waited for command output", glyph: "wait" };
 		case "stop_command":
 			return { verb: "Stopped command", glyph: "stop" };
+		case "lean:stdin":
+			return text("chars")?.includes("\u0003")
+				? { verb: "Stopped command", glyph: "stop" }
+				: text("chars")
+					? { verb: "Sent input to command", glyph: "wait" }
+					: { verb: "Waited for command output", glyph: "wait" };
+		case "lean:read":
+		case "lean:image": {
+			const path = text("file_path") ?? text("path");
+			if (path && /\.(png|jpe?g|gif|webp)$/i.test(path))
+				return {
+					verb: "Viewed",
+					target: basename(path),
+					code: true,
+					glyph: "image",
+				};
+			return {
+				verb: "Read",
+				target: path ? basename(path) : undefined,
+				code: true,
+				glyph: "read",
+			};
+		}
+		case "lean:write":
+			return {
+				verb: "Wrote",
+				target: basename(text("file_path") ?? text("path") ?? "file"),
+				code: true,
+				added: lineCount(text("content")),
+			};
+		case "lean:edit": {
+			const edits = Array.isArray(input.edits)
+				? (input.edits as Record<string, unknown>[])
+				: [input];
+			// Chats stored before 2026-10-17 used oldText/newText; read both for display.
+			const strings = (key: string, legacy: string) =>
+				edits.map((edit) => {
+					const value = edit[key] ?? edit[legacy];
+					return typeof value === "string" ? value : "";
+				});
+			return {
+				verb: "Edited",
+				target: basename(text("file_path") ?? text("path") ?? "file"),
+				code: true,
+				added: strings("new_string", "newText").reduce(
+					(sum, value) => sum + lineCount(value),
+					0,
+				),
+				removed: strings("old_string", "oldText").reduce(
+					(sum, value) => sum + lineCount(value),
+					0,
+				),
+			};
+		}
+		case "lean:glob":
+			return {
+				verb: "Found files",
+				target: text("pattern"),
+				code: true,
+				glyph: "search",
+			};
+		case "lean:grep":
+			return {
+				verb: "Searched",
+				target: text("pattern")
+					? clip(text("pattern") as string, 80)
+					: undefined,
+				code: true,
+				glyph: "search",
+			};
 		case "apply_patch": {
 			const operation = (input.operation ?? {}) as Record<string, unknown>;
 			// The freeform (Codex) apply_patch input is the raw patch text, not JSON.
@@ -228,6 +328,33 @@ export function toolActivity(item: DynamicToolCallItem): ToolActivity {
 						/\*\*\* (?:Update|Add|Delete) File: (.+)/.exec(patch)?.[1] ??
 						/^\+\+\+ (?:b\/)?(?!\/dev\/null)(\S+)/m.exec(patch)?.[1]);
 			const kind = String(operation.type ?? "");
+			// A '*** Begin Patch' envelope: each file with its own verb.
+			const files = [
+				...patch.matchAll(/^\*\*\* (Update|Add|Delete) File: (.+)$/gm),
+			].map(([, operation, file]) => ({
+				verb:
+					operation === "Add"
+						? "Created"
+						: operation === "Delete"
+							? "Deleted"
+							: "Edited",
+				file: basename(file.trim()),
+			}));
+			if (!text("path") && typeof operation.path !== "string" && files.length)
+				return {
+					verb: files[0].verb,
+					target: files[0].file,
+					code: true,
+					...patchStats(patch),
+					...(files.length > 1
+						? {
+								note: files
+									.slice(1)
+									.map(({ verb, file }) => `${verb} ${file}`)
+									.join(", "),
+							}
+						: {}),
+				};
 			const verb =
 				/create|add/.test(kind) ||
 				/\*\*\* Add File|^(?:---|\*\*\*) \/dev\/null/m.test(patch)
@@ -242,13 +369,14 @@ export function toolActivity(item: DynamicToolCallItem): ToolActivity {
 				...patchStats(patch),
 			};
 		}
-		case "replace_text":
-		case "write_file":
+		case "replace_text": {
+			const path = text("path") ?? text("file_path");
 			return {
 				verb: "Edited",
-				target: text("path") ? basename(text("path") as string) : undefined,
+				target: path ? basename(path) : undefined,
 				code: true,
 			};
+		}
 		case "read_repository_guidance": {
 			const scope = text("scope");
 			return {
@@ -295,6 +423,33 @@ export function toolActivity(item: DynamicToolCallItem): ToolActivity {
 							? `${cited} ${cited === 1 ? "source" : "sources"}`
 							: undefined,
 				glyph: "search",
+			};
+		}
+		case CODE_MODE_TOOL: {
+			// One card for the whole program; its inner calls are listed inside it.
+			const calls = codeModeResult(item)?.calls ?? [];
+			const counts = new Map<string, number>();
+			for (const call of calls)
+				counts.set(call.tool, (counts.get(call.tool) ?? 0) + 1);
+			const notCompleted = calls.filter(
+				(call) => call.status !== "completed",
+			).length;
+			return {
+				verb: "Ran code",
+				target: counts.size
+					? clip(
+							[...counts]
+								.map(([name, count]) =>
+									count > 1 ? `${name} ×${count}` : name,
+								)
+								.join(" · "),
+							80,
+						)
+					: undefined,
+				code: true,
+				note: calls.length
+					? `${calls.length} ${calls.length === 1 ? "call" : "calls"}${notCompleted ? `, ${notCompleted} not completed` : ""}`
+					: undefined,
 			};
 		}
 		case "read_plugin_skill":

@@ -28,6 +28,7 @@ import {
 import { deliverAgentTaskEvents } from "../services/agent-task-event-delivery";
 import { deliverPrRepairEvents } from "../services/pr-repair";
 import { captureSessionCheckpoint } from "../services/session-checkpoint";
+import { teardownSubagentForks } from "../services/subagent-runtime";
 import type { WorkspaceMachines } from "../services/workspace-machines";
 import { runApiTurn } from "./api-turn";
 import {
@@ -179,6 +180,7 @@ export async function startWorkspaceWorker(machines?: WorkspaceMachines) {
 				supervisingAt = Date.now();
 				await recoverChildTurnEvents();
 				await superviseAgentChildren(taskMachines);
+				await teardownSubagentForks(taskMachines);
 				await deliverPrRepairEvents(taskMachines);
 			}
 		} catch {

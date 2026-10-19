@@ -55,6 +55,7 @@ import {
 } from "#/domain/slash-command";
 import { captureAnalytics } from "#/features/analytics/client";
 import { authClient } from "#/features/auth/client";
+import { listChatEvidence } from "#/features/evidence/evidence.fn";
 import type { PublicCodexSession } from "#/server/services/codex-workspace-session";
 import { listProjectCommandsFn } from "../workspace/explorer.fn";
 import { saveProjectSecretFn } from "../workspace/project-secrets.fn";
@@ -111,9 +112,12 @@ export function SessionLauncher({
 	projectPickerOpen,
 	onProjectPickerOpenChange,
 	memoryActions,
+	onRemoveQueued,
 }: {
 	/** Memory lines recalled or saved by this chat's turns: open, undo, check. */
 	memoryActions?: MemoryMarkerActions;
+	/** Takes back a message still waiting behind the running turn. */
+	onRemoveQueued?: (messageId: string) => void;
 	session: PublicCodexSession;
 	busy: boolean;
 	harnessId: AgentProviderId;
@@ -251,6 +255,34 @@ export function SessionLauncher({
 					sessionId: session.agentSessionId,
 				},
 			});
+		},
+	});
+	const loadEvidence = useServerFn(listChatEvidence);
+	// Pull request evidence (prEvidence) arrives after the turn, from a background job.
+	const chatEvidence = useQuery({
+		queryKey: [
+			"chat-evidence",
+			selectedProject?.id,
+			session.agentSessionId,
+			session.turnStatus,
+		],
+		enabled: !!selectedProject?.id && !!session.agentSessionId,
+		queryFn: () => {
+			if (!selectedProject || !session.agentSessionId)
+				return { enabled: false, evidence: [] };
+			return loadEvidence({
+				data: {
+					projectId: selectedProject.id,
+					sessionId: session.agentSessionId,
+				},
+			});
+		},
+		refetchInterval: (query) => {
+			const data = query.state.data;
+			if (!data?.enabled) return false;
+			return data.evidence.some((record) => record.status === "capturing")
+				? 10_000
+				: 30_000;
 		},
 	});
 	const [draft, setDraft] = useState(initialDraft);
@@ -429,6 +461,8 @@ export function SessionLauncher({
 				kind: "userMessage",
 				id: SessionItemId(userMessageId),
 				text,
+				// Sent during a run, it waits for the run's next step.
+				...(turnStatus === "running" ? { queued: true as const } : {}),
 				...(files.length
 					? {
 							attachments: files.map((file) => ({
@@ -608,6 +642,7 @@ export function SessionLauncher({
 						: undefined
 				}
 				tasks={childTasks}
+				evidence={chatEvidence.data?.evidence}
 				memoryActions={memoryActions}
 				items={items}
 				turnStatus={turnStatus}
@@ -639,6 +674,7 @@ export function SessionLauncher({
 					disabled: busy || turnStatus === "running",
 					onContinue: (key) => sendText(FAILOVER_CONTINUE_TEXT, undefined, key),
 				}}
+				onRemoveQueued={onRemoveQueued}
 			/>
 			<div className="session-dock">
 				{visibleSlashCommands.length === 0 ? (
@@ -797,7 +833,10 @@ export function SessionLauncher({
 										<Square className="size-3.5" fill="currentColor" />
 									</span>
 								</button>
-							) : (
+							) : null}
+							{turnStatus !== "running" ||
+							draft.trim() ||
+							attachments.length ? (
 								<button
 									type="button"
 									className="session-send"
@@ -809,24 +848,26 @@ export function SessionLauncher({
 											: !composerCanSend(sendableDraft(draft.trim()), false))
 									}
 									title={
-										canResumeFollowUp
-											? "Resume and send"
-											: harnessReady
-												? session.canSend
-													? "Send task"
-													: "Wait for this harness to finish starting"
-												: composerCanStartSignIn({
-															harnessId,
-															connection: session.connection,
-															snapshotAvailable: session.snapshotAvailable,
-															busy,
-															draft,
-															slashDraft: Boolean(draftCommand),
-														})
-													? "Send"
-													: harnessRequiresAccountLogin(harnessId)
-														? `Sign in to ${agentProviderById(harnessId).name} to start a session`
-														: `Connect ${agentProviderById(harnessId).name} to start a session`
+										turnStatus === "running"
+											? "Queue this message for the running turn"
+											: canResumeFollowUp
+												? "Resume and send"
+												: harnessReady
+													? session.canSend
+														? "Send task"
+														: "Wait for this harness to finish starting"
+													: composerCanStartSignIn({
+																harnessId,
+																connection: session.connection,
+																snapshotAvailable: session.snapshotAvailable,
+																busy,
+																draft,
+																slashDraft: Boolean(draftCommand),
+															})
+														? "Send"
+														: harnessRequiresAccountLogin(harnessId)
+															? `Sign in to ${agentProviderById(harnessId).name} to start a session`
+															: `Connect ${agentProviderById(harnessId).name} to start a session`
 									}
 									onClick={sendDraft}
 								>
@@ -834,7 +875,7 @@ export function SessionLauncher({
 										<ArrowUp className="size-4" />
 									</span>
 								</button>
-							)}
+							) : null}
 						</div>
 						{selectedModel?.notice ? (
 							<p className="model-provider-notice">{selectedModel.notice}</p>

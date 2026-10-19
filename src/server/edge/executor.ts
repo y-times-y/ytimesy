@@ -46,6 +46,7 @@ import {
 	executeWorkflowRequest,
 	type WorkflowStepClaim,
 } from "../jobs/model-workflow-executor";
+import { provideCodeModeWasmModule } from "../services/code-mode-sandbox";
 import { timed, withStepTrace } from "../services/step-timing";
 import { runBackgroundJob, startBackgroundJob } from "./background-jobs";
 import { SqliteConversationSteps } from "./conversation-step-storage";
@@ -57,6 +58,12 @@ import { type QueuedTurn, SqliteTurnQueue } from "./turn-queue";
 
 export { BackgroundJobRunner } from "./background-jobs";
 export { ProjectEnvironment } from "./project-environment";
+
+// Workers cannot compile WebAssembly from bytes; Wrangler precompiles the
+// code-mode sandbox's module, imported only when a program first runs.
+provideCodeModeWasmModule(() =>
+	import("./quickjs.wasm").then((module) => module.default),
+);
 
 // Validate scalar secrets separately: generated ProcessEnv requirements must not
 // force application credentials into the deliberately sanitized Git subprocess environment.
@@ -622,6 +629,14 @@ export default {
 					id: backgroundJobId(`cron:${minute}:memory-dreams`),
 					kind: "maintenance",
 					action: "memory-dreams",
+				}),
+			);
+		if (minute % 360 === 30)
+			jobs.push(
+				backgroundJob.parse({
+					id: backgroundJobId(`cron:${minute}:evidence-expiry`),
+					kind: "maintenance",
+					action: "evidence-expiry",
 				}),
 			);
 		if (minute % 60 === 0)

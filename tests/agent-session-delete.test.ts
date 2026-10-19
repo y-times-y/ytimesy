@@ -60,6 +60,7 @@ beforeAll(async () => {
 		"20260927210000_project_environments.sql",
 		"20260927220000_agent_competitions.sql",
 		"20260930220000_chat_branches.sql",
+		"20261018010000_builder_subagents.sql",
 	])
 		await db.exec(await readFile(`supabase/migrations/${file}`, "utf8"));
 	// The harness constraint from 20260927203000_api_turns (this schema builds api_turn itself).

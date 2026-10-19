@@ -1,9 +1,12 @@
+import { listedOpenRouterId } from "#/domain/api-model-list";
 import type { ModelProvider } from "#/domain/model-connection";
 import { browseModels } from "./browse-models";
 import { readModelCatalogBody } from "./model-catalog";
 
 type ModelContext = {
 	contextWindow?: number;
+	/** False when the public catalog lists the model without image input. */
+	imageInput?: boolean;
 	nativeCompaction?: "openai" | "openai-endpoint" | "anthropic" | "xai";
 };
 const cached = new Map<string, { expires: number; value: ModelContext }>();
@@ -96,7 +99,12 @@ export async function readModelContext(
 	} catch {
 		// Missing metadata uses the shared unknown-window budget, not an invented model limit.
 	}
-	const value = { contextWindow, nativeCompaction };
+	const imageInput = await catalogImageInput(input).catch(() => undefined);
+	const value = {
+		contextWindow,
+		nativeCompaction,
+		...(imageInput === undefined ? {} : { imageInput }),
+	};
 	if (cached.size >= 1000) cached.delete(cached.keys().next().value as string);
 	cached.set(input.cacheKey, {
 		value,
@@ -175,4 +183,16 @@ async function listedContextWindow(
 					(row as { name?: unknown }).name === input.modelId),
 		),
 	);
+}
+
+/** Whether the public catalog lists image input for the model; unknown stays undefined. */
+async function catalogImageInput(input: {
+	provider: ModelProvider;
+	modelId: string;
+}): Promise<boolean | undefined> {
+	const catalogId =
+		listedOpenRouterId(input.modelId) ??
+		(input.provider === "openai" ? `openai/${input.modelId}` : input.modelId);
+	const listed = await browseModels();
+	return listed.find((model) => model.id === catalogId)?.imageInput;
 }

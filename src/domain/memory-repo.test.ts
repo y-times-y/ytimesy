@@ -126,18 +126,18 @@ describe("memory on the request", () => {
 		);
 	});
 
-	it("selects at most five similar lines above the cutoff, never twice", () => {
+	it("selects at most eight lines above the cutoff, never twice", () => {
 		const files = {
 			"MEMORY.md": "- Prefers short answers",
 			"tooling.md": Array.from(
-				{ length: 8 },
+				{ length: 12 },
 				(_, index) => `- Rule ${index}`,
 			).join("\n"),
 			"other.md": "- Uses Go modules [project: acme/api]",
 		};
 		const lines = memoryLines(files);
 		const scores = new Map(
-			lines.map((entry, index) => [entry, 0.9 - index * 0.06]),
+			lines.map((entry, index) => [entry, 0.9 - index * 0.04]),
 		);
 		const picked = selectMemoryMatches({
 			lines,
@@ -152,6 +152,9 @@ describe("memory on the request", () => {
 			"Rule 3",
 			"Rule 4",
 			"Rule 5",
+			"Rule 6",
+			"Rule 7",
+			"Rule 8",
 		]);
 		expect(memoryMatchesPart(picked.slice(0, 1))).toContain(
 			"tooling.md:2: - Rule 1",
@@ -193,6 +196,55 @@ describe("dream inbox and save hook", () => {
 			{ file: "tooling.md", text: "Uses pnpm, never npm", project: "" },
 		]);
 		expect(parseSaveHookAnswer("no json")).toEqual([]);
+	});
+
+	it("reads which shown line an entry replaces, and keeps brackets that are not metadata", () => {
+		expect(
+			parseSaveHookAnswer(
+				'{"entries":[{"file":"tooling.md","text":"Use pnpm","project":"","replaces":"tooling.md:3"},{"file":"log.md","text":"Prefix logs with [orders]","replaces":"nonsense"},{"file":"x.md","text":"Ends in [key: value]"}]}',
+			),
+		).toEqual([
+			{
+				file: "tooling.md",
+				text: "Use pnpm",
+				project: "",
+				replaces: { path: "tooling.md", line: 3 },
+			},
+			{ file: "log.md", text: "Prefix logs with [orders]", project: "" },
+			{ file: "x.md", text: "Ends in key: value", project: "" },
+		]);
+		expect(
+			parseSaveHookAnswer(
+				'{"entries":[{"file":"y.md","text":"See [[other]]"}]}',
+			),
+		).toEqual([{ file: "y.md", text: "See other", project: "" }]);
+	});
+});
+
+describe("superseded entries", () => {
+	const text = [
+		"- Use npm [source: a] [superseded-by: https://app/?chat=2]",
+		"- Use pnpm [source: https://app/?chat=2]",
+	].join("\n");
+
+	it("are hidden like expired ones and removed by a dream's cleanup", () => {
+		expect(annotateMemoryText(text, { today: "2026-10-15" })).toBe(
+			"- Use pnpm [source: https://app/?chat=2]",
+		);
+		expect(withoutExpired({ "t.md": text }, "2026-10-15")).toEqual([
+			{ path: "t.md", content: "- Use pnpm [source: https://app/?chat=2]" },
+		]);
+		const lines = memoryLines({ "t.md": text });
+		expect(lines[0].meta["superseded-by"]).toBe("https://app/?chat=2");
+		expect(
+			selectMemoryMatches({
+				lines,
+				scores: new Map(lines.map((entry) => [entry, 0.9])),
+				alreadyShown: () => false,
+				today: "2026-10-15",
+				project: null,
+			}).map((entry) => entry.text),
+		).toEqual(["Use pnpm"]);
 	});
 });
 

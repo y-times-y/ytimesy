@@ -3,6 +3,8 @@ import {
 	apiConversation,
 	assertApiContextFits,
 	isUserRequestMessage,
+	nextTurnMessages,
+	runtimeHandoffPrompt,
 } from "./api-conversation";
 import { applyApiProgress } from "./api-progress";
 import { SessionItemId } from "./ids";
@@ -66,4 +68,68 @@ it("recognizes the person's own messages, including handoff-wrapped ones, and no
 	expect(
 		isUserRequestMessage(items, { role: "assistant", content: "Fix it" }),
 	).toBe(false);
+});
+
+it("continues structured history after a runtime switch without repeating it in an envelope", () => {
+	const transcript = [
+		{ kind: "userMessage" as const, id: SessionItemId("u1"), text: "Run it" },
+		{ kind: "agentMessage" as const, id: SessionItemId("a1"), text: "Ran it" },
+	];
+	const items = [
+		...transcript,
+		{
+			kind: "userMessage" as const,
+			id: SessionItemId("u2"),
+			text: "What did you run last?",
+		},
+	];
+	const handoff = runtimeHandoffPrompt(transcript, "What did you run last?");
+	const previous = [
+		{ role: "user" as const, content: "Run it" },
+		{ role: "assistant" as const, content: "Ran it" },
+	];
+	const continued = nextTurnMessages({
+		previous,
+		items,
+		text: "What did you run last?",
+		runtimeText: "What did you run last?",
+		handoff,
+	});
+	expect(continued).toEqual([
+		...previous,
+		{ role: "user", content: "What did you run last?" },
+	]);
+	expect(JSON.stringify(continued)).not.toContain("previous-conversation");
+	// Without structured history the envelope is the only carrier of the transcript.
+	expect(
+		nextTurnMessages({
+			previous: null,
+			items,
+			text: "What did you run last?",
+			runtimeText: "What did you run last?",
+			handoff,
+		}),
+	).toEqual([...previous, { role: "user", content: handoff }]);
+});
+
+it("sends a runtime replacement text after structured history and in the rebuilt transcript", () => {
+	const items = [
+		{ kind: "userMessage" as const, id: SessionItemId("u"), text: "visible" },
+	];
+	expect(
+		nextTurnMessages({
+			previous: [{ role: "user", content: "earlier" }],
+			items,
+			text: "visible",
+			runtimeText: "peer notice",
+		}).at(-1),
+	).toEqual({ role: "user", content: "peer notice" });
+	expect(
+		nextTurnMessages({
+			previous: null,
+			items,
+			text: "visible",
+			runtimeText: "peer notice",
+		}),
+	).toEqual([{ role: "user", content: "peer notice" }]);
 });

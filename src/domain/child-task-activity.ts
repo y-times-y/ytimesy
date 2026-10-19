@@ -1,9 +1,12 @@
 import type { AgentTask } from "./agent-task";
 import type { SessionItem, SessionTurnStatus } from "./session-item";
+import type { SubagentTaskView } from "./subagent-tree";
 
 export type AgentTaskActivity = AgentTask & {
 	readonly items: readonly SessionItem[];
 	readonly turnStatus: SessionTurnStatus;
+	/** Set for children started through the agent tool (subagents=on). */
+	readonly subagent?: SubagentTaskView;
 };
 
 const INTERNAL_EVENT_PREFIX = "\u2063ytimesy-child-event:";
@@ -25,6 +28,16 @@ function isInternalChildTaskMessage(text: string): boolean {
 					"Answer the child, escalate to the user if necessary, or revise the plan.",
 				)))
 	);
+}
+
+/** The person's latest request in a chat, skipping internal child-event messages. */
+export function latestUserRequestText(items: readonly SessionItem[]) {
+	for (let index = items.length - 1; index >= 0; index--) {
+		const item = items[index];
+		if (item.kind === "userMessage" && !isInternalChildTaskMessage(item.text))
+			return item.text;
+	}
+	return "";
 }
 
 /** Old notification turns remain in storage, but are not user-authored chat. */
@@ -82,7 +95,11 @@ export function childTaskAnchorId(
 }
 
 function isTaskCreationTool(name: string) {
-	return name.endsWith("create_task") || name.endsWith("launch_ready_tasks");
+	return (
+		name.endsWith("create_task") ||
+		name.endsWith("launch_ready_tasks") ||
+		name === "agent"
+	);
 }
 
 function isTaskCreation(item: SessionItem, taskId?: string) {

@@ -197,6 +197,13 @@ const OFFICIAL_OPENROUTER_PROVIDERS: Readonly<
 };
 
 /** The faster speeds a listed OpenRouter model offers, empty when none. */
+/** The OpenRouter catalog id of a listed model, by either of its ids. */
+export function listedOpenRouterId(modelId: string): string | undefined {
+	return API_MODEL_LIST.find(
+		(model) => model.openRouterId === modelId || model.directId === modelId,
+	)?.openRouterId;
+}
+
 export function apiModelSpeeds(openRouterId: string): readonly ApiModelSpeed[] {
 	return (
 		API_MODEL_LIST.find((model) => model.openRouterId === openRouterId)

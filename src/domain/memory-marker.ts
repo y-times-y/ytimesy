@@ -28,12 +28,29 @@ export type RecalledMemoryLine = {
 	};
 };
 
+/**
+ * What the read hook did: matched lines, found none above the cutoff,
+ * skipped a short or command message, ran out of time, or failed.
+ */
+export type MemoryReadHookOutcome =
+	| "matched"
+	| "none"
+	| "skipped"
+	| "timeout"
+	| "error";
+
 export type MemoryRecall = {
 	/** Memory commit when the request was read; this turn's saves are diffed against it. */
 	readonly head: string | null;
 	/** MEMORY.md (the memory index) was attached at chat start. */
 	readonly index?: true;
 	readonly lines: readonly RecalledMemoryLine[];
+	/** The read hook's outcome and wall time (full mode with embeddings only). */
+	readonly hook?: {
+		readonly outcome: MemoryReadHookOutcome;
+		readonly ms: number;
+		readonly error?: string;
+	};
 };
 
 export type SavedMemoryLine = {

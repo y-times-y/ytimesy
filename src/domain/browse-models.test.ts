@@ -195,3 +195,22 @@ it("reads the gateway catalog's ids and context sizes without filtering it", () 
 	]);
 	expect(() => parseBrowseModels({})).toThrow("unavailable");
 });
+
+it("reads whether the catalog lists image input, and leaves it unknown otherwise", () => {
+	expect(
+		parseBrowseModels({
+			data: [
+				{
+					id: "vendor/vision",
+					architecture: { input_modalities: ["text", "image"] },
+				},
+				{ id: "vendor/text", architecture: { input_modalities: ["text"] } },
+				{ id: "vendor/unknown" },
+			],
+		}).map((model) => [model.id, model.imageInput]),
+	).toEqual([
+		["vendor/vision", true],
+		["vendor/text", false],
+		["vendor/unknown", undefined],
+	]);
+});

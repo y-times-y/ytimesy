@@ -235,7 +235,7 @@ vi.mock("../services/api-agent-tools", () => ({
 }));
 // The mocked tool set carries probe fields; the shell filter has its own tests.
 vi.mock("../services/builder-shell-surface", () => ({
-	builderShellTools: (tools: unknown) => tools,
+	builderToolSurface: ({ tools }: { tools: unknown }) => ({ tools }),
 }));
 vi.mock("../services/api-command-scope", () => ({
 	stopApiTurnCommands: mocks.stop,
@@ -1099,6 +1099,59 @@ it("treats a Stop noticed by the heartbeat as the user's clean stop", async () =
 			expect.anything(),
 			"cancelled",
 			expect.not.arrayContaining([expect.objectContaining({ kind: "error" })]),
+		);
+	} finally {
+		vi.useRealTimers();
+	}
+});
+
+it("settles a Stop during a tool call with that call in the saved history", async () => {
+	vi.useFakeTimers();
+	try {
+		mocks.renew.mockResolvedValueOnce(true).mockResolvedValue(false);
+		mocks.cancelRequested.mockResolvedValue(true);
+		const inFlight = [
+			{ role: "user" as const, content: "what is running?" },
+			{
+				role: "assistant" as const,
+				content: [
+					{
+						type: "tool-call" as const,
+						toolCallId: "call-1",
+						toolName: "exec_command",
+						input: { cmd: "sleep 60; echo marker-one" },
+					},
+				],
+			},
+		];
+		mocks.stepRuntime.mockImplementation(
+			(
+				input: Parameters<typeof hangUntilAborted>[0] & {
+					messages: unknown[];
+					onAttemptFailed: (state: unknown) => void;
+				},
+			) =>
+				hangUntilAborted(input).catch((error: unknown) => {
+					input.onAttemptFailed({
+						committed: input.messages,
+						droppedStepSaved: false,
+						uncommittedIds: [],
+						inFlight,
+					});
+					throw error;
+				}),
+		);
+		const outcome = runApiTurn({} as WorkspaceMachines, childTurn, {
+			index: 1,
+			signal: new AbortController().signal,
+		});
+		await vi.advanceTimersByTimeAsync(1_500);
+		expect(await outcome).toBe("cancelled");
+		expect(mocks.finalize).toHaveBeenCalledWith(
+			expect.anything(),
+			"cancelled",
+			expect.anything(),
+			inFlight,
 		);
 	} finally {
 		vi.useRealTimers();

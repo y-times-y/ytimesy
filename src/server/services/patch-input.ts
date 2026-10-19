@@ -2,6 +2,8 @@
 // patch envelopes, SEARCH/REPLACE blocks, whole-file writes) into file changes,
 // and applies hunks with whitespace/line-drift tolerance but never ambiguously.
 
+import { foldTypography } from "./typography-fold";
+
 export class PatchInputError extends Error {}
 
 export const PATCH_INPUT_HELP = `Accepted apply_patch inputs (use one):
@@ -57,11 +59,18 @@ export type PatchFileChange =
 	| { type: "delete"; path: string }
 	| { type: "update"; path: string; edits: PatchEdit[]; moveTo?: string };
 
-export function repositoryPatchPath(raw: string): string {
+/**
+ * A patch path as a repository-relative one. With `root` (the repository's
+ * absolute path), an absolute path inside it is made relative first, as
+ * Codex's own apply_patch accepts; anything else absolute is refused.
+ */
+export function repositoryPatchPath(raw: string, root?: string): string {
 	let path = raw.trim();
 	// Timestamps follow a tab in traditional diff headers.
 	path = path.split("\t")[0].trim();
 	if (/^".*"$/.test(path)) path = path.slice(1, -1);
+	const base = root?.replace(/\/+$/, "");
+	if (base && path.startsWith(`${base}/`)) path = path.slice(base.length + 1);
 	while (path.startsWith("./")) path = path.slice(2);
 	if (
 		!path ||
@@ -75,26 +84,35 @@ export function repositoryPatchPath(raw: string): string {
 	return path;
 }
 
-/** Parses patch text in any accepted format. `path` names the file for headerless input. */
+type PatchPath = (raw: string) => string;
+
+/**
+ * Parses patch text in any accepted format. `path` names the file for
+ * headerless input; `root` (the repository's absolute path) lets file headers
+ * name files inside it by absolute path.
+ */
 export function parsePatchText(
 	input: string,
 	path?: string,
+	root?: string,
 ): PatchFileChange[] {
+	const toPath: PatchPath = (raw) => repositoryPatchPath(raw, root);
 	let text = input.replaceAll("\r\n", "\n");
 	if (/^\*\*\* Begin Patch\s*$|^\*\*\* (Add|Update|Delete) File:/m.test(text))
-		return parseCodexEnvelope(stripOuterFence(text));
-	if (/^<{5,9} SEARCH\s*$/m.test(text)) return parseSearchReplace(text, path);
+		return parseCodexEnvelope(stripOuterFence(text), toPath);
+	if (/^<{5,9} SEARCH\s*$/m.test(text))
+		return parseSearchReplace(text, path, toPath);
 	text = stripOuterFence(text);
 	if (
 		/^(diff --git |--- |\+\+\+ |@@)/m.test(text) ||
 		(/^\*\*\* /m.test(text) && /^--- /m.test(text))
 	)
-		return parseUnifiedDiff(text, path);
+		return parseUnifiedDiff(text, path, toPath);
 	if (path && /^[-+ ]/m.test(text))
 		return [
 			{
 				type: "update",
-				path: repositoryPatchPath(path),
+				path: toPath(path),
 				edits: parseLooseHunks(text.split("\n"), path).map((hunk) => ({
 					kind: "hunk" as const,
 					hunk,
@@ -115,7 +133,10 @@ function stripOuterFence(text: string): string {
 	return lines.join("\n");
 }
 
-function parseCodexEnvelope(text: string): PatchFileChange[] {
+function parseCodexEnvelope(
+	text: string,
+	toPath: PatchPath,
+): PatchFileChange[] {
 	const lines = text.split("\n");
 	const sections: {
 		kind: "Add" | "Update" | "Delete";
@@ -134,7 +155,7 @@ function parseCodexEnvelope(text: string): PatchFileChange[] {
 		if (header) {
 			sections.push({
 				kind: header[1] as "Add" | "Update" | "Delete",
-				path: repositoryPatchPath(header[2]),
+				path: toPath(header[2]),
 				body: [],
 			});
 			continue;
@@ -142,7 +163,7 @@ function parseCodexEnvelope(text: string): PatchFileChange[] {
 		const current = sections.at(-1);
 		const move = /^\*\*\* Move to:\s*(.+)$/.exec(line);
 		if (move && current?.kind === "Update") {
-			current.moveTo = repositoryPatchPath(move[1]);
+			current.moveTo = toPath(move[1]);
 			continue;
 		}
 		if (!current) {
@@ -190,7 +211,7 @@ function parseCodexEnvelope(text: string): PatchFileChange[] {
 const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@ ?(.*)$/;
 
 /** Parses '@@'-separated hunks (unified or V4A style); lines before any '@@' form an implicit hunk. */
-export function parseLooseHunks(lines: string[], path: string): Hunk[] {
+function parseLooseHunks(lines: string[], path: string): Hunk[] {
 	const hunks: Hunk[] = [];
 	let current: Hunk | null = null;
 	let pendingAnchors: string[] = [];
@@ -264,7 +285,11 @@ type UnifiedFile = {
 	body: string[];
 };
 
-function parseUnifiedDiff(text: string, path?: string): PatchFileChange[] {
+function parseUnifiedDiff(
+	text: string,
+	path: string | undefined,
+	toPath: PatchPath,
+): PatchFileChange[] {
 	const lines = text.split("\n");
 	const files: UnifiedFile[] = [];
 	let inHunks = false;
@@ -345,7 +370,7 @@ function parseUnifiedDiff(text: string, path?: string): PatchFileChange[] {
 		if (oldMissing && newMissing)
 			throw new PatchInputError("A diff section names no file path.");
 		if (oldMissing) {
-			const target = repositoryPatchPath(newPath as string);
+			const target = toPath(newPath as string);
 			const hunks = parseLooseHunks(file.body, target);
 			const added = hunks.flatMap((hunk) =>
 				hunk.lines.filter((entry) => entry.op !== "-"),
@@ -359,9 +384,9 @@ function parseUnifiedDiff(text: string, path?: string): PatchFileChange[] {
 					: "",
 			};
 		}
-		const source = repositoryPatchPath(oldPath as string);
+		const source = toPath(oldPath as string);
 		if (newMissing) return { type: "delete", path: source };
-		const target = repositoryPatchPath(newPath as string);
+		const target = toPath(newPath as string);
 		const hunks = parseLooseHunks(file.body, source);
 		if (!hunks.length && source === target)
 			throw new PatchInputError(
@@ -388,7 +413,11 @@ function stripDiffPrefix(raw: string, prefix: string) {
 	return path.startsWith(prefix) ? path.slice(prefix.length) : path;
 }
 
-function parseSearchReplace(text: string, path?: string): PatchFileChange[] {
+function parseSearchReplace(
+	text: string,
+	path: string | undefined,
+	toPath: PatchPath,
+): PatchFileChange[] {
 	const lines = text.split("\n");
 	const changes: PatchFileChange[] = [];
 	let candidate: string | undefined;
@@ -428,7 +457,7 @@ function parseSearchReplace(text: string, path?: string): PatchFileChange[] {
 			throw new PatchInputError(
 				"SEARCH/REPLACE blocks need a file: pass the path field or put the path on the line before '<<<<<<< SEARCH'.",
 			);
-		const file = repositoryPatchPath(target);
+		const file = toPath(target);
 		const edit: PatchEdit = {
 			kind: "replace",
 			search: search.length ? `${search.join("\n")}\n` : "",
@@ -461,10 +490,17 @@ function joinContent({ lines, eol, finalNewline }: SplitContent) {
 	return lines.length ? `${lines.join(eol)}${finalNewline ? eol : ""}` : "";
 }
 
+/**
+ * Line matchers, strictest first: exact, trailing whitespace ignored, all
+ * whitespace runs collapsed, then also typography folded (as lean-edit.ts
+ * and Codex's apply_patch do). Hunks match whole lines, so unlike lean-edit
+ * the looser levels also ignore indentation.
+ */
 const MATCHERS: ((line: string) => string)[] = [
 	(line) => line,
 	(line) => line.trimEnd(),
 	(line) => line.trim().replace(/\s+/g, " "),
+	(line) => foldTypography(line).trim().replace(/\s+/g, " "),
 ];
 
 function findBlock(

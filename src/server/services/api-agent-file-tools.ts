@@ -4,6 +4,7 @@ import { applyDiff } from "@openai/agents-core/utils";
 import { type ModelMessage, type ToolSet, tool } from "ai";
 import { z } from "zod";
 import { checkExecutionGroups } from "#/domain/check-execution-groups";
+import { clip } from "#/domain/clip";
 import { publicToolDetail } from "#/domain/tool-detail";
 import type { agentOutputArtifacts } from "./agent-output-artifacts";
 import {
@@ -125,6 +126,9 @@ type RepositoryFilePage = {
 	nextStart: number | null;
 };
 
+/** Characters one read, page or check returns by default (also the scripts' cap). */
+const FILE_TOOL_CHARACTERS = 32_000;
+
 const READ_ENVIRONMENT_REPORT_SCRIPT = `import json, os, stat, sys
 start = int(sys.argv[1])
 if not 0 <= start <= 10000000:
@@ -138,8 +142,8 @@ with os.fdopen(descriptor, 'r', encoding='utf-8') as handle:
     if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
         raise ValueError('Environment report must be a regular file')
     handle.read(start)
-    text = handle.read(32001)
-print(json.dumps({'available': True, 'start': start, 'text': text[:32000], 'nextStart': start + 32000 if len(text) > 32000 else None}, ensure_ascii=False))`;
+    text = handle.read(${FILE_TOOL_CHARACTERS + 1})
+print(json.dumps({'available': True, 'start': start, 'text': text[:${FILE_TOOL_CHARACTERS}], 'nextStart': start + ${FILE_TOOL_CHARACTERS} if len(text) > ${FILE_TOOL_CHARACTERS} else None}, ensure_ascii=False))`;
 
 const READ_FILES_SCRIPT = `import hashlib, json, pathlib, sys
 root = pathlib.Path(sys.argv[1]).resolve(strict=True)
@@ -262,7 +266,7 @@ if request['operation'] == 'move':
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
-    return {'path': request['newPath'], 'previousPath': request['path'], 'sha256': hashlib.sha256(content.encode()).hexdigest(), 'diagnosticSource': content if len(content) <= 32000 else None}
+    return {'path': request['newPath'], 'previousPath': request['path'], 'sha256': hashlib.sha256(content.encode()).hexdigest(), 'diagnosticSource': content if len(content) <= ${FILE_TOOL_CHARACTERS} else None}
 if validate_only:
     return {'path': request['path']}
 target.parent.mkdir(parents=True, exist_ok=True)
@@ -277,17 +281,27 @@ try:
 finally:
     if os.path.exists(temporary):
         os.unlink(temporary)
-return {'path': request['path'], 'sha256': hashlib.sha256(content.encode()).hexdigest(), 'diagnosticSource': content if len(content) <= 32000 else None}`;
+return {'path': request['path'], 'sha256': hashlib.sha256(content.encode()).hexdigest(), 'diagnosticSource': content if len(content) <= ${FILE_TOOL_CHARACTERS} else None}`;
 
-const EDIT_SCRIPT = `import fcntl, hashlib, json, os, pathlib, stat, sys, tempfile
-root = pathlib.Path(sys.argv[1]).resolve(strict=True)
-lock = open('/tmp/ytimesy-edit-lock-' + hashlib.sha256(str(root).encode()).hexdigest(), 'a')
+/**
+ * Python (needs fcntl, hashlib, os, pathlib, stat, tempfile and a resolved
+ * `root`): takes the repository's edit lock and defines
+ * `apply_edit(request, validate_only=False)`, one checked edit relative to
+ * `root`: no absolute paths or .git, no symlinks, no escape from `root`,
+ * stale-content refusal, atomic replace with the temp file always removed.
+ * The lean surfaces' file writer uses the same function.
+ */
+export const LOCKED_APPLY_EDIT = `lock = open('/tmp/ytimesy-edit-lock-' + hashlib.sha256(str(root).encode()).hexdigest(), 'a')
 fcntl.flock(lock, fcntl.LOCK_EX)
 def apply_edit(request, validate_only=False):
 ${EDIT_OPERATION_SCRIPT.trim()
 	.split("\n")
 	.map((line) => `    ${line}`)
-	.join("\n")}
+	.join("\n")}`;
+
+const EDIT_SCRIPT = `import fcntl, hashlib, json, os, pathlib, stat, sys, tempfile
+root = pathlib.Path(sys.argv[1]).resolve(strict=True)
+${LOCKED_APPLY_EDIT}
 with open(sys.argv[2], encoding='utf-8') as handle:
     request = json.load(handle)
 if isinstance(request, dict) and 'preflight' in request:
@@ -359,6 +373,8 @@ export function apiAgentFileTools(
 	},
 ): ToolSet {
 	const { signal, once } = input;
+	/** Patch headers may name repository files by absolute path (as Codex's own apply_patch allows). */
+	const repositoryRoot = async () => (await resolveToolWorkspace(input)).cwd;
 	function readRepositoryFiles(
 		paths: string[],
 		start: number,
@@ -379,7 +395,7 @@ export function apiAgentFileTools(
 	async function readRepositoryFiles(
 		paths: string[],
 		start?: number,
-		maxCharacters = 32000,
+		maxCharacters = FILE_TOOL_CHARACTERS,
 		guidance?: FileReadGuidance,
 	): Promise<
 		RepositoryFileBatch | RepositoryFilePage | RepositoryGuidanceReadReceipt
@@ -451,11 +467,20 @@ export function apiAgentFileTools(
 				"Read up to eight known UTF-8 repository files in one inspection. Prefer batching known paths over separate reads. Missing/non-file paths return a per-path error, not empty file content. Unsafe paths reject the request. Defaults: 32,000 characters per file, 64,000 total; maxCharacters may be 128,000 for large required bodies. Total is max(64,000,maxCharacters), in request order. Follow truncation with read_file. Only guidance/configuration already supplied completely by read_repository_guidance may return a fresh hash-verified receipt instead of duplicating text: alreadyInContext means its full body is still active; previouslyRead links its exact archive, not an active body. Set repeatCompleteBody:true when you need the text again. Ordinary source files always return content. Paths exclude .git.",
 			inputSchema: z.object({
 				paths: z.array(z.string().min(1).max(2048)).min(1).max(8),
-				maxCharacters: z.number().int().min(1).max(128000).default(32000),
+				maxCharacters: z
+					.number()
+					.int()
+					.min(1)
+					.max(128000)
+					.default(FILE_TOOL_CHARACTERS),
 				repeatCompleteBody: z.boolean().default(false),
 			}),
 			execute: (
-				{ paths, maxCharacters = 32000, repeatCompleteBody = false },
+				{
+					paths,
+					maxCharacters = FILE_TOOL_CHARACTERS,
+					repeatCompleteBody = false,
+				},
 				options,
 			) =>
 				readRepositoryFiles(paths, undefined, maxCharacters, {
@@ -469,11 +494,21 @@ export function apiAgentFileTools(
 			inputSchema: z.object({
 				path: z.string().min(1).max(2048),
 				start: z.number().int().min(0).max(10_000_000).default(0),
-				maxCharacters: z.number().int().min(1).max(128000).default(32000),
+				maxCharacters: z
+					.number()
+					.int()
+					.min(1)
+					.max(128000)
+					.default(FILE_TOOL_CHARACTERS),
 				repeatCompleteBody: z.boolean().default(false),
 			}),
 			execute: (
-				{ path, start = 0, maxCharacters = 32000, repeatCompleteBody = false },
+				{
+					path,
+					start = 0,
+					maxCharacters = FILE_TOOL_CHARACTERS,
+					repeatCompleteBody = false,
+				},
 				options,
 			) =>
 				readRepositoryFiles([path], start, maxCharacters, {
@@ -496,7 +531,11 @@ export function apiAgentFileTools(
 				);
 				return {
 					passed: result.exitCode === 0,
-					output: `${result.stdout}${result.stderr}`.slice(0, 32_000),
+					output: clip(
+						`${result.stdout}${result.stderr}`,
+						FILE_TOOL_CHARACTERS,
+						"\n[output truncated]",
+					),
 				};
 			},
 		}),
@@ -855,7 +894,9 @@ export function apiAgentFileTools(
 				execute: (patch: string, options) =>
 					once(options.toolCallId, async () => {
 						try {
-							return await applyFileChanges(parsePatchText(patch));
+							return await applyFileChanges(
+								parsePatchText(patch, undefined, await repositoryRoot()),
+							);
 						} catch (error) {
 							const message =
 								error instanceof Error
@@ -951,7 +992,11 @@ export function apiAgentFileTools(
 					if (operation.type === "delete_file" || !operation.diff) throw error;
 					let changes: PatchFileChange[];
 					try {
-						changes = parsePatchText(operation.diff, operation.path);
+						changes = parsePatchText(
+							operation.diff,
+							operation.path,
+							await repositoryRoot(),
+						);
 					} catch {
 						throw error;
 					}
@@ -960,13 +1005,15 @@ export function apiAgentFileTools(
 				return await writeEdit(request);
 			}
 			if (patchText !== undefined)
-				return await applyFileChanges(parsePatchText(patchText, args.path));
+				return await applyFileChanges(
+					parsePatchText(patchText, args.path, await repositoryRoot()),
+				);
 			if (!args.path)
 				throw new PatchInputError("content needs a path to write.");
 			return await applyFileChanges([
 				{
 					type: "write",
-					path: repositoryPatchPath(args.path),
+					path: repositoryPatchPath(args.path, await repositoryRoot()),
 					content: args.content as string,
 				},
 			]);

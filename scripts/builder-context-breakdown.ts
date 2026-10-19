@@ -7,6 +7,13 @@
 // network, database or VM is used.
 //
 //   node --import tsx scripts/builder-context-breakdown.ts [--json] [--repo <path>]
+//   node --import tsx scripts/builder-context-breakdown.ts --surfaces
+//
+// --surfaces compares the builder tool surfaces (docs/builder-tool-surface.md):
+// system instructions and tool definitions for current, lean-native (per
+// model family) and lean, on each family's transport, and lean with the
+// codeMode=on harness variant (run_code and its prompt paragraph) as
+// "lean+code".
 //
 // Token counts are estimates: characters / 4 of the JSON actually sent (no
 // tokenizer is installed). Claude's tokenizer yields more tokens per
@@ -20,6 +27,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { ModelMessage, ToolSet } from "ai";
+import type { HarnessToolSurfaceId } from "#/domain/harness-variant";
 import { WorkspaceId } from "#/domain/ids";
 import type { AgentSessionRecord } from "#/server/adapters/agent-sessions";
 import { connectedLanguageModel } from "#/server/adapters/api-model";
@@ -27,7 +35,8 @@ import { nativeWebSearchTools } from "#/server/adapters/native-web-search";
 import { agentTurnInstructions } from "#/server/services/agent-turn-instructions";
 import { apiAgentTools } from "#/server/services/api-agent-tools";
 import { automaticRepositoryContext } from "#/server/services/automatic-repository-context";
-import { builderShellTools } from "#/server/services/builder-shell-surface";
+import { builderToolSurface } from "#/server/services/builder-shell-surface";
+import { CODE_MODE_TOOL, codeModeTool } from "#/server/services/code-mode-tool";
 import {
 	type ModelAgentRuntime,
 	runModelAgentStep,
@@ -50,9 +59,25 @@ const PROMPT =
 
 class Captured extends Error {}
 
+type Transport =
+	| "codex"
+	| "openrouter-claude"
+	| "openrouter-gemini"
+	| "openrouter-qwen";
+const OPENROUTER_MODELS: Record<Exclude<Transport, "codex">, string> = {
+	"openrouter-claude": "anthropic/claude-sonnet-5.5",
+	"openrouter-gemini": "google/gemini-4-argon",
+	"openrouter-qwen": "qwen/qwen3.8-max-prime",
+};
+const modelFor = (transport: Transport) =>
+	transport === "codex" ? "gpt-6.1-sol" : OPENROUTER_MODELS[transport];
+
 /** The root builder's tools, instructions and message preparation, assembled as api-turn.ts does. */
 async function builderTurnRequest(input: {
-	transport: "codex" | "openrouter-claude";
+	transport: Transport;
+	surface: HarnessToolSurfaceId;
+	/** The codeMode=on harness variant: run_code beside a lean surface. */
+	codeMode?: boolean;
 	repo: string;
 	prompt: string;
 	exec: (
@@ -86,19 +111,48 @@ async function builderTurnRequest(input: {
 			turnId: "fixture-turn",
 			signal,
 			writable: true,
+			// As api-turn.ts: the Codex subscription gets the freeform apply_patch.
+			freeformPatch: input.transport === "codex",
 		}),
 		workspace,
 		signal,
 		instructionMessages: { turnStart: true },
 		onEvent: async () => {},
 	});
-	const tools: ToolSet = {
-		...builderShellTools(repositoryContext.tools),
+	const modelId = modelFor(input.transport);
+	const surface = builderToolSurface({
+		variant: input.surface,
+		modelId,
+		tools: repositoryContext.tools,
+		lean: {
+			workspace,
+			sessionId: session.id,
+			turnId: "fixture-turn",
+			signal,
+			// Never install helper commands on this machine.
+			installHelpers: async () => {},
+		},
+	});
+	const turnTools: ToolSet = {
+		...surface.tools,
 		...planTools(new PlanLock({ kind: "none" })),
 		...nativeWebSearchTools(
 			input.transport === "codex" ? "openai" : "openrouter",
 		),
 	};
+	// As api-turn.ts: run_code is built from the turn's final tools and added last.
+	const runCode =
+		input.codeMode && surface.lean
+			? codeModeTool({
+					tools: turnTools,
+					signal,
+					sessionId: session.id,
+					turnId: "fixture-turn",
+				})
+			: undefined;
+	const tools: ToolSet = runCode
+		? { ...turnTools, [CODE_MODE_TOOL]: runCode }
+		: turnTools;
 	return {
 		tools,
 		instructions: agentTurnInstructions({
@@ -107,6 +161,7 @@ async function builderTurnRequest(input: {
 			tools,
 			plugins: [],
 			projectKnowledge: null,
+			leanShape: surface.lean?.shape,
 		}),
 		messages: [{ role: "user", content: input.prompt }] as ModelMessage[],
 		prepareMessages: repositoryContext.prepare,
@@ -179,9 +234,11 @@ function environmentReport(repo: string) {
 type Body = Record<string, unknown>;
 
 async function firstRequest(
-	transport: "codex" | "openrouter-claude",
+	transport: Transport,
 	repo: string,
 	report: string,
+	surface: HarnessToolSurfaceId = "current",
+	codeMode = false,
 ) {
 	let body: Body | undefined;
 	const capture: typeof fetch = async (_url, init) => {
@@ -190,6 +247,8 @@ async function firstRequest(
 	};
 	const request = await builderTurnRequest({
 		transport,
+		surface,
+		codeMode,
 		repo,
 		prompt: PROMPT,
 		exec: (command) =>
@@ -228,7 +287,7 @@ async function firstRequest(
 						{
 							provider: "openrouter",
 							baseUrl: "https://openrouter.ai/api/v1",
-							modelId: "anthropic/claude-sonnet-5.5",
+							modelId: modelFor(transport),
 							apiKey: "fixture",
 						},
 						capture,
@@ -241,8 +300,7 @@ async function firstRequest(
 	await runModelAgentStep(
 		{
 			userId: "fixture-owner",
-			modelId:
-				transport === "codex" ? "gpt-6.1-sol" : "anthropic/claude-sonnet-5.5",
+			modelId: modelFor(transport),
 			toolSurface: "implementation",
 			instructions: request.instructions,
 			messages: request.messages,
@@ -319,6 +377,69 @@ const report = fixtureCheckout.report;
 const repo =
 	repoFlag > 0 ? resolve(process.argv[repoFlag + 1]) : fixtureCheckout.repo;
 await writeFile(report, environmentReport(repo));
+if (process.argv.includes("--surfaces")) {
+	try {
+		const rows: Record<string, string | number>[] = [];
+		for (const [label, surface, codeMode] of [
+			["current", "current", false],
+			["lean-native", "lean-native", false],
+			["lean", "lean", false],
+			["lean+code", "lean", true],
+		] as const)
+			for (const transport of [
+				"codex",
+				"openrouter-claude",
+				"openrouter-gemini",
+				"openrouter-qwen",
+			] as const) {
+				const body = await firstRequest(
+					transport,
+					repo,
+					report,
+					surface,
+					codeMode,
+				);
+				const parts = components(body);
+				const toolCharacters = [...parts]
+					.filter(
+						([name]) =>
+							name.startsWith("provider tool") ||
+							name.startsWith("tool definitions"),
+					)
+					.reduce((sum, [, characters]) => sum + characters, 0);
+				const system = parts.get("system instructions") ?? 0;
+				const names = ((body.tools ?? []) as Body[]).map((tool) =>
+					String(
+						tool.name ?? (tool.function as Body | undefined)?.name ?? tool.type,
+					),
+				);
+				rows.push({
+					surface: label,
+					model: modelFor(transport),
+					tools: names.length,
+					systemTokens: tokens(system),
+					toolTokens: tokens(toolCharacters),
+					systemPlusTools: tokens(system + toolCharacters),
+					requestTokens: tokens(parts.get("total request body") ?? 0),
+					names: names.join(" "),
+				});
+			}
+		if (process.argv.includes("--json"))
+			console.log(JSON.stringify(rows, null, 2));
+		else {
+			console.log(
+				`${"surface".padEnd(12)}${"model".padEnd(30)}${"tools".padStart(6)}${"system".padStart(8)}${"tools".padStart(8)}${"sys+tools".padStart(11)}${"request".padStart(9)}  names`,
+			);
+			for (const row of rows)
+				console.log(
+					`${String(row.surface).padEnd(12)}${String(row.model).padEnd(30)}${String(row.tools).padStart(6)}${String(row.systemTokens).padStart(8)}${String(row.toolTokens).padStart(8)}${String(row.systemPlusTools).padStart(11)}${String(row.requestTokens).padStart(9)}  ${row.names}`,
+				);
+		}
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+	process.exit(0);
+}
 try {
 	const results = {
 		codex: components(await firstRequest("codex", repo, report)),

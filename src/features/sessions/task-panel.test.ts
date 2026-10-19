@@ -54,3 +54,79 @@ it("explains that tasks are agent-created when empty", () => {
 	expect(html).toContain("when the agent creates tasks");
 	expect(html).not.toContain("New task");
 });
+
+it("shows each subagent's role, VM, budget use and spend, and the tree total", () => {
+	const spend = (tokens: number, costUsd: number, vmMinutes = 0) => ({
+		tokens,
+		inputTokens: tokens,
+		outputTokens: 0,
+		cacheReadTokens: 0,
+		costUsd,
+		planBilled: false,
+		vmMinutes,
+	});
+	const task: AgentTask = {
+		id: "w",
+		parentSessionId: "root",
+		title: "Add the flag",
+		label: "Task 1",
+		depth: 1,
+		status: "working",
+		prompt: "Private brief",
+		placement: "fresh",
+		access: "read_write",
+		execution: "parallel",
+		dependsOnSessionId: null,
+		summary: null,
+		reviewState: "pending",
+		branch: null,
+		pullRequestUrl: null,
+		harnessId: "api",
+		listedModelId: "Sonnet",
+		createdAt: "",
+		updatedAt: "",
+	};
+	const html = renderToStaticMarkup(
+		createElement(TaskPanel, {
+			tasks: [
+				{
+					...task,
+					subagent: {
+						role: "writer",
+						vm: "fork",
+						steps: 41,
+						minutes: 6.2,
+						budget: { steps: 150, minutes: 30, tokens: 2_000_000 },
+						spend: spend(380_000, 0.76, 9),
+						subtree: spend(480_000, 0.96, 9),
+					},
+				},
+				{
+					...task,
+					id: "r",
+					label: "Task 1.1",
+					depth: 2,
+					status: "done",
+					subagent: {
+						role: "reviewer",
+						vm: "shared",
+						steps: 7,
+						minutes: 2,
+						budget: null,
+						spend: spend(100_000, 0.2),
+						subtree: spend(100_000, 0.2),
+					},
+				},
+			],
+		}),
+	);
+	expect(html).toContain(
+		"writer · fork · 41/150 steps · 6/30 min · 480k tok · $0.96 · 9.0 VM min",
+	);
+	expect(html).toContain(
+		"reviewer · shared · 7 steps · 2 min · 100k tok · $0.20",
+	);
+	expect(html).toContain("Subagents 2 · 480k tok · $0.96 · 9.0 VM min");
+	expect(html).not.toContain("Private brief");
+	expect(html).not.toMatch(/<(button|input|select|textarea|details|a)\b/);
+});

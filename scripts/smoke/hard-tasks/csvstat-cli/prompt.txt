@@ -1,0 +1,1 @@
+Build csvstat.py as specified in README.md. It is delivered on its own: another team will copy just csvstat.py into a fresh environment and run it there, so check it from a clean copy before finishing.

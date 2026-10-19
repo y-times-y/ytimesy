@@ -3,6 +3,7 @@ import {
 	type CompletedVerification,
 	completedVerification,
 } from "#/domain/completion-verification";
+import { jsonbText } from "#/domain/jsonb";
 import { database } from "./database";
 
 const baselineSchema = z.object({
@@ -47,7 +48,7 @@ export async function pinVerificationBaseline(
 			sessionId,
 			userId,
 			key,
-			JSON.stringify({ id: key, ok: true, result: baseline }),
+			jsonbText({ id: key, ok: true, result: baseline }),
 		],
 	);
 	if ((await readVerificationBaseline(userId, sessionId, directory)) !== base)
@@ -73,7 +74,7 @@ export async function recordCompletedVerification(
 			sessionId,
 			userId,
 			key,
-			JSON.stringify({ id: key, ok: true, result: verified }),
+			jsonbText({ id: key, ok: true, result: verified }),
 		],
 	);
 	if (!saved.rowCount)

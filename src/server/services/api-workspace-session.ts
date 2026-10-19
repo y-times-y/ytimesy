@@ -1,14 +1,14 @@
 import { pendingPlanId } from "#/domain/agent-plan";
 import {
-	apiConversation,
 	assertApiContextFits,
+	nextTurnMessages,
 } from "#/domain/api-conversation";
 import { type ApiModelSpeedId, apiModelSpeeds } from "#/domain/api-model-list";
 import { childTaskPublicItems } from "#/domain/child-task-activity";
 import { reconstructedContextTransition } from "#/domain/harness-model-profile";
-import {
-	type IncomingAttachment,
-	withAttachmentNote,
+import type {
+	IncomingAttachment,
+	MessageAttachment,
 } from "#/domain/message-attachment";
 import { parseModelRouteId } from "#/domain/model-connection";
 import {
@@ -22,7 +22,10 @@ import {
 	releasingChatClaimOnFailure,
 	titleUntitledAgentSession,
 } from "#/server/adapters/agent-sessions";
-import { agentSessionForOwner } from "../adapters/agent-sessions";
+import {
+	agentSessionForOwner,
+	descendantAgentSessions,
+} from "../adapters/agent-sessions";
 import {
 	enqueueApiTurn,
 	inheritedApiTurnSettings,
@@ -92,6 +95,8 @@ export async function sendApiWorkspaceTask(
 		idempotencyKey?: string;
 		approvesPlan?: boolean;
 		attachments?: readonly IncomingAttachment[];
+		/** Files a queued message already put in private storage. */
+		storedAttachments?: readonly MessageAttachment[];
 		/** A fallback route the user approved for this turn (`<connection>|<model>`). */
 		continueOn?: string;
 	},
@@ -196,11 +201,13 @@ export async function sendApiWorkspaceTask(
 		: undefined;
 	if (input.approvesPlan && !pendingPlanId(current))
 		throw new Error("That plan was already answered.");
-	const attachments = await storeMessageAttachments(
-		scope.userId,
-		session.id,
-		input.attachments,
-	);
+	const attachments = input.storedAttachments
+		? [...input.storedAttachments]
+		: await storeMessageAttachments(
+				scope.userId,
+				session.id,
+				input.attachments,
+			);
 	const items = sessionItemsQueuedWithUser(
 		current,
 		input.text,
@@ -214,23 +221,13 @@ export async function sendApiWorkspaceTask(
 		selected.modelId,
 		connection.revision,
 	);
-	let messages = previous
-		? [
-				...previous,
-				{
-					role: "user" as const,
-					content: withAttachmentNote(
-						input.runtimeText ?? input.text,
-						attachments,
-					),
-				},
-			]
-		: apiConversation(items);
-	if (input.runtimeText)
-		messages[messages.length - 1] = {
-			role: "user",
-			content: withAttachmentNote(input.runtimeText, attachments),
-		};
+	let messages = nextTurnMessages({
+		previous,
+		items,
+		text: input.text,
+		runtimeText: input.runtimeText,
+		attachments,
+	});
 	if (!previous)
 		messages = reconstructedContextTransition(
 			messages,
@@ -264,5 +261,12 @@ export async function stopApiWorkspaceTask(scope: CodexSessionScope) {
 	if (!scope.sessionId) throw new Error("Select a chat first.");
 	await readApiWorkspaceSession(scope);
 	await cancelServerTurn(scope.userId, scope.sessionId);
+	// Stop on a parent stops its whole subagent tree; cancelled children send no reports.
+	const { userId } = scope;
+	await Promise.all(
+		(await descendantAgentSessions(userId, scope.sessionId))
+			.filter((child) => child.agentRole && child.turnStatus === "running")
+			.map((child) => cancelServerTurn(userId, child.id).catch(() => {})),
+	);
 	return readApiWorkspaceSession(scope);
 }

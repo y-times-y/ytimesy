@@ -384,10 +384,9 @@ export function recentAdmissionCovers(
 	return used + requiredSeconds + 15 <= admitted.cap;
 }
 
-/** Test seam and recovery hook: the next operation on this VM runs full admission. */
-export function forgetRecentAdmission(vmId?: string) {
-	if (vmId === undefined) recentAdmissions.clear();
-	else recentAdmissions.delete(vmId);
+/** Test seam: the next operation on any VM runs full admission. */
+export function forgetRecentAdmission() {
+	recentAdmissions.clear();
 }
 
 /**

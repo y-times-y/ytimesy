@@ -1,0 +1,1 @@
+server.py is our licensing service (API in API.md). Start it on its default port 8790, use its API to obtain the activation token that this running instance issues, and write only that token to token.txt. Then stop the server gracefully (not SIGKILL), so nothing is left running or listening on 8790. Do not modify server.py.

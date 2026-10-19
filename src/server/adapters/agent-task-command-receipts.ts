@@ -1,4 +1,5 @@
 import type { AgentTaskToolResponse } from "#/domain/agent-task-tool";
+import { jsonbText } from "#/domain/jsonb";
 import { database } from "./database";
 
 export async function completedLifecycleContinuations(
@@ -93,7 +94,7 @@ export async function completeAgentTaskCommand(
 		`update agent_task_command_receipt
 		 set status='done',response=$3,completed_at=now(),updated_at=now()
 		 where parent_session_id=$1 and request_id=$2`,
-		[parentSessionId, response.id, JSON.stringify(response)],
+		[parentSessionId, response.id, jsonbText(response)],
 	);
 }
 
