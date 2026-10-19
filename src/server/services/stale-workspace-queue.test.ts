@@ -34,10 +34,10 @@ it("fails only stale queued workspaces with no build and no template", async () 
 		($4,'alice','queued','snap',now()-interval '1 hour')`,
 		[stale, fresh, building, templated],
 	);
-	await db.query(
-		"insert into environment_build values($1,$2,'running')",
-		[randomUUID(), building],
-	);
+	await db.query("insert into environment_build values($1,$2,'running')", [
+		randomUUID(),
+		building,
+	]);
 	expect(await recoverStaleQueuedWorkspaces()).toBe(1);
 	const rows = (
 		await db.query<{ id: string; status: string; error_message: string }>(
@@ -51,7 +51,7 @@ it("fails only stale queued workspaces with no build and no template", async () 
 	expect(
 		rows.filter((row) => row.id !== stale).map((row) => row.status),
 	).toEqual(["queued", "queued", "queued"]);
-	expect(
-		(await db.query("select * from workspace_event")).rows,
-	).toHaveLength(1);
+	expect((await db.query("select * from workspace_event")).rows).toHaveLength(
+		1,
+	);
 });
