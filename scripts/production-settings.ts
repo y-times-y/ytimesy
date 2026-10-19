@@ -76,3 +76,49 @@ export function assertProductionBuildAnalytics(
 			"Production web build requires VITE_POSTHOG_PROJECT_TOKEN (browser analytics and error capture).",
 		);
 }
+
+/**
+ * Launch gate on a production wrangler config: workers_dev stays off and the
+ * web Worker has no route until the owner says go live. The one exception is
+ * the edge executor's own custom domain (docs/guest-hostname-design.md), which
+ * VM guests use for the signed Git proxy: exactly one route, a custom domain
+ * whose host is YTIMESY_GIT_PROXY_URL's, never the app's hostname.
+ */
+export function assertProductionRoutes(input: {
+	readonly file: string;
+	readonly text: string;
+	readonly gitProxyUrl: string;
+	readonly appUrl: string;
+}) {
+	const production = input.text.slice(input.text.indexOf('"production"'));
+	const refuse = (reason: string) =>
+		new Error(`${input.file} production ${reason}`);
+	if (!/"workers_dev":\s*false/.test(production))
+		throw refuse("must keep workers_dev off.");
+	if (/"route"\s*:/.test(production))
+		throw refuse("must not set a route; only the executor custom domain.");
+	const declared = production.match(/"routes"\s*:/g)?.length ?? 0;
+	if (!declared) return;
+	if (input.file !== "wrangler.edge-executor.jsonc")
+		throw refuse("must have no routes until launch.");
+	const blocks = [...production.matchAll(/"routes"\s*:\s*(\[[^\]]*\])/g)];
+	let routes: unknown;
+	try {
+		routes = declared === 1 && blocks.length === 1 && JSON.parse(blocks[0][1]);
+	} catch {
+		routes = null;
+	}
+	const host = new URL(input.gitProxyUrl).host;
+	const route = Array.isArray(routes) && routes.length === 1 ? routes[0] : null;
+	if (
+		!route ||
+		typeof route !== "object" ||
+		Object.keys(route).sort().join(",") !== "custom_domain,pattern" ||
+		(route as { custom_domain: unknown }).custom_domain !== true ||
+		(route as { pattern: unknown }).pattern !== host ||
+		host === new URL(input.appUrl).host
+	)
+		throw refuse(
+			`may only route its custom domain ${host} (YTIMESY_GIT_PROXY_URL): [{ "pattern": "${host}", "custom_domain": true }].`,
+		);
+}

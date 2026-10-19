@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHmac, createPrivateKey } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import {
+	assertProductionRoutes,
 	productionAnalyticsSettings,
 	productionRuntimeSettings,
 } from "./production-settings";
@@ -39,9 +40,12 @@ const required = [
 	// Master key for stored project secrets and credentials. Escrow it before
 	// any user data exists; there is no file fallback in production.
 	"YTIMESY_SECRETS_KEY",
-	// Open decision (launch checklist): the hostname VM guests use for the Git
-	// proxy and realtime, behind Access with a service token or executor-only.
+	// The executor's custom domain VM guests use for the signed Git proxy and
+	// realtime (docs/guest-hostname-design.md), e.g. https://edge.ytimesy.com.
 	"YTIMESY_GIT_PROXY_URL",
+	// Verifies GitHub's signature on /api/github/repair-events deliveries; the
+	// production GitHub App's webhook secret. Without it PR repair is off.
+	"GITHUB_PR_REPAIR_WEBHOOK_SECRET",
 	"YTIMESY_USER_MONTHLY_MICRO_USD",
 	"YTIMESY_FLEET_MONTHLY_MICRO_USD",
 	"YTIMESY_FLEET_LIFETIME_MICRO_USD",
@@ -75,18 +79,15 @@ for (const name of ["APP_URL", "YTIMESY_GIT_PROXY_URL"] as const) {
 		throw new Error(`${name} must be a production HTTPS hostname.`);
 }
 
-// Launch gate: no public route or workers.dev URL until the owner says go live.
-for (const file of ["wrangler.web.jsonc", "wrangler.edge-executor.jsonc"]) {
-	const text = await readFile(file, "utf8");
-	const production = text.slice(text.indexOf('"production"'));
-	if (
-		!/"workers_dev":\s*false/.test(production) ||
-		/"routes"\s*:/.test(production)
-	)
-		throw new Error(
-			`${file} production must keep workers_dev off and no routes.`,
-		);
-}
+// Launch gate: no public app route or workers.dev URL until the owner says go
+// live; only the executor's own custom domain (the Git proxy host) is allowed.
+for (const file of ["wrangler.web.jsonc", "wrangler.edge-executor.jsonc"])
+	assertProductionRoutes({
+		file,
+		text: await readFile(file, "utf8"),
+		gitProxyUrl: secrets.YTIMESY_GIT_PROXY_URL,
+		appUrl: secrets.APP_URL,
+	});
 
 // Every migration must be applied to production before its code ships.
 const migrations = execFileSync(
@@ -188,5 +189,5 @@ run("pnpm", ["exec", "vite", "build"], undefined, {
 wrangler("wrangler.web.jsonc", ["deploy"]);
 wrangler("wrangler.web.jsonc", ["secret", "bulk"], JSON.stringify(secrets));
 console.log(
-	"Production deployed with no public route. Reach it only through Cloudflare Access until launch.",
+	"Production deployed with no public app route. Reach it only through Cloudflare Access until launch.",
 );
