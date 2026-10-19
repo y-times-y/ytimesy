@@ -103,7 +103,7 @@ async function call(
 	).execute(input, { toolCallId: "edit", messages });
 }
 
-it("wires the shared shell and command lifecycle into production writers, not read-only leads", async () => {
+it("wires the shared shell and command lifecycle into writer subagents, not readers", async () => {
 	const { root, machines } = await fixture();
 	const input = {
 		machines,
@@ -114,6 +114,7 @@ it("wires the shared shell and command lifecycle into production writers, not re
 			userId: "owner",
 			providerRef: "test-vm",
 			taskAccess: "read_write",
+			agentRole: "writer",
 		} as AgentSessionRecord,
 		turnId: "shell-wiring-test",
 		signal: new AbortController().signal,
@@ -132,7 +133,11 @@ it("wires the shared shell and command lifecycle into production writers, not re
 		expect(writer[name]?.execute).toBeTypeOf("function");
 	const lead = apiAgentTools({
 		...input,
-		session: { ...input.session, taskAccess: "read_only" },
+		session: {
+			...input.session,
+			taskAccess: "read_only",
+			agentRole: "researcher",
+		},
 	});
 	for (const name of [
 		"bash",
