@@ -578,6 +578,25 @@ export function WorkspaceHome({
 		);
 	}, []);
 
+	// `?project=<id>&chat=<id>` (from GitHub wake-ups) opens a chat in another project.
+	const linkedProject = useRef(
+		typeof window === "undefined"
+			? null
+			: new URLSearchParams(window.location.search).get("project"),
+	);
+	useEffect(() => {
+		const id = linkedProject.current;
+		if (!id || !projects.data?.some((project) => project.id === id)) return;
+		linkedProject.current = null;
+		const here = new URL(window.location.href);
+		here.searchParams.delete("project");
+		window.history.replaceState(
+			window.history.state,
+			"",
+			`${here.pathname}${here.search}${here.hash}`,
+		);
+		selectProject(id);
+	});
 	const linkedChat = useRef(
 		typeof window === "undefined"
 			? null

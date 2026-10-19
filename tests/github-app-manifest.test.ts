@@ -16,4 +16,12 @@ it("grants the App every permission the server requests from it", () => {
 	expect(permissions).toContain("contents: 'write'");
 	expect(permissions).toContain("pull_requests: 'write'");
 	expect(permissions).toContain("metadata: 'read'");
+	// GitHub delivers issue_comment only with Issues read; wake-ups read job logs with Actions read.
+	const wake = readFileSync(
+		"src/server/adapters/github/pull-request-wake-github.ts",
+		"utf8",
+	);
+	expect(wake).toContain('actions: "read"');
+	expect(permissions).toContain("issues: 'read'");
+	expect(permissions).toContain("actions: 'read'");
 });

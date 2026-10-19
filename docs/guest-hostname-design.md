@@ -94,17 +94,24 @@ Option A with `edge.ytimesy.com`, plus Access on the web app until launch.
    - Webhook URL: `https://ytimesy.com/api/github/repair-events`, with a new
      webhook secret (`GITHUB_PR_REPAIR_WEBHOOK_SECRET`)
    - Repository permissions: Contents read and write, Pull requests read
-     and write, Checks read-only, Metadata read-only (the same set as
-     `scripts/setup-github-app.mjs`). Checks read lets PR repair re-read the
-     failing check run or suite it was woken for.
-   - Subscribe to events: Check run, Check suite, Pull request review (the
-     events `/api/github/repair-events` handles).
+     and write, Checks read-only, Issues read-only, Actions read-only,
+     Metadata read-only (the same set as `scripts/setup-github-app.mjs`).
+     Checks read lets PR repair re-read the failing check run or suite it was
+     woken for; Issues read is what GitHub requires to deliver Issue comment
+     events (`@ytimesy` on a pull request); Actions read lets a CI wake-up
+     include the failed job's log tail (without it the wake carries check
+     output and annotations only).
+   - Subscribe to events: Check run, Check suite, Pull request review, Issue
+     comment, Pull request review comment (the events
+     `/api/github/repair-events` handles; see
+     `src/server/services/pull-request-wake.ts`).
    - The existing development App was created before Checks was in the
      manifest: in GitHub > Settings > Developer settings > GitHub Apps >
      (app) > Permissions & events, set Checks to Read-only and save; each
      installation owner then accepts the new permission from the
      installation page (until then, check-failure repair cannot read the
-     check and stops).
+     check and stops). Add Issues and Actions read-only and the Issue comment
+     and Pull request review comment events the same way.
    - Record app id, private key, client id/secret and slug as `GITHUB_APP_*`
      / `GITHUB_PRIVATE_KEY` in `.secrets/production.env`.
 4. **Production GitHub OAuth app** (sign-in): authorization callback URL

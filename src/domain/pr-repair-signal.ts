@@ -16,20 +16,52 @@ export const prRepairSignal = z.object({
 	kind: z.enum(["check_run", "check_suite", "review"]),
 	sourceId: z.number().int().positive(),
 	prNumber: z.number().int().positive().nullable(),
+	/** Same-repository pull requests GitHub lists on a check (empty for forks). */
+	prNumbers: z.array(z.number().int().positive()).max(10).default([]),
 });
 export type PrRepairSignal = z.infer<typeof prRepairSignal>;
+/** A new comment that mentions @ytimesy on a pull request; its text is re-read later. */
+export const prCommentSignal = z.object({
+	repositoryId: z.number().int().positive(),
+	fullName: repository.shape.full_name,
+	installationId: z.number().int().positive().nullable(),
+	kind: z.enum(["comment", "review_comment"]),
+	sourceId: z.number().int().positive(),
+	prNumber: z.number().int().positive(),
+});
+export type PrCommentSignal = z.infer<typeof prCommentSignal>;
+export const githubPrSignal = z.union([prRepairSignal, prCommentSignal]);
+export type GitHubPrSignal = PrRepairSignal | PrCommentSignal;
 export const prRepairDelivery = z
 	.object({
 		deliveryId: z.uuid(),
-		signal: prRepairSignal,
+		signal: githubPrSignal,
 	})
 	.strict();
 
-/** Only failed completed checks and change-requesting reviews can start repair work. */
+export function isPrCommentSignal(
+	signal: GitHubPrSignal,
+): signal is PrCommentSignal {
+	return signal.kind === "comment" || signal.kind === "review_comment";
+}
+
+/** `@ytimesy` as a whole mention (not part of an e-mail address or a longer handle). */
+export const YTIMESY_MENTION = /(^|[^\w@/.-])@ytimesy(?![\w-])/i;
+
+const pullNumbers = z
+	.array(z.object({ number: z.number().int().positive() }))
+	.catch([])
+	.transform((pulls) => pulls.slice(0, 10).map((pull) => pull.number));
+
+/**
+ * Failed completed checks and change-requesting reviews can start repair work;
+ * a human's new comment that mentions @ytimesy on a pull request can wake its
+ * chat. Only bounded identifiers are kept: text is re-read from GitHub later.
+ */
 export function parsePrRepairSignal(
 	event: string,
 	raw: unknown,
-): PrRepairSignal | null {
+): GitHubPrSignal | null {
 	const common = z
 		.object({
 			action: z.string(),
@@ -50,6 +82,7 @@ export function parsePrRepairSignal(
 					id: z.number().int().positive(),
 					head_sha: sha,
 					conclusion: z.string().nullable(),
+					pull_requests: pullNumbers.optional(),
 				}),
 			})
 			.safeParse(raw);
@@ -68,6 +101,55 @@ export function parsePrRepairSignal(
 			kind: event,
 			sourceId: check.id,
 			prNumber: null,
+			prNumbers: check.pull_requests ?? [],
+		};
+	}
+	if (event === "issue_comment" || event === "pull_request_review_comment") {
+		const author = z.object({
+			type: z.string(),
+		});
+		const parsed = z
+			.object({
+				comment: z.object({
+					id: z.number().int().positive(),
+					body: z.string().nullable(),
+					user: author,
+				}),
+				sender: author,
+			})
+			.safeParse(raw);
+		const number =
+			event === "issue_comment"
+				? z
+						.object({
+							issue: z.object({
+								number: z.number().int().positive(),
+								pull_request: z.object({}).passthrough(),
+							}),
+						})
+						.safeParse(raw)
+				: z
+						.object({
+							pull_request: z.object({ number: z.number().int().positive() }),
+						})
+						.safeParse(raw);
+		if (
+			!parsed.success ||
+			!number.success ||
+			common.data.action !== "created" ||
+			parsed.data.comment.user.type !== "User" ||
+			parsed.data.sender.type !== "User" ||
+			!YTIMESY_MENTION.test(parsed.data.comment.body ?? "")
+		)
+			return null;
+		return {
+			...identity,
+			kind: event === "issue_comment" ? "comment" : "review_comment",
+			sourceId: parsed.data.comment.id,
+			prNumber:
+				"issue" in number.data
+					? number.data.issue.number
+					: number.data.pull_request.number,
 		};
 	}
 	if (event === "pull_request_review") {
@@ -96,6 +178,7 @@ export function parsePrRepairSignal(
 			kind: "review",
 			sourceId: parsed.data.review.id,
 			prNumber: parsed.data.pull_request.number,
+			prNumbers: [parsed.data.pull_request.number],
 		};
 	}
 	return null;

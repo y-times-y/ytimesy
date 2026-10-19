@@ -6,8 +6,10 @@ export async function githubInstallationAccessToken(
 	installationId: number | string,
 	scope?: {
 		repositoryNames: string[];
-		contents: "read" | "write";
+		contents?: "read" | "write";
 		pullRequests?: "read" | "write";
+		checks?: "read";
+		actions?: "read";
 	},
 ) {
 	const credentials = await Effect.runPromise(readGitHubAppCredentials());
