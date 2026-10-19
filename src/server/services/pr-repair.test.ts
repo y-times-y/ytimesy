@@ -10,6 +10,10 @@ const mocks = vi.hoisted(() => ({
 	evidence: vi.fn(),
 	send: vi.fn(),
 	release: vi.fn(),
+	wakes: vi.fn(),
+}));
+vi.mock("./pull-request-wake", () => ({
+	deliverPullRequestWakes: mocks.wakes,
 }));
 vi.mock("../adapters/database", () => ({
 	database: () => ({ query: mocks.query, connect: mocks.connect }),
@@ -145,4 +149,13 @@ it("dispatches the same model with a durable idempotency key and counts once", a
 	claimed = false;
 	await deliverPrRepairEvents(machines);
 	expect(attempts).toBe(1);
+});
+it("delivers chat wake-ups for ytimesy pull requests after task repairs", async () => {
+	claimed = true;
+	await deliverPrRepairEvents(machines);
+	expect(mocks.wakes).toHaveBeenCalledWith(machines);
+	vi.stubEnv("YTIMESY_PR_REPAIR_ENABLED", "0");
+	mocks.wakes.mockClear();
+	await deliverPrRepairEvents(machines);
+	expect(mocks.wakes).not.toHaveBeenCalled();
 });

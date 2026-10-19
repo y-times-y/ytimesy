@@ -27,6 +27,8 @@ type GitHubAppListing = {
 		contents?: "read" | "write";
 		pullRequests?: "read" | "write";
 		checks?: "read";
+		/** Actions workflow job logs (optional App permission). */
+		actions?: "read";
 	}) => Promise<string>;
 };
 
@@ -79,9 +81,13 @@ export function createOctokitGitHubListing(): GitHubAppListing {
 				...(input.repositoryNames
 					? { repositoryNames: input.repositoryNames }
 					: {}),
-				...(input.contents || input.pullRequests || input.checks
+				...(input.contents ||
+				input.pullRequests ||
+				input.checks ||
+				input.actions
 					? {
 							permissions: {
+								...(input.actions ? { actions: input.actions } : {}),
 								...(input.checks ? { checks: input.checks } : {}),
 								...(input.contents ? { contents: input.contents } : {}),
 								...(input.pullRequests
