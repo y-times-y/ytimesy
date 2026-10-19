@@ -112,6 +112,27 @@ export async function saveAttemptLoopDeadline(
 	);
 }
 
+/**
+ * An eval runner's hard stop for a session's turns (epoch ms in
+ * response.deadlineAt). Product sessions never have this receipt.
+ */
+export const TURN_DEADLINE_REQUEST_ID = "turn-deadline";
+
+/**
+ * Saves the runner's hard stop for the session's turns: the edge cancels a
+ * running turn once it passes (renewApiTurn and the step claim), whether or
+ * not the runner is still there to cancel it.
+ */
+export async function saveTurnDeadline(sessionId: string, deadlineAt: number) {
+	await database().query(
+		`insert into agent_task_command_receipt(parent_session_id,request_id,status,response,completed_at)
+		 values($1,$2,'done',$3::jsonb,now())
+		 on conflict (parent_session_id,request_id)
+		 do update set response=excluded.response, updated_at=now()`,
+		[sessionId, TURN_DEADLINE_REQUEST_ID, JSON.stringify({ deadlineAt })],
+	);
+}
+
 export async function attemptLoopDeadline(sessionId: string) {
 	const { rows } = await database().query(
 		`select response->>'deadlineAt' as deadline from agent_task_command_receipt

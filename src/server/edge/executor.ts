@@ -23,6 +23,7 @@ import {
 	type ApiTurn,
 	cancelWaitingApiTurn,
 	refreshWaitingApiTurns,
+	turnPastDeadlineSql,
 } from "../adapters/api-turns";
 import {
 	backgroundJobId,
@@ -442,6 +443,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 				Omit<ApiTurn, "messages" | "items"> & {
 					fresh: boolean;
 					cancel_requested: boolean;
+					past_deadline?: boolean;
 					legacy: boolean;
 					version: string;
 				}
@@ -449,6 +451,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 				`select t.id,t.session_id,t.user_id,t.connection_id,t.connection_revision,t.model_id,t.settings,t.failover,
 			 t.state,t.lease_id,t.cancel_requested,t.updated_at::text as version,
 			 heartbeat_at>=now()-interval '45 seconds' as fresh,
+			 ${turnPastDeadlineSql("t")} as past_deadline,
 			 exists(select 1 from model_workflow_step s where s.turn_id=t.id) as legacy
 			 from api_turn t where t.id=$1 and t.lease_id=$2 and t.executor='durable-object'`,
 				[step.turnId, leaseId],
@@ -462,6 +465,14 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		)
 			return { kind: "done", outcome: row.state };
 		if (row.state !== "running" || !row.fresh) return { kind: "unavailable" };
+		// An eval runner's hard deadline passed between steps: stop as if asked.
+		if (row.past_deadline && !row.cancel_requested) {
+			await database().query(
+				"update api_turn set cancel_requested=true where id=$1 and lease_id=$2 and state='running'",
+				[row.id, leaseId],
+			);
+			row.cancel_requested = true;
+		}
 		let history = this.history.read(row.id, row.version);
 		if (!history) {
 			const loaded = (
