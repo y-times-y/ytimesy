@@ -18,7 +18,9 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import { FreestyleApiError } from "freestyle";
 import {
+	type AttemptLoopState,
 	type AttemptSnapshot,
 	type AttemptVerdictKind,
 	attemptLimit,
@@ -39,6 +41,7 @@ import {
 } from "../src/domain/harness-variant";
 import { WorkspaceId } from "../src/domain/ids";
 import { modelBilling } from "../src/domain/model-pricing";
+import type { ReviewLoopState } from "../src/domain/review-loop";
 import { sessionItemsFromUnknown } from "../src/domain/session-item";
 import {
 	deleteAgentSessionForOwner,
@@ -73,6 +76,7 @@ import {
 	lockedByOther,
 	newDetachedState,
 	START_NEEDS_MS,
+	wakeForFinalize,
 	worthWaiting,
 } from "./hard-set/detached";
 import {
@@ -92,6 +96,11 @@ import {
 	reviewLoopReport,
 } from "./hard-set/review-report";
 import { HARD_SET, HARD_SET_CHUNKS, type HardSetTask } from "./hard-set/tasks";
+import {
+	type ToolCallSummary,
+	toolCallLine,
+	toolCallSummary,
+} from "./hard-set/turn-record";
 import { codexUsage, preflightExecutor, sh, taskVms } from "./hard-set/vm";
 import {
 	assertDevelopmentDatabase,
@@ -245,6 +254,20 @@ type HardSetRecord = RunRecord & {
 	reviewLoop?: HardSetReviewRecord | null;
 	/** --detach: what later --collect invocations need to start or finish it. */
 	detached?: DetachedState | null;
+	/** The turn's tool calls per tool name (kept before the session is deleted). */
+	toolSummary?: ToolCallSummary | null;
+	/**
+	 * The loops' durable state rows (agent_task_command_receipt), copied
+	 * before cleanup deletes them with the eval user.
+	 */
+	loopStates?: {
+		attempt: AttemptLoopState[];
+		review: ReviewLoopState[];
+	} | null;
+	/** An infrastructure failure (VM gone, not resumable) rather than the agent's. */
+	infraError?: string | null;
+	/** The agent VM was paused (idle) and resumed before staging. */
+	agentVmResumed?: boolean;
 };
 
 type HardSetLoopAttempt = {
@@ -423,6 +446,21 @@ function printAttemptLoops(records: HardSetRecord[]) {
 	if (rows.length) console.log(formatCheckerAccuracy(checkerAccuracy(rows)));
 }
 
+/** The checkout's branch ref ("" when unreadable; noted). */
+async function currentBranch(vm: string, cwd: string, notes: string[]) {
+	return machines
+		.exec(
+			WorkspaceId(vm),
+			`git -C ${sh(cwd)} symbolic-ref -q HEAD || true`,
+			15_000,
+		)
+		.then((result) => result.stdout.trim())
+		.catch((error: unknown) => {
+			notes.push(`Branch not read: ${safe(error).slice(0, 200)}`);
+			return "";
+		});
+}
+
 /**
  * The loop's record after the turn: per attempt the checker's verdict, spend
  * and candidate. When the loop did not finish before the runner's cancel,
@@ -431,30 +469,28 @@ function printAttemptLoops(records: HardSetRecord[]) {
  */
 async function readAttemptLoop(
 	sessionId: string,
-	vm: string,
+	/** Null: from the state row alone (the VM is gone or not reachable). */
+	vm: string | null,
 	model: string,
+	loaded?: AttemptLoopState[],
 ): Promise<HardSetLoopRecord | null> {
-	const state = (await attemptLoopStates(sessionId)).at(-1);
+	const state = (loaded ?? (await attemptLoopStates(sessionId))).at(-1);
 	if (!state) return null;
 	const cwd = state.checkpoint.cwd;
-	const workspace = { machines, vm: WorkspaceId(vm), cwd };
-	const branch = (
-		await machines.exec(
-			WorkspaceId(vm),
-			`git -C ${sh(cwd)} symbolic-ref -q HEAD || true`,
-			15_000,
-		)
-	).stdout.trim();
 	const notes: string[] = [];
-	let final = await captureConversationCode(
-		workspace,
-		attemptRef(state.turnId, "final"),
-	).catch((error: unknown) => {
-		notes.push(`Final tree not captured: ${safe(error).slice(0, 200)}`);
-		return null;
-	});
+	const branch = vm ? await currentBranch(vm, cwd, notes) : "";
+	let final = vm
+		? await captureConversationCode(
+				{ machines, vm: WorkspaceId(vm), cwd },
+				attemptRef(state.turnId, "final"),
+			).catch((error: unknown) => {
+				notes.push(`Final tree not captured: ${safe(error).slice(0, 200)}`);
+				return null;
+			})
+		: null;
+	if (!vm) notes.push("Read from the loop's state row only (no agent VM).");
 	let runnerRestored: number | null = null;
-	if (state.phase !== "done" && state.candidates.length) {
+	if (vm && state.phase !== "done" && state.candidates.length) {
 		const inProgress =
 			final && !state.candidates.some((c) => c.snapshot.tree === final?.tree)
 				? [
@@ -489,20 +525,27 @@ async function readAttemptLoop(
 			chosen.snapshot.tree !== final?.tree &&
 			!inProgress.some((c) => c.n === best)
 		) {
-			const restored = await machines.exec(
-				WorkspaceId(vm),
-				restoreSnapshotCommand(chosen.snapshot, branch),
-				60_000,
-			);
+			const restored = await machines
+				.exec(
+					WorkspaceId(vm),
+					restoreSnapshotCommand(chosen.snapshot, branch),
+					60_000,
+				)
+				.catch((error: unknown) => ({
+					exitCode: -1,
+					stdout: "",
+					stderr: safe(error),
+				}));
 			if (restored.exitCode === 0) {
 				runnerRestored = chosen.n;
 				final = chosen.snapshot;
 			} else notes.push(`Restore of attempt ${chosen.n} failed.`);
 		}
+	}
+	if (state.phase !== "done")
 		notes.push(
 			`The loop stopped in phase ${state.phase} at the runner's cancel.`,
 		);
-	}
 	const spend = attemptLoopSpend(
 		state,
 		modelBilling({ harness: "codex", modelId: model }),
@@ -539,7 +582,7 @@ async function readAttemptLoop(
 				sameAsFinal: !!final && candidate.snapshot.tree === final.tree,
 				// Identical trees share one grade.
 				gradeName:
-					final && candidate.snapshot.tree === final.tree
+					!vm || (final && candidate.snapshot.tree === final.tree)
 						? null
 						: `artifacts-a${
 								state.candidates.find(
@@ -568,28 +611,26 @@ async function readAttemptLoop(
  */
 async function readReviewLoop(
 	sessionId: string,
-	vm: string,
+	/** Null: from the state row alone (the VM is gone or not reachable). */
+	vm: string | null,
 	model: string,
+	loaded?: ReviewLoopState[],
 ): Promise<HardSetReviewRecord | null> {
-	const state = (await reviewLoopStates(sessionId)).at(-1);
+	const state = (loaded ?? (await reviewLoopStates(sessionId))).at(-1);
 	if (!state) return null;
 	const cwd = state.checkpoint.cwd;
-	const workspace = { machines, vm: WorkspaceId(vm), cwd };
-	const branch = (
-		await machines.exec(
-			WorkspaceId(vm),
-			`git -C ${sh(cwd)} symbolic-ref -q HEAD || true`,
-			15_000,
-		)
-	).stdout.trim();
 	const notes: string[] = [];
-	const final = await captureConversationCode(
-		workspace,
-		reviewRef(state.turnId, "final"),
-	).catch((error: unknown) => {
-		notes.push(`Final tree not captured: ${safe(error).slice(0, 200)}`);
-		return null;
-	});
+	const branch = vm ? await currentBranch(vm, cwd, notes) : "";
+	const final = vm
+		? await captureConversationCode(
+				{ machines, vm: WorkspaceId(vm), cwd },
+				reviewRef(state.turnId, "final"),
+			).catch((error: unknown) => {
+				notes.push(`Final tree not captured: ${safe(error).slice(0, 200)}`);
+				return null;
+			})
+		: null;
+	if (!vm) notes.push("Read from the loop's state row only (no agent VM).");
 	if (state.phase !== "done")
 		notes.push(
 			`The loop stopped in phase ${state.phase} at the runner's cancel.`,
@@ -632,7 +673,8 @@ async function readReviewLoop(
 				tree: round.snapshot.tree,
 				snapshot: round.snapshot,
 				sameAsFinal,
-				gradeName: sameAsFinal ? null : `artifacts-r${firstSame}`,
+				// Without the VM nothing is staged, so nothing is graded on its own.
+				gradeName: sameAsFinal || !vm ? null : `artifacts-r${firstSame}`,
 				graderReward: null,
 				graderPassed: null,
 			};
@@ -685,6 +727,24 @@ if (flags.report) {
 	if (cost) console.log(cost);
 	printAttemptLoops(records);
 	for (const line of reviewLoopReport(records)) console.log(line);
+	const agentRuns = records.filter((record) => record.mode === "agent");
+	if (agentRuns.length) {
+		console.log(
+			"\nTool calls per run (by tool; [agent, find_tools, run_code]):",
+		);
+		for (const record of agentRuns)
+			console.log(
+				`- ${record.task}.${record.attempt} ${record.variant}: ${
+					record.toolSummary
+						? toolCallLine(record.toolSummary)
+						: `${record.toolCalls} call(s): ${Object.entries(
+								record.toolsUsed ?? {},
+							)
+								.map(([name, count]) => `${name} ${count}`)
+								.join(", ")} (items only)`
+				}${record.agentVmResumed ? "; agent VM resumed for staging" : ""}${record.infraError ? `; INFRA: ${record.infraError}` : ""}`,
+			);
+	}
 	for (const record of records.filter((record) => !isScored(record)))
 		console.log(
 			`- ${record.task}.${record.attempt}: ${record.status} ${record.state} budget ${record.agentBudgetSec}/${record.agentRequestedSec}s ${[...record.errors, record.gradeError].filter(Boolean).join(" | ").slice(0, 300)}`,
@@ -1172,6 +1232,103 @@ async function saveTranscript(run: TaskRun) {
 }
 
 /**
+ * Copies what the session's deletion would take with it into the record:
+ * the turn's tool calls per tool name and the loops' state rows (with a
+ * loop record built from the row alone when staging never read it). Runs at
+ * finalize and again before every cleanup; a failure is noted, never thrown.
+ */
+async function recordTurn(run: {
+	record: HardSetRecord;
+	sessionId: string | null;
+	options: RunOptions;
+}) {
+	const { record, sessionId, options } = run;
+	if (!sessionId || options.mode !== "agent") return;
+	try {
+		const state = await turnState(sessionId);
+		if (state)
+			record.toolSummary = toolCallSummary(
+				sessionItemsFromUnknown(state.items),
+				state.messages,
+			);
+		const loopStates = {
+			attempt: await attemptLoopStates(sessionId),
+			review: await reviewLoopStates(sessionId),
+		};
+		// Rows only grow; a later read with none never erases an earlier copy.
+		if (
+			loopStates.attempt.length ||
+			loopStates.review.length ||
+			!record.loopStates
+		)
+			record.loopStates = loopStates;
+		if (!record.attemptLoop && loopStates.attempt.length)
+			record.attemptLoop = await readAttemptLoop(
+				sessionId,
+				null,
+				options.model,
+				loopStates.attempt,
+			);
+		if (!record.reviewLoop && loopStates.review.length)
+			record.reviewLoop = await readReviewLoop(
+				sessionId,
+				null,
+				options.model,
+				loopStates.review,
+			);
+	} catch (error) {
+		record.errors.push(`Turn record not saved: ${safe(error).slice(0, 200)}`);
+	}
+}
+
+/**
+ * Wakes the agent VM for staging (the product pauses it when idle; a turn
+ * that ended early leaves it paused before the collect) and holds it awake
+ * for the rest of this invocation. Throws an infrastructure error, recorded
+ * on the run, when the VM is gone or will not resume.
+ */
+async function wakeAgentVm(run: TaskRun) {
+	const vm = run.agentVm as string;
+	const ref = client.vms.ref(vm);
+	const holdSec = Math.max(
+		300,
+		Math.ceil((invocationDeadline - Date.now()) / 1000) + 300,
+	);
+	const woke = await wakeForFinalize({
+		state: () =>
+			ref.data().then(
+				(data) => String(data.state),
+				(error: unknown) => {
+					if (
+						error instanceof FreestyleApiError &&
+						(error.status === 404 || error.code === "NOT_FOUND")
+					)
+						return null;
+					throw error;
+				},
+			),
+		resume: async () => {
+			// The product's resume path (admission, idle timeout, start, wait).
+			await machines.ensureRunning(WorkspaceId(vm));
+		},
+		hold: async () => {
+			await ref.update({ idleTimeoutSeconds: holdSec } as never);
+		},
+		sleep: (ms) => delay(ms),
+	});
+	if (!woke.ok) {
+		run.record.infraError = woke.reason;
+		throw new Error(`Infrastructure: ${woke.reason}`);
+	}
+	if (woke.resumed) {
+		run.record.agentVmResumed = true;
+		console.info(
+			`${run.task.id}.${run.record.attempt}: agent VM was ${woke.from}; resumed it for staging.`,
+		);
+	}
+}
+
+/**
  * Stages the result (and every earlier tree of the loop), hands it to the
  * grader VM and starts the tests; the record says grading after this.
  */
@@ -1302,6 +1459,8 @@ async function stageAndGrade(run: TaskRun) {
 /** Deletes the run's session, agent VM and eval user (and the grader unless it grades). */
 async function cleanupRun(run: TaskRun, keepGrader: boolean) {
 	const { record } = run;
+	// Before the session and eval user (and their loop rows) are deleted.
+	await recordTurn(run);
 	if (run.userId && run.sessionId)
 		await cancelServerTurn(run.userId, run.sessionId).catch(() => {});
 	if (run.agentVm) await client.vms.delete(run.agentVm).catch(() => {});
@@ -1410,6 +1569,7 @@ async function runTask(
 		}
 		record.agentSec = seconds(run.agentStarted);
 		if (record.usageLimit) throw new Error(record.usageLimit);
+		await wakeAgentVm(run);
 		await stageAndGrade(run);
 		keepGrader = true;
 		await saveRecord(runDir, record);
@@ -1585,7 +1745,10 @@ async function finalizeDetached(
 			state.slot = null;
 		}
 		await saveTranscript(run);
+		await recordTurn(run);
+		await saveRecord(runDir, record);
 		if (record.usageLimit) throw new Error(record.usageLimit);
+		await wakeAgentVm(run);
 		startGrader(run);
 		await stageAndGrade(run);
 		keepGrader = true;
@@ -1649,6 +1812,7 @@ async function advanceDetached(record: HardSetRecord) {
 		}
 		if (action.kind === "expire") {
 			record.errors.push(action.reason);
+			record.infraError = action.reason;
 			record.status = "error";
 			const run = newRun(task, environment, record, options, true);
 			run.userId = state.userId;

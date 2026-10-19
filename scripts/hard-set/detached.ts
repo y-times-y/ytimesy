@@ -257,3 +257,65 @@ export function detachedStatusRows(
 	}
 	return rows;
 }
+
+export type WakeResult =
+	| { ok: true; resumed: boolean; from: string }
+	| { ok: false; gone: boolean; reason: string };
+
+/**
+ * Wakes the agent VM before a finalize touches it. The product pauses an
+ * idle workspace VM (PRODUCT_IDLE_TIMEOUT_SECONDS) and the edge resets its
+ * idle timeout on every resume, so a turn that ends early leaves a paused VM
+ * long before the collect: resume it the product's way (`resume`), then
+ * hold it awake for the finalize (`hold`, best effort). Transient failures
+ * are retried; a VM that no longer exists (`state` resolves null: deleted,
+ * or its lifetime ended) is reported as gone, never thrown.
+ */
+export async function wakeForFinalize(
+	deps: {
+		/** The VM's provider state; null when the VM no longer exists. */
+		state: () => Promise<string | null>;
+		resume: () => Promise<void>;
+		hold: () => Promise<void>;
+		sleep: (ms: number) => Promise<void>;
+	},
+	attempts = 4,
+): Promise<WakeResult> {
+	let last = "unknown error";
+	let from: string | null = null;
+	for (let attempt = 0; attempt < attempts; attempt++) {
+		try {
+			let state = await deps.state();
+			if (state === null)
+				return {
+					ok: false,
+					gone: true,
+					reason: "The agent VM no longer exists (deleted or expired).",
+				};
+			from ??= state;
+			if (state !== "running") {
+				await deps.resume();
+				state = await deps.state();
+				if (state === null)
+					return {
+						ok: false,
+						gone: true,
+						reason: "The agent VM no longer exists (deleted or expired).",
+					};
+				if (state !== "running")
+					throw new Error(`The agent VM is ${state} after a resume.`);
+			}
+			await deps.hold().catch(() => {});
+			// A VM found not running was resumed, on this try or an earlier one.
+			return { ok: true, resumed: from !== "running", from };
+		} catch (error) {
+			last = error instanceof Error ? error.message : String(error);
+			if (attempt < attempts - 1) await deps.sleep(5_000 * (attempt + 1));
+		}
+	}
+	return {
+		ok: false,
+		gone: false,
+		reason: `The agent VM could not be resumed (${attempts} tries): ${last.slice(0, 300)}`,
+	};
+}
