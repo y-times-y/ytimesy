@@ -298,14 +298,14 @@ it("destroys agent copies and side-chat copies, never the template VM", async ()
 		projectId: project.id,
 		workspaceId,
 		harness: "api",
-		providerRef: "vm-agent",
+		providerRef: "vm-copy-agent",
 	});
 	await insertAgentSession({
 		userId: "alice",
 		projectId: project.id,
 		workspaceId,
 		harness: "api",
-		providerRef: "vm-side",
+		providerRef: "vm-copy-side",
 		parentSessionId: parent.id,
 	});
 	const destroyed: string[] = [];
@@ -318,7 +318,7 @@ it("destroys agent copies and side-chat copies, never the template VM", async ()
 		},
 		{ userId: "alice", projectId: project.id, sessionId: parent.id },
 	);
-	expect(destroyed.sort()).toEqual(["vm-agent", "vm-side"]);
+	expect(destroyed.sort()).toEqual(["vm-copy-agent", "vm-copy-side"]);
 	const remaining = await db.query(
 		"select id from agent_session where project_id=$1",
 		[project.id],
@@ -466,6 +466,72 @@ it("deletes a shared child session without destroying its parent's machine", asy
 		(await db.query("select id from agent_session where id=$1", [parent.id]))
 			.rows,
 	).toEqual([{ id: parent.id }]);
+});
+
+it("never destroys a parent VM its reader shares, deleting the reader alone or a legacy role-less shared child", async () => {
+	const { project, workspaceId } = await readyWorkspace();
+	const parent = await insertAgentSession({
+		userId: "alice",
+		projectId: project.id,
+		workspaceId,
+		harness: "codex",
+		providerRef: "vm-shared-parent",
+		listedModelId: "codex/gpt-test",
+	});
+	const reader = await insertAgentSession({
+		userId: "alice",
+		projectId: project.id,
+		workspaceId,
+		harness: "codex",
+		providerRef: "vm-shared-parent",
+		parentSessionId: parent.id,
+		task: { prompt: "Read", placement: "shared", access: "read_only" },
+	});
+	const legacy = await insertAgentSession({
+		userId: "alice",
+		projectId: project.id,
+		workspaceId,
+		harness: "codex",
+		providerRef: "vm-shared-parent",
+		parentSessionId: parent.id,
+		task: { prompt: "Old child", placement: "shared", access: "read_only" },
+	});
+	await db.query("update agent_session set agent_role='researcher' where id=$1", [
+		reader.id,
+	]);
+	const destroyed: string[] = [];
+	const machines = {
+		destroy: async (vm: string) => {
+			destroyed.push(vm);
+		},
+		destroySnapshot: async () => {},
+	};
+	for (const child of [reader, legacy])
+		await deleteAgentSessionMachine(machines, {
+			userId: "alice",
+			projectId: project.id,
+			sessionId: child.id,
+		});
+	expect(destroyed).toEqual([]);
+	// Deleting the chat itself destroys its VM exactly once.
+	const another = await insertAgentSession({
+		userId: "alice",
+		projectId: project.id,
+		workspaceId,
+		harness: "codex",
+		providerRef: "vm-shared-parent",
+		parentSessionId: parent.id,
+		task: { prompt: "Read", placement: "shared", access: "read_only" },
+	});
+	await db.query("update agent_session set agent_role='reviewer' where id=$1", [
+		another.id,
+	]);
+	await deleteAgentSessionMachine(machines, {
+		userId: "alice",
+		projectId: project.id,
+		sessionId: parent.id,
+	});
+	expect(destroyed).toEqual(["vm-shared-parent"]);
 });
 
 it("does not let another user delete a session", async () => {

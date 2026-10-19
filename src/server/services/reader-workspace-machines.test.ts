@@ -38,17 +38,17 @@ const decoded = (command: string) =>
 describe("read-only subagent machines", () => {
 	beforeEach(() => forgetPreparedReaders());
 
-	it("leaves the builder, writers and old shared tasks unwrapped", async () => {
+	it("leaves the builder and writers unwrapped", async () => {
 		const { machines, commands } = fakeMachines();
 		await machinesForAgentSession(machines, {
 			id: "writer",
-			taskPlacement: "fresh",
 			agentRole: "writer",
 		}).exec(vm, "touch a", 1000);
-		await machinesForAgentSession(machines, {
-			id: "legacy",
-			taskPlacement: "shared",
-		}).exec(vm, "ls", 1000);
+		await machinesForAgentSession(machines, { id: "builder" }).exec(
+			vm,
+			"ls",
+			1000,
+		);
 		expect(commands[0]).toBe("touch a");
 		expect(commands[1]).not.toContain("ytimesy-reader");
 	});
@@ -57,7 +57,6 @@ describe("read-only subagent machines", () => {
 		const { machines, commands } = fakeMachines();
 		const reader = machinesForAgentSession(machines, {
 			id: "child-1",
-			taskPlacement: "shared",
 			agentRole: "reviewer",
 		});
 		await reader.exec(vm, "git diff", 1000);
@@ -83,7 +82,6 @@ describe("read-only subagent machines", () => {
 		const { machines, writes, commands } = fakeMachines();
 		const reader = machinesForAgentSession(machines, {
 			id: "child-1",
-			taskPlacement: "shared",
 			agentRole: "checker",
 		});
 		await expect(
@@ -104,7 +102,6 @@ describe("read-only subagent machines", () => {
 		const { machines, commands } = fakeMachines();
 		const reader = machinesForAgentSession(machines, {
 			id: "child-1",
-			taskPlacement: "shared",
 			agentRole: "researcher",
 		});
 		expect(await reader.readTextFile(vm, PROJECT_CWD_PATH)).toContain(

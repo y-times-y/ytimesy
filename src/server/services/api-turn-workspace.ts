@@ -1,5 +1,6 @@
 import { Effect, Either } from "effect";
 import { WorkspaceId } from "#/domain/ids";
+import { sharesParentMachine } from "#/domain/subagent";
 import {
 	type AgentSessionRecord,
 	agentSessionForOwner,
@@ -61,13 +62,13 @@ export function deferredApiTurnWorkspace(
 		// A root chat's checkout plan (project, branch and GitHub reads) does not
 		// depend on its VM, so it loads while the VM is bound and started. Its
 		// outcome, failure included, is used exactly where it was loaded before.
-		const earlyCheckout = owner.taskPlacement
+		const earlyCheckout = owner.parentSessionId
 			? undefined
 			: Effect.runPromise(
 					Effect.either(loadTenantProjectCheckout(checkoutScope)),
 				);
 		earlyCheckout?.catch(() => {});
-		if (owner.taskPlacement === "shared") {
+		if (sharesParentMachine(owner)) {
 			const parent = owner.parentSessionId
 				? await agentSessionForOwner(owner.userId, owner.parentSessionId)
 				: null;
@@ -79,7 +80,7 @@ export function deferredApiTurnWorkspace(
 			])();
 		}
 		signal.throwIfAborted();
-		const bound = owner.taskPlacement
+		const bound = owner.parentSessionId
 			? await bindPreparedAgentTaskMachine(
 					machinesForAgentSession(machines, owner),
 					{
@@ -99,7 +100,7 @@ export function deferredApiTurnWorkspace(
 		signal.throwIfAborted();
 		await scoped.ensureRunning(vm);
 		signal.throwIfAborted();
-		if (bound.session.taskPlacement !== "shared")
+		if (!sharesParentMachine(bound.session))
 			await Effect.runPromise(
 				Effect.gen(function* () {
 					const checkout = earlyCheckout
@@ -127,14 +128,8 @@ export function deferredApiTurnWorkspace(
 				sessionId: owner.id,
 				additionalRepositoryNames,
 			});
-		// A writable child task needs its pinned baseline: completion
-		// verification gates its handoff.
-		if (
-			bound.session.parentSessionId &&
-			bound.session.taskPlacement !== "shared" &&
-			bound.session.taskAccess === "read_write"
-		)
-			await baselines();
+		// A writer subagent's patch is measured from its pinned baseline.
+		if (bound.session.agentRole === "writer") await baselines();
 		// A root chat commits and publishes without that gate (turn-commit.ts);
 		// its baseline only scopes lifecycle hooks, so a chat whose checkout was
 		// already edited before baselines existed keeps working without one.

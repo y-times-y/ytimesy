@@ -400,6 +400,19 @@ export async function descendantAgentSessions(
 	return result.rows.map((row: AgentSessionRow) => toSession(row));
 }
 
+/** VMs still bound to one of the owner's sessions outside `sessionIds`. */
+export async function providerRefsHeldOutside(
+	userId: string,
+	sessionIds: readonly string[],
+) {
+	const result = await database().query<{ provider_ref: string }>(
+		`select distinct provider_ref from agent_session
+		where user_id=$1 and provider_ref is not null and not (id::text = any($2::text[]))`,
+		[userId, sessionIds],
+	);
+	return new Set(result.rows.map((row) => row.provider_ref));
+}
+
 export async function deleteAgentSessionForOwner(
 	userId: string,
 	sessionId: string,

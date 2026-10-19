@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { WorkspaceId } from "#/domain/ids";
 import { posixShellQuoted } from "#/domain/posix-command";
 import { repositoriesForProject } from "#/domain/projects";
+import { sharesParentMachine } from "#/domain/subagent";
 import { agentSessionForOwner } from "../adapters/agent-sessions";
 import {
 	exportGuestCheckpoint,
@@ -74,9 +75,8 @@ async function captureSessionCheckpointStages(
 	if (!project) return;
 	const selected = machinesForAgentSession(machines, session);
 	await selected.ensureRunning(WorkspaceId(session.providerRef));
-	const paths =
-		session.taskPlacement === "shared"
-			? []
+	const paths = sharesParentMachine(session)
+		? []
 			: repositoriesForProject(project).map((repo) =>
 					repositoryDirectory(repo.fullName),
 				);
@@ -155,7 +155,7 @@ export async function restoreSessionWorkspace(
 ) {
 	const checkpoint = await checkpointForSession(userId, sessionId);
 	const session = await agentSessionForOwner(userId, sessionId);
-	if (!checkpoint || !session || session.taskPlacement === "shared")
+	if (!checkpoint || !session || sharesParentMachine(session))
 		throw new Error(
 			"No recoverable workspace checkpoint exists for this conversation.",
 		);

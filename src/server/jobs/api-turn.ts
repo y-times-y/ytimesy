@@ -62,7 +62,7 @@ import type {
 	SessionItem,
 	UserMessageItem,
 } from "#/domain/session-item";
-import { MAX_SUBAGENT_LEVEL } from "#/domain/subagent";
+import { MAX_SUBAGENT_LEVEL, writesOwnCheckout } from "#/domain/subagent";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
 import {
 	type AgentSessionRecord,
@@ -501,9 +501,8 @@ async function runApiTurnAttempt(
 			runtime: owner.harness === "codex" ? "codex" : "api",
 			role: analyticsAgentRole(owner),
 		};
-		// The root chat is the builder itself; writable children build too.
-		const writable =
-			!owner.parentSessionId || owner.taskAccess === "read_write";
+		// The root chat is the builder itself; writer subagents build too.
+		const writable = writesOwnCheckout(owner);
 		// Cross-chat memory (Agent Memory Repo) for the root builder, never
 		// benchmarks. Loaded alongside the rest of the setup; never fails a turn.
 		const memoryLoading =
