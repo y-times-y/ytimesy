@@ -4,10 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { Freestyle } from "freestyle";
 import { WorkspaceId } from "../src/domain/ids";
 import { sessionItemsFromUnknown } from "../src/domain/session-item";
-import {
-	desktopHostname,
-	desktopPortIsListening,
-} from "../src/domain/workspace-desktop";
+import { desktopPortIsListening } from "../src/domain/workspace-desktop";
 import {
 	deleteAgentSessionForOwner,
 	insertAgentSession,
@@ -17,12 +14,16 @@ import { claimApiTurn } from "../src/server/adapters/api-turns";
 import { withBackgroundJobDispatcher } from "../src/server/adapters/background-job-dispatch";
 import { closeDatabase, database } from "../src/server/adapters/database";
 import { GUEST_INTERNET_FIREWALL } from "../src/server/adapters/freestyle/proof-vm";
-import { PROBE_WORKSPACE_DESKTOP } from "../src/server/adapters/freestyle/start-desktop";
+import { probeWorkspaceDesktop } from "../src/server/adapters/freestyle/start-desktop";
 import { waitUntilVmRunning } from "../src/server/adapters/freestyle/wait-until-running";
 import { createFreestyleWorkspaceMachines } from "../src/server/adapters/freestyle/workspace-machines";
 import { dispatchModelWorkflow } from "../src/server/adapters/model-workflow-dispatch";
 import { cancelServerTurn } from "../src/server/services/cancel-server-turn";
 import { sendSubscriptionTask } from "../src/server/services/codex-subscription-session";
+import {
+	desktopEdgeHostname,
+	desktopViewerCredentialDigest,
+} from "../src/server/services/vm-edge-keys";
 import { DEVELOPMENT_EDGE_ORIGIN } from "./development-config";
 
 // Operator-only proof on development: does the chat agent start the shared
@@ -261,13 +262,13 @@ try {
 	);
 	const browserTools = tools.filter((call) => call.tool.startsWith("browser_"));
 	const probe = await machines
-		.exec(vm, PROBE_WORKSPACE_DESKTOP, 15_000)
+		.exec(vm, probeWorkspaceDesktop(desktopViewerCredentialDigest(vm)), 15_000)
 		.catch(() => null);
 	const rules = await client.tls.rules
 		.list({ vmId } as never)
 		.catch(() => ({ rules: [] as { domain: string }[] }));
 	const viewerExposed = (rules as { rules: { domain: string }[] }).rules.some(
-		(rule) => rule.domain === desktopHostname(vmId as string),
+		(rule) => rule.domain === desktopEdgeHostname(vmId as string),
 	);
 	const diff = await machines.exec(
 		vm,

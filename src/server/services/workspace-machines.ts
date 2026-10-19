@@ -1,5 +1,6 @@
 import type { AuthSnapshotId, WorkspaceId } from "#/domain/ids";
 import type { MachineSizeId } from "#/domain/machine-size";
+import type { VmEdgeRoute, VmEdgeRouteKind } from "#/domain/vm-edge-routes";
 
 export interface CommandOutput {
 	readonly exitCode: number;
@@ -65,6 +66,26 @@ export interface WorkspaceMachines {
 		port: number,
 		hostname: string,
 	) => Promise<string>;
+	/** Like exposeHttp, optionally behind a forward-auth check, and replacing superseded routes. */
+	readonly publishHttpRoute?: (
+		workspaceId: WorkspaceId,
+		route: { hostname: string; port: number; forwardAuthId?: string },
+	) => Promise<{ origin: string; ruleId: string }>;
+	readonly listHttpRoutes?: (
+		workspaceId: WorkspaceId,
+	) => Promise<readonly VmEdgeRoute[]>;
+	/** Deletes this app's routes of these kinds (optionally one port's); returns how many. */
+	readonly withdrawHttpRoutes?: (
+		workspaceId: WorkspaceId,
+		kinds: readonly VmEdgeRouteKind[],
+		port?: number,
+	) => Promise<number>;
+	/** Id of the account's forward-auth config at this URL, created on first use. */
+	readonly ensureEdgeAuthorizer?: (config: {
+		url: string;
+		headers: Record<string, string>;
+		protectedCookies: string[];
+	}) => Promise<string>;
 	readonly destroyOrphans: (slugPrefix: string) => Promise<readonly string[]>;
 	readonly snapshotEnvironment: (
 		workspaceId: WorkspaceId,

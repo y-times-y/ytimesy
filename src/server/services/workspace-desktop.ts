@@ -4,7 +4,6 @@ import { WorkspaceId } from "#/domain/ids";
 import { workspaceEnvironmentIsReady } from "#/domain/project-workspace";
 import {
 	desktopClientViewerUrl,
-	desktopHostname,
 	desktopPortIsListening,
 	desktopRemoteOrigin,
 	desktopStartFailureReason,
@@ -16,8 +15,9 @@ import {
 	desktopWallpaperBase64,
 } from "#/server/adapters/freestyle/desktop-wallpaper";
 import {
+	DESKTOP_VIEWER_CREDENTIAL_PATH,
 	ENSURE_WORKSPACE_DESKTOP,
-	PROBE_WORKSPACE_DESKTOP,
+	probeWorkspaceDesktop,
 	START_WORKSPACE_DESKTOP,
 } from "#/server/adapters/freestyle/start-desktop";
 import { readyWorkspaceForOwner } from "#/server/adapters/workspaces";
@@ -25,6 +25,12 @@ import {
 	bindAgentSessionMachine,
 	peekAgentSessionMachine,
 } from "./agent-session-machine";
+import {
+	desktopEdgeHostname,
+	desktopViewerAuthorization,
+	desktopViewerCredential,
+	desktopViewerCredentialDigest,
+} from "./vm-edge-keys";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 export type DesktopScope = {
@@ -142,21 +148,10 @@ export function startWorkspaceDesktop(
 			desktops.set(key, failed);
 			return failed;
 		}
-		const exposed = yield* Effect.either(
-			Effect.tryPromise(() =>
-				machines.exposeHttp(
-					WorkspaceId(providerRef),
-					6080,
-					desktopHostname(providerRef),
-				),
-			),
+		yield* Effect.either(
+			Effect.tryPromise(() => publishDesktopViewer(machines, providerRef)),
 		);
-		rememberDesktopRemote(
-			key,
-			exposed._tag === "Right"
-				? exposed.right
-				: desktopRemoteOrigin(desktopHostname(providerRef)),
-		);
+		remotes.set(key, providerRef);
 		const running = clientFacingDesktop(
 			{
 				status: "running",
@@ -188,7 +183,11 @@ export async function ensureDesktopProcesses(
 	providerRef: string,
 ) {
 	const id = WorkspaceId(providerRef);
-	const probe = await machines.exec(id, PROBE_WORKSPACE_DESKTOP, 15_000);
+	const probe = await machines.exec(
+		id,
+		probeWorkspaceDesktop(desktopViewerCredentialDigest(providerRef)),
+		15_000,
+	);
 	if (probe.exitCode === 0 && desktopPortIsListening(probe.stdout))
 		return probe;
 	await machines.writeTextFile(
@@ -196,7 +195,47 @@ export async function ensureDesktopProcesses(
 		DESKTOP_WALLPAPER_B64_PATH,
 		desktopWallpaperBase64(),
 	);
+	await machines.writeTextFile(
+		id,
+		DESKTOP_VIEWER_CREDENTIAL_PATH,
+		desktopViewerCredential(providerRef),
+	);
 	return machines.exec(id, START_WORKSPACE_DESKTOP, 300_000);
+}
+
+/** Publishes the VM's viewer port under its keyed name, replacing any older desktop route. */
+export function publishDesktopViewer(
+	machines: Pick<WorkspaceMachines, "exposeHttp">,
+	providerRef: string,
+) {
+	return machines.exposeHttp(
+		WorkspaceId(providerRef),
+		6080,
+		desktopEdgeHostname(providerRef),
+	);
+}
+
+export async function withdrawDesktopViewer(
+	machines: Pick<WorkspaceMachines, "withdrawHttpRoutes">,
+	providerRef: string,
+) {
+	return (
+		(await machines.withdrawHttpRoutes?.(WorkspaceId(providerRef), ["desk"])) ??
+		0
+	);
+}
+
+export type DesktopRemote = {
+	readonly origin: string;
+	/** websockify's BasicHTTPAuth header; only the server relay holds it. */
+	readonly authorization: string;
+};
+
+function desktopRemoteFor(providerRef: string): DesktopRemote {
+	return {
+		origin: desktopRemoteOrigin(desktopEdgeHostname(providerRef)),
+		authorization: desktopViewerAuthorization(providerRef),
+	};
 }
 
 /**
@@ -211,7 +250,7 @@ export async function desktopFromRunningGuest(
 	if (!running) return null;
 	const probe = await machines.exec(
 		WorkspaceId(providerRef),
-		PROBE_WORKSPACE_DESKTOP,
+		probeWorkspaceDesktop(desktopViewerCredentialDigest(providerRef)),
 		15_000,
 	);
 	if (!desktopPortIsListening(`${probe.stdout}\n${probe.stderr}`)) return null;
@@ -225,9 +264,17 @@ export async function desktopFromRunningGuest(
 
 export async function resolveDesktopRemote(
 	scope: DesktopScope,
-): Promise<string | null> {
+): Promise<DesktopRemote | null> {
 	const cached = remotes.get(scopeKey(scope));
-	if (cached) return cached;
+	if (cached) return desktopRemoteFor(cached);
+	const providerRef = await peekSessionMachineRef(scope);
+	if (!providerRef) return null;
+	remotes.set(scopeKey(scope), providerRef);
+	return desktopRemoteFor(providerRef);
+}
+
+/** The owner's chat machine for this scope, without creating or starting it. */
+export async function peekSessionMachineRef(scope: DesktopScope) {
 	if (!scope.projectId) return null;
 	const workspace = await readyWorkspaceForOwner(scope.userId, scope.projectId);
 	const peeked = await peekAgentSessionMachine({
@@ -235,14 +282,10 @@ export async function resolveDesktopRemote(
 		projectId: scope.projectId,
 		sessionId: scope.sessionId,
 	});
-	const providerRef = copiedAgentMachineRef({
+	return copiedAgentMachineRef({
 		sessionProviderRef: peeked.providerRef,
 		templateProviderRef: workspace?.providerRef ?? null,
 	});
-	if (!providerRef) return null;
-	const origin = desktopRemoteOrigin(desktopHostname(providerRef));
-	rememberDesktopRemote(scopeKey(scope), origin);
-	return origin;
 }
 
 function recoverRunningDesktop(
@@ -269,19 +312,25 @@ function recoverRunningDesktop(
 		const recovered = yield* Effect.tryPromise(() =>
 			desktopFromRunningGuest(machines, providerRef),
 		);
-		if (!recovered) return null;
-		rememberDesktopRemote(
-			scopeKey(scope),
-			desktopRemoteOrigin(desktopHostname(providerRef)),
-		);
+		if (!recovered) {
+			// Asleep or not serving: take the viewer route down until a start republishes it.
+			remotes.delete(scopeKey(scope));
+			yield* Effect.tryPromise(() =>
+				withdrawDesktopViewer(machines, providerRef),
+			).pipe(Effect.catchAll(() => Effect.void));
+			return null;
+		}
+		remotes.set(scopeKey(scope), providerRef);
 		void machines
 			.exec(WorkspaceId(providerRef), ENSURE_WORKSPACE_DESKTOP, 120_000)
 			.catch(() => undefined);
+		void publishDesktopViewer(machines, providerRef).catch(() => undefined);
 		return clientFacingDesktop(recovered, scope);
 	}).pipe(Effect.catchAll(() => Effect.succeed(null)));
 }
 
 const desktops = new Map<string, WorkspaceDesktop>();
+/** Scope → the VM whose desktop the relay connects to. */
 const remotes = new Map<string, string>();
 
 function scopeKey(scope: DesktopScope) {
@@ -290,10 +339,6 @@ function scopeKey(scope: DesktopScope) {
 
 function desktopFor(key: string): WorkspaceDesktop {
 	return desktops.get(key) ?? { status: "stopped" };
-}
-
-function rememberDesktopRemote(key: string, origin: string) {
-	remotes.set(key, origin.replace(/\/$/, ""));
 }
 
 function clientFacingDesktop(

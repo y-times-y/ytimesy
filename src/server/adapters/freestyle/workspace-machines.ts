@@ -24,6 +24,12 @@ import type {
 	WorkspaceMachines,
 } from "#/server/services/workspace-machines";
 import { abortableFreestyleFetch } from "./abortable-fetch";
+import {
+	ensureVmEdgeAuthorizer,
+	listVmEdgeRoutes,
+	publishVmEdgeRoute,
+	withdrawVmEdgeRoutes,
+} from "./edge-routes";
 import { forkRunningVm } from "./fork-vm";
 import {
 	PRODUCT_IDLE_TIMEOUT_SECONDS,
@@ -86,7 +92,13 @@ export function createFreestyleWorkspaceMachines(
 				: {}),
 	});
 
-	const machines: WorkspaceMachines = {
+	const machines: WorkspaceMachines &
+		Required<
+			Pick<
+				WorkspaceMachines,
+				"publishHttpRoute" | "listHttpRoutes" | "withdrawHttpRoutes"
+			>
+		> = {
 		restoreRetainedSession: (userId, sessionId, oldVmId) =>
 			restoreRetainedWorkspace(freestyle, userId, sessionId, oldVmId),
 		async createProofWorkspace(
@@ -253,22 +265,13 @@ export function createFreestyleWorkspaceMachines(
 			port: number,
 			hostname: string,
 		): Promise<string> {
+			return (await machines.publishHttpRoute(workspaceId, { hostname, port }))
+				.origin;
+		},
+
+		async publishHttpRoute(workspaceId, route) {
 			try {
-				const listed = await freestyle.tls.rules.list({
-					vmId: workspaceId,
-				});
-				const already = listed.rules.some(
-					(rule) => rule.domain === hostname && rule.destination.port === port,
-				);
-				if (!already) {
-					await freestyle.tls.rules.create({
-						action: "allow",
-						domain: hostname,
-						source: { public: true },
-						destination: { vmId: workspaceId, port },
-					});
-				}
-				return `https://${hostname}`;
+				return await publishVmEdgeRoute(freestyle, workspaceId, route);
 			} catch (cause) {
 				throw new WorkspaceProvisionError({
 					operation: "create",
@@ -277,6 +280,13 @@ export function createFreestyleWorkspaceMachines(
 				});
 			}
 		},
+
+		listHttpRoutes: (workspaceId) => listVmEdgeRoutes(freestyle, workspaceId),
+
+		withdrawHttpRoutes: (workspaceId, kinds, port) =>
+			withdrawVmEdgeRoutes(freestyle, workspaceId, kinds, port),
+
+		ensureEdgeAuthorizer: (config) => ensureVmEdgeAuthorizer(freestyle, config),
 
 		async destroyOrphans(slugPrefix: string): Promise<readonly string[]> {
 			try {
