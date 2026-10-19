@@ -602,4 +602,6 @@ export async function expireApiTurnLeases() {
 	 task_state=case when parent_session_id is null then task_state else 'failed' end,updated_at=now()
 	 from saved where s.id=saved.session_id returning ${SETTLED_TURN_COLUMNS}`);
 	captureSettledTurns(result.rows ?? []);
+	/** How many turns were abandoned, for the owner's alert. */
+	return result.rows?.length ?? 0;
 }

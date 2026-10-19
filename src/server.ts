@@ -1,4 +1,5 @@
 import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
+import { captureServerException } from "./server/adapters/analytics";
 import { registerAuthEmailBinding } from "./server/adapters/email";
 import { registerMemoryRepos } from "./server/adapters/memory-repos";
 import { handleWorkerSocket } from "./server/sockets/worker-sockets";
@@ -13,6 +14,33 @@ type WorkerContext = { waitUntil(work: Promise<unknown>): void };
  * On Cloudflare every request gets its own database scope; on the local Node dev
  * server (no bindings) requests go straight to the TanStack handler.
  */
+/**
+ * Server errors go to PostHog error tracking: thrown errors, and 5xx
+ * responses (server functions turn their errors into those). Only the method
+ * and path are recorded, never the query or body.
+ */
+async function monitored(
+	request: Request,
+	handle: () => Response | Promise<Response>,
+): Promise<Response> {
+	const where = () => {
+		const { pathname } = new URL(request.url);
+		return { method: request.method, path: pathname.slice(0, 200) };
+	};
+	try {
+		const response = await handle();
+		if (response.status >= 500)
+			void captureServerException(
+				new Error(`HTTP ${response.status} from ${request.method} route`),
+				{ source: "web", properties: { ...where(), status: response.status } },
+			);
+		return response;
+	} catch (error) {
+		void captureServerException(error, { source: "web", properties: where() });
+		throw error;
+	}
+}
+
 export default createServerEntry({
 	async fetch(request, ...rest) {
 		const [env, context] = rest as unknown as [
@@ -22,7 +50,9 @@ export default createServerEntry({
 		const redirect = canonicalOriginRedirect(request, process.env.APP_URL);
 		if (redirect) return redirect;
 		if (!env?.HYPERDRIVE || !context)
-			return withSecurityHeaders(await handler.fetch(request));
+			return withSecurityHeaders(
+				await monitored(request, () => handler.fetch(request)),
+			);
 		registerAuthEmailBinding(env.EMAIL);
 		registerMemoryRepos(env.ARTIFACTS);
 		return withWebRequestScope(
@@ -30,7 +60,11 @@ export default createServerEntry({
 			(work) => context.waitUntil(work),
 			async () =>
 				withSecurityHeaders(
-					await (handleWorkerSocket(request) ?? handler.fetch(request)),
+					await monitored(
+						request,
+						async () =>
+							(await handleWorkerSocket(request)) ?? handler.fetch(request),
+					),
 				),
 		);
 	},

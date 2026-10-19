@@ -19,7 +19,12 @@ function analyticsClient(): Promise<PostHog | null> {
 				autocapture: false,
 				capture_pageview: false,
 				capture_pageleave: false,
-				capture_exceptions: false,
+				// Uncaught errors and unhandled rejections, as $exception events.
+				capture_exceptions: {
+					capture_unhandled_errors: true,
+					capture_unhandled_rejections: true,
+					capture_console_errors: false,
+				},
 				disable_session_recording: false,
 				session_recording: replayPrivacy,
 				enable_recording_console_log: false,
@@ -37,7 +42,9 @@ function analyticsClient(): Promise<PostHog | null> {
 						event.event === "$snapshot" &&
 						Array.isArray(event.properties.$snapshot_data)
 							? { $snapshot_data: event.properties.$snapshot_data }
-							: filteredAnalyticsProperties(event.event, event.properties);
+							: event.event === "$exception"
+								? exceptionProperties(event.properties)
+								: filteredAnalyticsProperties(event.event, event.properties);
 					if (!properties) return null;
 					event.properties = {
 						...properties,
@@ -58,6 +65,18 @@ function analyticsClient(): Promise<PostHog | null> {
 		})
 		.catch(() => null);
 	return client;
+}
+
+/** Error tracking keeps the exception itself and the page path, nothing else. */
+function exceptionProperties(properties: Record<string, unknown>) {
+	const path =
+		typeof window === "undefined" ? undefined : window.location.pathname;
+	return {
+		$exception_list: properties.$exception_list,
+		$exception_level: properties.$exception_level,
+		$exception_fingerprint: properties.$exception_fingerprint,
+		...(path ? { path: path.slice(0, 200) } : {}),
+	};
 }
 
 /** Best-effort analytics must never block or fail a user operation. */

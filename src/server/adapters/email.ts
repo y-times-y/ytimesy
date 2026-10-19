@@ -61,6 +61,17 @@ export function authEmailDeliveryConfigured() {
 	return authEmailSender() !== null;
 }
 
+/**
+ * Sends one operational message (owner alerts) through the same sender as
+ * auth email, without the outbox. False when no sender is configured.
+ */
+export async function sendOperationalEmail(message: OutgoingAuthEmail) {
+	const send = authEmailSender();
+	if (!send) return false;
+	await send(message);
+	return true;
+}
+
 const AUTH_EMAIL_REPLY_TO = "support@ytimesy.com";
 
 /** Codes a later attempt cannot fix; anything else is retried with backoff. */
