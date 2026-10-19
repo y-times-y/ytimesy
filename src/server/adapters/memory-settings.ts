@@ -326,9 +326,12 @@ export type RecentChatMessage = {
 
 /**
  * The latest user message of each of the user's other root chats whose turn
- * completed in the last `windowSeconds` and whose save hook has neither
- * shown a saved line (a memorySave after that message) nor found nothing to
- * save: what memory may not hold yet. Newest first.
+ * is queued or running, or completed in the last `windowSeconds`, and whose
+ * save hook has neither shown a saved line (a memorySave after that message)
+ * nor found nothing to save: what memory may not hold yet. Newest first.
+ * A message counts from when it was sent, not from when its turn's row
+ * reads completed, so a chat opened right as another one settles still sees
+ * what was said there.
  */
 export async function recentUnsavedMessages(
 	userId: string,
@@ -343,21 +346,20 @@ export async function recentUnsavedMessages(
 			text: string | null;
 			at: Date;
 		}>(
-			`select s.id::text as id,s.title,m.e->>'text' as text,t.at
-			 from agent_session s
-			 join lateral (select max(updated_at) as at from api_turn
-			   where session_id=s.id and user_id=s.user_id and state='completed') t on true
+			`with recent as (select session_id,max(case when state='completed' then updated_at else now() end) as at
+			   from api_turn where user_id=$1 and session_id::text<>$2
+			     and (state in ('queued','running') or (state='completed' and updated_at > now()-make_interval(secs=>$3)))
+			   group by session_id)
+			 select s.id::text as id,s.title,m.e->>'text' as text,r.at
+			 from recent r join agent_session s on s.id=r.session_id and s.user_id=$1 and s.parent_session_id is null
 			 join lateral (select x.e,x.i from jsonb_array_elements(s.items) with ordinality as x(e,i)
 			   where x.e->>'kind'='userMessage' order by x.i desc limit 1) m on true
-			 where s.user_id=$1 and s.id::text<>$2 and s.parent_session_id is null
-			   and s.updated_at > now()-make_interval(secs=>$3)
-			   and t.at > now()-make_interval(secs=>$3)
-			   and not exists(select 1 from jsonb_array_elements(s.items) with ordinality as y(e,j)
+			 where not exists(select 1 from jsonb_array_elements(s.items) with ordinality as y(e,j)
 			     where y.j > m.i and y.e->>'kind'='memorySave')
 			   and not exists(select 1 from memory_model_usage u
 			     where u.user_id=s.user_id and u.session_id=s.id and u.kind='save'
-			       and u.created_at >= t.at and u.outcome like '%:nothing-new')
-			 order by t.at desc limit $4`,
+			       and u.created_at >= r.at and u.outcome like '%:nothing-new')
+			 order by r.at desc limit $4`,
 			[userId, exceptSessionId, windowSeconds, limit],
 		)
 	).rows;
