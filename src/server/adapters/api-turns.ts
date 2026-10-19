@@ -30,6 +30,7 @@ import {
 } from "./conversation-recovery";
 import { database } from "./database";
 import { observePeerInbox } from "./peer-inbox-observation";
+import { trainingEligibleAtTurnStart } from "./training-consent";
 import { mirrorTurnHistory } from "./turn-history-mirror";
 
 export type ApiTurn = {
@@ -170,8 +171,8 @@ export async function enqueueApiTurn(input: {
 			taskAccess: session.rows[0].task_access ?? null,
 		};
 		await client.query(
-			`insert into api_turn(id,session_id,user_id,connection_id,connection_revision,model_id,state,messages,items,idempotency_key,executor,settings,failover)
-			 values($1,$2,$3,$4,$5,$6,'queued',$7,$8,$9,$10,$11,$12)`,
+			`insert into api_turn(id,session_id,user_id,connection_id,connection_revision,model_id,state,messages,items,idempotency_key,executor,settings,failover,training_eligible)
+			 values($1,$2,$3,$4,$5,$6,'queued',$7,$8,$9,$10,$11,$12,${trainingEligibleAtTurnStart("$3", "$2")})`,
 			[
 				turnId,
 				input.sessionId,

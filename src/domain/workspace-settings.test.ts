@@ -11,6 +11,7 @@ describe("workspace settings", () => {
 	it("lists the essential settings sections", () => {
 		expect(settingsNavItems().map((item) => item.id)).toEqual([
 			"account",
+			"privacy",
 			"github",
 			"project",
 			"agents",

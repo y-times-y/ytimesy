@@ -48,7 +48,8 @@ export async function accountCleanupTargets(userId: string) {
 }
 
 /**
- * Deletes the account row; every owned row cascades from it. Unsettled VM
+ * Deletes the account row; every owned row cascades from it, and an enabled
+ * training consent is recorded as withdrawn. Unsettled VM
  * usage holds are settled at their full reservation first, so deleting an
  * account can never turn running compute into free compute.
  */
@@ -60,6 +61,12 @@ export async function deleteAccountRecords(userId: string) {
 			`update infrastructure_usage_reservation r set consumed_micro_usd=r.reserved_micro_usd, settled_at=now()
 			from infrastructure_vm_admission a
 			where a.reservation_id=r.id and a.user_id=$1 and r.consumed_micro_usd is null`,
+			[userId],
+		);
+		// Deleting the account withdraws training consent; the audit event outlives it.
+		await client.query(
+			`insert into training_consent_event(user_id,enabled,policy_version,source)
+			 select user_id,false,policy_version,'account-deletion' from training_consent where user_id=$1 and enabled`,
 			[userId],
 		);
 		const deleted = await client.query(
