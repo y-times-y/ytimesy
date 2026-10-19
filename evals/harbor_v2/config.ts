@@ -3,7 +3,10 @@ import {
 	type HarnessVariant,
 	harnessVariantFromFlags,
 } from "../../src/domain/harness-variant";
-import type { ModelProvider } from "../../src/domain/model-connection";
+import {
+	type ModelProvider,
+	parseModelRouteId,
+} from "../../src/domain/model-connection";
 import {
 	type ModelBilling,
 	modelBilling,
@@ -66,14 +69,23 @@ export const API_ENDPOINTS: Record<
 /**
  * Variant keys the bridge implements. The rest (memory, subagents, PR
  * evidence, the attempt loop) need the product's database and job stack;
- * a non-default value for them is refused.
+ * a non-default value for them is refused. roleModels is implemented for
+ * the one child the bridge runs, the review loop's checker.
  */
 export const BRIDGE_VARIANT_KEYS = [
 	"toolSurface",
 	"codeMode",
 	"review",
 	"promptCacheScope",
+	"roleModels",
 ] as const satisfies readonly (keyof HarnessVariant)[];
+
+/** A model run in the trial: the builder's, or the checker's own (roleModels.checker). */
+export type HarborModel = {
+	modelId: string;
+	effort: HarborEffort;
+	billing: ModelBilling;
+};
 
 export type HarborBridgeConfig = {
 	route: HarborRoute;
@@ -82,6 +94,12 @@ export type HarborBridgeConfig = {
 	variant: HarnessVariant;
 	/** The model's list-price billing: a plan route's dollars are an estimate. */
 	billing: ModelBilling;
+	/**
+	 * The review checker's model (roleModels.checker) on the builder's route;
+	 * null: the checker runs on the builder's model, as the product's
+	 * roleModels does for a role without an entry.
+	 */
+	checker: HarborModel | null;
 	/** Per-trial dollar cap, checked before every model request; null only on a plan route without one set. */
 	trialUsdCap: number | null;
 	/** The shared spend ledger and its total cap (required on paid routes). */
@@ -132,6 +150,14 @@ export function harborBridgeConfig(env: Env): HarborBridgeConfig {
 			!(BRIDGE_VARIANT_KEYS as readonly string[]).includes(key) &&
 			variant[key] !== DEFAULT_HARNESS_VARIANT[key],
 	);
+	// Writers, researchers, reviewers and the judge need subagents or attempts.
+	const otherRoles = Object.keys(variant.roleModels).filter(
+		(role) => role !== "checker",
+	);
+	if (otherRoles.length)
+		unsupported.push(
+			...otherRoles.map((role) => `roleModels.${role}` as keyof HarnessVariant),
+		);
 	if (unsupported.length)
 		throw new Error(
 			`The Harbor bridge does not implement ${unsupported.join(", ")}; they need the product's database and job stack.`,
@@ -145,6 +171,11 @@ export function harborBridgeConfig(env: Env): HarborBridgeConfig {
 	if (paid && !billing.price)
 		throw new Error(
 			`No list price is known for ${modelId}; add it to KNOWN_MODEL_PRICES before a capped run.`,
+		);
+	const checker = checkerModel(route, variant, effort);
+	if (checker && paid && !checker.billing.price)
+		throw new Error(
+			`No list price is known for the checker's ${checker.modelId}; add it to KNOWN_MODEL_PRICES before a capped run.`,
 		);
 	const totalCap = positiveDollars(
 		"YTIMESY_HARBOR_TOTAL_USD_CAP",
@@ -183,6 +214,7 @@ export function harborBridgeConfig(env: Env): HarborBridgeConfig {
 		effort,
 		variant,
 		billing,
+		checker,
 		trialUsdCap,
 		total:
 			totalCap !== undefined && ledger ? { ledger, capUsd: totalCap } : null,
@@ -192,5 +224,53 @@ export function harborBridgeConfig(env: Env): HarborBridgeConfig {
 			? env.YTIMESY_HARBOR_KEY_FILE || endpoint.defaultKeyFile
 			: null,
 		keyEnv: endpoint?.keyEnv ?? null,
+	};
+}
+
+/**
+ * roleModels.checker on the bridge: a model on the builder's route (one
+ * transport and one credential per trial). `codex:<slug>` needs the
+ * subscription route; `api:<model>` an API route; a bare `<model>` is taken
+ * on the builder's route. An exact connection route (`api/<id>/<model>`)
+ * names the product's stored connection and is refused, as is a model on
+ * another route: the bridge refuses what it cannot run rather than falling
+ * back silently.
+ */
+export function checkerModel(
+	route: HarborRoute,
+	variant: HarnessVariant,
+	/** The builder's effort, used when the entry names none. */
+	builderEffort: HarborEffort,
+): HarborModel | null {
+	const entry = variant.roleModels.checker;
+	if (!entry) return null;
+	if (entry.model.startsWith("api/") || parseModelRouteId(entry.model))
+		throw new Error(
+			`roleModels.checker "${entry.model}" names a stored connection; use codex:<slug>, api:<model> or <model> on the trial's route.`,
+		);
+	const [prefix, ...rest] = entry.model.split(":");
+	const scoped = prefix === "codex" || prefix === "api";
+	const modelId = scoped ? rest.join(":") : entry.model;
+	const subscription = route === "codex-subscription";
+	if (!modelId || (prefix === "codex" && !subscription))
+		throw new Error(
+			`roleModels.checker "${entry.model}" needs YTIMESY_HARBOR_ROUTE=codex-subscription.`,
+		);
+	if (prefix === "api" && subscription)
+		throw new Error(
+			`roleModels.checker "${entry.model}" needs an API route; this trial runs on the Codex subscription.`,
+		);
+	const effort = (entry.effort ?? builderEffort) as HarborEffort;
+	if (!EFFORTS.includes(effort))
+		throw new Error(
+			`roleModels.checker effort must be one of ${EFFORTS.join(", ")}.`,
+		);
+	return {
+		modelId,
+		effort,
+		billing: modelBilling({
+			harness: subscription ? "codex" : "api",
+			modelId,
+		}),
 	};
 }

@@ -1,12 +1,19 @@
 import { access, mkdir, writeFile } from "node:fs/promises";
-import type { LanguageModel, ModelMessage } from "ai";
+import type { LanguageModel, ModelMessage, ToolSet } from "ai";
 import type { ApiAgentEvent } from "../../src/domain/api-agent-event";
 import {
 	type ApiTokenUsage,
 	addApiTokenUsage,
 } from "../../src/domain/api-token-usage";
+import {
+	type EfficiencySummary,
+	efficiencySummary,
+	type ModelSpendRow,
+	type SpendSession,
+	treeModelSpend,
+} from "../../src/domain/eval-efficiency";
 import { harnessVariantLabel } from "../../src/domain/harness-variant";
-import { WorkspaceId } from "../../src/domain/ids";
+import { SessionItemId, WorkspaceId } from "../../src/domain/ids";
 import { usageCostUsd } from "../../src/domain/model-pricing";
 import type { ContextArchiveStorage } from "../../src/server/adapters/context-archives";
 import { stopApiTurnCommands } from "../../src/server/services/api-command-scope";
@@ -22,7 +29,11 @@ import {
 	type TimedEvent,
 	type TimedNotice,
 } from "./atif";
-import { API_ENDPOINTS, type HarborBridgeConfig } from "./config";
+import {
+	API_ENDPOINTS,
+	type HarborBridgeConfig,
+	type HarborModel,
+} from "./config";
 import { type HarborWorkspace, harborHarness } from "./harness";
 import {
 	type CheckerRun,
@@ -61,9 +72,14 @@ export type HarborTrialInput = {
 	machines: WorkspaceMachines;
 	userId: string;
 	storage: ContextArchiveStorage;
-	/** Builds the route's runtime with every model request passed through `wrapModel`. */
+	/**
+	 * Builds the route's runtime with every model request passed through
+	 * `wrapModel`: the builder's model, or `model` (the checker's own,
+	 * roleModels.checker) on the same route.
+	 */
 	runtime: (
 		wrapModel: (model: LanguageModel) => LanguageModel,
+		model?: HarborModel,
 	) => Promise<ModelAgentRuntime>;
 	mcpServers?: readonly string[];
 	harness: {
@@ -84,7 +100,86 @@ export type HarborTrialResult = {
 	costUsd: number | null;
 	requests: number;
 	reviewRounds: number;
+	/** AA-style cost block (src/domain/eval-efficiency.ts); null when refused. */
+	efficiency: TrialEfficiency | null;
 };
+
+/**
+ * The trial's cost block, from the shared eval-efficiency summary (the one
+ * the hard-set runner prints): cost, tokens, model calls and cache hit rate,
+ * split per role and model. Whether the task was solved is the grader's
+ * call, so `solved` is not known here; aggregate trials with
+ * evals/harbor_v2/efficiency.ts, which joins the verifier's reward.
+ */
+export type TrialEfficiency = Omit<
+	EfficiencySummary,
+	"solved" | "perSolvedUsd"
+> & { readonly modelRows: readonly ModelSpendRow[] };
+
+/** One usage record as a session's items, for treeModelSpend. */
+function usageSession(
+	session: Omit<SpendSession, "items">,
+	usage: ApiTokenUsage | null,
+): SpendSession {
+	return {
+		...session,
+		items: usage
+			? [
+					{
+						kind: "userMessage",
+						id: SessionItemId(`${session.id}-usage`),
+						text: "",
+						apiUsage: usage,
+					},
+				]
+			: [],
+	};
+}
+
+export function trialEfficiency(input: {
+	rootId: string;
+	harness: "codex" | "api";
+	builder: { modelId: string; usage: ApiTokenUsage | null };
+	checkers: readonly {
+		sessionId: string;
+		modelId: string;
+		usage: ApiTokenUsage | null;
+	}[];
+	seconds: number;
+}): TrialEfficiency {
+	const modelRows = treeModelSpend({
+		rootId: input.rootId,
+		sessions: [
+			usageSession(
+				{
+					id: input.rootId,
+					harness: input.harness,
+					listedModelId: input.builder.modelId,
+				},
+				input.builder.usage,
+			),
+			...input.checkers.map((checker) =>
+				usageSession(
+					{
+						id: checker.sessionId,
+						harness: input.harness,
+						listedModelId: checker.modelId,
+						agentRole: "checker",
+					},
+					checker.usage,
+				),
+			),
+		],
+	});
+	const {
+		solved: _solved,
+		perSolvedUsd: _perSolved,
+		...summary
+	} = efficiencySummary([
+		{ solved: false, seconds: input.seconds, models: modelRows },
+	]);
+	return { ...summary, modelRows };
+}
 
 const sum = (usages: (ApiTokenUsage | null)[]) =>
 	usages.reduce<ApiTokenUsage | null>(
@@ -163,6 +258,7 @@ export async function runHarborTrial(
 					costUsd: 0,
 					requests: 0,
 					reviewRounds: 0,
+					efficiency: null,
 				};
 			throw error;
 		}
@@ -173,22 +269,38 @@ export async function runHarborTrial(
 	const notices: TimedNotice[] = [];
 	const checkerRuns: {
 		sessionId: string;
+		model: HarborModel;
 		events: TimedEvent[];
 		brief: string;
 		instructions: string;
+		tools: ToolSet;
 		startedAt: string;
 		run: CheckerRun;
 	}[] = [];
+	const builderModel: HarborModel = {
+		modelId: config.modelId,
+		effort: config.effort,
+		billing: config.billing,
+	};
+	// roleModels.checker: the checker's own model on the route; else the builder's.
+	const checkerModel = config.checker ?? builderModel;
 	const totalUsage = () =>
 		sum([
 			runsUsage(events, builderStarts),
 			...checkerRuns.map((checker) => lastUsage(checker.events)),
 		]);
+	// Each run at its own model's price (a cheaper checker counts less).
+	const spendParts = () => [
+		{ usage: runsUsage(events, builderStarts), billing: config.billing },
+		...checkerRuns.map((checker) => ({
+			usage: lastUsage(checker.events),
+			billing: checker.model.billing,
+		})),
+	];
 	const guard = trialSpendGuard({
-		billing: config.billing,
 		capUsd: config.trialUsdCap,
 		requestLimit: config.requestLimit,
-		usage: totalUsage,
+		parts: spendParts,
 	});
 	const remainingMs = Math.max(1000, input.deadlineAt - now());
 	const signal = AbortSignal.timeout(remainingMs);
@@ -207,9 +319,16 @@ export async function runHarborTrial(
 	let reviewRounds = 0;
 	let reviewSummary: unknown = null;
 	try {
-		const runtime = await input.runtime((model) =>
-			guardedLanguageModel(model, guard, signal),
-		);
+		const wrapModel = (model: LanguageModel) =>
+			guardedLanguageModel(model, guard, signal);
+		const runtime = await input.runtime(wrapModel);
+		// Built on the first check, only when the checker has its own model.
+		let checkerRuntime: Promise<ModelAgentRuntime> | null = null;
+		const runtimeForChecker = () => {
+			if (!config.checker) return Promise.resolve(runtime);
+			checkerRuntime ??= input.runtime(wrapModel, config.checker);
+			return checkerRuntime;
+		};
 		const provider =
 			config.route === "codex-subscription"
 				? "codex-subscription"
@@ -274,13 +393,16 @@ export async function runHarborTrial(
 			const started = now();
 			const entry = {
 				sessionId: spec.sessionId,
+				model: checkerModel,
 				events: checkerEvents,
 				brief: spec.brief,
 				instructions: "",
+				tools: {} as ToolSet,
 				startedAt: new Date(started).toISOString(),
 				run: null as unknown as CheckerRun,
 			};
 			const done = (async () => {
+				const checkerRuntimeReady = runtimeForChecker();
 				const checker = await harborHarness({
 					workspace: {
 						...workspace,
@@ -289,7 +411,7 @@ export async function runHarborTrial(
 						turnId: `${spec.sessionId}-turn`,
 					},
 					userId: input.userId,
-					modelId: config.modelId,
+					modelId: checkerModel.modelId,
 					provider,
 					variant: config.variant,
 					webSearch: false,
@@ -301,6 +423,7 @@ export async function runHarborTrial(
 					subagent: { role: "checker", budget: spec.budget },
 				});
 				entry.instructions = checker.instructions;
+				entry.tools = checker.tools;
 				const stepGuard = checkerStepGuard({
 					budget: spec.budget,
 					startedAt: started,
@@ -310,8 +433,8 @@ export async function runHarborTrial(
 					const messages = await runModelAgent(
 						{
 							userId: input.userId,
-							modelId: config.modelId,
-							reasoning: config.effort,
+							modelId: checkerModel.modelId,
+							reasoning: checkerModel.effort,
 							toolSurface: "implementation",
 							cacheScopeId: spec.sessionId,
 							...checker.input,
@@ -333,7 +456,7 @@ export async function runHarborTrial(
 							},
 							onStep: async () => {},
 						},
-						runtime,
+						await checkerRuntimeReady,
 					);
 					return {
 						outcome: "completed" as const,
@@ -376,6 +499,16 @@ export async function runHarborTrial(
 					deadlineAt: input.deadlineAt - 120_000,
 					startChecker,
 					trace: reviewTrace,
+					...(config.checker
+						? {
+								checkerModel: {
+									harness:
+										config.route === "codex-subscription" ? "codex" : "api",
+									modelId: config.checker.modelId,
+									reasoning: config.checker.effort,
+								},
+							}
+						: {}),
 					now,
 				}),
 			});
@@ -425,13 +558,36 @@ export async function runHarborTrial(
 		for (const checker of checkerRuns) checker.run?.stop();
 	}
 	const usage = totalUsage();
-	const costUsd = usage ? usageCostUsd(usage, config.billing) : 0;
+	// Each run at its own model's price; unknown when any price is unknown.
+	const costUsd = spendParts().reduce<number | null>((total, part) => {
+		if (total === null) return null;
+		if (!part.usage) return total;
+		const cost = usageCostUsd(part.usage, part.billing);
+		return cost === null ? null : total + cost;
+	}, 0);
+	const efficiency = trialEfficiency({
+		rootId: input.trialId,
+		harness: config.route === "codex-subscription" ? "codex" : "api",
+		builder: {
+			modelId: config.modelId,
+			usage: runsUsage(events, builderStarts),
+		},
+		checkers: checkerRuns.map((checker) => ({
+			sessionId: checker.sessionId,
+			modelId: checker.model.modelId,
+			usage: lastUsage(checker.events),
+		})),
+		seconds: (now() - Date.parse(startedAt)) / 1000,
+	});
 	const fingerprint = {
 		trial: input.trialId,
 		harness: input.harness,
 		route: config.route,
 		model: config.modelId,
 		effort: config.effort,
+		checkerModel: config.checker
+			? { model: config.checker.modelId, effort: config.checker.effort }
+			: null,
 		variant: harnessVariantLabel(config.variant),
 		billing: config.billing.kind,
 		trialUsdCap: config.trialUsdCap,
@@ -448,37 +604,46 @@ export async function runHarborTrial(
 			requests: guard.requests(),
 			usage,
 			costUsd,
+			efficiency,
 			review: {
 				rounds: reviewRounds,
 				checks: reviewTrace.checks,
+				state: reviewTrace.state ?? null,
 				summary: reviewSummary,
 			},
 			events,
 			notices,
-			checkers: checkerRuns.map(({ sessionId, events, brief }) => ({
+			checkers: checkerRuns.map(({ sessionId, model, events, brief }) => ({
 				sessionId,
+				model: model.modelId,
+				effort: model.effort,
 				brief,
 				events,
 			})),
 		}),
 	);
 	const toolDefinitions = await atifToolDefinitions(tools).catch(() => []);
-	const subagents: AtifTrajectory[] = checkerRuns.map((checker) =>
-		atifTrajectory({
-			sessionId: input.trialId,
-			trajectoryId: checker.sessionId,
-			agent: {
-				name: `${input.harness.name}-checker`,
-				version: input.harness.version,
-			},
-			modelName: config.modelId,
-			effort: config.effort,
-			billing: config.billing,
-			systemPrompt: checker.instructions || "(checker)",
-			instruction: checker.brief,
-			startedAt: checker.startedAt,
-			events: checker.events,
-		}),
+	const subagents: AtifTrajectory[] = await Promise.all(
+		checkerRuns.map(async (checker) =>
+			atifTrajectory({
+				sessionId: input.trialId,
+				trajectoryId: checker.sessionId,
+				agent: {
+					name: `${input.harness.name}-checker`,
+					version: input.harness.version,
+				},
+				modelName: checker.model.modelId,
+				effort: checker.model.effort,
+				billing: checker.model.billing,
+				systemPrompt: checker.instructions || "(checker)",
+				instruction: checker.brief,
+				startedAt: checker.startedAt,
+				events: checker.events,
+				toolDefinitions: await atifToolDefinitions(checker.tools).catch(
+					() => [],
+				),
+			}),
+		),
 	);
 	const trajectory = atifTrajectory({
 		sessionId: input.trialId,
@@ -498,6 +663,7 @@ export async function runHarborTrial(
 		notices,
 		toolDefinitions,
 		subagents,
+		metricsExtra: { efficiency },
 		...(failure ? { notes: `The builder stopped early: ${failure}` } : {}),
 	});
 	await writeFile(
@@ -517,5 +683,6 @@ export async function runHarborTrial(
 		costUsd,
 		requests: guard.requests(),
 		reviewRounds,
+		efficiency,
 	};
 }

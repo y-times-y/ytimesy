@@ -106,12 +106,14 @@ try {
 			machines: harborMachines(exec),
 			userId,
 			storage: archives.storage,
-			runtime: (wrapModel) =>
+			runtime: (wrapModel, model) =>
 				harborRuntime({
-					config,
+					config: model
+						? { ...config, modelId: model.modelId, effort: model.effort }
+						: config,
 					env: process.env,
 					userId,
-					cacheScope: trialId,
+					cacheScope: model ? `${trialId}:checker` : trialId,
 					wrapModel,
 				}),
 			mcpServers: args.mcpServers,
@@ -128,6 +130,7 @@ try {
 			costUsd: result.costUsd,
 			requests: result.requests,
 			reviewRounds: result.reviewRounds,
+			efficiency: result.efficiency,
 		};
 	} finally {
 		await archives.close().catch(() => {});

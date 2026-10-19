@@ -45,7 +45,7 @@ unchanged and remains the harness of record for the TB4 runs; v2 lives in
 | `YTIMESY_HARBOR_APPROVED` | must equal the route: the operator's billing approval (required) |
 | `YTIMESY_HARBOR_MODEL` | default `gpt-6.1-sol` / `claude-opus-5-5` / `gemini-3.8-flash` |
 | `YTIMESY_HARBOR_EFFORT` | `low` … `max` (default `max`) |
-| `YTIMESY_HARBOR_VARIANT` | harness variant flags, e.g. `review=on` or `toolSurface=lean-native,codeMode=on`. Supported: `toolSurface`, `codeMode`, `review`, `promptCacheScope`. `attempts`, `subagents`, memory and `prEvidence` need the product's database and are refused. |
+| `YTIMESY_HARBOR_VARIANT` | harness variant flags, e.g. `review=on` or `toolSurface=lean-native,codeMode=primary`. Supported: `toolSurface`, `codeMode` (`on`, `primary`), `review`, `promptCacheScope`, `roleModels.checker`. `attempts`, `subagents`, memory, `prEvidence` and the other roles' `roleModels` need the product's database or subagents and are refused. |
 | `YTIMESY_HARBOR_TRIAL_USD_CAP` | per-trial cap; default $20 or the total cap if lower; at most $100 |
 | `YTIMESY_HARBOR_TOTAL_USD_CAP` + `YTIMESY_HARBOR_SPEND_LEDGER` | total cap and its JSON-lines ledger; required on paid routes |
 | `YTIMESY_HARBOR_REQUEST_LIMIT` | model requests per trial, builder and checkers together (default 400) |
@@ -62,6 +62,30 @@ instead of touching the development database). The subscription route loads `.en
 and then points `DATABASE_URL` at a per-trial loopback Postgres in Docker
 (`benchmarks/evaluation/operator-database.ts`, needs the `postgres:13` image and a
 repository checkout on the host), holding only the access token.
+
+## Checker model (roleModels.checker)
+
+`roleModels.checker=<model>[@<effort>]` runs the review checker on its own model, on the
+trial's route (one transport and credential per trial): `codex:<slug>` on
+`codex-subscription`, `api:<model>` on an API route, a bare `<model>` on whichever route
+the trial uses. A stored-connection route id (`api/<id>/<model>`), a model on another
+route, or a paid model without a list price is refused. Without an effort the checker
+uses the builder's. The checker's runtime is built on its first check; its requests pass
+the same guard; its usage is priced at its own model (trial cap, ledger, ATIF subagent
+trajectory, the review state's `rounds[].checker.model`).
+
+## Cost block (AA-style)
+
+Every trial's `ytimesy-trace.json` and `trajectory.json` (`final_metrics.extra.efficiency`)
+carry the shared eval-efficiency summary (`src/domain/eval-efficiency.ts`, the block
+`scripts/hard-set.ts` prints): `$`/task, tokens (in/out), model calls, cache hit rate,
+seconds, and `modelRows` per role (builder, checker) and model, each at its own price
+(`~$` = list-price estimate on plan-billed routes). Harbor's `AgentContext` metadata gets
+the same block. Per job (arm), joined with the verifier reward:
+
+```sh
+node --import tsx evals/harbor_v2/efficiency.ts .ytimesy/harbor-v2/smoke [job ...]
+```
 
 ## Spending caps
 
@@ -116,13 +140,18 @@ process (`review.ts`) and reuses the product's loop, brief, verdict parsing, eli
 deadlines and notice unchanged:
 
 - state in memory (a trial is one process and is never resumed);
-- the checker is a second model run on the same container: lean tools, the product's
-  checker role prompt and budget (60 steps, 10 min, 800K tokens), the 90 % wrap-up notice,
-  no web search, its usage counted in the same trial cap;
+- the checker is a second model run on the same container with the product's reader
+  surface: read-only file tools, a working command runner, a lean shape without write and
+  edit (`builderToolSurface` `readOnly`), the read-only lean prompt (`leanReadOnly`), code
+  mode as the builder's variant, no agent tool and so no orchestration block; the
+  product's checker role prompt and budget (60 steps, 10 min, 800K tokens), the 90 %
+  wrap-up notice, no web search, its usage counted in the same trial cap at its own model's
+  price (roleModels.checker);
 - deadline: Harbor's agent timeout minus 3 minutes (60 s in the agent, 120 s in the loop).
 
-Difference from the product: the product's checker runs as a reader Linux user that cannot
-write the checkout. A task container has no such user, so after every check the checkout is
+Difference from the product: the product's checker runs its commands as a reader Linux user
+that cannot write the checkout. A task container has no such user, so the checker's commands
+run as the container's user and after every check the checkout is
 restored to the tree the checker was given (`restoreConversationCode`); the trace records
 whether each restore succeeded. Ignored files the checker creates are not removed.
 
@@ -136,7 +165,9 @@ Not reproduced, because they need the database, the job stack or a person: cross
 memory, plan mode, the user's MCP connections (task MCP servers work through `mcp-call`),
 plugins, project secrets, repository lifecycle hooks, subagents, the attempt loop, the
 background-command completion gate and durable step resumption. Write-once tool receipts
-and turn memos are in memory.
+and turn memos are in memory. `codeMode=primary` lists run_code first and adds the product's
+one-command note to the command tool (`primaryCodeModeTools`, shared with api-turn); it has
+no deferred tools to hide, since the bridge offers no agent, plan or MCP tools.
 
 ## Verified offline (no model calls, no spend)
 
@@ -147,7 +178,10 @@ and turn memos are in memory.
   derives usage for `claude-opus-5-5`. The trial cap stops before the next request; a full
   ledger refuses before inference; an existing trace is never overwritten. `review=on`:
   checker findings return to the builder, the fix runs, the second check passes, the
-  checker's stray file is undone, builder + checker usage is one trial's.
+  checker's stray file is undone, builder + checker usage is one trial's. `review=on,codeMode=primary,roleModels.checker=…`: run_code first in
+  the builder's tools and prompt; the checker on its own runtime and model, with commands
+  but no write/edit, no orchestration block; cost = each run at its own price; the
+  efficiency block's per-role rows.
 - `tests/harbor-v2-units.test.ts`: config validation, guard, ledger (incl. concurrency and
   stop file), transport guard (Anthropic/OpenAI/Gemini terminal events, resend after a
   cut, give-up path, no credentials in logs), ATIF details (retract, freeform input,
@@ -172,13 +206,15 @@ and turn memos are in memory.
 
 ## Minimal smoke test (do not run without approval)
 
-CPU tasks, local Docker, Codex subscription (plan-billed) first. From this worktree:
+CPU tasks, local Docker, Codex subscription (plan-billed), today's harness variants:
+review loop, code mode primary, the checker on `gpt-6-luna`. From this worktree:
 
 ```sh
 cd /Users/hetpatel/Documents/ChatGPT/cloud-bridge2
 mkdir -p .ytimesy/harbor-v2
 
 # 1. Preflight: oracle must score 1 and nop 0 through the real grader. No model calls.
+#    (Passed 2026-10-19 for session-window-debug, shadow-relay, mvcc-lsm-compaction.)
 node --import tsx evals/harbor_v2/preflight.ts \
   --tasks session-window-debug,shadow-relay --env docker \
   --jobs-dir .ytimesy/harbor-v2/preflight
@@ -186,6 +222,7 @@ node --import tsx evals/harbor_v2/preflight.ts \
 # 2. One agent trial per task, agent time cut to 1/8 (1 h of the 8 h limit).
 export PYTHONPATH=$PWD YTIMESY_REPO=$PWD
 export YTIMESY_HARBOR_ROUTE=codex-subscription YTIMESY_HARBOR_APPROVED=codex-subscription
+export YTIMESY_HARBOR_VARIANT=review=on,codeMode=primary,roleModels.checker=codex:gpt-6-luna
 export YTIMESY_EVALUATION_CODEX_AUTH_FILE=$HOME/.codex/auth.json
 export YTIMESY_HARBOR_PREFLIGHT=$PWD/.ytimesy/harbor-v2/preflight/preflight.json
 export YTIMESY_TRANSPORT_LOG=$PWD/.ytimesy/harbor-v2/transport.log
@@ -197,11 +234,50 @@ for task in shadow-relay session-window-debug; do
     --jobs-dir .ytimesy/harbor-v2/smoke --job-name smoke-$task
 done
 
-# 3. Check: reward in result.json, ATIF validates, the trace names the fingerprint.
-for f in .ytimesy/harbor-v2/smoke/smoke-*/*__*/result.json; do
-  python3 -c "import json,sys; r=json.load(open(sys.argv[1])); print(sys.argv[1], (r.get('verifier_result') or {}).get('rewards'), (r.get('agent_result') or {}).get('cost_usd'), r.get('exception_info'))" "$f"
+# 3. Check each trial: reward, Harbor's cost, the ATIF validates under Harbor 0.24.0,
+#    the trace's fingerprint, review rounds, checker model and cost block.
+HP=$(ls -d ~/.cache/uv/archive-v0/*/bin/python | while read p; do
+  "$p" -I -c "import importlib.metadata as m,sys; sys.exit(m.version('harbor')!='0.24.0')" 2>/dev/null && echo "$p"; done | head -1)
+for t in .ytimesy/harbor-v2/smoke/smoke-*/*__*/; do
+  "$HP" -I -c "
+import json,sys
+from pathlib import Path
+from harbor.models.trajectories import Trajectory
+from harbor.utils.trajectory_utils import load_model_usage_from_trajectory
+t=Path(sys.argv[1]); r=json.loads((t/'result.json').read_text())
+tr=json.loads((t/'agent/ytimesy-trace.json').read_text())
+Trajectory.model_validate_json((t/'agent/trajectory.json').read_text())
+print(t.name, 'reward', (r.get('verifier_result') or {}).get('rewards'), 'exception', r.get('exception_info'))
+print('  usage by model', {k: v.model_dump() for k, v in (load_model_usage_from_trajectory(t/'agent/trajectory.json') or {}).items()})
+print('  variant', tr['variant'], 'checker', tr['checkerModel'], 'failure', tr['failure'])
+print('  review rounds', tr['review']['rounds'], 'checks', [(c['sessionId'], c['restored']) for c in tr['review']['checks']])
+e=tr['efficiency']; print('  cost/task', e['perTaskUsd'], 'tokens', e['tokensPerTask'], 'calls', e['callsPerTask'], 'cache hit', e['cacheHitRate'])
+for m in e['modelRows']: print('   ', m['role'], m['model'], m['requests'], 'calls', m['costUsd'])
+" "$t"
 done
+node --import tsx evals/harbor_v2/efficiency.ts .ytimesy/harbor-v2/smoke
 ```
+
+Expected:
+
+- `result.json`: `verifier_result.rewards.reward` 0 or 1, `exception_info` null (a refusal
+  or setup failure raises instead of scoring 0); `agent_result.cost_usd` = the trace's
+  `costUsd` (a list-price estimate on the plan).
+- `agent/trajectory.json` validates (ATIF-v1.7); `load_model_usage_from_trajectory` lists
+  `gpt-6.1-sol` (and `gpt-6-luna` from the embedded checker trajectories); the builder's
+  `agent.tool_definitions[0]` is `run_code`; each `subagent_trajectories[i]` has
+  `model_name: gpt-6-luna` and tools without `write`/`edit`; `final_metrics.extra` has
+  `cost_basis` and `efficiency`.
+- `agent/ytimesy-trace.json`: `variant` = `codeMode=primary,review=on,roleModels.checker=codex:gpt-6-luna`
+  (the label orders keys as the variant does), `checkerModel` `{model: gpt-6-luna, effort: max}`,
+  `review.rounds` ≥ 0 with `checks[].restored: true`, `review.state.rounds[].checker.model.modelId`
+  `gpt-6-luna`; `efficiency.modelRows` = a `builder gpt-6.1-sol` row and, when a check ran,
+  a `checker gpt-6-luna` row, each with its own `costUsd`.
+- No ledger on the plan route (no caps unless `YTIMESY_HARBOR_TRIAL_USD_CAP` is set). On a
+  paid route the ledger shows one `reserve` and one `settle` per trial, settle = `costUsd`.
+- `efficiency.ts` prints one headline per job (`solved/tasks · ~$/task · ~$/solved · tok/task
+  · calls/task · cache hit · s/task`) and one line per role and model.
+- `transport.log`: one line per streamed request, `terminal` set, no resends expected.
 
 A paid route adds the caps, e.g. Gemini:
 
