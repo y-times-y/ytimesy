@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { Blocks, Bot, Folder, Plug, User, X } from "lucide-react";
+import { Blocks, Bot, Folder, Plug, Shield, User, X } from "lucide-react";
 import { ScrollArea } from "radix-ui";
 import { type FormEvent, type ReactNode, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
@@ -48,6 +48,10 @@ import {
 	saveProjectSecretFn,
 } from "./project-secrets.fn";
 import { codexSubscriptionUsageFn } from "./subscription-usage.fn";
+import {
+	ProjectTrainingSettings,
+	TrainingConsentSettings,
+} from "./training-consent-settings";
 
 type AccountView = {
 	readonly user: {
@@ -61,6 +65,7 @@ type AccountView = {
 
 const sectionIcon = {
 	account: User,
+	privacy: Shield,
 	github: GithubMark,
 	project: Folder,
 	agents: Bot,
@@ -179,6 +184,7 @@ export function ProjectSettings({
 										<InfrastructureUsage />
 									</>
 								) : null}
+								{section === "privacy" ? <TrainingConsentSettings /> : null}
 								{section === "github" ? (
 									<GithubSection
 										loading={account.isPending}
@@ -203,6 +209,12 @@ export function ProjectSettings({
 											/>
 										) : null}
 										<ProjectSecretsSection project={settingsProject} />
+										{settingsProject ? (
+											<ProjectTrainingSettings
+												key={`training-${settingsProject.id}`}
+												projectId={settingsProject.id}
+											/>
+										) : null}
 									</>
 								) : null}
 								{section === "plugins" ? <Plugins /> : null}

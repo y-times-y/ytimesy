@@ -98,6 +98,16 @@ beforeAll(async () => {
 			"utf8",
 		),
 	);
+	// Training consent reads the chat's project; this schema builds both minimally.
+	await db.exec(
+		"create table project(id uuid primary key,user_id text); alter table agent_session add column project_id uuid references project(id)",
+	);
+	await db.exec(
+		await readFile(
+			"supabase/migrations/20261019150000_training_consent.sql",
+			"utf8",
+		),
+	);
 	await db.query(
 		`insert into model_connection(id,user_id,provider,label,base_url,sealed_credential,revision) values($1,'alice','openrouter','Test','https://openrouter.ai/api/v1','fixture',$2)`,
 		[connectionId, revision],
@@ -127,6 +137,42 @@ function submit(userId = "alice", targetSessionId = sessionId) {
 		items: [],
 	});
 }
+
+it("stamps training eligibility when the turn is queued, off by default", async () => {
+	const projectId = randomUUID();
+	await db.query("insert into project(id,user_id) values($1,'alice')", [
+		projectId,
+	]);
+	await db.query("update agent_session set project_id=$1 where id=$2", [
+		projectId,
+		sessionId,
+	]);
+	const eligible = async () =>
+		(
+			await query(
+				"select training_eligible from api_turn order by created_at desc limit 1",
+			)
+		).rows[0];
+	await submit();
+	expect(await eligible()).toEqual({ training_eligible: false });
+	const reset = () =>
+		db.exec("truncate api_turn; update agent_session set turn_status='idle'");
+	await reset();
+	await db.query(
+		"insert into training_consent(user_id,enabled,policy_version,source) values('alice',true,'v','settings')",
+	);
+	await submit();
+	expect(await eligible()).toEqual({ training_eligible: true });
+	await reset();
+	await db.query("update project set training_excluded=true where id=$1", [
+		projectId,
+	]);
+	await submit();
+	expect(await eligible()).toEqual({ training_eligible: false });
+	await db.exec(
+		"delete from training_consent; update agent_session set project_id=null; delete from project",
+	);
+});
 
 it("assigns one immutable executor when admitting a turn", async () => {
 	vi.stubEnv("YTIMESY_MODEL_EXECUTION_TARGET", "durable-object");
