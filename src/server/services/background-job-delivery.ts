@@ -22,10 +22,6 @@ import { listReadyWorkspaceIds } from "../adapters/workspaces";
 import { relayConversationDeliveriesOnce } from "../jobs/conversation-delivery";
 import { enqueueSessionCheckpoint } from "../jobs/queue";
 import {
-	recoverChildTurnEvents,
-	superviseAgentChildren,
-} from "./agent-child-supervision";
-import {
 	deliverAgentPeerMessage,
 	PeerMessagePendingError,
 } from "./agent-peer-messaging";
@@ -47,6 +43,7 @@ import { deliverPrRepairEvents } from "./pr-repair";
 import { captureSessionCheckpoint } from "./session-checkpoint";
 import { recoverStaleQueuedWorkspaces } from "./stale-workspace-queue";
 import { teardownSubagentForks } from "./subagent-runtime";
+import { recoverChildTurnEvents } from "./subagent-turn-recovery";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 export async function deliverBackgroundJob(
@@ -62,8 +59,7 @@ export async function deliverBackgroundJob(
 					await alertAbandonedTurns(await expireApiTurnLeases());
 					break;
 				case "supervise":
-					await recoverChildTurnEvents();
-					await superviseAgentChildren(machines);
+					await recoverChildTurnEvents(machines);
 					// Writer subagents' forks, 30 minutes after their report.
 					await teardownSubagentForks(machines);
 					break;

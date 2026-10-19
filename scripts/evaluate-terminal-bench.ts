@@ -20,10 +20,8 @@ import type {
 	EvaluationProtocol,
 	EvaluationTask,
 } from "../src/domain/harness-evaluation";
-import { SessionItemId, WorkspaceId } from "../src/domain/ids";
-import { posixShellCommand } from "../src/domain/posix-command";
+import { WorkspaceId } from "../src/domain/ids";
 import { environmentRecipe } from "../src/domain/project-environment";
-import { agentSessionForOwner } from "../src/server/adapters/agent-sessions";
 import {
 	downloadCheckpoint,
 	removeCheckpoint,
@@ -36,12 +34,9 @@ import {
 	startWorkspaceWorker,
 	stopWorkspaceWorker,
 } from "../src/server/jobs/worker";
-import { openAgentTask } from "../src/server/services/agent-session-machine";
-import { deferredApiTurnWorkspace } from "../src/server/services/api-turn-workspace";
-import { commitCompletedSessionTurn } from "../src/server/services/turn-commit";
 
 const [taskPath, outputPath, mode] = process.argv.slice(2);
-if (!taskPath || !outputPath || !["preflight", "handoff", "run"].includes(mode))
+if (!taskPath || !outputPath || !["preflight", "run"].includes(mode))
 	throw new Error("Specify task, private output and preflight/run mode.");
 if (
 	mode === "run" &&
@@ -207,27 +202,8 @@ try {
 		protocol,
 	);
 	await save("active-attempt", attempt);
-	if (mode === "preflight" || mode === "handoff") {
-		const child = await openAgentTask({
-			userId: local.userId,
-			projectId,
-			parentSessionId: attempt.rootId,
-			title: "Verify isolated builder checkout",
-			harness: "codex",
-			modelId: protocol.modelId,
-			prompt: task.instruction,
-			placement: "fresh",
-			access: "read_write",
-			execution: "parallel",
-			dependsOnSessionId: null,
-		});
-		const boundChild = await deferredApiTurnWorkspace(
-			bridge.machines,
-			child,
-			cancelled.signal,
-		)();
-		if (boundChild.vm === attempt.vmId)
-			throw new Error("Writable child did not receive a separate machine.");
+	if (mode === "preflight") {
+		// The root chat is the builder: preflight checks its bound checkout is clean.
 		const checked = await bridge.machines.exec(
 			WorkspaceId(attempt.vmId),
 			'cd "$(cat /tmp/ytimesy-project-cwd)" && git status --porcelain',
@@ -235,65 +211,6 @@ try {
 		);
 		if (checked.exitCode || checked.stdout.trim())
 			throw new Error("Production binding modified the benchmark checkout.");
-		if (mode === "handoff") {
-			// No-model check of a builder's completion hand-back: one trivial edit,
-			// then the exact completion step a finished builder turn runs.
-			const edited = await bridge.machines.exec(
-				WorkspaceId(boundChild.vm),
-				'cd "$(cat /tmp/ytimesy-project-cwd)" && printf "handoff probe\\n" >> ytimesy-handoff-probe.txt && git status --porcelain',
-				15000,
-			);
-			console.log("builder edit:", edited.exitCode, edited.stdout.trim());
-			const receipts = await database().query<{ request_id: string }>(
-				"select request_id from agent_task_command_receipt where parent_session_id=$1",
-				[child.id],
-			);
-			console.log(
-				"builder cwd:",
-				boundChild.cwd,
-				"baseline keys:",
-				receipts.rows.map((row) => row.request_id),
-			);
-			const session = await agentSessionForOwner(local.userId, child.id);
-			if (!session) throw new Error("Builder session is missing.");
-			try {
-				await commitCompletedSessionTurn(
-					{ ...session, providerRef: boundChild.vm },
-					[
-						{
-							kind: "userMessage",
-							id: SessionItemId("probe"),
-							text: task.instruction,
-						},
-					],
-					{
-						// The same capabilities a finished builder turn provides (api-turn.ts).
-						exec: (providerRef, argv, _env, timeout) =>
-							bridge.machines.exec(
-								WorkspaceId(providerRef),
-								posixShellCommand(argv),
-								timeout,
-							),
-						readTextFile: (providerRef, path) =>
-							bridge.machines.readTextFile(WorkspaceId(providerRef), path),
-					} as Parameters<typeof commitCompletedSessionTurn>[2],
-				);
-				console.log("handoff: completion step succeeded");
-			} catch (error) {
-				console.log("handoff failure chain:");
-				for (
-					let current: unknown = error;
-					current;
-					current = (current as { cause?: unknown }).cause
-				)
-					console.log(
-						" -",
-						current instanceof Error
-							? `${current.name}: ${current.message}`
-							: String(current),
-					);
-			}
-		}
 		await save("result", {
 			preflight: true,
 			inferenceRequests: 0,

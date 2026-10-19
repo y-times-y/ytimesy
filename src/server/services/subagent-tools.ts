@@ -342,8 +342,6 @@ async function spawnSubagent(
 		prompt: brief,
 		placement: placement === "fork" ? "fresh" : "shared",
 		access: placement === "fork" ? "read_write" : "read_only",
-		execution: "parallel",
-		dependsOnSessionId: null,
 	});
 	const childId = child.id;
 	try {

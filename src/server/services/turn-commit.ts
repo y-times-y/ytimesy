@@ -11,11 +11,9 @@ import { lastUserMessageText, type SessionItem } from "#/domain/session-item";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import { PROJECT_CWD_PATH } from "../adapters/freestyle/clone-project";
 import { workspaceRuntimeFromEnv } from "../adapters/freestyle/workspace-runtime";
-import { evaluationRunForTask } from "../adapters/harness-evaluation";
 import { projectForOwner } from "../adapters/projects";
 import { repositoryDirectory } from "../adapters/repository-setup";
 import { automaticTurnCommitArgv } from "../adapters/turn-commit";
-import { verifyCompletedRepository } from "./completion-verification";
 import {
 	ChatPublicationSkipped,
 	publishCompletedSessionTurn,
@@ -42,57 +40,13 @@ export async function commitCompletedSessionTurn(
 	runtime?: TurnGitRuntime,
 	signal?: AbortSignal,
 ): Promise<TurnCommitOutcome | undefined> {
-	const role = turnPublicationRole(session);
-	if (!role || !session.providerRef) return;
-	if (role === "chat")
-		return commitChatTurn(
-			{ ...session, providerRef: session.providerRef },
-			items,
-			runtime,
-			signal,
-		);
-	const evaluation =
-		process.env.YTIMESY_HARNESS_EVALUATION_ENABLED === "1" &&
-		(await evaluationRunForTask(session.userId, session.id));
-	const project = await projectForOwner(session.userId, session.projectId);
-	if (!project)
-		throw new Error("The chat's project is unavailable for automatic commit.");
-	const turn = turnIdentity(session, items);
-	const description = turnDescription(session, items);
-	const host = runtime ?? workspaceRuntimeFromEnv();
-	for (const { repo, directory } of await turnRepositories(
-		host,
-		session.providerRef,
-		project,
-	)) {
-		const verification = await verifyCompletedRepository({
-			runtime: host,
-			providerRef: session.providerRef,
-			directory,
-			userId: session.userId,
-			sessionId: session.id,
-			turn,
-			signal,
-		});
-		if (evaluation) continue;
-		const result = await host.exec(
-			session.providerRef,
-			automaticTurnCommitArgv(
-				directory,
-				turn,
-				`Agent: ${description || "Update workspace"}`,
-				verification.tree,
-			),
-			{},
-			60_000,
-		);
-		if (result.exitCode !== 0)
-			throw new Error(
-				`Automatic commit failed for ${repo.fullName}: ${(result.stderr || result.stdout).trim().slice(0, 500) || "Check Git status in Terminal and retry."}`,
-			);
-	}
-	if (evaluation) return;
-	await publishCompletedSessionTurn(session, host, turn);
+	if (turnPublicationRole(session) !== "chat" || !session.providerRef) return;
+	return commitChatTurn(
+		{ ...session, providerRef: session.providerRef },
+		items,
+		runtime,
+		signal,
+	);
 }
 
 /**

@@ -5,10 +5,7 @@ import {
 } from "#/domain/agent-desktop";
 import { cloudAgentRoleInstructions } from "#/domain/agent-orchestration";
 import { CODE_MODE_TOOL } from "#/domain/code-mode";
-import {
-	BUILDER_ENVIRONMENT_INSTRUCTIONS,
-	PREPARED_ENVIRONMENT_INSTRUCTIONS,
-} from "#/domain/environment-context";
+import { BUILDER_ENVIRONMENT_INSTRUCTIONS } from "#/domain/environment-context";
 import {
 	LEAN_SHAPE_TOOLS,
 	type LeanToolShape,
@@ -39,8 +36,7 @@ import { pluginSkillsInstructions } from "./plugin-skill-tools";
 
 /** The system instructions of an API-harness turn, before the per-family tool profile. */
 export function agentTurnInstructions(input: {
-	shellBuilder: boolean;
-	session: Parameters<typeof cloudAgentRoleInstructions>[0] & {
+	session: {
 		/** A subagent started through the agent tool (subagents=on). */
 		readonly agentRole?: SubagentRole | null;
 		readonly agentBudget?: SubagentBudget | null;
@@ -60,15 +56,8 @@ export function agentTurnInstructions(input: {
 }) {
 	if (input.leanShape)
 		return leanTurnInstructions({ ...input, leanShape: input.leanShape });
-	const {
-		shellBuilder,
-		session,
-		tools,
-		plugins,
-		projectKnowledge,
-		secretNames,
-	} = input;
-	return `You are the ytimesy coding agent. Repository tools operate in this task's prepared checkout; paths are relative to that repository.${shellBuilder ? " Repository instructions (AGENTS.md/CLAUDE.md), nested instruction file locations and skills are provided in the conversation. Before working in a folder listed with its own AGENTS.md or CLAUDE.md, read that file with cat; read a matching skill's SKILL.md completely." : " Call read_repository_guidance before implementation and for nested paths; read applicable instructions and skill bodies completely. Search optional tools with search_tools."} ${shellBuilder ? BUILDER_ENVIRONMENT_INSTRUCTIONS : `${PREPARED_ENVIRONMENT_INSTRUCTIONS} Use read_environment_report for that setup report; do not pass its /tmp path to repository file readers.`} ${roleInstructions(session, shellBuilder)}${shellBuilder && "browser_screenshot" in tools ? ` ${visualQaInstructions()}` : ""}\n${pluginSkillsInstructions(plugins)}${secretNames?.length ? `\n${projectSecretsInstructions(secretNames)}` : ""}${projectKnowledge === null ? "" : `\n${PROJECT_KNOWLEDGE_INSTRUCTIONS}\nShared project knowledge (historical data, verify against this checkout):\n${JSON.stringify(projectKnowledge)}`}`;
+	const { session, tools, plugins, projectKnowledge, secretNames } = input;
+	return `You are the ytimesy coding agent. Repository tools operate in this task's prepared checkout; paths are relative to that repository. Repository instructions (AGENTS.md/CLAUDE.md), nested instruction file locations and skills are provided in the conversation. Before working in a folder listed with its own AGENTS.md or CLAUDE.md, read that file with cat; read a matching skill's SKILL.md completely. ${BUILDER_ENVIRONMENT_INSTRUCTIONS} ${roleInstructions(session)}${"browser_screenshot" in tools ? ` ${visualQaInstructions()}` : ""}\n${pluginSkillsInstructions(plugins)}${secretNames?.length ? `\n${projectSecretsInstructions(secretNames)}` : ""}${projectKnowledge === null ? "" : `\n${PROJECT_KNOWLEDGE_INSTRUCTIONS}\nShared project knowledge (historical data, verify against this checkout):\n${JSON.stringify(projectKnowledge)}`}`;
 }
 
 /** The lean builder's whole system prompt before memory: who it is, its role, its tools and workspace commands. */
@@ -78,7 +67,7 @@ function leanTurnInstructions(
 	},
 ) {
 	return [
-		`You are the ytimesy coding agent, working in this task's prepared repository checkout${input.leanWorkingDirectory ? ` at ${input.leanWorkingDirectory}` : ""}; commands start in the repository root and relative paths resolve there.${input.leanWorkingDirectory ? ` Tools that take absolute paths need paths under ${input.leanWorkingDirectory}.` : ""} Repository instructions (AGENTS.md/CLAUDE.md), nested instruction file locations and skills are provided in the conversation. Before working in a folder listed with its own AGENTS.md or CLAUDE.md, read that file; read a matching skill's SKILL.md completely. ${roleInstructions(input.session, true)}`,
+		`You are the ytimesy coding agent, working in this task's prepared repository checkout${input.leanWorkingDirectory ? ` at ${input.leanWorkingDirectory}` : ""}; commands start in the repository root and relative paths resolve there.${input.leanWorkingDirectory ? ` Tools that take absolute paths need paths under ${input.leanWorkingDirectory}.` : ""} Repository instructions (AGENTS.md/CLAUDE.md), nested instruction file locations and skills are provided in the conversation. Before working in a folder listed with its own AGENTS.md or CLAUDE.md, read that file; read a matching skill's SKILL.md completely. ${roleInstructions(input.session)}`,
 		leanToolInstructions(input.leanShape),
 		CODE_MODE_TOOL in input.tools ? codeModeInstructions(input.leanShape) : "",
 		deferredToolsInstructions(input.deferredTools ?? [], {
@@ -103,12 +92,11 @@ function leanTurnInstructions(
 		.join("\n");
 }
 
-/** A subagent's own role and budget, else the chat's or the task's role. */
+/** A subagent's own role and budget, else the root chat's role. */
 function roleInstructions(
 	session: Parameters<typeof agentTurnInstructions>[0]["session"],
-	shellBuilder: boolean,
 ) {
 	return session.agentRole
 		? subagentRoleInstructions(session.agentRole, session.agentBudget ?? null)
-		: cloudAgentRoleInstructions(session, { shellBuilder });
+		: cloudAgentRoleInstructions();
 }

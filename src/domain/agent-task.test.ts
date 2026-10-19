@@ -212,47 +212,14 @@ describe("agentTaskStartBlockedByDependency", () => {
 });
 
 describe("turnPublicationRole", () => {
-	const base = {
-		providerRef: "vm",
-		parentSessionId: null,
-		taskPlacement: null,
-		taskAccess: null,
-	};
-	it("publishes every root chat as a chat, whatever its legacy task access", () => {
+	const base = { providerRef: "vm", parentSessionId: null };
+	it("publishes every root chat as a chat", () => {
 		expect(turnPublicationRole(base)).toBe("chat");
-		expect(turnPublicationRole({ ...base, taskAccess: "read_only" })).toBe(
-			"chat",
-		);
 	});
-	it("publishes only read_write child tasks", () => {
-		const child = { ...base, parentSessionId: "lead", taskPlacement: "fresh" };
-		expect(turnPublicationRole({ ...child, taskAccess: "read_write" })).toBe(
-			"task",
-		);
-		expect(turnPublicationRole({ ...child, taskAccess: "read_only" })).toBe(
+	it("never publishes a subagent", () => {
+		expect(turnPublicationRole({ ...base, parentSessionId: "builder" })).toBe(
 			null,
 		);
-		expect(
-			turnPublicationRole({
-				...child,
-				taskAccess: "read_write",
-				taskPlacement: "shared",
-			}),
-		).toBe(null);
-	});
-	it("never publishes a subagent, reader or writer", () => {
-		const subagent = { ...base, parentSessionId: "builder" };
-		expect(turnPublicationRole({ ...subagent, agentRole: "writer" })).toBe(
-			null,
-		);
-		expect(
-			turnPublicationRole({
-				...subagent,
-				agentRole: "explorer",
-				taskPlacement: "shared",
-			}),
-		).toBe(null);
-		expect(turnPublicationRole({ ...base, agentRole: "writer" })).toBe(null);
 	});
 	it("never publishes without a machine", () => {
 		expect(turnPublicationRole({ ...base, providerRef: null })).toBe(null);

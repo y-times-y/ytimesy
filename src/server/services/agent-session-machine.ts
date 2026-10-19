@@ -9,19 +9,11 @@ import {
 	shouldResealProjectSnapshotAfterCopyFailure,
 	workspaceCopyCapacityRetryDelaysMs,
 } from "#/domain/agent-session";
-import {
-	type AgentTaskAccess,
-	type AgentTaskExecution,
-	type AgentTaskPlacement,
-	agentTaskStartBlockedByDependency,
-	canSpawnAgentTask,
-	validateAgentTaskPlan,
-} from "#/domain/agent-task";
+import type { AgentTaskAccess, AgentTaskPlacement } from "#/domain/agent-task";
 import { failureMessage, workspaceLooksGone } from "#/domain/failure-message";
 import { AuthSnapshotId, WorkspaceId } from "#/domain/ids";
 import { listedModelPreferenceFromSessions } from "#/domain/listed-model";
 import type { MachineSizeId } from "#/domain/machine-size";
-import { projectCheckoutFromFullName } from "#/domain/project-checkout";
 import { workspaceEnvironmentIsReady } from "#/domain/project-workspace";
 import { sessionTitleFromText } from "#/domain/session-item";
 import {
@@ -34,13 +26,9 @@ import {
 	listAgentSessions,
 	reusableEmptyChat,
 	saveAgentSessionProviderRef,
-	saveAgentTaskDraft,
 	selectAgentSessionHarness,
 } from "#/server/adapters/agent-sessions";
-import { receiveBrokeredRepository } from "#/server/adapters/github/git-broker";
 import { projectMachineSize } from "#/server/adapters/project-machine-size";
-import { projectForOwner } from "#/server/adapters/projects";
-import { repositoryDirectory } from "#/server/adapters/repository-setup";
 import {
 	saveTemplateSnapshot,
 	workspaceForProject,
@@ -68,8 +56,6 @@ async function resolveAgentSessionRecord(input: {
 		readonly prompt: string;
 		readonly placement: AgentTaskPlacement;
 		readonly access: AgentTaskAccess;
-		readonly execution: AgentTaskExecution;
-		readonly dependsOnSessionId: string | null;
 	};
 }) {
 	const workspace = await workspaceForProject(input.userId, input.projectId);
@@ -176,8 +162,8 @@ export async function openAgentSession(input: {
 }
 
 /**
- * Creates a child task under any session. The parent chain is deliberately
- * bounded so recursive delegation cannot grow without limit.
+ * Creates a subagent's session row under its parent (subagent-tools.ts). The
+ * tree's depth, width and budget are admitted by subagentAdmission first.
  */
 export async function openAgentTask(input: {
 	readonly userId: string;
@@ -189,49 +175,16 @@ export async function openAgentTask(input: {
 	readonly prompt: string;
 	readonly placement: AgentTaskPlacement;
 	readonly access: AgentTaskAccess;
-	readonly execution: AgentTaskExecution;
-	readonly dependsOnSessionId: string | null;
 }) {
-	let parent = await agentSessionForOwner(input.userId, input.parentSessionId);
-	if (!parent || parent.projectId !== input.projectId) {
-		throw new Error("The parent task is not available.");
-	}
-	let parentDepth = 0;
-	while (parent.parentSessionId) {
-		parentDepth += 1;
-		const next = await agentSessionForOwner(
-			input.userId,
-			parent.parentSessionId,
-		);
-		if (!next || next.projectId !== input.projectId) {
-			throw new Error("The task hierarchy is invalid.");
-		}
-		parent = next;
-	}
-	if (!canSpawnAgentTask(parentDepth)) {
-		throw new Error("Tasks can delegate at most three levels deep.");
-	}
-	const invalidPlan = validateAgentTaskPlan({
-		prompt: input.prompt,
-		placement: input.placement,
-		access: input.access,
-		execution: input.execution,
-		dependsOnSessionId: input.dependsOnSessionId,
-	});
-	if (invalidPlan) throw new Error(invalidPlan);
-	if (input.dependsOnSessionId) {
-		const predecessor = await agentSessionForOwner(
-			input.userId,
-			input.dependsOnSessionId,
-		);
-		if (
-			!predecessor ||
-			predecessor.projectId !== input.projectId ||
-			predecessor.parentSessionId !== input.parentSessionId
-		) {
-			throw new Error("A stacked predecessor must be a sibling task.");
-		}
-	}
+	const parent = await agentSessionForOwner(
+		input.userId,
+		input.parentSessionId,
+	);
+	if (!parent || parent.projectId !== input.projectId)
+		throw new Error("The parent agent is not available.");
+	if (!input.prompt.trim()) throw new Error("A brief is required.");
+	if (input.placement === "shared" && input.access !== "read_only")
+		throw new Error("A subagent on its parent's VM must be read-only.");
 	const { session } = await resolveAgentSessionRecord({
 		userId: input.userId,
 		projectId: input.projectId,
@@ -244,145 +197,31 @@ export async function openAgentTask(input: {
 			prompt: input.prompt,
 			placement: input.placement,
 			access: input.access,
-			execution: input.execution,
-			dependsOnSessionId: input.dependsOnSessionId,
 		},
 	});
 	return session;
 }
 
-export async function editAgentTaskDraft(input: {
-	readonly userId: string;
-	readonly projectId: string;
-	readonly taskSessionId: string;
-	readonly title: string;
-	readonly harness: AgentProviderId;
-	readonly modelId: string;
-	readonly prompt: string;
-	readonly placement: AgentTaskPlacement;
-	readonly access: AgentTaskAccess;
-	readonly execution: AgentTaskExecution;
-	readonly dependsOnSessionId: string | null;
-}) {
-	const draft = await agentSessionForOwner(input.userId, input.taskSessionId);
-	if (
-		!draft ||
-		draft.projectId !== input.projectId ||
-		!draft.parentSessionId ||
-		draft.taskState !== "draft" ||
-		draft.providerRef
-	) {
-		throw new Error("Only an unstarted task draft can be edited.");
-	}
-	const invalidPlan = validateAgentTaskPlan({
-		prompt: input.prompt,
-		placement: input.placement,
-		access: input.access,
-		execution: input.execution,
-		dependsOnSessionId: input.dependsOnSessionId,
-	});
-	if (invalidPlan) throw new Error(invalidPlan);
-	if (!input.title.trim() || !input.modelId.trim()) {
-		throw new Error("A task title and model are required.");
-	}
-	if (input.dependsOnSessionId) {
-		const predecessor = await agentSessionForOwner(
-			input.userId,
-			input.dependsOnSessionId,
-		);
-		if (
-			!predecessor ||
-			predecessor.projectId !== input.projectId ||
-			predecessor.parentSessionId !== draft.parentSessionId ||
-			predecessor.id === draft.id
-		) {
-			throw new Error("A stacked predecessor must be another sibling task.");
-		}
-	}
-	const saved = await saveAgentTaskDraft({
-		userId: input.userId,
-		sessionId: draft.id,
-		title: input.title.trim().slice(0, 120),
-		prompt: input.prompt.trim(),
-		harness: input.harness,
-		modelId: input.modelId.trim(),
-		placement: input.placement,
-		access: input.access,
-		execution: input.execution,
-		dependsOnSessionId: input.dependsOnSessionId,
-	});
-	if (!saved) throw new Error("The task draft changed before it was saved.");
-	return saved;
-}
-
-/**
- * Validates a stored draft immediately before execution. Capacity is checked
- * here because drafts consume neither a runtime slot nor model tokens.
- */
+/** Atomically moves an opened subagent row to working before its first send. */
 export async function prepareAgentTaskStart(input: {
 	readonly userId: string;
 	readonly projectId: string;
 	readonly taskSessionId: string;
-	readonly expectedDraft?: AgentSessionRecord;
 }) {
 	const task = await agentSessionForOwner(input.userId, input.taskSessionId);
 	if (
 		!task ||
 		task.projectId !== input.projectId ||
 		!task.parentSessionId ||
-		!task.taskState ||
-		!task.taskPlacement ||
-		!task.taskAccess ||
-		!task.taskExecution
-	) {
-		throw new Error("The task draft is not available.");
-	}
-	if (task.taskState !== "draft" && task.taskState !== "idle") {
-		throw new Error("Only a draft or idle task can be started.");
-	}
-	await rootAgentSession(input.userId, input.projectId, task);
-	const predecessor = task.dependsOnSessionId
-		? await agentSessionForOwner(input.userId, task.dependsOnSessionId)
-		: null;
-	const dependencyBlock = agentTaskStartBlockedByDependency(
-		{
-			execution: task.taskExecution,
-			dependsOnSessionId: task.dependsOnSessionId,
-		},
-		predecessor
-			? {
-					status: predecessor.taskState ?? "idle",
-					reviewState: predecessor.taskReviewState ?? "pending",
-					branch: predecessor.taskBranch,
-				}
-			: null,
-	);
-	if (dependencyBlock) throw new Error(dependencyBlock);
-	await reserveAgentTaskStart(
-		input.userId,
-		input.projectId,
-		task.id,
-		input.expectedDraft,
-	);
+		!task.taskState
+	)
+		throw new Error("The subagent is not available.");
+	if (task.taskState !== "draft" && task.taskState !== "idle")
+		throw new Error("Only a new or idle subagent can be started.");
+	await reserveAgentTaskStart(input.userId, input.projectId, task.id);
 	const started = await agentSessionForOwner(input.userId, task.id);
-	if (!started) throw new Error("The task draft could not be started.");
-	return { task: started, predecessor };
-}
-
-async function rootAgentSession(
-	userId: string,
-	projectId: string,
-	start: AgentSessionRecord,
-) {
-	let current = start;
-	while (current.parentSessionId) {
-		const parent = await agentSessionForOwner(userId, current.parentSessionId);
-		if (!parent || parent.projectId !== projectId) {
-			throw new Error("The task hierarchy is invalid.");
-		}
-		current = parent;
-	}
-	return current;
+	if (!started) throw new Error("The subagent could not be started.");
+	return { task: started };
 }
 
 export async function bindAgentSessionMachine(
@@ -471,8 +310,8 @@ export async function bindAgentSessionMachine(
 }
 
 /**
- * Assigns the execution machine selected by a validated task plan. Stacked
- * work copies the reviewed predecessor state rather than the clean template.
+ * A reader subagent shares its parent's VM; a writer runs on the fork that
+ * subagent-tools saved as its provider ref.
  */
 export async function bindPreparedAgentTaskMachine(
 	machines: WorkspaceMachines,
@@ -480,10 +319,8 @@ export async function bindPreparedAgentTaskMachine(
 		readonly userId: string;
 		readonly projectId: string;
 		readonly task: AgentSessionRecord;
-		readonly predecessor: AgentSessionRecord | null;
 	},
 ) {
-	let sourceSnapshotId: string | undefined;
 	if (input.task.taskPlacement === "shared") {
 		if (!input.task.parentSessionId) {
 			throw new Error("The read-only task has no parent machine.");
@@ -507,70 +344,14 @@ export async function bindPreparedAgentTaskMachine(
 			parentProviderRef,
 		);
 		return { session, providerRef: parentProviderRef };
-	} else if (
-		input.task.taskExecution === "stacked" &&
-		!input.predecessor?.taskBranch
-	) {
-		throw new Error(
-			"Publish the reviewed predecessor before starting stacked work.",
-		);
 	}
-	const bound = await bindAgentSessionMachine(machines, {
+	return bindAgentSessionMachine(machines, {
 		userId: input.userId,
 		projectId: input.projectId,
 		harness: input.task.harness,
 		sessionId: input.task.id,
 		createNew: false,
-		sourceSnapshotId,
 	});
-	if (input.task.taskExecution === "stacked" && input.predecessor?.taskBranch) {
-		await checkoutStackedTaskBase(machines, bound.providerRef, {
-			userId: input.userId,
-			projectId: input.projectId,
-			branch: input.predecessor.taskBranch,
-		});
-	}
-	return bound;
-}
-
-async function checkoutStackedTaskBase(
-	machines: WorkspaceMachines,
-	providerRef: string,
-	input: {
-		readonly userId: string;
-		readonly projectId: string;
-		readonly branch: string;
-	},
-) {
-	const project = await projectForOwner(input.userId, input.projectId);
-	const checkout = project
-		? projectCheckoutFromFullName({
-				userId: input.userId,
-				projectId: input.projectId,
-				fullName: project.fullName,
-				branch: project.branch,
-				installationId: project.installationId,
-			})
-		: null;
-	if (!project || !checkout)
-		throw new Error("The stacked project is unavailable.");
-	const workspaceId = WorkspaceId(providerRef);
-	const result = await receiveBrokeredRepository(
-		{
-			exec: (command, timeout) => machines.exec(workspaceId, command, timeout),
-			writeTextFile: (path, text) =>
-				machines.writeTextFile(workspaceId, path, text),
-		},
-		{
-			...checkout,
-			branch: input.branch,
-			workingBranch: input.branch,
-			destination: repositoryDirectory(project.fullName),
-			mode: "update",
-		},
-	);
-	if (result !== "updated")
-		throw new Error("The stacked predecessor branch could not be checked out.");
 }
 
 export async function peekAgentSessionMachine(input: {

@@ -3,16 +3,9 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { WorkspaceId } from "#/domain/ids";
-import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import { agentOutputArtifacts } from "./agent-output-artifacts";
-import { inspectProjectSourceEvidence } from "./project-source-evidence";
-import {
-	readAuthorizedTaskChecks,
-	readAuthorizedTaskOutput,
-	requireCurrentTaskCheck,
-} from "./task-output-evidence";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 const run = promisify(execFile);
@@ -73,127 +66,6 @@ it("retains complete Unicode output and stderr behind bounded session-owned page
 			{ toolCallId: "bad", messages: [], context: {} },
 		),
 	).rejects.toThrow();
-});
-
-it("retains source-bound evidence and rejects accepting it after declared code changes", async () => {
-	const artifacts = await fixture();
-	await run("git", ["init", "-q", artifacts.root]);
-	await writeFile(join(artifacts.root, "source.ts"), "export const value = 1");
-	await run("git", ["-C", artifacts.root, "add", "source.ts"]);
-	await run("git", [
-		"-C",
-		artifacts.root,
-		"-c",
-		"user.name=Test",
-		"-c",
-		"user.email=test@example.com",
-		"commit",
-		"-qm",
-		"base",
-	]);
-	const workspace = {
-		machines: artifacts.machines,
-		vm: WorkspaceId("test"),
-		cwd: artifacts.root,
-	};
-	await writeFile(join(artifacts.root, "source.ts"), "export const value = 2");
-	const before = await inspectProjectSourceEvidence(
-		workspace,
-		["source.ts"],
-		true,
-	);
-	const result = await artifacts.capture("printf 'check passed'");
-	await artifacts.recordVerification(result.reference, {
-		command: "printf 'check passed'",
-		cwd: artifacts.root,
-		before,
-		after: before,
-		sourcesStable: true,
-	});
-	const request = {
-		machines: artifacts.machines,
-		task: {
-			id: "owner",
-			userId: "owner",
-			projectId: "project",
-			providerRef: "test",
-		} as AgentSessionRecord,
-		ownerId: "owner",
-		projectId: "project",
-		page: { reference: result.reference, view: "summary" },
-		signal: new AbortController().signal,
-	};
-	const current = await readAuthorizedTaskOutput(request);
-	expect(() => requireCurrentTaskCheck(current)).not.toThrow();
-	const failure = await artifacts.capture("printf 'warning' >&2; exit 1");
-	await artifacts.recordVerification(failure.reference, {
-		command: "failing check",
-		cwd: artifacts.root,
-		before,
-		after: before,
-		sourcesStable: true,
-	});
-	const bundleRequest = {
-		...request,
-		references: [result.reference, failure.reference],
-	};
-	const observations = vi.spyOn(artifacts.machines, "exec");
-	observations.mockClear();
-	const bundle = await readAuthorizedTaskChecks(bundleRequest);
-	expect(observations).toHaveBeenCalledTimes(2); // One log bundle plus one fresh shared source observation.
-	expect(bundle.sourceProofs).toHaveLength(1);
-	expect(bundle.sourceProofs[0].sourcesCurrent).toBe(true);
-	expect(bundle.checks[0]).toMatchObject({
-		sourceProof: 0,
-		completion: { status: 0, stopped: null },
-	});
-	expect(bundle.checks[1]).toMatchObject({
-		sourceProof: 0,
-		completion: { status: 1, stopped: null },
-		stderr: {
-			content: "warning",
-			fullOutput: { reference: failure.reference },
-		},
-	});
-	expect(bundle.checks[0].stdout).not.toHaveProperty("verification");
-	await expect(
-		readAuthorizedTaskChecks({ ...bundleRequest, ownerId: "other" }),
-	).rejects.toThrow("not available");
-	await expect(
-		readAuthorizedTaskChecks({
-			...bundleRequest,
-			references: [result.reference, result.reference],
-		}),
-	).rejects.toThrow("distinct");
-	await run("git", ["-C", artifacts.root, "add", "source.ts"]);
-	await run("git", [
-		"-C",
-		artifacts.root,
-		"-c",
-		"user.name=Test",
-		"-c",
-		"user.email=test@example.com",
-		"commit",
-		"-qm",
-		"publication",
-	]);
-	const published = await readAuthorizedTaskOutput(request);
-	expect(() => requireCurrentTaskCheck(published)).not.toThrow();
-	await writeFile(join(artifacts.root, "source.ts"), "export const value = 3");
-	const stale = await readAuthorizedTaskOutput(request);
-	const staleBundle = await readAuthorizedTaskChecks(bundleRequest);
-	expect(staleBundle.sourceProofs[0].sourcesCurrent).toBe(false);
-	expect(stale).toMatchObject({
-		sourcesCurrent: false,
-		completion: { status: 0 },
-	});
-	expect(() => requireCurrentTaskCheck(stale)).toThrow("current unchanged");
-	for (const evidence of [
-		{},
-		{ ...current, completion: { status: 1, stopped: null } },
-		{ ...current, completion: { status: 0, stopped: "timeout" } },
-	])
-		expect(() => requireCurrentTaskCheck(evidence)).toThrow();
 });
 
 it("reports no matches separately from a failed command and stops timed-out execution", async () => {
@@ -261,30 +133,4 @@ it("does not invent success for legacy captures or malformed completion receipts
 	await expect(
 		artifacts.read({ reference: result.reference }),
 	).rejects.toThrow();
-});
-
-it("retains actual foreground completion with both output streams for later leader review", async () => {
-	const artifacts = await fixture();
-	for (const exitCode of [0, 2]) {
-		const result = await artifacts.capture(`exit ${exitCode}`);
-		for (const stream of ["stdout", "stderr"] as const) {
-			expect(
-				await readAuthorizedTaskOutput({
-					machines: artifacts.machines,
-					task: {
-						id: "owner",
-						userId: "owner",
-						projectId: "project",
-						providerRef: "test",
-					} as AgentSessionRecord,
-					ownerId: "owner",
-					projectId: "project",
-					page: { reference: result.reference, stream, background: false },
-					signal: new AbortController().signal,
-				}),
-			).toMatchObject({
-				completion: { status: exitCode, stopped: null },
-			});
-		}
-	}
 });

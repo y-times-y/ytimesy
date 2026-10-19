@@ -1,13 +1,8 @@
 import { turnPublicationRole } from "#/domain/agent-task";
 import { posixShellQuoted } from "#/domain/posix-command";
 import { repositoriesForProject } from "#/domain/projects";
-import { sessionBranchName } from "#/domain/session-branch";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
-import {
-	adoptChatPublicationBranch,
-	agentSessionForOwner,
-	saveAgentTaskPublication,
-} from "../adapters/agent-sessions";
+import { adoptChatPublicationBranch } from "../adapters/agent-sessions";
 import { isDevEvalUser } from "../adapters/dev-eval-users";
 import { authorizedRepository, compareBranchAhead } from "../adapters/github";
 import { ensureAppDraftPullRequest } from "../adapters/github/app-pull-request";
@@ -60,31 +55,16 @@ export async function publishCompletedSessionTurn(
 	if (!/^[a-f0-9]{64}$/.test(turn))
 		throw new Error("Invalid turn handoff identity.");
 	const revision = `refs/ytimesy/turn-commits/${turn}`;
-	const role = turnPublicationRole(session);
-	if (!role) return;
+	if (turnPublicationRole(session) !== "chat") return;
 	if (await turnPublicationExcluded(session)) return;
 	const project = await projectForOwner(session.userId, session.projectId);
 	if (!project)
 		throw new Error("The chat's project is unavailable for automatic handoff.");
-	const predecessor =
-		session.taskExecution === "stacked" && session.dependsOnSessionId
-			? await agentSessionForOwner(session.userId, session.dependsOnSessionId)
-			: null;
-	if (
-		session.taskExecution === "stacked" &&
-		(!predecessor?.taskBranch || predecessor.projectId !== session.projectId)
-	)
-		throw new Error("The stacked task's published base is unavailable.");
 	const providerRef = session.providerRef;
 	if (!providerRef) return;
 	// A chat publishes only its own working branch (taken below if it has
-	// none yet); task branches and stacked bases belong to child tasks.
-	let head =
-		role === "chat"
-			? session.workingBranch
-			: session.workingBranch ||
-				session.taskBranch ||
-				sessionBranchName({ title: session.title, id: session.id });
+	// none yet).
+	let head = session.workingBranch;
 	let chatBase = session.baseBranch;
 	let token: string | undefined;
 	let published: TurnPublication | undefined;
@@ -150,19 +130,12 @@ export async function publishCompletedSessionTurn(
 		}
 		const primary = repo.fullName === project.fullName;
 		const base = primary
-			? predecessor?.taskBranch ||
-				chatBase ||
-				(role === "chat"
-					? projectBaseBranch(project, repository)
-					: repository.defaultBranch)
+			? chatBase || projectBaseBranch(project, repository)
 			: repo.branch || repository.defaultBranch;
-		if (head === base || head === repository.defaultBranch) {
-			if (role === "chat")
-				throw new ChatPublicationSkipped(
-					`Changes are committed in this chat but were not pushed: it works directly on ${head}, and ytimesy never pushes to a base or default branch automatically. Start a new chat to get its own branch.`,
-				);
-			throw new Error("Automatic handoff requires a separate task branch.");
-		}
+		if (head === base || head === repository.defaultBranch)
+			throw new ChatPublicationSkipped(
+				`Changes are committed in this chat but were not pushed: it works directly on ${head}, and ytimesy never pushes to a base or default branch automatically. Start a new chat to get its own branch.`,
+			);
 		await pushBrokeredRepository(
 			{
 				exec: (command, timeout) =>
@@ -229,11 +202,6 @@ export async function publishCompletedSessionTurn(
 						error instanceof Error ? error.message.slice(0, 300) : "unknown",
 				}),
 			);
-		if (primary && session.parentSessionId)
-			await saveAgentTaskPublication(session.id, {
-				branch: head,
-				pullRequestUrl: pull.url,
-			});
 		await markPublished(runtime, providerRef, directory, revision);
 		if (primary) published = { branch: head, pullRequestUrl: pull.url };
 	}

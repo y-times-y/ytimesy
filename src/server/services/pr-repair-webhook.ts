@@ -6,7 +6,6 @@ import {
 	isPrCommentSignal,
 	parsePrRepairSignal,
 } from "#/domain/pr-repair-signal";
-import { database } from "../adapters/database";
 import { stagePullRequestWakes } from "../adapters/pull-request-links";
 import { enqueuePrRepair } from "../jobs/queue";
 
@@ -75,22 +74,5 @@ export async function stageVerifiedPrRepairSignal(
 			sourceId: signal.sourceId,
 			headSha: signal.headSha,
 		});
-	const candidates = await database().query<{ id: string }>(
-		`select s.id from agent_session s join project p on p.id=s.project_id and p.user_id=s.user_id
-		join project_repository r on r.project_id=p.id and r.repository_id::bigint=$1
-		where s.task_access='read_write' and s.harness in ('api','codex') and s.parent_session_id is not null
-		and s.task_pull_request_url like $2 and ($3::bigint is null or r.installation_id::bigint=$3)`,
-		[
-			signal.repositoryId,
-			`https://github.com/${signal.fullName}/pull/%`,
-			signal.installationId,
-		],
-	);
-	for (const candidate of candidates.rows) {
-		await database().query(
-			`insert into agent_pr_repair_event(delivery_id,session_id,head_sha,signal) values($1,$2,$3,$4) on conflict do nothing`,
-			[deliveryId, candidate.id, signal.headSha, JSON.stringify(signal)],
-		);
-	}
 	await enqueuePrRepair();
 }

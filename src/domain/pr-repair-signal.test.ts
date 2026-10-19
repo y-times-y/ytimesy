@@ -3,7 +3,6 @@ import {
 	isPrCommentSignal,
 	parsePrRepairSignal,
 	prRepairDelivery,
-	prRepairPrompt,
 } from "./pr-repair-signal";
 
 const sha = "a".repeat(40);
@@ -60,12 +59,6 @@ it("extracts only bounded identifiers; arbitrary webhook text is not stored", ()
 		prNumbers: [],
 	});
 	if (!signal || isPrCommentSignal(signal)) throw new Error("Signal missing");
-	expect(prRepairPrompt(signal, "untrusted review text", 3)).toContain(
-		"Do not merge",
-	);
-	expect(prRepairPrompt(signal, "untrusted review text", 3)).toContain(
-		"untrusted data",
-	);
 });
 
 it("keeps the same-repository pull request numbers GitHub lists on a failed check", () => {

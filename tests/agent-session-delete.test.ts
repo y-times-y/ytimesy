@@ -5,9 +5,6 @@ import {
 	adoptChatPublicationBranch,
 	insertAgentSession,
 	projectBranchHeldByOtherSession,
-	saveAgentTaskPublication,
-	saveAgentTaskReview,
-	saveAgentTaskState,
 	saveSessionBranchSelection,
 	saveSessionWorkingBranch,
 	selectAgentSessionHarness,
@@ -449,11 +446,9 @@ it("deletes a shared child session without destroying its parent's machine", asy
 		prompt: "Inspect the current working tree without editing it.",
 		placement: "shared",
 		access: "read_only",
-		execution: "parallel",
-		dependsOnSessionId: null,
 	});
 	await db.query(
-		"update agent_session set provider_ref='vm-parent' where id=$1",
+		"update agent_session set provider_ref='vm-parent',agent_role='researcher' where id=$1",
 		[child.id],
 	);
 	const destroyed: string[] = [];
@@ -548,7 +543,7 @@ it("opens a new chat without copying a VM and inherits the last listed model", a
 	expect(stored.rows[0]?.listed_model_id).toBe("opencode/big-pickle");
 });
 
-it("stores drafts without compute and gates stacked work on reviewed predecessors", async () => {
+it("stores a subagent draft without compute and starts it once", async () => {
 	const { project, workspaceId } = await readyWorkspace();
 	const root = await insertAgentSession({
 		userId: "alice",
@@ -557,7 +552,7 @@ it("stores drafts without compute and gates stacked work on reviewed predecessor
 		harness: "codex",
 		listedModelId: "codex/gpt-test",
 	});
-	const first = await openAgentTask({
+	const draft = await openAgentTask({
 		userId: "alice",
 		projectId: project.id,
 		parentSessionId: root.id,
@@ -567,57 +562,22 @@ it("stores drafts without compute and gates stacked work on reviewed predecessor
 		prompt: "Implement and verify the schema.",
 		placement: "fresh",
 		access: "read_write",
-		execution: "parallel",
-		dependsOnSessionId: null,
 	});
-	expect(first.taskState).toBe("draft");
-	expect(first.providerRef).toBeNull();
-	const second = await openAgentTask({
-		userId: "alice",
-		projectId: project.id,
-		parentSessionId: root.id,
-		title: "API",
-		harness: "codex",
-		modelId: "codex/gpt-test",
-		prompt: "Build the API on the reviewed schema.",
-		placement: "fresh",
-		access: "read_write",
-		execution: "stacked",
-		dependsOnSessionId: first.id,
-	});
-	await expect(
-		prepareAgentTaskStart({
-			userId: "alice",
-			projectId: project.id,
-			taskSessionId: second.id,
-		}),
-	).rejects.toThrow("finish");
-	await saveAgentTaskState(first.id, "done");
-	await expect(
-		prepareAgentTaskStart({
-			userId: "alice",
-			projectId: project.id,
-			taskSessionId: second.id,
-		}),
-	).rejects.toThrow("Review");
-	await saveAgentTaskReview(first.id, "reviewed");
-	await expect(
-		prepareAgentTaskStart({
-			userId: "alice",
-			projectId: project.id,
-			taskSessionId: second.id,
-		}),
-	).rejects.toThrow("Publish");
-	await saveAgentTaskPublication(first.id, {
-		branch: "ytimesy-task-1",
-		pullRequestUrl: "https://example.test/pull/1",
-	});
+	expect(draft.taskState).toBe("draft");
+	expect(draft.providerRef).toBeNull();
 	const started = await prepareAgentTaskStart({
 		userId: "alice",
 		projectId: project.id,
-		taskSessionId: second.id,
+		taskSessionId: draft.id,
 	});
 	expect(started.task.taskState).toBe("working");
+	await expect(
+		prepareAgentTaskStart({
+			userId: "alice",
+			projectId: project.id,
+			taskSessionId: draft.id,
+		}),
+	).rejects.toThrow("new or idle");
 });
 
 it("gives a branchless root chat its publication branch once, during a running turn, and never renames it", async () => {

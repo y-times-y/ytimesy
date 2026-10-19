@@ -156,7 +156,6 @@ async function builderTurnRequest(input: {
 	return {
 		tools,
 		instructions: agentTurnInstructions({
-			shellBuilder: true,
 			session,
 			tools,
 			plugins: [],

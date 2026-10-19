@@ -97,7 +97,7 @@ async function signedDelivery(event: string, payload: unknown) {
 	});
 }
 
-it("stages @ytimesy comments as chat wake-ups only, and failed checks for both", async () => {
+it("stages @ytimesy comments and failed checks as chat wake-ups", async () => {
 	vi.stubEnv("YTIMESY_PR_REPAIR_ENABLED", "1");
 	vi.stubEnv("GITHUB_PR_REPAIR_WEBHOOK_SECRET", "fixture-only");
 	const repository = { id: 1, full_name: "owner/repo" };
@@ -121,8 +121,6 @@ it("stages @ytimesy comments as chat wake-ups only, and failed checks for both",
 		sourceId: 9,
 		headSha: null,
 	});
-	// Comments never reach task repair's session staging.
-	expect(mocks.query).not.toHaveBeenCalled();
 	mocks.stageWakes.mockClear();
 	await receivePrRepairWebhook(
 		await signedDelivery("check_run", {
@@ -143,5 +141,7 @@ it("stages @ytimesy comments as chat wake-ups only, and failed checks for both",
 			headSha: "a".repeat(40),
 		}),
 	);
-	expect(mocks.query).toHaveBeenCalled();
+	// Retired child-task PR repair staged its own rows; nothing else is written.
+	expect(mocks.query).not.toHaveBeenCalled();
+	expect(mocks.enqueue).toHaveBeenCalledTimes(2);
 });

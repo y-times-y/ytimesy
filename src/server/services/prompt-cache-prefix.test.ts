@@ -69,7 +69,6 @@ function stepSetup(step: number) {
 	return {
 		tools,
 		instructions: agentTurnInstructions({
-			shellBuilder: true,
 			session,
 			tools,
 			plugins: [],

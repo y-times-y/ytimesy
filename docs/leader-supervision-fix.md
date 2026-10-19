@@ -1,5 +1,7 @@
 # Leader supervision and child-card placement
 
+> **Retired (2026-10).** The lead/child task architecture this describes was removed. The root chat is the builder; it delegates only through builder subagents (`agent`/`agent_send`, docs/builder-tool-surface.md). Kept for history; do not implement from it.
+
 Development fix, 2026-10-02. No schema migration, new VM, or API fallback.
 
 ## Behavior

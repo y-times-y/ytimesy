@@ -18,10 +18,6 @@ import { applyProjectEnvironment } from "../adapters/rigkit/apply";
 import { listenForQueuedTurns } from "../adapters/turn-queue-wake";
 import { listReadyWorkspaceIds } from "../adapters/workspaces";
 import {
-	recoverChildTurnEvents,
-	superviseAgentChildren,
-} from "../services/agent-child-supervision";
-import {
 	deliverAgentPeerMessage,
 	type PeerMessage,
 } from "../services/agent-peer-messaging";
@@ -29,6 +25,7 @@ import { deliverAgentTaskEvents } from "../services/agent-task-event-delivery";
 import { deliverPrRepairEvents } from "../services/pr-repair";
 import { captureSessionCheckpoint } from "../services/session-checkpoint";
 import { teardownSubagentForks } from "../services/subagent-runtime";
+import { recoverChildTurnEvents } from "../services/subagent-turn-recovery";
 import type { WorkspaceMachines } from "../services/workspace-machines";
 import { runApiTurn } from "./api-turn";
 import {
@@ -178,8 +175,7 @@ export async function startWorkspaceWorker(machines?: WorkspaceMachines) {
 			await deliverAgentTaskEvents(taskMachines);
 			if (Date.now() - supervisingAt >= 30_000) {
 				supervisingAt = Date.now();
-				await recoverChildTurnEvents();
-				await superviseAgentChildren(taskMachines);
+				await recoverChildTurnEvents(taskMachines);
 				await teardownSubagentForks(taskMachines);
 				await deliverPrRepairEvents(taskMachines);
 			}
