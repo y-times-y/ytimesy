@@ -18,12 +18,15 @@ import {
 import { loadToolsSnapshotSetting } from "../product-settings";
 import { CHEAP_BASE_RESOURCES, CHEAP_BASE_SNAPSHOT } from "./product-vm";
 import {
-	touchWorkspaceRetention,
+	assertRetentionTouched,
+	RETENTION_TOUCH_CTES,
+	retentionTouchParams,
 	workspaceRetentionEnabled,
 } from "./workspace-retention";
 
 type Vm = ReturnType<Freestyle["vms"]["ref"]>;
 type Admission = {
+	slug: string;
 	vm_id: string | null;
 	user_id: string;
 	reservation_id: string;
@@ -48,16 +51,60 @@ export function computeHourlyMicroUsd(resources: VmResources) {
 	return Math.ceil(resources.cpu * 40_320 + (resources.memory / 1024) * 12_900);
 }
 
-async function ownerForSlug(slug: string, client: PoolClient) {
-	const result = await client.query<{ user_id: string }>(
-		`select user_id from workspace where 'ytimesy-ws-' || id::text=$1
-		 union all select user_id from agent_session where 'ytimesy-ag-' || left(replace(id::text,'-',''),16)=$1
-		 union all select w.user_id from environment_build b join workspace w on w.id=b.workspace_id where 'ytimesy-build-' || b.id::text=$1`,
-		[slug],
+const OWNERS_SQL = `select user_id from workspace where 'ytimesy-ws-' || id::text=$1
+ union all select user_id from agent_session where 'ytimesy-ag-' || left(replace(id::text,'-',''),16)=$1
+ union all select w.user_id from environment_build b join workspace w on w.id=b.workspace_id where 'ytimesy-build-' || b.id::text=$1`;
+
+type AdmissionContext = {
+	/** The slug's owners; admission requires exactly one. */
+	owners: string[];
+	admission: Admission | undefined;
+	retention: { phase: string | null; vmId: string | null };
+};
+
+/**
+ * Everything admission reads before deciding, in one round trip: the slug's
+ * owner, its admission row and, for a resume, the workspace retention touch
+ * (which ran first as its own statements before; it still commits even when
+ * admission then refuses).
+ */
+async function admissionContext(
+	client: PoolClient,
+	slug: string,
+	touch?: VmData,
+): Promise<AdmissionContext> {
+	// Without retention for this VM the statement never reads its table.
+	const retention = touch ? retentionTouchParams(touch) : undefined;
+	const touching = retention?.[4] === true;
+	const result = await client.query<
+		Partial<Admission> & {
+			owners: string[] | null;
+			retention_phase: string | null;
+			retention_vm_id: string | null;
+		}
+	>(
+		touching
+			? `with ${RETENTION_TOUCH_CTES}
+		 select (select array_agg(user_id) from (${OWNERS_SQL}) o) as owners,
+		 (select phase from retention_prior) as retention_phase,(select vm_id from retention_prior) as retention_vm_id,
+		 a.* from (select 1) one left join infrastructure_vm_admission a on a.slug=$1`
+			: `select (select array_agg(user_id) from (${OWNERS_SQL}) o) as owners,
+		 null as retention_phase,null as retention_vm_id,
+		 a.* from (select 1) one left join infrastructure_vm_admission a on a.slug=$1`,
+		touching && retention ? retention : [slug],
 	);
-	if (result.rows.length !== 1)
+	const { owners, retention_phase, retention_vm_id, ...row } = result.rows[0];
+	return {
+		owners: owners ?? [],
+		admission: row.slug ? (row as Admission) : undefined,
+		retention: { phase: retention_phase, vmId: retention_vm_id },
+	};
+}
+
+function verifiedOwner(context: AdmissionContext) {
+	if (context.owners.length !== 1)
 		throw new Error("VM usage owner could not be uniquely verified.");
-	return result.rows[0].user_id;
+	return context.owners[0];
 }
 
 /**
@@ -140,6 +187,10 @@ export async function lockedVm<T>(
 	}
 }
 
+const ADMISSION_COLUMNS =
+	"slug,vm_id,user_id,reservation_id,max_run_total_seconds,baseline_seconds,hourly_micro_usd,updated_at";
+
+/** The cap to run against, and the admission row as it now stands. */
 async function admittedCap(
 	slug: string,
 	resources: VmResources,
@@ -148,15 +199,13 @@ async function admittedCap(
 	vmId?: string,
 	requestedSeconds = 300,
 	settled = false,
-) {
+	read?: AdmissionContext,
+): Promise<{ cap: number; row: Admission }> {
 	if (!Number.isFinite(totalSeconds) || totalSeconds < 0)
 		throw new Error("VM runtime counter is unavailable.");
-	const userId = await ownerForSlug(slug, client);
-	const existing = await client.query<Admission>(
-		"select * from infrastructure_vm_admission where slug=$1",
-		[slug],
-	);
-	const previous = existing.rows[0];
+	const context = read ?? (await admissionContext(client, slug));
+	const userId = verifiedOwner(context);
+	const previous = context.admission;
 	if (previous) {
 		if (previous.vm_id && previous.vm_id !== vmId)
 			throw new Error(
@@ -178,7 +227,7 @@ async function admittedCap(
 				requiredSeconds: Math.max(0, requestedSeconds - 15),
 			}) === "keep"
 		)
-			return Number(previous.max_run_total_seconds);
+			return { cap: Number(previous.max_run_total_seconds), row: previous };
 		const consumed = Math.ceil(
 			((totalSeconds - Number(previous.baseline_seconds)) *
 				Number(previous.hourly_micro_usd)) /
@@ -215,17 +264,23 @@ async function admittedCap(
 		client,
 	);
 	// Persist BEFORE provider mutation. A failed create/update retains its hold and retries the same absolute cap.
-	await client.query(
-		`insert into infrastructure_vm_admission(slug,user_id,reservation_id,max_run_total_seconds,baseline_seconds,hourly_micro_usd)
-	 values($1,$2,$3,$4,$5,$6) on conflict(slug) do update set reservation_id=$3,max_run_total_seconds=$4,baseline_seconds=$5,hourly_micro_usd=$6,updated_at=now()`,
-		[slug, userId, id, baseline + seconds, baseline, hourlyMicroUsd],
+	// A known VM binds a row that is unbound or already its own.
+	const saved = await client.query<Admission>(
+		`insert into infrastructure_vm_admission(slug,user_id,reservation_id,max_run_total_seconds,baseline_seconds,hourly_micro_usd,vm_id)
+	 values($1,$2,$3,$4,$5,$6,$7) on conflict(slug) do update set reservation_id=$3,max_run_total_seconds=$4,baseline_seconds=$5,hourly_micro_usd=$6,updated_at=now(),
+	 vm_id=case when $7::text is not null and (infrastructure_vm_admission.vm_id is null or infrastructure_vm_admission.vm_id=$7) then $7 else infrastructure_vm_admission.vm_id end
+	 returning ${ADMISSION_COLUMNS}`,
+		[
+			slug,
+			userId,
+			id,
+			baseline + seconds,
+			baseline,
+			hourlyMicroUsd,
+			vmId ?? null,
+		],
 	);
-	if (vmId)
-		await client.query(
-			"update infrastructure_vm_admission set vm_id=$2 where slug=$1 and (vm_id is null or vm_id=$2)",
-			[slug, vmId],
-		);
-	return baseline + seconds;
+	return { cap: baseline + seconds, row: saved.rows[0] };
 }
 
 export async function admitVmResume(
@@ -260,10 +315,11 @@ export async function admitVmResume(
 	if (settledState(data.state)) await reconcilePausedVm(vm);
 	await lockedVm(data.slug, async (client) => {
 		const latest = await vm.data();
-		await touchWorkspaceRetention(client, latest);
+		const context = await admissionContext(client, data.slug as string, latest);
+		assertRetentionTouched(context.retention, latest);
 		if (latest.totalRunSeconds == null)
 			throw new Error("VM runtime counter is unavailable.");
-		let cap = await admittedCap(
+		let { cap, row } = await admittedCap(
 			data.slug as string,
 			latest.resources,
 			latest.totalRunSeconds,
@@ -271,6 +327,7 @@ export async function admitVmResume(
 			latest.id,
 			Math.max(300, requiredSeconds + 15),
 			settledState(latest.state),
+			context,
 		);
 		if (
 			settledState(latest.state) &&
@@ -279,11 +336,6 @@ export async function admitVmResume(
 			throw new MachineUsageLimitReached();
 		let runningUsage: number | undefined;
 		if (latest.state === "running") {
-			const result = await client.query<Admission>(
-				"select * from infrastructure_vm_admission where slug=$1",
-				[data.slug],
-			);
-			const row = result.rows[0];
 			const elapsed = Math.max(
 				0,
 				Math.ceil((Date.now() - new Date(row.updated_at).getTime()) / 1000),
@@ -324,10 +376,12 @@ export async function admitVmResume(
 			if (confirmed.maxRunTotalSeconds !== cap)
 				throw new Error("Provider did not confirm the execution budget.");
 		}
-		await client.query(
-			"update infrastructure_vm_admission set vm_id=$2 where slug=$1 and (vm_id is null or vm_id=$2)",
-			[data.slug, latest.id],
-		);
+		// Binding a row already bound to this VM would change nothing.
+		if (row.vm_id !== latest.id)
+			await client.query(
+				"update infrastructure_vm_admission set vm_id=$2 where slug=$1 and (vm_id is null or vm_id=$2)",
+				[data.slug, latest.id],
+			);
 		if (runningUsage !== undefined)
 			recentAdmissions.set(latest.id, {
 				cap,
@@ -461,7 +515,7 @@ export async function admitVmCreate(
 				resources = retained.rows[0].resources;
 			}
 		}
-		return admittedCap(
+		const admitted = await admittedCap(
 			slug,
 			requestedResources
 				? effectiveMachineResources(resources, requestedResources)
@@ -471,6 +525,7 @@ export async function admitVmCreate(
 			undefined,
 			requestedSeconds,
 		);
+		return admitted.cap;
 	});
 	const vmId = await create(cap);
 	await database().query(

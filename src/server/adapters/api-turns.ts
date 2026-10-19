@@ -29,6 +29,7 @@ import {
 	recoveredConversation,
 } from "./conversation-recovery";
 import { database } from "./database";
+import { observePeerInbox } from "./peer-inbox-observation";
 import { mirrorTurnHistory } from "./turn-history-mirror";
 
 export type ApiTurn = {
@@ -356,14 +357,22 @@ export async function renewApiTurn(turn: ApiTurn): Promise<boolean> {
 	// the heartbeat fails and the turn settles as a clean stop.
 	const result = await Effect.runPromise(
 		Effect.tryPromise({
-			try: () =>
-				database().query(
+			try: async () => {
+				const startedAt = Date.now();
+				// The inbox flag rides the heartbeat so steps can skip reading an empty inbox.
+				const renewed = await database().query<{ inbox_pending: boolean }>(
 					`with expired as (update api_turn t set cancel_requested=true where t.id=$1 and t.lease_id=$2 and t.state='running'
 		 and not t.cancel_requested and ${turnPastDeadlineSql("t")} returning t.id)
 		 update api_turn set heartbeat_at=now() where id=$1 and lease_id=$2 and state='running' and not cancel_requested
-		 and heartbeat_at>=now()-interval '45 seconds' and not exists(select 1 from expired) returning id`,
+		 and heartbeat_at>=now()-interval '45 seconds' and not exists(select 1 from expired)
+		 returning id,exists(select 1 from agent_peer_inbox q where q.recipient_id=api_turn.session_id and not q.accepted) as inbox_pending`,
 					[turn.id, turn.lease_id],
-				),
+				);
+				const row = renewed.rows?.[0];
+				if (row && turn.session_id)
+					observePeerInbox(turn.session_id, startedAt, row.inbox_pending);
+				return renewed;
+			},
 			catch: (error) => error,
 		}).pipe(
 			Effect.retry({

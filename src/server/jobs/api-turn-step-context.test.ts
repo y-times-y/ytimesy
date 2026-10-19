@@ -220,6 +220,18 @@ it("loads turn-fixed context once and adds no delegation context to a chat witho
 		expect(JSON.stringify(prepared)).not.toContain("Current delegated tasks");
 });
 
+it("publishes the running snapshot on a turn's first step only", async () => {
+	const { publishApiTurnProgress } = await import("../adapters/api-turns");
+	vi.mocked(publishApiTurnProgress).mockClear();
+	await steps(1);
+	const first = vi.mocked(publishApiTurnProgress).mock.calls.length;
+	expect(first).toBeGreaterThan(0);
+	vi.mocked(publishApiTurnProgress).mockClear();
+	// Steps 2 and 3 start from items the previous checkpoint already wrote.
+	await steps(3);
+	expect(vi.mocked(publishApiTurnProgress).mock.calls.length).toBe(first);
+});
+
 it("keeps the delegated-task snapshot for a parent without re-sending it for capacity changes", async () => {
 	state.children = [
 		{

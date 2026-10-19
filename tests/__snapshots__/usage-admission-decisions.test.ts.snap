@@ -1,0 +1,536 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`admits a running VM that has no admission yet and enrolls its retention > round trips 1`] = `10`;
+
+exports[`admits a running VM that has no admission yet and enrolls its retention 1`] = `
+[
+  {
+    "automaticRestart": false,
+    "maxRunTotalSeconds": 450,
+  },
+]
+`;
+
+exports[`admits a running VM that has no admission yet and enrolls its retention 2`] = `
+{
+  "admission": [
+    {
+      "baseline_seconds": "150",
+      "hourly_micro_usd": "132240",
+      "max_run_total_seconds": "450",
+      "reservation_id": "r0",
+      "slug": "ytimesy-ag-0000000000004000",
+      "user_id": "alice",
+      "vm_id": "vm-1",
+    },
+  ],
+  "leases": [],
+  "reservations": [
+    {
+      "consumed_micro_usd": null,
+      "id": "r0",
+      "reserved_micro_usd": "13224",
+      "resource_key": "vm:ytimesy-ag-0000000000004000",
+      "user_id": "alice",
+    },
+  ],
+  "retention": [
+    {
+      "phase": "active",
+      "touched": true,
+      "vm_id": "vm-1",
+    },
+  ],
+}
+`;
+
+exports[`buys a new VM's cap before creating it and binds the VM after > round trips 1`] = `12`;
+
+exports[`buys a new VM's cap before creating it and binds the VM after 1`] = `"vm-new"`;
+
+exports[`buys a new VM's cap before creating it and binds the VM after 2`] = `
+[
+  300,
+]
+`;
+
+exports[`buys a new VM's cap before creating it and binds the VM after 3`] = `
+{
+  "admission": [
+    {
+      "baseline_seconds": "0",
+      "hourly_micro_usd": "132240",
+      "max_run_total_seconds": "300",
+      "reservation_id": "r0",
+      "slug": "ytimesy-ag-0000000000004000",
+      "user_id": "alice",
+      "vm_id": "vm-new",
+    },
+  ],
+  "leases": [],
+  "reservations": [
+    {
+      "consumed_micro_usd": null,
+      "id": "r0",
+      "reserved_micro_usd": "13224",
+      "resource_key": "vm:ytimesy-ag-0000000000004000",
+      "user_id": "alice",
+    },
+  ],
+  "retention": [],
+}
+`;
+
+exports[`keeps a running VM's covering cap without buying runtime > round trips 1`] = `3`;
+
+exports[`keeps a running VM's covering cap without buying runtime 1`] = `
+{
+  "admission": [
+    {
+      "baseline_seconds": "100",
+      "hourly_micro_usd": "132240",
+      "max_run_total_seconds": "1000",
+      "reservation_id": "r0",
+      "slug": "ytimesy-ag-0000000000004000",
+      "user_id": "alice",
+      "vm_id": "vm-1",
+    },
+  ],
+  "leases": [],
+  "reservations": [
+    {
+      "consumed_micro_usd": null,
+      "id": "r0",
+      "reserved_micro_usd": "35264",
+      "resource_key": "vm:ytimesy-ag-0000000000004000",
+      "user_id": "alice",
+    },
+  ],
+  "retention": [
+    {
+      "phase": "active",
+      "touched": true,
+      "vm_id": "vm-1",
+    },
+  ],
+}
+`;
+
+exports[`refuses a paused VM whose allowance cannot buy the operation 1`] = `"This chat's machine reached its usage limit, so it cannot start. Your work is preserved; retry once the cloud usage allowance resets or is raised."`;
+
+exports[`refuses a paused VM whose allowance cannot buy the operation 2`] = `
+{
+  "admission": [
+    {
+      "baseline_seconds": "903",
+      "hourly_micro_usd": "132240",
+      "max_run_total_seconds": "948",
+      "reservation_id": "r1",
+      "slug": "ytimesy-ag-0000000000004000",
+      "user_id": "alice",
+      "vm_id": "vm-1",
+    },
+  ],
+  "leases": [],
+  "reservations": [
+    {
+      "consumed_micro_usd": "11131",
+      "id": "r0",
+      "reserved_micro_usd": "13224",
+      "resource_key": "vm:ytimesy-ag-0000000000004000",
+      "user_id": "alice",
+    },
+    {
+      "consumed_micro_usd": null,
+      "id": "r1",
+      "reserved_micro_usd": "3857",
+      "resource_key": "vm:ytimesy-ag-0000000000004000",
+      "user_id": "alice",
+    },
+  ],
+  "retention": [
+    {
+      "phase": "active",
+      "touched": true,
+      "vm_id": "vm-1",
+    },
+  ],
+}
+`;
+
+exports[`refuses a top-up past the fleet's monthly budget 1`] = `
+{
+  "admission": [
+    {
+      "baseline_seconds": "100",
+      "hourly_micro_usd": "132240",
+      "max_run_total_seconds": "400",
+      "reservation_id": "r0",
+      "slug": "ytimesy-ag-0000000000004000",
+      "user_id": "alice",
+      "vm_id": "vm-1",
+    },
+  ],
+  "leases": [],
+  "reservations": [
+    {
+      "consumed_micro_usd": null,
+      "id": "r0",
+      "reserved_micro_usd": "13224",
+      "resource_key": "vm:ytimesy-ag-0000000000004000",
+      "user_id": "alice",
+    },
+  ],
+  "retention": [
+    {
+      "phase": "active",
+      "touched": true,
+      "vm_id": "vm-1",
+    },
+  ],
+}
+`;
+
+exports[`refuses a top-up past the user's allowance including grants 1`] = `
+{
+  "admission": [
+    {
+      "baseline_seconds": "100",
+      "hourly_micro_usd": "132240",
+      "max_run_total_seconds": "700",
+      "reservation_id": "r0",
+      "slug": "ytimesy-ag-0000000000004000",
+      "user_id": "alice",
+      "vm_id": "vm-1",
+    },
+  ],
+  "leases": [],
+  "reservations": [
+    {
+      "consumed_micro_usd": null,
+      "id": "r0",
+      "reserved_micro_usd": "24244",
+      "resource_key": "vm:ytimesy-ag-0000000000004000",
+      "user_id": "alice",
+    },
+  ],
+  "retention": [
+    {
+      "phase": "active",
+      "touched": true,
+      "vm_id": "vm-1",
+    },
+  ],
+}
+`;
+
+exports[`refuses another generation before touching the provider 1`] = `"Workspace generation changed; the previous usage hold must be reconciled before recovery."`;
+
+exports[`refuses another generation before touching the provider 2`] = `
+{
+  "admission": [
+    {
+      "baseline_seconds": "100",
+      "hourly_micro_usd": "132240",
+      "max_run_total_seconds": "1000",
+      "reservation_id": "r0",
+      "slug": "ytimesy-ag-0000000000004000",
+      "user_id": "alice",
+      "vm_id": "vm-0",
+    },
+  ],
+  "leases": [],
+  "reservations": [
+    {
+      "consumed_micro_usd": null,
+      "id": "r0",
+      "reserved_micro_usd": "35264",
+      "resource_key": "vm:ytimesy-ag-0000000000004000",
+      "user_id": "alice",
+    },
+  ],
+  "retention": [
+    {
+      "phase": "active",
+      "touched": true,
+      "vm_id": "vm-1",
+    },
+  ],
+}
+`;
+
+exports[`refuses another owner before touching the provider 1`] = `"VM usage ownership changed."`;
+
+exports[`refuses another owner before touching the provider 2`] = `
+{
+  "admission": [
+    {
+      "baseline_seconds": "100",
+      "hourly_micro_usd": "132240",
+      "max_run_total_seconds": "1000",
+      "reservation_id": "r0",
+      "slug": "ytimesy-ag-0000000000004000",
+      "user_id": "bob",
+      "vm_id": "vm-1",
+    },
+  ],
+  "leases": [],
+  "reservations": [
+    {
+      "consumed_micro_usd": null,
+      "id": "r0",
+      "reserved_micro_usd": "35264",
+      "resource_key": "vm:ytimesy-ag-0000000000004000",
+      "user_id": "bob",
+    },
+  ],
+  "retention": [
+    {
+      "phase": "active",
+      "touched": true,
+      "vm_id": "vm-1",
+    },
+  ],
+}
+`;
+
+exports[`refuses changed resources before touching the provider 1`] = `"VM resources changed; its budget must be reconciled before resuming."`;
+
+exports[`refuses changed resources before touching the provider 2`] = `
+{
+  "admission": [
+    {
+      "baseline_seconds": "100",
+      "hourly_micro_usd": "1",
+      "max_run_total_seconds": "1000",
+      "reservation_id": "r0",
+      "slug": "ytimesy-ag-0000000000004000",
+      "user_id": "alice",
+      "vm_id": "vm-1",
+    },
+  ],
+  "leases": [],
+  "reservations": [
+    {
+      "consumed_micro_usd": null,
+      "id": "r0",
+      "reserved_micro_usd": "35264",
+      "resource_key": "vm:ytimesy-ag-0000000000004000",
+      "user_id": "alice",
+    },
+  ],
+  "retention": [
+    {
+      "phase": "active",
+      "touched": true,
+      "vm_id": "vm-1",
+    },
+  ],
+}
+`;
+
+exports[`refuses no owner before touching the provider 1`] = `"VM usage owner could not be uniquely verified."`;
+
+exports[`refuses no owner before touching the provider 2`] = `
+{
+  "admission": [
+    {
+      "baseline_seconds": "100",
+      "hourly_micro_usd": "132240",
+      "max_run_total_seconds": "1000",
+      "reservation_id": "r0",
+      "slug": "ytimesy-ag-0000000000004000",
+      "user_id": "alice",
+      "vm_id": "vm-1",
+    },
+  ],
+  "leases": [],
+  "reservations": [
+    {
+      "consumed_micro_usd": null,
+      "id": "r0",
+      "reserved_micro_usd": "35264",
+      "resource_key": "vm:ytimesy-ag-0000000000004000",
+      "user_id": "alice",
+    },
+  ],
+  "retention": [],
+}
+`;
+
+exports[`refuses rebound retention before touching the provider 1`] = `"Workspace recovery binding changed. Retry shortly."`;
+
+exports[`refuses rebound retention before touching the provider 2`] = `
+{
+  "admission": [
+    {
+      "baseline_seconds": "100",
+      "hourly_micro_usd": "132240",
+      "max_run_total_seconds": "1000",
+      "reservation_id": "r0",
+      "slug": "ytimesy-ag-0000000000004000",
+      "user_id": "alice",
+      "vm_id": "vm-1",
+    },
+  ],
+  "leases": [],
+  "reservations": [
+    {
+      "consumed_micro_usd": null,
+      "id": "r0",
+      "reserved_micro_usd": "35264",
+      "resource_key": "vm:ytimesy-ag-0000000000004000",
+      "user_id": "alice",
+    },
+  ],
+  "retention": [
+    {
+      "phase": "active",
+      "touched": false,
+      "vm_id": "vm-0",
+    },
+  ],
+}
+`;
+
+exports[`refuses recovering retention before touching the provider 1`] = `"Workspace recovery is in progress. Retry shortly."`;
+
+exports[`refuses recovering retention before touching the provider 2`] = `
+{
+  "admission": [
+    {
+      "baseline_seconds": "100",
+      "hourly_micro_usd": "132240",
+      "max_run_total_seconds": "1000",
+      "reservation_id": "r0",
+      "slug": "ytimesy-ag-0000000000004000",
+      "user_id": "alice",
+      "vm_id": "vm-1",
+    },
+  ],
+  "leases": [],
+  "reservations": [
+    {
+      "consumed_micro_usd": null,
+      "id": "r0",
+      "reserved_micro_usd": "35264",
+      "resource_key": "vm:ytimesy-ag-0000000000004000",
+      "user_id": "alice",
+    },
+  ],
+  "retention": [
+    {
+      "phase": "capturing",
+      "touched": false,
+      "vm_id": "vm-1",
+    },
+  ],
+}
+`;
+
+exports[`replays a reservation idempotently and refuses a changed identity 1`] = `
+{
+  "admission": [],
+  "leases": [],
+  "reservations": [
+    {
+      "consumed_micro_usd": "700",
+      "id": "r0",
+      "reserved_micro_usd": "1500",
+      "resource_key": "vm:x",
+      "user_id": "alice",
+    },
+  ],
+  "retention": [],
+}
+`;
+
+exports[`settles a paused VM and buys a fresh cap before resuming it > round trips 1`] = `22`;
+
+exports[`settles a paused VM and buys a fresh cap before resuming it 1`] = `
+[
+  {
+    "automaticRestart": false,
+    "maxRunTotalSeconds": 903,
+  },
+  {
+    "automaticRestart": false,
+    "maxRunTotalSeconds": 1203,
+  },
+]
+`;
+
+exports[`settles a paused VM and buys a fresh cap before resuming it 2`] = `
+{
+  "admission": [
+    {
+      "baseline_seconds": "903",
+      "hourly_micro_usd": "132240",
+      "max_run_total_seconds": "1203",
+      "reservation_id": "r1",
+      "slug": "ytimesy-ag-0000000000004000",
+      "user_id": "alice",
+      "vm_id": "vm-1",
+    },
+  ],
+  "leases": [],
+  "reservations": [
+    {
+      "consumed_micro_usd": "11131",
+      "id": "r0",
+      "reserved_micro_usd": "13224",
+      "resource_key": "vm:ytimesy-ag-0000000000004000",
+      "user_id": "alice",
+    },
+    {
+      "consumed_micro_usd": null,
+      "id": "r1",
+      "reserved_micro_usd": "13224",
+      "resource_key": "vm:ytimesy-ag-0000000000004000",
+      "user_id": "alice",
+    },
+  ],
+  "retention": [
+    {
+      "phase": "active",
+      "touched": true,
+      "vm_id": "vm-1",
+    },
+  ],
+}
+`;
+
+exports[`tops up a running VM whose cap no longer covers the operation > round trips 1`] = `9`;
+
+exports[`tops up a running VM whose cap no longer covers the operation 1`] = `
+{
+  "admission": [
+    {
+      "baseline_seconds": "100",
+      "hourly_micro_usd": "132240",
+      "max_run_total_seconds": "700",
+      "reservation_id": "r0",
+      "slug": "ytimesy-ag-0000000000004000",
+      "user_id": "alice",
+      "vm_id": "vm-1",
+    },
+  ],
+  "leases": [],
+  "reservations": [
+    {
+      "consumed_micro_usd": null,
+      "id": "r0",
+      "reserved_micro_usd": "24244",
+      "resource_key": "vm:ytimesy-ag-0000000000004000",
+      "user_id": "alice",
+    },
+  ],
+  "retention": [
+    {
+      "phase": "active",
+      "touched": true,
+      "vm_id": "vm-1",
+    },
+  ],
+}
+`;

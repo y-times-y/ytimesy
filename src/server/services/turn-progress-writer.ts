@@ -35,6 +35,13 @@ export function turnProgressWriter(
 			latest = items;
 			start();
 		},
+		/**
+		 * Drops a snapshot not yet being written: the caller is about to write
+		 * newer items itself (a checkpoint), so writing it first is wasted.
+		 */
+		supersede() {
+			latest = undefined;
+		},
 		async drain() {
 			while (running) await running;
 			if (failed) throw failure;
