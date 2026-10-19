@@ -1,0 +1,251 @@
+import type { ModelMessage, ToolSet } from "ai";
+import type { ApiAgentEvent } from "../../src/domain/api-agent-event";
+import {
+	CODE_MODE_TOOL,
+	type CodeModeResult,
+} from "../../src/domain/code-mode";
+import type { HarnessVariant } from "../../src/domain/harness-variant";
+import type { ModelProvider } from "../../src/domain/model-connection";
+import type { SubagentBudget, SubagentRole } from "../../src/domain/subagent";
+import {
+	archiveModelContext,
+	type ContextArchiveStorage,
+} from "../../src/server/adapters/context-archives";
+import { nativeWebSearchTools } from "../../src/server/adapters/native-web-search";
+import { agentContextArchiveTools } from "../../src/server/services/agent-context-archive-tools";
+import { agentOutputArtifacts } from "../../src/server/services/agent-output-artifacts";
+import type { AgentToolWorkspace } from "../../src/server/services/agent-tool-workspace";
+import { agentTurnInstructions } from "../../src/server/services/agent-turn-instructions";
+import { apiAgentCommandTools } from "../../src/server/services/api-agent-command-tools";
+import { apiAgentFileTools } from "../../src/server/services/api-agent-file-tools";
+import { apiAgentImageTools } from "../../src/server/services/api-agent-image-tools";
+import { apiAgentLanguageTools } from "../../src/server/services/api-agent-language-tools";
+import { apiAgentSearchTools } from "../../src/server/services/api-agent-search-tools";
+import { automaticRepositoryContext } from "../../src/server/services/automatic-repository-context";
+import { batchedAgentReads } from "../../src/server/services/batched-agent-reads";
+import { builderToolSurface } from "../../src/server/services/builder-shell-surface";
+import { codeModeTool } from "../../src/server/services/code-mode-tool";
+import { codeToolingTools } from "../../src/server/services/code-tooling";
+import { compactionStateSnapshot } from "../../src/server/services/compaction-state-snapshot";
+import { dapDebuggerTools } from "../../src/server/services/dap-debugger";
+import type { ModelAgentInput } from "../../src/server/services/model-agent-loop";
+import { nodeDebuggerTools } from "../../src/server/services/node-debugger";
+import { repositoryGuidanceTool } from "../../src/server/services/repository-guidance";
+
+/**
+ * The product builder's turn setup (src/server/jobs/api-turn.ts) rebuilt
+ * without the database: the same base tools, builderToolSurface for the
+ * variant (lean by default), repository instructions as conversation
+ * messages, code mode when asked, the provider's hosted web search, native
+ * compaction's state snapshot, and the product's own system prompt
+ * (agentTurnInstructions) for a root builder. Write-once receipts and turn
+ * memos live in memory: a Harbor trial is one process, never resumed.
+ *
+ * Not reproduced (they need the product's database or job stack, or a
+ * person): cross-chat memory, plan mode, MCP connections from the user's
+ * account (task MCP servers are reached through the mcp-call helper),
+ * plugins, project secrets, repository lifecycle hooks, subagents, the
+ * attempt loop and the background-command completion gate.
+ */
+
+export type HarborWorkspace = AgentToolWorkspace & {
+	signal: AbortSignal;
+	sessionId: string;
+	turnId: string;
+};
+
+/** In-memory write-once receipts: each tool call id runs once. */
+export function memoryReceipts() {
+	const receipts = new Map<string, Promise<unknown>>();
+	return (id: string, run: () => Promise<unknown>) => {
+		let receipt = receipts.get(id);
+		if (!receipt) {
+			receipt = run();
+			receipts.set(id, receipt);
+		}
+		return receipt;
+	};
+}
+
+function memoryMemo() {
+	const values = new Map<string, Promise<unknown>>();
+	return <T>(key: string, load: () => Promise<T>) => {
+		let value = values.get(key) as Promise<T> | undefined;
+		if (!value) {
+			value = load();
+			values.set(key, value);
+		}
+		return value;
+	};
+}
+
+/**
+ * The product's base tool set (apiAgentTools' repository tools) over the
+ * Harbor workspace. A Codex subscription gets Codex's freeform apply_patch
+ * and an official OpenAI endpoint the public Responses one, as in api-turn.
+ */
+export function harborBaseTools(
+	workspace: HarborWorkspace,
+	options: { nativePatch: boolean; freeformPatch: boolean; readOnly?: boolean },
+): ToolSet {
+	const once = memoryReceipts();
+	const execution = {
+		...workspace,
+		ownerSessionId: workspace.sessionId,
+		readOnly: options.readOnly ?? false,
+		once,
+	};
+	const output = agentOutputArtifacts(execution);
+	const tools: ToolSet = {
+		...apiAgentFileTools({
+			...execution,
+			output,
+			nativePatch: options.nativePatch,
+			freeformPatch: options.freeformPatch,
+		}),
+		...apiAgentSearchTools({ ...execution, output }),
+		...apiAgentLanguageTools(execution),
+		...apiAgentImageTools(execution),
+		...apiAgentCommandTools({ ...execution, output }),
+		...nodeDebuggerTools(execution),
+		...dapDebuggerTools(execution),
+		...codeToolingTools(execution),
+		read_tool_output: output.readTool,
+		read_repository_guidance: repositoryGuidanceTool(execution),
+	};
+	tools.batch_read = batchedAgentReads(tools, workspace.signal);
+	return tools;
+}
+
+export type HarborHarness = {
+	tools: ToolSet;
+	instructions: string;
+	/** ModelAgentInput hooks: repository context, archives, compaction snapshot. */
+	input: Pick<
+		ModelAgentInput,
+		| "prepareMessages"
+		| "afterTools"
+		| "restoreInstructions"
+		| "archiveHistory"
+		| "compactionSnapshot"
+		| "isUserRequest"
+	>;
+	leanShape: string | null;
+};
+
+export async function harborHarness(input: {
+	workspace: HarborWorkspace;
+	userId: string;
+	modelId: string;
+	/** The route's provider, for hosted web search and patch shape. */
+	provider: ModelProvider | "codex-subscription";
+	variant: HarnessVariant;
+	webSearch: boolean;
+	instruction: string;
+	storage: ContextArchiveStorage;
+	onEvent: (event: ApiAgentEvent) => Promise<void>;
+	/** A task's MCP servers, reachable through the mcp-call helper. */
+	mcpNote?: string;
+	/** A runtime subagent (the review loop's checker): its role and budget, no web search. */
+	subagent?: { role: SubagentRole; budget: SubagentBudget };
+}): Promise<HarborHarness> {
+	const { workspace, variant } = input;
+	const memo = memoryMemo();
+	const leanOnce = memoryReceipts();
+	const subscription = input.provider === "codex-subscription";
+	const base = harborBaseTools(workspace, {
+		nativePatch: input.provider === "openai",
+		freeformPatch: subscription,
+	});
+	const archiveTools = agentContextArchiveTools({
+		userId: input.userId,
+		sessionId: workspace.sessionId,
+		signal: workspace.signal,
+		storage: input.storage,
+	});
+	const repositoryContext = automaticRepositoryContext({
+		tools: { ...base, ...archiveTools },
+		workspace: async () => workspace,
+		signal: workspace.signal,
+		// Builders get repository instructions as messages, like AGENTS.md in Codex.
+		instructionMessages: { turnStart: true },
+		onEvent: input.onEvent,
+	});
+	const surface = builderToolSurface({
+		variant: variant.toolSurface,
+		modelId: input.modelId,
+		tools: repositoryContext.tools,
+		lean: {
+			workspace: async () => workspace,
+			sessionId: workspace.sessionId,
+			turnId: workspace.turnId,
+			signal: workspace.signal,
+			once: (requestId, _fingerprint, run) => leanOnce(requestId, run),
+			memo,
+		},
+	});
+	const webSearch =
+		input.webSearch && !input.subagent
+			? nativeWebSearchTools(
+					input.provider === "codex-subscription" ? "openai" : input.provider,
+				)
+			: {};
+	let tools: ToolSet = { ...surface.tools, ...webSearch };
+	if (variant.codeMode === "on" && surface.lean) {
+		const journal = new Map<string, CodeModeResult>();
+		const runCode = codeModeTool({
+			tools,
+			signal: workspace.signal,
+			sessionId: workspace.sessionId,
+			turnId: workspace.turnId,
+			journal: (toolCallId) => ({
+				recorded: async () => journal.get(toolCallId),
+				record: async (result) => {
+					journal.set(toolCallId, result);
+				},
+			}),
+		});
+		if (runCode) tools = { ...tools, [CODE_MODE_TOOL]: runCode };
+	}
+	const instructions = agentTurnInstructions({
+		shellBuilder: true,
+		session: input.subagent
+			? {
+					parentSessionId: "harbor-builder",
+					agentRole: input.subagent.role,
+					agentBudget: input.subagent.budget,
+				}
+			: { parentSessionId: null },
+		tools,
+		plugins: [],
+		projectKnowledge: null,
+		leanShape: surface.lean?.shape,
+		leanWorkingDirectory: surface.lean ? workspace.cwd : undefined,
+	});
+	return {
+		tools,
+		instructions: `${instructions}${input.mcpNote ?? ""}`,
+		leanShape: surface.lean?.shape ?? null,
+		input: {
+			prepareMessages: repositoryContext.prepare,
+			afterTools: repositoryContext.afterTools,
+			restoreInstructions: repositoryContext.restoreInstructions,
+			archiveHistory: async (history: ModelMessage[]) => {
+				const reference = await archiveModelContext(
+					input.userId,
+					workspace.sessionId,
+					history,
+					input.storage,
+				);
+				// A lean surface has no archive tools: it searches a file instead.
+				const file = await surface.lean?.saveHistory(reference, history);
+				return file ? { file } : reference;
+			},
+			compactionSnapshot: compactionStateSnapshot({
+				workspace: async () => workspace,
+			}),
+			isUserRequest: (message: ModelMessage) =>
+				message.role === "user" && message.content === input.instruction,
+		},
+	};
+}

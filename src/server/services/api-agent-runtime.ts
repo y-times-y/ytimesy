@@ -1,4 +1,4 @@
-import type { ModelMessage } from "ai";
+import type { LanguageModel, ModelMessage } from "ai";
 import type { ApiModelSpeedId } from "#/domain/api-model-list";
 import { defaultMaxOutputTokens } from "#/domain/api-output-limit";
 import { ApiModelPreparationFailure } from "#/domain/api-turn-failure";
@@ -142,11 +142,17 @@ export async function apiModelRuntime(
 		reasoning?: string;
 		maxOutputTokens?: number;
 		fetch: typeof globalThis.fetch;
+		/**
+		 * Wraps the model before anything uses it (an evaluation's spending
+		 * guard), so native compaction's requests go through the wrapper too.
+		 */
+		wrapModel?: (model: LanguageModel) => LanguageModel;
 	},
 	onStage: (stage: string) => void = () => {},
 ): Promise<ModelAgentRuntime> {
 	onStage("model");
-	const model = connectedLanguageModel(input, input.fetch);
+	const connected = connectedLanguageModel(input, input.fetch);
+	const model = input.wrapModel ? input.wrapModel(connected) : connected;
 	const cacheSettings = apiPromptCacheSettings({
 		provider: input.provider,
 		baseUrl: input.baseUrl,
