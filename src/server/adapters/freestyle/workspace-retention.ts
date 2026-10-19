@@ -25,6 +25,7 @@ import { scrubAgentSecrets } from "./scrub-agent-secrets";
 import {
 	admitVmCreate,
 	computeHourlyMicroUsd,
+	infrastructureAdmissionEnabled,
 	lockedVm,
 } from "./usage-admission";
 import { waitUntilVmRunning } from "./wait-until-running";
@@ -43,7 +44,7 @@ type Retention = {
 export function workspaceRetentionEnabled() {
 	return (
 		process.env.YTIMESY_WORKSPACE_RETENTION === "true" &&
-		process.env.YTIMESY_INFRASTRUCTURE_ADMISSION === "true"
+		infrastructureAdmissionEnabled()
 	);
 }
 
