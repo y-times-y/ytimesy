@@ -61,6 +61,22 @@ export const HARNESS_VARIANT_VALUES = {
 	 * (src/server/services/pr-evidence.ts); off changes nothing (the default).
 	 */
 	prEvidence: ["off", "on"],
+	/**
+	 * Behavioural guidance on a lean surface (src/domain/instruction-profiles.ts,
+	 * docs/instruction-tuning.md): default = the model family's chosen profile
+	 * (INSTRUCTION_PROFILE_BY_FAMILY, baseline for every family today);
+	 * baseline = the v13-lean guidance unchanged; verify-hard, plan-first and
+	 * persist each add one paragraph; concise replaces the guidance with a
+	 * short version.
+	 */
+	instructions: [
+		"baseline",
+		"verify-hard",
+		"plan-first",
+		"persist",
+		"concise",
+		"default",
+	],
 } as const;
 
 type Values = typeof HARNESS_VARIANT_VALUES;
@@ -74,6 +90,7 @@ export type PromptCacheScope = HarnessVariant["promptCacheScope"];
 export type CodeMode = HarnessVariant["codeMode"];
 export type SubagentsMode = HarnessVariant["subagents"];
 export type PrEvidence = HarnessVariant["prEvidence"];
+export type InstructionVariant = HarnessVariant["instructions"];
 
 export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	memoryWording: "rules",
@@ -83,6 +100,7 @@ export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	codeMode: "off",
 	subagents: "off",
 	prEvidence: "off",
+	instructions: "default",
 };
 
 /**

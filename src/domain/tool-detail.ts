@@ -91,6 +91,8 @@ export function publicToolDetail(
 	const safe = redactSecrets(format === "output" ? toolOutputText(text) : text)
 		.replace(/\bsk-[\w-]{12,}/g, "[redacted]")
 		.replace(/\bAIza[\w-]{20,}/g, "[redacted]")
+		// Google's newer key format (AQ. and an opaque token).
+		.replace(/\bAQ\.[\w-]{30,}/g, "[redacted]")
 		.replace(
 			/((?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)["']?\s*[:=]\s*)(["'])(.*?)\2/gi,
 			"$1$2[redacted]$2",

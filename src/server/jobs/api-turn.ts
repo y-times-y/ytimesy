@@ -954,6 +954,7 @@ async function runApiTurnAttempt(
 						}
 					: undefined,
 			cacheScopeId: promptCacheScopeId(variant.promptCacheScope, owner.id),
+			instructionVariant: variant.instructions,
 			userId: turn.user_id,
 			connectionId: route.connectionId ?? undefined,
 			connectionRevision: route.connectionRevision,

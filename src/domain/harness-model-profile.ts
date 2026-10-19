@@ -1,5 +1,10 @@
 import type { ModelMessage } from "ai";
 import type { HarnessToolSurfaceId } from "./harness-variant";
+import {
+	CONCISE_GUIDANCE,
+	INSTRUCTION_PROFILE_ADDITIONS,
+	type InstructionProfile,
+} from "./instruction-profiles";
 
 export type HarnessModelFamily = "openai" | "anthropic" | "google" | "other";
 
@@ -256,6 +261,7 @@ const SHELL_BEHAVIOUR = [
 function leanHarnessInstructions(
 	shape: LeanToolShape,
 	family: HarnessModelFamily,
+	profile: InstructionProfile,
 ) {
 	const { command: run, edit } = LEAN_SHAPE_TOOLS[shape];
 	const context =
@@ -264,11 +270,20 @@ function leanHarnessInstructions(
 			: family === "google"
 				? "Thought signatures are provider-managed continuation state. Do not reconstruct them or claim a missing thought was recovered; use source and ~/.ytimesy/history/ evidence."
 				: "After compaction, rely on files, command output and ~/.ytimesy/history/, not on reasoning you remember.";
+	// Baseline keeps its exact v13-lean text; other profiles name themselves
+	// (docs/instruction-tuning.md).
+	const label = profile === "baseline" ? "v13-lean" : `v13-lean+${profile}`;
+	const header = `Harness tool profile ${label} (${family}): Edit files with ${edit}, or from ${run} when you can make the edit and run its check in the same command. ${context}`;
+	if (profile === "concise")
+		return `${header} Inspect with ${run}, reading related files together in one command. ${CONCISE_GUIDANCE}`;
 	return [
-		`Harness tool profile v13-lean (${family}): Edit files with ${edit}, or from ${run} when you can make the edit and run its check in the same command. ${context}`,
+		header,
 		`Inspect with ${run} (rg, sed -n, git, project CLIs), reading related files together in one command rather than slice by slice, and reproduce the problem with the smallest executable check early. Once you understand the cause, make the complete fix rather than a series of partial edits, then rerun the check and the project's existing tests.`,
 		...SHELL_BEHAVIOUR,
-	].join(" ");
+		profile === "baseline" ? "" : INSTRUCTION_PROFILE_ADDITIONS[profile],
+	]
+		.filter(Boolean)
+		.join(" ");
 }
 
 export function harnessModelToolInstructions(
@@ -276,6 +291,8 @@ export function harnessModelToolInstructions(
 	/** "freeform": Codex's grammar-constrained apply_patch that takes raw patch text. */
 	nativePatch: boolean | "freeform",
 	availableTools?: readonly string[],
+	/** Lean surfaces only: the behavioural guidance profile (instruction-profiles.ts). */
+	profile: InstructionProfile = "baseline",
 ) {
 	const editing =
 		nativePatch === "freeform"
@@ -295,7 +312,7 @@ export function harnessModelToolInstructions(
 	// agentTurnInstructions; this adds the same behavioural guidance as
 	// v13-shell in the lean tools' names, so a comparison measures the tools.
 	const lean = availableTools && leanSurfaceShape(availableTools);
-	if (lean) return leanHarnessInstructions(lean, family);
+	if (lean) return leanHarnessInstructions(lean, family, profile);
 	// A shell-shaped surface (like native Codex) gets shell-centric guidance
 	// instead of instructions for specialist tools it was not offered.
 	if (availableTools && isShellSurface(availableTools))
