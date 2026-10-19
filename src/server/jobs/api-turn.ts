@@ -56,7 +56,10 @@ import {
 import { modelBilling } from "#/domain/model-pricing";
 import { modelStepLimit } from "#/domain/model-workflow";
 import { posixShellCommand } from "#/domain/posix-command";
-import { agentSecretsEnvFile } from "#/domain/project-secret";
+import {
+	agentSecretsEnvFile,
+	sessionReceivesProjectSecrets,
+} from "#/domain/project-secret";
 import { modelSwitchHistory } from "#/domain/runtime-handoff";
 import type {
 	ModelSwitchItem,
@@ -548,6 +551,8 @@ async function runApiTurnAttempt(
 					),
 				)
 			: null;
+		// Readers keep the values for redaction but get no env file or names.
+		const receivesSecrets = sessionReceivesProjectSecrets(owner);
 		let secretsWritten: Promise<void> | undefined;
 		let attachmentsWritten: Promise<void> | undefined;
 		const prepareWorkspace = deferredApiTurnWorkspace(
@@ -561,7 +566,7 @@ async function runApiTurnAttempt(
 		const workspace = async () => {
 			execution = await timed("turn:workspace", prepareWorkspace);
 			let secretsReady: Promise<void> | undefined;
-			if (projectSecrets) {
+			if (projectSecrets && receivesSecrets) {
 				const { machines: vmMachines, vm } = execution;
 				// The env file stays on the VM's disk across steps; a new VM gets it written.
 				secretsWritten ??= turnMemo(
@@ -733,12 +738,15 @@ async function runApiTurnAttempt(
 		// prompt (Claude Code's tools take absolute paths). The first step
 		// prepares the workspace before the model is called anyway; later steps
 		// reuse the memo, so the prompt stays byte-stable for caching.
+		// Preparing the workspace here is a workspace failure, not a connection one.
+		failureStage = "workspace";
 		const leanWorkingDirectory = surface.lean
 			? await turnMemo(
 					`${turn.id}:lean-working-directory`,
 					async () => (await workspace()).cwd,
 				)
 			: undefined;
+		failureStage = "connection";
 		// The user's remote MCP servers are called from here; credentials never reach the VM.
 		// Connections are live HTTP clients bound to this step's request, so a
 		// step that calls a tool connects again; the tool lists are reused. A
@@ -1063,7 +1071,7 @@ async function runApiTurnAttempt(
 					tools,
 					plugins,
 					projectKnowledge,
-					secretNames: projectSecrets?.names,
+					secretNames: receivesSecrets ? projectSecrets?.names : undefined,
 					leanShape: surface.lean?.shape,
 					leanWorkingDirectory,
 					deferredTools: deferral?.deferred,

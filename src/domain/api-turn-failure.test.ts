@@ -12,6 +12,7 @@ import {
 	SafeApiModelFailure,
 	SubscriptionMetadataFailure,
 } from "./api-turn-failure";
+import { PROJECT_SECRETS_PREPARATION_FAILED } from "./project-secret";
 
 it("preserves safe metadata failure categories in the visible model-stage error", () => {
 	for (const reason of [
@@ -50,6 +51,15 @@ it("distinguishes safe failure stages without exposing provider details", () => 
 	expect(apiTurnFailureMessage("workspace")).toContain("workspace");
 	expect(apiTurnFailureMessage("budget")).toContain("before a model request");
 	expect(apiTurnFailureMessage("model")).toContain("No fallback was used");
+});
+
+it("reports a project secrets failure as a workspace failure, never a connection change", () => {
+	const message = apiTurnFailureMessage(
+		"workspace",
+		new Error(PROJECT_SECRETS_PREPARATION_FAILED),
+	);
+	expect(message).toContain("secrets could not be written");
+	expect(message).not.toContain("API connection");
 });
 
 function providerFailure(statusCode: number, data?: unknown) {

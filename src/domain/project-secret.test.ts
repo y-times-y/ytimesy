@@ -14,6 +14,7 @@ import {
 	redactSecretValues,
 	SECRET_COMMIT_GUARD,
 	secretForms,
+	sessionReceivesProjectSecrets,
 } from "./project-secret";
 
 describe("project secrets", () => {
@@ -123,5 +124,15 @@ describe("project secrets", () => {
 		writeFileSync(join(repo, "leak.txt"), "key = sk_test_abcdef123\n");
 		expect(() => sh(`git add -A && ${guard}`)).toThrow(/STRIPE_KEY/);
 		expect(sh("git diff --cached --name-only")).toBe("");
+	});
+});
+
+describe("who receives project secrets", () => {
+	it("gives the builder and writers the env file, never read-only subagents", () => {
+		expect(sessionReceivesProjectSecrets({})).toBe(true);
+		expect(sessionReceivesProjectSecrets({ agentRole: null })).toBe(true);
+		expect(sessionReceivesProjectSecrets({ agentRole: "writer" })).toBe(true);
+		for (const agentRole of ["researcher", "reviewer", "checker"] as const)
+			expect(sessionReceivesProjectSecrets({ agentRole })).toBe(false);
 	});
 });
