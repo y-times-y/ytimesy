@@ -1,5 +1,6 @@
 import type { ToolSet } from "ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { evalWorkSuffix } from "#/domain/eval-prompt";
 import {
 	DEFAULT_HARNESS_VARIANT,
 	type HarnessVariant,
@@ -315,6 +316,54 @@ it("sends run_code and the lean tools to the Codex subscription when codeMode=pr
 	expect(record).toMatchObject({ turnId: "turn", step: 1, call: 0 });
 	expect(record.tools).toEqual(names);
 	expect(saved.instructions).toBe(body.instructions);
+});
+
+it("sends nothing in code mode primary that batches several steps into one shell command", async () => {
+	const { body } = await sentRequest({ codeMode: "primary", subagents: "on" });
+	const text = [
+		body.instructions,
+		...body.tools.map((tool) => tool.description ?? ""),
+	].join("\n");
+	expect(text).not.toMatch(
+		/in one command|in the same command|one combined verification command|command or script|from bash when/,
+	);
+	expect(text).toContain(
+		"cover any remaining ones in one run_code program running the checks (Promise.all where independent)",
+	);
+});
+
+it("sends a byte-identical system prompt and tool list on every step", async () => {
+	const variant = { codeMode: "primary", subagents: "on" } as const;
+	const first = await sentRequest(variant, { step: 1 });
+	const second = await sentRequest(variant, { step: 2 });
+	const third = await sentRequest(variant, { step: 3 });
+	expect(second.body.instructions).toBe(first.body.instructions);
+	expect(JSON.stringify(second.body.tools)).toBe(
+		JSON.stringify(first.body.tools),
+	);
+	expect(third.body.instructions).toBe(first.body.instructions);
+	expect(JSON.stringify(third.body.tools)).toBe(
+		JSON.stringify(first.body.tools),
+	);
+});
+
+it("sends the eval suffix without child tasks or a ban on delegation when subagents are on", async () => {
+	const suffix = evalWorkSuffix({
+		where: "environment",
+		done: "task",
+		subagents: true,
+	});
+	const { body } = await sentRequest(
+		{ codeMode: "primary", subagents: "on" },
+		{ text: `Fix the compaction bug in /app.${suffix}` },
+	);
+	const sent = JSON.stringify(body);
+	expect(sent).toContain(
+		"Work in this environment: no plan proposal, commits, pull requests or publishing.",
+	);
+	expect(sent).not.toContain("child tasks");
+	expect(sent).not.toMatch(/work directly/i);
+	expect(body.instructions).toContain("delegating only as below");
 });
 
 it("offers no run_code with code mode off", async () => {
