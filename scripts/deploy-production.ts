@@ -1,7 +1,10 @@
 import { execFileSync } from "node:child_process";
 import { createHmac, createPrivateKey } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { productionRuntimeSettings } from "./production-settings";
+import {
+	productionAnalyticsSettings,
+	productionRuntimeSettings,
+} from "./production-settings";
 
 /**
  * Production deploy for the edge executor and the web Worker. Not run yet:
@@ -120,9 +123,8 @@ secrets.YTIMESY_GIT_PROXY_SECRET = secrets.GIT_PROXY_SECRET;
 // Background delivery and recovery address the same chat objects as inference.
 secrets.YTIMESY_REALTIME_URL = secrets.YTIMESY_GIT_PROXY_URL;
 Object.assign(secrets, productionRuntimeSettings(process.env));
+Object.assign(secrets, productionAnalyticsSettings(process.env));
 for (const name of [
-	"POSTHOG_KEY",
-	"POSTHOG_HOST",
 	"GOOGLE_CLIENT_ID",
 	"GOOGLE_CLIENT_SECRET",
 	"YTIMESY_TOOLS_SNAPSHOT_ID",
