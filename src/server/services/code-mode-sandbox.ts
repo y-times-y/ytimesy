@@ -149,10 +149,20 @@ function prelude(
 	const write = globalThis.__ytimesyLog;
 	delete globalThis.__ytimesyCall;
 	delete globalThis.__ytimesyLog;
+	// A failed call resolves to a failure value instead of rejecting, so one
+	// missing file or refused edit never sinks a Promise.all and the other
+	// results still come back.
+	const failed = (name, error) => {
+		const message = error && typeof error.message === "string" ? error.message : String(error);
+		return Object.freeze({ ok: false, tool: name, error: message, toString: () => "[" + name + " failed] " + message });
+	};
 	const tools = {};
 	for (const name of ${JSON.stringify(names)}) {
 		tools[name] = (args) =>
-			call(name, JSON.stringify(args === undefined ? {} : args)).then((text) => JSON.parse(text));
+			call(name, JSON.stringify(args === undefined ? {} : args)).then(
+				(text) => JSON.parse(text),
+				(error) => failed(name, error),
+			);
 	}
 	const show = (value) => {
 		if (typeof value === "string") return value;
@@ -162,6 +172,9 @@ function prelude(
 	const log = (level) => (...values) => write(level, values.map(show).join(" "));
 	globalThis.tools = Object.freeze(tools);
 	globalThis.console = Object.freeze({ log: log("log"), info: log("info"), warn: log("warn"), error: log("error"), debug: log("debug") });
+	// text(...) adds to what comes back as the program goes, kept even if it later throws.
+	globalThis.text = log("log");
+	globalThis.print = globalThis.text;
 })();`;
 }
 

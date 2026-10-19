@@ -250,6 +250,9 @@ describe("run_code on the lean surface", () => {
 			expect(description).toContain(`tools.${name}(args)`);
 		for (const name of ["web_search", "propose_plan", "report_task_blocked"])
 			expect(description).not.toContain(`tools.${name}(`);
+		expect(description).toContain("resolves to { ok: false, error }");
+		expect(description).toContain("text(...) output");
+		expect(description).not.toContain("rejects");
 		expect(
 			codeModeTool({
 				tools: {},
@@ -314,11 +317,11 @@ describe("run_code on the lean surface", () => {
 		const program = await runCode(
 			tools,
 			`const read = await tools.read({ path: "src/a.txt" });
-			let missing; try { await tools.read({ path: "src/nope.txt" }); } catch (error) { missing = error.message; }
+			const missing = (await tools.read({ path: "src/nope.txt" })).error;
 			const failed = await tools.bash({ command: "echo out; echo err >&2; exit 3" });
 			const long = await tools.bash({ command: "seq 1 3000" });
-			let badEdit; try { await tools.edit({ path: "src/a.txt", edits: [{ old_string: "gamma", new_string: "x" }] }); } catch (error) { badEdit = error.message; }
-			let invalid; try { await tools.read({ path: 42 }); } catch (error) { invalid = error.message; }
+			const badEdit = (await tools.edit({ path: "src/a.txt", edits: [{ old_string: "gamma", new_string: "x" }] })).error;
+			const invalid = (await tools.read({ path: 42 })).error;
 			return { read, missing, failed, longTail: long.output.slice(-300), longLines: long.output.split("\\n").length, badEdit, invalid };`,
 		);
 		expect(program.ok).toBe(true);
@@ -465,7 +468,7 @@ describe("run_code on the lean surface", () => {
 				// Shell writes are refused as for a direct call: best effort, heredoc writes.
 				() => tools.bash({ command: "cat > src/plan.txt <<'EOF'\\nchanged\\nEOF" }),
 			]) {
-				try { await attempt(); refusals.push("ran"); } catch (error) { refusals.push(error.message); }
+				const r = await attempt(); refusals.push(r.ok === false ? r.error : "ran");
 			}
 			return { before, refusals };`,
 		);
@@ -600,8 +603,13 @@ describe("code mode primary", () => {
 		expect(description).toContain("Promise.all([tools.read({ path:");
 		expect(description).toContain('tools.bash({ command: "npm test');
 		expect(description).toContain(
-			'Edit then test: await tools.edit({ path: "src/a.ts", edits: [{ old_string:',
+			'Edit then test: const e = await tools.edit({ path: "src/a.ts", edits: [{ old_string:',
 		);
+		expect(description).toContain("if (e.ok === false) return e.error;");
+		// Failures are values, and text() reports as the program goes.
+		expect(description).toContain("resolves to { ok: false, error }");
+		expect(description).not.toContain("rejects");
+		expect(description).toContain('text("build:", b.exitCode)');
 		expect(description).toContain("searchTools(query)");
 		// Deferred tools are not advertised as direct tools; turn-ending ones are not callable.
 		expect(description).not.toContain("tools.agent");
