@@ -261,14 +261,46 @@ export function scoreReasonTrajectory(input: {
 const readJson = (path: string): unknown =>
 	JSON.parse(readFileSync(path, "utf8"));
 
-/** Every `<task>.<attempt>.transcript.json` under the run directories, with its record beside it. */
+/**
+ * Every transcript under the run directories: hard-set's
+ * `<task>.<attempt>.transcript.json` with its record beside it, and the
+ * builder smoke suite's (YTIMESY_SMOKE_TRANSCRIPTS) `{ record, items }`
+ * files, whose record names the task and its verifier result.
+ */
 export function loadTranscriptScores(runDirectories: readonly string[]) {
 	const scores: BatchingScore[] = [];
 	for (const directory of runDirectories) {
-		if (!existsSync(directory)) continue;
+		if (!existsSync(directory) || !statSync(directory).isDirectory()) continue;
 		for (const name of readdirSync(directory).sort()) {
 			const match = /^(.+)\.(\d+)\.transcript\.json$/.exec(name);
-			if (!match) continue;
+			if (!match) {
+				if (!name.endsWith(".json")) continue;
+				const smoke = readJson(join(directory, name)) as {
+					record?: {
+						task?: unknown;
+						verifierPassed?: unknown;
+						modelSteps?: unknown;
+					};
+					items?: unknown;
+				};
+				if (
+					typeof smoke?.record?.task !== "string" ||
+					!Array.isArray(smoke.items)
+				)
+					continue;
+				scores.push(
+					scoreTranscript({
+						run: basename(directory),
+						task: smoke.record.task,
+						transcript: smoke,
+						record: {
+							passed: smoke.record.verifierPassed,
+							modelSteps: smoke.record.modelSteps,
+						},
+					}),
+				);
+				continue;
+			}
 			const recordPath = join(directory, `${match[1]}.${match[2]}.json`);
 			scores.push(
 				scoreTranscript({
