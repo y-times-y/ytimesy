@@ -1,6 +1,9 @@
 import type { ModelMessage } from "ai";
 import type { ApiTokenUsage } from "../../src/domain/api-token-usage";
-import type { AttemptSnapshot } from "../../src/domain/attempt-loop";
+import type {
+	AttemptSnapshot,
+	LoopChildModel,
+} from "../../src/domain/attempt-loop";
 import { SessionItemId } from "../../src/domain/ids";
 import type { ModelBilling } from "../../src/domain/model-pricing";
 import type { ReviewLoopState } from "../../src/domain/review-loop";
@@ -47,6 +50,8 @@ export type StartChecker = (input: {
 }) => CheckerRun;
 
 export type ReviewTrace = {
+	/** The loop's last saved state (rounds, verdicts, the checker's model). */
+	state?: ReviewLoopState | null;
 	checks: {
 		sessionId: string;
 		snapshot: string;
@@ -59,6 +64,8 @@ export function harborReviewDeps(input: {
 	deadlineAt: number | null;
 	startChecker: StartChecker;
 	trace: ReviewTrace;
+	/** roleModels.checker: recorded in the loop's rounds so its spend is priced at that model. */
+	checkerModel?: Omit<LoopChildModel, "notice">;
 	now?: () => number;
 }): ReviewLoopDeps {
 	let state: ReviewLoopState | null = null;
@@ -86,6 +93,7 @@ export function harborReviewDeps(input: {
 		load: async () => state,
 		save: async (_sessionId, saved) => {
 			state = saved;
+			input.trace.state = saved;
 		},
 		runnerDeadline: async () => input.deadlineAt,
 		capture: async (workspace, ref) => {
@@ -132,7 +140,9 @@ export function harborReviewDeps(input: {
 					entry.settled = { outcome: "failed", report: "" };
 				},
 			);
-			return { sessionId };
+			return input.checkerModel
+				? { sessionId, model: input.checkerModel }
+				: { sessionId };
 		},
 		takeReport: async (_parent, child) => {
 			return checkers.get(child)?.settled ?? null;

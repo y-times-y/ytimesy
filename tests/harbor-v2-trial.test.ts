@@ -16,6 +16,7 @@ import {
 } from "../evals/harbor_v2/harbor-machines";
 import { ledgerSummary } from "../evals/harbor_v2/spend";
 import { runHarborTrial } from "../evals/harbor_v2/trial";
+import { modelBilling, usageCostUsd } from "../src/domain/model-pricing";
 import { localHarnessWorkspace } from "./helpers/local-harness-workspace";
 
 /**
@@ -349,12 +350,10 @@ describe("runHarborTrial with review=on", () => {
 				finish(100, 10, true),
 			],
 			[...text("b2", "Done."), finish(100, 10)],
-			// Checker, round 1: a stray write in the checkout, then its verdict.
+			// Checker, round 1: a stray file from a command (a reader has no
+			// write tool but runs commands), then its verdict.
 			[
-				call("k1", "write", {
-					path: "stray.txt",
-					content: "checker scratch\n",
-				}),
+				call("k1", "bash", { command: "echo checker scratch > stray.txt" }),
 				finish(100, 10, true),
 			],
 			[...text("k2", failing), finish(100, 10)],
@@ -428,5 +427,146 @@ describe("runHarborTrial with review=on", () => {
 				"import sys;from pathlib import Path;from harbor.models.trajectories import Trajectory;Trajectory.model_validate_json(Path(sys.argv[1]).read_text())",
 				join(f.logs, "trajectory.json"),
 			]);
+	}, 120_000);
+	it("passes codeMode=primary and roleModels.checker through: the checker runs on its own model, as a reader, priced at its route", async () => {
+		const f = await fixture({
+			YTIMESY_HARBOR_VARIANT:
+				"review=on,codeMode=primary,roleModels.checker=claude-sonnet-5-5",
+		});
+		const passing = JSON.stringify({
+			verdict: "pass",
+			failures: [],
+			requirements: [
+				{
+					requirement: "prints 42",
+					met: true,
+					evidence: "python3 solution.py -> 42",
+				},
+			],
+			assumptions: [],
+			notes: "",
+		});
+		const builder = scriptedModel([
+			[
+				call("b1", "write", { path: "solution.py", content: "print(42)\n" }),
+				finish(100, 10, true),
+			],
+			[...text("b2", "Done."), finish(100, 10)],
+		]);
+		const checker = scriptedModel([
+			[...text("k1", passing), finish(1000, 100)],
+		]);
+		const runtimes: (string | null)[] = [];
+		const result = await runHarborTrial({
+			config: f.config,
+			trialId: "trial-roles",
+			instruction: "Create solution.py that prints 42.",
+			cwd: f.checkout.root,
+			logsDir: f.logs,
+			deadlineAt: Date.now() + 30 * 60_000,
+			machines: f.side.machines,
+			userId: "harbor",
+			storage: f.archives.storage,
+			runtime: async (wrap, model) => {
+				runtimes.push(model?.modelId ?? null);
+				return { model: wrap(model ? checker.model : builder.model) };
+			},
+			harness: {
+				name: "ytimesy",
+				version: "test",
+				commit: null,
+				bundleSha256: null,
+			},
+		});
+		expect(result.failure).toBeNull();
+		expect(runtimes).toEqual([null, "claude-sonnet-5-5"]);
+		expect(builder.calls()).toBe(2);
+		expect(checker.calls()).toBe(1);
+		const trajectory = JSON.parse(
+			await readFile(join(f.logs, "trajectory.json"), "utf8"),
+		);
+		// primary: run_code first, the command tool says what it is still for.
+		const builderTools = trajectory.agent.tool_definitions.map(
+			(entry: { function: { name: string } }) => entry.function.name,
+		);
+		expect(builderTools[0]).toBe("run_code");
+		expect(trajectory.steps[0].message).toContain("run_code is your main tool");
+		// The checker: its own model, a reader surface (commands, no write or
+		// edit), and no orchestration block (the bridge has no agent tool).
+		const sub = trajectory.subagent_trajectories[0];
+		expect(sub.agent.model_name).toBe("claude-sonnet-5-5");
+		expect(sub.steps[0].message).toContain("checker");
+		expect(sub.steps[0].message).not.toContain("Subagents:");
+		const checkerTools = sub.agent.tool_definitions.map(
+			(entry: { function: { name: string } }) => entry.function.name,
+		);
+		expect(checkerTools).toEqual(
+			expect.arrayContaining(["run_code", "read", "bash"]),
+		);
+		expect(checkerTools).not.toContain("write");
+		expect(checkerTools).not.toContain("edit");
+		expect(trajectory.steps[0].message).not.toContain("Subagents:");
+		const trace = JSON.parse(
+			await readFile(join(f.logs, "ytimesy-trace.json"), "utf8"),
+		);
+		expect(trace.checkerModel).toMatchObject({ model: "claude-sonnet-5-5" });
+		expect(trace.checkers[0].model).toBe("claude-sonnet-5-5");
+		// The product's loop state records it, so its own spend uses that price.
+		expect(trace.review.state.rounds[0].checker.model).toMatchObject({
+			harness: "api",
+			modelId: "claude-sonnet-5-5",
+		});
+		// Each run at its own price.
+		const opus = modelBilling({ harness: "api", modelId: "claude-opus-5-5" });
+		const sonnet = modelBilling({
+			harness: "api",
+			modelId: "claude-sonnet-5-5",
+		});
+		const tokens = (input: number, output: number) => ({
+			inputTokens: input,
+			outputTokens: output,
+			uncachedInputTokens: input,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+		});
+		const expected =
+			(usageCostUsd(tokens(200, 20), opus) ?? 0) +
+			(usageCostUsd(tokens(1000, 100), sonnet) ?? 0);
+		expect(result.costUsd).toBeCloseTo(expected, 8);
+		// The shared AA-style block: per role and model, calls and cache hit.
+		expect(result.efficiency).toMatchObject({
+			tasks: 1,
+			callsPerTask: 3,
+			tokensPerTask: 1320,
+			cacheHitRate: 0,
+		});
+		expect(result.efficiency?.perTaskUsd).toBeCloseTo(expected, 8);
+		expect(
+			result.efficiency?.models.map((row) => [
+				row.role,
+				row.model,
+				row.requests,
+			]),
+		).toEqual([
+			["builder", "claude-opus-5-5", 2],
+			["checker", "claude-sonnet-5-5", 1],
+		]);
+		expect(trace.efficiency.perTaskUsd).toBeCloseTo(expected, 8);
+		expect(trajectory.final_metrics.extra.efficiency.callsPerTask).toBe(3);
+		expect(trajectory.final_metrics.total_cost_usd).toBeCloseTo(expected, 6);
+		// Harbor attributes each embedded checker trajectory to its own model.
+		if (process.env.HARBOR_PYTHON) {
+			const checked = await promisify(execFile)(process.env.HARBOR_PYTHON, [
+				"-I",
+				"-c",
+				"import sys,json;from pathlib import Path;from harbor.utils.trajectory_utils import load_model_usage_from_trajectory;u=load_model_usage_from_trajectory(Path(sys.argv[1]));print(json.dumps({k:v.model_dump() for k,v in (u or {}).items()}))",
+				join(f.logs, "trajectory.json"),
+			]);
+			const byModel = JSON.parse(checked.stdout);
+			expect(byModel["claude-opus-5-5"]).toMatchObject({ n_input_tokens: 200 });
+			expect(byModel["claude-sonnet-5-5"]).toMatchObject({
+				n_input_tokens: 1000,
+			});
+		}
 	}, 120_000);
 });

@@ -47,16 +47,30 @@ export type TrialSpendGuard = {
 	readonly stopReason: () => string | null;
 };
 
+/** One model run's cumulative usage at its own route's price. */
+export type SpendPart = {
+	readonly usage: ApiTokenUsage | null;
+	readonly billing: ModelBilling;
+};
+
 export function trialSpendGuard(input: {
-	billing: ModelBilling;
 	capUsd: number | null;
 	requestLimit: number;
-	/** Cumulative usage of every model this trial ran (builder and checkers). */
-	usage: () => ApiTokenUsage | null;
+	/**
+	 * Every model run of this trial so far (builder runs and checkers), each
+	 * priced at its own model: a checker on roleModels.checker costs its price.
+	 */
+	parts: () => readonly SpendPart[];
 }): TrialSpendGuard {
 	let requests = 0;
 	let stopped: string | null = null;
-	const spentUsd = () => estimatedUsd(input.usage(), input.billing);
+	const spentUsd = () =>
+		input
+			.parts()
+			.reduce(
+				(total, part) => total + estimatedUsd(part.usage, part.billing),
+				0,
+			);
 	const refuse = (reason: string) => {
 		stopped = reason;
 		throw new SpendCapReached(reason);

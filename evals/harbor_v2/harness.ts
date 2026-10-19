@@ -24,7 +24,10 @@ import { apiAgentSearchTools } from "../../src/server/services/api-agent-search-
 import { automaticRepositoryContext } from "../../src/server/services/automatic-repository-context";
 import { batchedAgentReads } from "../../src/server/services/batched-agent-reads";
 import { builderToolSurface } from "../../src/server/services/builder-shell-surface";
-import { codeModeTool } from "../../src/server/services/code-mode-tool";
+import {
+	codeModeTool,
+	primaryCodeModeTools,
+} from "../../src/server/services/code-mode-tool";
 import { codeToolingTools } from "../../src/server/services/code-tooling";
 import { compactionStateSnapshot } from "../../src/server/services/compaction-state-snapshot";
 import { dapDebuggerTools } from "../../src/server/services/dap-debugger";
@@ -45,7 +48,8 @@ import { repositoryGuidanceTool } from "../../src/server/services/repository-gui
  * person): cross-chat memory, plan mode, MCP connections from the user's
  * account (task MCP servers are reached through the mcp-call helper),
  * plugins, project secrets, repository lifecycle hooks, subagents, the
- * attempt loop and the background-command completion gate.
+ * attempt loop and the background-command completion gate. Without the
+ * agent tool there is no orchestration block in any prompt.
  */
 
 export type HarborWorkspace = AgentToolWorkspace & {
@@ -83,6 +87,12 @@ function memoryMemo() {
  * The product's base tool set (apiAgentTools' repository tools) over the
  * Harbor workspace. A Codex subscription gets Codex's freeform apply_patch
  * and an official OpenAI endpoint the public Responses one, as in api-turn.
+ *
+ * `readOnly` is a read-only subagent's set (the review checker), as the
+ * product's apiAgentTools with readerCommands: read-only file tools but a
+ * working command runner. The product keeps the checkout safe with the
+ * reader Linux user; the bridge restores the checkout after each check
+ * (review.ts).
  */
 export function harborBaseTools(
 	workspace: HarborWorkspace,
@@ -92,13 +102,14 @@ export function harborBaseTools(
 	const execution = {
 		...workspace,
 		ownerSessionId: workspace.sessionId,
-		readOnly: options.readOnly ?? false,
+		readOnly: false,
 		once,
 	};
 	const output = agentOutputArtifacts(execution);
 	const tools: ToolSet = {
 		...apiAgentFileTools({
 			...execution,
+			readOnly: options.readOnly ?? false,
 			output,
 			nativePatch: options.nativePatch,
 			freeformPatch: options.freeformPatch,
@@ -153,9 +164,13 @@ export async function harborHarness(input: {
 	const memo = memoryMemo();
 	const leanOnce = memoryReceipts();
 	const subscription = input.provider === "codex-subscription";
+	// The checker is a reader: read-only files, a working command runner and
+	// a lean surface without write and edit (builderToolSurface readOnly).
+	const readOnly = !!input.subagent;
 	const base = harborBaseTools(workspace, {
 		nativePatch: input.provider === "openai",
 		freeformPatch: subscription,
+		readOnly,
 	});
 	const archiveTools = agentContextArchiveTools({
 		userId: input.userId,
@@ -175,6 +190,7 @@ export async function harborHarness(input: {
 		variant: variant.toolSurface,
 		modelId: input.modelId,
 		tools: repositoryContext.tools,
+		readOnly,
 		lean: {
 			workspace: async () => workspace,
 			sessionId: workspace.sessionId,
@@ -191,13 +207,19 @@ export async function harborHarness(input: {
 				)
 			: {};
 	let tools: ToolSet = { ...surface.tools, ...webSearch };
-	if (variant.codeMode === "on" && surface.lean) {
+	// Code mode on a lean surface, as api-turn's withCodeMode. primary has no
+	// deferred tools here: the bridge offers no agent, plan or MCP tools.
+	const codeMode =
+		surface.lean && variant.codeMode !== "off" ? variant.codeMode : null;
+	if (codeMode) {
 		const journal = new Map<string, CodeModeResult>();
 		const runCode = codeModeTool({
 			tools,
 			signal: workspace.signal,
 			sessionId: workspace.sessionId,
 			turnId: workspace.turnId,
+			mode: codeMode,
+			deferred: [],
 			journal: (toolCallId) => ({
 				recorded: async () => journal.get(toolCallId),
 				record: async (result) => {
@@ -205,7 +227,11 @@ export async function harborHarness(input: {
 				},
 			}),
 		});
-		if (runCode) tools = { ...tools, [CODE_MODE_TOOL]: runCode };
+		if (runCode)
+			tools =
+				codeMode === "primary"
+					? primaryCodeModeTools({ [CODE_MODE_TOOL]: runCode }, tools)
+					: { ...tools, [CODE_MODE_TOOL]: runCode };
 	}
 	const instructions = agentTurnInstructions({
 		shellBuilder: true,
@@ -220,7 +246,9 @@ export async function harborHarness(input: {
 		plugins: [],
 		projectKnowledge: null,
 		leanShape: surface.lean?.shape,
+		leanReadOnly: surface.lean?.readOnly,
 		leanWorkingDirectory: surface.lean ? workspace.cwd : undefined,
+		codeMode: codeMode && CODE_MODE_TOOL in tools ? codeMode : undefined,
 	});
 	return {
 		tools,

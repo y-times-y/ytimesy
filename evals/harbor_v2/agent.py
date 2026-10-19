@@ -180,6 +180,7 @@ class YtimesyHarborV2Agent(YtimesyAgent):
                 "requests": done.get("requests"),
                 "reviewRounds": done.get("reviewRounds"),
                 "failure": done.get("failure"),
+                "efficiency": done.get("efficiency"),
                 "seconds": round(time.monotonic() - started, 1),
             },
         }

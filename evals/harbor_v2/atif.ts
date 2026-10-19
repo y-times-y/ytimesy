@@ -153,6 +153,8 @@ export function atifTrajectory(input: {
 	toolDefinitions?: Record<string, unknown>[];
 	notes?: string;
 	extra?: Record<string, unknown>;
+	/** Added to final_metrics.extra (the trial's AA-style cost block). */
+	metricsExtra?: Record<string, unknown>;
 	subagents?: AtifTrajectory[];
 }): AtifTrajectory {
 	const steps: AtifStep[] = [
@@ -366,8 +368,15 @@ export function atifTrajectory(input: {
 					}
 				: {}),
 			total_steps: steps.length,
-			...(input.billing.kind === "plan"
-				? { extra: { cost_basis: "list-price estimate; plan-billed route" } }
+			...(input.billing.kind === "plan" || input.metricsExtra
+				? {
+						extra: {
+							...(input.billing.kind === "plan"
+								? { cost_basis: "list-price estimate; plan-billed route" }
+								: {}),
+							...input.metricsExtra,
+						},
+					}
 				: {}),
 		},
 		...(input.extra ? { extra: input.extra } : {}),

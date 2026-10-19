@@ -1,9 +1,10 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { atifTrajectory, type TimedEvent } from "../evals/harbor_v2/atif";
 import { harborBridgeConfig } from "../evals/harbor_v2/config";
+import { jobRuns } from "../evals/harbor_v2/efficiency";
 import {
 	committedUsd,
 	ledgerSummary,
@@ -17,7 +18,7 @@ import {
 	streamKind,
 	terminalEvent,
 } from "../evals/harbor_v2/transport-guard";
-import { modelBilling } from "../src/domain/model-pricing";
+import { modelBilling, usageCostUsd } from "../src/domain/model-pricing";
 
 const base = {
 	YTIMESY_HARBOR_ROUTE: "anthropic",
@@ -97,6 +98,76 @@ describe("harborBridgeConfig", () => {
 		).toThrow(/does not implement subagents/);
 	});
 
+	it("passes codeMode=primary and a checker model on the subscription route", () => {
+		const config = harborBridgeConfig({
+			YTIMESY_HARBOR_ROUTE: "codex-subscription",
+			YTIMESY_HARBOR_APPROVED: "codex-subscription",
+			YTIMESY_HARBOR_EFFORT: "high",
+			YTIMESY_HARBOR_VARIANT:
+				"review=on,codeMode=primary,roleModels.checker=codex:gpt-6-luna",
+		});
+		expect(config.variant).toMatchObject({
+			review: "on",
+			codeMode: "primary",
+			roleModels: { checker: { model: "codex:gpt-6-luna" } },
+		});
+		expect(config.checker).toMatchObject({
+			modelId: "gpt-6-luna",
+			effort: "high",
+			billing: { kind: "plan" },
+		});
+		expect(config.checker?.billing.price).not.toBeNull();
+		expect(
+			harborBridgeConfig({
+				YTIMESY_HARBOR_ROUTE: "codex-subscription",
+				YTIMESY_HARBOR_APPROVED: "codex-subscription",
+				YTIMESY_HARBOR_VARIANT: "roleModels.checker=gpt-6-luna@low",
+			}).checker,
+		).toMatchObject({ modelId: "gpt-6-luna", effort: "low" });
+		// No entry: the checker runs on the builder's model.
+		expect(harborBridgeConfig(capped).checker).toBeNull();
+	});
+
+	it("refuses checker models the trial's route cannot serve, and other roles", () => {
+		expect(() =>
+			harborBridgeConfig({
+				...capped,
+				YTIMESY_HARBOR_VARIANT: "roleModels.checker=codex:gpt-6-luna",
+			}),
+		).toThrow(/needs YTIMESY_HARBOR_ROUTE=codex-subscription/);
+		expect(() =>
+			harborBridgeConfig({
+				YTIMESY_HARBOR_ROUTE: "codex-subscription",
+				YTIMESY_HARBOR_APPROVED: "codex-subscription",
+				YTIMESY_HARBOR_VARIANT: "roleModels.checker=api:gpt-6-luna",
+			}),
+		).toThrow(/needs an API route/);
+		expect(() =>
+			harborBridgeConfig({
+				...capped,
+				YTIMESY_HARBOR_VARIANT: "roleModels.checker=api/conn/gpt-6-luna",
+			}),
+		).toThrow(/stored connection/);
+		expect(() =>
+			harborBridgeConfig({
+				...capped,
+				YTIMESY_HARBOR_VARIANT: "roleModels.checker=claude-opus-9-9",
+			}),
+		).toThrow(/checker's claude-opus-9-9/);
+		expect(() =>
+			harborBridgeConfig({
+				...capped,
+				YTIMESY_HARBOR_VARIANT: "roleModels.writer=claude-sonnet-5-5",
+			}),
+		).toThrow(/does not implement roleModels\.writer/);
+		expect(
+			harborBridgeConfig({
+				...capped,
+				YTIMESY_HARBOR_VARIANT: "roleModels.checker=claude-sonnet-5-5",
+			}).checker?.billing.price,
+		).toMatchObject({ input: expect.any(Number) });
+	});
+
 	it("lets the plan-billed subscription run without a cap, at list-price estimates", () => {
 		const config = harborBridgeConfig({
 			YTIMESY_HARBOR_ROUTE: "codex-subscription",
@@ -135,10 +206,9 @@ describe("trial spend guard", () => {
 			cacheWriteTokens: 0,
 		};
 		const guard = trialSpendGuard({
-			billing,
 			capUsd: 1,
 			requestLimit: 10,
-			usage: () => usage,
+			parts: () => [{ usage, billing }],
 		});
 		guard.beforeRequest();
 		usage = { ...usage, inputTokens: 250_000, uncachedInputTokens: 250_000 };
@@ -149,14 +219,37 @@ describe("trial spend guard", () => {
 
 	it("enforces the request limit", () => {
 		const guard = trialSpendGuard({
-			billing,
 			capUsd: null,
 			requestLimit: 2,
-			usage: () => null,
+			parts: () => [],
 		});
 		guard.beforeRequest();
 		guard.beforeRequest();
 		expect(() => guard.beforeRequest()).toThrow(/request limit/);
+	});
+
+	it("prices each model run at its own model (a cheaper checker counts less)", () => {
+		const tokens = {
+			inputTokens: 100_000,
+			outputTokens: 0,
+			uncachedInputTokens: 100_000,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+		};
+		const luna = modelBilling({ harness: "api", modelId: "gpt-6-luna" });
+		const guard = trialSpendGuard({
+			capUsd: null,
+			requestLimit: 10,
+			parts: () => [
+				{ usage: tokens, billing },
+				{ usage: tokens, billing: luna },
+			],
+		});
+		expect(guard.spentUsd()).toBeCloseTo(
+			(usageCostUsd(tokens, billing) ?? 0) + (usageCostUsd(tokens, luna) ?? 0),
+			6,
+		);
+		expect(usageCostUsd(tokens, luna)).not.toBe(usageCostUsd(tokens, billing));
 	});
 });
 
@@ -448,5 +541,51 @@ describe("ATIF trajectory", () => {
 			total_steps: 5,
 		});
 		expect(JSON.stringify(trajectory)).not.toContain("partial");
+	});
+});
+
+describe("job efficiency", () => {
+	let directory: string;
+	afterEach(async () => {
+		if (directory) await rm(directory, { recursive: true, force: true });
+	});
+
+	it("joins each trial's cost block with its verifier reward and skips trials without one", async () => {
+		directory = await mkdtemp(join(tmpdir(), "harbor-efficiency-"));
+		const row = {
+			role: "builder",
+			model: "gpt-6.1-sol",
+			agents: 1,
+			requests: 4,
+			inputTokens: 1000,
+			outputTokens: 100,
+			cacheReadTokens: 800,
+			costUsd: 0.01,
+			estimated: true,
+		};
+		const trial = async (
+			name: string,
+			reward: number | null,
+			trace: boolean,
+		) => {
+			await mkdir(join(directory, name, "agent"), { recursive: true });
+			await writeFile(
+				join(directory, name, "result.json"),
+				JSON.stringify({ verifier_result: { rewards: { reward } } }),
+			);
+			if (trace)
+				await writeFile(
+					join(directory, name, "agent", "ytimesy-trace.json"),
+					JSON.stringify({
+						efficiency: { secondsPerTask: 60, modelRows: [row] },
+					}),
+				);
+		};
+		await trial("a__1", 1, true);
+		await trial("b__2", 0, true);
+		await trial("c__3", 1, false);
+		const runs = await jobRuns(directory);
+		expect(runs.map((run) => run.solved).sort()).toEqual([false, true]);
+		expect(runs[0]).toMatchObject({ seconds: 60, models: [row] });
 	});
 });
