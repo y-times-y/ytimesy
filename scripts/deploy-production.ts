@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createHmac, createPrivateKey } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { productionRuntimeSettings } from "./production-settings";
 
 /**
  * Production deploy for the edge executor and the web Worker. Not run yet:
@@ -118,21 +119,7 @@ secrets.YTIMESY_REALTIME_SECRET = derived("ytimesy:realtime:production:v1");
 secrets.YTIMESY_GIT_PROXY_SECRET = secrets.GIT_PROXY_SECRET;
 // Background delivery and recovery address the same chat objects as inference.
 secrets.YTIMESY_REALTIME_URL = secrets.YTIMESY_GIT_PROXY_URL;
-// Set here, not in a wrangler vars block (that breaks the generated types).
-secrets.YTIMESY_ENVIRONMENT = "production";
-secrets.GIT_PROXY_ENABLED = "1";
-secrets.MODEL_EXECUTION_ENABLED = "1";
-secrets.ENVIRONMENT_EXECUTION_ENABLED = "1";
-secrets.BACKGROUND_EXECUTION_ENABLED = "1";
-secrets.YTIMESY_BACKGROUND_CRON_ENABLED = "1";
-secrets.YTIMESY_MODEL_EXECUTION_TARGET = "durable-object";
-secrets.YTIMESY_INFRASTRUCTURE_ADMISSION = "true";
-// New chat, environment and job objects start near the production database
-// (Supabase us-east-2, Ohio); see src/server/edge/durable-object-location.ts.
-secrets.YTIMESY_DURABLE_OBJECT_LOCATION_HINT =
-	process.env.YTIMESY_PRODUCTION_DURABLE_OBJECT_LOCATION_HINT || "enam";
-// Auth email goes out through the EMAIL send_email binding (wrangler config).
-secrets.AUTH_EMAIL_FROM = process.env.AUTH_EMAIL_FROM || "noreply@ytimesy.com";
+Object.assign(secrets, productionRuntimeSettings(process.env));
 for (const name of [
 	"POSTHOG_KEY",
 	"POSTHOG_HOST",
