@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { independentReviewBrief, parseReviewVerdict } from "./checker-brief";
+import { truncatedVerdictJson } from "./attempt-loop";
+import {
+	checkerDeadlineNotice,
+	checkerWrapUpLeadMs,
+	independentReviewBrief,
+	parseReviewVerdict,
+} from "./checker-brief";
 
 const input = {
 	taskText: "Write `/app/out.json` with the field `total`.\nKeep it exact.",
@@ -100,5 +106,73 @@ describe("parseReviewVerdict", () => {
 		expect(missing.verdict).toBe("unsure");
 		expect(missing.parsed).toBe(false);
 		expect(missing.requirements).toEqual([]);
+	});
+});
+
+describe("a checker answer cut off or wrapped", () => {
+	const full = {
+		verdict: "unsure",
+		failures: ["speedup: 2009x on relabeled pairs, 5000x required"],
+		requirements: [
+			{ requirement: "importable package", met: true, evidence: "import ok" },
+			{ requirement: "5000x speedup", met: false, evidence: "2009x" },
+			{ requirement: "matches networkx", met: true, evidence: "diffed" },
+		],
+		assumptions: [{ assumption: "a", alternative: "b", outcome: "c" }],
+		notes: "n",
+	};
+
+	it("salvages the complete part of a verdict cut off mid-answer", () => {
+		const text = JSON.stringify(full, null, 2);
+		const cut = text.slice(0, text.indexOf('"matches networkx"') + 6);
+		const verdict = parseReviewVerdict(`Report:\n${cut}`);
+		expect(verdict.parsed).toBe(true);
+		expect(verdict.truncated).toBe(true);
+		expect(verdict.verdict).toBe("unsure");
+		expect(verdict.failures).toEqual(full.failures);
+		expect(verdict.requirements.map((entry) => entry.requirement)).toEqual([
+			"importable package",
+			"5000x speedup",
+		]);
+		expect(verdict.notes).toMatch(/cut off/);
+		expect(truncatedVerdictJson("no json")).toBeNull();
+		expect(truncatedVerdictJson('{"verdict": "fa')).toBeNull();
+	});
+
+	it("never trusts a pass that was cut off", () => {
+		const text = JSON.stringify({ ...full, verdict: "pass", failures: [] });
+		const verdict = parseReviewVerdict(
+			text.slice(0, text.indexOf("assumptions")),
+		);
+		expect(verdict.truncated).toBe(true);
+		expect(verdict.verdict).toBe("unsure");
+	});
+
+	it("reads fenced JSON and prefers a complete verdict over a cut-off one", () => {
+		const fenced = `Done.\n\`\`\`json\n${JSON.stringify({ ...full, verdict: "fail" })}\n\`\`\`\nThanks.`;
+		expect(parseReviewVerdict(fenced)).toMatchObject({
+			verdict: "fail",
+			parsed: true,
+		});
+		expect(parseReviewVerdict(fenced).truncated).toBeUndefined();
+		const both = `${JSON.stringify({ ...full, verdict: "fail" })}\n${JSON.stringify(full).slice(0, 80)}`;
+		expect(parseReviewVerdict(both).verdict).toBe("fail");
+	});
+
+	it("asks for the verdict well before the limit", () => {
+		expect(checkerWrapUpLeadMs(7 * 60_000)).toBe(90_000);
+		expect(checkerWrapUpLeadMs(12 * 60_000)).toBe(144_000);
+		expect(checkerWrapUpLeadMs(60_000)).toBe(30_000);
+		expect(checkerDeadlineNotice(91.4)).toContain("about 91 seconds");
+		expect(checkerDeadlineNotice(10)).toContain("only the JSON");
+	});
+
+	it("names the diff command when given", () => {
+		expect(
+			independentReviewBrief({
+				...input,
+				diffCommand: "git -C /app diff base head",
+			}),
+		).toContain("`git -C /app diff base head` shows the whole change.");
 	});
 });

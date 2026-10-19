@@ -1,4 +1,10 @@
 import type { ApiTokenUsage } from "./api-token-usage";
+import { independentReviewBrief } from "./checker-brief";
+import {
+	type AttemptVerdictKind,
+	type CheckerVerdict,
+	jsonObjects,
+} from "./checker-verdict";
 
 /**
  * The attempt loop (decision 2026-10-17, Phase 2; harness variant
@@ -9,26 +15,17 @@ import type { ApiTokenUsage } from "./api-token-usage";
  * the pure rules; the runtime is src/server/services/attempt-loop.ts.
  */
 
-export const ATTEMPT_VERDICTS = ["pass", "fail", "unsure"] as const;
-export type AttemptVerdictKind = (typeof ATTEMPT_VERDICTS)[number];
-
-export type CheckerTest = {
-	readonly name: string;
-	readonly passed: boolean;
-	readonly evidence?: string;
-};
-
-/** The checker's structured answer, normalized. */
-export type CheckerVerdict = {
-	readonly verdict: AttemptVerdictKind;
-	readonly failures: readonly string[];
-	readonly tests: readonly CheckerTest[];
-	/** Where its acceptance tests (and run.sh) are, as it reported them. */
-	readonly testsPath: string | null;
-	readonly notes: string;
-	/** False when the report held no verdict JSON (counted as unsure). */
-	readonly parsed: boolean;
-};
+export {
+	ATTEMPT_VERDICTS,
+	type AttemptVerdictKind,
+	type CheckerTest,
+	type CheckerVerdict,
+	jsonObjects,
+	NO_VERDICT_FAILURE,
+	parseCheckerVerdict,
+	truncatedVerdictJson,
+	verdictRecords,
+} from "./checker-verdict";
 
 /** Starting values; the measurement plan tunes them. */
 export const ATTEMPT_LOOP_LIMITS = {
@@ -74,121 +71,6 @@ export function selectionReserveMs(loopMs: number) {
 }
 
 // ---------------------------------------------------------------------------
-// The checker's verdict.
-
-/** Every balanced top-level {...} in a text, last first (strings respected). */
-export function jsonObjects(text: string): string[] {
-	const found: string[] = [];
-	for (let end = text.lastIndexOf("}"); end >= 0; ) {
-		let depth = 0;
-		let start = -1;
-		let inString = false;
-		// Scan backwards for the matching opening brace.
-		for (let index = end; index >= 0; index--) {
-			const char = text[index];
-			if (inString) {
-				if (char === '"') {
-					let slashes = 0;
-					for (let back = index - 1; back >= 0 && text[back] === "\\"; back--)
-						slashes++;
-					if (slashes % 2 === 0) inString = false;
-				}
-				continue;
-			}
-			if (char === '"') inString = true;
-			else if (char === "}") depth++;
-			else if (char === "{") {
-				depth--;
-				if (depth === 0) {
-					start = index;
-					break;
-				}
-			}
-		}
-		if (start < 0) break;
-		found.push(text.slice(start, end + 1));
-		end = text.lastIndexOf("}", start - 1);
-	}
-	return found;
-}
-
-const text = (value: unknown, max: number) =>
-	typeof value === "string" ? value.trim().slice(0, max) : "";
-
-/**
- * The verdict in a checker's report: the last JSON object with a valid
- * `verdict`. A "pass" whose own tests failed is not trusted (unsure). No JSON
- * is an unsure verdict, never a pass.
- */
-export function parseCheckerVerdict(report: string): CheckerVerdict {
-	for (const candidate of jsonObjects(report)) {
-		let value: unknown;
-		try {
-			value = JSON.parse(candidate);
-		} catch {
-			continue;
-		}
-		if (!value || typeof value !== "object") continue;
-		const record = value as Record<string, unknown>;
-		const verdict = record.verdict;
-		if (!(ATTEMPT_VERDICTS as readonly unknown[]).includes(verdict)) continue;
-		const tests: CheckerTest[] = Array.isArray(record.tests)
-			? record.tests.slice(0, 100).flatMap((entry) => {
-					if (!entry || typeof entry !== "object") return [];
-					const test = entry as Record<string, unknown>;
-					const name = text(test.name, 200);
-					if (!name || typeof test.passed !== "boolean") return [];
-					const evidence = text(test.evidence, 600);
-					return [
-						{ name, passed: test.passed, ...(evidence ? { evidence } : {}) },
-					];
-				})
-			: [];
-		const listed = Array.isArray(record.failures)
-			? record.failures
-					.map((failure) =>
-						typeof failure === "string"
-							? text(failure, 600)
-							: failure && typeof failure === "object"
-								? text(JSON.stringify(failure), 600)
-								: "",
-					)
-					.filter(Boolean)
-			: [];
-		const failures = (
-			listed.length
-				? listed
-				: tests
-						.filter((test) => !test.passed)
-						.map((test) =>
-							test.evidence ? `${test.name}: ${test.evidence}` : test.name,
-						)
-		).slice(0, 20);
-		const testsPath = text(record.testsPath, 500);
-		const anyFailed = tests.some((test) => !test.passed);
-		return {
-			verdict:
-				verdict === "pass" && (anyFailed || listed.length)
-					? "unsure"
-					: (verdict as AttemptVerdictKind),
-			failures,
-			tests,
-			testsPath: testsPath.startsWith("/") ? testsPath : null,
-			notes: text(record.notes, 2000),
-			parsed: true,
-		};
-	}
-	return {
-		verdict: "unsure",
-		failures: ["The checker's report held no verdict JSON."],
-		tests: [],
-		testsPath: null,
-		notes: report.trim().slice(-800),
-		parsed: false,
-	};
-}
-
-// ---------------------------------------------------------------------------
 // Briefs and notices (kept lean: the builder never sees the loop's rules).
 
 /**
@@ -206,26 +88,18 @@ export function attemptCheckerBrief(input: {
 	readonly directory: string;
 }) {
 	const tests = `${input.directory}/tests`;
-	const work = `${input.directory}/work`;
+	// The shared review brief, plus the acceptance suite that selection runs
+	// against every candidate.
 	return [
-		"You are an independent checker. Decide whether the delivered work below meets the task. You did not build it and nobody will tell you what to look for; a strict grader with hidden tests will judge it next.",
+		independentReviewBrief({
+			taskText: input.taskText,
+			checkout: input.checkout,
+			changedFiles: input.changedFiles,
+			scratch: input.directory,
+			diffCommand: `git -C ${input.checkout} diff ${input.base} ${input.candidate}`,
+		}),
 		"",
-		"<task>",
-		input.taskText,
-		"</task>",
-		"",
-		"<deliverable>",
-		`The working tree at ${input.checkout}. ${input.changedFiles.length ? `Changed files: ${input.changedFiles.slice(0, 200).join(", ")}.` : "No files changed."} \`git -C ${input.checkout} diff ${input.base} ${input.candidate}\` shows the whole change.`,
-		"</deliverable>",
-		"",
-		"Steps:",
-		`1. The checkout is read-only for you. Copy it (\`cp -a ${input.checkout} ${work}\`) and run things in the copy; read the checkout's own path only where the task names it.`,
-		`2. From the task text alone, write acceptance tests in ${tests}: every explicit requirement, exact names, paths and output formats, edge cases and the inputs a strict grader would try, and that the delivered files alone are enough (no scratch data, caches or untracked helpers).`,
-		`3. Write ${tests}/run.sh: \`bash ${tests}/run.sh <dir>\` runs every test against the checkout at <dir>, prints one line per test (\`PASS <name>\` or \`FAIL <name>: <reason>\`), writes temporary files only under \`mktemp -d\`, exits 0 only when all pass and finishes within 2 minutes. Include the project's own checks where they apply, and \`ytimesy-check\` on the deliverable when the task delivers something a third party runs.`,
-		`4. Run \`bash ${tests}/run.sh ${work}\`, and read the code where a test cannot reach.`,
-		"5. Answer with only this JSON:",
-		`{ "verdict": "pass" | "fail" | "unsure", "failures": ["<requirement>: <what is wrong, with evidence>"], "tests": [{ "name": "...", "passed": true, "evidence": "..." }], "testsPath": "${tests}", "notes": "..." }`,
-		"pass only when every test passes and nothing the task requires is missing; fail when something required is wrong or missing; unsure when you could not test what matters.",
+		`Also leave an acceptance suite for comparing attempts: \`bash ${tests}/run.sh <dir>\` runs your checks against the checkout at <dir>, prints one line per check (\`PASS <name>\` or \`FAIL <name>: <reason>\`), writes temporary files only under \`mktemp -d\`, exits 0 only when all pass and finishes within 2 minutes. Add \`"tests": [{ "name": "...", "passed": true, "evidence": "..." }], "testsPath": "${tests}"\` to your JSON.`,
 	].join("\n");
 }
 
