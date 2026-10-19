@@ -4,6 +4,7 @@ import {
 	type ApiTokenUsage,
 	addApiTokenUsage,
 } from "../../src/domain/api-token-usage";
+import { usageSince } from "../../src/domain/attempt-loop";
 import {
 	type ModelBilling,
 	usageCostUsd,
@@ -101,28 +102,12 @@ function argumentsOf(input: unknown): Record<string, unknown> {
 	return { input: input ?? null };
 }
 
+/** One step's usage: the cumulative counters' difference (requests and long-context tier included). */
 function usageDelta(
 	previous: ApiTokenUsage | null,
 	next: ApiTokenUsage,
 ): ApiTokenUsage {
-	const minus = (key: keyof Omit<ApiTokenUsage, "costUsd">) =>
-		next[key] === null ? null : Math.max(0, next[key] - (previous?.[key] ?? 0));
-	return {
-		inputTokens: minus("inputTokens"),
-		outputTokens: minus("outputTokens"),
-		uncachedInputTokens: minus("uncachedInputTokens"),
-		cacheReadTokens: minus("cacheReadTokens"),
-		cacheWriteTokens: minus("cacheWriteTokens"),
-		...(typeof next.costUsd === "number"
-			? {
-					costUsd: Math.max(
-						0,
-						next.costUsd -
-							(typeof previous?.costUsd === "number" ? previous.costUsd : 0),
-					),
-				}
-			: {}),
-	};
+	return usageSince(next, previous) ?? next;
 }
 
 function metricsOf(usage: ApiTokenUsage, billing: ModelBilling): Metrics {

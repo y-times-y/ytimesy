@@ -1,4 +1,5 @@
-import type { SessionItem } from "./session-item";
+import { CODE_MODE_TOOL, codeModeResult } from "./code-mode";
+import type { DynamicToolCallItem, SessionItem } from "./session-item";
 
 /** The agent locks edits with this tool; they stay locked until the user approves. */
 export const ENTER_PLAN_MODE_TOOL = "enter_plan_mode";
@@ -31,15 +32,22 @@ export function agentPlanState(items: readonly SessionItem[]): AgentPlanState {
 		}
 		if (item.kind === "planProposal")
 			return { kind: "proposed", planId: item.id };
-		if (
-			!laterTurn &&
-			item.kind === "dynamicToolCall" &&
-			item.tool === ENTER_PLAN_MODE_TOOL &&
-			item.status === "completed"
-		)
+		if (!laterTurn && item.kind === "dynamicToolCall" && entersPlanMode(item))
 			return { kind: "planning" };
 	}
 	return { kind: "none" };
+}
+
+/** A completed enter_plan_mode call, direct or inside a run_code program (code mode primary). */
+function entersPlanMode(item: DynamicToolCallItem) {
+	if (item.tool === ENTER_PLAN_MODE_TOOL) return item.status === "completed";
+	return (
+		item.tool === CODE_MODE_TOOL &&
+		(codeModeResult(item)?.calls ?? []).some(
+			(call) =>
+				call?.tool === ENTER_PLAN_MODE_TOOL && call.status === "completed",
+		)
+	);
 }
 
 /** The plan that still waits for the user's approval, if any. */

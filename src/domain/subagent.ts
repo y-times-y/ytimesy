@@ -23,6 +23,17 @@ export function isReaderRole(role: SubagentRole | null | undefined) {
 	return !!role && role !== "writer";
 }
 
+/**
+ * A read-only subagent on its parent's VM: every guest command runs as the
+ * reader Linux user (src/server/services/reader-workspace-machines.ts).
+ */
+export function runsAsReader(session: {
+	readonly taskPlacement?: string | null;
+	readonly agentRole?: SubagentRole | null;
+}) {
+	return session.taskPlacement === "shared" && isReaderRole(session.agentRole);
+}
+
 /** Where a child runs; not an argument, because it follows from the role. */
 export type SubagentPlacement = "fork" | "shared-read-only";
 
@@ -45,6 +56,13 @@ export type SubagentBudget = {
 	readonly tokens: number;
 	/** Set by agent_send stop: the step count at which the turn stops. */
 	readonly stopAtStep?: number;
+	/**
+	 * The model `tokens` is counted in (the tree's builder model). The child's
+	 * own and its descendants' tokens are weighted by their price relative to
+	 * it (budgetTokenWeight in subagent-usage.ts). Absent on older rows: raw
+	 * tokens.
+	 */
+	readonly priceBasis?: string;
 };
 
 type Level = 1 | 2 | 3;

@@ -82,3 +82,20 @@ it("gives shell builders a short role without specialist-tool instructions", () 
 	);
 	expect(shell.length).toBeLessThan(1500);
 });
+
+it("softens the root line only when the builder can delegate", () => {
+	const delegating = cloudAgentRoleInstructions(
+		{},
+		{ shellBuilder: true, delegates: true },
+	);
+	expect(delegating).toContain(
+		"work in this workspace. Inspect, implement, run the checks and answer the user yourself, delegating only as below.",
+	);
+	expect(delegating).not.toContain("work directly");
+	expect(
+		cloudAgentRoleInstructions(
+			{ parentSessionId: "lead", taskAccess: "read_write" },
+			{ shellBuilder: true, delegates: true },
+		),
+	).not.toContain("delegating only as below");
+});

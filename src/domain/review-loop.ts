@@ -1,5 +1,5 @@
 import type { ApiTokenUsage } from "./api-token-usage";
-import type { AttemptSnapshot } from "./attempt-loop";
+import type { AttemptSnapshot, LoopChildModel } from "./attempt-loop";
 import type { ReviewVerdict } from "./checker-brief";
 import { NO_VERDICT_FAILURE } from "./checker-verdict";
 
@@ -262,6 +262,8 @@ export type ReviewRound = {
 		readonly budgetMs: number;
 		readonly endedAt?: number;
 		readonly usage?: ApiTokenUsage | null;
+		/** The checker's own model (roleModels); absent = the builder's. */
+		readonly model?: LoopChildModel;
 	};
 	readonly verdict: ReviewVerdict | null;
 	readonly timedOut?: boolean;

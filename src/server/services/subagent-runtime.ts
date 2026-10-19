@@ -1,7 +1,7 @@
 import type { ModelMessage } from "ai";
 import { checkerWrapUpLeadMs } from "#/domain/checker-brief";
 import { WorkspaceId } from "#/domain/ids";
-import { modelBilling } from "#/domain/model-pricing";
+import { sessionBilling } from "#/domain/model-pricing";
 import type { SessionItem } from "#/domain/session-item";
 import {
 	overlappingWriters,
@@ -15,6 +15,7 @@ import { subagentWrapUpNotice } from "#/domain/subagent-instructions";
 import { subagentTree } from "#/domain/subagent-tree";
 import {
 	agentSpend,
+	budgetTokenWeight,
 	sessionTokenUsage,
 	usageTokens,
 } from "#/domain/subagent-usage";
@@ -44,7 +45,8 @@ export class SubagentBudgetExhausted extends Error {
 type SubagentSession = Pick<
 	AgentSessionRecord,
 	"id" | "userId" | "createdAt" | "agentRole" | "agentBudget"
->;
+> &
+	Partial<Pick<AgentSessionRecord, "listedModelId">>;
 
 /**
  * Checked before every model step of a subagent's turn: counts the step,
@@ -66,11 +68,16 @@ export async function guardSubagentStep(input: {
 	const { steps, budget } = await recordStep(input.session.id);
 	const limits = budget ?? input.session.agentBudget;
 	if (!limits) return input.messages;
+	// Tokens count in the budget's basis model: a cheaper model's count for less.
+	const weight = (modelId: string | null | undefined) =>
+		budgetTokenWeight(modelId, limits.priceBasis);
 	const childTokens = (
 		await descendants(input.session.userId, input.session.id)
 	).reduce(
 		(total, child) =>
-			total + usageTokens(sessionTokenUsage(child.items as SessionItem[])),
+			total +
+			usageTokens(sessionTokenUsage(child.items as SessionItem[])) *
+				weight(child.listedModelId),
 		0,
 	);
 	const checker = input.session.agentRole === "checker";
@@ -81,7 +88,10 @@ export async function guardSubagentStep(input: {
 			minutes:
 				((input.now ?? Date.now()) - Date.parse(input.session.createdAt)) /
 				60_000,
-			tokens: usageTokens(sessionTokenUsage(input.items)) + childTokens,
+			tokens:
+				usageTokens(sessionTokenUsage(input.items)) *
+					weight(input.session.listedModelId) +
+				childTokens,
 		},
 		checker ? checkerWrapUpLeadMs(limits.minutes * 60_000) / 60_000 : 0,
 	);
@@ -136,10 +146,7 @@ export async function subagentReport(input: {
 		node?.subtree ??
 		agentSpend({
 			items: input.items,
-			billing: modelBilling({
-				harness: session.harness === "codex" ? "codex" : "api",
-				modelId: session.listedModelId,
-			}),
+			billing: sessionBilling(session),
 		});
 	const header = subagentReportHeader({
 		label,
