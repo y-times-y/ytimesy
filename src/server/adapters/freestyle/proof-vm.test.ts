@@ -44,3 +44,9 @@ describe("requestedAuthSnapshotId", () => {
 		expect(requestedAuthSnapshotId(undefined)).toBeNull();
 	});
 });
+
+it("lets guests reach only public addresses: no private, VM or network destinations", () => {
+	expect(GUEST_INTERNET_FIREWALL.rules).toEqual([
+		{ action: "allow", source: {}, destination: { public: true } },
+	]);
+});

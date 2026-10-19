@@ -32,6 +32,7 @@ import { Route as ApiGithubRepositoriesRouteImport } from './routes/api/github/r
 import { Route as ApiIdentityProvidersRouteImport } from './routes/api/identity/providers'
 import { Route as ApiInternalCodexTransportRouteImport } from './routes/api/internal/codex-transport'
 import { Route as ApiProjectsPublishRouteImport } from './routes/api/projects/publish'
+import { Route as ApiVmEdgeAuthorizeRouteImport } from './routes/api/vm-edge/authorize'
 import { Route as ApiWorkspacesRetryRouteImport } from './routes/api/workspaces.retry'
 import { Route as ApiMcpOauthCallbackRouteImport } from './routes/api/mcp/oauth/callback'
 import { Route as ProjectsProjectIdEvidenceEvidenceIdRouteImport } from './routes/projects/$projectId/evidence/$evidenceId'
@@ -153,6 +154,11 @@ const ApiProjectsPublishRoute = ApiProjectsPublishRouteImport.update({
   path: '/publish',
   getParentRoute: () => ApiProjectsRoute,
 } as any)
+const ApiVmEdgeAuthorizeRoute = ApiVmEdgeAuthorizeRouteImport.update({
+  id: '/api/vm-edge/authorize',
+  path: '/api/vm-edge/authorize',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiWorkspacesRetryRoute = ApiWorkspacesRetryRouteImport.update({
   id: '/retry',
   path: '/retry',
@@ -200,6 +206,7 @@ export interface FileRoutesByFullPath {
   '/api/identity/providers': typeof ApiIdentityProvidersRoute
   '/api/internal/codex-transport': typeof ApiInternalCodexTransportRoute
   '/api/projects/publish': typeof ApiProjectsPublishRoute
+  '/api/vm-edge/authorize': typeof ApiVmEdgeAuthorizeRoute
   '/api/workspaces/retry': typeof ApiWorkspacesRetryRoute
   '/api/mcp/oauth/callback': typeof ApiMcpOauthCallbackRoute
   '/projects/$projectId/evidence/$evidenceId': typeof ProjectsProjectIdEvidenceEvidenceIdRoute
@@ -229,6 +236,7 @@ export interface FileRoutesByTo {
   '/api/identity/providers': typeof ApiIdentityProvidersRoute
   '/api/internal/codex-transport': typeof ApiInternalCodexTransportRoute
   '/api/projects/publish': typeof ApiProjectsPublishRoute
+  '/api/vm-edge/authorize': typeof ApiVmEdgeAuthorizeRoute
   '/api/workspaces/retry': typeof ApiWorkspacesRetryRoute
   '/api/mcp/oauth/callback': typeof ApiMcpOauthCallbackRoute
   '/projects/$projectId/evidence/$evidenceId': typeof ProjectsProjectIdEvidenceEvidenceIdRoute
@@ -259,6 +267,7 @@ export interface FileRoutesById {
   '/api/identity/providers': typeof ApiIdentityProvidersRoute
   '/api/internal/codex-transport': typeof ApiInternalCodexTransportRoute
   '/api/projects/publish': typeof ApiProjectsPublishRoute
+  '/api/vm-edge/authorize': typeof ApiVmEdgeAuthorizeRoute
   '/api/workspaces/retry': typeof ApiWorkspacesRetryRoute
   '/api/mcp/oauth/callback': typeof ApiMcpOauthCallbackRoute
   '/projects/$projectId/evidence/$evidenceId': typeof ProjectsProjectIdEvidenceEvidenceIdRoute
@@ -290,6 +299,7 @@ export interface FileRouteTypes {
     | '/api/identity/providers'
     | '/api/internal/codex-transport'
     | '/api/projects/publish'
+    | '/api/vm-edge/authorize'
     | '/api/workspaces/retry'
     | '/api/mcp/oauth/callback'
     | '/projects/$projectId/evidence/$evidenceId'
@@ -319,6 +329,7 @@ export interface FileRouteTypes {
     | '/api/identity/providers'
     | '/api/internal/codex-transport'
     | '/api/projects/publish'
+    | '/api/vm-edge/authorize'
     | '/api/workspaces/retry'
     | '/api/mcp/oauth/callback'
     | '/projects/$projectId/evidence/$evidenceId'
@@ -348,6 +359,7 @@ export interface FileRouteTypes {
     | '/api/identity/providers'
     | '/api/internal/codex-transport'
     | '/api/projects/publish'
+    | '/api/vm-edge/authorize'
     | '/api/workspaces/retry'
     | '/api/mcp/oauth/callback'
     | '/projects/$projectId/evidence/$evidenceId'
@@ -377,6 +389,7 @@ export interface RootRouteChildren {
   ApiGithubRepositoriesRoute: typeof ApiGithubRepositoriesRoute
   ApiIdentityProvidersRoute: typeof ApiIdentityProvidersRoute
   ApiInternalCodexTransportRoute: typeof ApiInternalCodexTransportRoute
+  ApiVmEdgeAuthorizeRoute: typeof ApiVmEdgeAuthorizeRoute
   ApiMcpOauthCallbackRoute: typeof ApiMcpOauthCallbackRoute
   ProjectsProjectIdEvidenceEvidenceIdRoute: typeof ProjectsProjectIdEvidenceEvidenceIdRoute
 }
@@ -544,6 +557,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiProjectsPublishRouteImport
       parentRoute: typeof ApiProjectsRoute
     }
+    '/api/vm-edge/authorize': {
+      id: '/api/vm-edge/authorize'
+      path: '/api/vm-edge/authorize'
+      fullPath: '/api/vm-edge/authorize'
+      preLoaderRoute: typeof ApiVmEdgeAuthorizeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/workspaces/retry': {
       id: '/api/workspaces/retry'
       path: '/retry'
@@ -625,6 +645,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiGithubRepositoriesRoute: ApiGithubRepositoriesRoute,
   ApiIdentityProvidersRoute: ApiIdentityProvidersRoute,
   ApiInternalCodexTransportRoute: ApiInternalCodexTransportRoute,
+  ApiVmEdgeAuthorizeRoute: ApiVmEdgeAuthorizeRoute,
   ApiMcpOauthCallbackRoute: ApiMcpOauthCallbackRoute,
   ProjectsProjectIdEvidenceEvidenceIdRoute:
     ProjectsProjectIdEvidenceEvidenceIdRoute,

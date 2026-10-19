@@ -102,14 +102,6 @@ export function desktopRemoteOrigin(hostname: string) {
 	return `https://${hostname.replace(/\/$/, "")}`;
 }
 
-export function desktopHostname(providerRef: string) {
-	const slug = providerRef
-		.replaceAll(/[^a-zA-Z0-9]/g, "")
-		.slice(-12)
-		.toLowerCase();
-	return `ytimesy-desk-${slug || "local"}.style.dev`;
-}
-
 export function desktopPortIsListening(output: string) {
 	return output.includes("YTIMESY_DESKTOP_UP");
 }

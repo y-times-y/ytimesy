@@ -1,11 +1,13 @@
 import { expect, it, vi } from "vitest";
 import { WorkspaceId } from "#/domain/ids";
-import { desktopHostname } from "#/domain/workspace-desktop";
 import {
 	apiAgentBrowserTools,
 	safeBrowserUrl,
 } from "./api-agent-browser-tools";
+import { desktopEdgeHostname } from "./vm-edge-keys";
 import type { WorkspaceMachines } from "./workspace-machines";
+
+vi.stubEnv("BETTER_AUTH_SECRET", "test-root-secret-that-is-long-enough-000");
 
 it("allows loopback preview pages", async () => {
 	expect(await safeBrowserUrl("http://localhost:3000/preview")).toBe(
@@ -54,7 +56,7 @@ it("exposes the Desktop tab viewer once when the agent starts the desktop itself
 	});
 	await screenshot({}, { toolCallId: "b", messages: [] });
 	expect(exposeHttp).toHaveBeenCalledOnce();
-	expect(exposeHttp).toHaveBeenCalledWith(vm, 6080, desktopHostname(vm));
+	expect(exposeHttp).toHaveBeenCalledWith(vm, 6080, desktopEdgeHostname(vm));
 });
 
 it("says why the shared desktop could not start", async () => {

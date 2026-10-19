@@ -180,9 +180,30 @@ if ! pgrep -x x11vnc >/dev/null 2>&1; then
   x11vnc -display :0 -forever -shared -nopw -listen 127.0.0.1 -rfbport 5900 >/tmp/ytimesy-desk.log 2>&1 &
   sleep 1
 fi
-if ! ss -ltn | grep -q ':6080'; then
-  websockify 0.0.0.0:6080 127.0.0.1:5900 >/tmp/ytimesy-desk-proxy.log 2>&1 &
-  sleep 1
+# The viewer port is published at the edge, so it only listens publicly behind
+# the server-held credential (BasicHTTPAuth). Without one it stays local.
+DESK_AUTH_FILE=/tmp/ytimesy-desk-viewer.auth
+DESK_AUTH_APPLIED=/tmp/ytimesy-desk-auth.applied
+desk_proxy_listening() { ss -ltn | grep -q ':6080 '; }
+if [ -s "$DESK_AUTH_FILE" ]; then
+  chmod 600 "$DESK_AUTH_FILE"
+  DESK_AUTH_DIGEST="$(sha256sum "$DESK_AUTH_FILE" | cut -d' ' -f1)"
+  if ! desk_proxy_listening || [ "$(cat "$DESK_AUTH_APPLIED" 2>/dev/null)" != "$DESK_AUTH_DIGEST" ]; then
+    pkill -f 'websockify.*:6080' >/dev/null 2>&1 || true
+    sleep 1
+    websockify --auth-plugin websockify.auth_plugins.BasicHTTPAuth --auth-source "$(cat "$DESK_AUTH_FILE")" 0.0.0.0:6080 127.0.0.1:5900 >/tmp/ytimesy-desk-proxy.log 2>&1 &
+    sleep 1
+    printf '%s' "$DESK_AUTH_DIGEST" > "$DESK_AUTH_APPLIED"
+  fi
+else
+  if ss -ltn | grep -qF -e '0.0.0.0:6080 ' -e '*:6080 ' -e '[::]:6080 '; then
+    pkill -f 'websockify.*:6080' >/dev/null 2>&1 || true
+    sleep 1
+  fi
+  if ! desk_proxy_listening; then
+    websockify 127.0.0.1:6080 127.0.0.1:5900 >/tmp/ytimesy-desk-proxy.log 2>&1 &
+    sleep 1
+  fi
 fi
 python3 - <<'PY'
 import json
@@ -258,16 +279,25 @@ if command -v tint2 >/dev/null 2>&1; then
 fi
 `;
 
-export const PROBE_WORKSPACE_DESKTOP = `python3 - <<'PY'
+/** Up only when the viewer proxy listens with the credential whose digest is given. */
+export function probeWorkspaceDesktop(credentialDigest: string) {
+	if (!/^[a-f0-9]{64}$/.test(credentialDigest))
+		throw new Error("Desktop credential digest must be SHA-256 hex.");
+	return `python3 - <<'PY'
 import socket
 probe = socket.socket()
 probe.settimeout(1)
 try:
     probe.connect(("127.0.0.1", 6080))
-    print("YTIMESY_DESKTOP_UP")
+    with open("/tmp/ytimesy-desk-auth.applied") as applied:
+        current = applied.read().strip() == "${credentialDigest}"
+    print("YTIMESY_DESKTOP_UP" if current else "YTIMESY_DESKTOP_DOWN")
 except Exception:
     print("YTIMESY_DESKTOP_DOWN")
 finally:
     probe.close()
 PY
 `;
+}
+
+export const DESKTOP_VIEWER_CREDENTIAL_PATH = "/tmp/ytimesy-desk-viewer.auth";
