@@ -105,6 +105,14 @@ export type ModelAgentInput = {
 	onStep: (messages: ModelMessage[]) => Promise<void>;
 	onToolMetric?: (metric: HarnessToolMetric) => void;
 	onModelMetric?: (metric: HarnessModelMetric) => void;
+	/**
+	 * Development evals: the system prompt and the prepared tool definitions
+	 * of each provider call, exactly as sent (model-request-recorder.ts).
+	 */
+	onModelRequest?: (request: {
+		instructions: string;
+		tools: ReadonlyArray<Record<string, unknown>> | undefined;
+	}) => void;
 	beforeStep?: (messages: ModelMessage[]) => Promise<void>;
 	prepareMessages?: (messages: ModelMessage[]) => Promise<ModelMessage[]>;
 	beforeCompaction?: (messages: ModelMessage[]) => Promise<void>;
@@ -918,6 +926,10 @@ async function executeModelSteps(
 				messages,
 			}) => {
 				activeToolCount = preparedTools?.length ?? 0;
+				input.onModelRequest?.({
+					instructions: input.instructions,
+					tools: preparedTools,
+				});
 				preparedPromptCharacters = JSON.stringify({
 					instructions,
 					messages,

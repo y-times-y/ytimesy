@@ -58,6 +58,7 @@ import {
 } from "../src/server/adapters/attempt-loop-store";
 import { withBackgroundJobDispatcher } from "../src/server/adapters/background-job-dispatch";
 import { closeDatabase, database } from "../src/server/adapters/database";
+import { modelRequestLog } from "../src/server/adapters/model-request-log";
 import { dispatchModelWorkflow } from "../src/server/adapters/model-workflow-dispatch";
 import {
 	attemptLoopSpend,
@@ -1272,9 +1273,20 @@ async function watchTurn(run: TaskRun) {
 async function saveTranscript(run: TaskRun) {
 	if (!run.options.transcripts || !run.sessionId) return;
 	const state = await turnState(run.sessionId);
+	// Each request's tool names and prompt hash, the builder's and its
+	// subagents' (the checker's included); each distinct system prompt and
+	// tool list once under `bodies` (src/server/adapters/model-request-log.ts).
+	const requests = await modelRequestLog(run.sessionId).catch((error) => {
+		console.warn("Model requests were not read:", safe(error));
+		return null;
+	});
 	await writeFile(
 		join(runDir, `${run.task.id}.${run.record.attempt}.transcript.json`),
-		JSON.stringify({ items: state?.items, messages: state?.messages }, null, 1),
+		JSON.stringify(
+			{ items: state?.items, messages: state?.messages, requests },
+			null,
+			1,
+		),
 	).catch((error) => console.warn("Transcript was not written:", safe(error)));
 }
 

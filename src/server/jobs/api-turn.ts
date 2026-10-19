@@ -96,6 +96,7 @@ import { coordinateConversationTurn } from "../adapters/conversation-turn-contro
 import {
 	devEvalUsersEnabled,
 	harnessVariantForUser,
+	isDevEvalUser,
 } from "../adapters/dev-eval-users";
 import {
 	assertEvaluationActive,
@@ -154,6 +155,7 @@ import {
 } from "../services/message-attachments";
 import type { ModelAgentInput } from "../services/model-agent-loop";
 import { planModelFailover } from "../services/model-failover";
+import { modelRequestRecorder } from "../services/model-request-recorder";
 import {
 	PLAN_CONTINUE_NOTICE,
 	PLAN_END_TURN_TOOLS,
@@ -977,7 +979,7 @@ async function runApiTurnAttempt(
 				];
 			}
 		}
-		const runAgent = subscription
+		const runModel = subscription
 			? step
 				? runCodexSubscriptionAgentStep
 				: runCodexSubscriptionAgent
@@ -986,6 +988,18 @@ async function runApiTurnAttempt(
 						...input,
 						connectionId: route.connectionId as string,
 					});
+		const runAgent = (input: ModelAgentInput) =>
+			(
+				runModel(input) as Promise<Awaited<ReturnType<typeof runModel>>>
+			).finally(() => requestRecorder?.flush());
+		// Development evals record each request's system prompt and tool list.
+		const requestRecorder = (await turnRecordsRequests(turn.id, owner.userId))
+			? modelRequestRecorder({
+					sessionId: owner.id,
+					turnId: turn.id,
+					step: step?.index ?? 0,
+				})
+			: null;
 		const previousContext = recordedContextUsage(items)?.context;
 		const agentInput: ModelAgentInput = {
 			previousContext:
@@ -1029,6 +1043,7 @@ async function runApiTurnAttempt(
 					},
 				);
 			},
+			...(requestRecorder ? { onModelRequest: requestRecorder.record } : {}),
 			onModelMetric: (metric) => {
 				recordStepTiming("model:total", metric.duration_ms);
 				if (metric.first_output_ms !== null)
@@ -1776,6 +1791,12 @@ async function runApiTurnAttempt(
  * Development eval users pick harness variants per run; everyone else (and
  * production) gets the default. Fixed for the turn.
  */
+function turnRecordsRequests(turnId: string, userId: string) {
+	return devEvalUsersEnabled()
+		? turnMemo(`${turnId}:records-requests`, () => isDevEvalUser(userId))
+		: Promise.resolve(false);
+}
+
 function turnHarnessVariant(turnId: string, userId: string) {
 	return devEvalUsersEnabled()
 		? turnMemo(`${turnId}:harness-variant`, () => harnessVariantForUser(userId))
