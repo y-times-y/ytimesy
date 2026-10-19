@@ -76,6 +76,8 @@ import {
 	detachedStatusRows,
 	lockedByOther,
 	newDetachedState,
+	runtimeCapFor,
+	runtimeWarning,
 	START_NEEDS_MS,
 	wakeForFinalize,
 	worthWaiting,
@@ -1095,7 +1097,9 @@ async function provision(run: TaskRun) {
 	}
 	if (!run.detached) startGrader(run);
 	// A detached task's VM outlives this invocation: setup, the agent's
-	// budget, then the window in which a --collect finishes it.
+	// budget, then the window in which a --collect finishes it. The edge's
+	// usage admission replaces this runtime cap once the turn starts, so the
+	// finalize raises it again (wakeAgentVm, runtimeCapFor).
 	const lifetimeSec = run.detached
 		? SETUP_LIMIT_SEC + options.agentSeconds + COLLECT_WINDOW_MS / 1000 + 120
 		: Math.ceil((invocationDeadline - Date.now()) / 1000) + 120;
@@ -1350,6 +1354,20 @@ async function wakeAgentVm(run: TaskRun) {
 					throw error;
 				},
 			),
+		budget: async () => {
+			const data = await ref.data();
+			const cap = runtimeCapFor(data, holdSec);
+			if (cap === null) return;
+			await ref.update({ maxRunTotalSeconds: cap } as never);
+			const confirmed = await ref.data();
+			if (confirmed.maxRunTotalSeconds !== cap)
+				throw new Error(
+					`The agent VM's runtime cap stayed ${confirmed.maxRunTotalSeconds}s (asked ${cap}s).`,
+				);
+			console.info(
+				`${run.task.id}: agent VM runtime cap raised ${data.maxRunTotalSeconds}s -> ${cap}s (${data.totalRunSeconds}s used) for the finalize.`,
+			);
+		},
 		resume: async () => {
 			// The product's resume path (admission, idle timeout, start, wait).
 			await machines.ensureRunning(WorkspaceId(vm));
@@ -1807,6 +1825,22 @@ async function finalizeDetached(
 	logResult(run, state.finalizeStartedAt ?? Date.now());
 }
 
+const runtimeWarned = new Set<string>();
+/** Once per invocation: a finished turn's agent VM near its runtime cap. */
+async function warnRuntime(state: DetachedState) {
+	const vm = state.agentVm;
+	if (!vm || runtimeWarned.has(vm) || state.phase === "queued") return;
+	const data = await client.vms
+		.ref(vm)
+		.data()
+		.catch(() => null);
+	if (!data) return;
+	const warning = runtimeWarning(state, data);
+	if (!warning) return;
+	runtimeWarned.add(vm);
+	console.warn(`Runtime: ${warning}`);
+}
+
 /** Collect: one detached task, step by step, while this invocation can help it. */
 async function advanceDetached(record: HardSetRecord) {
 	const state = record.detached as DetachedState;
@@ -1841,6 +1875,7 @@ async function advanceDetached(record: HardSetRecord) {
 				? await pollTurn({ record, sessionId: state.sessionId })
 				: null;
 		if (turn !== null) state.turnState = turn;
+		await warnRuntime(state);
 		const action = collectAction(state, {
 			now: Date.now(),
 			invocationEndsAt: invocationDeadline,

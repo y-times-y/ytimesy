@@ -24,6 +24,18 @@ export function readerScratchDirectory(sessionId: string) {
 export const READER_USER_SETUP_SCRIPT = `id -u ${READER_LINUX_USER} >/dev/null 2>&1 || useradd --system --user-group --no-create-home --home-dir ${READER_SCRATCH_ROOT} --shell /bin/bash ${READER_LINUX_USER}
 install -d -o root -g root -m 0755 ${READER_SCRATCH_ROOT}`;
 
+/**
+ * Runs READER_USER_SETUP_SCRIPT as root from the builder's user (passwordless
+ * sudo). Anything that hands a directory to the reader runs it first: VMs
+ * booted from an image older than the reader user lack it.
+ */
+export function readerUserSetupCommand() {
+	const encoded = Buffer.from(READER_USER_SETUP_SCRIPT, "utf8").toString(
+		"base64",
+	);
+	return `sudo -n bash -c "$(printf %s ${encoded} | base64 -d)"`;
+}
+
 /** Runtime directories every session writes under; sticky like /tmp so a reader can add its own entries only. */
 const SHARED_RUNTIME_PARENTS = [
 	"/tmp/ytimesy-api-command-scopes",
@@ -41,12 +53,9 @@ export function readerPreparationScript(input: {
 	readonly checkout?: string;
 }) {
 	const scratch = readerScratchDirectory(input.sessionId);
-	const encoded = Buffer.from(READER_USER_SETUP_SCRIPT, "utf8").toString(
-		"base64",
-	);
 	return [
 		"set -e",
-		`sudo -n bash -c "$(printf %s ${encoded} | base64 -d)"`,
+		readerUserSetupCommand(),
 		`sudo -n install -d -o ${READER_LINUX_USER} -g ${READER_LINUX_USER} -m 0700 ${scratch}`,
 		...SHARED_RUNTIME_PARENTS.map(
 			(directory) =>

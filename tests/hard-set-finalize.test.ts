@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { wakeForFinalize } from "../scripts/hard-set/detached";
+import {
+	runtimeCapFor,
+	runtimeLeftSec,
+	runtimeWarning,
+	wakeForFinalize,
+} from "../scripts/hard-set/detached";
 import { reviewLoopReport } from "../scripts/hard-set/review-report";
 import { toolCallLine, toolCallSummary } from "../scripts/hard-set/turn-record";
 import { SessionItemId } from "../src/domain/ids";
@@ -13,6 +18,7 @@ const vm = (states: (string | null | Error)[]) => {
 			if (next instanceof Error) throw next;
 			return next ?? null;
 		}),
+		budget: vi.fn(async () => {}),
 		resume: vi.fn(async () => {}),
 		hold: vi.fn(async () => {}),
 		sleep: vi.fn(async () => {}),
@@ -70,10 +76,64 @@ describe("hard set finalize wakes the agent VM", () => {
 		expect(deps.resume).toHaveBeenCalledTimes(3);
 	});
 
+	it("raises the runtime cap before resuming a paused VM", async () => {
+		const deps = vm(["paused", "running"]);
+		const order: string[] = [];
+		deps.budget.mockImplementation(async () => {
+			order.push("budget");
+		});
+		deps.resume.mockImplementation(async () => {
+			order.push("resume");
+		});
+		expect(await wakeForFinalize(deps)).toMatchObject({ ok: true });
+		expect(order).toEqual(["budget", "resume"]);
+	});
+
+	it("retries when the cap cannot be raised", async () => {
+		const deps = vm(["paused"]);
+		deps.budget.mockRejectedValue(new Error("cap stayed 2600s"));
+		const result = await wakeForFinalize(deps, 2);
+		expect(result.ok ? "" : result.reason).toContain("cap stayed");
+		expect(deps.resume).not.toHaveBeenCalled();
+	});
+
 	it("does not fail a wake when the idle hold is refused", async () => {
 		const deps = vm(["running"]);
 		deps.hold.mockRejectedValue(new Error("no"));
 		expect(await wakeForFinalize(deps)).toMatchObject({ ok: true });
+	});
+});
+
+describe("the agent VM's runtime cap", () => {
+	// hs30b-rvon: the edge metered the VM in short chunks after the turn and
+	// the collect 17 minutes later found the cap spent.
+	const spent = { totalRunSeconds: 2604, maxRunTotalSeconds: 2604 };
+
+	it("raises a spent cap to cover the finalize, never lowers one", () => {
+		expect(runtimeLeftSec(spent)).toBe(0);
+		expect(runtimeCapFor(spent, 900)).toBe(3504);
+		expect(
+			runtimeCapFor({ totalRunSeconds: 100, maxRunTotalSeconds: 5820 }, 900),
+		).toBeNull();
+		expect(runtimeCapFor({ totalRunSeconds: 100 }, 900)).toBeNull();
+	});
+
+	it("warns a collect about a finished turn's VM near its limit", () => {
+		const state = {
+			phase: "running" as const,
+			agentVm: "vm-1",
+			turnState: "completed",
+		};
+		expect(runtimeWarning(state, { ...spent, state: "paused" })).toContain(
+			"vm-1 (paused) has 0.0m of runtime left",
+		);
+		// A live turn keeps the edge extending it; plenty left needs no warning.
+		expect(
+			runtimeWarning({ ...state, turnState: "running" }, spent),
+		).toBeNull();
+		expect(
+			runtimeWarning(state, { totalRunSeconds: 100, maxRunTotalSeconds: 5820 }),
+		).toBeNull();
 	});
 });
 
