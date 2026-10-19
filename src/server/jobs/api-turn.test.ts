@@ -359,6 +359,111 @@ it("keeps completion capture and no cross-chat memory for Codex subscription tur
 	expect(mocks.report).toHaveBeenCalledOnce();
 });
 
+describe("a Codex subscription (ChatGPT plan) root chat publishes like an API chat", () => {
+	const subscriptionTurn = (extra: Partial<ApiTurn> = {}) =>
+		({
+			id: "turn",
+			session_id: "session",
+			user_id: "owner",
+			connection_id: null,
+			connection_revision: subscriptionTurnRevision("medium"),
+			model_id: "gpt-5.5",
+			state: "running",
+			messages: [{ role: "user", content: "Fix branches" }],
+			items: [
+				{
+					kind: "userMessage",
+					id: SessionItemId("user"),
+					text: "Fix branches",
+				},
+			],
+			lease_id: "lease",
+			...extra,
+		}) as ApiTurn;
+	const codexOwner = (extra: Record<string, unknown> = {}) =>
+		mocks.owner.mockResolvedValue({
+			id: "session",
+			userId: "owner",
+			projectId: "project",
+			harness: "codex",
+			providerRef: "vm",
+			parentSessionId: null,
+			taskAccess: null,
+			...extra,
+		});
+	const answering = () =>
+		mocks.subscriptionRuntime.mockImplementation(async (input) => {
+			await input.tools.workspace();
+			await input.onEvent({ type: "text-delta", id: "reply", text: "Done." });
+			return [];
+		});
+
+	it("commits and pushes the turn at the completion boundary on its machine", async () => {
+		codexOwner();
+		answering();
+		mocks.commit.mockResolvedValueOnce({
+			publication: {
+				branch: "ytimesy/fix-branches-abc123",
+				pullRequestUrl: null,
+			},
+		});
+		expect(await runApiTurn({} as WorkspaceMachines, subscriptionTurn())).toBe(
+			"completed",
+		);
+		expect(mocks.subscriptionRuntime).toHaveBeenCalledOnce();
+		expect(mocks.commit).toHaveBeenCalledOnce();
+		expect(mocks.commit.mock.calls[0][0]).toMatchObject({
+			id: "session",
+			harness: "codex",
+			providerRef: "vm",
+		});
+	});
+
+	it("shows why its changes were not pushed and still completes", async () => {
+		codexOwner();
+		answering();
+		mocks.commit.mockResolvedValueOnce({
+			notice: "Changes are committed in this chat but were not pushed.",
+		});
+		expect(await runApiTurn({} as WorkspaceMachines, subscriptionTurn())).toBe(
+			"completed",
+		);
+		expect(mocks.finalize).toHaveBeenCalledWith(
+			expect.anything(),
+			"completed",
+			expect.arrayContaining([
+				expect.objectContaining({ kind: "notice", id: "turn:publication" }),
+			]),
+		);
+	});
+
+	it("commits nothing for a subagent or a turn that ends in plan mode", async () => {
+		codexOwner({ agentRole: "writer", parentSessionId: "parent" });
+		answering();
+		await runApiTurn({} as WorkspaceMachines, subscriptionTurn());
+		codexOwner();
+		await runApiTurn(
+			{} as WorkspaceMachines,
+			subscriptionTurn({
+				items: [
+					{
+						kind: "userMessage",
+						id: SessionItemId("user"),
+						text: "Plan branches",
+					},
+					{
+						kind: "dynamicToolCall",
+						id: SessionItemId("enter"),
+						tool: "enter_plan_mode",
+						status: "completed",
+					},
+				],
+			} as Partial<ApiTurn>),
+		);
+		expect(mocks.commit).not.toHaveBeenCalled();
+	});
+});
+
 it("stops command groups on abort while the model loop is still awaiting a tool", async () => {
 	let finishTool: () => void = () => {
 		throw new Error("Tool was not started");

@@ -221,6 +221,52 @@ it("persists the selected runtime before a reused chat starts polling", async ()
 	).toEqual([{ harness: "codex", listed_model_id: null }]);
 });
 
+it.each(["codex", "api"] as const)(
+	"gives a %s root chat whose VM is gone a fresh copy, never a child",
+	async (harness) => {
+		const { project, workspaceId } = await readyWorkspace();
+		const root = await insertAgentSession({
+			userId: "alice",
+			projectId: project.id,
+			workspaceId,
+			harness,
+			providerRef: "vm-gone",
+		});
+		const child = await insertAgentSession({
+			userId: "alice",
+			projectId: project.id,
+			workspaceId,
+			harness,
+			providerRef: "vm-gone",
+			parentSessionId: root.id,
+		});
+		const machines = {
+			ensureRunning: async (id: string) => {
+				if (id === "vm-gone") throw new Error("VM not found");
+				return id;
+			},
+			provisionSession: async () => "vm-fresh",
+			exec: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+			writeTextFile: async () => {},
+		} as never;
+		const bound = await bindAgentSessionMachine(machines, {
+			userId: "alice",
+			projectId: project.id,
+			sessionId: root.id,
+			harness,
+		});
+		expect(bound.providerRef).toBe("vm-fresh");
+		await expect(
+			bindAgentSessionMachine(machines, {
+				userId: "alice",
+				projectId: project.id,
+				sessionId: child.id,
+				harness,
+			}),
+		).rejects.toThrow("VM not found");
+	},
+);
+
 it("does not switch a running turn or another owner's runtime", async () => {
 	const { project, workspaceId } = await readyWorkspace();
 	const session = await insertAgentSession({

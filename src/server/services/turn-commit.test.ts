@@ -194,6 +194,29 @@ it("commits a root chat's turn without the verification gate and returns where i
 	});
 });
 
+it.each(["codex", "api"] as const)(
+	"commits and publishes a %s-harness root chat the same way",
+	async (harness) => {
+		lookup.mockResolvedValue({ fullName: "owner/primary", branch: "main" });
+		verification.mockClear();
+		publication.publish.mockClear();
+		publication.publish.mockResolvedValue({
+			branch: "ytimesy/fix-parser-0c4a1e",
+			pullRequestUrl: null,
+		});
+		const runtime = new MemoryWorkspaceRuntime();
+		const outcome = await commitCompletedSessionTurn(
+			{ ...chat, harness },
+			items,
+			runtime,
+		);
+		expect(verification).not.toHaveBeenCalled();
+		expect(runtime.commands).toHaveLength(1);
+		expect(publication.publish).toHaveBeenCalledOnce();
+		expect(outcome?.publication?.branch).toBe("ytimesy/fix-parser-0c4a1e");
+	},
+);
+
 it("neither commits nor pushes a root chat of an eval user or evaluation run", async () => {
 	publication.excluded.mockResolvedValueOnce(true);
 	publication.publish.mockClear();

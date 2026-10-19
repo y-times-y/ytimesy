@@ -446,10 +446,11 @@ export async function bindAgentSessionMachine(
 					);
 				}
 			: undefined,
-		// An API root chat whose machine is gone (and has no checkpoint) gets a
-		// fresh copy; its committed turns are on its GitHub branch.
-		replaceMissingReadOnly:
-			input.harness === "api" && !selectedSession.parentSessionId,
+		// A root chat whose machine is gone (and has no checkpoint) gets a fresh
+		// copy; its committed turns are on its GitHub branch. Codex subscription
+		// and API chats both run through api-turn with their transcript in the
+		// database, so the harness keeps nothing on the VM worth refusing over.
+		replaceMissingReadOnly: !selectedSession.parentSessionId,
 		workspaceId: workspace.id,
 		templateSnapshotId,
 		machineSize: selectedSession.providerRef
