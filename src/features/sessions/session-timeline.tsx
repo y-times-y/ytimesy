@@ -902,6 +902,15 @@ function SessionItemView({
 					</p>
 				</div>
 			);
+		case "notice":
+			return (
+				<div className="session-activity" data-kind="notice" role="status">
+					<p>
+						<ActivityIcon glyph="guide" />
+						<span className="session-activity-title">{item.message}</span>
+					</p>
+				</div>
+			);
 		case "unknown":
 			return (
 				<div

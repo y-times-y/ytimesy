@@ -108,7 +108,8 @@ export function groupTimelineRows(
 				item.kind !== "planProposal" &&
 				item.kind !== "secretRequest" &&
 				item.kind !== "memorySave" &&
-				item.kind !== "modelSwitch",
+				item.kind !== "modelSwitch" &&
+				item.kind !== "notice",
 		);
 		if (activity[0])
 			rows.push({
@@ -142,6 +143,12 @@ export function groupTimelineRows(
 		rows.push(
 			...visible
 				.filter((item) => item.kind === "memorySave")
+				.map((item) => ({ kind: "item" as const, item })),
+		);
+		// Why the turn's changes stayed off GitHub, last.
+		rows.push(
+			...visible
+				.filter((item) => item.kind === "notice")
 				.map((item) => ({ kind: "item" as const, item })),
 		);
 	}

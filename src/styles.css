@@ -802,6 +802,15 @@ a.sidebar-chat-pr,
 	font-size: 13px;
 	line-height: 18px;
 }
+a.session-title-meta {
+	flex-shrink: 0;
+	text-decoration: none;
+}
+a.session-title-meta:hover,
+a.session-title-meta:focus-visible {
+	color: #f2f2f2;
+	text-decoration: underline;
+}
 
 .workspace-body {
 	flex: 1;
