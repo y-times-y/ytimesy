@@ -94,4 +94,19 @@ describe("hard set: grading each attempt of the loop", () => {
 		expect(setup).toContain("- /tmp/ytimesy-attempts:/tmp/ytimesy-attempts");
 		expect(setup).toContain("chmod 1777 /tmp/ytimesy-attempts");
 	});
+
+	it("keeps execute-only files unreadable and out of the git baseline", () => {
+		const setup = setupFiles(task, "demo")["/tb/setup.sh"];
+		execFileSync("bash", ["-n"], { input: setup });
+		// ACLs never make an execute-only file readable (after both setfacl passes).
+		expect(
+			setup.split("! -perm -u=r ! -perm -o=r -exec setfacl -b {} +").length,
+		).toBe(3);
+		expect(setup).toContain(
+			"sudo -u ubuntu find . -path ./.git -prune -o \\( ! -readable -o -type d ! -executable \\) -print -prune | sed 's|^\\./|/|' >> .git/info/exclude",
+		);
+		expect(setup.indexOf("! -readable")).toBeLessThan(
+			setup.indexOf("sudo -u ubuntu git add -A"),
+		);
+	});
 });

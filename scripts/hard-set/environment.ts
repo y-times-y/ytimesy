@@ -201,6 +201,14 @@ export function extraMounts(task: TaskEnvironment) {
 
 const q = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
 
+/**
+ * Shell (VM, root, $MOUNTS set): files the image made unreadable to everyone
+ * (an execute-only tool, mode 111) lose the ACLs that would let the task's
+ * user read them, so they stay as the image has them.
+ */
+export const UNREADABLE_KEEP_MODE =
+	"find $MOUNTS -type f ! -perm -u=r ! -perm -o=r -exec setfacl -b {} + 2>/dev/null || true";
+
 /** VM-side files for the setup step; `name` is the builder project's folder under ~. */
 export function setupFiles(task: TaskEnvironment, name: string) {
 	if (!/^[A-Za-z0-9._-]+$/.test(name))
@@ -261,6 +269,7 @@ chown -R 1000:1000 $MOUNTS
 # The VM user (builder file tools, git) and the container user (commands)
 # both keep write access to everything either of them creates.
 setfacl -R -m u:1000:rwX,d:u:1000:rwX,m:rwX,d:m:rwX $MOUNTS
+${UNREADABLE_KEEP_MODE}
 log "task directories copied: $MOUNTS (working directory $WD)"
 git config --system --add safe.directory '*'
 cd "$WD"
@@ -270,6 +279,8 @@ if [ ! -d .git ]; then
   sudo -u ubuntu git config user.name 'Evaluation fixture'
   sudo -u ubuntu git config user.email 'evaluation@ytimesy.invalid'
   printf '\nnode_modules/\n.next/\n.ytimesy/\n__pycache__/\n' >> .git/info/exclude
+  # What the VM user cannot read (an execute-only tool) stays out of the baseline.
+  sudo -u ubuntu find . -path ./.git -prune -o \( ! -readable -o -type d ! -executable \) -print -prune | sed 's|^\./|/|' >> .git/info/exclude
   sudo -u ubuntu git add -A
   sudo -u ubuntu git commit -q --allow-empty -m 'Frozen benchmark environment'
 fi
@@ -321,6 +332,7 @@ docker exec -u 0 -e WD="$WD" -e NAME="$NAME" tb sh -c '
 cuid=$(docker exec tb id -u)
 if [ "$cuid" != 0 ] && [ "$cuid" != 1000 ]; then
   setfacl -R -m u:$cuid:rwX,d:u:$cuid:rwX $MOUNTS
+  ${UNREADABLE_KEEP_MODE}
 fi
 printf '%s\n' $MOUNTS > /tb/route-mounts
 printf 'WD=%q\nMOUNTS=%q\n' "$WD" "$MOUNTS" > /tb/runtime.sh

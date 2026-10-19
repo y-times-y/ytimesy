@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -8,17 +8,24 @@ import {
 	controlRates,
 	failingRates,
 	failureEvidence,
+	formatRates,
+	GRADE_LABELS,
+	type Grade,
+	gradeFromUnknown,
 	gradingPrompt,
 	outcomeOf,
 	parseGrade,
 } from "../scripts/checker-detect/grading";
 import {
+	execHeader,
+	isAppleDouble,
 	isPatchArtifact,
 	outsideFiles,
 	parseRestoreLog,
 	patchDirectory,
 	restoreProblems,
 	restoreScript,
+	sidecarStateProblem,
 } from "../scripts/checker-detect/restore";
 import {
 	HELD_OUT_TASKS,
@@ -313,7 +320,7 @@ describe("grading", () => {
 		expect(evidence.length).toBeLessThan(12_100);
 	});
 
-	it("builds a blind prompt and parses the grade", () => {
+	it("builds a blind prompt with the full findings and parses the grade", () => {
 		const prompt = gradingPrompt({
 			instruction: "Do it.",
 			evidence: "FAILED test_total: 9 != 10",
@@ -322,37 +329,56 @@ describe("grading", () => {
 				failures: ["total off by one"],
 				unmetRequirements: ["total off by one", "missing header"],
 				notes: "",
+				requirements: [
+					{ requirement: "out.json exists", met: true, evidence: "ls" },
+					{ requirement: "total exact", met: false, evidence: "9 vs 10" },
+					{ requirement: "fast", met: null, evidence: "" },
+				],
+				assumptions: [
+					{ assumption: "inclusive", alternative: "exclusive", outcome: "10" },
+				],
 			},
 		});
 		expect(prompt).toContain("1. total off by one\n2. missing header");
+		expect(prompt).toContain("- [met] out.json exists -- ls");
+		expect(prompt).toContain("- [NOT MET] total exact -- 9 vs 10");
+		expect(prompt).toContain("- [unchecked] fast");
+		expect(prompt).toContain(
+			"- inclusive | alternative: exclusive | outcome: 10",
+		);
+		for (const label of GRADE_LABELS) expect(prompt).toContain(`"${label}"`);
 		expect(prompt).not.toMatch(/verdict/i);
 		expect(
 			parseGrade(
-				'{"cause":"total","label":"named_cause","otherReal":true,"reason":"r"}',
+				'{"cause":"total","label":"partial","finding":2,"reason":"r"}',
 			),
-		).toEqual({
-			cause: "total",
-			label: "named_cause",
-			otherReal: null,
-			reason: "r",
-		});
-		expect(
-			parseGrade(
-				'x {"cause":"c","label":"other","otherReal":false,"reason":""}',
-			)?.otherReal,
-		).toBe(false);
+		).toEqual({ cause: "total", label: "partial", finding: 2, reason: "r" });
 		expect(parseGrade('{"label":"maybe"}')).toBeNull();
 		expect(blindId("a.b")).toMatch(/^S-[0-9a-f]{8}$/);
 		expect(blindId("a.b")).toBe(blindId("a.b"));
 	});
 
-	it("scores outcomes into detection, wrong-cause, miss and false-alarm rates", () => {
-		const grade = (
-			label: "named_cause" | "other",
-			otherReal: boolean | null,
-		) => ({
+	it("maps grades in the earlier two-label format", () => {
+		const legacy = (otherReal: boolean | null) =>
+			parseGrade(
+				JSON.stringify({ cause: "c", label: "other", otherReal, reason: "" }),
+			);
+		expect(legacy(true)).toMatchObject({ label: "other_real", legacy: true });
+		expect(legacy(false)).toMatchObject({ label: "wrong", legacy: true });
+		expect(legacy(null)).toMatchObject({ label: "none", legacy: true });
+		expect(
+			gradeFromUnknown({
+				label: "named_cause",
+				otherReal: null,
+				cause: "",
+				reason: "",
+			})?.label,
+		).toBe("named_cause");
+	});
+
+	it("scores outcomes; unfit samples stay out of every rate", () => {
+		const grade = (label: Grade["label"]): Grade => ({
 			label,
-			otherReal,
 			cause: "",
 			reason: "",
 		});
@@ -360,49 +386,218 @@ describe("grading", () => {
 			outcomeOf({
 				kind: "failing",
 				verdict: "fail",
-				grade: grade("named_cause", null),
+				grade: grade("named_cause"),
 			}),
 			outcomeOf({
 				kind: "failing",
 				verdict: "unsure",
-				grade: grade("other", true),
+				grade: grade("partial"),
 			}),
 			outcomeOf({
 				kind: "failing",
 				verdict: "fail",
-				grade: grade("other", false),
+				grade: grade("other_real"),
 			}),
+			outcomeOf({ kind: "failing", verdict: "fail", grade: grade("wrong") }),
+			outcomeOf({ kind: "failing", verdict: "unsure", grade: grade("none") }),
 			outcomeOf({ kind: "failing", verdict: "pass", grade: null }),
 			outcomeOf({ kind: "failing", verdict: "fail", grade: null }),
 			outcomeOf({ kind: "failing", verdict: null, grade: null }),
+			outcomeOf({
+				kind: "failing",
+				verdict: "fail",
+				grade: grade("named_cause"),
+				unfit: true,
+			}),
 		];
 		expect(failing).toEqual([
 			"named_cause",
+			"partial",
 			"other_real",
-			"other_not_real",
+			"wrong",
+			"none",
 			"missed",
 			"ungraded",
 			"no_run",
+			"unfit",
 		]);
 		const rates = failingRates(failing);
 		expect(rates).toMatchObject({
-			n: 6,
+			n: 9,
 			named: 1,
-			other: 2,
+			partial: 1,
 			otherReal: 1,
+			wrong: 1,
+			none: 1,
 			missed: 1,
 			ungraded: 1,
 			noRun: 1,
+			unfit: 1,
 		});
-		expect(rates.detectionRate).toBeCloseTo(0.25);
-		expect(rates.missRate).toBeCloseTo(0.25);
+		expect(rates.detectionRate).toBeCloseTo(1 / 6);
+		expect(rates.missRate).toBeCloseTo(1 / 6);
+		expect(formatRates("x", rates)).toContain("unfit (left out) 1");
 		const controls = controlRates([
 			outcomeOf({ kind: "control", verdict: "fail", grade: null }),
 			outcomeOf({ kind: "control", verdict: "pass", grade: null }),
 			outcomeOf({ kind: "control", verdict: "unsure", grade: null }),
 			outcomeOf({ kind: "control", verdict: null, grade: null }),
+			outcomeOf({ kind: "control", verdict: "fail", grade: null, unfit: true }),
 		]);
-		expect(controls).toMatchObject({ n: 4, ran: 3, falseAlarms: 1, unsure: 1 });
+		expect(controls).toMatchObject({
+			n: 5,
+			ran: 3,
+			unfit: 1,
+			falseAlarms: 1,
+			unsure: 1,
+		});
 		expect(controls.falseAlarmRate).toBeCloseTo(1 / 3);
+	});
+});
+
+describe("restore fidelity", () => {
+	const sidecarTask = environment({
+		id: "portal-task",
+		sidecars: ["portal"],
+		artifacts: [
+			{ source: "/app", service: "main", exclude: [] },
+			{ source: "/audit/log.jsonl", service: "portal", exclude: [] },
+		],
+	});
+
+	it("leaves AppleDouble entries out, widens modes from the image and re-checks a restarted sidecar's files", () => {
+		const script = restoreScript(sidecarTask, "/r");
+		expect(script).toContain("--exclude='._*' -xzf");
+		expect(script).toContain('echo "APPLEDOUBLE');
+		expect(script).toContain("modes 'main' '/app' \"$BEFORE/0\"");
+		expect(script).toContain(
+			"fixmodes 0 'main' '/app' '/r/workspace/0/app' \"$BEFORE/0\"",
+		);
+		// The working directory is replaced: it must hold no file the artifact lacked.
+		expect(script).toContain("'/r/workspace/0/app' RESTORED 1");
+		expect(script).toContain(
+			"verify 1 'portal' '/audit/log.jsonl' '/r/workspace/1/log.jsonl' RECHECK",
+		);
+		expect(script).toContain("! -perm -u=r ! -perm -o=r -exec setfacl -b");
+		expect(isAppleDouble("./0/._evalbench")).toBe(true);
+		expect(isAppleDouble("./0/evalbench/._.py")).toBe(true);
+		expect(isAppleDouble("./0/a._b")).toBe(false);
+		expect(execHeader(new TextEncoder().encode("#!/b"))).toBe(true);
+		expect(execHeader(new Uint8Array([0x7f, 0x45, 0x4c, 0x46]))).toBe(true);
+		expect(execHeader(new TextEncoder().encode("abcd"))).toBe(false);
+	});
+
+	it("names extra files, a sidecar that rewrote its state and leftover AppleDouble files", () => {
+		const result = parseRestoreLog(
+			[
+				"APPLEDOUBLE 2",
+				"MODES 0 1",
+				"RESTORED 0 extra 12",
+				"RESTORED 1 ok 1",
+				"SIDECAR portal healthy",
+				"RECHECK 1 mismatch 1",
+				"ABSENT /tests",
+				"ABSENT /solution",
+				"RESTORE_DONE",
+			].join("\n"),
+		);
+		expect(result.modes).toEqual([{ index: 0, changed: 1 }]);
+		expect(result.rechecks).toEqual([
+			{ index: 1, state: "mismatch", files: 1 },
+		]);
+		expect(restoreProblems(sidecarTask, result)).toEqual([
+			"2 AppleDouble file(s) in the workspace",
+			"artifact /app holds files the artifact did not have",
+			"sidecar portal changed /audit/log.jsonl when it restarted (state not kept)",
+		]);
+	});
+
+	it("marks tasks whose sidecar state cannot be restored", () => {
+		expect(sidecarStateProblem(environment())).toBeNull();
+		expect(sidecarStateProblem(sidecarTask)).toMatch(/does not reload them/);
+		expect(
+			sidecarStateProblem(
+				environment({
+					sidecars: ["feed"],
+					artifacts: [{ source: "/w", service: "main", exclude: [] }],
+				}),
+			),
+		).toMatch(/start fresh/);
+		expect(
+			sidecarStateProblem({ ...sidecarTask, id: "heat-pump-warranty" }),
+		).toBeNull();
+	});
+
+	it("runs the restore end to end against a fake docker: no AppleDouble file, image modes kept, extra files caught", () => {
+		const dir = mkdtempSync(join(tmpdir(), "checker-restore-e2e-"));
+		try {
+			// The "container" is a directory; docker exec/cp act on it.
+			const box = join(dir, "box");
+			const bin = join(dir, "bin");
+			execFileSync("mkdir", [
+				"-p",
+				`${box}/app`,
+				bin,
+				`${dir}/root/stage/0/app`,
+			]);
+			writeFileSync(`${box}/app/run.sh`, "#!/bin/sh\necho old\n", {
+				mode: 0o755,
+			});
+			writeFileSync(`${box}/app/stale.txt`, "stale\n");
+			writeFileSync(`${dir}/root/stage/0/app/run.sh`, "#!/bin/sh\necho new\n", {
+				mode: 0o644,
+			});
+			writeFileSync(`${dir}/root/stage/0/app/._run.sh`, "appledouble");
+			writeFileSync(
+				join(bin, "docker"),
+				[
+					"#!/bin/bash",
+					`BOX=${box}`,
+					'case "$1" in',
+					// biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter expansion
+					'  exec) shift; while [[ "$1" == -* ]]; do case "$1" in -u|-w|-e) shift 2;; *) shift;; esac; done; shift; args=(); for a in "$@"; do args+=("${a//\\/app/$BOX/app}"); done; if [ ${#args[@]} = 1 ]; then sed "s|/app|$BOX/app|g" | sh; else "${args[@]}" | sed "s|$BOX||g"; fi;;',
+					// biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter expansion
+					'  cp) src=$2; dst=$3; if [ "$dst" = - ]; then p=${src#*:}; tar -C "$BOX$(dirname "$p")" -cf - "$(basename "$p")"; else p=${dst#*:}; if [[ "$src" == */. ]]; then cp -a "$src" "$BOX$p/"; else cp -p "$src" "$BOX$p"; fi; fi;;',
+					"  *) ;;",
+					"esac",
+				].join("\n"),
+				{ mode: 0o755 },
+			);
+			// GNU stat's `-c "%a %n"`, as in a Linux container.
+			writeFileSync(
+				join(bin, "stat"),
+				'#!/bin/sh\nshift 2\nexec python3 -c \'import os,sys\nfor p in sys.argv[1:]: print("%o %s" % (os.stat(p).st_mode & 0o7777, p))\' "$@"\n',
+				{ mode: 0o755 },
+			);
+			execFileSync("tar", [
+				"-czf",
+				`${dir}/root/workspace.tgz`,
+				"-C",
+				`${dir}/root/stage`,
+				".",
+			]);
+			writeFileSync(`${dir}/root/runtime.sh`, "WD=/app\nMOUNTS=''\n");
+			const task = environment({
+				artifacts: [{ source: "/app", service: "main", exclude: [] }],
+			});
+			writeFileSync(
+				`${dir}/root/restore.sh`,
+				restoreScript(task, `${dir}/root`),
+			);
+			const log = execFileSync("bash", [`${dir}/root/restore.sh`], {
+				encoding: "utf8",
+				env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+			});
+			const result = parseRestoreLog(log);
+			expect(result.appleDouble).toBe(0);
+			expect(result.artifacts).toEqual([{ index: 0, state: "ok", files: 1 }]);
+			expect(result.modes).toEqual([{ index: 0, changed: 1 }]);
+			expect(
+				execFileSync("ls", ["-A", `${box}/app`], { encoding: "utf8" }).trim(),
+			).toBe("run.sh");
+			expect(statSync(`${box}/app/run.sh`).mode & 0o777).toBe(0o755);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });

@@ -66,34 +66,101 @@ export type CheckerFindings = {
 	readonly failures: readonly string[];
 	readonly unmetRequirements: readonly string[];
 	readonly notes: string;
+	/** The checker's whole requirement table (met, unmet, unchecked). */
+	readonly requirements?: readonly {
+		readonly requirement: string;
+		readonly met: boolean | null;
+		readonly evidence: string;
+	}[];
+	readonly assumptions?: readonly {
+		readonly assumption: string;
+		readonly alternative: string;
+		readonly outcome: string;
+	}[];
 };
 
 /** Anonymous id for a sample on the grading sheet (the grader never sees task or trial names). */
 export const blindId = (sampleId: string) => `S-${rank(sampleId).slice(0, 8)}`;
 
-export const GRADE_LABELS = ["named_cause", "other"] as const;
+/**
+ * named_cause: a finding names the defect behind a failing hidden check;
+ * partial: a finding is about that defect but too vague, mis-diagnosed or
+ * only part of it; other_real: the cause is not named but a finding is a real
+ * defect; wrong: the concrete findings are wrong; none: no concrete finding.
+ */
+export const GRADE_LABELS = [
+	"named_cause",
+	"partial",
+	"other_real",
+	"wrong",
+	"none",
+] as const;
 export type GradeLabel = (typeof GRADE_LABELS)[number];
 
 export type Grade = {
 	readonly label: GradeLabel;
-	/** For "other": whether what it flagged is a real defect, from the evidence. */
-	readonly otherReal: boolean | null;
 	/** The grader's one-line statement of the hidden failure's cause. */
 	readonly cause: string;
 	readonly reason: string;
+	/** The finding (1-based, as listed) that names or touches the cause. */
+	readonly finding?: number | null;
+	/** A grade in the earlier two-label format, mapped on read. */
+	readonly legacy?: boolean;
 };
 
 export const GRADE_SCHEMA = {
 	type: "object",
 	additionalProperties: false,
-	required: ["cause", "label", "otherReal", "reason"],
+	required: ["cause", "label", "finding", "reason"],
 	properties: {
 		cause: { type: "string" },
 		label: { type: "string", enum: [...GRADE_LABELS] },
-		otherReal: { type: ["boolean", "null"] },
+		finding: { type: ["integer", "null"] },
 		reason: { type: "string" },
 	},
 } as const;
+
+const MAX_FINDINGS_TEXT = 40_000;
+
+/** The checker's findings as the grader reads them: numbered findings, the requirement table, assumptions. */
+export function findingsText(findings: CheckerFindings) {
+	const listed = [
+		...findings.failures,
+		...findings.unmetRequirements.filter(
+			(entry) => !findings.failures.includes(entry),
+		),
+	];
+	const requirements = findings.requirements ?? [];
+	const assumptions = findings.assumptions ?? [];
+	const lines = [
+		"Findings:",
+		...(listed.length
+			? listed.map((finding, index) => `${index + 1}. ${finding}`)
+			: ["(no specific finding)"]),
+		...(requirements.length
+			? [
+					"",
+					"Requirement table (met / NOT MET / unchecked, with the reviewer's evidence):",
+					...requirements.map(
+						(entry) =>
+							`- [${entry.met === true ? "met" : entry.met === false ? "NOT MET" : "unchecked"}] ${entry.requirement}${entry.evidence ? ` -- ${entry.evidence}` : ""}`,
+					),
+				]
+			: []),
+		...(assumptions.length
+			? [
+					"",
+					"Assumptions the reviewer examined:",
+					...assumptions.map(
+						(entry) =>
+							`- ${entry.assumption}${entry.alternative ? ` | alternative: ${entry.alternative}` : ""}${entry.outcome ? ` | outcome: ${entry.outcome}` : ""}`,
+					),
+				]
+			: []),
+		...(findings.notes ? ["", `Notes: ${findings.notes}`] : []),
+	];
+	return clipHead(lines.join("\n"), MAX_FINDINGS_TEXT);
+}
 
 /** The grader's prompt for one failing sample (the checker's verdict is fail or unsure). */
 export function gradingPrompt(input: {
@@ -101,39 +168,34 @@ export function gradingPrompt(input: {
 	readonly evidence: string;
 	readonly findings: CheckerFindings;
 }) {
-	const listed = [
-		...input.findings.failures,
-		...input.findings.unmetRequirements.filter(
-			(entry) => !input.findings.failures.includes(entry),
-		),
-	];
 	return [
-		"You grade a reviewer. A task's hidden tests failed the delivered work. Separately, a reviewer who could not see the tests inspected the same work and reported findings. Decide whether the reviewer named the actual cause of the hidden failure.",
+		"You grade a reviewer. A task's hidden tests failed the delivered work. Separately, a reviewer who could not see the tests inspected the same work and reported findings. Decide whether the reviewer found what made the hidden tests fail.",
 		"",
 		"<task>",
-		clipHead(input.instruction, 6000),
+		clipHead(input.instruction, 8000),
 		"</task>",
 		"",
 		"<hidden_test_failure>",
 		input.evidence,
 		"</hidden_test_failure>",
 		"",
-		"<reviewer_findings>",
-		...(listed.length
-			? listed.map((finding, index) => `${index + 1}. ${finding}`)
-			: ["(no specific finding)"]),
-		...(input.findings.notes
-			? [`Notes: ${clipHead(input.findings.notes, 1500)}`]
-			: []),
-		"</reviewer_findings>",
+		"<reviewer_report>",
+		findingsText(input.findings),
+		"</reviewer_report>",
 		"",
-		"First state the cause of the hidden failure in one line, from the test output. Then label:",
-		'- "named_cause": a finding identifies that cause (the same defect or requirement, even in other words, specific enough that fixing it would address at least one of the failing checks). A vague finding ("may not meet the spec") does not count.',
-		'- "other": no finding identifies it. Then set otherReal: true when a finding is still a real defect the evidence supports or does not contradict, false when the findings look wrong, null when you cannot tell.',
-		'Answer with only JSON: { "cause": "...", "label": "named_cause" | "other", "otherReal": true | false | null, "reason": "..." }',
+		"First state the cause of the hidden failure in one line, from the test output (when the output is only a summary, use the task text to infer what the failing checks test). Then read every finding and the NOT MET rows of the requirement table, and judge on substance, not wording: the reviewer never saw the tests, so the same defect counts even when described from the requirement's side, through a different symptom, or found by a different route.",
+		"Label:",
+		'- "named_cause": a finding (or NOT MET row) identifies the defect behind at least one failing check, specifically enough that fixing what it says would make that check pass.',
+		'- "partial": a finding is about that defect or the requirement it breaks, but is too vague, gets the mechanism wrong, or covers only part of it, so fixing it alone would likely not make a failing check pass.',
+		'- "other_real": no finding is about the cause, but at least one concrete finding is a real defect (supported by the task and evidence, or plausible and not contradicted).',
+		'- "wrong": there are concrete findings, none about the cause, and they look wrong (contradicted by the task or the evidence).',
+		'- "none": no concrete finding (only "could not verify" statements or no findings).',
+		"Set finding to the number of the finding that names or touches the cause (null when none does).",
+		'Answer with only JSON: { "cause": "...", "label": "named_cause" | "partial" | "other_real" | "wrong" | "none", "finding": <number or null>, "reason": "..." }',
 	].join("\n");
 }
 
+/** A grade from the grader's answer; the earlier {named_cause|other, otherReal} format is mapped. */
 export function parseGrade(text: string): Grade | null {
 	const start = text.indexOf("{");
 	const end = text.lastIndexOf("}");
@@ -143,32 +205,57 @@ export function parseGrade(text: string): Grade | null {
 			string,
 			unknown
 		>;
-		if (!(GRADE_LABELS as readonly unknown[]).includes(value.label))
-			return null;
-		return {
-			label: value.label as GradeLabel,
-			otherReal:
-				value.label === "other" && typeof value.otherReal === "boolean"
-					? value.otherReal
-					: null,
-			cause: typeof value.cause === "string" ? value.cause.slice(0, 600) : "",
-			reason:
-				typeof value.reason === "string" ? value.reason.slice(0, 1200) : "",
-		};
+		return gradeFromUnknown(value);
 	} catch {
 		return null;
 	}
 }
 
+export function gradeFromUnknown(value: unknown): Grade | null {
+	if (!value || typeof value !== "object") return null;
+	const record = value as Record<string, unknown>;
+	const cause =
+		typeof record.cause === "string" ? record.cause.slice(0, 600) : "";
+	const reason =
+		typeof record.reason === "string" ? record.reason.slice(0, 1200) : "";
+	if ((GRADE_LABELS as readonly unknown[]).includes(record.label))
+		return {
+			label: record.label as GradeLabel,
+			cause,
+			reason,
+			finding:
+				typeof record.finding === "number" && Number.isInteger(record.finding)
+					? record.finding
+					: null,
+			...(record.legacy === true ? { legacy: true } : {}),
+		};
+	if (record.label === "other")
+		return {
+			label:
+				record.otherReal === true
+					? "other_real"
+					: record.otherReal === false
+						? "wrong"
+						: "none",
+			cause,
+			reason,
+			finding: null,
+			legacy: true,
+		};
+	return null;
+}
+
 /** One sample's outcome. */
 export type Outcome =
 	| "named_cause"
+	| "partial"
 	| "other_real"
-	| "other_not_real"
-	| "other_unclear"
+	| "wrong"
+	| "none"
 	| "missed"
 	| "ungraded"
 	| "no_run"
+	| "unfit"
 	| "control_pass"
 	| "false_alarm"
 	| "control_unsure";
@@ -178,7 +265,10 @@ export function outcomeOf(input: {
 	/** null: the checker did not run or gave no record. */
 	readonly verdict: AttemptVerdictKind | null;
 	readonly grade: Grade | null;
+	/** The sample cannot be restored faithfully (reported apart, never in a rate). */
+	readonly unfit?: boolean;
 }): Outcome {
+	if (input.unfit) return "unfit";
 	if (input.verdict === null) return "no_run";
 	if (input.kind === "control")
 		return input.verdict === "fail"
@@ -188,25 +278,23 @@ export function outcomeOf(input: {
 				: "control_pass";
 	if (input.verdict === "pass") return "missed";
 	if (!input.grade) return "ungraded";
-	if (input.grade.label === "named_cause") return "named_cause";
-	return input.grade.otherReal === true
-		? "other_real"
-		: input.grade.otherReal === false
-			? "other_not_real"
-			: "other_unclear";
+	return input.grade.label;
 }
 
 export type Rates = {
 	readonly n: number;
 	readonly named: number;
-	readonly other: number;
+	readonly partial: number;
 	readonly otherReal: number;
+	readonly wrong: number;
+	readonly none: number;
 	readonly missed: number;
 	readonly ungraded: number;
 	readonly noRun: number;
-	/** Of the samples with a checker run and a grade (or a pass verdict). */
+	readonly unfit: number;
+	/** Of the fit samples with a checker run and a grade (or a pass verdict). */
 	readonly detectionRate: number | null;
-	readonly wrongCauseRate: number | null;
+	readonly partialRate: number | null;
 	readonly missRate: number | null;
 };
 
@@ -214,31 +302,40 @@ export function failingRates(outcomes: readonly Outcome[]): Rates {
 	const count = (...kinds: Outcome[]) =>
 		outcomes.filter((outcome) => kinds.includes(outcome)).length;
 	const named = count("named_cause");
-	const other = count("other_real", "other_not_real", "other_unclear");
+	const partial = count("partial");
+	const otherReal = count("other_real");
+	const wrong = count("wrong");
+	const none = count("none");
 	const missed = count("missed");
-	const decided = named + other + missed;
+	const decided = named + partial + otherReal + wrong + none + missed;
 	const ratio = (part: number) => (decided ? part / decided : null);
 	return {
 		n: outcomes.length,
 		named,
-		other,
-		otherReal: count("other_real"),
+		partial,
+		otherReal,
+		wrong,
+		none,
 		missed,
 		ungraded: count("ungraded"),
 		noRun: count("no_run"),
+		unfit: count("unfit"),
 		detectionRate: ratio(named),
-		wrongCauseRate: ratio(other),
+		partialRate: ratio(partial),
 		missRate: ratio(missed),
 	};
 }
 
 export function controlRates(outcomes: readonly Outcome[]) {
-	const ran = outcomes.filter((outcome) => outcome !== "no_run");
+	const ran = outcomes.filter(
+		(outcome) => outcome !== "no_run" && outcome !== "unfit",
+	);
 	const falseAlarms = ran.filter((outcome) => outcome === "false_alarm").length;
 	const unsure = ran.filter((outcome) => outcome === "control_unsure").length;
 	return {
 		n: outcomes.length,
 		ran: ran.length,
+		unfit: outcomes.filter((outcome) => outcome === "unfit").length,
 		falseAlarms,
 		unsure,
 		falseAlarmRate: ran.length ? falseAlarms / ran.length : null,
@@ -250,5 +347,12 @@ const percent = (value: number | null) =>
 	value === null ? "-" : `${Math.round(value * 100)}%`;
 
 export function formatRates(label: string, rates: Rates) {
-	return `${label}: ${rates.n} sample(s); named the cause ${rates.named} (${percent(rates.detectionRate)}), flagged something else ${rates.other} (${percent(rates.wrongCauseRate)}; ${rates.otherReal} of them real), missed (verdict pass) ${rates.missed} (${percent(rates.missRate)}); not graded ${rates.ungraded}, no checker run ${rates.noRun}.`;
+	const decided =
+		rates.named +
+		rates.partial +
+		rates.otherReal +
+		rates.wrong +
+		rates.none +
+		rates.missed;
+	return `${label}: ${rates.n} sample(s), ${decided} decided; named the cause ${rates.named} (${percent(rates.detectionRate)}), partial ${rates.partial} (${percent(rates.partialRate)}), other real defect ${rates.otherReal}, wrong ${rates.wrong}, no concrete finding ${rates.none}, missed (verdict pass) ${rates.missed} (${percent(rates.missRate)}); not graded ${rates.ungraded}, no checker run ${rates.noRun}, unfit (left out) ${rates.unfit}.`;
 }
