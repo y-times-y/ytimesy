@@ -11,6 +11,7 @@ import { incomingAttachments } from "#/domain/message-attachment";
 import { chatHoldingSend } from "#/server/adapters/agent-sessions";
 import { FreestyleWorkspaceMachinesLive } from "#/server/adapters/freestyle/live";
 import { listProjects } from "#/server/adapters/projects";
+import { consumeUserAction } from "#/server/adapters/user-action-rate";
 import { requireUser } from "#/server/auth/auth";
 import { advanceCodexDeviceLogin } from "#/server/auth/codex-device-login";
 import { hasManagedCodexAuth } from "#/server/auth/codex-managed-auth";
@@ -273,6 +274,7 @@ export const sendCodexSessionTask = createServerFn({ method: "POST" })
 			data.sessionId,
 			data.createNew,
 		);
+		await consumeUserAction(scope.userId, "chat-send");
 		return withQueuedMessages(
 			await runWithMachines((machines) =>
 				sendComposerMessage(machines, scope, data),

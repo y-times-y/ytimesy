@@ -16,6 +16,7 @@ import {
 	userInfrastructureUsage,
 } from "../infrastructure-usage";
 import { loadToolsSnapshotSetting } from "../product-settings";
+import { consumeUserAction } from "../user-action-rate";
 import { CHEAP_BASE_RESOURCES, CHEAP_BASE_SNAPSHOT } from "./product-vm";
 import {
 	assertRetentionTouched,
@@ -540,6 +541,9 @@ export async function admitVmCreate(
 				resources = retained.rows[0].resources;
 			}
 		}
+		// Every new machine counts against its owner's creation limit.
+		const context = await admissionContext(connection, slug);
+		await consumeUserAction(verifiedOwner(context), "vm-create", connection);
 		const admitted = await admittedCap(
 			slug,
 			requestedResources
@@ -549,6 +553,8 @@ export async function admitVmCreate(
 			connection,
 			undefined,
 			requestedSeconds,
+			false,
+			context,
 		);
 		return admitted.cap;
 	});

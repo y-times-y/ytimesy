@@ -1,6 +1,7 @@
+import { captchaPlugin } from "@better-auth-ui/react/plugins/captcha";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { ThemeProvider } from "next-themes";
-import { type ReactNode, useLayoutEffect } from "react";
+import { type ReactNode, useLayoutEffect, useMemo } from "react";
 import { AuthProvider } from "#/components/auth/auth-provider";
 import { Toaster } from "#/components/ui/sonner";
 import { TooltipProvider } from "#/components/ui/tooltip";
@@ -14,6 +15,7 @@ import {
 	fallbackIdentityOptions,
 	useIdentityOptions,
 } from "./identity-options";
+import { TurnstileWidget } from "./turnstile-widget";
 
 export function AuthProviders({ children }: { children: ReactNode }) {
 	const navigate = useNavigate();
@@ -26,6 +28,20 @@ export function AuthProviders({ children }: { children: ReactNode }) {
 		location.searchStr ?? "",
 	);
 	useNoUnsafeReturnTo(location.href);
+	const siteKey = identity.turnstileSiteKey;
+	const plugins = useMemo(
+		() =>
+			siteKey
+				? [
+						captchaPlugin({
+							render: (props) => (
+								<TurnstileWidget siteKey={siteKey} {...props} />
+							),
+						}),
+					]
+				: [],
+		[siteKey],
+	);
 	return (
 		<ThemeProvider
 			attribute="class"
@@ -37,6 +53,7 @@ export function AuthProviders({ children }: { children: ReactNode }) {
 			<TooltipProvider>
 				<AuthProvider
 					authClient={authClient}
+					plugins={plugins}
 					redirectTo={returnTo}
 					socialProviders={[...identity.socialProviders]}
 					emailAndPassword={{

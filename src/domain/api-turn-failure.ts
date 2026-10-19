@@ -148,6 +148,8 @@ function machineFailureReason(message: string) {
 		)
 	)
 		return "its saved state is still being restored";
+	if (/too many new machines/i.test(message))
+		return "this account started too many new machines in the last hour; wait a few minutes";
 	if (/another operation is updating this machine/i.test(message))
 		return "another operation was updating it";
 	if (/did not become running|stopped before it became running/i.test(message))

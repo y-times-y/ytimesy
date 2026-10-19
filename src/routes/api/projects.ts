@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { Effect } from "effect";
 import { projectGroupSelection, projectSelection } from "../../domain/projects";
 import { listProjects } from "../../server/adapters/projects";
+import { requireUserAction } from "../../server/adapters/user-action-rate";
 import { requireUser } from "../../server/auth/auth";
 import { endpoint, requireSameOrigin } from "../../server/http";
 import {
@@ -19,6 +20,7 @@ export const Route = createFileRoute("/api/projects")({
 				endpoint(async () => {
 					requireSameOrigin(request);
 					const user = await requireUser(request.headers);
+					await requireUserAction(user.id, "project-create");
 					const body = await request.json();
 					const operation =
 						body && typeof body === "object" && "repositories" in body

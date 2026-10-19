@@ -1,4 +1,5 @@
 import { betterAuth } from "better-auth";
+import { captcha } from "better-auth/plugins";
 import { captureServerAnalytics } from "../adapters/analytics";
 import { database } from "../adapters/database";
 import {
@@ -11,6 +12,7 @@ import {
 	requestAllowsLocalQaIdentity,
 } from "./local-qa-identity";
 import { authTrustedOrigins, googleOAuthConfigured } from "./providers";
+import { TURNSTILE_ENDPOINTS, turnstileSettings } from "./turnstile";
 
 /**
  * OAuth state lives in the database and is bound to the browser that started
@@ -26,9 +28,24 @@ export const oauthAccountPolicy = {
 	storeStateStrategy: "database" as const,
 };
 
+/** Server-side Turnstile verification, when this environment requires it. */
+export function authCaptchaPlugins(appUrl: string) {
+	const turnstile = turnstileSettings();
+	if (!turnstile) return [];
+	return [
+		captcha({
+			provider: "cloudflare-turnstile",
+			secretKey: turnstile.secretKey,
+			endpoints: TURNSTILE_ENDPOINTS,
+			allowedHostnames: [new URL(appUrl).hostname],
+		}),
+	];
+}
+
 function authOptions() {
 	const config = serverConfig();
 	return {
+		plugins: authCaptchaPlugins(config.APP_URL),
 		database: database(),
 		baseURL: config.APP_URL,
 		secret: config.BETTER_AUTH_SECRET,
