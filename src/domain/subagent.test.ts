@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
 	builderRemaining,
-	checkerBrief,
 	childSubagentBudget,
 	isReaderRole,
 	liveChildrenAllowed,
@@ -16,6 +15,7 @@ import {
 	subagentReportHeader,
 	writerPatchBlock,
 } from "./subagent";
+import { subagentWrapUpNotice } from "./subagent-instructions";
 
 describe("subagent placement", () => {
 	it("forks writers and shares the VM read-only with every reader role", () => {
@@ -83,6 +83,20 @@ describe("subagent budgets", () => {
 			state: "exhausted",
 			reason: "tokens 1,000,000/1,000,000",
 		});
+	});
+
+	it("warns a checker earlier on minutes so it can write its verdict", () => {
+		const budget = { steps: 100, minutes: 10, tokens: 1_000_000 };
+		const used = { steps: 5, minutes: 8, tokens: 1000 };
+		expect(subagentBudgetState(budget, used)).toEqual({ state: "ok" });
+		expect(subagentBudgetState(budget, used, 2)).toMatchObject({
+			state: "wrap-up",
+			reason: "minutes 8/10",
+		});
+		expect(subagentWrapUpNotice("minutes 8/10", "checker")).toMatch(
+			/^Budget nearly used \(minutes 8\/10\)\. Stop investigating and answer now with only the JSON/,
+		);
+		expect(subagentWrapUpNotice("x", "researcher")).toContain("Wrap up now");
 	});
 });
 
@@ -199,25 +213,6 @@ describe("subagent reports", () => {
 		expect(block).toContain("Overlaps with: agent 1.3 (src/api/user.ts)");
 		expect(block).toContain("git apply -3");
 		expect(writerPatchBlock(null, [])).toBe("Patch: no changes.");
-	});
-});
-
-describe("checker brief", () => {
-	it("holds only the task text, the deliverable and fixed instructions", () => {
-		const brief = checkerBrief({
-			taskText: "Add count_lines(text) with a test.",
-			checkout: "/home/ubuntu/repo",
-			changedFiles: ["words.py", "test_words.py"],
-			scratch: "/tmp/ytimesy-agents/abc",
-		});
-		expect(brief).toContain(
-			"<task>\nAdd count_lines(text) with a test.\n</task>",
-		);
-		expect(brief).toContain("changed files: words.py, test_words.py");
-		expect(brief).toContain('"verdict": "pass" | "fail" | "unsure"');
-		expect(brief).toContain(
-			"cp -a /home/ubuntu/repo /tmp/ytimesy-agents/abc/work",
-		);
 	});
 });
 

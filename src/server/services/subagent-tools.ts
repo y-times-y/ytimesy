@@ -3,6 +3,7 @@ import { type ToolSet, tool } from "ai";
 import { Effect } from "effect";
 import { z } from "zod";
 import { agentSessionMachineSlug } from "#/domain/agent-session";
+import { independentReviewBrief } from "#/domain/checker-brief";
 import { latestUserRequestText } from "#/domain/child-task-activity";
 import { WorkspaceId } from "#/domain/ids";
 import { posixShellQuoted } from "#/domain/posix-command";
@@ -11,7 +12,6 @@ import {
 	AGENT_SEND_TOOL,
 	AGENT_TOOL,
 	builderRemaining,
-	checkerBrief,
 	isReaderRole,
 	SUBAGENT_BRIEF_MAX,
 	SUBAGENT_ROLES,
@@ -445,7 +445,7 @@ async function checkerBriefFor(
 		.split("\n")
 		.map((line) => line.slice(3).trim())
 		.filter(Boolean);
-	return checkerBrief({
+	return independentReviewBrief({
 		taskText,
 		checkout: workspace.cwd,
 		changedFiles,

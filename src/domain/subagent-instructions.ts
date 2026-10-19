@@ -55,7 +55,12 @@ export function subagentRoleInstructions(
 		.join(" ");
 }
 
-/** The runtime notice at 90% of a budget. */
-export function subagentWrapUpNotice(reason: string) {
-	return `Budget nearly used (${reason}). Wrap up now: start nothing new, finish what you are on and write your report. This is a runtime notice, not a new request.`;
+/** The runtime notice at 90% of a budget (a checker's comes earlier and asks for its verdict). */
+export function subagentWrapUpNotice(
+	reason: string,
+	role?: SubagentRole | null,
+) {
+	return role === "checker"
+		? `Budget nearly used (${reason}). Stop investigating and answer now with only the JSON your brief asks for; a requirement you could not check is not met. This is a runtime notice, not a new request.`
+		: `Budget nearly used (${reason}). Wrap up now: start nothing new, finish what you are on and write your report. This is a runtime notice, not a new request.`;
 }

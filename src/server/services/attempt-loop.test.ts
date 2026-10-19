@@ -244,8 +244,10 @@ describe("the attempt loop", () => {
 		// The checker's brief: the request verbatim and the change, never the report.
 		expect(h.started).toHaveLength(1);
 		expect(h.started[0].role).toBe("checker");
-		expect(h.started[0].brief).toContain(`<task>\n${TASK}\n</task>`);
-		expect(h.started[0].brief).toContain("Changed files: compaction.py.");
+		expect(h.started[0].brief).toContain(`<request>\n${TASK}\n</request>`);
+		expect(h.started[0].brief).toContain(
+			"files changed by the run: compaction.py.",
+		);
 		expect(h.started[0].brief).not.toContain("Done: fixed it.");
 		expect(h.vm.some((command) => command.includes("ytimesy-reader"))).toBe(
 			true,

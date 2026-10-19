@@ -1,18 +1,16 @@
 import {
-	ATTEMPT_VERDICTS,
 	type CheckerVerdict,
-	jsonObjects,
 	parseCheckerVerdict,
-} from "./attempt-loop";
+	verdictRecords,
+} from "./checker-verdict";
 
 /**
  * The independent checker's review brief, in one place: the checker detection
- * test (scripts/checker-detect.ts) uses it now, and the product checker
- * (`checkerBrief` in subagent.ts, `attemptCheckerBrief` in attempt-loop.ts)
- * is meant to move onto it once the test has measured it. It is generic on
- * purpose: nothing in it names a task, a domain or a known failure, and it
- * gets only the user's request verbatim and the deliverable, never the
- * builder's transcript, report or reasoning.
+ * test (scripts/checker-detect.ts), the review loop (review=on), the
+ * builder's own checker subagent and the attempt loop's checker all use it.
+ * It is generic on purpose: nothing in it names a task, a domain or a known
+ * failure, and it gets only the user's request verbatim and the deliverable,
+ * never the builder's transcript, report or reasoning.
  */
 
 export type ReviewBriefInput = {
@@ -26,6 +24,8 @@ export type ReviewBriefInput = {
 	readonly outsideFiles?: readonly string[];
 	/** Where the checker may write (copies, scripts, scratch inputs). */
 	readonly scratch: string;
+	/** A command that shows the whole change (e.g. a git diff between two refs). */
+	readonly diffCommand?: string;
 };
 
 const MAX_LISTED_FILES = 200;
@@ -37,6 +37,9 @@ function deliverableLine(input: ReviewBriefInput) {
 		`The working directory ${input.checkout}${changed.length ? `; files changed by the run: ${changed.join(", ")}${input.changedFiles.length > changed.length ? ", ..." : ""}` : " (no changed files recorded)"}.`,
 		...(outside.length
 			? [`Files the run delivered outside it: ${outside.join(", ")}.`]
+			: []),
+		...(input.diffCommand
+			? [`\`${input.diffCommand}\` shows the whole change.`]
 			: []),
 	].join(" ");
 }
@@ -89,22 +92,6 @@ export type ReviewVerdict = CheckerVerdict & {
 const clip = (value: unknown, max: number) =>
 	typeof value === "string" ? value.trim().slice(0, max) : "";
 
-/** The last JSON object holding a verdict, as a record (null when none parses). */
-function lastVerdictObject(report: string): Record<string, unknown> | null {
-	for (const candidate of jsonObjects(report)) {
-		try {
-			const value = JSON.parse(candidate);
-			if (
-				value &&
-				typeof value === "object" &&
-				(ATTEMPT_VERDICTS as readonly unknown[]).includes(value.verdict)
-			)
-				return value as Record<string, unknown>;
-		} catch {}
-	}
-	return null;
-}
-
 /**
  * The checker's answer: the verdict and failures as the product parses them
  * (a "pass" that lists failures is unsure; no JSON is unsure), plus the
@@ -112,7 +99,9 @@ function lastVerdictObject(report: string): Record<string, unknown> | null {
  */
 export function parseReviewVerdict(report: string): ReviewVerdict {
 	const base = parseCheckerVerdict(report);
-	const record = base.parsed ? lastVerdictObject(report) : null;
+	const record = base.parsed
+		? (verdictRecords(report)[0]?.record ?? null)
+		: null;
 	const requirements = Array.isArray(record?.requirements)
 		? record.requirements.slice(0, 200).flatMap((entry) => {
 				if (!entry || typeof entry !== "object") return [];
@@ -162,4 +151,18 @@ export function parseReviewVerdict(report: string): ReviewVerdict {
 		requirements,
 		assumptions,
 	};
+}
+
+/**
+ * How long before a checker's time limit it is told to answer: a fifth of its
+ * time, at least 90 seconds, at most half (its verdict JSON takes a minute to
+ * write).
+ */
+export function checkerWrapUpLeadMs(budgetMs: number) {
+	return Math.min(budgetMs / 2, Math.max(90_000, budgetMs * 0.2));
+}
+
+/** The runtime notice near a checker's time limit: answer now, with the JSON. */
+export function checkerDeadlineNotice(secondsLeft: number) {
+	return `Runtime notice, not a new request: about ${Math.max(0, Math.round(secondsLeft))} seconds are left for this check. Stop investigating now and answer with only the JSON your brief asks for; a requirement you could not check is not met (say so in its evidence).`;
 }

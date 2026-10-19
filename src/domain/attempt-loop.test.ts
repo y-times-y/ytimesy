@@ -105,13 +105,17 @@ describe("briefs and notices", () => {
 			directory: "/tmp/ytimesy-attempts/t/1",
 		});
 		expect(brief).toContain(
-			"<task>\nWrite /app/out.txt with the primes below 100.\n</task>",
+			"<request>\nWrite /app/out.txt with the primes below 100.\n</request>",
 		);
+		// The shared review brief's four parts.
+		expect(brief).toContain("4. Exercise it as an outside grader would.");
 		expect(brief).toContain(
 			"git -C /home/ubuntu/app diff refs/ytimesy/attempts/t-base refs/ytimesy/attempts/t-1",
 		);
 		expect(brief).toContain("/tmp/ytimesy-attempts/t/1/tests/run.sh");
-		expect(brief).toContain("ytimesy-check");
+		expect(brief).toContain(
+			"cp -a /home/ubuntu/app /tmp/ytimesy-attempts/t/1/work",
+		);
 		expect(brief).toContain('"testsPath": "/tmp/ytimesy-attempts/t/1/tests"');
 	});
 

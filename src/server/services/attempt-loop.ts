@@ -230,6 +230,19 @@ export function restoreSnapshotCommand(
 	return `python3 -c ${quote(RESTORE_SCRIPT)} ${quote(snapshot.cwd)} ${quote(snapshot.ref)} ${quote(snapshot.tree)} ${quote(snapshot.indexTree)} ${quote(snapshot.head)} ${quote(branch)}`;
 }
 
+/**
+ * Creates a runtime checker's directory under ATTEMPT_TESTS_ROOT, owned by
+ * the reader user (its only writable place besides its scratch). The root is
+ * shared with a benchmark's task container.
+ */
+export function checkerDirectoryCommand(directory: string) {
+	const parent = directory.slice(0, directory.lastIndexOf("/"));
+	return [
+		`sudo -n install -d -m 0755 ${quote(ATTEMPT_TESTS_ROOT)} ${quote(parent)} 2>/dev/null && sudo -n install -d -o ${READER_LINUX_USER} -g ${READER_LINUX_USER} -m 0755 ${quote(directory)} 2>/dev/null`,
+		`|| { mkdir -p ${quote(directory)} && chmod 0777 ${quote(directory)}; }`,
+	].join(" ");
+}
+
 export function listenersCommand(keep?: readonly number[]) {
 	return keep
 		? `python3 -c ${quote(LISTENERS_SCRIPT)} stop ${quote(JSON.stringify(keep))}`
@@ -485,14 +498,7 @@ export function createAttemptLoop(input: AttemptLoopInput) {
 
 	/** The attempt's directory, owned by the reader so its checker can write there. */
 	async function prepareDirectory(directory: string) {
-		const parent = directory.slice(0, directory.lastIndexOf("/"));
-		const result = await deps.vm(
-			[
-				`sudo -n install -d -m 0755 ${quote(ATTEMPT_TESTS_ROOT)} ${quote(parent)} 2>/dev/null && sudo -n install -d -o ${READER_LINUX_USER} -g ${READER_LINUX_USER} -m 0755 ${quote(directory)} 2>/dev/null`,
-				`|| { mkdir -p ${quote(directory)} && chmod 0777 ${quote(directory)}; }`,
-			].join(" "),
-			20_000,
-		);
+		const result = await deps.vm(checkerDirectoryCommand(directory), 20_000);
 		if (result.exitCode !== 0)
 			throw new Error("The checker's directory could not be created.");
 	}
