@@ -64,7 +64,6 @@ import {
 	STATE_SNAPSHOT_HEADING,
 	type UserRequestPredicate,
 	userMessageBudget,
-	workingContextTarget,
 } from "./api-agent-context";
 import { BackgroundHistoryCompaction } from "./background-history-compaction";
 import { composedAgentTools } from "./composed-agent-tools";
@@ -92,14 +91,14 @@ export type ModelAgentInput = {
 	messages: ModelMessage[];
 	instructions: string;
 	tools: ToolSet;
-	knownTools?: readonly string[];
 	/**
 	 * Deferred tools (deferred-tools.ts): the tools each request offers, in
 	 * order. Tools outside it stay in `tools` but are neither sent nor
 	 * callable until they appear here. Read before every step.
 	 */
 	toolOrder?: () => readonly string[];
-	toolSurface?: "coordination" | "implementation";
+	/** Retired and ignored: every turn uses the implementation surface; frozen benchmark runners still pass it. */
+	toolSurface?: "implementation";
 	/** Harness variant `instructions`; unset or default = the family's profile. */
 	instructionVariant?: InstructionVariant;
 	/** A successful call to one of these ends the turn, e.g. a plan waiting for approval. */
@@ -458,8 +457,6 @@ export type ModelAgentRuntime = {
 	autoCompactTokenLimit?: number;
 	/** Optional operating budget; distinct from the provider's hard context window. */
 	workingContextTokens?: number;
-	/** Coordination may need enough room to dispatch before compacting large guidance. */
-	coordinationWorkingContextTokens?: number;
 	/** Retired and ignored; frozen benchmark runtimes still pass false. */
 	archiveConsumedGuidance?: false;
 	prefetchInitialReads?: boolean;
@@ -535,12 +532,7 @@ async function executeModelSteps(
 		AbortSignal.timeout(input.turnTimeoutMs ?? 30 * 60 * 1000),
 	]);
 	const { model, cacheSettings = {} } = runtime;
-	const tools = discoverableAgentTools(
-		input.tools,
-		input.messages,
-		input.knownTools,
-		input.toolSurface,
-	);
+	const tools = discoverableAgentTools(input.tools);
 	const reads = new Set<string>();
 	let activeToolCount = 0;
 	let preparedPromptCharacters = 0;
@@ -583,34 +575,19 @@ async function executeModelSteps(
 			schema: await asSchema(definition.inputSchema).jsonSchema,
 		})),
 	);
-	const contextBudget = (messages: ModelMessage[]) => {
-		const visibleTools = discoverableAgentTools(
-			input.tools,
-			messages,
-			input.knownTools,
-			input.toolSurface,
-		);
-		return modelContextBudget({
+	const contextBudget = (_messages: ModelMessage[]) =>
+		modelContextBudget({
 			contextWindow: runtime.contextWindow,
 			maxOutputTokens: runtime.maxOutputTokens,
 			autoCompactTokenLimit: runtime.autoCompactTokenLimit,
-			workingContextTokens: workingContextTarget({
-				history: messages,
-				implementation: input.toolSurface === "implementation",
-				workingContextTokens: runtime.workingContextTokens,
-				coordinationWorkingContextTokens:
-					runtime.coordinationWorkingContextTokens,
-			}),
+			workingContextTokens: runtime.workingContextTokens,
 			fixedTokens: estimateContextTokens({
 				instructions: input.instructions,
 				tools: toolSchemas.filter(
-					({ name }) =>
-						visibleTools[name]?.deferLoading !== true &&
-						(!input.toolOrder || input.toolOrder().includes(name)),
+					({ name }) => !input.toolOrder || input.toolOrder().includes(name),
 				),
 			}),
 		});
-	};
 	const accumulated = { usage: null as ApiTokenUsage | null };
 	/** Rehydrate exact instructions, then describe current state from the runtime, not from memory. */
 	const afterCompaction = async (
@@ -747,7 +724,6 @@ async function executeModelSteps(
 						prefetchInitialAgentReads({
 							messages: history,
 							tools: input.tools,
-							coordination: input.toolSurface === "coordination",
 							cacheStablePrefix:
 								modelFamily === "openai" &&
 								runtime.fallbackContextPolicy !== "bound-prefix",
@@ -901,7 +877,7 @@ async function executeModelSteps(
 			maxOutputTokens: runtime.maxOutputTokens,
 			stopWhen: [
 				isStepCount(
-					input.maxSteps ?? modelStepLimit(input.toolSurface ?? "coordination"),
+					input.maxSteps ?? modelStepLimit(),
 				),
 				...(input.endTurnTools?.length
 					? [hasToolCall(...input.endTurnTools)]

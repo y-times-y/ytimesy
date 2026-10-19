@@ -108,7 +108,7 @@ export function updateProjectKnowledge(
 	return updated;
 }
 
-/** Topic titles aid discovery; children never receive unrelated bodies or sibling reports. */
+/** Topic titles aid discovery; subagents never receive unrelated bodies or sibling reports. */
 export function knowledgeForTask(
 	document: string,
 	task: string,
@@ -150,7 +150,7 @@ export function knowledgeForTask(
 	}
 	if (sections.length)
 		parts.push(
-			"Use search_project_memory and read_project_memory for complete notes and linked topics. These are virtual memory references, not checkout files. Check sources before relying on notes; do not infer implementation from this index. Children report corrections to their lead; only non-competing leads maintain shared notes.",
+			"Use search_project_memory and read_project_memory for complete notes and linked topics. These are virtual memory references, not checkout files. Check sources before relying on notes; do not infer implementation from this index. Subagents report corrections to their parent agent; only root chats maintain shared notes.",
 		);
 	if (!child && projectMemoryMaintenance(document).recommended)
 		parts.push(

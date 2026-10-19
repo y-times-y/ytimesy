@@ -4,7 +4,6 @@ import { Effect } from "effect";
 import { beforeEach, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { applyApiProgress } from "#/domain/api-progress";
-import { SafeApiModelFailure } from "#/domain/api-turn-failure";
 import type { SessionItem } from "#/domain/session-item";
 import { nativeModelCompactor } from "../adapters/model-compaction";
 import {
@@ -295,7 +294,6 @@ it("adopts a background native checkpoint after the tool step without losing the
 			userId: "alice",
 			modelId: "gpt-6.1-sol",
 			instructions: "Inspect",
-			knownTools: ["inspect"],
 			messages: [
 				{ role: "user", content: "previous request" },
 				{ role: "assistant", content: "e".repeat(10500) },
@@ -342,43 +340,6 @@ it("adopts a background native checkpoint after the tool step without losing the
 	expect(JSON.stringify(result.messages)).toContain("read-current");
 	expect(result.messages.at(-1)?.role).toBe("tool");
 	expect(JSON.stringify(result.messages)).not.toContain("e".repeat(100));
-});
-
-it("budgets deferred schemas only after discovery, while preserving the hard input limit", async () => {
-	const optional = tool({
-		description: "Optional browser capability ".repeat(4000),
-		inputSchema: z.object({ url: z.string() }),
-		execute: async () => ({}),
-	});
-	for (const knownTools of [[], ["browser_screenshot"]]) {
-		const model = new MockLanguageModelV4({
-			doStream: async () => stream([finish]),
-		});
-		const pending = runModelAgent(
-			{
-				userId: "alice",
-				modelId: "gpt-6.1-sol",
-				instructions: "Keep every required check",
-				messages: [{ role: "user", content: "Inspect the task" }],
-				tools: { browser_screenshot: optional },
-				knownTools,
-				signal: new AbortController().signal,
-				onStep: async () => {},
-				onEvent: async () => {},
-			},
-			{ model, contextWindow: 12_000 },
-		);
-		if (knownTools.length) {
-			await expect(pending).rejects.toBeInstanceOf(SafeApiModelFailure);
-			expect(model.doStreamCalls).toHaveLength(0);
-		} else {
-			await pending;
-			expect(model.doStreamCalls).toHaveLength(1);
-			expect(JSON.stringify(model.doStreamCalls[0].tools)).not.toContain(
-				"Optional browser capability",
-			);
-		}
-	}
 });
 
 it("still rejects a native checkpoint exceeding the hard input limit without replacing original history", async () => {
@@ -577,7 +538,6 @@ it("durable one-step execution checkpoints a tool result without starting a seco
 			modelId: "gpt-6.1-sol",
 			messages: [{ role: "user", content: "Inspect" }],
 			instructions: "Inspect",
-			knownTools: ["inspect"],
 			tools: {
 				inspect: tool({
 					inputSchema: z.object({}),
@@ -615,7 +575,6 @@ it("retains full tool events while checkpointing the SDK's compact model view", 
 			modelId: "gpt-6.1-sol",
 			instructions: "Inspect",
 			messages: [{ role: "user", content: "Inspect" }],
-			knownTools: ["inspect"],
 			tools: {
 				inspect: tool({
 					inputSchema: z.object({}),
@@ -1199,7 +1158,6 @@ it("retries one retryable request-start failure without replaying completed tool
 			instructions: "Test",
 			messages: [{ role: "user", content: "Inspect" }],
 			tools: { inspect: tool({ inputSchema: z.object({}), execute }) },
-			knownTools: ["inspect"],
 			signal: new AbortController().signal,
 			onStep: async () => {},
 			onEvent: async () => {},

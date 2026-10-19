@@ -35,27 +35,6 @@ type ContextMeasurement = {
 	estimatedHistory: number;
 };
 
-export function workingContextTarget(input: {
-	history: ModelMessage[];
-	implementation: boolean;
-	workingContextTokens?: number;
-	coordinationWorkingContextTokens?: number;
-}) {
-	const delegationStarted = input.history.some(
-		(message) =>
-			message.role === "assistant" &&
-			Array.isArray(message.content) &&
-			message.content.some(
-				(part) =>
-					part.type === "tool-call" &&
-					["create_task", "launch_ready_tasks"].includes(part.toolName),
-			),
-	);
-	return input.implementation || delegationStarted
-		? input.workingContextTokens
-		: (input.coordinationWorkingContextTokens ?? input.workingContextTokens);
-}
-
 /** Provider usage already counts encoded reasoning. Estimate only the history added since that measurement. */
 export function contextTokenPressure(
 	history: ModelMessage[],

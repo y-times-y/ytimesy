@@ -22,9 +22,9 @@ const options = {
 const reads: Parameters<
 	NonNullable<ReturnType<typeof batchedAgentReads>["execute"]>
 >[0]["reads"] = [
-	{ tool: "inspect_task_diff", arguments: { taskId: "child" } },
+	{ tool: "read_code", arguments: { taskId: "child" } },
 	{
-		tool: "read_task_checks",
+		tool: "search_files",
 		arguments: { taskId: "child", references: ["check"] },
 	},
 ];
@@ -43,11 +43,11 @@ it("reads independent evidence concurrently and retains full original receipts a
 	}));
 	const batch = batchedAgentReads(
 		{
-			inspect_task_diff: tool({
+			read_code: tool({
 				inputSchema: z.object({ taskId: z.string() }),
 				execute: diff,
 			}),
-			read_task_checks: tool({
+			search_files: tool({
 				inputSchema: z.object({
 					taskId: z.string(),
 					references: z.array(z.string()),
@@ -75,7 +75,7 @@ it("reads independent evidence concurrently and retains full original receipts a
 it("rejects write tools, missing executors and cancellation before starting reads", async () => {
 	const read = vi.fn();
 	const batch = batchedAgentReads(
-		{ inspect_task_diff: tool({ inputSchema: z.object({}), execute: read }) },
+		{ read_code: tool({ inputSchema: z.object({}), execute: read }) },
 		options.abortSignal,
 	);
 	await expect(
@@ -101,13 +101,13 @@ it("rejects write tools, missing executors and cancellation before starting read
 it("does not turn a failed read into successful evidence or expose its raw error", async () => {
 	const batch = batchedAgentReads(
 		{
-			inspect_task_diff: tool({
+			read_code: tool({
 				inputSchema: z.object({}),
 				execute: (): unknown => {
 					throw new Error("private detail");
 				},
 			}),
-			read_task_checks: tool({
+			search_files: tool({
 				inputSchema: z.object({}),
 				execute: async () => ({ sourcesCurrent: false }),
 			}),
@@ -128,7 +128,7 @@ it("validates nested arguments before invoking a read", async () => {
 	const diff = vi.fn(async () => ({ sha256: "exact" }));
 	const batch = batchedAgentReads(
 		{
-			inspect_task_diff: tool({
+			read_code: tool({
 				inputSchema: z.object({ taskId: z.string() }),
 				execute: diff,
 			}),
@@ -139,7 +139,7 @@ it("validates nested arguments before invoking a read", async () => {
 		batch,
 		{
 			reads: [
-				{ tool: "inspect_task_diff", arguments: { taskId: 3 } },
+				{ tool: "read_code", arguments: { taskId: 3 } },
 				reads[0],
 			],
 		},

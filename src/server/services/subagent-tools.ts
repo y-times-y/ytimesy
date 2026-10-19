@@ -380,7 +380,7 @@ async function spawnSubagent(
 }
 
 /**
- * Starts a read-only child with a brief the runtime wrote (the builder never
+ * Starts a read-only subagent with a brief the runtime wrote (the builder never
  * adds to it): the attempt loop's checker and tiebreak judge. Its report is
  * taken by the runtime, not delivered to the builder.
  */

@@ -9,39 +9,7 @@ import {
 	modelContextBudget,
 	retainedUserMessages,
 	UNKNOWN_CONTEXT_WINDOW,
-	workingContextTarget,
 } from "./api-agent-context";
-
-it("allows initial coordination headroom but bounds subsequent delegated reviews", () => {
-	const settings = {
-		workingContextTokens: 32_000,
-		coordinationWorkingContextTokens: 48_000,
-	};
-	const history: ModelMessage[] = [{ role: "user", content: "Implement" }];
-	expect(
-		workingContextTarget({ ...settings, history, implementation: false }),
-	).toBe(48_000);
-	expect(
-		workingContextTarget({ ...settings, history, implementation: true }),
-	).toBe(32_000);
-	history.push({
-		role: "assistant",
-		content: [
-			{
-				type: "tool-call",
-				toolName: "create_task",
-				toolCallId: "child",
-				input: {},
-			},
-		],
-	});
-	expect(
-		workingContextTarget({ ...settings, history, implementation: false }),
-	).toBe(32_000);
-	expect(
-		workingContextTarget({ history, implementation: false }),
-	).toBeUndefined();
-});
 
 it("uses measured reasoning usage without tokenizing its opaque encoding again", () => {
 	const history: ModelMessage[] = [

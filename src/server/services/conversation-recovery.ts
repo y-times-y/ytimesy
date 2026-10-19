@@ -50,7 +50,7 @@ export async function ensureConversationCodePoint(
 
 /**
  * Code points exist only where the turn wrote to the session's own checkout: a
- * builder-direct root chat or an isolated writable child task.
+ * builder-direct root chat or an isolated writer subagent.
  * Shared-placement children run inside their parent's VM, so they never rewind it.
  */
 export function ownsWritableCheckout(row: {

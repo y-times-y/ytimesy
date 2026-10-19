@@ -324,8 +324,7 @@ export class InitialAgentReadFailure extends Error {
 		read:
 			| "read_repository_guidance"
 			| "read_environment_report"
-			| "inspect_changes"
-			| "read_task_capacity",
+			| "inspect_changes",
 	) {
 		super(
 			`Workspace preparation failed during ${read}. No model request was started. Repair or reconnect the environment before retrying.`,
