@@ -3,6 +3,10 @@ import type { Duplex } from "node:stream";
 import { WebSocketServer } from "ws";
 import { DESKTOP_PATH, runDesktopSession } from "./sockets/desktop-session";
 import { nodeClientSocket, openNodeRemoteSocket } from "./sockets/node-sockets";
+import {
+	socketOriginAllowed,
+	trustedSocketOrigins,
+} from "./sockets/socket-origin";
 import { runTerminalSession, TERMINAL_PATH } from "./sockets/terminal-session";
 
 const attached = new WeakSet<Server>();
@@ -25,6 +29,11 @@ export function attachTerminalUpgrade(httpServer: Server) {
 			const url = new URL(request.url ?? "/", "http://localhost");
 			if (url.pathname !== DESKTOP_PATH && url.pathname !== TERMINAL_PATH) {
 				for (const listener of existing) listener(request, socket, head);
+				return;
+			}
+			const origin = request.headers.origin ?? null;
+			if (!socketOriginAllowed(origin, trustedSocketOrigins())) {
+				socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
 				return;
 			}
 			wss.handleUpgrade(request, socket, head, (ws) => {
