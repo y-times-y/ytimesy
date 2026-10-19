@@ -10,7 +10,9 @@ const snapshot = z.object({
 	tree: hash,
 	indexTree: hash,
 	head: hash,
-	ref: z.string().regex(/^refs\/ytimesy\/(recovery|attempts)\/[a-zA-Z0-9-]+$/),
+	ref: z
+		.string()
+		.regex(/^refs\/ytimesy\/(recovery|attempts|review)\/[a-zA-Z0-9-]+$/),
 });
 const CODE_CHECKPOINT_SCRIPT = `import fcntl,hashlib,json,os,pathlib,subprocess,sys,tempfile
 root,ref=sys.argv[1:3]
@@ -34,7 +36,7 @@ with tempfile.TemporaryDirectory(prefix='ytimesy-recovery-') as tmp:
  git('update-ref',ref+'-index',staged)
 print(json.dumps({'cwd':requestedRoot,'tree':tree,'indexTree':index,'head':head,'ref':ref}))`;
 
-/** `ref` defaults to a new recovery ref; the attempt loop names its own (refs/ytimesy/attempts/...). */
+/** `ref` defaults to a new recovery ref; the attempt and review loops name their own (refs/ytimesy/attempts/..., refs/ytimesy/review/...). */
 export async function captureConversationCode(
 	workspace: AgentToolWorkspace,
 	ref = `refs/ytimesy/recovery/${randomUUID()}`,
