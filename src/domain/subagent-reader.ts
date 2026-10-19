@@ -78,7 +78,9 @@ export function readerCommand(sessionId: string, command: string) {
 
 /**
  * Where the runtime may write a file for a reader: its scratch, its session
- * runtime root, and single-use payload files directly in /tmp.
+ * runtime root, single-use payload files directly in /tmp, and the attempt
+ * loop's per-attempt directories (the runtime creates each one for its
+ * checker, owned by the reader).
  */
 export function readerMayWrite(
 	path: string,
@@ -90,6 +92,7 @@ export function readerMayWrite(
 	return (
 		path.startsWith(`${scratch}/`) ||
 		path.startsWith(`${sessionRoot}/`) ||
+		/^\/tmp\/ytimesy-attempts\/[a-zA-Z0-9-]+\/\d+\/./.test(path) ||
 		/^\/tmp\/ytimesy-[a-z-]+-[0-9a-f-]{36}\.[a-z]+$/.test(path)
 	);
 }

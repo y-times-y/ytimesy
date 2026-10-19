@@ -1,4 +1,5 @@
 import type { ModelMessage } from "ai";
+import { checkerWrapUpLeadMs } from "#/domain/checker-brief";
 import { WorkspaceId } from "#/domain/ids";
 import { modelBilling } from "#/domain/model-pricing";
 import type { SessionItem } from "#/domain/session-item";
@@ -72,17 +73,22 @@ export async function guardSubagentStep(input: {
 			total + usageTokens(sessionTokenUsage(child.items as SessionItem[])),
 		0,
 	);
-	const state = subagentBudgetState(limits, {
-		steps,
-		minutes:
-			((input.now ?? Date.now()) - Date.parse(input.session.createdAt)) /
-			60_000,
-		tokens: usageTokens(sessionTokenUsage(input.items)) + childTokens,
-	});
+	const checker = input.session.agentRole === "checker";
+	const state = subagentBudgetState(
+		limits,
+		{
+			steps,
+			minutes:
+				((input.now ?? Date.now()) - Date.parse(input.session.createdAt)) /
+				60_000,
+			tokens: usageTokens(sessionTokenUsage(input.items)) + childTokens,
+		},
+		checker ? checkerWrapUpLeadMs(limits.minutes * 60_000) / 60_000 : 0,
+	);
 	if (state.state === "exhausted")
 		throw new SubagentBudgetExhausted(state.reason);
 	if (state.state === "wrap-up") {
-		const notice = subagentWrapUpNotice(state.reason);
+		const notice = subagentWrapUpNotice(state.reason, input.session.agentRole);
 		if (
 			!input.messages.some(
 				(message) =>

@@ -201,6 +201,14 @@ export function extraMounts(task: TaskEnvironment) {
 
 const q = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
 
+/**
+ * Shell (VM, root, $MOUNTS set): files the image made unreadable to everyone
+ * (an execute-only tool, mode 111) lose the ACLs that would let the task's
+ * user read them, so they stay as the image has them.
+ */
+export const UNREADABLE_KEEP_MODE =
+	"find $MOUNTS -type f ! -perm -u=r ! -perm -o=r -exec setfacl -b {} + 2>/dev/null || true";
+
 /** VM-side files for the setup step; `name` is the builder project's folder under ~. */
 export function setupFiles(task: TaskEnvironment, name: string) {
 	if (!/^[A-Za-z0-9._-]+$/.test(name))
@@ -261,6 +269,7 @@ chown -R 1000:1000 $MOUNTS
 # The VM user (builder file tools, git) and the container user (commands)
 # both keep write access to everything either of them creates.
 setfacl -R -m u:1000:rwX,d:u:1000:rwX,m:rwX,d:m:rwX $MOUNTS
+${UNREADABLE_KEEP_MODE}
 log "task directories copied: $MOUNTS (working directory $WD)"
 git config --system --add safe.directory '*'
 cd "$WD"
@@ -270,15 +279,19 @@ if [ ! -d .git ]; then
   sudo -u ubuntu git config user.name 'Evaluation fixture'
   sudo -u ubuntu git config user.email 'evaluation@ytimesy.invalid'
   printf '\nnode_modules/\n.next/\n.ytimesy/\n__pycache__/\n' >> .git/info/exclude
+  # What the VM user cannot read (an execute-only tool) stays out of the baseline.
+  sudo -u ubuntu find . -path ./.git -prune -o \( ! -readable -o -type d ! -executable \) -print -prune | sed 's|^\./|/|' >> .git/info/exclude
   sudo -u ubuntu git add -A
   sudo -u ubuntu git commit -q --allow-empty -m 'Frozen benchmark environment'
 fi
 sudo -u ubuntu git update-ref refs/ytimesy/base HEAD
 cd /tb
 log "git baseline ready"
-mkdir -p /home/ubuntu/.ytimesy /tb/route
+mkdir -p /home/ubuntu/.ytimesy /tb/route /tmp/ytimesy-agents /tmp/ytimesy-attempts
 chown ubuntu:ubuntu /home/ubuntu/.ytimesy
 chmod 0777 /tb/route
+chmod 0755 /tmp/ytimesy-agents
+chmod 1777 /tmp/ytimesy-attempts
 sudo -u ubuntu ln -sfn "$WD" "/home/ubuntu/$NAME"
 {
   echo "services:"
@@ -292,6 +305,10 @@ sudo -u ubuntu ln -sfn "$WD" "/home/ubuntu/$NAME"
   echo "    volumes:"
   echo "      - /home/ubuntu/.ytimesy:/home/ubuntu/.ytimesy:ro"
   echo "      - /tb/route:/tb/route"
+  # Read-only subagents' scratch and the attempt loop's checker suites
+  # (attempts=3): written on the VM, run in the container.
+  echo "      - /tmp/ytimesy-agents:/tmp/ytimesy-agents"
+  echo "      - /tmp/ytimesy-attempts:/tmp/ytimesy-attempts"
   for d in $MOUNTS; do echo "      - $d:$d"; done
 } > /tb/override.yaml
 docker compose -p tb -f /tb/compose.json -f /tb/override.yaml up -d --wait --wait-timeout 240 >/tb/compose-up.log 2>&1 || { cat /tb/compose-up.log; exit 1; }
@@ -315,6 +332,7 @@ docker exec -u 0 -e WD="$WD" -e NAME="$NAME" tb sh -c '
 cuid=$(docker exec tb id -u)
 if [ "$cuid" != 0 ] && [ "$cuid" != 1000 ]; then
   setfacl -R -m u:$cuid:rwX,d:u:$cuid:rwX $MOUNTS
+  ${UNREADABLE_KEEP_MODE}
 fi
 printf '%s\n' $MOUNTS > /tb/route-mounts
 printf 'WD=%q\nMOUNTS=%q\n' "$WD" "$MOUNTS" > /tb/runtime.sh
@@ -391,11 +409,12 @@ const PROFILE_HOOK = [
  * verifier: collect commands, then each artifact copied out of its service
  * into /tb/artifacts/<index>/ and packed into /tb/artifacts.tgz.
  */
-export function stageScript(task: TaskEnvironment) {
+export function stageScript(task: TaskEnvironment, name = "artifacts") {
+	const dir = `/tb/${name}`;
 	const lines = [
 		"#!/bin/bash",
 		"set -uo pipefail",
-		"rm -rf /tb/artifacts /tb/artifacts.tgz; mkdir -p /tb/artifacts",
+		`rm -rf ${dir} ${dir}.tgz; mkdir -p ${dir}`,
 		'cid() { if [ "$1" = main ]; then echo tb; else docker compose -p tb -f /tb/compose.json -f /tb/override.yaml ps -q "$1"; fi; }',
 	];
 	for (const step of task.collect)
@@ -408,13 +427,13 @@ export function stageScript(task: TaskEnvironment) {
 			.map((pattern) => `--exclude=${q(pattern.replace(/^\.\//, ""))}`)
 			.join(" ");
 		lines.push(
-			`mkdir -p /tb/artifacts/${index}`,
-			`docker cp "$(cid ${q(artifact.service)}):${source}" - 2>/dev/null | tar -x -C /tb/artifacts/${index} ${excludes} || echo ${q(`artifact unavailable: ${artifact.source}`)}`,
+			`mkdir -p ${dir}/${index}`,
+			`docker cp "$(cid ${q(artifact.service)}):${source}" - 2>/dev/null | tar -x -C ${dir}/${index} ${excludes} || echo ${q(`artifact unavailable: ${artifact.source}`)}`,
 		);
 	});
 	lines.push(
-		"tar -czf /tb/artifacts.tgz -C /tb/artifacts .",
-		'echo "STAGED $(du -sk /tb/artifacts | cut -f1) KB"',
+		`tar -czf ${dir}.tgz -C ${dir} .`,
+		`echo "STAGED $(du -sk ${dir} | cut -f1) KB"`,
 	);
 	return `${lines.join("\n")}\n`;
 }
@@ -435,14 +454,21 @@ export function graderPullScript(task: TaskEnvironment) {
  * the verifier image has none) are there: the verifier container gets the
  * artifacts at their original paths, then `/tests/test.sh` runs.
  */
-export function verifyScript(task: TaskEnvironment, timeoutSec: number) {
+export function verifyScript(
+	task: TaskEnvironment,
+	timeoutSec: number,
+	name = "artifacts",
+) {
+	const dir = `/tb/${name}`;
+	const out =
+		name === "artifacts" ? "/tb/verifier-out" : `/tb/verifier-out-${name}`;
 	const lines = [
 		"#!/bin/bash",
 		"set -uo pipefail",
 		"t0=$(date +%s)",
 		'log() { echo "[grade +$(( $(date +%s) - t0 ))s] $*"; }',
-		"rm -rf /tb/artifacts /tb/verifier-out; mkdir -p /tb/artifacts /tb/verifier-out",
-		"tar -xzf /tb/artifacts.tgz -C /tb/artifacts",
+		`rm -rf ${dir} ${out}; mkdir -p ${dir} ${out}`,
+		`tar -xzf ${dir}.tgz -C ${dir}`,
 		"for _ in $(seq 280); do [ -f /tb/pull.exit ] && break; sleep 1; done",
 		'[ "$(cat /tb/pull.exit 2>/dev/null)" = 0 ] || { tail -c 600 /tb/pull.log; echo "GRADE_ERROR verifier image pull failed"; exit 0; }',
 		`docker rm -f tbv >/dev/null 2>&1; docker run -d --name tbv ${Object.entries(
@@ -458,7 +484,7 @@ export function verifyScript(task: TaskEnvironment, timeoutSec: number) {
 		const base = source.split("/").at(-1) as string;
 		const parent = source.slice(0, source.lastIndexOf("/")) || "/";
 		lines.push(
-			`if [ -d /tb/artifacts/${index}/${q(base)} ]; then docker exec -u 0 tbv mkdir -p ${q(source)} && docker cp /tb/artifacts/${index}/${q(base)}/. tbv:${q(source)}; elif [ -e /tb/artifacts/${index}/${q(base)} ]; then docker exec -u 0 tbv mkdir -p ${q(parent)} && docker cp /tb/artifacts/${index}/${q(base)} tbv:${q(source)}; else log ${q(`no artifact ${artifact.source}`)}; fi`,
+			`if [ -d ${dir}/${index}/${q(base)} ]; then docker exec -u 0 tbv mkdir -p ${q(source)} && docker cp ${dir}/${index}/${q(base)}/. tbv:${q(source)}; elif [ -e ${dir}/${index}/${q(base)} ]; then docker exec -u 0 tbv mkdir -p ${q(parent)} && docker cp ${dir}/${index}/${q(base)} tbv:${q(source)}; else log ${q(`no artifact ${artifact.source}`)}; fi`,
 		);
 	});
 	lines.push(
@@ -469,12 +495,12 @@ export function verifyScript(task: TaskEnvironment, timeoutSec: number) {
 		`timeout ${Math.max(30, Math.floor(timeoutSec))} docker exec tbv bash -c 'chmod +x /tests/test.sh 2>/dev/null; bash /tests/test.sh > /logs/verifier/test-stdout.txt 2>&1'`,
 		"rc=$?",
 		'log "tests exited $rc"',
-		"docker cp tbv:/logs/verifier/. /tb/verifier-out/ >/dev/null 2>&1",
+		`docker cp tbv:/logs/verifier/. ${out}/ >/dev/null 2>&1`,
 		"docker rm -f tbv >/dev/null 2>&1",
 		'echo "TESTS_EXIT=$rc"',
-		'if [ -f /tb/verifier-out/reward.json ]; then echo "REWARD_JSON=$(tr -d "\\n" < /tb/verifier-out/reward.json)"; fi',
-		'if [ -f /tb/verifier-out/reward.txt ]; then echo "REWARD_TXT=$(tr -d "\\n" < /tb/verifier-out/reward.txt)"; fi',
-		'echo "TESTS_TAIL_BEGIN"; tail -c 1500 /tb/verifier-out/test-stdout.txt 2>/dev/null; echo; echo "TESTS_TAIL_END"',
+		`if [ -f ${out}/reward.json ]; then echo "REWARD_JSON=$(tr -d "\\n" < ${out}/reward.json)"; fi`,
+		`if [ -f ${out}/reward.txt ]; then echo "REWARD_TXT=$(tr -d "\\n" < ${out}/reward.txt)"; fi`,
+		`echo "TESTS_TAIL_BEGIN"; tail -c 1500 ${out}/test-stdout.txt 2>/dev/null; echo; echo "TESTS_TAIL_END"`,
 	);
 	return `${lines.join("\n")}\n`;
 }
@@ -525,4 +551,40 @@ export function parseReward(output: string): {
 		error,
 		tail,
 	};
+}
+
+/**
+ * Runs as root on the grader VM after the final verify: grades each earlier
+ * attempt's artifacts (/tb/<name>.tgz) one after another, in sections
+ * `ATTEMPT_BEGIN <name>` ... `ATTEMPT_END <name>` that parseReward reads.
+ */
+export function attemptsVerifyScript(
+	task: TaskEnvironment,
+	timeoutSec: number,
+	names: readonly string[],
+) {
+	const lines = [
+		"#!/bin/bash",
+		"for _ in $(seq 3600); do [ -f /tb/verify.exit ] && break; sleep 1; done",
+	];
+	for (const name of names)
+		lines.push(
+			`cat > /tb/verify-${name}.sh <<'YTIMESY_VERIFY_EOF'`,
+			verifyScript(task, timeoutSec, name).trimEnd(),
+			"YTIMESY_VERIFY_EOF",
+			`echo "ATTEMPT_BEGIN ${name}"`,
+			`bash /tb/verify-${name}.sh`,
+			`echo "ATTEMPT_END ${name}"`,
+		);
+	return `${lines.join("\n")}\n`;
+}
+
+/** Each attempt section's output from attemptsVerifyScript, by name. */
+export function attemptSections(output: string) {
+	const sections = new Map<string, string>();
+	for (const match of output.matchAll(
+		/ATTEMPT_BEGIN (\S+)\n([\s\S]*?)\nATTEMPT_END \1/g,
+	))
+		sections.set(match[1], match[2]);
+	return sections;
 }

@@ -3,6 +3,7 @@ import { type ToolSet, tool } from "ai";
 import { Effect } from "effect";
 import { z } from "zod";
 import { agentSessionMachineSlug } from "#/domain/agent-session";
+import { independentReviewBrief } from "#/domain/checker-brief";
 import { latestUserRequestText } from "#/domain/child-task-activity";
 import { WorkspaceId } from "#/domain/ids";
 import { posixShellQuoted } from "#/domain/posix-command";
@@ -11,7 +12,6 @@ import {
 	AGENT_SEND_TOOL,
 	AGENT_TOOL,
 	builderRemaining,
-	checkerBrief,
 	isReaderRole,
 	SUBAGENT_BRIEF_MAX,
 	SUBAGENT_ROLES,
@@ -174,17 +174,7 @@ type Tree = {
 export function subagentTools(context: SubagentToolContext): ToolSet {
 	const deps = { ...defaultDeps, ...context.deps };
 	const { parent } = context;
-	const loadTree = async (): Promise<Tree & { level: number }> => {
-		const ancestors = await deps.ancestors(parent.userId, parent.id);
-		const root = ancestors.at(-1) ?? parent;
-		const sessions = await deps.tree(parent.userId, root.id);
-		return {
-			root,
-			sessions,
-			level: ancestors.length,
-			nodes: subagentTree(root.id, sessions, deps.now()).nodes,
-		};
-	};
+	const loadTree = () => loadTreeFor(deps, parent);
 
 	const agent = tool({
 		description:
@@ -206,79 +196,20 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 				throw new Error(
 					"A read-only agent cannot start a writer; report what should change instead.",
 				);
-			if (!parent.listedModelId)
-				throw new Error("Your session has no model for a subagent to inherit.");
-			const tree = await loadTree();
-			const own = tree.nodes.find((node) => node.id === parent.id);
-			const parentRemaining = own
-				? subagentNodeRemaining(own)
-				: builderRemaining(
-						subagentTree(tree.root.id, tree.sessions, deps.now()).total.tokens,
-					);
-			const admission = subagentAdmission({
-				parentLevel: tree.level,
-				liveChildrenOfParent: tree.nodes.filter(
-					(node) => node.parentId === parent.id && node.live,
-				).length,
-				liveInTree: tree.nodes.filter((node) => node.live).length,
-				parentRemaining: parentRemaining ?? builderRemaining(0),
-			});
-			if (!admission.admitted) throw new Error(admission.reason);
 			const workspace = await context.workspace();
-			const brief =
-				role === "checker"
-					? await checkerBriefFor(context, tree.root, workspace)
-					: (input.brief as string).trim();
-			const placement = subagentPlacement(role);
-			const child = await deps.openTask({
-				userId: parent.userId,
-				projectId: parent.projectId,
-				parentSessionId: parent.id,
-				title: input.title,
-				harness: parent.harness,
-				modelId: parent.listedModelId,
-				prompt: brief,
-				placement: placement === "fork" ? "fresh" : "shared",
-				access: placement === "fork" ? "read_write" : "read_only",
-				execution: "parallel",
-				dependsOnSessionId: null,
-			});
-			const childId = child.id;
-			try {
-				await deps.saveSpec(parent.userId, childId, {
+			const { childId, budget, placement } = await spawnSubagent(
+				context,
+				deps,
+				{
 					role,
-					budget: admission.budget,
-				});
-				if (placement === "fork") {
-					const fork = await deps.fork({
-						machines: context.machines,
-						parentVm: workspace.vm,
-						slug: agentSessionMachineSlug(childId),
-					});
-					await deps.saveProviderRef(childId, fork.vm);
-					await deps.mergeFork(childId, {
-						vmId: fork.vm,
-						sourceVmId: workspace.vm,
-						forkMs: fork.forkMs,
-						bootedAt: new Date(deps.now()).toISOString(),
-						base: fork.base,
-						parentHead: fork.parentHead,
-					});
-				}
-				await deps.start(
-					{
-						userId: parent.userId,
-						projectId: parent.projectId,
-						sessionId: parent.id,
-						harnessId: parent.harness,
-						createNew: false,
-					},
-					childId,
-				);
-			} catch (cause) {
-				await deps.markFailed(childId).catch(() => {});
-				throw cause;
-			}
+					title: input.title,
+					brief: async (tree) =>
+						role === "checker"
+							? await checkerBriefFor(context, tree.root, workspace)
+							: (input.brief as string).trim(),
+				},
+				workspace,
+			);
 			const label =
 				(await loadTree()).nodes.find((node) => node.id === childId)?.label ??
 				"?";
@@ -287,15 +218,10 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 				taskId: childId,
 				role,
 				vm: placement,
-				budget: publicBudget(admission.budget),
+				budget: publicBudget(budget),
 			};
 			if (!input.wait) return started;
-			const report = await waitForReport(
-				context,
-				deps,
-				childId,
-				admission.budget,
-			);
+			const report = await waitForReport(context, deps, childId, budget);
 			return report
 				? { ...started, ...report }
 				: {
@@ -346,6 +272,145 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 	return { [AGENT_TOOL]: agent, [AGENT_SEND_TOOL]: agentSend };
 }
 
+type LoadedTree = Tree & { level: number };
+
+async function loadTreeFor(
+	deps: SubagentToolDeps,
+	parent: AgentSessionRecord,
+): Promise<LoadedTree> {
+	const ancestors = await deps.ancestors(parent.userId, parent.id);
+	const root = ancestors.at(-1) ?? parent;
+	const sessions = await deps.tree(parent.userId, root.id);
+	return {
+		root,
+		sessions,
+		level: ancestors.length,
+		nodes: subagentTree(root.id, sessions, deps.now()).nodes,
+	};
+}
+
+/**
+ * Admission, placement and start of one child: the agent tool's path, and
+ * the runtime's for children it starts itself (the attempt loop's checker
+ * and judge). `cap` lowers the admitted budget, never raises it.
+ */
+async function spawnSubagent(
+	context: SubagentToolContext,
+	deps: SubagentToolDeps,
+	input: {
+		readonly role: SubagentRole;
+		readonly title: string;
+		readonly brief: (tree: LoadedTree) => Promise<string>;
+		readonly cap?: Partial<SubagentBudget>;
+	},
+	workspace: AgentToolWorkspace,
+) {
+	const { parent } = context;
+	const { role } = input;
+	if (!parent.listedModelId)
+		throw new Error("Your session has no model for a subagent to inherit.");
+	const tree = await loadTreeFor(deps, parent);
+	const own = tree.nodes.find((node) => node.id === parent.id);
+	const parentRemaining = own
+		? subagentNodeRemaining(own)
+		: builderRemaining(
+				subagentTree(tree.root.id, tree.sessions, deps.now()).total.tokens,
+			);
+	const admission = subagentAdmission({
+		parentLevel: tree.level,
+		liveChildrenOfParent: tree.nodes.filter(
+			(node) => node.parentId === parent.id && node.live,
+		).length,
+		liveInTree: tree.nodes.filter((node) => node.live).length,
+		parentRemaining: parentRemaining ?? builderRemaining(0),
+	});
+	if (!admission.admitted) throw new Error(admission.reason);
+	const budget: SubagentBudget = {
+		steps: Math.min(admission.budget.steps, input.cap?.steps ?? Infinity),
+		minutes: Math.min(admission.budget.minutes, input.cap?.minutes ?? Infinity),
+		tokens: Math.min(admission.budget.tokens, input.cap?.tokens ?? Infinity),
+	};
+	const brief = await input.brief(tree);
+	const placement = subagentPlacement(role);
+	const child = await deps.openTask({
+		userId: parent.userId,
+		projectId: parent.projectId,
+		parentSessionId: parent.id,
+		title: input.title,
+		harness: parent.harness,
+		modelId: parent.listedModelId,
+		prompt: brief,
+		placement: placement === "fork" ? "fresh" : "shared",
+		access: placement === "fork" ? "read_write" : "read_only",
+		execution: "parallel",
+		dependsOnSessionId: null,
+	});
+	const childId = child.id;
+	try {
+		await deps.saveSpec(parent.userId, childId, { role, budget });
+		if (placement === "fork") {
+			const fork = await deps.fork({
+				machines: context.machines,
+				parentVm: workspace.vm,
+				slug: agentSessionMachineSlug(childId),
+			});
+			await deps.saveProviderRef(childId, fork.vm);
+			await deps.mergeFork(childId, {
+				vmId: fork.vm,
+				sourceVmId: workspace.vm,
+				forkMs: fork.forkMs,
+				bootedAt: new Date(deps.now()).toISOString(),
+				base: fork.base,
+				parentHead: fork.parentHead,
+			});
+		}
+		await deps.start(
+			{
+				userId: parent.userId,
+				projectId: parent.projectId,
+				sessionId: parent.id,
+				harnessId: parent.harness,
+				createNew: false,
+			},
+			childId,
+		);
+	} catch (cause) {
+		await deps.markFailed(childId).catch(() => {});
+		throw cause;
+	}
+	return { childId, budget, placement };
+}
+
+/**
+ * Starts a read-only child with a brief the runtime wrote (the builder never
+ * adds to it): the attempt loop's checker and tiebreak judge. Its report is
+ * taken by the runtime, not delivered to the builder.
+ */
+export async function startRuntimeSubagent(
+	context: SubagentToolContext,
+	input: {
+		readonly role: "checker" | "reviewer";
+		readonly title: string;
+		readonly brief: string;
+		readonly cap?: Partial<SubagentBudget>;
+	},
+) {
+	const deps = { ...defaultDeps, ...context.deps };
+	const workspace = await context.workspace();
+	const { childId, budget } = await spawnSubagent(
+		context,
+		deps,
+		{
+			role: input.role,
+			title: input.title.slice(0, SUBAGENT_TITLE_MAX),
+			brief: async () => input.brief,
+			cap: input.cap,
+		},
+		workspace,
+	);
+	return { sessionId: childId, budget };
+}
+
 function publicBudget(budget: SubagentBudget) {
 	return {
 		steps: budget.steps,
@@ -380,7 +445,7 @@ async function checkerBriefFor(
 		.split("\n")
 		.map((line) => line.slice(3).trim())
 		.filter(Boolean);
-	return checkerBrief({
+	return independentReviewBrief({
 		taskText,
 		checkout: workspace.cwd,
 		changedFiles,

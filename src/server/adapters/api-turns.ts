@@ -21,6 +21,7 @@ import {
 	type TurnAnalyticsSession,
 } from "../services/turn-analytics";
 import { modelConcurrencyLimits } from "./agent-capacity";
+import { TURN_DEADLINE_REQUEST_ID } from "./attempt-loop-store";
 import { dispatchBackgroundJob } from "./background-job-dispatch";
 import { wakeConversationProgress } from "./conversation-progress-wake";
 import {
@@ -338,15 +339,29 @@ export async function claimApiTurn(
 	}
 }
 
+/**
+ * SQL: the turn aliased `alias` has passed its eval runner's hard deadline
+ * (saveTurnDeadline). Past it the turn is cancelled on the edge as if its
+ * owner pressed Stop, so a detached run ends on time without its runner.
+ */
+export const turnPastDeadlineSql = (alias: string) =>
+	`exists(select 1 from agent_task_command_receipt d where d.parent_session_id=${alias}.session_id
+	 and d.request_id='${TURN_DEADLINE_REQUEST_ID}' and d.status='done'
+	 and (d.response->>'deadlineAt')::double precision <= extract(epoch from now())*1000)`;
+
 export async function renewApiTurn(turn: ApiTurn): Promise<boolean> {
 	// Only the idempotent, identity-fenced heartbeat may retry a disconnected socket.
 	// Cancellation, stale leases, pool saturation and SQL errors remain terminal.
+	// A turn past its runner deadline is cancelled in the same statement, so
+	// the heartbeat fails and the turn settles as a clean stop.
 	const result = await Effect.runPromise(
 		Effect.tryPromise({
 			try: () =>
 				database().query(
-					`update api_turn set heartbeat_at=now() where id=$1 and lease_id=$2 and state='running' and not cancel_requested
-		 and heartbeat_at>=now()-interval '45 seconds' returning id`,
+					`with expired as (update api_turn t set cancel_requested=true where t.id=$1 and t.lease_id=$2 and t.state='running'
+		 and not t.cancel_requested and ${turnPastDeadlineSql("t")} returning t.id)
+		 update api_turn set heartbeat_at=now() where id=$1 and lease_id=$2 and state='running' and not cancel_requested
+		 and heartbeat_at>=now()-interval '45 seconds' and not exists(select 1 from expired) returning id`,
 					[turn.id, turn.lease_id],
 				),
 			catch: (error) => error,

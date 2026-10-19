@@ -4,7 +4,11 @@ import { SessionItemId, WorkspaceId } from "#/domain/ids";
 import type { SessionItem } from "#/domain/session-item";
 import type { SubagentRole } from "#/domain/subagent";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
-import { type SubagentToolDeps, subagentTools } from "./subagent-tools";
+import {
+	type SubagentToolDeps,
+	startRuntimeSubagent,
+	subagentTools,
+} from "./subagent-tools";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 const NOW = Date.parse("2026-10-18T12:00:00.000Z");
@@ -137,7 +141,7 @@ function harness(
 				context: undefined,
 			} as never,
 		) as Promise<Record<string, unknown>>;
-	return { sessions, deps, call, exec };
+	return { sessions, deps, call, exec, parent };
 }
 
 describe("agent tool", () => {
@@ -376,5 +380,72 @@ describe("agent_send", () => {
 		await expect(call("agent_send", { id: "1" })).rejects.toThrow(
 			"Pass a message, stop: true, or both.",
 		);
+	});
+});
+
+describe("runtime-started subagents (the attempt loop)", () => {
+	it("starts a read-only checker with the runtime's brief and a capped budget", async () => {
+		const { deps, exec, parent } = harness();
+		const machines = { exec } as unknown as WorkspaceMachines;
+		const started = await startRuntimeSubagent(
+			{
+				machines,
+				parent,
+				workspace: async () => ({
+					machines,
+					vm: WorkspaceId("vm-root"),
+					cwd: "/home/user/app",
+				}),
+				signal: new AbortController().signal,
+				deps,
+			},
+			{
+				role: "checker",
+				title: "Check attempt 1 of 3",
+				brief: "<task>Add a --json flag</task> runtime brief",
+				cap: { steps: 60, minutes: 4, tokens: 800_000 },
+			},
+		);
+		expect(started).toEqual({
+			sessionId: "child-1",
+			budget: { steps: 60, minutes: 4, tokens: 800_000 },
+		});
+		expect(deps.openTask).toHaveBeenCalledWith(
+			expect.objectContaining({
+				prompt: "<task>Add a --json flag</task> runtime brief",
+				placement: "shared",
+				access: "read_only",
+			}),
+		);
+		expect(deps.saveSpec).toHaveBeenCalledWith("user", "child-1", {
+			role: "checker",
+			budget: { steps: 60, minutes: 4, tokens: 800_000 },
+		});
+		expect(deps.fork).not.toHaveBeenCalled();
+		expect(deps.start).toHaveBeenCalledOnce();
+	});
+
+	it("never raises a budget above the admitted one", async () => {
+		const { deps, exec, parent } = harness();
+		const machines = { exec } as unknown as WorkspaceMachines;
+		const started = await startRuntimeSubagent(
+			{
+				machines,
+				parent,
+				workspace: async () => ({
+					machines,
+					vm: WorkspaceId("vm-root"),
+					cwd: "/w",
+				}),
+				signal: new AbortController().signal,
+				deps,
+			},
+			{ role: "reviewer", title: "Judge", brief: "b", cap: { steps: 999 } },
+		);
+		expect(started.budget).toEqual({
+			steps: 150,
+			minutes: 30,
+			tokens: 2_000_000,
+		});
 	});
 });

@@ -167,6 +167,46 @@ it("renews the lease and chat coordination before resuming", async () => {
 	expect(mocks.startJob).toHaveBeenCalled();
 });
 
+it("cancels a turn between steps once its runner deadline has passed", async () => {
+	mocks.query
+		.mockResolvedValueOnce({
+			rowCount: 1,
+			rows: [
+				{
+					id: turn.turnId,
+					state: "running",
+					fresh: true,
+					legacy: false,
+					cancel_requested: false,
+					past_deadline: true,
+					version: "v1",
+				},
+			],
+		})
+		.mockResolvedValueOnce({ rowCount: 1, rows: [] })
+		.mockResolvedValueOnce({
+			rowCount: 1,
+			rows: [{ messages: [], items: [] }],
+		});
+	let kind = "";
+	mocks.step.mockImplementation(
+		async (step, _machines, receipts, _signal, resume) => {
+			const claim = await receipts.claim(step, resume);
+			kind = claim.kind;
+			return "unavailable";
+		},
+	);
+	const { object, state } = conversation();
+	await object.startTurn(scope, turn);
+	await state.ctx.storage.put("identity", scope);
+	await object.alarm();
+	expect(mocks.query.mock.calls[0][0]).toContain("as past_deadline");
+	expect(mocks.query.mock.calls[0][0]).toContain("turn-deadline");
+	expect(mocks.query.mock.calls[1][0]).toContain("set cancel_requested=true");
+	expect(mocks.query.mock.calls[1][1]).toEqual([turn.turnId, turn.leaseId]);
+	expect(kind).toBe("cancelled");
+});
+
 it("shares the alarm between the turn loop and the room lease", async () => {
 	mocks.step.mockResolvedValue("continue");
 	const { object, state, sql } = conversation();
