@@ -12,13 +12,13 @@ import { removeUserPullRequestEvidence } from "./pr-evidence-cleanup";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 /** Calls in flight at once: keeps a heavy account's deletion fast without a burst. */
-const CLEANUP_CONCURRENCY = 6;
+export const CLEANUP_CONCURRENCY = 6;
 
 /**
  * Runs `work` over `items` with at most `limit` calls in flight. The first
  * failure stops new calls from starting and is rethrown once in-flight ones end.
  */
-async function eachLimited<T>(
+export async function eachLimited<T>(
 	items: readonly T[],
 	limit: number,
 	work: (item: T) => Promise<void>,
