@@ -109,6 +109,8 @@ it("publishes the chat working branch against its selected starting branch", asy
 		1,
 		"acme/app",
 		expect.objectContaining({ head: "ytimesy/task-sess", base: "feature" }),
+		// Recorded as this project's pull request so GitHub events can wake the chat.
+		{ userId: "alice", projectId, repositoryId: 2, sessionId: "sess" },
 	);
 });
 
@@ -217,12 +219,17 @@ it("commits and pushes from the checkout before opening a draft pull request", a
 	expect(
 		runtime.files.some((file) => file.path === "/tmp/ytimesy-gh-token"),
 	).toBe(false);
-	expect(adapter.create).toHaveBeenCalledWith(1, "acme/app", {
-		title: "Ship feature",
-		body: "Ready for review.",
-		head: "feature",
-		base: "master",
-	});
+	expect(adapter.create).toHaveBeenCalledWith(
+		1,
+		"acme/app",
+		{
+			title: "Ship feature",
+			body: "Ready for review.",
+			head: "feature",
+			base: "master",
+		},
+		expect.objectContaining({ userId: "alice", projectId, repositoryId: 2 }),
+	);
 	expect(published).toEqual({
 		number: 4,
 		url: "https://github.example.test/acme/app/pull/4",
@@ -250,10 +257,15 @@ it("publishes a workspace branch when the project is on the default branch", asy
 	await Effect.runPromise(
 		publishProject("alice", { projectId, title: "Ship feature" }, runtime),
 	);
-	expect(adapter.create).toHaveBeenCalledWith(1, "acme/app", {
-		title: "Ship feature",
-		body: "",
-		head: "ytimesy-222222222222",
-		base: "master",
-	});
+	expect(adapter.create).toHaveBeenCalledWith(
+		1,
+		"acme/app",
+		{
+			title: "Ship feature",
+			body: "",
+			head: "ytimesy-222222222222",
+			base: "master",
+		},
+		expect.objectContaining({ userId: "alice", projectId, sessionId: null }),
+	);
 });

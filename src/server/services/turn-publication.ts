@@ -120,6 +120,12 @@ export async function publishCompletedSessionTurn(
 				head,
 				base,
 			},
+			{
+				userId: session.userId,
+				projectId: session.projectId,
+				repositoryId: repo.repositoryId,
+				sessionId: session.id,
+			},
 		);
 		// Harness-captured evidence (prEvidence=on) runs as a background job after
 		// the handoff; queueing never blocks or fails the turn.

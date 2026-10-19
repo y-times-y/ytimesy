@@ -93,6 +93,21 @@ it("pushes the completed revision for each repository and records the primary dr
 		expect(input.revision).toBe(`refs/ytimesy/turn-commits/${turn}`);
 	}
 	expect(deps.pull).toHaveBeenCalledTimes(2);
+	// Each pull request is recorded as the project's, for GitHub wake-ups.
+	expect(deps.pull.mock.calls.map((call) => call[3])).toEqual([
+		{
+			userId: "alice",
+			projectId: "project",
+			repositoryId: 1,
+			sessionId: "chat-abcd",
+		},
+		{
+			userId: "alice",
+			projectId: "project",
+			repositoryId: 3,
+			sessionId: "chat-abcd",
+		},
+	]);
 	expect(deps.save).toHaveBeenCalledWith("chat-abcd", {
 		branch: "ytimesy/fix-parser-abcd",
 		pullRequestUrl: "https://github.com/owner/primary/pull/1",

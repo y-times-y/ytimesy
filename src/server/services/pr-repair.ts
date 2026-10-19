@@ -5,6 +5,7 @@ import { agentSessionForOwner } from "../adapters/agent-sessions";
 import { database } from "../adapters/database";
 import { currentPrRepairEvidence } from "../adapters/github/pr-repair-evidence";
 import { sendHarnessWorkspaceTask } from "./harness-workspace-session";
+import { deliverPullRequestWakes } from "./pull-request-wake";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 type RepairEvent = {
@@ -94,9 +95,18 @@ async function reserveRepairAttempt(
 	}
 }
 
-/** Queued turns have unique repair IDs, so a lost delivery acknowledgement cannot dispatch twice. */
+/**
+ * Task PR repair, then chat wake-ups for pull requests ytimesy opened
+ * (src/server/services/pull-request-wake.ts); both run from the pr-repair job.
+ */
 export async function deliverPrRepairEvents(machines: WorkspaceMachines) {
 	if (process.env.YTIMESY_PR_REPAIR_ENABLED !== "1") return;
+	await deliverTaskRepairEvents(machines);
+	await deliverPullRequestWakes(machines);
+}
+
+/** Queued turns have unique repair IDs, so a lost delivery acknowledgement cannot dispatch twice. */
+async function deliverTaskRepairEvents(machines: WorkspaceMachines) {
 	for (let index = 0; index < 10; index++) {
 		const event = await claimRepairEvent();
 		if (!event) return;
