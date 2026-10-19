@@ -18,7 +18,7 @@ import {
 	validateAgentTaskPlan,
 } from "#/domain/agent-task";
 import { failureMessage, workspaceLooksGone } from "#/domain/failure-message";
-import { WorkspaceId } from "#/domain/ids";
+import { AuthSnapshotId, WorkspaceId } from "#/domain/ids";
 import { listedModelPreferenceFromSessions } from "#/domain/listed-model";
 import type { MachineSizeId } from "#/domain/machine-size";
 import { projectCheckoutFromFullName } from "#/domain/project-checkout";
@@ -45,12 +45,12 @@ import {
 	saveTemplateSnapshot,
 	workspaceForProject,
 } from "#/server/adapters/workspaces";
+import { chatCleanupTargets } from "../adapters/account-deletion";
 import { reserveAgentTaskStart } from "../adapters/agent-capacity";
 import { checkpointForSession } from "../adapters/checkpoints/records";
 import {
 	checkpointStorageConfigured,
-	removeCheckpoint,
-	removeContextArchives,
+	removeChatObjects,
 } from "../adapters/checkpoints/storage";
 import { restoreSessionWorkspace } from "./session-checkpoint";
 import type { WorkspaceMachines } from "./workspace-machines";
@@ -594,8 +594,17 @@ export async function peekAgentSessionMachine(input: {
  * template VM stay. A session that was attached to the template before
  * snapshots existed only drops the row.
  */
+/**
+ * Deletes a chat and its subagent chats: their stored checkpoints, context
+ * archives and attachments, their own VMs, then their rows, then the
+ * retained-recovery VMs and snapshots only they referenced.
+ *
+ * Storage and VM failures before the rows go stop the deletion so a retry
+ * finds everything again. Retained resources go only once the rows are gone;
+ * a failure there is logged and left to provider expiry.
+ */
 export async function deleteAgentSessionMachine(
-	machines: Pick<WorkspaceMachines, "destroy">,
+	machines: Pick<WorkspaceMachines, "destroy" | "destroySnapshot">,
 	input: {
 		readonly userId: string;
 		readonly projectId: string;
@@ -608,13 +617,13 @@ export async function deleteAgentSessionMachine(
 	}
 	const workspace = await workspaceForProject(input.userId, input.projectId);
 	const children = await descendantAgentSessions(input.userId, session.id);
-	for (const removed of [session, ...children]) {
-		if (checkpointStorageConfigured()) {
-			const checkpoint = await checkpointForSession(input.userId, removed.id);
-			if (checkpoint) await removeCheckpoint(checkpoint.object_path);
-			await removeContextArchives(input.userId, removed.id);
-		}
-	}
+	const removed = [session, ...children];
+	if (checkpointStorageConfigured())
+		for (const chat of removed) await removeChatObjects(input.userId, chat.id);
+	const retained = await chatCleanupTargets(
+		input.userId,
+		removed.map((chat) => chat.id),
+	);
 	const refs = sessionMachineRefsToDestroy({
 		sessionProviderRef:
 			session.taskPlacement === "shared" ? null : session.providerRef,
@@ -627,6 +636,23 @@ export async function deleteAgentSessionMachine(
 		await machines.destroy(WorkspaceId(ref));
 	}
 	await deleteAgentSessionForOwner(input.userId, session.id);
+	const sharedToolsSnapshot = process.env.YTIMESY_TOOLS_SNAPSHOT_ID?.trim();
+	const leftovers: string[] = [];
+	for (const vmId of retained.vmIds.filter((id) => !refs.includes(id)))
+		await machines.destroy(WorkspaceId(vmId)).catch(() => {
+			leftovers.push(`vm:${vmId}`);
+		});
+	for (const snapshotId of retained.snapshotIds.filter(
+		(id) => id !== sharedToolsSnapshot,
+	))
+		await machines.destroySnapshot(AuthSnapshotId(snapshotId)).catch(() => {
+			leftovers.push(`snapshot:${snapshotId}`);
+		});
+	if (leftovers.length)
+		console.warn("Chat deletion left provider resources to expire.", {
+			sessionId: session.id,
+			leftovers,
+		});
 }
 
 export async function executeSessionMachinePlan(input: {

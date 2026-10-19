@@ -198,6 +198,40 @@ it("deletes the project's chat files and private snapshots, sparing shared ones"
 	);
 });
 
+it("deletes subagent chat files and a template snapshot only this project uses", async () => {
+	const { project, workspaceId } = await readyProject("alice", 27);
+	await db.query(
+		"update workspace set template_snapshot_id='snap-template-27' where id=$1",
+		[workspaceId],
+	);
+	const lead = await insertAgentSession({
+		userId: "alice",
+		projectId: project.id,
+		workspaceId,
+		harness: "api",
+		providerRef: "vm-lead-27",
+	});
+	const subagent = await insertAgentSession({
+		userId: "alice",
+		projectId: project.id,
+		workspaceId,
+		harness: "api",
+		providerRef: "vm-subagent-27",
+		parentSessionId: lead.id,
+	});
+	const snapshots: string[] = [];
+	await removeProjectMachine(
+		machines(undefined, async (id) => {
+			snapshots.push(id);
+		}),
+		{ userId: "alice", projectId: project.id },
+	);
+	expect(storage.removed.sort()).toEqual(
+		[`alice/${lead.id}`, `alice/${subagent.id}`].sort(),
+	);
+	expect(snapshots).toEqual(["snap-template-27"]);
+});
+
 it("keeps the project and its machines when chat files cannot be deleted", async () => {
 	const { project, workspaceId } = await readyProject("alice", 26);
 	await insertAgentSession({
