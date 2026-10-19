@@ -37,6 +37,13 @@ import {
 	costSummary as sharedCostSummary,
 } from "../src/domain/eval-cost";
 import {
+	type EfficiencyRun,
+	efficiencySummary,
+	formatEfficiencyBlock,
+	type ModelSpendRow,
+	treeModelSpend,
+} from "../src/domain/eval-efficiency";
+import {
 	harnessVariantFromFlags,
 	harnessVariantLabel,
 } from "../src/domain/harness-variant";
@@ -45,7 +52,9 @@ import { modelBilling } from "../src/domain/model-pricing";
 import type { ReviewLoopState } from "../src/domain/review-loop";
 import { sessionItemsFromUnknown } from "../src/domain/session-item";
 import {
+	agentSessionForOwner,
 	deleteAgentSessionForOwner,
+	descendantAgentSessions,
 	insertAgentSession,
 	saveAgentSessionProviderRef,
 } from "../src/server/adapters/agent-sessions";
@@ -276,6 +285,11 @@ type HardSetRecord = RunRecord & {
 	infraError?: string | null;
 	/** The agent VM was paused (idle) and resumed before staging. */
 	agentVmResumed?: boolean;
+	/**
+	 * Spend per role (builder, subagent, checker, judge) and model, each at
+	 * its own route's price, from the session tree before cleanup.
+	 */
+	modelBreakdown?: ModelSpendRow[] | null;
 };
 
 type HardSetLoopAttempt = {
@@ -751,6 +765,7 @@ if (flags.compare) {
 	);
 	if (!records.length) throw new Error(`No records in ${runs.join(", ")}.`);
 	printEfficiency(records);
+	printEfficiencyBlocks(records, (record) => `${record.run} ${record.variant}`);
 	process.exit(0);
 }
 
@@ -773,6 +788,9 @@ if (flags.report) {
 	printAttemptLoops(records);
 	for (const line of reviewLoopReport(records)) console.log(line);
 	printEfficiency(records);
+	printEfficiencyBlocks(records, () => `Run ${flags.run}`);
+	if (new Set(records.map((record) => record.variant)).size > 1)
+		printEfficiencyBlocks(records, (record) => `Arm ${record.variant}`);
 	const agentRuns = records.filter((record) => record.mode === "agent");
 	if (agentRuns.length) {
 		console.log(
@@ -1080,6 +1098,10 @@ async function provision(run: TaskRun) {
 	const user = await createEvalUser({
 		label: `hard-set ${task.id} ${harnessVariantLabel(options.variant)}`,
 		variant: options.variant,
+		// A role model off the Codex plan needs the owner's OpenRouter connection.
+		openRouter: Object.values(options.variant.roleModels).some(
+			(entry) => !entry?.model.startsWith("codex:"),
+		),
 	});
 	run.user = user;
 	run.userId = user.userId;
@@ -1299,6 +1321,7 @@ async function saveTranscript(run: TaskRun) {
 async function recordTurn(run: {
 	record: HardSetRecord;
 	sessionId: string | null;
+	userId: string | null;
 	options: RunOptions;
 }) {
 	const { record, sessionId, options } = run;
@@ -1335,9 +1358,103 @@ async function recordTurn(run: {
 				options.model,
 				loopStates.review,
 			);
+		const breakdown = run.userId
+			? await sessionTreeSpend(run.userId, sessionId, loopStates.attempt)
+			: null;
+		// Sessions only grow until cleanup; never replace a copy with nothing.
+		if (breakdown?.length) record.modelBreakdown = breakdown;
 	} catch (error) {
 		record.errors.push(`Turn record not saved: ${safe(error).slice(0, 200)}`);
 	}
+}
+
+/** The run's spend per role and model from its stored session tree. */
+async function sessionTreeSpend(
+	userId: string,
+	rootId: string,
+	attemptStates: readonly AttemptLoopState[],
+) {
+	const root = await agentSessionForOwner(userId, rootId);
+	if (!root) return null;
+	const judgeIds = new Set(
+		attemptStates.flatMap((state) =>
+			state.selection?.judge ? [state.selection.judge.sessionId] : [],
+		),
+	);
+	return treeModelSpend({
+		rootId,
+		sessions: [root, ...(await descendantAgentSessions(userId, rootId))],
+		judgeIds,
+	});
+}
+
+/**
+ * A record as the efficiency block reads it: its stored per-model breakdown,
+ * or for older records the builder's own counts plus the loops' checker
+ * spend (both on the builder's model, as those records were priced).
+ */
+function efficiencyRun(record: HardSetRecord): EfficiencyRun {
+	const loop = record.attemptLoop ?? record.reviewLoop;
+	const models: ModelSpendRow[] = record.modelBreakdown?.length
+		? record.modelBreakdown
+		: [
+				{
+					role: "builder",
+					model: record.model,
+					agents: 1,
+					requests: record.modelSteps ?? null,
+					inputTokens: record.inputTokens ?? 0,
+					outputTokens: record.outputTokens ?? 0,
+					cacheReadTokens: record.cachedTokens ?? 0,
+					costUsd: estimatedCost(record),
+					estimated: true,
+				},
+				...(loop?.checkers
+					? [
+							{
+								role: "checker" as const,
+								model: record.model,
+								agents: loop.checkers,
+								requests: null,
+								inputTokens: loop.extraTokens,
+								outputTokens: 0,
+								cacheReadTokens: 0,
+								costUsd: loop.extraCostUsd,
+								estimated: true,
+							},
+						]
+					: []),
+			];
+	return { solved: record.passed, seconds: record.agentSec, models };
+}
+
+/**
+ * The AA-style block (src/domain/eval-efficiency.ts) over scored agent runs:
+ * one headline per group plus its per-role, per-model split.
+ */
+function printEfficiencyBlocks(
+	records: HardSetRecord[],
+	groupBy: (record: HardSetRecord) => string,
+) {
+	const scored = records.filter(
+		(record) => record.mode === "agent" && isScored(record),
+	);
+	if (!scored.length) return;
+	console.log(
+		"\nEfficiency per task (AA-style; scored agent runs; calls = model requests; each model at its own route's list price):",
+	);
+	const groups = new Map<string, HardSetRecord[]>();
+	for (const record of scored)
+		groups.set(groupBy(record), [
+			...(groups.get(groupBy(record)) ?? []),
+			record,
+		]);
+	for (const [name, list] of groups)
+		for (const line of formatEfficiencyBlock(
+			name,
+			efficiencySummary(list.map(efficiencyRun)),
+		))
+			console.log(line);
 }
 
 /**
