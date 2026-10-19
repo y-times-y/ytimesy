@@ -41,6 +41,7 @@ import {
 import { safeReturnTo } from "#/domain/return-to";
 import { useIdentityOptions } from "#/features/auth/identity-options";
 import { YtimesyBrand } from "#/features/auth/onboarding-shell";
+import { TermsNotice } from "#/features/auth/terms-consent";
 import { useSignInContinuation } from "#/lib/auth/use-sign-in-continuation.ts";
 import { cn } from "#/lib/utils.ts";
 import { isAuthFormFieldInvalid, useAuthForm } from "./auth-form";
@@ -383,6 +384,8 @@ export function SignIn({
 							</Link>
 						</FieldDescription>
 					)}
+
+					<TermsNotice />
 				</div>
 			</CardContent>
 		</Card>
