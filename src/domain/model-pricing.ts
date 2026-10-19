@@ -53,11 +53,21 @@ function knownPrice(modelId: string) {
 	);
 }
 
-/** The bare model id for a route id (`api/<connection>/<model>`), a `codex:` id or a plain id. */
+/**
+ * The bare model id for a route id (`api/<connection>/<model>`), a `codex:` id
+ * or a plain id. Claude's direct and Bedrock ids (`claude-opus-5-5`,
+ * `anthropic.claude-opus-5-5`, `us.anthropic.claude-opus-5-5-v1:0`) name the
+ * same model as the catalog's `claude-opus-5.5`, so they share its price.
+ */
 export function pricedModelId(routeOrModelId: string) {
 	const route = parseModelRouteId(routeOrModelId);
-	const id = route?.modelId ?? routeOrModelId.replace(/^codex:/, "");
-	return id.replace(/:free$/, "");
+	const id = (route?.modelId ?? routeOrModelId.replace(/^codex:/, ""))
+		.replace(/:free$/, "")
+		.replace(/^(?:[a-z]{2,4}\.)?anthropic\.(?=claude-)/, "");
+	const claude = /^(claude-[a-z]+)-(\d+)-(\d{1,2})(?:-v\d+(?::\d+)?)?$/.exec(
+		id,
+	);
+	return claude ? `${claude[1]}-${claude[2]}.${claude[3]}` : id;
 }
 
 export function modelBilling(input: {
