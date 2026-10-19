@@ -134,6 +134,8 @@ import { withCompletedTaskReviewContext } from "../services/completed-task-revie
 import { ensureConversationCodePoint } from "../services/conversation-recovery";
 import {
 	BUILDER_DEFERRED_TOOL_GROUPS,
+	CODE_MODE_DEFERRED_TOOL_GROUPS,
+	CODE_MODE_DIRECT_ONLY_TOOLS,
 	deferredToolSurface,
 	loadedDeferredTools,
 } from "../services/deferred-tools";
@@ -830,48 +832,74 @@ async function runApiTurnAttempt(
 						projectSecrets?.redact ?? [],
 					)
 				: {};
+		// Code mode is a development harness variant on a lean surface only
+		// (docs/parallel-evals.md). primary: run_code is the main tool and the
+		// deferred tools are callable only from inside it.
+		const codeMode =
+			surface.lean && variant.codeMode !== "off" ? variant.codeMode : null;
+		const baseTools: ToolSet = {
+			...turnTools({
+				surfaceTools,
+				mcp,
+				plugins,
+				webSearch,
+				hooks,
+				planLock,
+				projectSecrets,
+			}),
+			...delegation,
+		};
+		// Rarely used tools stay out of the tool list: loaded on demand through
+		// find_tools (subagents=on on a lean surface), or called from run_code
+		// (codeMode=primary). Loads append, so earlier requests' tool lists stay
+		// a cached prefix.
+		const deferredGroups =
+			codeMode === "primary"
+				? CODE_MODE_DEFERRED_TOOL_GROUPS
+				: subagentsOn && surface.lean
+					? BUILDER_DEFERRED_TOOL_GROUPS
+					: null;
 		const allTools = withCodeMode(
-			{
-				...turnTools({
-					surfaceTools,
-					mcp,
-					plugins,
-					webSearch,
-					hooks,
-					planLock,
-					projectSecrets,
-				}),
-				...delegation,
-			},
-			// A development harness variant on a lean surface only (docs/parallel-evals.md).
-			variant.codeMode === "on" && surface.lean
+			baseTools,
+			codeMode
 				? {
 						signal: abort.signal,
 						sessionId: owner.id,
 						turnId: turn.id,
 						toolCallPrefix: step ? `step-${step.index}:` : undefined,
 						redact: projectSecrets?.redact ?? [],
+						mode: codeMode,
+						deferred:
+							codeMode === "primary"
+								? CODE_MODE_DEFERRED_TOOL_GROUPS.flatMap(
+										(group) => group.tools,
+									).filter(
+										(name) =>
+											name in baseTools &&
+											!CODE_MODE_DIRECT_ONLY_TOOLS.includes(name),
+									)
+								: [],
 					}
 				: null,
 		);
-		// Rarely used tools load on demand through find_tools (subagents=on on a
-		// lean surface); loads append, so earlier requests' tool lists stay a
-		// cached prefix.
-		const deferral =
-			subagentsOn && surface.lean
-				? deferredToolSurface({
-						tools: allTools,
-						groups: BUILDER_DEFERRED_TOOL_GROUPS,
-						loaded: loadedDeferredTools(
-							items,
-							messages,
-							BUILDER_DEFERRED_TOOL_GROUPS,
-						),
-						forceLoaded: planLock?.planning
-							? [ENTER_PLAN_MODE_TOOL, PROPOSE_PLAN_TOOL]
-							: [],
-					})
-				: null;
+		const planToolsWhilePlanning = () =>
+			planLock?.planning ? [ENTER_PLAN_MODE_TOOL, PROPOSE_PLAN_TOOL] : [];
+		const deferral = deferredGroups
+			? deferredToolSurface({
+					tools: allTools,
+					groups: deferredGroups,
+					loaded: loadedDeferredTools(items, messages, deferredGroups),
+					...(codeMode === "primary"
+						? {
+								// Plan mode can start inside a program; propose_plan
+								// must then be a direct call (it ends the turn).
+								forceLoaded: planToolsWhilePlanning,
+								discovery: "run_code" as const,
+								unlisted: CODE_MODE_DIRECT_ONLY_TOOLS,
+							}
+						: { forceLoaded: planToolsWhilePlanning() }),
+				})
+			: null;
 		const tools = deferral?.tools ?? allTools;
 		if (planLock?.planning && firstStep)
 			messages = withPlanModeNotice(
@@ -1039,6 +1067,7 @@ async function runApiTurnAttempt(
 					leanShape: surface.lean?.shape,
 					leanWorkingDirectory,
 					deferredTools: deferral?.deferred,
+					codeMode: codeMode ?? undefined,
 					prEvidence: variant.prEvidence === "on" && writable,
 				},
 				memory,
@@ -1805,6 +1834,8 @@ function withCodeMode(
 		turnId: string;
 		toolCallPrefix?: string;
 		redact: readonly string[];
+		mode: "on" | "primary";
+		deferred: readonly string[];
 	} | null,
 ): ToolSet {
 	if (!codeMode) return tools;

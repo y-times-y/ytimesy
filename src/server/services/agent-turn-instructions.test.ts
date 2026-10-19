@@ -53,6 +53,26 @@ describe("subagent instructions", () => {
 		expect(withAgent).toContain("git apply -3");
 	});
 
+	it("in code mode primary, teaches run_code as the main tool and sends deferred tools through it", () => {
+		const primary = agentTurnInstructions({
+			...base,
+			session: { parentSessionId: null },
+			tools: { bash: stub, agent: stub, run_code: stub },
+			deferredTools: [{ name: "agent", description: "Start a subagent." }],
+			codeMode: "primary",
+		});
+		expect(primary).toContain("run_code is your main tool");
+		expect(primary).toContain(
+			"make an edit and run the test in the same program",
+		);
+		expect(primary).not.toContain("run_code runs one JavaScript program");
+		expect(primary).toContain(
+			"call them from inside run_code as tools.<name>(args)",
+		);
+		expect(primary).toContain("call it from run_code: tools.agent(args)");
+		expect(primary).not.toContain("find_tools");
+	});
+
 	it("gives a subagent its role, budget and report contract instead of the chat's role", () => {
 		const reviewer = agentTurnInstructions({
 			...base,

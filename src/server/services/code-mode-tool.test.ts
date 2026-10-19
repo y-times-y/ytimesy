@@ -19,6 +19,7 @@ import {
 	CODE_MODE_TOOL,
 	type CodeModeResult,
 	codeModeCallItems,
+	codeModeConcurrency,
 	codeModeResult,
 	storedCodeModeResult,
 } from "#/domain/code-mode";
@@ -550,6 +551,115 @@ describe("run_code on the lean surface", () => {
 		await expect(
 			runCode(coreSurface(), 'return "b";', { toolCallId: "call-f" }),
 		).rejects.toThrow(/Recorded tool inputs differ/);
+	});
+});
+
+describe("code mode primary", () => {
+	const deferredTools = (entered: string[]) => ({
+		agent: tool({
+			description:
+				"Start a background subagent with only your brief. Its report arrives as a message.",
+			inputSchema: z.object({
+				role: z.enum(["writer", "researcher"]).describe("What it may do"),
+				brief: z.string().describe("The whole task, self-contained"),
+				files: z.array(z.string()).optional(),
+			}),
+			execute: async (args: { role: string }) => {
+				entered.push(`agent:${args.role}`);
+				return { started: "agent-1" };
+			},
+		}),
+		enter_plan_mode: tool({
+			description: "Enter plan mode before changing anything.",
+			inputSchema: z.object({ reason: z.string() }),
+			execute: async () => {
+				entered.push("plan");
+				return { planMode: true };
+			},
+		}),
+		propose_plan: tool({
+			inputSchema: z.object({ plan: z.string() }),
+			execute: async () => null,
+		}),
+	});
+	const primary = (tools: ToolSet, deferred: string[]) =>
+		codeModeTool({
+			tools,
+			signal: new AbortController().signal,
+			sessionId,
+			turnId: "turn",
+			mode: "primary",
+			deferred,
+		});
+
+	it("teaches batching in the surface's names and points deferred tools to searchTools", () => {
+		const entered: string[] = [];
+		const tools = { ...coreSurface(), ...deferredTools(entered) };
+		const description =
+			primary(tools, ["agent", "enter_plan_mode"])?.description ?? "";
+		expect(description).toContain("Promise.all([tools.read({ path:");
+		expect(description).toContain('tools.bash({ command: "npm test');
+		expect(description).toContain(
+			'Edit then test: await tools.edit({ path: "src/a.ts", edits: [{ old_string:',
+		);
+		expect(description).toContain("searchTools(query)");
+		// Deferred tools are not advertised as direct tools; turn-ending ones are not callable.
+		expect(description).not.toContain("tools.agent");
+		expect(description).not.toContain("propose_plan");
+		// Stable: the same tools give the same bytes.
+		expect(primary(tools, ["agent", "enter_plan_mode"])?.description).toBe(
+			description,
+		);
+		const withoutDeferred = primary(coreSurface(), [])?.description ?? "";
+		expect(withoutDeferred).not.toContain("searchTools");
+	});
+
+	it("finds a deferred tool's declaration and calls it from the program", async () => {
+		const entered: string[] = [];
+		const runCode = primary({ ...coreSurface(), ...deferredTools(entered) }, [
+			"agent",
+			"enter_plan_mode",
+		]);
+		const result = (await runCode?.execute?.(
+			{
+				code: `const found = searchTools("subagent");
+				const all = ALL_TOOLS.length;
+				const none = searchTools("zzzz");
+				const started = await tools.agent({ role: "researcher", brief: "map the parser" });
+				let plan; try { await tools.propose_plan({ plan: "x" }); } catch (error) { plan = error.message; }
+				return { found, all, none: none.split("\\n")[0], started, plan };`,
+			},
+			options(randomUUID()),
+		)) as CodeModeResult;
+		expect(result.error).toBeUndefined();
+		const value = JSON.parse(result.result as string);
+		expect(value.found).toContain("tools.agent(args: {");
+		expect(value.found).toContain(
+			'role: "writer" | "researcher"; // What it may do',
+		);
+		expect(value.found).toContain("files?: string[];");
+		expect(value.found).not.toContain("enter_plan_mode");
+		expect(value.all).toBe(2);
+		expect(value.none).toBe("// No tool matched; every tool:");
+		expect(value.started).toEqual({ started: "agent-1" });
+		expect(value.plan).toMatch(/not a function/);
+		expect(entered).toEqual(["agent:researcher"]);
+		expect(result.calls.map((call) => call.tool)).toEqual(["agent"]);
+	});
+
+	it("records when each inner call started, so parallelism is measurable", async () => {
+		const result = await runCode(
+			coreSurface(),
+			`await Promise.all([tools.bash({ command: "sleep 0.3" }), tools.bash({ command: "sleep 0.3" })]);
+			await tools.bash({ command: "true" });`,
+		);
+		expect(result.calls.map((call) => typeof call.at)).toEqual([
+			"number",
+			"number",
+			"number",
+		]);
+		expect(codeModeConcurrency(result.calls)).toBe(2);
+		expect(result.calls[2]?.at).toBeGreaterThanOrEqual(250);
 	});
 });
 
