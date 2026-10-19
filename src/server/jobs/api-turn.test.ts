@@ -34,6 +34,10 @@ const mocks = vi.hoisted(() => ({
 	afterAttempt: vi.fn(),
 }));
 // Development eval users pick harness variants; everyone else gets the default.
+vi.mock("../services/subagent-runtime", async (original) => ({
+	...(await original<typeof import("../services/subagent-runtime")>()),
+	subagentReport: async (input: { text: string }) => input.text,
+}));
 vi.mock("../adapters/dev-eval-users", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../adapters/dev-eval-users")>()),
 	devEvalUsersEnabled: () => mocks.variant() !== undefined,
@@ -773,13 +777,14 @@ it("awaits an in-flight heartbeat before the invocation can close its database p
 	}
 });
 
-it("immediately queues a completed child's parent event", async () => {
+it("immediately queues a completed subagent's parent event", async () => {
 	mocks.owner.mockResolvedValue({
 		id: "session",
 		userId: "owner",
 		projectId: "project",
 		harness: "api",
 		parentSessionId: "parent",
+		agentRole: "researcher",
 	});
 	mocks.runtime.mockImplementation(async (input) =>
 		input.onEvent({ type: "text-delta", id: "answer", text: "Done" }),
@@ -799,6 +804,7 @@ it("tells builders their repository instructions are supplied, with the same sys
 		harness: "api",
 		parentSessionId: "parent",
 		taskAccess: "read_write",
+		agentRole: "writer",
 	});
 	const seen: string[] = [];
 	const capture = async (input: { instructions: string }) => {
@@ -1095,7 +1101,7 @@ it("finishes a bounded step limit without starting inference or publishing a fak
 });
 
 it.each([false, true])(
-	"admits builder step 31 for root chats and writable children (child: %s)",
+	"admits builder step 31 for root chats and writer subagents (child: %s)",
 	async (child) => {
 		mocks.owner.mockResolvedValue({
 			id: "session",
@@ -1107,6 +1113,7 @@ it.each([false, true])(
 						parentSessionId: "parent",
 						taskAccess: "read_write",
 						taskPlacement: "fresh",
+						agentRole: "writer",
 					}
 				: {}),
 		});
@@ -1320,7 +1327,7 @@ it("still reports a lost turn lease that the user did not ask to stop", async ()
 });
 
 it.each([
-	["a child", { parentSessionId: "parent" }],
+	["a subagent", { parentSessionId: "parent", agentRole: "researcher" }],
 	["a root chat", {}],
 ])(
 	"fails %s out of time with a time-limit message and notifies its parent",

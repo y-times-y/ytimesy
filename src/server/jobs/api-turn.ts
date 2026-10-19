@@ -103,7 +103,6 @@ import { injectServerPeerMessages } from "../adapters/server-peer-inbox";
 import { subagentAncestors } from "../adapters/subagents";
 import { readVerificationBaseline } from "../adapters/turn-verification";
 import { hasManagedCodexAuth } from "../auth/codex-managed-auth";
-import { discoveredToolsFromSession } from "../services/agent-tool-discovery";
 import type { AgentToolWorkspace } from "../services/agent-tool-workspace";
 import { agentTurnInstructions } from "../services/agent-turn-instructions";
 import { runApiAgent, runApiAgentStep } from "../services/api-agent-runtime";
@@ -889,9 +888,7 @@ async function runApiTurnAttempt(
 		let flushedAt = 0;
 		let metricIndex = 0;
 		failureStage = "model";
-		// Every root chat and child task works on the implementation surface.
-		const toolSurface = "implementation";
-		if (step && (step.limitReached || step.index > modelStepLimit(toolSurface)))
+		if (step && (step.limitReached || step.index > modelStepLimit()))
 			throw new IncompleteAgentTurn("tool-calls");
 		// Once per turn, before its first model request; a resumed first step reuses the journal.
 		if (firstStep) {
@@ -945,9 +942,7 @@ async function runApiTurnAttempt(
 			connectionRevision: route.connectionRevision,
 			reasoning: subscription?.reasoning ?? apiSettings.reasoning,
 			speed: apiSettings.speed,
-			knownTools: discoveredToolsFromSession(items),
 			...(deferral ? { toolOrder: deferral.order } : {}),
-			toolSurface,
 			...(planLock
 				? {
 						endTurnTools: [
@@ -1435,16 +1430,14 @@ async function runApiTurnAttempt(
 				sessionId: owner.id,
 				turnId: turn.id,
 				eventType: "completed",
-				summary: owner.agentRole
-					? await subagentReport({
-							machines: unscopedMachines,
-							session: owner as AgentSessionRecord,
-							items,
-							outcome: "finished",
-							text: finalText.slice(-9000) || "(no final report)",
-						})
-					: finalText.slice(-16000) ||
-						"Turn ended without a recorded final summary; inspect the task before accepting it.",
+				// Only subagents reach here: a role-less child is refused above.
+				summary: await subagentReport({
+					machines: unscopedMachines,
+					session: owner as AgentSessionRecord,
+					items,
+					outcome: "finished",
+					text: finalText.slice(-9000) || "(no final report)",
+				}),
 			});
 			if (eventId) await enqueueAgentTaskEvent(eventId).catch(() => {});
 		}

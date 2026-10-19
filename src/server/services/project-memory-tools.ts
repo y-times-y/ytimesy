@@ -32,7 +32,7 @@ const entrySchema = z.object({
 	]),
 });
 
-/** Reads do not boot a VM; only non-competing leads can publish source-inspected notes. */
+/** Reads do not boot a VM; only root chats can publish source-inspected notes. */
 export function projectMemoryTools(input: {
 	session: AgentSessionRecord;
 	workspace: () => Promise<AgentToolWorkspace>;
@@ -90,7 +90,7 @@ export function projectMemoryTools(input: {
 	});
 	tools.consolidate_project_memory = tool({
 		description:
-			"Maintain memory during a normal lead turn: merge duplicates, correct stale facts after source inspection, or remove obsolete topics. Atomic and revision-fenced; old versions remain readable. Preserve useful decisions, uncertainty and source pointers. No background model or code changes are started.",
+			"Maintain memory during a normal root chat turn: merge duplicates, correct stale facts after source inspection, or remove obsolete topics. Atomic and revision-fenced; old versions remain readable. Preserve useful decisions, uncertainty and source pointers. No background model or code changes are started.",
 		inputSchema: z.object({
 			expectedRevision: revision,
 			removeKeys: z.array(key).max(16),

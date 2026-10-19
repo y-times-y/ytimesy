@@ -398,7 +398,7 @@ try {
 			`cd ${modelDirectory} && git init -q && git add . && git -c user.name=Proof -c user.email=proof@example.invalid commit -qm baseline && git update-ref refs/ytimesy/base HEAD`,
 		);
 		await database().query(
-			"insert into agent_session(id,user_id,project_id,workspace_id,parent_session_id,harness,title,status,turn_status,provider_ref,task_access,task_placement,task_execution) values($1,$2,$3,$4,$5,'codex','Disposable model-loop smoke','ready','idle',$6,'read_write','fresh','parallel')",
+			"insert into agent_session(id,user_id,project_id,workspace_id,parent_session_id,harness,title,status,turn_status,provider_ref,task_access,task_placement,agent_role) values($1,$2,$3,$4,$5,'codex','Disposable model-loop smoke','ready','idle',$6,'read_write','fresh','writer')",
 			[childId, userId, projectId, workspaceId, sessionId, vmId],
 		);
 		const childSession = await agentSessionForOwner(userId, childId);
