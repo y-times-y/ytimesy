@@ -102,6 +102,9 @@ beforeAll(async () => {
 		`insert into model_connection(id,user_id,provider,label,base_url,sealed_credential,revision) values($1,'alice','openrouter','Test','https://openrouter.ai/api/v1','fixture',$2)`,
 		[connectionId, revision],
 	);
+	await db.exec(
+		"create table if not exists agent_task_command_receipt(parent_session_id uuid,request_id text,status text,response jsonb)",
+	);
 });
 beforeEach(async () => {
 	vi.stubEnv("YTIMESY_MODEL_EXECUTION_TARGET", "node");
@@ -476,6 +479,30 @@ it("retains turn history when its connection is deleted", async () => {
 	} finally {
 		await db.exec("rollback");
 	}
+});
+it("cancels a running turn on the heartbeat once its runner deadline passes", async () => {
+	await submit();
+	const turn = await claimApiTurn();
+	if (!turn) throw Error("missing turn");
+	await db.query(
+		"insert into agent_task_command_receipt values($1,'turn-deadline','done',$2::jsonb)",
+		[sessionId, JSON.stringify({ deadlineAt: Date.now() + 60_000 })],
+	);
+	expect(await renewApiTurn(turn)).toBe(true);
+	await db.query(
+		"update agent_task_command_receipt set response=$2::jsonb where parent_session_id=$1",
+		[sessionId, JSON.stringify({ deadlineAt: Date.now() - 1000 })],
+	);
+	expect(await renewApiTurn(turn)).toBe(false);
+	expect(
+		(
+			await db.query("select cancel_requested from api_turn where id=$1", [
+				turn.id,
+			])
+		).rows[0],
+	).toEqual({ cancel_requested: true });
+	expect(await finalizeApiTurn(turn, "completed", [])).toBe("cancelled");
+	await db.exec("delete from agent_task_command_receipt");
 });
 it("stops after cancellation and fences late checkpoints after completion", async () => {
 	await submit();

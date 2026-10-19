@@ -77,6 +77,27 @@ export const HARNESS_VARIANT_VALUES = {
 		"concise",
 		"default",
 	],
+	/**
+	 * The attempt loop (src/server/services/attempt-loop.ts, decision
+	 * 2026-10-17 Phase 2): 3 = when the root builder finishes, an independent
+	 * checker subagent tests the delivered result against the user's request;
+	 * a failed or unsure attempt is kept as a candidate, the working tree is
+	 * reset and the builder tries a different approach, up to three attempts
+	 * within a time and token budget, and the best candidate is kept. 1 = one
+	 * attempt, unchanged behaviour (the default).
+	 */
+	attempts: ["1", "3"],
+	/**
+	 * The review loop (src/server/services/review-loop.ts, decision
+	 * 2026-10-18 "A"): on = when the root builder finishes a turn that
+	 * changed files (and ran long enough or delivered something runnable),
+	 * an independent checker subagent reviews the work against the user's
+	 * request; concrete findings go back to the same run as one runtime
+	 * notice and the builder verifies and fixes them, up to two rounds,
+	 * within the time left. off = unchanged behaviour (the default). Not
+	 * combined with attempts=3 (the attempt loop wins).
+	 */
+	review: ["off", "on"],
 } as const;
 
 type Values = typeof HARNESS_VARIANT_VALUES;
@@ -91,6 +112,8 @@ export type CodeMode = HarnessVariant["codeMode"];
 export type SubagentsMode = HarnessVariant["subagents"];
 export type PrEvidence = HarnessVariant["prEvidence"];
 export type InstructionVariant = HarnessVariant["instructions"];
+export type AttemptsMode = HarnessVariant["attempts"];
+export type ReviewMode = HarnessVariant["review"];
 
 export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	memoryWording: "rules",
@@ -101,6 +124,8 @@ export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	subagents: "off",
 	prEvidence: "off",
 	instructions: "default",
+	attempts: "1",
+	review: "off",
 };
 
 /**

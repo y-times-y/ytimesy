@@ -6,7 +6,7 @@
  * worth retrying; counting them as fails would blame the model for our outage.
  */
 export type ScoredRecord = {
-	readonly status: "final" | "grading" | "error";
+	readonly status: "final" | "grading" | "error" | "queued" | "running";
 	readonly state: string;
 	readonly usageLimit: string | null;
 	readonly reward: number | null;

@@ -12,8 +12,12 @@ export type HardSetRecord = RunRecord & {
 	startedAt: string;
 	reward: number | null;
 	passed: boolean;
-	/** final, grading (tests still running on graderVmId), or error. */
-	status: "final" | "grading" | "error";
+	/**
+	 * final, grading (tests still running on graderVmId), error, or for a
+	 * detached run queued (waiting for a model slot) and running (its turn is
+	 * on the edge, or its finalize was interrupted).
+	 */
+	status: "final" | "grading" | "error" | "queued" | "running";
 	setupSec: number;
 	agentSec: number;
 	agentBudgetSec: number;

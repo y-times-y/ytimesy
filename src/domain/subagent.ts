@@ -132,10 +132,15 @@ export type SubagentBudgetState =
 	| { readonly state: "ok" }
 	| { readonly state: "wrap-up" | "exhausted"; readonly reason: string };
 
-/** At 90% of any dimension the child is told to wrap up; at 100% its turn stops. */
+/**
+ * At 90% of any dimension the child is told to wrap up; at 100% its turn
+ * stops. `wrapUpLeadMinutes` moves the minutes warning earlier (a checker
+ * needs time to write its verdict).
+ */
 export function subagentBudgetState(
 	budget: SubagentBudget,
 	used: SubagentUsed,
+	wrapUpLeadMinutes = 0,
 ): SubagentBudgetState {
 	const dimensions: [string, number, number][] = [
 		["steps", used.steps, budget.steps],
@@ -151,7 +156,13 @@ export function subagentBudgetState(
 	}
 	const exhausted = dimensions.find(([, value, limit]) => value >= limit);
 	if (exhausted) return { state: "exhausted", reason: describe(exhausted) };
-	const near = dimensions.find(([, value, limit]) => value >= limit * 0.9);
+	const near = dimensions.find(
+		([name, value, limit]) =>
+			value >=
+			(name === "minutes"
+				? Math.min(limit * 0.9, limit - wrapUpLeadMinutes)
+				: limit * 0.9),
+	);
 	return near ? { state: "wrap-up", reason: describe(near) } : { state: "ok" };
 }
 
@@ -286,33 +297,6 @@ export function writerPatchBlock(
 				]
 			: []),
 		`Review with \`git diff ${patch.base} ${patch.ref}\`; apply with \`git apply -3 ${patch.path}\` (or merge the ref).`,
-	].join("\n");
-}
-
-/**
- * The checker's whole brief, built by the runtime: the user's task verbatim
- * and the deliverable. The builder cannot add hints, so the verdict is
- * independent of the builder's own reading of the task.
- */
-export function checkerBrief(input: {
-	readonly taskText: string;
-	readonly checkout: string;
-	readonly changedFiles: readonly string[];
-	readonly scratch: string;
-}) {
-	return [
-		"You are an independent checker. Decide whether the deliverable below meets the task. You did not build it and nobody will tell you what to look for.",
-		"",
-		"<task>",
-		input.taskText,
-		"</task>",
-		"",
-		"<deliverable>",
-		`The working tree at ${input.checkout}${input.changedFiles.length ? `, changed files: ${input.changedFiles.slice(0, 200).join(", ")}` : " (no uncommitted changes)"}.`,
-		"</deliverable>",
-		"",
-		`The checkout is read-only for you. Copy it first (\`cp -a ${input.checkout} ${input.scratch}/work\`) and work only in ${input.scratch}. Write your own acceptance tests from the task text, run them and \`ytimesy-check\` where it applies, then answer with only this JSON:`,
-		'{ "verdict": "pass" | "fail" | "unsure", "tests": [{ "name": "...", "passed": true, "evidence": "..." }], "notes": "..." }',
 	].join("\n");
 }
 

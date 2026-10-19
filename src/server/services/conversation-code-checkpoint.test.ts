@@ -6,6 +6,7 @@ import {
 	captureConversationCode,
 	restoreConversationCode,
 } from "./conversation-code-checkpoint";
+import { reviewRef } from "./review-loop";
 
 it("restores binary, staged, unstaged, deleted and untracked files while preserving ignored files and branch history", async () => {
 	const fixture = await localHarnessWorkspace();
@@ -109,3 +110,25 @@ it("removes files created after a chat's first message, committed or not, from t
 		await fixture.cleanup();
 	}
 }, 30_000);
+
+it("captures the review loop's refs (refs/ytimesy/review/...) as well as the attempt loop's", async () => {
+	const fixture = await localHarnessWorkspace();
+	try {
+		const { root, workspace, run } = fixture;
+		await writeFile(join(root, "source.txt"), "reviewed\n");
+		for (const ref of [
+			reviewRef("turn-1", "base"),
+			"refs/ytimesy/attempts/turn-1-a1",
+		]) {
+			const snapshot = await captureConversationCode(workspace, ref);
+			expect(snapshot.ref).toBe(ref);
+			expect(
+				(
+					await run("git", ["-C", root, "rev-parse", `${ref}^{tree}`])
+				).stdout.trim(),
+			).toBe(snapshot.tree);
+		}
+	} finally {
+		await fixture.cleanup();
+	}
+});
