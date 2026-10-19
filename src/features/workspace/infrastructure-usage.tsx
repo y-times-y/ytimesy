@@ -8,6 +8,7 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "#/components/ui/select";
+import { usageWarning } from "#/domain/usage-warning";
 import { InfrastructureStatements } from "./infrastructure-statements";
 import {
 	adjustInfrastructureUsageFn,
@@ -46,6 +47,7 @@ function UsageSummary({
 					Math.max(0, usage.remainingMicroUsd / usage.allowanceMicroUsd),
 				)
 			: 0;
+	const warning = usageWarning(usage);
 	return (
 		<div className="settings-group settings-group-body">
 			<div className="settings-usage-figure">
@@ -55,7 +57,7 @@ function UsageSummary({
 			{/* biome-ignore lint/a11y/useSemanticElements: a styled bar; a native <meter> cannot hold the fill span */}
 			<div
 				className="settings-meter"
-				data-tone={share < 0.15 ? "low" : undefined}
+				data-tone={share < 0.15 || warning ? "low" : undefined}
 				role="meter"
 				aria-label="Cloud minutes left"
 				aria-valuemin={0}
@@ -70,6 +72,62 @@ function UsageSummary({
 					? ` · ${wholeMinutes(usage.reservedMicroUsd)} held for running machines`
 					: ""}
 			</p>
+			{warning ? (
+				<p className="settings-usage-warning" role="status">
+					{warning.message}
+				</p>
+			) : null}
+		</div>
+	);
+}
+
+const DISMISSED_USAGE_WARNING = "ytimesy:dismissed-usage-warning";
+
+/**
+ * Early warning in the workspace once 70% of the month's cloud minutes are
+ * used, and again when they run out. Dismissing hides it for this browser
+ * session until the next 10% step.
+ */
+export function UsageWarningBanner() {
+	const readUsage = useServerFn(infrastructureUsageFn);
+	const usage = useQuery({
+		queryKey: ["infrastructure-usage"],
+		queryFn: () => readUsage(),
+		refetchInterval: 60_000,
+		retry: false,
+	});
+	const warning = usage.data ? usageWarning(usage.data) : null;
+	const step = warning
+		? `${warning.level}:${Math.floor(warning.usedPercent / 10)}`
+		: null;
+	const [dismissed, setDismissed] = useState(() => {
+		try {
+			return sessionStorage.getItem(DISMISSED_USAGE_WARNING);
+		} catch {
+			return null;
+		}
+	});
+	if (!warning || dismissed === step) return null;
+	return (
+		<div
+			className="usage-warning-banner"
+			data-level={warning.level}
+			role="status"
+		>
+			<p>{warning.message}</p>
+			<button
+				type="button"
+				onClick={() => {
+					setDismissed(step);
+					try {
+						if (step) sessionStorage.setItem(DISMISSED_USAGE_WARNING, step);
+					} catch {
+						// Dismissal is a convenience; it may not persist.
+					}
+				}}
+			>
+				Dismiss
+			</button>
 		</div>
 	);
 }

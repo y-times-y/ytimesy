@@ -3787,3 +3787,44 @@ a.sidebar-chat-pr,
 	color: #8f8f8f;
 	font-size: 11px;
 }
+
+.settings-usage-warning {
+	margin: 8px 0 0;
+	color: #fca5a5;
+	font-size: 13px;
+}
+.usage-warning-banner {
+	position: fixed;
+	z-index: 40;
+	right: 16px;
+	bottom: 16px;
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	max-width: min(440px, calc(100vw - 32px));
+	padding: 10px 12px;
+	border: 1px solid #3a2a12;
+	border-radius: 10px;
+	background: #1a1408;
+	color: #fcd34d;
+	font-size: 13px;
+	line-height: 1.4;
+}
+.usage-warning-banner[data-level="exhausted"] {
+	border-color: #4a1d1d;
+	background: #1c0d0d;
+	color: #fca5a5;
+}
+.usage-warning-banner p {
+	margin: 0;
+}
+.usage-warning-banner button {
+	flex: none;
+	padding: 4px 10px;
+	border: 1px solid #333;
+	border-radius: 6px;
+	background: #141414;
+	color: #ededed;
+	font-size: 12px;
+	cursor: pointer;
+}

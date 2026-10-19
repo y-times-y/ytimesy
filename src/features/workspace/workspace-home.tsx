@@ -118,6 +118,7 @@ import {
 import { sessionReconciliationQuery } from "../sessions/session-reconciliation";
 import { getWorkspaceDesktop, startWorkspaceDesktopFn } from "./desktop.fn";
 import { readWorkspaceChangesFn } from "./explorer.fn";
+import { UsageWarningBanner } from "./infrastructure-usage";
 import { readMemoryFn, undoMemoryLineFn } from "./memory.fn";
 import { ProjectSettings } from "./project-settings";
 import { ProjectSidebar } from "./project-sidebar";
@@ -1444,6 +1445,7 @@ export function WorkspaceHome({
 				onClose={() => setSettingsOpen(false)}
 				initialSection={settingsSection}
 			/>
+			<UsageWarningBanner />
 			<main
 				ref={workspaceMainRef}
 				className="workspace-main"
