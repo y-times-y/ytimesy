@@ -57,6 +57,7 @@ node --env-file=.env --import tsx scripts/hard-set.ts --report --run base-1017
 - `--chunk 1..6` or `--tasks a,b` picks tasks; every selected task starts at once (`--concurrency` lowers that). Keep the tasks in flight across all processes at eight or fewer (the `codex` slots shared with the other eval scripts, `YTIMESY_EVAL_CODEX_SLOTS`) and the eval processes at six or fewer (development database), so at most two chunk processes at a time.
 - `--variant key=value` (repeatable) runs the harness variant (docs/parallel-evals.md); use a separate `--run` name per variant. `--reasoning <effort>` sets the subscription effort (the model default when unset; the record keeps it). `--model` (default `gpt-6.1-sol`).
 - `--agent-minutes` (default 7) is the agent budget; tasks with large images cap it lower (`maxAgentMinutes` in tasks.ts: 6 for coq, both freecad tasks and vllm, 5 for vpp) so that setup, agent and staging always fit the ten minutes, and every run of a task gets the same budget.
+- `--model google/<model>` (e.g. `google/gemini-3.8-flash`) runs the API harness on a direct Google Gemini connection instead of the Codex subscription (see Models).
 - `--transcripts` keeps each run's stored items and model messages next to its record.
 - `--mode oracle` runs the task's reference solution instead of the agent (expect reward 1) and `--mode nop` runs nothing (expect 0). Run both after changing the runner or the dataset. They use VMs only, no model.
 
@@ -67,6 +68,12 @@ Scoring: a record counts when it was graded (`status` final with a reward), was 
 The Codex usage limit: each invocation prints the subscription's 5-hour and weekly usage (read only) before and after. It refuses to start when the limit is already reached, and a turn that fails on the usage limit stops the invocation from starting more tasks; those records are not scored. Rerun them later under the same `--run`.
 
 Cleanup: each task's eval user, session and agent VM are deleted in `finally`. After a crash, `scripts/smoke/eval-user.ts --user <eval-id>` removes only that user (from this worktree's manifest); `--cleanup` also sweeps other runs' old eval users, so prefer `--user` on a shared dev database. Grader VMs belong to no user: `--collect` deletes them, and each has a 45-minute lifetime (Freestyle TTL), so a crash leaves them running at most that long.
+
+## Models
+
+The default route is the owner's Codex subscription (`--model gpt-6.1-sol`). `--model google/<model>` uses the development Gemini key in `.secrets/gemini-api-key` (`--google-key-file`): each eval user gets its own `google` model connection with that key sealed for it (deleted with the user), the chat is an API-harness chat on that connection, and the turn runs through the product's Google route (AI SDK google provider, key in the `x-goog-api-key` header). Before starting, the run checks that the key lists the model and sends one tiny probe request; a quota error there refuses to start (and prints a `GEMINI_QUOTA` line for scripts/instruction-tuning.ts).
+
+Gemini's free tier is per project and model: 5 requests per minute for gemini-3.8-flash (measured 2026-10-18) and a daily request quota. Gemini runs therefore share the `gemini` slot (`YTIMESY_EVAL_GEMINI_SLOTS`, default 1): one task at a time across processes, so a Gemini invocation should hold one task. A turn that fails on the provider rate limit is recorded as a usage limit (not scored) and stops the invocation, like the Codex limit. Costs in the table are at list price for the Google model (not charged on the free tier).
 
 ## How a task runs
 

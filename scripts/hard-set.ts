@@ -35,6 +35,7 @@ import {
 	harnessVariantLabel,
 } from "../src/domain/harness-variant";
 import { WorkspaceId } from "../src/domain/ids";
+import { modelRouteId } from "../src/domain/model-connection";
 import { sessionItemsFromUnknown } from "../src/domain/session-item";
 import {
 	deleteAgentSessionForOwner,
@@ -53,6 +54,7 @@ import {
 	modelWorkflowSigningSecret,
 } from "../src/server/adapters/model-workflow-dispatch";
 import { workspaceBootSnapshotId } from "../src/server/records/tools-snapshot-store";
+import { sendApiWorkspaceTask } from "../src/server/services/api-workspace-session";
 import { cancelServerTurn } from "../src/server/services/cancel-server-turn";
 import { sendSubscriptionTask } from "../src/server/services/codex-subscription-session";
 import { DEVELOPMENT_EDGE_ORIGIN } from "./development-config";
@@ -66,13 +68,20 @@ import {
 	type TaskEnvironment,
 	verifyScript,
 } from "./hard-set/environment";
+import {
+	DEFAULT_GEMINI_KEY_FILE,
+	geminiConnectionModels,
+	probeGeminiQuota,
+	readGeminiKey,
+} from "./hard-set/gemini";
+import type { HardSetRecord } from "./hard-set/records";
+import { hardSetRoute, quotaStop, recordPricing } from "./hard-set/route";
 import { infraFailure, isScored } from "./hard-set/scoring";
 import { HARD_SET, HARD_SET_CHUNKS, type HardSetTask } from "./hard-set/tasks";
 import {
 	assertDevelopmentDatabase,
 	emptyRecord,
 	measureRun,
-	type RunRecord,
 	safe,
 	table,
 	turnState,
@@ -88,7 +97,6 @@ import {
 
 const DEFAULT_DATASET = resolve("../cloud/.ytimesy/tb4-dataset");
 const RUNS = resolve(".ytimesy/hard-set");
-const USAGE_LIMIT = /usage limit is used up|usage_limit_reached/i;
 // Wall-time reserve after the agent: cancel/settle, staging, artifact transfer.
 const AFTER_AGENT_RESERVE_SEC = 75;
 // A grader VM lives at most this long (its tests may outlast the invocation;
@@ -108,7 +116,10 @@ const { values: flags } = parseArgs({
 		chunk: { type: "string" },
 		/** agent (default), oracle (reference solution, expect 1) or nop (no agent, expect 0). */
 		mode: { type: "string", default: "agent" },
+		/** A Codex model id (subscription) or google/<model> (Gemini API key). */
 		model: { type: "string", default: "gpt-6.1-sol" },
+		/** The Gemini key file for google/<model> runs (never printed). */
+		"google-key-file": { type: "string", default: DEFAULT_GEMINI_KEY_FILE },
 		/** Reasoning effort for the subscription turn; the model default when unset. */
 		reasoning: { type: "string" },
 		variant: { type: "string", multiple: true },
@@ -134,8 +145,7 @@ function estimatedCost(record: HardSetRecord) {
 	if (record.inputTokens === null || record.inputTokens === undefined)
 		return null;
 	return runListPrice({
-		harness: "codex",
-		modelId: record.model,
+		...recordPricing(record.model),
 		inputTokens: record.inputTokens,
 		cachedTokens: record.cachedTokens ?? null,
 		outputTokens: record.outputTokens ?? null,
@@ -160,34 +170,6 @@ function costSummary(records: HardSetRecord[]) {
 
 const sh = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
 const seconds = (from: number) => Math.round((Date.now() - from) / 1000);
-
-type HardSetRecord = RunRecord & {
-	run: string;
-	attempt: string;
-	category: string;
-	mode: string;
-	variant: string;
-	reasoning: string | null;
-	startedAt: string;
-	reward: number | null;
-	passed: boolean;
-	/** final, grading (tests still running on graderVmId), or error. */
-	status: "final" | "grading" | "error";
-	setupSec: number;
-	agentSec: number;
-	agentBudgetSec: number;
-	agentRequestedSec: number;
-	stageSec: number;
-	gradeSec: number;
-	testsExit: number | null;
-	testsTail: string;
-	gradeError: string | null;
-	usageLimit: string | null;
-	vmResources: string | null;
-	graderVmId: string | null;
-	gradeStartedAt: string | null;
-	gradeTimeoutSec: number | null;
-};
 
 function selectedTasks(): HardSetTask[] {
 	if (flags.tasks && flags.chunk)
@@ -515,14 +497,18 @@ const tasks = selectedTasks();
 const requestedAgentSeconds = Math.round(Number(flags["agent-minutes"]) * 60);
 if (!(requestedAgentSeconds >= 60))
 	throw new Error("--agent-minutes must be at least 1.");
+const route = hardSetRoute(flags.model as string);
+// Gemini's free tier is per project and model (5 requests/min measured on
+// 2026-10-18), so Gemini runs share the `gemini` slots (default 1).
+const routeSlots =
+	route.kind === "google" ? SLOT_LIMITS.gemini : SLOT_LIMITS.codex;
 const concurrency = Math.max(
 	1,
-	Math.min(SLOT_LIMITS.codex, Number(flags.concurrency) || tasks.length),
+	Math.min(routeSlots, Number(flags.concurrency) || tasks.length),
 );
 if (flags.reasoning && !/^[a-z]+$/.test(flags.reasoning))
 	throw new Error("--reasoning expects an effort name such as medium or high.");
-const model = flags.model as string;
-if (!/^[a-z0-9._-]+$/.test(model)) throw new Error("Unexpected model id.");
+const model = route.modelId;
 await assertDevelopmentDatabase();
 
 // Same development-edge wiring as the smoke suite (scripts/smoke/builder-harness.ts).
@@ -653,7 +639,7 @@ async function runTask(
 	attempt: string,
 ): Promise<HardSetRecord> {
 	const record: HardSetRecord = {
-		...emptyRecord(`codex:${model}`, task.id),
+		...emptyRecord(route.recordModel, task.id),
 		run: flags.run as string,
 		attempt,
 		category: task.category,
@@ -705,14 +691,19 @@ async function runTask(
 		user = await createEvalUser({
 			label: `hard-set ${task.id} ${harnessVariantLabel(variant)}`,
 			variant,
+			...(google ? { google } : {}),
 		});
+		const listedModelId =
+			route.kind === "google"
+				? modelRouteId(user.googleConnectionId as string, model)
+				: model;
 		const session = await insertAgentSession({
 			userId: user.userId,
 			projectId: user.project.projectId,
 			workspaceId: user.project.workspaceId,
-			harness: "codex",
+			harness: route.kind === "google" ? "api" : "codex",
 			title: `Hard set ${task.id}`,
-			listedModelId: model,
+			listedModelId,
 		});
 		sessionId = session.id;
 		// The grader VM boots and pulls the verifier image while the agent works.
@@ -809,21 +800,28 @@ async function runTask(
 				[session.id],
 			);
 			const text = `${environment.instruction}${ENVIRONMENT_NOTE(workdir)}${PROMPT_SUFFIX}`;
+			const scope = {
+				userId: owner.userId,
+				projectId: owner.project.projectId,
+				sessionId: session.id,
+			};
 			await withSlot(
-				"codex",
-				SLOT_LIMITS.codex,
+				route.kind === "google" ? "gemini" : "codex",
+				routeSlots,
 				async () => {
 					await withBackgroundJobDispatcher(
 						async () => {},
 						() =>
-							sendSubscriptionTask(
-								{
-									userId: owner.userId,
-									projectId: owner.project.projectId,
-									sessionId: session.id,
-								},
-								{ modelId: model, text, variant: flags.reasoning },
-							),
+							route.kind === "google"
+								? sendApiWorkspaceTask(scope, {
+										modelId: listedModelId,
+										text,
+									})
+								: sendSubscriptionTask(scope, {
+										modelId: model,
+										text,
+										variant: flags.reasoning,
+									}),
 					);
 					let admitted = false;
 					while (
@@ -854,15 +852,13 @@ async function runTask(
 						const items = sessionItemsFromUnknown(state?.items);
 						measureRun(record, items, state?.messages, () => 0);
 						record.state = state?.state ?? "missing";
-						const failure = JSON.stringify(
-							items.filter((item) => item.kind === "error"),
+						const quota = quotaStop(
+							route.kind,
+							JSON.stringify(items.filter((item) => item.kind === "error")),
 						);
-						if (USAGE_LIMIT.test(failure)) {
-							record.usageLimit =
-								/Your ChatGPT plan's Codex usage limit[^"]*/.exec(
-									failure,
-								)?.[0] ?? "Codex usage limit reached";
-							usageLimitHit = record.usageLimit;
+						if (quota) {
+							record.usageLimit = quota;
+							usageLimitHit = quota;
 							stopping = true;
 						}
 						if (state && !["queued", "running"].includes(state.state)) break;
@@ -984,7 +980,29 @@ for (const task of tasks) {
 	environments.set(task.id, environment);
 }
 if (mode === "agent") await preflightExecutor();
-const ownerId = mode === "agent" ? await subscriptionOwner() : null;
+// A Gemini run: the key's catalog entry for the model, and one probe request
+// so a spent quota stops the run before any VM starts.
+const google =
+	mode === "agent" && route.kind === "google"
+		? await (async () => {
+				const apiKey = await readGeminiKey(flags["google-key-file"]);
+				const models = await geminiConnectionModels(apiKey, model);
+				const quota = await probeGeminiQuota(apiKey, model);
+				if (quota.state === "limited") {
+					console.log(
+						`GEMINI_QUOTA ${JSON.stringify({ daily: quota.daily, retryAfterSec: quota.retryAfterSec, quotaIds: quota.quotaIds })}`,
+					);
+					throw new Error(
+						`Gemini quota reached (${quota.quotaIds.join(", ") || "429"}${quota.retryAfterSec ? `, retry in ${quota.retryAfterSec}s` : ""}); not starting.`,
+					);
+				}
+				if (quota.state === "error")
+					throw new Error(`Gemini probe failed (HTTP ${quota.status}).`);
+				return { apiKey, models };
+			})()
+		: null;
+const ownerId =
+	mode === "agent" && route.kind === "codex" ? await subscriptionOwner() : null;
 const usageBefore = ownerId ? await codexUsage(ownerId) : null;
 console.info(
 	`Hard set run ${flags.run}: ${tasks.length} task(s), mode ${mode}, variant ${harnessVariantLabel(variant)}, model ${model}${flags.reasoning ? ` (${flags.reasoning})` : ""}, agent ${requestedAgentSeconds}s (less for large images), ceiling ${maxMinutes} min, concurrency ${concurrency}.${usageBefore ? ` Codex usage before: ${usageBefore}.` : ""}`,
@@ -1023,7 +1041,7 @@ printTable(records);
 const scored = records.filter(isScored);
 const grading = records.filter((record) => record.status === "grading");
 console.log(
-	`\n${scored.filter((record) => record.passed).length}/${scored.length} scored runs passed; ${grading.length} still grading${grading.length ? ` (then: --collect --run ${flags.run})` : ""}. Wall ${seconds(invocationStart)}s.${usageAfter ? ` Codex usage after: ${usageAfter}.` : ""}${usageLimitHit ? ` STOPPED on the Codex usage limit: ${usageLimitHit}` : ""}\nRecords: ${runDir}`,
+	`\n${scored.filter((record) => record.passed).length}/${scored.length} scored runs passed; ${grading.length} still grading${grading.length ? ` (then: --collect --run ${flags.run})` : ""}. Wall ${seconds(invocationStart)}s.${usageAfter ? ` Codex usage after: ${usageAfter}.` : ""}${usageLimitHit ? ` STOPPED on a usage limit: ${usageLimitHit}` : ""}\nRecords: ${runDir}`,
 );
 const cost = costSummary(scored.filter((record) => record.mode === "agent"));
 if (cost) console.log(cost);

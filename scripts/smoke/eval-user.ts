@@ -36,6 +36,10 @@ import {
 } from "../../src/domain/harness-variant";
 import type { MemoryMode } from "../../src/domain/memory-repo";
 import {
+	type ConnectedModel,
+	MODEL_PROVIDERS,
+} from "../../src/domain/model-connection";
+import {
 	accountCleanupTargets,
 	deleteAccountRecords,
 } from "../../src/server/adapters/account-deletion";
@@ -75,6 +79,8 @@ export type EvalUser = {
 	project: EvalProject;
 	/** The user's OpenRouter connection (a copy of the owner's), if any. */
 	openRouterConnectionId: string | null;
+	/** The direct Google connection created with `google`, else null. */
+	googleConnectionId: string | null;
 	/** The user's memory repo name (user_memory.repo). */
 	memoryRepo: string;
 	/** Sets this user's memory mode and repo (the repo is deleted on release). */
@@ -239,6 +245,27 @@ async function copyOpenRouterConnections(ownerId: string, userId: string) {
 		ids.push(id);
 	}
 	return ids;
+}
+
+/** A direct Google connection for an eval user (rows cascade on release). */
+async function insertGoogleConnection(
+	userId: string,
+	google: { apiKey: string; models: readonly ConnectedModel[] },
+) {
+	const id = randomUUID();
+	await database().query(
+		`insert into model_connection(id,user_id,provider,label,base_url,sealed_credential,models,revision,last_probe_at)
+		 values($1,$2,'google','Google Gemini (eval)',$3,$4,$5::jsonb,$6,null)`,
+		[
+			id,
+			userId,
+			MODEL_PROVIDERS.google.baseUrl,
+			await seal(JSON.stringify({ id, userId, apiKey: google.apiKey })),
+			JSON.stringify(google.models),
+			randomUUID(),
+		],
+	);
+	return id;
 }
 
 function manifestPath(userId: string) {
@@ -432,6 +459,11 @@ export async function createEvalUser(options: {
 	asOwner?: boolean;
 	/** Copy the owner's OpenRouter connection(s). */
 	openRouter?: boolean;
+	/**
+	 * A direct Google Gemini connection with this key and model list (e.g.
+	 * the dev key in .secrets/gemini-api-key); sealed for the eval user only.
+	 */
+	google?: { apiKey: string; models: readonly ConnectedModel[] };
 	/** Initial memory mode for the user (default off: no hooks, no repo). */
 	memory?: MemoryMode;
 	/** Leave memory repos behind on release (inspection; delete them yourself). */
@@ -468,6 +500,7 @@ export async function createEvalUser(options: {
 				dirName: source.full_name.split("/")[1],
 			},
 			openRouterConnectionId: gateways.length === 1 ? gateways[0].id : null,
+			googleConnectionId: null,
 			memoryRepo: memoryRepoName(ownerId),
 			setMemory: async () => {
 				throw new Error("Memory settings need an eval user, not --as-owner.");
@@ -499,6 +532,7 @@ export async function createEvalUser(options: {
 		variant,
 		project: { projectId: "", workspaceId: "", fullName: "", dirName: "" },
 		openRouterConnectionId: null,
+		googleConnectionId: null,
 		memoryRepo: memoryRepoName(userId),
 		async setMemory(mode, repo) {
 			const name = repo ?? user.memoryRepo;
@@ -556,6 +590,11 @@ export async function createEvalUser(options: {
 			const ids = await copyOpenRouterConnections(ownerId, userId);
 			user.openRouterConnectionId = ids.length === 1 ? ids[0] : null;
 		}
+		if (options.google)
+			user.googleConnectionId = await insertGoogleConnection(
+				userId,
+				options.google,
+			);
 		await user.setMemory(options.memory ?? "off");
 		user.project = await copyProject(ownerId, userId);
 	} catch (error) {
@@ -629,6 +668,12 @@ export const SLOT_LIMITS = {
 	codex: Number(process.env.YTIMESY_EVAL_CODEX_SLOTS) || 8,
 	/** Concurrent OpenRouter `:free` runs (20 requests/min per account). */
 	openRouterFree: Number(process.env.YTIMESY_EVAL_FREE_SLOTS) || 2,
+	/**
+	 * Concurrent Gemini API runs on the development key. Its free tier allows
+	 * 5 requests/min per project and model (measured 2026-10-18), shared by
+	 * every run, so one at a time unless the key is on a paid tier.
+	 */
+	gemini: Number(process.env.YTIMESY_EVAL_GEMINI_SLOTS) || 1,
 };
 
 // ---------------------------------------------------------------------------
