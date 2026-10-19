@@ -133,6 +133,8 @@ for (const name of [
 	"YTIMESY_TOOLS_SNAPSHOT_ID",
 	"YTIMESY_CODEX_RELAY_URL",
 	"YTIMESY_CODEX_RELAY_SECRET",
+	// Owner alerts go to het@ytimesy.com unless this names another address.
+	"YTIMESY_ALERT_EMAIL",
 ] as const) {
 	if (process.env[name]) secrets[name] = process.env[name];
 }

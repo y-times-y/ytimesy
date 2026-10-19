@@ -69,6 +69,34 @@ export async function userInfrastructureUsage(
 	};
 }
 
+/**
+ * The fleet's monthly and lifetime spend (consumed plus held) against its
+ * caps, for the owner's budget alerts. Null when the caps are not configured.
+ */
+export async function fleetInfrastructureUsage() {
+	let limits: BudgetLimits;
+	try {
+		limits = infrastructureUsageLimits();
+	} catch {
+		return null;
+	}
+	const period = utcUsageMonth();
+	const result = await database().query<{ fleet: string; lifetime: string }>(
+		`select
+		 (select coalesce(sum(case when consumed_micro_usd is null then reserved_micro_usd else consumed_micro_usd end),0)
+		  from infrastructure_usage_reservation where period=$1::date or consumed_micro_usd is null) as fleet,
+		 (select coalesce(sum(coalesce(consumed_micro_usd,reserved_micro_usd)),0) from infrastructure_usage_reservation) as lifetime`,
+		[period],
+	);
+	return {
+		period,
+		monthlyUsedMicroUsd: Number(result.rows[0]?.fleet ?? 0),
+		monthlyCapMicroUsd: limits.fleetMicroUsd,
+		lifetimeUsedMicroUsd: Number(result.rows[0]?.lifetime ?? 0),
+		lifetimeCapMicroUsd: limits.lifetimeFleetMicroUsd,
+	};
+}
+
 /** Short transactions serialize budget admission across every worker replica. No provider calls hold this lock. */
 async function usageTransaction<T>(
 	operation: (client: PoolClient) => Promise<T>,

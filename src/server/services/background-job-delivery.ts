@@ -36,6 +36,11 @@ import {
 	runMemoryDream,
 	runMemorySave,
 } from "./memory-jobs";
+import {
+	alertAbandonedTurns,
+	alertFailedEmails,
+	alertFleetBudget,
+} from "./operational-alerts";
 import { expirePullRequestEvidence } from "./pr-evidence-cleanup";
 import { runPullRequestEvidenceJob } from "./pr-evidence-job";
 import { deliverPrRepairEvents } from "./pr-repair";
@@ -54,7 +59,7 @@ export async function deliverBackgroundJob(
 				case "reconcile":
 					await recoverExpiredEnvironmentBuilds();
 					await recoverStaleQueuedWorkspaces();
-					await expireApiTurnLeases();
+					await alertAbandonedTurns(await expireApiTurnLeases());
 					break;
 				case "supervise":
 					await recoverChildTurnEvents();
@@ -65,7 +70,8 @@ export async function deliverBackgroundJob(
 				case "delivery":
 					await relayConversationDeliveriesOnce();
 					// Verification and password-reset mail queued by the web app.
-					if (authEmailDeliveryConfigured()) await deliverAuthEmails();
+					if (authEmailDeliveryConfigured())
+						await alertFailedEmails((await deliverAuthEmails()).failed);
 					break;
 				case "checkpoints":
 					if (checkpointStorageConfigured())
@@ -90,6 +96,7 @@ export async function deliverBackgroundJob(
 					await reconcileInfrastructureVms(client);
 					await observeFleetCosts(client);
 					await recycleIdleWorkspaces(client);
+					await alertFleetBudget();
 					break;
 				}
 				case "memory-dreams":

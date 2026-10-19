@@ -48,6 +48,7 @@ import {
 	type WorkflowStepClaim,
 } from "../jobs/model-workflow-executor";
 import { provideCodeModeWasmModule } from "../services/code-mode-sandbox";
+import { alertCronFailure } from "../services/operational-alerts";
 import { timed, withStepTrace } from "../services/step-timing";
 import { runBackgroundJob, startBackgroundJob } from "./background-jobs";
 import { SqliteConversationSteps } from "./conversation-step-storage";
@@ -670,12 +671,22 @@ export default {
 				)
 				.map((job) => runBackgroundJob(env, job)),
 		);
+		const failures: Promise<unknown>[] = [];
 		for (const [index, result] of results.entries())
-			if (result.status === "rejected")
-				console.warn("Scheduled job failed.", {
+			if (result.status === "rejected") {
+				const job = {
 					kind: jobs[index].kind,
 					action: "action" in jobs[index] ? jobs[index].action : undefined,
-				});
+				};
+				console.warn("Scheduled job failed.", job);
+				// Error tracking and an owner email (at most hourly per job).
+				failures.push(
+					withDatabaseScope(env.HYPERDRIVE.connectionString, () =>
+						alertCronFailure(job, result.reason),
+					).catch(() => undefined),
+				);
+			}
+		await Promise.all(failures);
 	},
 	async fetch(request: Request, env: EdgeExecutorEnvironment) {
 		registerAuthEmailBinding(env.EMAIL);
