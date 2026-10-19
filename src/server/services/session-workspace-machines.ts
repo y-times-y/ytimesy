@@ -1,4 +1,4 @@
-import { isReaderRole } from "#/domain/subagent";
+import { sharesParentMachine } from "#/domain/subagent";
 import type { AgentSessionRecord } from "#/server/adapters/agent-sessions";
 import { readerWorkspaceMachines } from "./reader-workspace-machines";
 import type { WorkspaceMachines } from "./workspace-machines";
@@ -87,19 +87,16 @@ export function sessionScopedWorkspaceMachines(
 }
 
 /**
- * A session's machines: a shared child gets its own runtime state on the
- * parent's VM, and a read-only subagent additionally runs as the reader
- * Linux user (reader-workspace-machines.ts).
+ * A session's machines: a reader subagent gets its own runtime state on the
+ * parent's VM and runs as the reader Linux user (reader-workspace-machines.ts).
  */
 export function machinesForAgentSession(
 	machines: WorkspaceMachines,
-	session: Pick<AgentSessionRecord, "id" | "taskPlacement"> &
+	session: Pick<AgentSessionRecord, "id"> &
 		Partial<Pick<AgentSessionRecord, "agentRole">>,
 ) {
 	const base = baseWorkspaceMachines(machines);
-	if (session.taskPlacement !== "shared") return base;
-	if (!isReaderRole(session.agentRole))
-		return sessionScopedWorkspaceMachines(machines, session.id);
+	if (!sharesParentMachine(session)) return base;
 	const reader = readerWorkspaceMachines(base, {
 		sessionId: session.id,
 		sessionRoot: sessionRuntimeRoot(session.id),

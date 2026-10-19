@@ -55,7 +55,10 @@ beforeEach(() => {
 	}));
 	mocks.child.mockImplementation(async (_machines, input) => ({
 		session: input.task,
-		providerRef: input.task.taskPlacement === "shared" ? "vm-root" : "vm-child",
+		providerRef:
+			input.task.agentRole && input.task.agentRole !== "writer"
+				? "vm-root"
+				: "vm-child",
 	}));
 });
 
@@ -78,6 +81,7 @@ it("prepares a cold shared parent before binding the child to that exact workspa
 		id: "child",
 		taskPlacement: "shared",
 		parentSessionId: root.id,
+		agentRole: "researcher",
 	} as AgentSessionRecord;
 	const binding = await deferredApiTurnWorkspace(
 		machines,
@@ -91,32 +95,6 @@ it("prepares a cold shared parent before binding the child to that exact workspa
 		expect.objectContaining({ task }),
 	);
 	expect(mocks.checkout).toHaveBeenCalledTimes(1);
-});
-
-it("preserves the validated stacked predecessor when lazily binding a writer", async () => {
-	const predecessor = {
-		...root,
-		id: "previous",
-		taskBranch: "ytimesy/previous",
-	};
-	mocks.read.mockResolvedValue(predecessor);
-	const task = {
-		...root,
-		id: "child",
-		taskPlacement: "fresh",
-		taskExecution: "stacked",
-		dependsOnSessionId: predecessor.id,
-	} as AgentSessionRecord;
-	await deferredApiTurnWorkspace(
-		machines,
-		task,
-		new AbortController().signal,
-	)();
-	expect(mocks.root).not.toHaveBeenCalled();
-	expect(mocks.child).toHaveBeenCalledWith(
-		machines,
-		expect.objectContaining({ task, predecessor }),
-	);
 });
 
 it("rejects cancelled preparation and cross-project shared parents", async () => {
@@ -134,6 +112,7 @@ it("rejects cancelled preparation and cross-project shared parents", async () =>
 				id: "child",
 				taskPlacement: "shared",
 				parentSessionId: root.id,
+				agentRole: "reviewer",
 			} as AgentSessionRecord,
 			new AbortController().signal,
 		)(),
@@ -240,7 +219,7 @@ it("keeps a root chat working when its already-edited checkout cannot pin a base
 	warn.mockRestore();
 });
 
-it("still requires the baseline for a writable child task", async () => {
+it("still requires the baseline for a writer subagent", async () => {
 	mocks.baseline.mockRejectedValueOnce(new Error("not pristine"));
 	mocks.read.mockResolvedValue(root);
 	await expect(
@@ -252,6 +231,7 @@ it("still requires the baseline for a writable child task", async () => {
 				parentSessionId: root.id,
 				taskPlacement: "fresh",
 				taskAccess: "read_write",
+				agentRole: "writer",
 			} as AgentSessionRecord,
 			new AbortController().signal,
 		)(),

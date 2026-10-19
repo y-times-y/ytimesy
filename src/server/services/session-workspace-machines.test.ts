@@ -21,16 +21,16 @@ describe("session workspace machines", () => {
 		);
 	});
 
-	it("gives a writing grandchild the unscoped machine after a shared child", async () => {
+	it("gives a writing grandchild the unscoped machine after a reader child", async () => {
 		const exec = vi.fn(async () => ({ exitCode: 0, stdout: "", stderr: "" }));
 		const machines = { exec } as unknown as WorkspaceMachines;
 		const sharedChild = machinesForAgentSession(machines, {
 			id: "shared-child",
-			taskPlacement: "shared",
+			agentRole: "researcher",
 		});
 		const writingGrandchild = machinesForAgentSession(sharedChild, {
 			id: "writing-grandchild",
-			taskPlacement: "fresh",
+			agentRole: "writer",
 		});
 		await writingGrandchild.exec(WorkspaceId("vm-grandchild"), "pwd");
 		expect(writingGrandchild).toBe(machines);

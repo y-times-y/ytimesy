@@ -16,6 +16,7 @@ import { listedModelPreferenceFromSessions } from "#/domain/listed-model";
 import type { MachineSizeId } from "#/domain/machine-size";
 import { workspaceEnvironmentIsReady } from "#/domain/project-workspace";
 import { sessionTitleFromText } from "#/domain/session-item";
+import { sharesParentMachine } from "#/domain/subagent";
 import {
 	type AgentSessionRecord,
 	agentSessionForOwner,
@@ -24,6 +25,7 @@ import {
 	descendantAgentSessions,
 	insertAgentSession,
 	listAgentSessions,
+	providerRefsHeldOutside,
 	reusableEmptyChat,
 	saveAgentSessionProviderRef,
 	selectAgentSessionHarness,
@@ -321,9 +323,9 @@ export async function bindPreparedAgentTaskMachine(
 		readonly task: AgentSessionRecord;
 	},
 ) {
-	if (input.task.taskPlacement === "shared") {
+	if (sharesParentMachine(input.task)) {
 		if (!input.task.parentSessionId) {
-			throw new Error("The read-only task has no parent machine.");
+			throw new Error("The reader subagent has no parent machine.");
 		}
 		const parent = await agentSessionForOwner(
 			input.userId,
@@ -406,14 +408,22 @@ export async function deleteAgentSessionMachine(
 		input.userId,
 		removed.map((chat) => chat.id),
 	);
+	// Readers run on their parent's VM: never destroy it with them. A VM a
+	// session outside this deletion still holds (the parent of a deleted
+	// reader, or a legacy shared child's parent) is never destroyed either.
+	const held = await providerRefsHeldOutside(
+		input.userId,
+		removed.map((chat) => chat.id),
+	);
 	const refs = sessionMachineRefsToDestroy({
-		sessionProviderRef:
-			session.taskPlacement === "shared" ? null : session.providerRef,
+		sessionProviderRef: sharesParentMachine(session)
+			? null
+			: session.providerRef,
 		childProviderRefs: children
-			.filter((child) => child.taskPlacement !== "shared")
+			.filter((child) => !sharesParentMachine(child))
 			.map((child) => child.providerRef),
 		templateProviderRef: workspace?.providerRef ?? null,
-	});
+	}).filter((ref) => !held.has(ref));
 	for (const ref of refs) {
 		await machines.destroy(WorkspaceId(ref));
 	}

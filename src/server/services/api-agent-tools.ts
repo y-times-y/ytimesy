@@ -45,9 +45,11 @@ export function apiAgentTools(
 ): ToolSet {
 	const { machines, session, signal } = input;
 	const executionIdentity = scopedToolExecution();
+	// Only a writer subagent's own fork is writable here; the root builder's
+	// writes come from its shell surface (input.writable).
 	const readOnly =
 		!input.writable &&
-		(!session.parentSessionId || session.taskAccess !== "read_write");
+		(!session.parentSessionId || session.agentRole !== "writer");
 	const workspace = async (): Promise<AgentToolWorkspace> => {
 		signal.throwIfAborted();
 		if ("workspace" in input) return input.workspace();

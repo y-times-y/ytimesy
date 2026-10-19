@@ -23,6 +23,24 @@ export function isReaderRole(role: SubagentRole | null | undefined) {
 	return !!role && role !== "writer";
 }
 
+/**
+ * A reader subagent runs on its parent's VM (stored task_placement 'shared'):
+ * it owns neither that machine nor its checkout.
+ */
+export function sharesParentMachine(session: {
+	readonly agentRole?: SubagentRole | null;
+}) {
+	return isReaderRole(session.agentRole);
+}
+
+/** The root chat (the builder) and writer subagents edit their own checkout. */
+export function writesOwnCheckout(session: {
+	readonly parentSessionId: string | null;
+	readonly agentRole?: SubagentRole | null;
+}) {
+	return !session.parentSessionId || session.agentRole === "writer";
+}
+
 /** Where a child runs; not an argument, because it follows from the role. */
 export type SubagentPlacement = "fork" | "shared-read-only";
 
