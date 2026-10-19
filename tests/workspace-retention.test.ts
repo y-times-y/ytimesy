@@ -37,7 +37,7 @@ const resources = { cpu: 2, memory: 4096, storage: 16384 };
 beforeAll(async () => {
 	db = new PGlite();
 	await db.exec(`create role anon; create role authenticated; create table auth_user(id text primary key); insert into auth_user values('alice');
-	create table agent_session(id uuid primary key,user_id text,project_id text,provider_ref text,turn_status text,task_placement text);
+	create table agent_session(id uuid primary key,user_id text,project_id text,provider_ref text,turn_status text,task_placement text,agent_role text);
 	create table api_turn(session_id uuid,state text); create table workspace(id text,user_id text); create table environment_build(id text,workspace_id text);`);
 	for (const file of [
 		"20261003020000_infrastructure_usage",

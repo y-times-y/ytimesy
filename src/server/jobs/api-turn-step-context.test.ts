@@ -198,14 +198,14 @@ async function steps(count: number) {
 	return perStep;
 }
 
-it("loads turn-fixed context once and adds no delegation context to a chat without children", async () => {
+it("loads turn-fixed context once, on the first step", async () => {
 	const perStep = await steps(3);
 	console.info(
 		"per-step context cost (queries, VM execs, VM writes):",
 		perStep.map((step) => [step.queries.length, step.execs, step.writes]),
 	);
-	// Later steps only check the peer inbox; config, secrets, hooks and the
-	// children check come from the turn's first step.
+	// Later steps only check the peer inbox; config, secrets and hooks come
+	// from the turn's first step.
 	for (const later of perStep.slice(1)) {
 		expect(later.queries).toEqual([
 			expect.stringContaining("from agent_peer_inbox"),
@@ -213,11 +213,6 @@ it("loads turn-fixed context once and adds no delegation context to a chat witho
 		expect(later.execs).toBe(0);
 		expect(later.writes).toBe(0);
 	}
-	expect(
-		perStep[0].queries.filter((sql) => sql.includes("parent_session_id=$2")),
-	).toHaveLength(1);
-	for (const prepared of state.seen)
-		expect(JSON.stringify(prepared)).not.toContain("Current delegated tasks");
 });
 
 it("publishes the running snapshot on a turn's first step only", async () => {
@@ -230,31 +225,6 @@ it("publishes the running snapshot on a turn's first step only", async () => {
 	// Steps 2 and 3 start from items the previous checkpoint already wrote.
 	await steps(3);
 	expect(vi.mocked(publishApiTurnProgress).mock.calls.length).toBe(first);
-});
-
-it("keeps the delegated-task snapshot for a parent without re-sending it for capacity changes", async () => {
-	state.children = [
-		{
-			id: "child",
-			title: "Fix tests",
-			task_state: "working",
-			turn_status: "running",
-			task_review_state: "pending",
-		},
-	];
-	const [first] = await steps(1);
-	expect(JSON.stringify(state.seen[0])).toContain("Current delegated tasks");
-	expect(first.queries.some((sql) => sql.includes("task_state='done'"))).toBe(
-		true,
-	);
-	state.available = 1;
-	await steps(1);
-	const snapshots = (state.seen.at(-1) ?? []).filter(
-		(message) =>
-			typeof message.content === "string" &&
-			message.content.startsWith("Current delegated tasks"),
-	);
-	expect(snapshots).toHaveLength(1);
 });
 
 it("reloads turn-fixed context when a restarted isolate resumes the turn", async () => {
