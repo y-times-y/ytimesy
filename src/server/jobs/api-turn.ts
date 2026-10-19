@@ -117,7 +117,7 @@ import { apiAgentTools } from "../services/api-agent-tools";
 import { stopApiTurnCommands } from "../services/api-command-scope";
 import { deferredApiTurnWorkspace } from "../services/api-turn-workspace";
 import { createAttemptLoop } from "../services/attempt-loop";
-import { attemptLoopDeps } from "../services/attempt-loop-deps";
+import { attemptLoopDeps, reviewLoopDeps } from "../services/attempt-loop-deps";
 import { automaticRepositoryContext } from "../services/automatic-repository-context";
 import {
 	pendingAgentCommandIds,
@@ -169,6 +169,7 @@ import {
 } from "../services/project-secrets";
 import { startQueuedUserTurn } from "../services/queued-user-messages";
 import { withRedactedResults } from "../services/redacted-tools";
+import { createReviewLoop } from "../services/review-loop";
 import {
 	SECRET_REQUEST_END_TURN_TOOLS,
 	secretRequestTools,
@@ -1228,24 +1229,28 @@ async function runApiTurnAttempt(
 		// it checkpoints before the first model step, and a step may instead
 		// wait for its checker, start the next attempt with a reset history,
 		// or end the loop without a model call.
+		// The review loop (review=on) uses the same hooks: a check at the
+		// completion boundary, its findings back into the same run.
 		const attemptsMax = attemptLimit(variant.attempts);
-		const attemptLoop =
-			step &&
-			attemptsMax > 1 &&
+		const loopEligible =
+			!!step &&
 			writable &&
 			!owner.parentSessionId &&
 			!owner.agentRole &&
-			!planLock?.planning
+			!planLock?.planning;
+		const loopBilling = modelBilling({
+			harness: subscription ? "codex" : "api",
+			modelId: route.modelId,
+		});
+		const attemptLoop =
+			step && loopEligible && attemptsMax > 1
 				? createAttemptLoop({
 						sessionId: owner.id,
 						turnId: turn.id,
 						max: attemptsMax,
 						workspace,
 						signal: abort.signal,
-						billing: modelBilling({
-							harness: subscription ? "codex" : "api",
-							modelId: route.modelId,
-						}),
+						billing: loopBilling,
 						taskText: () => latestUserRequestText(items),
 						isRequest: (message) => isUserRequestMessage(items, message),
 						deps: attemptLoopDeps({
@@ -1258,7 +1263,25 @@ async function runApiTurnAttempt(
 							items: () => items,
 						}),
 					})
-				: null;
+				: step && loopEligible && variant.review === "on"
+					? createReviewLoop({
+							sessionId: owner.id,
+							turnId: turn.id,
+							workspace,
+							signal: abort.signal,
+							billing: loopBilling,
+							taskText: () => latestUserRequestText(items),
+							deps: reviewLoopDeps({
+								machines: unscopedMachines,
+								parent: owner as AgentSessionRecord,
+								turnId: turn.id,
+								workspace,
+								signal: abort.signal,
+								waitDeadlineAt: step.waitDeadlineAt,
+								items: () => items,
+							}),
+						})
+					: null;
 		const attemptWaitUntil = () =>
 			Math.min(
 				step?.waitDeadlineAt ?? Number.POSITIVE_INFINITY,

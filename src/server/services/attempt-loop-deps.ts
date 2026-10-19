@@ -3,8 +3,10 @@ import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import {
 	attemptLoopDeadline,
 	loadAttemptLoopState,
+	loadReviewLoopState,
 	loopSubagentStatus,
 	saveAttemptLoopState,
+	saveReviewLoopState,
 	takeLoopSubagentReport,
 } from "../adapters/attempt-loop-store";
 import { requestSubagentStop } from "../adapters/subagents";
@@ -14,6 +16,7 @@ import { scopedShellCommand, stopApiCommand } from "./api-command-scope";
 import type { AttemptLoopDeps } from "./attempt-loop";
 import { pendingAgentCommandIds } from "./background-command-context";
 import { captureConversationCode } from "./conversation-code-checkpoint";
+import type { ReviewLoopDeps } from "./review-loop";
 import { startRuntimeSubagent } from "./subagent-tools";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -84,5 +87,17 @@ export function attemptLoopDeps(input: {
 			for (const id of pendingAgentCommandIds(input.items()))
 				await stopApiCommand(workspace, turnId, id).catch(() => {});
 		},
+	};
+}
+
+/** The review loop's production wiring: the attempt loop's plumbing with its own state. */
+export function reviewLoopDeps(
+	input: Parameters<typeof attemptLoopDeps>[0],
+): ReviewLoopDeps {
+	const { load: _load, save: _save, ...shared } = attemptLoopDeps(input);
+	return {
+		...shared,
+		load: loadReviewLoopState,
+		save: saveReviewLoopState,
 	};
 }

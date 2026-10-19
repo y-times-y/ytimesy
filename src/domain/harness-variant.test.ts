@@ -19,6 +19,7 @@ describe("harness variants", () => {
 			subagents: "off",
 			prEvidence: "off",
 			attempts: "1",
+			review: "off",
 		});
 	});
 
@@ -37,6 +38,7 @@ describe("harness variants", () => {
 			subagents: "off",
 			prEvidence: "off",
 			attempts: "1",
+			review: "off",
 		});
 		expect(
 			harnessVariantFromFlags(["memoryWording=notes,toolSurface=lean-native"]),
@@ -49,6 +51,7 @@ describe("harness variants", () => {
 			subagents: "off",
 			prEvidence: "off",
 			attempts: "1",
+			review: "off",
 		});
 		expect(
 			harnessVariantFromFlags(["memoryWording=notes,memoryWriter=both"]),
@@ -81,6 +84,7 @@ describe("harness variants", () => {
 			subagents: "off",
 			prEvidence: "off",
 			attempts: "1",
+			review: "off",
 		});
 		expect(harnessVariantFromUnknown({ memoryWriter: "agent" })).toEqual({
 			...DEFAULT_HARNESS_VARIANT,

@@ -6,8 +6,11 @@ import {
 	attemptLoopDeadline,
 	attemptLoopStates,
 	loadAttemptLoopState,
+	loadReviewLoopState,
+	reviewLoopStates,
 	saveAttemptLoopDeadline,
 	saveAttemptLoopState,
+	saveReviewLoopState,
 	takeLoopSubagentReport,
 } from "../src/server/adapters/attempt-loop-store";
 
@@ -108,6 +111,26 @@ it("stores a runner's deadline", async () => {
 	expect(await attemptLoopDeadline(parent)).toBe(1_700_000_000_000);
 	// The deadline row is not a loop state.
 	expect(await attemptLoopStates(parent)).toHaveLength(2);
+});
+
+it("keeps review loop states apart from attempt loop states", async () => {
+	expect(await loadReviewLoopState(parent, "turn-1")).toBeNull();
+	await saveReviewLoopState(parent, {
+		version: 1,
+		kind: "review",
+		turnId: "turn-1",
+		phase: "checking",
+		startedAt: 1,
+		deadlineAt: 2,
+		checkpoint: state("x", 1).checkpoint,
+		rounds: [],
+	});
+	expect((await loadReviewLoopState(parent, "turn-1"))?.phase).toBe("checking");
+	expect((await reviewLoopStates(parent)).map((s) => s.turnId)).toEqual([
+		"turn-1",
+	]);
+	expect(await attemptLoopStates(parent)).toHaveLength(2);
+	expect((await loadAttemptLoopState(parent, "turn-1"))?.attempt).toBe(2);
 });
 
 it("takes a checker's report and keeps it out of the builder's inbox", async () => {
