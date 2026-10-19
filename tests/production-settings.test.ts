@@ -1,7 +1,9 @@
+import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import { retentionTouchParams } from "#/server/adapters/freestyle/workspace-retention";
 import {
 	assertProductionBuildAnalytics,
+	assertProductionRoutes,
 	PRODUCTION_RETENTION_ENROLL_AFTER,
 	productionAnalyticsSettings,
 	productionRuntimeSettings,
@@ -93,4 +95,70 @@ it("fails only a production web build that lacks the browser token", () => {
 	expect(() =>
 		assertProductionBuildAnalytics({ CLOUDFLARE_ENV: "development" }),
 	).not.toThrow();
+});
+
+const productionConfig = (extra: string) =>
+	`{ "env": { "development": { "routes": [{ "pattern": "dev.example.com" }] },
+	  "production": { "name": "x", ${extra} "workers_dev": false } } }`;
+const gate = (file: string, extra: string) => () =>
+	assertProductionRoutes({
+		file,
+		text: productionConfig(extra),
+		gitProxyUrl: "https://edge.ytimesy.com",
+		appUrl: "https://ytimesy.com",
+	});
+
+it("lets only the executor route its own Git proxy custom domain in production", () => {
+	expect(gate("wrangler.web.jsonc", "")).not.toThrow();
+	expect(gate("wrangler.edge-executor.jsonc", "")).not.toThrow();
+	expect(
+		gate(
+			"wrangler.edge-executor.jsonc",
+			'"routes": [{ "pattern": "edge.ytimesy.com", "custom_domain": true }],',
+		),
+	).not.toThrow();
+	// The web Worker stays route-less until launch, even on the same domain.
+	expect(
+		gate(
+			"wrangler.web.jsonc",
+			'"routes": [{ "pattern": "edge.ytimesy.com", "custom_domain": true }],',
+		),
+	).toThrow("no routes until launch");
+	for (const routes of [
+		'"routes": [{ "pattern": "ytimesy.com", "custom_domain": true }],',
+		'"routes": [{ "pattern": "edge.ytimesy.com/*", "zone_name": "ytimesy.com" }],',
+		'"routes": [{ "pattern": "edge.ytimesy.com" }],',
+		'"routes": [{ "pattern": "edge.ytimesy.com", "custom_domain": true }, { "pattern": "other.ytimesy.com", "custom_domain": true }],',
+		'"route": "edge.ytimesy.com/*",',
+	])
+		expect(gate("wrangler.edge-executor.jsonc", routes), routes).toThrow();
+	expect(() =>
+		assertProductionRoutes({
+			file: "wrangler.edge-executor.jsonc",
+			text: '{ "env": { "production": { "workers_dev": true } } }',
+			gitProxyUrl: "https://edge.ytimesy.com",
+			appUrl: "https://ytimesy.com",
+		}),
+	).toThrow("workers_dev off");
+});
+
+it("passes the committed production wrangler configs", () => {
+	for (const file of ["wrangler.web.jsonc", "wrangler.edge-executor.jsonc"])
+		expect(() =>
+			assertProductionRoutes({
+				file,
+				text: readFileSync(file, "utf8"),
+				gitProxyUrl: "https://edge.ytimesy.com",
+				appUrl: "https://ytimesy.com",
+			}),
+		).not.toThrow();
+});
+
+it("refuses a production deploy without the PR repair webhook secret", () => {
+	const script = readFileSync("scripts/deploy-production.ts", "utf8");
+	const required = script.slice(
+		script.indexOf("const required = ["),
+		script.indexOf("] as const;"),
+	);
+	expect(required).toContain('"GITHUB_PR_REPAIR_WEBHOOK_SECRET"');
 });

@@ -112,11 +112,14 @@ Option A with `edge.ytimesy.com`, plus Access on the web app until launch.
 5. **Google OAuth client** (if Google sign-in is offered): authorized
    redirect URI `https://ytimesy.com/api/auth/callback/google`.
 
-## Code follow-ups before deploying (not built)
+## Code follow-ups before deploying
 
-- `scripts/deploy-production.ts`: allow exactly one production route, the
-  executor's `edge.<domain>` custom domain, and keep refusing web routes and
-  `workers_dev`. Also require `GITHUB_PR_REPAIR_WEBHOOK_SECRET`.
+- Done: `scripts/deploy-production.ts` allows exactly one production route,
+  the executor's custom domain, whose host must equal
+  `YTIMESY_GIT_PROXY_URL`'s and differ from `APP_URL`'s
+  (`assertProductionRoutes` in `scripts/production-settings.ts`); it keeps
+  refusing web routes and `workers_dev`, and requires
+  `GITHUB_PR_REPAIR_WEBHOOK_SECRET`.
 - `wrangler.edge-executor.jsonc` production env: add
   `"routes": [{ "pattern": "edge.ytimesy.com", "custom_domain": true }]` (or
   attach it in the dashboard as in step 1).
