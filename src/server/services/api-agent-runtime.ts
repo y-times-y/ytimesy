@@ -1,6 +1,8 @@
 import type { ModelMessage } from "ai";
+import type { ApiModelSpeedId } from "#/domain/api-model-list";
+import { defaultMaxOutputTokens } from "#/domain/api-output-limit";
 import { ApiModelPreparationFailure } from "#/domain/api-turn-failure";
-import { modelRouteId } from "#/domain/model-connection";
+import { type ModelProvider, modelRouteId } from "#/domain/model-connection";
 import { connectedLanguageModel } from "#/server/adapters/api-model";
 import { apiPromptCacheSettings } from "#/server/adapters/api-prompt-cache";
 import {
@@ -84,116 +86,157 @@ async function prepareApiModel<T>(
 	try {
 		onStage("credential");
 		const apiKey = await connectionApiKey(input.userId, connection);
-		onStage("model");
-		const model = connectedLanguageModel(
-			{
-				...connection,
-				modelId: input.modelId,
-				apiKey,
-				speed: input.speed,
-			},
-			transport.fetch,
+		return await run(
+			await apiModelRuntime(
+				{
+					provider: connection.provider,
+					baseUrl: connection.baseUrl,
+					apiKey,
+					modelId: input.modelId,
+					speed: input.speed,
+					userId: input.userId,
+					connectionId: input.connectionId,
+					cacheScopeId: input.cacheScopeId ?? "default",
+					contextCacheKey: JSON.stringify([
+						input.userId,
+						connection.id,
+						connection.revision,
+						input.modelId,
+					]),
+					contextWindow: connection.models.find(
+						(row) => row.id === input.modelId,
+					)?.contextWindow,
+					reasoning: input.reasoning,
+					maxOutputTokens: input.maxOutputTokens,
+					fetch: transport.fetch,
+				},
+				onStage,
+			),
 		);
-		const cacheSettings = apiPromptCacheSettings({
-			...connection,
-			userId: input.userId,
-			connectionId: input.connectionId,
-			scopeId: input.cacheScopeId ?? "default",
-		});
-		const origin = new URL(connection.baseUrl).origin;
-		const responsesRoute =
-			connection.provider === "openai" ||
-			(connection.provider === "compatible" &&
-				["https://api.x.ai", "https://api.meta.ai"].includes(origin));
-		const boundPrefix =
-			connection.provider === "anthropic" ||
-			connection.provider === "google" ||
-			(connection.provider === "openrouter" &&
-				/^(anthropic|google)\//.test(input.modelId));
-		onStage("context");
-		const context = await readModelContext(
-			{
-				...connection,
-				apiKey,
-				modelId: input.modelId,
-				contextWindow: connection.models.find((row) => row.id === input.modelId)
-					?.contextWindow,
-				cacheKey: JSON.stringify([
-					input.userId,
-					connection.id,
-					connection.revision,
-					input.modelId,
-				]),
-			},
-			transport.fetch,
-		);
-		const effort = apiReasoningEffort(input.reasoning);
-		const requestSettings = (instructions: string) =>
-			withReasoningEffort(
-				baseRequestSettings(instructions),
-				connection.provider,
-				effort,
-			);
-		const baseRequestSettings = (instructions: string) =>
-			responsesRoute
-				? {
-						...cacheSettings,
-						providerOptions: {
-							...cacheSettings.providerOptions,
-							openai: {
-								...cacheSettings.providerOptions?.openai,
-								instructions,
-								store: false,
-								include: ["reasoning.encrypted_content"],
-							},
-						},
-					}
-				: {
-						...cacheSettings,
-						system: instructions,
-						...(context.nativeCompaction === "anthropic" &&
-						origin === "https://api.anthropic.com"
-							? {
-									providerOptions: {
-										...cacheSettings.providerOptions,
-										anthropic: {
-											...cacheSettings.providerOptions?.anthropic,
-											thinking: {
-												blockBinding: { prefixMismatchBehavior: "error" },
-											},
-										},
-									},
-								}
-							: {}),
-					};
-		onStage("inference");
-		return await run({
-			model,
-			cacheSettings,
-			maxOutputTokens: input.maxOutputTokens ?? 8192,
-			contextWindow: context.contextWindow,
-			imageInput: context.imageInput,
-			fallbackContextPolicy: boundPrefix ? "bound-prefix" : "whole-turns",
-			backgroundCompaction: connection.provider === "openai",
-			requestSettings,
-			compact:
-				context.nativeCompaction === "xai" ||
-				context.nativeCompaction === "openai-endpoint"
-					? responsesEndpointCompactor({
-							...connection,
-							modelId: input.modelId,
-							apiKey,
-							fetch: transport.fetch,
-						})
-					: context.nativeCompaction
-						? nativeModelCompactor(
-								model,
-								context.nativeCompaction,
-								requestSettings,
-							)
-						: undefined,
-		});
 	} finally {
 		await transport.close();
 	}
+}
+
+/**
+ * The model runtime of an API route, from the route's endpoint and key: the
+ * request settings, prompt-cache routing, reasoning effort, context window
+ * and native compaction every API-harness turn uses. prepareApiModel calls
+ * it for a stored connection; the Harbor bridge (evals/harbor_v2) calls it
+ * with a key file, so both run the same runtime.
+ */
+export async function apiModelRuntime(
+	input: {
+		provider: ModelProvider;
+		baseUrl: string;
+		apiKey: string;
+		modelId: string;
+		speed?: ApiModelSpeedId;
+		userId: string;
+		connectionId: string;
+		cacheScopeId: string;
+		/** Caches the model's catalog limits; a stored connection adds its revision. */
+		contextCacheKey: string;
+		/** The connection's own catalog row, when it lists one. */
+		contextWindow?: number;
+		reasoning?: string;
+		maxOutputTokens?: number;
+		fetch: typeof globalThis.fetch;
+	},
+	onStage: (stage: string) => void = () => {},
+): Promise<ModelAgentRuntime> {
+	onStage("model");
+	const model = connectedLanguageModel(input, input.fetch);
+	const cacheSettings = apiPromptCacheSettings({
+		provider: input.provider,
+		baseUrl: input.baseUrl,
+		userId: input.userId,
+		connectionId: input.connectionId,
+		scopeId: input.cacheScopeId,
+	});
+	const origin = new URL(input.baseUrl).origin;
+	const responsesRoute =
+		input.provider === "openai" ||
+		(input.provider === "compatible" &&
+			["https://api.x.ai", "https://api.meta.ai"].includes(origin));
+	const boundPrefix =
+		input.provider === "anthropic" ||
+		input.provider === "google" ||
+		(input.provider === "openrouter" &&
+			/^(anthropic|google)\//.test(input.modelId));
+	onStage("context");
+	const context = await readModelContext(
+		{
+			provider: input.provider,
+			baseUrl: input.baseUrl,
+			apiKey: input.apiKey,
+			modelId: input.modelId,
+			contextWindow: input.contextWindow,
+			cacheKey: input.contextCacheKey,
+		},
+		input.fetch,
+	);
+	const effort = apiReasoningEffort(input.reasoning);
+	const baseRequestSettings = (instructions: string) =>
+		responsesRoute
+			? {
+					...cacheSettings,
+					providerOptions: {
+						...cacheSettings.providerOptions,
+						openai: {
+							...cacheSettings.providerOptions?.openai,
+							instructions,
+							store: false,
+							include: ["reasoning.encrypted_content"],
+						},
+					},
+				}
+			: {
+					...cacheSettings,
+					system: instructions,
+					...(context.nativeCompaction === "anthropic" &&
+					origin === "https://api.anthropic.com"
+						? {
+								providerOptions: {
+									...cacheSettings.providerOptions,
+									anthropic: {
+										...cacheSettings.providerOptions?.anthropic,
+										thinking: {
+											blockBinding: { prefixMismatchBehavior: "error" },
+										},
+									},
+								},
+							}
+						: {}),
+				};
+	const requestSettings = (instructions: string) =>
+		withReasoningEffort(
+			baseRequestSettings(instructions),
+			input.provider,
+			effort,
+		);
+	onStage("inference");
+	return {
+		model,
+		cacheSettings,
+		maxOutputTokens:
+			input.maxOutputTokens ??
+			defaultMaxOutputTokens(input.provider, input.modelId),
+		contextWindow: context.contextWindow,
+		imageInput: context.imageInput,
+		fallbackContextPolicy: boundPrefix ? "bound-prefix" : "whole-turns",
+		backgroundCompaction: input.provider === "openai",
+		requestSettings,
+		compact:
+			context.nativeCompaction === "xai" ||
+			context.nativeCompaction === "openai-endpoint"
+				? responsesEndpointCompactor(input)
+				: context.nativeCompaction
+					? nativeModelCompactor(
+							model,
+							context.nativeCompaction,
+							requestSettings,
+						)
+					: undefined,
+	};
 }
