@@ -315,6 +315,21 @@ export async function saveSessionWorkingBranch(
 	return toSession(result.rows[0]);
 }
 
+/** Whether another chat or task in the project already works on or published this branch. */
+export async function projectBranchHeldByOtherSession(
+	userId: string,
+	projectId: string,
+	sessionId: string,
+	branch: string,
+) {
+	const result = await database().query(
+		`select 1 from agent_session where user_id=$1 and project_id=$2 and id<>$3
+		 and (working_branch=$4 or task_branch=$4) limit 1`,
+		[userId, projectId, sessionId, branch],
+	);
+	return Boolean(result.rows[0]);
+}
+
 export async function agentSessionById(sessionId: string) {
 	const result = await database().query(
 		`select ${SESSION_COLUMNS} from agent_session where id=$1`,
