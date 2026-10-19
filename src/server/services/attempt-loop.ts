@@ -17,6 +17,7 @@ import {
 	attemptRef,
 	type CheckerVerdict,
 	decideAfterCheck,
+	type LoopChildModel,
 	loopTokens,
 	meanAttemptStats,
 	NO_ATTEMPT_SPEND,
@@ -32,8 +33,13 @@ import {
 	usageSince,
 } from "#/domain/attempt-loop";
 import { SessionItemId } from "#/domain/ids";
-import { type ModelBilling, usageCostUsd } from "#/domain/model-pricing";
+import {
+	type ModelBilling,
+	modelBilling,
+	usageCostUsd,
+} from "#/domain/model-pricing";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
+import type { ModelRole } from "#/domain/role-models";
 import {
 	type SessionItem,
 	sessionItemsFromUnknown,
@@ -108,10 +114,17 @@ export type AttemptLoopDeps = {
 	) => Promise<AttemptSnapshot>;
 	readonly startSubagent: (input: {
 		readonly role: "checker" | "reviewer";
+		/** The roleModels entry that applies (the tiebreak judge passes "judge"). */
+		readonly modelRole?: ModelRole;
 		readonly title: string;
 		readonly brief: string;
 		readonly cap: Partial<SubagentBudget>;
-	}) => Promise<{ readonly sessionId: string }>;
+	}) => Promise<{
+		readonly sessionId: string;
+		/** The child's model when the runtime knows it (priced at its own route). */
+		readonly model?: Omit<LoopChildModel, "notice">;
+		readonly notice?: string;
+	}>;
 	readonly takeReport: (
 		parentSessionId: string,
 		childSessionId: string,
@@ -331,6 +344,27 @@ export function baseMessageCount(
 	return end;
 }
 
+/** A loop child's record of its model, for its state (absent when it runs on the builder's). */
+export function loopChildModel(started: {
+	readonly model?: Omit<LoopChildModel, "notice">;
+	readonly notice?: string;
+}): LoopChildModel | undefined {
+	if (!started.model) return undefined;
+	return started.notice
+		? { ...started.model, notice: started.notice }
+		: started.model;
+}
+
+/** A child's billing: its own route's when recorded, else the builder's. */
+export function childBilling(
+	model: LoopChildModel | undefined,
+	builder: ModelBilling,
+): ModelBilling {
+	return model
+		? modelBilling({ harness: model.harness, modelId: model.modelId })
+		: builder;
+}
+
 function spendOf(
 	usage: ApiTokenUsage | null | undefined,
 	billing: ModelBilling,
@@ -350,7 +384,10 @@ export function attemptLoopSpend(
 ) {
 	const attempts = state.candidates.map((candidate) => {
 		const builder = spendOf(candidate.builderUsage, billing);
-		const checker = spendOf(candidate.checker?.usage, billing);
+		const checker = spendOf(
+			candidate.checker?.usage,
+			childBilling(candidate.checker?.model, billing),
+		);
 		const total: AttemptSpend = {
 			tokens: builder.tokens + checker.tokens,
 			costUsd:
@@ -368,7 +405,10 @@ export function attemptLoopSpend(
 				(candidate.checker?.endedAt ?? candidate.endedAt) - candidate.startedAt,
 		};
 	});
-	const judge = spendOf(state.selection?.judge?.usage, billing);
+	const judge = spendOf(
+		state.selection?.judge?.usage,
+		childBilling(state.selection?.judge?.model, billing),
+	);
 	const total = attempts.reduce(
 		(sum, attempt) => ({
 			tokens: sum.tokens + attempt.total.tokens,
@@ -592,7 +632,12 @@ export function createAttemptLoop(input: AttemptLoopInput) {
 		});
 		candidate = {
 			...candidate,
-			checker: { sessionId: checker.sessionId, startedAt: now, directory },
+			checker: {
+				sessionId: checker.sessionId,
+				startedAt: now,
+				directory,
+				...(loopChildModel(checker) ? { model: loopChildModel(checker) } : {}),
+			},
 		};
 		return save({
 			...state,
@@ -872,6 +917,7 @@ export function createAttemptLoop(input: AttemptLoopInput) {
 			try {
 				const judge = await deps.startSubagent({
 					role: "reviewer",
+					modelRole: "judge",
 					title: `Compare attempts ${a.n} and ${b.n}`,
 					brief: attemptJudgeBrief({
 						taskText: input.taskText(),
@@ -890,7 +936,11 @@ export function createAttemptLoop(input: AttemptLoopInput) {
 				});
 				selection = {
 					...selection,
-					judge: { sessionId: judge.sessionId, winner: null },
+					judge: {
+						sessionId: judge.sessionId,
+						winner: null,
+						...(loopChildModel(judge) ? { model: loopChildModel(judge) } : {}),
+					},
 				};
 				const judging = await save({ ...state, phase: "judging", selection });
 				return awaitJudge(judging, step);

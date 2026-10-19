@@ -97,6 +97,8 @@ export function startPreparedAgentTask(
 	scope: HarnessSessionScope,
 	taskSessionId: string,
 	expectedDraft?: AgentSessionRecord,
+	/** The first turn's reasoning effort (a role model's); the route default when unset. */
+	options?: { readonly reasoning?: string },
 ): Effect.Effect<
 	{ id: string; machineId: string | null; placement: "shared" | "fresh" },
 	unknown
@@ -124,6 +126,7 @@ export function startPreparedAgentTask(
 				{
 					text: task.taskPrompt as string,
 					modelId: task.listedModelId as string,
+					...(options?.reasoning ? { variant: options.reasoning } : {}),
 				},
 				true,
 			),

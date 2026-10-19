@@ -6,7 +6,15 @@ import { agentSessionMachineSlug } from "#/domain/agent-session";
 import { independentReviewBrief } from "#/domain/checker-brief";
 import { latestUserRequestText } from "#/domain/child-task-activity";
 import { WorkspaceId } from "#/domain/ids";
+import type { FailoverConnection } from "#/domain/model-failover";
 import { posixShellQuoted } from "#/domain/posix-command";
+import {
+	type ModelRole,
+	type ResolvedChildModel,
+	type RoleModels,
+	resolveRoleModel,
+	roleModelFor,
+} from "#/domain/role-models";
 import { sessionItemsFromUnknown } from "#/domain/session-item";
 import {
 	AGENT_SEND_TOOL,
@@ -27,6 +35,7 @@ import {
 	subagentNodeRemaining,
 	subagentTree,
 } from "#/domain/subagent-tree";
+import { budgetTokenWeight } from "#/domain/subagent-usage";
 import {
 	type AgentSessionRecord,
 	agentSessionForOwner,
@@ -45,6 +54,7 @@ import { queueAgentPeerMessage } from "./agent-peer-messaging";
 import { openAgentTask } from "./agent-session-machine";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 import { startPreparedAgentTask } from "./harness-workspace-session";
+import { failoverConnections } from "./model-failover";
 import { forkWriterWorkspace } from "./subagent-writer";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -76,7 +86,10 @@ export type SubagentToolDeps = {
 	readonly start: (
 		scope: Parameters<typeof startPreparedAgentTask>[0],
 		taskId: string,
+		options?: { readonly reasoning?: string },
 	) => Promise<unknown>;
+	/** Every route the user can use now (role models are checked against it). */
+	readonly routes: (userId: string) => Promise<readonly FailoverConnection[]>;
 	readonly markFailed: (sessionId: string) => Promise<unknown>;
 	readonly takeReport: typeof takeSubagentReport;
 	readonly message: typeof queueAgentPeerMessage;
@@ -105,8 +118,11 @@ const defaultDeps: SubagentToolDeps = {
 	fork: (...args) => forkWriterWorkspace(...args),
 	saveProviderRef: (...args) => saveAgentSessionProviderRef(...args),
 	mergeFork: (...args) => mergeSubagentFork(...args),
-	start: (scope, taskId) =>
-		Effect.runPromise(startPreparedAgentTask(scope, taskId)),
+	start: (scope, taskId, options) =>
+		Effect.runPromise(
+			startPreparedAgentTask(scope, taskId, undefined, options),
+		),
+	routes: (userId) => failoverConnections(userId),
 	markFailed: (sessionId) => saveAgentTaskState(sessionId, "failed"),
 	takeReport: (...args) => takeSubagentReport(...args),
 	message: (...args) => queueAgentPeerMessage(...args),
@@ -122,6 +138,8 @@ export type SubagentToolContext = {
 	readonly signal: AbortSignal;
 	/** A durable step's own deadline for blocking calls. */
 	readonly waitDeadlineAt?: number;
+	/** A model per role (harness variant roleModels); children inherit the parent's model otherwise. */
+	readonly roleModels?: RoleModels;
 	readonly deps?: Partial<SubagentToolDeps>;
 };
 
@@ -197,11 +215,12 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 					"A read-only agent cannot start a writer; report what should change instead.",
 				);
 			const workspace = await context.workspace();
-			const { childId, budget, placement } = await spawnSubagent(
+			const { childId, budget, placement, model, notice } = await spawnSubagent(
 				context,
 				deps,
 				{
 					role,
+					modelRole: role,
 					title: input.title,
 					brief: async (tree) =>
 						role === "checker"
@@ -218,7 +237,9 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 				taskId: childId,
 				role,
 				vm: placement,
-				budget: publicBudget(budget),
+				model: model.label,
+				budget: publicBudget(budget, model.listedModelId),
+				...(notice ? { modelNotice: notice } : {}),
 			};
 			if (!input.wait) return started;
 			const report = await waitForReport(context, deps, childId, budget);
@@ -299,6 +320,8 @@ async function spawnSubagent(
 	deps: SubagentToolDeps,
 	input: {
 		readonly role: SubagentRole;
+		/** Which roleModels entry applies (the judge is a reviewer with its own entry). */
+		readonly modelRole: ModelRole;
 		readonly title: string;
 		readonly brief: (tree: LoadedTree) => Promise<string>;
 		readonly cap?: Partial<SubagentBudget>;
@@ -309,12 +332,19 @@ async function spawnSubagent(
 	const { role } = input;
 	if (!parent.listedModelId)
 		throw new Error("Your session has no model for a subagent to inherit.");
+	const { model, notice } = await childModel(
+		context,
+		deps,
+		input.modelRole,
+		parent.listedModelId,
+	);
 	const tree = await loadTreeFor(deps, parent);
 	const own = tree.nodes.find((node) => node.id === parent.id);
 	const parentRemaining = own
 		? subagentNodeRemaining(own)
 		: builderRemaining(
-				subagentTree(tree.root.id, tree.sessions, deps.now()).total.tokens,
+				subagentTree(tree.root.id, tree.sessions, deps.now()).total
+					.budgetTokens,
 			);
 	const admission = subagentAdmission({
 		parentLevel: tree.level,
@@ -329,6 +359,8 @@ async function spawnSubagent(
 		steps: Math.min(admission.budget.steps, input.cap?.steps ?? Infinity),
 		minutes: Math.min(admission.budget.minutes, input.cap?.minutes ?? Infinity),
 		tokens: Math.min(admission.budget.tokens, input.cap?.tokens ?? Infinity),
+		// Counted in the builder's tokens: a cheaper child's tokens weigh less.
+		...(tree.root.listedModelId ? { priceBasis: tree.root.listedModelId } : {}),
 	};
 	const brief = await input.brief(tree);
 	const placement = subagentPlacement(role);
@@ -337,8 +369,8 @@ async function spawnSubagent(
 		projectId: parent.projectId,
 		parentSessionId: parent.id,
 		title: input.title,
-		harness: parent.harness,
-		modelId: parent.listedModelId,
+		harness: model.harness,
+		modelId: model.listedModelId,
 		prompt: brief,
 		placement: placement === "fork" ? "fresh" : "shared",
 		access: placement === "fork" ? "read_write" : "read_only",
@@ -373,12 +405,51 @@ async function spawnSubagent(
 				createNew: false,
 			},
 			childId,
+			model.reasoning ? { reasoning: model.reasoning } : undefined,
 		);
 	} catch (cause) {
 		await deps.markFailed(childId).catch(() => {});
 		throw cause;
 	}
-	return { childId, budget, placement };
+	return { childId, budget, placement, model, notice };
+}
+
+/**
+ * The child's model: its role's entry in roleModels when the user can use
+ * that route (an API child under a Codex builder and the reverse are both
+ * fine), else the parent's, with a notice when an entry was set but unusable.
+ */
+async function childModel(
+	context: SubagentToolContext,
+	deps: SubagentToolDeps,
+	role: ModelRole,
+	parentModel: string,
+): Promise<{ model: ResolvedChildModel; notice?: string }> {
+	const inherited: ResolvedChildModel = {
+		harness: context.parent.harness,
+		listedModelId: parentModel,
+		label: parentModel,
+	};
+	if (!roleModelFor(context.roleModels, role)) return { model: inherited };
+	let connections: readonly FailoverConnection[];
+	try {
+		connections = await deps.routes(context.parent.userId);
+	} catch {
+		return {
+			model: inherited,
+			notice: `Could not list this account's model routes; this ${role} runs on the parent's model ${parentModel}.`,
+		};
+	}
+	const resolved = resolveRoleModel({
+		role,
+		roleModels: context.roleModels,
+		connections,
+		parentModel,
+	});
+	if (resolved.kind === "inherit") return { model: inherited };
+	if (resolved.kind === "fallback")
+		return { model: inherited, notice: resolved.notice };
+	return { model: resolved.model, notice: resolved.notice };
 }
 
 /**
@@ -390,6 +461,8 @@ export async function startRuntimeSubagent(
 	context: SubagentToolContext,
 	input: {
 		readonly role: "checker" | "reviewer";
+		/** The roleModels entry to use; the role's own by default (the tiebreak judge passes "judge"). */
+		readonly modelRole?: ModelRole;
 		readonly title: string;
 		readonly brief: string;
 		readonly cap?: Partial<SubagentBudget>;
@@ -397,25 +470,37 @@ export async function startRuntimeSubagent(
 ) {
 	const deps = { ...defaultDeps, ...context.deps };
 	const workspace = await context.workspace();
-	const { childId, budget } = await spawnSubagent(
+	const { childId, budget, model, notice } = await spawnSubagent(
 		context,
 		deps,
 		{
 			role: input.role,
+			modelRole: input.modelRole ?? input.role,
 			title: input.title.slice(0, SUBAGENT_TITLE_MAX),
 			brief: async () => input.brief,
 			cap: input.cap,
 		},
 		workspace,
 	);
-	return { sessionId: childId, budget };
+	return {
+		sessionId: childId,
+		budget,
+		model: {
+			harness: model.harness,
+			modelId: model.listedModelId,
+			...(model.reasoning ? { reasoning: model.reasoning } : {}),
+		},
+		...(notice ? { notice } : {}),
+	};
 }
 
-function publicBudget(budget: SubagentBudget) {
+/** What the agent tool reports: tokens in the child's own model when it is priced differently. */
+function publicBudget(budget: SubagentBudget, childModelId: string) {
+	const weight = budgetTokenWeight(childModelId, budget.priceBasis);
 	return {
 		steps: budget.steps,
 		minutes: budget.minutes,
-		tokens: budget.tokens,
+		tokens: Math.floor(budget.tokens / weight),
 	};
 }
 

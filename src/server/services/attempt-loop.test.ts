@@ -11,6 +11,7 @@ import {
 	attemptReport,
 	baseMessageCount,
 	checkerDirectoryCommand,
+	childBilling,
 	createAttemptLoop,
 	parseSuiteRun,
 	suiteCommand,
@@ -679,5 +680,53 @@ describe("listener scripts", () => {
 			execSync(listenersCommand(listed), { shell: "/bin/bash" }).toString(),
 		);
 		expect(stopped).toEqual([]);
+	});
+});
+
+describe("loop children priced at their own route", () => {
+	const usage = {
+		inputTokens: 1_000_000,
+		outputTokens: 0,
+		uncachedInputTokens: 1_000_000,
+		cacheReadTokens: 0,
+		cacheWriteTokens: 0,
+	};
+	const builder = { kind: "tokens" as const, price: { input: 4, output: 20 } };
+
+	it("bills a checker and judge on their recorded models, else the builder's", () => {
+		expect(childBilling(undefined, builder)).toBe(builder);
+		expect(
+			childBilling({ harness: "codex", modelId: "gpt-6-luna" }, builder),
+		).toMatchObject({ kind: "plan", price: { input: 0.1 } });
+		const state = {
+			candidates: [
+				{
+					n: 1,
+					startedAt: 0,
+					endedAt: 1,
+					builderUsage: usage,
+					checker: {
+						sessionId: "c",
+						startedAt: 0,
+						directory: "/d",
+						usage,
+						model: { harness: "api", modelId: "google/gemini-3.8-flash" },
+					},
+				},
+			],
+			selection: {
+				judge: {
+					sessionId: "j",
+					winner: null,
+					usage,
+					model: { harness: "api", modelId: "openai/gpt-6-luna" },
+				},
+			},
+		} as unknown as AttemptLoopState;
+		const spend = attemptLoopSpend(state, builder);
+		expect(spend.attempts[0].builder.costUsd).toBeCloseTo(4);
+		expect(spend.attempts[0].checker.costUsd).toBeCloseTo(0.75);
+		expect(spend.judge.costUsd).toBeCloseTo(0.1);
+		expect(spend.total.costUsd).toBeCloseTo(4.85);
 	});
 });

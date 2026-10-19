@@ -1,3 +1,11 @@
+import {
+	isModelRole,
+	parseRoleModel,
+	type RoleModels,
+	roleModelsFlags,
+	roleModelsFromUnknown,
+} from "./role-models";
+
 /**
  * Harness variants. DEFAULT_HARNESS_VARIANT is the product's behaviour for
  * everyone; in development, eval users (dev_eval_user) may pick other values
@@ -90,6 +98,13 @@ export const HARNESS_VARIANT_VALUES = {
 type Values = typeof HARNESS_VARIANT_VALUES;
 export type HarnessVariant = {
 	readonly [Key in keyof Values]: Values[Key][number];
+} & {
+	/**
+	 * A model per subagent role (src/domain/role-models.ts): writer,
+	 * researcher, reviewer, checker, judge. Empty (the default): every child
+	 * runs on its parent's model. Flags: `roleModels.<role>=<model>[@<effort>]`.
+	 */
+	readonly roleModels: RoleModels;
 };
 export type MemoryWording = HarnessVariant["memoryWording"];
 export type MemoryWriter = HarnessVariant["memoryWriter"];
@@ -111,6 +126,7 @@ export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	prEvidence: "off",
 	attempts: "1",
 	review: "off",
+	roleModels: {},
 };
 
 /**
@@ -138,7 +154,9 @@ export function harnessVariantFromUnknown(value: unknown): HarnessVariant {
 	const variant: Record<string, unknown> = { ...DEFAULT_HARNESS_VARIANT };
 	if (value && typeof value === "object" && !Array.isArray(value))
 		for (const [key, entry] of Object.entries(value))
-			if (isKey(key) && validValue(key, entry)) variant[key] = entry;
+			if (key === "roleModels")
+				variant.roleModels = roleModelsFromUnknown(entry);
+			else if (isKey(key) && validValue(key, entry)) variant[key] = entry;
 	return variant as HarnessVariant;
 }
 
@@ -150,6 +168,18 @@ export function harnessVariantFromFlags(
 	for (const flag of flags)
 		for (const pair of flag.split(",")) {
 			const [key, value, ...rest] = pair.split("=").map((part) => part.trim());
+			const role = /^roleModels\.(.+)$/.exec(key ?? "")?.[1];
+			if (role !== undefined && value !== undefined && !rest.length) {
+				if (!isModelRole(role))
+					throw new Error(
+						`--variant roleModels.<role> takes a role in writer, researcher, reviewer, checker, judge; got "${role}".`,
+					);
+				variant.roleModels = {
+					...(variant.roleModels as RoleModels),
+					[role]: parseRoleModel(value),
+				};
+				continue;
+			}
 			if (!key || value === undefined || rest.length || !isKey(key))
 				throw new Error(
 					`--variant expects key=value with key in ${Object.keys(HARNESS_VARIANT_VALUES).join(", ")}; got "${pair}".`,
@@ -168,16 +198,20 @@ export function harnessVariantChanges(
 	variant: HarnessVariant,
 ): Partial<HarnessVariant> {
 	return Object.fromEntries(
-		Object.entries(variant).filter(
-			([key, value]) =>
-				DEFAULT_HARNESS_VARIANT[key as keyof HarnessVariant] !== value,
+		Object.entries(variant).filter(([key, value]) =>
+			key === "roleModels"
+				? Object.keys(value ?? {}).length > 0
+				: DEFAULT_HARNESS_VARIANT[key as keyof HarnessVariant] !== value,
 		),
 	) as Partial<HarnessVariant>;
 }
 
 export function harnessVariantLabel(variant: HarnessVariant) {
-	const changes = Object.entries(harnessVariantChanges(variant));
-	return changes.length
-		? changes.map(([key, value]) => `${key}=${value}`).join(",")
-		: "default";
+	const changes = Object.entries(harnessVariantChanges(variant)).flatMap(
+		([key, value]) =>
+			key === "roleModels"
+				? roleModelsFlags(value as RoleModels)
+				: [`${key}=${value}`],
+	);
+	return changes.length ? changes.join(",") : "default";
 }

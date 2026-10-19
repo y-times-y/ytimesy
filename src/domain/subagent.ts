@@ -56,6 +56,13 @@ export type SubagentBudget = {
 	readonly tokens: number;
 	/** Set by agent_send stop: the step count at which the turn stops. */
 	readonly stopAtStep?: number;
+	/**
+	 * The model `tokens` is counted in (the tree's builder model). The child's
+	 * own and its descendants' tokens are weighted by their price relative to
+	 * it (budgetTokenWeight in subagent-usage.ts). Absent on older rows: raw
+	 * tokens.
+	 */
+	readonly priceBasis?: string;
 };
 
 type Level = 1 | 2 | 3;
