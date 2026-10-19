@@ -39,7 +39,10 @@ import {
 	sessionItemsFromUnknown,
 } from "#/domain/session-item";
 import type { SubagentBudget } from "#/domain/subagent";
-import { READER_LINUX_USER } from "#/domain/subagent-reader";
+import {
+	READER_LINUX_USER,
+	readerUserSetupCommand,
+} from "#/domain/subagent-reader";
 import { sessionTokenUsage } from "#/domain/subagent-usage";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 
@@ -234,11 +237,19 @@ export function restoreSnapshotCommand(
  * Creates a runtime checker's directory under ATTEMPT_TESTS_ROOT, owned by
  * the reader user (its only writable place besides its scratch). The root is
  * shared with a benchmark's task container.
+ *
+ * The reader user is created first: on a VM booted from an image older than
+ * the reader user the ownership step failed, and the fallback then failed
+ * too because the root had just been made root-owned 0755 (every review=on
+ * check in hs30b-rvon ended "the checker's directory could not be created").
+ * The root and the turn's directory stay sticky and world-writable like /tmp,
+ * so the fallback works as the builder's user and the container keeps access.
  */
 export function checkerDirectoryCommand(directory: string) {
 	const parent = directory.slice(0, directory.lastIndexOf("/"));
+	const shared = `${quote(ATTEMPT_TESTS_ROOT)} ${quote(parent)}`;
 	return [
-		`sudo -n install -d -m 0755 ${quote(ATTEMPT_TESTS_ROOT)} ${quote(parent)} 2>/dev/null && sudo -n install -d -o ${READER_LINUX_USER} -g ${READER_LINUX_USER} -m 0755 ${quote(directory)} 2>/dev/null`,
+		`{ ${readerUserSetupCommand()} && sudo -n install -d ${shared} && sudo -n chmod 1777 ${shared} && sudo -n install -d -o ${READER_LINUX_USER} -g ${READER_LINUX_USER} -m 0755 ${quote(directory)}; } >/dev/null 2>&1`,
 		`|| { mkdir -p ${quote(directory)} && chmod 0777 ${quote(directory)}; }`,
 	].join(" ");
 }

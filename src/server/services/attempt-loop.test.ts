@@ -3,12 +3,14 @@ import { describe, expect, it, vi } from "vitest";
 import type { AttemptLoopState, AttemptSnapshot } from "#/domain/attempt-loop";
 import { SessionItemId, WorkspaceId } from "#/domain/ids";
 import type { SessionItem } from "#/domain/session-item";
+import { readerUserSetupCommand } from "#/domain/subagent-reader";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 import {
 	type AttemptLoopDeps,
 	attemptLoopSpend,
 	attemptReport,
 	baseMessageCount,
+	checkerDirectoryCommand,
 	createAttemptLoop,
 	parseSuiteRun,
 	suiteCommand,
@@ -497,6 +499,26 @@ describe("the attempt loop", () => {
 });
 
 describe("helpers", () => {
+	it("creates the reader user before handing it the checker's directory", () => {
+		// hs30b-rvon: the VM image predated the reader user, so the ownership
+		// step failed, and the fallback failed on the root it had just made 0755.
+		const command = checkerDirectoryCommand(
+			"/tmp/ytimesy-attempts/turn-1/review-1",
+		);
+		const setup = command.indexOf(readerUserSetupCommand());
+		const owned = command.indexOf("-o ytimesy-reader");
+		expect(setup).toBeGreaterThanOrEqual(0);
+		expect(owned).toBeGreaterThan(setup);
+		// The shared root and the turn's directory stay writable for the fallback.
+		expect(command).toContain(
+			"sudo -n chmod 1777 '/tmp/ytimesy-attempts' '/tmp/ytimesy-attempts/turn-1'",
+		);
+		expect(command).not.toMatch(/-m 0755 '\/tmp\/ytimesy-attempts'/);
+		expect(command).toMatch(
+			/\|\| \{ mkdir -p '\/tmp\/ytimesy-attempts\/turn-1\/review-1' && chmod 0777 /,
+		);
+	});
+
 	it("finds the messages before the first attempt", () => {
 		const messages: ModelMessage[] = [
 			{ role: "user", content: "old" },
