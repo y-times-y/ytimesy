@@ -315,6 +315,30 @@ export async function saveSessionWorkingBranch(
 	return toSession(result.rows[0]);
 }
 
+/**
+ * Gives a root chat that has no branch of its own (one opened before chats
+ * published) its publication branch, during the turn that first pushes. Only
+ * a chat still without a working branch takes it, so a name is never
+ * replaced; the stored row is returned either way.
+ */
+export async function adoptChatPublicationBranch(
+	userId: string,
+	sessionId: string,
+	branch: string,
+	baseBranch: string,
+) {
+	const result = await database().query(
+		`update agent_session set selected_branch=$3, working_branch=$3, base_branch=coalesce(base_branch,$4), updated_at=now()
+		 where user_id=$1 and id=$2 and parent_session_id is null and working_branch is null
+		 returning ${SESSION_COLUMNS}`,
+		[userId, sessionId, branch, baseBranch],
+	);
+	if (result.rows[0]) return toSession(result.rows[0]);
+	const stored = await agentSessionForOwner(userId, sessionId);
+	if (!stored) throw new Error("This chat is no longer available.");
+	return stored;
+}
+
 /** Whether another chat or task in the project already works on or published this branch. */
 export async function projectBranchHeldByOtherSession(
 	userId: string,
@@ -430,7 +454,8 @@ export async function insertAgentSession(input: {
 			input.task?.prompt ?? null,
 			input.task ? "draft" : null,
 			input.task?.placement ?? null,
-			input.task?.access ?? (input.parentSessionId ? null : "read_only"),
+			// Root chats carry no task access: they publish as chats (turnPublicationRole).
+			input.task?.access ?? null,
 			input.task?.execution ?? null,
 			input.task?.dependsOnSessionId ?? null,
 			input.task ? "pending" : null,

@@ -161,6 +161,13 @@ export type ModelSwitchItem = {
 	readonly usageBefore?: ApiTokenUsage;
 };
 
+/** A server note about the turn, such as why its changes were not pushed to GitHub. */
+export type NoticeSessionItem = {
+	readonly kind: "notice";
+	readonly id: SessionItemId;
+	readonly message: string;
+};
+
 export type UnknownSessionItem = {
 	readonly kind: "unknown";
 	readonly id: SessionItemId;
@@ -182,6 +189,7 @@ export type SessionItem =
 	| WebSearchItem
 	| ErrorSessionItem
 	| ModelSwitchItem
+	| NoticeSessionItem
 	| UnknownSessionItem;
 
 export function isTurnRunning(status: SessionTurnStatus): boolean {

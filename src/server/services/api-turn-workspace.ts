@@ -124,17 +124,33 @@ export function deferredApiTurnWorkspace(
 		const cwd = (await scoped.readTextFile(vm, PROJECT_CWD_PATH))?.trim();
 		if (!cwd?.startsWith("/"))
 			throw new Error("Prepared repository path is unavailable.");
-		if (
-			bound.session.taskPlacement !== "shared" &&
-			bound.session.taskAccess !== "read_only"
-		)
-			await establishVerificationBaselines({
+		const baselines = () =>
+			establishVerificationBaselines({
 				machines: scoped,
 				vm,
 				cwd,
 				userId: owner.userId,
 				sessionId: owner.id,
 				additionalRepositoryNames,
+			});
+		// A writable child task needs its pinned baseline: completion
+		// verification gates its handoff.
+		if (
+			bound.session.parentSessionId &&
+			bound.session.taskPlacement !== "shared" &&
+			bound.session.taskAccess === "read_write"
+		)
+			await baselines();
+		// A root chat commits and publishes without that gate (turn-commit.ts);
+		// its baseline only scopes lifecycle hooks, so a chat whose checkout was
+		// already edited before baselines existed keeps working without one.
+		else if (!bound.session.parentSessionId)
+			await baselines().catch((error) => {
+				signal.throwIfAborted();
+				console.warn("Chat verification baseline unavailable.", {
+					message:
+						error instanceof Error ? error.message.slice(0, 200) : "unknown",
+				});
 			});
 		return { workspace: { machines: scoped, vm, cwd }, session: bound.session };
 	}

@@ -1342,6 +1342,47 @@ describe("the attempt loop (harness variant attempts=3)", () => {
 		expect(mocks.commit).toHaveBeenCalledOnce();
 	});
 
+	it("commits and pushes nothing for a root turn that ends in plan mode", async () => {
+		finishing();
+		const planning = {
+			...rootTurn,
+			items: [
+				...rootTurn.items,
+				{
+					kind: "dynamicToolCall",
+					id: SessionItemId("enter"),
+					tool: "enter_plan_mode",
+					status: "completed",
+				},
+			],
+		} as ApiTurn;
+		expect(await runApiTurn({} as WorkspaceMachines, planning, durable())).toBe(
+			"completed",
+		);
+		expect(mocks.commit).not.toHaveBeenCalled();
+	});
+
+	it("shows why a root chat's changes were not pushed, and still completes", async () => {
+		finishing();
+		mocks.commit.mockResolvedValueOnce({
+			notice: "Changes are committed in this chat but were not pushed.",
+		});
+		expect(await runApiTurn({} as WorkspaceMachines, rootTurn, durable())).toBe(
+			"completed",
+		);
+		expect(mocks.finalize).toHaveBeenCalledWith(
+			expect.anything(),
+			"completed",
+			expect.arrayContaining([
+				expect.objectContaining({
+					kind: "notice",
+					id: "turn:publication",
+					message: "Changes are committed in this chat but were not pushed.",
+				}),
+			]),
+		);
+	});
+
 	it("review=on hands the checker's findings back to the same run instead of publishing", async () => {
 		mocks.variant.mockReturnValue({
 			...(await import("#/domain/harness-variant")).DEFAULT_HARNESS_VARIANT,

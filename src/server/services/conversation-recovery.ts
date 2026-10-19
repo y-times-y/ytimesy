@@ -131,8 +131,8 @@ export async function recoverConversation(
 			id = randomUUID();
 			// A fork has an independent lazy workspace and fresh task ancestry; it cannot control source children.
 			await client.query(
-				`insert into agent_session(id,user_id,project_id,workspace_id,harness,title,listed_model_id,status,turn_status,task_access,selected_branch)
-        values($1,$2,$3,$4,$5,$6,$7,'starting','idle','read_only',$8)`,
+				`insert into agent_session(id,user_id,project_id,workspace_id,harness,title,listed_model_id,status,turn_status,selected_branch)
+        values($1,$2,$3,$4,$5,$6,$7,'starting','idle',$8)`,
 				[
 					id,
 					userId,

@@ -446,10 +446,10 @@ export async function bindAgentSessionMachine(
 					);
 				}
 			: undefined,
+		// An API root chat whose machine is gone (and has no checkpoint) gets a
+		// fresh copy; its committed turns are on its GitHub branch.
 		replaceMissingReadOnly:
-			input.harness === "api" &&
-			!selectedSession.parentSessionId &&
-			selectedSession.taskAccess === "read_only",
+			input.harness === "api" && !selectedSession.parentSessionId,
 		workspaceId: workspace.id,
 		templateSnapshotId,
 		machineSize: selectedSession.providerRef
