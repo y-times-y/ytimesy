@@ -32,7 +32,7 @@ Generate fresh for production; never reuse development values.
 | Account deletion | Done (2026-10-14): Settings > Account, typed confirmation; deletes VMs, private snapshots, chat storage and the user (migration `20261014050000` fixes the blocking foreign keys). Not exercised on a real account yet. |
 | Email | Done (2026-10-14): verification and reset mail sends from the outbox through the `EMAIL` binding, with retries; sign-up hides email when no sender is configured. Verified on dev into Gmail Primary. |
 | 70% usage alert | Missing. The budget ledger enforces hard limits only. |
-| Backups | No plan recorded. Production is Supabase Free (no PITR); at minimum a scheduled logical dump to R2 and a tested restore. |
+| Backups | Built (2026-10-19), not yet run: daily encrypted `pg_dump` to a private R2 bucket via GitHub Actions (`scripts/backup-production-db.ts`, `.github/workflows/backup-production-db.yml`) and a restore drill into a scratch database (`scripts/restore-db-backup.ts`). **Owner action:** bucket, scoped R2 token, escrowed key and repository secrets; see `docs/database-backups.md`. |
 | Terms / privacy | Drafts at `/terms` and `/privacy`, bannered "Draft for review"; need counsel review. |
 
 ## Live verification on production (behind Access)

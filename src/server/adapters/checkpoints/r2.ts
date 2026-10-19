@@ -5,7 +5,7 @@ import { createHash, createHmac } from "node:crypto";
  * Only node:crypto is used, so the same code runs in Node and in Workers
  * with nodejs_compat.
  */
-type R2Configuration = {
+export type R2Configuration = {
 	accountId: string;
 	accessKeyId: string;
 	secretAccessKey: string;
@@ -159,6 +159,15 @@ export async function r2DeletePrefix(config: R2Configuration, prefix: string) {
 		}
 	}
 	throw new Error("R2 prefix deletion exceeded its bounded batch limit.");
+}
+
+/** Object keys under `prefix`, up to about `wanted` (backups, cleanup). */
+export function r2ListKeys(
+	config: R2Configuration,
+	prefix: string,
+	wanted = 1000,
+) {
+	return listKeys(config, prefix, wanted);
 }
 
 const xmlText = (text: string) =>
