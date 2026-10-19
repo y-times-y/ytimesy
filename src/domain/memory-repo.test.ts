@@ -2,11 +2,16 @@ import type { ModelMessage } from "ai";
 import { describe, expect, it } from "vitest";
 import { isUserRequestMessage } from "./api-conversation";
 import {
+	alwaysApplies,
 	annotateMemoryText,
 	appendMemoryEntry,
 	attachedMemory,
 	chatIdFromSource,
+	dreamReviewSection,
+	droppedDetails,
 	EMPTY_MEMORY,
+	isNewFileRequest,
+	likelySupersededPairs,
 	memoryEntryPart,
 	memoryLines,
 	memoryLinks,
@@ -17,6 +22,7 @@ import {
 	parseSaveHookAnswer,
 	renderDreamInbox,
 	selectMemoryMatches,
+	supersedesLine,
 	withMemoryParts,
 	withoutExpired,
 } from "./memory-repo";
@@ -245,6 +251,178 @@ describe("superseded entries", () => {
 				project: null,
 			}).map((entry) => entry.text),
 		).toEqual(["Use pnpm"]);
+	});
+});
+
+describe("rules a request must follow without naming them", () => {
+	const files = {
+		"style.md": [
+			'- New source files start with the line "# Copyright (c) Acme Corp" [added: 2026-01-12]',
+			'- License headers: replaced the copyright line with "# SPDX-License-Identifier: Apache-2.0" as the first line of new source files [added: 2026-05-30]',
+			"- New JSON files use 4-space indentation [added: 2026-10-18]",
+			"- Max line length is 100 [added: 2026-01-30]",
+		].join("\n"),
+		"tooling.md": [
+			"- CLI scripts live in scripts/ and use argparse [added: 2026-02-06]",
+			"- Renamed scripts/ to tools/: new CLI scripts go in tools/ [added: 2026-10-18]",
+			"- Run the linter before committing [scope: always; added: 2026-03-01]",
+		].join("\n"),
+		"api.md": "- Routes live under /api/v2 [added: 2026-03-06]",
+	};
+	const lines = memoryLines(files);
+	const byText = (part: string) =>
+		lines.find((entry) => entry.text.includes(part)) as (typeof lines)[number];
+	const select = (query: string, scores: Map<(typeof lines)[number], number>) =>
+		selectMemoryMatches({
+			lines,
+			scores,
+			alreadyShown: () => false,
+			today: "2026-10-18",
+			project: null,
+			query,
+		}).map((entry) => entry.text.slice(0, 20));
+
+	it("tells a new file from an edit", () => {
+		expect(isNewFileRequest("Add util/slug.py with slugify(text)")).toBe(true);
+		expect(isNewFileRequest("Add a command-line script that prints 3")).toBe(
+			true,
+		);
+		expect(isNewFileRequest("Add GET /users/<id> to routes.py")).toBe(false);
+		expect(isNewFileRequest("Add event_to_json(event) in events.py")).toBe(
+			false,
+		);
+		expect(
+			alwaysApplies(byText("New JSON"), "Add config/limits.json with x"),
+		).toBe(true);
+		expect(alwaysApplies(byText("New JSON"), "Add util/text.py with x")).toBe(
+			false,
+		);
+		expect(alwaysApplies(byText("Run the linter"), "Fix the bug")).toBe(true);
+	});
+
+	it("adds them without a similarity match, newest version only", () => {
+		// Nothing scores: only the always-applicable rules ride along.
+		expect(select("Add util/slug.py with slugify(text)", new Map())).toEqual([
+			"License headers: rep",
+			"Run the linter befor",
+		]);
+		expect(select("Fix the flaky test in orders", new Map())).toEqual([
+			"Run the linter befor",
+		]);
+	});
+
+	it("keeps one convention line just below the cut, and swaps an old decision for its change", () => {
+		const scores = new Map([
+			[byText("Routes live"), 0.6],
+			[byText("CLI scripts live"), 0.5],
+			[byText("Renamed scripts/"), 0.46],
+		]);
+		// The old scripts/ rule is shown as the line that changed it, once.
+		expect(select("Fix the bug", scores)).toEqual([
+			"Routes live under /a",
+			"Renamed scripts/ to ",
+			"Run the linter befor",
+		]);
+		// Past the top eight, a convention line still gets one extra slot.
+		const crowded = memoryLines({
+			"misc.md": Array.from(
+				{ length: 8 },
+				(_, index) => `- Rule ${index} [added: 2026-01-0${index + 1}]`,
+			).join("\n"),
+			"tooling.md": "- New CLI scripts go in tools/\n- Old CLI scripts stay\n",
+		});
+		const crowdedScores = (convention: number) =>
+			new Map(
+				crowded.map((entry) => [
+					entry,
+					entry.text.startsWith("Rule") ? 0.7 : convention,
+				]),
+			);
+		const pick = (convention: number) =>
+			selectMemoryMatches({
+				lines: crowded,
+				scores: crowdedScores(convention),
+				alreadyShown: () => false,
+				today: "2026-10-18",
+				project: null,
+			}).map((entry) => entry.text);
+		expect(pick(0.5)).toHaveLength(9);
+		expect(pick(0.5)).toContain("New CLI scripts go in tools/");
+		expect(pick(0.4)).toHaveLength(8);
+		expect(
+			supersedesLine(byText("Renamed scripts/"), byText("CLI scripts live")),
+		).toBe(true);
+		expect(
+			supersedesLine(byText("License headers"), byText("New source files")),
+		).toBe(true);
+		expect(
+			supersedesLine(byText("New source files"), byText("License headers")),
+		).toBe(false);
+		expect(likelySupersededPairs(files)).toEqual([
+			"style.md:1 -> style.md:2",
+			"tooling.md:1 -> tooling.md:2",
+		]);
+		expect(dreamReviewSection(files)).toContain("style.md:1 -> style.md:2");
+	});
+
+	it("never retires an exception that names the rule it narrows", () => {
+		const tooling = memoryLines({
+			"tooling.md": [
+				"- Switched the repo from npm to pnpm; use pnpm for installs [added: 2026-05-12]",
+				"- pnpm everywhere, except legacy/, which still uses npm [added: 2026-07-02]",
+			].join("\n"),
+		});
+		expect(supersedesLine(tooling[1], tooling[0])).toBe(false);
+	});
+});
+
+describe("a replacement that loses details", () => {
+	it("keeps the old shape when only one part of it changed", () => {
+		const shape =
+			'API errors now return {"error": {"code": "<snake_case_code>", "message": "<text>"}} with the HTTP status';
+		expect(
+			droppedDetails(
+				shape,
+				'API error codes must be UPPER_SNAKE_CASE from now on (e.g. "ITEMS_REQUIRED")',
+				"Make POST /orders return 400 without items. Error codes are UPPER_SNAKE_CASE from now on, like ITEMS_REQUIRED.",
+			),
+		).toEqual([
+			'{"error": {"code": "<snake_case_code>", "message": "<text>"}}',
+		]);
+		// The whole shape restated, or a user who asked to drop it: nothing lost.
+		expect(
+			droppedDetails(
+				shape,
+				'API errors return {"error": {"code": "<UPPER_SNAKE_CODE>", "message": "<text>"}}',
+				"codes are upper case now",
+			),
+		).toEqual([]);
+		expect(
+			droppedDetails(
+				shape,
+				"API errors are plain strings",
+				"Drop the error envelope; return plain strings instead",
+			),
+		).toEqual([]);
+		expect(
+			droppedDetails("Use npm for installs", "Use pnpm", "pnpm now"),
+		).toEqual([]);
+	});
+
+	it("reads the always scope from the save hook's answer", () => {
+		expect(
+			parseSaveHookAnswer(
+				'{"entries":[{"file":"style.md","text":"Every new file starts with an SPDX line","scope":"always"},{"file":"x.md","text":"Other","scope":"sometimes"}]}',
+			),
+		).toEqual([
+			{
+				file: "style.md",
+				text: "Every new file starts with an SPDX line",
+				project: "",
+				scope: "always",
+			},
+			{ file: "x.md", text: "Other", project: "" },
+		]);
 	});
 });
 
