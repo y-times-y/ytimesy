@@ -128,3 +128,37 @@ export async function projectCleanupTargets(userId: string, projectId: string) {
 		sessionIds: row?.session_ids ?? [],
 	};
 }
+
+/**
+ * Retained-recovery VMs and snapshots of the chats being deleted (a chat and
+ * its subagents), collected before their rows cascade away. A VM or snapshot
+ * that anything outside these chats still references is left alone.
+ */
+export async function chatCleanupTargets(
+	userId: string,
+	sessionIds: readonly string[],
+) {
+	const result = await database().query<{
+		vm_ids: string[] | null;
+		snapshot_ids: string[] | null;
+	}>(
+		`with retained as (select vm_id,snapshot_id from workspace_retention where user_id=$1 and session_id=any($2::uuid[]))
+		select
+			(select array_agg(distinct r.vm_id order by r.vm_id) from retained r
+				where r.vm_id<>''
+				and not exists (select 1 from agent_session a where a.provider_ref=r.vm_id and not a.id=any($2::uuid[]))
+				and not exists (select 1 from workspace w where w.provider_ref=r.vm_id)
+				and not exists (select 1 from environment_build b where b.provider_ref=r.vm_id)
+			) as vm_ids,
+			(select array_agg(distinct r.snapshot_id order by r.snapshot_id) from retained r
+				where r.snapshot_id is not null and r.snapshot_id<>''
+				and not exists (select 1 from workspace_retention o where o.snapshot_id=r.snapshot_id and not o.session_id=any($2::uuid[]))
+				and not exists (select 1 from workspace w where w.template_snapshot_id=r.snapshot_id)
+				and not exists (select 1 from environment_build b where b.snapshot_id=r.snapshot_id)
+				and not exists (select 1 from product_setting p where trim(p.value)=r.snapshot_id)
+			) as snapshot_ids`,
+		[userId, sessionIds],
+	);
+	const row = result.rows[0];
+	return { vmIds: row?.vm_ids ?? [], snapshotIds: row?.snapshot_ids ?? [] };
+}

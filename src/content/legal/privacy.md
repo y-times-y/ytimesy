@@ -196,10 +196,12 @@ service, or as part of a merger or acquisition (with notice to you).
 
 ## 7. Deleting your data
 
-- **Chats**: deleting a chat removes its messages, saved checkpoints and
-  workspace. [See required changes: attachments and retained snapshots.]
-- **Projects**: deleting a project removes its chats, workspaces and pull
-  request evidence. Your GitHub repositories are not touched.
+- **Chats**: deleting a chat removes its messages, saved checkpoints,
+  attachments, workspace and saved workspace snapshots, and those of its
+  subagent chats.
+- **Projects**: deleting a project removes its chats (with the above),
+  workspaces, environment snapshots and pull request evidence. Your GitHub
+  repositories are not touched.
 - **Memory**: "Clear memory" deletes your memory repository.
 - **Account**: Settings, Delete account. This immediately deletes your
   account, chats, attachments, checkpoints, pull request evidence, workspaces

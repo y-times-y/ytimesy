@@ -30,6 +30,22 @@ vi.mock("../src/server/adapters/database", () => ({
 		connect: async () => ({ query, release() {} }),
 	}),
 }));
+const storage = vi.hoisted(() => ({
+	configured: false,
+	removed: [] as string[],
+}));
+vi.mock(
+	"../src/server/adapters/checkpoints/storage",
+	async (importOriginal) => ({
+		...(await importOriginal<
+			typeof import("../src/server/adapters/checkpoints/storage")
+		>()),
+		checkpointStorageConfigured: () => storage.configured,
+		removeChatObjects: async (_userId: string, sessionId: string) => {
+			storage.removed.push(sessionId);
+		},
+	}),
+);
 vi.mock("../src/server/config", () => ({
 	serverConfig: () => ({
 		APP_URL: "[REDACTED]",
@@ -61,6 +77,7 @@ beforeAll(async () => {
 		"20260927220000_agent_competitions.sql",
 		"20260930220000_chat_branches.sql",
 		"20261018010000_builder_subagents.sql",
+		"20261003022000_workspace_retention.sql",
 	])
 		await db.exec(await readFile(`supabase/migrations/${file}`, "utf8"));
 	// The harness constraint from 20260927203000_api_turns (this schema builds api_turn itself).
@@ -252,6 +269,7 @@ it("destroys agent copies and side-chat copies, never the template VM", async ()
 			destroy: async (workspaceId) => {
 				destroyed.push(workspaceId);
 			},
+			destroySnapshot: async () => {},
 		},
 		{ userId: "alice", projectId: project.id, sessionId: parent.id },
 	);
@@ -266,6 +284,75 @@ it("destroys agent copies and side-chat copies, never the template VM", async ()
 		[workspaceId],
 	);
 	expect(template.rows[0]?.provider_ref).toBe("vm-template");
+});
+
+it("deletes every stored file and the retained snapshots only the deleted chats used", async () => {
+	const { project, workspaceId } = await readyWorkspace();
+	const parent = await insertAgentSession({
+		userId: "alice",
+		projectId: project.id,
+		workspaceId,
+		harness: "api",
+		providerRef: "vm-chat",
+	});
+	const child = await insertAgentSession({
+		userId: "alice",
+		projectId: project.id,
+		workspaceId,
+		harness: "api",
+		providerRef: null,
+		parentSessionId: parent.id,
+	});
+	const sibling = await insertAgentSession({
+		userId: "alice",
+		projectId: project.id,
+		workspaceId,
+		harness: "api",
+		providerRef: "vm-sibling",
+	});
+	// The child was retained (its VM is gone); its snapshot is the parent's too,
+	// and the sibling shares another snapshot that must survive.
+	await db.query(
+		`insert into workspace_retention(session_id,user_id,vm_id,slug,resources,snapshot_id,phase,expires_at,verified_at) values
+		 ($1,'alice','vm-chat','slug-parent','{}','snap-chat','active',null,null),
+		 ($2,'alice','vm-child-retained','slug-child','{}','snap-child','retained',now()+interval '90 days',now()),
+		 ($3,'alice','vm-sibling','slug-sibling','{}','snap-shared','retained',now()+interval '90 days',now())`,
+		[parent.id, child.id, sibling.id],
+	);
+	await db.query(
+		"update workspace_retention set snapshot_id='snap-shared' where session_id=$1",
+		[parent.id],
+	);
+	storage.configured = true;
+	storage.removed.length = 0;
+	const destroyed: string[] = [];
+	const snapshots: string[] = [];
+	try {
+		await deleteAgentSessionMachine(
+			{
+				destroy: async (id) => {
+					destroyed.push(id);
+				},
+				destroySnapshot: async (id) => {
+					snapshots.push(id);
+				},
+			},
+			{ userId: "alice", projectId: project.id, sessionId: parent.id },
+		);
+	} finally {
+		storage.configured = false;
+	}
+	expect(storage.removed.sort()).toEqual([parent.id, child.id].sort());
+	expect(destroyed.sort()).toEqual(["vm-chat", "vm-child-retained"]);
+	expect(snapshots).toEqual(["snap-child"]);
+	expect(
+		(
+			await db.query(
+				"select session_id from workspace_retention where session_id in ($1,$2)",
+				[parent.id, child.id],
+			)
+		).rows,
+	).toEqual([]);
 });
 
 it("drops a leftover template-bound session row without deleting the template VM", async () => {
@@ -283,6 +370,7 @@ it("drops a leftover template-bound session row without deleting the template VM
 			destroy: async (workspaceId) => {
 				destroyed.push(workspaceId);
 			},
+			destroySnapshot: async () => {},
 		},
 		{ userId: "alice", projectId: project.id, sessionId: session.id },
 	);
@@ -326,6 +414,7 @@ it("deletes a shared child session without destroying its parent's machine", asy
 			destroy: async (workspaceId) => {
 				destroyed.push(workspaceId);
 			},
+			destroySnapshot: async () => {},
 		},
 		{ userId: "alice", projectId: project.id, sessionId: child.id },
 	);
@@ -350,6 +439,9 @@ it("does not let another user delete a session", async () => {
 			{
 				destroy: async () => {
 					throw new Error("destroy must not run");
+				},
+				destroySnapshot: async () => {
+					throw new Error("destroySnapshot must not run");
 				},
 			},
 			{ userId: "bob", projectId: project.id, sessionId: session.id },
