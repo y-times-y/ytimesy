@@ -26,7 +26,23 @@ function infrastructureUsageLimits(): BudgetLimits {
 	};
 }
 
-type UsageSummary = { consumed: string; reserved: string };
+type BalanceRow = { allowance: string; consumed: string; reserved: string };
+
+/** A user's allowance and spend as columns, parameters $1 user, $2 period, $3 default allowance. */
+const BALANCE_COLUMNS = `coalesce((select monthly_micro_usd from infrastructure_usage_policy where user_id=$1),$3::bigint)
+ +coalesce((select sum(amount_micro_usd) from infrastructure_usage_adjustment where user_id=$1 and period=$2::date and kind='grant'),0) as allowance,
+ u.consumed,u.reserved`;
+const BALANCE_USAGE = `(select coalesce(sum(consumed_micro_usd),0) as consumed,
+ coalesce(sum(reserved_micro_usd) filter(where consumed_micro_usd is null),0) as reserved
+ from infrastructure_usage_reservation where user_id=$1 and (period=$2::date or consumed_micro_usd is null)) u`;
+
+function balanceFrom(row: BalanceRow) {
+	return infrastructureBalance({
+		allowanceMicroUsd: Number(row.allowance),
+		consumedMicroUsd: Number(row.consumed),
+		reservedMicroUsd: Number(row.reserved),
+	});
+}
 
 async function readBalance(
 	client: Pick<PoolClient, "query">,
@@ -34,22 +50,11 @@ async function readBalance(
 	period: string,
 	defaultUserMicroUsd: number,
 ) {
-	const policy = await client.query<{ amount: string }>(
-		`select coalesce((select monthly_micro_usd from infrastructure_usage_policy where user_id=$1),$3::bigint)
-		 +coalesce((select sum(amount_micro_usd) from infrastructure_usage_adjustment where user_id=$1 and period=$2 and kind='grant'),0) as amount`,
+	const result = await client.query<BalanceRow>(
+		`select ${BALANCE_COLUMNS} from ${BALANCE_USAGE}`,
 		[userId, period, defaultUserMicroUsd],
 	);
-	const usage = await client.query<UsageSummary>(
-		`select coalesce(sum(consumed_micro_usd),0) as consumed,
-		 coalesce(sum(reserved_micro_usd) filter(where consumed_micro_usd is null),0) as reserved
-		 from infrastructure_usage_reservation where user_id=$1 and (period=$2 or consumed_micro_usd is null)`,
-		[userId, period],
-	);
-	return infrastructureBalance({
-		allowanceMicroUsd: Number(policy.rows[0].amount),
-		consumedMicroUsd: Number(usage.rows[0].consumed),
-		reservedMicroUsd: Number(usage.rows[0].reserved),
-	});
+	return balanceFrom(result.rows[0]);
 }
 
 export async function userInfrastructureUsage(
@@ -105,19 +110,34 @@ export async function reserveInfrastructureUsage(
 	const limits = infrastructureUsageLimits();
 	return usageTransaction(async (client) => {
 		let amountToReserve = input.amountMicroUsd;
-		const existing = await client.query<{
-			user_id: string;
-			resource_key: string;
-			reserved_micro_usd: string;
-			consumed_micro_usd: string | null;
-		}>(
-			"select user_id,resource_key,reserved_micro_usd,consumed_micro_usd from infrastructure_usage_reservation where id=$1",
-			[input.id],
+		const period = utcUsageMonth();
+		// Everything the decision needs in one read under the budget lock; the
+		// checks below run in their original order on it.
+		const read = await client.query<
+			BalanceRow & {
+				existing_user_id: string | null;
+				resource_key: string | null;
+				reserved_micro_usd: string | null;
+				consumed_micro_usd: string | null;
+				owner: boolean;
+				fleet: string;
+				lifetime: string;
+			}
+		>(
+			`select e.user_id as existing_user_id,e.resource_key,e.reserved_micro_usd,e.consumed_micro_usd,
+			 exists(select 1 from auth_user where id=$1) as owner,
+			 ${BALANCE_COLUMNS},
+			 (select coalesce(sum(case when consumed_micro_usd is null then reserved_micro_usd else consumed_micro_usd end),0)
+			  from infrastructure_usage_reservation where period=$2::date or consumed_micro_usd is null) as fleet,
+			 (select coalesce(sum(coalesce(consumed_micro_usd,reserved_micro_usd)),0) from infrastructure_usage_reservation) as lifetime
+			 from ${BALANCE_USAGE}
+			 left join infrastructure_usage_reservation e on e.id=$4`,
+			[input.userId, period, limits.defaultUserMicroUsd, input.id],
 		);
-		if (existing.rows[0]) {
-			const row = existing.rows[0];
+		const row = read.rows[0];
+		if (row.existing_user_id !== null) {
 			if (
-				row.user_id !== input.userId ||
+				row.existing_user_id !== input.userId ||
 				row.resource_key !== input.resourceKey ||
 				(mode === "create" &&
 					Number(row.reserved_micro_usd) !== input.amountMicroUsd)
@@ -133,35 +153,14 @@ export async function reserveInfrastructureUsage(
 			if (!amountToReserve) return;
 		} else if (mode === "increase")
 			throw new Error("Infrastructure reservation is unavailable.");
-		const owner = await client.query("select id from auth_user where id=$1", [
-			input.userId,
-		]);
-		if (!owner.rows.length) throw new Error("Usage account is unavailable.");
-		const period = utcUsageMonth();
-		const balance = await readBalance(
-			client,
-			input.userId,
-			period,
-			limits.defaultUserMicroUsd,
-		);
+		if (!row.owner) throw new Error("Usage account is unavailable.");
+		const balance = balanceFrom(row);
 		if (balance.remainingMicroUsd < amountToReserve)
 			throw new Error("Your cloud execution allowance is exhausted.");
 		// Holds survive month boundaries until settled: an old run cannot evade the new fleet cap.
-		const fleet = await client.query<{ amount: string }>(
-			`select coalesce(sum(case when consumed_micro_usd is null then reserved_micro_usd else consumed_micro_usd end),0) as amount
-			 from infrastructure_usage_reservation where period=$1 or consumed_micro_usd is null`,
-			[period],
-		);
-		if (Number(fleet.rows[0].amount) + amountToReserve > limits.fleetMicroUsd)
+		if (Number(row.fleet) + amountToReserve > limits.fleetMicroUsd)
 			throw new Error("The fleet cloud execution budget is exhausted.");
-		const lifetime = await client.query<{ amount: string }>(
-			`select coalesce(sum(coalesce(consumed_micro_usd,reserved_micro_usd)),0) as amount
-			 from infrastructure_usage_reservation`,
-		);
-		if (
-			Number(lifetime.rows[0].amount) + amountToReserve >
-			limits.lifetimeFleetMicroUsd
-		)
+		if (Number(row.lifetime) + amountToReserve > limits.lifetimeFleetMicroUsd)
 			throw new Error(
 				"The lifetime fleet cloud execution budget is exhausted.",
 			);
@@ -190,27 +189,26 @@ export async function settleInfrastructureUsage(
 ) {
 	validUsageAmount(input.consumedMicroUsd);
 	await usageTransaction(async (client) => {
+		// Reads the hold and settles it in one statement; the update only
+		// applies where the checks below pass, and any refusal rolls back.
 		const result = await client.query<{
 			reserved_micro_usd: string;
 			consumed_micro_usd: string | null;
 		}>(
-			"select reserved_micro_usd,consumed_micro_usd from infrastructure_usage_reservation where id=$1 and user_id=$2",
-			[input.id, input.userId],
+			`with hold as (select reserved_micro_usd,consumed_micro_usd from infrastructure_usage_reservation where id=$1 and user_id=$2),
+			 settled as (update infrastructure_usage_reservation set consumed_micro_usd=$3,settled_at=now()
+			  where id=$1 and user_id=$2 and consumed_micro_usd is null and reserved_micro_usd>=$3 returning 1)
+			 select reserved_micro_usd,consumed_micro_usd from hold`,
+			[input.id, input.userId, input.consumedMicroUsd],
 		);
 		const row = result.rows[0];
 		if (!row || input.consumedMicroUsd > Number(row.reserved_micro_usd))
 			throw new Error("Infrastructure settlement exceeds its reservation.");
-		if (row.consumed_micro_usd !== null) {
-			if (Number(row.consumed_micro_usd) !== input.consumedMicroUsd)
-				throw new Error(
-					"Infrastructure settlement changed after confirmation.",
-				);
-			return;
-		}
-		await client.query(
-			"update infrastructure_usage_reservation set consumed_micro_usd=$3,settled_at=now() where id=$1 and user_id=$2",
-			[input.id, input.userId, input.consumedMicroUsd],
-		);
+		if (
+			row.consumed_micro_usd !== null &&
+			Number(row.consumed_micro_usd) !== input.consumedMicroUsd
+		)
+			throw new Error("Infrastructure settlement changed after confirmation.");
 	}, existingClient);
 }
 
