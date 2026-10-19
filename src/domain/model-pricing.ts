@@ -30,7 +30,18 @@ export const KNOWN_MODEL_PRICES: Readonly<Record<string, ModelPrice>> = {
 	},
 	"google/gemini-3.8-flash": { input: 0.6, output: 3.5, cacheRead: 0.15 },
 	"deepseek/deepseek-v4.1-flash": { input: 0.4, output: 1.6, cacheRead: 0.04 },
-	"openai/gpt-6.1-sol": { input: 2.5, output: 10, cacheRead: 0.25 },
+	// OpenAI Standard tier, developers.openai.com/api/docs/pricing, read
+	// 2026-10-18 (verified). These are the short-context rates (requests up to
+	// 272K input tokens). Above 272K the page lists $4.00 input / $0.20 cached
+	// / $5.00 cache write / $15.00 output. This table has no context tiers and
+	// usage is summed per turn (the size of each request is lost), so a
+	// long-context request is estimated at the short-context rate: a lower bound.
+	"openai/gpt-6.1-sol": {
+		input: 2,
+		output: 10,
+		cacheRead: 0.1,
+		cacheWrite: 2.5,
+	},
 };
 
 /**
