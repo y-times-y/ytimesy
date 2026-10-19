@@ -81,6 +81,12 @@ export type EvalUser = {
 	setMemory(mode: MemoryMode, repo?: string | null): Promise<void>;
 	/** Records a VM so a crashed run's --cleanup can delete it. */
 	trackVm(vmId: string): Promise<void>;
+	/**
+	 * Hands the user to a detached run that outlives this process: signals and
+	 * crashes here no longer delete it, and --cleanup leaves it alone until
+	 * `until` (epoch ms). releaseEvalUser deletes it later.
+	 */
+	detach(until: number): Promise<void>;
 	/** Deletes everything this run created; returns what could not be removed. */
 	release(): Promise<string[]>;
 };
@@ -95,7 +101,15 @@ type Manifest = {
 	vms: string[];
 	memoryRepos: string[];
 	asOwner?: boolean;
+	/** A detached run owns the user until then (epoch ms): --cleanup skips it. */
+	detachedUntil?: number;
 };
+
+/** A detached run still owns this user (its process is gone on purpose). */
+export const detachedHold = (
+	manifest: { detachedUntil?: number },
+	now: number,
+) => typeof manifest.detachedUntil === "number" && manifest.detachedUntil > now;
 
 export async function assertDevelopmentDatabase() {
 	if (
@@ -473,6 +487,9 @@ export async function createEvalUser(options: {
 				throw new Error("Memory settings need an eval user, not --as-owner.");
 			},
 			trackVm: async () => {},
+			detach: async () => {
+				throw new Error("Detached runs need an eval user, not --as-owner.");
+			},
 			release: async () => [],
 		};
 	}
@@ -520,6 +537,11 @@ export async function createEvalUser(options: {
 			manifest.vms.push(vmId);
 			await writeManifest(manifest);
 		},
+		async detach(until) {
+			manifest.detachedUntil = until;
+			await writeManifest(manifest);
+			live.delete(userId);
+		},
 		release() {
 			released ??= releaseUser(manifest).finally(() => live.delete(userId));
 			return released;
@@ -565,6 +587,36 @@ export async function createEvalUser(options: {
 	return user;
 }
 
+/**
+ * Deletes a detached run's eval user (its manifest names its VMs and repos).
+ * Idempotent: a user already removed has no manifest and no rows.
+ */
+export async function releaseEvalUser(userId: string): Promise<string[]> {
+	if (!/^eval-[0-9a-f]{12}$/.test(userId))
+		throw new Error(`${userId} is not an eval user id.`);
+	const manifest = await readFile(manifestPath(userId), "utf8")
+		.then((text) => JSON.parse(text) as Manifest)
+		.catch(() => null);
+	if (manifest) return releaseUser(manifest);
+	const row = (
+		await database().query<{ owner_user_id: string; created_at: Date }>(
+			"select owner_user_id,created_at from dev_eval_user where user_id=$1",
+			[userId],
+		)
+	).rows[0];
+	if (!row) return [];
+	return releaseUser({
+		userId,
+		ownerId: row.owner_user_id,
+		label: "detached",
+		pid: 0,
+		host: "",
+		createdAt: new Date(row.created_at).toISOString(),
+		vms: [],
+		memoryRepos: [],
+	});
+}
+
 // ---------------------------------------------------------------------------
 // Cross-process rate-limit slots: at most `limit` holders of `name` across
 // every eval process on this machine (e.g. OpenRouter's 20 rpm free tier).
@@ -578,6 +630,80 @@ function alive(pid: number) {
 	} catch (error) {
 		return (error as NodeJS.ErrnoException).code === "EPERM";
 	}
+}
+
+/**
+ * Whether a slot file's holder is gone: a process that died, or a detached
+ * run whose expiry passed ("detached:<expiresAt>:<label>").
+ */
+export function slotHolderGone(
+	content: string,
+	now: number,
+	isAlive: (pid: number) => boolean = alive,
+	ownPid = process.pid,
+) {
+	if (content.startsWith("detached:"))
+		return !(Number(content.split(":")[1]) > now);
+	const owner = Number(content.split(":")[0]);
+	return Boolean(owner) && owner !== ownPid && !isAlive(owner);
+}
+
+export type DetachedSlot = { path: string; token: string };
+
+/**
+ * Takes a free slot for a detached run without waiting: the slot outlives
+ * this process and frees itself at `expiresAt` (epoch ms) unless released
+ * first. Null when every slot is held.
+ */
+export async function tryDetachedSlot(
+	name: string,
+	limit: number,
+	label: string,
+	expiresAt: number,
+): Promise<DetachedSlot | null> {
+	await mkdir(SLOTS, { recursive: true });
+	const token = `detached:${Math.round(expiresAt)}:${label.replaceAll(":", "_")}:${randomUUID()}`;
+	for (let index = 0; index < limit; index++) {
+		const path = join(SLOTS, `${name}.${index}`);
+		for (let tries = 0; tries < 2; tries++) {
+			try {
+				const handle = await open(path, "wx");
+				await handle.writeFile(token);
+				await handle.close();
+				return { path, token };
+			} catch {
+				if (
+					slotHolderGone(
+						await readFile(path, "utf8").catch(() => ""),
+						Date.now(),
+					)
+				)
+					await rm(path, { force: true });
+				else break;
+			}
+		}
+	}
+	return null;
+}
+
+/** Frees a detached run's slot if it still holds it (idempotent). */
+export async function releaseDetachedSlot(slot: DetachedSlot) {
+	if ((await readFile(slot.path, "utf8").catch(() => "")) === slot.token)
+		await rm(slot.path, { force: true });
+}
+
+/** Detached slots of `name` held now, by label. */
+export async function detachedSlotHolders(name: string, limit: number) {
+	const holders: string[] = [];
+	for (let index = 0; index < limit; index++) {
+		const content = await readFile(
+			join(SLOTS, `${name}.${index}`),
+			"utf8",
+		).catch(() => "");
+		if (content.startsWith("detached:") && !slotHolderGone(content, Date.now()))
+			holders.push(content.split(":")[2] ?? "");
+	}
+	return holders;
 }
 
 export async function withSlot<T>(
@@ -599,11 +725,13 @@ export async function withSlot<T>(
 				await handle.close();
 				held = path;
 			} catch {
-				// A slot whose holder died is free again.
-				const owner = Number(
-					(await readFile(path, "utf8").catch(() => "")).split(":")[0],
-				);
-				if (owner && owner !== process.pid && !alive(owner))
+				// A slot whose holder died (or whose detached run expired) is free again.
+				if (
+					slotHolderGone(
+						await readFile(path, "utf8").catch(() => ""),
+						Date.now(),
+					)
+				)
 					await rm(path, { force: true });
 			}
 		}
@@ -685,6 +813,10 @@ async function cli() {
 		if (!manifest) throw new Error(`No local manifest for ${values.user}.`);
 		if (manifest.host === hostname() && alive(manifest.pid))
 			throw new Error(`${values.user}: its run (pid ${manifest.pid}) is live.`);
+		if (detachedHold(manifest, Date.now()))
+			console.warn(
+				`${values.user}: a detached run holds it until ${new Date(manifest.detachedUntil as number).toISOString()}; removing as asked.`,
+			);
 		const leftovers = await releaseUser(manifest);
 		console.log(
 			`${manifest.userId} (${manifest.label}): ${leftovers.length ? `left ${leftovers.join(", ")}` : "removed"}`,
@@ -697,6 +829,12 @@ async function cli() {
 	let failed = 0;
 	for (const manifest of manifests) {
 		handled.add(manifest.userId);
+		if (detachedHold(manifest, Date.now())) {
+			console.log(
+				`skip ${manifest.userId}: a detached run holds it until ${new Date(manifest.detachedUntil as number).toISOString()} (its --collect releases it)`,
+			);
+			continue;
+		}
 		if (manifest.host === hostname() && alive(manifest.pid)) {
 			console.log(
 				`skip ${manifest.userId}: its run (pid ${manifest.pid}) is live`,
