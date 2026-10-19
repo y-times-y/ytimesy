@@ -12,7 +12,7 @@ import type { SubagentTaskView } from "#/domain/subagent-tree";
 import { formatSpend, totalSpend } from "#/domain/subagent-usage";
 
 const statusLabels: Record<AgentTaskStatus, string> = {
-	draft: "Planned",
+	draft: "Starting",
 	working: "Working",
 	waiting: "Waiting",
 	idle: "Idle",
@@ -63,7 +63,7 @@ export function TaskPanel({ tasks }: { tasks: readonly PanelTask[] }) {
 			</header>
 			{tasks.length === 0 ? (
 				<p className="task-empty">
-					Delegated work will appear here when the agent creates tasks.
+					Subagents appear here when the agent starts them.
 				</p>
 			) : (
 				<ol className="task-list">
@@ -104,7 +104,7 @@ export function TaskPanel({ tasks }: { tasks: readonly PanelTask[] }) {
 								<div>
 									<span className="task-label">{task.label}</span>
 									<strong>
-										{task.status === "done" ? <s>{task.title}</s> : task.title}
+										{task.title}
 									</strong>
 								</div>
 								<small>

@@ -348,13 +348,11 @@ function ChildTaskCard({
 	const busy = task.status === "working" || task.status === "waiting";
 	const status =
 		task.status === "done"
-			? task.reviewState === "pending"
-				? "Awaiting review"
-				: "Completed"
+			? "Completed"
 			: task.status === "failed"
 				? "Failed"
 				: task.status === "draft"
-					? "Planned"
+					? "Starting"
 					: busy
 						? "Working"
 						: "Idle";

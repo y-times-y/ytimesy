@@ -15,12 +15,7 @@ it("shows task hierarchy and statuses without interactive controls", () => {
 		prompt: "Private task prompt",
 		placement: "fresh",
 		access: "read_write",
-		execution: "parallel",
-		dependsOnSessionId: null,
 		summary: null,
-		reviewState: "pending",
-		branch: null,
-		pullRequestUrl: null,
 		harnessId: "codex",
 		listedModelId: "Test model",
 		createdAt: "",
@@ -49,9 +44,9 @@ it("shows task hierarchy and statuses without interactive controls", () => {
 	expect(html).not.toContain("fresh");
 });
 
-it("explains that tasks are agent-created when empty", () => {
+it("explains that subagents appear once started when empty", () => {
 	const html = renderToStaticMarkup(createElement(TaskPanel, { tasks: [] }));
-	expect(html).toContain("when the agent creates tasks");
+	expect(html).toContain("when the agent starts them");
 	expect(html).not.toContain("New task");
 });
 
@@ -75,12 +70,7 @@ it("shows each subagent's role, VM, budget use and spend, and the tree total", (
 		prompt: "Private brief",
 		placement: "fresh",
 		access: "read_write",
-		execution: "parallel",
-		dependsOnSessionId: null,
 		summary: null,
-		reviewState: "pending",
-		branch: null,
-		pullRequestUrl: null,
 		harnessId: "api",
 		listedModelId: "Sonnet",
 		createdAt: "",

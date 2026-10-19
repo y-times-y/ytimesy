@@ -9,18 +9,18 @@ export type AgentTaskStatus =
 	| "done"
 	| "failed";
 
-export function shouldPollAgentTasks(
-	leadStatus: SessionTurnStatus,
+/** Poll a chat's subagents while the chat runs or any subagent is busy. */
+export function shouldPollSubagents(
+	chatStatus: SessionTurnStatus,
 	tasks: readonly Pick<AgentTask, "status">[],
 ): boolean {
 	return (
-		leadStatus === "running" ||
+		chatStatus === "running" ||
 		tasks.some((task) => task.status === "working" || task.status === "waiting")
 	);
 }
 export type AgentTaskPlacement = "shared" | "fresh";
 export type AgentTaskAccess = "read_only" | "read_write";
-export type AgentTaskExecution = "parallel" | "stacked";
 export type AgentTaskReviewState = "pending" | "reviewed" | "rejected";
 
 /**
@@ -47,12 +47,7 @@ export type AgentTask = {
 	readonly prompt: string;
 	readonly placement: AgentTaskPlacement;
 	readonly access: AgentTaskAccess;
-	readonly execution: AgentTaskExecution;
-	readonly dependsOnSessionId: string | null;
 	readonly summary: string | null;
-	readonly reviewState: AgentTaskReviewState;
-	readonly branch: string | null;
-	readonly pullRequestUrl: string | null;
 	readonly harnessId: AgentProviderId;
 	readonly listedModelId: string | null;
 	readonly createdAt: string;
@@ -72,12 +67,7 @@ type TaskSession = {
 	readonly taskState?: AgentTaskStatus | null;
 	readonly taskPlacement?: AgentTaskPlacement | null;
 	readonly taskAccess?: AgentTaskAccess | null;
-	readonly taskExecution?: AgentTaskExecution | null;
-	readonly dependsOnSessionId?: string | null;
 	readonly taskSummary?: string | null;
-	readonly taskReviewState?: AgentTaskReviewState | null;
-	readonly taskBranch?: string | null;
-	readonly taskPullRequestUrl?: string | null;
 };
 
 function taskStatusFromTurn(
@@ -126,12 +116,7 @@ export function agentTaskTree(
 				prompt: session.taskPrompt ?? "",
 				placement: session.taskPlacement ?? "fresh",
 				access: session.taskAccess ?? "read_write",
-				execution: session.taskExecution ?? "parallel",
-				dependsOnSessionId: session.dependsOnSessionId ?? null,
 				summary: session.taskSummary ?? null,
-				reviewState: session.taskReviewState ?? "pending",
-				branch: session.taskBranch ?? null,
-				pullRequestUrl: session.taskPullRequestUrl ?? null,
 				harnessId: session.harness,
 				listedModelId: session.listedModelId,
 				createdAt: session.createdAt,
