@@ -44,6 +44,15 @@ export const ATTEMPT_LOOP_LIMITS = {
 	suiteSeconds: 120,
 } as const;
 
+/** A loop child's model as started (src/domain/role-models.ts), so it is priced at its own route. */
+export type LoopChildModel = {
+	readonly harness: "codex" | "api";
+	readonly modelId: string;
+	readonly reasoning?: string;
+	/** Why the child did not get its role's configured model. */
+	readonly notice?: string;
+};
+
 export const ATTEMPT_TESTS_ROOT = "/tmp/ytimesy-attempts";
 
 /** The checker of attempt `n` writes its tests (and its copy of the checkout) here. */
@@ -416,14 +425,43 @@ export function usageSince(
 ): ApiTokenUsage | null {
 	if (!after) return null;
 	if (!before) return after;
-	const delta = Object.fromEntries(
-		USAGE_FIELDS.map((field) => [
-			field,
-			after[field] === null || before[field] === null
-				? null
-				: Math.max(0, (after[field] ?? 0) - (before[field] ?? 0)),
-		]),
-	) as ApiTokenUsage;
+	const fieldsSince = <
+		T extends Pick<ApiTokenUsage, (typeof USAGE_FIELDS)[number]>,
+	>(
+		later: T,
+		earlier: Partial<T> | undefined,
+	) =>
+		Object.fromEntries(
+			USAGE_FIELDS.map((field) => [
+				field,
+				later[field] === null || earlier?.[field] === null
+					? null
+					: Math.max(0, (later[field] ?? 0) - (earlier?.[field] ?? 0)),
+			]),
+		) as unknown as Pick<ApiTokenUsage, (typeof USAGE_FIELDS)[number]>;
+	let delta: ApiTokenUsage = fieldsSince(after, before);
+	if (after.requests !== undefined)
+		delta = {
+			...delta,
+			requests: Math.max(0, after.requests - (before.requests ?? 0)),
+		};
+	const long = after.longContext;
+	if (long) {
+		const earlier =
+			before.longContext?.aboveInputTokens === long.aboveInputTokens
+				? before.longContext
+				: undefined;
+		const requests = long.requests - (earlier?.requests ?? 0);
+		if (requests > 0)
+			delta = {
+				...delta,
+				longContext: {
+					...fieldsSince(long, earlier),
+					aboveInputTokens: long.aboveInputTokens,
+					requests,
+				},
+			};
+	}
 	if (typeof after.costUsd === "number" && typeof before.costUsd === "number")
 		return { ...delta, costUsd: Math.max(0, after.costUsd - before.costUsd) };
 	return after.costUsd === undefined ? delta : { ...delta, costUsd: null };
@@ -552,6 +590,8 @@ export type AttemptCandidate = {
 		readonly endedAt?: number;
 		readonly directory: string;
 		readonly usage?: ApiTokenUsage | null;
+		/** The checker's own model (roleModels); absent = the builder's. */
+		readonly model?: LoopChildModel;
 	} | null;
 	readonly verdict: CheckerVerdict | null;
 	readonly checkMs?: number;
@@ -569,6 +609,7 @@ export type AttemptSelectionRecord = {
 		readonly sessionId: string;
 		readonly winner: number | null;
 		readonly usage?: ApiTokenUsage | null;
+		readonly model?: LoopChildModel;
 	};
 	readonly explanation: string;
 	readonly notes: readonly string[];

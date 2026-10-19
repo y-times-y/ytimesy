@@ -903,6 +903,7 @@ it("streams text and supplied reasoning, executes a tool, then continues to the 
 				uncachedInputTokens: 3,
 				cacheReadTokens: 0,
 				cacheWriteTokens: 0,
+				requests: 1,
 			},
 		},
 		{
@@ -913,6 +914,7 @@ it("streams text and supplied reasoning, executes a tool, then continues to the 
 				uncachedInputTokens: 6,
 				cacheReadTokens: 0,
 				cacheWriteTokens: 0,
+				requests: 2,
 			},
 		},
 	]);

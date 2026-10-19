@@ -845,6 +845,7 @@ async function runApiTurnAttempt(
 							workspace,
 							signal: abort.signal,
 							waitDeadlineAt: step?.waitDeadlineAt,
+							roleModels: variant.roleModels,
 						}),
 						projectSecrets?.redact ?? [],
 					)
@@ -1321,6 +1322,7 @@ async function runApiTurnAttempt(
 							signal: abort.signal,
 							waitDeadlineAt: step.waitDeadlineAt,
 							items: () => items,
+							roleModels: variant.roleModels,
 						}),
 					})
 				: step && loopEligible && variant.review === "on"
@@ -1339,6 +1341,7 @@ async function runApiTurnAttempt(
 								signal: abort.signal,
 								waitDeadlineAt: step.waitDeadlineAt,
 								items: () => items,
+								roleModels: variant.roleModels,
 							}),
 						})
 					: null;

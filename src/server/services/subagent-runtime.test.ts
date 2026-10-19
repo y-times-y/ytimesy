@@ -112,6 +112,34 @@ describe("subagent step guard", () => {
 			"stopped by the parent",
 		);
 	});
+
+	it("counts a cheaper model's tokens at the builder's price", async () => {
+		const luna = {
+			...session,
+			listedModelId: "gpt-6-luna",
+			agentBudget: { ...budget, priceBasis: "anthropic/claude-opus-5.5" },
+		};
+		const step = (tokens: number) =>
+			guardSubagentStep({
+				session: luna,
+				items: used(tokens),
+				messages,
+				now: NOW,
+				deps: {
+					recordStep: vi.fn(async () => ({
+						steps: 1,
+						budget: luna.agentBudget,
+					})),
+					descendants: vi.fn(async () => []),
+				},
+			});
+		// 3M Luna tokens weigh 0.75M Opus tokens (the 0.25 floor): under budget.
+		expect(await step(3_000_000)).toBe(messages);
+		// 4M weigh the whole 1M budget: the turn stops.
+		await expect(step(4_000_000)).rejects.toBeInstanceOf(
+			SubagentBudgetExhausted,
+		);
+	});
 });
 
 function record(

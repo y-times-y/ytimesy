@@ -1,6 +1,8 @@
 import type { ToolSet } from "ai";
 import { describe, expect, it, vi } from "vitest";
 import { SessionItemId, WorkspaceId } from "#/domain/ids";
+import type { FailoverConnection } from "#/domain/model-failover";
+import type { RoleModels } from "#/domain/role-models";
 import type { SessionItem } from "#/domain/session-item";
 import type { SubagentRole } from "#/domain/subagent";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
@@ -52,6 +54,7 @@ function harness(
 		parent?: Row;
 		ancestors?: Row[];
 		deps?: Partial<SubagentToolDeps>;
+		roleModels?: RoleModels;
 	} = {},
 ) {
 	const sessions: Row[] = options.sessions ?? [
@@ -115,6 +118,7 @@ function harness(
 		saveProviderRef: vi.fn(async () => ({}) as never),
 		mergeFork: vi.fn(async () => {}),
 		start: vi.fn(async () => ({})),
+		routes: vi.fn(async () => []),
 		markFailed: vi.fn(async () => {}),
 		takeReport: vi.fn(async () => null),
 		message: vi.fn(async () => ({}) as never),
@@ -131,6 +135,7 @@ function harness(
 		}),
 		signal: new AbortController().signal,
 		deps,
+		roleModels: options.roleModels,
 	});
 	const call = (name: string, input: unknown) =>
 		tools[name]?.execute?.(
@@ -157,6 +162,7 @@ describe("agent tool", () => {
 			taskId: "child-1",
 			role: "writer",
 			vm: "fork",
+			model: "anthropic/claude-sonnet-5.5",
 			budget: { steps: 150, minutes: 30, tokens: 2_000_000 },
 		});
 		expect(deps.openTask).toHaveBeenCalledWith(
@@ -300,7 +306,12 @@ describe("agent tool", () => {
 		expect(result.budget).toEqual({ steps: 25, minutes: 5, tokens: 1_000_000 });
 		expect(deps.saveSpec).toHaveBeenCalledWith("user", "child-1", {
 			role: "researcher",
-			budget: { steps: 25, minutes: 5, tokens: 1_000_000 },
+			budget: {
+				steps: 25,
+				minutes: 5,
+				tokens: 1_000_000,
+				priceBasis: "anthropic/claude-sonnet-5.5",
+			},
 		});
 	});
 
@@ -408,7 +419,13 @@ describe("runtime-started subagents (the attempt loop)", () => {
 		);
 		expect(started).toEqual({
 			sessionId: "child-1",
-			budget: { steps: 60, minutes: 4, tokens: 800_000 },
+			budget: {
+				steps: 60,
+				minutes: 4,
+				tokens: 800_000,
+				priceBasis: "anthropic/claude-sonnet-5.5",
+			},
+			model: { harness: "api", modelId: "anthropic/claude-sonnet-5.5" },
 		});
 		expect(deps.openTask).toHaveBeenCalledWith(
 			expect.objectContaining({
@@ -419,7 +436,12 @@ describe("runtime-started subagents (the attempt loop)", () => {
 		);
 		expect(deps.saveSpec).toHaveBeenCalledWith("user", "child-1", {
 			role: "checker",
-			budget: { steps: 60, minutes: 4, tokens: 800_000 },
+			budget: {
+				steps: 60,
+				minutes: 4,
+				tokens: 800_000,
+				priceBasis: "anthropic/claude-sonnet-5.5",
+			},
 		});
 		expect(deps.fork).not.toHaveBeenCalled();
 		expect(deps.start).toHaveBeenCalledOnce();
@@ -446,6 +468,126 @@ describe("runtime-started subagents (the attempt loop)", () => {
 			steps: 150,
 			minutes: 30,
 			tokens: 2_000_000,
+			priceBasis: "anthropic/claude-sonnet-5.5",
 		});
+	});
+});
+
+describe("role models", () => {
+	const CONNECTION = "11111111-1111-4111-8111-111111111111";
+	const routes: FailoverConnection[] = [
+		{
+			key: "codex",
+			label: "Codex",
+			kind: "subscription",
+			revision: "",
+			models: [
+				{ id: "gpt-6.1-sol", label: "GPT-6.1 Sol", reasoning: ["low", "high"] },
+				{ id: "gpt-6-luna", label: "GPT-6 Luna", reasoning: ["low", "high"] },
+			],
+		},
+		{
+			key: CONNECTION,
+			label: "OpenRouter",
+			kind: "gateway",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+			revision: "r1",
+			models: [{ id: "google/gemini-3.8-flash", label: "Gemini 3.8 Flash" }],
+		},
+	];
+
+	it("runs a role on its own route and effort, with tokens counted at the builder's price", async () => {
+		const { deps, call } = harness({
+			roleModels: { researcher: { model: "codex:gpt-6-luna", effort: "low" } },
+			deps: { routes: vi.fn(async () => routes) },
+		});
+		const result = await call("agent", {
+			role: "researcher",
+			title: "Find it",
+			brief: "Where is the CLI parsed?",
+		});
+		// An API (Sonnet) builder starts a Codex-plan child.
+		expect(deps.openTask).toHaveBeenCalledWith(
+			expect.objectContaining({ harness: "codex", modelId: "gpt-6-luna" }),
+		);
+		expect(deps.start).toHaveBeenCalledWith(expect.anything(), "child-1", {
+			reasoning: "low",
+		});
+		expect(result.model).toBe("GPT-6 Luna · Codex");
+		// Luna is far cheaper than Sonnet: the 2M builder-token budget is shown
+		// in Luna's tokens at the 4× hard cap.
+		expect(result.budget).toEqual({
+			steps: 150,
+			minutes: 30,
+			tokens: 8_000_000,
+		});
+		expect(result).not.toHaveProperty("modelNotice");
+	});
+
+	it("resolves an API model under any connection for a role", async () => {
+		const { deps, call } = harness({
+			roleModels: { writer: { model: "api:gemini-3.8-flash" } },
+			deps: { routes: vi.fn(async () => routes) },
+		});
+		await call("agent", { role: "writer", title: "w", brief: "b" });
+		expect(deps.openTask).toHaveBeenCalledWith(
+			expect.objectContaining({
+				harness: "api",
+				modelId: `api/${CONNECTION}/google%2Fgemini-3.8-flash`,
+			}),
+		);
+	});
+
+	it("falls back to the parent's model with a notice when the route is unavailable", async () => {
+		const { deps, call } = harness({
+			roleModels: { reviewer: { model: "codex:gpt-6-astra" } },
+			deps: { routes: vi.fn(async () => routes) },
+		});
+		const result = await call("agent", {
+			role: "reviewer",
+			title: "r",
+			brief: "b",
+		});
+		expect(deps.openTask).toHaveBeenCalledWith(
+			expect.objectContaining({
+				harness: "api",
+				modelId: "anthropic/claude-sonnet-5.5",
+			}),
+		);
+		expect(String(result.modelNotice)).toContain(
+			'roleModels.reviewer "codex:gpt-6-astra" is not available',
+		);
+	});
+
+	it("gives the runtime's judge the judge entry, else the reviewer's", async () => {
+		const { deps, exec, parent } = harness({
+			deps: { routes: vi.fn(async () => routes) },
+		});
+		const machines = { exec } as unknown as WorkspaceMachines;
+		const started = await startRuntimeSubagent(
+			{
+				machines,
+				parent,
+				workspace: async () => ({
+					machines,
+					vm: WorkspaceId("vm-root"),
+					cwd: "/w",
+				}),
+				signal: new AbortController().signal,
+				deps,
+				roleModels: { reviewer: { model: "gpt-6-luna" } },
+			},
+			{ role: "reviewer", modelRole: "judge", title: "Judge", brief: "b" },
+		);
+		expect(started.model).toEqual({ harness: "codex", modelId: "gpt-6-luna" });
+		expect(deps.routes).toHaveBeenCalledWith("user");
+	});
+
+	it("never lists routes when no role model is set", async () => {
+		const routesFake = vi.fn(async () => routes);
+		const { call } = harness({ deps: { routes: routesFake } });
+		await call("agent", { role: "researcher", title: "x", brief: "y" });
+		expect(routesFake).not.toHaveBeenCalled();
 	});
 });
