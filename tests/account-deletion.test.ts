@@ -38,6 +38,18 @@ vi.mock("../src/server/adapters/memory-repos", () => ({
 		},
 	}),
 }));
+const analytics = vi.hoisted(() => ({
+	deleted: vi.fn(async (_user: string) => true),
+}));
+vi.mock("../src/server/adapters/analytics-deletion", () => ({
+	deleteAnalyticsPerson: analytics.deleted,
+}));
+const cancelled = vi.hoisted(() => [] as string[]);
+vi.mock("../src/server/services/cancel-server-turn", () => ({
+	cancelServerTurn: async (userId: string, sessionId: string) => {
+		cancelled.push(`${userId}/${sessionId}`);
+	},
+}));
 const realtime = vi.hoisted(() => ({
 	purge: vi.fn(async (_user: string, _session: string) => {}),
 }));
@@ -289,4 +301,21 @@ it("deletes each chat's Durable Object state, and keeps the account when it cann
 	expect(machines.destroy).not.toHaveBeenCalled();
 	await deleteAccount(machines, "alice");
 	expect(realtime.purge).toHaveBeenLastCalledWith("alice", session);
+});
+
+it("cancels running turns before anything is removed and deletes the analytics person", async () => {
+	cancelled.length = 0;
+	const machines = {
+		destroy: vi.fn(async (_id: string) => {}),
+		destroySnapshot: vi.fn(async (_id: string) => {}),
+	};
+	storage.remove.mockImplementationOnce(async () => {
+		expect(cancelled).toEqual([`alice/${session}`]);
+	});
+	await deleteAccount(machines, "alice");
+	expect(cancelled).toEqual([`alice/${session}`]);
+	expect(analytics.deleted).toHaveBeenCalledWith("alice");
+	// An analytics failure is logged as a leftover, never undoes the deletion.
+	analytics.deleted.mockRejectedValueOnce(new Error("PostHog down"));
+	await expect(deleteAccount(machines, "bob")).resolves.toBeUndefined();
 });
