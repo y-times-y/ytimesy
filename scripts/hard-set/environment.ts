@@ -203,8 +203,9 @@ export function taskMessage(
 	task: Pick<TaskEnvironment, "instruction">,
 	workdir: string,
 	subagents: boolean,
+	suffix?: string | null,
 ) {
-	return `${task.instruction}\n\n(Environment: your shell commands run inside the task's container, starting in ${workdir}. File tools reach the task's working directory directly; use the shell for files elsewhere.)${evalWorkSuffix({ where: "environment", done: "task", subagents })}`;
+	return `${task.instruction}\n\n(Environment: your shell commands run inside the task's container, starting in ${workdir}. File tools reach the task's working directory directly; use the shell for files elsewhere.)${evalWorkSuffix({ where: "environment", done: "task", subagents })}${suffix ? `\n\n${suffix}` : ""}`;
 }
 
 /** Top-level task directories (besides the working directory's) to share with the VM. */
