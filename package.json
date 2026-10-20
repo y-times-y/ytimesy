@@ -19,7 +19,8 @@
 		"build:edge-executor": "wrangler types --config wrangler.edge-executor.jsonc --env-interface EdgeExecutorEnvironment .ytimesy/edge-executor-runtime.d.ts && node --import tsx scripts/build-edge-executor.ts",
 		"typecheck:edge-executor": "pnpm build:edge-executor && tsc --noEmit --project tsconfig.edge-executor.json",
 		"prove:workspace": "tsx scripts/prove-workspace.ts",
-		"db:migrate": "node --env-file-if-exists=.env --import tsx scripts/db-migrate.ts"
+		"db:migrate": "node --env-file-if-exists=.env --import tsx scripts/db-migrate.ts",
+		"rehearsal": "node --import tsx scripts/rehearsal/run.ts"
 	},
 	"dependencies": {
 		"@ai-sdk/anthropic": "4.0.65",

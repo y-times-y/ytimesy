@@ -24,6 +24,7 @@ import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parse } from "yaml";
+import { evalWorkSuffix } from "../../src/domain/eval-prompt";
 import { SOURCE_AGENT_SECRETS } from "../../src/domain/project-secret";
 import {
 	READER_LINUX_USER,
@@ -195,6 +196,15 @@ export async function loadTaskEnvironment(
 		gpus: Number(environment.gpus ?? 0),
 		mcpServers: ((environment.mcp_servers ?? []) as unknown[]).length,
 	};
+}
+
+/** The chat message a task run sends: the instruction, where commands run, the eval suffix. */
+export function taskMessage(
+	task: Pick<TaskEnvironment, "instruction">,
+	workdir: string,
+	subagents: boolean,
+) {
+	return `${task.instruction}\n\n(Environment: your shell commands run inside the task's container, starting in ${workdir}. File tools reach the task's working directory directly; use the shell for files elsewhere.)${evalWorkSuffix({ where: "environment", done: "task", subagents })}`;
 }
 
 /** Top-level task directories (besides the working directory's) to share with the VM. */
