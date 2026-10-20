@@ -29,7 +29,10 @@ import {
 	backgroundJobId,
 	withBackgroundJobDispatcher,
 } from "../adapters/background-job-dispatch";
-import { withCodexSubscriptionEgress } from "../adapters/codex-subscription-transport";
+import {
+	probeCodexEgress,
+	withCodexSubscriptionEgress,
+} from "../adapters/codex-subscription-transport";
 import { withConversationProgressWake } from "../adapters/conversation-progress-wake";
 import { withConversationTurnCoordinator } from "../adapters/conversation-turn-control";
 import { database } from "../adapters/database";
@@ -601,12 +604,32 @@ export default {
 		registerAuthEmailBinding(env.EMAIL);
 		registerMemoryRepos(env.ARTIFACTS);
 		registerMemoryEmbeddings(env.AI);
+		const minute = Math.floor(controller.scheduledTime / 60_000);
+		// Codex egress health: every 5 minutes, only when an account to probe
+		// with is named. Alerts the owner when a path is blocked.
+		const probeUser = process.env.YTIMESY_CODEX_EGRESS_PROBE_USER_ID;
+		const probe =
+			probeUser && minute % 5 === 0
+				? withDatabaseScope(
+						env.HYPERDRIVE.connectionString,
+						() =>
+							withCodexSubscriptionEgress(
+								(input, options) => env.CODEX_EGRESS.fetch(input, options),
+								() => probeCodexEgress(probeUser),
+							),
+						null,
+					).then(
+						(results) => console.info("Codex egress probe.", { results }),
+						() => console.warn("Codex egress probe failed."),
+					)
+				: undefined;
 		if (
 			process.env.BACKGROUND_EXECUTION_ENABLED !== "1" ||
 			process.env.YTIMESY_BACKGROUND_CRON_ENABLED !== "1"
-		)
+		) {
+			await probe;
 			return;
-		const minute = Math.floor(controller.scheduledTime / 60_000);
+		}
 		const jobs = [
 			backgroundJob.parse({
 				id: backgroundJobId(`cron:${minute}:model-admission`),
@@ -686,7 +709,7 @@ export default {
 					).catch(() => undefined),
 				);
 			}
-		await Promise.all(failures);
+		await Promise.all([...failures, probe]);
 	},
 	async fetch(request: Request, env: EdgeExecutorEnvironment) {
 		registerAuthEmailBinding(env.EMAIL);
