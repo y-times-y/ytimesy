@@ -78,8 +78,8 @@ import {
 import {
 	AGENT_SEND_TOOL,
 	AGENT_TOOL,
+	isReaderRole,
 	MAX_SUBAGENT_LEVEL,
-	sharesParentMachine,
 	writesOwnCheckout,
 } from "#/domain/subagent";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
@@ -718,7 +718,7 @@ async function runApiTurnAttempt(
 		// A read-only subagent's commands run as the reader Linux user, which
 		// cannot write the checkout (reader-workspace-machines.ts), so it gets
 		// the command runner its shell surface is built on.
-		const reader = sharesParentMachine(owner);
+		const reader = isReaderRole(owner.agentRole);
 		const originalTools = apiAgentTools({
 			machines,
 			session: owner,

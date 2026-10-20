@@ -48,14 +48,14 @@ describe("read-only subagent machines", () => {
 	it("leaves the builder and writers unwrapped", async () => {
 		const { machines, commands } = fakeMachines();
 		await machinesForAgentSession(machines, {
+			taskPlacement: "fresh",
 			id: "writer",
 			agentRole: "writer",
 		}).exec(vm, "touch a", 1000);
-		await machinesForAgentSession(machines, { id: "builder" }).exec(
-			vm,
-			"ls",
-			1000,
-		);
+		await machinesForAgentSession(machines, {
+			id: "builder",
+			taskPlacement: null,
+		}).exec(vm, "ls", 1000);
 		expect(commands[0]).toBe("touch a");
 		expect(commands[1]).not.toContain("ytimesy-reader");
 	});
@@ -63,6 +63,7 @@ describe("read-only subagent machines", () => {
 	it("prepares the VM once, then runs every command as the reader user", async () => {
 		const { machines, commands } = fakeMachines();
 		const reader = machinesForAgentSession(machines, {
+			taskPlacement: "shared",
 			id: "child-1",
 			agentRole: "reviewer",
 		});
@@ -88,6 +89,7 @@ describe("read-only subagent machines", () => {
 	it("refuses runtime writes outside the scratch and hands allowed files to the reader", async () => {
 		const { machines, writes, commands } = fakeMachines();
 		const reader = machinesForAgentSession(machines, {
+			taskPlacement: "shared",
 			id: "child-1",
 			agentRole: "checker",
 		});
@@ -108,6 +110,7 @@ describe("read-only subagent machines", () => {
 	it("reads files as the reader, except its own runtime's control file", async () => {
 		const { machines, commands } = fakeMachines();
 		const reader = machinesForAgentSession(machines, {
+			taskPlacement: "shared",
 			id: "child-1",
 			agentRole: "researcher",
 		});
@@ -148,6 +151,7 @@ describe("read-only subagent machines", () => {
 				: { exitCode: 0, stdout: "contents", stderr: "" },
 		);
 		const reader = machinesForAgentSession(machines, {
+			taskPlacement: "shared",
 			id: "checker-1",
 			agentRole: "checker",
 		});
@@ -169,6 +173,7 @@ describe("read-only subagent machines", () => {
 		const parent = (path: string) => path.slice(0, path.lastIndexOf("/"));
 		const { machines, commands } = fakeMachines();
 		await machinesForAgentSession(machines, {
+			taskPlacement: "shared",
 			id: "child-1",
 			agentRole: "checker",
 		}).exec(vm, "pwd", 1000);

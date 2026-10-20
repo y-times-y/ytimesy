@@ -1,4 +1,4 @@
-import { sharesParentMachine } from "#/domain/subagent";
+import { isReaderRole, sharesParentMachine } from "#/domain/subagent";
 import type { AgentSessionRecord } from "#/server/adapters/agent-sessions";
 import { readerWorkspaceMachines } from "./reader-workspace-machines";
 import type { WorkspaceMachines } from "./workspace-machines";
@@ -92,11 +92,14 @@ export function sessionScopedWorkspaceMachines(
  */
 export function machinesForAgentSession(
 	machines: WorkspaceMachines,
-	session: Pick<AgentSessionRecord, "id"> &
+	session: Pick<AgentSessionRecord, "id" | "taskPlacement"> &
 		Partial<Pick<AgentSessionRecord, "agentRole">>,
 ) {
 	const base = baseWorkspaceMachines(machines);
 	if (!sharesParentMachine(session)) return base;
+	// A shared writer keeps its own runtime state but runs as the builder's user.
+	if (!isReaderRole(session.agentRole))
+		return sessionScopedWorkspaceMachines(machines, session.id);
 	const reader = readerWorkspaceMachines(base, {
 		sessionId: session.id,
 		sessionRoot: sessionRuntimeRoot(session.id),

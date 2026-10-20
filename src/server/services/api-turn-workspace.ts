@@ -136,8 +136,13 @@ export function deferredApiTurnWorkspace(
 							}
 						: undefined,
 			});
-		// A writer subagent's patch is measured from its pinned baseline.
-		if (bound.session.agentRole === "writer") await baselines();
+		// A writer subagent's patch is measured from its pinned baseline; a
+		// shared writer works in its lead's checkout and has no patch.
+		if (
+			bound.session.agentRole === "writer" &&
+			!sharesParentMachine(bound.session)
+		)
+			await baselines();
 		// A root chat commits and publishes without that gate (turn-commit.ts);
 		// its baseline only scopes lifecycle hooks, so a chat whose checkout was
 		// already edited before baselines existed keeps working without one.
