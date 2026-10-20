@@ -1,14 +1,18 @@
 import type { ModelMessage } from "ai";
+import { type ApiTokenUsage, addApiTokenUsage } from "#/domain/api-token-usage";
 import { checkerWrapUpLeadMs } from "#/domain/checker-brief";
-import { modelName } from "#/domain/fusion-pairs";
 import { WorkspaceId } from "#/domain/ids";
 import { sessionBilling } from "#/domain/model-pricing";
+import type { RoleModels } from "#/domain/role-models";
 import type { SessionItem } from "#/domain/session-item";
 import {
 	currentSidekickRound,
 	endSidekickRound,
 	isActiveSidekick,
+	markSidekickSwitch,
 	previousSidekickRound,
+	recordSidekickDecision,
+	reportPushesBack,
 	retireSidekickState,
 	type SidekickState,
 	sidekickIdleTtlMinutes,
@@ -18,11 +22,16 @@ import {
 	subagentBudgetCheck,
 } from "#/domain/sidekick";
 import {
+	type ClassifierInput,
+	sidekickDecisionNotice,
+	sidekickEscalation,
+} from "#/domain/sidekick-classifier";
+import {
+	roundCommands,
 	roundEvidence,
+	sidekickRoundBrief,
 	sidekickRoundItems,
 	sidekickSignals,
-	sidekickStuckNotice,
-	warrantsEscalation,
 } from "#/domain/sidekick-signals";
 import {
 	AGENT_SEND_TOOL,
@@ -47,6 +56,7 @@ import {
 	descendantAgentSessions,
 } from "../adapters/agent-sessions";
 import {
+	addSessionRequestUsage,
 	forkedWritersDueForTeardown,
 	idleSidekicksPastTtl,
 	subagentTree as loadSubagentTree,
@@ -55,7 +65,12 @@ import {
 	requestSubagentStop,
 	saveSidekickState,
 	subagentAncestors,
+	updateSidekickState,
 } from "../adapters/subagents";
+import {
+	classifySidekick,
+	type SidekickClassification,
+} from "./sidekick-classifier";
 import {
 	type SidekickRoundChanges,
 	sidekickRoundChanges,
@@ -165,8 +180,13 @@ export async function subagentReport(input: {
 	readonly text: string;
 	readonly now?: number;
 	readonly deps?: SidekickRuntimeDeps;
-	/** Lead mode fusion: roleModels.writerEscalation's model, named in a stuck notice. */
-	readonly escalationModel?: string;
+	/** Lead mode fusion: the variant's role models (the classifier's and writerEscalation's). */
+	readonly roleModels?: RoleModels;
+	/**
+	 * Stops the round's classifier early. Not the finished turn's own signal:
+	 * the report is written after the turn ended, when that signal is spent.
+	 */
+	readonly signal?: AbortSignal;
 }): Promise<string> {
 	const { session } = input;
 	const role = session.agentRole;
@@ -241,12 +261,14 @@ export async function subagentReport(input: {
 				sessionId: session.id,
 				label,
 				state: sidekick,
+				userId: session.userId,
 				outcome: input.outcome,
-				patchFiles: changes?.files.length ?? 0,
-				end: changes?.end,
+				changes,
+				report: input.text,
 				items: input.items,
 				model: session.listedModelId ?? null,
-				escalationModel: input.escalationModel,
+				roleModels: input.roleModels,
+				signal: input.signal,
 				now,
 				deps: input.deps,
 			}),
@@ -346,71 +368,182 @@ export type SidekickRuntimeDeps = {
 	readonly descendants?: typeof descendantAgentSessions;
 	readonly stop?: typeof requestSubagentStop;
 	readonly now?: () => number;
+	/** The round's classifier (classifySidekick with the variant's role models). */
+	readonly classify?: (
+		summary: ClassifierInput,
+	) => Promise<SidekickClassification>;
+	/** Compare-and-set of the sidekick's state (updateSidekickState). */
+	readonly updateState?: (
+		sessionId: string,
+		mutate: (current: SidekickState) => SidekickState | null,
+	) => Promise<SidekickState | null>;
+	/** Adds the classifier's usage to the session's latest request. */
+	readonly addUsage?: (
+		sessionId: string,
+		usage: ApiTokenUsage,
+	) => Promise<unknown>;
+	/** Charges the classifier's usage to the turn's other ledgers (an evaluation run). */
+	readonly chargeUsage?: (
+		usage: ApiTokenUsage,
+		key: string,
+	) => Promise<unknown>;
 };
+
+/** Adds a one-off call's usage to the session's latest request (where turn usage is kept). */
+export function addRequestUsage(sessionId: string, usage: ApiTokenUsage) {
+	return addSessionRequestUsage(sessionId, (items) => {
+		for (let index = items.length - 1; index >= 0; index--) {
+			const item = items[index] as SessionItem | undefined;
+			if (item?.kind !== "userMessage") continue;
+			const next = [...items];
+			next[index] = {
+				...item,
+				apiUsage: addApiTokenUsage(item.apiUsage ?? null, usage),
+			};
+			return next;
+		}
+		return null;
+	});
+}
 
 /**
  * Closes a sidekick's round after its report: records the round (its
- * changed files, end snapshot, evidence and hand-back signals) and retires
- * it when it has no rounds left (or was retired meanwhile). Returns the
- * report's closing line.
+ * changed files, end snapshot, evidence and hand-back signals) and the
+ * classifier's decision on it, and retires it when it has no rounds left
+ * (or was retired meanwhile). A hand_back puts a notice in the report; a
+ * switch_model marks the switch for its next compaction. Returns the
+ * report's closing lines.
  */
 async function endSidekickRoundAndReport(input: {
 	readonly sessionId: string;
+	readonly userId: string;
 	readonly label: string;
 	readonly state: SidekickState;
 	readonly outcome: SubagentOutcome;
-	readonly patchFiles: number;
-	readonly end?: string;
+	readonly changes: SidekickRoundChanges | null;
+	readonly report: string;
 	/** The sidekick's history (this round is the part after its start message). */
 	readonly items: readonly SessionItem[];
 	readonly model: string | null;
-	readonly escalationModel?: string;
+	readonly roleModels?: RoleModels;
+	readonly signal?: AbortSignal;
 	readonly now: number;
 	readonly deps?: SidekickRuntimeDeps;
 }) {
+	const roundItems = sidekickRoundItems(input.items, input.state.round);
+	const kind = currentSidekickRound(input.state)?.kind ?? "build";
+	const patchFiles = input.changes?.files.length ?? 0;
 	// Hand-back signals: this round against the one before it.
-	const evidence = roundEvidence(
-		sidekickRoundItems(input.items, input.state.round),
-	);
+	const evidence = roundEvidence(roundItems);
 	const signals = sidekickSignals({
-		kind: currentSidekickRound(input.state)?.kind ?? "build",
+		kind,
 		outcome: input.outcome,
-		patchFiles: input.patchFiles,
+		patchFiles,
 		evidence,
 		previous: previousSidekickRound(input.state)?.evidence,
 		roundsLeft: sidekickRoundsLeft(input.state),
 	});
-	const ended = endSidekickRound(input.state, {
-		now: new Date(input.now).toISOString(),
+	const escalation = sidekickEscalation(input.roleModels, input.model);
+	const summary: ClassifierInput = {
+		point: "round",
+		round: input.state.round,
+		roundKind: kind,
+		model: input.model ?? "",
+		brief: sidekickRoundBrief(input.items, input.state.round),
+		report: input.report,
+		commands: roundCommands(roundItems),
+		diff: {
+			files: input.changes?.files ?? [],
+			...statLineCounts(input.changes?.stat ?? ""),
+		},
 		outcome: input.outcome,
-		patchFiles: input.patchFiles,
-		end: input.end,
-		evidence,
 		signals,
+		canSwitch: !!escalation,
+	};
+	const { answer, record, usage } = await (
+		input.deps?.classify ??
+		((summary: ClassifierInput) =>
+			classifySidekick({
+				userId: input.userId,
+				sessionId: input.sessionId,
+				roleModels: input.roleModels,
+				summary,
+				signal: input.signal,
+			}))
+	)(summary);
+	// Its spend counts like any model call's: in the session's usage and the turn's ledgers.
+	if (usage) {
+		await (input.deps?.addUsage ?? addRequestUsage)(
+			input.sessionId,
+			usage,
+		).catch(() => {});
+		await input.deps
+			?.chargeUsage?.(usage, `classifier:${record.inputsHash}`)
+			.catch(() => {});
+	}
+	// Applied to the state as stored now: the classifier took a while, and
+	// the lead may have stopped (retired) the sidekick meanwhile.
+	const close = (current: SidekickState) => {
+		const ended = recordSidekickDecision(
+			endSidekickRound(current, {
+				now: new Date(input.now).toISOString(),
+				outcome: input.outcome,
+				patchFiles,
+				end: input.changes?.end,
+				evidence,
+				signals,
+				pushback: reportPushesBack(input.report),
+			}),
+			record,
+		);
+		return answer.decision === "switch_model" && escalation && !ended.retired
+			? markSidekickSwitch(ended, {
+					to: escalation,
+					reason: answer.reason,
+					round: current.round,
+					at: new Date(input.now).toISOString(),
+				})
+			: ended;
+	};
+	const ended =
+		(await (input.deps?.updateState ?? updateSidekickState)(
+			input.sessionId,
+			close,
+		).catch(() => null)) ?? close(input.state);
+	const switching =
+		answer.decision === "switch_model" &&
+		!!ended.pendingSwitch &&
+		!ended.retired;
+	const notice = sidekickDecisionNotice({
+		label: input.label,
+		decision:
+			answer.decision === "switch_model" && !switching
+				? "hand_back"
+				: answer.decision,
+		reason: answer.reason,
+		...(switching ? { switchTo: escalation } : {}),
 	});
-	await (input.deps?.saveState ?? saveSidekickState)(
-		input.sessionId,
-		ended,
-	).catch(() => {});
 	if (ended.retired)
 		return [
 			`Sidekick ${input.label} is retired (${ended.retired.reason}). Start a new writer for more work.`,
-			sidekickStuckNotice({ label: input.label, signals }),
+			notice,
 		]
 			.filter(Boolean)
 			.join("\n\n");
-	const escalation =
-		input.escalationModel &&
-		warrantsEscalation(signals) &&
-		modelName(input.escalationModel) !== modelName(input.model ?? "")
-			? input.escalationModel
-			: undefined;
 	return [
 		`Sidekick ${input.label}: ${sidekickRoundLabel(ended)} done. It keeps its context: send feedback or the next brief with ${AGENT_SEND_TOOL} (id ${input.label}); it works in your checkout as it is then, so keep or revert its changes first.`,
-		sidekickStuckNotice({ label: input.label, signals, escalation }),
+		notice,
 	]
 		.filter(Boolean)
 		.join("\n\n");
+}
+
+/** Lines added and removed, from the summary line of `git diff --stat`. */
+function statLineCounts(stat: string) {
+	return {
+		added: Number(/(\d+) insertions?\(\+\)/.exec(stat)?.[1] ?? 0),
+		removed: Number(/(\d+) deletions?\(-\)/.exec(stat)?.[1] ?? 0),
+	};
 }
 
 /**

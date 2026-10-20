@@ -7,6 +7,12 @@ import {
 	retireSidekickState,
 	type SidekickState,
 } from "#/domain/sidekick";
+import {
+	type ClassifierInput,
+	rulesDecision,
+	type SidekickDecision,
+	type SidekickDecisionRecord,
+} from "#/domain/sidekick-classifier";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 
 const adapters = vi.hoisted(() => ({
@@ -35,6 +41,49 @@ vi.mock("../adapters/agent-sessions", () => ({
 vi.mock("./subagent-writer", () => ({
 	transferWriterPatch: adapters.transfer,
 }));
+// No model call in these tests: the classifier answers as its rules would.
+vi.mock("./sidekick-classifier", () => ({
+	classifySidekick: vi.fn(async ({ summary }: { summary: ClassifierInput }) => {
+		const answer = rulesDecision(summary.signals, summary.canSwitch);
+		return { answer, record: decisionRecord(answer.decision, "rules") };
+	}),
+}));
+
+/** A compare-and-set fake: applies the change to `stored` (what the database holds now) and saves it. */
+function applying(
+	stored: SidekickState,
+	save: (id: string, state: SidekickState) => Promise<void>,
+) {
+	return vi.fn(
+		async (
+			id: string,
+			mutate: (current: SidekickState) => SidekickState | null,
+		) => {
+			const next = mutate(stored);
+			if (next) await save(id, next);
+			return next;
+		},
+	);
+}
+
+function decisionRecord(
+	decision: SidekickDecision,
+	source: SidekickDecisionRecord["source"] = "classifier",
+): SidekickDecisionRecord {
+	return {
+		point: "round",
+		round: 2,
+		decision,
+		reason: "test",
+		source,
+		inputsHash: "h",
+		latencyMs: 5,
+		tokens: 100,
+		costUsd: 0.001,
+		planBilled: true,
+		at: "2026-10-18T12:00:00.000Z",
+	};
+}
 
 const {
 	guardSubagentStep,
@@ -426,7 +475,8 @@ describe("sidekick (lead mode fusion)", () => {
 			now: NOW,
 			deps: {
 				session: vi.fn(async () => sidekick),
-				saveState,
+				updateState: applying(state, saveState),
+				addUsage: vi.fn(async () => true),
 				roundChanges,
 			},
 		});
@@ -547,7 +597,11 @@ describe("sidekick (lead mode fusion)", () => {
 			now: NOW,
 			deps: {
 				session: vi.fn(async () => sidekick),
-				saveState: vi.fn(async () => {}),
+				updateState: applying(
+					state,
+					vi.fn(async () => {}),
+				),
+				addUsage: vi.fn(async () => true),
 				roundChanges: vi.fn(async () => {
 					throw new Error("no git");
 				}),
@@ -579,7 +633,8 @@ describe("sidekick (lead mode fusion)", () => {
 			now: NOW,
 			deps: {
 				session: vi.fn(async () => sidekick),
-				saveState,
+				updateState: applying(state, saveState),
+				addUsage: vi.fn(async () => true),
 				roundChanges: vi.fn(async () => ({
 					end: "e".repeat(40),
 					files: [],
@@ -591,7 +646,7 @@ describe("sidekick (lead mode fusion)", () => {
 		expect(destroy).not.toHaveBeenCalled();
 	});
 
-	it("tells the lead the sidekick is stuck when it fails the same check again", async () => {
+	it("classifies a stuck round and marks a model switch for the sidekick's next compaction", async () => {
 		const root = record("root", null, { providerRef: "vm-root" });
 		const state = sidekickState({
 			round: 2,
@@ -668,6 +723,14 @@ describe("sidekick (lead mode fusion)", () => {
 			},
 		];
 		const saveState = vi.fn(async () => {});
+		const classify = vi.fn(async (_summary: ClassifierInput) => ({
+			answer: {
+				decision: "switch_model" as const,
+				reason: "it repeats make test",
+			},
+			record: decisionRecord("switch_model"),
+			usage: null,
+		}));
 		const report = await subagentReport({
 			machines: { destroy: vi.fn() } as never,
 			session: sidekick,
@@ -675,30 +738,114 @@ describe("sidekick (lead mode fusion)", () => {
 			outcome: "finished",
 			text: "Still failing.",
 			now: NOW,
-			escalationModel: "codex:gpt-6.1-sol",
+			roleModels: { writerEscalation: { model: "codex:gpt-6.1-sol" } },
 			deps: {
 				session: vi.fn(async () => sidekick),
-				saveState,
+				updateState: applying(state, saveState),
+				addUsage: vi.fn(async () => true),
+				classify,
 				roundChanges: vi.fn(async () => ({
 					end: "b".repeat(40),
 					files: ["src/cli.ts"],
-					stat: " src/cli.ts | 1 +",
+					stat: " src/cli.ts | 1 +\n 1 file changed, 1 insertion(+)",
 				})),
 			},
 		});
+		// The classifier sees the round: its brief, report, commands, diff and signals.
+		const summary = classify.mock.calls[0]?.[0] as unknown as ClassifierInput;
+		expect(summary).toMatchObject({
+			point: "round",
+			round: 2,
+			model: "gpt-6-luna",
+			brief: expect.stringContaining("Round 2/6 from your lead"),
+			report: "Still failing.",
+			diff: { files: ["src/cli.ts"], added: 1, removed: 0 },
+			canSwitch: true,
+		});
+		expect(summary.commands).toEqual([
+			{ command: "make test", exitCode: 2 },
+			{ command: "grep -n missing src/cli.ts", exitCode: 1 },
+		]);
+		expect(summary.signals).toEqual([
+			{ kind: "same-check-failed", detail: "make test" },
+		]);
 		expect(report).toContain(
-			"Runtime notice: sidekick 1 looks stuck because it failed the same check as last round (`make test`).",
+			"Runtime notice: sidekick 1 looks stuck (it repeats make test).",
 		);
-		expect(report).toContain("Re-brief it more prescriptively");
-		expect(report).toContain("restarts it on codex:gpt-6.1-sol");
+		expect(report).toContain(
+			"The runtime switches it to codex:gpt-6.1-sol at its next context compaction",
+		);
 		const saved = (
 			saveState.mock.calls[0] as unknown as [string, SidekickState]
 		)[1];
+		expect(saved.pendingSwitch).toMatchObject({
+			to: "codex:gpt-6.1-sol",
+			reason: "it repeats make test",
+			round: 2,
+		});
+		expect(saved.decisions?.[0]).toMatchObject({
+			decision: "switch_model",
+			source: "classifier",
+		});
 		// Only this round's failures count; a no-match grep is not a failure.
 		expect(saved.rounds.at(-1)?.evidence?.failedChecks).toEqual(["make test"]);
 		expect(saved.rounds.at(-1)?.signals).toEqual([
 			{ kind: "same-check-failed", detail: "make test" },
 		]);
+	});
+
+	it("applies the round's decision to the stored state: a sidekick the lead stopped meanwhile stays retired; its usage is charged", async () => {
+		const root = record("root", null, { providerRef: "vm-root" });
+		const state = sidekickState({ round: 2, roundStartedAt: at(-3) });
+		const sidekick = record("s", "root", {
+			agentRole: "writer",
+			listedModelId: "gpt-6-luna",
+			taskPlacement: "shared",
+			agentBudget: sidekickBudget(state),
+		});
+		adapters.ancestors.mockResolvedValue([root]);
+		adapters.tree.mockResolvedValue([root, sidekick]);
+		const usage = {
+			inputTokens: 900,
+			outputTokens: 30,
+			uncachedInputTokens: 900,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+		};
+		const saveState = vi.fn(async () => {});
+		const addUsage = vi.fn(async () => true);
+		const chargeUsage = vi.fn(async () => {});
+		const stored = retireSidekickState(state, "stopped by the lead", at(-1));
+		const report = await subagentReport({
+			machines: { destroy: vi.fn(async () => {}) } as never,
+			session: sidekick,
+			items: [],
+			outcome: "finished",
+			text: "Still failing.",
+			now: NOW,
+			roleModels: { writerEscalation: { model: "codex:gpt-6.1-sol" } },
+			deps: {
+				session: vi.fn(async () => sidekick),
+				updateState: applying(stored, saveState),
+				addUsage,
+				chargeUsage,
+				classify: vi.fn(async () => ({
+					answer: { decision: "switch_model" as const, reason: "stuck" },
+					record: decisionRecord("switch_model"),
+					usage,
+				})),
+			},
+		});
+		const saved = (
+			saveState.mock.calls[0] as unknown as [string, SidekickState]
+		)[1];
+		expect(saved.retired?.reason).toBe("stopped by the lead");
+		expect(saved.pendingSwitch).toBeUndefined();
+		expect(saved.decisions).toHaveLength(1);
+		expect(report).toContain("Sidekick 1 is retired (stopped by the lead)");
+		expect(report).toContain("needs you (stuck)");
+		expect(addUsage).toHaveBeenCalledWith("s", usage);
+		expect(chargeUsage).toHaveBeenCalledWith(usage, "classifier:h");
 	});
 
 	it("keeps an idle sidekick for the chat's next message when the lead's turn completes", async () => {

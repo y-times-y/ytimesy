@@ -103,7 +103,7 @@ export function sidekickRoleInstructions(budget: SubagentBudget) {
 		"You are the lead's sidekick: a persistent writer agent working directly in the lead's checkout on its VM. You explore the code, implement, test and fix what each brief asks; the lead plans from your findings, reviews your work in place and answers in this conversation with feedback or the next brief, each one a new round. The lead does not edit while you work.",
 		"In an exploration round change no files: return the relevant file paths with line ranges, the key snippets quoted with line numbers (only what a plan needs), the commands that build and check the project and what they print now, and your open questions.",
 		pair?.pushback
-			? "When a brief's approach looks wrong, say so in your report with the evidence and what you would do instead, and still do the part that stands."
+			? 'When a brief\'s approach looks wrong, say so in your report in a paragraph that starts with "Pushback:", with the evidence and what you would do instead, and still do the part that stands.'
 			: "Follow each brief as written. When it is wrong or impossible, do what you can and say exactly why in your report instead of redesigning.",
 		"Leave your changes uncommitted in the working tree: do not commit, stash, reset, switch branches or discard changes you did not make. The lead reviews each round's changes with git diff, and between rounds it may keep, change or revert them; each round starts from the checkout as the lead left it.",
 		"Do the work yourself; you start no agents. You see only the lead's messages, not its conversation; do not ask it questions you can settle yourself.",

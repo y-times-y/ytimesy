@@ -14,6 +14,8 @@ export type ScenarioId =
 	| "fusion-explore"
 	| "fusion-multiturn"
 	| "fusion-stuck"
+	| "fusion-handback"
+	| "fusion-classifier-fail"
 	| "subagents"
 	| "rigor";
 
@@ -34,7 +36,11 @@ const runCode = (code: string): Reply => ({
 const bash = (command: string, timeout?: number): Reply => ({
 	calls: [{ name: "bash", args: timeout ? { command, timeout } : { command } }],
 });
-const marked = (tag: string) => (first: string) => first.includes(tag);
+/** The sidekick classifier's requests (src/domain/sidekick-classifier.ts). */
+export const CLASSIFIER_MARKER = "Sidekick round summary for classification.";
+const isClassifier = (first: string) => first.includes(CLASSIFIER_MARKER);
+const marked = (tag: string) => (first: string) =>
+	first.includes(tag) && !isClassifier(first);
 const isChecker = (first: string) =>
 	first.includes("You are an independent checker");
 
@@ -405,7 +411,7 @@ function sidekickScript(
 		match: (first) =>
 			first.includes(HARNESS_EXPLORE_HEADING) &&
 			first.includes(tag) &&
-			!first.includes("You take over as the lead's sidekick"),
+			!isClassifier(first),
 		reply: ({ step, last }) => {
 			const index = Math.floor(step / 2);
 			const round = rounds[index];
@@ -435,7 +441,7 @@ const leadMatch = (tag: string) => (first: string) =>
 	first.includes(tag) &&
 	!isChecker(first) &&
 	!first.includes(HARNESS_EXPLORE_HEADING) &&
-	!first.includes("You take over as the lead's sidekick");
+	!isClassifier(first);
 
 /** The write the lead tries in the same batch as a handoff (the guard refuses it). */
 const LEAD_WRITE_PROBE = `const edited = await tools.edit({ path: "src/version_set.cc", edits: [{ old_string: "#include", new_string: "// lead write during a round\\n#include" }] });
@@ -582,23 +588,134 @@ function stuckLeadScript(tag: string): AgentScript {
 				return send({
 					id: "1",
 					message:
-						'[rehearsal:escalated] Add a one-line comment "rehearsal escalated" to the top of src/snapshot_context.cc and report.',
+						'[rehearsal:stuck-escalated] Add a one-line comment "rehearsal escalated" to the top of src/snapshot_context.cc and report.',
 				});
 			return { text: "Rehearsal stuck lead finished." };
 		},
 	};
 }
 
+/** c4: the same sidekick session, now on the escalation model after its compaction. */
 function escalatedSidekickScript(): AgentScript {
 	return {
 		name: "escalated-sidekick",
-		match: (first) =>
-			first.includes("You take over as the lead's sidekick") &&
-			first.includes("[rehearsal:escalated]"),
-		reply: ({ step }) =>
-			step === 0
-				? markFile("src/snapshot_context.cc", "rehearsal escalated")
-				: { text: "Rehearsal escalated sidekick done." },
+		match: (first, model) =>
+			first.includes("[rehearsal:stuck-escalated]") &&
+			!isClassifier(first) &&
+			model === "gpt-6.1-sol",
+		reply: ({ calls }) =>
+			calls.some((call) =>
+				JSON.stringify(call.args).includes("rehearsal escalated"),
+			)
+				? { text: "Rehearsal escalated sidekick done." }
+				: markFile("src/snapshot_context.cc", "rehearsal escalated"),
+	};
+}
+
+/** c5: the classifier hands the build round back; the lead takes over and edits itself. */
+function handbackLeadScript(tag: string): AgentScript {
+	return {
+		name: "handback-lead",
+		match: leadMatch(tag),
+		reply: (context) => {
+			const reportsIn = writerReports(context);
+			const sends = count(context, "agent_send");
+			if (!reportsIn.length)
+				return {
+					text: "NO_EXPLORATION_REPORT: the lead's first request had no snippets.",
+				};
+			if (reportsIn.length < sends + 1) return leadDidNotWait();
+			if (!sends)
+				return send({
+					id: "1",
+					message: `[rehearsal:handback-build] Add "// rehearsal handback 1" above line 1 of ${EXPLORE_FILE} and report.`,
+				});
+			if (reviewCount(context) < sends)
+				return reviewInPlace(reportsIn.at(-1) as string);
+			const handedBack = context.userTexts.some((text) =>
+				text.includes("Runtime notice: sidekick 1 needs you"),
+			);
+			if (!handedBack) return { text: "NO_HANDBACK_NOTICE" };
+			if (!leadEdited(context))
+				return runCode(`const text = await tools.read({ path: "src/lsm_db.cc" });
+const first = String(text).split("\\n")[0].replace(/^\\s*\\d+[\\t|:]\\s?/, "");
+const edited = await tools.edit({ path: "src/lsm_db.cc", edits: [{ old_string: first, new_string: "// rehearsal lead took over\\n" + first }] });
+return JSON.stringify({ edited, LEAD_TOOK_OVER: true });`);
+			return { text: "Rehearsal handback lead took over and finished." };
+		},
+	};
+}
+
+const leadEdited = (context: ScriptContext) =>
+	context.calls.some((call) =>
+		JSON.stringify(call.args).includes("LEAD_TOOK_OVER"),
+	);
+
+/** c6: the classifier answers prose; the rules decide (no escalation model: hand back). */
+function classifierFailLeadScript(tag: string): AgentScript {
+	return {
+		name: "clsfail-lead",
+		match: leadMatch(tag),
+		reply: (context) => {
+			const reportsIn = writerReports(context);
+			const sends = count(context, "agent_send");
+			if (!reportsIn.length)
+				return {
+					text: "NO_EXPLORATION_REPORT: the lead's first request had no snippets.",
+				};
+			if (reportsIn.length < sends + 1) return leadDidNotWait();
+			if (reviewCount(context) < sends)
+				return reviewInPlace(reportsIn.at(-1) as string);
+			if (sends === 0)
+				return send({
+					id: "1",
+					message: `[rehearsal:clsfail-build] Make \`make bogus-check\` pass, and add "// rehearsal stuck 1" above line 1 of ${EXPLORE_FILE}. Report.`,
+				});
+			if (sends === 1)
+				return send({
+					id: "1",
+					message:
+						'[rehearsal:clsfail-feedback] make bogus-check still fails. Fix it, and add "rehearsal stuck 2" to the top of src/lsm_db.cc.',
+				});
+			return { text: "Rehearsal classifier-failure lead finished." };
+		},
+	};
+}
+
+/**
+ * The classifier, scripted per scenario by the brief's marker: c4 says
+ * switch_model after the second failing build round (the lead's feedback
+ * brief); c5 hands the build round back; c6 answers prose (unparsable, so the rules decide); any other
+ * sidekick round is on_track.
+ */
+export function classifierScript(): AgentScript {
+	return {
+		name: "classifier",
+		match: isClassifier,
+		reply: ({ userTexts }) => {
+			const text = userTexts.join("\n");
+			const summary = JSON.parse(
+				text.slice(text.indexOf(CLASSIFIER_MARKER) + CLASSIFIER_MARKER.length),
+			) as { round: number; brief: string; canSwitch: boolean };
+			const json = (decision: string, reason: string) => ({
+				text: JSON.stringify({ decision, reason }),
+			});
+			if (summary.brief.includes("[rehearsal:stuck-"))
+				return summary.brief.includes("[rehearsal:stuck-feedback]")
+					? json(
+							"switch_model",
+							"rehearsal: it failed make bogus-check twice the same way",
+						)
+					: json("on_track", "rehearsal: progressing");
+			if (summary.brief.includes("[rehearsal:handback-"))
+				return json(
+					"hand_back",
+					"rehearsal: the brief leaves src/lsm_db.cc to the lead",
+				);
+			if (summary.brief.includes("[rehearsal:clsfail-"))
+				return { text: "Looks stuck to me, probably." };
+			return json("on_track", "rehearsal: progressing");
+		},
 	};
 }
 
@@ -751,12 +868,13 @@ export function scenarios(): Scenario[] {
 		{
 			id: "fusion-stuck",
 			title:
-				"c4. lead=fusion stuck signal: the same check fails twice, the lead is told, the sidekick restarts on writerEscalation in the same checkout",
+				"c4. lead=fusion classifier switch: the same check fails twice, the classifier says switch_model, the same sidekick continues on writerEscalation after its compaction",
 			variant:
 				"codeMode=primary,subagents=on,lead=fusion,roleModels.writer=codex:gpt-6-luna,roleModels.writerEscalation=codex:gpt-6.1-sol",
 			scripts: [
-				stuckLeadScript("[rehearsal:fusion-stuck]"),
+				// First: after its compaction the escalated sidekick's history keeps the request's tag.
 				escalatedSidekickScript(),
+				stuckLeadScript("[rehearsal:fusion-stuck]"),
 				sidekickScript("stuck-sidekick", "[rehearsal:fusion-stuck]", [
 					{ kind: "explore" },
 					{
@@ -772,6 +890,49 @@ export function scenarios(): Scenario[] {
 						check: "make bogus-check",
 					},
 				]),
+			],
+		},
+		{
+			id: "fusion-handback",
+			title:
+				"c5. lead=fusion hand_back: the classifier hands the build round back, the notice reaches the lead, which takes over",
+			variant:
+				"codeMode=primary,subagents=on,lead=fusion,roleModels.writer=codex:gpt-6-luna,roleModels.writerEscalation=codex:gpt-6.1-sol",
+			scripts: [
+				handbackLeadScript("[rehearsal:fusion-handback]"),
+				sidekickScript("handback-sidekick", "[rehearsal:fusion-handback]", [
+					{ kind: "explore" },
+					{ kind: "build", path: EXPLORE_FILE, marker: "rehearsal handback 1" },
+				]),
+			],
+		},
+		{
+			id: "fusion-classifier-fail",
+			title:
+				"c6. lead=fusion classifier failure: an unparsable answer falls back to the rules, which hand the stuck round back",
+			variant:
+				"codeMode=primary,subagents=on,lead=fusion,roleModels.writer=codex:gpt-6-luna",
+			scripts: [
+				classifierFailLeadScript("[rehearsal:fusion-classifier-fail]"),
+				sidekickScript(
+					"clsfail-sidekick",
+					"[rehearsal:fusion-classifier-fail]",
+					[
+						{ kind: "explore" },
+						{
+							kind: "build",
+							path: EXPLORE_FILE,
+							marker: "rehearsal stuck 1",
+							check: "make bogus-check",
+						},
+						{
+							kind: "build",
+							path: "src/lsm_db.cc",
+							marker: "rehearsal stuck 2",
+							check: "make bogus-check",
+						},
+					],
+				),
 			],
 		},
 		{

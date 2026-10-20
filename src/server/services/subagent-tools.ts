@@ -20,7 +20,6 @@ import {
 import { sessionItemsFromUnknown } from "#/domain/session-item";
 import {
 	beginSidekickRound,
-	currentSidekickRound,
 	harnessExplorationBrief,
 	isActiveSidekick,
 	latestUserRequestId,
@@ -32,11 +31,7 @@ import {
 	sidekickRoundsLeft,
 	sidekickState,
 } from "#/domain/sidekick";
-import {
-	type SidekickRoundKind,
-	sidekickStuckReasons,
-	warrantsEscalation,
-} from "#/domain/sidekick-signals";
+import type { SidekickRoundKind } from "#/domain/sidekick-signals";
 import {
 	AGENT_SEND_TOOL,
 	AGENT_TOOL,
@@ -545,8 +540,6 @@ async function sendToSidekick(
 		throw new Error(
 			`Sidekick ${target.label} has used all ${state.maxRounds} rounds. Take over, or stop it and start a new writer.`,
 		);
-	const restarted = await escalateSidekick(context, deps, input);
-	if (restarted) return restarted;
 	const round = state.round + 1;
 	// The runtime's heading goes in front; delivery takes 8,000 characters.
 	const note = sidekickRoundMessage({
@@ -589,6 +582,11 @@ async function sendToSidekick(
 			? {
 					backgroundCommands:
 						"Your background commands are still running and may write while it works; stop them (ytimesy-job stop) if they touch its files.",
+				}
+			: {}),
+		...(next.pendingSwitch
+			? {
+					model: `this round starts by compacting its context; it continues on ${next.pendingSwitch.to} (same session)`,
 				}
 			: {}),
 		delivery: "now",
@@ -738,96 +736,6 @@ export async function startHarnessExploration(
 	return { id: label, round: 1 };
 }
 
-/** Characters of the stuck sidekick's last report a handover carries. */
-const HANDOVER_REPORT_MAX = 3_000;
-
-/**
- * A model switch for a stuck sidekick (roleModels.writerEscalation): when
- * its last round fired a stuck signal, the next round does not go to it.
- * It is retired and a fresh sidekick starts on the escalation model in the
- * same checkout, with a handover of the old one's last report in front of
- * the lead's message: the switch happens at a fresh context, as a model
- * switch at compaction does. Null when no switch applies.
- */
-async function escalateSidekick(
-	context: SubagentToolContext,
-	deps: SubagentToolDeps,
-	input: {
-		readonly target: SubagentNode;
-		readonly session: SubagentTreeSession & AgentSessionRecord;
-		readonly state: SidekickState;
-		readonly message?: string;
-		readonly kind: SidekickRoundKind;
-		readonly requestKey?: string;
-	},
-) {
-	const { target, session, state } = input;
-	const signals = currentSidekickRound(state)?.signals ?? [];
-	if (
-		!warrantsEscalation(signals) ||
-		!roleModelFor(context.roleModels, "writerEscalation") ||
-		!context.parent.listedModelId
-	)
-		return null;
-	const { model } = await childModel(
-		context,
-		deps,
-		"writerEscalation",
-		context.parent.listedModelId,
-	);
-	if (model.listedModelId === session.listedModelId) return null;
-	const reasons = sidekickStuckReasons(signals);
-	await deps.retireSidekick(
-		context.machines,
-		session,
-		`restarted on ${model.listedModelId}: ${reasons}`,
-	);
-	const items = sessionItemsFromUnknown(session.items);
-	const lastReport =
-		[...items].reverse().find((item) => item.kind === "agentMessage")?.text ??
-		"(no report)";
-	const brief = [
-		`You take over as the lead's sidekick from an earlier sidekick on ${session.listedModelId ?? "another model"} that got stuck: ${reasons}. You work in the lead's checkout, where its changes are (unless the lead reverted them).`,
-		`Its last report:\n${lastReport.trim().slice(-HANDOVER_REPORT_MAX)}`,
-		`The lead's brief:\n${(input.message ?? "").trim()}`,
-		...(input.kind === "explore" ? [SIDEKICK_EXPLORE_NOTE] : []),
-	].join("\n\n");
-	const workspace = await context.workspace();
-	const spawned = await spawnSubagent(
-		context,
-		deps,
-		{
-			role: "writer",
-			modelRole: "writerEscalation",
-			title: `${session.title} (on ${model.listedModelId})`.slice(
-				0,
-				SUBAGENT_TITLE_MAX,
-			),
-			sidekick: {
-				kind: input.kind,
-				requestKey: input.requestKey,
-				escalatedFrom: {
-					label: target.label,
-					model: session.listedModelId ?? "",
-					reason: reasons,
-				},
-			},
-			brief: async () => brief,
-		},
-		workspace,
-	);
-	const label =
-		(await loadTreeFor(deps, context.parent)).nodes.find(
-			(node) => node.id === spawned.childId,
-		)?.label ?? "?";
-	return {
-		id: label,
-		status: `sidekick ${target.label} was stuck (${reasons}); restarted as sidekick ${label} on ${spawned.model.label}, round 1/${spawned.budget.sidekick?.maxRounds ?? "?"} started`,
-		note: `Sidekick ${target.label} is retired; ${label} works in your checkout with a handover of its last report and your message. Use id ${label} from now on.`,
-		delivery: "now",
-	};
-}
-
 async function loadTreeFor(
 	deps: SubagentToolDeps,
 	parent: AgentSessionRecord,
@@ -862,7 +770,6 @@ async function spawnSubagent(
 		readonly sidekick?: {
 			readonly kind: SidekickRoundKind;
 			readonly requestKey?: string;
-			readonly escalatedFrom?: SidekickState["escalatedFrom"];
 		};
 	},
 	workspace: AgentToolWorkspace,

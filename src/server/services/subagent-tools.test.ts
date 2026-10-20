@@ -947,91 +947,48 @@ describe("lead mode fusion: the persistent sidekick", () => {
 		expect(deps.openTask).not.toHaveBeenCalled();
 	});
 
-	it("restarts a stuck sidekick on roleModels.writerEscalation with a handover, in the same checkout", async () => {
-		const stuck = (escalate: boolean) => {
-			const sidekick = idleSidekick({
-				rounds: [
-					{
-						n: 1,
-						startedAt: at(-10),
-						endedAt: at(-5),
-						outcome: "finished",
-						patchFiles: 1,
-						signals: [{ kind: "same-check-failed", detail: "npm test" }],
-					},
-				],
-			});
-			Object.assign(sidekick, {
-				listedModelId: "gpt-6-luna",
-				harness: "codex",
-				items: [
-					{
-						kind: "agentMessage",
-						id: SessionItemId("a1"),
-						text: "npm test still fails on the exit code.",
-					},
-				],
-			});
-			return harness({
-				sessions: [row("root", null, { items: userTask }), sidekick],
-				lead: "fusion",
-				roleModels: escalate
-					? {
-							writer: { model: "codex:gpt-6-luna" },
-							writerEscalation: { model: "codex:gpt-6.1-sol" },
-						}
-					: { writer: { model: "codex:gpt-6-luna" } },
-				deps: {
-					routes: vi.fn(async () => [
-						{
-							key: "codex",
-							label: "Codex",
-							kind: "subscription",
-							revision: "",
-							models: [
-								{ id: "gpt-6.1-sol", label: "GPT-6.1 Sol" },
-								{ id: "gpt-6-luna", label: "GPT-6 Luna" },
-							],
-						} as FailoverConnection,
-					]),
+	it("sends a stuck sidekick's next round to the same session, which switches models at its compaction", async () => {
+		const sidekick = idleSidekick({
+			rounds: [
+				{
+					n: 1,
+					startedAt: at(-10),
+					endedAt: at(-5),
+					outcome: "finished",
+					patchFiles: 1,
+					signals: [{ kind: "same-check-failed", detail: "npm test" }],
 				},
-			});
-		};
-		const escalated = stuck(true);
-		const result = await escalated.call("agent_send", {
+			],
+			pendingSwitch: {
+				to: "codex:gpt-6.1-sol",
+				reason: "it repeats npm test",
+				round: 1,
+				at: at(-5),
+			},
+		});
+		Object.assign(sidekick, { listedModelId: "gpt-6-luna", harness: "codex" });
+		const { call, deps, sessions } = harness({
+			sessions: [row("root", null, { items: userTask }), sidekick],
+			lead: "fusion",
+			roleModels: {
+				writer: { model: "codex:gpt-6-luna" },
+				writerEscalation: { model: "codex:gpt-6.1-sol" },
+			},
+		});
+		const result = await call("agent_send", {
 			id: "1",
 			message: "Make npm test pass: print the exit code in --json.",
 		});
-		expect(result.status).toContain("sidekick 1 was stuck");
-		expect(result.status).toContain("restarted as sidekick 2");
-		expect(escalated.deps.retireSidekick).toHaveBeenCalledWith(
-			expect.anything(),
-			expect.objectContaining({ id: "s" }),
-			expect.stringContaining("restarted on gpt-6.1-sol"),
-		);
-		const opened = vi.mocked(escalated.deps.openTask).mock.calls[0]?.[0];
-		expect(opened).toMatchObject({
-			harness: "codex",
-			modelId: "gpt-6.1-sol",
-			placement: "shared",
-			access: "read_write",
-		});
-		expect(opened?.prompt).toContain("npm test still fails on the exit code.");
-		expect(opened?.prompt).toContain("You work in the lead's checkout");
-		expect(opened?.prompt).toContain("print the exit code in --json");
-		expect(escalated.deps.fork).not.toHaveBeenCalled();
-		const next = escalated.sessions.find((entry) => entry.id === "child-1")
-			?.agentBudget?.sidekick as SidekickState;
-		expect(next.escalatedFrom).toMatchObject({
-			label: "1",
-			model: "gpt-6-luna",
-		});
-		// Without an escalation model the stuck sidekick simply takes the next round.
-		const plain = stuck(false);
-		expect(
-			(await plain.call("agent_send", { id: "1", message: "again" })).status,
-		).toBe("round 2/6 started");
-		expect(plain.deps.retireSidekick).not.toHaveBeenCalled();
+		expect(result.status).toBe("round 2/6 started");
+		expect(result.model).toContain("continues on codex:gpt-6.1-sol");
+		// No retirement and no new writer: the same session takes the round.
+		expect(deps.retireSidekick).not.toHaveBeenCalled();
+		expect(deps.openTask).not.toHaveBeenCalled();
+		expect(vi.mocked(deps.message).mock.calls[0]?.[1]).toBe("s");
+		const state = sessions.find((entry) => entry.id === "s")?.agentBudget
+			?.sidekick as SidekickState;
+		expect(state.pendingSwitch?.to).toBe("codex:gpt-6.1-sol");
+		expect(state.round).toBe(2);
 	});
 });
 

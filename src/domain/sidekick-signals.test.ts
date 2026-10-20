@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import { SessionItemId } from "./ids";
 import type { SessionItem } from "./session-item";
 import {
+	roundCommands,
 	roundEvidence,
+	sidekickRoundBrief,
 	sidekickRoundItems,
 	sidekickSignals,
-	sidekickStuckNotice,
+	sidekickStuckReasons,
 	warrantsEscalation,
 } from "./sidekick-signals";
 
@@ -157,20 +159,49 @@ describe("sidekick signals", () => {
 		).toEqual([]);
 	});
 
-	it("words the lead's notice and escalates only on stuck signals", () => {
+	it("words the reasons and calls only stuck signals a reason to switch models", () => {
 		const signals = [
 			{ kind: "same-check-failed" as const, detail: "make test" },
 		];
-		expect(sidekickStuckNotice({ label: "1", signals })).toBe(
-			"Runtime notice: sidekick 1 looks stuck because it failed the same check as last round (`make test`). Re-brief it more prescriptively (the exact change, file and line, and the command that must pass), or take over and do it yourself.",
+		expect(sidekickStuckReasons(signals)).toBe(
+			"it failed the same check as last round (`make test`)",
 		);
-		expect(
-			sidekickStuckNotice({ label: "1", signals, escalation: "gpt-6.1-sol" }),
-		).toContain("restarts it on gpt-6.1-sol");
-		expect(sidekickStuckNotice({ label: "1", signals: [] })).toBe("");
 		expect(warrantsEscalation(signals)).toBe(true);
 		expect(warrantsEscalation([{ kind: "round-budget", detail: "x" }])).toBe(
 			false,
 		);
+	});
+
+	it("lists every command of a round with its exit code and finds the round's brief", () => {
+		const items: SessionItem[] = [
+			{ kind: "userMessage", id: SessionItemId("b1"), text: "First brief." },
+			{
+				kind: "dynamicToolCall",
+				id: SessionItemId("c1"),
+				tool: "bash",
+				input: JSON.stringify({ command: "make  test" }),
+				output: "ok\n\nexit 0",
+				status: "completed",
+			},
+			{
+				kind: "userMessage",
+				id: SessionItemId("b2"),
+				text: "Peer message from lead (root):\n\nRound 2/6 from your lead. Fix it.",
+			},
+			{
+				kind: "dynamicToolCall",
+				id: SessionItemId("c2"),
+				tool: "bash",
+				input: JSON.stringify({ command: "make lint" }),
+				output: "bad\n\nexit 2",
+				status: "completed",
+			},
+		];
+		expect(roundCommands(items)).toEqual([
+			{ command: "make test", exitCode: 0 },
+			{ command: "make lint", exitCode: 2 },
+		]);
+		expect(sidekickRoundBrief(items, 1)).toBe("First brief.");
+		expect(sidekickRoundBrief(items, 2)).toContain("Round 2/6 from your lead");
 	});
 });
