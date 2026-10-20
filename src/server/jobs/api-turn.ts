@@ -11,7 +11,7 @@ import {
 	isUserRequestMessage,
 } from "#/domain/api-conversation";
 import { applyApiProgress, recordedContextUsage } from "#/domain/api-progress";
-import { addApiTokenUsage } from "#/domain/api-token-usage";
+import { type ApiTokenUsage, addApiTokenUsage } from "#/domain/api-token-usage";
 import {
 	ApiTurnCancelled,
 	type ApiTurnFailureStage,
@@ -40,7 +40,6 @@ import { prepareInterruptedStep } from "#/domain/interrupted-step";
 import { withMemoryRecall } from "#/domain/memory-marker";
 import { officialProviderEndpoint } from "#/domain/model-connection";
 import {
-	type FailoverReason,
 	failoverExhaustedDetail,
 	failoverNotice,
 	failoverQuestion,
@@ -200,7 +199,9 @@ import {
 } from "../services/secret-request-tool";
 import { machinesForAgentSession } from "../services/session-workspace-machines";
 import {
+	blockSidekickSwitch,
 	completeSidekickModelSwitch,
+	sidekickSwitchAllowed,
 	sidekickSwitchAtCompaction,
 } from "../services/sidekick-model-switch";
 import { recordStepTiming, timed } from "../services/step-timing";
@@ -1112,16 +1113,26 @@ async function runApiTurnAttempt(
 			// a pending switch compacts first (src/server/services/sidekick-model-switch.ts).
 			...(sidekickState(owner)
 				? {
-						compactFirst: sidekickSwitchDue(
-							sidekickState(owner) as NonNullable<
-								ReturnType<typeof sidekickState>
-							>,
-						),
+						compactFirst:
+							sidekickSwitchDue(
+								sidekickState(owner) as NonNullable<
+									ReturnType<typeof sidekickState>
+								>,
+								turn.id,
+							) &&
+							sidekickSwitchAllowed(
+								sidekickState(owner) as NonNullable<
+									ReturnType<typeof sidekickState>
+								>,
+								turn.id,
+							),
 						switchAtCompaction: sidekickSwitchAtCompaction({
 							userId: owner.userId,
 							sessionId: owner.id,
+							turnId: turn.id,
 							roleModels: variant.roleModels,
 							items: () => items,
+							signal: abort.signal,
 						}),
 					}
 				: {}),
@@ -1616,6 +1627,19 @@ async function runApiTurnAttempt(
 							outcome: "finished",
 							text: finalText.slice(-9000) || "(no final report)",
 							roleModels: fusionRoleModels,
+							signal: abort.signal,
+							...(evaluation
+								? {
+										deps: {
+											chargeUsage: (usage: ApiTokenUsage, key: string) =>
+												recordEvaluationUsage(
+													evaluation as EvaluationRun,
+													`${turn.id}:${key}`,
+													usage,
+												),
+										},
+									}
+								: {}),
 						})
 					: finalText.slice(-16000) ||
 						"Turn ended without a recorded final summary; inspect the task before accepting it.",
@@ -1639,21 +1663,31 @@ async function runApiTurnAttempt(
 			!coordinationFailure
 		) {
 			try {
+				const current = {
+					route,
+					label: {
+						model: route.modelId,
+						connection: route.connectionId ?? "Codex",
+					},
+				};
+				// A switch that throws is dropped like an unavailable route: the
+				// turn continues where it was, and switches no more this turn.
 				const outcome = await completeSidekickModelSwitch({
 					userId: turn.user_id,
 					sessionId: turn.session_id,
+					turnId: turn.id,
 					roleModels: fusionRoleModels,
 					target: error.target,
 					compacted: error.compacted,
-					current: {
-						route,
-						label: {
-							model: route.modelId,
-							connection: route.connectionId ?? "Codex",
-						},
-					},
+					current,
 					previous: turnFailover(turn.failover),
 					messages,
+				}).catch((cause: unknown) => {
+					blockSidekickSwitch(turn.id);
+					return {
+						kind: "kept" as const,
+						reason: cause instanceof Error ? cause.message : String(cause),
+					};
 				});
 				if (outcome.kind === "kept")
 					console.warn("A sidekick's model switch was dropped.", {
@@ -1661,7 +1695,23 @@ async function runApiTurnAttempt(
 					});
 				const failover =
 					outcome.kind === "switched" ? outcome.failover : undefined;
-				if (outcome.kind === "switched") messages = outcome.messages;
+				if (outcome.kind === "switched") {
+					messages = outcome.messages;
+					items = [
+						...items,
+						modelSwitchItem(items, {
+							id: `${turn.id}:sidekick-switch-${failover?.switches ?? 1}`,
+							state: "switched",
+							message: `Switched from ${outcome.from} to ${outcome.to} at a context compaction (${error.target.reason.replace(/[.\s]+$/, "")}).`,
+							reason: "sidekick-escalation",
+							from: current.label,
+							to: {
+								...outcome.label,
+								key: routeKey(outcome.failover.route),
+							},
+						}),
+					];
+				}
 				await checkpointApiTurn(turn, messages, items, failover);
 				// The turn's lease carries over to the step on the new route.
 				coordinated = false;
@@ -1879,6 +1929,7 @@ async function runApiTurnAttempt(
 								? "budget exhausted"
 								: "failed",
 						roleModels: fusionRoleModels,
+						signal: abort.signal,
 						text: [
 							failureMessage,
 							items
@@ -2081,7 +2132,7 @@ function modelSwitchItem(
 		id: string;
 		state: ModelSwitchItem["state"];
 		message: string;
-		reason: FailoverReason;
+		reason: ModelSwitchItem["reason"];
 		from: ModelSwitchItem["from"];
 		to: ModelSwitchItem["to"];
 	},

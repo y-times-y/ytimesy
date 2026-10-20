@@ -148,7 +148,8 @@ export type ModelSwitchItem = {
 	readonly kind: "modelSwitch";
 	readonly id: SessionItemId;
 	readonly message: string;
-	readonly reason: FailoverReason;
+	/** A failover's reason, or lead mode fusion's sidekick switching models at a compaction. */
+	readonly reason: FailoverReason | "sidekick-escalation";
 	readonly from: { readonly model: string; readonly connection: string };
 	readonly to: {
 		readonly model: string;

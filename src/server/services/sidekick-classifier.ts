@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { type LanguageModel, type LanguageModelUsage, streamText } from "ai";
+import type { ApiTokenUsage } from "#/domain/api-token-usage";
 import { parseModelRouteId } from "#/domain/model-connection";
 import type { FailoverConnection } from "#/domain/model-failover";
 import { modelBilling, usageCostUsd } from "#/domain/model-pricing";
@@ -22,6 +23,7 @@ import {
 } from "#/domain/sidekick-classifier";
 import { usageTokens } from "#/domain/subagent-usage";
 import { apiTokenUsage } from "../adapters/api-token-usage";
+import { reserveApiTokens } from "../adapters/api-usage-budget";
 import { codexSubscriptionModel } from "../adapters/codex-subscription";
 import { withApiModel } from "./api-agent-runtime";
 import {
@@ -39,9 +41,22 @@ export type ClassifierCall = (input: {
 	readonly signal: AbortSignal;
 }) => Promise<{ text: string; usage: LanguageModelUsage }>;
 
+/** A failed classifier request, with the usage the provider reported before it failed. */
+export class ClassifierCallError extends Error {
+	constructor(
+		readonly cause: unknown,
+		readonly usage: LanguageModelUsage | undefined,
+	) {
+		super(cause instanceof Error ? cause.message : String(cause));
+		this.name = cause instanceof Error ? cause.name : "ClassifierCallError";
+	}
+}
+
 export type SidekickClassifierDeps = {
 	readonly routes?: (userId: string) => Promise<readonly FailoverConnection[]>;
 	readonly call?: ClassifierCall;
+	/** The API token budget (API routes only; a plan route is not metered per token). */
+	readonly reserve?: typeof reserveApiTokens;
 	readonly now?: () => number;
 	readonly timeoutMs?: number;
 };
@@ -50,6 +65,8 @@ export type SidekickClassifierDeps = {
 export type SidekickClassification = {
 	readonly answer: ClassifierAnswer;
 	readonly record: SidekickDecisionRecord;
+	/** The call's usage (also on a failure when the provider reported it); null without a call. */
+	readonly usage: ApiTokenUsage | null;
 };
 
 const MAX_OUTPUT_TOKENS = 400;
@@ -73,11 +90,18 @@ async function streamOnce(
 		abortSignal: signal,
 		onError: () => {},
 	});
-	for await (const part of result.fullStream) {
-		if (part.type === "error") throw part.error;
-		if (part.type === "abort") throw new Error("The classifier was aborted.");
+	let reported: LanguageModelUsage | undefined;
+	try {
+		for await (const part of result.fullStream) {
+			if (part.type === "finish-step") reported = part.usage;
+			if (part.type === "error") throw part.error;
+			if (part.type === "abort")
+				throw signal.reason ?? new Error("The classifier was aborted.");
+		}
+		return { text: await result.text, usage: await result.totalUsage };
+	} catch (cause) {
+		throw new ClassifierCallError(cause, reported);
 	}
-	return { text: await result.text, usage: await result.totalUsage };
 }
 
 /** The classifier request on the plan (codex:) or an API connection. */
@@ -126,8 +150,12 @@ export const callClassifierModel: ClassifierCall = async (input) => {
  */
 export async function classifySidekick(input: {
 	readonly userId: string;
+	/** The sidekick's session (its task's API token budget). */
+	readonly sessionId: string;
 	readonly roleModels: RoleModels | undefined;
 	readonly summary: ClassifierInput;
+	/** The turn's abort signal; the call also stops at its own short timeout. */
+	readonly signal?: AbortSignal;
 	readonly deps?: SidekickClassifierDeps;
 }): Promise<SidekickClassification> {
 	const deps = input.deps ?? {};
@@ -156,22 +184,33 @@ export async function classifySidekick(input: {
 				resolved.kind === "fallback" ? resolved.notice : "no classifier route",
 			);
 		model = resolved.model;
+		if (model.harness !== "codex")
+			await (deps.reserve ?? reserveApiTokens)(
+				input.userId,
+				input.sessionId,
+				Buffer.byteLength(CLASSIFIER_INSTRUCTIONS + message, "utf8") +
+					MAX_OUTPUT_TOKENS * 4,
+			);
 		const timeoutMs = deps.timeoutMs ?? classifierTimeoutMs();
 		const reply = await (deps.call ?? callClassifierModel)({
 			userId: input.userId,
 			model,
 			instructions: CLASSIFIER_INSTRUCTIONS,
 			message,
-			signal: AbortSignal.timeout(timeoutMs),
+			signal: input.signal
+				? AbortSignal.any([AbortSignal.timeout(timeoutMs), input.signal])
+				: AbortSignal.timeout(timeoutMs),
 		});
 		usage = reply.usage;
 		answer = parseClassifierReply(reply.text);
 		if (!answer)
 			fallback = `unparsable reply: ${reply.text.trim().slice(0, 120) || "(empty)"}`;
 	} catch (cause) {
+		if (cause instanceof ClassifierCallError) usage = cause.usage;
 		const error = cause instanceof Error ? cause : new Error(String(cause));
-		fallback =
-			error.name === "TimeoutError" || error.name === "AbortError"
+		fallback = input.signal?.aborted
+			? "the turn was stopped"
+			: error.name === "TimeoutError" || error.name === "AbortError"
 				? "timed out"
 				: `failed: ${error.message.slice(0, 160)}`;
 	}
@@ -198,5 +237,5 @@ export async function classifySidekick(input: {
 		...(model ? { model: model.listedModelId } : {}),
 		at: new Date(now()).toISOString(),
 	};
-	return { answer: decided, record };
+	return { answer: decided, record, usage: counts };
 }

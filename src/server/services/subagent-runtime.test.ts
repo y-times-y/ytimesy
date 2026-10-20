@@ -49,6 +49,23 @@ vi.mock("./sidekick-classifier", () => ({
 	}),
 }));
 
+/** A compare-and-set fake: applies the change to `stored` (what the database holds now) and saves it. */
+function applying(
+	stored: SidekickState,
+	save: (id: string, state: SidekickState) => Promise<void>,
+) {
+	return vi.fn(
+		async (
+			id: string,
+			mutate: (current: SidekickState) => SidekickState | null,
+		) => {
+			const next = mutate(stored);
+			if (next) await save(id, next);
+			return next;
+		},
+	);
+}
+
 function decisionRecord(
 	decision: SidekickDecision,
 	source: SidekickDecisionRecord["source"] = "classifier",
@@ -465,7 +482,8 @@ describe("sidekick (lead mode fusion)", () => {
 			now: NOW,
 			deps: {
 				session: vi.fn(async () => sidekick),
-				saveState,
+				updateState: applying(state, saveState),
+				addUsage: vi.fn(async () => true),
 				mergeFork: adapters.mergeFork,
 			},
 		});
@@ -519,7 +537,8 @@ describe("sidekick (lead mode fusion)", () => {
 			now: NOW,
 			deps: {
 				session: vi.fn(async () => sidekick),
-				saveState,
+				updateState: applying(state, saveState),
+				addUsage: vi.fn(async () => true),
 				mergeFork: adapters.mergeFork,
 			},
 		});
@@ -631,6 +650,7 @@ describe("sidekick (lead mode fusion)", () => {
 				reason: "it repeats make test",
 			},
 			record: decisionRecord("switch_model"),
+			usage: null,
 		}));
 		const report = await subagentReport({
 			machines: { destroy: vi.fn() } as never,
@@ -642,7 +662,8 @@ describe("sidekick (lead mode fusion)", () => {
 			roleModels: { writerEscalation: { model: "codex:gpt-6.1-sol" } },
 			deps: {
 				session: vi.fn(async () => sidekick),
-				saveState,
+				updateState: applying(state, saveState),
+				addUsage: vi.fn(async () => true),
 				mergeFork: adapters.mergeFork,
 				classify,
 			},
@@ -688,6 +709,67 @@ describe("sidekick (lead mode fusion)", () => {
 		expect(saved.rounds.at(-1)?.signals).toEqual([
 			{ kind: "same-check-failed", detail: "make test" },
 		]);
+	});
+
+	it("applies the round's decision to the stored state: a sidekick the lead stopped meanwhile stays retired; its usage is charged", async () => {
+		const root = record("root", null, { providerRef: "vm-root" });
+		const state = sidekickState({ round: 2, roundStartedAt: at(-3) });
+		const sidekick = record("s", "root", {
+			agentRole: "writer",
+			listedModelId: "gpt-6-luna",
+			agentBudget: sidekickBudget(state),
+			agentFork: {
+				vmId: "vm-fork",
+				sourceVmId: "vm-root",
+				bootedAt: at(-30),
+				base: "lead-tree",
+				parentHead: "lead-head",
+			},
+		});
+		adapters.ancestors.mockResolvedValue([root]);
+		adapters.tree.mockResolvedValue([root, sidekick]);
+		const usage = {
+			inputTokens: 900,
+			outputTokens: 30,
+			uncachedInputTokens: 900,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+		};
+		const saveState = vi.fn(async () => {});
+		const addUsage = vi.fn(async () => true);
+		const chargeUsage = vi.fn(async () => {});
+		const stored = retireSidekickState(state, "stopped by the lead", at(-1));
+		const report = await subagentReport({
+			machines: { destroy: vi.fn(async () => {}) } as never,
+			session: sidekick,
+			items: [],
+			outcome: "finished",
+			text: "Still failing.",
+			now: NOW,
+			roleModels: { writerEscalation: { model: "codex:gpt-6.1-sol" } },
+			deps: {
+				session: vi.fn(async () => sidekick),
+				updateState: applying(stored, saveState),
+				addUsage,
+				chargeUsage,
+				mergeFork: adapters.mergeFork,
+				classify: vi.fn(async () => ({
+					answer: { decision: "switch_model" as const, reason: "stuck" },
+					record: decisionRecord("switch_model"),
+					usage,
+				})),
+			},
+		});
+		const saved = (
+			saveState.mock.calls[0] as unknown as [string, SidekickState]
+		)[1];
+		expect(saved.retired?.reason).toBe("stopped by the lead");
+		expect(saved.pendingSwitch).toBeUndefined();
+		expect(saved.decisions).toHaveLength(1);
+		expect(report).toContain("Sidekick 1 is retired (stopped by the lead)");
+		expect(report).toContain("needs you (stuck)");
+		expect(addUsage).toHaveBeenCalledWith("s", usage);
+		expect(chargeUsage).toHaveBeenCalledWith(usage, "classifier:h");
 	});
 
 	it("keeps an idle sidekick for the chat's next message when the lead's turn completes", async () => {

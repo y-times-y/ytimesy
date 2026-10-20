@@ -70,7 +70,7 @@ it("compacts a pending switch's round first into a neutral summary, saves it, an
 		doStream: async () =>
 			textStream("## Requirements and constraints\n- Fix it"),
 	});
-	const hook = vi.fn(async () => target);
+	const hook = vi.fn(async () => ({ target }));
 	const run = input(hook);
 	const error = await runModelAgentStep(run, {
 		model,
@@ -92,7 +92,7 @@ it("runs the step as usual when the hook names no model", async () => {
 	const model = new MockLanguageModelV4({
 		doStream: async () => textStream("Done"),
 	});
-	const run = input(vi.fn(async () => null));
+	const run = input(vi.fn(async () => ({ target: null })));
 	const result = await runModelAgentStep(run, {
 		model,
 		contextWindow: 200_000,
@@ -110,7 +110,7 @@ it("switches on the whole history when a round's first compaction cannot run", a
 	});
 	// A single request: nothing before it to summarize.
 	const run = input(
-		vi.fn(async () => target),
+		vi.fn(async () => ({ target })),
 		[{ role: "user", content: "Round 1 brief" }],
 	);
 	const error = await runModelAgentStep(run, {
@@ -132,4 +132,44 @@ it("drops the parallel tool call option from one-off requests", () => {
 	).toEqual({ providerOptions: { openai: { instructions: "x" } } });
 	const plain = { system: "x" };
 	expect(withoutToolSettings(plain)).toBe(plain);
+});
+
+it("keeps the summary when the context archive fails, and charges the decision's usage to the run", async () => {
+	const model = new MockLanguageModelV4({
+		doStream: async () =>
+			textStream("## Requirements and constraints\n- Fix it"),
+	});
+	const decisionUsage = {
+		inputTokens: 900,
+		outputTokens: 30,
+		uncachedInputTokens: 900,
+		cacheReadTokens: 0,
+		cacheWriteTokens: 0,
+	};
+	const run = {
+		...input(vi.fn(async () => ({ target, usage: decisionUsage }))),
+		// The rehearsal has no archive storage: the upload throws.
+		archiveHistory: vi.fn(async () => {
+			throw new Error("storage is not configured");
+		}),
+	};
+	const error = await runModelAgentStep(run, {
+		model,
+		contextWindow: 200_000,
+	}).catch((cause: unknown) => cause);
+	expect(error).toBeInstanceOf(ModelSwitchAtCompaction);
+	expect((error as ModelSwitchAtCompaction).compacted).toBe(true);
+	const saved = JSON.stringify(run.onStep.mock.calls.at(-1)?.[0]);
+	expect(saved).toContain("Summary of earlier conversation");
+	expect(saved).not.toContain("Original context archive");
+	const usages = (
+		run.onEvent.mock.calls as unknown as [
+			{ type: string; usage?: { inputTokens: number } },
+		][]
+	)
+		.map(([event]) => event)
+		.filter((event) => event.type === "usage");
+	// The decision's tokens first, then the summary's on top.
+	expect(usages[0]?.usage?.inputTokens).toBe(900);
+	expect(usages.at(-1)?.usage?.inputTokens).toBe(903);
 });

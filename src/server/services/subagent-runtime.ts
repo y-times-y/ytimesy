@@ -1,4 +1,5 @@
 import type { ModelMessage } from "ai";
+import { type ApiTokenUsage, addApiTokenUsage } from "#/domain/api-token-usage";
 import { checkerWrapUpLeadMs } from "#/domain/checker-brief";
 import { WorkspaceId } from "#/domain/ids";
 import { sessionBilling } from "#/domain/model-pricing";
@@ -57,6 +58,7 @@ import {
 	descendantAgentSessions,
 } from "../adapters/agent-sessions";
 import {
+	addSessionRequestUsage,
 	forkedWritersDueForTeardown,
 	idleSidekicksPastTtl,
 	subagentTree as loadSubagentTree,
@@ -65,6 +67,7 @@ import {
 	requestSubagentStop,
 	saveSidekickState,
 	subagentAncestors,
+	updateSidekickState,
 } from "../adapters/subagents";
 import {
 	classifySidekick,
@@ -175,6 +178,8 @@ export async function subagentReport(input: {
 	readonly deps?: SidekickRuntimeDeps;
 	/** Lead mode fusion: the variant's role models (the classifier's and writerEscalation's). */
 	readonly roleModels?: RoleModels;
+	/** The sidekick turn's abort signal (the classifier stops with it). */
+	readonly signal?: AbortSignal;
 }): Promise<string> {
 	const { session } = input;
 	const role = session.agentRole;
@@ -281,6 +286,7 @@ export async function subagentReport(input: {
 					items: input.items,
 					model: session.listedModelId ?? null,
 					roleModels: input.roleModels,
+					signal: input.signal,
 					now,
 					deps: input.deps,
 				}),
@@ -302,7 +308,39 @@ export type SidekickRuntimeDeps = {
 	readonly classify?: (
 		summary: ClassifierInput,
 	) => Promise<SidekickClassification>;
+	/** Compare-and-set of the sidekick's state (updateSidekickState). */
+	readonly updateState?: (
+		sessionId: string,
+		mutate: (current: SidekickState) => SidekickState | null,
+	) => Promise<SidekickState | null>;
+	/** Adds the classifier's usage to the session's latest request. */
+	readonly addUsage?: (
+		sessionId: string,
+		usage: ApiTokenUsage,
+	) => Promise<unknown>;
+	/** Charges the classifier's usage to the turn's other ledgers (an evaluation run). */
+	readonly chargeUsage?: (
+		usage: ApiTokenUsage,
+		key: string,
+	) => Promise<unknown>;
 };
+
+/** Adds a one-off call's usage to the session's latest request (where turn usage is kept). */
+export function addRequestUsage(sessionId: string, usage: ApiTokenUsage) {
+	return addSessionRequestUsage(sessionId, (items) => {
+		for (let index = items.length - 1; index >= 0; index--) {
+			const item = items[index] as SessionItem | undefined;
+			if (item?.kind !== "userMessage") continue;
+			const next = [...items];
+			next[index] = {
+				...item,
+				apiUsage: addApiTokenUsage(item.apiUsage ?? null, usage),
+			};
+			return next;
+		}
+		return null;
+	});
+}
 
 /**
  * Closes a sidekick's round after its report: records the round and the
@@ -326,6 +364,7 @@ async function endSidekickRoundAndReport(input: {
 	readonly items: readonly SessionItem[];
 	readonly model: string | null;
 	readonly roleModels?: RoleModels;
+	readonly signal?: AbortSignal;
 	readonly now: number;
 	readonly deps?: SidekickRuntimeDeps;
 }) {
@@ -360,39 +399,59 @@ async function endSidekickRoundAndReport(input: {
 		signals,
 		canSwitch: !!escalation,
 	};
-	const { answer, record } = await (
+	const { answer, record, usage } = await (
 		input.deps?.classify ??
 		((summary: ClassifierInput) =>
 			classifySidekick({
 				userId: input.userId,
+				sessionId: input.sessionId,
 				roleModels: input.roleModels,
 				summary,
+				signal: input.signal,
 			}))
 	)(summary);
-	let ended = recordSidekickDecision(
-		endSidekickRound(input.state, {
-			now: new Date(input.now).toISOString(),
-			outcome: input.outcome,
-			patchFiles,
-			evidence,
-			signals,
-			pushback: reportPushesBack(input.report),
-		}),
-		record,
-	);
+	// Its spend counts like any model call's: in the session's usage and the turn's ledgers.
+	if (usage) {
+		await (input.deps?.addUsage ?? addRequestUsage)(
+			input.sessionId,
+			usage,
+		).catch(() => {});
+		await input.deps
+			?.chargeUsage?.(usage, `classifier:${record.inputsHash}`)
+			.catch(() => {});
+	}
+	// Applied to the state as stored now: the classifier took a while, and
+	// the lead may have stopped (retired) the sidekick meanwhile.
+	const close = (current: SidekickState) => {
+		const ended = recordSidekickDecision(
+			endSidekickRound(current, {
+				now: new Date(input.now).toISOString(),
+				outcome: input.outcome,
+				patchFiles,
+				evidence,
+				signals,
+				pushback: reportPushesBack(input.report),
+			}),
+			record,
+		);
+		return answer.decision === "switch_model" && escalation && !ended.retired
+			? markSidekickSwitch(ended, {
+					to: escalation,
+					reason: answer.reason,
+					round: current.round,
+					at: new Date(input.now).toISOString(),
+				})
+			: ended;
+	};
+	const ended =
+		(await (input.deps?.updateState ?? updateSidekickState)(
+			input.sessionId,
+			close,
+		).catch(() => null)) ?? close(input.state);
 	const switching =
-		answer.decision === "switch_model" && escalation && !ended.retired;
-	if (switching)
-		ended = markSidekickSwitch(ended, {
-			to: escalation,
-			reason: answer.reason,
-			round: input.state.round,
-			at: new Date(input.now).toISOString(),
-		});
-	await (input.deps?.saveState ?? saveSidekickState)(
-		input.sessionId,
-		ended,
-	).catch(() => {});
+		answer.decision === "switch_model" &&
+		!!ended.pendingSwitch &&
+		!ended.retired;
 	const notice = sidekickDecisionNotice({
 		label: input.label,
 		decision:

@@ -1,4 +1,5 @@
 import type { ModelMessage } from "ai";
+import type { ApiTokenUsage } from "#/domain/api-token-usage";
 import { parseModelRouteId } from "#/domain/model-connection";
 import {
 	type FailoverConnection,
@@ -39,7 +40,7 @@ import {
 	type AgentSessionRecord,
 	agentSessionForOwner,
 } from "../adapters/agent-sessions";
-import { saveSidekickModel, saveSidekickState } from "../adapters/subagents";
+import { updateSidekickState } from "../adapters/subagents";
 import type { ModelSwitchTarget } from "./model-agent-loop";
 import { failoverConnections } from "./model-failover";
 import {
@@ -71,8 +72,8 @@ import {
 
 export type SidekickSwitchDeps = {
 	readonly session?: typeof agentSessionForOwner;
-	readonly saveState?: typeof saveSidekickState;
-	readonly saveModel?: typeof saveSidekickModel;
+	/** Compare-and-set of the state, with the session's model in the same write. */
+	readonly updateState?: typeof updateSidekickState;
 	readonly routes?: (userId: string) => Promise<readonly FailoverConnection[]>;
 	readonly classify?: (
 		summary: ClassifierInput,
@@ -80,13 +81,40 @@ export type SidekickSwitchDeps = {
 	readonly now?: () => number;
 };
 
+/**
+ * Turns whose switch was dropped (route unavailable, or the switch failed):
+ * no further switch, and no more switch compactions, in them. Kept in
+ * memory whether or not the state's own mark (switchBlockedTurn) was saved,
+ * which also covers a step that runs in another isolate.
+ */
+const blockedTurns = new Set<string>();
+
+export function blockSidekickSwitch(turnId: string) {
+	blockedTurns.add(turnId);
+	if (blockedTurns.size > 1000)
+		blockedTurns.delete(blockedTurns.values().next().value as string);
+}
+
+/** Whether a turn may still switch the sidekick's model. */
+export function sidekickSwitchAllowed(state: SidekickState, turnId: string) {
+	return !blockedTurns.has(turnId) && state.switchBlockedTurn !== turnId;
+}
+
+/** What the run does at a compaction: switch or not, and the classifier's usage to charge. */
+export type CompactionSwitchDecision = {
+	readonly target: ModelSwitchTarget | null;
+	readonly usage?: ApiTokenUsage | null;
+};
+
 /** The hook the sidekick's run asks at each compaction (ModelAgentInput.switchAtCompaction). */
 export function sidekickSwitchAtCompaction(input: {
 	readonly userId: string;
 	readonly sessionId: string;
+	readonly turnId: string;
 	readonly roleModels: RoleModels | undefined;
 	/** The session's items now (the round so far). */
 	readonly items: () => readonly SessionItem[];
+	readonly signal?: AbortSignal;
 	readonly deps?: SidekickSwitchDeps;
 }) {
 	const deps = input.deps ?? {};
@@ -94,41 +122,51 @@ export function sidekickSwitchAtCompaction(input: {
 		forced,
 	}: {
 		readonly forced: boolean;
-	}): Promise<ModelSwitchTarget | null> => {
+	}): Promise<CompactionSwitchDecision> => {
+		const none = { target: null };
 		const session = await (deps.session ?? agentSessionForOwner)(
 			input.userId,
 			input.sessionId,
 		);
 		const state = sidekickState(session);
-		if (!session || !state || state.retired) return null;
+		if (!session || !state || state.retired) return none;
+		if (!sidekickSwitchAllowed(state, input.turnId)) return none;
 		if (state.pendingSwitch)
 			return {
-				spec: state.pendingSwitch.to,
-				reason: state.pendingSwitch.reason,
-				trigger: "pending",
+				target: {
+					spec: state.pendingSwitch.to,
+					reason: state.pendingSwitch.reason,
+					trigger: "pending",
+				},
 			};
 		const escalation = sidekickEscalation(
 			input.roleModels,
 			session.listedModelId,
 		);
-		if (forced || !escalation) return null;
-		const { answer, record } = await (
+		if (forced || !escalation) return none;
+		const { answer, record, usage } = await (
 			deps.classify ??
 			((summary: ClassifierInput) =>
 				classifySidekick({
 					userId: input.userId,
+					sessionId: input.sessionId,
 					roleModels: input.roleModels,
 					summary,
+					signal: input.signal,
 				}))
 		)(compactionSummary(state, input.items(), session, escalation));
 		// A hand_back mid-round is recorded only: the round's own decision reaches the lead.
-		await (deps.saveState ?? saveSidekickState)(
+		await (deps.updateState ?? updateSidekickState)(
 			input.sessionId,
-			recordSidekickDecision(state, record),
+			(current) => recordSidekickDecision(current, record),
 		).catch(() => {});
-		return answer.decision === "switch_model"
-			? { spec: escalation, reason: answer.reason, trigger: "compaction" }
-			: null;
+		return {
+			target:
+				answer.decision === "switch_model"
+					? { spec: escalation, reason: answer.reason, trigger: "compaction" }
+					: null,
+			usage,
+		};
 	};
 }
 
@@ -221,6 +259,9 @@ export type SidekickSwitchOutcome =
 			readonly failover: TurnFailover;
 			readonly messages: ModelMessage[];
 			readonly to: string;
+			readonly from: string;
+			/** The new route's labels (the timeline's model switch item). */
+			readonly label: RouteLabel;
 	  }
 	| { readonly kind: "kept"; readonly reason: string };
 
@@ -234,6 +275,7 @@ export type SidekickSwitchOutcome =
 export async function completeSidekickModelSwitch(input: {
 	readonly userId: string;
 	readonly sessionId: string;
+	readonly turnId: string;
 	readonly roleModels: RoleModels | undefined;
 	readonly target: ModelSwitchTarget;
 	readonly compacted: boolean;
@@ -251,11 +293,15 @@ export async function completeSidekickModelSwitch(input: {
 	);
 	const state = sidekickState(session);
 	if (!session || !state) return { kind: "kept", reason: "not a sidekick" };
+	const update = deps.updateState ?? updateSidekickState;
+	// Once per turn, whether or not the state's mark is saved: a dropped
+	// switch must not compact again and again.
 	const keep = async (reason: string) => {
-		const { pendingSwitch: _, ...rest } = state;
-		await (deps.saveState ?? saveSidekickState)(input.sessionId, rest).catch(
-			() => {},
-		);
+		blockSidekickSwitch(input.turnId);
+		await update(input.sessionId, (current) => {
+			const { pendingSwitch: _, ...rest } = current;
+			return { ...rest, switchBlockedTurn: input.turnId };
+		}).catch(() => {});
 		return { kind: "kept" as const, reason };
 	};
 	const entry =
@@ -277,22 +323,28 @@ export async function completeSidekickModelSwitch(input: {
 	if (!next) return keep(`no route for ${resolved.model.listedModelId}`);
 	if (routeKey(next.route) === routeKey(input.current.route))
 		return keep("already on the escalation model");
-	await (deps.saveModel ?? saveSidekickModel)(input.sessionId, {
-		listedModelId: resolved.model.listedModelId,
-		harness: resolved.model.harness === "codex" ? "codex" : "api",
-	});
-	await (deps.saveState ?? saveSidekickState)(
+	// The model and the switch's record in one write; a sidekick retired
+	// meanwhile is not switched (nor brought back).
+	const saved = await update(
 		input.sessionId,
-		completeSidekickSwitch(state, {
-			from: session.listedModelId ?? "",
-			to: resolved.model.listedModelId,
-			reason: input.target.reason,
-			round: state.round,
-			trigger: input.target.trigger,
-			compacted: input.compacted,
-			at: now,
-		}),
+		(current) =>
+			current.retired
+				? null
+				: completeSidekickSwitch(current, {
+						from: session.listedModelId ?? "",
+						to: resolved.model.listedModelId,
+						reason: input.target.reason,
+						round: current.round,
+						trigger: input.target.trigger,
+						compacted: input.compacted,
+						at: now,
+					}),
+		{
+			listedModelId: resolved.model.listedModelId,
+			harness: resolved.model.harness === "codex" ? "codex" : "api",
+		},
 	);
+	if (!saved) return keep("the sidekick was retired meanwhile");
 	const failover = nextTurnFailover(input.previous, input.current, {
 		route: next.route,
 		connectionKey: next.route.connectionId ?? SUBSCRIPTION_KEY,
@@ -305,6 +357,8 @@ export async function completeSidekickModelSwitch(input: {
 		kind: "switched",
 		failover,
 		to: resolved.model.listedModelId,
+		from: session.listedModelId ?? "",
+		label: next.label,
 		messages: modelSwitchHistory(
 			input.messages,
 			`Runtime note: your context was compacted and you now run on ${resolved.model.listedModelId} (${input.target.reason.replace(/[.\s]+$/, "")}). Continue the current round from the summary above; your checkout is unchanged.`,

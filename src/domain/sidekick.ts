@@ -151,6 +151,8 @@ export type SidekickState = {
 	readonly pendingSwitch?: SidekickPendingSwitch;
 	/** Model switches carried out. */
 	readonly switches?: readonly SidekickSwitch[];
+	/** The turn whose switch was dropped: it neither switches nor compacts for one again. */
+	readonly switchBlockedTurn?: string;
 };
 
 export function newSidekickState(
@@ -424,11 +426,12 @@ export function markSidekickSwitch(
  * policy: at the next compaction, and since a short round rarely reaches
  * one, its next round forces one first).
  */
-export function sidekickSwitchDue(state: SidekickState) {
+export function sidekickSwitchDue(state: SidekickState, turnId?: string) {
 	return (
 		!!state.pendingSwitch &&
 		!state.retired &&
-		state.round > state.pendingSwitch.round
+		state.round > state.pendingSwitch.round &&
+		(turnId === undefined || state.switchBlockedTurn !== turnId)
 	);
 }
 
