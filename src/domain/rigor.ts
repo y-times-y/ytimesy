@@ -1,8 +1,12 @@
+import { isInternalChildTaskMessage } from "./child-task-activity";
+import type { SessionItem } from "./session-item";
+
 /**
  * Rigor (harness variant rigor=on): the builder's block on ambiguity,
- * finishing and running the deliverable as an outside user would, and the
- * review loop's test for a final answer that admits unverified work. The
- * checker's side is in checker-brief.ts.
+ * finishing and running the deliverable as an outside user would, the root
+ * builder's up-front requirements list, and the review loop's test for a
+ * final answer that admits unverified work. The checker's side is in
+ * checker-brief.ts.
  */
 
 /** The builder's rigor block (root builder and writers; readers never get it). */
@@ -12,6 +16,53 @@ export const RIGOR_BUILDER_INSTRUCTIONS = [
 	"- Before finishing, run the deliverable as an outside user would: a fresh shell and process, a clean directory with only the files the request names, no dependencies or data files the request does not provide or declare, and results read back with standard clients and tools, not helpers you wrote.",
 	"- Do not finish with time left while something is unverified or a known risk is open: verify or fix it first. Report as unverified only what cannot be checked here.",
 ].join("\n");
+
+/** Most lines a builder's requirements list keeps. */
+export const MAX_BUILDER_REQUIREMENTS = 25;
+
+/**
+ * The root builder's requirements list (not writers: they work from a brief).
+ * It is written in the builder's own message between tag lines, never to a
+ * file, so it cannot reach a commit; the review loop takes the latest block
+ * of the turn from the transcript.
+ */
+export const RIGOR_REQUIREMENTS_INSTRUCTIONS = `- Requirements: before you start, write the request's requirements in your message between a <requirements> line and a </requirements> line, never in a file: one line each, at most ${MAX_BUILDER_REQUIREMENTS}, from the request and the files it points to (names, paths, formats, values, units, limits, invocation, side effects). Mark an ambiguous item with the reading you chose. Before finishing, re-check every item against the actual result; fix an unmet one or report it in your final answer.`;
+
+/** Lead mode fusion: when the lead writes the list and what the sidekick gets. */
+export const RIGOR_LEAD_REQUIREMENTS =
+	"- As the lead, write the list right after the exploration report, before your first brief, and put the items a brief covers into that brief.";
+
+const REQUIREMENTS_BLOCK = /<requirements>([\s\S]*?)<\/requirements>/gi;
+
+/** The last requirements block in a text, one item per line (null when none). */
+export function requirementsFromText(text: string): string[] | null {
+	const block = [...text.matchAll(REQUIREMENTS_BLOCK)].at(-1)?.[1];
+	if (block === undefined) return null;
+	return block
+		.split("\n")
+		.map((line) => line.replace(/^\s*(?:[-*\u2022]|\d+[.)])?\s*/, "").trim())
+		.filter(Boolean)
+		.slice(0, MAX_BUILDER_REQUIREMENTS)
+		.map((line) => (line.length > 300 ? `${line.slice(0, 297)}...` : line));
+}
+
+/**
+ * The builder's latest requirements list in this turn: its messages since
+ * the person's latest request (child-event messages do not start a turn).
+ */
+export function builderRequirements(
+	items: readonly SessionItem[],
+): string[] | null {
+	for (let index = items.length - 1; index >= 0; index--) {
+		const item = items[index];
+		if (item.kind === "userMessage" && !isInternalChildTaskMessage(item.text))
+			return null;
+		if (item.kind !== "agentMessage") continue;
+		const list = requirementsFromText(item.text);
+		if (list?.length) return list;
+	}
+	return null;
+}
 
 /** Phrases that admit work was not verified or still fails. */
 const ADMITS =
