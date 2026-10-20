@@ -53,6 +53,13 @@ import { modelBilling } from "../src/domain/model-pricing";
 import type { ReviewLoopState } from "../src/domain/review-loop";
 import { sessionItemsFromUnknown } from "../src/domain/session-item";
 import {
+	type FusionTurnMetrics,
+	fusionMeansLine,
+	fusionMetricsLine,
+	fusionMetricsMeans,
+	fusionTurnMetrics,
+} from "../src/domain/sidekick";
+import {
 	agentSessionForOwner,
 	deleteAgentSessionForOwner,
 	descendantAgentSessions,
@@ -300,6 +307,8 @@ type HardSetRecord = RunRecord & {
 	 * its own route's price, from the session tree before cleanup.
 	 */
 	modelBreakdown?: ModelSpendRow[] | null;
+	/** lead=fusion: handoffs, sidekick rounds, lead edits, patches applied, spend split (src/domain/sidekick.ts). */
+	fusion?: FusionTurnMetrics | null;
 };
 
 type HardSetLoopAttempt = {
@@ -757,6 +766,32 @@ function printEfficiency(records: HardSetRecord[]) {
 	console.log(table(efficiencyTable(rows)));
 }
 
+/** lead=fusion runs: one line per run, then per-arm means. */
+function printFusion(
+	records: HardSetRecord[],
+	groupBy: (record: HardSetRecord) => string,
+) {
+	const runs = records.filter(
+		(record) => record.mode === "agent" && record.fusion,
+	);
+	if (!runs.length) return;
+	console.log(
+		"\nFusion (lead=fusion; handoffs = rounds the lead started; lead edits = its own edit/write calls; spend at list price):",
+	);
+	for (const record of runs)
+		console.log(
+			`- ${record.task}.${record.attempt} ${groupBy(record)} ${record.passed ? "PASS" : "fail"}: ${fusionMetricsLine(record.fusion as FusionTurnMetrics, record.agentSec)}`,
+		);
+	const groups = new Map<string, FusionTurnMetrics[]>();
+	for (const record of runs.filter(isScored))
+		groups.set(groupBy(record), [
+			...(groups.get(groupBy(record)) ?? []),
+			record.fusion as FusionTurnMetrics,
+		]);
+	for (const [name, list] of groups)
+		console.log(`  ${name}: ${fusionMeansLine(fusionMetricsMeans(list))}`);
+}
+
 if (flags.compare) {
 	const runs = flags.compare.split(",").map((run) => run.trim());
 	const records: HardSetRecord[] = [];
@@ -778,6 +813,7 @@ if (flags.compare) {
 	if (!records.length) throw new Error(`No records in ${runs.join(", ")}.`);
 	printEfficiency(records);
 	printEfficiencyBlocks(records, (record) => `${record.run} ${record.variant}`);
+	printFusion(records, (record) => `${record.run} ${record.variant}`);
 	process.exit(0);
 }
 
@@ -803,6 +839,7 @@ if (flags.report) {
 	printEfficiencyBlocks(records, () => `Run ${flags.run}`);
 	if (new Set(records.map((record) => record.variant)).size > 1)
 		printEfficiencyBlocks(records, (record) => `Arm ${record.variant}`);
+	printFusion(records, (record) => `Arm ${record.variant}`);
 	const agentRuns = records.filter((record) => record.mode === "agent");
 	if (agentRuns.length) {
 		console.log(
@@ -1380,34 +1417,38 @@ async function recordTurn(run: {
 				options.model,
 				loopStates.review,
 			);
-		const breakdown = run.userId
-			? await sessionTreeSpend(run.userId, sessionId, loopStates.attempt)
+		const tree = run.userId ? await sessionTree(run.userId, sessionId) : null;
+		const breakdown = tree
+			? sessionTreeSpend(sessionId, tree, loopStates.attempt)
 			: null;
 		// Sessions only grow until cleanup; never replace a copy with nothing.
 		if (breakdown?.length) record.modelBreakdown = breakdown;
+		if (tree && (record.variant.includes("lead=fusion") || record.fusion))
+			record.fusion = fusionTurnMetrics({ rootId: sessionId, sessions: tree });
 	} catch (error) {
 		record.errors.push(`Turn record not saved: ${safe(error).slice(0, 200)}`);
 	}
 }
 
-/** The run's spend per role and model from its stored session tree. */
-async function sessionTreeSpend(
-	userId: string,
-	rootId: string,
-	attemptStates: readonly AttemptLoopState[],
-) {
+/** The run's stored session tree: the root (the builder) first. */
+async function sessionTree(userId: string, rootId: string) {
 	const root = await agentSessionForOwner(userId, rootId);
 	if (!root) return null;
+	return [root, ...(await descendantAgentSessions(userId, rootId))];
+}
+
+/** The run's spend per role and model from its session tree. */
+function sessionTreeSpend(
+	rootId: string,
+	sessions: Awaited<ReturnType<typeof sessionTree>> & object,
+	attemptStates: readonly AttemptLoopState[],
+) {
 	const judgeIds = new Set(
 		attemptStates.flatMap((state) =>
 			state.selection?.judge ? [state.selection.judge.sessionId] : [],
 		),
 	);
-	return treeModelSpend({
-		rootId,
-		sessions: [root, ...(await descendantAgentSessions(userId, rootId))],
-		judgeIds,
-	});
+	return treeModelSpend({ rootId, sessions, judgeIds });
 }
 
 /**
