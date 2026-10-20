@@ -14,6 +14,7 @@ import {
 	subagentRemaining,
 	subagentReportHeader,
 	writerPatchBlock,
+	writerPatchExclusion,
 } from "./subagent";
 import { subagentWrapUpNotice } from "./subagent-instructions";
 
@@ -213,6 +214,78 @@ describe("subagent reports", () => {
 		expect(block).toContain("Overlaps with: agent 1.3 (src/api/user.ts)");
 		expect(block).toContain("git apply -3");
 		expect(writerPatchBlock(null, [])).toBe("Patch: no changes.");
+	});
+});
+
+describe("writer patch contents", () => {
+	const file = (path: string, bytes = 100, binary = false) => ({
+		path,
+		bytes,
+		binary,
+	});
+	it("keeps new source and small assets, and leaves scratch and large binaries out", () => {
+		expect(writerPatchExclusion(file("src/new.ts"), "")).toBeNull();
+		expect(writerPatchExclusion(file("icon.png", 4_000, true), "")).toBeNull();
+		expect(writerPatchExclusion(file("tmp/page.html"), "")).toBe("scratch");
+		expect(writerPatchExclusion(file("a/Downloads/x.json"), "")).toBe(
+			"scratch",
+		);
+		expect(writerPatchExclusion(file("node_modules/x/i.js"), "")).toBe(
+			"scratch",
+		);
+		// A file merely named like a scratch directory is not one.
+		expect(writerPatchExclusion(file("src/cache"), "")).toBeNull();
+		expect(writerPatchExclusion(file("photo.jpg", 150_000, true), "")).toBe(
+			"binary",
+		);
+		expect(writerPatchExclusion(file("dump.json", 2_000_000), "")).toBe(
+			"large",
+		);
+	});
+	it("keeps a file the brief names, by path or by name", () => {
+		expect(
+			writerPatchExclusion(
+				file("out/photo.jpg", 150_000, true),
+				"Save photo.jpg",
+			),
+		).toBeNull();
+		expect(
+			writerPatchExclusion(
+				file("downloads/data.csv"),
+				"put downloads/data.csv in",
+			),
+		).toBeNull();
+	});
+	it("warns about an unusually large patch and lists left-out files", () => {
+		const patch = {
+			path: "/home/u/.ytimesy/agents/2.patch",
+			files: Array.from({ length: 51 }, (_, index) => `f${index}`),
+			added: 3426,
+			removed: 0,
+			sha256: "b".repeat(64),
+			ref: "refs/ytimesy/agents/2",
+			base: "base1",
+		};
+		expect(writerPatchBlock(patch, [])).toContain(
+			"Warning: this patch is unusually large",
+		);
+		const block = writerPatchBlock(
+			{
+				...patch,
+				files: ["src/a.ts"],
+				added: 10,
+				excluded: {
+					count: 9,
+					bytes: 3 * 1024 * 1024,
+					paths: ["downloads/a.png", "downloads/b.png"],
+				},
+			},
+			[],
+		);
+		expect(block).not.toContain("unusually large");
+		expect(block).toContain(
+			"Left out: 9 new files (3.0 MB) in scratch, download or cache directories or large binaries the brief did not name: downloads/a.png, downloads/b.png, …",
+		);
 	});
 });
 
