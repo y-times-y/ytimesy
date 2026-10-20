@@ -13,6 +13,7 @@ import {
 	LEAN_SHAPE_TOOLS,
 	type LeanToolShape,
 } from "#/domain/harness-model-profile";
+import type { LeadMode } from "#/domain/harness-variant";
 import {
 	codeModeInstructions,
 	leanToolInstructions,
@@ -30,7 +31,9 @@ import {
 	type SubagentRole,
 } from "#/domain/subagent";
 import {
+	fusionLeadInstructions,
 	orchestratorInstructions,
+	sidekickRoleInstructions,
 	subagentRoleInstructions,
 } from "#/domain/subagent-instructions";
 import {
@@ -63,6 +66,8 @@ export function agentTurnInstructions(input: {
 	codeMode?: "on" | "primary";
 	/** Harness variant prEvidence=on: one line on `ytimesy-evidence`. */
 	prEvidence?: boolean;
+	/** Harness variant lead: fusion gives the root builder the lead's block. */
+	lead?: LeadMode;
 }) {
 	if (input.leanShape)
 		return leanTurnInstructions({ ...input, leanShape: input.leanShape });
@@ -103,11 +108,15 @@ function leanTurnInstructions(
 			? deferredToolsInstructions(input.deferredTools ?? [])
 			: "",
 		AGENT_TOOL in input.tools
-			? orchestratorInstructions({
-					codeMode,
-					// A read-only subagent may start readers, never writers.
-					readOnly: readOnly || isReaderRole(input.session.agentRole),
-				})
+			? input.lead === "fusion" && !input.session.agentRole
+				? fusionLeadInstructions({
+						editTools: leanEditTools(input.leanShape, input.tools),
+					})
+				: orchestratorInstructions({
+						codeMode,
+						// A read-only subagent may start readers, never writers.
+						readOnly: readOnly || isReaderRole(input.session.agentRole),
+					})
 			: "",
 		// The desktop browser runs as the builder's user; readers do not drive it.
 		readOnly
@@ -128,12 +137,22 @@ function leanTurnInstructions(
 		.join("\n");
 }
 
+/** The surface's file-editing tools that this turn offers (the lead's take-over tools). */
+function leanEditTools(shape: LeanToolShape, tools: ToolSet) {
+	const names = LEAN_SHAPE_TOOLS[shape] as Partial<Record<string, string>>;
+	return [...new Set([names.edit, names.write])].filter(
+		(name): name is string => !!name && name in tools,
+	);
+}
+
 /** A subagent's own role and budget, else the chat's or the task's role. */
 function roleInstructions(
 	session: Parameters<typeof agentTurnInstructions>[0]["session"],
 	shellBuilder: boolean,
 	delegates: boolean,
 ) {
+	if (session.agentRole === "writer" && session.agentBudget?.sidekick)
+		return sidekickRoleInstructions(session.agentBudget);
 	return session.agentRole
 		? subagentRoleInstructions(session.agentRole, session.agentBudget ?? null)
 		: cloudAgentRoleInstructions(session, { shellBuilder, delegates });

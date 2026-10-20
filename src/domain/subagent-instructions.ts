@@ -1,4 +1,9 @@
-import type { SubagentBudget, SubagentRole } from "./subagent";
+import {
+	AGENT_SEND_TOOL,
+	AGENT_TOOL,
+	type SubagentBudget,
+	type SubagentRole,
+} from "./subagent";
 
 /**
  * The orchestration block (subagents=on): when to delegate, how to call
@@ -51,6 +56,40 @@ export function orchestratorInstructions(
 			: "Verify before relying on an agent: a report is a claim, not a fact. Review a writer's patch (`git diff <base> <ref>`), apply it with `git apply -3`, rerun its checks yourself; spot-check a reader's findings before they drive edits.",
 		"A refused spawn (depth, budget or concurrency) means do the work yourself.",
 	].join("\n");
+}
+
+/**
+ * The lead's block (harness variant lead=fusion, after Devin Fusion): it
+ * replaces the orchestration block for the root builder. The lead plans,
+ * briefs, reviews and answers the user; a persistent sidekick implements
+ * and tests. `editTools` are the surface's own file-editing tool names.
+ */
+export function fusionLeadInstructions(options: {
+	readonly editTools: readonly string[];
+}) {
+	const edit = options.editTools.map((name) => `\`${name}\``).join(", ");
+	return [
+		`Subagents: you are the lead. You plan, brief, review and answer the user; a persistent sidekick (a writer agent, usually on a cheaper model) explores, implements and tests. \`${AGENT_TOOL}\` starts an agent in the background and returns at once; \`${AGENT_SEND_TOOL}\` messages or stops one; reports arrive as messages.`,
+		"- Short or trivial tasks (a few steps, one obvious change): do them yourself; a handoff costs more than it saves there.",
+		`- Otherwise explore only enough to plan, then hand implementation and testing to the sidekick early: \`${AGENT_TOOL}\` with role writer starts it. Your first writer is your sidekick for this turn; it keeps its context from round to round.`,
+		"- Brief by outcome: the goal; constraints; the files and areas involved; edge cases; and the definition of done as concrete checks or commands that must pass. It sees only your messages, never this conversation.",
+		"- Each round ends with its report and a patch relative to your checkout. Review the diff and its evidence (`git diff <base> <ref>`), apply it with `git add -A && git apply -3 <patch>` (a three-way apply needs your own edits staged), and rerun the key check yourself: a report is a claim, not a fact.",
+		`- Wrong or incomplete: send specific feedback with \`${AGENT_SEND_TOOL}\` (what fails, where, what done looks like) for another round instead of fixing it yourself. Before each round its fork is synced with your checkout, your own edits included, so apply or discard its last patch first.`,
+		`- Take over and edit yourself${edit ? ` (${edit})` : ""} only when the sidekick has failed twice on the same issue or is clearly out of its depth.`,
+		`- While it works, review, plan the next step or run checks; do not edit the files it is working on. Researchers and reviewers read your VM read-only when an investigation or a second look helps. Stop the sidekick (\`${AGENT_SEND_TOOL}\` with stop: true) when it is no longer needed. A refused spawn means do the work yourself.`,
+	].join("\n");
+}
+
+/** A sidekick's role, per-round budget and report contract (lead mode fusion). */
+export function sidekickRoleInstructions(budget: SubagentBudget) {
+	const state = budget.sidekick;
+	return [
+		"You are the lead's sidekick: a persistent writer agent on a fork of the lead's VM, your own copy of its checkout. You explore, implement and test what each brief asks; the lead reviews your work and answers in this conversation with feedback or the next brief, each one a new round.",
+		"At the start of every later round your checkout is reset to the lead's current checkout; the message says what happened to your earlier work. Each round's patch is everything in your checkout that differs from the lead's checkout at the round's start. Commit as you like; leftovers are committed for you. Ignored files (dependencies, build output) are not synced: reinstall when the lead changed dependencies.",
+		"Do the work yourself; you start no agents. You see only the lead's messages, not its conversation; do not ask it questions you can settle yourself.",
+		`Your budget per round: ${budget.steps} steps, ${budget.minutes} minutes${state ? `, ${state.roundTokens.toLocaleString("en-US")} tokens; ${state.maxRounds} rounds at most` : ""}. Near the end of a round you are told to wrap up; at the limit the round stops and whatever you have is reported.`,
+		"Your final message each round is your report to the lead: what changed, the exact commands you ran with their exit status, and what is unverified. The lead will check it, so claim only what you verified.",
+	].join(" ");
 }
 
 const ROLE_WORK: Record<SubagentRole, string> = {

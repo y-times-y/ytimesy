@@ -7,6 +7,7 @@ import {
 	type HarnessVariant,
 } from "#/domain/harness-variant";
 import { SessionItemId } from "#/domain/ids";
+import { newSidekickState } from "#/domain/sidekick";
 import { subscriptionTurnRevision } from "#/domain/subscription-turn";
 import {
 	FAKE_READER_UID,
@@ -377,10 +378,21 @@ it("sends nothing in code mode primary that batches several steps into one shell
 	);
 });
 
-it.each(["off", "on", "primary"] as const)(
-	"sends a byte-identical system prompt and tool list on every step (codeMode=%s)",
-	async (codeMode) => {
-		const variant = { codeMode, subagents: "on" } as const;
+it.each([
+	["off", "off"],
+	["on", "off"],
+	["primary", "off"],
+	["off", "fusion"],
+	["on", "fusion"],
+	["primary", "fusion"],
+] as const)(
+	"sends a byte-identical system prompt and tool list on every step (codeMode=%s, lead=%s)",
+	async (codeMode, lead) => {
+		const variant = {
+			codeMode,
+			subagents: lead === "fusion" ? "off" : "on",
+			lead,
+		} as const;
 		const first = await sentRequest(variant, { step: 1 });
 		const second = await sentRequest(variant, { step: 2 });
 		const third = await sentRequest(variant, { step: 3 });
@@ -499,39 +511,62 @@ function namedTools(text: string) {
 	});
 }
 
-type Role = "builder" | "writer" | "researcher" | "reviewer" | "checker";
+type Role =
+	| "builder"
+	| "writer"
+	| "sidekick"
+	| "researcher"
+	| "reviewer"
+	| "checker";
 
 function ownerFor(role: Role) {
 	if (role === "builder") return ROOT_OWNER;
+	const writes = role === "writer" || role === "sidekick";
+	const agentBudget = { steps: 75, minutes: 15, tokens: 1_000_000 };
 	return {
 		...ROOT_OWNER,
 		id: `child-${role}`,
 		parentSessionId: "session",
-		agentRole: role,
-		agentBudget: { steps: 75, minutes: 15, tokens: 1_000_000 },
-		taskAccess: role === "writer" ? "read_write" : "read_only",
-		taskPlacement: role === "writer" ? "fork" : "shared",
+		agentRole: writes ? "writer" : role,
+		agentBudget:
+			role === "sidekick"
+				? {
+						...agentBudget,
+						sidekick: newSidekickState(agentBudget, "2026-10-19T10:00:00.000Z"),
+					}
+				: agentBudget,
+		taskAccess: writes ? "read_write" : "read_only",
+		taskPlacement: writes ? "fork" : "shared",
 	};
 }
 
 describe("role surfaces: every advertised tool works, no prompt names an absent one", () => {
 	const cases = (
-		["builder", "writer", "researcher", "reviewer", "checker"] as const
+		[
+			"builder",
+			"writer",
+			"sidekick",
+			"researcher",
+			"reviewer",
+			"checker",
+		] as const
 	).flatMap((role) =>
-		(role === "builder" ? [0] : [1, 3]).flatMap((level) =>
-			(["off", "on", "primary"] as const).flatMap((codeMode) =>
-				(["off", "on"] as const).map((subagents) => ({
-					role,
-					level,
-					codeMode,
-					subagents,
-				})),
-			),
+		(role === "builder" ? [0] : role === "sidekick" ? [1] : [1, 3]).flatMap(
+			(level) =>
+				(["off", "on", "primary"] as const).flatMap((codeMode) =>
+					(["off", "on"] as const).flatMap((subagents) =>
+						// Lead mode applies to the root builder and its sidekick.
+						(role === "builder" || role === "sidekick"
+							? (["off", "fusion"] as const)
+							: (["off"] as const)
+						).map((lead) => ({ role, level, codeMode, subagents, lead })),
+					),
+				),
 		),
 	);
 	it.each(cases)(
-		"$role at level $level, codeMode=$codeMode, subagents=$subagents",
-		async ({ role, level, codeMode, subagents }) => {
+		"$role at level $level, codeMode=$codeMode, subagents=$subagents, lead=$lead",
+		async ({ role, level, codeMode, subagents, lead }) => {
 			owner = ownerFor(role);
 			mocks.level = level;
 			// Inside run_code, the tools a program can call (probed while the turn runs).
@@ -551,7 +586,11 @@ describe("role surfaces: every advertised tool works, no prompt names an absent 
 				expect(run.error).toBeUndefined();
 				callable = new Set(JSON.parse(run.result as string) as string[]);
 			};
-			const { body, names, agent } = await sentRequest({ codeMode, subagents });
+			const { body, names, agent } = await sentRequest({
+				codeMode,
+				subagents,
+				lead,
+			});
 			const tools = agent.tools;
 			const available = new Set(Object.keys(tools));
 			// Every tool in the request has an executor (or runs at the provider).
@@ -601,12 +640,20 @@ describe("role surfaces: every advertised tool works, no prompt names an absent 
 						expect(callable, `run_code cannot call ${name}`).toContain(name);
 			}
 			// Delegation: the checker never, the deepest level never, others when on.
+			// A sidekick does its rounds itself; lead mode gives the builder the tools.
 			const delegates =
 				role !== "checker" &&
+				role !== "sidekick" &&
 				level < 3 &&
-				(role !== "builder" || subagents === "on");
+				(role !== "builder" || subagents === "on" || lead === "fusion");
 			expect(available.has("agent")).toBe(delegates);
 			expect(body.instructions.includes("Subagents:")).toBe(delegates);
+			expect(body.instructions.includes("you are the lead")).toBe(
+				delegates && role === "builder" && lead === "fusion",
+			);
+			expect(body.instructions.includes("You are the lead's sidekick")).toBe(
+				role === "sidekick",
+			);
 			// The workflow tools are ordinary tools: in the request's tool list,
 			// in a fixed place (after the surface's tools, before web search).
 			expect(names.includes("agent")).toBe(delegates);
@@ -628,7 +675,7 @@ describe("role surfaces: every advertised tool works, no prompt names an absent 
 			} else expect(names).not.toContain("enter_plan_mode");
 			if (codeMode === "primary") expect(names[0]).toBe("run_code");
 			// Readers share the parent's VM read-only: nothing that changes files.
-			if (role !== "builder" && role !== "writer")
+			if (role !== "builder" && role !== "writer" && role !== "sidekick")
 				for (const name of ["write", "edit"])
 					expect(available.has(name), `a ${role} has ${name}`).toBe(false);
 			if (role === "checker") {

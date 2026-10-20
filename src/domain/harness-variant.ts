@@ -94,6 +94,16 @@ export const HARNESS_VARIANT_VALUES = {
 	 * combined with attempts=3 (the attempt loop wins).
 	 */
 	review: ["off", "on"],
+	/**
+	 * Lead mode (src/domain/sidekick.ts, Devin Fusion style): fusion makes
+	 * the root builder a lead that plans, briefs, reviews and answers the
+	 * user, and makes its first writer a persistent sidekick (cheaper model
+	 * via roleModels.writer) that keeps its context and fork across rounds of
+	 * briefs and feedback, its fork synced with the lead's checkout before
+	 * each round. Implies the agent tools (as subagents=on). off = unchanged
+	 * behaviour (the default).
+	 */
+	lead: ["off", "fusion"],
 } as const;
 
 type Values = typeof HARNESS_VARIANT_VALUES;
@@ -116,6 +126,7 @@ export type SubagentsMode = HarnessVariant["subagents"];
 export type PrEvidence = HarnessVariant["prEvidence"];
 export type AttemptsMode = HarnessVariant["attempts"];
 export type ReviewMode = HarnessVariant["review"];
+export type LeadMode = HarnessVariant["lead"];
 
 export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	memoryWording: "rules",
@@ -127,6 +138,7 @@ export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	prEvidence: "off",
 	attempts: "1",
 	review: "off",
+	lead: "off",
 	roleModels: {},
 };
 

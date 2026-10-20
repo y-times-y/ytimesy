@@ -1,9 +1,11 @@
 import type { ToolSet } from "ai";
 import { describe, expect, it, vi } from "vitest";
+import type { LeadMode } from "#/domain/harness-variant";
 import { SessionItemId, WorkspaceId } from "#/domain/ids";
 import type { FailoverConnection } from "#/domain/model-failover";
 import type { RoleModels } from "#/domain/role-models";
 import type { SessionItem } from "#/domain/session-item";
+import { newSidekickState, type SidekickState } from "#/domain/sidekick";
 import type { SubagentRole } from "#/domain/subagent";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import {
@@ -55,6 +57,7 @@ function harness(
 		ancestors?: Row[];
 		deps?: Partial<SubagentToolDeps>;
 		roleModels?: RoleModels;
+		lead?: LeadMode;
 	} = {},
 ) {
 	const sessions: Row[] = options.sessions ?? [
@@ -123,6 +126,26 @@ function harness(
 		takeReport: vi.fn(async () => null),
 		message: vi.fn(async () => ({}) as never),
 		stop: vi.fn(async () => {}),
+		syncSidekick: vi.fn(async () => ({
+			status: "carried" as const,
+			base: "lead-tree-sha",
+			parentHead: "lead-head-sha",
+			previousHead: "own-head-sha",
+		})),
+		saveSidekick: vi.fn(
+			async (id: string, state: SidekickState, options?: object) => {
+				const child = sessions.find((entry) => entry.id === id);
+				if (child)
+					Object.assign(child, {
+						agentBudget: {
+							...child.agentBudget,
+							...(options ? { stopAtStep: undefined } : {}),
+							sidekick: state,
+						},
+					});
+			},
+		),
+		retireSidekick: vi.fn(async () => "retired" as const),
 		...options.deps,
 	} satisfies SubagentToolDeps;
 	const tools: ToolSet = subagentTools({
@@ -136,6 +159,7 @@ function harness(
 		signal: new AbortController().signal,
 		deps,
 		roleModels: options.roleModels,
+		lead: options.lead,
 	});
 	const call = (name: string, input: unknown) =>
 		tools[name]?.execute?.(
@@ -589,5 +613,217 @@ describe("role models", () => {
 		const { call } = harness({ deps: { routes: routesFake } });
 		await call("agent", { role: "researcher", title: "x", brief: "y" });
 		expect(routesFake).not.toHaveBeenCalled();
+	});
+});
+
+describe("lead mode fusion: the persistent sidekick", () => {
+	const brief = {
+		role: "writer",
+		title: "Add the flag",
+		brief: "Add --json to src/cli.ts; done when npm test passes.",
+	};
+	const fork = {
+		vmId: "vm-fork",
+		sourceVmId: "vm-root",
+		bootedAt: at(-10),
+		base: "base-sha",
+		parentHead: "head-sha",
+	};
+	/** A sidekick that reported round `round` and is idle now. */
+	const idleSidekick = (fields: Partial<SidekickState> = {}) =>
+		row("s", "root", {
+			agentRole: "writer",
+			turnStatus: "completed",
+			agentSteps: 40,
+			agentBudget: {
+				steps: 150,
+				minutes: 30,
+				tokens: 2_000_000,
+				sidekick: {
+					...newSidekickState({ tokens: 2_000_000 }, at(-10)),
+					...fields,
+				},
+			},
+			agentFork: fork,
+		});
+
+	it("makes the lead's first writer its sidekick and refuses a second writer while it lives", async () => {
+		const { call, deps, sessions } = harness({ lead: "fusion" });
+		const started = await call("agent", brief);
+		expect(started).toMatchObject({ id: "1", role: "writer", vm: "fork" });
+		expect(started.sidekick).toContain(
+			"Your persistent sidekick: up to 6 rounds",
+		);
+		const child = sessions.find((entry) => entry.id === "child-1");
+		expect(child?.agentBudget?.sidekick).toMatchObject({
+			round: 1,
+			maxRounds: 6,
+			roundStartSteps: 0,
+			roundTokens: 1_000_000,
+		});
+		await expect(call("agent", { ...brief, title: "Another" })).rejects.toThrow(
+			"Your sidekick 1 is still available (working): send it the next brief or feedback with agent_send (id 1)",
+		);
+		// Readers are still fine beside it.
+		await call("agent", {
+			role: "researcher",
+			title: "Map",
+			brief: "Where is X?",
+		});
+		expect(deps.openTask).toHaveBeenCalledTimes(2);
+	});
+
+	it("keeps ordinary writers with lead=off", async () => {
+		const { call, sessions } = harness();
+		const started = await call("agent", brief);
+		expect(started.sidekick).toBeUndefined();
+		expect(
+			sessions.find((entry) => entry.id === "child-1")?.agentBudget?.sidekick,
+		).toBeUndefined();
+		await call("agent", { ...brief, title: "Second writer" });
+	});
+
+	it("starts round 2 in the same session: syncs the fork with the lead's checkout, then delivers the feedback", async () => {
+		const sessions = [row("root", null), idleSidekick()];
+		const { call, deps } = harness({ sessions, lead: "fusion" });
+		const result = await call("agent_send", {
+			id: "1",
+			message: "The --json output misses the exit code; add it and test it.",
+		});
+		expect(result).toMatchObject({
+			id: "1",
+			status: "round 2/6 started",
+			delivery: "now",
+		});
+		expect(result.checkout).toContain(
+			"plus its earlier work you have not applied",
+		);
+		// The fork synced from the lead's VM, against the fork's recorded base.
+		expect(deps.syncSidekick).toHaveBeenCalledWith(
+			expect.objectContaining({
+				leadVm: "vm-root",
+				forkVm: "vm-fork",
+				label: "1",
+				round: 2,
+				base: "base-sha",
+				parentHead: "head-sha",
+			}),
+		);
+		// The next patch is relative to the lead's checkout.
+		expect(deps.mergeFork).toHaveBeenCalledWith("s", {
+			base: "lead-tree-sha",
+			parentHead: "lead-head-sha",
+		});
+		const state = sessions[1]?.agentBudget?.sidekick as SidekickState;
+		expect(state).toMatchObject({ round: 2, roundStartSteps: 40 });
+		expect(state.rounds.at(-1)).toMatchObject({ n: 2, sync: "carried" });
+		expect(deps.saveSidekick).toHaveBeenCalledWith("s", expect.anything(), {
+			clearStop: true,
+		});
+		// The same agent session (its context) receives the message; nothing new is spawned.
+		expect(deps.openTask).not.toHaveBeenCalled();
+		expect(deps.fork).not.toHaveBeenCalled();
+		const [, recipient, text] = vi.mocked(deps.message).mock.calls[0] ?? [];
+		expect(recipient).toBe("s");
+		expect(text).toMatch(
+			/^Round 2\/6 from your lead\. Your checkout now matches/,
+		);
+		expect(text).toContain("The --json output misses the exit code");
+		// Sync happens before delivery.
+		expect(
+			vi.mocked(deps.syncSidekick).mock.invocationCallOrder[0],
+		).toBeLessThan(
+			vi.mocked(deps.message).mock.invocationCallOrder[0] as number,
+		);
+	});
+
+	it("steers a working sidekick without a new round", async () => {
+		const sessions = [
+			row("root", null),
+			{ ...idleSidekick(), turnStatus: "running" } as never,
+		];
+		const { call, deps } = harness({ sessions, lead: "fusion" });
+		expect(
+			await call("agent_send", { id: "1", message: "Use port 4001." }),
+		).toMatchObject({
+			status: "message queued",
+		});
+		expect(deps.syncSidekick).not.toHaveBeenCalled();
+		expect(deps.saveSidekick).not.toHaveBeenCalled();
+	});
+
+	it("caps the rounds and refuses a retired sidekick", async () => {
+		const full = harness({
+			sessions: [row("root", null), idleSidekick({ round: 6 })],
+			lead: "fusion",
+		});
+		await expect(
+			full.call("agent_send", { id: "1", message: "again" }),
+		).rejects.toThrow(
+			"Sidekick 1 has used all 6 rounds. Take over, or stop it and start a new writer.",
+		);
+		expect(full.deps.syncSidekick).not.toHaveBeenCalled();
+		const retired = harness({
+			sessions: [
+				row("root", null),
+				idleSidekick({
+					retired: { at: at(-1), reason: "stopped by the lead" },
+				}),
+			],
+			lead: "fusion",
+		});
+		await expect(
+			retired.call("agent_send", { id: "1", message: "again" }),
+		).rejects.toThrow("Sidekick 1 is retired (stopped by the lead)");
+		// A retired sidekick no longer blocks a new writer, which becomes the next sidekick.
+		const next = await retired.call("agent", brief);
+		expect(next.sidekick).toBeDefined();
+	});
+
+	it("retires an idle sidekick on stop (its fork goes now) and stops a working one", async () => {
+		const idle = harness({
+			sessions: [row("root", null), idleSidekick()],
+			lead: "fusion",
+		});
+		expect(
+			await idle.call("agent_send", { id: "1", stop: true }),
+		).toMatchObject({
+			status: "retired",
+		});
+		expect(idle.deps.retireSidekick).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.objectContaining({ id: "s" }),
+			"stopped by the lead",
+		);
+		expect(idle.deps.message).not.toHaveBeenCalled();
+		const working = harness({
+			sessions: [
+				row("root", null),
+				{ ...idleSidekick(), turnStatus: "running" } as never,
+			],
+			lead: "fusion",
+			deps: { retireSidekick: vi.fn(async () => "stopping" as const) },
+		});
+		expect(
+			await working.call("agent_send", { id: "1", stop: true }),
+		).toMatchObject({
+			status: "stopping",
+		});
+		expect(working.deps.stop).toHaveBeenCalledWith("s");
+	});
+
+	it("fails the round's start, not the sidekick, when its fork is gone", async () => {
+		const gone = row("s", "root", {
+			...idleSidekick(),
+			agentFork: { ...fork, deletedAt: at(-1) },
+		});
+		const { call, deps } = harness({
+			sessions: [row("root", null), gone],
+			lead: "fusion",
+		});
+		await expect(
+			call("agent_send", { id: "1", message: "next" }),
+		).rejects.toThrow("Sidekick 1's fork is gone");
+		expect(deps.message).not.toHaveBeenCalled();
 	});
 });

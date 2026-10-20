@@ -1,6 +1,7 @@
 import { tool } from "ai";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
+import { beginSidekickRound, newSidekickState } from "#/domain/sidekick";
 import { agentTurnInstructions } from "./agent-turn-instructions";
 
 const stub = tool({
@@ -162,5 +163,122 @@ describe("subagent instructions", () => {
 		);
 		expect(researcher).toContain('tools.agent({ role: "researcher"');
 		expect(researcher).not.toMatch(/writer|git apply/);
+	});
+});
+
+describe("lead mode fusion instructions", () => {
+	const lead = (
+		leanShape: "core" | "codex" | "claude",
+		tools: Record<string, typeof stub>,
+		variant?: "off" | "fusion",
+	) =>
+		agentTurnInstructions({
+			...base,
+			leanShape,
+			session: { parentSessionId: null },
+			tools,
+			lead: variant,
+		});
+
+	it("replaces the orchestration block with the lead's for the root builder", () => {
+		const fusion = lead(
+			"core",
+			{
+				bash: stub,
+				read: stub,
+				edit: stub,
+				write: stub,
+				agent: stub,
+				agent_send: stub,
+			},
+			"fusion",
+		);
+		expect(fusion).toContain("Subagents: you are the lead.");
+		expect(fusion).toContain(
+			"Short or trivial tasks (a few steps, one obvious change): do them yourself",
+		);
+		expect(fusion).toContain(
+			"the definition of done as concrete checks or commands that must pass",
+		);
+		expect(fusion).toContain(
+			"send specific feedback with `agent_send` (what fails, where, what done looks like) for another round instead of fixing it yourself",
+		);
+		expect(fusion).toContain(
+			"Take over and edit yourself (`edit`, `write`) only when the sidekick has failed twice on the same issue or is clearly out of its depth.",
+		);
+		expect(fusion).toContain("git add -A && git apply -3 <patch>");
+		// Not the default block's delegation policy.
+		expect(fusion).not.toContain("Delegate when it saves wall-clock time");
+		expect(fusion).toContain(
+			"answer the user yourself, delegating only as below.",
+		);
+		const off = lead("core", { bash: stub, edit: stub, agent: stub }, "off");
+		expect(off).toContain("Delegate when it saves wall-clock time");
+		expect(off).not.toContain("you are the lead");
+	});
+
+	it("names the surface's own editing tools", () => {
+		expect(
+			lead(
+				"codex",
+				{ exec_command: stub, apply_patch: stub, agent: stub },
+				"fusion",
+			),
+		).toContain("Take over and edit yourself (`apply_patch`) only when");
+		expect(
+			lead(
+				"claude",
+				{ Bash: stub, Edit: stub, Write: stub, agent: stub },
+				"fusion",
+			),
+		).toContain("Take over and edit yourself (`Edit`, `Write`) only when");
+	});
+
+	it("gives the sidekick its persistent role and per-round budget, never the lead's block", () => {
+		const budget = { steps: 150, minutes: 30, tokens: 2_000_000 };
+		const sidekick = agentTurnInstructions({
+			...base,
+			session: {
+				parentSessionId: "root",
+				taskAccess: "read_write",
+				agentRole: "writer",
+				agentBudget: {
+					...budget,
+					sidekick: newSidekickState(budget, "2026-10-19T10:00:00.000Z"),
+				},
+			},
+			tools: { bash: stub, edit: stub },
+			lead: "fusion",
+		});
+		expect(sidekick).toContain("You are the lead's sidekick");
+		expect(sidekick).toContain(
+			"Your budget per round: 150 steps, 30 minutes, 1,000,000 tokens; 6 rounds at most.",
+		);
+		expect(sidekick).toContain("you start no agents");
+		expect(sidekick).not.toContain("you are the lead");
+		// Static across rounds: the round's state never enters the prompt.
+		const later = agentTurnInstructions({
+			...base,
+			session: {
+				parentSessionId: "root",
+				taskAccess: "read_write",
+				agentRole: "writer",
+				agentBudget: {
+					...budget,
+					sidekick: beginSidekickRound(
+						newSidekickState(budget, "2026-10-19T10:00:00.000Z"),
+						{
+							now: "2026-10-19T10:20:00.000Z",
+							steps: 40,
+							tokens: 9,
+							sync: "clean",
+						},
+					),
+				},
+			},
+			tools: { bash: stub, edit: stub },
+			lead: "fusion",
+		});
+		expect(later).toBe(sidekick);
 	});
 });

@@ -68,6 +68,7 @@ import type {
 	SessionItem,
 	UserMessageItem,
 } from "#/domain/session-item";
+import { isActiveSidekick } from "#/domain/sidekick";
 import {
 	AGENT_SEND_TOOL,
 	AGENT_TOOL,
@@ -191,6 +192,7 @@ import { machinesForAgentSession } from "../services/session-workspace-machines"
 import { recordStepTiming, timed } from "../services/step-timing";
 import {
 	guardSubagentStep,
+	retireLeadSidekicks,
 	SubagentBudgetExhausted,
 	subagentReport,
 } from "../services/subagent-runtime";
@@ -326,6 +328,8 @@ async function runApiTurnAttempt(
 	// machines before this session's scoping; the report needs the session.
 	const unscopedMachines = machines;
 	let subagentSession: AgentSessionRecord | undefined;
+	/** Lead mode fusion's root: its sidekicks are retired when its turn ends. */
+	let fusionLead: { userId: string; id: string } | undefined;
 	let commandStop: Promise<void> | undefined;
 	const stopCommands = () => {
 		if (execution)
@@ -472,7 +476,13 @@ async function runApiTurnAttempt(
 		if (owner.agentRole) subagentSession = owner;
 		// Builder subagents (harness variant subagents=on): the agent tools
 		// and per-level budgets. Children carry the role.
-		const subagentsOn = variant.subagents === "on" || !!owner.agentRole;
+		// Lead mode fusion implies them: the lead delegates to its sidekick.
+		const subagentsOn =
+			variant.subagents === "on" ||
+			variant.lead === "fusion" ||
+			!!owner.agentRole;
+		if (variant.lead === "fusion" && !owner.parentSessionId)
+			fusionLead = { userId: owner.userId, id: owner.id };
 		const subagentLevel = owner.agentRole
 			? (
 					await turnMemo(`${turn.id}:subagent-ancestors`, () =>
@@ -842,7 +852,10 @@ async function runApiTurnAttempt(
 			subagentsOn &&
 			surface.lean &&
 			(owner.agentRole
-				? owner.agentRole !== "checker" && subagentLevel < MAX_SUBAGENT_LEVEL
+				? owner.agentRole !== "checker" &&
+					// A sidekick does the work itself (lead mode fusion).
+					!isActiveSidekick(owner) &&
+					subagentLevel < MAX_SUBAGENT_LEVEL
 				: !owner.parentSessionId)
 				? withRedactedResults(
 						subagentTools({
@@ -852,6 +865,7 @@ async function runApiTurnAttempt(
 							signal: abort.signal,
 							waitDeadlineAt: step?.waitDeadlineAt,
 							roleModels: variant.roleModels,
+							lead: variant.lead,
 						}),
 						projectSecrets?.redact ?? [],
 					)
@@ -1101,6 +1115,7 @@ async function runApiTurnAttempt(
 					deferredTools: deferral?.deferred,
 					codeMode: codeMode ?? undefined,
 					prEvidence: variant.prEvidence === "on" && writable,
+					lead: variant.lead,
 				},
 				memory,
 			),
@@ -1529,6 +1544,12 @@ async function runApiTurnAttempt(
 			return saved === "cancelled" ? "cancelled" : "failed";
 		}
 		await publishProgress("completed").catch(() => {});
+		if (fusionLead)
+			await retireLeadSidekicks(
+				unscopedMachines,
+				fusionLead,
+				"the lead's turn ended",
+			).catch(() => {});
 		await memory?.afterTurn(turn.id);
 		await recordCloudProjectReport(owner, turn.id, items).catch(() => {
 			console.warn(
@@ -1744,6 +1765,14 @@ async function runApiTurnAttempt(
 			await publishProgress?.(saved === "cancelled" ? "idle" : "failed").catch(
 				() => {},
 			);
+		if (saved && fusionLead)
+			await retireLeadSidekicks(
+				unscopedMachines,
+				fusionLead,
+				saved === "cancelled"
+					? "the lead was stopped"
+					: "the lead's turn ended",
+			).catch(() => {});
 		if (saved === "failed") {
 			// A subagent still reports: what it said so far and, for a writer,
 			// the partial patch (its work in progress is committed for it).
