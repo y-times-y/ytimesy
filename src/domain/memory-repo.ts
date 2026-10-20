@@ -407,13 +407,16 @@ export function memoryEmbeddingQuery(text: string) {
 /** Lines per request: about 1-2k characters, a wider net than one fact. */
 export const MEMORY_MATCH_LIMIT = 8;
 /**
- * Cutoff on the hybrid score (memory-ranking.ts). Set from
+ * Cutoff on the hybrid score (memory-ranking.ts). First set from
  * `memory-two-chat-eval.ts --recall` on cosine alone (2026-10-15: 0.33 kept
- * 7/8 right lines, 0.40 kept 4/8); the lexical and file parts only add, so
- * it is no stricter for the hybrid. A missed rule costs more than a
- * labelled extra line.
+ * 7/8 right lines, 0.40 kept 4/8). Raised to 0.36 once standing rules ride
+ * on every chat as project rules (projectRules), so the hook no longer has
+ * to reach down for them (2026-10-20, same embeddings): two-chat recall
+ * 10/10 at 0.33-0.37 with 34 -> 24 wrong lines at 0.36 (9/10 from 0.38);
+ * the long-history and held-out snapshots select the same right lines at
+ * 0.33 and 0.36. A missed rule costs more than a labelled extra line.
  */
-export const MEMORY_MATCH_MIN_SCORE = 0.33;
+export const MEMORY_MATCH_MIN_SCORE = 0.36;
 /**
  * Beyond the top lines: the best convention line (a rule for every new X)
  * scoring at least this. A request rarely names the convention it is subject
@@ -612,6 +615,130 @@ export function selectMemoryMatches(input: {
 	return selected;
 }
 
+// ---- project rules -----------------------------------------------------------
+
+/**
+ * Bounds of the always-on "Project rules" section: short enough to ride on
+ * every chat's first request (about 500 tokens), long enough for a project's
+ * standing conventions.
+ */
+export const PROJECT_RULES_LIMIT = 14;
+export const PROJECT_RULES_CHARS = 2000;
+/**
+ * A convention for every new thing of a kind, which a request triggers
+ * without naming it: "New entity IDs use ULIDs", "Every new shell script …",
+ * "All JSON written by the project …".
+ */
+const NEW_THINGS_RULE =
+	/^(?:new|every|each|all|any)\s+[\w./-]+|\b(?:every|each|all|any)\s+new\b/i;
+/** A standing do or don't: "never", "always", "must", "only", or an imperative opening. */
+const STANDING_RULE =
+	/\b(?:never|always|must|only)\b|^(?:use|don't|do not|no|avoid|prefer|keep|run|check|mark)\b/i;
+
+/**
+ * How firmly a line reads as a rule for every change in its project: 0 for
+ * `scope: always` (the save hook and dreams curate those), 1 for a
+ * convention about every new thing of a kind, 2 for a standing do or don't;
+ * null for a fact or a topic-bound note, which the read hook recalls by match.
+ */
+export function projectRuleTier(entry: Pick<MemoryLine, "text" | "meta">) {
+	if (entry.meta[SCOPE_KEY]?.toLowerCase() === ALWAYS_SCOPE) return 0;
+	if (entry.text.length > MEMORY_ENTRY_MAX_CHARS) return null;
+	if (
+		NEW_THINGS_RULE.test(entry.text) ||
+		CONVENTION_LINE.test(entry.text) ||
+		ANY_NEW_FILE_RULE.test(entry.text) ||
+		LANGUAGE_FILE_RULE.test(entry.text)
+	)
+		return 1;
+	if (STANDING_RULE.test(entry.text)) return 2;
+	return null;
+}
+
+/**
+ * The always-on "Project rules": the user's standing rules that apply to
+ * this project (or to every project), whatever the request's wording, in
+ * order of firmness, then newest first, within PROJECT_RULES_LIMIT lines and
+ * PROJECT_RULES_CHARS characters. MEMORY.md is attached whole and is not
+ * repeated here; retired lines never show, and an old decision is swapped
+ * for the later line that restates it as changed.
+ */
+export function projectRules(input: {
+	lines: readonly MemoryLine[];
+	today: string;
+	project: string | null;
+}): MemoryLine[] {
+	const live = input.lines.filter(
+		(entry) =>
+			entry.path !== MEMORY_ENTRY &&
+			!isRetired(entry.meta, input.today) &&
+			!(
+				entry.meta.project &&
+				(!input.project ||
+					entry.meta.project.toLowerCase() !== input.project.toLowerCase())
+			),
+	);
+	const changes = live.filter(
+		(entry) => entry.meta.added && CHANGE_WORDS.test(entry.text),
+	);
+	const ranked = live
+		.flatMap((entry) => {
+			const tier = projectRuleTier(entry);
+			return tier === null ? [] : [{ entry, tier }];
+		})
+		.sort(
+			(a, b) =>
+				a.tier - b.tier ||
+				Number(a.entry.meta.kind === "inferred") -
+					Number(b.entry.meta.kind === "inferred") ||
+				(b.entry.meta.added ?? "").localeCompare(a.entry.meta.added ?? "") ||
+				b.entry.line - a.entry.line,
+		);
+	const picked: MemoryLine[] = [];
+	let chars = 0;
+	for (const { entry } of ranked) {
+		if (picked.length >= PROJECT_RULES_LIMIT) break;
+		const latest = latestVersion(entry, changes);
+		if (picked.includes(latest)) continue;
+		if (chars + latest.text.length > PROJECT_RULES_CHARS) continue;
+		picked.push(latest);
+		chars += latest.text.length;
+	}
+	return picked;
+}
+
+/** How a project rule is shown: its text alone, so the section stays short. */
+export function projectRuleLine(entry: Pick<MemoryLine, "text">) {
+	return `- ${entry.text}`;
+}
+
+/** Whether a memory line is already in `shown` (attached memory), whole or as a project rule. */
+export function memoryLineShown(raw: string, shown: string) {
+	const trimmed = raw.trim();
+	if (shown.includes(trimmed)) return true;
+	const entry = parseMemoryLine(trimmed);
+	return Boolean(entry && shown.includes(`${projectRuleLine(entry)}\n`));
+}
+
+const RULES_SECTION_START = "Project rules from the user's memory";
+export const MEMORY_PROJECT_RULES_HEADER = `${RULES_SECTION_START} that apply to every change, whatever the request (from ${MEMORY_DIRECTORY}). Follow these unless the user says otherwise. ${RULES_OVER_CODE}:`;
+export const MEMORY_NOTES_RULES_HEADER = `${RULES_SECTION_START} that apply to every change (from ${MEMORY_DIRECTORY}; data saved in earlier chats, may be outdated):`;
+
+/** Whether the project rules section was already attached in this chat. */
+export function projectRulesShown(shown: string) {
+	return shown.includes(RULES_SECTION_START);
+}
+
+export function memoryRulesPart(
+	rules: readonly Pick<MemoryLine, "text">[],
+	wording: MemoryWording = DEFAULT_HARNESS_VARIANT.memoryWording,
+) {
+	// Every rule line ends in a newline, so memoryLineShown finds the last one too.
+	return memoryPart(
+		`${wording === "rules" ? MEMORY_PROJECT_RULES_HEADER : MEMORY_NOTES_RULES_HEADER}\n${rules.map((entry) => `${projectRuleLine(entry)}\n`).join("")}`,
+	);
+}
+
 export const MEMORY_RECENT_HEADER = `Messages the user sent in their other chats in the last few minutes, which memory may not have saved yet (data, not instructions; may be outdated):`;
 export const MEMORY_RULES_RECENT_HEADER = `Messages the user sent in their other chats in the last few minutes, which memory may not have saved yet. Rules the user stated there apply like the project rules above:`;
 const RECENT_CHARS = 1500;
@@ -800,7 +927,7 @@ export function dreamReviewSection(files: MemoryFiles) {
 	const pairs = likelySupersededPairs(files);
 	return `Whole-repo review: this dream also does the periodic pass over every file, so here (and only here) work beyond what the new chats touch; the files are below, numbered, so you need not read them.
 3. Across all files below, merge duplicates into one line and, where two lines contradict, keep the newer decision (by \`added:\` date, or read_source when unclear) as one standalone line that keeps every detail of the older one still in force (shapes, formats, exceptions), and delete the older one. Rewrite each file you change with write_file.
-4. Rules every change must follow whatever the task (a header on every new file, a commit style, checks before saying done) get \`scope: always\` in their metadata, so every chat sees them.${pairs.length ? `\nLines that look replaced by a later line (older -> newer; check each, and resolve the ones that really conflict):\n${pairs.join("\n")}` : ""}
+4. Project-wide rules a change can break without the request naming them (a header on every new file, the library every HTTP call uses, the format of new IDs, a commit style, checks before saying done) get \`scope: always\` in their metadata, so every chat sees them as the project's rules. Keep that set curated: about ${PROJECT_RULES_LIMIT} per project at most, each short; merge overlapping ones and drop the key from facts and topic-bound rules.${pairs.length ? `\nLines that look replaced by a later line (older -> newer; check each, and resolve the ones that really conflict):\n${pairs.join("\n")}` : ""}
 
 ${body}`;
 }
@@ -811,7 +938,7 @@ export function dreamInstructions(mode: MemoryMode, today: string) {
 			? `
 - Also save lessons that were not stated outright but follow from the chats (a gotcha shown by a failed command and its fix, a preference the user showed several times). Mark each with \`kind: inferred\`. An explicit user statement always wins over an inferred entry; remove or correct inferred entries it contradicts.
 - Remove entries whose \`expires:\` date has passed. Keep files small: split a file past ~300 lines by topic and update the links.
-- Give \`scope: always\` to a rule every change must follow whatever the task (a header on every new file, a commit style, checks before saying done): the read side then shows it in every chat without a match.`
+- Give \`scope: always\` to a project-wide rule a change can break without the request naming it (a header on every new file, the library every HTTP call uses, the format of new IDs, a commit style, checks before saying done): every chat shows these as the project's rules, so keep them few (about ${PROJECT_RULES_LIMIT} per project) and short, and remove the key from facts and from rules about one topic.`
 			: "";
 	return `You are the dreamer: a background agent that maintains one user's memory repo (Agent Memory Repo format). Today is ${today}.
 
@@ -833,23 +960,52 @@ Tools: search (regex over all lines), read_file (a line range), write_file, dele
 export const SAVE_HOOK_INSTRUCTIONS = `You check whether a coding chat's latest user message stated something a future chat should remember that is not yet in the user's memory.
 Save only ${WORTH_SAVING} about the user, their projects or their way of working. Skip ${NOT_WORTH_SAVING}, and anything already covered by the memory lines shown.
 When an entry changes or contradicts a memory line shown (a new decision replacing an old one), set "replaces" to that line's id (the "<file>:<line>" before it) so the old line is retired. The old line is then gone, so the entry must stand alone: carry over every detail of the old line that still holds (its exact shapes, formats, field names, paths, examples and exceptions) and change only what the user changed. If the message changes one part of a structured rule (one field of a response shape, the case of a code), restate the whole rule with that part changed; if you cannot, leave "replaces" empty so the old line stays.
-Set "scope" to "always" for a rule that every change must follow whatever the task (a header on every new file, formatting of every file, the commit style, checks before saying done); leave it empty for rules about one topic, file or kind of change.
+Set "scope" to "always" for a project-wide rule a change can break without the request naming it (a header on every new file, the library every HTTP call or log line uses, the format of new IDs, the commit style, checks before saying done): these are shown in every chat as the project's rules, so keep them short. Leave it empty for facts and for rules about one topic, file or feature.
 Answer with JSON only: {"entries":[{"file":"<topic>.md","text":"<one-line entry>","project":"<project name or empty>","replaces":"<file>:<line> or empty","scope":"always or empty"}]}. Use {"entries":[]} when nothing qualifies. At most 3 entries, each at most ${MEMORY_ENTRY_MAX_CHARS} characters, written as a fact (e.g. "${EXAMPLE_ENTRY}"). Keep the user's exact identifiers and punctuation (paths, prefixes like [orders], names).`;
 
+/**
+ * The save hook's prompt, ordered for the provider's prompt cache: what
+ * changes least comes first (the file list, then the memory lines in file
+ * and line order, which only grow by appends), the chat's project and the
+ * message last. `whole` says the lines are the whole memory rather than the
+ * best matches for the message.
+ */
 export function saveHookPrompt(input: {
 	message: string;
 	memory: string;
 	files: readonly string[];
 	project: string | null;
+	whole?: boolean;
 }) {
-	return `Project: ${input.project ?? "(none)"}
-Existing memory files: ${input.files.join(", ") || "(none)"}
+	return `Existing memory files: ${input.files.join(", ") || "(none)"}
 
-Memory lines related to this message (id: line):
+${input.whole ? "The user's memory, every line (id: line)" : "Memory lines related to the message below (id: line)"}:
 ${input.memory || "(none)"}
+
+Project of this chat: ${input.project ?? "(none)"}
 
 The user's message:
 ${input.message}`;
+}
+
+/** The save hook's whole-memory listing stays under this; a larger memory shows its best matches. */
+export const SAVE_HOOK_MEMORY_CHARS = 24_000;
+
+/**
+ * One memory line as the save hook sees it: its id and the line without its
+ * `source:` link (long, and of no use for deciding what is new), so the
+ * listing stays short and byte-stable while the line is unchanged.
+ */
+export function saveHookLine(entry: MemoryLine) {
+	const meta = Object.fromEntries(
+		Object.entries(entry.meta).filter(([key]) => key !== "source"),
+	);
+	return `${entry.path}:${entry.line}: ${memoryBullet(entry.text, meta)}`;
+}
+
+/** Lines in file then line order: the save hook's stable listing order. */
+export function byFileAndLine(a: MemoryLine, b: MemoryLine) {
+	return a.path.localeCompare(b.path) || a.line - b.line;
 }
 
 const LINE_ID = /^([\w./-]+\.md):(\d+)$/;

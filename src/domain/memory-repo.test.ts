@@ -13,13 +13,18 @@ import {
 	isNewFileRequest,
 	likelySupersededPairs,
 	memoryEntryPart,
+	memoryLineShown,
 	memoryLines,
 	memoryLinks,
 	memoryMatchesPart,
 	memoryPath,
 	memoryQueryText,
+	memoryRulesPart,
 	parseMemoryLine,
 	parseSaveHookAnswer,
+	projectRules,
+	projectRulesShown,
+	projectRuleTier,
 	renderDreamInbox,
 	selectMemoryMatches,
 	supersedesLine,
@@ -373,6 +378,60 @@ describe("rules a request must follow without naming them", () => {
 			].join("\n"),
 		});
 		expect(supersedesLine(tooling[1], tooling[0])).toBe(false);
+	});
+});
+
+describe("project rules", () => {
+	const lines = memoryLines({
+		"MEMORY.md": "# Memory\n\n- Never deploy on Fridays\n",
+		"api.md": [
+			"# api",
+			"- Errors are JSON with a code field [scope: always; added: 2026-10-01]",
+			"- The orders API returns 50 rows per page",
+			"- Always run pnpm check before saying done [added: 2026-10-02]",
+			"- New entity IDs use ULIDs [added: 2026-10-03]",
+			"- Switched new entity IDs from ULIDs to UUIDv7 [added: 2026-10-09]",
+			"- Old webhook flags must stay [expires: 2026-01-01]",
+			"- Every log line uses lib/log.ts [project: other/app; scope: always]",
+		].join("\n"),
+	});
+
+	it("takes standing rules by firmness, swapped for their later change, without facts", () => {
+		const rules = projectRules({
+			lines,
+			today: "2026-10-15",
+			project: "acme/web",
+		});
+		expect(rules.map((entry) => entry.text)).toEqual([
+			"Errors are JSON with a code field",
+			"Switched new entity IDs from ULIDs to UUIDv7",
+			"Always run pnpm check before saying done",
+		]);
+		expect(
+			projectRules({ lines, today: "2026-10-15", project: "other/app" }).map(
+				(entry) => entry.text,
+			),
+		).toContain("Every log line uses lib/log.ts");
+		expect(
+			projectRuleTier({ text: "The orders API returns 50 rows", meta: {} }),
+		).toBeNull();
+	});
+
+	it("is recognised as shown, so the read hook does not repeat a rule", () => {
+		const rules = projectRules({
+			lines,
+			today: "2026-10-15",
+			project: null,
+		});
+		const part = memoryRulesPart(rules);
+		expect(projectRulesShown(part)).toBe(true);
+		expect(projectRulesShown(memoryEntryPart("- x"))).toBe(false);
+		const last = rules.at(-1);
+		if (!last) throw new Error("rules expected");
+		expect(memoryLineShown(last.raw, part)).toBe(true);
+		expect(
+			memoryLineShown("- The orders API returns 50 rows per page", part),
+		).toBe(false);
 	});
 });
 
