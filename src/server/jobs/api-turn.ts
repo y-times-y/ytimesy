@@ -903,10 +903,7 @@ async function runApiTurnAttempt(
 			leadBackgroundCommands: () => pendingAgentCommandIds(items),
 		};
 		const delegation: ToolSet = delegates
-			? withRedactedResults(
-					subagentTools(subagentContext),
-					redact,
-				)
+			? withRedactedResults(subagentTools(subagentContext), redact)
 			: {};
 		// Lead mode fusion (src/server/services/fusion-lead.ts): the harness
 		// starts the request's exploration, and the lead waits while its
