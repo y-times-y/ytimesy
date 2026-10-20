@@ -54,6 +54,8 @@ const mocks = vi.hoisted(() => ({
 		| ((input: { tools: Record<string, unknown> }) => Promise<void>),
 	/** Use the real per-session machines (a reader's commands run as the reader user). */
 	sessionMachines: false,
+	/** Lead mode fusion's gate: "wait" while the sidekick works. */
+	leadGate: vi.fn(async (): Promise<"ready" | "wait"> => "ready"),
 	/** Answers a VM command before the default fake does (null: not handled). */
 	vm: null as
 		| null
@@ -93,6 +95,13 @@ vi.mock("../adapters/subagents", async (importOriginal) => ({
 vi.mock("../services/subagent-runtime", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../services/subagent-runtime")>()),
 	guardSubagentStep: async (input: { messages: unknown }) => input.messages,
+}));
+// Lead mode fusion's gate reads the sidekick's rounds from the database:
+// here the lead has none running, so every step calls the model.
+vi.mock("../services/fusion-lead", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../services/fusion-lead")>()),
+	fusionLeadGate: (...args: unknown[]) => mocks.leadGate(...(args as [])),
+	fusionRoundOpen: async () => false,
 }));
 // run_code's run journal: every run is new (no database).
 vi.mock("../adapters/agent-task-command-receipts", async (importOriginal) => ({
@@ -411,6 +420,25 @@ it.each([
 		expect(first.names).not.toContain("find_tools");
 	},
 );
+
+it("lead=fusion: no model call while the sidekick works; the step ends to wait on", async () => {
+	mocks.leadGate.mockClear();
+	mocks.leadGate.mockResolvedValueOnce("wait");
+	await expect(
+		sentRequest({ codeMode: "primary", subagents: "off", lead: "fusion" }),
+	).rejects.toThrow("No model request was sent");
+	expect(mocks.leadGate).toHaveBeenCalledTimes(1);
+	// The next step's gate is ready (the report is in the mailbox): the model is called.
+	const next = await sentRequest(
+		{ codeMode: "primary", subagents: "off", lead: "fusion" },
+		{ step: 2 },
+	);
+	expect(next.body.instructions).toContain("Subagents: you are the lead.");
+	expect(mocks.leadGate).toHaveBeenCalledTimes(2);
+	// Never for a builder without lead mode.
+	await sentRequest({ codeMode: "primary", subagents: "on", lead: "off" });
+	expect(mocks.leadGate).toHaveBeenCalledTimes(2);
+});
 
 it("sends the eval suffix without child tasks or a ban on delegation when subagents are on", async () => {
 	const suffix = evalWorkSuffix({

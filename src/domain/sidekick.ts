@@ -21,19 +21,27 @@ import { agentSpend, totalSpend } from "./subagent-usage";
 /**
  * Lead mode fusion (harness variant lead=fusion, after the fusion pattern): the
  * root builder is a lead that plans, briefs, reviews and answers the user;
- * its first writer is a persistent sidekick. The sidekick keeps its session
- * (context, provider cache) and its forked VM across rounds: each brief or
- * piece of feedback the lead sends while it is idle starts a new round,
- * after the runtime has synced the fork with the lead's checkout
- * (src/server/services/sidekick-sync.ts). Each round ends with a report and
- * a patch relative to the lead's checkout at the round's start.
+ * its writer is a persistent sidekick. As in the fusion pattern the flow is: the
+ * user's task, the sidekick's code exploration (started by the harness
+ * before the lead's first model call), file snippets, the lead's plan, the
+ * sidekick's code, tests and lint fixes, the lead's review, its requested
+ * edits, the sidekick's fixes, the final code.
+ *
+ * The two share one workspace: the sidekick works directly in the lead's
+ * checkout on the lead's VM, as an ordinary writer (no fork, no sync, no
+ * patch). One writes at a time: while a round runs the lead waits (its turn
+ * makes no model call and cannot complete), and after the round it reviews
+ * the changes in place (`git diff` against the round's start snapshot).
+ * The sidekick keeps its session (context, provider cache) across rounds:
+ * each brief or piece of feedback the lead sends while it is idle starts a
+ * new round.
  *
  * The sidekick lives as long as the chat: idle between the user's messages,
  * it takes the lead's next brief in a later turn with its context intact.
  * It is retired when the lead stops it, the lead's turn fails or is
  * cancelled, it used a turn's rounds, or it stayed idle past its TTL
- * (sidekickIdleTtlMinutes; the maintenance sweep deletes its fork). The
- * round cap counts per user request.
+ * (sidekickIdleTtlMinutes; the maintenance sweep; idle it costs nothing,
+ * since it holds no VM of its own). The round cap counts per user request.
  *
  * These are the pure rules: the state kept in the sidekick's agent_budget,
  * its per-round budget, and the per-turn metrics an eval reads.
@@ -43,7 +51,7 @@ import { agentSpend, totalSpend } from "./subagent-usage";
 export const SIDEKICK_MAX_ROUNDS = 6;
 /** Rounds kept in the state (metrics across a chat's turns). */
 const KEPT_ROUNDS = 24;
-/** Minutes an idle sidekick (and its forked VM) waits for the lead's next brief. */
+/** Minutes an idle sidekick waits for the lead's next brief. */
 export const SIDEKICK_IDLE_TTL_MINUTES = 30;
 
 /** The idle TTL: YTIMESY_SIDEKICK_IDLE_MINUTES when set to a positive number. */
@@ -58,30 +66,17 @@ export function sidekickIdleTtlMinutes(
 /** Below this a round cannot do useful work. */
 const MIN_ROUND_TOKENS = 50_000;
 
-/**
- * How the fork met the lead's checkout at a round's start: unchanged (the
- * sidekick had no work), clean (all its work was already in the lead's
- * checkout, i.e. applied), carried (work the lead had not applied was
- * replayed on top and committed), conflict (that work did not replay; the
- * fork matches the lead's checkout and the old work is kept under a ref).
- */
-export const SIDEKICK_SYNC_STATUSES = [
-	"unchanged",
-	"clean",
-	"carried",
-	"conflict",
-] as const;
-export type SidekickSyncStatus = (typeof SIDEKICK_SYNC_STATUSES)[number];
-
 export type SidekickRound = {
 	readonly n: number;
 	readonly startedAt: string;
 	readonly endedAt?: string;
 	readonly outcome?: SubagentOutcome;
-	/** Files in the round's patch (0: no changes). */
+	/** Files the round changed in the shared checkout (0: no changes). */
 	readonly patchFiles?: number;
-	/** Rounds after the first: how the fork was synced before it. */
-	readonly sync?: SidekickSyncStatus;
+	/** The checkout at the round's start, snapshotted as a commit (its changes are diffed against it). */
+	readonly base?: string;
+	/** The checkout at the round's end, snapshotted as a commit. */
+	readonly end?: string;
 	/** explore: read and report snippets, change no files; build (default): change files. */
 	readonly kind?: SidekickRoundKind;
 	/** Its failed checks and errors, compared by the next round's signals. */
@@ -130,6 +125,8 @@ export function newSidekickState(
 		readonly requestKey?: string;
 		readonly kind?: SidekickRoundKind;
 		readonly escalatedFrom?: SidekickState["escalatedFrom"];
+		/** The checkout snapshot at round 1's start. */
+		readonly base?: string;
 	} = {},
 ): SidekickState {
 	return {
@@ -149,7 +146,12 @@ export function newSidekickState(
 		roundStartSteps: 0,
 		roundStartTokens: 0,
 		rounds: [
-			{ n: 1, startedAt: now, ...(options.kind ? { kind: options.kind } : {}) },
+			{
+				n: 1,
+				startedAt: now,
+				...(options.kind ? { kind: options.kind } : {}),
+				...(options.base ? { base: options.base } : {}),
+			},
 		],
 	};
 }
@@ -269,14 +271,15 @@ export function subagentBudgetCheck(
 	};
 }
 
-/** The state when the lead starts the next round (the fork is synced by then). */
+/** The state when the lead starts the next round. */
 export function beginSidekickRound(
 	state: SidekickState,
 	input: {
 		readonly now: string;
 		readonly steps: number;
 		readonly tokens: number;
-		readonly sync: SidekickSyncStatus;
+		/** The checkout snapshot at the round's start. */
+		readonly base?: string;
 		readonly kind?: SidekickRoundKind;
 		/** The lead's current user request; another one than before starts a new turn's count. */
 		readonly requestKey?: string;
@@ -301,8 +304,8 @@ export function beginSidekickRound(
 			{
 				n,
 				startedAt: input.now,
-				sync: input.sync,
 				...(input.kind ? { kind: input.kind } : {}),
+				...(input.base ? { base: input.base } : {}),
 			},
 		].slice(-KEPT_ROUNDS),
 	};
@@ -315,6 +318,8 @@ export function endSidekickRound(
 		readonly now: string;
 		readonly outcome: SubagentOutcome;
 		readonly patchFiles: number;
+		/** The checkout snapshot at the round's end. */
+		readonly end?: string;
 		readonly evidence?: RoundEvidence;
 		readonly signals?: readonly SidekickSignal[];
 	},
@@ -328,6 +333,7 @@ export function endSidekickRound(
 						endedAt: input.now,
 						outcome: input.outcome,
 						patchFiles: input.patchFiles,
+						...(input.end ? { end: input.end } : {}),
 						...(input.evidence ? { evidence: input.evidence } : {}),
 						...(input.signals?.length ? { signals: input.signals } : {}),
 					}
@@ -357,45 +363,81 @@ export function retireSidekickState(
 	return state.retired ? state : { ...state, retired: { at: now, reason } };
 }
 
-/** A round's patch name: the first round keeps the agent's label, later ones add the round. */
-export function sidekickPatchLabel(label: string, round: number) {
-	return round <= 1 ? label : `${label}.r${round}`;
+/** Where the lead's checkout keeps a round's start (or end) snapshot. */
+export function sidekickRoundRef(
+	label: string,
+	round: number,
+	edge: "start" | "end",
+) {
+	return `refs/ytimesy/sidekick/${label}/round-${round}-${edge}`;
 }
 
-/** Where the fork keeps the sidekick's own head at the end of a round. */
-export function sidekickRoundRef(round: number) {
-	return `refs/ytimesy/sidekick/round-${round}`;
+/** Whether the sidekick is in a round: its current round has no report yet. */
+export function sidekickRoundOpen(state: SidekickState) {
+	return !currentSidekickRound(state)?.endedAt;
+}
+
+/**
+ * Whether the user request `requestKey` already has an exploration round
+ * among these sidekick states (an escalated sidekick's predecessor counts).
+ */
+export function requestExplored(
+	states: readonly SidekickState[],
+	requestKey: string,
+) {
+	return states.some(
+		(state) =>
+			state.requestKey === requestKey &&
+			state.rounds.some(
+				(round) =>
+					round.kind === "explore" && round.n >= (state.turnFirstRound ?? 1),
+			),
+	);
 }
 
 /** Appended to an exploration round's brief: what to return (lead mode fusion). */
 export const SIDEKICK_EXPLORE_NOTE =
 	"Exploration round: change no files. Find the code this task touches and report in this format. Files: each relevant path with its line ranges and why it matters. Snippets: the key code quoted with line numbers, only what a plan needs. Commands: how to build and run the checks, and what they print now. Open questions: what you could not settle.";
 
-/** The text the sidekick receives at a new round's start: how its checkout changed, then the lead's message. */
+/** Opens the exploration brief the harness writes from the user's request. */
+export const HARNESS_EXPLORE_HEADING =
+	"Exploration round for your lead, started by the harness before the lead plans.";
+/** The longest part of the user's request an exploration brief quotes. */
+const EXPLORE_REQUEST_MAX = 5_000;
+
+/**
+ * The exploration brief the harness gives the sidekick when a user request
+ * starts (the fusion pattern's first step): the request itself and what to return.
+ */
+export function harnessExplorationBrief(requestText: string) {
+	const request = requestText.trim();
+	const quoted =
+		request.length > EXPLORE_REQUEST_MAX
+			? `${request.slice(0, EXPLORE_REQUEST_MAX)}\n[request truncated]`
+			: request;
+	return [
+		HARNESS_EXPLORE_HEADING,
+		`The user's request:\n<request>\n${quoted}\n</request>`,
+		"Find the code this request touches so the lead can plan without reading it: the relevant files, the key snippets with their line ranges, how to build and run the checks (and what they print now), what the change will touch, and what is still open.",
+		SIDEKICK_EXPLORE_NOTE,
+	].join("\n\n");
+}
+
+/** The text the sidekick receives at a new round's start: the round, then the lead's message. */
 export function sidekickRoundMessage(input: {
 	readonly round: number;
 	readonly maxRounds: number;
-	readonly sync: SidekickSyncStatus;
 	readonly message: string;
 	/** The first round of the current user request (1: the chat's first). */
 	readonly turnFirstRound?: number;
 	readonly kind?: SidekickRoundKind;
 }) {
-	const previous = sidekickRoundRef(input.round - 1);
-	const checkout = {
-		unchanged: "Your checkout now matches the lead's current checkout.",
-		clean:
-			"Your checkout now matches the lead's current checkout, which already contains all of your earlier work.",
-		carried:
-			"Your checkout now matches the lead's current checkout, with your earlier work the lead has not applied replayed on top and committed.",
-		conflict: `Your checkout now matches the lead's current checkout. Your earlier work the lead has not applied conflicted with it and is not in the checkout; it is at ${previous} (git diff HEAD ${previous}); reuse what still applies.`,
-	}[input.sync];
 	const first = input.turnFirstRound ?? 1;
 	const heading =
 		first <= 1
 			? `Round ${input.round}/${input.maxRounds} from your lead.`
 			: `Round ${input.round} from your lead (${input.round - first + 1}/${input.maxRounds} for the user's new request).`;
-	return `${heading} ${checkout} This round's patch is everything that differs from this checkout when you finish.\n\n${input.message.trim()}${input.kind === "explore" ? `\n\n${SIDEKICK_EXPLORE_NOTE}` : ""}`;
+	return `${heading} You work in the lead's checkout as it is now (the lead may have changed or reverted your earlier work); the lead waits while you work and reviews this round's changes in place.\n\n${input.message.trim()}${input.kind === "explore" ? `\n\n${SIDEKICK_EXPLORE_NOTE}` : ""}`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -414,9 +456,8 @@ export type FusionTurnMetrics = {
 	readonly writersStarted: number;
 	/** The lead's own file edits (edit/write calls, run_code's included). */
 	readonly leadEdits: number;
-	/** The lead's commands that applied or merged an agent's patch or ref. */
+	/** The lead's commands that applied or merged an agent's patch or ref (0 with a shared checkout). */
 	readonly patchesApplied: number;
-	readonly syncs: Readonly<Record<SidekickSyncStatus, number>>;
 	readonly lead: FusionSpend;
 	readonly sidekick: FusionSpend;
 	/** Other children (readers, checkers, other writers). */
@@ -532,9 +573,6 @@ export function fusionTurnMetrics(input: {
 	);
 	const sidekicks = children.filter((session) => sidekickState(session));
 	const calls = toolCalls(sessionItemsFromUnknown(root?.items));
-	const syncs = Object.fromEntries(
-		SIDEKICK_SYNC_STATUSES.map((status) => [status, 0]),
-	) as Record<SidekickSyncStatus, number>;
 	let handoffs = 0;
 	let ended = 0;
 	let busyMs = 0;
@@ -551,7 +589,6 @@ export function fusionTurnMetrics(input: {
 			if (round.kind === "explore") explorationHandoffs += 1;
 			for (const signal of round.signals ?? [])
 				signals[signal.kind] = (signals[signal.kind] ?? 0) + 1;
-			if (round.sync) syncs[round.sync] += 1;
 			if (!round.endedAt) continue;
 			ended += 1;
 			busyMs += Math.max(
@@ -575,7 +612,6 @@ export function fusionTurnMetrics(input: {
 				(COMMAND_TOOLS.has(call.tool) || call.tool === "bash") &&
 				APPLIES_AGENT_WORK.test(call.input.replaceAll('\\"', '"')),
 		).length,
-		syncs,
 		lead: fusionSpend(root ? [root] : []),
 		sidekick: fusionSpend(sidekicks),
 		others: fusionSpend(
@@ -616,9 +652,6 @@ export function fusionMetricsLine(
 		sum && metrics.sidekick.costUsd !== null
 			? ` (${Math.round((metrics.sidekick.costUsd / sum) * 100)}% sidekick)`
 			: "";
-	const syncs = SIDEKICK_SYNC_STATUSES.filter(
-		(status) => metrics.syncs[status],
-	).map((status) => `${status} ${metrics.syncs[status]}`);
 	return [
 		`sidekicks ${metrics.sidekicks}`,
 		`handoffs ${metrics.handoffs}`,
@@ -627,7 +660,6 @@ export function fusionMetricsLine(
 		`writers ${metrics.writersStarted}`,
 		`lead edits ${metrics.leadEdits}`,
 		`patches applied ${metrics.patchesApplied}`,
-		...(syncs.length ? [`syncs ${syncs.join("/")}`] : []),
 		`lead ${k(metrics.lead.tokens)} ${usd(metrics.lead.costUsd)}`,
 		`sidekick ${k(metrics.sidekick.tokens)} ${usd(metrics.sidekick.costUsd)}${share}`,
 		...(metrics.others.tokens

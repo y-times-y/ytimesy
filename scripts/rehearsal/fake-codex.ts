@@ -46,6 +46,8 @@ export type ModelRequestRecord = {
 	reply: Reply;
 	/** The newest user-role message this request carried. */
 	lastUser: string;
+	/** Every user-role message this request carried, in order. */
+	users: string[];
 	/** The request's prompt_cache_key (one per agent session). */
 	cacheKey: string | null;
 	at: number;
@@ -201,6 +203,7 @@ export class FakeCodex {
 			tools: (body.tools ?? []).map((tool) => tool.name ?? tool.type ?? ""),
 			reply,
 			lastUser: userTexts.at(-1) ?? "",
+			users: userTexts,
 			cacheKey: body.prompt_cache_key ?? null,
 			at: Date.now(),
 		});

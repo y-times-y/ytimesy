@@ -191,6 +191,8 @@ export async function openAgentTask(input: {
 	readonly access: AgentTaskAccess;
 	readonly execution: AgentTaskExecution;
 	readonly dependsOnSessionId: string | null;
+	/** Lead mode fusion's sidekick: a writer on its parent's machine (src/domain/sidekick.ts). */
+	readonly sharedWriter?: boolean;
 }) {
 	let parent = await agentSessionForOwner(input.userId, input.parentSessionId);
 	if (!parent || parent.projectId !== input.projectId) {
@@ -217,6 +219,7 @@ export async function openAgentTask(input: {
 		access: input.access,
 		execution: input.execution,
 		dependsOnSessionId: input.dependsOnSessionId,
+		sharedWriter: input.sharedWriter,
 	});
 	if (invalidPlan) throw new Error(invalidPlan);
 	if (input.dependsOnSessionId) {

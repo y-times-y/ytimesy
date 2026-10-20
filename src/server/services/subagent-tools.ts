@@ -21,6 +21,7 @@ import { sessionItemsFromUnknown } from "#/domain/session-item";
 import {
 	beginSidekickRound,
 	currentSidekickRound,
+	harnessExplorationBrief,
 	isActiveSidekick,
 	latestUserRequestId,
 	newSidekickState,
@@ -45,6 +46,7 @@ import {
 	SUBAGENT_ROLES,
 	SUBAGENT_TITLE_MAX,
 	type SubagentBudget,
+	type SubagentPlacement,
 	type SubagentRole,
 	subagentAdmission,
 	subagentPlacement,
@@ -76,7 +78,7 @@ import { openAgentTask } from "./agent-session-machine";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 import { startPreparedAgentTask } from "./harness-workspace-session";
 import { failoverConnections } from "./model-failover";
-import { syncSidekickFork } from "./sidekick-sync";
+import { markSidekickRoundStart } from "./sidekick-workspace";
 import { retireSidekick } from "./subagent-runtime";
 import { forkWriterWorkspace } from "./subagent-writer";
 import type { WorkspaceMachines } from "./workspace-machines";
@@ -119,8 +121,8 @@ export type SubagentToolDeps = {
 	readonly takeReport: typeof takeSubagentReport;
 	readonly message: typeof queueAgentPeerMessage;
 	readonly stop: typeof requestSubagentStop;
-	/** Lead mode fusion: the sidekick's fork sync, state and retirement. */
-	readonly syncSidekick: typeof syncSidekickFork;
+	/** Lead mode fusion: the round's start snapshot, the sidekick's state and retirement. */
+	readonly markRoundStart: typeof markSidekickRoundStart;
 	readonly saveSidekick: typeof saveSidekickState;
 	readonly retireSidekick: typeof retireSidekick;
 };
@@ -156,7 +158,7 @@ const defaultDeps: SubagentToolDeps = {
 	takeReport: (...args) => takeSubagentReport(...args),
 	message: (...args) => queueAgentPeerMessage(...args),
 	stop: (...args) => requestSubagentStop(...args),
-	syncSidekick: (...args) => syncSidekickFork(...args),
+	markRoundStart: (...args) => markSidekickRoundStart(...args),
 	saveSidekick: (...args) => saveSidekickState(...args),
 	retireSidekick: (...args) => retireSidekick(...args),
 };
@@ -174,15 +176,22 @@ export type SubagentToolContext = {
 	readonly roleModels?: RoleModels;
 	/** Harness variant lead: fusion makes the root's first writer a persistent sidekick. */
 	readonly lead?: LeadMode;
+	/**
+	 * Lead mode fusion: called when a sidekick round starts, so the lead's
+	 * turn stops writing to the shared checkout at once (fusion-lead.ts).
+	 */
+	readonly onSidekickRound?: () => void;
 	readonly deps?: Partial<SubagentToolDeps>;
 };
 
+const ROLE_TEXT =
+	"writer: edits code on a fork of your VM and returns a patch; researcher, reviewer: read-only on your VM; checker: independent pass/fail of your current work against the user's task";
+/** Lead mode fusion: the writer is the sidekick, in the lead's own checkout. */
+const LEAD_ROLE_TEXT =
+	"writer: your sidekick, which works in your own checkout while you wait (its changes stay uncommitted in your working tree for you to review); researcher, reviewer: read-only on your VM; checker: independent pass/fail of your current work against the user's task";
+
 const agentInput = z.object({
-	role: z
-		.enum(SUBAGENT_ROLES)
-		.describe(
-			"writer: edits code on a fork of your VM and returns a patch; researcher, reviewer: read-only on your VM; checker: independent pass/fail of your current work against the user's task",
-		),
+	role: z.enum(SUBAGENT_ROLES).describe(ROLE_TEXT),
 	title: z.string().min(1).max(SUBAGENT_TITLE_MAX),
 	brief: z
 		.string()
@@ -242,15 +251,21 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 	const requestKey = () =>
 		latestUserRequestId(sessionItemsFromUnknown(parent.items));
 	const agent = tool({
-		description:
-			"Start a subagent in the background. It sees only your brief (never this conversation), works within its own budget and reports back as a message; keep working meanwhile. Writers get a fork of your VM (your uncommitted work included) and return a patch and git ref for you to review and apply; readers share your VM read-only. Returns its id and budget.",
+		description: isLead
+			? "Start a subagent. It sees only your brief (never this conversation), works within its own budget and reports back as a message. Your writer is your sidekick: it works directly in your checkout, you wait while it works (the runtime holds your turn until its report), and you review its changes in place with git diff. Readers share your VM read-only and run in the background. Returns its id and budget."
+			: "Start a subagent in the background. It sees only your brief (never this conversation), works within its own budget and reports back as a message; keep working meanwhile. Writers get a fork of your VM (your uncommitted work included) and return a patch and git ref for you to review and apply; readers share your VM read-only. Returns its id and budget.",
 		inputSchema: isLead
-			? agentInput.extend({ explore: exploreField })
+			? agentInput.extend({
+					role: z.enum(SUBAGENT_ROLES).describe(LEAD_ROLE_TEXT),
+					explore: exploreField,
+				})
 			: agentInput,
 		execute: async (
 			input: z.infer<typeof agentInput> & { explore?: boolean },
 		) => {
 			const role: SubagentRole = input.role;
+			// Before any await: a write in the same batch must already see the round.
+			if (isLead && role === "writer") context.onSidekickRound?.();
 			if (role === "checker" && input.brief?.trim())
 				throw new Error(
 					"A checker takes no brief: the runtime gives it the user's task and your deliverable, so its verdict stays independent.",
@@ -317,7 +332,7 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 				...(notice ? { modelNotice: notice } : {}),
 				...(budget.sidekick
 					? {
-							sidekick: `Your persistent sidekick for this chat: up to ${budget.sidekick.maxRounds} rounds per user request, steps and minutes per round. After its report, send feedback or the next brief with ${AGENT_SEND_TOOL} (also on the user's later messages); it keeps its context, and its fork is synced with your checkout before each round.`,
+							sidekick: `Your persistent sidekick for this chat: up to ${budget.sidekick.maxRounds} rounds per user request, steps and minutes per round. It works in your checkout; you wait while it works and review its changes in place after its report. Then send feedback or the next brief with ${AGENT_SEND_TOOL} (also on the user's later messages); it keeps its context.`,
 						}
 					: {}),
 			};
@@ -333,8 +348,9 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 	});
 
 	const agentSend = tool({
-		description:
-			"Steer one of your running subagents (message, delivered at its next step) or stop it (it wraps up and reports what is done). A finished agent resumes with the message.",
+		description: isLead
+			? "Steer one of your running subagents (message, delivered at its next step) or stop it (it wraps up and reports what is done). A message to your idle sidekick starts its next round in your checkout; you wait for its report. A finished reader resumes with the message."
+			: "Steer one of your running subagents (message, delivered at its next step) or stop it (it wraps up and reports what is done). A finished agent resumes with the message.",
 		inputSchema: isLead
 			? sendInput.extend({ explore: exploreField })
 			: sendInput,
@@ -343,6 +359,10 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 		) => {
 			if (!input.message && !input.stop)
 				throw new Error("Pass a message, stop: true, or both.");
+			// Before any await: a message usually starts a sidekick round, and a
+			// write in the same batch must already see it (the next step's gate
+			// lifts this when no round runs).
+			if (isLead && input.message && !input.stop) context.onSidekickRound?.();
 			const tree = await loadTree();
 			const target = tree.nodes.find(
 				(node) => node.label === input.id && node.parentId === parent.id,
@@ -394,11 +414,11 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 type LoadedTree = Tree & { level: number };
 
 /**
- * agent_send to a sidekick (lead mode fusion). Stop retires it (an idle
- * one's fork is deleted now). A message while it is idle starts its next
- * round: the fork is synced with the lead's checkout, the round's budget
- * starts, and the message arrives with how the checkout changed. A message
- * while it works is ordinary steering (null: the caller handles it).
+ * agent_send to a sidekick (lead mode fusion). Stop retires it. A message
+ * while it is idle starts its next round in the lead's checkout: the
+ * checkout is snapshotted (the round's changes are diffed against it), the
+ * round's budget starts, and the message arrives. A message while it works
+ * is ordinary steering (null: the caller handles it).
  */
 async function sendToSidekick(
 	context: SubagentToolContext,
@@ -424,7 +444,7 @@ async function sendToSidekick(
 			return {
 				id: target.label,
 				status: "retired",
-				note: "Its fork is deleted; a new writer becomes your next sidekick.",
+				note: "A new writer becomes your next sidekick.",
 			};
 		return null;
 	}
@@ -439,53 +459,31 @@ async function sendToSidekick(
 		);
 	const restarted = await escalateSidekick(context, deps, input);
 	if (restarted) return restarted;
-	const fork = session.agentFork;
-	if (!fork?.vmId || fork.deletedAt || !fork.base || !fork.parentHead)
-		throw new Error(
-			`Sidekick ${target.label}'s fork is gone; stop it and start a new writer.`,
-		);
 	const round = state.round + 1;
-	// The runtime's note on the checkout goes in front; delivery takes 8,000 characters.
+	// The runtime's heading goes in front; delivery takes 8,000 characters.
 	const note = sidekickRoundMessage({
 		round,
 		maxRounds: state.maxRounds,
-		sync: "conflict",
 		message: "",
+		turnFirstRound: round,
 	}).length;
 	if (note + (input.message ?? "").trim().length > PEER_MESSAGE_MAX)
 		throw new Error(
-			`A sidekick round's message takes at most ${PEER_MESSAGE_MAX - note} characters; shorten it or point to a file in your checkout (it is synced to the sidekick).`,
+			`A sidekick round's message takes at most ${PEER_MESSAGE_MAX - note} characters; shorten it or point to a file in your checkout (the sidekick works in it).`,
 		);
-	const workspace = await context.workspace();
-	const sync = await deps.syncSidekick({
-		machines: context.machines,
-		leadVm: workspace.vm,
-		forkVm: WorkspaceId(fork.vmId),
-		label: target.label,
+	const next = await beginRound(context, deps, {
+		target,
+		state,
 		round,
-		base: fork.base,
-		parentHead: fork.parentHead,
-	});
-	await deps.mergeFork(target.id, {
-		base: sync.base,
-		parentHead: sync.parentHead,
-	});
-	const next = beginSidekickRound(state, {
-		now: new Date(deps.now()).toISOString(),
-		steps: target.steps,
-		tokens: target.subtree.budgetTokens,
-		sync: sync.status,
 		kind: input.kind,
 		requestKey: input.requestKey,
 	});
-	await deps.saveSidekick(target.id, next, { clearStop: true });
 	await deps.message(
 		context.parent,
 		target.id,
 		sidekickRoundMessage({
 			round,
 			maxRounds: state.maxRounds,
-			sync: sync.status,
 			message: input.message ?? "",
 			turnFirstRound: next.turnFirstRound,
 			kind: input.kind,
@@ -495,17 +493,138 @@ async function sendToSidekick(
 	return {
 		id: target.label,
 		status: `${sidekickRoundLabel(next)} started`,
-		checkout: {
-			unchanged: "its fork now matches your checkout",
-			clean:
-				"its fork now matches your checkout (all its earlier work was in it)",
-			carried:
-				"its fork now matches your checkout plus its earlier work you have not applied",
-			conflict:
-				"its fork now matches your checkout; its unapplied earlier work conflicted and was set aside",
-		}[sync.status],
+		checkout:
+			"it works in your checkout now; you wait for its report, then review its changes in place",
 		delivery: "now",
 	};
+}
+
+/**
+ * Starts a sidekick's next round: snapshots the lead's checkout (the
+ * round's base) and saves the round's state. The lead stops writing at once.
+ */
+async function beginRound(
+	context: SubagentToolContext,
+	deps: SubagentToolDeps,
+	input: {
+		readonly target: SubagentNode;
+		readonly state: SidekickState;
+		readonly round: number;
+		readonly kind: SidekickRoundKind;
+		readonly requestKey?: string;
+	},
+) {
+	context.onSidekickRound?.();
+	const workspace = await context.workspace();
+	const base = await roundBase(
+		context,
+		deps,
+		workspace,
+		input.target.label,
+		input.round,
+	);
+	const next = beginSidekickRound(input.state, {
+		now: new Date(deps.now()).toISOString(),
+		steps: input.target.steps,
+		tokens: input.target.subtree.budgetTokens,
+		base,
+		kind: input.kind,
+		requestKey: input.requestKey,
+	});
+	await deps.saveSidekick(input.target.id, next, { clearStop: true });
+	return next;
+}
+
+/** The round's start snapshot; a failed snapshot only costs the round's precise diff. */
+async function roundBase(
+	context: SubagentToolContext,
+	deps: SubagentToolDeps,
+	workspace: AgentToolWorkspace,
+	label: string,
+	round: number,
+) {
+	try {
+		return await deps.markRoundStart({
+			machines: context.machines,
+			vm: WorkspaceId(workspace.vm),
+			label,
+			round,
+		});
+	} catch (cause) {
+		console.warn("A sidekick round's start could not be snapshotted.", {
+			message: cause instanceof Error ? cause.message.slice(0, 200) : "",
+		});
+		return undefined;
+	}
+}
+
+/**
+ * Lead mode fusion's first step (the fusion pattern: the user's task, then the
+ * sidekick's code exploration): before the lead's first model call for a
+ * user request, the harness starts an exploration round with a brief built
+ * from the request. An idle sidekick from the chat's earlier requests takes
+ * it as its next round; otherwise a new sidekick starts. Null when the lead
+ * has a working sidekick or none can start (the lead then plans alone).
+ */
+export async function startHarnessExploration(
+	context: SubagentToolContext,
+	input: { readonly requestKey: string; readonly requestText: string },
+) {
+	const deps = { ...defaultDeps, ...context.deps };
+	const { parent } = context;
+	const tree = await loadTreeFor(deps, parent);
+	const node = tree.nodes.find(
+		(entry) =>
+			entry.parentId === parent.id &&
+			isActiveSidekick(
+				tree.sessions.find((session) => session.id === entry.id),
+			),
+	);
+	const brief = harnessExplorationBrief(input.requestText);
+	if (node) {
+		const session = tree.sessions.find((entry) => entry.id === node.id);
+		const state = sidekickState(session);
+		if (!session || !state || node.live) return null;
+		if (!sidekickRoundsLeft(state, input.requestKey)) return null;
+		const round = state.round + 1;
+		const next = await beginRound(context, deps, {
+			target: node,
+			state,
+			round,
+			kind: "explore",
+			requestKey: input.requestKey,
+		});
+		await deps.message(
+			parent,
+			node.id,
+			sidekickRoundMessage({
+				round,
+				maxRounds: state.maxRounds,
+				message: brief.slice(0, PEER_MESSAGE_MAX - 400),
+				turnFirstRound: next.turnFirstRound,
+			}),
+			randomUUID(),
+		);
+		return { id: node.label, round };
+	}
+	const workspace = await context.workspace();
+	const { childId } = await spawnSubagent(
+		context,
+		deps,
+		{
+			role: "writer",
+			modelRole: "writer",
+			title: "Explore the code for this request",
+			sidekick: { kind: "explore", requestKey: input.requestKey },
+			brief: async () => brief,
+		},
+		workspace,
+	);
+	const label =
+		(await loadTreeFor(deps, parent)).nodes.find(
+			(entry) => entry.id === childId,
+		)?.label ?? "?";
+	return { id: label, round: 1 };
 }
 
 /** Characters of the stuck sidekick's last report a handover carries. */
@@ -514,11 +633,10 @@ const HANDOVER_REPORT_MAX = 3_000;
 /**
  * A model switch for a stuck sidekick (roleModels.writerEscalation): when
  * its last round fired a stuck signal, the next round does not go to it.
- * It is retired (its fork deleted) and a fresh sidekick starts on the
- * escalation model from the lead's current checkout, with a handover of
- * the old one's last report in front of the lead's message: the switch
- * happens at a fresh context, as a model switch at compaction does. Null
- * when no switch applies.
+ * It is retired and a fresh sidekick starts on the escalation model in the
+ * same checkout, with a handover of the old one's last report in front of
+ * the lead's message: the switch happens at a fresh context, as a model
+ * switch at compaction does. Null when no switch applies.
  */
 async function escalateSidekick(
 	context: SubagentToolContext,
@@ -557,15 +675,9 @@ async function escalateSidekick(
 	const lastReport =
 		[...items].reverse().find((item) => item.kind === "agentMessage")?.text ??
 		"(no report)";
-	const patch = session.agentFork?.patch?.path;
 	const brief = [
-		`You take over as the lead's sidekick from an earlier sidekick on ${session.listedModelId ?? "another model"} that got stuck: ${reasons}. Your checkout is the lead's current checkout.`,
+		`You take over as the lead's sidekick from an earlier sidekick on ${session.listedModelId ?? "another model"} that got stuck: ${reasons}. You work in the lead's checkout, where its changes are (unless the lead reverted them).`,
 		`Its last report:\n${lastReport.trim().slice(-HANDOVER_REPORT_MAX)}`,
-		...(patch
-			? [
-					`Its last patch is at ${patch} in the lead's checkout (not in yours unless the lead applied it).`,
-				]
-			: []),
 		`The lead's brief:\n${(input.message ?? "").trim()}`,
 		...(input.kind === "explore" ? [SIDEKICK_EXPLORE_NOTE] : []),
 	].join("\n\n");
@@ -600,7 +712,7 @@ async function escalateSidekick(
 	return {
 		id: label,
 		status: `sidekick ${target.label} was stuck (${reasons}); restarted as sidekick ${label} on ${spawned.model.label}, round 1/${spawned.budget.sidekick?.maxRounds ?? "?"} started`,
-		note: `Sidekick ${target.label} is retired and its fork deleted; ${label} has a handover of its last report and your message. Use id ${label} from now on.`,
+		note: `Sidekick ${target.label} is retired; ${label} works in your checkout with a handover of its last report and your message. Use id ${label} from now on.`,
 		delivery: "now",
 	};
 }
@@ -678,17 +790,12 @@ async function spawnSubagent(
 		// Counted in the builder's tokens: a cheaper child's tokens weigh less.
 		...(tree.root.listedModelId ? { priceBasis: tree.root.listedModelId } : {}),
 	};
-	if (input.sidekick)
-		budget = {
-			...budget,
-			sidekick: newSidekickState(budget, new Date(deps.now()).toISOString(), {
-				...input.sidekick,
-				model: model.listedModelId,
-				pair: fusionPairProfile(parent.listedModelId, model.listedModelId),
-			}),
-		};
 	const brief = await input.brief(tree);
-	const placement = subagentPlacement(role);
+	// Lead mode fusion's sidekick works in the lead's own checkout.
+	const placement: SubagentPlacement = input.sidekick
+		? "shared-writer"
+		: subagentPlacement(role);
+	if (input.sidekick) context.onSidekickRound?.();
 	const child = await deps.openTask({
 		userId: parent.userId,
 		projectId: parent.projectId,
@@ -698,13 +805,42 @@ async function spawnSubagent(
 		modelId: model.listedModelId,
 		prompt: brief,
 		placement: placement === "fork" ? "fresh" : "shared",
-		access: placement === "fork" ? "read_write" : "read_only",
+		access: placement === "shared-read-only" ? "read_only" : "read_write",
 		execution: "parallel",
 		dependsOnSessionId: null,
+		...(placement === "shared-writer" ? { sharedWriter: true } : {}),
 	});
 	const childId = child.id;
 	try {
+		if (input.sidekick)
+			budget = {
+				...budget,
+				sidekick: newSidekickState(budget, new Date(deps.now()).toISOString(), {
+					...input.sidekick,
+					model: model.listedModelId,
+					pair: fusionPairProfile(parent.listedModelId, model.listedModelId),
+				}),
+			};
 		await deps.saveSpec(parent.userId, childId, { role, budget });
+		// Round 1's base: the lead's checkout before the sidekick starts.
+		if (budget.sidekick) {
+			const label = (await loadTreeFor(deps, parent)).nodes.find(
+				(node) => node.id === childId,
+			)?.label;
+			const base = label
+				? await roundBase(context, deps, workspace, label, 1)
+				: undefined;
+			if (base) {
+				const sidekick: SidekickState = {
+					...budget.sidekick,
+					rounds: budget.sidekick.rounds.map((round) =>
+						round.n === 1 ? { ...round, base } : round,
+					),
+				};
+				budget = { ...budget, sidekick };
+				await deps.saveSidekick(childId, sidekick);
+			}
+		}
 		if (placement === "fork") {
 			const fork = await deps.fork({
 				machines: context.machines,

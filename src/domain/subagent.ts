@@ -36,8 +36,12 @@ export function runsAsReader(session: {
 	return session.taskPlacement === "shared" && isReaderRole(session.agentRole);
 }
 
-/** Where a child runs; not an argument, because it follows from the role. */
-export type SubagentPlacement = "fork" | "shared-read-only";
+/**
+ * Where a child runs; not an argument, because it follows from the role.
+ * Lead mode fusion's sidekick is the exception: a writer in the lead's own
+ * checkout ("shared-writer", src/domain/sidekick.ts).
+ */
+export type SubagentPlacement = "fork" | "shared-read-only" | "shared-writer";
 
 export function subagentPlacement(role: SubagentRole): SubagentPlacement {
 	return role === "writer" ? "fork" : "shared-read-only";

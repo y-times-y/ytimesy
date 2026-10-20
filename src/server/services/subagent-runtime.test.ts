@@ -383,7 +383,7 @@ describe("sidekick (lead mode fusion)", () => {
 		);
 	});
 
-	it("reports each round's patch under its own name and keeps the sidekick for the next round", async () => {
+	it("reports what the round changed in the lead's checkout and keeps the sidekick for the next round", async () => {
 		const root = record("root", null, { providerRef: "vm-root" });
 		const state = sidekickState({
 			round: 2,
@@ -394,34 +394,27 @@ describe("sidekick (lead mode fusion)", () => {
 					startedAt: at(-30),
 					endedAt: at(-20),
 					outcome: "finished",
-					patchFiles: 2,
+					patchFiles: 0,
+					kind: "explore",
 				},
-				{ n: 2, startedAt: at(-3), sync: "clean" },
+				{ n: 2, startedAt: at(-3), base: "a".repeat(40) },
 			],
 		});
 		const sidekick = record("s", "root", {
 			agentRole: "writer",
 			agentSteps: 60,
+			taskPlacement: "shared",
+			providerRef: "vm-root",
 			agentBudget: sidekickBudget(state),
-			agentFork: {
-				vmId: "vm-fork",
-				sourceVmId: "vm-root",
-				bootedAt: at(-30),
-				base: "lead-tree",
-				parentHead: "lead-head",
-			},
 		});
 		adapters.ancestors.mockResolvedValue([root]);
 		adapters.tree.mockResolvedValue([root, sidekick]);
-		adapters.transfer.mockResolvedValue({
-			path: "~/.ytimesy/agents/1.r2.patch",
-			files: ["src/cli.ts"],
-			added: 3,
-			removed: 1,
-			sha256: "c".repeat(64),
-			ref: "refs/ytimesy/agents/1.r2",
-			base: "lead-tree",
-		});
+		adapters.transfer.mockClear();
+		const roundChanges = vi.fn(async () => ({
+			end: "b".repeat(40),
+			files: ["src/cli.ts", "test/cli.test.ts"],
+			stat: " src/cli.ts       | 3 ++-\n test/cli.test.ts | 9 +++++++++\n 2 files changed, 11 insertions(+), 1 deletion(-)",
+		}));
 		const saveState = vi.fn(async () => {});
 		const destroy = vi.fn(async () => {});
 		const report = await subagentReport({
@@ -434,19 +427,30 @@ describe("sidekick (lead mode fusion)", () => {
 			deps: {
 				session: vi.fn(async () => sidekick),
 				saveState,
-				mergeFork: adapters.mergeFork,
+				roundChanges,
 			},
 		});
 		expect(report).toContain(
 			"[agent 1 writer finished · round 2/6 · 60 steps · 3m",
 		);
-		expect(adapters.transfer).toHaveBeenCalledWith(
+		// Snapshotted in the lead's VM against the round's start; no fork, no patch.
+		expect(roundChanges).toHaveBeenCalledWith(
 			expect.objectContaining({
-				label: "1.r2",
-				base: "lead-tree",
-				parentHead: "lead-head",
+				vm: "vm-root",
+				label: "1",
+				round: 2,
+				base: "a".repeat(40),
 			}),
 		);
+		expect(adapters.transfer).not.toHaveBeenCalled();
+		expect(report).toContain(
+			"Sidekick 1 worked in your checkout: this round changed 2 files, uncommitted in your working tree.",
+		);
+		expect(report).toContain(
+			`\`git diff ${"a".repeat(12)} ${"b".repeat(12)}\` is this round alone`,
+		);
+		expect(report).toContain("2 files changed, 11 insertions(+)");
+		expect(report).not.toContain(".patch");
 		expect(report).toContain("Sidekick 1: round 2/6 done.");
 		const saved = (
 			saveState.mock.calls[0] as unknown as [string, SidekickState]
@@ -454,25 +458,51 @@ describe("sidekick (lead mode fusion)", () => {
 		expect(saved.rounds.at(-1)).toMatchObject({
 			n: 2,
 			outcome: "finished",
-			patchFiles: 1,
+			patchFiles: 2,
+			base: "a".repeat(40),
+			end: "b".repeat(40),
 		});
 		expect(saved.retired).toBeUndefined();
 		expect(destroy).not.toHaveBeenCalled();
 	});
 
-	it("retires the sidekick and deletes its fork after its last round's report", async () => {
+	it("still reports a round whose changes could not be listed", async () => {
+		const root = record("root", null, { providerRef: "vm-root" });
+		const state = sidekickState({ round: 1, roundStartedAt: at(-3) });
+		const sidekick = record("s", "root", {
+			agentRole: "writer",
+			taskPlacement: "shared",
+			agentBudget: sidekickBudget(state),
+		});
+		adapters.ancestors.mockResolvedValue([root]);
+		adapters.tree.mockResolvedValue([root, sidekick]);
+		const report = await subagentReport({
+			machines: {} as never,
+			session: sidekick,
+			items: [],
+			outcome: "finished",
+			text: "done",
+			now: NOW,
+			deps: {
+				session: vi.fn(async () => sidekick),
+				saveState: vi.fn(async () => {}),
+				roundChanges: vi.fn(async () => {
+					throw new Error("no git");
+				}),
+			},
+		});
+		expect(report).toContain(
+			"Review them in place with `git status` and `git diff` (this round's exact changes could not be listed).",
+		);
+	});
+
+	it("retires the sidekick after its last round's report (it holds no VM)", async () => {
 		const root = record("root", null, { providerRef: "vm-root" });
 		const state = sidekickState({ round: 6, roundStartedAt: at(-1) });
 		const sidekick = record("s", "root", {
 			agentRole: "writer",
+			taskPlacement: "shared",
 			agentBudget: sidekickBudget(state),
-			agentFork: {
-				vmId: "vm-fork",
-				sourceVmId: "vm-root",
-				bootedAt: at(-30),
-				base: "lead-tree",
-				parentHead: "lead-head",
-			},
 		});
 		adapters.ancestors.mockResolvedValue([root]);
 		adapters.tree.mockResolvedValue([root, sidekick]);
@@ -488,17 +518,15 @@ describe("sidekick (lead mode fusion)", () => {
 			deps: {
 				session: vi.fn(async () => sidekick),
 				saveState,
-				mergeFork: adapters.mergeFork,
+				roundChanges: vi.fn(async () => ({
+					end: "e".repeat(40),
+					files: [],
+					stat: "",
+				})),
 			},
 		});
-		expect(report).toContain(
-			"Sidekick 1 is retired (all rounds used); its fork is deleted.",
-		);
-		expect(destroy).toHaveBeenCalledWith("vm-fork");
-		expect(adapters.mergeFork).toHaveBeenCalledWith(
-			"s",
-			expect.objectContaining({ deletedAt: new Date(NOW).toISOString() }),
-		);
+		expect(report).toContain("Sidekick 1 is retired (all rounds used).");
+		expect(destroy).not.toHaveBeenCalled();
 	});
 
 	it("tells the lead the sidekick is stuck when it fails the same check again", async () => {
@@ -518,32 +546,17 @@ describe("sidekick (lead mode fusion)", () => {
 						errors: ["make: *** [Makefile:#: test] Error #"],
 					},
 				},
-				{ n: 2, startedAt: at(-3), sync: "clean", kind: "build" },
+				{ n: 2, startedAt: at(-3), kind: "build", base: "a".repeat(40) },
 			],
 		});
 		const sidekick = record("s", "root", {
 			agentRole: "writer",
 			listedModelId: "gpt-6-luna",
+			taskPlacement: "shared",
 			agentBudget: sidekickBudget(state),
-			agentFork: {
-				vmId: "vm-fork",
-				sourceVmId: "vm-root",
-				bootedAt: at(-30),
-				base: "lead-tree",
-				parentHead: "lead-head",
-			},
 		});
 		adapters.ancestors.mockResolvedValue([root]);
 		adapters.tree.mockResolvedValue([root, sidekick]);
-		adapters.transfer.mockResolvedValue({
-			path: "/home/u/.ytimesy/agents/1.r2.patch",
-			files: ["src/cli.ts"],
-			added: 1,
-			removed: 0,
-			sha256: "d".repeat(64),
-			ref: "refs/ytimesy/agents/1.r2",
-			base: "lead-tree",
-		});
 		const items: SessionItem[] = [
 			{
 				kind: "userMessage",
@@ -604,7 +617,11 @@ describe("sidekick (lead mode fusion)", () => {
 			deps: {
 				session: vi.fn(async () => sidekick),
 				saveState,
-				mergeFork: adapters.mergeFork,
+				roundChanges: vi.fn(async () => ({
+					end: "b".repeat(40),
+					files: ["src/cli.ts"],
+					stat: " src/cli.ts | 1 +",
+				})),
 			},
 		});
 		expect(report).toContain(
@@ -624,57 +641,47 @@ describe("sidekick (lead mode fusion)", () => {
 
 	it("keeps an idle sidekick for the chat's next message when the lead's turn completes", async () => {
 		const state = sidekickState();
-		const fork = (vmId: string) => ({
-			vmId,
-			sourceVmId: "vm-root",
-			bootedAt: at(-30),
-		});
 		const idle = record("idle", "root", {
 			agentRole: "writer",
 			turnStatus: "completed",
 			agentBudget: sidekickBudget(state),
-			agentFork: fork("vm-idle"),
 		});
 		const running = record("running", "root", {
 			agentRole: "writer",
 			turnStatus: "running",
 			agentBudget: sidekickBudget(state),
-			agentFork: fork("vm-running"),
 		});
-		const destroy = vi.fn(async () => {});
 		const stop = vi.fn(async () => {});
 		const count = await retireLeadSidekicks(
-			{ destroy } as never,
+			{} as never,
 			{ userId: "user", id: "root" },
 			"the lead's turn ended while it worked",
 			{
 				descendants: vi.fn(async () => [idle, running]),
 				stop,
 				saveState: vi.fn(async () => {}),
-				mergeFork: adapters.mergeFork,
 				now: () => NOW,
 			},
 			{ keepIdle: true },
 		);
 		expect(count).toBe(1);
-		expect(destroy).not.toHaveBeenCalled();
 		expect(stop).toHaveBeenCalledWith("running");
 	});
 
-	it("retires a sidekick idle past its TTL from the maintenance sweep", async () => {
+	it("retires a sidekick idle past its TTL from the maintenance sweep (no VM to delete)", async () => {
 		const idle = {
 			id: "idle",
 			agentRole: "writer" as const,
 			agentBudget: sidekickBudget(sidekickState()),
-			agentFork: { vmId: "vm-idle", sourceVmId: "vm-root", bootedAt: at(-90) },
+			agentFork: null,
 			turnStatus: "completed" as const,
 		};
 		adapters.idle.mockResolvedValueOnce([idle]);
 		adapters.saveState.mockClear();
 		const destroy = vi.fn(async () => {});
-		expect(await teardownSubagentForks({ destroy } as never, 30, 45)).toBe(1);
+		expect(await teardownSubagentForks({ destroy } as never, 30, 45)).toBe(0);
 		expect(adapters.idle).toHaveBeenCalledWith(45);
-		expect(destroy).toHaveBeenCalledWith("vm-idle");
+		expect(destroy).not.toHaveBeenCalled();
 		expect(adapters.saveState).toHaveBeenCalledWith(
 			"idle",
 			expect.objectContaining({
@@ -685,24 +692,17 @@ describe("sidekick (lead mode fusion)", () => {
 		);
 	});
 
-	it("retires the lead's sidekicks when its turn ends: idle ones lose their fork now, running ones are stopped", async () => {
+	it("retires the lead's sidekicks when its turn ends: running ones are stopped", async () => {
 		const state = sidekickState();
-		const fork = (vmId: string) => ({
-			vmId,
-			sourceVmId: "vm-root",
-			bootedAt: at(-30),
-		});
 		const idle = record("idle", "root", {
 			agentRole: "writer",
 			turnStatus: "idle",
 			agentBudget: sidekickBudget(state),
-			agentFork: fork("vm-idle"),
 		});
 		const running = record("running", "root", {
 			agentRole: "writer",
 			turnStatus: "running",
 			agentBudget: sidekickBudget(state),
-			agentFork: fork("vm-running"),
 		});
 		const retired = record("retired", "root", {
 			agentRole: "writer",
@@ -710,32 +710,27 @@ describe("sidekick (lead mode fusion)", () => {
 			agentBudget: sidekickBudget(
 				retireSidekickState(state, "stopped", at(-5)),
 			),
-			agentFork: fork("vm-retired"),
 		});
 		const ordinary = record("writer", "root", {
 			agentRole: "writer",
 			turnStatus: "idle",
 			agentBudget: budget,
-			agentFork: fork("vm-writer"),
 		});
-		const destroy = vi.fn(async () => {});
 		const stop = vi.fn(async () => {});
 		const saveState = vi.fn(async () => {});
 		const count = await retireLeadSidekicks(
-			{ destroy } as never,
+			{} as never,
 			{ userId: "user", id: "root" },
 			"the lead's turn ended",
 			{
 				descendants: vi.fn(async () => [idle, running, retired, ordinary]),
 				stop,
 				saveState,
-				mergeFork: adapters.mergeFork,
 				now: () => NOW,
 			},
 		);
 		expect(count).toBe(2);
-		expect(destroy).toHaveBeenCalledTimes(1);
-		expect(destroy).toHaveBeenCalledWith("vm-idle");
+		expect(stop).toHaveBeenCalledTimes(1);
 		expect(stop).toHaveBeenCalledWith("running");
 		expect(saveState).toHaveBeenCalledWith(
 			"running",
@@ -744,6 +739,12 @@ describe("sidekick (lead mode fusion)", () => {
 					at: new Date(NOW).toISOString(),
 					reason: "the lead's turn ended",
 				},
+			}),
+		);
+		expect(saveState).toHaveBeenCalledWith(
+			"idle",
+			expect.objectContaining({
+				retired: expect.objectContaining({ reason: "the lead's turn ended" }),
 			}),
 		);
 	});

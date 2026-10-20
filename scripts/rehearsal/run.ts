@@ -8,6 +8,7 @@
 //   pnpm rehearsal --scenario fusion       # one or more (comma-separated ids in scenarios.ts)
 //   pnpm rehearsal --fresh-setup           # rerun the task setup instead of reusing it
 //   pnpm rehearsal --keep                  # leave the VMs running for inspection
+//   pnpm rehearsal --run rh2               # its own VM names and database, beside another run
 //
 // Exit code 0 only when every check of every selected scenario passed.
 import { mkdir, writeFile } from "node:fs/promises";
@@ -23,18 +24,25 @@ const { values } = parseArgs({
 		keep: { type: "boolean", default: false },
 		task: { type: "string", default: "mvcc-lsm-compaction" },
 		timeout: { type: "string", default: "900" },
+		/** Prefix of this run's VM names and its database: two runs side by side need two. */
+		run: { type: "string", default: "rh" },
 	},
 });
+if (!/^[a-z][a-z0-9]{0,15}$/.test(values.run))
+	throw new Error("--run takes 1-16 lowercase letters and digits.");
 const root = resolve(import.meta.dirname, "../..");
 const started = Date.now();
 const elapsed = () => `${Math.round((Date.now() - started) / 1000)}s`;
-const databaseUrl = await freshDatabase(root);
+const databaseUrl = await freshDatabase(
+	root,
+	values.run === "rh" ? "rehearsal" : `rehearsal_${values.run}`,
+);
 applyRehearsalEnvironment(databaseUrl);
 
 // Server modules read the environment above; load them after it is set.
 const { RehearsalVms, removeRehearsalVms } = await import("./vm");
 // VMs left by an interrupted rehearsal (labelled; the task snapshot is kept).
-await removeRehearsalVms();
+await removeRehearsalVms(values.run);
 const { taskSnapshot } = await import("./task-vm");
 const { FakeCodex } = await import("./fake-codex");
 const { RehearsalEdge } = await import("./edge");
@@ -55,7 +63,7 @@ const selected = scenarios().filter(
 );
 if (!selected.length) throw new Error(`Unknown scenario ${values.scenario}.`);
 
-const vms = new RehearsalVms("rh");
+const vms = new RehearsalVms(values.run);
 console.log(`rehearsal: database ready (${elapsed()})`);
 const prepared = await taskSnapshot(vms, values.task, {
 	fresh: values["fresh-setup"],
@@ -79,12 +87,16 @@ await mkdir(outDir, { recursive: true });
 let failed = 0;
 const results = await Promise.all(
 	selected.map(async (scenario) => {
-		const vm = await vms.startFrom(prepared.snapshot, `rh-${scenario.id}`);
+		const vm = await vms.startFrom(
+			prepared.snapshot,
+			`${values.run}-${scenario.id}`,
+		);
 		const variant = harnessVariantFromFlags([scenario.variant]);
 		const user = await edge.invoke(() =>
 			createRehearsalUser(owner, `rehearsal ${scenario.id}`, variant),
 		);
-		const text = `${taskMessage(prepared.task, "/app", variant.subagents === "on")}\n\n[rehearsal:${scenario.id}]`;
+		// The tag leads: an exploration brief quotes the request's start.
+		const text = `[rehearsal:${scenario.id}]\n\n${taskMessage(prepared.task, "/app", variant.subagents === "on")}`;
 		const sessionId = await edge.invoke(() =>
 			startTaskChat({
 				user,
