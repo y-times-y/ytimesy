@@ -121,6 +121,23 @@ export const HARNESS_VARIANT_VALUES = {
 	 * behaviour (the default).
 	 */
 	lead: ["off", "fusion"],
+	/**
+	 * Rigor (src/domain/rigor.ts): on adds the builder's rigor block
+	 * (ambiguity resolved by convention, else the strictest reading, with a
+	 * margin on numeric thresholds; no finishing with time left and something
+	 * unverified; one run of the deliverable as an outside user would run it),
+	 * the matching checks to every checker brief, and makes the review loop
+	 * send back a final answer that admits unverified work while over half
+	 * the time is left. off = unchanged behaviour (the default).
+	 */
+	rigor: ["off", "on"],
+	/**
+	 * The most characters one tool result shows the model (the builder's
+	 * surface tools, src/server/services/tool-output-cap.ts): a longer one
+	 * keeps its head and tail, and the note between them says where the rest
+	 * is. off = the surface's own limits only (the default).
+	 */
+	outputCap: ["off", "10000", "16000"],
 } as const;
 
 type Values = typeof HARNESS_VARIANT_VALUES;
@@ -145,6 +162,8 @@ export type InstructionVariant = HarnessVariant["instructions"];
 export type AttemptsMode = HarnessVariant["attempts"];
 export type ReviewMode = HarnessVariant["review"];
 export type LeadMode = HarnessVariant["lead"];
+export type RigorMode = HarnessVariant["rigor"];
+export type OutputCap = HarnessVariant["outputCap"];
 
 export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	memoryWording: "rules",
@@ -158,8 +177,15 @@ export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	attempts: "1",
 	review: "off",
 	lead: "off",
+	rigor: "off",
+	outputCap: "off",
 	roleModels: {},
 };
+
+/** The outputCap variant's limit in characters; undefined when off. */
+export function outputCapCharacters(cap: OutputCap) {
+	return cap === "off" ? undefined : Number(cap);
+}
 
 /**
  * The scope a turn's prompt-cache key is derived from (hashed with the user

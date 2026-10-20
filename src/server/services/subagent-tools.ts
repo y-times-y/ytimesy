@@ -172,6 +172,14 @@ export type SubagentToolContext = {
 	readonly roleModels?: RoleModels;
 	/** Harness variant lead: fusion makes the root's first writer a persistent sidekick. */
 	readonly lead?: LeadMode;
+	/**
+	 * The parent turn's reasoning effort: a child on another model gets it
+	 * unless its roleModels entry sets one (a same-model child inherits the
+	 * parent turn's settings when its first turn is sent).
+	 */
+	readonly parentReasoning?: string;
+	/** Harness variant rigor=on: the checker's brief gets the rigor checks. */
+	readonly rigor?: boolean;
 	readonly deps?: Partial<SubagentToolDeps>;
 };
 
@@ -766,6 +774,7 @@ async function childModel(
 		roleModels: context.roleModels,
 		connections,
 		parentModel,
+		parentEffort: context.parentReasoning,
 	});
 	if (resolved.kind === "inherit") return { model: inherited };
 	if (resolved.kind === "fallback")
@@ -856,6 +865,7 @@ async function checkerBriefFor(
 		checkout: workspace.cwd,
 		changedFiles,
 		scratch: "$HOME",
+		rigor: context.rigor,
 	});
 }
 

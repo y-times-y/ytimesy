@@ -10,9 +10,13 @@ import { stageScript, type TaskEnvironment } from "../hard-set/environment";
 import type { RehearsalEdge } from "./edge";
 import type { FakeCodex } from "./fake-codex";
 import {
+	ADMITTED_LINE,
+	CAP_NOTE,
 	type Check,
 	EXPLORE_FILE,
 	MULTITURN_FOLLOW_UP,
+	RIGOR_BLOCK,
+	RIGOR_CHECKER_LINES,
 	type ScenarioId,
 } from "./scenarios";
 import type { RehearsalVms } from "./vm";
@@ -300,6 +304,87 @@ export async function checkScenario(
 			"review 2 passed after the builder's fix",
 			reviews.some((review) => has(review.output, "Review 2: pass")),
 			reviews.map((review) => clip(review.output, 160)).join(" / "),
+		);
+		// Without rigor and outputCap (the controls for scenario rigor).
+		check(
+			"without rigor=on the builder has no rigor block",
+			requests("review-builder").every(
+				(request) => !has(request.instructions, RIGOR_BLOCK),
+			),
+		);
+		check(
+			"without rigor=on the checker brief has no rigor checks",
+			checkerCalls.every((request) =>
+				RIGOR_CHECKER_LINES.every((line) => !has(request.firstUser, line)),
+			),
+		);
+		check(
+			"without outputCap no tool output is capped",
+			data.requests.every((request) =>
+				request.lastOutputs.every((output) => !has(output, CAP_NOTE)),
+			),
+		);
+	}
+
+	if (id === "rigor") {
+		const builder = requests("rigor-builder");
+		check(
+			"rigor=on: the builder's instructions carry the rigor block",
+			builder.length >= 4 &&
+				builder.every((request) => has(request.instructions, RIGOR_BLOCK)),
+			`${builder.length} requests`,
+		);
+		const checker = requests("rigor-checker");
+		check(
+			"rigor=on: the checker brief carries the rigor checks",
+			checker.length >= 1 &&
+				checker.every((request) =>
+					RIGOR_CHECKER_LINES.every((line) => has(request.firstUser, line)),
+				) &&
+				checker.every((request) => !has(request.instructions, RIGOR_BLOCK)),
+			clip(checker[0]?.firstUser, 300),
+		);
+		const seq = builder.find((request) => request.step === 1)?.lastOutputs[0];
+		check(
+			"outputCap=10000: the long command output reached the model capped, head and tail kept, with where the rest is",
+			!!seq &&
+				seq.length < 11_000 &&
+				has(seq, CAP_NOTE, "the full output is in ", "\n29999\n30000"),
+			`${seq?.length} chars: ${clip(seq?.slice(0, 200))}`,
+		);
+		const notice = builder.find((request) =>
+			request.lastUser.includes("independent checker reviewed your work"),
+		);
+		check(
+			"rigor=on: the admitted gap came back as F1 although the checker passed",
+			has(
+				notice?.lastUser,
+				"F1. Your final answer admits unverified or open work",
+				ADMITTED_LINE,
+			),
+			clip(notice?.lastUser, 400),
+		);
+		const reviews = calls(items, "review_check");
+		check(
+			"review 1 passed but was sent back; review 2 passed and finished",
+			reviews.some((review) => has(review.output, "Review 1: pass")) &&
+				reviews.some((review) => has(review.output, "Review 2: pass")) &&
+				!reviews.some((review) => has(review.output, "Review ended")),
+			reviews.map((review) => clip(review.output, 160)).join(" / "),
+		);
+		check(
+			"the builder ran at effort high",
+			builder.every((request) => request.effort === "high"),
+			builder.map((request) => request.effort).join(","),
+		);
+		check(
+			"the checker on another model (gpt-6-luna) inherited effort high",
+			checker.length >= 1 &&
+				checker.every(
+					(request) =>
+						request.model === "gpt-6-luna" && request.effort === "high",
+				),
+			checker.map((request) => `${request.model}@${request.effort}`).join(","),
 		);
 	}
 

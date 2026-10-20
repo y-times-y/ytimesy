@@ -33,6 +33,8 @@ export function attemptLoopDeps(input: {
 	readonly items: () => readonly SessionItem[];
 	/** The checker's and judge's models (harness variant roleModels). */
 	readonly roleModels?: RoleModels;
+	/** The builder turn's reasoning effort (children on another model inherit it). */
+	readonly parentReasoning?: string;
 }): AttemptLoopDeps {
 	const { turnId, signal } = input;
 	return {
@@ -60,6 +62,7 @@ export function attemptLoopDeps(input: {
 					signal,
 					waitDeadlineAt: input.waitDeadlineAt,
 					roleModels: input.roleModels,
+					parentReasoning: input.parentReasoning,
 				},
 				spec,
 			),

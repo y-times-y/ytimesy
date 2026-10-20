@@ -5,6 +5,7 @@ import {
 	harnessVariantFromFlags,
 	harnessVariantFromUnknown,
 	harnessVariantLabel,
+	outputCapCharacters,
 	promptCacheScopeId,
 } from "./harness-variant";
 
@@ -22,6 +23,8 @@ describe("harness variants", () => {
 			attempts: "1",
 			review: "off",
 			lead: "off",
+			rigor: "off",
+			outputCap: "off",
 			roleModels: {},
 		});
 	});
@@ -44,6 +47,8 @@ describe("harness variants", () => {
 			attempts: "1",
 			review: "off",
 			lead: "off",
+			rigor: "off",
+			outputCap: "off",
 			roleModels: {},
 		});
 		expect(
@@ -60,6 +65,8 @@ describe("harness variants", () => {
 			attempts: "1",
 			review: "off",
 			lead: "off",
+			rigor: "off",
+			outputCap: "off",
 			roleModels: {},
 		});
 		expect(
@@ -96,6 +103,8 @@ describe("harness variants", () => {
 			attempts: "1",
 			review: "off",
 			lead: "off",
+			rigor: "off",
+			outputCap: "off",
 			roleModels: {},
 		});
 		expect(harnessVariantFromUnknown({ memoryWriter: "agent" })).toEqual({
@@ -142,6 +151,23 @@ describe("harness variants", () => {
 				harnessVariantFromFlags(["subagents=on,codeMode=on"]),
 			),
 		).toBe("codeMode=on,subagents=on");
+	});
+
+	it("offers rigor and an output cap only when asked", () => {
+		expect(DEFAULT_HARNESS_VARIANT.rigor).toBe("off");
+		expect(outputCapCharacters(DEFAULT_HARNESS_VARIANT.outputCap)).toBe(
+			undefined,
+		);
+		const variant = harnessVariantFromFlags(["rigor=on,outputCap=10000"]);
+		expect(variant).toMatchObject({ rigor: "on", outputCap: "10000" });
+		expect(outputCapCharacters(variant.outputCap)).toBe(10_000);
+		expect(harnessVariantLabel(variant)).toBe("rigor=on,outputCap=10000");
+		expect(harnessVariantFromUnknown({ outputCap: "123" }).outputCap).toBe(
+			"off",
+		);
+		expect(() => harnessVariantFromFlags(["outputCap=123"])).toThrow(
+			"accepts off, 10000, 16000",
+		);
 	});
 
 	it("keys the prompt cache per chat unless the variant shares it per account", () => {

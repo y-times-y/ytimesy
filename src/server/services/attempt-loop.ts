@@ -151,6 +151,8 @@ export type AttemptLoopInput = {
 	/** Whether a model message is a user request (not runtime context). */
 	readonly isRequest: (message: ModelMessage) => boolean;
 	readonly deps: AttemptLoopDeps;
+	/** Harness variant rigor=on: the checker's brief gets the rigor checks. */
+	readonly rigor?: boolean;
 };
 
 type Taken = {
@@ -621,6 +623,7 @@ export function createAttemptLoop(input: AttemptLoopInput) {
 				base: state.checkpoint.ref,
 				candidate: snapshot.ref,
 				directory,
+				rigor: input.rigor,
 			}),
 			cap: {
 				...ATTEMPT_LOOP_LIMITS.checker,

@@ -17,6 +17,21 @@ const input = {
 };
 
 describe("independentReviewBrief", () => {
+	it("adds the rigor checks only with rigor=on", () => {
+		const plain = independentReviewBrief(input);
+		const rigor = independentReviewBrief({ ...input, rigor: true });
+		for (const check of [
+			"look in the deliverable (files, comments, docs, output) for assumptions or interpretations it states",
+			"the reading the convention of the library, ecosystem or standard involved gives (else the strictest reading)",
+			"Run it once as an outside user would: a fresh shell in a clean directory holding only the files the request names",
+			"never helpers the builder wrote",
+			"A deliverable that itself admits unverified, failing or skipped parts (in its files, notes or output) is fail",
+		]) {
+			expect(rigor).toContain(check);
+			expect(plain).not.toContain(check);
+		}
+	});
+
 	it("carries the request verbatim, the deliverable and the four review parts", () => {
 		const brief = independentReviewBrief(input);
 		expect(brief).toContain(`<request>\n${input.taskText}\n</request>`);
