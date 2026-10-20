@@ -1,6 +1,10 @@
 import { execFileSync } from "node:child_process";
 import { createHmac, createPrivateKey } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import {
+	codexRelaySettingNames,
+	codexRelaySettingsProblem,
+} from "../src/domain/codex-egress";
 import { DEVELOPMENT_EDGE_ORIGIN } from "./development-config";
 
 // Deliberately fixed to development. Secrets travel over stdin, never shell arguments or logs.
@@ -87,6 +91,10 @@ for (const name of [
 	"YTIMESY_TOOLS_SNAPSHOT_ID",
 	"YTIMESY_CODEX_RELAY_URL",
 	"YTIMESY_CODEX_RELAY_SECRET",
+	// Further Codex egress relays, tried in order after the first (2..8).
+	...codexRelaySettingNames,
+	// The account whose login probes Codex egress paths every 5 minutes.
+	"YTIMESY_CODEX_EGRESS_PROBE_USER_ID",
 	"YTIMESY_PR_REPAIR_ENABLED",
 	// Cloudflare Email Service sender for verification and password-reset mail.
 	"AUTH_EMAIL_FROM",
@@ -103,18 +111,8 @@ for (const name of [
 }
 // ytimesy.com is onboarded to Email Sending; the EMAIL binding sends from here.
 secrets.AUTH_EMAIL_FROM ||= "noreply@ytimesy.com";
-if (
-	Boolean(secrets.YTIMESY_CODEX_RELAY_URL) !==
-	Boolean(secrets.YTIMESY_CODEX_RELAY_SECRET)
-)
-	throw new Error(
-		"Subscription relay URL and signing key must be configured together.",
-	);
-if (
-	secrets.YTIMESY_CODEX_RELAY_SECRET &&
-	secrets.YTIMESY_CODEX_RELAY_SECRET.length < 32
-)
-	throw new Error("Subscription relay signing key is invalid.");
+const relayProblem = codexRelaySettingsProblem(secrets);
+if (relayProblem) throw new Error(relayProblem);
 if (!secrets.YTIMESY_REALTIME_URL || !secrets.YTIMESY_REALTIME_SECRET) {
 	const realtime = JSON.parse(
 		await readFile(".ytimesy/realtime-development.json", "utf8"),
