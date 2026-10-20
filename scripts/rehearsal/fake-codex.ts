@@ -9,7 +9,8 @@ import { randomUUID } from "node:crypto";
 
 export type ToolCall = { name: string; args: unknown };
 export type Reply =
-	| { calls: ToolCall[] }
+	/** Tool calls, after a message when `text` is set (e.g. a plan written before acting). */
+	| { calls: ToolCall[]; text?: string }
 	| { text: string }
 	/** A 200 without a body once (rehearses the provider flake), then `then`. */
 	| { fault: "empty-body"; after: Reply };
@@ -152,8 +153,14 @@ export class FakeCodex {
 			[];
 		const byId = new Map<string, (typeof calls)[number]>();
 		const seenSteps: string[] = [];
+		// A message followed by its step's tool calls is one step, not two.
+		let textWithCalls = 0;
+		let previous: InputItem | undefined;
 		for (const item of body.input) {
+			const after = previous;
+			previous = item;
 			if (item.type === "function_call" || item.type === "custom_tool_call") {
+				if (after?.role === "assistant" && text(after.content)) textWithCalls++;
 				const id = item.call_id ?? "";
 				const tag = /^rh_(\d+_[0-9a-f]+)_\d+$/.exec(id);
 				if (tag && !seenSteps.includes(tag[1])) seenSteps.push(tag[1]);
@@ -177,7 +184,7 @@ export class FakeCodex {
 				if (said) texts.push(said);
 			}
 		}
-		const step = seenSteps.length + texts.length;
+		const step = seenSteps.length + texts.length - textWithCalls;
 		// A compaction's provider-neutral summary (a model switch at
 		// compaction): answered here, keeping the conversation's markers.
 		if (body.instructions?.startsWith(SUMMARY_INSTRUCTIONS)) {
@@ -274,11 +281,14 @@ export class FakeCodex {
 		if ("calls" in reply) {
 			// Unique per conversation step, so the next request can count steps.
 			const run = randomUUID().slice(0, 8);
-			reply.calls.forEach((call, index) => {
+			const offset = reply.text ? 1 : 0;
+			if (reply.text) events.push(...messageEvents(reply.text));
+			reply.calls.forEach((call, slot) => {
+				const index = slot + offset;
 				const item = {
 					type: "function_call",
 					id: `fc_${randomUUID()}`,
-					call_id: `rh_${step}_${run}_${index}`,
+					call_id: `rh_${step}_${run}_${slot}`,
 					name: call.name,
 					arguments: JSON.stringify(call.args),
 				};
@@ -302,20 +312,7 @@ export class FakeCodex {
 				);
 			});
 		} else if ("text" in reply) {
-			const id = `msg_${randomUUID()}`;
-			events.push(
-				{
-					type: "response.output_item.added",
-					output_index: 0,
-					item: { type: "message", id },
-				},
-				{ type: "response.output_text.delta", item_id: id, delta: reply.text },
-				{
-					type: "response.output_item.done",
-					output_index: 0,
-					item: { type: "message", id },
-				},
-			);
+			events.push(...messageEvents(reply.text));
 		}
 		events.push({
 			type: "response.completed",
@@ -333,4 +330,22 @@ export class FakeCodex {
 			{ headers: { "Content-Type": "text/event-stream" } },
 		);
 	}
+}
+
+/** One assistant message at output index 0. */
+function messageEvents(text: string) {
+	const id = `msg_${randomUUID()}`;
+	return [
+		{
+			type: "response.output_item.added",
+			output_index: 0,
+			item: { type: "message", id },
+		},
+		{ type: "response.output_text.delta", item_id: id, delta: text },
+		{
+			type: "response.output_item.done",
+			output_index: 0,
+			item: { type: "message", id },
+		},
+	];
 }

@@ -105,13 +105,36 @@ function builderScript(tag: string): AgentScript {
 
 const NOTICE = "independent checker reviewed your work";
 
+/** rigor=on: the root builder's requirements list (src/domain/rigor.ts). */
+export const REQUIREMENTS_INSTRUCTION =
+	"- Requirements: before you start, write the request's requirements";
+export const LEAD_REQUIREMENTS_INSTRUCTION =
+	"- As the lead, write the list right after the exploration report";
+/** The checker brief's label for the builder's list. */
+export const BUILDER_LIST_LABEL =
+	"The builder's understanding of the requirements, written before it worked (a claim to compare, not ground truth):";
+/** Only the scripted lists carry this, so a file, diff or commit holding it leaked the list. */
+export const REQUIREMENTS_MARK = "rh-requirements-list";
+export const BUILDER_REQUIREMENTS = [
+	`${REQUIREMENTS_MARK}: tests/regression_test.cc prints the rehearsal line`,
+	`${REQUIREMENTS_MARK}: make test exits 0 (reading: the whole suite, not one test)`,
+];
+/** A plan message that opens with the requirements block. */
+export const requirementsMessage = (items: readonly string[]) =>
+	`Requirements first.\n<requirements>\n${items.map((item) => `- ${item}`).join("\n")}\n</requirements>`;
+
 function reviewBuilderScript(tag: string): AgentScript {
 	return {
 		name: "review-builder",
 		match: (first) => first.includes(tag) && !isChecker(first),
 		reply: ({ step, userTexts, calls }) => {
 			const notices = userTexts.filter((text) => text.includes(NOTICE));
-			if (step === 0) return runCode(EDIT_AND_TEST);
+			// The list is written here too: without rigor=on nothing takes it.
+			if (step === 0)
+				return {
+					...runCode(EDIT_AND_TEST),
+					text: requirementsMessage(BUILDER_REQUIREMENTS),
+				};
 			if (!notices.length) return { text: "Rehearsal change made and tested." };
 			// After each review's findings: run the tests again, then finish.
 			const answered = calls.filter((call) =>
@@ -494,6 +517,11 @@ function fusionLeadScript(tag: string): AgentScript {
 }
 
 /** c2: the lead plans from the harness exploration's snippets without reading. */
+/** The explore lead's requirements list (rigor=on). */
+export const LEAD_REQUIREMENTS = [
+	`${REQUIREMENTS_MARK}: ${EXPLORE_FILE} starts with the rehearsal explore line`,
+];
+
 function exploreLeadScript(tag: string): AgentScript {
 	return {
 		name: "explore-lead",
@@ -510,10 +538,14 @@ function exploreLeadScript(tag: string): AgentScript {
 				// The plan quotes the sidekick's snippet: the lead never read the file.
 				const snippet =
 					/Snippets:\n[^\n]*\n([^\n]+)/.exec(reportsIn[0] ?? "")?.[1] ?? "";
-				return send({
-					id: "1",
-					message: `[rehearsal:explore-build] Plan from your snippets: above "${snippet.trim()}" (line 1 of ${EXPLORE_FILE}) add the line "// rehearsal explore build", then run git diff --stat and report.`,
-				});
+				return {
+					...send({
+						id: "1",
+						message: `[rehearsal:explore-build] Plan from your snippets: above "${snippet.trim()}" (line 1 of ${EXPLORE_FILE}) add the line "// rehearsal explore build", then run git diff --stat and report.\nRequirements:\n- ${LEAD_REQUIREMENTS[0]}`,
+					}),
+					// rigor=on: the list right after the exploration report.
+					text: requirementsMessage(LEAD_REQUIREMENTS),
+				};
 			}
 			if (reviewCount(context) < sends)
 				return reviewInPlace(reportsIn.at(-1) as string);
@@ -742,7 +774,11 @@ function rigorBuilderScript(tag: string): AgentScript {
 		name: "rigor-builder",
 		match: (first) => first.includes(tag) && !isChecker(first),
 		reply: ({ step, userTexts, calls }) => {
-			if (step === 0) return bash("seq 1 30000");
+			if (step === 0)
+				return {
+					...bash("seq 1 30000"),
+					text: requirementsMessage(BUILDER_REQUIREMENTS),
+				};
 			if (step === 1) return { calls: [{ name: "edit", args: builderEdit }] };
 			const notices = userTexts.filter((text) => text.includes(NOTICE));
 			if (!notices.length)
@@ -796,6 +832,31 @@ function rigorCheckerScript(tag: string): AgentScript {
 	};
 }
 
+/** fusion-explore's review: a checker that passes with one test of its own. */
+function exploreCheckerScript(tag: string): AgentScript {
+	return {
+		name: "explore-checker",
+		match: (first) => isChecker(first) && first.includes(tag),
+		reply: () => ({
+			text: JSON.stringify({
+				verdict: "pass",
+				failures: [],
+				tests: [
+					{
+						name: "rehearsal: the explore line is present",
+						command: `grep -c 'rehearsal explore build' ${EXPLORE_FILE}`,
+						passed: true,
+						output: "1",
+					},
+				],
+				requirements: [],
+				assumptions: [],
+				notes: "rehearsal explore check",
+			}),
+		}),
+	};
+}
+
 export function scenarios(): Scenario[] {
 	return [
 		{
@@ -834,11 +895,12 @@ export function scenarios(): Scenario[] {
 		{
 			id: "fusion-explore",
 			title:
-				"c2. lead=fusion explore-first: the harness's exploration round returns snippets, the lead plans from them without reading",
+				"c2. lead=fusion explore-first, rigor=on, review=on: the harness's exploration round returns snippets, the lead writes its requirements list and plans from them without reading; the checker gets the list",
 			variant:
-				"codeMode=primary,subagents=on,lead=fusion,roleModels.writer=codex:gpt-6-luna",
+				"codeMode=primary,subagents=on,lead=fusion,review=on,rigor=on,roleModels.writer=codex:gpt-6-luna",
 			scripts: [
 				exploreLeadScript("[rehearsal:fusion-explore]"),
+				exploreCheckerScript("[rehearsal:fusion-explore]"),
 				sidekickScript("explore-sidekick", "[rehearsal:fusion-explore]", [
 					{ kind: "explore" },
 					{

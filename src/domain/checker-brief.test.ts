@@ -32,6 +32,33 @@ describe("independentReviewBrief", () => {
 		}
 	});
 
+	it("adds the builder's requirements list only with rigor=on, as a claim compared after the checker's own list", () => {
+		const builderRequirements = ["out.json has a total field", "units: ms"];
+		const plain = independentReviewBrief({ ...input, builderRequirements });
+		const none = independentReviewBrief({ ...input, rigor: true });
+		const rigor = independentReviewBrief({
+			...input,
+			rigor: true,
+			builderRequirements,
+		});
+		for (const brief of [plain, none]) {
+			expect(brief).not.toContain("builder_requirements");
+			expect(brief).not.toContain("builder's understanding");
+		}
+		expect(rigor).toContain(
+			"Then, and only then, compare your list with the builder's understanding of the requirements at the end of this brief: it is the builder's claim, not ground truth",
+		);
+		expect(rigor).toContain(
+			"never drop one of yours because the builder's list lacks it",
+		);
+		expect(rigor).toContain(
+			"<builder_requirements>\nThe builder's understanding of the requirements, written before it worked (a claim to compare, not ground truth):\n- out.json has a total field\n- units: ms\n</builder_requirements>",
+		);
+		expect(rigor.indexOf("4. Test it yourself.")).toBeLessThan(
+			rigor.indexOf("<builder_requirements>"),
+		);
+	});
+
 	it("carries the request verbatim, the deliverable and the four review parts", () => {
 		const brief = independentReviewBrief(input);
 		expect(brief).toContain(`<request>\n${input.taskText}\n</request>`);

@@ -67,6 +67,67 @@ describe("rigor instructions", () => {
 	});
 });
 
+describe("rigor requirements list", () => {
+	const list =
+		"- Requirements: before you start, write the request's requirements";
+	const lead =
+		"- As the lead, write the list right after the exploration report";
+	it("asks the root builder (a fusion lead included) for the list, never a writer or sidekick", () => {
+		const tools = { bash: stub, agent: stub, run_code: stub };
+		const root = agentTurnInstructions({
+			...base,
+			session: {},
+			tools: { bash: stub },
+			rigor: true,
+		});
+		expect(root).toContain(list);
+		expect(root).not.toContain(lead);
+		expect(
+			agentTurnInstructions({
+				...base,
+				leanShape: undefined,
+				session: {},
+				tools: { bash: stub },
+				rigor: true,
+			}),
+		).toContain(list);
+		const fusion = agentTurnInstructions({
+			...base,
+			session: {},
+			tools,
+			lead: "fusion",
+			rigor: true,
+		});
+		expect(fusion).toContain(list);
+		expect(fusion).toContain(lead);
+		expect(
+			agentTurnInstructions({ ...base, session: {}, tools, lead: "fusion" }),
+		).not.toContain(list);
+		for (const session of [
+			{ agentRole: "writer" as const },
+			{
+				agentRole: "writer" as const,
+				agentBudget: {
+					steps: 10,
+					minutes: 5,
+					tokens: 1000,
+					sidekick: undefined,
+				},
+			},
+		]) {
+			const writer = agentTurnInstructions({
+				...base,
+				session,
+				tools: { bash: stub },
+				lead: "fusion",
+				rigor: true,
+			});
+			expect(writer).not.toContain(list);
+			expect(writer).not.toContain(lead);
+		}
+	});
+});
+
 describe("subagent instructions", () => {
 	it("requires delegation only of the root builder under subagents=force", () => {
 		const tools = { bash: stub, agent: stub, run_code: stub };
