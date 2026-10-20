@@ -9,10 +9,11 @@ import type { SubagentBudget } from "../../src/domain/subagent";
 import { database } from "../../src/server/adapters/database";
 import { stageScript, type TaskEnvironment } from "../hard-set/environment";
 import type { RehearsalEdge } from "./edge";
-import type { FakeCodex } from "./fake-codex";
+import type { FakeCodex, ModelRequestRecord } from "./fake-codex";
 import {
 	ADMITTED_LINE,
 	CAP_NOTE,
+	CHECKER_MARKER,
 	type Check,
 	EXPLORE_FILE,
 	MULTITURN_FOLLOW_UP,
@@ -130,6 +131,10 @@ const calls = (items: Item[], tool: string) =>
 
 const has = (text: string | undefined, ...needles: string[]) =>
 	needles.every((needle) => (text ?? "").includes(needle));
+
+// Repository instructions may come before the brief as their own user message.
+const checkerBrief = (request: ModelRequestRecord | undefined) =>
+	request?.users.find((user) => user.includes(CHECKER_MARKER));
 
 const clip = (text: string | undefined, max = 300) =>
 	(text ?? "").replaceAll(/\s+/g, " ").slice(0, max);
@@ -317,13 +322,20 @@ export async function checkScenario(
 		);
 		check(
 			"without rigor=on the checker brief has no rigor checks",
-			checkerCalls.every((request) =>
-				RIGOR_CHECKER_LINES.every((line) => !has(request.firstUser, line)),
-			),
+			checkerCalls.length >= 1 &&
+				checkerCalls.every((request) => {
+					const brief = checkerBrief(request);
+					return (
+						!!brief && RIGOR_CHECKER_LINES.every((line) => !has(brief, line))
+					);
+				}),
+			clip(checkerBrief(checkerCalls[0])),
 		);
+		// Scenarios run at once against one fake; rigor's capped output is in it too.
+		const ownCalls = [...requests("review-builder"), ...checkerCalls];
 		check(
 			"without outputCap no tool output is capped",
-			data.requests.every((request) =>
+			ownCalls.every((request) =>
 				request.lastOutputs.every((output) => !has(output, CAP_NOTE)),
 			),
 		);
@@ -342,10 +354,10 @@ export async function checkScenario(
 			"rigor=on: the checker brief carries the rigor checks",
 			checker.length >= 1 &&
 				checker.every((request) =>
-					RIGOR_CHECKER_LINES.every((line) => has(request.firstUser, line)),
+					RIGOR_CHECKER_LINES.every((line) => has(checkerBrief(request), line)),
 				) &&
 				checker.every((request) => !has(request.instructions, RIGOR_BLOCK)),
-			clip(checker[0]?.firstUser, 300),
+			clip(checkerBrief(checker[0]), 300),
 		);
 		const seq = builder.find((request) => request.step === 1)?.lastOutputs[0];
 		check(

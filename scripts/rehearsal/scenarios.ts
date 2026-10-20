@@ -41,8 +41,9 @@ export const CLASSIFIER_MARKER = "Sidekick round summary for classification.";
 const isClassifier = (first: string) => first.includes(CLASSIFIER_MARKER);
 const marked = (tag: string) => (first: string) =>
 	first.includes(tag) && !isClassifier(first);
-const isChecker = (first: string) =>
-	first.includes("You are an independent checker");
+/** The opening of the checker's brief (src/domain/checker-brief.ts). */
+export const CHECKER_MARKER = "You are an independent checker";
+const isChecker = (first: string) => first.includes(CHECKER_MARKER);
 
 /** The regression test's last line, which the builder's edit extends. */
 const TEST_FILE = "tests/regression_test.cc";
