@@ -45,7 +45,7 @@ function wrangler(args: string[], input?: string) {
 try {
 	const rows = (
 		await database().query<{ user_id: string; model: string }>(
-			`select a.user_id, (select listed_model_id from agent_session s where s.user_id=a.user_id and s.harness='codex' and s.listed_model_id is not null order by updated_at desc limit 1) as model from agent_account a where a.provider='codex' and a.status='connected' and a.encrypted_codex_auth is not null`,
+			`select a.user_id, (select listed_model_id from agent_session s where s.user_id=a.user_id and s.harness='codex' and s.listed_model_id is not null order by updated_at desc limit 1) as model from agent_account a where a.provider='codex' and a.status='connected' and a.encrypted_codex_auth is not null and not exists (select 1 from dev_eval_user e where e.user_id=a.user_id)`,
 		)
 	).rows;
 	if (rows.length !== 1 || !rows[0].model)

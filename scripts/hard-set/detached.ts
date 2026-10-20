@@ -18,6 +18,8 @@ export type DetachedPlan = {
 	variantFlags: string[];
 	agentSeconds: number;
 	transcripts: boolean;
+	/** --task-suffix: text appended to every task's message (absent on older plans). */
+	taskSuffix?: string | null;
 };
 
 export type DetachedPhase =
