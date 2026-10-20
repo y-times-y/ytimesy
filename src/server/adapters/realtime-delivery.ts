@@ -62,6 +62,31 @@ export async function publishConversationSnapshot(
 		);
 	return true;
 }
+/**
+ * Deletes one chat's Durable Object state (step receipts, history cache,
+ * queue, latest snapshot) and its alarm. Idempotent; a no-op without the edge.
+ */
+export async function purgeConversationState(
+	userId: string,
+	sessionId: string,
+) {
+	const config = realtimeDeliveryConfiguration();
+	if (!config) return;
+	const url = `${config.url}/purge`;
+	const body = JSON.stringify({ userId, sessionId });
+	const response = await executorFetch(url, {
+		method: "POST",
+		headers: {
+			...(await signDeliveryRequest(config.secret, "POST", url, body)),
+			"Content-Type": "application/json",
+		},
+		body,
+		signal: AbortSignal.timeout(10_000),
+	});
+	await response.body?.cancel().catch(() => {});
+	if (!response.ok)
+		throw new Error(`Chat state could not be deleted (${response.status}).`);
+}
 export async function subscribeConversationSnapshot(
 	snapshot: ConversationSnapshot,
 	signal: AbortSignal,

@@ -37,6 +37,7 @@ import {
 	saveProject,
 	saveProjectGroup,
 } from "../adapters/projects";
+import { purgeConversationState } from "../adapters/realtime-delivery";
 import {
 	saveWorkspaceStatus,
 	workspaceForProject,
@@ -297,6 +298,14 @@ export async function removeProjectMachine(
 				{ status: 503 },
 			);
 		});
+	await eachLimited(targets.sessionIds, CLEANUP_CONCURRENCY, (sessionId) =>
+		purgeConversationState(input.userId, sessionId),
+	).catch(() => {
+		throw new Response(
+			"The project was not removed because its chats' state could not be deleted. Try again.",
+			{ status: 503 },
+		);
+	});
 	// Pull request evidence media in private storage; its rows cascade with the project.
 	await removeProjectPullRequestEvidence(input.userId, input.projectId);
 	await deleteProjectForOwner(input.userId, input.projectId);

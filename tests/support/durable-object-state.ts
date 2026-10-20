@@ -19,6 +19,7 @@ export function durableObjectState() {
 		setAlarm(at: number): Promise<void>;
 		getAlarm(): Promise<number | null>;
 		deleteAlarm(): Promise<void>;
+		deleteAll(): Promise<void>;
 	};
 	const storage: Storage = {
 		sql: {
@@ -47,6 +48,13 @@ export function durableObjectState() {
 		},
 		async deleteAlarm() {
 			alarm.at = null;
+		},
+		async deleteAll() {
+			kv.clear();
+			const tables = db
+				.prepare("select name from sqlite_master where type='table'")
+				.all() as { name: string }[];
+			for (const { name } of tables) db.exec(`drop table "${name}"`);
 		},
 	};
 	return {

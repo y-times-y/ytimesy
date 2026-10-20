@@ -11,6 +11,12 @@ const storage = vi.hoisted(() => ({
 	removed: [] as string[],
 	fail: false,
 }));
+const purged = vi.hoisted(() => [] as string[]);
+vi.mock("../src/server/adapters/realtime-delivery", () => ({
+	purgeConversationState: async (userId: string, sessionId: string) => {
+		purged.push(`${userId}/${sessionId}`);
+	},
+}));
 vi.mock("../src/server/adapters/checkpoints/storage", () => ({
 	checkpointStorageConfigured: storage.configured,
 	removeChatObjects: async (userId: string, sessionId: string) => {
@@ -19,6 +25,7 @@ vi.mock("../src/server/adapters/checkpoints/storage", () => ({
 	},
 }));
 beforeEach(() => {
+	purged.length = 0;
 	storage.removed.length = 0;
 	storage.fail = false;
 });
@@ -179,6 +186,8 @@ it("deletes the project's chat files and private snapshots, sparing shared ones"
 		{ userId: "alice", projectId: project.id },
 	);
 	expect(storage.removed).toEqual([`alice/${chat.id}`]);
+	// The chat's Durable Object state goes with it.
+	expect(purged).toEqual([`alice/${chat.id}`]);
 	expect(destroyed.sort()).toEqual([
 		"vm-build-24",
 		"vm-chat-24",
