@@ -37,8 +37,22 @@ export function runApiAgentStep(
 	return withApiModel(input, (runtime) => runModelAgentStep(input, runtime));
 }
 
-async function withApiModel<T>(
-	input: ModelAgentInput & { connectionId: string },
+/** What preparing an API connection's model reads from a run's input. */
+type ApiModelInput = Pick<
+	ModelAgentInput,
+	| "userId"
+	| "connectionRevision"
+	| "modelId"
+	| "speed"
+	| "cacheScopeId"
+	| "reasoning"
+	| "maxOutputTokens"
+	| "signal"
+> & { connectionId: string };
+
+/** Runs `run` with an API connection's model prepared (also for one-off calls such as the sidekick classifier). */
+export async function withApiModel<T>(
+	input: ApiModelInput,
 	run: (runtime: ModelAgentRuntime) => Promise<T>,
 ): Promise<T> {
 	let stage: string = "connection";
@@ -53,7 +67,7 @@ async function withApiModel<T>(
 }
 
 async function prepareApiModel<T>(
-	input: ModelAgentInput & { connectionId: string },
+	input: ApiModelInput,
 	run: (runtime: ModelAgentRuntime) => Promise<T>,
 	onStage: (stage: string) => void,
 ): Promise<T> {

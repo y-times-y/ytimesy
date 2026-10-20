@@ -4,12 +4,11 @@ import type { SessionItem } from "./session-item";
 import type { SubagentOutcome } from "./subagent";
 
 /**
- * Hand-back signals for lead mode fusion (src/domain/sidekick.ts), a
- * deterministic stand-in for the fusion pattern's lightweight classifiers: after
+ * Hand-back signals for lead mode fusion (src/domain/sidekick.ts): after
  * each sidekick round the runtime compares what the round ran with the
- * round before and tells the lead when the sidekick looks stuck, so it can
- * re-brief more prescriptively or take over. With roleModels.writerEscalation
- * the next round restarts the sidekick on that model instead.
+ * round before. The signals are features for the round's classifier
+ * (src/domain/sidekick-classifier.ts) and its fallback when the classifier
+ * cannot answer.
  */
 
 export const SIDEKICK_SIGNAL_KINDS = [
@@ -129,15 +128,12 @@ function isFailure(command: string, exitCode: number) {
 	return !(exitCode === 1 && PROBES.test(first));
 }
 
-/** The failed commands of a round's items (code mode's inner calls included). */
-export function roundEvidence(items: readonly SessionItem[]): RoundEvidence {
-	const failures: { command: string; error: string }[] = [];
+/** Every command of a round's items with its result (code mode's inner calls included). */
+function commandResults(items: readonly SessionItem[]) {
+	const commands: { command: string; exitCode: number; output: string }[] = [];
 	const add = (command: string, result: ReturnType<typeof commandResult>) => {
-		if (!command || !result || !isFailure(command, result.exitCode)) return;
-		failures.push({
-			command: normalizeCommand(command),
-			error: errorLine(result.output),
-		});
+		if (!command || !result) return;
+		commands.push({ command: normalizeCommand(command), ...result });
 	};
 	for (const item of items) {
 		if (item.kind === "commandExecution" && item.exitCode !== null)
@@ -153,6 +149,27 @@ export function roundEvidence(items: readonly SessionItem[]): RoundEvidence {
 				if (call && COMMAND_TOOLS.has(String(call.tool)))
 					add(commandOf(call.input), commandResult(call.output));
 	}
+	return commands;
+}
+
+/** Every command a round ran with its exit code, oldest first. */
+export function roundCommands(
+	items: readonly SessionItem[],
+): { command: string; exitCode: number }[] {
+	return commandResults(items).map(({ command, exitCode }) => ({
+		command,
+		exitCode,
+	}));
+}
+
+/** The failed commands of a round's items (code mode's inner calls included). */
+export function roundEvidence(items: readonly SessionItem[]): RoundEvidence {
+	const failures = commandResults(items)
+		.filter((entry) => isFailure(entry.command, entry.exitCode))
+		.map((entry) => ({
+			command: entry.command,
+			error: errorLine(entry.output),
+		}));
 	const unique = (values: string[]) =>
 		[...new Set(values.filter(Boolean))].slice(-MAX_KEPT);
 	return {
@@ -177,6 +194,21 @@ export function sidekickRoundItems(
 			return items.slice(index + 1);
 	}
 	return items;
+}
+
+/** The lead's message that started round `round` (the brief for the first round). */
+export function sidekickRoundBrief(
+	items: readonly SessionItem[],
+	round: number,
+): string {
+	if (round <= 1)
+		return items.find((item) => item.kind === "userMessage")?.text ?? "";
+	const start = new RegExp(`(^|\\n)Round ${round}[/ ]`);
+	for (let index = items.length - 1; index >= 0; index--) {
+		const item = items[index];
+		if (item?.kind === "userMessage" && start.test(item.text)) return item.text;
+	}
+	return "";
 }
 
 /** The signals of a round that just ended (compared with the round before it). */
@@ -232,19 +264,7 @@ export function sidekickStuckReasons(signals: readonly SidekickSignal[]) {
 	return signals.map((signal) => REASON[signal.kind](signal.detail)).join("; ");
 }
 
-/** The notice the lead's next request carries after a round with signals. */
-export function sidekickStuckNotice(input: {
-	readonly label: string;
-	readonly signals: readonly SidekickSignal[];
-	/** Set when its next round restarts on roleModels.writerEscalation. */
-	readonly escalation?: string;
-}) {
-	if (!input.signals.length) return "";
-	const reasons = sidekickStuckReasons(input.signals);
-	return `Runtime notice: sidekick ${input.label} looks stuck because ${reasons}. Re-brief it more prescriptively (the exact change, file and line, and the command that must pass), or take over and do it yourself.${input.escalation ? ` If you send it another round, the runtime restarts it on ${input.escalation} with a handover of its last report (a model switch at a fresh context).` : ""}`;
-}
-
-/** Whether a round's signals call for the escalation model at the next round. */
+/** Whether a round's signals point at a model that cannot get past a failure (the rules' switch_model). */
 export function warrantsEscalation(signals: readonly SidekickSignal[]) {
 	return signals.some(
 		(signal) =>

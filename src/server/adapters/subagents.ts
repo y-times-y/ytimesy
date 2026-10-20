@@ -98,6 +98,18 @@ export async function saveSidekickState(
 	);
 }
 
+/** A sidekick continues on another model (lead mode fusion's switch at compaction): its next turns use it. */
+export async function saveSidekickModel(
+	sessionId: string,
+	model: { readonly listedModelId: string; readonly harness: "codex" | "api" },
+) {
+	await database().query(
+		`update agent_session set listed_model_id=$2, harness=$3, updated_at=now()
+		 where id=$1 and agent_role='writer'`,
+		[sessionId, model.listedModelId, model.harness],
+	);
+}
+
 /**
  * Forked writer VMs to delete: reported at least `graceMinutes` ago and
  * idle, or whose session is no longer running anything. A lead's active

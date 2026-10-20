@@ -3,12 +3,16 @@ import { SessionItemId } from "./ids";
 import type { SessionItem } from "./session-item";
 import {
 	beginSidekickRound,
+	completeSidekickSwitch,
 	endSidekickRound,
 	fusionMetricsLine,
 	fusionTurnMetrics,
 	isActiveSidekick,
 	latestUserRequestId,
+	markSidekickSwitch,
 	newSidekickState,
+	recordSidekickDecision,
+	reportPushesBack,
 	retireSidekickState,
 	sidekickIdleSince,
 	sidekickIdleTtlMinutes,
@@ -16,6 +20,7 @@ import {
 	sidekickRoundLabel,
 	sidekickRoundMessage,
 	sidekickRoundsLeft,
+	sidekickSwitchDue,
 	subagentBudgetCheck,
 } from "./sidekick";
 
@@ -319,6 +324,133 @@ describe("fusion turn metrics", () => {
 		expect(line).toContain("sidekick busy 10.0m of 20.0m");
 		expect(line).toContain("explore 0 · reads lead 1/sidekick 2");
 		expect(line).toContain("signals same-check-failed 1");
+	});
+
+	it("records the pair-tuning signals: edit rate, rework, failures, pushback and classifier decisions", () => {
+		const decision = (
+			value: "on_track" | "hand_back" | "switch_model",
+			source: "classifier" | "rules",
+			costUsd: number | null,
+		) => ({
+			point: "round" as const,
+			round: 1,
+			decision: value,
+			reason: "r",
+			source,
+			inputsHash: "h",
+			latencyMs: 100,
+			tokens: 10,
+			costUsd,
+			planBilled: true,
+			at: at(1),
+		});
+		let tuned = newSidekickState({ tokens: 2_000_000 }, at(0), {
+			requestKey: "u1",
+		});
+		tuned = endSidekickRound(tuned, {
+			now: at(1),
+			outcome: "finished",
+			patchFiles: 1,
+		});
+		tuned = recordSidekickDecision(
+			tuned,
+			decision("on_track", "classifier", 0.001),
+		);
+		// Feedback in the same request: a rework round, which fails.
+		tuned = beginSidekickRound(tuned, {
+			now: at(2),
+			steps: 1,
+			tokens: 1,
+			sync: "clean",
+			requestKey: "u1",
+		});
+		tuned = endSidekickRound(tuned, {
+			now: at(3),
+			outcome: "budget exhausted",
+			patchFiles: 0,
+			pushback: true,
+		});
+		tuned = recordSidekickDecision(tuned, decision("switch_model", "rules", 0));
+		tuned = markSidekickSwitch(tuned, {
+			to: "codex:gpt-6.1-sol",
+			reason: "r",
+			round: 2,
+			at: at(3),
+		});
+		// The next request's first build round is not rework.
+		tuned = beginSidekickRound(tuned, {
+			now: at(4),
+			steps: 2,
+			tokens: 2,
+			sync: "clean",
+			requestKey: "u2",
+		});
+		expect(sidekickSwitchDue(tuned)).toBe(true);
+		tuned = completeSidekickSwitch(tuned, {
+			from: "gpt-6-luna",
+			to: "gpt-6.1-sol",
+			reason: "r",
+			round: 3,
+			trigger: "pending",
+			compacted: true,
+			at: at(4),
+		});
+		expect(sidekickSwitchDue(tuned)).toBe(false);
+		expect(tuned.model).toBe("gpt-6.1-sol");
+		tuned = endSidekickRound(tuned, {
+			now: at(5),
+			outcome: "finished",
+			patchFiles: 1,
+		});
+		tuned = recordSidekickDecision(
+			tuned,
+			decision("hand_back", "classifier", null),
+		);
+		const metrics = fusionTurnMetrics({
+			rootId: "root",
+			sessions: [
+				{ ...sessions[0], items: [call("edit", { path: "a.ts" }, "1")] },
+				{
+					...sessions[1],
+					agentBudget: { ...sessions[1].agentBudget, sidekick: tuned },
+					items: [
+						call("edit", { path: "b.ts" }, "s1"),
+						call("write", { path: "c.ts" }, "s2"),
+						call("edit", { path: "d.ts" }, "s3"),
+					],
+				},
+			] as typeof sessions,
+		});
+		expect(metrics).toMatchObject({
+			leadEdits: 1,
+			sidekickEdits: 3,
+			leadEditRate: 0.25,
+			reworkRounds: 1,
+			sidekickFailures: 1,
+			pushbacks: 1,
+			switches: 1,
+			decisions: { on_track: 1, switch_model: 1, hand_back: 1 },
+			classifierFallbacks: 1,
+			classifierMeanMs: 100,
+			classifierUsd: null,
+		});
+		const line = fusionMetricsLine(metrics);
+		expect(line).toContain(
+			"lead edit rate 25% · rework 1 · failures 1 · pushback 1",
+		);
+		expect(line).toContain(
+			"decisions on_track 1/switch_model 1/hand_back 1 (rules 1) 100ms ?",
+		);
+		expect(line).toContain("switches 1");
+	});
+
+	it("tells a report that pushes back on its brief", () => {
+		expect(
+			reportPushesBack("Done.\n\nPushback: the cache belongs in db.ts."),
+		).toBe(true);
+		expect(reportPushesBack("**Pushback:** wrong file")).toBe(true);
+		expect(reportPushesBack("I disagree with the brief's plan.")).toBe(true);
+		expect(reportPushesBack("Done: make test passes.")).toBe(false);
 	});
 
 	it("is all zeros for a builder that never delegated", () => {
