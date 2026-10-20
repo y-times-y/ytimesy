@@ -43,6 +43,20 @@ describe("start workspace desktop", () => {
 		);
 	});
 
+	it("keeps the display, viewer and its credential from other users on the VM", () => {
+		expect(START_WORKSPACE_DESKTOP).not.toMatch(/Xvfb :0 -screen[^\n]*-ac/);
+		expect(START_WORKSPACE_DESKTOP).toContain(
+			'Xvfb :0 -screen 0 1440x900x24 -auth "$XAUTH" -nolisten tcp',
+		);
+		expect(START_WORKSPACE_DESKTOP).toContain('xauth -q -f "$XAUTH" source -');
+		expect(START_WORKSPACE_DESKTOP).toContain(
+			'-unixsock "$VNC_SOCKET" -rfbport 0',
+		);
+		expect(START_WORKSPACE_DESKTOP).not.toContain("-rfbport 5900 >");
+		expect(START_WORKSPACE_DESKTOP).toContain('install -d -m 0700 "$VNC_DIR"');
+		expect(START_WORKSPACE_DESKTOP).not.toContain('$(cat "$DESK_AUTH_FILE")');
+	});
+
 	it("can add the dock to a desktop that is already running", () => {
 		expect(ENSURE_WORKSPACE_DESKTOP).toContain("hostname ytimesy");
 		expect(ENSURE_WORKSPACE_DESKTOP).toContain("tint2");

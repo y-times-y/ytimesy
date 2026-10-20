@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
 	READER_LINUX_USER,
+	READER_LOOPBACK_BLOCK_SCRIPT,
 	READER_USER_SETUP_SCRIPT,
 	readerCommand,
 	readerMayWrite,
@@ -36,6 +37,18 @@ describe("reader Linux user", () => {
 			"find '/home/ubuntu/repo' -maxdepth 4 -name node_modules -prune -o -name '.env*' -type f -exec chmod o-rwx {} +",
 		);
 		expect(script).toContain("sudo -n chmod 1777 /tmp/ytimesy-sessions");
+	});
+
+	it("refuses the reader loopback TCP (DevTools, debug adapters, the viewer) as root, idempotently", () => {
+		const script = readerPreparationScript({ sessionId: "child-1" });
+		expect(script).toContain(
+			`sudo -n bash -c "$(printf %s ${Buffer.from(READER_LOOPBACK_BLOCK_SCRIPT).toString("base64")} | base64 -d)"`,
+		);
+		expect(READER_LOOPBACK_BLOCK_SCRIPT).toContain(
+			`OUTPUT -o lo -p tcp -m owner --uid-owner ${READER_LINUX_USER} -j REJECT`,
+		);
+		expect(READER_LOOPBACK_BLOCK_SCRIPT).toContain('"$table" -w -C $rule');
+		expect(READER_LOOPBACK_BLOCK_SCRIPT).toContain("ip6tables");
 	});
 
 	it("runs a command as the reader with its scratch as HOME and the command intact", () => {
