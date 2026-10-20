@@ -1,7 +1,15 @@
+import { isInternalChildTaskMessage } from "./child-task-activity";
 import { CODE_MODE_TOOL, codeModeResult } from "./code-mode";
+import type { FusionPairProfile } from "./fusion-pairs";
 import { leanToolNames } from "./harness-model-profile";
 import { sessionBilling } from "./model-pricing";
 import { type SessionItem, sessionItemsFromUnknown } from "./session-item";
+import type {
+	RoundEvidence,
+	SidekickRoundKind,
+	SidekickSignal,
+	SidekickSignalKind,
+} from "./sidekick-signals";
 import type {
 	SubagentBudget,
 	SubagentOutcome,
@@ -20,12 +28,33 @@ import { agentSpend, totalSpend } from "./subagent-usage";
  * (src/server/services/sidekick-sync.ts). Each round ends with a report and
  * a patch relative to the lead's checkout at the round's start.
  *
+ * The sidekick lives as long as the chat: idle between the user's messages,
+ * it takes the lead's next brief in a later turn with its context intact.
+ * It is retired when the lead stops it, the lead's turn fails or is
+ * cancelled, it used a turn's rounds, or it stayed idle past its TTL
+ * (sidekickIdleTtlMinutes; the maintenance sweep deletes its fork). The
+ * round cap counts per user request.
+ *
  * These are the pure rules: the state kept in the sidekick's agent_budget,
  * its per-round budget, and the per-turn metrics an eval reads.
  */
 
-/** Rounds one sidekick may run (its first brief included). */
+/** Rounds one sidekick may run per user request (its first brief included). */
 export const SIDEKICK_MAX_ROUNDS = 6;
+/** Rounds kept in the state (metrics across a chat's turns). */
+const KEPT_ROUNDS = 24;
+/** Minutes an idle sidekick (and its forked VM) waits for the lead's next brief. */
+export const SIDEKICK_IDLE_TTL_MINUTES = 30;
+
+/** The idle TTL: YTIMESY_SIDEKICK_IDLE_MINUTES when set to a positive number. */
+export function sidekickIdleTtlMinutes(
+	env: Readonly<Record<string, string | undefined>> = process.env,
+) {
+	const value = Number(env.YTIMESY_SIDEKICK_IDLE_MINUTES);
+	return Number.isFinite(value) && value > 0
+		? value
+		: SIDEKICK_IDLE_TTL_MINUTES;
+}
 /** Below this a round cannot do useful work. */
 const MIN_ROUND_TOKENS = 50_000;
 
@@ -53,6 +82,12 @@ export type SidekickRound = {
 	readonly patchFiles?: number;
 	/** Rounds after the first: how the fork was synced before it. */
 	readonly sync?: SidekickSyncStatus;
+	/** explore: read and report snippets, change no files; build (default): change files. */
+	readonly kind?: SidekickRoundKind;
+	/** Its failed checks and errors, compared by the next round's signals. */
+	readonly evidence?: RoundEvidence;
+	/** Hand-back signals fired at its end (src/domain/sidekick-signals.ts). */
+	readonly signals?: readonly SidekickSignal[];
 };
 
 export type SidekickState = {
@@ -66,15 +101,44 @@ export type SidekickState = {
 	readonly roundStartSteps: number;
 	readonly roundStartTokens: number;
 	readonly rounds: readonly SidekickRound[];
-	/** Set when it may take no more rounds (stopped, out of rounds, the lead's turn ended). */
+	/** Set when it may take no more rounds (stopped, out of rounds, idle too long, the lead's turn failed). */
 	readonly retired?: { readonly at: string; readonly reason: string };
+	/** The lead/sidekick pair's tuning (src/domain/fusion-pairs.ts). */
+	readonly pair?: FusionPairProfile;
+	/** The sidekick's model when it started. */
+	readonly model?: string;
+	/** The lead's user request (its message id) the current rounds serve. */
+	readonly requestKey?: string;
+	/** The first round of the current user request (the round cap counts from it). */
+	readonly turnFirstRound?: number;
+	/** User requests this sidekick served (1 in a single-message chat). */
+	readonly turns?: number;
+	/** Set on a sidekick restarted on roleModels.writerEscalation. */
+	readonly escalatedFrom?: {
+		readonly label: string;
+		readonly model: string;
+		readonly reason: string;
+	};
 };
 
 export function newSidekickState(
 	budget: Pick<SubagentBudget, "tokens">,
 	now: string,
+	options: {
+		readonly pair?: FusionPairProfile;
+		readonly model?: string;
+		readonly requestKey?: string;
+		readonly kind?: SidekickRoundKind;
+		readonly escalatedFrom?: SidekickState["escalatedFrom"];
+	} = {},
 ): SidekickState {
 	return {
+		...(options.pair ? { pair: options.pair } : {}),
+		...(options.model ? { model: options.model } : {}),
+		...(options.requestKey ? { requestKey: options.requestKey } : {}),
+		...(options.escalatedFrom ? { escalatedFrom: options.escalatedFrom } : {}),
+		turnFirstRound: 1,
+		turns: 1,
 		maxRounds: SIDEKICK_MAX_ROUNDS,
 		roundTokens: Math.max(
 			Math.min(budget.tokens, MIN_ROUND_TOKENS),
@@ -84,7 +148,9 @@ export function newSidekickState(
 		roundStartedAt: now,
 		roundStartSteps: 0,
 		roundStartTokens: 0,
-		rounds: [{ n: 1, startedAt: now }],
+		rounds: [
+			{ n: 1, startedAt: now, ...(options.kind ? { kind: options.kind } : {}) },
+		],
 	};
 }
 
@@ -105,13 +171,50 @@ export function isActiveSidekick(session: SidekickSession | null | undefined) {
 	return !!state && !state.retired;
 }
 
-/** Whether the sidekick has rounds left to start another. */
-export function sidekickRoundsLeft(state: SidekickState) {
-	return Math.max(0, state.maxRounds - state.round);
+/** The current round's number within its user request (from 1). */
+export function sidekickTurnRound(state: SidekickState) {
+	return state.round - (state.turnFirstRound ?? 1) + 1;
 }
 
+/**
+ * Rounds left to start in this user request; a new request (another
+ * `requestKey`) starts a fresh count.
+ */
+export function sidekickRoundsLeft(state: SidekickState, requestKey?: string) {
+	if (requestKey && state.requestKey && requestKey !== state.requestKey)
+		return state.maxRounds;
+	return Math.max(0, state.maxRounds - sidekickTurnRound(state));
+}
+
+/** "round 2/6" in the chat's first request, "round 8 (2/6 this turn)" later. */
 export function sidekickRoundLabel(state: SidekickState) {
-	return `round ${state.round}/${state.maxRounds}`;
+	return roundLabel(state.round, state.turnFirstRound ?? 1, state.maxRounds);
+}
+
+function roundLabel(round: number, turnFirstRound: number, maxRounds: number) {
+	return turnFirstRound <= 1
+		? `round ${round}/${maxRounds}`
+		: `round ${round} (${round - turnFirstRound + 1}/${maxRounds} this turn)`;
+}
+
+/** When the sidekick went idle (its last round's end), if it is idle. */
+export function sidekickIdleSince(state: SidekickState) {
+	const last = state.rounds.at(-1);
+	return last?.n === state.round ? (last.endedAt ?? null) : null;
+}
+
+/** The lead's latest user request: its message id, skipping child reports and runtime notes. */
+export function latestUserRequestId(items: readonly SessionItem[]) {
+	for (let index = items.length - 1; index >= 0; index--) {
+		const item = items[index];
+		if (
+			item?.kind === "userMessage" &&
+			!isInternalChildTaskMessage(item.text) &&
+			!/^(Runtime notice|Peer message from )/.test(item.text)
+		)
+			return String(item.id);
+	}
+	return undefined;
 }
 
 /**
@@ -174,19 +277,34 @@ export function beginSidekickRound(
 		readonly steps: number;
 		readonly tokens: number;
 		readonly sync: SidekickSyncStatus;
+		readonly kind?: SidekickRoundKind;
+		/** The lead's current user request; another one than before starts a new turn's count. */
+		readonly requestKey?: string;
 	},
 ): SidekickState {
 	const n = state.round + 1;
+	const newRequest =
+		!!input.requestKey &&
+		!!state.requestKey &&
+		input.requestKey !== state.requestKey;
 	return {
 		...state,
+		...(input.requestKey ? { requestKey: input.requestKey } : {}),
+		turnFirstRound: newRequest ? n : (state.turnFirstRound ?? 1),
+		turns: (state.turns ?? 1) + (newRequest ? 1 : 0),
 		round: n,
 		roundStartedAt: input.now,
 		roundStartSteps: input.steps,
 		roundStartTokens: input.tokens,
 		rounds: [
 			...state.rounds,
-			{ n, startedAt: input.now, sync: input.sync },
-		].slice(-state.maxRounds),
+			{
+				n,
+				startedAt: input.now,
+				sync: input.sync,
+				...(input.kind ? { kind: input.kind } : {}),
+			},
+		].slice(-KEPT_ROUNDS),
 	};
 }
 
@@ -197,6 +315,8 @@ export function endSidekickRound(
 		readonly now: string;
 		readonly outcome: SubagentOutcome;
 		readonly patchFiles: number;
+		readonly evidence?: RoundEvidence;
+		readonly signals?: readonly SidekickSignal[];
 	},
 ): SidekickState {
 	const ended: SidekickState = {
@@ -208,13 +328,25 @@ export function endSidekickRound(
 						endedAt: input.now,
 						outcome: input.outcome,
 						patchFiles: input.patchFiles,
+						...(input.evidence ? { evidence: input.evidence } : {}),
+						...(input.signals?.length ? { signals: input.signals } : {}),
 					}
 				: round,
 		),
 	};
-	return state.round >= state.maxRounds && !state.retired
+	return sidekickTurnRound(state) >= state.maxRounds && !state.retired
 		? retireSidekickState(ended, "all rounds used", input.now)
 		: ended;
+}
+
+/** The current round's record. */
+export function currentSidekickRound(state: SidekickState) {
+	return state.rounds.find((round) => round.n === state.round);
+}
+
+/** The round before the current one, if kept. */
+export function previousSidekickRound(state: SidekickState) {
+	return state.rounds.find((round) => round.n === state.round - 1);
 }
 
 export function retireSidekickState(
@@ -235,12 +367,19 @@ export function sidekickRoundRef(round: number) {
 	return `refs/ytimesy/sidekick/round-${round}`;
 }
 
+/** Appended to an exploration round's brief: what to return (lead mode fusion). */
+export const SIDEKICK_EXPLORE_NOTE =
+	"Exploration round: change no files. Find the code this task touches and report in this format. Files: each relevant path with its line ranges and why it matters. Snippets: the key code quoted with line numbers, only what a plan needs. Commands: how to build and run the checks, and what they print now. Open questions: what you could not settle.";
+
 /** The text the sidekick receives at a new round's start: how its checkout changed, then the lead's message. */
 export function sidekickRoundMessage(input: {
 	readonly round: number;
 	readonly maxRounds: number;
 	readonly sync: SidekickSyncStatus;
 	readonly message: string;
+	/** The first round of the current user request (1: the chat's first). */
+	readonly turnFirstRound?: number;
+	readonly kind?: SidekickRoundKind;
 }) {
 	const previous = sidekickRoundRef(input.round - 1);
 	const checkout = {
@@ -251,7 +390,12 @@ export function sidekickRoundMessage(input: {
 			"Your checkout now matches the lead's current checkout, with your earlier work the lead has not applied replayed on top and committed.",
 		conflict: `Your checkout now matches the lead's current checkout. Your earlier work the lead has not applied conflicted with it and is not in the checkout; it is at ${previous} (git diff HEAD ${previous}); reuse what still applies.`,
 	}[input.sync];
-	return `Round ${input.round}/${input.maxRounds} from your lead. ${checkout} This round's patch is everything that differs from this checkout when you finish.\n\n${input.message.trim()}`;
+	const first = input.turnFirstRound ?? 1;
+	const heading =
+		first <= 1
+			? `Round ${input.round}/${input.maxRounds} from your lead.`
+			: `Round ${input.round} from your lead (${input.round - first + 1}/${input.maxRounds} for the user's new request).`;
+	return `${heading} ${checkout} This round's patch is everything that differs from this checkout when you finish.\n\n${input.message.trim()}${input.kind === "explore" ? `\n\n${SIDEKICK_EXPLORE_NOTE}` : ""}`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -279,6 +423,17 @@ export type FusionTurnMetrics = {
 	readonly others: FusionSpend;
 	/** Minutes the sidekick spent inside rounds (start to report). */
 	readonly sidekickBusyMinutes: number;
+	/** Exploration rounds (the sidekick explored and returned snippets). Optional: older records lack it. */
+	readonly explorationHandoffs?: number;
+	/** File reads (read tool calls and cat/sed/head/tail/nl commands) by the lead and by its sidekicks. */
+	readonly leadReads?: number;
+	readonly sidekickReads?: number;
+	/** Hand-back signals fired after rounds, by kind. */
+	readonly signals?: Readonly<Partial<Record<SidekickSignalKind, number>>>;
+	/** Sidekicks restarted on roleModels.writerEscalation. */
+	readonly switches?: number;
+	/** The most user requests one sidekick served (its lifetime across the chat's turns). */
+	readonly sidekickTurns?: number;
 };
 
 export type FusionSpend = {
@@ -299,6 +454,30 @@ type MetricsSession = {
 
 const EDIT_TOOLS = new Set<string>(leanToolNames(["write", "edit"]));
 const COMMAND_TOOLS = new Set<string>(leanToolNames(["command"]));
+const READ_TOOLS = new Set<string>(leanToolNames(["read"]));
+/** A shell command that prints a file (the codex shape reads through its shell). */
+const PRINTS_FILE =
+	/^\s*(?:cd\s+\S+\s*&&\s*)?(?:cat|sed\s+-n|head|tail|nl|less)\s/;
+
+function commandText(input: string) {
+	try {
+		const parsed = JSON.parse(input) as { command?: unknown; cmd?: unknown };
+		const command = parsed.command ?? parsed.cmd;
+		return typeof command === "string" ? command : input;
+	} catch {
+		return input;
+	}
+}
+
+/** File reads among a session's tool calls. */
+function fileReads(calls: readonly { tool: string; input: string }[]) {
+	return calls.filter(
+		(call) =>
+			READ_TOOLS.has(call.tool) ||
+			((COMMAND_TOOLS.has(call.tool) || call.tool === "bash") &&
+				PRINTS_FILE.test(commandText(call.input))),
+	).length;
+}
 /** git apply/am of an agent patch, or merge/cherry-pick/checkout of an agent ref. */
 const APPLIES_AGENT_WORK =
 	/git\s+(?:-C\s+\S+\s+)?(?:apply|am)\b[^\n]*\.ytimesy\/agents\/|git\s+(?:-C\s+\S+\s+)?(?:merge|cherry-pick|checkout|restore|read-tree)\b[^\n]*refs\/ytimesy\/agents\//;
@@ -359,10 +538,19 @@ export function fusionTurnMetrics(input: {
 	let handoffs = 0;
 	let ended = 0;
 	let busyMs = 0;
+	let explorationHandoffs = 0;
+	let switches = 0;
+	let sidekickTurns = 0;
+	const signals: Partial<Record<SidekickSignalKind, number>> = {};
 	for (const session of sidekicks) {
 		const state = sidekickState(session) as SidekickState;
+		if (state.escalatedFrom) switches += 1;
+		sidekickTurns = Math.max(sidekickTurns, state.turns ?? 1);
 		for (const round of state.rounds) {
 			handoffs += 1;
+			if (round.kind === "explore") explorationHandoffs += 1;
+			for (const signal of round.signals ?? [])
+				signals[signal.kind] = (signals[signal.kind] ?? 0) + 1;
 			if (round.sync) syncs[round.sync] += 1;
 			if (!round.endedAt) continue;
 			ended += 1;
@@ -394,6 +582,16 @@ export function fusionTurnMetrics(input: {
 			children.filter((session) => !sidekicks.includes(session)),
 		),
 		sidekickBusyMinutes: busyMs / 60_000,
+		explorationHandoffs,
+		leadReads: fileReads(calls),
+		sidekickReads: sidekicks.reduce(
+			(total, session) =>
+				total + fileReads(toolCalls(sessionItemsFromUnknown(session.items))),
+			0,
+		),
+		signals,
+		switches,
+		sidekickTurns,
 	};
 }
 
@@ -436,7 +634,25 @@ export function fusionMetricsLine(
 			? [`others ${k(metrics.others.tokens)} ${usd(metrics.others.costUsd)}`]
 			: []),
 		`sidekick busy ${metrics.sidekickBusyMinutes.toFixed(1)}m${agentSeconds ? ` of ${(agentSeconds / 60).toFixed(1)}m` : ""}`,
+		...(metrics.explorationHandoffs === undefined
+			? []
+			: [
+					`explore ${metrics.explorationHandoffs}`,
+					`reads lead ${metrics.leadReads ?? 0}/sidekick ${metrics.sidekickReads ?? 0}`,
+				]),
+		...(signalsText(metrics) ? [`signals ${signalsText(metrics)}`] : []),
+		...(metrics.switches ? [`switches ${metrics.switches}`] : []),
+		...((metrics.sidekickTurns ?? 1) > 1
+			? [`sidekick turns ${metrics.sidekickTurns}`]
+			: []),
 	].join(" · ");
+}
+
+function signalsText(metrics: FusionTurnMetrics) {
+	return Object.entries(metrics.signals ?? {})
+		.filter(([, count]) => count)
+		.map(([kind, count]) => `${kind} ${count}`)
+		.join("/");
 }
 
 /** Means over runs of one arm, for the Fusion block's arm line. */
@@ -458,9 +674,17 @@ export function fusionMetricsMeans(list: readonly FusionTurnMetrics[]) {
 		leadUsd: meanUsd((metrics) => metrics.lead.costUsd),
 		sidekickUsd: meanUsd((metrics) => metrics.sidekick.costUsd),
 		sidekickBusyMinutes: mean((metrics) => metrics.sidekickBusyMinutes),
+		explorationHandoffs: mean((metrics) => metrics.explorationHandoffs ?? 0),
+		leadReads: mean((metrics) => metrics.leadReads ?? 0),
+		signals: mean((metrics) =>
+			Object.values(metrics.signals ?? {}).reduce(
+				(total, count) => total + (count ?? 0),
+				0,
+			),
+		),
 	};
 }
 
 export function fusionMeansLine(means: ReturnType<typeof fusionMetricsMeans>) {
-	return `${means.runs} run(s), per run: handoffs ${means.handoffs.toFixed(1)} · rounds ${means.sidekickRounds.toFixed(1)} · lead edits ${means.leadEdits.toFixed(1)} · patches applied ${means.patchesApplied.toFixed(1)} · lead ${usd(means.leadUsd)} · sidekick ${usd(means.sidekickUsd)} · sidekick busy ${means.sidekickBusyMinutes.toFixed(1)}m`;
+	return `${means.runs} run(s), per run: handoffs ${means.handoffs.toFixed(1)} · rounds ${means.sidekickRounds.toFixed(1)} · lead edits ${means.leadEdits.toFixed(1)} · patches applied ${means.patchesApplied.toFixed(1)} · lead ${usd(means.leadUsd)} · sidekick ${usd(means.sidekickUsd)} · sidekick busy ${means.sidekickBusyMinutes.toFixed(1)}m · explore ${means.explorationHandoffs.toFixed(1)} · lead reads ${means.leadReads.toFixed(1)} · signals ${means.signals.toFixed(1)}`;
 }

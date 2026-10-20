@@ -7,9 +7,13 @@ import {
 	fusionMetricsLine,
 	fusionTurnMetrics,
 	isActiveSidekick,
+	latestUserRequestId,
 	newSidekickState,
 	retireSidekickState,
+	sidekickIdleSince,
+	sidekickIdleTtlMinutes,
 	sidekickPatchLabel,
+	sidekickRoundLabel,
 	sidekickRoundMessage,
 	sidekickRoundsLeft,
 	subagentBudgetCheck,
@@ -122,6 +126,72 @@ describe("sidekick rounds", () => {
 	});
 });
 
+describe("sidekick lifetime across the chat's requests", () => {
+	it("counts rounds per user request and labels later requests' rounds", () => {
+		let state = newSidekickState({ tokens: 2_000_000 }, at(0), {
+			requestKey: "u1",
+			kind: "explore",
+		});
+		expect(state.rounds[0]?.kind).toBe("explore");
+		for (let n = 2; n <= 6; n++)
+			state = beginSidekickRound(
+				endSidekickRound(state, {
+					now: at(n),
+					outcome: "finished",
+					patchFiles: 1,
+				}),
+				{ now: at(n), steps: 0, tokens: 0, sync: "clean", requestKey: "u1" },
+			);
+		expect(sidekickRoundsLeft(state, "u1")).toBe(0);
+		// The user's next message: a fresh count for the same sidekick.
+		expect(sidekickRoundsLeft(state, "u2")).toBe(6);
+		state = endSidekickRound(state, {
+			now: at(7),
+			outcome: "finished",
+			patchFiles: 1,
+		});
+		// The sixth round of a request retires it.
+		expect(state.retired?.reason).toBe("all rounds used");
+		const kept = beginSidekickRound(
+			{ ...state, retired: undefined },
+			{ now: at(60), steps: 0, tokens: 0, sync: "clean", requestKey: "u2" },
+		);
+		expect(kept).toMatchObject({ round: 7, turnFirstRound: 7, turns: 2 });
+		expect(sidekickRoundLabel(kept)).toBe("round 7 (1/6 this turn)");
+		expect(sidekickRoundsLeft(kept, "u2")).toBe(5);
+		expect(sidekickIdleSince(kept)).toBeNull();
+		expect(sidekickIdleSince(state)).toBe(at(7));
+	});
+
+	it("reads the idle TTL from the environment, 30 minutes by default", () => {
+		expect(sidekickIdleTtlMinutes({})).toBe(30);
+		expect(sidekickIdleTtlMinutes({ YTIMESY_SIDEKICK_IDLE_MINUTES: "5" })).toBe(
+			5,
+		);
+		expect(
+			sidekickIdleTtlMinutes({ YTIMESY_SIDEKICK_IDLE_MINUTES: "never" }),
+		).toBe(30);
+	});
+
+	it("finds the latest user request, skipping child reports and peer messages", () => {
+		const items: SessionItem[] = [
+			{ kind: "userMessage", id: SessionItemId("u1"), text: "Build it" },
+			{
+				kind: "userMessage",
+				id: SessionItemId("c1"),
+				text: "\u2063ytimesy-child-event:abc\n[agent 1 writer finished]",
+			},
+			{
+				kind: "userMessage",
+				id: SessionItemId("p1"),
+				text: "Peer message from x (y):\n\nhello",
+			},
+		];
+		expect(latestUserRequestId(items)).toBe("u1");
+		expect(latestUserRequestId([])).toBeUndefined();
+	});
+});
+
 describe("fusion turn metrics", () => {
 	const usage = (input: number, output: number) => ({
 		inputTokens: input,
@@ -172,7 +242,12 @@ describe("fusion turn metrics", () => {
 			}),
 			{ now: at(10), steps: 30, tokens: 10_000, sync: "carried" },
 		),
-		{ now: at(14), outcome: "finished", patchFiles: 1 },
+		{
+			now: at(14),
+			outcome: "finished",
+			patchFiles: 1,
+			signals: [{ kind: "same-check-failed", detail: "make test" }],
+		},
 	);
 	const sessions = [
 		{
@@ -201,7 +276,10 @@ describe("fusion turn metrics", () => {
 					text: "brief",
 					apiUsage: usage(400_000, 20_000),
 				},
-			],
+				call("read", { path: "src/a.ts" }, "s-1"),
+				call("bash", { command: "sed -n 1,80p src/b.ts" }, "s-2"),
+				call("bash", { command: "make test" }, "s-3"),
+			] as SessionItem[],
 		},
 		{
 			id: "r",
@@ -225,6 +303,12 @@ describe("fusion turn metrics", () => {
 			patchesApplied: 2,
 			syncs: { unchanged: 0, clean: 0, carried: 1, conflict: 0 },
 			sidekickBusyMinutes: 10,
+			explorationHandoffs: 0,
+			leadReads: 1,
+			sidekickReads: 2,
+			signals: { "same-check-failed": 1 },
+			switches: 0,
+			sidekickTurns: 1,
 		});
 		expect(metrics.lead.tokens).toBe(105_000);
 		expect(metrics.sidekick.tokens).toBe(420_000);
@@ -233,6 +317,8 @@ describe("fusion turn metrics", () => {
 		expect(line).toContain("handoffs 2 · rounds 2");
 		expect(line).toContain("lead edits 3 · patches applied 2");
 		expect(line).toContain("sidekick busy 10.0m of 20.0m");
+		expect(line).toContain("explore 0 · reads lead 1/sidekick 2");
+		expect(line).toContain("signals same-check-failed 1");
 	});
 
 	it("is all zeros for a builder that never delegated", () => {

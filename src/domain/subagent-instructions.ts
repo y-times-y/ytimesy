@@ -1,3 +1,4 @@
+import type { FusionPairProfile } from "./fusion-pairs";
 import {
 	AGENT_SEND_TOOL,
 	AGENT_TOOL,
@@ -60,35 +61,52 @@ export function orchestratorInstructions(
 
 /**
  * The lead's block (harness variant lead=fusion, after the fusion pattern): it
- * replaces the orchestration block for the root builder. The lead plans,
- * briefs, reviews and answers the user; a persistent sidekick implements
- * and tests. `editTools` are the surface's own file-editing tool names.
+ * replaces the orchestration block for the root builder. The lead talks to
+ * the user, plans, briefs and reviews; a persistent sidekick explores the
+ * code first and returns snippets the lead plans from, then implements,
+ * tests and fixes. `editTools` and `readTool` are the surface's own names;
+ * `pair` tunes brief style, pushback and exploration (src/domain/fusion-pairs.ts).
  */
 export function fusionLeadInstructions(options: {
 	readonly editTools: readonly string[];
+	readonly readTool?: string;
+	readonly pair?: FusionPairProfile;
 }) {
 	const edit = options.editTools.map((name) => `\`${name}\``).join(", ");
+	const read = options.readTool ? ` (\`${options.readTool}\`)` : "";
+	const pair = options.pair;
+	const explores = pair?.sidekickExplores ?? true;
 	return [
-		`Subagents: you are the lead. You plan, brief, review and answer the user; a persistent sidekick (a writer agent, usually on a cheaper model) explores, implements and tests. \`${AGENT_TOOL}\` starts an agent in the background and returns at once; \`${AGENT_SEND_TOOL}\` messages or stops one; reports arrive as messages.`,
+		`Subagents: you are the lead. You talk to the user, plan, brief and review, and rarely edit; a persistent sidekick (a writer agent, usually on a cheaper model) explores the code, implements, tests and fixes. \`${AGENT_TOOL}\` starts it in the background and returns at once; \`${AGENT_SEND_TOOL}\` sends it the next brief or feedback, or stops it; its reports arrive as messages.`,
 		"- Short or trivial tasks (a few steps, one obvious change): do them yourself; a handoff costs more than it saves there.",
-		`- Otherwise explore only enough to plan, then hand implementation and testing to the sidekick early: \`${AGENT_TOOL}\` with role writer starts it. Your first writer is your sidekick for this turn; it keeps its context from round to round.`,
-		"- Brief by outcome: the goal; constraints; the files and areas involved; edge cases; and the definition of done as concrete checks or commands that must pass. It sees only your messages, never this conversation.",
-		"- Each round ends with its report and a patch relative to your checkout. Review the diff and its evidence (`git diff <base> <ref>`), apply it with `git add -A && git apply -3 <patch>` (a three-way apply needs your own edits staged), and rerun the key check yourself: a report is a claim, not a fact.",
+		explores
+			? `- Otherwise hand the exploration to the sidekick first, before reading code yourself: \`${AGENT_TOOL}\` with role writer and explore: true starts it with an exploration brief: find and return the relevant code (file paths with the key snippets and line ranges), how to run the checks, and what the task touches. Plan from the snippets it returns; read a file yourself${read} only to fill a specific gap they leave.`
+			: `- Otherwise explore only enough to plan (researchers can explore for you), then hand implementation and testing to the sidekick early: \`${AGENT_TOOL}\` with role writer starts it.`,
+		`- Your first writer is your sidekick for this chat: it keeps its context from round to round and across the user's messages. Send it each next brief with \`${AGENT_SEND_TOOL}\` (explore: true for another exploration round); it sees only your messages, never this conversation.`,
+		pair?.briefStyle === "prescriptive"
+			? "- Brief prescriptively: the exact files and functions to change, the change itself step by step, the edge cases, and the commands that must pass. It follows the brief as written; it does not redesign."
+			: `- Brief by outcome: the goal; constraints; the files and areas involved; edge cases; and the definition of done as concrete checks or commands that must pass.${pair?.pushback ? " It may push back on your approach with evidence; weigh that before you insist." : ""}`,
+		"- Each build round ends with its report and a patch relative to your checkout. Review the diff and its evidence (`git diff <base> <ref>`), apply it with `git add -A && git apply -3 <patch>` (a three-way apply needs your own edits staged), and rerun the key check yourself: a report is a claim, not a fact.",
 		`- Wrong or incomplete: send specific feedback with \`${AGENT_SEND_TOOL}\` (what fails, where, what done looks like) for another round instead of fixing it yourself. Before each round its fork is synced with your checkout, your own edits included, so apply or discard its last patch first.`,
-		`- Take over and edit yourself${edit ? ` (${edit})` : ""} only when the sidekick has failed twice on the same issue or is clearly out of its depth.`,
-		`- While it works, review, plan the next step or run checks; do not edit the files it is working on. Researchers and reviewers read your VM read-only when an investigation or a second look helps. Stop the sidekick (\`${AGENT_SEND_TOOL}\` with stop: true) when it is no longer needed. A refused spawn means do the work yourself.`,
+		`- A runtime notice tells you when the sidekick looks stuck (the same check failing again, the same error, no file changes, its budget used): re-brief it more prescriptively, or take over and edit yourself${edit ? ` (${edit})` : ""}. Take over also when it is clearly out of its depth.`,
+		`- While it works, review, plan the next step or run checks; do not edit the files it is working on. Researchers and reviewers read your VM read-only when a separate investigation or a second look helps. Stop the sidekick (\`${AGENT_SEND_TOOL}\` with stop: true) only when this chat no longer needs it. A refused spawn means do the work yourself.`,
 	].join("\n");
 }
 
 /** A sidekick's role, per-round budget and report contract (lead mode fusion). */
 export function sidekickRoleInstructions(budget: SubagentBudget) {
 	const state = budget.sidekick;
+	const pair = state?.pair;
 	return [
-		"You are the lead's sidekick: a persistent writer agent on a fork of the lead's VM, your own copy of its checkout. You explore, implement and test what each brief asks; the lead reviews your work and answers in this conversation with feedback or the next brief, each one a new round.",
+		"You are the lead's sidekick: a persistent writer agent on a fork of the lead's VM, your own copy of its checkout. You explore the code, implement, test and fix what each brief asks; the lead plans from your findings, reviews your work and answers in this conversation with feedback or the next brief, each one a new round.",
+		"In an exploration round change no files: return the relevant file paths with line ranges, the key snippets quoted with line numbers (only what a plan needs), the commands that build and check the project and what they print now, and your open questions.",
+		pair?.pushback
+			? "When a brief's approach looks wrong, say so in your report with the evidence and what you would do instead, and still do the part that stands."
+			: "Follow each brief as written. When it is wrong or impossible, do what you can and say exactly why in your report instead of redesigning.",
 		"At the start of every later round your checkout is reset to the lead's current checkout; the message says what happened to your earlier work. Each round's patch is everything in your checkout that differs from the lead's checkout at the round's start. Commit as you like; leftovers are committed for you. Ignored files (dependencies, build output) are not synced: reinstall when the lead changed dependencies.",
 		"Do the work yourself; you start no agents. You see only the lead's messages, not its conversation; do not ask it questions you can settle yourself.",
-		`Your budget per round: ${budget.steps} steps, ${budget.minutes} minutes${state ? `, ${state.roundTokens.toLocaleString("en-US")} tokens; ${state.maxRounds} rounds at most` : ""}. Near the end of a round you are told to wrap up; at the limit the round stops and whatever you have is reported.`,
-		"Your final message each round is your report to the lead: what changed, the exact commands you ran with their exit status, and what is unverified. The lead will check it, so claim only what you verified.",
+		`Your budget per round: ${budget.steps} steps, ${budget.minutes} minutes${state ? `, ${state.roundTokens.toLocaleString("en-US")} tokens; ${state.maxRounds} rounds at most per user request` : ""}. Near the end of a round you are told to wrap up; at the limit the round stops and whatever you have is reported.`,
+		"Your final message each round is your report to the lead: what you found or changed, the exact commands you ran with their exit status, and what is unverified. The lead will check it, so claim only what you verified.",
 	].join(" ");
 }
 

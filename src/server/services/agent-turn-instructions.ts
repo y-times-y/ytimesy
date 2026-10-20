@@ -6,6 +6,7 @@ import {
 import { cloudAgentRoleInstructions } from "#/domain/agent-orchestration";
 import { CODE_MODE_TOOL } from "#/domain/code-mode";
 import { BUILDER_ENVIRONMENT_INSTRUCTIONS } from "#/domain/environment-context";
+import type { FusionPairProfile } from "#/domain/fusion-pairs";
 import {
 	LEAN_SHAPE_TOOLS,
 	type LeanToolShape,
@@ -64,6 +65,8 @@ export function agentTurnInstructions(input: {
 	prEvidence?: boolean;
 	/** Harness variant lead: fusion gives the root builder the lead's block. */
 	lead?: LeadMode;
+	/** Lead mode fusion: the lead/sidekick pair's tuning (src/domain/fusion-pairs.ts). */
+	fusionPair?: FusionPairProfile;
 }) {
 	if (input.leanShape)
 		return leanTurnInstructions({ ...input, leanShape: input.leanShape });
@@ -100,6 +103,12 @@ function leanTurnInstructions(
 			? input.lead === "fusion" && !input.session.agentRole
 				? fusionLeadInstructions({
 						editTools: leanEditTools(input.leanShape, input.tools),
+						readTool: (
+							LEAN_SHAPE_TOOLS[input.leanShape] as Partial<
+								Record<string, string>
+							>
+						).read,
+						pair: input.fusionPair,
 					})
 				: orchestratorInstructions({
 						codeMode,

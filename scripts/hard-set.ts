@@ -1772,6 +1772,19 @@ async function stageAndGrade(run: TaskRun) {
 }
 
 /** Deletes the run's session, agent VM and eval user (and the grader unless it grades). */
+/** Forked writer VMs under a chat that are not deleted yet. */
+async function childForkVms(sessionId: string) {
+	const result = await database().query<{ vm_id: string }>(
+		`with recursive tree as (select id from agent_session where id=$1
+		 union all select s.id from agent_session s join tree t on s.parent_session_id=t.id)
+		 select agent_fork->>'vmId' as vm_id from agent_session
+		 where id in (select id from tree) and id<>$1
+		   and agent_fork ? 'vmId' and not (agent_fork ? 'deletedAt')`,
+		[sessionId],
+	);
+	return result.rows.map((row) => row.vm_id).filter(Boolean);
+}
+
 async function cleanupRun(run: TaskRun, keepGrader: boolean) {
 	const { record } = run;
 	// Before the session and eval user (and their loop rows) are deleted.
@@ -1779,6 +1792,11 @@ async function cleanupRun(run: TaskRun, keepGrader: boolean) {
 	if (run.userId && run.sessionId)
 		await cancelServerTurn(run.userId, run.sessionId).catch(() => {});
 	if (run.agentVm) await client.vms.delete(run.agentVm).catch(() => {});
+	// lead=fusion keeps an idle sidekick (and its fork) for the chat's next
+	// message; this chat has none, so its forks go before the session row.
+	if (run.userId && run.sessionId)
+		for (const vmId of await childForkVms(run.sessionId).catch(() => []))
+			await client.vms.delete(vmId).catch(() => {});
 	if (run.userId && run.sessionId)
 		await deleteAgentSessionForOwner(run.userId, run.sessionId).catch(() => {});
 	if (run.userId) {

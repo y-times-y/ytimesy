@@ -5,7 +5,7 @@
 // with every migration, and a scripted model in place of the provider.
 //
 //   pnpm rehearsal                         # every scenario
-//   pnpm rehearsal --scenario fusion       # one (builder|review|fusion|subagents)
+//   pnpm rehearsal --scenario fusion       # one or more (comma-separated ids in scenarios.ts)
 //   pnpm rehearsal --fresh-setup           # rerun the task setup instead of reusing it
 //   pnpm rehearsal --keep                  # leave the VMs running for inspection
 //
@@ -40,9 +40,8 @@ const { FakeCodex } = await import("./fake-codex");
 const { RehearsalEdge } = await import("./edge");
 const { scenarios } = await import("./scenarios");
 const { checkScenario, collect } = await import("./checks");
-const { seedOwner, createRehearsalUser, startTaskChat } = await import(
-	"./seed"
-);
+const { seedOwner, createRehearsalUser, startTaskChat, sendFollowUp } =
+	await import("./seed");
 const { harnessVariantFromFlags } = await import(
 	"../../src/domain/harness-variant"
 );
@@ -97,7 +96,8 @@ const results = await Promise.all(
 		);
 		console.log(`rehearsal: ${scenario.id} started (${elapsed()})`);
 		let settleError: string | undefined;
-		try {
+		// Waits until the chat's tree is idle with `turns` finished root turns.
+		const settle = async (turns: number) => {
 			await edge.until(
 				async () => {
 					const { database } = await import(
@@ -121,11 +121,24 @@ const results = await Promise.all(
 						"select count(*)::int as n from api_turn where session_id=$1 and state in ('completed','failed','cancelled')",
 						[sessionId],
 					);
-					return live.rows[0].n === 0 && root.rows[0].n > 0;
+					return live.rows[0].n === 0 && root.rows[0].n >= turns;
 				},
 				Number(values.timeout) * 1000,
 				`${scenario.id} to settle`,
 			);
+		};
+		try {
+			await settle(1);
+			// Later user messages in the same chat, each after the last settled.
+			for (const [index, followUp] of (scenario.followUps ?? []).entries()) {
+				await edge.invoke(() =>
+					sendFollowUp({ user, sessionId, text: followUp }),
+				);
+				console.log(
+					`rehearsal: ${scenario.id} follow-up ${index + 1} sent (${elapsed()})`,
+				);
+				await settle(index + 2);
+			}
 		} catch (error) {
 			settleError = (error as Error).message;
 		}
