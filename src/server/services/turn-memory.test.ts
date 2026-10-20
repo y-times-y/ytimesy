@@ -23,6 +23,7 @@ vi.mock("../adapters/memory-settings", () => ({
 	memoryEmbeddings: vi.fn(async () => new Map()),
 	saveMemoryEmbeddings: vi.fn(async () => {}),
 	recentUnsavedMessages: vi.fn(async () => []),
+	pendingMemorySaves: vi.fn(async () => 0),
 }));
 const dispatched: unknown[] = [];
 vi.mock("../adapters/background-job-dispatch", () => ({
@@ -424,6 +425,104 @@ describe("freshness", () => {
 			(await memory?.attach(messages, [user("a", "Fix the build")], workspace))
 				?.messages,
 		).toBe(messages);
+	});
+});
+
+describe("saves still running in other chats", () => {
+	const owner = {
+		id: "11111111-1111-4111-8111-111111111111",
+		userId: "u1",
+		projectId: null,
+	};
+	const before = { "MEMORY.md": EMPTY_MEMORY };
+	const after = { "MEMORY.md": `${EMPTY_MEMORY}- New entity IDs use ULIDs\n` };
+
+	it("are waited for, so the next chat reads what they saved", async () => {
+		let saved = false;
+		const snapshot = vi.fn(async () =>
+			saved
+				? { head: "after", files: after }
+				: { head: "before", files: before },
+		);
+		const pendingSaves = vi.fn(async () => {
+			if (pendingSaves.mock.calls.length < 2) return 1;
+			saved = true;
+			return 0;
+		});
+		const memory = await turnMemory(owner, {
+			repo: { ...fakeRepo(before), snapshot },
+			embed: null,
+			today: () => "2026-10-15",
+			projectName: null,
+			pendingSaves,
+		});
+		if (!memory) throw new Error("memory should be on");
+		const { messages, recall } = await memory.attach(
+			[{ role: "user", content: "add an orders table" }],
+			[user("a", "add an orders table")],
+			workspace,
+		);
+		expect(pendingSaves).toHaveBeenCalledTimes(2);
+		expect(recall?.head).toBe("after");
+		expect(JSON.stringify(messages[0].content)).toContain(
+			"New entity IDs use ULIDs",
+		);
+	});
+
+	it("never hold up the request past the wait, nor fail it", async () => {
+		vi.useFakeTimers();
+		try {
+			const memory = await turnMemory(owner, {
+				repo: fakeRepo(before),
+				embed: null,
+				today: () => "2026-10-15",
+				projectName: null,
+				pendingSaves: async () => 1,
+			});
+			const attaching = memory?.attach(
+				[{ role: "user", content: "add an orders table" }],
+				[user("a", "add an orders table")],
+				workspace,
+			);
+			await vi.advanceTimersByTimeAsync(5000);
+			expect((await attaching)?.recall?.head).toBe("abc");
+		} finally {
+			vi.useRealTimers();
+		}
+		const broken = await turnMemory(owner, {
+			repo: fakeRepo(before),
+			embed: null,
+			projectName: null,
+			pendingSaves: async () => {
+				throw new Error("database down");
+			},
+		});
+		expect(
+			(
+				await broken?.attach(
+					[{ role: "user", content: "add an orders table" }],
+					[user("a", "add an orders table")],
+					workspace,
+				)
+			)?.recall?.head,
+		).toBe("abc");
+	});
+
+	it("are not waited for when the agent alone writes memory", async () => {
+		const pendingSaves = vi.fn(async () => 1);
+		const memory = await turnMemory(owner, {
+			repo: fakeRepo(before),
+			embed: null,
+			projectName: null,
+			writer: "agent",
+			pendingSaves,
+		});
+		await memory?.attach(
+			[{ role: "user", content: "add an orders table" }],
+			[user("a", "add an orders table")],
+			workspace,
+		);
+		expect(pendingSaves).not.toHaveBeenCalled();
 	});
 });
 

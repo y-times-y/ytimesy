@@ -61,6 +61,7 @@ import {
 	memoryChatTitles,
 	memoryProjectName,
 	memorySettings,
+	pendingMemorySaves,
 	type RecentChatMessage,
 	recentUnsavedMessages,
 } from "../adapters/memory-settings";
@@ -82,6 +83,14 @@ const MAX_EMBEDDED_LINES = 400;
  */
 const RECENT_WINDOW_SECONDS = 600;
 const RECENT_TIMEOUT_MS = 3000;
+/**
+ * A save hook still running for another chat's last turn is waited for this
+ * long, so what the user said there is read as a saved line; past it, the
+ * recent messages above stand in for it.
+ */
+const SAVE_WAIT_MS = 4000;
+const SAVE_POLL_MS = 500;
+const SAVE_WAIT_WINDOW_SECONDS = 120;
 /** Reading what a turn saved never holds up its completion for long. */
 const SAVED_LINES_TIMEOUT_MS = 5000;
 
@@ -135,6 +144,8 @@ export async function turnMemory(
 		writer?: MemoryWriter;
 		/** The user's latest messages in other chats that memory may not hold yet. */
 		recentMessages?: () => Promise<readonly RecentChatMessage[]>;
+		/** How many of the user's other chats have a save hook still to finish. */
+		pendingSaves?: () => Promise<number>;
 	} = {},
 ): Promise<TurnMemory | null> {
 	const settings = await memorySettings(owner.userId).catch((error) => {
@@ -167,6 +178,10 @@ export async function turnMemory(
 		options.recentMessages ??
 		(() =>
 			recentUnsavedMessages(owner.userId, owner.id, RECENT_WINDOW_SECONDS));
+	const pendingSaves =
+		options.pendingSaves ??
+		(() =>
+			pendingMemorySaves(owner.userId, owner.id, SAVE_WAIT_WINDOW_SECONDS));
 	const chatTitles =
 		options.chatTitles ??
 		((ids: readonly string[]) => memoryChatTitles(owner.userId, ids));
@@ -251,18 +266,28 @@ export async function turnMemory(
 			if (attachedMemory([current]).length) return unchanged;
 			const loaded = prefetched === undefined ? await prefetching : prefetched;
 			if (!loaded) return unchanged;
-			const { snapshot } = loaded;
+			let { snapshot, vectors } = loaded;
+			// A save that finishes while this waits is read here, not missed.
+			if (
+				mode === "full" &&
+				writer !== "agent" &&
+				(await waitForPendingSaves(pendingSaves))
+			) {
+				const latest = await repo.snapshot().catch(() => null);
+				if (latest && latest.head !== snapshot.head) {
+					snapshot = latest;
+					vectors = null;
+				}
+			}
 			const shown = attachedMemory(messages).join("\n");
-			const firstRequest =
-				items.filter((item) => item.kind === "userMessage").length === 1 &&
-				!memoryIndexShown(shown);
+			const firstMessage =
+				items.filter((item) => item.kind === "userMessage").length === 1;
+			const firstRequest = firstMessage && !memoryIndexShown(shown);
 			const entry = snapshot.files[MEMORY_ENTRY];
 			const showEntry =
 				firstRequest &&
 				entry !== undefined &&
 				entry.trim() !== EMPTY_MEMORY.trim();
-			const firstMessage =
-				items.filter((item) => item.kind === "userMessage").length === 1;
 			// Freshness without a model call: what the user just said in another
 			// chat, while its save hook may still be running.
 			const recent =
@@ -274,7 +299,7 @@ export async function turnMemory(
 					? await readHook({
 							snapshot,
 							embed,
-							vectors: loaded.vectors ?? undefined,
+							vectors: vectors ?? undefined,
 							userId: owner.userId,
 							query: latestUserText(items),
 							alreadyShown: (raw) =>
@@ -430,6 +455,50 @@ async function recentLines(
 	} finally {
 		clearTimeout(timer);
 		work.catch(() => {});
+	}
+}
+
+/**
+ * Waits up to SAVE_WAIT_MS for other chats' pending save hooks; whether
+ * there were any, so memory is worth reading again. Never fails.
+ */
+async function waitForPendingSaves(pending: () => Promise<number>) {
+	const deadline = Date.now() + SAVE_WAIT_MS;
+	const sleep = (ms: number) =>
+		new Promise<void>((resolve) => setTimeout(resolve, ms));
+	const ask = async () => {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const work = Promise.resolve().then(pending);
+		try {
+			return await Promise.race([
+				work,
+				new Promise<null>((resolve) => {
+					timer = setTimeout(
+						() => resolve(null),
+						Math.max(0, deadline - Date.now()),
+					);
+				}),
+			]);
+		} finally {
+			clearTimeout(timer);
+			work.catch(() => {});
+		}
+	};
+	try {
+		if (!(await ask())) return false;
+		while (Date.now() + SAVE_POLL_MS < deadline) {
+			await sleep(SAVE_POLL_MS);
+			if ((await ask()) === 0) return true;
+		}
+		console.warn("Memory saves of other chats were still running.", {
+			ms: SAVE_WAIT_MS,
+		});
+		return true;
+	} catch (error) {
+		console.warn("Pending memory saves could not be read.", {
+			error: error instanceof Error ? error.name : "unknown",
+		});
+		return false;
 	}
 }
 
