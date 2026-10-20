@@ -108,11 +108,14 @@ import {
 import {
 	type HardSetReviewRecord,
 	reviewLoopReport,
+	reviewStateForRecord,
 } from "./hard-set/review-report";
 import { HARD_SET, HARD_SET_CHUNKS, type HardSetTask } from "./hard-set/tasks";
 import {
+	childTranscript,
 	efficiencyRow,
 	efficiencyTable,
+	setupLogSummary,
 	type ToolCallSummary,
 	toolCallLine,
 	toolCallSummary,
@@ -253,6 +256,12 @@ type HardSetRecord = RunRecord & {
 	 */
 	status: "final" | "grading" | "error" | "queued" | "running";
 	setupSec: number;
+	/**
+	 * The setup script's own log lines (`[setup +Ns] ...`, its self-tests
+	 * included) and its last lines on failure: what the VM proved before the
+	 * agent started.
+	 */
+	setupLog?: string | null;
 	agentSec: number;
 	agentBudgetSec: number;
 	agentRequestedSec: number;
@@ -639,7 +648,9 @@ async function readReviewLoop(
 	model: string,
 	loaded?: ReviewLoopState[],
 ): Promise<HardSetReviewRecord | null> {
-	const state = (loaded ?? (await reviewLoopStates(sessionId))).at(-1);
+	const state = reviewStateForRecord(
+		loaded ?? (await reviewLoopStates(sessionId)),
+	);
 	if (!state) return null;
 	const cwd = state.checkpoint.cwd;
 	const notes: string[] = [];
@@ -1167,6 +1178,7 @@ async function provision(run: TaskRun) {
 				),
 	);
 	record.setupSec = seconds(started);
+	record.setupLog = setupLogSummary(setup.log, setup.exit);
 	console.info(
 		`${task.id}: setup ${setup.exit === 0 ? "ok" : `FAILED (${setup.exit})`} in ${record.setupSec}s`,
 	);
@@ -1301,10 +1313,21 @@ async function saveTranscript(run: TaskRun) {
 		console.warn("Model requests were not read:", safe(error));
 		return null;
 	});
+	// The subagents' own sessions (the review loop's checker among them):
+	// their tool calls and outputs, which the root's items do not hold and
+	// the eval user's cleanup deletes.
+	const children = run.userId
+		? await descendantAgentSessions(run.userId, run.sessionId)
+				.then((sessions) => sessions.map(childTranscript))
+				.catch((error) => {
+					console.warn("Subagent sessions were not read:", safe(error));
+					return null;
+				})
+		: null;
 	await writeFile(
 		join(runDir, `${run.task.id}.${run.record.attempt}.transcript.json`),
 		JSON.stringify(
-			{ items: state?.items, messages: state?.messages, requests },
+			{ items: state?.items, messages: state?.messages, requests, children },
 			null,
 			1,
 		),

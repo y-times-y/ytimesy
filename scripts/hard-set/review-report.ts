@@ -7,6 +7,19 @@ import {
 	checkerAccuracy,
 	formatCheckerAccuracy,
 } from "../../src/domain/attempt-loop";
+import type { ReviewLoopState } from "../../src/domain/review-loop";
+
+/**
+ * The review state a record reports: the latest one that ran a round. A
+ * session has one state per turn, and the checker's completion is delivered
+ * to the builder as a child event that wakes a short follow-up turn whose
+ * own state is "not-eligible (no files changed)"; the last state alone hid
+ * the round that was checked (rl-live-2).
+ */
+export function reviewStateForRecord(states: readonly ReviewLoopState[]) {
+	const ran = states.filter((state) => state.rounds.length > 0);
+	return ran.at(-1) ?? states.at(-1) ?? null;
+}
 
 export type HardSetReviewRound = {
 	n: number;

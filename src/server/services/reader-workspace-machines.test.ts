@@ -1,9 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceId } from "#/domain/ids";
+import { SHARED_RUNTIME_PARENTS } from "#/domain/subagent-reader";
 import { PROJECT_CWD_PATH } from "../adapters/freestyle/clone-project";
+import { commandRoot } from "./api-agent-command-tools";
+import { commandScopeRoot } from "./api-command-scope";
 import { writeAgentProjectSecrets } from "./project-secrets";
 import { forgetPreparedReaders } from "./reader-workspace-machines";
-import { machinesForAgentSession } from "./session-workspace-machines";
+import {
+	machinesForAgentSession,
+	sessionRuntimeRoot,
+} from "./session-workspace-machines";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 const vm = WorkspaceId("vm-parent");
@@ -158,5 +164,28 @@ describe("read-only subagent machines", () => {
 		await expect(writeAgentProjectSecrets(reader, vm, secrets)).rejects.toThrow(
 			"cannot write /tmp/ytimesy-secrets/agent.env",
 		);
+	});
+
+	// rl-live-2: the builder's first command created /tmp/ytimesy-api-commands
+	// as ubuntu 0755, so the checker's `mkdir -p <its command root>` failed
+	// and every bash call threw "Could not start or observe command".
+	it("opens every shared runtime parent a reader's commands write under", async () => {
+		const parent = (path: string) => path.slice(0, path.lastIndexOf("/"));
+		const { machines, commands } = fakeMachines();
+		await machinesForAgentSession(machines, {
+			id: "child-1",
+			taskPlacement: "shared",
+			agentRole: "checker",
+		}).exec(vm, "pwd", 1000);
+		for (const root of [
+			commandRoot("child-1"),
+			commandScopeRoot("turn-1"),
+			sessionRuntimeRoot("child-1"),
+		]) {
+			expect(SHARED_RUNTIME_PARENTS).toContain(parent(root));
+			expect(commands[0]).toContain(
+				`sudo -n install -d -m 1777 ${parent(root)} && sudo -n chmod 1777 ${parent(root)}`,
+			);
+		}
 	});
 });

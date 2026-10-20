@@ -3,7 +3,9 @@ import {
 	type HardSetReviewRecord,
 	type HardSetReviewRound,
 	reviewLoopReport,
+	reviewStateForRecord,
 } from "../scripts/hard-set/review-report";
+import type { ReviewLoopState } from "../src/domain/review-loop";
 
 const snapshot = {
 	cwd: "/app",
@@ -125,5 +127,29 @@ describe("hard set review report", () => {
 				{ task: "x", attempt: "1", status: "final", passed: true },
 			]),
 		).toEqual([]);
+	});
+});
+
+describe("hard set review state", () => {
+	// rl-live-2: the checker's completion woke a second builder turn whose
+	// own state was "not-eligible (no files changed)".
+	const checked = {
+		turnId: "turn-1",
+		outcome: "no-findings",
+		rounds: [{ n: 1 }],
+	} as unknown as ReviewLoopState;
+	const wake = {
+		turnId: "turn-2",
+		outcome: "not-eligible",
+		rounds: [],
+	} as unknown as ReviewLoopState;
+
+	it("reports the latest state that ran a round, not a later empty wake turn", () => {
+		expect(reviewStateForRecord([checked, wake])).toBe(checked);
+	});
+
+	it("falls back to the last state when no turn ran a round", () => {
+		expect(reviewStateForRecord([wake])).toBe(wake);
+		expect(reviewStateForRecord([])).toBeNull();
 	});
 });
