@@ -1,3 +1,5 @@
+import type { SidekickState } from "./sidekick";
+
 /**
  * Builder subagents (docs/subagents.md, decision 2026-10-17): the builder is
  * level 0 and spawns children through one `agent` tool. Placement follows
@@ -63,6 +65,19 @@ export type SubagentBudget = {
 	readonly tokens: number;
 	/** Set by agent_send stop: the step count at which the turn stops. */
 	readonly stopAtStep?: number;
+	/**
+	 * The model `tokens` is counted in (the tree's builder model). The child's
+	 * own and its descendants' tokens are weighted by their price relative to
+	 * it (budgetTokenWeight in subagent-usage.ts). Absent on older rows: raw
+	 * tokens.
+	 */
+	readonly priceBasis?: string;
+	/**
+	 * Lead mode fusion: this writer is the lead's persistent sidekick
+	 * (src/domain/sidekick.ts). steps and minutes then apply per round,
+	 * tokens over its whole life, with a per-round token cap in the state.
+	 */
+	readonly sidekick?: SidekickState;
 };
 
 type Level = 1 | 2 | 3;
@@ -249,6 +264,8 @@ export function subagentReportHeader(input: {
 	readonly costUsd?: number | null;
 	/** costUsd is a list-price estimate for a plan-billed route. */
 	readonly costEstimated?: boolean;
+	/** A sidekick's round, e.g. "round 2/6". */
+	readonly round?: string;
 }) {
 	const tokens =
 		input.tokens >= 1_000_000
@@ -260,7 +277,7 @@ export function subagentReportHeader(input: {
 			: input.costEstimated
 				? ` · ~$${input.costUsd.toFixed(2)} list-price est.`
 				: ` · $${input.costUsd.toFixed(2)}`;
-	return `[agent ${input.label} ${input.role} ${input.outcome} · ${input.steps} steps · ${Math.max(0, Math.round(input.minutes))}m · ${tokens} tokens${cost}]`;
+	return `[agent ${input.label} ${input.role} ${input.outcome}${input.round ? ` · ${input.round}` : ""} · ${input.steps} steps · ${Math.max(0, Math.round(input.minutes))}m · ${tokens} tokens${cost}]`;
 }
 
 export type WriterPatch = {
@@ -318,7 +335,7 @@ export function writerPatchBlock(
 	].join("\n");
 }
 
-/** The builder's delegation tools (loaded on demand through find_tools). */
+/** The builder's delegation tools (always in the tool list when offered). */
 export const AGENT_TOOL = "agent";
 export const AGENT_SEND_TOOL = "agent_send";
 

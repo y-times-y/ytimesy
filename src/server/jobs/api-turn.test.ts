@@ -42,6 +42,7 @@ vi.mock("../adapters/dev-eval-users", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../adapters/dev-eval-users")>()),
 	devEvalUsersEnabled: () => mocks.variant() !== undefined,
 	harnessVariantForUser: async () => mocks.variant(),
+	isDevEvalUser: async () => false,
 }));
 vi.mock("../services/attempt-loop", () => ({ createAttemptLoop: mocks.loop }));
 vi.mock("../services/review-loop", () => ({

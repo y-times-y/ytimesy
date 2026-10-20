@@ -1,6 +1,6 @@
 import type { AgentProviderId } from "./agent-provider";
 import { type AgentTaskStatus, agentTaskTree } from "./agent-task";
-import { modelBilling } from "./model-pricing";
+import { sessionBilling } from "./model-pricing";
 import {
 	type SessionItem,
 	type SessionTurnStatus,
@@ -18,6 +18,7 @@ import {
 import {
 	type AgentSpend,
 	agentSpend,
+	budgetTokenWeight,
 	forkVmMinutes,
 	subtreeSpends,
 	totalSpend,
@@ -68,14 +69,16 @@ export type SubagentTree = {
 	readonly builder: AgentSpend;
 };
 
-function sessionSpend(session: SubagentTreeSession, now: number) {
+function sessionSpend(
+	session: SubagentTreeSession,
+	now: number,
+	basisModelId: string | null,
+) {
 	return agentSpend({
 		items: sessionItemsFromUnknown(session.items) as readonly SessionItem[],
-		billing: modelBilling({
-			harness: session.harness === "codex" ? "codex" : "api",
-			modelId: session.listedModelId,
-		}),
+		billing: sessionBilling(session),
 		vmMinutes: forkVmMinutes(session.agentFork ?? null, now),
+		budgetWeight: budgetTokenWeight(session.listedModelId, basisModelId),
 	});
 }
 
@@ -90,8 +93,11 @@ export function subagentTree(
 	now: number,
 ): SubagentTree {
 	const byId = new Map(sessions.map((session) => [session.id, session]));
+	// Budgets are in the builder's tokens: each agent's tokens are weighted by
+	// its model's price relative to the builder's.
+	const basis = byId.get(rootId)?.listedModelId ?? null;
 	const spends = new Map(
-		sessions.map((session) => [session.id, sessionSpend(session, now)]),
+		sessions.map((session) => [session.id, sessionSpend(session, now, basis)]),
 	);
 	const subtrees = subtreeSpends(
 		sessions.map((session) => ({
@@ -142,7 +148,7 @@ export function subagentNodeRemaining(
 		? subagentRemaining(node.budget, {
 				steps: node.steps,
 				minutes: node.minutes,
-				tokens: node.subtree.tokens,
+				tokens: node.subtree.budgetTokens,
 			})
 		: null;
 }

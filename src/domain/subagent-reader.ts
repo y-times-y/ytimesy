@@ -24,11 +24,33 @@ export function readerScratchDirectory(sessionId: string) {
 export const READER_USER_SETUP_SCRIPT = `id -u ${READER_LINUX_USER} >/dev/null 2>&1 || useradd --system --user-group --no-create-home --home-dir ${READER_SCRATCH_ROOT} --shell /bin/bash ${READER_LINUX_USER}
 install -d -o root -g root -m 0755 ${READER_SCRATCH_ROOT}`;
 
-/** Runtime directories every session writes under; sticky like /tmp so a reader can add its own entries only. */
-const SHARED_RUNTIME_PARENTS = [
+/**
+ * Runs READER_USER_SETUP_SCRIPT as root from the builder's user (passwordless
+ * sudo). Anything that hands a directory to the reader runs it first: VMs
+ * booted from an image older than the reader user lack it.
+ */
+export function readerUserSetupCommand() {
+	const encoded = Buffer.from(READER_USER_SETUP_SCRIPT, "utf8").toString(
+		"base64",
+	);
+	return `sudo -n bash -c "$(printf %s ${encoded} | base64 -d)"`;
+}
+
+/**
+ * Runtime directories every session writes under; sticky like /tmp so a
+ * reader can add its own entries only. The first session to run a command
+ * creates them as its own user (0755), and on a shared VM that is the
+ * builder, so without this a reader cannot create its entry and every
+ * command it runs fails before it starts: its command records
+ * (`commandRoot`, api-agent-command-tools.ts), its process scopes
+ * (`COMMAND_SCOPES_DIRECTORY`, api-command-scope.ts) and its runtime root
+ * (`sessionRuntimeRoot`, session-workspace-machines.ts).
+ */
+export const SHARED_RUNTIME_PARENTS = [
+	"/tmp/ytimesy-api-commands",
 	"/tmp/ytimesy-api-command-scopes",
 	"/tmp/ytimesy-sessions",
-];
+] as const;
 
 /**
  * Prepares the shared VM for one reader, run as the builder's user (who has
@@ -41,12 +63,9 @@ export function readerPreparationScript(input: {
 	readonly checkout?: string;
 }) {
 	const scratch = readerScratchDirectory(input.sessionId);
-	const encoded = Buffer.from(READER_USER_SETUP_SCRIPT, "utf8").toString(
-		"base64",
-	);
 	return [
 		"set -e",
-		`sudo -n bash -c "$(printf %s ${encoded} | base64 -d)"`,
+		readerUserSetupCommand(),
 		`sudo -n install -d -o ${READER_LINUX_USER} -g ${READER_LINUX_USER} -m 0700 ${scratch}`,
 		...SHARED_RUNTIME_PARENTS.map(
 			(directory) =>
@@ -67,13 +86,21 @@ function shellQuote(value: string) {
 }
 
 /**
+ * Git refuses a repository another user owns ("dubious ownership"), which is
+ * every checkout a reader looks at; command-scope config marks them safe
+ * (safe.directory is honored there, unlike in a repository's own config).
+ */
+const READER_GIT_ENVIRONMENT =
+	"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0='*'";
+
+/**
  * One guest command run as the reader: its own HOME (the scratch
  * directory), the command passed base64-encoded so quoting never multiplies.
  */
 export function readerCommand(sessionId: string, command: string) {
 	const scratch = readerScratchDirectory(sessionId);
 	const encoded = Buffer.from(command, "utf8").toString("base64");
-	return `sudo -n -u ${READER_LINUX_USER} -- env HOME=${scratch} USER=${READER_LINUX_USER} LOGNAME=${READER_LINUX_USER} TMPDIR=${scratch} bash -c "$(printf %s ${encoded} | base64 -d)"`;
+	return `sudo -n -u ${READER_LINUX_USER} -- env HOME=${scratch} USER=${READER_LINUX_USER} LOGNAME=${READER_LINUX_USER} TMPDIR=${scratch} ${READER_GIT_ENVIRONMENT} bash -c "$(printf %s ${encoded} | base64 -d)"`;
 }
 
 /**

@@ -1,3 +1,11 @@
+import {
+	isModelRole,
+	parseRoleModel,
+	type RoleModels,
+	roleModelsFlags,
+	roleModelsFromUnknown,
+} from "./role-models";
+
 /**
  * Harness variants. DEFAULT_HARNESS_VARIANT is the product's behaviour for
  * everyone; in development, eval users (dev_eval_user) may pick other values
@@ -41,14 +49,18 @@ export const HARNESS_VARIANT_VALUES = {
 	/**
 	 * Code mode on a lean surface: on adds run_code, a JavaScript program
 	 * that calls the other tools (several reads, searches and commands in one
-	 * model call; src/server/services/code-mode-tool.ts); off offers the
-	 * surface unchanged (the default).
+	 * model call; src/server/services/code-mode-tool.ts); primary makes
+	 * run_code the main way to work (its description and instructions teach
+	 * batching) and a large MCP setup's search and call tools callable only
+	 * from inside run_code (searchTools(query) for their declarations);
+	 * agent, agent_send and enter_plan_mode stay in the tool list. off
+	 * offers the surface unchanged (the default).
 	 */
-	codeMode: ["off", "on"],
+	codeMode: ["off", "on", "primary"],
 	/**
 	 * Builder subagents (docs/subagents.md): on gives the builder the agent
-	 * and agent_send tools (loaded on demand through find_tools, with the
-	 * other rarely used tools), the orchestration prompt block, per-level
+	 * and agent_send tools (ordinary tools in the tool list, in every code
+	 * mode), the orchestration prompt block, per-level
 	 * budgets and the subagent tree; off offers the surface unchanged (the
 	 * default) until the evals show it pays off.
 	 */
@@ -98,11 +110,28 @@ export const HARNESS_VARIANT_VALUES = {
 	 * combined with attempts=3 (the attempt loop wins).
 	 */
 	review: ["off", "on"],
+	/**
+	 * Lead mode (src/domain/sidekick.ts, Devin Fusion style): fusion makes
+	 * the root builder a lead that plans, briefs, reviews and answers the
+	 * user, and makes its first writer a persistent sidekick (cheaper model
+	 * via roleModels.writer) that keeps its context and fork across rounds of
+	 * briefs and feedback, its fork synced with the lead's checkout before
+	 * each round. Implies the agent tools (as subagents=on). off = unchanged
+	 * behaviour (the default).
+	 */
+	lead: ["off", "fusion"],
 } as const;
 
 type Values = typeof HARNESS_VARIANT_VALUES;
 export type HarnessVariant = {
 	readonly [Key in keyof Values]: Values[Key][number];
+} & {
+	/**
+	 * A model per subagent role (src/domain/role-models.ts): writer,
+	 * researcher, reviewer, checker, judge. Empty (the default): every child
+	 * runs on its parent's model. Flags: `roleModels.<role>=<model>[@<effort>]`.
+	 */
+	readonly roleModels: RoleModels;
 };
 export type MemoryWording = HarnessVariant["memoryWording"];
 export type MemoryWriter = HarnessVariant["memoryWriter"];
@@ -114,6 +143,7 @@ export type PrEvidence = HarnessVariant["prEvidence"];
 export type InstructionVariant = HarnessVariant["instructions"];
 export type AttemptsMode = HarnessVariant["attempts"];
 export type ReviewMode = HarnessVariant["review"];
+export type LeadMode = HarnessVariant["lead"];
 
 export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	memoryWording: "rules",
@@ -126,6 +156,8 @@ export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	instructions: "default",
 	attempts: "1",
 	review: "off",
+	lead: "off",
+	roleModels: {},
 };
 
 /**
@@ -153,7 +185,9 @@ export function harnessVariantFromUnknown(value: unknown): HarnessVariant {
 	const variant: Record<string, unknown> = { ...DEFAULT_HARNESS_VARIANT };
 	if (value && typeof value === "object" && !Array.isArray(value))
 		for (const [key, entry] of Object.entries(value))
-			if (isKey(key) && validValue(key, entry)) variant[key] = entry;
+			if (key === "roleModels")
+				variant.roleModels = roleModelsFromUnknown(entry);
+			else if (isKey(key) && validValue(key, entry)) variant[key] = entry;
 	return variant as HarnessVariant;
 }
 
@@ -165,6 +199,18 @@ export function harnessVariantFromFlags(
 	for (const flag of flags)
 		for (const pair of flag.split(",")) {
 			const [key, value, ...rest] = pair.split("=").map((part) => part.trim());
+			const role = /^roleModels\.(.+)$/.exec(key ?? "")?.[1];
+			if (role !== undefined && value !== undefined && !rest.length) {
+				if (!isModelRole(role))
+					throw new Error(
+						`--variant roleModels.<role> takes a role in writer, researcher, reviewer, checker, judge; got "${role}".`,
+					);
+				variant.roleModels = {
+					...(variant.roleModels as RoleModels),
+					[role]: parseRoleModel(value),
+				};
+				continue;
+			}
 			if (!key || value === undefined || rest.length || !isKey(key))
 				throw new Error(
 					`--variant expects key=value with key in ${Object.keys(HARNESS_VARIANT_VALUES).join(", ")}; got "${pair}".`,
@@ -183,16 +229,20 @@ export function harnessVariantChanges(
 	variant: HarnessVariant,
 ): Partial<HarnessVariant> {
 	return Object.fromEntries(
-		Object.entries(variant).filter(
-			([key, value]) =>
-				DEFAULT_HARNESS_VARIANT[key as keyof HarnessVariant] !== value,
+		Object.entries(variant).filter(([key, value]) =>
+			key === "roleModels"
+				? Object.keys(value ?? {}).length > 0
+				: DEFAULT_HARNESS_VARIANT[key as keyof HarnessVariant] !== value,
 		),
 	) as Partial<HarnessVariant>;
 }
 
 export function harnessVariantLabel(variant: HarnessVariant) {
-	const changes = Object.entries(harnessVariantChanges(variant));
-	return changes.length
-		? changes.map(([key, value]) => `${key}=${value}`).join(",")
-		: "default";
+	const changes = Object.entries(harnessVariantChanges(variant)).flatMap(
+		([key, value]) =>
+			key === "roleModels"
+				? roleModelsFlags(value as RoleModels)
+				: [`${key}=${value}`],
+	);
+	return changes.length ? changes.join(",") : "default";
 }

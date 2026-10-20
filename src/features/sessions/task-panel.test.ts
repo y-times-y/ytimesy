@@ -53,6 +53,7 @@ it("explains that subagents appear once started when empty", () => {
 it("shows each subagent's role, VM, budget use and spend, and the tree total", () => {
 	const spend = (tokens: number, costUsd: number, vmMinutes = 0) => ({
 		tokens,
+		budgetTokens: tokens,
 		inputTokens: tokens,
 		outputTokens: 0,
 		cacheReadTokens: 0,

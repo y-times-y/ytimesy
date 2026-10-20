@@ -2,7 +2,7 @@ import { SessionItemId } from "./ids";
 import type { DynamicToolCallItem } from "./session-item";
 
 /**
- * Code mode (harness variant codeMode=on): one tool whose input is a
+ * Code mode (harness variant codeMode=on|primary): one tool whose input is a
  * JavaScript program that calls the builder's other tools. These helpers are
  * shared by the server (what a run records) and the chat (one card listing
  * the program's inner calls).
@@ -16,9 +16,38 @@ export type CodeModeCallLog = {
 	readonly input: string;
 	readonly status: "completed" | "failed" | "refused";
 	readonly ms: number;
+	/** When the call started, in ms after the program's first call started (absent in older records). */
+	readonly at?: number;
 	/** What the program received (or the error), clipped. */
 	readonly output: string;
 };
+
+/**
+ * The most inner calls of one program that ran at the same time (1 = one
+ * after another), from each call's start and duration; null when the
+ * record predates start times.
+ */
+export function codeModeConcurrency(
+	calls: readonly CodeModeCallLog[],
+): number | null {
+	if (!calls.length) return 0;
+	if (calls.some((call) => typeof call?.at !== "number")) return null;
+	const edges = calls.flatMap((call) => [
+		{ time: call.at as number, delta: 1 },
+		// Ends sort before starts at the same instant: back-to-back is not overlap.
+		{ time: (call.at as number) + Math.max(1, call.ms), delta: -1 },
+	]);
+	edges.sort(
+		(left, right) => left.time - right.time || left.delta - right.delta,
+	);
+	let running = 0;
+	let most = 0;
+	for (const edge of edges) {
+		running += edge.delta;
+		most = Math.max(most, running);
+	}
+	return most;
+}
 
 /** What run_code returns (and the chat stores). */
 export type CodeModeResult = {

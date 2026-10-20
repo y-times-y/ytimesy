@@ -1,5 +1,10 @@
 import { type ApiTokenUsage, addApiTokenUsage } from "./api-token-usage";
-import { type ModelBilling, usageCostUsd } from "./model-pricing";
+import {
+	type ModelBilling,
+	modelPrice,
+	referenceTokenPrice,
+	usageCostUsd,
+} from "./model-pricing";
 import type { SessionItem } from "./session-item";
 
 /**
@@ -11,6 +16,13 @@ import type { SessionItem } from "./session-item";
 /** One agent's own spend, children excluded. */
 export type AgentSpend = {
 	readonly tokens: number;
+	/**
+	 * Tokens as budgets count them: weighted by this agent's price relative to
+	 * the tree's basis model (the builder's), so a cheaper child's tokens count
+	 * for less (budgetTokenWeight). Equal to `tokens` when every model in the
+	 * tree has the same price or a price is unknown.
+	 */
+	readonly budgetTokens: number;
 	readonly inputTokens: number;
 	readonly outputTokens: number;
 	readonly cacheReadTokens: number;
@@ -27,6 +39,7 @@ export type AgentSpend = {
 
 export const NO_SPEND: AgentSpend = {
 	tokens: 0,
+	budgetTokens: 0,
 	inputTokens: 0,
 	outputTokens: 0,
 	cacheReadTokens: 0,
@@ -51,14 +64,42 @@ export function usageTokens(usage: ApiTokenUsage | null | undefined) {
 	return (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0);
 }
 
+/** Budget weights are clamped: a free or very cheap child gets at most 4× the raw tokens (the hard cap). */
+export const BUDGET_WEIGHT_MIN = 0.25;
+export const BUDGET_WEIGHT_MAX = 4;
+
+/**
+ * How much one of `modelId`'s tokens counts against a budget set in the
+ * basis model's tokens: their reference prices' ratio (a typical agent mix,
+ * mostly cache reads), clamped to [BUDGET_WEIGHT_MIN, BUDGET_WEIGHT_MAX].
+ * 1 when either price is unknown; a `:free` route weighs the minimum.
+ */
+export function budgetTokenWeight(
+	modelId: string | null | undefined,
+	basisModelId: string | null | undefined,
+) {
+	if (!modelId || !basisModelId || modelId === basisModelId) return 1;
+	if (/:free$/.test(modelId)) return BUDGET_WEIGHT_MIN;
+	const model = modelPrice(modelId);
+	const basis = modelPrice(basisModelId);
+	if (!model || !basis) return 1;
+	const ratio = referenceTokenPrice(model) / referenceTokenPrice(basis);
+	if (!Number.isFinite(ratio)) return 1;
+	return Math.min(BUDGET_WEIGHT_MAX, Math.max(BUDGET_WEIGHT_MIN, ratio));
+}
+
 export function agentSpend(input: {
 	readonly items: readonly SessionItem[];
 	readonly billing: ModelBilling;
 	readonly vmMinutes?: number;
+	/** budgetTokenWeight of this agent's model against the tree's basis. */
+	readonly budgetWeight?: number;
 }): AgentSpend {
 	const usage = sessionTokenUsage(input.items);
+	const tokens = usageTokens(usage);
 	return {
-		tokens: usageTokens(usage),
+		tokens,
+		budgetTokens: Math.round(tokens * (input.budgetWeight ?? 1)),
 		inputTokens: usage?.inputTokens ?? 0,
 		outputTokens: usage?.outputTokens ?? 0,
 		cacheReadTokens: usage?.cacheReadTokens ?? 0,
@@ -73,6 +114,7 @@ export function totalSpend(spends: readonly AgentSpend[]): AgentSpend {
 	return spends.reduce(
 		(total, spend) => ({
 			tokens: total.tokens + spend.tokens,
+			budgetTokens: total.budgetTokens + spend.budgetTokens,
 			inputTokens: total.inputTokens + spend.inputTokens,
 			outputTokens: total.outputTokens + spend.outputTokens,
 			cacheReadTokens: total.cacheReadTokens + spend.cacheReadTokens,

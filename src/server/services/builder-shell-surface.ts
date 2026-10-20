@@ -45,6 +45,8 @@ export function builderShellTools(tools: ToolSet): ToolSet {
 /** What a lean surface adds to the turn besides its tools. */
 export type LeanBuilderSurface = {
 	shape: LeanToolShape;
+	/** A read-only subagent's surface: commands and reads, no file-changing tools. */
+	readOnly: boolean;
 	/** How runtime notices tell the model to read a background command's output. */
 	commandReader: string;
 	/** The completion gate's hint for commands still running. */
@@ -71,21 +73,38 @@ export function builderToolSurface(input: {
 	tools: ToolSet;
 	/** Used by the lean variants only. */
 	lean: LeanSurfaceContext;
+	/**
+	 * A read-only subagent (researcher, reviewer, checker): its commands run
+	 * as the reader user, and a lean shape's write and edit tools are left
+	 * out because they could only fail.
+	 */
+	readOnly?: boolean;
 }): { tools: ToolSet; lean?: LeanBuilderSurface } {
 	if (input.variant === "current")
 		return { tools: builderShellTools(input.tools) };
 	const shape = leanToolShape(input.variant, input.modelId);
 	const { tools, engine } = leanShapeTools(shape, input.tools, input.lean);
-	const names: { stdin?: string; read?: string } = LEAN_SHAPE_TOOLS[shape];
+	const names: { stdin?: string; read?: string; write?: string; edit: string } =
+		LEAN_SHAPE_TOOLS[shape];
+	const changing = new Set(
+		input.readOnly
+			? [names.write, names.edit].filter(
+					(name): name is string => !!name && name !== names.read,
+				)
+			: [],
+	);
 	return {
 		tools: {
-			...tools,
+			...Object.fromEntries(
+				Object.entries(tools).filter(([name]) => !changing.has(name)),
+			),
 			...(input.tools.report_task_blocked
 				? { report_task_blocked: input.tools.report_task_blocked }
 				: {}),
 		},
 		lean: {
 			shape,
+			readOnly: !!input.readOnly,
 			commandReader: names.stdin
 				? `${names.stdin} (its session_id)`
 				: `${names.read} on ${engine.outputPath("<id>")}`,

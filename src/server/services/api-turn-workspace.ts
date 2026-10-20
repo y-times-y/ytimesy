@@ -127,6 +127,14 @@ export function deferredApiTurnWorkspace(
 				userId: owner.userId,
 				sessionId: owner.id,
 				additionalRepositoryNames,
+				// A writer subagent works on a fork of its parent's VM (never pristine).
+				forkedFrom:
+					owner.parentSessionId && owner.agentFork?.vmId && owner.agentFork.base
+						? {
+								parentSessionId: owner.parentSessionId,
+								forkBase: owner.agentFork.base,
+							}
+						: undefined,
 			});
 		// A writer subagent's patch is measured from its pinned baseline.
 		if (bound.session.agentRole === "writer") await baselines();

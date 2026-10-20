@@ -46,6 +46,8 @@ type PublicHarnessSession = PublicCodexSession;
 export function startPreparedAgentTask(
 	scope: HarnessSessionScope,
 	taskSessionId: string,
+	/** The first turn's reasoning effort (a role model's); the route default when unset. */
+	options?: { readonly reasoning?: string },
 ): Effect.Effect<{ id: string; machineId: string | null }, unknown> {
 	return Effect.gen(function* () {
 		if (!scope.projectId) throw new Error("The project is not available.");
@@ -66,6 +68,7 @@ export function startPreparedAgentTask(
 				{
 					text: task.taskPrompt as string,
 					modelId: task.listedModelId as string,
+					...(options?.reasoning ? { variant: options.reasoning } : {}),
 				},
 				true,
 			),

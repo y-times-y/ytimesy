@@ -10,3 +10,12 @@ it("makes the root chat the builder, in plain words", () => {
 	expect(direct).not.toContain("read-only lead");
 	expect(direct).not.toContain("create_task");
 });
+
+it("softens the root line only when the builder can delegate", () => {
+	const delegating = cloudAgentRoleInstructions({ delegates: true });
+	expect(delegating).toContain(
+		"work in this workspace. Inspect, implement, run the checks and answer the user yourself, delegating only as below.",
+	);
+	expect(delegating).not.toContain("work directly");
+	expect(cloudAgentRoleInstructions()).toContain("work directly");
+});

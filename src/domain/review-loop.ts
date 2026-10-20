@@ -1,7 +1,7 @@
 import type { ApiTokenUsage } from "./api-token-usage";
-import type { AttemptSnapshot } from "./attempt-loop";
+import type { AttemptSnapshot, LoopChildModel } from "./attempt-loop";
 import type { ReviewVerdict } from "./checker-brief";
-import { NO_VERDICT_FAILURE } from "./checker-verdict";
+import { type CheckerTest, NO_VERDICT_FAILURE } from "./checker-verdict";
 
 /**
  * The review loop (harness variant review=on, decision 2026-10-18 "A"):
@@ -30,6 +30,8 @@ export const REVIEW_LOOP_LIMITS = {
 	maxFindings: 8,
 	/** Assumptions handed over per round (after failures and unmet requirements). */
 	maxAssumptions: 3,
+	/** The checker's failing tests handed over per round, to reproduce its findings. */
+	maxFailingTests: 5,
 } as const;
 
 /** Files that run: code, scripts, build and service definitions. */
@@ -131,18 +133,43 @@ export function reviewFindings(verdict: ReviewVerdict): ReviewFinding[] {
 export const hasConcreteFindings = (findings: readonly ReviewFinding[]) =>
 	findings.some((finding) => finding.kind !== "assumption");
 
+/** The checker's own tests that failed, with the command and output to reproduce each. */
+export function failingTests(verdict: ReviewVerdict | null): CheckerTest[] {
+	return (verdict?.tests ?? [])
+		.filter((test) => !test.passed)
+		.slice(0, REVIEW_LOOP_LIMITS.maxFailingTests);
+}
+
+function failingTestLine(test: CheckerTest) {
+	const output = test.output ?? test.evidence;
+	return [
+		`- ${clip(test.name, 200)}`,
+		test.command ? `: \`${clip(test.command, 500)}\`` : "",
+		output ? ` -> ${clip(output.replace(/\s*\n\s*/g, " | "), 600)}` : "",
+	].join("");
+}
+
 /**
  * The one runtime notice a review round adds to the builder's own run: the
- * checker's findings with their evidence, and what to do with them.
+ * checker's findings with their evidence, the failing tests it wrote (command
+ * and output, to reproduce them), and what to do with them.
  */
 export function reviewNotice(input: {
 	readonly round: number;
 	readonly maxRounds: number;
 	readonly findings: readonly ReviewFinding[];
+	readonly failingTests?: readonly CheckerTest[];
 }) {
+	const tests = input.failingTests ?? [];
 	return [
 		`Runtime notice, not a new user request. An independent checker reviewed your work against the request above (review ${input.round} of ${input.maxRounds}). It saw only the request and the files, not your reasoning, and it can be wrong. Its findings:`,
 		...input.findings.map((finding) => `${finding.id}. ${finding.text}`),
+		...(tests.length
+			? [
+					"Tests it wrote that failed (run each command to reproduce; the test itself may be wrong):",
+					...tests.map(failingTestLine),
+				]
+			: []),
 		"Verify each finding yourself. Fix the real ones and re-run what proves each fix; do not change correct work to satisfy a wrong finding. End your final answer with one line per finding: `F1: fixed` or `F1: rejected - <why>`.",
 	].join("\n");
 }
@@ -262,6 +289,8 @@ export type ReviewRound = {
 		readonly budgetMs: number;
 		readonly endedAt?: number;
 		readonly usage?: ApiTokenUsage | null;
+		/** The checker's own model (roleModels); absent = the builder's. */
+		readonly model?: LoopChildModel;
 	};
 	readonly verdict: ReviewVerdict | null;
 	readonly timedOut?: boolean;

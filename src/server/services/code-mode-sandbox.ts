@@ -112,17 +112,57 @@ function loadQuickJS() {
 /** Tool names the guest sees as tools[name]; MCP names may contain dashes. */
 const TOOL_NAME = /^[A-Za-z_$][A-Za-z0-9_$-]{0,63}$/;
 
-function prelude(names: readonly string[]) {
+/** A tool a program can look up with searchTools(query) (code mode primary). */
+export type CodeModeCatalogEntry = {
+	readonly name: string;
+	/** Its TypeScript-like declaration, as searchTools returns it. */
+	readonly declaration: string;
+};
+
+/**
+ * searchTools(query): the declarations of the catalog's tools whose name or
+ * declaration contains a word of the query (every tool for an empty query
+ * or no match, with a note); ALL_TOOLS: every declaration. Both run in the
+ * guest, so a lookup is no tool call.
+ */
+function discoveryPrelude(catalog: readonly CodeModeCatalogEntry[]) {
+	if (!catalog.length) return "";
+	return `
+	const catalog = ${JSON.stringify(catalog.map((entry) => ({ name: entry.name, declaration: entry.declaration, text: `${entry.name} ${entry.declaration}`.toLowerCase() })))};
+	globalThis.ALL_TOOLS = Object.freeze(catalog.map((entry) => entry.declaration));
+	globalThis.searchTools = (query) => {
+		const words = String(query ?? "").toLowerCase().match(/[a-z0-9]+/g) ?? [];
+		const hits = catalog.filter((entry) => words.some((word) => entry.text.includes(word)));
+		return hits.length
+			? hits.map((entry) => entry.declaration).join("\\n\\n")
+			: (words.length ? "// No tool matched; every tool:\\n" : "") + catalog.map((entry) => entry.declaration).join("\\n\\n");
+	};`;
+}
+
+function prelude(
+	names: readonly string[],
+	catalog: readonly CodeModeCatalogEntry[] = [],
+) {
 	return `"use strict";
-(() => {
+(() => {${discoveryPrelude(catalog)}
 	const call = globalThis.__ytimesyCall;
 	const write = globalThis.__ytimesyLog;
 	delete globalThis.__ytimesyCall;
 	delete globalThis.__ytimesyLog;
+	// A failed call resolves to a failure value instead of rejecting, so one
+	// missing file or refused edit never sinks a Promise.all and the other
+	// results still come back.
+	const failed = (name, error) => {
+		const message = error && typeof error.message === "string" ? error.message : String(error);
+		return Object.freeze({ ok: false, tool: name, error: message, toString: () => "[" + name + " failed] " + message });
+	};
 	const tools = {};
 	for (const name of ${JSON.stringify(names)}) {
 		tools[name] = (args) =>
-			call(name, JSON.stringify(args === undefined ? {} : args)).then((text) => JSON.parse(text));
+			call(name, JSON.stringify(args === undefined ? {} : args)).then(
+				(text) => JSON.parse(text),
+				(error) => failed(name, error),
+			);
 	}
 	const show = (value) => {
 		if (typeof value === "string") return value;
@@ -132,6 +172,9 @@ function prelude(names: readonly string[]) {
 	const log = (level) => (...values) => write(level, values.map(show).join(" "));
 	globalThis.tools = Object.freeze(tools);
 	globalThis.console = Object.freeze({ log: log("log"), info: log("info"), warn: log("warn"), error: log("error"), debug: log("debug") });
+	// text(...) adds to what comes back as the program goes, kept even if it later throws.
+	globalThis.text = log("log");
+	globalThis.print = globalThis.text;
 })();`;
 }
 
@@ -169,6 +212,8 @@ export async function runSandboxedProgram(input: {
 	call: SandboxToolCall;
 	signal: AbortSignal;
 	limits?: Partial<CodeModeLimits>;
+	/** Tools searchTools / ALL_TOOLS describe (code mode primary). */
+	catalog?: readonly CodeModeCatalogEntry[];
 }): Promise<SandboxOutcome> {
 	const limits = { ...DEFAULT_CODE_MODE_LIMITS, ...input.limits };
 	const names = input.tools.filter((name) => TOOL_NAME.test(name));
@@ -324,7 +369,9 @@ export async function runSandboxedProgram(input: {
 	};
 
 	try {
-		const setup = guest(() => vm.evalCode(prelude(names), "prelude.js"));
+		const setup = guest(() =>
+			vm.evalCode(prelude(names, input.catalog), "prelude.js"),
+		);
 		if (setup.error) {
 			const message = errorText(vm, setup.error);
 			setup.error.dispose();

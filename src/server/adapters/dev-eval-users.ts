@@ -62,6 +62,7 @@ export async function codexCredentialUserId(userId: string) {
  * Whether this is a throwaway eval user, whatever the deployment's switches
  * say: eval users own copies of their owner's project rows (same repository
  * name and installation), so nothing may push to GitHub for them anywhere.
+ * Their model requests are also recorded for the runner (model-request-log.ts).
  */
 export async function isDevEvalUser(userId: string): Promise<boolean> {
 	return Boolean(await evalUserRow(userId));

@@ -5,7 +5,11 @@ import {
 	type CodeModeCallLog,
 	type CodeModeResult,
 } from "#/domain/code-mode";
-import { leanToolNames, leanToolRole } from "#/domain/harness-model-profile";
+import {
+	LEAN_COMMAND_ARGUMENTS,
+	leanToolNames,
+	leanToolRole,
+} from "#/domain/harness-model-profile";
 import { reportedToolFailure } from "#/domain/harness-performance";
 import {
 	CALL_MCP_TOOL_TOOL,
@@ -17,7 +21,12 @@ import {
 	claimAgentTaskCommand,
 	completeAgentTaskCommand,
 } from "../adapters/agent-task-command-receipts";
-import { type CodeModeLimits, runSandboxedProgram } from "./code-mode-sandbox";
+import { toolDeclaration } from "./code-mode-declarations";
+import {
+	type CodeModeCatalogEntry,
+	type CodeModeLimits,
+	runSandboxedProgram,
+} from "./code-mode-sandbox";
 import { LEAN_COMMAND_MAX_SECONDS } from "./lean-engine";
 import { keepHead, LEAN_MAX_BYTES, LEAN_MAX_LINES } from "./lean-output";
 import { toolRequestFingerprint } from "./tool-execution-identity";
@@ -33,13 +42,20 @@ const RECORD_CHARACTERS = 2_000;
 const MAX_TOOL_CALLS = 40;
 
 /**
+ * How a failed inner call reaches the program (code-mode-sandbox.ts): a
+ * value, not a rejection, so one failure never sinks a Promise.all.
+ */
+const FAILURE_VALUE =
+	"A failed call does not throw: it resolves to { ok: false, error }, so one failure never sinks a Promise.all; check r.ok === false before using a result.";
+
+/**
  * The tools a program may call: the lean surface's own tools (every shape's
- * names), the user's MCP tools and the subagent tools (subagents=on; a
- * program calls them without loading them through find_tools), never
+ * names), the user's MCP tools and the subagent tools (subagents=on; also
+ * in the tool list, so the model may call them either way), never
  * provider-hosted tools (web search runs inside the model call, so a program
  * cannot call it), plan, secret or turn-ending tools.
  */
-function callableTools(tools: ToolSet) {
+function callableTools(tools: ToolSet, deferred: ReadonlySet<string>) {
 	const lean = new Set<string>(leanToolNames());
 	return Object.fromEntries(
 		Object.entries(tools).filter(
@@ -48,6 +64,7 @@ function callableTools(tools: ToolSet) {
 				definition.execute &&
 				definition.type !== "provider" &&
 				(lean.has(name) ||
+					deferred.has(name) ||
 					name === AGENT_TOOL ||
 					name === AGENT_SEND_TOOL ||
 					name === SEARCH_MCP_TOOLS_TOOL ||
@@ -248,10 +265,33 @@ export function codeModeTool(input: {
 	turnId: string;
 	toolCallPrefix?: string;
 	limits?: Partial<CodeModeLimits>;
+	/**
+	 * primary (harness variant codeMode=primary): run_code is the main way to
+	 * work; its description teaches batching, and `deferred` tools (a large
+	 * MCP setup's search and call tools) are callable only from programs,
+	 * found with searchTools(query).
+	 */
+	mode?: "on" | "primary";
+	/** Tools not in the request's tool list that programs may call (primary). */
+	deferred?: readonly string[];
 }): Tool | undefined {
-	const callable = callableTools(input.tools);
+	const deferred = new Set(
+		input.mode === "primary" ? (input.deferred ?? []) : [],
+	);
+	const callable = callableTools(input.tools, deferred);
 	const names = Object.keys(callable);
 	if (!names.length) return undefined;
+	const hidden = names.filter((name) => deferred.has(name));
+	let catalog: Promise<CodeModeCatalogEntry[]> | undefined;
+	const loadCatalog = () => {
+		catalog ??= Promise.all(
+			hidden.map(async (name) => ({
+				name,
+				declaration: await toolDeclaration(name, callable[name] as Tool),
+			})),
+		);
+		return catalog;
+	};
 	const journal =
 		input.journal ??
 		((toolCallId: string, fingerprint: string) =>
@@ -266,8 +306,17 @@ export function codeModeTool(input: {
 		command && read
 			? ` Example: const [a, b, t] = await Promise.all([tools.${read}({ path: "src/a.ts" }), tools.${read}({ path: "src/b.ts" }), tools.${command}({ command: "npm test 2>&1 | tail -20" })]); return { a: a.split("\\n").length, b: b.includes("export"), tests: t.exitCode };`
 			: "";
+	const description =
+		input.mode === "primary"
+			? primaryDescription(
+					names.filter((name) => !deferred.has(name)),
+					hidden.length > 0,
+				)
+			: undefined;
 	return tool({
-		description: `Run a JavaScript program (the body of an async function) that calls your tools, to do several steps in one call. Available: ${names.map((name) => `tools.${name}(args)`).join(", ")}; each takes the same arguments as the tool and resolves to the text it would show you (${command ? `tools.${command} resolves to { output, exitCode }` : "MCP tools to their result"}), or rejects with an Error. Use Promise.all for independent calls. Only the return value (JSON-serializable, same size limit as a file read) and console.log output come back, with one line per tool call, so filter large outputs in code. No network, imports, timers or environment; at most ${MAX_TOOL_CALLS} tool calls per program.${example}`,
+		description:
+			description ??
+			`Run a JavaScript program (the body of an async function) that calls your tools, to do several steps in one call. Available: ${names.map((name) => `tools.${name}(args)`).join(", ")}; each takes the same arguments as the tool and resolves to the text it would show you (${command ? `tools.${command} resolves to { output, exitCode }` : "MCP tools to their result"}). ${FAILURE_VALUE} Use Promise.all for independent calls. Only the return value (JSON-serializable, same size limit as a file read) and text(...) output come back, with one line per tool call, so filter large outputs in code. No network, imports, timers or environment; at most ${MAX_TOOL_CALLS} tool calls per program.${example}`,
 		inputSchema: codeInput,
 		execute: async (raw, options) => {
 			const args = codeInput.parse(raw);
@@ -286,9 +335,12 @@ export function codeModeTool(input: {
 				timeout.signal,
 			]);
 			const calls: CodeModeCallLog[] = [];
+			let firstStarted: number | undefined;
 			const call = async (name: string, callArgs: unknown, index: number) => {
 				const definition = callable[name];
 				const started = performance.now();
+				firstStarted ??= started;
+				const at = Math.round(started - firstStarted);
 				const log = (
 					status: CodeModeCallLog["status"],
 					output: unknown,
@@ -298,6 +350,7 @@ export function codeModeTool(input: {
 						input: clip(asText(callArgs ?? {}), RECORD_CHARACTERS),
 						status,
 						ms: Math.round(performance.now() - started),
+						at,
 						output: clip(asText(output), RECORD_CHARACTERS),
 					};
 				};
@@ -359,6 +412,7 @@ export function codeModeTool(input: {
 					code: args.code,
 					tools: names,
 					signal,
+					...(hidden.length ? { catalog: await loadCatalog() } : {}),
 					limits: {
 						maxToolCalls: MAX_TOOL_CALLS,
 						resultBytes: 4 * LEAN_MAX_BYTES,
@@ -409,4 +463,47 @@ function storedResult(result: CodeModeResult): CodeModeResult {
 				calls: result.calls,
 			}
 		: result;
+}
+
+/** Read and command argument names per lean shape, for the description's examples. */
+function exampleKeys(names: readonly string[]) {
+	const command = names.find((name) => leanToolRole(name) === "command");
+	const read = names.find((name) => leanToolRole(name) === "read");
+	const edit = names.find((name) => leanToolRole(name) === "edit");
+	return {
+		command,
+		commandKey: (command && LEAN_COMMAND_ARGUMENTS[command]) ?? "command",
+		read,
+		readKey: read === "read" ? "path" : "file_path",
+		edit,
+	};
+}
+
+/**
+ * run_code's description in code mode primary: the batching patterns as
+ * short examples in the surface's own tool names. It depends only on the
+ * turn's tool names, so it is byte-stable across steps.
+ */
+function primaryDescription(direct: readonly string[], hasDeferred: boolean) {
+	const { command, commandKey, read, readKey, edit } = exampleKeys(direct);
+	const readCall = (path: string) =>
+		read
+			? `tools.${read}({ ${readKey}: "${path}" })`
+			: `tools.${command}({ ${commandKey}: "cat ${path}" })`;
+	const run = (text: string) =>
+		`tools.${command}({ ${commandKey}: "${text}" })`;
+	const examples = command
+		? [
+				`- Parallel reads and searches: const [a, b, hits] = await Promise.all([${readCall("src/a.ts")}, ${readCall("src/b.ts")}, ${run("rg -n parseHeader src")}]); return { a, b, hits };`,
+				`- Edit then test: const e = await ${edit === "edit" && readKey === "path" ? `tools.edit({ path: "src/a.ts", edits: [{ old_string: "i < n", new_string: "i <= n" }] })` : `tools.${edit ?? command}(…)`}; if (e.ok === false) return e.error; const t = await ${run("npm test 2>&1 | tail -40")}; return t.exitCode === 0 ? "pass" : t.output;`,
+				`- Report as you go: text("build:", b.exitCode) adds a line to what comes back, even if a later step throws.`,
+				`- Return only what you need: filter, slice or count long output in code (e.g. the failing test names), not the whole log.`,
+			]
+		: [];
+	return [
+		`Run a JavaScript program (the body of an async function) that calls your tools and returns only what you need, in one step. Prefer it whenever you would make two or more calls whose inputs you already know.`,
+		`tools.<name>(args) takes the tool's own arguments and resolves to the text it would show you${command ? ` (tools.${command} to { output, exitCode })` : ""}. ${FAILURE_VALUE} Direct tools: ${direct.map((name) => `tools.${name}`).join(", ")}.${hasDeferred ? " Other tools (not in your tool list) are callable here too: searchTools(query) returns their TypeScript declarations and ALL_TOOLS lists them all; call them as tools.<name>(args)." : ""}`,
+		...examples,
+		`The return value (JSON-serializable, same size limit as a file read) and text(...) output (printed as the program goes, kept if it later throws) come back with one line per tool call. No network, imports, timers or environment; at most ${MAX_TOOL_CALLS} tool calls per program.`,
+	].join("\n");
 }

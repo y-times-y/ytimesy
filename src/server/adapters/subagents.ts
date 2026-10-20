@@ -1,3 +1,4 @@
+import type { SidekickState } from "#/domain/sidekick";
 import type {
 	SubagentBudget,
 	SubagentFork,
@@ -82,8 +83,25 @@ export async function subagentTree(
 }
 
 /**
+ * Saves a sidekick's state (src/domain/sidekick.ts) into its budget.
+ * `clearStop` drops an earlier agent_send stop's step limit (a new round).
+ */
+export async function saveSidekickState(
+	sessionId: string,
+	state: SidekickState,
+	options: { readonly clearStop?: boolean } = {},
+) {
+	await database().query(
+		`update agent_session set agent_budget=(coalesce(agent_budget,'{}'::jsonb)${options.clearStop ? " - 'stopAtStep'" : ""}) || jsonb_build_object('sidekick', $2::jsonb), updated_at=now()
+		 where id=$1 and agent_role='writer'`,
+		[sessionId, JSON.stringify(state)],
+	);
+}
+
+/**
  * Forked writer VMs to delete: reported at least `graceMinutes` ago and
- * idle, or whose session is no longer running anything.
+ * idle, or whose session is no longer running anything. A lead's active
+ * sidekick stays while the lead's turn runs: it waits for the next round.
  */
 export async function forkedWritersDueForTeardown(graceMinutes: number) {
 	const result = await database().query(
@@ -95,6 +113,14 @@ export async function forkedWritersDueForTeardown(graceMinutes: number) {
 		   and agent_fork ? 'reportedAt'
 		   and (agent_fork->>'reportedAt')::timestamptz < now() - make_interval(mins => $1)
 		   and turn_status <> 'running'
+		   and not (
+		     agent_budget ? 'sidekick'
+		     and not (agent_budget->'sidekick' ? 'retired')
+		     and exists (
+		       select 1 from agent_session lead_session
+		       where lead_session.id = agent_session.parent_session_id and lead_session.turn_status = 'running'
+		     )
+		   )
 		 limit 32`,
 		[graceMinutes],
 	);

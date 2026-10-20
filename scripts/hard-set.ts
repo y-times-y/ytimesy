@@ -8,6 +8,7 @@
 // node --env-file=.env --import tsx scripts/hard-set.ts --live --run <name> --chunk 1
 // node --env-file=.env --import tsx scripts/hard-set.ts --collect --run <name>
 // node --env-file=.env --import tsx scripts/hard-set.ts --report --run <name>
+// node --env-file=.env --import tsx scripts/hard-set.ts --compare <run>,<run>   # efficiency side by side
 //
 // Detached (agent budgets longer than one invocation, docs/hard-set.md):
 // node --env-file=.env --import tsx scripts/hard-set.ts --live --detach --run <name> --tasks a,b --agent-minutes 30
@@ -18,7 +19,9 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import { FreestyleApiError } from "freestyle";
 import {
+	type AttemptLoopState,
 	type AttemptSnapshot,
 	type AttemptVerdictKind,
 	attemptLimit,
@@ -34,15 +37,32 @@ import {
 	costSummary as sharedCostSummary,
 } from "../src/domain/eval-cost";
 import {
+	type EfficiencyRun,
+	efficiencySummary,
+	formatEfficiencyBlock,
+	type ModelSpendRow,
+	treeModelSpend,
+} from "../src/domain/eval-efficiency";
+import {
 	harnessVariantFromFlags,
 	harnessVariantLabel,
 } from "../src/domain/harness-variant";
 import { WorkspaceId } from "../src/domain/ids";
 import { modelRouteId } from "../src/domain/model-connection";
 import { modelBilling } from "../src/domain/model-pricing";
+import type { ReviewLoopState } from "../src/domain/review-loop";
 import { sessionItemsFromUnknown } from "../src/domain/session-item";
 import {
+	type FusionTurnMetrics,
+	fusionMeansLine,
+	fusionMetricsLine,
+	fusionMetricsMeans,
+	fusionTurnMetrics,
+} from "../src/domain/sidekick";
+import {
+	agentSessionForOwner,
 	deleteAgentSessionForOwner,
+	descendantAgentSessions,
 	insertAgentSession,
 	saveAgentSessionProviderRef,
 } from "../src/server/adapters/agent-sessions";
@@ -55,6 +75,7 @@ import {
 } from "../src/server/adapters/attempt-loop-store";
 import { withBackgroundJobDispatcher } from "../src/server/adapters/background-job-dispatch";
 import { closeDatabase, database } from "../src/server/adapters/database";
+import { modelRequestLog } from "../src/server/adapters/model-request-log";
 import { dispatchModelWorkflow } from "../src/server/adapters/model-workflow-dispatch";
 import { sendApiWorkspaceTask } from "../src/server/services/api-workspace-session";
 import {
@@ -74,7 +95,10 @@ import {
 	detachedStatusRows,
 	lockedByOther,
 	newDetachedState,
+	runtimeCapFor,
+	runtimeWarning,
 	START_NEEDS_MS,
+	wakeForFinalize,
 	worthWaiting,
 } from "./hard-set/detached";
 import {
@@ -87,6 +111,7 @@ import {
 	setupFiles,
 	stageScript,
 	type TaskEnvironment,
+	taskMessage,
 	verifyScript,
 } from "./hard-set/environment";
 import {
@@ -99,6 +124,7 @@ import type { HardSetRecord as BaseHardSetRecord } from "./hard-set/records";
 import {
 	type HardSetReviewRecord,
 	reviewLoopReport,
+	reviewStateForRecord,
 } from "./hard-set/review-report";
 import {
 	type HardSetRoute,
@@ -108,6 +134,15 @@ import {
 } from "./hard-set/route";
 import { infraFailure, isScored } from "./hard-set/scoring";
 import { HARD_SET, HARD_SET_CHUNKS, type HardSetTask } from "./hard-set/tasks";
+import {
+	childTranscript,
+	efficiencyRow,
+	efficiencyTable,
+	setupLogSummary,
+	type ToolCallSummary,
+	toolCallLine,
+	toolCallSummary,
+} from "./hard-set/turn-record";
 import { codexUsage, preflightExecutor, sh, taskVms } from "./hard-set/vm";
 import {
 	assertDevelopmentDatabase,
@@ -143,6 +178,8 @@ const { values: flags } = parseArgs({
 		list: { type: "boolean", default: false },
 		collect: { type: "boolean", default: false },
 		report: { type: "boolean", default: false },
+		/** Efficiency of several runs side by side (comma-separated run names): model calls, run_code, inner calls, tokens, cost, time. */
+		compare: { type: "string" },
 		/** Start the turns and return; --collect finishes them (docs/hard-set.md). */
 		detach: { type: "boolean", default: false },
 		/** Detached runs: phase, agent time used vs budget, what is next. */
@@ -227,12 +264,39 @@ const seconds = (from: number) => Math.round((Date.now() - from) / 1000);
 
 /** The shared record (scripts/hard-set/records.ts) plus this runner's loop and detached state. */
 type HardSetRecord = BaseHardSetRecord & {
+	/**
+	 * The setup script's own log lines (`[setup +Ns] ...`, its self-tests
+	 * included) and its last lines on failure: what the VM proved before the
+	 * agent started.
+	 */
+	setupLog?: string | null;
 	/** attempts=3: the loop's attempts, checker verdicts and per-attempt grades. */
 	attemptLoop?: HardSetLoopRecord | null;
 	/** review=on: the review rounds, checker verdicts and the grade of each checked tree. */
 	reviewLoop?: HardSetReviewRecord | null;
 	/** --detach: what later --collect invocations need to start or finish it. */
 	detached?: DetachedState | null;
+	/** The turn's tool calls per tool name (kept before the session is deleted). */
+	toolSummary?: ToolCallSummary | null;
+	/**
+	 * The loops' durable state rows (agent_task_command_receipt), copied
+	 * before cleanup deletes them with the eval user.
+	 */
+	loopStates?: {
+		attempt: AttemptLoopState[];
+		review: ReviewLoopState[];
+	} | null;
+	/** An infrastructure failure (VM gone, not resumable) rather than the agent's. */
+	infraError?: string | null;
+	/** The agent VM was paused (idle) and resumed before staging. */
+	agentVmResumed?: boolean;
+	/**
+	 * Spend per role (builder, subagent, checker, judge) and model, each at
+	 * its own route's price, from the session tree before cleanup.
+	 */
+	modelBreakdown?: ModelSpendRow[] | null;
+	/** lead=fusion: handoffs, sidekick rounds, lead edits, patches applied, spend split (src/domain/sidekick.ts). */
+	fusion?: FusionTurnMetrics | null;
 };
 
 type HardSetLoopAttempt = {
@@ -405,6 +469,21 @@ function printAttemptLoops(records: HardSetRecord[]) {
 	if (rows.length) console.log(formatCheckerAccuracy(checkerAccuracy(rows)));
 }
 
+/** The checkout's branch ref ("" when unreadable; noted). */
+async function currentBranch(vm: string, cwd: string, notes: string[]) {
+	return machines
+		.exec(
+			WorkspaceId(vm),
+			`git -C ${sh(cwd)} symbolic-ref -q HEAD || true`,
+			15_000,
+		)
+		.then((result) => result.stdout.trim())
+		.catch((error: unknown) => {
+			notes.push(`Branch not read: ${safe(error).slice(0, 200)}`);
+			return "";
+		});
+}
+
 /**
  * The loop's record after the turn: per attempt the checker's verdict, spend
  * and candidate. When the loop did not finish before the runner's cancel,
@@ -413,30 +492,28 @@ function printAttemptLoops(records: HardSetRecord[]) {
  */
 async function readAttemptLoop(
 	sessionId: string,
-	vm: string,
+	/** Null: from the state row alone (the VM is gone or not reachable). */
+	vm: string | null,
 	model: string,
+	loaded?: AttemptLoopState[],
 ): Promise<HardSetLoopRecord | null> {
-	const state = (await attemptLoopStates(sessionId)).at(-1);
+	const state = (loaded ?? (await attemptLoopStates(sessionId))).at(-1);
 	if (!state) return null;
 	const cwd = state.checkpoint.cwd;
-	const workspace = { machines, vm: WorkspaceId(vm), cwd };
-	const branch = (
-		await machines.exec(
-			WorkspaceId(vm),
-			`git -C ${sh(cwd)} symbolic-ref -q HEAD || true`,
-			15_000,
-		)
-	).stdout.trim();
 	const notes: string[] = [];
-	let final = await captureConversationCode(
-		workspace,
-		attemptRef(state.turnId, "final"),
-	).catch((error: unknown) => {
-		notes.push(`Final tree not captured: ${safe(error).slice(0, 200)}`);
-		return null;
-	});
+	const branch = vm ? await currentBranch(vm, cwd, notes) : "";
+	let final = vm
+		? await captureConversationCode(
+				{ machines, vm: WorkspaceId(vm), cwd },
+				attemptRef(state.turnId, "final"),
+			).catch((error: unknown) => {
+				notes.push(`Final tree not captured: ${safe(error).slice(0, 200)}`);
+				return null;
+			})
+		: null;
+	if (!vm) notes.push("Read from the loop's state row only (no agent VM).");
 	let runnerRestored: number | null = null;
-	if (state.phase !== "done" && state.candidates.length) {
+	if (vm && state.phase !== "done" && state.candidates.length) {
 		const inProgress =
 			final && !state.candidates.some((c) => c.snapshot.tree === final?.tree)
 				? [
@@ -471,20 +548,27 @@ async function readAttemptLoop(
 			chosen.snapshot.tree !== final?.tree &&
 			!inProgress.some((c) => c.n === best)
 		) {
-			const restored = await machines.exec(
-				WorkspaceId(vm),
-				restoreSnapshotCommand(chosen.snapshot, branch),
-				60_000,
-			);
+			const restored = await machines
+				.exec(
+					WorkspaceId(vm),
+					restoreSnapshotCommand(chosen.snapshot, branch),
+					60_000,
+				)
+				.catch((error: unknown) => ({
+					exitCode: -1,
+					stdout: "",
+					stderr: safe(error),
+				}));
 			if (restored.exitCode === 0) {
 				runnerRestored = chosen.n;
 				final = chosen.snapshot;
 			} else notes.push(`Restore of attempt ${chosen.n} failed.`);
 		}
+	}
+	if (state.phase !== "done")
 		notes.push(
 			`The loop stopped in phase ${state.phase} at the runner's cancel.`,
 		);
-	}
 	const spend = attemptLoopSpend(
 		state,
 		modelBilling(recordPricing(hardSetRoute(model).recordModel)),
@@ -521,7 +605,7 @@ async function readAttemptLoop(
 				sameAsFinal: !!final && candidate.snapshot.tree === final.tree,
 				// Identical trees share one grade.
 				gradeName:
-					final && candidate.snapshot.tree === final.tree
+					!vm || (final && candidate.snapshot.tree === final.tree)
 						? null
 						: `artifacts-a${
 								state.candidates.find(
@@ -550,28 +634,28 @@ async function readAttemptLoop(
  */
 async function readReviewLoop(
 	sessionId: string,
-	vm: string,
+	/** Null: from the state row alone (the VM is gone or not reachable). */
+	vm: string | null,
 	model: string,
+	loaded?: ReviewLoopState[],
 ): Promise<HardSetReviewRecord | null> {
-	const state = (await reviewLoopStates(sessionId)).at(-1);
+	const state = reviewStateForRecord(
+		loaded ?? (await reviewLoopStates(sessionId)),
+	);
 	if (!state) return null;
 	const cwd = state.checkpoint.cwd;
-	const workspace = { machines, vm: WorkspaceId(vm), cwd };
-	const branch = (
-		await machines.exec(
-			WorkspaceId(vm),
-			`git -C ${sh(cwd)} symbolic-ref -q HEAD || true`,
-			15_000,
-		)
-	).stdout.trim();
 	const notes: string[] = [];
-	const final = await captureConversationCode(
-		workspace,
-		reviewRef(state.turnId, "final"),
-	).catch((error: unknown) => {
-		notes.push(`Final tree not captured: ${safe(error).slice(0, 200)}`);
-		return null;
-	});
+	const branch = vm ? await currentBranch(vm, cwd, notes) : "";
+	const final = vm
+		? await captureConversationCode(
+				{ machines, vm: WorkspaceId(vm), cwd },
+				reviewRef(state.turnId, "final"),
+			).catch((error: unknown) => {
+				notes.push(`Final tree not captured: ${safe(error).slice(0, 200)}`);
+				return null;
+			})
+		: null;
+	if (!vm) notes.push("Read from the loop's state row only (no agent VM).");
 	if (state.phase !== "done")
 		notes.push(
 			`The loop stopped in phase ${state.phase} at the runner's cancel.`,
@@ -601,6 +685,12 @@ async function readReviewLoop(
 				findingTexts: round.findings
 					.slice(0, 5)
 					.map((finding) => `${finding.id} ${finding.text.slice(0, 200)}`),
+				checkerTests: (round.verdict?.tests ?? []).map((test) => ({
+					name: test.name.slice(0, 200),
+					passed: test.passed,
+					command: test.command?.slice(0, 300) ?? null,
+				})),
+				untested: !!round.verdict?.untested,
 				decision: round.decision ?? null,
 				checkerTokens: roundSpend?.checker.tokens ?? 0,
 				checkerCostUsd: roundSpend?.checker.costUsd ?? null,
@@ -614,7 +704,8 @@ async function readReviewLoop(
 				tree: round.snapshot.tree,
 				snapshot: round.snapshot,
 				sameAsFinal,
-				gradeName: sameAsFinal ? null : `artifacts-r${firstSame}`,
+				// Without the VM nothing is staged, so nothing is graded on its own.
+				gradeName: sameAsFinal || !vm ? null : `artifacts-r${firstSame}`,
 				graderReward: null,
 				graderPassed: null,
 			};
@@ -649,6 +740,71 @@ if (flags.list) {
 	process.exit(0);
 }
 
+/** Agent records whose turn ran, as efficiency rows (per run, then means per run and variant). */
+function printEfficiency(records: HardSetRecord[]) {
+	const rows = records
+		.filter((record) => record.mode === "agent" && record.modelSteps)
+		.map((record) =>
+			efficiencyRow(record, estimatedCost(record), isScored(record)),
+		);
+	if (!rows.length) return;
+	console.log(
+		"\nEfficiency (agent runs whose turn ran; pass - = not scored, pass mean = passed/scored): steps = model calls; tools = direct calls; inner = run_code's tool calls; parallel = programs with 2+ calls at once; in/step = input tokens per model call (context size); est $ at list price; agent s = agent wall time.",
+	);
+	console.log(table(efficiencyTable(rows)));
+}
+
+/** lead=fusion runs: one line per run, then per-arm means. */
+function printFusion(
+	records: HardSetRecord[],
+	groupBy: (record: HardSetRecord) => string,
+) {
+	const runs = records.filter(
+		(record) => record.mode === "agent" && record.fusion,
+	);
+	if (!runs.length) return;
+	console.log(
+		"\nFusion (lead=fusion; handoffs = rounds the lead started; lead edits = its own edit/write calls; spend at list price):",
+	);
+	for (const record of runs)
+		console.log(
+			`- ${record.task}.${record.attempt} ${groupBy(record)} ${record.passed ? "PASS" : "fail"}: ${fusionMetricsLine(record.fusion as FusionTurnMetrics, record.agentSec)}`,
+		);
+	const groups = new Map<string, FusionTurnMetrics[]>();
+	for (const record of runs.filter(isScored))
+		groups.set(groupBy(record), [
+			...(groups.get(groupBy(record)) ?? []),
+			record.fusion as FusionTurnMetrics,
+		]);
+	for (const [name, list] of groups)
+		console.log(`  ${name}: ${fusionMeansLine(fusionMetricsMeans(list))}`);
+}
+
+if (flags.compare) {
+	const runs = flags.compare.split(",").map((run) => run.trim());
+	const records: HardSetRecord[] = [];
+	for (const run of runs) {
+		if (!/^[A-Za-z0-9._=-]{1,80}$/.test(run))
+			throw new Error(`--compare takes run names; got "${run}".`);
+		records.push(
+			...(await readRecords(join(RUNS, run))).map((record) => ({
+				...record,
+				run,
+			})),
+		);
+	}
+	records.sort((a, b) =>
+		`${a.run}/${a.task}.${a.attempt}`.localeCompare(
+			`${b.run}/${b.task}.${b.attempt}`,
+		),
+	);
+	if (!records.length) throw new Error(`No records in ${runs.join(", ")}.`);
+	printEfficiency(records);
+	printEfficiencyBlocks(records, (record) => `${record.run} ${record.variant}`);
+	printFusion(records, (record) => `${record.run} ${record.variant}`);
+	process.exit(0);
+}
+
 if (flags.report) {
 	const dir = runDirectory();
 	const records = (await readRecords(dir)).sort((a, b) =>
@@ -680,6 +836,29 @@ if (flags.report) {
 	if (cost) console.log(cost);
 	printAttemptLoops(records);
 	for (const line of reviewLoopReport(records)) console.log(line);
+	printEfficiency(records);
+	printEfficiencyBlocks(records, () => `Run ${flags.run}`);
+	if (new Set(records.map((record) => record.variant)).size > 1)
+		printEfficiencyBlocks(records, (record) => `Arm ${record.variant}`);
+	printFusion(records, (record) => `Arm ${record.variant}`);
+	const agentRuns = records.filter((record) => record.mode === "agent");
+	if (agentRuns.length) {
+		console.log(
+			"\nTool calls per run (by tool; [agent, find_tools, run_code]):",
+		);
+		for (const record of agentRuns)
+			console.log(
+				`- ${record.task}.${record.attempt} ${record.variant}: ${
+					record.toolSummary
+						? toolCallLine(record.toolSummary)
+						: `${record.toolCalls} call(s): ${Object.entries(
+								record.toolsUsed ?? {},
+							)
+								.map(([name, count]) => `${name} ${count}`)
+								.join(", ")} (items only)`
+				}${record.agentVmResumed ? "; agent VM resumed for staging" : ""}${record.infraError ? `; INFRA: ${record.infraError}` : ""}`,
+			);
+	}
 	for (const record of records.filter((record) => !isScored(record)))
 		console.log(
 			`- ${record.task}.${record.attempt}: ${record.status} ${record.state} budget ${record.agentBudgetSec}/${record.agentRequestedSec}s ${[...record.errors, record.gradeError].filter(Boolean).join(" | ").slice(0, 300)}`,
@@ -852,10 +1031,6 @@ let stopping = false;
 let usageLimitHit: string | null = null;
 const live = new Set<() => Promise<void>>();
 
-const ENVIRONMENT_NOTE = (workdir: string) =>
-	`\n\n(Environment: your shell commands run inside the task's container, starting in ${workdir}. File tools reach the task's working directory directly; use the shell for files elsewhere.)`;
-const PROMPT_SUFFIX =
-	"\n\nWork directly in this environment: no plan proposal, child tasks, commits, pull requests or publishing. Stop when the task is done and checked.";
 // Setup of the task's environment never takes longer than this.
 const SETUP_LIMIT_SEC = 300;
 
@@ -1024,6 +1199,10 @@ async function provision(run: TaskRun) {
 		label: `hard-set ${task.id} ${harnessVariantLabel(options.variant)}`,
 		variant: options.variant,
 		...(google ? { google } : {}),
+		// A role model off the Codex plan needs the owner's OpenRouter connection.
+		openRouter: Object.values(options.variant.roleModels).some(
+			(entry) => !entry?.model.startsWith("codex:"),
+		),
 	});
 	run.user = user;
 	run.userId = user.userId;
@@ -1042,7 +1221,9 @@ async function provision(run: TaskRun) {
 	}
 	if (!run.detached) startGrader(run);
 	// A detached task's VM outlives this invocation: setup, the agent's
-	// budget, then the window in which a --collect finishes it.
+	// budget, then the window in which a --collect finishes it. The edge's
+	// usage admission replaces this runtime cap once the turn starts, so the
+	// finalize raises it again (wakeAgentVm, runtimeCapFor).
 	const lifetimeSec = run.detached
 		? SETUP_LIMIT_SEC + options.agentSeconds + COLLECT_WINDOW_MS / 1000 + 120
 		: Math.ceil((invocationDeadline - Date.now()) / 1000) + 120;
@@ -1088,6 +1269,7 @@ async function provision(run: TaskRun) {
 				),
 	);
 	record.setupSec = seconds(started);
+	record.setupLog = setupLogSummary(setup.log, setup.exit);
 	console.info(
 		`${task.id}: setup ${setup.exit === 0 ? "ok" : `FAILED (${setup.exit})`} in ${record.setupSec}s`,
 	);
@@ -1130,7 +1312,11 @@ async function startTurn(run: TaskRun) {
 		await saveAttemptLoopDeadline(sessionId, run.agentDeadline - 20_000);
 	// The edge cancels the turn at the deadline, with or without this runner.
 	await saveTurnDeadline(sessionId, run.agentDeadline);
-	const text = `${environment.instruction}${ENVIRONMENT_NOTE(run.workdir)}${PROMPT_SUFFIX}`;
+	const text = taskMessage(
+		environment,
+		run.workdir,
+		options.variant.subagents === "on",
+	);
 	const scope = {
 		userId: user.userId,
 		projectId: user.project.projectId,
@@ -1219,10 +1405,242 @@ async function watchTurn(run: TaskRun) {
 async function saveTranscript(run: TaskRun) {
 	if (!run.options.transcripts || !run.sessionId) return;
 	const state = await turnState(run.sessionId);
+	// Each request's tool names and prompt hash, the builder's and its
+	// subagents' (the checker's included); each distinct system prompt and
+	// tool list once under `bodies` (src/server/adapters/model-request-log.ts).
+	const requests = await modelRequestLog(run.sessionId).catch((error) => {
+		console.warn("Model requests were not read:", safe(error));
+		return null;
+	});
+	// The subagents' own sessions (the review loop's checker among them):
+	// their tool calls and outputs, which the root's items do not hold and
+	// the eval user's cleanup deletes.
+	const children = run.userId
+		? await descendantAgentSessions(run.userId, run.sessionId)
+				.then((sessions) => sessions.map(childTranscript))
+				.catch((error) => {
+					console.warn("Subagent sessions were not read:", safe(error));
+					return null;
+				})
+		: null;
 	await writeFile(
 		join(runDir, `${run.task.id}.${run.record.attempt}.transcript.json`),
-		JSON.stringify({ items: state?.items, messages: state?.messages }, null, 1),
+		JSON.stringify(
+			{ items: state?.items, messages: state?.messages, requests, children },
+			null,
+			1,
+		),
 	).catch((error) => console.warn("Transcript was not written:", safe(error)));
+}
+
+/**
+ * Copies what the session's deletion would take with it into the record:
+ * the turn's tool calls per tool name and the loops' state rows (with a
+ * loop record built from the row alone when staging never read it). Runs at
+ * finalize and again before every cleanup; a failure is noted, never thrown.
+ */
+async function recordTurn(run: {
+	record: HardSetRecord;
+	sessionId: string | null;
+	userId: string | null;
+	options: RunOptions;
+}) {
+	const { record, sessionId, options } = run;
+	if (!sessionId || options.mode !== "agent") return;
+	try {
+		const state = await turnState(sessionId);
+		if (state)
+			record.toolSummary = toolCallSummary(
+				sessionItemsFromUnknown(state.items),
+				state.messages,
+			);
+		const loopStates = {
+			attempt: await attemptLoopStates(sessionId),
+			review: await reviewLoopStates(sessionId),
+		};
+		// Rows only grow; a later read with none never erases an earlier copy.
+		if (
+			loopStates.attempt.length ||
+			loopStates.review.length ||
+			!record.loopStates
+		)
+			record.loopStates = loopStates;
+		if (!record.attemptLoop && loopStates.attempt.length)
+			record.attemptLoop = await readAttemptLoop(
+				sessionId,
+				null,
+				options.model,
+				loopStates.attempt,
+			);
+		if (!record.reviewLoop && loopStates.review.length)
+			record.reviewLoop = await readReviewLoop(
+				sessionId,
+				null,
+				options.model,
+				loopStates.review,
+			);
+		const tree = run.userId ? await sessionTree(run.userId, sessionId) : null;
+		const breakdown = tree
+			? sessionTreeSpend(sessionId, tree, loopStates.attempt)
+			: null;
+		// Sessions only grow until cleanup; never replace a copy with nothing.
+		if (breakdown?.length) record.modelBreakdown = breakdown;
+		if (tree && (record.variant.includes("lead=fusion") || record.fusion))
+			record.fusion = fusionTurnMetrics({ rootId: sessionId, sessions: tree });
+	} catch (error) {
+		record.errors.push(`Turn record not saved: ${safe(error).slice(0, 200)}`);
+	}
+}
+
+/** The run's stored session tree: the root (the builder) first. */
+async function sessionTree(userId: string, rootId: string) {
+	const root = await agentSessionForOwner(userId, rootId);
+	if (!root) return null;
+	return [root, ...(await descendantAgentSessions(userId, rootId))];
+}
+
+/** The run's spend per role and model from its session tree. */
+function sessionTreeSpend(
+	rootId: string,
+	sessions: Awaited<ReturnType<typeof sessionTree>> & object,
+	attemptStates: readonly AttemptLoopState[],
+) {
+	const judgeIds = new Set(
+		attemptStates.flatMap((state) =>
+			state.selection?.judge ? [state.selection.judge.sessionId] : [],
+		),
+	);
+	return treeModelSpend({ rootId, sessions, judgeIds });
+}
+
+/**
+ * A record as the efficiency block reads it: its stored per-model breakdown,
+ * or for older records the builder's own counts plus the loops' checker
+ * spend (both on the builder's model, as those records were priced).
+ */
+function efficiencyRun(record: HardSetRecord): EfficiencyRun {
+	const loop = record.attemptLoop ?? record.reviewLoop;
+	const models: ModelSpendRow[] = record.modelBreakdown?.length
+		? record.modelBreakdown
+		: [
+				{
+					role: "builder",
+					model: record.model,
+					agents: 1,
+					requests: record.modelSteps ?? null,
+					inputTokens: record.inputTokens ?? 0,
+					outputTokens: record.outputTokens ?? 0,
+					cacheReadTokens: record.cachedTokens ?? 0,
+					costUsd: estimatedCost(record),
+					estimated: true,
+				},
+				...(loop?.checkers
+					? [
+							{
+								role: "checker" as const,
+								model: record.model,
+								agents: loop.checkers,
+								requests: null,
+								inputTokens: loop.extraTokens,
+								outputTokens: 0,
+								cacheReadTokens: 0,
+								costUsd: loop.extraCostUsd,
+								estimated: true,
+							},
+						]
+					: []),
+			];
+	return { solved: record.passed, seconds: record.agentSec, models };
+}
+
+/**
+ * The AA-style block (src/domain/eval-efficiency.ts) over scored agent runs:
+ * one headline per group plus its per-role, per-model split.
+ */
+function printEfficiencyBlocks(
+	records: HardSetRecord[],
+	groupBy: (record: HardSetRecord) => string,
+) {
+	const scored = records.filter(
+		(record) => record.mode === "agent" && isScored(record),
+	);
+	if (!scored.length) return;
+	console.log(
+		"\nEfficiency per task (AA-style; scored agent runs; calls = model requests; each model at its own route's list price):",
+	);
+	const groups = new Map<string, HardSetRecord[]>();
+	for (const record of scored)
+		groups.set(groupBy(record), [
+			...(groups.get(groupBy(record)) ?? []),
+			record,
+		]);
+	for (const [name, list] of groups)
+		for (const line of formatEfficiencyBlock(
+			name,
+			efficiencySummary(list.map(efficiencyRun)),
+		))
+			console.log(line);
+}
+
+/**
+ * Wakes the agent VM for staging (the product pauses it when idle; a turn
+ * that ended early leaves it paused before the collect) and holds it awake
+ * for the rest of this invocation. Throws an infrastructure error, recorded
+ * on the run, when the VM is gone or will not resume.
+ */
+async function wakeAgentVm(run: TaskRun) {
+	const vm = run.agentVm as string;
+	const ref = client.vms.ref(vm);
+	const holdSec = Math.max(
+		300,
+		Math.ceil((invocationDeadline - Date.now()) / 1000) + 300,
+	);
+	const woke = await wakeForFinalize({
+		state: () =>
+			ref.data().then(
+				(data) => String(data.state),
+				(error: unknown) => {
+					if (
+						error instanceof FreestyleApiError &&
+						(error.status === 404 || error.code === "NOT_FOUND")
+					)
+						return null;
+					throw error;
+				},
+			),
+		budget: async () => {
+			const data = await ref.data();
+			const cap = runtimeCapFor(data, holdSec);
+			if (cap === null) return;
+			await ref.update({ maxRunTotalSeconds: cap } as never);
+			const confirmed = await ref.data();
+			if (confirmed.maxRunTotalSeconds !== cap)
+				throw new Error(
+					`The agent VM's runtime cap stayed ${confirmed.maxRunTotalSeconds}s (asked ${cap}s).`,
+				);
+			console.info(
+				`${run.task.id}: agent VM runtime cap raised ${data.maxRunTotalSeconds}s -> ${cap}s (${data.totalRunSeconds}s used) for the finalize.`,
+			);
+		},
+		resume: async () => {
+			// The product's resume path (admission, idle timeout, start, wait).
+			await machines.ensureRunning(WorkspaceId(vm));
+		},
+		hold: async () => {
+			await ref.update({ idleTimeoutSeconds: holdSec } as never);
+		},
+		sleep: (ms) => delay(ms),
+	});
+	if (!woke.ok) {
+		run.record.infraError = woke.reason;
+		throw new Error(`Infrastructure: ${woke.reason}`);
+	}
+	if (woke.resumed) {
+		run.record.agentVmResumed = true;
+		console.info(
+			`${run.task.id}.${run.record.attempt}: agent VM was ${woke.from}; resumed it for staging.`,
+		);
+	}
 }
 
 /**
@@ -1356,6 +1774,8 @@ async function stageAndGrade(run: TaskRun) {
 /** Deletes the run's session, agent VM and eval user (and the grader unless it grades). */
 async function cleanupRun(run: TaskRun, keepGrader: boolean) {
 	const { record } = run;
+	// Before the session and eval user (and their loop rows) are deleted.
+	await recordTurn(run);
 	if (run.userId && run.sessionId)
 		await cancelServerTurn(run.userId, run.sessionId).catch(() => {});
 	if (run.agentVm) await client.vms.delete(run.agentVm).catch(() => {});
@@ -1464,6 +1884,7 @@ async function runTask(
 		}
 		record.agentSec = seconds(run.agentStarted);
 		if (record.usageLimit) throw new Error(record.usageLimit);
+		await wakeAgentVm(run);
 		await stageAndGrade(run);
 		keepGrader = true;
 		await saveRecord(runDir, record);
@@ -1639,7 +2060,10 @@ async function finalizeDetached(
 			state.slot = null;
 		}
 		await saveTranscript(run);
+		await recordTurn(run);
+		await saveRecord(runDir, record);
 		if (record.usageLimit) throw new Error(record.usageLimit);
+		await wakeAgentVm(run);
 		startGrader(run);
 		await stageAndGrade(run);
 		keepGrader = true;
@@ -1653,6 +2077,22 @@ async function finalizeDetached(
 	}
 	await saveRecord(runDir, record);
 	logResult(run, state.finalizeStartedAt ?? Date.now());
+}
+
+const runtimeWarned = new Set<string>();
+/** Once per invocation: a finished turn's agent VM near its runtime cap. */
+async function warnRuntime(state: DetachedState) {
+	const vm = state.agentVm;
+	if (!vm || runtimeWarned.has(vm) || state.phase === "queued") return;
+	const data = await client.vms
+		.ref(vm)
+		.data()
+		.catch(() => null);
+	if (!data) return;
+	const warning = runtimeWarning(state, data);
+	if (!warning) return;
+	runtimeWarned.add(vm);
+	console.warn(`Runtime: ${warning}`);
 }
 
 /** Collect: one detached task, step by step, while this invocation can help it. */
@@ -1689,6 +2129,7 @@ async function advanceDetached(record: HardSetRecord) {
 				? await pollTurn({ record, sessionId: state.sessionId })
 				: null;
 		if (turn !== null) state.turnState = turn;
+		await warnRuntime(state);
 		const action = collectAction(state, {
 			now: Date.now(),
 			invocationEndsAt: invocationDeadline,
@@ -1703,6 +2144,7 @@ async function advanceDetached(record: HardSetRecord) {
 		}
 		if (action.kind === "expire") {
 			record.errors.push(action.reason);
+			record.infraError = action.reason;
 			record.status = "error";
 			const run = newRun(task, environment, record, options, true);
 			run.userId = state.userId;

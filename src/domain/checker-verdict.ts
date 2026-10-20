@@ -7,10 +7,15 @@
 export const ATTEMPT_VERDICTS = ["pass", "fail", "unsure"] as const;
 export type AttemptVerdictKind = (typeof ATTEMPT_VERDICTS)[number];
 
+/** A test or probe the checker wrote and ran (name = what it checks). */
 export type CheckerTest = {
 	readonly name: string;
 	readonly passed: boolean;
 	readonly evidence?: string;
+	/** One command that runs it (absolute paths), so the builder can reproduce it. */
+	readonly command?: string;
+	/** The output lines that show its result. */
+	readonly output?: string;
 };
 
 /** The checker's structured answer, normalized. */
@@ -162,11 +167,28 @@ export function parseCheckerVerdict(report: string): CheckerVerdict {
 		? record.tests.slice(0, 100).flatMap((entry) => {
 				if (!entry || typeof entry !== "object") return [];
 				const test = entry as Record<string, unknown>;
-				const name = text(test.name, 200);
-				if (!name || typeof test.passed !== "boolean") return [];
+				const name = text(test.name, 200) || text(test.checks, 200);
+				const result = text(test.result, 20).toLowerCase();
+				const passed =
+					typeof test.passed === "boolean"
+						? test.passed
+						: result === "pass" || result === "passed"
+							? true
+							: result === "fail" || result === "failed"
+								? false
+								: null;
+				if (!name || passed === null) return [];
 				const evidence = text(test.evidence, 600);
+				const command = text(test.command, 500);
+				const output = text(test.output, 800);
 				return [
-					{ name, passed: test.passed, ...(evidence ? { evidence } : {}) },
+					{
+						name,
+						passed,
+						...(evidence ? { evidence } : {}),
+						...(command ? { command } : {}),
+						...(output ? { output } : {}),
+					},
 				];
 			})
 		: [];
@@ -186,9 +208,10 @@ export function parseCheckerVerdict(report: string): CheckerVerdict {
 			? listed
 			: tests
 					.filter((test) => !test.passed)
-					.map((test) =>
-						test.evidence ? `${test.name}: ${test.evidence}` : test.name,
-					)
+					.map((test) => {
+						const evidence = test.evidence ?? test.output;
+						return evidence ? `${test.name}: ${evidence}` : test.name;
+					})
 	).slice(0, 20);
 	const testsPath = text(record.testsPath, 500);
 	const anyFailed = tests.some((test) => !test.passed);
