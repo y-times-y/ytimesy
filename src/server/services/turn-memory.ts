@@ -37,9 +37,11 @@ import {
 	memoryRecentLine,
 	memoryRecentPart,
 	memoryToday,
+	SCRUB_MEMORY_CREDENTIAL,
 	selectMemoryMatches,
 	withMemoryParts,
 } from "#/domain/memory-repo";
+import { MODEL_WORKFLOW_DEADLINE_MS } from "#/domain/model-workflow";
 import { posixShellQuoted as quote } from "#/domain/posix-command";
 import type { SessionItem } from "#/domain/session-item";
 import {
@@ -66,8 +68,12 @@ import {
 } from "../adapters/memory-settings";
 import type { AgentToolWorkspace } from "./agent-tool-workspace";
 
-/** The VM's Git token outlives any single durable step; each step mints a new one. */
-const VM_TOKEN_TTL_SECONDS = 3600;
+/**
+ * The VM's Git token outlives any single durable step (each step mints a new
+ * one) by a few minutes; a completed turn revokes it and removes it from the
+ * clone sooner.
+ */
+const VM_TOKEN_TTL_SECONDS = MODEL_WORKFLOW_DEADLINE_MS / 1000 + 5 * 60;
 /**
  * The read hook's budget before the first model call. A chat's first request
  * waits longer: its VM is still starting, and a late recall beats none.
@@ -97,6 +103,10 @@ export type TurnMemory = {
 	instructions: string;
 	/** Clone or refresh ~/memory on the VM with a fresh short-lived token. */
 	prepareVm(workspace: AgentToolWorkspace): Promise<void>;
+	/** Tokens prepareVm put on the VM, for tool-result redaction. */
+	vmTokens(): readonly string[];
+	/** Removes the token from the clone and revokes it; never fails. */
+	releaseVm(workspace: AgentToolWorkspace): Promise<void>;
 	/**
 	 * MEMORY.md at chat start and the read hook, attached to the current
 	 * request; `recall` is what the chat shows of it (null when memory was
@@ -213,6 +223,7 @@ export async function turnMemory(
 			: new Map<string, string>();
 		return matches.map((entry) => recalledMemoryLine(entry, titles));
 	}
+	const vmTokens: string[] = [];
 	return {
 		mode,
 		instructions: memoryInstructions(
@@ -227,6 +238,7 @@ export async function turnMemory(
 		async prepareVm(workspace) {
 			try {
 				const credentials = await repo.credentials(VM_TOKEN_TTL_SECONDS);
+				vmTokens.push(credentials.token);
 				const result = await workspace.machines.exec(
 					workspace.vm,
 					memoryCloneScript(credentials),
@@ -241,6 +253,21 @@ export async function turnMemory(
 					error: error instanceof Error ? error.name : "unknown",
 				});
 			}
+		},
+		vmTokens: () => vmTokens,
+		async releaseVm(workspace) {
+			const tokens = vmTokens.splice(0);
+			if (!tokens.length) return;
+			const scrubbed = await workspace.machines
+				.exec(workspace.vm, SCRUB_MEMORY_CREDENTIAL, 15_000)
+				.catch(() => null);
+			if (scrubbed?.exitCode !== 0)
+				console.warn("Memory token could not be removed from the VM.");
+			await Promise.all(
+				tokens.map((token) => repo.revokeCredential?.(token)),
+			).catch(() => {
+				console.warn("Memory token could not be revoked; it expires soon.");
+			});
 		},
 		async attach(messages, items, workspace) {
 			const unchanged = { messages, recall: null };
