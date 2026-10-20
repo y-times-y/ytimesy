@@ -11,7 +11,11 @@
 // builder command (the runtime wraps each in `bash -lc` behind the
 // agent-secrets prefix) is re-executed inside the task container by a
 // /etc/profile.d hook, in the same directory, with its process group stopped
-// when the command ends or is cancelled. Grading follows Harbor's separate
+// when the command ends or is cancelled. A read-only subagent's commands run
+// as ytimesy-reader on the VM (src/domain/subagent-reader.ts), which may not
+// use Docker; the hook routes them through a sudo rule that allows only the
+// route script, and the route runs them in the container as the reader's
+// uid, which cannot write the checkout. Grading follows Harbor's separate
 // verifier on a second VM that never runs the agent: collect commands and
 // artifacts copied out on the agent VM; on the grader VM the verifier image
 // started, artifacts copied in at the same paths, `/tests/test.sh`, then
@@ -21,6 +25,11 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parse } from "yaml";
 import { SOURCE_AGENT_SECRETS } from "../../src/domain/project-secret";
+import {
+	READER_LINUX_USER,
+	READER_SCRATCH_ROOT,
+	READER_USER_SETUP_SCRIPT,
+} from "../../src/domain/subagent-reader";
 
 export type Artifact = {
 	source: string;
@@ -338,40 +347,101 @@ printf '%s\n' $MOUNTS > /tb/route-mounts
 printf 'WD=%q\nMOUNTS=%q\n' "$WD" "$MOUNTS" > /tb/runtime.sh
 install -m 755 /tb/tb-route /usr/local/bin/tb-route
 install -m 644 /tb/zz-tb-route.sh /etc/profile.d/zz-tb-route.sh
+chmod 0644 /tb/route-prefix /tb/route-mounts
 printf '%s\n' "/home/ubuntu/$NAME" > /tmp/ytimesy-project-cwd
 chown ubuntu:ubuntu /tmp/ytimesy-project-cwd
+# Read-only subagents run as ${READER_LINUX_USER} on the VM, which is not in the
+# docker group: it may run only the route script as root (which then runs the
+# command in the container as the reader's uid), nothing else.
+${READER_USER_SETUP_SCRIPT}
+ruid=$(id -u ${READER_LINUX_USER}); rgid=$(id -g ${READER_LINUX_USER})
+printf '%s\n' 'Defaults:${READER_LINUX_USER} !use_pty' '${READER_LINUX_USER} ALL=(root) NOPASSWD: /usr/local/bin/tb-route' > /tb/sudoers-reader
+visudo -cqf /tb/sudoers-reader
+install -m 0440 /tb/sudoers-reader /etc/sudoers.d/zz-tb-route-reader
+docker exec -u 0 -e RUID="$ruid" -e RGID="$rgid" tb sh -c '
+  grep -q "^[^:]*:[^:]*:$RGID:" /etc/group || echo "${READER_LINUX_USER}:x:$RGID:" >> /etc/group
+  grep -q "^[^:]*:[^:]*:$RUID:" /etc/passwd || echo "${READER_LINUX_USER}:x:$RUID:$RGID::${READER_SCRATCH_ROOT}:/bin/sh" >> /etc/passwd
+  echo "container reader: $(grep "^[^:]*:[^:]*:$RUID:" /etc/passwd | cut -d: -f1) uid $RUID"
+  # Briefs name the checkout by ~/<project>; an image home may be 0750.
+  chmod o+x /home/ubuntu
+'
 # Self-test: a builder-shaped command from the project runs in the container.
 probe=$(cd "/home/ubuntu/$NAME" && sudo -u ubuntu bash -lc "$(cat /tb/route-prefix)
 echo routed:\$(test -e /.dockerenv && echo container):\$(pwd -P)")
 expected="routed:container:$WD"
 if [ "$probe" = "$expected" ]; then log "route self-test ok ($probe)"; else echo "route self-test failed: got '$probe', expected '$expected'"; exit 1; fi
+# Self-test: a reader-shaped command runs in the container as the reader and
+# cannot write the working directory.
+install -d -o ${READER_LINUX_USER} -g ${READER_LINUX_USER} -m 0700 ${READER_SCRATCH_ROOT}/setup-self-test
+probe=$(cd "$WD" && sudo -n -u ${READER_LINUX_USER} -- env HOME=${READER_SCRATCH_ROOT}/setup-self-test bash -lc "$(cat /tb/route-prefix)
+echo routed:\$(test -e /.dockerenv && echo container):\$(id -u):\$(cd /home/ubuntu/$NAME && pwd -P):\$(touch .ytimesy-reader-probe 2>/dev/null && echo writable || echo read-only)")
+rm -rf ${READER_SCRATCH_ROOT}/setup-self-test "$WD/.ytimesy-reader-probe"
+expected="routed:container:$ruid:$WD:read-only"
+if [ "$probe" = "$expected" ]; then log "reader route self-test ok ($probe)"; else echo "reader route self-test failed: got '$probe', expected '$expected'"; exit 1; fi
 echo "$WD" > /tb/workdir
 log "setup done"
 `;
 
-/** VM side of a routed builder command: argv cwd, command text. */
+/**
+ * VM side of a routed command: argv cwd, command text. A read-only
+ * subagent's command arrives as root through the sudo rule with two more
+ * arguments, its scratch HOME and a route id, and runs in the container as
+ * the reader's uid (which owns nothing in the checkout). The reader cannot
+ * signal this root process, so its hook stops the command with
+ * `tb-route --stop <id>` (again through sudo), which signals only the
+ * reader's own processes in the container.
+ */
 const ROUTE_SCRIPT = String.raw`#!/bin/bash
-cwd=$1
-id="$(date +%s%N)-$$"
-printf '%s' "$2" > "/tb/route/$id.sh"
-if [ -f /tb/route/.setsid ]; then
-  inner="umask 0002; exec setsid --wait bash -c 'echo \$\$ > /tb/route/$id.pid; exec bash -l /tb/route/$id.sh'"
-else
-  inner="umask 0002; echo \$\$ > /tb/route/$id.pid; exec bash -l /tb/route/$id.sh"
-fi
-docker exec -w "$cwd" -e NO_COLOR=1 -e TERM=dumb tb bash -c "$inner" &
-child=$!
-# Signals the command's process group in the container; "clean" also removes
-# its pid file (written by the container's user, so removed from there).
+reader=""
+if [ "$(id -u)" = 0 ] && [ "${"$"}{SUDO_USER:-}" = ${READER_LINUX_USER} ] && [ -n "${"$"}{SUDO_UID:-}" ]; then reader=1; fi
+# Signals the command's process group in the container (as the command's own
+# user); "clean" also removes its pid file (written by that user). No "--":
+# dash's kill rejects it, which used to leave all but the leader running.
 stop_group() {
-  docker exec tb sh -c "p=/tb/route/$id.pid; if [ -s \$p ]; then kill -$1 -- -\$(cat \$p) 2>/dev/null || kill -$1 \$(cat \$p) 2>/dev/null; fi; [ '$2' = clean ] && rm -f \$p; true" >/dev/null 2>&1
+  docker exec "${"$"}{as[@]}" tb sh -c "p=/tb/route/$id.pid; if [ -s \$p ]; then kill -$1 -\$(cat \$p) 2>/dev/null || kill -$1 \$(cat \$p) 2>/dev/null; fi; [ '$2' = clean ] && rm -f \$p; true" >/dev/null 2>&1
 }
-trap 'stop_group TERM; sleep 1; stop_group KILL clean; kill $child 2>/dev/null; rm -f "/tb/route/$id.sh" 2>/dev/null; exit 143' TERM HUP INT
+if [ -n "$reader" ]; then
+  as=(-u "$SUDO_UID:$SUDO_GID")
+  if [ "$1" = --stop ]; then
+    [[ "${"$"}{2:-}" =~ ^[0-9]+-[0-9]+$ ]] || exit 2
+    id="reader-$2"
+    stop_group TERM; sleep 0.5; stop_group KILL clean
+    exit 0
+  fi
+  [[ "${"$"}{4:-}" =~ ^[0-9]+-[0-9]+$ ]] || exit 2
+  id="reader-$4"
+  home=${READER_SCRATCH_ROOT}
+  if [[ "${"$"}{3:-}" =~ ^${READER_SCRATCH_ROOT}/[A-Za-z0-9-]+$ ]]; then home=$3; fi
+  # A fresh root-owned directory, so the reader cannot redirect this root write.
+  dir=$(mktemp -d /tb/route/reader.XXXXXXXX)
+  chmod 0755 "$dir"
+  script="$dir/command.sh"
+  env=(-e "HOME=$home" -e "TMPDIR=$home" -e USER=${READER_LINUX_USER} -e LOGNAME=${READER_LINUX_USER})
+else
+  [ "$1" != --stop ] || exit 2
+  id="$(date +%s%N)-$$"
+  as=()
+  env=()
+  dir=""
+  script="/tb/route/$id.sh"
+fi
+cwd=$1
+printf '%s' "$2" > "$script"
+[ -z "$dir" ] || chmod 0644 "$script"
+if [ -f /tb/route/.setsid ]; then
+  inner="umask 0002; exec setsid --wait bash -c 'echo \$\$ > /tb/route/$id.pid; exec bash -l $script'"
+else
+  inner="umask 0002; echo \$\$ > /tb/route/$id.pid; exec bash -l $script"
+fi
+docker exec "${"$"}{as[@]}" "${"$"}{env[@]}" -w "$cwd" -e NO_COLOR=1 -e TERM=dumb tb bash -c "$inner" &
+child=$!
+cleanup() { if [ -n "$dir" ]; then rm -rf "$dir"; else rm -f "$script" 2>/dev/null; fi; }
+trap 'stop_group TERM; sleep 1; stop_group KILL clean; kill $child 2>/dev/null; cleanup; exit 143' TERM HUP INT
 wait $child
 rc=$?
 # As on the VM, a command's leftover process group ends with it.
 stop_group KILL clean
-rm -f "/tb/route/$id.sh" 2>/dev/null
+cleanup
 exit $rc
 `;
 
@@ -396,6 +466,20 @@ const PROFILE_HOOK = [
 	"    done < /tb/route-mounts",
 	"    __tb_re='^[[:space:]]*ytimesy-(job|browser)([[:space:]][^;&|$`<>()]*)?[[:space:]]*$'",
 	'    if [[ "$__tb_rest" =~ $__tb_re ]]; then __tb_route=""; fi',
+	// A read-only subagent may not use Docker; its one sudo rule is the route.
+	// The route runs as root, which the reader's runtime cannot signal, so this
+	// shell stays as the process it signals and stops the route through sudo.
+	// Both run in their own sessions: the runtime's kill of the command's
+	// group then never meets a root process it may not signal, and the stop
+	// outlives this shell. The trap waits for the stop, so the runtime's
+	// group kill cannot catch it before it has left this group.
+	`    if [ -n "$__tb_route" ] && [ "$(id -un)" = ${READER_LINUX_USER} ]; then`,
+	'      __tb_id="$(date +%s%N)-$$"',
+	`      trap 'setsid sudo -n /usr/local/bin/tb-route --stop "$__tb_id" </dev/null >/dev/null 2>&1 & wait $!; exit 143' TERM HUP INT`,
+	'      setsid sudo -n /usr/local/bin/tb-route "$__tb_cwd" "$BASH_EXECUTION_STRING" "$HOME" "$__tb_id" &',
+	"      wait $!",
+	"      exit $?",
+	"    fi",
 	'    if [ -n "$__tb_route" ]; then exec /usr/local/bin/tb-route "$__tb_cwd" "$BASH_EXECUTION_STRING"; fi',
 	"    unset __tb_rest __tb_cwd __tb_route __tb_m __tb_re",
 	"  fi",
