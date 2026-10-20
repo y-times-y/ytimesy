@@ -4,6 +4,7 @@ import {
 	EMPTY_MEMORY,
 	MEMORY_MATCHES_HEADER,
 	MEMORY_MESSAGE_HEADER,
+	MEMORY_PROJECT_RULES_HEADER,
 	MEMORY_RULES_MATCHES_HEADER,
 	MEMORY_RULES_MESSAGE_HEADER,
 	MEMORY_RULES_RECENT_HEADER,
@@ -23,6 +24,7 @@ vi.mock("../adapters/memory-settings", () => ({
 	memoryEmbeddings: vi.fn(async () => new Map()),
 	saveMemoryEmbeddings: vi.fn(async () => {}),
 	recentUnsavedMessages: vi.fn(async () => []),
+	pendingMemorySaves: vi.fn(async () => 0),
 }));
 const dispatched: unknown[] = [];
 vi.mock("../adapters/background-job-dispatch", () => ({
@@ -340,8 +342,8 @@ describe("read hook", () => {
 		// Prefetched before the request is attached: the lines are embedded already.
 		await vi.waitFor(() => expect(documents).toHaveBeenCalledTimes(1));
 		const { recall } = await memory.attach(
-			[{ role: "user", content: "install a date library please" }],
-			[user("a", "install a date library please")],
+			[{ role: "user", content: "fix the timestamps in the export" }],
+			[user("a", "fix the timestamps in the export")],
 			workspace,
 		);
 		expect(snapshot).toHaveBeenCalledTimes(1);
@@ -350,7 +352,11 @@ describe("read hook", () => {
 			outcome: "matched",
 			ms: expect.any(Number),
 		});
-		expect(recall?.lines.map((line) => line.path)).toEqual(["tooling.md"]);
+		// The standing pnpm rule rides as a project rule; the hook adds the match.
+		expect(recall?.lines.map((line) => line.path)).toEqual([
+			"tooling.md",
+			"time.md",
+		]);
 	});
 });
 
@@ -427,6 +433,184 @@ describe("freshness", () => {
 	});
 });
 
+describe("project rules", () => {
+	const files = {
+		"MEMORY.md": EMPTY_MEMORY,
+		"ids.md":
+			"# ids\n- New entity IDs use ULIDs [added: 2026-10-01]\n- Order IDs were sequential in v1 [added: 2026-10-02]\n",
+		"web.md":
+			"# web\n- Every HTTP call goes through lib/http.ts [project: acme/web; scope: always]\n",
+		"other.md":
+			"# other\n- Never log tokens [project: other/app; scope: always]\n",
+	};
+
+	it("rides on the chat's first request whatever its wording, once, and is not matched again", async () => {
+		const memory = await turnMemory(
+			{
+				id: "11111111-1111-4111-8111-111111111111",
+				userId: "u1",
+				projectId: null,
+			},
+			{
+				repo: fakeRepo(files),
+				embed,
+				today: () => "2026-10-15",
+				projectName: "acme/web",
+				wording: "rules",
+			},
+		);
+		if (!memory) throw new Error("memory should be on");
+		const items = [user("a", "add an orders endpoint")];
+		const { messages, recall } = await memory.attach(
+			[{ role: "user", content: "add an orders endpoint" }],
+			items,
+			workspace,
+		);
+		const parts = messages[0].content as { text: string }[];
+		expect(parts[1].text).toContain(MEMORY_PROJECT_RULES_HEADER);
+		// Scope always first, then conventions; facts and other projects stay out.
+		expect(parts[1].text).toContain(
+			"- Every HTTP call goes through lib/http.ts\n- New entity IDs use ULIDs\n",
+		);
+		expect(parts[1].text).not.toContain("sequential");
+		expect(JSON.stringify(parts)).not.toContain("Never log tokens");
+		// The hook's matches never repeat a rule.
+		expect(parts.slice(2).map((part) => part.text)).toEqual([
+			expect.not.stringContaining("ULIDs"),
+		]);
+		expect(recall?.lines.map((line) => line.path)).toEqual([
+			"web.md",
+			"ids.md",
+			"ids.md",
+		]);
+		const later = await memory.attach(
+			[
+				...messages,
+				{ role: "assistant", content: "Done." },
+				{ role: "user", content: "give new entity IDs a prefix too" },
+			],
+			[...items, user("b", "give new entity IDs a prefix too")],
+			workspace,
+		);
+		expect(JSON.stringify(later.messages.at(-1)?.content)).not.toContain(
+			"ULIDs",
+		);
+	});
+
+	it("is not attached to a later request of a chat begun without it", async () => {
+		const memory = await memoryFor(files, "notes");
+		const items = [user("a", "earlier"), user("b", "add an orders endpoint")];
+		const { messages } = await memory.attach(
+			[
+				{ role: "user", content: "earlier" },
+				{ role: "assistant", content: "ok" },
+				{ role: "user", content: "add an orders endpoint" },
+			],
+			items,
+			workspace,
+		);
+		expect(messages.at(-1)?.content).toBe("add an orders endpoint");
+	});
+});
+
+describe("saves still running in other chats", () => {
+	const owner = {
+		id: "11111111-1111-4111-8111-111111111111",
+		userId: "u1",
+		projectId: null,
+	};
+	const before = { "MEMORY.md": EMPTY_MEMORY };
+	const after = { "MEMORY.md": `${EMPTY_MEMORY}- New entity IDs use ULIDs\n` };
+
+	it("are waited for, so the next chat reads what they saved", async () => {
+		let saved = false;
+		const snapshot = vi.fn(async () =>
+			saved
+				? { head: "after", files: after }
+				: { head: "before", files: before },
+		);
+		const pendingSaves = vi.fn(async () => {
+			if (pendingSaves.mock.calls.length < 2) return 1;
+			saved = true;
+			return 0;
+		});
+		const memory = await turnMemory(owner, {
+			repo: { ...fakeRepo(before), snapshot },
+			embed: null,
+			today: () => "2026-10-15",
+			projectName: null,
+			pendingSaves,
+		});
+		if (!memory) throw new Error("memory should be on");
+		const { messages, recall } = await memory.attach(
+			[{ role: "user", content: "add an orders table" }],
+			[user("a", "add an orders table")],
+			workspace,
+		);
+		expect(pendingSaves).toHaveBeenCalledTimes(2);
+		expect(recall?.head).toBe("after");
+		expect(JSON.stringify(messages[0].content)).toContain(
+			"New entity IDs use ULIDs",
+		);
+	});
+
+	it("never hold up the request past the wait, nor fail it", async () => {
+		vi.useFakeTimers();
+		try {
+			const memory = await turnMemory(owner, {
+				repo: fakeRepo(before),
+				embed: null,
+				today: () => "2026-10-15",
+				projectName: null,
+				pendingSaves: async () => 1,
+			});
+			const attaching = memory?.attach(
+				[{ role: "user", content: "add an orders table" }],
+				[user("a", "add an orders table")],
+				workspace,
+			);
+			await vi.advanceTimersByTimeAsync(5000);
+			expect((await attaching)?.recall?.head).toBe("abc");
+		} finally {
+			vi.useRealTimers();
+		}
+		const broken = await turnMemory(owner, {
+			repo: fakeRepo(before),
+			embed: null,
+			projectName: null,
+			pendingSaves: async () => {
+				throw new Error("database down");
+			},
+		});
+		expect(
+			(
+				await broken?.attach(
+					[{ role: "user", content: "add an orders table" }],
+					[user("a", "add an orders table")],
+					workspace,
+				)
+			)?.recall?.head,
+		).toBe("abc");
+	});
+
+	it("are not waited for when the agent alone writes memory", async () => {
+		const pendingSaves = vi.fn(async () => 1);
+		const memory = await turnMemory(owner, {
+			repo: fakeRepo(before),
+			embed: null,
+			projectName: null,
+			writer: "agent",
+			pendingSaves,
+		});
+		await memory?.attach(
+			[{ role: "user", content: "add an orders table" }],
+			[user("a", "add an orders table")],
+			workspace,
+		);
+		expect(pendingSaves).not.toHaveBeenCalled();
+	});
+});
+
 describe("memory markers", () => {
 	const chatId = "11111111-1111-4111-8111-111111111111";
 	const otherChat = "22222222-2222-4222-8222-222222222222";
@@ -452,10 +636,11 @@ describe("memory markers", () => {
 			[user("a", "install a date library please")],
 			workspace,
 		);
+		// A standing rule is recalled as a project rule, so the hook finds nothing more.
 		expect(recall).toEqual({
 			head: "abc",
 			index: true,
-			hook: { outcome: "matched", ms: expect.any(Number) },
+			hook: { outcome: "none", ms: expect.any(Number) },
 			lines: [
 				{
 					path: "tooling.md",
