@@ -1,5 +1,7 @@
 // What a rehearsal scenario left behind (turn items, child sessions, model
 // requests, VM state) and the checks each scenario must pass.
+
+import type { ReviewLoopState } from "../../src/domain/review-loop";
 import {
 	fusionTurnMetrics,
 	HARNESS_EXPLORE_HEADING,
@@ -12,11 +14,17 @@ import type { RehearsalEdge } from "./edge";
 import type { FakeCodex, ModelRequestRecord } from "./fake-codex";
 import {
 	ADMITTED_LINE,
+	BUILDER_LIST_LABEL,
+	BUILDER_REQUIREMENTS,
 	CAP_NOTE,
 	CHECKER_MARKER,
 	type Check,
 	EXPLORE_FILE,
+	LEAD_REQUIREMENTS,
+	LEAD_REQUIREMENTS_INSTRUCTION,
 	MULTITURN_FOLLOW_UP,
+	REQUIREMENTS_INSTRUCTION,
+	REQUIREMENTS_MARK,
 	RIGOR_BLOCK,
 	RIGOR_CHECKER_LINES,
 	type ScenarioId,
@@ -163,6 +171,41 @@ export async function checkScenario(
 		data.requests.filter((request) => request.agent === agent);
 	const vmFile = async (vm: string, command: string) =>
 		(await data.vms.root(vm, command)).stdout;
+	/** rigor=on: the review rounds' captured requirements lists. */
+	const reviewLists = () =>
+		data.reviewState.flatMap(
+			(row) =>
+				(row.response as ReviewLoopState | null)?.rounds?.map(
+					(round) => round.builderRequirements ?? null,
+				) ?? [],
+		);
+	/** The checker brief carries the list after its own review parts, labelled as a claim. */
+	const briefCarriesList = (
+		brief: string | undefined,
+		list: readonly string[],
+	) =>
+		has(
+			brief,
+			`<builder_requirements>\n${BUILDER_LIST_LABEL}\n${list.map((item) => `- ${item}`).join("\n")}\n</builder_requirements>`,
+			"compare your list with the builder's understanding of the requirements",
+		) &&
+		(brief ?? "").indexOf("1. Requirements.") <
+			(brief ?? "").indexOf("<builder_requirements>");
+	/**
+	 * Lines holding the list's mark in the task checkout's commits (every
+	 * ref), its diff and its files, next to lines holding the run's own edit
+	 * (which must be there, or the search saw nothing).
+	 */
+	const listLeak = async (edit: string) => {
+		const search = (needle: string) =>
+			`{ git -c safe.directory='*' log --all -p; git -c safe.directory='*' diff HEAD; grep -r --exclude-dir=.git -e '${needle}' .; } 2>/dev/null | grep -c -e '${needle}'`;
+		const out = await vmFile(
+			data.vm,
+			`docker exec tb sh -c ${JSON.stringify(`cd /app && ${search(REQUIREMENTS_MARK)}; ${search(edit)}`)}`,
+		);
+		const [mark, own] = out.trim().split("\n").map(Number);
+		return { mark, own, ok: mark === 0 && own > 0 };
+	};
 	const childItems = (role: string) =>
 		data.children
 			.filter((child) => child.agent_role === role)
@@ -331,6 +374,27 @@ export async function checkScenario(
 				}),
 			clip(checkerBrief(checkerCalls[0])),
 		);
+		check(
+			"without rigor=on the builder is not asked for a requirements list",
+			requests("review-builder").every(
+				(request) => !has(request.instructions, REQUIREMENTS_INSTRUCTION),
+			),
+		);
+		check(
+			"without rigor=on a list the builder wrote is not captured or given to the checker",
+			has(
+				data.rootItems.find((item) => has(item.text, "<requirements>"))?.text,
+				BUILDER_REQUIREMENTS[0],
+			) &&
+				reviewLists().length >= 1 &&
+				reviewLists().every((list) => list === null) &&
+				checkerCalls.every(
+					(request) =>
+						!has(checkerBrief(request), "builder_requirements") &&
+						!has(checkerBrief(request), REQUIREMENTS_MARK),
+				),
+			JSON.stringify(reviewLists()),
+		);
 		// Scenarios run at once against one fake; rigor's capped output is in it too.
 		const ownCalls = [...requests("review-builder"), ...checkerCalls];
 		check(
@@ -358,6 +422,42 @@ export async function checkScenario(
 				) &&
 				checker.every((request) => !has(request.instructions, RIGOR_BLOCK)),
 			clip(checkerBrief(checker[0]), 300),
+		);
+		check(
+			"rigor=on: the builder is asked for its requirements list (not as a lead)",
+			builder.every(
+				(request) =>
+					has(request.instructions, REQUIREMENTS_INSTRUCTION) &&
+					!has(request.instructions, LEAD_REQUIREMENTS_INSTRUCTION),
+			),
+		);
+		check(
+			"rigor=on: the builder's list was captured on every review round",
+			reviewLists().length >= 2 &&
+				reviewLists().every(
+					(list) =>
+						JSON.stringify(list) === JSON.stringify(BUILDER_REQUIREMENTS),
+				),
+			JSON.stringify(reviewLists()),
+		);
+		check(
+			"rigor=on: the checker brief carries the list, labelled as the builder's claim, after its own parts",
+			checker.length >= 1 &&
+				checker.every((request) =>
+					briefCarriesList(checkerBrief(request), BUILDER_REQUIREMENTS),
+				),
+			clip(
+				checkerBrief(checker[0])?.slice(
+					checkerBrief(checker[0])?.indexOf("<builder_requirements>"),
+				),
+				400,
+			),
+		);
+		const leak = await listLeak("rehearsal edit applied");
+		check(
+			"rigor=on: the list is in no commit, diff or file of the checkout",
+			leak.ok,
+			JSON.stringify(leak),
 		);
 		const seq = builder.find((request) => request.step === 1)?.lastOutputs[0];
 		check(
@@ -702,7 +802,62 @@ export async function checkScenario(
 			);
 		}
 
+		if (id === "fusion")
+			check(
+				"without rigor=on the lead is not asked for a requirements list",
+				lead.every(
+					(request) =>
+						!has(request.instructions, REQUIREMENTS_INSTRUCTION) &&
+						!has(request.instructions, LEAD_REQUIREMENTS_INSTRUCTION),
+				),
+			);
+
 		if (id === "fusion-explore") {
+			check(
+				"rigor=on: the lead is asked for the list as the lead; the sidekick gets the rigor block, not the list",
+				lead.length >= 1 &&
+					lead.every((request) =>
+						has(
+							request.instructions,
+							REQUIREMENTS_INSTRUCTION,
+							LEAD_REQUIREMENTS_INSTRUCTION,
+						),
+					) &&
+					sidekickCalls.every(
+						(request) =>
+							has(request.instructions, RIGOR_BLOCK) &&
+							!has(request.instructions, REQUIREMENTS_INSTRUCTION),
+					),
+			);
+			check(
+				"rigor=on: the lead's brief gave the sidekick its list's items",
+				sidekickCalls.some((request) =>
+					request.users.some((text) => has(text, LEAD_REQUIREMENTS[0])),
+				),
+			);
+			const checker = requests("explore-checker");
+			check(
+				"rigor=on: the lead's list was captured and the checker got it as a claim",
+				reviewLists().length >= 1 &&
+					reviewLists().every(
+						(list) =>
+							JSON.stringify(list) === JSON.stringify(LEAD_REQUIREMENTS),
+					) &&
+					checker.length >= 1 &&
+					checker.every((request) =>
+						briefCarriesList(checkerBrief(request), LEAD_REQUIREMENTS),
+					),
+				JSON.stringify({
+					lists: reviewLists(),
+					brief: clip(checkerBrief(checker[0]), 200),
+				}),
+			);
+			const leak = await listLeak("rehearsal explore build");
+			check(
+				"rigor=on: the lead's list is in no commit, diff or file of the checkout",
+				leak.ok,
+				JSON.stringify(leak),
+			);
 			check(
 				"the exploration round changed no files and fired no signal",
 				state?.rounds[0]?.patchFiles === 0 && !state?.rounds[0]?.signals,
