@@ -11,6 +11,15 @@ import { deliverParentTaskNotification } from "./agent-task-event-delivery";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 /** Recover settled server turns even after a crash between finalization and notification. */
+/**
+ * How long a finished child turn is left to its own runtime before its
+ * event is recovered. The runtime saves the report after the turn row is
+ * final, and a writer's report first transfers its patch (seconds); a
+ * recovery inside that window saved the bare final text under the same
+ * dedupe key, so the parent never saw the patch (found by the rehearsal).
+ */
+export const CHILD_EVENT_RECOVERY_GRACE_SECONDS = 120;
+
 export async function recoverChildTurnEvents() {
 	const result = await database().query<{
 		id: string;
@@ -21,10 +30,12 @@ export async function recoverChildTurnEvents() {
 		`select t.id,t.session_id,t.state,t.items from api_turn t
 		 join agent_session c on c.id=t.session_id and c.user_id=t.user_id
 		 where c.parent_session_id is not null and t.state in ('completed','failed')
+		 and t.updated_at < now() - make_interval(secs => $1)
 		 and not exists(select 1 from api_turn newer where newer.session_id=t.session_id and newer.created_at>t.created_at)
 		 and not exists(select 1 from agent_task_event e where e.child_session_id=c.id and
 		   (e.dedupe_key=c.id::text || ':' || t.state || ':' || t.id::text or e.created_at>=t.updated_at))
 		 order by t.updated_at limit 32`,
+		[CHILD_EVENT_RECOVERY_GRACE_SECONDS],
 	);
 	for (const turn of result.rows) {
 		const items = sessionItemsFromUnknown(turn.items);
