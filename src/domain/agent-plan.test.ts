@@ -92,3 +92,34 @@ it("records propose_plan as a plan item, not a tool row, once it succeeded", () 
 			),
 		).toBeNull();
 });
+
+it("counts plan mode entered from inside a run_code program (code mode primary)", () => {
+	const program = (status: "completed" | "failed"): SessionItem => ({
+		kind: "dynamicToolCall",
+		id: SessionItemId("t1:code"),
+		tool: "run_code",
+		status: "completed",
+		output: JSON.stringify({
+			ok: true,
+			calls: [
+				{ tool: "read", input: "{}", status: "completed", ms: 1, output: "" },
+				{
+					tool: "enter_plan_mode",
+					input: "{}",
+					status,
+					ms: 1,
+					output: "",
+				},
+			],
+		}),
+	});
+	expect(agentPlanState([user("u1"), program("completed")])).toEqual({
+		kind: "planning",
+	});
+	expect(agentPlanState([user("u1"), program("failed")])).toEqual({
+		kind: "none",
+	});
+	expect(
+		agentPlanState([user("u1"), program("completed"), user("u2")]),
+	).toEqual({ kind: "none" });
+});

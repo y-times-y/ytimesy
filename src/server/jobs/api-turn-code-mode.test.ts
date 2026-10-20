@@ -112,6 +112,7 @@ beforeEach(() => {
 vi.mock("../adapters/dev-eval-users", () => ({
 	devEvalUsersEnabled: () => true,
 	harnessVariantForUser: mocks.variant,
+	isDevEvalUser: async () => false,
 }));
 vi.mock("../adapters/model-connections", () => ({
 	loadModelConnection: vi.fn(async () => ({ revision: "revision" })),
@@ -211,14 +212,15 @@ it("offers and describes run_code on the lean surface when codeMode=on", async (
 	expect(input.instructions).toContain("run_code runs one JavaScript program");
 });
 
-it("still offers run_code when subagents defer the rarely used tools", async () => {
+it("offers run_code and the agent tool side by side when subagents are on", async () => {
 	const input = await offered({ codeMode: "on", subagents: "on" });
 	expect(Object.keys(input.tools)).toContain("run_code");
-	// The request's active tools (deferral sends only these).
+	// agent is an ordinary visible tool in every code mode; only code mode
+	// primary defers anything (MCP search/call), so nothing is listed here.
 	expect(input.toolOrder?.()).toContain("run_code");
-	expect(input.toolOrder?.()).not.toContain("agent");
+	expect(input.toolOrder?.()).toContain("agent");
 	expect(input.instructions).toContain("run_code runs one JavaScript program");
-	expect(input.instructions).toContain("or call one directly from run_code");
+	expect(input.instructions).not.toContain("searchTools");
 });
 
 it("offers no run_code when codeMode is off or the surface is not lean", async () => {

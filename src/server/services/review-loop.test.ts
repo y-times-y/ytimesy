@@ -147,6 +147,15 @@ const verdict = (value: Record<string, unknown>) =>
 const FAIL = verdict({
 	verdict: "fail",
 	failures: ["ordering: a newer tombstone hides an older live version"],
+	tests: [
+		{
+			name: "a tombstone over a live version, then compaction",
+			command: "python3 /tmp/ytimesy-attempts/turn/review-1/tests/t1.py",
+			passed: false,
+			output: "AssertionError: get(k) returned None\nexpected v1",
+		},
+		{ name: "empty store compacts", command: "true", passed: true },
+	],
 	requirements: [
 		{ requirement: "regression test", met: true, evidence: "make test ok" },
 		{
@@ -167,7 +176,14 @@ const FAIL = verdict({
 describe("review loop", () => {
 	it("checks the finished turn, hands concrete findings back to the same run, and finishes on pass", async () => {
 		const h = harness({
-			reports: [FAIL, verdict({ verdict: "pass", failures: [] })],
+			reports: [
+				FAIL,
+				verdict({
+					verdict: "pass",
+					failures: [],
+					tests: [{ name: "edge", command: "c", passed: true }],
+				}),
+			],
 		});
 		expect((await h.loop.beforeModel(h.step(0, ""))).kind).toBe("run");
 		expect(h.state()?.checkpoint.ref).toBe("refs/ytimesy/review/turn-base");
@@ -208,6 +224,11 @@ describe("review loop", () => {
 		);
 		expect(notice).toContain("`F1: fixed` or `F1: rejected - <why>`");
 		expect(notice).not.toContain("regression test");
+		// The checker's failing test, with the command and output to reproduce it.
+		expect(notice).toContain(
+			"Tests it wrote that failed (run each command to reproduce; the test itself may be wrong):\n- a tombstone over a live version, then compaction: `python3 /tmp/ytimesy-attempts/turn/review-1/tests/t1.py` -> AssertionError: get(k) returned None | expected v1",
+		);
+		expect(notice).not.toContain("empty store compacts");
 		expect(h.state()?.phase).toBe("fixing");
 		expect(first.items?.at(-1)).toMatchObject({ tool: "review_check" });
 		// The fix: the builder answers, the tree changed; a second check passes.

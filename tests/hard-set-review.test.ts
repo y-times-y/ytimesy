@@ -3,7 +3,9 @@ import {
 	type HardSetReviewRecord,
 	type HardSetReviewRound,
 	reviewLoopReport,
+	reviewStateForRecord,
 } from "../scripts/hard-set/review-report";
+import type { ReviewLoopState } from "../src/domain/review-loop";
 
 const snapshot = {
 	cwd: "/app",
@@ -125,5 +127,64 @@ describe("hard set review report", () => {
 				{ task: "x", attempt: "1", status: "final", passed: true },
 			]),
 		).toEqual([]);
+	});
+});
+
+describe("hard set review report: the checker's own tests", () => {
+	it("counts the tests the checker wrote and flags an untested pass", () => {
+		const lines = reviewLoopReport([
+			{
+				task: "mvcc",
+				attempt: "1",
+				status: "final",
+				passed: false,
+				reviewLoop: loop(
+					[
+						round({
+							checkerTests: [
+								{ name: "a", passed: false, command: "c" },
+								{ name: "b", passed: true, command: null },
+							],
+						}),
+						round({
+							n: 2,
+							verdict: "unsure",
+							findings: 0,
+							decision: "no-findings",
+							checkerTests: [],
+							untested: true,
+						}),
+					],
+					{ outcome: "no-findings" },
+				),
+			},
+		]);
+		expect(lines[2]).toBe(
+			"- mvcc.1: R1 fail(2) [2 tests, 1 failed]->fail 2.5m fix 1.2m fixed 1 rejected 1, R2 unsure [0 tests, untested pass]->fail 2.5m; no-findings; final fail",
+		);
+	});
+});
+
+describe("hard set review state", () => {
+	// rl-live-2: the checker's completion woke a second builder turn whose
+	// own state was "not-eligible (no files changed)".
+	const checked = {
+		turnId: "turn-1",
+		outcome: "no-findings",
+		rounds: [{ n: 1 }],
+	} as unknown as ReviewLoopState;
+	const wake = {
+		turnId: "turn-2",
+		outcome: "not-eligible",
+		rounds: [],
+	} as unknown as ReviewLoopState;
+
+	it("reports the latest state that ran a round, not a later empty wake turn", () => {
+		expect(reviewStateForRecord([checked, wake])).toBe(checked);
+	});
+
+	it("falls back to the last state when no turn ran a round", () => {
+		expect(reviewStateForRecord([wake])).toBe(wake);
+		expect(reviewStateForRecord([])).toBeNull();
 	});
 });

@@ -21,6 +21,8 @@ describe("harness variants", () => {
 			instructions: "default",
 			attempts: "1",
 			review: "off",
+			lead: "off",
+			roleModels: {},
 		});
 	});
 
@@ -41,6 +43,8 @@ describe("harness variants", () => {
 			instructions: "default",
 			attempts: "1",
 			review: "off",
+			lead: "off",
+			roleModels: {},
 		});
 		expect(
 			harnessVariantFromFlags(["memoryWording=notes,toolSurface=lean-native"]),
@@ -55,6 +59,8 @@ describe("harness variants", () => {
 			instructions: "default",
 			attempts: "1",
 			review: "off",
+			lead: "off",
+			roleModels: {},
 		});
 		expect(
 			harnessVariantFromFlags(["memoryWording=notes,memoryWriter=both"]),
@@ -89,6 +95,8 @@ describe("harness variants", () => {
 			instructions: "default",
 			attempts: "1",
 			review: "off",
+			lead: "off",
+			roleModels: {},
 		});
 		expect(harnessVariantFromUnknown({ memoryWriter: "agent" })).toEqual({
 			...DEFAULT_HARNESS_VARIANT,

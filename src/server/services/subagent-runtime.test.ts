@@ -2,6 +2,11 @@ import type { ModelMessage } from "ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionItemId } from "#/domain/ids";
 import type { SessionItem } from "#/domain/session-item";
+import {
+	newSidekickState,
+	retireSidekickState,
+	type SidekickState,
+} from "#/domain/sidekick";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 
 const adapters = vi.hoisted(() => ({
@@ -26,8 +31,12 @@ vi.mock("./subagent-writer", () => ({
 	transferWriterPatch: adapters.transfer,
 }));
 
-const { guardSubagentStep, SubagentBudgetExhausted, subagentReport } =
-	await import("./subagent-runtime");
+const {
+	guardSubagentStep,
+	retireLeadSidekicks,
+	SubagentBudgetExhausted,
+	subagentReport,
+} = await import("./subagent-runtime");
 
 const NOW = Date.parse("2026-10-18T12:00:00.000Z");
 const at = (minutes: number) => new Date(NOW + minutes * 60_000).toISOString();
@@ -110,6 +119,34 @@ describe("subagent step guard", () => {
 		expect(wrapped.at(-1)?.content).toContain("the parent asked you to stop");
 		await expect(guard(13, { budget: stopping })).rejects.toThrow(
 			"stopped by the parent",
+		);
+	});
+
+	it("counts a cheaper model's tokens at the builder's price", async () => {
+		const luna = {
+			...session,
+			listedModelId: "gpt-6-luna",
+			agentBudget: { ...budget, priceBasis: "anthropic/claude-opus-5.5" },
+		};
+		const step = (tokens: number) =>
+			guardSubagentStep({
+				session: luna,
+				items: used(tokens),
+				messages,
+				now: NOW,
+				deps: {
+					recordStep: vi.fn(async () => ({
+						steps: 1,
+						budget: luna.agentBudget,
+					})),
+					descendants: vi.fn(async () => []),
+				},
+			});
+		// 3M Luna tokens weigh 0.75M Opus tokens (the 0.25 floor): under budget.
+		expect(await step(3_000_000)).toBe(messages);
+		// 4M weigh the whole 1M budget: the turn stops.
+		await expect(step(4_000_000)).rejects.toBeInstanceOf(
+			SubagentBudgetExhausted,
 		);
 	});
 });
@@ -243,5 +280,281 @@ describe("subagent report", () => {
 			now: NOW,
 		});
 		expect(report).toMatch(/· ~\$[\d.]+ list-price est\.\]/);
+	});
+});
+
+describe("sidekick (lead mode fusion)", () => {
+	const sidekickState = (
+		fields: Partial<SidekickState> = {},
+	): SidekickState => ({
+		...newSidekickState({ tokens: 1_000_000 }, at(-30)),
+		...fields,
+	});
+	const sidekickBudget = (state: SidekickState) => ({
+		...budget,
+		sidekick: state,
+	});
+	const sidekickSession = (state: SidekickState) => ({
+		...session,
+		agentRole: "writer" as const,
+		createdAt: at(-60),
+		agentBudget: sidekickBudget(state),
+	});
+	const step = (
+		state: SidekickState,
+		steps: number,
+		options: {
+			items?: SessionItem[];
+			history?: ModelMessage[];
+			stopAtStep?: number;
+		} = {},
+	) =>
+		guardSubagentStep({
+			session: sidekickSession(state),
+			items: options.items ?? [],
+			messages: options.history ?? messages,
+			now: NOW,
+			deps: {
+				recordStep: vi.fn(async () => ({
+					steps,
+					budget: {
+						...sidekickBudget(state),
+						...(options.stopAtStep === undefined
+							? {}
+							: { stopAtStep: options.stopAtStep }),
+					},
+				})),
+				descendants: vi.fn(async () => []),
+			},
+		});
+	const round2 = sidekickState({
+		round: 2,
+		roundStartedAt: at(-2),
+		roundStartSteps: 95,
+		roundStartTokens: 300_000,
+	});
+
+	it("counts steps and minutes from the round's start, not the agent's creation", async () => {
+		// 140 steps in all, 60 minutes old: over an ordinary agent's budget,
+		// but round 2 has used 45 steps and 2 minutes.
+		expect(await step(round2, 140)).toBe(messages);
+		await expect(step(round2, 195)).rejects.toThrow(
+			"Budget exhausted (round 2, steps 100/100).",
+		);
+	});
+
+	it("caps one round's tokens and the sidekick's lifetime tokens", async () => {
+		// Round cap 500k: 300k before the round plus 520k now is 520k in the round.
+		await expect(step(round2, 100, { items: used(820_000) })).rejects.toThrow(
+			"round 2, tokens",
+		);
+		// Lifetime 1M: 900k before the round leaves 100k for it.
+		const late = sidekickState({ ...round2, roundStartTokens: 900_000 });
+		await expect(step(late, 100, { items: used(1_000_000) })).rejects.toThrow(
+			"Budget exhausted (round 2, tokens 100,000/100,000).",
+		);
+	});
+
+	it("wraps up once per round, though an earlier round's notice is in its history", async () => {
+		const earlier: ModelMessage[] = [
+			...messages,
+			{
+				role: "user",
+				content: "Budget nearly used (round 1, steps 90/100). Wrap up now.",
+			},
+		];
+		const wrapped = await step(round2, 185, { history: earlier });
+		expect(wrapped).toHaveLength(3);
+		expect(wrapped.at(-1)?.content).toContain(
+			"Budget nearly used (round 2, steps 90/100)",
+		);
+		expect(await step(round2, 186, { history: wrapped })).toBe(wrapped);
+	});
+
+	it("applies an agent_send stop within the round", async () => {
+		await expect(step(round2, 98, { stopAtStep: 98 })).rejects.toThrow(
+			"stopped by the parent",
+		);
+	});
+
+	it("reports each round's patch under its own name and keeps the sidekick for the next round", async () => {
+		const root = record("root", null, { providerRef: "vm-root" });
+		const state = sidekickState({
+			round: 2,
+			roundStartedAt: at(-3),
+			rounds: [
+				{
+					n: 1,
+					startedAt: at(-30),
+					endedAt: at(-20),
+					outcome: "finished",
+					patchFiles: 2,
+				},
+				{ n: 2, startedAt: at(-3), sync: "clean" },
+			],
+		});
+		const sidekick = record("s", "root", {
+			agentRole: "writer",
+			agentSteps: 60,
+			agentBudget: sidekickBudget(state),
+			agentFork: {
+				vmId: "vm-fork",
+				sourceVmId: "vm-root",
+				bootedAt: at(-30),
+				base: "lead-tree",
+				parentHead: "lead-head",
+			},
+		});
+		adapters.ancestors.mockResolvedValue([root]);
+		adapters.tree.mockResolvedValue([root, sidekick]);
+		adapters.transfer.mockResolvedValue({
+			path: "~/.ytimesy/agents/1.r2.patch",
+			files: ["src/cli.ts"],
+			added: 3,
+			removed: 1,
+			sha256: "c".repeat(64),
+			ref: "refs/ytimesy/agents/1.r2",
+			base: "lead-tree",
+		});
+		const saveState = vi.fn(async () => {});
+		const destroy = vi.fn(async () => {});
+		const report = await subagentReport({
+			machines: { destroy } as never,
+			session: sidekick,
+			items: used(10_000),
+			outcome: "finished",
+			text: "Fixed the flag; npm test exit 0.",
+			now: NOW,
+			deps: {
+				session: vi.fn(async () => sidekick),
+				saveState,
+				mergeFork: adapters.mergeFork,
+			},
+		});
+		expect(report).toContain(
+			"[agent 1 writer finished · round 2/6 · 60 steps · 3m",
+		);
+		expect(adapters.transfer).toHaveBeenCalledWith(
+			expect.objectContaining({
+				label: "1.r2",
+				base: "lead-tree",
+				parentHead: "lead-head",
+			}),
+		);
+		expect(report).toContain("Sidekick 1: round 2/6 done.");
+		const saved = (
+			saveState.mock.calls[0] as unknown as [string, SidekickState]
+		)[1];
+		expect(saved.rounds.at(-1)).toMatchObject({
+			n: 2,
+			outcome: "finished",
+			patchFiles: 1,
+		});
+		expect(saved.retired).toBeUndefined();
+		expect(destroy).not.toHaveBeenCalled();
+	});
+
+	it("retires the sidekick and deletes its fork after its last round's report", async () => {
+		const root = record("root", null, { providerRef: "vm-root" });
+		const state = sidekickState({ round: 6, roundStartedAt: at(-1) });
+		const sidekick = record("s", "root", {
+			agentRole: "writer",
+			agentBudget: sidekickBudget(state),
+			agentFork: {
+				vmId: "vm-fork",
+				sourceVmId: "vm-root",
+				bootedAt: at(-30),
+				base: "lead-tree",
+				parentHead: "lead-head",
+			},
+		});
+		adapters.ancestors.mockResolvedValue([root]);
+		adapters.tree.mockResolvedValue([root, sidekick]);
+		const destroy = vi.fn(async () => {});
+		const saveState = vi.fn(async () => {});
+		const report = await subagentReport({
+			machines: { destroy } as never,
+			session: sidekick,
+			items: [],
+			outcome: "finished",
+			text: "done",
+			now: NOW,
+			deps: {
+				session: vi.fn(async () => sidekick),
+				saveState,
+				mergeFork: adapters.mergeFork,
+			},
+		});
+		expect(report).toContain(
+			"Sidekick 1 is retired (all rounds used); its fork is deleted.",
+		);
+		expect(destroy).toHaveBeenCalledWith("vm-fork");
+		expect(adapters.mergeFork).toHaveBeenCalledWith(
+			"s",
+			expect.objectContaining({ deletedAt: new Date(NOW).toISOString() }),
+		);
+	});
+
+	it("retires the lead's sidekicks when its turn ends: idle ones lose their fork now, running ones are stopped", async () => {
+		const state = sidekickState();
+		const fork = (vmId: string) => ({
+			vmId,
+			sourceVmId: "vm-root",
+			bootedAt: at(-30),
+		});
+		const idle = record("idle", "root", {
+			agentRole: "writer",
+			turnStatus: "idle",
+			agentBudget: sidekickBudget(state),
+			agentFork: fork("vm-idle"),
+		});
+		const running = record("running", "root", {
+			agentRole: "writer",
+			turnStatus: "running",
+			agentBudget: sidekickBudget(state),
+			agentFork: fork("vm-running"),
+		});
+		const retired = record("retired", "root", {
+			agentRole: "writer",
+			turnStatus: "idle",
+			agentBudget: sidekickBudget(
+				retireSidekickState(state, "stopped", at(-5)),
+			),
+			agentFork: fork("vm-retired"),
+		});
+		const ordinary = record("writer", "root", {
+			agentRole: "writer",
+			turnStatus: "idle",
+			agentBudget: budget,
+			agentFork: fork("vm-writer"),
+		});
+		const destroy = vi.fn(async () => {});
+		const stop = vi.fn(async () => {});
+		const saveState = vi.fn(async () => {});
+		const count = await retireLeadSidekicks(
+			{ destroy } as never,
+			{ userId: "user", id: "root" },
+			"the lead's turn ended",
+			{
+				descendants: vi.fn(async () => [idle, running, retired, ordinary]),
+				stop,
+				saveState,
+				mergeFork: adapters.mergeFork,
+				now: () => NOW,
+			},
+		);
+		expect(count).toBe(2);
+		expect(destroy).toHaveBeenCalledTimes(1);
+		expect(destroy).toHaveBeenCalledWith("vm-idle");
+		expect(stop).toHaveBeenCalledWith("running");
+		expect(saveState).toHaveBeenCalledWith(
+			"running",
+			expect.objectContaining({
+				retired: {
+					at: new Date(NOW).toISOString(),
+					reason: "the lead's turn ended",
+				},
+			}),
+		);
 	});
 });

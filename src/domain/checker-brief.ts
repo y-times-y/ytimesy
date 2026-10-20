@@ -44,7 +44,7 @@ function deliverableLine(input: ReviewBriefInput) {
 	].join(" ");
 }
 
-/** The review a checker runs on a finished deliverable; returns {verdict, failures[]} JSON. */
+/** The review a checker runs on a finished deliverable; returns {verdict, failures[], tests[]} JSON. */
 export function independentReviewBrief(input: ReviewBriefInput) {
 	const work = `${input.scratch}/work`;
 	return [
@@ -58,17 +58,17 @@ export function independentReviewBrief(input: ReviewBriefInput) {
 		deliverableLine(input),
 		"</deliverable>",
 		"",
-		`Do not change the deliverable. Copy what you need (\`cp -a ${input.checkout} ${work}\`) and run experiments only in ${input.scratch}; read the original paths where the request names them.`,
+		`Do not change the deliverable. Copy the checkout's contents (\`mkdir -p ${work} && cp -a ${input.checkout}/. ${work}/\`; the trailing /. copies what the path points to, even when it is a symbolic link) and run experiments only in ${input.scratch}; read the original paths where the request names them.`,
 		"",
 		"Review in four parts:",
 		"1. Requirements. List every requirement in the request and in the files it points to (specs, READMEs, schemas, API docs, examples, format notes in the working directory): exact names, paths, formats, fields, values, units, ordering, limits, invocation and side effects such as records saved in a service. For each, give evidence that it is met or not: a command and its output, or a file and line. A requirement you could not check is not met.",
 		"2. Assumptions. List the assumptions the deliverable depends on: readings of ambiguous wording, conventions, units, defaults, tie-breaking, interpretation of the inputs. Where a result hinges on one, work out the alternative reading and test it, and say which one the request and its files support.",
 		"3. Plausibility. Check that outputs are plausible: magnitudes, counts and ranges against the inputs, internal consistency, totals that add up, no placeholders, hard-coded or degenerate answers, and nothing that only works on the examples.",
-		"4. Exercise it as an outside grader would. Use the stated paths, formats and invocation exactly, from a clean shell and another directory, without scratch files, caches or environment the builder may have left. Try fresh inputs and edge cases a strict grader would use, and run the existing tests and callers of anything that was changed.",
+		`4. Test it yourself. The project's existing tests passed for the builder too and are not enough: a strict grader's hidden tests target what they miss. For each requirement and each risky change in the diff, write at least one new test or executable probe of your own under ${input.scratch}/tests, aimed at cases the existing tests do not cover (derive them from the request, the diff and the files it points to): boundaries, empty and large inputs, error paths, ordering, concurrency and the states between steps. Use the stated paths, formats and invocation exactly, from a clean shell and another directory, without anything the builder may have left. Run your tests against your copy, then the existing tests and the callers of anything changed.`,
 		"",
 		"Answer with only this JSON:",
-		'{ "verdict": "pass" | "fail" | "unsure", "failures": ["<requirement or assumption>: <what is wrong, with evidence>"], "requirements": [{ "requirement": "...", "met": true, "evidence": "..." }], "assumptions": [{ "assumption": "...", "alternative": "...", "outcome": "..." }], "notes": "..." }',
-		"pass only when every requirement is met with evidence and nothing the request needs is missing or wrong; fail when something required is wrong or missing (name each in failures, most important first); unsure when you could not check what matters.",
+		'{ "verdict": "pass" | "fail" | "unsure", "failures": ["<requirement or assumption>: <what is wrong, with evidence>"], "tests": [{ "name": "<what it checks>", "command": "<one command that runs it, absolute paths>", "passed": true, "output": "<the lines that show the result>" }], "requirements": [{ "requirement": "...", "met": true, "evidence": "..." }], "assumptions": [{ "assumption": "...", "alternative": "...", "outcome": "..." }], "notes": "..." }',
+		'"tests" lists only the tests and probes you wrote, each run. pass only when your new tests and the existing checks all pass and every requirement is met with evidence; a pass without new tests of your own counts as unsure. fail when something required is wrong or missing: name each in failures, most important first, with the failing test as its evidence. unsure only when you genuinely could not run what matters; say why in notes.',
 	].join("\n");
 }
 
@@ -87,15 +87,22 @@ export type ReviewAssumption = {
 export type ReviewVerdict = CheckerVerdict & {
 	readonly requirements: readonly ReviewRequirement[];
 	readonly assumptions: readonly ReviewAssumption[];
+	/** The checker said pass without a test of its own (counted as unsure). */
+	readonly untested?: boolean;
 };
+
+/** The note an untested pass gets. */
+export const UNTESTED_PASS_NOTE =
+	"(Said pass without running a new test of its own; counted as unsure.)";
 
 const clip = (value: unknown, max: number) =>
 	typeof value === "string" ? value.trim().slice(0, max) : "";
 
 /**
  * The checker's answer: the verdict and failures as the product parses them
- * (a "pass" that lists failures is unsure; no JSON is unsure), plus the
- * requirement and assumption lists the review asks for.
+ * (a "pass" that lists failures, or names no new test of its own, is unsure;
+ * no JSON is unsure), plus the requirement and assumption lists and the tests
+ * it wrote.
  */
 export function parseReviewVerdict(report: string): ReviewVerdict {
 	const base = parseCheckerVerdict(report);
@@ -143,13 +150,24 @@ export function parseReviewVerdict(report: string): ReviewVerdict {
 						: entry.requirement,
 				)
 				.slice(0, 20);
+	// Re-running the existing tests is not enough for a pass (see the brief).
+	const untested =
+		base.verdict === "pass" && !failures.length && !base.tests.length;
 	return {
 		...base,
 		verdict:
-			base.verdict === "pass" && failures.length ? "unsure" : base.verdict,
+			base.verdict === "pass" && (failures.length || untested)
+				? "unsure"
+				: base.verdict,
 		failures,
 		requirements,
 		assumptions,
+		...(untested
+			? {
+					untested: true,
+					notes: `${UNTESTED_PASS_NOTE}${base.notes ? ` ${base.notes}` : ""}`,
+				}
+			: {}),
 	};
 }
 
@@ -164,5 +182,5 @@ export function checkerWrapUpLeadMs(budgetMs: number) {
 
 /** The runtime notice near a checker's time limit: answer now, with the JSON. */
 export function checkerDeadlineNotice(secondsLeft: number) {
-	return `Runtime notice, not a new request: about ${Math.max(0, Math.round(secondsLeft))} seconds are left for this check. Stop investigating now and answer with only the JSON your brief asks for; a requirement you could not check is not met (say so in its evidence).`;
+	return `Runtime notice, not a new request: about ${Math.max(0, Math.round(secondsLeft))} seconds are left for this check. Stop investigating now and answer with only the JSON your brief asks for, listing the tests you wrote and ran; a requirement you could not check is not met (say so in its evidence).`;
 }

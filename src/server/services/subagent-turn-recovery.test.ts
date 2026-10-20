@@ -89,3 +89,13 @@ it("falls back to the final text when the report cannot be built", async () => {
 		}),
 	);
 });
+
+it("leaves a just-finished child to its own runtime's report", async () => {
+	// A writer's report (with its patch) is saved after the turn row is final;
+	// recovering inside that window raced it and dropped the patch block.
+	mocks.query.mockResolvedValue({ rows: [] });
+	await recoverChildTurnEvents({} as never);
+	const [sql, values] = mocks.query.mock.calls.at(-1) as [string, unknown[]];
+	expect(sql).toContain("t.updated_at < now() - make_interval(secs => $1)");
+	expect(values).toEqual([120]);
+});

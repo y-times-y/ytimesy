@@ -141,6 +141,12 @@ export function taskVms(apiKey: string) {
 			storage: Math.max(data.resources.storage, 32768),
 		};
 		await created.vm.resize(target);
+		// The runtime cap is what stops the VM, not the ttl: confirm it took.
+		const cap = (await created.vm.data()).maxRunTotalSeconds;
+		if (cap !== lifetimeSec)
+			throw new Error(
+				`${purpose} VM runtime cap is ${cap}s, not the requested ${lifetimeSec}s.`,
+			);
 		// Resized CPUs come online a few seconds after the resize.
 		for (let attempt = 0; attempt < 15; attempt++) {
 			const online = await machines

@@ -38,7 +38,11 @@ export type DetachedState = {
 	/** Epoch ms. */
 	agentStartedAt: number | null;
 	agentDeadlineAt: number | null;
-	/** The agent VM's Freestyle lifetime ends then: finalize before it. */
+	/**
+	 * The agent VM's Freestyle lifetime (ttl) ends then: finalize before it.
+	 * Its runtime cap is another limit, metered by the edge once the turn
+	 * starts (runtimeCapFor).
+	 */
 	vmExpiresAt: number | null;
 	slot: DetachedSlot | null;
 	/** A grader VM created by an interrupted finalize (deleted on retry). */
@@ -256,4 +260,121 @@ export function detachedStatusRows(
 		]);
 	}
 	return rows;
+}
+
+/** The agent VM's provider runtime counters (Freestyle VM data). */
+export type VmRuntime = {
+	readonly totalRunSeconds?: number | null;
+	readonly maxRunTotalSeconds?: number | null;
+};
+
+/** A finished turn's VM with less runtime than this left gets a collect warning. */
+export const RUNTIME_WARN_SEC = 15 * 60;
+
+/** Runtime the provider still allows before it stops the VM; null when uncapped or unknown. */
+export function runtimeLeftSec(runtime: VmRuntime): number | null {
+	const cap = runtime.maxRunTotalSeconds;
+	if (cap == null || cap < 0) return null;
+	return Math.max(0, cap - (runtime.totalRunSeconds ?? 0));
+}
+
+/**
+ * The runtime cap that leaves `needSec` more for a finalize, or null when the
+ * current cap already does. Only ever raises it.
+ *
+ * Why a finalize must own the cap: the hard set creates the agent VM with a
+ * cap covering setup, the agent budget and the collect window, but its slug
+ * names the session, so the development edge's usage admission meters the VM
+ * once the turn starts and replaces that cap with short paid chunks (300 s
+ * at a time, extended only while the edge uses it) and trims it to the used
+ * runtime when the VM pauses. A collect after the turn then finds the cap
+ * spent, and this invocation (admission off) cannot extend it the product's
+ * way (hs30b-rvon: "The machine's runtime budget is used up and this
+ * deployment cannot extend it").
+ */
+export function runtimeCapFor(
+	runtime: VmRuntime,
+	needSec: number,
+): number | null {
+	const left = runtimeLeftSec(runtime);
+	if (left === null || left >= needSec) return null;
+	return Math.ceil((runtime.totalRunSeconds ?? 0) + needSec);
+}
+
+/** A collect's warning for a finished turn whose agent VM is near its runtime limit. */
+export function runtimeWarning(
+	state: Pick<DetachedState, "phase" | "agentVm" | "turnState">,
+	runtime: VmRuntime & { readonly state?: string | null },
+): string | null {
+	if (state.phase === "queued" || isLive(state.turnState)) return null;
+	const left = runtimeLeftSec(runtime);
+	if (left === null || left >= RUNTIME_WARN_SEC) return null;
+	return `agent VM ${state.agentVm} (${runtime.state ?? "?"}) has ${minutes(left * 1000)} of runtime left (${runtime.totalRunSeconds ?? "?"}s used of a ${runtime.maxRunTotalSeconds}s cap): the edge's usage admission metered it after the turn; the finalize raises the cap before resuming it.`;
+}
+
+export type WakeResult =
+	| { ok: true; resumed: boolean; from: string }
+	| { ok: false; gone: boolean; reason: string };
+
+/**
+ * Wakes the agent VM before a finalize touches it. The product pauses an
+ * idle workspace VM (PRODUCT_IDLE_TIMEOUT_SECONDS) and the edge resets its
+ * idle timeout on every resume, so a turn that ends early leaves a paused VM
+ * long before the collect: raise its runtime cap to cover the finalize
+ * (`budget`), resume it the product's way (`resume`), then hold it awake
+ * for the finalize (`hold`, best effort). Transient failures
+ * are retried; a VM that no longer exists (`state` resolves null: deleted,
+ * or its lifetime ended) is reported as gone, never thrown.
+ */
+export async function wakeForFinalize(
+	deps: {
+		/** The VM's provider state; null when the VM no longer exists. */
+		state: () => Promise<string | null>;
+		/** Raises the provider runtime cap so the finalize fits (runtimeCapFor). */
+		budget: () => Promise<void>;
+		resume: () => Promise<void>;
+		hold: () => Promise<void>;
+		sleep: (ms: number) => Promise<void>;
+	},
+	attempts = 4,
+): Promise<WakeResult> {
+	let last = "unknown error";
+	let from: string | null = null;
+	for (let attempt = 0; attempt < attempts; attempt++) {
+		try {
+			let state = await deps.state();
+			if (state === null)
+				return {
+					ok: false,
+					gone: true,
+					reason: "The agent VM no longer exists (deleted or expired).",
+				};
+			from ??= state;
+			// Before a resume: a spent cap refuses it.
+			await deps.budget();
+			if (state !== "running") {
+				await deps.resume();
+				state = await deps.state();
+				if (state === null)
+					return {
+						ok: false,
+						gone: true,
+						reason: "The agent VM no longer exists (deleted or expired).",
+					};
+				if (state !== "running")
+					throw new Error(`The agent VM is ${state} after a resume.`);
+			}
+			await deps.hold().catch(() => {});
+			// A VM found not running was resumed, on this try or an earlier one.
+			return { ok: true, resumed: from !== "running", from };
+		} catch (error) {
+			last = error instanceof Error ? error.message : String(error);
+			if (attempt < attempts - 1) await deps.sleep(5_000 * (attempt + 1));
+		}
+	}
+	return {
+		ok: false,
+		gone: false,
+		reason: `The agent VM could not be resumed (${attempts} tries): ${last.slice(0, 300)}`,
+	};
 }

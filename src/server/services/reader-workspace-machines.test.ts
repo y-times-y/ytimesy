@@ -1,8 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceId } from "#/domain/ids";
+import { SHARED_RUNTIME_PARENTS } from "#/domain/subagent-reader";
 import { PROJECT_CWD_PATH } from "../adapters/freestyle/clone-project";
+import { commandRoot } from "./api-agent-command-tools";
+import { commandScopeRoot } from "./api-command-scope";
+import { writeAgentProjectSecrets } from "./project-secrets";
 import { forgetPreparedReaders } from "./reader-workspace-machines";
-import { machinesForAgentSession } from "./session-workspace-machines";
+import {
+	machinesForAgentSession,
+	sessionRuntimeRoot,
+} from "./session-workspace-machines";
 import type { WorkspaceMachines } from "./workspace-machines";
 
 const vm = WorkspaceId("vm-parent");
@@ -115,5 +122,65 @@ describe("read-only subagent machines", () => {
 		expect(decoded(read).join("\n")).toContain(
 			"cat -- '/tmp/ytimesy-secrets/agent.env'",
 		);
+	});
+
+	// Reproduces the checker's 0-step failure (rvcm-check1): the turn wrote the
+	// project env file through the reader's machines. The secrets directory is
+	// the default user's (0700), so the reader's chmod fails; were it allowed,
+	// the env file is still outside what a reader may write. api-turn skips the
+	// write for readers (sessionReceivesProjectSecrets).
+	it("cannot write project secrets as the reader, so reader turns must not try", async () => {
+		const { machines } = fakeMachines();
+		// The OS's answer: the directory is the default user's, so the reader's chmod fails.
+		let ownedByDefaultUser = true;
+		vi.mocked(machines.exec).mockImplementation(async (_target, command) =>
+			ownedByDefaultUser &&
+			command.includes("ytimesy-reader") &&
+			decoded(command).some((line) =>
+				line.includes("chmod 700 '/tmp/ytimesy-secrets'"),
+			)
+				? {
+						exitCode: 1,
+						stdout: "",
+						stderr:
+							"chmod: changing permissions of '/tmp/ytimesy-secrets': Operation not permitted",
+					}
+				: { exitCode: 0, stdout: "contents", stderr: "" },
+		);
+		const reader = machinesForAgentSession(machines, {
+			id: "checker-1",
+			agentRole: "checker",
+		});
+		const secrets = { envFile: "", redact: [], names: [] };
+		await expect(writeAgentProjectSecrets(reader, vm, secrets)).rejects.toThrow(
+			"Could not prepare project secrets in the workspace.",
+		);
+		// Were the reader allowed to prepare it, the env file is still not its to write.
+		ownedByDefaultUser = false;
+		await expect(writeAgentProjectSecrets(reader, vm, secrets)).rejects.toThrow(
+			"cannot write /tmp/ytimesy-secrets/agent.env",
+		);
+	});
+
+	// rl-live-2: the builder's first command created /tmp/ytimesy-api-commands
+	// as ubuntu 0755, so the checker's `mkdir -p <its command root>` failed
+	// and every bash call threw "Could not start or observe command".
+	it("opens every shared runtime parent a reader's commands write under", async () => {
+		const parent = (path: string) => path.slice(0, path.lastIndexOf("/"));
+		const { machines, commands } = fakeMachines();
+		await machinesForAgentSession(machines, {
+			id: "child-1",
+			agentRole: "checker",
+		}).exec(vm, "pwd", 1000);
+		for (const root of [
+			commandRoot("child-1"),
+			commandScopeRoot("turn-1"),
+			sessionRuntimeRoot("child-1"),
+		]) {
+			expect(SHARED_RUNTIME_PARENTS).toContain(parent(root));
+			expect(commands[0]).toContain(
+				`sudo -n install -d -m 1777 ${parent(root)} && sudo -n chmod 1777 ${parent(root)}`,
+			);
+		}
 	});
 });

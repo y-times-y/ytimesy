@@ -66,3 +66,71 @@ it("pins before execution, reuses the server baseline, and preserves dirty legac
 		await rm(cwd, { recursive: true, force: true });
 	}
 });
+
+it("pins a forked writer to its parent's baseline instead of refusing its non-pristine fork", async () => {
+	// fusion-mech-1: the sidekick's fork had committed the parent's tree as
+	// its fork base, so HEAD != refs/ytimesy/base and every writer failed
+	// "A pristine server-owned verification baseline is required".
+	const cwd = await mkdtemp(join(tmpdir(), "yt-baseline-fork-"));
+	try {
+		const git = (...args: string[]) =>
+			run("git", [
+				"-C",
+				cwd,
+				"-c",
+				"user.name=Test",
+				"-c",
+				"user.email=test@example.invalid",
+				...args,
+			]);
+		await run("git", ["init", "-q", cwd]);
+		await git("commit", "--allow-empty", "-qm", "baseline");
+		await git("update-ref", "refs/ytimesy/base", "HEAD");
+		const base = (await git("rev-parse", "HEAD")).stdout.trim();
+		await writeFile(join(cwd, "lead.txt"), "the lead's uncommitted work");
+		await git("add", "-A");
+		await git("commit", "-qm", "ytimesy fork base");
+		const exec = vi.fn(async (_vm: string, command: string) => {
+			try {
+				return { ...(await run("bash", ["-lc", command])), exitCode: 0 };
+			} catch {
+				return { stdout: "", stderr: "", exitCode: 1 };
+			}
+		});
+		const input = {
+			cwd,
+			vm: "fork",
+			userId: "alice",
+			sessionId: "writer",
+			machines: { exec },
+		} as unknown as Parameters<typeof establishVerificationBaselines>[0];
+		mocks.pin.mockClear();
+		mocks.read.mockImplementation(async (_user: string, session: string) =>
+			session === "lead" ? base : null,
+		);
+		await expect(establishVerificationBaselines(input)).rejects.toThrow(
+			"pristine",
+		);
+		const forkBase = (await git("rev-parse", "HEAD")).stdout.trim();
+		const forkedFrom = { parentSessionId: "lead", forkBase };
+		await establishVerificationBaselines({ ...input, forkedFrom });
+		expect(mocks.pin).toHaveBeenCalledWith("alice", "writer", cwd, base);
+		// A parent without a baseline (a read-only hard-set root) hands down
+		// the runtime's recorded fork base.
+		mocks.pin.mockClear();
+		mocks.read.mockResolvedValue(null);
+		await establishVerificationBaselines({ ...input, forkedFrom });
+		expect(mocks.pin).toHaveBeenCalledWith("alice", "writer", cwd, forkBase);
+		// A commit the fork does not have is refused.
+		mocks.pin.mockClear();
+		await expect(
+			establishVerificationBaselines({
+				...input,
+				forkedFrom: { parentSessionId: "lead", forkBase: "f".repeat(40) },
+			}),
+		).rejects.toThrow("does not carry");
+		expect(mocks.pin).not.toHaveBeenCalled();
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});

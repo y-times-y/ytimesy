@@ -5,6 +5,7 @@ import {
 	isWorkspaceComputeAllowanceExhausted,
 	usageCapFailureMessage,
 } from "./failure-message";
+import { PROJECT_SECRETS_PREPARATION_FAILED } from "./project-secret";
 import { VerificationPolicyFailure } from "./task-integration-checks";
 
 export class ApiTurnCancelled extends Error {
@@ -680,6 +681,11 @@ export function apiTurnFailureMessage(
 				error.message === "Prepared repository path is unavailable."
 			)
 				return "The prepared repository is missing from this workspace. Repair the environment before retrying.";
+			if (
+				error instanceof Error &&
+				error.message === PROJECT_SECRETS_PREPARATION_FAILED
+			)
+				return "The project's secrets could not be written into the workspace. Check the workspace and retry; no model request was sent.";
 			if (
 				error instanceof Error &&
 				/(?:LIMIT_EXCEEDED|vcpu_time|memory_time|allowance)/i.test(

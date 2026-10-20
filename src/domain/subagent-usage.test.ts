@@ -30,7 +30,7 @@ describe("model pricing", () => {
 	it("bills a subscription by plan and unknown models as tokens only", () => {
 		expect(modelBilling({ harness: "codex", modelId: "gpt-6.1-sol" })).toEqual({
 			kind: "plan",
-			price: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
+			price: expect.objectContaining({ input: 2, output: 10, cacheRead: 0.1 }),
 		});
 		expect(
 			modelBilling({ harness: "api", modelId: "acme/unknown-model" }),
@@ -54,8 +54,8 @@ describe("model pricing", () => {
 			cacheReadTokens: 800_000,
 			cacheWriteTokens: 0,
 		};
-		// 0.2M × $2 + 0.8M × $0.2 + 0.1M × $10
-		expect(usageCostUsd(usage, billing)).toBeCloseTo(0.4 + 0.16 + 1);
+		// 0.2M × $2 + 0.8M × $0.1 + 0.1M × $10
+		expect(usageCostUsd(usage, billing)).toBeCloseTo(0.4 + 0.08 + 1);
 		expect(usageCostUsd({ ...usage, costUsd: 0.5 }, billing)).toBe(0.5);
 		// A plan route: the list-price estimate, never a reported charge.
 		expect(
@@ -63,7 +63,7 @@ describe("model pricing", () => {
 				{ ...usage, costUsd: 0.5 },
 				{ kind: "plan", price: billing.price },
 			),
-		).toBeCloseTo(1.56);
+		).toBeCloseTo(1.48);
 		expect(usageCostUsd(usage, { kind: "plan", price: null })).toBeNull();
 		expect(usageCostUsd(usage, { kind: "tokens", price: null })).toBeNull();
 	});

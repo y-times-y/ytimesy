@@ -105,3 +105,107 @@ it("lets the product builder do visual QA without leaving the shell surface", as
 		),
 	).toBe(true);
 });
+
+it("gives a reader subagent a lean surface whose command tool runs, without write or edit, and prompts that name only its tools", async () => {
+	const { builderToolSurface } = await import("./builder-shell-surface");
+	const { agentTurnInstructions } = await import("./agent-turn-instructions");
+	const { WorkspaceId } = await import("#/domain/ids");
+	const commands: string[] = [];
+	const base = {
+		execute_command: tool({
+			inputSchema: z.object({ command: z.string() }),
+			execute: async ({ command }) => {
+				commands.push(command);
+				return {
+					id: "c1",
+					status: 0,
+					stdout: "tests ok\n",
+					start: 0,
+					nextStart: null,
+				};
+			},
+		}),
+		continue_command: tool({
+			inputSchema: z.object({}),
+			execute: async () => ({}),
+		}),
+		report_task_blocked: tool({
+			inputSchema: z.object({}),
+			execute: async () => ({}),
+		}),
+	};
+	const workspace = async () => ({
+		machines: {} as never,
+		vm: WorkspaceId("vm"),
+		cwd: "/home/ubuntu/repo",
+	});
+	const surface = builderToolSurface({
+		variant: "lean",
+		modelId: "gpt-6.1-sol",
+		tools: base,
+		readOnly: true,
+		lean: {
+			workspace,
+			sessionId: "reader",
+			turnId: "turn",
+			signal: new AbortController().signal,
+			once: (_request, _fingerprint, run) => run(),
+			installHelpers: async () => {},
+		},
+	});
+	const names = Object.keys(surface.tools);
+	expect(names).toEqual(["read", "bash", "report_task_blocked"]);
+	expect(surface.lean?.readOnly).toBe(true);
+	const bash = surface.tools.bash as unknown as {
+		execute: (args: object, options: object) => Promise<unknown>;
+	};
+	const result = (await bash.execute(
+		{ command: "python3 -m pytest -q" },
+		{ toolCallId: "b1", messages: [] },
+	)) as { output: string; status: number };
+	expect(commands).toEqual(["python3 -m pytest -q"]);
+	expect(result).toMatchObject({ status: 0, output: "tests ok\n" });
+
+	for (const offered of [names, [...names, "run_code"]]) {
+		const profile = harnessModelToolInstructions("openai", false, offered);
+		expect(profile).toContain("v13-lean-reader");
+		expect(profile).not.toMatch(/execute_command|Edit files|tools\.edit/);
+	}
+	const prompt = agentTurnInstructions({
+		session: { agentRole: "checker", agentBudget: null } as never,
+		tools: { ...surface.tools, run_code: base.report_task_blocked },
+		plugins: [],
+		projectKnowledge: null,
+		leanShape: "core",
+		leanReadOnly: true,
+		codeMode: "primary",
+	});
+	expect(prompt).toContain("bash runs shell commands");
+	expect(prompt).toContain("read-only user");
+	expect(prompt).not.toMatch(
+		/execute_command|edit and write|tools\.edit|ytimesy-check|ytimesy-browser/,
+	);
+});
+
+it("keeps a builder's full lean surface and edit-first profile", async () => {
+	const { leanSurfaceShape } = await import("#/domain/harness-model-profile");
+	expect(leanSurfaceShape(["read", "write", "edit", "bash"])).toBe("core");
+	expect(leanSurfaceShape(["read", "bash"])).toBe("core");
+	expect(
+		leanSurfaceShape([
+			"run_shell_command",
+			"read_file",
+			"write_file",
+			"edit",
+			"glob",
+			"grep_search",
+		]),
+	).toBe("qwen");
+	const profile = harnessModelToolInstructions("openai", false, [
+		"read",
+		"write",
+		"edit",
+		"bash",
+	]);
+	expect(profile).toContain("v13-lean (openai): Edit files with edit");
+});

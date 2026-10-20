@@ -18,6 +18,7 @@ import {
 	decideAfterVerdict,
 	decideCheck,
 	expectedCheckMs,
+	failingTests,
 	findingResponses,
 	REVIEW_LOOP_LIMITS,
 	type ReviewLoopState,
@@ -39,6 +40,8 @@ import {
 	type AttemptLoopOutcome,
 	attemptReport,
 	checkerDirectoryCommand,
+	childBilling,
+	loopChildModel,
 	turnUsage,
 } from "./attempt-loop";
 
@@ -132,7 +135,10 @@ const plus = (left: AttemptSpend, right: AttemptSpend): AttemptSpend => ({
 export function reviewLoopSpend(state: ReviewLoopState, billing: ModelBilling) {
 	const rounds = state.rounds.map((round) => ({
 		n: round.n,
-		checker: spendOf(round.checker.usage, billing),
+		checker: spendOf(
+			round.checker.usage,
+			childBilling(round.checker.model, billing),
+		),
 		fix: spendOf(round.fix?.usage, billing),
 		checkMs:
 			(round.checker.endedAt ?? round.checker.startedAt) -
@@ -168,6 +174,10 @@ function summaryItem(
 			...(findingsOf?.findings.length
 				? findingsOf.findings.map((finding) => `${finding.id}. ${finding.text}`)
 				: []),
+			...failingTests(findingsOf?.verdict ?? null).map(
+				(test) =>
+					`Failing test: ${test.name}${test.command ? ` (\`${test.command}\`)` : ""}`,
+			),
 			`Checker spent ${Math.round(spend.checker.tokens / 1000)}k tokens${dollars(spend.checker.costUsd, spend.checker.estimated)}.`,
 		].join("\n"),
 		status: "completed",
@@ -290,6 +300,7 @@ export function createReviewLoop(input: ReviewLoopInput) {
 				"the checker's directory could not be created",
 			);
 		let sessionIdOfChecker: string;
+		let modelOfChecker: ReturnType<typeof loopChildModel>;
 		try {
 			const checker = await deps.startSubagent({
 				role: "checker",
@@ -307,6 +318,7 @@ export function createReviewLoop(input: ReviewLoopInput) {
 				},
 			});
 			sessionIdOfChecker = checker.sessionId;
+			modelOfChecker = loopChildModel(checker);
 		} catch (error) {
 			return finish(
 				state,
@@ -326,6 +338,7 @@ export function createReviewLoop(input: ReviewLoopInput) {
 					changedFiles: changedFiles.length,
 					checker: {
 						sessionId: sessionIdOfChecker,
+						...(modelOfChecker ? { model: modelOfChecker } : {}),
 						startedAt: deps.now(),
 						budgetMs: decision.checkMs,
 					},
@@ -433,6 +446,7 @@ export function createReviewLoop(input: ReviewLoopInput) {
 						round: round.n,
 						maxRounds: REVIEW_LOOP_LIMITS.maxRounds,
 						findings,
+						failingTests: failingTests(verdict),
 					}),
 				},
 			],

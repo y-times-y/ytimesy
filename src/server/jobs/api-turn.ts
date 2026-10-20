@@ -28,6 +28,7 @@ import {
 	TURN_COORDINATION_LEASE_MS,
 	type TurnControl,
 } from "#/domain/conversation-turn-control";
+import { leanToolRole } from "#/domain/harness-model-profile";
 import {
 	DEFAULT_HARNESS_VARIANT,
 	promptCacheScopeId,
@@ -55,14 +56,25 @@ import {
 import { modelBilling } from "#/domain/model-pricing";
 import { modelStepLimit } from "#/domain/model-workflow";
 import { posixShellCommand } from "#/domain/posix-command";
-import { agentSecretsEnvFile } from "#/domain/project-secret";
+import {
+	agentSecretsEnvFile,
+	sessionReceivesProjectSecrets,
+} from "#/domain/project-secret";
 import { modelSwitchHistory } from "#/domain/runtime-handoff";
+import { REQUEST_PROJECT_SECRET_TOOL } from "#/domain/secret-request";
 import type {
 	ModelSwitchItem,
 	SessionItem,
 	UserMessageItem,
 } from "#/domain/session-item";
-import { MAX_SUBAGENT_LEVEL, writesOwnCheckout } from "#/domain/subagent";
+import { isActiveSidekick } from "#/domain/sidekick";
+import {
+	AGENT_SEND_TOOL,
+	AGENT_TOOL,
+	MAX_SUBAGENT_LEVEL,
+	sharesParentMachine,
+	writesOwnCheckout,
+} from "#/domain/subagent";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
 import {
 	type AgentSessionRecord,
@@ -87,6 +99,7 @@ import { coordinateConversationTurn } from "../adapters/conversation-turn-contro
 import {
 	devEvalUsersEnabled,
 	harnessVariantForUser,
+	isDevEvalUser,
 } from "../adapters/dev-eval-users";
 import {
 	assertEvaluationActive,
@@ -125,9 +138,10 @@ import {
 import { compactionStateSnapshot } from "../services/compaction-state-snapshot";
 import { ensureConversationCodePoint } from "../services/conversation-recovery";
 import {
-	BUILDER_DEFERRED_TOOL_GROUPS,
+	CODE_MODE_DEFERRED_TOOLS,
 	deferredToolSurface,
 	loadedDeferredTools,
+	PLAN_ONLY_TOOLS,
 } from "../services/deferred-tools";
 import { harnessLifecycleHooks } from "../services/harness-lifecycle-hooks";
 import { journaledToolOperation } from "../services/journaled-tool-operation";
@@ -140,6 +154,7 @@ import {
 } from "../services/message-attachments";
 import type { ModelAgentInput } from "../services/model-agent-loop";
 import { planModelFailover } from "../services/model-failover";
+import { modelRequestRecorder } from "../services/model-request-recorder";
 import {
 	PLAN_CONTINUE_NOTICE,
 	PLAN_END_TURN_TOOLS,
@@ -166,6 +181,7 @@ import { machinesForAgentSession } from "../services/session-workspace-machines"
 import { recordStepTiming, timed } from "../services/step-timing";
 import {
 	guardSubagentStep,
+	retireLeadSidekicks,
 	SubagentBudgetExhausted,
 	subagentReport,
 } from "../services/subagent-runtime";
@@ -301,6 +317,8 @@ async function runApiTurnAttempt(
 	// machines before this session's scoping; the report needs the session.
 	const unscopedMachines = machines;
 	let subagentSession: AgentSessionRecord | undefined;
+	/** Lead mode fusion's root: its sidekicks are retired when its turn ends. */
+	let fusionLead: { userId: string; id: string } | undefined;
 	let commandStop: Promise<void> | undefined;
 	const stopCommands = () => {
 		if (execution)
@@ -453,9 +471,15 @@ async function runApiTurnAttempt(
 			evaluation = await evaluationRunForTask(owner.userId, owner.id);
 		const variant = await turnHarnessVariant(turn.id, owner.userId);
 		if (owner.agentRole) subagentSession = owner;
-		// Builder subagents (harness variant subagents=on): the agent tools,
-		// deferred tool loading and per-level budgets. Children carry the role.
-		const subagentsOn = variant.subagents === "on" || !!owner.agentRole;
+		// Builder subagents (harness variant subagents=on): the agent tools
+		// and per-level budgets. Children carry the role.
+		// Lead mode fusion implies them: the lead delegates to its sidekick.
+		const subagentsOn =
+			variant.subagents === "on" ||
+			variant.lead === "fusion" ||
+			!!owner.agentRole;
+		if (variant.lead === "fusion" && !owner.parentSessionId)
+			fusionLead = { userId: owner.userId, id: owner.id };
 		const subagentLevel = owner.agentRole
 			? (
 					await turnMemo(`${turn.id}:subagent-ancestors`, () =>
@@ -541,6 +565,8 @@ async function runApiTurnAttempt(
 					),
 				)
 			: null;
+		// Readers keep the values for redaction but get no env file or names.
+		const receivesSecrets = sessionReceivesProjectSecrets(owner);
 		let secretsWritten: Promise<void> | undefined;
 		let attachmentsWritten: Promise<void> | undefined;
 		const prepareWorkspace = deferredApiTurnWorkspace(
@@ -554,7 +580,7 @@ async function runApiTurnAttempt(
 		const workspace = async () => {
 			execution = await timed("turn:workspace", prepareWorkspace);
 			let secretsReady: Promise<void> | undefined;
-			if (projectSecrets) {
+			if (projectSecrets && receivesSecrets) {
 				const { machines: vmMachines, vm } = execution;
 				// The env file stays on the VM's disk across steps; a new VM gets it written.
 				secretsWritten ??= turnMemo(
@@ -645,6 +671,10 @@ async function runApiTurnAttempt(
 					);
 		// Awaited below; this only keeps an early failure from being unhandled.
 		running.catch(() => {});
+		// A read-only subagent's commands run as the reader Linux user, which
+		// cannot write the checkout (reader-workspace-machines.ts), so it gets
+		// the command runner its shell surface is built on.
+		const reader = sharesParentMachine(owner);
 		const originalTools = apiAgentTools({
 			machines,
 			session: owner,
@@ -655,6 +685,7 @@ async function runApiTurnAttempt(
 			toolCallPrefix: step ? `step-${step.index}:` : undefined,
 			signal: abort.signal,
 			writable,
+			readerCommands: reader,
 			waitDeadlineAt: step?.waitDeadlineAt,
 		});
 		const hooks = harnessLifecycleHooks({
@@ -712,6 +743,7 @@ async function runApiTurnAttempt(
 			variant: variant.toolSurface,
 			modelId: route.modelId,
 			tools: repositoryContext.tools,
+			readOnly: reader,
 			lean: {
 				workspace,
 				sessionId: owner.id,
@@ -726,12 +758,15 @@ async function runApiTurnAttempt(
 		// prompt (Claude Code's tools take absolute paths). The first step
 		// prepares the workspace before the model is called anyway; later steps
 		// reuse the memo, so the prompt stays byte-stable for caching.
+		// Preparing the workspace here is a workspace failure, not a connection one.
+		failureStage = "workspace";
 		const leanWorkingDirectory = surface.lean
 			? await turnMemo(
 					`${turn.id}:lean-working-directory`,
 					async () => (await workspace()).cwd,
 				)
 			: undefined;
+		failureStage = "connection";
 		// The user's remote MCP servers are called from here; credentials never reach the VM.
 		// Connections are live HTTP clients bound to this step's request, so a
 		// step that calls a tool connects again; the tool lists are reused. A
@@ -797,12 +832,16 @@ async function runApiTurnAttempt(
 		const commandReader =
 			surface.lean?.commandReader ??
 			("read_command" in surfaceTools ? "read_command" : "continue_command");
-		// The builder and subagents above the deepest level may delegate.
+		// The builder and subagents above the deepest level may delegate; a
+		// checker reviews the deliverable itself, on the smallest surface.
 		const delegation: ToolSet =
 			subagentsOn &&
 			surface.lean &&
 			(owner.agentRole
-				? subagentLevel < MAX_SUBAGENT_LEVEL
+				? owner.agentRole !== "checker" &&
+					// A sidekick does the work itself (lead mode fusion).
+					!isActiveSidekick(owner) &&
+					subagentLevel < MAX_SUBAGENT_LEVEL
 				: !owner.parentSessionId)
 				? withRedactedResults(
 						subagentTools({
@@ -811,53 +850,75 @@ async function runApiTurnAttempt(
 							workspace,
 							signal: abort.signal,
 							waitDeadlineAt: step?.waitDeadlineAt,
+							roleModels: variant.roleModels,
+							lead: variant.lead,
 						}),
 						projectSecrets?.redact ?? [],
 					)
 				: {};
+		// Code mode is a development harness variant on a lean surface only
+		// (docs/parallel-evals.md). primary: run_code is the main tool; a large
+		// MCP setup's search and call tools are callable only from inside it.
+		const codeMode =
+			surface.lean && variant.codeMode !== "off" ? variant.codeMode : null;
+		const baseTools: ToolSet = {
+			...turnTools({
+				surfaceTools,
+				mcp,
+				plugins,
+				webSearch,
+				hooks,
+				planLock,
+				projectSecrets,
+			}),
+			...delegation,
+		};
+		// Deferred (deferred-tools.ts): in code mode primary the MCP search and
+		// call tools (run_code only), and propose_plan, offered only while
+		// planning (it ends the turn). agent, agent_send, enter_plan_mode and
+		// request_project_secret are ordinary tools. Additions append, so
+		// earlier requests' tool lists stay a cached prefix.
+		const deferredNames = [
+			...(codeMode === "primary" ? CODE_MODE_DEFERRED_TOOLS : []),
+			...(codeMode === "primary" || (subagentsOn && surface.lean)
+				? PLAN_ONLY_TOOLS
+				: []),
+		];
 		const allTools = withCodeMode(
-			{
-				...turnTools({
-					surfaceTools,
-					mcp,
-					plugins,
-					webSearch,
-					hooks,
-					planLock,
-					projectSecrets,
-				}),
-				...delegation,
-			},
-			// A development harness variant on a lean surface only (docs/parallel-evals.md).
-			variant.codeMode === "on" && surface.lean
+			baseTools,
+			codeMode
 				? {
 						signal: abort.signal,
 						sessionId: owner.id,
 						turnId: turn.id,
 						toolCallPrefix: step ? `step-${step.index}:` : undefined,
 						redact: projectSecrets?.redact ?? [],
+						mode: codeMode,
+						deferred:
+							codeMode === "primary"
+								? CODE_MODE_DEFERRED_TOOLS.filter((name) => name in baseTools)
+								: [],
 					}
 				: null,
 		);
-		// Rarely used tools load on demand through find_tools (subagents=on on a
-		// lean surface); loads append, so earlier requests' tool lists stay a
-		// cached prefix.
-		const deferral =
-			subagentsOn && surface.lean
-				? deferredToolSurface({
-						tools: allTools,
-						groups: BUILDER_DEFERRED_TOOL_GROUPS,
-						loaded: loadedDeferredTools(
-							items,
-							messages,
-							BUILDER_DEFERRED_TOOL_GROUPS,
-						),
-						forceLoaded: planLock?.planning
-							? [ENTER_PLAN_MODE_TOOL, PROPOSE_PLAN_TOOL]
-							: [],
-					})
-				: null;
-		const tools = deferral?.tools ?? allTools;
+		const orderedTools = surface.lean
+			? inLeanToolOrder(allTools, {
+					surface: Object.keys(surfaceTools),
+					webSearch: Object.keys(webSearch),
+					runCodeFirst: codeMode === "primary",
+				})
+			: allTools;
+		const deferral = deferredNames.length
+			? deferredToolSurface({
+					tools: orderedTools,
+					deferred: deferredNames,
+					loaded: loadedDeferredTools(items, messages, deferredNames),
+					// Plan mode can start mid-turn; propose_plan must then be offered.
+					forceLoaded: () => (planLock?.planning ? PLAN_ONLY_TOOLS : []),
+					unlisted: PLAN_ONLY_TOOLS,
+				})
+			: null;
+		const tools = deferral?.tools ?? orderedTools;
 		if (planLock?.planning && firstStep)
 			messages = withPlanModeNotice(
 				messages,
@@ -916,7 +977,7 @@ async function runApiTurnAttempt(
 				];
 			}
 		}
-		const runAgent = subscription
+		const runModel = subscription
 			? step
 				? runCodexSubscriptionAgentStep
 				: runCodexSubscriptionAgent
@@ -925,6 +986,18 @@ async function runApiTurnAttempt(
 						...input,
 						connectionId: route.connectionId as string,
 					});
+		const runAgent = (input: ModelAgentInput) =>
+			(
+				runModel(input) as Promise<Awaited<ReturnType<typeof runModel>>>
+			).finally(() => requestRecorder?.flush());
+		// Development evals record each request's system prompt and tool list.
+		const requestRecorder = (await turnRecordsRequests(turn.id, owner.userId))
+			? modelRequestRecorder({
+					sessionId: owner.id,
+					turnId: turn.id,
+					step: step?.index ?? 0,
+				})
+			: null;
 		const previousContext = recordedContextUsage(items)?.context;
 		const agentInput: ModelAgentInput = {
 			previousContext:
@@ -967,6 +1040,7 @@ async function runApiTurnAttempt(
 					},
 				);
 			},
+			...(requestRecorder ? { onModelRequest: requestRecorder.record } : {}),
 			onModelMetric: (metric) => {
 				recordStepTiming("model:total", metric.duration_ms);
 				if (metric.first_output_ms !== null)
@@ -1008,11 +1082,14 @@ async function runApiTurnAttempt(
 					tools,
 					plugins,
 					projectKnowledge: null,
-					secretNames: projectSecrets?.names,
+					secretNames: receivesSecrets ? projectSecrets?.names : undefined,
 					leanShape: surface.lean?.shape,
+					leanReadOnly: surface.lean?.readOnly,
 					leanWorkingDirectory,
 					deferredTools: deferral?.deferred,
+					codeMode: codeMode ?? undefined,
 					prEvidence: variant.prEvidence === "on" && writable,
+					lead: variant.lead,
 				},
 				memory,
 			),
@@ -1196,6 +1273,7 @@ async function runApiTurnAttempt(
 							signal: abort.signal,
 							waitDeadlineAt: step.waitDeadlineAt,
 							items: () => items,
+							roleModels: variant.roleModels,
 						}),
 					})
 				: step && loopEligible && variant.review === "on"
@@ -1214,6 +1292,7 @@ async function runApiTurnAttempt(
 								signal: abort.signal,
 								waitDeadlineAt: step.waitDeadlineAt,
 								items: () => items,
+								roleModels: variant.roleModels,
 							}),
 						})
 					: null;
@@ -1413,6 +1492,12 @@ async function runApiTurnAttempt(
 			return saved === "cancelled" ? "cancelled" : "failed";
 		}
 		await publishProgress("completed").catch(() => {});
+		if (fusionLead)
+			await retireLeadSidekicks(
+				unscopedMachines,
+				fusionLead,
+				"the lead's turn ended",
+			).catch(() => {});
 		await memory?.afterTurn(turn.id);
 		await recordCloudProjectReport(owner, turn.id, items).catch(() => {
 			console.warn(
@@ -1626,6 +1711,14 @@ async function runApiTurnAttempt(
 			await publishProgress?.(saved === "cancelled" ? "idle" : "failed").catch(
 				() => {},
 			);
+		if (saved && fusionLead)
+			await retireLeadSidekicks(
+				unscopedMachines,
+				fusionLead,
+				saved === "cancelled"
+					? "the lead was stopped"
+					: "the lead's turn ended",
+			).catch(() => {});
 		if (saved === "failed") {
 			// A subagent still reports: what it said so far and, for a writer,
 			// the partial patch (its work in progress is committed for it).
@@ -1684,6 +1777,12 @@ async function runApiTurnAttempt(
  * Development eval users pick harness variants per run; everyone else (and
  * production) gets the default. Fixed for the turn.
  */
+function turnRecordsRequests(turnId: string, userId: string) {
+	return devEvalUsersEnabled()
+		? turnMemo(`${turnId}:records-requests`, () => isDevEvalUser(userId))
+		: Promise.resolve(false);
+}
+
 function turnHarnessVariant(turnId: string, userId: string) {
 	return devEvalUsersEnabled()
 		? turnMemo(`${turnId}:harness-variant`, () => harnessVariantForUser(userId))
@@ -1737,6 +1836,40 @@ function turnTools(input: {
 }
 
 /**
+ * A lean builder's tool list in a fixed order, so it is byte-stable within
+ * a chat: run_code first in code mode primary, the surface's own tools, the
+ * workflow tools (agent, agent_send, enter_plan_mode, propose_plan when not
+ * deferred), web search, request_project_secret, then the rest (MCP,
+ * plugins, run_code in code mode on) in insertion order.
+ */
+function inLeanToolOrder(
+	tools: ToolSet,
+	groups: {
+		surface: readonly string[];
+		webSearch: readonly string[];
+		runCodeFirst: boolean;
+	},
+): ToolSet {
+	const leading = [
+		...(groups.runCodeFirst ? [CODE_MODE_TOOL] : []),
+		...groups.surface,
+		AGENT_TOOL,
+		AGENT_SEND_TOOL,
+		ENTER_PLAN_MODE_TOOL,
+		PROPOSE_PLAN_TOOL,
+		...groups.webSearch,
+		REQUEST_PROJECT_SECRET_TOOL,
+	].filter((name) => name in tools);
+	const names = [
+		...new Set([
+			...leading,
+			...Object.keys(tools).filter((name) => !leading.includes(name)),
+		]),
+	];
+	return Object.fromEntries(names.map((name) => [name, tools[name]]));
+}
+
+/**
  * Adds run_code (code mode) to a lean builder's final tool set. Its programs
  * call the tools above as they are, already wrapped in hooks, redaction and
  * plan mode, so every inner call is checked like a direct one; run_code's
@@ -1750,17 +1883,41 @@ function withCodeMode(
 		turnId: string;
 		toolCallPrefix?: string;
 		redact: readonly string[];
+		mode: "on" | "primary";
+		deferred: readonly string[];
 	} | null,
 ): ToolSet {
 	if (!codeMode) return tools;
 	const runCode = codeModeTool({ tools, ...codeMode });
-	return runCode
-		? {
-				...tools,
-				...withRedactedResults({ [CODE_MODE_TOOL]: runCode }, codeMode.redact),
-			}
-		: tools;
+	if (!runCode) return tools;
+	const offered = withRedactedResults(
+		{ [CODE_MODE_TOOL]: runCode },
+		codeMode.redact,
+	);
+	if (codeMode.mode !== "primary") return { ...tools, ...offered };
+	// primary: run_code is listed first, as the system prompt names it first,
+	// and the command tool says it is for one command. Both depend only on the
+	// surface, so the tool list stays byte-stable across steps.
+	return {
+		...offered,
+		...Object.fromEntries(
+			Object.entries(tools).map(([name, definition]) => [
+				name,
+				leanToolRole(name) === "command"
+					? ({
+							...definition,
+							description:
+								`${definition.description ?? ""} ${PRIMARY_COMMAND_NOTE}`.trim(),
+						} as typeof definition)
+					: definition,
+			]),
+		),
+	};
 }
+
+/** The command tool's line in code mode primary: what it is still for. */
+const PRIMARY_COMMAND_NOTE =
+	"Use it for one command, or a long-running or interactive process; for several known steps use run_code.";
 
 /** The system prompt: the builder's instructions, then memory's. */
 function turnInstructions(
