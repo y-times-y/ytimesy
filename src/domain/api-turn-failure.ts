@@ -298,6 +298,16 @@ export class SubscriptionMetadataFailure extends Error {
 	}
 }
 
+/** Every configured egress path to the Codex backend was blocked for this request. */
+export class CodexEgressUnavailable extends Error {
+	constructor(readonly attempts: readonly { path: string; reason: string }[]) {
+		super(
+			`Codex subscription is unreachable: every network path was blocked (${attempts.map((row) => `${row.path}: ${row.reason}`).join(", ") || "none configured"}). Nothing was sent to the model. Retry in a few minutes; the owner has been alerted.`,
+		);
+		this.name = "CodexEgressUnavailable";
+	}
+}
+
 /** The stored subscription login was definitively rejected; only the user can sign in again. */
 export class CodexReconnectRequired extends Error {
 	constructor() {
@@ -666,6 +676,7 @@ export function apiTurnFailureMessage(
 	if (error instanceof IncompleteAgentTurn) return error.message;
 	if (error instanceof InitialAgentReadFailure) return error.message;
 	if (error instanceof SubscriptionMetadataFailure) return error.message;
+	if (error instanceof CodexEgressUnavailable) return error.message;
 	if (error instanceof VerificationPolicyFailure) return error.message;
 	if (error instanceof LifecycleHookRefusal) return error.message;
 	const reconnect = reconnectCause(error);
