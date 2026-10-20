@@ -6,7 +6,7 @@ import {
 	type ClassifierInput,
 	classifierMessage,
 } from "#/domain/sidekick-classifier";
-import { classifySidekick } from "./sidekick-classifier";
+import { ClassifierCallError, classifySidekick } from "./sidekick-classifier";
 
 const routes = vi.fn(
 	async (): Promise<FailoverConnection[]> => [
@@ -58,6 +58,7 @@ function classify(
 	let clock = 1_000;
 	return classifySidekick({
 		userId: "user",
+		sessionId: "s",
 		roleModels,
 		summary,
 		deps: { routes, call, now: () => (clock += 40), timeoutMs: 50 },
@@ -146,6 +147,7 @@ describe("classifySidekick", () => {
 	it("turns a switch_model it cannot carry out into a hand_back", async () => {
 		const { answer } = await classifySidekick({
 			userId: "user",
+			sessionId: "s",
 			roleModels: {},
 			summary: { ...summary, canSwitch: false },
 			deps: {
@@ -157,5 +159,71 @@ describe("classifySidekick", () => {
 			},
 		});
 		expect(answer.decision).toBe("hand_back");
+	});
+
+	it("returns the call's usage, also from a failed call that reported it", async () => {
+		const ok = await classify(vi.fn(async () => ({ text: "nope", usage })));
+		expect(ok.usage).toMatchObject({ inputTokens: 900, outputTokens: 30 });
+		const failed = await classify(
+			vi.fn(async () => {
+				throw new ClassifierCallError(new Error("stream reset"), usage);
+			}),
+		);
+		expect(failed.record).toMatchObject({ source: "rules", tokens: 930 });
+		expect(failed.usage).toMatchObject({ inputTokens: 900 });
+		const none = await classify(
+			vi.fn(async () => {
+				throw new Error("refused");
+			}),
+		);
+		expect(none.usage).toBeNull();
+	});
+
+	it("stops with the turn, and reserves API budget only on an API route", async () => {
+		const turn = new AbortController();
+		turn.abort();
+		const reserve = vi.fn(async () => {});
+		const stopped = await classifySidekick({
+			userId: "user",
+			sessionId: "s",
+			roleModels: {},
+			summary,
+			signal: turn.signal,
+			deps: {
+				routes,
+				reserve,
+				call: vi.fn(async (input: { signal: AbortSignal }) => {
+					input.signal.throwIfAborted();
+					return { text: "", usage };
+				}),
+			},
+		});
+		expect(stopped.record.fallback).toBe("the turn was stopped");
+		// The default classifier is on the plan: no per-token budget.
+		expect(reserve).not.toHaveBeenCalled();
+		const apiRoutes = async (): Promise<FailoverConnection[]> => [
+			{
+				key: "22222222-2222-4222-8222-222222222222",
+				label: "OpenRouter",
+				kind: "api-paid",
+				revision: "r",
+				models: [{ id: "google/gemini-3.8-flash", label: "Flash" }],
+			} as unknown as FailoverConnection,
+		];
+		await classifySidekick({
+			userId: "user",
+			sessionId: "s",
+			roleModels: { classifier: { model: "api:google/gemini-3.8-flash" } },
+			summary,
+			deps: {
+				routes: apiRoutes,
+				reserve,
+				call: vi.fn(async () => ({
+					text: '{"decision":"on_track","reason":"ok"}',
+					usage,
+				})),
+			},
+		});
+		expect(reserve).toHaveBeenCalledWith("user", "s", expect.any(Number));
 	});
 });

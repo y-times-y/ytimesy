@@ -9,6 +9,7 @@ import { subscriptionTurnRevision } from "#/domain/subscription-turn";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import {
 	completeSidekickModelSwitch,
+	sidekickSwitchAllowed,
 	sidekickSwitchAtCompaction,
 } from "./sidekick-model-switch";
 
@@ -73,90 +74,138 @@ const items: SessionItem[] = [
 	},
 ];
 
+/** A compare-and-set fake over one stored state; `stored` is what a concurrent writer left. */
+function store(stored: SidekickState) {
+	const saved: { state: SidekickState; model?: unknown }[] = [];
+	const updateState = vi.fn(
+		async (
+			_id: string,
+			mutate: (current: SidekickState) => SidekickState | null,
+			model?: unknown,
+		) => {
+			const next = mutate(stored);
+			if (!next) return null;
+			const kept =
+				stored.retired && !next.retired
+					? { ...next, retired: stored.retired }
+					: next;
+			saved.push({ state: kept, model });
+			return kept;
+		},
+	);
+	return { updateState, saved };
+}
+
+const stateOf = (session: AgentSessionRecord) =>
+	session.agentBudget?.sidekick as SidekickState;
+const pending = {
+	to: "codex:gpt-6.1-sol",
+	reason: "it repeats make test",
+	round: 1,
+	at: "x",
+};
+
 describe("sidekickSwitchAtCompaction", () => {
-	it("switches at a compaction when a switch is pending, without asking again", async () => {
-		const classify = vi.fn();
-		const hook = sidekickSwitchAtCompaction({
+	const hookFor = (
+		session: AgentSessionRecord | null,
+		deps: Record<string, unknown> = {},
+		models: typeof roleModels = roleModels,
+		turnId = "turn",
+	) =>
+		sidekickSwitchAtCompaction({
 			userId: "user",
 			sessionId: "s",
-			roleModels,
+			turnId,
+			roleModels: models,
 			items: () => items,
-			deps: {
-				session: vi.fn(async () =>
-					sidekick({
-						pendingSwitch: {
-							to: "codex:gpt-6.1-sol",
-							reason: "it repeats make test",
-							round: 1,
-							at: new Date(NOW).toISOString(),
-						},
-					}),
-				),
-				classify,
-			},
+			deps: { session: vi.fn(async () => session), ...deps },
 		});
+
+	it("switches at a compaction when a switch is pending, without asking again", async () => {
+		const classify = vi.fn();
+		const hook = hookFor(sidekick({ pendingSwitch: pending }), { classify });
 		expect(await hook({ forced: true })).toEqual({
-			spec: "codex:gpt-6.1-sol",
-			reason: "it repeats make test",
-			trigger: "pending",
+			target: {
+				spec: "codex:gpt-6.1-sol",
+				reason: "it repeats make test",
+				trigger: "pending",
+			},
 		});
 		expect(classify).not.toHaveBeenCalled();
 	});
 
-	it("asks the classifier at any other compaction and records its decision", async () => {
-		const saveState = vi.fn(async () => {});
+	it("asks the classifier at any other compaction, records its decision on the stored state, and returns its usage", async () => {
+		const usage = {
+			inputTokens: 900,
+			outputTokens: 30,
+			uncachedInputTokens: 900,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+		};
+		// The lead stopped the sidekick while the classifier ran.
+		const { updateState, saved } = store({
+			...stateOf(sidekick()),
+			retired: { at: "y", reason: "stopped by the lead" },
+		});
 		const decide = (decision: SidekickDecisionRecord["decision"]) =>
-			sidekickSwitchAtCompaction({
-				userId: "user",
-				sessionId: "s",
-				roleModels,
-				items: () => items,
-				deps: {
-					session: vi.fn(async () => sidekick()),
-					saveState,
-					classify: vi.fn(async (summary) => {
-						expect(summary).toMatchObject({
-							point: "compaction",
-							round: 2,
-							brief: "Round 2/6 from your lead. Fix make test.",
-							canSwitch: true,
-						});
-						return {
-							answer: { decision, reason: record.reason },
-							record: { ...record, decision },
-						};
-					}),
-				},
+			hookFor(sidekick(), {
+				updateState,
+				classify: vi.fn(async (summary) => {
+					expect(summary).toMatchObject({
+						point: "compaction",
+						round: 2,
+						brief: "Round 2/6 from your lead. Fix make test.",
+						canSwitch: true,
+					});
+					return {
+						answer: { decision, reason: record.reason },
+						record: { ...record, decision },
+						usage,
+					};
+				}),
 			})({ forced: false });
 		expect(await decide("switch_model")).toEqual({
-			spec: "codex:gpt-6.1-sol",
-			reason: "it keeps failing make test",
-			trigger: "compaction",
+			target: {
+				spec: "codex:gpt-6.1-sol",
+				reason: "it keeps failing make test",
+				trigger: "compaction",
+			},
+			usage,
 		});
-		expect(await decide("hand_back")).toBeNull();
-		expect(saveState).toHaveBeenCalledTimes(2);
-		const saved = (
-			saveState.mock.calls[0] as unknown as [string, SidekickState]
-		)[1];
-		expect(saved.decisions).toEqual([{ ...record, decision: "switch_model" }]);
+		expect((await decide("hand_back")).target).toBeNull();
+		expect(saved[0]?.state.decisions).toEqual([
+			{ ...record, decision: "switch_model" },
+		]);
+		// Never resurrected.
+		expect(saved[0]?.state.retired?.reason).toBe("stopped by the lead");
 	});
 
-	it("never switches without an escalation model or a sidekick", async () => {
+	it("never switches without an escalation model, a live sidekick, or in a turn whose switch was dropped", async () => {
 		const classify = vi.fn();
-		const hook = (session: AgentSessionRecord | null, models = roleModels) =>
-			sidekickSwitchAtCompaction({
-				userId: "user",
-				sessionId: "s",
-				roleModels: models,
-				items: () => items,
-				deps: { session: vi.fn(async () => session), classify },
-			})({ forced: false });
 		expect(
-			await hook(sidekick(), { writer: roleModels.writer } as never),
+			(
+				await hookFor(sidekick(), { classify }, {
+					writer: roleModels.writer,
+				} as never)({ forced: false })
+			).target,
 		).toBeNull();
-		expect(await hook(null)).toBeNull();
 		expect(
-			await hook(sidekick({ retired: { at: "x", reason: "stopped" } })),
+			(await hookFor(null, { classify })({ forced: false })).target,
+		).toBeNull();
+		expect(
+			(
+				await hookFor(sidekick({ retired: { at: "x", reason: "stopped" } }), {
+					classify,
+				})({ forced: false })
+			).target,
+		).toBeNull();
+		expect(
+			(
+				await hookFor(
+					sidekick({ pendingSwitch: pending, switchBlockedTurn: "turn" }),
+					{ classify },
+				)({ forced: true })
+			).target,
 		).toBeNull();
 		expect(classify).not.toHaveBeenCalled();
 	});
@@ -175,40 +224,35 @@ describe("completeSidekickModelSwitch", () => {
 		},
 		label: { model: "gpt-6-luna", connection: "Codex" },
 	};
-
-	it("moves the same session to the escalation route and records the switch", async () => {
-		const saveModel = vi.fn(async () => {});
-		const saveState = vi.fn(async () => {});
-		const outcome = await completeSidekickModelSwitch({
+	const complete = (
+		session: AgentSessionRecord,
+		updateState: ReturnType<typeof store>["updateState"],
+		turnId: string,
+		models: Record<string, unknown> = roleModels,
+		spec = "codex:gpt-6.1-sol",
+	) =>
+		completeSidekickModelSwitch({
 			userId: "user",
 			sessionId: "s",
-			roleModels,
-			target: {
-				spec: "codex:gpt-6.1-sol",
-				reason: "it repeats make test",
-				trigger: "pending",
-			},
+			turnId,
+			roleModels: models,
+			target: { spec, reason: "it repeats make test", trigger: "pending" },
 			compacted: true,
 			current,
 			previous: null,
 			messages,
 			deps: {
-				session: vi.fn(async () =>
-					sidekick({
-						pendingSwitch: {
-							to: "codex:gpt-6.1-sol",
-							reason: "it repeats make test",
-							round: 1,
-							at: "x",
-						},
-					}),
-				),
+				session: vi.fn(async () => session),
 				routes,
-				saveModel,
-				saveState,
+				updateState: updateState as never,
 				now: () => NOW,
 			},
 		});
+
+	it("moves the same session to the escalation route and records the switch in one write", async () => {
+		const session = sidekick({ pendingSwitch: pending });
+		const { updateState, saved } = store(stateOf(session));
+		const outcome = await complete(session, updateState, "turn-a");
 		expect(outcome.kind).toBe("switched");
 		if (outcome.kind !== "switched") return;
 		expect(outcome.failover.route).toEqual({
@@ -217,16 +261,21 @@ describe("completeSidekickModelSwitch", () => {
 			modelId: "gpt-6.1-sol",
 		});
 		expect(outcome.failover.switches).toBe(1);
-		expect(saveModel).toHaveBeenCalledWith("s", {
+		expect(outcome).toMatchObject({
+			from: "gpt-6-luna",
+			to: "gpt-6.1-sol",
+			label: { model: "GPT-6.1 Sol", connection: "Codex" },
+		});
+		// The model and the state change together.
+		expect(saved).toHaveLength(1);
+		expect(saved[0]?.model).toEqual({
 			listedModelId: "gpt-6.1-sol",
 			harness: "codex",
 		});
-		const saved = (
-			saveState.mock.calls[0] as unknown as [string, SidekickState]
-		)[1];
-		expect(saved.pendingSwitch).toBeUndefined();
-		expect(saved.model).toBe("gpt-6.1-sol");
-		expect(saved.switches).toEqual([
+		const state = saved[0]?.state as SidekickState;
+		expect(state.pendingSwitch).toBeUndefined();
+		expect(state.model).toBe("gpt-6.1-sol");
+		expect(state.switches).toEqual([
 			{
 				from: "gpt-6-luna",
 				to: "gpt-6.1-sol",
@@ -237,7 +286,6 @@ describe("completeSidekickModelSwitch", () => {
 				at: new Date(NOW).toISOString(),
 			},
 		]);
-		// The summary carries over; a runtime note says what happened.
 		expect(JSON.stringify(outcome.messages)).toContain(
 			"Summary of earlier conversation",
 		);
@@ -246,43 +294,37 @@ describe("completeSidekickModelSwitch", () => {
 		);
 	});
 
-	it("drops the pending switch and keeps the route when the escalation model is unavailable", async () => {
-		const saveState = vi.fn(async () => {});
-		const saveModel = vi.fn(async () => {});
-		const outcome = await completeSidekickModelSwitch({
-			userId: "user",
-			sessionId: "s",
-			roleModels: { writerEscalation: { model: "api:google/gemini-3.8-pro" } },
-			target: {
-				spec: "api:google/gemini-3.8-pro",
-				reason: "stuck",
-				trigger: "pending",
-			},
-			compacted: true,
-			current,
-			previous: null,
-			messages,
-			deps: {
-				session: vi.fn(async () =>
-					sidekick({
-						pendingSwitch: {
-							to: "api:google/gemini-3.8-pro",
-							reason: "stuck",
-							round: 1,
-							at: "x",
-						},
-					}),
-				),
-				routes,
-				saveModel,
-				saveState,
-			},
+	it("does not switch a sidekick retired meanwhile, and blocks the turn", async () => {
+		const session = sidekick({ pendingSwitch: pending });
+		const { updateState, saved } = store({
+			...stateOf(session),
+			retired: { at: "y", reason: "stopped by the lead" },
 		});
+		const outcome = await complete(session, updateState, "turn-b");
+		expect(outcome).toEqual({
+			kind: "kept",
+			reason: "the sidekick was retired meanwhile",
+		});
+		expect(saved.every((entry) => entry.model === undefined)).toBe(true);
+		expect(saved.at(-1)?.state.retired?.reason).toBe("stopped by the lead");
+		expect(sidekickSwitchAllowed(stateOf(session), "turn-b")).toBe(false);
+	});
+
+	it("drops an unavailable switch once per turn, even when its state cannot be saved", async () => {
+		const session = sidekick({ pendingSwitch: pending });
+		const updateState = vi.fn(async () => {
+			throw new Error("database unavailable");
+		});
+		const outcome = await complete(
+			session,
+			updateState as never,
+			"turn-c",
+			{ writerEscalation: { model: "api:google/gemini-3.8-pro" } },
+			"api:google/gemini-3.8-pro",
+		);
 		expect(outcome.kind).toBe("kept");
-		expect(saveModel).not.toHaveBeenCalled();
-		const saved = (
-			saveState.mock.calls[0] as unknown as [string, SidekickState]
-		)[1];
-		expect(saved.pendingSwitch).toBeUndefined();
+		// The pending switch is still stored, but this turn will not try again.
+		expect(sidekickSwitchAllowed(stateOf(session), "turn-c")).toBe(false);
+		expect(sidekickSwitchAllowed(stateOf(session), "turn-d")).toBe(true);
 	});
 });

@@ -153,7 +153,11 @@ export type ModelAgentInput = {
 	switchAtCompaction?: (input: {
 		readonly history: ModelMessage[];
 		readonly forced: boolean;
-	}) => Promise<ModelSwitchTarget | null>;
+	}) => Promise<{
+		readonly target: ModelSwitchTarget | null;
+		/** A call made to decide (the classifier's): charged to this run's usage. */
+		readonly usage?: ApiTokenUsage | null;
+	}>;
 	/**
 	 * Called once when the run gives up, before it throws: the last cleanly
 	 * finished history, whether a failed step's partial output was saved after
@@ -832,7 +836,7 @@ async function executeModelSteps(
 					: contextBudget(history);
 				const contextTokens = contextTokenPressure(history, measured);
 				// Each compaction is a chance to switch models (the cache misses anyway).
-				const switchTarget =
+				const switchDecision =
 					input.switchAtCompaction &&
 					(forced || firstForced || contextTokens >= budget.compactAtTokens)
 						? await input.switchAtCompaction({
@@ -840,6 +844,14 @@ async function executeModelSteps(
 								forced: firstForced && !forced,
 							})
 						: null;
+				if (switchDecision?.usage) {
+					accumulated.usage = addApiTokenUsage(
+						accumulated.usage,
+						switchDecision.usage,
+					);
+					await input.onEvent({ type: "usage", usage: accumulated.usage });
+				}
+				const switchTarget = switchDecision?.target ?? null;
 				if (switchTarget) {
 					const summarize = async (older: ModelMessage[]) => {
 						await input.onEvent({ type: "context", compacting: true });
@@ -866,6 +878,22 @@ async function executeModelSteps(
 							await input.onEvent({ type: "context", compacting: false });
 						}
 					};
+					// The archive is a convenience here: a failed upload must not
+					// cost the summary (and the switch its compaction).
+					const archive = input.archiveHistory;
+					const bestEffortArchive =
+						archive &&
+						(async (messages: ModelMessage[]) => {
+							try {
+								return await archive(messages);
+							} catch (error) {
+								console.warn("Context archive failed at a model switch.", {
+									message:
+										error instanceof Error ? error.message.slice(0, 200) : "",
+								});
+								return null;
+							}
+						});
 					let switched: { messages: ModelMessage[]; compacted: boolean };
 					try {
 						switched = await compactApiHistory(
@@ -878,7 +906,7 @@ async function executeModelSteps(
 									estimatedHistory,
 								),
 							},
-							input.archiveHistory,
+							bestEffortArchive,
 							// At a round's start everything before its message is summarized.
 							firstForced ? "whole-turns" : "completed-steps",
 							input.isUserRequest,
@@ -887,6 +915,10 @@ async function executeModelSteps(
 						// An overflow must shrink; a switch at a round's start goes ahead
 						// on the whole provider-neutral history instead.
 						if (forced || !firstForced) throw error;
+						console.warn("Compaction for a model switch failed.", {
+							message:
+								error instanceof Error ? error.message.slice(0, 200) : "",
+						});
 						switched = { messages: history, compacted: false };
 					}
 					if (switched.compacted) {
