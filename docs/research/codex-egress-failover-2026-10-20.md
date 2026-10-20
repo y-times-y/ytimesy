@@ -49,7 +49,7 @@ The relay now classifies its own upstream response with the same rules. It answe
    - `YTIMESY_CODEX_RELAY_URL_2` + `YTIMESY_CODEX_RELAY_SECRET_2` … `_8`: further relays, tried in order;
    - `YTIMESY_CODEX_EGRESS_PROBE_USER_ID` (optional): the owner account whose Codex login the 5-minute probe uses.
    The `CODEX_EGRESS` VPC binding stays first; no wrangler config change is needed.
-3. **Migration** `supabase/migrations/20261020130000_owner_alert_codex_egress.sql` adds the `codex-egress` owner-alert kind. Until it is applied, the alert claim insert fails and alerts fall back to per-isolate dedupe.
+3. **Migration** `supabase/migrations/20261020140000_owner_alert_codex_egress.sql` adds the `codex-egress` owner-alert kind. Until it is applied, the alert claim insert fails and alerts fall back to per-isolate dedupe.
 4. **Verify** after deploying: run the probe, or temporarily point relay 1 at a host that returns 403, and confirm a chat still answers through relay 2 and the alert email arrives.
 
 ## Per-user egress through the user's Freestyle VM (design notes only)
