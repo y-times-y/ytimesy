@@ -138,6 +138,23 @@ export type ModelAgentInput = {
 	) => Promise<string | undefined>;
 	afterTools?: (messages: ModelMessage[]) => Promise<ModelMessage[]>;
 	/**
+	 * Compact before the first step even below the threshold, when
+	 * `switchAtCompaction` names a model to continue on (lead mode fusion: a
+	 * sidekick's pending model switch is carried out at its next round's start).
+	 */
+	compactFirst?: boolean;
+	/**
+	 * Asked at each compaction before it runs (lead mode fusion's sidekick):
+	 * a model to continue on after it, or null. With one, the compaction
+	 * writes a provider-neutral text summary (a native checkpoint is bound to
+	 * this model) and the run ends with ModelSwitchAtCompaction once the
+	 * compacted history is saved; the caller continues on the new model.
+	 */
+	switchAtCompaction?: (input: {
+		readonly history: ModelMessage[];
+		readonly forced: boolean;
+	}) => Promise<ModelSwitchTarget | null>;
+	/**
 	 * Called once when the run gives up, before it throws: the last cleanly
 	 * finished history, whether a failed step's partial output was saved after
 	 * it, and the ids of that partial output (never retracted by a retry).
@@ -152,6 +169,37 @@ export type ModelAgentInput = {
 		readonly inFlight?: ModelMessage[];
 	}) => void;
 };
+
+/** The model a run continues on after a compaction (src/server/services/sidekick-model-switch.ts). */
+export type ModelSwitchTarget = {
+	/** The roleModels spec, e.g. codex:gpt-6.1-sol. */
+	readonly spec: string;
+	readonly reason: string;
+	/** pending: decided earlier; compaction: decided at this compaction. */
+	readonly trigger: "pending" | "compaction";
+};
+
+/** Ends a run whose history was just compacted for a model switch; it is saved already. */
+export class ModelSwitchAtCompaction extends Error {
+	constructor(
+		readonly target: ModelSwitchTarget,
+		/** False when the compaction failed and the history was kept whole. */
+		readonly compacted: boolean,
+	) {
+		super(`Model switch at compaction to ${target.spec}.`);
+		this.name = "ModelSwitchAtCompaction";
+	}
+}
+
+/** A request's settings without the tool-call options of a run with tools (one-off calls send none). */
+export function withoutToolSettings<T extends object>(settings: T): T {
+	const options = (settings as { providerOptions?: Record<string, unknown> })
+		.providerOptions;
+	const openai = options?.openai as Record<string, unknown> | undefined;
+	if (!openai || !("parallelToolCalls" in openai)) return settings;
+	const { parallelToolCalls: _, ...rest } = openai;
+	return { ...settings, providerOptions: { ...options, openai: rest } };
+}
 
 /** Shared streaming/tool loop; credential transports stay in their provider adapters. */
 export async function runModelAgent(
@@ -572,6 +620,7 @@ async function executeModelSteps(
 		((instructions: string) => ({ system: instructions }));
 	let history = input.messages;
 	let pendingCompaction = forceCompaction;
+	let compactFirst = input.compactFirst === true;
 	// A rejected request proved the last measurement wrong; estimate afresh.
 	let measured =
 		!forceCompaction &&
@@ -776,10 +825,77 @@ async function executeModelSteps(
 				const estimatedHistory = estimateContextTokens(history);
 				const forced = pendingCompaction;
 				pendingCompaction = undefined;
+				const firstForced = compactFirst;
+				compactFirst = false;
 				const budget = forced
 					? overflowCompactionBudget(contextBudget(history), forced)
 					: contextBudget(history);
 				const contextTokens = contextTokenPressure(history, measured);
+				// Each compaction is a chance to switch models (the cache misses anyway).
+				const switchTarget =
+					input.switchAtCompaction &&
+					(forced || firstForced || contextTokens >= budget.compactAtTokens)
+						? await input.switchAtCompaction({
+								history,
+								forced: firstForced && !forced,
+							})
+						: null;
+				if (switchTarget) {
+					const summarize = async (older: ModelMessage[]) => {
+						await input.onEvent({ type: "context", compacting: true });
+						try {
+							await input.beforeCompaction?.(older);
+							runSignal.throwIfAborted();
+							const summary = streamText({
+								...cacheSettings,
+								model,
+								...withoutToolSettings(
+									requestSettings(CONTEXT_SUMMARY_INSTRUCTIONS),
+								),
+								prompt: JSON.stringify(older),
+								maxRetries: 1,
+								maxOutputTokens: 2048,
+								abortSignal: runSignal,
+								onError: () => {},
+							});
+							for await (const part of summary.fullStream)
+								if (part.type === "error") throw part.error;
+							await recordUsage(await summary.totalUsage);
+							return await summary.text;
+						} finally {
+							await input.onEvent({ type: "context", compacting: false });
+						}
+					};
+					let switched: { messages: ModelMessage[]; compacted: boolean };
+					try {
+						switched = await compactApiHistory(
+							history,
+							summarize,
+							{
+								...budget,
+								compactAtTokens: Math.min(
+									budget.compactAtTokens,
+									estimatedHistory,
+								),
+							},
+							input.archiveHistory,
+							// At a round's start everything before its message is summarized.
+							firstForced ? "whole-turns" : "completed-steps",
+							input.isUserRequest,
+						);
+					} catch (error) {
+						// An overflow must shrink; a switch at a round's start goes ahead
+						// on the whole provider-neutral history instead.
+						if (forced || !firstForced) throw error;
+						switched = { messages: history, compacted: false };
+					}
+					if (switched.compacted) {
+						history = await afterCompaction(switched.messages, history);
+						measured = undefined;
+						await input.onStep(history);
+					}
+					throw new ModelSwitchAtCompaction(switchTarget, switched.compacted);
+				}
 				const compact = async (older: ModelMessage[]) => {
 					await input.onEvent({ type: "context", compacting: true });
 					try {
@@ -921,6 +1037,7 @@ async function executeModelSteps(
 			],
 			// Provider errors can echo request credentials; publish only the sanitized error below.
 			onError: ({ error }) => {
+				if (error instanceof ModelSwitchAtCompaction) return;
 				console.warn(
 					error instanceof InitialAgentReadFailure
 						? "Agent preparation failed"
@@ -1166,7 +1283,11 @@ async function executeModelSteps(
 					});
 					break;
 				case "error":
-					if (part.error instanceof InitialAgentReadFailure) throw part.error;
+					if (
+						part.error instanceof InitialAgentReadFailure ||
+						part.error instanceof ModelSwitchAtCompaction
+					)
+						throw part.error;
 					throw new SafeApiModelFailure(part.error);
 				case "abort":
 					throw new Error("Model run cancelled.");

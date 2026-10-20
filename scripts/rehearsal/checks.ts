@@ -610,7 +610,6 @@ export async function checkScenario(
 				"the next round restarted the sidekick on roleModels.writerEscalation",
 				has(sends[1]?.output, "was stuck", "restarted as sidekick 2") &&
 					escalated?.listed_model_id === "gpt-6.1-sol" &&
-					escalated?.agent_budget?.sidekick?.escalatedFrom?.label === "1" &&
 					requests("escalated-sidekick").every(
 						(request) => request.model === "gpt-6.1-sol",
 					),

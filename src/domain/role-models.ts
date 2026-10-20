@@ -23,10 +23,16 @@ export const MODEL_ROLES = [
 	"checker",
 	"judge",
 	/**
-	 * Lead mode fusion: the model a stuck sidekick is restarted on
-	 * (src/domain/sidekick-signals.ts); no escalation without it.
+	 * Lead mode fusion: the model a stuck sidekick switches to at its next
+	 * context compaction (src/server/services/sidekick-model-switch.ts); no
+	 * switch without it.
 	 */
 	"writerEscalation",
+	/**
+	 * Lead mode fusion: the small model judging each sidekick round
+	 * (src/domain/sidekick-classifier.ts); codex:gpt-6-luna@low when unset.
+	 */
+	"classifier",
 ] as const;
 export type ModelRole = (typeof MODEL_ROLES)[number];
 

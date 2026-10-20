@@ -7,6 +7,12 @@ import {
 	retireSidekickState,
 	type SidekickState,
 } from "#/domain/sidekick";
+import {
+	type ClassifierInput,
+	rulesDecision,
+	type SidekickDecision,
+	type SidekickDecisionRecord,
+} from "#/domain/sidekick-classifier";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 
 const adapters = vi.hoisted(() => ({
@@ -35,6 +41,32 @@ vi.mock("../adapters/agent-sessions", () => ({
 vi.mock("./subagent-writer", () => ({
 	transferWriterPatch: adapters.transfer,
 }));
+// No model call in these tests: the classifier answers as its rules would.
+vi.mock("./sidekick-classifier", () => ({
+	classifySidekick: vi.fn(async ({ summary }: { summary: ClassifierInput }) => {
+		const answer = rulesDecision(summary.signals, summary.canSwitch);
+		return { answer, record: decisionRecord(answer.decision, "rules") };
+	}),
+}));
+
+function decisionRecord(
+	decision: SidekickDecision,
+	source: SidekickDecisionRecord["source"] = "classifier",
+): SidekickDecisionRecord {
+	return {
+		point: "round",
+		round: 2,
+		decision,
+		reason: "test",
+		source,
+		inputsHash: "h",
+		latencyMs: 5,
+		tokens: 100,
+		costUsd: 0.001,
+		planBilled: true,
+		at: "2026-10-18T12:00:00.000Z",
+	};
+}
 
 const {
 	guardSubagentStep,
@@ -501,7 +533,7 @@ describe("sidekick (lead mode fusion)", () => {
 		);
 	});
 
-	it("tells the lead the sidekick is stuck when it fails the same check again", async () => {
+	it("classifies a stuck round and marks a model switch for the sidekick's next compaction", async () => {
 		const root = record("root", null, { providerRef: "vm-root" });
 		const state = sidekickState({
 			round: 2,
@@ -593,6 +625,13 @@ describe("sidekick (lead mode fusion)", () => {
 			},
 		];
 		const saveState = vi.fn(async () => {});
+		const classify = vi.fn(async (_summary: ClassifierInput) => ({
+			answer: {
+				decision: "switch_model" as const,
+				reason: "it repeats make test",
+			},
+			record: decisionRecord("switch_model"),
+		}));
 		const report = await subagentReport({
 			machines: { destroy: vi.fn() } as never,
 			session: sidekick,
@@ -600,21 +639,50 @@ describe("sidekick (lead mode fusion)", () => {
 			outcome: "finished",
 			text: "Still failing.",
 			now: NOW,
-			escalationModel: "codex:gpt-6.1-sol",
+			roleModels: { writerEscalation: { model: "codex:gpt-6.1-sol" } },
 			deps: {
 				session: vi.fn(async () => sidekick),
 				saveState,
 				mergeFork: adapters.mergeFork,
+				classify,
 			},
 		});
+		// The classifier sees the round: its brief, report, commands, diff and signals.
+		const summary = classify.mock.calls[0]?.[0] as unknown as ClassifierInput;
+		expect(summary).toMatchObject({
+			point: "round",
+			round: 2,
+			model: "gpt-6-luna",
+			brief: expect.stringContaining("Round 2/6 from your lead"),
+			report: "Still failing.",
+			diff: { files: ["src/cli.ts"], added: 1, removed: 0 },
+			canSwitch: true,
+		});
+		expect(summary.commands).toEqual([
+			{ command: "make test", exitCode: 2 },
+			{ command: "grep -n missing src/cli.ts", exitCode: 1 },
+		]);
+		expect(summary.signals).toEqual([
+			{ kind: "same-check-failed", detail: "make test" },
+		]);
 		expect(report).toContain(
-			"Runtime notice: sidekick 1 looks stuck because it failed the same check as last round (`make test`).",
+			"Runtime notice: sidekick 1 looks stuck (it repeats make test).",
 		);
-		expect(report).toContain("Re-brief it more prescriptively");
-		expect(report).toContain("restarts it on codex:gpt-6.1-sol");
+		expect(report).toContain(
+			"The runtime switches it to codex:gpt-6.1-sol at its next context compaction",
+		);
 		const saved = (
 			saveState.mock.calls[0] as unknown as [string, SidekickState]
 		)[1];
+		expect(saved.pendingSwitch).toMatchObject({
+			to: "codex:gpt-6.1-sol",
+			reason: "it repeats make test",
+			round: 2,
+		});
+		expect(saved.decisions?.[0]).toMatchObject({
+			decision: "switch_model",
+			source: "classifier",
+		});
 		// Only this round's failures count; a no-match grep is not a failure.
 		expect(saved.rounds.at(-1)?.evidence?.failedChecks).toEqual(["make test"]);
 		expect(saved.rounds.at(-1)?.signals).toEqual([

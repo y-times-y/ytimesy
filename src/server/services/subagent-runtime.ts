@@ -1,14 +1,17 @@
 import type { ModelMessage } from "ai";
 import { checkerWrapUpLeadMs } from "#/domain/checker-brief";
-import { modelName } from "#/domain/fusion-pairs";
 import { WorkspaceId } from "#/domain/ids";
 import { sessionBilling } from "#/domain/model-pricing";
+import type { RoleModels } from "#/domain/role-models";
 import type { SessionItem } from "#/domain/session-item";
 import {
 	currentSidekickRound,
 	endSidekickRound,
 	isActiveSidekick,
+	markSidekickSwitch,
 	previousSidekickRound,
+	recordSidekickDecision,
+	reportPushesBack,
 	retireSidekickState,
 	type SidekickState,
 	sidekickIdleTtlMinutes,
@@ -19,11 +22,16 @@ import {
 	subagentBudgetCheck,
 } from "#/domain/sidekick";
 import {
+	type ClassifierInput,
+	sidekickDecisionNotice,
+	sidekickEscalation,
+} from "#/domain/sidekick-classifier";
+import {
+	roundCommands,
 	roundEvidence,
+	sidekickRoundBrief,
 	sidekickRoundItems,
 	sidekickSignals,
-	sidekickStuckNotice,
-	warrantsEscalation,
 } from "#/domain/sidekick-signals";
 import {
 	AGENT_SEND_TOOL,
@@ -58,6 +66,10 @@ import {
 	saveSidekickState,
 	subagentAncestors,
 } from "../adapters/subagents";
+import {
+	classifySidekick,
+	type SidekickClassification,
+} from "./sidekick-classifier";
 import { transferWriterPatch } from "./subagent-writer";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -161,8 +173,8 @@ export async function subagentReport(input: {
 	readonly text: string;
 	readonly now?: number;
 	readonly deps?: SidekickRuntimeDeps;
-	/** Lead mode fusion: roleModels.writerEscalation's model, named in a stuck notice. */
-	readonly escalationModel?: string;
+	/** Lead mode fusion: the variant's role models (the classifier's and writerEscalation's). */
+	readonly roleModels?: RoleModels;
 }): Promise<string> {
 	const { session } = input;
 	const role = session.agentRole;
@@ -262,11 +274,13 @@ export async function subagentReport(input: {
 					label,
 					fork: fork ?? null,
 					state: sidekick,
+					userId: session.userId,
 					outcome: input.outcome,
-					patchFiles: patch?.files.length ?? 0,
+					patch,
+					report: input.text,
 					items: input.items,
 					model: session.listedModelId ?? null,
-					escalationModel: input.escalationModel,
+					roleModels: input.roleModels,
 					now,
 					deps: input.deps,
 				}),
@@ -284,52 +298,110 @@ export type SidekickRuntimeDeps = {
 	readonly descendants?: typeof descendantAgentSessions;
 	readonly stop?: typeof requestSubagentStop;
 	readonly now?: () => number;
+	/** The round's classifier (classifySidekick with the variant's role models). */
+	readonly classify?: (
+		summary: ClassifierInput,
+	) => Promise<SidekickClassification>;
 };
 
 /**
- * Closes a sidekick's round after its report: records the round, retires it
- * when it has no rounds left (or was retired meanwhile) and then deletes its
- * fork, since the patch and ref are already in the lead's checkout. Returns
- * the report's closing line.
+ * Closes a sidekick's round after its report: records the round and the
+ * classifier's decision on it, retires it when it has no rounds left (or
+ * was retired meanwhile) and then deletes its fork, since the patch and ref
+ * are already in the lead's checkout. A hand_back puts a notice in the
+ * report; a switch_model marks the switch for its next compaction. Returns
+ * the report's closing lines.
  */
 async function endSidekickRoundAndReport(input: {
 	readonly machines: WorkspaceMachines;
 	readonly sessionId: string;
+	readonly userId: string;
 	readonly label: string;
 	readonly fork: SubagentFork | null;
 	readonly state: SidekickState;
 	readonly outcome: SubagentOutcome;
-	readonly patchFiles: number;
+	readonly patch: WriterPatch | null;
+	readonly report: string;
 	/** The sidekick's history (this round is the part after its start message). */
 	readonly items: readonly SessionItem[];
 	readonly model: string | null;
-	readonly escalationModel?: string;
+	readonly roleModels?: RoleModels;
 	readonly now: number;
 	readonly deps?: SidekickRuntimeDeps;
 }) {
+	const roundItems = sidekickRoundItems(input.items, input.state.round);
+	const kind = currentSidekickRound(input.state)?.kind ?? "build";
+	const patchFiles = input.patch?.files.length ?? 0;
 	// Hand-back signals: this round against the one before it.
-	const evidence = roundEvidence(
-		sidekickRoundItems(input.items, input.state.round),
-	);
+	const evidence = roundEvidence(roundItems);
 	const signals = sidekickSignals({
-		kind: currentSidekickRound(input.state)?.kind ?? "build",
+		kind,
 		outcome: input.outcome,
-		patchFiles: input.patchFiles,
+		patchFiles,
 		evidence,
 		previous: previousSidekickRound(input.state)?.evidence,
 		roundsLeft: sidekickRoundsLeft(input.state),
 	});
-	const ended = endSidekickRound(input.state, {
-		now: new Date(input.now).toISOString(),
+	const escalation = sidekickEscalation(input.roleModels, input.model);
+	const summary: ClassifierInput = {
+		point: "round",
+		round: input.state.round,
+		roundKind: kind,
+		model: input.model ?? "",
+		brief: sidekickRoundBrief(input.items, input.state.round),
+		report: input.report,
+		commands: roundCommands(roundItems),
+		diff: {
+			files: input.patch?.files ?? [],
+			added: input.patch?.added ?? 0,
+			removed: input.patch?.removed ?? 0,
+		},
 		outcome: input.outcome,
-		patchFiles: input.patchFiles,
-		evidence,
 		signals,
-	});
+		canSwitch: !!escalation,
+	};
+	const { answer, record } = await (
+		input.deps?.classify ??
+		((summary: ClassifierInput) =>
+			classifySidekick({
+				userId: input.userId,
+				roleModels: input.roleModels,
+				summary,
+			}))
+	)(summary);
+	let ended = recordSidekickDecision(
+		endSidekickRound(input.state, {
+			now: new Date(input.now).toISOString(),
+			outcome: input.outcome,
+			patchFiles,
+			evidence,
+			signals,
+			pushback: reportPushesBack(input.report),
+		}),
+		record,
+	);
+	const switching =
+		answer.decision === "switch_model" && escalation && !ended.retired;
+	if (switching)
+		ended = markSidekickSwitch(ended, {
+			to: escalation,
+			reason: answer.reason,
+			round: input.state.round,
+			at: new Date(input.now).toISOString(),
+		});
 	await (input.deps?.saveState ?? saveSidekickState)(
 		input.sessionId,
 		ended,
 	).catch(() => {});
+	const notice = sidekickDecisionNotice({
+		label: input.label,
+		decision:
+			answer.decision === "switch_model" && !switching
+				? "hand_back"
+				: answer.decision,
+		reason: answer.reason,
+		...(switching ? { switchTo: escalation } : {}),
+	});
 	if (ended.retired) {
 		await deleteSidekickFork(input.machines, input.sessionId, input.fork, {
 			...input.deps,
@@ -337,20 +409,14 @@ async function endSidekickRoundAndReport(input: {
 		});
 		return [
 			`Sidekick ${input.label} is retired (${ended.retired.reason}); its fork is deleted. Start a new writer for more work.`,
-			sidekickStuckNotice({ label: input.label, signals }),
+			notice,
 		]
 			.filter(Boolean)
 			.join("\n\n");
 	}
-	const escalation =
-		input.escalationModel &&
-		warrantsEscalation(signals) &&
-		modelName(input.escalationModel) !== modelName(input.model ?? "")
-			? input.escalationModel
-			: undefined;
 	return [
 		`Sidekick ${input.label}: ${sidekickRoundLabel(ended)} done. It keeps its context and fork: send feedback or the next brief with ${AGENT_SEND_TOOL} (id ${input.label}); its fork is synced with your checkout first, so apply or discard this patch before you do.`,
-		sidekickStuckNotice({ label: input.label, signals, escalation }),
+		notice,
 	]
 		.filter(Boolean)
 		.join("\n\n");

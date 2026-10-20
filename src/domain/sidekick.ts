@@ -5,6 +5,10 @@ import { leanToolNames } from "./harness-model-profile";
 import { sessionBilling } from "./model-pricing";
 import { type SessionItem, sessionItemsFromUnknown } from "./session-item";
 import type {
+	SidekickDecision,
+	SidekickDecisionRecord,
+} from "./sidekick-classifier";
+import type {
 	RoundEvidence,
 	SidekickRoundKind,
 	SidekickSignal,
@@ -88,6 +92,34 @@ export type SidekickRound = {
 	readonly evidence?: RoundEvidence;
 	/** Hand-back signals fired at its end (src/domain/sidekick-signals.ts). */
 	readonly signals?: readonly SidekickSignal[];
+	/** Which of the chat's user requests it served (1: the first). */
+	readonly request?: number;
+	/** Its report argued against the brief (pair tuning: pushback occurrences). */
+	readonly pushback?: boolean;
+};
+
+/** A model switch the classifier asked for, carried out at the sidekick's next compaction. */
+export type SidekickPendingSwitch = {
+	/** roleModels.writerEscalation's spec, e.g. codex:gpt-6.1-sol. */
+	readonly to: string;
+	readonly reason: string;
+	/** The round whose decision asked for it. */
+	readonly round: number;
+	readonly at: string;
+};
+
+/** A switch carried out: the same session continued on another model from its compacted context. */
+export type SidekickSwitch = {
+	readonly from: string;
+	readonly to: string;
+	readonly reason: string;
+	/** The round it happened in (its start, or mid-round). */
+	readonly round: number;
+	/** pending: decided at a round's end; compaction: decided by the classifier at this compaction. */
+	readonly trigger: "pending" | "compaction";
+	/** False when the compaction failed and the switch went ahead on the provider-neutral history. */
+	readonly compacted: boolean;
+	readonly at: string;
 };
 
 export type SidekickState = {
@@ -113,12 +145,12 @@ export type SidekickState = {
 	readonly turnFirstRound?: number;
 	/** User requests this sidekick served (1 in a single-message chat). */
 	readonly turns?: number;
-	/** Set on a sidekick restarted on roleModels.writerEscalation. */
-	readonly escalatedFrom?: {
-		readonly label: string;
-		readonly model: string;
-		readonly reason: string;
-	};
+	/** Classifier decisions (rounds' ends and compactions), oldest first. */
+	readonly decisions?: readonly SidekickDecisionRecord[];
+	/** Set while a switch_model waits for the sidekick's next compaction. */
+	readonly pendingSwitch?: SidekickPendingSwitch;
+	/** Model switches carried out. */
+	readonly switches?: readonly SidekickSwitch[];
 };
 
 export function newSidekickState(
@@ -129,14 +161,12 @@ export function newSidekickState(
 		readonly model?: string;
 		readonly requestKey?: string;
 		readonly kind?: SidekickRoundKind;
-		readonly escalatedFrom?: SidekickState["escalatedFrom"];
 	} = {},
 ): SidekickState {
 	return {
 		...(options.pair ? { pair: options.pair } : {}),
 		...(options.model ? { model: options.model } : {}),
 		...(options.requestKey ? { requestKey: options.requestKey } : {}),
-		...(options.escalatedFrom ? { escalatedFrom: options.escalatedFrom } : {}),
 		turnFirstRound: 1,
 		turns: 1,
 		maxRounds: SIDEKICK_MAX_ROUNDS,
@@ -149,7 +179,12 @@ export function newSidekickState(
 		roundStartSteps: 0,
 		roundStartTokens: 0,
 		rounds: [
-			{ n: 1, startedAt: now, ...(options.kind ? { kind: options.kind } : {}) },
+			{
+				n: 1,
+				startedAt: now,
+				request: 1,
+				...(options.kind ? { kind: options.kind } : {}),
+			},
 		],
 	};
 }
@@ -287,11 +322,12 @@ export function beginSidekickRound(
 		!!input.requestKey &&
 		!!state.requestKey &&
 		input.requestKey !== state.requestKey;
+	const turns = (state.turns ?? 1) + (newRequest ? 1 : 0);
 	return {
 		...state,
 		...(input.requestKey ? { requestKey: input.requestKey } : {}),
 		turnFirstRound: newRequest ? n : (state.turnFirstRound ?? 1),
-		turns: (state.turns ?? 1) + (newRequest ? 1 : 0),
+		turns,
 		round: n,
 		roundStartedAt: input.now,
 		roundStartSteps: input.steps,
@@ -302,6 +338,7 @@ export function beginSidekickRound(
 				n,
 				startedAt: input.now,
 				sync: input.sync,
+				request: turns,
 				...(input.kind ? { kind: input.kind } : {}),
 			},
 		].slice(-KEPT_ROUNDS),
@@ -317,6 +354,7 @@ export function endSidekickRound(
 		readonly patchFiles: number;
 		readonly evidence?: RoundEvidence;
 		readonly signals?: readonly SidekickSignal[];
+		readonly pushback?: boolean;
 	},
 ): SidekickState {
 	const ended: SidekickState = {
@@ -330,6 +368,7 @@ export function endSidekickRound(
 						patchFiles: input.patchFiles,
 						...(input.evidence ? { evidence: input.evidence } : {}),
 						...(input.signals?.length ? { signals: input.signals } : {}),
+						...(input.pushback ? { pushback: true } : {}),
 					}
 				: round,
 		),
@@ -355,6 +394,65 @@ export function retireSidekickState(
 	now: string,
 ): SidekickState {
 	return state.retired ? state : { ...state, retired: { at: now, reason } };
+}
+
+/** Decisions kept in the state. */
+const KEPT_DECISIONS = 48;
+
+/** The state with one more classifier decision recorded. */
+export function recordSidekickDecision(
+	state: SidekickState,
+	record: SidekickDecisionRecord,
+): SidekickState {
+	return {
+		...state,
+		decisions: [...(state.decisions ?? []), record].slice(-KEPT_DECISIONS),
+	};
+}
+
+/** The state after a switch_model: the switch waits for the next compaction. */
+export function markSidekickSwitch(
+	state: SidekickState,
+	pending: SidekickPendingSwitch,
+): SidekickState {
+	return { ...state, pendingSwitch: pending };
+}
+
+/**
+ * Whether the current round must start by compacting the sidekick's
+ * context: a switch is pending from an earlier round's decision (switch
+ * policy: at the next compaction, and since a short round rarely reaches
+ * one, its next round forces one first).
+ */
+export function sidekickSwitchDue(state: SidekickState) {
+	return (
+		!!state.pendingSwitch &&
+		!state.retired &&
+		state.round > state.pendingSwitch.round
+	);
+}
+
+/** The state once the sidekick continues on another model. */
+export function completeSidekickSwitch(
+	state: SidekickState,
+	done: SidekickSwitch,
+): SidekickState {
+	const { pendingSwitch: _, ...rest } = state;
+	return {
+		...rest,
+		model: done.to,
+		switches: [...(state.switches ?? []), done],
+	};
+}
+
+/** A report that argues against its brief (the pushback contract's "Pushback:" or its usual wording). */
+export function reportPushesBack(report: string) {
+	return (
+		/^\s*(?:\*\*)?pushback(?:\*\*)?\s*:/im.test(report) ||
+		/\b(?:I disagree|the brief(?:'s)? (?:approach|plan) (?:is|looks|seems) (?:wrong|flawed)|I would instead|instead I would|I recommend instead)\b/i.test(
+			report,
+		)
+	);
 }
 
 /** A round's patch name: the first round keeps the agent's label, later ones add the round. */
@@ -430,10 +528,33 @@ export type FusionTurnMetrics = {
 	readonly sidekickReads?: number;
 	/** Hand-back signals fired after rounds, by kind. */
 	readonly signals?: Readonly<Partial<Record<SidekickSignalKind, number>>>;
-	/** Sidekicks restarted on roleModels.writerEscalation. */
+	/** Model switches at compaction (the same sidekick continued on roleModels.writerEscalation). */
 	readonly switches?: number;
 	/** The most user requests one sidekick served (its lifetime across the chat's turns). */
 	readonly sidekickTurns?: number;
+	/*
+	 * Pair tuning (src/domain/fusion-pairs.ts): what a profile's brief style,
+	 * pushback and exploration settings are judged by. Optional: older
+	 * records lack them.
+	 */
+	/** The sidekicks' own file edits (edit/write calls, run_code's included). */
+	readonly sidekickEdits?: number;
+	/** The lead's share of all file edits: leadEdits / (leadEdits + sidekickEdits); 0 without edits. */
+	readonly leadEditRate?: number;
+	/** Rework (feedback) rounds: build rounds after the first build round of the same user request. */
+	readonly reworkRounds?: number;
+	/** Rounds that ended failed or at their budget. */
+	readonly sidekickFailures?: number;
+	/** Rounds whose report argued against the brief. */
+	readonly pushbacks?: number;
+	/** Classifier decisions by kind (rounds' ends and compactions). */
+	readonly decisions?: Readonly<Partial<Record<SidekickDecision, number>>>;
+	/** Decisions the rules made because the classifier failed, timed out or answered badly. */
+	readonly classifierFallbacks?: number;
+	/** Mean classifier latency per decision, in ms. */
+	readonly classifierMeanMs?: number;
+	/** The classifier calls' list-price dollars (null when a price is unknown). */
+	readonly classifierUsd?: number | null;
 };
 
 export type FusionSpend = {
@@ -541,14 +662,39 @@ export function fusionTurnMetrics(input: {
 	let explorationHandoffs = 0;
 	let switches = 0;
 	let sidekickTurns = 0;
+	let reworkRounds = 0;
+	let sidekickFailures = 0;
+	let pushbacks = 0;
+	let classifierFallbacks = 0;
+	let classifierMs = 0;
+	let classifierUsd: number | null = 0;
+	const decisions: Partial<Record<SidekickDecision, number>> = {};
 	const signals: Partial<Record<SidekickSignalKind, number>> = {};
 	for (const session of sidekicks) {
 		const state = sidekickState(session) as SidekickState;
-		if (state.escalatedFrom) switches += 1;
+		switches += state.switches?.length ?? 0;
 		sidekickTurns = Math.max(sidekickTurns, state.turns ?? 1);
+		for (const record of state.decisions ?? []) {
+			decisions[record.decision] = (decisions[record.decision] ?? 0) + 1;
+			if (record.source === "rules") classifierFallbacks += 1;
+			classifierMs += record.latencyMs;
+			classifierUsd =
+				classifierUsd === null || record.costUsd === null
+					? null
+					: classifierUsd + record.costUsd;
+		}
+		const built = new Set<number>();
 		for (const round of state.rounds) {
 			handoffs += 1;
 			if (round.kind === "explore") explorationHandoffs += 1;
+			else {
+				const request = round.request ?? 1;
+				if (built.has(request)) reworkRounds += 1;
+				built.add(request);
+			}
+			if (round.pushback) pushbacks += 1;
+			if (round.outcome === "failed" || round.outcome === "budget exhausted")
+				sidekickFailures += 1;
 			for (const signal of round.signals ?? [])
 				signals[signal.kind] = (signals[signal.kind] ?? 0) + 1;
 			if (round.sync) syncs[round.sync] += 1;
@@ -560,6 +706,19 @@ export function fusionTurnMetrics(input: {
 			);
 		}
 	}
+	const leadEdits = calls.filter((call) => EDIT_TOOLS.has(call.tool)).length;
+	const sidekickEdits = sidekicks.reduce(
+		(total, session) =>
+			total +
+			toolCalls(sessionItemsFromUnknown(session.items)).filter((call) =>
+				EDIT_TOOLS.has(call.tool),
+			).length,
+		0,
+	);
+	const decided = Object.values(decisions).reduce(
+		(total, value) => total + (value ?? 0),
+		0,
+	);
 	return {
 		sidekicks: sidekicks.length,
 		handoffs,
@@ -569,7 +728,7 @@ export function fusionTurnMetrics(input: {
 			(call) =>
 				call.tool === "agent" && /"role"\s*:\s*"writer"/.test(call.input),
 		).length,
-		leadEdits: calls.filter((call) => EDIT_TOOLS.has(call.tool)).length,
+		leadEdits,
 		patchesApplied: calls.filter(
 			(call) =>
 				(COMMAND_TOOLS.has(call.tool) || call.tool === "bash") &&
@@ -592,6 +751,16 @@ export function fusionTurnMetrics(input: {
 		signals,
 		switches,
 		sidekickTurns,
+		sidekickEdits,
+		leadEditRate:
+			leadEdits + sidekickEdits ? leadEdits / (leadEdits + sidekickEdits) : 0,
+		reworkRounds,
+		sidekickFailures,
+		pushbacks,
+		decisions,
+		classifierFallbacks,
+		classifierMeanMs: decided ? classifierMs / decided : 0,
+		classifierUsd,
 	};
 }
 
@@ -645,7 +814,27 @@ export function fusionMetricsLine(
 		...((metrics.sidekickTurns ?? 1) > 1
 			? [`sidekick turns ${metrics.sidekickTurns}`]
 			: []),
+		...(metrics.leadEditRate === undefined
+			? []
+			: [
+					`lead edit rate ${Math.round(metrics.leadEditRate * 100)}%`,
+					`rework ${metrics.reworkRounds ?? 0}`,
+					`failures ${metrics.sidekickFailures ?? 0}`,
+					`pushback ${metrics.pushbacks ?? 0}`,
+				]),
+		...(decisionsText(metrics)
+			? [
+					`decisions ${decisionsText(metrics)}${metrics.classifierFallbacks ? ` (rules ${metrics.classifierFallbacks})` : ""} ${Math.round(metrics.classifierMeanMs ?? 0)}ms ${usd(metrics.classifierUsd ?? null)}`,
+				]
+			: []),
 	].join(" · ");
+}
+
+function decisionsText(metrics: FusionTurnMetrics) {
+	return Object.entries(metrics.decisions ?? {})
+		.filter(([, count]) => count)
+		.map(([kind, count]) => `${kind} ${count}`)
+		.join("/");
 }
 
 function signalsText(metrics: FusionTurnMetrics) {
@@ -682,9 +871,16 @@ export function fusionMetricsMeans(list: readonly FusionTurnMetrics[]) {
 				0,
 			),
 		),
+		leadEditRate: mean((metrics) => metrics.leadEditRate ?? 0),
+		reworkRounds: mean((metrics) => metrics.reworkRounds ?? 0),
+		sidekickFailures: mean((metrics) => metrics.sidekickFailures ?? 0),
+		pushbacks: mean((metrics) => metrics.pushbacks ?? 0),
+		handBacks: mean((metrics) => metrics.decisions?.hand_back ?? 0),
+		switches: mean((metrics) => metrics.switches ?? 0),
+		classifierFallbacks: mean((metrics) => metrics.classifierFallbacks ?? 0),
 	};
 }
 
 export function fusionMeansLine(means: ReturnType<typeof fusionMetricsMeans>) {
-	return `${means.runs} run(s), per run: handoffs ${means.handoffs.toFixed(1)} · rounds ${means.sidekickRounds.toFixed(1)} · lead edits ${means.leadEdits.toFixed(1)} · patches applied ${means.patchesApplied.toFixed(1)} · lead ${usd(means.leadUsd)} · sidekick ${usd(means.sidekickUsd)} · sidekick busy ${means.sidekickBusyMinutes.toFixed(1)}m · explore ${means.explorationHandoffs.toFixed(1)} · lead reads ${means.leadReads.toFixed(1)} · signals ${means.signals.toFixed(1)}`;
+	return `${means.runs} run(s), per run: handoffs ${means.handoffs.toFixed(1)} · rounds ${means.sidekickRounds.toFixed(1)} · lead edits ${means.leadEdits.toFixed(1)} · patches applied ${means.patchesApplied.toFixed(1)} · lead ${usd(means.leadUsd)} · sidekick ${usd(means.sidekickUsd)} · sidekick busy ${means.sidekickBusyMinutes.toFixed(1)}m · explore ${means.explorationHandoffs.toFixed(1)} · lead reads ${means.leadReads.toFixed(1)} · signals ${means.signals.toFixed(1)} · lead edit rate ${Math.round(means.leadEditRate * 100)}% · rework ${means.reworkRounds.toFixed(1)} · failures ${means.sidekickFailures.toFixed(1)} · pushback ${means.pushbacks.toFixed(1)} · hand_back ${means.handBacks.toFixed(1)} · switches ${means.switches.toFixed(1)} · classifier fallbacks ${means.classifierFallbacks.toFixed(1)}`;
 }
