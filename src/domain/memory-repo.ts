@@ -829,20 +829,49 @@ When an entry changes or contradicts a memory line shown (a new decision replaci
 Set "scope" to "always" for a rule that every change must follow whatever the task (a header on every new file, formatting of every file, the commit style, checks before saying done); leave it empty for rules about one topic, file or kind of change.
 Answer with JSON only: {"entries":[{"file":"<topic>.md","text":"<one-line entry>","project":"<project name or empty>","replaces":"<file>:<line> or empty","scope":"always or empty"}]}. Use {"entries":[]} when nothing qualifies. At most 3 entries, each at most ${MEMORY_ENTRY_MAX_CHARS} characters, written as a fact (e.g. "${EXAMPLE_ENTRY}"). Keep the user's exact identifiers and punctuation (paths, prefixes like [orders], names).`;
 
+/**
+ * The save hook's prompt, ordered for the provider's prompt cache: what
+ * changes least comes first (the file list, then the memory lines in file
+ * and line order, which only grow by appends), the chat's project and the
+ * message last. `whole` says the lines are the whole memory rather than the
+ * best matches for the message.
+ */
 export function saveHookPrompt(input: {
 	message: string;
 	memory: string;
 	files: readonly string[];
 	project: string | null;
+	whole?: boolean;
 }) {
-	return `Project: ${input.project ?? "(none)"}
-Existing memory files: ${input.files.join(", ") || "(none)"}
+	return `Existing memory files: ${input.files.join(", ") || "(none)"}
 
-Memory lines related to this message (id: line):
+${input.whole ? "The user's memory, every line (id: line)" : "Memory lines related to the message below (id: line)"}:
 ${input.memory || "(none)"}
+
+Project of this chat: ${input.project ?? "(none)"}
 
 The user's message:
 ${input.message}`;
+}
+
+/** The save hook's whole-memory listing stays under this; a larger memory shows its best matches. */
+export const SAVE_HOOK_MEMORY_CHARS = 24_000;
+
+/**
+ * One memory line as the save hook sees it: its id and the line without its
+ * `source:` link (long, and of no use for deciding what is new), so the
+ * listing stays short and byte-stable while the line is unchanged.
+ */
+export function saveHookLine(entry: MemoryLine) {
+	const meta = Object.fromEntries(
+		Object.entries(entry.meta).filter(([key]) => key !== "source"),
+	);
+	return `${entry.path}:${entry.line}: ${memoryBullet(entry.text, meta)}`;
+}
+
+/** Lines in file then line order: the save hook's stable listing order. */
+export function byFileAndLine(a: MemoryLine, b: MemoryLine) {
+	return a.path.localeCompare(b.path) || a.line - b.line;
 }
 
 const LINE_ID = /^([\w./-]+\.md):(\d+)$/;
