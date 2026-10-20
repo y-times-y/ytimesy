@@ -8,6 +8,7 @@ import {
 } from "../domain/conversation-delivery";
 import {
 	type ActiveConversationTurn,
+	conversationPurgeSchema,
 	TURN_COORDINATION_LEASE_MS,
 	turnControlSchema,
 } from "../domain/conversation-turn-control";
@@ -28,6 +29,7 @@ interface ConversationStorage {
 	put(key: string, value: unknown): Promise<void>;
 	put(entries: Record<string, unknown>): Promise<void>;
 	delete(key: string): Promise<boolean>;
+	deleteAll?(): Promise<void>;
 	deleteAlarm(): Promise<void>;
 	setAlarm(time: number): Promise<void>;
 }
@@ -86,9 +88,20 @@ export class ConversationRoom {
 			this.latest = conversationSnapshotSchema.parse(JSON.parse(text));
 		});
 	}
+	/** Forgets the latest snapshot; the host deletes the stored state. */
+	forget() {
+		this.latest = null;
+	}
 	async fetch(request: Request): Promise<Response> {
 		const url = new URL(request.url);
 		if (url.pathname.startsWith("/turn/")) return this.controlTurn(request);
+		// The standalone realtime Worker's room owns all of its object's storage.
+		if (url.pathname === "/purge") {
+			this.forget();
+			await this.state.storage.deleteAlarm();
+			await this.state.storage.deleteAll?.();
+			return new Response(null, { status: 204 });
+		}
 		if (request.method === "POST") {
 			const incoming = conversationSnapshotSchema.parse(await request.json());
 			if (incoming.sessionId !== incoming.progress.sessionId)
@@ -344,6 +357,7 @@ export async function routeRealtimeRequest(
 			!(
 				(request.method === "POST" &&
 					(url.pathname === "/snapshot" ||
+						url.pathname === "/purge" ||
 						/^\/turn\/(acquire|renew|release|cancel)$/.test(url.pathname))) ||
 				(request.method === "GET" && url.pathname === "/stream")
 			)
@@ -356,7 +370,9 @@ export async function routeRealtimeRequest(
 			request.method === "POST"
 				? (url.pathname === "/snapshot"
 						? conversationSnapshotSchema
-						: turnControlSchema
+						: url.pathname === "/purge"
+							? conversationPurgeSchema
+							: turnControlSchema
 					).parse(JSON.parse(body))
 				: {
 						userId: url.searchParams.get("userId"),

@@ -218,3 +218,38 @@ it("owns realtime snapshots and cancellation in the model chat DO without access
 		).status,
 	).toBe(404);
 });
+
+it("purges a chat object's stored state on a signed request, idempotently", async () => {
+	const sessionId = randomUUID();
+	const snapshotUrl = "http://localhost/snapshot";
+	const body = JSON.stringify({
+		userId: "edge-carol",
+		sessionId,
+		revision: "1",
+		progress: { sessionId, turnStatus: "idle", items: [] },
+	});
+	expect(
+		(
+			await worker.fetch(snapshotUrl, {
+				method: "POST",
+				body,
+				headers: await signDeliveryRequest(secret, "POST", snapshotUrl, body),
+			})
+		).status,
+	).toBe(204);
+	const purgeUrl = "http://localhost/purge";
+	const purge = JSON.stringify({ userId: "edge-carol", sessionId });
+	expect(
+		(await worker.fetch(purgeUrl, { method: "POST", body: purge })).status,
+	).toBe(401);
+	for (let attempt = 0; attempt < 2; attempt++)
+		expect(
+			(
+				await worker.fetch(purgeUrl, {
+					method: "POST",
+					body: purge,
+					headers: await signDeliveryRequest(secret, "POST", purgeUrl, purge),
+				})
+			).status,
+		).toBe(204);
+});

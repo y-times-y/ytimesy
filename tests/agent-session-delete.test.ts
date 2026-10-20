@@ -33,6 +33,15 @@ const storage = vi.hoisted(() => ({
 	configured: false,
 	removed: [] as string[],
 }));
+const purged = vi.hoisted(() => [] as string[]);
+vi.mock("../src/server/adapters/realtime-delivery", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../src/server/adapters/realtime-delivery")
+	>()),
+	purgeConversationState: async (_userId: string, sessionId: string) => {
+		purged.push(sessionId);
+	},
+}));
 vi.mock(
 	"../src/server/adapters/checkpoints/storage",
 	async (importOriginal) => ({
@@ -388,6 +397,9 @@ it("deletes every stored file and the retained snapshots only the deleted chats 
 		storage.configured = false;
 	}
 	expect(storage.removed.sort()).toEqual([parent.id, child.id].sort());
+	// Each deleted chat's Durable Object state goes too, the sibling's stays.
+	expect(purged).toEqual(expect.arrayContaining([parent.id, child.id]));
+	expect(purged).not.toContain(sibling.id);
 	expect(destroyed.sort()).toEqual(["vm-chat", "vm-child-retained"]);
 	expect(snapshots).toEqual(["snap-child"]);
 	expect(

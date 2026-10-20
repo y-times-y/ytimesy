@@ -38,6 +38,12 @@ vi.mock("../src/server/adapters/memory-repos", () => ({
 		},
 	}),
 }));
+const realtime = vi.hoisted(() => ({
+	purge: vi.fn(async (_user: string, _session: string) => {}),
+}));
+vi.mock("../src/server/adapters/realtime-delivery", () => ({
+	purgeConversationState: realtime.purge,
+}));
 vi.mock("../src/server/adapters/checkpoints/storage", () => ({
 	checkpointStorageConfigured: storage.configured,
 	removeChatObjects: storage.remove,
@@ -266,4 +272,21 @@ it("deletes the user's memory repos, and only logs when Artifacts fails", async 
 		expect.objectContaining({ leftovers: ["memory:memory-carol"] }),
 	);
 	warn.mockRestore();
+});
+
+it("deletes each chat's Durable Object state, and keeps the account when it cannot", async () => {
+	const machines = {
+		destroy: vi.fn(async (_id: string) => {}),
+		destroySnapshot: vi.fn(async (_id: string) => {}),
+	};
+	realtime.purge.mockRejectedValueOnce(new Error("edge unavailable"));
+	await expect(deleteAccount(machines, "alice")).rejects.toBeInstanceOf(
+		Response,
+	);
+	expect(
+		(await db.query("select 1 from auth_user where id='alice'")).rows,
+	).toHaveLength(1);
+	expect(machines.destroy).not.toHaveBeenCalled();
+	await deleteAccount(machines, "alice");
+	expect(realtime.purge).toHaveBeenLastCalledWith("alice", session);
 });

@@ -8,6 +8,7 @@ import {
 	removeChatObjects,
 } from "../adapters/checkpoints/storage";
 import { memoryRepo, memoryRepoName } from "../adapters/memory-repos";
+import { purgeConversationState } from "../adapters/realtime-delivery";
 import { removeUserPullRequestEvidence } from "./pr-evidence-cleanup";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -65,6 +66,14 @@ export async function deleteAccount(
 				{ status: 503 },
 			);
 		});
+	await eachLimited(targets.sessionIds, CLEANUP_CONCURRENCY, (sessionId) =>
+		purgeConversationState(userId, sessionId),
+	).catch(() => {
+		throw new Response(
+			"Your account was not deleted because its chats' state could not be removed. Try again.",
+			{ status: 503 },
+		);
+	});
 	// Pull request evidence media, before the rows that point at it go.
 	await removeUserPullRequestEvidence(userId).catch(() => {
 		throw new Response(

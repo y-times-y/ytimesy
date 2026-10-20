@@ -243,6 +243,29 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		else await this.ctx.storage.setAlarm(next);
 	}
 	/**
+	 * Deletes everything this chat stored here (step receipts, history cache,
+	 * queue, turn loop, room snapshot) and its alarm, when the chat, its
+	 * project or its account is deleted. A second purge finds nothing left.
+	 */
+	private async purge(scope: { userId: string; sessionId: string }) {
+		let existing: string | undefined;
+		try {
+			existing = this.ctx.storage.sql
+				.exec<{ name: string }>("select name from conversation_identity")
+				.toArray()[0]?.name;
+		} catch {
+			// Its tables went with an earlier purge by this instance.
+			return new Response(null, { status: 204 });
+		}
+		if (existing && existing !== modelConversationName(scope))
+			return new Response(null, { status: 403 });
+		this.room.forget();
+		this.history.clear();
+		await this.ctx.storage.deleteAlarm();
+		await this.ctx.storage.deleteAll();
+		return new Response(null, { status: 204 });
+	}
+	/**
 	 * A deploy or crash that resets this object mid-step makes Cloudflare re-run
 	 * the alarm; the step's receipt is still "processing", so it is resumed.
 	 */
@@ -506,6 +529,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 		if (
 			path === "/snapshot" ||
 			path === "/stream" ||
+			path === "/purge" ||
 			path.startsWith("/turn/")
 		) {
 			const secret = process.env.YTIMESY_REALTIME_SECRET;
@@ -515,6 +539,7 @@ export class ModelConversation extends DurableObject<EdgeExecutorEnvironment> {
 				request,
 				secret,
 				async (scope, authenticated) => {
+					if (path === "/purge") return this.purge(scope);
 					if (!this.bindIdentity(scope))
 						return new Response(null, { status: 403 });
 					if (path === "/turn/cancel") {
@@ -706,6 +731,7 @@ export default {
 			if (
 				path === "/snapshot" ||
 				path === "/stream" ||
+				path === "/purge" ||
 				path.startsWith("/turn/")
 			) {
 				const secret = process.env.YTIMESY_REALTIME_SECRET;
