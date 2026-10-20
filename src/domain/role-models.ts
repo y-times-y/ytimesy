@@ -22,6 +22,11 @@ export const MODEL_ROLES = [
 	"reviewer",
 	"checker",
 	"judge",
+	/**
+	 * Lead mode fusion: the model a stuck sidekick is restarted on
+	 * (src/domain/sidekick-signals.ts); no escalation without it.
+	 */
+	"writerEscalation",
 ] as const;
 export type ModelRole = (typeof MODEL_ROLES)[number];
 

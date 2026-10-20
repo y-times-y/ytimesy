@@ -15,6 +15,8 @@ const adapters = vi.hoisted(() => ({
 	session: vi.fn(),
 	mergeFork: vi.fn(async () => {}),
 	transfer: vi.fn(),
+	idle: vi.fn(async (): Promise<unknown[]> => []),
+	saveState: vi.fn(async () => {}),
 }));
 vi.mock("../adapters/subagents", () => ({
 	subagentAncestors: adapters.ancestors,
@@ -22,6 +24,9 @@ vi.mock("../adapters/subagents", () => ({
 	mergeSubagentFork: adapters.mergeFork,
 	recordSubagentStep: vi.fn(),
 	forkedWritersDueForTeardown: vi.fn(async () => []),
+	idleSidekicksPastTtl: adapters.idle,
+	saveSidekickState: adapters.saveState,
+	requestSubagentStop: vi.fn(async () => {}),
 }));
 vi.mock("../adapters/agent-sessions", () => ({
 	agentSessionForOwner: adapters.session,
@@ -36,6 +41,7 @@ const {
 	retireLeadSidekicks,
 	SubagentBudgetExhausted,
 	subagentReport,
+	teardownSubagentForks,
 } = await import("./subagent-runtime");
 
 const NOW = Date.parse("2026-10-18T12:00:00.000Z");
@@ -492,6 +498,190 @@ describe("sidekick (lead mode fusion)", () => {
 		expect(adapters.mergeFork).toHaveBeenCalledWith(
 			"s",
 			expect.objectContaining({ deletedAt: new Date(NOW).toISOString() }),
+		);
+	});
+
+	it("tells the lead the sidekick is stuck when it fails the same check again", async () => {
+		const root = record("root", null, { providerRef: "vm-root" });
+		const state = sidekickState({
+			round: 2,
+			roundStartedAt: at(-3),
+			rounds: [
+				{
+					n: 1,
+					startedAt: at(-30),
+					endedAt: at(-20),
+					outcome: "finished",
+					patchFiles: 1,
+					evidence: {
+						failedChecks: ["make test"],
+						errors: ["make: *** [Makefile:#: test] Error #"],
+					},
+				},
+				{ n: 2, startedAt: at(-3), sync: "clean", kind: "build" },
+			],
+		});
+		const sidekick = record("s", "root", {
+			agentRole: "writer",
+			listedModelId: "gpt-6-luna",
+			agentBudget: sidekickBudget(state),
+			agentFork: {
+				vmId: "vm-fork",
+				sourceVmId: "vm-root",
+				bootedAt: at(-30),
+				base: "lead-tree",
+				parentHead: "lead-head",
+			},
+		});
+		adapters.ancestors.mockResolvedValue([root]);
+		adapters.tree.mockResolvedValue([root, sidekick]);
+		adapters.transfer.mockResolvedValue({
+			path: "/home/u/.ytimesy/agents/1.r2.patch",
+			files: ["src/cli.ts"],
+			added: 1,
+			removed: 0,
+			sha256: "d".repeat(64),
+			ref: "refs/ytimesy/agents/1.r2",
+			base: "lead-tree",
+		});
+		const items: SessionItem[] = [
+			{
+				kind: "userMessage",
+				id: SessionItemId("r1"),
+				text: "Make the flag work.",
+			},
+			{
+				kind: "dynamicToolCall",
+				id: SessionItemId("old"),
+				tool: "bash",
+				input: JSON.stringify({ command: "make lint" }),
+				output: "lint failed\n\nexit 2",
+				status: "completed",
+			},
+			{
+				kind: "userMessage",
+				id: SessionItemId("r2"),
+				text: "Peer message from lead (root):\n\nRound 2/6 from your lead. Fix it.",
+			},
+			{
+				kind: "dynamicToolCall",
+				id: SessionItemId("code"),
+				tool: "run_code",
+				input: "{}",
+				output: JSON.stringify({
+					ok: true,
+					result: "",
+					calls: [
+						{
+							tool: "bash",
+							input: JSON.stringify({ command: "make  test" }),
+							output: JSON.stringify({
+								output: "make: *** [Makefile:12: test] Error 2\n",
+								exitCode: 2,
+							}),
+							status: "completed",
+						},
+						{
+							tool: "bash",
+							input: JSON.stringify({ command: "grep -n missing src/cli.ts" }),
+							output: JSON.stringify({ output: "", exitCode: 1 }),
+							status: "completed",
+						},
+					],
+				}),
+				status: "completed",
+			},
+		];
+		const saveState = vi.fn(async () => {});
+		const report = await subagentReport({
+			machines: { destroy: vi.fn() } as never,
+			session: sidekick,
+			items,
+			outcome: "finished",
+			text: "Still failing.",
+			now: NOW,
+			escalationModel: "codex:gpt-6.1-sol",
+			deps: {
+				session: vi.fn(async () => sidekick),
+				saveState,
+				mergeFork: adapters.mergeFork,
+			},
+		});
+		expect(report).toContain(
+			"Runtime notice: sidekick 1 looks stuck because it failed the same check as last round (`make test`).",
+		);
+		expect(report).toContain("Re-brief it more prescriptively");
+		expect(report).toContain("restarts it on codex:gpt-6.1-sol");
+		const saved = (
+			saveState.mock.calls[0] as unknown as [string, SidekickState]
+		)[1];
+		// Only this round's failures count; a no-match grep is not a failure.
+		expect(saved.rounds.at(-1)?.evidence?.failedChecks).toEqual(["make test"]);
+		expect(saved.rounds.at(-1)?.signals).toEqual([
+			{ kind: "same-check-failed", detail: "make test" },
+		]);
+	});
+
+	it("keeps an idle sidekick for the chat's next message when the lead's turn completes", async () => {
+		const state = sidekickState();
+		const fork = (vmId: string) => ({
+			vmId,
+			sourceVmId: "vm-root",
+			bootedAt: at(-30),
+		});
+		const idle = record("idle", "root", {
+			agentRole: "writer",
+			turnStatus: "completed",
+			agentBudget: sidekickBudget(state),
+			agentFork: fork("vm-idle"),
+		});
+		const running = record("running", "root", {
+			agentRole: "writer",
+			turnStatus: "running",
+			agentBudget: sidekickBudget(state),
+			agentFork: fork("vm-running"),
+		});
+		const destroy = vi.fn(async () => {});
+		const stop = vi.fn(async () => {});
+		const count = await retireLeadSidekicks(
+			{ destroy } as never,
+			{ userId: "user", id: "root" },
+			"the lead's turn ended while it worked",
+			{
+				descendants: vi.fn(async () => [idle, running]),
+				stop,
+				saveState: vi.fn(async () => {}),
+				mergeFork: adapters.mergeFork,
+				now: () => NOW,
+			},
+			{ keepIdle: true },
+		);
+		expect(count).toBe(1);
+		expect(destroy).not.toHaveBeenCalled();
+		expect(stop).toHaveBeenCalledWith("running");
+	});
+
+	it("retires a sidekick idle past its TTL from the maintenance sweep", async () => {
+		const idle = {
+			id: "idle",
+			agentRole: "writer" as const,
+			agentBudget: sidekickBudget(sidekickState()),
+			agentFork: { vmId: "vm-idle", sourceVmId: "vm-root", bootedAt: at(-90) },
+			turnStatus: "completed" as const,
+		};
+		adapters.idle.mockResolvedValueOnce([idle]);
+		adapters.saveState.mockClear();
+		const destroy = vi.fn(async () => {});
+		expect(await teardownSubagentForks({ destroy } as never, 30, 45)).toBe(1);
+		expect(adapters.idle).toHaveBeenCalledWith(45);
+		expect(destroy).toHaveBeenCalledWith("vm-idle");
+		expect(adapters.saveState).toHaveBeenCalledWith(
+			"idle",
+			expect.objectContaining({
+				retired: expect.objectContaining({
+					reason: "idle for over 45 minutes",
+				}),
+			}),
 		);
 	});
 

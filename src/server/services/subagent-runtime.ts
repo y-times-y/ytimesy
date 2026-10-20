@@ -1,18 +1,30 @@
 import type { ModelMessage } from "ai";
 import { checkerWrapUpLeadMs } from "#/domain/checker-brief";
+import { modelName } from "#/domain/fusion-pairs";
 import { WorkspaceId } from "#/domain/ids";
 import { sessionBilling } from "#/domain/model-pricing";
 import type { SessionItem } from "#/domain/session-item";
 import {
+	currentSidekickRound,
 	endSidekickRound,
 	isActiveSidekick,
+	previousSidekickRound,
 	retireSidekickState,
 	type SidekickState,
+	sidekickIdleTtlMinutes,
 	sidekickPatchLabel,
 	sidekickRoundLabel,
+	sidekickRoundsLeft,
 	sidekickState,
 	subagentBudgetCheck,
 } from "#/domain/sidekick";
+import {
+	roundEvidence,
+	sidekickRoundItems,
+	sidekickSignals,
+	sidekickStuckNotice,
+	warrantsEscalation,
+} from "#/domain/sidekick-signals";
 import {
 	AGENT_SEND_TOOL,
 	overlappingWriters,
@@ -38,6 +50,7 @@ import {
 } from "../adapters/agent-sessions";
 import {
 	forkedWritersDueForTeardown,
+	idleSidekicksPastTtl,
 	subagentTree as loadSubagentTree,
 	mergeSubagentFork,
 	recordSubagentStep,
@@ -148,6 +161,8 @@ export async function subagentReport(input: {
 	readonly text: string;
 	readonly now?: number;
 	readonly deps?: SidekickRuntimeDeps;
+	/** Lead mode fusion: roleModels.writerEscalation's model, named in a stuck notice. */
+	readonly escalationModel?: string;
 }): Promise<string> {
 	const { session } = input;
 	const role = session.agentRole;
@@ -249,6 +264,9 @@ export async function subagentReport(input: {
 					state: sidekick,
 					outcome: input.outcome,
 					patchFiles: patch?.files.length ?? 0,
+					items: input.items,
+					model: session.listedModelId ?? null,
+					escalationModel: input.escalationModel,
 					now,
 					deps: input.deps,
 				}),
@@ -282,13 +300,31 @@ async function endSidekickRoundAndReport(input: {
 	readonly state: SidekickState;
 	readonly outcome: SubagentOutcome;
 	readonly patchFiles: number;
+	/** The sidekick's history (this round is the part after its start message). */
+	readonly items: readonly SessionItem[];
+	readonly model: string | null;
+	readonly escalationModel?: string;
 	readonly now: number;
 	readonly deps?: SidekickRuntimeDeps;
 }) {
+	// Hand-back signals: this round against the one before it.
+	const evidence = roundEvidence(
+		sidekickRoundItems(input.items, input.state.round),
+	);
+	const signals = sidekickSignals({
+		kind: currentSidekickRound(input.state)?.kind ?? "build",
+		outcome: input.outcome,
+		patchFiles: input.patchFiles,
+		evidence,
+		previous: previousSidekickRound(input.state)?.evidence,
+		roundsLeft: sidekickRoundsLeft(input.state),
+	});
 	const ended = endSidekickRound(input.state, {
 		now: new Date(input.now).toISOString(),
 		outcome: input.outcome,
 		patchFiles: input.patchFiles,
+		evidence,
+		signals,
 	});
 	await (input.deps?.saveState ?? saveSidekickState)(
 		input.sessionId,
@@ -299,9 +335,25 @@ async function endSidekickRoundAndReport(input: {
 			...input.deps,
 			now: () => input.now,
 		});
-		return `Sidekick ${input.label} is retired (${ended.retired.reason}); its fork is deleted. Start a new writer for more work.`;
+		return [
+			`Sidekick ${input.label} is retired (${ended.retired.reason}); its fork is deleted. Start a new writer for more work.`,
+			sidekickStuckNotice({ label: input.label, signals }),
+		]
+			.filter(Boolean)
+			.join("\n\n");
 	}
-	return `Sidekick ${input.label}: ${sidekickRoundLabel(ended)} done. It keeps its context and fork: send feedback or the next brief with ${AGENT_SEND_TOOL} (id ${input.label}); its fork is synced with your checkout first, so apply or discard this patch before you do.`;
+	const escalation =
+		input.escalationModel &&
+		warrantsEscalation(signals) &&
+		modelName(input.escalationModel) !== modelName(input.model ?? "")
+			? input.escalationModel
+			: undefined;
+	return [
+		`Sidekick ${input.label}: ${sidekickRoundLabel(ended)} done. It keeps its context and fork: send feedback or the next brief with ${AGENT_SEND_TOOL} (id ${input.label}); its fork is synced with your checkout first, so apply or discard this patch before you do.`,
+		sidekickStuckNotice({ label: input.label, signals, escalation }),
+	]
+		.filter(Boolean)
+		.join("\n\n");
 }
 
 async function deleteSidekickFork(
@@ -352,12 +404,17 @@ export async function retireSidekick(
 	return "retired" as const;
 }
 
-/** The lead's turn ended (or stopped): its active sidekicks are retired. */
+/**
+ * The lead's turn ended: its active sidekicks are retired, or with
+ * `keepIdle` (a completed turn) only those still working are; an idle
+ * sidekick stays for the chat's next message until its idle TTL.
+ */
 export async function retireLeadSidekicks(
 	machines: WorkspaceMachines,
 	lead: { readonly userId: string; readonly id: string },
 	reason: string,
 	deps?: SidekickRuntimeDeps,
+	options: { readonly keepIdle?: boolean } = {},
 ) {
 	const children = await (deps?.descendants ?? descendantAgentSessions)(
 		lead.userId,
@@ -365,7 +422,11 @@ export async function retireLeadSidekicks(
 	);
 	let retired = 0;
 	for (const child of children)
-		if (child.parentSessionId === lead.id && isActiveSidekick(child)) {
+		if (
+			child.parentSessionId === lead.id &&
+			isActiveSidekick(child) &&
+			!(options.keepIdle && child.turnStatus !== "running")
+		) {
 			await retireSidekick(machines, child, reason, deps).catch((cause) =>
 				console.warn("A sidekick could not be retired.", {
 					message: cause instanceof Error ? cause.message.slice(0, 200) : "",
@@ -378,13 +439,28 @@ export async function retireLeadSidekicks(
 
 /**
  * Deletes writer forks 30 minutes after their report (the parent has the
- * patch and ref by then); run from the maintenance sweep.
+ * patch and ref by then), and retires sidekicks idle past their TTL (their
+ * forks go with them); run from the maintenance sweep.
  */
 export async function teardownSubagentForks(
 	machines: WorkspaceMachines,
 	graceMinutes = 30,
+	idleMinutes = sidekickIdleTtlMinutes(),
 ) {
 	let deleted = 0;
+	for (const idle of await idleSidekicksPastTtl(idleMinutes)) {
+		const status = await retireSidekick(
+			machines,
+			idle,
+			`idle for over ${idleMinutes} minutes`,
+		).catch((cause) => {
+			console.warn("An idle sidekick could not be retired yet.", {
+				message: cause instanceof Error ? cause.message.slice(0, 200) : "",
+			});
+			return null;
+		});
+		if (status === "retired") deleted += 1;
+	}
 	for (const fork of await forkedWritersDueForTeardown(graceMinutes)) {
 		try {
 			await machines.destroy(WorkspaceId(fork.vmId));

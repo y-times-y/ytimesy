@@ -5,7 +5,11 @@ import { SessionItemId, WorkspaceId } from "#/domain/ids";
 import type { FailoverConnection } from "#/domain/model-failover";
 import type { RoleModels } from "#/domain/role-models";
 import type { SessionItem } from "#/domain/session-item";
-import { newSidekickState, type SidekickState } from "#/domain/sidekick";
+import {
+	newSidekickState,
+	SIDEKICK_EXPLORE_NOTE,
+	type SidekickState,
+} from "#/domain/sidekick";
 import type { SubagentRole } from "#/domain/subagent";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import {
@@ -652,7 +656,7 @@ describe("lead mode fusion: the persistent sidekick", () => {
 		const started = await call("agent", brief);
 		expect(started).toMatchObject({ id: "1", role: "writer", vm: "fork" });
 		expect(started.sidekick).toContain(
-			"Your persistent sidekick: up to 6 rounds",
+			"Your persistent sidekick for this chat: up to 6 rounds per user request",
 		);
 		const child = sessions.find((entry) => entry.id === "child-1");
 		expect(child?.agentBudget?.sidekick).toMatchObject({
@@ -810,6 +814,147 @@ describe("lead mode fusion: the persistent sidekick", () => {
 			status: "stopping",
 		});
 		expect(working.deps.stop).toHaveBeenCalledWith("s");
+	});
+
+	it("marks an exploration round: the brief asks for snippets and the round is recorded as explore", async () => {
+		const { call, deps, sessions } = harness({
+			lead: "fusion",
+			sessions: [row("root", null, { items: userTask })],
+		});
+		await call("agent", { ...brief, explore: true });
+		const prompt = vi.mocked(deps.openTask).mock.calls[0]?.[0].prompt;
+		expect(prompt).toContain(brief.brief);
+		expect(prompt).toContain(SIDEKICK_EXPLORE_NOTE);
+		const state = sessions.find((entry) => entry.id === "child-1")?.agentBudget
+			?.sidekick as SidekickState;
+		expect(state.rounds[0]).toMatchObject({ n: 1, kind: "explore" });
+		expect(state.requestKey).toBe("u1");
+		// The pair's tuning is recorded for the sidekick's own prompt.
+		expect(state.pair?.name).toBe("default");
+		// Only the sidekick explores.
+		await expect(
+			call("agent", {
+				role: "researcher",
+				title: "r",
+				brief: "b",
+				explore: true,
+			}),
+		).rejects.toThrow("explore applies only to your sidekick");
+	});
+
+	it("serves the chat's next user request with a fresh round count", async () => {
+		const sessions = [
+			row("root", null, { items: userTask }),
+			idleSidekick({ round: 6, requestKey: "u0" }),
+		];
+		const { call, deps } = harness({ sessions, lead: "fusion" });
+		const result = await call("agent_send", {
+			id: "1",
+			message: "The user now wants --yaml too.",
+			explore: true,
+		});
+		expect(result.status).toBe("round 7 (1/6 this turn) started");
+		const state = sessions[1]?.agentBudget?.sidekick as SidekickState;
+		expect(state).toMatchObject({
+			round: 7,
+			turnFirstRound: 7,
+			turns: 2,
+			requestKey: "u1",
+		});
+		expect(state.rounds.at(-1)).toMatchObject({ n: 7, kind: "explore" });
+		const text = vi.mocked(deps.message).mock.calls[0]?.[2];
+		expect(text).toMatch(
+			/^Round 7 from your lead \(1\/6 for the user's new request\)\./,
+		);
+		expect(text).toContain(SIDEKICK_EXPLORE_NOTE);
+		// The same session takes it: no new writer.
+		expect(deps.openTask).not.toHaveBeenCalled();
+	});
+
+	it("restarts a stuck sidekick on roleModels.writerEscalation with a handover", async () => {
+		const stuck = (escalate: boolean) => {
+			const sidekick = idleSidekick({
+				rounds: [
+					{
+						n: 1,
+						startedAt: at(-10),
+						endedAt: at(-5),
+						outcome: "finished",
+						patchFiles: 1,
+						signals: [{ kind: "same-check-failed", detail: "npm test" }],
+					},
+				],
+			});
+			Object.assign(sidekick, {
+				listedModelId: "gpt-6-luna",
+				harness: "codex",
+				items: [
+					{
+						kind: "agentMessage",
+						id: SessionItemId("a1"),
+						text: "npm test still fails on the exit code.",
+					},
+				],
+				agentFork: {
+					...fork,
+					patch: { path: "/home/user/.ytimesy/agents/1.patch", files: [] },
+				},
+			});
+			return harness({
+				sessions: [row("root", null, { items: userTask }), sidekick],
+				lead: "fusion",
+				roleModels: escalate
+					? {
+							writer: { model: "codex:gpt-6-luna" },
+							writerEscalation: { model: "codex:gpt-6.1-sol" },
+						}
+					: { writer: { model: "codex:gpt-6-luna" } },
+				deps: {
+					routes: vi.fn(async () => [
+						{
+							key: "codex",
+							label: "Codex",
+							kind: "subscription",
+							revision: "",
+							models: [
+								{ id: "gpt-6.1-sol", label: "GPT-6.1 Sol" },
+								{ id: "gpt-6-luna", label: "GPT-6 Luna" },
+							],
+						} as FailoverConnection,
+					]),
+				},
+			});
+		};
+		const escalated = stuck(true);
+		const result = await escalated.call("agent_send", {
+			id: "1",
+			message: "Make npm test pass: print the exit code in --json.",
+		});
+		expect(result.status).toContain("sidekick 1 was stuck");
+		expect(result.status).toContain("restarted as sidekick 2");
+		expect(escalated.deps.retireSidekick).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.objectContaining({ id: "s" }),
+			expect.stringContaining("restarted on gpt-6.1-sol"),
+		);
+		expect(escalated.deps.syncSidekick).not.toHaveBeenCalled();
+		const opened = vi.mocked(escalated.deps.openTask).mock.calls[0]?.[0];
+		expect(opened).toMatchObject({ harness: "codex", modelId: "gpt-6.1-sol" });
+		expect(opened?.prompt).toContain("npm test still fails on the exit code.");
+		expect(opened?.prompt).toContain("/home/user/.ytimesy/agents/1.patch");
+		expect(opened?.prompt).toContain("print the exit code in --json");
+		const next = escalated.sessions.find((entry) => entry.id === "child-1")
+			?.agentBudget?.sidekick as SidekickState;
+		expect(next.escalatedFrom).toMatchObject({
+			label: "1",
+			model: "gpt-6-luna",
+		});
+		// Without an escalation model the stuck sidekick simply takes the next round.
+		const plain = stuck(false);
+		expect(
+			(await plain.call("agent_send", { id: "1", message: "again" })).status,
+		).toBe("round 2/6 started");
+		expect(plain.deps.retireSidekick).not.toHaveBeenCalled();
 	});
 
 	it("fails the round's start, not the sidekick, when its fork is gone", async () => {
