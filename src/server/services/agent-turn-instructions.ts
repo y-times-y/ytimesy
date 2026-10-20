@@ -70,6 +70,8 @@ export function agentTurnInstructions(input: {
 	fusionPair?: FusionPairProfile;
 	/** Harness variant rigor=on: the rigor block for agents that change files. */
 	rigor?: boolean;
+	/** Harness variant subagents=force: the root builder must delegate at least once. */
+	forceDelegation?: boolean;
 }) {
 	if (input.leanShape)
 		return leanTurnInstructions({ ...input, leanShape: input.leanShape });
@@ -124,6 +126,7 @@ function leanTurnInstructions(
 					})
 				: orchestratorInstructions({
 						codeMode,
+						force: !!input.forceDelegation && !input.session.agentRole,
 						// A read-only subagent may start readers, never writers.
 						readOnly: readOnly || isReaderRole(input.session.agentRole),
 					})

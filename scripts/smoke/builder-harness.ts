@@ -822,7 +822,7 @@ export async function createHarnessRunner(options: {
 			await db.query("update agent_session set status='ready' where id=$1", [
 				session.id,
 			]);
-			const text = `${task.prompt}${evalWorkSuffix({ where: "repository", done: "change", subagents: user.variant.subagents === "on" })}`;
+			const text = `${task.prompt}${evalWorkSuffix({ where: "repository", done: "change", subagents: user.variant.subagents !== "off" })}`;
 			await withBackgroundJobDispatcher(
 				async () => {},
 				() =>

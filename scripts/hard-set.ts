@@ -1320,7 +1320,7 @@ async function startTurn(run: TaskRun) {
 	const text = taskMessage(
 		environment,
 		run.workdir,
-		options.variant.subagents === "on",
+		options.variant.subagents !== "off",
 		options.taskSuffix,
 	);
 	const scope = {

@@ -63,9 +63,12 @@ export const HARNESS_VARIANT_VALUES = {
 	 * and agent_send tools (ordinary tools in the tool list, in every code
 	 * mode), the orchestration prompt block, per-level
 	 * budgets and the subagent tree; off offers the surface unchanged (the
-	 * default) until the evals show it pays off.
+	 * default) until the evals show it pays off. force is on plus a prompt
+	 * line that requires the root builder to delegate at least once (the
+	 * shape is its choice): the positive control that measures what
+	 * delegation is worth when the model would not choose it.
 	 */
-	subagents: ["off", "on"],
+	subagents: ["off", "on", "force"],
 	/**
 	 * Pull request evidence: on makes the harness capture screenshots, a
 	 * short recording or CLI output from the pushed commit when a turn's
