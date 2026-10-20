@@ -3,9 +3,9 @@ import type { SubagentBudget, SubagentRole } from "./subagent";
 /**
  * The orchestration block (subagents=on): when to delegate, how to call
  * the agent tool, how to brief, coordinate and verify. Shown to every agent
- * that has the agent tool (never a checker). The agent tool itself is
- * deferred (find_tools, or run_code in code mode primary), so its role list
- * and arguments are here: knowing how to call it takes no lookup.
+ * that has the agent tool (never a checker). agent and agent_send are
+ * ordinary tools in the tool list, so their arguments come from their
+ * schemas; this block says when and how to use them.
  */
 export function orchestratorInstructions(
 	options: {
@@ -15,9 +15,6 @@ export function orchestratorInstructions(
 	} = {},
 ) {
 	const { codeMode, readOnly } = options;
-	const roles = readOnly
-		? '"researcher" | "reviewer" | "checker"'
-		: '"writer" | "researcher" | "reviewer" | "checker"';
 	const parallel = readOnly
 		? 'await Promise.all([tools.agent({ role: "researcher", title: "Map the parser", brief: "…" }), tools.agent({ role: "researcher", title: "Map the cache", brief: "…" })])'
 		: 'await Promise.all([tools.agent({ role: "writer", title: "Fix pricing rounding", brief: "…" }), tools.agent({ role: "writer", title: "Build the release bundle", brief: "…" })])';
@@ -25,8 +22,7 @@ export function orchestratorInstructions(
 		? `start them together from one run_code program: ${parallel}`
 		: "start them together: call agent once per part in the same step";
 	return [
-		`Subagents: \`agent\` (${codeMode === "primary" ? "call it from run_code: tools.agent(args)" : `load it with find_tools${codeMode ? ", or call it from run_code" : ""}`}) starts a background agent with only your brief and returns its id at once; \`agent_send\` steers or stops one. Their reports arrive as messages.`,
-		`Arguments: agent({ role: ${roles}, title: string, brief?: string, wait?: boolean }); brief is required except for a checker, which takes none; wait (readers only) blocks until the report. agent_send({ id, message?, stop? }).`,
+		`Subagents: \`agent\` starts a background agent with only your brief and returns its id at once; \`agent_send\` steers or stops one. Their reports arrive as messages.${readOnly ? " You may start only researchers, reviewers and checkers." : ""}`,
 		"Delegate when it saves wall-clock time:",
 		readOnly
 			? `- two or more independent investigations, each likely to take over 5 minutes: ${howParallel};`

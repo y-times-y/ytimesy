@@ -51,15 +51,16 @@ export const HARNESS_VARIANT_VALUES = {
 	 * that calls the other tools (several reads, searches and commands in one
 	 * model call; src/server/services/code-mode-tool.ts); primary makes
 	 * run_code the main way to work (its description and instructions teach
-	 * batching) and the deferred tools (agent, plan, MCP search) callable
-	 * only from inside run_code (searchTools(query) for their declarations,
-	 * no find_tools); off offers the surface unchanged (the default).
+	 * batching) and a large MCP setup's search and call tools callable only
+	 * from inside run_code (searchTools(query) for their declarations);
+	 * agent, agent_send and enter_plan_mode stay in the tool list. off
+	 * offers the surface unchanged (the default).
 	 */
 	codeMode: ["off", "on", "primary"],
 	/**
 	 * Builder subagents (docs/subagents.md): on gives the builder the agent
-	 * and agent_send tools (loaded on demand through find_tools, with the
-	 * other rarely used tools), the orchestration prompt block, per-level
+	 * and agent_send tools (ordinary tools in the tool list, in every code
+	 * mode), the orchestration prompt block, per-level
 	 * budgets and the subagent tree; off offers the surface unchanged (the
 	 * default) until the evals show it pays off.
 	 */

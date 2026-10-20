@@ -62,12 +62,18 @@ import {
 	sessionReceivesProjectSecrets,
 } from "#/domain/project-secret";
 import { modelSwitchHistory } from "#/domain/runtime-handoff";
+import { REQUEST_PROJECT_SECRET_TOOL } from "#/domain/secret-request";
 import type {
 	ModelSwitchItem,
 	SessionItem,
 	UserMessageItem,
 } from "#/domain/session-item";
-import { MAX_SUBAGENT_LEVEL, runsAsReader } from "#/domain/subagent";
+import {
+	AGENT_SEND_TOOL,
+	AGENT_TOOL,
+	MAX_SUBAGENT_LEVEL,
+	runsAsReader,
+} from "#/domain/subagent";
 import { subscriptionTurnSettings } from "#/domain/subscription-turn";
 import {
 	completedChildrenForReview,
@@ -138,11 +144,10 @@ import { compactionStateSnapshot } from "../services/compaction-state-snapshot";
 import { withCompletedTaskReviewContext } from "../services/completed-task-review-context";
 import { ensureConversationCodePoint } from "../services/conversation-recovery";
 import {
-	BUILDER_DEFERRED_TOOL_GROUPS,
-	CODE_MODE_DEFERRED_TOOL_GROUPS,
-	CODE_MODE_DIRECT_ONLY_TOOLS,
+	CODE_MODE_DEFERRED_TOOLS,
 	deferredToolSurface,
 	loadedDeferredTools,
+	PLAN_ONLY_TOOLS,
 } from "../services/deferred-tools";
 import { harnessLifecycleHooks } from "../services/harness-lifecycle-hooks";
 import { runAgentTaskTool } from "../services/harness-workspace-session";
@@ -465,8 +470,8 @@ async function runApiTurnAttempt(
 			evaluation = await evaluationRunForTask(owner.userId, owner.id);
 		const variant = await turnHarnessVariant(turn.id, owner.userId);
 		if (owner.agentRole) subagentSession = owner;
-		// Builder subagents (harness variant subagents=on): the agent tools,
-		// deferred tool loading and per-level budgets. Children carry the role.
+		// Builder subagents (harness variant subagents=on): the agent tools
+		// and per-level budgets. Children carry the role.
 		const subagentsOn = variant.subagents === "on" || !!owner.agentRole;
 		const subagentLevel = owner.agentRole
 			? (
@@ -852,8 +857,8 @@ async function runApiTurnAttempt(
 					)
 				: {};
 		// Code mode is a development harness variant on a lean surface only
-		// (docs/parallel-evals.md). primary: run_code is the main tool and the
-		// deferred tools are callable only from inside it.
+		// (docs/parallel-evals.md). primary: run_code is the main tool; a large
+		// MCP setup's search and call tools are callable only from inside it.
 		const codeMode =
 			surface.lean && variant.codeMode !== "off" ? variant.codeMode : null;
 		const baseTools: ToolSet = {
@@ -868,16 +873,17 @@ async function runApiTurnAttempt(
 			}),
 			...delegation,
 		};
-		// Rarely used tools stay out of the tool list: loaded on demand through
-		// find_tools (subagents=on on a lean surface), or called from run_code
-		// (codeMode=primary). Loads append, so earlier requests' tool lists stay
-		// a cached prefix.
-		const deferredGroups =
-			codeMode === "primary"
-				? CODE_MODE_DEFERRED_TOOL_GROUPS
-				: subagentsOn && surface.lean
-					? BUILDER_DEFERRED_TOOL_GROUPS
-					: null;
+		// Deferred (deferred-tools.ts): in code mode primary the MCP search and
+		// call tools (run_code only), and propose_plan, offered only while
+		// planning (it ends the turn). agent, agent_send, enter_plan_mode and
+		// request_project_secret are ordinary tools. Additions append, so
+		// earlier requests' tool lists stay a cached prefix.
+		const deferredNames = [
+			...(codeMode === "primary" ? CODE_MODE_DEFERRED_TOOLS : []),
+			...(codeMode === "primary" || (subagentsOn && surface.lean)
+				? PLAN_ONLY_TOOLS
+				: []),
+		];
 		const allTools = withCodeMode(
 			baseTools,
 			codeMode
@@ -890,36 +896,29 @@ async function runApiTurnAttempt(
 						mode: codeMode,
 						deferred:
 							codeMode === "primary"
-								? CODE_MODE_DEFERRED_TOOL_GROUPS.flatMap(
-										(group) => group.tools,
-									).filter(
-										(name) =>
-											name in baseTools &&
-											!CODE_MODE_DIRECT_ONLY_TOOLS.includes(name),
-									)
+								? CODE_MODE_DEFERRED_TOOLS.filter((name) => name in baseTools)
 								: [],
 					}
 				: null,
 		);
-		const planToolsWhilePlanning = () =>
-			planLock?.planning ? [ENTER_PLAN_MODE_TOOL, PROPOSE_PLAN_TOOL] : [];
-		const deferral = deferredGroups
+		const orderedTools = surface.lean
+			? inLeanToolOrder(allTools, {
+					surface: Object.keys(surfaceTools),
+					webSearch: Object.keys(webSearch),
+					runCodeFirst: codeMode === "primary",
+				})
+			: allTools;
+		const deferral = deferredNames.length
 			? deferredToolSurface({
-					tools: allTools,
-					groups: deferredGroups,
-					loaded: loadedDeferredTools(items, messages, deferredGroups),
-					...(codeMode === "primary"
-						? {
-								// Plan mode can start inside a program; propose_plan
-								// must then be a direct call (it ends the turn).
-								forceLoaded: planToolsWhilePlanning,
-								discovery: "run_code" as const,
-								unlisted: CODE_MODE_DIRECT_ONLY_TOOLS,
-							}
-						: { forceLoaded: planToolsWhilePlanning() }),
+					tools: orderedTools,
+					deferred: deferredNames,
+					loaded: loadedDeferredTools(items, messages, deferredNames),
+					// Plan mode can start mid-turn; propose_plan must then be offered.
+					forceLoaded: () => (planLock?.planning ? PLAN_ONLY_TOOLS : []),
+					unlisted: PLAN_ONLY_TOOLS,
 				})
 			: null;
-		const tools = deferral?.tools ?? allTools;
+		const tools = deferral?.tools ?? orderedTools;
 		if (planLock?.planning && firstStep)
 			messages = withPlanModeNotice(
 				messages,
@@ -1859,6 +1858,40 @@ function turnTools(input: {
 		catalog: mcp.catalog,
 		purposes: mcp.purposes,
 	});
+}
+
+/**
+ * A lean builder's tool list in a fixed order, so it is byte-stable within
+ * a chat: run_code first in code mode primary, the surface's own tools, the
+ * workflow tools (agent, agent_send, enter_plan_mode, propose_plan when not
+ * deferred), web search, request_project_secret, then the rest (MCP,
+ * plugins, run_code in code mode on) in insertion order.
+ */
+function inLeanToolOrder(
+	tools: ToolSet,
+	groups: {
+		surface: readonly string[];
+		webSearch: readonly string[];
+		runCodeFirst: boolean;
+	},
+): ToolSet {
+	const leading = [
+		...(groups.runCodeFirst ? [CODE_MODE_TOOL] : []),
+		...groups.surface,
+		AGENT_TOOL,
+		AGENT_SEND_TOOL,
+		ENTER_PLAN_MODE_TOOL,
+		PROPOSE_PLAN_TOOL,
+		...groups.webSearch,
+		REQUEST_PROJECT_SECRET_TOOL,
+	].filter((name) => name in tools);
+	const names = [
+		...new Set([
+			...leading,
+			...Object.keys(tools).filter((name) => !leading.includes(name)),
+		]),
+	];
+	return Object.fromEntries(names.map((name) => [name, tools[name]]));
 }
 
 /**

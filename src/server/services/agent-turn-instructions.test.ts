@@ -29,30 +29,21 @@ describe("subagent instructions", () => {
 			...base,
 			session: { parentSessionId: null },
 			tools: { bash: stub, agent: stub, run_code: stub },
-			deferredTools: [
-				{ name: "agent", description: "Start a subagent." },
-				{ name: "propose_plan", description: "Propose a plan." },
-			],
+			codeMode: "on",
 		});
+		// agent is an ordinary tool: no loading, no deferred list.
 		expect(withAgent).toContain(
-			"More tools are available on demand; they are not in your tool list until you load one with find_tools",
+			"Subagents: `agent` starts a background agent with only your brief and returns its id at once;",
 		);
-		expect(withAgent).toContain(
-			"- agent: Start a subagent.\n- propose_plan: Propose a plan.",
-		);
-		expect(withAgent).toContain(
-			"load it with find_tools, or call it from run_code",
-		);
-		// Concrete triggers, the call's arguments and one parallel example.
+		expect(withAgent).not.toMatch(/find_tools|searchTools|More tools/);
+		// Concrete triggers and one parallel example (arguments come from the schema).
 		expect(withAgent).toContain(
 			"two or more independent parts, each likely to take over 5 minutes, or a long build or test run beside a fix: start writers in parallel",
 		);
 		expect(withAgent).toContain(
 			'start them together from one run_code program: await Promise.all([tools.agent({ role: "writer"',
 		);
-		expect(withAgent).toContain(
-			'agent({ role: "writer" | "researcher" | "reviewer" | "checker", title: string, brief?: string, wait?: boolean })',
-		);
+		expect(withAgent).not.toContain("Arguments: agent(");
 		expect(withAgent).toContain(
 			"after a hard fix, a reviewer can check it while you run the suite yourself",
 		);
@@ -73,12 +64,14 @@ describe("subagent instructions", () => {
 		expect(withAgent).toContain("git apply -3");
 	});
 
-	it("in code mode primary, teaches run_code as the main tool and sends deferred tools through it", () => {
+	it("in code mode primary, teaches run_code as the main tool and sends only deferred MCP tools through it", () => {
 		const primary = agentTurnInstructions({
 			...base,
 			session: { parentSessionId: null },
 			tools: { bash: stub, agent: stub, run_code: stub },
-			deferredTools: [{ name: "agent", description: "Start a subagent." }],
+			deferredTools: [
+				{ name: "search_mcp_tools", description: "Search MCP tools." },
+			],
 			codeMode: "primary",
 		});
 		expect(primary).toContain("run_code is your main tool");
@@ -95,8 +88,19 @@ describe("subagent instructions", () => {
 		expect(primary).toContain(
 			"call them from inside run_code as tools.<name>(args)",
 		);
-		expect(primary).toContain("call it from run_code: tools.agent(args)");
+		expect(primary).toContain("- search_mcp_tools: Search MCP tools.");
+		expect(primary).not.toContain("call it from run_code");
 		expect(primary).not.toContain("find_tools");
+		// Nothing deferred: searchTools goes unmentioned.
+		const nothingDeferred = agentTurnInstructions({
+			...base,
+			session: { parentSessionId: null },
+			tools: { bash: stub, agent: stub, run_code: stub },
+			deferredTools: [],
+			codeMode: "primary",
+		});
+		expect(nothingDeferred).not.toMatch(/searchTools|ALL_TOOLS|find_tools/);
+		expect(nothingDeferred).toContain("Subagents: `agent` starts");
 	});
 
 	it("gives a subagent its role, budget and report contract instead of the chat's role", () => {
@@ -154,7 +158,7 @@ describe("subagent instructions", () => {
 			codeMode: "primary",
 		});
 		expect(researcher).toContain(
-			'agent({ role: "researcher" | "reviewer" | "checker",',
+			"You may start only researchers, reviewers and checkers.",
 		);
 		expect(researcher).toContain('tools.agent({ role: "researcher"');
 		expect(researcher).not.toMatch(/writer|git apply/);
