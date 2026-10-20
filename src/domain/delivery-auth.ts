@@ -1,6 +1,6 @@
 const encoder = new TextEncoder();
 const SIGNATURE_HEADER = "x-ytimesy-delivery-signature";
-const EXPIRY_HEADER = "x-ytimesy-delivery-expires";
+export const EXPIRY_HEADER = "x-ytimesy-delivery-expires";
 
 async function signingKey(secret: string) {
 	if (secret.length < 32)

@@ -54,7 +54,10 @@ import { runBackgroundJob, startBackgroundJob } from "./background-jobs";
 import { SqliteConversationSteps } from "./conversation-step-storage";
 import { durableObjectLocation } from "./durable-object-location";
 import type { EdgeExecutorEnvironment } from "./environment";
-import { authorizeGitProxy } from "./github-git-authorization";
+import {
+	authorizeGitProxy,
+	claimGitProxyGrant,
+} from "./github-git-authorization";
 import { withEdgeModelEndpoints } from "./model-endpoint";
 import { TurnHistoryCache } from "./turn-history-cache";
 import { type QueuedTurn, SqliteTurnQueue } from "./turn-queue";
@@ -858,12 +861,22 @@ export default {
 			if (new URL(request.url).pathname.startsWith("/git/")) {
 				const config = gitProxySecrets.safeParse(env);
 				if (!config.success) return new Response(null, { status: 503 });
-				return proxyGithubGit(request, config.data.GIT_PROXY_SECRET, (grant) =>
-					withDatabaseScope(
-						env.HYPERDRIVE.connectionString,
-						() => authorizeGitProxy(grant),
-						null,
-					),
+				return proxyGithubGit(
+					request,
+					config.data.GIT_PROXY_SECRET,
+					(grant) =>
+						withDatabaseScope(
+							env.HYPERDRIVE.connectionString,
+							() => authorizeGitProxy(grant),
+							null,
+						),
+					fetch,
+					(nonce, expiresAt) =>
+						withDatabaseScope(
+							env.HYPERDRIVE.connectionString,
+							() => claimGitProxyGrant(nonce, expiresAt),
+							null,
+						),
 				);
 			}
 			const secrets = executorSecrets.parse(env);
