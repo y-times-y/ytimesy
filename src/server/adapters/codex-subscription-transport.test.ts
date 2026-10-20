@@ -37,7 +37,11 @@ it("scopes VPC transport to its invocation, preserving streams, account fencing 
 		expect(response.body).toBe(stream);
 		expect(vpc).toHaveBeenCalledOnce();
 		expect(ordinary).not.toHaveBeenCalled();
-		expect(vpc.mock.calls[0][1]?.signal).toBe(controller.signal);
+		// A relay follows, so the VPC attempt also carries its header deadline.
+		const sent = vpc.mock.calls[0][1]?.signal;
+		expect(sent?.aborted).toBe(false);
+		controller.abort();
+		expect(sent?.aborted).toBe(true);
 		await expect(
 			subscriptionFetch("owner", "codex/responses", {}, "other-account"),
 		).rejects.toThrow("account changed");

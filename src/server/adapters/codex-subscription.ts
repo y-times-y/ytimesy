@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { APICallError } from "ai";
 import { z } from "zod";
 import {
+	CodexEgressUnavailable,
 	CodexReconnectRequired,
 	SubscriptionMetadataFailure,
 	SubscriptionUsageLimitReached,
@@ -111,7 +112,8 @@ export function subscriptionLimits(
 }
 
 async function subscriptionRequest(userId: string, path: string) {
-	const signal = AbortSignal.timeout(7_000);
+	// Room for one blocked egress path (6s to headers) and the next one.
+	const signal = AbortSignal.timeout(12_000);
 	let response: Response;
 	try {
 		response = await subscriptionFetch(userId, path, {
@@ -125,7 +127,11 @@ async function subscriptionRequest(userId: string, path: string) {
 			signal,
 		});
 	} catch (error) {
-		if (error instanceof CodexReconnectRequired) throw error;
+		if (
+			error instanceof CodexReconnectRequired ||
+			error instanceof CodexEgressUnavailable
+		)
+			throw error;
 		throw new SubscriptionMetadataFailure(
 			signal.aborted ||
 				(error instanceof Error && error.name === "TimeoutError")
