@@ -116,7 +116,7 @@ export async function createRehearsalUser(
 		],
 	);
 	await db.query(
-		"insert into infrastructure_usage_policy(user_id,monthly_micro_usd) values($1,$2)",
+		"insert into infrastructure_usage_policy(user_id,monthly_micro_usd,five_hour_micro_usd,weekly_micro_usd) values($1,$2,$2,$2)",
 		[userId, 50_000_000],
 	);
 	// A placeholder login: turns resolve the owner's (codexCredentialUserId).

@@ -66,8 +66,11 @@ secrets.YTIMESY_DURABLE_OBJECT_LOCATION_HINT =
 // Development only: throwaway eval users (dev_eval_user) borrow their owner's
 // Codex login and carry per-run harness variants. Production never sets it.
 secrets.YTIMESY_DEV_EVAL_USERS = "1";
+secrets.YTIMESY_USER_5H_MICRO_USD =
+	process.env.YTIMESY_USER_5H_MICRO_USD || "5000000";
+secrets.YTIMESY_USER_WEEKLY_MICRO_USD =
+	process.env.YTIMESY_USER_WEEKLY_MICRO_USD || "25000000";
 for (const name of [
-	"YTIMESY_USER_MONTHLY_MICRO_USD",
 	"YTIMESY_FLEET_MONTHLY_MICRO_USD",
 	"YTIMESY_FLEET_LIFETIME_MICRO_USD",
 ] as const) {
