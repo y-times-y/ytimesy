@@ -161,7 +161,7 @@ export async function transferWriterPatch(input: {
 	);
 	if (!forkCwd?.startsWith("/") || !parentCwd?.startsWith("/"))
 		throw new Error("A repository path is unavailable.");
-	const outDir = `/tmp/ytimesy-agent-export-${input.label}`;
+	const outDir = `/tmp/ytimesy-agent-export-${input.label}-${randomUUID()}`;
 	const exported = await machines.exec(
 		forkVm,
 		writerExportScript({
