@@ -74,7 +74,7 @@ it("does not bind until a repository tool asks, and shares concurrent preparatio
 	expect(mocks.root).toHaveBeenCalledTimes(1);
 });
 
-it("prepares a cold shared parent before binding the child to that exact workspace", async () => {
+it("binds a shared child to its parent's workspace without preparing a checkout", async () => {
 	mocks.read.mockResolvedValue(root);
 	const task = {
 		...root,
@@ -89,12 +89,42 @@ it("prepares a cold shared parent before binding the child to that exact workspa
 		new AbortController().signal,
 	)();
 	expect(binding.vm).toBe("vm-root");
-	expect(mocks.root).toHaveBeenCalledTimes(1);
+	expect(mocks.root).not.toHaveBeenCalled();
 	expect(mocks.child).toHaveBeenCalledWith(
 		machines,
 		expect.objectContaining({ task }),
 	);
-	expect(mocks.checkout).toHaveBeenCalledTimes(1);
+	expect(mocks.load).not.toHaveBeenCalled();
+	expect(mocks.checkout).not.toHaveBeenCalled();
+});
+
+it("fails a shared child clearly when its parent's workspace stays unavailable", async () => {
+	vi.useFakeTimers();
+	try {
+		mocks.read.mockResolvedValue(root);
+		mocks.child.mockRejectedValue(
+			new Error("Start the parent workspace before sharing its state."),
+		);
+		const attaching = deferredApiTurnWorkspace(
+			machines,
+			{
+				...root,
+				id: "child",
+				taskPlacement: "shared",
+				parentSessionId: root.id,
+				agentRole: "reviewer",
+			} as AgentSessionRecord,
+			new AbortController().signal,
+		)();
+		const failed = expect(attaching).rejects.toThrow(
+			/parent's workspace is unavailable.*Start the parent workspace/,
+		);
+		await vi.runAllTimersAsync();
+		await failed;
+		expect(mocks.checkout).not.toHaveBeenCalled();
+	} finally {
+		vi.useRealTimers();
+	}
 });
 
 it("rejects cancelled preparation and cross-project shared parents", async () => {
@@ -127,7 +157,6 @@ it("reuses a turn's preparation in its next step until the turn forgets it", asy
 			machines,
 			root,
 			new AbortController().signal,
-			[],
 			reuse,
 		)();
 	const first = await step();
@@ -151,7 +180,6 @@ it("does not keep a failed preparation for the next step", async () => {
 			machines,
 			root,
 			new AbortController().signal,
-			[],
 			reuse,
 		)();
 	await expect(step()).rejects.toThrow("bind failed");

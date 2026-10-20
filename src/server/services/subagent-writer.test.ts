@@ -1,5 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { WorkspaceId } from "#/domain/ids";
@@ -155,6 +162,94 @@ describe("writer subagent git round trip", () => {
 				parentHead: fork.parentHead,
 			}),
 		).toBeNull();
+	});
+
+	it("keeps deliberate changes and leaves scratch, downloads and large binaries out, reporting them", async () => {
+		const vms = localVms();
+		cleanup = vms.root;
+		writeFileSync(join(vms.parentRepo, ".gitignore"), "*.log\n");
+		const fork = await forkWriterWorkspace({
+			machines: vms.machines,
+			parentVm: WorkspaceId("parent"),
+			slug: "fork-1",
+		});
+		const write = (path: string, contents: string | Buffer) => {
+			mkdirSync(join(fork.cwd, path, ".."), { recursive: true });
+			writeFileSync(join(fork.cwd, path), contents);
+		};
+		const binary = (bytes: number) => Buffer.alloc(bytes, 0);
+		// Deliberate: a tracked edit, new source, a small asset, a named binary.
+		write("a.ts", "export const a = 2;\n");
+		write("src/new.ts", "export const fresh = 1;\n");
+		write("src/icon.png", binary(2_000));
+		write("docs/report.pdf", binary(300_000));
+		// Scratch: downloads, a cache the child even committed, big binaries
+		// and records, and an ignored log.
+		write("downloads/photo.jpg", binary(5_000));
+		write("downloads/records.json", '{"a":1}\n');
+		write(".cache/x/page.html", "<html></html>\n");
+		vms.git(fork.cwd, "add", "-A");
+		vms.git(fork.cwd, "commit", "-qm", "child commit with scratch");
+		write("dataset.parquet", binary(200_000));
+		write("records.csv", "x,y\n".repeat(300_000));
+		write("run.log", "noise\n");
+		const patch = await transferWriterPatch({
+			machines: vms.machines,
+			forkVm: fork.vm,
+			parentVm: WorkspaceId("parent"),
+			label: "1",
+			base: fork.base,
+			parentHead: fork.parentHead,
+			named: "Write docs/report.pdf from the data.",
+		});
+		expect([...(patch?.files ?? [])].sort()).toEqual([
+			"a.ts",
+			"docs/report.pdf",
+			"src/icon.png",
+			"src/new.ts",
+		]);
+		expect(patch?.excluded).toMatchObject({ count: 5 });
+		expect(patch?.excluded?.bytes).toBeGreaterThan(1_400_000);
+		expect(patch?.excluded?.paths.slice(0, 2)).toEqual([
+			"records.csv",
+			"dataset.parquet",
+		]);
+		expect(patch?.excluded?.paths).toEqual(
+			expect.arrayContaining([
+				"downloads/photo.jpg",
+				"downloads/records.json",
+				".cache/x/page.html",
+			]),
+		);
+		// Left out of the patch and ref, not deleted from the fork.
+		expect(existsSync(join(fork.cwd, "downloads/photo.jpg"))).toBe(true);
+		expect(
+			vms.git(fork.cwd, "ls-files", "downloads", ".cache", "records.csv"),
+		).toBe("");
+	});
+
+	it("reports left-out files when they were the writer's only changes", async () => {
+		const vms = localVms();
+		cleanup = vms.root;
+		const fork = await forkWriterWorkspace({
+			machines: vms.machines,
+			parentVm: WorkspaceId("parent"),
+			slug: "fork-1",
+		});
+		mkdirSync(join(fork.cwd, "tmp"));
+		writeFileSync(join(fork.cwd, "tmp/out.txt"), "scratch\n");
+		await expect(
+			transferWriterPatch({
+				machines: vms.machines,
+				forkVm: fork.vm,
+				parentVm: WorkspaceId("parent"),
+				label: "1",
+				base: fork.base,
+				parentHead: fork.parentHead,
+			}),
+		).rejects.toThrow(
+			/changed nothing deliberate; left out 1 new file .*tmp\/out\.txt/,
+		);
 	});
 
 	it("parses numstat including binary files", () => {

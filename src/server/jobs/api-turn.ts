@@ -612,7 +612,6 @@ async function runApiTurnAttempt(
 			machines,
 			owner,
 			abort.signal,
-			[],
 			workspaceReuse,
 		);
 		let codePoint: Promise<void> | undefined;
