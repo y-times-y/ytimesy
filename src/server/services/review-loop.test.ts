@@ -22,6 +22,7 @@ function harness(options: {
 	reports: (string | null)[];
 	deadlineAt?: number;
 	changed?: string;
+	rigor?: boolean;
 }) {
 	let now = 1_000_000;
 	let tree = "t-base";
@@ -99,6 +100,7 @@ function harness(options: {
 		billing: { kind: "plan", price: { input: 2, output: 10, cacheRead: 0.25 } },
 		taskText: () => TASK,
 		deps,
+		rigor: options.rigor,
 	});
 	const items = (usage: number, text: string): SessionItem[] => [
 		{
@@ -261,6 +263,75 @@ describe("review loop", () => {
 		expect(spend.checker.tokens).toBe(4400);
 		expect(spend.fix.tokens).toBe(4400);
 		expect(spend.rounds).toHaveLength(2);
+	});
+
+	it("with rigor=on, sends back a passed turn whose answer admits unverified work while time is left", async () => {
+		const PASS = verdict({
+			verdict: "pass",
+			failures: [],
+			tests: [{ name: "edge", command: "c", passed: true }],
+		});
+		const h = harness({ reports: [PASS, PASS], rigor: true });
+		await h.loop.beforeModel(h.step(0, ""));
+		h.setTree("t-1");
+		h.advance(4 * 60_000);
+		const first = await h.loop.afterAttempt(
+			h.step(
+				1,
+				"Compaction fixed.\nUnverified: the concurrent-writer path was not tested.",
+			),
+		);
+		expect(h.started[0].brief).toContain(
+			"look in the deliverable (files, comments, docs, output) for assumptions or interpretations it states",
+		);
+		expect(first.kind).toBe("run");
+		if (first.kind !== "run") throw new Error();
+		const notice = String(first.messages?.at(-1)?.content);
+		expect(notice).toContain(
+			'F1. Your final answer admits unverified or open work while over half of the time is left: "Unverified: the concurrent-writer path was not tested."',
+		);
+		expect(h.state()?.rounds[0].decision).toBe("fix");
+		// The fix verifies it; nothing is admitted any more, so the pass finishes.
+		h.setTree("t-2");
+		const done = await h.loop.afterAttempt(
+			h.step(
+				2,
+				"Tested the concurrent-writer path.\nF1: fixed\nUnverified: none.",
+			),
+		);
+		expect(done.kind).toBe("finished");
+		expect(h.state()?.outcome).toBe("pass");
+	});
+
+	it("without rigor, or with under half the time left, a passed turn finishes despite admitted gaps", async () => {
+		const PASS = verdict({
+			verdict: "pass",
+			failures: [],
+			tests: [{ name: "edge", command: "c", passed: true }],
+		});
+		const off = harness({ reports: [PASS] });
+		await off.loop.beforeModel(off.step(0, ""));
+		off.setTree("t-1");
+		off.advance(4 * 60_000);
+		expect(
+			(await off.loop.afterAttempt(off.step(1, "Done. Not tested on Windows.")))
+				.kind,
+		).toBe("finished");
+		expect(off.started[0].brief).not.toContain(
+			"assumptions or interpretations it states",
+		);
+		const late = harness({ reports: [PASS], rigor: true });
+		await late.loop.beforeModel(late.step(0, ""));
+		late.setTree("t-1");
+		late.advance(35 * 60_000);
+		expect(
+			(
+				await late.loop.afterAttempt(
+					late.step(1, "Done. Not tested on Windows."),
+				)
+			).kind,
+		).toBe("finished");
+		expect(late.state()?.outcome).toBe("pass");
 	});
 
 	it("stops after two rounds", async () => {

@@ -62,6 +62,8 @@ function harness(
 		deps?: Partial<SubagentToolDeps>;
 		roleModels?: RoleModels;
 		lead?: LeadMode;
+		parentReasoning?: string;
+		rigor?: boolean;
 	} = {},
 ) {
 	const sessions: Row[] = options.sessions ?? [
@@ -164,6 +166,8 @@ function harness(
 		deps,
 		roleModels: options.roleModels,
 		lead: options.lead,
+		parentReasoning: options.parentReasoning,
+		rigor: options.rigor,
 	});
 	const call = (name: string, input: unknown) =>
 		tools[name]?.execute?.(
@@ -551,6 +555,41 @@ describe("role models", () => {
 			tokens: 8_000_000,
 		});
 		expect(result).not.toHaveProperty("modelNotice");
+	});
+
+	it("gives a child the parent's effort unless its entry sets one", async () => {
+		const inherits = harness({
+			roleModels: { checker: { model: "codex:gpt-6-luna" } },
+			deps: { routes: vi.fn(async () => routes) },
+			parentReasoning: "high",
+		});
+		await inherits.call("agent", { role: "checker", title: "Check it" });
+		expect(inherits.deps.start).toHaveBeenCalledWith(
+			expect.anything(),
+			"child-1",
+			{ reasoning: "high" },
+		);
+		const own = harness({
+			roleModels: { checker: { model: "codex:gpt-6-luna", effort: "low" } },
+			deps: { routes: vi.fn(async () => routes) },
+			parentReasoning: "high",
+		});
+		await own.call("agent", { role: "checker", title: "Check it" });
+		expect(own.deps.start).toHaveBeenCalledWith(expect.anything(), "child-1", {
+			reasoning: "low",
+		});
+		// An effort the child's route does not offer: its default.
+		const unoffered = harness({
+			roleModels: { checker: { model: "codex:gpt-6-luna" } },
+			deps: { routes: vi.fn(async () => routes) },
+			parentReasoning: "xhigh",
+		});
+		await unoffered.call("agent", { role: "checker", title: "Check it" });
+		expect(unoffered.deps.start).toHaveBeenCalledWith(
+			expect.anything(),
+			"child-1",
+			undefined,
+		);
 	});
 
 	it("resolves an API model under any connection for a role", async () => {

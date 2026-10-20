@@ -33,6 +33,7 @@ import { fusionPairFor } from "#/domain/fusion-pairs";
 import { leanToolRole } from "#/domain/harness-model-profile";
 import {
 	DEFAULT_HARNESS_VARIANT,
+	outputCapCharacters,
 	promptCacheScopeId,
 } from "#/domain/harness-variant";
 import { SessionItemId, WorkspaceId } from "#/domain/ids";
@@ -198,6 +199,7 @@ import {
 	subagentReport,
 } from "../services/subagent-runtime";
 import { subagentTools } from "../services/subagent-tools";
+import { withOutputCap } from "../services/tool-output-cap";
 import { analyticsAgentRole } from "../services/turn-analytics";
 import { commitCompletedSessionTurn } from "../services/turn-commit";
 import { forgetTurnMemo, turnMemo } from "../services/turn-memo";
@@ -497,6 +499,8 @@ async function runApiTurnAttempt(
 		const apiSettings: ApiTurnSettings = subscription
 			? {}
 			: (route.settings ?? {});
+		// This turn's reasoning effort; children on another model inherit it.
+		const turnReasoning = subscription?.reasoning ?? apiSettings.reasoning;
 		// The subscription endpoint rejects the public Responses apply_patch tool;
 		// it gets native Codex's freeform apply_patch (Lark grammar) instead.
 		let nativePatch = false;
@@ -870,6 +874,8 @@ async function runApiTurnAttempt(
 							waitDeadlineAt: step?.waitDeadlineAt,
 							roleModels: variant.roleModels,
 							lead: variant.lead,
+							parentReasoning: turnReasoning,
+							rigor: variant.rigor === "on",
 						}),
 						projectSecrets?.redact ?? [],
 					)
@@ -902,22 +908,27 @@ async function runApiTurnAttempt(
 				? PLAN_ONLY_TOOLS
 				: []),
 		];
-		const allTools = withCodeMode(
-			baseTools,
-			codeMode
-				? {
-						signal: abort.signal,
-						sessionId: owner.id,
-						turnId: turn.id,
-						toolCallPrefix: step ? `step-${step.index}:` : undefined,
-						redact: projectSecrets?.redact ?? [],
-						mode: codeMode,
-						deferred:
-							codeMode === "primary"
-								? CODE_MODE_DEFERRED_TOOLS.filter((name) => name in baseTools)
-								: [],
-					}
-				: null,
+		// Harness variant outputCap: each result the model reads keeps its
+		// head and tail within the cap (tool-output-cap.ts).
+		const allTools = withOutputCap(
+			withCodeMode(
+				baseTools,
+				codeMode
+					? {
+							signal: abort.signal,
+							sessionId: owner.id,
+							turnId: turn.id,
+							toolCallPrefix: step ? `step-${step.index}:` : undefined,
+							redact: projectSecrets?.redact ?? [],
+							mode: codeMode,
+							deferred:
+								codeMode === "primary"
+									? CODE_MODE_DEFERRED_TOOLS.filter((name) => name in baseTools)
+									: [],
+						}
+					: null,
+			),
+			outputCapCharacters(variant.outputCap),
 		);
 		const orderedTools = surface.lean
 			? inLeanToolOrder(allTools, {
@@ -1039,7 +1050,7 @@ async function runApiTurnAttempt(
 			userId: turn.user_id,
 			connectionId: route.connectionId ?? undefined,
 			connectionRevision: route.connectionRevision,
-			reasoning: subscription?.reasoning ?? apiSettings.reasoning,
+			reasoning: turnReasoning,
 			speed: apiSettings.speed,
 			knownTools: discoveredToolsFromSession(items),
 			...(deferral ? { toolOrder: deferral.order } : {}),
@@ -1120,6 +1131,7 @@ async function runApiTurnAttempt(
 					codeMode: codeMode ?? undefined,
 					prEvidence: variant.prEvidence === "on" && writable,
 					lead: variant.lead,
+					rigor: variant.rigor === "on",
 					fusionPair:
 						variant.lead === "fusion" && !owner.parentSessionId
 							? fusionPairFor(owner.listedModelId, variant.roleModels)
@@ -1346,7 +1358,9 @@ async function runApiTurnAttempt(
 							waitDeadlineAt: step.waitDeadlineAt,
 							items: () => items,
 							roleModels: variant.roleModels,
+							parentReasoning: turnReasoning,
 						}),
+						rigor: variant.rigor === "on",
 					})
 				: step && loopEligible && variant.review === "on"
 					? createReviewLoop({
@@ -1365,7 +1379,9 @@ async function runApiTurnAttempt(
 								waitDeadlineAt: step.waitDeadlineAt,
 								items: () => items,
 								roleModels: variant.roleModels,
+								parentReasoning: turnReasoning,
 							}),
+							rigor: variant.rigor === "on",
 						})
 					: null;
 		const attemptWaitUntil = () =>

@@ -25,6 +25,7 @@ import {
 	PROJECT_KNOWLEDGE_INSTRUCTIONS,
 } from "#/domain/project-knowledge";
 import { projectSecretsInstructions } from "#/domain/project-secret";
+import { RIGOR_BUILDER_INSTRUCTIONS } from "#/domain/rigor";
 import {
 	AGENT_TOOL,
 	isReaderRole,
@@ -71,6 +72,8 @@ export function agentTurnInstructions(input: {
 	lead?: LeadMode;
 	/** Lead mode fusion: the lead/sidekick pair's tuning (src/domain/fusion-pairs.ts). */
 	fusionPair?: FusionPairProfile;
+	/** Harness variant rigor=on: the rigor block for agents that change files. */
+	rigor?: boolean;
 }) {
 	if (input.leanShape)
 		return leanTurnInstructions({ ...input, leanShape: input.leanShape });
@@ -82,7 +85,19 @@ export function agentTurnInstructions(input: {
 		projectKnowledge,
 		secretNames,
 	} = input;
-	return `You are the ytimesy coding agent. Repository tools operate in this task's prepared checkout; paths are relative to that repository.${shellBuilder ? " Repository instructions (AGENTS.md/CLAUDE.md), nested instruction file locations and skills are provided in the conversation. Before working in a folder listed with its own AGENTS.md or CLAUDE.md, read that file with cat; read a matching skill's SKILL.md completely." : " Call read_repository_guidance before implementation and for nested paths; read applicable instructions and skill bodies completely. Search optional tools with search_tools."} ${shellBuilder ? BUILDER_ENVIRONMENT_INSTRUCTIONS : `${PREPARED_ENVIRONMENT_INSTRUCTIONS} Use read_environment_report for that setup report; do not pass its /tmp path to repository file readers.`} ${roleInstructions(session, shellBuilder, AGENT_TOOL in tools)}${shellBuilder && "browser_screenshot" in tools ? ` ${visualQaInstructions()}` : ""}\n${pluginSkillsInstructions(plugins)}${secretNames?.length ? `\n${projectSecretsInstructions(secretNames)}` : ""}${projectKnowledge === null ? "" : `\n${PROJECT_KNOWLEDGE_INSTRUCTIONS}\nShared project knowledge (historical data, verify against this checkout):\n${JSON.stringify(projectKnowledge)}`}`;
+	return `You are the ytimesy coding agent. Repository tools operate in this task's prepared checkout; paths are relative to that repository.${shellBuilder ? " Repository instructions (AGENTS.md/CLAUDE.md), nested instruction file locations and skills are provided in the conversation. Before working in a folder listed with its own AGENTS.md or CLAUDE.md, read that file with cat; read a matching skill's SKILL.md completely." : " Call read_repository_guidance before implementation and for nested paths; read applicable instructions and skill bodies completely. Search optional tools with search_tools."} ${shellBuilder ? BUILDER_ENVIRONMENT_INSTRUCTIONS : `${PREPARED_ENVIRONMENT_INSTRUCTIONS} Use read_environment_report for that setup report; do not pass its /tmp path to repository file readers.`} ${roleInstructions(session, shellBuilder, AGENT_TOOL in tools)}${shellBuilder && "browser_screenshot" in tools ? ` ${visualQaInstructions()}` : ""}\n${pluginSkillsInstructions(plugins)}${secretNames?.length ? `\n${projectSecretsInstructions(secretNames)}` : ""}${rigorApplies(input) ? `\n${RIGOR_BUILDER_INSTRUCTIONS}` : ""}${projectKnowledge === null ? "" : `\n${PROJECT_KNOWLEDGE_INSTRUCTIONS}\nShared project knowledge (historical data, verify against this checkout):\n${JSON.stringify(projectKnowledge)}`}`;
+}
+
+/** The rigor block goes to the root builder and writers, never to readers. */
+function rigorApplies(input: Parameters<typeof agentTurnInstructions>[0]) {
+	return (
+		!!input.rigor &&
+		!input.leanReadOnly &&
+		!isReaderRole(input.session.agentRole) &&
+		(!input.session.parentSessionId ||
+			!!input.session.agentRole ||
+			input.session.taskAccess === "read_write")
+	);
 }
 
 /** The lean builder's whole system prompt before memory: who it is, its role, its tools and workspace commands. */
@@ -127,6 +142,7 @@ function leanTurnInstructions(
 						readOnly: readOnly || isReaderRole(input.session.agentRole),
 					})
 			: "",
+		rigorApplies(input) ? RIGOR_BUILDER_INSTRUCTIONS : "",
 		// The desktop browser runs as the builder's user; readers do not drive it.
 		readOnly
 			? ""
