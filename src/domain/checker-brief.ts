@@ -58,7 +58,7 @@ export function independentReviewBrief(input: ReviewBriefInput) {
 		deliverableLine(input),
 		"</deliverable>",
 		"",
-		`Do not change the deliverable. Copy what you need (\`cp -a ${input.checkout} ${work}\`) and run experiments only in ${input.scratch}; read the original paths where the request names them.`,
+		`Do not change the deliverable. Copy the checkout's contents (\`mkdir -p ${work} && cp -a ${input.checkout}/. ${work}/\`; the trailing /. copies what the path points to, even when it is a symbolic link) and run experiments only in ${input.scratch}; read the original paths where the request names them.`,
 		"",
 		"Review in four parts:",
 		"1. Requirements. List every requirement in the request and in the files it points to (specs, READMEs, schemas, API docs, examples, format notes in the working directory): exact names, paths, formats, fields, values, units, ordering, limits, invocation and side effects such as records saved in a service. For each, give evidence that it is met or not: a command and its output, or a file and line. A requirement you could not check is not met.",
