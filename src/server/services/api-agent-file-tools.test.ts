@@ -154,7 +154,11 @@ it("wires the shared shell and command lifecycle into writer subagents, not read
 	// the command runner its lean bash is built on; it still cannot edit.
 	const reader = apiAgentTools({
 		...input,
-		session: { ...input.session, taskAccess: "read_only" },
+		session: {
+			...input.session,
+			taskAccess: "read_only",
+			agentRole: "checker",
+		},
 		readerCommands: true,
 	});
 	for (const name of ["execute_command", "continue_command", "stop_command"])
