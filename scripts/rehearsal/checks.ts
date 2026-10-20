@@ -578,7 +578,6 @@ export async function checkScenario(
 				"a lead edit sent with the handoff was refused (one writer at a time)",
 				has(
 					parseOutput(probe).result,
-					"REFUSED",
 					"Your sidekick is working in your checkout",
 				) &&
 					!has(await head("src/version_set.cc"), "lead write during a round"),

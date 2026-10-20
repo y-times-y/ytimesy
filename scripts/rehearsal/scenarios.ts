@@ -435,7 +435,7 @@ const leadMatch = (tag: string) => (first: string) =>
 	!first.includes("You take over as the lead's sidekick");
 
 /** The write the lead tries in the same batch as a handoff (the guard refuses it). */
-const LEAD_WRITE_PROBE = `const edited = await tools.edit({ path: "src/version_set.cc", edits: [{ old_string: "#include", new_string: "// lead write during a round\\n#include" }] }).catch((error) => "REFUSED: " + String(error?.message ?? error));
+const LEAD_WRITE_PROBE = `const edited = await tools.edit({ path: "src/version_set.cc", edits: [{ old_string: "#include", new_string: "// lead write during a round\\n#include" }] });
 return JSON.stringify({ edited });`;
 
 /**
