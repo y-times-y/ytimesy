@@ -1627,7 +1627,6 @@ async function runApiTurnAttempt(
 							outcome: "finished",
 							text: finalText.slice(-9000) || "(no final report)",
 							roleModels: fusionRoleModels,
-							signal: abort.signal,
 							...(evaluation
 								? {
 										deps: {
@@ -1929,7 +1928,6 @@ async function runApiTurnAttempt(
 								? "budget exhausted"
 								: "failed",
 						roleModels: fusionRoleModels,
-						signal: abort.signal,
 						text: [
 							failureMessage,
 							items
