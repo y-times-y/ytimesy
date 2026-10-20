@@ -43,7 +43,6 @@ import {
 	type ModelSpendRow,
 	treeModelSpend,
 } from "../src/domain/eval-efficiency";
-import { evalWorkSuffix } from "../src/domain/eval-prompt";
 import {
 	harnessVariantFromFlags,
 	harnessVariantLabel,
@@ -110,6 +109,7 @@ import {
 	setupFiles,
 	stageScript,
 	type TaskEnvironment,
+	taskMessage,
 	verifyScript,
 } from "./hard-set/environment";
 import {
@@ -1034,8 +1034,6 @@ let stopping = false;
 let usageLimitHit: string | null = null;
 const live = new Set<() => Promise<void>>();
 
-const ENVIRONMENT_NOTE = (workdir: string) =>
-	`\n\n(Environment: your shell commands run inside the task's container, starting in ${workdir}. File tools reach the task's working directory directly; use the shell for files elsewhere.)`;
 // Setup of the task's environment never takes longer than this.
 const SETUP_LIMIT_SEC = 300;
 
@@ -1264,7 +1262,11 @@ async function startTurn(run: TaskRun) {
 		await saveAttemptLoopDeadline(sessionId, run.agentDeadline - 20_000);
 	// The edge cancels the turn at the deadline, with or without this runner.
 	await saveTurnDeadline(sessionId, run.agentDeadline);
-	const text = `${environment.instruction}${ENVIRONMENT_NOTE(run.workdir)}${evalWorkSuffix({ where: "environment", done: "task", subagents: options.variant.subagents === "on" })}`;
+	const text = taskMessage(
+		environment,
+		run.workdir,
+		options.variant.subagents === "on",
+	);
 	await withBackgroundJobDispatcher(
 		async () => {},
 		() =>
