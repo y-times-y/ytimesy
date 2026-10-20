@@ -14,9 +14,16 @@ const STOPWORDS = new Set(
 	),
 );
 
-/** A light English stemmer: enough to match "installs"/"install", "tests"/"test". */
+/**
+ * A light English stemmer: enough to match "installs"/"install",
+ * "tests"/"test", and short plurals ("IDs"/"id", "keys"/"key"), which a
+ * request often names in the singular ("its id").
+ */
 function stem(word: string) {
-	if (word.length <= 4) return word;
+	if (word.length <= 4)
+		return word.length >= 3 && /[^su]s$/.test(word) && !word.endsWith("is")
+			? word.slice(0, -1)
+			: word;
 	for (const suffix of ["ing", "ed", "es", "s"])
 		if (word.endsWith(suffix) && word.length - suffix.length >= 4)
 			return word.slice(0, -suffix.length);
