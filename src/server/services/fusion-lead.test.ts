@@ -14,6 +14,7 @@ import {
 	fusionLeadGate,
 	fusionRoundOpen,
 	LEAD_WAITS_NOTICE,
+	leadWriteTracker,
 	withSidekickWriteGuard,
 } from "./fusion-lead";
 import type { SubagentToolContext } from "./subagent-tools";
@@ -63,6 +64,8 @@ function gate(options: {
 	items?: SessionItem[];
 	waitMs?: number;
 	exploreFlag?: boolean;
+	activeTurn?: boolean;
+	staged?: boolean;
 }) {
 	let now = T0;
 	const deps = {
@@ -75,6 +78,9 @@ function gate(options: {
 		stage: vi.fn(async () => {}),
 		saveState: vi.fn(async () => {}),
 		explore: options.explore ?? vi.fn(async () => ({ id: "1", round: 1 })),
+		activeTurn: vi.fn(async () => options.activeTurn ?? false),
+		stop: vi.fn(async () => {}),
+		staged: vi.fn(async () => options.staged ?? false),
 	} satisfies FusionLeadDeps;
 	const run = () =>
 		fusionLeadGate({
@@ -247,11 +253,53 @@ describe("fusion lead gate", () => {
 		expect(await run()).toBe("ready");
 		expect(deps.stage).toHaveBeenCalledWith("lead", "e2", expect.any(String));
 		expect(deps.reportEvents).toHaveBeenCalledWith("s", at(-1_000));
-		expect(
-			await fusionRoundOpen(lead, {
-				children: async () => [sidekick(building, true)],
+		// The completion check reads the same rule, bounded by the step's start:
+		// a round that began in this step is open, an older one never holds it.
+		const openDeps = {
+			now: () => T0,
+			children: async () => [sidekick(building, true)],
+			reportEvents: async () => [],
+		};
+		expect(await fusionRoundOpen(lead, T0 - 5_000, openDeps)).toBe(true);
+		expect(await fusionRoundOpen(lead, T0, openDeps)).toBe(false);
+	});
+
+	it("treats a round as over once its report event exists, though its state still shows it open", async () => {
+		// A worker-disconnect recovery (or a failed save) left the state open.
+		const open = beginSidekickRound(
+			endSidekickRound(
+				newSidekickState({ tokens: 1_000_000 }, at(-60_000), {
+					requestKey: "u1",
+					kind: "explore",
+				}),
+				{ now: at(-50_000), outcome: "finished", patchFiles: 0 },
+			),
+			{ now: at(-10_000), steps: 1, tokens: 1, requestKey: "u1" },
+		);
+		const { deps, run } = gate({
+			children: () => [sidekick(open, false)],
+			events: () => [{ ...report("e3"), eventType: "failed" as const }],
+		});
+		expect(await run()).toBe("ready");
+		expect(deps.sleep).not.toHaveBeenCalled();
+		expect(deps.stage).toHaveBeenCalledWith("lead", "e3", expect.any(String));
+		// The state is closed to match, so the completion check agrees.
+		expect(deps.saveState).toHaveBeenCalledWith(
+			"s",
+			expect.objectContaining({
+				rounds: expect.arrayContaining([
+					expect.objectContaining({ n: 2, outcome: "failed", endedAt: at(0) }),
+				]),
 			}),
-		).toBe(true);
+		);
+		expect(
+			await fusionRoundOpen(lead, T0 - 60_000, {
+				now: () => T0,
+				children: async () => [sidekick(open, false)],
+				reportEvents: async () => [report("e3")],
+				saveState: async () => {},
+			}),
+		).toBe(false);
 	});
 
 	it("gives up on a round whose sidekick never ran, with a notice to the lead", async () => {
@@ -259,19 +307,55 @@ describe("fusion lead gate", () => {
 			requestKey: "u1",
 			kind: "explore",
 		});
+		// A queued turn is a round about to run: still waited on.
+		const queued = gate({
+			children: () => [sidekick(stalled, false)],
+			activeTurn: true,
+			waitMs: 5_000,
+		});
+		expect(await queued.run()).toBe("wait");
+		expect(queued.deps.saveState).not.toHaveBeenCalled();
 		const { deps, run } = gate({ children: () => [sidekick(stalled, false)] });
 		expect(await run()).toBe("ready");
+		// Retired (its queued round message is dropped) and stopped at once.
 		expect(deps.saveState).toHaveBeenCalledWith(
 			"s",
 			expect.objectContaining({
 				rounds: [expect.objectContaining({ outcome: "failed" })],
+				retired: expect.objectContaining({
+					reason: "round 1 did not run or report",
+				}),
 			}),
 		);
+		expect(deps.stop).toHaveBeenCalledWith("s", { now: true });
 		expect(deps.stage).toHaveBeenCalledWith(
 			"lead",
 			"sidekick-stalled:s:1",
 			expect.stringContaining("did not run or report"),
 		);
+	});
+});
+
+describe("the harness exploration's start", () => {
+	it("is tried once per request: after a failure the lead plans without snippets", async () => {
+		const first = gate({
+			children: () => [],
+			explore: vi.fn(async () => {
+				throw new Error("no capacity");
+			}),
+		});
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		expect(await first.run()).toBe("ready");
+		warn.mockRestore();
+		expect(first.deps.stage).toHaveBeenCalledWith(
+			"lead",
+			"exploration-failed:lead:u1",
+			expect.stringContaining("could not start (no capacity)"),
+		);
+		// The next step finds the notice and does not try again.
+		const next = gate({ children: () => [], staged: true });
+		expect(await next.run()).toBe("ready");
+		expect(next.deps.explore).not.toHaveBeenCalled();
 	});
 });
 
@@ -286,8 +370,9 @@ describe("the lead's write guard", () => {
 				bash: { execute: run },
 				read: { execute: run },
 				agent_send: { execute: run },
+				write_stdin: { execute: run },
 			} as unknown as ToolSet,
-			() => busy,
+			{ busy: () => busy, track: (result) => result },
 		);
 		const call = (name: string) => {
 			const execute = tools[name]?.execute as
@@ -301,7 +386,39 @@ describe("the lead's write guard", () => {
 		expect(() => call("edit")).toThrow(LEAD_WAITS_NOTICE);
 		expect(() => call("write")).toThrow(LEAD_WAITS_NOTICE);
 		expect(() => call("bash")).toThrow(LEAD_WAITS_NOTICE);
+		expect(() => call("write_stdin")).toThrow(LEAD_WAITS_NOTICE);
 		expect(await call("read")).toBe("ok");
 		expect(await call("agent_send")).toBe("ok");
+	});
+});
+
+describe("the lead's write tracker", () => {
+	it("lets a round start only after the writes already running finish", async () => {
+		const writes = leadWriteTracker();
+		let finish = () => {};
+		const slow = new Promise<string>((resolve) => {
+			finish = () => resolve("edited");
+		});
+		const tools = withSidekickWriteGuard(
+			{ edit: { execute: () => slow } } as unknown as ToolSet,
+			writes,
+		);
+		const edit = tools.edit?.execute as unknown as () => Promise<string>;
+		const running = edit();
+		writes.start();
+		let settled = false;
+		const waiting = writes.settled().then(() => {
+			settled = true;
+		});
+		await Promise.resolve();
+		expect(settled).toBe(false);
+		// A write after the handoff is refused at once.
+		expect(() => edit()).toThrow(LEAD_WAITS_NOTICE);
+		finish();
+		await waiting;
+		expect(settled).toBe(true);
+		expect(await running).toBe("edited");
+		writes.clear();
+		expect(writes.busy()).toBe(false);
 	});
 });

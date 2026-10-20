@@ -214,7 +214,9 @@ export async function subagentReport(input: {
 		...(sidekick ? { round: sidekickRoundLabel(sidekick) } : {}),
 	});
 	const parts = [header, input.text.trim()];
-	if (role === "writer" && sidekick) {
+	// A sidekick from before the shared checkout still reports its fork's patch (below).
+	const forkedSidekick = !!sidekick && !!session.agentFork?.vmId;
+	if (role === "writer" && sidekick && !forkedSidekick) {
 		const parent = ancestors[0];
 		const base = currentSidekickRound(sidekick)?.base;
 		let changes: SidekickRoundChanges | null = null;
@@ -293,6 +295,27 @@ export async function subagentReport(input: {
 				failure,
 			),
 		);
+		if (sidekick) {
+			// It worked on a fork from before the shared checkout: its round ends
+			// with this patch, and it is retired (a new writer works in the lead's
+			// checkout).
+			const nowIso = new Date(now).toISOString();
+			await (input.deps?.saveState ?? saveSidekickState)(
+				session.id,
+				retireSidekickState(
+					endSidekickRound(sidekick, {
+						now: nowIso,
+						outcome: input.outcome,
+						patchFiles: patch?.files.length ?? 0,
+					}),
+					"it ran on a fork from before the shared checkout",
+					nowIso,
+				),
+			).catch(() => {});
+			parts.push(
+				`Sidekick ${label} ran on a fork from before the shared checkout, so it is retired after this report: review and apply its patch yourself. Your next writer becomes a sidekick that works in your checkout.`,
+			);
+		}
 	}
 	return parts.filter(Boolean).join("\n\n");
 }

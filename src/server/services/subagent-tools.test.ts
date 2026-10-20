@@ -1091,3 +1091,113 @@ describe("lead mode fusion: the harness-started exploration", () => {
 		expect(deps.message).not.toHaveBeenCalled();
 	});
 });
+
+describe("lead mode fusion: sidekicks from before the shared checkout, and the lead's own writes", () => {
+	const forked = (fields: Partial<Row> = {}) =>
+		row("s", "root", {
+			agentRole: "writer",
+			turnStatus: "completed",
+			agentBudget: {
+				steps: 150,
+				minutes: 30,
+				tokens: 2_000_000,
+				sidekick: newSidekickState({ tokens: 2_000_000 }, at(-30)),
+			},
+			agentFork: {
+				vmId: "vm-fork",
+				sourceVmId: "vm-root",
+				bootedAt: at(-30),
+			},
+			...fields,
+		});
+
+	it("retires an idle forked sidekick and gives the brief to a fresh one in the lead's checkout", async () => {
+		const { call, deps } = harness({
+			lead: "fusion",
+			sessions: [row("root", null, { items: userTask }), forked()],
+		});
+		const result = await call("agent_send", {
+			id: "1",
+			message: "Add --json and test it.",
+		});
+		expect(result.status).toContain(
+			"ran on a fork from before the shared checkout and is retired",
+		);
+		expect(deps.retireSidekick).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.objectContaining({ id: "s" }),
+			"it ran on a fork from before the shared checkout",
+		);
+		expect(deps.openTask).toHaveBeenCalledWith(
+			expect.objectContaining({
+				placement: "shared",
+				access: "read_write",
+				prompt: "Add --json and test it.",
+			}),
+		);
+		expect(deps.message).not.toHaveBeenCalled();
+		expect(deps.fork).not.toHaveBeenCalled();
+	});
+
+	it("explores a new request with a fresh sidekick instead of a forked one", async () => {
+		const { context, deps } = harness({
+			lead: "fusion",
+			sessions: [row("root", null, { items: userTask }), forked()],
+		});
+		expect(
+			await startHarnessExploration(context, {
+				requestKey: "u1",
+				requestText: "Add --json.",
+			}),
+		).toMatchObject({ round: 1 });
+		expect(deps.retireSidekick).toHaveBeenCalled();
+		expect(deps.openTask).toHaveBeenCalledWith(
+			expect.objectContaining({ placement: "shared" }),
+		);
+	});
+
+	it("waits for the lead's writes already running before the round's snapshot, and notes its background commands", async () => {
+		const order: string[] = [];
+		const sessions = [
+			row("root", null),
+			row("s", "root", {
+				agentRole: "writer",
+				turnStatus: "completed",
+				taskPlacement: "shared",
+				agentBudget: {
+					steps: 150,
+					minutes: 30,
+					tokens: 2_000_000,
+					sidekick: newSidekickState({ tokens: 2_000_000 }, at(-10)),
+				},
+			}),
+		];
+		const { deps, context } = harness({
+			lead: "fusion",
+			sessions,
+			deps: {
+				markRoundStart: vi.fn(async () => {
+					order.push("snapshot");
+					return "a".repeat(40);
+				}),
+			},
+		});
+		const tools = subagentTools({
+			...context,
+			leadWritesSettled: async () => {
+				order.push("writes settled");
+			},
+			leadBackgroundCommands: () => ["job-7"],
+		});
+		const result = (await tools.agent_send?.execute?.(
+			{ id: "1", message: "Next: add --yaml." } as never,
+			{ toolCallId: "c", messages: [] } as never,
+		)) as Record<string, unknown>;
+		expect(order).toEqual(["writes settled", "snapshot"]);
+		expect(result.backgroundCommands).toContain("still running");
+		const text = vi.mocked(deps.message).mock.calls[0]?.[2];
+		expect(text).toContain(
+			"The lead has background commands still running in this checkout (job-7)",
+		);
+	});
+});

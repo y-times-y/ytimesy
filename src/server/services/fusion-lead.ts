@@ -6,6 +6,7 @@ import {
 	endSidekickRound,
 	latestUserRequestId,
 	requestExplored,
+	retireSidekickState,
 	type SidekickState,
 	sidekickRoundOpen,
 	sidekickState,
@@ -16,8 +17,12 @@ import {
 	descendantAgentSessions,
 } from "../adapters/agent-sessions";
 import { childReportEventsSince } from "../adapters/agent-task-events";
-import { stageServerPeerMessage } from "../adapters/server-peer-inbox";
-import { saveSidekickState } from "../adapters/subagents";
+import { hasActiveApiTurn } from "../adapters/api-turns";
+import {
+	serverPeerMessageStaged,
+	stageServerPeerMessage,
+} from "../adapters/server-peer-inbox";
+import { requestSubagentStop, saveSidekickState } from "../adapters/subagents";
 import {
 	boundedNotificationText,
 	subagentReportNotification,
@@ -59,6 +64,11 @@ export type FusionLeadDeps = {
 	readonly stage: typeof stageServerPeerMessage;
 	readonly saveState: typeof saveSidekickState;
 	readonly explore: typeof startHarnessExploration;
+	/** Whether the session has a queued or running turn (a round about to run). */
+	readonly activeTurn: typeof hasActiveApiTurn;
+	readonly stop: typeof requestSubagentStop;
+	/** Whether the lead's mailbox already holds this notice (accepted or not). */
+	readonly staged: typeof serverPeerMessageStaged;
 };
 
 const defaultDeps: FusionLeadDeps = {
@@ -81,6 +91,9 @@ const defaultDeps: FusionLeadDeps = {
 	stage: (...args) => stageServerPeerMessage(...args),
 	saveState: (...args) => saveSidekickState(...args),
 	explore: (...args) => startHarnessExploration(...args),
+	activeTurn: (...args) => hasActiveApiTurn(...args),
+	stop: (...args) => requestSubagentStop(...args),
+	staged: (...args) => serverPeerMessageStaged(...args),
 };
 
 type Sidekick = {
@@ -117,17 +130,26 @@ function requestText(items: readonly SessionItem[], requestKey: string) {
 }
 
 /**
- * Whether one of the lead's sidekicks is in a round, or its last round's
- * report has not reached the lead's mailbox yet. A report that exists is
- * staged in the mailbox now (the same message delivery would stage).
+ * The one rule for whether a sidekick round is still in progress, read by
+ * the gate and by the completion check alike. A round is over once its
+ * report event exists, whatever its state says (a worker-disconnect
+ * recovery or a failed save can leave the state open): such a round is
+ * closed in the state now. Without an event it is in progress while its
+ * state is open, or for a short lag after its state closed (the event
+ * follows). An open round whose sidekick has no live or queued turn for
+ * STALLED_ROUND_MS is abandoned: closed, the sidekick retired and stopped
+ * at once, the lead told. With `stage`, reports that exist are put in the
+ * lead's mailbox. Returns the rounds still in progress.
  */
-async function roundInProgress(
+async function roundsInProgress(
 	deps: FusionLeadDeps,
 	lead: AgentSessionRecord,
 	sidekicks: readonly Sidekick[],
+	options: { readonly stage: boolean },
 ) {
 	const now = deps.now();
-	let waiting = false;
+	const iso = new Date(now).toISOString();
+	const pending: { readonly startedAt: string }[] = [];
 	for (const sidekick of sidekicks) {
 		const round = currentSidekickRound(sidekick.state);
 		if (!round) continue;
@@ -135,40 +157,63 @@ async function roundInProgress(
 			sidekick.session.id,
 			round.startedAt,
 		);
-		for (const event of events.filter((entry) => entry.pending))
-			await deps.stage(
-				lead.id,
-				event.id,
-				boundedNotificationText(subagentReportNotification(event)),
-			);
-		if (events.length) continue;
-		if (sidekickRoundOpen(sidekick.state)) {
-			if (
-				!sidekick.live &&
-				now - Date.parse(round.startedAt) > STALLED_ROUND_MS
-			) {
-				// Its turn never started or died without a report: the lead goes on.
+		if (events.length) {
+			if (options.stage)
+				for (const event of events.filter((entry) => entry.pending))
+					await deps.stage(
+						lead.id,
+						event.id,
+						boundedNotificationText(subagentReportNotification(event)),
+					);
+			if (sidekickRoundOpen(sidekick.state))
 				await deps.saveState(
 					sidekick.session.id,
 					endSidekickRound(sidekick.state, {
-						now: new Date(now).toISOString(),
+						now: iso,
+						outcome:
+							events.at(-1)?.eventType === "failed" ? "failed" : "finished",
+						patchFiles: round.patchFiles ?? 0,
+					}),
+				);
+			continue;
+		}
+		if (sidekickRoundOpen(sidekick.state)) {
+			const stalled =
+				now - Date.parse(round.startedAt) > STALLED_ROUND_MS &&
+				!sidekick.live &&
+				!(await deps.activeTurn(lead.userId, sidekick.session.id));
+			if (!stalled) {
+				pending.push(round);
+				continue;
+			}
+			// Its turn never started or died without a report. It must not start
+			// later and write beside the lead: retired (its queued round message
+			// is then dropped on delivery) and stopped at once.
+			await deps.saveState(
+				sidekick.session.id,
+				retireSidekickState(
+					endSidekickRound(sidekick.state, {
+						now: iso,
 						outcome: "failed",
 						patchFiles: 0,
 					}),
-				);
-				await deps.stage(
-					lead.id,
-					`sidekick-stalled:${sidekick.session.id}:${round.n}`,
-					`Runtime notice: your sidekick's round ${round.n} did not run or report. Its changes, if any, are in your checkout (git status). Send the brief again with agent_send, or do it yourself.`,
-				);
-				continue;
-			}
-			waiting = true;
-		} else if (round.endedAt && now - Date.parse(round.endedAt) < REPORT_LAG_MS)
+					`round ${round.n} did not run or report`,
+					iso,
+				),
+			);
+			await deps.stop(sidekick.session.id, { now: true });
+			await deps.stage(
+				lead.id,
+				`sidekick-stalled:${sidekick.session.id}:${round.n}`,
+				`Runtime notice: your sidekick's round ${round.n} did not run or report, so it is retired. Its changes, if any, are in your checkout (git status). Start a new writer for the brief, or do it yourself.`,
+			);
+			continue;
+		}
+		if (round.endedAt && now - Date.parse(round.endedAt) < REPORT_LAG_MS)
 			// The round is recorded as ended; its report event follows.
-			waiting = true;
+			pending.push(round);
 	}
-	return waiting;
+	return pending;
 }
 
 export type FusionLeadGateInput = {
@@ -198,6 +243,11 @@ export async function fusionLeadGate(
 	const requestKey = latestUserRequestId(input.items);
 	const text = requestKey ? requestText(input.items, requestKey) : "";
 	let explorationTried = !input.explore || !requestKey || !text.trim();
+	// One attempt per request: a failed start leaves a notice in the lead's
+	// mailbox, and the lead plans without snippets from then on.
+	const failedNotice = `exploration-failed:${lead.id}:${requestKey}`;
+	if (!explorationTried && (await deps.staged(lead.id, failedNotice)))
+		explorationTried = true;
 	for (;;) {
 		signal.throwIfAborted();
 		let sidekicks = await leadSidekicks(deps, lead);
@@ -215,54 +265,107 @@ export async function fusionLeadGate(
 			) {
 				const started = await deps
 					.explore(input.context, { requestKey, requestText: text })
-					.catch((cause) => {
+					.catch(async (cause) => {
 						// The lead plans without the snippets; it may start its sidekick itself.
+						const message =
+							cause instanceof Error ? cause.message.slice(0, 300) : "";
 						console.warn(
 							"The harness could not start the sidekick's exploration.",
-							{
-								message:
-									cause instanceof Error ? cause.message.slice(0, 200) : "",
-							},
+							{ message },
+						);
+						await deps.stage(
+							lead.id,
+							failedNotice,
+							`Runtime notice: the sidekick's exploration of this request could not start (${message || "unknown error"}). Plan from your own reading, or start a writer with explore: true.`,
 						);
 						return null;
 					});
 				if (started) sidekicks = await leadSidekicks(deps, lead);
 			}
 		}
-		if (!(await roundInProgress(deps, lead, sidekicks))) return "ready";
+		if (
+			!(await roundsInProgress(deps, lead, sidekicks, { stage: true })).length
+		)
+			return "ready";
 		const left = input.waitUntil - deps.now();
 		if (left <= 0) return "wait";
 		await deps.sleep(Math.min(POLL_MS, left), signal);
 	}
 }
 
-/** Whether a lead's sidekick round is still open (its turn's completion check). */
+/**
+ * The completion check: whether a round started since `since` (the start
+ * of this step's gate) is still in progress, by the gate's own rule. Only
+ * this step's handoffs can start one, so a round the gate already waited
+ * out (or one left inconsistent) never keeps the turn from completing.
+ */
 export async function fusionRoundOpen(
 	lead: AgentSessionRecord,
+	since: number,
 	deps: Partial<FusionLeadDeps> = {},
 ) {
 	const all = { ...defaultDeps, ...deps };
-	return (await leadSidekicks(all, lead)).some((sidekick) =>
-		sidekickRoundOpen(sidekick.state),
-	);
+	return (
+		await roundsInProgress(all, lead, await leadSidekicks(all, lead), {
+			stage: false,
+		})
+	).some((round) => Date.parse(round.startedAt) >= since);
 }
 
 /** The tools that write the checkout or run commands in it. */
 const WRITING_TOOLS = new Set<string>(
-	leanToolNames(["write", "edit", "command"]),
+	leanToolNames(["write", "edit", "command", "stdin"]),
 );
 
 export const LEAD_WAITS_NOTICE =
 	"Your sidekick is working in your checkout this round, so you do not edit files or run commands now: the runtime holds your next step until its report arrives, then review its changes in place.";
 
 /**
- * The lead's writing tools refuse while a round it just started runs (a
- * call in the same batch as the agent_send that started it); from the next
- * step on the gate keeps the lead waiting instead.
+ * The lead's writes within one step: whether a sidekick round started
+ * (its writing tools refuse from then on), and the writing calls still
+ * running, which a round's start waits out before it snapshots the checkout
+ * (a write earlier in the same batch than the handoff).
+ */
+export function leadWriteTracker() {
+	let busy = false;
+	const running = new Set<PromiseLike<unknown>>();
+	return {
+		busy: () => busy,
+		/** A round starts: refuse the lead's writes for the rest of the step. */
+		start: () => {
+			busy = true;
+		},
+		/** The gate found no round running: the lead may write again. */
+		clear: () => {
+			busy = false;
+		},
+		track: <T>(result: T) => {
+			if (result && typeof (result as { then?: unknown }).then === "function") {
+				const pending = result as unknown as Promise<unknown>;
+				running.add(pending);
+				pending.then(
+					() => running.delete(pending),
+					() => running.delete(pending),
+				);
+			}
+			return result;
+		},
+		/** Resolves once every writing call already started has finished. */
+		settled: async () => {
+			await Promise.allSettled([...running]);
+		},
+	};
+}
+export type LeadWriteTracker = ReturnType<typeof leadWriteTracker>;
+
+/**
+ * The lead's writing tools (edits, commands, stdin to a running command)
+ * refuse while a round it just started runs (a call in the same batch as
+ * the handoff); from the next step on the gate keeps the lead waiting.
  */
 export function withSidekickWriteGuard(
 	tools: ToolSet,
-	busy: () => boolean,
+	writes: Pick<LeadWriteTracker, "busy" | "track">,
 ): ToolSet {
 	return Object.fromEntries(
 		Object.entries(tools).map(([name, tool]) => {
@@ -273,8 +376,8 @@ export function withSidekickWriteGuard(
 				{
 					...tool,
 					execute: (...args: Parameters<typeof execute>) => {
-						if (busy()) throw new Error(LEAD_WAITS_NOTICE);
-						return execute(...args);
+						if (writes.busy()) throw new Error(LEAD_WAITS_NOTICE);
+						return writes.track(execute(...args));
 					},
 				},
 			];

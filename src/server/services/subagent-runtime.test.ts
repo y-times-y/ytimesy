@@ -466,6 +466,68 @@ describe("sidekick (lead mode fusion)", () => {
 		expect(destroy).not.toHaveBeenCalled();
 	});
 
+	it("reports an in-flight forked sidekick's patch, then retires it", async () => {
+		const root = record("root", null, { providerRef: "vm-root" });
+		const state = sidekickState({
+			round: 2,
+			roundStartedAt: at(-3),
+			rounds: [
+				{ n: 1, startedAt: at(-30), endedAt: at(-20), outcome: "finished" },
+				{ n: 2, startedAt: at(-3) },
+			],
+		});
+		const sidekick = record("s", "root", {
+			agentRole: "writer",
+			agentBudget: sidekickBudget(state),
+			agentFork: {
+				vmId: "vm-fork",
+				sourceVmId: "vm-root",
+				bootedAt: at(-30),
+				base: "lead-tree",
+				parentHead: "lead-head",
+			},
+		});
+		adapters.ancestors.mockResolvedValue([root]);
+		adapters.tree.mockResolvedValue([root, sidekick]);
+		adapters.transfer.mockResolvedValue({
+			path: "/home/u/.ytimesy/agents/1.patch",
+			files: ["src/cli.ts"],
+			added: 1,
+			removed: 0,
+			sha256: "e".repeat(64),
+			ref: "refs/ytimesy/agents/1",
+			base: "lead-tree",
+		});
+		const saveState = vi.fn(async () => {});
+		const roundChanges = vi.fn();
+		const report = await subagentReport({
+			machines: {} as never,
+			session: sidekick,
+			items: [],
+			outcome: "finished",
+			text: "done",
+			now: NOW,
+			deps: {
+				session: vi.fn(async () => sidekick),
+				saveState,
+				roundChanges,
+				mergeFork: adapters.mergeFork,
+			},
+		});
+		expect(report).toContain("/home/u/.ytimesy/agents/1.patch");
+		expect(report).toContain(
+			"ran on a fork from before the shared checkout, so it is retired after this report",
+		);
+		expect(roundChanges).not.toHaveBeenCalled();
+		const saved = (
+			saveState.mock.calls[0] as unknown as [string, SidekickState]
+		)[1];
+		expect(saved.retired?.reason).toBe(
+			"it ran on a fork from before the shared checkout",
+		);
+		expect(saved.rounds.at(-1)).toMatchObject({ n: 2, patchFiles: 1 });
+	});
+
 	it("still reports a round whose changes could not be listed", async () => {
 		const root = record("root", null, { providerRef: "vm-root" });
 		const state = sidekickState({ round: 1, roundStartedAt: at(-3) });

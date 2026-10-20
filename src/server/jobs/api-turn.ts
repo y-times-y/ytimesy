@@ -155,6 +155,7 @@ import {
 	type FusionLeadGateInput,
 	fusionLeadGate,
 	fusionRoundOpen,
+	leadWriteTracker,
 	withSidekickWriteGuard,
 } from "../services/fusion-lead";
 import { harnessLifecycleHooks } from "../services/harness-lifecycle-hooks";
@@ -342,8 +343,10 @@ async function runApiTurnAttempt(
 	let fusionLead: { userId: string; id: string } | undefined;
 	/** Lead mode fusion: roleModels.writerEscalation, named in a sidekick's stuck notice. */
 	let escalationModel: string | undefined;
-	/** Lead mode fusion: a sidekick round started in this step (the lead stops writing). */
-	let sidekickBusy = false;
+	/** Lead mode fusion: the lead's writes in this step (a round started stops them). */
+	const leadWrites = leadWriteTracker();
+	/** Lead mode fusion: when this step's gate began (the completion check's bound). */
+	let leadGateAt = Date.now();
 	let commandStop: Promise<void> | undefined;
 	const stopCommands = () => {
 		if (execution)
@@ -883,9 +886,9 @@ async function runApiTurnAttempt(
 			roleModels: variant.roleModels,
 			lead: variant.lead,
 			// Lead mode fusion: one writer at a time in the shared checkout.
-			onSidekickRound: () => {
-				sidekickBusy = true;
-			},
+			onSidekickRound: leadWrites.start,
+			leadWritesSettled: leadWrites.settled,
+			leadBackgroundCommands: () => pendingAgentCommandIds(items),
 		};
 		const delegation: ToolSet = delegates
 			? withRedactedResults(
@@ -906,7 +909,7 @@ async function runApiTurnAttempt(
 								.sidekickExplores,
 							waitUntil,
 						} satisfies FusionLeadGateInput).then((ready) => {
-							if (ready === "ready") sidekickBusy = false;
+							if (ready === "ready") leadWrites.clear();
 							return ready;
 						})
 				: null;
@@ -925,9 +928,7 @@ async function runApiTurnAttempt(
 			projectSecrets,
 		});
 		const baseTools: ToolSet = {
-			...(leadGate
-				? withSidekickWriteGuard(ownTools, () => sidekickBusy)
-				: ownTools),
+			...(leadGate ? withSidekickWriteGuard(ownTools, leadWrites) : ownTools),
 			...delegation,
 		};
 		// Deferred (deferred-tools.ts): in code mode primary the MCP search and
@@ -1420,6 +1421,7 @@ async function runApiTurnAttempt(
 		// checkout; a round still running at the step's deadline continues the
 		// wait in the next step. Its report is in the mailbox once it is ready.
 		if (step && leadGate) {
+			leadGateAt = Date.now();
 			const gate = await timed("turn:fusionLead", () =>
 				leadGate(attemptWaitUntil()),
 			);
@@ -1522,7 +1524,7 @@ async function runApiTurnAttempt(
 		if (
 			step &&
 			leadGate &&
-			(await fusionRoundOpen(owner as AgentSessionRecord))
+			(await fusionRoundOpen(owner as AgentSessionRecord, leadGateAt))
 		) {
 			await saveCheckpoint();
 			coordinated = false;
