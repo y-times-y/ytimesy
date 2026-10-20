@@ -325,6 +325,33 @@ export type RecentChatMessage = {
 };
 
 /**
+ * How many of the user's other root chats completed their latest turn in the
+ * last `windowSeconds` and have no save-hook run recorded since: saves that
+ * are queued or still running. The save hook records its run once it is
+ * done (saved, nothing new, or failed), so a new chat can wait for those
+ * before it reads memory.
+ */
+export async function pendingMemorySaves(
+	userId: string,
+	exceptSessionId: string,
+	windowSeconds: number,
+): Promise<number> {
+	const row = (
+		await database().query<{ pending: number | string }>(
+			`select count(*) as pending from api_turn t
+			 join agent_session s on s.id=t.session_id and s.user_id=$1 and s.parent_session_id is null
+			 where t.user_id=$1 and t.session_id::text<>$2 and t.state='completed'
+			   and t.updated_at > now()-make_interval(secs=>$3)
+			   and not exists(select 1 from api_turn n where n.user_id=$1 and n.session_id=t.session_id and n.updated_at > t.updated_at)
+			   and not exists(select 1 from memory_model_usage u where u.user_id=$1 and u.session_id=t.session_id
+			     and u.kind='save' and u.created_at >= t.updated_at)`,
+			[userId, exceptSessionId, windowSeconds],
+		)
+	).rows[0];
+	return Number(row?.pending ?? 0);
+}
+
+/**
  * The latest user message of each of the user's other root chats whose turn
  * is queued or running, or completed in the last `windowSeconds`, and whose
  * save hook has neither shown a saved line (a memorySave after that message)
