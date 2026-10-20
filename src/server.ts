@@ -6,6 +6,7 @@ import { handleWorkerSocket } from "./server/sockets/worker-sockets";
 import { canonicalOriginRedirect } from "./server/web/canonical-origin";
 import type { WebWorkerEnvironment } from "./server/web/environment";
 import { withWebRequestScope } from "./server/web/request-scope";
+import { limitRequestBody } from "./server/web/request-size";
 import { withSecurityHeaders } from "./server/web/security-headers";
 
 type WorkerContext = { waitUntil(work: Promise<unknown>): void };
@@ -42,13 +43,15 @@ async function monitored(
 }
 
 export default createServerEntry({
-	async fetch(request, ...rest) {
+	async fetch(incoming, ...rest) {
 		const [env, context] = rest as unknown as [
 			WebWorkerEnvironment | undefined,
 			WorkerContext | undefined,
 		];
-		const redirect = canonicalOriginRedirect(request, process.env.APP_URL);
+		const redirect = canonicalOriginRedirect(incoming, process.env.APP_URL);
 		if (redirect) return redirect;
+		const request = limitRequestBody(incoming);
+		if (request instanceof Response) return withSecurityHeaders(request);
 		if (!env?.HYPERDRIVE || !context)
 			return withSecurityHeaders(
 				await monitored(request, () => handler.fetch(request)),

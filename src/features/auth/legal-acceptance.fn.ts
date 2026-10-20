@@ -37,7 +37,10 @@ export const getLegalAcceptanceFn = createServerFn({ method: "GET" }).handler(
 export const acceptLegalTermsFn = createServerFn({ method: "POST" })
 	.validator((data: unknown) =>
 		z
-			.object({ termsVersion: z.string(), privacyVersion: z.string() })
+			.object({
+				termsVersion: z.string().max(64),
+				privacyVersion: z.string().max(64),
+			})
 			.parse(data),
 	)
 	.handler(async ({ data }) => {

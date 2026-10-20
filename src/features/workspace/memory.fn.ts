@@ -52,7 +52,9 @@ export const readMemoryFn = createServerFn({ method: "GET" }).handler(
 
 /** Commits that changed one file, newest first, each with its diff. */
 export const readMemoryHistoryFn = createServerFn({ method: "GET" })
-	.validator((data: unknown) => z.object({ path: z.string() }).parse(data))
+	.validator((data: unknown) =>
+		z.object({ path: z.string().max(512) }).parse(data),
+	)
 	.handler(async ({ data }) => {
 		const user = await requireUser(getRequest().headers);
 		const path = memoryPath(data.path);
@@ -111,7 +113,7 @@ export const clearMemoryFn = createServerFn({ method: "POST" }).handler(
 export const undoMemoryLineFn = createServerFn({ method: "POST" })
 	.validator((data: unknown) =>
 		z
-			.object({ path: z.string(), text: z.string().min(1).max(2000) })
+			.object({ path: z.string().max(512), text: z.string().min(1).max(2000) })
 			.parse(data),
 	)
 	.handler(async ({ data }) => {
