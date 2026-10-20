@@ -20,6 +20,7 @@ describe("harness variants", () => {
 			prEvidence: "off",
 			attempts: "1",
 			review: "off",
+			lead: "off",
 			roleModels: {},
 		});
 	});
@@ -40,6 +41,7 @@ describe("harness variants", () => {
 			prEvidence: "off",
 			attempts: "1",
 			review: "off",
+			lead: "off",
 			roleModels: {},
 		});
 		expect(
@@ -54,6 +56,7 @@ describe("harness variants", () => {
 			prEvidence: "off",
 			attempts: "1",
 			review: "off",
+			lead: "off",
 			roleModels: {},
 		});
 		expect(
@@ -88,6 +91,7 @@ describe("harness variants", () => {
 			prEvidence: "off",
 			attempts: "1",
 			review: "off",
+			lead: "off",
 			roleModels: {},
 		});
 		expect(harnessVariantFromUnknown({ memoryWriter: "agent" })).toEqual({
