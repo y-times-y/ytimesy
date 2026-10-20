@@ -571,6 +571,9 @@ async function runApiTurnAttempt(
 			: null;
 		// Readers keep the values for redaction but get no env file or names.
 		const receivesSecrets = sessionReceivesProjectSecrets(owner);
+		// Values every tool result is redacted of. The memory clone's token
+		// joins once it is on the VM, so tools read this list at call time.
+		const redact: string[] = [...(projectSecrets?.redact ?? [])];
 		let secretsWritten: Promise<void> | undefined;
 		let attachmentsWritten: Promise<void> | undefined;
 		const prepareWorkspace = deferredApiTurnWorkspace(
@@ -610,7 +613,10 @@ async function runApiTurnAttempt(
 			const ready = execution;
 			const cloning = memoryLoading.then((memory) => {
 				if (!memory) return;
-				memoryCloned ??= memory.prepareVm(ready);
+				memoryCloned ??= memory.prepareVm(ready).then(() => {
+					for (const token of memory.vmTokens())
+						if (!redact.includes(token)) redact.push(token);
+				});
 				return memoryCloned;
 			});
 			await attachmentsWritten;
@@ -857,7 +863,7 @@ async function runApiTurnAttempt(
 							roleModels: variant.roleModels,
 							lead: variant.lead,
 						}),
-						projectSecrets?.redact ?? [],
+						redact,
 					)
 				: {};
 		// Code mode is a development harness variant on a lean surface only
@@ -874,6 +880,7 @@ async function runApiTurnAttempt(
 				hooks,
 				planLock,
 				projectSecrets,
+				redact,
 			}),
 			...delegation,
 		};
@@ -896,7 +903,7 @@ async function runApiTurnAttempt(
 						sessionId: owner.id,
 						turnId: turn.id,
 						toolCallPrefix: step ? `step-${step.index}:` : undefined,
-						redact: projectSecrets?.redact ?? [],
+						redact,
 						mode: codeMode,
 						deferred:
 							codeMode === "primary"
@@ -1511,6 +1518,12 @@ async function runApiTurnAttempt(
 				{ keepIdle: true },
 			).catch(() => {});
 		await memory?.afterTurn(turn.id);
+		// The turn's own memory writes are done; its VM token goes now rather
+		// than at expiry. A later turn clones with a new one.
+		if (memoryCloned && execution) {
+			const ready = execution;
+			await memoryCloned.then(() => memory?.releaseVm(ready)).catch(() => {});
+		}
 		await recordCloudProjectReport(owner, turn.id, items).catch(() => {
 			console.warn(
 				"Completed turn saved, but its project report needs recovery.",
@@ -1816,15 +1829,15 @@ function turnTools(input: {
 	hooks: ReturnType<typeof harnessLifecycleHooks>;
 	planLock: PlanLock | null;
 	projectSecrets: Awaited<ReturnType<typeof loadAgentProjectSecrets>> | null;
+	redact: readonly string[];
 }) {
-	const { mcp, hooks, planLock, projectSecrets } = input;
+	const { mcp, hooks, planLock, projectSecrets, redact } = input;
 	const withMcp = {
 		...input.surfaceTools,
 		...mcp.tools,
 		...pluginSkillTools(input.plugins),
 		...input.webSearch,
 	};
-	const redact = projectSecrets?.redact ?? [];
 	// Only a person in a root chat can paste a secret into the card.
 	const secretTools =
 		planLock && projectSecrets

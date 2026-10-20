@@ -23,3 +23,20 @@ it("redacts runtime secret values from tool results and errors", async () => {
 		"bad key [REDACTED]",
 	);
 });
+
+it("redacts values added to the list after the tools were wrapped", async () => {
+	const secrets: string[] = [];
+	const tools = withRedactedResults(
+		{
+			bash: { execute: async () => "Authorization: Bearer art_memorytoken1" },
+		} as unknown as ToolSet,
+		secrets,
+	);
+	await expect(tools.bash?.execute?.({}, options)).resolves.toBe(
+		"Authorization: Bearer art_memorytoken1",
+	);
+	secrets.push("art_memorytoken1");
+	await expect(tools.bash?.execute?.({}, options)).resolves.toBe(
+		"Authorization: Bearer [REDACTED]",
+	);
+});
