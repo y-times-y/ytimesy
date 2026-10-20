@@ -37,7 +37,8 @@ export type ModelRole = (typeof MODEL_ROLES)[number];
  *   (its OpenRouter id or the maker's own id), e.g. `api:google/gemini-3.8-flash`;
  * - `api/<connection>/<model>`: one exact API route;
  * - `<model>`: the plan if it serves the model, else an API connection.
- * `effort` is the reasoning effort for that role (the route's default when unset).
+ * `effort` is the reasoning effort for that role (when unset, the parent
+ * turn's effort if the route offers it, else the route's default).
  */
 export type RoleModel = { readonly model: string; readonly effort?: string };
 export type RoleModels = { readonly [Role in ModelRole]?: RoleModel };
@@ -199,6 +200,8 @@ export function resolveRoleModel(input: {
 	readonly connections: readonly FailoverConnection[];
 	/** The parent's model, named in the fallback notice. */
 	readonly parentModel: string;
+	/** The parent turn's reasoning effort: used when the entry sets none and the route offers it. */
+	readonly parentEffort?: string;
 }): RoleModelResolution {
 	const entry = roleModelFor(input.roleModels, input.role);
 	if (!entry) return { kind: "inherit" };
@@ -224,7 +227,15 @@ export function resolveRoleModel(input: {
 		};
 	}
 	const model = routeOf(found.connection, found.model);
-	if (!entry.effort) return { kind: "role", model };
+	if (!entry.effort)
+		return {
+			kind: "role",
+			model:
+				input.parentEffort &&
+				found.model.reasoning?.includes(input.parentEffort)
+					? { ...model, reasoning: input.parentEffort }
+					: model,
+		};
 	if (!found.model.reasoning?.includes(entry.effort))
 		return {
 			kind: "role",

@@ -69,9 +69,15 @@ export function reviewEligibility(input: {
 /** One finding handed to the builder, numbered F1, F2, ... */
 export type ReviewFinding = {
 	readonly id: string;
-	readonly kind: "failure" | "requirement" | "assumption";
+	/** unverified: the builder's own final answer admitted unverified work (rigor=on). */
+	readonly kind: "failure" | "requirement" | "assumption" | "unverified";
 	readonly text: string;
 };
+
+/** rigor=on: the finding for a final answer that admits unverified work with time left. */
+function unverifiedText(admitted: readonly string[]) {
+	return `Your final answer admits unverified or open work while over half of the time is left: ${admitted.map((line) => `"${line}"`).join("; ")}. Verify or fix it now; report as unverified only what cannot be checked here.`;
+}
 
 const RUNTIME_FAILURES = new Set([
 	NO_VERDICT_FAILURE,
@@ -84,9 +90,14 @@ const clip = (value: string, max: number) =>
 /**
  * The checker's specific findings, most important first: its failures, the
  * unmet requirements it did not already list, then the assumptions it
- * examined (alternative and outcome), as evidence to weigh.
+ * examined (alternative and outcome), as evidence to weigh. With rigor=on an
+ * admission of unverified work in the builder's answer comes first.
  */
-export function reviewFindings(verdict: ReviewVerdict): ReviewFinding[] {
+export function reviewFindings(
+	verdict: ReviewVerdict,
+	/** rigor=on: lines of the builder's final answer that admit unverified work. */
+	admitted: readonly string[] = [],
+): ReviewFinding[] {
 	const failures = verdict.failures.filter(
 		(failure) => !RUNTIME_FAILURES.has(failure),
 	);
@@ -105,6 +116,9 @@ export function reviewFindings(verdict: ReviewVerdict): ReviewFinding[] {
 				),
 		);
 	const concrete = [
+		...(admitted.length
+			? [{ kind: "unverified" as const, text: unverifiedText(admitted) }]
+			: []),
 		...failures.map((text) => ({ kind: "failure" as const, text })),
 		...unmet.map((text) => ({ kind: "requirement" as const, text })),
 	].slice(0, REVIEW_LOOP_LIMITS.maxFindings);
@@ -257,7 +271,10 @@ export type ReviewOutcome =
 	| "not-eligible"
 	| "check-failed";
 
-/** After a verdict: pass finishes; concrete findings get a fix while time allows. */
+/**
+ * After a verdict: pass finishes (unless the builder admitted unverified
+ * work, rigor=on); concrete findings get a fix while time allows.
+ */
 export function decideAfterVerdict(input: {
 	readonly verdict: ReviewVerdict;
 	readonly findings: readonly ReviewFinding[];
@@ -266,7 +283,10 @@ export function decideAfterVerdict(input: {
 }):
 	| { readonly kind: "fix" }
 	| { readonly kind: "finish"; readonly reason: ReviewOutcome } {
-	if (input.verdict.verdict === "pass")
+	if (
+		input.verdict.verdict === "pass" &&
+		!input.findings.some((finding) => finding.kind === "unverified")
+	)
 		return { kind: "finish", reason: "pass" };
 	if (!hasConcreteFindings(input.findings))
 		return { kind: "finish", reason: "no-findings" };
@@ -294,6 +314,8 @@ export type ReviewRound = {
 	};
 	readonly verdict: ReviewVerdict | null;
 	readonly timedOut?: boolean;
+	/** rigor=on: what the builder's final answer admitted, with over half the time left. */
+	readonly admitted?: readonly string[];
 	readonly findings: readonly ReviewFinding[];
 	/** What followed the verdict. */
 	readonly decision?: "fix" | ReviewOutcome;
