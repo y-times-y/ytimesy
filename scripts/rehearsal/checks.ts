@@ -1,10 +1,20 @@
 // What a rehearsal scenario left behind (turn items, child sessions, model
 // requests, VM state) and the checks each scenario must pass.
+import {
+	fusionTurnMetrics,
+	type SidekickState,
+} from "../../src/domain/sidekick";
+import type { SubagentBudget } from "../../src/domain/subagent";
 import { database } from "../../src/server/adapters/database";
 import { stageScript, type TaskEnvironment } from "../hard-set/environment";
 import type { RehearsalEdge } from "./edge";
 import type { FakeCodex } from "./fake-codex";
-import type { Check, ScenarioId } from "./scenarios";
+import {
+	type Check,
+	EXPLORE_FILE,
+	MULTITURN_FOLLOW_UP,
+	type ScenarioId,
+} from "./scenarios";
 import type { RehearsalVms } from "./vm";
 
 type Item = {
@@ -37,10 +47,13 @@ export async function collect(input: {
 			)
 		).rows;
 	const session = (
-		await db.query<{ items: Item[] }>(
-			"select items from agent_session where id=$1",
-			[input.sessionId],
-		)
+		await db.query<{
+			items: Item[];
+			listed_model_id: string | null;
+			harness: string;
+		}>("select items,listed_model_id,harness from agent_session where id=$1", [
+			input.sessionId,
+		])
 	).rows[0];
 	const children = (
 		await db.query<{
@@ -51,11 +64,14 @@ export async function collect(input: {
 			task_state: string | null;
 			provider_ref: string | null;
 			agent_fork: Record<string, unknown> | null;
+			agent_budget: (SubagentBudget & { sidekick?: SidekickState }) | null;
+			listed_model_id: string | null;
+			harness: string;
 			items: Item[];
 		}>(
 			`with recursive tree as (select id from agent_session where id=$1
 			 union all select s.id from agent_session s join tree t on s.parent_session_id=t.id)
-			 select id,parent_session_id,agent_role,title,task_state,provider_ref,agent_fork,items
+			 select id,parent_session_id,agent_role,title,task_state,provider_ref,agent_fork,agent_budget,listed_model_id,harness,items
 			 from agent_session where id in (select id from tree) and id<>$1 order by created_at`,
 			[input.sessionId],
 		)
@@ -75,6 +91,8 @@ export async function collect(input: {
 		sessionId: input.sessionId,
 		rootTurns: await turns(input.sessionId),
 		rootItems: session?.items ?? [],
+		rootModel: session?.listed_model_id ?? null,
+		rootHarness: session?.harness ?? "codex",
 		children,
 		childTurns,
 		reviewState,
@@ -368,13 +386,16 @@ export async function checkScenario(
 					"rehearsal round 2",
 				),
 			);
+			// The sidekick lives as long as the chat: idle after the lead's turn,
+			// its fork kept for the next message (until its idle TTL).
 			check(
-				"the sidekick was retired at the lead's turn end (fork deleted)",
-				Boolean(writer?.agent_fork?.deletedAt) &&
-					data.destroyed.includes(String(writer?.agent_fork?.vmId)),
+				"the idle sidekick stays for the chat after the lead's turn (fork kept)",
+				!writer?.agent_budget?.sidekick?.retired &&
+					!writer?.agent_fork?.deletedAt &&
+					!data.destroyed.includes(String(writer?.agent_fork?.vmId)),
 				JSON.stringify({
+					retired: writer?.agent_budget?.sidekick?.retired,
 					deletedAt: writer?.agent_fork?.deletedAt,
-					destroyed: data.destroyed,
 				}),
 			);
 		} else {
@@ -392,6 +413,239 @@ export async function checkScenario(
 				"the awaited researcher's report came back in the agent tool result",
 				started.some((item) => has(item.output, "Rehearsal researcher report")),
 				started.map((item) => clip(item.output, 200)).join(" / "),
+			);
+		}
+	}
+	if (
+		id === "fusion-explore" ||
+		id === "fusion-multiturn" ||
+		id === "fusion-stuck"
+	) {
+		const writers = data.children.filter(
+			(child) => child.agent_role === "writer",
+		);
+		const sidekick = writers[0];
+		const state = sidekick?.agent_budget?.sidekick;
+		const metrics = fusionTurnMetrics({
+			rootId: data.sessionId,
+			sessions: [
+				{
+					id: data.sessionId,
+					parentSessionId: null,
+					harness: data.rootHarness,
+					listedModelId: data.rootModel,
+					items: data.rootItems,
+				},
+				...data.children.map((child) => ({
+					id: child.id,
+					parentSessionId: child.parent_session_id,
+					harness: child.harness,
+					listedModelId: child.listed_model_id,
+					items: child.items,
+					agentRole: child.agent_role as never,
+					agentBudget: child.agent_budget,
+				})),
+			],
+		});
+		// The chat's whole history (a turn's items repeat earlier turns').
+		const sends = calls(data.rootItems, "agent_send");
+		const applied = calls(data.rootItems, "run_code").filter((item) =>
+			has(item.input, "git apply"),
+		);
+		const head = async (path: string) =>
+			vmFile(data.vm, `docker exec tb head -1 /app/${path}`);
+
+		if (id === "fusion-explore") {
+			const sidekickCalls = requests("explore-sidekick");
+			check(
+				"the first handoff was an exploration brief (explore: true, the report format appended)",
+				state?.rounds[0]?.kind === "explore" &&
+					has(sidekickCalls[0]?.lastUser, "Exploration round: change no files"),
+				JSON.stringify(state?.rounds[0]),
+			);
+			check(
+				"the exploration round changed no files and fired no signal",
+				state?.rounds[0]?.patchFiles === 0 && !state?.rounds[0]?.signals,
+				JSON.stringify(state?.rounds[0]),
+			);
+			const planned = requests("explore-lead").find((request) =>
+				has(request.lastUser, "Snippets:"),
+			);
+			check(
+				"the lead's next request carried the sidekick's files and snippets",
+				has(
+					planned?.lastUser,
+					"Files:",
+					`${EXPLORE_FILE}:1-12`,
+					"#ifndef MVCC_LSM_TYPES_H_",
+					"Commands:",
+					"Open questions:",
+				),
+				clip(planned?.lastUser, 500),
+			);
+			check(
+				"the lead read no files itself; the sidekick did the reading",
+				metrics.leadReads === 0 && (metrics.sidekickReads ?? 0) >= 2,
+				JSON.stringify({
+					lead: metrics.leadReads,
+					sidekick: metrics.sidekickReads,
+				}),
+			);
+			check(
+				"the lead's plan quoted the snippet in round 2's brief",
+				has(String((sends[0] as Item | undefined)?.input), "harbor-canary"),
+				clip((sends[0] as Item | undefined)?.input),
+			);
+			check(
+				"metrics: one exploration handoff, two rounds",
+				metrics.explorationHandoffs === 1 && metrics.sidekickRounds === 2,
+				JSON.stringify(metrics),
+			);
+			check(
+				"the build round's patch reached the lead's checkout",
+				applied.length === 1 &&
+					has(await head(EXPLORE_FILE), "rehearsal explore build"),
+				applied.map((item) => clip(parseOutput(item).result, 200)).join(" / "),
+			);
+		}
+
+		if (id === "fusion-multiturn") {
+			check(
+				"two user requests, both turns completed",
+				data.rootTurns.length === 2 &&
+					data.rootTurns.every((turn) => turn.state === "completed") &&
+					has(JSON.stringify(data.rootItems), MULTITURN_FOLLOW_UP.slice(0, 40)),
+				data.rootTurns.map((turn) => turn.state).join(","),
+			);
+			check(
+				"one sidekick served both requests (no second writer)",
+				writers.length === 1 && state?.turns === 2,
+				JSON.stringify({ writers: writers.length, turns: state?.turns }),
+			);
+			check(
+				"the second request's round started on the same sidekick after syncing its fork",
+				has(
+					sends[0]?.output,
+					"round 2 (1/6 this turn) started",
+					"all its earlier work was in it",
+				) && state?.rounds[1]?.sync === "clean",
+				clip(sends[0]?.output),
+			);
+			const keys = new Set(
+				requests("mt-sidekick").map((request) => request.cacheKey),
+			);
+			check(
+				"the sidekick kept one session across turns (same prompt cache key)",
+				requests("mt-sidekick").length >= 4 &&
+					keys.size === 1 &&
+					!keys.has(null),
+				JSON.stringify([...keys]),
+			);
+			check(
+				"the second round's message was labelled for the new request",
+				requests("mt-sidekick").some((request) =>
+					has(
+						request.lastUser,
+						"Round 2 from your lead (1/6 for the user's new request)",
+					),
+				),
+			);
+			check(
+				"round 2's change reached the lead",
+				applied.length === 2 &&
+					has(await head("src/lsm_db.cc"), "rehearsal round 2"),
+			);
+			check(
+				"stopping the sidekick retired it and deleted its fork",
+				state?.retired?.reason === "stopped by the lead" &&
+					Boolean(sidekick?.agent_fork?.deletedAt) &&
+					data.destroyed.includes(String(sidekick?.agent_fork?.vmId)),
+				JSON.stringify({
+					retired: state?.retired,
+					deletedAt: sidekick?.agent_fork?.deletedAt,
+				}),
+			);
+		}
+
+		if (id === "fusion-stuck") {
+			const lead = requests("stuck-lead");
+			const notice =
+				"looks stuck because it failed the same check as last round (`make bogus-check`)";
+			const first = lead.find((request) =>
+				has(request.lastUser, "rehearsal stuck 1"),
+			);
+			check(
+				"round 1's report carried no stuck notice",
+				Boolean(lead.find((request) => /round 1\/6/.test(request.lastUser))) &&
+					!lead.some(
+						(request) =>
+							/round 1\/6/.test(request.lastUser) &&
+							has(request.lastUser, "looks stuck"),
+					),
+				clip(first?.lastUser),
+			);
+			const stuck = lead.find((request) => has(request.lastUser, notice));
+			check(
+				"the lead's next request after round 2 carried the stuck notice",
+				Boolean(stuck) &&
+					has(
+						stuck?.lastUser,
+						"Re-brief it more prescriptively",
+						"restarts it on codex:gpt-6.1-sol",
+					),
+				clip(
+					lead
+						.map((request) => request.lastUser)
+						.find((text) => /round 2\/6/.test(text)),
+					600,
+				),
+			);
+			check(
+				"round 2 recorded the same-check-failed signal",
+				state?.rounds[1]?.signals?.[0]?.kind === "same-check-failed",
+				JSON.stringify(state?.rounds[1]),
+			);
+			const escalated = writers[1];
+			check(
+				"the next round restarted the sidekick on roleModels.writerEscalation",
+				has(sends[1]?.output, "was stuck", "restarted as sidekick 2") &&
+					escalated?.listed_model_id === "gpt-6.1-sol" &&
+					escalated?.agent_budget?.sidekick?.escalatedFrom?.label === "1" &&
+					requests("escalated-sidekick").every(
+						(request) => request.model === "gpt-6.1-sol",
+					),
+				clip(sends[1]?.output),
+			);
+			check(
+				"the escalated sidekick got a handover of the stuck one's last report",
+				has(
+					requests("escalated-sidekick")[0]?.lastUser,
+					"Its last report:",
+					"make bogus-check still fails",
+					"[rehearsal:escalated]",
+				),
+				clip(requests("escalated-sidekick")[0]?.lastUser, 500),
+			);
+			check(
+				"the stuck sidekick was retired and its fork deleted",
+				has(state?.retired?.reason, "restarted on gpt-6.1-sol") &&
+					data.destroyed.includes(String(sidekick?.agent_fork?.vmId)),
+				JSON.stringify(state?.retired),
+			);
+			check(
+				"metrics: signals and one model switch",
+				(metrics.signals?.["same-check-failed"] ?? 0) >= 1 &&
+					metrics.switches === 1,
+				JSON.stringify({
+					signals: metrics.signals,
+					switches: metrics.switches,
+				}),
+			);
+			check(
+				"the escalated sidekick's patch reached the lead",
+				applied.length === 3 &&
+					has(await head("src/snapshot_context.cc"), "rehearsal escalated"),
+				applied.map((item) => clip(parseOutput(item).result, 160)).join(" / "),
 			);
 		}
 	}
