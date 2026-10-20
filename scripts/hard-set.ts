@@ -190,6 +190,8 @@ const { values: flags } = parseArgs({
 		dataset: { type: "string", default: DEFAULT_DATASET },
 		/** Keep each agent run's stored items and model messages (run directory). */
 		transcripts: { type: "boolean", default: false },
+		/** Text appended to every task's message (behaviour probes, e.g. a delegation positive control). */
+		"task-suffix": { type: "string" },
 	},
 });
 
@@ -1009,6 +1011,7 @@ type RunOptions = {
 	loopAttempts: number;
 	mode: "agent" | "oracle" | "nop";
 	transcripts: boolean;
+	taskSuffix: string | null;
 	/** The agent budget for this task (its maxAgentMinutes applied). */
 	agentSeconds: number;
 };
@@ -1043,6 +1046,7 @@ function runOptions(input: {
 	variantFlags: string[];
 	mode: string;
 	transcripts: boolean;
+	taskSuffix?: string | null;
 	agentSeconds: number;
 }): RunOptions {
 	if (!/^[a-z0-9._-]+$/.test(input.model))
@@ -1062,6 +1066,7 @@ function runOptions(input: {
 		loopAttempts: attemptLimit(variant.attempts),
 		mode: input.mode as RunOptions["mode"],
 		transcripts: input.transcripts,
+		taskSuffix: input.taskSuffix?.trim() || null,
 		agentSeconds: input.agentSeconds,
 	};
 }
@@ -1266,6 +1271,7 @@ async function startTurn(run: TaskRun) {
 		environment,
 		run.workdir,
 		options.variant.subagents === "on",
+		options.taskSuffix,
 	);
 	await withBackgroundJobDispatcher(
 		async () => {},
@@ -2274,6 +2280,7 @@ const baseOptions = runOptions({
 	variantFlags: flags.variant ?? [],
 	mode: flags.mode as string,
 	transcripts: flags.transcripts as boolean,
+	taskSuffix: flags["task-suffix"] ?? null,
 	agentSeconds: requestedAgentSeconds,
 });
 const mode = baseOptions.mode;
@@ -2338,6 +2345,7 @@ if (flags.detach) {
 				variantFlags: options.variantFlags,
 				agentSeconds: options.agentSeconds,
 				transcripts: options.transcripts,
+				taskSuffix: options.taskSuffix,
 			};
 			const record = newRecord(task, attempt, options);
 			record.status = "queued";
