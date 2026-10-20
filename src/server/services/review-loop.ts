@@ -18,6 +18,7 @@ import {
 	decideAfterVerdict,
 	decideCheck,
 	expectedCheckMs,
+	failingTests,
 	findingResponses,
 	REVIEW_LOOP_LIMITS,
 	type ReviewLoopState,
@@ -173,6 +174,10 @@ function summaryItem(
 			...(findingsOf?.findings.length
 				? findingsOf.findings.map((finding) => `${finding.id}. ${finding.text}`)
 				: []),
+			...failingTests(findingsOf?.verdict ?? null).map(
+				(test) =>
+					`Failing test: ${test.name}${test.command ? ` (\`${test.command}\`)` : ""}`,
+			),
 			`Checker spent ${Math.round(spend.checker.tokens / 1000)}k tokens${dollars(spend.checker.costUsd, spend.checker.estimated)}.`,
 		].join("\n"),
 		status: "completed",
@@ -441,6 +446,7 @@ export function createReviewLoop(input: ReviewLoopInput) {
 						round: round.n,
 						maxRounds: REVIEW_LOOP_LIMITS.maxRounds,
 						findings,
+						failingTests: failingTests(verdict),
 					}),
 				},
 			],

@@ -703,6 +703,12 @@ async function readReviewLoop(
 				findingTexts: round.findings
 					.slice(0, 5)
 					.map((finding) => `${finding.id} ${finding.text.slice(0, 200)}`),
+				checkerTests: (round.verdict?.tests ?? []).map((test) => ({
+					name: test.name.slice(0, 200),
+					passed: test.passed,
+					command: test.command?.slice(0, 300) ?? null,
+				})),
+				untested: !!round.verdict?.untested,
 				decision: round.decision ?? null,
 				checkerTokens: roundSpend?.checker.tokens ?? 0,
 				checkerCostUsd: roundSpend?.checker.costUsd ?? null,

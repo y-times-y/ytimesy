@@ -130,6 +130,41 @@ describe("hard set review report", () => {
 	});
 });
 
+describe("hard set review report: the checker's own tests", () => {
+	it("counts the tests the checker wrote and flags an untested pass", () => {
+		const lines = reviewLoopReport([
+			{
+				task: "mvcc",
+				attempt: "1",
+				status: "final",
+				passed: false,
+				reviewLoop: loop(
+					[
+						round({
+							checkerTests: [
+								{ name: "a", passed: false, command: "c" },
+								{ name: "b", passed: true, command: null },
+							],
+						}),
+						round({
+							n: 2,
+							verdict: "unsure",
+							findings: 0,
+							decision: "no-findings",
+							checkerTests: [],
+							untested: true,
+						}),
+					],
+					{ outcome: "no-findings" },
+				),
+			},
+		]);
+		expect(lines[2]).toBe(
+			"- mvcc.1: R1 fail(2) [2 tests, 1 failed]->fail 2.5m fix 1.2m fixed 1 rejected 1, R2 unsure [0 tests, untested pass]->fail 2.5m; no-findings; final fail",
+		);
+	});
+});
+
 describe("hard set review state", () => {
 	// rl-live-2: the checker's completion woke a second builder turn whose
 	// own state was "not-eligible (no files changed)".

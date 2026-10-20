@@ -697,72 +697,78 @@ describe("role surfaces: every advertised tool works, no prompt names an absent 
  * directory, as the reader's uid.
  */
 describe("role surfaces: a reader's advertised command tool executes on the container-routed path", () => {
+	// Readers run the same way under lead=fusion (the lead's checker or reviewer).
 	const cases = (["researcher", "reviewer", "checker"] as const).flatMap(
 		(role) =>
-			(["off", "primary"] as const).map((codeMode) => ({ role, codeMode })),
+			(["off", "primary"] as const).flatMap((codeMode) =>
+				(["off", "fusion"] as const).map((lead) => ({ role, codeMode, lead })),
+			),
 	);
-	it.each(cases)("$role, codeMode=$codeMode", async ({ role, codeMode }) => {
-		owner = ownerFor(role);
-		mocks.level = 1;
-		mocks.sessionMachines = true;
-		const route = hardSetRoute([checkout]);
-		const runs: ReturnType<typeof route.run>[] = [];
-		mocks.vm = (command) => {
-			// The command runner's launch: the one VM command holding a login script.
-			const { user, home, command: launched } = vmCommandUser(command);
-			const script = launched.includes("tmux -L")
-				? routedScript(launched)
-				: null;
-			if (!script) return null;
-			const run = route.run(script, { user, cwd: checkout, home });
-			runs.push(run);
-			return {
-				exitCode: 0,
-				stdout: JSON.stringify({
-					status: run.exitCode,
-					stopped: null,
-					stdout: run.stdout + run.stderr,
-					start: 0,
-					nextStart: null,
-				}),
-				stderr: "",
+	it.each(cases)(
+		"$role, codeMode=$codeMode, lead=$lead",
+		async ({ role, codeMode, lead }) => {
+			owner = ownerFor(role);
+			mocks.level = 1;
+			mocks.sessionMachines = true;
+			const route = hardSetRoute([checkout]);
+			const runs: ReturnType<typeof route.run>[] = [];
+			mocks.vm = (command) => {
+				// The command runner's launch: the one VM command holding a login script.
+				const { user, home, command: launched } = vmCommandUser(command);
+				const script = launched.includes("tmux -L")
+					? routedScript(launched)
+					: null;
+				if (!script) return null;
+				const run = route.run(script, { user, cwd: checkout, home });
+				runs.push(run);
+				return {
+					exitCode: 0,
+					stdout: JSON.stringify({
+						status: run.exitCode,
+						stopped: null,
+						stdout: run.stdout + run.stderr,
+						start: 0,
+						nextStart: null,
+					}),
+					stderr: "",
+				};
 			};
-		};
-		let result: unknown;
-		let failure: unknown;
-		mocks.probe = async (input) => {
-			const bash = (input.tools as ToolSet).bash;
+			let result: unknown;
+			let failure: unknown;
+			mocks.probe = async (input) => {
+				const bash = (input.tools as ToolSet).bash;
+				try {
+					if (!bash?.execute) throw new Error("A reader is not offered bash.");
+					result = await bash.execute(
+						{ command: "pwd -P; echo routed" } as never,
+						{
+							toolCallId: `route-${role}-${codeMode}`,
+							messages: [],
+							abortSignal: new AbortController().signal,
+							context: {},
+						} as never,
+					);
+				} catch (error) {
+					failure = error;
+				}
+			};
 			try {
-				if (!bash?.execute) throw new Error("A reader is not offered bash.");
-				result = await bash.execute(
-					{ command: "pwd -P; echo routed" } as never,
-					{
-						toolCallId: `route-${role}-${codeMode}`,
-						messages: [],
-						abortSignal: new AbortController().signal,
-						context: {},
-					} as never,
-				);
-			} catch (error) {
-				failure = error;
+				await sentRequest({ codeMode, subagents: "on", lead });
+			} finally {
+				route.dispose();
 			}
-		};
-		try {
-			await sentRequest({ codeMode, subagents: "on" });
-		} finally {
-			route.dispose();
-		}
-		if (failure) throw failure;
-		expect(runs).toHaveLength(1);
-		const [run] = runs;
-		expect(run?.sudo[0]?.[1]).toBe(`${route.dir}/tb-route`);
-		const exec = run?.docker.find((args) => args.includes("-w")) ?? [];
-		expect(exec.slice(0, 3)).toEqual([
-			"exec",
-			"-u",
-			`${FAKE_READER_UID}:${FAKE_READER_UID}`,
-		]);
-		expect(run?.stdout).toBe(`${realpathSync(checkout)}\nrouted\n`);
-		expect(JSON.stringify(result)).toContain("routed");
-	});
+			if (failure) throw failure;
+			expect(runs).toHaveLength(1);
+			const [run] = runs;
+			expect(run?.sudo[0]?.[1]).toBe(`${route.dir}/tb-route`);
+			const exec = run?.docker.find((args) => args.includes("-w")) ?? [];
+			expect(exec.slice(0, 3)).toEqual([
+				"exec",
+				"-u",
+				`${FAKE_READER_UID}:${FAKE_READER_UID}`,
+			]);
+			expect(run?.stdout).toBe(`${realpathSync(checkout)}\nrouted\n`);
+			expect(JSON.stringify(result)).toContain("routed");
+		},
+	);
 });
