@@ -63,6 +63,13 @@ export function productionAnalyticsSettings(
 	return {
 		POSTHOG_PROJECT_TOKEN: env.POSTHOG_PROJECT_TOKEN as string,
 		POSTHOG_HOST: env.POSTHOG_HOST || "https://us.i.posthog.com",
+		// Account deletion removes the PostHog person (person:write key);
+		// without them it logs the person as a leftover.
+		...Object.fromEntries(
+			(["POSTHOG_PERSONAL_API_KEY", "POSTHOG_PROJECT_ID"] as const)
+				.filter((name) => env[name]?.trim())
+				.map((name) => [name, env[name] as string]),
+		),
 	};
 }
 
