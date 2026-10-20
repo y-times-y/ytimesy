@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import type { ToolSet } from "ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { evalWorkSuffix } from "#/domain/eval-prompt";
@@ -7,6 +8,12 @@ import {
 } from "#/domain/harness-variant";
 import { SessionItemId } from "#/domain/ids";
 import { subscriptionTurnRevision } from "#/domain/subscription-turn";
+import {
+	FAKE_READER_UID,
+	hardSetRoute,
+	routedScript,
+	vmCommandUser,
+} from "../../../tests/helpers/hard-set-route";
 import type { ApiTurn } from "../adapters/api-turns";
 import { withCodexSubscriptionEgress } from "../adapters/codex-subscription-transport";
 import type { WorkspaceMachines } from "../services/workspace-machines";
@@ -44,6 +51,14 @@ const mocks = vi.hoisted(() => ({
 	probe: null as
 		| null
 		| ((input: { tools: Record<string, unknown> }) => Promise<void>),
+	/** Use the real per-session machines (a reader's commands run as the reader user). */
+	sessionMachines: false,
+	/** Answers a VM command before the default fake does (null: not handled). */
+	vm: null as
+		| null
+		| ((
+				command: string,
+		  ) => { exitCode: number; stdout: string; stderr: string } | null),
 }));
 // The real subscription agent, with its input recorded on the way through.
 vi.mock("../services/codex-subscription-agent", async (importOriginal) => {
@@ -164,7 +179,8 @@ vi.mock("../services/conversation-recovery", () => ({
 vi.mock("../adapters/turn-verification", () => ({
 	readVerificationBaseline: vi.fn(async () => null),
 }));
-vi.mock("../services/api-command-scope", () => ({
+vi.mock("../services/api-command-scope", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../services/api-command-scope")>()),
 	stopApiTurnCommands: vi.fn(async () => undefined),
 }));
 vi.mock("../services/project-secrets", () => ({
@@ -178,29 +194,56 @@ vi.mock("../services/project-secrets", () => ({
 vi.mock("../services/api-turn-workspace", () => ({
 	// An empty local checkout stands in for the VM: the repository guidance
 	// scan runs for real against it; every other command succeeds silently.
+	// Its machines are the session's, as the real one binds them (a reader's
+	// run as the reader user when mocks.sessionMachines is set).
 	deferredApiTurnWorkspace: () => async () => ({
-		machines: {
-			exec: async (_vm: unknown, command: string) => {
-				if (!command.startsWith("python3 -c "))
-					return { exitCode: 0, stdout: "", stderr: "" };
-				const { spawnSync } = await import("node:child_process");
-				const run = spawnSync("sh", ["-c", command], { encoding: "utf8" });
-				return {
-					exitCode: run.status ?? 1,
-					stdout: run.stdout,
-					stderr: run.stderr,
-				};
-			},
-			readTextFile: async () => null,
-			writeTextFile: async () => undefined,
-		},
+		machines: (
+			await import("../services/session-workspace-machines")
+		).machinesForAgentSession(
+			{
+				exec: async (_vm: unknown, sent: string) => {
+					const answered = mocks.vm?.(sent);
+					if (answered) return answered;
+					// A reader's command: the same script, run as the reader user.
+					const encoded =
+						/^sudo -n -u ytimesy-reader -- .* bash -c "\$\(printf %s ([A-Za-z0-9+/=]+) \| base64 -d\)"$/s.exec(
+							sent,
+						)?.[1];
+					const command = encoded
+						? Buffer.from(encoded, "base64").toString("utf8")
+						: sent;
+					if (!command.startsWith("python3 -c "))
+						return { exitCode: 0, stdout: "", stderr: "" };
+					const { spawnSync } = await import("node:child_process");
+					const run = spawnSync("sh", ["-c", command], { encoding: "utf8" });
+					return {
+						exitCode: run.status ?? 1,
+						stdout: run.stdout,
+						stderr: run.stderr,
+					};
+				},
+				readTextFile: async () => null,
+				writeTextFile: async () => undefined,
+			} as unknown as WorkspaceMachines,
+			owner as never,
+		),
 		vm: "vm",
 		cwd: checkout,
 	}),
 }));
-vi.mock("../services/session-workspace-machines", () => ({
-	machinesForAgentSession: (machines: unknown) => machines,
-}));
+vi.mock("../services/session-workspace-machines", async (importOriginal) => {
+	const real =
+		await importOriginal<
+			typeof import("../services/session-workspace-machines")
+		>();
+	return {
+		...real,
+		machinesForAgentSession: (
+			...args: Parameters<typeof real.machinesForAgentSession>
+		) =>
+			mocks.sessionMachines ? real.machinesForAgentSession(...args) : args[0],
+	};
+});
 
 const ROOT_OWNER = {
 	id: "session",
@@ -288,6 +331,8 @@ beforeEach(() => {
 	owner = ROOT_OWNER;
 	mocks.level = 0;
 	mocks.probe = null;
+	mocks.sessionMachines = false;
+	mocks.vm = null;
 	mocks.saved.mockReset().mockResolvedValue(undefined);
 	mocks.finalize.mockReset().mockImplementation(async (_turn, state) => state);
 });
@@ -563,4 +608,85 @@ describe("role surfaces: every advertised tool works, no prompt names an absent 
 			}
 		},
 	);
+});
+
+/**
+ * Hard-set and Terminal-Bench tasks run every agent command in the task's
+ * container: a login hook on the VM routes it there (scripts/hard-set/
+ * environment.ts). A reader's commands run as the reader user on the VM, so
+ * the route is a different one (its sudo rule, its uid in the container).
+ * Here the advertised command tool runs through the real reader machines,
+ * and the login script that reaches the VM goes through the real hook and
+ * route (tests/helpers/hard-set-route.ts): it must execute, in the task
+ * directory, as the reader's uid.
+ */
+describe("role surfaces: a reader's advertised command tool executes on the container-routed path", () => {
+	const cases = (["researcher", "reviewer", "checker"] as const).flatMap(
+		(role) =>
+			(["off", "primary"] as const).map((codeMode) => ({ role, codeMode })),
+	);
+	it.each(cases)("$role, codeMode=$codeMode", async ({ role, codeMode }) => {
+		owner = ownerFor(role);
+		mocks.level = 1;
+		mocks.sessionMachines = true;
+		const route = hardSetRoute([checkout]);
+		const runs: ReturnType<typeof route.run>[] = [];
+		mocks.vm = (command) => {
+			// The command runner's launch: the one VM command holding a login script.
+			const { user, home, command: launched } = vmCommandUser(command);
+			const script = launched.includes("tmux -L")
+				? routedScript(launched)
+				: null;
+			if (!script) return null;
+			const run = route.run(script, { user, cwd: checkout, home });
+			runs.push(run);
+			return {
+				exitCode: 0,
+				stdout: JSON.stringify({
+					status: run.exitCode,
+					stopped: null,
+					stdout: run.stdout + run.stderr,
+					start: 0,
+					nextStart: null,
+				}),
+				stderr: "",
+			};
+		};
+		let result: unknown;
+		let failure: unknown;
+		mocks.probe = async (input) => {
+			const bash = (input.tools as ToolSet).bash;
+			try {
+				if (!bash?.execute) throw new Error("A reader is not offered bash.");
+				result = await bash.execute(
+					{ command: "pwd -P; echo routed" } as never,
+					{
+						toolCallId: `route-${role}-${codeMode}`,
+						messages: [],
+						abortSignal: new AbortController().signal,
+						context: {},
+					} as never,
+				);
+			} catch (error) {
+				failure = error;
+			}
+		};
+		try {
+			await sentRequest({ codeMode, subagents: "on" });
+		} finally {
+			route.dispose();
+		}
+		if (failure) throw failure;
+		expect(runs).toHaveLength(1);
+		const [run] = runs;
+		expect(run?.sudo[0]?.[1]).toBe(`${route.dir}/tb-route`);
+		const exec = run?.docker.find((args) => args.includes("-w")) ?? [];
+		expect(exec.slice(0, 3)).toEqual([
+			"exec",
+			"-u",
+			`${FAKE_READER_UID}:${FAKE_READER_UID}`,
+		]);
+		expect(run?.stdout).toBe(`${realpathSync(checkout)}\nrouted\n`);
+		expect(JSON.stringify(result)).toContain("routed");
+	});
 });
