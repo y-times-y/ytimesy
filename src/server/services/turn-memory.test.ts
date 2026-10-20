@@ -659,3 +659,39 @@ describe("who writes memory (harness variant memoryWriter)", () => {
 		]);
 	});
 });
+
+describe("the VM's memory token", () => {
+	it("is offered for redaction once on the VM, then removed and revoked when the turn ends", async () => {
+		const repo = {
+			...fakeRepo({}),
+			credentials: vi.fn(async (_ttl: number) => ({
+				remote: "https://git/memory.git",
+				token: "art_vm_token_1",
+			})),
+			revokeCredential: vi.fn(async () => {}),
+		};
+		const memory = await turnMemory(
+			{
+				id: "11111111-1111-4111-8111-111111111111",
+				userId: "u1",
+				projectId: null,
+			},
+			{ repo, embed: null, appUrl: "https://ytimesy.test", projectName: null },
+		);
+		if (!memory) throw new Error("memory should be on");
+		const exec = vi.fn(async (_vm: string, _command: string) => ({
+			exitCode: 0,
+			stdout: "",
+			stderr: "",
+		}));
+		const vm = { machines: { exec }, vm: "vm-1" } as never;
+		await memory.prepareVm(vm);
+		// Shorter than the old hour: one durable step plus a few minutes.
+		expect(repo.credentials.mock.calls[0][0]).toBeLessThanOrEqual(35 * 60);
+		expect(memory.vmTokens()).toEqual(["art_vm_token_1"]);
+		await memory.releaseVm(vm);
+		expect(exec.mock.calls.at(-1)?.[1]).toContain("extraheader");
+		expect(repo.revokeCredential).toHaveBeenCalledWith("art_vm_token_1");
+		expect(memory.vmTokens()).toEqual([]);
+	});
+});

@@ -42,6 +42,7 @@ import {
 	checkpointStorageConfigured,
 	removeChatObjects,
 } from "../adapters/checkpoints/storage";
+import { purgeConversationState } from "../adapters/realtime-delivery";
 import { restoreSessionWorkspace } from "./session-checkpoint";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -410,6 +411,8 @@ export async function deleteAgentSessionMachine(
 	const removed = [session, ...children];
 	if (checkpointStorageConfigured())
 		for (const chat of removed) await removeChatObjects(input.userId, chat.id);
+	for (const chat of removed)
+		await purgeConversationState(input.userId, chat.id);
 	const retained = await chatCleanupTargets(
 		input.userId,
 		removed.map((chat) => chat.id),

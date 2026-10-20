@@ -704,6 +704,13 @@ fi
 echo ready`;
 }
 
+/**
+ * Removes the memory clone's token header from ~/memory/.git/config and
+ * proves it is gone. Run when a turn ends and before any snapshot, so a
+ * retained or reused image never carries a live write token.
+ */
+export const SCRUB_MEMORY_CREDENTIAL = `f="$HOME/${MEMORY_HOME_FOLDER}/.git/config"; if [ -f "$f" ]; then git config --file "$f" --get-regexp '^http\\..*\\.extraheader$' | cut -d' ' -f1 | while read -r key; do git config --file "$f" --unset-all "$key"; done; ! grep -qi extraheader "$f"; fi`;
+
 // ---- dreaming ------------------------------------------------------------------
 
 export type DreamChat = {

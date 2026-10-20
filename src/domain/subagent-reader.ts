@@ -17,6 +17,19 @@ export function readerScratchDirectory(sessionId: string) {
 }
 
 /**
+ * Root shell that refuses the reader every TCP connection over loopback: the
+ * builder's Chrome DevTools (9222), debug adapters, desktop viewer and dev
+ * servers listen there without their own credentials. Idempotent; a VM
+ * without iptables (or without the owner match) is reported and left as is,
+ * since the reader's tools never need loopback TCP.
+ */
+export const READER_LOOPBACK_BLOCK_SCRIPT = `for table in iptables ip6tables; do
+  command -v "$table" >/dev/null 2>&1 || { echo "ytimesy: $table unavailable; reader loopback TCP is not blocked" >&2; continue; }
+  rule="OUTPUT -o lo -p tcp -m owner --uid-owner ${READER_LINUX_USER} -j REJECT --reject-with tcp-reset"
+  "$table" -w -C $rule 2>/dev/null || "$table" -w -I $rule || echo "ytimesy: $table refused the reader loopback rule" >&2
+done`;
+
+/**
  * Root shell that creates the reader user (idempotent). Baked into the tools
  * snapshot (scripts/build-tools-snapshot.ts); the runtime runs it again with
  * `sudo -n` on VMs booted from an older image.
@@ -67,6 +80,7 @@ export function readerPreparationScript(input: {
 		"set -e",
 		readerUserSetupCommand(),
 		`sudo -n install -d -o ${READER_LINUX_USER} -g ${READER_LINUX_USER} -m 0700 ${scratch}`,
+		`sudo -n bash -c "$(printf %s ${Buffer.from(READER_LOOPBACK_BLOCK_SCRIPT, "utf8").toString("base64")} | base64 -d)"`,
 		...SHARED_RUNTIME_PARENTS.map(
 			(directory) =>
 				`sudo -n install -d -m 1777 ${directory} && sudo -n chmod 1777 ${directory}`,

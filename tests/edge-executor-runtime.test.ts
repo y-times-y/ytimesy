@@ -5,6 +5,7 @@ import { signDeliveryRequest } from "../src/domain/delivery-auth";
 
 let worker: Awaited<ReturnType<typeof unstable_dev>>;
 const secret = "local-only-edge-test-secret".repeat(3);
+const ingressSecret = "local-only-repair-ingress-secret".repeat(2);
 
 beforeAll(async () => {
 	worker = await unstable_dev(".ytimesy/edge-executor.mjs", {
@@ -16,6 +17,7 @@ beforeAll(async () => {
 			BACKGROUND_WORKFLOW_SECRET: secret,
 			BACKGROUND_EXECUTION_ENABLED: "1",
 			YTIMESY_REALTIME_SECRET: secret,
+			PR_REPAIR_INGRESS_SECRET: ingressSecret,
 		},
 		logLevel: "error",
 		experimental: { disableExperimentalWarning: true },
@@ -92,10 +94,11 @@ it("loads the real harness bundle in workerd and rejects unsigned calls before d
 	).toBe(401);
 });
 
-it("accepts only signed repair intake and keeps it disabled until enabled", async () => {
+it("accepts only repair intake signed with the ingress key and keeps it disabled until enabled", async () => {
 	const url = "http://localhost/pr-repair-event";
 	const body = "{}";
 	expect((await worker.fetch(url, { method: "POST", body })).status).toBe(401);
+	// The model workflow key no longer opens repair intake.
 	expect(
 		(
 			await worker.fetch(url, {
@@ -104,7 +107,30 @@ it("accepts only signed repair intake and keeps it disabled until enabled", asyn
 				headers: await signDeliveryRequest(secret, "POST", url, body),
 			})
 		).status,
+	).toBe(401);
+	expect(
+		(
+			await worker.fetch(url, {
+				method: "POST",
+				body,
+				headers: await signDeliveryRequest(ingressSecret, "POST", url, body),
+			})
+		).status,
 	).toBe(503);
+});
+
+it("does not accept the repair ingress key for model steps", async () => {
+	const url = "http://localhost/model-step";
+	const body = "{}";
+	expect(
+		(
+			await worker.fetch(url, {
+				method: "POST",
+				body,
+				headers: await signDeliveryRequest(ingressSecret, "POST", url, body),
+			})
+		).status,
+	).toBe(401);
 });
 
 it("does not admit a chat turn while development cutover is disabled", async () => {
@@ -191,4 +217,39 @@ it("owns realtime snapshots and cancellation in the model chat DO without access
 			})
 		).status,
 	).toBe(404);
+});
+
+it("purges a chat object's stored state on a signed request, idempotently", async () => {
+	const sessionId = randomUUID();
+	const snapshotUrl = "http://localhost/snapshot";
+	const body = JSON.stringify({
+		userId: "edge-carol",
+		sessionId,
+		revision: "1",
+		progress: { sessionId, turnStatus: "idle", items: [] },
+	});
+	expect(
+		(
+			await worker.fetch(snapshotUrl, {
+				method: "POST",
+				body,
+				headers: await signDeliveryRequest(secret, "POST", snapshotUrl, body),
+			})
+		).status,
+	).toBe(204);
+	const purgeUrl = "http://localhost/purge";
+	const purge = JSON.stringify({ userId: "edge-carol", sessionId });
+	expect(
+		(await worker.fetch(purgeUrl, { method: "POST", body: purge })).status,
+	).toBe(401);
+	for (let attempt = 0; attempt < 2; attempt++)
+		expect(
+			(
+				await worker.fetch(purgeUrl, {
+					method: "POST",
+					body: purge,
+					headers: await signDeliveryRequest(secret, "POST", purgeUrl, purge),
+				})
+			).status,
+		).toBe(204);
 });

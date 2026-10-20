@@ -100,3 +100,24 @@ export async function authorizeGitProxy(grant: GitProxyGrant) {
 		throw new GitProxyFailure("installation-token");
 	});
 }
+
+/** Spends a push grant once; false when it was already used. */
+export async function claimGitProxyGrant(nonce: string, expiresAt: number) {
+	if (!/^[a-f0-9]{32}$/.test(nonce) || !Number.isFinite(expiresAt))
+		return false;
+	const claimed = await database()
+		.query(
+			`with expired as (
+			   delete from git_proxy_grant_claim where expires_at < now() - interval '5 minutes'
+			 )
+			 insert into git_proxy_grant_claim(nonce, expires_at)
+			 values ($1, to_timestamp($2::float8 / 1000))
+			 on conflict (nonce) do nothing
+			 returning nonce`,
+			[nonce, expiresAt],
+		)
+		.catch(() => {
+			throw new GitProxyFailure("grant-claim");
+		});
+	return claimed.rows.length === 1;
+}

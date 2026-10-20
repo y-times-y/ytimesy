@@ -3,14 +3,15 @@ import { redactSecretValues } from "#/domain/project-secret";
 
 /**
  * Replaces runtime secret values in every tool result and error before the
- * model, lifecycle hooks or the chat see them.
+ * model, lifecycle hooks or the chat see them. `secrets` is read on each
+ * call: a turn adds values (the memory clone's token) after its tools exist.
  */
 export function withRedactedResults(
 	tools: ToolSet,
 	secrets: readonly string[],
 ): ToolSet {
-	if (!secrets.length) return tools;
-	const redact = <T>(value: T) => redactSecretValues(value, secrets);
+	const redact = <T>(value: T) =>
+		secrets.length ? redactSecretValues(value, secrets) : value;
 	return Object.fromEntries(
 		Object.entries(tools).map(([name, definition]) => {
 			const execute = definition.execute;

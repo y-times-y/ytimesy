@@ -44,12 +44,15 @@ credits.
 ## Accounting
 
 Use integer micro-USD (one million units per dollar), never floating point dollar
-balances. A UTC calendar month has a default user allowance, an optional persistent
-monthly override, and one-time grants scoped to that month. Grants require explicit
-administrator authority and a reason; administrators consume allowance too.
+balances. Each user has a rolling 5-hour and a rolling 7-day limit (deployment
+defaults, optional per-user overrides set by an administrator with a reason;
+administrators consume usage too). Settled usage counts at its settlement time and
+open holds count now. The former calendar-month allowance and its grants are kept
+as history only.
 
 Before externally chargeable work, reserve its upper-bound cost atomically against
-the user's allowance, the monthly fleet limit, and the lifetime fleet limit. The
+the monthly fleet limit and the lifetime fleet limit; a new turn or VM start is
+refused while a user window is exhausted. The
 lifetime limit is necessary when funding free usage from a finite promotional
 credit balance. User grants cannot change either fleet limit.
 
@@ -69,7 +72,7 @@ must perform explicit authorization.
 
 Required configuration for the ledger:
 
-- `YTIMESY_USER_MONTHLY_MICRO_USD`: default monthly user allowance.
+- `YTIMESY_USER_5H_MICRO_USD` and `YTIMESY_USER_WEEKLY_MICRO_USD`: each user's rolling 5-hour and 7-day limits (deploy defaults $5 and $25). `infrastructure_usage_policy.five_hour_micro_usd` / `weekly_micro_usd` override them per user. An exhausted window refuses new turns and VM starts (unless one of the user's turns is still running) and names when it reopens; work already running always finishes.
 - `YTIMESY_FLEET_MONTHLY_MICRO_USD`: monthly fleet execution ceiling.
 - `YTIMESY_FLEET_LIFETIME_MICRO_USD`: aggregate execution ceiling over all months.
 - `YTIMESY_ADMIN_USER_IDS`: comma-separated exact Better Auth user IDs. Empty grants
