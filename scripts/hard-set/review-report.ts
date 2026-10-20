@@ -28,6 +28,10 @@ export type HardSetReviewRound = {
 	truncated: boolean;
 	findings: number;
 	findingTexts: string[];
+	/** The tests the checker wrote and ran (absent on records before 2026-10-19). */
+	checkerTests?: { name: string; passed: boolean; command: string | null }[];
+	/** It said pass without a test of its own (parsed as unsure). */
+	untested?: boolean;
 	/** fix, or why the loop stopped after this round. */
 	decision: string | null;
 	checkerTokens: number;
@@ -81,6 +85,14 @@ const reviewOn = (variant: string | undefined) =>
 const grade = (passed: boolean | null) =>
 	passed === null ? "?" : passed ? "PASS" : "fail";
 
+/** The checker's own tests, as ` [3 tests, 1 failed]` (empty on older records). */
+function checkerTestsLabel(round: HardSetReviewRound) {
+	if (!round.checkerTests) return "";
+	const failed = round.checkerTests.filter((test) => !test.passed).length;
+	const count = round.checkerTests.length;
+	return ` [${count} test${count === 1 ? "" : "s"}${failed ? `, ${failed} failed` : ""}${round.untested ? ", untested pass" : ""}]`;
+}
+
 /** Report lines for the runs that had a review loop (empty when none). */
 export function reviewLoopReport(records: readonly RunWithReview[]) {
 	const runs = records.filter((record) => record.reviewLoop);
@@ -113,7 +125,7 @@ export function reviewLoopReport(records: readonly RunWithReview[]) {
 		const rounds = loop.rounds
 			.map(
 				(round) =>
-					`R${round.n} ${round.verdict ?? (round.timedOut ? "no-verdict" : "-")}${round.findings ? `(${round.findings})` : ""}->${grade(round.graderPassed)} ${round.checkMinutes.toFixed(1)}m${round.decision === "fix" ? ` fix ${round.fixMinutes.toFixed(1)}m fixed ${round.fixed} rejected ${round.rejected}${round.unanswered ? ` unanswered ${round.unanswered}` : ""}` : ""}`,
+					`R${round.n} ${round.verdict ?? (round.timedOut ? "no-verdict" : "-")}${round.findings ? `(${round.findings})` : ""}${checkerTestsLabel(round)}->${grade(round.graderPassed)} ${round.checkMinutes.toFixed(1)}m${round.decision === "fix" ? ` fix ${round.fixMinutes.toFixed(1)}m fixed ${round.fixed} rejected ${round.rejected}${round.unanswered ? ` unanswered ${round.unanswered}` : ""}` : ""}`,
 			)
 			.join(", ");
 		lines.push(

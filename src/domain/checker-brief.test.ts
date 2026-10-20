@@ -5,6 +5,7 @@ import {
 	checkerWrapUpLeadMs,
 	independentReviewBrief,
 	parseReviewVerdict,
+	UNTESTED_PASS_NOTE,
 } from "./checker-brief";
 
 const input = {
@@ -28,10 +29,41 @@ describe("independentReviewBrief", () => {
 			"1. Requirements.",
 			"2. Assumptions.",
 			"3. Plausibility.",
-			"4. Exercise it as an outside grader would.",
+			"4. Test it yourself.",
 		])
 			expect(brief).toContain(part);
 		expect(brief).toContain('"verdict": "pass" | "fail" | "unsure"');
+	});
+
+	it("requires new tests of its own: existing tests are necessary, not sufficient", () => {
+		const brief = independentReviewBrief(input);
+		expect(brief).toMatch(
+			/existing tests passed for the builder too and are not enough/,
+		);
+		expect(brief).toContain(
+			"For each requirement and each risky change in the diff, write at least one new test or executable probe of your own under /tmp/check/tests",
+		);
+		expect(brief).toContain("cases the existing tests do not cover");
+		expect(brief).toContain(
+			"Run your tests against your copy, then the existing tests",
+		);
+		// Each test is reported: what it checks, the command, the result.
+		expect(brief).toContain(
+			'"tests": [{ "name": "<what it checks>", "command": "<one command that runs it, absolute paths>", "passed": true, "output": "<the lines that show the result>" }]',
+		);
+		// The verdict rules.
+		expect(brief).toContain(
+			"pass only when your new tests and the existing checks all pass",
+		);
+		expect(brief).toContain(
+			"a pass without new tests of your own counts as unsure",
+		);
+		expect(brief).toContain("with the failing test as its evidence");
+		expect(brief).toContain(
+			"unsure only when you genuinely could not run what matters; say why in notes",
+		);
+		// Generic: nothing about a task or a domain beyond the request itself.
+		expect(brief).not.toMatch(/mvcc|lsm|compaction|flush/i);
 	});
 
 	it("says when no changed files were recorded and caps long lists", () => {
@@ -98,6 +130,7 @@ describe("parseReviewVerdict", () => {
 				JSON.stringify({
 					verdict: "pass",
 					failures: [],
+					tests: [{ name: "empty input", command: "c", passed: true }],
 					requirements: [{ requirement: "r", met: true, evidence: "e" }],
 				}),
 			).verdict,
@@ -106,6 +139,88 @@ describe("parseReviewVerdict", () => {
 		expect(missing.verdict).toBe("unsure");
 		expect(missing.parsed).toBe(false);
 		expect(missing.requirements).toEqual([]);
+	});
+});
+
+describe("the checker's own tests", () => {
+	it("reads each test: what it checks, its command, its result and output", () => {
+		const verdict = parseReviewVerdict(
+			JSON.stringify({
+				verdict: "fail",
+				failures: ["total exact: off by one (test: sum of inputs)"],
+				tests: [
+					{
+						name: "sum of inputs",
+						command: "python3 /tmp/check/tests/sum.py /tmp/check/work",
+						passed: false,
+						output: "expected 10\ngot 9",
+					},
+					{ checks: "empty input", command: "c2", result: "pass" },
+					{ name: "no result" },
+				],
+			}),
+		);
+		expect(verdict.tests).toEqual([
+			{
+				name: "sum of inputs",
+				passed: false,
+				command: "python3 /tmp/check/tests/sum.py /tmp/check/work",
+				output: "expected 10\ngot 9",
+			},
+			{ name: "empty input", passed: true, command: "c2" },
+		]);
+		expect(verdict.untested).toBeUndefined();
+	});
+
+	it("counts a pass without any new test as unsure, and flags it", () => {
+		const verdict = parseReviewVerdict(
+			JSON.stringify({
+				verdict: "pass",
+				failures: [],
+				requirements: [
+					{ requirement: "r", met: true, evidence: "make test passed" },
+				],
+				notes: "existing tests pass",
+			}),
+		);
+		expect(verdict.verdict).toBe("unsure");
+		expect(verdict.untested).toBe(true);
+		expect(verdict.notes).toBe(`${UNTESTED_PASS_NOTE} existing tests pass`);
+		// A fail or unsure without tests stays as it is.
+		for (const kind of ["fail", "unsure"] as const) {
+			const other = parseReviewVerdict(
+				JSON.stringify({ verdict: kind, failures: ["x: y"] }),
+			);
+			expect(other.verdict).toBe(kind);
+			expect(other.untested).toBeUndefined();
+		}
+	});
+
+	it("never passes when one of its own tests failed, and reports it as a failure", () => {
+		const verdict = parseReviewVerdict(
+			JSON.stringify({
+				verdict: "pass",
+				tests: [
+					{ name: "a", command: "c", passed: true },
+					{ name: "b", command: "d", passed: false, output: "boom" },
+				],
+			}),
+		);
+		expect(verdict.verdict).toBe("unsure");
+		expect(verdict.failures).toEqual(["b: boom"]);
+	});
+
+	it("still reads an older answer without tests (legacy fields)", () => {
+		const verdict = parseReviewVerdict(
+			JSON.stringify({
+				verdict: "fail",
+				failures: ["x"],
+				tests: [{ name: "n", passed: false, evidence: "e" }],
+			}),
+		);
+		expect(verdict.tests).toEqual([
+			{ name: "n", passed: false, evidence: "e" },
+		]);
 	});
 });
 
