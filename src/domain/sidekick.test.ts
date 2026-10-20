@@ -3,18 +3,24 @@ import { SessionItemId } from "./ids";
 import type { SessionItem } from "./session-item";
 import {
 	beginSidekickRound,
+	currentSidekickRound,
 	endSidekickRound,
 	fusionMetricsLine,
 	fusionTurnMetrics,
+	HARNESS_EXPLORE_HEADING,
+	harnessExplorationBrief,
 	isActiveSidekick,
 	latestUserRequestId,
 	newSidekickState,
+	requestExplored,
 	retireSidekickState,
+	SIDEKICK_EXPLORE_NOTE,
 	sidekickIdleSince,
 	sidekickIdleTtlMinutes,
-	sidekickPatchLabel,
 	sidekickRoundLabel,
 	sidekickRoundMessage,
+	sidekickRoundOpen,
+	sidekickRoundRef,
 	sidekickRoundsLeft,
 	subagentBudgetCheck,
 } from "./sidekick";
@@ -49,18 +55,23 @@ describe("sidekick rounds", () => {
 				now: at(n * 10),
 				steps: n * 20,
 				tokens: n * 1000,
-				sync: n % 2 ? "carried" : "clean",
+				base: `base-${n}`,
 			});
 			expect(state).toMatchObject({
 				round: n,
 				roundStartSteps: n * 20,
 				roundStartedAt: at(n * 10),
 			});
+			expect(sidekickRoundOpen(state)).toBe(true);
+			expect(currentSidekickRound(state)?.base).toBe(`base-${n}`);
 			state = endSidekickRound(state, {
 				now: at(n * 10 + 3),
 				outcome: "finished",
 				patchFiles: 1,
+				end: `end-${n}`,
 			});
+			expect(sidekickRoundOpen(state)).toBe(false);
+			expect(currentSidekickRound(state)?.end).toBe(`end-${n}`);
 		}
 		expect(state.rounds).toHaveLength(6);
 		expect(sidekickRoundsLeft(state)).toBe(0);
@@ -94,7 +105,6 @@ describe("sidekick rounds", () => {
 			now: at(40),
 			steps: 70,
 			tokens: 600_000,
-			sync: "clean",
 		});
 		const check = subagentBudgetCheck(
 			{ ...budget, sidekick: state, stopAtStep: 75 },
@@ -111,18 +121,74 @@ describe("sidekick rounds", () => {
 		expect(check.reasonPrefix).toBe("round 2, ");
 	});
 
-	it("names later rounds' patches and tells the sidekick how its checkout changed", () => {
-		expect(sidekickPatchLabel("1", 1)).toBe("1");
-		expect(sidekickPatchLabel("1", 3)).toBe("1.r3");
-		const conflict = sidekickRoundMessage({
+	it("names a round's snapshots and tells the sidekick it works in the lead's checkout", () => {
+		expect(sidekickRoundRef("1", 3, "start")).toBe(
+			"refs/ytimesy/sidekick/1/round-3-start",
+		);
+		const message = sidekickRoundMessage({
 			round: 3,
 			maxRounds: 6,
-			sync: "conflict",
 			message: "  Fix the parser. ",
 		});
-		expect(conflict).toMatch(/^Round 3\/6 from your lead\./);
-		expect(conflict).toContain("refs/ytimesy/sidekick/round-2");
-		expect(conflict.endsWith("\n\nFix the parser.")).toBe(true);
+		expect(message).toMatch(/^Round 3\/6 from your lead\./);
+		expect(message).toContain("You work in the lead's checkout as it is now");
+		expect(message.endsWith("\n\nFix the parser.")).toBe(true);
+		expect(
+			sidekickRoundMessage({
+				round: 3,
+				maxRounds: 6,
+				message: "Look around.",
+				kind: "explore",
+			}).endsWith(SIDEKICK_EXPLORE_NOTE),
+		).toBe(true);
+	});
+
+	it("writes the harness's exploration brief from the user's request", () => {
+		const brief = harnessExplorationBrief("  Add a --json flag.  ");
+		expect(brief.startsWith(HARNESS_EXPLORE_HEADING)).toBe(true);
+		expect(brief).toContain("<request>\nAdd a --json flag.\n</request>");
+		expect(brief).toContain("the key snippets with their line ranges");
+		expect(brief.endsWith(SIDEKICK_EXPLORE_NOTE)).toBe(true);
+		const long = harnessExplorationBrief("x".repeat(9_000));
+		expect(long).toContain("[request truncated]");
+		expect(long.length).toBeLessThan(6_500);
+	});
+
+	it("knows whether a request has its exploration round", () => {
+		const explored = newSidekickState({ tokens: 1_000_000 }, at(0), {
+			requestKey: "u1",
+			kind: "explore",
+		});
+		expect(requestExplored([explored], "u1")).toBe(true);
+		expect(requestExplored([explored], "u2")).toBe(false);
+		const built = newSidekickState({ tokens: 1_000_000 }, at(0), {
+			requestKey: "u1",
+		});
+		expect(requestExplored([built], "u1")).toBe(false);
+		// The next request's build round on the same sidekick is no exploration of it.
+		const next = beginSidekickRound(
+			endSidekickRound(explored, {
+				now: at(1),
+				outcome: "finished",
+				patchFiles: 0,
+			}),
+			{ now: at(2), steps: 0, tokens: 0, requestKey: "u2" },
+		);
+		expect(requestExplored([next], "u2")).toBe(false);
+		expect(
+			requestExplored(
+				[
+					beginSidekickRound(next, {
+						now: at(3),
+						steps: 0,
+						tokens: 0,
+						requestKey: "u2",
+						kind: "explore",
+					}),
+				],
+				"u2",
+			),
+		).toBe(true);
 	});
 });
 
@@ -140,7 +206,7 @@ describe("sidekick lifetime across the chat's requests", () => {
 					outcome: "finished",
 					patchFiles: 1,
 				}),
-				{ now: at(n), steps: 0, tokens: 0, sync: "clean", requestKey: "u1" },
+				{ now: at(n), steps: 0, tokens: 0, requestKey: "u1" },
 			);
 		expect(sidekickRoundsLeft(state, "u1")).toBe(0);
 		// The user's next message: a fresh count for the same sidekick.
@@ -154,7 +220,7 @@ describe("sidekick lifetime across the chat's requests", () => {
 		expect(state.retired?.reason).toBe("all rounds used");
 		const kept = beginSidekickRound(
 			{ ...state, retired: undefined },
-			{ now: at(60), steps: 0, tokens: 0, sync: "clean", requestKey: "u2" },
+			{ now: at(60), steps: 0, tokens: 0, requestKey: "u2" },
 		);
 		expect(kept).toMatchObject({ round: 7, turnFirstRound: 7, turns: 2 });
 		expect(sidekickRoundLabel(kept)).toBe("round 7 (1/6 this turn)");
@@ -240,7 +306,7 @@ describe("fusion turn metrics", () => {
 				outcome: "finished",
 				patchFiles: 2,
 			}),
-			{ now: at(10), steps: 30, tokens: 10_000, sync: "carried" },
+			{ now: at(10), steps: 30, tokens: 10_000 },
 		),
 		{
 			now: at(14),
@@ -291,7 +357,7 @@ describe("fusion turn metrics", () => {
 		},
 	];
 
-	it("counts handoffs, rounds, lead edits, applied patches, syncs, spend and time", () => {
+	it("counts handoffs, rounds, lead edits, applied patches, spend and time", () => {
 		const metrics = fusionTurnMetrics({ rootId: "root", sessions });
 		expect(metrics).toMatchObject({
 			sidekicks: 1,
@@ -301,7 +367,6 @@ describe("fusion turn metrics", () => {
 			writersStarted: 1,
 			leadEdits: 3,
 			patchesApplied: 2,
-			syncs: { unchanged: 0, clean: 0, carried: 1, conflict: 0 },
 			sidekickBusyMinutes: 10,
 			explorationHandoffs: 0,
 			leadReads: 1,

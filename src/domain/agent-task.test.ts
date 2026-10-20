@@ -149,6 +149,17 @@ describe("validateAgentTaskPlan", () => {
 				dependsOnSessionId: null,
 			}),
 		).toBe("Shared-machine tasks must be read-only.");
+		// Lead mode fusion's sidekick is the one shared writer.
+		expect(
+			validateAgentTaskPlan({
+				prompt: "Implement the change",
+				placement: "shared",
+				access: "read_write",
+				execution: "parallel",
+				dependsOnSessionId: null,
+				sharedWriter: true,
+			}),
+		).toBeNull();
 	});
 
 	it("requires an explicit predecessor only for stacked work", () => {

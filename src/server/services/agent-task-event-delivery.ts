@@ -61,7 +61,7 @@ async function deliverAgentTaskEvent(
 			machines,
 			parent,
 			event.id,
-			`${childTaskEventQueueText(event.id)}\n${subagentReportMessage(event)}`,
+			subagentReportNotification(event),
 		);
 		return;
 	}
@@ -73,6 +73,13 @@ async function deliverAgentTaskEvent(
 	);
 }
 
+/** A notification as the parent's mailbox holds it (long ones are cut). */
+export function boundedNotificationText(runtimeText: string) {
+	return runtimeText.length > 11000
+		? `${runtimeText.slice(0, 10500)}\n[Notification excerpt truncated. Read the child's full result with read_task before reviewing.]`
+		: runtimeText;
+}
+
 /** Active turns consume the existing mailbox at safe points; idle turns wake normally. */
 export async function deliverParentTaskNotification(
 	machines: WorkspaceMachines,
@@ -80,10 +87,7 @@ export async function deliverParentTaskNotification(
 	notificationId: string,
 	runtimeText: string,
 ) {
-	runtimeText =
-		runtimeText.length > 11000
-			? `${runtimeText.slice(0, 10500)}\n[Notification excerpt truncated. Read the child's full result with read_task before reviewing.]`
-			: runtimeText;
+	runtimeText = boundedNotificationText(runtimeText);
 	const scopedMachines = machinesForAgentSession(machines, parent);
 	if (await serverPeerMessageAccepted(parent.id, notificationId)) return;
 	if (parent.turnStatus === "running") {
@@ -122,6 +126,11 @@ export async function deliverParentTaskNotification(
 	}
 	await stageServerPeerMessage(parent.id, notificationId, runtimeText);
 	await acknowledgeServerPeerMessage(parent.id, notificationId);
+}
+
+/** The queued message that carries a subagent's report to its parent. */
+export function subagentReportNotification(event: AgentTaskEvent) {
+	return `${childTaskEventQueueText(event.id)}\n${subagentReportMessage(event)}`;
 }
 
 /** A subagent's report as its parent reads it; the report is a claim to verify. */

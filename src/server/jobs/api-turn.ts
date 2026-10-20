@@ -151,6 +151,12 @@ import {
 	loadedDeferredTools,
 	PLAN_ONLY_TOOLS,
 } from "../services/deferred-tools";
+import {
+	type FusionLeadGateInput,
+	fusionLeadGate,
+	fusionRoundOpen,
+	withSidekickWriteGuard,
+} from "../services/fusion-lead";
 import { harnessLifecycleHooks } from "../services/harness-lifecycle-hooks";
 import { runAgentTaskTool } from "../services/harness-workspace-session";
 import { journaledToolOperation } from "../services/journaled-tool-operation";
@@ -197,7 +203,10 @@ import {
 	SubagentBudgetExhausted,
 	subagentReport,
 } from "../services/subagent-runtime";
-import { subagentTools } from "../services/subagent-tools";
+import {
+	type SubagentToolContext,
+	subagentTools,
+} from "../services/subagent-tools";
 import { analyticsAgentRole } from "../services/turn-analytics";
 import { commitCompletedSessionTurn } from "../services/turn-commit";
 import { forgetTurnMemo, turnMemo } from "../services/turn-memo";
@@ -333,6 +342,8 @@ async function runApiTurnAttempt(
 	let fusionLead: { userId: string; id: string } | undefined;
 	/** Lead mode fusion: roleModels.writerEscalation, named in a sidekick's stuck notice. */
 	let escalationModel: string | undefined;
+	/** Lead mode fusion: a sidekick round started in this step (the lead stops writing). */
+	let sidekickBusy = false;
 	let commandStop: Promise<void> | undefined;
 	const stopCommands = () => {
 		if (execution)
@@ -618,7 +629,9 @@ async function runApiTurnAttempt(
 				return memoryCloned;
 			});
 			await attachmentsWritten;
-			if (writable) {
+			// A shared writer (lead mode fusion's sidekick) works in its lead's
+			// checkout, whose code points are the lead's.
+			if (writable && owner.taskPlacement !== "shared") {
 				const prompt = [...items]
 					.reverse()
 					.find((item) => item.kind === "userMessage");
@@ -852,43 +865,69 @@ async function runApiTurnAttempt(
 			);
 		// The builder and subagents above the deepest level may delegate; a
 		// checker reviews the deliverable itself, on the smallest surface.
-		const delegation: ToolSet =
+		const delegates =
 			subagentsOn &&
-			surface.lean &&
+			!!surface.lean &&
 			(owner.agentRole
 				? owner.agentRole !== "checker" &&
 					// A sidekick does the work itself (lead mode fusion).
 					!isActiveSidekick(owner) &&
 					subagentLevel < MAX_SUBAGENT_LEVEL
-				: !owner.parentSessionId)
-				? withRedactedResults(
-						subagentTools({
-							machines: unscopedMachines,
-							parent: owner as AgentSessionRecord,
-							workspace,
-							signal: abort.signal,
-							waitDeadlineAt: step?.waitDeadlineAt,
-							roleModels: variant.roleModels,
-							lead: variant.lead,
-						}),
-						projectSecrets?.redact ?? [],
-					)
-				: {};
+				: !owner.parentSessionId);
+		const subagentContext: SubagentToolContext = {
+			machines: unscopedMachines,
+			parent: owner as AgentSessionRecord,
+			workspace,
+			signal: abort.signal,
+			waitDeadlineAt: step?.waitDeadlineAt,
+			roleModels: variant.roleModels,
+			lead: variant.lead,
+			// Lead mode fusion: one writer at a time in the shared checkout.
+			onSidekickRound: () => {
+				sidekickBusy = true;
+			},
+		};
+		const delegation: ToolSet = delegates
+			? withRedactedResults(
+					subagentTools(subagentContext),
+					projectSecrets?.redact ?? [],
+				)
+			: {};
+		// Lead mode fusion (src/server/services/fusion-lead.ts): the harness
+		// starts the request's exploration, and the lead waits while its
+		// sidekick works in the shared checkout.
+		const leadGate =
+			fusionLead && delegates
+				? (waitUntil: number) =>
+						fusionLeadGate({
+							context: subagentContext,
+							items,
+							explore: fusionPairFor(owner.listedModelId, variant.roleModels)
+								.sidekickExplores,
+							waitUntil,
+						} satisfies FusionLeadGateInput).then((ready) => {
+							if (ready === "ready") sidekickBusy = false;
+							return ready;
+						})
+				: null;
 		// Code mode is a development harness variant on a lean surface only
 		// (docs/parallel-evals.md). primary: run_code is the main tool; a large
 		// MCP setup's search and call tools are callable only from inside it.
 		const codeMode =
 			surface.lean && variant.codeMode !== "off" ? variant.codeMode : null;
+		const ownTools = turnTools({
+			surfaceTools,
+			mcp,
+			plugins,
+			webSearch,
+			hooks,
+			planLock,
+			projectSecrets,
+		});
 		const baseTools: ToolSet = {
-			...turnTools({
-				surfaceTools,
-				mcp,
-				plugins,
-				webSearch,
-				hooks,
-				planLock,
-				projectSecrets,
-			}),
+			...(leadGate
+				? withSidekickWriteGuard(ownTools, () => sidekickBusy)
+				: ownTools),
 			...delegation,
 		};
 		// Deferred (deferred-tools.ts): in code mode primary the MCP search and
@@ -1148,6 +1187,9 @@ async function runApiTurnAttempt(
 			afterTools: async (history) =>
 				hooks.drain(await repositoryContext.afterTools(history)),
 			prepareMessages: async (history) => {
+				// The local worker's loop calls the model several times in one
+				// run; durable steps wait before their one call instead (below).
+				if (!step && leadGate) await leadGate(Number.POSITIVE_INFINITY);
 				if (owner.agentRole) {
 					// Counted and checked before every model step: a wrap-up
 					// notice at 90%, the turn stops at 100% (reported as such).
@@ -1374,6 +1416,19 @@ async function runApiTurnAttempt(
 				Date.now() + 10 * 60_000,
 			);
 		let result: Awaited<ReturnType<typeof runAgent>>;
+		// Lead mode fusion: no model call while the sidekick works in the shared
+		// checkout; a round still running at the step's deadline continues the
+		// wait in the next step. Its report is in the mailbox once it is ready.
+		if (step && leadGate) {
+			const gate = await timed("turn:fusionLead", () =>
+				leadGate(attemptWaitUntil()),
+			);
+			if (gate === "wait") {
+				await saveCheckpoint();
+				coordinated = false;
+				return "continue";
+			}
+		}
 		const loopStep = attemptLoop
 			? await timed("turn:attemptLoop", () =>
 					attemptLoop.beforeModel({
@@ -1461,6 +1516,17 @@ async function runApiTurnAttempt(
 				return "continue";
 			}
 			throw new IncompleteAgentTurn("background-command-review-required");
+		}
+		// Lead mode fusion: the turn does not complete while a sidekick round
+		// runs; the next step waits for its report and the lead answers after it.
+		if (
+			step &&
+			leadGate &&
+			(await fusionRoundOpen(owner as AgentSessionRecord))
+		) {
+			await saveCheckpoint();
+			coordinated = false;
+			return "continue";
 		}
 		let lastUser = items.length - 1;
 		while (lastUser >= 0 && items[lastUser].kind !== "userMessage") lastUser--;

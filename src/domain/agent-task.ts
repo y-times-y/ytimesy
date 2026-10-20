@@ -40,6 +40,11 @@ type AgentTaskPlan = {
 	readonly access: AgentTaskAccess;
 	readonly execution: AgentTaskExecution;
 	readonly dependsOnSessionId: string | null;
+	/**
+	 * Lead mode fusion's sidekick: the one writer allowed on its parent's
+	 * machine, since the lead does not write while it works.
+	 */
+	readonly sharedWriter?: boolean;
 };
 
 export type AgentTask = {
@@ -183,7 +188,11 @@ export function canSpawnAgentTask(parentDepth: number) {
 
 export function validateAgentTaskPlan(plan: AgentTaskPlan): string | null {
 	if (!plan.prompt.trim()) return "A task prompt is required.";
-	if (plan.placement === "shared" && plan.access !== "read_only") {
+	if (
+		plan.placement === "shared" &&
+		plan.access !== "read_only" &&
+		!plan.sharedWriter
+	) {
 		return "Shared-machine tasks must be read-only.";
 	}
 	if (plan.execution === "stacked" && !plan.dependsOnSessionId) {
