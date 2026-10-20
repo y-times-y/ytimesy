@@ -8,19 +8,20 @@ import type { AgentToolWorkspace } from "./agent-tool-workspace";
 
 /**
  * Only a pristine initial checkout establishes policy; legacy dirty tasks fail
- * closed. A writer subagent's fork is never pristine (it starts from its
- * parent's working tree, committed as its fork base), so it inherits the
- * parent's pinned baseline for the same directory instead: the parent's is
- * server-owned already, and the fork is a copy of the parent's VM, so the
- * commit is there.
+ * closed. A writer subagent's fork is never pristine: it starts from its
+ * parent's working tree, which the runtime commits as the fork base and
+ * records server-side (agent_fork.base). The fork takes its parent's pinned
+ * baseline for the same directory when there is one; a parent that pins
+ * none (a hard-set root chat is read-only) hands down the recorded fork
+ * base. Either commit must be in the fork.
  */
 export async function establishVerificationBaselines(
 	input: AgentToolWorkspace & {
 		userId: string;
 		sessionId: string;
 		additionalRepositoryNames?: readonly string[];
-		/** A forked writer's parent session, whose baseline the fork inherits. */
-		forkedFrom?: string;
+		/** A forked writer: its parent session and its recorded fork base. */
+		forkedFrom?: { parentSessionId: string; forkBase: string };
 	},
 ) {
 	for (const directory of [
@@ -34,11 +35,11 @@ export async function establishVerificationBaselines(
 		)
 			continue;
 		const inherited = input.forkedFrom
-			? await readVerificationBaseline(
+			? ((await readVerificationBaseline(
 					input.userId,
-					input.forkedFrom,
+					input.forkedFrom.parentSessionId,
 					directory,
-				)
+				)) ?? (directory === input.cwd ? input.forkedFrom.forkBase : null))
 			: null;
 		if (inherited) {
 			const present = await input.machines.exec(
