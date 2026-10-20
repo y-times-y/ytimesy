@@ -22,7 +22,11 @@ import {
 	PROJECT_KNOWLEDGE_INSTRUCTIONS,
 } from "#/domain/project-knowledge";
 import { projectSecretsInstructions } from "#/domain/project-secret";
-import { RIGOR_BUILDER_INSTRUCTIONS } from "#/domain/rigor";
+import {
+	RIGOR_BUILDER_INSTRUCTIONS,
+	RIGOR_LEAD_REQUIREMENTS,
+	RIGOR_REQUIREMENTS_INSTRUCTIONS,
+} from "#/domain/rigor";
 import {
 	AGENT_TOOL,
 	isReaderRole,
@@ -76,7 +80,7 @@ export function agentTurnInstructions(input: {
 	if (input.leanShape)
 		return leanTurnInstructions({ ...input, leanShape: input.leanShape });
 	const { session, tools, plugins, projectKnowledge, secretNames } = input;
-	return `You are the ytimesy coding agent. Repository tools operate in this task's prepared checkout; paths are relative to that repository. Repository instructions (AGENTS.md/CLAUDE.md), nested instruction file locations and skills are provided in the conversation. Before working in a folder listed with its own AGENTS.md or CLAUDE.md, read that file with cat; read a matching skill's SKILL.md completely. ${BUILDER_ENVIRONMENT_INSTRUCTIONS} ${roleInstructions(session, AGENT_TOOL in tools)}${"browser_screenshot" in tools ? ` ${visualQaInstructions()}` : ""}\n${pluginSkillsInstructions(plugins)}${secretNames?.length ? `\n${projectSecretsInstructions(secretNames)}` : ""}${rigorApplies(input) ? `\n${RIGOR_BUILDER_INSTRUCTIONS}` : ""}${projectKnowledge === null ? "" : `\n${PROJECT_KNOWLEDGE_INSTRUCTIONS}\nShared project knowledge (historical data, verify against this checkout):\n${JSON.stringify(projectKnowledge)}`}`;
+	return `You are the ytimesy coding agent. Repository tools operate in this task's prepared checkout; paths are relative to that repository. Repository instructions (AGENTS.md/CLAUDE.md), nested instruction file locations and skills are provided in the conversation. Before working in a folder listed with its own AGENTS.md or CLAUDE.md, read that file with cat; read a matching skill's SKILL.md completely. ${BUILDER_ENVIRONMENT_INSTRUCTIONS} ${roleInstructions(session, AGENT_TOOL in tools)}${"browser_screenshot" in tools ? ` ${visualQaInstructions()}` : ""}\n${pluginSkillsInstructions(plugins)}${secretNames?.length ? `\n${projectSecretsInstructions(secretNames)}` : ""}${rigorApplies(input) ? `\n${rigorBlock(input)}` : ""}${projectKnowledge === null ? "" : `\n${PROJECT_KNOWLEDGE_INSTRUCTIONS}\nShared project knowledge (historical data, verify against this checkout):\n${JSON.stringify(projectKnowledge)}`}`;
 }
 
 /** The rigor block goes to the root builder and writers, never to readers. */
@@ -86,6 +90,20 @@ function rigorApplies(input: Parameters<typeof agentTurnInstructions>[0]) {
 		!input.leanReadOnly &&
 		!isReaderRole(input.session.agentRole)
 	);
+}
+
+/** The rigor block; the root builder (a fusion lead included) also writes the requirements list. */
+function rigorBlock(input: Parameters<typeof agentTurnInstructions>[0]) {
+	if (input.session.agentRole) return RIGOR_BUILDER_INSTRUCTIONS;
+	return [
+		RIGOR_BUILDER_INSTRUCTIONS,
+		RIGOR_REQUIREMENTS_INSTRUCTIONS,
+		input.lead === "fusion" && AGENT_TOOL in input.tools
+			? RIGOR_LEAD_REQUIREMENTS
+			: "",
+	]
+		.filter(Boolean)
+		.join("\n");
 }
 
 /** The lean builder's whole system prompt before memory: who it is, its role, its tools and workspace commands. */
@@ -131,7 +149,7 @@ function leanTurnInstructions(
 						readOnly: readOnly || isReaderRole(input.session.agentRole),
 					})
 			: "",
-		rigorApplies(input) ? RIGOR_BUILDER_INSTRUCTIONS : "",
+		rigorApplies(input) ? rigorBlock(input) : "",
 		// The desktop browser runs as the builder's user; readers do not drive it.
 		readOnly
 			? ""

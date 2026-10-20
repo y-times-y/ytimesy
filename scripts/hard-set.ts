@@ -693,6 +693,9 @@ async function readReviewLoop(
 					command: test.command?.slice(0, 300) ?? null,
 				})),
 				untested: !!round.verdict?.untested,
+				...(round.builderRequirements
+					? { builderRequirements: [...round.builderRequirements] }
+					: {}),
 				decision: round.decision ?? null,
 				checkerTokens: roundSpend?.checker.tokens ?? 0,
 				checkerCostUsd: roundSpend?.checker.costUsd ?? null,

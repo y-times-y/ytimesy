@@ -32,6 +32,8 @@ export type HardSetReviewRound = {
 	checkerTests?: { name: string; passed: boolean; command: string | null }[];
 	/** It said pass without a test of its own (parsed as unsure). */
 	untested?: boolean;
+	/** rigor=on: the builder's requirements list the checker got (absent before 2026-10-20). */
+	builderRequirements?: string[];
 	/** fix, or why the loop stopped after this round. */
 	decision: string | null;
 	checkerTokens: number;
@@ -90,7 +92,7 @@ function checkerTestsLabel(round: HardSetReviewRound) {
 	if (!round.checkerTests) return "";
 	const failed = round.checkerTests.filter((test) => !test.passed).length;
 	const count = round.checkerTests.length;
-	return ` [${count} test${count === 1 ? "" : "s"}${failed ? `, ${failed} failed` : ""}${round.untested ? ", untested pass" : ""}]`;
+	return ` [${count} test${count === 1 ? "" : "s"}${failed ? `, ${failed} failed` : ""}${round.untested ? ", untested pass" : ""}${round.builderRequirements ? `, builder listed ${round.builderRequirements.length} requirement${round.builderRequirements.length === 1 ? "" : "s"}` : ""}]`;
 }
 
 /** Report lines for the runs that had a review loop (empty when none). */

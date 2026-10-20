@@ -316,6 +316,8 @@ export type ReviewRound = {
 	readonly timedOut?: boolean;
 	/** rigor=on: what the builder's final answer admitted, with over half the time left. */
 	readonly admitted?: readonly string[];
+	/** rigor=on: the builder's requirements list the checker got as a claim. */
+	readonly builderRequirements?: readonly string[];
 	readonly findings: readonly ReviewFinding[];
 	/** What followed the verdict. */
 	readonly decision?: "fix" | ReviewOutcome;

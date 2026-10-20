@@ -303,6 +303,55 @@ describe("review loop", () => {
 		expect(h.state()?.outcome).toBe("pass");
 	});
 
+	it("with rigor=on, gives the checker the builder's requirements list as a claim and keeps it on the round", async () => {
+		const PASS = verdict({
+			verdict: "pass",
+			failures: [],
+			tests: [{ name: "edge", command: "c", passed: true }],
+		});
+		const LIST =
+			"Planned.\n<requirements>\n- compaction keeps the newest version per key\n- `make test` passes (reading: the whole suite)\n</requirements>";
+		const withList = (h: ReturnType<typeof harness>, answer: string) => {
+			const step = h.step(1, answer);
+			return {
+				...step,
+				items: [
+					step.items[0],
+					{
+						kind: "agentMessage" as const,
+						id: SessionItemId("plan"),
+						text: LIST,
+					},
+					...step.items.slice(1),
+				],
+			};
+		};
+		const on = harness({ reports: [PASS], rigor: true });
+		await on.loop.beforeModel(on.step(0, ""));
+		on.setTree("t-1");
+		on.advance(4 * 60_000);
+		await on.loop.afterAttempt(withList(on, "Done."));
+		const brief = on.started[0].brief;
+		expect(brief).toContain(
+			"<builder_requirements>\nThe builder's understanding of the requirements, written before it worked (a claim to compare, not ground truth):\n- compaction keeps the newest version per key\n- `make test` passes (reading: the whole suite)\n</builder_requirements>",
+		);
+		// The checker's own list comes first; the claim follows the review parts.
+		expect(brief.indexOf("1. Requirements.")).toBeLessThan(
+			brief.indexOf("<builder_requirements>"),
+		);
+		expect(on.state()?.rounds[0].builderRequirements).toEqual([
+			"compaction keeps the newest version per key",
+			"`make test` passes (reading: the whole suite)",
+		]);
+		const off = harness({ reports: [PASS] });
+		await off.loop.beforeModel(off.step(0, ""));
+		off.setTree("t-1");
+		off.advance(4 * 60_000);
+		await off.loop.afterAttempt(withList(off, "Done."));
+		expect(off.started[0].brief).not.toContain("builder_requirements");
+		expect(off.state()?.rounds[0].builderRequirements).toBeUndefined();
+	});
+
 	it("without rigor, or with under half the time left, a passed turn finishes despite admitted gaps", async () => {
 		const PASS = verdict({
 			verdict: "pass",

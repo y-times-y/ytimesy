@@ -28,6 +28,11 @@ export type ReviewBriefInput = {
 	readonly diffCommand?: string;
 	/** Harness variant rigor=on: the stated-assumption, outside-run and admitted-gap checks. */
 	readonly rigor?: boolean;
+	/**
+	 * rigor=on: the builder's own requirements list (src/domain/rigor.ts), a
+	 * claim the checker compares with its own list after deriving that.
+	 */
+	readonly builderRequirements?: readonly string[];
 };
 
 /** rigor=on: stated interpretations get the convention-based reading tested. */
@@ -37,6 +42,10 @@ const RIGOR_ASSUMPTIONS =
 /** rigor=on: one run the way an outside user would run it. */
 const RIGOR_OUTSIDE_RUN =
 	" Run it once as an outside user would: a fresh shell in a clean directory holding only the files the request names, no dependencies or data files the request does not provide or declare, and results read back with standard clients and tools, never helpers the builder wrote.";
+
+/** rigor=on with the builder's list: compare it only after the checker's own list. */
+const RIGOR_COMPARE =
+	" Then, and only then, compare your list with the builder's understanding of the requirements at the end of this brief: it is the builder's claim, not ground truth, and may be wrong or incomplete. Each requirement its list missed or read differently from the request is a failure when the deliverable falls short of the request's reading (say which reading the request supports), else a line in notes; never drop one of yours because the builder's list lacks it.";
 
 /** rigor=on: a deliverable that admits a gap is not a pass. */
 const RIGOR_ADMITTED =
@@ -62,6 +71,7 @@ function deliverableLine(input: ReviewBriefInput) {
 export function independentReviewBrief(input: ReviewBriefInput) {
 	const work = `${input.scratch}/work`;
 	const rigor = !!input.rigor;
+	const claimed = rigor ? (input.builderRequirements ?? []) : [];
 	return [
 		"You are an independent checker. Decide whether the delivered work meets the request below. You did not build it and nobody will tell you what to look for. A strict grader with hidden tests judges it after you, from the request alone, so look for what such a grader would check and what would make it fail.",
 		"",
@@ -76,10 +86,19 @@ export function independentReviewBrief(input: ReviewBriefInput) {
 		`Do not change the deliverable. Copy the checkout's contents (\`mkdir -p ${work} && cp -a ${input.checkout}/. ${work}/\`; the trailing /. copies what the path points to, even when it is a symbolic link) and run experiments only in ${input.scratch}; read the original paths where the request names them.`,
 		"",
 		"Review in four parts:",
-		"1. Requirements. List every requirement in the request and in the files it points to (specs, READMEs, schemas, API docs, examples, format notes in the working directory): exact names, paths, formats, fields, values, units, ordering, limits, invocation and side effects such as records saved in a service. For each, give evidence that it is met or not: a command and its output, or a file and line. A requirement you could not check is not met.",
+		`1. Requirements. List every requirement in the request and in the files it points to (specs, READMEs, schemas, API docs, examples, format notes in the working directory): exact names, paths, formats, fields, values, units, ordering, limits, invocation and side effects such as records saved in a service. For each, give evidence that it is met or not: a command and its output, or a file and line. A requirement you could not check is not met.${claimed.length ? RIGOR_COMPARE : ""}`,
 		`2. Assumptions. List the assumptions the deliverable depends on: readings of ambiguous wording, conventions, units, defaults, tie-breaking, interpretation of the inputs. Where a result hinges on one, work out the alternative reading and test it, and say which one the request and its files support.${rigor ? RIGOR_ASSUMPTIONS : ""}`,
 		"3. Plausibility. Check that outputs are plausible: magnitudes, counts and ranges against the inputs, internal consistency, totals that add up, no placeholders, hard-coded or degenerate answers, and nothing that only works on the examples.",
 		`4. Test it yourself. The project's existing tests passed for the builder too and are not enough: a strict grader's hidden tests target what they miss. For each requirement and each risky change in the diff, write at least one new test or executable probe of your own under ${input.scratch}/tests, aimed at cases the existing tests do not cover (derive them from the request, the diff and the files it points to): boundaries, empty and large inputs, error paths, ordering, concurrency and the states between steps. Use the stated paths, formats and invocation exactly, from a clean shell and another directory, without anything the builder may have left. Run your tests against your copy, then the existing tests and the callers of anything changed.${rigor ? RIGOR_OUTSIDE_RUN : ""}`,
+		...(claimed.length
+			? [
+					"",
+					"<builder_requirements>",
+					"The builder's understanding of the requirements, written before it worked (a claim to compare, not ground truth):",
+					...claimed.map((line) => `- ${line}`),
+					"</builder_requirements>",
+				]
+			: []),
 		"",
 		"Answer with only this JSON:",
 		'{ "verdict": "pass" | "fail" | "unsure", "failures": ["<requirement or assumption>: <what is wrong, with evidence>"], "tests": [{ "name": "<what it checks>", "command": "<one command that runs it, absolute paths>", "passed": true, "output": "<the lines that show the result>" }], "requirements": [{ "requirement": "...", "met": true, "evidence": "..." }], "assumptions": [{ "assumption": "...", "alternative": "...", "outcome": "..." }], "notes": "..." }',
