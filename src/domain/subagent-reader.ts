@@ -36,11 +36,21 @@ export function readerUserSetupCommand() {
 	return `sudo -n bash -c "$(printf %s ${encoded} | base64 -d)"`;
 }
 
-/** Runtime directories every session writes under; sticky like /tmp so a reader can add its own entries only. */
-const SHARED_RUNTIME_PARENTS = [
+/**
+ * Runtime directories every session writes under; sticky like /tmp so a
+ * reader can add its own entries only. The first session to run a command
+ * creates them as its own user (0755), and on a shared VM that is the
+ * builder, so without this a reader cannot create its entry and every
+ * command it runs fails before it starts: its command records
+ * (`commandRoot`, api-agent-command-tools.ts), its process scopes
+ * (`COMMAND_SCOPES_DIRECTORY`, api-command-scope.ts) and its runtime root
+ * (`sessionRuntimeRoot`, session-workspace-machines.ts).
+ */
+export const SHARED_RUNTIME_PARENTS = [
+	"/tmp/ytimesy-api-commands",
 	"/tmp/ytimesy-api-command-scopes",
 	"/tmp/ytimesy-sessions",
-];
+] as const;
 
 /**
  * Prepares the shared VM for one reader, run as the builder's user (who has
