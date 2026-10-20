@@ -1818,6 +1818,9 @@ async function recallCheck() {
 		selectMemoryMatches,
 		memoryQueryText,
 		annotateMemoryText,
+		projectRules,
+		memoryRulesPart,
+		memoryLineShown,
 	} = await import("../src/domain/memory-repo");
 	const { memoryMatchScores } = await import("../src/domain/memory-ranking");
 	const remote = memoryEmbedder();
@@ -1846,6 +1849,8 @@ async function recallCheck() {
 		lines: 0,
 		stale: 0,
 		queries: 0,
+		rules: 0,
+		snapshots: 0,
 	};
 	const paths = (flags["recall-check"] as string).split(",").filter(Boolean);
 	for (const path of paths) {
@@ -1861,6 +1866,16 @@ async function recallCheck() {
 			const index = annotateMemoryText(files["MEMORY.md"] ?? "", {
 				today: memoryToday(),
 			});
+			// The always-on project rules ride with it (project: null leaves out
+			// rules tied to a project, as in an eval chat without one).
+			const rules = projectRules({
+				lines,
+				today: memoryToday(),
+				project: null,
+			});
+			const shown = `${index}\n${memoryRulesPart(rules)}`;
+			totals.rules += rules.length;
+			totals.snapshots++;
 			const vectors = await embed.documents(lines.map(memoryLineEmbeddingText));
 			for (const probe of [...PROBES, ...FRESHNESS.map((pair) => pair.probe)]) {
 				const live =
@@ -1888,7 +1903,7 @@ async function recallCheck() {
 				const selected = selectMemoryMatches({
 					lines,
 					scores,
-					alreadyShown: (raw) => index.includes(raw),
+					alreadyShown: (raw) => memoryLineShown(raw, shown),
 					today: memoryToday(),
 					project: null,
 					query,
@@ -1896,8 +1911,11 @@ async function recallCheck() {
 				const inIndex = index
 					.split("\n")
 					.some((row) => row.startsWith("- ") && probe.right.test(row));
+				const inRules = rules.some((entry) => probe.right.test(entry.text));
 				const inContext =
-					inIndex || selected.some((entry) => probe.right.test(entry.text));
+					inIndex ||
+					inRules ||
+					selected.some((entry) => probe.right.test(entry.text));
 				const stale = probe.stale
 					? selected.filter(
 							(entry) =>
@@ -1924,7 +1942,7 @@ async function recallCheck() {
 					cosineRank ? String(cosineRank) : "-",
 					rank ? String(rank) : "-",
 					rank ? (scores.get(ranked[rank - 1]) ?? 0).toFixed(3) : "-",
-					inIndex ? "MEMORY.md" : inContext ? "yes" : "no",
+					inIndex ? "MEMORY.md" : inRules ? "rules" : inContext ? "yes" : "no",
 					String(selected.length),
 					String(stale),
 					(scores.get(ranked[0]) ?? 0).toFixed(3),
@@ -1936,7 +1954,7 @@ async function recallCheck() {
 	await embed.save();
 	console.log(table(rows));
 	console.log(
-		`Probes whose fact is in the snapshot: ${totals.probes}; recall@5 cosine ${totals.cosine5}, hybrid ${totals.hybrid5}; in context (MEMORY.md, or selected by the read hook: up to ${MEMORY_MATCH_LIMIT}, score >= ${MEMORY_MATCH_MIN_SCORE}) ${totals.inContext}. Lines selected per query ${(totals.lines / Math.max(1, totals.queries)).toFixed(2)}; queries with a stale line selected ${totals.stale}/${totals.queries}. "live injected lines" = read-hook lines the probe actually got in that run.`,
+		`Probes whose fact is in the snapshot: ${totals.probes}; recall@5 cosine ${totals.cosine5}, hybrid ${totals.hybrid5}; in context (MEMORY.md, the project rules, or selected by the read hook: up to ${MEMORY_MATCH_LIMIT}, score >= ${MEMORY_MATCH_MIN_SCORE}) ${totals.inContext}. Project rules per chat ${(totals.rules / Math.max(1, totals.snapshots)).toFixed(1)} lines. Lines selected per query ${(totals.lines / Math.max(1, totals.queries)).toFixed(2)}; queries with a stale line selected ${totals.stale}/${totals.queries}. "live injected lines" = read-hook lines the probe actually got in that run.`,
 	);
 }
 

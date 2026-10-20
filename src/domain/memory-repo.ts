@@ -407,13 +407,16 @@ export function memoryEmbeddingQuery(text: string) {
 /** Lines per request: about 1-2k characters, a wider net than one fact. */
 export const MEMORY_MATCH_LIMIT = 8;
 /**
- * Cutoff on the hybrid score (memory-ranking.ts). Set from
+ * Cutoff on the hybrid score (memory-ranking.ts). First set from
  * `memory-two-chat-eval.ts --recall` on cosine alone (2026-10-15: 0.33 kept
- * 7/8 right lines, 0.40 kept 4/8); the lexical and file parts only add, so
- * it is no stricter for the hybrid. A missed rule costs more than a
- * labelled extra line.
+ * 7/8 right lines, 0.40 kept 4/8). Raised to 0.36 once standing rules ride
+ * on every chat as project rules (projectRules), so the hook no longer has
+ * to reach down for them (2026-10-20, same embeddings): two-chat recall
+ * 10/10 at 0.33-0.37 with 34 -> 24 wrong lines at 0.36 (9/10 from 0.38);
+ * the long-history and held-out snapshots select the same right lines at
+ * 0.33 and 0.36. A missed rule costs more than a labelled extra line.
  */
-export const MEMORY_MATCH_MIN_SCORE = 0.33;
+export const MEMORY_MATCH_MIN_SCORE = 0.36;
 /**
  * Beyond the top lines: the best convention line (a rule for every new X)
  * scoring at least this. A request rarely names the convention it is subject
