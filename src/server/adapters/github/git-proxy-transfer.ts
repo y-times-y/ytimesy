@@ -74,12 +74,16 @@ async function checked(
 	return result.stdout.trim();
 }
 
-/** Private temporary Git config carries only an expiring capability; origin remains credential-free. */
+/**
+ * Private temporary Git config carries only an expiring capability; origin
+ * remains credential-free. A write capability updates only `input.branch`,
+ * once, and the proxy refuses deletes and every other ref.
+ */
 async function withProxyGit<T>(
 	host: GitTransferHost,
 	input: Repository,
 	access: "read" | "write",
-	run: (git: string, url: string) => Promise<T>,
+	run: (git: string, url: string, temporary: string) => Promise<T>,
 ) {
 	const config = gitProxyConfiguration();
 	if (!config || !input.userId || !input.projectId)
@@ -91,6 +95,7 @@ async function withProxyGit<T>(
 		name: input.name,
 		installationId: Number(input.installationId),
 		access,
+		...(access === "write" ? { branch: input.branch } : {}),
 	});
 	const temporary = await checked(
 		host,
@@ -113,13 +118,10 @@ async function withProxyGit<T>(
 				.join("\n")}\n`,
 		);
 		const git = `env GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=${quote(`${temporary}/config`)} GIT_TERMINAL_PROMPT=0 GIT_ALLOW_PROTOCOL=https git -c core.hooksPath=/dev/null -c protocol.ext.allow=never -c fetch.fsckObjects=true -c transfer.fsckObjects=true`;
-		return await run(git, url);
+		return await run(git, url, temporary);
 	} finally {
 		await host
-			.exec(
-				`rm -f ${quote(`${temporary}/config`)}; rmdir ${quote(temporary)}`,
-				10_000,
-			)
+			.exec(`rm -rf ${quote(temporary)}`, 10_000)
 			.catch(() => undefined);
 	}
 }
@@ -203,10 +205,26 @@ export async function pushProxiedRepository(
 		`git check-ref-format --branch ${quote(input.branch)}`,
 		"Workspace Git rejected the branch name.",
 	);
-	await withProxyGit(host, input, "write", async (git, url) => {
+	await withProxyGit(host, input, "write", async (git, url, temporary) => {
+		// The checkout's own config is the agent's to write (http.proxy,
+		// url.*.insteadOf, http.curloptResolve...), so the push runs from a
+		// fresh repository that borrows the checkout's objects but none of
+		// its config.
+		const directory = quote(input.directory);
+		const publish = quote(`${temporary}/push.git`);
 		await checked(
 			host,
-			`${git} -C ${quote(input.directory)} push ${quote(url)} ${quote(`${input.revision || "HEAD"}:refs/heads/${input.branch}`)}`,
+			`set -eu
+objects=$(cd ${directory} && cd "$(git rev-parse --git-path objects)" && pwd -P)
+commit=$(git -C ${directory} rev-parse --verify ${quote(`${input.revision || "HEAD"}^{commit}`)})
+${git} init -q --bare ${publish}
+printf '%s\n' "$objects" > ${quote(`${temporary}/push.git/objects/info/alternates`)}
+${git} --git-dir=${publish} update-ref refs/heads/publish "$commit"`,
+			"Workspace Git could not prepare the commit to push.",
+		);
+		await checked(
+			host,
+			`${git} --git-dir=${publish} push ${quote(url)} ${quote(`refs/heads/publish:refs/heads/${input.branch}`)}`,
 			TRANSFER_FAILED,
 			NETWORK_GIT_TIMEOUT_MS,
 		);
