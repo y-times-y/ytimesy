@@ -82,6 +82,8 @@ export function parseNumstat(numstat: string) {
 	return { files, added, removed };
 }
 
+const PATCH_PATH_MARKER = "ytimesy-patch-path:";
+
 /** Run in the parent: store the patch, fetch the bundle into the agent's ref. */
 export function parentImportScript(input: {
 	readonly cwd: string;
@@ -104,6 +106,9 @@ export function parentImportScript(input: {
 					'rm -f "$bundle"',
 				]
 			: []),
+		// The absolute path: the parent's commands may run as another user
+		// (a hard-set task container runs them as root), where ~ is not this home.
+		`printf '${PATCH_PATH_MARKER}%s\\n' "$(cd ${directory} && pwd -P)/${input.label}.patch"`,
 	].join("\n");
 }
 
@@ -208,7 +213,12 @@ export async function transferWriterPatch(input: {
 			`The patch could not be stored in your checkout: ${imported.stderr.slice(-400)}`,
 		);
 	return {
-		path: writerPatchPath(input.label),
+		path:
+			imported.stdout
+				.split("\n")
+				.find((line) => line.startsWith(PATCH_PATH_MARKER))
+				?.slice(PATCH_PATH_MARKER.length)
+				.trim() || writerPatchPath(input.label),
 		...parseNumstat(numstat ?? ""),
 		sha256: (sha256 ?? "").trim(),
 		ref: bundlePayload
