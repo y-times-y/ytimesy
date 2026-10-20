@@ -1,3 +1,5 @@
+import { USAGE_WINDOW_REFUSAL_PATTERN } from "./infrastructure-usage";
+
 const GENERIC_EFFECT_PROMISE_FAILURE =
 	"An unknown error occurred in Effect.tryPromise";
 
@@ -11,7 +13,7 @@ export function failureMessage(cause: unknown): string {
 }
 
 export const USER_USAGE_CAP_MESSAGE =
-	"You have used this month's cloud minutes, so new machine time cannot start. Your work is preserved; the allowance resets on the 1st (UTC).";
+	"You have reached your cloud usage limit, so new machine time cannot start. Your work is preserved; the limit refills over the next hours (see Settings for the exact time).";
 export const FLEET_MONTHLY_CAP_MESSAGE =
 	"The ytimesy free beta has used its shared cloud budget for this month, so new machine time cannot start. Your work is preserved; the budget resets on the 1st (UTC). Questions: support@ytimesy.com.";
 export const FLEET_LIFETIME_CAP_MESSAGE =
@@ -23,6 +25,8 @@ export const FLEET_LIFETIME_CAP_MESSAGE =
  * the beta's shared budget, not something the user did or can fix.
  */
 export function usageCapFailureMessage(message: string): string | null {
+	const window = USAGE_WINDOW_REFUSAL_PATTERN.exec(message);
+	if (window) return window[0];
 	if (/lifetime fleet cloud execution budget is exhausted/i.test(message))
 		return FLEET_LIFETIME_CAP_MESSAGE;
 	if (/fleet cloud execution budget is exhausted/i.test(message))

@@ -1,31 +1,44 @@
 import { expect, it } from "vitest";
+import { usageWindowState } from "./infrastructure-usage";
 import { usageWarning } from "./usage-warning";
 
-const usage = (consumed: number, reserved = 0, allowance = 1000) => ({
-	allowanceMicroUsd: allowance,
-	consumedMicroUsd: consumed,
-	reservedMicroUsd: reserved,
+const now = Date.parse("2026-10-20T12:00:00Z");
+const label = (ms: number) => new Date(ms).toISOString();
+const windows = (fiveHourUsed: number, weeklyUsed = fiveHourUsed) => [
+	usageWindowState(
+		"five_hour",
+		[{ at: now - 60_000, microUsd: fiveHourUsed, open: false }],
+		1000,
+		now,
+	),
+	usageWindowState(
+		"weekly",
+		[{ at: now - 60_000, microUsd: weeklyUsed, open: false }],
+		5000,
+		now,
+	),
+];
+
+it("stays quiet below 80% of every window", () => {
+	expect(usageWarning(windows(0), label)).toBeNull();
+	expect(usageWarning(windows(799), label)).toBeNull();
 });
 
-it("stays quiet below 70% of the monthly allowance", () => {
-	expect(usageWarning(usage(0))).toBeNull();
-	expect(usageWarning(usage(699))).toBeNull();
-});
-
-it("warns at 70%, counting minutes held by running machines", () => {
-	expect(usageWarning(usage(700))).toMatchObject({
+it("gives a heads-up at 80% of a window with the time it starts to refill", () => {
+	const warning = usageWarning(windows(850), label);
+	expect(warning).toMatchObject({
 		level: "warning",
-		usedPercent: 70,
+		window: "five_hour",
+		usedPercent: 85,
 	});
-	expect(usageWarning(usage(500, 250))).toMatchObject({
-		level: "warning",
-		usedPercent: 75,
-	});
-	expect(usageWarning(usage(950))?.message).toContain("95%");
+	expect(warning?.message).toContain("85% of your 5-hour");
+	expect(warning?.message).toContain(label(now - 60_000 + 5 * 3_600_000));
+	expect(usageWarning(windows(100, 4500), label)?.window).toBe("weekly");
 });
 
-it("says the allowance is used up at 100% or with no allowance", () => {
-	expect(usageWarning(usage(1000))?.level).toBe("exhausted");
-	expect(usageWarning(usage(900, 200))?.level).toBe("exhausted");
-	expect(usageWarning(usage(0, 0, 0))?.level).toBe("exhausted");
+it("says when new work can start again once a window is exhausted", () => {
+	const warning = usageWarning(windows(1000), label);
+	expect(warning?.level).toBe("exhausted");
+	expect(warning?.message).toContain("Running work finishes");
+	expect(warning?.message).toContain(label(now - 60_000 + 5 * 3_600_000));
 });

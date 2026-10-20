@@ -44,13 +44,15 @@ beforeAll(async () => {
 	db = new PGlite();
 	await db.exec(`create role anon; create role authenticated; create table auth_user(id text primary key); insert into auth_user values('alice'),('bob');
 	create table agent_session(id uuid primary key,user_id text,project_id text,provider_ref text,turn_status text,task_placement text,agent_role text);
-	create table workspace(id text,user_id text); create table environment_build(id text,workspace_id text);`);
+	create table workspace(id text,user_id text); create table environment_build(id text,workspace_id text);
+	create table api_turn(id text,user_id text,state text);`);
 	for (const file of [
 		"20261003020000_infrastructure_usage",
 		"20261003021000_infrastructure_vm_identity",
 		"20261003022000_workspace_retention",
 		"20261003024000_infrastructure_zero_runtime",
 		"20261013060000_infrastructure_vm_lease",
+		"20261020130000_infrastructure_usage_windows",
 	])
 		await db.exec(readFileSync(`supabase/migrations/${file}.sql`, "utf8"));
 });
@@ -58,12 +60,13 @@ beforeEach(async () => {
 	vi.stubEnv("YTIMESY_WORKSPACE_RETENTION", "true");
 	vi.stubEnv("YTIMESY_INFRASTRUCTURE_ADMISSION", "true");
 	vi.stubEnv("YTIMESY_RETENTION_ENROLL_AFTER", "2026-01-01T00:00:00Z");
-	vi.stubEnv("YTIMESY_USER_MONTHLY_MICRO_USD", "1000000");
+	vi.stubEnv("YTIMESY_USER_5H_MICRO_USD", "1000000");
+	vi.stubEnv("YTIMESY_USER_WEEKLY_MICRO_USD", "1000000");
 	vi.stubEnv("YTIMESY_FLEET_MONTHLY_MICRO_USD", "500000000");
 	vi.stubEnv("YTIMESY_FLEET_LIFETIME_MICRO_USD", "7000000000");
 	forgetRecentAdmission();
 	await db.exec(
-		"truncate workspace_retention,infrastructure_vm_lease,infrastructure_vm_admission,infrastructure_usage_reservation,infrastructure_usage_policy,infrastructure_usage_adjustment,agent_session;",
+		"truncate workspace_retention,infrastructure_vm_lease,infrastructure_vm_admission,infrastructure_usage_reservation,infrastructure_usage_policy,infrastructure_usage_adjustment,agent_session,api_turn;",
 	);
 	await query(
 		"insert into agent_session values($1,'alice','project','vm-1','running',null)",
@@ -256,8 +259,8 @@ it("does not enroll a VM created before the retention cutover", async () => {
 	expect((await decisions()).retention).toEqual([]);
 });
 
-it("refuses a paused VM whose allowance cannot buy the operation", async () => {
-	vi.stubEnv("YTIMESY_USER_MONTHLY_MICRO_USD", "15000");
+it("refuses to resume a paused VM once a usage window is exhausted, unless a turn still runs", async () => {
+	vi.stubEnv("YTIMESY_USER_5H_MICRO_USD", "10000");
 	await seedAdmission({ cap: 900, baseline: 600 });
 	await seedRetention();
 	const { vm } = machine({
@@ -265,8 +268,12 @@ it("refuses a paused VM whose allowance cannot buy the operation", async () => {
 		totalRunSeconds: 903,
 		maxRunTotalSeconds: 900,
 	});
-	expect(await outcome(() => resume(vm, 60))).toMatchSnapshot();
-	expect(await decisions()).toMatchSnapshot();
+	// Settling the pause leaves 303 seconds (11,131 micro-USD) in the window.
+	expect(await outcome(() => resume(vm, 60))).toMatch(
+		/^You have reached your 5-hour cloud usage limit, so new work cannot start until \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\./,
+	);
+	await query("insert into api_turn values('turn-1','alice','running')");
+	expect(await outcome(() => resume(vm, 60))).toBe(null);
 });
 
 it("refuses a top-up past the fleet's monthly budget", async () => {
@@ -291,19 +298,14 @@ it("refuses a top-up past the fleet's lifetime budget", async () => {
 	);
 });
 
-it("refuses a top-up past the user's allowance including grants", async () => {
-	vi.stubEnv("YTIMESY_USER_MONTHLY_MICRO_USD", "20000");
+it("tops up a running VM past an exhausted usage window, so its turn finishes", async () => {
+	vi.stubEnv("YTIMESY_USER_5H_MICRO_USD", "1000");
+	vi.stubEnv("YTIMESY_USER_WEEKLY_MICRO_USD", "1000");
 	await seedAdmission({ cap: 400, baseline: 100, ageSeconds: 250 });
 	await seedRetention();
-	const { vm } = machine({ maxRunTotalSeconds: 400 });
-	expect(await outcome(() => resume(vm, 60))).toBe(
-		"Your cloud execution allowance is exhausted.",
-	);
-	await query(
-		"insert into infrastructure_usage_adjustment(id,actor_id,user_id,kind,period,amount_micro_usd,reason) values('20000000-0000-4000-8000-000000000001','admin','alice','grant',date_trunc('month',now() at time zone 'utc')::date,100000,'test')",
-	);
+	const { vm, updates } = machine({ maxRunTotalSeconds: 400 });
 	expect(await outcome(() => resume(vm, 60))).toBe(null);
-	expect(await decisions()).toMatchSnapshot();
+	expect(updates.at(-1)?.maxRunTotalSeconds).toBeGreaterThan(400);
 });
 
 it.each([

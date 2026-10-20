@@ -78,7 +78,8 @@ it("fails an unmetered resume of a spent VM with a machine reason before calling
 });
 
 const caps = {
-	YTIMESY_USER_MONTHLY_MICRO_USD: "5000000",
+	YTIMESY_USER_5H_MICRO_USD: "5000000",
+	YTIMESY_USER_WEEKLY_MICRO_USD: "5000000",
 	YTIMESY_FLEET_MONTHLY_MICRO_USD: "100000000",
 	YTIMESY_FLEET_LIFETIME_MICRO_USD: "500000000",
 };
