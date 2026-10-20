@@ -31,12 +31,16 @@ import {
 	memoryIndexShown,
 	memoryInstructions,
 	memoryLineEmbeddingText,
+	memoryLineShown,
 	memoryLines,
 	memoryMatchesPart,
 	memoryQueryText,
 	memoryRecentLine,
 	memoryRecentPart,
+	memoryRulesPart,
 	memoryToday,
+	projectRules,
+	projectRulesShown,
 	selectMemoryMatches,
 	withMemoryParts,
 } from "#/domain/memory-repo";
@@ -288,6 +292,16 @@ export async function turnMemory(
 				firstRequest &&
 				entry !== undefined &&
 				entry.trim() !== EMPTY_MEMORY.trim();
+			const rules =
+				mode === "full" && firstMessage && !projectRulesShown(shown)
+					? projectRules({
+							lines: recallableLines(snapshot),
+							today: today(),
+							project: projectName,
+						})
+					: [];
+			const rulesPart = rules.length ? memoryRulesPart(rules, wording) : null;
+			const inContext = rulesPart ? `${shown}\n${rulesPart}` : shown;
 			// Freshness without a model call: what the user just said in another
 			// chat, while its save hook may still be running.
 			const recent =
@@ -303,7 +317,7 @@ export async function turnMemory(
 							userId: owner.userId,
 							query: latestUserText(items),
 							alreadyShown: (raw) =>
-								shown.includes(raw) ||
+								memoryLineShown(raw, inContext) ||
 								(showEntry && (entry ?? "").includes(raw)),
 							today: today(),
 							project: projectName,
@@ -316,7 +330,7 @@ export async function turnMemory(
 			const recall: MemoryRecall = {
 				head: snapshot.head,
 				...(showEntry ? { index: true as const } : {}),
-				lines: await recalledLines(matches),
+				lines: await recalledLines([...rules, ...matches]),
 				...(hook
 					? {
 							hook: {
@@ -328,7 +342,7 @@ export async function turnMemory(
 					: {}),
 			};
 			const fresh = await recent;
-			if (!showEntry && !matches.length && !fresh.length)
+			if (!showEntry && !rulesPart && !matches.length && !fresh.length)
 				return { messages, recall };
 			const missing =
 				mode === "full"
@@ -356,6 +370,7 @@ export async function turnMemory(
 							),
 						]
 					: []),
+				...(rulesPart ? [rulesPart] : []),
 				...(matches.length
 					? [memoryMatchesPart(matches, missing, wording)]
 					: []),
