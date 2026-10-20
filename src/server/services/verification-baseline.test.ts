@@ -111,15 +111,23 @@ it("pins a forked writer to its parent's baseline instead of refusing its non-pr
 		await expect(establishVerificationBaselines(input)).rejects.toThrow(
 			"pristine",
 		);
-		await establishVerificationBaselines({ ...input, forkedFrom: "lead" });
+		const forkBase = (await git("rev-parse", "HEAD")).stdout.trim();
+		const forkedFrom = { parentSessionId: "lead", forkBase };
+		await establishVerificationBaselines({ ...input, forkedFrom });
 		expect(mocks.pin).toHaveBeenCalledWith("alice", "writer", cwd, base);
-		// A parent baseline the fork does not have is refused.
+		// A parent without a baseline (a read-only hard-set root) hands down
+		// the runtime's recorded fork base.
 		mocks.pin.mockClear();
-		mocks.read.mockImplementation(async (_user: string, session: string) =>
-			session === "lead" ? "f".repeat(40) : null,
-		);
+		mocks.read.mockResolvedValue(null);
+		await establishVerificationBaselines({ ...input, forkedFrom });
+		expect(mocks.pin).toHaveBeenCalledWith("alice", "writer", cwd, forkBase);
+		// A commit the fork does not have is refused.
+		mocks.pin.mockClear();
 		await expect(
-			establishVerificationBaselines({ ...input, forkedFrom: "lead" }),
+			establishVerificationBaselines({
+				...input,
+				forkedFrom: { parentSessionId: "lead", forkBase: "f".repeat(40) },
+			}),
 		).rejects.toThrow("does not carry");
 		expect(mocks.pin).not.toHaveBeenCalled();
 	} finally {
