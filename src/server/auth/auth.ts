@@ -66,7 +66,7 @@ export function authCaptchaPlugins(appUrl: string) {
 	];
 }
 
-function authOptions() {
+export function authOptions() {
 	const config = serverConfig();
 	return {
 		plugins: authCaptchaPlugins(config.APP_URL),
@@ -82,6 +82,8 @@ function authOptions() {
 			requireEmailVerification: true,
 			minPasswordLength: 8,
 			autoSignIn: false,
+			// A reset password ends every other session, including a thief's.
+			revokeSessionsOnPasswordReset: true,
 			sendResetPassword: async ({
 				user,
 				url,
@@ -100,7 +102,10 @@ function authOptions() {
 		emailVerification: {
 			sendOnSignUp: true,
 			sendOnSignIn: true,
-			autoSignInAfterVerification: true,
+			// A verification link is a bearer token sitting in an inbox; it
+			// proves the address, it does not sign anyone in. The link lands on
+			// sign-in, which returns to the page that asked.
+			autoSignInAfterVerification: false,
 			sendVerificationEmail: async ({
 				user,
 				url,
