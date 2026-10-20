@@ -28,7 +28,8 @@ it("enrolls production agent VMs created after the cutover, never earlier ones",
 	const settings = productionRuntimeSettings({});
 	const saved = { ...process.env };
 	Object.assign(process.env, settings, {
-		YTIMESY_USER_MONTHLY_MICRO_USD: "1",
+		YTIMESY_USER_5H_MICRO_USD: "1",
+		YTIMESY_USER_WEEKLY_MICRO_USD: "1",
 		YTIMESY_FLEET_MONTHLY_MICRO_USD: "1",
 		YTIMESY_FLEET_LIFETIME_MICRO_USD: "1",
 	});

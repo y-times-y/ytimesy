@@ -46,7 +46,6 @@ const required = [
 	// Verifies GitHub's signature on /api/github/repair-events deliveries; the
 	// production GitHub App's webhook secret. Without it PR repair is off.
 	"GITHUB_PR_REPAIR_WEBHOOK_SECRET",
-	"YTIMESY_USER_MONTHLY_MICRO_USD",
 	"YTIMESY_FLEET_MONTHLY_MICRO_USD",
 	"YTIMESY_FLEET_LIFETIME_MICRO_USD",
 	"R2_ACCOUNT_ID",
@@ -63,6 +62,13 @@ for (const name of required) {
 	if (!value) throw new Error(`Production deployment is missing ${name}.`);
 	secrets[name] = value;
 }
+
+// Per-user rolling usage windows (micro-USD of VM cost); the deployment's
+// environment tunes them, these are the defaults.
+secrets.YTIMESY_USER_5H_MICRO_USD =
+	process.env.YTIMESY_USER_5H_MICRO_USD || "5000000";
+secrets.YTIMESY_USER_WEEKLY_MICRO_USD =
+	process.env.YTIMESY_USER_WEEKLY_MICRO_USD || "25000000";
 
 const database = new URL(secrets.DATABASE_URL);
 if (
@@ -121,6 +127,9 @@ secrets.ENVIRONMENT_WORKFLOW_SECRET = derived(
 );
 secrets.BACKGROUND_WORKFLOW_SECRET = derived(
 	"ytimesy:background-workflows:production:v1",
+);
+secrets.PR_REPAIR_INGRESS_SECRET = derived(
+	"ytimesy:pr-repair-ingress:production:v1",
 );
 secrets.YTIMESY_REALTIME_SECRET = derived("ytimesy:realtime:production:v1");
 secrets.YTIMESY_GIT_PROXY_SECRET = secrets.GIT_PROXY_SECRET;

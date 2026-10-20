@@ -13,7 +13,6 @@ import { database } from "../database";
 import {
 	reserveInfrastructureUsage,
 	settleInfrastructureUsage,
-	userInfrastructureUsage,
 } from "../infrastructure-usage";
 import { loadToolsSnapshotSetting } from "../product-settings";
 import { consumeUserAction } from "../user-action-rate";
@@ -39,7 +38,8 @@ type Admission = {
 const PROVIDER_STOP_BUFFER_SECONDS = 60;
 
 export const INFRASTRUCTURE_CAP_SETTINGS = [
-	"YTIMESY_USER_MONTHLY_MICRO_USD",
+	"YTIMESY_USER_5H_MICRO_USD",
+	"YTIMESY_USER_WEEKLY_MICRO_USD",
 	"YTIMESY_FLEET_MONTHLY_MICRO_USD",
 	"YTIMESY_FLEET_LIFETIME_MICRO_USD",
 ] as const;
@@ -269,13 +269,9 @@ async function admittedCap(
 		);
 	}
 	const hourlyMicroUsd = computeHourlyMicroUsd(resources);
-	const balance = await userInfrastructureUsage(userId, client);
-	const seconds = Math.min(
-		Math.max(1, Math.min(3600, requestedSeconds)),
-		Math.floor((balance.remainingMicroUsd * 3600) / hourlyMicroUsd) -
-			PROVIDER_STOP_BUFFER_SECONDS,
-	);
-	if (seconds < 1) throw new MachineUsageLimitReached();
+	// The user's usage windows gate starting work, not its size: a running
+	// machine keeps buying runtime so its turn finishes (fleet caps still apply).
+	const seconds = Math.max(1, Math.min(3600, requestedSeconds));
 	const id = randomUUID();
 	const baseline = Math.floor(totalSeconds);
 	await reserveInfrastructureUsage(
@@ -286,6 +282,8 @@ async function admittedCap(
 			amountMicroUsd: Math.ceil(
 				((seconds + PROVIDER_STOP_BUFFER_SECONDS) * hourlyMicroUsd) / 3600,
 			),
+			// A known VM that is not paused or stopped is already running.
+			continuing: vmId !== undefined && !settled,
 		},
 		client,
 	);

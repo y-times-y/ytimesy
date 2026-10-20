@@ -19,10 +19,10 @@ import {
 function viewerBlock(dir: string) {
 	const start = START_WORKSPACE_DESKTOP.indexOf("DESK_AUTH_FILE=");
 	const end = START_WORKSPACE_DESKTOP.indexOf("python3 - <<'PY'", start);
-	return START_WORKSPACE_DESKTOP.slice(start, end).replaceAll(
-		"/tmp/ytimesy-desk",
-		`${dir}/ytimesy-desk`,
-	);
+	return `HOME=${dir}\nVNC_SOCKET=${dir}/rfb.sock\n${START_WORKSPACE_DESKTOP.slice(
+		start,
+		end,
+	).replaceAll("/tmp/ytimesy-desk", `${dir}/ytimesy-desk`)}`;
 }
 
 let dir: string;
@@ -37,11 +37,17 @@ beforeEach(() => {
 	stub("websockify", `echo "websockify $*" >> "${dir}/calls"`);
 	stub("sleep", "true");
 	stub("sha256sum", `shasum -a 256 "$1"`);
+	// pgrep -f answers from pgrep.out: the proxy already running, if any.
+	stub("pgrep", `grep -q -- "$2" "${dir}/pgrep.out" 2>/dev/null`);
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-function run(listening = "") {
+function run(
+	listening = "",
+	running = listening ? "websockify --unix-target" : "",
+) {
 	writeFileSync(join(dir, "ss.out"), listening);
+	writeFileSync(join(dir, "pgrep.out"), running);
 	execFileSync("/bin/sh", ["-eu", "-c", `${viewerBlock(dir)}\nwait`], {
 		env: { PATH: `${dir}:/usr/bin:/bin` },
 	});
@@ -56,8 +62,10 @@ it("listens publicly only behind the credential, and records which one", () => {
 	writeFileSync(join(dir, "ytimesy-desk-viewer.auth"), "ytimesy:secret");
 	expect(run()).toEqual([
 		"pkill -f websockify.*:6080",
-		"websockify --auth-plugin websockify.auth_plugins.BasicHTTPAuth --auth-source ytimesy:secret 0.0.0.0:6080 127.0.0.1:5900",
+		`websockify --auth-plugin ytimesy_desk_auth.FileBasicHTTPAuth --auth-source ${dir}/ytimesy-desk-viewer.auth --unix-target=${dir}/rfb.sock 0.0.0.0:6080`,
 	]);
+	// The credential is read from its file, never passed in argv.
+	expect(readFileSync(join(dir, "calls"), "utf8")).not.toContain("secret");
 	expect(readFileSync(join(dir, "ytimesy-desk-auth.applied"), "utf8")).toBe(
 		createHash("sha256").update("ytimesy:secret").digest("hex"),
 	);
@@ -85,7 +93,9 @@ it("without a credential, stops an open public proxy and listens on loopback onl
 		"pkill -f websockify.*:6080",
 	]);
 	rmSync(join(dir, "calls"));
-	expect(run("")).toEqual(["websockify 127.0.0.1:6080 127.0.0.1:5900"]);
+	expect(run("")).toEqual([
+		`websockify --unix-target=${dir}/rfb.sock 127.0.0.1:6080`,
+	]);
 	rmSync(join(dir, "calls"));
 	expect(run("LISTEN 0 100 127.0.0.1:6080 0.0.0.0:*\n")).toEqual([]);
 });
@@ -94,4 +104,48 @@ it("probes for the credential it expects and refuses anything but a digest", () 
 	const digest = "a".repeat(64);
 	expect(probeWorkspaceDesktop(digest)).toContain(`== "${digest}"`);
 	expect(() => probeWorkspaceDesktop("$(reboot)")).toThrow();
+});
+
+it("restarts a proxy left from the TCP viewer even when its credential is current", () => {
+	writeFileSync(join(dir, "ytimesy-desk-viewer.auth"), "ytimesy:secret");
+	writeFileSync(
+		join(dir, "ytimesy-desk-auth.applied"),
+		createHash("sha256").update("ytimesy:secret").digest("hex"),
+	);
+	expect(
+		run(
+			"LISTEN 0 100 0.0.0.0:6080 0.0.0.0:*\n",
+			"websockify 0.0.0.0:6080 127.0.0.1:5900",
+		)[0],
+	).toBe("pkill -f websockify.*:6080");
+});
+
+it("loads the viewer credential from its file in the auth plugin", () => {
+	execFileSync("/bin/sh", ["-eu", "-c", viewerBlock(dir)], {
+		env: { PATH: `${dir}:/usr/bin:/bin` },
+	});
+	// A stand-in for websockify's BasicHTTPAuth, which compares user:password to src.
+	const fake = join(dir, "fake", "websockify");
+	execFileSync("mkdir", ["-p", fake]);
+	writeFileSync(join(fake, "__init__.py"), "");
+	writeFileSync(
+		join(fake, "auth_plugins.py"),
+		"class BasicHTTPAuth:\n    def __init__(self, src=None):\n        self.src = src\n",
+	);
+	writeFileSync(join(dir, "ytimesy-desk-viewer.auth"), "ytimesy:secret\n");
+	const src = execFileSync(
+		"python3",
+		[
+			"-c",
+			"import sys, ytimesy_desk_auth as a; print(a.FileBasicHTTPAuth(sys.argv[1]).src)",
+			join(dir, "ytimesy-desk-viewer.auth"),
+		],
+		{
+			env: {
+				PYTHONPATH: `${join(dir, ".ytimesy", "desk-auth")}:${join(dir, "fake")}`,
+			},
+			encoding: "utf8",
+		},
+	);
+	expect(src).toBe("ytimesy:secret\n");
 });

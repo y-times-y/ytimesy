@@ -38,6 +38,24 @@ vi.mock("../src/server/adapters/memory-repos", () => ({
 		},
 	}),
 }));
+const analytics = vi.hoisted(() => ({
+	deleted: vi.fn(async (_user: string) => true),
+}));
+vi.mock("../src/server/adapters/analytics-deletion", () => ({
+	deleteAnalyticsPerson: analytics.deleted,
+}));
+const cancelled = vi.hoisted(() => [] as string[]);
+vi.mock("../src/server/services/cancel-server-turn", () => ({
+	cancelServerTurn: async (userId: string, sessionId: string) => {
+		cancelled.push(`${userId}/${sessionId}`);
+	},
+}));
+const realtime = vi.hoisted(() => ({
+	purge: vi.fn(async (_user: string, _session: string) => {}),
+}));
+vi.mock("../src/server/adapters/realtime-delivery", () => ({
+	purgeConversationState: realtime.purge,
+}));
 vi.mock("../src/server/adapters/checkpoints/storage", () => ({
 	checkpointStorageConfigured: storage.configured,
 	removeChatObjects: storage.remove,
@@ -266,4 +284,38 @@ it("deletes the user's memory repos, and only logs when Artifacts fails", async 
 		expect.objectContaining({ leftovers: ["memory:memory-carol"] }),
 	);
 	warn.mockRestore();
+});
+
+it("deletes each chat's Durable Object state, and keeps the account when it cannot", async () => {
+	const machines = {
+		destroy: vi.fn(async (_id: string) => {}),
+		destroySnapshot: vi.fn(async (_id: string) => {}),
+	};
+	realtime.purge.mockRejectedValueOnce(new Error("edge unavailable"));
+	await expect(deleteAccount(machines, "alice")).rejects.toBeInstanceOf(
+		Response,
+	);
+	expect(
+		(await db.query("select 1 from auth_user where id='alice'")).rows,
+	).toHaveLength(1);
+	expect(machines.destroy).not.toHaveBeenCalled();
+	await deleteAccount(machines, "alice");
+	expect(realtime.purge).toHaveBeenLastCalledWith("alice", session);
+});
+
+it("cancels running turns before anything is removed and deletes the analytics person", async () => {
+	cancelled.length = 0;
+	const machines = {
+		destroy: vi.fn(async (_id: string) => {}),
+		destroySnapshot: vi.fn(async (_id: string) => {}),
+	};
+	storage.remove.mockImplementationOnce(async () => {
+		expect(cancelled).toEqual([`alice/${session}`]);
+	});
+	await deleteAccount(machines, "alice");
+	expect(cancelled).toEqual([`alice/${session}`]);
+	expect(analytics.deleted).toHaveBeenCalledWith("alice");
+	// An analytics failure is logged as a leftover, never undoes the deletion.
+	analytics.deleted.mockRejectedValueOnce(new Error("PostHog down"));
+	await expect(deleteAccount(machines, "bob")).resolves.toBeUndefined();
 });

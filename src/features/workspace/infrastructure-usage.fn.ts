@@ -51,7 +51,7 @@ export const adjustInfrastructureUsageFn = createServerFn({ method: "POST" })
 		z.object({
 			id: z.string().uuid(),
 			userId: z.string().min(1).max(200),
-			kind: z.enum(["grant", "monthly_limit"]),
+			kind: z.enum(["five_hour_limit", "weekly_limit"]),
 			amountMicroUsd: z.number().int().min(0).max(1_000_000_000_000),
 			reason: z.string().trim().min(1).max(500),
 		}),
@@ -112,7 +112,7 @@ export const infrastructureAllowanceAuditFn = createServerFn({
 		id: string;
 		actor_id: string;
 		user_id: string;
-		kind: "grant" | "monthly_limit";
+		kind: string;
 		amount_micro_usd: string;
 		reason: string;
 		created_at: Date;

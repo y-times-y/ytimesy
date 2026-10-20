@@ -7,7 +7,7 @@ import { Effect } from "effect";
 import { App } from "octokit";
 import { closeDatabase, database } from "#/server/adapters/database";
 import { readGitHubAppCredentials } from "#/server/adapters/github/credentials";
-import { modelWorkflowSigningSecret } from "#/server/adapters/model-workflow-dispatch";
+import { prRepairIngressSigningSecret } from "#/server/adapters/model-workflow-dispatch";
 import {
 	DEVELOPMENT_EDGE_ORIGIN,
 	WORKERS_DEV_SUBDOMAIN,
@@ -104,7 +104,7 @@ async function main() {
 			secretsFile,
 			JSON.stringify({
 				GITHUB_PR_REPAIR_WEBHOOK_SECRET: secret,
-				MODEL_WORKFLOW_SECRET: modelWorkflowSigningSecret(),
+				PR_REPAIR_INGRESS_SECRET: prRepairIngressSigningSecret(),
 			}),
 			{ mode: 0o600 },
 		);

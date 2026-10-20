@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`admits a running VM that has no admission yet and enrolls its retention > round trips 1`] = `10`;
+exports[`admits a running VM that has no admission yet and enrolls its retention > round trips 1`] = `9`;
 
 exports[`admits a running VM that has no admission yet and enrolls its retention 1`] = `
 [
@@ -116,48 +116,6 @@ exports[`keeps a running VM's covering cap without buying runtime 1`] = `
 }
 `;
 
-exports[`refuses a paused VM whose allowance cannot buy the operation 1`] = `"This chat's machine reached its usage limit, so it cannot start. Your work is preserved; retry once the cloud usage allowance resets or is raised."`;
-
-exports[`refuses a paused VM whose allowance cannot buy the operation 2`] = `
-{
-  "admission": [
-    {
-      "baseline_seconds": "903",
-      "hourly_micro_usd": "132240",
-      "max_run_total_seconds": "948",
-      "reservation_id": "r1",
-      "slug": "ytimesy-ag-0000000000004000",
-      "user_id": "alice",
-      "vm_id": "vm-1",
-    },
-  ],
-  "leases": [],
-  "reservations": [
-    {
-      "consumed_micro_usd": "11131",
-      "id": "r0",
-      "reserved_micro_usd": "13224",
-      "resource_key": "vm:ytimesy-ag-0000000000004000",
-      "user_id": "alice",
-    },
-    {
-      "consumed_micro_usd": null,
-      "id": "r1",
-      "reserved_micro_usd": "3857",
-      "resource_key": "vm:ytimesy-ag-0000000000004000",
-      "user_id": "alice",
-    },
-  ],
-  "retention": [
-    {
-      "phase": "active",
-      "touched": true,
-      "vm_id": "vm-1",
-    },
-  ],
-}
-`;
-
 exports[`refuses a top-up past the fleet's monthly budget 1`] = `
 {
   "admission": [
@@ -177,39 +135,6 @@ exports[`refuses a top-up past the fleet's monthly budget 1`] = `
       "consumed_micro_usd": null,
       "id": "r0",
       "reserved_micro_usd": "13224",
-      "resource_key": "vm:ytimesy-ag-0000000000004000",
-      "user_id": "alice",
-    },
-  ],
-  "retention": [
-    {
-      "phase": "active",
-      "touched": true,
-      "vm_id": "vm-1",
-    },
-  ],
-}
-`;
-
-exports[`refuses a top-up past the user's allowance including grants 1`] = `
-{
-  "admission": [
-    {
-      "baseline_seconds": "100",
-      "hourly_micro_usd": "132240",
-      "max_run_total_seconds": "700",
-      "reservation_id": "r0",
-      "slug": "ytimesy-ag-0000000000004000",
-      "user_id": "alice",
-      "vm_id": "vm-1",
-    },
-  ],
-  "leases": [],
-  "reservations": [
-    {
-      "consumed_micro_usd": null,
-      "id": "r0",
-      "reserved_micro_usd": "24244",
       "resource_key": "vm:ytimesy-ag-0000000000004000",
       "user_id": "alice",
     },

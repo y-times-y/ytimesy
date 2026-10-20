@@ -109,9 +109,9 @@ EOF
   fi
 }
 
-if ! command -v Xvfb >/dev/null 2>&1 || ! command -v x11vnc >/dev/null 2>&1 || ! command -v websockify >/dev/null 2>&1; then
+if ! command -v Xvfb >/dev/null 2>&1 || ! command -v x11vnc >/dev/null 2>&1 || ! command -v websockify >/dev/null 2>&1 || ! command -v xauth >/dev/null 2>&1; then
   apt_get update -qq
-  apt_get install -y -qq --no-install-recommends xvfb x11vnc websockify fluxbox xterm feh tint2 pcmanfm
+  apt_get install -y -qq --no-install-recommends xvfb xauth x11vnc websockify fluxbox xterm feh tint2 pcmanfm
 fi
 if ! command -v tint2 >/dev/null 2>&1 || ! command -v pcmanfm >/dev/null 2>&1; then
   apt_get update -qq
@@ -139,6 +139,14 @@ touch "$PROFILE"
 if ! grep -q 'DISPLAY=:0' "$PROFILE" 2>/dev/null; then
   printf '\\nexport DISPLAY=:0\\n' >> "$PROFILE"
 fi
+# The display, its viewer and Chrome's DevTools belong to this user only: X
+# clients need the cookie in this 0600 file, and read-only agents (another
+# Linux user on the same VM) have neither it nor loopback TCP.
+XAUTH="\${HOME}/.Xauthority"
+export XAUTHORITY="$XAUTH"
+if ! grep -q 'XAUTHORITY=' "$PROFILE" 2>/dev/null; then
+  printf 'export XAUTHORITY="$HOME/.Xauthority"\\n' >> "$PROFILE"
+fi
 printf ':0\\n' > /tmp/ytimesy-display
 
 if [ ! -s /tmp/ytimesy-desktop-wallpaper.b64 ]; then
@@ -156,8 +164,20 @@ fi
 printf 'session.screen0.rootCommand: feh --bg-fill %s\\n' "$WALLPAPER" > "\${HOME}/.fluxbox/overlay"
 write_desktop_launchers
 
+# A desktop started before access control (-ac, a TCP viewer without a
+# password) restarts locked down.
+if pgrep -f 'Xvfb :0 .*-ac' >/dev/null 2>&1; then
+  pkill -x x11vnc >/dev/null 2>&1 || true
+  pkill -x Xvfb >/dev/null 2>&1 || true
+  sleep 1
+fi
 if ! pgrep -x Xvfb >/dev/null 2>&1; then
-  Xvfb :0 -screen 0 1440x900x24 -ac >/tmp/ytimesy-xvfb.log 2>&1 &
+  (umask 077; touch "$XAUTH")
+  chmod 600 "$XAUTH"
+  cookie="$(mcookie 2>/dev/null || python3 -c 'import secrets; print(secrets.token_hex(16))')"
+  # printf is a builtin, so the cookie never appears in a process list.
+  printf 'add :0 . %s\\n' "$cookie" | xauth -q -f "$XAUTH" source -
+  Xvfb :0 -screen 0 1440x900x24 -auth "$XAUTH" -nolisten tcp >/tmp/ytimesy-xvfb.log 2>&1 &
   sleep 1
 fi
 export DISPLAY=:0
@@ -176,32 +196,60 @@ fi
 if ! find_chrome_bin >/dev/null 2>&1; then
   echo "Chrome is still installing; desktop is up on DISPLAY=:0" >&2
 fi
+# VNC listens only on a Unix socket in a 0700 directory, not on TCP; the
+# viewer proxy below is its one client. x11vnc has no VNC password: the
+# socket's permissions and the proxy's credential are the access control.
+VNC_DIR="\${HOME}/.ytimesy/vnc"
+VNC_SOCKET="$VNC_DIR/rfb.sock"
+if pgrep -f 'x11vnc.*-rfbport 5900' >/dev/null 2>&1; then
+  pkill -x x11vnc >/dev/null 2>&1 || true
+  sleep 1
+fi
 if ! pgrep -x x11vnc >/dev/null 2>&1; then
-  x11vnc -display :0 -forever -shared -nopw -listen 127.0.0.1 -rfbport 5900 >/tmp/ytimesy-desk.log 2>&1 &
+  install -d -m 0700 "$VNC_DIR"
+  rm -f "$VNC_SOCKET"
+  x11vnc -display :0 -auth "$XAUTH" -forever -shared -nopw -unixsock "$VNC_SOCKET" -rfbport 0 >/tmp/ytimesy-desk.log 2>&1 &
   sleep 1
 fi
 # The viewer port is published at the edge, so it only listens publicly behind
-# the server-held credential (BasicHTTPAuth). Without one it stays local.
+# the server-held credential (BasicHTTPAuth). Without one it stays local. The
+# credential is read from its 0600 file by a small plugin, never put in argv
+# where any user's process list shows it.
 DESK_AUTH_FILE=/tmp/ytimesy-desk-viewer.auth
 DESK_AUTH_APPLIED=/tmp/ytimesy-desk-auth.applied
+DESK_AUTH_PLUGIN="\${HOME}/.ytimesy/desk-auth"
+mkdir -p "$DESK_AUTH_PLUGIN"
+cat > "$DESK_AUTH_PLUGIN/ytimesy_desk_auth.py" <<'PY'
+from websockify.auth_plugins import BasicHTTPAuth
+
+
+class FileBasicHTTPAuth(BasicHTTPAuth):
+    """BasicHTTPAuth with user:password read from the file named by --auth-source."""
+
+    def __init__(self, src=None):
+        with open(src) as source:
+            super().__init__(source.read().rstrip("\\n"))
+PY
 desk_proxy_listening() { ss -ltn | grep -q ':6080 '; }
+# A proxy from before the Unix-socket viewer forwards to a port nothing serves.
+desk_proxy_current() { pgrep -f 'websockify.*--unix-target' >/dev/null 2>&1; }
 if [ -s "$DESK_AUTH_FILE" ]; then
   chmod 600 "$DESK_AUTH_FILE"
   DESK_AUTH_DIGEST="$(sha256sum "$DESK_AUTH_FILE" | cut -d' ' -f1)"
-  if ! desk_proxy_listening || [ "$(cat "$DESK_AUTH_APPLIED" 2>/dev/null)" != "$DESK_AUTH_DIGEST" ]; then
+  if ! desk_proxy_listening || ! desk_proxy_current || [ "$(cat "$DESK_AUTH_APPLIED" 2>/dev/null)" != "$DESK_AUTH_DIGEST" ]; then
     pkill -f 'websockify.*:6080' >/dev/null 2>&1 || true
     sleep 1
-    websockify --auth-plugin websockify.auth_plugins.BasicHTTPAuth --auth-source "$(cat "$DESK_AUTH_FILE")" 0.0.0.0:6080 127.0.0.1:5900 >/tmp/ytimesy-desk-proxy.log 2>&1 &
+    PYTHONPATH="$DESK_AUTH_PLUGIN" websockify --auth-plugin ytimesy_desk_auth.FileBasicHTTPAuth --auth-source "$DESK_AUTH_FILE" --unix-target="$VNC_SOCKET" 0.0.0.0:6080 >/tmp/ytimesy-desk-proxy.log 2>&1 &
     sleep 1
     printf '%s' "$DESK_AUTH_DIGEST" > "$DESK_AUTH_APPLIED"
   fi
 else
-  if ss -ltn | grep -qF -e '0.0.0.0:6080 ' -e '*:6080 ' -e '[::]:6080 '; then
+  if ss -ltn | grep -qF -e '0.0.0.0:6080 ' -e '*:6080 ' -e '[::]:6080 ' || { desk_proxy_listening && ! desk_proxy_current; }; then
     pkill -f 'websockify.*:6080' >/dev/null 2>&1 || true
     sleep 1
   fi
-  if ! desk_proxy_listening; then
-    websockify 127.0.0.1:6080 127.0.0.1:5900 >/tmp/ytimesy-desk-proxy.log 2>&1 &
+  if ! desk_proxy_listening || ! desk_proxy_current; then
+    websockify --unix-target="$VNC_SOCKET" 127.0.0.1:6080 >/tmp/ytimesy-desk-proxy.log 2>&1 &
     sleep 1
   fi
 fi

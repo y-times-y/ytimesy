@@ -29,6 +29,8 @@ import {
 	recoveredConversation,
 } from "./conversation-recovery";
 import { database } from "./database";
+import { infrastructureAdmissionEnabled } from "./freestyle/usage-admission";
+import { assertUsageWindowsOpen } from "./infrastructure-usage";
 import { observePeerInbox } from "./peer-inbox-observation";
 import { trainingEligibleAtTurnStart } from "./training-consent";
 import { mirrorTurnHistory } from "./turn-history-mirror";
@@ -115,6 +117,11 @@ export async function enqueueApiTurn(input: {
 	/** The user chose to continue this turn on a fallback route from the start. */
 	failover?: TurnFailover;
 }) {
+	// A turn the user (or a wake-up) starts is new work and waits for an
+	// exhausted usage window; a subagent's task belongs to its parent's
+	// running turn, which always finishes.
+	if (!input.preparedTask && infrastructureAdmissionEnabled())
+		await assertUsageWindowsOpen(input.userId);
 	const client = await database().connect();
 	let turnId: string | undefined;
 	let started: TurnAnalyticsSession | undefined;

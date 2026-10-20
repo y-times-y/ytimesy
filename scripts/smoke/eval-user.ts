@@ -591,10 +591,10 @@ export async function createEvalUser(options: {
 			"insert into dev_eval_user(user_id,owner_user_id,label,harness_variant) values($1,$2,$3,$4::jsonb)",
 			[userId, ownerId, label, JSON.stringify(harnessVariantChanges(variant))],
 		);
-		// A run starts one VM per task and repeat; the product default monthly
-		// allowance covers only a few concurrent holds. The fleet caps still apply.
+		// A run starts one VM per task and repeat; the product's default usage
+		// windows cover only a few concurrent holds. The fleet caps still apply.
 		await db.query(
-			"insert into infrastructure_usage_policy(user_id,monthly_micro_usd) values($1,$2)",
+			"insert into infrastructure_usage_policy(user_id,monthly_micro_usd,five_hour_micro_usd,weekly_micro_usd) values($1,$2,$2,$2)",
 			[userId, EVAL_USER_VM_ALLOWANCE_MICRO_USD],
 		);
 		await db.query(
