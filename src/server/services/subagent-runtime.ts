@@ -178,7 +178,10 @@ export async function subagentReport(input: {
 	readonly deps?: SidekickRuntimeDeps;
 	/** Lead mode fusion: the variant's role models (the classifier's and writerEscalation's). */
 	readonly roleModels?: RoleModels;
-	/** The sidekick turn's abort signal (the classifier stops with it). */
+	/**
+	 * Stops the round's classifier early. Not the finished turn's own signal:
+	 * the report is written after the turn ended, when that signal is spent.
+	 */
 	readonly signal?: AbortSignal;
 }): Promise<string> {
 	const { session } = input;
