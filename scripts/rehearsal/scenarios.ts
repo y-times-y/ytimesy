@@ -13,6 +13,8 @@ export type ScenarioId =
 	| "fusion-explore"
 	| "fusion-multiturn"
 	| "fusion-stuck"
+	| "fusion-handback"
+	| "fusion-classifier-fail"
 	| "subagents";
 
 export type Scenario = {
@@ -30,7 +32,11 @@ const runCode = (code: string): Reply => ({
 const bash = (command: string, timeout?: number): Reply => ({
 	calls: [{ name: "bash", args: timeout ? { command, timeout } : { command } }],
 });
-const marked = (tag: string) => (first: string) => first.includes(tag);
+/** The sidekick classifier's requests (src/domain/sidekick-classifier.ts). */
+export const CLASSIFIER_MARKER = "Sidekick round summary for classification.";
+const isClassifier = (first: string) => first.includes(CLASSIFIER_MARKER);
+const marked = (tag: string) => (first: string) =>
+	first.includes(tag) && !isClassifier(first);
 const isChecker = (first: string) =>
 	first.includes("You are an independent checker");
 
@@ -519,7 +525,7 @@ function stuckLeadScript(tag: string): AgentScript {
 				return send({
 					id: "1",
 					message:
-						'[rehearsal:escalated] Add a one-line comment "rehearsal escalated" to the top of src/snapshot_context.cc and report the patch.',
+						'[rehearsal:stuck-escalated] Add a one-line comment "rehearsal escalated" to the top of src/snapshot_context.cc and report the patch.',
 				});
 			if (reportsIn.length >= 3 && applied >= 3)
 				return { text: "Rehearsal stuck lead finished." };
@@ -532,9 +538,10 @@ function stuckSidekickScript(): AgentScript {
 	const files = [EXPLORE_FILE, "src/lsm_db.cc"];
 	return {
 		name: "stuck-sidekick",
-		match: (first) =>
+		match: (first, model) =>
 			first.includes("[rehearsal:stuck-sidekick]") &&
-			!first.includes("You take over as the lead's sidekick"),
+			!isClassifier(first) &&
+			model === "gpt-6-luna",
 		reply: ({ step }) => {
 			const round = Math.floor(step / 2);
 			if (step % 2 === 0)
@@ -550,16 +557,147 @@ function stuckSidekickScript(): AgentScript {
 	};
 }
 
+/** c4: the same sidekick session, now on the escalation model after its compaction. */
 function escalatedSidekickScript(): AgentScript {
 	return {
 		name: "escalated-sidekick",
-		match: (first) =>
-			first.includes("You take over as the lead's sidekick") &&
-			first.includes("[rehearsal:escalated]"),
-		reply: ({ step }) =>
-			step === 0
-				? markFile("src/snapshot_context.cc", "rehearsal escalated")
-				: { text: "Rehearsal escalated sidekick done." },
+		match: (first, model) =>
+			first.includes("[rehearsal:stuck-escalated]") &&
+			!first.includes("[rehearsal:fusion-stuck]") &&
+			!isClassifier(first) &&
+			model === "gpt-6.1-sol",
+		reply: ({ calls }) =>
+			calls.some((call) =>
+				JSON.stringify(call.args).includes("rehearsal escalated"),
+			)
+				? { text: "Rehearsal escalated sidekick done." }
+				: markFile("src/snapshot_context.cc", "rehearsal escalated"),
+	};
+}
+
+/** c5: the classifier hands round 1 back; the lead takes over and edits itself. */
+function handbackLeadScript(tag: string): AgentScript {
+	return {
+		name: "handback-lead",
+		match: (first) => first.includes(tag) && !isChecker(first),
+		reply: (context) => {
+			const patches = reports(context);
+			const applied = appliedCount(context);
+			if (!count(context, "agent"))
+				return {
+					calls: [
+						{
+							name: "agent",
+							args: {
+								role: "writer",
+								title: "Mark the types",
+								brief: `[rehearsal:handback-sidekick] Add a one-line comment "rehearsal handback 1" to the top of ${EXPLORE_FILE}. Report the patch.`,
+							},
+						},
+					],
+				};
+			if (patches.length > applied)
+				return applyPatch(patches[applied] as string);
+			const handedBack = context.userTexts.some((text) =>
+				text.includes("Runtime notice: sidekick 1 needs you"),
+			);
+			if (!handedBack) return waitForReport();
+			if (!count(context, "edit") && !leadEdited(context))
+				return runCode(`const text = await tools.read({ path: "src/lsm_db.cc" });
+const first = String(text).split("\\n")[0].replace(/^\\s*\\d+[\\t|:]\\s?/, "");
+const edited = await tools.edit({ path: "src/lsm_db.cc", edits: [{ old_string: first, new_string: "// rehearsal lead took over\\n" + first }] });
+return JSON.stringify({ edited, LEAD_TOOK_OVER: true });`);
+			return { text: "Rehearsal handback lead took over and finished." };
+		},
+	};
+}
+
+const leadEdited = (context: ScriptContext) =>
+	context.calls.some((call) =>
+		JSON.stringify(call.args).includes("LEAD_TOOK_OVER"),
+	);
+
+/** c6: the classifier answers garbage; the rules decide (no escalation model: hand back). */
+function classifierFailLeadScript(tag: string): AgentScript {
+	return {
+		name: "clsfail-lead",
+		match: (first) => first.includes(tag) && !isChecker(first),
+		reply: (context) => {
+			const reportsIn = writerReports(context);
+			const patches = reports(context);
+			const applied = appliedCount(context);
+			const sends = count(context, "agent_send");
+			if (!count(context, "agent"))
+				return {
+					calls: [
+						{
+							name: "agent",
+							args: {
+								role: "writer",
+								title: "Make the bogus check pass",
+								brief: `[rehearsal:clsfail-sidekick] Make \`make bogus-check\` pass, and add a one-line comment "rehearsal stuck 1" to the top of ${EXPLORE_FILE}. Report the patch.`,
+							},
+						},
+					],
+				};
+			if (patches.length > applied)
+				return applyPatch(patches[applied] as string);
+			if (reportsIn.length === 1 && sends === 0)
+				return send({
+					id: "1",
+					message:
+						'[rehearsal:clsfail-feedback] make bogus-check still fails. Fix it, and add "rehearsal stuck 2" to the top of src/lsm_db.cc.',
+				});
+			if (reportsIn.length >= 2 && applied >= 2)
+				return { text: "Rehearsal classifier-failure lead finished." };
+			return waitForReport();
+		},
+	};
+}
+
+function clsfailSidekickScript(): AgentScript {
+	const stuck = stuckSidekickScript();
+	return {
+		name: "clsfail-sidekick",
+		match: marked("[rehearsal:clsfail-sidekick]"),
+		reply: stuck.reply,
+	};
+}
+
+/**
+ * The classifier, scripted per scenario by the brief's marker: c4 says
+ * on_track after round 1 and switch_model after round 2; c5 hands round 1
+ * back; c6 answers prose (unparsable, so the rules decide); any other
+ * sidekick round is on_track.
+ */
+export function classifierScript(): AgentScript {
+	return {
+		name: "classifier",
+		match: isClassifier,
+		reply: ({ userTexts }) => {
+			const text = userTexts.join("\n");
+			const summary = JSON.parse(
+				text.slice(text.indexOf(CLASSIFIER_MARKER) + CLASSIFIER_MARKER.length),
+			) as { round: number; brief: string; canSwitch: boolean };
+			const json = (decision: string, reason: string) => ({
+				text: JSON.stringify({ decision, reason }),
+			});
+			if (summary.brief.includes("[rehearsal:stuck-"))
+				return summary.round === 2
+					? json(
+							"switch_model",
+							"rehearsal: it failed make bogus-check twice the same way",
+						)
+					: json("on_track", "rehearsal: progressing");
+			if (summary.brief.includes("[rehearsal:handback-"))
+				return json(
+					"hand_back",
+					"rehearsal: the brief leaves src/lsm_db.cc to the lead",
+				);
+			if (summary.brief.includes("[rehearsal:clsfail-"))
+				return { text: "Looks stuck to me, probably." };
+			return json("on_track", "rehearsal: progressing");
+		},
 	};
 }
 
@@ -619,13 +757,35 @@ export function scenarios(): Scenario[] {
 		{
 			id: "fusion-stuck",
 			title:
-				"c4. lead=fusion stuck signal: the same check fails twice, the lead is told, the sidekick restarts on writerEscalation",
+				"c4. lead=fusion classifier switch: the same check fails twice, the classifier says switch_model, the same sidekick continues on writerEscalation after its compaction",
 			variant:
 				"codeMode=primary,subagents=on,lead=fusion,roleModels.writer=codex:gpt-6-luna,roleModels.writerEscalation=codex:gpt-6.1-sol",
 			scripts: [
 				stuckLeadScript("[rehearsal:fusion-stuck]"),
 				escalatedSidekickScript(),
 				stuckSidekickScript(),
+			],
+		},
+		{
+			id: "fusion-handback",
+			title:
+				"c5. lead=fusion hand_back: the classifier hands round 1 back, the notice reaches the lead, which takes over",
+			variant:
+				"codeMode=primary,subagents=on,lead=fusion,roleModels.writer=codex:gpt-6-luna,roleModels.writerEscalation=codex:gpt-6.1-sol",
+			scripts: [
+				handbackLeadScript("[rehearsal:fusion-handback]"),
+				writerScript("handback-sidekick", "[rehearsal:handback-sidekick]"),
+			],
+		},
+		{
+			id: "fusion-classifier-fail",
+			title:
+				"c6. lead=fusion classifier failure: an unparsable answer falls back to the rules, which hand the stuck round back",
+			variant:
+				"codeMode=primary,subagents=on,lead=fusion,roleModels.writer=codex:gpt-6-luna",
+			scripts: [
+				classifierFailLeadScript("[rehearsal:fusion-classifier-fail]"),
+				clsfailSidekickScript(),
 			],
 		},
 		{

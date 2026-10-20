@@ -51,6 +51,9 @@ export type ModelRequestRecord = {
 	at: number;
 };
 
+/** The start of CONTEXT_SUMMARY_INSTRUCTIONS (src/server/services/api-agent-context.ts). */
+const SUMMARY_INSTRUCTIONS = "Write a continuation record for an earlier part";
+
 const CATALOG = ["gpt-6.1-sol", "gpt-6-luna"].map((slug, priority) => ({
 	slug,
 	display_name: slug,
@@ -163,6 +166,27 @@ export class FakeCodex {
 			}
 		}
 		const step = seenSteps.length + texts.length;
+		// A compaction's provider-neutral summary (a model switch at
+		// compaction): answered here, keeping the conversation's markers.
+		if (body.instructions?.startsWith(SUMMARY_INSTRUCTIONS)) {
+			const tags = [
+				...new Set(userTexts.join("\n").match(/\[rehearsal:[a-z0-9-]+\]/g)),
+			];
+			const reply: Reply = {
+				text: `## Requirements and constraints\n- Rehearsal summary of the earlier rounds (${tags.join(" ") || "no markers"}).\n## Decisions\n- None\n## Files changed\n- None\n## Checks run and results\n- make bogus-check failed twice\n## Open TODOs\n- None\n## Important facts\n- None`,
+			};
+			this.requests.push({
+				agent: "summarizer",
+				model: body.model,
+				step: 0,
+				tools: [],
+				reply,
+				lastUser: userTexts.at(-1)?.slice(0, 2000) ?? "",
+				cacheKey: body.prompt_cache_key ?? null,
+				at: Date.now(),
+			});
+			return this.stream(body.model, reply, "summarizer", 0);
+		}
 		// The task or brief is not always the first user message (the runtime
 		// may put context first), so scripts match on every user message.
 		const first = userTexts.join("\n\n");
