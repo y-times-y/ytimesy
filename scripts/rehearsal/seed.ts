@@ -193,3 +193,24 @@ export async function startTaskChat(input: {
 	});
 	return session.id;
 }
+
+/** A later user message in the same task chat (a multi-turn scenario). */
+export async function sendFollowUp(input: {
+	user: RehearsalUser;
+	sessionId: string;
+	text: string;
+}) {
+	const { user } = input;
+	await sendSubscriptionTask(
+		{
+			userId: user.userId,
+			projectId: user.projectId,
+			sessionId: input.sessionId,
+		},
+		{ modelId: MODEL, text: input.text },
+	);
+	await dispatchBackgroundJob({
+		id: backgroundJobId(`rehearsal-admit:${input.sessionId}:${randomUUID()}`),
+		kind: "model-admission",
+	});
+}

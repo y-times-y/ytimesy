@@ -46,6 +46,8 @@ export type ModelRequestRecord = {
 	reply: Reply;
 	/** The newest user-role message this request carried. */
 	lastUser: string;
+	/** The request's prompt_cache_key (one per agent session). */
+	cacheKey: string | null;
 	at: number;
 };
 
@@ -117,6 +119,7 @@ export class FakeCodex {
 			instructions?: string;
 			input: InputItem[];
 			tools?: { name?: string; type?: string }[];
+			prompt_cache_key?: string;
 		};
 		return this.respond(body);
 	};
@@ -126,6 +129,7 @@ export class FakeCodex {
 		instructions?: string;
 		input: InputItem[];
 		tools?: { name?: string; type?: string }[];
+		prompt_cache_key?: string;
 	}): Response {
 		const userTexts: string[] = [];
 		const texts: string[] = [];
@@ -197,6 +201,7 @@ export class FakeCodex {
 			tools: (body.tools ?? []).map((tool) => tool.name ?? tool.type ?? ""),
 			reply,
 			lastUser: userTexts.at(-1) ?? "",
+			cacheKey: body.prompt_cache_key ?? null,
 			at: Date.now(),
 		});
 		if ("fault" in reply) {
