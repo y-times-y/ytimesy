@@ -48,6 +48,14 @@ export type ModelRequestRecord = {
 	lastUser: string;
 	/** The request's prompt_cache_key (one per agent session). */
 	cacheKey: string | null;
+	/** The system instructions the agent was given. */
+	instructions: string;
+	/** The first user-role message (the task or brief). */
+	firstUser: string;
+	/** The reasoning effort the request asked for. */
+	effort: string | null;
+	/** Outputs of the previous step's tool calls, as the model read them. */
+	lastOutputs: string[];
 	at: number;
 };
 
@@ -120,6 +128,7 @@ export class FakeCodex {
 			input: InputItem[];
 			tools?: { name?: string; type?: string }[];
 			prompt_cache_key?: string;
+			reasoning?: { effort?: string };
 		};
 		return this.respond(body);
 	};
@@ -130,6 +139,7 @@ export class FakeCodex {
 		input: InputItem[];
 		tools?: { name?: string; type?: string }[];
 		prompt_cache_key?: string;
+		reasoning?: { effort?: string };
 	}): Response {
 		const userTexts: string[] = [];
 		const texts: string[] = [];
@@ -202,6 +212,10 @@ export class FakeCodex {
 			reply,
 			lastUser: userTexts.at(-1) ?? "",
 			cacheKey: body.prompt_cache_key ?? null,
+			instructions: body.instructions ?? "",
+			firstUser: userTexts[0] ?? "",
+			effort: body.reasoning?.effort ?? null,
+			lastOutputs: last.map((call) => call.output),
 			at: Date.now(),
 		});
 		if ("fault" in reply) {

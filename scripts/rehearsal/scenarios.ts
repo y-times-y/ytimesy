@@ -13,12 +13,15 @@ export type ScenarioId =
 	| "fusion-explore"
 	| "fusion-multiturn"
 	| "fusion-stuck"
-	| "subagents";
+	| "subagents"
+	| "rigor";
 
 export type Scenario = {
 	readonly id: ScenarioId;
 	readonly title: string;
 	readonly variant: string;
+	/** The chat's reasoning effort (the model's default when unset). */
+	readonly reasoning?: string;
 	readonly scripts: AgentScript[];
 	/** Later user messages, each sent once the chat settled after the one before. */
 	readonly followUps?: readonly string[];
@@ -563,6 +566,82 @@ function escalatedSidekickScript(): AgentScript {
 	};
 }
 
+// ---------------------------------------------------------------------------
+// e. rigor=on with outputCap=10000 at effort high: a long command output is
+// capped with a hint; the builder edits and finishes admitting an unverified
+// path; the checker (another model, no effort of its own) passes, and the
+// review loop sends the admission back; the builder verifies and round 2
+// passes.
+
+export const RIGOR_BLOCK = "Ambiguous wording: list the plausible readings";
+export const RIGOR_CHECKER_LINES = [
+	"assumptions or interpretations it states",
+	"Run it once as an outside user would",
+	"A deliverable that itself admits unverified, failing or skipped parts",
+];
+export const ADMITTED_LINE =
+	"Unverified: the compaction path under concurrent writers was not tested.";
+export const CAP_NOTE = "cut from the middle of this";
+
+function rigorBuilderScript(tag: string): AgentScript {
+	return {
+		name: "rigor-builder",
+		match: (first) => first.includes(tag) && !isChecker(first),
+		reply: ({ step, userTexts, calls }) => {
+			if (step === 0) return bash("seq 1 30000");
+			if (step === 1) return { calls: [{ name: "edit", args: builderEdit }] };
+			const notices = userTexts.filter((text) => text.includes(NOTICE));
+			if (!notices.length)
+				return { text: `Rehearsal rigor change made.\n${ADMITTED_LINE}` };
+			if (!calls.some((call) => JSON.stringify(call.args).includes("verified")))
+				return {
+					calls: [
+						{
+							name: "edit",
+							args: {
+								path: TEST_FILE,
+								edits: [
+									{
+										old_string: '"rehearsal edit applied\\n"',
+										new_string: '"rehearsal edit applied (verified)\\n"',
+									},
+								],
+							},
+						},
+					],
+				};
+			return {
+				text: "Verified the concurrent-writer path.\nF1: fixed\nUnverified: none.",
+			};
+		},
+	};
+}
+
+function rigorCheckerScript(tag: string): AgentScript {
+	return {
+		name: "rigor-checker",
+		match: (first) => isChecker(first) && first.includes(tag),
+		reply: () => ({
+			text: JSON.stringify({
+				verdict: "pass",
+				failures: [],
+				tests: [
+					{
+						name: "rehearsal: the edit is present",
+						command:
+							"grep -c 'rehearsal edit applied' tests/regression_test.cc",
+						passed: true,
+						output: "1",
+					},
+				],
+				requirements: [],
+				assumptions: [],
+				notes: "rehearsal rigor check",
+			}),
+		}),
+	};
+}
+
 export function scenarios(): Scenario[] {
 	return [
 		{
@@ -639,6 +718,18 @@ export function scenarios(): Scenario[] {
 				}),
 				writerScript("writer", "[rehearsal:writer]"),
 				researcherScript(),
+			],
+		},
+		{
+			id: "rigor",
+			title:
+				"e. rigor=on, outputCap=10000, effort high: capped output, rigor prompts, an admitted gap sent back, the checker inherits the effort",
+			variant:
+				"subagents=on,review=on,rigor=on,outputCap=10000,roleModels.checker=codex:gpt-6-luna",
+			reasoning: "high",
+			scripts: [
+				rigorBuilderScript("[rehearsal:rigor]"),
+				rigorCheckerScript("[rehearsal:rigor]"),
 			],
 		},
 	];

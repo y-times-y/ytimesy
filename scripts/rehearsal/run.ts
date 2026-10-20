@@ -92,6 +92,7 @@ const results = await Promise.all(
 				text,
 				agentSeconds: 1800,
 				title: `Rehearsal ${scenario.id}`,
+				reasoning: scenario.reasoning,
 			}),
 		);
 		console.log(`rehearsal: ${scenario.id} started (${elapsed()})`);
