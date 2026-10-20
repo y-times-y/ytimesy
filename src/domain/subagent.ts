@@ -27,12 +27,18 @@ export function isReaderRole(role: SubagentRole | null | undefined) {
 
 /**
  * A reader subagent runs on its parent's VM (stored task_placement 'shared'):
- * it owns neither that machine nor its checkout.
+ * it owns neither that machine nor its checkout. So does lead mode fusion's
+ * sidekick, a writer in its lead's checkout (src/domain/sidekick.ts), which
+ * runs as the builder's user, not the reader's.
  */
 export function sharesParentMachine(session: {
 	readonly agentRole?: SubagentRole | null;
+	readonly taskPlacement: string | null;
 }) {
-	return isReaderRole(session.agentRole);
+	return (
+		isReaderRole(session.agentRole) ||
+		(session.agentRole === "writer" && session.taskPlacement === "shared")
+	);
 }
 
 /** The root chat (the builder) and writer subagents edit their own checkout. */

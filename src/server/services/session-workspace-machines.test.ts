@@ -25,16 +25,36 @@ describe("session workspace machines", () => {
 		const exec = vi.fn(async () => ({ exitCode: 0, stdout: "", stderr: "" }));
 		const machines = { exec } as unknown as WorkspaceMachines;
 		const sharedChild = machinesForAgentSession(machines, {
+			taskPlacement: "shared",
 			id: "shared-child",
 			agentRole: "researcher",
 		});
 		const writingGrandchild = machinesForAgentSession(sharedChild, {
+			taskPlacement: "fresh",
 			id: "writing-grandchild",
 			agentRole: "writer",
 		});
 		await writingGrandchild.exec(WorkspaceId("vm-grandchild"), "pwd");
 		expect(writingGrandchild).toBe(machines);
 		expect(exec).toHaveBeenCalledWith(WorkspaceId("vm-grandchild"), "pwd");
+	});
+
+	it("runs lead mode fusion's shared writer on its parent's VM as the builder's user, with its own runtime root", async () => {
+		const exec = vi.fn(async () => ({ exitCode: 0, stdout: "", stderr: "" }));
+		const machines = { exec } as unknown as WorkspaceMachines;
+		const sidekick = machinesForAgentSession(machines, {
+			id: "sidekick",
+			agentRole: "writer",
+			taskPlacement: "shared",
+		});
+		expect(sidekick).not.toBe(machines);
+		await sidekick.exec(
+			WorkspaceId("vm-lead"),
+			"cat /tmp/ytimesy-codex-external-tokens.json",
+		);
+		const command = (exec.mock.calls[0] as unknown as [unknown, string])[1];
+		expect(command).toContain("sidekick");
+		expect(command).not.toContain("ytimesy-reader");
 	});
 
 	it("maps adapter reads, writes, and commands into one session root", async () => {
