@@ -377,20 +377,28 @@ it("sends nothing in code mode primary that batches several steps into one shell
 	);
 });
 
-it("sends a byte-identical system prompt and tool list on every step", async () => {
-	const variant = { codeMode: "primary", subagents: "on" } as const;
-	const first = await sentRequest(variant, { step: 1 });
-	const second = await sentRequest(variant, { step: 2 });
-	const third = await sentRequest(variant, { step: 3 });
-	expect(second.body.instructions).toBe(first.body.instructions);
-	expect(JSON.stringify(second.body.tools)).toBe(
-		JSON.stringify(first.body.tools),
-	);
-	expect(third.body.instructions).toBe(first.body.instructions);
-	expect(JSON.stringify(third.body.tools)).toBe(
-		JSON.stringify(first.body.tools),
-	);
-});
+it.each(["off", "on", "primary"] as const)(
+	"sends a byte-identical system prompt and tool list on every step (codeMode=%s)",
+	async (codeMode) => {
+		const variant = { codeMode, subagents: "on" } as const;
+		const first = await sentRequest(variant, { step: 1 });
+		const second = await sentRequest(variant, { step: 2 });
+		const third = await sentRequest(variant, { step: 3 });
+		expect(second.body.instructions).toBe(first.body.instructions);
+		expect(JSON.stringify(second.body.tools)).toBe(
+			JSON.stringify(first.body.tools),
+		);
+		expect(third.body.instructions).toBe(first.body.instructions);
+		expect(JSON.stringify(third.body.tools)).toBe(
+			JSON.stringify(first.body.tools),
+		);
+		// The workflow tools are there from the first step, never loaded later.
+		expect(first.names).toEqual(
+			expect.arrayContaining(["agent", "agent_send", "enter_plan_mode"]),
+		);
+		expect(first.names).not.toContain("find_tools");
+	},
+);
 
 it("sends the eval suffix without child tasks or a ban on delegation when subagents are on", async () => {
 	const suffix = evalWorkSuffix({
@@ -574,9 +582,10 @@ describe("role surfaces: every advertised tool works, no prompt names an absent 
 			].join("\n");
 			for (const name of namedTools(text))
 				expect(available, `the prompt names ${name}`).toContain(name);
-			// find_tools is named only when the request offers it.
-			if (namedTools(body.instructions).includes("find_tools"))
-				expect(names).toContain("find_tools");
+			// Nothing is deferred here (no large MCP setup): no find_tools, and
+			// no prompt sends the model to searchTools/ALL_TOOLS.
+			expect(names).not.toContain("find_tools");
+			expect(text).not.toMatch(/find_tools|searchTools|ALL_TOOLS/);
 			// Inside run_code, every tool the prompt says to call from a program exists.
 			if (available.has("run_code")) {
 				if (!callable) throw new Error("run_code was not probed.");
@@ -598,6 +607,26 @@ describe("role surfaces: every advertised tool works, no prompt names an absent 
 				(role !== "builder" || subagents === "on");
 			expect(available.has("agent")).toBe(delegates);
 			expect(body.instructions.includes("Subagents:")).toBe(delegates);
+			// The workflow tools are ordinary tools: in the request's tool list,
+			// in a fixed place (after the surface's tools, before web search).
+			expect(names.includes("agent")).toBe(delegates);
+			expect(names.includes("agent_send")).toBe(delegates);
+			if (delegates) {
+				expect(names.indexOf("agent_send")).toBe(names.indexOf("agent") + 1);
+				expect(names.indexOf("agent")).toBeGreaterThan(names.indexOf("bash"));
+				expect(names.indexOf("agent")).toBeLessThan(
+					names.indexOf("web_search"),
+				);
+			}
+			// A root chat (a person can approve a plan) always offers plan mode.
+			if (role === "builder") {
+				expect(names).toContain("enter_plan_mode");
+				expect(names.indexOf("enter_plan_mode")).toBeLessThan(
+					names.indexOf("web_search"),
+				);
+				expect(names).toContain("request_project_secret");
+			} else expect(names).not.toContain("enter_plan_mode");
+			if (codeMode === "primary") expect(names[0]).toBe("run_code");
 			// Readers share the parent's VM read-only: nothing that changes files.
 			if (role !== "builder" && role !== "writer")
 				for (const name of ["write", "edit"])

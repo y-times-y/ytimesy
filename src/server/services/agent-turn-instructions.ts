@@ -57,7 +57,7 @@ export function agentTurnInstructions(input: {
 	leanReadOnly?: boolean;
 	/** The repository's absolute path on the workspace (lean surfaces state it). */
 	leanWorkingDirectory?: string;
-	/** Tools loaded on demand (deferred-tools.ts), listed so the model knows they exist. */
+	/** Tools only run_code can call (deferred-tools.ts), listed so the model knows they exist. */
 	deferredTools?: readonly DeferredToolEntry[];
 	/** Harness variant codeMode (with run_code in the tools): primary teaches run_code as the main tool. */
 	codeMode?: "on" | "primary";
@@ -98,7 +98,10 @@ function leanTurnInstructions(
 			: codeMode
 				? codeModeInstructions(input.leanShape)
 				: "",
-		deferredToolsInstructions(input.deferredTools ?? [], { codeMode }),
+		// Only code mode primary defers tools the prompt lists (MCP search/call).
+		codeMode === "primary"
+			? deferredToolsInstructions(input.deferredTools ?? [])
+			: "",
 		AGENT_TOOL in input.tools
 			? orchestratorInstructions({
 					codeMode,

@@ -318,7 +318,7 @@ export function writerPatchBlock(
 	].join("\n");
 }
 
-/** The builder's delegation tools (loaded on demand through find_tools). */
+/** The builder's delegation tools (always in the tool list when offered). */
 export const AGENT_TOOL = "agent";
 export const AGENT_SEND_TOOL = "agent_send";
 

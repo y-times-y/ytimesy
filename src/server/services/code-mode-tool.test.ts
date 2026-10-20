@@ -263,7 +263,7 @@ describe("run_code on the lean surface", () => {
 		).toBeUndefined();
 	});
 
-	it("lets a program call the deferred subagent tools without loading them", () => {
+	it("lets a program call the subagent tools too (they are also in the tool list)", () => {
 		const runCode = codeModeTool({
 			tools: {
 				...coreSurface(),
@@ -275,7 +275,7 @@ describe("run_code on the lean surface", () => {
 					inputSchema: z.object({}),
 					execute: async () => null,
 				}),
-				find_tools: tool({
+				enter_plan_mode: tool({
 					inputSchema: z.object({}),
 					execute: async () => null,
 				}),
@@ -287,7 +287,7 @@ describe("run_code on the lean surface", () => {
 		const description = runCode?.description ?? "";
 		expect(description).toContain("tools.agent(args)");
 		expect(description).toContain("tools.agent_send(args)");
-		expect(description).not.toContain("tools.find_tools(");
+		expect(description).not.toContain("tools.enter_plan_mode(");
 	});
 
 	it("tells the model when to use run_code only when it is offered", () => {
@@ -558,14 +558,14 @@ describe("run_code on the lean surface", () => {
 });
 
 describe("code mode primary", () => {
-	const deferredTools = (entered: string[]) => ({
+	/** The turn's other tools: agent and plan mode are direct, MCP search/call deferred. */
+	const otherTools = (entered: string[]) => ({
 		agent: tool({
 			description:
 				"Start a background subagent with only your brief. Its report arrives as a message.",
 			inputSchema: z.object({
 				role: z.enum(["writer", "researcher"]).describe("What it may do"),
 				brief: z.string().describe("The whole task, self-contained"),
-				files: z.array(z.string()).optional(),
 			}),
 			execute: async (args: { role: string }) => {
 				entered.push(`agent:${args.role}`);
@@ -584,7 +584,24 @@ describe("code mode primary", () => {
 			inputSchema: z.object({ plan: z.string() }),
 			execute: async () => null,
 		}),
+		search_mcp_tools: tool({
+			description: "Search the connected MCP servers' tools.",
+			inputSchema: z.object({
+				query: z.string().describe("Words to match"),
+				server: z.string().optional(),
+			}),
+			execute: async (args: { query: string }) => {
+				entered.push(`search:${args.query}`);
+				return [{ name: "mcp__docs__find" }];
+			},
+		}),
+		call_mcp_tool: tool({
+			description: "Call one MCP tool by name.",
+			inputSchema: z.object({ name: z.string(), arguments: z.object({}) }),
+			execute: async () => null,
+		}),
 	});
+	const DEFERRED = ["search_mcp_tools", "call_mcp_tool"];
 	const primary = (tools: ToolSet, deferred: string[]) =>
 		codeModeTool({
 			tools,
@@ -595,11 +612,10 @@ describe("code mode primary", () => {
 			deferred,
 		});
 
-	it("teaches batching in the surface's names and points deferred tools to searchTools", () => {
+	it("teaches batching in the surface's names and points only deferred MCP tools to searchTools", () => {
 		const entered: string[] = [];
-		const tools = { ...coreSurface(), ...deferredTools(entered) };
-		const description =
-			primary(tools, ["agent", "enter_plan_mode"])?.description ?? "";
+		const tools = { ...coreSurface(), ...otherTools(entered) };
+		const description = primary(tools, DEFERRED)?.description ?? "";
 		expect(description).toContain("Promise.all([tools.read({ path:");
 		expect(description).toContain('tools.bash({ command: "npm test');
 		expect(description).toContain(
@@ -611,48 +627,54 @@ describe("code mode primary", () => {
 		expect(description).not.toContain("rejects");
 		expect(description).toContain('text("build:", b.exitCode)');
 		expect(description).toContain("searchTools(query)");
-		// Deferred tools are not advertised as direct tools; turn-ending ones are not callable.
-		expect(description).not.toContain("tools.agent");
+		// agent is a direct tool; deferred ones are not advertised as direct;
+		// plan tools are not callable from a program.
+		expect(description).toContain("tools.agent");
+		expect(description).not.toContain("tools.search_mcp_tools");
 		expect(description).not.toContain("propose_plan");
+		expect(description).not.toContain("enter_plan_mode");
 		// Stable: the same tools give the same bytes.
-		expect(primary(tools, ["agent", "enter_plan_mode"])?.description).toBe(
-			description,
-		);
-		const withoutDeferred = primary(coreSurface(), [])?.description ?? "";
-		expect(withoutDeferred).not.toContain("searchTools");
+		expect(primary(tools, DEFERRED)?.description).toBe(description);
+		// Nothing deferred: searchTools goes unmentioned.
+		const withoutDeferred =
+			primary({ ...coreSurface(), agent: otherTools([]).agent }, [])
+				?.description ?? "";
+		expect(withoutDeferred).not.toMatch(/searchTools|ALL_TOOLS/);
+		expect(withoutDeferred).toContain("tools.agent");
 	});
 
-	it("finds a deferred tool's declaration and calls it from the program", async () => {
+	it("finds a deferred tool's declaration, calls it and the direct agent tool from the program", async () => {
 		const entered: string[] = [];
-		const runCode = primary({ ...coreSurface(), ...deferredTools(entered) }, [
-			"agent",
-			"enter_plan_mode",
-		]);
+		const runCode = primary(
+			{ ...coreSurface(), ...otherTools(entered) },
+			DEFERRED,
+		);
 		const result = (await runCode?.execute?.(
 			{
-				code: `const found = searchTools("subagent");
+				code: `const found = searchTools("search");
 				const all = ALL_TOOLS.length;
 				const none = searchTools("zzzz");
+				const hits = await tools.search_mcp_tools({ query: "docs" });
 				const started = await tools.agent({ role: "researcher", brief: "map the parser" });
 				let plan; try { await tools.propose_plan({ plan: "x" }); } catch (error) { plan = error.message; }
-				return { found, all, none: none.split("\\n")[0], started, plan };`,
+				return { found, all, none: none.split("\\n")[0], hits, started, plan };`,
 			},
 			options(randomUUID()),
 		)) as CodeModeResult;
 		expect(result.error).toBeUndefined();
 		const value = JSON.parse(result.result as string);
-		expect(value.found).toContain("tools.agent(args: {");
-		expect(value.found).toContain(
-			'role: "writer" | "researcher"; // What it may do',
-		);
-		expect(value.found).toContain("files?: string[];");
-		expect(value.found).not.toContain("enter_plan_mode");
+		expect(value.found).toContain("tools.search_mcp_tools(args: {");
+		expect(value.found).toContain("query: string; // Words to match");
+		expect(value.found).not.toContain("tools.agent(");
 		expect(value.all).toBe(2);
 		expect(value.none).toBe("// No tool matched; every tool:");
 		expect(value.started).toEqual({ started: "agent-1" });
 		expect(value.plan).toMatch(/not a function/);
-		expect(entered).toEqual(["agent:researcher"]);
-		expect(result.calls.map((call) => call.tool)).toEqual(["agent"]);
+		expect(entered).toEqual(["search:docs", "agent:researcher"]);
+		expect(result.calls.map((call) => call.tool)).toEqual([
+			"search_mcp_tools",
+			"agent",
+		]);
 	});
 
 	it("records when each inner call started, so parallelism is measurable", async () => {
