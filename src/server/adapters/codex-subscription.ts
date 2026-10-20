@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { APICallError } from "ai";
 import { z } from "zod";
 import {
 	CodexReconnectRequired,
@@ -303,6 +304,19 @@ export async function codexSubscriptionModel(
 				throw new SubscriptionUsageLimitReached(limit);
 			}
 		}
+		// rl-tests-sol: a 200 with no body ("Failed to process successful
+		// response", the SDK's EmptyResponseBodyError) failed the turn. Nothing
+		// was streamed or executed, so this is a request-start failure the
+		// SDK's bounded retry may resend; any stream that started is never
+		// replayed.
+		if (response.ok && !response.body)
+			throw new APICallError({
+				message: "The provider accepted the request but sent no response body.",
+				url: String(url),
+				requestBodyValues: {},
+				statusCode: response.status,
+				isRetryable: true,
+			});
 		return timedFirstByte(response, startedAt);
 	};
 	const model = connectedLanguageModel(
