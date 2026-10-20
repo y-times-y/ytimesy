@@ -114,7 +114,7 @@ describe("briefs and notices", () => {
 		);
 		expect(brief).toContain("/tmp/ytimesy-attempts/t/1/tests/run.sh");
 		expect(brief).toContain(
-			"cp -a /home/ubuntu/app /tmp/ytimesy-attempts/t/1/work",
+			"mkdir -p /tmp/ytimesy-attempts/t/1/work && cp -a /home/ubuntu/app/. /tmp/ytimesy-attempts/t/1/work/",
 		);
 		expect(brief).toContain('"testsPath": "/tmp/ytimesy-attempts/t/1/tests"');
 	});

@@ -24,7 +24,13 @@ describe("independentReviewBrief", () => {
 		expect(brief).toContain(
 			"Files the run delivered outside it: /results/report.csv.",
 		);
-		expect(brief).toContain("cp -a /app /tmp/check/work");
+		// The checkout path is often a symbolic link (~/<project> -> /app on a
+		// hard-set VM): copying the link itself left the checker a "copy" that
+		// was the read-only original (rl-tests-luna), so the contents are copied.
+		expect(brief).toContain(
+			"mkdir -p /tmp/check/work && cp -a /app/. /tmp/check/work/",
+		);
+		expect(brief).not.toContain("cp -a /app /tmp/check/work");
 		for (const part of [
 			"1. Requirements.",
 			"2. Assumptions.",
