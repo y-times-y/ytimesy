@@ -28,6 +28,7 @@ import {
 	TURN_COORDINATION_LEASE_MS,
 	type TurnControl,
 } from "#/domain/conversation-turn-control";
+import { fusionPairFor } from "#/domain/fusion-pairs";
 import { leanToolRole } from "#/domain/harness-model-profile";
 import {
 	DEFAULT_HARNESS_VARIANT,
@@ -319,6 +320,8 @@ async function runApiTurnAttempt(
 	let subagentSession: AgentSessionRecord | undefined;
 	/** Lead mode fusion's root: its sidekicks are retired when its turn ends. */
 	let fusionLead: { userId: string; id: string } | undefined;
+	/** Lead mode fusion: roleModels.writerEscalation, named in a sidekick's stuck notice. */
+	let escalationModel: string | undefined;
 	let commandStop: Promise<void> | undefined;
 	const stopCommands = () => {
 		if (execution)
@@ -480,6 +483,7 @@ async function runApiTurnAttempt(
 			!!owner.agentRole;
 		if (variant.lead === "fusion" && !owner.parentSessionId)
 			fusionLead = { userId: owner.userId, id: owner.id };
+		escalationModel = variant.roleModels.writerEscalation?.model;
 		const subagentLevel = owner.agentRole
 			? (
 					await turnMemo(`${turn.id}:subagent-ancestors`, () =>
@@ -1090,6 +1094,10 @@ async function runApiTurnAttempt(
 					codeMode: codeMode ?? undefined,
 					prEvidence: variant.prEvidence === "on" && writable,
 					lead: variant.lead,
+					fusionPair:
+						variant.lead === "fusion" && !owner.parentSessionId
+							? fusionPairFor(owner.listedModelId, variant.roleModels)
+							: undefined,
 				},
 				memory,
 			),
@@ -1492,11 +1500,15 @@ async function runApiTurnAttempt(
 			return saved === "cancelled" ? "cancelled" : "failed";
 		}
 		await publishProgress("completed").catch(() => {});
+		// The sidekick lives as long as the chat: an idle one waits for the
+		// next message (until its idle TTL); one still working is stopped.
 		if (fusionLead)
 			await retireLeadSidekicks(
 				unscopedMachines,
 				fusionLead,
-				"the lead's turn ended",
+				"the lead's turn ended while it worked",
+				undefined,
+				{ keepIdle: true },
 			).catch(() => {});
 		await memory?.afterTurn(turn.id);
 		await recordCloudProjectReport(owner, turn.id, items).catch(() => {
@@ -1521,6 +1533,7 @@ async function runApiTurnAttempt(
 					items,
 					outcome: "finished",
 					text: finalText.slice(-9000) || "(no final report)",
+					escalationModel,
 				}),
 			});
 			if (eventId) await enqueueAgentTaskEvent(eventId).catch(() => {});
@@ -1731,6 +1744,7 @@ async function runApiTurnAttempt(
 							error instanceof SubagentBudgetExhausted
 								? "budget exhausted"
 								: "failed",
+						escalationModel,
 						text: [
 							failureMessage,
 							items

@@ -101,7 +101,8 @@ export async function saveSidekickState(
 /**
  * Forked writer VMs to delete: reported at least `graceMinutes` ago and
  * idle, or whose session is no longer running anything. A lead's active
- * sidekick stays while the lead's turn runs: it waits for the next round.
+ * sidekick stays: it waits for the next round, across the chat's turns,
+ * until it is retired (idleSidekicksPastTtl retires an idle one).
  */
 export async function forkedWritersDueForTeardown(graceMinutes: number) {
 	const result = await database().query(
@@ -116,10 +117,6 @@ export async function forkedWritersDueForTeardown(graceMinutes: number) {
 		   and not (
 		     agent_budget ? 'sidekick'
 		     and not (agent_budget->'sidekick' ? 'retired')
-		     and exists (
-		       select 1 from agent_session lead_session
-		       where lead_session.id = agent_session.parent_session_id and lead_session.turn_status = 'running'
-		     )
 		   )
 		 limit 32`,
 		[graceMinutes],
@@ -129,6 +126,44 @@ export async function forkedWritersDueForTeardown(graceMinutes: number) {
 			sessionId: row.id,
 			userId: row.user_id,
 			vmId: row.vm_id,
+		}),
+	);
+}
+
+/**
+ * Active sidekicks idle (not working, their lead not working) for at least
+ * `idleMinutes` since their last report: the maintenance sweep retires
+ * them and deletes their forks.
+ */
+export async function idleSidekicksPastTtl(idleMinutes: number) {
+	const result = await database().query(
+		`select id, agent_role, agent_budget, agent_fork, turn_status
+		 from agent_session
+		 where agent_role='writer'
+		   and agent_budget ? 'sidekick'
+		   and not (agent_budget->'sidekick' ? 'retired')
+		   and turn_status <> 'running'
+		   and coalesce((agent_fork->>'reportedAt')::timestamptz, updated_at) < now() - ($1::float8 * interval '1 minute')
+		   and not exists (
+		     select 1 from agent_session lead_session
+		     where lead_session.id = agent_session.parent_session_id and lead_session.turn_status = 'running'
+		   )
+		 limit 32`,
+		[idleMinutes],
+	);
+	return result.rows.map(
+		(row: {
+			id: string;
+			agent_role: SubagentRole;
+			agent_budget: SubagentBudget;
+			agent_fork: SubagentFork | null;
+			turn_status: AgentSessionRecord["turnStatus"];
+		}) => ({
+			id: row.id,
+			agentRole: row.agent_role,
+			agentBudget: row.agent_budget,
+			agentFork: row.agent_fork,
+			turnStatus: row.turn_status,
 		}),
 	);
 }

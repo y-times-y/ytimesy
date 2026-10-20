@@ -1,5 +1,6 @@
 import {
 	isModelRole,
+	MODEL_ROLES,
 	parseRoleModel,
 	type RoleModels,
 	roleModelsFlags,
@@ -203,7 +204,7 @@ export function harnessVariantFromFlags(
 			if (role !== undefined && value !== undefined && !rest.length) {
 				if (!isModelRole(role))
 					throw new Error(
-						`--variant roleModels.<role> takes a role in writer, researcher, reviewer, checker, judge; got "${role}".`,
+						`--variant roleModels.<role> takes a role in ${MODEL_ROLES.join(", ")}; got "${role}".`,
 					);
 				variant.roleModels = {
 					...(variant.roleModels as RoleModels),
