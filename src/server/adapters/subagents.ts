@@ -99,6 +99,81 @@ export async function saveSidekickState(
 }
 
 /**
+ * Applies `mutate` to the sidekick's current state and saves it only if
+ * nothing changed it meanwhile (compare-and-set on the stored state,
+ * retried), so a slow caller (the classifier) never overwrites a newer
+ * write. A retired sidekick stays retired. With `model` the session's model
+ * changes in the same statement (a switch at compaction). Returns the saved
+ * state, or null when there is no sidekick or `mutate` declines.
+ */
+export async function updateSidekickState(
+	sessionId: string,
+	mutate: (current: SidekickState) => SidekickState | null,
+	model?: { readonly listedModelId: string; readonly harness: "codex" | "api" },
+): Promise<SidekickState | null> {
+	for (let attempt = 0; attempt < 5; attempt++) {
+		const read = await database().query<{ sidekick: SidekickState | null }>(
+			`select agent_budget->'sidekick' as sidekick from agent_session
+			 where id=$1 and agent_role='writer'`,
+			[sessionId],
+		);
+		const current = read.rows[0]?.sidekick;
+		if (!current) return null;
+		const mutated = mutate(current);
+		if (!mutated) return null;
+		const next =
+			current.retired && !mutated.retired
+				? { ...mutated, retired: current.retired }
+				: mutated;
+		const saved = await database().query(
+			`update agent_session
+			 set agent_budget=jsonb_set(agent_budget, '{sidekick}', $2::jsonb),
+			     listed_model_id=coalesce($4, listed_model_id),
+			     harness=coalesce($5, harness),
+			     updated_at=now()
+			 where id=$1 and agent_role='writer' and agent_budget->'sidekick' = $3::jsonb`,
+			[
+				sessionId,
+				JSON.stringify(next),
+				JSON.stringify(current),
+				model?.listedModelId ?? null,
+				model?.harness ?? null,
+			],
+		);
+		if (saved.rowCount) return next;
+	}
+	throw new Error("The sidekick's state kept changing; it was not saved.");
+}
+
+/**
+ * Adds a one-off model call's usage (the sidekick classifier's) to the
+ * session's latest request, where its turns' usage lives, so session and
+ * eval totals include it. Compare-and-set on the items, retried.
+ */
+export async function addSessionRequestUsage(
+	sessionId: string,
+	add: (items: unknown[]) => unknown[] | null,
+) {
+	for (let attempt = 0; attempt < 5; attempt++) {
+		const read = await database().query<{ items: unknown[] | null }>(
+			"select items from agent_session where id=$1",
+			[sessionId],
+		);
+		const items = read.rows[0]?.items;
+		if (!Array.isArray(items)) return false;
+		const next = add(items);
+		if (!next) return false;
+		const saved = await database().query(
+			`update agent_session set items=$2::jsonb, updated_at=now()
+			 where id=$1 and items = $3::jsonb`,
+			[sessionId, JSON.stringify(next), JSON.stringify(items)],
+		);
+		if (saved.rowCount) return true;
+	}
+	return false;
+}
+
+/**
  * Forked writer VMs to delete: reported at least `graceMinutes` ago and
  * idle, or whose session is no longer running anything. Lead mode
  * fusion's sidekick has no fork (it works in the lead's checkout); an

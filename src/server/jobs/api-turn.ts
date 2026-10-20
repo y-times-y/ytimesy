@@ -10,7 +10,7 @@ import {
 	isUserRequestMessage,
 } from "#/domain/api-conversation";
 import { applyApiProgress, recordedContextUsage } from "#/domain/api-progress";
-import { addApiTokenUsage } from "#/domain/api-token-usage";
+import { type ApiTokenUsage, addApiTokenUsage } from "#/domain/api-token-usage";
 import {
 	ApiTurnCancelled,
 	type ApiTurnFailureStage,
@@ -40,7 +40,6 @@ import { prepareInterruptedStep } from "#/domain/interrupted-step";
 import { withMemoryRecall } from "#/domain/memory-marker";
 import { officialProviderEndpoint } from "#/domain/model-connection";
 import {
-	type FailoverReason,
 	failoverExhaustedDetail,
 	failoverNotice,
 	failoverQuestion,
@@ -50,6 +49,7 @@ import {
 	routeConnectionKey,
 	routeKey,
 	servingRoute,
+	turnFailover,
 } from "#/domain/model-failover";
 import {
 	developmentOutageError,
@@ -62,6 +62,7 @@ import {
 	agentSecretsEnvFile,
 	sessionReceivesProjectSecrets,
 } from "#/domain/project-secret";
+import type { RoleModels } from "#/domain/role-models";
 import { modelSwitchHistory } from "#/domain/runtime-handoff";
 import { REQUEST_PROJECT_SECRET_TOOL } from "#/domain/secret-request";
 import type {
@@ -69,7 +70,11 @@ import type {
 	SessionItem,
 	UserMessageItem,
 } from "#/domain/session-item";
-import { isActiveSidekick } from "#/domain/sidekick";
+import {
+	isActiveSidekick,
+	sidekickState,
+	sidekickSwitchDue,
+} from "#/domain/sidekick";
 import {
 	AGENT_SEND_TOOL,
 	AGENT_TOOL,
@@ -161,7 +166,10 @@ import {
 	materializeMessageAttachments,
 	sessionAttachments,
 } from "../services/message-attachments";
-import type { ModelAgentInput } from "../services/model-agent-loop";
+import {
+	type ModelAgentInput,
+	ModelSwitchAtCompaction,
+} from "../services/model-agent-loop";
 import { planModelFailover } from "../services/model-failover";
 import { modelRequestRecorder } from "../services/model-request-recorder";
 import {
@@ -187,6 +195,12 @@ import {
 	secretRequestTools,
 } from "../services/secret-request-tool";
 import { machinesForAgentSession } from "../services/session-workspace-machines";
+import {
+	blockSidekickSwitch,
+	completeSidekickModelSwitch,
+	sidekickSwitchAllowed,
+	sidekickSwitchAtCompaction,
+} from "../services/sidekick-model-switch";
 import { recordStepTiming, timed } from "../services/step-timing";
 import {
 	guardSubagentStep,
@@ -332,8 +346,8 @@ async function runApiTurnAttempt(
 	let subagentSession: AgentSessionRecord | undefined;
 	/** Lead mode fusion's root: its sidekicks are retired when its turn ends. */
 	let fusionLead: { userId: string; id: string } | undefined;
-	/** Lead mode fusion: roleModels.writerEscalation, named in a sidekick's stuck notice. */
-	let escalationModel: string | undefined;
+	/** Lead mode fusion: the variant's role models (a sidekick's classifier and escalation model). */
+	let fusionRoleModels: RoleModels | undefined;
 	/** Lead mode fusion: the lead's writes in this step (a round started stops them). */
 	const leadWrites = leadWriteTracker();
 	/** Lead mode fusion: when this step's gate began (the completion check's bound). */
@@ -499,7 +513,7 @@ async function runApiTurnAttempt(
 			!!owner.agentRole;
 		if (variant.lead === "fusion" && !owner.parentSessionId)
 			fusionLead = { userId: owner.userId, id: owner.id };
-		escalationModel = variant.roleModels.writerEscalation?.model;
+		fusionRoleModels = variant.roleModels;
 		const subagentLevel = owner.agentRole
 			? (
 					await turnMemo(`${turn.id}:subagent-ancestors`, () =>
@@ -1121,6 +1135,33 @@ async function runApiTurnAttempt(
 				failedAttempt = state;
 			},
 			messages,
+			// Lead mode fusion's sidekick: each compaction may switch its model;
+			// a pending switch compacts first (src/server/services/sidekick-model-switch.ts).
+			...(sidekickState(owner)
+				? {
+						compactFirst:
+							sidekickSwitchDue(
+								sidekickState(owner) as NonNullable<
+									ReturnType<typeof sidekickState>
+								>,
+								turn.id,
+							) &&
+							sidekickSwitchAllowed(
+								sidekickState(owner) as NonNullable<
+									ReturnType<typeof sidekickState>
+								>,
+								turn.id,
+							),
+						switchAtCompaction: sidekickSwitchAtCompaction({
+							userId: owner.userId,
+							sessionId: owner.id,
+							turnId: turn.id,
+							roleModels: variant.roleModels,
+							items: () => items,
+							signal: abort.signal,
+						}),
+					}
+				: {}),
 			archiveHistory: async (history) => {
 				const reference = await archiveModelContext(
 					owner.userId,
@@ -1617,7 +1658,19 @@ async function runApiTurnAttempt(
 					items,
 					outcome: "finished",
 					text: finalText.slice(-9000) || "(no final report)",
-					escalationModel,
+					roleModels: fusionRoleModels,
+					...(evaluation
+						? {
+								deps: {
+									chargeUsage: (usage: ApiTokenUsage, key: string) =>
+										recordEvaluationUsage(
+											evaluation as EvaluationRun,
+											`${turn.id}:${key}`,
+											usage,
+										),
+								},
+							}
+						: {}),
 				}),
 			});
 			if (eventId) await enqueueAgentTaskEvent(eventId).catch(() => {});
@@ -1629,6 +1682,82 @@ async function runApiTurnAttempt(
 	} catch (error) {
 		workspaceReuse?.forget();
 		await progress.drain().catch(() => {});
+		// A sidekick's run ended at a compaction to switch models: the same
+		// turn continues on the escalation route from the compacted history.
+		if (
+			error instanceof ModelSwitchAtCompaction &&
+			subagentSession &&
+			!abort.signal.aborted &&
+			!progressFailed &&
+			!coordinationFailure
+		) {
+			try {
+				const current = {
+					route,
+					label: {
+						model: route.modelId,
+						connection: route.connectionId ?? "Codex",
+					},
+				};
+				// A switch that throws is dropped like an unavailable route: the
+				// turn continues where it was, and switches no more this turn.
+				const outcome = await completeSidekickModelSwitch({
+					userId: turn.user_id,
+					sessionId: turn.session_id,
+					turnId: turn.id,
+					roleModels: fusionRoleModels,
+					target: error.target,
+					compacted: error.compacted,
+					current,
+					previous: turnFailover(turn.failover),
+					messages,
+				}).catch((cause: unknown) => {
+					blockSidekickSwitch(turn.id);
+					return {
+						kind: "kept" as const,
+						reason: cause instanceof Error ? cause.message : String(cause),
+					};
+				});
+				if (outcome.kind === "kept")
+					console.warn("A sidekick's model switch was dropped.", {
+						reason: outcome.reason.slice(0, 200),
+					});
+				const failover =
+					outcome.kind === "switched" ? outcome.failover : undefined;
+				if (outcome.kind === "switched") {
+					messages = outcome.messages;
+					items = [
+						...items,
+						modelSwitchItem(items, {
+							id: `${turn.id}:sidekick-switch-${failover?.switches ?? 1}`,
+							state: "switched",
+							message: `Switched from ${outcome.from} to ${outcome.to} at a context compaction (${error.target.reason.replace(/[.\s]+$/, "")}).`,
+							reason: "sidekick-escalation",
+							from: current.label,
+							to: {
+								...outcome.label,
+								key: routeKey(outcome.failover.route),
+							},
+						}),
+					];
+				}
+				await checkpointApiTurn(turn, messages, items, failover);
+				// The turn's lease carries over to the step on the new route.
+				coordinated = false;
+				return {
+					failedOver: {
+						...turn,
+						...(failover ? { failover } : {}),
+						messages,
+						items,
+					},
+				};
+			} catch (cause) {
+				console.warn("A sidekick's model switch failed.", {
+					...apiTurnFailureClassification(cause),
+				});
+			}
+		}
 		if (!abort.signal.aborted || heartbeatFailed || progressFailed)
 			console.warn("API turn failed", {
 				stage: coordinationFailure ? "coordination" : failureStage,
@@ -1828,7 +1957,7 @@ async function runApiTurnAttempt(
 							error instanceof SubagentBudgetExhausted
 								? "budget exhausted"
 								: "failed",
-						escalationModel,
+						roleModels: fusionRoleModels,
 						text: [
 							failureMessage,
 							items
@@ -2031,7 +2160,7 @@ function modelSwitchItem(
 		id: string;
 		state: ModelSwitchItem["state"];
 		message: string;
-		reason: FailoverReason;
+		reason: ModelSwitchItem["reason"];
 		from: ModelSwitchItem["from"];
 		to: ModelSwitchItem["to"];
 	},

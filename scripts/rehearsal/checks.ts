@@ -469,19 +469,25 @@ export async function checkScenario(
 		id === "fusion" ||
 		id === "fusion-explore" ||
 		id === "fusion-multiturn" ||
-		id === "fusion-stuck"
+		id === "fusion-stuck" ||
+		id === "fusion-handback" ||
+		id === "fusion-classifier-fail"
 	) {
 		const leadName = {
 			fusion: "fusion-lead",
 			"fusion-explore": "explore-lead",
 			"fusion-multiturn": "multiturn-lead",
 			"fusion-stuck": "stuck-lead",
+			"fusion-handback": "handback-lead",
+			"fusion-classifier-fail": "clsfail-lead",
 		}[id];
 		const sidekickName = {
 			fusion: "sidekick",
 			"fusion-explore": "explore-sidekick",
 			"fusion-multiturn": "mt-sidekick",
 			"fusion-stuck": "stuck-sidekick",
+			"fusion-handback": "handback-sidekick",
+			"fusion-classifier-fail": "clsfail-sidekick",
 		}[id];
 		const writers = data.children.filter(
 			(child) => child.agent_role === "writer",
@@ -778,28 +784,47 @@ export async function checkScenario(
 			);
 		}
 
+		const decisions = state?.decisions ?? [];
+		check(
+			"every sidekick round has a recorded classifier decision (hash, latency, source)",
+			decisions.filter((entry) => entry.point === "round").length ===
+				(state?.rounds.filter((round) => round.endedAt).length ?? -1) &&
+				decisions.every(
+					(entry) =>
+						/^[0-9a-f]{64}$/.test(entry.inputsHash) &&
+						entry.latencyMs >= 0 &&
+						(entry.source === "classifier" || entry.source === "rules"),
+				),
+			JSON.stringify(decisions),
+		);
+
 		if (id === "fusion-stuck") {
 			const notice =
-				"looks stuck because it failed the same check as last round (`make bogus-check`)";
+				"looks stuck (rehearsal: it failed make bogus-check twice the same way)";
 			check(
-				"round 2's report carried no stuck notice",
+				"rounds 1 and 2 carried no notice (the classifier said on_track)",
 				lead.some((request) => /round 2\/6/.test(request.lastUser)) &&
 					!lead.some(
 						(request) =>
-							/round 2\/6/.test(request.lastUser) &&
-							has(request.lastUser, "looks stuck"),
-					),
+							/round [12]\/6/.test(request.lastUser) &&
+							has(request.lastUser, "Runtime notice"),
+					) &&
+					decisions
+						.slice(0, 2)
+						.every(
+							(entry) =>
+								entry.decision === "on_track" && entry.source === "classifier",
+						),
+				JSON.stringify(decisions.slice(0, 2)),
 			);
 			const stuck = lead.find((request) => has(request.lastUser, notice));
 			check(
-				"the lead's next request after round 3 carried the stuck notice",
-				Boolean(stuck) &&
-					has(
-						stuck?.lastUser,
-						"round 3/6",
-						"Re-brief it more prescriptively",
-						"restarts it on codex:gpt-6.1-sol",
-					),
+				"the lead's next request after round 3 carried the classifier's switch notice",
+				has(
+					stuck?.lastUser,
+					"round 3/6",
+					"The runtime switches it to codex:gpt-6.1-sol at its next context compaction",
+				),
 				clip(
 					lead
 						.map((request) => request.lastUser)
@@ -808,44 +833,78 @@ export async function checkScenario(
 				),
 			);
 			check(
-				"round 3 recorded the same-check-failed signal",
-				state?.rounds[2]?.signals?.[0]?.kind === "same-check-failed",
-				JSON.stringify(state?.rounds[2]),
-			);
-			const escalated = writers[1];
-			check(
-				"the next round restarted the sidekick on roleModels.writerEscalation, in the same checkout",
-				has(sends[2]?.output, "was stuck", "restarted as sidekick 2") &&
-					escalated?.listed_model_id === "gpt-6.1-sol" &&
-					escalated?.provider_ref === data.vm &&
-					escalated?.agent_budget?.sidekick?.escalatedFrom?.label === "1" &&
-					requests("escalated-sidekick").every(
-						(request) => request.model === "gpt-6.1-sol",
+				"round 3: the same-check-failed signal fed the classifier, which said switch_model",
+				state?.rounds[2]?.signals?.[0]?.kind === "same-check-failed" &&
+					decisions[2]?.decision === "switch_model" &&
+					decisions[2]?.source === "classifier" &&
+					requests("classifier").some((request) =>
+						has(request.lastUser, "same-check-failed: make bogus-check"),
 					),
-				clip(sends[2]?.output),
+				JSON.stringify({ round: state?.rounds[2], decision: decisions[2] }),
+			);
+			const summaries = requests("summarizer");
+			check(
+				"round 4 started with a compaction on the old model (a neutral summary)",
+				summaries.length === 1 && summaries[0]?.model === "gpt-6-luna",
+				JSON.stringify(summaries.map((request) => request.model)),
+			);
+			const escalated = requests("escalated-sidekick");
+			const old = requests("stuck-sidekick");
+			check(
+				"the same sidekick session continued on writerEscalation after the compaction",
+				writers.length === 1 &&
+					sidekick?.listed_model_id === "gpt-6.1-sol" &&
+					escalated.length >= 2 &&
+					escalated.every((request) => request.model === "gpt-6.1-sol") &&
+					old.every((request) => request.model === "gpt-6-luna") &&
+					// One session: the same prompt cache scope on both models.
+					new Set([...old, ...escalated].map((request) => request.cacheKey))
+						.size === 1,
+				JSON.stringify({
+					writers: writers.length,
+					model: sidekick?.listed_model_id,
+					keys: [
+						...new Set(
+							[...old, ...escalated].map((request) => request.cacheKey),
+						),
+					],
+				}),
 			);
 			check(
-				"the escalated sidekick got a handover of the stuck one's last report",
+				"the escalated model started from the compacted summary with a runtime note",
 				has(
-					requests("escalated-sidekick")[0]?.lastUser,
-					"Its last report:",
-					"make bogus-check still fails",
-					"[rehearsal:escalated]",
-				),
-				clip(requests("escalated-sidekick")[0]?.lastUser, 500),
+					escalated[0]?.lastUser,
+					"you now run on gpt-6.1-sol",
+					"Continue the current round from the summary above",
+				) && !has(escalated[0]?.lastUser, "rehearsal stuck 1"),
+				clip(escalated[0]?.lastUser, 500),
 			);
 			check(
-				"the stuck sidekick was retired",
-				has(state?.retired?.reason, "restarted on gpt-6.1-sol"),
-				JSON.stringify(state?.retired),
+				"the switch was recorded (pending, compacted, round 4) and nothing is pending",
+				state?.switches?.length === 1 &&
+					state.switches[0]?.from === "gpt-6-luna" &&
+					state.switches[0]?.to === "gpt-6.1-sol" &&
+					state.switches[0]?.trigger === "pending" &&
+					state.switches[0]?.compacted === true &&
+					state.switches[0]?.round === 4 &&
+					!state.pendingSwitch &&
+					!state.retired,
+				JSON.stringify({
+					switches: state?.switches,
+					pending: state?.pendingSwitch,
+				}),
 			);
 			check(
-				"metrics: signals and one model switch",
+				"metrics: signals, decisions and one model switch",
 				(metrics.signals?.["same-check-failed"] ?? 0) >= 1 &&
-					metrics.switches === 1,
+					metrics.switches === 1 &&
+					metrics.decisions?.switch_model === 1 &&
+					(metrics.decisions?.on_track ?? 0) >= 2 &&
+					metrics.classifierFallbacks === 0,
 				JSON.stringify({
 					signals: metrics.signals,
 					switches: metrics.switches,
+					decisions: metrics.decisions,
 				}),
 			);
 			check(
@@ -853,6 +912,94 @@ export async function checkScenario(
 				has(await head(EXPLORE_FILE), "rehearsal stuck 1") &&
 					has(await head("src/lsm_db.cc"), "rehearsal stuck 2") &&
 					has(await head("src/snapshot_context.cc"), "rehearsal escalated"),
+			);
+		}
+
+		if (id === "fusion-handback") {
+			const lead = requests("handback-lead");
+			const notice = lead.find((request) =>
+				has(request.lastUser, "Runtime notice: sidekick 1 needs you"),
+			);
+			check(
+				"the classifier's hand_back notice reached the lead with its reason",
+				has(
+					notice?.lastUser,
+					"needs you (rehearsal: the brief leaves src/lsm_db.cc to the lead)",
+					"or take over and do it yourself",
+				),
+				clip(
+					lead
+						.map((request) => request.lastUser)
+						.find((text) => /round 2\/6/.test(text)),
+					600,
+				),
+			);
+			check(
+				"the build round's decision was recorded as the classifier's hand_back; no switch",
+				decisions[0]?.decision === "on_track" &&
+					decisions[1]?.decision === "hand_back" &&
+					decisions[1]?.source === "classifier" &&
+					decisions[1]?.model === "gpt-6-luna" &&
+					!state?.pendingSwitch &&
+					!state?.switches?.length,
+				JSON.stringify(decisions),
+			);
+			check(
+				"the lead took over and edited itself (lead edit rate counted)",
+				metrics.leadEdits >= 1 &&
+					(metrics.leadEditRate ?? 0) > 0 &&
+					metrics.decisions?.hand_back === 1 &&
+					has(await head("src/lsm_db.cc"), "rehearsal lead took over"),
+				JSON.stringify({
+					leadEdits: metrics.leadEdits,
+					rate: metrics.leadEditRate,
+					decisions: metrics.decisions,
+				}),
+			);
+		}
+
+		if (id === "fusion-classifier-fail") {
+			const lead = requests("clsfail-lead");
+			check(
+				"an unparsable classifier answer fell back to the rules, for every build round",
+				decisions.length === 3 &&
+					decisions[0]?.source === "classifier" &&
+					decisions
+						.slice(1)
+						.every(
+							(entry) =>
+								entry.source === "rules" &&
+								has(entry.fallback, "unparsable reply: Looks stuck to me"),
+						) &&
+					requests("classifier").length >= 2,
+				JSON.stringify(decisions),
+			);
+			check(
+				"the rules: round 2 on_track; round 3 (same check failed, no escalation model) hand_back",
+				decisions[1]?.decision === "on_track" &&
+					decisions[2]?.decision === "hand_back" &&
+					!state?.pendingSwitch,
+				JSON.stringify(decisions),
+			);
+			check(
+				"the rules' hand_back notice reached the lead",
+				lead.some((request) =>
+					has(
+						request.lastUser,
+						"Runtime notice: sidekick 1 needs you (it failed the same check as last round (`make bogus-check`))",
+					),
+				),
+				clip(
+					lead
+						.map((request) => request.lastUser)
+						.find((text) => /round 3\/6/.test(text)),
+					600,
+				),
+			);
+			check(
+				"metrics: two rules fallbacks, one rework round",
+				metrics.classifierFallbacks === 2 && metrics.reworkRounds === 1,
+				JSON.stringify(metrics),
 			);
 		}
 	}
