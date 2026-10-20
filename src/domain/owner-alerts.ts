@@ -2,7 +2,8 @@ export type OwnerAlertKind =
 	| "fleet-budget"
 	| "abandoned-turns"
 	| "cron-failure"
-	| "email-failed";
+	| "email-failed"
+	| "codex-egress";
 
 export type OwnerAlert = {
 	readonly kind: OwnerAlertKind;
@@ -54,4 +55,32 @@ export function fleetBudgetAlerts(input: {
 		});
 	}
 	return alerts;
+}
+
+/** A Codex egress path started failing; later requests skip it for a cooldown. */
+export function codexEgressBlockedAlert(
+	path: string,
+	reason: string,
+	now = new Date(),
+): OwnerAlert {
+	return {
+		kind: "codex-egress",
+		key: `${path}:blocked:${alertHour(now)}`,
+		subject: `ytimesy: Codex egress path ${path} blocked (${reason})`,
+		text: `The Codex subscription egress path ${path} was blocked (${reason}). Requests now use the next configured path and retry ${path} after its cooldown. If every path fails, Codex subscription chats stop. Check the path (Workers VPC egress, or the relay host and its IP) and docs/research/codex-cloudflare-egress-2026-10-08.md. Further blocks of this path this hour are not emailed.`,
+	};
+}
+
+/** No configured egress path could reach the Codex backend. */
+export function codexEgressExhaustedAlert(
+	attempts: readonly { path: string; reason: string }[],
+	now = new Date(),
+): OwnerAlert {
+	const tried = attempts.map((row) => `${row.path} (${row.reason})`).join(", ");
+	return {
+		kind: "codex-egress",
+		key: `all:${alertHour(now)}`,
+		subject: "ytimesy: every Codex egress path is blocked",
+		text: `No Codex subscription egress path could reach chatgpt.com: ${tried || "none configured"}. Codex subscription chats fail (or fail over to another model) until a path recovers. Add or repair a relay (YTIMESY_CODEX_RELAY_URL_N with its signing key) or check Workers VPC egress. Further occurrences this hour are not emailed.`,
+	};
 }

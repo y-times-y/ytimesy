@@ -20,3 +20,7 @@ The maintainer of [background-agents issue #1374](https://github.com/ColeMurray/
 VPC/Gateway egress passed in this account: catalog HTTP 200 (506 ms), completed tiny subscription inference HTTP 200 (1,190 ms). The probe explicitly required the binding and could not fall back to ordinary fetch. No customer-hosted tunnel or persistent compute was added. Both disposable Workers were deleted.
 
 The development DO executor now uses invocation-local `CODEX_EGRESS` for subscription transport. The full live proof completed in 18,090 ms, including independently verified VM file-read evidence, final assistant answer, token usage and completed reconnect streaming. The model was the existing saved `gpt-6-luna`; this is not a speed benchmark. Cleanup removes the disposable VM/chats and disables the model gate. Device-code auth and application dispatch are unchanged. No permanent Node relay URL is required for this tested DO path. Real cancellation/restart and broader rollout remain separate verification gates.
+
+## 2026-10-20: VPC egress blocked; failover added
+
+On 2026-10-20 at about 12:55 PDT the VPC/Gateway path started returning 403 for the same login that still worked from a laptop. Subscription requests now fail over across an ordered list of paths (VPC first, then up to eight signed Node relays on static IPs). Each blocked path cools down for 5 minutes, and the owner is alerted. See `codex-egress-failover-2026-10-20.md` for the design and what must be deployed.

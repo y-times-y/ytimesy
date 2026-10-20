@@ -2,6 +2,10 @@ import { execFileSync } from "node:child_process";
 import { createHmac, createPrivateKey } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import {
+	codexRelaySettingNames,
+	codexRelaySettingsProblem,
+} from "../src/domain/codex-egress";
+import {
 	assertProductionRoutes,
 	productionAnalyticsSettings,
 	productionRuntimeSettings,
@@ -143,11 +147,17 @@ for (const name of [
 	"YTIMESY_TOOLS_SNAPSHOT_ID",
 	"YTIMESY_CODEX_RELAY_URL",
 	"YTIMESY_CODEX_RELAY_SECRET",
+	// Further Codex egress relays, tried in order after the first (2..8).
+	...codexRelaySettingNames,
+	// The account whose login probes Codex egress paths every 5 minutes.
+	"YTIMESY_CODEX_EGRESS_PROBE_USER_ID",
 	// Owner alerts go to het@ytimesy.com unless this names another address.
 	"YTIMESY_ALERT_EMAIL",
 ] as const) {
 	if (process.env[name]) secrets[name] = process.env[name];
 }
+const relayProblem = codexRelaySettingsProblem(secrets);
+if (relayProblem) throw new Error(relayProblem);
 const key = Buffer.from(
 	secrets.YTIMESY_SECRETS_KEY,
 	/^[a-f0-9]{64}$/i.test(secrets.YTIMESY_SECRETS_KEY) ? "hex" : "base64",
