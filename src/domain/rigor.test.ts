@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { admittedUnverified, RIGOR_BUILDER_INSTRUCTIONS } from "./rigor";
+import { SessionItemId } from "./ids";
+import {
+	admittedUnverified,
+	builderRequirements,
+	MAX_BUILDER_REQUIREMENTS,
+	RIGOR_BUILDER_INSTRUCTIONS,
+	RIGOR_REQUIREMENTS_INSTRUCTIONS,
+	requirementsFromText,
+} from "./rigor";
+import type { SessionItem } from "./session-item";
 
 describe("rigor", () => {
 	it("finds the lines of a final answer that admit unverified or failing work", () => {
@@ -33,6 +42,62 @@ describe("rigor", () => {
 		);
 		expect(RIGOR_BUILDER_INSTRUCTIONS).toContain(
 			"run the deliverable as an outside user would",
+		);
+	});
+
+	it("reads the last requirements block of a text, one clipped item per line", () => {
+		expect(requirementsFromText("No list here.")).toBeNull();
+		expect(
+			requirementsFromText(
+				"Plan.\n<requirements>\n- old\n</requirements>\nRevised:\n<requirements>\n- writes out.json\n2. sorted by id (reading: ascending)\n\n* exit 0\n</requirements>",
+			),
+		).toEqual([
+			"writes out.json",
+			"sorted by id (reading: ascending)",
+			"exit 0",
+		]);
+		const long = Array.from({ length: 40 }, (_, i) => `- item ${i}`).join("\n");
+		expect(
+			requirementsFromText(`<requirements>\n${long}\n</requirements>`),
+		).toHaveLength(MAX_BUILDER_REQUIREMENTS);
+	});
+
+	it("takes the builder's latest list since the person's request", () => {
+		const user = (id: string, text: string): SessionItem => ({
+			kind: "userMessage",
+			id: SessionItemId(id),
+			text,
+		});
+		const agent = (id: string, text: string): SessionItem => ({
+			kind: "agentMessage",
+			id: SessionItemId(id),
+			text,
+		});
+		const list = (item: string) => `<requirements>\n- ${item}\n</requirements>`;
+		expect(
+			builderRequirements([
+				user("u1", "first request"),
+				agent("a1", list("from the first request")),
+				user("u2", "second request"),
+				agent("a2", "working"),
+			]),
+		).toBeNull();
+		expect(
+			builderRequirements([
+				user("u1", "request"),
+				agent("a1", list("first reading")),
+				agent("a2", list("revised reading")),
+				agent("a3", "Done."),
+			]),
+		).toEqual(["revised reading"]);
+	});
+
+	it("asks for the list in the message, never in a file", () => {
+		expect(RIGOR_REQUIREMENTS_INSTRUCTIONS).toContain(
+			"between a <requirements> line and a </requirements> line, never in a file",
+		);
+		expect(RIGOR_REQUIREMENTS_INSTRUCTIONS).toContain(
+			"Mark an ambiguous item with the reading you chose.",
 		);
 	});
 });

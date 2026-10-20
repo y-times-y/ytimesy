@@ -31,6 +31,7 @@ import {
 } from "#/domain/review-loop";
 import {
 	admittedUnverified,
+	builderRequirements,
 	UNVERIFIED_SEND_BACK_TIME_LEFT,
 } from "#/domain/rigor";
 import {
@@ -95,7 +96,9 @@ export type ReviewLoopInput = {
 	/**
 	 * Harness variant rigor=on: the checker's brief gets the rigor checks, and
 	 * a final answer that admits unverified work while over half the loop's
-	 * time is left is sent back even when the checker passes it.
+	 * time is left is sent back even when the checker passes it. The
+	 * builder's requirements list (its latest block this turn) goes to the
+	 * checker as a claim and is kept on the round.
 	 */
 	readonly rigor?: boolean;
 };
@@ -308,6 +311,7 @@ export function createReviewLoop(input: ReviewLoopInput) {
 				UNVERIFIED_SEND_BACK_TIME_LEFT
 				? admittedUnverified(attemptReport(step.items))
 				: [];
+		const requirements = input.rigor ? builderRequirements(step.items) : null;
 		const directory = `${attemptDirectory(turnId, 0).replace(/\/0$/, "")}/review-${n}`;
 		const prepared = await deps.vm(checkerDirectoryCommand(directory), 20_000);
 		if (prepared.exitCode !== 0)
@@ -330,6 +334,7 @@ export function createReviewLoop(input: ReviewLoopInput) {
 					scratch: directory,
 					diffCommand: `git -C ${workspace.cwd} diff ${state.checkpoint.ref} ${snapshot.ref}`,
 					rigor: input.rigor,
+					...(requirements ? { builderRequirements: requirements } : {}),
 				}),
 				cap: {
 					...REVIEW_LOOP_LIMITS.checker,
@@ -363,6 +368,7 @@ export function createReviewLoop(input: ReviewLoopInput) {
 					},
 					verdict: null,
 					...(admitted.length ? { admitted } : {}),
+					...(requirements ? { builderRequirements: requirements } : {}),
 					findings: [],
 				},
 			],
