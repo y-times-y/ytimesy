@@ -38,7 +38,7 @@ await removeRehearsalVms();
 const { taskSnapshot } = await import("./task-vm");
 const { FakeCodex } = await import("./fake-codex");
 const { RehearsalEdge } = await import("./edge");
-const { scenarios } = await import("./scenarios");
+const { classifierScript, scenarios } = await import("./scenarios");
 const { checkScenario, collect } = await import("./checks");
 const { seedOwner, createRehearsalUser, startTaskChat, sendFollowUp } =
 	await import("./seed");
@@ -64,7 +64,11 @@ console.log(
 	`rehearsal: task VM ${prepared.reused ? "reused" : "set up"} (${elapsed()})\n${prepared.setupLog}`,
 );
 
-const fake = new FakeCodex(selected.flatMap((scenario) => scenario.scripts));
+// The sidekick classifier's requests are told apart first (src/domain/sidekick-classifier.ts).
+const fake = new FakeCodex([
+	classifierScript(),
+	...selected.flatMap((scenario) => scenario.scripts),
+]);
 const machines = vms.machines();
 const edge = new RehearsalEdge({ databaseUrl, machines, egress: fake.fetch });
 const owner = await edge.invoke(() => seedOwner());
