@@ -1,6 +1,10 @@
 import { tool } from "ai";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
+import {
+	type FusionPairProfile,
+	fusionPairProfile,
+} from "#/domain/fusion-pairs";
 import { beginSidekickRound, newSidekickState } from "#/domain/sidekick";
 import { agentTurnInstructions } from "./agent-turn-instructions";
 
@@ -204,8 +208,16 @@ describe("lead mode fusion instructions", () => {
 			"send specific feedback with `agent_send` (what fails, where, what done looks like) for another round instead of fixing it yourself",
 		);
 		expect(fusion).toContain(
-			"Take over and edit yourself (`edit`, `write`) only when the sidekick has failed twice on the same issue or is clearly out of its depth.",
+			"re-brief it more prescriptively, or take over and edit yourself (`edit`, `write`).",
 		);
+		// Exploration first: the sidekick explores, the lead plans from its snippets.
+		expect(fusion).toContain(
+			"hand the exploration to the sidekick first, before reading code yourself: `agent` with role writer and explore: true",
+		);
+		expect(fusion).toContain(
+			"read a file yourself (`read`) only to fill a specific gap they leave.",
+		);
+		expect(fusion).toContain("across the user's messages");
 		expect(fusion).toContain("git add -A && git apply -3 <patch>");
 		// Not the default block's delegation policy.
 		expect(fusion).not.toContain("Delegate when it saves wall-clock time");
@@ -217,6 +229,34 @@ describe("lead mode fusion instructions", () => {
 		expect(off).not.toContain("you are the lead");
 	});
 
+	it("shapes briefs, pushback and exploration by the pair's profile", () => {
+		const tools = { bash: stub, read: stub, edit: stub, agent: stub };
+		const withPair = (pair: FusionPairProfile) =>
+			agentTurnInstructions({
+				...base,
+				leanShape: "core",
+				session: { parentSessionId: null },
+				tools,
+				lead: "fusion",
+				fusionPair: pair,
+			});
+		const solLuna = withPair(fusionPairProfile("gpt-6.1-sol", "gpt-6-luna"));
+		expect(solLuna).toContain("Brief prescriptively:");
+		expect(solLuna).not.toContain("Brief by outcome");
+		expect(solLuna).toContain("explore: true");
+		const strong = withPair(fusionPairProfile("gpt-6.1-sol", "gpt-6.1-sol"));
+		expect(strong).toContain("Brief by outcome");
+		expect(strong).toContain("It may push back on your approach");
+		const noExplore = withPair({
+			name: "test",
+			briefStyle: "outcome",
+			pushback: false,
+			sidekickExplores: false,
+		});
+		expect(noExplore).not.toContain("explore: true starts it");
+		expect(noExplore).not.toContain("push back");
+	});
+
 	it("names the surface's own editing tools", () => {
 		expect(
 			lead(
@@ -224,14 +264,14 @@ describe("lead mode fusion instructions", () => {
 				{ exec_command: stub, apply_patch: stub, agent: stub },
 				"fusion",
 			),
-		).toContain("Take over and edit yourself (`apply_patch`) only when");
+		).toContain("take over and edit yourself (`apply_patch`).");
 		expect(
 			lead(
 				"claude",
 				{ Bash: stub, Edit: stub, Write: stub, agent: stub },
 				"fusion",
 			),
-		).toContain("Take over and edit yourself (`Edit`, `Write`) only when");
+		).toContain("take over and edit yourself (`Edit`, `Write`).");
 	});
 
 	it("gives the sidekick its persistent role and per-round budget, never the lead's block", () => {
@@ -252,9 +292,12 @@ describe("lead mode fusion instructions", () => {
 		});
 		expect(sidekick).toContain("You are the lead's sidekick");
 		expect(sidekick).toContain(
-			"Your budget per round: 150 steps, 30 minutes, 1,000,000 tokens; 6 rounds at most.",
+			"Your budget per round: 150 steps, 30 minutes, 1,000,000 tokens; 6 rounds at most per user request.",
 		);
 		expect(sidekick).toContain("you start no agents");
+		expect(sidekick).toContain("In an exploration round change no files");
+		// No pair recorded: the sidekick follows briefs (no pushback).
+		expect(sidekick).toContain("Follow each brief as written.");
 		expect(sidekick).not.toContain("you are the lead");
 		// Static across rounds: the round's state never enters the prompt.
 		const later = agentTurnInstructions({
