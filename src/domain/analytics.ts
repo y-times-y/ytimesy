@@ -38,6 +38,22 @@ export const serverAnalyticsEvents = {
 		same_model: z.boolean(),
 		to_paid: z.boolean(),
 	}),
+	/** A Codex subscription request moved off a blocked network path. */
+	codex_egress_failover: z.object({
+		path: z.string().regex(/^(vpc|direct|relay-[1-8])$/),
+		reason: z.enum([
+			"challenge",
+			"cloudflare-block",
+			"forbidden-html",
+			"unauthorized-html",
+			"gateway-error",
+			"redirect",
+			"relay-unavailable",
+			"transport",
+			"timeout",
+		]),
+		outcome: z.enum(["switched", "exhausted"]),
+	}),
 	environment_started: z.object({ repositories: z.number().int().positive() }),
 	environment_finished: z.object({
 		outcome: z.enum(["ready", "failed"]),
