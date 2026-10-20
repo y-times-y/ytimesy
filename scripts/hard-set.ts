@@ -1798,8 +1798,8 @@ async function cleanupRun(run: TaskRun, keepGrader: boolean) {
 	if (run.userId && run.sessionId)
 		await cancelServerTurn(run.userId, run.sessionId).catch(() => {});
 	if (run.agentVm) await client.vms.delete(run.agentVm).catch(() => {});
-	// lead=fusion keeps an idle sidekick (and its fork) for the chat's next
-	// message; this chat has none, so its forks go before the session row.
+	// Writer forks (subagents=on) go before the session row; lead=fusion's
+	// sidekick works in the agent VM and has none.
 	if (run.userId && run.sessionId)
 		for (const vmId of await childForkVms(run.sessionId).catch(() => []))
 			await client.vms.delete(vmId).catch(() => {});

@@ -2,6 +2,7 @@
 // observable afterwards. Every agent's conversation is told apart by a
 // marker in its first message: the task text carries [rehearsal:<id>], and
 // the scripted leads write [rehearsal:<role>] into their briefs.
+import { HARNESS_EXPLORE_HEADING } from "../../src/domain/sidekick";
 import type { AgentScript, Reply, ScriptContext } from "./fake-codex";
 
 export type Check = { name: string; ok: boolean; detail?: string };
@@ -204,8 +205,8 @@ return JSON.stringify({ copy, write, make, probe });`);
 }
 
 // ---------------------------------------------------------------------------
-// c. lead=fusion: the lead starts its sidekick, applies its patch, sends
-// feedback, applies the second round's patch and finishes.
+// d. subagents=on: the builder starts a forked writer and applies its patch,
+// and an awaited researcher reports from the shared VM.
 
 /** Reports from writers arrive as user-role messages naming the patch. */
 function reports(context: ScriptContext) {
@@ -215,12 +216,9 @@ function reports(context: ScriptContext) {
 		.filter((path): path is string => Boolean(path));
 }
 
-function leadScript(
-	tag: string,
-	input: { feedbackRounds: number; startResearcher?: boolean },
-): AgentScript {
+function leadScript(tag: string): AgentScript {
 	return {
-		name: input.startResearcher ? "subagents-lead" : "fusion-lead",
+		name: "subagents-lead",
 		match: (first) => first.includes(tag) && !isChecker(first),
 		reply: (context) => {
 			const { calls } = context;
@@ -230,50 +228,37 @@ function leadScript(
 					call.name === "run_code" &&
 					JSON.stringify(call.args).includes("git apply"),
 			).length;
-			const sent = calls.filter((call) => call.name === "agent_send").length;
 			const found = reports(context);
-			if (!started.length) {
-				const calls_: { name: string; args: unknown }[] = [
-					{
-						name: "agent",
-						args: {
-							role: "writer",
-							title: "Rehearsal writer",
-							brief: `[rehearsal:${input.startResearcher ? "writer" : "sidekick"}] Add a one-line comment to the top of include/mvcc_lsm/types.h saying "rehearsal round 1". Run git diff --stat. Report the patch.`,
+			if (!started.length)
+				return {
+					calls: [
+						{
+							name: "agent",
+							args: {
+								role: "writer",
+								title: "Rehearsal writer",
+								brief:
+									'[rehearsal:writer] Add a one-line comment to the top of include/mvcc_lsm/types.h saying "rehearsal round 1". Run git diff --stat. Report the patch.',
+							},
 						},
-					},
-				];
-				if (input.startResearcher)
-					calls_.push({
-						name: "agent",
-						args: {
-							role: "researcher",
-							title: "Rehearsal researcher",
-							wait: true,
-							brief:
-								"[rehearsal:researcher] Report the working directory, your uid and what `make -n test` would run. Do not change anything.",
+						{
+							name: "agent",
+							args: {
+								role: "researcher",
+								title: "Rehearsal researcher",
+								wait: true,
+								brief:
+									"[rehearsal:researcher] Report the working directory, your uid and what `make -n test` would run. Do not change anything.",
+							},
 						},
-					});
-				return { calls: calls_ };
-			}
+					],
+				};
 			if (found.length > applied) {
 				const patch = found[applied];
 				return runCode(`const apply = await tools.bash({ command: ${JSON.stringify(`git apply -3 ${patch} && git diff --stat && echo PATCH_APPLIED`)} });
 return JSON.stringify(apply);`);
 			}
-			if (applied > sent && sent < input.feedbackRounds)
-				return {
-					calls: [
-						{
-							name: "agent_send",
-							args: {
-								id: "1",
-								message: `[rehearsal:feedback] Good. Round ${sent + 2}: add a one-line comment "rehearsal round ${sent + 2}" to the top of src/lsm_db.cc and report the patch.`,
-							},
-						},
-					],
-				};
-			if (applied >= input.feedbackRounds + 1)
+			if (applied >= 1)
 				return { text: `Rehearsal lead finished: ${applied} patches applied.` };
 			// Waiting for the writer's report: keep the turn alive.
 			return bash("sleep 15; echo waiting-for-report");
@@ -282,22 +267,20 @@ return JSON.stringify(apply);`);
 }
 
 function writerScript(name: string, tag: string): AgentScript {
-	const file = ["include/mvcc_lsm/types.h", "src/lsm_db.cc"];
 	return {
 		name,
 		match: marked(tag),
 		reply: ({ step }) => {
-			const round = Math.floor(step / 2);
-			if (step % 2 === 0)
+			if (step === 0)
 				return runCode(`const before = await tools.bash({ command: "pwd; id -u; git log --oneline -3; git status --short" });
-const path = ${JSON.stringify(file[round] ?? file[0])};
+const path = "include/mvcc_lsm/types.h";
 const text = await tools.read({ path });
 const first = String(text).split("\\n")[0].replace(/^\\s*\\d+[\\t|:]\\s?/, "");
-const edited = await tools.edit({ path, edits: [{ old_string: first, new_string: "// rehearsal round ${round + 1}\\n" + first }] });
+const edited = await tools.edit({ path, edits: [{ old_string: first, new_string: "// rehearsal round 1\\n" + first }] });
 const after = await tools.bash({ command: "git diff --stat" });
 return JSON.stringify({ before, edited, after });`);
 			return {
-				text: `Rehearsal ${name} round ${round + 1} done: one comment line added.`,
+				text: `Rehearsal ${name} round 1 done: one comment line added.`,
 			};
 		},
 	};
@@ -319,8 +302,11 @@ return JSON.stringify(r);`);
 }
 
 // ---------------------------------------------------------------------------
-// c2-c4. lead=fusion as Devin Fusion: exploration first, a sidekick that
-// lives across the chat's messages, and stuck signals with a model switch.
+// c-c4. lead=fusion as Devin Fusion: the user's task, the sidekick's code
+// exploration (started by the harness before the lead's first model call),
+// file snippets, the lead's plan, the sidekick's code in the lead's own
+// checkout while the lead waits, the lead's review in place, requested
+// edits, fixes, the final answer after the last report.
 
 /** Sidekick reports the lead received (each child event once). */
 function writerReports(context: ScriptContext) {
@@ -329,112 +315,202 @@ function writerReports(context: ScriptContext) {
 	);
 }
 
-const applyPatch = (patch: string) =>
-	runCode(`const apply = await tools.bash({ command: ${JSON.stringify(`git apply -3 ${patch} && git diff --stat && echo PATCH_APPLIED`)} });
-return JSON.stringify(apply);`);
-const waitForReport = () => bash("sleep 15; echo waiting-for-report");
 const send = (args: Record<string, unknown>): Reply => ({
 	calls: [{ name: "agent_send", args }],
 });
 const count = (context: ScriptContext, name: string) =>
 	context.calls.filter((call) => call.name === name).length;
-const appliedCount = (context: ScriptContext) =>
+/** The lead's in-place reviews (run_code programs that print REVIEWED). */
+const reviewCount = (context: ScriptContext) =>
 	context.calls.filter(
 		(call) =>
 			call.name === "run_code" &&
-			JSON.stringify(call.args).includes("git apply"),
+			JSON.stringify(call.args).includes("REVIEWED"),
 	).length;
+
+/** The lead reviews a round in place: the report's diff command, then git status. */
+function reviewInPlace(report: string): Reply {
+	const diff = /`(git diff [0-9a-f]{7,40} [0-9a-f]{7,40})`/.exec(report)?.[1];
+	const command = `${diff ?? "echo NO-ROUND-DIFF; git diff"} && git status --short && echo REVIEWED`;
+	return runCode(`const review = await tools.bash({ command: ${JSON.stringify(command)} });
+return JSON.stringify(review);`);
+}
+
+/** A lead that would have to poll is a deviation: the harness holds it while the sidekick works. */
+const leadDidNotWait = () => bash("echo LEAD_DID_NOT_WAIT");
 
 /** A round that adds `// <marker>` above the first line of `path`. */
 const markFile = (path: string, marker: string, before = "") =>
 	runCode(`${before}const text = await tools.read({ path: ${JSON.stringify(path)} });
 const first = String(text).split("\\n")[0].replace(/^\\s*\\d+[\\t|:]\\s?/, "");
 const edited = await tools.edit({ path: ${JSON.stringify(path)}, edits: [{ old_string: first, new_string: ${JSON.stringify(`// ${marker}\n`)} + first }] });
-const after = await tools.bash({ command: "git diff --stat" });
+const after = await tools.bash({ command: "pwd; id -u; test -e /.dockerenv && echo in-container; git diff --stat" });
 return JSON.stringify({ edited, after });`);
 
 export const EXPLORE_FILE = "include/mvcc_lsm/types.h";
 
-/** c2: the lead's first handoff is exploration; it plans from the snippets. */
-function exploreLeadScript(tag: string): AgentScript {
+/** The exploration round's program: reads, the check command, and where it runs. */
+const EXPLORE_PROGRAM = `const [types, db, make] = await Promise.all([
+  tools.read({ path: ${JSON.stringify(EXPLORE_FILE)}, limit: 12 }),
+  tools.read({ path: "src/lsm_db.cc", limit: 10 }),
+  tools.bash({ command: "pwd; id -u; test -e /.dockerenv && echo in-container; make -n test | head -3" }),
+]);
+const head = (text) => String(text).split("\\n").slice(0, 3).map((line) => line.replace(/^\\s*\\d+[\\t|:]\\s?/, "")).join("|");
+return "SNIPPET_TYPES<<" + head(types) + ">> SNIPPET_DB<<" + head(db) + ">> WHERE<<" + JSON.stringify(make).replaceAll("\\n", " ") + ">>";`;
+
+function explorationReport(last: ScriptContext["last"]) {
+	// The program's return value, however the result is wrapped.
+	const raw = (last[0]?.output ?? "").replaceAll('\\"', '"');
+	const lines = (name: string) =>
+		(new RegExp(`${name}<<(.*?)>>`).exec(raw)?.[1] ?? "").split("|");
+	return [
+		"Rehearsal exploration report.",
+		"Files:",
+		`- ${EXPLORE_FILE}:1-12: the engine's shared types`,
+		"- src/lsm_db.cc:1-10: the DB entry point",
+		"Snippets:",
+		`${EXPLORE_FILE}:1-3`,
+		...lines("SNIPPET_TYPES"),
+		"src/lsm_db.cc:1-3",
+		...lines("SNIPPET_DB"),
+		"Commands:",
+		"- make test: builds build/regression_test and runs it",
+		`Where: ${(/WHERE<<(.*?)>>/.exec(raw)?.[1] ?? "").slice(0, 300)}`,
+		"Open questions:",
+		"- none",
+	].join("\n");
+}
+
+type Round =
+	| { readonly kind: "explore" }
+	| {
+			readonly kind: "build";
+			readonly path: string;
+			readonly marker: string;
+			/** A check run first (its failure is the stuck signal's evidence). */
+			readonly check?: string;
+	  };
+
+/**
+ * A sidekick: its conversation starts with the harness's exploration brief
+ * for the scenario's request; each round is a program step and a report.
+ */
+function sidekickScript(
+	name: string,
+	tag: string,
+	rounds: Round[],
+): AgentScript {
 	return {
-		name: "explore-lead",
-		match: (first) => first.includes(tag) && !isChecker(first),
+		name,
+		match: (first) =>
+			first.includes(HARNESS_EXPLORE_HEADING) &&
+			first.includes(tag) &&
+			!first.includes("You take over as the lead's sidekick"),
+		reply: ({ step, last }) => {
+			const index = Math.floor(step / 2);
+			const round = rounds[index];
+			if (!round) return { text: `Rehearsal ${name}: no round ${index + 1}.` };
+			if (step % 2 === 0)
+				return round.kind === "explore"
+					? runCode(EXPLORE_PROGRAM)
+					: markFile(
+							round.path,
+							round.marker,
+							round.check
+								? `const check = await tools.bash({ command: ${JSON.stringify(round.check)} });\n`
+								: "",
+						);
+			if (round.kind === "explore") return { text: explorationReport(last) };
+			return {
+				text: round.check
+					? `Rehearsal ${name} round ${index + 1}: ${round.check} still fails; marked ${round.path}.`
+					: `Rehearsal ${name} round ${index + 1} done: marked ${round.path} with "${round.marker}".`,
+			};
+		},
+	};
+}
+
+/** A lead's conversation (the scenario's task), never a sidekick's or a checker's. */
+const leadMatch = (tag: string) => (first: string) =>
+	first.includes(tag) &&
+	!isChecker(first) &&
+	!first.includes(HARNESS_EXPLORE_HEADING) &&
+	!first.includes("You take over as the lead's sidekick");
+
+/** The write the lead tries in the same batch as a handoff (the guard refuses it). */
+const LEAD_WRITE_PROBE = `const edited = await tools.edit({ path: "src/version_set.cc", edits: [{ old_string: "#include", new_string: "// lead write during a round\\n#include" }] });
+return JSON.stringify({ edited });`;
+
+/**
+ * c: harness exploration, a planned build round, an in-place review,
+ * requested edits (sent with a write the guard refuses), the fix round,
+ * a second review, the final answer.
+ */
+function fusionLeadScript(tag: string): AgentScript {
+	return {
+		name: "fusion-lead",
+		match: leadMatch(tag),
 		reply: (context) => {
 			const reportsIn = writerReports(context);
-			const applied = appliedCount(context);
-			if (!count(context, "agent"))
+			const sends = count(context, "agent_send");
+			const reviews = reviewCount(context);
+			if (!reportsIn.length)
+				return {
+					text: "NO_EXPLORATION_REPORT: the lead's first request had no snippets.",
+				};
+			if (reportsIn.length < sends + 1) return leadDidNotWait();
+			if (!sends)
+				return send({
+					id: "1",
+					message: `[rehearsal:fusion-build] Plan from your snippets: add the line "// rehearsal round 2" above line 1 of ${EXPLORE_FILE}, then run git diff --stat and report.`,
+				});
+			if (reviews < sends) return reviewInPlace(reportsIn.at(-1) as string);
+			if (sends === 1)
 				return {
 					calls: [
 						{
-							name: "agent",
+							name: "agent_send",
 							args: {
-								role: "writer",
-								title: "Explore the storage engine",
-								explore: true,
-								brief:
-									"[rehearsal:explore-sidekick] Find and return the code this task touches: the type definitions and the DB entry point, with file paths, the key snippets and line ranges, how to run the checks, and what the task touches.",
+								id: "1",
+								message:
+									'[rehearsal:fusion-feedback] Reviewed. Also add "// rehearsal round 3" above line 1 of src/lsm_db.cc and report.',
 							},
 						},
+						{ name: "run_code", args: { code: LEAD_WRITE_PROBE } },
 					],
 				};
-			if (!reportsIn.length) return waitForReport();
-			if (!count(context, "agent_send")) {
+			return {
+				text: "Rehearsal lead finished: two build rounds reviewed in place.",
+			};
+		},
+	};
+}
+
+/** c2: the lead plans from the harness exploration's snippets without reading. */
+function exploreLeadScript(tag: string): AgentScript {
+	return {
+		name: "explore-lead",
+		match: leadMatch(tag),
+		reply: (context) => {
+			const reportsIn = writerReports(context);
+			const sends = count(context, "agent_send");
+			if (!reportsIn.length)
+				return {
+					text: "NO_EXPLORATION_REPORT: the lead's first request had no snippets.",
+				};
+			if (reportsIn.length < sends + 1) return leadDidNotWait();
+			if (!sends) {
 				// The plan quotes the sidekick's snippet: the lead never read the file.
 				const snippet =
 					/Snippets:\n[^\n]*\n([^\n]+)/.exec(reportsIn[0] ?? "")?.[1] ?? "";
 				return send({
 					id: "1",
-					message: `[rehearsal:explore-build] Plan from your snippets: above "${snippet.trim()}" (line 1 of ${EXPLORE_FILE}) add the line "// rehearsal explore build", then run git diff --stat and report the patch.`,
+					message: `[rehearsal:explore-build] Plan from your snippets: above "${snippet.trim()}" (line 1 of ${EXPLORE_FILE}) add the line "// rehearsal explore build", then run git diff --stat and report.`,
 				});
 			}
-			const patches = reports(context);
-			if (patches.length > applied)
-				return applyPatch(patches[applied] as string);
-			if (applied) return { text: "Rehearsal explore lead finished." };
-			return waitForReport();
-		},
-	};
-}
-
-function exploreSidekickScript(): AgentScript {
-	return {
-		name: "explore-sidekick",
-		match: marked("[rehearsal:explore-sidekick]"),
-		reply: ({ step, last }) => {
-			if (step === 0)
-				return runCode(`const [types, db, make] = await Promise.all([
-  tools.read({ path: ${JSON.stringify(EXPLORE_FILE)}, limit: 12 }),
-  tools.read({ path: "src/lsm_db.cc", limit: 10 }),
-  tools.bash({ command: "make -n test | head -3" }),
-]);
-const head = (text) => String(text).split("\\n").slice(0, 3).map((line) => line.replace(/^\\s*\\d+[\\t|:]\\s?/, "")).join("|");
-return "SNIPPET_TYPES<<" + head(types) + ">> SNIPPET_DB<<" + head(db) + ">> MAKE_EXIT=" + make.exitCode;`);
-			if (step === 1) {
-				// The program's return value, however the result is wrapped.
-				const raw = (last[0]?.output ?? "").replaceAll('\\"', '"');
-				const lines = (name: string) =>
-					(new RegExp(`${name}<<(.*?)>>`).exec(raw)?.[1] ?? "").split("|");
-				return {
-					text: [
-						"Rehearsal exploration report.",
-						"Files:",
-						`- ${EXPLORE_FILE}:1-12: the engine's shared types`,
-						"- src/lsm_db.cc:1-10: the DB entry point",
-						"Snippets:",
-						`${EXPLORE_FILE}:1-3`,
-						...lines("SNIPPET_TYPES"),
-						"src/lsm_db.cc:1-3",
-						...lines("SNIPPET_DB"),
-						"Commands:",
-						"- make test: builds build/regression_test and runs it",
-						"Open questions:",
-						"- none",
-					].join("\n"),
-				};
-			}
-			if (step === 2) return markFile(EXPLORE_FILE, "rehearsal explore build");
-			return { text: "Rehearsal explore-sidekick build round done." };
+			if (reviewCount(context) < sends)
+				return reviewInPlace(reportsIn.at(-1) as string);
+			return { text: "Rehearsal explore lead finished." };
 		},
 	};
 }
@@ -442,46 +518,39 @@ return "SNIPPET_TYPES<<" + head(types) + ">> SNIPPET_DB<<" + head(db) + ">> MAKE
 export const MULTITURN_FOLLOW_UP =
 	"[rehearsal:fusion-multiturn-2] A second request in the same chat: also mark src/lsm_db.cc.";
 
-/** c3: the same sidekick serves the chat's second user message. */
+/** c3: the same sidekick serves the chat's second user message, exploring it first. */
 function multiturnLeadScript(tag: string): AgentScript {
 	return {
 		name: "multiturn-lead",
-		match: (first) => first.includes(tag) && !isChecker(first),
+		match: leadMatch(tag),
 		reply: (context) => {
 			const reportsIn = writerReports(context);
-			const applied = appliedCount(context);
-			const patches = reports(context);
+			const sends = context.calls.filter((call) => call.name === "agent_send");
+			const builds = sends.filter(
+				(call) => !(call.args as { stop?: boolean }).stop,
+			).length;
 			const second = context.userTexts.some((text) =>
 				text.includes("[rehearsal:fusion-multiturn-2]"),
 			);
-			if (!count(context, "agent"))
-				return {
-					calls: [
-						{
-							name: "agent",
-							args: {
-								role: "writer",
-								title: "Mark the types",
-								brief: `[rehearsal:mt-sidekick] Add a one-line comment "rehearsal round 1" to the top of ${EXPLORE_FILE}. Run git diff --stat. Report the patch.`,
-							},
-						},
-					],
-				};
-			if (patches.length > applied)
-				return applyPatch(patches[applied] as string);
+			// Rounds so far: one exploration per request, one build per send.
+			const expected = (second ? 2 : 1) + builds;
+			if (reportsIn.length < expected) return leadDidNotWait();
+			if (reviewCount(context) < builds)
+				return reviewInPlace(reportsIn.at(-1) as string);
 			if (!second)
-				return applied
+				return builds
 					? { text: "First request done; the sidekick stays for the chat." }
-					: waitForReport();
-			const sends = context.calls.filter((call) => call.name === "agent_send");
-			if (!sends.length)
+					: send({
+							id: "1",
+							message: `[rehearsal:mt-build-1] Add "// rehearsal round 2" above line 1 of ${EXPLORE_FILE} and report.`,
+						});
+			if (builds < 2)
 				return send({
 					id: "1",
 					message:
-						'[rehearsal:mt-feedback] The user\'s next request: add a one-line comment "rehearsal round 2" to the top of src/lsm_db.cc and report the patch.',
+						'[rehearsal:mt-build-2] The user\'s next request: add "// rehearsal round 4" above line 1 of src/lsm_db.cc and report.',
 				});
-			if (reportsIn.length < 2 || applied < 2) return waitForReport();
-			if (sends.length < 2) return send({ id: "1", stop: true });
+			if (sends.length < 3) return send({ id: "1", stop: true });
 			return { text: "Second request done; sidekick stopped." };
 		},
 	};
@@ -491,64 +560,31 @@ function multiturnLeadScript(tag: string): AgentScript {
 function stuckLeadScript(tag: string): AgentScript {
 	return {
 		name: "stuck-lead",
-		match: (first) => first.includes(tag) && !isChecker(first),
+		match: leadMatch(tag),
 		reply: (context) => {
 			const reportsIn = writerReports(context);
-			const applied = appliedCount(context);
-			const patches = reports(context);
 			const sends = count(context, "agent_send");
-			if (!count(context, "agent"))
-				return {
-					calls: [
-						{
-							name: "agent",
-							args: {
-								role: "writer",
-								title: "Make the bogus check pass",
-								brief: `[rehearsal:stuck-sidekick] Make \`make bogus-check\` pass, and add a one-line comment "rehearsal stuck 1" to the top of ${EXPLORE_FILE}. Report the patch.`,
-							},
-						},
-					],
-				};
-			if (patches.length > applied)
-				return applyPatch(patches[applied] as string);
-			if (reportsIn.length === 1 && sends === 0)
+			const reviews = reviewCount(context);
+			if (reportsIn.length < sends + 1) return leadDidNotWait();
+			if (reviews < sends) return reviewInPlace(reportsIn.at(-1) as string);
+			if (sends === 0)
+				return send({
+					id: "1",
+					message: `[rehearsal:stuck-build] Make \`make bogus-check\` pass, and add "// rehearsal stuck 1" above line 1 of ${EXPLORE_FILE}. Report.`,
+				});
+			if (sends === 1)
 				return send({
 					id: "1",
 					message:
 						'[rehearsal:stuck-feedback] make bogus-check still fails. Fix it, and add "rehearsal stuck 2" to the top of src/lsm_db.cc.',
 				});
-			if (reportsIn.length === 2 && sends === 1)
+			if (sends === 2)
 				return send({
 					id: "1",
 					message:
-						'[rehearsal:escalated] Add a one-line comment "rehearsal escalated" to the top of src/snapshot_context.cc and report the patch.',
+						'[rehearsal:escalated] Add a one-line comment "rehearsal escalated" to the top of src/snapshot_context.cc and report.',
 				});
-			if (reportsIn.length >= 3 && applied >= 3)
-				return { text: "Rehearsal stuck lead finished." };
-			return waitForReport();
-		},
-	};
-}
-
-function stuckSidekickScript(): AgentScript {
-	const files = [EXPLORE_FILE, "src/lsm_db.cc"];
-	return {
-		name: "stuck-sidekick",
-		match: (first) =>
-			first.includes("[rehearsal:stuck-sidekick]") &&
-			!first.includes("You take over as the lead's sidekick"),
-		reply: ({ step }) => {
-			const round = Math.floor(step / 2);
-			if (step % 2 === 0)
-				return markFile(
-					files[round] ?? EXPLORE_FILE,
-					`rehearsal stuck ${round + 1}`,
-					'const check = await tools.bash({ command: "make bogus-check" });\n',
-				);
-			return {
-				text: `Rehearsal stuck sidekick round ${round + 1}: make bogus-check still fails.`,
-			};
+			return { text: "Rehearsal stuck lead finished." };
 		},
 	};
 }
@@ -664,47 +700,78 @@ export function scenarios(): Scenario[] {
 		},
 		{
 			id: "fusion",
-			title: "c. lead=fusion: sidekick runs, two rounds of patches, teardown",
+			title:
+				"c. lead=fusion: harness exploration, two build rounds in the lead's checkout, the lead waits and reviews in place",
 			variant:
 				"codeMode=primary,subagents=on,lead=fusion,roleModels.writer=codex:gpt-6-luna",
 			scripts: [
-				leadScript("[rehearsal:fusion]", { feedbackRounds: 1 }),
-				writerScript("sidekick", "[rehearsal:sidekick]"),
+				fusionLeadScript("[rehearsal:fusion]"),
+				sidekickScript("sidekick", "[rehearsal:fusion]", [
+					{ kind: "explore" },
+					{ kind: "build", path: EXPLORE_FILE, marker: "rehearsal round 2" },
+					{ kind: "build", path: "src/lsm_db.cc", marker: "rehearsal round 3" },
+				]),
 			],
 		},
 		{
 			id: "fusion-explore",
 			title:
-				"c2. lead=fusion explore-first: round 1 returns snippets, the lead plans from them without reading",
+				"c2. lead=fusion explore-first: the harness's exploration round returns snippets, the lead plans from them without reading",
 			variant:
 				"codeMode=primary,subagents=on,lead=fusion,roleModels.writer=codex:gpt-6-luna",
 			scripts: [
 				exploreLeadScript("[rehearsal:fusion-explore]"),
-				exploreSidekickScript(),
+				sidekickScript("explore-sidekick", "[rehearsal:fusion-explore]", [
+					{ kind: "explore" },
+					{
+						kind: "build",
+						path: EXPLORE_FILE,
+						marker: "rehearsal explore build",
+					},
+				]),
 			],
 		},
 		{
 			id: "fusion-multiturn",
 			title:
-				"c3. lead=fusion multi-turn: the chat's second message reuses the same sidekick session and fork",
+				"c3. lead=fusion multi-turn: the chat's second message is explored by, and built on, the same sidekick session",
 			variant:
 				"codeMode=primary,subagents=on,lead=fusion,roleModels.writer=codex:gpt-6-luna",
 			scripts: [
 				multiturnLeadScript("[rehearsal:fusion-multiturn]"),
-				writerScript("mt-sidekick", "[rehearsal:mt-sidekick]"),
+				sidekickScript("mt-sidekick", "[rehearsal:fusion-multiturn]", [
+					{ kind: "explore" },
+					{ kind: "build", path: EXPLORE_FILE, marker: "rehearsal round 2" },
+					{ kind: "explore" },
+					{ kind: "build", path: "src/lsm_db.cc", marker: "rehearsal round 4" },
+				]),
 			],
 			followUps: [MULTITURN_FOLLOW_UP],
 		},
 		{
 			id: "fusion-stuck",
 			title:
-				"c4. lead=fusion stuck signal: the same check fails twice, the lead is told, the sidekick restarts on writerEscalation",
+				"c4. lead=fusion stuck signal: the same check fails twice, the lead is told, the sidekick restarts on writerEscalation in the same checkout",
 			variant:
 				"codeMode=primary,subagents=on,lead=fusion,roleModels.writer=codex:gpt-6-luna,roleModels.writerEscalation=codex:gpt-6.1-sol",
 			scripts: [
 				stuckLeadScript("[rehearsal:fusion-stuck]"),
 				escalatedSidekickScript(),
-				stuckSidekickScript(),
+				sidekickScript("stuck-sidekick", "[rehearsal:fusion-stuck]", [
+					{ kind: "explore" },
+					{
+						kind: "build",
+						path: EXPLORE_FILE,
+						marker: "rehearsal stuck 1",
+						check: "make bogus-check",
+					},
+					{
+						kind: "build",
+						path: "src/lsm_db.cc",
+						marker: "rehearsal stuck 2",
+						check: "make bogus-check",
+					},
+				]),
 			],
 		},
 		{
@@ -712,10 +779,7 @@ export function scenarios(): Scenario[] {
 			title: "d. subagents=on: a researcher in the container, a writer's patch",
 			variant: "codeMode=primary,subagents=on",
 			scripts: [
-				leadScript("[rehearsal:subagents]", {
-					feedbackRounds: 0,
-					startResearcher: true,
-				}),
+				leadScript("[rehearsal:subagents]"),
 				writerScript("writer", "[rehearsal:writer]"),
 				researcherScript(),
 			],

@@ -1,5 +1,6 @@
 import { Effect } from "effect";
 import { sessionItemsFromUnknown } from "#/domain/session-item";
+import { sidekickState } from "#/domain/sidekick";
 import {
 	type AgentSessionRecord,
 	agentSessionForOwner,
@@ -73,6 +74,10 @@ export async function deliverAgentPeerMessage(
 	if (!sender) return;
 	const recipient = await steerableChild(sender, message.recipientId);
 	if (!recipient) return;
+	// Lead mode fusion: a retired sidekick takes no new round. Waking it would
+	// let it write in the lead's checkout beside the lead.
+	if (sidekickState(recipient)?.retired && recipient.turnStatus !== "running")
+		return;
 	const text = `Message from ${sender.title} (${sender.id}):\n\n${message.message}\n\nCoordination message ID: ${messageId}`;
 	const runtimeText = `${text}\n\nThis is your parent agent steering your brief, not a new user request. Adjust your work accordingly; keep your role's access limits, and put anything you would answer in your final report.`;
 	if (await serverPeerMessageAccepted(recipient.id, messageId)) return;

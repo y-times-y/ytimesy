@@ -2,6 +2,7 @@
 // requests, VM state) and the checks each scenario must pass.
 import {
 	fusionTurnMetrics,
+	HARNESS_EXPLORE_HEADING,
 	type SidekickState,
 } from "../../src/domain/sidekick";
 import type { SubagentBudget } from "../../src/domain/subagent";
@@ -66,6 +67,8 @@ export async function collect(input: {
 			agent_role: string | null;
 			title: string;
 			task_state: string | null;
+			task_placement: string | null;
+			task_access: string | null;
 			provider_ref: string | null;
 			agent_fork: Record<string, unknown> | null;
 			agent_budget: (SubagentBudget & { sidekick?: SidekickState }) | null;
@@ -75,7 +78,7 @@ export async function collect(input: {
 		}>(
 			`with recursive tree as (select id from agent_session where id=$1
 			 union all select s.id from agent_session s join tree t on s.parent_session_id=t.id)
-			 select id,parent_session_id,agent_role,title,task_state,provider_ref,agent_fork,agent_budget,listed_model_id,harness,items
+			 select id,parent_session_id,agent_role,title,task_state,task_placement,task_access,provider_ref,agent_fork,agent_budget,listed_model_id,harness,items
 			 from agent_session where id in (select id from tree) and id<>$1 order by created_at`,
 			[input.sessionId],
 		)
@@ -388,22 +391,14 @@ export async function checkScenario(
 		);
 	}
 
-	if (id === "fusion" || id === "subagents") {
+	if (id === "subagents") {
 		const writer = data.children.find((child) => child.agent_role === "writer");
-		const writerName = id === "fusion" ? "sidekick" : "writer";
-		const writerCalls = requests(writerName);
-		const rounds = id === "fusion" ? 2 : 1;
+		const writerCalls = requests("writer");
 		check(
-			`the ${writerName} made model calls (${rounds} round${rounds > 1 ? "s" : ""})`,
-			writerCalls.length >= 2 * rounds,
+			"the writer made model calls (1 round)",
+			writerCalls.length >= 2,
 			`${writerCalls.length} calls`,
 		);
-		if (id === "fusion")
-			check(
-				"the sidekick ran on roleModels.writer (gpt-6-luna)",
-				writerCalls.every((call) => call.model === "gpt-6-luna"),
-				writerCalls.map((call) => call.model).join(","),
-			);
 		const started = calls(items, "agent");
 		check(
 			"the agent tool started the writer on a fork",
@@ -426,8 +421,8 @@ export async function checkScenario(
 			has(item.input, "git apply"),
 		);
 		check(
-			`the lead applied ${rounds} patch${rounds > 1 ? "es" : ""} from absolute paths`,
-			applied.length === rounds &&
+			"the lead applied 1 patch from absolute paths",
+			applied.length === 1 &&
 				applied.every(
 					(item) =>
 						has(parseOutput(item).result, "PATCH_APPLIED") &&
@@ -453,59 +448,41 @@ export async function checkScenario(
 				"rehearsal round 1",
 			),
 		);
-		if (id === "fusion") {
-			const sent = calls(items, "agent_send");
-			check(
-				"agent_send started round 2 after syncing the fork",
-				has(
-					sent[0]?.output,
-					"round 2/6 started",
-					"all its earlier work was in it",
-				),
-				clip(sent[0]?.output),
-			);
-			check(
-				"round 2's change reached the lead",
-				has(
-					await vmFile(data.vm, "docker exec tb head -1 /app/src/lsm_db.cc"),
-					"rehearsal round 2",
-				),
-			);
-			// The sidekick lives as long as the chat: idle after the lead's turn,
-			// its fork kept for the next message (until its idle TTL).
-			check(
-				"the idle sidekick stays for the chat after the lead's turn (fork kept)",
-				!writer?.agent_budget?.sidekick?.retired &&
-					!writer?.agent_fork?.deletedAt &&
-					!data.destroyed.includes(String(writer?.agent_fork?.vmId)),
-				JSON.stringify({
-					retired: writer?.agent_budget?.sidekick?.retired,
-					deletedAt: writer?.agent_fork?.deletedAt,
-				}),
-			);
-		} else {
-			const researcher = data.children.find(
-				(child) => child.agent_role === "researcher",
-			);
-			const look = parseOutput(calls(researcher?.items ?? [], "run_code")[0]);
-			check(
-				"the researcher ran read-only in the task container",
-				has(look.result, "/app", "in-container", "READ_ONLY_OK") &&
-					!has(look.result, "\\n0\\n"),
-				clip(look.result),
-			);
-			check(
-				"the awaited researcher's report came back in the agent tool result",
-				started.some((item) => has(item.output, "Rehearsal researcher report")),
-				started.map((item) => clip(item.output, 200)).join(" / "),
-			);
-		}
+		const researcher = data.children.find(
+			(child) => child.agent_role === "researcher",
+		);
+		const look = parseOutput(calls(researcher?.items ?? [], "run_code")[0]);
+		check(
+			"the researcher ran read-only in the task container",
+			has(look.result, "/app", "in-container", "READ_ONLY_OK") &&
+				!has(look.result, "\\n0\\n"),
+			clip(look.result),
+		);
+		check(
+			"the awaited researcher's report came back in the agent tool result",
+			started.some((item) => has(item.output, "Rehearsal researcher report")),
+			started.map((item) => clip(item.output, 200)).join(" / "),
+		);
 	}
+
 	if (
+		id === "fusion" ||
 		id === "fusion-explore" ||
 		id === "fusion-multiturn" ||
 		id === "fusion-stuck"
 	) {
+		const leadName = {
+			fusion: "fusion-lead",
+			"fusion-explore": "explore-lead",
+			"fusion-multiturn": "multiturn-lead",
+			"fusion-stuck": "stuck-lead",
+		}[id];
+		const sidekickName = {
+			fusion: "sidekick",
+			"fusion-explore": "explore-sidekick",
+			"fusion-multiturn": "mt-sidekick",
+			"fusion-stuck": "stuck-sidekick",
+		}[id];
 		const writers = data.children.filter(
 			(child) => child.agent_role === "writer",
 		);
@@ -534,39 +511,184 @@ export async function checkScenario(
 		});
 		// The chat's whole history (a turn's items repeat earlier turns').
 		const sends = calls(data.rootItems, "agent_send");
-		const applied = calls(data.rootItems, "run_code").filter((item) =>
-			has(item.input, "git apply"),
-		);
 		const head = async (path: string) =>
 			vmFile(data.vm, `docker exec tb head -1 /app/${path}`);
+		const lead = requests(leadName);
+		const sidekickCalls = requests(sidekickName);
+		const time = (iso: string | undefined) => (iso ? Date.parse(iso) : NaN);
+		const rounds = writers.flatMap(
+			(writer) => writer.agent_budget?.sidekick?.rounds ?? [],
+		);
+
+		// 1. The user's task, then the sidekick's code exploration, started by the harness.
+		check(
+			"the harness started the exploration round before the lead's first model call",
+			state?.rounds[0]?.kind === "explore" &&
+				has(
+					sidekickCalls[0]?.users.join("\n"),
+					HARNESS_EXPLORE_HEADING,
+					`[rehearsal:${id}]`,
+				) &&
+				time(state?.rounds[0]?.startedAt) < (lead[0]?.at ?? 0) &&
+				(sidekickCalls[0]?.at ?? Infinity) < (lead[0]?.at ?? 0) &&
+				!calls(data.rootItems, "agent").length,
+			JSON.stringify({
+				round: state?.rounds[0],
+				sidekickFirst: sidekickCalls[0]?.at,
+				leadFirst: lead[0]?.at,
+				agentCalls: calls(data.rootItems, "agent").length,
+			}),
+		);
+		// 2. File snippets: the lead's first request carries them.
+		check(
+			"the lead's first model request carried the exploration report (files, snippets, commands)",
+			has(
+				lead[0]?.users.find((text) => has(text, "Snippets:")),
+				"Files:",
+				`${EXPLORE_FILE}:1-3`,
+				"#ifndef MVCC_LSM_TYPES_H_",
+				"Commands:",
+				"Open questions:",
+			),
+			clip(lead[0]?.lastUser, 500),
+		);
+		// 3. One shared workspace: the sidekick is a writer in the lead's checkout.
+		const leadForks = data.forks.filter((fork) => fork.source === data.vm);
+		check(
+			"the sidekick works in the lead's checkout as a writer (shared VM, no fork, no patch)",
+			writers.length > 0 &&
+				writers.every(
+					(writer) =>
+						writer.provider_ref === data.vm &&
+						writer.task_placement === "shared" &&
+						writer.task_access === "read_write" &&
+						!writer.agent_fork,
+				) &&
+				!leadForks.length &&
+				!has(JSON.stringify(data.rootItems), ".ytimesy/agents/") &&
+				!calls(data.rootItems, "run_code").some((item) =>
+					has(item.input, "git apply"),
+				),
+			JSON.stringify({
+				writers: writers.map((writer) => ({
+					vm: writer.provider_ref,
+					placement: writer.task_placement,
+					access: writer.task_access,
+					fork: writer.agent_fork,
+				})),
+				leadVm: data.vm,
+				forks: leadForks,
+			}),
+		);
+		const where = calls(sidekick?.items ?? [], "run_code")
+			.map((item) => parseOutput(item).result ?? "")
+			.find((result) => has(result, "WHERE<<"));
+		check(
+			"the sidekick ran as the builder's user in the task container (not the reader)",
+			has(where, "/app", "in-container") && !/\b999\b/.test(where ?? ""),
+			clip(where, 300),
+		);
+		// 4. One writer at a time: the lead makes no model call while a round runs.
+		const during = lead.filter((request) =>
+			rounds.some(
+				(round) =>
+					time(round.startedAt) < request.at &&
+					request.at < (round.endedAt ? time(round.endedAt) : Infinity),
+			),
+		);
+		check(
+			"the lead made no model call (and no edit) while a sidekick round ran",
+			!during.length &&
+				!calls(data.rootItems, "bash").some((item) =>
+					has(item.input, "LEAD_DID_NOT_WAIT"),
+				),
+			JSON.stringify(
+				during.map((request) => ({ at: request.at, step: request.step })),
+			),
+		);
+		check(
+			"the lead reviewed each build round in place (git diff of the round, git status)",
+			calls(data.rootItems, "run_code")
+				.filter((item) => has(item.input, "REVIEWED"))
+				.every(
+					(item) =>
+						has(parseOutput(item).result, "REVIEWED", "+// rehearsal") &&
+						!has(item.input, "NO-ROUND-DIFF"),
+				) &&
+				calls(data.rootItems, "run_code").filter((item) =>
+					has(item.input, "REVIEWED"),
+				).length === rounds.filter((round) => round.kind !== "explore").length,
+			calls(data.rootItems, "run_code")
+				.filter((item) => has(item.input, "REVIEWED"))
+				.map((item) => clip(parseOutput(item).result, 200))
+				.join(" / "),
+		);
+		// 5. The lead waits: its final answer comes after the last round's report.
+		const lastEnd = Math.max(...rounds.map((round) => time(round.endedAt)));
+		const finalAnswer = lead.at(-1);
+		check(
+			"the lead's final answer came after the last round's report",
+			Number.isFinite(lastEnd) &&
+				(finalAnswer?.at ?? 0) > lastEnd &&
+				"text" in (finalAnswer?.reply ?? {}) &&
+				rounds.every((round) => round.endedAt) &&
+				data.rootTurns.every((turn) => turn.state === "completed"),
+			JSON.stringify({ lastEnd, final: finalAnswer?.at }),
+		);
+		check(
+			"the sidekick ran on roleModels.writer (gpt-6-luna)",
+			sidekickCalls.length >= 2 &&
+				sidekickCalls.every((call) => call.model === "gpt-6-luna"),
+			sidekickCalls.map((call) => call.model).join(","),
+		);
+
+		if (id === "fusion") {
+			check(
+				"build rounds' changes are in the lead's checkout (rounds 2 and 3)",
+				has(await head(EXPLORE_FILE), "rehearsal round 2") &&
+					has(await head("src/lsm_db.cc"), "rehearsal round 3"),
+			);
+			check(
+				"round 2's message told the sidekick it works in the lead's checkout",
+				sidekickCalls.some((request) =>
+					request.lastUser.includes(
+						"Round 2/6 from your lead. You work in the lead's checkout as it is now",
+					),
+				),
+			);
+			const probe = calls(data.rootItems, "run_code").find((item) =>
+				has(item.input, "lead write during a round"),
+			);
+			check(
+				"a lead edit sent with the handoff was refused (one writer at a time)",
+				has(
+					parseOutput(probe).result,
+					"Your sidekick is working in your checkout",
+				) &&
+					!has(await head("src/version_set.cc"), "lead write during a round"),
+				clip(probe?.output, 400),
+			);
+			check(
+				"metrics: one exploration and two build rounds, no lead edit took effect, no patch applied",
+				metrics.explorationHandoffs === 1 &&
+					metrics.sidekickRounds === 3 &&
+					metrics.patchesApplied === 0 &&
+					metrics.sidekicks === 1,
+				JSON.stringify(metrics),
+			);
+			// The sidekick lives as long as the chat: idle after the lead's turn.
+			check(
+				"the idle sidekick stays for the chat after the lead's turn",
+				!state?.retired,
+				JSON.stringify({ retired: state?.retired }),
+			);
+		}
 
 		if (id === "fusion-explore") {
-			const sidekickCalls = requests("explore-sidekick");
-			check(
-				"the first handoff was an exploration brief (explore: true, the report format appended)",
-				state?.rounds[0]?.kind === "explore" &&
-					has(sidekickCalls[0]?.lastUser, "Exploration round: change no files"),
-				JSON.stringify(state?.rounds[0]),
-			);
 			check(
 				"the exploration round changed no files and fired no signal",
 				state?.rounds[0]?.patchFiles === 0 && !state?.rounds[0]?.signals,
 				JSON.stringify(state?.rounds[0]),
-			);
-			const planned = requests("explore-lead").find((request) =>
-				has(request.lastUser, "Snippets:"),
-			);
-			check(
-				"the lead's next request carried the sidekick's files and snippets",
-				has(
-					planned?.lastUser,
-					"Files:",
-					`${EXPLORE_FILE}:1-12`,
-					"#ifndef MVCC_LSM_TYPES_H_",
-					"Commands:",
-					"Open questions:",
-				),
-				clip(planned?.lastUser, 500),
 			);
 			check(
 				"the lead read no files itself; the sidekick did the reading",
@@ -587,10 +709,8 @@ export async function checkScenario(
 				JSON.stringify(metrics),
 			);
 			check(
-				"the build round's patch reached the lead's checkout",
-				applied.length === 1 &&
-					has(await head(EXPLORE_FILE), "rehearsal explore build"),
-				applied.map((item) => clip(parseOutput(item).result, 200)).join(" / "),
+				"the build round's change reached the lead's checkout",
+				has(await head(EXPLORE_FILE), "rehearsal explore build"),
 			);
 		}
 
@@ -608,98 +728,101 @@ export async function checkScenario(
 				JSON.stringify({ writers: writers.length, turns: state?.turns }),
 			);
 			check(
-				"the second request's round started on the same sidekick after syncing its fork",
-				has(
-					sends[0]?.output,
-					"round 2 (1/6 this turn) started",
-					"all its earlier work was in it",
-				) && state?.rounds[1]?.sync === "clean",
-				clip(sends[0]?.output),
-			);
-			const keys = new Set(
-				requests("mt-sidekick").map((request) => request.cacheKey),
+				"the second request was explored first, by the same sidekick, before the lead's first call of that turn",
+				state?.rounds[2]?.kind === "explore" &&
+					sidekickCalls.some((request) =>
+						has(
+							request.lastUser,
+							"Round 3 from your lead (1/6 for the user's new request)",
+							HARNESS_EXPLORE_HEADING,
+							"[rehearsal:fusion-multiturn-2]",
+						),
+					) &&
+					time(state?.rounds[2]?.startedAt) <
+						(lead.find((request) =>
+							request.users.some((text) =>
+								has(text, "[rehearsal:fusion-multiturn-2]"),
+							),
+						)?.at ?? 0),
+				JSON.stringify(state?.rounds[2]),
 			);
 			check(
+				"the second turn's first lead request carried the new exploration report",
+				Boolean(
+					lead
+						.find((request) =>
+							request.users.some((text) =>
+								has(text, "[rehearsal:fusion-multiturn-2]"),
+							),
+						)
+						?.users.some((text) =>
+							has(text, "round 3 (1/6 this turn)", "Snippets:"),
+						),
+				),
+			);
+			const keys = new Set(sidekickCalls.map((request) => request.cacheKey));
+			check(
 				"the sidekick kept one session across turns (same prompt cache key)",
-				requests("mt-sidekick").length >= 4 &&
-					keys.size === 1 &&
-					!keys.has(null),
+				sidekickCalls.length >= 8 && keys.size === 1 && !keys.has(null),
 				JSON.stringify([...keys]),
 			);
 			check(
-				"the second round's message was labelled for the new request",
-				requests("mt-sidekick").some((request) =>
-					has(
-						request.lastUser,
-						"Round 2 from your lead (1/6 for the user's new request)",
-					),
-				),
+				"round 4's change reached the lead's checkout",
+				has(await head("src/lsm_db.cc"), "rehearsal round 4") &&
+					has(await head(EXPLORE_FILE), "rehearsal round 2"),
 			);
 			check(
-				"round 2's change reached the lead",
-				applied.length === 2 &&
-					has(await head("src/lsm_db.cc"), "rehearsal round 2"),
-			);
-			check(
-				"stopping the sidekick retired it and deleted its fork",
-				state?.retired?.reason === "stopped by the lead" &&
-					Boolean(sidekick?.agent_fork?.deletedAt) &&
-					data.destroyed.includes(String(sidekick?.agent_fork?.vmId)),
-				JSON.stringify({
-					retired: state?.retired,
-					deletedAt: sidekick?.agent_fork?.deletedAt,
-				}),
+				"stopping the sidekick retired it",
+				state?.retired?.reason === "stopped by the lead",
+				JSON.stringify({ retired: state?.retired }),
 			);
 		}
 
 		if (id === "fusion-stuck") {
-			const lead = requests("stuck-lead");
 			const notice =
 				"looks stuck because it failed the same check as last round (`make bogus-check`)";
-			const first = lead.find((request) =>
-				has(request.lastUser, "rehearsal stuck 1"),
-			);
 			check(
-				"round 1's report carried no stuck notice",
-				Boolean(lead.find((request) => /round 1\/6/.test(request.lastUser))) &&
+				"round 2's report carried no stuck notice",
+				lead.some((request) => /round 2\/6/.test(request.lastUser)) &&
 					!lead.some(
 						(request) =>
-							/round 1\/6/.test(request.lastUser) &&
+							/round 2\/6/.test(request.lastUser) &&
 							has(request.lastUser, "looks stuck"),
 					),
-				clip(first?.lastUser),
 			);
 			const stuck = lead.find((request) => has(request.lastUser, notice));
 			check(
-				"the lead's next request after round 2 carried the stuck notice",
+				"the lead's next request after round 3 carried the stuck notice",
 				Boolean(stuck) &&
 					has(
 						stuck?.lastUser,
+						"round 3/6",
 						"Re-brief it more prescriptively",
 						"restarts it on codex:gpt-6.1-sol",
 					),
 				clip(
 					lead
 						.map((request) => request.lastUser)
-						.find((text) => /round 2\/6/.test(text)),
+						.find((text) => /round 3\/6/.test(text)),
 					600,
 				),
 			);
 			check(
-				"round 2 recorded the same-check-failed signal",
-				state?.rounds[1]?.signals?.[0]?.kind === "same-check-failed",
-				JSON.stringify(state?.rounds[1]),
+				"round 3 recorded the same-check-failed signal",
+				state?.rounds[2]?.signals?.[0]?.kind === "same-check-failed",
+				JSON.stringify(state?.rounds[2]),
 			);
 			const escalated = writers[1];
 			check(
-				"the next round restarted the sidekick on roleModels.writerEscalation",
-				has(sends[1]?.output, "was stuck", "restarted as sidekick 2") &&
+				"the next round restarted the sidekick on roleModels.writerEscalation, in the same checkout",
+				has(sends[2]?.output, "was stuck", "restarted as sidekick 2") &&
 					escalated?.listed_model_id === "gpt-6.1-sol" &&
+					escalated?.provider_ref === data.vm &&
 					escalated?.agent_budget?.sidekick?.escalatedFrom?.label === "1" &&
 					requests("escalated-sidekick").every(
 						(request) => request.model === "gpt-6.1-sol",
 					),
-				clip(sends[1]?.output),
+				clip(sends[2]?.output),
 			);
 			check(
 				"the escalated sidekick got a handover of the stuck one's last report",
@@ -712,9 +835,8 @@ export async function checkScenario(
 				clip(requests("escalated-sidekick")[0]?.lastUser, 500),
 			);
 			check(
-				"the stuck sidekick was retired and its fork deleted",
-				has(state?.retired?.reason, "restarted on gpt-6.1-sol") &&
-					data.destroyed.includes(String(sidekick?.agent_fork?.vmId)),
+				"the stuck sidekick was retired",
+				has(state?.retired?.reason, "restarted on gpt-6.1-sol"),
 				JSON.stringify(state?.retired),
 			);
 			check(
@@ -727,10 +849,10 @@ export async function checkScenario(
 				}),
 			);
 			check(
-				"the escalated sidekick's patch reached the lead",
-				applied.length === 3 &&
+				"every round's change reached the lead's checkout",
+				has(await head(EXPLORE_FILE), "rehearsal stuck 1") &&
+					has(await head("src/lsm_db.cc"), "rehearsal stuck 2") &&
 					has(await head("src/snapshot_context.cc"), "rehearsal escalated"),
-				applied.map((item) => clip(parseOutput(item).result, 160)).join(" / "),
 			);
 		}
 	}

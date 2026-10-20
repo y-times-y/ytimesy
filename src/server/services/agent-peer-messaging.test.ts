@@ -1,5 +1,6 @@
 import { Effect } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { newSidekickState } from "#/domain/sidekick";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import {
 	deliverAgentPeerMessage,
@@ -147,6 +148,27 @@ describe("agent_send boundaries", () => {
 });
 
 describe("queued steering delivery", () => {
+	it("drops a round message to a retired sidekick instead of waking it beside its lead", async () => {
+		session("b", "root", {
+			turnStatus: "completed",
+			agentRole: "writer",
+			agentBudget: {
+				steps: 1,
+				minutes: 1,
+				tokens: 1,
+				sidekick: {
+					...newSidekickState({ tokens: 1 }, "2026-10-20T12:00:00.000Z"),
+					retired: {
+						at: "2026-10-20T12:06:00.000Z",
+						reason: "round 1 did not run or report",
+					},
+				},
+			},
+		});
+		await deliverAgentPeerMessage(machines, message, "job");
+		expect(fake.stage).not.toHaveBeenCalled();
+		expect(fake.send).not.toHaveBeenCalled();
+	});
 	it("stages a waiting child's reply while its durable API turn remains active", async () => {
 		session("b", "root", {
 			agentRole: "writer",

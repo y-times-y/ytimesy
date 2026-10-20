@@ -24,7 +24,7 @@ const base = {
 describe("rigor instructions", () => {
 	it("gives the rigor block to the builder and writers under rigor=on only", () => {
 		const block = "Ambiguous wording: list the plausible readings";
-		const root = { parentSessionId: null };
+		const root = {};
 		expect(
 			agentTurnInstructions({ ...base, session: root, tools: { bash: stub } }),
 		).not.toContain(block);
@@ -48,7 +48,7 @@ describe("rigor instructions", () => {
 		expect(
 			agentTurnInstructions({
 				...base,
-				session: { parentSessionId: "root", agentRole: "writer" },
+				session: { agentRole: "writer" as const },
 				tools: { bash: stub },
 				rigor: true,
 			}),
@@ -57,7 +57,7 @@ describe("rigor instructions", () => {
 			expect(
 				agentTurnInstructions({
 					...base,
-					session: { parentSessionId: "root", agentRole },
+					session: { agentRole },
 					tools: { bash: stub },
 					leanReadOnly: true,
 					rigor: true,
@@ -237,8 +237,15 @@ describe("lead mode fusion instructions", () => {
 		);
 		expect(fusion).toContain("Subagents: you are the lead.");
 		expect(fusion).toContain(
-			"Short or trivial tasks (a few steps, one obvious change): do them yourself",
+			"Short or trivial changes (one obvious edit): make them yourself",
 		);
+		// Shared checkout, one writer at a time: the lead waits and reviews in place.
+		expect(fusion).toContain(
+			"It works directly in your checkout, one writer at a time: while it works you wait",
+		);
+		expect(fusion).toContain("`git diff <start> <end>`");
+		expect(fusion).toContain("Your final answer comes after its last report.");
+		expect(fusion).not.toContain("git apply");
 		expect(fusion).toContain(
 			"the definition of done as concrete checks or commands that must pass",
 		);
@@ -248,15 +255,14 @@ describe("lead mode fusion instructions", () => {
 		expect(fusion).toContain(
 			"re-brief it more prescriptively, or take over and edit yourself (`edit`, `write`).",
 		);
-		// Exploration first: the sidekick explores, the lead plans from its snippets.
+		// Exploration first, started by the runtime: the lead plans from its snippets.
 		expect(fusion).toContain(
-			"hand the exploration to the sidekick first, before reading code yourself: `agent` with role writer and explore: true",
+			"Each user request starts with the sidekick's exploration: the runtime gives it the request before your first step",
 		);
 		expect(fusion).toContain(
-			"read a file yourself (`read`) only to fill a specific gap they leave.",
+			"read a file yourself (`read`) only to fill a specific gap they leave,",
 		);
 		expect(fusion).toContain("across the user's messages");
-		expect(fusion).toContain("git add -A && git apply -3 <patch>");
 		// Not the default block's delegation policy.
 		expect(fusion).not.toContain("Delegate when it saves wall-clock time");
 		expect(fusion).toContain(
@@ -291,7 +297,7 @@ describe("lead mode fusion instructions", () => {
 			pushback: false,
 			sidekickExplores: false,
 		});
-		expect(noExplore).not.toContain("explore: true starts it");
+		expect(noExplore).not.toContain("starts with the sidekick's exploration");
 		expect(noExplore).not.toContain("push back");
 	});
 
@@ -327,6 +333,10 @@ describe("lead mode fusion instructions", () => {
 			lead: "fusion",
 		});
 		expect(sidekick).toContain("You are the lead's sidekick");
+		expect(sidekick).toContain("working directly in the lead's checkout");
+		expect(sidekick).toContain(
+			"Leave your changes uncommitted in the working tree",
+		);
 		expect(sidekick).toContain(
 			"Your budget per round: 150 steps, 30 minutes, 1,000,000 tokens; 6 rounds at most per user request.",
 		);
@@ -348,7 +358,7 @@ describe("lead mode fusion instructions", () => {
 							now: "2026-10-19T10:20:00.000Z",
 							steps: 40,
 							tokens: 9,
-							sync: "clean",
+							base: "abc",
 						},
 					),
 				},
