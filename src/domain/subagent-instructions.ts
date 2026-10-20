@@ -18,9 +18,11 @@ export function orchestratorInstructions(
 		codeMode?: boolean | "primary";
 		/** A read-only subagent: it may start readers, never writers. */
 		readOnly?: boolean;
+		/** Harness variant subagents=force (the root builder only). */
+		force?: boolean;
 	} = {},
 ) {
-	const { codeMode, readOnly } = options;
+	const { codeMode, readOnly, force } = options;
 	const parallel = readOnly
 		? 'await Promise.all([tools.agent({ role: "researcher", title: "Map the parser", brief: "…" }), tools.agent({ role: "researcher", title: "Map the cache", brief: "…" })])'
 		: 'await Promise.all([tools.agent({ role: "writer", title: "Fix pricing rounding", brief: "…" }), tools.agent({ role: "writer", title: "Build the release bundle", brief: "…" })])';
@@ -56,8 +58,13 @@ export function orchestratorInstructions(
 			? "Verify before relying on an agent: a report is a claim, not a fact; spot-check its findings before you report them."
 			: "Verify before relying on an agent: a report is a claim, not a fact. Review a writer's patch (`git diff <base> <ref>`), apply it with `git apply -3`, rerun its checks yourself; spot-check a reader's findings before they drive edits.",
 		"A refused spawn (depth, budget or concurrency) means do the work yourself.",
+		...(force ? [FORCED_DELEGATION] : []),
 	].join("\n");
 }
+
+/** subagents=force: delegation is required, its shape is the builder's choice. */
+export const FORCED_DELEGATION =
+	"For this task, delegation is required: start at least one subagent before you finish. Choose what fits: researchers mapping code or data in parallel while you start, writers for independent parts, or a reviewer checking your fix while you run the tests. Integrate and verify their results yourself.";
 
 /**
  * The lead's block (harness variant lead=fusion, after Devin Fusion): it

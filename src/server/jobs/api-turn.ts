@@ -508,7 +508,7 @@ async function runApiTurnAttempt(
 		// and per-level budgets. Children carry the role.
 		// Lead mode fusion implies them: the lead delegates to its sidekick.
 		const subagentsOn =
-			variant.subagents === "on" ||
+			variant.subagents !== "off" ||
 			variant.lead === "fusion" ||
 			!!owner.agentRole;
 		if (variant.lead === "fusion" && !owner.parentSessionId)
@@ -1191,6 +1191,7 @@ async function runApiTurnAttempt(
 					prEvidence: variant.prEvidence === "on" && writable,
 					lead: variant.lead,
 					rigor: variant.rigor === "on",
+					forceDelegation: variant.subagents === "force",
 					fusionPair:
 						variant.lead === "fusion" && !owner.parentSessionId
 							? fusionPairFor(owner.listedModelId, variant.roleModels)

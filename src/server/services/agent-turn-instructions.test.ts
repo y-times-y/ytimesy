@@ -6,6 +6,7 @@ import {
 	fusionPairProfile,
 } from "#/domain/fusion-pairs";
 import { beginSidekickRound, newSidekickState } from "#/domain/sidekick";
+import { FORCED_DELEGATION } from "#/domain/subagent-instructions";
 import { agentTurnInstructions } from "./agent-turn-instructions";
 
 const stub = tool({
@@ -67,6 +68,27 @@ describe("rigor instructions", () => {
 });
 
 describe("subagent instructions", () => {
+	it("requires delegation only of the root builder under subagents=force", () => {
+		const tools = { bash: stub, agent: stub, run_code: stub };
+		const forced = agentTurnInstructions({
+			...base,
+			session: {},
+			tools,
+			forceDelegation: true,
+		});
+		expect(forced).toContain(FORCED_DELEGATION);
+		expect(
+			agentTurnInstructions({ ...base, session: {}, tools }),
+		).not.toContain(FORCED_DELEGATION);
+		expect(
+			agentTurnInstructions({
+				...base,
+				session: { agentRole: "writer" },
+				tools,
+				forceDelegation: true,
+			}),
+		).not.toContain(FORCED_DELEGATION);
+	});
 	it("teaches the builder cost-aware orchestration only when it has the agent tool", () => {
 		const without = agentTurnInstructions({
 			...base,

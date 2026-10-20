@@ -100,7 +100,7 @@ const results = await Promise.all(
 			createRehearsalUser(owner, `rehearsal ${scenario.id}`, variant),
 		);
 		// The tag leads: an exploration brief quotes the request's start.
-		const text = `[rehearsal:${scenario.id}]\n\n${taskMessage(prepared.task, "/app", variant.subagents === "on")}`;
+		const text = `[rehearsal:${scenario.id}]\n\n${taskMessage(prepared.task, "/app", variant.subagents !== "off")}`;
 		const sessionId = await edge.invoke(() =>
 			startTaskChat({
 				user,
