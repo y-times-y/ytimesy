@@ -32,6 +32,10 @@ const mocks = vi.hoisted(() => ({
 	reviewLoop: vi.fn(),
 	beforeModel: vi.fn(),
 	afterAttempt: vi.fn(),
+	leadGate: vi.fn(async (): Promise<"ready" | "wait"> => "ready"),
+	/** A lean surface (lead mode needs one); off by default. */
+	lean: null as null | Record<string, unknown>,
+	roundOpen: vi.fn(async () => false),
 }));
 // Development eval users pick harness variants; everyone else gets the default.
 vi.mock("../services/subagent-runtime", async (original) => ({
@@ -45,6 +49,12 @@ vi.mock("../adapters/dev-eval-users", async (importOriginal) => ({
 	isDevEvalUser: async () => false,
 }));
 vi.mock("../services/attempt-loop", () => ({ createAttemptLoop: mocks.loop }));
+// Lead mode fusion's gate and completion check (their rule is tested in fusion-lead.test.ts).
+vi.mock("../services/fusion-lead", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../services/fusion-lead")>()),
+	fusionLeadGate: mocks.leadGate,
+	fusionRoundOpen: mocks.roundOpen,
+}));
 vi.mock("../services/review-loop", () => ({
 	createReviewLoop: mocks.reviewLoop,
 }));
@@ -134,6 +144,7 @@ beforeEach(() => {
 		taskAccess: "read_write",
 	});
 	mocks.renew.mockReset().mockResolvedValue(true);
+	mocks.lean = null;
 	mocks.promptSubmit.mockReset().mockResolvedValue(undefined);
 	mocks.cancelRequested.mockReset().mockResolvedValue(false);
 	mocks.finalize.mockImplementation(async (_turn, state) => state);
@@ -270,7 +281,8 @@ vi.mock("../services/api-agent-tools", () => ({
 }));
 // The mocked tool set carries probe fields; the shell filter has its own tests.
 vi.mock("../services/builder-shell-surface", () => ({
-	builderToolSurface: ({ tools }: { tools: unknown }) => ({ tools }),
+	builderToolSurface: ({ tools }: { tools: unknown }) =>
+		mocks.lean ? { tools, lean: mocks.lean } : { tools },
 }));
 vi.mock("../services/api-command-scope", () => ({
 	stopApiTurnCommands: mocks.stop,
@@ -1444,6 +1456,51 @@ describe("the attempt loop (harness variant attempts=3)", () => {
 			await input.onEvent({ type: "text-delta", id: "reply", text: "Fixed." });
 			return { messages: input.messages, outcome: "completed" };
 		});
+
+	it("lead=fusion: a round still open at completion continues the turn once; the next step completes", async () => {
+		mocks.variant.mockReturnValue({
+			...(await import("#/domain/harness-variant")).DEFAULT_HARNESS_VARIANT,
+			lead: "fusion",
+		});
+		finishing();
+		mocks.lean = {
+			shape: "core",
+			readOnly: false,
+			commandReader: "read_command",
+			waitHint: () => "",
+			saveHistory: async () => null,
+		};
+		mocks.leadGate.mockClear();
+		mocks.roundOpen.mockReset().mockResolvedValueOnce(true);
+		const before = Date.now();
+		expect(
+			await runApiTurn(
+				{} as WorkspaceMachines,
+				{ ...rootTurn, id: "turn-lead" },
+				durable(),
+			),
+		).toBe("continue");
+		expect(mocks.leadGate).toHaveBeenCalledOnce();
+		// Bounded by this step's gate: only a round started since then holds it.
+		const [owner, since] = mocks.roundOpen.mock.calls[0] as unknown as [
+			{ id: string },
+			number,
+		];
+		expect(owner.id).toBe("session");
+		expect(since).toBeGreaterThanOrEqual(before);
+		expect(mocks.commit).not.toHaveBeenCalled();
+		mocks.roundOpen.mockResolvedValue(false);
+		expect(
+			await runApiTurn(
+				{} as WorkspaceMachines,
+				{ ...rootTurn, id: "turn-lead" },
+				{ index: 3, signal: new AbortController().signal },
+			),
+		).toBe("completed");
+		expect(mocks.leadGate).toHaveBeenCalledTimes(2);
+		expect(mocks.commit).toHaveBeenCalledOnce();
+		mocks.lean = null;
+	});
 
 	it("is off by default: no loop, the turn completes as before", async () => {
 		finishing();

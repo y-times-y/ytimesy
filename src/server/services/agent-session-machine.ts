@@ -177,6 +177,8 @@ export async function openAgentTask(input: {
 	readonly prompt: string;
 	readonly placement: AgentTaskPlacement;
 	readonly access: AgentTaskAccess;
+	/** Lead mode fusion's sidekick: a writer on its parent's machine (src/domain/sidekick.ts). */
+	readonly sharedWriter?: boolean;
 }) {
 	const parent = await agentSessionForOwner(
 		input.userId,
@@ -185,7 +187,11 @@ export async function openAgentTask(input: {
 	if (!parent || parent.projectId !== input.projectId)
 		throw new Error("The parent agent is not available.");
 	if (!input.prompt.trim()) throw new Error("A brief is required.");
-	if (input.placement === "shared" && input.access !== "read_only")
+	if (
+		input.placement === "shared" &&
+		input.access !== "read_only" &&
+		!input.sharedWriter
+	)
 		throw new Error("A subagent on its parent's VM must be read-only.");
 	const { session } = await resolveAgentSessionRecord({
 		userId: input.userId,

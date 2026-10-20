@@ -100,9 +100,9 @@ export async function saveSidekickState(
 
 /**
  * Forked writer VMs to delete: reported at least `graceMinutes` ago and
- * idle, or whose session is no longer running anything. A lead's active
- * sidekick stays: it waits for the next round, across the chat's turns,
- * until it is retired (idleSidekicksPastTtl retires an idle one).
+ * idle, or whose session is no longer running anything. Lead mode
+ * fusion's sidekick has no fork (it works in the lead's checkout); an
+ * older forked one stays while active.
  */
 export async function forkedWritersDueForTeardown(graceMinutes: number) {
 	const result = await database().query(
@@ -133,7 +133,7 @@ export async function forkedWritersDueForTeardown(graceMinutes: number) {
 /**
  * Active sidekicks idle (not working, their lead not working) for at least
  * `idleMinutes` since their last report: the maintenance sweep retires
- * them and deletes their forks.
+ * them (they hold no VM of their own).
  */
 export async function idleSidekicksPastTtl(idleMinutes: number) {
 	const result = await database().query(
@@ -192,11 +192,17 @@ export async function takeSubagentReport(childSessionId: string) {
 		: null;
 }
 
-/** Asks a running subagent to wrap up: its budget treats the next few steps as its last. */
-export async function requestSubagentStop(sessionId: string) {
+/**
+ * Asks a running subagent to wrap up: its budget treats the next few steps
+ * as its last, or with `now` its next step (it reports at once).
+ */
+export async function requestSubagentStop(
+	sessionId: string,
+	options: { readonly now?: boolean } = {},
+) {
 	await database().query(
-		`update agent_session set agent_budget=coalesce(agent_budget,'{}'::jsonb) || jsonb_build_object('stopAtStep', agent_steps + 3), updated_at=now()
+		`update agent_session set agent_budget=coalesce(agent_budget,'{}'::jsonb) || jsonb_build_object('stopAtStep', agent_steps + $2::int), updated_at=now()
 		 where id=$1 and agent_role is not null`,
-		[sessionId],
+		[sessionId, options.now ? 0 : 3],
 	);
 }

@@ -12,7 +12,6 @@ import {
 	retireSidekickState,
 	type SidekickState,
 	sidekickIdleTtlMinutes,
-	sidekickPatchLabel,
 	sidekickRoundLabel,
 	sidekickRoundsLeft,
 	sidekickState,
@@ -28,7 +27,6 @@ import {
 import {
 	AGENT_SEND_TOOL,
 	overlappingWriters,
-	type SubagentFork,
 	type SubagentOutcome,
 	subagentBudgetState,
 	subagentReportHeader,
@@ -58,6 +56,10 @@ import {
 	saveSidekickState,
 	subagentAncestors,
 } from "../adapters/subagents";
+import {
+	type SidekickRoundChanges,
+	sidekickRoundChanges,
+} from "./sidekick-workspace";
 import { transferWriterPatch } from "./subagent-writer";
 import type { WorkspaceMachines } from "./workspace-machines";
 
@@ -151,7 +153,9 @@ export async function guardSubagentStep(input: {
 /**
  * The report a subagent's parent receives: a one-line header (outcome,
  * steps, minutes, tokens, dollars), the agent's own final text, and for a
- * writer the patch transferred into the parent's checkout.
+ * writer the patch transferred into the parent's checkout; for lead mode
+ * fusion's sidekick, which works in the lead's checkout, what its round
+ * changed there.
  */
 export async function subagentReport(input: {
 	readonly machines: WorkspaceMachines;
@@ -210,7 +214,44 @@ export async function subagentReport(input: {
 		...(sidekick ? { round: sidekickRoundLabel(sidekick) } : {}),
 	});
 	const parts = [header, input.text.trim()];
-	if (role === "writer") {
+	// A sidekick from before the shared checkout still reports its fork's patch (below).
+	const forkedSidekick = !!sidekick && !!session.agentFork?.vmId;
+	if (role === "writer" && sidekick && !forkedSidekick) {
+		const parent = ancestors[0];
+		const base = currentSidekickRound(sidekick)?.base;
+		let changes: SidekickRoundChanges | null = null;
+		try {
+			if (!parent?.providerRef || !base)
+				throw new Error("the round's start is unknown");
+			changes = await (input.deps?.roundChanges ?? sidekickRoundChanges)({
+				machines: input.machines,
+				vm: WorkspaceId(parent.providerRef),
+				label,
+				round: sidekick.round,
+				base,
+			});
+		} catch (cause) {
+			console.warn("A sidekick round's changes could not be listed.", {
+				message: cause instanceof Error ? cause.message.slice(0, 200) : "",
+			});
+		}
+		parts.push(sidekickChangesBlock(label, base, changes));
+		parts.push(
+			await endSidekickRoundAndReport({
+				sessionId: session.id,
+				label,
+				state: sidekick,
+				outcome: input.outcome,
+				patchFiles: changes?.files.length ?? 0,
+				end: changes?.end,
+				items: input.items,
+				model: session.listedModelId ?? null,
+				escalationModel: input.escalationModel,
+				now,
+				deps: input.deps,
+			}),
+		);
+	} else if (role === "writer") {
 		let patch: WriterPatch | null = null;
 		let failure: string | undefined;
 		const fork = session.agentFork;
@@ -222,7 +263,7 @@ export async function subagentReport(input: {
 				machines: input.machines,
 				forkVm: WorkspaceId(fork.vmId),
 				parentVm: WorkspaceId(parent.providerRef),
-				label: sidekick ? sidekickPatchLabel(label, sidekick.round) : label,
+				label,
 				base: fork.base,
 				parentHead: fork.parentHead,
 			});
@@ -254,31 +295,52 @@ export async function subagentReport(input: {
 				failure,
 			),
 		);
-		if (sidekick)
+		if (sidekick) {
+			// It worked on a fork from before the shared checkout: its round ends
+			// with this patch, and it is retired (a new writer works in the lead's
+			// checkout).
+			const nowIso = new Date(now).toISOString();
+			await (input.deps?.saveState ?? saveSidekickState)(
+				session.id,
+				retireSidekickState(
+					endSidekickRound(sidekick, {
+						now: nowIso,
+						outcome: input.outcome,
+						patchFiles: patch?.files.length ?? 0,
+					}),
+					"it ran on a fork from before the shared checkout",
+					nowIso,
+				),
+			).catch(() => {});
 			parts.push(
-				await endSidekickRoundAndReport({
-					machines: input.machines,
-					sessionId: session.id,
-					label,
-					fork: fork ?? null,
-					state: sidekick,
-					outcome: input.outcome,
-					patchFiles: patch?.files.length ?? 0,
-					items: input.items,
-					model: session.listedModelId ?? null,
-					escalationModel: input.escalationModel,
-					now,
-					deps: input.deps,
-				}),
+				`Sidekick ${label} ran on a fork from before the shared checkout, so it is retired after this report: review and apply its patch yourself. Your next writer becomes a sidekick that works in your checkout.`,
 			);
+		}
 	}
 	return parts.filter(Boolean).join("\n\n");
+}
+
+/** What a sidekick's round changed in the lead's checkout, and how to review it. */
+export function sidekickChangesBlock(
+	label: string,
+	base: string | undefined,
+	changes: SidekickRoundChanges | null,
+) {
+	if (!changes || !base)
+		return `Sidekick ${label} worked in your checkout; its changes are uncommitted in your working tree. Review them in place with \`git status\` and \`git diff\` (this round's exact changes could not be listed).`;
+	if (!changes.files.length)
+		return `Sidekick ${label} changed no files in your checkout this round.`;
+	return [
+		`Sidekick ${label} worked in your checkout: this round changed ${changes.files.length} file${changes.files.length === 1 ? "" : "s"}, uncommitted in your working tree. Review them in place: \`git diff ${base.slice(0, 12)} ${changes.end.slice(0, 12)}\` is this round alone (\`git diff\` and \`git status\` show all uncommitted work).`,
+		`\`\`\`\n${changes.stat}\n\`\`\``,
+	].join("\n");
 }
 
 /** What the sidekick functions touch outside themselves; tests pass fakes. */
 export type SidekickRuntimeDeps = {
 	readonly session?: typeof agentSessionForOwner;
 	readonly transfer?: typeof transferWriterPatch;
+	readonly roundChanges?: typeof sidekickRoundChanges;
 	readonly mergeFork?: typeof mergeSubagentFork;
 	readonly saveState?: typeof saveSidekickState;
 	readonly descendants?: typeof descendantAgentSessions;
@@ -287,19 +349,18 @@ export type SidekickRuntimeDeps = {
 };
 
 /**
- * Closes a sidekick's round after its report: records the round, retires it
- * when it has no rounds left (or was retired meanwhile) and then deletes its
- * fork, since the patch and ref are already in the lead's checkout. Returns
- * the report's closing line.
+ * Closes a sidekick's round after its report: records the round (its
+ * changed files, end snapshot, evidence and hand-back signals) and retires
+ * it when it has no rounds left (or was retired meanwhile). Returns the
+ * report's closing line.
  */
 async function endSidekickRoundAndReport(input: {
-	readonly machines: WorkspaceMachines;
 	readonly sessionId: string;
 	readonly label: string;
-	readonly fork: SubagentFork | null;
 	readonly state: SidekickState;
 	readonly outcome: SubagentOutcome;
 	readonly patchFiles: number;
+	readonly end?: string;
 	/** The sidekick's history (this round is the part after its start message). */
 	readonly items: readonly SessionItem[];
 	readonly model: string | null;
@@ -323,6 +384,7 @@ async function endSidekickRoundAndReport(input: {
 		now: new Date(input.now).toISOString(),
 		outcome: input.outcome,
 		patchFiles: input.patchFiles,
+		end: input.end,
 		evidence,
 		signals,
 	});
@@ -330,18 +392,13 @@ async function endSidekickRoundAndReport(input: {
 		input.sessionId,
 		ended,
 	).catch(() => {});
-	if (ended.retired) {
-		await deleteSidekickFork(input.machines, input.sessionId, input.fork, {
-			...input.deps,
-			now: () => input.now,
-		});
+	if (ended.retired)
 		return [
-			`Sidekick ${input.label} is retired (${ended.retired.reason}); its fork is deleted. Start a new writer for more work.`,
+			`Sidekick ${input.label} is retired (${ended.retired.reason}). Start a new writer for more work.`,
 			sidekickStuckNotice({ label: input.label, signals }),
 		]
 			.filter(Boolean)
 			.join("\n\n");
-	}
 	const escalation =
 		input.escalationModel &&
 		warrantsEscalation(signals) &&
@@ -349,42 +406,23 @@ async function endSidekickRoundAndReport(input: {
 			? input.escalationModel
 			: undefined;
 	return [
-		`Sidekick ${input.label}: ${sidekickRoundLabel(ended)} done. It keeps its context and fork: send feedback or the next brief with ${AGENT_SEND_TOOL} (id ${input.label}); its fork is synced with your checkout first, so apply or discard this patch before you do.`,
+		`Sidekick ${input.label}: ${sidekickRoundLabel(ended)} done. It keeps its context: send feedback or the next brief with ${AGENT_SEND_TOOL} (id ${input.label}); it works in your checkout as it is then, so keep or revert its changes first.`,
 		sidekickStuckNotice({ label: input.label, signals, escalation }),
 	]
 		.filter(Boolean)
 		.join("\n\n");
 }
 
-async function deleteSidekickFork(
-	machines: WorkspaceMachines,
-	sessionId: string,
-	fork: SubagentFork | null | undefined,
-	deps?: SidekickRuntimeDeps,
-) {
-	if (!fork?.vmId || fork.deletedAt) return;
-	try {
-		await machines.destroy(WorkspaceId(fork.vmId));
-		await (deps?.mergeFork ?? mergeSubagentFork)(sessionId, {
-			deletedAt: new Date(deps?.now?.() ?? Date.now()).toISOString(),
-		});
-	} catch (cause) {
-		// The maintenance sweep deletes it later (a retired sidekick is an ordinary writer there).
-		console.warn("A sidekick fork could not be deleted yet.", {
-			message: cause instanceof Error ? cause.message.slice(0, 200) : "",
-		});
-	}
-}
-
 /**
- * Retires one sidekick: an idle one's fork is deleted now; a running one
- * is asked to stop and its fork goes after its report.
+ * Retires one sidekick: it takes no more rounds; a running one is asked to
+ * stop (its report still arrives). It holds no VM of its own, so nothing
+ * else is deleted.
  */
 export async function retireSidekick(
-	machines: WorkspaceMachines,
+	_machines: WorkspaceMachines,
 	session: Pick<
 		AgentSessionRecord,
-		"id" | "agentRole" | "agentBudget" | "agentFork" | "turnStatus"
+		"id" | "agentRole" | "agentBudget" | "turnStatus"
 	>,
 	reason: string,
 	deps?: SidekickRuntimeDeps,
@@ -400,7 +438,6 @@ export async function retireSidekick(
 		await (deps?.stop ?? requestSubagentStop)(session.id);
 		return "stopping" as const;
 	}
-	await deleteSidekickFork(machines, session.id, session.agentFork, deps);
 	return "retired" as const;
 }
 
@@ -439,8 +476,9 @@ export async function retireLeadSidekicks(
 
 /**
  * Deletes writer forks 30 minutes after their report (the parent has the
- * patch and ref by then), and retires sidekicks idle past their TTL (their
- * forks go with them); run from the maintenance sweep.
+ * patch and ref by then), and retires sidekicks idle past their TTL (they
+ * hold no VM, so only their state changes); run from the maintenance sweep.
+ * Returns the forks deleted.
  */
 export async function teardownSubagentForks(
 	machines: WorkspaceMachines,
@@ -448,8 +486,8 @@ export async function teardownSubagentForks(
 	idleMinutes = sidekickIdleTtlMinutes(),
 ) {
 	let deleted = 0;
-	for (const idle of await idleSidekicksPastTtl(idleMinutes)) {
-		const status = await retireSidekick(
+	for (const idle of await idleSidekicksPastTtl(idleMinutes))
+		await retireSidekick(
 			machines,
 			idle,
 			`idle for over ${idleMinutes} minutes`,
@@ -457,10 +495,7 @@ export async function teardownSubagentForks(
 			console.warn("An idle sidekick could not be retired yet.", {
 				message: cause instanceof Error ? cause.message.slice(0, 200) : "",
 			});
-			return null;
 		});
-		if (status === "retired") deleted += 1;
-	}
 	for (const fork of await forkedWritersDueForTeardown(graceMinutes)) {
 		try {
 			await machines.destroy(WorkspaceId(fork.vmId));

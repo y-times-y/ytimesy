@@ -122,7 +122,12 @@ export function subagentTree(
 			level: task.depth,
 			title: task.title,
 			role: session.agentRole,
-			vm: subagentPlacement(session.agentRole) === "fork" ? "fork" : "shared",
+			// Lead mode fusion's sidekick is a writer in its lead's checkout.
+			vm:
+				subagentPlacement(session.agentRole) === "fork" &&
+				!session.agentBudget?.sidekick
+					? "fork"
+					: "shared",
 			state: task.status,
 			live: task.status === "working" || task.status === "waiting",
 			steps: session.agentSteps ?? 0,

@@ -386,16 +386,30 @@ async function copyVolumeNow(from: string, to: string) {
 	]);
 }
 
-/** Removes every rehearsal container and VM volume (not the image cache). */
-export async function removeRehearsalVms() {
-	const ids = (await docker(["ps", "-aq", "--filter", `label=${LABEL}`])).stdout
+/**
+ * Removes the rehearsal containers and VM volumes of one run's prefix (the
+ * VMs are named <prefix>-<scenario> and <prefix>-fork-<n>), never another
+ * run's or the image cache.
+ */
+export async function removeRehearsalVms(prefix: string) {
+	const mine = (name: string) => name.startsWith(`${prefix}-`);
+	const names = (
+		await docker([
+			"ps",
+			"-a",
+			"--filter",
+			`label=${LABEL}`,
+			"--format",
+			"{{.Names}}",
+		])
+	).stdout
 		.split("\n")
-		.filter(Boolean);
-	if (ids.length) await docker(["rm", "-f", ...ids]);
+		.filter((name) => name && mine(name));
+	if (names.length) await docker(["rm", "-f", ...names]);
 	const volumes = (
 		await docker(["volume", "ls", "-q", "--filter", `label=${LABEL}`])
 	).stdout
 		.split("\n")
-		.filter(Boolean);
+		.filter((name) => name && mine(name));
 	if (volumes.length) await docker(["volume", "rm", "-f", ...volumes]);
 }

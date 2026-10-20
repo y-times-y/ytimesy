@@ -158,3 +158,25 @@ function toAgentTaskEvent(row: AgentTaskEventRow): AgentTaskEvent {
 		attempts: row.attempts,
 	};
 }
+
+/**
+ * A child's report events (completed or failed) created since `since`,
+ * oldest first, with whether delivery still owes them to the parent
+ * (lead mode fusion: the lead waits for its sidekick round's report).
+ */
+export async function childReportEventsSince(
+	childSessionId: string,
+	since: string,
+) {
+	const result = await database().query<AgentTaskEventRow & { status: string }>(
+		`select id,user_id,parent_session_id,child_session_id,event_type,payload,attempts,status
+		 from agent_task_event
+		 where child_session_id=$1 and event_type in ('completed','failed') and created_at >= $2::timestamptz
+		 order by created_at`,
+		[childSessionId, since],
+	);
+	return result.rows.map((row) => ({
+		...toAgentTaskEvent(row),
+		pending: row.status === "pending" || row.status === "delivering",
+	}));
+}
