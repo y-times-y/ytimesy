@@ -30,6 +30,10 @@ import {
 	reviewNotice,
 } from "#/domain/review-loop";
 import {
+	admittedUnverified,
+	UNVERIFIED_SEND_BACK_TIME_LEFT,
+} from "#/domain/rigor";
+import {
 	type SessionItem,
 	sessionItemsFromUnknown,
 } from "#/domain/session-item";
@@ -61,7 +65,9 @@ import {
  * 3. Decide: pass finishes. Fail or unsure with concrete findings and time
  *    left adds one runtime notice with the findings to the same run and the
  *    builder continues; nothing is reset. Up to two rounds per turn.
- *    Anything else finishes.
+ *    Anything else finishes. With rigor=on, a final answer that admitted
+ *    unverified work while over half the time was left is a finding too,
+ *    and is sent back even after a pass.
  *
  * Waiting for the checker spans durable steps like the attempt loop.
  */
@@ -86,6 +92,12 @@ export type ReviewLoopInput = {
 	/** The user's request this turn answers, verbatim. */
 	readonly taskText: () => string;
 	readonly deps: ReviewLoopDeps;
+	/**
+	 * Harness variant rigor=on: the checker's brief gets the rigor checks, and
+	 * a final answer that admits unverified work while over half the loop's
+	 * time is left is sent back even when the checker passes it.
+	 */
+	readonly rigor?: boolean;
 };
 
 type StepInput = {
@@ -290,6 +302,12 @@ export function createReviewLoop(input: ReviewLoopInput) {
 		});
 		if (!eligible.review)
 			return finish(state, step, "not-eligible", eligible.reason);
+		const admitted =
+			input.rigor &&
+			(state.deadlineAt - now) / (state.deadlineAt - state.startedAt) >
+				UNVERIFIED_SEND_BACK_TIME_LEFT
+				? admittedUnverified(attemptReport(step.items))
+				: [];
 		const directory = `${attemptDirectory(turnId, 0).replace(/\/0$/, "")}/review-${n}`;
 		const prepared = await deps.vm(checkerDirectoryCommand(directory), 20_000);
 		if (prepared.exitCode !== 0)
@@ -311,6 +329,7 @@ export function createReviewLoop(input: ReviewLoopInput) {
 					changedFiles,
 					scratch: directory,
 					diffCommand: `git -C ${workspace.cwd} diff ${state.checkpoint.ref} ${snapshot.ref}`,
+					rigor: input.rigor,
 				}),
 				cap: {
 					...REVIEW_LOOP_LIMITS.checker,
@@ -343,6 +362,7 @@ export function createReviewLoop(input: ReviewLoopInput) {
 						budgetMs: decision.checkMs,
 					},
 					verdict: null,
+					...(admitted.length ? { admitted } : {}),
 					findings: [],
 				},
 			],
@@ -399,7 +419,7 @@ export function createReviewLoop(input: ReviewLoopInput) {
 		const verdict: ReviewVerdict | null = taken.timedOut
 			? null
 			: parseReviewVerdict(taken.report);
-		const findings = verdict ? reviewFindings(verdict) : [];
+		const findings = verdict ? reviewFindings(verdict, round.admitted) : [];
 		const usage = sessionTokenUsage(
 			sessionItemsFromUnknown(
 				await deps.childItems(round.checker.sessionId).catch(() => []),

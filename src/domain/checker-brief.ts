@@ -26,7 +26,21 @@ export type ReviewBriefInput = {
 	readonly scratch: string;
 	/** A command that shows the whole change (e.g. a git diff between two refs). */
 	readonly diffCommand?: string;
+	/** Harness variant rigor=on: the stated-assumption, outside-run and admitted-gap checks. */
+	readonly rigor?: boolean;
 };
+
+/** rigor=on: stated interpretations get the convention-based reading tested. */
+const RIGOR_ASSUMPTIONS =
+	" Also look in the deliverable (files, comments, docs, output) for assumptions or interpretations it states. For each, work out the reading the convention of the library, ecosystem or standard involved gives (else the strictest reading) and test the deliverable under it. A numeric result at the edge of a stated threshold is a risk; say so.";
+
+/** rigor=on: one run the way an outside user would run it. */
+const RIGOR_OUTSIDE_RUN =
+	" Run it once as an outside user would: a fresh shell in a clean directory holding only the files the request names, no dependencies or data files the request does not provide or declare, and results read back with standard clients and tools, never helpers the builder wrote.";
+
+/** rigor=on: a deliverable that admits a gap is not a pass. */
+const RIGOR_ADMITTED =
+	" A deliverable that itself admits unverified, failing or skipped parts (in its files, notes or output) is fail, or unsure when you could not check those parts; never pass.";
 
 const MAX_LISTED_FILES = 200;
 
@@ -47,6 +61,7 @@ function deliverableLine(input: ReviewBriefInput) {
 /** The review a checker runs on a finished deliverable; returns {verdict, failures[], tests[]} JSON. */
 export function independentReviewBrief(input: ReviewBriefInput) {
 	const work = `${input.scratch}/work`;
+	const rigor = !!input.rigor;
 	return [
 		"You are an independent checker. Decide whether the delivered work meets the request below. You did not build it and nobody will tell you what to look for. A strict grader with hidden tests judges it after you, from the request alone, so look for what such a grader would check and what would make it fail.",
 		"",
@@ -62,13 +77,13 @@ export function independentReviewBrief(input: ReviewBriefInput) {
 		"",
 		"Review in four parts:",
 		"1. Requirements. List every requirement in the request and in the files it points to (specs, READMEs, schemas, API docs, examples, format notes in the working directory): exact names, paths, formats, fields, values, units, ordering, limits, invocation and side effects such as records saved in a service. For each, give evidence that it is met or not: a command and its output, or a file and line. A requirement you could not check is not met.",
-		"2. Assumptions. List the assumptions the deliverable depends on: readings of ambiguous wording, conventions, units, defaults, tie-breaking, interpretation of the inputs. Where a result hinges on one, work out the alternative reading and test it, and say which one the request and its files support.",
+		`2. Assumptions. List the assumptions the deliverable depends on: readings of ambiguous wording, conventions, units, defaults, tie-breaking, interpretation of the inputs. Where a result hinges on one, work out the alternative reading and test it, and say which one the request and its files support.${rigor ? RIGOR_ASSUMPTIONS : ""}`,
 		"3. Plausibility. Check that outputs are plausible: magnitudes, counts and ranges against the inputs, internal consistency, totals that add up, no placeholders, hard-coded or degenerate answers, and nothing that only works on the examples.",
-		`4. Test it yourself. The project's existing tests passed for the builder too and are not enough: a strict grader's hidden tests target what they miss. For each requirement and each risky change in the diff, write at least one new test or executable probe of your own under ${input.scratch}/tests, aimed at cases the existing tests do not cover (derive them from the request, the diff and the files it points to): boundaries, empty and large inputs, error paths, ordering, concurrency and the states between steps. Use the stated paths, formats and invocation exactly, from a clean shell and another directory, without anything the builder may have left. Run your tests against your copy, then the existing tests and the callers of anything changed.`,
+		`4. Test it yourself. The project's existing tests passed for the builder too and are not enough: a strict grader's hidden tests target what they miss. For each requirement and each risky change in the diff, write at least one new test or executable probe of your own under ${input.scratch}/tests, aimed at cases the existing tests do not cover (derive them from the request, the diff and the files it points to): boundaries, empty and large inputs, error paths, ordering, concurrency and the states between steps. Use the stated paths, formats and invocation exactly, from a clean shell and another directory, without anything the builder may have left. Run your tests against your copy, then the existing tests and the callers of anything changed.${rigor ? RIGOR_OUTSIDE_RUN : ""}`,
 		"",
 		"Answer with only this JSON:",
 		'{ "verdict": "pass" | "fail" | "unsure", "failures": ["<requirement or assumption>: <what is wrong, with evidence>"], "tests": [{ "name": "<what it checks>", "command": "<one command that runs it, absolute paths>", "passed": true, "output": "<the lines that show the result>" }], "requirements": [{ "requirement": "...", "met": true, "evidence": "..." }], "assumptions": [{ "assumption": "...", "alternative": "...", "outcome": "..." }], "notes": "..." }',
-		'"tests" lists only the tests and probes you wrote, each run. pass only when your new tests and the existing checks all pass and every requirement is met with evidence; a pass without new tests of your own counts as unsure. fail when something required is wrong or missing: name each in failures, most important first, with the failing test as its evidence. unsure only when you genuinely could not run what matters; say why in notes.',
+		`"tests" lists only the tests and probes you wrote, each run. pass only when your new tests and the existing checks all pass and every requirement is met with evidence; a pass without new tests of your own counts as unsure. fail when something required is wrong or missing: name each in failures, most important first, with the failing test as its evidence. unsure only when you genuinely could not run what matters; say why in notes.${rigor ? RIGOR_ADMITTED : ""}`,
 	].join("\n");
 }
 

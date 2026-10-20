@@ -22,6 +22,51 @@ const base = {
 	leanWorkingDirectory: "/home/user/app",
 };
 
+describe("rigor instructions", () => {
+	it("gives the rigor block to the builder and writers under rigor=on only", () => {
+		const block = "Ambiguous wording: list the plausible readings";
+		const root = { parentSessionId: null };
+		expect(
+			agentTurnInstructions({ ...base, session: root, tools: { bash: stub } }),
+		).not.toContain(block);
+		expect(
+			agentTurnInstructions({
+				...base,
+				session: root,
+				tools: { bash: stub },
+				rigor: true,
+			}),
+		).toContain(block);
+		expect(
+			agentTurnInstructions({
+				...base,
+				leanShape: undefined,
+				session: root,
+				tools: { bash: stub },
+				rigor: true,
+			}),
+		).toContain(block);
+		expect(
+			agentTurnInstructions({
+				...base,
+				session: { parentSessionId: "root", agentRole: "writer" },
+				tools: { bash: stub },
+				rigor: true,
+			}),
+		).toContain(block);
+		for (const agentRole of ["checker", "researcher", "reviewer"] as const)
+			expect(
+				agentTurnInstructions({
+					...base,
+					session: { parentSessionId: "root", agentRole },
+					tools: { bash: stub },
+					leanReadOnly: true,
+					rigor: true,
+				}),
+			).not.toContain(block);
+	});
+});
+
 describe("subagent instructions", () => {
 	it("teaches the builder cost-aware orchestration only when it has the agent tool", () => {
 		const without = agentTurnInstructions({
