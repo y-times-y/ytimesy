@@ -79,6 +79,11 @@ const executorSecrets = z.object({
 	MODEL_WORKFLOW_SECRET: z.string().min(32),
 	MODEL_EXECUTION_ENABLED: z.enum(["0", "1"]).default("0"),
 });
+// The PR-repair ingress Worker holds only this key, so it can stage repair
+// signals but never sign a model step or turn start.
+const prRepairIngressSecrets = z.object({
+	PR_REPAIR_INGRESS_SECRET: z.string().min(32),
+});
 const gitProxySecrets = z.object({
 	DATABASE_URL: z.string().min(1),
 	DATABASE_SSL_CA: z.string().optional(),
@@ -762,7 +767,8 @@ export default {
 				);
 			}
 			if (new URL(request.url).pathname === "/pr-repair-event") {
-				const secrets = executorSecrets.parse(env);
+				const secrets = prRepairIngressSecrets.safeParse(env);
+				if (!secrets.success) return new Response(null, { status: 503 });
 				return await withDatabaseScope(
 					env.HYPERDRIVE.connectionString,
 					() =>
@@ -773,7 +779,7 @@ export default {
 							() =>
 								executeWorkflowRequest(
 									request,
-									secrets.MODEL_WORKFLOW_SECRET,
+									secrets.data.PR_REPAIR_INGRESS_SECRET,
 									() => {
 										throw new Error("Repair intake does not run model steps.");
 									},

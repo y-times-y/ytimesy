@@ -35,7 +35,7 @@ export class PrRepairWorkflow extends WorkflowEntrypoint<
 					headers: {
 						"content-type": "application/json",
 						...(await signDeliveryRequest(
-							this.env.MODEL_WORKFLOW_SECRET,
+							this.env.PR_REPAIR_INGRESS_SECRET,
 							"POST",
 							url,
 							body,
@@ -57,7 +57,7 @@ export class PrRepairWorkflow extends WorkflowEntrypoint<
 
 export default {
 	async fetch(request: Request, env: PrRepairEnvironment) {
-		if (!env.GITHUB_PR_REPAIR_WEBHOOK_SECRET || !env.MODEL_WORKFLOW_SECRET)
+		if (!env.GITHUB_PR_REPAIR_WEBHOOK_SECRET || !env.PR_REPAIR_INGRESS_SECRET)
 			return new Response(null, { status: 503 });
 		return acceptPrRepairWebhook(
 			request,

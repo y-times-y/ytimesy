@@ -122,6 +122,9 @@ secrets.ENVIRONMENT_WORKFLOW_SECRET = derived(
 secrets.BACKGROUND_WORKFLOW_SECRET = derived(
 	"ytimesy:background-workflows:production:v1",
 );
+secrets.PR_REPAIR_INGRESS_SECRET = derived(
+	"ytimesy:pr-repair-ingress:production:v1",
+);
 secrets.YTIMESY_REALTIME_SECRET = derived("ytimesy:realtime:production:v1");
 secrets.YTIMESY_GIT_PROXY_SECRET = secrets.GIT_PROXY_SECRET;
 // Background delivery and recovery address the same chat objects as inference.
