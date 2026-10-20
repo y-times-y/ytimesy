@@ -164,6 +164,8 @@ export async function startTaskChat(input: {
 	text: string;
 	agentSeconds: number;
 	title: string;
+	/** The chat's reasoning effort (the model's default when unset). */
+	reasoning?: string;
 }) {
 	const { user } = input;
 	const session = await insertAgentSession({
@@ -185,7 +187,11 @@ export async function startTaskChat(input: {
 	await saveTurnDeadline(session.id, deadline);
 	await sendSubscriptionTask(
 		{ userId: user.userId, projectId: user.projectId, sessionId: session.id },
-		{ modelId: MODEL, text: input.text },
+		{
+			modelId: MODEL,
+			text: input.text,
+			...(input.reasoning ? { variant: input.reasoning } : {}),
+		},
 	);
 	await dispatchBackgroundJob({
 		id: backgroundJobId(`rehearsal-admit:${session.id}`),
