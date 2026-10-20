@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { WorkspaceId } from "#/domain/ids";
@@ -46,8 +46,15 @@ describe("writer subagent git round trip", () => {
 			base: fork.base,
 			parentHead: fork.parentHead,
 		});
+		// An absolute path: the parent's commands may run as another user (a
+		// hard-set lead's run as root in the task container, where ~ is /root).
+		expect(patch?.path).toBe(
+			join(
+				realpathSync(vms.homes.get("parent") as string),
+				".ytimesy/agents/1.patch",
+			),
+		);
 		expect(patch).toMatchObject({
-			path: "~/.ytimesy/agents/1.patch",
 			files: ["a.ts", "b.ts"],
 			added: 2,
 			removed: 1,
