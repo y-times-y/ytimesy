@@ -25,7 +25,6 @@ export function deferredApiTurnWorkspace(
 	machines: WorkspaceMachines,
 	owner: AgentSessionRecord,
 	signal: AbortSignal,
-	ancestors: readonly string[] = [],
 	/** A durable step reuses its turn's earlier preparation; see turnWorkspaceReuse. */
 	reuse?: TurnWorkspaceReuse,
 ) {
@@ -51,9 +50,8 @@ export function deferredApiTurnWorkspace(
 		workspace: AgentToolWorkspace;
 		session: AgentSessionRecord;
 	}> {
+		if (sharesParentMachine(owner)) return attachSharedParent();
 		let additionalRepositoryNames: string[] = [];
-		if (ancestors.includes(owner.id) || ancestors.length > 8)
-			throw new Error("Invalid shared task ancestry.");
 		const checkoutScope = {
 			userId: owner.userId,
 			projectId: owner.projectId,
@@ -68,17 +66,6 @@ export function deferredApiTurnWorkspace(
 					Effect.either(loadTenantProjectCheckout(checkoutScope)),
 				);
 		earlyCheckout?.catch(() => {});
-		if (sharesParentMachine(owner)) {
-			const parent = owner.parentSessionId
-				? await agentSessionForOwner(owner.userId, owner.parentSessionId)
-				: null;
-			if (!parent || parent.projectId !== owner.projectId)
-				throw new Error("The shared parent task is unavailable.");
-			await deferredApiTurnWorkspace(machines, parent, signal, [
-				...ancestors,
-				owner.id,
-			])();
-		}
 		signal.throwIfAborted();
 		const bound = owner.parentSessionId
 			? await bindPreparedAgentTaskMachine(
@@ -100,21 +87,20 @@ export function deferredApiTurnWorkspace(
 		signal.throwIfAborted();
 		await scoped.ensureRunning(vm);
 		signal.throwIfAborted();
-		if (!sharesParentMachine(bound.session))
-			await Effect.runPromise(
-				Effect.gen(function* () {
-					const checkout = earlyCheckout
-						? yield* Either.match(yield* Effect.promise(() => earlyCheckout), {
-								onLeft: Effect.fail,
-								onRight: Effect.succeed,
-							})
-						: yield* loadTenantProjectCheckout(checkoutScope);
-					additionalRepositoryNames = (
-						checkout?.additionalRepositories ?? []
-					).map((repo) => repo.name);
-					yield* ensureProjectCheckout(scoped, vm, checkout);
-				}),
-			);
+		await Effect.runPromise(
+			Effect.gen(function* () {
+				const checkout = earlyCheckout
+					? yield* Either.match(yield* Effect.promise(() => earlyCheckout), {
+							onLeft: Effect.fail,
+							onRight: Effect.succeed,
+						})
+					: yield* loadTenantProjectCheckout(checkoutScope);
+				additionalRepositoryNames = (
+					checkout?.additionalRepositories ?? []
+				).map((repo) => repo.name);
+				yield* ensureProjectCheckout(scoped, vm, checkout);
+			}),
+		);
 		signal.throwIfAborted();
 		const cwd = (await scoped.readTextFile(vm, PROJECT_CWD_PATH))?.trim();
 		if (!cwd?.startsWith("/"))
@@ -136,13 +122,8 @@ export function deferredApiTurnWorkspace(
 							}
 						: undefined,
 			});
-		// A writer subagent's patch is measured from its pinned baseline; a
-		// shared writer works in its lead's checkout and has no patch.
-		if (
-			bound.session.agentRole === "writer" &&
-			!sharesParentMachine(bound.session)
-		)
-			await baselines();
+		// A writer subagent's patch is measured from its pinned baseline.
+		if (bound.session.agentRole === "writer") await baselines();
 		// A root chat commits and publishes without that gate (turn-commit.ts);
 		// its baseline only scopes lifecycle hooks, so a chat whose checkout was
 		// already edited before baselines existed keeps working without one.
@@ -156,4 +137,55 @@ export function deferredApiTurnWorkspace(
 			});
 		return { workspace: { machines: scoped, vm, cwd }, session: bound.session };
 	}
+	/**
+	 * A reader (or a shared writer) runs in its parent's prepared checkout and
+	 * never prepares one: preparing would take the GitHub clone path whenever
+	 * the parent's VM is briefly unreachable, as it is while a sibling
+	 * writer's fork snapshots it. It waits, bounded, for that VM instead.
+	 */
+	async function attachSharedParent(): Promise<{
+		workspace: AgentToolWorkspace;
+		session: AgentSessionRecord;
+	}> {
+		const deadline = Date.now() + SHARED_PARENT_WAIT_MS;
+		let pause = 250;
+		let reason = "";
+		for (;;) {
+			signal.throwIfAborted();
+			const parent = owner.parentSessionId
+				? await agentSessionForOwner(owner.userId, owner.parentSessionId)
+				: null;
+			if (!parent || parent.projectId !== owner.projectId)
+				throw new Error("The shared parent task is unavailable.");
+			try {
+				const bound = await bindPreparedAgentTaskMachine(
+					machinesForAgentSession(machines, owner),
+					{ userId: owner.userId, projectId: owner.projectId, task: owner },
+				);
+				const scoped = machinesForAgentSession(machines, bound.session);
+				const vm = WorkspaceId(bound.providerRef);
+				signal.throwIfAborted();
+				await scoped.ensureRunning(vm);
+				const cwd = (await scoped.readTextFile(vm, PROJECT_CWD_PATH))?.trim();
+				if (cwd?.startsWith("/"))
+					return {
+						workspace: { machines: scoped, vm, cwd },
+						session: bound.session,
+					};
+				reason = "its prepared repository path is not readable";
+			} catch (error) {
+				signal.throwIfAborted();
+				reason = error instanceof Error ? error.message : String(error);
+			}
+			if (Date.now() + pause > deadline)
+				throw new Error(
+					`The parent's workspace is unavailable, so this subagent cannot attach to it (${reason.slice(0, 200)}). Retry once the parent's workspace is running.`,
+				);
+			await new Promise((resolve) => setTimeout(resolve, pause));
+			pause = Math.min(pause * 2, 2_000);
+		}
+	}
 }
+
+/** How long a reader waits for its parent's VM (a writer's fork pauses it). */
+const SHARED_PARENT_WAIT_MS = 120_000;
