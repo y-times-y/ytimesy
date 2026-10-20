@@ -135,6 +135,11 @@ export function deferredApiTurnWorkspace(
 				userId: owner.userId,
 				sessionId: owner.id,
 				additionalRepositoryNames,
+				// A writer subagent works on a fork of its parent's VM (never pristine).
+				forkedFrom:
+					owner.parentSessionId && owner.agentFork?.vmId
+						? owner.parentSessionId
+						: undefined,
 			});
 		return { workspace: { machines: scoped, vm, cwd }, session: bound.session };
 	}
