@@ -288,6 +288,9 @@ export async function subagentReport(input: {
 				label,
 				base: fork.base,
 				parentHead: fork.parentHead,
+				named: input.items
+					.flatMap((item) => (item.kind === "userMessage" ? [item.text] : []))
+					.join("\n"),
 			});
 		} catch (cause) {
 			failure = cause instanceof Error ? cause.message : String(cause);

@@ -299,7 +299,89 @@ export type WriterPatch = {
 	readonly sha256: string;
 	readonly ref: string;
 	readonly base: string;
+	/** New files left out of the patch (still on the writer's fork until it is deleted). */
+	readonly excluded?: WriterPatchExclusions;
 };
+
+export type WriterPatchExclusions = {
+	readonly count: number;
+	readonly bytes: number;
+	/** The first few, by size. */
+	readonly paths: readonly string[];
+};
+
+/** Directories a writer fills with downloads, caches and scratch, never deliverables. */
+const SCRATCH_DIRECTORIES = new Set([
+	".cache",
+	".mypy_cache",
+	".pytest_cache",
+	".ruff_cache",
+	".tmp",
+	".venv",
+	".ytimesy",
+	"__pycache__",
+	"cache",
+	"download",
+	"downloads",
+	"node_modules",
+	"scratch",
+	"temp",
+	"tmp",
+	"venv",
+]);
+/** A new binary at least this large is data the writer fetched, not a change. */
+const LARGE_BINARY_BYTES = 100 * 1024;
+/** A new file at least this large is not a deliberate edit, text or not. */
+const LARGE_FILE_BYTES = 1024 * 1024;
+
+/**
+ * Why a file the writer added stays out of its patch, or null to keep it.
+ * Ignored files never reach the patch (git add -A skips them); of the rest,
+ * scratch, download and cache directories and large binaries are left out
+ * unless the writer's brief or messages name the file.
+ */
+export function writerPatchExclusion(
+	file: {
+		readonly path: string;
+		readonly bytes: number;
+		readonly binary: boolean;
+	},
+	named: string,
+): "scratch" | "binary" | "large" | null {
+	const name = file.path.split("/").at(-1) ?? file.path;
+	if (named.includes(file.path) || (name.length >= 3 && named.includes(name)))
+		return null;
+	if (
+		file.path
+			.split("/")
+			.slice(0, -1)
+			.some((segment) => SCRATCH_DIRECTORIES.has(segment.toLowerCase()))
+	)
+		return "scratch";
+	if (file.binary && file.bytes >= LARGE_BINARY_BYTES) return "binary";
+	if (file.bytes >= LARGE_FILE_BYTES) return "large";
+	return null;
+}
+
+/** A patch this large is more likely to carry stray output than intent. */
+export function unusuallyLargePatch(patch: {
+	readonly files: readonly unknown[];
+	readonly added: number;
+	readonly removed: number;
+}) {
+	return patch.files.length > 30 || patch.added + patch.removed > 2_000;
+}
+
+function sizeLabel(bytes: number) {
+	if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+	if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+	return `${bytes} B`;
+}
+
+/** The new files a writer's patch left out, so the parent knows they exist. */
+export function excludedFilesNote(excluded: WriterPatchExclusions) {
+	return `${excluded.count} new file${excluded.count === 1 ? "" : "s"} (${sizeLabel(excluded.bytes)}) in scratch, download or cache directories or large binaries the brief did not name: ${excluded.paths.join(", ")}${excluded.count > excluded.paths.length ? ", …" : ""}. They stay only on the writer's fork, which is deleted about 30 minutes after this report; name them in a brief if they are deliverables.`;
+}
 
 export function writerPatchRef(label: string) {
 	return `refs/ytimesy/agents/${label}`;
@@ -336,6 +418,14 @@ export function writerPatchBlock(
 	return [
 		`Patch: ${patch.path} (${patch.files.length} files, +${patch.added} −${patch.removed}, sha256 ${patch.sha256.slice(0, 16)})`,
 		`Ref:   ${patch.ref}   Base: ${patch.base}`,
+		...(unusuallyLargePatch(patch)
+			? [
+					`Warning: this patch is unusually large; check \`git diff --stat ${patch.base} ${patch.ref}\` for downloads or generated output before applying.`,
+				]
+			: []),
+		...(patch.excluded?.count
+			? [`Left out: ${excludedFilesNote(patch.excluded)}`]
+			: []),
 		...(overlaps.length
 			? [
 					`Overlaps with: ${overlaps.map((overlap) => `agent ${overlap.label} (${overlap.files.slice(0, 4).join(", ")}${overlap.files.length > 4 ? ", …" : ""})`).join("; ")}`,
