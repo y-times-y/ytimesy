@@ -43,6 +43,10 @@ secrets.GIT_PROXY_SECRET =
 secrets.ENVIRONMENT_WORKFLOW_SECRET =
 	process.env.YTIMESY_ENVIRONMENT_WORKFLOW_SECRET ||
 	derived("ytimesy:environment-workflows:development:v1");
+// Matches prRepairIngressSigningSecret, which the ingress Worker is deployed with.
+secrets.PR_REPAIR_INGRESS_SECRET =
+	process.env.YTIMESY_PR_REPAIR_INGRESS_SECRET ||
+	derived("ytimesy:pr-repair-ingress:development:v1");
 secrets.GIT_PROXY_ENABLED = "1";
 secrets.MODEL_EXECUTION_ENABLED = "1";
 secrets.ENVIRONMENT_EXECUTION_ENABLED = "1";
