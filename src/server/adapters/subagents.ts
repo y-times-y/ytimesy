@@ -192,11 +192,17 @@ export async function takeSubagentReport(childSessionId: string) {
 		: null;
 }
 
-/** Asks a running subagent to wrap up: its budget treats the next few steps as its last. */
-export async function requestSubagentStop(sessionId: string) {
+/**
+ * Asks a running subagent to wrap up: its budget treats the next few steps
+ * as its last, or with `now` its next step (it reports at once).
+ */
+export async function requestSubagentStop(
+	sessionId: string,
+	options: { readonly now?: boolean } = {},
+) {
 	await database().query(
-		`update agent_session set agent_budget=coalesce(agent_budget,'{}'::jsonb) || jsonb_build_object('stopAtStep', agent_steps + 3), updated_at=now()
+		`update agent_session set agent_budget=coalesce(agent_budget,'{}'::jsonb) || jsonb_build_object('stopAtStep', agent_steps + $2::int), updated_at=now()
 		 where id=$1 and agent_role is not null`,
-		[sessionId],
+		[sessionId, options.now ? 0 : 3],
 	);
 }

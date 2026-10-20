@@ -22,6 +22,14 @@ export async function serverPeerMessageAccepted(
 	);
 	return result.rows[0]?.accepted ?? false;
 }
+/** Whether the recipient's mailbox holds this message, accepted or not. */
+export async function serverPeerMessageStaged(recipientId: string, id: string) {
+	const result = await database().query(
+		"select 1 from agent_peer_inbox where recipient_id=$1 and id=$2",
+		[recipientId, id],
+	);
+	return (result.rowCount ?? 0) > 0;
+}
 export async function removePendingServerPeerMessage(
 	recipientId: string,
 	id: string,

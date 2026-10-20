@@ -181,8 +181,48 @@ export type SubagentToolContext = {
 	 * turn stops writing to the shared checkout at once (fusion-lead.ts).
 	 */
 	readonly onSidekickRound?: () => void;
+	/** Lead mode fusion: resolves once the lead's writing calls already started have finished. */
+	readonly leadWritesSettled?: () => Promise<void>;
+	/** Lead mode fusion: the lead's background commands still running (they may write while the sidekick works). */
+	readonly leadBackgroundCommands?: () => readonly string[];
 	readonly deps?: Partial<SubagentToolDeps>;
 };
+
+/** A sidekick started before the shared checkout, on its own fork. */
+const FORKED_SIDEKICK = "it ran on a fork from before the shared checkout";
+function forkedSidekick(session: AgentSessionRecord | undefined) {
+	return !!session?.agentFork?.vmId && !session.agentFork.deletedAt;
+}
+
+/**
+ * Retires an idle sidekick that still has its own fork (started before the
+ * shared checkout): its next round starts a fresh sidekick in the lead's
+ * checkout instead. True when it was retired.
+ */
+async function retireForkedSidekick(
+	context: SubagentToolContext,
+	deps: SubagentToolDeps,
+	session: (SubagentTreeSession & AgentSessionRecord) | undefined,
+	live: boolean,
+) {
+	if (
+		!session ||
+		live ||
+		!forkedSidekick(session) ||
+		!isActiveSidekick(session)
+	)
+		return false;
+	await deps.retireSidekick(context.machines, session, FORKED_SIDEKICK);
+	return true;
+}
+
+/** The lead's background commands still running, as a note for the sidekick's round message. */
+function backgroundNote(context: SubagentToolContext) {
+	const ids = context.leadBackgroundCommands?.() ?? [];
+	return ids.length
+		? `The lead has background commands still running in this checkout (${ids.join(", ")}); they may write files while you work.`
+		: "";
+}
 
 const ROLE_TEXT =
 	"writer: edits code on a fork of your VM and returns a patch; researcher, reviewer: read-only on your VM; checker: independent pass/fail of your current work against the user's task";
@@ -293,7 +333,15 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 							tree.sessions.find((session) => session.id === node.id),
 						),
 				);
-				if (alive)
+				const replaced =
+					alive &&
+					(await retireForkedSidekick(
+						context,
+						deps,
+						tree.sessions.find((session) => session.id === alive.id),
+						alive.live,
+					));
+				if (alive && !replaced)
 					throw new Error(
 						`Your sidekick ${alive.label} is still available (${alive.live ? "working" : "idle"}): send it the next brief or feedback with ${AGENT_SEND_TOOL} (id ${alive.label}) instead of starting another writer. To replace it, stop it first (${AGENT_SEND_TOOL} with stop: true).`,
 					);
@@ -378,6 +426,40 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 				);
 			const session = tree.sessions.find((entry) => entry.id === target.id);
 			const sidekick = sidekickState(session);
+			if (
+				sidekick &&
+				session &&
+				input.message &&
+				!input.stop &&
+				(await retireForkedSidekick(context, deps, session, target.live))
+			) {
+				const workspace = await context.workspace();
+				const spawned = await spawnSubagent(
+					context,
+					deps,
+					{
+						role: "writer",
+						modelRole: "writer",
+						title: session.title,
+						sidekick: {
+							kind: input.explore ? "explore" : "build",
+							requestKey: requestKey(),
+						},
+						brief: async () =>
+							`${input.message?.trim()}${input.explore ? `\n\n${SIDEKICK_EXPLORE_NOTE}` : ""}`,
+					},
+					workspace,
+				);
+				const label =
+					(await loadTree()).nodes.find((node) => node.id === spawned.childId)
+						?.label ?? "?";
+				return {
+					id: label,
+					status: `sidekick ${target.label} ran on a fork from before the shared checkout and is retired; sidekick ${label} took this brief in your checkout, round 1/${spawned.budget.sidekick?.maxRounds ?? "?"} started`,
+					note: `Use id ${label} from now on.`,
+					delivery: "now",
+				};
+			}
 			if (sidekick && session) {
 				const handled = await sendToSidekick(context, deps, {
 					target,
@@ -484,7 +566,9 @@ async function sendToSidekick(
 		sidekickRoundMessage({
 			round,
 			maxRounds: state.maxRounds,
-			message: input.message ?? "",
+			message: [input.message ?? "", backgroundNote(context)]
+				.filter(Boolean)
+				.join("\n\n"),
 			turnFirstRound: next.turnFirstRound,
 			kind: input.kind,
 		}),
@@ -495,6 +579,12 @@ async function sendToSidekick(
 		status: `${sidekickRoundLabel(next)} started`,
 		checkout:
 			"it works in your checkout now; you wait for its report, then review its changes in place",
+		...(backgroundNote(context)
+			? {
+					backgroundCommands:
+						"Your background commands are still running and may write while it works; stop them (ytimesy-job stop) if they touch its files.",
+				}
+			: {}),
 		delivery: "now",
 	};
 }
@@ -515,6 +605,8 @@ async function beginRound(
 	},
 ) {
 	context.onSidekickRound?.();
+	// A write the lead started earlier in this batch finishes before the snapshot.
+	await context.leadWritesSettled?.();
 	const workspace = await context.workspace();
 	const base = await roundBase(
 		context,
@@ -581,7 +673,15 @@ export async function startHarnessExploration(
 			),
 	);
 	const brief = harnessExplorationBrief(input.requestText);
-	if (node) {
+	const forked =
+		!!node &&
+		(await retireForkedSidekick(
+			context,
+			deps,
+			tree.sessions.find((entry) => entry.id === node.id),
+			node.live,
+		));
+	if (node && !forked) {
 		const session = tree.sessions.find((entry) => entry.id === node.id);
 		const state = sidekickState(session);
 		if (!session || !state || node.live) return null;
@@ -600,7 +700,12 @@ export async function startHarnessExploration(
 			sidekickRoundMessage({
 				round,
 				maxRounds: state.maxRounds,
-				message: brief.slice(0, PEER_MESSAGE_MAX - 400),
+				message: [
+					brief.slice(0, PEER_MESSAGE_MAX - 800),
+					backgroundNote(context),
+				]
+					.filter(Boolean)
+					.join("\n\n"),
 				turnFirstRound: next.turnFirstRound,
 			}),
 			randomUUID(),
@@ -790,12 +895,20 @@ async function spawnSubagent(
 		// Counted in the builder's tokens: a cheaper child's tokens weigh less.
 		...(tree.root.listedModelId ? { priceBasis: tree.root.listedModelId } : {}),
 	};
-	const brief = await input.brief(tree);
+	const brief = [
+		await input.brief(tree),
+		input.sidekick ? backgroundNote(context) : "",
+	]
+		.filter(Boolean)
+		.join("\n\n");
 	// Lead mode fusion's sidekick works in the lead's own checkout.
 	const placement: SubagentPlacement = input.sidekick
 		? "shared-writer"
 		: subagentPlacement(role);
-	if (input.sidekick) context.onSidekickRound?.();
+	if (input.sidekick) {
+		context.onSidekickRound?.();
+		await context.leadWritesSettled?.();
+	}
 	const child = await deps.openTask({
 		userId: parent.userId,
 		projectId: parent.projectId,

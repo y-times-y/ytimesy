@@ -1,5 +1,6 @@
 import { Effect } from "effect";
 import { sessionItemsFromUnknown } from "#/domain/session-item";
+import { sidekickState } from "#/domain/sidekick";
 import {
 	type AgentSessionRecord,
 	agentSessionForOwner,
@@ -111,6 +112,10 @@ export async function deliverAgentPeerMessage(
 		(task) => task.id === message.recipientId,
 	);
 	if (!recipient || recipient.taskState === "draft") return;
+	// Lead mode fusion: a retired sidekick takes no new round. Waking it would
+	// let it write in the lead's checkout beside the lead.
+	if (sidekickState(recipient)?.retired && recipient.turnStatus !== "running")
+		return;
 	const text = `Peer message from ${sender.title} (${sender.id}):\n\n${message.message}\n\nCoordination message ID: ${messageId}`;
 	// agent_send: a subagent hears its parent as steering, not as a peer.
 	const steering =
