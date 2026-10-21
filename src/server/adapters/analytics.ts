@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { PostHog } from "posthog-node";
+import { redactSecrets } from "#/domain/redact-secrets";
 import {
 	type ServerAnalyticsEvent,
 	type ServerAnalyticsProperties,
@@ -84,22 +85,8 @@ function posthogClient(token: string): Promise<PostHog> {
 	return active;
 }
 
-const SECRET_PATTERNS: readonly RegExp[] = [
-	/\b(?:sk|pk|rk|ghp|gho|ghs|ghu|github_pat|phc|xox[abp])[-_][A-Za-z0-9_-]{8,}/g,
-	/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi,
-	/\/\/[^/\s:@]+:[^/\s@]+@/g,
-	/\b[A-Za-z0-9_+-]{40,}={0,2}/g,
-];
-
 /** Error text with tokens, credentials in URLs and long opaque strings removed. */
-export function redactErrorText(text: string) {
-	let redacted = text;
-	for (const pattern of SECRET_PATTERNS)
-		redacted = redacted.replace(pattern, (match) =>
-			match.startsWith("//") ? "//[redacted]@" : "[redacted]",
-		);
-	return redacted.slice(0, 4000);
-}
+export const redactErrorText = (text: string) => redactSecrets(text);
 
 /**
  * Best-effort server error tracking (PostHog exceptions): the error's class,
