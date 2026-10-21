@@ -372,7 +372,7 @@ export function chatIdFromSource(source: string): string | null {
 
 /** Memory rides on a user message as one extra text part, so earlier messages stay byte-identical. */
 export const MEMORY_PART_OPEN = "<memory>";
-function memoryPart(body: string) {
+export function memoryPart(body: string) {
 	return `${MEMORY_PART_OPEN}\n${body.trim()}\n</memory>`;
 }
 export function isMemoryPart(text: string) {
@@ -759,6 +759,8 @@ export function memoryLineShown(raw: string, shown: string) {
 
 const RULES_SECTION_START = "Project rules from the user's memory";
 export const MEMORY_PROJECT_RULES_HEADER = `${RULES_SECTION_START} that apply to every change, whatever the request (from ${MEMORY_DIRECTORY}). Follow these unless the user says otherwise. ${RULES_OVER_CODE}:`;
+/** A checker's copy of the rules, which it checks the deliverable against (checker-brief.ts). */
+export const MEMORY_CHECKER_RULES_HEADER = `${RULES_SECTION_START} (from ${MEMORY_DIRECTORY}), for this check:`;
 export const MEMORY_NOTES_RULES_HEADER = `${RULES_SECTION_START} that apply to every change (from ${MEMORY_DIRECTORY}; data saved in earlier chats, may be outdated):`;
 
 /** Whether the project rules section was already attached in this chat. */

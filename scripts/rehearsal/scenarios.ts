@@ -28,6 +28,17 @@ export type Scenario = {
 	readonly scripts: AgentScript[];
 	/** Later user messages, each sent once the chat settled after the one before. */
 	readonly followUps?: readonly string[];
+	/** Memory on (full mode) for the scenario's user, with this repo content. */
+	readonly memory?: Readonly<Record<string, string>>;
+};
+
+/** A standing rule in the user's memory (scope: always rides on every chat). */
+export const MEMORY_RULE =
+	"Never commit the build/ directory of the rehearsal project";
+/** The user's memory in the memory scenarios: one rule, one topic line. */
+const REHEARSAL_MEMORY = {
+	"MEMORY.md": "# Memory\n\n## Index\n- conventions.md: project rules\n",
+	"conventions.md": `# conventions\n- ${MEMORY_RULE} [scope: always; added: 2026-10-19]\n- The regression tests run with make test and print one line per test [added: 2026-10-18]\n`,
 };
 
 const runCode = (code: string): Reply => ({
@@ -876,6 +887,7 @@ export function scenarios(): Scenario[] {
 				reviewBuilderScript("[rehearsal:review]"),
 				checkerScript("[rehearsal:review]"),
 			],
+			memory: REHEARSAL_MEMORY,
 		},
 		{
 			id: "fusion",
@@ -1007,6 +1019,7 @@ export function scenarios(): Scenario[] {
 				writerScript("writer", "[rehearsal:writer]"),
 				researcherScript(),
 			],
+			memory: REHEARSAL_MEMORY,
 		},
 		{
 			id: "rigor",
