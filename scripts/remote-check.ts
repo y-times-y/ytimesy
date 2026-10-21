@@ -229,14 +229,15 @@ try {
 	// Toolchain as on the laptop: Node, pnpm from packageManager, Bun (one test runs it).
 	const setup = await step(
 		"setup",
-		`set -euo pipefail
+		`set -euxo pipefail
+exec 2>&1
 cd ${WORK}
 sudo -u ubuntu git init -q repo
 sudo -u ubuntu git -C repo fetch -q ../repo.bundle "${tempRef}:refs/remote-check/head"
 sudo -u ubuntu git -C repo checkout -q --detach ${sha}
 arch=$(uname -m); case "$arch" in x86_64) narch=x64;; aarch64) narch=arm64;; esac
 curl -fsSL https://nodejs.org/dist/${nodeVersion}/node-${nodeVersion}-linux-$narch.tar.xz | tar -xJ -C /usr/local --strip-components=1
-npm install -g --silent pnpm@${pnpmVersion}
+npm install -g --force --loglevel=error pnpm@${pnpmVersion}
 sudo -u ubuntu -H bash -c 'curl -fsSL https://bun.sh/install | bash -s bun-v${bunVersion}' >/dev/null
 command -v docker >/dev/null || (apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io >/dev/null)
 systemctl start docker 2>/dev/null || true
