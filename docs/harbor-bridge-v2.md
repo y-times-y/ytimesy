@@ -45,7 +45,7 @@ unchanged and remains the harness of record for the TB4 runs; v2 lives in
 | `YTIMESY_HARBOR_APPROVED` | must equal the route: the operator's billing approval (required) |
 | `YTIMESY_HARBOR_MODEL` | default `gpt-6.1-sol` / `claude-opus-5-5` / `gemini-3.8-flash` |
 | `YTIMESY_HARBOR_EFFORT` | `low` … `max` (default `max`) |
-| `YTIMESY_HARBOR_VARIANT` | harness variant flags, e.g. `review=on` or `toolSurface=lean-native,codeMode=primary`. Supported: `toolSurface`, `codeMode` (`on`, `primary`), `review`, `promptCacheScope`, `roleModels.checker`. `attempts`, `subagents`, memory, `prEvidence` and the other roles' `roleModels` need the product's database or subagents and are refused. |
+| `YTIMESY_HARBOR_VARIANT` | harness variant flags, e.g. `lead=fusion,review=on,checkerMode=pair,rigor=on,codeMode=primary`. Supported: `toolSurface`, `codeMode` (`on`, `primary`), `review`, `checkerMode` (`single`, `pair`; pair needs `review=on`), `lead` (`fusion`), `rigor`, `promptCacheScope`, `roleModels.{writer,writerEscalation,classifier,checker,checkerWorker}`. Refused: `subagents=on`/`force` (several writers at once: product-only, they need the database and a VM fork per writer), `attempts`, memory, `prEvidence`, `roleModels.{researcher,reviewer,judge}`. |
 | `YTIMESY_HARBOR_TRIAL_USD_CAP` | per-trial cap; default $20 or the total cap if lower; at most $100 |
 | `YTIMESY_HARBOR_TOTAL_USD_CAP` + `YTIMESY_HARBOR_SPEND_LEDGER` | total cap and its JSON-lines ledger; required on paid routes |
 | `YTIMESY_HARBOR_REQUEST_LIMIT` | model requests per trial, builder and checkers together (default 400) |
@@ -73,6 +73,53 @@ route, or a paid model without a list price is refused. Without an effort the ch
 uses the builder's. The checker's runtime is built on its first check; its requests pass
 the same guard; its usage is priced at its own model (trial cap, ledger, ATIF subagent
 trajectory, the review state's `rounds[].checker.model`).
+
+## lead=fusion, checkerMode=pair, rigor (one writer)
+
+Child sessions live in memory for the trial (`sessions.ts`: role, parent, model, events,
+briefs, reports, conversation), in place of the product's agent_sessions rows and mailboxes.
+`children.ts` holds the lead's tools and the pair judge's worker tool.
+
+- **lead=fusion**: the builder is the lead, with the product's fusion lead prompt block. Before
+  its first model call the harness runs the sidekick's exploration round on the request
+  (`harnessExplorationBrief`); the report is added to the lead's first message. The lead's
+  `agent` (role writer, once) and `agent_send` (`id`, `message`, `explore`, `stop`) run one
+  sidekick round in process and return its report as the tool result: one writer at a time,
+  in the lead's own checkout (no fork), and the lead makes no model call while it works. Any
+  other role, or a second writer, is refused ("do the work yourself"). The sidekick gets the
+  product's sidekick role block (`newSidekickState` in its budget) and keeps its conversation
+  across rounds.
+- **Classifier**: after every round, the product's `CLASSIFIER_INSTRUCTIONS`, `classifierMessage`,
+  `parseClassifierReply`, `applicableDecision` and the rules fallback, one tool-free call on
+  `roleModels.classifier` (the builder's model when unset; the product defaults to
+  `codex:gpt-6-luna@low`). The decision record (tokens, cost at the classifier's price,
+  source, model) is in the trace's `fusion.decisions`; a hand_back/switch_model notice is
+  appended to the round's report. Differences: no sidekick signals (`signals: []`) and no
+  diff line counts; switch_model moves the sidekick to `roleModels.writerEscalation` at its
+  next round (the product switches at its next compaction).
+- **Irreversible actions stay with the lead**: the bridge has no push, PR or deploy tools for
+  anyone; the sidekick's prompt forbids commit, stash, reset, branch switches and discarding
+  others' changes (the product's rule; prompt-level, as in the product). Not enforced by a
+  tool guard: a sidekick could still run `git commit` from its shell.
+- **checkerMode=pair**: the review checker is the judge (`roleModels.checker`, the product's
+  pair brief); its `checker_worker` tool (`brief`, `workers[]`, `id`, `model: strong`) runs
+  read-only workers on `roleModels.checkerWorker` (builder's model when unset; product default
+  `codex:gpt-6-luna`) with the product's worker brief frame, and waits for their reports.
+  The workers' and judge's tool calls are passed to the loop as items, so
+  `pairReviewVerdict` marks each test's `ranBy`.
+- **rigor=on**: the product's rigor block in the builder's (and sidekick's) prompt, and the
+  review loop's rigor checks.
+- **Readers never write the checkout**: before each check the checkout (with `.git` and the
+  review refs) is copied with `cp -a` to `/tmp/ytimesy-readers/<trial>/<checker>/checkout`;
+  the checker and its workers run there (their `cwd`, and the brief's checkout paths are
+  rewritten to the copy). Difference from the product: the product runs readers as a reader
+  Linux user that cannot write the checkout; here a reader's shell could still write the
+  original by an absolute path it was never given. Nothing is restored afterwards. The trace's
+  `review.readerCopies` lists each copy.
+- **Costs per role**: every child's usage counts in the trial cap at its own model's price;
+  `efficiency.modelRows` has `builder`, `sidekick`, `checker`, `checkerWorker` and
+  `classifier` rows; each child is an embedded ATIF subagent trajectory
+  (`<harness>-<role>`).
 
 ## Cost block (AA-style)
 
@@ -150,10 +197,8 @@ deadlines and notice unchanged:
 - deadline: Harbor's agent timeout minus 3 minutes (60 s in the agent, 120 s in the loop).
 
 Difference from the product: the product's checker runs its commands as a reader Linux user
-that cannot write the checkout. A task container has no such user, so the checker's commands
-run as the container's user and after every check the checkout is
-restored to the tree the checker was given (`restoreConversationCode`); the trace records
-whether each restore succeeded. Ignored files the checker creates are not removed.
+that cannot write the checkout. In the bridge the checker works in its own `cp -a` copy of the
+checkout (see "lead=fusion, checkerMode=pair, rigor"); nothing is restored afterwards.
 
 Building this found a product bug, fixed on this branch: `captureConversationCode`
 rejected the review loop's `refs/ytimesy/review/...` refs, so `review=on` could not take its
@@ -163,7 +208,7 @@ first checkpoint with the real capture (its unit tests used a fake).
 
 Not reproduced, because they need the database, the job stack or a person: cross-chat
 memory, plan mode, the user's MCP connections (task MCP servers work through `mcp-call`),
-plugins, project secrets, repository lifecycle hooks, subagents, the attempt loop, the
+plugins, project secrets, repository lifecycle hooks, several writers at once (subagents=on/force), the attempt loop, the
 background-command completion gate and durable step resumption. Write-once tool receipts
 and turn memos are in memory. `codeMode=primary` lists run_code first and adds the product's
 one-command note to the command tool (`primaryCodeModeTools`, shared with api-turn); it has
@@ -182,6 +227,14 @@ no deferred tools to hide, since the bridge offers no agent, plan or MCP tools.
   the builder's tools and prompt; the checker on its own runtime and model, with commands
   but no write/edit, no orchestration block; cost = each run at its own price; the
   efficiency block's per-role rows.
+- `tests/harbor-v2-trial.test.ts`, lead=fusion: exploration round, a sidekick build that
+  writes the lead's checkout, two classifier decisions recorded with tokens and cost, the
+  lead's answer; the lead's and sidekick's product prompt blocks; rows builder/sidekick/classifier,
+  each model separate. checkerMode=pair: the judge briefs a worker, the worker's file stays in
+  the copy, findings reach the builder, the fix passes, the worker's test is `ranBy: worker`;
+  rows builder/checker/checkerWorker. The single-checker test: the checker's stray file never
+  reaches the checkout.
+- `tests/harbor-v2-sessions.test.ts`: the in-memory session store.
 - `tests/harbor-v2-units.test.ts`: config validation, guard, ledger (incl. concurrency and
   stop file), transport guard (Anthropic/OpenAI/Gemini terminal events, resend after a
   cut, give-up path, no credentials in logs), ATIF details (retract, freeform input,
@@ -250,7 +303,7 @@ Trajectory.model_validate_json((t/'agent/trajectory.json').read_text())
 print(t.name, 'reward', (r.get('verifier_result') or {}).get('rewards'), 'exception', r.get('exception_info'))
 print('  usage by model', {k: v.model_dump() for k, v in (load_model_usage_from_trajectory(t/'agent/trajectory.json') or {}).items()})
 print('  variant', tr['variant'], 'checker', tr['checkerModel'], 'failure', tr['failure'])
-print('  review rounds', tr['review']['rounds'], 'checks', [(c['sessionId'], c['restored']) for c in tr['review']['checks']])
+print('  review rounds', tr['review']['rounds'], 'checks', tr['review']['readerCopies'])
 e=tr['efficiency']; print('  cost/task', e['perTaskUsd'], 'tokens', e['tokensPerTask'], 'calls', e['callsPerTask'], 'cache hit', e['cacheHitRate'])
 for m in e['modelRows']: print('   ', m['role'], m['model'], m['requests'], 'calls', m['costUsd'])
 " "$t"
@@ -270,7 +323,7 @@ Expected:
   `cost_basis` and `efficiency`.
 - `agent/ytimesy-trace.json`: `variant` = `codeMode=primary,review=on,roleModels.checker=codex:gpt-6-luna`
   (the label orders keys as the variant does), `checkerModel` `{model: gpt-6-luna, effort: max}`,
-  `review.rounds` ≥ 0 with `checks[].restored: true`, `review.state.rounds[].checker.model.modelId`
+  `review.rounds` ≥ 0 with `readerCopies[].ok: true`, `review.state.rounds[].checker.model.modelId`
   `gpt-6-luna`; `efficiency.modelRows` = a `builder gpt-6.1-sol` row and, when a check ran,
   a `checker gpt-6-luna` row, each with its own `costUsd`.
 - No ledger on the plan route (no caps unless `YTIMESY_HARBOR_TRIAL_USD_CAP` is set). On a
