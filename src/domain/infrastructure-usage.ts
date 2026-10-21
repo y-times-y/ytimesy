@@ -33,7 +33,8 @@ export function infrastructureBalance(input: {
 /**
  * Per-user VM usage is limited over two rolling windows (as Claude and Codex
  * subscriptions are): a short one that refills within hours and a weekly
- * one. Hitting either refuses new work only; running work finishes.
+ * one. Hitting either refuses new work; running work finishes, up to a hard
+ * ceiling about an hour of runtime past the limit.
  */
 export const USAGE_WINDOWS = [
 	{ id: "five_hour", label: "5-hour limit", ms: 5 * 60 * 60 * 1000 },
@@ -135,5 +136,38 @@ export class UsageWindowExhausted extends Error {
 	constructor(readonly window: UsageWindowState) {
 		super(usageWindowRefusal(window));
 		this.name = "UsageWindowExhausted";
+	}
+}
+
+/**
+ * Running work may carry a window past its limit by about this much runtime
+ * of the machine buying it, never further: it finishes its turn, but cannot
+ * extend indefinitely.
+ */
+export const USAGE_OVERRUN_SECONDS = 3600;
+
+/** The hard ceiling of a window for a machine costing hourlyMicroUsd. */
+export function usageWindowCeiling(
+	limitMicroUsd: number,
+	hourlyMicroUsd: number,
+) {
+	validUsageAmount(hourlyMicroUsd);
+	return (
+		limitMicroUsd + Math.ceil((hourlyMicroUsd * USAGE_OVERRUN_SECONDS) / 3600)
+	);
+}
+
+/** Fixed wording; failure mapping recognizes it and shows it as is. */
+export function usageCeilingRefusal(window: UsageWindowState) {
+	const which = window.id === "weekly" ? "weekly" : "5-hour";
+	return `Running work has used the grace past your ${which} cloud usage limit, so this machine cannot keep running${window.resetsAt ? ` until ${utcMinute(window.resetsAt)}` : ""}. Your work is preserved.`;
+}
+export const USAGE_CEILING_REFUSAL_PATTERN =
+	/Running work has used the grace past your (?:5-hour|weekly) cloud usage limit, so this machine cannot keep running(?: until \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC)?\. Your work is preserved\./;
+
+export class UsageCeilingReached extends Error {
+	constructor(readonly window: UsageWindowState) {
+		super(usageCeilingRefusal(window));
+		this.name = "UsageCeilingReached";
 	}
 }
