@@ -352,13 +352,19 @@ echo "node $(node -v) pnpm $(pnpm -v) bun $(${HOME}/.bun/bin/bun --version) dock
 } finally {
 	await rm(scratch, { recursive: true, force: true });
 	if (vm && !values.keep) {
-		const deleted = await vms.client.vms
-			.delete(vm)
-			.then(() => true)
-			.catch((error: Error) => {
-				console.log(`remote-check: VM delete failed: ${error.message}`);
-				return false;
-			});
+		let deleted = false;
+		for (let attempt = 0; attempt < 6 && !deleted; attempt++) {
+			deleted = await vms.client.vms
+				.delete(vm)
+				.then(() => true)
+				.catch((error: Error) => {
+					console.log(
+						`remote-check: VM delete failed: ${error.message}; retrying`,
+					);
+					return false;
+				});
+			if (!deleted) await new Promise((done) => setTimeout(done, 10_000));
+		}
 		console.log(
 			`remote-check cleanup: VM ${vm} ${deleted ? "deleted" : "NOT deleted, delete it by hand"}`,
 		);
