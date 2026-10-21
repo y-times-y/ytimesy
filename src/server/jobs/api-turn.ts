@@ -137,6 +137,7 @@ import {
 	withBackgroundCommandContext,
 } from "../services/background-command-context";
 import { builderToolSurface } from "../services/builder-shell-surface";
+import { checkerPairGate } from "../services/checker-pair-gate";
 import { CODE_MODE_TOOL, codeModeTool } from "../services/code-mode-tool";
 import {
 	runCodexSubscriptionAgent,
@@ -933,6 +934,15 @@ async function runApiTurnAttempt(
 							return ready;
 						})
 				: null;
+		// checkerMode=pair: the judge waits for its workers' reports (checker-pair-gate.ts).
+		const judgeGate = pairJudge
+			? (waitUntil: number) =>
+					checkerPairGate({
+						judge: owner as AgentSessionRecord,
+						signal: abort.signal,
+						waitUntil,
+					})
+			: null;
 		// Code mode is a development harness variant on a lean surface only
 		// (docs/parallel-evals.md). primary: run_code is the main tool; a large
 		// MCP setup's search and call tools are callable only from inside it.
@@ -1234,6 +1244,7 @@ async function runApiTurnAttempt(
 				// The local worker's loop calls the model several times in one
 				// run; durable steps wait before their one call instead (below).
 				if (!step && leadGate) await leadGate(Number.POSITIVE_INFINITY);
+				if (!step && judgeGate) await judgeGate(Number.POSITIVE_INFINITY);
 				if (owner.agentRole) {
 					// Counted and checked before every model step: a wrap-up
 					// notice at 90%, the turn stops at 100% (reported as such).
@@ -1434,6 +1445,17 @@ async function runApiTurnAttempt(
 			leadGateAt = Date.now();
 			const gate = await timed("turn:fusionLead", () =>
 				leadGate(attemptWaitUntil()),
+			);
+			if (gate === "wait") {
+				await saveCheckpoint();
+				coordinated = false;
+				return "continue";
+			}
+		}
+		// checkerMode=pair: no judge model call while a worker still works.
+		if (step && judgeGate) {
+			const gate = await timed("turn:checkerPair", () =>
+				judgeGate(attemptWaitUntil()),
 			);
 			if (gate === "wait") {
 				await saveCheckpoint();
