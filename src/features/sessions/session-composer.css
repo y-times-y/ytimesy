@@ -2302,31 +2302,9 @@ code.session-tool-target {
 	margin-top: 3px;
 }
 
-/* Agents list under the composer: the lead, then this request's helpers. */
-.agent-dot {
-	flex: 0 0 7px;
-	width: 7px;
-	height: 7px;
-	border-radius: 50%;
-	background: #d4d4d4;
-}
-.agent-dot[data-color="blue"] {
-	background: #6b8fd6;
-}
-.agent-dot[data-color="green"] {
-	background: #5fae8b;
-}
-.agent-dot[data-color="amber"] {
-	background: #c9a45a;
-}
-.agent-dot[data-color="violet"] {
-	background: #9a83d4;
-}
-.agent-dot[data-color="rose"] {
-	background: #cf7d93;
-}
-.agent-dot[data-color="teal"] {
-	background: #4fa8ad;
+/* Agents list under the composer: Main, this request's helpers, background runs. */
+.agent-icon {
+	flex: 0 0 auto;
 }
 .agent-panel {
 	margin: 6px 0 2px;
@@ -2349,9 +2327,9 @@ code.session-tool-target {
 .agent-panel-summary:hover {
 	background: #ffffff08;
 }
-.agent-panel-dots {
+.agent-panel-icons {
 	display: inline-flex;
-	gap: 3px;
+	gap: 4px;
 }
 .agent-panel-summary-meta {
 	color: #7a7a7a;
@@ -2392,13 +2370,51 @@ code.session-tool-target {
 	background: #ffffff08;
 }
 .agent-row[aria-current="true"] {
-	background: #ffffff10;
-	box-shadow: inset 0 0 0 1px #ffffff14;
+	background: #ffffff0d;
+	box-shadow: inset 2px 0 0 var(--agent-accent, #e5e5e5);
 	color: #f2f2f2;
 }
-.agent-row-name {
+div.agent-row {
+	cursor: default;
+}
+div.agent-row:hover {
+	background: transparent;
+}
+.agent-row-tag {
 	flex: 0 0 auto;
+	padding: 0 5px;
+	border-radius: 4px;
+	background: #ffffff0a;
+	color: #8a8a8a;
+	font-size: 10.5px;
+	line-height: 16px;
+}
+.agent-row-metric {
+	flex: 0 0 auto;
+	color: #8a8a8a;
+	font-size: 11px;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+.agent-metric-tooltip {
+	z-index: 120;
+	padding: 6px 9px;
+	border: 1px solid #2c2c2c;
+	border-radius: 7px;
+	background: #161616;
+	color: #d6d6d6;
+	font-size: 11.5px;
+	font-variant-numeric: tabular-nums;
+	box-shadow: 0 8px 24px #000a;
+}
+.agent-row-name {
+	flex: 0 1 auto;
+	min-width: 0;
+	max-width: 42%;
+	overflow: hidden;
 	font-weight: 500;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 .agent-row-doing {
 	flex: 1 1 auto;
@@ -2427,10 +2443,12 @@ code.session-tool-target {
 }
 .agent-row-status {
 	flex: 0 0 auto;
-	min-width: 48px;
 	color: #7a7a7a;
 	font-size: 11px;
 	text-align: right;
+}
+.agent-row-status[data-status="free"] {
+	color: #6d6d6d;
 }
 .agent-row-status[data-status="working"] {
 	color: #bdbdbd;
@@ -2463,6 +2481,10 @@ code.session-tool-target {
 	}
 	.agent-row {
 		min-height: 36px;
+	}
+	.agent-row-doing,
+	.agent-row-status {
+		display: none;
 	}
 }
 @media (prefers-reduced-motion: reduce) {
@@ -2498,6 +2520,36 @@ button.helper-line:hover {
 .helper-line[data-finished="true"][data-status="failed"] .helper-line-text {
 	color: #f87171;
 }
+.helper-view-header {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-height: 32px;
+	padding: 4px 0 8px;
+	border-bottom: 1px solid #ffffff0d;
+	color: #e5e5e5;
+	font-size: 13px;
+}
+.helper-view-name {
+	min-width: 0;
+	overflow: hidden;
+	font-weight: 500;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.helper-view-back {
+	margin-left: auto;
+	padding: 3px 8px;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	color: #8a8a8a;
+	font-size: 12px;
+}
+.helper-view-back:hover {
+	background: #ffffff0c;
+	color: #e5e5e5;
+}
 
 /* A helper's view: who sent each message, and steering still waiting. */
 .session-message-sender {
@@ -2517,4 +2569,23 @@ button.helper-line:hover {
 	font-size: 10px;
 	font-weight: 500;
 	line-height: 16px;
+}
+
+/* A command left running in the background: its own lane, tagged. */
+.session-activity[data-background="true"] {
+	border-left: 2px solid
+		color-mix(in oklab, var(--agent-background), transparent 45%);
+	padding-left: 8px;
+}
+.session-activity[data-background="true"] > summary .session-tool-verb {
+	color: #8a8f98;
+}
+
+/* Status by brightness: finished agents dim, working ones stay bright. */
+.agent-row[data-status="done"] .agent-icon,
+.agent-row[data-status="failed"] .agent-icon {
+	opacity: 0.5;
+}
+.agent-row[data-status="done"] .agent-row-name {
+	color: #9a9a9a;
 }

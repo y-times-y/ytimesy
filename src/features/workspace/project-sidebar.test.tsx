@@ -70,7 +70,7 @@ describe("left sidebar", () => {
 		const html = render(null);
 		// One sort icon button (a menu) instead of a segmented control.
 		expect(html).toContain('aria-label="Sort chats: Projects"');
-		expect(html).not.toContain("sidebar-sort\"");
+		expect(html).not.toContain('sidebar-sort"');
 		expect(html.indexOf(">Beta<")).toBeLessThan(html.indexOf(">Alpha<"));
 		expect(html).not.toContain("sidebar-chat-project");
 	});
@@ -81,10 +81,12 @@ describe("left sidebar", () => {
 		expect(html.indexOf("Newest chat")).toBeLessThan(
 			html.indexOf("Older chat"),
 		);
+		// The project shows as a thin colour bar, its name in the row's tooltip.
 		expect(html).toMatch(
-			/class="sidebar-chat-project"><span class="sidebar-project-dot" style="background:#[0-9a-f]{6}" aria-hidden="true"><\/span><span>Beta<\/span>/,
+			/data-project-bar="true" style="--project-color:#[0-9a-f]{6}"/,
 		);
-		expect(html).toContain("<span>Alpha</span>");
+		expect(html).toContain('title="Newest chat · Beta"');
+		expect(html).not.toContain("sidebar-chat-project");
 		expect(html).not.toContain("sidebar-folder-row");
 		// Neither waits on the user nor runs: both are Done, with a count.
 		expect(html).toMatch(

@@ -18,7 +18,13 @@ import {
 	ShieldX,
 } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import {
+	type CSSProperties,
+	type ReactNode,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
 import { type Project, projectDisplayName } from "#/domain/projects";
 import { isTurnRunning, type SessionTurnStatus } from "#/domain/session-item";
 import {
@@ -45,7 +51,6 @@ import {
 	type SidebarSort,
 	type SidebarStatusGroup,
 	seenChatStorageValue,
-	sidebarChatAttention,
 	sidebarChatIsRunning,
 	sidebarChatSeenKey,
 	sidebarChatsEmptyCopy,
@@ -256,29 +261,6 @@ export function ProjectSidebar({
 		});
 	}
 
-	function chatAttention(chat: SidebarChat) {
-		const turnStatus =
-			chat.id === selectedChatId ? openTurnStatus : chat.turnStatus;
-		const running = sidebarChatIsRunning({
-			chatId: chat.id,
-			turnStatus,
-			busyChatIds,
-			openChatId: selectedChatId,
-			openTurnStatus,
-		});
-		return sidebarChatAttention({
-			running,
-			turnStatus,
-			selected: chat.id === selectedChatId,
-			seen: seenKeys.includes(
-				sidebarChatSeenKey({
-					...chat,
-					turnStatus,
-				}),
-			),
-		});
-	}
-
 	function chatRunning(chat: SidebarChat) {
 		return sidebarChatIsRunning({
 			chatId: chat.id,
@@ -320,7 +302,6 @@ export function ProjectSidebar({
 	}
 
 	function chatRow(chat: SidebarChat, project?: Project) {
-		const attention = chatAttention(chat);
 		const status = chatStatus(chat);
 		const waiting =
 			status === "needs-you" && chat.waitingOn
@@ -334,13 +315,31 @@ export function ProjectSidebar({
 				className="sidebar-chat-row"
 				data-selected={chat.id === selectedChatId}
 				data-pinned={pinned ? "true" : undefined}
+				data-project-bar={project ? "true" : undefined}
+				style={
+					project
+						? ({ "--project-color": projectColor(project.id) } as CSSProperties)
+						: undefined
+				}
 			>
 				<button
 					type="button"
 					className="sidebar-chat"
 					data-selected={chat.id === selectedChatId}
-					data-activity={status === "needs-you" ? "needs-you" : attention}
-					title={waiting ? `${chat.title} · ${waiting}` : chat.title}
+					data-activity={
+						status === "needs-you"
+							? "needs-you"
+							: status === "working"
+								? "running"
+								: undefined
+					}
+					title={[
+						chat.title,
+						project ? projectDisplayName(project) : null,
+						waiting,
+					]
+						.filter(Boolean)
+						.join(" · ")}
 					aria-current={chat.id === selectedChatId ? "page" : undefined}
 					onClick={() =>
 						project && project.id !== selectedProjectId && onSelectChatInProject
@@ -351,21 +350,11 @@ export function ProjectSidebar({
 					<span className="sidebar-chat-dot" aria-hidden="true" />
 					<span className="sidebar-chat-title">{chat.title}</span>
 					{project ? (
-						<span className="sidebar-chat-project">
-							<span
-								className="sidebar-project-dot"
-								style={{ background: projectColor(project.id) }}
-								aria-hidden="true"
-							/>
-							<span>{projectDisplayName(project)}</span>
-						</span>
+						<span className="sr-only">{projectDisplayName(project)}</span>
 					) : null}
 					{waiting ? <span className="sr-only">{waiting}</span> : null}
-					{attention === "running" ? (
+					{status === "working" ? (
 						<span className="sr-only">Running</span>
-					) : null}
-					{attention === "attention" ? (
-						<span className="sr-only">Needs attention</span>
 					) : null}
 				</button>
 				<div className="sidebar-chat-trailing">
@@ -382,7 +371,7 @@ export function ProjectSidebar({
 						}}
 					>
 						<Pin
-							size={13}
+							size={14}
 							strokeWidth={1.5}
 							fill={pinned ? "currentColor" : "none"}
 						/>
@@ -398,7 +387,7 @@ export function ProjectSidebar({
 								onDeleteChat(chat.id);
 							}}
 						>
-							<Archive size={13} strokeWidth={1.5} />
+							<Archive size={14} strokeWidth={1.5} />
 						</button>
 					) : null}
 					{chat.prNeed ? (
@@ -451,7 +440,7 @@ export function ProjectSidebar({
 				aria-controls="project-sidebar"
 				onClick={toggleProjects}
 			>
-				<PanelLeft size={18} />
+				<PanelLeft size={16} strokeWidth={1.5} />
 			</button>
 			<button
 				type="button"
@@ -494,7 +483,7 @@ export function ProjectSidebar({
 						aria-controls="project-sidebar"
 						onClick={toggleProjects}
 					>
-						<PanelLeft size={18} />
+						<PanelLeft size={16} strokeWidth={1.5} />
 					</button>
 				</div>
 				<div className="sidebar-toolbar">
@@ -503,7 +492,7 @@ export function ProjectSidebar({
 						className="sidebar-new-project"
 						onClick={onAddProject}
 					>
-						<Plus size={16} />
+						<Plus size={16} strokeWidth={1.5} />
 						New project
 					</button>
 				</div>
@@ -531,7 +520,7 @@ export function ProjectSidebar({
 									aria-label={`Sort chats: ${sort === "recent" ? "Recent" : "Projects"}`}
 									title="Sort chats"
 								>
-									<ArrowUpDown size={13} strokeWidth={1.5} />
+									<ArrowUpDown size={14} strokeWidth={1.5} />
 								</button>
 							</DropdownMenu.Trigger>
 							<DropdownMenu.Portal>
@@ -550,7 +539,7 @@ export function ProjectSidebar({
 											<DropdownMenu.RadioItem key={value} value={value}>
 												<span className="sidebar-sort-check">
 													<DropdownMenu.ItemIndicator>
-														<Check size={13} />
+														<Check size={14} strokeWidth={1.5} />
 													</DropdownMenu.ItemIndicator>
 												</span>
 												{value === "recent" ? "Recent" : "Projects"}
@@ -603,7 +592,7 @@ export function ProjectSidebar({
 											aria-expanded={open}
 											onClick={() => toggleProjectFolder(project.id)}
 										>
-											<ChevronRight size={14} />
+											<ChevronRight size={14} strokeWidth={1.5} />
 										</button>
 										<button
 											type="button"
@@ -635,7 +624,7 @@ export function ProjectSidebar({
 														onDeleteProject(project.id);
 													}}
 												>
-													<Archive size={13} strokeWidth={1.5} />
+													<Archive size={14} strokeWidth={1.5} />
 												</button>
 											) : null}
 											<button
@@ -718,7 +707,7 @@ export function ProjectSidebar({
 					data-active={newChatActive}
 					onClick={() => onNewChat()}
 				>
-					<Plus size={16} />
+					<Plus size={16} strokeWidth={1.5} />
 				</button>
 				{onOpenMemory ? (
 					<button
@@ -819,15 +808,15 @@ function SidebarAccountButton({ onOpen }: { onOpen: () => void }) {
 }
 
 function SidebarChatPrIcon({ need }: { need: SidebarChatPrNeed }) {
-	if (need === "ready") return <GitPullRequest size={13} strokeWidth={1.5} />;
-	if (need === "merged") return <GitMerge size={13} strokeWidth={1.5} />;
-	if (need === "pending") return <Clock3 size={13} strokeWidth={1.5} />;
+	if (need === "ready") return <GitPullRequest size={14} strokeWidth={1.5} />;
+	if (need === "merged") return <GitMerge size={14} strokeWidth={1.5} />;
+	if (need === "pending") return <Clock3 size={14} strokeWidth={1.5} />;
 	if (need === "conflict")
-		return <GitCompareArrows size={13} strokeWidth={1.5} />;
-	if (need === "blocked") return <ShieldX size={13} strokeWidth={1.5} />;
+		return <GitCompareArrows size={14} strokeWidth={1.5} />;
+	if (need === "blocked") return <ShieldX size={14} strokeWidth={1.5} />;
 	if (need === "checks_failed")
-		return <CircleAlert size={13} strokeWidth={1.5} />;
+		return <CircleAlert size={14} strokeWidth={1.5} />;
 	if (need === "draft")
-		return <GitPullRequestDraft size={13} strokeWidth={1.5} />;
-	return <GitPullRequestClosed size={13} strokeWidth={1.5} />;
+		return <GitPullRequestDraft size={14} strokeWidth={1.5} />;
+	return <GitPullRequestClosed size={14} strokeWidth={1.5} />;
 }
