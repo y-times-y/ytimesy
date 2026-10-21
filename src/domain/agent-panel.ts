@@ -49,6 +49,8 @@ export type AgentMetric = {
 	readonly tokens?: {
 		readonly input: number;
 		readonly output: number;
+		/** Input read from the prompt cache (part of `input`). */
+		readonly cached?: number;
 		/** Null when a price is unknown. */
 		readonly costUsd: number | null;
 		/** Plan-billed: the dollars are a list-price estimate. */
@@ -318,6 +320,7 @@ export function helperMetric(task: AgentTaskActivity): AgentMetric {
 					tokens: {
 						input: spend.inputTokens,
 						output: spend.outputTokens,
+						...(spend.cacheReadTokens ? { cached: spend.cacheReadTokens } : {}),
 						costUsd: spend.costUsd,
 						estimated: spend.planBilled,
 					},
@@ -348,6 +351,7 @@ export function leadMetric(input: {
 					tokens: {
 						input: usage.inputTokens ?? 0,
 						output: usage.outputTokens ?? 0,
+						...(usage.cacheReadTokens ? { cached: usage.cacheReadTokens } : {}),
 						costUsd: usageCostUsd(
 							usage,
 							sessionBilling({
@@ -530,15 +534,22 @@ export function metricText(metric: AgentMetric, now: number) {
 	return tokens === null ? time : `${time} · ${formatTokens(tokens)} tokens`;
 }
 
-/** The metric's hover: the input/output split and estimated cost. */
+/** The metric's hover: the input / cached / output split and cost. */
 export function metricDetail(metric: AgentMetric) {
 	if (!metric.tokens) return null;
-	const { input, output, costUsd, estimated } = metric.tokens;
+	const { input, output, cached, costUsd, estimated } = metric.tokens;
 	const cost =
 		costUsd === null
 			? "cost unknown"
 			: `${estimated ? "about " : ""}$${costUsd < 0.01 && costUsd > 0 ? costUsd.toFixed(3) : costUsd.toFixed(2)}${estimated ? " at list price" : ""}`;
-	return `${formatTokens(input)} in · ${formatTokens(output)} out · ${cost}`;
+	return [
+		`${formatTokens(input)} in`,
+		cached ? `${formatTokens(cached)} cached` : null,
+		`${formatTokens(output)} out`,
+		cost,
+	]
+		.filter(Boolean)
+		.join(" · ");
 }
 
 /** More rows than this and finished helpers fold into "+N done". */

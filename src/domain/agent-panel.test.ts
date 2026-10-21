@@ -165,6 +165,9 @@ describe("time and tokens", () => {
 		expect(metricText({ startedAt: 0 }, 5_000)).toBe("5s");
 		expect(metricDetail(metric)).toBe("18k in · 3k out · $0.04");
 		expect(
+			metricDetail({ ...metric, tokens: { ...metric.tokens, cached: 12_000 } }),
+		).toBe("18k in · 12k cached · 3k out · $0.04");
+		expect(
 			metricDetail({ ...metric, tokens: { ...metric.tokens, costUsd: null } }),
 		).toBe("18k in · 3k out · cost unknown");
 	});
@@ -196,7 +199,12 @@ describe("time and tokens", () => {
 		expect(helperMetric(helper)).toEqual({
 			startedAt: Date.parse("2026-10-21T10:20:00Z"),
 			endedAt: Date.parse("2026-10-21T10:30:00Z"),
-			tokens: { input: 18_000, output: 3_000, costUsd: 0.04, estimated: true },
+			tokens: {
+				input: 18_000,
+				output: 3_000,
+				costUsd: 0.04,
+				estimated: true,
+			},
 		});
 	});
 	it("gives Main the latest request's time and tokens", () => {
