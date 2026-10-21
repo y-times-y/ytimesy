@@ -47,6 +47,7 @@ function analyticsClient(): Promise<PostHog | null> {
 					// Replay DOM is already masked by the recorder before this boundary.
 					if (
 						event.event === "$snapshot" &&
+						typeof window.location?.href === "string" &&
 						replaySafeUrl(window.location.href) === null
 					)
 						return null;

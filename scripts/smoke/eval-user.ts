@@ -233,7 +233,12 @@ async function copyOpenRouterConnections(ownerId: string, userId: string) {
 	).rows;
 	const ids: string[] = [];
 	for (const row of rows) {
-		const credential = JSON.parse(await unseal(row.sealed_credential)) as {
+		const credential = JSON.parse(
+			await unseal(row.sealed_credential, {
+				purpose: "model-credential",
+				userId: ownerId,
+			}),
+		) as {
 			id: string;
 			userId: string;
 			apiKey: string;
@@ -250,7 +255,10 @@ async function copyOpenRouterConnections(ownerId: string, userId: string) {
 				userId,
 				row.label,
 				row.base_url,
-				await seal(JSON.stringify({ ...credential, id, userId })),
+				await seal(JSON.stringify({ ...credential, id, userId }), {
+					purpose: "model-credential",
+					userId,
+				}),
 				JSON.stringify(row.models),
 				randomUUID(),
 				row.last_probe_at,
@@ -274,7 +282,10 @@ async function insertGoogleConnection(
 			id,
 			userId,
 			MODEL_PROVIDERS.google.baseUrl,
-			await seal(JSON.stringify({ id, userId, apiKey: google.apiKey })),
+			await seal(JSON.stringify({ id, userId, apiKey: google.apiKey }), {
+				purpose: "model-credential",
+				userId,
+			}),
 			JSON.stringify(google.models),
 			randomUUID(),
 		],
@@ -600,7 +611,11 @@ export async function createEvalUser(options: {
 		await db.query(
 			`insert into agent_account(user_id,provider,status,plan_type,updated_at,encrypted_codex_auth)
 			 select $1,'codex','connected',plan_type,now(),$3 from agent_account where user_id=$2 and provider='codex'`,
-			[userId, ownerId, await seal(placeholderCodexAuth())],
+			[
+				userId,
+				ownerId,
+				await seal(placeholderCodexAuth(), { purpose: "codex-auth", userId }),
+			],
 		);
 		// The subscription model list is a cache of the same account's catalog.
 		await db.query(
