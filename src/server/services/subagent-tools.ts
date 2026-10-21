@@ -59,6 +59,8 @@ import {
 	saveAgentSessionProviderRef,
 	saveAgentTaskState,
 } from "../adapters/agent-sessions";
+import { infrastructureAdmissionEnabled } from "../adapters/freestyle/usage-admission";
+import { assertUsageWindowsOpen } from "../adapters/infrastructure-usage";
 import {
 	subagentTree as loadSubagentTree,
 	mergeSubagentFork,
@@ -120,6 +122,8 @@ export type SubagentToolDeps = {
 	readonly markRoundStart: typeof markSidekickRoundStart;
 	readonly saveSidekick: typeof saveSidekickState;
 	readonly retireSidekick: typeof retireSidekick;
+	/** Refuses a new child (and its fork) while a usage window is exhausted. */
+	readonly usageWindowsOpen: (userId: string) => Promise<void>;
 };
 
 // Resolved at call time, so a test that mocks one of these modules does not
@@ -154,6 +158,9 @@ const defaultDeps: SubagentToolDeps = {
 	markRoundStart: (...args) => markSidekickRoundStart(...args),
 	saveSidekick: (...args) => saveSidekickState(...args),
 	retireSidekick: (...args) => retireSidekick(...args),
+	usageWindowsOpen: async (userId) => {
+		if (infrastructureAdmissionEnabled()) await assertUsageWindowsOpen(userId);
+	},
 };
 
 export type SubagentToolContext = {
@@ -778,6 +785,8 @@ async function spawnSubagent(
 	const { role } = input;
 	if (!parent.listedModelId)
 		throw new Error("Your session has no model for a subagent to inherit.");
+	// A child is new work: no session, fork or turn starts past the limit.
+	await deps.usageWindowsOpen(parent.userId);
 	const { model, notice } = await childModel(
 		context,
 		deps,

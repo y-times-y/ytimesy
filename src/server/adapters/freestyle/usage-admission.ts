@@ -269,23 +269,32 @@ async function admittedCap(
 		);
 	}
 	const hourlyMicroUsd = computeHourlyMicroUsd(resources);
-	// The user's usage windows gate starting work, not its size: a running
-	// machine keeps buying runtime so its turn finishes (fleet caps still apply).
-	const seconds = Math.max(1, Math.min(3600, requestedSeconds));
+	const holdFor = (runSeconds: number) =>
+		Math.ceil(
+			((runSeconds + PROVIDER_STOP_BUFFER_SECONDS) * hourlyMicroUsd) / 3600,
+		);
+	// The user's usage windows gate starting work; a running machine keeps
+	// buying runtime so its turn finishes, but only up to the windows' hard
+	// ceiling, which may shrink this hold (fleet caps still apply).
+	const requested = Math.max(1, Math.min(3600, requestedSeconds));
 	const id = randomUUID();
 	const baseline = Math.floor(totalSeconds);
-	await reserveInfrastructureUsage(
+	const held = await reserveInfrastructureUsage(
 		{
 			id,
 			userId,
 			resourceKey: `vm:${slug}`,
-			amountMicroUsd: Math.ceil(
-				((seconds + PROVIDER_STOP_BUFFER_SECONDS) * hourlyMicroUsd) / 3600,
-			),
+			amountMicroUsd: holdFor(requested),
+			hourlyMicroUsd,
+			minimumMicroUsd: holdFor(1),
 			// A known VM that is not paused or stopped is already running.
 			continuing: vmId !== undefined && !settled,
 		},
 		client,
+	);
+	const seconds = Math.min(
+		requested,
+		Math.floor((held * 3600) / hourlyMicroUsd) - PROVIDER_STOP_BUFFER_SECONDS,
 	);
 	// Persist BEFORE provider mutation. A failed create/update retains its hold and retries the same absolute cap.
 	// A known VM binds a row that is unbound or already its own.
@@ -367,22 +376,31 @@ export async function admitVmResume(
 			runningUsage = Number(row.baseline_seconds) + elapsed;
 			const needed = runningUsage + requiredSeconds + 15;
 			if (needed > cap) {
-				const target = Math.max(cap + 300, needed);
-				await reserveInfrastructureUsage(
+				const hourly = Number(row.hourly_micro_usd);
+				const baseline = Number(row.baseline_seconds);
+				const holdFor = (until: number) =>
+					Math.ceil(
+						((until - baseline + PROVIDER_STOP_BUFFER_SECONDS) * hourly) / 3600,
+					);
+				// A running machine extends only up to the windows' hard ceiling:
+				// the top-up may shrink, but never below what this operation needs.
+				const held = await reserveInfrastructureUsage(
 					{
 						id: row.reservation_id,
 						userId: row.user_id,
 						resourceKey: `vm:${data.slug}`,
-						amountMicroUsd: Math.ceil(
-							((target -
-								Number(row.baseline_seconds) +
-								PROVIDER_STOP_BUFFER_SECONDS) *
-								Number(row.hourly_micro_usd)) /
-								3600,
-						),
+						amountMicroUsd: holdFor(Math.max(cap + 300, needed)),
+						hourlyMicroUsd: hourly,
+						minimumMicroUsd: holdFor(needed),
 					},
 					client,
 					"increase",
+				);
+				const target = Math.min(
+					Math.max(cap + 300, needed),
+					baseline +
+						Math.floor((held * 3600) / hourly) -
+						PROVIDER_STOP_BUFFER_SECONDS,
 				);
 				await client.query(
 					"update infrastructure_vm_admission set max_run_total_seconds=$2 where slug=$1",

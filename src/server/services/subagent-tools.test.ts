@@ -151,6 +151,7 @@ function harness(
 			},
 		),
 		retireSidekick: vi.fn(async () => "retired" as const),
+		usageWindowsOpen: vi.fn(async () => {}),
 		...options.deps,
 	} satisfies SubagentToolDeps;
 	const onSidekickRound = vi.fn();
@@ -361,6 +362,25 @@ describe("agent tool", () => {
 			call("agent", { role: "writer", title: "x", brief: "y" }),
 		).rejects.toThrow("snapshot refused");
 		expect(deps.markFailed).toHaveBeenCalledWith("child-1");
+		expect(deps.start).not.toHaveBeenCalled();
+	});
+
+	it("checks the usage windows before opening a child or forking its VM", async () => {
+		const { deps, call } = harness({
+			deps: {
+				usageWindowsOpen: vi.fn(async () => {
+					throw new Error(
+						"You have reached your 5-hour cloud usage limit, so new work cannot start.",
+					);
+				}),
+			},
+		});
+		await expect(
+			call("agent", { role: "writer", title: "x", brief: "y" }),
+		).rejects.toThrow("5-hour cloud usage limit");
+		expect(deps.usageWindowsOpen).toHaveBeenCalledWith("user");
+		expect(deps.openTask).not.toHaveBeenCalled();
+		expect(deps.fork).not.toHaveBeenCalled();
 		expect(deps.start).not.toHaveBeenCalled();
 	});
 
