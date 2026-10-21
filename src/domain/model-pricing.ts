@@ -177,6 +177,31 @@ function priceAt(id: string, at: number): ModelPrice | null {
 	return changes[0]?.price ?? base;
 }
 
+/**
+ * Amazon Bedrock bills OpenAI models at OpenAI's list price through a global
+ * inference profile (`global.openai.gpt-…`) and 10% above it through a
+ * geographic one (`us.openai.gpt-…`); cache writes are billed at the listed
+ * cache-write price.
+ */
+const BEDROCK_REGIONAL_OPENAI = /^(?:us|us-gov|eu|apac|jp|au|ca)\.openai\.gpt-/;
+export const BEDROCK_REGIONAL_PREMIUM = 1.1;
+
+function scaledTokenPrices<T extends TokenPrices>(price: T, factor: number): T {
+	const scale = (value: number | undefined) =>
+		value === undefined ? undefined : value * factor;
+	return {
+		...price,
+		input: price.input * factor,
+		output: price.output * factor,
+		...(price.cacheRead === undefined
+			? {}
+			: { cacheRead: scale(price.cacheRead) }),
+		...(price.cacheWrite === undefined
+			? {}
+			: { cacheWrite: scale(price.cacheWrite) }),
+	};
+}
+
 /** The list price of a route, `codex:` slug, direct id or OpenRouter id; null when unknown. */
 export function modelPrice(
 	modelId: string,
@@ -192,7 +217,19 @@ export function modelPrice(
 	])
 		if (candidate) {
 			const price = priceAt(candidate, at);
-			if (price) return price;
+			if (!price) continue;
+			const bare = parseModelRouteId(modelId)?.modelId ?? modelId;
+			if (!BEDROCK_REGIONAL_OPENAI.test(bare)) return price;
+			const regional = scaledTokenPrices(price, BEDROCK_REGIONAL_PREMIUM);
+			return price.longContext
+				? {
+						...regional,
+						longContext: scaledTokenPrices(
+							price.longContext,
+							BEDROCK_REGIONAL_PREMIUM,
+						),
+					}
+				: regional;
 		}
 	return null;
 }
@@ -207,7 +244,9 @@ export function pricedModelId(routeOrModelId: string) {
 	const route = parseModelRouteId(routeOrModelId);
 	const id = (route?.modelId ?? routeOrModelId.replace(/^codex:/, ""))
 		.replace(/:free$/, "")
-		.replace(/^(?:[a-z]{2,4}\.)?anthropic\.(?=claude-)/, "");
+		.replace(/^(?:[a-z]{2,4}\.)?anthropic\.(?=claude-)/, "")
+		// Bedrock's OpenAI ids and inference profiles (`global.openai.gpt-6.1-sol`).
+		.replace(/^(?:[a-z]{2,6}(?:-[a-z]+)?\.)?openai\.(?=gpt-)/, "");
 	const claude = /^(claude-[a-z]+)-(\d+)-(\d{1,2})(?:-v\d+(?::\d+)?)?$/.exec(
 		id,
 	);

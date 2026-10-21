@@ -7,11 +7,19 @@ import {
 	type ModelProvider,
 	parseModelRouteId,
 } from "../../src/domain/model-connection";
-import type { ModelRole } from "../../src/domain/role-models";
 import {
 	type ModelBilling,
 	modelBilling,
 } from "../../src/domain/model-pricing";
+import type { ModelRole } from "../../src/domain/role-models";
+import {
+	BEDROCK_DEFAULT_MODEL,
+	BEDROCK_DEFAULT_REGION,
+	BEDROCK_INFERENCE_PROFILES,
+	type BedrockInferenceProfile,
+	bedrockBaseUrl,
+	bedrockModelId,
+} from "./bedrock";
 
 /**
  * How a Harbor bridge v2 trial is configured: environment variables the
@@ -25,6 +33,7 @@ export const HARBOR_ROUTES = [
 	"anthropic",
 	"gemini",
 	"codex-subscription",
+	"bedrock",
 ] as const;
 export type HarborRoute = (typeof HARBOR_ROUTES)[number];
 
@@ -41,7 +50,7 @@ type ApiEndpoint = {
 };
 
 export const API_ENDPOINTS: Record<
-	Exclude<HarborRoute, "codex-subscription">,
+	Exclude<HarborRoute, "codex-subscription" | "bedrock">,
 	ApiEndpoint
 > = {
 	"openai-api": {
@@ -66,6 +75,15 @@ export const API_ENDPOINTS: Record<
 		keyEnv: "GEMINI_API_KEY",
 	},
 };
+
+/** The product transport a route's requests use (bedrock: OpenAI Responses). */
+export function routeProvider(
+	route: HarborRoute,
+): ModelProvider | "codex-subscription" {
+	if (route === "codex-subscription") return route;
+	if (route === "bedrock") return "openai";
+	return API_ENDPOINTS[route].provider;
+}
 
 /**
  * Variant keys the bridge implements. The rest (memory, subagents, PR
@@ -138,6 +156,12 @@ export type HarborBridgeConfig = {
 	/** Where the key is read from (API routes). */
 	keyFile: string | null;
 	keyEnv: string | null;
+	/** The bedrock route's Region, endpoint and inference profile; null elsewhere. */
+	bedrock: {
+		region: string;
+		baseUrl: string;
+		profile: BedrockInferenceProfile;
+	} | null;
 };
 
 type Env = Record<string, string | undefined>;
@@ -161,9 +185,19 @@ export function harborBridgeConfig(env: Env): HarborBridgeConfig {
 		throw new Error(
 			`Set YTIMESY_HARBOR_APPROVED=${route} to approve this route's spending.`,
 		);
-	const endpoint = route === "codex-subscription" ? null : API_ENDPOINTS[route];
-	const modelId =
-		env.YTIMESY_HARBOR_MODEL || endpoint?.defaultModel || "gpt-6.1-sol";
+	const endpoint =
+		route === "codex-subscription" || route === "bedrock"
+			? null
+			: API_ENDPOINTS[route];
+	const bedrock = route === "bedrock" ? bedrockSettings(env) : null;
+	const requestedModel =
+		env.YTIMESY_HARBOR_MODEL ||
+		endpoint?.defaultModel ||
+		(bedrock ? BEDROCK_DEFAULT_MODEL : "gpt-6.1-sol");
+	// Bedrock serves these models through an inference profile, priced by it.
+	const modelId = bedrock
+		? bedrockModelId(requestedModel, bedrock.profile)
+		: requestedModel;
 	const effort = (env.YTIMESY_HARBOR_EFFORT || "max") as HarborEffort;
 	if (!EFFORTS.includes(effort))
 		throw new Error(
@@ -209,7 +243,13 @@ export function harborBridgeConfig(env: Env): HarborBridgeConfig {
 		);
 	const roles: Partial<Record<BridgeRole, HarborModel>> = {};
 	for (const role of BRIDGE_ROLES) {
-		const model = roleModelOnRoute(route, variant, role, effort);
+		const model = roleModelOnRoute(
+			route,
+			variant,
+			role,
+			effort,
+			bedrock?.profile,
+		);
 		if (!model) continue;
 		if (paid && !model.billing.price)
 			throw new Error(
@@ -248,7 +288,13 @@ export function harborBridgeConfig(env: Env): HarborBridgeConfig {
 	const requestLimit = Number(env.YTIMESY_HARBOR_REQUEST_LIMIT || 400);
 	if (!(Number.isInteger(requestLimit) && requestLimit > 0))
 		throw new Error("YTIMESY_HARBOR_REQUEST_LIMIT must be a positive integer.");
-	const webSearch = (env.YTIMESY_HARBOR_WEB_SEARCH || "on") !== "off";
+	// bedrock-runtime has no server-side tools: no hosted web search there.
+	const webSearch =
+		(env.YTIMESY_HARBOR_WEB_SEARCH || (bedrock ? "off" : "on")) !== "off";
+	if (bedrock && webSearch)
+		throw new Error(
+			"The bedrock route has no hosted web search (bedrock-runtime offers no server-side tools); unset YTIMESY_HARBOR_WEB_SEARCH or set it to off.",
+		);
 	return {
 		route,
 		modelId,
@@ -266,7 +312,19 @@ export function harborBridgeConfig(env: Env): HarborBridgeConfig {
 			? env.YTIMESY_HARBOR_KEY_FILE || endpoint.defaultKeyFile
 			: null,
 		keyEnv: endpoint?.keyEnv ?? null,
+		bedrock,
 	};
+}
+
+function bedrockSettings(env: Env) {
+	const region = env.YTIMESY_HARBOR_BEDROCK_REGION || BEDROCK_DEFAULT_REGION;
+	const profile = (env.YTIMESY_HARBOR_BEDROCK_PROFILE ||
+		"global") as BedrockInferenceProfile;
+	if (!BEDROCK_INFERENCE_PROFILES.includes(profile))
+		throw new Error(
+			`YTIMESY_HARBOR_BEDROCK_PROFILE must be one of ${BEDROCK_INFERENCE_PROFILES.join(", ")}.`,
+		);
+	return { region, baseUrl: bedrockBaseUrl(region), profile };
 }
 
 /**
@@ -283,8 +341,15 @@ export function checkerModel(
 	variant: HarnessVariant,
 	/** The builder's effort, used when the entry names none. */
 	builderEffort: HarborEffort,
+	bedrockProfile?: BedrockInferenceProfile,
 ): HarborModel | null {
-	return roleModelOnRoute(route, variant, "checker", builderEffort);
+	return roleModelOnRoute(
+		route,
+		variant,
+		"checker",
+		builderEffort,
+		bedrockProfile,
+	);
 }
 
 /** roleModels.<role> on the trial's route, by checkerModel's rules. */
@@ -293,6 +358,8 @@ export function roleModelOnRoute(
 	variant: HarnessVariant,
 	role: BridgeRole,
 	builderEffort: HarborEffort,
+	/** The bedrock route's inference profile (default global). */
+	bedrockProfile: BedrockInferenceProfile = "global",
 ): HarborModel | null {
 	const entry = variant.roleModels[role];
 	if (!entry) return null;
@@ -301,10 +368,14 @@ export function roleModelOnRoute(
 			`roleModels.${role} "${entry.model}" names a stored connection; use codex:<slug>, api:<model> or <model> on the trial's route.`,
 		);
 	const [prefix, ...rest] = entry.model.split(":");
-	const scoped = prefix === "codex" || prefix === "api";
-	const modelId = scoped ? rest.join(":") : entry.model;
+	const scoped = prefix === "codex" || prefix === "api" || prefix === "bedrock";
+	const named = scoped ? rest.join(":") : entry.model;
 	const subscription = route === "codex-subscription";
-	if (!modelId || (prefix === "codex" && !subscription))
+	if (prefix === "bedrock" && route !== "bedrock")
+		throw new Error(
+			`roleModels.${role} "${entry.model}" needs YTIMESY_HARBOR_ROUTE=bedrock.`,
+		);
+	if (!named || (prefix === "codex" && !subscription))
 		throw new Error(
 			`roleModels.${role} "${entry.model}" needs YTIMESY_HARBOR_ROUTE=codex-subscription.`,
 		);
@@ -312,6 +383,8 @@ export function roleModelOnRoute(
 		throw new Error(
 			`roleModels.${role} "${entry.model}" needs an API route; this trial runs on the Codex subscription.`,
 		);
+	const modelId =
+		route === "bedrock" ? bedrockModelId(named, bedrockProfile) : named;
 	const effort = (entry.effort ?? builderEffort) as HarborEffort;
 	if (!EFFORTS.includes(effort))
 		throw new Error(

@@ -10,6 +10,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { localContextArchives } from "../../benchmarks/evaluation/local-context-archives";
+import { bedrockCredentials } from "./bedrock";
 import { harborBridgeConfig } from "./config";
 import { harborChannel, harborMachines } from "./harbor-machines";
 import { preflightRefusal } from "./preflight";
@@ -61,7 +62,8 @@ try {
 		finish({ refused: preflight, failure: null, costUsd: 0, requests: 0 });
 	}
 	// A missing or malformed key fails here, before any spend is reserved.
-	if (config.route !== "codex-subscription")
+	if (config.route === "bedrock") await bedrockCredentials(process.env);
+	else if (config.route !== "codex-subscription")
 		await routeApiKey(config, process.env);
 	installTransportGuard({ logPath: process.env.YTIMESY_TRANSPORT_LOG });
 	const trialId = args.trialId || randomUUID();
