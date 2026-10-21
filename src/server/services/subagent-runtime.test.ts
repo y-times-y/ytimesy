@@ -494,14 +494,14 @@ describe("sidekick (lead mode fusion)", () => {
 		);
 		expect(adapters.transfer).not.toHaveBeenCalled();
 		expect(report).toContain(
-			"Sidekick 1 worked in your checkout: this round changed 2 files, uncommitted in your working tree.",
+			"Writer 1 worked in your checkout: this round changed 2 files, uncommitted in your working tree.",
 		);
 		expect(report).toContain(
 			`\`git diff ${"a".repeat(12)} ${"b".repeat(12)}\` is this round alone`,
 		);
 		expect(report).toContain("2 files changed, 11 insertions(+)");
 		expect(report).not.toContain(".patch");
-		expect(report).toContain("Sidekick 1: round 2/6 done.");
+		expect(report).toContain("Writer 1: round 2/6 done.");
 		const saved = (
 			saveState.mock.calls[0] as unknown as [string, SidekickState]
 		)[1];
@@ -642,7 +642,7 @@ describe("sidekick (lead mode fusion)", () => {
 				})),
 			},
 		});
-		expect(report).toContain("Sidekick 1 is retired (all rounds used).");
+		expect(report).toContain("Writer 1 is retired (all rounds used).");
 		expect(destroy).not.toHaveBeenCalled();
 	});
 
@@ -691,7 +691,7 @@ describe("sidekick (lead mode fusion)", () => {
 			{
 				kind: "userMessage",
 				id: SessionItemId("r2"),
-				text: "Peer message from lead (root):\n\nRound 2/6 from your lead. Fix it.",
+				text: "Peer message from lead (root):\n\nRound 2/6 from Main. Fix it.",
 			},
 			{
 				kind: "dynamicToolCall",
@@ -757,7 +757,7 @@ describe("sidekick (lead mode fusion)", () => {
 			point: "round",
 			round: 2,
 			model: "gpt-6-luna",
-			brief: expect.stringContaining("Round 2/6 from your lead"),
+			brief: expect.stringContaining("Round 2/6 from Main"),
 			report: "Still failing.",
 			diff: { files: ["src/cli.ts"], added: 1, removed: 0 },
 			canSwitch: true,
@@ -770,7 +770,7 @@ describe("sidekick (lead mode fusion)", () => {
 			{ kind: "same-check-failed", detail: "make test" },
 		]);
 		expect(report).toContain(
-			"Runtime notice: sidekick 1 looks stuck (it repeats make test).",
+			"Runtime notice: writer 1 looks stuck (it repeats make test).",
 		);
 		expect(report).toContain(
 			"The runtime switches it to codex:gpt-6.1-sol at its next context compaction",
@@ -815,7 +815,7 @@ describe("sidekick (lead mode fusion)", () => {
 		const saveState = vi.fn(async () => {});
 		const addUsage = vi.fn(async () => true);
 		const chargeUsage = vi.fn(async () => {});
-		const stored = retireSidekickState(state, "stopped by the lead", at(-1));
+		const stored = retireSidekickState(state, "stopped by Main", at(-1));
 		const report = await subagentReport({
 			machines: { destroy: vi.fn(async () => {}) } as never,
 			session: sidekick,
@@ -839,10 +839,10 @@ describe("sidekick (lead mode fusion)", () => {
 		const saved = (
 			saveState.mock.calls[0] as unknown as [string, SidekickState]
 		)[1];
-		expect(saved.retired?.reason).toBe("stopped by the lead");
+		expect(saved.retired?.reason).toBe("stopped by Main");
 		expect(saved.pendingSwitch).toBeUndefined();
 		expect(saved.decisions).toHaveLength(1);
-		expect(report).toContain("Sidekick 1 is retired (stopped by the lead)");
+		expect(report).toContain("Writer 1 is retired (stopped by Main)");
 		expect(report).toContain("needs you (stuck)");
 		expect(addUsage).toHaveBeenCalledWith("s", usage);
 		expect(chargeUsage).toHaveBeenCalledWith(usage, "classifier:h");

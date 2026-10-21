@@ -496,8 +496,12 @@ function reviewInPlace(report: string): Reply {
 return JSON.stringify(review);`);
 }
 
-/** A lead that would have to poll is a deviation: the harness holds it while the sidekick works. */
-const leadDidNotWait = () => bash("echo LEAD_DID_NOT_WAIT");
+/** Main's hand-off text while its writer works: a status that ends its turn (the report wakes it). */
+export const MAIN_HANDOFF = "MAIN_HANDOFF";
+/** Main is free during a build round: it tells the user where things stand and ends its turn. */
+const handOff = (): Reply => ({
+	text: `${MAIN_HANDOFF}: my writer is working on the brief in my checkout; I review its report when it arrives.`,
+});
 
 /** A round that adds `// <marker>` above the first line of `path`. */
 const markFile = (path: string, marker: string, before = "") =>
@@ -618,7 +622,7 @@ function fusionLeadScript(tag: string): AgentScript {
 				return {
 					text: "NO_EXPLORATION_REPORT: the lead's first request had no snippets.",
 				};
-			if (reportsIn.length < sends + 1) return leadDidNotWait();
+			if (reportsIn.length < sends + 1) return handOff();
 			if (!sends)
 				return send({
 					id: "1",
@@ -663,7 +667,7 @@ function exploreLeadScript(tag: string): AgentScript {
 				return {
 					text: "NO_EXPLORATION_REPORT: the lead's first request had no snippets.",
 				};
-			if (reportsIn.length < sends + 1) return leadDidNotWait();
+			if (reportsIn.length < sends + 1) return handOff();
 			if (!sends) {
 				// The plan quotes the sidekick's snippet: the lead never read the file.
 				const snippet =
@@ -703,7 +707,7 @@ function multiturnLeadScript(tag: string): AgentScript {
 			);
 			// Rounds so far: one exploration per request, one build per send.
 			const expected = (second ? 2 : 1) + builds;
-			if (reportsIn.length < expected) return leadDidNotWait();
+			if (reportsIn.length < expected) return handOff();
 			if (reviewCount(context) < builds)
 				return reviewInPlace(reportsIn.at(-1) as string);
 			if (!second)
@@ -734,7 +738,7 @@ function stuckLeadScript(tag: string): AgentScript {
 			const reportsIn = writerReports(context);
 			const sends = count(context, "agent_send");
 			const reviews = reviewCount(context);
-			if (reportsIn.length < sends + 1) return leadDidNotWait();
+			if (reportsIn.length < sends + 1) return handOff();
 			if (reviews < sends) return reviewInPlace(reportsIn.at(-1) as string);
 			if (sends === 0)
 				return send({
@@ -787,7 +791,7 @@ function handbackLeadScript(tag: string): AgentScript {
 				return {
 					text: "NO_EXPLORATION_REPORT: the lead's first request had no snippets.",
 				};
-			if (reportsIn.length < sends + 1) return leadDidNotWait();
+			if (reportsIn.length < sends + 1) return handOff();
 			if (!sends)
 				return send({
 					id: "1",
@@ -796,7 +800,7 @@ function handbackLeadScript(tag: string): AgentScript {
 			if (reviewCount(context) < sends)
 				return reviewInPlace(reportsIn.at(-1) as string);
 			const handedBack = context.userTexts.some((text) =>
-				text.includes("Runtime notice: sidekick 1 needs you"),
+				text.includes("Runtime notice: writer 1 needs you"),
 			);
 			if (!handedBack) return { text: "NO_HANDBACK_NOTICE" };
 			if (!leadEdited(context))
@@ -826,7 +830,7 @@ function classifierFailLeadScript(tag: string): AgentScript {
 				return {
 					text: "NO_EXPLORATION_REPORT: the lead's first request had no snippets.",
 				};
-			if (reportsIn.length < sends + 1) return leadDidNotWait();
+			if (reportsIn.length < sends + 1) return handOff();
 			if (reviewCount(context) < sends)
 				return reviewInPlace(reportsIn.at(-1) as string);
 			if (sends === 0)
@@ -1023,7 +1027,7 @@ export function scenarios(): Scenario[] {
 		{
 			id: "fusion",
 			title:
-				"c. lead=fusion: harness exploration, two build rounds in the lead's checkout, the lead waits and reviews in place",
+				"c. lead=fusion: harness exploration, two build rounds in the lead's checkout, Main hands off and reviews in place",
 			variant:
 				"codeMode=primary,subagents=on,lead=fusion,roleModels.writer=codex:gpt-6-luna",
 			scripts: [

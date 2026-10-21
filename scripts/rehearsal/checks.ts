@@ -26,6 +26,7 @@ import {
 	EXPLORE_FILE,
 	LEAD_REQUIREMENTS,
 	LEAD_REQUIREMENTS_INSTRUCTION,
+	MAIN_HANDOFF,
 	MEMORY_RULE,
 	MULTITURN_FOLLOW_UP,
 	PAIR_WORKER_MARKER,
@@ -939,23 +940,21 @@ export async function checkScenario(
 			has(where, "/app", "in-container") && !/\b999\b/.test(where ?? ""),
 			clip(where, 300),
 		);
-		// 4. One writer at a time: the lead makes no model call while a round runs.
-		const during = lead.filter((request) =>
-			rounds.some(
-				(round) =>
-					time(round.startedAt) < request.at &&
-					request.at < (round.endedAt ? time(round.endedAt) : Infinity),
-			),
+		// 4. Main is released during a build round: it hands off (a status
+		// message ends its turn) and the round's report wakes it in a new turn.
+		const buildRounds = rounds.filter((round) => round.kind !== "explore");
+		const handoffs = data.rootItems.filter(
+			(item) => item.kind === "agentMessage" && has(item.text, MAIN_HANDOFF),
 		);
 		check(
-			"the lead made no model call (and no edit) while a sidekick round ran",
-			!during.length &&
-				!calls(data.rootItems, "bash").some((item) =>
-					has(item.input, "LEAD_DID_NOT_WAIT"),
-				),
-			JSON.stringify(
-				during.map((request) => ({ at: request.at, step: request.step })),
-			),
+			"Main handed off during each build round and its report woke Main in a new turn",
+			handoffs.length >= buildRounds.length &&
+				data.rootTurns.length >= buildRounds.length + 1,
+			JSON.stringify({
+				buildRounds: buildRounds.length,
+				handoffs: handoffs.length,
+				rootTurns: data.rootTurns.length,
+			}),
 		);
 		check(
 			"the lead reviewed each build round in place (git diff of the round, git status)",
@@ -1003,7 +1002,7 @@ export async function checkScenario(
 				"round 2's message told the sidekick it works in the lead's checkout",
 				sidekickCalls.some((request) =>
 					request.lastUser.includes(
-						"Round 2/6 from your lead. You work in the lead's checkout as it is now",
+						"Round 2/6 from Main. You work in Main's checkout as it is now",
 					),
 				),
 			);
@@ -1014,7 +1013,7 @@ export async function checkScenario(
 				"a lead edit sent with the handoff was refused (one writer at a time)",
 				has(
 					parseOutput(probe).result,
-					"Your sidekick is working in your checkout",
+					"Your writer is working in your checkout",
 				) &&
 					!has(await head("src/version_set.cc"), "lead write during a round"),
 				clip(probe?.output, 400),
@@ -1139,7 +1138,7 @@ export async function checkScenario(
 					sidekickCalls.some((request) =>
 						has(
 							request.lastUser,
-							"Round 3 from your lead (1/6 for the user's new request)",
+							"Round 3 from Main (1/6 for the user's new request)",
 							HARNESS_EXPLORE_HEADING,
 							"[rehearsal:fusion-multiturn-2]",
 						),
@@ -1179,7 +1178,7 @@ export async function checkScenario(
 			);
 			check(
 				"stopping the sidekick retired it",
-				state?.retired?.reason === "stopped by the lead",
+				state?.retired?.reason === "stopped by Main",
 				JSON.stringify({ retired: state?.retired }),
 			);
 		}
@@ -1318,7 +1317,7 @@ export async function checkScenario(
 		if (id === "fusion-handback") {
 			const lead = requests("handback-lead");
 			const notice = lead.find((request) =>
-				has(request.lastUser, "Runtime notice: sidekick 1 needs you"),
+				has(request.lastUser, "Runtime notice: writer 1 needs you"),
 			);
 			check(
 				"the classifier's hand_back notice reached the lead with its reason",
@@ -1386,7 +1385,7 @@ export async function checkScenario(
 				lead.some((request) =>
 					has(
 						request.lastUser,
-						"Runtime notice: sidekick 1 needs you (it failed the same check as last round (`make bogus-check`))",
+						"Runtime notice: writer 1 needs you (it failed the same check as last round (`make bogus-check`))",
 					),
 				),
 				clip(

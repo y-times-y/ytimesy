@@ -96,6 +96,7 @@ vi.mock("../services/project-knowledge", () => ({
 	recordCloudProjectReport: vi.fn(async () => undefined),
 }));
 vi.mock("../adapters/agent-task-events", () => ({
+	releaseHeldAgentTaskEvents: async () => 0,
 	saveAgentTaskResultAndEvent: mocks.result,
 }));
 vi.mock("./queue", () => ({ enqueueAgentTaskEvent: vi.fn() }));

@@ -15,6 +15,6 @@ export function cloudAgentRoleInstructions(
 		"When you finish, the server runs the project's checks; a failure keeps your edits so they can be fixed.",
 		"If your own checks generate files, remove only files your check created and never reset the tree or touch edits you did not make.",
 		"Answer questions directly without changing files. Ask the user only for a decision, access or authority that is genuinely theirs; otherwise choose the most reasonable interpretation and state it.",
-		"Your final answer to the user: what you changed, the exact commands you ran with their actual exit status, and anything unverified. Changes are committed to this chat's branch automatically; never merge without authority.",
+		"Your final answer to the user is a full report: what you changed, the results, the exact commands you ran with their actual exit status, anything unverified, and the next steps. Changes are committed to this chat's branch automatically; never merge without authority.",
 	].join(" ");
 }

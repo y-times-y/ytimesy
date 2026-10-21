@@ -354,7 +354,17 @@ describe("lean instructions", () => {
 		expect(lean).toContain("You are the coding agent for this chat");
 		expect(lean).toContain("`ytimesy-browser screenshot`");
 		expect(lean).toContain("look at the PNG it prints with read_file");
-		expect(lean.length).toBeLessThan(current.length + 1900);
+		// Main hands off instead of waiting; a subagent's turn end is its report.
+		expect(lean).toContain("When only waiting is left, do not wait or poll");
+		expect(
+			agentTurnInstructions({
+				...input,
+				session: { agentRole: "writer" },
+				leanShape: "gemini",
+			}),
+		).not.toContain("When only waiting is left");
+		// The lean surface adds its tools and Main's hand-off rule (HANDOFF_INSTRUCTIONS).
+		expect(lean.length).toBeLessThan(current.length + 2300);
 		const knowing = agentTurnInstructions({
 			...input,
 			projectKnowledge: "Billing lives in billing/.",
