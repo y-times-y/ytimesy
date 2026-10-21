@@ -22,6 +22,7 @@ describe("harness variants", () => {
 			instructions: "default",
 			attempts: "1",
 			review: "off",
+			checkerMode: "single",
 			lead: "off",
 			rigor: "off",
 			outputCap: "off",
@@ -46,6 +47,7 @@ describe("harness variants", () => {
 			instructions: "default",
 			attempts: "1",
 			review: "off",
+			checkerMode: "single",
 			lead: "off",
 			rigor: "off",
 			outputCap: "off",
@@ -64,6 +66,7 @@ describe("harness variants", () => {
 			instructions: "default",
 			attempts: "1",
 			review: "off",
+			checkerMode: "single",
 			lead: "off",
 			rigor: "off",
 			outputCap: "off",
@@ -102,6 +105,7 @@ describe("harness variants", () => {
 			instructions: "default",
 			attempts: "1",
 			review: "off",
+			checkerMode: "single",
 			lead: "off",
 			rigor: "off",
 			outputCap: "off",
@@ -167,6 +171,34 @@ describe("harness variants", () => {
 		);
 		expect(() => harnessVariantFromFlags(["outputCap=123"])).toThrow(
 			"accepts off, 10000, 16000",
+		);
+	});
+
+	it("keeps the single checker unless checkerMode=pair is asked", () => {
+		expect(DEFAULT_HARNESS_VARIANT.checkerMode).toBe("single");
+		const variant = harnessVariantFromFlags([
+			"review=on,checkerMode=pair,roleModels.checker=codex:gpt-6.1-sol",
+			"roleModels.checkerWorker=codex:gpt-6-luna",
+		]);
+		expect(variant).toMatchObject({
+			review: "on",
+			checkerMode: "pair",
+			roleModels: {
+				checker: { model: "codex:gpt-6.1-sol" },
+				checkerWorker: { model: "codex:gpt-6-luna" },
+			},
+		});
+		expect(harnessVariantLabel(variant)).toBe(
+			"review=on,checkerMode=pair,roleModels.checker=codex:gpt-6.1-sol,roleModels.checkerWorker=codex:gpt-6-luna",
+		);
+		expect(harnessVariantFromUnknown({ checkerMode: "trio" }).checkerMode).toBe(
+			"single",
+		);
+		expect(harnessVariantFromUnknown({ checkerMode: "pair" }).checkerMode).toBe(
+			"pair",
+		);
+		expect(() => harnessVariantFromFlags(["checkerMode=trio"])).toThrow(
+			"accepts single, pair",
 		);
 	});
 

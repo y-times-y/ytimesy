@@ -119,6 +119,8 @@ export type AttemptLoopDeps = {
 		readonly title: string;
 		readonly brief: string;
 		readonly cap: Partial<SubagentBudget>;
+		/** checkerMode=pair: the checker is a judge with a worker (src/domain/checker-pair.ts). */
+		readonly pair?: boolean;
 	}) => Promise<{
 		readonly sessionId: string;
 		/** The child's model when the runtime knows it (priced at its own route). */
