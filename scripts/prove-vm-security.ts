@@ -33,16 +33,17 @@ import {
 	issueGitProxyGrant,
 	proxyGithubGit,
 } from "../src/domain/github-git-proxy";
+import {
+	GUEST_METADATA_DESTINATIONS,
+	guestMetadataBlockCommand,
+} from "../src/domain/guest-network-guard";
 import { WorkspaceId } from "../src/domain/ids";
 import {
 	memoryCloneScript,
 	SCRUB_MEMORY_CREDENTIAL,
 } from "../src/domain/memory-repo";
 import { AGENT_SECRETS_DIRECTORY } from "../src/domain/project-secret";
-import {
-	READER_LINUX_USER,
-	READER_LOOPBACK_BLOCK_SCRIPT,
-} from "../src/domain/subagent-reader";
+import { READER_LINUX_USER } from "../src/domain/subagent-reader";
 import {
 	insertAgentSession,
 	saveAgentSessionProviderRef,
@@ -51,7 +52,8 @@ import { closeDatabase, database } from "../src/server/adapters/database";
 import { forkRunningVm } from "../src/server/adapters/freestyle/fork-vm";
 import { productCreateVmFields } from "../src/server/adapters/freestyle/product-vm";
 import {
-	DESKTOP_VIEWER_CREDENTIAL_PATH,
+	DESKTOP_PRIVATE_DIRECTORY,
+	DESKTOP_XAUTHORITY,
 	START_WORKSPACE_DESKTOP,
 } from "../src/server/adapters/freestyle/start-desktop";
 import { waitUntilVmRunning } from "../src/server/adapters/freestyle/wait-until-running";
@@ -221,7 +223,11 @@ async function pollProbe(
 /** WebSocket handshake outcome: 101 when it opened, else the HTTP status or an error. */
 function wsProbe(
 	url: string,
-	options: { headers?: Record<string, string>; origin?: string },
+	options: {
+		headers?: Record<string, string>;
+		origin?: string;
+		firstMessage?: boolean;
+	},
 ) {
 	return new Promise<{ status: number | null; detail: string }>((resolve) => {
 		const socket = new WebSocket(url, ["binary"], {
@@ -237,7 +243,21 @@ function wsProbe(
 			} catch {}
 			resolve({ status, detail });
 		};
-		socket.on("open", () => done(101, "opened"));
+		socket.on("open", () => {
+			if (!options.firstMessage) return done(101, "opened");
+			const timer = setTimeout(() => done(101, "opened, no data"), 8000);
+			socket.once("message", (data: Buffer) => {
+				clearTimeout(timer);
+				done(
+					101,
+					`opened, first bytes ${JSON.stringify(data.subarray(0, 11).toString("latin1"))}`,
+				);
+			});
+			socket.once("close", () => {
+				clearTimeout(timer);
+				done(101, "opened, then closed without data");
+			});
+		});
 		socket.on("unexpected-response", (_request, response) =>
 			done(response.statusCode ?? null, "refused"),
 		);
@@ -314,6 +334,26 @@ for path in sys.argv[1:]:
 print(json.dumps(out))
 `;
 
+/** RFB handshake on a Unix socket: the security types the server offers. */
+const RFB_PY = `
+import socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.settimeout(5)
+version = b""
+try:
+    s.connect(sys.argv[1])
+    version = s.recv(12)
+    if not version.startswith(b"RFB "):
+        raise ConnectionError("no RFB banner")
+    s.sendall(version)
+    count = s.recv(1)[0]
+    types = list(s.recv(count)) if count else []
+    print("types=" + ",".join(str(t) for t in types))
+except Exception as e:
+    print("error:" + type(e).__name__ + " banner=" + repr(version[:11]))
+finally:
+    s.close()
+`;
+
 function pythonCommand(source: string, args: string[]) {
 	return `printf %s ${b64(source)} | base64 -d > /tmp/.vmsec-$$.py && python3 /tmp/.vmsec-$$.py ${args.map(sh).join(" ")}; status=$?; rm -f /tmp/.vmsec-$$.py; exit $status`;
 }
@@ -337,35 +377,68 @@ const jsonOf = (text: string) =>
 	JSON.parse(text.slice(text.indexOf("{"))) as Record<string, unknown>;
 const cliArtifacts: ArtifactsNamespace = {
 	async create(name) {
-		await wranglerArtifacts([
-			"repos",
-			"create",
-			name,
-			"--namespace",
-			MEMORY_NAMESPACE,
-		]).catch(() => {
-			throw Object.assign(new Error("create failed"), {
-				code: "ALREADY_EXISTS",
-			});
-		});
-		return { remote: "" };
-	},
-	async get(name) {
-		let info: Record<string, unknown>;
-		try {
-			info = jsonOf(
+		for (let attempt = 1; ; attempt++) {
+			try {
 				await wranglerArtifacts([
 					"repos",
-					"get",
+					"create",
 					name,
 					"--namespace",
 					MEMORY_NAMESPACE,
-					"--json",
-				]),
-			);
-		} catch {
-			throw Object.assign(new Error("not found"), { code: "NOT_FOUND" });
+				]);
+				// Visible to `get` before the adapter asks for it.
+				for (let wait = 0; wait < 6; wait++) {
+					const seen = await wranglerArtifacts([
+						"repos",
+						"get",
+						name,
+						"--namespace",
+						MEMORY_NAMESPACE,
+						"--json",
+					]).then(
+						() => true,
+						() => false,
+					);
+					if (seen) break;
+					console.log("Memory repo created but not visible yet; waiting.");
+					await delay(5000);
+				}
+				return { remote: "" };
+			} catch (error) {
+				const text = `${(error as { stdout?: string }).stdout ?? ""}${(error as { stderr?: string }).stderr ?? ""}`;
+				if (/already exists|conflict|409/i.test(text))
+					throw Object.assign(new Error("exists"), { code: "ALREADY_EXISTS" });
+				console.log(
+					`Memory repo create attempt ${attempt} failed: ${safeError(error).slice(0, 120)}`,
+				);
+				if (attempt >= 3) throw error;
+				await delay(5000);
+			}
 		}
+	},
+	async get(name) {
+		let info: Record<string, unknown> | null = null;
+		for (let attempt = 1; attempt <= 3 && !info; attempt++) {
+			try {
+				info = jsonOf(
+					await wranglerArtifacts([
+						"repos",
+						"get",
+						name,
+						"--namespace",
+						MEMORY_NAMESPACE,
+						"--json",
+					]),
+				);
+			} catch (error) {
+				const text = `${(error as { stdout?: string }).stdout ?? ""}${(error as { stderr?: string }).stderr ?? ""}`;
+				if (/not found|404/i.test(text) && attempt === 1)
+					throw Object.assign(new Error("not found"), { code: "NOT_FOUND" });
+				if (attempt < 3) await delay(5000);
+			}
+		}
+		if (!info)
+			throw Object.assign(new Error("not found"), { code: "NOT_FOUND" });
 		return {
 			info: async () => ({ remote: String(info.remote) }),
 			async createToken(scope = "write", ttl = MEMORY_TOKEN_TTL_SECONDS) {
@@ -598,61 +671,110 @@ try {
 		`Setup: chat VM running (builder user ${who[0]}, home ${builderHome}).`,
 	);
 
+	// ---- per-turn metadata block (api-turn-workspace blockGuestMetadata) ----
+	const blocks = [
+		await exec(vm, guestMetadataBlockCommand(), 30_000),
+		await exec(vm, guestMetadataBlockCommand(), 30_000),
+	];
+	const ruleCounts = (
+		await exec(
+			vm,
+			GUEST_METADATA_DESTINATIONS.map(
+				([table, destination]) =>
+					`printf '%s ' "$(sudo -n ${table} -S OUTPUT 2>/dev/null | grep -c -- '-d ${destination}/[0-9]* -j REJECT')"`,
+			).join("; "),
+			15_000,
+		)
+	).stdout
+		.trim()
+		.split(/\s+/);
+	record(
+		"3",
+		"per-turn metadata block: REJECT for 169.254.169.254, 169.254.170.2, fd00:ec2::254 (run twice: idempotent)",
+		blocks.every((b) => b.exitCode === 0) &&
+			ruleCounts.length === GUEST_METADATA_DESTINATIONS.length &&
+			ruleCounts.every((n) => n === "1"),
+		`exits ${blocks.map((b) => b.exitCode).join(",")}; rule count per destination ${ruleCounts.join(",")}`,
+	);
+
 	// ---- desktop, started the product's way ---------------------------------
 	// ensureDesktopProcesses is what startWorkspaceDesktop runs on the VM.
 	const productStart = await ensureDesktopProcesses(machines, vm);
 	const productListening = (
 		await exec(vm, "ss -ltnH | grep -c ':6080 ' || true", 15_000)
 	).stdout.trim();
-	if (productStart.exitCode === 0) {
-		record("1", "desktop start on the product path", true, "exit 0");
-	} else {
-		record(
-			"1",
-			"desktop start on the product path (functional, not security)",
-			false,
-			`exit ${productStart.exitCode}${/Terminated/.test(productStart.stderr) ? " (Terminated)" : ""}; viewer listening: ${productListening !== "0"}`,
-		);
-		// Same script, run from a file: the script's own `pkill -f
-		// 'websockify.*:6080'` then cannot match its `bash -c` command line.
-		await machines.writeTextFile(
-			WorkspaceId(vm),
-			"/tmp/vmsec-start-desktop.sh",
-			START_WORKSPACE_DESKTOP,
-		);
-		const fromFile = await exec(
-			vm,
-			"bash /tmp/vmsec-start-desktop.sh",
-			300_000,
-		);
-		console.log(
-			`Workaround: start script run from a file: exit ${fromFile.exitCode}.`,
-		);
-		// A second product start over the existing credential file (a restart).
-		const restart = await ensureDesktopProcesses(machines, vm);
-		const owner = (
-			await exec(
-				vm,
-				`stat -c '%U:%G %a' ${DESKTOP_VIEWER_CREDENTIAL_PATH}`,
-				15_000,
-			)
-		).stdout.trim();
-		record(
-			"1",
-			"desktop restart on the product path (functional, not security)",
-			restart.exitCode === 0 || /YTIMESY_DESKTOP_UP/.test(restart.stdout),
-			`exit ${restart.exitCode}${restart.exitCode === 0 ? "" : /Operation not permitted/.test(restart.stderr) ? " (chmod of the credential file not permitted)" : ""}; credential file now ${owner}`,
-		);
+	record(
+		"1",
+		"desktop start on the product path (no self-kill, was exit 143)",
+		productStart.exitCode === 0 && productListening !== "0",
+		`exit ${productStart.exitCode}${/Terminated/.test(productStart.stderr) ? " (Terminated)" : ""}; viewer listening: ${productListening !== "0"}`,
+	);
+	if (productStart.exitCode !== 0 || productListening === "0") {
+		const fromFile = await exec(vm, START_WORKSPACE_DESKTOP, 300_000);
+		console.log(`Workaround: start script rerun: exit ${fromFile.exitCode}.`);
+	}
+	const restart = await ensureDesktopProcesses(machines, vm);
+	record(
+		"1",
+		"desktop restart on the product path",
+		restart.exitCode === 0,
+		`exit ${restart.exitCode}`,
+	);
+	// VNC: Unix socket only, password required.
+	const vncTcp = (
 		await exec(
 			vm,
-			`sudo -n chown "$(id -un):$(id -gn)" ${DESKTOP_VIEWER_CREDENTIAL_PATH} && chmod 600 ${DESKTOP_VIEWER_CREDENTIAL_PATH}`,
+			"sudo -n ss -ltnpH 2>/dev/null | grep -E ':590[0-9][[:space:]]' | awk '{print $4}' | tr '\\n' ' '",
 			15_000,
-		);
-		const listening = (
-			await exec(vm, "ss -ltnH | grep -c ':6080 ' || true", 15_000)
-		).stdout.trim();
-		if (listening === "0") throw new Error("Desktop viewer is not listening.");
-	}
+		)
+	).stdout.trim();
+	const vncArgs = (await exec(vm, "pgrep -a -x x11vnc | head -1", 15_000))
+		.stdout;
+	record(
+		"1",
+		"x11vnc: no TCP listener on 590x (127.0.0.1, [::]), Unix socket + password file",
+		vncTcp === "" &&
+			vncArgs.includes("-unixsock") &&
+			vncArgs.includes("-passwdfile") &&
+			vncArgs.includes("-rfbport 0"),
+		`TCP listeners: ${vncTcp || "none"}; -unixsock ${vncArgs.includes("-unixsock")}, -passwdfile ${vncArgs.includes("-passwdfile")}, -noipv6 ${vncArgs.includes("-noipv6")}`,
+	);
+	const rfbSecurity = (
+		await exec(
+			vm,
+			pythonCommand(RFB_PY, [`${builderHome}/.ytimesy/vnc/rfb.sock`]),
+			30_000,
+		)
+	).stdout.trim();
+	record(
+		"1",
+		"VNC handshake (as the builder, on the socket) offers only password auth",
+		/^types=/.test(rfbSecurity) &&
+			rfbSecurity.split("=")[1].split(",").includes("2") &&
+			!rfbSecurity.split("=")[1].split(",").includes("1"),
+		`${rfbSecurity || "no answer"} (1 = none, 2 = VNC password)`,
+	);
+	// A VNC server on TCP makes the start script stop x11vnc and refuse.
+	await execOk(
+		vm,
+		`printf %s ${b64(LISTENERS_PY)} | base64 -d > /tmp/vmsec-vnc-tcp.py && (nohup setsid python3 /tmp/vmsec-vnc-tcp.py 127.0.0.1:5901 >/dev/null 2>&1 &) && sleep 2`,
+		20_000,
+	);
+	const refused = await exec(vm, START_WORKSPACE_DESKTOP, 300_000);
+	const vncAfterRefusal = (
+		await exec(vm, "pgrep -c -x x11vnc || true", 15_000)
+	).stdout.trim();
+	await exec(vm, "pkill -f '[v]msec-vnc-tcp'; sleep 1", 15_000);
+	const recovered = await exec(vm, START_WORKSPACE_DESKTOP, 300_000);
+	record(
+		"1",
+		"desktop refused while a VNC server listens on TCP (then recovers)",
+		refused.exitCode !== 0 &&
+			/listened on TCP/.test(refused.stderr) &&
+			vncAfterRefusal === "0" &&
+			recovered.exitCode === 0,
+		`with TCP 5901: exit ${refused.exitCode}, refusal message ${/listened on TCP/.test(refused.stderr)}, x11vnc running ${vncAfterRefusal}; after removing it: exit ${recovered.exitCode}`,
+	);
 	await publishDesktopViewer(machines, vm);
 	credentialPassword = desktopViewerCredential(vm).split(":")[1];
 	const deskHost = desktopEdgeHostname(vm);
@@ -702,12 +824,15 @@ try {
 		wsWrong.status === 401 || wsWrong.status === 403,
 		`handshake ${wsWrong.status ?? wsWrong.detail}`,
 	);
-	const wsRight = await wsProbe(deskWs, { headers: { authorization: right } });
+	const wsRight = await wsProbe(deskWs, {
+		headers: { authorization: right },
+		firstMessage: true,
+	});
 	record(
 		"1",
-		"desktop WebSocket, server-held credentials (no regression)",
-		wsRight.status === 101,
-		`handshake ${wsRight.status ?? wsRight.detail}`,
+		"desktop WebSocket, server-held credentials: VNC answers (no regression)",
+		wsRight.status === 101 && wsRight.detail.includes("RFB "),
+		`handshake ${wsRight.status ?? ""} ${wsRight.detail}`,
 	);
 
 	// ---- 5. cross-site WebSocket --------------------------------------------
@@ -961,7 +1086,7 @@ try {
 				: `none open (${[...new Set(privateTargets.map((t) => states[t]))].join("/")})`,
 		);
 		const metadataHttp = await runAs(
-			"curl -sS -m 4 -o /dev/null -w '%{http_code}' http://169.254.169.254/latest/meta-data/ 2>/dev/null; echo; curl -sS -m 4 -o /dev/null -w '%{http_code}' -g 'http://[fd00:ec2::254]/latest/meta-data/' 2>/dev/null; echo",
+			"curl -sS -m 4 -o /dev/null -w '%{http_code}' http://169.254.169.254/latest/meta-data/ 2>/dev/null; echo; curl -sS -m 4 -o /dev/null -w '%{http_code}' -g 'http://[fd00:ec2::254]/latest/meta-data/' 2>/dev/null; echo; curl -sS -m 4 -o /dev/null -w '%{http_code}' -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token 2>/dev/null; echo; curl -sS -m 4 -o /dev/null -w '%{http_code}' http://169.254.170.2/ 2>/dev/null; echo",
 		);
 		const codes = metadataHttp.stdout
 			.trim()
@@ -969,14 +1094,18 @@ try {
 			.map((code) => code.trim() || "000");
 		record(
 			"3",
-			`${label}: metadata HTTP (169.254.169.254, fd00:ec2::254)`,
-			codes.every((code) => code === "000"),
-			`HTTP ${codes.join(", ")} (000 = no connection)`,
+			`${label}: metadata HTTP (GET 169.254.169.254, GET fd00:ec2::254, AWS PUT /latest/api/token, GET 169.254.170.2)`,
+			codes.length === 4 && codes.every((code) => code === "000"),
+			`HTTP ${codes.join(", ")} (000 = no connection; the PUT was 200 before)`,
 		);
 		record(
 			"3",
-			`${label}: public egress control`,
-			states[publicControl] === "open",
+			label === "builder"
+				? "builder: public egress control"
+				: "reader: no network at all (public address unreachable)",
+			label === "builder"
+				? states[publicControl] === "open"
+				: states[publicControl] !== "open",
 			`1.1.1.1:443 ${states[publicControl]}${gateway ? `; gateway ${gateway}:80 ${states[`${gateway}:80`]}, :22 ${states[`${gateway}:22`]} (info)` : ""}${gateway6 ? "; IPv6 default route present (info)" : ""}`,
 		);
 	}
@@ -1116,11 +1245,11 @@ try {
 		).stdout.trim() || "{}",
 	) as Record<string, string>;
 	const xReader = await asReader(
-		`DISPLAY=:0 XAUTHORITY=${sh(`${builderHome}/.Xauthority`)} timeout 5 xdpyinfo >/dev/null 2>&1; echo $?`,
+		`DISPLAY=:0 XAUTHORITY=${sh(DESKTOP_XAUTHORITY)} timeout 5 xdpyinfo >/dev/null 2>&1; echo $?`,
 	);
 	const xBuilder = await exec(
 		vm,
-		`DISPLAY=:0 XAUTHORITY="$HOME/.Xauthority" timeout 5 xdpyinfo >/dev/null 2>&1; echo $?`,
+		`DISPLAY=:0 XAUTHORITY=${sh(DESKTOP_XAUTHORITY)} timeout 5 xdpyinfo >/dev/null 2>&1; echo $?`,
 	);
 	record(
 		"6",
@@ -1148,11 +1277,15 @@ try {
 		};
 	};
 	for (const [label, path] of [
-		["desktop viewer credential", DESKTOP_VIEWER_CREDENTIAL_PATH],
+		[
+			"desktop viewer credential",
+			`${DESKTOP_PRIVATE_DIRECTORY}/viewer.credential`,
+		],
+		["VNC password file", `${DESKTOP_PRIVATE_DIRECTORY}/vnc.passwd`],
 		["Git proxy config", `${proxyDir}/config`],
 		["agent secrets env", `${AGENT_SECRETS_DIRECTORY}/agent.env`],
 		["memory clone config (token)", memoryConfig],
-		["builder .Xauthority", `${builderHome}/.Xauthority`],
+		["X cookie (private Xauthority)", DESKTOP_XAUTHORITY],
 	] as const) {
 		const outcome = await readable(path);
 		record("6", `reader: read ${label}`, outcome.denied, outcome.detail);
@@ -1177,15 +1310,130 @@ try {
 		`password ${psOut.stdout.includes(credentialPassword) ? "VISIBLE" : "not visible"}; websockify ${psOut.stdout.includes("websockify") ? "visible (process seen)" : "not seen"}`,
 	);
 
-	const blockScript = b64(READER_LOOPBACK_BLOCK_SCRIPT);
+	const modes = (
+		await exec(
+			vm,
+			`stat -c %a ${sh(`${builderHome}/memory`)} ${sh(`${builderHome}/memory/.git`)} ${sh(memoryConfig)} | tr '\\n' ' '`,
+			15_000,
+		)
+	).stdout
+		.trim()
+		.split(/\s+/);
+	record(
+		"6",
+		"memory clone modes (dir, .git, config) 0700/0700/0600",
+		modes.join(" ") === "700 700 600",
+		modes.join(" "),
+	);
+	const readerMemoryList = await asReader(
+		`ls ${sh(`${builderHome}/memory`)} >/dev/null 2>&1; echo "exit=$?"`,
+	);
+	record(
+		"6",
+		"reader: list ~/memory",
+		!/exit=0/.test(readerMemoryList.stdout),
+		readerMemoryList.stdout.trim(),
+	);
+	const netns = (
+		await asReader(
+			"readlink /proc/self/ns/net; ip -o link 2>/dev/null | awk -F': ' '{print $2}' | tr '\\n' ','; echo; getent hosts example.com >/dev/null 2>&1 && echo dns-ok || echo dns-fail",
+		)
+	).stdout
+		.trim()
+		.split("\n");
+	const builderNetns = (
+		await exec(vm, "readlink /proc/self/ns/net", 15_000)
+	).stdout.trim();
+	record(
+		"6",
+		"reader runs in its own network namespace (lo only, no DNS)",
+		netns[0] !== "" &&
+			netns[0] !== builderNetns &&
+			netns[1]?.replace(/,$/, "") === "lo" &&
+			netns[2] === "dns-fail",
+		`reader ns ${netns[0] === builderNetns ? "SAME as builder" : "own"}; links ${netns[1] ?? "?"}; ${netns[2] ?? "?"}`,
+	);
+
+	// What a researcher still needs, from inside the namespace.
+	const checkout = (
+		await machines.readTextFile(WorkspaceId(vm), "/tmp/ytimesy-project-cwd")
+	)?.trim();
+	const research = (
+		await asReader(
+			[
+				checkout
+					? `cd ${sh(checkout)} && echo "git log: $(git log -1 --format=%h >/dev/null 2>&1 && echo ok || echo fail)" && echo "grep: $(grep -rIl --exclude-dir=node_modules --exclude-dir=.git . . 2>/dev/null | head -1 >/dev/null && echo ok || echo fail)"`
+					: 'echo "git log: no checkout"',
+				'echo "own loopback server: $(cd "$HOME" && (python3 -m http.server 18080 --bind 127.0.0.1 >/dev/null 2>&1 & echo $! > srv.pid) && sleep 1 && curl -s -m 3 -o /dev/null -w \'%{http_code}\' http://127.0.0.1:18080/; kill $(cat "$HOME/srv.pid") 2>/dev/null)"',
+				"echo \"https fetch (registry.npmjs.org): $(curl -s -m 5 -o /dev/null -w '%{http_code}' https://registry.npmjs.org/ 2>/dev/null)\"",
+			].join("\n"),
+			90_000,
+		)
+	).stdout.trim();
+	record(
+		"6",
+		"reader: code reading still works (git log, grep, its own loopback server)",
+		/git log: ok/.test(research) &&
+			/grep: ok/.test(research) &&
+			/own loopback server: 200/.test(research),
+		research.replaceAll("\n", "; "),
+	);
+
+	// A benchmark task container (hard-set's sudo route: the reader may run
+	// only the route script as root, which docker-execs into the container).
+	const dockerReady = await exec(
+		vm,
+		"sudo -n docker info >/dev/null 2>&1 && echo ready || echo missing",
+		60_000,
+	);
+	if (!dockerReady.stdout.includes("ready")) {
+		record("6", "reader: task container route", null, "docker unavailable");
+	} else {
+		const started = await exec(
+			vm,
+			"sudo -n docker rm -f vmsec-tb >/dev/null 2>&1; sudo -n docker run -d --name vmsec-tb --entrypoint sleep curlimages/curl:8.10.1 900 >/dev/null && echo started",
+			240_000,
+		);
+		const route = `#!/bin/bash\n[ "$(id -u)" = 0 ] && [ "\${SUDO_USER:-}" = ${READER_LINUX_USER} ] || exit 2\nexec docker exec -u "$SUDO_UID:$SUDO_GID" vmsec-tb sh -c "$1"\n`;
+		await execOk(
+			vm,
+			`printf %s ${b64(route)} | base64 -d > /tmp/vmsec-route && sudo -n install -m 0755 -o root -g root /tmp/vmsec-route /usr/local/bin/vmsec-route && printf '%s\\n' 'Defaults:${READER_LINUX_USER} !use_pty' '${READER_LINUX_USER} ALL=(root) NOPASSWD: /usr/local/bin/vmsec-route' > /tmp/vmsec-sudoers && sudo -n visudo -cqf /tmp/vmsec-sudoers && sudo -n install -m 0440 /tmp/vmsec-sudoers /etc/sudoers.d/zz-vmsec-route`,
+			30_000,
+		);
+		const routed = (
+			await asReader(
+				`sudo -n /usr/local/bin/vmsec-route 'echo "routed:$(test -e /.dockerenv && echo container):$(id -u)"; echo "container public: $(curl -s -m 5 -o /dev/null -w %{http_code} https://1.1.1.1/)"; echo "container metadata PUT: $(curl -s -m 4 -o /dev/null -w %{http_code} -X PUT -H X-aws-ec2-metadata-token-ttl-seconds:60 http://169.254.169.254/latest/api/token)"; echo "container metadata GET: $(curl -s -m 4 -o /dev/null -w %{http_code} http://169.254.169.254/latest/meta-data/)"' 2>&1`,
+				90_000,
+			)
+		).stdout.trim();
+		record(
+			"6",
+			"reader: runs commands in a task container through the sudo route (works from its netns)",
+			started.stdout.includes("started") && /routed:container:\d+/.test(routed),
+			`container ${started.stdout.includes("started") ? "started" : `not started (${started.exitCode})`}; ${/routed:[^\n]*/.exec(routed)?.[0] ?? `no route output: ${routed.split("\n").at(-1)?.slice(0, 80) ?? ""}`}`,
+		);
+		const put = /container metadata PUT: (\d+)/.exec(routed)?.[1] ?? "?";
+		const get = /container metadata GET: (\d+)/.exec(routed)?.[1] ?? "?";
+		const pub = /container public: (\d+)/.exec(routed)?.[1] ?? "?";
+		record(
+			"3",
+			"task container (docker, FORWARD path): metadata PUT /latest/api/token and GET",
+			put === "000" && get === "000",
+			`PUT ${put}, GET ${get} (000 = no connection); container public 1.1.1.1 HTTP ${pub} (info: a routed reader command has the container's network)`,
+		);
+		await exec(
+			vm,
+			"sudo -n docker rm -f vmsec-tb >/dev/null 2>&1; sudo -n rm -f /etc/sudoers.d/zz-vmsec-route /usr/local/bin/vmsec-route",
+			60_000,
+		);
+	}
+
 	const diagnostics = await exec(
 		vm,
 		[
 			'echo "iptables: $(command -v iptables >/dev/null && echo present || echo missing), ip6tables: $(command -v ip6tables >/dev/null && echo present || echo missing)"',
-			"echo \"reader owner rules: v4 $(sudo -n iptables -S OUTPUT 2>/dev/null | grep -c -- '--uid-owner'), v6 $(sudo -n ip6tables -S OUTPUT 2>/dev/null | grep -c -- '--uid-owner')\"",
-			`echo "block script stderr: $(sudo -n bash -c "$(printf %s ${blockScript} | base64 -d)" 2>&1 >/dev/null | head -2 | tr '\\n' ' ')"`,
-			`echo "port 5900 listeners: $(sudo -n ss -ltnpH 'sport = :5900' 2>/dev/null | awk '{print $4}' | tr '\\n' ' ')by $(sudo -n ss -ltnpH 'sport = :5900' 2>/dev/null | grep -o '(("[a-zA-Z0-9_.-]*' | tr -d '("' | sort -u | tr '\\n' ' ')"`,
-			`echo "memory modes (dir, .git, config): $(stat -c %a ${sh(`${builderHome}/memory`)} ${sh(`${builderHome}/memory/.git`)} ${sh(memoryConfig)} | tr '\\n' ' '), home $(stat -c %a ${sh(builderHome)})"`,
+			`echo "port 590x listeners: $(sudo -n ss -ltnpH 2>/dev/null | grep -E ':590[0-9][[:space:]]' | awk '{print $4}' | tr '\\n' ' ')"`,
+			`echo "home $(stat -c %a ${sh(builderHome)}), desktop private $(stat -c %a ${DESKTOP_PRIVATE_DIRECTORY})"`,
 		].join("\n"),
 		60_000,
 	);
@@ -1258,6 +1506,16 @@ try {
 			deleteSnapshot: async (snapshotId) => {
 				await client.vms.snapshots.delete(snapshotId);
 				snapshots.delete(snapshotId);
+			},
+			// As workspace-machines.ts forkWorkspace does.
+			scrubFork: async (forkVm) => {
+				const scrubbed = await exec(forkVm, SCRUB_MEMORY_CREDENTIAL, 30_000);
+				if (scrubbed.exitCode !== 0)
+					throw new Error("the memory clone still holds a token");
+			},
+			deleteVm: async (forkVm) => {
+				await machines.destroy(WorkspaceId(forkVm));
+				vms.delete(forkVm);
 			},
 		});
 		const forkConfig = (
