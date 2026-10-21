@@ -1,4 +1,5 @@
 import type { PostHogConfig } from "posthog-js";
+import { replaySafeUrl } from "#/domain/redact-secrets";
 
 /** Block private application surfaces before rrweb serializes their DOM. */
 export const replayPrivacy: PostHogConfig["session_recording"] = {
@@ -37,3 +38,18 @@ export const replayPrivacy: PostHogConfig["session_recording"] = {
 	captureJsonLd: false,
 	maskCapturedNetworkRequestFn: () => null,
 };
+
+/**
+ * Replay events without full URLs: rrweb meta events (type 4) carry the page
+ * href, which can hold tokens (e.g. /auth/reset-password?token=). Query and
+ * fragment are dropped; /auth/* pages are dropped entirely.
+ */
+export function replaySnapshotData(data: unknown[]): unknown[] {
+	return data.flatMap((item) => {
+		if (!item || typeof item !== "object") return [item];
+		const event = item as { type?: unknown; data?: { href?: unknown } };
+		if (event.type !== 4 || typeof event.data?.href !== "string") return [item];
+		const href = replaySafeUrl(event.data.href);
+		return href === null ? [] : [{ ...event, data: { ...event.data, href } }];
+	});
+}

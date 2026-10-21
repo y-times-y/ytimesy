@@ -117,3 +117,9 @@ it("lets a solved challenge through to sign-up", async () => {
 	);
 	expect((await signUp(productionAuth(), "solved")).status).toBe(200);
 });
+
+it("Turnstile also guards resending the verification email", async () => {
+	const { TURNSTILE_ENDPOINTS } = await import("./turnstile");
+	expect(TURNSTILE_ENDPOINTS).toContain("/send-verification-email");
+	expect(TURNSTILE_ENDPOINTS).toContain("/request-password-reset");
+});

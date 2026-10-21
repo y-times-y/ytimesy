@@ -4,12 +4,13 @@ import {
 	type AnalyticsProperties,
 	filteredAnalyticsProperties,
 } from "#/domain/analytics";
+import { redactDeep, replaySafeUrl } from "#/domain/redact-secrets";
 import {
 	onReplayConsentChange,
 	type ReplayConsent,
 	readReplayConsent,
 } from "./replay-consent";
-import { replayPrivacy } from "./replay-privacy";
+import { replayPrivacy, replaySnapshotData } from "./replay-privacy";
 
 let client: Promise<PostHog | null> | undefined;
 function analyticsClient(): Promise<PostHog | null> {
@@ -44,10 +45,20 @@ function analyticsClient(): Promise<PostHog | null> {
 				before_send: (event) => {
 					if (!event) return null;
 					// Replay DOM is already masked by the recorder before this boundary.
+					if (
+						event.event === "$snapshot" &&
+						typeof window.location?.href === "string" &&
+						replaySafeUrl(window.location.href) === null
+					)
+						return null;
 					const properties =
 						event.event === "$snapshot" &&
 						Array.isArray(event.properties.$snapshot_data)
-							? { $snapshot_data: event.properties.$snapshot_data }
+							? {
+									$snapshot_data: replaySnapshotData(
+										event.properties.$snapshot_data,
+									),
+								}
 							: event.event === "$exception"
 								? exceptionProperties(event.properties)
 								: filteredAnalyticsProperties(event.event, event.properties);
@@ -90,7 +101,7 @@ function exceptionProperties(properties: Record<string, unknown>) {
 	const path =
 		typeof window === "undefined" ? undefined : window.location.pathname;
 	return {
-		$exception_list: properties.$exception_list,
+		$exception_list: redactDeep(properties.$exception_list),
 		$exception_level: properties.$exception_level,
 		$exception_fingerprint: properties.$exception_fingerprint,
 		...(path ? { path: path.slice(0, 200) } : {}),
