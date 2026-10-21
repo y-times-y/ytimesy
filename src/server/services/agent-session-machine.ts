@@ -31,6 +31,7 @@ import {
 	selectAgentSessionHarness,
 } from "#/server/adapters/agent-sessions";
 import { projectMachineSize } from "#/server/adapters/project-machine-size";
+import { projectNetworkPolicy } from "#/server/adapters/project-network-policy";
 import {
 	saveTemplateSnapshot,
 	workspaceForProject,
@@ -265,6 +266,7 @@ export async function bindAgentSessionMachine(
 		);
 		if (recovered) {
 			await machines.ensureRunning(WorkspaceId(recovered));
+			await applyProjectNetworkPolicy(machines, input, recovered);
 			return {
 				session: { ...selectedSession, providerRef: recovered },
 				providerRef: recovered,
@@ -313,10 +315,27 @@ export async function bindAgentSessionMachine(
 				() => undefined,
 			),
 	});
+	await applyProjectNetworkPolicy(machines, input, executed.providerRef);
 	return {
 		session: { ...selectedSession, providerRef: executed.providerRef },
 		providerRef: executed.providerRef,
 	};
+}
+
+/**
+ * Every chat machine (writer forks included) gets the project's internet
+ * access before its turn runs, so a settings change lands at the next turn.
+ */
+async function applyProjectNetworkPolicy(
+	machines: WorkspaceMachines,
+	input: { readonly userId: string; readonly projectId: string },
+	providerRef: string,
+) {
+	if (!machines.applyNetworkPolicy) return;
+	await machines.applyNetworkPolicy(
+		WorkspaceId(providerRef),
+		await projectNetworkPolicy(input.userId, input.projectId),
+	);
 }
 
 /**
