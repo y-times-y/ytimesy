@@ -494,7 +494,7 @@ export function sidebarStatusSections<T>(
 export const PROJECT_COLORS = [
 	"#6b8fd6",
 	"#5fae8b",
-	"#6fa0c9",
+	"#c56fb5",
 	"#9a83d4",
 	"#cf7d93",
 	"#4fa8ad",
