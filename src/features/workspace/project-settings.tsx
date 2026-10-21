@@ -42,6 +42,7 @@ import { Plugins } from "../sessions/plugins";
 import { GithubMark } from "./github-mark";
 import { InfrastructureUsage } from "./infrastructure-usage";
 import { MachineSizeSettings } from "./machine-size-settings";
+import { NetworkAccessSettings } from "./network-access-settings";
 import {
 	deleteProjectSecretFn,
 	listProjectSecretsFn,
@@ -205,6 +206,12 @@ export function ProjectSettings({
 										{settingsProject ? (
 											<MachineSizeSettings
 												key={settingsProject.id}
+												projectId={settingsProject.id}
+											/>
+										) : null}
+										{settingsProject ? (
+											<NetworkAccessSettings
+												key={`network-${settingsProject.id}`}
 												projectId={settingsProject.id}
 											/>
 										) : null}

@@ -1,6 +1,7 @@
 import type { AuthSnapshotId, WorkspaceId } from "#/domain/ids";
 import type { MachineSizeId } from "#/domain/machine-size";
 import type { VmEdgeRoute, VmEdgeRouteKind } from "#/domain/vm-edge-routes";
+import type { VmNetworkPolicy } from "#/domain/vm-network-policy";
 
 export interface CommandOutput {
 	readonly exitCode: number;
@@ -32,6 +33,14 @@ export interface WorkspaceMachines {
 		},
 		signal: AbortSignal,
 	) => Promise<CommandOutput>;
+	/**
+	 * Makes a VM's internet access match the project's policy (firewall grant
+	 * and Outbound TLS rules), idempotently. Providers without it stay open.
+	 */
+	readonly applyNetworkPolicy?: (
+		workspaceId: WorkspaceId,
+		policy: VmNetworkPolicy,
+	) => Promise<void>;
 	readonly restoreRetainedSession?: (
 		userId: string,
 		sessionId: string,

@@ -4090,3 +4090,22 @@ a.session-title-meta:focus-visible {
 		font-size: 16px;
 	}
 }
+
+.network-domains {
+	display: grid;
+	gap: 6px;
+	margin-top: 12px;
+}
+
+.network-domains textarea {
+	width: 100%;
+	font: inherit;
+	font-family: var(--font-mono, ui-monospace, monospace);
+	font-size: 13px;
+	padding: 8px 10px;
+	border: 1px solid var(--border, currentColor);
+	border-radius: 8px;
+	background: transparent;
+	color: inherit;
+	resize: vertical;
+}
