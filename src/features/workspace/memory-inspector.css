@@ -284,11 +284,11 @@ a.memory-row-action:hover {
 	padding: 16px 24px 32px;
 }
 
-/* The full-page Memory view from the left sidebar, in place of the chat. */
-.workspace-main[data-memory-page="true"] > .workspace-body,
-.workspace-main[data-memory-page="true"] > .workspace-inspector-toggle,
-.workspace-main[data-memory-page="true"] > .workspace-inspector-expand {
-	display: none;
+/* The full-page Memory view from the left sidebar replaces the chat entirely:
+   no chat panes, header, composer or inspector controls behind it. */
+.workspace-main[data-memory-page="true"] > :not(.memory-page) {
+	/* biome-ignore lint/complexity/noImportantStyles: the chat panes' group sets display inline (react-resizable-panels) */
+	display: none !important;
 }
 .memory-page {
 	container-type: inline-size;
@@ -317,6 +317,8 @@ a.memory-row-action:hover {
 	font-size: 13px;
 }
 .memory-page .memory-inspector {
+	flex: 1;
+	min-height: 0;
 	border: 1px solid #ffffff12;
 	border-radius: 10px;
 	overflow: hidden;
