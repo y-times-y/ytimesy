@@ -1,26 +1,29 @@
-import { Info } from "lucide-react";
 import { Tooltip } from "radix-ui";
 import type { ReactNode } from "react";
 
-/** A small (i) whose tooltip holds the longer explanation, so the page stays short. */
-export function MemoryInfo({
-	label,
+/**
+ * A title whose tooltip holds the longer explanation, so the page stays
+ * short without an extra info icon.
+ */
+export function MemoryTitleTip({
+	tip,
 	children,
 }: {
-	label: string;
+	tip: ReactNode;
 	children: ReactNode;
 }) {
 	return (
-		<Tooltip.Provider delayDuration={150}>
+		<Tooltip.Provider delayDuration={200}>
 			<Tooltip.Root>
 				<Tooltip.Trigger asChild>
-					<button type="button" className="memory-info" aria-label={label}>
-						<Info size={13} aria-hidden="true" />
-					</button>
+					{/* biome-ignore lint/a11y/noNoninteractiveTabindex: the title is focusable so keyboard users can read its explanation. */}
+					<span className="memory-title-tip" tabIndex={0}>
+						{children}
+					</span>
 				</Tooltip.Trigger>
 				<Tooltip.Portal>
 					<Tooltip.Content className="memory-info-tip" sideOffset={6}>
-						{children}
+						{tip}
 					</Tooltip.Content>
 				</Tooltip.Portal>
 			</Tooltip.Root>

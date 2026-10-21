@@ -1,20 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import {
-	Calendar,
-	ChevronDown,
-	FolderInput,
-	Hash,
-	Maximize2,
-	Minus,
-	Moon,
-	Pencil,
-	Pin,
-	PinOff,
-	Plus,
-	Trash2,
-	X,
-} from "lucide-react";
+import { ChevronDown, Minus, Plus, X } from "lucide-react";
 import {
 	type ReactNode,
 	type PointerEvent as ReactPointerEvent,
@@ -50,9 +36,8 @@ const DAY = 86_400_000;
 const TOP = 76;
 const AXIS = 34;
 const SLOT = 13;
-/** Readable whatever the zoom: marks are sized in pixels, not in days. */
-const R = 4.5;
-const R_NEW = 5.5;
+/** Readable whatever the zoom: marks are sized in pixels (a 6px dot), not in days. */
+const R = 3;
 
 type View = { pxPerDay: number; offset: number };
 
@@ -64,47 +49,46 @@ function shortDate(day: number) {
 	});
 }
 
-/** One line's mark: solid (stated), hollow (inferred) or a diamond (always on). */
+/**
+ * One line's mark: always the same small dot in its lane colour. Status is
+ * weight, not shape: inferred is dimmer, replaced faint, new carries a fine
+ * ring, and an always-on rule a short underline.
+ */
 export function LaneMark({
 	mark,
 	color,
 	recent,
+	retired,
 	x = 0,
 	y = 0,
 }: {
 	mark: LaneNode["mark"];
 	color: string;
 	recent?: boolean;
+	retired?: boolean;
 	x?: number;
 	y?: number;
 }) {
-	const r = recent ? R_NEW : R;
 	return (
-		<g className="lane-mark" data-mark={mark} style={{ color }}>
-			{recent ? <circle className="lane-glow" cx={x} cy={y} r={r + 5} /> : null}
+		<g
+			className="lane-mark"
+			data-mark={mark}
+			data-retired={retired ? "true" : undefined}
+			style={{ color }}
+		>
+			{recent ? (
+				<circle className="lane-new" cx={x} cy={y} r={R + 2.5} />
+			) : null}
+			<circle className="lane-dot" cx={x} cy={y} r={R} />
 			{mark === "rule" ? (
-				<path
-					className="lane-shape"
-					d={`M${x} ${y - r - 1}L${x + r + 1} ${y}L${x} ${y + r + 1}L${x - r - 1} ${y}Z`}
+				<line
+					className="lane-rule"
+					x1={x - 3.5}
+					x2={x + 3.5}
+					y1={y + R + 3}
+					y2={y + R + 3}
 				/>
-			) : (
-				<circle
-					className="lane-shape"
-					cx={x}
-					cy={y}
-					r={mark === "inferred" ? r - 0.75 : r}
-				/>
-			)}
-		</g>
-	);
-}
-
-/** A dream's merge: a ring with a plus, like a merge commit. */
-export function MergeMark({ x = 0, y = 0 }: { x?: number; y?: number }) {
-	return (
-		<g className="lane-merge">
-			<circle cx={x} cy={y} r={6.5} />
-			<path d={`M${x - 3} ${y}H${x + 3}M${x} ${y - 3}V${y + 3}`} />
+			) : null}
 		</g>
 	);
 }
@@ -439,13 +423,9 @@ export function MemoryGraphPage({
 							return (
 								<g key={dream.id} className="lane-dream">
 									<line x1={dx} x2={dx} y1={TOP - 4} y2={lanesBottom} />
-									<Moon
-										x={dx - 6}
-										y={TOP - 26}
-										width={12}
-										height={12}
-										strokeWidth={1.8}
-									/>
+									<text x={dx} y={TOP - 14}>
+										Dream
+									</text>
 									<title>{`Dream, ${shortDate(dream.day)}: ${dream.message}`}</title>
 									{dream.merges.map((merge) => {
 										const my = laneY(merge.lane);
@@ -460,11 +440,18 @@ export function MemoryGraphPage({
 														<g key={ghost.text} className="lane-ghost">
 															<path
 																className="lane-merge-line"
-																d={`M${gx} ${gy}C${(gx + dx) / 2} ${gy} ${(gx + dx) / 2} ${my} ${dx - 7} ${my}`}
+																d={(() => {
+																	// Merged lines converge into the line they became.
+																	const tx = target?.x ?? dx;
+																	const ty = target?.y ?? my;
+																	const mid = (gx + tx) / 2;
+																	return `M${gx} ${gy}C${mid} ${gy} ${mid} ${ty} ${tx} ${ty}`;
+																})()}
 															/>
 															<LaneMark
 																mark={ghost.mark}
 																color={laneColors[ghost.lane]}
+																retired
 																x={gx}
 																y={gy}
 															/>
@@ -472,14 +459,14 @@ export function MemoryGraphPage({
 														</g>
 													);
 												})}
-												{target ? (
-													<path
-														className="lane-merge-line"
-														data-into="true"
-														d={`M${dx + 7} ${my}C${(dx + target.x) / 2} ${my} ${(dx + target.x) / 2} ${target.y} ${target.x} ${target.y}`}
+												{target ? null : (
+													<circle
+														className="lane-merge-end"
+														cx={dx}
+														cy={my}
+														r={R}
 													/>
-												) : null}
-												<MergeMark x={dx} y={my} />
+												)}
 											</g>
 										);
 									})}
@@ -524,7 +511,7 @@ export function MemoryGraphPage({
 											className="lane-ring"
 											cx={at.x}
 											cy={at.y}
-											r={(node.recent ? R_NEW : R) + 4}
+											r={R + 5}
 										/>
 									) : null}
 									<LaneMark
@@ -599,7 +586,7 @@ export function MemoryGraphPage({
 							{total} {total === 1 ? "memory" : "memories"}
 						</small>
 					</span>
-					<ChevronDown size={14} aria-hidden="true" />
+					<ChevronDown size={14} strokeWidth={1.5} aria-hidden="true" />
 				</button>
 			</MemoryScopeMenu>
 
@@ -614,7 +601,7 @@ export function MemoryGraphPage({
 						}))
 					}
 				>
-					<Minus size={14} />
+					<Minus size={14} strokeWidth={1.5} />
 				</button>
 				<button
 					type="button"
@@ -626,10 +613,10 @@ export function MemoryGraphPage({
 						}))
 					}
 				>
-					<Plus size={14} />
+					<Plus size={14} strokeWidth={1.5} />
 				</button>
 				<button type="button" onClick={fitView}>
-					<Maximize2 size={13} aria-hidden="true" /> Fit
+					Fit
 				</button>
 			</div>
 
@@ -695,7 +682,7 @@ function MemoryDetails({
 			<header>
 				<h2>Memory</h2>
 				<button type="button" aria-label="Close" onClick={onClose}>
-					<X size={14} />
+					<X size={16} strokeWidth={1.5} />
 				</button>
 			</header>
 			<dl>
@@ -748,16 +735,8 @@ function MemoryDetails({
 				</div>
 			</dl>
 			<p className="memory-graph-foot">
-				{row.added ? (
-					<span>
-						<Calendar size={12} aria-hidden="true" />
-						{formatMemoryDate(row.added)}
-					</span>
-				) : null}
-				<span>
-					<Hash size={12} aria-hidden="true" />
-					{row.path.replace(/\.md$/, "")}
-				</span>
+				{row.added ? <span>{formatMemoryDate(row.added)}</span> : null}
+				<span>{row.path.replace(/\.md$/, "")}</span>
 				{row.chatId ? (
 					<a
 						href={`/?chat=${row.chatId}`}
@@ -796,7 +775,7 @@ function MemoryDetails({
 									setEditing(true);
 								}}
 							>
-								<Pencil size={13} aria-hidden="true" /> Edit
+								Edit
 							</button>
 							<MemoryScopeMenu
 								label="Move to"
@@ -808,7 +787,7 @@ function MemoryDetails({
 								}}
 							>
 								<button type="button" disabled={busy}>
-									<FolderInput size={13} aria-hidden="true" /> Move
+									Move
 								</button>
 							</MemoryScopeMenu>
 							<button
@@ -817,22 +796,16 @@ function MemoryDetails({
 								aria-pressed={row.rule}
 								onClick={() => onEdit({ op: "update", ref, always: !row.rule })}
 							>
-								{row.rule ? (
-									<PinOff size={13} aria-hidden="true" />
-								) : (
-									<Pin size={13} aria-hidden="true" />
-								)}
-								{row.rule ? "Unpin" : "Pin"}
+								{row.rule ? "Turn off always on" : "Make always on"}
 							</button>
 						</>
 					)}
 					<button
 						type="button"
-						aria-label="Delete"
 						disabled={busy}
 						onClick={() => setConfirmDelete(true)}
 					>
-						<Trash2 size={13} aria-hidden="true" />
+						Delete
 					</button>
 				</div>
 			)}
@@ -845,16 +818,11 @@ function MemoryDetails({
 	);
 }
 
-/** One row: every mark and line the lanes use, drawn the same way. */
+/** One quiet line: the four marks that need explaining, drawn the same way. */
 export function MemoryLanesLegend() {
-	const item = (mark: ReactNode, label: string, width = 18) => (
+	const item = (mark: ReactNode, label: string) => (
 		<li>
-			<svg
-				viewBox={`${-width / 2} -9 ${width} 18`}
-				width={width}
-				height={18}
-				aria-hidden="true"
-			>
+			<svg viewBox="-8 -8 16 16" width={14} height={14} aria-hidden="true">
 				{mark}
 			</svg>
 			{label}
@@ -863,30 +831,14 @@ export function MemoryLanesLegend() {
 	const grey = "#a3a3a3";
 	return (
 		<ul className="memory-lanes-legend" aria-label="Legend">
-			{item(<LaneMark mark="stated" color={grey} />, "Stated")}
 			{item(<LaneMark mark="inferred" color={grey} />, "Inferred")}
-			{item(<LaneMark mark="rule" color={grey} />, "Always on")}
-			{item(<LaneMark mark="stated" color={grey} recent />, "New", 22)}
-			{item(
-				<g opacity={0.3}>
-					<LaneMark mark="stated" color={grey} />
-				</g>,
-				"Replaced",
-			)}
+			{item(<LaneMark mark="stated" color={grey} recent />, "New this week")}
+			{item(<LaneMark mark="rule" color={grey} y={-2} />, "Always on")}
 			{item(
 				<g className="lane-curves">
-					<path data-active="true" d="M-12 5C-2 5 2 -5 12 -5" />
+					<path data-active="true" d="M-7 4C-1 4 1 -4 7 -4" />
 				</g>,
-				"Changed",
-				26,
-			)}
-			{item(
-				<g className="lane-dream">
-					<line x1={-8} x2={-8} y1={-9} y2={9} />
-					<MergeMark x={4} y={0} />
-				</g>,
-				"Dream",
-				26,
+				"Replaced by",
 			)}
 		</ul>
 	);
