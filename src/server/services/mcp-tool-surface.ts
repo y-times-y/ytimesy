@@ -166,16 +166,16 @@ export function mcpSchemaIssues(
 			: Array.isArray(schema.type)
 				? schema.type
 				: [schema.type];
-	if (types.length && !types.some((type) => matchesType(value, type)))
+	if (types.length && !types.some((type: string) => matchesType(value, type)))
 		return [`${path}: expected ${types.join(" or ")}, got ${typeOf(value)}`];
 	if (
 		schema.enum &&
 		!schema.enum.some(
-			(option) => JSON.stringify(option) === JSON.stringify(value),
+			(option: unknown) => JSON.stringify(option) === JSON.stringify(value),
 		)
 	)
 		issues.push(
-			`${path}: must be one of ${schema.enum.map((option) => JSON.stringify(option)).join(", ")}`,
+			`${path}: must be one of ${schema.enum.map((option: unknown) => JSON.stringify(option)).join(", ")}`,
 		);
 	if (
 		schema.const !== undefined &&
@@ -186,7 +186,8 @@ export function mcpSchemaIssues(
 	if (
 		branches &&
 		!branches.some(
-			(branch) => mcpSchemaIssues(branch, value, path, depth + 1).length === 0,
+			(branch: JSONSchema7Definition) =>
+				mcpSchemaIssues(branch, value, path, depth + 1).length === 0,
 		)
 	)
 		issues.push(`${path}: matches none of the allowed shapes`);

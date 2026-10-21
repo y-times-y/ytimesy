@@ -37,9 +37,14 @@ const mocks = vi.hoisted(() => ({
 	lean: null as null | Record<string, unknown>,
 	roundOpen: vi.fn(async () => false),
 	/** Cross-chat memory for the root builder; off unless a test sets one. */
-	memory: vi.fn(async (): Promise<unknown> => null),
+	turnMemory: vi.fn(async (..._args: unknown[]): Promise<unknown> => null),
+	subagentMemory: vi.fn(async (..._args: unknown[]): Promise<unknown> => null),
 }));
-vi.mock("../services/turn-memory", () => ({ turnMemory: mocks.memory }));
+// Memory is off unless a test turns it on; the real one is in turn-memory.test.ts.
+vi.mock("../services/turn-memory", () => ({
+	turnMemory: mocks.turnMemory,
+	subagentMemory: mocks.subagentMemory,
+}));
 // Development eval users pick harness variants; everyone else gets the default.
 vi.mock("../services/subagent-runtime", async (original) => ({
 	...(await original<typeof import("../services/subagent-runtime")>()),
@@ -117,7 +122,8 @@ vi.mock("../adapters/agent-sessions", () => ({
 }));
 beforeEach(() => {
 	vi.clearAllMocks();
-	mocks.memory.mockReset().mockResolvedValue(null);
+	mocks.turnMemory.mockReset().mockResolvedValue(null);
+	mocks.subagentMemory.mockReset().mockResolvedValue(null);
 	mocks.variant.mockReset().mockReturnValue(undefined);
 	mocks.reviewLoop.mockReset().mockImplementation(() => ({
 		beforeModel: mocks.beforeModel,
@@ -811,6 +817,80 @@ it("immediately queues a completed subagent's parent event", async () => {
 		expect.objectContaining({ eventType: "completed" }),
 	);
 	expect(mocks.enqueue).toHaveBeenCalledWith("event");
+});
+
+it("gives a subagent the project's memory read only: attached to its request, never saved", async () => {
+	const saveHook = vi.fn();
+	const rootMemory = {
+		mode: "full",
+		instructions: "memory instructions",
+		prepareVm: vi.fn(),
+		vmTokens: () => [],
+		releaseVm: vi.fn(),
+		attach: vi.fn(),
+		recordSaved: vi.fn(),
+		afterTurn: saveHook,
+	};
+	mocks.turnMemory.mockResolvedValue(rootMemory);
+	const attach = vi.fn(async (messages: { content: unknown }[]) => ({
+		messages: messages.map((message) => ({
+			...message,
+			content: [
+				{ type: "text", text: String(message.content) },
+				{ type: "text", text: "<memory>\nProject rules\n</memory>" },
+			],
+		})),
+		recall: { head: "abc", lines: [] },
+	}));
+	mocks.subagentMemory.mockResolvedValue({ attach });
+	const seen: { instructions: string; messages: unknown }[] = [];
+	mocks.runtime.mockImplementation(async (input) => {
+		seen.push({ instructions: input.instructions, messages: input.messages });
+		return [];
+	});
+	mocks.promptSubmit.mockResolvedValue({ block: false });
+	const brief = {
+		...childTurn,
+		messages: [{ role: "user", content: "Check the export" }],
+		items: [
+			{
+				kind: "userMessage",
+				id: SessionItemId("brief"),
+				text: "Check the export",
+			},
+		],
+	} as ApiTurn;
+	for (const agentRole of ["checker", "writer"] as const) {
+		mocks.owner.mockResolvedValue({
+			id: "session",
+			userId: "owner",
+			projectId: "project",
+			harness: "api",
+			parentSessionId: "parent",
+			taskAccess: agentRole === "writer" ? "read_write" : "read_only",
+			agentRole,
+		});
+		await runApiTurn({} as WorkspaceMachines, brief);
+		expect(mocks.subagentMemory).toHaveBeenLastCalledWith(
+			expect.objectContaining({ userId: "owner", projectId: "project" }),
+			expect.anything(),
+		);
+		expect(mocks.subagentMemory.mock.lastCall?.[0]).toMatchObject({
+			role: agentRole,
+		});
+	}
+	expect(attach).toHaveBeenCalledTimes(2);
+	expect(seen).toHaveLength(2);
+	for (const request of seen) {
+		expect(JSON.stringify(request.messages)).toContain("Project rules");
+		// No memory instructions: a child is never told to write memory.
+		expect(request.instructions).not.toContain("memory instructions");
+	}
+	// Only the root chat's memory has a save hook, and a child never loads it.
+	expect(mocks.turnMemory).not.toHaveBeenCalled();
+	expect(saveHook).not.toHaveBeenCalled();
+	expect(rootMemory.prepareVm).not.toHaveBeenCalled();
+	expect(rootMemory.recordSaved).not.toHaveBeenCalled();
 });
 
 it("tells builders their repository instructions are supplied, with the same system prompt every turn", async () => {
@@ -1707,7 +1787,7 @@ describe("the VM's memory token is released however a step ends", () => {
 
 	it("on a failed turn", async () => {
 		const memory = fakeMemory();
-		mocks.memory.mockResolvedValue(memory);
+		mocks.turnMemory.mockResolvedValue(memory);
 		mocks.stepRuntime.mockImplementation(async (input) => {
 			await input.tools.workspace();
 			throw new Error("Model unavailable");
@@ -1729,7 +1809,7 @@ describe("the VM's memory token is released however a step ends", () => {
 		vi.useFakeTimers();
 		try {
 			const memory = fakeMemory();
-			mocks.memory.mockResolvedValue(memory);
+			mocks.turnMemory.mockResolvedValue(memory);
 			mocks.renew.mockResolvedValueOnce(true).mockResolvedValue(false);
 			mocks.cancelRequested.mockResolvedValue(true);
 			mocks.stepRuntime.mockImplementation(async (input) => {
@@ -1753,7 +1833,7 @@ describe("the VM's memory token is released however a step ends", () => {
 
 	it("revokes earlier steps' tokens even when this step never prepared the VM", async () => {
 		const memory = fakeMemory();
-		mocks.memory.mockResolvedValue(memory);
+		mocks.turnMemory.mockResolvedValue(memory);
 		mocks.stepRuntime.mockImplementation(async () => {
 			throw new Error("Model unavailable");
 		});
