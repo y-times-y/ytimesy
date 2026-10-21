@@ -333,6 +333,20 @@
 	letter-spacing: 0.04em;
 	text-transform: uppercase;
 }
+.memory-topic-group > header button {
+	opacity: 0;
+	transition: opacity 120ms ease;
+}
+.memory-topic-group:hover > header button,
+.memory-topic-group:focus-within > header button,
+.memory-topic-group > header button[aria-pressed="true"] {
+	opacity: 1;
+}
+@media (hover: none) {
+	.memory-topic-group > header button {
+		opacity: 1;
+	}
+}
 .memory-topic-group h3 .memory-muted {
 	margin-left: 4px;
 	color: #5f5f5f;
@@ -536,18 +550,6 @@ a.memory-row-action:hover {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
-.memory-inspector button.memory-info,
-.memory-info {
-	display: inline-flex;
-	align-items: center;
-	height: auto;
-	margin-left: auto;
-	padding: 2px;
-	border: 0;
-	background: transparent;
-	color: #6f6f6f;
-	cursor: help;
-}
 .memory-info-tip {
 	z-index: 200;
 	max-width: 260px;
@@ -714,33 +716,46 @@ a.memory-row-action:hover {
 	text-anchor: middle;
 }
 .lane-dream line {
-	stroke: #b9b4d6;
-	stroke-opacity: 0.35;
-	stroke-dasharray: 1 4;
+	stroke: #ffffff;
+	stroke-opacity: 0.14;
+	stroke-width: 1;
+	stroke-dasharray: 3 4;
+}
+.lane-dream text {
+	fill: #6a6a6a;
+	font-size: 10px;
+	letter-spacing: 0.02em;
+	text-anchor: middle;
+}
+.lane-dot {
+	fill: currentColor;
+}
+.lane-mark[data-mark="inferred"] {
+	opacity: 0.45;
+}
+.lane-mark[data-retired="true"] {
+	opacity: 0.2;
+}
+.lane-new {
+	fill: none;
+	stroke: currentColor;
+	stroke-opacity: 0.75;
+	stroke-width: 1;
+}
+.lane-rule {
+	stroke: currentColor;
+	stroke-width: 2;
 	stroke-linecap: round;
 }
-.lane-dream > svg {
-	color: #b9b4d6;
-	opacity: 0.75;
-}
-.lane-merge circle {
-	fill: #0b0b0b;
-	stroke: #d4d4d4;
-	stroke-width: 1.3;
-}
-.lane-merge path {
-	stroke: #d4d4d4;
-	stroke-width: 1.3;
-	stroke-linecap: round;
+.lane-merge-end {
+	fill: #d4d4d4;
+	opacity: 0.6;
 }
 .lane-merge-line {
 	fill: none;
 	stroke: #d4d4d4;
 	stroke-opacity: 0.28;
 	stroke-width: 1;
-}
-.lane-ghost .lane-mark {
-	opacity: 0.4;
 }
 .lane-curves path {
 	fill: none;
@@ -757,31 +772,12 @@ a.memory-row-action:hover {
 .lane-curves[data-focus="true"] path:not([data-active="true"]) {
 	stroke-opacity: 0.12;
 }
-.lane-shape {
-	fill: currentColor;
-}
-.lane-mark[data-mark="inferred"] .lane-shape {
-	fill: #0b0b0b;
-	stroke: currentColor;
-	stroke-width: 1.5;
-}
-.lane-glow {
-	fill: currentColor;
-	opacity: 0.16;
-}
 .lane-nodes > g {
 	cursor: pointer;
 	transition: opacity 140ms ease;
 }
-.lane-nodes > g[data-retired="true"] {
-	opacity: 0.3;
-}
 .lane-nodes[data-focus="true"] > g:not([data-chain="true"]) {
 	opacity: 0.45;
-}
-.lane-nodes[data-focus="true"]
-	> g[data-retired="true"]:not([data-chain="true"]) {
-	opacity: 0.18;
 }
 .lane-nodes > g[data-chain="true"] {
 	opacity: 1;
@@ -872,12 +868,16 @@ a.memory-row-action:hover {
 	top: 14px;
 	right: 14px;
 	display: flex;
-	gap: 2px;
-	padding: 3px;
+	padding: 2px;
+	border-color: #ffffff0f;
+	background: #111111;
+	box-shadow: none;
 }
 .memory-graph-page .memory-lanes-zoom button {
-	height: 26px;
+	height: 24px;
 	padding: 0 8px;
+	color: #8a8a8a;
+	font-size: 11.5px;
 }
 .memory-graph-tip {
 	position: absolute;
@@ -1006,6 +1006,14 @@ a.memory-row-action:hover {
 	padding: 0 8px;
 	border: 1px solid #ffffff10;
 }
+.memory-title-tip {
+	cursor: help;
+	border-radius: 4px;
+	outline: none;
+}
+.memory-title-tip:focus-visible {
+	box-shadow: 0 0 0 2px #ffffff30;
+}
 .memory-lanes-legend {
 	position: absolute;
 	right: 0;
@@ -1026,7 +1034,8 @@ a.memory-row-action:hover {
 .memory-lanes-legend li {
 	display: inline-flex;
 	align-items: center;
-	gap: 5px;
+	gap: 6px;
+	color: #6f6f6f;
 }
 .memory-lanes[data-narrow="true"] .memory-graph-details {
 	top: auto;

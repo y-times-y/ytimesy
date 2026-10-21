@@ -1,7 +1,7 @@
-import { ChevronRight, Moon } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { useState } from "react";
 import type { MemoryDreamStatus } from "#/domain/memory-dream-schedule";
-import { MemoryInfo } from "./memory-info";
+import { MemoryTitleTip } from "./memory-info";
 
 function time(iso: string) {
 	return new Date(iso).toLocaleTimeString("en-US", {
@@ -55,17 +55,14 @@ export function MemoryDreams({
 	return (
 		<section className="memory-dreams" aria-label="Dreaming">
 			<header>
-				<Moon size={14} aria-hidden="true" />
-				<h3>Dreaming</h3>
+				<MemoryTitleTip
+					tip={`About 15 minutes after your chats go quiet, the agent reviews them: saves what was missed, merges duplicates and retires lines a later chat replaced. Once a week it reviews all of memory${status.reviewDue ? ` (next ${day(status.reviewDue)})` : ""}.`}
+				>
+					<h3>Dreaming</h3>
+				</MemoryTitleTip>
 				<span className="memory-dreams-tagline">
 					tidies memory while you're away
 				</span>
-				<MemoryInfo label="About dreaming">
-					About 15 minutes after your chats go quiet, the agent reviews them:
-					saves what was missed, merges duplicates and retires lines a later
-					chat replaced. Once a week it reviews all of memory
-					{status.reviewDue ? ` (next ${day(status.reviewDue)})` : ""}.
-				</MemoryInfo>
 			</header>
 			<dl className="memory-dreams-facts">
 				<div>
@@ -81,7 +78,7 @@ export function MemoryDreams({
 								onClick={() => setOpen((value) => !value)}
 							>
 								Changes
-								<ChevronRight size={12} aria-hidden="true" />
+								<ChevronRight size={14} strokeWidth={1.5} aria-hidden="true" />
 							</button>
 						) : null}
 					</dd>

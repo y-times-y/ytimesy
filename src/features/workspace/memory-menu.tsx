@@ -57,6 +57,7 @@ export function MemoryScopeMenu({
 						>
 							<Check
 								size={14}
+								strokeWidth={1.5}
 								aria-hidden="true"
 								style={{ opacity: choice.value === value ? 1 : 0 }}
 							/>

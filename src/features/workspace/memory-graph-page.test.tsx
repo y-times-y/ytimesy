@@ -63,7 +63,11 @@ describe("Memory lanes page", () => {
 		expect(html.match(/data-node="/g)).toHaveLength(3);
 		expect(html).toContain('data-retired="true"');
 		expect(html).toContain('data-mark="rule"');
-		expect(html).toContain('class="lane-merge"');
+		// Merged lines converge into the line they became; no extra merge glyph.
+		expect(html.match(/class="lane-merge-line"/g)).toHaveLength(1);
+		expect(html).toContain(">Dream</text>");
+		expect(html).not.toContain('lane-merge"');
+		expect(html).toContain('class="lane-rule"');
 		expect(html).toContain(">Today<");
 		const labels = html.slice(html.indexOf("lane-labels"));
 		expect(labels.indexOf("Personal")).toBeLessThan(labels.indexOf("web"));
@@ -71,17 +75,15 @@ describe("Memory lanes page", () => {
 		expect(html).not.toContain("hex");
 	});
 
-	it("explains every mark in one legend row", () => {
+	it("explains the marks in one short legend line", () => {
 		const html = renderToStaticMarkup(<MemoryLanesLegend />);
 		for (const label of [
-			"Stated",
 			"Inferred",
+			"New this week",
 			"Always on",
-			"New",
-			"Replaced",
-			"Changed",
-			"Dream",
+			"Replaced by",
 		])
 			expect(html).toContain(label);
+		expect(html.match(/<li>/g)).toHaveLength(4);
 	});
 });

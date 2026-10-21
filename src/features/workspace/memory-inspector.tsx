@@ -3,7 +3,6 @@ import { useServerFn } from "@tanstack/react-start";
 import {
 	ChevronDown,
 	FolderInput,
-	History,
 	Pencil,
 	Pin,
 	PinOff,
@@ -344,7 +343,7 @@ export function MemoryInspector({
 							aria-label="Dismiss"
 							onClick={() => setNotice(null)}
 						>
-							<X size={12} />
+							<X size={14} strokeWidth={1.5} />
 						</button>
 					</p>
 				) : null}
@@ -396,7 +395,7 @@ export function MemoryInspector({
 							)}
 							<div className="memory-list-tools">
 								<label className="memory-search">
-									<Search size={13} aria-hidden="true" />
+									<Search size={14} strokeWidth={1.5} aria-hidden="true" />
 									<input
 										type="search"
 										placeholder="Search"
@@ -411,7 +410,7 @@ export function MemoryInspector({
 											aria-label="Clear search"
 											onClick={() => setQuery("")}
 										>
-											<X size={12} />
+											<X size={14} strokeWidth={1.5} />
 										</button>
 									) : null}
 								</label>
@@ -490,7 +489,7 @@ export function MemoryInspector({
 							disabled={!files?.length}
 							onClick={() => setConfirmClear(true)}
 						>
-							<Trash2 size={13} aria-hidden="true" /> Clear all
+							Clear all
 						</button>
 					)}
 				</div>
@@ -582,7 +581,7 @@ function MemoryComposer({
 						aria-label={`Applies to ${projectLabel(project)}`}
 					>
 						{projectLabel(project)}
-						<ChevronDown size={12} aria-hidden="true" />
+						<ChevronDown size={14} strokeWidth={1.5} aria-hidden="true" />
 					</button>
 				</MemoryScopeMenu>
 				<button
@@ -592,7 +591,6 @@ function MemoryComposer({
 					title="Attach to every chat, whatever the request"
 					onClick={() => setAlways((value) => !value)}
 				>
-					<Pin size={12} aria-hidden="true" />
 					Always on
 				</button>
 				<span className="memory-composer-hint">
@@ -646,10 +644,9 @@ function TopicGroup({
 					className="memory-quiet"
 					aria-pressed={showHistory}
 					aria-label={`History of ${title}`}
-					title="History"
 					onClick={() => setShowHistory((value) => !value)}
 				>
-					<History size={13} aria-hidden="true" />
+					History
 				</button>
 			</header>
 			{showHistory ? (
@@ -797,9 +794,7 @@ function MemoryRowItem({
 			) : (
 				<p className="memory-row-text">
 					{row.rule && !row.replaced ? (
-						<span className="memory-badge">
-							<Pin size={10} aria-hidden="true" /> Always on
-						</span>
+						<span className="memory-badge">Always on</span>
 					) : null}
 					{row.replaced ? (
 						<span className="memory-badge" data-tone="replaced">
@@ -885,7 +880,11 @@ function MemoryRowItem({
 									disabled={busy}
 									onClick={onTogglePin}
 								>
-									{row.rule ? <PinOff size={13} /> : <Pin size={13} />}
+									{row.rule ? (
+										<PinOff size={14} strokeWidth={1.5} />
+									) : (
+										<Pin size={14} strokeWidth={1.5} />
+									)}
 								</button>
 								<button
 									type="button"
@@ -895,7 +894,7 @@ function MemoryRowItem({
 									disabled={busy}
 									onClick={onStartEdit}
 								>
-									<Pencil size={13} />
+									<Pencil size={14} strokeWidth={1.5} />
 								</button>
 								<MemoryScopeMenu
 									label="Move to"
@@ -914,7 +913,7 @@ function MemoryRowItem({
 										title="Move"
 										disabled={busy}
 									>
-										<FolderInput size={13} />
+										<FolderInput size={14} strokeWidth={1.5} />
 									</button>
 								</MemoryScopeMenu>
 							</>
@@ -927,7 +926,7 @@ function MemoryRowItem({
 							disabled={busy}
 							onClick={onAskDelete}
 						>
-							<Trash2 size={13} />
+							<Trash2 size={14} strokeWidth={1.5} />
 						</button>
 					</span>
 				)}
