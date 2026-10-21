@@ -1344,6 +1344,102 @@ describe("checkerMode=pair: the checker's judge and worker", () => {
 		);
 	});
 
+	it("starts up to 3 workers at once, splits the worker tokens, and waits for all their reports", async () => {
+		const reports: Record<string, string> = {
+			"child-1": "w1: exit 0",
+			"child-2": "w2: exit 1",
+			"child-3": "w3: exit 0",
+		};
+		const takeReport = vi.fn(async (id: string) =>
+			reports[id]
+				? { outcome: "completed" as const, report: reports[id] }
+				: null,
+		);
+		const { call, deps } = pair({ takeReport });
+		const result = await call({
+			workers: [
+				{ brief: "Group A in $SCRATCH/w1." },
+				{ brief: "Group B in $SCRATCH/w2." },
+				{ brief: "Group C in $SCRATCH/w3." },
+			],
+		});
+		expect(result).toEqual({
+			workers: [
+				{
+					id: "1.1",
+					model: "GPT-6 Luna · Codex",
+					outcome: "completed",
+					report: "w1: exit 0",
+				},
+				{
+					id: "1.2",
+					model: "GPT-6 Luna · Codex",
+					outcome: "completed",
+					report: "w2: exit 1",
+				},
+				{
+					id: "1.3",
+					model: "GPT-6 Luna · Codex",
+					outcome: "completed",
+					report: "w3: exit 0",
+				},
+			],
+		});
+		expect(deps.openTask).toHaveBeenCalledTimes(3);
+		// Half the judge's tokens, shared by three.
+		for (const entry of vi.mocked(deps.saveSpec).mock.calls)
+			expect(entry[2].budget).toMatchObject({ tokens: 133_333 });
+	});
+
+	it("refuses more than 3 live workers", async () => {
+		const { call, deps } = pair({ takeReport: vi.fn(async () => null) });
+		await expect(
+			call({ workers: [1, 2, 3, 4].map((n) => ({ brief: `Group ${n}` })) }),
+		).rejects.toThrow("At most 3 workers run at once; 0 still running.");
+		expect(deps.openTask).not.toHaveBeenCalled();
+		// Two still running: a batch of two more is refused, one more starts.
+		const running = pair({ takeReport: vi.fn(async () => null) });
+		Object.assign(running.context, { waitDeadlineAt: 0 });
+		await running.call({ workers: [{ brief: "a" }, { brief: "b" }] });
+		await expect(
+			running.call({ workers: [{ brief: "c" }, { brief: "d" }] }),
+		).rejects.toThrow("At most 3 workers run at once; 2 still running.");
+		await running.call({ brief: "c" });
+		expect(running.deps.openTask).toHaveBeenCalledTimes(3);
+	});
+
+	it("runs one strong worker on the judge's model, records it, and refuses a second", async () => {
+		const takeReport = vi.fn().mockResolvedValue({
+			outcome: "completed",
+			report: "traced it",
+		});
+		const { call, deps, sessions } = pair({ takeReport });
+		const result = await call({ brief: "Trace the race.", model: "strong" });
+		// No roleModels.checker set: the judge's own model.
+		expect(result).toMatchObject({ id: "1.1", model: "gpt-6.1-sol" });
+		expect(vi.mocked(deps.openTask).mock.calls[0]?.[0]).toMatchObject({
+			modelId: "gpt-6.1-sol",
+			access: "read_only",
+		});
+		expect(vi.mocked(deps.saveSpec).mock.calls[0]?.[2].budget).toMatchObject({
+			checkerPair: "worker",
+			checkerStrong: true,
+		});
+		Object.assign(sessions.at(-1) as Row, { turnStatus: "completed" });
+		await expect(
+			call({ brief: "Another hard one.", model: "strong" }),
+		).rejects.toThrow("At most 1 strong worker per check (already used).");
+		await expect(
+			call({
+				workers: [{ brief: "a", model: "strong" }, { brief: "b" }],
+			}),
+		).rejects.toThrow("At most 1 strong worker per check");
+		// The cheap worker is still available.
+		expect(await call({ brief: "Run make test." })).toMatchObject({
+			model: "GPT-6 Luna · Codex",
+		});
+	});
+
 	it("refuses a worker when the judge's time is nearly gone", async () => {
 		const { call, deps, sessions } = pair();
 		Object.assign(sessions[1] as Row, { createdAt: at(-7.5) });
