@@ -76,4 +76,39 @@ describe("line vectors", () => {
 		]);
 		expect(embed.documents).toHaveBeenCalledWith(["a"]);
 	});
+
+	it("shares lines another call is still fetching, and the read hook need not wait for the save", async () => {
+		let release: () => void = () => {};
+		const saved = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const cache = {
+			load: vi.fn(async () => new Map<string, number[]>()),
+			save: vi.fn(async () => saved),
+		};
+		const stats = {
+			warm: 0,
+			shared: 0,
+			loaded: 0,
+			loadMs: 0,
+			embedded: 0,
+			embedMs: 0,
+		};
+		// The turn's prefetch and a read hook on a newer snapshot, at once.
+		const [prefetch, hook] = await Promise.all([
+			cachedLineEmbeddings("u3", ["a", "bb"], embed, cache, {
+				saveInBackground: true,
+			}),
+			cachedLineEmbeddings("u3", ["a", "bb", "ccc"], embed, cache, {
+				stats,
+				saveInBackground: true,
+			}),
+		]);
+		expect(prefetch).toEqual([[1], [2]]);
+		expect(hook).toEqual([[1], [2], [3]]);
+		// Each line is embedded once; the save is still pending.
+		expect(embed.documents.mock.calls).toEqual([[["a", "bb"]], [["ccc"]]]);
+		expect(stats).toMatchObject({ shared: 2, embedded: 1 });
+		release();
+	});
 });

@@ -452,7 +452,12 @@ export type ChatResult = {
 	verifierOutput: string;
 	expiredLeak: string | null;
 	/** Ours: the read hook's outcome and wall time, as recorded on the request. */
-	hook?: { outcome: string; ms: number; error?: string };
+	hook?: {
+		outcome: string;
+		ms: number;
+		error?: string;
+		spans?: Record<string, number>;
+	};
 	/** Supermemory: the plugin's recall for this prompt. */
 	smRecall?: {
 		profileItems: number;
@@ -1715,6 +1720,20 @@ function printReport(outputs: ArmOutput[]) {
 			console.log(
 				`\n${output.arm} read hook: ${[...outcomes].map(([outcome, count]) => `${outcome} ${count}`).join(", ")}; median ${ms[Math.floor(ms.length / 2)]}ms, max ${ms[ms.length - 1]}ms`,
 			);
+			// Where the time went (runs from 2026-10-20 on); saveWaitMs is not part of ms.
+			const spans = new Map<string, number[]>();
+			for (const hook of hooks)
+				for (const [name, value] of Object.entries(hook.spans ?? {}))
+					spans.set(name, [...(spans.get(name) ?? []), value]);
+			if (spans.size)
+				console.log(
+					`${output.arm} read hook spans: ${[...spans]
+						.map(([name, values]) => {
+							const sorted = [...values].sort((a, b) => a - b);
+							return `${name} median ${sorted[Math.floor(sorted.length / 2)]} max ${sorted[sorted.length - 1]}`;
+						})
+						.join("; ")}`,
+				);
 		}
 		if (output.costs.length)
 			console.log(

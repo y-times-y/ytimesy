@@ -132,16 +132,39 @@ export function resetWarmLineEmbeddings() {
 	warm.clear();
 }
 
+/** Where a call's line vectors came from, and how long each source took. */
+export type LineEmbeddingStats = {
+	/** Lines held warm in this isolate. */
+	warm: number;
+	/** Lines another call in this isolate was already loading or embedding. */
+	shared: number;
+	/** Lines read from the database, and the read's wall time. */
+	loaded: number;
+	loadMs: number;
+	/** Lines embedded now, and the embedding calls' wall time. */
+	embedded: number;
+	embedMs: number;
+};
+
+/**
+ * Cold lines a call in this isolate is loading or embedding right now, by
+ * warm key: a second call for the same lines (the turn's prefetch and a read
+ * hook on a newer snapshot) waits for them instead of repeating the work.
+ */
+const inFlight = new Map<string, Promise<number[] | undefined>>();
+
 /**
  * Embeddings for `texts`: vectors this isolate holds, then cached ones from
  * the database, the rest computed once and saved. Unchanged lines are never
- * embedded again, and a warm isolate reads nothing.
+ * embedded again, and a warm isolate reads nothing. With `saveInBackground`
+ * (the read hook) the vectors are returned before the database write ends.
  */
 export async function cachedLineEmbeddings(
 	userId: string,
 	texts: readonly string[],
 	embed: Embed,
 	cache = { load: memoryEmbeddings, save: saveMemoryEmbeddings },
+	options: { stats?: LineEmbeddingStats; saveInBackground?: boolean } = {},
 ) {
 	const hashes = texts.map(lineHash);
 	const known = new Map<string, number[]>();
@@ -149,31 +172,95 @@ export async function cachedLineEmbeddings(
 		const vector = warm.get(warmKey(userId, hash));
 		if (vector) known.set(hash, vector);
 	}
-	const cold = [...new Set(hashes.filter((hash) => !known.has(hash)))];
-	if (cold.length)
-		for (const [hash, vector] of await cache.load(
-			userId,
-			MEMORY_EMBEDDING_MODEL,
-			cold,
-		)) {
-			known.set(hash, vector);
-			remember(userId, hash, vector);
-		}
-	const missing = cold.filter((hash) => !known.has(hash));
-	if (missing.length) {
-		const byHash = new Map(hashes.map((hash, index) => [hash, texts[index]]));
-		const vectors = await embed.documents(
-			missing.map((hash) => byHash.get(hash) ?? ""),
+	const unknown = [...new Set(hashes.filter((hash) => !known.has(hash)))];
+	const shared = unknown.filter((hash) => inFlight.has(warmKey(userId, hash)));
+	const cold = unknown.filter((hash) => !inFlight.has(warmKey(userId, hash)));
+	const sharing = shared.map((hash) => inFlight.get(warmKey(userId, hash)));
+	const stats = options.stats;
+	if (stats) {
+		stats.warm += hashes.length - unknown.length;
+		stats.shared += shared.length;
+	}
+	let settle: (vectors: Map<string, number[]>) => void = () => {};
+	const settled = new Promise<Map<string, number[]>>((resolve) => {
+		settle = resolve;
+	});
+	for (const hash of cold) {
+		const key = warmKey(userId, hash);
+		inFlight.set(
+			key,
+			settled.then((vectors) => vectors.get(hash)),
 		);
-		const rows = missing.map((hash, index) => ({
-			hash,
-			embedding: vectors[index],
-		}));
-		for (const row of rows) {
-			known.set(row.hash, row.embedding);
-			remember(userId, row.hash, row.embedding);
+	}
+	const found = new Map<string, number[]>();
+	try {
+		if (cold.length) {
+			const started = Date.now();
+			for (const [hash, vector] of await cache.load(
+				userId,
+				MEMORY_EMBEDDING_MODEL,
+				cold,
+			)) {
+				known.set(hash, vector);
+				found.set(hash, vector);
+				remember(userId, hash, vector);
+			}
+			if (stats) {
+				stats.loaded += found.size;
+				stats.loadMs += Date.now() - started;
+			}
 		}
-		await cache.save(userId, MEMORY_EMBEDDING_MODEL, rows);
+		const missing = cold.filter((hash) => !known.has(hash));
+		if (missing.length) {
+			const byHash = new Map(hashes.map((hash, index) => [hash, texts[index]]));
+			const started = Date.now();
+			const vectors = await embed.documents(
+				missing.map((hash) => byHash.get(hash) ?? ""),
+			);
+			if (stats) {
+				stats.embedded += missing.length;
+				stats.embedMs += Date.now() - started;
+			}
+			const rows = missing.map((hash, index) => ({
+				hash,
+				embedding: vectors[index],
+			}));
+			for (const row of rows) {
+				known.set(row.hash, row.embedding);
+				found.set(row.hash, row.embedding);
+				remember(userId, row.hash, row.embedding);
+			}
+			const saving = cache.save(userId, MEMORY_EMBEDDING_MODEL, rows);
+			if (options.saveInBackground)
+				saving.catch(() => {
+					console.warn("Memory line vectors could not be saved.");
+				});
+			else await saving;
+		}
+	} finally {
+		settle(found);
+		for (const hash of cold) inFlight.delete(warmKey(userId, hash));
+	}
+	// Lines another call was fetching; one it failed to fetch is fetched here.
+	const waited = await Promise.all(sharing);
+	const retry: string[] = [];
+	shared.forEach((hash, index) => {
+		const vector = waited[index] ?? warm.get(warmKey(userId, hash));
+		if (vector) known.set(hash, vector);
+		else retry.push(hash);
+	});
+	if (retry.length) {
+		const byHash = new Map(hashes.map((hash, index) => [hash, texts[index]]));
+		const again = await cachedLineEmbeddings(
+			userId,
+			retry.map((hash) => byHash.get(hash) ?? ""),
+			embed,
+			cache,
+			options,
+		);
+		retry.forEach((hash, index) => {
+			known.set(hash, again[index] ?? []);
+		});
 	}
 	return hashes.map((hash) => known.get(hash) ?? []);
 }

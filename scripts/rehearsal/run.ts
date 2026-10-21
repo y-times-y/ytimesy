@@ -46,6 +46,8 @@ await removeRehearsalVms(values.run);
 const { taskSnapshot } = await import("./task-vm");
 const { FakeCodex } = await import("./fake-codex");
 const { RehearsalEdge } = await import("./edge");
+const { registerRehearsalMemory } = await import("./memory");
+registerRehearsalMemory();
 const { classifierScript, scenarios } = await import("./scenarios");
 const { checkScenario, collect } = await import("./checks");
 const { seedOwner, createRehearsalUser, startTaskChat, sendFollowUp } =
@@ -97,7 +99,12 @@ const results = await Promise.all(
 		);
 		const variant = harnessVariantFromFlags([scenario.variant]);
 		const user = await edge.invoke(() =>
-			createRehearsalUser(owner, `rehearsal ${scenario.id}`, variant),
+			createRehearsalUser(
+				owner,
+				`rehearsal ${scenario.id}`,
+				variant,
+				scenario.memory,
+			),
 		);
 		// The tag leads: an exploration brief quotes the request's start.
 		const text = `[rehearsal:${scenario.id}]\n\n${taskMessage(prepared.task, "/app", variant.subagents !== "off")}`;
