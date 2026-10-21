@@ -1,3 +1,4 @@
+import { applyVmNetworkPolicy } from "./vm-network";
 import { randomBytes } from "node:crypto";
 import { Freestyle, FreestyleApiError, type VmData } from "freestyle";
 import { type AuthSnapshotId, WorkspaceId } from "#/domain/ids";
@@ -100,6 +101,11 @@ export function createFreestyleWorkspaceMachines(
 				"publishHttpRoute" | "listHttpRoutes" | "withdrawHttpRoutes"
 			>
 		> = {
+		async applyNetworkPolicy(workspaceId, policy) {
+			await retryTransientProviderFailure(() =>
+				applyVmNetworkPolicy(freestyle, workspaceId, policy),
+			);
+		},
 		restoreRetainedSession: (userId, sessionId, oldVmId) =>
 			restoreRetainedWorkspace(freestyle, userId, sessionId, oldVmId),
 		async createProofWorkspace(
