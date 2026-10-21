@@ -99,16 +99,23 @@ describe("independentReviewBrief", () => {
 		);
 		// Each test is reported: what it checks, the command, the result.
 		expect(brief).toContain(
-			'"tests": [{ "name": "<what it checks>", "command": "<one command that runs it, absolute paths>", "passed": true, "output": "<the lines that show the result>" }]',
+			'"tests": [{ "name": "<what it checks>", "command": "<one command that runs it, absolute paths>", "passed": true, "probe": false, "output": "<the lines that show the result>" }]',
 		);
 		// The verdict rules.
 		expect(brief).toContain(
-			"pass only when your new tests and the existing checks all pass",
+			"pass when every stated requirement is met with evidence and your non-probe tests and the existing checks pass",
 		);
+		expect(brief).toContain(
+			"fail only when the deliverable breaks something the request or its files state",
+		);
+		expect(brief).toContain(
+			"Your own re-derivation of an answer is not evidence by itself",
+		);
+		expect(brief).toContain("a failed probe is a note, not a failure");
 		expect(brief).toContain(
 			"a pass without new tests of your own counts as unsure",
 		);
-		expect(brief).toContain("with the failing test as its evidence");
+		expect(brief).toContain("shown by a failing test or command");
 		expect(brief).toContain(
 			"unsure only when you genuinely could not run what matters; say why in notes",
 		);

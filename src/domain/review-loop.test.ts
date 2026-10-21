@@ -215,6 +215,15 @@ describe("review gating and time", () => {
 				now: 0,
 				deadlineAt: 1e9,
 			}),
-		).toEqual({ kind: "finish", reason: "no-findings" });
+		).toEqual({ kind: "finish", reason: "unsure" });
+		// Unsure with findings still finishes: only a fail sends the builder back.
+		expect(
+			decideAfterVerdict({
+				verdict: review({ verdict: "unsure", failures: ["x: maybe wrong"] }),
+				findings: [{ kind: "failure", text: "x: maybe wrong" } as never],
+				now: 0,
+				deadlineAt: 1e9,
+			}),
+		).toEqual({ kind: "finish", reason: "unsure" });
 	});
 });
