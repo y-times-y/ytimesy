@@ -15,6 +15,8 @@ import {
 	captureConversationCode,
 	restoreConversationCode,
 } from "../../src/server/services/conversation-code-checkpoint";
+import type { TrialSessions } from "./sessions";
+import { runsUsage } from "./trial";
 import {
 	createReviewLoop,
 	type ReviewLoopDeps,
@@ -66,6 +68,8 @@ export function harborReviewDeps(input: {
 	trace: ReviewTrace;
 	/** roleModels.checker: recorded in the loop's rounds so its spend is priced at that model. */
 	checkerModel?: Omit<LoopChildModel, "notice">;
+	/** checkerMode=pair: the trial's sessions, where a judge's workers are. */
+	sessions?: TrialSessions;
 	now?: () => number;
 }): ReviewLoopDeps {
 	let state: ReviewLoopState | null = null;
@@ -163,6 +167,30 @@ export function harborReviewDeps(input: {
 		stopChild: async (child) => {
 			checkers.get(child)?.stop();
 		},
+		workers: async (judgeId) =>
+			(input.sessions?.children(judgeId) ?? [])
+				.filter((worker) => worker.role === "checkerWorker")
+				.map((worker) => {
+					const usage = runsUsage(worker.events, worker.starts);
+					return {
+						sessionId: worker.id,
+						model: {
+							harness: worker.model.billing.kind === "plan" ? "codex" : "api",
+							modelId: worker.model.modelId,
+							reasoning: worker.model.effort,
+						},
+						items: usage
+							? [
+									{
+										kind: "userMessage",
+										id: SessionItemId(`${worker.id}-usage`),
+										text: "",
+										apiUsage: usage,
+									},
+								]
+							: [],
+					};
+				}),
 		vm: (command, timeoutMs) =>
 			input.workspace.machines.exec(input.workspace.vm, command, timeoutMs),
 	};
@@ -246,6 +274,8 @@ export function checkerStepGuard(input: {
 export type HarborReviewLoop = ReturnType<typeof createReviewLoop>;
 
 export function harborReviewLoop(input: {
+	rigor?: boolean;
+	pair?: boolean;
 	sessionId: string;
 	turnId: string;
 	workspace: AgentToolWorkspace;
@@ -262,5 +292,7 @@ export function harborReviewLoop(input: {
 		billing: input.billing,
 		taskText: () => input.instruction,
 		deps: input.deps,
+		rigor: input.rigor,
+		pair: input.pair,
 	});
 }

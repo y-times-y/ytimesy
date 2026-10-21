@@ -95,7 +95,7 @@ describe("harborBridgeConfig", () => {
 		).toThrow(/does not implement attempts/);
 		expect(() =>
 			harborBridgeConfig({ ...capped, YTIMESY_HARBOR_VARIANT: "subagents=on" }),
-		).toThrow(/does not implement subagents/);
+		).toThrow(/refuses subagents=on: several writers/);
 	});
 
 	it("passes codeMode=primary and a checker model on the subscription route", () => {
@@ -153,13 +153,40 @@ describe("harborBridgeConfig", () => {
 				...capped,
 				YTIMESY_HARBOR_VARIANT: "roleModels.checker=claude-opus-9-9",
 			}),
-		).toThrow(/checker's claude-opus-9-9/);
+		).toThrow(/roleModels\.checker's claude-opus-9-9/);
 		expect(() =>
 			harborBridgeConfig({
 				...capped,
-				YTIMESY_HARBOR_VARIANT: "roleModels.writer=claude-sonnet-5-5",
+				YTIMESY_HARBOR_VARIANT: "roleModels.researcher=claude-sonnet-5-5",
 			}),
-		).toThrow(/does not implement roleModels\.writer/);
+		).toThrow(/does not implement roleModels\.researcher/);
+		// lead=fusion's roles, checkerMode=pair and rigor run in the bridge.
+		const fusion = harborBridgeConfig({
+			...capped,
+			YTIMESY_HARBOR_VARIANT:
+				"lead=fusion,review=on,checkerMode=pair,rigor=on,codeMode=primary,roleModels.writer=claude-sonnet-5-5,roleModels.checker=claude-sonnet-5-5,roleModels.checkerWorker=claude-sonnet-5-5,roleModels.classifier=claude-sonnet-5-5@low,roleModels.writerEscalation=claude-opus-5-5",
+		});
+		expect(Object.keys(fusion.roles).sort()).toEqual([
+			"checker",
+			"checkerWorker",
+			"classifier",
+			"writer",
+			"writerEscalation",
+		]);
+		expect(fusion.roles.classifier?.effort).toBe("low");
+		expect(() =>
+			harborBridgeConfig({
+				...capped,
+				YTIMESY_HARBOR_VARIANT: "checkerMode=pair",
+			}),
+		).toThrow(/set review=on/);
+		for (const subagents of ["on", "force"])
+			expect(() =>
+				harborBridgeConfig({
+					...capped,
+					YTIMESY_HARBOR_VARIANT: `subagents=${subagents},lead=fusion`,
+				}),
+			).toThrow(/several writers at once/);
 		expect(
 			harborBridgeConfig({
 				...capped,

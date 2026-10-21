@@ -157,8 +157,17 @@ export async function harborHarness(input: {
 	onEvent: (event: ApiAgentEvent) => Promise<void>;
 	/** A task's MCP servers, reachable through the mcp-call helper. */
 	mcpNote?: string;
-	/** A runtime subagent (the review loop's checker): its role and budget, no web search. */
-	subagent?: { role: SubagentRole; budget: SubagentBudget };
+	/**
+	 * A runtime subagent: the review loop's checker or a pair worker (read
+	 * only), or lead=fusion's sidekick (role writer: it writes the lead's
+	 * checkout). No web search.
+	 */
+	subagent?: { role: SubagentRole; budget: SubagentBudget; readOnly: boolean };
+	/**
+	 * Tools the trial adds on top of the surface, before the prompt is built:
+	 * the fusion lead's agent/agent_send, a pair judge's checker_worker.
+	 */
+	extraTools?: (tools: ToolSet) => ToolSet;
 }): Promise<HarborHarness> {
 	const { workspace, variant } = input;
 	const memo = memoryMemo();
@@ -166,7 +175,7 @@ export async function harborHarness(input: {
 	const subscription = input.provider === "codex-subscription";
 	// The checker is a reader: read-only files, a working command runner and
 	// a lean surface without write and edit (builderToolSurface readOnly).
-	const readOnly = !!input.subagent;
+	const readOnly = input.subagent?.readOnly ?? false;
 	const base = harborBaseTools(workspace, {
 		nativePatch: input.provider === "openai",
 		freeformPatch: subscription,
@@ -233,15 +242,16 @@ export async function harborHarness(input: {
 					? primaryCodeModeTools({ [CODE_MODE_TOOL]: runCode }, tools)
 					: { ...tools, [CODE_MODE_TOOL]: runCode };
 	}
+	if (input.extraTools) tools = { ...tools, ...input.extraTools(tools) };
 	const instructions = agentTurnInstructions({
-		shellBuilder: true,
 		session: input.subagent
 			? {
-					parentSessionId: "harbor-builder",
 					agentRole: input.subagent.role,
 					agentBudget: input.subagent.budget,
 				}
-			: { parentSessionId: null },
+			: {},
+		lead: variant.lead,
+		rigor: variant.rigor === "on",
 		tools,
 		plugins: [],
 		projectKnowledge: null,
