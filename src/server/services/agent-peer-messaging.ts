@@ -1,4 +1,5 @@
 import { Effect } from "effect";
+import { steeringTexts } from "#/domain/agent-steering";
 import { sessionItemsFromUnknown } from "#/domain/session-item";
 import { sidekickState } from "#/domain/sidekick";
 import {
@@ -22,6 +23,8 @@ export type PeerMessage = {
 	readonly senderId: string;
 	readonly recipientId: string;
 	readonly message: string;
+	/** The user wrote it from the chat's agents list; senderId is the recipient's parent. */
+	readonly fromUser?: true;
 };
 
 /** Only a started direct subagent of the sender, same owner and project. */
@@ -78,8 +81,13 @@ export async function deliverAgentPeerMessage(
 	// let it write in the lead's checkout beside the lead.
 	if (sidekickState(recipient)?.retired && recipient.turnStatus !== "running")
 		return;
-	const text = `Message from ${sender.title} (${sender.id}):\n\n${message.message}\n\nCoordination message ID: ${messageId}`;
-	const runtimeText = `${text}\n\nThis is your parent agent steering your brief, not a new user request. Adjust your work accordingly; keep your role's access limits, and put anything you would answer in your final report.`;
+	const { text, runtimeText } = steeringTexts({
+		sender: message.fromUser
+			? { kind: "user" }
+			: { kind: "parent", title: sender.title, id: sender.id },
+		message: message.message,
+		messageId,
+	});
 	if (await serverPeerMessageAccepted(recipient.id, messageId)) return;
 	if (
 		sessionItemsFromUnknown(recipient.items).some(

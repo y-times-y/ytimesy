@@ -2301,3 +2301,220 @@ code.session-tool-target {
 	flex: none;
 	margin-top: 3px;
 }
+
+/* Agents list under the composer: the lead, then this request's helpers. */
+.agent-dot {
+	flex: 0 0 7px;
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: #d4d4d4;
+}
+.agent-dot[data-color="blue"] {
+	background: #6b8fd6;
+}
+.agent-dot[data-color="green"] {
+	background: #5fae8b;
+}
+.agent-dot[data-color="amber"] {
+	background: #c9a45a;
+}
+.agent-dot[data-color="violet"] {
+	background: #9a83d4;
+}
+.agent-dot[data-color="rose"] {
+	background: #cf7d93;
+}
+.agent-dot[data-color="teal"] {
+	background: #4fa8ad;
+}
+.agent-panel {
+	margin: 6px 0 2px;
+	padding: 0;
+}
+.agent-panel-summary {
+	display: none;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	min-height: 32px;
+	padding: 0 10px;
+	border: 0;
+	border-radius: 8px;
+	background: transparent;
+	color: #bdbdbd;
+	font-size: 12px;
+	text-align: left;
+}
+.agent-panel-summary:hover {
+	background: #ffffff08;
+}
+.agent-panel-dots {
+	display: inline-flex;
+	gap: 3px;
+}
+.agent-panel-summary-meta {
+	color: #7a7a7a;
+}
+.agent-panel-chevron {
+	margin-left: auto;
+	color: #7a7a7a;
+	transition: transform 120ms ease-out;
+}
+.agent-panel[data-expanded="true"] .agent-panel-chevron {
+	transform: rotate(90deg);
+}
+.agent-panel-list {
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+.agent-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	min-width: 0;
+	min-height: 28px;
+	padding: 0 10px;
+	border: 0;
+	border-radius: 8px;
+	background: transparent;
+	color: #d6d6d6;
+	font-size: 12px;
+	line-height: 16px;
+	text-align: left;
+}
+.agent-row:hover {
+	background: #ffffff08;
+}
+.agent-row[aria-current="true"] {
+	background: #ffffff10;
+	box-shadow: inset 0 0 0 1px #ffffff14;
+	color: #f2f2f2;
+}
+.agent-row-name {
+	flex: 0 0 auto;
+	font-weight: 500;
+}
+.agent-row-doing {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	color: #858585;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	animation: agent-row-doing-in 180ms ease-out;
+}
+@keyframes agent-row-doing-in {
+	from {
+		opacity: 0.25;
+	}
+	to {
+		opacity: 1;
+	}
+}
+.agent-row-queued {
+	flex: 0 0 auto;
+	padding: 1px 6px;
+	border-radius: 999px;
+	background: #ffffff0f;
+	color: #bdbdbd;
+	font-size: 11px;
+}
+.agent-row-status {
+	flex: 0 0 auto;
+	min-width: 48px;
+	color: #7a7a7a;
+	font-size: 11px;
+	text-align: right;
+}
+.agent-row-status[data-status="working"] {
+	color: #bdbdbd;
+}
+.agent-row-status[data-status="failed"] {
+	color: #f87171;
+}
+.agent-row[data-status="done"] .agent-row-name,
+.agent-row[data-status="idle"] .agent-row-name {
+	color: #a8a8a8;
+}
+.agent-panel-more {
+	min-height: 26px;
+	padding: 0 10px 0 25px;
+	border: 0;
+	border-radius: 8px;
+	background: transparent;
+	color: #7a7a7a;
+	font-size: 12px;
+}
+.agent-panel-more:hover {
+	color: #d4d4d4;
+}
+@media (max-width: 600px), (max-width: 900px) and (max-height: 500px) {
+	.agent-panel-summary {
+		display: flex;
+	}
+	.agent-panel:not([data-expanded="true"]) .agent-panel-list {
+		display: none;
+	}
+	.agent-row {
+		min-height: 36px;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.agent-row-doing {
+		animation: none;
+	}
+}
+
+/* A helper's start and finish in its parent's chat: one quiet line. */
+.helper-line {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	max-width: 100%;
+	margin: 2px 0;
+	padding: 2px 0;
+	border: 0;
+	background: transparent;
+	color: #858585;
+	font-size: 12px;
+	line-height: 18px;
+	text-align: left;
+}
+button.helper-line:hover {
+	color: #d4d4d4;
+}
+.helper-line-text {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.helper-line[data-finished="true"][data-status="failed"] .helper-line-text {
+	color: #f87171;
+}
+
+/* A helper's view: who sent each message, and steering still waiting. */
+.session-message-sender {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin: 0 0 4px 2px;
+	color: #858585;
+	font-size: 11px;
+	font-weight: 500;
+}
+.session-queued-badge {
+	padding: 0 6px;
+	border-radius: 999px;
+	background: #ffffff10;
+	color: #bdbdbd;
+	font-size: 10px;
+	font-weight: 500;
+	line-height: 16px;
+}
