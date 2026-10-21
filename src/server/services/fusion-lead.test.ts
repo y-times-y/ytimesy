@@ -12,7 +12,6 @@ import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import {
 	type FusionLeadDeps,
 	fusionLeadGate,
-	fusionRoundOpen,
 	LEAD_WAITS_NOTICE,
 	leadWriteTracker,
 	withSidekickWriteGuard,
@@ -219,7 +218,7 @@ describe("fusion lead gate", () => {
 		expect(off.deps.explore).not.toHaveBeenCalled();
 	});
 
-	it("waits for a build round the lead started and stages its report", async () => {
+	it("releases Main during a build round: busy at once, no wait, its report left for delivery after Main's turn", async () => {
 		const explored = endSidekickRound(
 			newSidekickState({ tokens: 1_000_000 }, at(-60_000), {
 				requestKey: "u1",
@@ -233,35 +232,18 @@ describe("fusion lead gate", () => {
 			tokens: 1000,
 			requestKey: "u1",
 		});
-		const { deps, run } = gate({
-			children: (now) =>
-				now - T0 < 9_000
-					? [sidekick(building, true)]
-					: [
-							sidekick(
-								endSidekickRound(building, {
-									now: at(9_000),
-									outcome: "finished",
-									patchFiles: 1,
-								}),
-								false,
-							),
-						],
-			// The report event lags the round's end by a few seconds.
-			events: (now) => (now - T0 < 15_000 ? [] : [report("e2")]),
+		const running = gate({ children: () => [sidekick(building, true)] });
+		expect(await running.run()).toBe("busy");
+		expect(running.deps.sleep).not.toHaveBeenCalled();
+		expect(running.deps.reportEvents).toHaveBeenCalledWith("s", at(-1_000));
+		// Reported: the round is over (Main may write again), and the report is
+		// not staged into Main's running turn.
+		const reported = gate({
+			children: () => [sidekick(building, false)],
+			events: () => [report("e2")],
 		});
-		expect(await run()).toBe("ready");
-		expect(deps.stage).toHaveBeenCalledWith("lead", "e2", expect.any(String));
-		expect(deps.reportEvents).toHaveBeenCalledWith("s", at(-1_000));
-		// The completion check reads the same rule, bounded by the step's start:
-		// a round that began in this step is open, an older one never holds it.
-		const openDeps = {
-			now: () => T0,
-			children: async () => [sidekick(building, true)],
-			reportEvents: async () => [],
-		};
-		expect(await fusionRoundOpen(lead, T0 - 5_000, openDeps)).toBe(true);
-		expect(await fusionRoundOpen(lead, T0, openDeps)).toBe(false);
+		expect(await reported.run()).toBe("ready");
+		expect(reported.deps.stage).not.toHaveBeenCalled();
 	});
 
 	it("treats a round as over once its report event exists, though its state still shows it open", async () => {
@@ -282,8 +264,9 @@ describe("fusion lead gate", () => {
 		});
 		expect(await run()).toBe("ready");
 		expect(deps.sleep).not.toHaveBeenCalled();
-		expect(deps.stage).toHaveBeenCalledWith("lead", "e3", expect.any(String));
-		// The state is closed to match, so the completion check agrees.
+		// A build round's report reaches Main after its turn, not mid-turn.
+		expect(deps.stage).not.toHaveBeenCalled();
+		// The state is closed to match.
 		expect(deps.saveState).toHaveBeenCalledWith(
 			"s",
 			expect.objectContaining({
@@ -292,14 +275,6 @@ describe("fusion lead gate", () => {
 				]),
 			}),
 		);
-		expect(
-			await fusionRoundOpen(lead, T0 - 60_000, {
-				now: () => T0,
-				children: async () => [sidekick(open, false)],
-				reportEvents: async () => [report("e3")],
-				saveState: async () => {},
-			}),
-		).toBe(false);
 	});
 
 	it("gives up on a round whose sidekick never ran, with a notice to the lead", async () => {
@@ -359,8 +334,8 @@ describe("the harness exploration's start", () => {
 	});
 });
 
-describe("the lead's write guard", () => {
-	it("refuses edits and commands while its sidekick round runs, never reads", async () => {
+describe("Main's write guard", () => {
+	it("refuses edits and commands while its writer's round runs, never reads", async () => {
 		let busy = false;
 		const run = vi.fn(async () => "ok");
 		const tools = withSidekickWriteGuard(

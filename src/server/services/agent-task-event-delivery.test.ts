@@ -4,6 +4,7 @@ import type { AgentTaskEvent } from "#/server/adapters/agent-task-events";
 import type { AgentSessionRecord } from "../adapters/agent-sessions";
 import {
 	deliverParentTaskNotification,
+	REPORT_HELD_FOR_TURN,
 	subagentReportMessage,
 } from "./agent-task-event-delivery";
 
@@ -44,9 +45,22 @@ const parent = {
 	harness: "codex",
 	listedModelId: "model",
 	turnStatus: "running",
+	parentSessionId: "main",
 } as AgentSessionRecord;
 
-it("injects notifications into an active parent without launching a second turn", async () => {
+it("holds a report to a chat whose turn runs: no mid-turn injection, no second turn", async () => {
+	await expect(
+		deliverParentTaskNotification(
+			{} as never,
+			{ ...parent, parentSessionId: null },
+			"event-1",
+			"Child finished",
+		),
+	).rejects.toThrow(REPORT_HELD_FOR_TURN);
+	expect(mocks.stage).not.toHaveBeenCalled();
+	expect(mocks.send).not.toHaveBeenCalled();
+});
+it("injects notifications into an active subagent parent without launching a second turn", async () => {
 	await expect(
 		deliverParentTaskNotification(
 			{} as never,
@@ -115,6 +129,7 @@ describe("subagent report messages", () => {
 		const message = subagentReportMessage(event("completed"));
 		expect(message).toContain("Evidence here");
 		expect(message).toContain("Treat it as a claim");
+		expect(message).toContain("give a full report");
 		expect(subagentReportMessage(event("blocked"))).toContain("Evidence here");
 	});
 });

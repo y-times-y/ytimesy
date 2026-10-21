@@ -19,8 +19,12 @@ import {
 	idleSessionsWithOpenBackgroundCommands,
 	replaceIdleSessionItems,
 } from "../adapters/background-command-sessions";
+import { stageServerPeerMessage } from "../adapters/server-peer-inbox";
 import { agentOutputDirectory } from "./agent-output-artifacts";
-import { deliverParentTaskNotification } from "./agent-task-event-delivery";
+import {
+	deliverParentTaskNotification,
+	REPORT_HELD_FOR_TURN,
+} from "./agent-task-event-delivery";
 import {
 	type AgentToolWorkspaceInput,
 	resolveToolWorkspace,
@@ -252,7 +256,21 @@ const watchDependencies = (): BackgroundWatchDependencies => ({
 	session: agentSessionForOwner,
 	activeTurn: hasActiveApiTurn,
 	replaceItems: replaceIdleSessionItems,
-	notify: deliverParentTaskNotification,
+	notify: async (machines, session, notificationId, text) => {
+		try {
+			await deliverParentTaskNotification(
+				machines,
+				session,
+				notificationId,
+				text,
+			);
+		} catch (error) {
+			// A turn started meanwhile: its own command's exit is read at its next step.
+			if (error instanceof Error && error.message === REPORT_HELD_FOR_TURN)
+				await stageServerPeerMessage(session.id, notificationId, text);
+			else throw error;
+		}
+	},
 });
 
 /**
