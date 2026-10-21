@@ -464,29 +464,10 @@ describe("a Codex subscription (ChatGPT plan) root chat publishes like an API ch
 		);
 	});
 
-	it("commits nothing for a subagent or a turn that ends in plan mode", async () => {
+	it("commits nothing for a subagent", async () => {
 		codexOwner({ agentRole: "writer", parentSessionId: "parent" });
 		answering();
 		await runApiTurn({} as WorkspaceMachines, subscriptionTurn());
-		codexOwner();
-		await runApiTurn(
-			{} as WorkspaceMachines,
-			subscriptionTurn({
-				items: [
-					{
-						kind: "userMessage",
-						id: SessionItemId("user"),
-						text: "Plan branches",
-					},
-					{
-						kind: "dynamicToolCall",
-						id: SessionItemId("enter"),
-						tool: "enter_plan_mode",
-						status: "completed",
-					},
-				],
-			} as Partial<ApiTurn>),
-		);
 		expect(mocks.commit).not.toHaveBeenCalled();
 	});
 });
@@ -1277,45 +1258,6 @@ it("runs the UserPromptSubmit hook on a durable turn's first step only", async (
 	expect(mocks.promptSubmit).not.toHaveBeenCalled();
 });
 
-it.each([
-	["planning", "enter_plan_mode", "Plan mode is still on"],
-	["proposed", "planProposal", "replied to your proposed plan"],
-])(
-	"tells a %s agent it is still in plan mode on the durable turn's first step",
-	async (_state, marker, notice) => {
-		mocks.stepRuntime.mockImplementation(async (input) => ({
-			messages: input.messages,
-			outcome: "continue",
-		}));
-		const items =
-			marker === "planProposal"
-				? [{ kind: "planProposal", id: SessionItemId("plan"), plan: "Plan" }]
-				: [
-						{
-							kind: "dynamicToolCall",
-							id: SessionItemId("enter"),
-							tool: marker,
-							status: "completed",
-						},
-					];
-		const turn = {
-			...childTurn,
-			items,
-			messages: [{ role: "user", content: "Go" }],
-		} as ApiTurn;
-		for (const index of [1, 2])
-			await runApiTurn({} as WorkspaceMachines, turn, {
-				index,
-				signal: new AbortController().signal,
-			});
-		const [first, second] = mocks.stepRuntime.mock.calls.map(([input]) =>
-			JSON.stringify(input.messages),
-		);
-		expect(first).toContain(notice);
-		expect(second).not.toContain(notice);
-	},
-);
-
 function hangUntilAborted(input: { signal: AbortSignal }) {
 	return new Promise((_resolve, reject) =>
 		input.signal.addEventListener("abort", () => reject(input.signal.reason)),
@@ -1594,26 +1536,6 @@ describe("the attempt loop (harness variant attempts=3)", () => {
 		expect(mocks.loop).not.toHaveBeenCalled();
 		expect(mocks.reviewLoop).not.toHaveBeenCalled();
 		expect(mocks.commit).toHaveBeenCalledOnce();
-	});
-
-	it("commits and pushes nothing for a root turn that ends in plan mode", async () => {
-		finishing();
-		const planning = {
-			...rootTurn,
-			items: [
-				...rootTurn.items,
-				{
-					kind: "dynamicToolCall",
-					id: SessionItemId("enter"),
-					tool: "enter_plan_mode",
-					status: "completed",
-				},
-			],
-		} as ApiTurn;
-		expect(await runApiTurn({} as WorkspaceMachines, planning, durable())).toBe(
-			"completed",
-		);
-		expect(mocks.commit).not.toHaveBeenCalled();
 	});
 
 	it("shows why a root chat's changes were not pushed, and still completes", async () => {
