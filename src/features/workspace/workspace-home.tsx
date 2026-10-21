@@ -1541,6 +1541,7 @@ export function WorkspaceHome({
 						<MemoryInspector
 							active
 							layout="page"
+							projects={projects.data}
 							onOpenChat={(chatId) => {
 								const listed = projectChats.find((group) =>
 									group.chats.some((chat) => chat.id === chatId),
