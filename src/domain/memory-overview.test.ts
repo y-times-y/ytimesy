@@ -3,14 +3,11 @@ import {
 	memoryChangeSummary,
 	memoryRows,
 	memoryScopes,
-	memoryTopics,
 	PERSONAL_SCOPE,
-	RULES_TOPIC,
 	recentMemoryRows,
 	rowsByTopic,
 	scopeRows,
 	searchMemoryRows,
-	topicRows,
 } from "./memory-overview";
 import { memoryTokens } from "./memory-ranking";
 
@@ -43,30 +40,6 @@ describe("memory overview", () => {
 		expect(replaced).toMatchObject({ replaced: true });
 	});
 
-	it("pins the project rules first, then topics by newest entry, the index last", () => {
-		expect(
-			memoryTopics(files, today).map((topic) => [
-				topic.id,
-				topic.title,
-				topic.count,
-				topic.updated,
-			]),
-		).toEqual([
-			[RULES_TOPIC, "Project rules", 1, "2026-10-02"],
-			["api.md", "API", 1, "2026-10-16"],
-			["tooling.md", "Tooling", 2, "2026-10-12"],
-			["notes.md", "notes", 1, undefined],
-			["MEMORY.md", "Index", 1, undefined],
-		]);
-	});
-
-	it("lists a topic's rows, the rules topic across files", () => {
-		expect(topicRows(rows, RULES_TOPIC).map((row) => row.text)).toEqual([
-			"Use pnpm, never npm",
-		]);
-		expect(topicRows(rows, "tooling.md")).toHaveLength(3);
-	});
-
 	it("feeds the newest dated entries in use, newest first", () => {
 		expect(recentMemoryRows(rows).map((row) => row.added)).toEqual([
 			"2026-10-16",
@@ -82,20 +55,6 @@ describe("memory overview", () => {
 		expect(searchMemoryRows(rows, "billing")).toHaveLength(1);
 		expect(searchMemoryRows(rows, "  ")).toEqual([]);
 	});
-});
-
-it("names a topic file titled like the pinned rules by its file name", () => {
-	const topics = memoryTopics(
-		{
-			"project-rules.md":
-				"# Project rules\n\n- Use pnpm [scope: always; added: 2026-10-02]\n",
-		},
-		"2026-10-20",
-	);
-	expect(topics.map((topic) => topic.title)).toEqual([
-		"Project rules",
-		"project-rules",
-	]);
 });
 
 describe("memory scopes", () => {

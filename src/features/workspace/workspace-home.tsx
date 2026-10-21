@@ -120,6 +120,7 @@ import { getWorkspaceDesktop, startWorkspaceDesktopFn } from "./desktop.fn";
 import { readWorkspaceChangesFn } from "./explorer.fn";
 import { UsageWarningBanner } from "./infrastructure-usage";
 import { readMemoryFn, undoMemoryLineFn } from "./memory.fn";
+import { MemoryGraphPage } from "./memory-graph-page";
 import { MemoryInspector } from "./memory-inspector";
 import { ProjectSettings } from "./project-settings";
 import { ProjectSidebar } from "./project-sidebar";
@@ -250,7 +251,8 @@ export function WorkspaceHome({
 		chats: projectChatLists[index]?.data ?? [],
 	}));
 	/** The full-page Memory view from the left sidebar, in place of the chat. */
-	const [memoryPageOpen, setMemoryPageOpen] = useState(false);
+	const [memoryPage, setMemoryPage] = useState<"list" | "graph" | null>(null);
+	const memoryPageOpen = memoryPage !== null;
 	const startSession = useServerFn(startProjectAgentSession);
 	const deleteSession = useServerFn(deleteProjectAgentSession);
 	const deleteProject = useServerFn(deleteOwnedProject);
@@ -989,7 +991,7 @@ export function WorkspaceHome({
 
 	/** Opening another project leaves nothing of the previous project's chat on screen. */
 	function selectProject(projectId: string) {
-		setMemoryPageOpen(false);
+		setMemoryPage(null);
 		if (projectId === selectedProject?.id) return;
 		setSelectedProjectId(projectId);
 		bumpSessionEpoch();
@@ -1022,7 +1024,7 @@ export function WorkspaceHome({
 	}
 
 	function startNewChat(projectId?: string) {
-		setMemoryPageOpen(false);
+		setMemoryPage(null);
 		const targetProjectId = projectId ?? selectedProject?.id;
 		if (!targetProjectId) {
 			openAddProject();
@@ -1186,7 +1188,7 @@ export function WorkspaceHome({
 	}
 
 	function openChat(id: string) {
-		setMemoryPageOpen(false);
+		setMemoryPage(null);
 		setComposerDraft(false);
 		setProjectPickerOpen(false);
 		selectedSessionIdRef.current = id;
@@ -1437,6 +1439,17 @@ export function WorkspaceHome({
 		(pr) => Boolean(activeHead) && pr.head === activeHead,
 	);
 	const sessionPullRequest = sessionPullRequests[0];
+	/** A memory's source chat, opened in its project; false when it is not listed. */
+	function openMemoryChat(chatId: string) {
+		const listed = projectChats.find((group) =>
+			group.chats.some((chat) => chat.id === chatId),
+		);
+		if (!listed) return false;
+		selectProject(listed.project.id);
+		openChat(chatId);
+		return true;
+	}
+
 	return (
 		<div className="workspace-shell" data-projects-collapsed={!projectsOpen}>
 			<ProjectSidebar
@@ -1466,10 +1479,15 @@ export function WorkspaceHome({
 					openChat(chatId);
 				}}
 				onOpenMemory={() => {
-					setMemoryPageOpen(true);
+					setMemoryPage("list");
 					if (compact) setProjectsOpen(false);
 				}}
-				memoryActive={memoryPageOpen}
+				memoryActive={memoryPage === "list"}
+				onOpenMemoryGraph={() => {
+					setMemoryPage("graph");
+					if (compact) setProjectsOpen(false);
+				}}
+				memoryGraphActive={memoryPage === "graph"}
 			/>
 			<ProjectSettings
 				codexUsage={session.usage}
@@ -1529,28 +1547,29 @@ export function WorkspaceHome({
 				>
 					<PanelRight size={18} />
 				</button>
-				{memoryPageOpen ? (
+				{memoryPage === "graph" ? (
+					<section
+						className="memory-page"
+						data-view="graph"
+						aria-label="Memory graph"
+					>
+						<MemoryGraphPage
+							active
+							projects={projects.data}
+							onOpenChat={openMemoryChat}
+						/>
+					</section>
+				) : memoryPage === "list" ? (
 					<section className="memory-page" aria-label="Memory page">
 						<header className="memory-page-header">
 							<h1>Memory</h1>
-							<p>
-								What the agent remembers across your chats: standing project
-								rules, preferences and decisions.
-							</p>
+							<p>What the agent remembers across chats.</p>
 						</header>
 						<MemoryInspector
 							active
 							layout="page"
 							projects={projects.data}
-							onOpenChat={(chatId) => {
-								const listed = projectChats.find((group) =>
-									group.chats.some((chat) => chat.id === chatId),
-								);
-								if (!listed) return false;
-								selectProject(listed.project.id);
-								openChat(chatId);
-								return true;
-							}}
+							onOpenChat={openMemoryChat}
 						/>
 					</section>
 				) : null}

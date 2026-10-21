@@ -46,7 +46,10 @@ describe("manual memory edits", () => {
 				},
 				"2026-10-21",
 			),
-		).toEqual({ ok: true });
+		).toEqual({
+			ok: true,
+			added: { path: "tooling.md", line: 3, text: "Use httpx" },
+		});
 		expect(memory.commit).toHaveBeenCalledTimes(1);
 		expect(memory.commit).toHaveBeenCalledWith(
 			first,
