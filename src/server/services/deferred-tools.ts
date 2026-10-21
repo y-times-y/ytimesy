@@ -1,5 +1,4 @@
 import type { ModelMessage, ToolSet } from "ai";
-import { EXIT_PLAN_MODE_TOOL, PROPOSE_PLAN_TOOL } from "#/domain/agent-plan";
 import {
 	CALL_MCP_TOOL_TOOL,
 	SEARCH_MCP_TOOLS_TOOL,
@@ -165,12 +164,6 @@ export function deferredToolSurface(input: {
 export const CODE_MODE_DEFERRED_TOOLS: readonly string[] = [
 	SEARCH_MCP_TOOLS_TOOL,
 	CALL_MCP_TOOL_TOOL,
-];
-
-/** Offered only while plan mode is on, never callable from a program (it ends the turn). */
-export const PLAN_ONLY_TOOLS: readonly string[] = [
-	PROPOSE_PLAN_TOOL,
-	EXIT_PLAN_MODE_TOOL,
 ];
 
 /**

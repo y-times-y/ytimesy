@@ -1,12 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ModelMessage, ToolSet } from "ai";
 import {
-	agentPlanState,
-	ENTER_PLAN_MODE_TOOL,
-	EXIT_PLAN_MODE_TOOL,
-	PROPOSE_PLAN_TOOL,
-} from "#/domain/agent-plan";
-import {
 	assertApiContextFits,
 	isUserRequestMessage,
 } from "#/domain/api-conversation";
@@ -150,7 +144,6 @@ import {
 	CODE_MODE_DEFERRED_TOOLS,
 	deferredToolSurface,
 	loadedDeferredTools,
-	PLAN_ONLY_TOOLS,
 } from "../services/deferred-tools";
 import {
 	type FusionLeadGateInput,
@@ -174,15 +167,6 @@ import {
 } from "../services/model-agent-loop";
 import { planModelFailover } from "../services/model-failover";
 import { modelRequestRecorder } from "../services/model-request-recorder";
-import {
-	PLAN_CONTINUE_NOTICE,
-	PLAN_END_TURN_TOOLS,
-	PLAN_REVISION_NOTICE,
-	PlanLock,
-	planTools,
-	withPlanMode,
-	withPlanModeNotice,
-} from "../services/plan-mode";
 import { pluginSkillTools } from "../services/plugin-skill-tools";
 import { recordCloudProjectReport } from "../services/project-knowledge";
 import {
@@ -791,11 +775,9 @@ async function runApiTurnAttempt(
 		const currentTask = [...items]
 			.reverse()
 			.find((item) => item.kind === "userMessage");
-		// Root chats with a person to approve: the agent decides when to plan.
-		// Benchmarks and child agents have no one to approve, so they never plan.
-		const planState = agentPlanState(items);
-		const planLock =
-			!owner.parentSessionId && !evaluation ? new PlanLock(planState) : null;
+		// A root chat has a person who can answer cards (a project secret);
+		// benchmarks and child agents have no one to answer.
+		const rootChat = !owner.parentSessionId && !evaluation;
 		const repositoryContext = automaticRepositoryContext({
 			tools: originalTools,
 			workspace,
@@ -982,7 +964,7 @@ async function runApiTurnAttempt(
 			plugins,
 			webSearch,
 			hooks,
-			planLock,
+			rootChat,
 			projectSecrets,
 			redact,
 		});
@@ -991,15 +973,11 @@ async function runApiTurnAttempt(
 			...delegation,
 		};
 		// Deferred (deferred-tools.ts): in code mode primary the MCP search and
-		// call tools (run_code only), and propose_plan, offered only while
-		// planning (it ends the turn). agent, agent_send, enter_plan_mode and
+		// call tools (run_code only). agent, agent_send and
 		// request_project_secret are ordinary tools. Additions append, so
 		// earlier requests' tool lists stay a cached prefix.
 		const deferredNames = [
 			...(codeMode === "primary" ? CODE_MODE_DEFERRED_TOOLS : []),
-			...(codeMode === "primary" || (subagentsOn && surface.lean)
-				? PLAN_ONLY_TOOLS
-				: []),
 		];
 		// Harness variant outputCap: each result the model reads keeps its
 		// head and tail within the cap (tool-output-cap.ts).
@@ -1035,19 +1013,9 @@ async function runApiTurnAttempt(
 					tools: orderedTools,
 					deferred: deferredNames,
 					loaded: loadedDeferredTools(items, messages, deferredNames),
-					// Plan mode can start mid-turn; propose_plan must then be offered.
-					forceLoaded: () => (planLock?.planning ? PLAN_ONLY_TOOLS : []),
-					unlisted: PLAN_ONLY_TOOLS,
 				})
 			: null;
 		const tools = deferral?.tools ?? orderedTools;
-		if (planLock?.planning && firstStep)
-			messages = withPlanModeNotice(
-				messages,
-				planState.kind === "proposed"
-					? PLAN_REVISION_NOTICE
-					: PLAN_CONTINUE_NOTICE,
-			);
 		if (mcp.unavailable.length) {
 			const notice = `MCP servers unavailable this turn (connection or credentials failed): ${mcp.unavailable.join(", ")}. Their tools are not offered; continue without them.`;
 			if (!messages.some((message) => message.content === notice))
@@ -1148,14 +1116,7 @@ async function runApiTurnAttempt(
 			reasoning: turnReasoning,
 			speed: apiSettings.speed,
 			...(deferral ? { toolOrder: deferral.order } : {}),
-			...(planLock
-				? {
-						endTurnTools: [
-							...PLAN_END_TURN_TOOLS,
-							...SECRET_REQUEST_END_TURN_TOOLS,
-						],
-					}
-				: {}),
+			...(rootChat ? { endTurnTools: [...SECRET_REQUEST_END_TURN_TOOLS] } : {}),
 			onToolMetric: (metric) => {
 				recordStepTiming(`tool:${metric.tool_name}`, metric.duration_ms);
 				void captureServerAnalytics(
@@ -1415,11 +1376,7 @@ async function runApiTurnAttempt(
 		// completion boundary, its findings back into the same run.
 		const attemptsMax = attemptLimit(variant.attempts);
 		const loopEligible =
-			!!step &&
-			writable &&
-			!owner.parentSessionId &&
-			!owner.agentRole &&
-			!planLock?.planning;
+			!!step && writable && !owner.parentSessionId && !owner.agentRole;
 		const loopBilling = modelBilling({
 			harness: subscription ? "codex" : "api",
 			modelId: route.modelId,
@@ -1645,37 +1602,35 @@ async function runApiTurnAttempt(
 				stopApiTurnCommands(execution as AgentToolWorkspace, turn.id),
 			);
 		// A subagent's work reaches its parent as a report (a writer's as a
-		// patch and ref), never as a commit or a published branch. A turn that
-		// ends in plan mode commits and pushes nothing.
-		const committed =
-			!owner.agentRole && !planLock?.planning
-				? await timed("turn:commit", () =>
-						commitCompletedSessionTurn(
-							{ ...owner, providerRef: execution?.vm ?? owner.providerRef },
-							items,
-							{
-								exec: (providerRef, argv, _env, timeout) =>
-									(execution?.machines ?? machines).exec(
-										WorkspaceId(providerRef),
-										posixShellCommand(argv),
-										timeout,
-									),
-								writeTextFile: (providerRef, path, contents) =>
-									(execution?.machines ?? machines).writeTextFile(
-										WorkspaceId(providerRef),
-										path,
-										contents,
-									),
-								readTextFile: (providerRef, path) =>
-									(execution?.machines ?? machines).readTextFile(
-										WorkspaceId(providerRef),
-										path,
-									),
-							},
-							abort.signal,
-						),
-					)
-				: undefined;
+		// patch and ref), never as a commit or a published branch.
+		const committed = !owner.agentRole
+			? await timed("turn:commit", () =>
+					commitCompletedSessionTurn(
+						{ ...owner, providerRef: execution?.vm ?? owner.providerRef },
+						items,
+						{
+							exec: (providerRef, argv, _env, timeout) =>
+								(execution?.machines ?? machines).exec(
+									WorkspaceId(providerRef),
+									posixShellCommand(argv),
+									timeout,
+								),
+							writeTextFile: (providerRef, path, contents) =>
+								(execution?.machines ?? machines).writeTextFile(
+									WorkspaceId(providerRef),
+									path,
+									contents,
+								),
+							readTextFile: (providerRef, path) =>
+								(execution?.machines ?? machines).readTextFile(
+									WorkspaceId(providerRef),
+									path,
+								),
+						},
+						abort.signal,
+					),
+				)
+			: undefined;
 		if (committed?.notice)
 			items = [
 				...items.filter((item) => item.id !== `${turn.id}:publication`),
@@ -2109,7 +2064,7 @@ function turnHarnessVariant(turnId: string, userId: string) {
 /**
  * The tools a turn offers: its surface's tools, the user's MCP servers,
  * plugin skills and hosted web search, wrapped in lifecycle hooks, secret
- * redaction and (in root chats) plan mode.
+ * redaction and (in root chats) the project-secret request.
  */
 function turnTools(input: {
 	surfaceTools: ToolSet;
@@ -2117,11 +2072,11 @@ function turnTools(input: {
 	plugins: Awaited<ReturnType<typeof enabledPluginComponents>>;
 	webSearch: ToolSet;
 	hooks: ReturnType<typeof harnessLifecycleHooks>;
-	planLock: PlanLock | null;
+	rootChat: boolean;
 	projectSecrets: Awaited<ReturnType<typeof loadAgentProjectSecrets>> | null;
 	redact: readonly string[];
 }) {
-	const { mcp, hooks, planLock, projectSecrets, redact } = input;
+	const { mcp, hooks, rootChat, projectSecrets, redact } = input;
 	const withMcp = {
 		...input.surfaceTools,
 		...mcp.tools,
@@ -2130,23 +2085,15 @@ function turnTools(input: {
 	};
 	// Only a person in a root chat can paste a secret into the card.
 	const secretTools =
-		planLock && projectSecrets
+		rootChat && projectSecrets
 			? secretRequestTools(projectSecrets.names.map(({ name }) => name))
 			: {};
 	// Large MCP setups are searched and called through two fixed tools; the
-	// real tools they run keep their hooks, plan mode and redaction.
+	// real tools they run keep their hooks and redaction.
 	return mcpToolSurface({
-		tools: planLock
-			? withPlanMode(
-					hooks.wrap(
-						withRedactedResults(
-							{ ...withMcp, ...planTools(planLock), ...secretTools },
-							redact,
-						),
-					),
-					() => planLock.planning,
-				)
-			: hooks.wrap(withRedactedResults(withMcp, redact)),
+		tools: hooks.wrap(
+			withRedactedResults({ ...withMcp, ...secretTools }, redact),
+		),
 		catalog: mcp.catalog,
 		purposes: mcp.purposes,
 	});
@@ -2155,8 +2102,8 @@ function turnTools(input: {
 /**
  * A lean builder's tool list in a fixed order, so it is byte-stable within
  * a chat: run_code first in code mode primary, the surface's own tools, the
- * workflow tools (agent, agent_send, enter_plan_mode, propose_plan when not
- * deferred), web search, request_project_secret, then the rest (MCP,
+ * workflow tools (agent, agent_send), web search, request_project_secret,
+ * then the rest (MCP,
  * plugins, run_code in code mode on) in insertion order.
  */
 function inLeanToolOrder(
@@ -2172,9 +2119,6 @@ function inLeanToolOrder(
 		...groups.surface,
 		AGENT_TOOL,
 		AGENT_SEND_TOOL,
-		ENTER_PLAN_MODE_TOOL,
-		PROPOSE_PLAN_TOOL,
-		EXIT_PLAN_MODE_TOOL,
 		...groups.webSearch,
 		REQUEST_PROJECT_SECRET_TOOL,
 	].filter((name) => name in tools);
@@ -2189,8 +2133,8 @@ function inLeanToolOrder(
 
 /**
  * Adds run_code (code mode) to a lean builder's final tool set. Its programs
- * call the tools above as they are, already wrapped in hooks, redaction and
- * plan mode, so every inner call is checked like a direct one; run_code's
+ * call the tools above as they are, already wrapped in hooks and redaction,
+ * so every inner call is checked like a direct one; run_code's
  * own result is redacted again on the way out.
  */
 function withCodeMode(

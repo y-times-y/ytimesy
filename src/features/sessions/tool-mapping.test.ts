@@ -24,11 +24,7 @@ import { AGENT_SEND_TOOL, AGENT_TOOL } from "#/domain/subagent";
 import { toolActivity } from "#/domain/tool-detail";
 import { nativeWebSearchTools } from "#/server/adapters/native-web-search";
 import { BUILDER_SHELL_TOOLS } from "#/server/services/builder-shell-surface";
-import {
-	CODE_MODE_DEFERRED_TOOLS,
-	PLAN_ONLY_TOOLS,
-} from "#/server/services/deferred-tools";
-import { PlanLock, planTools } from "#/server/services/plan-mode";
+import { CODE_MODE_DEFERRED_TOOLS } from "#/server/services/deferred-tools";
 import { pluginSkillTools } from "#/server/services/plugin-skill-tools";
 import { secretRequestTools } from "#/server/services/secret-request-tool";
 import { SessionTimeline } from "./session-timeline";
@@ -60,7 +56,6 @@ function harnessToolNames(): string[] {
 					},
 				] as never),
 			),
-			...Object.keys(planTools(new PlanLock({ kind: "none" } as never))),
 			...Object.keys(secretRequestTools([])),
 			ENTER_PLAN_MODE_TOOL,
 			PROPOSE_PLAN_TOOL,
@@ -68,7 +63,6 @@ function harnessToolNames(): string[] {
 			SEARCH_MCP_TOOLS_TOOL,
 			CALL_MCP_TOOL_TOOL,
 			...CODE_MODE_DEFERRED_TOOLS,
-			...PLAN_ONLY_TOOLS,
 			...IMAGE_VIEWING_TOOLS,
 			AGENT_TOOL,
 			AGENT_SEND_TOOL,

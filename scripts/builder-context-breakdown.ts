@@ -41,7 +41,6 @@ import {
 	type ModelAgentRuntime,
 	runModelAgentStep,
 } from "#/server/services/model-agent-loop";
-import { PlanLock, planTools } from "#/server/services/plan-mode";
 import type { WorkspaceMachines } from "#/server/services/workspace-machines";
 
 const FILES: Record<string, string> = {
@@ -135,7 +134,6 @@ async function builderTurnRequest(input: {
 	});
 	const turnTools: ToolSet = {
 		...surface.tools,
-		...planTools(new PlanLock({ kind: "none" })),
 		...nativeWebSearchTools(
 			input.transport === "codex" ? "openai" : "openrouter",
 		),
