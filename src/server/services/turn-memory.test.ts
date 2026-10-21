@@ -35,7 +35,7 @@ vi.mock("../adapters/background-job-dispatch", () => ({
 	}),
 }));
 
-const { turnMemory, readHook } = await import("./turn-memory");
+const { turnMemory, readHook, hedgedQuery } = await import("./turn-memory");
 
 function fakeRepo(files: Record<string, string>): MemoryRepo {
 	const snapshot: MemorySnapshot = { head: "abc", files };
@@ -351,6 +351,14 @@ describe("read hook", () => {
 		expect(recall?.hook).toEqual({
 			outcome: "matched",
 			ms: expect.any(Number),
+			spans: expect.objectContaining({
+				snapshotMs: expect.any(Number),
+				saveWaitMs: expect.any(Number),
+				queryMs: expect.any(Number),
+				vectorsMs: expect.any(Number),
+				rankMs: expect.any(Number),
+				embeddedLines: 2,
+			}),
 		});
 		// The standing pnpm rule rides as a project rule; the hook adds the match.
 		expect(recall?.lines.map((line) => line.path)).toEqual([
@@ -640,7 +648,11 @@ describe("memory markers", () => {
 		expect(recall).toEqual({
 			head: "abc",
 			index: true,
-			hook: { outcome: "none", ms: expect.any(Number) },
+			hook: {
+				outcome: "none",
+				ms: expect.any(Number),
+				spans: expect.any(Object),
+			},
 			lines: [
 				{
 					path: "tooling.md",
@@ -878,5 +890,69 @@ describe("the VM's memory token", () => {
 		expect(exec.mock.calls.at(-1)?.[1]).toContain("extraheader");
 		expect(repo.revokeCredential).toHaveBeenCalledWith("art_vm_token_1");
 		expect(memory.vmTokens()).toEqual([]);
+	});
+});
+
+describe("read hook timing", () => {
+	it("embeds the query again when the first call is slow, and the first answer wins", async () => {
+		vi.useFakeTimers();
+		try {
+			let calls = 0;
+			const query = vi.fn(async (text: string) => {
+				calls++;
+				if (calls === 1) return new Promise<number[]>(() => {});
+				return vector(text);
+			});
+			const answering = hedgedQuery(
+				{ query, documents },
+				"utc timestamps",
+				100,
+			);
+			await vi.advanceTimersByTimeAsync(100);
+			expect(await answering).toEqual({
+				vector: vector("utc timestamps"),
+				calls: 2,
+			});
+		} finally {
+			vi.useRealTimers();
+		}
+		const fails = vi.fn(async () => {
+			throw new TypeError("down");
+		});
+		await expect(
+			hedgedQuery({ query: fails, documents }, "utc timestamps", 100),
+		).rejects.toThrow("down");
+		expect(fails).toHaveBeenCalledTimes(2);
+	});
+
+	it("records where the hook's time went, and the wait for other chats' saves outside it", async () => {
+		const pendingSaves = vi.fn(async () => 0);
+		const memory = await turnMemory(
+			{
+				id: "11111111-1111-4111-8111-111111111111",
+				userId: "u-spans",
+				projectId: null,
+			},
+			{
+				repo: fakeRepo({ "time.md": "- Store timestamps in UTC\n" }),
+				embed,
+				today: () => "2026-10-15",
+				projectName: null,
+				pendingSaves,
+			},
+		);
+		const { recall } = (await memory?.attach(
+			[{ role: "user", content: "fix the timestamps in the export" }],
+			[user("a", "fix the timestamps in the export")],
+			workspace,
+		)) ?? { recall: null };
+		expect(recall?.hook?.spans).toMatchObject({
+			snapshotMs: expect.any(Number),
+			prefetchWaitMs: expect.any(Number),
+			saveWaitMs: expect.any(Number),
+			queryMs: expect.any(Number),
+			rankMs: expect.any(Number),
+			afterHookMs: expect.any(Number),
+		});
 	});
 });
