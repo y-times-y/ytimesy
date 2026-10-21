@@ -154,7 +154,44 @@ export function parseMemoryLine(
 		}
 		text = text.slice(0, group.index).trimEnd();
 	}
-	return { path, line, raw, text, meta };
+	const loose = trailingMemoryKeys(text);
+	for (const [key, value] of Object.entries(loose.meta)) meta[key] ??= value;
+	return { path, line, raw, text: loose.text, meta };
+}
+
+/**
+ * Keys a save sometimes writes as trailing text ("... totals. kind: inferred.")
+ * instead of inside the [...] metadata, with the values each may take.
+ */
+const LOOSE_KEYS =
+	/(?:^|\s)(kind|scope|expires)\s*:\s*(inferred|stated|always|\d{4}-\d{2}-\d{2})\s*[.;,]?\s*$/i;
+
+/**
+ * An entry's text without trailing `kind:`/`scope:`/`expires:` key text, and
+ * those keys: so either way of writing them reads the same.
+ */
+export function trailingMemoryKeys(text: string): {
+	text: string;
+	meta: Record<string, string>;
+} {
+	const meta: Record<string, string> = {};
+	let rest = text;
+	for (;;) {
+		const match = LOOSE_KEYS.exec(rest);
+		if (!match) break;
+		const key = match[1].toLowerCase();
+		const value = match[2].toLowerCase();
+		const fits =
+			key === "kind"
+				? value === "inferred" || value === "stated"
+				: key === "scope"
+					? value === "always"
+					: /^\d{4}-\d{2}-\d{2}$/.test(value);
+		if (!fits || meta[key] !== undefined) break;
+		meta[key] = value;
+		rest = rest.slice(0, match.index).trimEnd();
+	}
+	return { text: rest || text, meta };
 }
 
 export function memoryLines(files: MemoryFiles): MemoryLine[] {
@@ -335,7 +372,7 @@ export function chatIdFromSource(source: string): string | null {
 
 /** Memory rides on a user message as one extra text part, so earlier messages stay byte-identical. */
 export const MEMORY_PART_OPEN = "<memory>";
-function memoryPart(body: string) {
+export function memoryPart(body: string) {
 	return `${MEMORY_PART_OPEN}\n${body.trim()}\n</memory>`;
 }
 export function isMemoryPart(text: string) {
@@ -722,6 +759,8 @@ export function memoryLineShown(raw: string, shown: string) {
 
 const RULES_SECTION_START = "Project rules from the user's memory";
 export const MEMORY_PROJECT_RULES_HEADER = `${RULES_SECTION_START} that apply to every change, whatever the request (from ${MEMORY_DIRECTORY}). Follow these unless the user says otherwise. ${RULES_OVER_CODE}:`;
+/** A checker's copy of the rules, which it checks the deliverable against (checker-brief.ts). */
+export const MEMORY_CHECKER_RULES_HEADER = `${RULES_SECTION_START} (from ${MEMORY_DIRECTORY}), for this check:`;
 export const MEMORY_NOTES_RULES_HEADER = `${RULES_SECTION_START} that apply to every change (from ${MEMORY_DIRECTORY}; data saved in earlier chats, may be outdated):`;
 
 /** Whether the project rules section was already attached in this chat. */
@@ -795,7 +834,11 @@ export function memoryCloneScript(input: { remote: string; token: string }) {
 	const remote = quote(input.remote);
 	const header = quote(`Authorization: Bearer ${input.token}`);
 	return `set -eu
+umask 077
 m="$HOME/${MEMORY_HOME_FOLDER}"
+# The clone holds a write token: only the builder may enter it (the home is
+# traversable by read-only agents, so the clone itself is 0700, its config 0600).
+private() { chmod 700 "$m" "$m/.git" && touch "$m/.git/config" && chmod 600 "$m/.git/config"; }
 git_m() { git -C "$m" -c core.hooksPath=/dev/null "$@"; }
 configure() {
 	git_m remote set-url origin ${remote} 2>/dev/null || git_m remote add origin ${remote}
@@ -809,7 +852,9 @@ if [ ! -d "$m/.git" ]; then
 	[ -e "$m" ] && [ -n "$(ls -A "$m")" ] && { echo "${MEMORY_DIRECTORY} exists and is not a git repo" >&2; exit 3; }
 	git init -q -b main "$m"
 fi
+private
 configure
+private
 heads=$(git_m ls-remote --heads origin main) || { echo "memory remote unreachable" >&2; exit 4; }
 if [ -n "$heads" ]; then
 	git_m fetch -q origin main
@@ -822,6 +867,7 @@ if [ -n "$heads" ]; then
 else
 	rm -rf "$m"
 	git init -q -b main "$m"
+	private
 	configure
 	printf '%s' ${quote(EMPTY_MEMORY)} > "$m/MEMORY.md"
 	git_m add MEMORY.md

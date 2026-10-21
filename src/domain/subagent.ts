@@ -88,6 +88,12 @@ export type SubagentBudget = {
 	 * tokens over its whole life, with a per-round token cap in the state.
 	 */
 	readonly sidekick?: SidekickState;
+	/**
+	 * checkerMode=pair (src/domain/checker-pair.ts): a checker that is the
+	 * pair's judge (it gets the worker tool), or a reader that is its worker
+	 * (it starts no agents).
+	 */
+	readonly checkerPair?: "judge" | "worker";
 };
 
 type Level = 1 | 2 | 3;

@@ -39,7 +39,13 @@ vi.mock("../src/server/adapters/realtime-delivery", async (importOriginal) => ({
 		typeof import("../src/server/adapters/realtime-delivery")
 	>()),
 	purgeConversationState: async (_userId: string, sessionId: string) => {
-		purged.push(sessionId);
+		purged.push(`purge:${sessionId}`);
+	},
+}));
+// Running turns are cancelled before a chat's state is purged.
+vi.mock("../src/server/services/cancel-server-turn", () => ({
+	cancelServerTurn: async (_userId: string, sessionId: string) => {
+		purged.push(`cancel:${sessionId}`);
 	},
 }));
 vi.mock(
@@ -398,8 +404,14 @@ it("deletes every stored file and the retained snapshots only the deleted chats 
 	}
 	expect(storage.removed.sort()).toEqual([parent.id, child.id].sort());
 	// Each deleted chat's Durable Object state goes too, the sibling's stays.
-	expect(purged).toEqual(expect.arrayContaining([parent.id, child.id]));
-	expect(purged).not.toContain(sibling.id);
+	expect(purged).toEqual(
+		expect.arrayContaining([`purge:${parent.id}`, `purge:${child.id}`]),
+	);
+	expect(purged).not.toContain(`purge:${sibling.id}`);
+	// Each chat's turn is cancelled before any purge.
+	expect(purged.indexOf(`cancel:${child.id}`)).toBeLessThan(
+		purged.indexOf(`purge:${parent.id}`),
+	);
 	expect(destroyed.sort()).toEqual(["vm-chat", "vm-child-retained"]);
 	expect(snapshots).toEqual(["snap-child"]);
 	expect(

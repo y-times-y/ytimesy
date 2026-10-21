@@ -629,6 +629,19 @@ async function readAttemptLoop(
 	};
 }
 
+/** checkerMode=pair: the judge's and the workers' share of a checker spend. */
+function pairSpend(spend: {
+	judge: { tokens: number; costUsd: number | null };
+	worker: { tokens: number; costUsd: number | null };
+}) {
+	return {
+		judgeTokens: spend.judge.tokens,
+		judgeCostUsd: spend.judge.costUsd,
+		workerTokens: spend.worker.tokens,
+		workerCostUsd: spend.worker.costUsd,
+	};
+}
+
 /**
  * The review loop's record after the turn: per round the checker's verdict,
  * findings, the builder's answers and spend, and the tree it checked (graded
@@ -691,6 +704,7 @@ async function readReviewLoop(
 					name: test.name.slice(0, 200),
 					passed: test.passed,
 					command: test.command?.slice(0, 300) ?? null,
+					...(test.ranBy ? { ranBy: test.ranBy } : {}),
 				})),
 				untested: !!round.verdict?.untested,
 				...(round.builderRequirements
@@ -699,6 +713,14 @@ async function readReviewLoop(
 				decision: round.decision ?? null,
 				checkerTokens: roundSpend?.checker.tokens ?? 0,
 				checkerCostUsd: roundSpend?.checker.costUsd ?? null,
+				...(round.checker.pair && roundSpend
+					? {
+							pair: {
+								...pairSpend(roundSpend),
+								workers: round.checker.workers?.length ?? 0,
+							},
+						}
+					: {}),
 				checkMinutes: (roundSpend?.checkMs ?? 0) / 60_000,
 				fixTokens: roundSpend?.fix.tokens ?? 0,
 				fixCostUsd: roundSpend?.fix.costUsd ?? null,
@@ -718,6 +740,9 @@ async function readReviewLoop(
 		extraTokens: spend.checker.tokens,
 		extraCostUsd: spend.checker.costUsd,
 		checkers: state.rounds.length,
+		...(state.rounds.some((round) => round.checker.pair)
+			? { pair: pairSpend(spend) }
+			: {}),
 		finalTree: final?.tree ?? null,
 		branch,
 		attemptGrading: "none",

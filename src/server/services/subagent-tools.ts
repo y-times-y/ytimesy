@@ -3,10 +3,19 @@ import { type ToolSet, tool } from "ai";
 import { Effect } from "effect";
 import { z } from "zod";
 import { agentSessionMachineSlug } from "#/domain/agent-session";
-import { independentReviewBrief } from "#/domain/checker-brief";
+import {
+	checkerWrapUpLeadMs,
+	independentReviewBrief,
+} from "#/domain/checker-brief";
+import {
+	CHECKER_WORKER_BRIEF_MAX,
+	CHECKER_WORKER_TOOL,
+	checkerWorkerBrief,
+	checkerWorkerBudget,
+} from "#/domain/checker-pair";
 import { latestUserRequestText } from "#/domain/child-task-activity";
 import { fusionPairProfile } from "#/domain/fusion-pairs";
-import type { LeadMode } from "#/domain/harness-variant";
+import type { CheckerMode, LeadMode } from "#/domain/harness-variant";
 import { WorkspaceId } from "#/domain/ids";
 import type { FailoverConnection } from "#/domain/model-failover";
 import { posixShellQuoted } from "#/domain/posix-command";
@@ -42,6 +51,7 @@ import {
 	SUBAGENT_TITLE_MAX,
 	type SubagentBudget,
 	type SubagentPlacement,
+	type SubagentRemaining,
 	type SubagentRole,
 	subagentAdmission,
 	subagentPlacement,
@@ -59,6 +69,8 @@ import {
 	saveAgentSessionProviderRef,
 	saveAgentTaskState,
 } from "../adapters/agent-sessions";
+import { infrastructureAdmissionEnabled } from "../adapters/freestyle/usage-admission";
+import { assertUsageWindowsOpen } from "../adapters/infrastructure-usage";
 import {
 	subagentTree as loadSubagentTree,
 	mergeSubagentFork,
@@ -120,6 +132,8 @@ export type SubagentToolDeps = {
 	readonly markRoundStart: typeof markSidekickRoundStart;
 	readonly saveSidekick: typeof saveSidekickState;
 	readonly retireSidekick: typeof retireSidekick;
+	/** Refuses a new child (and its fork) while a usage window is exhausted. */
+	readonly usageWindowsOpen: (userId: string) => Promise<void>;
 };
 
 // Resolved at call time, so a test that mocks one of these modules does not
@@ -154,6 +168,9 @@ const defaultDeps: SubagentToolDeps = {
 	markRoundStart: (...args) => markSidekickRoundStart(...args),
 	saveSidekick: (...args) => saveSidekickState(...args),
 	retireSidekick: (...args) => retireSidekick(...args),
+	usageWindowsOpen: async (userId) => {
+		if (infrastructureAdmissionEnabled()) await assertUsageWindowsOpen(userId);
+	},
 };
 
 export type SubagentToolContext = {
@@ -177,6 +194,8 @@ export type SubagentToolContext = {
 	readonly parentReasoning?: string;
 	/** Harness variant rigor=on: the checker's brief gets the rigor checks. */
 	readonly rigor?: boolean;
+	/** Harness variant checkerMode=pair: a checker is a judge with a worker (src/domain/checker-pair.ts). */
+	readonly checkerMode?: CheckerMode;
 	/**
 	 * Lead mode fusion: called when a sidekick round starts, so the lead's
 	 * turn stops writing to the shared checkout at once (fusion-lead.ts).
@@ -354,6 +373,9 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 				{
 					role,
 					modelRole: role,
+					...(role === "checker" && context.checkerMode === "pair"
+						? { pair: "judge" as const }
+						: {}),
 					sidekick: sidekick
 						? {
 								kind: input.explore ? "explore" : "build",
@@ -492,6 +514,106 @@ export function subagentTools(context: SubagentToolContext): ToolSet {
 	});
 
 	return { [AGENT_TOOL]: agent, [AGENT_SEND_TOOL]: agentSend };
+}
+
+const workerInput = z.object({
+	brief: z
+		.string()
+		.min(1)
+		.max(CHECKER_WORKER_BRIEF_MAX)
+		.describe(
+			"Self-contained: what to read and summarize, the copy to make, the tests and probes to write under your scratch and run, the existing tests to run, and the evidence to return. The worker sees only this.",
+		),
+	title: z.string().min(1).max(SUBAGENT_TITLE_MAX).optional(),
+	id: z
+		.string()
+		.min(1)
+		.max(20)
+		.optional()
+		.describe(
+			'A worker of yours that already reported (e.g. "1.1"): send it this brief as a follow-up; it keeps its context',
+		),
+});
+
+/**
+ * checkerMode=pair: the judge's one delegation tool (src/domain/checker-pair.ts).
+ * It starts a read-only worker on roleModels.checkerWorker with the judge's
+ * brief in the runtime's frame, or briefs a worker that already reported
+ * again, and waits for its report. The worker shares the VM read-only as the
+ * reader user, like the judge.
+ */
+export function checkerWorkerTools(context: SubagentToolContext): ToolSet {
+	const deps = { ...defaultDeps, ...context.deps };
+	const { parent } = context;
+	const worker = tool({
+		description:
+			"Hand reading, test writing and test runs to your worker: a cheaper read-only agent on this VM that sees only your brief and reports compact evidence (commands with exit status and output, file:line excerpts, test results). Waits for its report. Pass id to brief a worker that already reported again.",
+		inputSchema: workerInput,
+		execute: async (input: z.infer<typeof workerInput>) => {
+			if (input.id) {
+				const tree = await loadTreeFor(deps, parent);
+				const target = tree.nodes.find(
+					(node) => node.label === input.id && node.parentId === parent.id,
+				);
+				const session = tree.sessions.find((entry) => entry.id === target?.id);
+				if (!target || !session?.agentBudget)
+					throw new Error(
+						`No worker ${input.id} of yours. Your workers: ${
+							tree.nodes
+								.filter((node) => node.parentId === parent.id)
+								.map((node) => `${node.label} (${node.state})`)
+								.join(", ") || "none"
+						}.`,
+					);
+				await deps.message(parent, target.id, input.brief.trim(), randomUUID());
+				if (target.live)
+					return {
+						id: target.label,
+						status:
+							"message queued: it is still working; its report arrives as a message",
+					};
+				const report = await waitForReport(
+					context,
+					deps,
+					target.id,
+					session.agentBudget,
+				);
+				return report
+					? { id: target.label, ...report }
+					: {
+							id: target.label,
+							note: "Still running; its report will arrive as a message.",
+						};
+			}
+			const workspace = await context.workspace();
+			const { childId, budget, model, notice } = await spawnSubagent(
+				context,
+				deps,
+				{
+					role: "researcher",
+					modelRole: "checkerWorker",
+					pair: "worker",
+					title: input.title ?? "Checker worker",
+					brief: async () => checkerWorkerBrief(input.brief),
+				},
+				workspace,
+			);
+			const label =
+				(await loadTreeFor(deps, parent)).nodes.find(
+					(node) => node.id === childId,
+				)?.label ?? "?";
+			const report = await waitForReport(context, deps, childId, budget);
+			return {
+				id: label,
+				model: model.label,
+				...(notice ? { modelNotice: notice } : {}),
+				...(report ?? {
+					note: "Still running; its report will arrive as a message.",
+				}),
+			};
+		},
+	});
+	return { [CHECKER_WORKER_TOOL]: worker };
 }
 
 type LoadedTree = Tree & { level: number };
@@ -766,6 +888,11 @@ async function spawnSubagent(
 		readonly title: string;
 		readonly brief: (tree: LoadedTree) => Promise<string>;
 		readonly cap?: Partial<SubagentBudget>;
+		/**
+		 * checkerMode=pair: the checker is the pair's judge, or the reader is
+		 * its worker (whose budget comes from checkerWorkerBudget).
+		 */
+		readonly pair?: "judge" | "worker";
 		/** Lead mode fusion: a writer that persists across rounds, and its first round. */
 		readonly sidekick?: {
 			readonly kind: SidekickRoundKind;
@@ -778,6 +905,8 @@ async function spawnSubagent(
 	const { role } = input;
 	if (!parent.listedModelId)
 		throw new Error("Your session has no model for a subagent to inherit.");
+	// A child is new work: no session, fork or turn starts past the limit.
+	await deps.usageWindowsOpen(parent.userId);
 	const { model, notice } = await childModel(
 		context,
 		deps,
@@ -801,12 +930,17 @@ async function spawnSubagent(
 		parentRemaining: parentRemaining ?? builderRemaining(0),
 	});
 	if (!admission.admitted) throw new Error(admission.reason);
+	const admitted =
+		input.pair === "worker"
+			? workerBudget(parent, admission.level, parentRemaining)
+			: admission.budget;
 	let budget: SubagentBudget = {
-		steps: Math.min(admission.budget.steps, input.cap?.steps ?? Infinity),
-		minutes: Math.min(admission.budget.minutes, input.cap?.minutes ?? Infinity),
-		tokens: Math.min(admission.budget.tokens, input.cap?.tokens ?? Infinity),
+		steps: Math.min(admitted.steps, input.cap?.steps ?? Infinity),
+		minutes: Math.min(admitted.minutes, input.cap?.minutes ?? Infinity),
+		tokens: Math.min(admitted.tokens, input.cap?.tokens ?? Infinity),
 		// Counted in the builder's tokens: a cheaper child's tokens weigh less.
 		...(tree.root.listedModelId ? { priceBasis: tree.root.listedModelId } : {}),
+		...(input.pair ? { checkerPair: input.pair } : {}),
 	};
 	const brief = [
 		await input.brief(tree),
@@ -900,6 +1034,30 @@ async function spawnSubagent(
 }
 
 /**
+ * checkerMode=pair: a worker's budget, most of its judge's remaining time
+ * (the judge waits for it) less the judge's time to write its verdict.
+ */
+function workerBudget(
+	judge: AgentSessionRecord,
+	level: number,
+	judgeRemaining: SubagentRemaining | null | undefined,
+) {
+	const judgeMinutes = judge.agentBudget?.minutes;
+	const budget = checkerWorkerBudget({
+		level,
+		judgeRemaining: judgeRemaining ?? builderRemaining(0),
+		judgeWrapUpMinutes: judgeMinutes
+			? checkerWrapUpLeadMs(judgeMinutes * 60_000) / 60_000
+			: 0,
+	});
+	if (!budget)
+		throw new Error(
+			"Too little of your time or budget is left for a worker. Do this work yourself.",
+		);
+	return budget;
+}
+
+/**
  * The child's model: its role's entry in roleModels when the user can use
  * that route (an API child under a Codex builder and the reverse are both
  * fine), else the parent's, with a notice when an entry was set but unusable.
@@ -952,6 +1110,8 @@ export async function startRuntimeSubagent(
 		readonly title: string;
 		readonly brief: string;
 		readonly cap?: Partial<SubagentBudget>;
+		/** checkerMode=pair: the checker is a judge with the worker tool. */
+		readonly pair?: boolean;
 	},
 ) {
 	const deps = { ...defaultDeps, ...context.deps };
@@ -965,6 +1125,9 @@ export async function startRuntimeSubagent(
 			title: input.title.slice(0, SUBAGENT_TITLE_MAX),
 			brief: async () => input.brief,
 			cap: input.cap,
+			...(input.pair && input.role === "checker"
+				? { pair: "judge" as const }
+				: {}),
 		},
 		workspace,
 	);
@@ -1022,6 +1185,7 @@ async function checkerBriefFor(
 		changedFiles,
 		scratch: "$HOME",
 		rigor: context.rigor,
+		pair: context.checkerMode === "pair",
 	});
 }
 

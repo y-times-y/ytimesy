@@ -115,6 +115,15 @@ export const HARNESS_VARIANT_VALUES = {
 	 */
 	review: ["off", "on"],
 	/**
+	 * The checker's shape (src/domain/checker-pair.ts): single = one checker
+	 * reads, tests and judges (the default); pair = a judge on
+	 * roleModels.checker plans the check and writes the verdict, and a
+	 * cheaper read-only worker on roleModels.checkerWorker (codex:gpt-6-luna
+	 * when unset) does the reading, test writing and running it briefs. Each
+	 * review round is still a full independent check.
+	 */
+	checkerMode: ["single", "pair"],
+	/**
 	 * Lead mode (src/domain/sidekick.ts, Devin Fusion style): fusion makes
 	 * the root builder a lead that plans, briefs, reviews and answers the
 	 * user, and makes its first writer a persistent sidekick (cheaper model
@@ -149,7 +158,7 @@ export type HarnessVariant = {
 } & {
 	/**
 	 * A model per subagent role (src/domain/role-models.ts): writer,
-	 * researcher, reviewer, checker, judge. Empty (the default): every child
+	 * researcher, reviewer, checker, judge, checkerWorker, ... Empty (the default): every child
 	 * runs on its parent's model. Flags: `roleModels.<role>=<model>[@<effort>]`.
 	 */
 	readonly roleModels: RoleModels;
@@ -164,6 +173,7 @@ export type PrEvidence = HarnessVariant["prEvidence"];
 export type InstructionVariant = HarnessVariant["instructions"];
 export type AttemptsMode = HarnessVariant["attempts"];
 export type ReviewMode = HarnessVariant["review"];
+export type CheckerMode = HarnessVariant["checkerMode"];
 export type LeadMode = HarnessVariant["lead"];
 export type RigorMode = HarnessVariant["rigor"];
 export type OutputCap = HarnessVariant["outputCap"];
@@ -179,6 +189,7 @@ export const DEFAULT_HARNESS_VARIANT: HarnessVariant = {
 	instructions: "default",
 	attempts: "1",
 	review: "off",
+	checkerMode: "single",
 	lead: "off",
 	rigor: "off",
 	outputCap: "off",

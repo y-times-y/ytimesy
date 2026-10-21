@@ -6,6 +6,7 @@ import {
 	machineSize,
 	machineSizeId,
 } from "#/domain/machine-size";
+import { SCRUB_MEMORY_CREDENTIAL } from "#/domain/memory-repo";
 import { publicFailureMessage } from "#/domain/project-workspace";
 import { guestMutationBlockedReason } from "#/domain/workspace";
 import {
@@ -351,6 +352,16 @@ export function createFreestyleWorkspaceMachines(
 						machines.provisionSession(slug, snapshotId, sizeId),
 					deleteSnapshot: (snapshotId) =>
 						freestyle.vms.snapshots.delete(snapshotId),
+					scrubFork: async (vmId) => {
+						const scrubbed = await machines.exec(
+							WorkspaceId(vmId),
+							SCRUB_MEMORY_CREDENTIAL,
+							30_000,
+						);
+						if (scrubbed.exitCode !== 0)
+							throw new Error("the memory clone still holds a token");
+					},
+					deleteVm: (vmId) => freestyle.vms.ref(vmId).delete(),
 				});
 				return { vm: WorkspaceId(fork.vmId), forkMs: fork.forkMs };
 			} catch (cause) {

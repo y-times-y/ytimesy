@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import {
 	Archive,
+	BookMarked,
 	ChevronRight,
 	CircleAlert,
 	Clock3,
@@ -24,14 +25,20 @@ import {
 	collapsedProjectStorageValue,
 	compactRelativeAge,
 	newChatIsActive,
+	type ProjectChats,
 	parseCollapsedProjectIds,
 	parsePinnedChatIds,
 	parseSeenChatKeys,
+	parseSidebarSort,
 	pinnedChatStorageValue,
 	projectFolderIsExpanded,
+	projectsByRecentActivity,
+	recentSidebarChats,
 	SIDEBAR_COLLAPSED_PROJECTS_KEY,
 	SIDEBAR_PINNED_CHATS_KEY,
+	SIDEBAR_SORT_KEY,
 	type SidebarChat,
+	type SidebarSort,
 	seenChatStorageValue,
 	sidebarChatAttention,
 	sidebarChatIsRunning,
@@ -70,6 +77,13 @@ interface ProjectSidebarProps {
 	onDeleteChat?: (id: string) => void;
 	onDeleteProject?: (id: string) => void;
 	onOpenSettings?: () => void;
+	/** Every project's chats, for the Recent list and ordering projects by activity. */
+	projectChats?: readonly ProjectChats<Project>[];
+	/** Opens a chat that may belong to another project (the Recent list). */
+	onSelectChatInProject?: (projectId: string, chatId: string) => void;
+	/** Opens the full-page Memory view. */
+	onOpenMemory?: () => void;
+	memoryActive?: boolean;
 }
 
 export function ProjectSidebar({
@@ -90,6 +104,10 @@ export function ProjectSidebar({
 	onDeleteChat,
 	onDeleteProject,
 	onOpenSettings,
+	projectChats = [],
+	onSelectChatInProject,
+	onOpenMemory,
+	memoryActive = false,
 }: ProjectSidebarProps) {
 	const sidebarToggle = useRef<HTMLButtonElement>(null);
 	const railLogo = useRef<HTMLButtonElement>(null);
@@ -117,6 +135,26 @@ export function ProjectSidebar({
 					window.localStorage.getItem(SIDEBAR_PINNED_CHATS_KEY),
 				),
 	);
+	const [sort, setSort] = useState<SidebarSort>(() =>
+		typeof window === "undefined"
+			? "projects"
+			: parseSidebarSort(window.localStorage.getItem(SIDEBAR_SORT_KEY)),
+	);
+	// The open project's chats are the freshest list; the others come from projectChats.
+	const groups = projects.map((project) => ({
+		project,
+		chats:
+			project.id === selectedProjectId
+				? chats
+				: (projectChats.find((group) => group.project.id === project.id)
+						?.chats ?? []),
+	}));
+	const recentChats = recentSidebarChats(groups, pinnedChatIds);
+	const orderedProjects = projectsByRecentActivity(projects, groups);
+	function chooseSort(next: SidebarSort) {
+		setSort(next);
+		window.localStorage.setItem(SIDEBAR_SORT_KEY, next);
+	}
 	const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const visible = expanded || hovered;
 	const selected = projects.find((project) => project.id === selectedProjectId);
@@ -233,6 +271,96 @@ export function ProjectSidebar({
 		});
 	}
 
+	function chatRow(chat: SidebarChat, project?: Project) {
+		const attention = chatAttention(chat);
+		const age = compactRelativeAge(chat.updatedAt, nowMs);
+		const pinned = pinnedChatIds.includes(chat.id);
+		return (
+			<li
+				key={chat.id}
+				className="sidebar-chat-row"
+				data-selected={chat.id === selectedChatId}
+				data-pinned={pinned ? "true" : undefined}
+			>
+				<button
+					type="button"
+					className="sidebar-chat"
+					data-selected={chat.id === selectedChatId}
+					data-activity={attention}
+					aria-current={chat.id === selectedChatId ? "page" : undefined}
+					onClick={() =>
+						project && project.id !== selectedProjectId && onSelectChatInProject
+							? onSelectChatInProject(project.id, chat.id)
+							: onSelectChat?.(chat.id)
+					}
+				>
+					<span className="sidebar-chat-dot" aria-hidden="true" />
+					<span className="sidebar-chat-title">{chat.title}</span>
+					{project ? (
+						<span className="sidebar-chat-project">
+							{projectDisplayName(project)}
+						</span>
+					) : null}
+					{attention === "running" ? (
+						<span className="sr-only">Running</span>
+					) : null}
+					{attention === "attention" ? (
+						<span className="sr-only">Needs attention</span>
+					) : null}
+				</button>
+				<div className="sidebar-chat-trailing">
+					<button
+						type="button"
+						className="sidebar-chat-pin"
+						aria-label={pinned ? `Unpin ${chat.title}` : `Pin ${chat.title}`}
+						aria-pressed={pinned}
+						title={pinned ? "Unpin chat" : "Pin chat"}
+						data-pinned={pinned ? "true" : undefined}
+						onClick={(event) => {
+							event.stopPropagation();
+							persistPinned(togglePinnedChatIds(pinnedChatIds, chat.id));
+						}}
+					>
+						<Pin
+							size={13}
+							strokeWidth={1.5}
+							fill={pinned ? "currentColor" : "none"}
+						/>
+					</button>
+					{onDeleteChat ? (
+						<button
+							type="button"
+							className="sidebar-chat-archive"
+							aria-label={`Remove ${chat.title}`}
+							title="Remove chat"
+							onClick={(event) => {
+								event.stopPropagation();
+								onDeleteChat(chat.id);
+							}}
+						>
+							<Archive size={13} strokeWidth={1.5} />
+						</button>
+					) : null}
+					{chat.prNeed ? (
+						<a
+							className="sidebar-chat-pr"
+							href={chat.prUrl ?? undefined}
+							target={chat.prUrl ? "_blank" : undefined}
+							rel={chat.prUrl ? "noreferrer" : undefined}
+							data-need={chat.prNeed}
+							aria-label={`${sidebarChatPrNeedLabel(chat.prNeed)} for ${chat.title}`}
+							title={sidebarChatPrNeedLabel(chat.prNeed)}
+							onClick={(event) => event.stopPropagation()}
+						>
+							<SidebarChatPrIcon need={chat.prNeed} />
+						</a>
+					) : null}
+					{age ? <span className="sidebar-chat-age">{age}</span> : null}
+				</div>
+			</li>
+		);
+	}
+
 	return (
 		<div
 			className="project-sidebar-frame"
@@ -319,9 +447,51 @@ export function ProjectSidebar({
 						New project
 					</button>
 				</div>
+				{onOpenMemory ? (
+					<nav className="sidebar-nav" aria-label="Workspace">
+						<button
+							type="button"
+							className="sidebar-nav-item"
+							aria-current={memoryActive ? "page" : undefined}
+							onClick={onOpenMemory}
+						>
+							<BookMarked size={16} strokeWidth={1.5} />
+							Memory
+						</button>
+					</nav>
+				) : null}
 				{projects.length ? (
+					<div className="sidebar-list-header">
+						<span>Chats</span>
+						<fieldset className="sidebar-sort" aria-label="Sort chats">
+							<button
+								type="button"
+								aria-pressed={sort === "recent"}
+								onClick={() => chooseSort("recent")}
+							>
+								Recent
+							</button>
+							<button
+								type="button"
+								aria-pressed={sort === "projects"}
+								onClick={() => chooseSort("projects")}
+							>
+								Projects
+							</button>
+						</fieldset>
+					</div>
+				) : null}
+				{projects.length && sort === "recent" ? (
+					recentChats.length ? (
+						<ul className="sidebar-chats sidebar-recent">
+							{recentChats.map(({ chat, project }) => chatRow(chat, project))}
+						</ul>
+					) : (
+						<p className="sidebar-empty">{emptyCopy}</p>
+					)
+				) : projects.length ? (
 					<ul className="sidebar-projects">
-						{projects.map((project) => {
+						{orderedProjects.map((project) => {
 							const selected = project.id === selectedProjectId;
 							const open = projectFolderIsExpanded({
 								projectId: project.id,
@@ -405,119 +575,7 @@ export function ProjectSidebar({
 										) : (
 											<ul className="sidebar-chats">
 												{chatsWithPinnedFirst(chats, pinnedChatIds).map(
-													(chat) => {
-														const attention = chatAttention(chat);
-														const age = compactRelativeAge(
-															chat.updatedAt,
-															nowMs,
-														);
-														const pinned = pinnedChatIds.includes(chat.id);
-														return (
-															<li
-																key={chat.id}
-																className="sidebar-chat-row"
-																data-selected={chat.id === selectedChatId}
-																data-pinned={pinned ? "true" : undefined}
-															>
-																<button
-																	type="button"
-																	className="sidebar-chat"
-																	data-selected={chat.id === selectedChatId}
-																	data-activity={attention}
-																	aria-current={
-																		chat.id === selectedChatId
-																			? "page"
-																			: undefined
-																	}
-																	onClick={() => onSelectChat?.(chat.id)}
-																>
-																	<span
-																		className="sidebar-chat-dot"
-																		aria-hidden="true"
-																	/>
-																	<span className="sidebar-chat-title">
-																		{chat.title}
-																	</span>
-																	{attention === "running" ? (
-																		<span className="sr-only">Running</span>
-																	) : null}
-																	{attention === "attention" ? (
-																		<span className="sr-only">
-																			Needs attention
-																		</span>
-																	) : null}
-																</button>
-																<div className="sidebar-chat-trailing">
-																	<button
-																		type="button"
-																		className="sidebar-chat-pin"
-																		aria-label={
-																			pinned
-																				? `Unpin ${chat.title}`
-																				: `Pin ${chat.title}`
-																		}
-																		aria-pressed={pinned}
-																		title={pinned ? "Unpin chat" : "Pin chat"}
-																		data-pinned={pinned ? "true" : undefined}
-																		onClick={(event) => {
-																			event.stopPropagation();
-																			persistPinned(
-																				togglePinnedChatIds(
-																					pinnedChatIds,
-																					chat.id,
-																				),
-																			);
-																		}}
-																	>
-																		<Pin
-																			size={13}
-																			strokeWidth={1.5}
-																			fill={pinned ? "currentColor" : "none"}
-																		/>
-																	</button>
-																	{onDeleteChat ? (
-																		<button
-																			type="button"
-																			className="sidebar-chat-archive"
-																			aria-label={`Remove ${chat.title}`}
-																			title="Remove chat"
-																			onClick={(event) => {
-																				event.stopPropagation();
-																				onDeleteChat(chat.id);
-																			}}
-																		>
-																			<Archive size={13} strokeWidth={1.5} />
-																		</button>
-																	) : null}
-																	{chat.prNeed ? (
-																		<a
-																			className="sidebar-chat-pr"
-																			href={chat.prUrl ?? undefined}
-																			target={chat.prUrl ? "_blank" : undefined}
-																			rel={
-																				chat.prUrl ? "noreferrer" : undefined
-																			}
-																			data-need={chat.prNeed}
-																			aria-label={`${sidebarChatPrNeedLabel(chat.prNeed)} for ${chat.title}`}
-																			title={sidebarChatPrNeedLabel(
-																				chat.prNeed,
-																			)}
-																			onClick={(event) =>
-																				event.stopPropagation()
-																			}
-																		>
-																			<SidebarChatPrIcon need={chat.prNeed} />
-																		</a>
-																	) : null}
-																	{age ? (
-																		<span className="sidebar-chat-age">
-																			{age}
-																		</span>
-																	) : null}
-																</div>
-															</li>
-														);
-													},
+													(chat) => chatRow(chat),
 												)}
 											</ul>
 										)
@@ -571,6 +629,18 @@ export function ProjectSidebar({
 				>
 					<Plus size={16} />
 				</button>
+				{onOpenMemory ? (
+					<button
+						type="button"
+						className="panel-toggle"
+						aria-label="Memory"
+						title="Memory"
+						data-active={memoryActive}
+						onClick={onOpenMemory}
+					>
+						<BookMarked size={16} strokeWidth={1.5} />
+					</button>
+				) : null}
 			</nav>
 		</div>
 	);

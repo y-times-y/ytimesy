@@ -23,7 +23,9 @@ export const readTrainingConsentFn = createServerFn({ method: "GET" }).handler(
  */
 export const saveTrainingConsentFn = createServerFn({ method: "POST" })
 	.validator((data: unknown) =>
-		z.object({ enabled: z.boolean(), policyVersion: z.string() }).parse(data),
+		z
+			.object({ enabled: z.boolean(), policyVersion: z.string().max(64) })
+			.parse(data),
 	)
 	.handler(async ({ data }): Promise<TrainingConsent> => {
 		requireSameOrigin(getRequest());

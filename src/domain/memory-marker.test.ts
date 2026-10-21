@@ -179,3 +179,22 @@ describe("undo", () => {
 		).toBeNull();
 	});
 });
+
+it("still finds a saved line recorded with its trailing key text", () => {
+	const files = {
+		"a.md":
+			"- Counts rows, not quantities. kind: inferred. [added: 2026-10-17]\n",
+	};
+	expect(
+		memoryHoldsLine(files, {
+			path: "a.md",
+			text: "Counts rows, not quantities. kind: inferred.",
+		}),
+	).toBe(true);
+	expect(
+		memoryHoldsLine(files, {
+			path: "a.md",
+			text: "Counts rows, not quantities.",
+		}),
+	).toBe(true);
+});

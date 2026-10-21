@@ -44,6 +44,7 @@ import {
 } from "../adapters/workspaces";
 import { githubAccessToken } from "../auth/github-connection";
 import { CLEANUP_CONCURRENCY, eachLimited } from "./account-deletion";
+import { cancelServerTurn } from "./cancel-server-turn";
 import { rejectRequest } from "./errors";
 import { removeProjectPullRequestEvidence } from "./pr-evidence-cleanup";
 import type { WorkspaceMachines } from "./workspace-machines";
@@ -289,6 +290,15 @@ export async function removeProjectMachine(
 	if (!project) throw new Error("Project is not available.");
 	const workspace = await workspaceForProject(input.userId, input.projectId);
 	const targets = await projectCleanupTargets(input.userId, input.projectId);
+	// Running turns stop before their chats' state goes (cancel, then purge).
+	await eachLimited(targets.sessionIds, CLEANUP_CONCURRENCY, (sessionId) =>
+		cancelServerTurn(input.userId, sessionId),
+	).catch(() => {
+		throw new Response(
+			"The project was not removed because a running turn could not be stopped. Try again.",
+			{ status: 503 },
+		);
+	});
 	if (checkpointStorageConfigured())
 		await eachLimited(targets.sessionIds, CLEANUP_CONCURRENCY, (sessionId) =>
 			removeChatObjects(input.userId, sessionId),

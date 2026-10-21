@@ -1,6 +1,8 @@
+import { checkerJudgeSection, previousFindingsSection } from "./checker-pair";
 import {
 	type CheckerVerdict,
 	parseCheckerVerdict,
+	UNTESTED_PASS_NOTE,
 	verdictRecords,
 } from "./checker-verdict";
 
@@ -33,6 +35,16 @@ export type ReviewBriefInput = {
 	 * claim the checker compares with its own list after deriving that.
 	 */
 	readonly builderRequirements?: readonly string[];
+	/**
+	 * Harness variant checkerMode=pair: the checker is a judge that briefs a
+	 * worker for the reading and test runs (src/domain/checker-pair.ts).
+	 */
+	readonly pair?: boolean;
+	/**
+	 * checkerMode=pair: the earlier review rounds' findings, as context for a
+	 * round that is still a full check.
+	 */
+	readonly previousFindings?: readonly string[];
 };
 
 /** rigor=on: stated interpretations get the convention-based reading tested. */
@@ -99,11 +111,59 @@ export function independentReviewBrief(input: ReviewBriefInput) {
 					"</builder_requirements>",
 				]
 			: []),
+		...(input.pair
+			? ["", checkerJudgeSection({ scratch: input.scratch, work })]
+			: []),
+		...(input.pair && input.previousFindings?.length
+			? ["", previousFindingsSection(input.previousFindings)]
+			: []),
 		"",
 		"Answer with only this JSON:",
 		'{ "verdict": "pass" | "fail" | "unsure", "failures": ["<requirement or assumption>: <what is wrong, with evidence>"], "tests": [{ "name": "<what it checks>", "command": "<one command that runs it, absolute paths>", "passed": true, "output": "<the lines that show the result>" }], "requirements": [{ "requirement": "...", "met": true, "evidence": "..." }], "assumptions": [{ "assumption": "...", "alternative": "...", "outcome": "..." }], "notes": "..." }',
 		`"tests" lists only the tests and probes you wrote, each run. pass only when your new tests and the existing checks all pass and every requirement is met with evidence; a pass without new tests of your own counts as unsure. fail when something required is wrong or missing: name each in failures, most important first, with the failing test as its evidence. unsure only when you genuinely could not run what matters; say why in notes.${rigor ? RIGOR_ADMITTED : ""}`,
 	].join("\n");
+}
+
+/**
+ * The user's standing rules for the project (from memory: instructions the
+ * user gave in earlier chats), shown to a checker after its brief. Unlike the
+ * builder's requirements list they are the user's own words, so the
+ * deliverable must follow each one that applies.
+ */
+export function checkerStandingRules(input: {
+	readonly rules: readonly string[];
+	/** Other remembered lines that may bear on the request (data, may be outdated). */
+	readonly related?: readonly string[];
+}) {
+	const related = input.related ?? [];
+	return [
+		...(input.rules.length
+			? [
+					"<standing_rules>",
+					"The user's standing rules for this project, which the user gave in earlier chats. They are the user's instructions, not the builder's claims: add \"follows the project's remembered rules\" to your requirements, and check each rule below that applies to this deliverable as its own requirement with evidence. A deliverable that breaks one fails unless the request itself says otherwise.",
+					...input.rules.map((rule) => `- ${rule}`),
+					"</standing_rules>",
+				]
+			: []),
+		...(related.length
+			? [
+					...(input.rules.length ? [""] : []),
+					"<remembered>",
+					"Other lines from the user's memory that may bear on this request (saved in earlier chats; may be outdated, the later `added:` date wins). Check any that states a rule for this deliverable like the standing rules:",
+					...related,
+					"</remembered>",
+				]
+			: []),
+	].join("\n");
+}
+
+/** The user's request inside a review brief (independentReviewBrief), or null. */
+export function reviewBriefRequest(brief: string): string | null {
+	const open = "<request>\n";
+	const start = brief.indexOf(open);
+	const end = brief.indexOf("\n</request>\n\n<deliverable>");
+	if (start < 0 || end < start) return null;
+	return brief.slice(start + open.length, end);
 }
 
 export type ReviewRequirement = {
@@ -125,9 +185,7 @@ export type ReviewVerdict = CheckerVerdict & {
 	readonly untested?: boolean;
 };
 
-/** The note an untested pass gets. */
-export const UNTESTED_PASS_NOTE =
-	"(Said pass without running a new test of its own; counted as unsure.)";
+export { UNTESTED_PASS_NOTE };
 
 const clip = (value: unknown, max: number) =>
 	typeof value === "string" ? value.trim().slice(0, max) : "";

@@ -45,7 +45,7 @@ beforeAll(async () => {
 	await db.exec(`create role anon; create role authenticated; create table auth_user(id text primary key); insert into auth_user values('alice'),('bob');
 	create table agent_session(id uuid primary key,user_id text,project_id text,provider_ref text,turn_status text,task_placement text,agent_role text);
 	create table workspace(id text,user_id text); create table environment_build(id text,workspace_id text);
-	create table api_turn(id text,user_id text,state text);`);
+	create table api_turn(id text,user_id text,state text,session_id text);`);
 	for (const file of [
 		"20261003020000_infrastructure_usage",
 		"20261003021000_infrastructure_vm_identity",
@@ -272,8 +272,37 @@ it("refuses to resume a paused VM once a usage window is exhausted, unless a tur
 	expect(await outcome(() => resume(vm, 60))).toMatch(
 		/^You have reached your 5-hour cloud usage limit, so new work cannot start until \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\./,
 	);
-	await query("insert into api_turn values('turn-1','alice','running')");
+	// A turn of another session does not exempt this machine.
+	await query(
+		"insert into api_turn values('turn-0','alice','running','20000000-0000-4000-8000-000000000009')",
+	);
+	expect(await outcome(() => resume(vm, 60))).toMatch(/5-hour cloud usage/);
+	// This session's own running turn does, below the hard ceiling.
+	await query("insert into api_turn values('turn-1','alice','running',$1)", [
+		session,
+	]);
 	expect(await outcome(() => resume(vm, 60))).toBe(null);
+});
+
+it("stops extending a running VM at the hard ceiling past an exhausted window", async () => {
+	// The window is exhausted; the ceiling adds one hour (132,240) to it.
+	vi.stubEnv("YTIMESY_USER_5H_MICRO_USD", "1000");
+	await seedAdmission({ cap: 400, baseline: 100, ageSeconds: 250 });
+	await seedRetention();
+	const { vm } = machine({ maxRunTotalSeconds: 400 });
+	// Exhausted, but under the ceiling: the running turn still gets runtime.
+	expect(await outcome(() => resume(vm, 60))).toBe(null);
+	// Other work brings the window near the ceiling: no further extension.
+	await query(
+		"insert into infrastructure_usage_reservation(id,user_id,resource_key,period,reserved_micro_usd) values('10000000-0000-4000-8000-000000000002','alice','vm:other',date_trunc('month',now() at time zone 'utc')::date,115000)",
+	);
+	await query(
+		"update infrastructure_vm_admission set updated_at=now()-interval '700 seconds'",
+	);
+	forgetRecentAdmission();
+	expect(await outcome(() => resume(vm, 60))).toMatch(
+		/^Running work has used the grace past your 5-hour cloud usage limit/,
+	);
 });
 
 it("refuses a top-up past the fleet's monthly budget", async () => {
