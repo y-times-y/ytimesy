@@ -270,7 +270,7 @@ it("serves VNC on its Unix socket only, behind the dropped password", () => {
 	expect(started.status).toBe(0);
 	const x11vnc = started.calls.find((call) => call.startsWith("x11vnc"));
 	expect(x11vnc).toContain(`-passwdfile ${dir}/vnc.passwd`);
-	expect(x11vnc).toContain("-rfbport 0 -rfbportv6 -1 -noipv6 -localhost");
+	expect(x11vnc).toContain("-rfbport 0 -rfbportv6 -1 -noipv6");
 	expect(x11vnc).not.toContain("-nopw");
 	expect(existsSync(join(dir, "vnc.password"))).toBe(false);
 	expect(readFileSync(join(dir, "vnc.passwd"), "utf8")).toBe("pass1234\n");

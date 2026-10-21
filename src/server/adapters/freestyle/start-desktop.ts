@@ -289,7 +289,7 @@ fi
 if ! pgrep -x x11vnc >/dev/null 2>&1; then
   install -d -m 0700 "$VNC_DIR"
   rm -f "$VNC_SOCKET"
-  x11vnc -display :0 -auth "$XAUTH" -forever -shared -passwdfile "$VNC_PASS_FILE" -unixsock "$VNC_SOCKET" -rfbport 0 -rfbportv6 -1 -noipv6 -localhost >/tmp/ytimesy-desk.log 2>&1 &
+  x11vnc -display :0 -auth "$XAUTH" -forever -shared -passwdfile "$VNC_PASS_FILE" -unixsock "$VNC_SOCKET" -rfbport 0 -rfbportv6 -1 -noipv6 >/tmp/ytimesy-desk.log 2>&1 &
   sleep 1
   printf '%s' "$VNC_PASS_DIGEST" > "$VNC_APPLIED"
 fi
