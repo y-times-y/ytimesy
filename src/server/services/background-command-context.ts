@@ -10,6 +10,8 @@ function pendingCommandReceipts(items: readonly SessionItem[]) {
 	return items.flatMap((item, index) => {
 		if (
 			item.kind !== "dynamicToolCall" ||
+			// Background commands run past the turn; their exits arrive as notices (background-command-notices.ts).
+			item.background ||
 			![
 				"start_command",
 				"execute_command",
@@ -25,6 +27,7 @@ function pendingCommandReceipts(items: readonly SessionItem[]) {
 			const decoded = JSON.parse(item.output);
 			const output = decoded?.type === "json" ? decoded.value : decoded;
 			return output?.status === "running" &&
+				output.background !== true &&
 				z.uuid().safeParse(output.id).success
 				? [{ index, id: output.id as string }]
 				: [];

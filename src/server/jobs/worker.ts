@@ -22,6 +22,7 @@ import {
 	type PeerMessage,
 } from "../services/agent-peer-messaging";
 import { deliverAgentTaskEvents } from "../services/agent-task-event-delivery";
+import { wakeChatsForBackgroundCommands } from "../services/background-command-notices";
 import { deliverPrRepairEvents } from "../services/pr-repair";
 import { captureSessionCheckpoint } from "../services/session-checkpoint";
 import { teardownSubagentForks } from "../services/subagent-runtime";
@@ -176,6 +177,8 @@ export async function startWorkspaceWorker(machines?: WorkspaceMachines) {
 			if (Date.now() - supervisingAt >= 30_000) {
 				supervisingAt = Date.now();
 				await recoverChildTurnEvents(taskMachines);
+				// Background commands that exited while their chat was between turns.
+				await wakeChatsForBackgroundCommands(taskMachines);
 				await teardownSubagentForks(taskMachines);
 				await deliverPrRepairEvents(taskMachines);
 			}
